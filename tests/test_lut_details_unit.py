@@ -123,6 +123,13 @@ def test_real_alias_asset_canonicalizes_pla_plus() -> None:
     assert resolver.canonicalize_material("PLA+") == "PLA"
 
 
+def test_real_alias_asset_canonicalizes_chinese_aliz() -> None:
+    asset_path = Path(__file__).resolve().parents[1] / "assets" / "lut_details_aliases.json"
+    resolver = AliasResolver.from_file(asset_path)
+
+    assert resolver.canonicalize_manufacturer("爱丽兹") == "Aliz"
+
+
 def test_catalog_indexer_applies_metadata_folder_and_filename_precedence(tmp_path: Path) -> None:
     alias_path = tmp_path / "lut_details_aliases.json"
     preset_dir = tmp_path / "lut-preset"

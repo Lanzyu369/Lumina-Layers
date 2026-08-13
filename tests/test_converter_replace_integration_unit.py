@@ -649,7 +649,7 @@ class TestColorHighlightCanary:
 class TestRegionDetectCanary:
     """Successful region-detect requests emit the structured done canary."""
 
-    def test_region_detect_emits_converter_region_detect_done_canary(
+    def test_region_detect_defaults_to_geometry_without_highlight_png(
         self,
         _isolate_dependency_overrides,
         caplog: pytest.LogCaptureFixture,
@@ -671,7 +671,9 @@ class TestRegionDetectCanary:
         assert body["region_id"]
         assert body["color_hex"] == "#ffffff"
         assert body["pixel_count"] == 8
-        assert body["preview_url"]
+        assert body["preview_url"] is None
+        assert body["contours"]
+        assert body["bbox"] == [0, 0, 4, 2]
 
         canary_records = [
             record
@@ -685,8 +687,328 @@ class TestRegionDetectCanary:
         assert record.session_id == session_id
         assert record.click_x == 0
         assert record.click_y == 0
+        assert record.region_id == body["region_id"]
+        assert record.component_cache_hit is False
         assert record.detected_pixel_count == 8
         assert record.detected_dominant_color == "#ffffff"
+        assert record.contour_count == len(body["contours"])
+        assert record.bbox == (0, 0, 4, 2)
+        assert record.include_preview is False
+        assert record.preview_png_ms == 0
+
+    def test_region_detect_can_generate_highlight_png_when_explicitly_requested(
+        self,
+        _isolate_dependency_overrides,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Legacy/debug callers may explicitly request a highlight PNG.
+        旧调用或调试场景可显式请求高亮 PNG。
+        """
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_preview_session(store)
+        target_logger = _capture_replace_logger(caplog)
+
+        try:
+            response = client.post(
+                "/api/convert/region-detect",
+                json={
+                    "session_id": session_id,
+                    "x": 0,
+                    "y": 0,
+                    "include_preview": True,
+                },
+            )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["region_id"]
+        assert body["color_hex"] == "#ffffff"
+        assert body["pixel_count"] == 8
+        assert body["preview_url"]
+        assert body["contours"]
+
+        canary_records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "converter_region_detect_done"
+        ]
+        assert len(canary_records) == 1
+
+        record = canary_records[0]
+        assert record.levelno == logging.INFO
+        assert record.session_id == session_id
+        assert record.include_preview is True
+        assert record.preview_png_ms >= 0
+        assert record.detected_pixel_count == 8
+
+    def test_region_detect_returns_stable_region_id_for_same_component(
+        self,
+        _isolate_dependency_overrides,
+    ) -> None:
+        """The same connected component gets the same ID on repeated clicks.
+        同一连通区域重复点击应返回同一个 ID，便于前端二次点击取消选中。
+        """
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_preview_session(store)
+
+        first = client.post(
+            "/api/convert/region-detect",
+            json={"session_id": session_id, "x": 0, "y": 0},
+        )
+        second = client.post(
+            "/api/convert/region-detect",
+            json={"session_id": session_id, "x": 1, "y": 0},
+        )
+
+        assert first.status_code == 200, first.text
+        assert second.status_code == 200, second.text
+        assert first.json()["region_id"] == second.json()["region_id"]
+
+    def test_region_detect_returns_drawable_contour_for_single_pixel_region(
+        self,
+        _isolate_dependency_overrides,
+    ) -> None:
+        """Single-pixel regions still need a drawable outline.
+        单像素区域也必须返回可绘制轮廓，避免前端看起来没有选中。
+        """
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = store.create()
+        matched_rgb = np.zeros((3, 3, 3), dtype=np.uint8)
+        matched_rgb[:, :, :] = [0, 0, 0]
+        matched_rgb[1, 1, :] = [255, 255, 255]
+        mask_solid = np.ones((3, 3), dtype=bool)
+        store.put(
+            session_id,
+            "preview_cache",
+            {
+                "matched_rgb": matched_rgb.copy(),
+                "quantized_image": matched_rgb.copy(),
+                "mask_solid": mask_solid,
+                "target_w": 3,
+                "target_h": 3,
+                "target_width_mm": 30.0,
+                "color_palette": [],
+            },
+        )
+        store.put(session_id, "material_source", "lut")
+
+        response = client.post(
+            "/api/convert/region-detect",
+            json={"session_id": session_id, "x": 1, "y": 1},
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["pixel_count"] == 1
+        assert body["preview_url"] is None
+        assert body["contours"]
+        assert len(body["contours"][0]) >= 3
+
+    def test_region_detect_returns_full_region_contour_without_physical_width_metadata(
+        self,
+        _isolate_dependency_overrides,
+    ) -> None:
+        """Missing target_width_mm must not degrade selection to click pixel.
+        缺少物理宽度元数据时，也必须返回整块连通区域轮廓。
+        """
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = store.create()
+        matched_rgb = np.full((5, 5, 3), [20, 20, 20], dtype=np.uint8)
+        matched_rgb[:, :, :] = [0, 0, 0]
+        matched_rgb[1:4, 1:4, :] = [255, 255, 255]
+        mask_solid = np.ones((5, 5), dtype=bool)
+        store.put(
+            session_id,
+            "preview_cache",
+            {
+                "matched_rgb": matched_rgb.copy(),
+                "quantized_image": matched_rgb.copy(),
+                "mask_solid": mask_solid,
+                "target_w": 5,
+                "target_h": 5,
+                "color_palette": [],
+            },
+        )
+        store.put(session_id, "material_source", "lut")
+
+        response = client.post(
+            "/api/convert/region-detect",
+            json={"session_id": session_id, "x": 2, "y": 2},
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["pixel_count"] == 9
+        assert body["preview_url"] is None
+        contours = body["contours"]
+        assert contours
+        xs = [point[0] for contour in contours for point in contour]
+        ys = [point[1] for contour in contours for point in contour]
+        assert body["bbox"] == [1, 1, 3, 3]
+        assert max(xs) - min(xs) >= 3.0
+        assert max(ys) - min(ys) >= 3.0
+
+    def test_region_detect_selects_full_visible_matched_colour_component(
+        self,
+        _isolate_dependency_overrides,
+    ) -> None:
+        """Click selection follows the visible matched colour, not source islands.
+        点击选区应跟随当前可见匹配色，而不是被上游量化原色拆成小块。
+        """
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = store.create()
+        matched_rgb = np.zeros((5, 5, 3), dtype=np.uint8)
+        matched_rgb[1:4, 1:4, :] = [180, 180, 180]
+        quantized_image = matched_rgb.copy()
+        # Simulate several source-quantized colours that all matched to the
+        # same visible/printed colour. The click should still select the
+        # whole 3x3 visible block.
+        quantized_image[1:4, 1:4, :] = [10, 10, 10]
+        quantized_image[2, 2, :] = [240, 240, 240]
+        quantized_image[1, 2, :] = [120, 120, 120]
+        mask_solid = np.ones((5, 5), dtype=bool)
+        store.put(
+            session_id,
+            "preview_cache",
+            {
+                "matched_rgb": matched_rgb.copy(),
+                "quantized_image": quantized_image,
+                "mask_solid": mask_solid,
+                "target_w": 5,
+                "target_h": 5,
+                "target_width_mm": 50.0,
+                "color_palette": [],
+            },
+        )
+        store.put(session_id, "material_source", "lut")
+
+        response = client.post(
+            "/api/convert/region-detect",
+            json={"session_id": session_id, "x": 2, "y": 2},
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["color_hex"] == "#b4b4b4"
+        assert body["pixel_count"] == 9
+        assert body["contours"]
+
+    def test_region_detect_returns_shape_outline_not_bbox_for_non_rectangular_region(
+        self,
+        _isolate_dependency_overrides,
+    ) -> None:
+        """Non-rectangular components must render their shape, not bbox.
+        非矩形色块必须显示真实形状轮廓，而不是退化成 bbox 方框。
+        """
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = store.create()
+        matched_rgb = np.zeros((5, 5, 3), dtype=np.uint8)
+        matched_rgb[1:4, 1, :] = [255, 255, 255]
+        matched_rgb[3, 1:4, :] = [255, 255, 255]
+        mask_solid = np.ones((5, 5), dtype=bool)
+        store.put(
+            session_id,
+            "preview_cache",
+            {
+                "matched_rgb": matched_rgb.copy(),
+                "quantized_image": matched_rgb.copy(),
+                "mask_solid": mask_solid,
+                "target_w": 5,
+                "target_h": 5,
+                "color_palette": [],
+            },
+        )
+        store.put(session_id, "material_source", "lut")
+
+        response = client.post(
+            "/api/convert/region-detect",
+            json={"session_id": session_id, "x": 1, "y": 1},
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["pixel_count"] == 5
+        assert body["bbox"] == [1, 1, 3, 3]
+        contour = body["contours"][0]
+        assert len(contour) > 4
+        # The bbox rectangle would only have 4 vertices. The real L-shape
+        # outline contains the concave turn at x=2, y=2 (pixel units).
+        assert [2.0, 2.0] in contour
+        xs = [point[0] for point in contour]
+        ys = [point[1] for point in contour]
+        assert max(xs) - min(xs) >= 3.0
+        assert max(ys) - min(ys) >= 3.0
+
+    def test_region_detect_reuses_visible_component_cache_for_repeated_clicks(
+        self,
+        _isolate_dependency_overrides,
+    ) -> None:
+        """Repeated clicks should use the cached visible-component index.
+        重复点击应复用当前可见色块分块缓存，而不是每次重建。
+        """
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_preview_session(store)
+
+        first = client.post(
+            "/api/convert/region-detect",
+            json={"session_id": session_id, "x": 0, "y": 0},
+        )
+        assert first.status_code == 200, first.text
+        session = store.get(session_id)
+        assert session is not None
+        assert session.get("visible_region_component_cache") is not None
+        assert session.get("selected_region_mask") is None
+
+        with patch(
+            "api.routers.converter.replace.build_visible_region_component_cache",
+            side_effect=AssertionError("cached clicks must not rebuild components"),
+        ):
+            second = client.post(
+                "/api/convert/region-detect",
+                json={"session_id": session_id, "x": 1, "y": 0},
+            )
+
+        assert second.status_code == 200, second.text
+        assert second.json()["region_id"] == first.json()["region_id"]
+        assert second.json()["bbox"] == first.json()["bbox"]
+
+    def test_region_replace_uses_cached_component_reference_after_detect(
+        self,
+        _isolate_dependency_overrides,
+    ) -> None:
+        """Region replace can rebuild the mask from a lightweight click ref.
+        区域替换可从点击阶段的轻量分块引用恢复完整 mask。
+        """
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_preview_session(store)
+
+        detect = client.post(
+            "/api/convert/region-detect",
+            json={"session_id": session_id, "x": 0, "y": 0},
+        )
+        assert detect.status_code == 200, detect.text
+        assert store.get(session_id)["selected_region_mask"] is None
+
+        with patch(
+            "api.routers.converter.replace._schedule_or_run_overridden_glb_build",
+            return_value=None,
+        ):
+            response = client.post(
+                "/api/convert/region-replace",
+                json={
+                    "session_id": session_id,
+                    "replacement_color": "#0000ff",
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        cache = store.get(session_id)["preview_cache"]
+        replaced_rgb = cache["matched_rgb"]
+        replaced_mask = np.all(replaced_rgb == [0, 0, 255], axis=-1)
+        assert int(np.count_nonzero(replaced_mask)) == 8
+        assert replaced_mask[:2, :].all()
 
     def test_region_detect_preserves_transparent_background_alpha(
         self,
@@ -697,7 +1019,14 @@ class TestRegionDetectCanary:
 
         response = client.post(
             "/api/convert/region-detect",
-            json={"session_id": session_id, "x": 1, "y": 1},
+            # 新架构默认不生成高亮 PNG（前端轮廓叠加），透明背景 canary
+            # 需显式请求预览图。
+            json={
+                "session_id": session_id,
+                "x": 1,
+                "y": 1,
+                "include_preview": True,
+            },
         )
 
         assert response.status_code == 200, response.text
@@ -1092,6 +1421,64 @@ class TestRegionReplaceBatchCanary:
         stored = store.get(session_id)["preview_cache"]
         assert is_preview_cache_artifact_ref(stored)
         assert stored["fields"]["matched_rgb"]["revision"] == 2
+
+    def test_region_replace_batch_click_uses_visible_matched_colour_component(
+        self,
+        _isolate_dependency_overrides,
+    ) -> None:
+        """Batch click replacement uses the same visible region as detection.
+        批量点击替换应与点击检测一样，按当前可见色块计算整块区域。
+        """
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = store.create()
+        matched_rgb = np.full((5, 5, 3), [20, 20, 20], dtype=np.uint8)
+        matched_rgb[1:4, 1:4, :] = [180, 180, 180]
+        quantized_image = matched_rgb.copy()
+        quantized_image[1:4, 1:4, :] = [10, 10, 10]
+        quantized_image[2, 2, :] = [240, 240, 240]
+        quantized_image[1, 2, :] = [120, 120, 120]
+        mask_solid = np.ones((5, 5), dtype=bool)
+        material_matrix = np.zeros((5, 5, 1), dtype=np.int32)
+        store.put(
+            session_id,
+            "preview_cache",
+            {
+                "matched_rgb": matched_rgb.copy(),
+                "quantized_image": quantized_image,
+                "mask_solid": mask_solid,
+                "material_matrix": material_matrix,
+                "target_w": 5,
+                "target_h": 5,
+                "target_width_mm": 50.0,
+                "color_palette": [],
+            },
+        )
+        store.put(session_id, "material_source", "lut")
+
+        with patch(
+            "api.routers.converter.replace.schedule_glb_build",
+            return_value="mock-glb-token",
+        ):
+            response = client.post(
+                "/api/convert/region-replace-batch",
+                json={
+                    "session_id": session_id,
+                    "items": [
+                        {
+                            "replacement_color": "#0000ff",
+                            "click_x": 2,
+                            "click_y": 2,
+                        }
+                    ],
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        cache = store.get(session_id)["preview_cache"]
+        replaced_rgb = cache["matched_rgb"]
+        replaced_mask = np.all(replaced_rgb == [0, 0, 255], axis=-1)
+        assert int(np.count_nonzero(replaced_mask)) == 9
+        assert replaced_mask[1:4, 1:4].all()
 
 
 class TestPredictRecipeCanary:

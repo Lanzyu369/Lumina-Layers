@@ -10,7 +10,7 @@ including preview, generate, batch, color replacement, and color merging.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Literal, Optional, Set, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -823,10 +823,24 @@ class ColorReplaceBatchRequest(BaseModel):
 
     session_id: str = Field(..., description="Session ID")
     replacements: list[ColorReplacePair] = Field(
-        ...,
-        min_length=1,
-        description="批量替换对列表（有序累积应用）",
+        default_factory=list,
+        description="批量替换对列表（可为空，空列表表示重放为无全局颜色替换）",
     )
+
+
+class FreeColorMutationRequest(BaseModel):
+    """Set or clear free-colour flags as one undoable content action."""
+
+    session_id: str = Field(..., description="Session ID")
+    action: Literal["toggle", "clear"]
+    color_hexes: list[str] = Field(default_factory=list)
+
+
+class FreeColorMutationResponse(BaseModel):
+    status: str = "ok"
+    free_color_set: list[str] = Field(default_factory=list)
+    can_undo: bool = False
+    can_redo: bool = False
 
 
 class ResetReplacementsRequest(BaseModel):
@@ -1006,14 +1020,14 @@ class ColorHighlightResponse(BaseModel):
 
 
 class SourceColorPickRequest(BaseModel):
-    """Request model for resolving a preview pixel's original source color.
-    解析预览像素原始源色的请求模型。
+    """Request model for resolving a preview pixel's current matched color.
+    解析预览像素当前匹配色的请求模型。
 
-    Used by ``POST /api/convert/source-color-pick`` when Select all mode
-    needs to map a clicked preview coordinate back to the original matched
-    palette colour, even after the displayed preview has been recoloured.
-    用于 ``POST /api/convert/source-color-pick``：全选模式点图时，按点击
-    坐标回查原始匹配色，即使当前展示图已经被换色也不受影响。
+    Used by ``POST /api/convert/source-color-pick`` when the Same-color
+    selection tool maps a clicked preview coordinate to the colour the user
+    currently sees after replacements or recipe overrides.
+    用于 ``POST /api/convert/source-color-pick``：同颜色全选点图时，按
+    当前预览状态回查点击像素颜色，会跟随替换和自定义配方后的结果。
 
     Attributes:
         session_id: Active session identifier. (Session ID)
@@ -1027,18 +1041,64 @@ class SourceColorPickRequest(BaseModel):
 
 
 class SourceColorPickResponse(BaseModel):
-    """Response model for a preview pixel's source and quantized colors.
-    预览像素对应源色和量化色的响应模型。
+    """Response model for a preview pixel's current matched and quantized colors.
+    预览像素对应当前匹配色和量化色的响应模型。
 
     Attributes:
-        source_matched_hex: Original matched source colour as ``#rrggbb``.
-            原始匹配源色，格式为 ``#rrggbb``。
+        source_matched_hex: Current matched colour as ``#rrggbb``.
+            当前匹配色，格式为 ``#rrggbb``。字段名为兼容旧前端保留。
         quantized_hex: Quantized source colour at the same pixel as ``#rrggbb``.
             同一像素的量化原色，格式为 ``#rrggbb``。
     """
 
-    source_matched_hex: str = Field(..., description="原始匹配源色 (#rrggbb)")
+    source_matched_hex: str = Field(..., description="当前匹配色 (#rrggbb)")
     quantized_hex: str = Field(..., description="量化原色 (#rrggbb)")
+
+
+class SelectionPoint(BaseModel):
+    """One image-space point in a staged selection brush stroke."""
+
+    x: float = Field(..., ge=0, description="预览像素 X 坐标")
+    y: float = Field(..., ge=0, description="预览像素 Y 坐标")
+
+
+class SelectionMutationRequest(BaseModel):
+    """Mutate the shared editor selection without changing preview content."""
+
+    session_id: str = Field(..., description="Session ID")
+    operation: Literal["point-toggle", "same-color-toggle", "brush-add", "clear"]
+    base_selection_revision: int = Field(..., ge=0, description="客户端选区版本")
+    content_revision: int = Field(..., ge=0, description="可见区域缓存内容版本")
+    x: int | None = Field(None, ge=0)
+    y: int | None = Field(None, ge=0)
+    color_hex: str | None = None
+    brush_radius: float | None = Field(None, gt=0, le=4096)
+    brush_points: list[SelectionPoint] = Field(default_factory=list, max_length=10000)
+
+
+class SelectionComponentItem(BaseModel):
+    label: int
+    region_id: str
+    color_hex: str
+    pixel_count: int
+    bbox: list[int]
+    anchor: list[int]
+
+
+class SelectionDocumentResponse(BaseModel):
+    """Authoritative shared selection summary and union boundary."""
+
+    selection_revision: int
+    content_revision: int
+    selected_pixel_count: int
+    selected_component_count: int
+    selected_color_hexes: list[str] = Field(default_factory=list)
+    region_ids: list[str] = Field(default_factory=list)
+    components: list[SelectionComponentItem] = Field(default_factory=list)
+    contours: list[list[list[float]]] = Field(default_factory=list)
+    can_undo: bool = False
+    can_redo: bool = False
+    brush_hit_component_count: int | None = None
 
 
 class RegionDetectRequest(BaseModel):
@@ -1059,6 +1119,10 @@ class RegionDetectRequest(BaseModel):
     session_id: str = Field(..., description="Session ID")
     x: int = Field(..., ge=0, description="点击像素 X 坐标")
     y: int = Field(..., ge=0, description="点击像素 Y 坐标")
+    include_preview: bool = Field(
+        False,
+        description="是否生成高亮预览 PNG；默认 false，仅显式请求时生成",
+    )
 
 
 class RegionDetectResponse(BaseModel):
@@ -1066,21 +1130,28 @@ class RegionDetectResponse(BaseModel):
     连通区域检测的响应模型。
 
     Returns the detected region metadata including a unique identifier,
-    the region color, pixel count, and a highlighted preview image URL.
-    返回检测到的区域元数据，包括唯一标识、区域颜色、像素数量和高亮预览图 URL。
+    the region color, pixel count, optional contours, and optionally a
+    highlighted preview image URL when ``include_preview`` is true.
+    返回检测到的区域元数据，包括唯一标识、区域颜色、像素数量、可选轮廓；
+    仅在 ``include_preview`` 为 true 时返回高亮预览图 URL。
 
     Attributes:
         region_id: Unique identifier for the detected region. (区域唯一标识)
         color_hex: Hex color of the region. (区域颜色 hex)
         pixel_count: Number of pixels in the region. (区域像素数量)
-        preview_url: URL of the highlighted preview image. (高亮预览图 URL)
+        preview_url: URL of the highlighted preview image when explicitly
+            requested, otherwise null. (显式请求时的高亮预览图 URL；默认 null)
     """
 
     region_id: str = Field(..., description="区域唯一标识")
     color_hex: str = Field(..., description="区域颜色 hex")
     pixel_count: int = Field(..., description="区域像素数量")
-    preview_url: str = Field(..., description="高亮预览图 URL")
+    preview_url: str | None = Field(None, description="高亮预览图 URL；默认不生成，可为 null")
     contours: list[list[list[float]]] | None = Field(None, description="区域轮廓坐标（世界坐标 mm），用于 3D 高亮")
+    bbox: tuple[int, int, int, int] | None = Field(
+        None,
+        description="区域像素 bbox: (x, y, width, height)，仅用于诊断和旧客户端兼容，不作为可视选区形状",
+    )
 
 
 class RegionReplaceRequest(BaseModel):
@@ -1146,6 +1217,11 @@ class RegionReplaceRequest(BaseModel):
             "gradient_group_index."
         ),
     )
+    selection_revision: int | None = Field(
+        None,
+        ge=0,
+        description="统一编辑选区版本；提供时优先使用共享 selection mask",
+    )
 
 
 class RegionReplaceBatchItem(BaseModel):
@@ -1153,11 +1229,11 @@ class RegionReplaceBatchItem(BaseModel):
     批量区域替换中的单条记录。
 
     Each item defines its own mask source: click coordinates (flood-fill
-    on the quantised preview) OR gradient group/region indices (mask
+    on the current visible preview colour) OR gradient group/region indices (mask
     rebuilt from the cached region_id_map) — exactly the same sources as
     the non-batch :class:`RegionReplaceRequest`. Items are applied in
     order so the final preview reflects the cumulative result.
-    每条 item 自己定义 mask 来源：点击坐标（泛洪填充）或渐变 group/region
+    每条 item 自己定义 mask 来源：点击坐标（按当前可见预览色泛洪填充）或渐变 group/region
     索引（从缓存的 region_id_map 重建 mask），与 :class:`RegionReplaceRequest`
     一致。items 按顺序累积作用到 matched_rgb，最终预览是综合结果。
 
@@ -1272,6 +1348,44 @@ class RegionRequantizeRequest(BaseModel):
     )
 
 
+class ReplacementHistoryRequest(BaseModel):
+    """Request model for replacement undo/redo.
+    替换历史撤销/重做请求。
+    """
+
+    session_id: str = Field(..., description="Session ID")
+    action: Literal["undo", "redo"] = Field(..., description="历史操作：undo 或 redo")
+
+
+class ReplacementHistoryResponse(BaseModel):
+    """Response model for replacement undo/redo.
+    替换历史撤销/重做响应。
+    """
+
+    status: str = Field("ok", description="操作状态")
+    action: Literal["undo", "redo"] = Field(..., description="执行的历史操作")
+    label: str | None = Field(None, description="被恢复的 checkpoint 标签")
+    entry_kind: Literal["content", "selection"] = Field(
+        "content", description="恢复的是内容操作还是选区操作"
+    )
+    selection: SelectionDocumentResponse | None = Field(
+        None, description="恢复选区操作后的当前选区摘要"
+    )
+    message: str = Field("Replacement history restored", description="操作结果消息")
+    preview_url: str = Field(..., description="恢复后的预览图 URL")
+    preview_glb_url: str | None = Field(None, description="异步 GLB URL；通常为 null")
+    can_undo: bool = Field(False, description="是否还可撤销")
+    can_redo: bool = Field(False, description="是否还可重做")
+    replacement_regions: list[dict] = Field(default_factory=list, description="当前颜色替换记录")
+    recipe_overrides: list[dict] = Field(default_factory=list, description="当前区域配方覆盖")
+    recipe_override_count: int = Field(0, description="区域配方覆盖数量")
+    region_replacement_count: int = Field(0, description="区域级像素修改次数")
+    color_layers: int | None = Field(None, description="当前颜色层数")
+    layer_height_mm: float | None = Field(None, description="当前层高")
+    gradient_groups: Optional[List["GradientGroupItem"]] = Field(None, description="当前渐变分组")
+    free_color_set: list[str] = Field(default_factory=list, description="恢复后的自由色集合")
+
+
 class RegionReplaceResponse(DynamicMaterialResultResponse):
     """Response model for region color replacement.
     区域颜色替换的响应模型。
@@ -1299,11 +1413,17 @@ class RegionReplaceResponse(DynamicMaterialResultResponse):
     preview_glb_url: Optional[str] = Field(None, description="重新生成的分段 GLB URL")
     color_contours: Optional[dict] = Field(None, description="更新后的颜色轮廓数据")
     message: str = Field("Region replaced", description="操作结果消息")
+    can_undo: bool = Field(False, description="是否可撤销颜色调整")
+    can_redo: bool = Field(False, description="是否可重做颜色调整")
     gradient_groups: Optional[List["GradientGroupItem"]] = Field(
         None,
         description=(
             "更新后的渐变分组（仅在端点重跑了 gradient-group 分析时提供）"
         ),
+    )
+    selection: Optional[SelectionDocumentResponse] = Field(
+        None,
+        description="共享选区换色后的权威选区状态（仅 selection mask 路径返回）",
     )
 
 

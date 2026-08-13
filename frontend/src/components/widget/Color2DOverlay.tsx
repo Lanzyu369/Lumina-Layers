@@ -13,14 +13,12 @@ import { useEffect, useCallback, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useWidgetStore } from '../../stores/widgetStore';
 import { useConverterStore } from '../../stores/converter';
-import { useI18n } from '../../i18n/context';
 import ColorPreview2D from '../sections/ColorPreview2D';
 import PalettePanel from '../sections/PalettePanel';
 import LutColorGrid from '../sections/LutColorGrid';
 
 export default function Color2DOverlay() {
   const closeOverlay = useWidgetStore((s) => s.closeColor2DOverlay);
-  const { t } = useI18n();
 
   const imageFile = useConverterStore((s) => s.imageFile);
   const previewImageUrl = useConverterStore((s) => s.previewImageUrl);
@@ -88,21 +86,6 @@ export default function Color2DOverlay() {
       data-testid="color-2d-overlay"
       className="absolute inset-0 z-[45] flex flex-col bg-slate-50/95 dark:bg-slate-950/95 backdrop-blur-sm"
     >
-      {/* Header: title + close */}
-      <div className="flex shrink-0 items-center justify-between border-b border-slate-200/80 px-4 py-1.5 dark:border-slate-800/80">
-        <h2 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-          {t('color_2d_overlay_title')}
-        </h2>
-        <button
-          type="button"
-          onClick={closeOverlay}
-          className="rounded-full border border-slate-200/80 bg-slate-100/85 px-3 py-1 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-200 dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-200 dark:hover:bg-slate-800"
-          aria-label={t('color_2d_overlay_close')}
-        >
-          {t('color_2d_overlay_close')} <span className="ml-1 text-[10px] text-slate-400">{t('color_2d_overlay_close_shortcut')}</span>
-        </button>
-      </div>
-
       {/* Content: left = 2D preview, right = palette + LUT grid in two columns */}
       {contentReady && (
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(18rem,0.82fr)_minmax(17rem,0.46fr)_minmax(20rem,0.72fr)] gap-0">

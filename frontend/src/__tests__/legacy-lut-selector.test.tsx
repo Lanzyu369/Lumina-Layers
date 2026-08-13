@@ -82,14 +82,6 @@ describe("LegacyLutSelector", () => {
     expect(screen.getByRole("checkbox", { name: "A 8C" })).toBeInTheDocument();
   });
 
-  it("uses the shared reverse-LUT checkbox row styling", () => {
-    renderSelector();
-
-    const checkbox = screen.getByRole("checkbox", { name: "A 4C" });
-    expect(checkbox).toHaveClass("sr-only");
-    expect(checkbox.closest("label")).toHaveClass("rounded-[22px]");
-  });
-
   it("emits multi-selected LUT names in grouped order", () => {
     const onLutSelectionChange = vi.fn();
     renderSelector({
@@ -124,6 +116,22 @@ describe("LegacyLutSelector", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "A 8C" }));
 
     expect(onLutSelectionChange).toHaveBeenCalledWith(["a4", "a8"]);
+  });
+
+  it("deselects a LUT when toggled off", () => {
+    const onLutSelectionChange = vi.fn();
+    renderSelector({
+      selectedLutNames: ["a4", "b4"],
+      onLutSelectionChange,
+      labels: {
+        ...labels,
+        multiSelect: "Multi-select LUTs",
+      },
+    });
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "B 4C" }));
+
+    expect(onLutSelectionChange).toHaveBeenCalledWith(["a4"]);
   });
 
   it("uses a vertical stack in compact mode", () => {

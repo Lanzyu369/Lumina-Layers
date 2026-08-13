@@ -19,6 +19,9 @@ const converterStoreState = vi.hoisted(() => ({
   customRecipeHistory: [] as RecipeHistoryItem[],
   pushCustomRecipeHistory: vi.fn(),
   source_version: "legacy",
+  selectedLutInfo: null as {
+    supports_predictive_match?: boolean;
+  } | null,
   materialDynamicLayerCountEnabled: false,
   selectedMaterialDirNames: [] as string[],
   materialSuggestions: null,
@@ -119,6 +122,7 @@ describe("CustomRecipeDialog", () => {
     vi.clearAllMocks();
     converterStoreState.customRecipeHistory = [];
     converterStoreState.source_version = "legacy";
+    converterStoreState.selectedLutInfo = null;
     converterStoreState.materialDynamicLayerCountEnabled = false;
     converterStoreState.selectedMaterialDirNames = [];
     converterStoreState.materialSuggestions = null;
@@ -192,7 +196,47 @@ describe("CustomRecipeDialog", () => {
     expect(applyRecipeOverrideMock.mock.calls[0]?.[0].recipe).toHaveLength(7);
   });
 
-  it("renders no-forward-model prediction failures as a warning", async () => {
+  it("disables prediction for LUT sources without a forward model", () => {
+    renderDialog();
+
+    expect(
+      screen.getByRole("button", { name: "recipe_custom_predict" }),
+    ).toBeDisabled();
+    const notice = screen.getByText("recipe_custom_predict_no_forward_model");
+    expect(notice).toBeInTheDocument();
+    expect(notice.className).toContain("slate");
+    expect(predictCustomRecipeMock).not.toHaveBeenCalled();
+  });
+
+  it("enables prediction for LUT sources that carry a forward model", () => {
+    converterStoreState.selectedLutInfo = { supports_predictive_match: true };
+    renderDialog();
+
+    expect(
+      screen.getByRole("button", { name: "recipe_custom_predict" }),
+    ).not.toBeDisabled();
+    expect(
+      screen.queryByText("recipe_custom_predict_no_forward_model"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("allows applying when LUT prediction is unavailable", async () => {
+    applyRecipeOverrideMock.mockResolvedValueOnce(applyResponse());
+    const onApplied = vi.fn();
+    renderDialog({ onApplied });
+
+    const applyButton = screen.getByRole("button", {
+      name: "recipe_custom_apply",
+    });
+    expect(applyButton).not.toBeDisabled();
+    fireEvent.click(applyButton);
+
+    await waitFor(() => expect(applyRecipeOverrideMock).toHaveBeenCalledOnce());
+    await waitFor(() => expect(onApplied).toHaveBeenCalledOnce());
+  });
+
+  it("renders no-forward-model prediction failures as a neutral notice for material sources", async () => {
+    converterStoreState.source_version = "material";
     predictCustomRecipeMock.mockRejectedValueOnce(
       new Error("No predictive runtime available for this source"),
     );
@@ -204,11 +248,12 @@ describe("CustomRecipeDialog", () => {
 
     const banner = await screen.findByTestId("recipe-error-banner");
     expect(banner).toHaveTextContent("recipe_custom_predict_no_forward_model");
-    expect(banner.className).toContain("amber");
+    expect(banner.className).toContain("slate");
     expect(banner.className).not.toContain("red");
   });
 
   it("allows applying after a package-only prediction warning", async () => {
+    converterStoreState.source_version = "material";
     predictCustomRecipeMock.mockRejectedValueOnce(
       new Error(
         "Recipe is not present in the runtime package; exact prediction unavailable for package-only source",
@@ -224,7 +269,7 @@ describe("CustomRecipeDialog", () => {
 
     const banner = await screen.findByTestId("recipe-error-banner");
     expect(banner).toHaveTextContent("recipe_custom_predict_no_forward_model");
-    expect(banner.className).toContain("amber");
+    expect(banner.className).toContain("slate");
 
     const applyButton = screen.getByRole("button", {
       name: "recipe_custom_apply",
@@ -237,6 +282,7 @@ describe("CustomRecipeDialog", () => {
   });
 
   it("renders generic prediction failures as an error", async () => {
+    converterStoreState.source_version = "material";
     predictCustomRecipeMock.mockRejectedValueOnce(new Error("network boom"));
     renderDialog();
 
@@ -247,10 +293,11 @@ describe("CustomRecipeDialog", () => {
     const banner = await screen.findByTestId("recipe-error-banner");
     expect(banner).toHaveTextContent("network boom");
     expect(banner.className).toContain("red");
-    expect(banner.className).not.toContain("amber");
+    expect(banner.className).not.toContain("slate");
   });
 
   it("hides backend validation paths from prediction failures", async () => {
+    converterStoreState.selectedLutInfo = { supports_predictive_match: true };
     predictCustomRecipeMock.mockRejectedValueOnce(
       apiValidationFailure(["body", "recipe"], "Recipe is required"),
     );
@@ -270,6 +317,7 @@ describe("CustomRecipeDialog", () => {
   });
 
   it("keeps non-target prediction validation details visible", async () => {
+    converterStoreState.selectedLutInfo = { supports_predictive_match: true };
     predictCustomRecipeMock.mockRejectedValueOnce(
       apiValidationFailure(["body", "layer_order"], "Layer order is invalid"),
     );
@@ -359,6 +407,40 @@ describe("CustomRecipeDialog", () => {
     fireEvent.click(undoButton);
     expect(screen.getAllByTestId(/recipe-layer-swatch-/)).toHaveLength(2);
     expect(undoButton).toBeDisabled();
+  });
+
+  it("renders sortable drag handles without changing recipe payload shape", async () => {
+    applyRecipeOverrideMock.mockResolvedValueOnce(applyResponse());
+    renderDialog({
+      palette: [
+        { color: "White", material: "white", hex: "F5F5F5" },
+        { color: "Red", material: "red", hex: "E53935" },
+      ],
+      colorLayers: 2,
+    });
+
+    fireEvent.change(
+      screen.getByPlaceholderText("recipe_custom_pattern_placeholder"),
+      { target: { value: "RW" } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "recipe_custom_pattern_apply" }),
+    );
+
+    expect(screen.getByTestId("recipe-layer-swatch-0")).toHaveStyle({
+      backgroundColor: "rgb(229, 57, 53)",
+    });
+    expect(screen.getByTestId("recipe-layer-swatch-1")).toHaveStyle({
+      backgroundColor: "rgb(245, 245, 245)",
+    });
+
+    const firstHandle = screen.getByTestId("recipe-layer-drag-handle-0");
+    expect(firstHandle).toHaveAttribute("role", "button");
+    expect(firstHandle).toHaveAttribute("aria-roledescription", "sortable");
+
+    fireEvent.click(screen.getByRole("button", { name: "recipe_custom_apply" }));
+    await waitFor(() => expect(applyRecipeOverrideMock).toHaveBeenCalledOnce());
+    expect(applyRecipeOverrideMock.mock.calls[0]?.[0].recipe).toEqual([1, 0]);
   });
 
   it("renders the current region swatch when a hex is provided", () => {

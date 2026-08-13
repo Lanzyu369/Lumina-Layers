@@ -1,5 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import {
+  closestCenter,
+  DndContext,
+  DragOverlay,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
 import Button from "./Button";
 import CustomRecipeSidePanel, {
@@ -27,6 +47,7 @@ import {
   buildPaletteHint,
   validateRecipePattern,
 } from "../../utils/recipePattern";
+import { formatDisplayLayerLabelParts } from "../../utils/layerLabels";
 
 interface PaletteOption {
   color: string;
@@ -106,6 +127,11 @@ interface Props {
   ) => void;
 }
 
+interface RecipeRow {
+  id: string;
+  displayIdx: number;
+}
+
 function buildDefaultRecipe(
   length: number,
   displayPalette: DisplayPaletteEntry[],
@@ -121,6 +147,16 @@ function buildDefaultRecipe(
   );
   const safeIdx = defaultIdx >= 0 ? defaultIdx : 0;
   return Array.from({ length }, () => safeIdx);
+}
+
+function makeRecipeRows(
+  recipe: number[],
+  nextId: () => string,
+): RecipeRow[] {
+  return recipe.map((displayIdx) => ({
+    id: nextId(),
+    displayIdx,
+  }));
 }
 
 function classifyPredictError(message: string): PredictFailureKind {
@@ -448,6 +484,110 @@ function useStableByKey<T>(value: T, key: string): T {
   return ref.current.value;
 }
 
+interface SortableRecipeRowProps {
+  row: RecipeRow;
+  index: number;
+  displayPalette: DisplayPaletteEntry[];
+  colorOptions: { label: string; value: string }[];
+  layerLabel: { label: string; viewerSuffix: string | null };
+  removeLabel: string;
+  dragHandleLabel: string;
+  canRemove: boolean;
+  onChangeLayer: (index: number, displayIdx: number) => void;
+  onRemoveLayer: (index: number) => void;
+}
+
+function SortableRecipeRow({
+  row,
+  index,
+  displayPalette,
+  colorOptions,
+  layerLabel,
+  removeLabel,
+  dragHandleLabel,
+  canRemove,
+  onChangeLayer,
+  onRemoveLayer,
+}: SortableRecipeRowProps) {
+  const {
+    attributes,
+    listeners,
+    setActivatorNodeRef,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: row.id });
+
+  const displayEntry = displayPalette[row.displayIdx];
+  const resolvedHex = displayEntry?.hex ?? null;
+  const swatchStyle = resolvedHex ? { backgroundColor: resolvedHex } : undefined;
+  const swatchFallbackClass = resolvedHex ? "" : "bg-slate-300 dark:bg-slate-600";
+  const swatchTitle = displayEntry?.color ?? "";
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={`grid gap-2 rounded-2xl border border-slate-200/80 bg-slate-50/70 p-3 transition-colors dark:border-slate-700/70 dark:bg-slate-900/50 lg:grid-cols-[auto_auto_auto_minmax(0,1fr)_auto] lg:items-center ${
+        isDragging
+          ? "relative z-10 border-blue-400/70 bg-blue-50/60 opacity-60 shadow-lg dark:border-blue-500/60 dark:bg-blue-500/10"
+          : ""
+      }`}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+      }}
+    >
+      <button
+        ref={setActivatorNodeRef}
+        type="button"
+        data-testid={`recipe-layer-drag-handle-${index}`}
+        className="touch-none grid h-9 w-5 shrink-0 cursor-grab select-none grid-cols-2 place-content-center gap-x-1 gap-y-1 rounded-lg text-slate-400 transition-colors hover:bg-slate-200/70 hover:text-slate-600 active:cursor-grabbing dark:text-slate-500 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+        aria-label={dragHandleLabel}
+        {...attributes}
+        {...listeners}
+      >
+        {Array.from({ length: 6 }).map((_, dotIndex) => (
+          <span
+            key={dotIndex}
+            aria-hidden="true"
+            className="h-1 w-1 rounded-full bg-current"
+          />
+        ))}
+      </button>
+      <div className="min-w-[4.5rem] text-sm font-medium leading-tight text-slate-700 dark:text-slate-200">
+        <span className="block">{layerLabel.label}</span>
+        {layerLabel.viewerSuffix && (
+          <span className="block text-xs font-normal text-slate-500 dark:text-slate-400">
+            {layerLabel.viewerSuffix}
+          </span>
+        )}
+      </div>
+      <div
+        data-testid={`recipe-layer-swatch-${index}`}
+        title={swatchTitle}
+        className={`h-6 w-6 rounded-lg border border-slate-300/80 dark:border-slate-600/80 ${swatchFallbackClass}`}
+        style={swatchStyle}
+      />
+      <Dropdown
+        label=""
+        value={String(row.displayIdx)}
+        options={colorOptions}
+        onChange={(next) => onChangeLayer(index, Number(next))}
+      />
+      <div className="flex flex-wrap gap-2">
+        <Button
+          label={removeLabel}
+          variant="secondary"
+          size="sm"
+          onClick={() => onRemoveLayer(index)}
+          disabled={!canRemove}
+        />
+      </div>
+    </div>
+  );
+}
+
 export default function CustomRecipeDialog({
   open,
   sessionId,
@@ -461,7 +601,7 @@ export default function CustomRecipeDialog({
   onClose,
   onApplied,
 }: Props) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const customRecipeHistory = useConverterStore(
     (state) => state.customRecipeHistory,
   );
@@ -469,6 +609,7 @@ export default function CustomRecipeDialog({
     (state) => state.pushCustomRecipeHistory,
   );
   const sourceVersion = useConverterStore((state) => state.source_version);
+  const selectedLutInfo = useConverterStore((state) => state.selectedLutInfo);
   const dynamicMaterialEnabled = useConverterStore(
     (state) => state.materialDynamicLayerCountEnabled,
   );
@@ -483,8 +624,17 @@ export default function CustomRecipeDialog({
   // 永远回显用户实际点击的原色；即使在稀疏 LUT 下用户选的原色物理上会被
   // 代用为别的通道，UI 也不会反漫到代用通道上。翻译到 LUT 索引仅发生在
   // 网络请求和历史条目边界。
-  const [recipe, setRecipe] = useState<number[]>(() =>
-    Array.from({ length: colorLayers }, () => 0),
+  const rowIdCounterRef = useRef(0);
+  const nextRecipeRowId = useCallback((): string => {
+    rowIdCounterRef.current += 1;
+    return `recipe-layer-${rowIdCounterRef.current}`;
+  }, []);
+  const [recipeRows, setRecipeRows] = useState<RecipeRow[]>(() =>
+    makeRecipeRows(Array.from({ length: colorLayers }, () => 0), nextRecipeRowId),
+  );
+  const recipe = useMemo(
+    () => recipeRows.map((row) => row.displayIdx),
+    [recipeRows],
   );
   const [pattern, setPattern] = useState("");
   const [prediction, setPrediction] = useState<RecipePredictResponse | null>(
@@ -514,6 +664,7 @@ export default function CustomRecipeDialog({
   const [appliedRegionHex, setAppliedRegionHex] = useState<string | null>(
     null,
   );
+  const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const paletteKey = JSON.stringify(
     palette.map((entry) => [
       entry.color,
@@ -597,6 +748,7 @@ export default function CustomRecipeDialog({
       setEditStack([]);
       setAppliedAt(null);
       setAppliedRegionHex(null);
+      setActiveDragId(null);
       return;
     }
     if (initializedKeyRef.current === initializationKey) {
@@ -613,9 +765,12 @@ export default function CustomRecipeDialog({
     // replaces this with the region's real matched stack when available.
     // 立即填一个同步默认（全白/base），避免异步请求进行中下拉是空状态；
     // 后端的真实 recipe 回来后会覆盖它。
-    setRecipe(
-      buildDefaultRecipe(colorLayers, displayPalette, resolvedBaseChannelIdx),
+    const defaultRecipe = buildDefaultRecipe(
+      colorLayers,
+      displayPalette,
+      resolvedBaseChannelIdx,
     );
+    setRecipeRows(makeRecipeRows(defaultRecipe, nextRecipeRowId));
     setPattern("");
     setPrediction(null);
     setLastPredictFromModel(false);
@@ -624,6 +779,7 @@ export default function CustomRecipeDialog({
     setPendingUpgrade(false);
     setEditStack([]);
     setAppliedAt(null);
+    setActiveDragId(null);
     // Region changed → drop the stale “applied” swatch so the prop’s hex wins.
     setAppliedRegionHex(null);
 
@@ -724,7 +880,7 @@ export default function CustomRecipeDialog({
               ? translated.slice(0, targetLen)
               : translated.slice(translated.length - targetLen);
         }
-        setRecipe(sized);
+        setRecipeRows(makeRecipeRows(sized, nextRecipeRowId));
       })
       .catch(() => {
         // Silent: the synchronous default already covers the UI.
@@ -740,15 +896,16 @@ export default function CustomRecipeDialog({
     displayPalette,
     dynamicMaterialEnabled,
     stableRegionIds,
+    nextRecipeRowId,
     sourceVersion,
   ]);
 
-  const snapshotBeforeEdit = () => {
+  const snapshotBeforeEdit = useCallback(() => {
     markDraftEdited();
-    setEditStack((prev) => [...prev, [...recipe]]);
+    setEditStack((prev) => [...prev, recipeRows.map((row) => row.displayIdx)]);
     setAppliedAt(null);
     setLastPredictFromModel(false);
-  };
+  }, [recipeRows]);
 
   const handleUndo = () => {
     if (editStack.length === 0) return;
@@ -757,7 +914,9 @@ export default function CustomRecipeDialog({
       if (prev.length === 0) return prev;
       const next = [...prev];
       const restored = next.pop();
-      if (restored) setRecipe([...restored]);
+      if (restored) {
+        setRecipeRows(makeRecipeRows(restored, nextRecipeRowId));
+      }
       setPendingUpgrade(false);
       setAppliedAt(null);
       setLastPredictFromModel(false);
@@ -796,13 +955,26 @@ export default function CustomRecipeDialog({
     [displayPalette],
   );
   const canApply = stableRegionIds.length > 0 && recipe.length > 0;
+  // 预测能力按「来源是否有前向模型」判断，而不是按来源类型一刀切：
+  // - material 来源走 Beer-Lambert 前向模型，始终可预测；
+  // - legacy/native LUT 只有在确实携带预测式运行时（supports_predictive_match）
+  //   时才可预测，避免误伤带前向模型的 LUT。
+  // Prediction gating follows the source's forward-model capability, not its
+  // type: material sources always predict via Beer-Lambert; legacy/native LUTs
+  // predict only when they carry a predictive runtime.
+  const canPredictRecipe =
+    sourceVersion === "material" ||
+    Boolean(selectedLutInfo?.supports_predictive_match);
   const shouldConfirmUpgrade = pendingUpgrade && recipe.length > colorLayers;
 
   const updateLayer = (index: number, displayIdx: number) => {
     snapshotBeforeEdit();
-    setRecipe((current) => {
+    setRecipeRows((current) => {
       const next = [...current];
-      next[index] = displayIdx;
+      const row = next[index];
+      if (row) {
+        next[index] = { ...row, displayIdx };
+      }
       return next;
     });
     setPendingUpgrade(false);
@@ -814,28 +986,45 @@ export default function CustomRecipeDialog({
       (entry) => entry.native && entry.lutIndex === resolvedBaseChannelIdx,
     );
     const safeIdx = defaultDisplayIdx >= 0 ? defaultDisplayIdx : 0;
-    setRecipe((current) => [...current, safeIdx]);
+    setRecipeRows((current) => [
+      ...current,
+      { id: nextRecipeRowId(), displayIdx: safeIdx },
+    ]);
     setPendingUpgrade(false);
   };
 
   const handleRemoveLayer = (index: number) => {
     snapshotBeforeEdit();
-    setRecipe((current) =>
+    setRecipeRows((current) =>
       current.filter((_, currentIndex) => currentIndex !== index),
     );
     setPendingUpgrade(false);
   };
 
-  const moveLayer = (index: number, delta: number) => {
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  const handleDragStart = (event: DragStartEvent) => {
+    setActiveDragId(String(event.active.id));
+  };
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const activeId = String(event.active.id);
+    const overId = event.over ? String(event.over.id) : null;
+    setActiveDragId(null);
+    if (!overId || activeId === overId) return;
+    const oldIndex = recipeRows.findIndex((row) => row.id === activeId);
+    const newIndex = recipeRows.findIndex((row) => row.id === overId);
+    if (oldIndex < 0 || newIndex < 0 || oldIndex === newIndex) return;
     snapshotBeforeEdit();
-    setRecipe((current) => {
-      const nextIndex = index + delta;
-      if (nextIndex < 0 || nextIndex >= current.length) return current;
-      const next = [...current];
-      const [item] = next.splice(index, 1);
-      next.splice(nextIndex, 0, item);
-      return next;
-    });
+    setRecipeRows((current) => arrayMove(current, oldIndex, newIndex));
+    setPendingUpgrade(false);
+  };
+
+  const handleDragCancel = () => {
+    setActiveDragId(null);
   };
 
   const handleApplyPattern = () => {
@@ -855,9 +1044,18 @@ export default function CustomRecipeDialog({
     // is already in displayPalette indices, so no translation needed here.
     // pattern 基于 displayPalette（8 原色）解析，recipe state 本身就是
     // displayPalette 索引，无需再翻译。
-    setRecipe((current) =>
-      applyRecipePattern(pattern, displayPalette, current.length, current),
-    );
+    setRecipeRows((current) => {
+      const nextRecipe = applyRecipePattern(
+        pattern,
+        displayPalette,
+        current.length,
+        current.map((row) => row.displayIdx),
+      );
+      return current.map((row, index) => ({
+        ...row,
+        displayIdx: nextRecipe[index] ?? row.displayIdx,
+      }));
+    });
   };
 
   // Translate a displayPalette-indexed recipe into backend-ready channel
@@ -902,6 +1100,9 @@ export default function CustomRecipeDialog({
   );
 
   const handlePredict = async () => {
+    if (!canPredictRecipe) {
+      return;
+    }
     setIsPredicting(true);
     setError(null);
     setErrorKind("general");
@@ -1070,7 +1271,7 @@ export default function CustomRecipeDialog({
       if (labelHit >= 0) return labelHit;
       return findDisplayIdxForLutIdx(lutIdx);
     });
-    setRecipe(restored);
+    setRecipeRows(makeRecipeRows(restored, nextRecipeRowId));
     setPendingUpgrade(false);
     setError(null);
     setErrorKind("general");
@@ -1084,7 +1285,7 @@ export default function CustomRecipeDialog({
 
   const errorToneClass =
     errorKind === "no_forward_model"
-      ? "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+      ? "border-slate-300/80 bg-slate-100/70 text-slate-600 dark:border-slate-700/70 dark:bg-slate-800/50 dark:text-slate-300"
       : "border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-300";
 
   const headerRegionHex = appliedRegionHex ?? currentRegionColorHex ?? null;
@@ -1098,10 +1299,11 @@ export default function CustomRecipeDialog({
       onClick={onClose}
     >
       <div
-        className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-[28px] border border-slate-200 p-5 shadow-2xl dark:border-slate-700"
+        className="max-h-[90vh] w-full max-w-5xl overflow-hidden rounded-[28px] border border-slate-200 shadow-2xl dark:border-slate-700"
         style={{ backgroundColor: "var(--surface-panel-strong)" }}
         onClick={(event) => event.stopPropagation()}
       >
+        <div className="max-h-[90vh] overflow-y-auto p-5">
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-center gap-3">
             {headerRegionHex && (
@@ -1161,68 +1363,53 @@ export default function CustomRecipeDialog({
               />
             </div>
 
-            <div className="flex flex-col gap-3">
-              {recipe.map((displayIdx, index) => {
-                const displayEntry = displayPalette[displayIdx];
-                const resolvedHex = displayEntry?.hex ?? null;
-                const swatchStyle = resolvedHex
-                  ? { backgroundColor: resolvedHex }
-                  : undefined;
-                const swatchFallbackClass = resolvedHex
-                  ? ""
-                  : "bg-slate-300 dark:bg-slate-600";
-                const swatchTitle = displayEntry?.color ?? "";
-
-                return (
-                  <div
-                    key={`${index}-${displayIdx}`}
-                    className="grid gap-2 rounded-2xl border border-slate-200/80 bg-slate-50/70 p-3 dark:border-slate-700/70 dark:bg-slate-900/50 lg:grid-cols-[auto_auto_minmax(0,1fr)_auto] lg:items-center"
-                  >
-                    <div className="text-sm font-medium text-slate-700 dark:text-slate-200">
-                      {t("recipe_custom_layer_label").replace(
-                        "{index}",
-                        String(index + 1),
-                      )}
-                    </div>
-                    <div
-                      data-testid={`recipe-layer-swatch-${index}`}
-                      title={swatchTitle}
-                      className={`h-6 w-6 rounded-lg border border-slate-300/80 dark:border-slate-600/80 ${swatchFallbackClass}`}
-                      style={swatchStyle}
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              modifiers={[restrictToVerticalAxis]}
+              onDragStart={handleDragStart}
+              onDragEnd={handleDragEnd}
+              onDragCancel={handleDragCancel}
+            >
+              <SortableContext
+                items={recipeRows.map((row) => row.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                <div className="flex flex-col gap-3">
+                  {recipeRows.map((row, index) => (
+                    <SortableRecipeRow
+                      key={row.id}
+                      row={row}
+                      index={index}
+                      displayPalette={displayPalette}
+                      colorOptions={colorOptions}
+                      layerLabel={formatDisplayLayerLabelParts(index, t, lang)}
+                      removeLabel={t("recipe_custom_remove_layer")}
+                      dragHandleLabel={t("recipe_custom_drag_handle_label")}
+                      canRemove={recipeRows.length > 1}
+                      onChangeLayer={updateLayer}
+                      onRemoveLayer={handleRemoveLayer}
                     />
-                    <Dropdown
-                      label=""
-                      value={String(displayIdx)}
-                      options={colorOptions}
-                      onChange={(next) => updateLayer(index, Number(next))}
-                    />
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        label={t("recipe_custom_move_up")}
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => moveLayer(index, -1)}
-                        disabled={index === 0}
-                      />
-                      <Button
-                        label={t("recipe_custom_move_down")}
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => moveLayer(index, 1)}
-                        disabled={index === recipe.length - 1}
-                      />
-                      <Button
-                        label={t("recipe_custom_remove_layer")}
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => handleRemoveLayer(index)}
-                        disabled={recipe.length <= 1}
-                      />
-                    </div>
+                  ))}
+                </div>
+              </SortableContext>
+              <DragOverlay dropAnimation={null}>
+                {activeDragId ? (
+                  <div className="rounded-2xl border border-blue-400/70 bg-blue-50/95 p-3 text-sm font-medium text-slate-700 shadow-xl dark:border-blue-500/60 dark:bg-slate-900/95 dark:text-slate-200">
+                    {
+                      formatDisplayLayerLabelParts(
+                        Math.max(
+                          0,
+                          recipeRows.findIndex((row) => row.id === activeDragId),
+                        ),
+                        t,
+                        lang,
+                      ).label
+                    }
                   </div>
-                );
-              })}
-            </div>
+                ) : null}
+              </DragOverlay>
+            </DndContext>
 
             {shouldConfirmUpgrade && (
               <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300">
@@ -1253,7 +1440,7 @@ export default function CustomRecipeDialog({
                 }
                 variant="secondary"
                 onClick={() => void handlePredict()}
-                disabled={isPredicting}
+                disabled={isPredicting || !canPredictRecipe}
                 loading={isPredicting}
               />
               <Button
@@ -1276,7 +1463,11 @@ export default function CustomRecipeDialog({
               <div className="text-sm font-medium text-slate-700 dark:text-slate-200">
                 {t("recipe_custom_preview_color")}
               </div>
-              {prediction ? (
+              {!canPredictRecipe ? (
+                <div className="rounded-2xl border border-slate-200/80 bg-slate-100/70 px-3 py-2 text-xs text-slate-600 dark:border-slate-700/70 dark:bg-slate-800/50 dark:text-slate-300">
+                  {t("recipe_custom_predict_no_forward_model")}
+                </div>
+              ) : prediction ? (
                 <>
                   <div
                     className="h-24 rounded-2xl border border-slate-200/80 shadow-[var(--shadow-control)] dark:border-slate-700/70"
@@ -1340,6 +1531,7 @@ export default function CustomRecipeDialog({
               onApplyHistory={handleApplyHistory}
             />
           </div>
+        </div>
         </div>
       </div>
     </div>,

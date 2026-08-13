@@ -27,14 +27,38 @@ export const workstationInsetCardClass =
 export const workstationShellClass =
   "rounded-t-[28px]";
 
+/* ========== Hierarchy v2 primitives ==========
+ * One bordered card level per page; inside a card only wells (tinted,
+ * borderless) and hairline dividers. Radii step down 16 → 10 → 6 px so
+ * outer/inner shapes stop competing.
+ * 层级 v2：每页只有一层带边框卡片；卡片内只用“凹槽”和分割线表达分组，
+ * 圆角按 16 → 10 → 6 px 递减，外壳与内部控件不再抢层级。 */
+
+export const cardClass = "panel-card rounded-2xl";
+
+export const cardPadClass = `${cardClass} px-5 py-5`;
+
+export const wellClass = "panel-well rounded-[10px]";
+
+export const wellPadClass = `${wellClass} px-3 py-2.5`;
+
+/** Hairline divider between groups inside a card. 卡内分组分割线。 */
+export const cardDividerClass =
+  "panel-divider border-t";
+
+/** Group header inside a card: small caps eyebrow, optionally with a tint dot.
+ * 卡内组标题：小型大写字距标题，可带彩色圆点替代彩色边框。 */
+export const groupHeaderClass =
+  "flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400";
+
 export const workstationFieldLabelClass =
   "text-sm font-medium text-slate-700 dark:text-slate-200";
 
 export const workstationInputClass =
-  "min-h-11 w-full rounded-[22px] border border-slate-200/80 bg-white/82 px-3.5 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] transition-all duration-200 hover:border-slate-300 hover:bg-white/90 focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45 dark:border-slate-700/80 dark:bg-slate-900/72 dark:text-slate-100 dark:hover:border-slate-600";
+  "min-h-11 w-full rounded-[10px] border border-slate-200/80 bg-white/82 px-3.5 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] transition-all duration-200 hover:border-slate-300 hover:bg-white/90 focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45 dark:border-slate-700/80 dark:bg-slate-900/72 dark:text-slate-100 dark:hover:border-slate-600";
 
 export const workstationChoiceRowClass =
-  "rounded-[22px] border border-slate-200/80 bg-white/60 px-3.5 py-3 shadow-[var(--shadow-control)] transition-all duration-200 dark:border-slate-700/80 dark:bg-slate-900/55";
+  "rounded-[10px] border border-slate-200/80 bg-white/60 px-3.5 py-3 shadow-[var(--shadow-control)] transition-all duration-200 dark:border-slate-700/80 dark:bg-slate-900/55";
 
 export const workstationChoiceRowActiveClass =
   "border-blue-400 bg-white/92 dark:border-blue-400/80 dark:bg-slate-900/82";

@@ -1,21 +1,41 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import * as fc from "fast-check";
 
-vi.mock("../api/converter", () => ({
-  fetchLutList: vi.fn(),
-  convertPreview: vi.fn(),
-  convertGenerate: vi.fn(),
-  fetchBedSizes: vi.fn(),
-  uploadHeightmap: vi.fn(),
-  fetchLutColors: vi.fn(),
-  cropImage: vi.fn(),
-  convertBatch: vi.fn(),
-  replaceColor: vi.fn(),
-  detectRegion: vi.fn(),
-  regionReplace: vi.fn(),
-  regionReplaceBatch: vi.fn(),
-  resetReplacements: vi.fn(),
-}));
+vi.mock("../api/converter", async () => {
+  const actual =
+    await vi.importActual<typeof import("../api/converter")>(
+      "../api/converter",
+    );
+  return {
+    ...actual,
+    fetchLutList: vi.fn(),
+    convertPreview: vi.fn(),
+    convertGenerate: vi.fn(),
+    fetchBedSizes: vi.fn(),
+    uploadHeightmap: vi.fn(),
+    fetchLutColors: vi.fn(),
+    cropImage: vi.fn(),
+    convertBatch: vi.fn(),
+    replaceColor: vi.fn(),
+    replaceColorsBatch: vi.fn().mockResolvedValue({
+      status: "ok",
+      message: "ok",
+      preview_url: "/api/files/mock-preview",
+      replacement_count: 1,
+    }),
+    colorHighlight: vi.fn().mockResolvedValue({
+      preview_url: "/api/files/mock-highlight",
+    }),
+    detectRegion: vi.fn(),
+    regionReplace: vi.fn(),
+    regionReplaceBatch: vi.fn().mockResolvedValue({
+      preview_url: "/api/files/mock-preview",
+      preview_glb_url: null,
+      message: "ok",
+    }),
+    resetReplacements: vi.fn(),
+  };
+});
 
 vi.stubGlobal(
   "URL",
@@ -41,6 +61,7 @@ import { useConverterStore } from "../stores/converter";
 import type { SelectionMode, RegionData } from "../stores/converter";
 import { colorRemapToReplacementRegions } from "../utils/colorUtils";
 import type { PaletteEntry } from "../api/types";
+import { replaceColorsBatch, resetReplacements } from "../api/converter";
 
 const hexColor = fc.stringMatching(/^[0-9a-f]{6}$/).filter((s) => s.length === 6);
 const selectionMode: fc.Arbitrary<SelectionMode> = fc.constantFrom(
@@ -50,11 +71,31 @@ const selectionMode: fc.Arbitrary<SelectionMode> = fc.constantFrom(
   "region",
 );
 const hexColorArray = fc.uniqueArray(hexColor, { minLength: 1, maxLength: 8 });
+const mockReplaceColorsBatch = vi.mocked(replaceColorsBatch);
+const mockResetReplacements = vi.mocked(resetReplacements);
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+async function flushPromises(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
 
 function resetStore() {
   useConverterStore.setState({
     colorRemapMap: {},
     remapHistory: [],
+    remapRedoHistory: [],
+    adjustmentHistory: [],
+    adjustmentRedoHistory: [],
     replacement_regions: [],
     palette: [],
     pendingReplacement: null,
@@ -62,10 +103,13 @@ function resetStore() {
     selectedRegions: [],
     sessionId: null,
     regionData: null,
+    recipe_overrides: [],
     regionReplacementCount: 0,
     replacePreviewLoading: false,
     originalPreviewUrl: null,
+    previewBaseImageUrl: null,
     previewImageUrl: null,
+    previewGlbUrl: null,
     error: null,
   });
 }
@@ -79,16 +123,6 @@ function toRegions(colors: string[]): RegionData[] {
     clickX: i,
     clickY: i,
   }));
-}
-
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
 }
 
 describe("color replace architecture", () => {
@@ -621,13 +655,85 @@ describe("color replace architecture", () => {
           useConverterStore.getState().clearAllRemaps();
           const state = useConverterStore.getState();
           expect(state.colorRemapMap).toEqual({});
-          expect(state.remapHistory).toEqual([]);
+          expect(state.remapRedoHistory).toEqual([]);
           expect(state.regionReplacementCount).toBe(0);
           expect(state.regionData).toBeNull();
         },
       ),
       { numRuns: 50 },
     );
+  });
+
+  it("clearAllRemaps accepts reset result and ignores stale replace preview", async () => {
+    resetStore();
+    const staleReplace = deferred<{
+      status: string;
+      message: string;
+      preview_url: string;
+      preview_3d_url?: string | null;
+      replacement_count: number;
+    }>();
+    mockReplaceColorsBatch.mockReturnValueOnce(staleReplace.promise);
+    mockResetReplacements.mockResolvedValueOnce({
+      status: "ok",
+      message: "All replacements cleared",
+      preview_url: "/api/files/reset-preview",
+      preview_glb_url: null,
+    });
+
+    useConverterStore.setState({
+      sessionId: "test-session",
+      colorRemapMap: { ff0000: "00ff00" },
+      remapHistory: [{ ff0000: "0000ff" }],
+      replacement_regions: [
+        {
+          quantized_hex: "#ff0000",
+          matched_hex: "#ff0000",
+          replacement_hex: "#00ff00",
+        },
+      ],
+      recipe_overrides: [
+        {
+          region_id: "r-1",
+          recipe: [0, 1],
+          layer_order: "Top2Bottom",
+        },
+      ],
+      regionReplacementCount: 2,
+      originalPreviewUrl: "/api/files/original-preview",
+      previewBaseImageUrl: "/api/files/replaced-preview",
+      previewImageUrl: "/api/files/replaced-preview",
+      previewGlbUrl: "/api/files/replaced.glb",
+    });
+
+    const pendingReplace = useConverterStore.getState().submitReplacePreview();
+    useConverterStore.getState().clearAllRemaps();
+    await flushPromises();
+
+    let state = useConverterStore.getState();
+    expect(mockResetReplacements).toHaveBeenCalledWith("test-session");
+    expect(state.colorRemapMap).toEqual({});
+    expect(state.replacement_regions).toEqual([]);
+    expect(state.recipe_overrides).toEqual([]);
+    expect(state.regionReplacementCount).toBe(0);
+    expect(state.previewImageUrl).toBe("/api/files/reset-preview");
+    expect(state.previewBaseImageUrl).toBe("/api/files/reset-preview");
+    expect(state.previewGlbUrl).toBeNull();
+
+    staleReplace.resolve({
+      status: "ok",
+      message: "stale",
+      preview_url: "/api/files/stale-replaced-preview",
+      preview_3d_url: "/api/files/stale-replaced.glb",
+      replacement_count: 1,
+    });
+    await pendingReplace;
+
+    state = useConverterStore.getState();
+    expect(state.previewImageUrl).toBe("/api/files/reset-preview");
+    expect(state.previewBaseImageUrl).toBe("/api/files/reset-preview");
+    expect(state.previewGlbUrl).toBeNull();
+    expect(state.colorRemapMap).toEqual({});
   });
 
   it("undoColorRemap restores previous snapshot", () => {
@@ -678,6 +784,26 @@ describe("color replace architecture", () => {
           expect(item.matched_hex.startsWith("#")).toBe(true);
           expect(item.replacement_hex.startsWith("#")).toBe(true);
         }
+      }),
+      { numRuns: 50 },
+    );
+  });
+
+  it("colorRemapToReplacementRegions falls back to the source hex when palette entry is missing", () => {
+    fc.assert(
+      fc.property(hexColor, hexColor, (sourceHex, targetHex) => {
+        const result = colorRemapToReplacementRegions(
+          { [sourceHex]: targetHex },
+          [],
+        );
+
+        expect(result).toEqual([
+          {
+            quantized_hex: `#${sourceHex}`,
+            matched_hex: `#${sourceHex}`,
+            replacement_hex: `#${targetHex}`,
+          },
+        ]);
       }),
       { numRuns: 50 },
     );

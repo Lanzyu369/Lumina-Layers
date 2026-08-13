@@ -1012,12 +1012,17 @@ describe("BasicSettings", () => {
       expect(screen.getByText(/品牌信息/)).toBeInTheDocument();
       expect(screen.getAllByText(/数据库/).length).toBeGreaterThan(0);
     });
-    expect(screen.getByRole("checkbox", { name: "A 4C" })).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "A 4C Alt" })).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "A 8C" })).toBeInTheDocument();
+    const fourColor = screen.getByRole("checkbox", { name: "A 4C" });
+    const alternateFourColor = screen.getByRole("checkbox", {
+      name: "A 4C Alt",
+    });
+    const eightColor = screen.getByRole("checkbox", { name: "A 8C" });
+    expect(fourColor).toBeEnabled();
+    expect(alternateFourColor).toBeEnabled();
+    expect(eightColor).toBeEnabled();
 
-    fireEvent.click(screen.getByRole("checkbox", { name: "A 4C" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "A 8C" }));
+    fireEvent.click(fourColor);
+    fireEvent.click(eightColor);
 
     await waitFor(() => {
       expect(useConverterStore.getState().lut_names).toEqual([
@@ -1033,18 +1038,17 @@ describe("BasicSettings", () => {
     fireEvent.click(screen.getByRole("combobox", { name: "LUT 品牌" }));
     fireEvent.click(screen.getByRole("option", { name: "Brand A" }));
 
-    await waitFor(() =>
-      expect(screen.getByRole("checkbox", { name: "A 4C" })).toBeEnabled(),
-    );
-    fireEvent.click(screen.getByRole("checkbox", { name: "A 4C" }));
+    const fourColor = await screen.findByRole("checkbox", { name: "A 4C" });
+    fireEvent.click(fourColor);
 
     await waitFor(() => {
       expect(useConverterStore.getState().lut_name).toBe("Brand A - A4");
     });
-    expect(screen.getByRole("checkbox", { name: "A 4C" })).toBeChecked();
+    expect(fourColor).toBeChecked();
+    expect(screen.getByText(/数据库/).parentElement).toHaveTextContent("A 4C");
   });
 
-  it("keeps the LUT dropdown disabled until LUTManager names are mapped", () => {
+  it("hides LUT choices until LUTManager names are mapped", () => {
     useConverterStore.setState({
       selectedLegacyManufacturer: "Brand A",
       lutListFull: [],
@@ -1055,6 +1059,7 @@ describe("BasicSettings", () => {
     render(<BasicSettings />);
 
     expect(screen.queryByRole("checkbox", { name: "A 4C" })).not.toBeInTheDocument();
+    expect(screen.getByText("品牌目录加载中…")).toBeInTheDocument();
     expect(useConverterStore.getState().lut_name).toBe("");
   });
 

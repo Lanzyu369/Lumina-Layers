@@ -1,4 +1,4 @@
-import { useMemo, useState, useRef, useEffect, useCallback, type ReactNode } from "react"
+import { useMemo, useState, useRef, useEffect, useCallback } from "react"
 import { createPortal } from "react-dom"
 import { buildLayerImagesSourceKey, resolveConverterSourceSelection, useConverterStore } from "../../stores/converter"
 import Button from "../ui/Button"
@@ -115,8 +115,6 @@ export default function ActionBar() {
   const error = useConverterStore((s) => s.error)
   const previewImageUrl = useConverterStore((s) => s.previewImageUrl)
   const previewBaseImageUrl = useConverterStore((s) => s.previewBaseImageUrl)
-  const selectionMode = useConverterStore((s) => s.selectionMode)
-  const selectedRegions = useConverterStore((s) => s.selectedRegions)
   const previewWidthMm = useConverterStore((s) => s.preview_width_mm)
   const previewPixelWidth = useConverterStore((s) => s.previewPixelWidth)
   const previewPixelHeight = useConverterStore((s) => s.previewPixelHeight)
@@ -210,96 +208,13 @@ export default function ActionBar() {
         : "action_batch_upload_hint"
   const previewDisplayUrl = puzzleOverlayUrl
     ? (previewBaseImageUrl ?? previewImageUrl)
-    : selectionMode === "multi-select"
-      ? (previewImageUrl ?? previewBaseImageUrl)
-      : previewImageUrl
+    : previewImageUrl
   const activeLayerImages =
     layerImagesSourceKey === layerImagesCurrentKey ? layerImages : EMPTY_LAYER_IMAGES
   const hasPreview = !!previewDisplayUrl && !!sessionId
-  const activeMultiSelectRegionId =
-    selectionMode === "multi-select" && selectedRegions.length > 0
-      ? selectedRegions[selectedRegions.length - 1].regionId
-      : null
-
-  const selectionOverlay = useMemo(() => {
-    if (
-      selectionMode !== "multi-select" ||
-      selectedRegions.length === 0 ||
-      !previewWidthMm ||
-      !previewPixelWidth ||
-      !previewPixelHeight ||
-      previewWidthMm <= 0 ||
-      previewPixelWidth <= 0 ||
-      previewPixelHeight <= 0
-    ) {
-      return null
-    }
-
-    const pixelScale = previewWidthMm / previewPixelWidth
-    if (!(pixelScale > 0)) {
-      return null
-    }
-
-    const polygons: ReactNode[] = []
-
-    for (const region of selectedRegions) {
-      if (
-        region.regionId === activeMultiSelectRegionId ||
-        !region.contours ||
-        region.contours.length === 0
-      ) {
-        continue
-      }
-
-      for (let polygonIndex = 0; polygonIndex < region.contours.length; polygonIndex += 1) {
-        const polygon = region.contours[polygonIndex]
-        if (polygon.length < 3) {
-          continue
-        }
-
-        const points = polygon
-          .map(([x, y]) => `${x / pixelScale},${previewPixelHeight - y / pixelScale}`)
-          .join(" ")
-
-        polygons.push(
-          <polygon
-            key={`${region.regionId}-${polygonIndex}`}
-            data-testid="preview-multi-select-polygon"
-            points={points}
-            className="fill-sky-400/25 stroke-sky-400/85"
-            strokeWidth={1}
-            strokeLinejoin="round"
-            vectorEffect="non-scaling-stroke"
-          />,
-        )
-      }
-    }
-
-    if (polygons.length === 0) {
-      return null
-    }
-
-    return (
-      <svg
-        data-testid="preview-multi-select-overlay"
-        viewBox={`0 0 ${previewPixelWidth} ${previewPixelHeight}`}
-        className="h-full w-full"
-        aria-hidden="true"
-      >
-        {polygons}
-      </svg>
-    )
-  }, [
-    activeMultiSelectRegionId,
-    previewPixelHeight,
-    previewPixelWidth,
-    previewWidthMm,
-    selectedRegions,
-    selectionMode,
-  ])
 
   const previewOverlay = useMemo(() => {
-    if (!puzzleOverlayUrl && !selectionOverlay) {
+    if (!puzzleOverlayUrl) {
       return null
     }
 
@@ -313,10 +228,9 @@ export default function ActionBar() {
             draggable={false}
           />
         ) : null}
-        {selectionOverlay}
       </>
     )
-  }, [puzzleOverlayUrl, selectionOverlay])
+  }, [puzzleOverlayUrl])
 
   const previewDebugOverlay = useMemo(() => (
     <div

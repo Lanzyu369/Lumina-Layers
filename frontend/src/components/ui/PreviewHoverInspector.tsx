@@ -3,6 +3,7 @@ import { useI18n } from "../../i18n/context"
 import type { HoverLayerColorSample } from "./previewHoverInspectorUtils"
 import { MAGNIFIER_SIZE_PX } from "./previewHoverInspectorUtils"
 import { getHoverInspectorLayout } from "./previewHoverInspectorUtils"
+import { formatDisplayLayerLabelParts } from "../../utils/layerLabels"
 
 interface PreviewHoverInspectorProps {
   dataTestId: string
@@ -29,7 +30,7 @@ export default function PreviewHoverInspector({
   showMagnifier = true,
   showLayerDetails = true,
 }: PreviewHoverInspectorProps) {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const layerLayout = getHoverInspectorLayout(hoverLayerColors.length, showLayerDetails)
 
   return (
@@ -43,7 +44,7 @@ export default function PreviewHoverInspector({
         style={{
           borderColor: "var(--surface-outline)",
           background: "var(--surface-panel-strong)",
-          color: "var(--surface-text-muted)",
+          color: "var(--surface-text)",
         }}
       >
         {showMagnifier && (
@@ -105,33 +106,44 @@ export default function PreviewHoverInspector({
                 className={
                   layerLayout.isCompactGrid
                     ? "grid grid-cols-2 gap-x-2 gap-y-1 text-[11px]"
-                    : "max-h-28 space-y-1 overflow-y-auto pr-1 text-[11px]"
+                    : "space-y-1 text-[11px]"
                 }
               >
-                {hoverLayerColors.map((layer) => (
-                  <li
-                    key={`${layer.displayIndex}-${layer.layerName}`}
-                    className={
-                      layerLayout.isCompactGrid
-                        ? "flex min-w-0 items-start justify-between gap-1"
-                        : "flex items-center justify-between gap-2"
-                    }
-                  >
-                    <span className="min-w-0 truncate">
-                      {t("action_layer_nth")}{layer.displayIndex}{t("action_layer_unit")}
-                    </span>
-                    <span className="inline-flex items-center gap-1.5 font-mono">
-                      <span
-                        className="h-2.5 w-2.5 rounded border"
-                        style={{
-                          borderColor: "var(--surface-outline)",
-                          backgroundColor: layer.colorHex ? `#${layer.colorHex}` : "transparent",
-                        }}
-                      />
-                      {layer.colorHex ? `#${layer.colorHex}` : t("viewer_hover_transparent")}
-                    </span>
-                  </li>
-                ))}
+                {hoverLayerColors.map((layer) => {
+                  const layerLabel = formatDisplayLayerLabelParts(layer.displayIndex - 1, t, lang)
+                  return (
+                    <li
+                      key={`${layer.displayIndex}-${layer.layerName}`}
+                      className={
+                        layerLayout.isCompactGrid
+                          ? "flex min-w-0 items-start justify-between gap-1"
+                          : "flex items-start justify-between gap-2"
+                      }
+                    >
+                      <span className="min-w-0 leading-tight">
+                        <span className="block">{layerLabel.label}</span>
+                        {layerLabel.viewerSuffix && (
+                          <span
+                            className="block text-[9px] font-normal leading-tight"
+                            style={{ color: "var(--surface-text-muted)" }}
+                          >
+                            {layerLabel.viewerSuffix}
+                          </span>
+                        )}
+                      </span>
+                      <span className="inline-flex items-center gap-1.5 font-mono">
+                        <span
+                          className="h-2.5 w-2.5 rounded border"
+                          style={{
+                            borderColor: "var(--surface-outline)",
+                            backgroundColor: layer.colorHex ? `#${layer.colorHex}` : "transparent",
+                          }}
+                        />
+                        {layer.colorHex ? `#${layer.colorHex}` : t("viewer_hover_transparent")}
+                      </span>
+                    </li>
+                  )
+                })}
               </ul>
             ) : (
               <p className="text-[11px]">{t("viewer_hover_no_layer_data")}</p>

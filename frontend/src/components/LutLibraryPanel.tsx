@@ -13,8 +13,9 @@ import { useWidgetStore } from "../stores/widgetStore";
 import Button from "./ui/Button";
 import {
   StatusBanner,
-  mutedSectionCardClass,
+  cardPadClass,
   resolvePanelSurfaceClass,
+  wellPadClass,
 } from "./ui/panelPrimitives";
 
 type LutOrigin = "cloud" | "custom" | "preset";
@@ -176,7 +177,7 @@ export default function LutLibraryPanel() {
       data-testid="lut-library-panel"
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
     >
-      <section className={`${mutedSectionCardClass} grid gap-4 px-4 py-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center`}>
+      <section className={`${cardPadClass} grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center`}>
         <div className="min-w-0">
           <p className="text-sm font-semibold text-slate-900 dark:text-slate-50">
             {t("lut_library_title")}
@@ -233,7 +234,7 @@ export default function LutLibraryPanel() {
         </StatusBanner>
       )}
 
-      <section className="flex flex-col gap-4">
+      <section className={`${cardPadClass} flex flex-col gap-4`}>
         <label className="min-w-0">
           <span className="sr-only">{t("lut_library_search_placeholder")}</span>
           <input
@@ -241,7 +242,7 @@ export default function LutLibraryPanel() {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder={t("lut_library_search_placeholder")}
-            className="min-h-11 w-full rounded-[22px] border border-slate-200/80 bg-[var(--surface-panel)] px-4 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] transition-all duration-200 hover:border-slate-300 focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:text-slate-100 dark:hover:border-slate-600"
+            className="min-h-11 w-full rounded-[10px] border border-slate-200/80 bg-[var(--surface-panel)] px-4 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] transition-all duration-200 hover:border-slate-300 focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:text-slate-100 dark:hover:border-slate-600"
           />
         </label>
 
@@ -252,7 +253,7 @@ export default function LutLibraryPanel() {
         ) : filteredItems.length === 0 ? (
           <div
             data-testid="lut-library-empty"
-            className="rounded-[22px] border border-dashed border-slate-300/80 px-4 py-8 text-center text-sm text-slate-500 dark:border-slate-700/80 dark:text-slate-400"
+            className={`${wellPadClass} py-8 text-center text-sm text-slate-500 dark:text-slate-400`}
           >
             {t("lut_library_empty")}
           </div>
@@ -274,7 +275,7 @@ export default function LutLibraryPanel() {
                     <article
                       key={`${item.name}:${item.fingerprint}`}
                       data-testid="lut-library-card"
-                      className="flex min-w-0 flex-col gap-4 rounded-[22px] border border-slate-200/80 bg-[var(--surface-panel)] p-4 shadow-[var(--shadow-control)] dark:border-slate-800/80"
+                      className={`${wellPadClass} flex min-w-0 flex-col gap-4 p-4`}
                     >
                       <div className="flex min-w-0 items-start justify-between gap-3">
                         <div className="min-w-0">

@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, memo } from "react";
 import { useConverterStore } from "../../stores/converter";
 import { useI18n } from "../../i18n/context";
-import { cx, workstationInsetCardClass, workstationPanelCardClass } from "../ui/panelPrimitives";
+import { cx, cardClass, wellPadClass } from "../ui/panelPrimitives";
 import type { MaterialColorSuggestionItem } from "../../api/types";
 import GradientGroupsPanel from "./GradientGroupsPanel";
 
@@ -20,6 +20,7 @@ export default function MaterialColorPicker() {
   const { t } = useI18n();
 
   const selectedColor = useConverterStore((s) => s.selectedColor);
+  const selectionDocument = useConverterStore((s) => s.selectionDocument);
   const selectedMaterialDirNames = useConverterStore(
     (s) => s.selectedMaterialDirNames,
   );
@@ -49,6 +50,15 @@ export default function MaterialColorPicker() {
   const stagePendingReplacement = useCallback(
     (target: string, options: { requireSource: boolean } = { requireSource: true }) => {
       const hexNoHash = target.replace(/^#/, "").toLowerCase();
+      if (selectionDocument && selectionDocument.selected_component_count > 0) {
+        setPendingReplacement({
+          sourceHex: selectedColor ?? "",
+          targetHex: hexNoHash,
+          mode: "multi-select",
+          sourceRegions: [...selectedRegions],
+        });
+        return true;
+      }
       switch (selectionMode) {
         case "select-all": {
           const colors =
@@ -89,6 +99,7 @@ export default function MaterialColorPicker() {
       }
     },
     [
+      selectionDocument,
       selectionMode,
       selectedColors,
       selectedRegions,
@@ -136,14 +147,14 @@ export default function MaterialColorPicker() {
   return (
     <div className="relative h-full">
       {replacePreviewLoading && (
-        <div className="absolute inset-0 z-10 flex items-center justify-center rounded-[28px] bg-slate-950/40">
+        <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-slate-950/40">
           <p className="text-xs text-slate-100">{t("lut_grid_loading")}</p>
         </div>
       )}
-      <div className={cx(workstationPanelCardClass, "flex h-full flex-col gap-3")}>
+      <div className={cx(cardClass, "flex h-full flex-col gap-3 px-4 py-4")}>
         {/* Pending replacement bar — mirrors LutColorGrid for consistent UX */}
         {pendingReplacement && (
-          <div className={cx(workstationInsetCardClass, "flex flex-col gap-2 px-3 py-2")}>
+          <div className={cx(wellPadClass, "flex flex-col gap-2 px-3 py-2")}>
             <div className="flex min-w-0 flex-wrap items-center gap-1.5">
               <div className="flex min-w-0 flex-wrap items-center gap-0.5">
                 {pendingReplacement.mode === "select-all" &&
@@ -152,7 +163,7 @@ export default function MaterialColorPicker() {
                   pendingReplacement.sourceColors.map((hex) => (
                     <span
                       key={hex}
-                      className="inline-block h-5 w-5 rounded-lg border border-slate-400/80 dark:border-slate-500/80"
+                      className="inline-block h-5 w-5 rounded-md border border-slate-400/80 dark:border-slate-500/80"
                       style={{ backgroundColor: `#${hex}` }}
                       title={`#${hex}`}
                     />
@@ -164,7 +175,7 @@ export default function MaterialColorPicker() {
                     return (
                       <span
                         key={region.regionId}
-                        className="inline-block h-5 w-5 rounded-lg border border-slate-400/80 dark:border-slate-500/80"
+                        className="inline-block h-5 w-5 rounded-md border border-slate-400/80 dark:border-slate-500/80"
                         style={{ backgroundColor: `#${hex}` }}
                         title={`#${hex} (${region.pixelCount}px)`}
                       />
@@ -172,7 +183,7 @@ export default function MaterialColorPicker() {
                   })
                 ) : (
                   <span
-                    className="inline-block h-5 w-5 rounded-lg border border-slate-400/80 dark:border-slate-500/80"
+                    className="inline-block h-5 w-5 rounded-md border border-slate-400/80 dark:border-slate-500/80"
                     style={{ backgroundColor: `#${pendingReplacement.sourceHex}` }}
                     title={`#${pendingReplacement.sourceHex}`}
                   />
@@ -180,7 +191,7 @@ export default function MaterialColorPicker() {
               </div>
               <span className="text-xs text-slate-400">→</span>
               <span
-                className="inline-block h-5 w-5 shrink-0 rounded-lg border border-slate-400/80 dark:border-slate-500/80"
+                className="inline-block h-5 w-5 shrink-0 rounded-md border border-slate-400/80 dark:border-slate-500/80"
                 style={{ backgroundColor: `#${pendingReplacement.targetHex}` }}
                 title={`#${pendingReplacement.targetHex}`}
               />
@@ -341,7 +352,7 @@ const TargetColorInputRow = memo(function TargetColorInputRow({
   );
 
   return (
-    <div className={cx(workstationInsetCardClass, "flex flex-col gap-2")}>
+    <div className={cx(wellPadClass, "flex flex-col gap-2")}>
       <label className="text-[clamp(0.6rem,0.75vw,0.65rem)] font-medium text-slate-600 dark:text-slate-300">
         {t("material_picker_target_label")}
       </label>
@@ -351,7 +362,7 @@ const TargetColorInputRow = memo(function TargetColorInputRow({
           aria-label={t("material_picker_target_label")}
           value={normalizedTarget || "#888888"}
           onChange={(e) => setDraftTarget(e.target.value)}
-          className="h-8 w-10 cursor-pointer rounded-lg border border-slate-300/80 bg-transparent dark:border-slate-700/80"
+          className="h-8 w-10 cursor-pointer rounded-md border border-slate-300/80 bg-transparent dark:border-slate-700/80"
         />
         <input
           type="text"
@@ -431,14 +442,14 @@ const SuggestionGrid = memo(function SuggestionGrid({
             aria-label={tooltip}
             title={tooltip}
             onClick={() => onClick(item)}
-            className={`relative flex w-full min-w-0 flex-col items-center rounded-[18px] border px-1 py-1.5 transition-colors ${
+            className={`relative flex w-full min-w-0 flex-col items-center rounded-[10px] border px-1 py-1.5 transition-colors ${
               isCurrent
                 ? "border-amber-400 bg-amber-400/10 ring-2 ring-amber-400/30"
                 : "border-transparent hover:border-slate-300 hover:bg-slate-100/70 dark:hover:border-slate-600 dark:hover:bg-slate-900/75"
             }`}
           >
             <span
-              className="block h-[clamp(1.1rem,1.7vw,1.3rem)] w-[clamp(1.1rem,1.7vw,1.3rem)] rounded-lg border border-slate-300/80 dark:border-slate-600/80"
+              className="block h-[clamp(1.1rem,1.7vw,1.3rem)] w-[clamp(1.1rem,1.7vw,1.3rem)] rounded-md border border-slate-300/80 dark:border-slate-600/80"
               style={{ backgroundColor: item.hex }}
             />
             <span className="mt-0.5 w-full truncate text-center font-mono text-[clamp(0.45rem,0.6vw,0.5rem)] leading-none text-slate-500 dark:text-slate-400">

@@ -76,6 +76,14 @@ export const CameraIcon = (props: SVGProps<SVGSVGElement>) => (
   </svg>
 );
 
+export const InfoIcon = (props: SVGProps<SVGSVGElement>) => (
+  <svg {...baseProps} className={sizeClass} {...props}>
+    <circle cx="12" cy="12" r="10" />
+    <line x1="12" y1="16" x2="12" y2="12" />
+    <line x1="12" y1="8" x2="12.01" y2="8" />
+  </svg>
+);
+
 export const CubeIcon = (props: SVGProps<SVGSVGElement>) => (
   <svg {...baseProps} className={sizeClass} {...props}>
     <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />

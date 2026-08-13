@@ -1,8 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useConverterStore } from "../stores/converter";
 import type { ConverterState } from "../stores/converter";
+import type { ReplacementHistoryResponse } from "../api/types";
 
+// The replacement undo/redo flow is server-checkpoint based since the selection
+// workstation work: ``undoColorRemap`` / ``redoColorRemap`` call
+// ``replacementHistory`` and rebuild state from ``buildHistoryRestoreState``.
+// 选区工作站之后撤销/重做改为服务端 checkpoint 机制：``undoColorRemap`` /
+// ``redoColorRemap`` 调 ``replacementHistory``，再通过 ``buildHistoryRestoreState``
+// 重建状态。
 vi.mock("../api/converter", () => ({
+  replacementHistory: vi.fn(),
+  resetReplacements: vi.fn(),
+  replaceColorsBatch: vi.fn(),
   fetchLutList: vi.fn(),
   convertPreview: vi.fn(),
   convertGenerate: vi.fn(),
@@ -12,17 +22,44 @@ vi.mock("../api/converter", () => ({
   cropImage: vi.fn(),
   convertBatch: vi.fn(),
   replaceColor: vi.fn(),
-  replaceColorsBatch: vi.fn(),
-  resetReplacements: vi.fn(),
 }));
 
-import { replaceColorsBatch, resetReplacements } from "../api/converter";
+import { replacementHistory } from "../api/converter";
 
-const mockReplaceColorsBatch = vi.mocked(replaceColorsBatch);
-const mockResetReplacements = vi.mocked(resetReplacements);
+const mockReplacementHistory = vi.mocked(replacementHistory);
 const heightMap = { bee6f8: 0.48, "112233": 2.0 };
 
-function seedStore(overrides: Partial<ConverterState>): void {
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function historyResponse(
+  overrides: Partial<ReplacementHistoryResponse> = {},
+): ReplacementHistoryResponse {
+  return {
+    status: "ok",
+    action: "undo",
+    message: "ok",
+    preview_url: "/api/files/restored",
+    preview_glb_url: null,
+    can_undo: false,
+    can_redo: true,
+    replacement_regions: [],
+    recipe_overrides: [],
+    recipe_override_count: 0,
+    free_color_set: [],
+    entry_kind: "content",
+    ...overrides,
+  };
+}
+
+function seedStore(
+  overrides: Partial<ConverterState> & { _pollAsyncGlb?: () => void },
+): void {
   useConverterStore.setState({
     sessionId: "height-identity-session",
     color_height_map: { ...heightMap },
@@ -38,6 +75,11 @@ function seedStore(overrides: Partial<ConverterState>): void {
     selectedColor: null,
     pendingReplacement: null,
     replacePreviewLoading: false,
+    historyBusy: false,
+    historyCanUndo: true,
+    historyCanRedo: false,
+    previewBaseImageUrl: "/api/files/base",
+    previewImageUrl: "/api/files/base",
     _pollAsyncGlb: vi.fn(),
     error: null,
     ...overrides,
@@ -46,91 +88,120 @@ function seedStore(overrides: Partial<ConverterState>): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockResetReplacements.mockResolvedValue({
-    status: "ok",
-    message: "reset",
-    preview_url: "/api/files/reset",
-    preview_glb_url: null,
-  });
-  mockReplaceColorsBatch.mockResolvedValue({
-    status: "ok",
-    message: "replayed",
-    preview_url: "/api/files/replayed",
-    replacement_count: 1,
-  });
+  mockReplacementHistory.mockResolvedValue(historyResponse());
 });
 
-describe("replacement undo preserves relief height identity", () => {
-  it("resets the backend before replaying the previous whole-colour map", async () => {
+describe("replacement undo/redo preserves relief height identity", () => {
+  it("keeps the local color_height_map after undo", async () => {
+    seedStore({ color_height_map: { ...heightMap } });
+
+    await useConverterStore.getState().undoColorRemap();
+
+    expect(mockReplacementHistory).toHaveBeenCalledWith(
+      "height-identity-session",
+      "undo",
+    );
+    expect(useConverterStore.getState().color_height_map).toEqual(heightMap);
+  });
+
+  it("keeps the local color_height_map after redo", async () => {
     seedStore({
-      colorRemapMap: { bee6f8: "f46429", "112233": "f46429" },
+      color_height_map: { ...heightMap },
+      historyCanUndo: false,
+      historyCanRedo: true,
+    });
+
+    await useConverterStore.getState().redoColorRemap();
+
+    expect(mockReplacementHistory).toHaveBeenCalledWith(
+      "height-identity-session",
+      "redo",
+    );
+    expect(useConverterStore.getState().color_height_map).toEqual(heightMap);
+  });
+
+  it("keeps the local color_height_map in the session-less undo flow", async () => {
+    seedStore({
+      sessionId: null,
+      color_height_map: { ...heightMap },
+      colorRemapMap: { bee6f8: "f46429" },
       remapHistory: [{ bee6f8: "445566" }],
     });
 
     await useConverterStore.getState().undoColorRemap();
 
-    expect(mockResetReplacements).toHaveBeenCalledWith(
-      "height-identity-session",
-    );
-    expect(mockReplaceColorsBatch).toHaveBeenCalledWith(
-      "height-identity-session",
-      [{ selectedColor: "#bee6f8", replacementColor: "#445566" }],
-    );
-    expect(mockResetReplacements.mock.invocationCallOrder[0]).toBeLessThan(
-      mockReplaceColorsBatch.mock.invocationCallOrder[0],
-    );
+    expect(mockReplacementHistory).not.toHaveBeenCalled();
     expect(useConverterStore.getState().color_height_map).toEqual(heightMap);
   });
 
-  it("performs a backend reset when undoing to an empty map", async () => {
-    seedStore({
-      colorRemapMap: { bee6f8: "f46429" },
-      remapHistory: [{}],
-    });
+  it.each([
+    {
+      action: "undo" as const,
+      historyCanUndo: true,
+      historyCanRedo: false,
+    },
+    {
+      action: "redo" as const,
+      historyCanUndo: false,
+      historyCanRedo: true,
+    },
+  ])(
+    "ignores a stale $action response after switching sessions",
+    async ({ action, historyCanUndo, historyCanRedo }) => {
+      const response = deferred<ReplacementHistoryResponse>();
+      mockReplacementHistory.mockReturnValueOnce(response.promise);
+      const pollAsyncGlb = vi.fn();
+      seedStore({
+        sessionId: "session-a",
+        historyCanUndo,
+        historyCanRedo,
+        _pollAsyncGlb: pollAsyncGlb,
+      });
 
-    await useConverterStore.getState().undoColorRemap();
+      const request =
+        action === "undo"
+          ? useConverterStore.getState().undoColorRemap()
+          : useConverterStore.getState().redoColorRemap();
+      useConverterStore.setState({
+        sessionId: "session-b",
+        previewImageUrl: "/api/files/session-b",
+        previewBaseImageUrl: "/api/files/session-b",
+        replacement_regions: [],
+        historyBusy: false,
+        historyCanUndo: false,
+        historyCanRedo: false,
+        replacePreviewLoading: false,
+      });
+      response.resolve(
+        historyResponse({
+          action,
+          preview_url: "/api/files/stale-session-a",
+          can_undo: true,
+          can_redo: true,
+          replacement_regions: [
+            {
+              quantized_hex: "#112233",
+              matched_hex: "#112233",
+              replacement_hex: "#445566",
+            },
+          ],
+        }),
+      );
 
-    expect(mockResetReplacements).toHaveBeenCalledTimes(1);
-    expect(mockReplaceColorsBatch).not.toHaveBeenCalled();
-    expect(useConverterStore.getState().colorRemapMap).toEqual({});
-    expect(useConverterStore.getState().color_height_map).toEqual(heightMap);
-  });
+      await request;
 
-  it("does not discard spatial edits when undo is requested", async () => {
-    seedStore({
-      colorRemapMap: { bee6f8: "f46429" },
-      remapHistory: [{}],
-      regionReplacementCount: 1,
-    });
-
-    await useConverterStore.getState().undoColorRemap();
-
-    expect(mockResetReplacements).not.toHaveBeenCalled();
-    expect(useConverterStore.getState().colorRemapMap).toEqual({
-      bee6f8: "f46429",
-    });
-    expect(useConverterStore.getState().error).toContain("局部替换");
-  });
-
-  it("converges to the confirmed reset state when replay fails", async () => {
-    seedStore({
-      colorRemapMap: { bee6f8: "f46429", "112233": "f46429" },
-      remapHistory: [{ bee6f8: "445566" }],
-      threemfDiskPath: "/tmp/stale.3mf",
-      downloadUrl: "/api/files/stale",
-      previewGlbUrl: "/api/files/stale.glb",
-    });
-    mockReplaceColorsBatch.mockRejectedValueOnce(new Error("replay failed"));
-
-    await useConverterStore.getState().undoColorRemap();
-
-    const state = useConverterStore.getState();
-    expect(state.colorRemapMap).toEqual({});
-    expect(state.remapHistory).toEqual([]);
-    expect(state.threemfDiskPath).toBeNull();
-    expect(state.downloadUrl).toBeNull();
-    expect(state.previewGlbUrl).toBeNull();
-    expect(state.previewImageUrl).toBe("/api/files/reset");
-    expect(state.error).toContain("replay failed");
-  });
+      expect(mockReplacementHistory).toHaveBeenCalledWith("session-a", action);
+      expect(useConverterStore.getState()).toMatchObject({
+        sessionId: "session-b",
+        previewImageUrl: "/api/files/session-b",
+        previewBaseImageUrl: "/api/files/session-b",
+        replacement_regions: [],
+        historyBusy: false,
+        historyCanUndo: false,
+        historyCanRedo: false,
+        replacePreviewLoading: false,
+      });
+      expect(pollAsyncGlb).not.toHaveBeenCalled();
+    },
+  );
 });

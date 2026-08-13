@@ -133,7 +133,7 @@ export default function WikiTooltip({
                   {title}
                 </div>
                 {description && (
-                  <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                  <div className="text-xs text-slate-500 dark:text-slate-400 mt-1 whitespace-pre-line">
                     {description}
                   </div>
                 )}

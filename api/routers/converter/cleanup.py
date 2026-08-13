@@ -12,6 +12,7 @@ from api.preview_cache_artifacts import (
     get_preview_cache_field_path,
     is_preview_cache_artifact_ref,
 )
+from api.replacement_history import collect_checkpoint_artifact_paths
 from api.schemas.converter import (
     CleanupSessionFilesRequest,
     CleanupSessionFilesResponse,
@@ -37,6 +38,7 @@ def _collect_preview_cache_artifact_paths(session_data: dict | None) -> set[str]
         return set()
 
     keep_paths: set[str] = set()
+    keep_paths.update(collect_checkpoint_artifact_paths(session_data))
     for field_name in _GENERATE_PREVIEW_CACHE_ARTIFACT_FIELDS:
         path = get_preview_cache_field_path(preview_cache, field_name)
         if path and os.path.exists(path):

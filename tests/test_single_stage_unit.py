@@ -4563,6 +4563,7 @@ def test_gradient_card_material_library_route_lists_saved_materials(
             {
                 "material_name": "PLA Basic",
                 "directory_name": "pla-basic",
+                "brand": "爱丽兹",
                 "material_type": "PLA",
                 "material_type_source": "archive",
                 "material_product_id": "product-pla-basic",
@@ -4604,6 +4605,7 @@ def test_gradient_card_material_library_route_lists_saved_materials(
     assert len(body["materials"]) == 1
     item = body["materials"][0]
     assert item["material_name"] == "PLA Basic"
+    assert item["brand"] == "Aliz"
     assert item["material_type"] == "PLA"
     assert item["material_type_source"] == "archive"
     assert item["material_product_id"] == "product-pla-basic"

@@ -1306,6 +1306,7 @@ export default function BasicSettings() {
         <>
           <Checkbox
             label={t("basic_crop_after_upload")}
+            tooltip={t("basic_crop_after_upload_hint")}
             checked={enableCrop}
             onChange={setEnableCrop}
           />
@@ -1457,6 +1458,7 @@ export default function BasicSettings() {
 
       <RadioGroup
         label={t("basic_source_version_label")}
+        tooltip={t("basic_source_version_hint")}
         value={source_version}
         options={sourceVersionOptions}
         onChange={(value) => setSourceVersion(value as "legacy" | "native" | "material")}
@@ -1558,6 +1560,7 @@ export default function BasicSettings() {
 
           <Dropdown
             label={t("basic_material_layer_height_label")}
+            tooltip={t("basic_material_layer_height_hint")}
             value={String(materialLayerHeightMm)}
             options={materialLayerHeightOptions}
             onChange={(v) => setMaterialLayerHeightMm(Number(v))}
@@ -1565,6 +1568,7 @@ export default function BasicSettings() {
 
           <Dropdown
             label={t("basic_material_backing_label")}
+            tooltip={t("basic_material_backing_hint")}
             value={resolvedMaterialBackingDirName}
             options={materialBackingOptions}
             onChange={(v) => setMaterialBackingMaterialDirName(v || null)}
@@ -1650,6 +1654,7 @@ export default function BasicSettings() {
                   />
                   <Dropdown
                     label={t("basic_layer_height_label")}
+                    tooltip={t("basic_layer_height_hint")}
                     value={String(layer_height_mm ?? selectedLutInfo.layer_height_mm ?? 0.08)}
                     options={supportedLayerHeightOptions}
                     onChange={(value) => setLayerHeightMm(Number(value))}
@@ -1677,6 +1682,7 @@ export default function BasicSettings() {
             <div className="min-w-0 flex-1">
               <Dropdown
                 label={t("basic_brand_label")}
+                tooltip={t("basic_brand_hint")}
                 value={selectedNativeBrand?.brand_key ?? ""}
                 options={nativeBrandOptions}
                 onChange={setNativeBrandKey}
@@ -1722,6 +1728,7 @@ export default function BasicSettings() {
 
               <Slider
                 label={t("basic_native_layer_count_label")}
+                tooltip={t("basic_native_layer_count_hint")}
                 value={nativeLayerCount}
                 min={1}
                 max={15}
@@ -1746,11 +1753,13 @@ export default function BasicSettings() {
                   <div className="grid gap-2">
                     <Checkbox
                       label={t("basic_model_enable")}
+                      tooltip={t("basic_model_enable_hint")}
                       checked={model_enable}
                       onChange={setModelEnable}
                     />
                     <Checkbox
                       label={t("basic_model_only")}
+                      tooltip={t("basic_model_only_hint")}
                       checked={model_only}
                       onChange={setModelOnly}
                     />
@@ -1863,6 +1872,7 @@ export default function BasicSettings() {
       {!modelSurfaceEnabled && (
         <RadioGroup
           label={t("basic_structure_mode")}
+          tooltip={t("basic_structure_mode_hint")}
           value={structure_mode}
           options={structureModeOptions}
           onChange={(v) => setStructureMode(v as StructureMode)}
@@ -1873,6 +1883,7 @@ export default function BasicSettings() {
 
       <RadioGroup
         label={t("basic_modeling_mode")}
+        tooltip={t("basic_modeling_mode_hint")}
         value={modeling_mode}
         options={modelingModeOptions}
         onChange={(v) => setModelingMode(v as ModelingMode)}

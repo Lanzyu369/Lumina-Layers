@@ -36,6 +36,7 @@ from api.preview_cache_memory import (
     get_process_rss_bytes,
     should_log_preview_cache_memory_profile_at_info,
 )
+from api.replacement_history import clear_replacement_history
 from api.schemas.converter import (
     BedSizeItem,
     BedSizeListResponse,
@@ -50,6 +51,7 @@ from api.schemas.responses import (
 )
 from api.session_store import SessionStore
 from api.structured_logging import bind_session_id, get_logger
+from api.visible_region_cache import schedule_visible_region_cache_prewarm
 from api.worker_pool import WorkerPoolManager
 from api.workers.converter_workers import worker_generate_preview
 from config import (
@@ -1601,6 +1603,12 @@ async def convert_preview(
             )
             raise
     store.put(session_id, "preview_cache", cache_session_value)
+    schedule_visible_region_cache_prewarm(
+        session_id,
+        store,
+        cache_data,
+        generation=0,
+    )
     if worker_gradient_groups is not None and worker_gradient_region_id_map is not None:
         store.put(session_id, "gradient_groups", worker_gradient_groups)
         store.put(
@@ -1682,7 +1690,7 @@ async def convert_preview(
             _material_backing_index,
         )
     store.put(session_id, "replacement_regions", parsed_replacement_regions or [])
-    store.put(session_id, "replacement_history", [])
+    clear_replacement_history(session_id, store)
     store.put(session_id, "free_color_set", set())
     if svg_large_format_policy is not None:
         store.put(session_id, "svg_large_format_policy", svg_large_format_policy)

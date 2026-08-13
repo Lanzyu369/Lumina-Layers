@@ -152,6 +152,11 @@ const arbPaletteEntry = fc.record({
   }),
 });
 
+function expectedBasicMaterialType(material: string | null | undefined): string {
+  const normalized = (material || "PLA").trim() || "PLA";
+  return /\s+Basic$/i.test(normalized) ? normalized : `${normalized} Basic`;
+}
+
 // ========== Tests ==========
 
 beforeEach(() => {
@@ -918,7 +923,7 @@ describe("Feature: extractor-calibration-tab, Property 11: confirm-palette è¯·æ±
           expect(mockedConfirmPalette).toHaveBeenCalledWith({
             session_id: "session-1",
             manufacturer: manufacturer.trim(),
-            type: type.trim(),
+            type: expectedBasicMaterialType(palette[0]?.material),
             palette: palette.map((entry) => ({
               ...entry,
               color_name: entry.color_name?.trim() || null,

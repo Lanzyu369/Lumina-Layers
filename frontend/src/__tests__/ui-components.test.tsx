@@ -179,7 +179,7 @@ describe("Selection controls", () => {
         onChange={() => {}}
       />,
     );
-    expect(screen.getByRole("combobox")).toHaveClass("rounded-[22px]");
+    expect(screen.getByRole("combobox")).toHaveClass("rounded-[10px]");
     expect(screen.getByRole("combobox")).toHaveClass("overflow-hidden");
   });
 
@@ -198,7 +198,7 @@ describe("Selection controls", () => {
     fireEvent.click(screen.getByRole("combobox"));
     const listbox = screen.getByRole("listbox");
     expect(listbox).toHaveClass("dock-scrollbar");
-    expect(listbox.parentElement).toHaveClass("rounded-[24px]");
+    expect(listbox.parentElement).toHaveClass("rounded-xl");
     expect(listbox.parentElement).toHaveClass("overflow-hidden");
   });
 
@@ -237,12 +237,12 @@ describe("Selection controls", () => {
       />,
     );
     expect(screen.getByLabelText("Single")).toBeChecked();
-    expect(screen.getByText("Single").closest("label")).toHaveClass("rounded-[22px]");
+    expect(screen.getByText("Single").closest("label")).toHaveClass("rounded-[10px]");
   });
 
   it("renders checkbox with the unified rounded selectable row", () => {
     render(<Checkbox label="Enable Relief" checked onChange={() => {}} />);
     expect(screen.getByLabelText("Enable Relief")).toBeChecked();
-    expect(screen.getByText("Enable Relief").closest("label")).toHaveClass("rounded-[22px]");
+    expect(screen.getByText("Enable Relief").closest("label")).toHaveClass("rounded-[10px]");
   });
 });

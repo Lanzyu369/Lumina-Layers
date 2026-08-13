@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { cx, workstationFieldLabelClass, workstationInputClass } from "./panelPrimitives";
+import HelpDot from "./HelpDot";
 
 interface DropdownOption {
   label: string;
@@ -22,6 +23,8 @@ interface DropdownProps {
   disabled?: boolean;
   placeholder?: string;
   labelAccessory?: ReactNode;
+  /** Optional hint text; renders a HelpDot after the label (ignored if labelAccessory is set). */
+  tooltip?: string;
 }
 
 export default function Dropdown({
@@ -33,6 +36,7 @@ export default function Dropdown({
   disabled = false,
   placeholder,
   labelAccessory,
+  tooltip,
 }: DropdownProps) {
   const [open, setOpen] = useState(false);
   const [menuPos, setMenuPos] = useState<{ top: number; left: number; width: number } | null>(null);
@@ -139,10 +143,10 @@ export default function Dropdown({
 
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
-      {labelAccessory ? (
+      {labelAccessory || tooltip ? (
         <div className="flex items-center gap-2">
           <label className={workstationFieldLabelClass}>{label}</label>
-          {labelAccessory}
+          {labelAccessory ?? <HelpDot title={label} description={tooltip ?? ""} />}
         </div>
       ) : (
         <label className={workstationFieldLabelClass}>{label}</label>
@@ -184,7 +188,7 @@ export default function Dropdown({
       {open && menuPos && createPortal(
         <div
           ref={menuRef}
-          className="z-[10010] overflow-hidden rounded-[24px] border border-slate-200/85 bg-slate-100/96 shadow-[var(--shadow-control)] backdrop-blur-xl dark:border-slate-700/85 dark:bg-slate-950/96"
+          className="z-[10010] overflow-hidden rounded-xl border border-slate-200/85 bg-slate-100/96 shadow-[var(--shadow-control)] backdrop-blur-xl dark:border-slate-700/85 dark:bg-slate-950/96"
           style={{
             position: "fixed",
             top: `${menuPos.top}px`,
@@ -214,7 +218,7 @@ export default function Dropdown({
                       aria-selected={isSelected}
                       onClick={() => handleSelect(opt.value)}
                       className={cx(
-                        "flex min-h-11 w-full items-center gap-2.5 rounded-[18px] px-3 py-2 text-left text-sm leading-6 transition-colors duration-150",
+                        "flex min-h-11 w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm leading-6 transition-colors duration-150",
                         isSelected
                           ? "bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-200"
                           : "text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900"

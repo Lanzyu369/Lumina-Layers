@@ -130,4 +130,35 @@ describe("converter store color highlight", () => {
       "/api/files/base.png",
     );
   });
+
+  it("uses local contour overlay instead of requesting highlight PNG when contours are cached", async () => {
+    const useConverterStore = await loadStore();
+    useConverterStore.setState({
+      sessionId: "session-highlight",
+      selectionMode: "select-all",
+      selectedColors: new Set<string>(),
+      previewImageUrl: "/api/files/base.png",
+      previewBaseImageUrl: "/api/files/base.png",
+      originalPreviewUrl: "/api/files/base.png",
+      colorContours: {
+        "555555": [
+          [
+            [0, 0],
+            [1, 0],
+            [1, 1],
+          ],
+        ],
+      },
+    });
+
+    useConverterStore.getState().toggleColorInSelection("555555");
+
+    expect(colorHighlightMock).not.toHaveBeenCalled();
+    expect(useConverterStore.getState().previewImageUrl).toBe(
+      "/api/files/base.png",
+    );
+    expect(useConverterStore.getState().selectedColors).toEqual(
+      new Set(["555555"]),
+    );
+  });
 });

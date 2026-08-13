@@ -108,13 +108,23 @@ function resetStore(overrides?: Partial<ReturnType<typeof useConverterStore.getS
   });
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("region 3d preview sync", () => {
   beforeEach(() => {
     resetStore();
     vi.clearAllMocks();
   });
 
-  it("uses the latest region highlight preview when detectAndAccumulateRegion selects a region in multi-select mode", async () => {
+  it("keeps the base preview and stores contours when detectAndAccumulateRegion uses the fast click path", async () => {
     const { detectRegion } = await import("../api/converter");
 
     resetStore({
@@ -130,15 +140,22 @@ describe("region 3d preview sync", () => {
       region_id: "region-2",
       color_hex: "#00ff00",
       pixel_count: 42,
-      preview_url: "/api/files/highlight-region-2",
-      contours: null,
+      preview_url: null,
+      contours: [
+        [
+          [0, 0],
+          [1, 0],
+          [1, 1],
+        ],
+      ],
     };
     (detectRegion as ReturnType<typeof vi.fn>).mockResolvedValue(response);
 
     await useConverterStore.getState().detectAndAccumulateRegion(12, 34);
 
     const state = useConverterStore.getState();
-    expect(state.previewImageUrl).toBe("/api/files/highlight-region-2");
+    expect(detectRegion).toHaveBeenCalledWith("test-session", 12, 34);
+    expect(state.previewImageUrl).toBe("/api/files/original-preview");
     expect(state.previewBaseImageUrl).toBe("/api/files/original-preview");
     expect(state.selectedColor).toBe("00ff00");
     expect(state.selectedRegions).toEqual([
@@ -146,11 +163,452 @@ describe("region 3d preview sync", () => {
         regionId: "region-2",
         colorHex: "#00ff00",
         pixelCount: 42,
-        previewUrl: "/api/files/highlight-region-2",
+        previewUrl: "/api/files/original-preview",
+        contours: response.contours,
         clickX: 12,
         clickY: 34,
       }),
     ]);
+  });
+
+  it("keeps the base preview when detectRegion uses the fast click path in single-region mode", async () => {
+    const { detectRegion } = await import("../api/converter");
+
+    resetStore({
+      selectionMode: "current",
+      originalPreviewUrl: "/api/files/original-preview",
+      previewBaseImageUrl: "/api/files/original-preview",
+      previewImageUrl: "/api/files/original-preview",
+      regionData: null,
+      selectedColor: null,
+    });
+
+    const response: RegionDetectResponse = {
+      region_id: "region-single",
+      color_hex: "#ff00ff",
+      pixel_count: 7,
+      preview_url: null,
+      contours: [
+        [
+          [0, 0],
+          [2, 0],
+          [2, 2],
+        ],
+      ],
+    };
+    (detectRegion as ReturnType<typeof vi.fn>).mockResolvedValue(response);
+
+    await useConverterStore.getState().detectRegion(5, 6);
+
+    const state = useConverterStore.getState();
+    expect(detectRegion).toHaveBeenCalledWith("test-session", 5, 6);
+    expect(state.previewImageUrl).toBe("/api/files/original-preview");
+    expect(state.regionData).toEqual(
+      expect.objectContaining({
+        regionId: "region-single",
+        previewUrl: "/api/files/original-preview",
+        contours: response.contours,
+        clickX: 5,
+        clickY: 6,
+      }),
+    );
+    expect(state.selectedColor).toBe("ff00ff");
+  });
+
+  it("does not invent a misleading one-pixel contour when region-detect returns no contours", async () => {
+    const { detectRegion } = await import("../api/converter");
+
+    resetStore({
+      selectionMode: "current",
+      originalPreviewUrl: "/api/files/original-preview",
+      previewBaseImageUrl: "/api/files/original-preview",
+      previewImageUrl: "/api/files/original-preview",
+      previewPixelWidth: 100,
+      previewPixelHeight: 50,
+      preview_width_mm: 200,
+      regionData: null,
+      selectedColor: null,
+    });
+
+    const response: RegionDetectResponse = {
+      region_id: "region-single-pixel",
+      color_hex: "#112233",
+      pixel_count: 1,
+      preview_url: null,
+      contours: [],
+    };
+    (detectRegion as ReturnType<typeof vi.fn>).mockResolvedValue(response);
+
+    await useConverterStore.getState().detectRegion(5, 6);
+
+    const state = useConverterStore.getState();
+    expect(state.regionData?.contours).toBeNull();
+  });
+
+  it("keeps both multi-select regions when consecutive clicks resolve out of order", async () => {
+    const { detectRegion } = await import("../api/converter");
+    const first = deferred<RegionDetectResponse>();
+    const second = deferred<RegionDetectResponse>();
+    (detectRegion as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+
+    resetStore({
+      selectionMode: "multi-select",
+      originalPreviewUrl: "/api/files/original-preview",
+      previewBaseImageUrl: "/api/files/original-preview",
+      previewImageUrl: "/api/files/original-preview",
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      preview_width_mm: 100,
+      selectedRegions: [],
+      selectedColor: null,
+    });
+
+    const firstClick = useConverterStore.getState().detectAndAccumulateRegion(10, 10);
+    const secondClick = useConverterStore.getState().detectAndAccumulateRegion(20, 20);
+
+    second.resolve({
+      region_id: "region-second",
+      color_hex: "#00ff00",
+      pixel_count: 8,
+      preview_url: null,
+      contours: [
+        [
+          [20, 80],
+          [21, 80],
+          [21, 79],
+        ],
+      ],
+    });
+    await Promise.resolve();
+
+    first.resolve({
+      region_id: "region-first",
+      color_hex: "#ff0000",
+      pixel_count: 6,
+      preview_url: null,
+      contours: [
+        [
+          [10, 90],
+          [11, 90],
+          [11, 89],
+        ],
+      ],
+    });
+
+    await Promise.all([firstClick, secondClick]);
+
+    const state = useConverterStore.getState();
+    expect(state.selectedRegions.map((region) => region.regionId).sort()).toEqual([
+      "region-first",
+      "region-second",
+    ]);
+    expect(state.selectedRegions.every((region) => region.contours?.length)).toBe(
+      true,
+    );
+  });
+
+  it("keeps a single-select region when duplicate detect responses resolve for one click", async () => {
+    const { detectRegion } = await import("../api/converter");
+    const first = deferred<RegionDetectResponse>();
+    const duplicate = deferred<RegionDetectResponse>();
+    (detectRegion as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(duplicate.promise);
+
+    resetStore({
+      selectionMode: "current",
+      originalPreviewUrl: "/api/files/original-preview",
+      previewBaseImageUrl: "/api/files/original-preview",
+      previewImageUrl: "/api/files/original-preview",
+      regionData: null,
+      selectedColor: null,
+    });
+
+    const firstClick = useConverterStore.getState().detectRegion(10, 10);
+    const duplicateClick = useConverterStore.getState().detectRegion(10, 10);
+
+    const response: RegionDetectResponse = {
+      region_id: "region-dup",
+      color_hex: "#ff0000",
+      pixel_count: 6,
+      preview_url: null,
+      contours: [
+        [
+          [10, 90],
+          [11, 90],
+          [11, 89],
+        ],
+      ],
+    };
+    first.resolve(response);
+    await Promise.resolve();
+    duplicate.resolve(response);
+
+    await Promise.all([firstClick, duplicateClick]);
+
+    const state = useConverterStore.getState();
+    expect(state.regionData?.regionId).toBe("region-dup");
+    expect(state.selectedColor).toBe("ff0000");
+  });
+
+  it("ignores stale single-select responses after a newer different click wins", async () => {
+    const { detectRegion } = await import("../api/converter");
+    const first = deferred<RegionDetectResponse>();
+    const second = deferred<RegionDetectResponse>();
+    (detectRegion as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+
+    resetStore({
+      selectionMode: "current",
+      originalPreviewUrl: "/api/files/original-preview",
+      previewBaseImageUrl: "/api/files/original-preview",
+      previewImageUrl: "/api/files/original-preview",
+      regionData: null,
+      selectedColor: null,
+    });
+
+    const firstClick = useConverterStore.getState().detectRegion(10, 10);
+    const secondClick = useConverterStore.getState().detectRegion(20, 20);
+
+    second.resolve({
+      region_id: "region-second",
+      color_hex: "#00ff00",
+      pixel_count: 8,
+      preview_url: null,
+      contours: [
+        [
+          [20, 80],
+          [21, 80],
+          [21, 79],
+        ],
+      ],
+    });
+    await Promise.resolve();
+
+    first.resolve({
+      region_id: "region-first",
+      color_hex: "#ff0000",
+      pixel_count: 6,
+      preview_url: null,
+      contours: [
+        [
+          [10, 90],
+          [11, 90],
+          [11, 89],
+        ],
+      ],
+    });
+
+    await Promise.all([firstClick, secondClick]);
+
+    const state = useConverterStore.getState();
+    expect(state.regionData?.regionId).toBe("region-second");
+    expect(state.selectedColor).toBe("00ff00");
+  });
+
+  it("ignores duplicate multi-select detect responses that were not selected when requested", async () => {
+    const { detectRegion } = await import("../api/converter");
+    const first = deferred<RegionDetectResponse>();
+    const duplicate = deferred<RegionDetectResponse>();
+    (detectRegion as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(duplicate.promise);
+
+    resetStore({
+      selectionMode: "multi-select",
+      originalPreviewUrl: "/api/files/original-preview",
+      previewBaseImageUrl: "/api/files/original-preview",
+      previewImageUrl: "/api/files/original-preview",
+      selectedRegions: [],
+      selectedColor: null,
+    });
+
+    const firstClick = useConverterStore.getState().detectAndAccumulateRegion(10, 10);
+    const duplicateClick = useConverterStore.getState().detectAndAccumulateRegion(10, 10);
+
+    const response: RegionDetectResponse = {
+      region_id: "region-dup",
+      color_hex: "#ff0000",
+      pixel_count: 6,
+      preview_url: null,
+      contours: [
+        [
+          [10, 90],
+          [11, 90],
+          [11, 89],
+        ],
+      ],
+    };
+    first.resolve(response);
+    await Promise.resolve();
+    duplicate.resolve(response);
+
+    await Promise.all([firstClick, duplicateClick]);
+
+    const state = useConverterStore.getState();
+    expect(state.selectedRegions.map((region) => region.regionId)).toEqual([
+      "region-dup",
+    ]);
+    expect(state.selectedColor).toBe("ff0000");
+  });
+
+  it("does not resurrect a multi-select region after the user clears while detection is pending", async () => {
+    const { detectRegion } = await import("../api/converter");
+    const pending = deferred<RegionDetectResponse>();
+    (detectRegion as ReturnType<typeof vi.fn>).mockReturnValueOnce(pending.promise);
+
+    resetStore({
+      selectionMode: "multi-select",
+      originalPreviewUrl: "/api/files/original-preview",
+      previewBaseImageUrl: "/api/files/original-preview",
+      previewImageUrl: "/api/files/original-preview",
+      selectedRegions: [],
+      selectedColor: null,
+    });
+
+    const click = useConverterStore.getState().detectAndAccumulateRegion(10, 10);
+    useConverterStore.getState().clearSelection();
+
+    pending.resolve({
+      region_id: "region-late",
+      color_hex: "#ff0000",
+      pixel_count: 6,
+      preview_url: null,
+      contours: [
+        [
+          [10, 90],
+          [11, 90],
+          [11, 89],
+        ],
+      ],
+    });
+
+    await click;
+
+    const state = useConverterStore.getState();
+    expect(state.selectedRegions).toEqual([]);
+    expect(state.selectedColor).toBeNull();
+  });
+
+  it("keeps a new multi-select click after clearing an older pending click", async () => {
+    const { detectRegion } = await import("../api/converter");
+    const oldPending = deferred<RegionDetectResponse>();
+    const newPending = deferred<RegionDetectResponse>();
+    (detectRegion as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce(oldPending.promise)
+      .mockReturnValueOnce(newPending.promise);
+
+    resetStore({
+      selectionMode: "multi-select",
+      originalPreviewUrl: "/api/files/original-preview",
+      previewBaseImageUrl: "/api/files/original-preview",
+      previewImageUrl: "/api/files/original-preview",
+      selectedRegions: [],
+      selectedColor: null,
+    });
+
+    const oldClick = useConverterStore.getState().detectAndAccumulateRegion(10, 10);
+    useConverterStore.getState().clearSelection();
+    const newClick = useConverterStore.getState().detectAndAccumulateRegion(20, 20);
+
+    oldPending.resolve({
+      region_id: "region-old",
+      color_hex: "#ff0000",
+      pixel_count: 6,
+      preview_url: null,
+      contours: [
+        [
+          [10, 90],
+          [11, 90],
+          [11, 89],
+        ],
+      ],
+    });
+    await oldClick;
+    expect(useConverterStore.getState().selectedRegions).toEqual([]);
+
+    newPending.resolve({
+      region_id: "region-new",
+      color_hex: "#00ff00",
+      pixel_count: 8,
+      preview_url: null,
+      contours: [
+        [
+          [20, 80],
+          [21, 80],
+          [21, 79],
+        ],
+      ],
+    });
+
+    await newClick;
+
+    const state = useConverterStore.getState();
+    expect(state.selectedRegions.map((region) => region.regionId)).toEqual([
+      "region-new",
+    ]);
+    expect(state.selectedColor).toBe("00ff00");
+  });
+
+  it("keeps a new single-select click after clearing an older pending click", async () => {
+    const { detectRegion } = await import("../api/converter");
+    const oldPending = deferred<RegionDetectResponse>();
+    const newPending = deferred<RegionDetectResponse>();
+    (detectRegion as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce(oldPending.promise)
+      .mockReturnValueOnce(newPending.promise);
+
+    resetStore({
+      selectionMode: "current",
+      originalPreviewUrl: "/api/files/original-preview",
+      previewBaseImageUrl: "/api/files/original-preview",
+      previewImageUrl: "/api/files/original-preview",
+      regionData: null,
+      selectedColor: null,
+    });
+
+    const oldClick = useConverterStore.getState().detectRegion(10, 10);
+    useConverterStore.getState().clearSelection();
+    const newClick = useConverterStore.getState().detectRegion(20, 20);
+
+    oldPending.resolve({
+      region_id: "region-old",
+      color_hex: "#ff0000",
+      pixel_count: 6,
+      preview_url: null,
+      contours: [
+        [
+          [10, 90],
+          [11, 90],
+          [11, 89],
+        ],
+      ],
+    });
+    await oldClick;
+    expect(useConverterStore.getState().regionData).toBeNull();
+
+    newPending.resolve({
+      region_id: "region-new",
+      color_hex: "#00ff00",
+      pixel_count: 8,
+      preview_url: null,
+      contours: [
+        [
+          [20, 80],
+          [21, 80],
+          [21, 79],
+        ],
+      ],
+    });
+
+    await newClick;
+
+    const state = useConverterStore.getState();
+    expect(state.regionData?.regionId).toBe("region-new");
+    expect(state.selectedColor).toBe("00ff00");
   });
 
   it("falls back to the latest remaining region highlight when removing multi-select regions", () => {

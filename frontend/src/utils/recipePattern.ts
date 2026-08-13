@@ -2,6 +2,21 @@ export interface RecipePaletteEntry {
   color: string;
 }
 
+const RECIPE_LETTER_BY_COLOR: Record<string, string> = {
+  white: "W",
+  black: "K",
+  cyan: "C",
+  magenta: "M",
+  yellow: "Y",
+  red: "R",
+  green: "G",
+  blue: "B",
+};
+
+function getRecipeLetter(color: string): string {
+  return RECIPE_LETTER_BY_COLOR[color.trim().toLowerCase()] ?? color.charAt(0).toUpperCase();
+}
+
 export function buildPaletteLetterMap(
   palette: RecipePaletteEntry[],
 ): Map<string, number[]> {
@@ -9,7 +24,7 @@ export function buildPaletteLetterMap(
   for (let i = 0; i < palette.length; i += 1) {
     const name = palette[i]?.color;
     if (!name) continue;
-    const letter = name.charAt(0).toUpperCase();
+    const letter = getRecipeLetter(name);
     const existing = map.get(letter);
     if (existing) {
       existing.push(i);
@@ -25,7 +40,7 @@ export function buildPaletteHint(palette: RecipePaletteEntry[]): string {
   const parts: string[] = [];
   for (const entry of palette) {
     if (!entry?.color) continue;
-    const letter = entry.color.charAt(0).toUpperCase();
+    const letter = getRecipeLetter(entry.color);
     if (seen.has(letter)) continue;
     seen.add(letter);
     parts.push(`${letter}=${entry.color}`);

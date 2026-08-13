@@ -6,8 +6,8 @@ from contextlib import contextmanager
 from copy import deepcopy
 import os
 import sys
+import time
 from typing import NoReturn
-import uuid
 
 import cv2
 import numpy as np
@@ -21,6 +21,8 @@ from api.schemas.converter import (
     ColorMergePreviewRequest,
     ColorReplaceBatchRequest,
     ColorReplaceRequest,
+    FreeColorMutationRequest,
+    FreeColorMutationResponse,
     RecipeOverrideApplyRequest,
     RecipePredictRequest,
     RegionDetectRequest,
@@ -31,7 +33,11 @@ from api.schemas.converter import (
     RegionReplaceRequest,
     RegionReplaceResponse,
     RegionRequantizeRequest,
+    ReplacementHistoryRequest,
+    ReplacementHistoryResponse,
     ResetReplacementsRequest,
+    SelectionDocumentResponse,
+    SelectionMutationRequest,
     SourceColorPickRequest,
     SourceColorPickResponse,
     VirtualMaterial,
@@ -46,6 +52,20 @@ from api.schemas.responses import (
     ResetReplacementsResponse,
 )
 from api.session_store import SessionStore
+from api.visible_region_cache import (
+    VISIBLE_REGION_CACHE_KEY,
+    build_visible_region_component_cache,
+    component_mask,
+    detect_single_component_at_point,
+    ensure_component_contours,
+    get_component_at,
+    get_valid_visible_region_cache,
+    get_visible_region_cache_build_lock,
+    get_visible_region_generation,
+    invalidate_visible_region_cache,
+    schedule_visible_region_cache_prewarm,
+    store_visible_region_component_cache,
+)
 from config import LUTMetadata, OUTPUT_DIR, PaletteEntry
 from core.color_merger import ColorMerger
 from core.color_replacement import ColorReplacementManager
@@ -54,7 +74,6 @@ from core.gradient_region_requantize import requantize_gradient_regions
 from core.converter import (
     extract_color_palette,
     generate_segmented_glb,
-    _compute_connected_region_mask_4n,
 )
 from core.naming import generate_segmented_glb_filename
 from core.material_cache import DEFAULT_GRID_RESOLUTION, load_material_solver_cache_with_fallback
@@ -86,6 +105,26 @@ from api.preview_cache_artifacts import (
     is_preview_cache_artifact_ref,
     persist_preview_cache,
     preview_cache_transaction,
+)
+from api.replacement_history import (
+    can_redo as replacement_can_redo,
+    can_undo as replacement_can_undo,
+    push_replacement_checkpoint,
+    replacement_history_lock,
+    restore_from_history,
+    snapshot_replacement_state,
+    snapshot_selection_state,
+)
+from api.selection_state import (
+    get_selection_mask,
+    get_selection_revision,
+    mutate_brush_add,
+    mutate_point_toggle,
+    mutate_same_color_toggle,
+    persist_selection_mask,
+    resolve_selection_mask,
+    selection_lock,
+    selection_summary,
 )
 from api.structured_logging import get_logger
 
@@ -521,7 +560,9 @@ def _get_region_mask_items_for_ids(
     for region_id in region_ids:
         mask = region_masks.get(region_id)
         if not isinstance(mask, np.ndarray):
-            generated_mask = _select_all_color_mask_for_region_id(session_data, region_id)
+            generated_mask = _get_cached_visible_region_mask(session_data, region_id)
+            if generated_mask is None:
+                generated_mask = _select_all_color_mask_for_region_id(session_data, region_id)
             if generated_mask is not None:
                 region_masks[region_id] = generated_mask
                 mask = generated_mask
@@ -532,11 +573,204 @@ def _get_region_mask_items_for_ids(
     if not masks:
         fallback_mask = session_data.get("selected_region_mask")
         fallback_id = session_data.get("selected_region_id")
+        if not isinstance(fallback_mask, np.ndarray):
+            fallback_mask = _get_cached_visible_region_mask(session_data, fallback_id)
+            if isinstance(fallback_id, str) and isinstance(fallback_mask, np.ndarray):
+                region_masks[fallback_id] = fallback_mask
         if isinstance(fallback_id, str) and isinstance(fallback_mask, np.ndarray) and (
             not region_ids or fallback_id in region_ids
         ):
             masks.append((fallback_id, fallback_mask))
     return masks
+
+
+def _get_visible_region_source_rgb(cache: dict) -> np.ndarray:
+    """Return the RGB image used for click-visible connected regions.
+    返回用于“点击当前可见色块”的连通域 RGB 图。
+
+    Region selection must follow the colour the user currently sees in the
+    preview. Using the upstream ``quantized_image`` can split one visible
+    matched-colour block into several tiny source-quantized islands.
+    区域选择必须按用户当前看到的预览色计算；如果继续用上游
+    ``quantized_image``，同一个可见匹配色块可能被拆成多个很小的原始量化块。
+    """
+    matched_rgb = cache.get("matched_rgb")
+    if matched_rgb is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Preview cache missing matched_rgb.",
+        )
+    matched_arr = np.asarray(matched_rgb)
+    if matched_arr.ndim != 3 or matched_arr.shape[2] < 3:
+        raise HTTPException(
+            status_code=409,
+            detail="Preview cache matched_rgb has invalid shape.",
+        )
+    visible_rgb = matched_arr[:, :, :3]
+    if visible_rgb.dtype != np.uint8:
+        return np.asarray(visible_rgb, dtype=np.uint8)
+    return visible_rgb
+
+
+def _ensure_visible_region_component_cache(
+    session_id: str,
+    store: SessionStore,
+    session_data: dict,
+    preview_cache: dict,
+) -> tuple[dict, bool]:
+    cached = get_valid_visible_region_cache(session_data)
+    if cached is not None:
+        return cached, True
+    with get_visible_region_cache_build_lock(session_id):
+        latest_session = store.get(session_id) or session_data
+        cached = get_valid_visible_region_cache(latest_session)
+        if cached is not None:
+            session_data[VISIBLE_REGION_CACHE_KEY] = cached
+            return cached, True
+        component_cache = build_visible_region_component_cache(
+            preview_cache,
+            generation=get_visible_region_generation(latest_session),
+        )
+        store_visible_region_component_cache(session_id, store, component_cache)
+        session_data[VISIBLE_REGION_CACHE_KEY] = component_cache
+        latest_session[VISIBLE_REGION_CACHE_KEY] = component_cache
+        return component_cache, False
+
+
+def _invalidate_and_prewarm_visible_region_cache(
+    session_id: str,
+    store: SessionStore,
+    session_data: dict,
+    preview_cache: dict | None,
+) -> None:
+    invalidate_visible_region_cache(session_id, store, session_data)
+    generation = get_visible_region_generation(session_data)
+    if preview_cache is not None:
+        schedule_visible_region_cache_prewarm(
+            session_id,
+            store,
+            preview_cache,
+            generation=generation,
+        )
+
+
+def _history_flags(session_data: dict | None) -> dict[str, bool]:
+    return {
+        "can_undo": replacement_can_undo(session_data),
+        "can_redo": replacement_can_redo(session_data),
+    }
+
+
+def _push_history_checkpoint(
+    session_id: str,
+    store: SessionStore,
+    session_data: dict,
+    checkpoint: dict | None,
+) -> dict[str, bool]:
+    push_replacement_checkpoint(session_id, store, session_data, checkpoint)
+    return _history_flags(session_data)
+
+
+def _current_replacement_regions(session_data: dict) -> list[dict]:
+    regions = session_data.get("replacement_regions") or []
+    if not isinstance(regions, list):
+        return []
+    return [dict(item) for item in regions if isinstance(item, dict)]
+
+
+def _current_recipe_overrides(session_data: dict) -> list[dict]:
+    overrides = session_data.get("recipe_overrides") or []
+    if not isinstance(overrides, list):
+        return []
+    return [dict(item) for item in overrides if isinstance(item, dict)]
+
+
+def _bump_region_replacement_count(
+    session_id: str,
+    store: SessionStore,
+    session_data: dict,
+    amount: int = 1,
+) -> int:
+    try:
+        current = int(session_data.get("region_replacement_count") or 0)
+    except (TypeError, ValueError):
+        current = 0
+    next_count = max(0, current + int(amount))
+    session_data["region_replacement_count"] = next_count
+    store.put(session_id, "region_replacement_count", next_count)
+    return next_count
+
+
+def _replacement_history_response(
+    *,
+    action: str,
+    checkpoint: dict | None,
+    session_data: dict,
+    preview_url: str,
+) -> ReplacementHistoryResponse:
+    restored_kind = (
+        str(checkpoint.get("kind", "content"))
+        if isinstance(checkpoint, dict)
+        else "content"
+    )
+    return ReplacementHistoryResponse(
+        status="ok",
+        action=action,  # type: ignore[arg-type]
+        label=str(checkpoint.get("label")) if isinstance(checkpoint, dict) else None,
+        entry_kind=restored_kind,
+        message="Replacement history restored",
+        preview_url=preview_url,
+        preview_glb_url=None,
+        replacement_regions=_current_replacement_regions(session_data),
+        recipe_overrides=_current_recipe_overrides(session_data),
+        recipe_override_count=int(session_data.get("recipe_override_count") or 0),
+        region_replacement_count=int(session_data.get("region_replacement_count") or 0),
+        color_layers=(
+            int(session_data["color_layers"])
+            if session_data.get("color_layers") is not None
+            else None
+        ),
+        layer_height_mm=(
+            float(session_data["layer_height_mm"])
+            if session_data.get("layer_height_mm") is not None
+            else None
+        ),
+        gradient_groups=session_data.get("gradient_groups"),
+        free_color_set=sorted(
+            str(value).replace("#", "").lower()
+            for value in (session_data.get("free_color_set") or set())
+        ),
+        **_history_flags(session_data),
+    )
+
+
+
+def _get_cached_visible_region_mask(
+    session_data: dict,
+    region_id: str | None,
+) -> np.ndarray | None:
+    if not isinstance(region_id, str) or not region_id:
+        return None
+    component_refs = session_data.get("selected_region_component_refs") or {}
+    if not isinstance(component_refs, dict):
+        return None
+    component_ref = component_refs.get(region_id)
+    if not isinstance(component_ref, dict):
+        return None
+    try:
+        label = int(component_ref.get("label"))
+        generation = int(component_ref.get("generation"))
+    except (TypeError, ValueError):
+        return None
+    if generation != get_visible_region_generation(session_data):
+        return None
+    component_cache = get_valid_visible_region_cache(session_data)
+    if component_cache is None:
+        return None
+    try:
+        return component_mask(component_cache, label)
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def _upgrade_material_matrix_layers(
@@ -888,6 +1122,10 @@ def replace_color(
     """
     try:
         session_data = _require_session(store, request.session_id)
+        history_checkpoint = snapshot_replacement_state(
+            session_data,
+            label="replace_color",
+        )
         with _preview_cache_transaction(
             request.session_id,
             store,
@@ -955,6 +1193,13 @@ def replace_color(
                 ),
                 metadata_fields=_REPLACEMENT_CACHE_METADATA_FIELDS,
             )
+            _invalidate_and_prewarm_visible_region_cache(request.session_id, store, session_data, cache)
+            history_flags = _push_history_checkpoint(
+                request.session_id,
+                store,
+                session_data,
+                history_checkpoint,
+            )
 
         # Schedule async segmented-GLB rebuild so this response returns
         # immediately after the PNG is ready. Frontend polls
@@ -963,14 +1208,10 @@ def replace_color(
         schedule_glb_build(request.session_id, store, registry, persisted_cache)
         glb_url: str | None = None
 
-        # Save history snapshot (deep copy of regions before this change) for undo
-        current_regions = session_data.get("replacement_regions", [])
-        snapshot = [dict(r) for r in current_regions]
-        history = list(session_data.get("replacement_history", []))
-        history.append(snapshot)
-        store.put(request.session_id, "replacement_history", history)
-
         # Append new replacement record
+        current_regions = session_data.get("replacement_regions", [])
+        if not isinstance(current_regions, list):
+            current_regions = []
         current_regions.append(
             {
                 "selected_color": request.selected_color,
@@ -1008,7 +1249,46 @@ def replace_color(
         preview_3d_url=glb_url,
         replacement_count=len(current_regions),
         **dynamic_material_result_from_cache(cache).model_dump(),
+        **history_flags,
     )
+
+
+@router.post("/free-colors", response_model=FreeColorMutationResponse)
+def mutate_free_colors(
+    request: FreeColorMutationRequest,
+    store: SessionStore = Depends(get_session_store),
+) -> FreeColorMutationResponse:
+    """Apply free-colour flags as a checkpointed content operation."""
+    with replacement_history_lock(request.session_id):
+        session_data = _require_session(store, request.session_id)
+        checkpoint = snapshot_replacement_state(session_data, label="free_colors")
+        current = {
+            str(value).replace("#", "").lower()
+            for value in (session_data.get("free_color_set") or set())
+        }
+        if request.action == "clear":
+            next_colors: set[str] = set()
+        else:
+            next_colors = set(current)
+            for raw in request.color_hexes:
+                normalized = str(raw).replace("#", "").lower()
+                if normalized in next_colors:
+                    next_colors.remove(normalized)
+                elif normalized:
+                    next_colors.add(normalized)
+        if next_colors != current:
+            session_data["free_color_set"] = next_colors
+            store.put(request.session_id, "free_color_set", next_colors)
+            push_replacement_checkpoint(
+                request.session_id,
+                store,
+                session_data,
+                checkpoint,
+            )
+        return FreeColorMutationResponse(
+            free_color_set=sorted(next_colors),
+            **_history_flags(session_data),
+        )
 
 
 @router.post("/reset-replacements", response_model=ResetReplacementsResponse)
@@ -1044,6 +1324,10 @@ def reset_replacements(
     """
     try:
         session_data = _require_session(store, request.session_id)
+        history_checkpoint = snapshot_replacement_state(
+            session_data,
+            label="reset_replacements",
+        )
         with _preview_cache_transaction(
             request.session_id,
             store,
@@ -1141,6 +1425,27 @@ def reset_replacements(
                 ),
                 metadata_fields=_REPLACEMENT_CACHE_METADATA_FIELDS,
             )
+            store.put(request.session_id, "replacement_regions", [])
+            session_data["replacement_regions"] = []
+            store.put(request.session_id, "global_replacement_base_matched_rgb", None)
+            session_data["global_replacement_base_matched_rgb"] = None
+            store.put(
+                request.session_id,
+                "global_replacement_base_material_matrix",
+                None,
+            )
+            session_data["global_replacement_base_material_matrix"] = None
+            store.put(request.session_id, "recipe_overrides", [])
+            session_data["recipe_overrides"] = []
+            store.put(request.session_id, "recipe_override_count", 0)
+            session_data["recipe_override_count"] = 0
+            _invalidate_and_prewarm_visible_region_cache(request.session_id, store, session_data, cache)
+            history_flags = _push_history_checkpoint(
+                request.session_id,
+                store,
+                session_data,
+                history_checkpoint,
+            )
 
         # Regenerate preview from original matched_rgb (no replacements applied)
         preview_bytes = _image_to_png_bytes(source_rgb)
@@ -1178,7 +1483,125 @@ def reset_replacements(
         preview_url=f"/api/files/{preview_id}",
         preview_glb_url=glb_url,
         **dynamic_material_result_from_cache(cache).model_dump(),
+        **history_flags,
     )
+
+
+@router.post("/replacement-history", response_model=ReplacementHistoryResponse)
+def replacement_history(
+    request: ReplacementHistoryRequest,
+    store: SessionStore = Depends(get_session_store),
+    registry: FileRegistry = Depends(get_file_registry),
+) -> ReplacementHistoryResponse:
+    """Undo or redo one color-adjustment operation.
+    撤销或重做一次颜色调整操作。
+    """
+    try:
+        with replacement_history_lock(request.session_id):
+            session_data = _require_session(store, request.session_id)
+            try:
+                checkpoint = restore_from_history(
+                    request.session_id,
+                    store,
+                    session_data,
+                    action=request.action,
+                )
+            except IndexError as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"No replacement {request.action} history available.",
+                ) from exc
+
+            if checkpoint.get("kind") == "selection":
+                cache = _require_preview_cache_fields(
+                    session_data,
+                    fields={"matched_rgb", "mask_solid"},
+                )
+                component_cache, _cache_hit = _ensure_visible_region_component_cache(
+                    request.session_id,
+                    store,
+                    session_data,
+                    cache,
+                )
+                response = _replacement_history_response(
+                    action=request.action,
+                    checkpoint=checkpoint,
+                    session_data=session_data,
+                    preview_url=str(
+                        session_data.get("preview_url")
+                        or session_data.get("original_preview_url")
+                        or ""
+                    ),
+                )
+                response.selection = _selection_document_response(
+                    session_data,
+                    component_cache,
+                    _get_visible_region_source_rgb(cache),
+                )
+                return response
+
+            with _preview_cache_transaction(
+                request.session_id,
+                store,
+                session_data,
+                fields={"matched_rgb", "mask_solid"},
+            ) as cache:
+                matched_rgb = cache.get("matched_rgb")
+                if matched_rgb is None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Preview cache missing matched_rgb.",
+                    )
+                preview_bytes = _render_styled_preview_bytes(
+                    np.asarray(matched_rgb, dtype=np.uint8),
+                    cache,
+                )
+                preview_id = registry.register_bytes(
+                    request.session_id,
+                    preview_bytes,
+                    f"preview_replacement_{request.action}.png",
+                )
+                persisted_cache = cache.commit(
+                    _dirty_array_fields(cache, "preview_rgba"),
+                    metadata_fields={"color_palette", "color_layers", "layer_height_mm"},
+                )
+                _invalidate_and_prewarm_visible_region_cache(
+                    request.session_id,
+                    store,
+                    session_data,
+                    cache,
+                )
+
+            schedule_glb_build(request.session_id, store, registry, persisted_cache)
+            preview_url = f"/api/files/{preview_id}"
+            response = _replacement_history_response(
+                action=request.action,
+                checkpoint=checkpoint,
+                session_data=session_data,
+                preview_url=preview_url,
+            )
+    except HTTPException:
+        raise
+    except PreviewCacheRevisionConflict as e:
+        _raise_replace_cache_conflict(
+            e,
+            session_id=request.session_id,
+            operation=f"replacement_history_{request.action}",
+        )
+    except REPLACE_HANDLED_ERRORS as e:
+        _handle_core_error(e, "Replacement history")
+
+    log.info(
+        "replacement-history completed",
+        extra={
+            "event": "converter_replacement_history_done",
+            "session_id": request.session_id,
+            "action": request.action,
+            "can_undo": response.can_undo,
+            "can_redo": response.can_redo,
+        },
+    )
+    return response
 
 
 @router.post("/source-color-pick", response_model=SourceColorPickResponse)
@@ -1186,16 +1609,15 @@ def source_color_pick(
     request: SourceColorPickRequest,
     store: SessionStore = Depends(get_session_store),
 ) -> SourceColorPickResponse:
-    """Resolve the original source colour at a preview pixel.
-    解析预览像素位置的原始源色。
+    """Resolve the current matched colour at a preview pixel.
+    解析预览像素位置的当前匹配色。
 
-    Select all clicks must be based on the original matched colour, not the
-    currently displayed recoloured preview. ``original_matched_rgb`` is the
-    preferred source; legacy sessions fall back to the current
-    ``preview_cache["matched_rgb"]`` so old previews can still be clicked.
-    全选点图必须按原始匹配色选中，而不是按已经换色后的展示图。优先读取
-    ``original_matched_rgb``；旧 session 没有它时回退到当前
-    ``preview_cache["matched_rgb"]``，避免旧预览完全不可点。
+    Select-all clicks are based on the current matched colour visible in the
+    preview. This intentionally follows user edits such as colour replacement
+    and custom recipe overrides instead of going back to the first preview's
+    ``original_matched_rgb``.
+    全选点图按当前预览实际匹配色选中；这会跟随颜色替换和自定义配方等
+    用户编辑，而不是回到第一次预览的 ``original_matched_rgb``。
 
     Raises:
         HTTPException(404): Session not found. (会话不存在)
@@ -1208,7 +1630,6 @@ def source_color_pick(
     cache = _require_preview_cache_fields(
         session_data,
         fields={
-            "original_matched_rgb",
             "matched_rgb",
             "quantized_image",
             "mask_solid",
@@ -1216,11 +1637,7 @@ def source_color_pick(
     )
 
     try:
-        source_rgb = session_data.get("original_matched_rgb")
-        if source_rgb is None:
-            source_rgb = cache.get("original_matched_rgb")
-        if source_rgb is None:
-            source_rgb = cache.get("matched_rgb")
+        source_rgb = cache.get("matched_rgb")
 
         quantized_image = cache.get("quantized_image")
         mask_solid = cache.get("mask_solid")
@@ -1228,7 +1645,7 @@ def source_color_pick(
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "Preview cache missing original_matched_rgb/matched_rgb, "
+                    "Preview cache missing matched_rgb, "
                     "quantized_image, or mask_solid."
                 ),
             )
@@ -1525,10 +1942,10 @@ def region_detect(
     """Detect a connected region of same-colored pixels at the click position.
     检测点击位置处同色像素的连通区域。
 
-    This endpoint is synchronous because the BFS flood-fill on a small
-    quantized preview image is lightweight. The heavy image processing
+    This endpoint is synchronous because the flood-fill on the current
+    visible preview colour image is lightweight. The heavy image processing
     was already completed in the /preview step.
-    此端点同步执行，因为在小尺寸量化预览图上的 BFS 洪水填充计算量很小。
+    此端点同步执行，因为在当前可见预览色图上的洪水填充计算量很小。
     繁重的图像处理已在 /preview 步骤中完成。
 
     Args:
@@ -1545,25 +1962,65 @@ def region_detect(
         HTTPException(400): Click coordinates out of bounds or on background. (点击坐标越界或在背景上)
         HTTPException(500): Internal processing error. (内部处理错误)
     """
+    started_at = time.perf_counter()
     session_data = _require_session(store, request.session_id)
     cache = _require_preview_cache_fields(
         session_data,
-        fields={"quantized_image", "mask_solid", "matched_rgb"},
+        fields={"mask_solid", "matched_rgb"},
     )
+    cache_ms = (time.perf_counter() - started_at) * 1000
+    flood_fill_ms = 0.0
+    contour_ms = 0.0
+    preview_png_ms = 0.0
+    preview_url: str | None = None
 
     try:
-        quantized_image: np.ndarray | None = cache.get("quantized_image")
-        mask_solid: np.ndarray | None = cache.get("mask_solid")
-        matched_rgb: np.ndarray | None = cache.get("matched_rgb")
-
-        if quantized_image is None or mask_solid is None or matched_rgb is None:
-            raise HTTPException(
-                status_code=409,
-                detail="Preview cache missing quantized_image, mask_solid, or matched_rgb.",
+        x, y = request.x, request.y
+        # Fast path: reuse a valid full component cache when one is already
+        # built. Slow path (cache invalidated by a recent replacement): build
+        # only the clicked colour's connected component ("click-lazy") instead
+        # of the full per-colour index (~1s on large previews), so the click
+        # returns in the ~300ms class. The full index keeps building in the
+        # background prewarm for box-select / select-all / restore flows.
+        # 快路径：已有全图缓存直接复用。慢路径（替换后缓存失效）：只对点击色做
+        # 一次连通域（点击懒计算），不做全图逐色索引，让点击在约 300ms 级返回；
+        # 全图索引由后台预热继续构建，供框选/全选/恢复使用。
+        component_cache = get_valid_visible_region_cache(session_data)
+        component_cache_hit = component_cache is not None
+        click_lazy_mask: np.ndarray | None = None
+        if component_cache is None:
+            generation = get_visible_region_generation(session_data)
+            try:
+                component_cache = detect_single_component_at_point(
+                    cache,
+                    generation=generation,
+                    x=request.x,
+                    y=request.y,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except KeyError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Clicked on background area.",
+                ) from exc
+            # Build the full boolean mask for this component up-front so the
+            # mutating endpoints can use it directly without depending on a
+            # label that the background full-cache rebuild would invalidate.
+            # 预先构建该块的完整 bool mask，替换端点可直接使用，避免依赖会被
+            # 后台全图重建失效的 label。
+            click_lazy_mask = component_mask(component_cache, 1)
+            # Keep building the full index in the background for later flows.
+            # 后台继续构建全图索引，供后续流程使用。
+            schedule_visible_region_cache_prewarm(
+                request.session_id,
+                store,
+                cache,
+                generation=generation,
             )
 
-        h, w = quantized_image.shape[:2]
-        x, y = request.x, request.y
+        h = int(component_cache["height"])
+        w = int(component_cache["width"])
 
         if not (0 <= x < w and 0 <= y < h):
             raise HTTPException(
@@ -1571,75 +2028,90 @@ def region_detect(
                 detail=f"Coordinates ({x}, {y}) out of bounds for image {w}x{h}.",
             )
 
-        if not mask_solid[y, x]:
+        try:
+            component_label, component = get_component_at(component_cache, x, y)
+        except KeyError as exc:
             raise HTTPException(
                 status_code=400,
                 detail="Clicked on background area.",
-            )
+            ) from exc
 
-        # Compute connected region mask via 4-neighbor BFS
-        region_mask: np.ndarray = _compute_connected_region_mask_4n(quantized_image, mask_solid, x, y)
+        pixel_count: int = int(component["pixel_count"])
+        color_hex: str = str(component["color_hex"])
+        region_id: str = str(component["region_id"])
+        bbox_raw = component.get("bbox")
+        if not isinstance(bbox_raw, list) or len(bbox_raw) != 4:
+            bbox: tuple[int, int, int, int] | None = None
+        else:
+            bbox = tuple(int(value) for value in bbox_raw)
 
-        pixel_count: int = int(np.count_nonzero(region_mask))
-        if pixel_count == 0:
-            raise HTTPException(
-                status_code=400,
-                detail="No connected region found at the click position.",
-            )
-
-        # Extract region color from matched_rgb at click position
-        r, g, b = int(matched_rgb[y, x, 0]), int(matched_rgb[y, x, 1]), int(matched_rgb[y, x, 2])
-        color_hex: str = f"#{r:02x}{g:02x}{b:02x}"
-
-        # Store region_mask in session for subsequent region-replace
-        region_id: str = str(uuid.uuid4())
-        store.put(request.session_id, "selected_region_mask", region_mask)
+        # Store a lightweight component reference for subsequent replace /
+        # recipe operations. The full boolean mask is rebuilt from label_map
+        # only when a mutating endpoint actually needs it.
+        # 点击阶段只存轻量引用，避免大图每次点击都构造整张 bool mask。
         store.put(request.session_id, "selected_region_id", region_id)
-        existing_masks = session_data.get("selected_region_masks") or {}
-        if not isinstance(existing_masks, dict):
-            existing_masks = {}
-        existing_masks[region_id] = region_mask
-        store.put(request.session_id, "selected_region_masks", existing_masks)
-        region_masks = dict(session_data.get("region_masks") or {})
-        region_masks[region_id] = region_mask
-        store.put(request.session_id, "region_masks", region_masks)
-        region_masks = session_data.get("selected_region_masks") or {}
-        if not isinstance(region_masks, dict):
-            region_masks = {}
-        region_masks = dict(region_masks)
-        region_masks[region_id] = region_mask
-        store.put(request.session_id, "selected_region_masks", region_masks)
+        if click_lazy_mask is not None:
+            # Preserve the precise lazy mask under its stable region id for
+            # recipe/content operations, but do not keep the legacy single-mask
+            # slot alive. This avoids a large hidden one-shot state and lets the
+            # background full cache replace only the lookup implementation.
+            region_masks = session_data.get("selected_region_masks") or {}
+            if not isinstance(region_masks, dict):
+                region_masks = {}
+            region_masks[region_id] = click_lazy_mask
+            store.put(request.session_id, "selected_region_masks", region_masks)
+            session_data["selected_region_masks"] = region_masks
+            store.put(request.session_id, "selected_region_mask", None)
+            session_data["selected_region_mask"] = None
+            # Drop any stale label ref for this region so the mutating endpoint
+            # falls back to selected_region_mask instead of a wrong label.
+            # 清掉该区域可能存在的旧 label 引用，确保替换端点回退到现成 mask。
+            component_refs = session_data.get("selected_region_component_refs") or {}
+            if isinstance(component_refs, dict) and region_id in component_refs:
+                component_refs.pop(region_id, None)
+                store.put(request.session_id, "selected_region_component_refs", component_refs)
+                session_data["selected_region_component_refs"] = component_refs
+        else:
+            store.put(request.session_id, "selected_region_mask", None)
+            component_refs = session_data.get("selected_region_component_refs") or {}
+            if not isinstance(component_refs, dict):
+                component_refs = {}
+            component_refs[region_id] = {
+                "generation": get_visible_region_generation(session_data),
+                "label": int(component_label),
+            }
+            store.put(request.session_id, "selected_region_component_refs", component_refs)
 
-        # Generate highlighted preview: overlay region with semi-transparent highlight
-        highlight_color = np.array([0, 200, 255], dtype=np.uint8)  # cyan highlight
-        alpha = 0.45
-        preview_img: np.ndarray = matched_rgb.copy()
-        preview_img[region_mask] = (
-            preview_img[region_mask].astype(np.float32) * (1 - alpha) + highlight_color.astype(np.float32) * alpha
-        ).astype(np.uint8)
+        # Return contours for frontend RGB outline rendering. The component
+        # cache computes this lazily only for the clicked region and reuses it
+        # on repeated clicks.
+        # 轮廓只对当前点击块懒计算，并在重复点击时复用。
+        contour_started_at = time.perf_counter()
+        region_contours: list[list[list[float]]] | None = ensure_component_contours(
+            component_cache,
+            component_label,
+        )
+        contour_ms = (time.perf_counter() - contour_started_at) * 1000
 
-        preview_bytes: bytes = _render_masked_preview_bytes(preview_img, mask_solid)
-        preview_id: str = registry.register_bytes(request.session_id, preview_bytes, "region_highlight.png")
+        if request.include_preview:
+            # Generate highlighted preview only for explicit debug/legacy
+            # callers. The default click path uses contours and avoids the
+            # expensive full-image copy + PNG encode + browser image reload.
+            # 仅显式请求时生成高亮 PNG；默认点击路径由前端轮廓叠加显示。
+            preview_started_at = time.perf_counter()
+            matched_rgb: np.ndarray = _get_visible_region_source_rgb(cache)
+            region_mask = component_mask(component_cache, component_label)
+            highlight_color = np.array([0, 200, 255], dtype=np.uint8)  # cyan highlight
+            alpha = 0.45
+            preview_img: np.ndarray = matched_rgb.copy()
+            preview_img[region_mask] = (
+                preview_img[region_mask].astype(np.float32) * (1 - alpha) + highlight_color.astype(np.float32) * alpha
+            ).astype(np.uint8)
 
-        # Extract 2D contours from region_mask for frontend RGB outline rendering
-        region_contours: list[list[list[float]]] | None = None
-        target_w = cache.get("target_w")
-        target_width_mm = cache.get("target_width_mm")
-        if target_w and target_width_mm and target_w > 0:
-            pixel_scale = target_width_mm / target_w
-            mask_u8 = region_mask.astype(np.uint8) * 255
-            cv_contours, _ = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            region_contours = []
-            for cnt in cv_contours:
-                if len(cnt) < 3:
-                    continue
-                pts = cnt.squeeze(1).astype(float)
-                world_pts: list[list[float]] = []
-                for px, py in pts:
-                    x_mm = float(px * pixel_scale)
-                    y_mm = float((h - py) * pixel_scale)
-                    world_pts.append([x_mm, y_mm])
-                region_contours.append(world_pts)
+            preview_bytes: bytes = _render_masked_preview_bytes(preview_img, cache["mask_solid"])
+            preview_id: str = registry.register_bytes(request.session_id, preview_bytes, "region_highlight.png")
+            preview_url = f"/api/files/{preview_id}"
+            preview_png_ms = (time.perf_counter() - preview_started_at) * 1000
 
     except HTTPException:
         raise
@@ -1653,17 +2125,189 @@ def region_detect(
             "session_id": request.session_id,
             "click_x": request.x,
             "click_y": request.y,
+            "region_id": region_id,
+            "component_cache_hit": component_cache_hit,
             "detected_pixel_count": pixel_count,
             "detected_dominant_color": color_hex,
+            "contour_count": len(region_contours or []),
+            "bbox": bbox,
+            "include_preview": request.include_preview,
+            "cache_ms": round(cache_ms, 2),
+            "flood_fill_ms": round(flood_fill_ms, 2),
+            "contour_ms": round(contour_ms, 2),
+            "preview_png_ms": round(preview_png_ms, 2),
+            "total_ms": round((time.perf_counter() - started_at) * 1000, 2),
         },
     )
     return RegionDetectResponse(
         region_id=region_id,
         color_hex=color_hex,
         pixel_count=pixel_count,
-        preview_url=f"/api/files/{preview_id}",
+        preview_url=preview_url,
         contours=region_contours,
+        bbox=bbox,
     )
+
+
+def _selection_document_response(
+    session_data: dict,
+    component_cache: dict,
+    matched_rgb: np.ndarray,
+    *,
+    brush_hit_component_count: int | None = None,
+) -> SelectionDocumentResponse:
+    payload = selection_summary(session_data, component_cache, matched_rgb)
+    if brush_hit_component_count is not None:
+        payload["brush_hit_component_count"] = brush_hit_component_count
+    return SelectionDocumentResponse(
+        **payload,
+        **_history_flags(session_data),
+    )
+
+
+@router.get(
+    "/selection/{session_id}",
+    response_model=SelectionDocumentResponse,
+)
+def get_editor_selection(
+    session_id: str,
+    store: SessionStore = Depends(get_session_store),
+) -> SelectionDocumentResponse:
+    """Return the shared selection document for the current visible content."""
+    session_data = _require_session(store, session_id)
+    cache = _require_preview_cache_fields(
+        session_data,
+        fields={"matched_rgb", "mask_solid"},
+    )
+    component_cache, _hit = _ensure_visible_region_component_cache(
+        session_id,
+        store,
+        session_data,
+        cache,
+    )
+    return _selection_document_response(
+        session_data,
+        component_cache,
+        _get_visible_region_source_rgb(cache),
+    )
+
+
+@router.post(
+    "/selection/mutate",
+    response_model=SelectionDocumentResponse,
+)
+def mutate_editor_selection(
+    request: SelectionMutationRequest,
+    store: SessionStore = Depends(get_session_store),
+) -> SelectionDocumentResponse:
+    """Apply one revision-checked tool gesture to the shared selection mask."""
+    started_at = time.perf_counter()
+    with selection_lock(request.session_id):
+        session_data = _require_session(store, request.session_id)
+        current_revision = get_selection_revision(session_data)
+        if current_revision != request.base_selection_revision:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Selection changed while the tool was running "
+                    f"(expected {request.base_selection_revision}, current {current_revision})."
+                ),
+            )
+        cache = _require_preview_cache_fields(
+            session_data,
+            fields={"matched_rgb", "mask_solid"},
+        )
+        component_cache, cache_hit = _ensure_visible_region_component_cache(
+            request.session_id,
+            store,
+            session_data,
+            cache,
+        )
+        content_revision = int(component_cache["generation"])
+        if request.operation != "clear" and request.content_revision != content_revision:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Visible content changed while the selection tool was running "
+                    f"(expected {request.content_revision}, current {content_revision})."
+                ),
+            )
+        shape = (int(component_cache["height"]), int(component_cache["width"]))
+        current = get_selection_mask(session_data, shape)
+        checkpoint = snapshot_selection_state(
+            session_data,
+            label=f"selection_{request.operation.replace('-', '_')}",
+        )
+        brush_hits: int | None = None
+        try:
+            if request.operation == "point-toggle":
+                if request.x is None or request.y is None:
+                    raise ValueError("Point selection requires x and y.")
+                next_mask = mutate_point_toggle(
+                    component_cache, current, request.x, request.y
+                )
+            elif request.operation == "same-color-toggle":
+                next_mask = mutate_same_color_toggle(
+                    component_cache,
+                    current,
+                    x=request.x,
+                    y=request.y,
+                    color_hex=request.color_hex,
+                )
+            elif request.operation == "brush-add":
+                if request.brush_radius is None:
+                    raise ValueError("Brush selection requires brush_radius.")
+                next_mask, brush_hits = mutate_brush_add(
+                    component_cache,
+                    current,
+                    [(point.x, point.y) for point in request.brush_points],
+                    request.brush_radius,
+                )
+            else:
+                next_mask = np.zeros(shape, dtype=bool)
+        except (IndexError, KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if np.array_equal(next_mask, current):
+            return _selection_document_response(
+                session_data,
+                component_cache,
+                _get_visible_region_source_rgb(cache),
+                brush_hit_component_count=brush_hits,
+            )
+        persist_selection_mask(
+            request.session_id,
+            store,
+            session_data,
+            next_mask,
+            content_generation=content_revision,
+        )
+        push_replacement_checkpoint(
+            request.session_id,
+            store,
+            session_data,
+            checkpoint,
+        )
+        response = _selection_document_response(
+            session_data,
+            component_cache,
+            _get_visible_region_source_rgb(cache),
+            brush_hit_component_count=brush_hits,
+        )
+    log.debug(
+        "editor selection mutated",
+        extra={
+            "event": "converter_selection_mutated",
+            "session_id": request.session_id,
+            "operation": request.operation,
+            "selection_revision": response.selection_revision,
+            "selected_component_count": response.selected_component_count,
+            "selected_pixel_count": response.selected_pixel_count,
+            "component_cache_hit": cache_hit,
+            "elapsed_ms": round((time.perf_counter() - started_at) * 1000, 2),
+        },
+    )
+    return response
 
 
 @router.post("/region-replace", response_model=RegionReplaceResponse)
@@ -1693,6 +2337,10 @@ def region_replace(
         HTTPException(500): Internal processing error. (内部处理错误)
     """
     session_data = _require_session(store, request.session_id)
+    history_checkpoint = snapshot_replacement_state(
+        session_data,
+        label="region_replace",
+    )
     cache_context = _preview_cache_transaction(
         request.session_id,
         store,
@@ -1701,6 +2349,8 @@ def region_replace(
             "matched_rgb",
             "material_matrix",
             "mask_solid",
+            "original_matched_rgb",
+            "original_material_matrix",
             "quantized_image",
         },
     )
@@ -1733,7 +2383,17 @@ def region_replace(
         mask_source: str = "click"
         gradient_group_idx = request.gradient_group_index
         gradient_region_idx = request.gradient_region_index
-        if gradient_group_idx is not None:
+        if request.selection_revision is not None:
+            mask_source = "selection"
+            try:
+                region_mask = resolve_selection_mask(
+                    session_data,
+                    (img_h, img_w),
+                    request.selection_revision,
+                )
+            except (KeyError, ValueError) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        elif gradient_group_idx is not None:
             region_id_map = session_data.get("gradient_region_id_map")
             if region_id_map is None:
                 raise HTTPException(
@@ -1782,7 +2442,11 @@ def region_replace(
                         ),
                     )
         else:
-            region_mask = session_data.get("selected_region_mask")
+            region_mask = _get_region_mask_items_for_ids(
+                session_data,
+                [str(session_data.get("selected_region_id") or "")],
+            )
+            region_mask = region_mask[0][1] if region_mask else None
             if region_mask is None:
                 raise HTTPException(
                     status_code=409,
@@ -1850,6 +2514,46 @@ def region_replace(
             ),
             metadata_fields=_REPLACEMENT_CACHE_METADATA_FIELDS,
         )
+        # Content history intentionally preserves the execution-time selection.
+        # Refresh its content-generation stamp after the visible-region cache moves
+        # to a new generation, so the user can immediately reuse the same mask.
+        _invalidate_and_prewarm_visible_region_cache(request.session_id, store, session_data, cache)
+        if mask_source == "selection":
+            # Serialise with selection gestures: persist_selection_mask writes
+            # the revision + mask non-atomically, so without the lock a concurrent
+            # gesture could be overwritten by this older mask and the revision
+            # regressed (breaking monotonicity and silently reselecting old pixels).
+            # 与选区手势串行化：persist 对 revision/mask 非原子写入，不持锁时
+            # 并发手势可能被这份更旧的 mask 覆盖且 revision 回退。
+            with selection_lock(request.session_id):
+                persist_selection_mask(
+                    request.session_id,
+                    store,
+                    session_data,
+                    region_mask,
+                    content_generation=get_visible_region_generation(session_data),
+                    revision=get_selection_revision(session_data),
+                )
+        _bump_region_replacement_count(request.session_id, store, session_data, 1)
+        history_flags = _push_history_checkpoint(
+            request.session_id,
+            store,
+            session_data,
+            history_checkpoint,
+        )
+        selection_response: SelectionDocumentResponse | None = None
+        if mask_source == "selection":
+            selection_component_cache, _selection_cache_hit = _ensure_visible_region_component_cache(
+                request.session_id,
+                store,
+                session_data,
+                cache,
+            )
+            selection_response = _selection_document_response(
+                session_data,
+                selection_component_cache,
+                _get_visible_region_source_rgb(cache),
+            )
 
         # Async GLB rebuild: /region-replace previously spent ~77% of its
         # wall time here; now the HTTP response returns in ~10s (sync +
@@ -1913,7 +2617,9 @@ def region_replace(
         preview_glb_url=glb_url,
         color_contours=contours_data,
         message="Region color replaced successfully",
+        selection=selection_response,
         **dynamic_material_result_from_cache(cache).model_dump(),
+        **history_flags,
     )
 
 
@@ -1962,6 +2668,10 @@ def region_requantize(
     from PIL import Image
 
     session_data = _require_session(store, request.session_id)
+    history_checkpoint = snapshot_replacement_state(
+        session_data,
+        label="region_requantize",
+    )
     cache_context = _preview_cache_transaction(
         request.session_id,
         store,
@@ -2264,6 +2974,14 @@ def region_requantize(
                 "glb_max_meshes",
             },
         )
+        _invalidate_and_prewarm_visible_region_cache(request.session_id, store, session_data, cache)
+        _bump_region_replacement_count(request.session_id, store, session_data, len(request.targets))
+        history_flags = _push_history_checkpoint(
+            request.session_id,
+            store,
+            session_data,
+            history_checkpoint,
+        )
         schedule_glb_build(request.session_id, store, registry, persisted_cache)
 
         log.info(
@@ -2319,6 +3037,7 @@ def region_requantize(
         ),
         gradient_groups=refreshed_groups,
         **dynamic_material_result_from_cache(cache).model_dump(),
+        **history_flags,
     )
 
 
@@ -2342,6 +3061,8 @@ def region_requantize(
 
 
 def _build_mask_for_region_batch_item(
+    session_id: str,
+    store: SessionStore,
     session_data: dict,
     item: RegionReplaceBatchItem,
     img_h: int,
@@ -2353,10 +3074,11 @@ def _build_mask_for_region_batch_item(
 
     Mirrors :func:`region_replace` mask-selection logic: gradient group/region
     indices take precedence (re-derived from the cached region_id_map); else
-    ``click_x`` / ``click_y`` trigger a fresh flood-fill on the quantised
-    preview.
+    ``click_x`` / ``click_y`` resolve through the cached current-visible
+    connected-component label map.
     与 :func:`region_replace` 的 mask 选择逻辑一致：优先渐变索引（现场从
-    缓存的 region_id_map 重建），否则使用 click_x/click_y 做泛洪填充。
+    缓存的 region_id_map 重建），否则使用 click_x/click_y 查询当前可见色块
+    分块缓存。
 
     Raises:
         HTTPException(400/404/409): Same error codes and messages as the
@@ -2405,8 +3127,8 @@ def _build_mask_for_region_batch_item(
             )
         return mask, "gradient_group"
 
-    # Click-detected path: flood-fill from (click_x, click_y) on the
-    # quantised preview, same kernel as /region-detect.
+    # Click-detected path: resolve (click_x, click_y) through the same cached
+    # visible-component label map as /region-detect.
     if item.click_x is None or item.click_y is None:
         raise HTTPException(
             status_code=400,
@@ -2416,26 +3138,26 @@ def _build_mask_for_region_batch_item(
             ),
         )
 
-    quantized_image = cache.get("quantized_image")
-    mask_solid = cache.get("mask_solid")
-    if quantized_image is None or mask_solid is None:
-        raise HTTPException(
-            status_code=409,
-            detail="Preview cache missing quantized_image or mask_solid.",
-        )
-
     x, y = int(item.click_x), int(item.click_y)
     if not (0 <= x < img_w and 0 <= y < img_h):
         raise HTTPException(
             status_code=400,
             detail=f"Coordinates ({x}, {y}) out of bounds for image {img_w}x{img_h}.",
         )
-    if not mask_solid[y, x]:
+    component_cache, _component_cache_hit = _ensure_visible_region_component_cache(
+        session_id,
+        store,
+        session_data,
+        cache,
+    )
+    try:
+        component_label, _component = get_component_at(component_cache, x, y)
+    except KeyError as exc:
         raise HTTPException(
             status_code=400,
             detail=f"Click ({x}, {y}) fell on background.",
-        )
-    mask = _compute_connected_region_mask_4n(quantized_image, mask_solid, x, y)
+        ) from exc
+    mask = component_mask(component_cache, component_label)
     if not np.any(mask):
         raise HTTPException(
             status_code=400,
@@ -2466,6 +3188,10 @@ def replace_colors_batch(
         HTTPException(409): No preview cache. (无预览缓存)
     """
     session_data = _require_session(store, request.session_id)
+    history_checkpoint = snapshot_replacement_state(
+        session_data,
+        label="replace_colors_batch",
+    )
     cache_context = _preview_cache_transaction(
         request.session_id,
         store,
@@ -2482,22 +3208,94 @@ def replace_colors_batch(
     try:
         matched_rgb: np.ndarray = cache["matched_rgb"]
         previous_rgb = matched_rgb.copy()
+        material_matrix = cache.get("material_matrix")
+        current_regions = list(session_data.get("replacement_regions", []))
+        base_rgb = session_data.get("global_replacement_base_matched_rgb")
+        base_material_matrix = session_data.get(
+            "global_replacement_base_material_matrix"
+        )
+        if base_rgb is not None:
+            source_rgb = np.asarray(base_rgb).copy()
+            source_material_matrix = (
+                np.asarray(base_material_matrix).copy()
+                if base_material_matrix is not None
+                else None
+            )
+        elif current_regions:
+            original_rgb = session_data.get("original_matched_rgb")
+            if original_rgb is None:
+                original_rgb = cache.get("original_matched_rgb")
+            original_material_matrix = session_data.get("original_material_matrix")
+            if original_material_matrix is None:
+                original_material_matrix = cache.get("original_material_matrix")
+            source_rgb = (
+                np.asarray(original_rgb).copy()
+                if original_rgb is not None
+                else matched_rgb.copy()
+            )
+            source_material_matrix = (
+                np.asarray(original_material_matrix).copy()
+                if original_material_matrix is not None
+                else (
+                    np.asarray(material_matrix).copy()
+                    if material_matrix is not None
+                    else None
+                )
+            )
+        else:
+            source_rgb = matched_rgb.copy()
+            source_material_matrix = (
+                np.asarray(material_matrix).copy()
+                if material_matrix is not None
+                else None
+            )
+        if source_rgb.shape != matched_rgb.shape:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Global replacement base shape does not match matched_rgb; "
+                    "re-run preview before replacing colours."
+                ),
+            )
+        if (
+            source_material_matrix is not None
+            and material_matrix is not None
+            and source_material_matrix.shape != np.asarray(material_matrix).shape
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Global replacement material base shape does not match "
+                    "material_matrix; re-run preview before replacing colours."
+                ),
+            )
+        if request.replacements and not current_regions:
+            store.put(
+                request.session_id,
+                "global_replacement_base_matched_rgb",
+                source_rgb.copy(),
+            )
+            if source_material_matrix is not None:
+                store.put(
+                    request.session_id,
+                    "global_replacement_base_material_matrix",
+                    source_material_matrix.copy(),
+                )
 
-        # Build manager from existing replacement_regions + every new pair.
-        # 把历史 replacement_regions 和本次新 pair 一起塞进 manager，
-        # 一次性 apply 到 matched_rgb。
+        # Rebuild from the pristine source using exactly the replacement
+        # pairs supplied by the client. This makes undo/redo deterministic:
+        # removing one mapping from the frontend history no longer leaves its
+        # pixels stuck in the already-mutated backend cache.
+        # 按前端当前完整映射从原始 matched_rgb 重放。这样撤销/重做时删掉
+        # 一条映射不会在已变异的后端缓存里留下旧色。
         manager = ColorReplacementManager()
-        for record in session_data.get("replacement_regions", []):
-            orig = ColorReplacementManager._hex_to_color(record["selected_color"])
-            repl = ColorReplacementManager._hex_to_color(record["replacement_color"])
-            manager.add_replacement(orig, repl)
         for pair in request.replacements:
             manager.add_replacement(
                 ColorReplacementManager._hex_to_color(pair.selected_color),
                 ColorReplacementManager._hex_to_color(pair.replacement_color),
             )
 
-        replaced_rgb = manager.apply_to_image(matched_rgb)
+        replaced_rgb = manager.apply_to_image(source_rgb)
         diff_pixel_count = int(np.any(previous_rgb != replaced_rgb, axis=-1).sum())
 
         log.debug(
@@ -2511,8 +3309,10 @@ def replace_colors_batch(
         )
 
         cache["matched_rgb"] = replaced_rgb
+        if source_material_matrix is not None:
+            cache["material_matrix"] = source_material_matrix.copy()
         _sync_material_matrix_after_rgb_change(
-            session_data, cache, previous_rgb, replaced_rgb
+            session_data, cache, source_rgb, replaced_rgb
         )
 
         # One PNG render + one GLB rebuild for the whole batch.
@@ -2531,6 +3331,13 @@ def replace_colors_batch(
             ),
             metadata_fields=_REPLACEMENT_CACHE_METADATA_FIELDS,
         )
+        _invalidate_and_prewarm_visible_region_cache(request.session_id, store, session_data, cache)
+        history_flags = _push_history_checkpoint(
+            request.session_id,
+            store,
+            session_data,
+            history_checkpoint,
+        )
 
         # Async GLB rebuild for the entire batch. Matches the single-pair
         # behaviour and keeps batch-swap responses as snappy as PNG render.
@@ -2538,22 +3345,21 @@ def replace_colors_batch(
         schedule_glb_build(request.session_id, store, registry, persisted_cache)
         glb_url: str | None = None
 
-        # One snapshot to history, append all new pairs to replacement_regions.
-        # 批次开始前快照入 history 一次，末尾一次性 append 所有新 pair。
-        current_regions = list(session_data.get("replacement_regions", []))
-        snapshot = [dict(r) for r in current_regions]
-        history = list(session_data.get("replacement_history", []))
-        history.append(snapshot)
-        store.put(request.session_id, "replacement_history", history)
-
-        for pair in request.replacements:
-            current_regions.append(
-                {
-                    "selected_color": pair.selected_color,
-                    "replacement_color": pair.replacement_color,
-                }
-            )
+        current_regions = [
+            {
+                "selected_color": pair.selected_color,
+                "replacement_color": pair.replacement_color,
+            }
+            for pair in request.replacements
+        ]
         store.put(request.session_id, "replacement_regions", current_regions)
+        if not current_regions:
+            store.put(request.session_id, "global_replacement_base_matched_rgb", None)
+            store.put(
+                request.session_id,
+                "global_replacement_base_material_matrix",
+                None,
+            )
 
     except HTTPException:
         raise
@@ -2585,6 +3391,7 @@ def replace_colors_batch(
         preview_3d_url=glb_url,
         replacement_count=len(request.replacements),
         **dynamic_material_result_from_cache(cache).model_dump(),
+        **history_flags,
     )
 
 
@@ -2607,6 +3414,10 @@ def region_replace_batch(
     内摊薄。
     """
     session_data = _require_session(store, request.session_id)
+    history_checkpoint = snapshot_replacement_state(
+        session_data,
+        label="region_replace_batch",
+    )
     cache_context = _preview_cache_transaction(
         request.session_id,
         store,
@@ -2615,7 +3426,6 @@ def region_replace_batch(
             "matched_rgb",
             "material_matrix",
             "mask_solid",
-            "quantized_image",
         },
     )
     cache = cache_context.__enter__()
@@ -2635,7 +3445,13 @@ def region_replace_batch(
         any_click_mask_used = False
         for item in request.items:
             mask, mask_source = _build_mask_for_region_batch_item(
-                session_data, item, img_h, img_w, cache
+                request.session_id,
+                store,
+                session_data,
+                item,
+                img_h,
+                img_w,
+                cache,
             )
             replacement_rgb = np.array(
                 ColorReplacementManager._hex_to_color(item.replacement_color),
@@ -2665,6 +3481,14 @@ def region_replace_batch(
                 "preview_rgba",
             ),
             metadata_fields=_REPLACEMENT_CACHE_METADATA_FIELDS,
+        )
+        _invalidate_and_prewarm_visible_region_cache(request.session_id, store, session_data, cache)
+        _bump_region_replacement_count(request.session_id, store, session_data, len(request.items))
+        history_flags = _push_history_checkpoint(
+            request.session_id,
+            store,
+            session_data,
+            history_checkpoint,
         )
 
         # Async GLB rebuild for the whole batch of region edits. See
@@ -2724,6 +3548,7 @@ def region_replace_batch(
         color_contours=contours_data,
         message=f"Batch replaced {len(request.items)} regions successfully",
         **dynamic_material_result_from_cache(cache).model_dump(),
+        **history_flags,
     )
 
 
@@ -3418,6 +4243,10 @@ def apply_recipe_override(
 ) -> RecipeOverrideApplyResponse:
     """Apply a custom recipe override to the selected regions and update preview cache."""
     session_data = _require_session(store, request.session_id)
+    history_checkpoint = snapshot_replacement_state(
+        session_data,
+        label="apply_recipe_override",
+    )
     missing_session_value = object()
     rollback_snapshot = {
         key: (
@@ -4027,6 +4856,13 @@ def apply_recipe_override(
         )
         store.put(request.session_id, "recipe_overrides", existing_overrides)
         store.put(request.session_id, "recipe_override_count", len(existing_overrides))
+        _invalidate_and_prewarm_visible_region_cache(request.session_id, store, session_data, cache)
+        history_flags = _push_history_checkpoint(
+            request.session_id,
+            store,
+            session_data,
+            history_checkpoint,
+        )
 
         # Async GLB rebuild for the newly applied recipe override. Keeps
         # the override response fast; GLB arrives via /glb-status polling.
@@ -4085,6 +4921,7 @@ def apply_recipe_override(
         ),
         override_count=len(existing_overrides),
         **dynamic_material_result_from_cache(cache).model_dump(),
+        **history_flags,
     )
 
 

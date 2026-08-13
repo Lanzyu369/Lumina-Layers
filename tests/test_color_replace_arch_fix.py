@@ -15,6 +15,8 @@ from api.app import app
 from api.dependencies import get_session_store, get_file_registry
 from api.file_registry import FileRegistry
 from api.session_store import SessionStore
+from api.selection_state import persist_selection_mask
+from api.visible_region_cache import build_visible_region_component_cache
 
 # Isolated store/registry per test module
 _test_store: SessionStore = SessionStore(ttl=1800)
@@ -157,6 +159,36 @@ class TestRegionReplaceNoNameError:
         expected_green = np.full((2, 4, 3), [0, 255, 0], dtype=np.uint8)
         np.testing.assert_array_equal(matched[2:, :], expected_green)
 
+    def test_region_replace_selection_response_carries_authoritative_content_revision(self) -> None:
+        sid = _create_session_with_region()
+        data = _test_store.get(sid)
+        assert data is not None
+        cache = data["preview_cache"]
+        cache["target_w"] = 4
+        cache["target_width_mm"] = 40.0
+        data["visible_region_cache_generation"] = 3
+        component_cache = build_visible_region_component_cache(cache, generation=3)
+        _test_store.put(sid, "visible_region_component_cache", component_cache)
+        selection_mask = np.zeros((4, 4), dtype=bool)
+        selection_mask[:2, :2] = True
+        persist_selection_mask(sid, _test_store, data, selection_mask, content_generation=3)
+
+        response = client.post(
+            "/api/convert/region-replace",
+            json={
+                "session_id": sid,
+                "replacement_color": "#0000ff",
+                "selection_revision": 1,
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["selection"]["selection_revision"] == 1
+        assert body["selection"]["content_revision"] == data["visible_region_cache_generation"]
+        assert body["selection"]["selected_pixel_count"] == 4
+        assert body["selection"]["selected_color_hexes"] == ["#0000ff"]
+
     def test_region_replace_no_region_returns_409(self) -> None:
         """Calling region-replace without prior region-detect returns 409.
         未先调用 region-detect 就调用 region-replace 返回 409。
@@ -282,7 +314,10 @@ class TestResetReplacementsRestoresOriginal:
             },
         )
         data = _test_store.get(sid)
-        assert len(data["replacement_history"]) > 0
+        # The unified replacement history lives in undo/redo checkpoint stacks,
+        # not a legacy linear "replacement_history" field. The undo stack must
+        # grow after the replace.
+        assert len(data.get("replacement_undo_stack", [])) > 0
 
         # Reset
         client.post(
@@ -290,7 +325,37 @@ class TestResetReplacementsRestoresOriginal:
             json={"session_id": sid},
         )
         data = _test_store.get(sid)
-        assert data["replacement_history"] == []
+        # Reset itself is checkpointed, so the undo stack is still non-empty —
+        # "clear replacements" is a reversible content action, not a wipe.
+        assert len(data.get("replacement_undo_stack", [])) > 0
+        assert data["replacement_regions"] == []
+
+    def test_reset_clears_recipe_overrides_and_global_replacement_base(self) -> None:
+        """Clear remaps is a full replacement reset, including recipes.
+        清空替换会完整清理颜色替换、自定义配方和全局换色基线。
+        """
+        sid = _create_session_with_region()
+        matched = _test_store.get(sid)["preview_cache"]["matched_rgb"]
+        _test_store.put(sid, "recipe_overrides", [{"region_id": "r1", "recipe": [0]}])
+        _test_store.put(sid, "recipe_override_count", 1)
+        _test_store.put(sid, "global_replacement_base_matched_rgb", matched.copy())
+        _test_store.put(
+            sid,
+            "global_replacement_base_material_matrix",
+            np.zeros((*matched.shape[:2], 2), dtype=np.int16),
+        )
+
+        response = client.post(
+            "/api/convert/reset-replacements",
+            json={"session_id": sid},
+        )
+
+        assert response.status_code == 200, response.text
+        data = _test_store.get(sid)
+        assert data["recipe_overrides"] == []
+        assert data["recipe_override_count"] == 0
+        assert data["global_replacement_base_matched_rgb"] is None
+        assert data["global_replacement_base_material_matrix"] is None
 
     def test_reset_without_original_uses_current(self) -> None:
         """When no original_matched_rgb saved, reset uses current cache.

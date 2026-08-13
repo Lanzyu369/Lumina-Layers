@@ -22,13 +22,17 @@ import type {
   GradientGroupsResponse,
   RegionDetectResponse,
   RegionReplaceResponse,
+  FreeColorMutationResponse,
   RecipePredictRequest,
   RecipePredictResponse,
   RecipeOverrideApplyRequest,
   RecipeOverrideApplyResponse,
-  DynamicMaterialResultResponse,
   RegionRecipeRequest,
   RegionRecipeResponse,
+  ResetReplacementsResponse,
+  ReplacementHistoryResponse,
+  SelectionDocumentResponse,
+  SelectionMutationRequest,
   AutoDetectColorsResponse,
   ModelSurfaceHitTriangle,
   ModelSurfaceModelTransform,
@@ -357,7 +361,7 @@ export async function replaceColorsBatch(
   return response.data;
 }
 
-/** 按预览像素坐标读取原始匹配源色，避免换色后的展示图影响全选点色。 */
+/** 按预览像素坐标读取当前匹配色，用于同颜色全选跟随用户已替换/自定义后的预览。 */
 export async function sourceColorPick(
   sessionId: string,
   x: number,
@@ -446,15 +450,44 @@ export async function colorHighlight(
   return response.data;
 }
 
+/** Read the shared, revisioned editor selection. */
+export async function getEditorSelection(
+  sessionId: string,
+): Promise<SelectionDocumentResponse> {
+  const response = await apiClient.get<SelectionDocumentResponse>(
+    `/convert/selection/${encodeURIComponent(sessionId)}`,
+  );
+  return response.data;
+}
+
+/** Apply one point, same-colour, brush, or clear mutation to the shared selection. */
+export async function mutateEditorSelection(
+  request: SelectionMutationRequest,
+): Promise<SelectionDocumentResponse> {
+  const response = await apiClient.post<SelectionDocumentResponse>(
+    "/convert/selection/mutate",
+    request,
+    { timeout: 3_600_000 },
+  );
+  return response.data;
+}
+
 /** 检测点击位置的连通区域 */
 export async function detectRegion(
   sessionId: string,
   x: number,
   y: number,
+  options?: { includePreview?: boolean },
 ): Promise<RegionDetectResponse> {
+  const body: Record<string, unknown> = {
+    session_id: sessionId,
+    x,
+    y,
+    include_preview: options?.includePreview ?? false,
+  };
   const response = await apiClient.post<RegionDetectResponse>(
     "/convert/region-detect",
-    { session_id: sessionId, x, y },
+    body,
     { timeout: 3_600_000 },
   );
   return response.data;
@@ -484,11 +517,15 @@ export async function regionReplace(
   sessionId: string,
   replacementColor: string,
   scope?: GradientRegionReplaceScope,
+  selectionRevision?: number,
 ): Promise<RegionReplaceResponse> {
   const body: Record<string, unknown> = {
     session_id: sessionId,
     replacement_color: replacementColor,
   };
+  if (selectionRevision !== undefined) {
+    body.selection_revision = selectionRevision;
+  }
   if (scope) {
     body.gradient_group_index = scope.gradientGroupIndex;
     if (scope.gradientRegionIndex !== undefined) {
@@ -706,12 +743,20 @@ export async function predictRecipe(
   return response.data;
 }
 
-/** 重置所有颜色替换响应 */
-export interface ResetReplacementsResponse extends DynamicMaterialResultResponse {
-  status: string;
-  message: string;
-  preview_url: string;
-  preview_glb_url?: string | null;
+export async function mutateFreeColors(
+  sessionId: string,
+  action: "toggle" | "clear",
+  colorHexes: string[] = [],
+): Promise<FreeColorMutationResponse> {
+  const response = await apiClient.post<FreeColorMutationResponse>(
+    "/convert/free-colors",
+    {
+      session_id: sessionId,
+      action,
+      color_hexes: colorHexes,
+    },
+  );
+  return response.data;
 }
 
 /** 重置所有颜色替换，恢复原始预览 */
@@ -721,6 +766,19 @@ export async function resetReplacements(
   const response = await apiClient.post<ResetReplacementsResponse>(
     "/convert/reset-replacements",
     { session_id: sessionId },
+    { timeout: 3_600_000 },
+  );
+  return response.data;
+}
+
+/** 撤销或重做一次颜色调整。 */
+export async function replacementHistory(
+  sessionId: string,
+  action: "undo" | "redo",
+): Promise<ReplacementHistoryResponse> {
+  const response = await apiClient.post<ReplacementHistoryResponse>(
+    "/convert/replacement-history",
+    { session_id: sessionId, action },
     { timeout: 3_600_000 },
   );
   return response.data;

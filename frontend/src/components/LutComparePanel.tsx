@@ -8,12 +8,12 @@ import Dropdown from "./ui/Dropdown";
 import Button from "./ui/Button";
 import {
   StatusBanner,
+  cardPadClass,
   desktopPrimaryColumnClass,
   desktopSecondaryColumnClass,
-  mutedSectionCardClass,
   resolveDesktopSplitLayoutClass,
   resolvePanelSurfaceClass,
-  resolveSectionCardClass,
+  wellPadClass,
 } from "./ui/panelPrimitives";
 
 function formatMetric(value: number): string {
@@ -270,7 +270,7 @@ export default function LutComparePanel() {
         <div className={desktopPrimaryColumnClass}>
           <section
             data-testid="lut-compare-lut-a-dropdown"
-            className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`}
+            className={`${cardPadClass} flex flex-col gap-3`}
           >
             <Dropdown
               label={t("lut_compare_lut_a_label")}
@@ -284,7 +284,7 @@ export default function LutComparePanel() {
               <StatusBanner tone="info">{t("lut_manager_loading")}</StatusBanner>
             )}
             {lutAInfo && (
-              <div className={`${mutedSectionCardClass} px-3 py-2 text-sm text-slate-600 dark:text-slate-300`}>
+              <div className={`${wellPadClass} px-3 py-2 text-sm text-slate-600 dark:text-slate-300`}>
                 <div>
                   {t("lut_manager_mode_summary")
                     .replace("{mode}", lutAInfo.color_mode)
@@ -299,7 +299,7 @@ export default function LutComparePanel() {
 
           <section
             data-testid="lut-compare-lut-b-dropdown"
-            className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`}
+            className={`${cardPadClass} flex flex-col gap-3`}
           >
             <Dropdown
               label={t("lut_compare_lut_b_label")}
@@ -313,7 +313,7 @@ export default function LutComparePanel() {
               <StatusBanner tone="info">{t("lut_manager_loading")}</StatusBanner>
             )}
             {lutBInfo && (
-              <div className={`${mutedSectionCardClass} px-3 py-2 text-sm text-slate-600 dark:text-slate-300`}>
+              <div className={`${wellPadClass} px-3 py-2 text-sm text-slate-600 dark:text-slate-300`}>
                 <div>
                   {t("lut_manager_mode_summary")
                     .replace("{mode}", lutBInfo.color_mode)
@@ -394,7 +394,7 @@ export default function LutComparePanel() {
 
           <section
             data-testid="worst-diffs"
-            className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}
+            className={`${cardPadClass} flex flex-col gap-4`}
           >
             <div>
               <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
@@ -410,7 +410,7 @@ export default function LutComparePanel() {
                 {compareResult.worst_diffs.map((item, index) => (
                   <div
                     key={`${item.recipe.join("|")}-${index}`}
-                    className={`${mutedSectionCardClass} p-4`}
+                    className={`${wellPadClass} p-4`}
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
@@ -451,7 +451,7 @@ export default function LutComparePanel() {
                 ))}
               </div>
             ) : (
-              <div className={`${mutedSectionCardClass} flex min-h-[220px] flex-col justify-center gap-3`}>
+              <div className={`${wellPadClass} flex min-h-[220px] flex-col justify-center gap-3`}>
                 <p className="text-sm font-medium text-slate-700 dark:text-slate-200">
                   {compareResult ? t("lut_compare_no_diffs") : t("lut_compare_no_result")}
                 </p>

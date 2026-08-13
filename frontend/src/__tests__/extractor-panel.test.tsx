@@ -3,6 +3,7 @@ import { render, screen, cleanup, fireEvent, within } from "@testing-library/rea
 import fc from "fast-check";
 import { useExtractorStore } from "../stores/extractorStore";
 import { ExtractorColorMode, ExtractorPage } from "../api/types";
+import { listGradientCardMaterials } from "../api/extractor";
 
 // ========== Mock browser APIs ==========
 
@@ -36,6 +37,7 @@ vi.mock("../api/extractor", () => ({
   colorcheckerRelease: vi.fn(),
   colorcheckerTouch: vi.fn(() => Promise.resolve()),
   extractColors: vi.fn(),
+  listGradientCardMaterials: vi.fn(() => Promise.resolve({ materials: [] })),
   manualFixCell: vi.fn(),
 }));
 
@@ -335,8 +337,32 @@ describe("ExtractorPanel 单元测试", () => {
     expect(screen.queryByTestId("error-message")).not.toBeInTheDocument();
   });
 
-  it("renders colordb metadata inputs and updates store state", async () => {
+  it("renders manufacturer and material controls without a type textbox", async () => {
     const ExtractorPanel = (await import("../components/ExtractorPanel")).default;
+    vi.mocked(listGradientCardMaterials).mockResolvedValueOnce({
+      status: "ok",
+      message: "ok",
+      materials: [
+        {
+          material_name: "red",
+          directory_name: "Bambu Lab/red",
+          brand: "Bambu Lab",
+          archive_path: "",
+          stage_a_params_path: "",
+          material_file_url: null,
+          estimated_rgb: [],
+        },
+        {
+          material_name: "white",
+          directory_name: "Prusa/white",
+          brand: "Prusa",
+          archive_path: "",
+          stage_a_params_path: "",
+          material_file_url: null,
+          estimated_rgb: [],
+        },
+      ],
+    });
 
     useExtractorStore.setState({
       manufacturer: "Bambu Lab",
@@ -358,19 +384,63 @@ describe("ExtractorPanel 单元测试", () => {
     expect(section).toBeInTheDocument();
     expect(screen.getByText("White")).toBeInTheDocument();
 
-    const textboxes = within(section).getAllByRole("textbox");
-    expect(textboxes).toHaveLength(3);
-    expect(textboxes[0]).toHaveValue("Bambu Lab");
-    expect(textboxes[1]).toHaveValue("PLA Basic");
-    expect(textboxes[2]).toHaveValue("Jade White");
+    const manufacturerInput = within(section).getByRole("combobox", {
+      name: "厂商",
+    });
+    const colorNameInput = within(section).getByRole("textbox");
+    expect(manufacturerInput).toHaveValue("Bambu Lab");
+    expect(colorNameInput).toHaveValue("Jade White");
 
-    fireEvent.change(textboxes[0], { target: { value: "Prusa" } });
-    fireEvent.change(textboxes[1], { target: { value: "PETG" } });
-    fireEvent.change(textboxes[2], { target: { value: "Pearl White" } });
+    fireEvent.change(manufacturerInput, { target: { value: "Prusa" } });
+    fireEvent.change(colorNameInput, { target: { value: "Pearl White" } });
 
     const state = useExtractorStore.getState();
     expect(state.manufacturer).toBe("Prusa");
-    expect(state.type).toBe("PETG");
     expect(state.defaultPalette[0].color_name).toBe("Pearl White");
+  });
+
+  it("allows selecting manufacturer from existing material brands", async () => {
+    const ExtractorPanel = (await import("../components/ExtractorPanel")).default;
+    vi.mocked(listGradientCardMaterials).mockResolvedValueOnce({
+      status: "ok",
+      message: "ok",
+      materials: [
+        {
+          material_name: "red",
+          directory_name: "Aliz/red",
+          brand: "Aliz",
+          archive_path: "",
+          stage_a_params_path: "",
+          material_file_url: null,
+          estimated_rgb: [],
+        },
+      ],
+    });
+
+    useExtractorStore.setState({
+      manufacturer: "",
+      defaultPalette: [
+        {
+          color: "White",
+          material: "PLA",
+          hex_color: "#FFFFFF",
+          color_name: "",
+        },
+      ],
+      paletteConfirmed: false,
+    });
+
+    render(<ExtractorPanel />);
+
+    const section = screen.getByTestId("palette-confirm-section");
+    const manufacturerInput = within(section).getByRole("combobox", {
+      name: "厂商",
+    });
+    fireEvent.focus(manufacturerInput);
+
+    const option = await screen.findByRole("option", { name: "Aliz" });
+    fireEvent.click(option);
+
+    expect(useExtractorStore.getState().manufacturer).toBe("Aliz");
   });
 });

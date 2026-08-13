@@ -173,8 +173,8 @@ class TestReplaceColorsBatch:
     def test_batch_appends_all_regions_and_single_history_snapshot(
         self, red_green_canvas: tuple[np.ndarray, np.ndarray, np.ndarray]
     ) -> None:
-        """replacement_regions grows by N; replacement_history grows by 1.
-        replacement_regions 增加 N 条，replacement_history 只增加 1 条快照。
+        """replacement_regions grows by N; undo stack grows by 1.
+        replacement_regions 增加 N 条，undo 栈只增加 1 个快照。
         """
         matched, mask_solid, quantized = red_green_canvas
         client, sid, store = _make_client(
@@ -195,10 +195,97 @@ class TestReplaceColorsBatch:
         assert len(data["replacement_regions"]) == 2
         assert data["replacement_regions"][0]["selected_color"] == "#ff0000"
         assert data["replacement_regions"][1]["selected_color"] == "#00ff00"
-        # Single batch → single pre-change snapshot (not N).
-        # 整批只有 1 个 snapshot，不是 N 个。
-        assert len(data["replacement_history"]) == 1
-        assert data["replacement_history"][0] == []
+        # Single batch → single pre-change checkpoint (not N).
+        # 整批只有 1 个 checkpoint，不是 N 个。
+        assert len(data["replacement_undo_stack"]) == 1
+        checkpoint = data["replacement_undo_stack"][0]
+        assert checkpoint["session_fields"]["replacement_regions"] == []
+
+    def test_batch_undo_redo_restores_backend_cache(
+        self, red_green_canvas: tuple[np.ndarray, np.ndarray, np.ndarray]
+    ) -> None:
+        """Undo/redo restores the backend preview cache, not just frontend metadata.
+        撤销/重做恢复后端 preview_cache，而不是只恢复前端元数据。
+        """
+        matched, mask_solid, quantized = red_green_canvas
+        client, sid, store = _make_client(
+            matched, mask_solid=mask_solid, quantized_image=quantized
+        )
+
+        response = client.post(
+            "/api/convert/replace-colors-batch",
+            json={
+                "session_id": sid,
+                "replacements": [
+                    {"selected_color": "#ff0000", "replacement_color": "#0000ff"},
+                ],
+            },
+        )
+        assert response.status_code == 200, response.text
+        replaced = store.get(sid)["preview_cache"]["matched_rgb"].copy()
+        assert np.all(replaced[:2, :] == (0, 0, 255))
+
+        undo = client.post(
+            "/api/convert/replacement-history",
+            json={"session_id": sid, "action": "undo"},
+        )
+        assert undo.status_code == 200, undo.text
+        assert undo.json()["can_redo"] is True
+        restored = store.get(sid)["preview_cache"]["matched_rgb"]
+        np.testing.assert_array_equal(restored, matched)
+        assert store.get(sid)["replacement_regions"] == []
+
+        redo = client.post(
+            "/api/convert/replacement-history",
+            json={"session_id": sid, "action": "redo"},
+        )
+        assert redo.status_code == 200, redo.text
+        np.testing.assert_array_equal(
+            store.get(sid)["preview_cache"]["matched_rgb"],
+            replaced,
+        )
+        assert len(store.get(sid)["replacement_regions"]) == 1
+
+    def test_batch_replays_from_original_rgb_for_undo_redo(
+        self, red_green_canvas: tuple[np.ndarray, np.ndarray, np.ndarray]
+    ) -> None:
+        """A later batch is the full desired map, not an append-only delta.
+        后续批量请求代表“当前完整映射”，必须从原图重放，支持撤销/重做。
+        """
+        matched, mask_solid, quantized = red_green_canvas
+        client, sid, store = _make_client(
+            matched, mask_solid=mask_solid, quantized_image=quantized
+        )
+        store.put(sid, "original_matched_rgb", matched.copy())
+
+        response_a = client.post(
+            "/api/convert/replace-colors-batch",
+            json={
+                "session_id": sid,
+                "replacements": [
+                    {"selected_color": "#ff0000", "replacement_color": "#0000ff"},
+                ],
+            },
+        )
+        assert response_a.status_code == 200, response_a.text
+        updated_a = store.get(sid)["preview_cache"]["matched_rgb"]
+        assert np.all(updated_a[:2, :] == (0, 0, 255))
+
+        response_b = client.post(
+            "/api/convert/replace-colors-batch",
+            json={
+                "session_id": sid,
+                "replacements": [
+                    {"selected_color": "#ff0000", "replacement_color": "#ffff00"},
+                ],
+            },
+        )
+        assert response_b.status_code == 200, response_b.text
+        updated_b = store.get(sid)["preview_cache"]["matched_rgb"]
+        assert np.all(updated_b[:2, :] == (255, 255, 0))
+        assert store.get(sid)["replacement_regions"] == [
+            {"selected_color": "#ff0000", "replacement_color": "#ffff00"}
+        ]
 
     def test_batch_unknown_session_returns_404(
         self, red_green_canvas: tuple[np.ndarray, np.ndarray, np.ndarray]
@@ -236,19 +323,47 @@ class TestReplaceColorsBatch:
         )
         assert response.status_code == 409
 
-    def test_batch_empty_replacements_rejected_by_schema(
+    def test_batch_empty_replacements_restores_original_global_remaps_only(
         self, red_green_canvas: tuple[np.ndarray, np.ndarray, np.ndarray]
     ) -> None:
-        """Empty list is a schema error (422), not a silent no-op.
-        空列表由 pydantic 校验返回 422，不静默。
+        """Empty list replays to no global remap without clearing recipes.
+        空列表用于撤销到“没有全局换色”，但不清空自定义配方状态。
         """
-        matched, *_ = red_green_canvas
-        client, sid, _ = _make_client(matched)
+        matched, mask_solid, quantized = red_green_canvas
+        client, sid, store = _make_client(
+            matched, mask_solid=mask_solid, quantized_image=quantized
+        )
+        custom_base = matched.copy()
+        custom_base[0, 0] = (128, 128, 128)
+        store.get(sid)["preview_cache"]["matched_rgb"] = custom_base.copy()
+        material_base = np.zeros((*matched.shape[:2], 2), dtype=np.int16)
+        material_base[0, 0] = [7, 7]
+        store.get(sid)["preview_cache"]["material_matrix"] = material_base.copy()
+        store.put(sid, "original_matched_rgb", matched.copy())
+        store.put(sid, "recipe_overrides", [{"region_id": "r1", "recipe": [0]}])
+
+        client.post(
+            "/api/convert/replace-colors-batch",
+            json={
+                "session_id": sid,
+                "replacements": [
+                    {"selected_color": "#ff0000", "replacement_color": "#0000ff"},
+                ],
+            },
+        )
         response = client.post(
             "/api/convert/replace-colors-batch",
             json={"session_id": sid, "replacements": []},
         )
-        assert response.status_code == 422
+        assert response.status_code == 200, response.text
+        updated = store.get(sid)["preview_cache"]["matched_rgb"]
+        assert np.array_equal(updated, custom_base)
+        updated_material = store.get(sid)["preview_cache"]["material_matrix"]
+        assert np.array_equal(updated_material, material_base)
+        assert store.get(sid)["replacement_regions"] == []
+        assert store.get(sid)["recipe_overrides"] == [
+            {"region_id": "r1", "recipe": [0]}
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -409,7 +524,8 @@ class TestRegionReplaceBatch:
             },
         )
         assert response.status_code == 409
-        assert "gradient_region_id_map" in response.json()["detail"]
+        # 409 文案已改为用户友好提示，不再暴露内部字段名。
+        assert "Gradient region data is unavailable" in response.json()["detail"]
 
     def test_batch_unknown_gradient_region_returns_404(
         self,

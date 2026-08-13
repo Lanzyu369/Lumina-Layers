@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useExtractorStore, ACCEPT_EXTRACTOR_FORMATS } from "../stores/extractorStore";
+import { listGradientCardMaterials } from "../api/extractor";
 import { buildCornerLabels } from "./ExtractorCanvas";
 import { useI18n } from "../i18n/context";
 import {
@@ -42,6 +43,115 @@ const materialOptions = MATERIAL_OPTIONS.map((material) => ({
 const textInputClass =
   "min-h-10 w-full rounded-2xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900 dark:text-slate-100";
 
+const manufacturerMenuClass =
+  "absolute z-20 mt-2 w-full overflow-hidden rounded-2xl border border-slate-200/85 bg-slate-100/96 shadow-[var(--shadow-control)] backdrop-blur-xl dark:border-slate-700/85 dark:bg-slate-950/96";
+
+const manufacturerMenuOptionClass =
+  "flex w-full items-start rounded-[18px] px-3 py-2.5 text-left text-sm leading-6 text-slate-700 transition-colors duration-150 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900";
+
+function ManufacturerCombobox({
+  value,
+  options,
+  loading,
+  onChange,
+  t,
+}: {
+  value: string;
+  options: string[];
+  loading: boolean;
+  onChange: (value: string) => void;
+  t: (key: string) => string;
+}) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const normalizedValue = value.trim().toLocaleLowerCase();
+  const filteredOptions = useMemo(() => {
+    if (!normalizedValue) return options;
+    return options.filter((option) => option.toLocaleLowerCase().includes(normalizedValue));
+  }, [normalizedValue, options]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className="flex flex-col gap-1">
+      <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
+        {t("ext_manufacturer_label")}
+      </span>
+      <div className="relative">
+        <input
+          className={`${textInputClass} pr-10`}
+          value={value}
+          placeholder={t("ext_manufacturer_placeholder")}
+          role="combobox"
+          aria-label={t("ext_manufacturer_label")}
+          aria-expanded={open}
+          aria-autocomplete="list"
+          onFocus={() => setOpen(true)}
+          onClick={() => setOpen(true)}
+          onChange={(e) => {
+            onChange(e.target.value);
+            setOpen(true);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setOpen(false);
+            if (event.key === "Enter") setOpen(false);
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => setOpen((previous) => !previous)}
+          className="absolute inset-y-0 right-2 inline-flex items-center justify-center rounded-lg px-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:text-slate-500 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+          aria-label={t("ext_manufacturer_label")}
+        >
+          <ChevronDown className={`h-4 w-4 transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
+        </button>
+        {open ? (
+          <div className={manufacturerMenuClass}>
+            <div role="listbox" className="max-h-64 overflow-y-auto p-2">
+              {loading ? (
+                <div className="px-3 py-2 text-sm text-slate-500 dark:text-slate-400">
+                  {t("ext_manufacturer_loading")}
+                </div>
+              ) : filteredOptions.length > 0 ? (
+                filteredOptions.map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    role="option"
+                    aria-selected={option.toLocaleLowerCase() === normalizedValue}
+                    onClick={() => {
+                      onChange(option);
+                      setOpen(false);
+                    }}
+                    className={manufacturerMenuOptionClass}
+                  >
+                    {option}
+                  </button>
+                ))
+              ) : (
+                <div className="px-3 py-2 text-sm text-slate-500 dark:text-slate-400">
+                  {value.trim()
+                    ? t("ext_manufacturer_custom_hint")
+                    : t("ext_manufacturer_empty")}
+                </div>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function formatEightColorPageLabel(pageNumber: number, t: (key: string) => string): string {
   return `${t("ext_page_number_prefix")}${pageNumber}${t("ext_page_number_suffix")}`;
 }
@@ -78,7 +188,6 @@ export default function ExtractorPanel() {
     mergeLoading,
     mergeError,
     manufacturer,
-    type: metadataType,
     defaultPalette,
     paletteConfirmed,
     paletteConfirmLoading,
@@ -96,7 +205,6 @@ export default function ExtractorPanel() {
     setColorcheckerEnabled,
     openColorcheckerDialog,
     setManufacturer,
-    setType,
     submitExtract,
     submitMerge,
     clearCornerPoints,
@@ -163,6 +271,8 @@ export default function ExtractorPanel() {
 
   const [correctionOpen, setCorrectionOpen] = useState(false);
   const [nudgeOpen, setNudgeOpen] = useState(true);
+  const [manufacturerOptions, setManufacturerOptions] = useState<string[]>([]);
+  const [manufacturerOptionsLoading, setManufacturerOptionsLoading] = useState(false);
 
   const cornerLabels = buildCornerLabels(color_mode, page, t);
   const placedCornerCount = corner_points.length;
@@ -174,6 +284,35 @@ export default function ExtractorPanel() {
     active_corner_index < corner_points.length
       ? corner_points[active_corner_index]
       : null;
+
+  useEffect(() => {
+    if (defaultPalette.length === 0 || paletteConfirmed) {
+      return undefined;
+    }
+    let cancelled = false;
+    setManufacturerOptionsLoading(true);
+    void listGradientCardMaterials()
+      .then((response) => {
+        if (cancelled) return;
+        const brands = Array.from(
+          new Set(
+            response.materials
+              .map((item) => (typeof item.brand === "string" ? item.brand.trim() : ""))
+              .filter((brand) => brand.length > 0),
+          ),
+        ).sort((a, b) => a.localeCompare(b));
+        setManufacturerOptions(brands);
+      })
+      .catch(() => {
+        if (!cancelled) setManufacturerOptions([]);
+      })
+      .finally(() => {
+        if (!cancelled) setManufacturerOptionsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [defaultPalette.length, paletteConfirmed]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -693,35 +832,22 @@ export default function ExtractorPanel() {
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{t("ext_palette_metadata_hint")}</p>
             </div>
             <div className="grid gap-2 lg:grid-cols-2">
-              <label className="flex flex-col gap-1">
-                <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
-                  {t("ext_manufacturer_label")}
-                </span>
-                <input
-                  className={textInputClass}
-                  value={manufacturer}
-                  onChange={(e) => setManufacturer(e.target.value)}
-                />
-              </label>
-              <label className="flex flex-col gap-1">
-                <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
-                  {t("ext_type_label")}
-                </span>
-                <input
-                  className={textInputClass}
-                  value={metadataType}
-                  onChange={(e) => setType(e.target.value)}
-                />
-              </label>
+              <ManufacturerCombobox
+                value={manufacturer}
+                options={manufacturerOptions}
+                loading={manufacturerOptionsLoading}
+                onChange={setManufacturer}
+                t={t}
+              />
+              <Dropdown
+                label={t("ext_material_type_label")}
+                value={defaultPalette[0]?.material ?? "PLA"}
+                options={materialOptions}
+                onChange={(mat) => {
+                  defaultPalette.forEach((_, i) => updatePaletteEntry(i, { material: mat }));
+                }}
+              />
             </div>
-            <Dropdown
-              label={t("ext_material_type_label")}
-              value={defaultPalette[0]?.material ?? "PLA"}
-              options={materialOptions}
-              onChange={(mat) => {
-                defaultPalette.forEach((_, i) => updatePaletteEntry(i, { material: mat }));
-              }}
-            />
             <div className="flex flex-col gap-2">
               {defaultPalette.map((entry, idx) => (
                 <div

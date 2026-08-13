@@ -123,6 +123,52 @@ class TestMerge5ColorExtendedSuccess:
             np.testing.assert_array_equal(merged_rgb[:50], lut1)
             np.testing.assert_array_equal(merged_rgb[50:], lut2)
 
+    def test_merge_pads_page1_and_exports_six_layer_metadata(self) -> None:
+        """5-color merged JSON should keep Page 2's 6-layer recipes."""
+        from utils.lut_manager import LUTManager
+        from config import LUTMetadata, PaletteEntry
+
+        lut1 = np.zeros((2, 3), dtype=np.uint8)
+        lut2 = np.zeros((2, 3), dtype=np.uint8)
+        metadata = LUTMetadata(palette=[
+            PaletteEntry(color="White", material="PETG"),
+            PaletteEntry(color="Red", material="PETG"),
+            PaletteEntry(color="Yellow", material="PETG"),
+            PaletteEntry(color="Blue", material="PETG"),
+            PaletteEntry(color="Black", material="PETG"),
+        ], color_mode="5-Color Extended")
+        stacks1 = np.array([[0, 0, 0, 0, 0], [0, 0, 0, 0, 1]], dtype=np.int32)
+        stacks2 = np.array([[4, 0, 0, 0, 0, 0], [1, 0, 0, 0, 0, 0]], dtype=np.int32)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            LUTManager.save_keyed_json(
+                _real_path_join(tmpdir, "temp_5c_ext_page_1.json"),
+                lut1,
+                stacks1,
+                metadata,
+            )
+            LUTManager.save_keyed_json(
+                _real_path_join(tmpdir, "temp_5c_ext_page_2.json"),
+                lut2,
+                stacks2,
+                metadata,
+            )
+            merged_path = _real_path_join(tmpdir, "lumina_lut.json")
+
+            with (
+                patch("api.routers.extractor.os.path.join", side_effect=_make_join_redirector(tmpdir)),
+                patch("config.LUT_FILE_PATH", merged_path),
+            ):
+                response = client.post("/api/extractor/merge-5color-extended")
+
+            assert response.status_code == 200
+            _rgb, merged_stacks, merged_meta = LUTManager.load_lut_with_metadata(merged_path)
+            assert merged_meta.max_color_layers == 6
+            assert merged_stacks is not None
+            assert merged_stacks.shape == (4, 6)
+            assert merged_stacks[0].tolist() == [-1, 0, 0, 0, 0, 0]
+            assert merged_stacks[2].tolist() == [4, 0, 0, 0, 0, 0]
+
     def test_merge_preserves_colordb_metadata_from_temp_pages(self) -> None:
         """Merged LUT should preserve manufacturer, type, and palette color_name metadata."""
         from utils.lut_manager import LUTManager

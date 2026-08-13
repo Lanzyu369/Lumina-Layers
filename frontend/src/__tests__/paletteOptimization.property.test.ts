@@ -341,6 +341,12 @@ describe('Feature: palette-optimization, Property 2: applyColorRemap 正确记�
     useConverterStore.setState({
       colorRemapMap: {},
       remapHistory: [],
+      remapRedoHistory: [],
+      adjustmentHistory: [],
+      adjustmentRedoHistory: [],
+      replacement_regions: [],
+      recipe_overrides: [],
+      regionReplacementCount: 0,
       sessionId: null,
     });
   });
@@ -352,6 +358,12 @@ describe('Feature: palette-optimization, Property 2: applyColorRemap 正确记�
         useConverterStore.setState({
           colorRemapMap: {},
           remapHistory: [],
+          remapRedoHistory: [],
+          adjustmentHistory: [],
+          adjustmentRedoHistory: [],
+          replacement_regions: [],
+          recipe_overrides: [],
+          regionReplacementCount: 0,
           sessionId: null,
         });
 
@@ -378,6 +390,12 @@ describe('Feature: palette-optimization, Property 2: applyColorRemap 正确记�
           useConverterStore.setState({
             colorRemapMap: {},
             remapHistory: [],
+            remapRedoHistory: [],
+            adjustmentHistory: [],
+            adjustmentRedoHistory: [],
+            replacement_regions: [],
+            recipe_overrides: [],
+            regionReplacementCount: 0,
             sessionId: null,
           });
 
@@ -413,6 +431,12 @@ describe('Feature: palette-optimization, Property 3: undo round trip', () => {
     useConverterStore.setState({
       colorRemapMap: {},
       remapHistory: [],
+      remapRedoHistory: [],
+      adjustmentHistory: [],
+      adjustmentRedoHistory: [],
+      replacement_regions: [],
+      recipe_overrides: [],
+      regionReplacementCount: 0,
       sessionId: null,
       originalPreviewUrl: '/api/files/original',
       previewImageUrl: '/api/files/original',
@@ -428,6 +452,12 @@ describe('Feature: palette-optimization, Property 3: undo round trip', () => {
           useConverterStore.setState({
             colorRemapMap: {},
             remapHistory: [],
+            remapRedoHistory: [],
+            adjustmentHistory: [],
+            adjustmentRedoHistory: [],
+            replacement_regions: [],
+            recipe_overrides: [],
+            regionReplacementCount: 0,
             sessionId: null,
             originalPreviewUrl: '/api/files/original',
             previewImageUrl: '/api/files/original',
@@ -470,6 +500,12 @@ describe('Feature: palette-optimization, Property 3: undo round trip', () => {
         useConverterStore.setState({
           colorRemapMap: {},
           remapHistory: [],
+          remapRedoHistory: [],
+          adjustmentHistory: [],
+          adjustmentRedoHistory: [],
+          replacement_regions: [],
+          recipe_overrides: [],
+          regionReplacementCount: 0,
           sessionId: null,
         });
 
@@ -499,13 +535,19 @@ describe('Feature: palette-optimization, Property 4: 清空替换归零', () => 
     useConverterStore.setState({
       colorRemapMap: {},
       remapHistory: [],
+      remapRedoHistory: [],
+      adjustmentHistory: [],
+      adjustmentRedoHistory: [],
+      replacement_regions: [],
+      recipe_overrides: [],
+      regionReplacementCount: 0,
       sessionId: null,
       originalPreviewUrl: '/api/files/original',
       previewImageUrl: '/api/files/original',
     });
   });
 
-  it('clearAllRemaps resets colorRemapMap to {} and remapHistory to []', () => {
+  it('clearAllRemaps empties the active map but keeps it undoable', () => {
     fc.assert(
       fc.property(
         fc.array(arbHexPair, { minLength: 0, maxLength: 10 }),
@@ -514,6 +556,12 @@ describe('Feature: palette-optimization, Property 4: 清空替换归零', () => 
           useConverterStore.setState({
             colorRemapMap: {},
             remapHistory: [],
+            remapRedoHistory: [],
+            adjustmentHistory: [],
+            adjustmentRedoHistory: [],
+            replacement_regions: [],
+            recipe_overrides: [],
+            regionReplacementCount: 0,
             sessionId: null,
             originalPreviewUrl: '/api/files/original',
             previewImageUrl: '/api/files/original',
@@ -523,19 +571,29 @@ describe('Feature: palette-optimization, Property 4: 清空替换归零', () => 
             useConverterStore.getState().applyColorRemap(origHex, newHex);
           }
 
+          const beforeClear = useConverterStore.getState();
+          const hadRemaps = Object.keys(beforeClear.colorRemapMap).length > 0;
+          const historyLenBefore = beforeClear.remapHistory.length;
+
           // Clear all
           useConverterStore.getState().clearAllRemaps();
 
           const state = useConverterStore.getState();
           expect(state.colorRemapMap).toEqual({});
-          expect(state.remapHistory).toEqual([]);
+          // "Clear" is undoable in the local flow: a non-empty pre-clear map is
+          // pushed as one extra history entry instead of the stack being wiped.
+          // “清空”在本地流程中可撤销：非空的清空前映射会作为一条额外历史入栈，
+          // 而不是把栈清空。
+          expect(state.remapHistory).toHaveLength(
+            historyLenBefore + (hadRemaps ? 1 : 0),
+          );
         },
       ),
       { numRuns: 100 },
     );
   });
 
-  it('clearAllRemaps is idempotent 鈥?calling twice yields same empty state', () => {
+  it('clearAllRemaps is idempotent — calling twice yields same state', () => {
     fc.assert(
       fc.property(
         fc.array(arbHexPair, { minLength: 1, maxLength: 5 }),
@@ -543,6 +601,12 @@ describe('Feature: palette-optimization, Property 4: 清空替换归零', () => 
           useConverterStore.setState({
             colorRemapMap: {},
             remapHistory: [],
+            remapRedoHistory: [],
+            adjustmentHistory: [],
+            adjustmentRedoHistory: [],
+            replacement_regions: [],
+            recipe_overrides: [],
+            regionReplacementCount: 0,
             sessionId: null,
             originalPreviewUrl: '/api/files/original',
             previewImageUrl: '/api/files/original',
@@ -553,11 +617,15 @@ describe('Feature: palette-optimization, Property 4: 清空替换归零', () => 
           }
 
           useConverterStore.getState().clearAllRemaps();
+          const afterFirst = useConverterStore.getState();
+          // Second clear: the map is already empty, so nothing new is pushed —
+          // the call is a true no-op on history.
+          // 第二次清空：映射已空，不再入栈，对历史是真正的无操作。
           useConverterStore.getState().clearAllRemaps();
 
           const state = useConverterStore.getState();
           expect(state.colorRemapMap).toEqual({});
-          expect(state.remapHistory).toEqual([]);
+          expect(state.remapHistory).toEqual(afterFirst.remapHistory);
         },
       ),
       { numRuns: 100 },

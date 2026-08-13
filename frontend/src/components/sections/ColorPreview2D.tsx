@@ -13,8 +13,9 @@ import { createPortal } from 'react-dom';
 import { sourceColorPick } from '../../api/converter';
 import { ModelingMode } from '../../api/types';
 import { buildLayerImagesSourceKey, useConverterStore } from '../../stores/converter';
+import type { SelectionDocument } from '../../stores/converter';
 import { useI18n } from '../../i18n/context';
-import CanvasPreviewSurface from '../ui/CanvasPreviewSurface';
+import CanvasPreviewSurface, { type CanvasPreviewSurfaceViewport } from '../ui/CanvasPreviewSurface';
 import { cx } from '../ui/panelPrimitives';
 import type { CanvasPreviewHoverSample } from '../ui/canvasPreviewUtils';
 import PreviewHoverInspector from '../ui/PreviewHoverInspector';
@@ -36,6 +37,8 @@ import {
 } from '../ui/previewHoverInspectorUtils';
 import { resolvePreviewHoverPixel } from './actionBarHoverUtils';
 import { readPixelColor } from './colorPreview2DUtils';
+import { detectLocalRegionContours } from './localRegionDetect';
+import { BRUSH_STROKE_OPACITY, drawBrushStrokes } from './brushDraftComposite';
 
 /**
  * Find the closest palette entry to a given hex color.
@@ -45,48 +48,210 @@ function findClosestPaletteHex(
   hex: string,
   palette: Array<{ matched_hex: string }>,
 ): string | null {
-  if (palette.length === 0) return null;
-
   const targetHex = hex.replace(/^#/, '');
   if (!/^[0-9a-fA-F]{6}$/.test(targetHex)) return null;
+
+  if (palette.length === 0) return targetHex.toUpperCase();
 
   const hexLower = targetHex.toLowerCase();
   // Exact match first
   const exact = palette.find((p) => p.matched_hex.replace(/^#/, '').toLowerCase() === hexLower);
   if (exact) return exact.matched_hex;
 
-  // Color distance match
-  const tr = parseInt(targetHex.slice(0, 2), 16);
-  const tg = parseInt(targetHex.slice(2, 4), 16);
-  const tb = parseInt(targetHex.slice(4, 6), 16);
+  // Do not force a nearest-palette fallback here: after a replacement or a
+  // custom recipe, the colour the user sees may legitimately not be part of
+  // the original palette. Returning the clicked HEX lets "same colour"
+  // selection operate on the current preview state instead of the first
+  // preview's colour set.
+  return targetHex.toUpperCase();
+}
 
-  let bestDist = Infinity;
-  let bestHex: string | null = null;
-
-  for (const entry of palette) {
-    const h = entry.matched_hex.replace(/^#/, '');
-    const er = parseInt(h.slice(0, 2), 16);
-    const eg = parseInt(h.slice(2, 4), 16);
-    const eb = parseInt(h.slice(4, 6), 16);
-    const dist = (tr - er) ** 2 + (tg - eg) ** 2 + (tb - eb) ** 2;
-    if (dist < bestDist) {
-      bestDist = dist;
-      bestHex = entry.matched_hex;
+function getContoursForHex(
+  contoursByHex: Record<string, number[][][]>,
+  hex: string,
+): number[][][] | null {
+  const noHash = hex.replace(/^#/, '');
+  const candidates = [
+    noHash,
+    noHash.toLowerCase(),
+    noHash.toUpperCase(),
+    `#${noHash}`,
+    `#${noHash.toLowerCase()}`,
+    `#${noHash.toUpperCase()}`,
+  ];
+  for (const key of candidates) {
+    const contours = contoursByHex[key];
+    if (contours && contours.length > 0) {
+      return contours;
     }
   }
+  return null;
+}
 
-  return bestHex;
+function normalizeHexForCompare(hex: string | null | undefined): string | null {
+  if (!hex) return null;
+  const normalized = hex.replace(/^#/, '').trim().toLowerCase();
+  return /^[0-9a-f]{6}$/.test(normalized) ? normalized : null;
+}
+
+function averageRgbForHex(hex: string): number | null {
+  const normalized = normalizeHexForCompare(hex);
+  if (!normalized) return null;
+  const r = Number.parseInt(normalized.slice(0, 2), 16);
+  const g = Number.parseInt(normalized.slice(2, 4), 16);
+  const b = Number.parseInt(normalized.slice(4, 6), 16);
+  return (r + g + b) / 3;
+}
+
+const SELECTION_BLINK_ACTIVE_MS = 2000;
+const SELECTION_BLINK_REST_MS = 2000;
+const SELECTION_BLINK_LIGHT_AVERAGE_THRESHOLD = 160;
+const SELECTION_BLINK_MAX_ALPHA = 0.46;
+const SELECTION_BLINK_MIN_DRAW_ALPHA = 0.006;
+
+function blinkFillStyleForHex(hex: string, pulse: number): string {
+  const average = averageRgbForHex(hex);
+  const isLightRegion =
+    average !== null && average > SELECTION_BLINK_LIGHT_AVERAGE_THRESHOLD;
+  const normalizedPulse = Math.max(0, Math.min(1, pulse));
+  const alpha = normalizedPulse * SELECTION_BLINK_MAX_ALPHA;
+  return isLightRegion
+    ? `rgba(0, 0, 0, ${alpha})`
+    : `rgba(255, 255, 255, ${alpha})`;
+}
+
+// A pre-rasterized blink overlay target: the Path2D (when supported) plus the
+// raw polygons as a fallback, in canvas pixel space. Built by the data effect
+// and consumed by the independent pulse-clock effect.
+// 预光栅化的闪烁叠加目标：Path2D（若支持）+ 原始多边形兜底，处于 canvas 像素空间。
+interface BlinkRenderTarget {
+  hex: string;
+  path: Path2D | null;
+  polygons: [number, number][][];
+}
+
+function regionColorCompatibleWithSample(
+  regionHex: string,
+  sampleHex: string | null,
+): boolean {
+  const region = normalizeHexForCompare(regionHex);
+  const sample = normalizeHexForCompare(sampleHex);
+  return Boolean(region && sample && region === sample);
 }
 
 function selectedColorAfterToggle(
   selectedColors: Set<string>,
   paletteHex: string,
 ): string | null {
-  if (!selectedColors.has(paletteHex)) {
+  const existing = Array.from(selectedColors).find(
+    (color) => color.toLowerCase() === paletteHex.toLowerCase(),
+  );
+  if (!existing) {
     return paletteHex;
   }
-  const remaining = Array.from(selectedColors).filter((color) => color !== paletteHex);
+  const remaining = Array.from(selectedColors).filter(
+    (color) => color.toLowerCase() !== paletteHex.toLowerCase(),
+  );
   return remaining.length > 0 ? remaining[remaining.length - 1] : null;
+}
+
+function resolvePreviewWidthForContours(
+  previewWidthMm: number | null | undefined,
+  previewPixelWidth: number | null | undefined,
+): number | null {
+  if (previewWidthMm && previewWidthMm > 0) return previewWidthMm;
+  if (previewPixelWidth && previewPixelWidth > 0) return previewPixelWidth;
+  return null;
+}
+
+function sampleToWorldPoint(
+  sample: CanvasPreviewHoverSample,
+  options: {
+    previewPixelWidth: number | null;
+    previewPixelHeight: number | null;
+    previewWidthMm: number | null;
+  },
+): { x: number; y: number } | null {
+  const pixelWidth = options.previewPixelWidth ?? sample.naturalWidth;
+  const pixelHeight = options.previewPixelHeight ?? sample.naturalHeight;
+  const contourWidth = resolvePreviewWidthForContours(options.previewWidthMm, pixelWidth);
+  if (!contourWidth || pixelWidth <= 0 || pixelHeight <= 0) {
+    return null;
+  }
+  const pixelScale = contourWidth / pixelWidth;
+  return {
+    x: sample.pixelX * pixelScale,
+    y: (pixelHeight - sample.pixelY) * pixelScale,
+  };
+}
+
+function pointOnSegment(
+  point: { x: number; y: number },
+  a: readonly [number, number],
+  b: readonly [number, number],
+): boolean {
+  const cross =
+    (point.y - a[1]) * (b[0] - a[0]) -
+    (point.x - a[0]) * (b[1] - a[1]);
+  if (Math.abs(cross) > 1e-6) return false;
+  const dot =
+    (point.x - a[0]) * (b[0] - a[0]) +
+    (point.y - a[1]) * (b[1] - a[1]);
+  if (dot < 0) return false;
+  const lenSq = (b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2;
+  return dot <= lenSq;
+}
+
+function pointInPolygon(
+  point: { x: number; y: number },
+  polygon: number[][],
+): boolean {
+  if (polygon.length < 3) return false;
+
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const a = polygon[j] as [number, number];
+    const b = polygon[i] as [number, number];
+    if (pointOnSegment(point, a, b)) {
+      return true;
+    }
+    const intersects =
+      (a[1] > point.y) !== (b[1] > point.y) &&
+      point.x < ((b[0] - a[0]) * (point.y - a[1])) / (b[1] - a[1]) + a[0];
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+function sampleHitsRegion(
+  sample: CanvasPreviewHoverSample,
+  region: {
+    colorHex?: string | null;
+    contours?: number[][][] | null;
+  },
+  options: {
+    previewPixelWidth: number | null;
+    previewPixelHeight: number | null;
+    previewWidthMm: number | null;
+    sampleHex?: string | null;
+  },
+): boolean {
+  if (
+    options.sampleHex != null &&
+    region.colorHex != null &&
+    !regionColorCompatibleWithSample(region.colorHex, options.sampleHex)
+  ) {
+    return false;
+  }
+
+  const point = sampleToWorldPoint(sample, options);
+  if (point && region.contours && region.contours.length > 0) {
+    if (region.contours.some((polygon) => pointInPolygon(point, polygon))) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 // --------------- Zoom / Pan constants ---------------
@@ -187,10 +352,15 @@ export default function ColorPreview2D({
     img.onerror = () => setDisplayUrl(stableImageUrl);
     img.src = stableImageUrl;
   }, [stableImageUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+  const activeCanvasSrc = showOriginal && originalUploadUrl ? originalUploadUrl : displayUrl;
 
   const previewPixelWidth = useConverterStore((s) => s.previewPixelWidth);
   const previewPixelHeight = useConverterStore((s) => s.previewPixelHeight);
   const selectionMode = useConverterStore((s) => s.selectionMode);
+  const selectionTool = useConverterStore((s) => s.selectionTool);
+  const selectionDocument = useConverterStore((s) => s.selectionDocument);
+  const applySelectionMutation = useConverterStore((s) => s.applySelectionMutation);
+  const brushSizePx = useConverterStore((s) => s.brushSizePx);
   const selectedColor = useConverterStore((s) => s.selectedColor);
   const selectedColors = useConverterStore((s) => s.selectedColors);
   const isLoading = useConverterStore((s) => s.isLoading);
@@ -198,6 +368,7 @@ export default function ColorPreview2D({
   const colorContours = useConverterStore((s) => s.colorContours);
   const regionData = useConverterStore((s) => s.regionData);
   const selectedRegions = useConverterStore((s) => s.selectedRegions);
+  const selectionBlinkEnabled = useConverterStore((s) => s.selectionBlinkEnabled);
   const sessionId = useConverterStore((s) => s.sessionId);
   const previewGlbUrl = useConverterStore((s) => s.previewGlbUrl);
   const previewWidthMm = useConverterStore((s) => s.preview_width_mm);
@@ -210,19 +381,67 @@ export default function ColorPreview2D({
 
   const detectRegion = useConverterStore((s) => s.detectRegion);
   const detectAndAccumulateRegion = useConverterStore((s) => s.detectAndAccumulateRegion);
+  const removeRegionFromSelection = useConverterStore((s) => s.removeRegionFromSelection);
+  const clearSelection = useConverterStore((s) => s.clearSelection);
 
   const [hoverSample, setHoverSample] = useState<CanvasPreviewHoverSample | null>(null);
+  const [brushHoverSample, setBrushHoverSample] = useState<CanvasPreviewHoverSample | null>(null);
   const [hoverLayerColors, setHoverLayerColors] = useState<HoverLayerColorSample[]>([]);
   const [hoverSurfaceHex, setHoverSurfaceHex] = useState<string | null>(null);
   const [previewCanvasBuffer, setPreviewCanvasBuffer] = useState<PreviewCanvasBuffer | null>(null);
+  const previewCanvasBufferRef = useRef<PreviewCanvasBuffer | null>(null);
+  const previewCanvasBufferSourceRef = useRef<string | null>(null);
   const [layerCanvasBuffers, setLayerCanvasBuffers] = useState<LayerCanvasBuffer[]>([]);
   const pendingHoverSampleRef = useRef<CanvasPreviewHoverSample | null>(null);
   const hoverDelayTimerRef = useRef<number | null>(null);
   const hoverResourceReleaseTimerRef = useRef<number | null>(null);
   const magnifierCanvasRef = useRef<HTMLCanvasElement>(null);
+  const selectionBlinkCanvasRef = useRef<HTMLCanvasElement>(null);
+  const brushDraftCanvasRef = useRef<HTMLCanvasElement>(null);
+  // 多笔累积：每一笔是一条点列。brushStrokesRef 存已抬笔的历史笔，
+  // brushPointsRef 存正在画的当前笔；应用时把两者一起提交。
+  // Strokes accumulate: past strokes live in brushStrokesRef, the in-progress
+  // stroke in brushPointsRef; both are submitted together on apply.
+  const brushStrokesRef = useRef<Array<Array<{ x: number; y: number }>>>([]);
+  const brushPointsRef = useRef<Array<{ x: number; y: number }>>([]);
+  // Display→image scale captured at stroke time, so executeBrushDraft can
+  // convert the display-pixel brush size into image pixels consistently with
+  // how the draft stroke is drawn (appendBrushSample). 落笔时记录的显示→图像比例。
+  const brushDisplayToImageScaleRef = useRef(1);
+  const [brushDraftVersion, setBrushDraftVersion] = useState(0);
   const fetchedLayerSessionRef = useRef<string | null>(null);
   const layerSampleCacheRef = useRef<Map<string, HoverLayerColorSample[]>>(new Map());
   const surfaceSampleCacheRef = useRef<Map<string, string | null>>(new Map());
+  const selectAllPickSeqRef = useRef(0);
+  // 闪烁目标与时间轴解耦：renderTargets 由数据 effect 写入，脉冲循环 effect 读取。
+  // version 用于让脉冲循环仅在轮廓数据变化时重描，避免每帧重画 Path2D。
+  // Blink targets are decoupled from the pulse clock so selection changes never
+  // restart the animation — only the contour data is swapped.
+  const blinkTargetsRef = useRef<readonly BlinkRenderTarget[]>([]);
+  const blinkTargetsVersionRef = useRef(0);
+  // 乐观轮廓：点击瞬间用本地 colorContours 立即高亮，待 region-detect 返回
+  // 精确连通块轮廓后由 svgContours 的 regionData 分支接管。仅作即时视觉反馈，
+  // 不写入 store，不干扰选中/替换逻辑。
+  // Optimistic contours give instant feedback on click using the locally-known
+  // full-colour outline while the precise connected-component contour is fetched.
+  const [optimisticContours, setOptimisticContours] = useState<{
+    hex: string;
+    polygons: number[][][];
+    clickX: number;
+    clickY: number;
+  } | null>(null);
+  // 多选乐观累加：multi-select 下每次点击本地 flood-fill 立即追加一个精确连通块
+  // 轮廓，与 selectedRegions 一起渲染；后端返回该块后按点击坐标移除。这样多选
+  // 点第一个和连续点多个都即时显示，不用等每次 region-detect 的网络往返。
+  // Optimistic accumulation for multi-select: each click flood-fills locally and
+  // appends an exact outline immediately, rendered alongside selectedRegions; the
+  // entry is removed (matched by click coords) once the backend region arrives.
+  const [optimisticRegions, setOptimisticRegions] = useState<Array<{
+    hex: string;
+    polygons: number[][][];
+    clickX: number;
+    clickY: number;
+  }>>([]);
   const needsLayerHoverData = hoverInspectorEnabled && showLayerDetails && hoverSample !== null;
   const displayPreviewSettled = displayUrl === stableImageUrl;
   const layerImagesCurrentKey = useMemo(
@@ -246,9 +465,26 @@ export default function ColorPreview2D({
 
   const [zoom, setZoom] = useState(1);
   const handleSurfaceReady = useCallback((payload: { previewBuffer: PreviewCanvasBuffer | null } | null) => {
-    setPreviewCanvasBuffer(payload?.previewBuffer ?? null);
+    const nextPreviewBuffer = payload?.previewBuffer ?? null;
+    previewCanvasBufferRef.current = nextPreviewBuffer;
+    previewCanvasBufferSourceRef.current = nextPreviewBuffer ? activeCanvasSrc : null;
+    setPreviewCanvasBuffer(nextPreviewBuffer);
     surfaceSampleCacheRef.current.clear();
-  }, []);
+  }, [activeCanvasSrc]);
+
+  const readActivePreviewPixel = useCallback((sample: CanvasPreviewHoverSample): string | null => {
+    const activeBuffer =
+      activeCanvasSrc === displayUrl &&
+      previewCanvasBufferSourceRef.current === displayUrl
+        ? previewCanvasBufferRef.current
+        : null;
+    return readPixelColor(activeBuffer, {
+      pixelX: sample.pixelX,
+      pixelY: sample.pixelY,
+      naturalWidth: sample.naturalWidth,
+      naturalHeight: sample.naturalHeight,
+    });
+  }, [activeCanvasSrc, displayUrl]);
 
   const clearHoverResourceReleaseTimer = useCallback(() => {
     if (hoverResourceReleaseTimerRef.current !== null) {
@@ -268,6 +504,25 @@ export default function ColorPreview2D({
   }, [clearHoverResourceReleaseTimer]);
 
   const handleHoverSample = useCallback((sample: CanvasPreviewHoverSample | null) => {
+    if (selectionTool === 'brush') {
+      // In brush mode, show the brush cursor immediately without the hover
+      // inspector delay, so the user can see where they're painting.
+      // 越界采样照常存入 brushHoverSample（携带 isOutOfImage 标记与未夹取
+      // 像素坐标）——它不流经悬停检查器等共享逻辑，只被光标圈消费：渲染时
+      // 用图像 fit 矩形把位置夹回边缘，保证指示圈永不可见丢失。
+      setBrushHoverSample((previous) => {
+        if (sample === null && previous === null) return previous;
+        if (sample && previous &&
+            sample.containerX === previous.containerX &&
+            sample.containerY === previous.containerY) {
+          return previous;
+        }
+        return sample;
+      });
+      return;
+    }
+    setBrushHoverSample(null);
+
     if (!hoverInspectorEnabled) {
       pendingHoverSampleRef.current = null;
       if (hoverDelayTimerRef.current !== null) {
@@ -307,7 +562,7 @@ export default function ColorPreview2D({
       }
       setHoverSample((previous) => (areHoverSamplesEqual(previous, pending) ? previous : pending));
     }, HOVER_POPOVER_DELAY_MS);
-  }, [clearHoverResourceReleaseTimer, hoverInspectorEnabled, scheduleHoverResourceRelease]);
+  }, [clearHoverResourceReleaseTimer, hoverInspectorEnabled, scheduleHoverResourceRelease, selectionTool]);
 
   const handleCanvasHoverSample = useCallback((sample: CanvasPreviewHoverSample | null) => {
     handleHoverSample(sample);
@@ -321,7 +576,6 @@ export default function ColorPreview2D({
 
   useEffect(() => {
     clearHoverResourceReleaseTimer();
-    setPreviewCanvasBuffer(null);
     setLayerCanvasBuffers([]);
     layerSampleCacheRef.current.clear();
     surfaceSampleCacheRef.current.clear();
@@ -580,50 +834,175 @@ export default function ColorPreview2D({
 
   const handleSelectAllClick = useCallback(
     async (sample: CanvasPreviewHoverSample) => {
+      const requestSeq = selectAllPickSeqRef.current + 1;
+      selectAllPickSeqRef.current = requestSeq;
       const sessionIdAtClick = sessionId;
-      const applyRawHexIfCurrent = (rawHex: string | null): void => {
-        if (!rawHex) return;
+      const applyRawHexIfCurrent = (rawHex: string | null): string | null => {
+        if (!rawHex) return null;
         const state = useConverterStore.getState();
         if (
           state.selectionMode !== 'select-all'
           || state.sessionId !== sessionIdAtClick
           || state.replacePreviewLoading
         ) {
-          return;
+          return null;
         }
         const paletteHex = findClosestPaletteHex(rawHex, state.palette);
-        if (!paletteHex) return;
+        if (!paletteHex) return null;
         state.toggleColorInSelection(paletteHex);
         state.setSelectedColor(selectedColorAfterToggle(state.selectedColors, paletteHex));
+        return paletteHex;
       };
+
+      const localRawHex = readActivePreviewPixel(sample);
+      const optimisticPaletteHex = applyRawHexIfCurrent(localRawHex);
 
       if (sessionIdAtClick) {
         try {
           const pick = await sourceColorPick(sessionIdAtClick, sample.pixelX, sample.pixelY);
+          if (selectAllPickSeqRef.current !== requestSeq) {
+            return;
+          }
+          const serverPaletteHex = findClosestPaletteHex(
+            pick.source_matched_hex,
+            useConverterStore.getState().palette,
+          );
+          if (
+            optimisticPaletteHex &&
+            serverPaletteHex &&
+            optimisticPaletteHex.toLowerCase() === serverPaletteHex.toLowerCase()
+          ) {
+            return;
+          }
+          if (optimisticPaletteHex) {
+            // Correct an optimistic click sampled from a highlighted/blended
+            // preview image. Toggle the optimistic colour off, then apply the
+            // authoritative backend colour for this pixel.
+            applyRawHexIfCurrent(optimisticPaletteHex);
+          }
           applyRawHexIfCurrent(pick.source_matched_hex);
           return;
         } catch {
           // Fall back to the preview buffer for legacy sessions or transient API failures.
         }
       }
-
-      const rawHex = readPixelColor(previewCanvasBuffer, {
-        pixelX: sample.pixelX,
-        pixelY: sample.pixelY,
-        naturalWidth: sample.naturalWidth,
-        naturalHeight: sample.naturalHeight,
-      });
-      applyRawHexIfCurrent(rawHex);
     },
-    [previewCanvasBuffer, sessionId],
+    [readActivePreviewPixel, sessionId],
   );
 
   const handleClick = useCallback(
     (sample: CanvasPreviewHoverSample) => {
       if (replacePreviewLoading) return;
-      if (!previewPixelWidth || !previewPixelHeight) return;
 
       const { pixelX, pixelY } = sample;
+
+      if (
+        selectionDocument &&
+        selectionMode !== 'current' &&
+        selectionMode !== 'region' &&
+        (selectionTool === 'point' || selectionTool === 'same-color')
+      ) {
+        const buffer =
+          activeCanvasSrc === displayUrl &&
+          previewCanvasBufferSourceRef.current === displayUrl
+            ? previewCanvasBufferRef.current
+            : null;
+        const widthMm =
+          previewWidthMm && previewWidthMm > 0
+            ? previewWidthMm
+            : previewPixelWidth;
+        const local =
+          buffer && widthMm
+            ? detectLocalRegionContours(buffer, {
+                pixelX,
+                pixelY,
+                naturalWidth: sample.naturalWidth,
+                naturalHeight: sample.naturalHeight,
+                previewWidthMm: widthMm,
+              })
+            : null;
+        if (!local) return;
+
+        if (selectionTool === 'point') {
+          const existing = selectionDocument.components.find(
+            (component) =>
+              component.color_hex.replace(/^#/, '').toLowerCase() === local.colorHex &&
+              component.pixel_count === local.pixelCount &&
+              component.bbox.join(',') === local.bbox.join(','),
+          );
+
+          // Toggle OFF: remove the clicked component from the display immediately.
+          // We match by component identity (color + pixel count + bbox), not by
+          // contour coordinates, because the backend may return simplified contours
+          // that don't exactly match the locally-detected polygons.
+          // 取消选择时按组件身份（颜色+像素数+bbox）匹配移除，不按轮廓坐标匹配，
+          // 因为后端返回的简化轮廓和本地检测的 polygon 可能不完全一致。
+          const existingIndex = existing
+            ? selectionDocument.components.indexOf(existing)
+            : -1;
+          const optimisticContours = existing
+            ? selectionDocument.contours.filter((_contour, index) => index !== existingIndex)
+            : [...selectionDocument.contours, ...local.polygons];
+          const optimisticComponents = existing
+            ? selectionDocument.components.filter((_component, index) => index !== existingIndex)
+            : [
+                ...selectionDocument.components,
+                {
+                  label: -Math.max(1, selectionDocument.selection_revision + 1),
+                  region_id: `__optimistic_selection__:${selectionDocument.selection_revision + 1}:${pixelX}:${pixelY}`,
+                  color_hex: `#${local.colorHex}`,
+                  pixel_count: local.pixelCount,
+                  bbox: [...local.bbox],
+                  anchor: [...local.anchor],
+                  contours: local.polygons,
+                },
+              ];
+          const optimisticColorHexes = Array.from(
+            new Set(optimisticComponents.map((component) => component.color_hex)),
+          );
+
+          const optimisticDocument: SelectionDocument = {
+            ...selectionDocument,
+            selection_revision: selectionDocument.selection_revision + 1,
+            selected_component_count: optimisticComponents.length,
+            selected_pixel_count: Math.max(
+              0,
+              selectionDocument.selected_pixel_count +
+              (existing ? -existing.pixel_count : local.pixelCount),
+            ),
+            selected_color_hexes: optimisticColorHexes,
+            region_ids: optimisticComponents.map((component) => component.region_id),
+            components: optimisticComponents,
+            contours: optimisticContours,
+          };
+
+          // Apply the optimistic state IMMEDIATELY so the user sees the new
+          // selection right away, then let the backend confirm it in the
+          // background. Previously we waited for the backend response before
+          // updating the UI, which caused the "new block disappears after a
+          // few seconds" bug when the backend was slow or failed.
+          // 立即应用乐观状态让用户看到新选区，后端在后台确认。之前等后端
+          // 响应才更新 UI，导致新色块几秒后消失。
+          useConverterStore.setState({
+            selectionDocument: optimisticDocument,
+          });
+
+          void applySelectionMutation({
+            operation: 'point-toggle',
+            x: pixelX,
+            y: pixelY,
+            optimisticDocument,
+          });
+        } else {
+          void applySelectionMutation({
+            operation: 'same-color-toggle',
+            x: pixelX,
+            y: pixelY,
+            colorHex: local.colorHex,
+          });
+        }
+        return;
+      }
 
       switch (selectionMode) {
         case 'select-all': {
@@ -631,44 +1010,271 @@ export default function ColorPreview2D({
           break;
         }
         case 'current':
-        case 'region':
+        case 'region': {
+          const rawHex = readActivePreviewPixel(sample);
+          if (
+            regionData &&
+            sampleHitsRegion(sample, regionData, {
+              previewPixelWidth,
+              previewPixelHeight,
+              previewWidthMm,
+              sampleHex: rawHex,
+            })
+          ) {
+            clearSelection();
+            break;
+          }
+          const paletteHex = rawHex
+            ? findClosestPaletteHex(rawHex, useConverterStore.getState().palette)
+            : null;
+          if (paletteHex) {
+            useConverterStore.getState().setSelectedColor(paletteHex);
+            // 乐观高亮：本地 flood-fill 立即算出**精确**的点击连通块轮廓，
+            // 而不是“全图同色”的近似（那会把区域外同色像素也框进来）。
+            // 后端 region-detect 返回后通常与本地结果一致，无视觉跳变。
+            // Optimistic highlight: a local flood-fill yields the *exact*
+            // connected component instantly — not the "all same-coloured pixels"
+            // approximation that would outline同色 pixels outside the region.
+            const buffer =
+              activeCanvasSrc === displayUrl &&
+              previewCanvasBufferSourceRef.current === displayUrl
+                ? previewCanvasBufferRef.current
+                : null;
+            const widthMm =
+              previewWidthMm && previewWidthMm > 0
+                ? previewWidthMm
+                : previewPixelWidth;
+            const local =
+              buffer && widthMm
+                ? detectLocalRegionContours(buffer, {
+                    pixelX,
+                    pixelY,
+                    naturalWidth: sample.naturalWidth,
+                    naturalHeight: sample.naturalHeight,
+                    previewWidthMm: widthMm,
+                  })
+                : null;
+            setOptimisticContours(
+              local && local.polygons.length > 0
+                ? {
+                    hex: paletteHex,
+                    polygons: local.polygons,
+                    clickX: pixelX,
+                    clickY: pixelY,
+                  }
+                : null,
+            );
+          } else {
+            setOptimisticContours(null);
+          }
           detectRegion(pixelX, pixelY);
           break;
-        case 'multi-select':
+        }
+        case 'multi-select': {
+          const rawHex = readActivePreviewPixel(sample);
+          const clickedRegion = selectedRegions.find((region) =>
+            regionColorCompatibleWithSample(region.colorHex, rawHex) &&
+            sampleHitsRegion(sample, region, {
+              previewPixelWidth,
+              previewPixelHeight,
+              previewWidthMm,
+              sampleHex: rawHex,
+            }),
+          );
+          if (clickedRegion) {
+            removeRegionFromSelection(clickedRegion.regionId);
+            break;
+          }
+          // Toggle-off an optimistic region whose backend region hasn't arrived
+          // yet: hitting its outline removes it from the optimistic list.
+          // 取消一个后端尚未返回的乐观区域：命中其轮廓则从乐观列表移除。
+          const clickedOptimistic = optimisticRegions.find((region) =>
+            sampleHitsRegion(
+              sample,
+              { colorHex: region.hex, contours: region.polygons },
+              {
+                previewPixelWidth,
+                previewPixelHeight,
+                previewWidthMm,
+                sampleHex: rawHex,
+              },
+            ),
+          );
+          if (clickedOptimistic) {
+            setOptimisticRegions((previous) =>
+              previous.filter(
+                (entry) =>
+                  entry.clickX !== clickedOptimistic.clickX ||
+                  entry.clickY !== clickedOptimistic.clickY,
+              ),
+            );
+            break;
+          }
+          const paletteHex = rawHex
+            ? findClosestPaletteHex(rawHex, useConverterStore.getState().palette)
+            : null;
+          if (paletteHex) {
+            useConverterStore.getState().setSelectedColor(paletteHex);
+          }
+          // 多选乐观累加：本地 flood-fill 立即算出精确连通块轮廓并追加显示，
+          // 后端 region-detect 返回该块后按点击坐标移除（见下方清除 effect）。
+          // Optimistic accumulate: flood-fill locally for an instant exact outline.
+          {
+            const buffer =
+              activeCanvasSrc === displayUrl &&
+              previewCanvasBufferSourceRef.current === displayUrl
+                ? previewCanvasBufferRef.current
+                : null;
+            const widthMm =
+              previewWidthMm && previewWidthMm > 0
+                ? previewWidthMm
+                : previewPixelWidth;
+            const local =
+              buffer && widthMm
+                ? detectLocalRegionContours(buffer, {
+                    pixelX,
+                    pixelY,
+                    naturalWidth: sample.naturalWidth,
+                    naturalHeight: sample.naturalHeight,
+                    previewWidthMm: widthMm,
+                  })
+                : null;
+            if (local && local.polygons.length > 0 && paletteHex) {
+              setOptimisticRegions((previous) => [
+                // Drop any stale optimistic entry for the same click point.
+                ...previous.filter(
+                  (entry) => entry.clickX !== pixelX || entry.clickY !== pixelY,
+                ),
+                {
+                  hex: paletteHex,
+                  polygons: local.polygons,
+                  clickX: pixelX,
+                  clickY: pixelY,
+                },
+              ]);
+            }
+          }
           detectAndAccumulateRegion(pixelX, pixelY);
           break;
+        }
       }
     },
     [
       replacePreviewLoading,
       previewPixelWidth,
       previewPixelHeight,
+      previewWidthMm,
       selectionMode,
+      selectionTool,
+      selectionDocument,
+      applySelectionMutation,
       handleSelectAllClick,
+      readActivePreviewPixel,
+      regionData,
+      selectedRegions,
+      activeCanvasSrc,
+      displayUrl,
       detectRegion,
       detectAndAccumulateRegion,
+      removeRegionFromSelection,
+      clearSelection,
+      optimisticRegions,
     ],
   );
 
-  // Collect contour polygons to render as SVG overlays
+  // Clear the optimistic outline once the precise contour for THIS click
+  // arrives (matched by click coordinates), or when the selection is cleared /
+  // mode changes. A stale ``regionData`` from a previous selection must NOT
+  // clear it — that's exactly what let the old outline mask the optimistic one.
+  // 仅当本次点击的精确轮廓返回时（按点击坐标匹配）才清除乐观轮廓；选区清空或
+  // 切换模式时也清除。上一个选区残留的旧 regionData 绝不能清除它——正是那个
+  // 误清除让旧轮廓盖住了乐观轮廓。
+  useEffect(() => {
+    if (!optimisticContours) return;
+    const arrived =
+      regionData?.contours &&
+      regionData.contours.length > 0 &&
+      regionData.clickX === optimisticContours.clickX &&
+      regionData.clickY === optimisticContours.clickY;
+    if (arrived) {
+      setOptimisticContours(null);
+      return;
+    }
+    if (!selectedColor && selectionMode !== 'multi-select') {
+      setOptimisticContours(null);
+    }
+  }, [regionData, selectedColor, selectionMode, optimisticContours]);
+
+  // Reconcile optimistic multi-select regions: drop each optimistic entry once
+  // the backend ``selectedRegions`` contains a region at the same click point,
+  // and clear them all when leaving multi-select or when the selection is
+  // emptied (e.g. clear-all / undo). 多选乐观项对账：后端 selectedRegions 出现
+  // 同点击坐标的区域后移除对应乐观项；切出多选或选区被清空时全部清空。
+  useEffect(() => {
+    if (selectionMode !== 'multi-select') {
+      if (optimisticRegions.length > 0) setOptimisticRegions([]);
+      return;
+    }
+    if (optimisticRegions.length === 0) return;
+    const remaining = optimisticRegions.filter(
+      (optimistic) =>
+        !selectedRegions.some(
+          (region) =>
+            region.clickX === optimistic.clickX &&
+            region.clickY === optimistic.clickY,
+        ),
+    );
+    if (remaining.length !== optimisticRegions.length) {
+      setOptimisticRegions(remaining);
+    }
+  }, [selectionMode, selectedRegions, optimisticRegions]);
+
+  // Collect the single authoritative union contour. Legacy branches remain as
+  // a compatibility fallback while gradient-panel callers migrate.
   const svgContours = useMemo(() => {
     if (!previewPixelWidth || !previewPixelHeight) return [];
-
+    if (selectionDocument && selectionDocument.contours.length > 0) {
+      return [
+        {
+          hex: selectionDocument.selected_color_hexes.at(-1)?.replace(/^#/, '') ?? 'ffffff',
+          polygons: selectionDocument.contours,
+        },
+      ];
+    }
     const targets: Array<{ hex: string; polygons: number[][][] }> = [];
 
     if (
+      (selectionMode === 'current' || selectionMode === 'region') &&
+      optimisticContours
+    ) {
+      // Optimistic outline takes top priority right after a click: it renders
+      // immediately from the locally-known colour while region-detect is still
+      // in flight. Without this priority, a stale ``regionData`` from the
+      // previous selection would win and the outline would only appear after
+      // the network round-trip — the residual delay the user noticed.
+      // 点击后乐观轮廓优先：region-detect 未返回时先用本地已知颜色轮廓立即显示。
+      // 否则上一个选区残留的旧 regionData 会占先，描边要等网络往返——正是用户
+      // 感知到的残余延迟。
+      targets.push({ hex: optimisticContours.hex, polygons: optimisticContours.polygons });
+    } else if (
       (selectionMode === 'current' || selectionMode === 'region') &&
       selectedColor &&
       regionData?.contours &&
       regionData.contours.length > 0
     ) {
       targets.push({ hex: selectedColor, polygons: regionData.contours });
-    } else if (selectionMode === 'multi-select' && selectedRegions.length > 0) {
+    } else if (selectionMode === 'multi-select') {
       for (const region of selectedRegions) {
         if (region.contours && region.contours.length > 0) {
           const hex = region.colorHex.replace(/^#/, '');
           targets.push({ hex, polygons: region.contours });
         }
+      }
+      // Optimistic accumulated regions render immediately alongside the
+      // authoritative ones; they're removed once the backend region lands.
+      // 乐观累加的区域与权威区域一起即时渲染；后端区域返回后即移除。
+      for (const region of optimisticRegions) {
+        targets.push({ hex: region.hex, polygons: region.polygons });
       }
     } else if (
       selectionMode === 'select-all' &&
@@ -678,39 +1284,313 @@ export default function ColorPreview2D({
       // Skip when the selection is region-scoped: ``colorContours`` lists
       // every pixel of each hex across the whole canvas, which would paint
       // cyan outlines far beyond the region's connected component. The
-      // region flow already displays the backend's exact mask via
-      // ``previewImageUrl`` above, so no client-side overlay is needed.
+      // region flow renders exact connected-component contours from
+      // ``regionData`` / ``selectedRegions`` above, so no full-colour overlay
+      // is needed here.
       // 区域来源跳过 contour 叠加——colorContours 是全图同色轮廓，叠上去
-      // 会把区域外的同色像素也框住；区域流程已经通过 previewImageUrl 显
-      // 示精确 mask 图，无需再叠轮廓。
+      // 会把区域外的同色像素也框住；区域流程已经通过 regionData /
+      // selectedRegions 的轮廓显示精确区域，无需再叠全图同色轮廓。
       for (const hex of selectedColors) {
-        if (colorContours[hex]) {
-          targets.push({ hex, polygons: colorContours[hex] });
+        const contours = getContoursForHex(colorContours, hex);
+        if (contours) {
+          targets.push({ hex, polygons: contours });
         }
       }
-    } else if (selectedColor && colorContours[selectedColor]) {
-      targets.push({ hex: selectedColor, polygons: colorContours[selectedColor] });
+    } else if (
+      selectionMode === 'select-all' &&
+      selectedColor &&
+      !isRegionScopedSelection
+    ) {
+      const contours = getContoursForHex(colorContours, selectedColor);
+      if (contours) {
+        targets.push({ hex: selectedColor, polygons: contours });
+      }
     }
 
     return targets;
   }, [
     selectionMode,
+    selectionDocument,
     selectedColor,
     selectedColors,
     selectedRegions,
     regionData,
     colorContours,
+    optimisticContours,
+    optimisticRegions,
     previewPixelWidth,
     previewPixelHeight,
     isRegionScopedSelection,
   ]);
+
+  // --- 数据 effect：把 svgContours 转成可绘制的 renderTargets 存入 ref。 ---
+  // 随选区/尺寸变化重跑，只更新数据 + 递增版本号，绝不动 rAF 循环和 opacity，
+  // 因此选区变化不会打断闪烁相位。
+  useEffect(() => {
+    const contourWidth = resolvePreviewWidthForContours(previewWidthMm, previewPixelWidth);
+    if (
+      !selectionBlinkEnabled ||
+      svgContours.length === 0 ||
+      !previewPixelWidth ||
+      !previewPixelHeight ||
+      !contourWidth ||
+      contourWidth <= 0
+    ) {
+      blinkTargetsRef.current = [];
+      blinkTargetsVersionRef.current += 1;
+      return;
+    }
+
+    const pixelScale = contourWidth / previewPixelWidth;
+    const supportsPath2D = typeof Path2D !== 'undefined';
+    const renderTargets: BlinkRenderTarget[] = svgContours.map((target) => {
+      const polygons = target.polygons
+        .filter((polygon) => polygon.length >= 3)
+        .map((polygon) =>
+          polygon.map(([xMm, yMm]) => [
+            xMm / pixelScale,
+            previewPixelHeight - yMm / pixelScale,
+          ] as [number, number]),
+        );
+      const path = supportsPath2D ? new Path2D() : null;
+      if (path) {
+        for (const polygon of polygons) {
+          polygon.forEach(([px, py], index) => {
+            if (index === 0) {
+              path.moveTo(px, py);
+            } else {
+              path.lineTo(px, py);
+            }
+          });
+          path.closePath();
+        }
+      }
+      return { hex: target.hex, path, polygons };
+    });
+
+    blinkTargetsRef.current =
+      renderTargets.every((target) => target.polygons.length === 0)
+        ? []
+        : renderTargets;
+    blinkTargetsVersionRef.current += 1;
+  }, [
+    selectionBlinkEnabled,
+    svgContours,
+    previewPixelWidth,
+    previewPixelHeight,
+    previewWidthMm,
+  ]);
+
+  // --- 脉冲时钟 effect：全局连续运行的 rAF 循环，只负责按相位更新 opacity。 ---
+  // 只挂一次（依赖不含任何选区状态），每帧从 blinkTargetsRef 读最新轮廓，
+  // 版本号变化时才重描轮廓，opacity 每帧照算 → 选区变化不打断周期/相位/频率。
+  useEffect(() => {
+    const canvas = selectionBlinkCanvasRef.current;
+    if (!canvas || !selectionBlinkEnabled || !previewPixelWidth || !previewPixelHeight) {
+      if (canvas) {
+        canvas.style.opacity = '0';
+        canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
+      }
+      return;
+    }
+
+    const context = canvas.getContext('2d');
+    if (!context) {
+      canvas.style.opacity = '0';
+      return;
+    }
+
+    canvas.width = previewPixelWidth;
+    canvas.height = previewPixelHeight;
+
+    const drawTarget = (target: BlinkRenderTarget) => {
+      if (target.path) {
+        context.fill(target.path);
+        return;
+      }
+      for (const polygon of target.polygons) {
+        context.beginPath();
+        polygon.forEach(([px, py], index) => {
+          if (index === 0) {
+            context.moveTo(px, py);
+          } else {
+            context.lineTo(px, py);
+          }
+        });
+        context.closePath();
+        context.fill();
+      }
+    };
+
+    const redrawTargets = () => {
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      const targets = blinkTargetsRef.current;
+      if (targets.length === 0) return;
+      context.save();
+      for (const target of targets) {
+        context.fillStyle = blinkFillStyleForHex(target.hex, 1);
+        drawTarget(target);
+      }
+      context.restore();
+    };
+
+    let lastDrawnVersion = -1;
+    let animationFrame = 0;
+    const blinkPeriodMs = SELECTION_BLINK_ACTIVE_MS + SELECTION_BLINK_REST_MS;
+
+    const drawFrame = () => {
+      const version = blinkTargetsVersionRef.current;
+      if (version !== lastDrawnVersion) {
+        lastDrawnVersion = version;
+        redrawTargets();
+      }
+      const hasTargets = blinkTargetsRef.current.length > 0;
+      const phaseMs = performance.now() % blinkPeriodMs;
+      if (!hasTargets || phaseMs >= SELECTION_BLINK_ACTIVE_MS) {
+        canvas.style.opacity = '0';
+      } else {
+        const progress = phaseMs / SELECTION_BLINK_ACTIVE_MS;
+        const pulse = Math.sin(progress * Math.PI);
+        canvas.style.opacity =
+          pulse < SELECTION_BLINK_MIN_DRAW_ALPHA ? '0' : String(pulse);
+      }
+      animationFrame = window.requestAnimationFrame(drawFrame);
+    };
+
+    animationFrame = window.requestAnimationFrame(drawFrame);
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+      canvas.style.opacity = '0';
+      context.clearRect(0, 0, canvas.width, canvas.height);
+    };
+    // 仅在开关/画布尺寸变化时重建循环；选区状态（svgContours 等）刻意不在依赖里。
+  }, [selectionBlinkEnabled, previewPixelWidth, previewPixelHeight]);
+
+  const executeBrushDraft = useCallback(() => {
+    const hasDraft = brushStrokesRef.current.length > 0 || brushPointsRef.current.length > 0;
+    if (!selectionDocument || !hasDraft || !previewPixelWidth) return;
+    // 提交所有累积的笔（历史笔 + 当前笔）的点，打平成一列。
+    const points = [...brushStrokesRef.current, brushPointsRef.current].flat();
+    const beforeRevision = selectionDocument.selection_revision;
+    void applySelectionMutation({
+      operation: 'brush-add',
+      // brushPoints are in image-pixel space; convert the display-pixel brush
+      // size with the same scale the draft stroke used so the backend hit-test
+      // matches what the user painted. 笔迹按图像像素绘制，半径也要按同样比例换算。
+      brushRadius: (brushSizePx / 2) * brushDisplayToImageScaleRef.current,
+      brushPoints: points,
+    }).then(() => {
+      const current = useConverterStore.getState();
+      if (
+        current.selectionDocument?.selection_revision === beforeRevision &&
+        current.error
+      ) {
+        return;
+      }
+      brushStrokesRef.current = [];
+      brushPointsRef.current = [];
+      brushDraftCanvasRef.current
+        ?.getContext('2d')
+        ?.clearRect(
+          0,
+          0,
+          brushDraftCanvasRef.current?.width ?? 0,
+          brushDraftCanvasRef.current?.height ?? 0,
+        );
+      setBrushDraftVersion((version) => version + 1);
+    });
+  }, [applySelectionMutation, brushSizePx, selectionDocument]);
+
+  const clearBrushDraft = useCallback(() => {
+    brushStrokesRef.current = [];
+    brushPointsRef.current = [];
+    const canvas = brushDraftCanvasRef.current;
+    canvas?.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
+    setBrushDraftVersion((version) => version + 1);
+  }, []);
+
+  // Clear any in-progress brush draft when the image/session changes, so
+  // strokes made on the previous image can never be applied to the new one
+  // (executeBrushDraft submits raw pixel coordinates, which are only valid
+  // for the image they were drawn on).
+  // 图像/会话切换时清空画笔草稿，避免把上一张图的笔迹提交给新图
+  // （executeBrushDraft 提交的是像素坐标，仅对绘制它的那张图有效）。
+  useEffect(() => {
+    clearBrushDraft();
+  }, [sessionId, stableImageUrl, clearBrushDraft]);
+
+  const appendBrushSample = useCallback((sample: CanvasPreviewHoverSample, start: boolean) => {
+    if (selectionTool !== 'brush' || !previewPixelWidth || !previewPixelHeight) return;
+    // Keep the brush cursor visible during the stroke by updating the hover sample
+    setBrushHoverSample(sample);
+    const point = { x: sample.pixelX, y: sample.pixelY };
+    if (start) brushPointsRef.current = [];
+    brushPointsRef.current.push(point);
+    const canvas = brushDraftCanvasRef.current;
+    const context = canvas?.getContext('2d');
+    if (!canvas || !context) return;
+    if (canvas.width !== previewPixelWidth || canvas.height !== previewPixelHeight) {
+      canvas.width = previewPixelWidth;
+      canvas.height = previewPixelHeight;
+    }
+    // The brush size is in *display* pixels (what the user sees on screen).
+    // The draft canvas is in preview image pixel space, so we convert display
+    // pixels to image pixels. The image is letterboxed (object-fit contain)
+    // inside the container, so the correct denominator is the *fitted* image
+    // width on screen, not the full container width — otherwise the stroke is
+    // smaller than the cursor when the container aspect differs from the image.
+    // 画笔尺寸是屏幕像素，草稿画布是图像像素空间；图像在容器内按 contain
+    // 缩放留边，换算分母必须用"图像在屏的实际宽度"而非容器宽度，否则
+    // 容器与图像宽高比不一致时笔迹会比指示圈小。
+    const naturalAspect =
+      sample.naturalHeight > 0 ? sample.naturalWidth / sample.naturalHeight : 1;
+    const containerAspect =
+      sample.containerHeight > 0
+        ? sample.containerWidth / sample.containerHeight
+        : 1;
+    const fittedImageWidth =
+      containerAspect > naturalAspect
+        ? sample.containerHeight * naturalAspect
+        : sample.containerWidth;
+    const displayToImageScale =
+      fittedImageWidth > 0 ? sample.naturalWidth / fittedImageWidth : 1;
+    brushDisplayToImageScaleRef.current = displayToImageScale;
+    // The cursor and stroke should both track image pixels consistently so
+    // their relationship stays constant at any zoom level.
+    const imageBrushSizePx = brushSizePx * displayToImageScale;
+
+    // 每个采样点把历史笔 + 当前笔全部重画（每条路径只 stroke 一次、不自我
+    // 重叠），因此重叠采样点不会让 alpha 叠加，所有笔保持统一固定透明度、
+    // 且都能同时看见。
+    // Redraw every stroke (past + current) per sample; each path is stroked
+    // once and never overlaps itself, so alpha stays uniform across all strokes.
+    drawBrushStrokes(context, brushStrokesRef.current, brushPointsRef.current, imageBrushSizePx);
+    setBrushDraftVersion((version) => version + 1);
+  }, [brushSizePx, previewPixelHeight, previewPixelWidth, selectionTool]);
+
+  // 抬笔：把当前笔并入历史笔，下一笔从新点列开始，但所有笔仍留在画布上。
+  // On stroke end, fold the current stroke into history so the next stroke
+  // starts fresh while all strokes stay on the canvas.
+  const endBrushStroke = useCallback(() => {
+    if (brushPointsRef.current.length > 0) {
+      brushStrokesRef.current.push(brushPointsRef.current);
+      brushPointsRef.current = [];
+    }
+    setBrushDraftVersion((version) => version + 1);
+  }, []);
+
+  useEffect(() => {
+    if (selectionTool !== 'brush') {
+      setBrushHoverSample(null);
+    }
+  }, [selectionTool]);
 
   const hoverInspectorStyle = hoverSample ? computeHoverInspectorStyle(hoverSample, {
     layerCount: hoverLayerColors.length,
     showMagnifier,
     showLayerDetails,
   }) : null;
-  const hoverInspectorOverlay = hoverInspectorEnabled && hoverSample && hoverInspectorStyle && typeof document !== 'undefined'
+  const hoverInspectorOverlay = hoverInspectorEnabled && selectionTool !== 'brush' && hoverSample && hoverInspectorStyle && typeof document !== 'undefined'
     ? createPortal(
       <PreviewHoverInspector
         dataTestId="main-2d-hover-inspector"
@@ -728,41 +1608,145 @@ export default function ColorPreview2D({
     )
     : null;
 
-  const contourOverlay = svgContours.length > 0 && previewPixelWidth && previewPixelHeight ? (
-    <svg
-      viewBox={`0 0 ${previewPixelWidth} ${previewPixelHeight}`}
-      className="pointer-events-none absolute inset-0 h-full w-full"
-      style={{ zIndex: 5 }}
-    >
-      {svgContours.map(({ hex, polygons }, ti) =>
-        polygons.map((polygon, pi) => {
-          if (polygon.length < 3) return null;
-          const previewWidthMmState = useConverterStore.getState().preview_width_mm;
-          if (!previewWidthMmState || previewWidthMmState <= 0) return null;
-          const pixelScale = previewWidthMmState / previewPixelWidth;
+  const renderBrushCursorScreenOverlay = useCallback((viewport: CanvasPreviewSurfaceViewport) => {
+    if (selectionTool !== 'brush') return null;
 
-          const points = polygon
-            .map(([xMm, yMm]) => {
+    // 画笔指示圈只在图像内替代系统光标（此时 cursor-none）。越界时系统光标
+    // 已恢复可见，指示圈若继续贴边残留，反而制造"圈在边缘、鼠标在别处"的
+    // 双重光标假象，因此越界/未悬停时不渲染。
+    if (!brushHoverSample || brushHoverSample.isOutOfImage) return null;
+
+    const diameter = Math.max(brushSizePx * viewport.scale, 3);
+
+    return (
+      <div
+        data-testid="selection-brush-cursor"
+        className="pointer-events-none absolute z-30 rounded-full border border-pink-400 bg-pink-300/15 shadow-[0_0_0_1px_rgba(255,255,255,0.8)]"
+        style={{
+          width: `${diameter}px`,
+          height: `${diameter}px`,
+          left: `${brushHoverSample.containerX}px`,
+          top: `${brushHoverSample.containerY}px`,
+          transform: 'translate(-50%, -50%)',
+        }}
+        aria-hidden="true"
+      />
+    );
+  }, [brushHoverSample, brushSizePx, selectionTool]);
+
+  const renderMarchingAntsScreenOverlay = useCallback((viewport: CanvasPreviewSurfaceViewport) => {
+    if (
+      !previewPixelWidth ||
+      !previewPixelHeight ||
+      viewport.containerSize.width <= 0 ||
+      viewport.containerSize.height <= 0 ||
+      svgContours.length === 0
+    ) {
+      return null;
+    }
+
+    const contourWidth = resolvePreviewWidthForContours(previewWidthMm, previewPixelWidth);
+    if (!contourWidth || contourWidth <= 0) return null;
+
+    const pixelScale = contourWidth / previewPixelWidth;
+    const strokeWidth = 1;
+
+    // 选区轮廓的屏幕投影约定（勿改动）：轮廓值域为图像像素 [0, previewPixel]，
+    // 按图像 fit 矩形精确投影到屏幕，与画布绘制严格对齐。
+    return (
+      <svg
+        data-testid="selection-marching-ants-overlay"
+        viewBox={`0 0 ${viewport.containerSize.width} ${viewport.containerSize.height}`}
+        className="pointer-events-none absolute inset-0 h-full w-full"
+        aria-hidden="true"
+      >
+        {svgContours.map(({ hex, polygons }, ti) =>
+          polygons.map((polygon, pi) => {
+            if (polygon.length < 3) return null;
+            const screenPoints = polygon.map(([xMm, yMm]) => {
               const px = xMm / pixelScale;
               const py = previewPixelHeight - yMm / pixelScale;
-              return `${px},${py}`;
-            })
-            .join(' ');
+              const sx =
+                viewport.imageScreenRect.x +
+                (px / previewPixelWidth) * viewport.imageScreenRect.width;
+              const sy =
+                viewport.imageScreenRect.y +
+                (py / previewPixelHeight) * viewport.imageScreenRect.height;
+              return [sx, sy] as const;
+            });
+            const path = screenPoints
+              .map(([x, y], index) => `${index === 0 ? 'M' : 'L'} ${x} ${y}`)
+              .join(' ');
+            const points = screenPoints.map(([x, y]) => `${x},${y}`).join(' ');
+            const key = `${hex}-${ti}-${pi}`;
+            return (
+              <g key={key}>
+                <polygon
+                  data-testid="selection-contour-compat"
+                  points={points}
+                  fill="none"
+                  stroke="transparent"
+                  aria-hidden="true"
+                />
+                <path
+                  data-testid="selection-marching-ants-white"
+                  d={`${path} Z`}
+                  fill="none"
+                  stroke="#ffffff"
+                  strokeWidth={strokeWidth}
+                  strokeDasharray="4 4"
+                  strokeLinejoin="round"
+                  vectorEffect="non-scaling-stroke"
+                  className="selection-marching-ants selection-marching-ants--white"
+                />
+                <path
+                  data-testid="selection-marching-ants-black"
+                  d={`${path} Z`}
+                  fill="none"
+                  stroke="#1a1a1a"
+                  strokeWidth={strokeWidth}
+                  strokeDasharray="4 4"
+                  strokeLinejoin="round"
+                  vectorEffect="non-scaling-stroke"
+                  className="selection-marching-ants selection-marching-ants--black"
+                />
+              </g>
+            );
+          }),
+        )}
+      </svg>
+    );
+  }, [previewPixelHeight, previewPixelWidth, previewWidthMm, svgContours, brushHoverSample, selectionTool]);
 
-          return (
-            <polygon
-              key={`${hex}-${ti}-${pi}`}
-              points={points}
-              fill="none"
-              stroke="#00ffff"
-              strokeWidth={Math.max(1, previewPixelWidth / 500)}
-              strokeLinejoin="round"
-              opacity={0.85}
-            />
-          );
-        }),
-      )}
-    </svg>
+  const renderSelectionScreenOverlay = useCallback((viewport: CanvasPreviewSurfaceViewport) => (
+    <>
+      {renderMarchingAntsScreenOverlay(viewport)}
+      {renderBrushCursorScreenOverlay(viewport)}
+    </>
+  ), [renderBrushCursorScreenOverlay, renderMarchingAntsScreenOverlay]);
+
+  // Always mount the pulse canvas once a preview exists. Previously it only
+  // mounted after contours appeared, while the rAF effect had already returned
+  // with a null ref; enabling blink therefore looked broken until another
+  // unrelated dependency changed.
+  const scaledPixelOverlay = previewPixelWidth && previewPixelHeight ? (
+    <>
+      <canvas
+        ref={selectionBlinkCanvasRef}
+        data-testid="selection-blink-canvas"
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 h-full w-full"
+        style={{ zIndex: 6 }}
+      />
+      <canvas
+        ref={brushDraftCanvasRef}
+        data-testid="selection-brush-draft"
+        data-version={brushDraftVersion}
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 h-full w-full"
+        style={{ zIndex: 7, opacity: BRUSH_STROKE_OPACITY }}
+      />
+    </>
   ) : null;
 
   const floatingOverlay = (
@@ -789,6 +1773,25 @@ export default function ColorPreview2D({
           {t('preview_debug_main_2d')}
         </div>
       </div>
+
+      {selectionTool === 'brush' && (brushStrokesRef.current.length > 0 || brushPointsRef.current.length > 0) && (
+        <div className="pointer-events-auto absolute bottom-2 left-1/2 z-30 flex -translate-x-1/2 gap-2 rounded-lg border border-pink-300/80 bg-white/95 p-2 shadow-lg dark:border-pink-700/80 dark:bg-slate-900/95">
+          <button
+            type="button"
+            onClick={executeBrushDraft}
+            className="rounded-md bg-pink-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-pink-600"
+          >
+            {t('selection_brush_apply')}
+          </button>
+          <button
+            type="button"
+            onClick={clearBrushDraft}
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+          >
+            {t('selection_brush_clear')}
+          </button>
+        </div>
+      )}
 
       {originalUploadUrl && (
         <button
@@ -841,7 +1844,7 @@ export default function ColorPreview2D({
   );
 
 
-  if (!displayUrl) {
+  if (!activeCanvasSrc) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-slate-500 dark:text-slate-400">
         {isLoading ? (
@@ -859,7 +1862,7 @@ export default function ColorPreview2D({
   return (
     <>
       <CanvasPreviewSurface
-        src={showOriginal && originalUploadUrl ? originalUploadUrl : displayUrl}
+        src={activeCanvasSrc}
         alt={previewAltText}
         dataTestId="color-preview-2d-container"
         className={
@@ -867,17 +1870,28 @@ export default function ColorPreview2D({
             ? 'h-full w-full checkerboard-bg'
             : 'h-full w-full bg-slate-200/60 dark:bg-slate-900/60'
         }
-        surfaceClassName="cursor-crosshair"
+        surfaceClassName={
+          selectionTool === 'brush' && brushHoverSample && !brushHoverSample.isOutOfImage
+            // 仅当指针确实悬停在图像上时隐藏系统光标（指示圈接管）；图像外
+            // 留白区或未悬停时系统光标始终可见，任何时刻都不会"鼠标找不到"。
+            ? 'cursor-none'
+            : 'cursor-crosshair'
+        }
         renderingQuality="crisp"
-        overlay={contourOverlay}
+        overlay={scaledPixelOverlay}
+        screenSpaceOverlay={renderSelectionScreenOverlay}
         floatingOverlay={floatingOverlay}
         interactionsDisabled={replacePreviewLoading}
         minScale={MIN_ZOOM}
         maxScale={MAX_ZOOM}
         wheelZoomStepMultiplier={ZOOM_STEP}
-        resetOnDoubleClick
+        allowOutOfImageHover={selectionTool === 'brush'}
         onHoverSample={handleCanvasHoverSample}
-        onClickSample={handleClick}
+        onClickSample={selectionTool === 'brush' ? undefined : handleClick}
+        onStrokeStart={selectionTool === 'brush' ? (sample) => appendBrushSample(sample, true) : undefined}
+        onStrokeMove={selectionTool === 'brush' ? (sample) => appendBrushSample(sample, false) : undefined}
+        onStrokeEnd={selectionTool === 'brush' ? endBrushStroke : undefined}
+        onStrokeCancel={selectionTool === 'brush' ? () => setBrushDraftVersion((version) => version + 1) : undefined}
         onSurfaceReady={handleSurfaceReady}
         onScaleChange={setZoom}
         middleButtonPanEnabled

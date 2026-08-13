@@ -6,7 +6,7 @@ import Button from "../ui/Button";
 import Switch from "../ui/Switch";
 import CustomRecipeDialog from "../ui/CustomRecipeDialog";
 import { useI18n } from "../../i18n/context";
-import { cx, workstationInsetCardClass, workstationPanelCardClass } from "../ui/panelPrimitives";
+import { cx, cardClass, wellPadClass } from "../ui/panelPrimitives";
 import { normalizeResourceUrl } from "../../utils/resourceUrl";
 import MaterialLayerBenefitCurve from "./MaterialLayerBenefitCurve";
 
@@ -14,17 +14,16 @@ import MaterialLayerBenefitCurve from "./MaterialLayerBenefitCurve";
 
 type ToolbarGroupTint = "slate" | "sky" | "rose" | "amber" | "emerald";
 
-const TOOLBAR_GROUP_TINT_CLASS: Record<ToolbarGroupTint, string> = {
-  slate:
-    "bg-slate-100/70 border-slate-200/70 dark:bg-slate-800/40 dark:border-slate-700/50",
-  sky:
-    "bg-sky-50/80 border-sky-200/70 dark:bg-sky-950/30 dark:border-sky-900/50",
-  rose:
-    "bg-rose-50/80 border-rose-200/70 dark:bg-rose-950/30 dark:border-rose-900/50",
-  amber:
-    "bg-amber-50/80 border-amber-200/70 dark:bg-amber-950/30 dark:border-amber-900/50",
-  emerald:
-    "bg-emerald-50/80 border-emerald-200/70 dark:bg-emerald-950/25 dark:border-emerald-900/50",
+/* Hierarchy v2: groups are borderless — a colored dot + small-caps label
+ * carries the category, so the card interior stays a single flat surface.
+ * 层级 v2：工具组不再是彩色边框小卡片，改为“彩点 + 小标题”，卡片内部
+ * 保持一个平面，靠留白分组。 */
+const TOOLBAR_GROUP_DOT_CLASS: Record<ToolbarGroupTint, string> = {
+  slate: "bg-slate-400",
+  sky: "bg-sky-500",
+  rose: "bg-rose-500",
+  amber: "bg-amber-500",
+  emerald: "bg-emerald-500",
 };
 
 const TOOLBAR_GROUP_LABEL_TINT_CLASS: Record<ToolbarGroupTint, string> = {
@@ -43,26 +42,23 @@ interface ToolbarGroupProps {
 }
 
 /**
- * Toolbar group card: tinted background + a small header label on top,
- * followed by a row of compact controls aligned to a shared baseline.
- * 工具栏分组：淡色背景 + 顶部小标题 + 同一基线的紧凑按钮行。
+ * Toolbar group: colored dot + small caps label above a row of compact
+ * controls. No border, no background — grouping is typographic.
+ * 工具栏分组：彩点 + 小标题 + 紧凑按钮行，无边框无底色，靠排版分组。
  */
 function ToolbarGroup({ label, tint, children, contentClassName }: ToolbarGroupProps) {
   return (
-    <div
-      className={cx(
-        "flex flex-col gap-1 rounded-xl border px-2.5 py-1.5",
-        TOOLBAR_GROUP_TINT_CLASS[tint],
-      )}
-      role="group"
-      aria-label={label}
-    >
+    <div className="flex flex-col gap-1" role="group" aria-label={label}>
       <span
         className={cx(
-          "text-[10px] font-semibold uppercase tracking-[0.1em]",
+          "flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.1em]",
           TOOLBAR_GROUP_LABEL_TINT_CLASS[tint],
         )}
       >
+        <span
+          aria-hidden="true"
+          className={cx("h-1.5 w-1.5 shrink-0 rounded-full", TOOLBAR_GROUP_DOT_CLASS[tint])}
+        />
         {label}
       </span>
       <div className={contentClassName ?? "flex min-h-9 flex-wrap items-center gap-1.5"}>{children}</div>
@@ -135,14 +131,14 @@ function PaletteItem({
             onSelect();
           }
         }}
-        className={`relative flex w-full min-w-0 flex-col items-center gap-1 rounded-2xl px-1.5 py-2 cursor-pointer border transition-all duration-150 ${
+        className={`relative flex w-full min-w-0 flex-col items-center gap-1 rounded-[10px] px-1.5 py-2 cursor-pointer border transition-all duration-150 ${
           isSelected
             ? "border-amber-400 bg-amber-400/10 ring-2 ring-amber-400/30"
             : "border-transparent bg-white/35 hover:border-slate-300 hover:bg-white/65 dark:bg-slate-900/35 dark:hover:border-slate-600 dark:hover:bg-slate-900/75"
         }`}
       >
         <span
-          className={`inline-block h-[clamp(1.4rem,2vw,1.75rem)] w-[clamp(1.4rem,2vw,1.75rem)] rounded-xl ${borderClass}`}
+          className={`inline-block h-[clamp(1.4rem,2vw,1.75rem)] w-[clamp(1.4rem,2vw,1.75rem)] rounded-md ${borderClass}`}
           style={{ backgroundColor: `#${displayHex}` }}
           title={`#${displayHex}`}
         />
@@ -170,7 +166,7 @@ function PaletteItem({
           onSelect();
         }
       }}
-      className={`relative flex h-full min-h-0 flex-col gap-2 rounded-[20px] px-2.5 py-2 cursor-pointer border transition-all duration-150 ${
+      className={`relative flex h-full min-h-0 flex-col gap-2 rounded-[10px] px-2.5 py-2 cursor-pointer border transition-all duration-150 ${
         isSelected
           ? "border-amber-400 bg-amber-400/10 ring-2 ring-amber-400/30"
           : "border-transparent bg-white/35 hover:border-slate-300 hover:bg-white/65 dark:bg-slate-900/35 dark:hover:border-slate-600 dark:hover:bg-slate-900/75"
@@ -179,7 +175,7 @@ function PaletteItem({
       {/* Top row: swatch + percentage */}
       <div className="flex items-center gap-1.5">
         <span
-          className={`inline-block h-[clamp(1.25rem,1.7vw,1.5rem)] w-[clamp(1.25rem,1.7vw,1.5rem)] shrink-0 rounded-xl ${borderClass}`}
+          className={`inline-block h-[clamp(1.25rem,1.7vw,1.5rem)] w-[clamp(1.25rem,1.7vw,1.5rem)] shrink-0 rounded-md ${borderClass}`}
           style={{ backgroundColor: `#${displayHex}` }}
           title={`#${displayHex}`}
         />
@@ -265,12 +261,12 @@ function FreeColorSummary({ freeColors }: { freeColors: Set<string> }) {
   const { t } = useI18n();
   if (freeColors.size === 0) return null;
   return (
-    <div className={cx(workstationInsetCardClass, "flex flex-wrap items-center gap-2 px-3 py-2.5")}>
+    <div className={cx(wellPadClass, "flex flex-wrap items-center gap-2 px-3 py-2.5")}>
       <span className="text-[clamp(0.65rem,0.8vw,0.7rem)] font-medium text-slate-500 dark:text-slate-400">{t("conv_free_color_label")}:</span>
       {Array.from(freeColors).sort().map(hex => (
         <span
           key={hex}
-          className="h-6 w-6 rounded-xl border-2 border-dashed border-red-400"
+          className="h-6 w-6 rounded-md border-2 border-dashed border-red-400"
           style={{ backgroundColor: `#${hex}` }}
           title={`#${hex}`}
         />
@@ -314,20 +310,34 @@ export default function PalettePanel({
   const color_layers = useConverterStore((s) => s.color_layers);
   const layer_height_mm = useConverterStore((s) => s.layer_height_mm);
   const selectedColor = useConverterStore((s) => s.selectedColor);
-  const setSelectedColor = useConverterStore((s) => s.setSelectedColor);
   const selectedColors = useConverterStore((s) => s.selectedColors);
   const toggleColorInSelection = useConverterStore((s) => s.toggleColorInSelection);
   const enable_relief = useConverterStore((s) => s.enable_relief);
   const color_height_map = useConverterStore((s) => s.color_height_map);
   const updateColorHeight = useConverterStore((s) => s.updateColorHeight);
   const colorRemapMap = useConverterStore((s) => s.colorRemapMap);
+  const recipeOverrides = useConverterStore((s) => s.recipe_overrides);
   const remapHistory = useConverterStore((s) => s.remapHistory);
+  const remapRedoHistory = useConverterStore((s) => s.remapRedoHistory);
+  const adjustmentHistory = useConverterStore((s) => s.adjustmentHistory);
+  const adjustmentRedoHistory = useConverterStore((s) => s.adjustmentRedoHistory);
+  const historyCanUndo = useConverterStore((s) => s.historyCanUndo);
+  const historyCanRedo = useConverterStore((s) => s.historyCanRedo);
+  const historyBusy = useConverterStore((s) => s.historyBusy);
   const undoColorRemap = useConverterStore((s) => s.undoColorRemap);
+  const redoColorRemap = useConverterStore((s) => s.redoColorRemap);
   const clearAllRemaps = useConverterStore((s) => s.clearAllRemaps);
+  const clearSelection = useConverterStore((s) => s.clearSelection);
   const replacePreviewLoading = useConverterStore((s) => s.replacePreviewLoading);
   const heightmap_max_height = useConverterStore((s) => s.heightmap_max_height);
   const selectionMode = useConverterStore((s) => s.selectionMode);
-  const setSelectionMode = useConverterStore((s) => s.setSelectionMode);
+  const selectionTool = useConverterStore((s) => s.selectionTool);
+  const setSelectionTool = useConverterStore((s) => s.setSelectionTool);
+  const selectionDocument = useConverterStore((s) => s.selectionDocument);
+  const brushSizePx = useConverterStore((s) => s.brushSizePx);
+  const setBrushSizePx = useConverterStore((s) => s.setBrushSizePx);
+  const selectionBlinkEnabled = useConverterStore((s) => s.selectionBlinkEnabled);
+  const toggleSelectionBlink = useConverterStore((s) => s.toggleSelectionBlink);
   const gradientSelection = useConverterStore((s) => s.gradientSelection);
   const selectedRegions = useConverterStore((s) => s.selectedRegions);
   const regionData = useConverterStore((s) => s.regionData);
@@ -344,7 +354,9 @@ export default function PalettePanel({
       ? selectedColorList.map((hex) => `__select_all_color__:${hex.replace(/^#/, "").toLowerCase()}`)
       : [];
   const activeRecipeRegionIds =
-    selectionMode === 'select-all'
+    selectionDocument && selectionDocument.selected_component_count > 0
+      ? selectionDocument.region_ids
+      : selectionMode === 'select-all'
       ? selectAllRecipeRegionIds
       : selectedRegions.length > 0
       ? selectedRegions.map((region) => region.regionId)
@@ -365,8 +377,20 @@ export default function PalettePanel({
     ? t("recipe_custom_disabled_region")
     : undefined;
 
-  const hasRemaps = Object.keys(colorRemapMap).length > 0 || regionReplacementCount > 0;
-  const hasHistory = remapHistory.length > 0;
+  const hasRemaps =
+    Object.keys(colorRemapMap).length > 0 ||
+    regionReplacementCount > 0 ||
+    recipeOverrides.length > 0;
+  const hasLocalHistory =
+    remapHistory.length > 0 || adjustmentHistory.length > 0 || hasRemaps;
+  const hasLocalRedoHistory =
+    remapRedoHistory.length > 0 || adjustmentRedoHistory.length > 0;
+  const canUndoHistory = sessionId
+    ? historyCanUndo && !historyBusy
+    : hasLocalHistory;
+  const canRedoHistory = sessionId
+    ? historyCanRedo && !historyBusy
+    : hasLocalRedoHistory;
   const dynamicRecipesByTarget = new Map<string, DynamicMaterialRecipe>();
   for (const recipe of materialDynamicRecipes) {
     const targetHex = dynamicTargetHex(recipe);
@@ -387,15 +411,6 @@ export default function PalettePanel({
         break;
       case 'select-all':
         toggleColorInSelection(hex);
-        // Keep selectedColor in sync for detail display & recommendations
-        if (selectedColors.has(hex)) {
-          // Was selected, now toggled off
-          const remaining = Array.from(selectedColors).filter((c) => c !== hex);
-          setSelectedColor(remaining.length > 0 ? remaining[remaining.length - 1] : null);
-        } else {
-          // Newly selected
-          setSelectedColor(hex);
-        }
         break;
     }
   };
@@ -433,7 +448,7 @@ export default function PalettePanel({
   };
 
   return (
-    <div className={cx(workstationPanelCardClass, "flex h-full min-h-0 flex-col")}>
+    <div className={cx(cardClass, "flex h-full min-h-0 flex-col px-4 py-4")}>
       {palette.length === 0 ? (
         <p className="py-4 text-sm text-slate-500 dark:text-slate-400">
           {t("palette_no_data")}
@@ -455,13 +470,13 @@ export default function PalettePanel({
               return (
                 <div className="flex flex-wrap items-center gap-1.5">
                   <span
-                    className="inline-block h-5 w-5 shrink-0 rounded-lg border border-slate-300/80 dark:border-slate-600/80"
+                    className="inline-block h-5 w-5 shrink-0 rounded-md border border-slate-300/80 dark:border-slate-600/80"
                     style={{ backgroundColor: `#${selectedEntry.quantized_hex}` }}
                     title={`${t("palette_quantized")}: #${selectedEntry.quantized_hex}`}
                   />
                   <span className="text-[10px] text-slate-400">{"\u2192"}</span>
                   <span
-                    className="inline-block h-5 w-5 shrink-0 rounded-lg border border-slate-300/80 dark:border-slate-600/80"
+                    className="inline-block h-5 w-5 shrink-0 rounded-md border border-slate-300/80 dark:border-slate-600/80"
                     style={{ backgroundColor: `#${selectedEntry.matched_hex}` }}
                     title={`${t("palette_matched")}: #${selectedEntry.matched_hex}`}
                   />
@@ -469,7 +484,7 @@ export default function PalettePanel({
                     <>
                       <span className="text-[10px] text-slate-400">{"\u2192"}</span>
                       <span
-                        className="inline-block h-5 w-5 shrink-0 rounded-lg border-2 border-yellow-500"
+                        className="inline-block h-5 w-5 shrink-0 rounded-md border-2 border-yellow-500"
                         style={{ backgroundColor: `#${remapped}` }}
                         title={`${t("palette_replaced_label")}: #${remapped}`}
                       />
@@ -487,7 +502,14 @@ export default function PalettePanel({
                   variant="secondary"
                   size="sm"
                   onClick={undoColorRemap}
-                  disabled={!hasHistory || replacePreviewLoading}
+                  disabled={!canUndoHistory || replacePreviewLoading}
+                />
+                <Button
+                  label={t("palette_redo")}
+                  variant="secondary"
+                  size="sm"
+                  onClick={redoColorRemap}
+                  disabled={!canRedoHistory || replacePreviewLoading}
                 />
                 <Button
                   label={t("palette_clear_remaps")}
@@ -501,35 +523,59 @@ export default function PalettePanel({
               <ToolbarGroup
                 label={t("palette_group_mode")}
                 tint="sky"
-                contentClassName="grid min-h-9 grid-cols-[repeat(auto-fit,minmax(4.75rem,1fr))] items-center gap-1.5"
+                contentClassName="grid min-h-9 grid-cols-[repeat(auto-fit,minmax(6.75rem,1fr))] items-center gap-1.5"
               >
                 <Button
                   label={t("palette_mode_select_all")}
-                  variant={selectionMode === 'select-all' ? 'primary' : 'secondary'}
+                  variant={selectionTool === 'same-color' ? 'primary' : 'secondary'}
                   size="sm"
-                  onClick={() => setSelectionMode('select-all')}
+                  onClick={() => setSelectionTool('same-color')}
                   className="w-full"
-                />
-                <Button
-                  label={t("palette_mode_current")}
-                  variant={selectionMode === 'current' ? 'primary' : 'secondary'}
-                  size="sm"
-                  onClick={() => setSelectionMode('current')}
-                  className="w-full"
+                  title={t("palette_mode_select_all")}
                 />
                 <Button
                   label={t("palette_mode_multi_select")}
-                  variant={selectionMode === 'multi-select' ? 'primary' : 'secondary'}
+                  variant={selectionTool === 'point' ? 'primary' : 'secondary'}
                   size="sm"
-                  onClick={() => setSelectionMode('multi-select')}
+                  onClick={() => setSelectionTool('point')}
                   className="w-full"
                 />
                 <Button
-                  label={t("palette_mode_region")}
-                  variant={selectionMode === 'region' ? 'primary' : 'secondary'}
+                  label={t("palette_mode_brush")}
+                  variant={selectionTool === 'brush' ? 'primary' : 'secondary'}
                   size="sm"
-                  onClick={() => setSelectionMode('region')}
+                  onClick={() => setSelectionTool('brush')}
                   className="w-full"
+                />
+                {selectionTool === 'brush' && (
+                  <label className="col-span-full flex items-center gap-2 px-1 text-[11px] text-slate-600 dark:text-slate-300">
+                    <span className="shrink-0">{t("selection_brush_size")}</span>
+                    <input
+                      aria-label={t("selection_brush_size")}
+                      type="range"
+                      min={2}
+                      max={160}
+                      value={brushSizePx}
+                      onChange={(event) => setBrushSizePx(Number(event.target.value))}
+                      className="min-w-0 flex-1 accent-pink-500"
+                    />
+                    <span className="w-10 text-right tabular-nums">{brushSizePx}px</span>
+                  </label>
+                )}
+                <Button
+                  label={t("palette_clear_selection")}
+                  variant="secondary"
+                  size="sm"
+                  onClick={clearSelection}
+                  className="w-full !border-amber-200/80 !bg-amber-100/80 !text-amber-800 hover:!bg-amber-100 dark:!border-amber-700/70 dark:!bg-amber-900/35 dark:!text-amber-100 dark:hover:!bg-amber-900/45"
+                />
+                <Button
+                  label={t("palette_selection_blink")}
+                  variant={selectionBlinkEnabled ? 'primary' : 'secondary'}
+                  size="sm"
+                  onClick={toggleSelectionBlink}
+                  className="w-full"
+                  title={t("palette_selection_blink_title")}
                 />
               </ToolbarGroup>
 
@@ -585,6 +631,13 @@ export default function PalettePanel({
           </div>
 
           <div className="shrink-0 flex flex-col gap-1.5">
+            {selectionDocument && selectionDocument.selected_component_count > 0 && (
+              <div className={cx(wellPadClass, "flex items-center gap-2 px-3 py-2 text-[11px] text-slate-600 dark:text-slate-300")}>
+                <span>{t("palette_selected_blocks").replace("{count}", String(selectionDocument.selected_component_count))}</span>
+                <span aria-hidden="true">·</span>
+                <span>{t("palette_selected_colors").replace("{count}", String(selectionDocument.selected_color_hexes.length))}</span>
+              </div>
+            )}
             {/* Select-all multi-color indicator. Hidden when the selection
                 came from a gradient region — the amber "N colours selected"
                 chip strip duplicates the already-confusing selection-border
@@ -594,7 +647,7 @@ export default function PalettePanel({
             {selectionMode === 'select-all' &&
               selectedColors.size > 0 &&
               !isRegionScopedSelection && (
-            <div className={cx(workstationInsetCardClass, "flex min-h-11 flex-nowrap items-center gap-2 overflow-hidden px-3 py-2.5")}>
+            <div className={cx(wellPadClass, "flex min-h-11 flex-nowrap items-center gap-2 overflow-hidden px-3 py-2.5")}>
               <span className="shrink-0 whitespace-nowrap text-[clamp(0.55rem,0.75vw,0.625rem)] font-medium text-amber-500 dark:text-amber-400">
                 {t("palette_multi_select_count").replace("{count}", String(selectedColors.size))}
               </span>
@@ -605,7 +658,7 @@ export default function PalettePanel({
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => handleSelect(hex)}
-                    className="h-5 w-5 shrink-0 rounded-lg border-2 border-amber-400 shadow-sm transition-transform hover:scale-110"
+                    className="h-5 w-5 shrink-0 rounded-md border-2 border-amber-400 shadow-sm transition-transform hover:scale-110"
                     style={{ backgroundColor: `#${hex}` }}
                     title={`#${hex} — ${t("palette_multi_select_click_remove")}`}
                   />
@@ -616,7 +669,7 @@ export default function PalettePanel({
 
             {/* Multi-select region indicator */}
             {selectionMode === 'multi-select' && selectedRegions.length > 0 && (
-            <div className={cx(workstationInsetCardClass, "flex flex-wrap items-center gap-2 px-3 py-2.5")}>
+            <div className={cx(wellPadClass, "flex flex-wrap items-center gap-2 px-3 py-2.5")}>
               <span className="text-[clamp(0.55rem,0.75vw,0.625rem)] font-medium text-amber-500 dark:text-amber-400">
                 {t("palette_multi_select_region_count").replace("{count}", String(selectedRegions.length))}
               </span>
@@ -627,7 +680,7 @@ export default function PalettePanel({
                     key={region.regionId}
                     type="button"
                     onClick={() => removeRegionFromSelection(region.regionId)}
-                    className="h-5 w-5 rounded-lg border-2 border-amber-400 shadow-sm transition-transform hover:scale-110"
+                    className="h-5 w-5 rounded-md border-2 border-amber-400 shadow-sm transition-transform hover:scale-110"
                     style={{ backgroundColor: `#${hex}` }}
                     title={`#${hex} (${region.pixelCount}px) — ${t("palette_multi_select_click_remove")}`}
                   />

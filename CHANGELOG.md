@@ -9,13 +9,25 @@ All notable changes to Lumina Studio are documented in this file.
 ## Unreleased
 
 ### Features
+- **Selection Workstation (Next-Gen)** - Reworked region selection around a single authoritative server-side selection mask with revision-based optimistic locking. Clicking a block now selects the whole visible matched-colour component instantly (local 4-connected flood-fill with server reconciliation), clicking again deselects, and a new **Selection Brush** paints circular strokes to sweep whole blocks into the selection. Selection boundaries render as Photoshop-style marching ants (white/black dual dashed outline) that stay crisp at any zoom and honour reduced-motion preferences.
+- **Checkpoint-based Undo/Redo** - All colour adjustments (replace, region replace, batch, recipe overrides, free colours, reset) now snapshot server-side before applying; undo/redo restores the exact state including the execution-time selection. Selection gestures are undoable individually and fold into the content operation they precede. "Clear all replacements" is itself undoable, and free-colour toggles are now reversible.
+- **Same-Colour Select Follows Recolour** - After recolouring a block, picking the new colour on the preview continues editing the same upstream colour; "select all same colour" and "pick blocks" now share one selection that survives tool switches.
+- **Extractor Enhancements** - Manufacturer field selects from the material library (with load/empty states), extracted brand names canonicalize to a standard form (incl. the "Aliz" Chinese alias), and 5-colour JSON recipes are preserved through extraction.
+- **Custom Recipe Layer Editing** - Reorder layers by drag-and-drop, apply a recipe by typing colour letters (e.g. `WRYBG`), and see "viewing face" annotations in the hover inspector.
+- **Help & Settings Copy Rework** - All help triggers use a lighter info icon (also available on dropdowns/radio groups), and every basic-setting item gained a plain-language explanation free of algorithm jargon; guidance is codified in `DESIGN.md`.
 - **Puzzle Mode Finish Pass** - Added puzzle-layout overlay preview in the converter workspace, a dedicated puzzle settings widget, 2D/3D overlay rendering, recipe import/export support, and combined 3MF assembly for per-piece puzzle generation
 - **Native Source Bundle Selection** - Added legacy/native source switching, native brand + DB bundle selection, native predictive source metadata, and backend catalog/normalization for reference bundles
 - **Single-Stage Workflow** - Added single-stage dataset extraction, Stage A fitting endpoints, store wiring, and UI/test coverage for the single-stage calibration flow
 - **Predictive Recipe Workflow** - Added predictive recipe color search/apply flows, native custom recipe editing, and supporting runtime metadata for predictive/native LUT sources
 - **Reproducible Bug Reports** - Bug reports now land as ticket directories (`feedback/<YYYY-MM>/<ticket_id>/`) carrying the user's original image, generated 3MF / ZIP, LUT snapshot, selected materials bundle, 30-minute action history, 500-entry client log buffer, and a bilingual `index.md` / `summary.txt`. Run `python scripts/load_bug_repro.py <ticket_id>` to rebuild the session locally without guessing what the user did.
 
+### Behavior Changes
+- **Legacy LUT selection stays multi-choice** - The traditional LUT database keeps its same-group multi-select checkbox list.
+- **Selection tools regrouped** - The palette toolbar now offers "Same colour / Pick blocks / Selection brush"; the former "Single" mode entry was removed (its 3D paths remain internally).
+
 ### Fixes
+- **Selection reliability** - Fixed stale-response races that could pick the wrong block or resurrect cleared selections; dragging no longer misfires as a click; preview no longer flashes while region highlights load.
+- **Undo/redo consistency** - Undoing a selection gesture re-publishes the restored mask so recipe/region flows keep working (previously a 409 "No selected regions available for recipe override").
 - **Puzzle Preview Reliability** - Fixed stale failure races that could clear a newer successful overlay, and allowed same-parameter puzzle overlay retries after transient failures
 - **Puzzle Import Normalization** - Imported recipes now normalize puzzle-vs-large-format and puzzle-vs-keychain-loop conflicts, and clear the reserved back-label engraving flag during import
 - **Combined Puzzle 3MF Metadata** - Combined exports now rebuild slice metadata, filament-sequence metadata, and package preview images instead of inheriting stale first-piece metadata
@@ -25,10 +37,8 @@ All notable changes to Lumina Studio are documented in this file.
 - **Smoke Coverage** - Added puzzle backend/frontend coverage to the fast smoke gate
 - **Native/Puzzle Contract Hardening** - Restored puzzle response summaries, reconnected puzzle generation to the frontend generate path, forwarded fridge-magnet payloads, and normalized recipe overrides across preview/apply/generate/large-format flows
 - **Preview and Session Safety** - Cleared stale preview sessions when source selections change, prevented native bundle generate from reusing legacy sessions, and tightened pre-session temp cleanup for native preview failures
-- **Governance and Encoding Cleanup** - Removed new catch-all exception regressions in governed paths, fixed the vector-engine false-positive `print(` governance trigger, and cleaned real mojibake from `.gitignore`
+- **Governance and Encoding Cleanup** - Removed new catch-all exception regressions in governed paths, fixed the vector-engine false-positive print() governance trigger, and cleaned real mojibake from `.gitignore`
 - **Single-Stage ZIP Safety** - Hardened ZIP extraction against path traversal and made malformed ZIP uploads return deterministic 422 responses with pre-session temp-file cleanup
-
----
 
 ## v1.6.4 (2026-03-20)
 

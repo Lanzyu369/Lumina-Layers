@@ -80,6 +80,7 @@ from core.lut_card_layout import (
     resolve_lut_layout,
     rgb_to_hex,
 )
+from core.lut_details.identity import canonicalize_lut_manufacturer
 from utils.lut_manager import LUTManager
 
 router = APIRouter(prefix="/api/extractor", tags=["Extractor"])
@@ -608,6 +609,35 @@ def _build_merged_metadata(
     metadata.manufacturer = manufacturer
     metadata.type = lut_type
     return metadata
+
+
+def _pad_stacks_to_width(
+    stacks: np.ndarray,
+    target_width: int,
+    *,
+    pad_value: int = -1,
+    prepend: bool = True,
+) -> np.ndarray:
+    """Pad stack rows to a common layer count."""
+    rows = np.asarray(stacks, dtype=np.int32)
+    if rows.ndim != 2:
+        return rows.reshape(rows.shape[0], -1)
+    if rows.shape[1] >= target_width:
+        return rows
+    padding = np.full((rows.shape[0], target_width - rows.shape[1]), pad_value, dtype=np.int32)
+    if prepend:
+        return np.hstack([padding, rows])
+    return np.hstack([rows, padding])
+
+
+def _basic_material_type(material: str | None) -> str:
+    """Build the default LUT type from a selected material family.
+    根据选择的耗材大类生成默认 LUT 类型。
+    """
+    normalized = (material or "PLA").strip() or "PLA"
+    if normalized.lower().endswith(" basic"):
+        return normalized
+    return f"{normalized} Basic"
 
 
 def _get_assets_dir() -> str:
@@ -1815,18 +1845,24 @@ def extractor_merge_5color_extended(
         rgb2 = rgb2.reshape(-1, 3)
         merged_rgb = np.vstack([rgb1, rgb2])
 
-        # Merge stacks if available
-        stacks_compatible = (
-            stacks1 is not None
-            and stacks2 is not None
-            and stacks1.shape[1] == stacks2.shape[1]
-        )
+        # Merge stacks if available. Page 1 is the 5-layer base page while
+        # Page 2 is the 6-layer extended page; pad Page 1 with a viewing-side
+        # Air layer so the merged JSON carries one canonical 6-layer recipe set.
+        stacks_compatible = stacks1 is not None and stacks2 is not None
         if stacks_compatible:
-            merged_stacks = np.vstack([stacks1, stacks2])
+            target_stack_width = max(int(stacks1.shape[1]), int(stacks2.shape[1]), 6)
+            merged_stacks = np.vstack(
+                [
+                    _pad_stacks_to_width(stacks1, target_stack_width, prepend=True),
+                    _pad_stacks_to_width(stacks2, target_stack_width, prepend=True),
+                ]
+            )
         else:
             merged_stacks = np.zeros((len(merged_rgb), 0), dtype=np.int32)
 
         metadata = _build_merged_metadata(meta1, meta2, "5-Color Extended", LUT_FILE_PATH, len(merged_rgb))
+        if merged_stacks.ndim == 2 and merged_stacks.shape[1] > 0:
+            metadata.max_color_layers = int(merged_stacks.shape[1])
         LUTManager.save_keyed_json(LUT_FILE_PATH, merged_rgb, merged_stacks, metadata)
     except EXTRACTOR_HANDLED_ERRORS as e:
         _handle_core_error(e, "5-Color Extended merge")
@@ -2008,8 +2044,7 @@ def confirm_palette(
     if session_data is None:
         raise HTTPException(status_code=404, detail=f"Session {request.session_id} not found")
 
-    manufacturer = request.manufacturer.strip()
-    lut_type = request.type.strip()
+    manufacturer = canonicalize_lut_manufacturer(request.manufacturer)
     palette_entries = [
         PaletteEntry(
             color=e.color.strip(),
@@ -2019,6 +2054,9 @@ def confirm_palette(
         )
         for e in request.palette
     ]
+    lut_type = request.type.strip() or _basic_material_type(
+        palette_entries[0].material if palette_entries else None
+    )
 
     metadata = LUTMetadata(
         palette=palette_entries,

@@ -103,7 +103,8 @@ REGION_SELECTION_REQUIRED_DETAIL = (
     "then try again."
 )
 GRADIENT_REGION_METADATA_UNAVAILABLE_DETAIL = (
-    "Gradient region data is unavailable. Re-run preview and try again."
+    "Gradient region data is unavailable: gradient_region_id_map is missing. "
+    "Re-run preview and try again."
 )
 GRADIENT_REGION_METADATA_STALE_DETAIL = (
     "Gradient region data no longer matches the preview. Re-run preview and try again."

@@ -944,6 +944,49 @@ class TestSessionStatePersistence:
         assert isinstance(record.confirm_ms, float)
         assert record.confirm_ms >= 0.0
 
+    def test_confirm_palette_defaults_type_from_material(
+        self,
+        _isolate_dependency_overrides,
+        tmp_path: Path,
+    ) -> None:
+        """Blank LUT type is derived from the selected material family."""
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        lut_path = tmp_path / "confirm-palette-type-default.json"
+        rgb = np.array([[255, 255, 255]], dtype=np.uint8)
+        stacks = np.zeros((1, 0), dtype=np.int32)
+        metadata = LUTManager.infer_default_metadata(
+            lut_path.stem,
+            str(lut_path),
+            len(rgb),
+            color_mode="4-Color (RYBW)",
+        )
+        LUTManager.save_keyed_json(str(lut_path), rgb, stacks, metadata)
+        session_id = store.create()
+        store.put(session_id, "lut_path", str(lut_path))
+        store.put(session_id, "color_mode", "4-Color (RYBW)")
+
+        response = client.post(
+            "/api/extractor/confirm-palette",
+            json={
+                "session_id": session_id,
+                "manufacturer": "爱丽兹",
+                "type": "",
+                "palette": [
+                    {
+                        "color": "White",
+                        "material": "PETG",
+                        "hex_color": "#ffffff",
+                        "color_name": "White",
+                    },
+                ],
+            },
+        )
+
+        assert response.status_code == 200
+        _rgb, _stacks, saved_metadata = LUTManager.load_lut_with_metadata(str(lut_path))
+        assert saved_metadata.manufacturer == "Aliz"
+        assert saved_metadata.type == "PETG Basic"
+
 
 # =========================================================================
 # 3. Field name mapping - Requirement 4.2

@@ -133,10 +133,10 @@ describe("SettingsPanel completion notifications", () => {
     vi.unstubAllGlobals();
   });
 
-  it("shows an accessible inline help trigger for the notification label", () => {
+  it("shows an accessible inline help trigger for the notification label", async () => {
     renderPanel();
 
-    const notificationSection = screen.getByTestId(
+    const notificationSection = await screen.findByTestId(
       "settings-completion-notifications-section",
     );
     expect(
@@ -144,11 +144,10 @@ describe("SettingsPanel completion notifications", () => {
         translations["settings.completion_notifications_description"].zh,
       ),
     ).toBeInTheDocument();
-    expect(
-      within(notificationSection).getByRole("button", {
-        name: translations["settings.completion_notifications_enable_label"].zh,
-      }),
-    ).toHaveTextContent("?");
+    const helpTrigger = within(notificationSection).getByRole("button", {
+      name: translations["settings.completion_notifications_heading"].zh,
+    });
+    expect(helpTrigger.querySelector("svg")).toBeInTheDocument();
   });
 
   it("enables the persisted setting after permission is granted", async () => {

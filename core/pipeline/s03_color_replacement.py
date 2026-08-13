@@ -16,6 +16,7 @@ import time
 from collections import deque
 from copy import deepcopy
 import pickle
+import cv2
 import numpy as np
 
 from core.pipeline.material_dynamic_layers import (
@@ -768,6 +769,24 @@ def _compute_connected_region_mask_4n(quantized_image, mask_solid, x, y):
         return np.zeros((h, w), dtype=bool)
 
     target = quantized_image[y, x]
+    eligible = (
+        np.all(quantized_image == target, axis=-1)
+        & np.asarray(mask_solid, dtype=bool)
+    )
+    if not eligible[y, x]:
+        return np.zeros((h, w), dtype=bool)
+
+    # Fast path: OpenCV's native flood fill is much faster than a Python
+    # deque loop on large previews while preserving 4-neighbour semantics.
+    try:
+        fill = np.ascontiguousarray(eligible.astype(np.uint8))
+        cv2.floodFill(fill, None, (int(x), int(y)), 2, flags=4)
+        return fill == 2
+    except cv2.error:
+        # Keep the previous pure-Python path as a conservative fallback for
+        # unusual OpenCV builds or unexpected array layouts.
+        pass
+
     out = np.zeros((h, w), dtype=bool)
     q = deque([(x, y)])
     out[y, x] = True
@@ -776,7 +795,7 @@ def _compute_connected_region_mask_4n(quantized_image, mask_solid, x, y):
         cx, cy = q.popleft()
         for nx, ny in ((cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)):
             if 0 <= nx < w and 0 <= ny < h and not out[ny, nx]:
-                if mask_solid[ny, nx] and np.array_equal(quantized_image[ny, nx], target):
+                if eligible[ny, nx]:
                     out[ny, nx] = True
                     q.append((nx, ny))
 

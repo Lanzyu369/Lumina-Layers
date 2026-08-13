@@ -9,6 +9,7 @@ import {
   convertPuzzleLayoutPreview,
   beaconCleanupSessionFiles,
   cleanupSessionFiles,
+  detectRegion,
   fetchLutList,
   getFileUrl,
 } from "../api/converter";
@@ -584,6 +585,58 @@ describe("convertGenerate", () => {
       params: nativeParams,
     });
   });
+});
+
+describe("detectRegion", () => {
+  it("defaults to the no-PNG fast path", async () => {
+    const fakeResponse = {
+      region_id: "region-1",
+      color_hex: "#ffffff",
+      pixel_count: 8,
+      preview_url: null,
+      contours: [],
+    };
+    mockPost.mockResolvedValueOnce({ data: fakeResponse });
+
+    const result = await detectRegion("sess-region", 3, 4);
+
+    expect(mockPost).toHaveBeenCalledWith(
+      "/convert/region-detect",
+      {
+        session_id: "sess-region",
+        x: 3,
+        y: 4,
+        include_preview: false,
+      },
+      { timeout: 3_600_000 },
+    );
+    expect(result).toEqual(fakeResponse);
+  });
+
+  it("only requests a highlight PNG when includePreview is explicitly true", async () => {
+    const fakeResponse = {
+      region_id: "region-1",
+      color_hex: "#ffffff",
+      pixel_count: 8,
+      preview_url: "/api/files/region-highlight.png",
+      contours: [],
+    };
+    mockPost.mockResolvedValueOnce({ data: fakeResponse });
+
+    await detectRegion("sess-region", 3, 4, { includePreview: true });
+
+    expect(mockPost).toHaveBeenCalledWith(
+      "/convert/region-detect",
+      {
+        session_id: "sess-region",
+        x: 3,
+        y: 4,
+        include_preview: true,
+      },
+      { timeout: 3_600_000 },
+    );
+  });
+
 });
 
 describe("convertGenerateLargeFormat", () => {

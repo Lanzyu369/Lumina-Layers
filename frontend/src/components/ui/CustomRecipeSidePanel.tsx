@@ -81,12 +81,12 @@ export default function CustomRecipeSidePanel({
   const canApplyHistory = regionIds.length > 0;
 
   return (
-    <div className="flex flex-col gap-3 rounded-2xl border border-slate-200/80 bg-slate-50/70 p-3 dark:border-slate-700/70 dark:bg-slate-900/50">
+    <div className="flex flex-col gap-3 overflow-hidden rounded-2xl border border-slate-200/80 bg-slate-50/70 p-3 dark:border-slate-700/70 dark:bg-slate-900/50">
       <div className="text-sm font-medium text-slate-700 dark:text-slate-200">
         {t("recipe_custom_history_title")}
       </div>
 
-      <div className="flex max-h-72 flex-col gap-2 overflow-y-auto pr-1">
+      <div className="flex max-h-72 flex-col gap-2 overflow-y-auto rounded-2xl pr-1">
         {history.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-slate-300/80 bg-slate-100/40 p-3 text-xs text-slate-400 dark:border-slate-700/60 dark:bg-slate-800/30">
             {t("recipe_custom_history_empty")}

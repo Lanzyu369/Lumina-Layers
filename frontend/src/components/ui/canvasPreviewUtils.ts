@@ -9,6 +9,11 @@ export interface CanvasPreviewHoverSample {
   pixelY: number
   naturalWidth: number
   naturalHeight: number
+  /**
+   * 仅当调用方以 allowOutOfImage 采样、且指针位于图像渲染区域之外时出现
+   * （值为 true）。此时 pixelX/pixelY 为未夹取的真实坐标（可为负）。
+   */
+  isOutOfImage?: true
 }
 
 export interface CanvasPreviewBuffer {
@@ -59,6 +64,13 @@ interface MapPointerToCanvasPreviewHoverSampleOptions {
   naturalHeight: number
   scale: number
   translate: CanvasPreviewPoint
+  /**
+   * 为 true 时指针超出图像区域不再返回 null，而是返回超出区域的采样点
+   * （pixelX/pixelY 不做边界夹取，可能为负或超过 naturalWidth/Height，调用方
+   * 如需索引像素请自行 clamp 或按 isOutOfImage 判定）。供选区画笔光标在图像
+   * 边缘之外仍然跟随指针的场景使用。
+   */
+  allowOutOfImage?: boolean
 }
 
 /** Clamp preview scale to the allowed zoom range. */
@@ -120,6 +132,7 @@ export function mapPointerToCanvasPreviewHoverSample(
     naturalHeight,
     scale,
     translate,
+    allowOutOfImage = false,
   } = options
 
   if (
@@ -138,11 +151,15 @@ export function mapPointerToCanvasPreviewHoverSample(
   const relY = clientY - containerRect.top
   const imageX = (relX - translate.x) / scale - imageRect.x
   const imageY = (relY - translate.y) / scale - imageRect.y
+  const isOutOfImage =
+    imageX < 0 || imageX >= imageRect.width || imageY < 0 || imageY >= imageRect.height
 
-  if (imageX < 0 || imageX >= imageRect.width || imageY < 0 || imageY >= imageRect.height) {
+  if (isOutOfImage && !allowOutOfImage) {
     return null
   }
 
+  // 默认（兼容旧行为）把像素坐标夹到图像范围内；opt-in 的调用方拿到的是
+  // 未夹取的真实坐标，配合 isOutOfImage 自行决定如何处理。
   const pixelX = Math.floor((imageX / imageRect.width) * naturalWidth)
   const pixelY = Math.floor((imageY / imageRect.height) * naturalHeight)
 
@@ -153,10 +170,11 @@ export function mapPointerToCanvasPreviewHoverSample(
     containerHeight: Math.round(containerRect.height),
     containerLeft: Math.round(containerRect.left),
     containerTop: Math.round(containerRect.top),
-    pixelX: Math.max(0, Math.min(naturalWidth - 1, pixelX)),
-    pixelY: Math.max(0, Math.min(naturalHeight - 1, pixelY)),
+    pixelX: allowOutOfImage ? pixelX : Math.max(0, Math.min(naturalWidth - 1, pixelX)),
+    pixelY: allowOutOfImage ? pixelY : Math.max(0, Math.min(naturalHeight - 1, pixelY)),
     naturalWidth,
     naturalHeight,
+    ...(allowOutOfImage && isOutOfImage ? { isOutOfImage: true as const } : {}),
   }
 }
 

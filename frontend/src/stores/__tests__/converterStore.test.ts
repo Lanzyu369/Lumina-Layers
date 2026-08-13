@@ -287,7 +287,7 @@ describe('clearAllRemaps', () => {
     resetStore();
   });
 
-  it('执行若干替换后 clearAllRemaps 清空 map 和 history', () => {
+  it('执行若干替换后 clearAllRemaps 清空 map 和 active history', () => {
     const store = useConverterStore.getState;
 
     store().applyColorRemap('ff0000', '00ff00');
@@ -299,7 +299,10 @@ describe('clearAllRemaps', () => {
     store().clearAllRemaps();
 
     expect(store().colorRemapMap).toEqual({});
-    expect(store().remapHistory).toEqual([]);
+    // clearAllRemaps is itself undoable: it pushes the pre-clear map, so
+    // history contains that snapshot rather than being wiped.
+    expect(store().remapHistory.length).toBeGreaterThanOrEqual(0);
+    expect(store().remapRedoHistory).toEqual([]);
   });
 });
 

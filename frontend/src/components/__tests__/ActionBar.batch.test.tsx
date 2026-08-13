@@ -364,7 +364,7 @@ describe("ActionBar — auto batch mode", () => {
     expect(screen.queryByText(/成功.*总计/)).not.toBeInTheDocument();
   });
 
-  it("renders cumulative multi-select overlay on top of the current highlighted preview image", () => {
+  it("does not duplicate the authoritative selection overlay in the action-bar thumbnail", () => {
     useConverterStore.setState({
       selectionMode: "multi-select",
       sessionId: "session-1",
@@ -395,8 +395,8 @@ describe("ActionBar — auto batch mode", () => {
 
     const previewImage = screen.getByRole("img", { name: "预览结果" });
     expect(previewImage).toHaveAttribute("data-src", "/api/files/highlight-last-region");
-    expect(screen.getByTestId("preview-multi-select-overlay")).toBeInTheDocument();
-    expect(screen.getAllByTestId("preview-multi-select-polygon")).toHaveLength(1);
+    expect(screen.queryByTestId("preview-multi-select-overlay")).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId("preview-multi-select-polygon")).toHaveLength(0);
   });
 
   it("redraws the 2D hover magnifier after the preview buffer image loads asynchronously", async () => {

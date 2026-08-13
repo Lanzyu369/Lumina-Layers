@@ -1773,6 +1773,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "暂无分层颜色数据",
     en: "No layer color data",
   },
+  layer_faces_viewer_suffix: {
+    zh: "这层是观赏面",
+    en: "viewing face",
+  },
   viewer_hover_transparent: {
     zh: "透明",
     en: "Transparent",
@@ -1861,20 +1865,36 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "↩️ Undone",
   },
   palette_mode_select_all: {
-    zh: "全选",
-    en: "All",
-  },
-  palette_mode_current: {
-    zh: "当前",
-    en: "Current",
+    zh: "同颜色全选",
+    en: "Same color",
   },
   palette_mode_multi_select: {
-    zh: "多选",
-    en: "Multi",
+    zh: "点选色块",
+    en: "Pick blocks",
   },
-  palette_mode_region: {
-    zh: "局部区域",
-    en: "Region",
+  palette_mode_brush: {
+    zh: "选区画笔",
+    en: "Selection brush",
+  },
+  palette_selected_blocks: {
+    zh: "已选 {count} 个色块",
+    en: "{count} blocks selected",
+  },
+  palette_selected_colors: {
+    zh: "涉及 {count} 种颜色",
+    en: "{count} colors",
+  },
+  selection_brush_size: {
+    zh: "画笔大小",
+    en: "Brush size",
+  },
+  selection_brush_apply: {
+    zh: "执行画笔",
+    en: "Apply brush",
+  },
+  selection_brush_clear: {
+    zh: "清除笔迹",
+    en: "Clear stroke",
   },
   palette_multi_select_count: {
     zh: "已选 {count} 色",
@@ -4341,16 +4361,28 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Palette Confirmation",
   },
   ext_palette_metadata_hint: {
-    zh: "填写厂商、类型，并为每个颜色记录厂商命名",
-    en: "Set manufacturer, type, and vendor color names for each entry",
+    zh: "填写厂商、耗材类型，并为每个颜色记录厂商命名",
+    en: "Set manufacturer, material type, and vendor color names for each entry",
   },
   ext_manufacturer_label: {
     zh: "厂商",
     en: "Manufacturer",
   },
-  ext_type_label: {
-    zh: "类型",
-    en: "Type",
+  ext_manufacturer_placeholder: {
+    zh: "输入或选择厂商",
+    en: "Type or select manufacturer",
+  },
+  ext_manufacturer_loading: {
+    zh: "正在加载耗材品牌...",
+    en: "Loading material brands...",
+  },
+  ext_manufacturer_empty: {
+    zh: "当前耗材库暂无品牌，可直接手动输入",
+    en: "No brands in the current material library; you can type one",
+  },
+  ext_manufacturer_custom_hint: {
+    zh: "可使用当前手动输入的厂商",
+    en: "You can use the manually typed manufacturer",
   },
   ext_palette_internal_color_label: {
     zh: "内部通道",
@@ -4419,6 +4451,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   basic_crop_after_upload: {
     zh: "上传后裁剪",
     en: "Crop After Upload",
+  },
+  basic_crop_after_upload_hint: {
+    zh: "勾选后，每次上传图片会先弹出裁剪窗口，方便只保留想打印的部分。",
+    en: "When checked, a crop dialog opens after each upload so you can keep only the part you want to print.",
   },
   basic_image_rotation_label: {
     zh: "图像旋转",
@@ -4548,6 +4584,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "来源类型",
     en: "Source Type",
   },
+  basic_source_version_hint: {
+    zh: "选择配色数据从哪里来：\n• 传统 LUT：使用实际打印并扫描出的色卡数据，颜色最可靠。\n• 反推LUT：由品牌耗材数据推算出来，不需要自己打印色卡。\n• 耗材档案：使用你在「耗材提取」中创建的耗材，自由搭配组合。",
+    en: "Choose where the color data comes from:\n• Legacy LUT: data measured from actually printed color charts — most reliable.\n• Inferred LUT: computed from brand filament data, no printed chart needed.\n• Material Archive: freely combine materials you created in Material Extraction.",
+  },
   basic_source_version_legacy: {
     zh: "传统 LUT",
     en: "Legacy LUT",
@@ -4616,9 +4656,17 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "\u5c42\u9ad8",
     en: "Layer Height",
   },
+  basic_material_layer_height_hint: {
+    zh: "\u6253\u5370\u65f6\u6bcf\u4e00\u5c42\u7684\u539a\u5ea6\uff08\u6beb\u7c73\uff09\u3002\u8fd9\u91cc\u9009\u7684\u6570\u503c\u8981\u548c\u5207\u7247\u8f6f\u4ef6\u91cc\u7684\u5c42\u9ad8\u4e00\u81f4\uff0c\u5426\u5219\u53e0\u51fa\u6765\u7684\u989c\u8272\u4f1a\u4e0d\u51c6\u3002",
+    en: "Thickness of each printed layer (mm). Must match the layer height in your slicer, or the blended colors will be off.",
+  },
   basic_material_backing_label: {
     zh: "\u5e95\u677f\u8017\u6750",
     en: "Base Plate Material",
+  },
+  basic_material_backing_hint: {
+    zh: "\u57ab\u5728\u753b\u9762\u6700\u5e95\u4e0b\u7684\u8017\u6750\uff0c\u76f8\u5f53\u4e8e\u6574\u5e45\u56fe\u7684\u80cc\u666f\u8272\u3002\u901a\u5e38\u9009\u767d\u8272\uff0c\u989c\u8272\u8fd8\u539f\u6548\u679c\u6700\u597d\u3002",
+    en: "The material placed under the whole image, acting as its background color. White usually gives the most accurate colors.",
   },
   basic_material_backing_placeholder: {
     zh: "\u5148\u9009\u62e9\u8017\u6750",
@@ -5080,6 +5128,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "品牌",
     en: "Brand",
   },
+  basic_brand_hint: {
+    zh: "选择耗材品牌后，会加载该品牌对应的颜色数据用于配色。",
+    en: "Selecting a filament brand loads that brand's color data for color matching.",
+  },
   basic_brand_loading: {
     zh: "品牌目录加载中…",
     en: "Loading brands…",
@@ -5120,6 +5172,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "层数",
     en: "Layer Count",
   },
+  basic_native_layer_count_hint: {
+    zh: "叠色使用的打印层数。层数越多能表现的颜色越丰富，但打印时间也越长。可选范围由所选的颜色数据库决定。",
+    en: "Number of printed layers used for color blending. More layers allow richer colors but take longer to print. The available range depends on the selected color database.",
+  },
   basic_native_mode_placeholder: {
     zh: "请选择支持模式",
     en: "Select a supported mode",
@@ -5137,8 +5193,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Layer Height",
   },
   basic_layer_height_hint: {
-    zh: "每层叠色的打印高度（毫米）。较小的层高可获得更细腻的色彩过渡，但打印时间更长。",
-    en: "Print height per color layer (in mm). Smaller layer heights produce smoother color transitions but increase print time.",
+    zh: "打印时每一层的厚度（毫米）。请选择该色卡（LUT）制作时使用的层高，并在切片软件里设置相同数值，否则颜色会有偏差。",
+    en: "Thickness of each printed layer (mm). Choose the layer height the LUT was made with, and use the same value in your slicer — otherwise colors will drift.",
   },
   basic_supported_modes_label: {
     zh: "支持模式",
@@ -5152,9 +5208,17 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "模型辅助匹配",
     en: "Model-Assisted Matching",
   },
+  basic_model_enable_hint: {
+    zh: "在数据库配色的基础上，用预测模型补充数据库里没有实测过的颜色组合，通常能让颜色更接近原图。",
+    en: "Supplements database color matching with a predictive model that covers combinations not physically measured, usually bringing colors closer to the original image.",
+  },
   basic_model_only: {
     zh: "仅模型匹配",
     en: "Model only",
+  },
+  basic_model_only_hint: {
+    zh: "完全用预测模型配色，不使用数据库实测数据。主要用于对比测试模型效果，日常使用建议保持关闭。",
+    en: "Uses only the predictive model for color matching, ignoring measured database data. Mainly for testing the model; keep it off for everyday use.",
   },
   basic_model_threshold: {
     zh: "模型阈值",
@@ -5193,16 +5257,24 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Thickness",
   },
   basic_thickness_hint: {
-    zh: "底板的厚度（毫米）。每一格对应一层打印层（0.08 mm），影响成品的整体厚度。",
-    en: "Base plate thickness (in mm). Each tick equals one print layer (0.08 mm), affecting the overall thickness of the output.",
+    zh: "底板的厚度（毫米）。底板越厚成品越结实，但打印时间和耗材用量也会增加。滑块每格对应一层打印层。",
+    en: "Thickness of the base plate (mm). A thicker base is sturdier but takes more time and material to print. Each slider step equals one print layer.",
   },
   basic_structure_mode: {
     zh: "结构模式",
     en: "Structure Mode",
   },
+  basic_structure_mode_hint: {
+    zh: "决定成品的正反面结构：\n• 双面：正反两面都呈现画面，适合挂件、灯片等两面都会被看到的场景。\n• 单面：只有正面有画面，背面是平整底板，打印更快、更省耗材。",
+    en: "Controls the front/back structure of the print:\n• Double-sided: the image shows on both sides — good for pendants or light panels viewed from either side.\n• Single-sided: image on the front only, flat base plate on the back — faster and uses less material.",
+  },
   basic_modeling_mode: {
     zh: "建模模式",
     en: "Modeling Mode",
+  },
+  basic_modeling_mode_hint: {
+    zh: "决定图片如何变成 3D 模型：\n• 高保真：忠实还原照片细节，适合绝大多数图片（推荐）。\n• 像素艺术：保留方块像素感，适合像素画、马赛克风格。\n• 矢量模式：生成平滑的曲线轮廓，适合 Logo、图标等颜色分明的图形。\n• 验证色卡：生成用于校准颜色的标准色卡，仅在测试耗材颜色时使用。",
+    en: "Controls how the image becomes a 3D model:\n• High-Fidelity: faithfully reproduces photo detail — recommended for most images.\n• Pixel Art: keeps the blocky pixel look — for pixel art and mosaic styles.\n• Vector: smooth curved outlines — for logos, icons, and flat-color artwork.\n• Color Card: generates a calibration color chart — only for testing filament colors.",
   },
   basic_image_format_error: {
     zh: "仅支持 JPG/PNG/SVG/WebP/HEIC 格式",
@@ -5231,8 +5303,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Large Format Mode",
   },
   basic_large_format_hint: {
-    zh: "自动切割为多片 3MF 压缩包",
-    en: "Auto-tiled into a ZIP of 3MF files",
+    zh: "作品超过打印床尺寸时，自动把模型切成多块，分别打印后再拼接。会生成一个包含多个 3MF 文件的压缩包。",
+    en: "When the artwork exceeds the print bed, the model is automatically split into tiles to print separately and assemble afterwards. Produces a ZIP containing multiple 3MF files.",
   },
   large_format_warning_native_unavailable: {
     zh: "此 SVG 暂不支持原生大画幅切片，已改用栅格切片。",
@@ -5305,56 +5377,56 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Quantize Colors",
   },
   adv_quantize_colors_hint: {
-    zh: "K-Means 聚类的色彩细节数量。值越大色彩过渡越细腻，但处理越慢；值越小色块越少、渲染越快。仅适用于高保真模式，矢量模式下不进行量化处理，此参数不生效。",
-    en: "Number of K-Means clusters for color quantization. Higher values produce smoother color transitions but increase processing time; lower values produce fewer color blocks and faster rendering. Only applies in High-Fidelity mode; this parameter has no effect in Vector mode as quantization is not performed.",
+    zh: "把图片归纳成多少种颜色再进行配色。数值越大，颜色过渡越细腻，但处理越慢；数值越小，色块越明显，处理越快。仅高保真模式有效，矢量模式下此参数不起作用。",
+    en: "How many colors the image is reduced to before color matching. Higher values give smoother color transitions but slower processing; lower values give more visible color blocks and faster processing. Only applies in High-Fidelity mode; has no effect in Vector mode.",
   },
   adv_isolated_pixel_cleanup: {
     zh: "孤立像素清理",
     en: "Isolated Pixel Cleanup",
   },
   adv_isolated_pixel_cleanup_hint: {
-    zh: "将色彩匹配后与 8 邻域完全不同的孤立像素替换为邻域众数邻居的对应值，不会造调色板外的新颜色。高保真模式下的 LUT 匹配、预测匹配与耗材档案路径均会应用此清理。",
-    en: "Replaces isolated pixels (whose material stack differs from all 8 neighbors) with values copied from the neighborhood-mode neighbor — palette-preserving by construction. Runs in High-Fidelity modeling mode across the legacy LUT, predictive matching, and material-archive pipelines.",
+    zh: "自动清理配色后画面上零星的孤立杂点（和周围颜色都不一样的单个像素），让色块更干净。只会借用周围已有的颜色，不会产生新颜色。",
+    en: "Automatically removes stray isolated dots left after color matching (single pixels that differ from all their neighbors), making color areas cleaner. Only reuses nearby existing colors — never introduces new ones.",
   },
   adv_separate_backing: {
     zh: "分离底板",
     en: "Separate Backing",
   },
   adv_separate_backing_hint: {
-    zh: "将底板层（通常是白色或背景色）作为独立颜色层输出，适用于需要单独处理底板的打印机或后处理流程。",
-    en: "Outputs the backing layer as a separate color layer, useful for printers or post-processing workflows that handle the backing layer independently.",
+    zh: "把底板（通常是白色背景）单独作为一个颜色部件输出，方便在切片软件里对底板单独换色或设置参数。",
+    en: "Outputs the base plate (usually the white background) as its own color part, so you can recolor or configure it separately in your slicer.",
   },
   adv_hue_protection: {
     zh: "色相保护",
     en: "Hue Protection",
   },
   adv_hue_protection_hint: {
-    zh: "在色彩匹配时优先保护色相，减少色相漂移。适合色彩准确度要求高、颜色种类多的图像。",
-    en: "Prioritizes hue preservation during color matching to reduce hue shift. Suitable for images requiring high color accuracy and a wide variety of colors.",
+    zh: "配色时优先保证颜色的色调不跑偏（例如红色不会变成偏橙）。适合颜色丰富、对还原准确度要求高的图片。",
+    en: "Prioritizes keeping color tones true during matching (e.g. reds won't drift toward orange). Good for colorful images where color accuracy matters.",
   },
   adv_unlock_quantize: {
     zh: "解锁量化颜色数",
     en: "Unlock quantize ceiling",
   },
   adv_unlock_quantize_hint: {
-    zh: "解锁后最高可拉到 8192，会显著增加内存占用与处理耗时，仅适合极端场景。",
-    en: "Unlocking raises the ceiling to 8192. This significantly increases memory and processing time; use only for extreme cases.",
+    zh: "解锁后颜色数量上限从 256 提升到 8192。会明显增加内存占用和处理时间，仅在确有需要时使用。",
+    en: "Unlocking raises the color count ceiling from 256 to 8192. This noticeably increases memory use and processing time; enable only when truly needed.",
   },
   adv_chroma_gate: {
     zh: "暗色彩度门槛",
     en: "Dark Chroma Gate",
   },
   adv_chroma_gate_hint: {
-    zh: "仅对色度低于此值的暗色区域启用色相保护。设为 0 则对所有暗色生效，设为较高值则仅对非常暗的阴影生效。推荐值: 15。",
-    en: "Applies hue protection only to dark areas whose chroma is below this threshold. Set to 0 to apply to all dark colors; higher values restrict it to very dark shadows. Recommended: 15.",
+    zh: "控制「色调保护」对暗部的作用范围：只有鲜艳程度低于此值的暗色区域才会被保护。设为 0 对所有暗色生效；数值越大，只保护越暗的阴影。推荐 15。",
+    en: "Controls how far hue protection reaches into dark areas: only dark regions less vivid than this value are protected. 0 protects all dark colors; higher values limit it to very dark shadows. Recommended: 15.",
   },
   adv_precise_color_matching: {
     zh: "高精度颜色匹配（实验性功能）",
     en: "Precise Color Matching (Experimental)",
   },
   adv_precise_color_matching_hint: {
-    zh: "将聚类中心约束在打印机可达颜色集合内，减少颜色偏移；性能可能略慢，仅在 LUT 颜色匹配模式生效。",
-    en: "Constrains cluster centers to printer-achievable colors, reducing color shifts. May be slightly slower; only effective in LUT color matching mode.",
+    zh: "配色时只使用打印机真正能打出来的颜色，减少成品和屏幕预览之间的色差。处理会稍慢一些，仅在传统 LUT 模式下有效。",
+    en: "Restricts color matching to colors your printer can actually produce, reducing the gap between the print and the on-screen preview. Slightly slower; only effective in Legacy LUT mode.",
   },
   adv_hue_protection_disabled_hint: {
     zh: "高精度匹配开启时，色相保护已被接管，无需手动启用。",
@@ -5369,16 +5441,16 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Auto Dynamic Range (Experimental)",
   },
   adv_auto_dynamic_range_hint: {
-    zh: "根据所选 LUT 或耗材档案的可达亮度范围，对原图 L* 进行压缩映射；高光与阴影使用软滚降以保留局部对比度，色度通道保持不变。",
-    en: "Compresses the source image's L* into the luminance range achievable by the selected LUT or material profile, using soft roll-offs in highlights and shadows to preserve local contrast while leaving chroma channels untouched.",
+    zh: "自动把图片的明暗范围调整到耗材实际能打出来的范围内，避免高光一片死白、阴影一片死黑，同时尽量保留画面的对比度。",
+    en: "Automatically fits the image's brightness range to what your filaments can actually reproduce, preventing blown-out highlights and crushed shadows while preserving as much contrast as possible.",
   },
   adv_high_precision_3d_preview: {
     zh: "3D高精度颜色预览",
     en: "High-precision 3D colour preview",
   },
   adv_high_precision_3d_preview_hint: {
-    zh: "开启后，3D 预览的颜色网格上限会提升到当前量化颜色数；可减少低频颜色被合并成灰色，但 GLB 生成和浏览器渲染会更慢。",
-    en: "When enabled, the 3D preview colour mesh limit is raised to the current quantized colour count. This reduces low-frequency colours being merged into greys, but GLB generation and browser rendering may be slower.",
+    zh: "让 3D 预览显示更多颜色、更接近成品效果，尤其能避免少量出现的颜色被合并成灰色。代价是生成预览和网页渲染会变慢。不影响最终打印文件。",
+    en: "Shows more colors in the 3D preview so it looks closer to the final print, especially preventing rare colors from being merged into gray. Preview generation and rendering get slower. Does not affect the exported print file.",
   },
 
   // ==================== Relief Settings ====================
@@ -5946,13 +6018,29 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "清空替换",
     en: "Clear Remaps",
   },
+  palette_redo: {
+    zh: "重做",
+    en: "Redo",
+  },
+  palette_clear_selection: {
+    zh: "全不选",
+    en: "Select none",
+  },
+  palette_selection_blink: {
+    zh: "选区闪烁",
+    en: "Blink selection",
+  },
+  palette_selection_blink_title: {
+    zh: "让当前选区整体呼吸闪烁：浅色区块变暗，深色区块发白；仅前端显示，不重新生成预览",
+    en: "Make the selected region pulse: light regions darken, dark regions brighten, without regenerating preview",
+  },
   palette_group_history: {
     zh: "历史",
     en: "History",
   },
   palette_group_mode: {
-    zh: "选择模式",
-    en: "Mode",
+    zh: "选择工具",
+    en: "Selection tools",
   },
   palette_group_free: {
     zh: "自由色",
@@ -5968,9 +6056,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   },
 
   // ==================== LUT Color Grid ====================
+  // Shown as an overlay while a replacement / undo-redo is being applied and
+  // the backend regenerates the preview. Key name kept for compatibility; the
+  // copy is intentionally neutral — it is not about loading LUT data.
+  // 替换/撤销重做进行中、后端重新出图时的遮罩文案。key 名保留兼容，文案
+  // 故意中性——它并不表示加载 LUT 数据。
   lut_grid_loading: {
-    zh: "加载 LUT 颜色中...",
-    en: "Loading LUT colors...",
+    zh: "正在更新预览...",
+    en: "Updating preview...",
   },
   lut_grid_select_lut: {
     zh: "请先选择 LUT 以加载可用颜色",
@@ -7379,13 +7472,9 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "删除层",
     en: "Remove Layer",
   },
-  recipe_custom_move_up: {
-    zh: "上移",
-    en: "Move Up",
-  },
-  recipe_custom_move_down: {
-    zh: "下移",
-    en: "Move Down",
+  recipe_custom_drag_handle_label: {
+    zh: "按住可以拖拽更换层序",
+    en: "Hold and drag to reorder layers",
   },
   recipe_custom_predict: {
     zh: "预测颜色",
@@ -7428,16 +7517,16 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Target Regions: {count}",
   },
   recipe_custom_pattern_placeholder: {
-    zh: "层色搜索，例如 WRYB?",
-    en: "Pattern search, e.g. WRYB?",
+    zh: "输入配方，可以快速应用，例如 WRYBG",
+    en: "Enter a recipe to apply quickly, e.g. WRYBG",
   },
   recipe_custom_pattern_hint: {
-    zh: "按层颜色快速填充。字母=颜色首字母，?=保留当前层，-=可选分隔。",
-    en: "Quick-fill by layer pattern. Letter=color initial, ?=keep current, -=optional separator.",
+    zh: "可输入颜色字母快速应用。",
+    en: "Enter color letters to apply quickly.",
   },
   recipe_custom_pattern_apply: {
-    zh: "应用模式",
-    en: "Apply Pattern",
+    zh: "快速应用",
+    en: "Quick Apply",
   },
   recipe_custom_pattern_invalid: {
     zh: "无法识别的字符：{char}",
@@ -7460,8 +7549,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Confirm layer upgrade",
   },
   recipe_custom_predict_no_forward_model: {
-    zh: "当前 LUT 没带预测模型，无法算出这张配方的颜色。换一张带模型的 LUT，或者直接应用试试。",
-    en: "This LUT has no forward model, so the recipe colour can't be predicted. Switch to a LUT with a model, or apply directly to try it out.",
+    zh: "当前 LUT 没带预测模型，无法算出配方的颜色。",
+    en: "This LUT has no forward model, so the recipe color can't be predicted.",
   },
   recipe_custom_target_from_model: {
     zh: "来自模型",
@@ -7472,8 +7561,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Recipe History",
   },
   recipe_custom_history_empty: {
-    zh: "还没有自定义配方记录。应用一次后，这里会留下可一键复用的快照。",
-    en: "No custom recipes yet. After you apply one, a reusable snapshot will appear here.",
+    zh: "应用一次后，这里会留下用过的配方。目前还没有历史记录哦。",
+    en: "After you apply a recipe, it will appear here. No history yet.",
   },
   recipe_custom_history_layers: {
     zh: "{count} 层",

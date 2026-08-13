@@ -35,16 +35,18 @@ vi.mock("../api/converter", () => ({
   colorHighlight: vi.fn(),
   detectRegion: vi.fn(),
   regionReplace: vi.fn(),
+  mutateEditorSelection: vi.fn(),
   resetReplacements: vi.fn(),
   autoDetectColors: vi.fn(),
   fetchGradientGroups: vi.fn(),
   fetchMaterialColorSuggestions: vi.fn(),
 }));
 
-import { regionReplace, replaceColor } from "../api/converter";
+import { regionReplace, replaceColor, mutateEditorSelection } from "../api/converter";
 
 const mockRegionReplace = vi.mocked(regionReplace);
 const mockReplaceColor = vi.mocked(replaceColor);
+const mockMutateEditorSelection = vi.mocked(mutateEditorSelection);
 
 function seedStore(overrides: Partial<ConverterState> = {}) {
   useConverterStore.setState({
@@ -186,5 +188,186 @@ describe("confirmReplacement · gradient-region scope", () => {
       "#ff0000",
       { gradientGroupIndex: 2, gradientRegionIndex: 3 },
     );
+  });
+
+  it("does not repaint an older selection confirmation over a newer optimistic click", async () => {
+    seedStore({
+      gradientSelection: null,
+      selectionDocument: {
+        selection_revision: 1,
+        content_revision: 10,
+        selected_pixel_count: 4,
+        selected_component_count: 1,
+        selected_color_hexes: ["#111111"],
+        region_ids: ["old-region"],
+        components: [
+          {
+            label: 1,
+            region_id: "old-region",
+            color_hex: "#111111",
+            pixel_count: 4,
+            bbox: [0, 0, 2, 2],
+            anchor: [0, 0],
+          },
+        ],
+        contours: [
+          [[0, 0], [2, 0], [2, 2], [0, 2]],
+        ],
+        can_undo: false,
+        can_redo: false,
+      },
+    });
+    mockMutateEditorSelection.mockResolvedValueOnce({
+      selection_revision: 2,
+      content_revision: 10,
+      selected_pixel_count: 4,
+      selected_component_count: 1,
+      selected_color_hexes: ["#111111"],
+      region_ids: ["old-region"],
+      components: [
+        {
+          label: 1,
+          region_id: "old-region",
+          color_hex: "#111111",
+          pixel_count: 4,
+          bbox: [0, 0, 2, 2],
+          anchor: [0, 0],
+        },
+      ],
+      contours: [
+        [[0, 0], [2, 0], [2, 2], [0, 2]],
+      ],
+      can_undo: true,
+      can_redo: false,
+    });
+
+    const newerOptimisticDocument = {
+      ...useConverterStore.getState().selectionDocument!,
+      selection_revision: 3,
+      selected_pixel_count: 8,
+      selected_component_count: 2,
+      selected_color_hexes: ["#111111", "#222222"],
+      region_ids: ["old-region", "new-region"],
+      components: [
+        ...useConverterStore.getState().selectionDocument!.components,
+        {
+          label: -3,
+          region_id: "new-region",
+          color_hex: "#222222",
+          pixel_count: 4,
+          bbox: [3, 0, 2, 2],
+          anchor: [3, 0],
+        },
+      ],
+      contours: [
+        ...useConverterStore.getState().selectionDocument!.contours,
+        [[3, 0], [5, 0], [5, 2], [3, 2]],
+      ],
+    };
+
+    await useConverterStore.getState().applySelectionMutation({
+      operation: "point-toggle",
+      x: 0,
+      y: 0,
+      optimisticDocument: newerOptimisticDocument,
+    });
+
+    const state = useConverterStore.getState();
+    expect(state.selectionDocument?.selection_revision).toBe(3);
+    expect(state.selectionDocument?.selected_component_count).toBe(2);
+    expect(state.selectedRegions.map((region) => region.regionId)).toEqual([
+      "old-region",
+      "new-region",
+    ]);
+  });
+
+  it("syncs the authoritative selection revision after selection-scoped replacement so clear-all still works", async () => {
+    seedStore({
+      gradientSelection: null,
+      selectionDocument: {
+        selection_revision: 7,
+        content_revision: 10,
+        selected_pixel_count: 4,
+        selected_component_count: 1,
+        selected_color_hexes: ["#aabbcc"],
+        region_ids: ["__editor_selection__:7"],
+        components: [
+          {
+            label: 1,
+            region_id: "__editor_selection__:7",
+            color_hex: "#aabbcc",
+            pixel_count: 4,
+            bbox: [0, 0, 2, 2],
+            anchor: [0, 0],
+          },
+        ],
+        contours: [],
+        can_undo: false,
+        can_redo: false,
+      },
+      pendingReplacement: {
+        sourceHex: "aabbcc",
+        targetHex: "ff0000",
+        mode: "multi-select",
+      },
+    });
+    mockRegionReplace.mockResolvedValue({
+      preview_url: "/api/files/preview-after.png",
+      preview_glb_url: null,
+      color_contours: null,
+      message: "ok",
+      selection: {
+        selection_revision: 7,
+        content_revision: 42,
+        selected_pixel_count: 4,
+        selected_component_count: 1,
+        selected_color_hexes: ["#ff0000"],
+        region_ids: ["__editor_selection__:7"],
+        components: [
+          {
+            label: 1,
+            region_id: "__editor_selection__:7",
+            color_hex: "#ff0000",
+            pixel_count: 4,
+            bbox: [0, 0, 2, 2],
+            anchor: [0, 0],
+          },
+        ],
+        contours: [],
+        can_undo: true,
+        can_redo: false,
+      },
+    });
+    mockMutateEditorSelection.mockResolvedValue({
+      selection_revision: 8,
+      content_revision: 42,
+      selected_pixel_count: 0,
+      selected_component_count: 0,
+      selected_color_hexes: [],
+      region_ids: [],
+      components: [],
+      contours: [],
+      can_undo: true,
+      can_redo: false,
+    });
+
+    await useConverterStore.getState().confirmReplacement();
+    await useConverterStore.getState().clearSelection();
+    await Promise.resolve();
+
+    expect(mockRegionReplace).toHaveBeenCalledWith(
+      "sess-confirm",
+      "#ff0000",
+      undefined,
+      7,
+    );
+    expect(mockMutateEditorSelection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: "clear",
+        base_selection_revision: 7,
+        content_revision: 42,
+      }),
+    );
+    expect(useConverterStore.getState().selectionDocument?.selected_pixel_count).toBe(0);
   });
 });
