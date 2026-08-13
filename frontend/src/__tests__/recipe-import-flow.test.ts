@@ -198,6 +198,25 @@ describe("recipe/importFlow", () => {
     );
   });
 
+  it("restores the base-layer height modifier project setting", () => {
+    const recipe = makeRecipe();
+    recipe.recipe.converter!.device.enable_base_layer_height_modifier = false;
+    useSettingsStore.setState({ enableBaseLayerHeightModifier: true });
+    const restoreResult: RestoreResult = {
+      state: {},
+      assetFile: new File(["test"], "source.png", { type: "image/png" }),
+      heightmapFile: null,
+      warnings: [],
+      recipe,
+    };
+
+    applyImport(restoreResult);
+
+    expect(
+      useSettingsStore.getState().enableBaseLayerHeightModifier,
+    ).toBe(false);
+  });
+
   it("restores the dynamic material Delta-E00 tolerance", () => {
     const recipe = makeRecipe();
     recipe.recipe.converter!.source = {
@@ -272,6 +291,44 @@ describe("recipe/importFlow", () => {
       materialDynamicRecipes: [dynamicRecipe],
       materialLayerBenefitCurve: benefitCurve,
     });
+  });
+
+  it("applies restored project color data after the embedded image reset", () => {
+    const replacement = {
+      quantized_hex: "aa0000",
+      matched_hex: "bb0000",
+      replacement_hex: "cc0000",
+    };
+    const historyEntry = {
+      id: "project-recipe",
+      recipe: [0, 1, 2, 3],
+      layerOrder: "Top2Bottom",
+      predictedRgb: [20, 30, 40] as [number, number, number],
+      predictedLab: [10, 0, 0] as [number, number, number],
+      hex: "141e28",
+      fromModel: false,
+      createdAtMs: 123,
+    };
+    const restoreResult: RestoreResult = {
+      state: {
+        replacement_regions: [replacement],
+        free_color_set: new Set(["cc0000"]),
+        customRecipeHistory: [historyEntry],
+        regionReplacementCount: 0,
+      },
+      assetFile: new File(["test"], "source.png", { type: "image/png" }),
+      heightmapFile: null,
+      warnings: [],
+      recipe: makeRecipe(),
+    };
+
+    applyImport(restoreResult);
+
+    const state = useConverterStore.getState();
+    expect(state.replacement_regions).toEqual([replacement]);
+    expect(state.free_color_set).toEqual(new Set(["cc0000"]));
+    expect(state.customRecipeHistory).toEqual([historyEntry]);
+    expect(state.regionReplacementCount).toBe(0);
   });
 
   it("resolves device profile from imported printer slicer and nozzle when older recipe lacks it", () => {

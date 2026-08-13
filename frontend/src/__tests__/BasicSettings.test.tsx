@@ -499,7 +499,9 @@ describe("BasicSettings", () => {
   it("renders UnifiedUploader in empty state", () => {
     render(<BasicSettings />);
     // UnifiedUploader shows the translated upload hint in empty state
-    expect(screen.getByText("拖拽图片或点击上传（支持多选）")).toBeInTheDocument();
+    expect(
+      screen.getByText("拖拽图片或 Lumina 项目文件（图片支持多选）"),
+    ).toBeInTheDocument();
   });
 
   it("routes a model file dropped anywhere in the converter to model surface upload", async () => {

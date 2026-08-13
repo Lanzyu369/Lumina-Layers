@@ -832,7 +832,7 @@ class FreeColorMutationRequest(BaseModel):
     """Set or clear free-colour flags as one undoable content action."""
 
     session_id: str = Field(..., description="Session ID")
-    action: Literal["toggle", "clear"]
+    action: Literal["toggle", "clear", "replace"]
     color_hexes: list[str] = Field(default_factory=list)
 
 

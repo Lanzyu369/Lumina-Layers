@@ -28,8 +28,8 @@ function makeEntry(version: string): AnnouncementEntry {
 
 describe("useAnnouncement", () => {
   it("announces the optional uploaded filename setting", () => {
-    expect(ANNOUNCEMENTS[0]?.version).toBe("2026-08-13");
-    const items = ANNOUNCEMENTS[0]?.sections.flatMap((section) => section.items) ?? [];
+    const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-08-13");
+    const items = entry?.sections.flatMap((section) => section.items) ?? [];
 
     expect(
       items.some(

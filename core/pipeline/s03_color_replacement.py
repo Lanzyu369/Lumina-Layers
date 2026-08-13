@@ -695,6 +695,90 @@ def _normalize_color_replacements_input(color_replacements):
     return {}
 
 
+def _normalize_replayed_color_replacements_input(
+    replacement_records: object,
+    matched_rgb: np.ndarray | None,
+    quantized_image: np.ndarray | None,
+    mask_solid: np.ndarray | None,
+) -> dict[str, str]:
+    """Resolve portable whole-image edits against the active material map.
+    按当前耗材映射重新解析项目中的全图改色。
+
+    ``matched_hex`` belongs to the material set used when a project was
+    saved. ``quantized_hex`` identifies the stable source-image color, so it
+    can locate the corresponding current matches after a LUT or material
+    change. Malformed or legacy records retain the historical matched-color
+    fallback.
+
+    Args:
+        replacement_records: Saved API-format replacement records.
+            (保存的 API 格式替换记录。)
+        matched_rgb: Current material-matched RGB image. (当前匹配图。)
+        quantized_image: Current quantized source image. (当前量化源图。)
+        mask_solid: Current printable-pixel mask. (当前实体像素掩码。)
+
+    Returns:
+        Current matched-color to target-color mappings.
+        (当前匹配色到目标色的映射。)
+    """
+    fallback = _normalize_color_replacements_input(replacement_records)
+    if not isinstance(replacement_records, list):
+        return fallback
+    if matched_rgb is None or quantized_image is None:
+        return fallback
+
+    matched = np.asarray(matched_rgb)
+    quantized = np.asarray(quantized_image)
+    if matched.ndim != 3 or matched.shape[-1] != 3:
+        return fallback
+    if quantized.shape != matched.shape:
+        return fallback
+
+    solid = np.asarray(mask_solid, dtype=bool)
+    if solid.shape != matched.shape[:2]:
+        solid = np.ones(matched.shape[:2], dtype=bool)
+
+    resolved: dict[str, str] = {}
+    for item in replacement_records:
+        if not isinstance(item, dict):
+            continue
+        item_fallback = _normalize_color_replacements_input([item])
+        if not item_fallback:
+            continue
+        fallback_source, replacement_hex = next(iter(item_fallback.items()))
+        quantized_hex = item.get("quantized") or item.get("quantized_hex")
+        if not isinstance(quantized_hex, str):
+            resolved[fallback_source] = replacement_hex
+            continue
+        try:
+            quantized_rgb = np.asarray(
+                _hex_to_rgb_tuple(quantized_hex),
+                dtype=quantized.dtype,
+            )
+        except (TypeError, ValueError):
+            resolved[fallback_source] = replacement_hex
+            continue
+
+        source_mask = np.all(quantized == quantized_rgb, axis=-1) & solid
+        if not np.any(source_mask):
+            resolved[fallback_source] = replacement_hex
+            continue
+
+        current_matches = np.unique(matched[source_mask], axis=0)
+        if current_matches.size == 0:
+            resolved[fallback_source] = replacement_hex
+            continue
+        for current_rgb in current_matches:
+            current_hex = "#{:02x}{:02x}{:02x}".format(
+                int(current_rgb[0]),
+                int(current_rgb[1]),
+                int(current_rgb[2]),
+            )
+            resolved[current_hex] = replacement_hex
+
+    return resolved
+
+
 def _apply_region_replacement(image_rgb, region_mask, replacement_rgb):
     """Apply replacement color only within region_mask coverage area.
     仅在 region_mask 覆盖区域应用替换色。
@@ -1077,7 +1161,12 @@ def run(ctx: dict) -> dict:
     # ---- Apply global color replacements ----
     effective_color_replacements = _normalize_color_replacements_input(color_replacements)
     if replacement_regions:
-        api_format_replacements = _normalize_color_replacements_input(replacement_regions)
+        api_format_replacements = _normalize_replayed_color_replacements_input(
+            replacement_regions,
+            matched_rgb,
+            ctx.get("quantized_image"),
+            mask_solid,
+        )
         if api_format_replacements:
             effective_color_replacements.update(api_format_replacements)
             # Remove API-format items (no mask) from replacement_regions to avoid

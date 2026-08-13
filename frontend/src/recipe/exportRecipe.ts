@@ -160,10 +160,13 @@ export function exportConverterRecipe(
       target_width_mm: state.target_width_mm,
       target_height_mm: state.target_height_mm,
       quantize_colors: state.quantize_colors,
+      quantize_colors_unlocked: state.quantize_colors_unlocked,
       high_precision_3d_preview: state.high_precision_3d_preview,
       enable_cleanup: state.enable_cleanup,
       svg_pixels_per_mm: settings.svgPixelsPerMm,
       hue_enable: state.hue_enable,
+      use_lut_constrained: state.use_lut_constrained,
+      auto_dynamic_range: state.auto_dynamic_range,
       chroma_gate: state.chroma_gate,
     },
     source: {
@@ -303,6 +306,8 @@ export function exportConverterRecipe(
       slicer: settings.slicerSoftware,
       nozzle_size: settings.nozzleSize,
       device_profile_id: settings.deviceProfileId,
+      enable_base_layer_height_modifier:
+        settings.enableBaseLayerHeightModifier,
     },
   };
 }

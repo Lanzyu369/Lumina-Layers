@@ -315,15 +315,21 @@ def _replacement_hex_to_rgb(value: object) -> tuple[int, int, int] | None:
 
 def _normalise_vector_replacement_input(
     color_replacements: object,
-) -> tuple[dict[tuple[int, int, int], tuple[int, int, int]], dict[str, str]]:
+) -> tuple[
+    dict[tuple[int, int, int], tuple[int, int, int]],
+    dict[tuple[int, int, int], tuple[int, int, int]],
+    dict[str, str],
+]:
     """Split structured replacement records from the legacy replacement map.
 
-    ``replacement_regions`` is keyed by the colour a user sees in the palette
-    (``matched_hex``), not necessarily by the source SVG fill.  The structured
-    mapping is therefore retained for the native dynamic-material path, where
-    it is resolved after a preflight match.  The second return value keeps the
-    historical ``{matched_hex: replacement_hex}`` contract for all other
-    vector paths.
+    Structured records retain both the material-matched palette identity and
+    the stable source-SVG identity.  Dynamic material matching can therefore
+    project edits after preflight, while static matching can refresh the
+    matched identity before using the historical replacement map.
+
+    Returns:
+        Targets keyed by matched RGB, targets keyed by source RGB, and the
+        historical ``{matched_hex: replacement_hex}`` map.
     """
 
     if isinstance(color_replacements, dict):
@@ -335,12 +341,13 @@ def _normalise_vector_replacement_input(
             target_value = target.strip().lower()
             if source_value and target_value:
                 legacy_map[source_value] = target_value
-        return {}, legacy_map
+        return {}, {}, legacy_map
 
     if not isinstance(color_replacements, list):
-        return {}, {}
+        return {}, {}, {}
 
     targets_by_matched: dict[tuple[int, int, int], tuple[int, int, int]] = {}
+    targets_by_source: dict[tuple[int, int, int], tuple[int, int, int]] = {}
     legacy_map: dict[str, str] = {}
     for item in color_replacements:
         if not isinstance(item, dict):
@@ -371,7 +378,68 @@ def _normalise_vector_replacement_input(
             # Assignment intentionally retains the historic last-record-wins
             # behaviour of ``_normalize_color_replacements_input``.
             targets_by_matched[source_rgb] = target_rgb
-    return targets_by_matched, legacy_map
+        quantized = item.get("quantized") or item.get("quantized_hex")
+        quantized_rgb = (
+            _replacement_hex_to_rgb(quantized)
+            if isinstance(quantized, str)
+            else None
+        )
+        if quantized_rgb is not None and target_rgb is not None:
+            targets_by_source[quantized_rgb] = target_rgb
+    return targets_by_matched, targets_by_source, legacy_map
+
+
+def _rematch_static_vector_replacement_records(
+    replacement_records: object,
+    vector_processor: object,
+) -> object:
+    """Update structured replacement identities for a static vector palette.
+
+    Dynamic material matching intentionally keeps source records untouched:
+    its geometry-weighted preflight consumes ``quantized_hex`` directly.
+    """
+    if not isinstance(replacement_records, list):
+        return replacement_records
+    matcher = getattr(vector_processor, "img_processor", None)
+    if bool(getattr(matcher, "dynamic_layer_count_enabled", False)):
+        return replacement_records
+
+    parsed: list[tuple[dict, tuple[int, int, int] | None]] = []
+    source_colors: set[tuple[int, int, int]] = set()
+    for item in replacement_records:
+        if not isinstance(item, dict):
+            continue
+        quantized = item.get("quantized") or item.get("quantized_hex")
+        source_rgb = (
+            _replacement_hex_to_rgb(quantized)
+            if isinstance(quantized, str)
+            else None
+        )
+        parsed.append((dict(item), source_rgb))
+        if source_rgb is not None:
+            source_colors.add(source_rgb)
+
+    solve_for_fills = getattr(matcher, "solve_for_fills", None)
+    if callable(solve_for_fills) and source_colors:
+        solve_for_fills(sorted(source_colors))
+
+    rematched: list[dict] = []
+    for item, source_rgb in parsed:
+        if source_rgb is None:
+            rematched.append(item)
+            continue
+        try:
+            lut_index, _ = vector_processor._match_lut_index_for_rgb(source_rgb)
+            current_rgb = matcher.lut_rgb[int(lut_index)]
+            item["matched_hex"] = "#{:02x}{:02x}{:02x}".format(
+                int(current_rgb[0]),
+                int(current_rgb[1]),
+                int(current_rgb[2]),
+            )
+        except (AttributeError, IndexError, TypeError, ValueError):
+            pass
+        rematched.append(item)
+    return rematched
 
 
 def _normalise_rgb_tuple(value: object) -> tuple[int, int, int] | None:
@@ -391,6 +459,7 @@ def _project_dynamic_replacement_targets(
     match_input_shapes: list[dict],
     preflight_matched_shapes: list[dict],
     targets_by_matched: dict[tuple[int, int, int], tuple[int, int, int]],
+    targets_by_source: dict[tuple[int, int, int], tuple[int, int, int]],
 ) -> tuple[list[dict], int]:
     """Project palette replacements onto per-run SVG match inputs.
 
@@ -412,7 +481,10 @@ def _project_dynamic_replacement_targets(
             if isinstance(matched_shape, dict)
             else None
         )
-        replacement = targets_by_matched.get(matched_rgb)
+        source_rgb = _normalise_rgb_tuple(item.get("color"))
+        replacement = targets_by_source.get(source_rgb)
+        if replacement is None:
+            replacement = targets_by_matched.get(matched_rgb)
         if replacement is None:
             projected_shapes.append(item)
             continue
@@ -5273,11 +5345,17 @@ class VectorProcessor:
         stage_timings["fill_dedup_s"] = 0.0
         stage_timings["material_solve_s"] = 0.0
         t0 = time.perf_counter()
-        targets_by_matched, legacy_replacements = _normalise_vector_replacement_input(
-            color_replacements
+        color_replacements = _rematch_static_vector_replacement_records(
+            color_replacements,
+            self,
         )
+        (
+            targets_by_matched,
+            targets_by_source,
+            legacy_replacements,
+        ) = _normalise_vector_replacement_input(color_replacements)
         dynamic_replacement_projection = bool(
-            targets_by_matched
+            (targets_by_matched or targets_by_source)
             and callable(solve_for_clipped_shapes)
             and bool(
                 getattr(self.img_processor, "dynamic_layer_count_enabled", False)
@@ -5309,6 +5387,7 @@ class VectorProcessor:
                 preflight_input_shapes,
                 preflight_matched_shapes,
                 targets_by_matched,
+                targets_by_source,
             )
             if projected_count:
                 material_solve_t0 = time.perf_counter()

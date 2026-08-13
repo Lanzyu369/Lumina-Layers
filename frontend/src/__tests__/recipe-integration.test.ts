@@ -13,6 +13,7 @@ import {
   RECIPE_IMPORT_WARNING_LUT_DEGRADED,
   RECIPE_IMPORT_WARNING_LUT_MISSING,
   RECIPE_IMPORT_WARNING_SPATIAL_EDITS_NOT_SERIALIZED,
+  RECIPE_IMPORT_WARNING_REGION_RECIPES_NOT_RESTORED,
   restoreConverterRecipe,
 } from "../recipe/importRecipe";
 import { annotateSpatialEditCompatibility } from "../recipe/importFlow";
@@ -217,14 +218,7 @@ describe("recipe integration", () => {
         LOCAL_FP,
       );
 
-      expect(restored.recipe_overrides).toHaveLength(2);
-      expect(restored.recipe_overrides![0]).toEqual({
-        region_id: "r1",
-        recipe: [0, 1, 2, 4],
-        layer_order: "Top2Bottom",
-        virtual_materials: [{ name: "Matte Black", hex: "#101010" }],
-      });
-      expect(restored.recipe_overrides![1].recipe).toEqual([1, 1, 0, 2]);
+      expect(restored.recipe_overrides).toEqual([]);
 
       expect(restored.customRecipeHistory).toHaveLength(1);
       const history = restored.customRecipeHistory![0];
@@ -239,7 +233,9 @@ describe("recipe integration", () => {
         { name: "Matte Black", hex: "#101010" },
       ]);
       expect(history.createdAtMs).toBe(1_700_000_000_000);
-      expect(warnings).toHaveLength(0);
+      expect(warnings).toContain(
+        RECIPE_IMPORT_WARNING_REGION_RECIPES_NOT_RESTORED,
+      );
 
       const embedded = await embedRecipeInPng(
         createMinimalPng(),
@@ -359,6 +355,9 @@ describe("recipe integration", () => {
         lut_name: "TestLUT",
         target_width_mm: 60,
         add_loop: true,
+        quantize_colors_unlocked: true,
+        use_lut_constrained: true,
+        auto_dynamic_range: true,
         workshopSource,
       });
 
@@ -372,7 +371,39 @@ describe("recipe integration", () => {
       expect(restored.lut_name).toBe("TestLUT");
       expect(restored.target_width_mm).toBe(60);
       expect(restored.add_loop).toBe(true);
+      expect(restored.quantize_colors_unlocked).toBe(true);
+      expect(restored.use_lut_constrained).toBe(true);
+      expect(restored.auto_dynamic_range).toBe(true);
       expect(restored.workshopSource).toEqual(workshopSource);
+    });
+  });
+
+  describe("PNG project round-trip", () => {
+    it("preserves output-affecting matching flags", async () => {
+      const { recipe } = await buildTestRecipe({
+        lut_name: "TestLUT",
+        quantize_colors_unlocked: true,
+        use_lut_constrained: true,
+        auto_dynamic_range: true,
+      });
+      const embedded = await embedRecipeInPng(
+        createMinimalPng(),
+        recipe,
+        recipe.integrity.recipe_sha256,
+      );
+      const parsed = await parseRecipeFile(
+        new File([embedded], "project.png", { type: "image/png" }),
+      );
+
+      const { state: restored } = restoreConverterRecipe(
+        parsed.recipe,
+        LOCAL_LUTS,
+        LOCAL_FP,
+      );
+
+      expect(restored.quantize_colors_unlocked).toBe(true);
+      expect(restored.use_lut_constrained).toBe(true);
+      expect(restored.auto_dynamic_range).toBe(true);
     });
   });
 

@@ -218,6 +218,38 @@ def test_free_color_mutation_is_checkpointed() -> None:
         app.dependency_overrides.pop(get_session_store, None)
 
 
+def test_free_color_replace_seeds_a_restored_project_session() -> None:
+    from fastapi.testclient import TestClient
+
+    from api.app import app
+    from api.dependencies import get_session_store
+
+    store = MemoryStore()
+    session = store.get("session")
+    assert session is not None
+    session["free_color_set"] = {"112233"}
+    app.dependency_overrides[get_session_store] = lambda: store
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/convert/free-colors",
+            json={
+                "session_id": "session",
+                "action": "replace",
+                "color_hexes": ["#abcdef", "ABCDEF", "#fedcba"],
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["free_color_set"] == ["abcdef", "fedcba"]
+        assert session["free_color_set"] == {"abcdef", "fedcba"}
+        assert response.json()["can_undo"] is True
+
+        restore_from_history("session", store, session, action="undo")
+        assert session["free_color_set"] == {"112233"}
+    finally:
+        app.dependency_overrides.pop(get_session_store, None)
+
+
 def test_repeated_free_color_toggle_preserves_serial_history() -> None:
     from fastapi.testclient import TestClient
 

@@ -1268,6 +1268,12 @@ def mutate_free_colors(
         }
         if request.action == "clear":
             next_colors: set[str] = set()
+        elif request.action == "replace":
+            next_colors = {
+                str(value).replace("#", "").lower()
+                for value in request.color_hexes
+                if str(value).replace("#", "")
+            }
         else:
             next_colors = set(current)
             for raw in request.color_hexes:

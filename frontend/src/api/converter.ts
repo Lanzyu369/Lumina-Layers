@@ -750,7 +750,7 @@ export async function predictRecipe(
 
 export async function mutateFreeColors(
   sessionId: string,
-  action: "toggle" | "clear",
+  action: "toggle" | "clear" | "replace",
   colorHexes: string[] = [],
 ): Promise<FreeColorMutationResponse> {
   const response = await apiClient.post<FreeColorMutationResponse>(

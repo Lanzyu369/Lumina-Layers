@@ -2773,15 +2773,89 @@ const DEFAULT_PUZZLE_PREVIEW_STATE = {
 
 const DEFAULT_PUZZLE_LAYOUT_SEED = 0;
 
-function buildPreviewSessionResetState(
-  current: Pick<
+type PortableProjectColorState = Pick<
+  ConverterState,
+  | "replacement_regions"
+  | "free_color_set"
+  | "customRecipeHistory"
+>;
+
+function normalizeReplacementHex(hex: string): string {
+  return hex.trim().replace(/^#/, "").toLowerCase();
+}
+
+function mergePortableReplacementRegions(
+  persisted: ColorReplacementItem[],
+  live: ColorReplacementItem[],
+): ColorReplacementItem[] {
+  const bySource = new Map<string, ColorReplacementItem>();
+  for (const item of [...persisted, ...live]) {
+    const quantized = normalizeReplacementHex(item.quantized_hex);
+    const matched = normalizeReplacementHex(item.matched_hex);
+    const source = quantized || matched;
+    if (!source) continue;
+    bySource.set(source, { ...item });
+  }
+  return Array.from(bySource.values());
+}
+
+function clonePortableProjectColorState(
+  state: Pick<
     ConverterState,
-    "hasManualPreview" | "previewAutoRefreshPending" | "previewRequestRevision"
+    "replacement_regions" | "free_color_set" | "customRecipeHistory"
   >,
-  preserveAutoRefreshEligibility = false,
+): PortableProjectColorState {
+  return {
+    replacement_regions: state.replacement_regions.map((item) => ({
+      ...item,
+    })),
+    free_color_set: new Set(state.free_color_set),
+    customRecipeHistory: state.customRecipeHistory.map((item) => ({
+      ...item,
+      recipe: [...item.recipe],
+      predictedRgb: [...item.predictedRgb] as [number, number, number],
+      predictedLab: [...item.predictedLab] as [number, number, number],
+      ...(item.displayHexes ? { displayHexes: [...item.displayHexes] } : {}),
+      ...(item.displayLabels
+        ? { displayLabels: [...item.displayLabels] }
+        : {}),
+      ...(item.virtualMaterials
+        ? {
+            virtualMaterials: item.virtualMaterials.map((material) => ({
+              ...material,
+            })),
+          }
+        : {}),
+    })),
+  };
+}
+
+function buildSourceChangeProjectColorState(
+  state: ConverterState,
+): PortableProjectColorState {
+  const portable = clonePortableProjectColorState(state);
+  const liveRemaps = colorRemapToReplacementRegions(
+    state.colorRemapMap,
+    state.palette,
+  );
+  return {
+    ...portable,
+    replacement_regions: mergePortableReplacementRegions(
+      portable.replacement_regions,
+      liveRemaps,
+    ),
+  };
+}
+
+function buildPreviewSessionResetState(
+  current: ConverterState,
+  preserveProjectComparisonState = false,
 ): Partial<ConverterState> {
-  const previewAutoRefreshPending = preserveAutoRefreshEligibility &&
+  const previewAutoRefreshPending = preserveProjectComparisonState &&
     (current.hasManualPreview || current.previewAutoRefreshPending);
+  const portableProjectColors = preserveProjectComparisonState
+    ? buildSourceChangeProjectColorState(current)
+    : null;
   return {
     sessionId: null,
     isLoading: false,
@@ -2836,6 +2910,7 @@ function buildPreviewSessionResetState(
     ...EMPTY_LUT_MATCH_STATE,
     ...DEFAULT_LAYER_IMAGES_STATE,
     ...DEFAULT_PUZZLE_PREVIEW_STATE,
+    ...(portableProjectColors ?? {}),
   };
 }
 
@@ -4275,7 +4350,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
                 RELIEF_MAX_EXTRA_HEIGHT_MM,
               )
             : state.heightmap_max_height,
-        ...buildPreviewSessionResetState(state),
+        ...buildPreviewSessionResetState(state, true),
       }));
     },
     setMaterialMinLayerCount: (count: number) => {
@@ -4307,7 +4382,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
                 RELIEF_MAX_EXTRA_HEIGHT_MM,
               )
             : state.heightmap_max_height,
-          ...buildPreviewSessionResetState(state),
+          ...buildPreviewSessionResetState(state, true),
         };
       });
     },
@@ -4340,7 +4415,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
                 RELIEF_MAX_EXTRA_HEIGHT_MM,
               )
             : state.heightmap_max_height,
-          ...buildPreviewSessionResetState(state),
+          ...buildPreviewSessionResetState(state, true),
         };
       });
     },
@@ -4357,7 +4432,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       if (isDynamicMaterialActive(_get())) {
         set({
           materialBackingMaterialDirName: name,
-          ...buildPreviewSessionResetState(_get()),
+          ...buildPreviewSessionResetState(_get(), true),
         });
         return;
       }
@@ -7755,10 +7830,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         hue_enable: state.hue_enable,
       });
 
-      const previewReplacementRegions = colorRemapToReplacementRegions(
+      const portableProjectColors = clonePortableProjectColorState(state);
+      const remapReplacementRegions = colorRemapToReplacementRegions(
         state.colorRemapMap,
         state.palette,
       );
+      const previewReplacementRegions = [
+        ...portableProjectColors.replacement_regions,
+        ...remapReplacementRegions,
+      ];
       const shouldReplayGlobalReplacements =
         previewReplacementRegions.length > 0;
 
@@ -7950,10 +8030,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           historyCanUndo: false,
           historyCanRedo: false,
           historyBusy: false,
-          replacement_regions: [],
+          replacement_regions: portableProjectColors.replacement_regions,
           recipe_overrides: [],
-          customRecipeHistory: [],
-          free_color_set: new Set<string>(),
+          customRecipeHistory: portableProjectColors.customRecipeHistory,
+          free_color_set: portableProjectColors.free_color_set,
           regionReplacementCount: 0,
           selectedColor: null,
           selectedColors: new Set<string>(),
@@ -7990,6 +8070,38 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           gradientSelection: null,
         });
         await _get().hydrateSelectionDocument();
+        if (portableProjectColors.free_color_set.size > 0) {
+          const freeColorRestoreSessionId = response.session_id;
+          try {
+            await queueFreeColorMutation(freeColorRestoreSessionId, async () => {
+              if (_get().sessionId !== freeColorRestoreSessionId) return;
+              const restoredFreeColors = await apiMutateFreeColors(
+                freeColorRestoreSessionId,
+                "replace",
+                Array.from(portableProjectColors.free_color_set),
+              );
+              if (isStalePreviewRequest()) return;
+              if (_get().sessionId !== freeColorRestoreSessionId) return;
+              set({
+                free_color_set: new Set(restoredFreeColors.free_color_set),
+                historyCanUndo: restoredFreeColors.can_undo,
+                historyCanRedo: restoredFreeColors.can_redo,
+              });
+            });
+            if (isStalePreviewRequest()) return;
+            if (_get().sessionId !== freeColorRestoreSessionId) return;
+          } catch (err) {
+            if (isStalePreviewRequest()) return;
+            if (_get().sessionId !== freeColorRestoreSessionId) return;
+            set({
+              error: visibleConverterError(
+                err,
+                "Free color restore failed",
+              ),
+            });
+            return;
+          }
+        }
         let heightmapReuploadFailed = false;
         if (
           shouldReuploadHeightmap &&
@@ -9447,9 +9559,16 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       imageFile: File,
       heightmapFile?: File | null,
     ) => {
-      // 1. Apply restored parameters (without triggering crop modal)
+      // Load the embedded source first. Ordinary uploads intentionally clear
+      // session state, so project parameters and portable colour data must be
+      // applied only after setImageFile finishes its synchronous reset.
+      // 先装载项目内嵌原图。普通上传会清空会话状态，因此项目参数和可携带的
+      // 调色数据必须在 setImageFile 的同步重置之后再写回。
       const prevEnableCrop = _get().enableCrop;
       const restoredWorkshopSource = partial.workshopSource ?? null;
+      set({ enableCrop: false });
+      _get().setImageFile(imageFile);
+
       const baseState = _get();
       const nextState = {
         ...baseState,
@@ -9466,16 +9585,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         modelBounds: null,
         ...fridgeMagnetState,
         engraveBackLabels: false,
-        enableCrop: false,
+        enableCrop: prevEnableCrop,
       });
 
-      // 2. Set image file (creates blob URL, triggers preview flow)
-      _get().setImageFile(imageFile);
-
-      // setImageFile invalidates preview-derived state. Restore only the
-      // validated dynamic metadata carried by the imported recipe so it
-      // remains available as historical export evidence until a fresh
-      // preview response replaces it.
+      // Keep validated dynamic results as historical export evidence until a
+      // fresh preview replaces them. This explicit assignment also documents
+      // the values that are safe to survive the source reset.
       set({
         materialDynamicRecipes: partial.materialDynamicRecipes ?? [],
         materialLayerBenefitCurve:
@@ -9486,13 +9601,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           partial.materialLayerBenefitPixelCount ?? 0,
       });
 
-      // 3. Restore crop setting
       set({
-        enableCrop: prevEnableCrop,
         workshopSource: restoredWorkshopSource,
       });
 
-      // 4. Set heightmap if present
+      // Restore the optional heightmap after all project state is in place.
       if (heightmapFile) {
         _get().setHeightmapFile(heightmapFile);
       }

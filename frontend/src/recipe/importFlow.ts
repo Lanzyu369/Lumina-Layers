@@ -234,6 +234,15 @@ export function applyImport(
     ) {
       settingsState.setSvgPixelsPerMm(conv.base.svg_pixels_per_mm);
     }
+    if (
+      typeof conv.device.enable_base_layer_height_modifier === "boolean" &&
+      conv.device.enable_base_layer_height_modifier !==
+        settingsState.enableBaseLayerHeightModifier
+    ) {
+      settingsState.setEnableBaseLayerHeightModifier(
+        conv.device.enable_base_layer_height_modifier,
+      );
+    }
   }
 
   // 3. The converter is always restored first. A validated workshop source

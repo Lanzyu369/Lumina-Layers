@@ -29,9 +29,12 @@ describe("recipe/exportRecipe", () => {
         target_width_mm: 100,
         target_height_mm: 75,
         quantize_colors: 64,
+        quantize_colors_unlocked: true,
         high_precision_3d_preview: true,
         enable_cleanup: true,
         hue_enable: true,
+        use_lut_constrained: true,
+        auto_dynamic_range: true,
         chroma_gate: 20,
       });
 
@@ -42,8 +45,11 @@ describe("recipe/exportRecipe", () => {
       expect(recipe.base.color_mode).toBe("4-Color (RYBW)");
       expect(recipe.base.target_width_mm).toBe(100);
       expect(recipe.base.target_height_mm).toBe(75);
+      expect(recipe.base.quantize_colors_unlocked).toBe(true);
       expect(recipe.base.high_precision_3d_preview).toBe(true);
       expect(recipe.base.hue_enable).toBe(true);
+      expect(recipe.base.use_lut_constrained).toBe(true);
+      expect(recipe.base.auto_dynamic_range).toBe(true);
       expect(recipe.base.chroma_gate).toBe(20);
       expect(recipe.base.svg_pixels_per_mm).toBe(10);
     });
@@ -127,6 +133,7 @@ describe("recipe/exportRecipe", () => {
         nozzleSize: "0.2",
         deviceProfileId: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
         svgPixelsPerMm: 18.5,
+        enableBaseLayerHeightModifier: false,
       });
 
       const recipe = exportConverterRecipe(makeState(), settings, "fp");
@@ -134,6 +141,7 @@ describe("recipe/exportRecipe", () => {
       expect(recipe.device.slicer).toBe("OrcaSlicer");
       expect(recipe.device.nozzle_size).toBe("0.2");
       expect(recipe.device.device_profile_id).toBe("OrcaSlicer:bbl:bambu-lab-p1s:0.2");
+      expect(recipe.device.enable_base_layer_height_modifier).toBe(false);
       expect(recipe.base.svg_pixels_per_mm).toBe(18.5);
     });
 

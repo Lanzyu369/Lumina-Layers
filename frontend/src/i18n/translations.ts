@@ -6426,8 +6426,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
 
   // ==================== Unified Uploader ====================
   upload_unified_hint: {
-    zh: "拖拽图片或点击上传（支持多选）",
-    en: "Drag & drop or click to upload (multi-select)",
+    zh: "拖拽图片或 Lumina 项目文件（图片支持多选）",
+    en: "Drop images or a Lumina project file (images support multi-select)",
   },
   upload_tap_to_change: {
     zh: "点击更换或追加",
@@ -6438,8 +6438,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Replace current image",
   },
   upload_unified_aria: {
-    zh: "拖拽图片或点击上传文件",
-    en: "Drag images or click to upload files",
+    zh: "拖拽图片或 Lumina 项目文件",
+    en: "Drop images or a Lumina project file",
   },
   upload_add_more: {
     zh: "添加更多图片",
@@ -7305,8 +7305,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Export Share Card",
   },
   recipe_export_sidecar_btn: {
-    zh: "导出 JSON",
-    en: "Export JSON",
+    zh: "保存项目",
+    en: "Save Project",
   },
   recipe_export_loading: {
     zh: "正在导出...",
@@ -7341,8 +7341,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "The export did not finish. Please try again.",
   },
   recipe_import_title: {
-    zh: "导入分享卡",
-    en: "Import Share Card",
+    zh: "恢复项目",
+    en: "Restore Project",
   },
   recipe_import_source_label: {
     zh: "来源",
@@ -7353,8 +7353,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "PNG Share Card",
   },
   recipe_import_source_json: {
-    zh: "JSON 配方文件",
-    en: "JSON Recipe File",
+    zh: "Lumina 项目文件",
+    en: "Lumina Project File",
   },
   recipe_import_version_label: {
     zh: "应用版本",
@@ -7413,8 +7413,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Released",
   },
   recipe_import_success: {
-    zh: "配方已恢复",
-    en: "Recipe restored",
+    zh: "项目已恢复",
+    en: "Project restored",
   },
   recipe_import_error: {
     zh: "导入失败：{error}",
@@ -7615,6 +7615,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   recipe_import_warning_spatial_edits_not_serialized: {
     zh: "连通区域的局部改色仅属于当前会话，未写入分享配方；导入后需要重新应用。",
     en: "Connected-region color edits belong to the current session and were not saved in the shared recipe; reapply them after import.",
+  },
+  recipe_import_warning_region_recipes_not_restored: {
+    zh: "区域自定义配方依赖原预览会话中的选区，导入后不会直接激活；配方历史已保留，可重新选区后应用。",
+    en: "Region-specific recipes depend on selections from the original preview session, so they are not activated on import. Their recipe history is kept for reuse after selecting a new region.",
   },
   recipe_import_workshop_degraded: {
     zh: "分享卡中的创意工坊编辑数据已损坏或当前不可用；主图和转换参数仍可正常导入。",

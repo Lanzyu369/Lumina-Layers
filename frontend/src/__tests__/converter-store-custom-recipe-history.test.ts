@@ -121,18 +121,22 @@ describe("converter store custom recipe history", () => {
     expect(useConverterStore.getState().customRecipeHistory).toEqual([]);
   });
 
-  it("resets recipe history after a successful submitPreview", async () => {
+  it("keeps reusable recipe history after a successful submitPreview", async () => {
     const useConverterStore = await loadStore();
     convertPreviewMock.mockResolvedValueOnce(previewResponse());
+    const historyItem = makeHistoryItem();
     useConverterStore.setState({
       imageFile: new File(["image"], "preview.png", { type: "image/png" }),
       lut_name: "demo-lut",
-      customRecipeHistory: [makeHistoryItem()],
+      customRecipeHistory: [historyItem],
     });
 
     await useConverterStore.getState().submitPreview();
 
-    expect(useConverterStore.getState().customRecipeHistory).toEqual([]);
+    expect(useConverterStore.getState().customRecipeHistory).toEqual([
+      historyItem,
+    ]);
+    expect(useConverterStore.getState().recipe_overrides).toEqual([]);
   });
 
   it("sets an error when applying a missing recipe history entry", async () => {

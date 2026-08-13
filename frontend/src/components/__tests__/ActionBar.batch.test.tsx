@@ -571,7 +571,7 @@ describe("ActionBar — auto batch mode", () => {
     render(<ActionBar />);
 
     expect(screen.getByRole("button", { name: "导出分享卡" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "导出 JSON" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "保存项目" })).toBeDisabled();
     expect(
       screen.getByText("模型覆面暂不支持配方导出，因为配方无法包含上传模型和选面。"),
     ).toBeInTheDocument();
@@ -653,7 +653,7 @@ describe("ActionBar — auto batch mode", () => {
 
     render(<ActionBar />);
 
-    fireEvent.click(screen.getByRole("button", { name: "导出 JSON" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存项目" }));
 
     await waitFor(() => {
       expect(

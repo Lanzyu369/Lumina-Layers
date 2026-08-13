@@ -53,10 +53,16 @@ export interface ConverterRecipeBase {
   /** @deprecated removed; kept optional for legacy recipe parsing only */
   bg_tol?: number;
   quantize_colors: number;
+  /** Preserve whether the editor allows the extended quantization range. */
+  quantize_colors_unlocked?: boolean;
   high_precision_3d_preview?: boolean;
   enable_cleanup: boolean;
   svg_pixels_per_mm?: number;
   hue_enable: boolean;
+  /** Constrain colour matching to colours represented by the active LUT. */
+  use_lut_constrained?: boolean;
+  /** Stretch the source colour range before LUT matching. */
+  auto_dynamic_range?: boolean;
   chroma_gate: number;
 }
 
@@ -169,6 +175,8 @@ export interface ConverterRecipeDevice {
   nozzle_size: string;
   /** V2 generated machine-registry device profile ID. */
   device_profile_id?: string;
+  /** Preserve the slicer's base-layer height modifier choice. */
+  enable_base_layer_height_modifier?: boolean;
 }
 
 export interface ConverterRecipeFridgeMagnet {

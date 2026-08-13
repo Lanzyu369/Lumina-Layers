@@ -71,7 +71,7 @@ describe("BasicSettings — auto batch mode (unified uploader)", () => {
   it("shows UnifiedUploader upload hint when no image is selected", () => {
     render(<BasicSettings />);
     expect(
-      screen.getByText("拖拽图片或点击上传（支持多选）"),
+      screen.getByText("拖拽图片或 Lumina 项目文件（图片支持多选）"),
     ).toBeInTheDocument();
   });
 
