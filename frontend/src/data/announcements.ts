@@ -16,6 +16,24 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-08-13",
+    title: {
+      zh: "Lumina Layers — 8 月更新",
+      en: "Lumina Layers — August Update",
+    },
+    sections: [
+      {
+        category: { zh: "新功能", en: "New" },
+        items: [
+          {
+            zh: "设置里新增“导出 3MF 时沿用上传文件名”开关，默认关闭；开启后，普通单件作品会把“海报.png”下载为“海报.3mf”，批量、拼图和大画幅仍使用原有名称。",
+            en: "Settings now include an optional “Use uploaded filename for 3MF exports” switch. It is off by default; when enabled, a normal single-item “poster.png” downloads as “poster.3mf”, while batch, puzzle, and large-format exports keep their existing names.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-08-08",
     title: {
       zh: "Lumina Layers — 材料配方颜色一致性",

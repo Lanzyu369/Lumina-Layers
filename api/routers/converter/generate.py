@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from PIL import Image
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, StrictBool, ValidationError
 
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.file_bridge import ensure_png_tempfile
@@ -60,6 +60,7 @@ from api.workers.converter_workers import (
 from core.batch_layout import LayoutResult, XYBBox, layout_shelf_by_row
 from core.errors import CachedPreviewAnalysisError
 from core.model_surface.types import ModelSurfaceError
+from core.naming import generate_preserved_upload_3mf_filename
 from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
 from utils.merged_bambu_3mf_writer import (
     MergedBambu3MFWriter,
@@ -205,6 +206,7 @@ class _GenerateBody(BaseModel):
 
     session_id: str
     params: ConvertGenerateRequest
+    preserve_upload_filename_for_3mf: StrictBool = False
 
 
 def _should_use_model_surface_overlay(session_data: dict) -> bool:
@@ -2232,9 +2234,18 @@ async def convert_generate(
     glb_registered = False
     try:
         try:
+            download_filename = None
+            if (
+                body.preserve_upload_filename_for_3mf
+                and not generated_color_card_svg
+            ):
+                download_filename = generate_preserved_upload_3mf_filename(
+                    session_data.get("source_basename")
+                )
             download_id = registry.register_path(
                 str(uuid.uuid4()),
                 threemf_path,
+                filename=download_filename,
                 ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
             )
         except ROUTER_HANDLED_ERRORS as exc:

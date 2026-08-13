@@ -106,6 +106,7 @@ import { trackLuminaEvent } from "../../analytics/umami";
 import {
   registerGeneratedArtifactInvalidator,
   registerPreviewArtifactInvalidator,
+  registerSingleItemDownloadInvalidator,
 } from "../generatedArtifactInvalidation";
 import { uploadImagePreview } from "../../api/system";
 import { tRuntime } from "../../i18n/runtime";
@@ -3387,6 +3388,7 @@ const GLB_POLL_MAX_MS = 5 * 60_000;
 // 变了就退出，避免多路 polling 互相覆盖 previewGlbUrl。
 let _glbPollSequence = 0;
 let _generateRequestSequence = 0;
+let _activeFilenameEligibleGenerateSequence: number | null = null;
 
 // ========== Preview AbortController ==========
 
@@ -8141,6 +8143,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set({ isGenerating: true, error: null, generatePerformanceTiming: null });
       _generateRequestSequence += 1;
       const generateSequence = _generateRequestSequence;
+      _activeFilenameEligibleGenerateSequence =
+        !state.batchMode &&
+        !state.puzzleEnabled &&
+        !state.largeFormatEnabled &&
+        state.modeling_mode !== ModelingModeEnum.COLOR_CARD
+          ? generateSequence
+          : null;
       const shouldIgnoreStaleGenerateResponse = (): boolean => {
         if (
           _isCurrentGenerateRequest(
@@ -8448,7 +8457,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           recipe_override_count: state.recipe_overrides.length,
           free_color_count: state.free_color_set.size,
         });
-        const response = await apiConvertGenerate(sessionId, baseParams);
+        const response = await apiConvertGenerate(
+          sessionId,
+          baseParams,
+          useSettingsStore.getState().preserveUploadFilenameFor3mf,
+        );
         if (shouldIgnoreStaleGenerateResponse()) {
           return null;
         }
@@ -8535,6 +8548,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         _clientLog("generate: failed", summarizeErrorForLog(err), "error");
         return null;
       } finally {
+        if (_activeFilenameEligibleGenerateSequence === generateSequence) {
+          _activeFilenameEligibleGenerateSequence = null;
+        }
         _endGenerateTimer();
       }
     },
@@ -9509,4 +9525,29 @@ registerPreviewArtifactInvalidator(() => {
   useConverterStore.setState(
     buildPreviewSessionResetState(useConverterStore.getState()),
   );
+});
+
+registerSingleItemDownloadInvalidator(() => {
+  if (
+    _activeFilenameEligibleGenerateSequence !== null &&
+    _activeFilenameEligibleGenerateSequence === _generateRequestSequence
+  ) {
+    _generateRequestSequence += 1;
+    _activeFilenameEligibleGenerateSequence = null;
+    useConverterStore.setState({ isGenerating: false });
+  }
+
+  const state = useConverterStore.getState();
+  if (
+    state.batchMode ||
+    state.puzzleEnabled ||
+    state.largeFormatEnabled ||
+    state.modeling_mode === ModelingModeEnum.COLOR_CARD
+  ) {
+    return;
+  }
+  useConverterStore.setState({
+    threemfDiskPath: null,
+    downloadUrl: null,
+  });
 });

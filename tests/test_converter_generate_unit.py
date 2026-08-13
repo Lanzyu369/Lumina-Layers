@@ -1548,12 +1548,14 @@ class TestGenerateParameterCompleteness:
         sid = _test_store.create()
         _test_store.put(sid, "preview_cache", {"some": "data", "target_w": 10, "target_h": 10})
         _test_store.put(sid, "image_path", image_path)
+        _test_store.put(sid, "source_basename", "海报.final")
         _test_store.put(sid, "lut_path", lut_path)
         _test_store.put(sid, "replacement_regions", [])
         _test_store.put(sid, "free_color_set", set())
 
         payload = {
             "session_id": sid,
+            "preserve_upload_filename_for_3mf": True,
             "params": {"lut_name": "test_lut"},
         }
         _mock_pool.submit = AsyncMock(
@@ -1571,6 +1573,8 @@ class TestGenerateParameterCompleteness:
             download_file_id = download_url.rsplit("/", 1)[-1]
             entry = _test_registry.get_entry(download_file_id)
             assert entry is not None
+            assert entry["filename"] == "海报.final.3mf"
+            assert entry["path"] == out_path
             assert entry["lifecycle"] == "ephemeral"
             assert entry["session_id"] != sid
 
@@ -1580,10 +1584,100 @@ class TestGenerateParameterCompleteness:
             download_response = client.get(download_url)
             assert download_response.status_code == 200
             assert download_response.content == b"3mf payload"
+            assert download_response.headers["content-disposition"] == (
+                "attachment; filename*=utf-8''%E6%B5%B7%E6%8A%A5.final.3mf"
+            )
         finally:
             for path in (image_path, lut_path, out_path):
                 if os.path.exists(path):
                     os.unlink(path)
+
+    def test_generated_download_keeps_worker_filename_by_default(self) -> None:
+        sid: str = _create_session_with_preview_and_files(_test_store)
+        _test_store.put(sid, "source_basename", "海报.final")
+        worker_path = "/tmp/descriptive_Lumina_HiFi_4C_20260813_123456.3mf"
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": worker_path,
+                "glb_path": None,
+                "status_msg": "OK",
+            }
+        )
+
+        with patch("os.path.exists", return_value=True):
+            response = client.post(
+                "/api/convert/generate",
+                json={"session_id": sid, "params": {"lut_name": "test_lut"}},
+            )
+
+        assert response.status_code == 200, response.text
+        file_id = response.json()["download_url"].rsplit("/", 1)[-1]
+        entry = _test_registry.get_entry(file_id)
+        assert entry is not None
+        assert entry["filename"] == os.path.basename(worker_path)
+
+    def test_preserve_upload_filename_requires_strict_boolean(self) -> None:
+        sid: str = _create_session_with_preview_and_files(_test_store)
+        _mock_pool.submit.reset_mock()
+
+        response = client.post(
+            "/api/convert/generate",
+            json={
+                "session_id": sid,
+                "preserve_upload_filename_for_3mf": "true",
+                "params": {"lut_name": "test_lut"},
+            },
+        )
+
+        assert response.status_code == 422
+        _mock_pool.submit.assert_not_called()
+
+    def test_preserve_upload_filename_does_not_rename_generated_color_card(
+        self,
+    ) -> None:
+        sid: str = _create_session_with_preview_and_files(_test_store)
+        _test_store.put(sid, "source_basename", "poster")
+        session_data = _test_store.get(sid)
+        assert session_data is not None
+        preview_cache = dict(session_data["preview_cache"])
+        preview_cache["color_palette"] = [
+            {"hex": "#ff0000"},
+            {"hex": "#00ff00"},
+        ]
+        _test_store.put(sid, "preview_cache", preview_cache)
+        worker_path = "/tmp/Lumina_ColorCard_20260813_123456.3mf"
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": worker_path,
+                "glb_path": None,
+                "status_msg": "OK",
+            }
+        )
+
+        with (
+            patch("os.path.exists", return_value=True),
+            patch(
+                "core.color_card.generate_color_card_svg",
+                return_value="/tmp/generated-color-card.svg",
+            ),
+        ):
+            response = client.post(
+                "/api/convert/generate",
+                json={
+                    "session_id": sid,
+                    "preserve_upload_filename_for_3mf": True,
+                    "params": {
+                        "lut_name": "test_lut",
+                        "modeling_mode": "color-card",
+                    },
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        file_id = response.json()["download_url"].rsplit("/", 1)[-1]
+        entry = _test_registry.get_entry(file_id)
+        assert entry is not None
+        assert entry["filename"] == os.path.basename(worker_path)
 
     def test_generate_defaults_enable_base_layer_modifier_true_when_field_missing(self) -> None:
         sid: str = _create_session_with_preview_and_files(_test_store)

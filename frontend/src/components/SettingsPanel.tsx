@@ -152,6 +152,12 @@ export default function SettingsPanel() {
   const setEnableCompletionNotifications = useSettingsStore(
     (s) => s.setEnableCompletionNotifications,
   );
+  const preserveUploadFilenameFor3mf = useSettingsStore(
+    (s) => s.preserveUploadFilenameFor3mf,
+  );
+  const setPreserveUploadFilenameFor3mf = useSettingsStore(
+    (s) => s.setPreserveUploadFilenameFor3mf,
+  );
   const enableSolverCacheGridSelection = useSettingsStore(
     (s) => s.enableSolverCacheGridSelection,
   );
@@ -817,6 +823,25 @@ export default function SettingsPanel() {
                 >
                   {t(completionNotificationStatus.translationKey)}
                 </StatusBanner>
+              </div>
+
+              <div
+                data-testid="settings-preserve-upload-filename-section"
+                className="flex items-start justify-between gap-4 border-t border-slate-200/60 pt-5 dark:border-slate-700/60"
+              >
+                <div className="min-w-0">
+                  <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+                    {t("settings.preserve_upload_filename_heading")}
+                  </h3>
+                  <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                    {t("settings.preserve_upload_filename_description")}
+                  </p>
+                </div>
+                <Switch
+                  checked={preserveUploadFilenameFor3mf}
+                  onChange={setPreserveUploadFilenameFor3mf}
+                  ariaLabel={t("settings.preserve_upload_filename_heading")}
+                />
               </div>
 
               <div className="flex items-start justify-between gap-4 border-t border-slate-200/60 pt-5 dark:border-slate-700/60">

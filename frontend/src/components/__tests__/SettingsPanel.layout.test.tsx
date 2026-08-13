@@ -17,6 +17,7 @@ vi.mock("../../utils/retryAsync", () => ({
 import type { PrinterInfo, SlicerOption } from "../../api/types";
 import * as systemApi from "../../api/system";
 import { I18nProvider } from "../../i18n/context";
+import { translations } from "../../i18n/translations";
 import { DEFAULT_SETTINGS, useSettingsStore } from "../../stores/settingsStore";
 import { useSlicerStore } from "../../stores/slicerStore";
 import SettingsPanel from "../SettingsPanel";
@@ -199,6 +200,46 @@ describe("SettingsPanel information architecture", () => {
     expect(
       screen.getByRole("switch", { name: "自动清理渐变条纹" }),
     ).toBeInTheDocument();
+  });
+
+  it("offers the default-off uploaded filename switch under General", () => {
+    renderPanel();
+
+    const navigation = screen.getByRole("navigation", { name: "设置分类" });
+    fireEvent.click(
+      within(navigation).getByRole("button", { name: /常规/ }),
+    );
+
+    const filenameSection = screen.getByTestId(
+      "settings-preserve-upload-filename-section",
+    );
+    expect(
+      within(filenameSection).getByText(
+        "开启后，普通单件生成会把“海报.png”下载为“海报.3mf”。默认关闭；批量、拼图和大画幅继续使用原有名称。",
+      ),
+    ).toBeInTheDocument();
+    const filenameSwitch = within(filenameSection).getByRole("switch", {
+      name: "导出 3MF 时沿用上传文件名",
+    });
+    expect(filenameSwitch).not.toBeChecked();
+
+    fireEvent.click(filenameSwitch);
+
+    expect(filenameSwitch).toBeChecked();
+    expect(
+      useSettingsStore.getState().preserveUploadFilenameFor3mf,
+    ).toBe(true);
+  });
+
+  it("provides matching English copy for the uploaded filename switch", () => {
+    expect(translations["settings.preserve_upload_filename_heading"].en).toBe(
+      "Use uploaded filename for 3MF exports",
+    );
+    expect(
+      translations["settings.preserve_upload_filename_description"].en,
+    ).toBe(
+      "When enabled, a normal single-item export downloads “poster.png” as “poster.3mf”. It is off by default; batch, puzzle, and large-format exports keep their existing names.",
+    );
   });
 
   it("keeps the machine registry out of the page until the chooser opens", async () => {

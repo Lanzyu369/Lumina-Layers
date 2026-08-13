@@ -179,6 +179,8 @@ export function collectBugReportContext(): BugReportContextPayload {
       : null,
     material_layer_height_mm: isMaterialSource ? converter.materialLayerHeightMm : null,
     material_backing_material_dir_name: isMaterialSource ? converter.materialBackingMaterialDirName : null,
+    preserve_upload_filename_for_3mf:
+      settings.preserveUploadFilenameFor3mf,
     recent_client_logs: getRecentClientLogs(),
     action_history: actionExport.history,
     session_history: actionExport.session_history,

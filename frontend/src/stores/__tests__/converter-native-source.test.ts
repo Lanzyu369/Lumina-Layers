@@ -202,6 +202,7 @@ describe("native bundle converter flow", () => {
     useSettingsStore.setState({
       enableCompletionNotifications: false,
       language: "zh",
+      preserveUploadFilenameFor3mf: false,
     });
   });
 
@@ -429,6 +430,144 @@ describe("native bundle converter flow", () => {
     expect(state.modelUrl).toBe("/api/files/fresh.glb");
     expect(state.isGenerating).toBe(false);
     expect(state.error).toBeNull();
+  });
+
+  it("ignores an in-flight regular result when the filename preference changes", async () => {
+    const pending = deferred<{
+      status: string;
+      message: string;
+      download_url: string;
+      preview_3d_url: string;
+    }>();
+    mocks.convertGenerate.mockReturnValueOnce(pending.promise);
+    seedLegacyGenerateState("session-filename-preference", {
+      modelUrl: "/api/files/existing-model.glb",
+      previewGlbUrl: "/api/files/existing-preview.glb",
+    });
+
+    const request = useConverterStore.getState().submitGenerate();
+    expect(mocks.convertGenerate).toHaveBeenCalledWith(
+      "session-filename-preference",
+      expect.any(Object),
+      false,
+    );
+
+    useSettingsStore.getState().setPreserveUploadFilenameFor3mf(true);
+
+    expect(useConverterStore.getState()).toMatchObject({
+      isGenerating: false,
+      downloadUrl: null,
+      threemfDiskPath: null,
+      modelUrl: "/api/files/existing-model.glb",
+      previewGlbUrl: "/api/files/existing-preview.glb",
+    });
+
+    pending.resolve({
+      status: "ok",
+      message: "stale naming preference",
+      download_url: "/api/files/stale-name.3mf",
+      preview_3d_url: "/api/files/stale-name.glb",
+    });
+    await request;
+
+    expect(useConverterStore.getState()).toMatchObject({
+      isGenerating: false,
+      downloadUrl: null,
+      threemfDiskPath: null,
+      modelUrl: "/api/files/existing-model.glb",
+      previewGlbUrl: "/api/files/existing-preview.glb",
+    });
+  });
+
+  it("invalidates a pending regular result after the page switches to puzzle mode", async () => {
+    const pending = deferred<{
+      status: string;
+      message: string;
+      download_url: string;
+      preview_3d_url: string;
+    }>();
+    mocks.convertGenerate.mockReturnValueOnce(pending.promise);
+    seedLegacyGenerateState("session-regular-before-puzzle", {
+      modelUrl: "/api/files/existing-model.glb",
+      previewGlbUrl: "/api/files/existing-preview.glb",
+    });
+
+    const request = useConverterStore.getState().submitGenerate();
+    expect(mocks.convertGenerate).toHaveBeenCalledOnce();
+
+    useConverterStore.setState({ puzzleEnabled: true });
+    useSettingsStore.getState().setPreserveUploadFilenameFor3mf(true);
+
+    expect(useConverterStore.getState()).toMatchObject({
+      isGenerating: false,
+      downloadUrl: null,
+      threemfDiskPath: null,
+      modelUrl: "/api/files/existing-model.glb",
+      previewGlbUrl: "/api/files/existing-preview.glb",
+    });
+
+    pending.resolve({
+      status: "ok",
+      message: "stale regular result",
+      download_url: "/api/files/stale-regular.3mf",
+      preview_3d_url: "/api/files/stale-regular.glb",
+    });
+    await request;
+
+    expect(useConverterStore.getState()).toMatchObject({
+      downloadUrl: null,
+      threemfDiskPath: null,
+      modelUrl: "/api/files/existing-model.glb",
+      previewGlbUrl: "/api/files/existing-preview.glb",
+    });
+  });
+
+  it("keeps a pending large-format result after the page exits large-format mode", async () => {
+    const pending = deferred<{
+      status: string;
+      message: string;
+      download_url: string;
+      tile_count: number;
+      grid_cols: number;
+      grid_rows: number;
+      warnings: string[];
+    }>();
+    mocks.convertGenerateLargeFormat.mockReturnValueOnce(pending.promise);
+    seedLegacyGenerateState("session-large-before-ordinary", {
+      largeFormatEnabled: true,
+      modelUrl: "/api/files/existing-model.glb",
+      previewGlbUrl: "/api/files/existing-preview.glb",
+    });
+
+    const request = useConverterStore.getState().submitGenerate();
+    expect(mocks.convertGenerateLargeFormat).toHaveBeenCalledOnce();
+
+    useConverterStore.setState({ largeFormatEnabled: false });
+    useSettingsStore.getState().setPreserveUploadFilenameFor3mf(true);
+
+    expect(useConverterStore.getState()).toMatchObject({
+      isGenerating: true,
+      downloadUrl: null,
+      modelUrl: "/api/files/existing-model.glb",
+      previewGlbUrl: "/api/files/existing-preview.glb",
+    });
+
+    pending.resolve({
+      status: "ok",
+      message: "large-format result",
+      download_url: "/api/files/large-result.zip",
+      tile_count: 4,
+      grid_cols: 2,
+      grid_rows: 2,
+      warnings: [],
+    });
+    await request;
+
+    expect(useConverterStore.getState()).toMatchObject({
+      isGenerating: false,
+      downloadUrl: "/api/files/large-result.zip",
+      threemfDiskPath: null,
+    });
   });
 
   it("clears loading without applying a stale generate response after only the session changes", async () => {

@@ -429,7 +429,7 @@ describe("convertGenerate", () => {
     fridge_magnets: [],
   };
 
-  it("sends JSON body with session_id and params", async () => {
+  it("defaults the upload-filename preference off in the JSON body", async () => {
     const fakeResponse = {
       status: "ok",
       message: "Model generated",
@@ -444,14 +444,29 @@ describe("convertGenerate", () => {
     const [url, body, config] = mockPost.mock.calls[0];
     expect(url).toBe("/convert/generate");
 
-    // 后端期望 JSON body: { session_id, params }
+    // 后端期望命名偏好位于 params 外层，避免进入模型生成参数。
     expect(body).toEqual({
       session_id: "sess-abc",
+      preserve_upload_filename_for_3mf: false,
       params: generateParams,
     });
 
     expect(config).toMatchObject({ timeout: 0 });
     expect(result).toEqual(fakeResponse);
+  });
+
+  it("sends the enabled upload-filename preference outside params", async () => {
+    mockPost.mockResolvedValueOnce({
+      data: { status: "ok", message: "done", download_url: "/api/files/x" },
+    });
+
+    await convertGenerate("sess-enabled", generateParams, true);
+
+    expect(mockPost.mock.calls[0][1]).toEqual({
+      session_id: "sess-enabled",
+      preserve_upload_filename_for_3mf: true,
+      params: generateParams,
+    });
   });
 
   it("includes optional fields in params when provided", async () => {
@@ -582,6 +597,7 @@ describe("convertGenerate", () => {
     expect(url).toBe("/convert/generate");
     expect(body).toEqual({
       session_id: "sess-native",
+      preserve_upload_filename_for_3mf: false,
       params: nativeParams,
     });
   });

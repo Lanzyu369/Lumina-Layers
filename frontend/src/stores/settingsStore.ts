@@ -5,6 +5,7 @@ import type { UserSettings } from "../api/types";
 import {
   invalidateGeneratedArtifacts,
   invalidatePreviewArtifacts,
+  invalidateSingleItemDownload,
 } from "./generatedArtifactInvalidation";
 import { invalidatePreviewRequest } from "./previewRequestCoordinator";
 
@@ -127,6 +128,7 @@ export interface SettingsState {
   enableFancyLoading: boolean;
   enableWittyLoading: boolean;
   enableCompletionNotifications: boolean;
+  preserveUploadFilenameFor3mf: boolean;
   paletteMode: "swatch" | "card";
   printerModel: string;
   slicerSoftware: string;
@@ -185,6 +187,7 @@ export interface SettingsActions {
   setEnableFancyLoading: (enabled: boolean) => void;
   setEnableWittyLoading: (enabled: boolean) => void;
   setEnableCompletionNotifications: (enabled: boolean) => void;
+  setPreserveUploadFilenameFor3mf: (enabled: boolean) => void;
   setPaletteMode: (mode: "swatch" | "card") => void;
   setPrinterModel: (id: string) => void;
   setSlicerSoftware: (id: string) => void;
@@ -218,6 +221,7 @@ export const DEFAULT_SETTINGS: SettingsState = {
   enableFancyLoading: true,
   enableWittyLoading: true,
   enableCompletionNotifications: false,
+  preserveUploadFilenameFor3mf: false,
   paletteMode: "swatch",
   printerModel: "bambu-h2d",
   slicerSoftware: "BambuStudio",
@@ -444,6 +448,14 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
 
       setEnableCompletionNotifications: (enabled: boolean) =>
         set({ enableCompletionNotifications: enabled }),
+
+      setPreserveUploadFilenameFor3mf: (enabled: boolean) => {
+        if (get().preserveUploadFilenameFor3mf === enabled) {
+          return;
+        }
+        set({ preserveUploadFilenameFor3mf: enabled });
+        invalidateSingleItemDownload();
+      },
 
       setPaletteMode: (mode: "swatch" | "card") => set({ paletteMode: mode }),
 

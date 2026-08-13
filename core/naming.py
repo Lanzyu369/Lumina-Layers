@@ -55,11 +55,61 @@ def _sanitize(name: str) -> str:
 # Legacy uploader/pywebview temporary file prefix pattern: tmp{random}_
 # (e.g. tmpq7esd8mm_photo, tmpud7d8o06_photo)
 _TEMP_PREFIX_RE = re.compile(r"^tmp[a-zA-Z0-9]{4,12}_")
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
+_WINDOWS_RESERVED_NAME_RE = re.compile(
+    r"^(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³]) *(?:\.|$)",
+    re.IGNORECASE,
+)
+_PRESERVED_3MF_EXTENSION = ".3mf"
+_MAX_FILENAME_COMPONENT_BYTES = 255
+_MAX_PRESERVED_3MF_STEM_BYTES = (
+    _MAX_FILENAME_COMPONENT_BYTES - len(_PRESERVED_3MF_EXTENSION.encode("utf-8"))
+)
 
 
 def _strip_temp_prefix(name: str) -> str:
     """去除上传器/pywebview 生成的临时文件名前缀。"""
     return _TEMP_PREFIX_RE.sub("", name)
+
+
+def _truncate_utf8(value: str, max_bytes: int) -> str:
+    """Truncate text to a UTF-8 byte limit without splitting a code point."""
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
+def generate_preserved_upload_3mf_filename(
+    source_basename: str | None,
+) -> str | None:
+    """Build a safe 3MF download name from an uploaded source basename.
+
+    根据上传文件的无扩展名名称生成安全的 3MF 下载文件名。
+
+    Args:
+        source_basename: Extension-free basename captured from upload metadata.
+            从上传元数据中取得的无扩展名文件名。
+
+    Returns:
+        A safe ``.3mf`` filename, or ``None`` when no usable stem remains.
+        安全的 ``.3mf`` 文件名；无法得到有效名称时返回 ``None``。
+    """
+    stem = str(source_basename or "").strip()
+    if not stem:
+        return None
+    stem = _strip_temp_prefix(stem)
+    stem = _CONTROL_CHAR_RE.sub("_", stem)
+    stem = _sanitize(stem).strip(" .")
+    stem = _truncate_utf8(stem, _MAX_PRESERVED_3MF_STEM_BYTES).rstrip(" .")
+    if not stem:
+        return None
+    if _WINDOWS_RESERVED_NAME_RE.match(stem):
+        stem = _truncate_utf8(
+            f"_{stem}",
+            _MAX_PRESERVED_3MF_STEM_BYTES,
+        ).rstrip(" .")
+    return f"{stem}{_PRESERVED_3MF_EXTENSION}"
 
 
 def generate_model_filename(

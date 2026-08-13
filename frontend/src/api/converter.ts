@@ -74,10 +74,15 @@ export async function convertPreview(
 export async function convertGenerate(
   sessionId: string,
   params: ConvertGenerateRequest,
+  preserveUploadFilenameFor3mf = false,
 ): Promise<GenerateResponse> {
   const response = await apiClient.post<GenerateResponse>(
     "/convert/generate",
-    { session_id: sessionId, params },
+    {
+      session_id: sessionId,
+      preserve_upload_filename_for_3mf: preserveUploadFilenameFor3mf,
+      params,
+    },
     { timeout: 0 },
   );
   return response.data;

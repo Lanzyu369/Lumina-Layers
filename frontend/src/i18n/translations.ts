@@ -2680,8 +2680,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "General",
   },
   "settings.category_general_desc": {
-    zh: "通知与界面体验偏好",
-    en: "Notifications and interface preferences",
+    zh: "通知、导出与界面体验偏好",
+    en: "Notifications, exports, and interface preferences",
   },
   "settings.category_conversion": {
     zh: "转换与精度",
@@ -2778,6 +2778,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   "settings.witty_loading_desc": {
     zh: "加载过程中显示轻松的提示语。",
     en: "Show lighthearted messages while a task is loading.",
+  },
+  "settings.preserve_upload_filename_heading": {
+    zh: "导出 3MF 时沿用上传文件名",
+    en: "Use uploaded filename for 3MF exports",
+  },
+  "settings.preserve_upload_filename_description": {
+    zh: "开启后，普通单件生成会把“海报.png”下载为“海报.3mf”。默认关闭；批量、拼图和大画幅继续使用原有名称。",
+    en: "When enabled, a normal single-item export downloads “poster.png” as “poster.3mf”. It is off by default; batch, puzzle, and large-format exports keep their existing names.",
   },
   "settings.cache": {
     zh: "缓存管理",

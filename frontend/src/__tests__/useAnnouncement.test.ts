@@ -27,9 +27,26 @@ function makeEntry(version: string): AnnouncementEntry {
 }
 
 describe("useAnnouncement", () => {
-  it("announces consistent material recipe colours", () => {
-    expect(ANNOUNCEMENTS[0]?.version).toBe("2026-08-08");
+  it("announces the optional uploaded filename setting", () => {
+    expect(ANNOUNCEMENTS[0]?.version).toBe("2026-08-13");
     const items = ANNOUNCEMENTS[0]?.sections.flatMap((section) => section.items) ?? [];
+
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("导出 3MF 时沿用上传文件名") &&
+          item.zh.includes("默认关闭") &&
+          item.zh.includes("批量、拼图和大画幅") &&
+          item.en.includes("Use uploaded filename for 3MF exports") &&
+          item.en.includes("off by default") &&
+          item.en.includes("batch, puzzle, and large-format"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps consistent material recipe colours in announcement history", () => {
+    const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-08-08");
+    const items = entry?.sections.flatMap((section) => section.items) ?? [];
 
     expect(
       items.some(

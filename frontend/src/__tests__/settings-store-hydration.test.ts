@@ -10,6 +10,8 @@ vi.mock("../stores/generatedArtifactInvalidation", () => ({
   registerGeneratedArtifactInvalidator: vi.fn(),
   invalidatePreviewArtifacts: vi.fn(),
   registerPreviewArtifactInvalidator: vi.fn(),
+  invalidateSingleItemDownload: vi.fn(),
+  registerSingleItemDownloadInvalidator: vi.fn(),
 }));
 
 vi.mock("../api/converter", () => ({
@@ -100,6 +102,10 @@ describe("settings store hydration and base-layer modifier wiring", () => {
     expect(
       settingsStoreModule.useSettingsStore.getState()
         .enableCompletionNotifications,
+    ).toBe(false);
+    expect(
+      settingsStoreModule.useSettingsStore.getState()
+        .preserveUploadFilenameFor3mf,
     ).toBe(false);
     expect(settingsStoreModule.useSettingsStore.getState().theme).toBe("dark");
   });
@@ -459,6 +465,7 @@ describe("settings store hydration and base-layer modifier wiring", () => {
     settingsStoreModule.useSettingsStore.setState({
       enableBaseLayerHeightModifier: false,
       svgPixelsPerMm: 18.5,
+      preserveUploadFilenameFor3mf: true,
     });
     converterStoreModule.useConverterStore.setState({
       ...converterStoreModule.DEFAULT_STATE,
@@ -475,6 +482,7 @@ describe("settings store hydration and base-layer modifier wiring", () => {
         enable_base_layer_height_modifier: false,
         svg_pixels_per_mm: 18.5,
       }),
+      true,
     );
   });
 });

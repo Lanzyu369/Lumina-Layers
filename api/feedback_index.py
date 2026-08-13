@@ -531,6 +531,7 @@ def generate_index_markdown(
         "material_delta_e00_tolerance",
         "material_layer_height_mm",
         "material_backing_material_dir_name",
+        "preserve_upload_filename_for_3mf",
     ):
         snapshot_lines.append(f"- {key}: {_safe_str(context.get(key))}")
 
@@ -620,6 +621,13 @@ def generate_summary_text(ticket_id: str, payload: dict[str, Any]) -> str:
     layer_count = context.get("material_layer_count")
     layer_height = context.get("material_layer_height_mm")
     backing = context.get("material_backing_material_dir_name") or "(无)"
+    preserve_upload_filename = context.get("preserve_upload_filename_for_3mf")
+    if preserve_upload_filename is True:
+        upload_filename_line = "沿用上传文件名：开启。"
+    elif preserve_upload_filename is False:
+        upload_filename_line = "沿用上传文件名：关闭。"
+    else:
+        upload_filename_line = "沿用上传文件名：(未采集)。"
 
     action_history = context.get("action_history") or []
     recent = list(_iter_list(action_history))[-5:]
@@ -680,6 +688,7 @@ def generate_summary_text(ticket_id: str, payload: dict[str, Any]) -> str:
         f"\"{description}\"\n\n"
         f"提交时工作流：{active_tab} Tab / {source_version} 模式 / "
         f"颜色模式 {color_mode} / LUT {lut_name}。{material_block}\n\n"
+        f"{upload_filename_line}\n\n"
         f"{workshop_block}"
         f"{advanced_line}\n\n"
         f"最近操作：{' → '.join(action_lines) if action_lines else '(无记录)'}。\n\n"

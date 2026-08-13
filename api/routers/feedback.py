@@ -436,6 +436,7 @@ class BugReportContext(BaseModel):
     )
     material_layer_height_mm: float | None = Field(default=None, ge=0.0, le=10.0)
     material_backing_material_dir_name: str | None = Field(default=None, max_length=128)
+    preserve_upload_filename_for_3mf: bool | None = None
     recent_client_logs: list[dict[str, Any]] = Field(default_factory=list)
 
     # --- Reproducible-bug-reports extensions (Req 2/3/5/6). All optional so

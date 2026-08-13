@@ -44,6 +44,7 @@ describe("collectBugReportContext", () => {
       theme: "dark",
       lastColorMode: "8-Color Max",
       lastLutName: "My LUT",
+      preserveUploadFilenameFor3mf: false,
     });
     useSingleStageStore.setState({
       sessionId: null,
@@ -123,6 +124,7 @@ describe("collectBugReportContext", () => {
       material_delta_e00_tolerance: null,
       material_layer_height_mm: null,
       material_backing_material_dir_name: null,
+      preserve_upload_filename_for_3mf: false,
       recent_client_logs: [],
       action_history: [],
       session_history: [],
@@ -131,6 +133,14 @@ describe("collectBugReportContext", () => {
       advanced_params: null,
       workshop: null,
     });
+  });
+
+  it("captures the uploaded filename export preference for reproduction", () => {
+    useSettingsStore.setState({ preserveUploadFilenameFor3mf: true });
+
+    const context = collectBugReportContext();
+
+    expect(context.preserve_upload_filename_for_3mf).toBe(true);
   });
 
   it("collects only bounded workshop diagnostics while the workshop tab is active", () => {
@@ -714,6 +724,7 @@ describe("collectBugReportContext", () => {
       "material_delta_e00_tolerance",
       "material_layer_height_mm",
       "material_backing_material_dir_name",
+      "preserve_upload_filename_for_3mf",
       "recent_client_logs",
       "action_history",
       "session_history",
