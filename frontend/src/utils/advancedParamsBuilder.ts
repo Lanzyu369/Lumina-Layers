@@ -134,6 +134,13 @@ function buildGeneration(
   options: BuildAdvancedParamsOptions,
 ): AdvancedParamsGeneration {
   const isMaterialSource = state.source_version === "material";
+  const wipeTowerWarningCodes = Array.from(
+    new Set(
+      state.generateWarnings
+        .filter((value) => typeof value === "string" && value.length <= 128)
+        .slice(0, 8),
+    ),
+  );
   return {
     structure_mode: state.structure_mode,
     modeling_mode: state.modeling_mode,
@@ -172,6 +179,9 @@ function buildGeneration(
         ? options.materialDeltaE00Tolerance
         : MATERIAL_DELTA_E00_TOLERANCE_DEFAULT
       : null,
+    ...(wipeTowerWarningCodes.length > 0
+      ? { wipe_tower_warning_codes: wipeTowerWarningCodes }
+      : {}),
   };
 }
 

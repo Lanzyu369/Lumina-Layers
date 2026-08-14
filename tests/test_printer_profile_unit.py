@@ -366,3 +366,36 @@ class TestSlicerTemplateCompatibilityContract:
         assert template["print_compatible_printers"] == [
             template["printer_settings_id"]
         ]
+
+@pytest.mark.parametrize(
+    ("slicer", "nozzle_size"),
+    (
+        ("BambuStudio", "0.4"),
+        ("BambuStudio", "0.2"),
+        ("OrcaSlicer", "0.4"),
+        ("OrcaSlicer", "0.2"),
+    ),
+)
+def test_a1_mini_waiting_temperature_compensation_is_marked_as_flush(
+    slicer: str,
+    nozzle_size: str,
+) -> None:
+    """Keep the purge-chute extrusion out of printable-bed validation.
+
+    保证废料口补偿挤出被标记为冲刷路径，不参与热床边界校验。
+    """
+
+    _PRINTER_TEMPLATE_CACHE.clear()
+    template = load_printer_template(
+        "bambu-a1-mini",
+        slicer=slicer,
+        nozzle_size=nozzle_size,
+    )
+    gcode = str(template["change_filament_gcode"])
+    marker = "Compensate for filament spillage during waiting temperature"
+    marker_offset = gcode.index(marker)
+    flush_start = gcode.rfind("; FLUSH_START", 0, marker_offset)
+    flush_end = gcode.find("; FLUSH_END", marker_offset)
+
+    assert flush_start >= 0
+    assert flush_end > marker_offset

@@ -63,6 +63,7 @@ from core.errors import CachedPreviewAnalysisError
 from core.model_surface.types import ModelSurfaceError
 from core.naming import generate_preserved_upload_3mf_filename
 from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
+from core.wipe_tower_placement import WIPE_TOWER_MANUAL_WARNING_CODE
 from utils.merged_bambu_3mf_writer import (
     MergedBambu3MFWriter,
     MergedItem,
@@ -97,6 +98,7 @@ from core.material_dynamic_solver import (
     DynamicMaterialSolverError,
 )
 from core.single_stage import record_material_usage
+from utils.bambu_3mf_writer import read_wipe_tower_placement_warnings
 from utils.lut_manager import LUTManager
 
 from .common import (
@@ -143,6 +145,10 @@ BATCH_PREVIEW_LIMIT_FALLBACK_MESSAGE: str = (
 BATCH_PREVIEW_UNAVAILABLE_MESSAGE: str = (
     "批量 3MF 下载已生成；网页 3D 预览暂不可用 / The batch 3MF download "
     "is ready; the browser 3D preview is temporarily unavailable."
+)
+BATCH_WIPE_TOWER_MANUAL_ADJUSTMENT_MESSAGE: str = (
+    "文件已继续生成，但当前模型和擦料塔无法在所选热床上同时安全摆放。"
+    "请务必在切片软件中手动移动模型，或调整擦料塔的宽度和位置后再打印。"
 )
 LARGE_FORMAT_GENERATION_FAILED_DETAIL: str = (
     "Large-format generation failed. Try again or check the server log for details."
@@ -2250,6 +2256,8 @@ async def convert_generate(
             surface_overlay=uses_surface_overlay,
         )
 
+    placement_warnings = read_wipe_tower_placement_warnings(threemf_path)
+
     # Register output files via FileRegistry
     sid = body.session_id
     preview_3d_url: str | None = None
@@ -2377,6 +2385,7 @@ async def convert_generate(
         download_url=f"/api/files/{download_id}",
         preview_3d_url=preview_3d_url,
         threemf_disk_path=None,
+        warnings=placement_warnings,
         performance_timing=performance_timing,
     )
 
@@ -4361,6 +4370,16 @@ async def convert_batch(
             plate_width_mm=plate_width_mm,
             plate_depth_mm=plate_depth_mm,
         )
+
+        for warning_code in read_wipe_tower_placement_warnings(merged_3mf_path):
+            if warning_code != WIPE_TOWER_MANUAL_WARNING_CODE:
+                continue
+            warnings.append(
+                WarningEntry(
+                    code=warning_code,
+                    message=BATCH_WIPE_TOWER_MANUAL_ADJUSTMENT_MESSAGE,
+                )
+            )
 
         # Step 4: FileRegistry registration
         stage = "file_registry"

@@ -23,7 +23,10 @@ import pytest
 import trimesh
 
 from config import TEMP_DIR
-from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
+from utils.bambu_3mf_writer import (
+    export_scene_with_bambu_metadata,
+    read_wipe_tower_placement_warnings,
+)
 from utils.merged_bambu_3mf_writer import (
     MergedBambu3MFWriter,
     MergedItem,
@@ -38,6 +41,11 @@ def _make_source_3mf(
     offset_x: float = 0.0,
     offset_y: float = 0.0,
     *,
+    width_mm: float = 10.0,
+    depth_mm: float = 8.0,
+    height_mm: float = 2.0,
+    printer_id: str = "bambu-h2d",
+    slicer: str = "BambuStudio",
     enable_base_layer_height_modifier: bool = False,
     backing_infill_density_percent: int = 100,
     base_height_mm: float = 0.8,
@@ -46,8 +54,14 @@ def _make_source_3mf(
     """Create a minimal real Bambu 3MF with one slot."""
     os.makedirs(TEMP_DIR, exist_ok=True)
     scene = trimesh.Scene()
-    box = trimesh.creation.box(extents=[10.0, 8.0, 2.0])
-    box.apply_translation([offset_x + 5.0, offset_y + 4.0, 1.0])
+    box = trimesh.creation.box(extents=[width_mm, depth_mm, height_mm])
+    box.apply_translation(
+        [
+            offset_x + width_mm / 2.0,
+            offset_y + depth_mm / 2.0,
+            height_mm / 2.0,
+        ]
+    )
     box.metadata["bambu_material_name"] = "Bambu PLA Black"
     scene.add_geometry(box, geom_name="Bambu PLA Black")
 
@@ -60,6 +74,8 @@ def _make_source_3mf(
         preview_colors={"Bambu PLA Black": (16, 16, 16, 255)},
         settings={},
         color_mode="4-Color",
+        printer_id=printer_id,
+        slicer=slicer,
         enable_base_layer_height_modifier=enable_base_layer_height_modifier,
         base_height_mm=base_height_mm,
         color_height_mm=color_height_mm,
@@ -344,6 +360,115 @@ class TestMergedWriterBambuCompatibility:
                     p.unlink(missing_ok=True)
                 except OSError:
                     pass
+
+    def test_merged_output_recomputes_wipe_tower_for_full_group(self) -> None:
+        src1 = _make_source_3mf(
+            width_mm=50.0,
+            depth_mm=60.0,
+            printer_id="bambu-a1-mini",
+        )
+        src2 = _make_source_3mf(
+            width_mm=50.0,
+            depth_mm=60.0,
+            printer_id="bambu-a1-mini",
+        )
+        items = [
+            MergedItem(
+                source_filename="left.png",
+                source_3mf_path=src1,
+                slots=(MaterialSlot(0, "Black", "#101010", "GFL00"),),
+                tx_mm=10.0,
+                ty_mm=10.0,
+            ),
+            MergedItem(
+                source_filename="right.png",
+                source_3mf_path=src2,
+                slots=(MaterialSlot(0, "Black", "#101010", "GFL00"),),
+                tx_mm=120.0,
+                ty_mm=10.0,
+            ),
+        ]
+        fd, out_path = tempfile.mkstemp(
+            suffix=".3mf",
+            dir=TEMP_DIR,
+            prefix="integ_wipe_group_",
+        )
+        os.close(fd)
+
+        try:
+            MergedBambu3MFWriter().write(
+                items,
+                Path(out_path),
+                plate_width_mm=180.0,
+                plate_depth_mm=180.0,
+            )
+
+            with zipfile.ZipFile(out_path) as package:
+                placement = json.loads(
+                    package.read("Metadata/lumina_wipe_tower_placement.json")
+                )
+                settings = json.loads(
+                    package.read("Metadata/project_settings.config")
+                )
+
+            model_bounds = placement["model_bounds_mm"]
+            model_outer = placement["model_outer_bounds_mm"]
+            tower_outer = placement["tower"]["outer_bounds_mm"]
+            assert model_bounds[2] - model_bounds[0] == pytest.approx(160.0)
+            assert model_bounds[3] - model_bounds[1] == pytest.approx(60.0)
+            assert placement["requires_manual_adjustment"] is False
+            assert settings["enable_prime_tower"] == "1"
+            assert float(settings["wipe_tower_x"][0]) == pytest.approx(
+                placement["tower"]["x_mm"]
+            )
+            assert float(settings["wipe_tower_y"][0]) == pytest.approx(
+                placement["tower"]["y_mm"]
+            )
+            assert (
+                model_outer[2] <= tower_outer[0]
+                or tower_outer[2] <= model_outer[0]
+                or model_outer[3] <= tower_outer[1]
+                or tower_outer[3] <= model_outer[1]
+            )
+            assert read_wipe_tower_placement_warnings(out_path) == []
+        finally:
+            for path in (src1, src2, Path(out_path)):
+                path.unlink(missing_ok=True)
+
+    def test_impossible_merged_layout_embeds_manual_warning(self) -> None:
+        source = _make_source_3mf(
+            width_mm=179.0,
+            depth_mm=179.0,
+            printer_id="bambu-a1-mini",
+        )
+        item = MergedItem(
+            source_filename="full-bed.png",
+            source_3mf_path=source,
+            slots=(MaterialSlot(0, "Black", "#101010", "GFL00"),),
+            tx_mm=0.5,
+            ty_mm=0.5,
+        )
+        fd, out_path = tempfile.mkstemp(
+            suffix=".3mf",
+            dir=TEMP_DIR,
+            prefix="integ_wipe_manual_",
+        )
+        os.close(fd)
+
+        try:
+            MergedBambu3MFWriter().write(
+                [item],
+                Path(out_path),
+                plate_width_mm=180.0,
+                plate_depth_mm=180.0,
+            )
+
+            assert read_wipe_tower_placement_warnings(out_path) == [
+                "wipe_tower_manual_adjustment_required"
+            ]
+        finally:
+            source.unlink(missing_ok=True)
+            Path(out_path).unlink(missing_ok=True)
 
     def test_project_process_and_filament_presets_are_preserved(self) -> None:
         """Merged 3MF keeps source project process/device/filament presets."""

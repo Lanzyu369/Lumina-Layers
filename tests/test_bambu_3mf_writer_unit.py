@@ -1840,6 +1840,28 @@ def test_bambu_h2c_extends_beyond_native_slots_without_group_vector_bloat() -> N
 
 
 class TestAnycubicWriterMetadata:
+    def test_project_process_targets_selected_orca_printer(self) -> None:
+        writer = BambuStudio3MFWriter(
+            "orca-a1-mini.3mf",
+            settings={},
+            color_mode="4-Color",
+            printer_id="bambu-a1-mini",
+            slicer="OrcaSlicer",
+        )
+        writer.add_mesh(
+            trimesh.creation.box(extents=[1, 1, 1]),
+            "White",
+            (255, 255, 255),
+        )
+
+        settings = json.loads(
+            writer._build_project_settings_bytes().decode("utf-8")
+        )
+
+        assert settings["print_compatible_printers"] == [
+            settings["printer_settings_id"]
+        ]
+
     def test_writer_base_template_uses_selected_nozzle_size_variant(self) -> None:
         writer = BambuStudio3MFWriter(
             "selected-nozzle.3mf",

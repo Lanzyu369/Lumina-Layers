@@ -332,6 +332,13 @@ def _format_advanced_params_section(context: dict[str, Any]) -> str:
     lines.append(f"- structure_mode: {_safe_str(structure_mode)}")
     lines.append(f"- modeling_mode: {_safe_str(modeling_mode)}")
     lines.append(f"- svg_pixels_per_mm: {_safe_str(svg_pixels_per_mm)}")
+    if isinstance(generation, dict):
+        warning_codes = generation.get("wipe_tower_warning_codes")
+        if isinstance(warning_codes, list) and warning_codes:
+            lines.append(
+                "- wipe_tower_warning_codes: "
+                + ", ".join(_safe_str(code) for code in warning_codes[:8])
+            )
 
     # Feature toggle states.
     for group_key, toggle_key in _INDEX_TOGGLE_GROUPS:

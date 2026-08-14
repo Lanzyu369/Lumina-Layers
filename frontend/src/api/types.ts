@@ -435,6 +435,7 @@ export interface GenerateResponse {
   download_url: string;
   preview_3d_url?: string;
   threemf_disk_path?: string;
+  warnings?: string[];
   performance_timing?: PerformanceTiming | null;
 }
 
@@ -1742,7 +1743,11 @@ export interface BatchItemResult {
  */
 export interface WarningEntry {
   /** Stable machine-readable warning code; routes the i18n key on the frontend. */
-  code: "plate-overflow" | "preview-limited" | (string & {});
+  code:
+    | "plate-overflow"
+    | "preview-limited"
+    | "wipe_tower_manual_adjustment_required"
+    | (string & {});
   /** Server-rendered human-readable text; only used as fallback. */
   message: string;
 }

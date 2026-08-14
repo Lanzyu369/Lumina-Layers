@@ -31,6 +31,13 @@ from core.backing_infill import (
     normalize_backing_infill_density_percent,
     resolve_effective_backing_infill_density_percent,
 )
+from core.wipe_tower_placement import (
+    Rect,
+    WIPE_TOWER_MANUAL_WARNING_CODE,
+    WipeTowerPlacementRequest,
+    WipeTowerPlacementResult,
+    solve_wipe_tower_placement,
+)
 from utils.bambu_3mf_cover import (
     COVER_PLATE_SPECS,
     COVER_THUMBNAIL_SPECS,
@@ -49,6 +56,15 @@ _PREVIEW_PLACEHOLDER_PNG_BYTES: Optional[bytes] = None
 _RAW_ZIP_COPY_CHUNK_SIZE = 1024 * 1024
 _LAYER_HEIGHT_GRID_MM = 0.02
 _MAX_LAYER_HEIGHT_NOZZLE_RATIO = 0.7
+_CREATOR_5_PRINTER_IDS = frozenset(
+    {"flashforge-creator-5", "flashforge-creator-5-pro"}
+)
+_CREATOR_5_TOWER_MIN_FOOTPRINT_WIDTH_MM = 58.5
+_CREATOR_5_TOWER_MIN_DEPTH_MM = 61.0
+_CREATOR_5_MODEL_TOWER_CLEARANCE_MM = 7.5
+_ANYCUBIC_TOWER_MIN_FOOTPRINT_WIDTH_MM = 50.0
+_ANYCUBIC_TOWER_MIN_DEPTH_MM = 57.5
+_ELEGOO_CC2_PREFERRED_TOP_EDGE_CLEARANCE_MM = 32.0
 
 
 def _get_trimesh():
@@ -686,6 +702,43 @@ def _find_template_filament_index(template_settings: dict, profile: _FilamentPro
     return None
 
 
+def _mark_purge_chute_compensation_as_flush(template: dict[str, Any]) -> dict[str, Any]:
+    """Exclude purge-chute extrusion from printable-bed path validation.
+
+    将废料口补偿挤出标记为冲刷路径，避免切片器把机外废料口误判为热床外模型路径。
+    """
+
+    gcode = template.get("change_filament_gcode")
+    marker = "Compensate for filament spillage during waiting temperature"
+    if not isinstance(gcode, str) or marker not in gcode:
+        return template
+
+    normalized_lines: list[str] = []
+    flush_active = False
+    changed = False
+    for line in gcode.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped == "; FLUSH_START":
+            flush_active = True
+        elif stripped == "; FLUSH_END":
+            flush_active = False
+
+        if marker in line and not flush_active:
+            newline = "\r\n" if line.endswith("\r\n") else "\n"
+            normalized_lines.append(f"; FLUSH_START{newline}")
+            normalized_lines.append(line)
+            normalized_lines.append(f"; FLUSH_END{newline}")
+            changed = True
+        else:
+            normalized_lines.append(line)
+
+    if not changed:
+        return template
+    normalized = copy.deepcopy(template)
+    normalized["change_filament_gcode"] = "".join(normalized_lines)
+    return normalized
+
+
 def _find_template_default_filament_index(template_settings: dict) -> int:
     for key in ("filament_type", "filament_settings_id"):
         value = template_settings.get(key)
@@ -891,6 +944,45 @@ def _validate_trimmed_project_filament_arrays(
                     f"project filament array '{key}' has {len(value)} entries; "
                     f"expected a multiple of {material_count}"
                 )
+
+
+def _collapse_orca_linear_arrays(
+    settings: dict,
+    material_count: int,
+    *,
+    template_settings: dict,
+) -> None:
+    """Collapse Orca's dual-variant arrays to one value per active slot.
+
+    对 Orca 项目按实际启用槽位收敛双变体数组。Orca 的项目校验按实际耗材
+    槽位解释这些数组；保留双变体长度会把未启用的变体当成越界项，导致
+    5/6/8 色项目在切片前被温度保护拦截。
+    """
+
+    if material_count <= 0:
+        return
+    template_count = _template_filament_count(template_settings)
+    if template_count <= 0 or material_count > template_count:
+        return
+
+    linear_keys = {
+        "flush_volumes_vector",
+        "long_retractions_when_ec",
+        "retraction_distances_when_ec",
+        "volumetric_speed_coefficients",
+    }
+    for key, value in list(settings.items()):
+        if not isinstance(value, list) or len(value) <= material_count:
+            continue
+        if not (key.startswith("filament_") or key in linear_keys):
+            continue
+        if len(value) % material_count != 0:
+            continue
+        group_size = len(value) // material_count
+        settings[key] = [
+            copy.deepcopy(value[index * group_size])
+            for index in range(material_count)
+        ]
 
 
 def _apply_filament_array_overrides(
@@ -1518,6 +1610,7 @@ def load_printer_template(
                 )
             else:
                 template = registry_template
+            template = _mark_purge_chute_compensation_as_flush(template)
             _PRINTER_TEMPLATE_CACHE[cache_key] = template
             log.debug(
                 "Loaded printer template from machine registry",
@@ -1550,6 +1643,7 @@ def load_printer_template(
     if os.path.exists(profile_path):
         with open(profile_path, "r", encoding="utf-8") as f:
             template = json.load(f)
+        template = _mark_purge_chute_compensation_as_flush(template)
         _PRINTER_TEMPLATE_CACHE[cache_key] = template
         log.debug(
             "Loaded printer template",
@@ -1568,6 +1662,7 @@ def load_printer_template(
     if os.path.exists(fallback_path):
         with open(fallback_path, "r", encoding="utf-8") as f:
             template = json.load(f)
+        template = _mark_purge_chute_compensation_as_flush(template)
         _PRINTER_TEMPLATE_CACHE[cache_key] = template
         log.warning(
             "Printer template not found; using fallback",
@@ -1786,6 +1881,7 @@ class BambuStudio3MFWriter:
         self.cover_source: "str | bytes | Image.Image | None" = cover_source
         self.cover_bundle: Optional[CoverPngBundle] = None
         self.preserve_template_filament_slots = preserve_template_filament_slots
+        self._wipe_tower_placement_cache: WipeTowerPlacementResult | None = None
 
     def add_mesh(self, mesh: _get_trimesh().Trimesh, name: str, color_rgb: tuple):
         """Add a mesh object to the scene.
@@ -1816,6 +1912,7 @@ class BambuStudio3MFWriter:
                 color_rgb=tuple(int(channel) for channel in color_rgb[:3]),
             )
         )
+        self._wipe_tower_placement_cache = None
 
     def _set_project_palette(self, slot_names: list[str], preview_colors: Dict) -> None:
         """Configure the project-wide palette used for exported metadata.
@@ -1825,6 +1922,7 @@ class BambuStudio3MFWriter:
 
         self._project_slot_names = [str(name) for name in slot_names if str(name)]
         self._project_preview_colors = dict(preview_colors or {})
+        self._wipe_tower_placement_cache = None
 
     def _build_object_material_palette(self) -> tuple[list[tuple[str, tuple[int, int, int]]], dict[str, int]]:
         """Build the compact material palette from queued mesh objects only.
@@ -2145,6 +2243,366 @@ class BambuStudio3MFWriter:
         except ValueError:
             return None
 
+    @staticmethod
+    def _parse_config_float(value: object, default: float = 0.0) -> float:
+        """Read the first numeric scalar from a slicer config value.
+
+        从切片器配置值中读取首个数值标量。
+        """
+
+        candidate = value[0] if isinstance(value, list) and value else value
+        try:
+            return float(candidate)
+        except (TypeError, ValueError):
+            return float(default)
+
+    @classmethod
+    def _parse_config_percent_ratio(
+        cls,
+        value: object,
+        default: float = 1.0,
+    ) -> float:
+        """Parse slicer percentages as a multiplier. / 将切片器百分比解析为倍率。"""
+
+        candidate = value[0] if isinstance(value, list) and value else value
+        text = str(candidate or "").strip()
+        is_percent = text.endswith("%")
+        if is_percent:
+            text = text[:-1].strip()
+        parsed = cls._parse_config_float(text, default)
+        if is_percent or parsed > 10.0:
+            parsed /= 100.0
+        return max(0.01, parsed)
+
+    @classmethod
+    def _parse_config_polygon(cls, value: object) -> tuple[tuple[float, float], ...]:
+        """Parse a flat ``["XxY", ...]`` polygon. / 解析扁平坐标多边形。"""
+
+        if not isinstance(value, list):
+            return ()
+        return tuple(
+            point
+            for point in (cls._parse_printable_area_point(item) for item in value)
+            if point is not None
+        )
+
+    @classmethod
+    def _parse_bed_exclusion_polygons(
+        cls,
+        value: object,
+    ) -> tuple[tuple[tuple[float, float], ...], ...]:
+        """Parse rectangular bed-exclusion groups, ignoring degenerate sentinels.
+
+        解析热床禁用矩形，并忽略 ``["0x0"]`` 一类退化占位值。
+        """
+
+        points = cls._parse_config_polygon(value)
+        if len(points) < 3:
+            return ()
+        if len(points) <= 4:
+            return (points,)
+        if len(points) % 4 == 0:
+            return tuple(
+                tuple(points[index : index + 4])
+                for index in range(0, len(points), 4)
+            )
+        return (points,)
+
+    @classmethod
+    def _parse_extruder_printable_polygons(
+        cls,
+        value: object,
+    ) -> tuple[tuple[tuple[float, float], ...], ...]:
+        """Parse per-extruder comma-separated printable polygons.
+
+        解析每个挤出头以逗号分隔的可打印多边形。
+        """
+
+        if not isinstance(value, list):
+            return ()
+        polygons: list[tuple[tuple[float, float], ...]] = []
+        for item in value:
+            tokens = [token.strip() for token in str(item or "").split(",")]
+            points = tuple(
+                point
+                for point in (cls._parse_printable_area_point(token) for token in tokens)
+                if point is not None
+            )
+            if len(points) >= 3:
+                polygons.append(points)
+        return tuple(polygons)
+
+    @staticmethod
+    def _replace_first_config_number(value: object, number: float) -> object:
+        """Preserve a config value's scalar/list shape while replacing slot zero.
+
+        保留配置值的标量或列表形态，仅替换第一个槽位。
+        """
+
+        formatted = BambuStudio3MFWriter._format_number(number)
+        if isinstance(value, list):
+            result = list(value)
+            if result:
+                result[0] = formatted
+            else:
+                result.append(formatted)
+            return result
+        return formatted
+
+    def _resolve_tower_purge_volume(self, template: dict[str, Any]) -> float:
+        """Resolve the slicer-family purge scalar used for footprint planning.
+
+        解析对应切片器用于占地估算的冲刷体积标量。
+        """
+
+        filament_prime_values = template.get("filament_prime_volume")
+
+        def _positive_filament_prime_values() -> list[float]:
+            if not isinstance(filament_prime_values, list):
+                return []
+            parsed = [
+                self._parse_config_float(item, 0.0)
+                for item in filament_prime_values
+            ]
+            return [value for value in parsed if value > 0.0]
+
+        positive_filament_values = _positive_filament_prime_values()
+        if self.slicer == "BambuStudio" and positive_filament_values:
+            # These template values are not persisted as a project override,
+            # so Bambu Studio resolves its native 45 mm3 material default when
+            # the embedded value is lower. Plan against the effective sliced
+            # value, not the under-sized project preview scalar.
+            return max(45.0, max(positive_filament_values))
+
+        prime_volume = self._parse_config_float(template.get("prime_volume"), -1.0)
+        if prime_volume > 0.0:
+            return prime_volume
+        if positive_filament_values:
+            return max(positive_filament_values)
+        values = template.get("flush_volumes_vector")
+        if isinstance(values, list):
+            parsed = [
+                self._parse_config_float(item, 0.0)
+                for item in values
+            ]
+            positive = [value for value in parsed if value > 0.0]
+            if positive:
+                return max(positive)
+        return 45.0
+
+    def _resolve_tower_extruder_count(self, template: dict[str, Any]) -> int:
+        nozzle_diameters = template.get("nozzle_diameter")
+        if isinstance(nozzle_diameters, list) and nozzle_diameters:
+            return len(nozzle_diameters)
+        return 1
+
+    def _resolve_filament_change_volume(self, template: dict[str, Any]) -> float:
+        lengths = template.get("filament_change_length")
+        length_values = lengths if isinstance(lengths, list) else [lengths]
+        max_length = max(
+            (self._parse_config_float(value, 0.0) for value in length_values),
+            default=0.0,
+        )
+        diameters = template.get("filament_diameter")
+        diameter_values = diameters if isinstance(diameters, list) else [diameters]
+        max_diameter = max(
+            (self._parse_config_float(value, 0.0) for value in diameter_values),
+            default=1.75,
+        )
+        if max_diameter <= 0.0:
+            max_diameter = 1.75
+        return max_length * math.pi * max_diameter * max_diameter / 4.0
+
+    def _resolve_tower_brim_width(
+        self,
+        template: dict[str, Any],
+        model_height: float,
+    ) -> float:
+        """Resolve fixed or automatic prime-tower brim width.
+
+        解析固定或自动计算的擦料塔裙边宽度。
+        """
+
+        brim = self._parse_config_float(template.get("prime_tower_brim_width"), 0.0)
+        if brim >= 0.0:
+            return brim
+        return min(8.0, max(0.0, model_height) / 100.0 * 8.0)
+
+    def _resolve_model_brim_width(self, template: dict[str, Any]) -> float:
+        """Return the active model brim reservation. / 返回模型实际裙边预留。"""
+
+        brim_type = str(
+            self.settings.get("brim_type", template.get("brim_type", ""))
+        ).strip().lower()
+        if brim_type in {"no_brim", "none", "0"}:
+            return 0.0
+        brim_value = self.settings.get("brim_width", template.get("brim_width"))
+        return max(0.0, self._parse_config_float(brim_value, 0.0))
+
+    def _build_wipe_tower_placement_request(
+        self,
+        template: dict[str, Any],
+        *,
+        model_bounds: Rect,
+        model_height: float,
+        material_count: int,
+    ) -> WipeTowerPlacementRequest | None:
+        """Build one placement request from a template and arbitrary bounds.
+
+        根据模板和任意模型包围盒构建一次擦料塔布局请求；单件导出和批量合并
+        共用同一套机型/切片器边界规则。
+        """
+
+        printable_area = self._parse_config_polygon(template.get("printable_area"))
+        if len(printable_area) < 3:
+            return None
+
+        uses_creator_5_tower_interface = (
+            self.slicer == "FlashStudio"
+            and self.printer_id in _CREATOR_5_PRINTER_IDS
+        )
+        uses_anycubic_tower_interface = self._is_anycubic_slicer()
+        uses_native_tower_envelope = (
+            uses_creator_5_tower_interface or uses_anycubic_tower_interface
+        )
+        tower_width = max(
+            2.0,
+            self._parse_config_float(template.get("prime_tower_width"), 35.0),
+        )
+        request = WipeTowerPlacementRequest(
+            printable_area=printable_area,
+            bed_exclusions=self._parse_bed_exclusion_polygons(
+                template.get("bed_exclude_area")
+            ),
+            extruder_printable_areas=self._parse_extruder_printable_polygons(
+                template.get("extruder_printable_area")
+            ),
+            model_bounds=model_bounds,
+            model_height=max(0.0, float(model_height)),
+            model_brim=self._resolve_model_brim_width(template),
+            material_count=max(1, int(material_count)),
+            layer_height=max(
+                0.01,
+                self._parse_config_float(
+                    self.settings.get("layer_height"),
+                    self._parse_config_float(template.get("layer_height"), 0.08),
+                ),
+            ),
+            nozzle_diameter=max(0.1, self._parse_config_float(self.nozzle_size, 0.4)),
+            purge_volume=self._resolve_tower_purge_volume(template),
+            tower_x=self._parse_config_float(template.get("wipe_tower_x"), 15.0),
+            tower_y=self._parse_config_float(template.get("wipe_tower_y"), 220.0),
+            tower_width=tower_width,
+            tower_rotation=self._parse_config_float(
+                template.get("wipe_tower_rotation_angle"), 0.0
+            ),
+            tower_brim=(
+                0.0
+                if uses_native_tower_envelope
+                else self._resolve_tower_brim_width(template, model_height)
+            ),
+            tower_infill_spacing_ratio=self._parse_config_percent_ratio(
+                template.get("prime_tower_infill_gap"),
+                1.0,
+            ),
+            extruder_count=self._resolve_tower_extruder_count(template),
+            filament_change_volume=self._resolve_filament_change_volume(template),
+            model_tower_clearance=(
+                _CREATOR_5_MODEL_TOWER_CLEARANCE_MM
+                if uses_creator_5_tower_interface
+                else 8.0
+            ),
+            edge_clearance=(0.0 if uses_native_tower_envelope else 2.0),
+            preferred_edge_clearance=4.0,
+            preferred_top_edge_clearance=(
+                _ELEGOO_CC2_PREFERRED_TOP_EDGE_CLEARANCE_MM
+                if self.printer_id == "elegoo-cc2"
+                else 0.0
+            ),
+            prefer_vertical_strip=(self.printer_id == "bambu-a1-mini"),
+            minimum_tower_footprint_width=(
+                _CREATOR_5_TOWER_MIN_FOOTPRINT_WIDTH_MM
+                if uses_creator_5_tower_interface
+                else (
+                    _ANYCUBIC_TOWER_MIN_FOOTPRINT_WIDTH_MM
+                    if uses_anycubic_tower_interface
+                    else 0.0
+                )
+            ),
+            minimum_tower_depth=(
+                _CREATOR_5_TOWER_MIN_DEPTH_MM
+                if uses_creator_5_tower_interface
+                else (
+                    _ANYCUBIC_TOWER_MIN_DEPTH_MM
+                    if uses_anycubic_tower_interface
+                    else 0.0
+                )
+            ),
+        )
+        return request
+
+    def _get_wipe_tower_placement(self) -> WipeTowerPlacementResult | None:
+        """Resolve and cache the joint model/tower placement.
+
+        联合求解并缓存模型与擦料塔摆放结果；安全模板保持原样，无解时仅标记
+        需要人工调整，绝不缩放模型或关闭擦料塔。
+        """
+
+        if self._wipe_tower_placement_cache is not None:
+            return self._wipe_tower_placement_cache
+        if not self.objects:
+            return None
+
+        template = self._get_base_config_template()
+        bounds_min, bounds_max = self._get_mesh_bounds()
+        request = self._build_wipe_tower_placement_request(
+            template,
+            model_bounds=Rect(
+                float(bounds_min[0]),
+                float(bounds_min[1]),
+                float(bounds_max[0]),
+                float(bounds_max[1]),
+            ),
+            model_height=float(bounds_max[2] - bounds_min[2]),
+            material_count=len(self._build_material_palette()[0]),
+        )
+        if request is None:
+            return None
+
+        placement = solve_wipe_tower_placement(request)
+        self._wipe_tower_placement_cache = placement
+        if placement.requires_manual_adjustment:
+            log.warning(
+                "No collision-free model and wipe-tower layout fits the selected bed",
+                extra={
+                    "event": "wipe_tower_manual_adjustment_required",
+                    "error_type": "WipeTowerPlacementUnavailable",
+                    "error_message": (
+                        "Generated without scaling the model or disabling the wipe tower; "
+                        "manual slicer adjustment is required."
+                    ),
+                    "path": self.output_path,
+                    "printer_id": self.printer_id,
+                    "slicer": self.slicer,
+                    "model_width_mm": round(request.model_bounds.width, 3),
+                    "model_depth_mm": round(request.model_bounds.height, 3),
+                },
+            )
+        else:
+            log.debug(
+                "Resolved model and wipe-tower placement",
+                extra={
+                    "event": "wipe_tower_placement_resolved",
+                    "path": self.output_path,
+                    "printer_id": self.printer_id,
+                    "slicer": self.slicer,
+                    "adapted": placement.adapted,
+                    "tower_width_mm": round(placement.tower_width, 3),
+                    "tower_rotation_deg": round(placement.tower_rotation, 3),
+                },
+            )
+        return placement
+
     def _get_printable_area_center(self) -> tuple[float, float] | None:
         settings = self._get_base_config_template()
         raw_area = settings.get("printable_area")
@@ -2180,14 +2638,18 @@ class BambuStudio3MFWriter:
 
     def _get_build_item_translation(self) -> tuple[float, float, float]:
         bounds_min, bounds_max = self._get_mesh_bounds()
-        model_center = (bounds_min + bounds_max) / 2.0
-        bed_center = self._get_printable_area_center()
-        if bed_center is None:
-            translate_x = 0.0
-            translate_y = 0.0
+        placement = self._get_wipe_tower_placement()
+        if placement is not None:
+            translate_x, translate_y = placement.model_translation
         else:
-            translate_x = float(bed_center[0] - model_center[0])
-            translate_y = float(bed_center[1] - model_center[1])
+            model_center = (bounds_min + bounds_max) / 2.0
+            bed_center = self._get_printable_area_center()
+            if bed_center is None:
+                translate_x = 0.0
+                translate_y = 0.0
+            else:
+                translate_x = float(bed_center[0] - model_center[0])
+                translate_y = float(bed_center[1] - model_center[1])
         translate_z = float(-bounds_min[2])
         return translate_x, translate_y, translate_z
 
@@ -2221,6 +2683,11 @@ class BambuStudio3MFWriter:
             ),
             ("Metadata/project_settings.config", "text/xml", self._build_project_settings_bytes()),
             ("Metadata/slice_info.config", "text/xml", self._build_slice_info_bytes()),
+            (
+                "Metadata/lumina_wipe_tower_placement.json",
+                "application/json",
+                self._build_wipe_tower_placement_metadata_bytes(),
+            ),
         ]
         if self._is_anycubic_slicer():
             parts.append(
@@ -2802,6 +3269,73 @@ class BambuStudio3MFWriter:
         tree.write(buf, encoding="utf-8", xml_declaration=False)
         return buf.getvalue()
 
+    def _build_wipe_tower_placement_metadata_bytes(self) -> bytes:
+        """Serialize Lumina's derived placement and manual-warning state.
+
+        序列化 Lumina 推导出的摆放结果及人工调整警告状态。
+        """
+
+        placement = self._get_wipe_tower_placement()
+        if placement is None:
+            log.warning(
+                "Printable area unavailable for wipe-tower validation",
+                extra={
+                    "event": "wipe_tower_manual_adjustment_required",
+                    "error_type": "PrintableAreaUnavailable",
+                    "error_message": (
+                        "Generated without scaling the model or disabling the wipe tower; "
+                        "manual slicer validation is required."
+                    ),
+                    "path": self.output_path,
+                    "printer_id": self.printer_id,
+                    "slicer": self.slicer,
+                },
+            )
+            payload: dict[str, Any] = {
+                "schema_version": 1,
+                "available": False,
+                "adapted": False,
+                "requires_manual_adjustment": True,
+                "warning_code": WIPE_TOWER_MANUAL_WARNING_CODE,
+                "reason": "printable_area_unavailable",
+            }
+        else:
+            payload = {
+                "schema_version": 1,
+                "available": True,
+                "adapted": placement.adapted,
+                "requires_manual_adjustment": placement.requires_manual_adjustment,
+                "warning_code": placement.warning_code,
+                "reason": placement.reason,
+                "model_translation_mm": list(placement.model_translation),
+                "model_bounds_mm": [
+                    placement.model_bounds.left,
+                    placement.model_bounds.bottom,
+                    placement.model_bounds.right,
+                    placement.model_bounds.top,
+                ],
+                "model_outer_bounds_mm": [
+                    placement.model_outer_bounds.left,
+                    placement.model_outer_bounds.bottom,
+                    placement.model_outer_bounds.right,
+                    placement.model_outer_bounds.top,
+                ],
+                "tower": {
+                    "x_mm": placement.tower_x,
+                    "y_mm": placement.tower_y,
+                    "width_mm": placement.tower_width,
+                    "estimated_depth_mm": placement.tower_depth,
+                    "rotation_deg": placement.tower_rotation,
+                    "outer_bounds_mm": [
+                        placement.tower_outer_bounds.left,
+                        placement.tower_outer_bounds.bottom,
+                        placement.tower_outer_bounds.right,
+                        placement.tower_outer_bounds.top,
+                    ],
+                },
+            }
+        return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+
     def _build_project_settings_bytes(self) -> bytes:
         """Build project_settings.config JSON as bytes.
         构建 project_settings.config JSON（字节形式）。
@@ -2810,6 +3344,12 @@ class BambuStudio3MFWriter:
         num_colors = len(material_palette)
 
         settings = self._get_base_config_template()
+        printer_settings_id = settings.get("printer_settings_id")
+        if isinstance(printer_settings_id, str) and printer_settings_id.strip():
+            # A project-scoped Lumina process must be valid for the machine
+            # selected for this export. Stale template compatibility lists can
+            # otherwise make Orca-family slicers reject the file before slicing.
+            settings["print_compatible_printers"] = [printer_settings_id]
         template_settings = copy.deepcopy(settings)
         preserve_template_filament_slots = _should_preserve_template_filament_slots(
             self._registry_device_profile,
@@ -2846,6 +3386,12 @@ class BambuStudio3MFWriter:
             preserve_template_slots=preserve_template_filament_slots,
         )
         _apply_material_filament_metadata(settings, template_settings, material_palette)
+        if self.slicer == "OrcaSlicer":
+            _collapse_orca_linear_arrays(
+                settings,
+                num_colors,
+                template_settings=template_settings,
+            )
         if self.slicer == "FlashStudio":
             _apply_flashstudio_project_metadata(settings, num_colors)
         if not preserve_template_filament_slots:
@@ -2860,9 +3406,11 @@ class BambuStudio3MFWriter:
             )
 
         settings.setdefault("single_extruder_multi_material", "1")
-        settings.setdefault("enable_prime_tower", "1")
+        # Product invariant: generated files never silently disable the tower.
+        # 产品约束：生成文件绝不静默关闭擦料塔。
+        settings["enable_prime_tower"] = "1"
 
-        applied_override_keys: list[str] = []
+        applied_override_keys: list[str] = ["enable_prime_tower"]
         if self.slicer == "OrcaSlicer":
             # Orca 2.4 may erase broad printable regions when its precise-wall
             # correction is combined with Lumina's Arachne one-wall artwork
@@ -2892,6 +3440,30 @@ class BambuStudio3MFWriter:
                 if key in self.settings:
                     settings[key] = self.settings[key]
                     applied_override_keys.append(key)
+
+        placement = self._get_wipe_tower_placement()
+        if placement is not None:
+            settings["wipe_tower_x"] = self._replace_first_config_number(
+                settings.get("wipe_tower_x"), placement.tower_x
+            )
+            settings["wipe_tower_y"] = self._replace_first_config_number(
+                settings.get("wipe_tower_y"), placement.tower_y
+            )
+            settings["prime_tower_width"] = self._format_number(
+                placement.tower_width
+            )
+            settings["wipe_tower_rotation_angle"] = self._format_number(
+                placement.tower_rotation
+            )
+            if placement.adapted:
+                applied_override_keys.extend(
+                    (
+                        "wipe_tower_x",
+                        "wipe_tower_y",
+                        "prime_tower_width",
+                        "wipe_tower_rotation_angle",
+                    )
+                )
 
         # Ensure BambuStudio/Orca's "modified-from-system-default" index
         # includes every key we actually overrode; otherwise the slicer
@@ -3257,6 +3829,36 @@ class BambuStudio3MFWriter:
 # ======================================================================
 # Public convenience function (signature unchanged from original)
 # ======================================================================
+
+
+def read_wipe_tower_placement_warnings(
+    threemf_path: str | os.PathLike[str],
+) -> list[str]:
+    """Read stable wipe-tower warning codes embedded in a generated 3MF.
+
+    读取生成 3MF 内嵌的稳定擦料塔警告代码。旧文件或无警告文件返回空列表。
+
+    Args:
+        threemf_path: Generated 3MF path. (生成的 3MF 路径)
+
+    Returns:
+        list[str]: Warning codes requiring user attention. (需要用户处理的警告代码)
+    """
+
+    metadata_path = "Metadata/lumina_wipe_tower_placement.json"
+    try:
+        with zipfile.ZipFile(os.fspath(threemf_path), "r") as package:
+            if metadata_path not in package.namelist():
+                return []
+            payload = json.loads(package.read(metadata_path).decode("utf-8"))
+    except (OSError, zipfile.BadZipFile, KeyError, UnicodeDecodeError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, dict) or not payload.get("requires_manual_adjustment"):
+        return []
+    warning_code = payload.get("warning_code")
+    if not isinstance(warning_code, str) or not warning_code.strip():
+        return []
+    return [warning_code.strip()]
 
 
 def export_scene_with_bambu_metadata(

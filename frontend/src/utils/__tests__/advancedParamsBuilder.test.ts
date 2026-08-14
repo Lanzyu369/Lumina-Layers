@@ -192,6 +192,23 @@ describe("buildAdvancedParams — active-tab guard", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildAdvancedParams — groups populated when toggles enabled", () => {
+  it("captures generated wipe-tower warning codes for bug reproduction", () => {
+    const result = buildAdvancedParams(
+      makeState({
+        generateWarnings: [
+          "wipe_tower_manual_adjustment_required",
+          "wipe_tower_manual_adjustment_required",
+        ],
+      }),
+      "converter",
+      { maxBytes: 8192 },
+    ) as AdvancedParamsFull;
+
+    expect(result.generation.wipe_tower_warning_codes).toEqual([
+      "wipe_tower_manual_adjustment_required",
+    ]);
+  });
+
   it("captures dynamic material generation settings", () => {
     const result = buildAdvancedParams(
       makeState({
