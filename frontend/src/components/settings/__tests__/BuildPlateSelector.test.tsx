@@ -78,6 +78,16 @@ describe("BuildPlateSelector", () => {
     ).toHaveClass("ring-inset");
   });
 
+  it("scales the card and artwork frame for wide 4K viewports", () => {
+    renderSelector();
+
+    const option = screen.getAllByRole("radio")[0];
+    expect(option).toHaveClass("w-[clamp(11rem,14vw,20rem)]");
+    expect(option.querySelector("span")).toHaveClass(
+      "h-[clamp(6rem,10vw,14rem)]",
+    );
+  });
+
   it("switches back to the official English label in English mode", () => {
     renderSelector(vi.fn(), "en");
 

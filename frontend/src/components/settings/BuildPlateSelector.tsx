@@ -97,13 +97,13 @@ export default function BuildPlateSelector({
               }}
               onClick={() => onSelect(plate.id)}
               onKeyDown={(event) => handleKeyDown(event, index)}
-              className={`group relative flex w-44 shrink-0 snap-start flex-col rounded-2xl p-3 text-left transition focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--focus-ring)] focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-950 ${
+              className={`group relative flex w-[clamp(11rem,14vw,20rem)] shrink-0 snap-start flex-col rounded-2xl p-3 text-left transition focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--focus-ring)] focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-950 ${
                 selected
                   ? "bg-blue-500/10 ring-2 ring-inset ring-blue-500 dark:bg-blue-400/10 dark:ring-blue-400"
                   : "bg-slate-100/70 ring-1 ring-inset ring-slate-200/80 hover:bg-slate-100 dark:bg-slate-800/55 dark:ring-slate-700/80 dark:hover:bg-slate-800"
               }`}
             >
-              <span className="flex h-24 w-full items-center justify-center overflow-hidden rounded-xl bg-[var(--surface-panel-strong)] px-2 py-2 dark:bg-slate-950/35">
+              <span className="flex h-[clamp(6rem,10vw,14rem)] w-full items-center justify-center overflow-hidden rounded-xl bg-[var(--surface-panel-strong)] px-2 py-2 dark:bg-slate-950/35">
                 <img
                   src={plate.image_url}
                   alt=""
