@@ -205,26 +205,29 @@ def run(ctx: dict) -> dict:
             except (ValueError, TypeError, RuntimeError, OSError) as e:
                 mesh_errors[mat_id] = e
 
-    log_detail = num_materials <= 8
-    preview_color_cache = {idx: preview_colors[idx] for idx in range(num_materials)}
-    for mat_id in range(num_materials):
-        if mat_id in mesh_errors:
-            e = mesh_errors[mat_id]
+    if mesh_errors:
+        for mat_id in sorted(mesh_errors):
+            error = mesh_errors[mat_id]
             _log.warning(
                 "Error generating mesh for material %s (%s): %s",
                 mat_id,
                 slot_names[mat_id],
-                e,
+                error,
                 extra={
                     "event": "s07_material_mesh_failed",
                     "material_id": int(mat_id),
                     "material": slot_names[mat_id],
-                    "error_type": type(e).__name__,
-                    "error_message": str(e),
+                    "error_type": type(error).__name__,
+                    "error_message": str(error),
                 },
             )
-            _log.debug("Continuing with other materials...")
-            continue
+        raise ValueError(
+            "Material mesh generation failed; refusing partial model export"
+        ) from mesh_errors[min(mesh_errors)]
+
+    log_detail = num_materials <= 8
+    preview_color_cache = {idx: preview_colors[idx] for idx in range(num_materials)}
+    for mat_id in range(num_materials):
         mesh = mesh_results.get(mat_id)
         if mesh:
             _apply_t0 = time.perf_counter()

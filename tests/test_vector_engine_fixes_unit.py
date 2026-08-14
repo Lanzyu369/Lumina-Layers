@@ -166,6 +166,51 @@ class TestNativeVectorRelief:
             [0.0, 1.84]
         )
 
+    def test_relief_optical_union_loss_rebuilds_original_shells(self, monkeypatch):
+        """Relief optical layers retain all source coverage when union is lossy."""
+
+        analysis = self._analysis()
+        original_union = vector_engine._union_run_group_geometries
+
+        def lossy_union(geometries):
+            items = tuple(geometries)
+            if len(items) == 2:
+                return items[0]
+            return original_union(items)
+
+        monkeypatch.setattr(
+            vector_engine,
+            "_union_run_group_geometries",
+            lossy_union,
+        )
+
+        result = VectorProcessor._build_relief_meshes(
+            matched_shapes=analysis.matched_shapes,
+            num_layers=analysis.num_layers,
+            layer_h=0.08,
+            num_channels=analysis.num_channels,
+            slot_names=analysis.slot_names,
+            scale_factor=analysis.scale_factor,
+            backing_color_id=0,
+            default_height_mm=1.0,
+            height_mode="color",
+            color_height_map={"#ff0000": 1.04, "#ffffff": 1.04},
+            heightmap_path=None,
+            heightmap_max_height=None,
+            bbox=analysis.bbox,
+            extrude_cache={},
+        )
+
+        expected_optical_volume = sum(
+            float(shape["geometry"].area) for shape in analysis.matched_shapes
+        ) * 0.16
+        actual_optical_volume = sum(
+            abs(float(mesh.volume))
+            for slot_name in ("Red", "White")
+            for mesh in result[slot_name]["meshes"]
+        )
+        assert actual_optical_volume == pytest.approx(expected_optical_volume)
+
     @pytest.mark.parametrize(
         ("color_mode", "structure_mode"),
         [
@@ -2507,13 +2552,25 @@ class TestRunLengthExtrudeMerging:
         def fake_disjoint_subset_union_all(items):
             return shapely_unary_union(list(items))
 
+        def fake_extrude(geometry, **_kwargs):
+            mesh = SimpleNamespace(
+                metadata={
+                    "_lumina_planar_coverage_mm2": float(geometry.area)
+                }
+            )
+            return [mesh]
+
         fast_union = mock.Mock(side_effect=fake_disjoint_subset_union_all)
         with (
             mock.patch.dict(
                 _union_run_group_geometries.__globals__,
                 {"disjoint_subset_union_all": fast_union},
             ),
-            mock.patch.object(VectorProcessor, "_extrude_geometry", return_value=["mesh"]),
+            mock.patch.object(
+                VectorProcessor,
+                "_extrude_geometry",
+                side_effect=fake_extrude,
+            ),
         ):
             result = VectorProcessor._run_length_extrude(
                 matched,
@@ -2541,12 +2598,24 @@ class TestRunLengthExtrudeMerging:
             snap_calls.append((id(geom), grid_size))
             return geom
 
+        def fake_extrude(geometry, **_kwargs):
+            mesh = SimpleNamespace(
+                metadata={
+                    "_lumina_planar_coverage_mm2": float(geometry.area)
+                }
+            )
+            return [mesh]
+
         with (
             mock.patch.dict(
                 VectorProcessor._run_length_extrude.__globals__,
                 {"set_precision": spy_set_precision},
             ),
-            mock.patch.object(VectorProcessor, "_extrude_geometry", return_value=["mesh"]),
+            mock.patch.object(
+                VectorProcessor,
+                "_extrude_geometry",
+                side_effect=fake_extrude,
+            ),
         ):
             result = VectorProcessor._run_length_extrude(
                 matched,
@@ -3450,7 +3519,8 @@ class TestDegenerateGeometryRepair:
         # Both the polygon and the repaired sliver should produce mesh.
         # Before the fix, only the polygon would extrude (sliver silently
         # dropped). After the fix, both produce mesh.
-        assert len(meshes) >= 1, "Should produce at least 1 mesh"
+        assert len(meshes) == 2, "Polygon and repaired LineString must both extrude"
+        assert all(mesh.is_watertight for mesh in meshes)
 
     def test_extrude_repairs_point_in_geometrycollection(self):
         """Point inside GeometryCollection is repaired via buffer."""
@@ -3463,7 +3533,8 @@ class TestDegenerateGeometryRepair:
         meshes = VectorProcessor._extrude_geometry(
             degenerate, height=0.08, z_offset=0.0, scale=1.0
         )
-        assert len(meshes) >= 1
+        assert len(meshes) == 2, "Polygon and repaired Point must both extrude"
+        assert all(mesh.is_watertight for mesh in meshes)
 
     def test_extrude_empty_geometrycollection_produces_nothing(self):
         """Empty GeometryCollection should produce no meshes."""

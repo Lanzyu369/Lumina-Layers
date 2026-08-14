@@ -1,14 +1,10 @@
-"""Regression tests for mesh vertex welding at shape borders.
+"""Regression tests for vector mesh topology at shape borders.
 
-Covers the fix where ``VectorProcessor.build_mesh`` pipes the concatenated
-per-slot mesh through ``Trimesh.merge_vertices`` so that coincident border
-vertices (produced by independent per-shape ``_extrude_geometry`` calls on
-neighbouring Shapely polygons) are welded.
-
-Without welding, Three.js and most triangle-based renderers compute per-face
-normals on two touching but vertex-disjoint surfaces, producing the visible
-"spikes / fragments" users reported on stroke-heavy or multi-path SVGs
-(e.g. ``test_images/1 (1).svg``).
+Independent extrusions may touch in physical space, but they must keep separate
+vertex indices unless their coincident internal walls are removed as part of a
+real boolean union.  Blind coordinate welding leaves those walls in place and
+creates edges used by four or more faces; Bambu Studio and OrcaSlicer may then
+drop large connected regions while reconstructing layer contours.
 """
 from __future__ import annotations
 
@@ -18,13 +14,16 @@ import numpy as np
 import pytest
 import trimesh
 from scipy.spatial import cKDTree
-from shapely.geometry import Polygon, box
+from shapely import wkt
+from shapely.geometry import LineString, Polygon, box
+from shapely.ops import unary_union
 
 import core.vector_engine as vector_engine
 from core.vector_engine import (
     VectorAnalysis,
     VectorProcessor,
     _build_stepped_volume_mesh,
+    _cap_planar_area_mm2,
     _concatenate_meshes_fast,
 )
 
@@ -36,6 +35,334 @@ def _coincident_pair_count(mesh: trimesh.Trimesh, tol: float = 1e-6) -> int:
     tree = cKDTree(mesh.vertices)
     pairs = tree.query_pairs(r=tol, output_type="ndarray")
     return int(pairs.shape[0])
+
+
+def _edge_incidence_counts(mesh: trimesh.Trimesh) -> np.ndarray:
+    """Return how many triangle faces use each indexed mesh edge."""
+
+    edges = np.asarray(mesh.edges_sorted, dtype=np.int64)
+    if len(edges) == 0:
+        return np.empty(0, dtype=np.int64)
+    _unique_edges, counts = np.unique(edges, axis=0, return_counts=True)
+    return counts
+
+
+class _CoverageMetadataMesh:
+    """Mesh sentinel that rejects the triangle-volume fallback."""
+
+    metadata = {"_lumina_planar_coverage_mm2": 12.5}
+
+    @property
+    def volume(self):
+        raise AssertionError("metadata fast path must not scan mesh volume")
+
+
+def test_planar_coverage_uses_extrusion_metadata_without_volume_scan() -> None:
+    """Known coverage must keep validation independent of triangle count."""
+
+    coverage = vector_engine._extruded_planar_coverage_mm2(
+        [_CoverageMetadataMesh()],
+        height=0.2,
+    )
+
+    assert coverage == pytest.approx(12.5)
+
+
+def test_cap_planar_area_is_measured_from_generated_triangles() -> None:
+    """Coverage metadata must be derived from the actual cap mesh."""
+
+    vertices, faces = vector_engine._direct_convex_extrusion_base(
+        box(0.0, 0.0, 3.0, 2.0),
+        2.0,
+    )
+
+    assert _cap_planar_area_mm2(vertices, faces) == pytest.approx(24.0)
+
+
+def test_lum_20260811_002_ring_contact_extrudes_to_slicer_safe_shell() -> None:
+    """A production contour must not create 4- or 6-face vertical edges.
+
+    The source polygon is valid and conserves area/volume, but it contains an
+    exterior-ring contact at sub-nanometre distance.  Extruding it verbatim
+    produces non-manifold indexed edges that Bambu Studio and OrcaSlicer may
+    resolve by dropping a large connected region from the first layers.
+    """
+
+    fixture_path = (
+        Path(__file__).parent
+        / "fixtures"
+        / "svg_regression"
+        / "lum_20260811_002_ring_contact.wkt"
+    )
+    polygon = wkt.loads(fixture_path.read_text(encoding="utf-8"))
+    scale = 0.2762232707950837
+    layer_height = 0.08
+
+    meshes = VectorProcessor._extrude_geometry(
+        polygon,
+        height=layer_height,
+        z_offset=0.0,
+        scale=scale,
+    )
+
+    assert len(meshes) == 1
+    mesh = meshes[0]
+    expected_volume = float(polygon.area) * scale * scale * layer_height
+    assert abs(float(mesh.volume)) == pytest.approx(expected_volume, rel=1e-6)
+    assert mesh.is_watertight
+    assert np.all(_edge_incidence_counts(mesh) == 2)
+
+
+def test_zero_area_polygon_is_not_exported() -> None:
+    """A true zero-area GEOS remnant has no printable cross-section."""
+
+    geometry = Polygon(
+        [
+            (0.0, 0.0),
+            (1.0, 1.0),
+            (2.0, 2.0),
+        ]
+    )
+
+    meshes = VectorProcessor._extrude_geometry(
+        geometry,
+        height=0.08,
+        z_offset=0.0,
+        scale=1.0,
+    )
+
+    assert meshes == []
+
+
+def test_non_polygon_geometry_is_repaired_before_zero_area_filter() -> None:
+    """The topology guard must preserve the existing LineString repair path."""
+
+    meshes = VectorProcessor._extrude_geometry(
+        LineString([(0.0, 0.0), (1.0, 0.0)]),
+        height=0.08,
+        z_offset=0.0,
+        scale=1.0,
+    )
+
+    assert len(meshes) == 1
+    assert meshes[0].is_watertight
+    assert np.all(_edge_incidence_counts(meshes[0]) == 2)
+
+
+def test_indexed_extrusion_preserves_sub_nozzle_speck_topology() -> None:
+    """Tiny valid contours stay exact when their ring revisits one XY point."""
+
+    geometry = wkt.loads(
+        "POLYGON ((0 0, 0.008 0, 0.01 0.002, 0.008 0.004, "
+        "0.004 0.002, 0.008000000000001 0.000000000000001, 0 0))"
+    )
+
+    meshes = VectorProcessor._extrude_geometry(
+        geometry,
+        height=0.08,
+        z_offset=0.0,
+        scale=1.0,
+    )
+
+    assert len(meshes) == 1
+    mesh = meshes[0]
+    assert mesh.is_watertight
+    assert np.all(_edge_incidence_counts(mesh) == 2)
+    assert abs(float(mesh.volume)) == pytest.approx(float(geometry.area) * 0.08)
+
+
+def test_polygon_extrusion_failure_does_not_return_partial_geometry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unrepairable polygon must stop export instead of disappearing."""
+
+    geometry = Polygon(
+        [(0.0, 0.0), (3.0, 0.0), (3.0, 3.0), (0.0, 3.0)],
+        [[(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0)]],
+    )
+
+    def fail_extrusion(_geometry):
+        raise ValueError("synthetic topology failure")
+
+    monkeypatch.setattr(
+        vector_engine,
+        "_extrude_polygonal_unit_height",
+        fail_extrusion,
+    )
+
+    with pytest.raises(ValueError, match="refusing partial model export"):
+        VectorProcessor._extrude_geometry(
+            geometry,
+            height=0.08,
+            z_offset=0.0,
+            scale=1.0,
+        )
+
+
+def test_polygon_extrusion_rejects_incomplete_closed_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A watertight but undersized triangulation must not self-certify."""
+
+    geometry = Polygon(
+        [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]
+    ).buffer(0.1, resolution=3)
+    incomplete = trimesh.creation.box(extents=(1.0, 1.0, 1.0))
+    incomplete.apply_translation((0.5, 0.5, 0.5))
+    monkeypatch.setattr(
+        vector_engine,
+        "_extrude_polygonal_unit_height",
+        lambda _geometry: incomplete,
+    )
+    monkeypatch.setattr(
+        vector_engine,
+        "_direct_convex_extrusion_base",
+        lambda _geometry, _scale: None,
+    )
+
+    with pytest.raises(ValueError, match="refusing partial model export"):
+        VectorProcessor._extrude_geometry(
+            geometry,
+            height=0.08,
+            z_offset=0.0,
+            scale=1.0,
+        )
+
+
+@pytest.mark.parametrize("touch_offset", [0.0, 1e-13])
+def test_extrude_geometry_separates_exterior_from_touching_hole_ring(
+    touch_offset: float,
+) -> None:
+    """Outer/hole point contacts must extrude as a closed shell."""
+
+    geometry = Polygon(
+        [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)],
+        [[(touch_offset, 5.0), (2.0, 4.0), (2.0, 6.0), (touch_offset, 5.0)]],
+    )
+    meshes = VectorProcessor._extrude_geometry(
+        geometry,
+        height=1.0,
+        z_offset=0.0,
+        scale=1.0,
+        extrude_cache={},
+    )
+
+    assert len(meshes) == 1
+    mesh = meshes[0]
+    assert mesh.is_watertight
+    assert np.all(_edge_incidence_counts(mesh) == 2)
+    assert abs(float(mesh.volume)) == pytest.approx(float(geometry.area), abs=0.01)
+
+
+def test_missing_manifold_kernel_refuses_unsafe_touching_ring_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing core triangulator must not silently export a partial shell."""
+
+    geometry = Polygon(
+        [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)],
+        [[(0.0, 5.0), (2.0, 4.0), (2.0, 6.0), (0.0, 5.0)]],
+    )
+    monkeypatch.setattr(
+        trimesh.creation,
+        "triangulate_polygon",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ImportError("synthetic missing manifold3d")
+        ),
+    )
+
+    with pytest.raises(ValueError, match="refusing partial model export"):
+        VectorProcessor._extrude_geometry(
+            geometry,
+            height=1.0,
+            z_offset=0.0,
+            scale=1.0,
+            extrude_cache={},
+        )
+
+
+def test_extrude_geometry_preserves_thin_bridge_without_coordinate_repair() -> None:
+    """Indexed extrusion retains a positive-area bridge exactly."""
+
+    geometry = unary_union(
+        [
+            box(0.0, 0.0, 1.0, 1.0),
+            box(1.0, 0.5, 2.0, 0.5 + 1e-13),
+            box(2.0, 0.0, 3.0, 1.0),
+        ]
+    )
+    meshes = VectorProcessor._extrude_geometry(
+        geometry,
+        height=1.0,
+        z_offset=0.0,
+        scale=1.0,
+        extrude_cache={},
+    )
+
+    assert len(meshes) == 1
+    mesh = meshes[0]
+    assert mesh.is_watertight
+    assert np.all(_edge_incidence_counts(mesh) == 2)
+    np.testing.assert_allclose(mesh.bounds, [[0.0, 0.0, 0.0], [3.0, 1.0, 1.0]])
+    assert abs(float(mesh.volume)) == pytest.approx(float(geometry.area), abs=0.01)
+
+
+def test_extrude_geometry_handles_duplicate_vertex_and_thin_bridge() -> None:
+    """Indexed extrusion tolerates redundant ring coordinates without welding."""
+
+    geometry = unary_union(
+        [
+            box(0.0, 0.0, 1.0, 1.0),
+            box(1.0, 0.5, 2.0, 0.5 + 1e-13),
+            box(2.0, 0.0, 3.0, 1.0),
+        ]
+    )
+    coordinates = list(geometry.exterior.coords)
+    coordinates.insert(2, coordinates[2])
+    geometry_with_duplicate = Polygon(coordinates)
+
+    meshes = VectorProcessor._extrude_geometry(
+        geometry_with_duplicate,
+        height=1.0,
+        z_offset=0.0,
+        scale=1.0,
+        extrude_cache={},
+    )
+
+    assert len(meshes) == 1
+    mesh = meshes[0]
+    assert mesh.is_watertight
+    assert len(mesh.split(only_watertight=False)) == 1
+    assert np.all(_edge_incidence_counts(mesh) == 2)
+    assert abs(float(mesh.volume)) == pytest.approx(
+        float(geometry_with_duplicate.area),
+        abs=0.01,
+    )
+
+
+def test_extrude_geometry_separates_point_touching_hole_rings() -> None:
+    """Two holes sharing one point must not create a four-face edge."""
+
+    geometry = Polygon(
+        [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)],
+        [
+            [(2.0, 4.0), (5.0, 5.0), (2.0, 6.0), (2.0, 4.0)],
+            [(8.0, 4.0), (8.0, 6.0), (5.0, 5.0), (8.0, 4.0)],
+        ],
+    )
+    meshes = VectorProcessor._extrude_geometry(
+        geometry,
+        height=1.0,
+        z_offset=0.0,
+        scale=1.0,
+        extrude_cache={},
+    )
+
+    assert len(meshes) == 1
+    mesh = meshes[0]
+    assert mesh.is_watertight
+    assert np.all(_edge_incidence_counts(mesh) == 2)
+    assert abs(float(mesh.volume)) == pytest.approx(float(geometry.area), abs=0.01)
 
 
 def _build_two_height_relief_board() -> trimesh.Trimesh:
@@ -452,7 +779,7 @@ def test_corner_touching_relief_stays_watertight_through_build_and_glb(
 
 
 def test_relief_backing_glb_round_trip_stays_watertight(tmp_path) -> None:
-    """The repaired topology must survive the actual preview file format."""
+    """The indexed topology must survive the actual preview file format."""
 
     board = _build_two_height_relief_board()
     scene = trimesh.Scene()
@@ -521,8 +848,8 @@ def test_real_svg_relief_preview_glb_is_watertight(tmp_path) -> None:
     assert loaded.geometry["backing_plate"].is_watertight
 
 
-class TestBuildMeshVertexWelding:
-    """Validate the root cause and the fix at ``build_mesh``'s concat boundary."""
+class TestBuildMeshShellTopology:
+    """Validate the slicer topology contract at ``build_mesh`` assembly."""
 
     @staticmethod
     def _two_adjacent_extrusions() -> tuple[trimesh.Trimesh, trimesh.Trimesh]:
@@ -548,43 +875,33 @@ class TestBuildMeshVertexWelding:
             "implicitly (if this fails, trimesh API semantics changed)."
         )
 
-    def test_merge_vertices_welds_coincident_border(self):
-        """``merge_vertices`` must eliminate the coincident pairs that caused
-        Three.js to render visible seams at shape borders."""
+    def test_merge_vertices_turns_shared_border_non_manifold(self):
+        """Blind welding reproduces the slicer's multi-face-edge defect."""
         left_mesh, right_mesh = self._two_adjacent_extrusions()
         combined = trimesh.util.concatenate([left_mesh, right_mesh])
-        v_before = int(combined.vertices.shape[0])
-        combined.merge_vertices()
-        v_after = int(combined.vertices.shape[0])
-        assert v_after < v_before, (
-            "merge_vertices must reduce the vertex count when adjacent shapes "
-            "produced coincident border vertices"
-        )
-        remaining = _coincident_pair_count(combined, tol=1e-9)
-        assert remaining == 0, (
-            f"After merge_vertices the mesh must contain no coincident "
-            f"vertex pairs, got {remaining}"
-        )
+        assert np.all(_edge_incidence_counts(combined) == 2)
 
-    def test_build_mesh_call_site_uses_fast_concat_then_merge_vertices(self):
-        """Governance: the fix in ``build_mesh`` must not regress by removing
-        the ``merge_vertices`` call after per-slot mesh concatenation."""
+        combined.merge_vertices()
+        assert np.any(_edge_incidence_counts(combined) > 2)
+
+    def test_build_mesh_call_site_does_not_weld_independent_shells(self):
+        """Governance: normal slot assembly must not weld closed prisms."""
         import inspect
 
         source = inspect.getsource(VectorProcessor.build_mesh)
         concat_idx = source.find("_concatenate_meshes_fast")
         assert concat_idx >= 0, "build_mesh must use the vector fast concat helper"
         merge_idx = source.find("merge_vertices", concat_idx)
-        assert merge_idx >= 0, (
-            "build_mesh must call merge_vertices() after fast concatenation so "
-            "coincident border vertices are welded before the scene is "
-            "handed to Three.js / exporters"
+        assert merge_idx < 0, (
+            "build_mesh must retain independently indexed closed shells; "
+            "blind merge_vertices() creates multi-face shared edges"
         )
 
     def test_build_mesh_fast_concat_does_not_depend_on_trimesh_generic_concatenate(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ):
+        monkeypatch.delenv("LUMINA_VECTOR_NATIVE_MESH", raising=False)
         left_mesh, right_mesh = self._two_adjacent_extrusions()
         processor = VectorProcessor.__new__(VectorProcessor)
 
@@ -632,12 +949,14 @@ class TestBuildMeshVertexWelding:
             rel=1e-6,
             abs=1e-6,
         )
-        assert _coincident_pair_count(combined, tol=1e-9) == 0
+        assert _coincident_pair_count(combined, tol=1e-9) >= 4
+        assert np.all(_edge_incidence_counts(combined) == 2)
 
     def test_build_mesh_fast_concat_accepts_single_array_chunk(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ):
+        monkeypatch.delenv("LUMINA_VECTOR_NATIVE_MESH", raising=False)
         source_mesh = VectorProcessor._extrude_geometry(
             box(0.0, 0.0, 2.0, 2.0),
             height=1.0,
@@ -683,6 +1002,104 @@ class TestBuildMeshVertexWelding:
 
         assert sorted(scene.geometry) == ["White"]
         assert int(len(scene.geometry["White"].faces)) == int(len(source_mesh.faces))
+
+
+def test_run_length_extrude_preserves_source_area_when_optimized_union_is_lossy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lossy run union must fall back instead of exporting a partial layer."""
+
+    source_geometries = [
+        box(0.0, 0.0, 1.0, 1.0),
+        box(2.0, 0.0, 3.0, 1.0),
+    ]
+
+    def drop_second_geometry(geometries):
+        return tuple(geometries)[0]
+
+    monkeypatch.setattr(
+        vector_engine,
+        "_union_run_group_geometries",
+        drop_second_geometry,
+    )
+
+    meshes_by_slot = VectorProcessor._run_length_extrude(
+        matched_shapes=[
+            {"geometry": geometry, "recipe": [0]}
+            for geometry in source_geometries
+        ],
+        num_layers=1,
+        layer_h=0.2,
+        num_channels=1,
+        slot_names=["White"],
+        scale_factor=1.0,
+        extrude_cache={},
+    )
+
+    meshes = meshes_by_slot["White"]["meshes"]
+    actual_volume = sum(abs(float(mesh.volume)) for mesh in meshes)
+    expected_volume = sum(float(geometry.area) for geometry in source_geometries) * 0.2
+    assert actual_volume == pytest.approx(expected_volume, rel=1e-6, abs=1e-6)
+
+
+def test_run_length_extrude_rebuilds_lost_5mm_island_beside_200mm_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Coverage tolerance must not hide a complete printable island loss."""
+
+    main_body = box(0.0, 0.0, 200.0, 200.0)
+    small_island = box(210.0, 0.0, 215.0, 5.0)
+    source_geometries = [main_body, small_island]
+
+    monkeypatch.setattr(
+        vector_engine,
+        "_union_run_group_geometries",
+        lambda geometries: tuple(geometries)[0],
+    )
+
+    meshes_by_slot = VectorProcessor._run_length_extrude(
+        matched_shapes=[
+            {"geometry": geometry, "recipe": [0]}
+            for geometry in source_geometries
+        ],
+        num_layers=1,
+        layer_h=0.2,
+        num_channels=1,
+        slot_names=["White"],
+        scale_factor=1.0,
+        extrude_cache={},
+    )
+
+    meshes = meshes_by_slot["White"]["meshes"]
+    actual_volume = sum(abs(float(mesh.volume)) for mesh in meshes)
+    expected_volume = (40000.0 + 25.0) * 0.2
+    assert actual_volume == pytest.approx(expected_volume, rel=1e-9, abs=1e-6)
+
+
+def test_run_length_extrude_rejects_incomplete_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If primary and fallback extrusion lose area, generation must stop."""
+
+    monkeypatch.setattr(
+        VectorProcessor,
+        "_extrude_geometry",
+        staticmethod(lambda *_args, **_kwargs: []),
+    )
+
+    with pytest.raises(ValueError, match="coverage"):
+        VectorProcessor._run_length_extrude(
+            matched_shapes=[
+                {"geometry": box(0.0, 0.0, 2.0, 2.0), "recipe": [0]}
+            ],
+            num_layers=1,
+            layer_h=0.2,
+            num_channels=1,
+            slot_names=["White"],
+            scale_factor=1.0,
+            extrude_cache={},
+        )
+
 
 def test_merge_vertices_preserves_volume_of_disjoint_parts():
     """Sanity guard: merging vertices must not collapse geometrically

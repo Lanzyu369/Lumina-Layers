@@ -42,7 +42,8 @@ WORKSHOP_SEED_LOCK = (
 )
 PYINSTALLER_DIST = ROOT / "dist"
 NATIVE_VECTOR_MESH_MARKER = "native-vector-mesh.enabled"
-GLB_V2_REQUIRED_MODULES = ("rasterio.features", "manifold3d")
+CORE_GEOMETRY_REQUIRED_MODULES = ("manifold3d",)
+GLB_V2_OPTIONAL_MODULES = ("rasterio.features",)
 WORKSHOP_DESKTOP_SECURITY_FILES = (
     ELECTRON_DIR / "workshop-security.cjs",
     ELECTRON_DIR / "preload.cjs",
@@ -88,11 +89,35 @@ def build_native_extensions_optional() -> bool:
     return True
 
 
-def check_glb_v2_dependencies_available() -> bool:
-    """Warn when desktop builds cannot bundle the default GLB v2 preview path."""
+def check_core_geometry_dependencies_available() -> None:
+    """Fail packaging when slicer-safe vector triangulation is unavailable."""
 
     missing = []
-    for module_name in GLB_V2_REQUIRED_MODULES:
+    for module_name in CORE_GEOMETRY_REQUIRED_MODULES:
+        try:
+            importlib.import_module(module_name)
+        except Exception as exc:
+            missing.append((module_name, exc))
+
+    if not missing:
+        print("  Core geometry dependencies available for packaging.")
+        return
+
+    details = "; ".join(
+        f"{module_name}: {exc}"
+        for module_name, exc in missing
+    )
+    raise RuntimeError(
+        "Core geometry dependencies are missing; refusing a desktop build "
+        f"that could export slicer-unsafe vector meshes. {details}"
+    )
+
+
+def check_glb_v2_dependencies_available() -> bool:
+    """Warn when desktop builds cannot bundle the optional raster GLB v2 path."""
+
+    missing = []
+    for module_name in GLB_V2_OPTIONAL_MODULES:
         try:
             importlib.import_module(module_name)
         except Exception as exc:
@@ -106,7 +131,7 @@ def check_glb_v2_dependencies_available() -> bool:
         "WARNING: GLB v2 preview dependencies are missing; packaged preview "
         "generation will fall back to v1 unless these modules are installed.",
     )
-    print("  Install with: pip install -r requirements-glb-v2.txt")
+    print("  Install optional preview acceleration with: pip install -r requirements-glb-v2.txt")
     for module_name, exc in missing:
         print(f"  - {module_name}: {exc}")
     return False
@@ -275,7 +300,12 @@ def main():
     print("\n[2/6] Building optional backend native extensions...")
     native_vector_mesh_enabled = build_native_extensions_optional()
 
-    print("\n[3/6] Checking GLB v2 desktop packaging dependencies...")
+    print("\n[3/6] Checking desktop geometry dependencies...")
+    try:
+        check_core_geometry_dependencies_available()
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}")
+        return 1
     check_glb_v2_dependencies_available()
 
     print("\n[4/6] Building backend (PyInstaller)...")

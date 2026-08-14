@@ -25,6 +25,35 @@ def test_lumina_overlay_preserves_protected_process_fields():
     assert merged["sparse_infill_density"] == "100%"
 
 
+def test_lumina_overlay_disables_orca_precise_outer_wall_for_single_wall_art():
+    """Orca 2.4 must not drop broad regions from an Arachne one-wall slice."""
+
+    merged = apply_lumina_process_overlay(
+        {
+            "printer_model": "Bambu Lab H2D",
+            "wall_generator": "arachne",
+            "wall_loops": "1",
+            "precise_outer_wall": "1",
+        },
+        slicer_id="OrcaSlicer",
+    )
+
+    assert merged["wall_generator"] == "arachne"
+    assert merged["wall_loops"] == "1"
+    assert merged["precise_outer_wall"] == "0"
+    difference_index = set(merged["different_settings_to_system"][0].split(";"))
+    assert "precise_outer_wall" in difference_index
+
+
+def test_lumina_overlay_keeps_bambu_precise_outer_wall_setting():
+    merged = apply_lumina_process_overlay(
+        {"precise_outer_wall": "1"},
+        slicer_id="BambuStudio",
+    )
+
+    assert merged["precise_outer_wall"] == "1"
+
+
 def test_lumina_overlay_preserves_temperature_array_shape():
     native = {"nozzle_temperature": ["210"], "bed_temperature": ["55"], "filament_type": ["PETG"]}
 
@@ -222,3 +251,27 @@ def test_lumina_overlay_prefers_existing_lumina_template_line_width_contract():
     assert merged["inner_wall_line_width"] == "0.45"
     assert merged["sparse_infill_line_width"] == "0.45"
     assert merged["internal_solid_infill_line_width"] == "0.42"
+
+
+def test_lumina_overlay_does_not_restore_stale_template_first_layer_height(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "core.machine_process_overlay._load_lumina_line_width_contract",
+        lambda *_args, **_kwargs: {
+            "line_width": "0.42",
+            "initial_layer_print_height": "0.20",
+        },
+    )
+
+    merged = apply_lumina_process_overlay(
+        {
+            "printer_model": "Bambu Lab H2D",
+            "nozzle_diameter": ["0.4"],
+            "initial_layer_print_height": "0.20",
+        },
+        source_profile_name="Bambu Lab H2D 0.4 nozzle",
+        slicer_id="OrcaSlicer",
+    )
+
+    assert merged["initial_layer_print_height"] == "0.08"

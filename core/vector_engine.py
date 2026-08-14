@@ -31,6 +31,7 @@ import time
 import xml.etree.ElementTree as ET
 import trimesh
 import cv2
+from mapbox_earcut import triangulate_float64
 from dataclasses import dataclass, field
 from svgelements import (
     SVG,
@@ -85,6 +86,17 @@ _log = get_logger(__name__)
 
 MIN_SHAPE_AREA_MM2 = 0.01
 BASE_COLOR_GAP_MM = 0.005
+# This allowance is only for accumulated float/triangulation noise. One part
+# per million is about 0.04 mm^2 on a 200 x 200 mm body, so it cannot hide a
+# separately printable island while still scaling above the fixed epsilon for
+# unusually large models.
+_VECTOR_COVERAGE_REL_TOL = 1e-6
+_VECTOR_COVERAGE_ABS_TOL_MM2 = 0.01
+_PLANAR_COVERAGE_METADATA_KEY = "_lumina_planar_coverage_mm2"
+# Polygons below one float64 epsilon in physical area are numerical residue,
+# not representable model detail.  Keep this many orders of magnitude below
+# any printable feature instead of reusing the user-facing shape-area filter.
+_FLOAT_RESIDUAL_AREA_MM2 = float(np.finfo(np.float64).eps)
 _MAX_BEZIER_DEPTH = 16
 
 # Supersample factor for the hard membership masks (mask_solid / matched_rgb /
@@ -113,6 +125,145 @@ def _union_run_group_geometries(geometries):
         except VECTOR_HANDLED_ERRORS:
             pass
     return unary_union(geometries)
+
+
+def _extruded_planar_coverage_mm2(meshes, height: float) -> float | None:
+    """Read cached planar coverage, falling back to prism mesh volume."""
+
+    height_value = float(height)
+    if height_value <= 0.0:
+        return 0.0
+
+    mesh_list = tuple(meshes)
+    metadata_total = 0.0
+    metadata_complete = True
+    for mesh in mesh_list:
+        metadata = getattr(mesh, "metadata", None)
+        try:
+            coverage = float(metadata[_PLANAR_COVERAGE_METADATA_KEY])
+        except (KeyError, TypeError, ValueError):
+            metadata_complete = False
+            break
+        if not math.isfinite(coverage) or coverage < 0.0:
+            metadata_complete = False
+            break
+        metadata_total += coverage
+    if metadata_complete:
+        return metadata_total
+
+    total_volume = 0.0
+    for mesh in mesh_list:
+        try:
+            volume = abs(float(mesh.volume))
+        except (AttributeError, TypeError, ValueError):
+            return None
+        if not math.isfinite(volume):
+            return None
+        total_volume += volume
+    return total_volume / height_value
+
+
+def _vector_coverage_is_incomplete(
+    expected_mm2: float,
+    actual_mm2: float,
+) -> bool:
+    """Return whether one-sided planar coverage loss exceeds tolerance."""
+
+    expected = max(0.0, float(expected_mm2))
+    actual = max(0.0, float(actual_mm2))
+    tolerance = max(
+        _VECTOR_COVERAGE_ABS_TOL_MM2,
+        expected * _VECTOR_COVERAGE_REL_TOL,
+    )
+    return actual + tolerance < expected
+
+
+def _source_planar_coverage_mm2(geometries, scale_factor: float) -> float:
+    """Measure source coverage before any precision snap or run-group union.
+
+    在精度吸附或 run-group 合并前测量源几何覆盖面积。
+
+    Run-group shapes are already visibility-clipped by the SVG pipeline, so
+    summing their areas is both cheaper and more independent than asking the
+    same boolean operation under test to produce the expected value.
+    """
+
+    scale_sq = float(scale_factor) * float(scale_factor)
+    area = 0.0
+    for geometry in geometries:
+        if geometry is None or getattr(geometry, "is_empty", True):
+            continue
+        try:
+            geometry_area = max(0.0, float(geometry.area))
+        except (AttributeError, TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("Unable to measure vector source coverage") from exc
+        if not math.isfinite(geometry_area):
+            raise ValueError("Vector source coverage is not finite")
+        area += geometry_area
+    return area * scale_sq
+
+
+def _extrude_source_geometries_with_coverage_guard(
+    source_geometries,
+    merged_geometry,
+    *,
+    height: float,
+    z_offset: float,
+    scale_factor: float,
+    extrude_cache,
+    context: str,
+):
+    """Extrude an optimized union, rebuilding source shells if coverage drops.
+
+    先挤出优化后的合并几何；若覆盖缺失，则按原始壳体重建并拒绝残缺输出。
+    """
+
+    source_geoms = tuple(
+        geometry
+        for geometry in source_geometries
+        if geometry is not None and not getattr(geometry, "is_empty", True)
+    )
+    expected_area_mm2 = _source_planar_coverage_mm2(source_geoms, scale_factor)
+    meshes = VectorProcessor._extrude_geometry(
+        merged_geometry,
+        height=height,
+        z_offset=z_offset,
+        scale=scale_factor,
+        extrude_cache=extrude_cache,
+    )
+    built_area_mm2 = _extruded_planar_coverage_mm2(meshes, height)
+    if (
+        built_area_mm2 is not None
+        and not _vector_coverage_is_incomplete(expected_area_mm2, built_area_mm2)
+    ):
+        return meshes
+
+    fallback_meshes = []
+    for source_geometry in source_geoms:
+        fallback_meshes.extend(
+            VectorProcessor._extrude_geometry(
+                source_geometry,
+                height=height,
+                z_offset=z_offset,
+                scale=scale_factor,
+                extrude_cache=extrude_cache,
+            )
+        )
+    fallback_area_mm2 = _extruded_planar_coverage_mm2(fallback_meshes, height)
+    if (
+        fallback_area_mm2 is None
+        or _vector_coverage_is_incomplete(expected_area_mm2, fallback_area_mm2)
+    ):
+        actual_area = (
+            "unavailable"
+            if fallback_area_mm2 is None
+            else f"{fallback_area_mm2:.6f}"
+        )
+        raise ValueError(
+            f"{context} coverage incomplete: expected "
+            f"{expected_area_mm2:.6f} mm^2, got {actual_area} after fallback"
+        )
+    return fallback_meshes
 
 
 def _union_occluder_geometries(geometries):
@@ -1243,6 +1394,170 @@ def _direct_convex_extrusion_base(poly, scale):
         faces.append((idx, count + next_idx, count + idx))
 
     return vertices, np.asarray(faces, dtype=np.int64)
+
+
+def _cap_planar_area_mm2(vertices, faces) -> float | None:
+    """Measure the bottom cap area of one unit-height extrusion."""
+
+    try:
+        vertex_array = np.asarray(vertices, dtype=np.float64)
+        face_array = np.asarray(faces, dtype=np.int64)
+        if (
+            vertex_array.ndim != 2
+            or vertex_array.shape[1] != 3
+            or face_array.ndim != 2
+            or face_array.shape[1] != 3
+            or len(vertex_array) == 0
+            or len(face_array) == 0
+        ):
+            return None
+        triangle_vertices = vertex_array[face_array]
+    except (IndexError, TypeError, ValueError):
+        return None
+
+    z_values = triangle_vertices[:, :, 2]
+    horizontal = np.ptp(z_values, axis=1) <= 1e-9
+    bottom = horizontal & (np.max(np.abs(z_values), axis=1) <= 1e-9)
+    if not np.any(bottom):
+        return None
+    xy = triangle_vertices[bottom, :, :2]
+    edge_a = xy[:, 1] - xy[:, 0]
+    edge_b = xy[:, 2] - xy[:, 0]
+    twice_area = np.abs(
+        edge_a[:, 0] * edge_b[:, 1] - edge_a[:, 1] * edge_b[:, 0]
+    )
+    area = float(np.sum(twice_area, dtype=np.float64) * 0.5)
+    return area if math.isfinite(area) and area >= 0.0 else None
+
+
+def _extrude_polygonal_unit_height(
+    geometry: Polygon | MultiPolygon,
+) -> trimesh.Trimesh:
+    """Extrude all polygon parts with topology-indexed boundary sidewalls."""
+
+    parts = geometry.geoms if isinstance(geometry, MultiPolygon) else (geometry,)
+    meshes = [
+        _extrude_polygon_unit_height_indexed(part)
+        for part in parts
+        if isinstance(part, Polygon) and not part.is_empty
+    ]
+    if not meshes:
+        raise ValueError("Vector polygon repair produced no extrudable parts")
+    if len(meshes) == 1:
+        return meshes[0]
+    return trimesh.util.concatenate(meshes)
+
+
+def _extrude_polygon_unit_height_indexed(poly: Polygon) -> trimesh.Trimesh:
+    """Build one prism without coordinate-welding distinct ring vertices.
+
+    Trimesh's generic extrusion builds each boundary wall independently and
+    relies on post-processing to weld coincident coordinates.  Valid SVG
+    boolean results can contain two ring vertices at the same XY coordinate
+    that are topologically distinct; coordinate welding then turns their
+    vertical walls into a 4/6-face edge.  Bambu Studio and OrcaSlicer rebuild
+    contours from those indexed triangle edges and may omit a large connected
+    region.  This builder derives sidewalls from the triangulation's boundary
+    indices, so only vertices already shared by the triangulator are shared in
+    the 3D mesh.
+    """
+
+    # Prefer the robust triangulator bundled in production. Its output keeps
+    # one indexed vertex at exact ring contacts, which is the topology needed
+    # for a closed sidewall. Earcut remains a best-effort runtime fallback;
+    # the watertight check at the caller fails closed if it cannot represent
+    # the same topology safely.
+    try:
+        vertices_2d, cap_faces = trimesh.creation.triangulate_polygon(
+            poly,
+            engine="manifold",
+        )
+    except VECTOR_HANDLED_ERRORS:
+        rings = [
+            np.asarray(poly.exterior.coords, dtype=np.float64)[:-1, :2],
+            *[
+                np.asarray(ring.coords, dtype=np.float64)[:-1, :2]
+                for ring in poly.interiors
+            ],
+        ]
+        if any(len(ring) < 3 for ring in rings):
+            raise ValueError("Vector polygon contains a degenerate ring")
+        vertices_2d = np.vstack(rings)
+        ring_ends = np.cumsum(
+            [len(ring) for ring in rings],
+            dtype=np.uint32,
+        )
+        cap_faces = triangulate_float64(vertices_2d, ring_ends).reshape((-1, 3))
+
+    vertices_2d = np.asarray(vertices_2d, dtype=np.float64)
+    cap_faces = np.asarray(cap_faces, dtype=np.int64)
+    if (
+        vertices_2d.ndim != 2
+        or vertices_2d.shape[1] != 2
+        or cap_faces.ndim != 2
+        or cap_faces.shape[1] != 3
+        or len(cap_faces) == 0
+    ):
+        raise ValueError("Vector polygon triangulation produced no cap faces")
+
+    cap_a = vertices_2d[cap_faces[:, 1]] - vertices_2d[cap_faces[:, 0]]
+    cap_b = vertices_2d[cap_faces[:, 2]] - vertices_2d[cap_faces[:, 0]]
+    signed_twice_area = (
+        cap_a[:, 0] * cap_b[:, 1] - cap_a[:, 1] * cap_b[:, 0]
+    )
+    non_degenerate = np.abs(signed_twice_area) > 1e-18
+    if not np.any(non_degenerate):
+        raise ValueError("Vector polygon triangulation has zero area")
+    if float(np.mean(signed_twice_area[non_degenerate])) < 0.0:
+        cap_faces = cap_faces[:, ::-1]
+
+    oriented_edges = np.vstack(
+        (
+            cap_faces[:, [0, 1]],
+            cap_faces[:, [1, 2]],
+            cap_faces[:, [2, 0]],
+        )
+    )
+    sorted_edges = np.sort(oriented_edges, axis=1)
+    _unique_edges, inverse, edge_counts = np.unique(
+        sorted_edges,
+        axis=0,
+        return_inverse=True,
+        return_counts=True,
+    )
+    if np.any(edge_counts > 2):
+        raise ValueError("Vector cap triangulation produced non-manifold edges")
+    boundary_edges = oriented_edges[edge_counts[inverse] == 1]
+    if len(boundary_edges) == 0:
+        raise ValueError("Vector polygon triangulation produced no boundary")
+
+    vertex_count = len(vertices_2d)
+    bottom = np.column_stack(
+        (vertices_2d, np.zeros(vertex_count, dtype=np.float64))
+    )
+    top = np.column_stack(
+        (vertices_2d, np.ones(vertex_count, dtype=np.float64))
+    )
+    start = boundary_edges[:, 0]
+    end = boundary_edges[:, 1]
+    side_faces = np.vstack(
+        (
+            np.column_stack((start, end, vertex_count + end)),
+            np.column_stack((start, vertex_count + end, vertex_count + start)),
+        )
+    )
+    faces = np.vstack(
+        (
+            cap_faces[:, ::-1],
+            cap_faces + vertex_count,
+            side_faces,
+        )
+    )
+    return trimesh.Trimesh(
+        vertices=np.vstack((bottom, top)),
+        faces=faces,
+        process=False,
+    )
 
 
 def _concatenate_meshes_fast(meshes):
@@ -5876,15 +6191,9 @@ class VectorProcessor:
 
             _log.debug("Merging %s parts for %s...", len(mesh_list), name)
             combined = _concatenate_meshes_fast(mesh_list)
-            # Weld coincident border vertices produced by independent per-shape
-            # ``_extrude_geometry`` calls so Three.js / exporters do not render
-            # visible seams along shape boundaries. 对相邻 shape 独立 extrude
-            # 后重合的边界顶点做焊接，避免下游 mesh 渲染/导出在形状边界出现缝隙。
-            if not data.get("topology_finalized", False):
-                try:
-                    combined.merge_vertices()
-                except Exception:
-                    pass
+            # Independent prisms must remain independently indexed closed
+            # shells. Blindly welding coincident coordinates preserves their
+            # internal walls and creates edges used by more than two faces.
             self._fix_coordinates(combined, svg_height_mm)
             if mirror_transform is not None:
                 combined.apply_transform(mirror_transform)
@@ -6079,12 +6388,17 @@ class VectorProcessor:
                 {"meshes": [], "mat_id": channel},
             )
             entry["meshes"].extend(
-                VectorProcessor._extrude_geometry(
+                _extrude_source_geometries_with_coverage_guard(
+                    geometries,
                     merged,
                     height=height,
                     z_offset=z_offset,
-                    scale=scale_factor,
+                    scale_factor=scale_factor,
                     extrude_cache=extrude_cache,
+                    context=(
+                        "Vector relief extrusion for "
+                        f"channel {channel}, layers {run_start}-{run_end}"
+                    ),
                 )
             )
 
@@ -7297,6 +7611,10 @@ class VectorProcessor:
             if slot_name not in meshes_by_slot:
                 meshes_by_slot[slot_name] = {"meshes": [], "mat_id": ch}
 
+            source_geoms = tuple(
+                geom for geom in geoms if geom is not None and not geom.is_empty
+            )
+
             if len(geoms) > 1:
                 pre_union_area = 0.0
                 for g in geoms:
@@ -7378,12 +7696,17 @@ class VectorProcessor:
                 z_bot = run_start * layer_h
                 height = (run_end - run_start + 1) * layer_h
 
-            new_meshes = VectorProcessor._extrude_geometry(
+            new_meshes = _extrude_source_geometries_with_coverage_guard(
+                source_geoms,
                 merged,
                 height=height,
                 z_offset=z_bot,
-                scale=scale_factor,
+                scale_factor=scale_factor,
                 extrude_cache=extrude_cache,
+                context=(
+                    "Vector extrusion for "
+                    f"channel {ch}, layers {run_start}-{run_end}"
+                ),
             )
             meshes_by_slot[slot_name]["meshes"].extend(new_meshes)
             for layer_idx in range(int(run_start), int(run_end) + 1):
@@ -9468,10 +9791,27 @@ class VectorProcessor:
                     )
                     continue
             try:
+                physical_area_mm2 = (
+                    abs(float(poly.area)) * float(scale) * float(scale)
+                )
+            except (AttributeError, TypeError, ValueError, OverflowError):
+                physical_area_mm2 = math.inf
+            # GEOS can retain a nominal Polygon whose vertices differ by only
+            # one floating-point ULP after boolean operations.  Such residue
+            # has no representable physical cross-section and cannot form a
+            # valid prism.  The epsilon-sized cutoff is deliberately unrelated
+            # to printable-detail filtering: every larger positive-area shape
+            # must still extrude or fail closed below.  Run this after the
+            # historical non-polygon repair so LineString/Point inputs keep
+            # their existing best-effort behavior.
+            if physical_area_mm2 <= _FLOAT_RESIDUAL_AREA_MM2:
+                continue
+            try:
                 cache_key = None
                 cached_base = None
                 base_vertices = None
                 base_faces = None
+                planar_coverage_mm2 = None
                 if extrude_cache is not None:
                     # Key excludes height: cache unit-height (h=1) base mesh,
                     # then scale Z per call. Avoids re-triangulating equal
@@ -9484,17 +9824,48 @@ class VectorProcessor:
                     if direct_base is not None:
                         base_vertices, base_faces = direct_base
                     else:
-                        m_base = trimesh.creation.extrude_polygon(poly, height=1.0)
+                        m_base = _extrude_polygonal_unit_height(poly)
+                        if not bool(m_base.is_watertight):
+                            raise ValueError(
+                                "Vector polygon extrusion produced non-manifold topology"
+                            )
                         base_vertices = np.asarray(m_base.vertices, dtype=np.float64).copy()
                         if base_vertices.ndim == 2 and base_vertices.shape[1] >= 2:
                             base_vertices[:, 0] *= float(scale)
                             base_vertices[:, 1] *= float(scale)
                         base_faces = np.asarray(m_base.faces, dtype=np.int64).copy()
+                    planar_coverage_mm2 = _cap_planar_area_mm2(
+                        base_vertices,
+                        base_faces,
+                    )
+                    if planar_coverage_mm2 is None:
+                        raise ValueError(
+                            "Vector polygon extrusion produced no measurable cap"
+                        )
+                    if _vector_coverage_is_incomplete(
+                        physical_area_mm2,
+                        planar_coverage_mm2,
+                    ):
+                        raise ValueError(
+                            "Vector polygon triangulation coverage incomplete: "
+                            f"expected {physical_area_mm2:.6f} mm^2, "
+                            f"got {planar_coverage_mm2:.6f} mm^2"
+                        )
                     if extrude_cache is not None and cache_key is not None:
-                        extrude_cache[cache_key] = (base_vertices, base_faces)
+                        extrude_cache[cache_key] = (
+                            base_vertices,
+                            base_faces,
+                            planar_coverage_mm2,
+                        )
                 else:
-                    if isinstance(cached_base, tuple) and len(cached_base) == 2:
+                    if isinstance(cached_base, tuple) and len(cached_base) == 3:
+                        base_vertices, base_faces, planar_coverage_mm2 = cached_base
+                    elif isinstance(cached_base, tuple) and len(cached_base) == 2:
                         base_vertices, base_faces = cached_base
+                        planar_coverage_mm2 = _cap_planar_area_mm2(
+                            base_vertices,
+                            base_faces,
+                        )
                     else:
                         # Backward-compatible with any in-process cache entries
                         # created before the array-payload optimization.
@@ -9506,6 +9877,12 @@ class VectorProcessor:
                     vertices[:, 2] = vertices[:, 2] * float(height) + float(z_offset)
                 faces = np.asarray(base_faces, dtype=np.int64).copy()
                 m = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+                if (
+                    planar_coverage_mm2 is not None
+                    and math.isfinite(planar_coverage_mm2)
+                    and planar_coverage_mm2 >= 0.0
+                ):
+                    m.metadata[_PLANAR_COVERAGE_METADATA_KEY] = planar_coverage_mm2
                 meshes.append(m)
             except VECTOR_HANDLED_ERRORS as e:
                 _log.warning(
@@ -9517,7 +9894,9 @@ class VectorProcessor:
                         "geometry_type": getattr(poly, "geom_type", None),
                     },
                 )
-                continue
+                raise ValueError(
+                    "Vector polygon extrusion failed; refusing partial model export"
+                ) from e
 
         return meshes
 

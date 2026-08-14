@@ -144,3 +144,14 @@ def test_clipper2_extension_uses_numpy_array_output_api() -> None:
     assert "#include <numpy/arrayobject.h>" in source
     assert "import_array" in source
     assert "PyArray_SimpleNew" in source
+
+
+def test_clipper2_extension_rejects_non_manifold_indexed_edges() -> None:
+    from scripts.build_native_extensions import ROOT
+
+    source = (
+        ROOT / "native" / "clipper2_batch" / "clipper2_batch_module.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert "HasClosedIndexedEdgeTopology" in source
+    assert '"indexed_edge_manifold_guard"' in source

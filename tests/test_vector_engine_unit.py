@@ -388,6 +388,26 @@ class TestExtrudeGeometry:
         meshes = VectorProcessor._extrude_geometry(Polygon(), height=1.0, z_offset=0, scale=1.0)
         assert meshes == []
 
+    def test_float_residual_polygon_is_ignored_before_triangulation(self):
+        """Sub-atomic GEOS residue must not abort an otherwise valid export."""
+
+        residue = Polygon(
+            [
+                (678.5630000000006, 2494.571000000001),
+                (678.563000000001, 2494.5710000000013),
+                (678.5630000000007, 2494.571000000001),
+            ]
+        )
+
+        meshes = VectorProcessor._extrude_geometry(
+            residue,
+            height=0.08,
+            z_offset=0.0,
+            scale=0.2762232707950837,
+        )
+
+        assert meshes == []
+
     def test_none_returns_empty(self):
         meshes = VectorProcessor._extrude_geometry(None, height=1.0, z_offset=0, scale=1.0)
         assert meshes == []
@@ -398,14 +418,17 @@ class TestExtrudeGeometry:
         cache = {}
 
         call_count = {"n": 0}
-        real_box = _ve.trimesh.creation.box
+        real_builder = _ve._extrude_polygon_unit_height_indexed
 
-        def fake_extrude_polygon(_poly, height):
+        def counted_builder(_poly):
             call_count["n"] += 1
-            # return any valid mesh; dimensions are irrelevant for cache count check
-            return real_box(extents=[1, 1, max(height, 1e-6)])
+            return real_builder(_poly)
 
-        with patch.object(_ve.trimesh.creation, "extrude_polygon", side_effect=fake_extrude_polygon):
+        with patch.object(
+            _ve,
+            "_extrude_polygon_unit_height_indexed",
+            side_effect=counted_builder,
+        ):
             meshes1 = VectorProcessor._extrude_geometry(poly, height=1.0, z_offset=0.0, scale=1.0, extrude_cache=cache)
             meshes2 = VectorProcessor._extrude_geometry(poly, height=1.0, z_offset=2.0, scale=1.0, extrude_cache=cache)
 
@@ -475,13 +498,13 @@ class TestExtrudeGeometry:
         assert len(meshes) == 1
         assert meshes[0].bounds[:, 2].tolist() == pytest.approx([3.0, 5.0])
 
-    def test_convex_polygon_extrudes_without_trimesh_triangulation(self):
+    def test_convex_polygon_extrudes_without_indexed_triangulation(self):
         """Convex no-hole polygons should use the direct extrusion path."""
         poly = box(0, 0, 10, 10)
 
         with patch.object(
-            _ve.trimesh.creation,
-            "extrude_polygon",
+            _ve,
+            "_extrude_polygon_unit_height_indexed",
             side_effect=AssertionError("convex no-hole polygons should not call trimesh extrusion"),
         ):
             meshes = VectorProcessor._extrude_geometry(
@@ -499,17 +522,21 @@ class TestExtrudeGeometry:
         assert mesh.bounds[1].tolist() == pytest.approx([5.0, 5.0, 5.0])
         assert abs(mesh.volume) == pytest.approx(50.0)
 
-    def test_nonconvex_polygon_keeps_trimesh_fallback(self):
-        """Non-convex polygons should keep the robust trimesh path."""
+    def test_nonconvex_polygon_uses_indexed_extrusion(self):
+        """Non-convex polygons use the slicer-safe indexed boundary path."""
         poly = Polygon([(0, 0), (10, 0), (10, 4), (4, 4), (4, 10), (0, 10)])
         calls = []
-        original = _ve.trimesh.creation.extrude_polygon
+        original = _ve._extrude_polygon_unit_height_indexed
 
-        def spy_extrude_polygon(*args, **kwargs):
+        def spy_indexed_extrusion(*args, **kwargs):
             calls.append(args[0])
             return original(*args, **kwargs)
 
-        with patch.object(_ve.trimesh.creation, "extrude_polygon", side_effect=spy_extrude_polygon):
+        with patch.object(
+            _ve,
+            "_extrude_polygon_unit_height_indexed",
+            side_effect=spy_indexed_extrusion,
+        ):
             meshes = VectorProcessor._extrude_geometry(
                 poly,
                 height=1.0,

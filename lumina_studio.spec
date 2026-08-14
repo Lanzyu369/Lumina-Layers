@@ -86,6 +86,7 @@ backend_datas = [
     # Runtime registry contract only: registry, Lumina plate art, and referenced templates.
     *collect_machine_registry_runtime_datas(ROOT / 'machine_registry'),
     ('printer_profiles', 'printer_profiles'),
+    ('bambu_config_template.json', '.'),
     *glb_v2_datas,
 ]
 backend_binaries = [

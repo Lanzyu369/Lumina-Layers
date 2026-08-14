@@ -29,6 +29,7 @@ from shapely.affinity import affine_transform
 from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, box
 from shapely.ops import unary_union
 from config import ModelingMode
+from core.vector_engine import VectorProcessor
 
 try:
     import numba
@@ -89,17 +90,17 @@ def _flip_geometry_to_world(geometry, height_px):
 
 
 def _merge_mesh_list(meshes):
-    """Concatenate and lightly clean a list of meshes.
-    合并并轻度清理 mesh 列表。
+    """Concatenate meshes while retaining independent closed shells.
+    合并 mesh，同时保留各自独立的闭合壳体。
     """
     clean_meshes = [mesh for mesh in meshes if mesh is not None and len(mesh.faces) > 0]
     if not clean_meshes:
         return None
 
-    combined = trimesh.util.concatenate(clean_meshes) if len(clean_meshes) > 1 else clean_meshes[0]
-    combined.merge_vertices()
-    combined.update_faces(combined.unique_faces())
-    return combined
+    # Adjacent prisms intentionally keep separate vertex indices. Welding
+    # their coincident coordinates without removing both internal walls first
+    # creates edges referenced by more than two triangles.
+    return trimesh.util.concatenate(clean_meshes) if len(clean_meshes) > 1 else clean_meshes[0]
 
 
 def _extrude_polygon_geometry(geometry, height, z_offset, extrude_cache=None):
@@ -122,14 +123,39 @@ def _extrude_polygon_geometry(geometry, height, z_offset, extrude_cache=None):
 
         if cached_base is None:
             try:
-                base_mesh = trimesh.creation.extrude_polygon(poly, height=1.0)
+                base_meshes = VectorProcessor._extrude_geometry(
+                    poly,
+                    height=1.0,
+                    z_offset=0.0,
+                    scale=1.0,
+                    extrude_cache=None,
+                )
+                if not base_meshes:
+                    raise ValueError("indexed polygon extrusion returned no mesh")
+                base_mesh = _merge_mesh_list(base_meshes)
+                if base_mesh is None:
+                    raise ValueError("indexed polygon extrusion returned no mesh")
             except (ValueError, TypeError, RuntimeError, AttributeError, OSError) as exc:
                 log.warning(
                     "Failed to extrude polygon: %s",
                     exc,
                     extra={"event": "polygon_extrusion_failed", "error_type": type(exc).__name__},
                 )
-                continue
+                raise ValueError(
+                    "Raster boundary polygon extrusion failed; refusing partial export"
+                ) from exc
+            if not bool(base_mesh.is_watertight):
+                raise ValueError(
+                    "Raster boundary polygon extrusion produced non-manifold topology"
+                )
+            expected_volume = float(poly.area)
+            actual_volume = abs(float(base_mesh.volume))
+            coverage_tolerance = max(1e-9, expected_volume * 1e-6)
+            if actual_volume + coverage_tolerance < expected_volume:
+                raise ValueError(
+                    "Raster boundary polygon extrusion coverage incomplete; "
+                    "refusing partial export"
+                )
             if extrude_cache is not None and cache_key is not None:
                 extrude_cache[cache_key] = base_mesh.copy()
             cached_base = base_mesh
@@ -248,7 +274,8 @@ class BaseMesher(ABC):
     """Mesh generator abstract base class"""
 
     _VERTEX_TEMPLATE = np.array(
-        [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]], dtype=np.float64
+        [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]],
+        dtype=np.float64,
     )
     _FACE_TEMPLATE = np.array(
         [
@@ -369,62 +396,41 @@ class BaseMesher(ABC):
             n = rect_arr.shape[0]
             if n == 0:
                 continue
-            x0, y0, x1, y1 = rect_arr[:, 0], rect_arr[:, 1], rect_arr[:, 2], rect_arr[:, 3]
+            x0, y0, x1, y1 = (
+                rect_arr[:, 0],
+                rect_arr[:, 1],
+                rect_arr[:, 2],
+                rect_arr[:, 3],
+            )
             wy0 = height_px - y1
             wy1 = height_px - y0
 
             base = np.empty((n, 8, 3), dtype=np.float64)
-            base[:, 0, 0] = x0
-            base[:, 0, 1] = wy0
-            base[:, 0, 2] = z_bottom
-            base[:, 1, 0] = x1
-            base[:, 1, 1] = wy0
-            base[:, 1, 2] = z_bottom
-            base[:, 2, 0] = x1
-            base[:, 2, 1] = wy1
-            base[:, 2, 2] = z_bottom
-            base[:, 3, 0] = x0
-            base[:, 3, 1] = wy1
-            base[:, 3, 2] = z_bottom
-            base[:, 4, 0] = x0
-            base[:, 4, 1] = wy0
-            base[:, 4, 2] = z_top
-            base[:, 5, 0] = x1
-            base[:, 5, 1] = wy0
-            base[:, 5, 2] = z_top
-            base[:, 6, 0] = x1
-            base[:, 6, 1] = wy1
-            base[:, 6, 2] = z_top
-            base[:, 7, 0] = x0
-            base[:, 7, 1] = wy1
-            base[:, 7, 2] = z_top
+            base[:, [0, 3, 4, 7], 0] = x0[:, None]
+            base[:, [1, 2, 5, 6], 0] = x1[:, None]
+            base[:, [0, 1, 4, 5], 1] = wy0[:, None]
+            base[:, [2, 3, 6, 7], 1] = wy1[:, None]
+            base[:, :4, 2] = z_bottom
+            base[:, 4:, 2] = z_top
 
             v_start = rect_idx * 8
             raw_verts[v_start : v_start + n * 8] = base.reshape(-1, 3)
-
-            offsets = (np.arange(n, dtype=np.int64) * 8 + v_start).reshape(-1, 1, 1)
+            offsets = (np.arange(n, dtype=np.int64) * 8 + v_start).reshape(
+                -1, 1, 1
+            )
             faces = self._FACE_TEMPLATE.reshape(1, 12, 3) + offsets
             f_start = rect_idx * 12
             raw_faces[f_start : f_start + n * 12] = faces.reshape(-1, 3)
             rect_idx += n
 
-        # Fast vertex dedup via integer coordinate unique (collision-free)
-        int_verts = np.stack(
-            [
-                np.round(raw_verts[:, 0]).astype(np.int64),
-                np.round(raw_verts[:, 1]).astype(np.int64),
-                np.round(raw_verts[:, 2]).astype(np.int64),
-            ],
-            axis=1,
+        # Do not weld touching prisms. Each indexed box stays independently
+        # closed, avoiding the >2-face edge incidence caused by the old global
+        # coordinate deduplication while retaining the fast vectorized path.
+        return trimesh.Trimesh(
+            vertices=raw_verts,
+            faces=raw_faces,
+            process=False,
         )
-        _, first_idx, inverse = np.unique(int_verts, axis=0, return_index=True, return_inverse=True)
-
-        unique_verts = raw_verts[first_idx]
-        deduped_faces = inverse[raw_faces]
-
-        mesh = trimesh.Trimesh(vertices=unique_verts, faces=deduped_faces, process=False)
-        mesh.update_faces(mesh.unique_faces())
-        return mesh
 
     def _build_mesh_from_layer_polygons(self, layer_polygons, height_px):
         """Build trimesh from list of (z_bottom, z_top, geometry) tuples.

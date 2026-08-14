@@ -2863,6 +2863,13 @@ class BambuStudio3MFWriter:
         settings.setdefault("enable_prime_tower", "1")
 
         applied_override_keys: list[str] = []
+        if self.slicer == "OrcaSlicer":
+            # Orca 2.4 may erase broad printable regions when its precise-wall
+            # correction is combined with Lumina's Arachne one-wall artwork
+            # process. Keep Arachne and the one-wall detail contract, but turn
+            # off only that incompatible correction in the saved project.
+            settings["precise_outer_wall"] = "0"
+            applied_override_keys.append("precise_outer_wall")
         if self.settings:
             for key in [
                 "layer_height",

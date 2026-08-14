@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -64,9 +65,11 @@ constexpr uint8_t kRetryMeshEmpty = 2;
 
 struct RejectedMeshRetryOutput {
   std::vector<MeshOutput> meshes;
+  MeshOutput coalesced_mesh;
   std::vector<uint8_t> statuses;
   std::vector<GroupOutput> fallback_groups;
   size_t path_count = 0;
+  bool meshes_coalesced = false;
 };
 
 struct PointKey {
@@ -85,6 +88,71 @@ struct PointKeyHash {
     return static_cast<size_t>(x ^ (y + 0x9e3779b97f4a7c15ULL + (x << 6U) + (x >> 2U)));
   }
 };
+
+struct EdgeKey {
+  int64_t a;
+  int64_t b;
+
+  bool operator==(const EdgeKey& other) const {
+    return a == other.a && b == other.b;
+  }
+};
+
+struct EdgeKeyHash {
+  size_t operator()(const EdgeKey& key) const {
+    const uint64_t a = static_cast<uint64_t>(key.a);
+    const uint64_t b = static_cast<uint64_t>(key.b);
+    return static_cast<size_t>(
+        a ^ (b + 0x9e3779b97f4a7c15ULL + (a << 6U) + (a >> 2U)));
+  }
+};
+
+bool HasClosedIndexedEdgeTopology(const MeshOutput& mesh) {
+  if (mesh.vertices.empty() || mesh.faces.empty()) {
+    return false;
+  }
+  std::unordered_map<EdgeKey, uint8_t, EdgeKeyHash> incidence;
+  incidence.reserve(mesh.faces.size() * 3U);
+  for (const Face3& face : mesh.faces) {
+    const int64_t indices[3] = {face.a, face.b, face.c};
+    for (size_t index = 0; index < 3U; ++index) {
+      const int64_t left = indices[index];
+      const int64_t right = indices[(index + 1U) % 3U];
+      if (left < 0 || right < 0 || left == right ||
+          left >= static_cast<int64_t>(mesh.vertices.size()) ||
+          right >= static_cast<int64_t>(mesh.vertices.size())) {
+        return false;
+      }
+      const EdgeKey key{std::min(left, right), std::max(left, right)};
+      uint8_t& count = incidence[key];
+      if (count >= 2U) {
+        return false;
+      }
+      ++count;
+    }
+  }
+  return std::all_of(
+      incidence.begin(), incidence.end(),
+      [](const auto& entry) { return entry.second == 2U; });
+}
+
+void AppendIndependentMesh(MeshOutput& destination, MeshOutput&& source) {
+  if (source.vertices.empty() || source.faces.empty()) {
+    return;
+  }
+  const int64_t vertex_offset = static_cast<int64_t>(destination.vertices.size());
+  destination.vertices.insert(
+      destination.vertices.end(),
+      std::make_move_iterator(source.vertices.begin()),
+      std::make_move_iterator(source.vertices.end()));
+  destination.faces.reserve(destination.faces.size() + source.faces.size());
+  for (const Face3& face : source.faces) {
+    destination.faces.push_back(Face3{
+        face.a + vertex_offset,
+        face.b + vertex_offset,
+        face.c + vertex_offset});
+  }
+}
 
 [[noreturn]] void ThrowTypeError(const std::string& message) {
   throw std::runtime_error(message);
@@ -492,22 +560,21 @@ MeshOutput ExtrudePolygonsToMesh(
     return mesh;
   }
 
-  size_t point_count = 0;
-  for (const PolyWithHoles& poly : polygons) {
-    for (const Path64& ring : poly.rings) {
-      point_count += ring.size();
-    }
-  }
-
-  std::unordered_map<PointKey, int64_t, PointKeyHash> bottom_index;
-  std::unordered_map<PointKey, int64_t, PointKeyHash> top_index;
-  bottom_index.reserve(point_count);
-  top_index.reserve(point_count);
-
   for (const PolyWithHoles& poly : polygons) {
     if (poly.rings.empty()) {
       continue;
     }
+    size_t point_count = 0;
+    for (const Path64& ring : poly.rings) {
+      point_count += ring.size();
+    }
+    // Keep coincident vertices in different polygon shells independently
+    // indexed. Sharing this map across polygons welds point contacts while
+    // retaining both shells' sidewalls, creating 4/6/8-face indexed edges.
+    std::unordered_map<PointKey, int64_t, PointKeyHash> bottom_index;
+    std::unordered_map<PointKey, int64_t, PointKeyHash> top_index;
+    bottom_index.reserve(point_count);
+    top_index.reserve(point_count);
     if (!AddTriangleFacesForPaths(
             mesh, bottom_index, top_index, poly.rings, scale, height, z_offset, xy_scale)) {
       return MeshOutput{};
@@ -517,7 +584,7 @@ MeshOutput ExtrudePolygonsToMesh(
     }
   }
 
-  return mesh;
+  return HasClosedIndexedEdgeTopology(mesh) ? std::move(mesh) : MeshOutput{};
 }
 
 double MeshSurfaceArea(const MeshOutput& mesh) {
@@ -631,11 +698,15 @@ RejectedMeshRetryOutput RetryRejectedPolygonsToMeshes(
     double height,
     double z_offset,
     double xy_scale,
+    bool coalesce_meshes,
     bool validate_surfaces,
     double relative_tolerance,
     double absolute_tolerance) {
   RejectedMeshRetryOutput output;
-  output.meshes.reserve(polygons.size());
+  output.meshes_coalesced = coalesce_meshes;
+  if (!coalesce_meshes) {
+    output.meshes.reserve(polygons.size());
+  }
   output.statuses.reserve(polygons.size());
   output.fallback_groups.resize(polygons.size());
   for (size_t index = 0; index < polygons.size(); ++index) {
@@ -664,7 +735,13 @@ RejectedMeshRetryOutput RetryRejectedPolygonsToMeshes(
     if (status != kRetryMeshAccepted) {
       output.fallback_groups[index].push_back(polygon);
     }
-    output.meshes.push_back(std::move(retry_mesh));
+    if (coalesce_meshes) {
+      if (status == kRetryMeshAccepted) {
+        AppendIndependentMesh(output.coalesced_mesh, std::move(retry_mesh));
+      }
+    } else {
+      output.meshes.push_back(std::move(retry_mesh));
+    }
     output.statuses.push_back(status);
   }
   return output;
@@ -772,29 +849,37 @@ PyObject* BuildRejectedMeshRetryRecords(
        index < static_cast<Py_ssize_t>(retry_outputs.size()); ++index) {
     const RejectedMeshRetryOutput& retry =
         retry_outputs[static_cast<size_t>(index)];
-    if (retry.meshes.empty()) {
+    if (retry.statuses.empty()) {
       Py_INCREF(Py_None);
       PyList_SET_ITEM(records, index, Py_None);
       continue;
     }
 
-    PyObject* meshes = PyList_New(
-        static_cast<Py_ssize_t>(retry.meshes.size()));
-    if (!meshes) {
-      Py_DECREF(records);
-      return nullptr;
-    }
-    for (Py_ssize_t mesh_index = 0;
-         mesh_index < static_cast<Py_ssize_t>(retry.meshes.size());
-         ++mesh_index) {
-      PyObject* mesh = BuildMesh(
-          retry.meshes[static_cast<size_t>(mesh_index)]);
-      if (!mesh) {
-        Py_DECREF(meshes);
+    PyObject* meshes = nullptr;
+    if (retry.meshes_coalesced) {
+      meshes = BuildMesh(retry.coalesced_mesh);
+      if (!meshes) {
         Py_DECREF(records);
         return nullptr;
       }
-      PyList_SET_ITEM(meshes, mesh_index, mesh);
+    } else {
+      meshes = PyList_New(static_cast<Py_ssize_t>(retry.meshes.size()));
+      if (!meshes) {
+        Py_DECREF(records);
+        return nullptr;
+      }
+      for (Py_ssize_t mesh_index = 0;
+           mesh_index < static_cast<Py_ssize_t>(retry.meshes.size());
+           ++mesh_index) {
+        PyObject* mesh = BuildMesh(
+            retry.meshes[static_cast<size_t>(mesh_index)]);
+        if (!mesh) {
+          Py_DECREF(meshes);
+          Py_DECREF(records);
+          return nullptr;
+        }
+        PyList_SET_ITEM(meshes, mesh_index, mesh);
+      }
     }
 
     npy_intp status_dims[1] = {
@@ -847,7 +932,7 @@ PyObject* BuildRejectedMeshRetryRecords(
     }
 
     PyObject* path_count = PyLong_FromSize_t(retry.path_count);
-    PyObject* record = PyTuple_New(4);
+    PyObject* record = PyTuple_New(retry.meshes_coalesced ? 5 : 4);
     if (!path_count || !record) {
       Py_XDECREF(record);
       Py_XDECREF(path_count);
@@ -861,6 +946,15 @@ PyObject* BuildRejectedMeshRetryRecords(
     PyTuple_SET_ITEM(record, 1, statuses);
     PyTuple_SET_ITEM(record, 2, fallbacks);
     PyTuple_SET_ITEM(record, 3, path_count);
+    if (retry.meshes_coalesced) {
+      PyObject* coalesced = PyBool_FromLong(1);
+      if (!coalesced) {
+        Py_DECREF(record);
+        Py_DECREF(records);
+        return nullptr;
+      }
+      PyTuple_SET_ITEM(record, 4, coalesced);
+    }
     PyList_SET_ITEM(records, index, record);
   }
   return records;
@@ -892,6 +986,16 @@ PyObject* NativeMeshCapabilities(PyObject*, PyObject*) {
   }
   PyDict_SetItemString(result, "rejected_mesh_retry", rejected_mesh_retry);
   Py_DECREF(rejected_mesh_retry);
+  PyObject* coalesced_rejected_mesh_retry = PyBool_FromLong(1);
+  if (!coalesced_rejected_mesh_retry) {
+    Py_DECREF(result);
+    return nullptr;
+  }
+  PyDict_SetItemString(
+      result,
+      "coalesced_rejected_mesh_retry",
+      coalesced_rejected_mesh_retry);
+  Py_DECREF(coalesced_rejected_mesh_retry);
   PyObject* native_surface_validation = PyBool_FromLong(1);
   if (!native_surface_validation) {
     Py_DECREF(result);
@@ -900,6 +1004,14 @@ PyObject* NativeMeshCapabilities(PyObject*, PyObject*) {
   PyDict_SetItemString(
       result, "native_surface_validation", native_surface_validation);
   Py_DECREF(native_surface_validation);
+  PyObject* topology_guard = PyBool_FromLong(1);
+  if (!topology_guard) {
+    Py_DECREF(result);
+    return nullptr;
+  }
+  PyDict_SetItemString(
+      result, "indexed_edge_manifold_guard", topology_guard);
+  Py_DECREF(topology_guard);
   return result;
 }
 
@@ -965,14 +1077,16 @@ PyObject* MergeRunGroupsToMeshes(PyObject*, PyObject* args, PyObject* kwargs) {
   int return_rejected_meshes = 0;
   int validate_retry_surfaces = 0;
   int validate_primary_surfaces = 0;
+  int coalesce_retry_meshes = 0;
   double surface_rel_tol = 0.001;
   double surface_abs_tol = 0.01;
   static const char* kwlist[] = {
       "groups", "close_delta_mm", "scale", "height", "z_offset", "xy_scale",
       "return_rejected_groups", "return_rejected_meshes",
       "validate_retry_surfaces", "validate_primary_surfaces",
+      "coalesce_retry_meshes",
       "surface_rel_tol", "surface_abs_tol", nullptr};
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|dLdddppppdd",
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|dLdddpppppdd",
                                    const_cast<char**>(kwlist),
                                    &groups_obj, &close_delta_mm, &scale_arg,
                                    &height, &z_offset, &xy_scale,
@@ -980,6 +1094,7 @@ PyObject* MergeRunGroupsToMeshes(PyObject*, PyObject* args, PyObject* kwargs) {
                                    &return_rejected_meshes,
                                    &validate_retry_surfaces,
                                    &validate_primary_surfaces,
+                                   &coalesce_retry_meshes,
                                    &surface_rel_tol,
                                    &surface_abs_tol)) {
     return nullptr;
@@ -988,6 +1103,12 @@ PyObject* MergeRunGroupsToMeshes(PyObject*, PyObject* args, PyObject* kwargs) {
     PyErr_SetString(
         PyExc_ValueError,
         "return_rejected_groups and return_rejected_meshes are mutually exclusive");
+    return nullptr;
+  }
+  if (coalesce_retry_meshes && !return_rejected_meshes) {
+    PyErr_SetString(
+        PyExc_ValueError,
+        "coalesce_retry_meshes requires return_rejected_meshes");
     return nullptr;
   }
   if (scale_arg <= 0) {
@@ -1032,7 +1153,7 @@ PyObject* MergeRunGroupsToMeshes(PyObject*, PyObject* args, PyObject* kwargs) {
   for (size_t i = 0; i < groups.size(); ++i) {
     GroupOutput polygons = ProcessGroup(groups[i], close_delta);
     outputs[i] = ExtrudePolygonsToMesh(polygons, scale, height, z_offset, xy_scale);
-    const bool primary_empty =
+    bool primary_empty =
         outputs[i].vertices.empty() || outputs[i].faces.empty();
     if (return_rejected_meshes && primary_empty) {
       primary_statuses[i] = kRetryMeshEmpty;
@@ -1047,6 +1168,7 @@ PyObject* MergeRunGroupsToMeshes(PyObject*, PyObject* args, PyObject* kwargs) {
                    std::max(0.0, surface_abs_tol))) {
       outputs[i] = MeshOutput{};
       primary_statuses[i] = kRetryMeshSurfaceReject;
+      primary_empty = true;
     }
     if (primary_empty) {
       if (return_rejected_meshes) {
@@ -1056,6 +1178,7 @@ PyObject* MergeRunGroupsToMeshes(PyObject*, PyObject* args, PyObject* kwargs) {
             height,
             z_offset,
             xy_scale,
+            coalesce_retry_meshes != 0,
             validate_retry_surfaces != 0,
             std::max(0.0, surface_rel_tol),
             std::max(0.0, surface_abs_tol));

@@ -86,6 +86,51 @@ def _add_8c_meshes(writer: BambuStudio3MFWriter) -> None:
         writer.add_mesh(mesh, name, rgb)
 
 
+def test_orca_project_disables_precise_outer_wall_for_one_wall_art() -> None:
+    """The written Orca project must retain the proven no-missing-path fix."""
+
+    writer = BambuStudio3MFWriter(
+        "orca-safe-wall.3mf",
+        settings={},
+        color_mode="8-Color",
+        printer_id="bambu-h2d",
+        slicer="OrcaSlicer",
+    )
+    _add_8c_meshes(writer)
+
+    settings = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
+
+    assert settings["wall_generator"] == "arachne"
+    assert settings["wall_loops"] == "1"
+    assert settings["precise_outer_wall"] == "0"
+    assert "precise_outer_wall" in set(
+        settings["different_settings_to_system"][0].split(";")
+    )
+
+
+def test_bambu_project_keeps_native_precise_outer_wall_value(monkeypatch) -> None:
+    writer = BambuStudio3MFWriter(
+        "bambu-native-wall.3mf",
+        settings={},
+        color_mode="4-Color",
+        printer_id="bambu-h2d",
+        slicer="BambuStudio",
+    )
+    _add_rybw_meshes(writer)
+    original_loader = writer._get_base_config_template
+
+    def precise_template() -> dict[str, object]:
+        template = original_loader()
+        template["precise_outer_wall"] = "1"
+        return template
+
+    monkeypatch.setattr(writer, "_get_base_config_template", precise_template)
+
+    settings = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
+
+    assert settings["precise_outer_wall"] == "1"
+
+
 def test_cover_relationship_postprocess_raw_copies_unchanged_deflated_entries(
     tmp_path,
     monkeypatch,

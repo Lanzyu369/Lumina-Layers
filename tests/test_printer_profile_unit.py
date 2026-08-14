@@ -7,6 +7,7 @@ Covers:
   - Task 0.2 nozzle support: profile metadata and nozzle-size-aware resolution
 """
 
+import json
 from pathlib import Path
 import pytest
 
@@ -305,3 +306,63 @@ class TestCheckedInNozzleVariants:
         ]
 
         assert not missing, f"Missing 0.2 template siblings: {missing}"
+
+
+class TestLuminaLayerHeightContract:
+    """Slicer layers must not span multiple physical Lumina material layers."""
+
+    def test_first_layer_print_height_matches_0_08_model_layer(self) -> None:
+        profiles_dir = Path(__file__).resolve().parents[1] / "printer_profiles"
+        template_names: set[str] = set()
+        for profile in list_printer_profiles():
+            slicers = {*profile.slicer_templates, "BambuStudio", "OrcaSlicer"}
+            for slicer in slicers:
+                for nozzle_size in ("0.4", "0.2"):
+                    template_names.add(
+                        profile.get_template_file(
+                            slicer,
+                            nozzle_size=nozzle_size,
+                        )
+                    )
+
+        mismatches = []
+        for template_name in sorted(template_names):
+            template_path = profiles_dir / template_name
+            if not template_path.is_file():
+                continue
+            settings = json.loads(template_path.read_text(encoding="utf-8"))
+            layer_height = str(settings.get("layer_height") or "").strip()
+            first_layer_height = str(
+                settings.get("initial_layer_print_height") or ""
+            ).strip()
+            if layer_height == "0.08" and first_layer_height != layer_height:
+                mismatches.append(
+                    (template_name, layer_height, first_layer_height)
+                )
+
+        assert mismatches == []
+
+
+class TestSlicerTemplateCompatibilityContract:
+    """Generated projects must be sliceable by their declared printer."""
+
+    @pytest.mark.parametrize("nozzle_size", ["0.4", "0.2"])
+    def test_orca_p2s_process_declares_its_p2s_printer(
+        self,
+        nozzle_size: str,
+    ) -> None:
+        profile = get_printer_profile("bambu-p2s")
+        template_name = profile.get_template_file(
+            "OrcaSlicer",
+            nozzle_size=nozzle_size,
+        )
+        template_path = (
+            Path(__file__).resolve().parents[1]
+            / "printer_profiles"
+            / template_name
+        )
+        template = json.loads(template_path.read_text(encoding="utf-8"))
+
+        assert template["print_compatible_printers"] == [
+            template["printer_settings_id"]
+        ]

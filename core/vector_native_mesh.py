@@ -30,7 +30,13 @@ from core.task_parallelism import (
     task_memory_headroom_bytes,
     task_parallelism_worker_scope,
 )
-from core.vector_engine import VectorProcessor, _union_run_group_geometries
+from core.vector_engine import (
+    VectorProcessor,
+    _extruded_planar_coverage_mm2,
+    _source_planar_coverage_mm2,
+    _union_run_group_geometries,
+    _vector_coverage_is_incomplete,
+)
 
 
 NATIVE_CLOSE_DELTA_MM = 0.03
@@ -46,8 +52,12 @@ NATIVE_BATCH_GEOMETRY_OVERHEAD_BYTES = 1024
 NATIVE_SURFACE_AREA_REL_TOL = 0.001
 NATIVE_SURFACE_AREA_ABS_TOL_MM2 = 0.01
 NATIVE_REQUIRED_GUARD_CAPABILITY = "triangulation_area_guard"
+NATIVE_TOPOLOGY_GUARD_CAPABILITY = "indexed_edge_manifold_guard"
 NATIVE_REJECTED_GROUP_REUSE_CAPABILITY = "rejected_group_reuse"
 NATIVE_REJECTED_MESH_RETRY_CAPABILITY = "rejected_mesh_retry"
+NATIVE_COALESCED_REJECTED_MESH_RETRY_CAPABILITY = (
+    "coalesced_rejected_mesh_retry"
+)
 NATIVE_SURFACE_VALIDATION_CAPABILITY = "native_surface_validation"
 NATIVE_SPLIT_RETRY_MIN_ORIGINAL_PATHS = 300
 NATIVE_SPLIT_RETRY_MAX_ORIGINAL_PATHS_PER_GEOM = 1.15
@@ -471,22 +481,63 @@ def _compute_native_batch(
                 continue
 
             if validate_surface:
+                validation_started = time.perf_counter()
                 if len(primary_statuses) > 0:
-                    surface_ok = True
-                    surface_checked += 1
-                else:
-                    validation_started = time.perf_counter()
-                    surface_ok = _native_surface_area_matches_arrays(
+                    # The native guard validates triangulation against its own
+                    # post-Clipper polygons. Always add this independent check
+                    # against the untouched source geoms as well.
+                    surface_ok = _native_source_coverage_matches_arrays(
                         mesh_arrays,
                         group.geoms,
                         height=batch.height,
                         scale_factor=scale_factor,
                     )
-                    surface_validation_seconds += (
-                        time.perf_counter() - validation_started
+                else:
+                    surface_ok = (
+                        _native_surface_area_matches_arrays(
+                            mesh_arrays,
+                            group.geoms,
+                            height=batch.height,
+                            scale_factor=scale_factor,
+                        )
+                        and _native_source_coverage_matches_arrays(
+                            mesh_arrays,
+                            group.geoms,
+                            height=batch.height,
+                            scale_factor=scale_factor,
+                        )
                     )
-                    surface_checked += 1
+                surface_validation_seconds += (
+                    time.perf_counter() - validation_started
+                )
+                surface_checked += 1
                 if not surface_ok:
+                    surface_rejects += 1
+                    outcomes.append(
+                        _NativeGroupOutcome(
+                            status="surface_reject",
+                            rejection_counter="",
+                            mesh_arrays=mesh_arrays,
+                        )
+                    )
+                    continue
+
+            # Coverage against untouched source geometry is a correctness
+            # invariant, not an optional profiling gate. When the native
+            # extension already checked its post-Clipper surface, this catches
+            # only losses that happened before that reference was produced.
+            if not validate_surface:
+                validation_started = time.perf_counter()
+                source_coverage_ok = _native_source_coverage_matches_arrays(
+                    mesh_arrays,
+                    group.geoms,
+                    height=batch.height,
+                    scale_factor=scale_factor,
+                )
+                surface_validation_seconds += (
+                    time.perf_counter() - validation_started
+                )
+                if not source_coverage_ok:
                     surface_rejects += 1
                     outcomes.append(
                         _NativeGroupOutcome(
@@ -538,6 +589,10 @@ def _run_native_mesh_call(
         module,
         NATIVE_REJECTED_GROUP_REUSE_CAPABILITY,
     )
+    coalesce_rejected_meshes = _native_module_has_capability(
+        module,
+        NATIVE_COALESCED_REJECTED_MESH_RETRY_CAPABILITY,
+    )
     native_surface_validation = _native_module_has_capability(
         module,
         NATIVE_SURFACE_VALIDATION_CAPABILITY,
@@ -558,6 +613,11 @@ def _run_native_mesh_call(
                 ),
                 "validate_primary_surfaces": (
                     validate_surfaces and native_surface_validation
+                ),
+                **(
+                    {"coalesce_retry_meshes": True}
+                    if coalesce_rejected_meshes
+                    else {}
                 ),
                 "surface_rel_tol": _surface_area_rel_tolerance(),
                 "surface_abs_tol": NATIVE_SURFACE_AREA_ABS_TOL_MM2,
@@ -679,9 +739,17 @@ def run_length_extrude_native_hybrid(
         jobs_by_height_z[(round(float(height), 8), round(float(z_bot), 8))].append((key, geoms))
 
     meshes_by_slot: dict[str, dict[str, Any]] = {}
+    missing_capabilities = []
     if not _native_module_has_triangulation_area_guard(module):
-        stats["native_capability_error"] = f"{NATIVE_REQUIRED_GUARD_CAPABILITY}_missing"
+        missing_capabilities.append(NATIVE_REQUIRED_GUARD_CAPABILITY)
         stats["native_triangulation_area_guard"] = "missing"
+    if not _native_module_has_topology_guard(module):
+        missing_capabilities.append(NATIVE_TOPOLOGY_GUARD_CAPABILITY)
+        stats["native_topology_guard"] = "missing"
+    if missing_capabilities:
+        stats["native_capability_error"] = (
+            "+".join(missing_capabilities) + "_missing"
+        )
         for (height, z_bot), jobs in jobs_by_height_z.items():
             for key, geoms in jobs:
                 _fallback_key(
@@ -699,6 +767,7 @@ def run_length_extrude_native_hybrid(
         return NativeVectorMeshResult(meshes_by_slot=meshes_by_slot, stats=stats)
 
     stats["native_triangulation_area_guard"] = "present"
+    stats["native_topology_guard"] = "present"
     batch_items = list(jobs_by_height_z.items())
     cheap_batch_costs = [
         _estimate_native_jobs_cost(jobs)
@@ -783,6 +852,7 @@ def _empty_stats() -> dict[str, float | int | str]:
         "native_split_group_count": 0,
         "native_split_meshes": 0,
         "native_split_fallback_groups": 0,
+        "native_split_source_coverage_rejects": 0,
         "native_rejected_groups_reused": 0,
         "native_rejected_mesh_retries_reused": 0,
         "native_split_parallel_workers": 1,
@@ -796,6 +866,7 @@ def _empty_stats() -> dict[str, float | int | str]:
         "fallback_groups": 0,
         "native_capability_error": "",
         "native_triangulation_area_guard": "",
+        "native_topology_guard": "",
         "native_parallel_workers": 1,
         "native_parallel_batch_count": 0,
         "native_parallel_source_geometry_count": 0,
@@ -871,6 +942,13 @@ def _native_module_has_triangulation_area_guard(module) -> bool:
     return _native_module_has_capability(
         module,
         NATIVE_REQUIRED_GUARD_CAPABILITY,
+    )
+
+
+def _native_module_has_topology_guard(module) -> bool:
+    return _native_module_has_capability(
+        module,
+        NATIVE_TOPOLOGY_GUARD_CAPABILITY,
     )
 
 
@@ -1099,6 +1177,7 @@ def _try_run_native_batches_parallel(
     stats["run_group_count"] = run_group_count
     stats["native_parallel_source_geometry_count"] = source_geometry_count
     stats["native_triangulation_area_guard"] = "present"
+    stats["native_topology_guard"] = "present"
     stats["native_parallel_workers"] = worker_count
     stats["native_parallel_requested_workers"] = worker_count
     stats["native_parallel_batch_count"] = len(batch_items)
@@ -1465,25 +1544,35 @@ def _run_native_job_batch(
             )
             continue
         if _surface_validation_enabled():
+            t_validate = time.perf_counter()
             if len(primary_statuses) > 0:
-                surface_ok = True
-                stats["native_surface_checked"] = int(
-                    stats["native_surface_checked"]
-                ) + 1
-            else:
-                t_validate = time.perf_counter()
-                surface_ok = _native_surface_area_matches_arrays(
+                surface_ok = _native_source_coverage_matches_arrays(
                     mesh_arrays,
                     geoms_by_key[key],
                     height=height,
                     scale_factor=scale_factor,
                 )
-                stats["surface_validation_seconds"] = float(
-                    stats["surface_validation_seconds"]
-                ) + (time.perf_counter() - t_validate)
-                stats["native_surface_checked"] = int(
-                    stats["native_surface_checked"]
-                ) + 1
+            else:
+                surface_ok = (
+                    _native_surface_area_matches_arrays(
+                        mesh_arrays,
+                        geoms_by_key[key],
+                        height=height,
+                        scale_factor=scale_factor,
+                    )
+                    and _native_source_coverage_matches_arrays(
+                        mesh_arrays,
+                        geoms_by_key[key],
+                        height=height,
+                        scale_factor=scale_factor,
+                    )
+                )
+            stats["surface_validation_seconds"] = float(
+                stats["surface_validation_seconds"]
+            ) + (time.perf_counter() - t_validate)
+            stats["native_surface_checked"] = int(
+                stats["native_surface_checked"]
+            ) + 1
             if not surface_ok:
                 stats["native_surface_rejects"] = int(stats["native_surface_rejects"]) + 1
                 _fallback_key(
@@ -1497,6 +1586,34 @@ def _run_native_job_batch(
                     extrude_cache=extrude_cache,
                     stats=stats,
                     reason="surface_reject",
+                )
+                continue
+        else:
+            t_validate = time.perf_counter()
+            source_coverage_ok = _native_source_coverage_matches_arrays(
+                mesh_arrays,
+                geoms_by_key[key],
+                height=height,
+                scale_factor=scale_factor,
+            )
+            stats["surface_validation_seconds"] = float(
+                stats["surface_validation_seconds"]
+            ) + (time.perf_counter() - t_validate)
+            if not source_coverage_ok:
+                stats["native_surface_rejects"] = int(
+                    stats["native_surface_rejects"]
+                ) + 1
+                _fallback_key(
+                    key,
+                    geoms_by_key[key],
+                    height=height,
+                    z_bot=z_bot,
+                    scale_factor=scale_factor,
+                    slot_names=slot_names,
+                    meshes_by_slot=meshes_by_slot,
+                    extrude_cache=extrude_cache,
+                    stats=stats,
+                    reason="source_coverage_reject",
                 )
                 continue
         stats["native_meshes"] = int(stats["native_meshes"]) + 1
@@ -1521,12 +1638,82 @@ def _retry_native_group_as_reference_polygons(
     prepared_retry_groups=None,
     prepared_retry_record=None,
 ) -> bool:
-    if not _should_consider_native_split(
-        original_geometry_count=len(geoms),
+    ch = key[0]
+    slot_name = slot_names[ch]
+    _ensure_slot(meshes_by_slot, slot_name, ch)
+    slot_data = meshes_by_slot[slot_name]
+    meshes = slot_data["meshes"]
+    buffers = slot_data.setdefault("_native_buffers", [])
+    mesh_count_before = len(meshes)
+    buffer_count_before = len(buffers)
+
+    accepted = _retry_native_group_as_reference_polygons_unchecked(
+        module=module,
+        key=key,
+        geoms=geoms,
         original_path_count=original_path_count,
-    ):
+        height=height,
+        z_bot=z_bot,
+        scale_factor=scale_factor,
+        slot_names=slot_names,
+        meshes_by_slot=meshes_by_slot,
+        extrude_cache=extrude_cache,
+        stats=stats,
+        path_cache=path_cache,
+        prepared_retry_groups=prepared_retry_groups,
+        prepared_retry_record=prepared_retry_record,
+    )
+    if not accepted:
         return False
 
+    expected_area = _source_planar_coverage_mm2(geoms, scale_factor)
+    actual_area = _extruded_planar_coverage_mm2(
+        meshes[mesh_count_before:],
+        height,
+    )
+    if actual_area is None:
+        actual_area = 0.0
+    for mesh_arrays in buffers[buffer_count_before:]:
+        buffer_area = _native_planar_coverage_mm2(
+            mesh_arrays,
+            height=height,
+        )
+        if buffer_area is None:
+            actual_area = None
+            break
+        actual_area += buffer_area
+
+    if actual_area is not None and not _vector_coverage_is_incomplete(
+        expected_area,
+        actual_area,
+    ):
+        return True
+
+    del meshes[mesh_count_before:]
+    del buffers[buffer_count_before:]
+    stats["native_split_source_coverage_rejects"] = int(
+        stats.get("native_split_source_coverage_rejects", 0) or 0
+    ) + 1
+    return False
+
+
+def _retry_native_group_as_reference_polygons_unchecked(
+    *,
+    module,
+    key: tuple[int, int, int],
+    geoms,
+    original_path_count: int,
+    height: float,
+    z_bot: float,
+    scale_factor: float,
+    slot_names,
+    meshes_by_slot: dict[str, dict[str, Any]],
+    extrude_cache,
+    stats: dict[str, float | int | str],
+    path_cache: dict[int, tuple[Any, list[list[tuple[float, float]]]]] | None,
+    prepared_retry_groups=None,
+    prepared_retry_record=None,
+) -> bool:
     if prepared_retry_record is not None:
         precomputed_result = _commit_precomputed_native_split_retry(
             key=key,
@@ -1542,6 +1729,12 @@ def _retry_native_group_as_reference_polygons(
         )
         if precomputed_result is not None:
             return precomputed_result
+
+    if not _should_consider_native_split(
+        original_geometry_count=len(geoms),
+        original_path_count=original_path_count,
+    ):
+        return False
 
     retry_polygons = None
     retry_groups = prepared_retry_groups
@@ -1688,35 +1881,44 @@ def _commit_precomputed_native_split_retry(
 ) -> bool | None:
     """Commit one native-side split retry, or decline malformed records safely."""
 
-    if not isinstance(retry_record, tuple) or len(retry_record) != 4:
+    if not isinstance(retry_record, tuple) or len(retry_record) not in {4, 5}:
         return None
     (
         raw_meshes,
         raw_statuses,
         raw_fallbacks,
         raw_path_count,
-    ) = retry_record
+    ) = retry_record[:4]
+    coalesced_record = len(retry_record) == 5
+    if coalesced_record and retry_record[4] is not True:
+        return None
     try:
-        native_meshes = list(raw_meshes)
         native_statuses = np.asarray(raw_statuses, dtype=np.uint8)
         retry_path_count = int(raw_path_count)
     except (TypeError, ValueError):
         return None
-    retry_group_count = len(native_meshes)
+    if native_statuses.ndim != 1:
+        return None
+    if coalesced_record:
+        native_meshes = None
+        retry_group_count = len(native_statuses)
+    else:
+        try:
+            native_meshes = list(raw_meshes)
+        except TypeError:
+            return None
+        retry_group_count = len(native_meshes)
     if (
         retry_group_count <= 1
         or retry_path_count < 0
-        or native_statuses.ndim != 1
         or len(native_statuses) != retry_group_count
         or not isinstance(raw_fallbacks, dict)
     ):
         return None
-    if not _should_retry_native_split(
-        original_path_count=original_path_count,
-        retry_group_count=retry_group_count,
-        retry_path_count=retry_path_count,
-    ):
-        return None
+    # This record was produced by the guarded native call from the exact
+    # already-merged polygons. Reusing it avoids repeating the same split in
+    # Python; the heuristic remains necessary only before launching a new
+    # native split call.
 
     fallback_groups = {}
     for raw_index, fallback_group in raw_fallbacks.items():
@@ -1733,16 +1935,13 @@ def _commit_precomputed_native_split_retry(
             return None
         fallback_groups[index] = polygon
 
-    mesh_arrays_by_index = [None] * retry_group_count
     accepted_count = 0
     surface_rejects = 0
-    for index, native_mesh in enumerate(native_meshes):
-        status = int(native_statuses[index])
+    for index, raw_status in enumerate(native_statuses):
+        status = int(raw_status)
         if status == NATIVE_RETRY_MESH_ACCEPTED:
-            mesh_arrays = _native_mesh_arrays(native_mesh)
-            if mesh_arrays is None or index in fallback_groups:
+            if index in fallback_groups:
                 return None
-            mesh_arrays_by_index[index] = mesh_arrays
             accepted_count += 1
             continue
         if status not in {
@@ -1750,12 +1949,34 @@ def _commit_precomputed_native_split_retry(
             NATIVE_RETRY_MESH_EMPTY,
         }:
             return None
-        if _native_mesh_arrays(native_mesh) is not None or index not in fallback_groups:
+        if index not in fallback_groups:
             return None
         if status == NATIVE_RETRY_MESH_SURFACE_REJECT:
             surface_rejects += 1
     if accepted_count + len(fallback_groups) != retry_group_count:
         return None
+
+    coalesced_mesh_arrays = None
+    mesh_arrays_by_index = None
+    if coalesced_record:
+        coalesced_mesh_arrays = _native_mesh_arrays(raw_meshes)
+        if accepted_count > 0 and coalesced_mesh_arrays is None:
+            return None
+        if accepted_count == 0 and not _native_mesh_is_empty(raw_meshes):
+            return None
+    else:
+        assert native_meshes is not None
+        mesh_arrays_by_index = [None] * retry_group_count
+        for index, native_mesh in enumerate(native_meshes):
+            status = int(native_statuses[index])
+            if status == NATIVE_RETRY_MESH_ACCEPTED:
+                mesh_arrays = _native_mesh_arrays(native_mesh)
+                if mesh_arrays is None:
+                    return None
+                mesh_arrays_by_index[index] = mesh_arrays
+                continue
+            if _native_mesh_arrays(native_mesh) is not None:
+                return None
 
     validate_surface = _surface_validation_enabled()
     surface_checked = accepted_count + surface_rejects if validate_surface else 0
@@ -1784,17 +2005,28 @@ def _commit_precomputed_native_split_retry(
     ch = key[0]
     slot_name = slot_names[ch]
     _ensure_slot(meshes_by_slot, slot_name, ch)
-    for index, mesh_arrays in enumerate(mesh_arrays_by_index):
-        if mesh_arrays is not None:
-            _append_native_buffer(
-                meshes_by_slot,
-                slot_name,
-                ch,
-                mesh_arrays,
-            )
+    if coalesced_mesh_arrays is not None:
+        _append_native_buffer(
+            meshes_by_slot,
+            slot_name,
+            ch,
+            coalesced_mesh_arrays,
+        )
+
+    for index in range(retry_group_count):
+        status = int(native_statuses[index])
+        if status == NATIVE_RETRY_MESH_ACCEPTED:
+            if mesh_arrays_by_index is not None:
+                mesh_arrays = mesh_arrays_by_index[index]
+                assert mesh_arrays is not None
+                _append_native_buffer(
+                    meshes_by_slot,
+                    slot_name,
+                    ch,
+                    mesh_arrays,
+                )
             continue
 
-        status = int(native_statuses[index])
         polygon = fallback_groups[index]
         if status == NATIVE_RETRY_MESH_SURFACE_REJECT:
             reason = "split_surface_reject"
@@ -2054,15 +2286,42 @@ def _fallback_key(
     ):
         stats["fallback_seconds"] = float(stats["fallback_seconds"]) + (time.perf_counter() - t0)
         return
-    meshes_by_slot[slot_name]["meshes"].extend(
-        _fallback_extrude_group(
-            geoms,
-            height=height,
-            z_bot=z_bot,
-            scale_factor=scale_factor,
-            extrude_cache=extrude_cache,
-        )
+    fallback_meshes = _fallback_extrude_group(
+        geoms,
+        height=height,
+        z_bot=z_bot,
+        scale_factor=scale_factor,
+        extrude_cache=extrude_cache,
     )
+    expected_area = _source_planar_coverage_mm2(geoms, scale_factor)
+    fallback_area = _extruded_planar_coverage_mm2(fallback_meshes, height)
+    if (
+        fallback_area is None
+        or _vector_coverage_is_incomplete(expected_area, fallback_area)
+    ):
+        # The optimized fallback union is allowed to fail, but the original
+        # shells are the final authority and must either extrude completely or
+        # abort the export.
+        fallback_meshes = []
+        for geom in geoms:
+            fallback_meshes.extend(
+                VectorProcessor._extrude_geometry(
+                    geom,
+                    height=height,
+                    z_offset=z_bot,
+                    scale=scale_factor,
+                    extrude_cache=extrude_cache,
+                )
+            )
+        fallback_area = _extruded_planar_coverage_mm2(fallback_meshes, height)
+        if (
+            fallback_area is None
+            or _vector_coverage_is_incomplete(expected_area, fallback_area)
+        ):
+            raise ValueError(
+                "Native vector fallback coverage incomplete; refusing partial export"
+            )
+    meshes_by_slot[slot_name]["meshes"].extend(fallback_meshes)
     stats["fallback_groups"] = int(stats["fallback_groups"]) + 1
     _increment_fallback_reason(stats, reason)
     stats["fallback_seconds"] = float(stats["fallback_seconds"]) + (time.perf_counter() - t0)
@@ -2128,15 +2387,21 @@ def _try_native_merged_fallback(
     ch = key[0]
     slot_name = slot_names[ch]
     _ensure_slot(meshes_by_slot, slot_name, ch)
-    meshes_by_slot[slot_name]["meshes"].extend(
-        VectorProcessor._extrude_geometry(
-            merged_geom,
-            height=height,
-            z_offset=z_bot,
-            scale=scale_factor,
-            extrude_cache=extrude_cache,
-        )
+    fallback_meshes = VectorProcessor._extrude_geometry(
+        merged_geom,
+        height=height,
+        z_offset=z_bot,
+        scale=scale_factor,
+        extrude_cache=extrude_cache,
     )
+    expected_area = _source_planar_coverage_mm2(geoms, scale_factor)
+    fallback_area = _extruded_planar_coverage_mm2(fallback_meshes, height)
+    if (
+        fallback_area is None
+        or _vector_coverage_is_incomplete(expected_area, fallback_area)
+    ):
+        return False
+    meshes_by_slot[slot_name]["meshes"].extend(fallback_meshes)
     stats["fallback_groups"] = int(stats["fallback_groups"]) + 1
     _increment_fallback_reason(stats, "native_merged_empty_native_mesh")
     stats["native_merged_fallback_groups"] = int(
@@ -2252,6 +2517,14 @@ def _native_mesh_arrays(native_mesh) -> tuple[np.ndarray, np.ndarray] | None:
     if np.any(fac < 0) or np.any(fac >= len(verts)):
         return None
     return verts, fac
+
+
+def _native_mesh_is_empty(native_mesh) -> bool:
+    try:
+        vertices, faces = native_mesh
+        return len(vertices) == 0 and len(faces) == 0
+    except (TypeError, ValueError):
+        return False
 
 
 def _mesh_from_arrays(mesh_arrays: tuple[np.ndarray, np.ndarray]) -> trimesh.Trimesh | None:
@@ -2411,6 +2684,53 @@ def _native_surface_area_matches_arrays(
     if delta <= NATIVE_SURFACE_AREA_ABS_TOL_MM2:
         return True
     return delta / expected_area <= _surface_area_rel_tolerance()
+
+
+def _native_planar_coverage_mm2(
+    mesh_arrays: tuple[np.ndarray, np.ndarray],
+    *,
+    height: float,
+) -> float | None:
+    """Measure native prism coverage independently from processed polygons."""
+
+    vertices, faces = mesh_arrays
+    try:
+        triangles = vertices[faces]
+    except (IndexError, TypeError, ValueError):
+        return None
+    if len(triangles) == 0 or float(height) <= 0.0:
+        return None
+    bottom_z = float(np.min(vertices[:, 2]))
+    z_values = triangles[:, :, 2]
+    horizontal = np.ptp(z_values, axis=1) <= 1e-9
+    bottom = horizontal & (np.max(np.abs(z_values - bottom_z), axis=1) <= 1e-9)
+    if not np.any(bottom):
+        return None
+    xy = triangles[bottom, :, :2]
+    edge_a = xy[:, 1] - xy[:, 0]
+    edge_b = xy[:, 2] - xy[:, 0]
+    twice_area = np.abs(
+        edge_a[:, 0] * edge_b[:, 1] - edge_a[:, 1] * edge_b[:, 0]
+    )
+    area = float(np.sum(twice_area, dtype=np.float64) * 0.5)
+    return area if np.isfinite(area) and area >= 0.0 else None
+
+
+def _native_source_coverage_matches_arrays(
+    mesh_arrays: tuple[np.ndarray, np.ndarray],
+    geoms,
+    *,
+    height: float,
+    scale_factor: float,
+) -> bool:
+    """Compare native output with untouched Shapely source geometry area."""
+
+    expected_area = _source_planar_coverage_mm2(geoms, scale_factor)
+    actual_area = _native_planar_coverage_mm2(mesh_arrays, height=height)
+    return actual_area is not None and not _vector_coverage_is_incomplete(
+        expected_area,
+        actual_area,
+    )
 
 
 def _expected_extruded_surface_area(geoms, *, height: float, scale_factor: float) -> float:
