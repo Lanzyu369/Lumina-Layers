@@ -39,6 +39,9 @@ def _make_source_3mf(
     offset_y: float = 0.0,
     *,
     enable_base_layer_height_modifier: bool = False,
+    backing_infill_density_percent: int = 100,
+    base_height_mm: float = 0.8,
+    color_height_mm: float = 2.4,
 ) -> Path:
     """Create a minimal real Bambu 3MF with one slot."""
     os.makedirs(TEMP_DIR, exist_ok=True)
@@ -58,9 +61,10 @@ def _make_source_3mf(
         settings={},
         color_mode="4-Color",
         enable_base_layer_height_modifier=enable_base_layer_height_modifier,
-        base_height_mm=0.8,
-        color_height_mm=2.4,
+        base_height_mm=base_height_mm,
+        color_height_mm=color_height_mm,
         face_orientation="down",
+        backing_infill_density_percent=backing_infill_density_percent,
     )
     return Path(path)
 
@@ -433,10 +437,16 @@ class TestMergedWriterBambuCompatibility:
         src1 = _make_source_3mf(
             offset_x=0.0,
             enable_base_layer_height_modifier=True,
+            backing_infill_density_percent=20,
+            base_height_mm=10.0,
+            color_height_mm=0.4,
         )
         src2 = _make_source_3mf(
             offset_x=15.0,
             enable_base_layer_height_modifier=True,
+            backing_infill_density_percent=20,
+            base_height_mm=10.0,
+            color_height_mm=0.4,
         )
 
         items = [
@@ -491,6 +501,35 @@ class TestMergedWriterBambuCompatibility:
                 ]
                 assert layer_object_ids == ["1", "2"]
                 assert layer_object_ids != build_ids
+                for layer_object in layer_root.findall("object"):
+                    ranges = layer_object.findall("range")
+                    assert [
+                        (
+                            float(item.get("min_z", "nan")),
+                            float(item.get("max_z", "nan")),
+                        )
+                        for item in ranges
+                    ] == pytest.approx(
+                        [(0.0, 0.4), (0.4, 3.4), (3.4, 10.4)]
+                    )
+                    density_options = [
+                        next(
+                            (
+                                option.text
+                                for option in item.findall("option")
+                                if option.get("opt_key")
+                                == "sparse_infill_density"
+                            ),
+                            None,
+                        )
+                        for item in ranges
+                    ]
+                    assert density_options == ["100%", "100%", None]
+
+                merged_project = json.loads(
+                    zf.read("Metadata/project_settings.config").decode("utf-8")
+                )
+                assert merged_project["sparse_infill_density"] == "20%"
 
                 cut_root = ET.fromstring(zf.read("Metadata/cut_information.xml"))
                 cut_object_ids = [

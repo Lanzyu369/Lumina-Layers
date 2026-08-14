@@ -124,6 +124,8 @@ function buildDimensions(state: ConverterState): AdvancedParamsDimensions {
     target_height_mm: state.target_height_mm,
     spacer_thick: state.spacer_thick,
     base_spacer_thick: state.base_spacer_thick,
+    backing_infill_density_percent:
+      state.backing_infill_density_percent,
   };
 }
 

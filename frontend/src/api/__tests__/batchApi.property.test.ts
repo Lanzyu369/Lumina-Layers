@@ -37,7 +37,8 @@ const arbFileList = fc.array(arbFile, { minLength: 1, maxLength: 10 });
 const arbBatchConvertParams: fc.Arbitrary<BatchConvertParams> = fc.record({
   lut_name: fc.string({ minLength: 1, maxLength: 30 }),
   target_width_mm: fc.double({ min: 10, max: 300, noNaN: true, noDefaultInfinity: true }),
-  spacer_thick: fc.double({ min: 0.1, max: 2.0, noNaN: true, noDefaultInfinity: true }),
+  spacer_thick: fc.double({ min: 0.2, max: 10, noNaN: true, noDefaultInfinity: true }),
+  backing_infill_density_percent: fc.integer({ min: 5, max: 100 }),
   structure_mode: fc.constantFrom("Double-sided", "Single-sided"),
   color_mode: fc.constantFrom("4-Color (CMYW)", "4-Color (RYBW)", "6-Color (CMYWGK 1296)", "6-Color (RYBWGK 1296)", "8-Color Max", "BW (Black & White)"),
   modeling_mode: fc.constantFrom("high-fidelity", "pixel", "vector"),

@@ -451,6 +451,45 @@ for relief geometry.
 模式关闭修改器，导出与 writer 边界还会再次检查，避免任何调用方误给浮雕
 写入全局 LCR 区间。
 
+### Backing sparse-infill contract / 背板稀疏填充契约
+
+`PrinterConfig.VIEWING_SURFACE_SOLID_DEPTH_MM` is the single project-level
+source of truth for the protected viewing-surface depth (default `3.0 mm`).
+The writer stores the requested deep-backing density in
+`Metadata/project_settings.config` as `sparse_infill_density`, then adds
+`sparse_infill_density=100%` object-height overrides to
+`Metadata/layer_config_ranges.xml` for the protected zones. The range builder
+splits overlaps with the existing coarse `layer_height` override into sorted,
+non-overlapping ranges.
+
+`PrinterConfig.VIEWING_SURFACE_SOLID_DEPTH_MM` 是观赏面保护深度的唯一项目级
+配置来源，默认值为 `3.0 mm`。writer 把用户选择的深层底板填充率写入
+`Metadata/project_settings.config` 的 `sparse_infill_density`，再通过
+`Metadata/layer_config_ranges.xml` 为观赏面保护区覆盖
+`sparse_infill_density=100%`。区间构建器会把该覆盖与已有的粗层高覆盖拆分为
+按 Z 排序且互不重叠的区间。
+
+| Orientation / 朝向 | Protected solid range / 实心保护区 |
+|---|---|
+| `down` | `[0, color_height + solid_depth]` |
+| `up` | `[base_height - solid_depth, base_height + color_height]` |
+| `double` | Both viewing-side ranges; overlapping ranges are merged / 两侧观赏面区间，相交时合并 |
+
+If the complete backing fits inside the protected depth (or inside both depths
+for a double-sided model), the effective global density is promoted to `100%`
+and no density-only range is needed. Sparse relief is rejected because its
+variable backing boundary cannot be protected by a single global Z range.
+Sparse puzzle generation is also rejected because puzzle assembly intentionally
+removes source object-height ranges. Raster, vector, native large-format, and
+batch exports all forward the same density and geometry context; merged batch
+archives remap the one-based model-object indexes while preserving the ranges.
+
+当整块底板不超过保护深度（双面模型则不超过两侧保护深度之和）时，实际全局
+填充率会提升为 `100%`，无需额外的密度区间。浮雕底板边界随位置变化，无法用
+单一全局 Z 区间可靠保护，因此稀疏浮雕会被拒绝；拼图装配会主动移除源对象的
+高度区间，因此也拒绝稀疏拼图。光栅、矢量、原生大画幅和批量导出统一透传
+密度与几何上下文，批量合并时会重映射从 1 开始的模型对象序号并保留区间。
+
 ### Turning it Off / 关闭方式
 
 - UI: **Settings → Slicer Settings → Base-plate layer-height modifier**（仅当
@@ -460,7 +499,8 @@ for relief geometry.
 - Config: set `"enable_base_layer_height_modifier": false` in `user_settings.json`
 
 Bambu-family slicer IDs (see `frontend/src/utils/settingsOptionIds.ts`):
-`BambuStudio`, `OrcaSlicer`, `SnapmakerOrca`, `ElegooSlicer`, `AnycubicSlicerNext`.
+`BambuStudio`, `OrcaSlicer`, `SnapmakerOrca`, `ElegooSlicer`,
+`AnycubicSlicerNext`, `FlashStudio`.
 
 ### Regression Tests / 回归测试入口
 
@@ -475,6 +515,9 @@ Bambu-family slicer IDs (see `frontend/src/utils/settingsOptionIds.ts`):
 - `tests/test_converter_generate_unit.py::TestConverterEntryAcceptsBaseLayerModifierKwarg`
   — signature contract (prevents API↔worker kwargs drift)
 - `tests/test_bambu_3mf_writer_unit.py` — writer-level kwargs plumbing
+- `tests/test_backing_infill_contract_unit.py` — 10 mm boundary, canonical
+  solid depth, orientation ranges, thin-backing promotion, and generated 3MF
+  process metadata
 - `frontend/src/components/__tests__/SettingsPanel.baseLayerHeightModifier.test.tsx`
   — UI gating by slicer family + translation assertions
 - `frontend/src/__tests__/settingsOptionIds.test.ts` — `isBambuFamilySlicer`

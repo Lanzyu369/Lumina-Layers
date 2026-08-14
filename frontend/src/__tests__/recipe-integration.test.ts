@@ -253,7 +253,7 @@ describe("recipe integration", () => {
       });
     });
 
-    it("exports schema_version 3 and imports legacy v1 without warnings", async () => {
+    it("exports schema_version 3 and imports legacy defaults without warnings", async () => {
       const { recipe } = await buildTestRecipe({ lut_name: "TestLUT" });
       expect(recipe.schema_version).toBe(3);
 
@@ -274,6 +274,20 @@ describe("recipe integration", () => {
       );
       expect(restored.recipe_overrides).toEqual([]);
       expect(restored.customRecipeHistory).toEqual([]);
+      expect(restored.backing_infill_density_percent).toBe(100);
+
+      const legacyV2 = JSON.parse(JSON.stringify(recipe)) as LuminaRecipe;
+      legacyV2.schema_version = 2;
+      if (legacyV2.recipe.converter) {
+        delete legacyV2.recipe.converter.geometry
+          .backing_infill_density_percent;
+      }
+      const { state: restoredV2 } = restoreConverterRecipe(
+        migrateRecipe(legacyV2),
+        LOCAL_LUTS,
+        LOCAL_FP,
+      );
+      expect(restoredV2.backing_infill_density_percent).toBe(100);
     });
 
     it("large format parameters round-trip", async () => {

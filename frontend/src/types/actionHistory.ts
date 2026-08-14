@@ -93,6 +93,7 @@ export interface AdvancedParamsDimensions {
   target_height_mm: number;
   spacer_thick: number;
   base_spacer_thick: number;
+  backing_infill_density_percent: number;
 }
 
 /**

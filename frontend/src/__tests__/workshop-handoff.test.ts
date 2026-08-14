@@ -363,6 +363,33 @@ describe("sandbox Workshop PNG handoff", () => {
     expect(useConverterStore.getState().spacer_thick).toBe(1.44);
   });
 
+  it.each([
+    { totalThicknessMm: 8, expectedBackingMm: 7.6 },
+    { totalThicknessMm: 50, expectedBackingMm: 10 },
+  ])(
+    "keeps Workshop backing recommendations within the converter 10 mm limit",
+    async ({ totalThicknessMm, expectedBackingMm }) => {
+      useConverterStore.setState({
+        structure_mode: StructureMode.SINGLE_SIDED,
+        color_layers: 5,
+        layer_height_mm: 0.08,
+      });
+
+      await handoffWorkshopPngToConverter(
+        sdkHandoff({ recommendedTotalThicknessMm: totalThicknessMm }),
+        undefined,
+        { decoder: decoder() },
+      );
+
+      expect(useConverterStore.getState().base_spacer_thick).toBe(
+        expectedBackingMm,
+      );
+      expect(useConverterStore.getState().spacer_thick).toBe(
+        expectedBackingMm,
+      );
+    },
+  );
+
   it("keeps the current backing for an older handoff without thickness", async () => {
     await handoffWorkshopPngToConverter(
       sdkHandoff({ recommendedTotalThicknessMm: undefined }),

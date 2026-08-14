@@ -51,6 +51,13 @@ function cloneVirtualMaterials(
   }));
 }
 
+function normalizeBackingInfillDensityPercent(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 100;
+  }
+  return Math.min(100, Math.max(5, Math.round(value)));
+}
+
 function normalizeImportedDynamicLayerCount(
   value: unknown,
   fallback: number,
@@ -674,6 +681,12 @@ export function restoreConverterRecipe(
       normalizedFridgeMagnets,
     ),
     base_spacer_thick: conv.geometry.spacer_thick,
+    backing_infill_density_percent:
+      conv.relief.enable_relief || puzzleEnabled
+        ? 100
+        : normalizeBackingInfillDensityPercent(
+            conv.geometry.backing_infill_density_percent,
+          ),
     structure_mode: (
       fridgeMagnetEnabled
         ? "Single-sided"

@@ -120,6 +120,7 @@ export type ConvertPreviewRequest = ConvertSourceSelection & {
 
 export type ConvertGenerateRequest = ConvertPreviewRequest & {
   spacer_thick: number;
+  backing_infill_density_percent?: number;
   structure_mode: StructureMode;
   separate_backing: boolean;
   add_loop: boolean;
@@ -1787,6 +1788,7 @@ export interface BatchConvertParams {
   separate_backing?: boolean;
   target_width_mm: number;
   spacer_thick: number;
+  backing_infill_density_percent?: number;
   structure_mode: string;
   color_mode: string;
   modeling_mode: string;

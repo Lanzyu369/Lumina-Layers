@@ -26,6 +26,11 @@ import numpy as np
 from PIL import Image
 
 from api.structured_logging import get_logger
+from core.backing_infill import (
+    get_viewing_surface_solid_z_ranges,
+    normalize_backing_infill_density_percent,
+    resolve_effective_backing_infill_density_percent,
+)
 from utils.bambu_3mf_cover import (
     COVER_PLATE_SPECS,
     COVER_THUMBNAIL_SPECS,
@@ -1226,9 +1231,12 @@ def build_layer_config_ranges_xml(
     min_layer_height_mm: float | None = None,
     max_layer_height_mm: float | None = None,
     object_id: int = 1,
+    enable_base_layer_height_modifier: bool = True,
+    backing_infill_density_percent: int = 100,
+    solid_depth_mm: float | None = None,
 ) -> bytes | None:
-    """Build Metadata/layer_config_ranges.xml for base-plate coarse layer height.
-    为底板粗层高生成 Metadata/layer_config_ranges.xml。
+    """Build object-height process overrides for backing print settings.
+    为底板打印设置生成对象高度范围覆盖。
 
     Args:
         base_height_mm (float): Backing/base thickness in millimetres.
@@ -1251,10 +1259,21 @@ def build_layer_config_ranges_xml(
             （打印机允许的可选最大层高）
         object_id (int): One-based model-object index written into the XML payload.
             （写入 XML 载荷的模型对象序号，从 1 开始）
+        enable_base_layer_height_modifier (bool): Whether to add the existing
+            coarse backing layer-height override.（是否添加既有的底板粗层高覆盖）
+        backing_infill_density_percent (int): Requested global backing infill
+            density. Values below 100 add protected 100-percent ranges next to
+            viewing surfaces when deeper backing remains sparse.
+            （请求的全局底板填充率；低于 100 时，在仍有深层稀疏底板的前提下，
+            为观赏面附近添加 100% 保护区间。）
+        solid_depth_mm (float | None): Optional protected backing depth;
+            ``None`` reads ``PrinterConfig.VIEWING_SURFACE_SOLID_DEPTH_MM``.
+            （可选的受保护底板深度；``None`` 读取项目配置。）
 
     Returns:
-        bytes | None: UTF-8 XML bytes when a coarse-layer override is required, otherwise `None`.
-            （当需要粗层高覆盖时返回 UTF-8 XML 字节，否则返回 `None`）
+        bytes | None: UTF-8 XML bytes when at least one process override is
+            required, otherwise ``None``.（存在至少一个切片参数覆盖时返回 UTF-8
+            XML 字节，否则返回 ``None``。）
 
     Raises:
         ValueError: If numeric inputs cannot be converted to floats.
@@ -1277,48 +1296,131 @@ def build_layer_config_ranges_xml(
         return None
     if normalized_face not in _VALID_LAYER_CONFIG_FACES:
         return None
-    if normalized_face == "double":
-        return None
-    if normalized_face == "up":
-        if (
-            initial_layer_height is None
-            or not math.isfinite(initial_layer_height)
-            or initial_layer_height <= 0
-        ):
-            return None
 
-    coarse_lh = _resolve_compatible_base_layer_height_mm(
+    overrides: list[tuple[float, float, dict[str, str]]] = []
+    if enable_base_layer_height_modifier and normalized_face != "double":
+        has_valid_initial_layer = (
+            initial_layer_height is not None
+            and math.isfinite(initial_layer_height)
+            and initial_layer_height > 0
+        )
+        if normalized_face != "up" or has_valid_initial_layer:
+            coarse_lh = _resolve_compatible_base_layer_height_mm(
+                base_height_mm=base_height,
+                nozzle_mm=nozzle,
+                fine_layer_height_mm=fine_layer_height,
+                fixed_first_layer_height_mm=(
+                    float(initial_layer_height)
+                    if normalized_face == "up" and initial_layer_height is not None
+                    else 0.0
+                ),
+                min_layer_height_mm=min_layer_height_mm,
+                max_layer_height_mm=max_layer_height_mm,
+            )
+            if coarse_lh is not None:
+                if normalized_face == "up":
+                    coarse_min_z = 0.0
+                    coarse_max_z = base_height
+                else:
+                    coarse_min_z = color_height
+                    coarse_max_z = color_height + base_height
+                overrides.append(
+                    (
+                        coarse_min_z,
+                        coarse_max_z,
+                        {
+                            "extruder": "0",
+                            "layer_height": f"{coarse_lh:.17g}",
+                        },
+                    )
+                )
+
+    effective_density = resolve_effective_backing_infill_density_percent(
+        backing_infill_density_percent,
         base_height_mm=base_height,
-        nozzle_mm=nozzle,
-        fine_layer_height_mm=fine_layer_height,
-        fixed_first_layer_height_mm=(
-            float(initial_layer_height) if normalized_face == "up" else 0.0
-        ),
-        min_layer_height_mm=min_layer_height_mm,
-        max_layer_height_mm=max_layer_height_mm,
+        face=normalized_face,
+        solid_depth_mm=solid_depth_mm,
     )
-    if coarse_lh is None:
+    if effective_density < 100:
+        for min_z, max_z in get_viewing_surface_solid_z_ranges(
+            base_height_mm=base_height,
+            color_height_mm=color_height,
+            face=normalized_face,
+            solid_depth_mm=solid_depth_mm,
+        ):
+            overrides.append(
+                (min_z, max_z, {"sparse_infill_density": "100%"})
+            )
+
+    segments = _split_layer_config_overrides(overrides)
+    if not segments:
         return None
+    # Bambu/Orca-family slicers require every explicit height range to carry a
+    # layer height. A density-only range imports, but crashes them at slice
+    # time. Preserve an existing coarse modifier and fill only missing values.
+    segments = [
+        (
+            min_z,
+            max_z,
+            options
+            if "layer_height" in options
+            else {"layer_height": f"{fine_layer_height:.17g}", **options},
+        )
+        for min_z, max_z, options in segments
+    ]
 
-    if normalized_face == "up":
-        min_z = 0.0
-        max_z = base_height
-    else:
-        min_z = color_height
-        max_z = color_height + base_height
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        "<objects>",
+        f' <object id="{object_id}">',
+    ]
+    for min_z, max_z, options in segments:
+        lines.append(
+            f'  <range min_z="{min_z:.17g}" max_z="{max_z:.17g}">'
+        )
+        for option_key, option_value in options.items():
+            lines.append(
+                f'   <option opt_key="{option_key}">{option_value}</option>'
+            )
+        lines.append("  </range>")
+    lines.extend([" </object>", "</objects>", ""])
+    return "\n".join(lines).encode("utf-8")
 
-    xml_text = (
-        '<?xml version="1.0" encoding="UTF-8"?>\n'
-        "<objects>\n"
-        f' <object id="{object_id}">\n'
-        f'  <range min_z="{min_z:.17g}" max_z="{max_z:.17g}">\n'
-        '   <option opt_key="extruder">0</option>\n'
-        f'   <option opt_key="layer_height">{coarse_lh:.17g}</option>\n'
-        "  </range>\n"
-        " </object>\n"
-        "</objects>\n"
+
+def _split_layer_config_overrides(
+    overrides: list[tuple[float, float, dict[str, str]]],
+) -> list[tuple[float, float, dict[str, str]]]:
+    """Split overlapping Z overrides into deterministic non-overlapping ranges."""
+    valid_overrides = [
+        (float(start), float(end), dict(options))
+        for start, end, options in overrides
+        if end > start + 1e-9 and options
+    ]
+    if not valid_overrides:
+        return []
+    boundaries = sorted(
+        {boundary for start, end, _options in valid_overrides for boundary in (start, end)}
     )
-    return xml_text.encode("utf-8")
+    segments: list[tuple[float, float, dict[str, str]]] = []
+    for start, end in zip(boundaries, boundaries[1:]):
+        if end <= start + 1e-9:
+            continue
+        active_options: dict[str, str] = {}
+        for override_start, override_end, options in valid_overrides:
+            if start >= override_start - 1e-9 and end <= override_end + 1e-9:
+                active_options.update(options)
+        if not active_options:
+            continue
+        if (
+            segments
+            and abs(segments[-1][1] - start) <= 1e-9
+            and segments[-1][2] == active_options
+        ):
+            previous_start, _previous_end, previous_options = segments[-1]
+            segments[-1] = (previous_start, end, previous_options)
+        else:
+            segments.append((start, end, active_options))
+    return segments
 
 
 def load_printer_template(
@@ -1565,6 +1667,7 @@ class BambuStudio3MFWriter:
         base_height_mm: float = 0.0,
         color_height_mm: float = 0.0,
         face_orientation: str = "down",
+        backing_infill_density_percent: int = 100,
         cover_source: "str | bytes | Image.Image | None" = None,
         device_profile_id: Optional[str] = None,
         preserve_template_filament_slots: Optional[bool] = None,
@@ -1593,6 +1696,11 @@ class BambuStudio3MFWriter:
                 （用于定位覆盖区间的彩色区域厚度）
             face_orientation (str): Base orientation selector; invalid values fall back to "down".
                 （底板朝向；非法值静默回退到 "down"）
+            backing_infill_density_percent (int): Requested deep-backing infill
+                percentage. Thin backing is promoted to 100 percent and deeper
+                backing receives protected solid ranges next to viewing surfaces.
+                （请求的深层底板填充百分比；薄底板会提升为 100%，较深底板会在
+                观赏面附近写入实心保护区间。）
             cover_source: Cover thumbnail image source. ``None`` uses silent
                 placeholder (calibration / kit / recipe swatch). ``str`` is
                 treated as a filesystem path; ``bytes`` as encoded image bytes;
@@ -1651,6 +1759,35 @@ class BambuStudio3MFWriter:
         if normalized_face_orientation not in _VALID_LAYER_CONFIG_FACES:
             normalized_face_orientation = "down"
         self.face_orientation = normalized_face_orientation
+        self.requested_backing_infill_density_percent = (
+            normalize_backing_infill_density_percent(
+                backing_infill_density_percent
+            )
+        )
+        if (
+            self.enable_relief
+            and self.requested_backing_infill_density_percent < 100
+        ):
+            raise ValueError(
+                "Sparse backing infill is not supported for variable-height relief exports."
+            )
+        self.effective_backing_infill_density_percent = (
+            resolve_effective_backing_infill_density_percent(
+                self.requested_backing_infill_density_percent,
+                base_height_mm=self.base_height_mm,
+                face=self.face_orientation,
+            )
+        )
+        self.settings["sparse_infill_density"] = (
+            f"{self.effective_backing_infill_density_percent}%"
+        )
+        if self.effective_backing_infill_density_percent < 100:
+            # A zero-layer top shell leaves the non-viewing face as exposed
+            # sparse infill even when the template carries a thickness value.
+            # Keep the template thickness contract and require one top skin.
+            self.settings["top_shell_layers"] = str(
+                max(1, int(self.settings.get("top_shell_layers", "0")))
+            )
         self._project_slot_names: list[str] = []
         self._project_preview_colors: dict | None = None
         self.cover_source: "str | bytes | Image.Image | None" = cover_source
@@ -2107,7 +2244,13 @@ class BambuStudio3MFWriter:
                     ),
                 ]
             )
-        if self.enable_base_layer_height_modifier and not self.enable_relief:
+        if (
+            not self.enable_relief
+            and (
+                self.enable_base_layer_height_modifier
+                or self.effective_backing_infill_density_percent < 100
+            )
+        ):
             # Bambu/Orca layer_config_ranges keys are one-based model-object
             # indexes, not 3MF resource/build object ids. Lumina emits one
             # assembled model object here; puzzle exports strip this metadata.
@@ -2131,6 +2274,12 @@ class BambuStudio3MFWriter:
                 min_layer_height_mm=min_layer_height,
                 max_layer_height_mm=max_layer_height,
                 object_id=1,
+                enable_base_layer_height_modifier=(
+                    self.enable_base_layer_height_modifier
+                ),
+                backing_infill_density_percent=(
+                    self.effective_backing_infill_density_percent
+                ),
             )
             if lcr_bytes is not None:
                 parts.append(("Metadata/layer_config_ranges.xml", "text/xml", lcr_bytes))
@@ -3111,6 +3260,7 @@ def export_scene_with_bambu_metadata(
     base_height_mm: float = 0.0,
     color_height_mm: float = 0.0,
     face_orientation: str = "down",
+    backing_infill_density_percent: int = 100,
     cover_source: "str | bytes | Image.Image | None" = None,
     device_profile_id: Optional[str] = None,
     preserve_template_filament_slots: Optional[bool] = None,
@@ -3143,6 +3293,11 @@ def export_scene_with_bambu_metadata(
             （用于定位覆盖区间的彩色区域厚度）
         face_orientation (str): Base orientation selector passed to the writer.
             （透传给写入器的底板朝向）
+        backing_infill_density_percent (int): Requested deep-backing infill
+            percentage. The writer promotes fully protected backing to 100 and
+            emits viewing-surface solid ranges for deeper backing.
+            （请求的深层底板填充百分比；写入器会把完全受保护的底板提升为 100%，
+            并为较深底板输出观赏面实心区间。）
         cover_source: Cover thumbnail image source. ``None`` uses silent
             placeholder (calibration / kit / recipe swatch / 既有调用方默认值);
             ``str`` is a filesystem path, ``bytes`` is encoded image bytes,
@@ -3201,18 +3356,15 @@ def export_scene_with_bambu_metadata(
         "device_profile_id": device_profile_id,
         "preserve_template_filament_slots": preserve_template_filament_slots,
         "enable_relief": bool(enable_relief),
+        "enable_base_layer_height_modifier": bool(
+            enable_base_layer_height_modifier
+        ),
+        "base_height_mm": float(base_height_mm),
+        "color_height_mm": float(color_height_mm),
+        "face_orientation": face_orientation,
+        "backing_infill_density_percent": backing_infill_density_percent,
     }
     writer = BambuStudio3MFWriter(**writer_kwargs)
-    writer.enable_relief = bool(enable_relief)
-    writer.enable_base_layer_height_modifier = bool(
-        enable_base_layer_height_modifier
-    ) and not writer.enable_relief
-    writer.base_height_mm = float(base_height_mm)
-    writer.color_height_mm = float(color_height_mm)
-    normalized_face_orientation = str(face_orientation).strip().lower()
-    if normalized_face_orientation not in _VALID_LAYER_CONFIG_FACES:
-        normalized_face_orientation = "down"
-    writer.face_orientation = normalized_face_orientation
     if resolved_project_slot_names:
         writer._set_project_palette(resolved_project_slot_names, preview_colors)
 

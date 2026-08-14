@@ -128,6 +128,7 @@ describe("submitBatch API 调用和状态管理", () => {
       lut_name: "test-lut",
       target_width_mm: 60,
       spacer_thick: 1.2,
+      backing_infill_density_percent: 100,
       structure_mode: StructureMode.DOUBLE_SIDED,
       color_mode: ColorMode.FOUR_COLOR_RYBW,
       modeling_mode: ModelingMode.HIGH_FIDELITY,

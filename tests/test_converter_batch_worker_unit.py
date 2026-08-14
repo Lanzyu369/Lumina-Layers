@@ -223,12 +223,14 @@ def batch_worker_artifacts(tmp_path):
                 slicer="OrcaSlicer",
                 nozzle_size="0.2",
                 enable_base_layer_height_modifier=False,
+                backing_infill_density_percent=25,
             )
             forwarded = convert_mock.call_args.kwargs
             assert forwarded["printer_id"] == "bambu-p1s"
             assert forwarded["slicer"] == "OrcaSlicer"
             assert forwarded["nozzle_size"] == "0.2"
             assert forwarded["enable_base_layer_height_modifier"] is False
+            assert forwarded["backing_infill_density_percent"] == 25
 
         yield artifact_prefix, image_path, result
     finally:

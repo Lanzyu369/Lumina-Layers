@@ -10,6 +10,7 @@ including preview, generate, batch, color replacement, and color merging.
 from __future__ import annotations
 
 from enum import Enum
+from math import ceil
 from typing import Dict, List, Literal, Optional, Set, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -18,13 +19,19 @@ from api.dynamic_material_settings import normalize_dynamic_material_settings
 from api.schemas.dynamic_material import DynamicMaterialResultResponse
 from api.schemas.lut import LutSourceSelection
 from config import (
+    PrinterConfig,
     SVG_PIXELS_PER_MM_DEFAULT,
     SVG_PIXELS_PER_MM_MAX,
     SVG_PIXELS_PER_MM_MIN,
     normalize_svg_pixels_per_mm,
 )
 
-MAX_BACKING_THICKNESS_MM = 3.5
+MAX_BACKING_THICKNESS_MM = PrinterConfig.MAX_BACKING_THICKNESS_MM
+FRIDGE_MAGNET_SHELL_THICKNESS_MM = 0.4
+MAX_FRIDGE_MAGNET_THICKNESS_MM = (
+    MAX_BACKING_THICKNESS_MM - FRIDGE_MAGNET_SHELL_THICKNESS_MM
+)
+MAX_FRIDGE_MAGNETS = 20
 MAX_RELIEF_EXTRA_HEIGHT_MM = 15.0
 MAX_RELIEF_TOTAL_HEIGHT_MM = MAX_BACKING_THICKNESS_MM + MAX_RELIEF_EXTRA_HEIGHT_MM
 # Minimum accepted by API handoff workflows; ordinary converter UI keeps its
@@ -233,13 +240,20 @@ class FridgeMagnetItem(BaseModel):
             (磁铁槽中心 Y 坐标，单位毫米)
     """
 
+    model_config = ConfigDict(allow_inf_nan=False)
+
     id: str = Field(..., description="磁铁槽项 ID")
     shape: FridgeMagnetShape = Field(..., description="磁铁形状: round | rect")
     preset_key: str = Field(..., description="磁铁预设键")
     diameter_mm: float | None = Field(None, gt=0, description="圆形磁铁直径 (mm)")
     width_mm: float | None = Field(None, gt=0, description="矩形磁铁宽度 (mm)")
     height_mm: float | None = Field(None, gt=0, description="矩形磁铁高度 (mm)")
-    thickness_mm: float = Field(..., gt=0, description="磁铁厚度 (mm)")
+    thickness_mm: float = Field(
+        ...,
+        gt=0,
+        le=MAX_FRIDGE_MAGNET_THICKNESS_MM,
+        description="磁铁厚度 (mm)",
+    )
     center_x_mm: float = Field(..., description="磁铁槽中心 X (mm)")
     center_y_mm: float = Field(..., description="磁铁槽中心 Y (mm)")
 
@@ -430,6 +444,9 @@ class ConvertGenerateRequest(LutSourceSelection):
             目标宽度 (mm)。
         spacer_thick: Backing plate thickness in millimeters.
             底板厚度 (mm)。
+        backing_infill_density_percent: Sparse-infill density used only below
+            the protected viewing-surface zone.（仅用于观赏面保护区以下深层底板的
+            稀疏填充百分比。）
         structure_mode: Print structure mode.
             打印结构模式。
         color_mode: Color system mode.
@@ -499,6 +516,12 @@ class ConvertGenerateRequest(LutSourceSelection):
         description="目标宽度 (mm)",
     )
     spacer_thick: float = Field(1.2, ge=0.2, le=MAX_BACKING_THICKNESS_MM, description="底板厚度 (mm)")
+    backing_infill_density_percent: int = Field(
+        PrinterConfig.BACKING_INFILL_DENSITY_DEFAULT_PERCENT,
+        ge=PrinterConfig.BACKING_INFILL_DENSITY_MIN_PERCENT,
+        le=PrinterConfig.BACKING_INFILL_DENSITY_MAX_PERCENT,
+        description="深层底板填充率 (%)",
+    )
     structure_mode: StructureMode = Field(StructureMode.DOUBLE_SIDED, description="打印结构模式")
     color_mode: ColorMode = Field(ColorMode.FOUR_COLOR_RYBW, description="颜色模式")
     modeling_mode: ModelingMode = Field(ModelingMode.HIGH_FIDELITY, description="建模模式")
@@ -546,7 +569,11 @@ class ConvertGenerateRequest(LutSourceSelection):
     loop_hole: float = Field(2.5, ge=1, le=5, description="环孔直径 (mm)")
     loop_pos: Optional[Tuple[float, float]] = Field(None, description="环位置 (x, y)")
     enable_fridge_magnet: bool = Field(False, description="启用冰箱贴磁铁槽")
-    fridge_magnets: List[FridgeMagnetItem] = Field(default_factory=list, description="冰箱贴磁铁槽列表")
+    fridge_magnets: List[FridgeMagnetItem] = Field(
+        default_factory=list,
+        max_length=MAX_FRIDGE_MAGNETS,
+        description="冰箱贴磁铁槽列表",
+    )
     loop_angle: float = Field(0.0, ge=-180, le=180, description="环旋转角度 (度)")
     loop_offset_x: float = Field(0.0, ge=-200, le=200, description="环 X 偏移 (mm)")
     loop_offset_y: float = Field(0.0, ge=-200, le=200, description="环 Y 偏移 (mm)")
@@ -601,6 +628,35 @@ class ConvertGenerateRequest(LutSourceSelection):
     @classmethod
     def validate_svg_pixels_per_mm(cls, value: float) -> float:
         return normalize_svg_pixels_per_mm(value)
+
+    @model_validator(mode="after")
+    def validate_sparse_backing_contract(self) -> "ConvertGenerateRequest":
+        """Reject geometry whose variable surface cannot use one safe Z range.
+        拒绝无法用统一 Z 区间保护观赏面的可变高度几何。
+        """
+        if self.enable_relief and self.backing_infill_density_percent < 100:
+            raise ValueError(
+                "Sparse backing infill is not supported with relief mode; "
+                "use 100% backing infill."
+            )
+        if self.enable_fridge_magnet and self.fridge_magnets:
+            deepest_cavity_mm = max(
+                magnet.thickness_mm for magnet in self.fridge_magnets
+            )
+            required_backing_mm = round(
+                ceil(
+                    (
+                        deepest_cavity_mm
+                        + FRIDGE_MAGNET_SHELL_THICKNESS_MM
+                    )
+                    / PrinterConfig.LAYER_HEIGHT
+                    - 1e-9
+                )
+                * PrinterConfig.LAYER_HEIGHT,
+                10,
+            )
+            self.spacer_thick = max(self.spacer_thick, required_backing_mm)
+        return self
 
     @model_validator(mode="after")
     def validate_dynamic_material_settings(self) -> "ConvertGenerateRequest":
@@ -747,6 +803,18 @@ class PuzzleGenerateRequest(PuzzleLayoutPreviewRequest):
     """
 
     params: ConvertGenerateRequest = Field(..., description="每块共享的生成参数")
+
+    @model_validator(mode="after")
+    def validate_sparse_backing_contract(self) -> "PuzzleGenerateRequest":
+        """Reject sparse infill because puzzle assembly strips object ranges.
+        拼图装配会移除对象高度范围，因此拒绝稀疏底板填充。
+        """
+        if self.params.backing_infill_density_percent < 100:
+            raise ValueError(
+                "Sparse backing infill is not supported for puzzle generation; "
+                "use 100% backing infill."
+            )
+        return self
 
 
 class ConvertBatchRequest(BaseModel):

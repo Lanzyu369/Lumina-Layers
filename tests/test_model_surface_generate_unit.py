@@ -155,7 +155,11 @@ def _seed_model_surface_generate_session(
     return session_id
 
 
-def _post_model_surface_generate(session_id: str) -> Response:
+def _post_model_surface_generate(
+    session_id: str,
+    *,
+    backing_infill_density_percent: int = 100,
+) -> Response:
     return TestClient(app, raise_server_exceptions=False).post(
         "/api/convert/generate",
         json={
@@ -165,6 +169,7 @@ def _post_model_surface_generate(session_id: str) -> Response:
                 "lut_name": "default",
                 "modeling_mode": CoreModelingMode.VECTOR.value,
                 "model_enable": True,
+                "backing_infill_density_percent": backing_infill_density_percent,
             },
         },
     )
@@ -174,6 +179,24 @@ def test_should_use_model_surface_overlay_requires_session_flag():
     assert _should_use_model_surface_overlay({"surface_overlay_enabled": True}) is True
     assert _should_use_model_surface_overlay({"surface_overlay_enabled": False}) is False
     assert _should_use_model_surface_overlay({}) is False
+
+
+def test_generate_rejects_sparse_backing_for_model_surface(
+    tmp_path: Path,
+    generate_state,
+) -> None:
+    store, _registry, pool = generate_state
+    session_id = _seed_model_surface_generate_session(tmp_path, store)
+    pool.submit_timed = AsyncMock()
+
+    response = _post_model_surface_generate(
+        session_id,
+        backing_infill_density_percent=20,
+    )
+
+    assert response.status_code == 422
+    assert "model surface" in response.json()["detail"].lower()
+    pool.submit_timed.assert_not_awaited()
 
 
 def test_generate_routes_model_surface_session_to_overlay_worker(
@@ -291,6 +314,10 @@ def test_generate_routes_model_surface_session_to_overlay_worker(
     assert submitted_params["converter_params"]["add_loop"] is False
     assert submitted_params["converter_params"]["enable_fridge_magnet"] is False
     assert submitted_params["converter_params"]["model_enable"] is True
+    assert (
+        submitted_params["converter_params"]["backing_infill_density_percent"]
+        == 100
+    )
     assert "surface_model_path" not in submitted_params["converter_params"]
     assert response.json()["preview_3d_url"] is None
 
@@ -406,6 +433,7 @@ def test_model_surface_vector_request_is_never_silently_downgraded(tmp_path):
     assert worker_params["converter_params"]["enable_relief"] is False
     assert worker_params["converter_params"]["enable_cloisonne"] is False
     assert worker_params["converter_params"]["enable_coating"] is False
+    assert worker_params["converter_params"]["backing_infill_density_percent"] == 100
 
     optical_layers = 4
     material_matrix = np.ones((2, 3, optical_layers), dtype=np.int16)
@@ -540,6 +568,21 @@ def test_worker_generate_model_surface_overlay_exports_bambu_3mf(tmp_path):
     assert captured["enable_base_layer_height_modifier"] is False
     assert captured["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.4"
     Path(result["threemf_path"]).unlink(missing_ok=True)
+
+
+def test_worker_generate_model_surface_overlay_rejects_sparse_backing(tmp_path):
+    from api.workers.converter_workers import worker_generate_model_surface_overlay
+
+    with pytest.raises(ValueError, match="model surface"):
+        worker_generate_model_surface_overlay(
+            str(tmp_path / "art.png"),
+            str(tmp_path / "lut.npy"),
+            {
+                "converter_params": {
+                    "backing_infill_density_percent": 20,
+                },
+            },
+        )
 
 
 def test_worker_generates_native_vector_surface_3mf_without_board_or_margin_stretch(

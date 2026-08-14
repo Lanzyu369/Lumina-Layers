@@ -32,6 +32,7 @@ function resetStore(): void {
     autoHeightMode: 'darker-higher',
     palette: [],
     previewGlbUrl: null,
+    replacePreviewLoading: false,
   });
 }
 
@@ -105,6 +106,58 @@ describe('Converter_Store 默认值', () => {
   it('remapHistory 默认为空数组', () => {
     const state = useConverterStore.getState();
     expect(state.remapHistory).toEqual([]);
+  });
+});
+
+describe('Converter_Store 底板厚度与填充率', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    resetConverterState({ backing_infill_density_percent: 100 });
+  });
+
+  it('accepts 10 mm backing and clamps values above the boundary', () => {
+    const store = useConverterStore.getState();
+
+    store.setSpacerThick(10);
+    expect(useConverterStore.getState().base_spacer_thick).toBe(10);
+    expect(useConverterStore.getState().spacer_thick).toBe(10);
+
+    store.setSpacerThick(10.08);
+    expect(useConverterStore.getState().base_spacer_thick).toBe(10);
+    expect(useConverterStore.getState().spacer_thick).toBe(10);
+  });
+
+  it('persists a selected backing infill density and clamps to the safe range', () => {
+    const store = useConverterStore.getState();
+
+    store.setBackingInfillDensityPercent(35);
+    expect(useConverterStore.getState().backing_infill_density_percent).toBe(35);
+    expect(localStorage.getItem('lumina_backingInfillDensityPercent')).toBe('35');
+
+    store.setBackingInfillDensityPercent(1);
+    expect(useConverterStore.getState().backing_infill_density_percent).toBe(5);
+    store.setBackingInfillDensityPercent(150);
+    expect(useConverterStore.getState().backing_infill_density_percent).toBe(100);
+  });
+
+  it('forces unsupported relief and puzzle flows back to 100 percent', () => {
+    const store = useConverterStore.getState();
+    store.setBackingInfillDensityPercent(20);
+    store.setEnableRelief(true);
+    expect(useConverterStore.getState().backing_infill_density_percent).toBe(100);
+
+    store.setEnableRelief(false);
+    store.setBackingInfillDensityPercent(25);
+    store.setPuzzleEnabled(true);
+    expect(useConverterStore.getState().backing_infill_density_percent).toBe(100);
+  });
+
+  it('forces model-surface flow back to 100 percent', () => {
+    const store = useConverterStore.getState();
+    store.setBackingInfillDensityPercent(20);
+    store.setModelSurfaceEnabled(true);
+    expect(useConverterStore.getState().backing_infill_density_percent).toBe(100);
+
   });
 });
 

@@ -76,6 +76,23 @@ describe("useAnnouncement", () => {
     ).toBe(true);
   });
 
+  it("announces backing thickness and infill controls in the latest update", () => {
+    expect(ANNOUNCEMENTS[0]?.version).toBe("2026-08-14");
+    const items = ANNOUNCEMENTS[0]?.sections.flatMap((section) => section.items) ?? [];
+
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("10 mm") &&
+          item.zh.includes("填充率") &&
+          item.zh.includes("观赏面") &&
+          item.en.includes("10 mm") &&
+          item.en.toLowerCase().includes("infill") &&
+          item.en.toLowerCase().includes("viewing-surface"),
+      ),
+    ).toBe(true);
+  });
+
   it("announces Flash Studio Desktop and Flashforge multicolor support", () => {
     const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-07-22");
     const items = entry?.sections.flatMap((section) => section.items) ?? [];

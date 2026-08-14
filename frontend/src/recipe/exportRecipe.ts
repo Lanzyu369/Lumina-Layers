@@ -217,6 +217,8 @@ export function exportConverterRecipe(
       spacer_thick: state.enable_fridge_magnet
         ? state.base_spacer_thick
         : state.spacer_thick,
+      backing_infill_density_percent:
+        state.backing_infill_density_percent,
       structure_mode: state.structure_mode,
       separate_backing: state.separate_backing,
       add_loop: state.add_loop,

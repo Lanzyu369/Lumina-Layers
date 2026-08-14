@@ -1228,6 +1228,7 @@ def worker_batch_convert_item(
     auto_dynamic_range: bool = False,
     high_precision_3d_preview: bool = False,
     device_profile_id: str | None = None,
+    backing_infill_density_percent: int = 100,
     material_dynamic_layer_count_enabled: bool = False,
     material_min_layer_count: int = 5,
     material_max_layer_count: int = 10,
@@ -1255,6 +1256,9 @@ def worker_batch_convert_item(
         lut_path: Path to the LUT calibration file. (LUT 校准文件路径)
         target_width_mm: Target physical width in mm. (目标物理宽度，毫米)
         spacer_thick: Backing plate thickness in mm. (底板厚度，毫米)
+        backing_infill_density_percent: Sparse-infill percentage used for deep
+            backing below the protected viewing-surface zone.
+            (观赏面保护区以下深层底板的稀疏填充百分比)
         structure_mode: Print structure mode, e.g. "Double-sided". (打印结构模式)
         color_mode: Color system mode, e.g. "4-Color". (色彩系统模式)
         modeling_mode_value: Modeling mode string, e.g. "high-fidelity". (建模模式字符串)
@@ -1323,6 +1327,7 @@ def worker_batch_convert_item(
         lut_path=lut_path,
         target_width_mm=target_width_mm,
         spacer_thick=spacer_thick,
+        backing_infill_density_percent=backing_infill_density_percent,
         structure_mode=structure_mode,
         color_mode=color_mode,
         color_layers=color_layers,
@@ -1646,6 +1651,10 @@ def worker_generate_model_surface_overlay(
     converter_params["enable_relief"] = False
     converter_params["enable_cloisonne"] = False
     converter_params["enable_coating"] = False
+    if int(converter_params.get("backing_infill_density_percent", 100)) < 100:
+        raise ValueError(
+            "Sparse backing infill is not supported for model surface generation."
+        )
 
     footprint_payload = normalized_params.get("surface_footprint")
     if not isinstance(footprint_payload, dict):
@@ -2369,6 +2378,9 @@ def worker_generate_large_format_svg_native(
                 ),
                 face_orientation=str(
                     worker_ctx.get("bambu_face_orientation", "down")
+                ),
+                backing_infill_density_percent=int(
+                    params.get("backing_infill_density_percent", 100)
                 ),
                 cover_source=tile_cover,
                 device_profile_id=params.get("device_profile_id") or None,

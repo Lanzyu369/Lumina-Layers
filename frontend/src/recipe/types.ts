@@ -68,6 +68,7 @@ export interface ConverterRecipeBase {
 
 export interface ConverterRecipeGeometry {
   spacer_thick: number;
+  backing_infill_density_percent?: number;
   structure_mode: string;
   separate_backing: boolean;
   add_loop: boolean;

@@ -34,6 +34,7 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         base_height_mm: float = 0.0,
         color_height_mm: float = 0.0,
         face_orientation: str = "down",
+        backing_infill_density_percent: int = 100,
         cover_source: object | None = None,
         device_profile_id: str | None = None,
         preserve_template_filament_slots: bool | None = None,
@@ -53,6 +54,9 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         captured["base_height_mm"] = base_height_mm
         captured["color_height_mm"] = color_height_mm
         captured["face_orientation"] = face_orientation
+        captured["backing_infill_density_percent"] = (
+            backing_infill_density_percent
+        )
         captured["cover_source"] = cover_source
         captured["device_profile_id"] = device_profile_id
         captured["preserve_template_filament_slots"] = preserve_template_filament_slots
@@ -134,6 +138,7 @@ def test_s09_passes_base_layer_kwargs_when_ctx_has_them(tmp_path) -> None:
                 bambu_color_height_mm=2.4,
                 bambu_face_orientation="down",
                 enable_base_layer_height_modifier=True,
+                backing_infill_density_percent=20,
             )
         )
 
@@ -143,6 +148,7 @@ def test_s09_passes_base_layer_kwargs_when_ctx_has_them(tmp_path) -> None:
     assert kwargs["base_height_mm"] == 0.8
     assert kwargs["color_height_mm"] == 2.4
     assert kwargs["face_orientation"] == "down"
+    assert kwargs["backing_infill_density_percent"] == 20
 
 
 def test_s09_relief_export_disables_base_modifier_at_handoff(tmp_path) -> None:
@@ -185,6 +191,7 @@ def test_s09_falls_back_to_safe_defaults_when_ctx_missing_keys(tmp_path) -> None
     assert kwargs["base_height_mm"] == 0.0
     assert kwargs["color_height_mm"] == 0.0
     assert kwargs["face_orientation"] == "down"
+    assert kwargs["backing_infill_density_percent"] == 100
 
 
 def test_s09_passes_face_up_for_five_color(tmp_path) -> None:

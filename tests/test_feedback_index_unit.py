@@ -309,6 +309,7 @@ def _full_advanced_params() -> dict[str, object]:
             "target_height_mm": 80.0,
             "spacer_thick": 0.2,
             "base_spacer_thick": 0.2,
+            "backing_infill_density_percent": 35,
         },
         "generation": {
             "structure_mode": "flat",
@@ -344,6 +345,7 @@ def test_index_renders_advanced_params_section_with_eight_toggles(tmp_path: Path
     assert "## Advanced Generation Parameters" in md
     # Dimensions line with × separator and mm unit.
     assert "Dimensions: 120.0 × 80.0 mm" in md
+    assert "Backing: 0.2 mm / 35% infill" in md
     # All eight toggle state lines must be present.
     assert "- enable_relief: enabled" in md
     assert "- enable_outline: enabled" in md
@@ -456,7 +458,10 @@ def test_summary_renders_active_toggles_line() -> None:
     payload = _payload_with_advanced(advanced)
 
     summary = generate_summary_text("LUM-20260511-001", payload)
-    expected_line = "尺寸 120.0×80.0 mm，已开启：浮雕、描边、景泰蓝、冰箱贴、拼图、大幅面。"
+    expected_line = (
+        "尺寸 120.0×80.0 mm，底板 0.2 mm / 35% 填充，"
+        "已开启：浮雕、描边、景泰蓝、冰箱贴、拼图、大幅面。"
+    )
     assert expected_line in summary
 
     # Line placement: after the workflow line, before 最近操作：.

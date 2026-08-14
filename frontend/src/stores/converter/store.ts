@@ -138,6 +138,11 @@ type LuminaWindow = Window & {
 };
 
 const BATCH_PREVIEW_BROWSER_SAFE_LIMIT = 96;
+const BACKING_INFILL_DENSITY_STORAGE_KEY =
+  "lumina_backingInfillDensityPercent";
+const BACKING_INFILL_DENSITY_MIN_PERCENT = 5;
+const BACKING_INFILL_DENSITY_MAX_PERCENT = 100;
+const BACKING_INFILL_DENSITY_DEFAULT_PERCENT = 100;
 
 function notifyCompletion(kind: CompletionNotificationKind): void {
   const settings = useSettingsStore.getState();
@@ -2025,6 +2030,7 @@ export interface ConverterState {
   target_width_mm: number;
   target_height_mm: number;
   spacer_thick: number;
+  backing_infill_density_percent: number;
   structure_mode: StructureMode;
   color_mode: ColorMode;
   modeling_mode: ModelingMode;
@@ -2330,6 +2336,7 @@ export interface ConverterActions {
   setTargetWidthMm: (width: number) => void;
   setTargetHeightMm: (height: number) => void;
   setSpacerThick: (thick: number) => void;
+  setBackingInfillDensityPercent: (density: number) => void;
   setStructureMode: (mode: StructureMode) => void;
   setColorMode: (mode: ColorMode) => void;
   setModelingMode: (mode: ModelingMode) => void;
@@ -3079,6 +3086,42 @@ function loadMaterialBackingMaterialDirName(): string | null {
   }
 }
 
+function normalizeBackingInfillDensityPercent(value: number): number {
+  if (!Number.isFinite(value)) {
+    return BACKING_INFILL_DENSITY_DEFAULT_PERCENT;
+  }
+  return clampValue(
+    Math.round(value),
+    BACKING_INFILL_DENSITY_MIN_PERCENT,
+    BACKING_INFILL_DENSITY_MAX_PERCENT,
+  );
+}
+
+function loadBackingInfillDensityPercent(): number {
+  try {
+    const raw = localStorage.getItem(BACKING_INFILL_DENSITY_STORAGE_KEY);
+    if (raw === null) return BACKING_INFILL_DENSITY_DEFAULT_PERCENT;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) {
+      return BACKING_INFILL_DENSITY_DEFAULT_PERCENT;
+    }
+    return normalizeBackingInfillDensityPercent(parsed);
+  } catch {
+    return BACKING_INFILL_DENSITY_DEFAULT_PERCENT;
+  }
+}
+
+function persistBackingInfillDensityPercent(density: number): void {
+  try {
+    localStorage.setItem(
+      BACKING_INFILL_DENSITY_STORAGE_KEY,
+      String(normalizeBackingInfillDensityPercent(density)),
+    );
+  } catch {
+    /* localStorage unavailable, ignore */
+  }
+}
+
 function persistMaterialBackingMaterialDirName(name: string | null): void {
   try {
     if (name && name.trim().length > 0) {
@@ -3126,6 +3169,7 @@ export const DEFAULT_STATE: ConverterState = {
   target_width_mm: 60,
   target_height_mm: 60,
   spacer_thick: 1.2,
+  backing_infill_density_percent: loadBackingInfillDensityPercent(),
   structure_mode: StructureModeEnum.DOUBLE_SIDED,
   color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
   modeling_mode: ModelingModeEnum.HIGH_FIDELITY,
@@ -3807,8 +3851,16 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     },
 
     setModelSurfaceEnabled: (enabled: boolean) => {
+      if (enabled) {
+        persistBackingInfillDensityPercent(
+          BACKING_INFILL_DENSITY_DEFAULT_PERCENT,
+        );
+      }
       set((state) => ({
         modelSurfaceEnabled: enabled,
+        backing_infill_density_percent: enabled
+          ? BACKING_INFILL_DENSITY_DEFAULT_PERCENT
+          : state.backing_infill_density_percent,
         structure_mode: enabled
           ? StructureModeEnum.SINGLE_SIDED
           : state.structure_mode,
@@ -3824,8 +3876,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         URL.revokeObjectURL(prev);
       }
       const previewUrl = URL.createObjectURL(file);
+      persistBackingInfillDensityPercent(
+        BACKING_INFILL_DENSITY_DEFAULT_PERCENT,
+      );
       set({
         modelSurfaceEnabled: true,
+        backing_infill_density_percent:
+          BACKING_INFILL_DENSITY_DEFAULT_PERCENT,
         structure_mode: StructureModeEnum.SINGLE_SIDED,
         modelSurfaceFile: file,
         modelSurfacePreviewUrl: previewUrl,
@@ -4576,7 +4633,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     setSpacerThick: (thick: number) =>
       set((state) => {
         const fridgeState = buildFridgeMagnetState(state, {
-          base_spacer_thick: clampValue(thick, 0.2, 3.5),
+          base_spacer_thick: clampValue(thick, 0.2, 10),
         });
         return {
           ...fridgeState,
@@ -4594,6 +4651,16 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           downloadUrl: null,
         };
       }),
+
+    setBackingInfillDensityPercent: (density: number) => {
+      const normalized = normalizeBackingInfillDensityPercent(density);
+      persistBackingInfillDensityPercent(normalized);
+      set({
+        backing_infill_density_percent: normalized,
+        threemfDiskPath: null,
+        downloadUrl: null,
+      });
+    },
 
     setStructureMode: (mode: StructureMode) =>
       set((state) => ({
@@ -4943,6 +5010,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           : state.heightmap_max_height;
         const updates: Partial<ConverterState> = {
           enable_relief: enabled,
+          backing_infill_density_percent: enabled
+            ? BACKING_INFILL_DENSITY_DEFAULT_PERCENT
+            : state.backing_infill_density_percent,
           enable_cloisonne: enabled ? false : state.enable_cloisonne,
           // Relief only supports single-sided structure
           structure_mode: enabled
@@ -4952,6 +5022,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           threemfDiskPath: null,
           downloadUrl: null,
         };
+        if (enabled) {
+          persistBackingInfillDensityPercent(
+            BACKING_INFILL_DENSITY_DEFAULT_PERCENT,
+          );
+        }
         // Requirement 6.5: When switching enable_relief from false to true,
         // auto-initialize color_height_map ONLY if it is currently empty.
         // Use computeAutoHeightMap to assign different heights based on
@@ -5056,18 +5131,31 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }),
 
     setPuzzleEnabled: (enabled: boolean) =>
-      set((state) => ({
-        puzzleEnabled: enabled && !state.batchMode,
-        largeFormatEnabled: enabled ? false : state.largeFormatEnabled,
-        add_loop: enabled ? false : state.add_loop,
-        ...buildFridgeMagnetState(state, {
-          enable_fridge_magnet: enabled ? false : state.enable_fridge_magnet,
-        }),
-        selectedFridgeMagnetId: enabled ? null : state.selectedFridgeMagnetId,
-        ...(!enabled ? DEFAULT_PUZZLE_PREVIEW_STATE : {}),
-        threemfDiskPath: null,
-        downloadUrl: null,
-      })),
+      set((state) => {
+        const puzzleEnabled = enabled && !state.batchMode;
+        if (puzzleEnabled) {
+          persistBackingInfillDensityPercent(
+            BACKING_INFILL_DENSITY_DEFAULT_PERCENT,
+          );
+        }
+        return {
+          puzzleEnabled,
+          backing_infill_density_percent: puzzleEnabled
+            ? BACKING_INFILL_DENSITY_DEFAULT_PERCENT
+            : state.backing_infill_density_percent,
+          largeFormatEnabled: enabled ? false : state.largeFormatEnabled,
+          add_loop: enabled ? false : state.add_loop,
+          ...buildFridgeMagnetState(state, {
+            enable_fridge_magnet: enabled ? false : state.enable_fridge_magnet,
+          }),
+          selectedFridgeMagnetId: enabled
+            ? null
+            : state.selectedFridgeMagnetId,
+          ...(!enabled ? DEFAULT_PUZZLE_PREVIEW_STATE : {}),
+          threemfDiskPath: null,
+          downloadUrl: null,
+        };
+      }),
     setPuzzleStyle: (style: PuzzleStyle) =>
       set({
         puzzleStyle: style,
@@ -8383,6 +8471,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           auto_dynamic_range: state.auto_dynamic_range,
           is_dark: useSettingsStore.getState().theme === "dark",
           spacer_thick: state.spacer_thick,
+          backing_infill_density_percent:
+            state.backing_infill_density_percent,
           structure_mode: state.structure_mode,
           separate_backing: state.separate_backing,
           add_loop: state.add_loop,
@@ -9230,6 +9320,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           ...sourceParams,
           target_width_mm: state.target_width_mm,
           spacer_thick: state.spacer_thick,
+          backing_infill_density_percent:
+            state.backing_infill_density_percent,
           structure_mode: state.structure_mode,
           color_mode: state.color_mode,
           modeling_mode: state.modeling_mode,

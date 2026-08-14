@@ -2836,6 +2836,9 @@ def _run_vector_branch(ctx: dict) -> dict:
             base_height_mm=float(ctx.get("bambu_base_height_mm", 0.0)),
             color_height_mm=float(ctx.get("bambu_color_height_mm", 0.0)),
             face_orientation=str(ctx.get("bambu_face_orientation", "down")),
+            backing_infill_density_percent=int(
+                ctx.get("backing_infill_density_percent", 100)
+            ),
             cover_source=vector_cover_source,
             device_profile_id=ctx.get("device_profile_id") or None,
             preserve_template_filament_slots=(

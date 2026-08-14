@@ -29,6 +29,10 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             zh: "现在可以把原图、输出参数、全图改色和自定义配方历史一起保存为 Lumina 项目文件，之后恢复项目继续比较不同设置或耗材；局部区域改色仍会明确提示仅保留在当前会话。",
             en: "You can now save the source artwork, output settings, whole-image colour changes, and custom recipe history as a Lumina project, then restore it to compare other settings or filaments. Spatial colour edits still show a clear current-session-only notice.",
           },
+          {
+            zh: "底板厚度现在最高可设为 10 mm，并可单独调节深层底板填充率；靠近观赏面的区域仍会自动保持实心。",
+            en: "Backing thickness can now be set up to 10 mm, with a separate infill control for deeper backing while the viewing-surface zone automatically stays solid.",
+          },
         ],
       },
     ],

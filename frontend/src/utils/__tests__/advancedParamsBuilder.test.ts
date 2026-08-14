@@ -296,6 +296,9 @@ describe("buildAdvancedParams — groups populated when toggles enabled", () => 
 
     // Dimensions / generation are always present and scalar-filled.
     expect(result.dimensions.target_width_mm).toBe(state.target_width_mm);
+    expect(result.dimensions.backing_infill_density_percent).toBe(
+      state.backing_infill_density_percent,
+    );
     expect(result.generation.structure_mode).toBe(state.structure_mode);
     expect(result.model_surface).toEqual({
       enabled: true,
@@ -1131,6 +1134,7 @@ const arbConverterState: fc.Arbitrary<ConverterState> = fc
     target_height_mm: arbPositiveFinite,
     spacer_thick: arbPositiveFinite,
     base_spacer_thick: arbPositiveFinite,
+    backing_infill_density_percent: fc.integer({ min: 5, max: 100 }),
 
     // Generation group (scalars + booleans).
     color_layers: fc.option(fc.integer({ min: 1, max: 64 }), { nil: null }),

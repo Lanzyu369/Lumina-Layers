@@ -840,6 +840,7 @@ def test_worker_generate_large_format_svg_native_uses_sanitized_tile_prefix_in_z
         "tile_width_mm": 60.0,
         "tile_height_mm": 80.0,
         "spacer_thick": 1.2,
+        "backing_infill_density_percent": 25,
         "structure_mode": "Single-sided",
         "color_mode": "4-Color",
         "replacement_regions": [],
@@ -864,6 +865,7 @@ def test_worker_generate_large_format_svg_native_uses_sanitized_tile_prefix_in_z
             captured_export_kwargs[0]["device_profile_id"]
             == "BambuStudio:bbl:bambu-lab-h2d:0.4"
         )
+        assert captured_export_kwargs[0]["backing_infill_density_percent"] == 25
     finally:
         if os.path.exists(result["zip_path"]):
             os.unlink(result["zip_path"])

@@ -68,6 +68,7 @@ from utils.merged_bambu_3mf_writer import (
     MaterialSlot as WriterMaterialSlot,
 )
 from config import (
+    PrinterConfig,
     SVG_PIXELS_PER_MM_DEFAULT,
     SVG_PIXELS_PER_MM_MAX,
     SVG_PIXELS_PER_MM_MIN,
@@ -289,6 +290,9 @@ def _prepare_model_surface_converter_params(
     converter_params["enable_cloisonne"] = False
     converter_params["enable_coating"] = False
     converter_params["enable_base_layer_height_modifier"] = False
+    converter_params["backing_infill_density_percent"] = (
+        PrinterConfig.BACKING_INFILL_DENSITY_DEFAULT_PERCENT
+    )
     return converter_params
 
 
@@ -2065,6 +2069,9 @@ async def convert_generate(
     params: dict = {
         "target_width_mm": request.target_width_mm,
         "spacer_thick": request.spacer_thick,
+        "backing_infill_density_percent": (
+            request.backing_infill_density_percent
+        ),
         "structure_mode": request.structure_mode.value,
         "color_mode": request.color_mode.value,
         "color_layers": request.color_layers,
@@ -2170,6 +2177,14 @@ async def convert_generate(
     worker_fn = worker_generate_model
     worker_params = params
     if _should_use_model_surface_overlay(session_data):
+        if request.backing_infill_density_percent < 100:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Sparse backing infill is not supported for model surface "
+                    "generation; use 100% backing infill."
+                ),
+            )
         worker_fn = worker_generate_model_surface_overlay
         worker_params = _prepare_model_surface_overlay_worker_params(
             session_data,
@@ -2469,6 +2484,9 @@ def _resolve_large_format_shared_params(
 
     params = {
         "spacer_thick": request.spacer_thick,
+        "backing_infill_density_percent": (
+            request.backing_infill_density_percent
+        ),
         "structure_mode": request.structure_mode.value,
         "color_mode": request.color_mode.value,
         "color_layers": request.color_layers,
@@ -3821,7 +3839,18 @@ async def convert_batch(
     material_grid_resolution: int | None = Form(None, description="耗材穷举缓存网格分辨率"),
     material_backing_material_index: int | None = Form(None, ge=0, description="耗材档案底板耗材索引"),
     target_width_mm: float = Form(60.0, description="目标宽度 (mm)"),
-    spacer_thick: float = Form(1.2, description="底板厚度 (mm)"),
+    spacer_thick: float = Form(
+        1.2,
+        ge=0.2,
+        le=PrinterConfig.MAX_BACKING_THICKNESS_MM,
+        description="底板厚度 (mm)",
+    ),
+    backing_infill_density_percent: int = Form(
+        PrinterConfig.BACKING_INFILL_DENSITY_DEFAULT_PERCENT,
+        ge=PrinterConfig.BACKING_INFILL_DENSITY_MIN_PERCENT,
+        le=PrinterConfig.BACKING_INFILL_DENSITY_MAX_PERCENT,
+        description="深层底板填充率 (%)",
+    ),
     separate_backing: bool = Form(
         False,
         description="Emit backing as a separate object / 将底板作为独立对象输出",
@@ -4019,6 +4048,14 @@ async def convert_batch(
                 status_code=422,
                 detail="Batch relief requires color_height_map",
             )
+        if enable_relief and backing_infill_density_percent < 100:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Sparse backing infill is not supported with relief mode; "
+                    "use 100% backing infill."
+                ),
+            )
         if enable_relief and resolved_modeling_mode == CoreModelingMode.VECTOR:
             if (
                 structure_mode != StructureMode.SINGLE_SIDED.value
@@ -4104,6 +4141,7 @@ async def convert_batch(
                 auto_dynamic_range,
                 high_precision_3d_preview,
                 device_profile_id,
+                backing_infill_density_percent,
                 material_dynamic_layer_count_enabled,
                 material_min_layer_count,
                 material_max_layer_count,

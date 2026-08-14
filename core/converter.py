@@ -348,6 +348,7 @@ def convert_image_to_3d(
     high_precision_3d_preview: bool = False,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
     *,
+    backing_infill_density_percent: int = 100,
     height_identity_rgb_path: Optional[str] = None,
     final_material_matrix_is_authoritative: bool = False,
     final_material_matrix_authority_mask_path: Optional[str] = None,
@@ -378,6 +379,9 @@ def convert_image_to_3d(
         device_profile_id: Optional generated machine registry device profile
             selection forwarded to 3MF export.
             (可选的机器注册表设备配置 ID，透传给 3MF 导出)
+        backing_infill_density_percent: Deep-backing sparse-infill percentage;
+            viewing-surface protection is added by the 3MF writer.
+            (深层底板稀疏填充百分比；观赏面保护由 3MF 写入器添加)
         material_dynamic_layer_count_enabled: Enable exact dynamic effective
             layers for material archives. (为耗材档案启用精确动态有效层数)
         material_min_layer_count: Minimum dynamic effective layers. (动态最小
@@ -612,6 +616,7 @@ def generate_final_model(
     material_backing_material_index: Optional[int] = None,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
     *,
+    backing_infill_density_percent: int = 100,
     height_identity_rgb_path: Optional[str] = None,
     final_material_matrix_is_authoritative: bool = False,
     final_material_matrix_authority_mask_path: Optional[str] = None,
@@ -640,6 +645,9 @@ def generate_final_model(
         device_profile_id: Optional generated machine registry device profile
             selection forwarded to ``convert_image_to_3d`` and 3MF export.
             (可选的机器注册表设备配置 ID，透传到主转换与 3MF 导出)
+        backing_infill_density_percent: Deep-backing sparse-infill percentage
+            forwarded to the 3MF writer.（透传到 3MF 写入器的深层底板稀疏填充
+            百分比）
         material_dynamic_layer_count_enabled: Enable exact dynamic effective
             layers. (启用精确动态有效层数)
         material_min_layer_count: Minimum dynamic effective layers. (动态最小
@@ -733,6 +741,7 @@ def generate_final_model(
         model_margin,
         quantize_colors,
         svg_pixels_per_mm=svg_pixels_per_mm,
+        backing_infill_density_percent=backing_infill_density_percent,
         blur_kernel=0,
         smooth_sigma=10,
         color_replacements=color_replacements,

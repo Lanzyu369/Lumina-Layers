@@ -653,7 +653,7 @@ describe("recipe/importRecipe", () => {
         },
       ]);
       expect(state.base_spacer_thick).toBe(0.7);
-      expect(state.spacer_thick).toBe(3.5);
+      expect(state.spacer_thick).toBe(3.52);
     });
 
     it("adds warning for name-only LUT match", () => {

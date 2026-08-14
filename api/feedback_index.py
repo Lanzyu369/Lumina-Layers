@@ -299,10 +299,25 @@ def _format_advanced_params_section(context: dict[str, Any]) -> str:
     if isinstance(dims, dict):
         width = dims.get("target_width_mm", _MISSING)
         height = dims.get("target_height_mm", _MISSING)
+        backing_thickness = dims.get(
+            "base_spacer_thick",
+            dims.get("spacer_thick", _MISSING),
+        )
+        backing_infill = dims.get(
+            "backing_infill_density_percent",
+            _MISSING,
+        )
     else:
         width = _MISSING
         height = _MISSING
+        backing_thickness = _MISSING
+        backing_infill = _MISSING
     lines.append(f"- Dimensions: {_safe_str(width)} × {_safe_str(height)} mm")
+    lines.append(
+        "- Backing: "
+        f"{_safe_str(backing_thickness)} mm / "
+        f"{_safe_str(backing_infill)}% infill"
+    )
 
     # Generation mode fields.
     generation = ap.get("generation")
@@ -410,6 +425,11 @@ def _format_advanced_params_summary_line(context: dict[str, Any]) -> str:
     dims = ap.get("dimensions") if isinstance(ap.get("dimensions"), dict) else {}
     width = dims.get("target_width_mm", "?")
     height = dims.get("target_height_mm", "?")
+    backing_thickness = dims.get(
+        "base_spacer_thick",
+        dims.get("spacer_thick", "?"),
+    )
+    backing_infill = dims.get("backing_infill_density_percent", "?")
 
     active_labels: list[str] = []
     for group_key, toggle_key, label in _SUMMARY_TOGGLE_CHECKS:
@@ -417,7 +437,10 @@ def _format_advanced_params_summary_line(context: dict[str, Any]) -> str:
         if isinstance(group, dict) and group.get(toggle_key) is True:
             active_labels.append(label)
     toggles_str = "、".join(active_labels) if active_labels else "无"
-    return f"尺寸 {width}×{height} mm，已开启：{toggles_str}。"
+    return (
+        f"尺寸 {width}×{height} mm，底板 {backing_thickness} mm / "
+        f"{backing_infill}% 填充，已开启：{toggles_str}。"
+    )
 
 
 def _render_advanced_params_summary_safe(context: dict[str, Any]) -> str:

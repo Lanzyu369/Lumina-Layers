@@ -99,7 +99,7 @@ def st_fridge_magnet_item(draw: st.DrawFn) -> FridgeMagnetItem:
         "id": draw(st_non_empty_str),
         "shape": shape,
         "preset_key": draw(st_non_empty_str),
-        "thickness_mm": draw(st.floats(min_value=0.1, max_value=20.0, allow_nan=False)),
+        "thickness_mm": draw(st.floats(min_value=0.1, max_value=9.6, allow_nan=False)),
         "center_x_mm": draw(st.floats(min_value=-500.0, max_value=500.0, allow_nan=False)),
         "center_y_mm": draw(st.floats(min_value=-500.0, max_value=500.0, allow_nan=False)),
     }
@@ -125,7 +125,7 @@ def st_convert_generate_request(draw: st.DrawFn) -> ConvertGenerateRequest:
     return ConvertGenerateRequest(
         lut_name=draw(st_non_empty_str),
         target_width_mm=draw(st.floats(min_value=10, max_value=400, allow_nan=False)),
-        spacer_thick=draw(st.floats(min_value=0.2, max_value=3.5, allow_nan=False)),
+        spacer_thick=draw(st.floats(min_value=0.2, max_value=10.0, allow_nan=False)),
         structure_mode=draw(st_structure_mode),
         color_mode=draw(st_color_mode),
         modeling_mode=draw(st_modeling_mode),
@@ -154,7 +154,7 @@ def st_convert_generate_request(draw: st.DrawFn) -> ConvertGenerateRequest:
                 max_size=5,
             )
         ),
-        heightmap_max_height=draw(st.floats(min_value=0.08, max_value=18.5, allow_nan=False)),
+        heightmap_max_height=draw(st.floats(min_value=0.08, max_value=25.0, allow_nan=False)),
         enable_outline=draw(st.booleans()),
         outline_width=draw(st.floats(min_value=0.5, max_value=10.0, allow_nan=False)),
         enable_cloisonne=draw(st.booleans()),
@@ -325,12 +325,12 @@ CONSTRAINED_FIELDS: List[Tuple[Type[BaseModel], str, float, float]] = [
     (ConvertGenerateRequest, "target_width_mm", 0.5, 9999),
     (ConvertPreviewRequest, "quantize_colors", 8, 8192),
     (ConvertPreviewRequest, "svg_pixels_per_mm", 2.0, 50.0),
-    (ConvertGenerateRequest, "spacer_thick", 0.2, 3.5),
+    (ConvertGenerateRequest, "spacer_thick", 0.2, 10.0),
     (ConvertGenerateRequest, "svg_pixels_per_mm", 2.0, 50.0),
     (ConvertGenerateRequest, "loop_width", 2, 10),
     (ConvertGenerateRequest, "loop_length", 4, 15),
     (ConvertGenerateRequest, "loop_hole", 1, 5),
-    (ConvertGenerateRequest, "heightmap_max_height", 0.08, 18.5),
+    (ConvertGenerateRequest, "heightmap_max_height", 0.08, 25.0),
     (ConvertGenerateRequest, "outline_width", 0.5, 10.0),
     (ConvertGenerateRequest, "wire_width_mm", 0.2, 1.2),
     (ConvertGenerateRequest, "wire_height_mm", 0.04, 1.0),
@@ -384,15 +384,15 @@ def _build_minimal_valid_data(model_cls: Type[BaseModel]) -> Dict[str, Any]:
 
 def test_convert_generate_request_accepts_total_relief_height_limit() -> None:
     """ConvertGenerateRequest should allow the UI's max backing plus relief height."""
-    request = ConvertGenerateRequest(lut_name="test_lut", heightmap_max_height=18.5)
+    request = ConvertGenerateRequest(lut_name="test_lut", heightmap_max_height=25.0)
 
-    assert request.heightmap_max_height == 18.5
+    assert request.heightmap_max_height == 25.0
 
 
 def test_convert_generate_request_rejects_relief_height_above_total_limit() -> None:
     """ConvertGenerateRequest should reject total relief heights above the UI maximum."""
     with pytest.raises(ValidationError):
-        ConvertGenerateRequest(lut_name="test_lut", heightmap_max_height=18.51)
+        ConvertGenerateRequest(lut_name="test_lut", heightmap_max_height=25.01)
 
 
 @pytest.mark.parametrize("model_cls", [ConvertPreviewRequest, ConvertGenerateRequest])
@@ -687,3 +687,114 @@ def test_convert_generate_request_defaults_fridge_magnet_fields() -> None:
 
     assert request.enable_fridge_magnet is False
     assert request.fridge_magnets == []
+
+
+@pytest.mark.parametrize("thickness_mm", [float("inf"), 9.61, 1_000_000.0])
+def test_fridge_magnet_item_rejects_thickness_beyond_10_mm_backing(
+    thickness_mm: float,
+) -> None:
+    """A cavity must leave the required 0.4 mm shell inside 10 mm backing."""
+
+    with pytest.raises(ValidationError):
+        FridgeMagnetItem(
+            id="round-too-deep",
+            shape="round",
+            preset_key="custom",
+            diameter_mm=12.0,
+            thickness_mm=thickness_mm,
+            center_x_mm=0.0,
+            center_y_mm=0.0,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "field_value"),
+    [
+        ("diameter_mm", float("inf")),
+        ("width_mm", float("inf")),
+        ("height_mm", float("inf")),
+        ("center_x_mm", float("inf")),
+        ("center_y_mm", float("-inf")),
+    ],
+)
+def test_fridge_magnet_item_rejects_non_finite_geometry(
+    field_name: str,
+    field_value: float,
+) -> None:
+    """Cavity geometry must stay finite before raster or vector processing."""
+
+    payload = {
+        "id": "magnet-non-finite",
+        "shape": "round",
+        "preset_key": "custom",
+        "diameter_mm": 12.0,
+        "thickness_mm": 3.0,
+        "center_x_mm": 0.0,
+        "center_y_mm": 0.0,
+        field_name: field_value,
+    }
+    if field_name in {"width_mm", "height_mm"}:
+        payload.update(
+            {
+                "shape": "rect",
+                "diameter_mm": None,
+                "width_mm": 15.0,
+                "height_mm": 5.0,
+                field_name: field_value,
+            }
+        )
+
+    with pytest.raises(ValidationError):
+        FridgeMagnetItem(**payload)
+
+
+@pytest.mark.parametrize(
+    ("thickness_mm", "expected_spacer_thick"),
+    [(2.5, 2.96), (3.0, 3.44), (9.6, 10.0)],
+)
+def test_convert_generate_request_raises_backing_to_fit_fridge_cavity(
+    thickness_mm: float,
+    expected_spacer_thick: float,
+) -> None:
+    """Raster and vector generation receive one cavity-safe backing height."""
+
+    request = ConvertGenerateRequest(
+        lut_name="test-lut",
+        spacer_thick=1.2,
+        enable_fridge_magnet=True,
+        fridge_magnets=[
+            FridgeMagnetItem(
+                id="round-1",
+                shape="round",
+                preset_key="custom",
+                diameter_mm=12.0,
+                thickness_mm=thickness_mm,
+                center_x_mm=0.0,
+                center_y_mm=0.0,
+            ),
+        ],
+    )
+
+    assert request.spacer_thick == expected_spacer_thick
+
+
+def test_convert_generate_request_rejects_more_than_20_fridge_magnets() -> None:
+    """API capacity matches the frontend and bug-report contract."""
+
+    magnet = {
+        "shape": "round",
+        "preset_key": "custom",
+        "diameter_mm": 12.0,
+        "thickness_mm": 3.0,
+        "center_x_mm": 0.0,
+        "center_y_mm": 0.0,
+    }
+    with pytest.raises(ValidationError):
+        ConvertGenerateRequest(
+            lut_name="test-lut",
+            enable_fridge_magnet=True,
+            fridge_magnets=[
+                {"id": f"round-{index}", **magnet}
+                for index in range(21)
+            ],
+        )

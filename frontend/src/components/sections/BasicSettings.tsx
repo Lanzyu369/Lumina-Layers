@@ -73,7 +73,10 @@ const COLOR_MODE_DOTS: Record<string, string[]> = {
 const DOT_CLS = "inline-block size-2 rounded-full shrink-0 ring-1 ring-black/10 dark:ring-white/20";
 const THICKNESS_LAYER_STEP_MM = 0.08;
 const THICKNESS_SLIDER_MIN_MM = 0.24;
-const THICKNESS_SLIDER_MAX_MM = 3.44;
+const THICKNESS_SLIDER_MAX_MM = 10;
+const BACKING_INFILL_DENSITY_MIN_PERCENT = 5;
+const BACKING_INFILL_DENSITY_MAX_PERCENT = 100;
+const BACKING_INFILL_DENSITY_STEP_PERCENT = 5;
 const GENERIC_HTTP_STATUS_ERROR_RE =
   /(?:Request failed with status code|HTTP(?:\s+error)?|status(?:\s+code)?)\s*\d{3}\b/i;
 const STARTUP_LUT_RETRY_DELAY_MS = 5_000;
@@ -304,6 +307,7 @@ export default function BasicSettings() {
     target_width_mm,
     target_height_mm,
     spacer_thick,
+    backing_infill_density_percent,
     structure_mode,
     modeling_mode,
     enable_relief,
@@ -385,6 +389,7 @@ export default function BasicSettings() {
     target_width_mm: s.target_width_mm,
     target_height_mm: s.target_height_mm,
     spacer_thick: s.spacer_thick,
+    backing_infill_density_percent: s.backing_infill_density_percent,
     structure_mode: s.structure_mode,
     modeling_mode: s.modeling_mode,
     enable_relief: s.enable_relief,
@@ -552,6 +557,9 @@ export default function BasicSettings() {
   const setTargetWidthMm = useConverterStore((s) => s.setTargetWidthMm);
   const setTargetHeightMm = useConverterStore((s) => s.setTargetHeightMm);
   const setSpacerThick = useConverterStore((s) => s.setSpacerThick);
+  const setBackingInfillDensityPercent = useConverterStore(
+    (s) => s.setBackingInfillDensityPercent,
+  );
   const setStructureMode = useConverterStore((s) => s.setStructureMode);
   const setModelingMode = useConverterStore((s) => s.setModelingMode);
   const setEnableCrop = useConverterStore((s) => s.setEnableCrop);
@@ -1868,6 +1876,20 @@ export default function BasicSettings() {
         onChange={setSpacerThick}
         normalizeTextValue={snapThicknessToLayerGrid}
       />
+
+      {!modelSurfaceEnabled && (
+        <Slider
+          label={t("basic_backing_infill_density")}
+          tooltip={t("basic_backing_infill_density_hint")}
+          value={backing_infill_density_percent}
+          min={BACKING_INFILL_DENSITY_MIN_PERCENT}
+          max={BACKING_INFILL_DENSITY_MAX_PERCENT}
+          step={BACKING_INFILL_DENSITY_STEP_PERCENT}
+          unit="%"
+          onChange={setBackingInfillDensityPercent}
+          disabled={enable_relief || puzzleEnabled}
+        />
+      )}
 
       {!modelSurfaceEnabled && (
         <RadioGroup

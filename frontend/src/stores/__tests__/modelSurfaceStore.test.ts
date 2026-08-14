@@ -78,6 +78,7 @@ describe("model surface overlay store flow", () => {
   });
 
   it("uploads a model and stores the model surface file id", async () => {
+    useConverterStore.setState({ backing_infill_density_percent: 20 });
     mocks.uploadModelSurface.mockResolvedValueOnce({
       status: "ok",
       model_file_id: "model-file-1",
@@ -112,6 +113,7 @@ describe("model surface overlay store flow", () => {
 
     const state = useConverterStore.getState();
     expect(state.modelSurfaceEnabled).toBe(true);
+    expect(state.backing_infill_density_percent).toBe(100);
     expect(state.modelSurfaceFile).toBe(file);
     expect(state.modelSurfaceModelFileId).toBe("model-file-1");
     expect(state.modelSurfaceSummary?.extents_mm).toEqual([20, 10, 2]);

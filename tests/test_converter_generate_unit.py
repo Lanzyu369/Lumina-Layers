@@ -512,7 +512,7 @@ class TestGenerateParameterCompleteness:
 
         # Verify params dict contains all scalar parameters
         assert submitted_params["target_width_mm"] == 80.0
-        assert submitted_params["spacer_thick"] == 1.5
+        assert submitted_params["spacer_thick"] == 2.96
         assert submitted_params["structure_mode"] == "Single-sided"
         assert submitted_params["color_mode"] == "4-Color (RYBW)"
         assert submitted_params["model_enable"] is True
@@ -3543,6 +3543,7 @@ class TestLargeFormatCachedAnalysisRouting:
         request = LargeFormatConvertGenerateRequest(
             lut_name="test_lut",
             modeling_mode=ModelingMode.VECTOR,
+            backing_infill_density_percent=25,
         )
 
         params = _resolve_large_format_shared_params(
@@ -3559,6 +3560,7 @@ class TestLargeFormatCachedAnalysisRouting:
         )
 
         assert params["replacement_regions"] == expected_replacements
+        assert params["backing_infill_density_percent"] == 25
 
     @pytest.mark.parametrize(
         "malformed_case",

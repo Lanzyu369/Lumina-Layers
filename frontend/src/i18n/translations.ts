@@ -5268,6 +5268,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "底板的厚度（毫米）。底板越厚成品越结实，但打印时间和耗材用量也会增加。滑块每格对应一层打印层。",
     en: "Thickness of the base plate (mm). A thicker base is sturdier but takes more time and material to print. Each slider step equals one print layer.",
   },
+  basic_backing_infill_density: {
+    zh: "背板填充率",
+    en: "Backing Infill",
+  },
+  basic_backing_infill_density_hint: {
+    zh: "控制深层背板的填充率。靠近观赏面的保护区域始终保持 100% 实心；浮雕和拼图模式固定为 100%。",
+    en: "Controls infill in the deeper backing. The protected zone next to the viewing surface always stays 100% solid; relief and puzzle modes stay at 100%.",
+  },
   basic_structure_mode: {
     zh: "结构模式",
     en: "Structure Mode",
