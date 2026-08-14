@@ -7800,6 +7800,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "审查权限并打开候选版本",
     en: "Review permissions and open candidate",
   },
+  "workshop.manager.blocked": {
+    zh: "已被 Registry 阻止",
+    en: "Blocked by the Registry",
+  },
   "workshop.manager.desktopOnly": {
     zh: "仅桌面版可打开",
     en: "Desktop app required",
@@ -7865,8 +7869,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Desktop secure mode: community modules run in an isolated sandbox without network or filesystem-path access.",
   },
   "workshop.manager.runtime.browser-restricted": {
-    zh: "浏览器限制模式：只能运行随 Lumina 预装的官方模块；社区与未审核模块需要桌面版。",
-    en: "Browser restricted mode: only official modules bundled with Lumina can run; community and unreviewed modules require the desktop app.",
+    zh: "浏览器限制模式：预装官方模块和签名 Registry 中的官方模块可在受限沙箱运行；社区与未审核模块需要桌面版。",
+    en: "Browser restricted mode: bundled official modules and official modules from the signed Registry can run in the restricted sandbox; community and unreviewed modules require the desktop app.",
   },
   "workshop.manager.runtime.unsafe-development": {
     zh: "不安全开发模式：仅本地模块可用合成数据调试，不会获得真实图片、工程或色库。",

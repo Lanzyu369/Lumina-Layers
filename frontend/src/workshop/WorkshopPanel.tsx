@@ -39,7 +39,9 @@ import {
   type WorkshopFrameProps,
 } from "./runtime/WorkshopFrame";
 import {
+  canRunWorkshopInBrowser,
   compareWorkshopSemver,
+  isBrowserTrustedWorkshopModule,
   WORKSHOP_RUNTIME_CLOSE_GRACE_MS,
   type WorkshopRuntimeMode,
 } from "./runtime/health";
@@ -136,7 +138,12 @@ function newestInstallableVersion(
 function sourceKey(
   module: InstalledWorkshopModule,
 ): "official" | "community" | "unreviewed" {
-  if (module.official) {
+  if (
+    isBrowserTrustedWorkshopModule(
+      module.source,
+      module.official,
+    )
+  ) {
     return "official";
   }
   return module.source === "registry"
@@ -167,7 +174,12 @@ function moduleAuditStatus(
   if (catalogVersion?.state === "active") {
     return "verified";
   }
-  if (module.source === "seed" && module.official) {
+  if (
+    isBrowserTrustedWorkshopModule(
+      module.source,
+      module.official,
+    )
+  ) {
     return "official";
   }
   if (module.source === "github" || module.source === "local") {
@@ -196,16 +208,23 @@ function canOpenModule(
     | "desktop-secure"
     | "browser-restricted"
     | "unsafe-development",
+  catalogModule?: WorkshopCatalogModule,
+  version?: string | null,
 ): boolean {
-  if (runtimeMode === "desktop-secure") {
-    return true;
+  const catalogVersion = catalogModule?.versions.find(
+    (candidate) => candidate.version === version,
+  );
+  if (
+    module.source === "registry" &&
+    (catalogVersion?.state === "blocked" ||
+      catalogVersion?.revocation != null)
+  ) {
+    return false;
   }
-  if (module.source === "seed" && module.official) {
-    return true;
-  }
-  return (
-    runtimeMode === "unsafe-development" &&
-    module.source === "local"
+  return canRunWorkshopInBrowser(
+    module.source,
+    module.official,
+    frameRuntimeMode(runtimeMode),
   );
 }
 
@@ -288,7 +307,34 @@ function InstalledCard({
     catalogModule,
     module.active_version,
   );
-  const openAllowed = canOpenModule(module, runtimeMode);
+  const activeOpenAllowed = canOpenModule(
+    module,
+    runtimeMode,
+    catalogModule,
+    module.active_version,
+  );
+  const candidateOpenAllowed = canOpenModule(
+    module,
+    runtimeMode,
+    catalogModule,
+    module.candidate_version,
+  );
+  const activeBlocked =
+    module.source === "registry" &&
+    !activeOpenAllowed &&
+    canRunWorkshopInBrowser(
+      module.source,
+      module.official,
+      frameRuntimeMode(runtimeMode),
+    );
+  const candidateBlocked =
+    module.source === "registry" &&
+    !candidateOpenAllowed &&
+    canRunWorkshopInBrowser(
+      module.source,
+      module.official,
+      frameRuntimeMode(runtimeMode),
+    );
   const title = detail
     ? localized(detail.name, lang)
     : module.module_id;
@@ -371,24 +417,28 @@ function InstalledCard({
           {module.active_version ? (
             <Button
               label={
-                openAllowed
+                activeBlocked
+                  ? t("workshop.manager.blocked")
+                  : activeOpenAllowed
                   ? t("workshop.manager.open")
                   : t("workshop.manager.desktopOnly")
               }
               onClick={() => onOpen(module.active_version as string)}
-              disabled={!module.enabled || !openAllowed}
+              disabled={!module.enabled || !activeOpenAllowed}
               className="flex-1"
             />
           ) : null}
           {module.candidate_version ? (
             <Button
               label={
-                openAllowed
+                candidateBlocked
+                  ? t("workshop.manager.blocked")
+                  : candidateOpenAllowed
                   ? t("workshop.manager.reviewCandidate")
                   : t("workshop.manager.desktopOnly")
               }
               onClick={onOpenCandidate}
-              disabled={!module.enabled || !openAllowed}
+              disabled={!module.enabled || !candidateOpenAllowed}
               variant={
                 module.active_version ? "secondary" : undefined
               }
@@ -805,7 +855,12 @@ export function WorkshopPanel({
       );
       if (
         installed?.candidate_version &&
-        canOpenModule(installed, runtimeMode)
+        canOpenModule(
+          installed,
+          runtimeMode,
+          catalogById.get(installed.module_id),
+          installed.candidate_version,
+        )
       ) {
         openModule(
           installed.module_id,
@@ -813,7 +868,13 @@ export function WorkshopPanel({
         );
       }
     },
-    [api, openModule, runModuleMutation, runtimeMode],
+    [
+      api,
+      catalogById,
+      openModule,
+      runModuleMutation,
+      runtimeMode,
+    ],
   );
 
   const requestStagedCandidate = useCallback(
@@ -821,7 +882,12 @@ export function WorkshopPanel({
       const candidateVersion = module.candidate_version;
       if (
         candidateVersion === null ||
-        !canOpenModule(module, runtimeMode)
+        !canOpenModule(
+          module,
+          runtimeMode,
+          catalogById.get(module.module_id),
+          candidateVersion,
+        )
       ) {
         return;
       }
@@ -851,7 +917,7 @@ export function WorkshopPanel({
       }
       confirm();
     },
-    [openModule, runtimeMode, t],
+    [catalogById, openModule, runtimeMode, t],
   );
 
   const requestUpdate = useCallback(

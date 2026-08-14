@@ -49,6 +49,7 @@ from core.workshop import (
     WorkshopRegistryError,
     WorkshopReleaseError,
     download_registry_package,
+    is_browser_trusted_workshop_module,
     load_registry_keys,
     resolve_github_release_package,
 )
@@ -1059,7 +1060,10 @@ def _verify_runtime_token(
     module_id: str,
     version: str,
 ) -> None:
-    if state.official and state.source == "seed":
+    if is_browser_trusted_workshop_module(
+        state.source,
+        state.official,
+    ):
         return
     expected = os.environ.get(
         "LUMINA_WORKSHOP_DESKTOP_TOKEN",
@@ -1088,6 +1092,58 @@ def _verify_runtime_token(
             exc=PermissionError("Workshop desktop token mismatch"),
             status_code=403,
             detail="Workshop runtime access was denied.",
+            module_id=module_id,
+            version=version,
+        )
+
+
+def _verify_registry_runtime_status(
+    state: InstalledModuleState,
+    *,
+    module_id: str,
+    version: str,
+) -> None:
+    if state.source != "registry":
+        return
+    try:
+        result = get_workshop_registry_client().refresh()
+        if not result.verified:
+            raise WorkshopRegistryError(
+                "Workshop Registry result is not verified"
+            )
+    except (WorkshopRegistryError, OSError) as exc:
+        _raise_workshop_http_error(
+            event="workshop_module_runtime_failed",
+            exc=exc,
+            status_code=503,
+            detail="No trusted Creative Workshop catalog is available.",
+            module_id=module_id,
+            version=version,
+        )
+    module = _find_registry_module(result.index, module_id)
+    registry_version = (
+        next(
+            (
+                candidate
+                for candidate in module.versions
+                if candidate.version == version
+            ),
+            None,
+        )
+        if module is not None
+        else None
+    )
+    if registry_version is not None and (
+        registry_version.state == "blocked"
+        or registry_version.revocation is not None
+    ):
+        _raise_workshop_http_error(
+            event="workshop_module_runtime_failed",
+            exc=WorkshopInstallError(
+                "Workshop module version is blocked"
+            ),
+            status_code=409,
+            detail="The Workshop module version is blocked.",
             module_id=module_id,
             version=version,
         )
@@ -1276,6 +1332,11 @@ def workshop_module_runtime(
     _verify_runtime_token(
         state,
         desktop_token,
+        module_id=module_id,
+        version=version,
+    )
+    _verify_registry_runtime_status(
+        state,
         module_id=module_id,
         version=version,
     )

@@ -315,6 +315,34 @@ def test_bad_signature_keeps_previous_verified_cache(tmp_path: Path) -> None:
     ).read_bytes() == payload
 
 
+def test_unsigned_official_upgrade_keeps_verified_community_cache(
+    tmp_path: Path,
+) -> None:
+    private_key = Ed25519PrivateKey.generate()
+    community = registry_fixture()
+    payload = canonical_registry_bytes(community)
+    first = client_for(
+        tmp_path,
+        private_key=private_key,
+        payload=payload,
+    ).refresh()
+    tampered = copy.deepcopy(community)
+    tampered["modules"][0]["official"] = True
+    replacement = canonical_registry_bytes(tampered)
+    client = client_for(
+        tmp_path,
+        private_key=private_key,
+        payload=replacement,
+        signature=signature_bytes(payload, private_key),
+    )
+
+    result = client.refresh()
+
+    assert result.source == "cache"
+    assert result.index == first.index
+    assert result.index.modules[0].official is False
+
+
 def test_etag_304_reuses_verified_cache_without_fetching_signature(
     tmp_path: Path,
 ) -> None:

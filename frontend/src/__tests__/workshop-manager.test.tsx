@@ -737,6 +737,12 @@ describe("Workshop installable module manager", () => {
       installed({
         module_id: "fixture.local",
         source: "github",
+        official: true,
+      }),
+      installed({
+        module_id: "fixture.filesystem",
+        source: "local",
+        official: true,
       }),
     ]);
     renderManager(api);
@@ -744,10 +750,98 @@ describe("Workshop installable module manager", () => {
     const openButtons = await screen.findAllByRole("button", {
       name: "仅桌面版可打开",
     });
-    expect(openButtons).toHaveLength(2);
+    expect(openButtons).toHaveLength(3);
     expect(openButtons.every((button) => button.hasAttribute("disabled"))).toBe(
       true,
     );
+  });
+
+  it("opens an official Registry module in browser mode", async () => {
+    const api = fakeApi([installed({ official: true })]);
+    renderManager(api);
+
+    const openButton = await screen.findByRole("button", {
+      name: "打开",
+    });
+    expect(openButton).toBeEnabled();
+    fireEvent.click(openButton);
+
+    expect(
+      screen.getByRole("region", {
+        name: "普通模块上传与校准页",
+      }),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        useWorkshopStore.getState().activeRuntimeContext,
+      ).toEqual({
+        installSource: "registry",
+        auditStatus: "official",
+      }),
+    );
+  });
+
+  it("disables opening exact Registry versions blocked by the trusted catalog", async () => {
+    const blockedCatalog = catalog();
+    blockedCatalog.modules[0].official = true;
+    blockedCatalog.modules[0].versions = [
+      {
+        version: "1.0.0",
+        state: "blocked",
+        permissions: [
+          {
+            name: "project.storage",
+            reason: "Need project.storage",
+          },
+        ],
+        revocation: {
+          reason_code: "malware",
+          severity: "critical",
+          message: {
+            zh_cn: "此版本已被阻止。",
+            en_us: "This version has been blocked.",
+          },
+        },
+      },
+      {
+        version: "1.1.0",
+        state: "blocked",
+        permissions: [
+          {
+            name: "project.storage",
+            reason: "Need project.storage",
+          },
+        ],
+        revocation: {
+          reason_code: "malware",
+          severity: "critical",
+          message: {
+            zh_cn: "此版本已被阻止。",
+            en_us: "This version has been blocked.",
+          },
+        },
+      },
+    ];
+    const module = installed({
+      official: true,
+      candidate_version: "1.1.0",
+      versions: ["1.0.0", "1.1.0"],
+      version_details: [version("1.0.0"), version("1.1.0")],
+    });
+    const api = fakeApi([module]);
+    vi.mocked(api.fetchCatalog).mockResolvedValue(blockedCatalog);
+    renderManager(api, fakeStorage(), "desktop-secure");
+
+    const blockedButtons = await screen.findAllByRole("button", {
+      name: "已被 Registry 阻止",
+    });
+    expect(blockedButtons).toHaveLength(2);
+    expect(blockedButtons.every((button) => button.hasAttribute("disabled"))).toBe(
+      true,
+    );
+    expect(
+      screen.queryByLabelText("普通模块上传与校准页"),
+    ).not.toBeInTheDocument();
   });
 
   it("renders README as sanitized Markdown and never executes raw HTML", async () => {

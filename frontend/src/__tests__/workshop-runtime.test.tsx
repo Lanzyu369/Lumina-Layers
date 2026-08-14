@@ -19,6 +19,7 @@ import {
 } from "../workshop/runtime/WorkshopFrame";
 import {
   WORKSHOP_RUNTIME_CSP,
+  canRunWorkshopInBrowser,
   desktopModuleUrl,
   isWorkshopApiCompatible,
 } from "../workshop/runtime/health";
@@ -118,6 +119,33 @@ afterEach(() => {
 });
 
 describe("WorkshopFrame", () => {
+  it.each([
+    ["official Registry", "registry", true, "browser", true],
+    ["official seed", "seed", true, "browser", true],
+    ["community Registry", "registry", false, "browser", false],
+    ["official GitHub", "github", true, "browser", false],
+    ["official local", "local", true, "browser", false],
+    ["desktop community", "registry", false, "desktop-secure", true],
+    ["fixture", "fixture", false, "browser", true],
+    [
+      "unsafe local",
+      "local",
+      false,
+      "browser-unsafe-development",
+      true,
+    ],
+  ] as const)("enforces the browser trust matrix for %s", (
+    _label,
+    source,
+    official,
+    mode,
+    expected,
+  ) => {
+    expect(canRunWorkshopInBrowser(source, official, mode)).toBe(
+      expected,
+    );
+  });
+
   it("pushes live UI state only to capable modules without reloading their frame", async () => {
     const capableChannel = channelFixture();
     const initialState = {
@@ -663,14 +691,73 @@ describe("WorkshopFrame", () => {
     );
   });
 
-  it("requires the secure desktop runtime for community packages", () => {
+  it("loads an official Registry runtime as same-origin srcDoc", async () => {
+    const fetchRuntime = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        "<html><head></head><body><script>globalThis.registry=true</script></body></html>",
+        {
+          status: 200,
+          headers: { "content-type": "text/html; charset=utf-8" },
+        },
+      ),
+    );
     render(
       <WorkshopFrame
         module={installedFixture({
           source: "registry",
-          official: false,
+          official: true,
           browserRuntimeHtml: null,
         })}
+      />,
+    );
+
+    const iframe = await screen.findByTitle("Fixture Hello");
+    expect(fetchRuntime).toHaveBeenCalledWith(
+      "/api/workshop/v1/modules/fixture.hello/1.0.0/runtime",
+      {
+        cache: "no-store",
+        credentials: "same-origin",
+        redirect: "error",
+      },
+    );
+    expect(iframe).toHaveAttribute("sandbox", "allow-scripts");
+    expect(iframe.getAttribute("sandbox")).not.toContain(
+      "allow-same-origin",
+    );
+    expect(iframe).toHaveAttribute("referrerpolicy", "no-referrer");
+    expect(iframe).not.toHaveAttribute("src");
+    const srcDoc = iframe.getAttribute("srcdoc") ?? "";
+    expect(srcDoc).toContain("globalThis.registry=true");
+    expect(srcDoc).toContain("default-src 'none'");
+    expect(srcDoc).toContain("connect-src 'none'");
+    expect(srcDoc).toContain("frame-src 'none'");
+    expect(srcDoc).toContain("form-action 'none'");
+    expect(srcDoc.indexOf(WORKSHOP_RUNTIME_CSP)).toBeGreaterThanOrEqual(
+      0,
+    );
+    expect(srcDoc.indexOf(WORKSHOP_RUNTIME_CSP)).toBeLessThan(
+      srcDoc.indexOf("<script>"),
+    );
+  });
+
+  it.each([
+    ["community Registry", "registry", false],
+    ["official GitHub", "github", true],
+    ["official local", "local", true],
+  ] as const)("requires the secure desktop runtime for %s packages", (
+    _label,
+    source,
+    official,
+  ) => {
+    const loadBrowserRuntime = vi.fn();
+    render(
+      <WorkshopFrame
+        module={installedFixture({
+          source,
+          official,
+          browserRuntimeHtml: null,
+        })}
+        loadBrowserRuntime={loadBrowserRuntime}
       />,
     );
 
@@ -678,7 +765,24 @@ describe("WorkshopFrame", () => {
       screen.getByText("此模块需要 Lumina 桌面版才能运行"),
     ).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveClass("m-3", "mt-16");
+    expect(loadBrowserRuntime).not.toHaveBeenCalled();
     expect(screen.queryByTitle("Fixture Hello")).not.toBeInTheDocument();
+  });
+
+  it("keeps official seed modules runnable in browser mode", () => {
+    render(
+      <WorkshopFrame
+        module={installedFixture({
+          source: "seed",
+          official: true,
+        })}
+      />,
+    );
+
+    expect(screen.getByTitle("Fixture Hello")).toHaveAttribute(
+      "sandbox",
+      "allow-scripts",
+    );
   });
 
   it("uses the custom scheme for community packages in secure desktop mode", () => {
