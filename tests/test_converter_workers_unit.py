@@ -871,6 +871,84 @@ def test_worker_generate_large_format_svg_native_uses_sanitized_tile_prefix_in_z
             os.unlink(result["zip_path"])
 
 
+def test_worker_generate_large_format_svg_native_applies_coating_to_tile() -> None:
+    """A native SVG tile must inherit the requested transparent coating."""
+
+    build_calls: list[dict[str, object]] = []
+
+    class _FakeVectorProcessor:
+        def __init__(self, lut_path: str, color_mode: str) -> None:
+            self.lut_path = lut_path
+            self.color_mode = color_mode
+
+        def analyze_svg(self, **_kwargs):
+            return SimpleNamespace(num_layers=5)
+
+        def build_mesh(self, **kwargs):
+            build_calls.append(
+                {
+                    **kwargs,
+                    "enable_coating": getattr(self, "enable_coating", False),
+                    "coating_height_mm": getattr(self, "coating_height_mm", 0.08),
+                }
+            )
+            fake_geom = SimpleNamespace(vertices=[(0, 0, 0)], faces=[(0, 0, 0)])
+            return SimpleNamespace(geometry={"Slot1": fake_geom})
+
+    fake_tile = SimpleNamespace(
+        label="R1C1",
+        analysis=SimpleNamespace(
+            preview_colors={0: [255, 0, 0, 255]},
+            slot_names=["Slot1"],
+        ),
+    )
+    params = {
+        "tile_name_prefix": "coating",
+        "total_width_mm": 20.0,
+        "total_height_mm": 20.0,
+        "tile_width_mm": 20.0,
+        "tile_height_mm": 20.0,
+        "spacer_thick": 1.2,
+        "structure_mode": "Single-sided",
+        "color_mode": "4-Color",
+        "replacement_regions": [],
+        "separate_backing": False,
+        "enable_coating": True,
+        "coating_height_mm": 0.12,
+    }
+
+    result = None
+    with (
+        patch(
+            "core.pipeline.s03_color_replacement._normalize_color_replacements_input",
+            return_value={},
+        ),
+        patch("core.vector_engine.VectorProcessor", _FakeVectorProcessor),
+        patch(
+            "core.vector_large_format.slice_vector_analysis_into_tiles",
+            return_value=[fake_tile],
+        ),
+        patch("api.workers.converter_workers._rasterize_tile_for_cover", return_value=None),
+        patch(
+            "utils.bambu_3mf_writer.export_scene_with_bambu_metadata",
+            side_effect=lambda *, output_path, **_kwargs: open(output_path, "wb").close(),
+        ),
+    ):
+        result = worker_generate_large_format_svg_native(
+            "image.svg",
+            "lut.npy",
+            params,
+        )
+
+    try:
+        assert len(build_calls) == 1
+        assert build_calls[0]["enable_coating"] is True
+        assert build_calls[0]["coating_height_mm"] == pytest.approx(0.12)
+    finally:
+        if result is not None and os.path.exists(result["zip_path"]):
+            os.unlink(result["zip_path"])
+
+
 def test_worker_generate_large_format_svg_native_preserves_relief_semantics_per_tile(
     tmp_path,
 ) -> None:

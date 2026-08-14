@@ -1947,6 +1947,10 @@ def worker_generate_large_format_svg_native(
     )
     layer_height_mm = _resolve_vector_layer_height_mm(worker_ctx)
     vector_processor.layer_height_mm = layer_height_mm
+    vector_processor.enable_coating = bool(worker_ctx.get("enable_coating", False))
+    vector_processor.coating_height_mm = float(
+        worker_ctx.get("coating_height_mm", 0.08)
+    )
     vector_processor.auto_dynamic_range = bool(params.get("auto_dynamic_range", False))
     analysis = vector_processor.analyze_svg(
         svg_path=image_path,
