@@ -152,6 +152,7 @@ export type ConvertGenerateRequest = ConvertPreviewRequest & {
   slicer?: string;
   nozzle_size?: string;
   device_profile_id?: string;
+  build_plate_id?: string;
   enable_base_layer_height_modifier?: boolean;
   use_cached_matched_rgb?: boolean;
 };
@@ -666,6 +667,7 @@ export interface CalibrationGenerateRequest {
   slicer?: string;
   nozzle_size?: string;
   device_profile_id?: string;
+  build_plate_id?: string;
 }
 
 // ========== Calibration Response Models ==========
@@ -698,6 +700,7 @@ export interface SingleStageKitGenerateRequest {
   slicer?: string;
   nozzle_size?: string;
   device_profile_id?: string;
+  build_plate_id?: string;
 }
 
 export interface SingleStageKitResponse {
@@ -1814,6 +1817,7 @@ export interface BatchConvertParams {
   slicer?: string;
   nozzle_size?: string;
   device_profile_id?: string;
+  build_plate_id?: string;
   enable_base_layer_height_modifier?: boolean;
 }
 
@@ -1924,6 +1928,7 @@ export interface RecipeSwatchRequest {
   slicer?: string;
   nozzle_size?: string;
   device_profile_id?: string;
+  build_plate_id?: string;
 }
 
 export interface RecipeSwatchResponse {
@@ -1953,6 +1958,7 @@ export interface MaterialRecipeSwatchRequest {
   slicer?: string;
   nozzle_size?: string;
   device_profile_id?: string;
+  build_plate_id?: string;
 }
 
 export interface MaterialRecipeSwatchResponse {
@@ -2102,11 +2108,21 @@ export interface ReplacementHistoryResponse {
 
 export interface DeviceProfileInfo {
   device_profile_id: string;
+  machine_profile_id?: string;
   slicer_id: string;
   nozzle_size: string;
   source_profile_name: string;
   revision: string;
   supported: boolean;
+  build_plates?: BuildPlateInfo[];
+  default_build_plate_id?: string;
+}
+
+export interface BuildPlateInfo {
+  id: string;
+  display_name: string;
+  display_name_zh?: string;
+  image_url: string;
 }
 
 export interface PrinterInfo {
@@ -2139,6 +2155,8 @@ export interface UserSettings {
   printer_model: string;
   slicer_software: string;
   device_profile_id: string;
+  build_plate_id: string;
+  build_plate_selections: Record<string, string>;
   custom_slicer_path: string;
   custom_slicer_id: string;
   nozzle_size: string;

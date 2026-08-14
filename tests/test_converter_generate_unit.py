@@ -243,6 +243,29 @@ def _create_svg_session(
     return sid, svg_path, lut_path
 
 
+def test_generate_rejects_unsupported_build_plate_before_worker() -> None:
+    sid = _create_session_with_preview_and_files(_test_store)
+    _mock_pool.submit = AsyncMock()
+    payload = {
+        "session_id": sid,
+        "params": {
+            "lut_name": "test_lut",
+            "printer_id": "bambu-h2d",
+            "slicer": "BambuStudio",
+            "nozzle_size": "0.4",
+            "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d:0.4",
+            "build_plate_id": "cool-plate",
+        },
+    }
+
+    with patch("os.path.exists", return_value=True):
+        response = client.post("/api/convert/generate", json=payload)
+
+    assert response.status_code == 422
+    assert "Unsupported build plate" in response.json()["detail"]
+    _mock_pool.submit.assert_not_called()
+
+
 def _create_raster_large_format_session(store: SessionStore) -> tuple[str, str, str]:
     """Create a PNG-backed session for large-format route tests."""
     fd_img, image_path = tempfile.mkstemp(suffix=".png")
@@ -466,7 +489,7 @@ class TestGenerateParameterCompleteness:
                 "wire_height_mm": 0.5,
                 "enable_coating": True,
                 "coating_height_mm": 0.1,
-                "printer_id": "orca-p1s",
+                "printer_id": "bambu-p1s",
                 "slicer": "OrcaSlicer",
                 "nozzle_size": "0.2",
                 "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
@@ -803,13 +826,67 @@ class TestGenerateParameterCompleteness:
         ):
             response = client.post(
                 "/api/convert/color-card",
-                json={"session_id": sid},
+                json={
+                    "session_id": sid,
+                    "printer_id": "bambu-p1s",
+                    "slicer": "OrcaSlicer",
+                    "nozzle_size": "0.2",
+                    "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
+                    "build_plate_id": "smooth-high-temp-plate",
+                },
             )
 
         assert response.status_code == 200, response.text
         assert captured["hex_colors"] == ["#ff0000", "#00ff00"]
         submitted_params = _mock_pool.submit.call_args.args[3]
         assert submitted_params["color_layers"] == 5
+        assert submitted_params["printer_id"] == "bambu-p1s"
+        assert submitted_params["slicer"] == "OrcaSlicer"
+        assert submitted_params["nozzle_size"] == "0.2"
+        assert submitted_params["device_profile_id"] == (
+            "OrcaSlicer:bbl:bambu-lab-p1s:0.2"
+        )
+        assert submitted_params["build_plate_id"] == "smooth-high-temp-plate"
+
+    def test_color_card_endpoint_rejects_unsupported_plate_before_svg(
+        self,
+        tmp_path,
+    ) -> None:
+        _test_store.clear_all()
+        lut_path = tmp_path / "source.npy"
+        lut_path.write_bytes(b"lut")
+        sid = _test_store.create()
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                "target_w": 4,
+                "target_h": 4,
+                "target_width_mm": 40.0,
+                "color_palette": [{"hex": "#ff0000"}],
+            },
+        )
+        _test_store.put(sid, "lut_path", str(lut_path))
+        _test_store.put(sid, "material_source", "lut")
+        _mock_pool.submit = AsyncMock()
+
+        with patch("core.color_card.generate_color_card_svg") as generate_svg:
+            response = client.post(
+                "/api/convert/color-card",
+                json={
+                    "session_id": sid,
+                    "printer_id": "bambu-h2d",
+                    "slicer": "BambuStudio",
+                    "nozzle_size": "0.4",
+                    "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d:0.4",
+                    "build_plate_id": "cool-plate",
+                },
+            )
+
+        assert response.status_code == 422
+        assert "Unsupported build plate" in response.json()["detail"]
+        generate_svg.assert_not_called()
+        _mock_pool.submit.assert_not_called()
 
     def test_color_card_worker_exception_uses_public_error_language(
         self,

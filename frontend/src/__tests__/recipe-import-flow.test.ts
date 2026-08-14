@@ -41,11 +41,25 @@ const PRINTERS: PrinterInfo[] = [
     device_profiles: [
       {
         device_profile_id: "BambuStudio:bbl:bambu-lab-h2d:0.4",
+        machine_profile_id: "BambuStudio:bbl:bambu-lab-h2d",
         slicer_id: "BambuStudio",
         nozzle_size: "0.4",
         source_profile_name: "Bambu Lab H2D 0.4 nozzle",
         revision: "sha256:h2d",
         supported: true,
+        build_plates: [
+          {
+            id: "engineering-plate",
+            display_name: "Engineering Plate",
+            image_url: "/h2d-engineering.png",
+          },
+          {
+            id: "textured-pei-plate",
+            display_name: "Textured PEI Plate",
+            image_url: "/h2d-textured.png",
+          },
+        ],
+        default_build_plate_id: "textured-pei-plate",
       },
     ],
   },
@@ -62,17 +76,58 @@ const PRINTERS: PrinterInfo[] = [
     device_profiles: [
       {
         device_profile_id: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
+        machine_profile_id: "OrcaSlicer:bbl:bambu-lab-p1s",
         slicer_id: "OrcaSlicer",
         nozzle_size: "0.2",
         source_profile_name: "Bambu Lab P1S 0.2 nozzle",
         revision: "sha256:p1s",
         supported: true,
+        build_plates: [
+          {
+            id: "smooth-high-temp-plate",
+            display_name: "Smooth High Temp Plate",
+            image_url: "/p1s-smooth.png",
+          },
+          {
+            id: "textured-pei-plate",
+            display_name: "Textured PEI Plate",
+            image_url: "/p1s-textured.png",
+          },
+        ],
+        default_build_plate_id: "textured-pei-plate",
+      },
+    ],
+  },
+  {
+    id: "flashforge-guider-3-ultra",
+    display_name: "Flashforge Guider 3 Ultra",
+    brand: "Flashforge",
+    bed_width: 330,
+    bed_depth: 340,
+    bed_height: 600,
+    supported_nozzle_sizes: ["0.4"],
+    supported_slicers: ["FlashStudio"],
+    thumbnail: "",
+    device_profiles: [
+      {
+        device_profile_id: "FlashStudio:flashforge:guider-3-ultra:0.4",
+        machine_profile_id: "FlashStudio:flashforge:guider-3-ultra",
+        slicer_id: "FlashStudio",
+        nozzle_size: "0.4",
+        source_profile_name: "Flashforge Guider 3 Ultra 0.4 nozzle",
+        revision: "sha256:guider",
+        supported: true,
+        build_plates: [],
+        default_build_plate_id: "",
       },
     ],
   },
 ];
 
-function makeRecipe(device_profile_id: string | null = "OrcaSlicer:bbl:bambu-lab-p1s:0.2"): LuminaRecipe {
+function makeRecipe(
+  device_profile_id: string | null = "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
+  build_plate_id: string | null = "smooth-high-temp-plate",
+): LuminaRecipe {
   const device: ConverterRecipeDevice = {
     printer_id: "bambu-p1s",
     slicer: "OrcaSlicer",
@@ -80,6 +135,9 @@ function makeRecipe(device_profile_id: string | null = "OrcaSlicer:bbl:bambu-lab
   };
   if (device_profile_id !== null) {
     device.device_profile_id = device_profile_id;
+  }
+  if (build_plate_id !== null) {
+    device.build_plate_id = build_plate_id;
   }
 
   return {
@@ -188,13 +246,16 @@ describe("recipe/importFlow", () => {
       recipe: makeRecipe(),
     };
 
-    applyImport(restoreResult);
+    applyImport(restoreResult, PRINTERS);
 
     expect(useSettingsStore.getState().printerModel).toBe("bambu-p1s");
     expect(useSettingsStore.getState().slicerSoftware).toBe("OrcaSlicer");
     expect(useSettingsStore.getState().nozzleSize).toBe("0.2");
     expect(useSettingsStore.getState().deviceProfileId).toBe(
       "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
+    );
+    expect(useSettingsStore.getState().buildPlateId).toBe(
+      "smooth-high-temp-plate",
     );
   });
 
@@ -353,6 +414,107 @@ describe("recipe/importFlow", () => {
     expect(useSettingsStore.getState().deviceProfileId).toBe(
       "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
     );
+  });
+
+  it("falls back to the target device default for a cross-device plate", () => {
+    const recipe = makeRecipe(
+      "BambuStudio:bbl:bambu-lab-h2d:0.4",
+      "engineering-plate",
+    );
+    recipe.recipe.converter!.device = {
+      ...recipe.recipe.converter!.device,
+      printer_id: "bambu-p1s",
+      slicer: "OrcaSlicer",
+      nozzle_size: "0.2",
+    };
+    useSettingsStore.setState({
+      deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.4",
+      buildPlateId: "engineering-plate",
+      buildPlateSelections: {
+        "BambuStudio:bbl:bambu-lab-h2d": "engineering-plate",
+        "OrcaSlicer:bbl:bambu-lab-p1s": "smooth-high-temp-plate",
+      },
+    });
+
+    applyImport(
+      {
+        state: {},
+        assetFile: new File(["test"], "source.png", { type: "image/png" }),
+        heightmapFile: null,
+        warnings: [],
+        recipe,
+      },
+      PRINTERS,
+    );
+
+    expect(useSettingsStore.getState()).toMatchObject({
+      deviceProfileId: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
+      buildPlateId: "textured-pei-plate",
+    });
+  });
+
+  it("uses the target device default for a legacy recipe without a plate", () => {
+    const recipe = makeRecipe(null, null);
+    useSettingsStore.setState({
+      deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.4",
+      buildPlateId: "engineering-plate",
+      buildPlateSelections: {
+        "BambuStudio:bbl:bambu-lab-h2d": "engineering-plate",
+        "OrcaSlicer:bbl:bambu-lab-p1s": "smooth-high-temp-plate",
+      },
+    });
+
+    applyImport(
+      {
+        state: {},
+        assetFile: new File(["test"], "source.png", { type: "image/png" }),
+        heightmapFile: null,
+        warnings: [],
+        recipe,
+      },
+      PRINTERS,
+    );
+
+    expect(useSettingsStore.getState()).toMatchObject({
+      deviceProfileId: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
+      buildPlateId: "textured-pei-plate",
+    });
+  });
+
+  it("clears the active plate when the imported target device has no plates", () => {
+    const recipe = makeRecipe(
+      "FlashStudio:flashforge:guider-3-ultra:0.4",
+      "engineering-plate",
+    );
+    recipe.recipe.converter!.device = {
+      ...recipe.recipe.converter!.device,
+      printer_id: "flashforge-guider-3-ultra",
+      slicer: "FlashStudio",
+      nozzle_size: "0.2",
+    };
+    useSettingsStore.setState({
+      buildPlateId: "engineering-plate",
+      buildPlateSelections: {
+        "BambuStudio:bbl:bambu-lab-h2d": "engineering-plate",
+      },
+    });
+
+    applyImport(
+      {
+        state: {},
+        assetFile: new File(["test"], "source.png", { type: "image/png" }),
+        heightmapFile: null,
+        warnings: [],
+        recipe,
+      },
+      PRINTERS,
+    );
+
+    expect(useSettingsStore.getState()).toMatchObject({
+      nozzleSize: "0.4",
+      deviceProfileId: "FlashStudio:flashforge:guider-3-ultra:0.4",
+      buildPlateId: "",
+    });
   });
 
   it("restores converter state first and then opens a valid workshop source for editing", () => {

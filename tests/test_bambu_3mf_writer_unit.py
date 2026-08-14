@@ -4,6 +4,7 @@ import json
 from io import BytesIO
 from pathlib import Path
 import re
+import sys
 import zipfile
 import xml.etree.ElementTree as ET
 from types import SimpleNamespace
@@ -373,6 +374,9 @@ def _write_registry_fixture(
     bed_width: int = 350,
     bed_depth: int = 320,
     bed_height: int = 325,
+    build_plates: list[dict[str, str]] | None = None,
+    supported_build_plate_ids: list[str] | None = None,
+    default_build_plate_id: str = "",
 ) -> None:
     template_path = (
         registry_root
@@ -392,6 +396,7 @@ def _write_registry_fixture(
         "profile_format": "bambu_orca",
         "application_metadata": application_metadata,
         "sidecar_policy": sidecar_policy,
+        "build_plates": build_plates or [],
         "machines": [
             {
                 "machine_profile_id": machine_profile_id,
@@ -402,6 +407,8 @@ def _write_registry_fixture(
                 "bed_depth": bed_depth,
                 "bed_height": bed_height,
                 "thumbnail": "",
+                "supported_build_plate_ids": supported_build_plate_ids or [],
+                "default_build_plate_id": default_build_plate_id,
                 "nozzles": [
                     {
                         "device_profile_id": device_profile_id,
@@ -427,6 +434,129 @@ def _write_registry_fixture(
         ),
         encoding="utf-8",
     )
+
+
+def test_selected_build_plate_updates_project_and_plate_metadata(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    registry_root = tmp_path / "machine_registry"
+    plate = {
+        "id": "smooth-pei-plate",
+        "display_name": "Smooth PEI Plate / High Temp Plate",
+        "project_value": "High Temp Plate",
+        "plate_value": "High Temp Plate",
+        "sidecar_value": "hot_plate",
+        "image": "plates/high-temp.png",
+        "source_path": "resources/images/bed_high_templ.png",
+        "source_version": "02.07.01.57",
+        "revision": "sha256:plate",
+    }
+    _write_registry_fixture(
+        registry_root,
+        template_payload={
+            "printer_model": "Bambu Lab H2D",
+            "printer_settings_id": "Bambu Lab H2D 0.4 nozzle",
+            "curr_bed_type": "Textured PEI Plate",
+        },
+        build_plates=[plate],
+        supported_build_plate_ids=[plate["id"]],
+        default_build_plate_id=plate["id"],
+    )
+    monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+    writer_module._PRINTER_TEMPLATE_CACHE.clear()
+    writer = BambuStudio3MFWriter(
+        str(tmp_path / "selected-plate.3mf"),
+        settings={},
+        color_mode="4-Color",
+        printer_id="bambu-h2d",
+        slicer="BambuStudio",
+        nozzle_size="0.4",
+        device_profile_id="BambuStudio:bbl:bambu-lab-h2d:0.4",
+        build_plate_id=plate["id"],
+    )
+    _add_rybw_meshes(writer)
+
+    project = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
+    model_root = ET.fromstring(writer._build_model_settings_bytes([1, 2, 3, 4], 5))
+    plate_root = model_root.find("./plate")
+
+    assert project["curr_bed_type"] == "High Temp Plate"
+    assert "curr_bed_type" not in project["different_settings_to_system"][0].split(";")
+    assert plate_root is not None
+    assert _metadata_values(plate_root)["bed_type"] == "High Temp Plate"
+
+
+def test_selected_build_plate_is_validated_for_device_profile(tmp_path, monkeypatch) -> None:
+    registry_root = tmp_path / "machine_registry"
+    _write_registry_fixture(
+        registry_root,
+        template_payload={"printer_model": "Bambu Lab H2D"},
+        build_plates=[],
+    )
+    monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+    writer_module._PRINTER_TEMPLATE_CACHE.clear()
+
+    with pytest.raises(ValueError, match="Unsupported build plate"):
+        BambuStudio3MFWriter(
+            str(tmp_path / "invalid-plate.3mf"),
+            printer_id="bambu-h2d",
+            slicer="BambuStudio",
+            nozzle_size="0.4",
+            device_profile_id="BambuStudio:bbl:bambu-lab-h2d:0.4",
+            build_plate_id="other-machine-plate",
+        )
+
+
+def test_flashstudio_selected_build_plate_updates_plate_sidecar(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    registry_root = tmp_path / "machine_registry"
+    plate = {
+        "id": "smooth-high-temp-plate",
+        "display_name": "Smooth High Temp Plate",
+        "project_value": "High Temp Plate",
+        "plate_value": "High Temp Plate",
+        "sidecar_value": "hot_plate",
+        "image": "plates/high-temp.png",
+        "source_path": "resources/images/bed_high_templ.png",
+        "source_version": "02.01.01.00",
+        "revision": "sha256:plate",
+    }
+    _write_registry_fixture(
+        registry_root,
+        template_payload={
+            "printer_model": "Flashforge Guider 3 Ultra",
+            "printer_settings_id": "Flashforge Guider 3 Ultra 0.4 Nozzle",
+        },
+        slicer_id="FlashStudio",
+        device_profile_id="FlashStudio:flashforge:flashforge-guider-3-ultra:0.4",
+        machine_profile_id="FlashStudio:flashforge:flashforge-guider-3-ultra",
+        source_version="02.01.01.00",
+        application_metadata="BambuStudio-2.3.2",
+        sidecar_policy="orca_like",
+        display_name="Flashforge Guider 3 Ultra",
+        brand="Flashforge",
+        vendor_key="Flashforge",
+        build_plates=[plate],
+        supported_build_plate_ids=[plate["id"]],
+        default_build_plate_id=plate["id"],
+    )
+    monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+    writer_module._PRINTER_TEMPLATE_CACHE.clear()
+    writer = BambuStudio3MFWriter(
+        str(tmp_path / "flash-selected-plate.3mf"),
+        printer_id="flashforge-guider-3-ultra",
+        slicer="FlashStudio",
+        nozzle_size="0.4",
+        device_profile_id="FlashStudio:flashforge:flashforge-guider-3-ultra:0.4",
+        build_plate_id=plate["id"],
+    )
+
+    sidecar = json.loads(writer._build_flashstudio_plate_json_bytes())
+
+    assert sidecar["bed_type"] == "hot_plate"
 
 
 def _export_two_mesh_registry_3mf(
@@ -723,14 +853,32 @@ def test_load_printer_template_merges_registry_device_profile_into_legacy_projec
     assert "inherits" not in template
 
 
-def test_load_printer_template_uses_default_machine_registry_without_env(tmp_path, monkeypatch) -> None:
-    registry_root = tmp_path / "machine_registry"
+def test_load_printer_template_uses_frozen_registry_and_project_profile(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from config import get_printer_profile
+
+    frozen_root = tmp_path / "frozen"
+    registry_root = frozen_root / "machine_registry"
     _write_registry_fixture(
         registry_root,
         template_payload={"printer_model": "Default Registry H2D", "layer_height": "0.08"},
     )
+    template_file = get_printer_profile("bambu-h2d").get_template_file(
+        "BambuStudio",
+        nozzle_size="0.4",
+    )
+    source_template = Path(__file__).resolve().parents[1] / "printer_profiles" / template_file
+    bundled_template = frozen_root / "printer_profiles" / template_file
+    bundled_template.parent.mkdir(parents=True)
+    bundled_template.write_bytes(source_template.read_bytes())
+    unrelated_cwd = tmp_path / "cwd"
+    unrelated_cwd.mkdir()
     monkeypatch.delenv("LUMINA_MACHINE_REGISTRY_DIR", raising=False)
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(frozen_root), raising=False)
+    monkeypatch.chdir(unrelated_cwd)
     writer_module._PRINTER_TEMPLATE_CACHE.clear()
 
     template = load_printer_template(
@@ -1336,6 +1484,7 @@ def test_anycubic_registry_separates_profile_and_client_versions(tmp_path, monke
 
     assert writer._get_app_version_str() == "AnycubicSlicerNext-1.4.1.2"
     assert writer._get_registry_source_version() == "1.3.2605.22"
+    assert writer._get_base_config_template()["version"] == "1.3.2605.22"
     config = ET.fromstring(writer._build_slice_info_bytes())
     header = config.find("header")
     assert header is not None

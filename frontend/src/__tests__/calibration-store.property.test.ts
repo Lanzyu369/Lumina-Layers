@@ -319,6 +319,14 @@ vi.mock("../utils/browserNotifications", () => ({
 const mockCalibrationGenerate = vi.mocked(calibrationGenerate);
 const mockGenerateSingleStageKit = vi.mocked(generateSingleStageKit);
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 // **Validates: Requirements 3.1**
 describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 Store 状态一致性", () => {
   beforeEach(() => {
@@ -453,6 +461,109 @@ describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 
     expect(
       notificationMocks.showBrowserCompletionNotification,
     ).toHaveBeenCalledWith("calibration", "en");
+  });
+
+  it("keeps a newer calibration request active when an old plate response resolves", async () => {
+    const stale = deferred<Awaited<ReturnType<typeof calibrationGenerate>>>();
+    const fresh = deferred<Awaited<ReturnType<typeof calibrationGenerate>>>();
+    mockCalibrationGenerate
+      .mockReturnValueOnce(stale.promise)
+      .mockReturnValueOnce(fresh.promise);
+    useSettingsStore.setState({
+      buildPlateId: "textured-pei-plate",
+    });
+
+    const staleRequest = useCalibrationStore.getState().submitLegacyGenerate();
+    useSettingsStore
+      .getState()
+      .setBuildPlateForMachine(
+        "OrcaSlicer:bbl:bambu-lab-p1s",
+        "smooth-pei-plate",
+      );
+    const stateAfterPlateChange = useCalibrationStore.getState();
+
+    const freshRequest = useCalibrationStore.getState().submitLegacyGenerate();
+    expect(mockCalibrationGenerate.mock.calls[0][0].build_plate_id).toBe(
+      "textured-pei-plate",
+    );
+    expect(mockCalibrationGenerate.mock.calls[1][0].build_plate_id).toBe(
+      "smooth-pei-plate",
+    );
+
+    stale.resolve({
+      status: "ok",
+      message: "stale",
+      download_url: "/api/files/stale-calibration.3mf",
+      threemf_disk_path: "/tmp/stale-calibration.3mf",
+      preview_url: "/api/files/stale-calibration.png",
+      layer_urls: [],
+    });
+    await staleRequest;
+    const stateAfterStaleResponse = useCalibrationStore.getState();
+
+    fresh.resolve({
+      status: "ok",
+      message: "fresh",
+      download_url: "/api/files/fresh-calibration.3mf",
+      threemf_disk_path: "/tmp/fresh-calibration.3mf",
+      preview_url: "/api/files/fresh-calibration.png",
+      layer_urls: [],
+    });
+    await freshRequest;
+
+    expect(stateAfterPlateChange).toMatchObject({
+      isLoading: false,
+      downloadUrl: null,
+      previewImageUrl: null,
+    });
+    expect(stateAfterStaleResponse).toMatchObject({
+      isLoading: true,
+      downloadUrl: null,
+      previewImageUrl: null,
+    });
+    expect(useCalibrationStore.getState()).toMatchObject({
+      isLoading: false,
+      downloadUrl: "/api/files/fresh-calibration.3mf",
+      previewImageUrl: "/api/files/fresh-calibration.png",
+    });
+  });
+
+  it("keeps calibration previews while clearing build-plate-specific outputs", () => {
+    useCalibrationStore.setState({
+      downloadUrl: "/api/files/calibration.3mf",
+      threemfDiskPath: "/tmp/calibration.3mf",
+      previewImageUrl: "/api/files/calibration.png",
+      layerImageUrls: ["/api/files/calibration-layer.png"],
+      modelUrl: "/api/files/calibration.glb",
+      manifestUrl: "/api/files/calibration-manifest.json",
+      singleStageJobs: [
+        {
+          color: "Sample",
+          color_name: "Sample",
+          material: "PLA Basic",
+          substrate_id: "white",
+          substrate_display_name: "White",
+          filename: "calibration.3mf",
+        },
+      ],
+    });
+
+    useSettingsStore
+      .getState()
+      .setBuildPlateForMachine(
+        "OrcaSlicer:bbl:bambu-lab-p1s",
+        "smooth-pei-plate",
+      );
+
+    expect(useCalibrationStore.getState()).toMatchObject({
+      downloadUrl: null,
+      threemfDiskPath: null,
+      previewImageUrl: "/api/files/calibration.png",
+      layerImageUrls: ["/api/files/calibration-layer.png"],
+      modelUrl: "/api/files/calibration.glb",
+      manifestUrl: null,
+      singleStageJobs: [],
+    });
   });
 
   it("submitGenerate sends single-stage layer height when workflow is single-stage", async () => {

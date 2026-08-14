@@ -200,6 +200,9 @@ python tools\machine_adapter\import_profiles.py `
 | `client_version` | `slice_info.config` header 版本 | `1.4.1.2 20260604104233` |
 | `revision` | 原生 profile 源文件 hash | `sha256:...` |
 
+`source_version` 记录 profile snapshot，与项目的 `Application` 和 sidecar client marker
+相互独立。后两者是目标切片器的项目兼容契约，必须用实际保存项目和目标版本切片验证，不能根据产品名或当前安装版本猜测。当前保留的 `1.4.1.2` 契约已由 Anycubic Slicer Next 1.4.1.1 CLI 无额外兼容参数成功切片验证。
+
 Flash Studio Desktop 1.7.11 的版本契约是：profile 包 `02.01.01.00`，
 项目格式与 `Application=BambuStudio-2.3.2`，`X-BBL-Client-Version` 为空。
 桌面版本 `1.7.11` 只用于安装识别，不应写进 3MF。Flash Studio 导出也不应

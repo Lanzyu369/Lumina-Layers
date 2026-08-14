@@ -21,6 +21,7 @@ import { embedRecipeInPng, extractRecipeFromPng, hasLuminaRecipe } from "../reci
 import { migrateRecipe } from "../recipe/migration";
 import { DEFAULT_STATE } from "../stores/converter";
 import { DEFAULT_SETTINGS } from "../stores/settingsStore";
+import type { SettingsState } from "../stores/settingsStore";
 import type { ConverterState } from "../stores/converter/store";
 import type { LutInfo, ColorReplacementItem } from "../api/types";
 import { ColorMode } from "../api/types";
@@ -55,13 +56,21 @@ const LOCAL_FP: Record<string, string> = {
   BWLUT: "fp_bw",
 };
 
-async function buildTestRecipe(stateOverrides: Partial<ConverterState> = {}, fingerprint?: string): Promise<{
+async function buildTestRecipe(
+  stateOverrides: Partial<ConverterState> = {},
+  fingerprint?: string,
+  settingsOverrides: Partial<SettingsState> = {},
+): Promise<{
   recipe: LuminaRecipe;
   state: ConverterState;
 }> {
   const state = { ...DEFAULT_STATE, ...stateOverrides } as ConverterState;
   const fp = fingerprint ?? (LOCAL_FP[state.lut_name] || "unknown_fp");
-  const converterRecipe = exportConverterRecipe(state, DEFAULT_SETTINGS, fp);
+  const converterRecipe = exportConverterRecipe(
+    state,
+    { ...DEFAULT_SETTINGS, ...settingsOverrides },
+    fp,
+  );
   const imageFile = new File([new Uint8Array([1, 2, 3, 4])], "photo.png", { type: "image/png" });
   const assets = await buildRecipeAssets(imageFile, state.heightmapFile);
   const cover: RecipeCover = { width: 100, height: 75, mime_type: "image/png" };
@@ -312,12 +321,19 @@ describe("recipe integration", () => {
   describe("PNG embed → extract round-trip", () => {
     it("recipe survives PNG embedding and extraction", async () => {
       const workshopSource = createBeadRecipeSourceFixture();
-      const { recipe } = await buildTestRecipe({
-        lut_name: "TestLUT",
-        target_width_mm: 80,
-        enable_relief: true,
-        workshopSource,
-      });
+      const { recipe } = await buildTestRecipe(
+        {
+          lut_name: "TestLUT",
+          target_width_mm: 80,
+          enable_relief: true,
+          workshopSource,
+        },
+        undefined,
+        {
+          deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.4",
+          buildPlateId: "textured-pei-plate",
+        },
+      );
 
       const png = createMinimalPng();
       const embedded = await embedRecipeInPng(png, recipe, recipe.integrity.recipe_sha256);
@@ -329,6 +345,9 @@ describe("recipe integration", () => {
       expect(extracted!.recipe.converter!.base.target_width_mm).toBe(80);
       expect(extracted!.recipe.converter!.relief.enable_relief).toBe(true);
       expect(extracted!.recipe.converter!.base.lut.name).toBe("TestLUT");
+      expect(extracted!.recipe.converter!.device.build_plate_id).toBe(
+        "textured-pei-plate",
+      );
       expect(extracted!.recipe.workshop).toEqual(workshopSource);
     });
 
@@ -365,21 +384,31 @@ describe("recipe integration", () => {
   describe("JSON sidecar round-trip", () => {
     it("export → JSON file → parse → import", async () => {
       const workshopSource = createBeadRecipeSourceFixture();
-      const { recipe } = await buildTestRecipe({
-        lut_name: "TestLUT",
-        target_width_mm: 60,
-        add_loop: true,
-        quantize_colors_unlocked: true,
-        use_lut_constrained: true,
-        auto_dynamic_range: true,
-        workshopSource,
-      });
+      const { recipe } = await buildTestRecipe(
+        {
+          lut_name: "TestLUT",
+          target_width_mm: 60,
+          add_loop: true,
+          quantize_colors_unlocked: true,
+          use_lut_constrained: true,
+          auto_dynamic_range: true,
+          workshopSource,
+        },
+        undefined,
+        {
+          deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.4",
+          buildPlateId: "textured-pei-plate",
+        },
+      );
 
       const jsonStr = JSON.stringify(recipe, null, 2);
       const jsonFile = new File([jsonStr], "card.lumina.json", { type: "application/json" });
 
       const parsed = await parseRecipeFile(jsonFile);
       expect(parsed.source).toBe("json");
+      expect(parsed.recipe.recipe.converter!.device.build_plate_id).toBe(
+        "textured-pei-plate",
+      );
 
       const { state: restored } = restoreConverterRecipe(parsed.recipe, LOCAL_LUTS, LOCAL_FP);
       expect(restored.lut_name).toBe("TestLUT");

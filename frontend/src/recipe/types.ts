@@ -176,6 +176,8 @@ export interface ConverterRecipeDevice {
   nozzle_size: string;
   /** V2 generated machine-registry device profile ID. */
   device_profile_id?: string;
+  /** Slicer-native build plate selected for the device profile. */
+  build_plate_id?: string;
   /** Preserve the slicer's base-layer height modifier choice. */
   enable_base_layer_height_modifier?: boolean;
 }

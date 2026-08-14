@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import runpy
+import sys
+from types import ModuleType, SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,6 +40,105 @@ def test_electron_build_packages_workshop_seed_resource_directory() -> None:
     }
 
     assert ("resources/workshop-seed", "workshop-seed") in resource_pairs
+
+
+def _load_spec_backend_datas(monkeypatch) -> list[tuple[str, str]]:
+    hooks_module = ModuleType("PyInstaller.utils.hooks")
+    hooks_module.collect_all = lambda _package_name: ([], [], [])
+    utils_module = ModuleType("PyInstaller.utils")
+    pyinstaller_module = ModuleType("PyInstaller")
+    monkeypatch.setitem(sys.modules, "PyInstaller", pyinstaller_module)
+    monkeypatch.setitem(sys.modules, "PyInstaller.utils", utils_module)
+    monkeypatch.setitem(sys.modules, "PyInstaller.utils.hooks", hooks_module)
+    monkeypatch.chdir(ROOT)
+
+    def fake_analysis(*_args, **kwargs):
+        return SimpleNamespace(
+            pure=[],
+            zipped_data=[],
+            scripts=[],
+            binaries=kwargs.get("binaries", []),
+            datas=kwargs.get("datas", []),
+        )
+
+    namespace = runpy.run_path(
+        str(ROOT / "lumina_studio.spec"),
+        init_globals={
+            "Analysis": fake_analysis,
+            "PYZ": lambda *_args, **_kwargs: object(),
+            "EXE": lambda *_args, **_kwargs: object(),
+        },
+    )
+    return namespace["backend_datas"]
+
+
+def _expanded_machine_registry_manifest(
+    datas: list[tuple[str, str]],
+) -> set[str]:
+    registry_root = (ROOT / "machine_registry").resolve()
+    packaged: set[str] = set()
+    for raw_source, raw_destination in datas:
+        source = Path(raw_source)
+        if not source.is_absolute():
+            source = ROOT / source
+        source = source.resolve()
+        if source != registry_root and registry_root not in source.parents:
+            continue
+
+        destination = Path(raw_destination)
+        if source.is_dir():
+            packaged.update(
+                (destination / path.relative_to(source)).as_posix()
+                for path in source.rglob("*")
+                if path.is_file()
+            )
+        else:
+            packaged.add((destination / source.name).as_posix())
+    return packaged
+
+
+def _expected_machine_registry_manifest() -> set[str]:
+    data = json.loads(
+        (ROOT / "machine_registry" / "registry.json").read_text(encoding="utf-8")
+    )
+    relative_paths = {"registry.json"}
+    for slicer in data["slicers"]:
+        relative_paths.update(
+            str(plate["image"]) for plate in slicer.get("build_plates", [])
+        )
+        for machine in slicer["machines"]:
+            relative_paths.update(
+                str(nozzle["template"]) for nozzle in machine["nozzles"]
+            )
+    return {f"machine_registry/{path}" for path in relative_paths}
+
+
+def test_pyinstaller_spec_bundles_only_registry_runtime_contract(monkeypatch) -> None:
+    packaged = _expanded_machine_registry_manifest(
+        _load_spec_backend_datas(monkeypatch)
+    )
+
+    assert packaged == _expected_machine_registry_manifest()
+    assert not any("/assets/" in path for path in packaged)
+    assert "machine_registry/BUILD_PLATE_SOURCES.md" not in packaged
+
+
+def test_pyinstaller_spec_bundles_registry_project_profile_dependencies() -> None:
+    spec = (ROOT / "lumina_studio.spec").read_text(encoding="utf-8")
+
+    assert spec.count("('printer_profiles', 'printer_profiles')") == 1
+
+
+def test_electron_does_not_duplicate_pyinstaller_machine_registry() -> None:
+    package_json = json.loads(
+        (ROOT / "electron" / "package.json").read_text(encoding="utf-8")
+    )
+
+    extra_resources = package_json["build"]["extraResources"]
+    assert not any(
+        isinstance(entry, dict) and entry.get("to") == "machine_registry"
+        for entry in extra_resources
+    )
 
 
 def test_desktop_build_copies_material_seed_to_packaged_resource_directory() -> None:

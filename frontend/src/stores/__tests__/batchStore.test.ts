@@ -41,6 +41,7 @@ function resetStore(): void {
     slicerSoftware: "OrcaSlicer",
     nozzleSize: "0.2",
     deviceProfileId: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
+    buildPlateId: "textured-pei-plate",
     enableBaseLayerHeightModifier: false,
     svgPixelsPerMm: 10,
     enableCompletionNotifications: false,
@@ -103,6 +104,14 @@ const mockBatchResponse: BatchResponse = {
   warnings: [],
 };
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 describe("submitBatch API 调用和状态管理", () => {
   beforeEach(() => {
     resetStore();
@@ -148,6 +157,7 @@ describe("submitBatch API 调用和状态管理", () => {
       slicer: "OrcaSlicer",
       nozzle_size: "0.2",
       device_profile_id: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
+      build_plate_id: "textured-pei-plate",
       enable_base_layer_height_modifier: false,
     });
     expect(
@@ -364,6 +374,63 @@ describe("submitBatch API 调用和状态管理", () => {
     expect(state.error).toBeNull();
     expect(state.threemfDiskPath).toBeNull();
     expect(state.downloadUrl).toBe("/api/files/batch_result.3mf");
+  });
+
+  it("切换打印板后旧批量响应不会覆盖新请求或提前结束 loading", async () => {
+    const files = [new File(["a"], "img.png", { type: "image/png" })];
+    const stale = deferred<BatchResponse>();
+    const fresh = deferred<BatchResponse>();
+    mockedConvertBatch
+      .mockReturnValueOnce(stale.promise)
+      .mockReturnValueOnce(fresh.promise);
+    useConverterStore.setState({ batchFiles: files });
+
+    const staleRequest = useConverterStore.getState().submitBatch();
+    useSettingsStore
+      .getState()
+      .setBuildPlateForMachine(
+        "OrcaSlicer:bbl:bambu-lab-p1s",
+        "smooth-pei-plate",
+      );
+
+    const stateAfterPlateChange = useConverterStore.getState();
+
+    const freshRequest = useConverterStore.getState().submitBatch();
+    expect(mockedConvertBatch.mock.calls[0][1].build_plate_id).toBe(
+      "textured-pei-plate",
+    );
+    expect(mockedConvertBatch.mock.calls[1][1].build_plate_id).toBe(
+      "smooth-pei-plate",
+    );
+
+    stale.resolve({
+      ...mockBatchResponse,
+      download_url: "/api/files/stale-batch.3mf",
+    });
+    await staleRequest;
+
+    const stateAfterStaleResponse = useConverterStore.getState();
+
+    fresh.resolve({
+      ...mockBatchResponse,
+      download_url: "/api/files/fresh-batch.3mf",
+    });
+    await freshRequest;
+
+    expect(stateAfterPlateChange).toMatchObject({
+      batchLoading: false,
+      batchResult: null,
+      downloadUrl: null,
+    });
+    expect(stateAfterStaleResponse).toMatchObject({
+      batchLoading: true,
+      batchResult: null,
+      downloadUrl: null,
+    });
+    expect(useConverterStore.getState()).toMatchObject({
+      batchLoading: false,
+      downloadUrl: "/api/files/fresh-batch.3mf",
+    });
   });
 
   it("submitBatch 成功后存储批量预览条目并清空单模型预览 URL", async () => {

@@ -12,6 +12,7 @@ import {
   detectRegion,
   fetchLutList,
   getFileUrl,
+  generateColorCard,
 } from "../api/converter";
 import { fetchLutCatalog } from "../api/lut";
 import {
@@ -709,6 +710,48 @@ describe("convertGenerateLargeFormat", () => {
     expect(body).toEqual({ session_id: "sess-large", params });
     expect(config).toMatchObject({ timeout: 0 });
     expect(result.warnings).toEqual(fakeResponse.warnings);
+  });
+});
+
+describe("generateColorCard", () => {
+  it("forwards the complete device and build plate selection", async () => {
+    const response = {
+      status: "ok",
+      message: "generated",
+      download_url: "/api/files/card",
+    };
+    mockPost.mockResolvedValueOnce({ data: response });
+
+    const result = await generateColorCard(
+      "sess-card",
+      {
+        printer_id: "bambu-p1s",
+        slicer: "OrcaSlicer",
+        nozzle_size: "0.2",
+        device_profile_id: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
+        build_plate_id: "smooth-high-temp-plate",
+      },
+      120,
+      0.6,
+      false,
+    );
+
+    expect(mockPost).toHaveBeenCalledWith(
+      "/convert/color-card",
+      {
+        session_id: "sess-card",
+        target_width_mm: 120,
+        spacer_thick: 0.6,
+        show_labels: false,
+        printer_id: "bambu-p1s",
+        slicer: "OrcaSlicer",
+        nozzle_size: "0.2",
+        device_profile_id: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
+        build_plate_id: "smooth-high-temp-plate",
+      },
+      { timeout: 0 },
+    );
+    expect(result).toEqual(response);
   });
 });
 

@@ -2841,6 +2841,7 @@ def _run_vector_branch(ctx: dict) -> dict:
             ),
             cover_source=vector_cover_source,
             device_profile_id=ctx.get("device_profile_id") or None,
+            build_plate_id=ctx.get("build_plate_id") or None,
             preserve_template_filament_slots=(
                 False
                 if str(ctx.get("material_source") or "lut") == "material_archive"

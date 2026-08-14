@@ -9,11 +9,23 @@ class DeviceProfileInfo(BaseModel):
     """Slicer-scoped machine registry device profile metadata."""
 
     device_profile_id: str
+    machine_profile_id: str
     slicer_id: str
     nozzle_size: str
     source_profile_name: str
     revision: str
     supported: bool = True
+    build_plates: list["BuildPlateInfo"] = Field(default_factory=list)
+    default_build_plate_id: str = ""
+
+
+class BuildPlateInfo(BaseModel):
+    """Slicer-native build plate available for one machine."""
+
+    id: str
+    display_name: str
+    display_name_zh: str = ""
+    image_url: str
 
 
 class PrinterInfo(BaseModel):
@@ -78,6 +90,8 @@ class UserSettings(BaseModel):
     printer_model: str = "bambu-h2d"
     slicer_software: str = "BambuStudio"
     device_profile_id: str = "BambuStudio:bbl:bambu-lab-h2d:0.4"
+    build_plate_id: str = ""
+    build_plate_selections: dict[str, str] = Field(default_factory=dict)
     custom_slicer_path: str = ""
     custom_slicer_id: str = ""
     nozzle_size: str = "0.4"

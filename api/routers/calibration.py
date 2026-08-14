@@ -10,6 +10,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 
 from api.dependencies import get_file_registry
+from api.export_device_validation import validate_export_device_selection
 from api.file_bridge import pil_to_png_bytes
 from api.file_registry import FileRegistry
 from api.schemas.calibration import CalibrationGenerateRequest
@@ -156,6 +157,13 @@ def calibration_generate(
     """Generate a printable calibration board.
     生成可打印的校准板。
     """
+    validate_export_device_selection(
+        printer_id=request.printer_id,
+        slicer=request.slicer,
+        nozzle_size=request.nozzle_size,
+        device_profile_id=request.device_profile_id,
+        build_plate_id=request.build_plate_id,
+    )
     mode = request.color_mode.value
     backing_thickness_mm = float(request.backing_thickness)
     device_kwargs = {
@@ -163,6 +171,7 @@ def calibration_generate(
         "slicer": request.slicer,
         "nozzle_size": request.nozzle_size,
         "device_profile_id": request.device_profile_id,
+        "build_plate_id": request.build_plate_id,
     }
     try:
         if mode == "BW (Black & White)":
@@ -349,6 +358,13 @@ def calibration_generate_single_stage_kit(
     registry: FileRegistry = Depends(get_file_registry),
 ) -> SingleStageKitResponse:
     """Generate a ChromaPrint3D-compatible single-stage kit."""
+    validate_export_device_selection(
+        printer_id=request.printer_id,
+        slicer=request.slicer,
+        nozzle_size=request.nozzle_size,
+        device_profile_id=request.device_profile_id,
+        build_plate_id=request.build_plate_id,
+    )
     try:
         palette = [
             PaletteEntry(
@@ -369,6 +385,7 @@ def calibration_generate_single_stage_kit(
             slicer=request.slicer,
             nozzle_size=request.nozzle_size,
             device_profile_id=request.device_profile_id,
+            build_plate_id=request.build_plate_id,
         )
     except (OSError, RuntimeError, TypeError, ValueError) as e:
         _handle_core_error(

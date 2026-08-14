@@ -133,6 +133,8 @@ export interface SettingsState {
   printerModel: string;
   slicerSoftware: string;
   deviceProfileId: string;
+  buildPlateId: string;
+  buildPlateSelections: Record<string, string>;
   customSlicerPath: string;
   customSlicerId: string;
   nozzleSize: NozzleSize;
@@ -192,6 +194,7 @@ export interface SettingsActions {
   setPrinterModel: (id: string) => void;
   setSlicerSoftware: (id: string) => void;
   setDeviceProfileId: (id: string) => void;
+  setBuildPlateForMachine: (machineProfileId: string, plateId: string) => void;
   setCustomSlicerPath: (path: string) => void;
   setCustomSlicerId: (id: string) => void;
   setNozzleSize: (size: NozzleSize) => void;
@@ -226,6 +229,8 @@ export const DEFAULT_SETTINGS: SettingsState = {
   printerModel: "bambu-h2d",
   slicerSoftware: "BambuStudio",
   deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.4",
+  buildPlateId: "",
+  buildPlateSelections: {},
   customSlicerPath: "",
   customSlicerId: "",
   nozzleSize: "0.4",
@@ -371,6 +376,23 @@ export function deriveBackendDeviceSettingsPatch(
   }
 
   if (
+    typeof settings.build_plate_id === "string" &&
+    current.buildPlateId === DEFAULT_SETTINGS.buildPlateId &&
+    !hasOwnSetting(persistedSnapshot, "buildPlateId")
+  ) {
+    patch.buildPlateId = settings.build_plate_id.trim();
+  }
+
+  if (
+    settings.build_plate_selections &&
+    typeof settings.build_plate_selections === "object" &&
+    Object.keys(current.buildPlateSelections).length === 0 &&
+    !hasOwnSetting(persistedSnapshot, "buildPlateSelections")
+  ) {
+    patch.buildPlateSelections = { ...settings.build_plate_selections };
+  }
+
+  if (
     typeof settings.custom_slicer_path === "string" &&
     settings.custom_slicer_path.trim() &&
     current.customSlicerPath === DEFAULT_SETTINGS.customSlicerPath &&
@@ -407,6 +429,27 @@ export function deriveBackendDeviceSettingsPatch(
   }
 
   return patch;
+}
+
+export interface ResolvedBuildPlateSelection {
+  plateId: string;
+  fellBack: boolean;
+}
+
+export function resolveBuildPlateSelection(
+  machineProfileId: string,
+  availablePlateIds: readonly string[],
+  defaultPlateId: string,
+  selections: Readonly<Record<string, string>>,
+): ResolvedBuildPlateSelection {
+  const remembered = selections[machineProfileId] ?? "";
+  if (remembered && availablePlateIds.includes(remembered)) {
+    return { plateId: remembered, fellBack: false };
+  }
+  const plateId = availablePlateIds.includes(defaultPlateId)
+    ? defaultPlateId
+    : (availablePlateIds[0] ?? "");
+  return { plateId, fellBack: Boolean(remembered && plateId) };
 }
 
 // ========== Store ==========
@@ -489,6 +532,29 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
       setDeviceProfileId: (id: string) => {
         set({ deviceProfileId: id });
         invalidateGeneratedArtifacts();
+      },
+
+      setBuildPlateForMachine: (machineProfileId: string, plateId: string) => {
+        const current = get();
+        if (
+          current.buildPlateId === plateId &&
+          (!plateId || current.buildPlateSelections[machineProfileId] === plateId)
+        ) {
+          return;
+        }
+        set((state) => {
+          if (!plateId) {
+            return { buildPlateId: "" };
+          }
+          return {
+            buildPlateId: plateId,
+            buildPlateSelections: {
+              ...state.buildPlateSelections,
+              [machineProfileId]: plateId,
+            },
+          };
+        });
+        invalidateGeneratedArtifacts({ preservePreviews: true });
       },
 
       setCustomSlicerPath: (path: string) => set({ customSlicerPath: path }),
@@ -588,6 +654,12 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
         if (typeof patch.deviceProfileId === "string") {
           actions.setDeviceProfileId(patch.deviceProfileId);
         }
+        if (patch.buildPlateSelections) {
+          set({ buildPlateSelections: patch.buildPlateSelections });
+        }
+        if (typeof patch.buildPlateId === "string") {
+          set({ buildPlateId: patch.buildPlateId });
+        }
       },
 
       syncToBackend: async () => {
@@ -603,6 +675,8 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
             printer_model: state.printerModel,
             slicer_software: state.slicerSoftware,
             device_profile_id: state.deviceProfileId,
+            build_plate_id: state.buildPlateId,
+            build_plate_selections: state.buildPlateSelections,
             custom_slicer_path: state.customSlicerPath,
             custom_slicer_id: state.customSlicerId,
             nozzle_size: state.nozzleSize,

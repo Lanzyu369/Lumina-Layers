@@ -25,6 +25,7 @@ from pydantic import BaseModel
 from PIL import Image
 
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
+from api.export_device_validation import validate_export_device_selection
 from api.file_registry import FileRegistry
 from api.preview_cache_artifacts import (
     get_preview_cache_metadata,
@@ -996,6 +997,13 @@ async def generate_puzzle(
     preview_cache_ref = session_data.get("preview_cache")
     request = body.params
     generate_params = request.params
+    validate_export_device_selection(
+        printer_id=generate_params.printer_id,
+        slicer=generate_params.slicer,
+        nozzle_size=generate_params.nozzle_size,
+        device_profile_id=generate_params.device_profile_id,
+        build_plate_id=generate_params.build_plate_id,
+    )
     if generate_params.enable_fridge_magnet:
         raise HTTPException(status_code=422, detail="Puzzle mode does not support fridge magnet cavities.")
     if generate_params.add_loop:
@@ -1188,6 +1196,7 @@ async def generate_puzzle(
             "slicer": generate_params.slicer,
             "nozzle_size": generate_params.nozzle_size,
             "device_profile_id": generate_params.device_profile_id,
+            "build_plate_id": generate_params.build_plate_id,
             "relief_global_max_height": relief_global_max_height,
             "material_dynamic_layer_count_enabled": dynamic_material_settings[0],
             "material_min_layer_count": dynamic_material_settings[1],
@@ -1396,6 +1405,7 @@ async def generate_puzzle(
             slicer=generate_params.slicer,
             nozzle_size=generate_params.nozzle_size,
             device_profile_id=generate_params.device_profile_id,
+            build_plate_id=generate_params.build_plate_id,
             overview_png_bytes=overview_png_bytes,
         )
         download_id = registry.register_path(

@@ -1228,6 +1228,7 @@ def worker_batch_convert_item(
     auto_dynamic_range: bool = False,
     high_precision_3d_preview: bool = False,
     device_profile_id: str | None = None,
+    build_plate_id: str | None = None,
     backing_infill_density_percent: int = 100,
     material_dynamic_layer_count_enabled: bool = False,
     material_min_layer_count: int = 5,
@@ -1355,6 +1356,7 @@ def worker_batch_convert_item(
         slicer=slicer,
         nozzle_size=nozzle_size,
         device_profile_id=device_profile_id,
+        build_plate_id=build_plate_id,
         enable_base_layer_height_modifier=enable_base_layer_height_modifier,
         material_source=material_source,
         selected_materials=selected_materials,
@@ -1718,6 +1720,7 @@ def worker_generate_model_surface_overlay(
             nozzle_size=str(normalized_params.get("nozzle_size", "0.4")),
             cover_source=cover_source,
             device_profile_id=normalized_params.get("device_profile_id") or None,
+            build_plate_id=normalized_params.get("build_plate_id") or None,
             enable_base_layer_height_modifier=False,
         )
         export_ready = True
@@ -2384,6 +2387,7 @@ def worker_generate_large_format_svg_native(
                 ),
                 cover_source=tile_cover,
                 device_profile_id=params.get("device_profile_id") or None,
+                build_plate_id=params.get("build_plate_id") or None,
                 preserve_template_filament_slots=(
                     False if material_source == "material_archive" else None
                 ),

@@ -35,6 +35,7 @@ class SingleStageKitGenerateRequest(BaseModel):
     slicer: str = Field(DEFAULT_SLICER_ID, description="Slicer software ID.")
     nozzle_size: str = Field("0.4", description="Nozzle size.")
     device_profile_id: str | None = Field(None, description="Machine registry device profile ID.")
+    build_plate_id: str | None = Field(None, description="Native slicer build plate ID.")
 
 
 class StageAFitRequest(BaseModel):
@@ -195,6 +196,7 @@ class MaterialRecipeSwatchRequest(BaseModel):
     slicer: str = Field("BambuStudio", description="Slicer software ID.")
     nozzle_size: str = Field("0.4", description="Nozzle size.")
     device_profile_id: str | None = Field(None, description="Machine registry device profile ID.")
+    build_plate_id: str | None = Field(None, description="Native slicer build plate ID.")
 
 
 class MaterialRecipeSwatchResponse(BaseModel):

@@ -30,6 +30,10 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
             en: "You can now save the source artwork, output settings, whole-image colour changes, and custom recipe history as a Lumina project, then restore it to compare other settings or filaments. Spatial colour edits still show a clear current-session-only notice.",
           },
           {
+            zh: "设置里现在可以直接选择切片软件原生打印板；Lumina 会按切片软件与打印机型号分别记忆，并把选择写进生成的 3MF。",
+            en: "You can now choose a slicer's native build plate in Settings. Lumina remembers it for each slicer and printer model, then writes the choice into generated 3MF files.",
+          },
+          {
             zh: "底板厚度现在最高可设为 10 mm，并可单独调节深层底板填充率；靠近观赏面的区域仍会自动保持实心。",
             en: "Backing thickness can now be set up to 10 mm, with a separate infill control for deeper backing while the viewing-surface zone automatically stays solid.",
           },

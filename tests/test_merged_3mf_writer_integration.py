@@ -370,6 +370,8 @@ class TestMergedWriterBambuCompatibility:
             printer_id="bambu-p1s",
             slicer="OrcaSlicer",
             nozzle_size="0.2",
+            device_profile_id="OrcaSlicer:bbl:bambu-lab-p1s:0.2",
+            build_plate_id="engineering-plate",
             enable_base_layer_height_modifier=False,
         )
 
@@ -421,10 +423,23 @@ class TestMergedWriterBambuCompatibility:
                     "printer_model",
                     "printer_settings_id",
                     "default_print_profile",
-                    "filament_settings_id",
                     "nozzle_diameter",
                 ):
                     assert merged_project.get(key) == src_project.get(key)
+                assert merged_project["filament_settings_id"] == (
+                    src_project["filament_settings_id"][:1]
+                )
+                assert merged_project["curr_bed_type"] == "Engineering Plate"
+
+                merged_model_settings = ET.fromstring(
+                    out_zip.read("Metadata/model_settings.config")
+                )
+                merged_plate = merged_model_settings.find("plate")
+                assert merged_plate is not None
+                assert {
+                    metadata.get("key"): metadata.get("value")
+                    for metadata in merged_plate.findall("metadata")
+                }["bed_type"] == "Engineering Plate"
         finally:
             for p in (Path(src_path), Path(out_path)):
                 try:

@@ -1,6 +1,10 @@
 import { describe, it, beforeEach, expect } from "vitest";
 import * as fc from "fast-check";
-import { useSettingsStore, DEFAULT_SETTINGS } from "../stores/settingsStore";
+import {
+  useSettingsStore,
+  DEFAULT_SETTINGS,
+  resolveBuildPlateSelection,
+} from "../stores/settingsStore";
 import type { SettingsState } from "../stores/settingsStore";
 
 // ========== Helpers ==========
@@ -53,6 +57,29 @@ describe("Feature: global-settings, Property 1: Settings persist round-trip", ()
     expect(persisted.state.deviceProfileId).toBe(
       "BambuStudio:bbl:bambu-lab-h2d:0.4",
     );
+  });
+
+  it("remembers build plates per slicer machine and survives nozzle changes", () => {
+    const machineId = "BambuStudio:bbl:bambu-lab-h2d";
+    useSettingsStore
+      .getState()
+      .setBuildPlateForMachine(machineId, "smooth-pei-plate");
+    useSettingsStore.getState().setNozzleSize("0.2");
+
+    const state = useSettingsStore.getState();
+    expect(state.buildPlateId).toBe("smooth-pei-plate");
+    expect(state.buildPlateSelections[machineId]).toBe("smooth-pei-plate");
+  });
+
+  it("falls back to the native default when a remembered plate disappears", () => {
+    expect(
+      resolveBuildPlateSelection(
+        "OrcaSlicer:bbl:bambu-lab-p1s",
+        ["textured-pei-plate", "supertack-plate"],
+        "textured-pei-plate",
+        { "OrcaSlicer:bbl:bambu-lab-p1s": "removed-plate" },
+      ),
+    ).toEqual({ plateId: "textured-pei-plate", fellBack: true });
   });
 
   it("writing settings to store persists them to localStorage and can be read back", () => {

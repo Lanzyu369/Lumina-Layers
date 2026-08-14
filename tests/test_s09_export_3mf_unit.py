@@ -37,6 +37,7 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         backing_infill_density_percent: int = 100,
         cover_source: object | None = None,
         device_profile_id: str | None = None,
+        build_plate_id: str | None = None,
         preserve_template_filament_slots: bool | None = None,
     ) -> str:
         captured["scene"] = scene
@@ -59,6 +60,7 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         )
         captured["cover_source"] = cover_source
         captured["device_profile_id"] = device_profile_id
+        captured["build_plate_id"] = build_plate_id
         captured["preserve_template_filament_slots"] = preserve_template_filament_slots
         return output_path
 
@@ -82,6 +84,7 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         "structure_mode": "双面",
         "printer_id": "bambu-h2d",
         "slicer": "BambuStudio",
+        "build_plate_id": "smooth-pei-plate",
     }
 
     result = s09_export_3mf.run(ctx)
@@ -98,6 +101,7 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         "white",
         "yellow",
     ]
+    assert captured["build_plate_id"] == "smooth-pei-plate"
 
 
 def _make_minimal_s09_ctx(tmp_path, **extra_ctx) -> dict:

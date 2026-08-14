@@ -18,6 +18,7 @@ import {
   SVG_PIXELS_PER_MM_MIN,
   SVG_PIXELS_PER_MM_STEP,
   SOLVER_CACHE_GRID_RESOLUTIONS,
+  resolveBuildPlateSelection,
   useSettingsStore,
   type NozzleSize,
   type SolverCacheGridResolution,
@@ -47,6 +48,7 @@ import Switch from "./ui/Switch";
 import WikiTooltip from "./ui/WikiTooltip";
 import SlicerLogo from "./slicer/SlicerLogo";
 import MachineSelectionDialog from "./settings/MachineSelectionDialog";
+import BuildPlateSelector from "./settings/BuildPlateSelector";
 import SettingsCategoryNav, {
   type SettingsCategory,
   type SettingsCategoryId,
@@ -128,11 +130,17 @@ export default function SettingsPanel() {
 
   // Store state (task 5.3)
   const printerModel = useSettingsStore((s) => s.printerModel);
+  const language = useSettingsStore((s) => s.language);
   const setPrinterModel = useSettingsStore((s) => s.setPrinterModel);
   const slicerSoftware = useSettingsStore((s) => s.slicerSoftware);
   const setSlicerSoftware = useSettingsStore((s) => s.setSlicerSoftware);
   const deviceProfileId = useSettingsStore((s) => s.deviceProfileId);
   const setDeviceProfileId = useSettingsStore((s) => s.setDeviceProfileId);
+  const buildPlateId = useSettingsStore((s) => s.buildPlateId);
+  const buildPlateSelections = useSettingsStore((s) => s.buildPlateSelections);
+  const setBuildPlateForMachine = useSettingsStore(
+    (s) => s.setBuildPlateForMachine,
+  );
   const customSlicerPath = useSettingsStore((s) => s.customSlicerPath);
   const nozzleSize = useSettingsStore((s) => s.nozzleSize);
   const setNozzleSize = useSettingsStore((s) => s.setNozzleSize);
@@ -306,6 +314,50 @@ export default function SettingsPanel() {
   const selectedSlicer =
     slicers.find((slicer) => slicer.id === resolvedSlicerSoftware) ?? null;
   const selectedPrinterThumbnailUrl = getMachineRegistryAssetUrl(selectedPrinter?.thumbnail);
+  const availableBuildPlates = selectedDeviceProfile?.build_plates ?? [];
+  const buildPlateSelection = resolveBuildPlateSelection(
+    selectedDeviceProfile?.machine_profile_id ?? "",
+    availableBuildPlates.map((plate) => plate.id),
+    selectedDeviceProfile?.default_build_plate_id ?? "",
+    buildPlateSelections,
+  );
+
+  useEffect(() => {
+    const machineProfileId = selectedDeviceProfile?.machine_profile_id ?? "";
+    if (!machineProfileId) {
+      return;
+    }
+    if (!buildPlateSelection.plateId) {
+      if (buildPlateId) {
+        setBuildPlateForMachine(machineProfileId, "");
+        void syncToBackend();
+      }
+      return;
+    }
+    if (
+      buildPlateId !== buildPlateSelection.plateId ||
+      buildPlateSelections[machineProfileId] !== buildPlateSelection.plateId
+    ) {
+      setBuildPlateForMachine(machineProfileId, buildPlateSelection.plateId);
+      void syncToBackend();
+    }
+  }, [
+    buildPlateSelection.plateId,
+    buildPlateId,
+    buildPlateSelections,
+    selectedDeviceProfile?.machine_profile_id,
+    setBuildPlateForMachine,
+    syncToBackend,
+  ]);
+
+  const handleBuildPlateSelect = (plateId: string) => {
+    const machineProfileId = selectedDeviceProfile?.machine_profile_id ?? "";
+    if (!machineProfileId) {
+      return;
+    }
+    setBuildPlateForMachine(machineProfileId, plateId);
+    void syncToBackend();
+  };
 
   useEffect(() => {
     if (slicersLoading || printersLoading || slicers.length === 0 || printers.length === 0) {
@@ -676,6 +728,21 @@ export default function SettingsPanel() {
                   className="w-full md:w-auto"
                 />
               </div>
+
+              <BuildPlateSelector
+                label={t("settings.build_plate")}
+                hint={t("settings.build_plate_hint")}
+                plates={availableBuildPlates}
+                selectedId={buildPlateSelection.plateId}
+                onSelect={handleBuildPlateSelect}
+                language={language}
+              />
+
+              {buildPlateSelection.fellBack && (
+                <StatusBanner tone="warning">
+                  {t("settings.build_plate_fallback")}
+                </StatusBanner>
+              )}
 
               {supportsLayerConfigRanges(resolvedSlicerSoftware) && (
                 <div

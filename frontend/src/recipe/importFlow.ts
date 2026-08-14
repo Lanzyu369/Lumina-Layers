@@ -4,7 +4,11 @@
  */
 
 import { useConverterStore } from "../stores/converter";
-import { useSettingsStore } from "../stores/settingsStore";
+import {
+  resolveBuildPlateSelection,
+  type NozzleSize,
+  useSettingsStore,
+} from "../stores/settingsStore";
 import { useWidgetStore } from "../stores/widgetStore";
 import { useWorkshopStore } from "../workshop/store";
 import { getPrinters } from "../api/system";
@@ -20,6 +24,7 @@ import type { RestoreResult } from "./importRecipe";
 import {
   normalizeSlicerOptionId,
   resolveDeviceProfileOptionId,
+  resolveNozzleSizeOption,
   resolvePrinterOptionId,
 } from "../utils/settingsOptionIds";
 
@@ -198,8 +203,13 @@ export function applyImport(
     const nextPrinter = conv.device.printer_id
       ? resolvePrinterOptionId(conv.device.printer_id, printerOptions, nextSlicer)
       : settingsState.printerModel;
-    const nextNozzle = conv.device.nozzle_size ?? settingsState.nozzleSize;
+    const importedNozzle = conv.device.nozzle_size ?? settingsState.nozzleSize;
     const selectedPrinter = printerOptions.find((printer) => printer.id === nextPrinter);
+    const nextNozzle = resolveNozzleSizeOption(
+      importedNozzle,
+      selectedPrinter,
+      nextSlicer,
+    );
 
     if (nextPrinter && nextPrinter !== settingsState.printerModel) {
       settingsState.setPrinterModel(nextPrinter);
@@ -208,26 +218,34 @@ export function applyImport(
       settingsState.setSlicerSoftware(nextSlicer);
     }
     if (nextNozzle && nextNozzle !== settingsState.nozzleSize) {
-      settingsState.setNozzleSize(nextNozzle as "0.2" | "0.4");
+      settingsState.setNozzleSize(nextNozzle as NozzleSize);
     }
-    const nextDeviceProfileId =
-      conv.device.device_profile_id ||
-      resolveDeviceProfileOptionId(
-        settingsState.deviceProfileId,
-        selectedPrinter,
-        nextSlicer,
-        nextNozzle,
-      );
+    const nextDeviceProfileId = resolveDeviceProfileOptionId(
+      conv.device.device_profile_id ?? "",
+      selectedPrinter,
+      nextSlicer,
+      nextNozzle,
+    );
     if (nextDeviceProfileId !== settingsState.deviceProfileId) {
       settingsState.setDeviceProfileId(nextDeviceProfileId);
-    } else if (
-      !conv.device.device_profile_id &&
-      !selectedPrinter?.device_profiles?.some(
-        (profile) => profile.device_profile_id === settingsState.deviceProfileId,
-      )
-    ) {
-      settingsState.setDeviceProfileId("");
     }
+    const selectedDeviceProfile = selectedPrinter?.device_profiles?.find(
+      (profile) => profile.device_profile_id === nextDeviceProfileId,
+    );
+    const machineProfileId = selectedDeviceProfile?.machine_profile_id ?? "";
+    const availablePlateIds =
+      selectedDeviceProfile?.build_plates?.map((plate) => plate.id) ?? [];
+    const importedPlateSelections =
+      machineProfileId && conv.device.build_plate_id
+        ? { [machineProfileId]: conv.device.build_plate_id }
+        : {};
+    const { plateId: nextBuildPlateId } = resolveBuildPlateSelection(
+      machineProfileId,
+      availablePlateIds,
+      selectedDeviceProfile?.default_build_plate_id ?? "",
+      importedPlateSelections,
+    );
+    settingsState.setBuildPlateForMachine(machineProfileId, nextBuildPlateId);
     if (
       typeof conv.base.svg_pixels_per_mm === "number" &&
       conv.base.svg_pixels_per_mm !== settingsState.svgPixelsPerMm

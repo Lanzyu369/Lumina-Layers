@@ -22,6 +22,7 @@ from PIL import Image
 from pydantic import BaseModel, StrictBool, ValidationError
 
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
+from api.export_device_validation import validate_export_device_selection
 from api.file_bridge import ensure_png_tempfile
 from api.file_registry import FileRegistry
 from api.preview_cache_artifacts import (
@@ -1709,6 +1710,13 @@ async def convert_generate(
     cache, cache_ref = _require_preview_cache_for_generate(session_data)
 
     request = body.params
+    validate_export_device_selection(
+        printer_id=request.printer_id,
+        slicer=request.slicer,
+        nozzle_size=request.nozzle_size,
+        device_profile_id=request.device_profile_id,
+        build_plate_id=request.build_plate_id,
+    )
     _validate_native_vector_relief_compatibility(request)
 
     # Retrieve paths stored during preview
@@ -2149,6 +2157,7 @@ async def convert_generate(
         "slicer": request.slicer,
         "nozzle_size": request.nozzle_size,
         "device_profile_id": request.device_profile_id,
+        "build_plate_id": request.build_plate_id,
         "enable_base_layer_height_modifier": request.enable_base_layer_height_modifier,
         "material_source": session_material_source,
         "material_dynamic_layer_count_enabled": dynamic_material_settings[0],
@@ -2552,6 +2561,7 @@ def _resolve_large_format_shared_params(
         "slicer": request.slicer,
         "nozzle_size": request.nozzle_size,
         "device_profile_id": request.device_profile_id,
+        "build_plate_id": request.build_plate_id,
         "enable_base_layer_height_modifier": request.enable_base_layer_height_modifier,
         "relief_global_max_height": relief_global_max_height,
         "material_dynamic_layer_count_enabled": dynamic_material_settings[0],
@@ -3294,6 +3304,13 @@ async def convert_generate_large_format(
 
     lf = body.params
     request = lf.params
+    validate_export_device_selection(
+        printer_id=request.printer_id,
+        slicer=request.slicer,
+        nozzle_size=request.nozzle_size,
+        device_profile_id=request.device_profile_id,
+        build_plate_id=request.build_plate_id,
+    )
     _validate_native_vector_relief_compatibility(request)
 
     if _has_requested_fridge_magnet_cavities(request):
@@ -3888,6 +3905,7 @@ async def convert_batch(
     slicer: str = Form("BambuStudio", description="切片器"),
     nozzle_size: str = Form("0.4", description="喷嘴直径"),
     device_profile_id: str | None = Form(None, description="机器注册表设备配置 ID"),
+    build_plate_id: str | None = Form(None, description="切片软件原生打印板 ID"),
     enable_base_layer_height_modifier: bool = Form(
         True,
         description="启用底板粗层高优化",
@@ -3908,6 +3926,13 @@ async def convert_batch(
         separate_backing: Emit the backing as a separate mesh object when true.
             (为 true 时将底板作为独立网格对象输出。)
     """
+    validate_export_device_selection(
+        printer_id=printer_id,
+        slicer=slicer,
+        nozzle_size=nozzle_size,
+        device_profile_id=device_profile_id,
+        build_plate_id=build_plate_id,
+    )
     # Resolve color source (main thread). Batch must mirror the single-image
     # preview/generate source selection contract: traditional LUT, native
     # reverse-LUT bundle, or material archives.
@@ -4141,6 +4166,7 @@ async def convert_batch(
                 auto_dynamic_range,
                 high_precision_3d_preview,
                 device_profile_id,
+                build_plate_id,
                 backing_infill_density_percent,
                 material_dynamic_layer_count_enabled,
                 material_min_layer_count,

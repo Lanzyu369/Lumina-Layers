@@ -132,6 +132,7 @@ describe("recipe/exportRecipe", () => {
         slicerSoftware: "OrcaSlicer",
         nozzleSize: "0.2",
         deviceProfileId: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
+        buildPlateId: "textured-pei-plate",
         svgPixelsPerMm: 18.5,
         enableBaseLayerHeightModifier: false,
       });
@@ -141,8 +142,19 @@ describe("recipe/exportRecipe", () => {
       expect(recipe.device.slicer).toBe("OrcaSlicer");
       expect(recipe.device.nozzle_size).toBe("0.2");
       expect(recipe.device.device_profile_id).toBe("OrcaSlicer:bbl:bambu-lab-p1s:0.2");
+      expect(recipe.device.build_plate_id).toBe("textured-pei-plate");
       expect(recipe.device.enable_base_layer_height_modifier).toBe(false);
       expect(recipe.base.svg_pixels_per_mm).toBe(18.5);
+    });
+
+    it("omits an empty build plate from the optional device recipe field", () => {
+      const recipe = exportConverterRecipe(
+        makeState(),
+        makeSettings({ buildPlateId: "" }),
+        "fp",
+      );
+
+      expect(recipe.device).not.toHaveProperty("build_plate_id");
     });
 
     it("exports converter source parameters for share-card restore", () => {

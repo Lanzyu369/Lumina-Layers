@@ -2711,6 +2711,18 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "更改设备",
     en: "Change Device",
   },
+  "settings.build_plate": {
+    zh: "打印板",
+    en: "Build Plate",
+  },
+  "settings.build_plate_hint": {
+    zh: "选择会写入 3MF，并按切片软件与打印机型号分别记忆。",
+    en: "The choice is written to 3MF and remembered for each slicer and printer model.",
+  },
+  "settings.build_plate_fallback": {
+    zh: "之前选择的打印板已不可用，已改用该机型的默认打印板。",
+    en: "The previous build plate is no longer available, so this printer's default is selected.",
+  },
   "settings.machine_dialog_title": {
     zh: "选择打印设备",
     en: "Choose Print Device",

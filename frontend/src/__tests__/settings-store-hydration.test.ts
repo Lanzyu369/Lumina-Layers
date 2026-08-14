@@ -8,6 +8,14 @@ vi.mock("../api/system", () => ({
 vi.mock("../stores/generatedArtifactInvalidation", () => ({
   invalidateGeneratedArtifacts: vi.fn(),
   registerGeneratedArtifactInvalidator: vi.fn(),
+  captureGeneratedArtifactIdentity: vi.fn(
+    (deviceProfileId: string, buildPlateId: string) => ({
+      revision: 0,
+      deviceProfileId,
+      buildPlateId,
+    }),
+  ),
+  isGeneratedArtifactIdentityCurrent: vi.fn(() => true),
   invalidatePreviewArtifacts: vi.fn(),
   registerPreviewArtifactInvalidator: vi.fn(),
   invalidateSingleItemDownload: vi.fn(),

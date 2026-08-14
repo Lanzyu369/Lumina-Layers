@@ -116,6 +116,7 @@ class CalibrationGenerateRequest(BaseModel):
     printer_id: str = Field(DEFAULT_PRINTER_ID, description="打印机配置 ID")
     slicer: str = Field(DEFAULT_SLICER_ID, description="切片软件 ID")
     device_profile_id: str | None = Field(None, description="机器注册表设备配置 ID")
+    build_plate_id: str | None = Field(None, description="打印板配置 ID")
     nozzle_size: str = Field("0.4", description="喷嘴直径")
 
     @field_validator("printer_id", mode="before")

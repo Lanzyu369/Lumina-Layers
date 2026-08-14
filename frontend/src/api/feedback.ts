@@ -57,6 +57,11 @@ export interface BugReportContextPayload {
     converter: string | null;
     single_stage: string | null;
   };
+  printer_id?: string;
+  slicer?: string;
+  nozzle_size?: string;
+  device_profile_id?: string;
+  build_plate_id?: string;
   color_mode: string | null;
   lut_name: string | null;
   lut_names?: string[];

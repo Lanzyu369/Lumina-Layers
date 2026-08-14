@@ -331,6 +331,7 @@ def convert_image_to_3d(
     slicer: str = "BambuStudio",
     nozzle_size: str = "0.4",
     device_profile_id: Optional[str] = None,
+    build_plate_id: Optional[str] = None,
     enable_base_layer_height_modifier: bool = True,
     center_on_bed: bool = True,
     relief_global_max_height: Optional[float] = None,
@@ -379,6 +380,8 @@ def convert_image_to_3d(
         device_profile_id: Optional generated machine registry device profile
             selection forwarded to 3MF export.
             (可选的机器注册表设备配置 ID，透传给 3MF 导出)
+        build_plate_id: Optional native slicer build-plate selection forwarded
+            to 3MF export. (可选的切片软件原生打印板 ID，透传给 3MF 导出)
         backing_infill_density_percent: Deep-backing sparse-infill percentage;
             viewing-surface protection is added by the 3MF writer.
             (深层底板稀疏填充百分比；观赏面保护由 3MF 写入器添加)
@@ -599,6 +602,7 @@ def generate_final_model(
     slicer: str = "BambuStudio",
     nozzle_size: str = "0.4",
     device_profile_id: Optional[str] = None,
+    build_plate_id: Optional[str] = None,
     enable_base_layer_height_modifier: bool = True,
     center_on_bed: bool = True,
     relief_global_max_height: Optional[float] = None,
@@ -645,6 +649,9 @@ def generate_final_model(
         device_profile_id: Optional generated machine registry device profile
             selection forwarded to ``convert_image_to_3d`` and 3MF export.
             (可选的机器注册表设备配置 ID，透传到主转换与 3MF 导出)
+        build_plate_id: Optional native slicer build-plate selection forwarded
+            to ``convert_image_to_3d`` and 3MF export.
+            (可选的切片软件原生打印板 ID，透传到主转换与 3MF 导出)
         backing_infill_density_percent: Deep-backing sparse-infill percentage
             forwarded to the 3MF writer.（透传到 3MF 写入器的深层底板稀疏填充
             百分比）
@@ -785,6 +792,7 @@ def generate_final_model(
         slicer=slicer,
         nozzle_size=nozzle_size,
         device_profile_id=device_profile_id,
+        build_plate_id=build_plate_id,
         enable_base_layer_height_modifier=enable_base_layer_height_modifier,
         center_on_bed=center_on_bed,
         relief_global_max_height=relief_global_max_height,

@@ -1,10 +1,58 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+import sys
 
 import pytest
 
-from core.machine_registry import load_machine_registry
+from core.machine_registry import load_machine_registry, resolve_machine_registry_root
+
+
+def test_machine_registry_root_resolution_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    explicit_root = tmp_path / "explicit-registry"
+    frozen_root = tmp_path / "frozen"
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(frozen_root), raising=False)
+
+    monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(explicit_root))
+    assert resolve_machine_registry_root() == explicit_root.resolve()
+
+    monkeypatch.delenv("LUMINA_MACHINE_REGISTRY_DIR")
+    assert resolve_machine_registry_root() == (
+        frozen_root / "machine_registry"
+    ).resolve()
+
+    monkeypatch.setattr(sys, "frozen", False)
+    assert resolve_machine_registry_root() == (
+        Path(__file__).resolve().parents[1] / "machine_registry"
+    )
+
+
+def test_runtime_machine_registry_consumers_share_frozen_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from api.export_device_validation import _machine_registry_path
+    from api.routers.system import _machine_registry_root
+    from utils.bambu_3mf_writer import _resolve_machine_registry_root
+
+    frozen_root = tmp_path / "frozen"
+    expected = (frozen_root / "machine_registry").resolve()
+    unrelated_cwd = tmp_path / "cwd"
+    unrelated_cwd.mkdir()
+    monkeypatch.chdir(unrelated_cwd)
+    monkeypatch.delenv("LUMINA_MACHINE_REGISTRY_DIR", raising=False)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(frozen_root), raising=False)
+
+    assert resolve_machine_registry_root() == expected
+    assert _machine_registry_root() == expected
+    assert _machine_registry_path() == expected / "registry.json"
+    assert Path(_resolve_machine_registry_root()) == expected
 
 
 def test_load_machine_registry_indexes_device_profiles(tmp_path):
@@ -23,6 +71,23 @@ def test_load_machine_registry_indexes_device_profiles(tmp_path):
                         "profile_format": "bambu_orca",
                         "application_metadata": "BambuStudio-02.07.01.57",
                         "sidecar_policy": "bambu_studio",
+                        "build_plates": [
+                            {
+                                "id": "textured-pei",
+                                "display_name": "Textured PEI Plate",
+                                "display_name_zh": "纹理PEI打印板",
+                                "project_value": "Textured PEI Plate",
+                                "plate_value": "Textured PEI Plate",
+                                "sidecar_value": "textured_plate",
+                                "image": (
+                                    "slicers/BambuStudio/02.07.01.57/"
+                                    "assets/build-plates/bed_pei.png"
+                                ),
+                                "source_path": "resources/images/bed_pei.png",
+                                "source_version": "02.07.01.57",
+                                "revision": "sha256:plate",
+                            }
+                        ],
                         "machines": [
                             {
                                 "machine_profile_id": "BambuStudio:bbl:bambu-lab-h2d",
@@ -33,6 +98,8 @@ def test_load_machine_registry_indexes_device_profiles(tmp_path):
                                 "bed_depth": 320,
                                 "bed_height": 325,
                                 "thumbnail": "slicers/BambuStudio/02.07.01.57/assets/h2d.png",
+                                "supported_build_plate_ids": ["textured-pei"],
+                                "default_build_plate_id": "textured-pei",
                                 "nozzles": [
                                     {
                                         "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d:0.4",
@@ -64,6 +131,93 @@ def test_load_machine_registry_indexes_device_profiles(tmp_path):
     assert profile.nozzle_size == "0.4"
     assert profile.application_metadata == "BambuStudio-02.07.01.57"
     assert profile.sidecar_policy == "bambu_studio"
+    assert profile.default_build_plate_id == "textured-pei"
+    assert [plate.id for plate in profile.build_plates] == ["textured-pei"]
+    assert profile.build_plates[0].image.endswith("build-plates/bed_pei.png")
+    assert profile.build_plates[0].display_name_zh == "纹理PEI打印板"
+
+    resolved = registry.resolve_build_plate(profile.device_profile_id, "textured-pei")
+    assert resolved.project_value == "Textured PEI Plate"
+    assert resolved.plate_value == "Textured PEI Plate"
+    assert resolved.sidecar_value == "textured_plate"
+
+
+def test_load_machine_registry_rejects_duplicate_build_plate_ids(tmp_path):
+    registry_path = tmp_path / "registry.json"
+    plate = {
+        "id": "textured-pei",
+        "display_name": "Textured PEI Plate",
+        "project_value": "Textured PEI Plate",
+        "plate_value": "Textured PEI Plate",
+        "sidecar_value": "textured_plate",
+        "image": "assets/bed_pei.png",
+        "source_path": "resources/images/bed_pei.png",
+        "source_version": "2.4.0",
+        "revision": "sha256:plate",
+    }
+    registry_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "generated_at": "2026-08-14T00:00:00+08:00",
+                "slicers": [
+                    {
+                        "slicer_id": "OrcaSlicer",
+                        "display_name": "OrcaSlicer",
+                        "source_version": "02.04.00.00",
+                        "application_metadata": "BambuStudio-02.04.00.00",
+                        "sidecar_policy": "orca_like",
+                        "build_plates": [plate, dict(plate)],
+                        "machines": [],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Duplicate machine registry build plate"):
+        load_machine_registry(registry_path)
+
+
+def test_load_machine_registry_rejects_unknown_machine_build_plate_reference(tmp_path):
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "generated_at": "2026-08-14T00:00:00+08:00",
+                "slicers": [
+                    {
+                        "slicer_id": "BambuStudio",
+                        "display_name": "Bambu Studio",
+                        "source_version": "02.07.01.57",
+                        "application_metadata": "BambuStudio-02.07.01.57",
+                        "sidecar_policy": "bambu_studio",
+                        "build_plates": [],
+                        "machines": [
+                            {
+                                "machine_profile_id": "BambuStudio:bbl:h2d",
+                                "display_name": "Bambu Lab H2D",
+                                "brand": "Bambu Lab",
+                                "vendor_key": "BBL",
+                                "bed_width": 350,
+                                "bed_depth": 320,
+                                "bed_height": 325,
+                                "supported_build_plate_ids": ["missing"],
+                                "default_build_plate_id": "missing",
+                                "nozzles": [],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Unknown machine registry build plate"):
+        load_machine_registry(registry_path)
 
 
 def test_load_machine_registry_rejects_duplicate_device_profile_ids(tmp_path):

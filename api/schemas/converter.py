@@ -610,6 +610,10 @@ class ConvertGenerateRequest(LutSourceSelection):
         None,
         description="Generated machine registry device profile ID",
     )
+    build_plate_id: Optional[str] = Field(
+        None,
+        description="Validated slicer-native build plate ID",
+    )
     enable_base_layer_height_modifier: bool = Field(
         True,
         description="Bambu 切片器：底板层高修改器开关（底板用 nozzle×0.5 粗层高打印）",

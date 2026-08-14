@@ -200,17 +200,14 @@ class _FilamentProfile:
 
 
 def _resolve_machine_registry_root() -> str:
-    """Return configured machine registry root, defaulting to cwd/machine_registry.
+    """Return the shared absolute machine-registry resource root.
 
-    返回机器注册表根目录；未配置环境变量时使用当前工作目录下的
-    ``machine_registry``，与系统设置 API 的默认读取位置保持一致。
+    返回共享的机器注册表绝对资源根目录。
     """
-    raw_root = os.environ.get("LUMINA_MACHINE_REGISTRY_DIR", "").strip()
-    return os.path.abspath(raw_root or "machine_registry")
 
+    from core.machine_registry import resolve_machine_registry_root
 
-def _registry_printer_slug(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
+    return str(resolve_machine_registry_root())
 
 
 def _version_tuple(value: object) -> tuple[int, ...]:
@@ -489,45 +486,23 @@ def _validate_registry_device_profile(
     加载并校验生成的机器注册表设备配置，避免选择的切片器/喷嘴与实际
     3MF 模板混用。
     """
-    from config import PRINTER_PROFILES, normalize_printer_profile_id, normalize_slicer_software_id
-    from core.machine_registry import load_machine_registry
+    from core.machine_registry import (
+        MachineRegistrySelectionError,
+        load_machine_registry,
+        validate_device_profile_selection,
+    )
 
-    normalized_printer_id = normalize_printer_profile_id(str(printer_id or ""))
-    requested_printer = PRINTER_PROFILES.get(normalized_printer_id)
-    normalized_slicer = normalize_slicer_software_id(str(slicer or ""))
     registry = load_machine_registry(registry_path)
     try:
-        profile = registry.get_device_profile(device_profile_id)
-    except KeyError as exc:
-        raise ValueError(f"Unknown machine registry device profile: {device_profile_id}") from exc
-
-    if not profile.supported:
-        raise ValueError(f"Machine registry device profile is not supported: {device_profile_id}")
-
-    if profile.slicer_id != normalized_slicer or profile.nozzle_size != nozzle_size:
-        raise ValueError(
-            "Machine registry device profile does not match requested slicer/nozzle: "
-            f"{device_profile_id} != {normalized_slicer}/{nozzle_size}"
+        profile, _ = validate_device_profile_selection(
+            registry,
+            device_profile_id=device_profile_id,
+            printer_id=printer_id,
+            slicer=slicer,
+            nozzle_size=nozzle_size,
         )
-    if requested_printer is not None and (
-        profile.display_name.casefold() != requested_printer.display_name.casefold()
-        or profile.brand.casefold() != requested_printer.brand.casefold()
-    ):
-        raise ValueError(
-            "Machine registry device profile does not match requested printer: "
-            f"{device_profile_id} != {requested_printer.brand}/{requested_printer.display_name}"
-        )
-    if requested_printer is None:
-        registry_printer_ids = {
-            _registry_printer_slug(profile.display_name),
-            _registry_printer_slug(f"{profile.brand}-{profile.display_name}"),
-            profile.machine_profile_id.casefold(),
-        }
-        if normalized_printer_id not in registry_printer_ids:
-            raise ValueError(
-                "Machine registry device profile does not match requested printer: "
-                f"{device_profile_id} != {printer_id}"
-            )
+    except MachineRegistrySelectionError as exc:
+        raise ValueError(str(exc)) from exc
     return profile
 
 
@@ -1670,6 +1645,7 @@ class BambuStudio3MFWriter:
         backing_infill_density_percent: int = 100,
         cover_source: "str | bytes | Image.Image | None" = None,
         device_profile_id: Optional[str] = None,
+        build_plate_id: Optional[str] = None,
         preserve_template_filament_slots: Optional[bool] = None,
     ):
         """Initialize 3MF writer with printer-specific template support.
@@ -1730,6 +1706,7 @@ class BambuStudio3MFWriter:
         self.printer_id = printer_id
         self.slicer = normalize_slicer_software_id(slicer)
         self.device_profile_id = str(device_profile_id or "").strip() or None
+        self.build_plate_id = str(build_plate_id or "").strip() or None
         legacy_nozzle_size = normalize_nozzle_size(nozzle_size) or "0.4"
         native_nozzle_size = format_native_nozzle_size(nozzle_size) or legacy_nozzle_size
         configured_nozzle_sizes = get_printer_profile(printer_id).supported_nozzle_sizes
@@ -1748,6 +1725,22 @@ class BambuStudio3MFWriter:
             if self.device_profile_id
             else None
         )
+        self._registry_build_plate = None
+        if self.build_plate_id:
+            if self._registry_device_profile is None or not self.device_profile_id:
+                raise ValueError("Build plate selection requires a machine registry device profile")
+            from core.machine_registry import load_machine_registry
+
+            registry_path = os.path.join(
+                _resolve_machine_registry_root(),
+                "registry.json",
+            )
+            try:
+                self._registry_build_plate = load_machine_registry(
+                    registry_path
+                ).resolve_build_plate(self.device_profile_id, self.build_plate_id)
+            except KeyError as exc:
+                raise ValueError(str(exc).strip("'")) from exc
         self.watermark = watermark
         self.enable_relief = bool(enable_relief)
         self.enable_base_layer_height_modifier = bool(
@@ -2766,6 +2759,15 @@ class BambuStudio3MFWriter:
         ET.SubElement(plate, "metadata", attrib={"key": "plater_id", "value": "1"})
         ET.SubElement(plate, "metadata", attrib={"key": "plater_name", "value": ""})
         ET.SubElement(plate, "metadata", attrib={"key": "locked", "value": "false"})
+        if self._registry_build_plate is not None:
+            ET.SubElement(
+                plate,
+                "metadata",
+                attrib={
+                    "key": "bed_type",
+                    "value": self._registry_build_plate.plate_value,
+                },
+            )
         if not self._is_anycubic_slicer():
             ET.SubElement(plate, "metadata", attrib={"key": "filament_map_mode", "value": "Auto For Flush"})
         if self.slicer == "FlashStudio":
@@ -2894,6 +2896,9 @@ class BambuStudio3MFWriter:
                 settings.get("different_settings_to_system"),
                 applied_override_keys,
             )
+
+        if self._registry_build_plate is not None:
+            settings["curr_bed_type"] = self._registry_build_plate.project_value
 
         _apply_snapmaker_u1_native_project_shape(
             settings,
@@ -3141,7 +3146,12 @@ class BambuStudio3MFWriter:
         payload = {
             "bbox_all": bbox_all,
             "bbox_objects": object_entries,
-            "bed_type": "textured_plate",
+            "bed_type": (
+                self._registry_build_plate.sidecar_value
+                if self._registry_build_plate is not None
+                and self._registry_build_plate.sidecar_value
+                else "textured_plate"
+            ),
             "filament_colors": [],
             "filament_ids": [],
             "first_extruder": 0,
@@ -3263,6 +3273,7 @@ def export_scene_with_bambu_metadata(
     backing_infill_density_percent: int = 100,
     cover_source: "str | bytes | Image.Image | None" = None,
     device_profile_id: Optional[str] = None,
+    build_plate_id: Optional[str] = None,
     preserve_template_filament_slots: Optional[bool] = None,
 ):
     """Export a Trimesh scene to BambuStudio/OrcaSlicer-compatible 3MF with metadata.
@@ -3307,6 +3318,8 @@ def export_scene_with_bambu_metadata(
         device_profile_id (Optional[str]): Slicer-scoped generated registry
             device profile ID used to select native machine metadata.
             （切片软件维度的注册表设备配置 ID，用于选择原生机型元数据）
+        build_plate_id (Optional[str]): Native build-plate identifier for the
+            selected device profile.（所选设备配置的原生打印板 ID）
         preserve_template_filament_slots (Optional[bool]): Override whether a
             registry-backed project keeps the template's native filament slot
             count. ``False`` trims project filament arrays to the selected
@@ -3354,6 +3367,7 @@ def export_scene_with_bambu_metadata(
         "watermark": watermark,
         "cover_source": cover_source,
         "device_profile_id": device_profile_id,
+        "build_plate_id": build_plate_id,
         "preserve_template_filament_slots": preserve_template_filament_slots,
         "enable_relief": bool(enable_relief),
         "enable_base_layer_height_modifier": bool(

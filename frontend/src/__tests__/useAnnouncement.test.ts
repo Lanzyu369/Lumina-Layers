@@ -44,6 +44,21 @@ describe("useAnnouncement", () => {
     ).toBe(true);
   });
 
+  it("announces slicer-native build plate selection", () => {
+    const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-08-14");
+    const items = entry?.sections.flatMap((section) => section.items) ?? [];
+
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("切片软件原生打印板") &&
+          item.zh.includes("写进生成的 3MF") &&
+          item.en.includes("native build plate") &&
+          item.en.includes("generated 3MF files"),
+      ),
+    ).toBe(true);
+  });
+
   it("keeps consistent material recipe colours in announcement history", () => {
     const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-08-08");
     const items = entry?.sections.flatMap((section) => section.items) ?? [];

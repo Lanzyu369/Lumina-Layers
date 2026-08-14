@@ -149,6 +149,26 @@ def test_bug_report_context_preserves_dynamic_material_scalars() -> None:
     assert dumped["material_delta_e00_tolerance"] == pytest.approx(0.4)
 
 
+def test_bug_report_context_preserves_build_plate_selection() -> None:
+    from api.routers.feedback import BugReportContext
+
+    context = dict(_payload()["context"])
+    context.update(
+        {
+            "printer_id": "bambu-h2d",
+            "slicer": "BambuStudio",
+            "nozzle_size": "0.4",
+            "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d:0.4",
+            "build_plate_id": "smooth-pei-plate",
+        }
+    )
+
+    dumped = BugReportContext.model_validate(context).model_dump()
+
+    assert dumped["build_plate_id"] == "smooth-pei-plate"
+    assert dumped["device_profile_id"] == "BambuStudio:bbl:bambu-lab-h2d:0.4"
+
+
 def test_bug_report_context_preserves_upload_filename_preference() -> None:
     from api.routers.feedback import BugReportContext
 

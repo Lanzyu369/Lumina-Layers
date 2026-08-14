@@ -122,8 +122,17 @@ export async function selectModelSurface(
 }
 
 /** 生成验证色卡 3MF：从当前 session 的调色板生成可打印的色块色卡 */
+export interface ColorCardDeviceSelection {
+  printer_id: string;
+  slicer: string;
+  nozzle_size: string;
+  device_profile_id?: string;
+  build_plate_id?: string;
+}
+
 export async function generateColorCard(
   sessionId: string,
+  device: ColorCardDeviceSelection,
   targetWidthMm: number = 100,
   spacerThick: number = 0.48,
   showLabels: boolean = true,
@@ -135,6 +144,7 @@ export async function generateColorCard(
       target_width_mm: targetWidthMm,
       spacer_thick: spacerThick,
       show_labels: showLabels,
+      ...device,
     },
     { timeout: 0 },
   );

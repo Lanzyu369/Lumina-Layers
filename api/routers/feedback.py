@@ -418,6 +418,11 @@ class BugReportContext(BaseModel):
     theme: Literal["light", "dark"]
     active_tab: str = Field(max_length=64)
     active_session_ids: BugReportSessionIds
+    printer_id: str | None = Field(default=None, max_length=128)
+    slicer: str | None = Field(default=None, max_length=128)
+    nozzle_size: str | None = Field(default=None, max_length=16)
+    device_profile_id: str | None = Field(default=None, max_length=256)
+    build_plate_id: str | None = Field(default=None, max_length=128)
     color_mode: str | None = Field(default=None, max_length=64)
     lut_name: str | None = Field(default=None, max_length=256)
     lut_names: list[str] = Field(default_factory=list, max_length=32)

@@ -432,6 +432,127 @@ describe("native bundle converter flow", () => {
     expect(state.error).toBeNull();
   });
 
+  it("invalidates an in-flight regular result when the build plate changes", async () => {
+    const stale = deferred<{
+      status: string;
+      message: string;
+      download_url: string;
+      preview_3d_url: string;
+    }>();
+    const fresh = deferred<{
+      status: string;
+      message: string;
+      download_url: string;
+      preview_3d_url: string;
+    }>();
+    mocks.convertGenerate
+      .mockReturnValueOnce(stale.promise)
+      .mockReturnValueOnce(fresh.promise);
+    useSettingsStore.setState({
+      deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.4",
+      buildPlateId: "engineering-plate",
+    });
+    seedLegacyGenerateState("session-plate-race", {
+      downloadUrl: "/api/files/previous-plate.3mf",
+      threemfDiskPath: "/tmp/previous-plate.3mf",
+      modelUrl: "/api/files/previous-plate.glb",
+      previewGlbUrl: "/api/files/current-preview.glb",
+    });
+
+    const staleRequest = useConverterStore.getState().submitGenerate();
+    useSettingsStore
+      .getState()
+      .setBuildPlateForMachine(
+        "BambuStudio:bbl:bambu-lab-h2d",
+        "textured-pei-plate",
+      );
+
+    const stateAfterPlateChange = useConverterStore.getState();
+
+    const freshRequest = useConverterStore.getState().submitGenerate();
+    expect(mocks.convertGenerate.mock.calls[0][1].build_plate_id).toBe(
+      "engineering-plate",
+    );
+    expect(mocks.convertGenerate.mock.calls[1][1].build_plate_id).toBe(
+      "textured-pei-plate",
+    );
+
+    stale.resolve({
+      status: "ok",
+      message: "stale",
+      download_url: "/api/files/stale-plate.3mf",
+      preview_3d_url: "/api/files/stale-plate.glb",
+    });
+    await staleRequest;
+
+    const stateAfterStaleResponse = useConverterStore.getState();
+
+    fresh.resolve({
+      status: "ok",
+      message: "fresh",
+      download_url: "/api/files/fresh-plate.3mf",
+      preview_3d_url: "/api/files/fresh-plate.glb",
+    });
+    await freshRequest;
+
+    expect(stateAfterPlateChange).toMatchObject({
+      isGenerating: false,
+      downloadUrl: null,
+      threemfDiskPath: null,
+      modelUrl: "/api/files/previous-plate.glb",
+      previewGlbUrl: "/api/files/current-preview.glb",
+    });
+    expect(stateAfterStaleResponse).toMatchObject({
+      isGenerating: true,
+      downloadUrl: null,
+      modelUrl: "/api/files/previous-plate.glb",
+      previewGlbUrl: "/api/files/current-preview.glb",
+    });
+    expect(useConverterStore.getState()).toMatchObject({
+      isGenerating: false,
+      downloadUrl: "/api/files/fresh-plate.3mf",
+      previewGlbUrl: "/api/files/current-preview.glb",
+    });
+  });
+
+  it("does not restore a color-card artifact generated for the previous plate", async () => {
+    const pending = deferred<{
+      status: string;
+      message: string;
+      download_url: string;
+      preview_3d_url: string;
+    }>();
+    mocks.convertGenerate.mockReturnValueOnce(pending.promise);
+    useSettingsStore.setState({
+      deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.4",
+      buildPlateId: "engineering-plate",
+    });
+    seedLegacyGenerateState("color-card-plate", {
+      modeling_mode: ModelingMode.COLOR_CARD,
+    });
+
+    const request = useConverterStore.getState().submitGenerate();
+    useSettingsStore
+      .getState()
+      .setBuildPlateForMachine(
+        "BambuStudio:bbl:bambu-lab-h2d",
+        "textured-pei-plate",
+      );
+    pending.resolve({
+      status: "ok",
+      message: "stale color card",
+      download_url: "/api/files/stale-color-card.3mf",
+      preview_3d_url: "/api/files/stale-color-card.glb",
+    });
+    await request;
+
+    expect(useConverterStore.getState()).toMatchObject({
+      isGenerating: false,
+      downloadUrl: null,
+      modelUrl: null,
+    });
+  });
+
   it("ignores an in-flight regular result when the filename preference changes", async () => {
     const pending = deferred<{
       status: string;
@@ -744,6 +865,51 @@ describe("native bundle converter flow", () => {
     expect(state.puzzleWarnings).toEqual([]);
   });
 
+  it("does not restore a puzzle artifact generated for the previous plate", async () => {
+    const pending = deferred<{
+      status: string;
+      message: string;
+      download_url: string;
+      threemf_disk_path: string;
+      piece_count: number;
+      grid_cols: number;
+      grid_rows: number;
+      warnings: string[];
+    }>();
+    mocks.convertGeneratePuzzle.mockReturnValueOnce(pending.promise);
+    useSettingsStore.setState({
+      deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.4",
+      buildPlateId: "engineering-plate",
+    });
+    seedLegacyGenerateState("puzzle-plate", { puzzleEnabled: true });
+
+    const request = useConverterStore.getState().submitGenerate();
+    useSettingsStore
+      .getState()
+      .setBuildPlateForMachine(
+        "BambuStudio:bbl:bambu-lab-h2d",
+        "textured-pei-plate",
+      );
+    pending.resolve({
+      status: "ok",
+      message: "stale puzzle",
+      download_url: "/api/files/stale-puzzle-plate.3mf",
+      threemf_disk_path: "/tmp/stale-puzzle-plate.3mf",
+      piece_count: 4,
+      grid_cols: 2,
+      grid_rows: 2,
+      warnings: ["stale"],
+    });
+    await request;
+
+    expect(useConverterStore.getState()).toMatchObject({
+      isGenerating: false,
+      downloadUrl: null,
+      puzzleResolvedPieceCount: null,
+      puzzleWarnings: [],
+    });
+  });
+
   it("ignores a stale large-format generate response after the session changes", async () => {
     const stale = deferred<{
       status: string;
@@ -788,6 +954,50 @@ describe("native bundle converter flow", () => {
     expect(state.sessionId).toBe("large-fresh");
     expect(state.downloadUrl).toBe("/api/files/fresh-large.zip");
     expect(state.largeFormatWarnings).toEqual([]);
+  });
+
+  it("does not restore a large-format artifact generated for the previous plate", async () => {
+    const pending = deferred<{
+      status: string;
+      message: string;
+      download_url: string;
+      tile_count: number;
+      grid_cols: number;
+      grid_rows: number;
+      warnings: string[];
+    }>();
+    mocks.convertGenerateLargeFormat.mockReturnValueOnce(pending.promise);
+    useSettingsStore.setState({
+      deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.4",
+      buildPlateId: "engineering-plate",
+    });
+    seedLegacyGenerateState("large-format-plate", {
+      largeFormatEnabled: true,
+    });
+
+    const request = useConverterStore.getState().submitGenerate();
+    useSettingsStore
+      .getState()
+      .setBuildPlateForMachine(
+        "BambuStudio:bbl:bambu-lab-h2d",
+        "textured-pei-plate",
+      );
+    pending.resolve({
+      status: "ok",
+      message: "stale large-format",
+      download_url: "/api/files/stale-large-format-plate.zip",
+      tile_count: 4,
+      grid_cols: 2,
+      grid_rows: 2,
+      warnings: ["stale"],
+    });
+    await request;
+
+    expect(useConverterStore.getState()).toMatchObject({
+      isGenerating: false,
+      downloadUrl: null,
+      largeFormatWarnings: [],
+    });
   });
 
   it("defaults native layer count to 5 when entering native mode without a valid current selection", () => {

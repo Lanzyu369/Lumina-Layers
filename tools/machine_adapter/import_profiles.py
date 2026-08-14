@@ -13,10 +13,16 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from config import format_native_nozzle_size
+from tools.machine_adapter.build_plates import (
+    copy_native_build_plate_assets,
+    intersect_machine_build_plate_scopes,
+    resolve_machine_build_plates,
+)
 from tools.machine_adapter.emitter import build_device_registry_entry
 from tools.machine_adapter.providers import get_provider
 from tools.machine_adapter.resolver import (
     ResolvedMachineProfile,
+    resolve_machine_model_settings,
     resolve_machine_profiles,
 )
 
@@ -337,6 +343,7 @@ def run_import(
     machine_name: str | None = None,
     application_metadata: str | None = None,
     client_version: str | None = None,
+    build_plate_source_roots: dict[str, Path] | None = None,
 ) -> ImportResult:
     source = ImportSource(
         slicer_id=slicer_id,
@@ -350,6 +357,7 @@ def run_import(
     slicer_payload, templates, device_count = _collect_import_payload(
         source,
         output_root=output_root,
+        build_plate_source_roots=build_plate_source_roots,
     )
     _write_import_payload(output_root=output_root, slicers=[slicer_payload], templates=templates)
     return ImportResult(device_count=device_count)
@@ -360,6 +368,7 @@ def _collect_import_payload(
     *,
     output_root: Path,
     asset_roots: tuple[AssetRoot, ...] = (),
+    build_plate_source_roots: dict[str, Path] | None = None,
 ) -> tuple[dict[str, Any], list[tuple[str, dict[str, Any]]], int]:
     slicer_id = source.slicer_id
     source_root = source.source_root
@@ -367,7 +376,16 @@ def _collect_import_payload(
     vendor_keys = source.vendor_keys
     machine_name = source.machine_name
     provider = get_provider(slicer_id)
+    build_plates = copy_native_build_plate_assets(
+        slicer_id=provider.slicer_id,
+        source_root=source_root,
+        source_version=source_version,
+        output_root=output_root,
+        source_roots=build_plate_source_roots,
+    )
+    available_build_plate_ids = {str(plate["id"]) for plate in build_plates}
     machines: dict[str, dict[str, Any]] = {}
+    machine_plate_resolutions: dict[str, list[tuple[list[str], str]]] = {}
     templates: list[tuple[str, dict[str, Any]]] = []
     seen_device_profile_ids: set[str] = set()
     seen_template_paths: set[str] = set()
@@ -416,6 +434,29 @@ def _collect_import_payload(
                 output_root=output_root,
                 asset_roots=asset_roots,
             )
+            machine_model_settings = resolve_machine_model_settings(
+                root=source_root,
+                vendor_key=profile.vendor_key,
+                printer_model=str(
+                    profile.settings.get("printer_model") or entry["display_name"]
+                ),
+            )
+            build_plate_settings = {
+                **machine_model_settings,
+                **profile.settings,
+            }
+            supported_build_plate_ids, default_build_plate_id = (
+                resolve_machine_build_plates(
+                    slicer_id=provider.slicer_id,
+                    settings=build_plate_settings,
+                    available_plate_ids=available_build_plate_ids,
+                    source_version=source_version,
+                    machine_profile_id=machine_id,
+                )
+            )
+            machine_plate_resolutions.setdefault(machine_id, []).append(
+                (supported_build_plate_ids, default_build_plate_id)
+            )
             machine = machines.setdefault(
                 machine_id,
                 {
@@ -427,6 +468,8 @@ def _collect_import_payload(
                     "bed_depth": entry["bed_depth"],
                     "bed_height": entry["bed_height"],
                     "thumbnail": thumbnail or entry["thumbnail"],
+                    "supported_build_plate_ids": supported_build_plate_ids,
+                    "default_build_plate_id": default_build_plate_id,
                     "nozzles": [],
                 },
             )
@@ -441,6 +484,13 @@ def _collect_import_payload(
                 }
             )
             templates.append((template_path, template))
+
+    for machine_id, resolutions in machine_plate_resolutions.items():
+        supported_build_plate_ids, default_build_plate_id = (
+            intersect_machine_build_plate_scopes(resolutions)
+        )
+        machines[machine_id]["supported_build_plate_ids"] = supported_build_plate_ids
+        machines[machine_id]["default_build_plate_id"] = default_build_plate_id
 
     if source.application_metadata is not None:
         application_metadata = source.application_metadata
@@ -465,6 +515,7 @@ def _collect_import_payload(
         "profile_format": provider.profile_format,
         "application_metadata": application_metadata,
         "sidecar_policy": provider.sidecar_policy,
+        "build_plates": build_plates,
         "machines": list(machines.values()),
     }
     if client_version is not None:
@@ -518,11 +569,15 @@ def run_import_sources(
         for vendor_key in source.vendor_keys
     )
     all_asset_roots = (*source_asset_roots, *asset_search_roots)
+    build_plate_source_roots = {
+        source.slicer_id: source.source_root for source in sources
+    }
     for source in sources:
         slicer_payload, source_templates, source_device_count = _collect_import_payload(
             source,
             output_root=output_root,
             asset_roots=all_asset_roots,
+            build_plate_source_roots=build_plate_source_roots,
         )
         if source_device_count == 0:
             continue

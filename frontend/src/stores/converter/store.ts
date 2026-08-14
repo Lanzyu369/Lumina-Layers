@@ -104,6 +104,8 @@ import {
 } from "../../utils/clientLog";
 import { trackLuminaEvent } from "../../analytics/umami";
 import {
+  captureGeneratedArtifactIdentity,
+  isGeneratedArtifactIdentityCurrent,
   registerGeneratedArtifactInvalidator,
   registerPreviewArtifactInvalidator,
   registerSingleItemDownloadInvalidator,
@@ -3507,6 +3509,7 @@ const GLB_POLL_MAX_MS = 5 * 60_000;
 // 变了就退出，避免多路 polling 互相覆盖 previewGlbUrl。
 let _glbPollSequence = 0;
 let _generateRequestSequence = 0;
+let _batchRequestSequence = 0;
 let _activeFilenameEligibleGenerateSequence: number | null = null;
 
 // ========== Preview AbortController ==========
@@ -8340,6 +8343,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         return null;
       }
 
+      const generateSettings = useSettingsStore.getState();
+      const generateIdentity = captureGeneratedArtifactIdentity(
+        generateSettings.deviceProfileId,
+        generateSettings.buildPlateId,
+      );
       set({ isGenerating: true, error: null, generatePerformanceTiming: null });
       _generateRequestSequence += 1;
       const generateSequence = _generateRequestSequence;
@@ -8351,11 +8359,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           ? generateSequence
           : null;
       const shouldIgnoreStaleGenerateResponse = (): boolean => {
+        const latestSettings = useSettingsStore.getState();
         if (
           _isCurrentGenerateRequest(
             generateSequence,
             sessionId,
             () => useConverterStore.getState().sessionId,
+          ) &&
+          isGeneratedArtifactIdentityCurrent(
+            generateIdentity,
+            latestSettings.deviceProfileId,
+            latestSettings.buildPlateId,
           )
         ) {
           return false;
@@ -8364,7 +8378,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         const latestState = useConverterStore.getState();
         if (
           _generateRequestSequence === generateSequence &&
-          latestState.sessionId !== sessionId &&
           latestState.isGenerating
         ) {
           set({ isGenerating: false });
@@ -8465,11 +8478,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           quantize_colors: state.quantize_colors,
           high_precision_3d_preview: state.high_precision_3d_preview,
           enable_cleanup: state.enable_cleanup,
-          svg_pixels_per_mm: useSettingsStore.getState().svgPixelsPerMm,
+          svg_pixels_per_mm: generateSettings.svgPixelsPerMm,
           ...resolveColorMatchingWeights(state),
           use_lut_constrained: state.use_lut_constrained,
           auto_dynamic_range: state.auto_dynamic_range,
-          is_dark: useSettingsStore.getState().theme === "dark",
+          is_dark: generateSettings.theme === "dark",
           spacer_thick: state.spacer_thick,
           backing_infill_density_percent:
             state.backing_infill_density_percent,
@@ -8515,12 +8528,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             state.free_color_set.size > 0
               ? Array.from(state.free_color_set).map((h) => `#${h}`)
               : undefined,
-          printer_id: useSettingsStore.getState().printerModel,
-          slicer: useSettingsStore.getState().slicerSoftware,
-          nozzle_size: useSettingsStore.getState().nozzleSize,
-          device_profile_id: useSettingsStore.getState().deviceProfileId,
+          printer_id: generateSettings.printerModel,
+          slicer: generateSettings.slicerSoftware,
+          nozzle_size: generateSettings.nozzleSize,
+          device_profile_id: generateSettings.deviceProfileId,
+          build_plate_id: generateSettings.buildPlateId,
           enable_base_layer_height_modifier:
-            useSettingsStore.getState().enableBaseLayerHeightModifier,
+            generateSettings.enableBaseLayerHeightModifier,
           use_cached_matched_rgb: state.regionReplacementCount > 0,
           ...(state.modelSurfaceEnabled &&
           state.modelSurfaceModelFileId &&
@@ -8662,7 +8676,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         const response = await apiConvertGenerate(
           sessionId,
           baseParams,
-          useSettingsStore.getState().preserveUploadFilenameFor3mf,
+          generateSettings.preserveUploadFilenameFor3mf,
         );
         if (shouldIgnoreStaleGenerateResponse()) {
           return null;
@@ -8753,7 +8767,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         if (_activeFilenameEligibleGenerateSequence === generateSequence) {
           _activeFilenameEligibleGenerateSequence = null;
         }
-        _endGenerateTimer();
+        if (_generateRequestSequence === generateSequence) {
+          _endGenerateTimer();
+        }
       }
     },
 
@@ -9271,6 +9287,23 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         set({ error: "请先设置颜色高度映射后再批量生成" });
         return;
       }
+      const settings = useSettingsStore.getState();
+      const batchIdentity = captureGeneratedArtifactIdentity(
+        settings.deviceProfileId,
+        settings.buildPlateId,
+      );
+      const batchSequence = ++_batchRequestSequence;
+      const isCurrentBatchRequest = (): boolean => {
+        const latestSettings = useSettingsStore.getState();
+        return (
+          batchSequence === _batchRequestSequence &&
+          isGeneratedArtifactIdentityCurrent(
+            batchIdentity,
+            latestSettings.deviceProfileId,
+            latestSettings.buildPlateId,
+          )
+        );
+      };
       set({
         batchLoading: true,
         batchResult: null,
@@ -9301,7 +9334,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
                 reliefMinimumTotalHeight,
               )
             : undefined;
-        const settings = useSettingsStore.getState();
         const resolvedSourceSelection = resolveConverterSourceSelection(state);
         const sourceParams =
           state.source_version === "material"
@@ -9350,6 +9382,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           slicer: settings.slicerSoftware,
           nozzle_size: settings.nozzleSize,
           device_profile_id: settings.deviceProfileId,
+          build_plate_id: settings.buildPlateId,
           enable_base_layer_height_modifier:
             settings.enableBaseLayerHeightModifier,
           ...(state.enable_relief
@@ -9361,6 +9394,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             : {}),
         };
         const result = await apiConvertBatch(state.batchFiles, params);
+        if (!isCurrentBatchRequest()) return;
         const previewItems = (result.preview_items ?? [])
           .slice(0, BATCH_PREVIEW_BROWSER_SAFE_LIMIT)
           .map((item) => ({
@@ -9396,6 +9430,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         });
         notifyCompletion("batch");
       } catch (err) {
+        if (!isCurrentBatchRequest()) return;
         set({
           batchLoading: false,
           error: visibleConverterError(err, "批量处理失败"),
@@ -9715,11 +9750,34 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
   })),
 );
 
-registerGeneratedArtifactInvalidator(() => {
+registerGeneratedArtifactInvalidator(({ preservePreviews }) => {
+  _generateRequestSequence += 1;
+  _batchRequestSequence += 1;
+  _activeFilenameEligibleGenerateSequence = null;
+  _endGenerateTimer();
   useConverterStore.setState({
-    modelUrl: null,
+    isGenerating: false,
+    batchLoading: false,
+    batchResult: null,
     threemfDiskPath: null,
     downloadUrl: null,
+    generatePerformanceTiming: null,
+    puzzleWarnings: [],
+    puzzleResolvedRows: null,
+    puzzleResolvedCols: null,
+    puzzleResolvedPieceCount: null,
+    largeFormatWarnings: [],
+    ...(preservePreviews
+      ? {}
+      : {
+          modelUrl: null,
+          previewGlbUrl: null,
+          previewImageUrl: null,
+          previewBaseImageUrl: null,
+          batchPreviewItems: [],
+          layerImages: [],
+          layerImagesSourceKey: null,
+        }),
   });
 });
 

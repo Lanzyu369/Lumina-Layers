@@ -1,5 +1,5 @@
 ﻿import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import MaterialRecipeQueryPanel from "../components/MaterialRecipeQueryPanel";
 import apiClient, { downloadResourceBlob } from "../api/client";
@@ -55,6 +55,14 @@ function apiValidationFailure(loc: Array<string | number>, msg: string) {
       headers: {},
     },
   });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 }
 
 describe("MaterialRecipeQueryPanel", () => {
@@ -524,6 +532,120 @@ describe("MaterialRecipeQueryPanel", () => {
       apiClient.defaults.baseURL = originalBaseUrl;
       vi.unstubAllEnvs();
     }
+  });
+
+  it("keeps a newer material swatch active when an old plate response resolves", async () => {
+    const stale = deferred<
+      Awaited<ReturnType<typeof generateMaterialRecipeSwatch>>
+    >();
+    const fresh = deferred<
+      Awaited<ReturnType<typeof generateMaterialRecipeSwatch>>
+    >();
+    vi.mocked(generateMaterialRecipeSwatch)
+      .mockReturnValueOnce(stale.promise)
+      .mockReturnValueOnce(fresh.promise);
+    useSettingsStore.setState({ buildPlateId: "engineering-plate" });
+    vi.mocked(listGradientCardMaterials).mockResolvedValue(buildLibraryResponse(2));
+    vi.mocked(previewMaterialRecipe).mockResolvedValue({
+      status: "ok",
+      layer_count: 2,
+      layer_height_mm: 0.08,
+      substrate: "white",
+      predicted_rgb: [180, 60, 90],
+      predicted_hex: "#B43C5A",
+      layers: [],
+    });
+
+    render(<MaterialRecipeQueryPanel />);
+    await waitFor(() => {
+      expect(screen.getAllByTestId("material-recipe-palette-item")).toHaveLength(2);
+    });
+    const tiles = screen.getAllByTestId("material-recipe-palette-item");
+    fireEvent.click(tiles[0]);
+    fireEvent.click(tiles[1]);
+    fireEvent.click(screen.getByRole("button", { name: /计算混色|Compute color/ }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /添加到队列|Add to queue/ })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /添加到队列|Add to queue/ }));
+    const generateButton = screen.getByRole("button", {
+      name: /生成验证色块|Generate swatch/,
+    });
+    fireEvent.click(generateButton);
+
+    useSettingsStore
+      .getState()
+      .setBuildPlateForMachine(
+        "BambuStudio:bbl:bambu-lab-h2d",
+        "textured-pei-plate",
+      );
+    await waitFor(() => {
+      expect(generateButton).toBeEnabled();
+    });
+
+    fireEvent.click(generateButton);
+    expect(vi.mocked(generateMaterialRecipeSwatch).mock.calls[0][0].build_plate_id).toBe(
+      "engineering-plate",
+    );
+    expect(vi.mocked(generateMaterialRecipeSwatch).mock.calls[1][0].build_plate_id).toBe(
+      "textured-pei-plate",
+    );
+
+    await act(async () => {
+      stale.resolve({
+        status: "ok",
+        message: "stale",
+        download_url: "/api/files/stale-material-swatch.3mf",
+        preview_url: "/api/files/stale-material-swatch.png",
+        recipe_count: 1,
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(generateButton).toBeDisabled();
+    });
+    expect(screen.queryByAltText(/色块图例|Swatch legend/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /下载 3MF|Download swatch/ }),
+    ).not.toBeInTheDocument();
+
+    await act(async () => {
+      fresh.resolve({
+        status: "ok",
+        message: "fresh",
+        download_url: "/api/files/fresh-material-swatch.3mf",
+        preview_url: "/api/files/fresh-material-swatch.png",
+        recipe_count: 1,
+      });
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByAltText(/色块图例|Swatch legend/)).toHaveAttribute(
+      "src",
+      "/api/files/fresh-material-swatch.png",
+    );
+    expect(
+      screen.getByRole("button", { name: /下载 3MF|Download swatch/ }),
+    ).toBeEnabled();
+
+    act(() => {
+      useSettingsStore
+        .getState()
+        .setBuildPlateForMachine(
+          "BambuStudio:bbl:bambu-lab-h2d",
+          "smooth-pei-plate",
+        );
+    });
+    await waitFor(() => {
+      expect(screen.getByAltText(/色块图例|Swatch legend/)).toHaveAttribute(
+        "src",
+        "/api/files/fresh-material-swatch.png",
+      );
+      expect(
+        screen.queryByRole("button", { name: /下载 3MF|Download swatch/ }),
+      ).not.toBeInTheDocument();
+    });
   });
 
   it("keeps swatch download failures in the panel with visible language", async () => {

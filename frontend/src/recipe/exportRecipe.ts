@@ -308,6 +308,9 @@ export function exportConverterRecipe(
       slicer: settings.slicerSoftware,
       nozzle_size: settings.nozzleSize,
       device_profile_id: settings.deviceProfileId,
+      ...(settings.buildPlateId
+        ? { build_plate_id: settings.buildPlateId }
+        : {}),
       enable_base_layer_height_modifier:
         settings.enableBaseLayerHeightModifier,
     },

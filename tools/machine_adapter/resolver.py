@@ -100,3 +100,32 @@ def resolve_machine_profiles(*, root: Path, vendor_key: str) -> list[ResolvedMac
         )
 
     return resolved
+
+
+def resolve_machine_model_settings(
+    *,
+    root: Path,
+    vendor_key: str,
+    printer_model: str,
+) -> dict[str, Any]:
+    """Return native machine-model metadata for one printer model.
+
+    返回指定打印机型号的原生 machine-model 元数据。Bambu/Orca 系切片软件把
+    ``not_support_bed_type`` 等能力约束放在 ``machine_model`` 文件中，而不是
+    可实例化喷嘴预设中；调用方需要合并两者后再解析机器能力。
+    """
+
+    machine_dir = root / vendor_key / "machine"
+    if not machine_dir.is_dir():
+        return {}
+    target = printer_model.strip().casefold()
+    if not target:
+        return {}
+    for path in sorted(machine_dir.rglob("*.json"), key=lambda item: item.as_posix()):
+        data = _read_json(path)
+        if str(data.get("type") or "").strip().casefold() != "machine_model":
+            continue
+        name = str(data.get("name") or path.stem).strip().casefold()
+        if name == target:
+            return data
+    return {}

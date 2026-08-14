@@ -224,6 +224,7 @@ def run(ctx: dict) -> dict:
             ),
             cover_source=ctx.get("cover_source_path") or ctx.get("image_path"),
             device_profile_id=ctx.get("device_profile_id") or None,
+            build_plate_id=ctx.get("build_plate_id") or None,
             preserve_template_filament_slots=(
                 False
                 if str(ctx.get("material_source") or "lut") == "material_archive"
