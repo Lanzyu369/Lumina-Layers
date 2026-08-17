@@ -254,10 +254,10 @@ def test_extrude_geometry_separates_exterior_from_touching_hole_ring(
     assert abs(float(mesh.volume)) == pytest.approx(float(geometry.area), abs=0.01)
 
 
-def test_missing_manifold_kernel_refuses_unsafe_touching_ring_fallback(
+def test_missing_all_polygon_triangulators_refuses_unsafe_touching_ring_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A missing core triangulator must not silently export a partial shell."""
+    """No triangulator may silently export a partial touching-ring shell."""
 
     geometry = Polygon(
         [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)],
@@ -268,6 +268,13 @@ def test_missing_manifold_kernel_refuses_unsafe_touching_ring_fallback(
         "triangulate_polygon",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             ImportError("synthetic missing manifold3d")
+        ),
+    )
+    monkeypatch.setattr(
+        vector_engine,
+        "triangulate_float64",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ImportError("synthetic missing mapbox earcut")
         ),
     )
 
@@ -350,6 +357,36 @@ def test_extrude_geometry_separates_point_touching_hole_rings() -> None:
             [(8.0, 4.0), (8.0, 6.0), (5.0, 5.0), (8.0, 4.0)],
         ],
     )
+    meshes = VectorProcessor._extrude_geometry(
+        geometry,
+        height=1.0,
+        z_offset=0.0,
+        scale=1.0,
+        extrude_cache={},
+    )
+
+    assert len(meshes) == 1
+    mesh = meshes[0]
+    assert mesh.is_watertight
+    assert np.all(_edge_incidence_counts(mesh) == 2)
+    assert abs(float(mesh.volume)) == pytest.approx(float(geometry.area), abs=0.01)
+
+
+def test_extrude_geometry_repairs_complex_point_touching_holes() -> None:
+    """A detailed hole and a small hole sharing one point stay slicer-safe."""
+
+    angles = np.linspace(0.0, 2.0 * np.pi, 20, endpoint=False)
+    large_hole = [
+        (10.0 + 8.0 * np.cos(theta), 10.0 + 8.0 * np.sin(theta))
+        for theta in angles
+    ]
+    contact = large_hole[0]
+    small_hole = [contact, (25.0, 8.0), (25.0, 12.0), contact]
+    geometry = Polygon(
+        [(0.0, 0.0), (30.0, 0.0), (30.0, 30.0), (0.0, 30.0)],
+        [large_hole, small_hole],
+    )
+
     meshes = VectorProcessor._extrude_geometry(
         geometry,
         height=1.0,

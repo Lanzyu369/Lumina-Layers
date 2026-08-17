@@ -92,6 +92,7 @@ BASE_COLOR_GAP_MM = 0.005
 # unusually large models.
 _VECTOR_COVERAGE_REL_TOL = 1e-6
 _VECTOR_COVERAGE_ABS_TOL_MM2 = 0.01
+_VECTOR_RING_SEPARATION_RETRY_MM = (0.0001, 0.001)
 _PLANAR_COVERAGE_METADATA_KEY = "_lumina_planar_coverage_mm2"
 # Polygons below one float64 epsilon in physical area are numerical residue,
 # not representable model detail.  Keep this many orders of magnitude below
@@ -1428,6 +1429,191 @@ def _cap_planar_area_mm2(vertices, faces) -> float | None:
     )
     area = float(np.sum(twice_area, dtype=np.float64) * 0.5)
     return area if math.isfinite(area) and area >= 0.0 else None
+
+
+def _polygon_requires_topology_validation(poly: Polygon, scale: float) -> bool:
+    """Return whether a polygon can contain ambiguous indexed ring edges."""
+    if bool(poly.interiors) or not bool(poly.is_valid):
+        return True
+    try:
+        rings = [
+            np.asarray(poly.exterior.coords, dtype=np.float64)[:-1, :2],
+            *[
+                np.asarray(ring.coords, dtype=np.float64)[:-1, :2]
+                for ring in poly.interiors
+            ],
+        ]
+        coordinates = np.vstack(rings)
+        scale_value = float(scale)
+        if (
+            coordinates.ndim != 2
+            or coordinates.shape[1] != 2
+            or len(coordinates) < 3
+            or not math.isfinite(scale_value)
+            or scale_value <= 0.0
+        ):
+            return True
+        if len(np.unique(coordinates, axis=0)) != len(coordinates):
+            return True
+        # ``neroued_3mf`` stores mesh vertices as float32.  Distinct SVG
+        # vertices that collapse at that boundary must take the canonical
+        # indexed extrusion path even when the source Polygon is valid and
+        # has no holes.
+        export_coordinates = (coordinates * scale_value).astype(np.float32)
+        return len(np.unique(export_coordinates, axis=0)) != len(export_coordinates)
+    except (AttributeError, IndexError, TypeError, ValueError, OverflowError):
+        return True
+
+
+def _separate_polygon_ring_contacts(poly: Polygon, geometry_gap: float):
+    """Move only touching holes by a sub-resolution inward offset."""
+    exterior_vertices = {
+        tuple(float(value) for value in coordinate[:2])
+        for coordinate in list(poly.exterior.coords)[:-1]
+    }
+    ring_data = [
+        (
+            ring,
+            {
+                tuple(float(value) for value in coordinate[:2])
+                for coordinate in list(ring.coords)[:-1]
+            },
+        )
+        for ring in poly.interiors
+    ]
+    contact_vertices = [set() for _ring, _vertices in ring_data]
+    for index, (_ring, vertices) in enumerate(ring_data):
+        contact_vertices[index].update(exterior_vertices.intersection(vertices))
+    for left_index, (_left_ring, left_vertices) in enumerate(ring_data):
+        for right_index in range(left_index + 1, len(ring_data)):
+            shared = left_vertices.intersection(ring_data[right_index][1])
+            if shared:
+                contact_vertices[left_index].update(shared)
+                contact_vertices[right_index].update(shared)
+
+    touching = {index for index, vertices in enumerate(contact_vertices) if vertices}
+    if not touching:
+        return poly
+
+    translated_holes = []
+    for ring_index, (ring, _vertices) in enumerate(ring_data):
+        if ring_index not in touching:
+            translated_holes.append(ring.coords)
+            continue
+        hole = Polygon(ring)
+        contacts = np.asarray(tuple(contact_vertices[ring_index]), dtype=np.float64)
+        contact_center = contacts.mean(axis=0)
+        representative = hole.representative_point()
+        direction = np.asarray(
+            [representative.x, representative.y], dtype=np.float64
+        ) - contact_center
+        direction_length = float(np.linalg.norm(direction))
+        if not math.isfinite(direction_length) or direction_length <= 0.0:
+            return None
+        offset = direction * (float(geometry_gap) / direction_length)
+        moved = affinity.translate(
+            hole,
+            xoff=float(offset[0]),
+            yoff=float(offset[1]),
+        )
+        if moved.is_empty or not isinstance(moved, Polygon):
+            return None
+        translated_holes.append(moved.exterior.coords)
+
+    repaired = Polygon(poly.exterior.coords, translated_holes)
+    if repaired.is_empty or not repaired.is_valid:
+        return None
+
+    repaired_vertices = []
+    for ring in repaired.interiors:
+        vertices = {
+            tuple(float(value) for value in coordinate[:2])
+            for coordinate in list(ring.coords)[:-1]
+        }
+        if exterior_vertices.intersection(vertices) or any(
+            prior.intersection(vertices) for prior in repaired_vertices
+        ):
+            return None
+        repaired_vertices.append(vertices)
+    return repaired
+
+
+def _repair_polygon_ring_contacts(
+    poly: Polygon,
+    scale: float,
+    separation_mm: float,
+):
+    """Snap and separate exact ring contacts below slicer resolution."""
+    try:
+        scale_value = float(scale)
+        geometry_gap = float(separation_mm) / scale_value
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    if (
+        not math.isfinite(scale_value)
+        or scale_value <= 0.0
+        or not math.isfinite(geometry_gap)
+        or geometry_gap <= 0.0
+    ):
+        return None
+    try:
+        snapped = set_precision(poly, grid_size=geometry_gap)
+    except VECTOR_HANDLED_ERRORS:
+        return None
+    if snapped is None or snapped.is_empty:
+        return None
+    if isinstance(snapped, Polygon):
+        return _separate_polygon_ring_contacts(snapped, geometry_gap)
+    if isinstance(snapped, MultiPolygon):
+        parts = [
+            _separate_polygon_ring_contacts(part, geometry_gap)
+            for part in snapped.geoms
+            if not part.is_empty
+        ]
+        if not parts or any(part is None for part in parts):
+            return None
+        repaired = parts[0] if len(parts) == 1 else MultiPolygon(parts)
+        if repaired.is_valid:
+            return repaired
+        try:
+            repaired = make_valid(repaired)
+        except VECTOR_HANDLED_ERRORS:
+            return None
+        if isinstance(repaired, (Polygon, MultiPolygon)) and repaired.is_valid:
+            return repaired
+        polygon_parts = [
+            geometry
+            for geometry in getattr(repaired, "geoms", ())
+            if isinstance(geometry, Polygon) and not geometry.is_empty
+        ]
+        if not polygon_parts:
+            return None
+        repaired = unary_union(polygon_parts)
+        if isinstance(repaired, (Polygon, MultiPolygon)) and repaired.is_valid:
+            return repaired
+        return None
+    return None
+
+
+def _polygon_repair_area_is_safe(
+    original,
+    repaired,
+    scale: float,
+) -> bool:
+    """Bound physical area changes introduced by contact separation."""
+    try:
+        scale_value = float(scale)
+        original_area = float(original.area) * scale_value * scale_value
+        repaired_area = float(repaired.area) * scale_value * scale_value
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return False
+    if not all(math.isfinite(value) for value in (original_area, repaired_area)):
+        return False
+    tolerance = max(
+        _VECTOR_COVERAGE_ABS_TOL_MM2,
+        original_area * _VECTOR_COVERAGE_REL_TOL,
+    )
+    return abs(repaired_area - original_area) <= tolerance
 
 
 def _extrude_polygonal_unit_height(
@@ -9824,8 +10010,46 @@ class VectorProcessor:
                     if direct_base is not None:
                         base_vertices, base_faces = direct_base
                     else:
-                        m_base = _extrude_polygonal_unit_height(poly)
-                        if not bool(m_base.is_watertight):
+                        m_base = None
+                        extrusion_error = None
+                        try:
+                            m_base = _extrude_polygonal_unit_height(poly)
+                        except VECTOR_HANDLED_ERRORS as exc:
+                            extrusion_error = exc
+
+                        if m_base is None or not bool(m_base.is_watertight):
+                            for separation_mm in _VECTOR_RING_SEPARATION_RETRY_MM:
+                                repaired_poly = _repair_polygon_ring_contacts(
+                                    poly,
+                                    scale,
+                                    separation_mm,
+                                )
+                                if (
+                                    repaired_poly is None
+                                    or not _polygon_repair_area_is_safe(
+                                        poly,
+                                        repaired_poly,
+                                        scale,
+                                    )
+                                ):
+                                    continue
+                                try:
+                                    repaired_mesh = _extrude_polygonal_unit_height(
+                                        repaired_poly
+                                    )
+                                except VECTOR_HANDLED_ERRORS as exc:
+                                    extrusion_error = exc
+                                    continue
+                                if not bool(repaired_mesh.is_watertight):
+                                    continue
+                                m_base = repaired_mesh
+                                break
+
+                        if m_base is None or not bool(m_base.is_watertight):
+                            if extrusion_error is not None:
+                                raise ValueError(
+                                    "Vector polygon extrusion produced non-manifold topology"
+                                ) from extrusion_error
                             raise ValueError(
                                 "Vector polygon extrusion produced non-manifold topology"
                             )
