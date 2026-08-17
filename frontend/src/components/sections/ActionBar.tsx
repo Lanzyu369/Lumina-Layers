@@ -26,6 +26,7 @@ import type { CanvasPreviewHoverSample } from "../ui/canvasPreviewUtils"
 import BedSizeSelector from "./BedSizeSelector"
 import SlicerSelector from "./SlicerSelector"
 import WikiTooltip from "../ui/WikiTooltip"
+import { StatusBanner } from "../ui/panelPrimitives"
 import { resolvePreviewHoverPixel } from "./actionBarHoverUtils"
 import { useI18n } from "../../i18n/context"
 import { useWorkspaceMode } from "../../hooks/useWorkspaceMode"
@@ -126,6 +127,7 @@ export default function ActionBar() {
   const submitFullPipeline = useConverterStore((s) => s.submitFullPipeline)
   const threemfDiskPath = useConverterStore((s) => s.threemfDiskPath)
   const downloadUrl = useConverterStore((s) => s.downloadUrl)
+  const generateWarnings = useConverterStore((s) => s.generateWarnings)
   const sessionId = useConverterStore((s) => s.sessionId)
   const largeFormatEnabled = useConverterStore((s) => s.largeFormatEnabled)
   const modelSurfaceEnabled = useConverterStore((s) => s.modelSurfaceEnabled)
@@ -826,6 +828,16 @@ export default function ActionBar() {
           </div>
         </div>
       )}
+
+      {downloadUrl &&
+        generateWarnings.includes("wipe_tower_manual_adjustment_required") && (
+          <StatusBanner
+            tone="warning"
+            title={t("wipe_tower_manual_adjustment_title")}
+          >
+            {t("wipe_tower_manual_adjustment_warning")}
+          </StatusBanner>
+        )}
 
       <SlicerSelector
         threemfDiskPath={threemfDiskPath}

@@ -2167,6 +2167,7 @@ export interface ConverterState {
   previewPixelWidth: number | null; // 预览图像像素宽度（用于 3D→像素坐标转换）
   previewPixelHeight: number | null; // 预览图像像素高度（用于 3D→像素坐标转换）
   previewWarnings: string[];
+  generateWarnings: string[];
   largeFormatWarnings: string[];
 
   // 模型边界（供 KeychainRing3D 定位）
@@ -2878,6 +2879,7 @@ function buildPreviewSessionResetState(
     batchPreviewItems: [],
     threemfDiskPath: null,
     downloadUrl: null,
+    generateWarnings: [],
     palette: [],
     materialDynamicRecipes: [],
     materialLayerBenefitCurve: [],
@@ -3271,6 +3273,7 @@ export const DEFAULT_STATE: ConverterState = {
   previewPixelWidth: null,
   previewPixelHeight: null,
   previewWarnings: [],
+  generateWarnings: [],
   largeFormatWarnings: [],
   modelBounds: null,
   enableCrop: loadEnableCrop(),
@@ -3785,6 +3788,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         batchResult: null,
         batchLoading: false,
         previewWarnings: [],
+        generateWarnings: [],
         largeFormatWarnings: [],
         gradientGroups: null,
         gradientGroupsLoading: false,
@@ -3841,6 +3845,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         batchResult: null,
         batchLoading: false,
         previewWarnings: [],
+        generateWarnings: [],
         largeFormatWarnings: [],
         gradientGroups: null,
         gradientGroupsLoading: false,
@@ -7940,6 +7945,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         previewAutoRefreshPending: false,
         previewSubmissionSequence: state.previewSubmissionSequence + 1,
         previewWarnings: [],
+        generateWarnings: [],
         largeFormatWarnings: [],
         ...DEFAULT_LAYER_IMAGES_STATE,
         ...DEFAULT_PUZZLE_PREVIEW_STATE,
@@ -8348,7 +8354,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         generateSettings.deviceProfileId,
         generateSettings.buildPlateId,
       );
-      set({ isGenerating: true, error: null, generatePerformanceTiming: null });
+      set({
+        isGenerating: true,
+        error: null,
+        generatePerformanceTiming: null,
+        generateWarnings: [],
+      });
       _generateRequestSequence += 1;
       const generateSequence = _generateRequestSequence;
       _activeFilenameEligibleGenerateSequence =
@@ -8586,6 +8597,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             batchPreviewItems: [],
             downloadUrl,
             threemfDiskPath: null,
+            generateWarnings: [],
             puzzleWarnings: puzzleResponse.warnings ?? [],
             puzzleResolvedRows: puzzleResponse.grid_rows ?? null,
             puzzleResolvedCols: puzzleResponse.grid_cols ?? null,
@@ -8641,6 +8653,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             batchPreviewItems: [],
             threemfDiskPath: null,
             downloadUrl,
+            generateWarnings: [],
             largeFormatWarnings: lfResponse.warnings ?? [],
           });
           _clientLog("generate: large-format zip received", {
@@ -8723,6 +8736,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           downloadUrl,
           threemfDiskPath: null,
           generatePerformanceTiming: response.performance_timing ?? null,
+          generateWarnings: response.warnings ?? [],
           largeFormatWarnings: [],
         });
         _logGenerateTimer("UI unlocked (isGenerating=false, modelUrl set)");
@@ -8730,6 +8744,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           model_url: modelUrl,
           download_url: downloadUrl,
           has_legacy_threemf_disk_path: Boolean(response.threemf_disk_path),
+          warning_count: (response.warnings ?? []).length,
         });
         trackLuminaEvent("lumina_converter_generate_done", {
           source_version: state.source_version,
@@ -8740,7 +8755,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           puzzle: false,
           large_format: false,
           elapsed_ms: getElapsedMsSince(_generateStartTime),
-          warning_count: 0,
+          warning_count: (response.warnings ?? []).length,
         });
         notifyCompletion("generation");
         return modelUrl;

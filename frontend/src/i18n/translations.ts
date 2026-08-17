@@ -5354,6 +5354,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "为避免超过像素预算，栅格切片清晰度已自动降低。",
     en: "Raster tiling density was reduced automatically to stay within the pixel budget.",
   },
+  wipe_tower_manual_adjustment_title: {
+    zh: "打印前必须手动调整擦料塔",
+    en: "Manual wipe tower adjustment required",
+  },
+  wipe_tower_manual_adjustment_warning: {
+    zh: "文件已继续生成，但当前模型和擦料塔无法在所选热床上同时安全摆放。Lumina 没有缩小模型，也没有关闭擦料塔；请务必在切片软件中手动移动模型，或调整擦料塔的宽度和位置后再打印。",
+    en: "The file was generated, but the model and wipe tower cannot both fit safely on the selected bed. Lumina did not scale the model or disable the tower; before printing, move the model or adjust the tower width and position manually in the slicer.",
+  },
   basic_tile_width: {
     zh: "切片宽度",
     en: "Tile Width",
@@ -6542,6 +6550,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   "batch.warnings.previewLimited.body": {
     zh: "批量 3MF 已包含全部成功模型；3D 预览会按当前热床尺寸自动显示可容纳的前若干个模型。",
     en: "The batch 3MF includes every successful model; the 3D preview automatically shows the first models that fit on the current print bed.",
+  },
+  "batch.warnings.wipeTowerManual.title": {
+    zh: "打印前必须手动调整擦料塔",
+    en: "Manual wipe tower adjustment required",
+  },
+  "batch.warnings.wipeTowerManual.body": {
+    zh: "批量 3MF 已继续生成，但全部模型与擦料塔无法在所选热床上同时安全摆放。Lumina 没有缩小模型，也没有关闭擦料塔；请务必在切片软件中手动调整后再打印。",
+    en: "The batch 3MF was generated, but the full model group and wipe tower cannot fit safely on the selected bed. Lumina did not scale the models or disable the tower; adjust them manually in the slicer before printing.",
   },
 
   // ==================== Slicer Selector ====================

@@ -171,6 +171,38 @@ def test_generate_response_exposes_worker_pool_timing() -> None:
     assert performance["endpoint_post_worker_ms"] >= 0.0
 
 
+def test_generate_response_forwards_embedded_wipe_tower_warning() -> None:
+    sid = _create_session_with_preview_and_files(_test_store)
+    _mock_pool.submit = AsyncMock(
+        return_value={
+            "threemf_path": "/tmp/manual-adjustment.3mf",
+            "glb_path": None,
+            "status_msg": "OK",
+        }
+    )
+    payload = {
+        "session_id": sid,
+        "params": {
+            "lut_name": "test_lut",
+            "modeling_mode": "high-fidelity",
+        },
+    }
+
+    with (
+        patch("os.path.exists", return_value=True),
+        patch(
+            "api.routers.converter.generate.read_wipe_tower_placement_warnings",
+            return_value=["wipe_tower_manual_adjustment_required"],
+        ),
+    ):
+        response = client.post("/api/convert/generate", json=payload)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["warnings"] == [
+        "wipe_tower_manual_adjustment_required"
+    ]
+
+
 def _create_session_with_preview_and_files(store: SessionStore) -> str:
     """Create a session pre-populated with preview_cache and file paths."""
     sid: str = store.create()

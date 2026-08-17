@@ -75,6 +75,7 @@ describe("ActionBar — auto batch mode", () => {
       modelUrl: null,
       threemfDiskPath: null,
       downloadUrl: null,
+      generateWarnings: [],
     });
     vi.mocked(recipeImportFlow.exportShareCard).mockResolvedValue(undefined);
     vi.mocked(recipeImportFlow.exportSidecar).mockResolvedValue(undefined);
@@ -94,6 +95,20 @@ describe("ActionBar — auto batch mode", () => {
     expect(screen.getByText("预览")).toBeInTheDocument();
     expect(screen.getByText("生成")).toBeInTheDocument();
     expect(screen.queryByText("批量生成")).not.toBeInTheDocument();
+  });
+
+  it("shows a mandatory manual-adjustment warning for a generated wipe tower conflict", () => {
+    useConverterStore.setState({
+      downloadUrl: "/api/files/model.3mf",
+      generateWarnings: ["wipe_tower_manual_adjustment_required"],
+    });
+
+    render(<ActionBar />);
+
+    expect(screen.getByText("打印前必须手动调整擦料塔")).toBeInTheDocument();
+    expect(
+      screen.getByText(/没有缩小模型，也没有关闭擦料塔/),
+    ).toBeInTheDocument();
   });
 
   // --- BatchMode (batchFiles has items → batchMode true) ---

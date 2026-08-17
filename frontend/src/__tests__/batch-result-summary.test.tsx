@@ -70,6 +70,16 @@ const propsD: BatchResponse = {
   warnings: [],
 };
 
+const propsE: BatchResponse = {
+  ...propsA,
+  warnings: [
+    {
+      code: "wipe_tower_manual_adjustment_required",
+      message: "raw fallback should not be rendered",
+    },
+  ],
+};
+
 // Lazy import to allow vi.mock to take effect before module loads
 async function importComponent() {
   const mod = await import("../components/ui/BatchResultSummary");
@@ -148,6 +158,25 @@ describe("BatchResultSummary", () => {
       const BatchResultSummary = await importComponent();
       // Should render without throwing
       expect(() => render(<BatchResultSummary result={propsC} />)).not.toThrow();
+    });
+  });
+
+  describe("wipe-tower manual warning", () => {
+    it("renders the localized manual-adjustment warning and keeps the download", async () => {
+      const BatchResultSummary = await importComponent();
+      render(<BatchResultSummary result={propsE} />);
+
+      expect(
+        screen.getByText(
+          translations["batch.warnings.wipeTowerManual.body"].zh,
+        ),
+      ).toBeInTheDocument();
+      expect(screen.queryByText("raw fallback should not be rendered")).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("link", {
+          name: translations["batch.download.mergedThreemf"].zh,
+        }),
+      ).toBeInTheDocument();
     });
   });
 

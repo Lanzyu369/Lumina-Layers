@@ -61,3 +61,16 @@ def test_generate_response_includes_performance_timing() -> None:
     assert data["performance_timing"]["result_delivery_ms"] == 1.0
     assert data["download_url"] == "/api/files/model.3mf"
     assert data["threemf_disk_path"] is None
+
+
+def test_generate_response_includes_wipe_tower_manual_warning_codes() -> None:
+    response = GenerateResponse(
+        status="ok",
+        message="Model generated",
+        download_url="/api/files/model.3mf",
+        warnings=["wipe_tower_manual_adjustment_required"],
+    )
+
+    assert response.model_dump()["warnings"] == [
+        "wipe_tower_manual_adjustment_required"
+    ]

@@ -1277,6 +1277,48 @@ class TestBatchMergeFlow:
         assert len(body["results"]) == 3
         assert all(r["status"] == "success" for r in body["results"])
 
+    def test_merged_wipe_tower_warning_is_returned_with_download(self) -> None:
+        _mock_pool.submit = AsyncMock(
+            return_value=_make_worker_result("img.png", 30.0, 20.0),
+        )
+
+        with (
+            patch(
+                "api.routers.converter.generate.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.generate.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write",
+                _noop_3mf_write,
+            ),
+            patch(
+                "api.routers.converter.generate.read_wipe_tower_placement_warnings",
+                return_value=["wipe_tower_manual_adjustment_required"],
+            ),
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[("images", _make_test_image_buf("img.png"))],
+                data={"lut_name": "test_lut"},
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["download_url"] is not None
+        assert body["warnings"] == [
+            {
+                "code": "wipe_tower_manual_adjustment_required",
+                "message": (
+                    "文件已继续生成，但当前模型和擦料塔无法在所选热床上同时安全摆放。"
+                    "请务必在切片软件中手动移动模型，或调整擦料塔的宽度和位置后再打印。"
+                ),
+            }
+        ]
+
     def test_preview_registration_failure_preserves_final_download(self) -> None:
         """Preview registration failure should not discard the merged 3MF."""
         _mock_pool.submit = AsyncMock(

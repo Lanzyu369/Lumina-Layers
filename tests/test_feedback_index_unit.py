@@ -314,6 +314,9 @@ def _full_advanced_params() -> dict[str, object]:
         "generation": {
             "structure_mode": "flat",
             "modeling_mode": "high_fidelity",
+            "wipe_tower_warning_codes": [
+                "wipe_tower_manual_adjustment_required"
+            ],
         },
         "relief": {"enable_relief": True},
         "outline": {"enable_outline": True},
@@ -356,6 +359,10 @@ def test_index_renders_advanced_params_section_with_eight_toggles(tmp_path: Path
     assert "- puzzleEnabled: disabled" in md
     assert "- largeFormatEnabled: enabled" in md
     assert "- spatial_edit_count: 3" in md
+    assert (
+        "- wipe_tower_warning_codes: "
+        "wipe_tower_manual_adjustment_required"
+    ) in md
 
     # Section ordering: Workflow Snapshot → Advanced Generation Parameters → Recent Actions.
     idx_snapshot = md.index("## Workflow Snapshot")

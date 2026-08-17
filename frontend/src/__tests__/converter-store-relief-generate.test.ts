@@ -453,6 +453,29 @@ describe("converter store relief generate flow", () => {
     expect(useConverterStore.getState().generatePerformanceTiming).toBeNull();
   });
 
+  it("stores manual wipe-tower warnings while keeping the generated download", async () => {
+    const useConverterStore = await loadStore();
+    mocks.convertGenerate.mockResolvedValue({
+      ...generateResponse(),
+      warnings: ["wipe_tower_manual_adjustment_required"],
+    });
+    useConverterStore.setState({
+      ...baseReadyState(),
+      sessionId: "session-relief",
+      palette: PREVIEW_PALETTE,
+      generateWarnings: [],
+    });
+
+    await useConverterStore.getState().submitGenerate();
+
+    expect(useConverterStore.getState().downloadUrl).toBe(
+      "/api/files/model.3mf",
+    );
+    expect(useConverterStore.getState().generateWarnings).toEqual([
+      "wipe_tower_manual_adjustment_required",
+    ]);
+  });
+
   it("sends auto-built relief heights as store values plus spacer thickness", async () => {
     const useConverterStore = await loadStore();
     useConverterStore.setState({

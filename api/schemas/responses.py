@@ -929,6 +929,7 @@ class GenerateResponse(_NoPublic3mfDiskPathMixin):
     download_url: str
     preview_3d_url: Optional[str] = None
     threemf_disk_path: Optional[str] = None
+    warnings: list[str] = Field(default_factory=list)
     performance_timing: Optional[PerformanceTimingResponse] = None
 
 
