@@ -2376,6 +2376,11 @@ async def upload_heightmap(
     # 7. Compute per-color average height from heightmap
     base_thickness: float = PrinterConfig.LAYER_HEIGHT  # 0.08mm
     mask_solid: np.ndarray | None = cache.get("mask_solid")
+    height_matrix = HeightmapLoader._map_grayscale_to_height(
+        grayscale_resized,
+        max_relief_height,
+        base_thickness,
+    )
 
     color_height_map: dict[str, float] = {}
     palette_data: list[dict] = cache.get("color_palette", [])
@@ -2395,11 +2400,7 @@ async def upload_heightmap(
             color_height_map[hex_key] = base_thickness
             continue
 
-        # Average grayscale value at matching pixel positions
-        avg_gray = float(np.mean(grayscale_resized[color_mask]))
-
-        # Map to height range [base_thickness, max_relief_height]
-        height = max_relief_height - (avg_gray / 255.0) * (max_relief_height - base_thickness)
+        height = float(np.mean(height_matrix[color_mask]))
         color_height_map[hex_key] = round(height, 4)
 
     # 8. Store heightmap data in session

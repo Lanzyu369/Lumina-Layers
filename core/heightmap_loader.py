@@ -2,7 +2,7 @@
 Lumina Studio - 高度图加载与处理模块 (Heightmap Loader)
 
 负责加载灰度高度图并将其转换为可用于 3D 模型生成的高度矩阵。
-灰度值映射规则：黑色(0) = 最高浮雕高度，白色(255) = 最低底板厚度。
+灰度值映射规则：黑色(0) = 最低底板厚度，白色(255) = 最高浮雕高度。
 """
 
 import logging
@@ -77,9 +77,9 @@ class HeightmapLoader:
     def _map_grayscale_to_height(grayscale: np.ndarray, max_relief_height: float, base_thickness: float) -> np.ndarray:
         """将灰度值映射为高度值，使用 NumPy 向量化运算。
 
-        公式: height_mm = max_relief_height - (grayscale / 255.0) * (max_relief_height - base_thickness)
-        黑色(0) → max_relief_height（最高点）
-        白色(255) → base_thickness（最低点）
+        公式: height_mm = base_thickness + (grayscale / 255.0) * (max_relief_height - base_thickness)
+        黑色(0) → base_thickness（最低点）
+        白色(255) → max_relief_height（最高点）
 
         Args:
             grayscale: (H, W) uint8 灰度图
@@ -89,7 +89,9 @@ class HeightmapLoader:
         Returns:
             np.ndarray: (H, W) float32 高度值，单位 mm
         """
-        height_mm = max_relief_height - (grayscale.astype(np.float32) / 255.0) * (max_relief_height - base_thickness)
+        height_mm = base_thickness + (grayscale.astype(np.float32) / 255.0) * (
+            max_relief_height - base_thickness
+        )
         return height_mm.astype(np.float32)
 
     @staticmethod
