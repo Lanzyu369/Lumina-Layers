@@ -947,6 +947,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const modelSurfaceBusy =
     showModelSurfaceSelector && (modelSurfaceLoading || modelSurfaceSelecting);
   const modelBounds = useConverterStore((s) => s.modelBounds);
+  const colorContours = useConverterStore((s) => s.colorContours);
   const diagnosticsSamplingEnabled = diagnosticsVisible || getThreePerfDebugConfig().enabled;
   const hasPerformanceTiming = Boolean(previewPerformanceTiming || generatePerformanceTiming);
 
@@ -1467,6 +1468,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             offsetY={loopOffsetY}
             positionPreset={loopPositionPreset}
             modelBounds={modelBounds}
+            contours={colorContours}
             cameraPanModifierActive={isSpacePanActive}
           />
         )}

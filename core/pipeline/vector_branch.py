@@ -450,7 +450,72 @@ def _finite_scene_bounds(scene: trimesh.Scene) -> np.ndarray | None:
     return bounds
 
 
-def _vector_loop_attach_point(ctx: dict, scene_bounds: np.ndarray) -> tuple[float, float]:
+def _scene_top_edge_for_contact_band(
+    scene: trimesh.Scene,
+    center_x: float,
+    contact_width: float,
+) -> float | None:
+    """Return the highest transformed mesh edge inside a horizontal band."""
+    if contact_width <= 0:
+        return None
+
+    band_min = center_x - contact_width / 2.0
+    band_max = center_x + contact_width / 2.0
+    top_y = float("-inf")
+
+    for node_name in scene.graph.nodes_geometry:
+        try:
+            transform, geometry_name = scene.graph[node_name]
+            geometry = scene.geometry[geometry_name]
+            vertices = trimesh.transform_points(
+                np.asarray(geometry.vertices, dtype=np.float64),
+                transform,
+            )[:, :2]
+            edges = np.asarray(geometry.edges_unique, dtype=np.int64)
+        except (AttributeError, KeyError, TypeError, ValueError):
+            continue
+        if vertices.ndim != 2 or vertices.shape[1] != 2 or edges.ndim != 2:
+            continue
+        if edges.shape[1] != 2 or len(edges) == 0:
+            continue
+
+        starts = vertices[edges[:, 0]]
+        ends = vertices[edges[:, 1]]
+        finite = np.all(np.isfinite(starts), axis=1) & np.all(
+            np.isfinite(ends), axis=1
+        )
+        starts = starts[finite]
+        ends = ends[finite]
+        if len(starts) == 0:
+            continue
+
+        for points in (starts, ends):
+            inside = (points[:, 0] >= band_min) & (points[:, 0] <= band_max)
+            if np.any(inside):
+                top_y = max(top_y, float(np.max(points[inside, 1])))
+
+        delta_x = ends[:, 0] - starts[:, 0]
+        non_vertical = np.abs(delta_x) > 1e-12
+        for boundary_x in (band_min, band_max):
+            ratios = np.zeros_like(delta_x)
+            ratios[non_vertical] = (
+                (boundary_x - starts[non_vertical, 0]) / delta_x[non_vertical]
+            )
+            crosses = non_vertical & (ratios >= 0.0) & (ratios <= 1.0)
+            if np.any(crosses):
+                edge_y = starts[crosses, 1] + ratios[crosses] * (
+                    ends[crosses, 1] - starts[crosses, 1]
+                )
+                top_y = max(top_y, float(np.max(edge_y)))
+
+    return top_y if np.isfinite(top_y) else None
+
+
+def _vector_loop_attach_point(
+    ctx: dict,
+    scene_bounds: np.ndarray,
+    scene: trimesh.Scene | None = None,
+) -> tuple[float, float]:
     min_x, min_y = float(scene_bounds[0, 0]), float(scene_bounds[0, 1])
     max_x, max_y = float(scene_bounds[1, 0]), float(scene_bounds[1, 1])
     center_x = (min_x + max_x) / 2.0
@@ -462,6 +527,21 @@ def _vector_loop_attach_point(ctx: dict, scene_bounds: np.ndarray) -> tuple[floa
         attach_y = _coerce_finite_float(loop_pos[1], max_y)
     else:
         preset = str(ctx.get("loop_position_preset") or "top-center")
+        offset_x = _coerce_finite_float(ctx.get("loop_offset_x"), 0.0)
+        offset_y = _coerce_finite_float(ctx.get("loop_offset_y"), 0.0)
+        if (
+            preset == "top-center"
+            and scene is not None
+            and abs(_coerce_finite_float(ctx.get("loop_angle"), 0.0)) <= 1e-9
+        ):
+            requested_x = center_x + offset_x
+            local_top = _scene_top_edge_for_contact_band(
+                scene,
+                requested_x,
+                _coerce_positive_float(ctx.get("loop_width"), 4.0),
+            )
+            if local_top is not None:
+                return requested_x, local_top + max(0.0, offset_y)
         if preset == "top-left":
             attach_x, attach_y = min_x, max_y
         elif preset == "top-right":
@@ -555,7 +635,7 @@ def _inject_vector_keychain_loop(
     if bounds is None:
         return False
 
-    attach_x, attach_y = _vector_loop_attach_point(ctx, bounds)
+    attach_x, attach_y = _vector_loop_attach_point(ctx, bounds, scene)
     _color_idx, rgba, material_name = _resolve_vector_loop_style(
         ctx,
         scene,

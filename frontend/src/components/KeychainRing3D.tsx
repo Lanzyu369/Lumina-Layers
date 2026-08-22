@@ -84,6 +84,7 @@ export interface KeychainRing3DProps {
     maxY: number;
     maxZ: number;
   } | null;
+  contours?: Record<string, number[][][]>;
 }
 
 /**
@@ -141,29 +142,152 @@ export function createKeychainRingGeometry(
   return geometry;
 }
 
+function contourTopWithinBand(
+  contours: Record<string, number[][][]> | undefined,
+  modelBounds: { minX: number; maxX: number; minY: number; maxY: number },
+  centerX: number,
+  contactWidth: number,
+): number | null {
+  if (!contours || contactWidth <= 0) {
+    return null;
+  }
+
+  const polygons = Object.values(contours).flat();
+  let contourMinX = Number.POSITIVE_INFINITY;
+  let contourMaxX = Number.NEGATIVE_INFINITY;
+  let contourMinY = Number.POSITIVE_INFINITY;
+  let contourMaxY = Number.NEGATIVE_INFINITY;
+  for (const polygon of polygons) {
+    for (const point of polygon) {
+      if (point.length < 2 || !Number.isFinite(point[0]) || !Number.isFinite(point[1])) {
+        continue;
+      }
+      contourMinX = Math.min(contourMinX, point[0]);
+      contourMaxX = Math.max(contourMaxX, point[0]);
+      contourMinY = Math.min(contourMinY, point[1]);
+      contourMaxY = Math.max(contourMaxY, point[1]);
+    }
+  }
+
+  const contourWidth = contourMaxX - contourMinX;
+  const contourHeight = contourMaxY - contourMinY;
+  if (!Number.isFinite(contourWidth) || !Number.isFinite(contourHeight)) {
+    return null;
+  }
+  if (contourWidth <= 0 || contourHeight <= 0) {
+    return null;
+  }
+
+  const scaleX = (modelBounds.maxX - modelBounds.minX) / contourWidth;
+  const scaleY = (modelBounds.maxY - modelBounds.minY) / contourHeight;
+  const mapPoint = (point: number[]) => ({
+    x: modelBounds.minX + (point[0] - contourMinX) * scaleX,
+    y: modelBounds.minY + (point[1] - contourMinY) * scaleY,
+  });
+  const bandMinX = centerX - contactWidth / 2;
+  const bandMaxX = centerX + contactWidth / 2;
+  let topY = Number.NEGATIVE_INFINITY;
+
+  const includePoint = (x: number, y: number) => {
+    if (x >= bandMinX && x <= bandMaxX) {
+      topY = Math.max(topY, y);
+    }
+  };
+
+  for (const polygon of polygons) {
+    if (polygon.length < 2) {
+      continue;
+    }
+    for (let index = 0; index < polygon.length; index += 1) {
+      const startPoint = polygon[index];
+      const endPoint = polygon[(index + 1) % polygon.length];
+      if (
+        startPoint.length < 2
+        || endPoint.length < 2
+        || !Number.isFinite(startPoint[0])
+        || !Number.isFinite(startPoint[1])
+        || !Number.isFinite(endPoint[0])
+        || !Number.isFinite(endPoint[1])
+      ) {
+        continue;
+      }
+      const start = mapPoint(startPoint);
+      const end = mapPoint(endPoint);
+      includePoint(start.x, start.y);
+      includePoint(end.x, end.y);
+
+      const deltaX = end.x - start.x;
+      if (Math.abs(deltaX) <= Number.EPSILON) {
+        continue;
+      }
+      for (const boundaryX of [bandMinX, bandMaxX]) {
+        const ratio = (boundaryX - start.x) / deltaX;
+        if (ratio >= 0 && ratio <= 1) {
+          topY = Math.max(topY, start.y + ratio * (end.y - start.y));
+        }
+      }
+    }
+  }
+
+  return Number.isFinite(topY) ? topY : null;
+}
+
 /**
  * Compute keychain loop position from model bounds and offset.
  * 根据模型边界和偏移量计算钥匙扣挂孔的 3D 位置。
  *
- * Always anchors at top-center of the model; user repositions via drag/offset.
- * 始终锚定在模型顶部中心，用户通过拖拽/偏移量重新定位。
+ * Anchors top-center loops to the local contour when contour data is available.
+ * 有轮廓数据时，顶部居中挂环会锚定到接触带下方的局部轮廓。
  *
- * @param _preset - Unused, kept for API compatibility. (未使用，保留 API 兼容性)
+ * @param preset - Position preset. Local contour protection applies to top-center.
+ *   (位置预设；局部轮廓保护用于顶部居中)
  * @param modelBounds - Model bounding box in mm. (模型包围盒，毫米)
  * @param offsetX - X offset in mm. (X 偏移量，毫米)
  * @param offsetY - Y offset in mm. (Y 偏移量，毫米)
  * @returns Computed {x, y} position in mm. (计算后的 {x, y} 位置，毫米)
  */
 export function computeLoopPosition(
-  _preset: string,
+  preset: string,
   modelBounds: { minX: number; maxX: number; minY: number; maxY: number },
   offsetX: number,
   offsetY: number,
+  contours?: Record<string, number[][][]>,
+  contactWidth = 0,
 ): { x: number; y: number } {
-  const baseX = (modelBounds.minX + modelBounds.maxX) / 2;
-  const baseY = modelBounds.maxY;
+  return computeLoopPlacement(
+    preset,
+    modelBounds,
+    offsetX,
+    offsetY,
+    contours,
+    contactWidth,
+  ).position;
+}
 
-  return { x: baseX + offsetX, y: baseY + offsetY };
+function computeLoopPlacement(
+  preset: string,
+  modelBounds: { minX: number; maxX: number; minY: number; maxY: number },
+  offsetX: number,
+  offsetY: number,
+  contours: Record<string, number[][][]> | undefined,
+  contactWidth: number,
+): { position: { x: number; y: number }; usesLocalContour: boolean } {
+  const baseX = (modelBounds.minX + modelBounds.maxX) / 2;
+  const x = baseX + offsetX;
+  const localTop = preset === "top-center"
+    ? contourTopWithinBand(contours, modelBounds, x, contactWidth)
+    : null;
+  if (localTop !== null) {
+    return {
+      position: { x, y: localTop + Math.max(0, offsetY) },
+      usesLocalContour: true,
+    };
+  }
+
+  return {
+    position: { x, y: modelBounds.maxY + offsetY },
+    usesLocalContour: false,
+  };
 }
 
 /** Visual feedback constants for drag interaction states. (拖拽交互状态的视觉反馈常量) */
@@ -187,6 +311,7 @@ function KeychainRing3D({
   offsetY,
   positionPreset,
   modelBounds,
+  contours,
 }: KeychainRing3DProps) {
   const { controls, camera, gl } = useThree();
 
@@ -220,16 +345,25 @@ function KeychainRing3D({
   }, [geometry]);
 
   // Memoize position — recompute when preset/offset/bounds change (Req 2.2, 3.4)
-  const position = useMemo(() => {
+  const placement = useMemo(() => {
     if (!modelBounds) return null;
-    return computeLoopPosition(positionPreset, modelBounds, offsetX, offsetY);
-  }, [positionPreset, modelBounds, offsetX, offsetY]);
+    return computeLoopPlacement(
+      positionPreset,
+      modelBounds,
+      offsetX,
+      offsetY,
+      Math.abs(angle) <= 1e-9 ? contours : undefined,
+      width,
+    );
+  }, [positionPreset, modelBounds, offsetX, offsetY, angle, contours, width]);
+  const position = placement?.position ?? null;
+  const constrainToLocalContour = placement?.usesLocalContour ?? false;
 
-  // Base position without offset (for computing drag delta)
-  const basePosition = useMemo(() => {
-    if (!modelBounds) return null;
-    return computeLoopPosition(positionPreset, modelBounds, 0, 0);
-  }, [positionPreset, modelBounds]);
+  useEffect(() => {
+    if (enabled && constrainToLocalContour && offsetY < 0) {
+      setLoopOffsetY(0);
+    }
+  }, [enabled, constrainToLocalContour, offsetY, setLoopOffsetY]);
 
   // Memoize rotation in radians (Req 1.2)
   const angleRad = useMemo(() => angle * (Math.PI / 180), [angle]);
@@ -303,7 +437,10 @@ function KeychainRing3D({
       const deltaY = intersectPoint.current.y - dragStartWorld.current.y;
 
       const newOffsetX = clamp(dragStartOffset.current.x + deltaX);
-      const newOffsetY = clamp(dragStartOffset.current.y + deltaY);
+      const requestedOffsetY = clamp(dragStartOffset.current.y + deltaY);
+      const newOffsetY = constrainToLocalContour
+        ? Math.max(0, requestedOffsetY)
+        : requestedOffsetY;
 
       setLoopOffsetX(newOffsetX);
       setLoopOffsetY(newOffsetY);
@@ -325,7 +462,17 @@ function KeychainRing3D({
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
     };
-  }, [isDragging, camera, gl, isHovered, clamp, setControlsEnabled, setLoopOffsetX, setLoopOffsetY]);
+  }, [
+    isDragging,
+    camera,
+    gl,
+    isHovered,
+    clamp,
+    constrainToLocalContour,
+    setControlsEnabled,
+    setLoopOffsetX,
+    setLoopOffsetY,
+  ]);
 
   // --- Hover handlers (Req 7.7) ---
 
@@ -360,7 +507,7 @@ function KeychainRing3D({
       ? DRAG_VISUAL.hover
       : DRAG_VISUAL.default;
 
-  const canRenderRing = Boolean(enabled && geometry && modelBounds && position && basePosition);
+  const canRenderRing = Boolean(enabled && geometry && modelBounds && position);
 
   useEffect(() => {
     if (canRenderRing || (!isDragging && !isHovered)) {
@@ -387,7 +534,7 @@ function KeychainRing3D({
   }, [restoreInteractionState]);
 
   // Return null when modelBounds is null (Req 6.2) or params invalid (Req 6.3)
-  if (!enabled || !geometry || !modelBounds || !position || !basePosition) {
+  if (!enabled || !geometry || !modelBounds || !position) {
     return null;
   }
 
