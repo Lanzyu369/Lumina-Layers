@@ -468,6 +468,9 @@ async def material_sync_refresh(
             "installed_count": result["installed_count"],
             "skipped_count": result["skipped_count"],
             "failed_count": result["failed_count"],
+            "catalog_not_modified": bool(
+                result.get("catalog_not_modified", False)
+            ),
         },
     )
     return MaterialSyncRefreshResponse(

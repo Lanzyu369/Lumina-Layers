@@ -205,6 +205,7 @@ _MATERIAL_SYNC_LOCK_STALE_SECONDS = 2 * 60 * 60
 _MATERIAL_SYNC_STATUS_CACHE_TTL_S = 5 * 60
 _MATERIAL_LIBRARY_CACHE_TTL_S = 5 * 60
 _MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE_TTL_S = 5 * 60
+_MATERIAL_REGISTRY_ETAG_MAX_BYTES = 1024
 _MATERIAL_LOCAL_ONLY_FILENAMES = frozenset({"usage_stats.json"})
 _MATERIAL_LOCAL_ONLY_DIRNAMES = frozenset({"_solver_cache"})
 _MATERIAL_SYNC_STATUS_CACHE_LOCK = threading.RLock()
@@ -2009,6 +2010,7 @@ def _empty_material_sync_index() -> dict[str, Any]:
         "installed": {},
         "revisions": {},
         "local_overrides": {},
+        "catalog_validators": {},
     }
 
 
@@ -2027,6 +2029,7 @@ def _load_material_sync_index_with_state(target_root: Path) -> tuple[dict[str, A
     index.setdefault("installed", {})
     index.setdefault("revisions", {})
     index.setdefault("local_overrides", {})
+    index.setdefault("catalog_validators", {})
     return index, "ready"
 
 
@@ -2093,6 +2096,143 @@ def _local_material_sync_entries(target_root: Path) -> list[dict[str, Any]]:
             }
         )
     return entries
+
+
+def _material_sync_binding_projection(index: dict[str, Any]) -> dict[str, Any]:
+    def project_entry(
+        material_id: str,
+        raw_entry: Any,
+        *,
+        revision_key: str | None = None,
+    ) -> dict[str, Any]:
+        if not isinstance(raw_entry, dict):
+            return {
+                "material_id": material_id,
+                "revision_key": revision_key,
+                "invalid_entry": raw_entry,
+            }
+        return {
+            "material_id": material_id,
+            "revision_key": revision_key,
+            "revision_id": str(raw_entry.get("revision_id") or ""),
+            "content_hash": str(raw_entry.get("content_hash") or ""),
+            "channel": str(raw_entry.get("channel") or ""),
+            "source": str(raw_entry.get("source") or ""),
+            "local_directory": str(raw_entry.get("local_directory") or ""),
+        }
+
+    installed = index.get("installed")
+    installed_projection = [
+        project_entry(str(material_id), raw_entry)
+        for material_id, raw_entry in (
+            installed.items() if isinstance(installed, dict) else ()
+        )
+    ]
+    installed_projection.sort(
+        key=lambda entry: str(entry.get("material_id") or "").casefold()
+    )
+
+    revisions = index.get("revisions")
+    revision_projection: list[dict[str, Any]] = []
+    for material_id, raw_revisions in (
+        revisions.items() if isinstance(revisions, dict) else ()
+    ):
+        if not isinstance(raw_revisions, dict):
+            revision_projection.append(
+                {
+                    "material_id": str(material_id),
+                    "invalid_revisions": raw_revisions,
+                }
+            )
+            continue
+        for revision_id, raw_entry in raw_revisions.items():
+            revision_projection.append(
+                project_entry(
+                    str(material_id),
+                    raw_entry,
+                    revision_key=str(revision_id),
+                )
+            )
+    revision_projection.sort(
+        key=lambda entry: (
+            str(entry.get("material_id") or "").casefold(),
+            str(entry.get("revision_key") or "").casefold(),
+        )
+    )
+    local_overrides = index.get("local_overrides")
+    return {
+        "installed": installed_projection,
+        "revisions": revision_projection,
+        "local_overrides": (
+            local_overrides if isinstance(local_overrides, dict) else {}
+        ),
+    }
+
+
+def _material_sync_local_state_hash(target_root: Path) -> str:
+    index = _load_material_sync_index(target_root)
+    local_entries: list[dict[str, Any]] = []
+    if target_root.exists():
+        for material_dir in _discover_saved_material_dirs(target_root):
+            try:
+                package_manifest, _files_to_write = (
+                    _build_material_bundle_package_manifest(
+                        target_root=target_root,
+                        material_dir=material_dir,
+                    )
+                )
+            except (
+                FileNotFoundError,
+                OSError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+                UnicodeDecodeError,
+            ):
+                continue
+            raw_files = package_manifest.get("files")
+            file_records = [
+                {
+                    "path": str(record.get("path") or ""),
+                    "role": str(record.get("role") or ""),
+                    "sha256": str(record.get("sha256") or ""),
+                    "bytes": int(record.get("bytes") or 0),
+                }
+                for record in (raw_files if isinstance(raw_files, list) else [])
+                if isinstance(record, dict)
+            ]
+            file_records.sort(key=lambda record: str(record["path"]).casefold())
+            local_entries.append(
+                {
+                    "material_id": str(package_manifest.get("material_id") or ""),
+                    "revision_id": str(package_manifest.get("revision_id") or ""),
+                    "content_hash": str(package_manifest.get("content_hash") or ""),
+                    "local_directory": str(
+                        package_manifest.get("local_directory") or ""
+                    ),
+                    "files": file_records,
+                }
+            )
+    local_entries.sort(
+        key=lambda entry: (
+            str(entry["local_directory"]).casefold(),
+            str(entry["material_id"]),
+            str(entry["revision_id"]),
+            str(entry["content_hash"]),
+        )
+    )
+    state_payload = {
+        "materials": local_entries,
+        "bindings": _material_sync_binding_projection(index),
+    }
+    canonical_state = json.dumps(
+        state_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(canonical_state).hexdigest()}"
 
 
 def _local_material_paths_by_sync_signature(
@@ -2497,6 +2637,94 @@ def _adopt_existing_local_material_bundle_revision(
     return candidate_path
 
 
+def _normalize_material_registry_etag(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    etag = value.strip()
+    if (
+        not etag
+        or len(etag.encode("utf-8")) > _MATERIAL_REGISTRY_ETAG_MAX_BYTES
+        or re.fullmatch(r'(?:W/)?"[\x21\x23-\x7e]+"', etag) is None
+    ):
+        return None
+    return etag
+
+
+def _material_sync_catalog_validator_key(channels: Sequence[str]) -> str:
+    return ",".join(channels)
+
+
+def _material_sync_catalog_validator(
+    *,
+    index: dict[str, Any],
+    registry_url: str,
+    channels: Sequence[str],
+) -> dict[str, Any] | None:
+    validators = index.get("catalog_validators")
+    if not isinstance(validators, dict):
+        return None
+    registry_validators = validators.get(registry_url)
+    if not isinstance(registry_validators, dict):
+        return None
+    raw_validator = registry_validators.get(
+        _material_sync_catalog_validator_key(channels)
+    )
+    if not isinstance(raw_validator, dict):
+        return None
+    etag = _normalize_material_registry_etag(raw_validator.get("etag"))
+    local_state_hash = str(raw_validator.get("local_state_hash") or "")
+    checked_count = raw_validator.get("checked_count")
+    if (
+        etag is None
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", local_state_hash) is None
+        or isinstance(checked_count, bool)
+        or not isinstance(checked_count, int)
+        or checked_count < 0
+        or raw_validator.get("channels") != list(channels)
+    ):
+        return None
+    return {
+        "etag": etag,
+        "local_state_hash": local_state_hash,
+        "checked_count": checked_count,
+        "channels": list(channels),
+    }
+
+
+def _update_material_sync_catalog_validator(
+    *,
+    index: dict[str, Any],
+    registry_url: str,
+    channels: Sequence[str],
+    validator: dict[str, Any] | None,
+    now: str,
+) -> None:
+    validators = index.setdefault("catalog_validators", {})
+    if not isinstance(validators, dict):
+        validators = {}
+        index["catalog_validators"] = validators
+    channel_key = _material_sync_catalog_validator_key(channels)
+    if validator is None:
+        registry_validators = validators.get(registry_url)
+        if isinstance(registry_validators, dict):
+            registry_validators.pop(channel_key, None)
+            if not registry_validators:
+                validators.pop(registry_url, None)
+        return
+
+    registry_validators = validators.setdefault(registry_url, {})
+    if not isinstance(registry_validators, dict):
+        registry_validators = {}
+        validators[registry_url] = registry_validators
+    registry_validators[channel_key] = {
+        "etag": str(validator["etag"]),
+        "local_state_hash": str(validator["local_state_hash"]),
+        "checked_count": int(validator["checked_count"]),
+        "channels": list(channels),
+        "updated_at": now,
+    }
+
+
 def _record_material_registry_refresh(
     *,
     target_root: Path,
@@ -2507,6 +2735,7 @@ def _record_material_registry_refresh(
     installed_count: int,
     skipped_count: int,
     failed_count: int,
+    catalog_validator: dict[str, Any] | None,
 ) -> None:
     now = _now_iso()
     index = _load_material_sync_index(target_root)
@@ -2524,6 +2753,13 @@ def _record_material_registry_refresh(
         "skipped_count": skipped_count,
         "failed_count": failed_count,
     }
+    _update_material_sync_catalog_validator(
+        index=index,
+        registry_url=registry_url,
+        channels=channels,
+        validator=catalog_validator,
+        now=now,
+    )
     index["last_sync_at"] = now
     _write_material_sync_index(target_root, index)
 
@@ -2587,9 +2823,46 @@ def _material_sync_revision_entry_path(
     if not isinstance(local_directory, str) or not local_directory.strip():
         return None
     material_dir = target_root / _normalize_relative_directory_name(local_directory)
-    if (material_dir / "material.json").is_file():
+    archive_path = material_dir / "material.json"
+    try:
+        archive_payload = json.loads(archive_path.read_text(encoding="utf-8"))
+        if not isinstance(archive_payload, dict):
+            return None
+        actual_content_hash = _local_material_content_hash(
+            material_dir,
+            archive_payload,
+        )
+    except (
+        OSError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        UnicodeDecodeError,
+    ):
+        return None
+    if actual_content_hash == str(package.get("content_hash") or ""):
         return material_dir
     return None
+
+
+def _material_registry_catalog_is_locally_converged(
+    *,
+    target_root: Path,
+    catalog_entries: Sequence[dict[str, Any]],
+) -> bool:
+    for entry in catalog_entries:
+        if not all(
+            str(entry.get(field) or "").strip()
+            for field in ("material_id", "revision_id", "content_hash")
+        ):
+            return False
+        if _installed_material_bundle_revision_path(
+            target_root=target_root,
+            package=entry,
+            include_revision_history=True,
+        ) is None:
+            return False
+    return True
 
 
 class _MaterialSyncRefreshFileLock:
@@ -2861,8 +3134,34 @@ def _reject_material_registry_package_redirect(response: Any) -> None:
 
 
 def _reject_material_registry_catalog_redirect(response: Any) -> None:
-    if bool(getattr(response, "is_redirect", False)):
+    if (
+        int(getattr(response, "status_code", 0)) != 304
+        and bool(getattr(response, "is_redirect", False))
+    ):
         raise RuntimeError("Material registry catalog redirects are not allowed")
+
+
+def _request_material_registry_refresh_catalog(
+    *,
+    client: Any,
+    registry_url: str,
+    channels: Sequence[str],
+    headers: dict[str, str],
+    etag: str | None,
+) -> Any:
+    request_headers = dict(headers)
+    if etag is not None:
+        request_headers["If-None-Match"] = etag
+    response = client.get(
+        _material_registry_catalog_url(registry_url),
+        params=[("channel", channel) for channel in channels],
+        headers=request_headers,
+        follow_redirects=False,
+    )
+    _reject_material_registry_catalog_redirect(response)
+    if int(response.status_code) != 304:
+        response.raise_for_status()
+    return response
 
 
 def _public_material_registry_refresh_failure_error(exc: BaseException) -> str:
@@ -5574,6 +5873,19 @@ def refresh_material_sync_from_registry(
         headers = {"User-Agent": "LuminaStudioMaterialSync/1"}
         if auth_token:
             headers["Authorization"] = f"Bearer {auth_token}"
+        pre_request_state_hash = _material_sync_local_state_hash(target_root)
+        sync_index = _load_material_sync_index(target_root)
+        stored_validator = _material_sync_catalog_validator(
+            index=sync_index,
+            registry_url=normalized_registry_url,
+            channels=normalized_channels,
+        )
+        conditional_etag = (
+            str(stored_validator["etag"])
+            if stored_validator is not None
+            and stored_validator["local_state_hash"] == pre_request_state_hash
+            else None
+        )
         client_kwargs: dict[str, Any] = {
             "timeout": float(timeout_s),
             "follow_redirects": True,
@@ -5583,16 +5895,84 @@ def refresh_material_sync_from_registry(
 
         with httpx.Client(**client_kwargs) as client:
             try:
-                catalog_response = client.get(
-                    _material_registry_catalog_url(normalized_registry_url),
-                    params=[("channel", channel) for channel in normalized_channels],
+                catalog_response = _request_material_registry_refresh_catalog(
+                    client=client,
+                    registry_url=normalized_registry_url,
+                    channels=normalized_channels,
                     headers=headers,
-                    follow_redirects=False,
+                    etag=conditional_etag,
                 )
-                _reject_material_registry_catalog_redirect(catalog_response)
-                catalog_response.raise_for_status()
+                if int(catalog_response.status_code) == 304:
+                    if conditional_etag is None or stored_validator is None:
+                        raise ValueError(
+                            "Material registry returned 304 without a usable validator"
+                        )
+                    post_response_state_hash = _material_sync_local_state_hash(
+                        target_root
+                    )
+                    if post_response_state_hash == pre_request_state_hash:
+                        response_etag = _normalize_material_registry_etag(
+                            catalog_response.headers.get("etag")
+                        )
+                        checked_count = int(stored_validator["checked_count"])
+                        registry_state = (
+                            sync_index.get("registries", {}).get(
+                                normalized_registry_url
+                            )
+                            if isinstance(sync_index.get("registries"), dict)
+                            else None
+                        )
+                        cursor = (
+                            registry_state.get("last_cursor")
+                            if isinstance(registry_state, dict)
+                            and registry_state.get("channels")
+                            == normalized_channels
+                            else None
+                        )
+                        _record_material_registry_refresh(
+                            target_root=target_root,
+                            registry_url=normalized_registry_url,
+                            channels=normalized_channels,
+                            cursor=cursor,
+                            checked_count=checked_count,
+                            installed_count=0,
+                            skipped_count=checked_count,
+                            failed_count=0,
+                            catalog_validator={
+                                "etag": response_etag or conditional_etag,
+                                "local_state_hash": pre_request_state_hash,
+                                "checked_count": checked_count,
+                            },
+                        )
+                        return {
+                            "registry_url": normalized_registry_url,
+                            "channels": normalized_channels,
+                            "checked_count": checked_count,
+                            "installed_count": 0,
+                            "skipped_count": checked_count,
+                            "failed_count": 0,
+                            "installed_materials": [],
+                            "failures": [],
+                            "catalog_not_modified": True,
+                        }
+
+                    catalog_response = _request_material_registry_refresh_catalog(
+                        client=client,
+                        registry_url=normalized_registry_url,
+                        channels=normalized_channels,
+                        headers=headers,
+                        etag=None,
+                    )
+                    if int(catalog_response.status_code) == 304:
+                        raise ValueError(
+                            "Material registry returned 304 to an unconditional request"
+                        )
+
                 catalog_payload = catalog_response.json()
                 catalog_entries = _material_registry_catalog_entries(catalog_payload)
+                catalog_etag = _normalize_material_registry_etag(
+                    catalog_response.headers.get("etag")
+                )
             except httpx.HTTPError as exc:
                 raise RuntimeError("Material registry catalog request failed") from exc
             except ValueError as exc:
@@ -5728,6 +6108,30 @@ def refresh_material_sync_from_registry(
             if isinstance(catalog_payload, dict)
             else None
         )
+        local_state_hash = _material_sync_local_state_hash(target_root)
+        catalog_is_converged = (
+            failed_count == 0
+            and _material_registry_catalog_is_locally_converged(
+                target_root=target_root,
+                catalog_entries=catalog_entries,
+            )
+        )
+        verified_state_hash = (
+            _material_sync_local_state_hash(target_root)
+            if catalog_is_converged
+            else None
+        )
+        catalog_validator = (
+            {
+                "etag": catalog_etag,
+                "local_state_hash": local_state_hash,
+                "checked_count": checked_count,
+            }
+            if catalog_etag is not None
+            and catalog_is_converged
+            and verified_state_hash == local_state_hash
+            else None
+        )
         _record_material_registry_refresh(
             target_root=target_root,
             registry_url=normalized_registry_url,
@@ -5737,6 +6141,7 @@ def refresh_material_sync_from_registry(
             installed_count=installed_count,
             skipped_count=skipped_count,
             failed_count=failed_count,
+            catalog_validator=catalog_validator,
         )
         return {
             "registry_url": normalized_registry_url,
@@ -5747,6 +6152,7 @@ def refresh_material_sync_from_registry(
             "failed_count": failed_count,
             "installed_materials": installed_materials,
             "failures": failures,
+            "catalog_not_modified": False,
         }
 
 
