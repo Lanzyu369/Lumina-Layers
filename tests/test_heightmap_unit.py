@@ -25,26 +25,26 @@ OPTICAL_THICKNESS_MM = OPTICAL_LAYERS * LAYER_HEIGHT  # 0.4mm
 class TestGrayscaleMapping:
     """灰度映射边界条件测试"""
 
-    def test_pure_black_maps_to_max_height(self):
-        """纯黑图（全 0）映射为最大高度"""
+    def test_pure_black_maps_to_base_thickness(self):
+        """纯黑图（全 0）映射为底板厚度"""
         grayscale = np.zeros((10, 10), dtype=np.uint8)
         max_height = 5.0
         base_thickness = 1.0
 
         result = HeightmapLoader._map_grayscale_to_height(grayscale, max_height, base_thickness)
 
-        np.testing.assert_allclose(result, max_height, atol=1e-5)
+        np.testing.assert_allclose(result, base_thickness, atol=1e-5)
         assert result.dtype == np.float32
 
-    def test_pure_white_maps_to_base_thickness(self):
-        """纯白图（全 255）映射为底板厚度"""
+    def test_pure_white_maps_to_max_height(self):
+        """纯白图（全 255）映射为最大高度"""
         grayscale = np.full((10, 10), 255, dtype=np.uint8)
         max_height = 5.0
         base_thickness = 1.0
 
         result = HeightmapLoader._map_grayscale_to_height(grayscale, max_height, base_thickness)
 
-        np.testing.assert_allclose(result, base_thickness, atol=1e-5)
+        np.testing.assert_allclose(result, max_height, atol=1e-5)
 
     def test_mid_gray_maps_to_middle_value(self):
         """中灰图（128）映射为中间值"""
@@ -54,8 +54,8 @@ class TestGrayscaleMapping:
 
         result = HeightmapLoader._map_grayscale_to_height(grayscale, max_height, base_thickness)
 
-        # 公式: height = 5.0 - (128/255) * (5.0 - 1.0)
-        expected = max_height - (128.0 / 255.0) * (max_height - base_thickness)
+        # 公式: height = 1.0 + (128/255) * (5.0 - 1.0)
+        expected = base_thickness + (128.0 / 255.0) * (max_height - base_thickness)
         np.testing.assert_allclose(result, expected, atol=1e-4)
 
 

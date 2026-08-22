@@ -252,8 +252,8 @@ class TestNativeVectorRelief:
             heightmap_max_height=2.0,
         )
 
-        assert scene.geometry["Red"].bounds[:, 2] == pytest.approx([1.84, 2.0])
-        assert scene.geometry["White"].bounds[:, 2] == pytest.approx([0.88, 1.04])
+        assert scene.geometry["Red"].bounds[:, 2] == pytest.approx([0.88, 1.04])
+        assert scene.geometry["White"].bounds[:, 2] == pytest.approx([1.84, 2.0])
         assert scene.geometry["Red"].extents[2] == pytest.approx(
             scene.geometry["White"].extents[2]
         )
