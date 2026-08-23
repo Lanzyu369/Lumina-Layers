@@ -17,6 +17,15 @@ _BRAND_BY_VENDOR_KEY = {
     "Elegoo": "Elegoo",
     "Anycubic": "Anycubic",
     "Flashforge": "Flashforge",
+    "Q Series": "QIDI",
+    "X 4 Series": "QIDI",
+    "X 5 Series": "QIDI",
+}
+
+_VENDOR_SLUG_BY_VENDOR_KEY = {
+    "Q Series": "qidi",
+    "X 4 Series": "qidi",
+    "X 5 Series": "qidi",
 }
 
 
@@ -131,7 +140,10 @@ def build_device_registry_entry(
     safe_source_version = _safe_path_segment(source_version)
     printer_model = str(settings.get("printer_model") or profile.name)
     nozzle = _first_nozzle(settings)
-    vendor_slug = _slug(profile.vendor_key)
+    vendor_slug = _VENDOR_SLUG_BY_VENDOR_KEY.get(
+        profile.vendor_key,
+        _slug(profile.vendor_key),
+    )
     machine_slug = _slug(printer_model)
     machine_profile_id = f"{provider.slicer_id}:{vendor_slug}:{machine_slug}"
     device_profile_id = f"{machine_profile_id}:{nozzle}"
@@ -141,11 +153,13 @@ def build_device_registry_entry(
         source_profile_name=profile.name,
         slicer_id=provider.slicer_id,
     )
-    if provider.slicer_id == "FlashStudio":
-        # Flash Studio's installed profile bundle has its own revision number
-        # (for example 02.01.01.00), while saved projects use the underlying
-        # Bambu project schema version (2.3.2). Keep those two concepts apart.
+    if provider.slicer_id in {"FlashStudio", "QIDIStudio"}:
+        # Vendor profile bundles and saved-project schemas are independent
+        # version contracts. Preserve the observed native project version.
         template["version"] = _project_format_version(provider, safe_source_version)
+    if provider.slicer_id == "QIDIStudio":
+        template["printer_variant"] = nozzle
+        template.setdefault("printer_extruder_id", ["1"])
     revision = _content_revision(template, source_hashes, safe_source_version)
     bed_width, bed_depth = _bed_size(settings)
 

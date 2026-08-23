@@ -61,6 +61,40 @@ LUMINA_MATERIAL_SYNC_REFRESH_INTERVAL_S
 
 如果同一个 `material_id` 在 catalog 中同时出现多个 revision，批量刷新会以 `ambiguous_revision` 失败关闭，不会根据 revision 字符串或返回顺序猜测最新版。用户仍可在云端耗材面板中明确选择某个 revision 手工安装。
 
+## Catalog 条件同步
+
+支持条件请求的独立 Registry 会在 `/materials/catalog` 的成功响应中返回
+`ETag`。Lumina 在首次完整同步并确认所有 catalog 条目已经本地收敛后，将
+validator 保存到耗材库的 `_sync/index.json`：
+
+```text
+catalog_validators[规范化 Registry URL][有序频道组合]
+```
+
+这是 schema `1.0` 的可选后端字段，不会出现在 `/api/material-sync/status`、
+`/api/material-sync/refresh` 响应、前端状态或日志中。同一个 URL 的
+`official,community` 与 `community,official` 是不同的请求表示，会分别保存。
+
+下一次刷新前，Lumina 会重新计算本地状态摘要。摘要覆盖耗材目录中参与同步的
+有效文件和同步索引绑定，忽略 `usage_stats.json`、`_solver_cache` 以及
+validator 自身。只有当前摘要仍与保存值一致时才发送 `If-None-Match`：
+
+- Registry 返回 `304 Not Modified` 且本地摘要仍一致时，不解析 catalog
+  JSON，也不下载 package；公开刷新响应沿用上次条目数作为 `checked_count`，
+  并全部计入 `skipped_count`。
+- 若等待 `304` 期间本地内容发生变化，Lumina 最多补发一次不带条件头的完整
+  catalog 请求。
+- 若必需的 `material.json` 或 Stage-A 参数文件被删除或修改，下一次完整响应
+  会按真实文件 hash 重新下载。原目录不会被覆盖，干净副本沿用现有时间后缀
+  冲突规则安装。
+- 无有效 `ETag`、存在包级失败或 catalog 尚未完全本地收敛时，当前频道组合的
+  validator 会被清除，下一次继续执行完整请求。
+
+旧 Registry 不返回 `ETag` 时无需额外配置，Lumina 会保持原有的 `200` 完整
+同步行为。Lumina 主应用内的兼容 Registry 路由也继续走这条兼容路径，不复制
+独立服务的服务端 ETag 实现。本次代码交付不包含云端部署；上面的条件请求只有
+在独立 Registry 更新上线后才会生效。
+
 ## 连接验证
 
 用浏览器或命令行打开：

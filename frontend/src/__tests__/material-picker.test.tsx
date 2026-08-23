@@ -177,6 +177,57 @@ describe("MaterialPickerDialog", () => {
     expect(onConfirm).toHaveBeenCalledWith(["jayo/yellow-pla"]);
   });
 
+  it("toggles and commits a single material from the lower card details", () => {
+    const onConfirm = vi.fn();
+    renderPicker({
+      materials: [
+        {
+          ...SINGLE_TYPE_MATERIALS[0],
+          contributor_name: "Alice",
+        },
+      ],
+      onConfirm,
+    });
+
+    fireEvent.click(screen.getByText("Alice"));
+    expect(
+      screen.getByRole("button", { name: "取消选择 Red PLA" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText(/已选耗材：1/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Alice"));
+    expect(
+      screen.getByRole("button", { name: "选择 Red PLA" }),
+    ).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(screen.getByText("Alice"));
+    fireEvent.click(screen.getByRole("button", { name: "完成" }));
+    expect(onConfirm).toHaveBeenCalledWith(["JAYO/red-pla"]);
+  });
+
+  it("keeps single-material favorite clicks independent from selection", () => {
+    renderPicker({
+      materials: [
+        {
+          ...SINGLE_TYPE_MATERIALS[0],
+          contributor_name: "Alice",
+        },
+      ],
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "收藏 Red PLA（Alice）" }),
+    );
+
+    expect(
+      screen.getByRole("button", { name: "取消收藏 Red PLA（Alice）" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "选择 Red PLA" }),
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByText(/已选耗材：0/)).toBeInTheDocument();
+  });
+
   it("keeps pointer selection free of a persistent inner focus ring", () => {
     renderPicker({
       initialSelected: ["JAYO/red-pla"],

@@ -28,6 +28,10 @@ const LEGACY_SLICER_ID_MAP: Record<string, string> = {
   "flash studio": "FlashStudio",
   "flash studio desktop": "FlashStudio",
   flashstudio: "FlashStudio",
+  qidi: "QIDIStudio",
+  qidi_studio: "QIDIStudio",
+  "qidi studio": "QIDIStudio",
+  qidistudio: "QIDIStudio",
   prusa: "PrusaSlicer",
   prusa_slicer: "PrusaSlicer",
   prusaslicer: "PrusaSlicer",
@@ -43,6 +47,7 @@ const DETECTED_SLICER_ID_MAP: Record<string, string> = {
   ElegooSlicer: "elegoo_slicer",
   AnycubicSlicerNext: "anycubic_slicer_next",
   FlashStudio: "flash_studio",
+  QIDIStudio: "qidi_studio",
   PrusaSlicer: "prusa_slicer",
   Cura: "cura",
 };
@@ -61,6 +66,7 @@ const SLICER_SOFTWARE_DISPLAY_NAME_MAP: Record<string, string> = {
   ElegooSlicer: "ElegooSlicer",
   AnycubicSlicerNext: "Anycubic Slicer Next",
   FlashStudio: "Flash Studio Desktop",
+  QIDIStudio: "QIDI Studio",
   PrusaSlicer: "PrusaSlicer",
   Cura: "Ultimaker Cura",
 };
@@ -72,6 +78,7 @@ const LAYER_CONFIG_RANGE_SLICER_IDS: ReadonlySet<string> = new Set([
   "ElegooSlicer",
   "AnycubicSlicerNext",
   "FlashStudio",
+  "QIDIStudio",
 ]);
 
 const DEFAULT_NOZZLE_SIZE = "0.4";

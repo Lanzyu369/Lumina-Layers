@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 
 import {
@@ -41,6 +41,7 @@ interface LoadCatalogAndStatusResult {
   catalogResponse: MaterialRegistryCatalogResponse | null;
   hasError: boolean;
   hasNotice: boolean;
+  isCurrent: boolean;
 }
 
 const catalogFilters: CatalogFilter[] = [
@@ -50,6 +51,7 @@ const catalogFilters: CatalogFilter[] = [
   "installed",
 ];
 const MATERIAL_CATALOG_PAGE_SIZE = 50;
+const MATERIAL_CATALOG_SEARCH_DEBOUNCE_MS = 400;
 const MATERIAL_REGISTRY_NOT_CONFIGURED_DETAIL = "Material registry URL is not configured";
 const MATERIAL_REGISTRY_STALE_INSTALL_DETAIL =
   "Selected material registry package is not in current material registry catalog";
@@ -250,8 +252,10 @@ export default function MaterialCloudSyncPanel() {
   const [status, setStatus] = useState<MaterialSyncStatusResponse | null>(null);
   const [catalog, setCatalog] = useState<MaterialRegistryCatalogResponse | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [catalogQuery, setCatalogQuery] = useState("");
   const [activeFilter, setActiveFilter] = useState<CatalogFilter>("all");
   const [isLoading, setIsLoading] = useState(true);
+  const [isSearchPending, setIsSearchPending] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isLoadingAll, setIsLoadingAll] = useState(false);
@@ -260,7 +264,9 @@ export default function MaterialCloudSyncPanel() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const catalogQuery = searchQuery.trim();
+  const catalogRequestIdRef = useRef(0);
+  const searchScheduleIdRef = useRef(0);
+  const latestSearchQueryRef = useRef("");
 
   const fetchCatalogPage = useCallback((query: MaterialRegistryCatalogQuery) => {
     return fetchMaterialRegistryCatalog(query);
@@ -325,77 +331,132 @@ export default function MaterialCloudSyncPanel() {
     }).length;
   }, [catalog, resolveCatalogInstalledEntry]);
 
-  const loadCatalogAndStatus = useCallback(async (): Promise<LoadCatalogAndStatusResult> => {
+  const loadCatalogAndStatus = useCallback(async (
+    query: string,
+  ): Promise<LoadCatalogAndStatusResult> => {
+    const requestId = ++catalogRequestIdRef.current;
+    setCatalogQuery(query);
     setIsLoading(true);
     setError(null);
     setNotice(null);
-    const [statusResult, catalogResult] = await Promise.allSettled([
-      fetchMaterialSyncStatus(),
-      fetchCatalogPage({
-        limit: MATERIAL_CATALOG_PAGE_SIZE,
-        offset: 0,
-        ...(catalogQuery ? { q: catalogQuery } : {}),
-      }),
-    ] as const);
-
-    const statusResponse = statusResult.status === "fulfilled" ? statusResult.value : null;
-    let catalogResponse = catalogResult.status === "fulfilled" ? catalogResult.value : null;
-    const failures: string[] = [];
-    let nextNotice: string | null = null;
-
-    if (statusResult.status === "rejected") {
-      failures.push(resolveErrorMessage(statusResult.reason, t("mat_sync_status_failed")));
-    }
-    if (catalogResult.status === "rejected") {
-      if (isMaterialRegistryNotConfiguredError(catalogResult.reason)) {
-        catalogResponse = emptyMaterialRegistryCatalog();
-        nextNotice = t("mat_sync_catalog_not_configured");
-      } else {
-        failures.push(resolveErrorMessage(catalogResult.reason, t("mat_sync_status_failed")));
-      }
-    }
-
-    setStatus(statusResponse);
-    setCatalog(catalogResponse ? mergeCatalogPage(null, catalogResponse) : null);
-    setNotice(nextNotice);
-    if (failures.length > 0) {
-      setError(failures.join(" / "));
-    }
     try {
+      const [statusResult, catalogResult] = await Promise.allSettled([
+        fetchMaterialSyncStatus(),
+        fetchCatalogPage({
+          limit: MATERIAL_CATALOG_PAGE_SIZE,
+          offset: 0,
+          ...(query ? { q: query } : {}),
+        }),
+      ] as const);
+
+      if (requestId !== catalogRequestIdRef.current) {
+        return {
+          statusResponse: null,
+          catalogResponse: null,
+          hasError: false,
+          hasNotice: false,
+          isCurrent: false,
+        };
+      }
+
+      const statusResponse = statusResult.status === "fulfilled" ? statusResult.value : null;
+      let catalogResponse = catalogResult.status === "fulfilled" ? catalogResult.value : null;
+      const failures: string[] = [];
+      let nextNotice: string | null = null;
+
+      if (statusResult.status === "rejected") {
+        failures.push(resolveErrorMessage(statusResult.reason, t("mat_sync_status_failed")));
+      }
+      if (catalogResult.status === "rejected") {
+        if (isMaterialRegistryNotConfiguredError(catalogResult.reason)) {
+          catalogResponse = emptyMaterialRegistryCatalog();
+          nextNotice = t("mat_sync_catalog_not_configured");
+        } else {
+          failures.push(resolveErrorMessage(catalogResult.reason, t("mat_sync_status_failed")));
+        }
+      }
+
+      setStatus(statusResponse);
+      setCatalog(catalogResponse ? mergeCatalogPage(null, catalogResponse) : null);
+      setNotice(nextNotice);
+      if (failures.length > 0) {
+        setError(failures.join(" / "));
+      }
       return {
         statusResponse,
         catalogResponse,
         hasError: failures.length > 0,
         hasNotice: nextNotice !== null,
+        isCurrent: true,
       };
     } finally {
-      setIsLoading(false);
+      if (requestId === catalogRequestIdRef.current) {
+        setIsLoading(false);
+      }
     }
-  }, [catalogQuery, fetchCatalogPage, t]);
+  }, [fetchCatalogPage, t]);
 
   useEffect(() => {
-    void loadCatalogAndStatus();
+    const scheduledQuery = searchQuery.trim();
+    const scheduleId = ++searchScheduleIdRef.current;
+    catalogRequestIdRef.current += 1;
+
+    const runScheduledSearch = () => {
+      if (scheduleId === searchScheduleIdRef.current) {
+        setIsSearchPending(false);
+        void loadCatalogAndStatus(scheduledQuery);
+      }
+    };
+    const timer = scheduledQuery
+      ? window.setTimeout(runScheduledSearch, MATERIAL_CATALOG_SEARCH_DEBOUNCE_MS)
+      : null;
+    if (timer === null) {
+      runScheduledSearch();
+    }
+
+    return () => {
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+      catalogRequestIdRef.current += 1;
+    };
+  }, [loadCatalogAndStatus, searchQuery]);
+
+  const loadCurrentQueryImmediately = useCallback(() => {
+    searchScheduleIdRef.current += 1;
+    setIsSearchPending(false);
+    return loadCatalogAndStatus(latestSearchQueryRef.current.trim());
   }, [loadCatalogAndStatus]);
+
+  const handleSearchQueryChange = useCallback((value: string) => {
+    latestSearchQueryRef.current = value;
+    catalogRequestIdRef.current += 1;
+    searchScheduleIdRef.current += 1;
+    setIsLoading(false);
+    setIsSearchPending(Boolean(value.trim()));
+    setSearchQuery(value);
+  }, []);
 
   const refreshCatalog = useCallback(async () => {
     setIsRefreshing(true);
     setSuccess(null);
     try {
-      const result = await loadCatalogAndStatus();
-      if (!result.hasError && !result.hasNotice) {
+      const result = await loadCurrentQueryImmediately();
+      if (result.isCurrent && !result.hasError && !result.hasNotice) {
         setSuccess(t("mat_sync_catalog_refresh_success"));
       }
     } finally {
       setIsRefreshing(false);
     }
-  }, [loadCatalogAndStatus, t]);
+  }, [loadCurrentQueryImmediately, t]);
 
   const loadMoreCatalog = useCallback(async () => {
     const loadedCount = catalog?.materials.length ?? 0;
     const totalCount = catalog?.total_count ?? catalog?.count ?? loadedCount;
-    if (!catalog || loadedCount >= totalCount || isLoadingMore || isLoadingAll) {
+    if (!catalog || loadedCount >= totalCount || isLoading || isSearchPending || isLoadingMore || isLoadingAll) {
       return;
     }
+    const requestId = ++catalogRequestIdRef.current;
     setIsLoadingMore(true);
     setError(null);
     try {
@@ -404,20 +465,25 @@ export default function MaterialCloudSyncPanel() {
         offset: loadedCount,
         ...(catalogQuery ? { q: catalogQuery } : {}),
       });
-      setCatalog((current) => mergeCatalogPage(current, nextPage));
+      if (requestId === catalogRequestIdRef.current) {
+        setCatalog((current) => mergeCatalogPage(current, nextPage));
+      }
     } catch (err) {
-      setError(resolveErrorMessage(err, t("mat_sync_status_failed")));
+      if (requestId === catalogRequestIdRef.current) {
+        setError(resolveErrorMessage(err, t("mat_sync_status_failed")));
+      }
     } finally {
       setIsLoadingMore(false);
     }
-  }, [catalog, catalogQuery, fetchCatalogPage, isLoadingAll, isLoadingMore, t]);
+  }, [catalog, catalogQuery, fetchCatalogPage, isLoading, isLoadingAll, isLoadingMore, isSearchPending, t]);
 
   const loadAllCatalog = useCallback(async () => {
     const loadedCount = catalog?.materials.length ?? 0;
     let totalCount = catalog?.total_count ?? catalog?.count ?? loadedCount;
-    if (!catalog || loadedCount >= totalCount || isLoadingMore || isLoadingAll) {
+    if (!catalog || loadedCount >= totalCount || isLoading || isSearchPending || isLoadingMore || isLoadingAll) {
       return;
     }
+    const requestId = ++catalogRequestIdRef.current;
     setIsLoadingAll(true);
     setError(null);
     try {
@@ -429,6 +495,9 @@ export default function MaterialCloudSyncPanel() {
           offset: nextOffset,
           ...(catalogQuery ? { q: catalogQuery } : {}),
         });
+        if (requestId !== catalogRequestIdRef.current) {
+          return;
+        }
         mergedCatalog = mergeCatalogPage(mergedCatalog, nextPage);
         totalCount = nextPage.total_count ?? totalCount;
         const pageCount = nextPage.count ?? nextPage.materials.length;
@@ -437,13 +506,17 @@ export default function MaterialCloudSyncPanel() {
         }
         nextOffset += pageCount;
       }
-      setCatalog(mergedCatalog);
+      if (requestId === catalogRequestIdRef.current) {
+        setCatalog(mergedCatalog);
+      }
     } catch (err) {
-      setError(resolveErrorMessage(err, t("mat_sync_status_failed")));
+      if (requestId === catalogRequestIdRef.current) {
+        setError(resolveErrorMessage(err, t("mat_sync_status_failed")));
+      }
     } finally {
       setIsLoadingAll(false);
     }
-  }, [catalog, catalogQuery, fetchCatalogPage, isLoadingAll, isLoadingMore, t]);
+  }, [catalog, catalogQuery, fetchCatalogPage, isLoading, isLoadingAll, isLoadingMore, isSearchPending, t]);
 
   const handleInstall = useCallback(async (entry: MaterialRegistryCatalogEntry) => {
     const installKey = `${entry.material_id}:${entry.revision_id}`;
@@ -459,14 +532,14 @@ export default function MaterialCloudSyncPanel() {
           package_sha256: entry.package_sha256,
         }
       );
-      await loadCatalogAndStatus();
+      await loadCurrentQueryImmediately();
       setSuccess(response.message || t("mat_sync_install_success"));
     } catch (err) {
       setError(resolveInstallErrorMessage(err, t("mat_sync_install_failed")));
     } finally {
       setPendingInstall(null);
     }
-  }, [loadCatalogAndStatus, t]);
+  }, [loadCurrentQueryImmediately, t]);
 
   const handleRollback = useCallback(async (entry: MaterialSyncInstalledEntry, revisionId: string) => {
     const rollbackKey = `${entry.material_id}:${revisionId}`;
@@ -478,14 +551,14 @@ export default function MaterialCloudSyncPanel() {
         entry.material_id,
         revisionId,
       );
-      await loadCatalogAndStatus();
+      await loadCurrentQueryImmediately();
       setSuccess(response.message || t("mat_sync_rollback_success"));
     } catch (err) {
       setError(resolveErrorMessage(err, t("mat_sync_rollback_failed")));
     } finally {
       setPendingRollback(null);
     }
-  }, [loadCatalogAndStatus, t]);
+  }, [loadCurrentQueryImmediately, t]);
 
   const syncIndexStateLabel = status
     ? t(`mat_sync_state_${status.index_state}`)
@@ -651,7 +724,7 @@ export default function MaterialCloudSyncPanel() {
             data-testid="material-cloud-search-input"
             type="search"
             value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
+            onChange={(event) => handleSearchQueryChange(event.target.value)}
             placeholder={t("mat_sync_search_placeholder")}
             className="min-h-11 rounded-2xl border border-slate-200/80 bg-[var(--surface-panel)] px-3 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:text-slate-100"
           />
@@ -881,7 +954,7 @@ export default function MaterialCloudSyncPanel() {
                 label={t("mat_sync_load_more_btn")}
                 variant="secondary"
                 onClick={() => void loadMoreCatalog()}
-                disabled={isLoadingMore || isLoadingAll}
+                disabled={isLoading || isSearchPending || isLoadingMore || isLoadingAll}
                 loading={isLoadingMore}
                 className="w-full sm:w-auto"
               />
@@ -889,7 +962,7 @@ export default function MaterialCloudSyncPanel() {
                 label={t("mat_sync_load_all_btn")}
                 variant="secondary"
                 onClick={() => void loadAllCatalog()}
-                disabled={isLoadingMore || isLoadingAll}
+                disabled={isLoading || isSearchPending || isLoadingMore || isLoadingAll}
                 loading={isLoadingAll}
                 className="w-full sm:w-auto"
               />

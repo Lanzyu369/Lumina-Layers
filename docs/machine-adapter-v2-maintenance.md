@@ -6,7 +6,7 @@
 
 机器适配 V2 的目标是：
 
-- 开发期读取 Bambu/Orca/Snapmaker/Elegoo/Anycubic/Flash Studio 的原生 profile JSON。
+- 开发期读取 Bambu/Orca/Snapmaker/Elegoo/Anycubic/Flash Studio/QIDI Studio 的原生 profile JSON。
 - 生成 Lumina 内置 `machine_registry/`，随仓库发布。
 - 用户端只读取 Lumina 内置 registry，不扫描用户本机切片器安装目录。
 - 严格按 `切片软件 -> 机器型号 -> 喷嘴 -> revision` 区分 profile，避免同名机型串模板。
@@ -39,7 +39,7 @@
 - 不要提交本机安装路径、用户设置、临时 3MF/GLB、`output/`、`materials/*/usage_stats.json`。
 - `machine_registry/` 是生成结果，允许提交。
 - `materials/` 是用户耗材数据，本工作流默认不碰。
-- ElegooSlicer、AnycubicSlicerNext 和 Flash Studio 虽然基于 Bambu/Orca 链路，但 3MF header、Application、sidecar 规则仍要按各自切片器处理。
+- ElegooSlicer、AnycubicSlicerNext、Flash Studio 和 QIDI Studio 虽然基于 Bambu/Orca 链路，但 3MF header、Application、sidecar 规则仍要按各自切片器处理。
 
 ## Registry 粒度
 
@@ -56,6 +56,7 @@ BambuStudio:bbl:bambu-lab-h2d:0.2
 ElegooSlicer:elegoo:elegoo-centauri-carbon-2:0.2
 AnycubicSlicerNext:anycubic:anycubic-kobra-x:0.25
 FlashStudio:flashforge:flashforge-ad5x:0.25
+QIDIStudio:qidi:q2:0.2
 ```
 
 注意：`device_profile_id` 的最后一段必须保留切片软件原生喷嘴值，而不是使用 Lumina 老模板的 0.1mm 归一化结果。Anycubic Kobra X 使用 `0.25`，如果被归并成 `0.2`，UI 文案和 3MF writer 的 registry 校验都会产生误导。
@@ -70,6 +71,7 @@ FlashStudio:flashforge:flashforge-ad5x:0.25
 - ElegooSlicer
 - AnycubicSlicerNext
 - FlashStudio
+- QIDIStudio
 
 当前已经人工验收过的代表机型：
 
@@ -85,6 +87,10 @@ FlashStudio:flashforge:flashforge-ad5x:0.25
 - Flashforge Guider 3 Ultra `0.4`
 - Flashforge Guider4 `0.25` / `0.4`
 - Flashforge Guider4 Pro `0.25` / `0.4`
+- QIDI Q2 `0.2` / `0.4`
+- QIDI Q2C `0.2` / `0.4`
+- QIDI X-Max 4 `0.2` / `0.4`
+- QIDI X-Plus 5 `0.4`
 
 ## 升级前准备
 
@@ -141,6 +147,7 @@ python tools\machine_adapter\sync_local_profiles.py --output machine_registry
 python tools\machine_adapter\sync_local_profiles.py --slicer ElegooSlicer --output machine_registry
 python tools\machine_adapter\sync_local_profiles.py --slicer AnycubicSlicerNext --output machine_registry
 python tools\machine_adapter\sync_local_profiles.py --slicer FlashStudio --output machine_registry
+python tools\machine_adapter\sync_local_profiles.py --slicer QIDIStudio --output machine_registry
 ```
 
 Flash Studio 的 `%APPDATA%\Orca-Flashforge\system` 通常只有 profile JSON，
@@ -187,6 +194,23 @@ python tools\machine_adapter\import_profiles.py `
 `client_version` 作为默认契约，因此直接省略这两个可选参数时也必须生成
 相同结果；示例显式写出它们，便于升级切片软件时人工核对或临时覆盖。
 
+QIDI Studio 安装包的正式 profile 位于安装目录 `resources\profiles`，并按
+`Q Series.json`、`X 4 Series.json`、`X 5 Series.json` 的 `machine_list`
+取边界。当前只支持已有真实 3MF 案例覆盖的 Q2、Q2C、X-Max 4、X-Plus 5；
+同样只导入口径不大于 `0.4` 的正式预设。Q2/Q2C/X-Max 4 为 `0.2` / `0.4`，
+X-Plus 5 仅 `0.4`。不要把 Q1 Pro、X 3 系列或 X-Plus 4 因目录存在就加入。
+
+```powershell
+python tools\machine_adapter\import_profiles.py `
+  --slicer QIDIStudio `
+  --source-root "<QIDI Studio install>\resources\profiles" `
+  --source-version 02.07.02.60 `
+  --vendor "Q Series" `
+  --vendor "X 4 Series" `
+  --vendor "X 5 Series" `
+  --output output\temp\qidi_registry_check
+```
+
 这个命令会生成单切片器 registry。合并多切片器时推荐使用 `run_import_sources(...)` 的 Python 小脚本，而不是手工拼 JSON。
 
 ### 源版本和应用版本
@@ -218,14 +242,23 @@ Creator 5 Pro 的四色项目输出 4 组耗材字段，而不是遗留 8 组通
 这些属于包结构；层高、线宽、墙生成器、温度、速度、填充和支撑仍由
 Lumina 工艺覆盖层提供，不能从参考 3MF 的具体切片任务照抄。
 
+QIDI Studio `02.07.02.60` 的原生契约来自 Q2、Q2C、X-Plus 5、X-Max 4
+四份保存项目：`Application=QIDIStudio-02.07.02.60`，项目 `version` 与
+`X-QDT-Client-Version` 同为 `02.07.02.60`，并带
+`QIDIStudio:3mfVersion=1`、`OrcaSlicer=2.1.0.14`。包内保留
+`filament_sequence.json`、`cut_information.xml`、`plate_1.json`，封面关系
+使用 `schemas.qiditech.com`；这些都是格式/路由字段，不得覆盖 Lumina 工艺。
+四份参考项目还统一使用 `skirt_loops=0`、`skirt_distance=2`、
+`skirt_height=1`、`draft_shield=disabled`；导出必须显式保留这些值，不能缺省后
+让 QIDI Studio 回退到本机工艺预设并重新开启裙边。
+
 Anycubic 常见情况是 `source_version` 和应用版本不同，必须分开记录。
 
-`tools/machine_adapter/sync_local_profiles.py` 里有两个显式覆盖表：
-
-- `APPLICATION_METADATA_OVERRIDES`
-- `CLIENT_VERSION_OVERRIDES`
-
-目前 Anycubic Slicer Next 和 Flash Studio 使用这些覆盖表固定为人工验收过的项目格式契约。下次升级时，必须先用真实切片器打开 3MF 验收，再更新这些常量和 `tests/test_machine_registry_bundle_unit.py` 的期望值；不要只改 vendor profile 包版本。
+`tools/machine_adapter/providers.py` 中的 `default_application_metadata` 与
+`default_client_version` 保存人工验收过的项目格式契约。目前 Anycubic
+Slicer Next、Flash Studio 和 QIDI Studio 都使用这些 provider 默认值。
+下次升级时必须先用真实切片器打开 3MF 验收，再更新默认值和
+`tests/test_machine_registry_bundle_unit.py` 的期望；不要只改 vendor profile 包版本。
 
 ## 生成后必须检查
 
@@ -330,6 +363,7 @@ python scripts\run_vitest.py run src\__tests__\settings-store-hydration.test.ts 
 - AnycubicSlicerNext 打开 AC KX `0.25`。
 - Flash Studio Desktop 打开 AD5X `0.25` / `0.4`、Guider 3 Ultra `0.4`、
   Guider4 `0.25` / `0.4`，并抽查 Creator 5 / Creator 5 Pro / Guider4 Pro。
+- QIDI Studio 打开 Q2、Q2C、X-Max 4 的 `0.2` / `0.4`，以及 X-Plus 5 `0.4`。
 
 生成示例使用 `core.converter.generate_final_model(...)`，输入图片可以用：
 
@@ -383,6 +417,7 @@ print("custom_gcode_per_layer", "Metadata/custom_gcode_per_layer.xml" in entries
 | ElegooSlicer | no | no | no |
 | AnycubicSlicerNext | no | no | yes |
 | FlashStudio | no | no | no |
+| QIDIStudio | yes | yes | no |
 
 ## 前端验收
 

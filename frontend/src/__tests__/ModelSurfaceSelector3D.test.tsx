@@ -2709,11 +2709,11 @@ describe("ModelSurfaceSelector3D", () => {
       expect(onUpdatePlacement).toHaveBeenCalledTimes(1);
       expect(onUpdatePlacement).toHaveBeenCalledWith({
         offset_x_mm: 4,
-        offset_y_mm: -1,
+        offset_y_mm: 1,
       });
       await waitFor(() => {
         expect(screen.getByRole("status", { name: "贴图位置读数" })).toHaveTextContent(
-          "Y -1.0 mm",
+          "Y 1.0 mm",
         );
       });
       expect(imageConstructCount).toBe(1);
@@ -4004,7 +4004,7 @@ describe("ModelSurfaceSelector3D", () => {
         currentPoint: [0, 1],
         startPlacement,
       }),
-    ).toEqual({ offset_x_mm: 0, offset_y_mm: -1 });
+    ).toEqual({ offset_x_mm: 0, offset_y_mm: 1 });
 
     expect(
       computeArtworkPlacementDragUpdate({

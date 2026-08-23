@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import MaterialCloudSyncPanel from "../components/MaterialCloudSyncPanel";
 import {
@@ -15,6 +15,46 @@ vi.mock("../api/materialSync", () => ({
   installMaterialRegistryCatalogEntry: vi.fn(),
   rollbackMaterialSyncRevision: vi.fn(),
 }));
+
+type CatalogResponse = Awaited<ReturnType<typeof fetchMaterialRegistryCatalog>>;
+
+const catalogResponse = (
+  materialId: string,
+  materialName: string,
+  {
+    offset = 0,
+    totalCount = 1,
+  }: {
+    offset?: number;
+    totalCount?: number;
+  } = {},
+): CatalogResponse => ({
+  schema_version: "1.0",
+  channels: ["official"],
+  count: 1,
+  total_count: totalCount,
+  offset,
+  limit: 50,
+  materials: [
+    {
+      material_id: materialId,
+      revision_id: `rev_${materialId}`,
+      content_hash: `sha256:${materialId}`,
+      channel: "official",
+      visibility: "official",
+      local_directory: `BrandA/${materialId}`,
+      display: { brand: "BrandA", material_name: materialName },
+      compatibility: {},
+      package_url: `/v1/packages/${materialId}.zip`,
+      package_sha256: materialId.padEnd(64, "0").slice(0, 64),
+      package_bytes: 1024,
+    },
+  ],
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("MaterialCloudSyncPanel", () => {
   beforeEach(() => {
@@ -478,6 +518,244 @@ describe("MaterialCloudSyncPanel", () => {
     const searchCard = screen.getAllByTestId("material-cloud-catalog-card")[0];
     expect(within(searchCard).getByText("Silk PETG")).toBeInTheDocument();
     expect(within(searchCard).queryByText("PLA Basic")).not.toBeInTheDocument();
+  });
+
+  it("debounces rapid typing while keeping refresh and clear immediate", async () => {
+    render(<MaterialCloudSyncPanel />);
+
+    expect(await screen.findByText("Silk PETG")).toBeInTheDocument();
+    vi.mocked(fetchMaterialRegistryCatalog).mockClear();
+    vi.useFakeTimers();
+
+    const searchInput = screen.getByTestId("material-cloud-search-input");
+    fireEvent.change(searchInput, { target: { value: "P" } });
+    fireEvent.change(searchInput, { target: { value: "PE" } });
+    fireEvent.change(searchInput, { target: { value: "PETG" } });
+
+    expect(fetchMaterialRegistryCatalog).not.toHaveBeenCalled();
+    await act(async () => {
+      vi.advanceTimersByTime(399);
+      await Promise.resolve();
+    });
+    expect(fetchMaterialRegistryCatalog).not.toHaveBeenCalled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+      await Promise.resolve();
+    });
+    expect(fetchMaterialRegistryCatalog).toHaveBeenCalledTimes(1);
+    expect(fetchMaterialRegistryCatalog).toHaveBeenLastCalledWith({
+      limit: 50,
+      offset: 0,
+      q: "PETG",
+    });
+
+    vi.mocked(fetchMaterialRegistryCatalog).mockClear();
+    fireEvent.change(searchInput, { target: { value: "PLA" } });
+    fireEvent.click(screen.getByRole("button", { name: /刷新云端目录|refresh catalog/i }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(fetchMaterialRegistryCatalog).toHaveBeenCalledTimes(1);
+    expect(fetchMaterialRegistryCatalog).toHaveBeenLastCalledWith({
+      limit: 50,
+      offset: 0,
+      q: "PLA",
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(400);
+      await Promise.resolve();
+    });
+    expect(fetchMaterialRegistryCatalog).toHaveBeenCalledTimes(1);
+
+    vi.mocked(fetchMaterialRegistryCatalog).mockClear();
+    fireEvent.change(searchInput, { target: { value: "" } });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(fetchMaterialRegistryCatalog).toHaveBeenCalledTimes(1);
+    expect(fetchMaterialRegistryCatalog).toHaveBeenLastCalledWith({
+      limit: 50,
+      offset: 0,
+    });
+  });
+
+  it("refreshes the latest query when installation finishes during debounce", async () => {
+    type InstallResponse = Awaited<ReturnType<typeof installMaterialRegistryCatalogEntry>>;
+    let resolveInstall!: (value: InstallResponse) => void;
+    const pendingInstall = new Promise<InstallResponse>((resolve) => {
+      resolveInstall = resolve;
+    });
+    vi.mocked(installMaterialRegistryCatalogEntry).mockReturnValueOnce(pendingInstall);
+
+    render(<MaterialCloudSyncPanel />);
+    expect(await screen.findByText("Silk PETG")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /下载到本地|download/i }));
+    await waitFor(() => {
+      expect(installMaterialRegistryCatalogEntry).toHaveBeenCalledTimes(1);
+    });
+
+    vi.mocked(fetchMaterialRegistryCatalog).mockClear();
+    vi.useFakeTimers();
+    fireEvent.change(screen.getByTestId("material-cloud-search-input"), {
+      target: { value: "PLA" },
+    });
+    expect(fetchMaterialRegistryCatalog).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveInstall({
+        status: "ok",
+        message: "installed",
+        installed_count: 1,
+        installed_materials: [],
+      });
+      await pendingInstall;
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fetchMaterialRegistryCatalog).toHaveBeenCalledTimes(1);
+    expect(fetchMaterialRegistryCatalog).toHaveBeenLastCalledWith({
+      limit: 50,
+      offset: 0,
+      q: "PLA",
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(400);
+      await Promise.resolve();
+    });
+    expect(fetchMaterialRegistryCatalog).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores an older search response that resolves after the latest query", async () => {
+    let resolveOlder!: (value: CatalogResponse) => void;
+    let resolveLatest!: (value: CatalogResponse) => void;
+    const olderResponse = new Promise<CatalogResponse>((resolve) => {
+      resolveOlder = resolve;
+    });
+    const latestResponse = new Promise<CatalogResponse>((resolve) => {
+      resolveLatest = resolve;
+    });
+
+    render(<MaterialCloudSyncPanel />);
+    expect(await screen.findByText("Silk PETG")).toBeInTheDocument();
+
+    vi.useFakeTimers();
+    vi.mocked(fetchMaterialRegistryCatalog).mockImplementation((query) => {
+      if (query?.q === "P") {
+        return olderResponse;
+      }
+      if (query?.q === "PLA") {
+        return latestResponse;
+      }
+      throw new Error(`unexpected query: ${query?.q ?? ""}`);
+    });
+
+    const searchInput = screen.getByTestId("material-cloud-search-input");
+    fireEvent.change(searchInput, { target: { value: "P" } });
+    await act(async () => {
+      vi.advanceTimersByTime(400);
+      await Promise.resolve();
+    });
+    fireEvent.change(searchInput, { target: { value: "PLA" } });
+    await act(async () => {
+      vi.advanceTimersByTime(400);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      resolveLatest(catalogResponse("mat_latest", "Latest PLA"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText("Latest PLA")).toBeInTheDocument();
+
+    await act(async () => {
+      resolveOlder(catalogResponse("mat_older", "Stale PLA"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText("Latest PLA")).toBeInTheDocument();
+    expect(screen.queryByText("Stale PLA")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { action: "load more", buttonName: /加载更多|load more/i },
+    { action: "load all", buttonName: /加载全部|load all/i },
+  ])("ignores a stale $action response after a new search", async ({ buttonName }) => {
+    let resolveOlderPage!: (value: CatalogResponse) => void;
+    let resolveLatestSearch!: (value: CatalogResponse) => void;
+    const olderPage = new Promise<CatalogResponse>((resolve) => {
+      resolveOlderPage = resolve;
+    });
+    const latestSearch = new Promise<CatalogResponse>((resolve) => {
+      resolveLatestSearch = resolve;
+    });
+    vi.mocked(fetchMaterialRegistryCatalog).mockImplementation((query) => {
+      if (query?.q === "Fresh") {
+        return latestSearch;
+      }
+      if (query?.offset === 1) {
+        return olderPage;
+      }
+      if (query?.offset === 0) {
+        return Promise.resolve(catalogResponse(
+          "mat_initial",
+          "Initial PLA",
+          { totalCount: 2 },
+        ));
+      }
+      throw new Error(`unexpected query: ${JSON.stringify(query)}`);
+    });
+
+    render(<MaterialCloudSyncPanel />);
+    expect(await screen.findByText("Initial PLA")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: buttonName }));
+    await waitFor(() => {
+      expect(fetchMaterialRegistryCatalog).toHaveBeenCalledWith({
+        limit: 50,
+        offset: 1,
+      });
+    });
+
+    vi.useFakeTimers();
+    fireEvent.change(screen.getByTestId("material-cloud-search-input"), {
+      target: { value: "Fresh" },
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(400);
+      await Promise.resolve();
+    });
+    expect(fetchMaterialRegistryCatalog).toHaveBeenCalledWith({
+      limit: 50,
+      offset: 0,
+      q: "Fresh",
+    });
+
+    await act(async () => {
+      resolveLatestSearch(catalogResponse("mat_fresh", "Fresh PLA"));
+      await latestSearch;
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText("Fresh PLA")).toBeInTheDocument();
+
+    await act(async () => {
+      resolveOlderPage(catalogResponse(
+        "mat_stale_page",
+        "Stale Page PETG",
+        { offset: 1, totalCount: 2 },
+      ));
+      await olderPage;
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText("Fresh PLA")).toBeInTheDocument();
+    expect(screen.queryByText("Stale Page PETG")).not.toBeInTheDocument();
   });
 
   it("updates an installed material when the catalog revision is newer", async () => {

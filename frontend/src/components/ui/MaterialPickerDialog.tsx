@@ -431,49 +431,53 @@ export default function MaterialPickerDialog({
                 group.profiles.length > 1 ? group : undefined,
               )
             }
-            className="flex min-w-0 flex-1 items-start gap-3 rounded-xl text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+            className="flex min-w-0 flex-1 flex-col items-stretch gap-3 rounded-xl text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
           >
-            <span
-              aria-hidden="true"
-              className="mt-0.5 h-11 w-11 shrink-0 rounded-xl border border-slate-200/80 dark:border-slate-700/80"
-              style={{ backgroundColor: materialSwatchColor(profile) }}
-            />
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm font-semibold text-slate-900 dark:text-slate-50">
-                {materialName}
+            <span className="flex min-w-0 items-start gap-3">
+              <span
+                aria-hidden="true"
+                className="mt-0.5 h-11 w-11 shrink-0 rounded-xl border border-slate-200/80 dark:border-slate-700/80"
+                style={{ backgroundColor: materialSwatchColor(profile) }}
+              />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-semibold text-slate-900 dark:text-slate-50">
+                  {materialName}
+                </span>
+                <span className="mt-1 block truncate text-xs text-slate-500 dark:text-slate-400">
+                  {[
+                    profile.brand?.trim(),
+                    materialType,
+                    formatLayerHeightMm(profile.layer_height_mm),
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </span>
               </span>
-              <span className="mt-1 block truncate text-xs text-slate-500 dark:text-slate-400">
-                {[
-                  profile.brand?.trim(),
-                  materialType,
-                  formatLayerHeightMm(profile.layer_height_mm),
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </span>
+            </span>
+            <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500 dark:text-slate-400">
+              {profile.mean_delta_e != null && (
+                <span>
+                  {formatMessage(t("basic_material_picker_delta_e"), {
+                    value: profile.mean_delta_e.toFixed(1),
+                  })}
+                </span>
+              )}
+              {profile.verification_count != null && (
+                <span>
+                  {formatMessage(
+                    t("basic_material_picker_verification_count"),
+                    { count: profile.verification_count },
+                  )}
+                </span>
+              )}
+              {profile.contributor_name?.trim() && (
+                <span className="truncate">
+                  {profile.contributor_name.trim()}
+                </span>
+              )}
             </span>
           </button>
           {renderFavoriteButton(profile, materialName)}
-        </div>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500 dark:text-slate-400">
-          {profile.mean_delta_e != null && (
-            <span>
-              {formatMessage(t("basic_material_picker_delta_e"), {
-                value: profile.mean_delta_e.toFixed(1),
-              })}
-            </span>
-          )}
-          {profile.verification_count != null && (
-            <span>
-              {formatMessage(
-                t("basic_material_picker_verification_count"),
-                { count: profile.verification_count },
-              )}
-            </span>
-          )}
-          {profile.contributor_name?.trim() && (
-            <span className="truncate">{profile.contributor_name.trim()}</span>
-          )}
         </div>
       </article>
     );

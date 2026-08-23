@@ -25,6 +25,7 @@ const SLICERS: SlicerOption[] = [
   { id: "BambuStudio", display_name: "Bambu Studio" },
   { id: "OrcaSlicer", display_name: "OrcaSlicer" },
   { id: "FlashStudio", display_name: "Flash Studio Desktop" },
+  { id: "QIDIStudio", display_name: "QIDI Studio" },
 ];
 
 const PRINTERS: PrinterInfo[] = [
@@ -138,6 +139,25 @@ const PRINTERS: PrinterInfo[] = [
       supported: true,
       build_plates: [],
       default_build_plate_id: "",
+    })),
+  },
+  {
+    id: "qidi-q2",
+    display_name: "Q2",
+    brand: "QIDI",
+    bed_width: 270,
+    bed_depth: 270,
+    bed_height: 256,
+    supported_nozzle_sizes: ["0.2", "0.4"],
+    supported_slicers: ["QIDIStudio"],
+    thumbnail: "slicers/QIDIStudio/02.07.02.60/assets/q2_cover.png",
+    device_profiles: ["0.2", "0.4"].map((nozzleSize) => ({
+      device_profile_id: `QIDIStudio:qidi:q2:${nozzleSize}`,
+      slicer_id: "QIDIStudio",
+      nozzle_size: nozzleSize,
+      source_profile_name: `Q2 ${nozzleSize} nozzle`,
+      revision: `sha256:qidi-q2-${nozzleSize}`,
+      supported: true,
     })),
   },
 ];
@@ -453,6 +473,31 @@ describe("SettingsPanel machine adapter registry UI", () => {
     expect(
       screen.queryByTestId("machine-adapter-nozzle-flashforge-guider-3-ultra-0_8"),
     ).not.toBeInTheDocument();
+  });
+
+  it("shows QIDI Studio's native Q2 nozzles and device profile ids", async () => {
+    useSettingsStore.setState({
+      printerModel: "qidi-q2",
+      slicerSoftware: "QIDIStudio",
+      nozzleSize: "0.4",
+      deviceProfileId: "QIDIStudio:qidi:q2:0.4",
+    });
+    renderPanel();
+
+    await openMachineDialog();
+    await screen.findByTestId("machine-adapter-card-qidi-q2");
+    const nozzle02 = await screen.findByTestId("machine-adapter-nozzle-qidi-q2-0_2");
+    const nozzle04 = await screen.findByTestId("machine-adapter-nozzle-qidi-q2-0_4");
+    expect(nozzle02).toHaveTextContent(/0\.2\s*(mm|毫米)/);
+    expect(nozzle04).toHaveTextContent(/0\.4\s*(mm|毫米)/);
+    expect(screen.queryByTestId("machine-adapter-nozzle-qidi-q2-0_6")).not.toBeInTheDocument();
+
+    fireEvent.click(nozzle02);
+    await waitFor(() => {
+      expect(useSettingsStore.getState().deviceProfileId).toBe(
+        "QIDIStudio:qidi:q2:0.2",
+      );
+    });
   });
 
   it("shows a visible error when printer options fail to load", async () => {
