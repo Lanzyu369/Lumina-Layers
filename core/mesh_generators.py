@@ -30,6 +30,10 @@ from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, box
 from shapely.ops import unary_union
 from config import ModelingMode
 from core.vector_engine import VectorProcessor
+from core.vector_mesh_topology import (
+    VECTOR_COVERAGE_ABS_TOL_MM2,
+    VECTOR_COVERAGE_REL_TOL,
+)
 
 try:
     import numba
@@ -150,7 +154,14 @@ def _extrude_polygon_geometry(geometry, height, z_offset, extrude_cache=None):
                 )
             expected_volume = float(poly.area)
             actual_volume = abs(float(base_mesh.volume))
-            coverage_tolerance = max(1e-9, expected_volume * 1e-6)
+            # VectorProcessor may remove float32-collapsed duplicate vertices
+            # after proving that the resulting area remains inside the shared
+            # export bound.  Reuse that same bound here so the raster wrapper
+            # does not reject an already-validated normalization.
+            coverage_tolerance = max(
+                VECTOR_COVERAGE_ABS_TOL_MM2,
+                expected_volume * VECTOR_COVERAGE_REL_TOL,
+            )
             if actual_volume + coverage_tolerance < expected_volume:
                 raise ValueError(
                     "Raster boundary polygon extrusion coverage incomplete; "
