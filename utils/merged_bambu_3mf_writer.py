@@ -795,7 +795,8 @@ def _serialize_per_item_model_n3mf(
 
     doc = builder.build()
     opts = n3mf.WriteOptions()
-    opts.vertex_precision = 6
+    # Match the normal 3MF writer and preserve every float32 vertex value.
+    opts.vertex_precision = 9
     opts.compact_xml = True
 
     # Write to temp file and extract the per-item model bytes.
