@@ -449,6 +449,37 @@ class TestGetPrinters:
             "display_name": "Flash Studio Desktop",
         } in response.json()["slicers"]
 
+    def test_get_printers_and_slicers_expose_qidi_studio_profiles(self) -> None:
+        printers_response = client.get("/api/system/printers")
+        slicers_response = client.get("/api/system/slicers")
+
+        assert printers_response.status_code == 200
+        assert slicers_response.status_code == 200
+        assert {
+            "id": "QIDIStudio",
+            "display_name": "QIDI Studio",
+        } in slicers_response.json()["slicers"]
+        expected_nozzles = {
+            "qidi-q2": ["0.2", "0.4"],
+            "qidi-q2c": ["0.2", "0.4"],
+            "qidi-x-max-4": ["0.2", "0.4"],
+            "qidi-x-plus-5": ["0.4"],
+        }
+        printers = {
+            printer["id"]: printer
+            for printer in printers_response.json()["printers"]
+            if printer["id"] in expected_nozzles
+        }
+        assert set(printers) == set(expected_nozzles)
+        for printer_id, nozzles in expected_nozzles.items():
+            printer = printers[printer_id]
+            assert printer["supported_slicers"] == ["QIDIStudio"]
+            assert [
+                profile["nozzle_size"]
+                for profile in printer["device_profiles"]
+                if profile["slicer_id"] == "QIDIStudio"
+            ] == nozzles
+
     def test_get_printers_attaches_registry_device_profiles(self, tmp_path, monkeypatch) -> None:
         registry_root = tmp_path / "machine_registry"
         registry_root.mkdir()

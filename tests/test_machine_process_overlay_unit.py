@@ -64,6 +64,30 @@ def test_lumina_overlay_preserves_temperature_array_shape():
     assert merged["filament_type"] == ["PLA"] * 8
 
 
+def test_lumina_overlay_disables_skirt_with_native_qidi_defaults():
+    native = {
+        "printer_model": "Q2",
+        "nozzle_diameter": ["0.4"],
+        "skirt_loops": "2",
+        "skirt_distance": "8",
+        "skirt_height": "3",
+        "draft_shield": "enabled",
+    }
+
+    merged = apply_lumina_process_overlay(
+        native,
+        source_profile_name="Q2 0.4 nozzle",
+        slicer_id="QIDIStudio",
+    )
+
+    assert merged["skirt_loops"] == "0"
+    assert merged["skirt_distance"] == "2"
+    assert merged["skirt_height"] == "1"
+    assert merged["draft_shield"] == "disabled"
+    difference_index = set(merged["different_settings_to_system"][0].split(";"))
+    assert {"skirt_loops", "skirt_distance", "skirt_height", "draft_shield"} <= difference_index
+
+
 def test_lumina_overlay_fills_missing_profile_id_and_line_widths():
     native = {
         "printer_model": "Bambu Lab H2D",

@@ -9,6 +9,7 @@ def test_vendor_slicers_reuse_bambu_orca_profile_format():
     elegoo = get_provider("ElegooSlicer")
     anycubic = get_provider("AnycubicSlicerNext")
     flashforge = get_provider("FlashStudio")
+    qidi = get_provider("QIDIStudio")
 
     assert elegoo.profile_format == "bambu_orca"
     assert elegoo.sidecar_policy == "orca_like"
@@ -23,6 +24,11 @@ def test_vendor_slicers_reuse_bambu_orca_profile_format():
     assert flashforge.default_vendor_keys == ("Flashforge",)
     assert flashforge.default_application_metadata == "BambuStudio-2.3.2"
     assert flashforge.default_client_version == ""
+    assert qidi.profile_format == "bambu_orca"
+    assert qidi.sidecar_policy == "qidi_studio"
+    assert qidi.default_vendor_keys == ("Q Series", "X 4 Series", "X 5 Series")
+    assert qidi.default_application_metadata == "QIDIStudio-02.07.02.60"
+    assert qidi.default_client_version == "02.07.02.60"
 
 
 def test_unknown_provider_is_rejected():

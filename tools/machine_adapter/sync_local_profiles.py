@@ -24,6 +24,7 @@ LOCAL_SLICER_SYSTEM_DIRS: dict[str, str] = {
     "ElegooSlicer": "ElegooSlicer/system",
     "AnycubicSlicerNext": "AnycubicSlicerNext/system",
     "FlashStudio": "Orca-Flashforge/system",
+    "QIDIStudio": "QIDIStudio/system",
 }
 
 _OFFICIAL_ORCA_COVER_ASSETS: tuple[tuple[str, str, str], ...] = (
