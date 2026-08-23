@@ -484,6 +484,7 @@ describe("SettingsPanel machine adapter registry UI", () => {
     });
     renderPanel();
 
+    await openMachineDialog();
     await screen.findByTestId("machine-adapter-card-qidi-q2");
     const nozzle02 = await screen.findByTestId("machine-adapter-nozzle-qidi-q2-0_2");
     const nozzle04 = await screen.findByTestId("machine-adapter-nozzle-qidi-q2-0_4");
