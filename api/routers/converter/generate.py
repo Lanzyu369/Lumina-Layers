@@ -108,6 +108,7 @@ from .common import (
     PREVIEW_CACHE_INVALID_DETAIL,
     PREVIEW_CACHE_UNAVAILABLE_DETAIL,
     PREVIEW_COLOR_PALETTE_UNAVAILABLE_DETAIL,
+    RECIPE_OVERRIDE_APPLIED_MASKS_KEY,
     ROUTER_HANDLED_ERRORS,
     SOURCE_IMAGE_UNAVAILABLE_DETAIL,
     _ensure_material_matrix_signed_capacity,
@@ -1035,6 +1036,51 @@ def _recover_select_all_color_region_mask(
     return np.asarray(color_mask, dtype=bool)
 
 
+def _resolve_applied_override_mask_snapshot(
+    *,
+    session_data: dict,
+    region_id: object,
+    shape: tuple[int, int],
+) -> np.ndarray | None:
+    """Return the mask snapshotted when this override was applied, if usable.
+
+    The live selection state prunes synthetic ``__editor_selection__:<rev>``
+    region ids on every selection gesture, so an override applied earlier can
+    no longer be resolved from ``selected_region_masks``. The apply endpoint
+    snapshots the exact masks it used; this helper validates one snapshot
+    entry against the current material-matrix shape before handing it back.
+
+    实时选区状态会在每次选区手势时清理 __editor_selection__:<rev> 合成
+    条目，导致更早应用的覆盖无法再从 selected_region_masks 解析。apply
+    端点会快照当时使用的掩码；本函数取出对应条目并校验其与当前
+    material_matrix 的形状一致后才返回。
+
+    Args:
+        session_data (dict): Session data holding the applied-mask snapshot.
+            (携带已应用掩码快照的会话数据)
+        region_id (object): Override region id to resolve. (待解析的覆盖区域 id)
+        shape (tuple[int, int]): Expected ``(height, width)`` of the mask.
+            (掩码应有的 (高, 宽) 形状)
+
+    Returns:
+        np.ndarray | None: Boolean mask copy matching ``shape``, or ``None``
+        when no usable snapshot exists. (与 shape 匹配的布尔掩码副本；无可用
+        快照时为 None)
+    """
+    if not isinstance(region_id, str):
+        return None
+    applied_masks = session_data.get(RECIPE_OVERRIDE_APPLIED_MASKS_KEY)
+    if not isinstance(applied_masks, dict):
+        return None
+    candidate = applied_masks.get(region_id)
+    if not isinstance(candidate, np.ndarray):
+        return None
+    mask = np.asarray(candidate, dtype=bool).copy()
+    if mask.shape != shape or not np.any(mask):
+        return None
+    return mask
+
+
 def _parse_batch_color_height_map(value: str | None) -> dict[str, float] | None:
     if not value:
         return None
@@ -1603,6 +1649,28 @@ def _prepare_recipe_override_worker_inputs(
             if region_mask is not None:
                 region_masks[region_id] = region_mask
                 store.put(sid, "selected_region_masks", region_masks)
+        if region_mask is None:
+            snapshot_mask = _resolve_applied_override_mask_snapshot(
+                session_data=session_data,
+                region_id=region_id,
+                shape=material_matrix_override.shape[:2],
+            )
+            if snapshot_mask is not None:
+                # Keep the snapshot local to this request: re-publishing a
+                # stale editor-selection id into ``selected_region_masks``
+                # would fight with the selection workstation's own state.
+                # 快照只作用于本次请求：把过期的选区 id 写回
+                # selected_region_masks 会与选区工作站的状态互相干扰。
+                region_masks[region_id] = snapshot_mask
+                log.debug(
+                    "Recipe override mask resolved from applied-time snapshot",
+                    extra={
+                        "event": "recipe_override_mask_snapshot_fallback",
+                        "session_id": sid,
+                        "region_id": str(region_id),
+                    },
+                )
+                region_mask = snapshot_mask
         if region_mask is None:
             raise HTTPException(
                 status_code=422,

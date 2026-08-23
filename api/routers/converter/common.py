@@ -48,6 +48,14 @@ from .source_validation import (
 
 EPHEMERAL_PREVIEW_TTL_SECONDS = 600
 BATCH_DOWNLOAD_TTL_SECONDS = 3600
+# Session key snapshotting per-region masks at apply-recipe-override time so
+# /generate can still re-apply overrides after the editor selection that
+# seeded them was cleared or revised (synthetic __editor_selection__ ids are
+# pruned from selected_region_masks on every selection gesture).
+# 会话键：apply-recipe-override 时对所用区域掩码做快照，供 /generate 在
+# 原选区被清除或更新（__editor_selection__ 合成 id 每次选区手势都会被
+# 清理）之后仍能精确重新套用配方覆盖。
+RECIPE_OVERRIDE_APPLIED_MASKS_KEY = "recipe_override_applied_masks"
 VECTOR_NATIVE_REQUIRES_SVG_ERROR = "vector_native_requires_svg"
 MODEL_SURFACE_PUBLIC_ERROR_MESSAGES: dict[str, str] = {
     MODEL_SURFACE_EMPTY_GEOMETRY: (

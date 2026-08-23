@@ -136,6 +136,7 @@ from .common import (
     NON_FATAL_GLB_ERRORS,
     PREVIEW_CACHE_INVALID_DETAIL,
     PREVIEW_CACHE_UNAVAILABLE_DETAIL,
+    RECIPE_OVERRIDE_APPLIED_MASKS_KEY,
     REGION_SELECTION_REQUIRED_DETAIL,
     ROUTER_HANDLED_ERRORS,
     _ensure_material_matrix_signed_capacity,
@@ -1357,6 +1358,8 @@ def reset_replacements(
             store.put(request.session_id, "replacement_history", [])
             store.put(request.session_id, "recipe_overrides", [])
             store.put(request.session_id, "recipe_override_count", 0)
+            session_data[RECIPE_OVERRIDE_APPLIED_MASKS_KEY] = {}
+            store.put(request.session_id, RECIPE_OVERRIDE_APPLIED_MASKS_KEY, {})
             history_truncated = 0
             previous_rgb = np.asarray(cache.get("matched_rgb")).copy()
 
@@ -1445,6 +1448,8 @@ def reset_replacements(
             session_data["recipe_overrides"] = []
             store.put(request.session_id, "recipe_override_count", 0)
             session_data["recipe_override_count"] = 0
+            session_data[RECIPE_OVERRIDE_APPLIED_MASKS_KEY] = {}
+            store.put(request.session_id, RECIPE_OVERRIDE_APPLIED_MASKS_KEY, {})
             _invalidate_and_prewarm_visible_region_cache(request.session_id, store, session_data, cache)
             history_flags = _push_history_checkpoint(
                 request.session_id,
@@ -4296,6 +4301,22 @@ def apply_recipe_override(
     if not region_mask_items:
         raise HTTPException(status_code=409, detail="No selected regions available for recipe override.")
 
+    # Snapshot the exact masks this override is applied to. The synthetic
+    # ``__editor_selection__:<rev>`` entries in ``selected_region_masks`` are
+    # pruned on every selection gesture (including the automatic clear after
+    # this apply succeeds), so /generate must be able to resolve the override
+    # footprint from this snapshot instead of the live selection state.
+    # 快照本次覆盖实际使用的掩码。selected_region_masks 里的
+    # __editor_selection__:<rev> 合成条目会在每次选区手势时被清理（包括
+    # 本次 apply 成功后前端的自动清空），/generate 必须能从这份快照解析
+    # 覆盖区域，而不是依赖易失的实时选区状态。
+    applied_override_masks = session_data.get(RECIPE_OVERRIDE_APPLIED_MASKS_KEY)
+    applied_override_masks = dict(applied_override_masks) if isinstance(applied_override_masks, dict) else {}
+    for _snapshot_region_id, _snapshot_mask in region_mask_items:
+        applied_override_masks[str(_snapshot_region_id)] = np.asarray(
+            _snapshot_mask, dtype=bool
+        ).copy()
+
     # Resolve source metadata: real LUT for LUT-backed sessions, stub
     # metadata + ``(None, None)`` arrays for material-archive sessions
     # (whose ``lut_path`` is the ``"__material_archive__"`` sentinel and
@@ -4862,6 +4883,8 @@ def apply_recipe_override(
         )
         store.put(request.session_id, "recipe_overrides", existing_overrides)
         store.put(request.session_id, "recipe_override_count", len(existing_overrides))
+        session_data[RECIPE_OVERRIDE_APPLIED_MASKS_KEY] = applied_override_masks
+        store.put(request.session_id, RECIPE_OVERRIDE_APPLIED_MASKS_KEY, applied_override_masks)
         _invalidate_and_prewarm_visible_region_cache(request.session_id, store, session_data, cache)
         history_flags = _push_history_checkpoint(
             request.session_id,

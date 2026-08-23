@@ -38,6 +38,12 @@ _SESSION_FIELD_KEYS: tuple[str, ...] = (
     "editor_selection_revision",
     "editor_selection_content_generation",
     "free_color_set",
+    # Applied-override mask snapshots ride with recipe_overrides so undo/redo
+    # keeps /generate able to re-apply historical overrides whose editor
+    # selection ids no longer exist in the live selection state.
+    # 已应用覆盖的掩码快照随 recipe_overrides 一起进出历史，保证撤销/重做后
+    # /generate 仍能重新套用那些选区 id 已不存在的覆盖。
+    "recipe_override_applied_masks",
 )
 
 _HISTORY_LOCK = threading.Lock()
@@ -259,6 +265,7 @@ def _restore_checkpoint(
         "editor_selection_revision": 0,
         "editor_selection_content_generation": 0,
         "free_color_set": set(),
+        "recipe_override_applied_masks": {},
     }
     restore_keys = (
         (

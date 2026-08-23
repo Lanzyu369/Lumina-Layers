@@ -68,6 +68,7 @@ from .common import (
     LUT_DATA_UNAVAILABLE_DETAIL,
     PREVIEW_CACHE_INVALID_DETAIL,
     PREVIEW_CACHE_UNAVAILABLE_DETAIL,
+    RECIPE_OVERRIDE_APPLIED_MASKS_KEY,
     ROUTER_HANDLED_ERRORS,
     SOURCE_IMAGE_UNAVAILABLE_DETAIL,
     _handle_core_error,
@@ -1226,8 +1227,42 @@ async def generate_puzzle(
             )
             if dynamic_recipe_overrides:
                 try:
+                    # Live selection masks first, then applied-time snapshots:
+                    # editor-selection ids are pruned from the live state on
+                    # every selection gesture, so overrides applied earlier
+                    # must fall back to the snapshot taken by /apply-recipe-
+                    # override. _prepare_piece_recipe_override_masks keeps
+                    # validating shape/source-grid compatibility per entry.
+                    # 优先实时选区掩码，缺失时回退 apply 时的快照：选区 id 会随
+                    # 选区手势从实时状态清理，早前应用的覆盖必须能从快照解析。
+                    # 每个条目的形状/栅格兼容性仍由
+                    # _prepare_piece_recipe_override_masks 校验。
+                    live_region_masks = session_data.get("selected_region_masks")
+                    merged_region_masks = (
+                        dict(live_region_masks)
+                        if isinstance(live_region_masks, dict)
+                        else {}
+                    )
+                    applied_mask_snapshot = session_data.get(
+                        RECIPE_OVERRIDE_APPLIED_MASKS_KEY
+                    )
+                    if isinstance(applied_mask_snapshot, dict):
+                        for override_item in dynamic_recipe_overrides:
+                            override_region_id = str(
+                                override_item.get("region_id") or ""
+                            ).strip()
+                            snapshot_entry = (
+                                applied_mask_snapshot.get(override_region_id)
+                                if override_region_id
+                                else None
+                            )
+                            if (
+                                override_region_id not in merged_region_masks
+                                and isinstance(snapshot_entry, np.ndarray)
+                            ):
+                                merged_region_masks[override_region_id] = snapshot_entry
                     piece_override_masks = _prepare_piece_recipe_override_masks(
-                        region_masks=session_data.get("selected_region_masks"),
+                        region_masks=merged_region_masks,
                         recipe_overrides=dynamic_recipe_overrides,
                         piece=piece,
                         source_shape=dynamic_puzzle_analysis[1].shape,
