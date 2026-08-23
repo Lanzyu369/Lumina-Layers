@@ -418,15 +418,15 @@ class TestExtrudeGeometry:
         cache = {}
 
         call_count = {"n": 0}
-        real_builder = _ve._extrude_polygon_unit_height_indexed
+        real_builder = _ve.extrude_polygon_for_export
 
-        def counted_builder(_poly):
+        def counted_builder(*args, **kwargs):
             call_count["n"] += 1
-            return real_builder(_poly)
+            return real_builder(*args, **kwargs)
 
         with patch.object(
             _ve,
-            "_extrude_polygon_unit_height_indexed",
+            "extrude_polygon_for_export",
             side_effect=counted_builder,
         ):
             meshes1 = VectorProcessor._extrude_geometry(poly, height=1.0, z_offset=0.0, scale=1.0, extrude_cache=cache)
@@ -504,7 +504,7 @@ class TestExtrudeGeometry:
 
         with patch.object(
             _ve,
-            "_extrude_polygon_unit_height_indexed",
+            "extrude_polygon_for_export",
             side_effect=AssertionError("convex no-hole polygons should not call trimesh extrusion"),
         ):
             meshes = VectorProcessor._extrude_geometry(
@@ -526,7 +526,7 @@ class TestExtrudeGeometry:
         """Non-convex polygons use the slicer-safe indexed boundary path."""
         poly = Polygon([(0, 0), (10, 0), (10, 4), (4, 4), (4, 10), (0, 10)])
         calls = []
-        original = _ve._extrude_polygon_unit_height_indexed
+        original = _ve.extrude_polygon_for_export
 
         def spy_indexed_extrusion(*args, **kwargs):
             calls.append(args[0])
@@ -534,7 +534,7 @@ class TestExtrudeGeometry:
 
         with patch.object(
             _ve,
-            "_extrude_polygon_unit_height_indexed",
+            "extrude_polygon_for_export",
             side_effect=spy_indexed_extrusion,
         ):
             meshes = VectorProcessor._extrude_geometry(

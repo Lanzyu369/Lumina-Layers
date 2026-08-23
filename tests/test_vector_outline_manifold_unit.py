@@ -131,6 +131,77 @@ def test_vector_outline_repairs_nonwatertight_simple_ring(
     assert np.all(counts == 2)
 
 
+def test_vector_outline_routes_extrusion_through_shared_topology_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Outline keeps its closed-mesh contract through the shared service."""
+
+    ring = box(0.0, 0.0, 10.0, 10.0).difference(box(2.0, 2.0, 8.0, 8.0))
+    _patch_ring(monkeypatch, ring)
+    calls = []
+    original_extrude_polygon = vector_branch.trimesh.creation.extrude_polygon
+
+    def fake_extrude_polygon_for_export(poly, *, xy_scale, prefer_fast):
+        calls.append((poly, xy_scale, prefer_fast))
+        mesh = original_extrude_polygon(poly, height=1.0)
+        mesh.metadata["topology_service_marker"] = "outline"
+        return [mesh]
+
+    monkeypatch.setattr(
+        vector_branch,
+        "extrude_polygon_for_export",
+        fake_extrude_polygon_for_export,
+    )
+
+    outline = vector_branch._generate_vector_outline_mesh(
+        analysis=_outline_analysis(),
+        outline_width_mm=1.0,
+        base_aux_color=[255, 255, 255, 255],
+        base_aux_material_name="White",
+        ctx=_outline_context(),
+    )
+
+    assert len(calls) == 1
+    assert calls[0][0].equals(ring)
+    assert calls[0][1] == pytest.approx(1.0)
+    assert calls[0][2] is True
+    assert outline is not None
+    assert outline.is_watertight
+    assert np.all(_edge_incidence_counts(outline) == 2)
+    assert outline.metadata["topology_service_marker"] == "outline"
+
+
+def test_vector_outline_rejects_shared_topology_service_failure_without_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Outline rejects a shared-service failure instead of retrying legacy extrusion."""
+
+    ring = box(0.0, 0.0, 10.0, 10.0).difference(box(2.0, 2.0, 8.0, 8.0))
+    _patch_ring(monkeypatch, ring)
+    service_calls = []
+
+    def fail_shared_topology_service(*_args, **_kwargs):
+        service_calls.append(True)
+        raise ValueError("synthetic topology service failure")
+
+    monkeypatch.setattr(
+        vector_branch,
+        "extrude_polygon_for_export",
+        fail_shared_topology_service,
+    )
+
+    outline = vector_branch._generate_vector_outline_mesh(
+        analysis=_outline_analysis(),
+        outline_width_mm=1.0,
+        base_aux_color=[255, 255, 255, 255],
+        base_aux_material_name="White",
+        ctx=_outline_context(),
+    )
+
+    assert service_calls == [True]
+    assert outline is None
+
+
 def test_vector_outline_survives_float32_writer_weld(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -185,20 +256,20 @@ def test_vector_outline_rejects_failed_piece_instead_of_partial_ring(
     )
     _patch_ring(monkeypatch, ring)
 
-    monkeypatch.setattr(
-        "core.vector_engine._extrude_polygonal_unit_height",
-        lambda _geometry: (_ for _ in ()).throw(ValueError("synthetic repair failure")),
-    )
-    original_extrude = vector_branch.trimesh.creation.extrude_polygon
+    original_extrude = vector_branch.extrude_polygon_for_export
 
-    def fail_suspicious_polygon(poly, *args, **kwargs):
+    def fail_suspicious_polygon(poly, *, xy_scale, prefer_fast):
         if getattr(poly, "interiors", ()):
-            raise ValueError("synthetic generic extrusion failure")
-        return original_extrude(poly, *args, **kwargs)
+            raise ValueError("synthetic topology service failure")
+        return original_extrude(
+            poly,
+            xy_scale=xy_scale,
+            prefer_fast=prefer_fast,
+        )
 
     monkeypatch.setattr(
-        vector_branch.trimesh.creation,
-        "extrude_polygon",
+        vector_branch,
+        "extrude_polygon_for_export",
         fail_suspicious_polygon,
     )
 
@@ -223,7 +294,7 @@ def test_outline_component_separation_survives_writer_coordinate_mapping() -> No
         vector_branch.trimesh.creation.extrude_polygon(right, height=1.0),
     ]
 
-    assert vector_branch._separate_outline_component_coordinates(meshes)
+    assert vector_branch.separate_component_coordinates(meshes)
 
     vertices = np.vstack([np.asarray(mesh.vertices) for mesh in meshes])
     faces = []
@@ -275,7 +346,7 @@ def test_outline_component_separation_survives_bed_scale_3mf_export(
             height=1.0,
         ),
     ]
-    assert vector_branch._separate_outline_component_coordinates(meshes)
+    assert vector_branch.separate_component_coordinates(meshes)
     outline = vector_branch.trimesh.util.concatenate(meshes)
 
     output_path = tmp_path / "outline.3mf"

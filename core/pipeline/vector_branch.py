@@ -33,7 +33,6 @@ from types import SimpleNamespace
 import cv2  # noqa: F401  -- imported for side-effect parity with coordinator
 import numpy as np
 import trimesh
-from shapely import set_precision
 from shapely.geometry import box
 from shapely.ops import unary_union
 from shapely.validation import make_valid
@@ -49,6 +48,12 @@ from core.pipeline.s08_auxiliary_meshes import (
     _coerce_preview_rgba,
 )
 from core.preview_analysis_cache import preview_analysis_reuse_is_required
+from core.vector_mesh_topology import (
+    extrude_polygon_for_export,
+    mesh_is_float32_safe,
+    prepare_geometry_for_float32,
+    separate_component_coordinates,
+)
 
 # ---------------------------------------------------------------------------
 # Cycle-safe re-import of small helpers that originate in coordinator.
@@ -850,339 +855,6 @@ def _clip_vector_outline_buffer_to_expected_bounds(expanded, union, width_units:
     return clipped
 
 
-def _outline_mesh_is_watertight(mesh) -> bool:
-    """Read Trimesh topology state without allowing diagnostics to escape."""
-    try:
-        return bool(mesh is not None and mesh.is_watertight)
-    except (AttributeError, IndexError, TypeError, ValueError, RuntimeError):
-        return False
-
-
-def _outline_mesh_is_float32_safe(
-    mesh,
-    *,
-    xy_scale: float = 1.0,
-) -> bool:
-    """Check topology after the writer's float32 vertex conversion.
-
-    ``neroued_3mf.Mesh.from_arrays`` stores ``Vec3f`` vertices even when the
-    Python caller supplies float64 arrays.  This validator mirrors that weld
-    boundary and rejects duplicate vertices, degenerate triangles, open
-    edges, or edges shared by more than two faces before a bad 3MF is written.
-
-    ``neroued_3mf.Mesh.from_arrays`` 即使接收 float64 数组，也会把顶点存成
-    ``Vec3f``。这里在写出前复现同一 float32 边界，拒绝重复顶点、退化三角形、
-    开放边和超过两面共享的边，避免生成损坏的 3MF。
-    """
-    try:
-        scale_value = float(xy_scale)
-        vertices = np.asarray(mesh.vertices, dtype=np.float64).copy()
-        faces = np.asarray(mesh.faces, dtype=np.int64)
-    except (AttributeError, TypeError, ValueError, OverflowError):
-        return False
-    if (
-        not math.isfinite(scale_value)
-        or scale_value <= 0.0
-        or vertices.ndim != 2
-        or vertices.shape[1] != 3
-        or faces.ndim != 2
-        or faces.shape[1] != 3
-        or len(vertices) == 0
-        or len(faces) == 0
-    ):
-        return False
-    vertices[:, :2] *= scale_value
-    if not np.all(np.isfinite(vertices)):
-        return False
-    export_vertices = vertices.astype(np.float32)
-    _unique_vertices, inverse, counts = np.unique(
-        export_vertices,
-        axis=0,
-        return_inverse=True,
-        return_counts=True,
-    )
-    if np.any(counts > 1):
-        return False
-    mapped_faces = inverse[faces]
-    if np.any(
-        (mapped_faces[:, 0] == mapped_faces[:, 1])
-        | (mapped_faces[:, 1] == mapped_faces[:, 2])
-        | (mapped_faces[:, 2] == mapped_faces[:, 0])
-    ):
-        return False
-    edges = np.concatenate(
-        [mapped_faces[:, [0, 1]], mapped_faces[:, [1, 2]], mapped_faces[:, [2, 0]]],
-        axis=0,
-    )
-    edges.sort(axis=1)
-    _unique_edges, edge_counts = np.unique(edges, axis=0, return_counts=True)
-    return bool(np.all(edge_counts == 2))
-
-
-def _outline_geometry_needs_float32_snap(geometry, scale_factor: float) -> bool:
-    """Return whether any Outline ring vertex collapses at float32 precision."""
-    try:
-        scale_value = float(scale_factor)
-    except (TypeError, ValueError):
-        return True
-    if not math.isfinite(scale_value) or scale_value <= 0.0:
-        return True
-    geometries = (
-        list(getattr(geometry, "geoms", ()))
-        if getattr(geometry, "geom_type", None) == "MultiPolygon"
-        else [geometry]
-    )
-    for polygon in geometries:
-        if not hasattr(polygon, "exterior"):
-            continue
-        rings = [polygon.exterior, *polygon.interiors]
-        for ring in rings:
-            coordinates = np.asarray(ring.coords, dtype=np.float64)[:-1, :2]
-            if len(coordinates) < 3:
-                return True
-            export_coordinates = (coordinates * scale_value).astype(np.float32)
-            if len(np.unique(export_coordinates, axis=0)) != len(export_coordinates):
-                return True
-    return False
-
-
-def _snap_outline_geometry_for_float32(
-    geometry,
-    *,
-    scale_factor: float,
-):
-    """Snap a failing Outline ring to a sub-resolution physical grid."""
-    try:
-        scale_value = float(scale_factor)
-        grid_size = 0.0001 / scale_value
-        original_area = float(geometry.area) * scale_value * scale_value
-    except (AttributeError, TypeError, ValueError, OverflowError, ZeroDivisionError):
-        return None
-    if (
-        not math.isfinite(scale_value)
-        or scale_value <= 0.0
-        or not math.isfinite(grid_size)
-        or grid_size <= 0.0
-        or not math.isfinite(original_area)
-    ):
-        return None
-    try:
-        snapped = set_precision(unary_union(geometry), grid_size=grid_size)
-    except COORDINATOR_HANDLED_ERRORS:
-        return None
-    if snapped is None or getattr(snapped, "is_empty", True):
-        return None
-    if not getattr(snapped, "is_valid", True):
-        try:
-            snapped = make_valid(snapped)
-        except COORDINATOR_HANDLED_ERRORS:
-            return None
-    if snapped is None or getattr(snapped, "is_empty", True):
-        return None
-    try:
-        snapped_area = float(snapped.area) * scale_value * scale_value
-    except (AttributeError, TypeError, ValueError, OverflowError):
-        return None
-    if not math.isfinite(snapped_area):
-        return None
-    try:
-        from core.vector_engine import (
-            _VECTOR_COVERAGE_ABS_TOL_MM2,
-            _VECTOR_COVERAGE_REL_TOL,
-        )
-
-        tolerance = max(
-            _VECTOR_COVERAGE_ABS_TOL_MM2,
-            original_area * _VECTOR_COVERAGE_REL_TOL,
-        )
-    except COORDINATOR_HANDLED_ERRORS:
-        tolerance = 0.01
-    if abs(snapped_area - original_area) > tolerance:
-        return None
-    return snapped
-
-
-def _separate_outline_component_coordinates(
-    meshes: list[trimesh.Trimesh],
-    *,
-    precision_digits: int = 12,
-    separation_mm: float = 1e-4,
-) -> bool:
-    """Keep independently indexed Outline shells distinct in 3MF output.
-
-    ``neroued_3mf`` stores vertices as float32 before formatting XML. Outline
-    pieces intentionally retain independent indices, so two shells that touch
-    at a coordinate can otherwise be remapped to one vertex during export and
-    acquire degenerate/non-manifold edges. Move only colliding shells by a
-    deterministic sub-micron offset; the offset is far below slicer
-    resolution and does not alter the intended footprint.
-
-    ``neroued_3mf`` 会先把顶点存成 float32 再写 XML。Outline 分片必须保留独立
-    索引，但相接分片的坐标可能被重新映射到同一个顶点，产生退化三角形和非流形边。
-    这里只对发生坐标冲突的独立壳体施加确定性的亚微米级平移，远低于切片分辨率。
-    """
-    try:
-        digits = int(precision_digits)
-        separation = float(separation_mm)
-    except (TypeError, ValueError):
-        return False
-    if digits < 6 or not math.isfinite(separation) or separation <= 0.0:
-        return False
-
-    # Keep the legacy precision argument for call-site compatibility, but use
-    # the actual n3mf storage domain for collision keys.
-    _ = digits
-    offsets = [(0.0, 0.0, 0.0)]
-    directions = (
-        (1.0, 0.0),
-        (-1.0, 0.0),
-        (0.0, 1.0),
-        (0.0, -1.0),
-        (1.0, 1.0),
-        (-1.0, 1.0),
-        (1.0, -1.0),
-        (-1.0, -1.0),
-    )
-    for step in range(1, 9):
-        offsets.extend(
-            (dx * separation * step, dy * separation * step, 0.0)
-            for dx, dy in directions
-        )
-
-    occupied: set[tuple[int, int, int]] = set()
-    for mesh in meshes:
-        vertices = np.asarray(getattr(mesh, "vertices", ()), dtype=np.float64)
-        if vertices.ndim != 2 or vertices.shape[1] != 3 or len(vertices) == 0:
-            return False
-        if not np.all(np.isfinite(vertices)):
-            return False
-
-        accepted = False
-        for offset in offsets:
-            candidate = vertices + np.asarray(offset, dtype=np.float64)
-            quantised = candidate.astype(np.float32)
-            if len(np.unique(quantised, axis=0)) != len(quantised):
-                continue
-            candidate_keys = {tuple(row) for row in quantised.tolist()}
-            if occupied.intersection(candidate_keys):
-                continue
-            if offset != (0.0, 0.0, 0.0):
-                mesh.apply_translation(offset)
-            occupied.update(candidate_keys)
-            accepted = True
-            break
-        if not accepted:
-            return False
-    return True
-
-
-def _extrude_vector_outline_polygon(
-    poly,
-    *,
-    height_units: float,
-    scale_factor: float,
-) -> list[trimesh.Trimesh]:
-    """Extrude one Outline polygon, repairing only unsafe indexed topology.
-
-    The fast Trimesh path is retained for ordinary Outline pieces.  When a
-    polygon produces a non-watertight shell, the canonical vector indexed
-    extrusion is retried on the original geometry.  Polygons with ambiguous
-    ring topology additionally retry on two sub-resolution precision grids.
-    A repaired candidate is accepted only if it is watertight and its physical
-    area changes by no more than the bounded coverage tolerance.
-
-    对普通 Outline 分片保留 Trimesh 快速挤出；任何非闭合结果都会先用主体矢量
-    分支的 indexed extrusion 重试，存在环接触风险时再用两个低于切片分辨率的
-    精度网格重试。只有拓扑闭合且物理面积变化在覆盖率容差内才接受修复结果。
-    """
-    fast_mesh = None
-    fast_error: BaseException | None = None
-    try:
-        fast_mesh = trimesh.creation.extrude_polygon(poly, height=height_units)
-    except COORDINATOR_HANDLED_ERRORS as exc:
-        fast_error = exc
-
-    try:
-        from core.vector_engine import (
-            _VECTOR_RING_SEPARATION_RETRY_MM,
-            _extrude_polygonal_unit_height,
-            _polygon_repair_area_is_safe,
-            _polygon_requires_topology_validation,
-            _repair_polygon_ring_contacts,
-        )
-    except COORDINATOR_HANDLED_ERRORS as exc:
-        raise ValueError("Vector outline topology repair helper unavailable") from exc
-
-    try:
-        scale_value = float(scale_factor)
-    except (TypeError, ValueError):
-        scale_value = 0.0
-    requires_topology_validation = _polygon_requires_topology_validation(
-        poly,
-        scale_value,
-    )
-    if (
-        _outline_mesh_is_watertight(fast_mesh)
-        and not requires_topology_validation
-    ):
-        return [fast_mesh]
-
-    candidates = [poly]
-    if (
-        requires_topology_validation
-        and math.isfinite(scale_value)
-        and scale_value > 0.0
-    ):
-        for gap_mm in _VECTOR_RING_SEPARATION_RETRY_MM:
-            repaired = _repair_polygon_ring_contacts(poly, scale_value, gap_mm)
-            if (
-                repaired is None
-                or getattr(repaired, "is_empty", True)
-                or not getattr(repaired, "is_valid", False)
-                or not _polygon_repair_area_is_safe(poly, repaired, scale_value)
-            ):
-                continue
-            candidates.append(repaired)
-
-    for candidate in candidates:
-        if candidate is not poly and not _polygon_repair_area_is_safe(
-            poly,
-            candidate,
-            scale_value,
-        ):
-            continue
-        candidate_parts = (
-            list(candidate.geoms)
-            if getattr(candidate, "geom_type", None) == "MultiPolygon"
-            else [candidate]
-        )
-        repaired_meshes = []
-        candidate_failed = False
-        for part in candidate_parts:
-            try:
-                repaired_mesh = _extrude_polygonal_unit_height(part)
-            except COORDINATOR_HANDLED_ERRORS:
-                candidate_failed = True
-                break
-            if not _outline_mesh_is_watertight(repaired_mesh):
-                candidate_failed = True
-                break
-            if not _outline_mesh_is_float32_safe(
-                repaired_mesh,
-                xy_scale=scale_value,
-            ):
-                candidate_failed = True
-                break
-            repaired_mesh.apply_scale([1.0, 1.0, float(height_units)])
-            repaired_meshes.append(repaired_mesh)
-        if not candidate_failed and repaired_meshes:
-            return repaired_meshes
-
-    if fast_mesh is None:
-        raise ValueError("Vector outline polygon extrusion failed") from fast_error
-    raise ValueError("Vector outline polygon topology could not be repaired")
-
-
 def _resolve_vector_outline_export_size_mm(
     analysis,
     scale_factor: float,
@@ -1283,8 +955,7 @@ def _generate_vector_outline_mesh(
            where ``outline_width_units = outline_width_mm / scale_factor``
            (vector geometry lives in pre-scale SVG units; ``build_mesh``
            multiplies by ``scale_factor`` during extrusion).
-        3. Extrude ring with ``trimesh.creation.extrude_polygon`` to the
-           same backing thickness used by the rest of the vector scene.
+        3. Extrude each polygon through the shared topology export service.
         4. ``apply_scale`` by ``scale_factor`` so the mesh lands in the
            same mm coordinate system as ``Board`` / colour slots.
         5. Decorate with ``metadata['name'] = 'Outline'`` +
@@ -1427,27 +1098,22 @@ def _generate_vector_outline_mesh(
         )
         return None
 
-    # The native 3MF writer stores vertices as float32.  Only enter the
-    # precision-repair branch when the actual ring contains coordinates that
-    # collapse at that boundary; ordinary Outline exports keep their exact
-    # geometry and fast path unchanged.
-    if _outline_geometry_needs_float32_snap(ring, scale_factor):
-        snapped_ring = _snap_outline_geometry_for_float32(
-            ring,
-            scale_factor=scale_factor,
+    prepared_ring = prepare_geometry_for_float32(
+        ring,
+        xy_scale=scale_factor,
+    )
+    if prepared_ring is None or getattr(prepared_ring, "is_empty", True):
+        log.warning(
+            "Vector outline rejected: float32 precision repair exceeded coverage guard",
+            extra={
+                "event": "vector_outline_rejected_topology",
+                "error_type": "float32_precision_loss",
+                "unsupported_reason": "outline_float32_precision_guard",
+                "shape_count": len(matched_shapes),
+            },
         )
-        if snapped_ring is None or getattr(snapped_ring, "is_empty", True):
-            log.warning(
-                "Vector outline rejected: float32 precision repair exceeded coverage guard",
-                extra={
-                    "event": "vector_outline_rejected_topology",
-                    "error_type": "float32_precision_loss",
-                    "unsupported_reason": "outline_float32_precision_guard",
-                    "shape_count": len(matched_shapes),
-                },
-            )
-            return None
-        ring = snapped_ring
+        return None
+    ring = prepared_ring
 
     layer_h = _resolve_vector_layer_height_mm(ctx)
     z_min_mm, z_max_mm = _resolve_vector_outline_z_span(
@@ -1458,12 +1124,12 @@ def _generate_vector_outline_mesh(
     )
     thickness_mm = max(layer_h, z_max_mm - z_min_mm)
     outline_layers = max(1, int(round(thickness_mm / layer_h)))
-    extrude_height_units = float(outline_layers)  # height in pre-scale units
+    outline_height_mm = float(outline_layers) * layer_h
 
     # Iterate over the ring's polygonal parts (a ring around a multi-shape
     # union is a MultiPolygon when the originals are disjoint) and extrude
-    # each piece independently. trimesh.creation.extrude_polygon accepts a
-    # single Polygon, so we explode and concatenate the pieces.
+    # each piece independently. The topology service accepts a single Polygon,
+    # so we explode and concatenate the pieces.
     # ring 通常是 MultiPolygon，逐个 Polygon 挤出再拼回。
     polys = []
     if hasattr(ring, "geoms"):
@@ -1486,10 +1152,10 @@ def _generate_vector_outline_mesh(
     meshes: list = []
     for poly_index, poly in enumerate(polys):
         try:
-            pieces = _extrude_vector_outline_polygon(
+            pieces = extrude_polygon_for_export(
                 poly,
-                height_units=extrude_height_units,
-                scale_factor=scale_factor,
+                xy_scale=scale_factor,
+                prefer_fast=True,
             )
         except COORDINATOR_HANDLED_ERRORS as exc:
             log.warning(
@@ -1516,11 +1182,13 @@ def _generate_vector_outline_mesh(
                 },
             )
             return None
-        # Pre-scale → mm: scale XY by scale_factor, Z by layer_height_mm so
-        # the outline sits in the same coordinate system as colour slots.
-        # 预缩放空间 → mm：XY 乘 scale_factor，Z 乘 layer_h，与色层同坐标系。
+        # Pre-scale → mm: scale XY by scale_factor and the unit-height Z
+        # by the complete Outline thickness.
+        # 预缩放空间 → mm：XY 乘 scale_factor，单位高度 Z 乘 Outline 总厚度。
         for piece in pieces:
-            piece.apply_scale([scale_factor, scale_factor, layer_h])
+            piece.apply_scale(
+                [scale_factor, scale_factor, outline_height_mm]
+            )
             if z_min_mm != 0.0:
                 piece.apply_translation([0.0, 0.0, z_min_mm])
             meshes.append(piece)
@@ -1528,7 +1196,7 @@ def _generate_vector_outline_mesh(
     if not meshes:
         return None
 
-    if not _separate_outline_component_coordinates(meshes):
+    if not separate_component_coordinates(meshes):
         log.warning(
             "Vector outline rejected: export-coordinate separation failed",
             extra={
@@ -1553,9 +1221,7 @@ def _generate_vector_outline_mesh(
         export_color_mode=export_color_mode,
     )
 
-    if not _outline_mesh_is_watertight(outline_mesh) or not _outline_mesh_is_float32_safe(
-        outline_mesh
-    ):
+    if not mesh_is_float32_safe(outline_mesh):
         log.warning(
             "Vector outline rejected: writer-domain topology validation failed",
             extra={
