@@ -160,6 +160,29 @@ def test_boundary_polygon_extrusion_is_watertight() -> None:
     assert float(mesh.volume) == pytest.approx(5.0)
 
 
+def test_boundary_polygon_extrusion_accepts_bounded_float32_normalization() -> None:
+    """Near-duplicate raster vertices may be normalized within the export bound."""
+
+    polygon = mesh_generators.Polygon(
+        [
+            (2.0, 22.0),
+            (2.0, 23.0),
+            (1.9999999999999654, 23.0),
+            (1.2233571841820776, 22.223357184182078),
+            (1.2683026830235615, 22.0),
+        ]
+    )
+
+    mesh = mesh_generators._extrude_polygon_geometry(
+        polygon,
+        height=1.0,
+        z_offset=0.0,
+    )[0]
+
+    _assert_closed_independent_shells(mesh)
+    assert abs(float(mesh.volume) - float(polygon.area)) <= 0.01
+
+
 def test_boundary_polygon_extrusion_rejects_lost_area(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

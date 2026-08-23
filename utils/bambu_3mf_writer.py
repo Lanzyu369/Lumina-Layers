@@ -2117,7 +2117,17 @@ class BambuStudio3MFWriter:
         doc = builder.build()
 
         opts = n3mf.WriteOptions()
-        opts.vertex_precision = 6
+        # ``neroued_3mf`` interprets this as significant-digit precision. At
+        # bed-scale X/Y coordinates, six digits round independent vertices to
+        # the same XML coordinate after the float32 storage boundary. Nine
+        # significant digits are sufficient to round-trip every IEEE-754
+        # float32 value while avoiding the file-size cost of an arbitrary
+        # higher precision.
+        # ``neroued_3mf`` 将此值按有效数字而非固定小数位处理。在打印床尺度的
+        # X/Y 坐标下，六位会把 float32 边界之后本应独立的顶点写成同一 XML
+        # 坐标。九位有效数字足以无歧义地往返任意 IEEE-754 float32，同时避免
+        # 任意提高精度带来的文件体积成本。
+        opts.vertex_precision = 9
         opts.compact_xml = True
         if self.watermark and hasattr(n3mf, "WatermarkConfig"):
             opts.watermark = n3mf.WatermarkConfig(payload=self.watermark.encode("utf-8"))

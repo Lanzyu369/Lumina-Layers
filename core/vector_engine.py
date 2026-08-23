@@ -31,7 +31,6 @@ import time
 import xml.etree.ElementTree as ET
 import trimesh
 import cv2
-from mapbox_earcut import triangulate_float64
 from dataclasses import dataclass, field
 from svgelements import (
     SVG,
@@ -47,7 +46,6 @@ from svgelements import (
     Length,
 )
 from shapely.geometry import Polygon, MultiPolygon, LineString, Point, box
-from shapely.geometry.polygon import orient
 from shapely import affinity
 try:
     from shapely import buffer as shapely_buffer
@@ -81,22 +79,23 @@ from core.task_parallelism import (
 from core.vector_diagnostics import (
     SVG_INTERSECTING_COMPOUND_COMPLEXITY_DIAGNOSTIC,
 )
+from core.vector_mesh_topology import (
+    VECTOR_COVERAGE_ABS_TOL_MM2 as _VECTOR_COVERAGE_ABS_TOL_MM2,
+    VECTOR_COVERAGE_REL_TOL as _VECTOR_COVERAGE_REL_TOL,
+    extrude_polygon_for_export,
+    mesh_is_float32_safe,
+)
 
 _log = get_logger(__name__)
 
 MIN_SHAPE_AREA_MM2 = 0.01
 BASE_COLOR_GAP_MM = 0.005
-# This allowance is only for accumulated float/triangulation noise. One part
-# per million is about 0.04 mm^2 on a 200 x 200 mm body, so it cannot hide a
-# separately printable island while still scaling above the fixed epsilon for
-# unusually large models.
-_VECTOR_COVERAGE_REL_TOL = 1e-6
-_VECTOR_COVERAGE_ABS_TOL_MM2 = 0.01
 _PLANAR_COVERAGE_METADATA_KEY = "_lumina_planar_coverage_mm2"
 # Polygons below one float64 epsilon in physical area are numerical residue,
 # not representable model detail.  Keep this many orders of magnitude below
 # any printable feature instead of reusing the user-facing shape-area filter.
 _FLOAT_RESIDUAL_AREA_MM2 = float(np.finfo(np.float64).eps)
+_FLOAT32_MAX_COORDINATE = float(np.finfo(np.float32).max)
 _MAX_BEZIER_DEPTH = 16
 
 # Supersample factor for the hard membership masks (mask_solid / matched_rgb /
@@ -1396,6 +1395,46 @@ def _direct_convex_extrusion_base(poly, scale):
     return vertices, np.asarray(faces, dtype=np.int64)
 
 
+def _direct_convex_candidate_needs_float32_validation(vertices) -> bool:
+    """Detect writer-domain risks in the fixed direct-convex face layout."""
+
+    vertex_array = np.asarray(vertices, dtype=np.float64)
+    if (
+        vertex_array.ndim != 2
+        or vertex_array.shape[1] != 3
+        or len(vertex_array) < 6
+        or len(vertex_array) % 2
+    ):
+        return True
+
+    ring_size = len(vertex_array) // 2
+    writer_xy = []
+    seen = set()
+    for raw_x, raw_y in vertex_array[:ring_size, :2]:
+        if not (
+            -_FLOAT32_MAX_COORDINATE <= raw_x <= _FLOAT32_MAX_COORDINATE
+            and -_FLOAT32_MAX_COORDINATE <= raw_y <= _FLOAT32_MAX_COORDINATE
+        ):
+            return True
+        point = (float(np.float32(raw_x)), float(np.float32(raw_y)))
+        if point in seen:
+            return True
+        seen.add(point)
+        writer_xy.append(point)
+
+    origin_x, origin_y = writer_xy[0]
+    for index in range(1, ring_size - 1):
+        point_a = writer_xy[index]
+        point_b = writer_xy[index + 1]
+        cross = (
+            (point_a[0] - origin_x) * (point_b[1] - origin_y)
+            - (point_a[1] - origin_y) * (point_b[0] - origin_x)
+        )
+        if cross == 0.0:
+            return True
+    return False
+
+
 def _cap_planar_area_mm2(vertices, faces) -> float | None:
     """Measure the bottom cap area of one unit-height extrusion."""
 
@@ -1428,136 +1467,6 @@ def _cap_planar_area_mm2(vertices, faces) -> float | None:
     )
     area = float(np.sum(twice_area, dtype=np.float64) * 0.5)
     return area if math.isfinite(area) and area >= 0.0 else None
-
-
-def _extrude_polygonal_unit_height(
-    geometry: Polygon | MultiPolygon,
-) -> trimesh.Trimesh:
-    """Extrude all polygon parts with topology-indexed boundary sidewalls."""
-
-    parts = geometry.geoms if isinstance(geometry, MultiPolygon) else (geometry,)
-    meshes = [
-        _extrude_polygon_unit_height_indexed(part)
-        for part in parts
-        if isinstance(part, Polygon) and not part.is_empty
-    ]
-    if not meshes:
-        raise ValueError("Vector polygon repair produced no extrudable parts")
-    if len(meshes) == 1:
-        return meshes[0]
-    return trimesh.util.concatenate(meshes)
-
-
-def _extrude_polygon_unit_height_indexed(poly: Polygon) -> trimesh.Trimesh:
-    """Build one prism without coordinate-welding distinct ring vertices.
-
-    Trimesh's generic extrusion builds each boundary wall independently and
-    relies on post-processing to weld coincident coordinates.  Valid SVG
-    boolean results can contain two ring vertices at the same XY coordinate
-    that are topologically distinct; coordinate welding then turns their
-    vertical walls into a 4/6-face edge.  Bambu Studio and OrcaSlicer rebuild
-    contours from those indexed triangle edges and may omit a large connected
-    region.  This builder derives sidewalls from the triangulation's boundary
-    indices, so only vertices already shared by the triangulator are shared in
-    the 3D mesh.
-    """
-
-    # Prefer the robust triangulator bundled in production. Its output keeps
-    # one indexed vertex at exact ring contacts, which is the topology needed
-    # for a closed sidewall. Earcut remains a best-effort runtime fallback;
-    # the watertight check at the caller fails closed if it cannot represent
-    # the same topology safely.
-    try:
-        vertices_2d, cap_faces = trimesh.creation.triangulate_polygon(
-            poly,
-            engine="manifold",
-        )
-    except VECTOR_HANDLED_ERRORS:
-        rings = [
-            np.asarray(poly.exterior.coords, dtype=np.float64)[:-1, :2],
-            *[
-                np.asarray(ring.coords, dtype=np.float64)[:-1, :2]
-                for ring in poly.interiors
-            ],
-        ]
-        if any(len(ring) < 3 for ring in rings):
-            raise ValueError("Vector polygon contains a degenerate ring")
-        vertices_2d = np.vstack(rings)
-        ring_ends = np.cumsum(
-            [len(ring) for ring in rings],
-            dtype=np.uint32,
-        )
-        cap_faces = triangulate_float64(vertices_2d, ring_ends).reshape((-1, 3))
-
-    vertices_2d = np.asarray(vertices_2d, dtype=np.float64)
-    cap_faces = np.asarray(cap_faces, dtype=np.int64)
-    if (
-        vertices_2d.ndim != 2
-        or vertices_2d.shape[1] != 2
-        or cap_faces.ndim != 2
-        or cap_faces.shape[1] != 3
-        or len(cap_faces) == 0
-    ):
-        raise ValueError("Vector polygon triangulation produced no cap faces")
-
-    cap_a = vertices_2d[cap_faces[:, 1]] - vertices_2d[cap_faces[:, 0]]
-    cap_b = vertices_2d[cap_faces[:, 2]] - vertices_2d[cap_faces[:, 0]]
-    signed_twice_area = (
-        cap_a[:, 0] * cap_b[:, 1] - cap_a[:, 1] * cap_b[:, 0]
-    )
-    non_degenerate = np.abs(signed_twice_area) > 1e-18
-    if not np.any(non_degenerate):
-        raise ValueError("Vector polygon triangulation has zero area")
-    if float(np.mean(signed_twice_area[non_degenerate])) < 0.0:
-        cap_faces = cap_faces[:, ::-1]
-
-    oriented_edges = np.vstack(
-        (
-            cap_faces[:, [0, 1]],
-            cap_faces[:, [1, 2]],
-            cap_faces[:, [2, 0]],
-        )
-    )
-    sorted_edges = np.sort(oriented_edges, axis=1)
-    _unique_edges, inverse, edge_counts = np.unique(
-        sorted_edges,
-        axis=0,
-        return_inverse=True,
-        return_counts=True,
-    )
-    if np.any(edge_counts > 2):
-        raise ValueError("Vector cap triangulation produced non-manifold edges")
-    boundary_edges = oriented_edges[edge_counts[inverse] == 1]
-    if len(boundary_edges) == 0:
-        raise ValueError("Vector polygon triangulation produced no boundary")
-
-    vertex_count = len(vertices_2d)
-    bottom = np.column_stack(
-        (vertices_2d, np.zeros(vertex_count, dtype=np.float64))
-    )
-    top = np.column_stack(
-        (vertices_2d, np.ones(vertex_count, dtype=np.float64))
-    )
-    start = boundary_edges[:, 0]
-    end = boundary_edges[:, 1]
-    side_faces = np.vstack(
-        (
-            np.column_stack((start, end, vertex_count + end)),
-            np.column_stack((start, vertex_count + end, vertex_count + start)),
-        )
-    )
-    faces = np.vstack(
-        (
-            cap_faces[:, ::-1],
-            cap_faces + vertex_count,
-            side_faces,
-        )
-    )
-    return trimesh.Trimesh(
-        vertices=np.vstack((bottom, top)),
-        faces=faces,
-        process=False,
-    )
 
 
 def _concatenate_meshes_fast(meshes):
@@ -1612,6 +1521,15 @@ def _build_atomic_prism_mesh(
 ) -> trimesh.Trimesh | None:
     """Extrude one planar cell with deterministic shared-edge diagonals."""
 
+    z_start = float(z_start)
+    z_end = float(z_end)
+    if (
+        not math.isfinite(z_start)
+        or not math.isfinite(z_end)
+        or z_end <= z_start
+    ):
+        raise ValueError("Atomic prism requires a positive Z span")
+
     base_meshes = VectorProcessor._extrude_geometry(
         polygon,
         height=z_end - z_start,
@@ -1625,6 +1543,29 @@ def _build_atomic_prism_mesh(
     base_faces = np.asarray(base.faces, dtype=np.int64)
     face_z = base_vertices[base_faces, 2]
     cap_mask = np.ptp(face_z, axis=1) <= 1e-9
+    bottom_mask = cap_mask & (
+        np.max(np.abs(face_z - float(z_start)), axis=1) <= 1e-9
+    )
+    bottom_faces = base_faces[bottom_mask]
+    if len(bottom_faces) == 0:
+        raise ValueError("Atomic prism extrusion produced no bottom cap faces")
+    bottom_edges = np.vstack(
+        (
+            bottom_faces[:, [0, 1]],
+            bottom_faces[:, [1, 2]],
+            bottom_faces[:, [2, 0]],
+        )
+    )
+    sorted_bottom_edges = np.sort(bottom_edges, axis=1)
+    _unique_edges, inverse, edge_counts = np.unique(
+        sorted_bottom_edges,
+        axis=0,
+        return_inverse=True,
+        return_counts=True,
+    )
+    boundary_edges = bottom_edges[edge_counts[inverse] == 1]
+    if len(boundary_edges) == 0:
+        raise ValueError("Atomic prism bottom cap produced no boundary edges")
     parts = [
         trimesh.Trimesh(
             vertices=base_vertices.copy(),
@@ -1633,44 +1574,40 @@ def _build_atomic_prism_mesh(
         )
     ]
 
-    oriented = orient(polygon, sign=1.0)
-    rings = [oriented.exterior, *oriented.interiors]
     side_vertices = []
     side_faces = []
-    for ring in rings:
-        coordinates = list(ring.coords)
-        for start, end in zip(coordinates, coordinates[1:]):
-            start_xy = (float(start[0]) * scale_factor, float(start[1]) * scale_factor)
-            end_xy = (float(end[0]) * scale_factor, float(end[1]) * scale_factor)
-            if start_xy == end_xy:
-                continue
-            vertex_offset = len(side_vertices)
-            side_vertices.extend(
+    for end_index, start_index in boundary_edges:
+        start_xy = tuple(base_vertices[int(start_index), :2])
+        end_xy = tuple(base_vertices[int(end_index), :2])
+        if start_xy == end_xy:
+            continue
+        vertex_offset = len(side_vertices)
+        side_vertices.extend(
+            [
+                (start_xy[0], start_xy[1], z_start),
+                (end_xy[0], end_xy[1], z_start),
+                (start_xy[0], start_xy[1], z_end),
+                (end_xy[0], end_xy[1], z_end),
+            ]
+        )
+        start_bottom = vertex_offset
+        end_bottom = vertex_offset + 1
+        start_top = vertex_offset + 2
+        end_top = vertex_offset + 3
+        if start_xy < end_xy:
+            side_faces.extend(
                 [
-                    (start_xy[0], start_xy[1], z_start),
-                    (end_xy[0], end_xy[1], z_start),
-                    (start_xy[0], start_xy[1], z_end),
-                    (end_xy[0], end_xy[1], z_end),
+                    (start_bottom, end_bottom, end_top),
+                    (start_bottom, end_top, start_top),
                 ]
             )
-            start_bottom = vertex_offset
-            end_bottom = vertex_offset + 1
-            start_top = vertex_offset + 2
-            end_top = vertex_offset + 3
-            if start_xy < end_xy:
-                side_faces.extend(
-                    [
-                        (start_bottom, end_bottom, end_top),
-                        (start_bottom, end_top, start_top),
-                    ]
-                )
-            else:
-                side_faces.extend(
-                    [
-                        (start_top, start_bottom, end_bottom),
-                        (start_top, end_bottom, end_top),
-                    ]
-                )
+        else:
+            side_faces.extend(
+                [
+                    (start_top, start_bottom, end_bottom),
+                    (start_top, end_bottom, end_top),
+                ]
+            )
 
     if side_faces:
         parts.append(
@@ -9821,14 +9758,35 @@ class VectorProcessor:
 
                 if cached_base is None:
                     direct_base = _direct_convex_extrusion_base(poly, scale)
+                    if (
+                        direct_base is not None
+                        and _direct_convex_candidate_needs_float32_validation(
+                            direct_base[0]
+                        )
+                    ):
+                        direct_candidate = trimesh.Trimesh(
+                            vertices=direct_base[0],
+                            faces=direct_base[1],
+                            process=False,
+                        )
+                        if not mesh_is_float32_safe(
+                            direct_candidate,
+                            xy_scale=1.0,
+                        ):
+                            direct_base = None
                     if direct_base is not None:
                         base_vertices, base_faces = direct_base
                     else:
-                        m_base = _extrude_polygonal_unit_height(poly)
-                        if not bool(m_base.is_watertight):
-                            raise ValueError(
-                                "Vector polygon extrusion produced non-manifold topology"
-                            )
+                        topology_meshes = extrude_polygon_for_export(
+                            poly,
+                            xy_scale=float(scale),
+                            prefer_fast=False,
+                        )
+                        m_base = (
+                            topology_meshes[0]
+                            if len(topology_meshes) == 1
+                            else trimesh.util.concatenate(topology_meshes)
+                        )
                         base_vertices = np.asarray(m_base.vertices, dtype=np.float64).copy()
                         if base_vertices.ndim == 2 and base_vertices.shape[1] >= 2:
                             base_vertices[:, 0] *= float(scale)

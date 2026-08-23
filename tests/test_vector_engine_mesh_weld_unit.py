@@ -22,9 +22,18 @@ import core.vector_engine as vector_engine
 from core.vector_engine import (
     VectorAnalysis,
     VectorProcessor,
+    _build_atomic_prism_mesh,
     _build_stepped_volume_mesh,
     _cap_planar_area_mm2,
     _concatenate_meshes_fast,
+    _finalize_prism_meshes,
+)
+from core.vector_mesh_topology import (
+    VECTOR_COVERAGE_ABS_TOL_MM2,
+    VECTOR_COVERAGE_REL_TOL,
+    extrude_polygon_for_export,
+    mesh_is_float32_safe,
+    prepare_geometry_for_float32,
 )
 
 
@@ -79,6 +88,180 @@ def test_cap_planar_area_is_measured_from_generated_triangles() -> None:
     assert _cap_planar_area_mm2(vertices, faces) == pytest.approx(24.0)
 
 
+@pytest.mark.parametrize(
+    ("polygon", "writer_vertices_stay_distinct"),
+    [
+        (
+            Polygon(
+                [
+                    (
+                        2500.0 + 1000.0 * np.cos(angle),
+                        2500.0 + 1000.0 * np.sin(angle),
+                    )
+                    for angle in (0.0, 1.0, 1.0 + 1e-8, 2.0, 3.0, 4.0, 5.0)
+                ]
+            ),
+            False,
+        ),
+        (
+            Polygon(
+                [
+                    (1500.0, 2500.0),
+                    (2500.0, 2499.99999),
+                    (3500.0, 2500.0),
+                    (3500.0, 3500.0),
+                    (1500.0, 3500.0),
+                ]
+            ),
+            True,
+        ),
+    ],
+    ids=("near_duplicate", "distinct_collinear"),
+)
+def test_float32_unsafe_direct_convex_candidate_routes_to_shared_service(
+    polygon: Polygon,
+    writer_vertices_stay_distinct: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direct convex output must not bypass writer-domain topology safety."""
+
+    scale = 0.04
+    direct = vector_engine._direct_convex_extrusion_base(polygon, scale)
+    assert direct is not None
+    direct_mesh = trimesh.Trimesh(
+        vertices=direct[0],
+        faces=direct[1],
+        process=False,
+    )
+    assert not mesh_is_float32_safe(direct_mesh, xy_scale=1.0)
+    writer_vertices = np.asarray(direct_mesh.vertices, dtype=np.float32)
+    if writer_vertices_stay_distinct:
+        assert len(np.unique(writer_vertices, axis=0)) == len(writer_vertices)
+        triangles = writer_vertices[direct_mesh.faces].astype(np.float64)
+        crosses = np.cross(
+            triangles[:, 1] - triangles[:, 0],
+            triangles[:, 2] - triangles[:, 0],
+        )
+        assert np.any(np.all(crosses == 0.0, axis=1))
+    if len(polygon.exterior.coords) == 8:
+        assert float(polygon.area) * scale * scale == pytest.approx(
+            4133.023362639679
+        )
+
+    service_calls = []
+    real_service = vector_engine.extrude_polygon_for_export
+
+    def traced_service(poly, *, xy_scale, prefer_fast):
+        service_calls.append((poly, xy_scale, prefer_fast))
+        return real_service(
+            poly,
+            xy_scale=xy_scale,
+            prefer_fast=prefer_fast,
+        )
+
+    monkeypatch.setattr(
+        vector_engine,
+        "extrude_polygon_for_export",
+        traced_service,
+    )
+    meshes = VectorProcessor._extrude_geometry(
+        polygon,
+        height=0.2,
+        z_offset=0.3,
+        scale=scale,
+        extrude_cache={},
+    )
+
+    assert len(service_calls) == 1
+    assert service_calls[0][0].equals(polygon)
+    assert service_calls[0][1] == pytest.approx(scale)
+    assert service_calls[0][2] is False
+    assert len(meshes) == 1
+    assert mesh_is_float32_safe(meshes[0], xy_scale=1.0)
+    np.testing.assert_allclose(meshes[0].bounds[:, 2], [0.3, 0.5])
+
+
+def test_extrude_geometry_routes_nonconvex_polygon_through_shared_topology_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The non-convex production path keeps coverage through one service."""
+
+    polygon = Polygon(
+        [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (2.0, 2.0), (0.0, 4.0)]
+    )
+    assert vector_engine._direct_convex_extrusion_base(polygon, 1.0) is None
+    calls = []
+
+    def fake_extrude_polygon_for_export(poly, *, xy_scale, prefer_fast):
+        calls.append((poly, xy_scale, prefer_fast))
+        mesh = trimesh.creation.extrude_polygon(poly, height=1.0)
+        mesh.apply_translation((10.0, 20.0, 0.0))
+        return [mesh]
+
+    monkeypatch.setattr(
+        vector_engine,
+        "extrude_polygon_for_export",
+        fake_extrude_polygon_for_export,
+    )
+
+    meshes = VectorProcessor._extrude_geometry(
+        polygon,
+        height=0.25,
+        z_offset=0.0,
+        scale=1.0,
+        extrude_cache={},
+    )
+
+    assert len(calls) == 1
+    assert calls[0][0].equals(polygon)
+    assert calls[0][1] == pytest.approx(1.0)
+    assert calls[0][2] is False
+    assert len(meshes) == 1
+    assert meshes[0].is_watertight
+    assert np.all(_edge_incidence_counts(meshes[0]) == 2)
+    assert abs(float(meshes[0].volume)) == pytest.approx(
+        float(polygon.area) * 0.25,
+    )
+    np.testing.assert_allclose(
+        meshes[0].bounds[:, :2],
+        np.asarray(polygon.bounds, dtype=np.float64).reshape(2, 2)
+        + np.asarray((10.0, 20.0)),
+    )
+
+
+def test_extrude_geometry_fails_closed_when_shared_topology_service_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A shared-service error rejects the polygon without legacy fallback."""
+
+    polygon = Polygon(
+        [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (2.0, 2.0), (0.0, 4.0)]
+    )
+    assert vector_engine._direct_convex_extrusion_base(polygon, 1.0) is None
+    service_calls = []
+
+    def fail_shared_topology_service(*_args, **_kwargs):
+        service_calls.append(True)
+        raise ValueError("synthetic topology service failure")
+
+    monkeypatch.setattr(
+        vector_engine,
+        "extrude_polygon_for_export",
+        fail_shared_topology_service,
+    )
+
+    with pytest.raises(ValueError, match="refusing partial model export"):
+        VectorProcessor._extrude_geometry(
+            polygon,
+            height=0.25,
+            z_offset=0.0,
+            scale=1.0,
+            extrude_cache={},
+        )
+
+    assert service_calls == [True]
+
+
 def test_lum_20260811_002_ring_contact_extrudes_to_slicer_safe_shell() -> None:
     """A production contour must not create 4- or 6-face vertical edges.
 
@@ -108,9 +291,277 @@ def test_lum_20260811_002_ring_contact_extrudes_to_slicer_safe_shell() -> None:
     assert len(meshes) == 1
     mesh = meshes[0]
     expected_volume = float(polygon.area) * scale * scale * layer_height
-    assert abs(float(mesh.volume)) == pytest.approx(expected_volume, rel=1e-6)
+    coverage_tolerance_mm2 = max(
+        VECTOR_COVERAGE_ABS_TOL_MM2,
+        float(polygon.area) * scale * scale * VECTOR_COVERAGE_REL_TOL,
+    )
+    assert abs(float(mesh.volume)) == pytest.approx(
+        expected_volume,
+        abs=coverage_tolerance_mm2 * layer_height,
+    )
     assert mesh.is_watertight
     assert np.all(_edge_incidence_counts(mesh) == 2)
+
+
+def _assert_atomic_prism_contract(
+    polygon: Polygon,
+    *,
+    scale: float,
+    z_start: float,
+    z_end: float,
+    expected_component_count: int = 1,
+) -> None:
+    """Assert cap, side-wall, coverage, and orientation agreement."""
+
+    raw_prism = _build_atomic_prism_mesh(
+        polygon,
+        z_start=z_start,
+        z_end=z_end,
+        scale_factor=scale,
+    )
+
+    assert raw_prism is not None
+    prism = _finalize_prism_meshes([raw_prism])
+    assert prism is not None
+    assert prism.is_watertight
+    assert prism.is_winding_consistent
+    np.testing.assert_allclose(prism.bounds[:, 2], [z_start, z_end])
+
+    components = prism.split(only_watertight=False)
+    assert len(components) == expected_component_count
+    assert all(component.is_watertight for component in components)
+    assert all(component.is_winding_consistent for component in components)
+
+    height = z_end - z_start
+    cap_area_mm2 = 0.0
+    for component in components:
+        np.testing.assert_allclose(component.bounds[:, 2], [z_start, z_end])
+        vertices = np.asarray(component.vertices, dtype=np.float64)
+        faces = np.asarray(component.faces, dtype=np.int64)
+        face_vertices = vertices[faces]
+        face_z = face_vertices[:, :, 2]
+        bottom_mask = np.all(
+            np.isclose(face_z, z_start, rtol=0.0, atol=1e-9),
+            axis=1,
+        )
+        bottom_faces = faces[bottom_mask]
+        assert len(bottom_faces) > 0
+        bottom_triangles = vertices[bottom_faces, :2]
+        edge_a = bottom_triangles[:, 1] - bottom_triangles[:, 0]
+        edge_b = bottom_triangles[:, 2] - bottom_triangles[:, 0]
+        component_cap_area_mm2 = float(
+            np.sum(
+                np.abs(
+                    edge_a[:, 0] * edge_b[:, 1]
+                    - edge_a[:, 1] * edge_b[:, 0]
+                ),
+                dtype=np.float64,
+            )
+            * 0.5
+        )
+        cap_area_mm2 += component_cap_area_mm2
+        assert abs(float(component.volume)) == pytest.approx(
+            component_cap_area_mm2 * height
+        )
+
+        cap_edges = np.vstack(
+            (
+                bottom_faces[:, [0, 1]],
+                bottom_faces[:, [1, 2]],
+                bottom_faces[:, [2, 0]],
+            )
+        )
+        sorted_cap_edges = np.sort(cap_edges, axis=1)
+        unique_cap_edges, cap_edge_counts = np.unique(
+            sorted_cap_edges,
+            axis=0,
+            return_counts=True,
+        )
+
+        def xy_edge_key(vertex_indices) -> tuple:
+            points = [tuple(vertices[int(index), :2]) for index in vertex_indices]
+            return tuple(sorted(points))
+
+        cap_boundary_xy = {
+            xy_edge_key(edge)
+            for edge in unique_cap_edges[cap_edge_counts == 1]
+        }
+        assert cap_boundary_xy
+        side_bottom_xy = set()
+        side_mask = np.ptp(face_z, axis=1) > 1e-9
+        for face in faces[side_mask]:
+            bottom_indices = [
+                int(index)
+                for index in face
+                if np.isclose(
+                    vertices[int(index), 2],
+                    z_start,
+                    rtol=0.0,
+                    atol=1e-9,
+                )
+            ]
+            if len(bottom_indices) == 2:
+                side_bottom_xy.add(xy_edge_key(bottom_indices))
+
+        assert side_bottom_xy == cap_boundary_xy
+
+    source_area_mm2 = float(polygon.area) * scale * scale
+    coverage_tolerance_mm2 = max(
+        VECTOR_COVERAGE_ABS_TOL_MM2,
+        source_area_mm2 * VECTOR_COVERAGE_REL_TOL,
+    )
+    assert abs(float(prism.volume)) == pytest.approx(cap_area_mm2 * height)
+    assert abs(cap_area_mm2 - source_area_mm2) <= coverage_tolerance_mm2
+
+
+def test_precision_snapped_atomic_prism_uses_actual_cap_boundary_for_sides() -> None:
+    """A snapped cap and its side walls must describe the same closed prism."""
+
+    fixture_path = (
+        Path(__file__).parent
+        / "fixtures"
+        / "svg_regression"
+        / "lum_20260811_002_ring_contact.wkt"
+    )
+    polygon = wkt.loads(fixture_path.read_text(encoding="utf-8"))
+
+    _assert_atomic_prism_contract(
+        polygon,
+        scale=0.2762232707950837,
+        z_start=0.35,
+        z_end=1.15,
+    )
+
+
+def test_atomic_prism_with_hole_uses_actual_cap_boundary_for_sides() -> None:
+    """Exterior and hole walls must both follow the generated cap boundary."""
+
+    polygon = Polygon(
+        [
+            (1500.0, 1500.0),
+            (3500.0, 1500.0),
+            (3500.0, 3500.0),
+            (1500.0, 3500.0),
+        ],
+        [
+            [
+                (2200.0, 2200.0),
+                (2200.0, 2800.0),
+                (2800.0, 2800.0),
+                (2800.0, 2200.0),
+            ]
+        ],
+    )
+
+    _assert_atomic_prism_contract(
+        polygon,
+        scale=0.04,
+        z_start=0.2,
+        z_end=1.05,
+    )
+
+
+def test_atomic_prism_preserves_every_precision_repair_component() -> None:
+    """A sub-grid dumbbell bridge must repair into two complete shells."""
+
+    polygon = unary_union(
+        [
+            box(0.0, 0.0, 1.0, 1.0),
+            # This positive float64 bridge collapses on the 0.0001 mm grid.
+            box(1.0, 0.5, 2.0, 0.5 + 1e-13),
+            box(2.0, 0.0, 3.0, 1.0),
+        ]
+    )
+    assert isinstance(polygon, Polygon)
+    assert polygon.is_valid
+
+    repaired = prepare_geometry_for_float32(polygon, xy_scale=1.0)
+    assert repaired is not None
+    assert repaired.geom_type == "MultiPolygon"
+    assert len(repaired.geoms) == 2
+    export_parts = extrude_polygon_for_export(
+        polygon,
+        xy_scale=1.0,
+        prefer_fast=False,
+    )
+    assert len(export_parts) == len(repaired.geoms)
+
+    _assert_atomic_prism_contract(
+        polygon,
+        scale=1.0,
+        z_start=0.25,
+        z_end=1.0,
+        expected_component_count=len(repaired.geoms),
+    )
+
+
+@pytest.mark.parametrize(
+    ("z_start", "z_end"),
+    [(0.5, 0.5), (0.5, 0.4)],
+)
+def test_atomic_prism_rejects_non_positive_z_span(
+    z_start: float,
+    z_end: float,
+) -> None:
+    """Atomic prisms require a positive Z span."""
+
+    with pytest.raises(ValueError, match="positive Z span"):
+        _build_atomic_prism_mesh(
+            box(0.0, 0.0, 1.0, 1.0),
+            z_start=z_start,
+            z_end=z_end,
+            scale_factor=1.0,
+        )
+
+
+def test_atomic_prism_rejects_mesh_without_bottom_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An extrusion without faces at z_start cannot form an atomic prism."""
+
+    candidate = trimesh.creation.box(extents=(1.0, 1.0, 1.0))
+    candidate.apply_translation((0.5, 0.5, 2.5))
+    monkeypatch.setattr(
+        VectorProcessor,
+        "_extrude_geometry",
+        staticmethod(lambda *_args, **_kwargs: [candidate]),
+    )
+
+    with pytest.raises(ValueError, match="bottom cap"):
+        _build_atomic_prism_mesh(
+            box(0.0, 0.0, 1.0, 1.0),
+            z_start=0.0,
+            z_end=1.0,
+            scale_factor=1.0,
+        )
+
+
+def test_atomic_prism_rejects_bottom_cap_without_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A closed bottom-face set has no boundary from which to build walls."""
+
+    candidate = trimesh.Trimesh(
+        vertices=np.asarray(
+            [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)],
+            dtype=np.float64,
+        ),
+        faces=np.asarray([(0, 1, 2), (2, 1, 0)], dtype=np.int64),
+        process=False,
+    )
+    monkeypatch.setattr(
+        VectorProcessor,
+        "_extrude_geometry",
+        staticmethod(lambda *_args, **_kwargs: [candidate]),
+    )
+
+    with pytest.raises(ValueError, match="boundary edges"):
+        _build_atomic_prism_mesh(
+            box(0.0, 0.0, 1.0, 1.0),
+            z_start=0.0,
+            z_end=1.0,
+            scale_factor=1.0,
+        )
 
 
 def test_zero_area_polygon_is_not_exported() -> None:
@@ -181,12 +632,12 @@ def test_polygon_extrusion_failure_does_not_return_partial_geometry(
         [[(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0)]],
     )
 
-    def fail_extrusion(_geometry):
+    def fail_extrusion(*_args, **_kwargs):
         raise ValueError("synthetic topology failure")
 
     monkeypatch.setattr(
         vector_engine,
-        "_extrude_polygonal_unit_height",
+        "extrude_polygon_for_export",
         fail_extrusion,
     )
 
@@ -211,8 +662,8 @@ def test_polygon_extrusion_rejects_incomplete_closed_cap(
     incomplete.apply_translation((0.5, 0.5, 0.5))
     monkeypatch.setattr(
         vector_engine,
-        "_extrude_polygonal_unit_height",
-        lambda _geometry: incomplete,
+        "extrude_polygon_for_export",
+        lambda *_args, **_kwargs: [incomplete],
     )
     monkeypatch.setattr(
         vector_engine,
@@ -254,20 +705,20 @@ def test_extrude_geometry_separates_exterior_from_touching_hole_ring(
     assert abs(float(mesh.volume)) == pytest.approx(float(geometry.area), abs=0.01)
 
 
-def test_missing_manifold_kernel_refuses_unsafe_touching_ring_fallback(
+def test_topology_service_failure_refuses_unsafe_touching_ring_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A missing core triangulator must not silently export a partial shell."""
+    """A topology-service dependency failure must reject the complete shell."""
 
     geometry = Polygon(
         [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)],
         [[(0.0, 5.0), (2.0, 4.0), (2.0, 6.0), (0.0, 5.0)]],
     )
     monkeypatch.setattr(
-        trimesh.creation,
-        "triangulate_polygon",
+        vector_engine,
+        "extrude_polygon_for_export",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            ImportError("synthetic missing manifold3d")
+            ValueError("synthetic missing polygon triangulators")
         ),
     )
 
@@ -308,7 +759,7 @@ def test_extrude_geometry_preserves_thin_bridge_without_coordinate_repair() -> N
 
 
 def test_extrude_geometry_handles_duplicate_vertex_and_thin_bridge() -> None:
-    """Indexed extrusion tolerates redundant ring coordinates without welding."""
+    """Writer-safe extrusion preserves area after an unrepresentable bridge."""
 
     geometry = unary_union(
         [
@@ -332,7 +783,9 @@ def test_extrude_geometry_handles_duplicate_vertex_and_thin_bridge() -> None:
     assert len(meshes) == 1
     mesh = meshes[0]
     assert mesh.is_watertight
-    assert len(mesh.split(only_watertight=False)) == 1
+    components = mesh.split(only_watertight=False)
+    assert len(components) == 2
+    assert all(component.is_watertight for component in components)
     assert np.all(_edge_incidence_counts(mesh) == 2)
     assert abs(float(mesh.volume)) == pytest.approx(
         float(geometry_with_duplicate.area),
@@ -350,6 +803,36 @@ def test_extrude_geometry_separates_point_touching_hole_rings() -> None:
             [(8.0, 4.0), (8.0, 6.0), (5.0, 5.0), (8.0, 4.0)],
         ],
     )
+    meshes = VectorProcessor._extrude_geometry(
+        geometry,
+        height=1.0,
+        z_offset=0.0,
+        scale=1.0,
+        extrude_cache={},
+    )
+
+    assert len(meshes) == 1
+    mesh = meshes[0]
+    assert mesh.is_watertight
+    assert np.all(_edge_incidence_counts(mesh) == 2)
+    assert abs(float(mesh.volume)) == pytest.approx(float(geometry.area), abs=0.01)
+
+
+def test_extrude_geometry_repairs_complex_point_touching_holes() -> None:
+    """A detailed hole and a small hole sharing one point stay slicer-safe."""
+
+    angles = np.linspace(0.0, 2.0 * np.pi, 20, endpoint=False)
+    large_hole = [
+        (10.0 + 8.0 * np.cos(theta), 10.0 + 8.0 * np.sin(theta))
+        for theta in angles
+    ]
+    contact = large_hole[0]
+    small_hole = [contact, (25.0, 8.0), (25.0, 12.0), contact]
+    geometry = Polygon(
+        [(0.0, 0.0), (30.0, 0.0), (30.0, 30.0), (0.0, 30.0)],
+        [large_hole, small_hole],
+    )
+
     meshes = VectorProcessor._extrude_geometry(
         geometry,
         height=1.0,

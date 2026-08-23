@@ -48,6 +48,12 @@ from core.pipeline.s08_auxiliary_meshes import (
     _coerce_preview_rgba,
 )
 from core.preview_analysis_cache import preview_analysis_reuse_is_required
+from core.vector_mesh_topology import (
+    extrude_polygon_for_export,
+    mesh_is_float32_safe,
+    prepare_geometry_for_float32,
+    separate_component_coordinates,
+)
 
 # ---------------------------------------------------------------------------
 # Cycle-safe re-import of small helpers that originate in coordinator.
@@ -87,7 +93,6 @@ except ImportError as exc:
 # log audits attach handlers to ``lumina.core.pipeline.coordinator``).
 # 日志命名空间故意继续沿用 coordinator，保证抽离后日志可观察性零变更。
 log = get_logger("core.pipeline.coordinator")
-
 
 # ---------------------------------------------------------------------------
 # Layer-0 (appearance face) diagnostics
@@ -950,8 +955,7 @@ def _generate_vector_outline_mesh(
            where ``outline_width_units = outline_width_mm / scale_factor``
            (vector geometry lives in pre-scale SVG units; ``build_mesh``
            multiplies by ``scale_factor`` during extrusion).
-        3. Extrude ring with ``trimesh.creation.extrude_polygon`` to the
-           same backing thickness used by the rest of the vector scene.
+        3. Extrude each polygon through the shared topology export service.
         4. ``apply_scale`` by ``scale_factor`` so the mesh lands in the
            same mm coordinate system as ``Board`` / colour slots.
         5. Decorate with ``metadata['name'] = 'Outline'`` +
@@ -1094,6 +1098,23 @@ def _generate_vector_outline_mesh(
         )
         return None
 
+    prepared_ring = prepare_geometry_for_float32(
+        ring,
+        xy_scale=scale_factor,
+    )
+    if prepared_ring is None or getattr(prepared_ring, "is_empty", True):
+        log.warning(
+            "Vector outline rejected: float32 precision repair exceeded coverage guard",
+            extra={
+                "event": "vector_outline_rejected_topology",
+                "error_type": "float32_precision_loss",
+                "unsupported_reason": "outline_float32_precision_guard",
+                "shape_count": len(matched_shapes),
+            },
+        )
+        return None
+    ring = prepared_ring
+
     layer_h = _resolve_vector_layer_height_mm(ctx)
     z_min_mm, z_max_mm = _resolve_vector_outline_z_span(
         ctx,
@@ -1103,12 +1124,12 @@ def _generate_vector_outline_mesh(
     )
     thickness_mm = max(layer_h, z_max_mm - z_min_mm)
     outline_layers = max(1, int(round(thickness_mm / layer_h)))
-    extrude_height_units = float(outline_layers)  # height in pre-scale units
+    outline_height_mm = float(outline_layers) * layer_h
 
     # Iterate over the ring's polygonal parts (a ring around a multi-shape
     # union is a MultiPolygon when the originals are disjoint) and extrude
-    # each piece independently. trimesh.creation.extrude_polygon accepts a
-    # single Polygon, so we explode and concatenate the pieces.
+    # each piece independently. The topology service accepts a single Polygon,
+    # so we explode and concatenate the pieces.
     # ring 通常是 MultiPolygon，逐个 Polygon 挤出再拼回。
     polys = []
     if hasattr(ring, "geoms"):
@@ -1129,30 +1150,62 @@ def _generate_vector_outline_mesh(
         return None
 
     meshes: list = []
-    for poly in polys:
+    for poly_index, poly in enumerate(polys):
         try:
-            piece = trimesh.creation.extrude_polygon(poly, height=extrude_height_units)
+            pieces = extrude_polygon_for_export(
+                poly,
+                xy_scale=scale_factor,
+                prefer_fast=True,
+            )
         except COORDINATOR_HANDLED_ERRORS as exc:
             log.warning(
-                "Vector outline polygon extrude skipped",
+                "Vector outline rejected after polygon extrusion failure",
                 extra={
                     "event": "vector_outline_polygon_extrude_failed",
                     "error_type": type(exc).__name__,
                     "error_message": str(exc),
+                    "polygon_index": int(poly_index),
+                    "polygon_count": int(len(polys)),
+                    "unsupported_reason": "outline_polygon_topology_unrepairable",
                 },
             )
-            continue
-        if piece is None or len(piece.vertices) == 0:
-            continue
-        # Pre-scale → mm: scale XY by scale_factor, Z by layer_height_mm so
-        # the outline sits in the same coordinate system as colour slots.
-        # 预缩放空间 → mm：XY 乘 scale_factor，Z 乘 layer_h，与色层同坐标系。
-        piece.apply_scale([scale_factor, scale_factor, layer_h])
-        if z_min_mm != 0.0:
-            piece.apply_translation([0.0, 0.0, z_min_mm])
-        meshes.append(piece)
+            return None
+        if not pieces or any(len(piece.vertices) == 0 for piece in pieces):
+            log.warning(
+                "Vector outline rejected: polygon extrusion returned empty mesh",
+                extra={
+                    "event": "vector_outline_rejected_topology",
+                    "error_type": "empty_mesh",
+                    "polygon_index": int(poly_index),
+                    "polygon_count": int(len(polys)),
+                    "unsupported_reason": "outline_polygon_empty_mesh",
+                },
+            )
+            return None
+        # Pre-scale → mm: scale XY by scale_factor and the unit-height Z
+        # by the complete Outline thickness.
+        # 预缩放空间 → mm：XY 乘 scale_factor，单位高度 Z 乘 Outline 总厚度。
+        for piece in pieces:
+            piece.apply_scale(
+                [scale_factor, scale_factor, outline_height_mm]
+            )
+            if z_min_mm != 0.0:
+                piece.apply_translation([0.0, 0.0, z_min_mm])
+            meshes.append(piece)
 
     if not meshes:
+        return None
+
+    if not separate_component_coordinates(meshes):
+        log.warning(
+            "Vector outline rejected: export-coordinate separation failed",
+            extra={
+                "event": "vector_outline_rejected_topology",
+                "error_type": "coordinate_collision",
+                "unsupported_reason": "outline_export_coordinate_collision",
+                "polygon_count": int(len(meshes)),
+            },
+        )
         return None
 
     if len(meshes) == 1:
@@ -1167,6 +1220,18 @@ def _generate_vector_outline_mesh(
         scale_factor=scale_factor,
         export_color_mode=export_color_mode,
     )
+
+    if not mesh_is_float32_safe(outline_mesh):
+        log.warning(
+            "Vector outline rejected: writer-domain topology validation failed",
+            extra={
+                "event": "vector_outline_rejected_topology",
+                "error_type": "float32_topology_validation",
+                "unsupported_reason": "outline_writer_domain_non_manifold",
+                "polygon_count": int(len(meshes)),
+            },
+        )
+        return None
 
     rgba = list(base_aux_color)
     if len(rgba) < 4:
