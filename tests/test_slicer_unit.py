@@ -174,6 +174,14 @@ class TestMacOSAppScanning:
                 },
                 "flash_studio",
             ),
+            (
+                "QIDIStudio.app",
+                {
+                    "CFBundleName": "QIDIStudio",
+                    "CFBundleIdentifier": "com.qiditech.QIDIStudio",
+                },
+                "qidi_studio",
+            ),
         ],
     )
     @patch("core.slicer.platform.system", return_value="Darwin")
@@ -318,6 +326,15 @@ class TestKnownSlicerMatches:
         (tmp_path / "helper.exe").write_bytes(b"exe")
 
         assert _find_exe_in_directory(str(tmp_path), hint="flashstudio") == str(executable)
+
+    def test_qidi_studio_display_name_and_executable_match(self, tmp_path):
+        assert _match_slicer_id("QIDIStudio 02.07.02.60") == (
+            "qidi_studio",
+            "QIDI Studio",
+        )
+        executable = tmp_path / "qidi-studio.exe"
+        executable.write_bytes(b"exe")
+        assert _find_exe_in_directory(str(tmp_path), hint="qidistudio") == str(executable)
 
 
 # =========================================================================

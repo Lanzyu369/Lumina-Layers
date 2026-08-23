@@ -18,12 +18,14 @@ The current export stack covers all printer/slicer combinations registered in
 
 At the time of writing:
 
-- 26 printer profiles are registered
-- 37 base metadata templates exist under `printer_profiles/`
-- 31 sibling `*_0_2.json` templates exist for `0.2` nozzle exports
+- 30 printer profiles are registered
+- 41 base metadata templates exist under `printer_profiles/`
+- 34 sibling `*_0_2.json` templates exist for `0.2` nozzle exports
 - Flashforge AD5X / Creator 5 / Creator 5 Pro / Guider4 / Guider4 Pro provide
   native `0.25` / `0.4` templates for Flash Studio Desktop
 - Flashforge Guider 3 Ultra provides a native `0.4` template
+- QIDI Q2 / Q2C / X-Max 4 provide native `0.2` / `0.4` templates for
+  QIDI Studio; X-Plus 5 provides its native `0.4` template
 
 ## Core Files
 
@@ -80,6 +82,9 @@ Important:
   by scanning every JSON left in the install directory. Only native presets at
   or below Lumina's `0.4` mm boundary are bundled; same-diameter standard and HF
   Guider4 presets are de-duplicated in favor of the standard preset.
+- QIDI Studio profiles are bounded by the formal `Q Series`, `X 4 Series`, and
+  `X 5 Series` manifests. Lumina exposes the four models backed by supplied
+  native 3MF fixtures and keeps only native nozzle presets at or below `0.4` mm.
 - `supported_nozzle_sizes` is exposed for every currently supported printer.
 
 ## Metadata Package Layout
@@ -110,6 +115,10 @@ Family-specific rules:
 - `FlashStudio`
   Omits Bambu-only aux sidecars, uses the native BBL client header, and does
   not emit an `OrcaSlicer-Version` tag.
+- `QIDIStudio`
+  Uses the native QDT client header, retains `filament_sequence.json` and
+  `cut_information.xml`, emits `plate_1.json`, and uses QIDI package-cover
+  relationship URIs.
 
 ## Nozzle Variant Rules
 
@@ -174,6 +183,7 @@ Rules currently used by the writer:
 - Elegoo: `ElegooSlicer-1.3.2.9`
 - Anycubic: `BambuStudio-1.3.9.4`
 - Flash Studio Desktop: `BambuStudio-2.3.2`
+- QIDI Studio: `QIDIStudio-02.07.02.60`
 
 Flash Studio keeps three versions separate:
 
@@ -195,6 +205,17 @@ filament arrays are contracted to the active project palette rather than a
 generic eight-slot template. These are format metadata only;
 Lumina remains authoritative for layer height, line widths, wall generation,
 temperatures, speeds, infill, support, and brim.
+
+QIDI Studio `02.07.02.60` uses the same value for its installed profile bundle,
+`Application`, project settings version, and `X-QDT-Client-Version`. Its native
+model metadata also contains `QIDIStudio:3mfVersion=1` and
+`OrcaSlicer=2.1.0.14`. The four supplied saved projects establish the supported
+machine boundary: Q2, Q2C, X-Max 4, and X-Plus 5. Q2, Q2C, and X-Max 4 expose
+`0.2` / `0.4`; X-Plus 5 exposes `0.4` only. The QIDI-specific fields are routing
+and package metadata; Lumina remains authoritative for process values.
+All four native reference projects explicitly disable the skirt
+(`skirt_loops=0`) and draft shield; Lumina writes those fields explicitly so
+QIDI Studio cannot fall back to a local process default that enables them.
 
 The H2-family `0.2` branch intentionally uses the newer Bambu client stamp
 because those machine/process presets are aligned to the newer H2 system family.
@@ -500,7 +521,7 @@ archives remap the one-based model-object indexes while preserving the ranges.
 
 Bambu-family slicer IDs (see `frontend/src/utils/settingsOptionIds.ts`):
 `BambuStudio`, `OrcaSlicer`, `SnapmakerOrca`, `ElegooSlicer`,
-`AnycubicSlicerNext`, `FlashStudio`.
+`AnycubicSlicerNext`, `FlashStudio`, `QIDIStudio`.
 
 ### Regression Tests / 回归测试入口
 

@@ -109,6 +109,9 @@ class TestNormalizeSettingsIdentifiers:
     def test_normalize_flash_studio_software_id(self) -> None:
         assert normalize_slicer_software_id("flash studio desktop") == "FlashStudio"
 
+    def test_normalize_qidi_studio_software_id(self) -> None:
+        assert normalize_slicer_software_id("qidi studio") == "QIDIStudio"
+
 
 class TestProfileRequiredFields:
     """Every profile has all required fields."""
@@ -210,6 +213,41 @@ class TestLoadPrinterTemplate:
         assert template["version"] == "2.3.2"
         assert template["filament_vendor"] == ["Flashforge"] * 8
         assert "Flashforge" in str(template["default_filament_profile"])
+
+    @pytest.mark.parametrize(
+        ("printer_id", "model", "nozzle_size"),
+        [
+            ("qidi-q2", "Q2", "0.2"),
+            ("qidi-q2", "Q2", "0.4"),
+            ("qidi-q2c", "Q2C", "0.2"),
+            ("qidi-q2c", "Q2C", "0.4"),
+            ("qidi-x-max-4", "X-Max 4", "0.2"),
+            ("qidi-x-max-4", "X-Max 4", "0.4"),
+            ("qidi-x-plus-5", "X-Plus 5", "0.4"),
+        ],
+    )
+    def test_qidi_templates_keep_native_machine_and_lumina_process_identity(
+        self,
+        printer_id: str,
+        model: str,
+        nozzle_size: str,
+    ) -> None:
+        profile = get_printer_profile(printer_id)
+        template_name = profile.get_template_file("QIDIStudio", nozzle_size=nozzle_size)
+        template = load_printer_template(
+            printer_id,
+            slicer="QIDIStudio",
+            nozzle_size=nozzle_size,
+        )
+
+        assert (Path("printer_profiles") / template_name).exists()
+        assert template["printer_model"] == model
+        assert template["printer_settings_id"] == f"{model} {nozzle_size} nozzle"
+        assert template["printer_variant"] == nozzle_size
+        assert template["nozzle_diameter"] == [nozzle_size]
+        assert template["version"] == "02.07.02.60"
+        assert template["layer_height"] == "0.08"
+        assert template["line_width"] == ("0.22" if nozzle_size == "0.2" else "0.42")
 
     def test_load_printer_template_reads_0_2_variant(self) -> None:
         template = load_printer_template("bambu-p1s", nozzle_size=0.2)

@@ -1197,6 +1197,10 @@ def test_bundled_flash_studio_quarter_profile_exports_native_package(tmp_path) -
     assert project["initial_layer_print_height"] == "0.08"
     assert project["wall_generator"] == "arachne"
     assert project["sparse_infill_density"] == "100%"
+    assert project["skirt_loops"] == "0"
+    assert project["skirt_distance"] == "2"
+    assert project["skirt_height"] == "1"
+    assert project["draft_shield"] == "disabled"
     assert project["filament_map_mode"] == "Auto For Flush"
     for key in (
         "filament_colour",
@@ -1258,6 +1262,97 @@ def test_bundled_flash_studio_quarter_profile_exports_native_package(tmp_path) -
     assert "Metadata/filament_sequence.json" not in entries
     assert "Metadata/cut_information.xml" not in entries
     assert "Metadata/custom_gcode_per_layer.xml" not in entries
+
+
+def test_bundled_qidi_q2_profile_exports_native_package_with_lumina_process(tmp_path) -> None:
+    output_path = tmp_path / "qidi-q2.3mf"
+    writer_module._PRINTER_TEMPLATE_CACHE.clear()
+    writer = BambuStudio3MFWriter(
+        str(output_path),
+        settings={},
+        color_mode="4-Color",
+        printer_id="qidi-q2",
+        slicer="QIDIStudio",
+        nozzle_size="0.4",
+        device_profile_id="QIDIStudio:qidi:q2:0.4",
+    )
+    _add_rybw_meshes(writer)
+    writer.export()
+
+    with zipfile.ZipFile(output_path, "r") as archive:
+        entries = set(archive.namelist())
+        project = json.loads(
+            archive.read("Metadata/project_settings.config").decode("utf-8")
+        )
+        slice_root = ET.fromstring(archive.read("Metadata/slice_info.config"))
+        model_text = archive.read("3D/3dmodel.model").decode("utf-8")
+        model_settings = ET.fromstring(archive.read("Metadata/model_settings.config"))
+        plate = json.loads(archive.read("Metadata/plate_1.json").decode("utf-8"))
+        sequence = json.loads(
+            archive.read("Metadata/filament_sequence.json").decode("utf-8")
+        )
+        relationships = ET.fromstring(archive.read("_rels/.rels"))
+        model_relationships = ET.fromstring(
+            archive.read("3D/_rels/3dmodel.model.rels")
+        )
+
+    header = {
+        item.attrib["key"]: item.attrib["value"]
+        for item in slice_root.findall("./header/header_item")
+    }
+    assert header == {
+        "X-QDT-Client-Type": "slicer",
+        "X-QDT-Client-Version": "02.07.02.60",
+    }
+    assert project["version"] == "02.07.02.60"
+    assert project["printer_model"] == "Q2"
+    assert project["printer_settings_id"] == "Q2 0.4 nozzle"
+    assert project["printer_variant"] == "0.4"
+    assert project["nozzle_diameter"] == ["0.4"]
+    assert project["default_print_profile"] == "0.20mm Standard @Q2"
+    assert project["layer_height"] == "0.08"
+    assert project["line_width"] == "0.42"
+    assert project["wall_loops"] == "1"
+    assert project["sparse_infill_density"] == "100%"
+    assert project["skirt_loops"] == "0"
+    assert project["skirt_distance"] == "2"
+    assert project["skirt_height"] == "1"
+    assert project["draft_shield"] == "disabled"
+    assert len(project["filament_settings_id"]) == 4
+    assert '<metadata name="Application">QIDIStudio-02.07.02.60</metadata>' in model_text
+    assert '<metadata name="OrcaSlicer">2.1.0.14</metadata>' in model_text
+    assert '<metadata name="QIDIStudio:3mfVersion">1</metadata>' in model_text
+    assert 'xmlns:QIDIStudio="http://schemas.qiditech.com/package/2021"' in model_text
+    assert {
+        "Metadata/plate_1.json",
+        "Metadata/filament_sequence.json",
+        "Metadata/cut_information.xml",
+    }.issubset(entries)
+    assert "Metadata/plate_1_small.png" not in entries
+    assert "Metadata/custom_gcode_per_layer.xml" not in entries
+    assert sequence["plate_1"] == {
+        "sequence": [],
+        "nozzle_sequence": [],
+        "optimal_assignment": [],
+    }
+    assert len(plate["filament_colors"]) == 4
+    assert plate["filament_ids"] == [0, 1, 2, 3]
+    plate_metadata = {
+        item.attrib["key"]: item.attrib["value"]
+        for item in model_settings.findall("./plate/metadata")
+    }
+    assert plate_metadata["filament_maps"] == "1 1 1 1"
+    assert plate_metadata["filament_volume_maps"] == "0 0 0 0"
+    relationship_types = {item.attrib["Type"] for item in relationships}
+    assert (
+        "http://schemas.qiditech.com/package/2021/cover-thumbnail-middle"
+        in relationship_types
+    )
+    assert (
+        "http://schemas.qiditech.com/package/2021/cover-thumbnail-small"
+        in relationship_types
+    )
+    assert len(list(model_relationships)) == 1
 
 
 def test_flash_studio_creator_5_pro_matches_manual_project_shape(tmp_path) -> None:

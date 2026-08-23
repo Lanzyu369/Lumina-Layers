@@ -36,6 +36,13 @@ _ELEGOO_CENTAURI_MODELS = {
 _SNAPMAKER_U1_MODEL = "snapmaker u1"
 _MAX_THUMBNAIL_DIMENSION = 1000
 _FLASHSTUDIO_MAX_SUPPORTED_NOZZLE_MM = 0.4
+_QIDI_STUDIO_SUPPORTED_MODELS = {
+    "q2",
+    "q2c",
+    "x-max 4",
+    "x-plus 5",
+}
+_QIDI_STUDIO_MAX_SUPPORTED_NOZZLE_MM = 0.4
 
 
 @dataclass(frozen=True)
@@ -259,6 +266,46 @@ def _select_flashstudio_multicolor_profiles(
     )
 
 
+def _select_qidi_studio_profiles(
+    profiles: list[ResolvedMachineProfile],
+    *,
+    source_root: Path,
+    vendor_key: str,
+) -> list[ResolvedMachineProfile]:
+    """Select QIDI Box-capable models and their native <=0.4 mm presets.
+
+    以 QIDI Studio 02.07.02.60 的正式 ``machine_list`` 为边界，只导入
+    用户提供原生 3MF 样例覆盖的 Q2、Q2C、X-Max 4 与 X-Plus 5。喷嘴口径
+    继续以软件清单为准，并遵守 Lumina 不支持大于 0.4 mm 的边界。
+    """
+
+    registered_names = _registered_machine_profile_names(
+        source_root=source_root,
+        vendor_key=vendor_key,
+    )
+    if not registered_names:
+        return []
+
+    selected: list[ResolvedMachineProfile] = []
+    for profile in profiles:
+        if profile.name.strip().casefold() not in registered_names:
+            continue
+        model_key = _profile_model_key(profile.name, profile.settings)
+        if model_key not in _QIDI_STUDIO_SUPPORTED_MODELS:
+            continue
+        nozzle_size = _profile_nozzle_size(profile)
+        if float(nozzle_size) > _QIDI_STUDIO_MAX_SUPPORTED_NOZZLE_MM:
+            continue
+        selected.append(profile)
+    return sorted(
+        selected,
+        key=lambda profile: (
+            _profile_model_key(profile.name, profile.settings),
+            float(_profile_nozzle_size(profile)),
+        ),
+    )
+
+
 def _should_import_profile(
     *,
     provider_id: str,
@@ -397,6 +444,12 @@ def _collect_import_payload(
             continue
         if provider.slicer_id == "FlashStudio" and vendor_key.casefold() == "flashforge":
             profiles = _select_flashstudio_multicolor_profiles(
+                profiles,
+                source_root=source_root,
+                vendor_key=vendor_key,
+            )
+        elif provider.slicer_id == "QIDIStudio":
+            profiles = _select_qidi_studio_profiles(
                 profiles,
                 source_root=source_root,
                 vendor_key=vendor_key,

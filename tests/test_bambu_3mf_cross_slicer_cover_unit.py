@@ -4,7 +4,7 @@
 
 These tests cover task 9 of the ``3mf-cover-thumbnail`` spec:
 
-- All six slicer IDs emit structurally complete 3MF packages. Flash Studio
+- All seven slicer IDs emit structurally complete 3MF packages. Flash Studio
   keeps both the package-level ``Auxiliaries/.thumbnails/*.png`` cover contract
   and its native ``Metadata/plate_1_small.png`` / ``plate_1.json`` sidecars.
 - ``Metadata/model_settings.config`` / ``project_settings.config`` /
@@ -54,8 +54,14 @@ _BAMBU_COVER_MIDDLE_TYPE = (
 _BAMBU_COVER_SMALL_TYPE = (
     "http://schemas.bambulab.com/package/2021/cover-thumbnail-small"
 )
+_QIDI_COVER_MIDDLE_TYPE = (
+    "http://schemas.qiditech.com/package/2021/cover-thumbnail-middle"
+)
+_QIDI_COVER_SMALL_TYPE = (
+    "http://schemas.qiditech.com/package/2021/cover-thumbnail-small"
+)
 
-# (printer_id, slicer) — covers the six slicer IDs accepted by
+# (printer_id, slicer) — covers the seven slicer IDs accepted by
 # ``BambuStudio3MFWriter._get_app_version_str``. The printer_id values match
 # templates that ship in the repo (see ``tests/test_bambu_3mf_png_integrity_unit.py``).
 SLICER_MATRIX: list[tuple[str, str]] = [
@@ -65,6 +71,7 @@ SLICER_MATRIX: list[tuple[str, str]] = [
     ("elegoo-cc2", "ElegooSlicer"),
     ("anycubic-kobra-x", "AnycubicSlicerNext"),
     ("flashforge-ad5x", "FlashStudio"),
+    ("qidi-q2", "QIDIStudio"),
 ]
 AUX_COVER_SLICER_MATRIX = list(SLICER_MATRIX)
 
@@ -184,6 +191,12 @@ def _cover_relationships_by_type(zf: zipfile.ZipFile) -> dict[str, ET.Element]:
     }
 
 
+def _expected_cover_relationship_types(slicer: str) -> tuple[str, str, str]:
+    if slicer == "QIDIStudio":
+        return _OPC_THUMBNAIL_TYPE, _QIDI_COVER_MIDDLE_TYPE, _QIDI_COVER_SMALL_TYPE
+    return _OPC_THUMBNAIL_TYPE, _BAMBU_COVER_MIDDLE_TYPE, _BAMBU_COVER_SMALL_TYPE
+
+
 # ---------------------------------------------------------------------------
 # 1) Cross-slicer structural regression
 # ---------------------------------------------------------------------------
@@ -259,7 +272,7 @@ class TestCrossSlicerStructure:
         AUX_COVER_SLICER_MATRIX,
         ids=[s for _, s in AUX_COVER_SLICER_MATRIX],
     )
-    def test_rels_has_opc_plus_two_bambu_cover_relationships_with_glossary_uris(
+    def test_rels_has_native_cover_relationships_with_glossary_uris(
         self,
         tmp_path: Path,
         red_source_png: Path,
@@ -277,23 +290,24 @@ class TestCrossSlicerStructure:
             cover_rels = _cover_relationships_by_type(zf)
 
         # Three cover relationships keyed by glossary-exact Type URI.
+        opc_type, middle_type, small_type = _expected_cover_relationship_types(slicer)
         assert set(cover_rels.keys()) == {
-            _OPC_THUMBNAIL_TYPE,
-            _BAMBU_COVER_MIDDLE_TYPE,
-            _BAMBU_COVER_SMALL_TYPE,
+            opc_type,
+            middle_type,
+            small_type,
         }, f"{slicer}: cover rel Types do not match glossary"
 
         # Targets exactly match the spec.
         assert (
-            cover_rels[_OPC_THUMBNAIL_TYPE].get("Target")
+            cover_rels[opc_type].get("Target")
             == "/Auxiliaries/.thumbnails/thumbnail_3mf.png"
         )
         assert (
-            cover_rels[_BAMBU_COVER_MIDDLE_TYPE].get("Target")
+            cover_rels[middle_type].get("Target")
             == "/Auxiliaries/.thumbnails/thumbnail_middle.png"
         )
         assert (
-            cover_rels[_BAMBU_COVER_SMALL_TYPE].get("Target")
+            cover_rels[small_type].get("Target")
             == "/Auxiliaries/.thumbnails/thumbnail_small.png"
         )
 
@@ -515,11 +529,9 @@ class TestSilentPlaceholderAcrossSlicers:
         with zipfile.ZipFile(out) as zf:
             cover_rels = _cover_relationships_by_type(zf)
         # All three cover relationships still present — no degraded output.
-        assert set(cover_rels.keys()) == {
-            _OPC_THUMBNAIL_TYPE,
-            _BAMBU_COVER_MIDDLE_TYPE,
-            _BAMBU_COVER_SMALL_TYPE,
-        }, (
+        assert set(cover_rels.keys()) == set(
+            _expected_cover_relationship_types(slicer)
+        ), (
             f"{slicer}: silent placeholder must still expose all three cover "
             f"relationships, got {sorted(cover_rels.keys())}"
         )

@@ -1042,6 +1042,25 @@ def _apply_flashstudio_project_metadata(settings: dict, material_count: int) -> 
     settings["printer_agent"] = str(settings.get("printer_agent") or "")
 
 
+def _apply_qidi_studio_project_metadata(settings: dict, material_count: int) -> None:
+    """Apply QIDI material routing fields without replacing Lumina process data.
+
+    补齐 QIDI Studio 项目所需的耗材路由字段；层高、线宽、温度、速度等
+    工艺参数仍由 Lumina 覆盖层提供。
+    """
+
+    if material_count <= 0:
+        return
+    raw_defaults = settings.get("default_filament_profile")
+    if isinstance(raw_defaults, list) and raw_defaults:
+        default_filament = str(raw_defaults[0] or "")
+    else:
+        default_filament = str(raw_defaults or "")
+    if not default_filament:
+        default_filament = "Generic PLA"
+    settings["filament_settings_id"] = [default_filament] * material_count
+
+
 def _iter_difference_index_keys(value: Any) -> list[str]:
     if isinstance(value, list):
         raw_items = value
@@ -2010,7 +2029,16 @@ class BambuStudio3MFWriter:
         builder.enable_production()
         builder.set_production_merge_objects(True)
 
-        builder.add_namespace("BambuStudio", "http://schemas.bambulab.com/package/2021")
+        if self.slicer == "QIDIStudio":
+            builder.add_namespace(
+                "QIDIStudio",
+                "http://schemas.qiditech.com/package/2021",
+            )
+        else:
+            builder.add_namespace(
+                "BambuStudio",
+                "http://schemas.bambulab.com/package/2021",
+            )
         builder.add_metadata("Application", self._get_app_version_str())
         orca_version = self._get_orca_slicer_version_tag()
         if orca_version:
@@ -2038,7 +2066,30 @@ class BambuStudio3MFWriter:
                 ("Title", ""),
             ):
                 builder.add_metadata(key, value)
-        builder.add_external_model_metadata("BambuStudio:3mfVersion", "1")
+        elif self.slicer == "QIDIStudio":
+            for key in (
+                "Copyright",
+                "CreationDate",
+                "Description",
+                "Designer",
+                "DesignerCover",
+                "DesignerUserId",
+                "License",
+                "ModificationDate",
+                "Origin",
+                "ProfileCover",
+                "ProfileDescription",
+                "ProfileTitle",
+                "Title",
+            ):
+                builder.add_metadata(key, "")
+            builder.add_metadata("QIDIStudio:3mfVersion", "1")
+        external_version_key = (
+            "QIDIStudio:3mfVersion"
+            if self.slicer == "QIDIStudio"
+            else "BambuStudio:3mfVersion"
+        )
+        builder.add_external_model_metadata(external_version_key, "1")
 
         material_palette, material_indices = self._build_material_palette()
         materials = [
@@ -2134,6 +2185,7 @@ class BambuStudio3MFWriter:
             "OrcaSlicer": "BambuStudio-2.3.2-rc2",
             "AnycubicSlicerNext": "BambuStudio-1.3.9.4",
             "FlashStudio": "BambuStudio-2.3.2",
+            "QIDIStudio": "QIDIStudio-02.07.02.60",
         }
         if self.slicer == "BambuStudio":
             return f"BambuStudio-{self._get_bambu_client_version()}"
@@ -2170,6 +2222,8 @@ class BambuStudio3MFWriter:
 
     def _get_orca_slicer_version_tag(self) -> str | None:
         """Return the OrcaSlicer metadata tag used to avoid Bambu-project imports."""
+        if self.slicer == "QIDIStudio":
+            return "2.1.0.14"
         if self.slicer != "OrcaSlicer":
             return None
         raw_version = self._get_registry_source_version()
@@ -2221,7 +2275,7 @@ class BambuStudio3MFWriter:
 
     def _should_emit_bambu_aux_parts(self) -> bool:
         """Return whether the export should include Bambu-only aux metadata parts."""
-        return self.slicer == "BambuStudio"
+        return self.slicer in {"BambuStudio", "QIDIStudio"}
 
     @staticmethod
     def _format_number(value: float) -> str:
@@ -2659,6 +2713,8 @@ class BambuStudio3MFWriter:
         """
         if self._is_anycubic_slicer():
             return "160"
+        if self.slicer == "QIDIStudio":
+            return "1603"
         return "1"
 
     # ------------------------------------------------------------------
@@ -2700,7 +2756,9 @@ class BambuStudio3MFWriter:
                     (
                         "Metadata/cut_information.xml",
                         "text/xml",
-                        self._build_cut_information_bytes(assembly_id),
+                        self._build_cut_information_bytes(
+                            1 if self.slicer == "QIDIStudio" else assembly_id
+                        ),
                     ),
                 ]
             )
@@ -2770,6 +2828,14 @@ class BambuStudio3MFWriter:
                     ),
                 ]
             )
+        elif self.slicer == "QIDIStudio":
+            parts.append(
+                (
+                    "Metadata/plate_1.json",
+                    "application/json",
+                    self._build_qidi_studio_plate_json_bytes(),
+                )
+            )
         # Auxiliaries/.thumbnails/* — package-level cover thumbnails referenced
         # from _rels/.rels (post-processed in _inject_cover_relationships_postprocess).
         cover_part_payloads = (
@@ -2798,6 +2864,10 @@ class BambuStudio3MFWriter:
         将切片器设置元数据挂到根模型的关系表上。
         """
         if not hasattr(builder, "add_custom_relationship"):
+            return
+        if self.slicer == "QIDIStudio":
+            # Native QIDI packages keep these parts discoverable by path and do
+            # not add Bambu settings relationships to 3dmodel.model.rels.
             return
 
         n3mf = _get_n3mf()
@@ -3063,8 +3133,7 @@ class BambuStudio3MFWriter:
             dst_zip.NameToInfo[dst_info.filename] = dst_info
             dst_zip.start_dir = dst_zip.fp.tell()
 
-    @staticmethod
-    def _rewrite_rels_xml(rels_bytes: bytes, rels_namespace: str) -> bytes:
+    def _rewrite_rels_xml(self, rels_bytes: bytes, rels_namespace: str) -> bytes:
         """Append three cover relationships to ``_rels/.rels`` XML payload.
 
         在 ``_rels/.rels`` XML 中追加三条 cover 关系（保留既有 ``rel-1``）。
@@ -3105,11 +3174,10 @@ class BambuStudio3MFWriter:
                 f"{{{rels_namespace}}}Relationship",
                 attrib={
                     "Id": candidate,
-                    "Type": str(spec.relationship_type or ""),
+                    "Type": self._get_cover_relationship_type(spec.logical_name),
                     "Target": "/" + spec.zip_path,
                 },
             )
-
         buf = io.BytesIO()
         # Mirror n3mf-emitted rels: include XML declaration with UTF-8
         # encoding; ElementTree handles the namespace via register_namespace.
@@ -3117,6 +3185,17 @@ class BambuStudio3MFWriter:
             buf, encoding="utf-8", xml_declaration=True
         )
         return buf.getvalue()
+
+    def _get_cover_relationship_type(self, logical_name: str) -> str:
+        """Return the package cover relationship URI for the target slicer."""
+
+        if logical_name == "package":
+            return (
+                "http://schemas.openxmlformats.org/package/2006/"
+                "relationships/metadata/thumbnail"
+            )
+        vendor = "qiditech" if self.slicer == "QIDIStudio" else "bambulab"
+        return f"http://schemas.{vendor}.com/package/2021/cover-thumbnail-{logical_name}"
 
     def _rewrite_main_model_xml(self, model_bytes: bytes) -> bytes:
         """Write build-item placement metadata expected by Bambu-family slicers."""
@@ -3126,11 +3205,22 @@ class BambuStudio3MFWriter:
         ET.register_namespace("", core_namespace)
         ET.register_namespace("p", production_namespace)
         ET.register_namespace("BambuStudio", "http://schemas.bambulab.com/package/2021")
+        if self.slicer == "QIDIStudio":
+            ET.register_namespace(
+                "QIDIStudio",
+                "http://schemas.qiditech.com/package/2021",
+            )
 
         try:
             root = ET.fromstring(model_bytes)
         except ET.ParseError as exc:
             raise RuntimeError(f"failed to parse 3D/3dmodel.model: {exc}") from exc
+
+        if self.slicer == "QIDIStudio":
+            root.set(
+                "xmlns:QIDIStudio",
+                "http://schemas.qiditech.com/package/2021",
+            )
 
         build = root.find(f"{{{core_namespace}}}build")
         if build is not None:
@@ -3166,7 +3256,7 @@ class BambuStudio3MFWriter:
         config = ET.Element("config")
 
         obj_elem = ET.SubElement(config, "object", attrib={"id": str(assembly_id)})
-        if self.slicer == "FlashStudio":
+        if self.slicer in {"FlashStudio", "QIDIStudio"}:
             ET.SubElement(
                 obj_elem,
                 "metadata",
@@ -3247,6 +3337,25 @@ class BambuStudio3MFWriter:
                     "value": " ".join(
                         str(index) for index in range(1, len(material_palette) + 1)
                     ),
+                },
+            )
+        elif self.slicer == "QIDIStudio":
+            material_palette, _ = self._build_material_palette()
+            slot_count = len(material_palette)
+            ET.SubElement(
+                plate,
+                "metadata",
+                attrib={
+                    "key": "filament_maps",
+                    "value": " ".join(["1"] * slot_count),
+                },
+            )
+            ET.SubElement(
+                plate,
+                "metadata",
+                attrib={
+                    "key": "filament_volume_maps",
+                    "value": " ".join(["0"] * slot_count),
                 },
             )
         ET.SubElement(plate, "metadata", attrib={"key": "thumbnail_file", "value": "Metadata/plate_1.png"})
@@ -3394,6 +3503,8 @@ class BambuStudio3MFWriter:
             )
         if self.slicer == "FlashStudio":
             _apply_flashstudio_project_metadata(settings, num_colors)
+        elif self.slicer == "QIDIStudio":
+            _apply_qidi_studio_project_metadata(settings, num_colors)
         if not preserve_template_filament_slots:
             filament_colour = settings.get("filament_colour")
             if isinstance(filament_colour, list):
@@ -3504,6 +3615,20 @@ class BambuStudio3MFWriter:
                     "value": self._get_anycubic_client_version(),
                 },
             )
+        elif self.slicer == "QIDIStudio":
+            ET.SubElement(
+                header,
+                "header_item",
+                attrib={"key": "X-QDT-Client-Type", "value": "slicer"},
+            )
+            ET.SubElement(
+                header,
+                "header_item",
+                attrib={
+                    "key": "X-QDT-Client-Version",
+                    "value": registry_client_version or "02.07.02.60",
+                },
+            )
         else:
             ET.SubElement(header, "header_item", attrib={"key": "X-BBL-Client-Type", "value": "slicer"})
             if self.slicer == "BambuStudio":
@@ -3571,12 +3696,14 @@ class BambuStudio3MFWriter:
         tree.write(buf, encoding="utf-8", xml_declaration=False)
         return buf.getvalue()
 
-    @staticmethod
-    def _build_filament_sequence_bytes() -> bytes:
+    def _build_filament_sequence_bytes(self) -> bytes:
         """Build filament_sequence.json as bytes.
         构建 filament_sequence.json（字节形式）。
         """
-        data = {"plate_1": {"sequence": []}}
+        plate = {"sequence": []}
+        if self.slicer == "QIDIStudio":
+            plate.update({"nozzle_sequence": [], "optimal_assignment": []})
+        data = {"plate_1": plate}
         return json.dumps(data, ensure_ascii=False).encode("utf-8")
 
     @staticmethod
@@ -3739,6 +3866,25 @@ class BambuStudio3MFWriter:
             "nozzle_diameter": float(self.nozzle_size),
             "version": 2,
         }
+        return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+
+    def _build_qidi_studio_plate_json_bytes(self) -> bytes:
+        """Build QIDI Studio's native plate summary from Lumina export data.
+
+        使用 Lumina 当前模型、调色板与工艺参数构建 QIDI Studio 盘面摘要，
+        不复制参考项目的用户、耗材或切片统计。
+        """
+
+        payload = json.loads(
+            self._build_flashstudio_plate_json_bytes().decode("utf-8")
+        )
+        material_palette, _ = self._build_material_palette()
+        payload["filament_colors"] = [
+            f"#{red:02X}{green:02X}{blue:02X}"
+            for _, (red, green, blue) in material_palette
+        ]
+        payload["filament_ids"] = list(range(len(material_palette)))
+        payload["first_extruder"] = 0
         return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
 
     # ------------------------------------------------------------------

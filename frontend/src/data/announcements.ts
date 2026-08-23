@@ -16,6 +16,24 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-08-23",
+    title: {
+      zh: "Lumina Layers — 8 月更新速览",
+      en: "Lumina Layers — August updates",
+    },
+    sections: [
+      {
+        category: { zh: "新功能", en: "New" },
+        items: [
+          {
+            zh: "8 月 23 日：新增 QIDI Studio 支持，可直接为 Q2、Q2C、X-Max 4 和 X-Plus 5 生成适配的多色 3MF。喷嘴选项按软件内的机型清单提供且最大为 0.4 毫米；导出文件保留 Lumina 工艺参数。",
+            en: "August 23: Added QIDI Studio support for multicolour 3MF exports targeting the Q2, Q2C, X-Max 4, and X-Plus 5. Nozzle choices follow QIDI Studio's machine list and are capped at 0.4 mm, while Lumina process settings remain intact.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-08-14",
     title: {
       zh: "Lumina Layers — 8 月更新",

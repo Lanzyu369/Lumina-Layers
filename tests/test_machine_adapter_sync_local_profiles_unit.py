@@ -66,6 +66,34 @@ def test_discover_local_import_sources_keeps_flash_studio_version_contract(tmp_p
     assert source.client_version == ""
 
 
+def test_discover_local_import_sources_keeps_qidi_studio_version_contract(tmp_path):
+    appdata_root = tmp_path / "AppData" / "Roaming"
+    qidi_root = appdata_root / "QIDIStudio" / "system"
+    for vendor_key in ("Q Series", "X 4 Series", "X 5 Series"):
+        (qidi_root / vendor_key / "machine").mkdir(parents=True)
+        (qidi_root / f"{vendor_key}.json").write_text(
+            '{"version":"02.07.02.60"}',
+            encoding="utf-8",
+        )
+
+    sources = discover_local_import_sources(
+        appdata_root=appdata_root,
+        slicer_ids=("QIDIStudio",),
+    )
+
+    assert len(sources) == 3
+    assert {source.vendor_keys for source in sources} == {
+        ("Q Series",),
+        ("X 4 Series",),
+        ("X 5 Series",),
+    }
+    for source in sources:
+        assert source.source_root == qidi_root
+        assert source.source_version == "02.07.02.60"
+        assert source.application_metadata == "QIDIStudio-02.07.02.60"
+        assert source.client_version == "02.07.02.60"
+
+
 def test_discover_local_asset_roots_includes_snapmaker_web_images(tmp_path):
     appdata_root = tmp_path / "AppData" / "Roaming"
     image_dir = (

@@ -28,6 +28,7 @@ SLICER_COVERAGE: list[tuple[str, str, str]] = [
     ("snapmaker-u1", "SnapmakerOrca", "0.4"),
     ("anycubic-kobra-x", "AnycubicSlicerNext", "0.4"),
     ("flashforge-ad5x", "FlashStudio", "0.25"),
+    ("qidi-q2", "QIDIStudio", "0.4"),
 ]
 
 

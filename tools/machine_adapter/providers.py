@@ -80,6 +80,15 @@ PROVIDERS: dict[str, MachineAdapterProvider] = {
         default_application_metadata="BambuStudio-2.3.2",
         default_client_version="",
     ),
+    "QIDIStudio": MachineAdapterProvider(
+        slicer_id="QIDIStudio",
+        display_name="QIDI Studio",
+        profile_format="bambu_orca",
+        sidecar_policy="qidi_studio",
+        default_vendor_keys=("Q Series", "X 4 Series", "X 5 Series"),
+        default_application_metadata="QIDIStudio-02.07.02.60",
+        default_client_version="02.07.02.60",
+    ),
 }
 
 

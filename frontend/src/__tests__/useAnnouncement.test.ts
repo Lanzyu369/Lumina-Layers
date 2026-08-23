@@ -92,8 +92,8 @@ describe("useAnnouncement", () => {
   });
 
   it("announces backing thickness and infill controls in the latest update", () => {
-    expect(ANNOUNCEMENTS[0]?.version).toBe("2026-08-14");
-    const items = ANNOUNCEMENTS[0]?.sections.flatMap((section) => section.items) ?? [];
+    const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-08-14");
+    const items = entry?.sections.flatMap((section) => section.items) ?? [];
 
     expect(
       items.some(
@@ -150,6 +150,24 @@ describe("useAnnouncement", () => {
           item.en.includes("preinstalled") &&
           item.en.includes("uninstalled") &&
           item.en.includes("Lumina"),
+      ),
+    ).toBe(true);
+  });
+
+  it("announces QIDI Studio and its machine-specific nozzle support", () => {
+    const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-08-23");
+    const items = entry?.sections.flatMap((section) => section.items) ?? [];
+
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("QIDI Studio") &&
+          item.zh.includes("Q2C") &&
+          item.zh.includes("X-Max 4") &&
+          item.zh.includes("X-Plus 5") &&
+          item.zh.includes("0.4") &&
+          item.en.includes("QIDI Studio") &&
+          item.en.includes("Lumina process settings"),
       ),
     ).toBe(true);
   });

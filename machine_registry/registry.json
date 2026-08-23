@@ -3206,6 +3206,122 @@
           "revision": "sha256:76052da6aa89bbfbaeed24840172ef64ace64d488ee324658455d24438f22ea2"
         }
       ]
+    },
+    {
+      "slicer_id": "QIDIStudio",
+      "display_name": "QIDI Studio",
+      "source_kind": "local_install",
+      "source_version": "02.07.02.60",
+      "profile_format": "bambu_orca",
+      "application_metadata": "QIDIStudio-02.07.02.60",
+      "sidecar_policy": "qidi_studio",
+      "machines": [
+        {
+          "machine_profile_id": "QIDIStudio:qidi:q2",
+          "display_name": "Q2",
+          "brand": "QIDI",
+          "vendor_key": "Q Series",
+          "bed_width": 270,
+          "bed_depth": 270,
+          "bed_height": 256,
+          "thumbnail": "slicers/QIDIStudio/02.07.02.60/assets/q2_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "QIDIStudio:qidi:q2:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Q2 0.2 nozzle",
+              "template": "slicers/QIDIStudio/02.07.02.60/metadata_templates/q2_0_2.json",
+              "revision": "sha256:3720ca449065bb7af66c96f60886f0d46fe48f055a0d19f9124875ee36cf76f4",
+              "supported": true
+            },
+            {
+              "device_profile_id": "QIDIStudio:qidi:q2:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Q2 0.4 nozzle",
+              "template": "slicers/QIDIStudio/02.07.02.60/metadata_templates/q2_0_4.json",
+              "revision": "sha256:43e37eb7d191a980394932065bc62b45af69795fd5ecccdc4a76e6e6678dde37",
+              "supported": true
+            }
+          ]
+        },
+        {
+          "machine_profile_id": "QIDIStudio:qidi:q2c",
+          "display_name": "Q2C",
+          "brand": "QIDI",
+          "vendor_key": "Q Series",
+          "bed_width": 270,
+          "bed_depth": 270,
+          "bed_height": 256,
+          "thumbnail": "slicers/QIDIStudio/02.07.02.60/assets/q2c_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "QIDIStudio:qidi:q2c:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Q2C 0.2 nozzle",
+              "template": "slicers/QIDIStudio/02.07.02.60/metadata_templates/q2c_0_2.json",
+              "revision": "sha256:21e5321310fb95ba21740ba5a5656eeb36f3b35db6f45755a4b0b7c42aa60861",
+              "supported": true
+            },
+            {
+              "device_profile_id": "QIDIStudio:qidi:q2c:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Q2C 0.4 nozzle",
+              "template": "slicers/QIDIStudio/02.07.02.60/metadata_templates/q2c_0_4.json",
+              "revision": "sha256:2e1ab2e85ae95087f8aaa7ab46e2ea02f68524e5b4fb5fc8c211e9ed7ded7eac",
+              "supported": true
+            }
+          ]
+        },
+        {
+          "machine_profile_id": "QIDIStudio:qidi:x-max-4",
+          "display_name": "X-Max 4",
+          "brand": "QIDI",
+          "vendor_key": "X 4 Series",
+          "bed_width": 390,
+          "bed_depth": 390,
+          "bed_height": 340,
+          "thumbnail": "slicers/QIDIStudio/02.07.02.60/assets/x-max-4_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "QIDIStudio:qidi:x-max-4:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "X-Max 4 0.2 nozzle",
+              "template": "slicers/QIDIStudio/02.07.02.60/metadata_templates/x-max-4_0_2.json",
+              "revision": "sha256:af44af53057fbfadb27b8d3b4092ce185781ddf4288e02b634f392730fd1bc7e",
+              "supported": true
+            },
+            {
+              "device_profile_id": "QIDIStudio:qidi:x-max-4:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "X-Max 4 0.4 nozzle",
+              "template": "slicers/QIDIStudio/02.07.02.60/metadata_templates/x-max-4_0_4.json",
+              "revision": "sha256:de1aa06641a5436a5e8ae3917445db267aadd40e524d3f31526ae0a46740ae46",
+              "supported": true
+            }
+          ]
+        },
+        {
+          "machine_profile_id": "QIDIStudio:qidi:x-plus-5",
+          "display_name": "X-Plus 5",
+          "brand": "QIDI",
+          "vendor_key": "X 5 Series",
+          "bed_width": 320,
+          "bed_depth": 320,
+          "bed_height": 300,
+          "thumbnail": "slicers/QIDIStudio/02.07.02.60/assets/x-plus-5_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "QIDIStudio:qidi:x-plus-5:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "X-Plus 5 0.4 nozzle",
+              "template": "slicers/QIDIStudio/02.07.02.60/metadata_templates/x-plus-5_0_4.json",
+              "revision": "sha256:aeb2ad1d89353e543f05efc86ce81ef0d4938680540c1acab5a356b25b9b931b",
+              "supported": true
+            }
+          ]
+        }
+      ],
+      "client_version": "02.07.02.60"
     }
   ]
 }

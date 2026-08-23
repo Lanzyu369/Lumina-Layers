@@ -20,6 +20,7 @@ const SLICERS: SlicerOption[] = [
   { id: "OrcaSlicer", display_name: "OrcaSlicer" },
   { id: "AnycubicSlicerNext", display_name: "Anycubic Slicer Next" },
   { id: "FlashStudio", display_name: "Flash Studio Desktop" },
+  { id: "QIDIStudio", display_name: "QIDI Studio" },
 ];
 
 const PRINTERS: PrinterInfo[] = [
@@ -197,11 +198,31 @@ const FLASHFORGE_GUIDER_3_ULTRA: PrinterInfo = {
   })),
 };
 
+const QIDI_Q2: PrinterInfo = {
+  id: "qidi-q2",
+  display_name: "Q2",
+  brand: "QIDI",
+  bed_width: 270,
+  bed_depth: 270,
+  bed_height: 256,
+  supported_nozzle_sizes: ["0.2", "0.4"],
+  supported_slicers: ["QIDIStudio"],
+  device_profiles: ["0.2", "0.4"].map((nozzleSize) => ({
+    device_profile_id: `QIDIStudio:qidi:q2:${nozzleSize}`,
+    slicer_id: "QIDIStudio",
+    nozzle_size: nozzleSize,
+    source_profile_name: `Q2 ${nozzleSize} nozzle`,
+    revision: `sha256:qidi-q2-${nozzleSize}`,
+    supported: true,
+  })),
+};
+
 describe("settingsOptionIds", () => {
   it("normalizes legacy slicer ids", () => {
     expect(normalizeSlicerOptionId("orca_slicer")).toBe("OrcaSlicer");
     expect(normalizeSlicerOptionId("anycubic_slicer_next")).toBe("AnycubicSlicerNext");
     expect(normalizeSlicerOptionId("flash studio desktop")).toBe("FlashStudio");
+    expect(normalizeSlicerOptionId("qidi studio")).toBe("QIDIStudio");
     expect(normalizeSlicerOptionId("prusa_slicer")).toBe("PrusaSlicer");
     expect(normalizeSlicerOptionId("ultimaker-cura")).toBe("Cura");
     expect(normalizeSlicerOptionId("BambuStudio")).toBe("BambuStudio");
@@ -212,6 +233,7 @@ describe("settingsOptionIds", () => {
     expect(getDetectedSlicerIdForSoftware("anycubic_slicer")).toBe("anycubic_slicer_next");
     expect(getDetectedSlicerIdForSoftware("FlashStudio")).toBe("flash_studio");
     expect(getDetectedSlicerIdForSoftware("flashforge")).toBe("flash_studio");
+    expect(getDetectedSlicerIdForSoftware("QIDIStudio")).toBe("qidi_studio");
     expect(getDetectedSlicerIdForSoftware("OrcaSlicer")).toBe("orca_slicer");
     expect(getDetectedSlicerIdForSoftware("prusa_slicer")).toBe("prusa_slicer");
     expect(getDetectedSlicerIdForSoftware("ultimaker cura")).toBe("cura");
@@ -220,6 +242,7 @@ describe("settingsOptionIds", () => {
   it("returns readable slicer software display names", () => {
     expect(getSlicerSoftwareDisplayName("AnycubicSlicerNext")).toBe("Anycubic Slicer Next");
     expect(getSlicerSoftwareDisplayName("flash_studio")).toBe("Flash Studio Desktop");
+    expect(getSlicerSoftwareDisplayName("qidi_studio")).toBe("QIDI Studio");
     expect(getSlicerSoftwareDisplayName("prusa_slicer")).toBe("PrusaSlicer");
     expect(getSlicerSoftwareDisplayName("ultimaker-cura")).toBe("Ultimaker Cura");
   });
@@ -287,6 +310,16 @@ describe("settingsOptionIds", () => {
     ).toBe("FlashStudio:flashforge:flashforge-guider-3-ultra:0.4");
   });
 
+  it("uses QIDI Studio's machine-specific native nozzles", () => {
+    expect(getPrinterNozzleSizeOptions(QIDI_Q2, "QIDIStudio")).toEqual([
+      "0.2",
+      "0.4",
+    ]);
+    expect(
+      resolveDeviceProfileOptionId("", QIDI_Q2, "QIDIStudio", "0.2"),
+    ).toBe("QIDIStudio:qidi:q2:0.2");
+  });
+
   it("keeps slicer-scoped machine ids separate", () => {
     expect("BambuStudio:bbl:bambu-lab-h2d:0.4").not.toBe(
       "OrcaSlicer:bbl:bambu-lab-h2d:0.4",
@@ -341,6 +374,7 @@ describe("settingsOptionIds", () => {
       expect(supportsLayerConfigRanges("OrcaSlicer")).toBe(true);
       expect(supportsLayerConfigRanges("AnycubicSlicerNext")).toBe(true);
       expect(supportsLayerConfigRanges("FlashStudio")).toBe(true);
+      expect(supportsLayerConfigRanges("QIDIStudio")).toBe(true);
     });
 
     it("returns true for legacy aliases", () => {

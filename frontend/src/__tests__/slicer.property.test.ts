@@ -535,6 +535,7 @@ describe("Property 6: 品牌配色映射完整性", () => {
     "orca_slicer",
     "anycubic_slicer_next",
     "flash_studio",
+    "qidi_studio",
     "elegoo_slicer",
     "prusa_slicer",
     "cura",

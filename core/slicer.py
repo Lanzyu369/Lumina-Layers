@@ -55,6 +55,10 @@ KNOWN_SLICERS: dict[str, dict] = {
         ],
         "display_name": "Flash Studio Desktop",
     },
+    "qidi_studio": {
+        "match": ["qidi studio", "qidistudio", "qidi-studio"],
+        "display_name": "QIDI Studio",
+    },
     "prusa_slicer": {
         "match": ["prusaslicer", "prusa slicer"],
         "display_name": "PrusaSlicer",
