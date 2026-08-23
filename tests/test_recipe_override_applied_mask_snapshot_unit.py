@@ -291,6 +291,35 @@ def test_reset_replacements_clears_applied_mask_snapshot(_iso):
     assert store.get(sid).get("recipe_override_applied_masks") == {}
 
 
+def test_new_preview_clears_overrides_and_applied_mask_snapshot(_iso):
+    """新预览必须连同配方覆盖与掩码快照一起重置。
+
+    同一会话换图重新预览时（标准 LUT 尺寸下新旧图片尺寸常常相同），若
+    快照残留，generate 会把旧覆盖静默套到新图上；必须随
+    clear_replacement_history 一并清空，让后续生成确定性失败并提示重新替换。
+    """
+    from api.replacement_history import clear_replacement_history
+
+    store = _iso["store"]
+    sid = _seed_material_archive_session(store)
+    region_ids = _select_red_region(client, sid)
+
+    resp = _apply_recipe_override(client, sid, region_ids)
+    assert resp.status_code == 200, resp.text
+    seeded = store.get(sid)
+    assert seeded.get("recipe_overrides")
+    assert seeded.get("recipe_override_applied_masks")
+
+    # New previews funnel through clear_replacement_history (preview.py).
+    clear_replacement_history(sid, store)
+
+    fresh = store.get(sid)
+    assert fresh.get("recipe_overrides") == []
+    assert fresh.get("recipe_override_count") == 0
+    assert fresh.get("recipe_override_applied_masks") == {}
+    assert not fresh.get("editor_selection_mask")
+
+
 def test_undo_redo_keeps_snapshot_in_sync_with_overrides(_iso):
     """撤销/重做时快照随 recipe_overrides 一起恢复。"""
     store = _iso["store"]

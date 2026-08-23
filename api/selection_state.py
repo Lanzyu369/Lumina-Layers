@@ -27,6 +27,15 @@ SELECTION_REVISION_KEY = "editor_selection_revision"
 SELECTION_CONTENT_GENERATION_KEY = "editor_selection_content_generation"
 SELECTION_REGION_PREFIX = "__editor_selection__:"
 
+# Session key snapshotting the per-region masks captured when recipe overrides
+# were applied. It lives beside the selection keys because these snapshots are
+# what /generate falls back to once the synthetic __editor_selection__:<rev>
+# entries above have been pruned by later selection gestures.
+# 会话键：apply 配方覆盖时对所用区域掩码做快照。放在选区键旁边是因为：
+# 上面的 __editor_selection__:<rev> 合成条目会随后续选区手势被清理，
+# 生成端在实时选区缺失时回退到这份快照。
+RECIPE_OVERRIDE_APPLIED_MASKS_KEY = "recipe_override_applied_masks"
+
 _LOCKS_GUARD = threading.Lock()
 _LOCKS: weakref.WeakValueDictionary[str, threading.RLock] = weakref.WeakValueDictionary()
 

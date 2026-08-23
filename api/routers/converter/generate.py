@@ -1656,11 +1656,18 @@ def _prepare_recipe_override_worker_inputs(
                 shape=material_matrix_override.shape[:2],
             )
             if snapshot_mask is not None:
-                # Keep the snapshot local to this request: re-publishing a
-                # stale editor-selection id into ``selected_region_masks``
-                # would fight with the selection workstation's own state.
-                # 快照只作用于本次请求：把过期的选区 id 写回
-                # selected_region_masks 会与选区工作站的状态互相干扰。
+                # Do not store.put the snapshot back into
+                # ``selected_region_masks``: the stale editor-selection id
+                # belongs to the selection workstation's lifecycle and gets
+                # re-pruned on its next gesture anyway. Note in-memory
+                # sessions alias this dict with the store, so the local write
+                # below is visible there too (harmless — same pruning applies);
+                # Postgres sessions keep it strictly request-local.
+                # 不要把快照 store.put 回 selected_region_masks：过期的选区
+                # id 归选区工作站生命周期管理，其下次手势会再次清理。内存版
+                # 会话的 session_data 与存储是同一活字典，下面的局部写入对
+                # 其可见（无害，同样会被清理）；Postgres 版则严格限于本次
+                # 请求。
                 region_masks[region_id] = snapshot_mask
                 log.debug(
                     "Recipe override mask resolved from applied-time snapshot",

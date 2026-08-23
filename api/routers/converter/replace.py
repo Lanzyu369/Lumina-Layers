@@ -4269,6 +4269,12 @@ def apply_recipe_override(
             "preview_cache",
             "recipe_overrides",
             "recipe_override_count",
+            # Symmetric with the success-path write below: if a failure lands
+            # between persisting the snapshot and the history push, the
+            # rollback must not leave an orphan applied-mask entry behind.
+            # 与成功路径的写入保持对称：若在快照落盘之后、历史入栈之前失败，
+            # 回滚不能留下孤儿掩码快照。
+            RECIPE_OVERRIDE_APPLIED_MASKS_KEY,
         )
     }
 
