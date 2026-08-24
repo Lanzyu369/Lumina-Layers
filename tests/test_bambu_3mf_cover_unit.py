@@ -474,6 +474,55 @@ class TestEncodeFailureFallback:
         assert bundle.warning["fallback_action"] == "placeholder_written"
 
 
+class TestMemoryFailurePropagation:
+    """Allocator failures must stop export instead of entering placeholders."""
+
+    def test_decode_memory_error_is_not_downgraded(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            cover_module,
+            "_composite_to_white",
+            lambda _image: (_ for _ in ()).throw(
+                MemoryError("cover decode allocation failed")
+            ),
+        )
+
+        with pytest.raises(MemoryError, match="cover decode allocation failed"):
+            CoverThumbnailBuilder().build(Image.new("RGB", (100, 100), 0))
+
+    def test_encode_memory_error_is_not_downgraded(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            cover_module,
+            "_encode_png",
+            lambda _image: (_ for _ in ()).throw(
+                MemoryError("cover encode allocation failed")
+            ),
+        )
+
+        with pytest.raises(MemoryError, match="cover encode allocation failed"):
+            CoverThumbnailBuilder().build(Image.new("RGB", (100, 100), 0))
+
+    def test_png_verify_memory_error_is_not_wrapped(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            cover_module.Image,
+            "open",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                MemoryError("cover verify allocation failed")
+            ),
+        )
+
+        with pytest.raises(MemoryError, match="cover verify allocation failed"):
+            cover_module._encode_png(Image.new("RGB", (8, 8), 0))
+
+
 # ---------------------------------------------------------------------------
 # RGB-mode invariant on output PNGs
 # ---------------------------------------------------------------------------

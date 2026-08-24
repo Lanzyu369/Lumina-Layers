@@ -6,7 +6,12 @@ from typing import Any
 import numpy as np
 import trimesh
 
-from core.model_surface.types import LoadedSurfaceMesh, MeshSummary, ModelSurfaceError
+from core.model_surface.types import (
+    MODEL_SURFACE_FATAL_ERRORS,
+    LoadedSurfaceMesh,
+    MeshSummary,
+    ModelSurfaceError,
+)
 from core.model_surface.validation import MODEL_SURFACE_EMPTY_GEOMETRY
 
 SUPPORTED_MODEL_EXTENSIONS = {".stl", ".obj"}
@@ -40,6 +45,8 @@ def load_model_surface_mesh(path: str | Path) -> LoadedSurfaceMesh:
 
     try:
         loaded: Any = trimesh.load_mesh(model_path, process=True, force="mesh")
+    except MODEL_SURFACE_FATAL_ERRORS:
+        raise
     except Exception as exc:  # pragma: no cover - delegated parser failures vary
         raise ModelSurfaceError(f"Could not load model file: {exc}") from exc
 
@@ -83,6 +90,8 @@ def _coerce_trimesh(loaded: Any) -> trimesh.Trimesh:
 def _count_mesh_bodies(mesh: trimesh.Trimesh) -> int:
     try:
         parts = mesh.split(only_watertight=False)
+    except MODEL_SURFACE_FATAL_ERRORS:
+        raise
     except Exception:
         return 1
     return max(1, len(parts))

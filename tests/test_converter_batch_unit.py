@@ -15,6 +15,7 @@ Validates:
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures.process import BrokenProcessPool
 import io
 import inspect
 import json
@@ -33,6 +34,7 @@ from api.dependencies import get_file_registry, get_session_store, get_worker_po
 from api.file_registry import FileRegistry
 from api.session_store import SessionStore
 from api.worker_pool import WorkerPoolManager
+from core.errors import VectorMeshMemoryBudgetError
 from utils.merged_bambu_3mf_writer import MergedWriteError
 
 _test_store: SessionStore = SessionStore(ttl=1800)
@@ -447,6 +449,66 @@ class TestBatchAllFailed:
         assert body["threemf_disk_path"] is None
         assert body["preview_3d_url"] is None
         assert body["preview_items"] == []
+
+    def test_batch_memory_admission_returns_actionable_422(self) -> None:
+        _mock_pool.submit = AsyncMock(
+            side_effect=VectorMeshMemoryBudgetError(
+                "preflight",
+                9 * 1024**3,
+                8 * 1024**3,
+                1 * 1024**3,
+                4_200,
+                420_000,
+            ),
+        )
+
+        with (
+            patch(
+                "api.routers.converter.generate.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.generate.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[("images", _make_test_image_buf("complex.png"))],
+                data={"lut_name": "test_lut"},
+            )
+
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"]["code"] == (
+            "vector_mesh_memory_budget_exceeded"
+        )
+
+    def test_batch_broken_worker_pool_stops_before_next_item(self) -> None:
+        _mock_pool.submit = AsyncMock(
+            side_effect=BrokenProcessPool("worker was killed")
+        )
+
+        with (
+            patch(
+                "api.routers.converter.generate.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.generate.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[
+                    ("images", _make_test_image_buf("complex-1.png")),
+                    ("images", _make_test_image_buf("complex-2.png")),
+                ],
+                data={"lut_name": "test_lut"},
+            )
+
+        assert response.status_code == 503
+        assert _mock_pool.submit.await_count == 1
 
     def test_batch_worker_missing_output_sanitizes_status_message(self) -> None:
         private_path = "/Users/min/private/batch-output/missing.3mf"

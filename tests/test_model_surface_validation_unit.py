@@ -35,3 +35,46 @@ def test_prepare_unions_overlapping_watertight_bodies() -> None:
     assert len(prepared.split(only_watertight=False)) == 1
     assert prepared.metadata["name"] == "surface-source"
     assert prepared.volume < primary.volume + detail.volume
+
+
+def test_prepare_model_surface_union_memory_error_is_fatal(monkeypatch) -> None:
+    left = trimesh.creation.box(extents=(4.0, 4.0, 2.0))
+    right = trimesh.creation.box(extents=(4.0, 4.0, 2.0))
+    right.apply_translation((8.0, 0.0, 0.0))
+    source = trimesh.util.concatenate((left, right))
+    monkeypatch.setattr(
+        "core.model_surface.validation.trimesh.boolean.union",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            MemoryError("surface union allocation")
+        ),
+    )
+
+    with pytest.raises(MemoryError, match="surface union allocation"):
+        prepare_model_surface_mesh_for_boolean(source)
+
+
+def test_prepare_single_body_can_transfer_ownership_without_split_or_copy(
+    monkeypatch,
+) -> None:
+    source = trimesh.creation.box(extents=(20.0, 20.0, 2.0))
+    monkeypatch.setattr(
+        trimesh.Trimesh,
+        "split",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("single-body ownership transfer must not split")
+        ),
+    )
+    monkeypatch.setattr(
+        trimesh.Trimesh,
+        "copy",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("single-body ownership transfer must not copy")
+        ),
+    )
+
+    prepared = prepare_model_surface_mesh_for_boolean(
+        source,
+        _take_ownership=True,
+    )
+
+    assert prepared is source

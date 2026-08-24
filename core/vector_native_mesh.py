@@ -24,6 +24,7 @@ from shapely.geometry import GeometryCollection, MultiPolygon, Polygon
 from shapely.geometry.polygon import orient
 from shapely.ops import unary_union
 
+from core.errors import VectorMeshMemoryBudgetError
 from core.task_parallelism import (
     AdaptiveParallelismPlan,
     resolve_task_parallelism_plan,
@@ -32,11 +33,17 @@ from core.task_parallelism import (
 )
 from core.vector_engine import (
     VectorProcessor,
+    _enforce_vector_mesh_runtime_headroom,
+    _extrude_source_geometries_with_coverage_guard,
     _extruded_planar_coverage_mm2,
     _source_planar_coverage_mm2,
     _union_run_group_geometries,
     _vector_coverage_is_incomplete,
 )
+from core.vector_mesh_memory import ByteBudgetLRU
+
+
+_FATAL_MEMORY_ERRORS = (MemoryError, VectorMeshMemoryBudgetError)
 
 
 NATIVE_CLOSE_DELTA_MM = 0.03
@@ -44,7 +51,10 @@ NATIVE_COORD_SCALE = 1_000_000
 NATIVE_BATCH_MIN_PARALLEL_ITEMS = 3
 NATIVE_BATCH_MIN_PARALLEL_GROUPS = 8
 NATIVE_BATCH_FIXED_VALIDATION_BYTES = 384 * 1024**2
-NATIVE_BATCH_INPUT_BYTES_PER_POINT = 2 * np.dtype(np.float64).itemsize
+# Native preparation first materializes Python ``(x, y)`` tuples and then
+# packs them into contiguous buffers.  Counting only the eventual float64 pair
+# underestimates the resident Python lists by an order of magnitude.
+NATIVE_BATCH_INPUT_BYTES_PER_POINT = 160
 NATIVE_BATCH_MESH_BYTES_PER_POINT = 256
 NATIVE_BATCH_GROUP_OVERHEAD_BYTES = 64 * 1024
 NATIVE_BATCH_RING_OVERHEAD_BYTES = 4 * 1024
@@ -72,6 +82,9 @@ NATIVE_RETRY_MESH_SURFACE_REJECT = 1
 NATIVE_RETRY_MESH_EMPTY = 2
 NATIVE_MERGED_FALLBACK_MIN_PATHS = 64
 NATIVE_MERGED_FALLBACK_MAX_HOLE_RATIO = 0.5
+NATIVE_PATH_CACHE_BUDGET_BYTES = 128 * 1024**2
+NATIVE_PATH_CACHE_ENTRY_OVERHEAD_BYTES = 128
+NATIVE_PATH_CACHE_RING_OVERHEAD_BYTES = 64
 
 
 @dataclass(frozen=True)
@@ -159,6 +172,44 @@ class _ComputedNativeBatch:
     surface_validation_seconds: float
     surface_checked: int
     surface_rejects: int
+
+
+def _native_path_cache_value_bytes(
+    value: tuple[Any, list[list[tuple[float, float]]]],
+) -> int:
+    """Estimate retained Python path storage for byte-budgeted caching."""
+
+    _geometry, paths = value
+    point_count = sum(len(path) for path in paths)
+    return (
+        NATIVE_PATH_CACHE_ENTRY_OVERHEAD_BYTES
+        + len(paths) * NATIVE_PATH_CACHE_RING_OVERHEAD_BYTES
+        + point_count * NATIVE_BATCH_INPUT_BYTES_PER_POINT
+    )
+
+
+def _new_native_path_cache() -> ByteBudgetLRU:
+    """Create one build-local cache with a strict resident byte ceiling."""
+
+    return ByteBudgetLRU(
+        max_bytes=NATIVE_PATH_CACHE_BUDGET_BYTES,
+        size_of=_native_path_cache_value_bytes,
+    )
+
+
+def _record_native_path_cache_stats(
+    stats: dict[str, float | int | str],
+    path_cache,
+) -> None:
+    stats["native_path_cache_peak_bytes"] = int(
+        getattr(path_cache, "peak_bytes", 0)
+    )
+    stats["native_path_cache_evictions"] = int(
+        getattr(path_cache, "eviction_count", 0)
+    )
+    stats["native_path_cache_oversized_rejections"] = int(
+        getattr(path_cache, "oversized_rejection_count", 0)
+    )
 
 
 def _saturating_add_bytes(left: int, right: int) -> int:
@@ -408,6 +459,8 @@ def _compute_native_batch(
                 scale_factor=scale_factor,
             )
             native_seconds = time.perf_counter() - native_started
+        except _FATAL_MEMORY_ERRORS:
+            raise
         except Exception as exc:
             return _ComputedNativeBatch(
                 call_error=type(exc).__name__,
@@ -422,6 +475,9 @@ def _compute_native_batch(
 
         convert_started = time.perf_counter()
         native_mesh_list = list(native_meshes or [])
+        del native_meshes
+        if len(native_mesh_list) > len(batch.groups):
+            del native_mesh_list[len(batch.groups) :]
         outcomes = []
         surface_validation_seconds = 0.0
         surface_checked = 0
@@ -438,6 +494,7 @@ def _compute_native_batch(
                 continue
 
             native_mesh = native_mesh_list[index]
+            native_mesh_list[index] = None
             mesh_arrays = _native_mesh_arrays(native_mesh)
             primary_status = (
                 int(primary_statuses[index])
@@ -448,6 +505,7 @@ def _compute_native_batch(
                 if primary_status == NATIVE_RETRY_MESH_SURFACE_REJECT:
                     surface_checked += 1
                     surface_rejects += 1
+                    del native_mesh
                     outcomes.append(
                         _NativeGroupOutcome(
                             status="surface_reject",
@@ -467,18 +525,22 @@ def _compute_native_batch(
                     if index < len(retry_records)
                     else None
                 )
+                rejection_counter = _native_mesh_rejection_reason(
+                    native_mesh
+                )
+                del native_mesh
                 outcomes.append(
                     _NativeGroupOutcome(
                         status="native_rejected",
-                        rejection_counter=_native_mesh_rejection_reason(
-                            native_mesh
-                        ),
+                        rejection_counter=rejection_counter,
                         mesh_arrays=None,
                         retry_groups=retry_groups,
                         retry_record=retry_record,
                     )
                 )
                 continue
+
+            del native_mesh
 
             if validate_surface:
                 validation_started = time.perf_counter()
@@ -513,11 +575,12 @@ def _compute_native_batch(
                 surface_checked += 1
                 if not surface_ok:
                     surface_rejects += 1
+                    del mesh_arrays
                     outcomes.append(
                         _NativeGroupOutcome(
                             status="surface_reject",
                             rejection_counter="",
-                            mesh_arrays=mesh_arrays,
+                            mesh_arrays=None,
                         )
                     )
                     continue
@@ -539,11 +602,12 @@ def _compute_native_batch(
                 )
                 if not source_coverage_ok:
                     surface_rejects += 1
+                    del mesh_arrays
                     outcomes.append(
                         _NativeGroupOutcome(
                             status="surface_reject",
                             rejection_counter="",
-                            mesh_arrays=mesh_arrays,
+                            mesh_arrays=None,
                         )
                     )
                     continue
@@ -808,8 +872,17 @@ def run_length_extrude_native_hybrid(
         stats["native_parallel_requested_workers"] = worker_count
         stats["native_parallel_workers"] = 1
 
-    path_cache: dict[int, tuple[Any, list[list[tuple[float, float]]]]] = {}
-    for (height, z_bot), jobs in batch_items:
+    path_cache = _new_native_path_cache()
+    for ((height, z_bot), jobs), batch_cost in zip(
+        batch_items,
+        cheap_batch_costs,
+    ):
+        _enforce_vector_mesh_runtime_headroom(
+            stage="native_batch",
+            estimated_additional_bytes=batch_cost.estimated_bytes,
+            shape_count=batch_cost.source_geometry_count,
+            coordinate_count=batch_cost.point_count,
+        )
         _run_native_job_batch(
             module=module,
             jobs=jobs,
@@ -823,6 +896,8 @@ def run_length_extrude_native_hybrid(
             path_cache=path_cache,
         )
 
+    _record_native_path_cache_stats(stats, path_cache)
+    path_cache.clear()
     _flush_native_buffers(meshes_by_slot, stats)
     return NativeVectorMeshResult(meshes_by_slot=meshes_by_slot, stats=stats)
 
@@ -834,6 +909,9 @@ def _empty_stats() -> dict[str, float | int | str]:
         "native_input_paths": 0,
         "native_path_cache_hits": 0,
         "native_path_cache_misses": 0,
+        "native_path_cache_peak_bytes": 0,
+        "native_path_cache_evictions": 0,
+        "native_path_cache_oversized_rejections": 0,
         "pack_seconds": 0.0,
         "native_seconds": 0.0,
         "mesh_convert_seconds": 0.0,
@@ -916,6 +994,8 @@ def _record_native_parallelism_plan(
 def _load_native_module(stats: dict[str, float | int | str]):
     try:
         return importlib.import_module("clipper2_batch")
+    except _FATAL_MEMORY_ERRORS:
+        raise
     except Exception as exc:
         stats["native_import_error"] = type(exc).__name__
         return None
@@ -927,6 +1007,8 @@ def _native_module_capabilities(module) -> dict:
         return {}
     try:
         capabilities = capabilities_fn()
+    except _FATAL_MEMORY_ERRORS:
+        raise
     except Exception:
         return {}
     if not isinstance(capabilities, dict):
@@ -1187,11 +1269,11 @@ def _try_run_native_batches_parallel(
         default=0,
     )
     meshes_by_slot: dict[str, dict[str, Any]] = {}
-    path_cache: dict[
-        int,
-        tuple[Any, list[list[tuple[float, float]]]],
-    ] = {}
-    local_extrude_cache = dict(extrude_cache) if extrude_cache is not None else None
+    path_cache = _new_native_path_cache()
+    # Commits happen on the owner thread, so the shared byte-budgeted cache is
+    # safe to use directly. Copying it to a plain dict removed its byte bound
+    # and could retain a second task-wide cache until every batch completed.
+    local_extrude_cache = extrude_cache
 
     try:
         if len(cheap_batch_costs) != len(batch_items):
@@ -1244,6 +1326,12 @@ def _try_run_native_batches_parallel(
                         live_estimated_bytes,
                         cheap_cost.estimated_bytes,
                     )
+                    _enforce_vector_mesh_runtime_headroom(
+                        stage="native_batch_window",
+                        estimated_additional_bytes=projected_cheap_bytes,
+                        shape_count=cheap_cost.source_geometry_count,
+                        coordinate_count=cheap_cost.point_count,
+                    )
                     if (
                         in_flight
                         and projected_cheap_bytes
@@ -1272,6 +1360,12 @@ def _try_run_native_batches_parallel(
                     projected_refined_bytes = _saturating_add_bytes(
                         live_estimated_bytes,
                         batch.cost.estimated_bytes,
+                    )
+                    _enforce_vector_mesh_runtime_headroom(
+                        stage="native_batch_prepared",
+                        estimated_additional_bytes=projected_refined_bytes,
+                        shape_count=batch.cost.source_geometry_count,
+                        coordinate_count=batch.cost.point_count,
                     )
                     individually_oversized = (
                         batch.cost.estimated_bytes
@@ -1356,9 +1450,11 @@ def _try_run_native_batches_parallel(
             time.perf_counter() - parallel_started
         )
 
+        _record_native_path_cache_stats(stats, path_cache)
+        path_cache.clear()
         _flush_native_buffers(meshes_by_slot, stats)
-        if extrude_cache is not None and local_extrude_cache is not None:
-            extrude_cache.update(local_extrude_cache)
+    except _FATAL_MEMORY_ERRORS:
+        raise
     except Exception as exc:
         return None, type(exc).__name__
 
@@ -1429,6 +1525,8 @@ def _run_native_job_batch(
             scale_factor=scale_factor,
         )
         stats["native_seconds"] = float(stats["native_seconds"]) + (time.perf_counter() - t0)
+    except _FATAL_MEMORY_ERRORS:
+        raise
     except Exception as exc:
         stats["native_call_error"] = type(exc).__name__
         for key in keys:
@@ -1448,10 +1546,12 @@ def _run_native_job_batch(
 
     t0 = time.perf_counter()
     native_mesh_list = list(native_meshes or [])
+    del native_meshes
     if len(native_mesh_list) > len(keys):
         stats["native_extra_meshes"] = int(stats["native_extra_meshes"]) + (
             len(native_mesh_list) - len(keys)
         )
+        del native_mesh_list[len(keys) :]
     for index, key in enumerate(keys):
         ch = key[0]
         slot_name = slot_names[ch]
@@ -1472,6 +1572,7 @@ def _run_native_job_batch(
             )
             continue
         native_mesh = native_mesh_list[index]
+        native_mesh_list[index] = None
         mesh_arrays = _native_mesh_arrays(native_mesh)
         primary_status = (
             int(primary_statuses[index])
@@ -1486,6 +1587,7 @@ def _run_native_job_batch(
                 stats["native_surface_rejects"] = int(
                     stats["native_surface_rejects"]
                 ) + 1
+                del native_mesh
                 _fallback_key(
                     key,
                     geoms_by_key[key],
@@ -1500,6 +1602,7 @@ def _run_native_job_batch(
                 )
                 continue
             reason = _native_mesh_rejection_reason(native_mesh)
+            del native_mesh
             stats[reason] = int(stats[reason]) + 1
             if _retry_native_group_as_reference_polygons(
                 module=module,
@@ -1543,6 +1646,7 @@ def _run_native_job_batch(
                 input_path_count=path_counts_by_key.get(key),
             )
             continue
+        del native_mesh
         if _surface_validation_enabled():
             t_validate = time.perf_counter()
             if len(primary_statuses) > 0:
@@ -1575,6 +1679,7 @@ def _run_native_job_batch(
             ) + 1
             if not surface_ok:
                 stats["native_surface_rejects"] = int(stats["native_surface_rejects"]) + 1
+                del mesh_arrays
                 _fallback_key(
                     key,
                     geoms_by_key[key],
@@ -1603,6 +1708,7 @@ def _run_native_job_batch(
                 stats["native_surface_rejects"] = int(
                     stats["native_surface_rejects"]
                 ) + 1
+                del mesh_arrays
                 _fallback_key(
                     key,
                     geoms_by_key[key],
@@ -1788,6 +1894,8 @@ def _retry_native_group_as_reference_polygons_unchecked(
         stats["native_seconds"] = float(stats["native_seconds"]) + (
             time.perf_counter() - t0
         )
+    except _FATAL_MEMORY_ERRORS:
+        raise
     except Exception:
         return False
 
@@ -1795,16 +1903,35 @@ def _retry_native_group_as_reference_polygons_unchecked(
     slot_name = slot_names[ch]
     _ensure_slot(meshes_by_slot, slot_name, ch)
     native_mesh_list = list(native_meshes or [])
+    del native_meshes
+    if len(native_mesh_list) > len(retry_groups):
+        stats["native_extra_meshes"] = int(stats["native_extra_meshes"]) + (
+            len(native_mesh_list) - len(retry_groups)
+        )
+        del native_mesh_list[len(retry_groups) :]
+
+    resolved_polygons = [
+        _retry_polygon_for_group(retry_polygons, retry_group, index)
+        for index, retry_group in enumerate(retry_groups)
+    ]
+    if any(poly is None for poly in resolved_polygons):
+        native_mesh_list.clear()
+        return False
+
     any_output = False
-    for index, retry_group in enumerate(retry_groups):
-        native_mesh = native_mesh_list[index] if index < len(native_mesh_list) else None
+    pending_fallbacks: list[tuple[Any, str]] = []
+    for index, _retry_group in enumerate(retry_groups):
+        if index < len(native_mesh_list):
+            native_mesh = native_mesh_list[index]
+            native_mesh_list[index] = None
+        else:
+            native_mesh = None
         mesh_arrays = _native_mesh_arrays(native_mesh)
         if mesh_arrays is not None:
+            del native_mesh
             surface_ok = True
             if _surface_validation_enabled():
-                poly = _retry_polygon_for_group(retry_polygons, retry_group, index)
-                if poly is None:
-                    return bool(any_output)
+                poly = resolved_polygons[index]
                 surface_ok = _native_mesh_surface_is_acceptable(
                     mesh_arrays,
                     [poly],
@@ -1823,20 +1950,10 @@ def _retry_native_group_as_reference_polygons_unchecked(
                 )
                 any_output = True
                 continue
-            _fallback_key(
-                key,
-                [poly],
-                height=height,
-                z_bot=z_bot,
-                scale_factor=scale_factor,
-                slot_names=slot_names,
-                meshes_by_slot=meshes_by_slot,
-                extrude_cache=extrude_cache,
-                stats=stats,
-                reason="split_surface_reject",
+            del mesh_arrays
+            pending_fallbacks.append(
+                (resolved_polygons[index], "split_surface_reject")
             )
-            stats["native_split_fallback_groups"] = int(stats["native_split_fallback_groups"]) + 1
-            any_output = True
             continue
 
         if native_mesh is None:
@@ -1846,9 +1963,13 @@ def _retry_native_group_as_reference_polygons_unchecked(
             counter_name = _native_mesh_rejection_reason(native_mesh)
             stats[counter_name] = int(stats[counter_name]) + 1
             reason = _fallback_reason_for_native_rejection(counter_name)
-        poly = _retry_polygon_for_group(retry_polygons, retry_group, index)
-        if poly is None:
-            return bool(any_output)
+        del native_mesh
+        pending_fallbacks.append(
+            (resolved_polygons[index], f"split_{reason}")
+        )
+
+    native_mesh_list.clear()
+    for poly, reason in pending_fallbacks:
         _fallback_key(
             key,
             [poly],
@@ -1859,7 +1980,7 @@ def _retry_native_group_as_reference_polygons_unchecked(
             meshes_by_slot=meshes_by_slot,
             extrude_cache=extrude_cache,
             stats=stats,
-            reason=f"split_{reason}",
+            reason=reason,
         )
         stats["native_split_fallback_groups"] = int(stats["native_split_fallback_groups"]) + 1
         any_output = True
@@ -2179,6 +2300,8 @@ def _native_retry_groups_for_native_retry(
             scale=NATIVE_COORD_SCALE,
         )
         merged_group = merged_groups[0] if merged_groups else []
+    except _FATAL_MEMORY_ERRORS:
+        raise
     except Exception:
         return None
     retry_groups = [poly for poly in (merged_group or []) if poly]
@@ -2217,6 +2340,8 @@ def _polygon_from_native_rings(rings) -> Polygon | None:
         return None
     try:
         polygon = Polygon(exterior, holes)
+    except _FATAL_MEMORY_ERRORS:
+        raise
     except Exception:
         return None
     if polygon.is_empty:
@@ -2286,41 +2411,18 @@ def _fallback_key(
     ):
         stats["fallback_seconds"] = float(stats["fallback_seconds"]) + (time.perf_counter() - t0)
         return
-    fallback_meshes = _fallback_extrude_group(
+    merged = _merged_reference_geometry(geoms)
+    if merged is None:
+        merged = GeometryCollection()
+    fallback_meshes = _extrude_source_geometries_with_coverage_guard(
         geoms,
+        merged,
         height=height,
-        z_bot=z_bot,
+        z_offset=z_bot,
         scale_factor=scale_factor,
         extrude_cache=extrude_cache,
+        context=f"Native fallback for channel {ch}",
     )
-    expected_area = _source_planar_coverage_mm2(geoms, scale_factor)
-    fallback_area = _extruded_planar_coverage_mm2(fallback_meshes, height)
-    if (
-        fallback_area is None
-        or _vector_coverage_is_incomplete(expected_area, fallback_area)
-    ):
-        # The optimized fallback union is allowed to fail, but the original
-        # shells are the final authority and must either extrude completely or
-        # abort the export.
-        fallback_meshes = []
-        for geom in geoms:
-            fallback_meshes.extend(
-                VectorProcessor._extrude_geometry(
-                    geom,
-                    height=height,
-                    z_offset=z_bot,
-                    scale=scale_factor,
-                    extrude_cache=extrude_cache,
-                )
-            )
-        fallback_area = _extruded_planar_coverage_mm2(fallback_meshes, height)
-        if (
-            fallback_area is None
-            or _vector_coverage_is_incomplete(expected_area, fallback_area)
-        ):
-            raise ValueError(
-                "Native vector fallback coverage incomplete; refusing partial export"
-            )
     meshes_by_slot[slot_name]["meshes"].extend(fallback_meshes)
     stats["fallback_groups"] = int(stats["fallback_groups"]) + 1
     _increment_fallback_reason(stats, reason)
@@ -2370,6 +2472,8 @@ def _try_native_merged_fallback(
             close_delta_mm=NATIVE_CLOSE_DELTA_MM,
             scale=NATIVE_COORD_SCALE,
         )
+    except _FATAL_MEMORY_ERRORS:
+        raise
     except Exception as exc:
         stats["native_merged_fallback_error"] = type(exc).__name__
         return False
@@ -2384,23 +2488,28 @@ def _try_native_merged_fallback(
         return False
 
     merged_geom = polygons[0] if len(polygons) == 1 else MultiPolygon(polygons)
+    expected_area = _source_planar_coverage_mm2(geoms, scale_factor)
+    merged_area = _source_planar_coverage_mm2((merged_geom,), scale_factor)
+    if _vector_coverage_is_incomplete(expected_area, merged_area):
+        # The native merge removed printable source coverage. Let the normal
+        # streamed per-source fallback handle the group and do not report this
+        # lossy candidate as an accepted merged fallback.
+        stats["native_merged_fallback_coverage_rejects"] = int(
+            stats.get("native_merged_fallback_coverage_rejects", 0) or 0
+        ) + 1
+        return False
     ch = key[0]
     slot_name = slot_names[ch]
     _ensure_slot(meshes_by_slot, slot_name, ch)
-    fallback_meshes = VectorProcessor._extrude_geometry(
+    fallback_meshes = _extrude_source_geometries_with_coverage_guard(
+        geoms,
         merged_geom,
         height=height,
         z_offset=z_bot,
-        scale=scale_factor,
+        scale_factor=scale_factor,
         extrude_cache=extrude_cache,
+        context=f"Native merged fallback for channel {ch}",
     )
-    expected_area = _source_planar_coverage_mm2(geoms, scale_factor)
-    fallback_area = _extruded_planar_coverage_mm2(fallback_meshes, height)
-    if (
-        fallback_area is None
-        or _vector_coverage_is_incomplete(expected_area, fallback_area)
-    ):
-        return False
     meshes_by_slot[slot_name]["meshes"].extend(fallback_meshes)
     stats["fallback_groups"] = int(stats["fallback_groups"]) + 1
     _increment_fallback_reason(stats, "native_merged_empty_native_mesh")
@@ -2455,6 +2564,8 @@ def _geometry_to_paths(geom) -> list[list[tuple[float, float]]]:
     for poly in _iter_polygons(geom):
         try:
             poly = orient(poly, sign=1.0)
+        except _FATAL_MEMORY_ERRORS:
+            raise
         except Exception:
             pass
         exterior = _ring(poly.exterior.coords)
@@ -2560,19 +2671,52 @@ def _coalesced_mesh_from_buffers(
     if len(buffers) == 1:
         return _mesh_from_arrays(buffers[0])
 
-    vertices = []
-    faces = []
-    vertex_offset = 0
-    for verts, fac in buffers:
-        if len(verts) == 0 or len(fac) == 0:
-            continue
-        vertices.append(verts)
-        faces.append(fac + vertex_offset)
-        vertex_offset += len(verts)
-
-    if not vertices or not faces:
+    valid_buffers = [
+        (np.asarray(verts), np.asarray(fac))
+        for verts, fac in buffers
+        if len(verts) > 0 and len(fac) > 0
+    ]
+    if not valid_buffers:
         return None
-    return _mesh_from_arrays((np.vstack(vertices), np.vstack(faces)))
+    total_vertices = sum(len(verts) for verts, _fac in valid_buffers)
+    total_faces = sum(len(fac) for _verts, fac in valid_buffers)
+    vertex_dtype = np.result_type(
+        *(verts.dtype for verts, _fac in valid_buffers),
+        np.float64,
+    )
+    face_dtype = np.result_type(
+        *(fac.dtype for _verts, fac in valid_buffers),
+        np.int64,
+    )
+    output_bytes = (
+        total_vertices * 3 * np.dtype(vertex_dtype).itemsize
+        + total_faces * 3 * np.dtype(face_dtype).itemsize
+    )
+    _enforce_vector_mesh_runtime_headroom(
+        stage="native_buffer_coalescing",
+        estimated_additional_bytes=max(16 * 1024 * 1024, output_bytes),
+        shape_count=len(valid_buffers),
+        coordinate_count=total_vertices,
+    )
+
+    vertices = np.empty((total_vertices, 3), dtype=vertex_dtype)
+    faces = np.empty((total_faces, 3), dtype=face_dtype)
+    vertex_cursor = 0
+    face_cursor = 0
+    for verts, fac in valid_buffers:
+        next_vertex = vertex_cursor + len(verts)
+        next_face = face_cursor + len(fac)
+        vertices[vertex_cursor:next_vertex] = verts
+        np.add(
+            fac,
+            vertex_cursor,
+            out=faces[face_cursor:next_face],
+            casting="unsafe",
+        )
+        vertex_cursor = next_vertex
+        face_cursor = next_face
+
+    return _mesh_from_arrays((vertices, faces))
 
 
 def _flush_native_buffers(
@@ -2586,11 +2730,13 @@ def _flush_native_buffers(
             continue
         mesh = _coalesced_mesh_from_buffers(buffers)
         if mesh is None:
+            buffers.clear()
             continue
         slot_data["meshes"].append(mesh)
         stats["native_coalesced_slots"] = int(stats["native_coalesced_slots"]) + 1
         stats["native_coalesced_meshes"] = int(stats["native_coalesced_meshes"]) + len(buffers)
         stats["native_output_meshes"] = int(stats["native_output_meshes"]) + 1
+        buffers.clear()
     stats["mesh_convert_seconds"] = float(stats["mesh_convert_seconds"]) + (
         time.perf_counter() - t0
     )
@@ -2760,19 +2906,8 @@ def _merged_reference_geometry(geoms):
             if merged is None or merged.is_empty:
                 merged = unioned
             return merged
+        except _FATAL_MEMORY_ERRORS:
+            raise
         except Exception:
-            return unary_union(snapped)
+            return None
     return geoms[0]
-
-
-def _fallback_extrude_group(geoms, *, height: float, z_bot: float, scale_factor: float, extrude_cache):
-    merged = _merged_reference_geometry(geoms)
-    if merged is None or (isinstance(merged, GeometryCollection) and merged.is_empty):
-        return []
-    return VectorProcessor._extrude_geometry(
-        merged,
-        height=height,
-        z_offset=z_bot,
-        scale=scale_factor,
-        extrude_cache=extrude_cache,
-    )

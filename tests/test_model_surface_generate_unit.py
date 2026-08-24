@@ -25,6 +25,7 @@ from api.session_store import SessionStore
 from config import ModelingMode as CoreModelingMode, PrinterConfig
 from core.model_surface.assembly import OverlaySceneResult
 from core.model_surface.types import ModelSurfaceError
+from core.errors import VectorMeshMemoryBudgetError
 from core.pipeline.s06_voxel_building import _build_voxel_matrix
 
 
@@ -568,6 +569,84 @@ def test_worker_generate_model_surface_overlay_exports_bambu_3mf(tmp_path):
     assert captured["enable_base_layer_height_modifier"] is False
     assert captured["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.4"
     Path(result["threemf_path"]).unlink(missing_ok=True)
+
+
+def test_worker_model_surface_memory_guard_runs_before_3mf_writer(tmp_path):
+    image_path = tmp_path / "surface-art.png"
+    lut_path = tmp_path / "lut.npy"
+    model_path = tmp_path / "plate.stl"
+    Image.new("RGB", (2, 2), (255, 0, 0)).save(image_path)
+    lut_path.write_bytes(b"lut")
+    model_path.write_bytes(b"solid plate\nendsolid plate\n")
+    scene = trimesh.Scene(
+        {"surface_base": trimesh.creation.box(extents=(2.0, 2.0, 1.0))}
+    )
+    overlay = OverlaySceneResult(
+        scene=scene,
+        slot_names=["surface_base"],
+        preview_colors={"surface_base": (245, 245, 245)},
+    )
+    rejected = VectorMeshMemoryBudgetError(
+        "model_surface_3mf_export",
+        9 * 1024**3,
+        8 * 1024**3,
+        4 * 1024**3,
+        1,
+        8,
+    )
+    from api.workers.converter_workers import worker_generate_model_surface_overlay
+
+    with (
+        patch(
+            "core.model_surface.pipeline.build_surface_overlay_scene",
+            return_value=overlay,
+        ),
+        patch(
+            "core.vector_engine._enforce_vector_scene_export_headroom",
+            side_effect=rejected,
+        ) as guard,
+        patch(
+            "utils.bambu_3mf_writer.export_scene_with_bambu_metadata",
+        ) as writer,
+    ):
+        with pytest.raises(VectorMeshMemoryBudgetError):
+            worker_generate_model_surface_overlay(
+                str(image_path),
+                str(lut_path),
+                {
+                    "surface_model_path": str(model_path),
+                    "surface_footprint": {
+                        "frame": {
+                            "origin": [0.0, 0.0, 1.0],
+                            "normal": [0.0, 0.0, 1.0],
+                            "u_axis": [1.0, 0.0, 0.0],
+                            "v_axis": [0.0, 1.0, 0.0],
+                        },
+                        "outer": [
+                            [-1.0, -1.0],
+                            [1.0, -1.0],
+                            [1.0, 1.0],
+                            [-1.0, 1.0],
+                            [-1.0, -1.0],
+                        ],
+                        "holes": [],
+                        "bounds_width_mm": 2.0,
+                        "bounds_height_mm": 2.0,
+                    },
+                    "surface_pocket_depth_mm": 0.08,
+                    "converter_params": {
+                        "target_width_mm": 2.0,
+                        "backing_infill_density_percent": 100,
+                    },
+                },
+            )
+
+    guard.assert_called_once_with(
+        scene,
+        stage="model_surface_3mf_export",
+        workspace_multiplier=5.0,
+    )
+    writer.assert_not_called()
 
 
 def test_worker_generate_model_surface_overlay_rejects_sparse_backing(tmp_path):

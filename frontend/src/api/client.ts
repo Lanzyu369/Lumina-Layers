@@ -207,6 +207,10 @@ const STRUCTURED_DETAIL_TRANSLATION_KEYS: ReadonlyMap<string, string> = new Map(
   ["source_svg_invalid", "api_error_source_svg_invalid"],
   ["source_svg_too_complex", "api_error_source_svg_too_complex"],
   [
+    "vector_mesh_memory_budget_exceeded",
+    "api_error_vector_mesh_memory_budget_exceeded",
+  ],
+  [
     "source_svg_no_renderable_geometry",
     "api_error_source_svg_no_renderable_geometry",
   ],

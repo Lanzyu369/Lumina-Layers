@@ -298,6 +298,20 @@ describe("apiClient", () => {
       language: "zh" as const,
       expected: "SVG 包含过多相交的复合子路径，无法安全处理。请简化或展平图稿后重新上传。",
     },
+    {
+      code: "vector_mesh_memory_budget_exceeded",
+      status: 422,
+      language: "en" as const,
+      expected:
+        "This Vector artwork is too complex to build safely. Simplify or flatten the SVG paths, reduce the model size, or split the artwork into smaller files, then try again.",
+    },
+    {
+      code: "vector_mesh_memory_budget_exceeded",
+      status: 422,
+      language: "zh" as const,
+      expected:
+        "这份矢量图过于复杂，当前无法安全生成模型。请简化或展平 SVG 路径、缩小模型尺寸，或拆成多个文件后重试。",
+    },
   ])(
     "translates converter source error $code in $language",
     async ({ code, status, language, expected }) => {

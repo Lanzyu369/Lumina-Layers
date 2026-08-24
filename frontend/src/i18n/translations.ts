@@ -149,6 +149,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "SVG 包含过多相交的复合子路径，无法安全处理。请简化或展平图稿后重新上传。",
     en: "The SVG contains too many intersecting compound subpaths to process safely. Simplify or flatten the artwork, then upload it again.",
   },
+  api_error_vector_mesh_memory_budget_exceeded: {
+    zh: "这份矢量图过于复杂，当前无法安全生成模型。请简化或展平 SVG 路径、缩小模型尺寸，或拆成多个文件后重试。",
+    en: "This Vector artwork is too complex to build safely. Simplify or flatten the SVG paths, reduce the model size, or split the artwork into smaller files, then try again.",
+  },
   api_error_source_svg_no_renderable_geometry: {
     zh: "SVG 中没有矢量模式可用的可见填充几何。请显示图稿，将描边和文字转换为填充路径，或切换到“高保真”模式。",
     en: "The SVG has no visible filled geometry supported by Vector mode. Make the artwork visible, convert strokes and text to filled paths, or switch to High-Fidelity mode.",

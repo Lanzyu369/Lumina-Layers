@@ -14,6 +14,7 @@ Validates:
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures.process import BrokenProcessPool
 import inspect
 import json
 import os
@@ -36,6 +37,7 @@ from api.preview_cache_artifacts import externalize_preview_cache
 from api.routers.converter.color_card import _COLOR_CARD_GENERATION_FAILED_DETAIL
 from api.routers.converter.generate import _generate_large_format_raster
 from api.routers.converter.generate import _generate_large_format_svg_native
+from api.routers.converter.generate import _rasterize_svg_for_large_format_fallback
 from api.routers.converter.generate import LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL
 from api.routers.converter.generate import LARGE_FORMAT_GENERATION_FAILED_DETAIL
 from api.routers.converter.generate import MODEL_GENERATION_FAILED_DETAIL
@@ -61,6 +63,7 @@ from core.converter import (
     _resolve_material_archive_backing_color_id,
     convert_image_to_3d,
 )
+from core.errors import VectorMeshMemoryBudgetError
 
 _test_store: SessionStore = SessionStore(ttl=1800)
 _test_registry: FileRegistry = FileRegistry()
@@ -89,6 +92,40 @@ setup_module(None)
 
 
 client: TestClient = TestClient(app)
+
+
+def test_large_format_svg_raster_fallback_passes_hard_pixel_budget(
+    tmp_path,
+) -> None:
+    """The fallback renderer must enforce the same 12M pixel ceiling."""
+
+    svg_path = tmp_path / "fallback.svg"
+    svg_path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>',
+        encoding="utf-8",
+    )
+    with (
+        patch(
+            "api.routers.converter.generate.TEMP_DIR",
+            str(tmp_path),
+        ),
+        patch(
+            "api.routers.converter.generate.rasterize_svg",
+            return_value=np.zeros((1, 1, 4), dtype=np.uint8),
+        ) as rasterize,
+    ):
+        png_path, _warnings = _rasterize_svg_for_large_format_fallback(
+            svg_path=str(svg_path),
+            total_width_mm=100.0,
+            total_height_mm=100.0,
+            sid="test-session",
+            store=_test_store,
+        )
+
+    try:
+        assert rasterize.call_args.kwargs["_max_total_pixels"] == 12_000_000
+    finally:
+        os.unlink(png_path)
 
 
 async def _timed_submit_via_generate_mock(
@@ -1863,6 +1900,49 @@ class TestGenerateWorkerException:
         assert response.json()["detail"] == MODEL_GENERATION_FAILED_DETAIL
         assert "Worker crashed" not in response.text
 
+    def test_generate_broken_worker_pool_returns_retryable_503(self) -> None:
+        sid: str = _create_session_with_preview_and_files(_test_store)
+        payload = {
+            "session_id": sid,
+            "params": {"lut_name": "test_lut"},
+        }
+        _mock_pool.submit = AsyncMock(
+            side_effect=BrokenProcessPool("worker was killed")
+        )
+
+        with patch("os.path.exists", return_value=True):
+            response = client.post("/api/convert/generate", json=payload)
+
+        assert response.status_code == 503
+        assert response.json()["detail"] == MODEL_GENERATION_FAILED_DETAIL
+        assert "worker was killed" not in response.text
+
+    def test_generate_memory_admission_returns_actionable_422(self) -> None:
+        sid: str = _create_session_with_preview_and_files(_test_store)
+        error = VectorMeshMemoryBudgetError(
+            "preflight",
+            9 * 1024**3,
+            8 * 1024**3,
+            1 * 1024**3,
+            4_200,
+            420_000,
+        )
+        _mock_pool.submit = AsyncMock(side_effect=error)
+
+        with patch("os.path.exists", return_value=True):
+            response = client.post(
+                "/api/convert/generate",
+                json={
+                    "session_id": sid,
+                    "params": {"lut_name": "test_lut"},
+                },
+            )
+
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert detail["error"] == "vector_mesh_memory_budget_exceeded"
+        assert detail["recoverable"] is True
+
 
 class TestGenerateRegistryFailureCleanup:
     """Final worker outputs should not leak when registry ownership fails."""
@@ -2204,6 +2284,58 @@ class TestGenerateRegistryFailureCleanup:
         assert not zip_path.exists()
 
     @pytest.mark.asyncio
+    async def test_large_format_svg_native_memory_admission_returns_422(
+        self,
+        tmp_path,
+    ) -> None:
+        image_path = tmp_path / "source.svg"
+        lut_path = tmp_path / "source.npy"
+        image_path.write_text("<svg/>", encoding="utf-8")
+        lut_path.write_bytes(b"lut")
+        error = VectorMeshMemoryBudgetError(
+            "preflight",
+            9 * 1024**3,
+            8 * 1024**3,
+            1 * 1024**3,
+            4_200,
+            420_000,
+        )
+        mock_pool = SimpleNamespace(submit=AsyncMock(side_effect=error))
+        request = LargeFormatConvertGenerateRequest(
+            total_width_mm=20.0,
+            total_height_mm=20.0,
+            tile_width_mm=20.0,
+            tile_height_mm=20.0,
+            lut_name="test_lut",
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _generate_large_format_svg_native(
+                image_path=str(image_path),
+                lut_path=str(lut_path),
+                source_basename="source",
+                recipe_overrides=None,
+                recipe_override_masks_path=None,
+                material_matrix_path=None,
+                total_width_mm=20.0,
+                total_height_mm=20.0,
+                tile_width_mm=20.0,
+                tile_height_mm=20.0,
+                request=request,
+                session_data={},
+                sid="session-memory-budget",
+                store=_test_store,
+                registry=FileRegistry(),
+                pool=mock_pool,
+                warnings=[],
+            )
+
+        assert exc_info.value.status_code == 422
+        assert exc_info.value.detail["code"] == (
+            "vector_mesh_memory_budget_exceeded"
+        )
+
+    @pytest.mark.asyncio
     async def test_large_format_svg_native_forwards_color_relief_params(
         self,
         tmp_path,
@@ -2381,6 +2513,54 @@ class TestGenerateRegistryFailureCleanup:
         assert exc_info.value.detail == LARGE_FORMAT_GENERATION_FAILED_DETAIL
         assert "registry unavailable" not in str(exc_info.value.detail)
         assert not (tmp_path / "tile.3mf").exists()
+
+    @pytest.mark.asyncio
+    async def test_large_format_raster_broken_pool_stops_remaining_tiles(
+        self,
+        tmp_path,
+    ) -> None:
+        image_path = tmp_path / "source.png"
+        lut_path = tmp_path / "source.npy"
+        Image.fromarray(np.zeros((20, 40, 3), dtype=np.uint8)).save(image_path)
+        lut_path.write_bytes(b"lut")
+        request = LargeFormatConvertGenerateRequest(
+            total_width_mm=40.0,
+            total_height_mm=20.0,
+            tile_width_mm=20.0,
+            tile_height_mm=20.0,
+            lut_name="test_lut",
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+        mock_pool = MagicMock(spec=WorkerPoolManager)
+        mock_pool.submit = AsyncMock(
+            side_effect=BrokenProcessPool("worker was killed")
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _generate_large_format_raster(
+                image_path=str(image_path),
+                lut_path=str(lut_path),
+                source_basename="source",
+                recipe_overrides=None,
+                recipe_override_masks_path=None,
+                material_matrix_path=None,
+                total_width_mm=40.0,
+                total_height_mm=20.0,
+                tile_width_mm=20.0,
+                tile_height_mm=20.0,
+                request=request,
+                session_data={},
+                sid="session-broken-pool",
+                store=_test_store,
+                registry=FileRegistry(),
+                pool=mock_pool,
+                warnings=[],
+            )
+
+        assert exc_info.value.status_code == 503
+        assert exc_info.value.detail == LARGE_FORMAT_GENERATION_FAILED_DETAIL
+        assert mock_pool.submit.call_count == 2
+        assert mock_pool.submit.await_count == 1
 
 
 class TestLargeFormatFridgeMagnetValidation:
@@ -4234,6 +4414,77 @@ class TestLargeFormatDimensionsAndRouting:
         assert "width" in response.json()["detail"].lower()
         assert "height" in response.json()["detail"].lower()
 
+    def test_large_format_rejects_unbounded_tile_grid_before_worker(self) -> None:
+        sid, _svg_path, _lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=True,
+        )
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 80.0,
+                "tile_width_mm": 0.001,
+                "tile_height_mm": 0.001,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "vector",
+                    "target_width_mm": 120.0,
+                },
+            },
+        }
+
+        with patch(
+            "api.routers.converter.generate._generate_large_format_svg_native"
+        ) as native_helper:
+            response = client.post(
+                "/api/convert/generate-large-format",
+                json=payload,
+            )
+
+        assert response.status_code == 422
+        assert "tile" in str(response.json()["detail"]).lower()
+        native_helper.assert_not_called()
+
+    def test_large_format_rejects_derived_dimension_above_limit(self) -> None:
+        sid, _svg_path, _lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=True,
+        )
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 9999.0,
+                "tile_width_mm": 250.0,
+                "tile_height_mm": 250.0,
+                "params": {
+                    "lut_name": "test_lut",
+                    "modeling_mode": "vector",
+                },
+            },
+        }
+        native_response = {
+            "status": "ok",
+            "message": "native",
+            "download_url": "/api/files/native",
+            "tile_count": 1,
+            "grid_cols": 1,
+            "grid_rows": 1,
+            "warnings": [],
+        }
+
+        with patch(
+            "api.routers.converter.generate._generate_large_format_svg_native",
+            return_value=native_response,
+        ) as native_helper:
+            response = client.post(
+                "/api/convert/generate-large-format",
+                json=payload,
+            )
+
+        assert response.status_code == 422
+        assert "9999" in str(response.json()["detail"])
+        native_helper.assert_not_called()
+
     def test_large_format_rejects_dimensions_inconsistent_with_preview_ratio(self) -> None:
         sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
 
@@ -5011,6 +5262,137 @@ class TestLargeFormatDimensionsAndRouting:
                 if os.path.exists(path):
                     os.unlink(path)
 
+    def test_large_format_svg_memory_admission_never_uses_raster_fallback(
+        self,
+    ) -> None:
+        sid, svg_path, lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=True,
+        )
+        error = VectorMeshMemoryBudgetError(
+            "native_mesh_batch",
+            9 * 1024**3,
+            8 * 1024**3,
+            1 * 1024**3,
+            4_200,
+            420_000,
+        )
+
+        try:
+            with (
+                patch(
+                    "api.routers.converter.generate._generate_large_format_svg_native",
+                    side_effect=error,
+                ) as native_helper,
+                patch(
+                    "api.routers.converter.generate._rasterize_svg_for_large_format_fallback",
+                ) as rasterize_helper,
+                patch(
+                    "api.routers.converter.generate._generate_large_format_raster",
+                ) as raster_helper,
+            ):
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="vector",
+                        use_cached_matched_rgb=False,
+                    ),
+                )
+
+            assert response.status_code == 422, response.text
+            assert response.json()["detail"]["code"] == (
+                "vector_mesh_memory_budget_exceeded"
+            )
+            native_helper.assert_called_once()
+            rasterize_helper.assert_not_called()
+            raster_helper.assert_not_called()
+        finally:
+            _test_store.close(sid)
+            for path in (svg_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_large_format_svg_memory_error_never_starts_raster_fallback(
+        self,
+    ) -> None:
+        sid, svg_path, lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=True,
+        )
+
+        try:
+            with (
+                patch(
+                    "api.routers.converter.generate._generate_large_format_svg_native",
+                    side_effect=MemoryError("native allocation failed"),
+                ) as native_helper,
+                patch(
+                    "api.routers.converter.generate._rasterize_svg_for_large_format_fallback",
+                ) as rasterize_helper,
+                patch(
+                    "api.routers.converter.generate._generate_large_format_raster",
+                ) as raster_helper,
+            ):
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="vector",
+                        use_cached_matched_rgb=False,
+                    ),
+                )
+
+            assert response.status_code == 500
+            native_helper.assert_called_once()
+            rasterize_helper.assert_not_called()
+            raster_helper.assert_not_called()
+        finally:
+            _test_store.close(sid)
+            for path in (svg_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_large_format_svg_broken_worker_never_starts_raster_fallback(
+        self,
+    ) -> None:
+        sid, svg_path, lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=True,
+        )
+
+        try:
+            with (
+                patch(
+                    "api.routers.converter.generate._generate_large_format_svg_native",
+                    side_effect=BrokenProcessPool("native worker was killed"),
+                ) as native_helper,
+                patch(
+                    "api.routers.converter.generate._rasterize_svg_for_large_format_fallback",
+                ) as rasterize_helper,
+                patch(
+                    "api.routers.converter.generate._generate_large_format_raster",
+                ) as raster_helper,
+            ):
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="vector",
+                        use_cached_matched_rgb=False,
+                    ),
+                )
+
+            assert response.status_code == 503
+            native_helper.assert_called_once()
+            rasterize_helper.assert_not_called()
+            raster_helper.assert_not_called()
+        finally:
+            _test_store.close(sid)
+            for path in (svg_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
     @pytest.mark.parametrize("fallback_stage", ["rasterize", "generate"])
     def test_large_format_svg_double_failure_returns_bounded_native_error(
         self,
@@ -5768,6 +6150,55 @@ class TestLargeFormatDimensionsAndRouting:
             assert material_path.exists()
         finally:
             store.clear_all()
+
+    @pytest.mark.asyncio
+    async def test_large_format_raster_memory_admission_returns_422(
+        self,
+        tmp_path,
+    ) -> None:
+        image_path = tmp_path / "source.png"
+        lut_path = tmp_path / "lut.npy"
+        Image.fromarray(np.zeros((10, 10, 3), dtype=np.uint8)).save(image_path)
+        lut_path.write_bytes(b"lut")
+        error = VectorMeshMemoryBudgetError(
+            "preflight",
+            9 * 1024**3,
+            8 * 1024**3,
+            1 * 1024**3,
+            4_200,
+            420_000,
+        )
+        request = LargeFormatConvertGenerateRequest(
+            lut_name="test_lut",
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _generate_large_format_raster(
+                image_path=str(image_path),
+                lut_path=str(lut_path),
+                source_basename="poster",
+                recipe_overrides=None,
+                recipe_override_masks_path=None,
+                matched_rgb_path=None,
+                mask_solid_path=None,
+                material_matrix_path=None,
+                total_width_mm=20.0,
+                total_height_mm=20.0,
+                tile_width_mm=20.0,
+                tile_height_mm=20.0,
+                request=request,
+                session_data={},
+                sid="raster-memory-budget",
+                store=SessionStore(ttl=1800),
+                registry=FileRegistry(),
+                pool=SimpleNamespace(submit=AsyncMock(side_effect=error)),
+            )
+
+        assert exc_info.value.status_code == 422
+        assert exc_info.value.detail["code"] == (
+            "vector_mesh_memory_budget_exceeded"
+        )
 
     @pytest.mark.asyncio
     async def test_large_format_cached_raster_uses_final_recipe_matrix_once(

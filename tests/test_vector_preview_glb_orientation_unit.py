@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 import trimesh
 
+from core.errors import VectorMeshMemoryBudgetError
 from core.pipeline.vector_branch import _make_vector_glb_preview_scene
 
 
@@ -32,6 +35,32 @@ def test_single_sided_vector_glb_preview_mirrors_front_face_up() -> None:
     assert preview.geometry["Board"].bounds[1][2] == pytest.approx(1.2)
     assert preview.geometry["Red"].bounds[0][2] == pytest.approx(1.205)
     assert preview.geometry["Board"].bounds[1][2] < preview.geometry["Red"].bounds[0][2]
+
+
+def test_single_sided_vector_glb_preview_checks_memory_before_copy() -> None:
+    scene = _make_single_sided_scene()
+    error = VectorMeshMemoryBudgetError(
+        "vector_glb_preview_copy",
+        9 * 1024**3,
+        8 * 1024**3,
+        1 * 1024**3,
+        2,
+        16,
+    )
+
+    with patch(
+        "core.vector_engine._enforce_vector_mesh_runtime_headroom",
+        side_effect=error,
+    ) as guard:
+        with pytest.raises(VectorMeshMemoryBudgetError) as raised:
+            _make_vector_glb_preview_scene(
+                scene,
+                structure_mode="Single-sided",
+                color_mode="4-Color (RYBW)",
+            )
+
+    assert raised.value.stage == "vector_glb_preview_copy"
+    assert guard.call_args.kwargs["stage"] == "vector_glb_preview_copy"
 
 
 def test_single_sided_vector_relief_glb_preview_keeps_face_up_scene() -> None:

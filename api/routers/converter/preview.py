@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from concurrent.futures.process import BrokenProcessPool
 import json
 import os
 import pickle
@@ -72,6 +73,7 @@ from core.material_dynamic_solver import (
     DynamicMaterialCandidateError,
     DynamicMaterialSolverError,
 )
+from core.errors import VectorMeshMemoryBudgetError
 from core.vector_large_format import inspect_svg_large_format_support, normalize_large_format_source_basename
 from utils.lut_manager import LUTManager
 
@@ -1242,6 +1244,13 @@ async def convert_preview(
         raise HTTPException(status_code=504, detail="Preview generation timed out")
     except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
         _handle_core_error(e, "preview generation")
+    except VectorMeshMemoryBudgetError as e:
+        _handle_core_error(e, "preview generation")
+    except BrokenProcessPool as e:
+        raise HTTPException(
+            status_code=503,
+            detail=_PREVIEW_GENERATION_FAILED_DETAIL,
+        ) from e
     except ROUTER_HANDLED_ERRORS as e:
         public_detail = _public_pipeline_validation_detail(
             e,

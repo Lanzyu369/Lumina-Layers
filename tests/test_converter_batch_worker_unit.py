@@ -162,6 +162,9 @@ def test_batch_compute_xy_bbox_supports_svg_alpha_bbox(tmp_path) -> None:
         target_width_mm=40.0,
         pixels_per_mm=3.0,
         crop_to_content=False,
+        _min_quality_px=1,
+        _max_longest_px=2048,
+        _cache_result=False,
     )
 
 
