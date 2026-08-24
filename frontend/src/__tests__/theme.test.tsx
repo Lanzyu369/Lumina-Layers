@@ -18,16 +18,16 @@ beforeEach(() => {
 // ========== ThemeToggle Component Tests ==========
 
 describe("ThemeToggle", () => {
-  it("renders moon icon (🌙) in light mode", () => {
+  it("renders moon icon in light mode", () => {
     useSettingsStore.setState({ theme: "light" });
     render(<ThemeToggle />);
-    expect(screen.getByRole("button", { name: "切换主题" })).toHaveTextContent("🌙");
+    expect(screen.getByTestId("theme-icon-moon")).toBeInTheDocument();
   });
 
-  it("renders sun icon (☀️) in dark mode", () => {
+  it("renders sun icon in dark mode", () => {
     useSettingsStore.setState({ theme: "dark" });
     render(<ThemeToggle />);
-    expect(screen.getByRole("button", { name: "切换主题" })).toHaveTextContent("☀️");
+    expect(screen.getByTestId("theme-icon-sun")).toBeInTheDocument();
   });
 
   it("toggles theme from light to dark on click", () => {

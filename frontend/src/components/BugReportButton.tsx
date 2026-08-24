@@ -1,4 +1,5 @@
 import { useI18n } from "../i18n/context";
+import { HEADER_ICON_BUTTON_CLASS } from "./ui/headerControls";
 
 interface BugReportButtonProps {
   onClick: () => void;
@@ -14,8 +15,7 @@ export function BugReportButton({ onClick }: BugReportButtonProps) {
       aria-label={t("bug_report_button_label")}
       title={t("bug_report_button_tooltip")}
       onClick={onClick}
-      className="panel-section-muted inline-flex h-9 w-9 items-center justify-center rounded-lg p-0 transition-opacity duration-200 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-      style={{ color: "var(--surface-text-muted)" }}
+      className={HEADER_ICON_BUTTON_CLASS}
     >
       <svg
         aria-hidden="true"

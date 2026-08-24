@@ -1,5 +1,6 @@
 import { useSettingsStore } from "../stores/settingsStore";
 import { useI18n } from "../i18n/context";
+import { HEADER_ICON_BUTTON_CLASS } from "./ui/headerControls";
 
 export function LanguageToggle() {
   const { t } = useI18n();
@@ -12,9 +13,11 @@ export function LanguageToggle() {
 
   return (
     <button
+      type="button"
       onClick={handleToggle}
       aria-label={t("app_toggle_language")}
-      className="px-3 py-1 rounded text-sm font-medium bg-slate-700 text-slate-300 hover:bg-slate-600 transition-colors"
+      title={t("app_toggle_language")}
+      className={`${HEADER_ICON_BUTTON_CLASS} text-xs font-semibold`}
     >
       {language === "zh" ? "EN" : "中"}
     </button>
