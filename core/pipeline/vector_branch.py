@@ -39,7 +39,7 @@ from shapely.validation import make_valid
 
 from api.structured_logging import get_logger
 from config import BedManager, PrinterConfig, normalize_nozzle_size
-from core.errors import CachedPreviewAnalysisError
+from core.errors import CachedPreviewAnalysisError, VectorTopologyError
 from core.geometry_utils import create_keychain_loop
 from core.pipeline import p06_bed_rendering, s09_export_3mf, vector_glb_preview
 from core.pipeline.pipeline_utils import extract_color_palette
@@ -1157,7 +1157,7 @@ def _generate_vector_outline_mesh(
                 xy_scale=scale_factor,
                 prefer_fast=True,
             )
-        except COORDINATOR_HANDLED_ERRORS as exc:
+        except (VectorTopologyError, *COORDINATOR_HANDLED_ERRORS) as exc:
             log.warning(
                 "Vector outline rejected after polygon extrusion failure",
                 extra={

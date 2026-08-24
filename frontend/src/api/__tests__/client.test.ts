@@ -326,6 +326,43 @@ describe("apiClient", () => {
     {
       language: "en" as const,
       expected:
+        "The vector artwork contains geometry that cannot be exported safely. Simplify or re-vectorize the artwork, then upload it again.",
+    },
+    {
+      language: "zh" as const,
+      expected:
+        "该矢量图稿包含无法安全导出的几何。请简化图稿或重新矢量化后，再上传重试。",
+    },
+  ])(
+    "translates actionable vector topology recovery in $language",
+    async ({ language, expected }) => {
+      useSettingsStore.setState({ language });
+      const detail = {
+        code: "vector_topology_unrepairable",
+        stage: "polygon_export",
+        action: "simplify_or_revectorize",
+        message: "The vector artwork cannot be exported.",
+      };
+      const error = new Error("Request failed with status code 422");
+      Object.assign(error, {
+        config: { method: "post", url: "/convert/generate" },
+        response: { status: 422, data: { detail } },
+      });
+      apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+      const rejected = await apiClient
+        .post("/convert/generate", {})
+        .catch((err) => err);
+
+      expect(rejected).toMatchObject({ message: expected });
+      expect(rejected.response?.data?.detail).toEqual(detail);
+    },
+  );
+
+  it.each([
+    {
+      language: "en" as const,
+      expected:
         "The model is not a closed solid and cannot be cut safely. Repair the mesh and upload it again.",
     },
     {

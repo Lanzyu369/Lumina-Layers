@@ -59,7 +59,7 @@ from api.workers.converter_workers import (
     worker_generate_model_surface_overlay,
 )
 from core.batch_layout import LayoutResult, XYBBox, layout_shelf_by_row
-from core.errors import CachedPreviewAnalysisError
+from core.errors import CachedPreviewAnalysisError, VectorTopologyError
 from core.model_surface.types import ModelSurfaceError
 from core.naming import generate_preserved_upload_3mf_filename
 from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
@@ -173,6 +173,15 @@ BATCH_ITEM_FAILED_DETAIL: str = (
 MODEL_GENERATION_FAILED_DETAIL: str = (
     "3MF generation failed. Re-run preview and try generating the model again."
 )
+VECTOR_TOPOLOGY_UNREPAIRABLE_DETAIL: dict[str, str] = {
+    "code": "vector_topology_unrepairable",
+    "stage": "polygon_export",
+    "action": "simplify_or_revectorize",
+    "message": (
+        "The vector artwork contains geometry that cannot be exported safely. "
+        "Simplify or re-vectorize the artwork, then upload it again."
+    ),
+}
 MODEL_SURFACE_SOURCE_UNAVAILABLE_DETAIL: str = (
     "Surface model is unavailable. Re-upload the model, run preview, and try again."
 )
@@ -2217,6 +2226,11 @@ async def convert_generate(
         )
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="3MF generation timed out")
+    except VectorTopologyError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=dict(VECTOR_TOPOLOGY_UNREPAIRABLE_DETAIL),
+        ) from exc
     except ModelSurfaceError as exc:
         detail = public_model_surface_error_detail(exc)
         if detail is None:

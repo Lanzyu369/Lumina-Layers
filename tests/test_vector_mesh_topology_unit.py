@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import pickle
+import traceback
+import weakref
+
 import numpy as np
 import pytest
 import trimesh
 from shapely.geometry import Point, Polygon, box
 
 import core.vector_mesh_topology as vector_mesh_topology
+from core.errors import VectorTopologyError
 from core.vector_mesh_topology import (
     extrude_polygon_for_export,
     mesh_is_float32_safe,
@@ -91,6 +96,23 @@ def _separate_holes_polygon() -> Polygon:
             [(8.0, 2.0), (10.0, 2.0), (9.0, 4.0)],
             [(2.0, 9.0), (4.0, 9.0), (3.0, 11.0)],
             [(8.0, 9.0), (10.0, 9.0), (9.0, 11.0)],
+        ],
+    )
+    assert polygon.is_valid
+    return polygon
+
+
+def _hub_touching_holes_polygon(*, contact_gap: float = 0.0) -> Polygon:
+    """Return a valid central hole with four point-touching satellites."""
+
+    polygon = Polygon(
+        [(0.0, 0.0), (30.0, 0.0), (30.0, 30.0), (0.0, 30.0)],
+        [
+            [(12.0, 12.0), (18.0, 12.0), (18.0, 18.0), (12.0, 18.0)],
+            [(12.0 - contact_gap, 15.0), (8.0, 13.0), (8.0, 17.0)],
+            [(18.0 + contact_gap, 15.0), (22.0, 17.0), (22.0, 13.0)],
+            [(15.0, 18.0 + contact_gap), (13.0, 22.0), (17.0, 22.0)],
+            [(15.0, 12.0 - contact_gap), (17.0, 8.0), (13.0, 8.0)],
         ],
     )
     assert polygon.is_valid
@@ -259,7 +281,7 @@ def test_export_extrusion_uses_only_bounded_repair_ladder(
         return_repaired_candidate,
     )
 
-    with pytest.raises(ValueError, match="topology could not be repaired"):
+    with pytest.raises(VectorTopologyError, match="topology could not be repaired"):
         extrude_polygon_for_export(
             polygon,
             xy_scale=1.0,
@@ -270,6 +292,90 @@ def test_export_extrusion_uses_only_bounded_repair_ladder(
     assert indexed_attempts[0] is polygon
     assert indexed_attempts[1] is repaired_candidates[0]
     assert indexed_attempts[2] is repaired_candidates[1]
+
+
+def test_export_failure_reports_structured_bounded_attempt_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every failed ladder stage exposes safe geometry and mesh metrics."""
+
+    polygon = box(0.0, 0.0, 3.0, 2.0)
+    wrong_coverage_mesh = trimesh.creation.box(extents=(1.0, 1.0, 1.0))
+    wrong_coverage_mesh.apply_translation((0.0, 0.0, 0.5))
+
+    def return_wrong_fast_extrusion(*_args, **_kwargs):
+        return wrong_coverage_mesh
+
+    def return_wrong_indexed_extrusion(_geometry):
+        return [wrong_coverage_mesh]
+
+    monkeypatch.setattr(
+        vector_mesh_topology.trimesh.creation,
+        "extrude_polygon",
+        return_wrong_fast_extrusion,
+    )
+    monkeypatch.setattr(
+        vector_mesh_topology,
+        "_extrude_indexed_parts",
+        return_wrong_indexed_extrusion,
+    )
+
+    with pytest.raises(VectorTopologyError) as exc:
+        extrude_polygon_for_export(
+            polygon,
+            xy_scale=1.0,
+            prefer_fast=True,
+        )
+
+    attempts = exc.value.attempts
+    assert [attempt["attempt"] for attempt in attempts] == [
+        "fast",
+        "original",
+        "repair_0.0001_mm",
+        "repair_0.001_mm",
+    ]
+    required_fields = {
+        "attempt",
+        "geometry_type",
+        "polygon_part_count",
+        "ring_count",
+        "hole_count",
+        "vertex_count",
+        "original_area_mm2",
+        "candidate_area_mm2",
+        "area_delta_mm2",
+        "float32_ring_collapse_count",
+        "candidate_mesh_count",
+        "watertight",
+        "non_manifold_edge_count",
+        "expected_coverage_mm2",
+        "actual_coverage_mm2",
+        "rejected_reason",
+        "error_type",
+    }
+    for attempt in attempts:
+        assert required_fields <= attempt.keys()
+        assert attempt["geometry_type"] == "Polygon"
+        assert attempt["polygon_part_count"] == 1
+        assert attempt["ring_count"] == 1
+        assert attempt["hole_count"] == 0
+        assert attempt["vertex_count"] == 4
+        assert attempt["original_area_mm2"] == pytest.approx(6.0)
+        assert attempt["candidate_area_mm2"] == pytest.approx(6.0)
+        assert attempt["area_delta_mm2"] == pytest.approx(0.0)
+        assert attempt["float32_ring_collapse_count"] == 0
+        assert attempt["candidate_mesh_count"] == 1
+        assert attempt["watertight"] is True
+        assert attempt["non_manifold_edge_count"] == 0
+        assert attempt["expected_coverage_mm2"] == pytest.approx(6.0)
+        assert attempt["actual_coverage_mm2"] == pytest.approx(1.0)
+        assert attempt["rejected_reason"] == "coverage_mismatch"
+        assert attempt["error_type"] is None
+    restored = pickle.loads(pickle.dumps(exc.value))
+    assert isinstance(restored, VectorTopologyError)
+    assert restored.error_type == "vector_topology_unrepairable"
+    assert str(restored) == str(exc.value)
+    assert restored.attempts == attempts
 
 
 def test_export_extrusion_recovers_from_fast_index_error(
@@ -345,7 +451,7 @@ def test_export_extrusion_recovers_from_manifold_operation_error(
 def test_export_extrusion_bounds_earcut_operation_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Earcut operation failures exhaust the fixed ladder as one ValueError."""
+    """Earcut operation failures exhaust the fixed ladder as one typed error."""
 
     polygon = box(0.0, 0.0, 3.0, 2.0)
     original_repair = vector_mesh_topology._repair_polygon_ring_contacts
@@ -357,7 +463,7 @@ def test_export_extrusion_bounds_earcut_operation_failures(
 
     def fail_earcut(*args, **_kwargs):
         earcut_calls.append(args)
-        raise OSError("synthetic Earcut failure")
+        raise OSError("synthetic Earcut failure near 12.345 67.890")
 
     def record_repair(poly, scale, separation_mm):
         repair_calls.append(separation_mm)
@@ -375,16 +481,61 @@ def test_export_extrusion_bounds_earcut_operation_failures(
         record_repair,
     )
 
-    with pytest.raises(ValueError, match="topology could not be repaired") as exc:
+    with pytest.raises(
+        VectorTopologyError,
+        match="topology could not be repaired",
+    ) as exc:
         extrude_polygon_for_export(
             polygon,
             xy_scale=1.0,
             prefer_fast=False,
         )
 
-    assert isinstance(exc.value.__cause__, OSError)
+    assert exc.value.__cause__ is None
+    assert exc.value.attempts[-1]["error_type"] == "OSError"
+    formatted = "".join(
+        traceback.format_exception(type(exc.value), exc.value, exc.value.__traceback__)
+    )
+    assert "12.345" not in formatted
+    assert "67.890" not in formatted
     assert len(earcut_calls) == 3
     assert repair_calls == [0.0001, 0.001]
+
+
+def test_failed_attempt_payload_is_released_before_next_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed extrusion traceback must not overlap the next attempt."""
+
+    polygon = box(0.0, 0.0, 3.0, 2.0)
+    payload_ref: weakref.ReferenceType[np.ndarray] | None = None
+    calls = 0
+
+    def fail_with_large_local(_geometry):
+        nonlocal calls, payload_ref
+        if calls == 0:
+            payload = np.empty(2_000_000, dtype=np.float64)
+            payload_ref = weakref.ref(payload)
+        else:
+            assert payload_ref is not None
+            assert payload_ref() is None
+        calls += 1
+        raise OSError("synthetic bounded extrusion failure")
+
+    monkeypatch.setattr(
+        vector_mesh_topology,
+        "_extrude_indexed_parts",
+        fail_with_large_local,
+    )
+
+    with pytest.raises(VectorTopologyError):
+        extrude_polygon_for_export(
+            polygon,
+            xy_scale=1.0,
+            prefer_fast=False,
+        )
+
+    assert calls == 3
 
 
 @pytest.mark.parametrize(
@@ -552,6 +703,46 @@ def test_export_extrusion_repairs_multiple_holes_sharing_one_point() -> None:
     )
 
 
+def test_export_extrusion_repairs_hub_with_four_point_touching_holes() -> None:
+    """A symmetric contact hub is repaired as independent hole components."""
+
+    polygon = _hub_touching_holes_polygon()
+
+    meshes = extrude_polygon_for_export(
+        polygon,
+        xy_scale=1.0,
+        prefer_fast=False,
+    )
+
+    assert meshes
+    assert all(mesh.is_watertight for mesh in meshes)
+    assert all(mesh_is_float32_safe(mesh, xy_scale=1.0) for mesh in meshes)
+    assert _total_unit_height_volume(meshes) == pytest.approx(
+        float(polygon.area),
+        abs=0.01,
+    )
+
+
+def test_export_extrusion_keeps_equivalent_separated_holes_working() -> None:
+    """The non-contacting control for the symmetric hub remains exportable."""
+
+    polygon = _hub_touching_holes_polygon(contact_gap=0.01)
+
+    meshes = extrude_polygon_for_export(
+        polygon,
+        xy_scale=1.0,
+        prefer_fast=False,
+    )
+
+    assert meshes
+    assert all(mesh.is_watertight for mesh in meshes)
+    assert all(mesh_is_float32_safe(mesh, xy_scale=1.0) for mesh in meshes)
+    assert _total_unit_height_volume(meshes) == pytest.approx(
+        float(polygon.area),
+        abs=0.01,
+    )
+
+
 def test_export_extrusion_preserves_non_contacting_holes_during_repair(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -624,6 +815,13 @@ def test_mesh_float32_safety_validates_large_meshes_and_open_negative() -> None:
         faces=np.asarray(mesh.faces, dtype=np.int64)[:-1].copy(),
         process=False,
     )
+    reversed_faces = np.asarray(mesh.faces, dtype=np.int64).copy()
+    reversed_faces[0] = reversed_faces[0, ::-1]
+    inconsistent_mesh = trimesh.Trimesh(
+        vertices=np.asarray(mesh.vertices, dtype=np.float64).copy(),
+        faces=reversed_faces,
+        process=False,
+    )
 
     assert len(mesh.faces) > 64
     assert mesh.is_watertight
@@ -631,6 +829,26 @@ def test_mesh_float32_safety_validates_large_meshes_and_open_negative() -> None:
     assert len(open_mesh.faces) > 64
     assert not open_mesh.is_watertight
     assert not mesh_is_float32_safe(open_mesh, xy_scale=1.0)
+    assert inconsistent_mesh.is_watertight
+    assert not inconsistent_mesh.is_winding_consistent
+    assert not mesh_is_float32_safe(inconsistent_mesh, xy_scale=1.0)
+
+
+def test_mesh_float32_safety_rejects_inconsistent_winding() -> None:
+    """A closed mesh with one reversed face is not safe for slicer export."""
+
+    mesh = trimesh.creation.box(extents=(1.0, 1.0, 1.0))
+    faces = np.asarray(mesh.faces, dtype=np.int64).copy()
+    faces[0] = faces[0, ::-1]
+    reversed_face_mesh = trimesh.Trimesh(
+        vertices=np.asarray(mesh.vertices, dtype=np.float64).copy(),
+        faces=faces,
+        process=False,
+    )
+
+    assert reversed_face_mesh.is_watertight
+    assert not reversed_face_mesh.is_winding_consistent
+    assert not mesh_is_float32_safe(reversed_face_mesh, xy_scale=1.0)
 
 
 def test_component_coordinate_separation_survives_float32_writer_mapping() -> None:

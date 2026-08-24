@@ -72,6 +72,7 @@ except ImportError:  # Shapely < 2.1; keep the old union path available.
 from api.structured_logging import get_logger
 from config import PrinterConfig, ColorSystem, VectorConfig
 from core import geos_buffer_fast
+from core.errors import VectorTopologyError
 from core.task_parallelism import (
     resolve_task_parallelism_plan,
     task_parallelism_worker_scope,
@@ -84,6 +85,7 @@ from core.vector_mesh_topology import (
     VECTOR_COVERAGE_REL_TOL as _VECTOR_COVERAGE_REL_TOL,
     extrude_polygon_for_export,
     mesh_is_float32_safe,
+    separate_component_coordinates,
 )
 
 _log = get_logger(__name__)
@@ -9792,6 +9794,38 @@ class VectorProcessor:
                             base_vertices[:, 0] *= float(scale)
                             base_vertices[:, 1] *= float(scale)
                         base_faces = np.asarray(m_base.faces, dtype=np.int64).copy()
+                        if len(topology_meshes) > 1:
+                            merged_candidate = trimesh.Trimesh(
+                                vertices=base_vertices,
+                                faces=base_faces,
+                                process=False,
+                            )
+                            if not mesh_is_float32_safe(
+                                merged_candidate,
+                                xy_scale=1.0,
+                            ):
+                                raise VectorTopologyError(
+                                    "Vector polygon topology could not be repaired for export",
+                                    (
+                                        {
+                                            "attempt": "engine_component_merge",
+                                            "geometry_type": getattr(
+                                                poly,
+                                                "geom_type",
+                                                None,
+                                            ),
+                                            "candidate_mesh_count": len(
+                                                topology_meshes
+                                            ),
+                                            "vertex_count": int(
+                                                len(base_vertices)
+                                            ),
+                                            "rejected_reason": (
+                                                "writer_domain_component_merge_unsafe"
+                                            ),
+                                        },
+                                    ),
+                                )
                     planar_coverage_mm2 = _cap_planar_area_mm2(
                         base_vertices,
                         base_faces,
@@ -9842,6 +9876,24 @@ class VectorProcessor:
                 ):
                     m.metadata[_PLANAR_COVERAGE_METADATA_KEY] = planar_coverage_mm2
                 meshes.append(m)
+            except VectorTopologyError as e:
+                topology_attempts = [dict(attempt) for attempt in e.attempts]
+                rejected_reason = (
+                    topology_attempts[-1].get("rejected_reason")
+                    if topology_attempts else None
+                )
+                _log.warning(
+                    "Failed to extrude vector polygon",
+                    extra={
+                        "event": "vector_polygon_extrude_failed",
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                        "geometry_type": getattr(poly, "geom_type", None),
+                        "topology_attempts": topology_attempts,
+                        "topology_rejected_reason": rejected_reason,
+                    },
+                )
+                raise
             except VECTOR_HANDLED_ERRORS as e:
                 _log.warning(
                     "Failed to extrude vector polygon",
@@ -9855,6 +9907,34 @@ class VectorProcessor:
                 raise ValueError(
                     "Vector polygon extrusion failed; refusing partial model export"
                 ) from e
+
+        if len(meshes) > 1:
+            components_safe = separate_component_coordinates(
+                meshes,
+                separation_mm=1e-4,
+                xy_scale=1.0,
+            )
+            if not components_safe:
+                raise VectorTopologyError(
+                    "Vector polygon topology could not be repaired for export",
+                    (
+                        {
+                            "attempt": "engine_geometry_parts",
+                            "geometry_type": getattr(
+                                geometry,
+                                "geom_type",
+                                None,
+                            ),
+                            "candidate_mesh_count": len(meshes),
+                            "vertex_count": int(
+                                sum(len(mesh.vertices) for mesh in meshes)
+                            ),
+                            "rejected_reason": (
+                                "writer_domain_component_separation_failed"
+                            ),
+                        },
+                    ),
+                )
 
         return meshes
 

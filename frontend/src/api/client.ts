@@ -202,6 +202,10 @@ function formatValidationDetails(details: unknown[]): string | null {
 
 const STRUCTURED_DETAIL_TRANSLATION_KEYS: ReadonlyMap<string, string> = new Map([
   ["vector_native_requires_svg", "api_error_vector_native_requires_svg"],
+  [
+    "vector_topology_unrepairable",
+    "api_error_vector_topology_unrepairable",
+  ],
   ["source_image_unreadable", "api_error_source_image_unreadable"],
   ["source_image_too_large", "api_error_source_image_too_large"],
   ["source_svg_invalid", "api_error_source_svg_invalid"],
@@ -248,9 +252,10 @@ function extractReadableDetail(data: unknown): string | null {
   }
 
   if (isRecord(detail)) {
-    const detailError = detail.error;
-    if (typeof detailError === "string") {
-      const translationKey = STRUCTURED_DETAIL_TRANSLATION_KEYS.get(detailError);
+    const detailCode =
+      typeof detail.error === "string" ? detail.error : detail.code;
+    if (typeof detailCode === "string") {
+      const translationKey = STRUCTURED_DETAIL_TRANSLATION_KEYS.get(detailCode);
       if (translationKey) {
         return tRuntime(translationKey);
       }

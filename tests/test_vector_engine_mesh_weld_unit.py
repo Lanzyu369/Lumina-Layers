@@ -15,10 +15,11 @@ import pytest
 import trimesh
 from scipy.spatial import cKDTree
 from shapely import wkt
-from shapely.geometry import LineString, Polygon, box
+from shapely.geometry import LineString, MultiPolygon, Polygon, box
 from shapely.ops import unary_union
 
 import core.vector_engine as vector_engine
+from core.errors import VectorTopologyError
 from core.vector_engine import (
     VectorAnalysis,
     VectorProcessor,
@@ -650,6 +651,56 @@ def test_polygon_extrusion_failure_does_not_return_partial_geometry(
         )
 
 
+def test_polygon_topology_failure_preserves_structured_attempt_log(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Topology diagnostics survive the engine boundary without coordinates."""
+
+    geometry = Polygon(
+        [(0.0, 0.0), (3.0, 0.0), (3.0, 3.0), (0.0, 3.0)],
+        [[(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0)]],
+    )
+    attempt = {
+        "attempt": "repair_0.001_mm",
+        "geometry_type": "Polygon",
+        "vertex_count": 8,
+        "rejected_reason": "float32_duplicate_vertex",
+    }
+    topology_error = VectorTopologyError(
+        "Vector polygon topology could not be repaired for export",
+        (attempt,),
+    )
+    records: list[dict[str, object]] = []
+
+    def fail_extrusion(*_args, **_kwargs):
+        raise topology_error
+
+    def capture_warning(_message: str, *, extra: dict[str, object]) -> None:
+        records.append(extra)
+
+    monkeypatch.setattr(
+        vector_engine,
+        "extrude_polygon_for_export",
+        fail_extrusion,
+    )
+    monkeypatch.setattr(vector_engine._log, "warning", capture_warning)
+
+    with pytest.raises(VectorTopologyError) as exc:
+        VectorProcessor._extrude_geometry(
+            geometry,
+            height=0.08,
+            z_offset=0.0,
+            scale=1.0,
+        )
+
+    assert exc.value is topology_error
+    record = records[0]
+    assert record["event"] == "vector_polygon_extrude_failed"
+    assert record["topology_attempts"] == [attempt]
+    assert record["topology_rejected_reason"] == "float32_duplicate_vertex"
+    assert "coordinates" not in str(record["topology_attempts"]).lower()
+
+
 def test_polygon_extrusion_rejects_incomplete_closed_cap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -787,9 +838,88 @@ def test_extrude_geometry_handles_duplicate_vertex_and_thin_bridge() -> None:
     assert len(components) == 2
     assert all(component.is_watertight for component in components)
     assert np.all(_edge_incidence_counts(mesh) == 2)
+    assert mesh_is_float32_safe(mesh, xy_scale=1.0)
     assert abs(float(mesh.volume)) == pytest.approx(
         float(geometry_with_duplicate.area),
         abs=0.01,
+    )
+
+
+def test_extrude_geometry_separates_repaired_diagonal_components() -> None:
+    """A vanished positive bridge must not reconnect shells in writer space."""
+
+    geometry = unary_union(
+        [
+            box(0.0, 0.0, 1.0, 1.0),
+            box(1.0, 1.0, 2.0, 2.0),
+            box(1.0 - 1e-13, 1.0 - 1e-13, 1.0 + 1e-13, 1.0 + 1e-13),
+        ]
+    )
+    assert isinstance(geometry, Polygon)
+    assert geometry.is_valid
+
+    meshes = VectorProcessor._extrude_geometry(
+        geometry,
+        height=1.0,
+        z_offset=0.0,
+        scale=1.0,
+        extrude_cache={},
+    )
+
+    assert len(meshes) == 1
+    mesh = meshes[0]
+    assert mesh_is_float32_safe(mesh, xy_scale=1.0)
+    components = mesh.split(only_watertight=False)
+    assert len(components) == 2
+    assert all(component.is_watertight for component in components)
+    assert np.all(_edge_incidence_counts(mesh) == 2)
+    assert abs(float(mesh.volume)) == pytest.approx(float(geometry.area), abs=0.01)
+
+    finalized = vector_engine._finalize_prism_meshes(meshes)
+    assert finalized is not None
+    assert finalized.is_watertight
+    assert finalized.is_winding_consistent
+    assert mesh_is_float32_safe(finalized, xy_scale=1.0)
+    assert np.all(_edge_incidence_counts(finalized) == 2)
+
+
+def test_extrude_geometry_does_not_revalidate_proven_components(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Global separation must not rescan every already-certified shell."""
+
+    geometry = MultiPolygon(
+        [
+            box(0.0, 0.0, 1.0, 1.0),
+            box(1.0, 1.0, 2.0, 2.0),
+        ]
+    )
+    original_validator = vector_engine.mesh_is_float32_safe
+    validator_calls = 0
+
+    def count_validator_calls(*args, **kwargs):
+        nonlocal validator_calls
+        validator_calls += 1
+        return original_validator(*args, **kwargs)
+
+    monkeypatch.setattr(
+        vector_engine,
+        "mesh_is_float32_safe",
+        count_validator_calls,
+    )
+
+    meshes = VectorProcessor._extrude_geometry(
+        geometry,
+        height=0.2,
+        z_offset=0.0,
+        scale=1.0,
+        extrude_cache={},
+    )
+
+    assert validator_calls == 0
+    assert original_validator(
+        _concatenate_meshes_fast(meshes),
+        xy_scale=1.0,
     )
 
 
@@ -1557,6 +1687,37 @@ def test_run_length_extrude_rebuilds_lost_5mm_island_beside_200mm_body(
     actual_volume = sum(abs(float(mesh.volume)) for mesh in meshes)
     expected_volume = (40000.0 + 25.0) * 0.2
     assert actual_volume == pytest.approx(expected_volume, rel=1e-9, abs=1e-6)
+
+
+def test_run_length_extrude_separates_point_touching_multipolygon_shells() -> None:
+    """Valid MultiPolygon parts stay independent after slot assembly."""
+
+    geometry = MultiPolygon(
+        [
+            box(0.0, 0.0, 1.0, 1.0),
+            box(1.0, 1.0, 2.0, 2.0),
+        ]
+    )
+    assert geometry.is_valid
+
+    meshes_by_slot = VectorProcessor._run_length_extrude(
+        matched_shapes=[{"geometry": geometry, "recipe": [0]}],
+        num_layers=1,
+        layer_h=0.2,
+        num_channels=1,
+        slot_names=["White"],
+        scale_factor=1.0,
+        extrude_cache={},
+    )
+
+    meshes = meshes_by_slot["White"]["meshes"]
+    combined = _concatenate_meshes_fast(meshes)
+    assert mesh_is_float32_safe(combined, xy_scale=1.0)
+    components = combined.split(only_watertight=False)
+    assert len(components) == 2
+    assert all(component.is_watertight for component in components)
+    assert np.all(_edge_incidence_counts(combined) == 2)
+    assert abs(float(combined.volume)) == pytest.approx(0.4, abs=1e-6)
 
 
 def test_run_length_extrude_rejects_incomplete_fallback(
