@@ -268,6 +268,17 @@ cd Lumina-Layers
 pip install -r requirements.txt
 ```
 
+### 选项 3：桌面客户端（Electron）
+
+```powershell
+# Windows PowerShell 5.1 不支持"&&"，请逐行执行
+cd frontend; pnpm install; cd ..
+cd electron; pnpm install; cd ..
+cd electron; pnpm start
+```
+
+桌面外壳会自动拉起 Python 后端和 Vite 开发服务器，无需单独先跑启动器。打包 Windows 安装程序与故障排查见[桌面客户端（Electron）指南](docs/desktop-electron.md)。
+
 ### 配置
 
 Lumina Studio 会从 `.env.local` 读取本地环境变量覆盖项。反馈邮件的 SMTP 配置请以 `.env.example` 为模板，真实密码或授权码只能放在 `.env.local` 或服务器 Secret 中，不能提交到 GitHub。
