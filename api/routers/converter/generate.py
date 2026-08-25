@@ -48,6 +48,7 @@ from api.schemas.responses import (
     LargeFormatGenerateResponse,
     WarningEntry,
 )
+from api.selection_state import unpack_applied_region_mask
 from api.session_store import SessionStore
 from api.structured_logging import get_logger
 from api.worker_pool import WorkerPoolManager
@@ -1039,6 +1040,7 @@ def _recover_select_all_color_region_mask(
 def _resolve_applied_override_mask_snapshot(
     *,
     session_data: dict,
+    sid: str,
     region_id: object,
     shape: tuple[int, int],
 ) -> np.ndarray | None:
@@ -1058,6 +1060,8 @@ def _resolve_applied_override_mask_snapshot(
     Args:
         session_data (dict): Session data holding the applied-mask snapshot.
             (携带已应用掩码快照的会话数据)
+        sid (str): Session id used for structured-log correlation. (用于结构化
+            日志关联的会话 id)
         region_id (object): Override region id to resolve. (待解析的覆盖区域 id)
         shape (tuple[int, int]): Expected ``(height, width)`` of the mask.
             (掩码应有的 (高, 宽) 形状)
@@ -1073,10 +1077,28 @@ def _resolve_applied_override_mask_snapshot(
     if not isinstance(applied_masks, dict):
         return None
     candidate = applied_masks.get(region_id)
-    if not isinstance(candidate, np.ndarray):
+    if candidate is None:
         return None
-    mask = np.asarray(candidate, dtype=bool).copy()
-    if mask.shape != shape or not np.any(mask):
+    # Unpacking also validates dtype/length/shape and rejects all-air masks,
+    # covering both packed entries and legacy raw boolean arrays.
+    # 解包同时校验 dtype/长度/形状并拒绝全空掩码，同时覆盖打包条目与旧版
+    # 裸布尔数组。
+    mask = unpack_applied_region_mask(candidate, shape)
+    if mask is None:
+        log.warning(
+            "Applied recipe-override snapshot is invalid; falling back to live region state",
+            extra={
+                "event": "recipe_override_snapshot_invalid",
+                "error_type": "RecipeOverrideSnapshotInvalid",
+                "error_message": (
+                    "The stored override mask snapshot failed validation "
+                    "(shape, dtype, or content); live selection state will be tried."
+                ),
+                "fallback_action": "use_live_region_state",
+                "session_id": sid,
+                "region_id": str(region_id),
+            },
+        )
         return None
     return mask
 
@@ -1639,7 +1661,46 @@ def _prepare_recipe_override_worker_inputs(
         region_id = item["region_id"]
         item_recipe = item["recipe"]
         item_layer_order = item["layer_order"]
-        region_mask = region_masks.get(region_id)
+        # A committed override must resolve to the exact footprint captured
+        # when it was applied. Mutable sources — the live selection entry or
+        # a select-all id recomputed against newer visible pixels — may have
+        # drifted since apply, so the applied-time snapshot wins first; live
+        # state and select-all recovery only serve legacy sessions whose
+        # snapshots predate this key.
+        # 已提交的覆盖必须解析到 apply 时的精确足迹。可变来源——实时选区
+        # 条目、按更新后可见像素重算的 select-all 区域——都可能与 apply 时
+        # 发生漂移，因此 apply 时快照最优先；实时状态与 select-all 重算仅
+        # 服务于没有快照键的旧会话。
+        region_mask = _resolve_applied_override_mask_snapshot(
+            session_data=session_data,
+            sid=sid,
+            region_id=region_id,
+            shape=material_matrix_override.shape[:2],
+        )
+        if region_mask is not None:
+            # Do not store.put the snapshot back into
+            # ``selected_region_masks``: the stale editor-selection id
+            # belongs to the selection workstation's lifecycle and gets
+            # re-pruned on its next gesture anyway. Note in-memory sessions
+            # alias this dict with the store, so the local write below is
+            # visible there too (harmless — same pruning applies); Postgres
+            # sessions keep it strictly request-local.
+            # 不要把快照 store.put 回 selected_region_masks：过期的选区
+            # id 归选区工作站生命周期管理，其下次手势会再次清理。内存版
+            # 会话的 session_data 与存储是同一活字典，下面的局部写入对
+            # 其可见（无害，同样会被清理）；Postgres 版则严格限于本次
+            # 请求。
+            region_masks[region_id] = region_mask
+            log.debug(
+                "Recipe override mask resolved from applied-time snapshot",
+                extra={
+                    "event": "recipe_override_mask_snapshot_fallback",
+                    "session_id": sid,
+                    "region_id": str(region_id),
+                },
+            )
+        if region_mask is None:
+            region_mask = region_masks.get(region_id)
         if region_mask is None:
             region_mask = _recover_select_all_color_region_mask(
                 cache=cache,
@@ -1649,35 +1710,6 @@ def _prepare_recipe_override_worker_inputs(
             if region_mask is not None:
                 region_masks[region_id] = region_mask
                 store.put(sid, "selected_region_masks", region_masks)
-        if region_mask is None:
-            snapshot_mask = _resolve_applied_override_mask_snapshot(
-                session_data=session_data,
-                region_id=region_id,
-                shape=material_matrix_override.shape[:2],
-            )
-            if snapshot_mask is not None:
-                # Do not store.put the snapshot back into
-                # ``selected_region_masks``: the stale editor-selection id
-                # belongs to the selection workstation's lifecycle and gets
-                # re-pruned on its next gesture anyway. Note in-memory
-                # sessions alias this dict with the store, so the local write
-                # below is visible there too (harmless — same pruning applies);
-                # Postgres sessions keep it strictly request-local.
-                # 不要把快照 store.put 回 selected_region_masks：过期的选区
-                # id 归选区工作站生命周期管理，其下次手势会再次清理。内存版
-                # 会话的 session_data 与存储是同一活字典，下面的局部写入对
-                # 其可见（无害，同样会被清理）；Postgres 版则严格限于本次
-                # 请求。
-                region_masks[region_id] = snapshot_mask
-                log.debug(
-                    "Recipe override mask resolved from applied-time snapshot",
-                    extra={
-                        "event": "recipe_override_mask_snapshot_fallback",
-                        "session_id": sid,
-                        "region_id": str(region_id),
-                    },
-                )
-                region_mask = snapshot_mask
         if region_mask is None:
             raise HTTPException(
                 status_code=422,

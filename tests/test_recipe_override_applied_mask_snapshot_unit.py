@@ -3,33 +3,68 @@
 复现路径：选区（__editor_selection__:<rev> 合成 region id）→
 apply-recipe-override → 前端自动清空选区（合成 id 从
 selected_region_masks 清理）→ /generate 重新套用覆盖时必须仍能解析掩码。
-修复方式：apply 端点把当时使用的掩码快照进会话键
-``recipe_override_applied_masks``，generate/puzzle 在实时选区缺失时回退。
+修复方式：apply 端点把当时使用的掩码位压缩快照进会话键
+``recipe_override_applied_masks``，generate/puzzle 以快照为最高优先级解析
+（实时选区与 select-all 重算仅服务旧会话），撤销/重做与重置同步维护。
 """
+import pickle
+from unittest.mock import AsyncMock, MagicMock
+
 import numpy as np
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from api.app import app
-from api.dependencies import get_file_registry, get_session_store
+from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.file_registry import FileRegistry
+from api.selection_state import (
+    RECIPE_OVERRIDE_APPLIED_MASKS_KEY,
+    pack_applied_region_mask,
+    unpack_applied_region_mask,
+)
 from api.session_store import SessionStore
+from api.worker_pool import WorkerPoolManager
 
 client = TestClient(app)
 
 
+def _make_mock_pool() -> MagicMock:
+    pool = MagicMock(spec=WorkerPoolManager)
+
+    async def _timed_submit(*args, **kwargs):
+        return await pool.submit(*args, **kwargs), {}
+
+    pool.submit = AsyncMock()
+    pool.submit_timed = AsyncMock(side_effect=_timed_submit)
+    return pool
+
+
 @pytest.fixture(autouse=True)
-def _iso():
+def _iso(monkeypatch):
     store = SessionStore()
     registry = FileRegistry()
+    pool = _make_mock_pool()
+    # Apply/reset endpoints schedule async GLB rebuilds whose cache commits
+    # can race the undo/redo requests below (flaky 409s). The lifecycle under
+    # test here is the override/mask state, not GLB, so stub it out.
+    # apply/reset 端点会调度异步 GLB 重建，其缓存提交可能与下方撤销/重做
+    # 请求竞态（偶发 409）。本文件验证的是覆盖/掩码生命周期而非 GLB，
+    # 直接置空。
+    monkeypatch.setattr(
+        "api.routers.converter.replace.schedule_glb_build",
+        lambda *args, **kwargs: None,
+    )
     app.dependency_overrides[get_session_store] = lambda: store
     app.dependency_overrides[get_file_registry] = lambda: registry
+    app.dependency_overrides[get_worker_pool] = lambda: pool
     try:
-        yield {"store": store, "registry": registry}
+        yield {"store": store, "registry": registry, "pool": pool}
     finally:
         app.dependency_overrides.pop(get_session_store, None)
         app.dependency_overrides.pop(get_file_registry, None)
+        app.dependency_overrides.pop(get_worker_pool, None)
 
 
 def _seed_material_archive_session(store: SessionStore) -> str:
@@ -61,6 +96,7 @@ def _seed_material_archive_session(store: SessionStore) -> str:
     store.put(session_id, "material_layer_count", 3)
     store.put(session_id, "material_layer_height_mm", 0.08)
     store.put(session_id, "lut_name", "__material_archive__")
+    store.put(session_id, "lut_path", "__material_archive__")
     return session_id
 
 
@@ -89,8 +125,8 @@ def _apply_recipe_override(client: TestClient, sid: str, region_ids: list[str]):
     })
 
 
-def test_apply_persists_applied_mask_snapshot(_iso):
-    """apply-recipe-override 快照本次使用的区域掩码。"""
+def test_apply_persists_bitpacked_applied_mask_snapshot(_iso):
+    """apply-recipe-override 快照本次使用的区域掩码（位压缩存储）。"""
     store = _iso["store"]
     sid = _seed_material_archive_session(store)
     region_ids = _select_red_region(client, sid)
@@ -99,18 +135,27 @@ def test_apply_persists_applied_mask_snapshot(_iso):
     assert resp.status_code == 200, resp.text
 
     session_data = store.get(sid)
-    snapshot = session_data.get("recipe_override_applied_masks")
+    snapshot = session_data.get(RECIPE_OVERRIDE_APPLIED_MASKS_KEY)
     assert isinstance(snapshot, dict), session_data.keys()
     for region_id in region_ids:
-        mask = snapshot.get(region_id)
-        assert isinstance(mask, np.ndarray), (region_id, snapshot.keys())
-        assert mask.dtype == np.dtype(bool)
-        assert mask.shape == (6, 6)
-        assert np.any(mask)
-        # The snapshot matches the live synthetic selection mask at apply time.
+        entry = snapshot.get(region_id)
+        # Packed format: shape metadata + ceil(H*W/8) uint8 bytes keeps the
+        # per-checkpoint history clone small on large images.
+        # 打包格式：shape 元数据 + ceil(H*W/8) 字节，控制大图下历史克隆的
+        # 内存占用。
+        assert isinstance(entry, dict), (region_id, entry)
+        assert entry["shape"] == [6, 6]
+        packed = entry["packed"]
+        assert isinstance(packed, np.ndarray)
+        assert packed.dtype == np.dtype(np.uint8)
+        assert packed.size == (6 * 6 + 7) // 8
+        restored = unpack_applied_region_mask(entry)
+        assert restored is not None and np.any(restored)
+        # The restored snapshot matches the live synthetic selection mask at
+        # apply time.
         live = (session_data.get("selected_region_masks") or {}).get(region_id)
         assert live is not None
-        np.testing.assert_array_equal(mask, np.asarray(live, dtype=bool))
+        np.testing.assert_array_equal(restored, np.asarray(live, dtype=bool))
 
 
 def test_generate_resolves_override_after_selection_cleared(_iso):
@@ -175,7 +220,6 @@ def test_generate_resolves_override_after_selection_cleared(_iso):
     )
     assert mm_path is not None
     assert masks_path is not None
-    import pickle
 
     with open(masks_path, "rb") as mask_file:
         saved_masks = pickle.load(mask_file)
@@ -184,14 +228,196 @@ def test_generate_resolves_override_after_selection_cleared(_iso):
     # The override must land on exactly the snapshotted footprint.
     # 覆盖必须精确落在快照掩码的像素足迹上。
     written_matrix = np.load(mm_path)
-    expected_snapshot = np.asarray(
-        store.get(sid)["recipe_override_applied_masks"][region_ids[0]],
-        dtype=bool,
+    expected_snapshot = unpack_applied_region_mask(
+        store.get(sid)[RECIPE_OVERRIDE_APPLIED_MASKS_KEY][region_ids[0]]
     )
     np.testing.assert_array_equal(saved_masks[region_ids[0]], expected_snapshot)
     np.testing.assert_array_equal(
         written_matrix[expected_snapshot],
         np.tile(np.array([0, 1, 0], dtype=written_matrix.dtype), (int(expected_snapshot.sum()), 1)),
+    )
+    store.close(sid)
+
+
+def test_generate_route_uses_snapshot_footprint_end_to_end(_iso, tmp_path):
+    """API 级回归：替换→清空选区→/generate 全链路按快照足迹套用配方。
+
+    直接调用内部 helper 的单测无法证明真实路由装配；本用例走
+    POST /api/convert/generate（mock worker 池），校验提交给 worker 的
+    掩码与材料矩阵都精确等于 apply 时快照的足迹。
+    """
+    store = _iso["store"]
+    pool = _iso["pool"]
+    sid = _seed_material_archive_session(store)
+
+    image_path = tmp_path / "input.png"
+    out_path = tmp_path / "out.3mf"
+    Image.fromarray(np.zeros((6, 6, 3), dtype=np.uint8)).save(image_path)
+    out_path.write_bytes(b"3mf")
+    store.put(sid, "image_path", str(image_path))
+    store.put(sid, "replacement_regions", [])
+    store.put(sid, "free_color_set", set())
+
+    region_ids = _select_red_region(client, sid)
+    resp = _apply_recipe_override(client, sid, region_ids)
+    assert resp.status_code == 200, resp.text
+    cleared = client.post("/api/convert/selection/mutate", json={
+        "session_id": sid,
+        "operation": "clear",
+        "base_selection_revision": 1,
+        "content_revision": 0,
+    })
+    assert cleared.status_code == 200, cleared.text
+
+    pool.submit = AsyncMock(return_value={
+        "threemf_path": str(out_path),
+        "glb_path": None,
+        "status_msg": "OK",
+    })
+
+    response = client.post("/api/convert/generate", json={
+        "session_id": sid,
+        "params": {
+            "lut_name": "__material_archive__",
+            "modeling_mode": "vector",
+            "target_width_mm": 113,
+            "spacer_thick": 0.24,
+            "structure_mode": "Single-sided",
+            "color_layers": 3,
+            "layer_height_mm": 0.08,
+            "separate_backing": True,
+            "recipe_overrides": [{
+                "region_id": region_ids[0],
+                "recipe": [0, 1, 0],
+                "layer_order": "Top2Bottom",
+            }],
+        },
+    })
+
+    assert response.status_code == 200, response.text
+    submitted_params = pool.submit.call_args.args[3]
+    assert submitted_params["recipe_override_masks_path"] is not None
+    with open(submitted_params["recipe_override_masks_path"], "rb") as f:
+        masks = pickle.load(f)
+    assert masks.keys() == {region_ids[0]}
+    expected_snapshot = unpack_applied_region_mask(
+        store.get(sid)[RECIPE_OVERRIDE_APPLIED_MASKS_KEY][region_ids[0]]
+    )
+    np.testing.assert_array_equal(masks[region_ids[0]], expected_snapshot)
+    material_matrix = np.load(submitted_params["material_matrix_path"])
+    np.testing.assert_array_equal(
+        material_matrix[expected_snapshot],
+        np.tile(np.array([0, 1, 0], dtype=material_matrix.dtype), (int(expected_snapshot.sum()), 1)),
+    )
+
+
+def test_snapshot_wins_over_select_all_recompute(_iso):
+    """/generate 的已提交覆盖必须使用 apply 时快照，而非按新像素重算。
+
+    select-all 区域 id 在旧顺序下会用当前 matched_rgb 重算足迹；若 apply
+    之后可见内容变化（同色像素位置改变），重算结果会偏离用户确认时的
+    足迹。快照优先保证生成与预览所见一致。
+    """
+    from api.routers.converter.generate import (
+        _prepare_recipe_override_worker_inputs,
+    )
+    from api.schemas.converter import ConvertGenerateRequest
+
+    store = _iso["store"]
+    sid = _seed_material_archive_session(store)
+    region_id = "__select_all_color__:ff0000"
+
+    # Snapshot says bottom-right block; a fresh select-all recomputation on
+    # the seeded matched_rgb would answer top-left [:3,:3] instead.
+    # 快照记录右下块；若按种子图重算 select-all 会得到左上 [:3,:3]。
+    committed_mask = np.zeros((6, 6), dtype=bool)
+    committed_mask[4:, 4:] = True
+    session_data = store.get(sid)
+    session_data[RECIPE_OVERRIDE_APPLIED_MASKS_KEY] = {
+        region_id: pack_applied_region_mask(committed_mask),
+    }
+
+    request = ConvertGenerateRequest(
+        lut_name="__material_archive__",
+        color_layers=3,
+        recipe_overrides=[{
+            "region_id": region_id,
+            "recipe": [1, 0, 1],
+            "layer_order": "Top2Bottom",
+        }],
+    )
+    mm_path, _masks_path = _prepare_recipe_override_worker_inputs(
+        cache=session_data.get("preview_cache"),
+        session_data=session_data,
+        recipe_overrides=[{
+            "region_id": region_id,
+            "recipe": [1, 0, 1],
+            "layer_order": "Top2Bottom",
+        }],
+        request=request,
+        sid=sid,
+        store=store,
+    )
+    assert mm_path is not None
+    written_matrix = np.load(mm_path)
+    # Committed footprint got the user recipe…
+    # 已提交足迹被套上用户配方……
+    np.testing.assert_array_equal(
+        written_matrix[committed_mask],
+        np.tile(np.array([1, 0, 1], dtype=written_matrix.dtype), (int(committed_mask.sum()), 1)),
+    )
+    # …while the drifted recompute zone kept its original stack.
+    # ……而已漂移的重算区保持原堆叠不被误改。
+    drifted_zone = np.zeros((6, 6), dtype=bool)
+    drifted_zone[:3, :3] = True
+    np.testing.assert_array_equal(
+        written_matrix[drifted_zone],
+        np.tile(np.array([0, 1, 0], dtype=written_matrix.dtype), (int(drifted_zone.sum()), 1)),
+    )
+    store.close(sid)
+
+
+def test_legacy_raw_array_snapshot_still_resolvable(_iso):
+    """位压缩上线前的旧会话（裸布尔数组）无需迁移即可继续生成。"""
+    from api.routers.converter.generate import (
+        _prepare_recipe_override_worker_inputs,
+    )
+    from api.schemas.converter import ConvertGenerateRequest
+
+    store = _iso["store"]
+    sid = _seed_material_archive_session(store)
+    region_id = "__editor_selection__:3"
+    legacy_mask = np.zeros((6, 6), dtype=bool)
+    legacy_mask[1:4, 1:4] = True
+    session_data = store.get(sid)
+    session_data[RECIPE_OVERRIDE_APPLIED_MASKS_KEY] = {region_id: legacy_mask}
+
+    request = ConvertGenerateRequest(
+        lut_name="__material_archive__",
+        color_layers=3,
+        recipe_overrides=[{
+            "region_id": region_id,
+            "recipe": [1, 0, 1],
+            "layer_order": "Top2Bottom",
+        }],
+    )
+    mm_path, masks_path = _prepare_recipe_override_worker_inputs(
+        cache=session_data.get("preview_cache"),
+        session_data=session_data,
+        recipe_overrides=[{
+            "region_id": region_id,
+            "recipe": [1, 0, 1],
+            "layer_order": "Top2Bottom",
+        }],
+        request=request,
+        sid=sid,
+        store=store,
+    )
+    assert mm_path is not None and masks_path is not None
+    written_matrix = np.load(mm_path)
+    np.testing.assert_array_equal(
+        written_matrix[legacy_mask],
+        np.tile(np.array([1, 0, 1], dtype=written_matrix.dtype), (int(legacy_mask.sum()), 1)),
     )
     store.close(sid)
 
@@ -245,7 +471,7 @@ def test_snapshot_shape_mismatch_is_rejected(_iso):
     sid = _seed_material_archive_session(store)
     region_id = "__editor_selection__:3"
     session_data = store.get(sid)
-    session_data["recipe_override_applied_masks"] = {
+    session_data[RECIPE_OVERRIDE_APPLIED_MASKS_KEY] = {
         region_id: np.ones((8, 10), dtype=bool),
     }
 
@@ -284,11 +510,11 @@ def test_reset_replacements_clears_applied_mask_snapshot(_iso):
 
     resp = _apply_recipe_override(client, sid, region_ids)
     assert resp.status_code == 200, resp.text
-    assert store.get(sid).get("recipe_override_applied_masks")
+    assert store.get(sid).get(RECIPE_OVERRIDE_APPLIED_MASKS_KEY)
 
     reset = client.post("/api/convert/reset-replacements", json={"session_id": sid})
     assert reset.status_code == 200, reset.text
-    assert store.get(sid).get("recipe_override_applied_masks") == {}
+    assert store.get(sid).get(RECIPE_OVERRIDE_APPLIED_MASKS_KEY) == {}
 
 
 def test_new_preview_clears_overrides_and_applied_mask_snapshot(_iso):
@@ -308,7 +534,7 @@ def test_new_preview_clears_overrides_and_applied_mask_snapshot(_iso):
     assert resp.status_code == 200, resp.text
     seeded = store.get(sid)
     assert seeded.get("recipe_overrides")
-    assert seeded.get("recipe_override_applied_masks")
+    assert seeded.get(RECIPE_OVERRIDE_APPLIED_MASKS_KEY)
 
     # New previews funnel through clear_replacement_history (preview.py).
     clear_replacement_history(sid, store)
@@ -316,7 +542,7 @@ def test_new_preview_clears_overrides_and_applied_mask_snapshot(_iso):
     fresh = store.get(sid)
     assert fresh.get("recipe_overrides") == []
     assert fresh.get("recipe_override_count") == 0
-    assert fresh.get("recipe_override_applied_masks") == {}
+    assert fresh.get(RECIPE_OVERRIDE_APPLIED_MASKS_KEY) == {}
     assert not fresh.get("editor_selection_mask")
 
 
@@ -328,7 +554,7 @@ def test_undo_redo_keeps_snapshot_in_sync_with_overrides(_iso):
 
     resp = _apply_recipe_override(client, sid, region_ids)
     assert resp.status_code == 200, resp.text
-    snapshot_after_apply = store.get(sid).get("recipe_override_applied_masks")
+    snapshot_after_apply = store.get(sid).get(RECIPE_OVERRIDE_APPLIED_MASKS_KEY)
     assert region_ids[0] in snapshot_after_apply
 
     undo = client.post("/api/convert/replacement-history", json={
@@ -337,16 +563,16 @@ def test_undo_redo_keeps_snapshot_in_sync_with_overrides(_iso):
     assert undo.status_code == 200, undo.text
     undone = store.get(sid)
     assert undone.get("recipe_overrides") == []
-    assert undone.get("recipe_override_applied_masks") == {}
+    assert undone.get(RECIPE_OVERRIDE_APPLIED_MASKS_KEY) == {}
 
     redo = client.post("/api/convert/replacement-history", json={
         "session_id": sid, "action": "redo",
     })
     assert redo.status_code == 200, redo.text
     redone = store.get(sid)
-    restored_snapshot = redone.get("recipe_override_applied_masks")
+    restored_snapshot = redone.get(RECIPE_OVERRIDE_APPLIED_MASKS_KEY)
     assert region_ids[0] in restored_snapshot
     np.testing.assert_array_equal(
-        np.asarray(restored_snapshot[region_ids[0]], dtype=bool),
-        np.asarray(snapshot_after_apply[region_ids[0]], dtype=bool),
+        unpack_applied_region_mask(restored_snapshot[region_ids[0]]),
+        unpack_applied_region_mask(snapshot_after_apply[region_ids[0]]),
     )

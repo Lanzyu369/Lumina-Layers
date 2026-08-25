@@ -121,6 +121,7 @@ from api.selection_state import (
     mutate_brush_add,
     mutate_point_toggle,
     mutate_same_color_toggle,
+    pack_applied_region_mask,
     persist_selection_mask,
     resolve_selection_mask,
     selection_lock,
@@ -4319,9 +4320,9 @@ def apply_recipe_override(
     applied_override_masks = session_data.get(RECIPE_OVERRIDE_APPLIED_MASKS_KEY)
     applied_override_masks = dict(applied_override_masks) if isinstance(applied_override_masks, dict) else {}
     for _snapshot_region_id, _snapshot_mask in region_mask_items:
-        applied_override_masks[str(_snapshot_region_id)] = np.asarray(
-            _snapshot_mask, dtype=bool
-        ).copy()
+        applied_override_masks[str(_snapshot_region_id)] = pack_applied_region_mask(
+            _snapshot_mask
+        )
 
     # Resolve source metadata: real LUT for LUT-backed sessions, stub
     # metadata + ``(None, None)`` arrays for material-archive sessions
