@@ -520,16 +520,26 @@ def _extrude_source_geometries_with_coverage_guard(
         merged_area_mm2,
     )
     if not use_source_fallback:
-        # Do not place speculative union arrays in the build-wide cache. If the
-        # 3D audit fails, retaining those arrays is precisely the full-primary +
-        # full-fallback overlap that caused the production OOM.
-        meshes = VectorProcessor._extrude_geometry(
-            merged_geometry,
-            height=height,
-            z_offset=z_offset,
-            scale=scale_factor,
-            extrude_cache=None,
+        # Reuse only the byte-budgeted production cache. If the later 3D audit
+        # rejects this primary, clear it before any fallback allocation so a
+        # cached primary and its complete replacement never overlap.
+        primary_cache = (
+            extrude_cache
+            if isinstance(extrude_cache, ByteBudgetLRU)
+            else None
         )
+        try:
+            meshes = VectorProcessor._extrude_geometry(
+                merged_geometry,
+                height=height,
+                z_offset=z_offset,
+                scale=scale_factor,
+                extrude_cache=primary_cache,
+            )
+        except Exception:
+            if primary_cache is not None:
+                primary_cache.clear()
+            raise
         built_area_mm2 = _extruded_planar_coverage_mm2(meshes, height)
         if (
             built_area_mm2 is not None
@@ -539,6 +549,8 @@ def _extrude_source_geometries_with_coverage_guard(
             )
         ):
             return meshes
+        if primary_cache is not None:
+            primary_cache.clear()
         if hasattr(meshes, "clear"):
             meshes.clear()
         del meshes

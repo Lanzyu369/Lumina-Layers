@@ -2168,6 +2168,87 @@ def test_coverage_guard_releases_failed_primary_before_source_fallback(
     assert vector_engine._extruded_planar_coverage_mm2(meshes, 0.2) == pytest.approx(2.0)
 
 
+def test_coverage_guard_reuses_only_the_bounded_primary_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Accepted primary meshes may populate the byte-budgeted build cache."""
+
+    source_geometries = (
+        box(0.0, 0.0, 1.0, 1.0),
+        box(2.0, 0.0, 3.0, 1.0),
+    )
+    merged = unary_union(source_geometries)
+    cache = vector_engine._new_vector_extrude_cache()
+    seen_caches = []
+
+    def accepted_primary(_geometry, *args, **kwargs):
+        seen_caches.append(kwargs.get("extrude_cache"))
+        return [_mesh_with_coverage(2.0)]
+
+    monkeypatch.setattr(
+        VectorProcessor,
+        "_extrude_geometry",
+        staticmethod(accepted_primary),
+    )
+
+    meshes = vector_engine._extrude_source_geometries_with_coverage_guard(
+        source_geometries,
+        merged,
+        height=0.2,
+        z_offset=0.0,
+        scale_factor=1.0,
+        extrude_cache=cache,
+        context="test",
+    )
+
+    assert seen_caches == [cache]
+    assert vector_engine._extruded_planar_coverage_mm2(meshes, 0.2) == pytest.approx(2.0)
+
+
+def test_coverage_guard_clears_bounded_primary_cache_before_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rejected speculative primary cannot remain cached beside fallback."""
+
+    source_geometries = (
+        box(0.0, 0.0, 1.0, 1.0),
+        box(2.0, 0.0, 3.0, 1.0),
+    )
+    merged = unary_union(source_geometries)
+    cache = vector_engine._new_vector_extrude_cache()
+
+    def late_loss_then_sources(geometry, *args, **kwargs):
+        if geometry is merged:
+            assert kwargs.get("extrude_cache") is cache
+            cache["speculative"] = (
+                np.zeros((8, 3), dtype=np.float64),
+                np.zeros((12, 3), dtype=np.int64),
+                1.0,
+            )
+            return [_mesh_with_coverage(1.0)]
+        assert len(cache) == 0
+        return [_mesh_with_coverage(1.0)]
+
+    monkeypatch.setattr(
+        VectorProcessor,
+        "_extrude_geometry",
+        staticmethod(late_loss_then_sources),
+    )
+
+    meshes = vector_engine._extrude_source_geometries_with_coverage_guard(
+        source_geometries,
+        merged,
+        height=0.2,
+        z_offset=0.0,
+        scale_factor=1.0,
+        extrude_cache=cache,
+        context="test",
+    )
+
+    assert len(cache) == 0
+    assert vector_engine._extruded_planar_coverage_mm2(meshes, 0.2) == pytest.approx(2.0)
+
+
 def test_source_fallback_compacts_many_shells_into_bounded_chunks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
