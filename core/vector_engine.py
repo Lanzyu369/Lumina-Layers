@@ -85,6 +85,7 @@ from core.vector_mesh_topology import (
     VECTOR_COVERAGE_REL_TOL as _VECTOR_COVERAGE_REL_TOL,
     extrude_polygon_for_export,
     mesh_is_float32_safe,
+    prepare_component_footprints_for_float32,
     separate_component_coordinates,
 )
 
@@ -9674,7 +9675,45 @@ class VectorProcessor:
             )
             return meshes
 
-        polys = geometry.geoms if hasattr(geometry, "geoms") else [geometry]
+        polys = list(geometry.geoms) if hasattr(geometry, "geoms") else [geometry]
+        polygon_parts = [
+            poly for poly in polys
+            if isinstance(poly, Polygon) and not poly.is_empty
+        ]
+        if len(polygon_parts) == len(polys) and len(polygon_parts) > 1:
+            prepared_parts = prepare_component_footprints_for_float32(
+                polygon_parts,
+                xy_scale=float(scale),
+            )
+            if prepared_parts is None:
+                raise VectorTopologyError(
+                    "Vector polygon topology could not be repaired for export",
+                    (
+                        {
+                            "attempt": "engine_geometry_2d_preflight",
+                            "geometry_type": getattr(
+                                geometry,
+                                "geom_type",
+                                None,
+                            ),
+                            "candidate_mesh_count": len(polygon_parts),
+                            "vertex_count": int(
+                                sum(
+                                    max(0, len(poly.exterior.coords) - 1)
+                                    + sum(
+                                        max(0, len(ring.coords) - 1)
+                                        for ring in poly.interiors
+                                    )
+                                    for poly in polygon_parts
+                                )
+                            ),
+                            "rejected_reason": (
+                                "writer_domain_component_preflight_failed"
+                            ),
+                        },
+                    ),
+                )
+            polys = prepared_parts
 
         for poly in polys:
             if poly.is_empty:
@@ -9794,38 +9833,6 @@ class VectorProcessor:
                             base_vertices[:, 0] *= float(scale)
                             base_vertices[:, 1] *= float(scale)
                         base_faces = np.asarray(m_base.faces, dtype=np.int64).copy()
-                        if len(topology_meshes) > 1:
-                            merged_candidate = trimesh.Trimesh(
-                                vertices=base_vertices,
-                                faces=base_faces,
-                                process=False,
-                            )
-                            if not mesh_is_float32_safe(
-                                merged_candidate,
-                                xy_scale=1.0,
-                            ):
-                                raise VectorTopologyError(
-                                    "Vector polygon topology could not be repaired for export",
-                                    (
-                                        {
-                                            "attempt": "engine_component_merge",
-                                            "geometry_type": getattr(
-                                                poly,
-                                                "geom_type",
-                                                None,
-                                            ),
-                                            "candidate_mesh_count": len(
-                                                topology_meshes
-                                            ),
-                                            "vertex_count": int(
-                                                len(base_vertices)
-                                            ),
-                                            "rejected_reason": (
-                                                "writer_domain_component_merge_unsafe"
-                                            ),
-                                        },
-                                    ),
-                                )
                     planar_coverage_mm2 = _cap_planar_area_mm2(
                         base_vertices,
                         base_faces,
@@ -9907,34 +9914,6 @@ class VectorProcessor:
                 raise ValueError(
                     "Vector polygon extrusion failed; refusing partial model export"
                 ) from e
-
-        if len(meshes) > 1:
-            components_safe = separate_component_coordinates(
-                meshes,
-                separation_mm=1e-4,
-                xy_scale=1.0,
-            )
-            if not components_safe:
-                raise VectorTopologyError(
-                    "Vector polygon topology could not be repaired for export",
-                    (
-                        {
-                            "attempt": "engine_geometry_parts",
-                            "geometry_type": getattr(
-                                geometry,
-                                "geom_type",
-                                None,
-                            ),
-                            "candidate_mesh_count": len(meshes),
-                            "vertex_count": int(
-                                sum(len(mesh.vertices) for mesh in meshes)
-                            ),
-                            "rejected_reason": (
-                                "writer_domain_component_separation_failed"
-                            ),
-                        },
-                    ),
-                )
 
         return meshes
 

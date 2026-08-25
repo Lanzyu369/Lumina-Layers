@@ -51,6 +51,7 @@ from core.preview_analysis_cache import preview_analysis_reuse_is_required
 from core.vector_mesh_topology import (
     extrude_polygon_for_export,
     mesh_is_float32_safe,
+    prepare_component_footprints_for_float32,
     prepare_geometry_for_float32,
     separate_component_coordinates,
 )
@@ -1149,6 +1150,23 @@ def _generate_vector_outline_mesh(
         )
         return None
 
+    prepared_polys = prepare_component_footprints_for_float32(
+        polys,
+        xy_scale=scale_factor,
+    )
+    if prepared_polys is None:
+        log.warning(
+            "Vector outline rejected: 2D writer preflight failed",
+            extra={
+                "event": "vector_outline_rejected_topology",
+                "error_type": "coordinate_collision",
+                "unsupported_reason": "outline_writer_footprint_preflight_failed",
+                "polygon_count": int(len(polys)),
+            },
+        )
+        return None
+    polys = prepared_polys
+
     meshes: list = []
     for poly_index, poly in enumerate(polys):
         try:
@@ -1196,42 +1214,30 @@ def _generate_vector_outline_mesh(
     if not meshes:
         return None
 
-    if not separate_component_coordinates(meshes):
-        log.warning(
-            "Vector outline rejected: export-coordinate separation failed",
-            extra={
-                "event": "vector_outline_rejected_topology",
-                "error_type": "coordinate_collision",
-                "unsupported_reason": "outline_export_coordinate_collision",
-                "polygon_count": int(len(meshes)),
-            },
+    for mesh in meshes:
+        _apply_vector_outline_export_transform(
+            mesh,
+            analysis=analysis,
+            ctx=ctx,
+            scale_factor=scale_factor,
+            export_color_mode=export_color_mode,
         )
-        return None
+        if not mesh_is_float32_safe(mesh):
+            log.warning(
+                "Vector outline rejected: writer-domain topology validation failed",
+                extra={
+                    "event": "vector_outline_rejected_topology",
+                    "error_type": "float32_topology_validation",
+                    "unsupported_reason": "outline_writer_domain_non_manifold",
+                    "polygon_count": int(len(meshes)),
+                },
+            )
+            return None
 
     if len(meshes) == 1:
         outline_mesh = meshes[0]
     else:
         outline_mesh = trimesh.util.concatenate(meshes)
-
-    _apply_vector_outline_export_transform(
-        outline_mesh,
-        analysis=analysis,
-        ctx=ctx,
-        scale_factor=scale_factor,
-        export_color_mode=export_color_mode,
-    )
-
-    if not mesh_is_float32_safe(outline_mesh):
-        log.warning(
-            "Vector outline rejected: writer-domain topology validation failed",
-            extra={
-                "event": "vector_outline_rejected_topology",
-                "error_type": "float32_topology_validation",
-                "unsupported_reason": "outline_writer_domain_non_manifold",
-                "polygon_count": int(len(meshes)),
-            },
-        )
-        return None
 
     rgba = list(base_aux_color)
     if len(rgba) < 4:

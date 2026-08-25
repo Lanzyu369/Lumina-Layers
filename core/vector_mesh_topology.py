@@ -5,17 +5,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from dataclasses import dataclass
 import math
 
 import numpy as np
 import trimesh
 from mapbox_earcut import triangulate_float64 as _triangulate_float64
 from shapely import affinity as _affinity
-from shapely import box as _vectorized_box
-from shapely import covered_by as _covered_by
-from shapely import linestrings as _linestrings
 from shapely import STRtree as _STRtree
 from shapely import set_precision as _set_precision
 from shapely.errors import ShapelyError as _ShapelyError
@@ -37,6 +32,7 @@ __all__ = [
     "VECTOR_RING_SEPARATION_RETRY_MM",
     "mesh_is_float32_safe",
     "prepare_geometry_for_float32",
+    "prepare_component_footprints_for_float32",
     "separate_component_coordinates",
     "extrude_polygon_for_export",
 ]
@@ -44,13 +40,7 @@ __all__ = [
 _FLOAT32_GRID_MM = 0.0001
 _FLOAT32_MAX = float(np.finfo(np.float32).max)
 _SMALL_MESH_FACE_LIMIT = 64
-_CAP_UNION_CHUNK_SIZE = 1024
-_WRITER_FACE_CHUNK_SIZE = 65_536
-_GENERIC_COMPONENT_FACE_LIMIT = 2048
-_GENERIC_COMPONENT_PAIR_LIMIT = 250_000
-_COMPONENT_AABB_PAIR_LIMIT = 250_000
-_WRITER_VOLUME_REL_TOL = 1e-6
-_WRITER_VOLUME_ABS_TOL_MM3 = 1e-9
+_COMPONENT_PAIR_LIMIT = 250_000
 _COMPONENT_MAX_STEPS = 8
 _COMPONENT_DIRECTIONS = (
     (1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0),
@@ -69,20 +59,6 @@ _RECOVERABLE_EXPORT_ERRORS = (
     _ShapelyError,
 )
 _Polygonal = _Polygon | _MultiPolygon
-
-
-class _ComponentPairBudgetExceeded(RuntimeError):
-    """The bounded component broad phase exhausted its inspection budget."""
-
-
-@dataclass(frozen=True)
-class _WriterBoundaryProfile:
-    """Filled writer-domain footprint and its closed Z range."""
-
-    footprint: _Polygonal
-    bounds: tuple[float, float, float, float]
-    z_min: float
-    z_max: float
 
 
 def _positive_scale(value: float) -> float | None:
@@ -109,455 +85,184 @@ def _mesh_arrays(mesh: trimesh.Trimesh) -> tuple[np.ndarray, np.ndarray] | None:
     return vertices, faces
 
 
-def _writer_vertices_for_offset(
+def _writer_mesh_vertices(
     vertices: np.ndarray,
     scale: float,
-    offset: tuple[float, float, float] = (0.0, 0.0, 0.0),
 ) -> np.ndarray | None:
-    """Quantize one candidate exactly as the 3MF float32 writer will."""
+    """Map mesh vertices exactly into the float32 coordinates written to 3MF."""
 
     writer_vertices = np.empty(vertices.shape, dtype=np.float32)
-    offset_array = np.asarray(offset, dtype=np.float64)
     with np.errstate(over="ignore", invalid="ignore"):
-        writer_vertices[:, :2] = (
-            vertices[:, :2] + offset_array[:2]
-        ) * scale
-        writer_vertices[:, 2] = vertices[:, 2] + offset_array[2]
+        writer_vertices[:, :2] = vertices[:, :2] * scale
+        writer_vertices[:, 2] = vertices[:, 2]
     if not np.all(np.isfinite(writer_vertices)):
         return None
     return writer_vertices
 
 
-def _writer_mesh_metrics(
-    writer_vertices: np.ndarray,
+def _trace_boundary_loops(boundary: np.ndarray) -> list[list[int]] | None:
+    """Trace consistently oriented cap boundary edges into closed loops."""
+
+    outgoing: dict[int, int] = {}
+    incoming: set[int] = set()
+    for raw_start, raw_end in boundary:
+        start, end = int(raw_start), int(raw_end)
+        if start == end or start in outgoing or end in incoming:
+            return None
+        outgoing[start] = end
+        incoming.add(end)
+    if set(outgoing) != incoming:
+        return None
+
+    loops: list[list[int]] = []
+    remaining = set(outgoing)
+    while remaining:
+        start = min(remaining)
+        loop = [start]
+        current = start
+        while True:
+            next_index = outgoing.get(current)
+            if next_index is None:
+                return None
+            if next_index == start:
+                break
+            if next_index not in remaining:
+                return None
+            loop.append(next_index)
+            current = next_index
+        if len(loop) < 3:
+            return None
+        remaining.difference_update(loop)
+        loops.append(loop)
+    return loops
+
+
+def _vertical_prism_profile(
+    mapped_vertices: np.ndarray,
     faces: np.ndarray,
-    *,
-    measure_coverage: bool = True,
-) -> tuple[bool, float | None]:
-    """Validate indexed triangles in chunks and return absolute volume."""
+) -> tuple[_Polygon, float, float] | None:
+    """Recover one vertical prism's footprint from indexed cap boundaries."""
 
     if (
         faces.ndim != 2
         or faces.shape[1:] != (3,)
         or len(faces) == 0
         or np.any(faces < 0)
-        or np.any(faces >= len(writer_vertices))
-        or np.any(
-            (faces[:, 0] == faces[:, 1])
-            | (faces[:, 1] == faces[:, 2])
-            | (faces[:, 2] == faces[:, 0])
-        )
+        or np.any(faces >= len(mapped_vertices))
     ):
-        return False, 0.0
-    signed_volume_six = 0.0
-    for start in range(0, len(faces), _WRITER_FACE_CHUNK_SIZE):
-        chunk = faces[start : start + _WRITER_FACE_CHUNK_SIZE]
-        triangles = writer_vertices[chunk].astype(np.float64)
-        crosses = np.cross(
-            triangles[:, 1] - triangles[:, 0],
-            triangles[:, 2] - triangles[:, 0],
+        return None
+    used = np.unique(faces.reshape(-1))
+    component_vertices = mapped_vertices[used]
+    z_values = np.unique(component_vertices[:, 2])
+    if len(z_values) != 2:
+        return None
+    z_min, z_max = float(z_values[0]), float(z_values[1])
+    if not z_min < z_max:
+        return None
+
+    bottom_xy = {
+        tuple(row)
+        for row in component_vertices[component_vertices[:, 2] == z_values[0], :2]
+    }
+    top_xy = {
+        tuple(row)
+        for row in component_vertices[component_vertices[:, 2] == z_values[1], :2]
+    }
+    if not bottom_xy or bottom_xy != top_xy:
+        return None
+
+    face_z = mapped_vertices[faces, 2]
+    bottom_faces = faces[np.all(face_z == z_values[0], axis=1)]
+    top_faces = faces[np.all(face_z == z_values[1], axis=1)]
+    if len(bottom_faces) == 0 or len(top_faces) == 0:
+        return None
+    oriented_edges = np.vstack(
+        (
+            bottom_faces[:, [0, 1]],
+            bottom_faces[:, [1, 2]],
+            bottom_faces[:, [2, 0]],
         )
-        if np.any(np.all(crosses == 0.0, axis=1)):
-            return False, 0.0
-        if measure_coverage:
-            signed_volume_six += float(
-                np.einsum("ij,ij->i", triangles[:, 0], crosses).sum(
-                    dtype=np.float64
-                )
+    )
+    sorted_edges = np.sort(oriented_edges, axis=1)
+    _edges, inverse, counts = np.unique(
+        sorted_edges,
+        axis=0,
+        return_inverse=True,
+        return_counts=True,
+    )
+    if np.any(counts > 2):
+        return None
+    boundary = oriented_edges[counts[inverse] == 1]
+    loops = _trace_boundary_loops(boundary)
+    if not loops:
+        return None
+
+    loop_coordinates = [
+        mapped_vertices[np.asarray(loop, dtype=np.int64), :2].astype(np.float64)
+        for loop in loops
+    ]
+    twice_areas = [
+        float(
+            np.sum(
+                coordinates[:, 0] * np.roll(coordinates[:, 1], -1)
+                - coordinates[:, 1] * np.roll(coordinates[:, 0], -1)
             )
-    coverage = abs(signed_volume_six) / 6.0 if measure_coverage else None
-    return True, coverage
-
-
-def _cap_faces_at_z(
-    writer_vertices: np.ndarray,
-    faces: np.ndarray,
-    z_value: np.float32,
-) -> np.ndarray | None:
-    """Collect cap faces without one unbounded ``vertices[faces]`` gather."""
-
-    chunks: list[np.ndarray] = []
-    for start in range(0, len(faces), _WRITER_FACE_CHUNK_SIZE):
-        chunk = faces[start : start + _WRITER_FACE_CHUNK_SIZE]
-        face_z = writer_vertices[chunk, 2]
-        selected = chunk[np.all(face_z == z_value, axis=1)]
-        if len(selected):
-            chunks.append(selected)
-    return np.concatenate(chunks, axis=0) if chunks else None
-
-
-def _filled_cap_footprint(
-    writer_vertices: np.ndarray,
-    faces: np.ndarray,
-    z_value: np.float32,
-) -> _Polygonal | None:
-    """Return the actual filled cap after writer-domain quantization."""
-
-    cap_faces = _cap_faces_at_z(writer_vertices, faces, z_value)
-    if cap_faces is None:
-        return None
-    partials: list[_Polygonal] = []
-    triangle_area = 0.0
-    coordinate_magnitude = 1.0
-    for start in range(0, len(cap_faces), _CAP_UNION_CHUNK_SIZE):
-        chunk = cap_faces[start : start + _CAP_UNION_CHUNK_SIZE]
-        points = writer_vertices[chunk, :2].astype(np.float64)
-        coordinate_magnitude = max(
-            coordinate_magnitude,
-            float(np.max(np.abs(points))),
         )
-        first_edges = points[:, 1] - points[:, 0]
-        second_edges = points[:, 2] - points[:, 0]
-        twice_area = np.abs(
-            first_edges[:, 0] * second_edges[:, 1]
-            - first_edges[:, 1] * second_edges[:, 0]
-        )
-        if np.any(twice_area == 0.0):
-            return None
-        triangle_area += float(twice_area.sum(dtype=np.float64)) * 0.5
-        polygons = [_Polygon(points[index]) for index in range(len(points))]
-        if any(polygon.is_empty or not polygon.is_valid for polygon in polygons):
-            return None
-        try:
-            chunk_union = _unary_union(polygons)
-        except _GEOMETRY_ERRORS:
-            return None
-        partials.append(chunk_union)
-    if not partials:
+        for coordinates in loop_coordinates
+    ]
+    if any(area == 0.0 or not math.isfinite(area) for area in twice_areas):
         return None
+    exterior_index = int(np.argmax(np.abs(twice_areas)))
+    exterior = loop_coordinates[exterior_index]
+    holes = [
+        coordinates
+        for index, coordinates in enumerate(loop_coordinates)
+        if index != exterior_index
+    ]
     try:
-        filled = _unary_union(partials)
+        footprint = _Polygon(exterior, holes)
     except _GEOMETRY_ERRORS:
         return None
-    parts = _polygon_parts(filled)
-    numeric_area_error = (
-        np.finfo(np.float64).eps
-        * coordinate_magnitude
-        * coordinate_magnitude
-        * max(64, len(cap_faces) * 64)
-    )
     if (
-        not parts
-        or not filled.is_valid
-        or not math.isclose(
-            float(filled.area),
-            triangle_area,
-            rel_tol=0.0,
-            abs_tol=max(1e-12, numeric_area_error),
-        )
+        footprint.is_empty
+        or not footprint.is_valid
+        or not math.isfinite(float(footprint.area))
+        or float(footprint.area) <= 0.0
     ):
         return None
+    return footprint, z_min, z_max
 
-    return filled
 
-
-def _side_faces_match_vertical_prism(
-    writer_vertices: np.ndarray,
-    faces: np.ndarray,
-    *,
-    z_min: np.float32,
-    z_max: np.float32,
-    footprint: _Polygonal,
+def _prism_profiles_are_disjoint(
+    profiles: list[tuple[_Polygon, float, float]],
 ) -> bool:
-    """Prove that all non-cap triangles form vertical footprint walls."""
+    """Check XY contact only for prism pairs whose closed Z ranges overlap."""
 
-    if footprint.is_empty:
+    if len(profiles) < 2:
+        return True
+    footprints = [profile[0] for profile in profiles]
+    try:
+        tree = _STRtree(footprints)
+    except _GEOMETRY_ERRORS:
         return False
-    for start in range(0, len(faces), _WRITER_FACE_CHUNK_SIZE):
-        chunk = faces[start : start + _WRITER_FACE_CHUNK_SIZE]
-        triangle_vertices = writer_vertices[chunk]
-        triangle_z = triangle_vertices[:, :, 2]
-        cap_mask = np.all(triangle_z == z_min, axis=1) | np.all(
-            triangle_z == z_max,
-            axis=1,
-        )
-        side_triangles = triangle_vertices[~cap_mask, :, :2].astype(np.float64)
-        if not len(side_triangles):
-            continue
-        first_edges = side_triangles[:, 1] - side_triangles[:, 0]
-        second_edges = side_triangles[:, 2] - side_triangles[:, 0]
-        twice_area = (
-            first_edges[:, 0] * second_edges[:, 1]
-            - first_edges[:, 1] * second_edges[:, 0]
-        )
-        if np.any(twice_area != 0.0):
-            return False
-        pair_indexes = np.asarray(((0, 1), (1, 2), (2, 0)), dtype=np.int64)
-        paired = side_triangles[:, pair_indexes]
-        squared_lengths = np.sum(
-            (paired[:, :, 1] - paired[:, :, 0]) ** 2,
-            axis=2,
-        )
-        longest = np.argmax(squared_lengths, axis=1)
-        if np.any(squared_lengths[np.arange(len(longest)), longest] == 0.0):
-            return False
-        endpoints = paired[np.arange(len(longest)), longest]
-        if not np.all(_covered_by(_linestrings(endpoints), footprint)):
-            return False
-    return True
-
-
-def _writer_boundary_profile(
-    writer_vertices: np.ndarray,
-    faces: np.ndarray,
-) -> _WriterBoundaryProfile | None:
-    """Build a filled writer-domain profile for a vertical prism mesh."""
-
-    if len(writer_vertices) == 0 or len(faces) == 0:
-        return None
-    bounds = _component_writer_bounds(writer_vertices, faces)
-    if bounds is None:
-        return None
-    z_min = np.float32(bounds[2])
-    z_max = np.float32(bounds[5])
-    if not np.isfinite(z_min) or not np.isfinite(z_max) or z_min >= z_max:
-        return None
-    footprint = _filled_cap_footprint(writer_vertices, faces, z_min)
-    top_footprint = _filled_cap_footprint(writer_vertices, faces, z_max)
-    if footprint is None or top_footprint is None:
-        return None
-    if (
-        not footprint.equals(top_footprint)
-        or not _side_faces_match_vertical_prism(
-            writer_vertices,
-            faces,
-            z_min=z_min,
-            z_max=z_max,
-            footprint=footprint,
-        )
-    ):
-        return None
-    return _WriterBoundaryProfile(
-        footprint=footprint,
-        bounds=tuple(float(value) for value in footprint.bounds),
-        z_min=float(z_min),
-        z_max=float(z_max),
-    )
-
-
-def _profiles_may_touch(
-    first: _WriterBoundaryProfile,
-    second: _WriterBoundaryProfile,
-) -> bool:
-    """Return whether closed 3D ranges overlap before exact line testing."""
-
-    first_min_x, first_min_y, first_max_x, first_max_y = first.bounds
-    second_min_x, second_min_y, second_max_x, second_max_y = second.bounds
-    return (
-        first.z_min <= second.z_max
-        and second.z_min <= first.z_max
-        and first_min_x <= second_max_x
-        and second_min_x <= first_max_x
-        and first_min_y <= second_max_y
-        and second_min_y <= first_max_y
-    )
-
-
-def _profiles_touch(
-    first: _WriterBoundaryProfile,
-    second: _WriterBoundaryProfile,
-) -> bool:
-    """Check exact float32 boundary contact after a cheap 3D AABB test."""
-
-    return _profiles_may_touch(first, second) and bool(
-        first.footprint.intersects(second.footprint)
-    )
-
-
-def _component_writer_bounds(
-    writer_vertices: np.ndarray,
-    faces: np.ndarray,
-) -> tuple[float, float, float, float, float, float] | None:
-    """Return one component's closed writer AABB."""
-
-    if (
-        len(faces) == 0
-        or np.any(faces < 0)
-        or np.any(faces >= len(writer_vertices))
-    ):
-        return None
-    if len(faces) <= _SMALL_MESH_FACE_LIMIT:
-        points = writer_vertices[faces]
-        minimum = np.min(points, axis=(0, 1))
-        maximum = np.max(points, axis=(0, 1))
-    else:
-        minimum = np.full(3, np.inf, dtype=np.float64)
-        maximum = np.full(3, -np.inf, dtype=np.float64)
-        for start in range(0, len(faces), _WRITER_FACE_CHUNK_SIZE):
-            used = faces[
-                start : start + _WRITER_FACE_CHUNK_SIZE
-            ].reshape(-1)
-            points = writer_vertices[used]
-            minimum = np.minimum(minimum, np.min(points, axis=0))
-            maximum = np.maximum(maximum, np.max(points, axis=0))
-    return (
-        float(minimum[0]),
-        float(minimum[1]),
-        float(minimum[2]),
-        float(maximum[0]),
-        float(maximum[1]),
-        float(maximum[2]),
-    )
-
-
-def _candidate_component_pairs(
-    bounds: np.ndarray,
-) -> Iterator[tuple[int, int]]:
-    """Yield closed XY/Z AABB candidates without an N-squared pair array."""
-
-    if len(bounds) < 2:
-        return
-    boxes = _vectorized_box(
-        bounds[:, 0],
-        bounds[:, 1],
-        bounds[:, 3],
-        bounds[:, 4],
-    )
-    tree = _STRtree(boxes)
     inspected_pairs = 0
-    for first, first_box in enumerate(boxes):
-        for second_raw in tree.query(first_box, predicate="intersects"):
-            second = int(second_raw)
-            if second <= first:
+    for first_index, footprint in enumerate(footprints):
+        try:
+            nearby = tree.query(footprint, predicate="intersects")
+        except _GEOMETRY_ERRORS:
+            return False
+        first_z_min, first_z_max = profiles[first_index][1:]
+        for raw_second_index in np.asarray(nearby).reshape(-1):
+            second_index = int(raw_second_index)
+            if second_index <= first_index:
                 continue
             inspected_pairs += 1
-            if inspected_pairs > _COMPONENT_AABB_PAIR_LIMIT:
-                raise _ComponentPairBudgetExceeded
-            if (
-                bounds[first, 2] <= bounds[second, 5]
-                and bounds[second, 2] <= bounds[first, 5]
-            ):
-                yield first, second
-
-
-def _triangles_touch(
-    first: np.ndarray,
-    second: np.ndarray,
-) -> bool:
-    """Conservatively test two closed float32-domain triangles for contact."""
-
-    first_edges = np.roll(first, -1, axis=0) - first
-    second_edges = np.roll(second, -1, axis=0) - second
-    first_normal = np.cross(first_edges[0], first_edges[1])
-    second_normal = np.cross(second_edges[0], second_edges[1])
-    axes = [first_normal, second_normal]
-    axes.extend(
-        np.cross(first_edge, second_edge)
-        for first_edge in first_edges
-        for second_edge in second_edges
-    )
-    # Triangle surfaces are zero-thickness convex sets.  The usual 3D
-    # triangle axes collapse to the shared normal for coplanar faces, so add
-    # in-plane edge normals to distinguish disjoint coplanar triangles.
-    axes.extend(np.cross(first_normal, edge) for edge in first_edges)
-    axes.extend(np.cross(second_normal, edge) for edge in second_edges)
-    for axis in axes:
-        norm = float(np.linalg.norm(axis))
-        if not math.isfinite(norm) or norm <= np.finfo(np.float64).tiny:
-            continue
-        first_projection = first @ axis
-        second_projection = second @ axis
-        magnitude = max(
-            1.0,
-            float(np.max(np.abs(first_projection))),
-            float(np.max(np.abs(second_projection))),
-        )
-        tolerance = np.finfo(np.float64).eps * 64.0 * magnitude
-        if (
-            float(np.max(first_projection))
-            < float(np.min(second_projection)) - tolerance
-            or float(np.max(second_projection))
-            < float(np.min(first_projection)) - tolerance
-        ):
-            return False
+            if inspected_pairs > _COMPONENT_PAIR_LIMIT:
+                return False
+            second_z_min, second_z_max = profiles[second_index][1:]
+            if max(first_z_min, second_z_min) <= min(first_z_max, second_z_max):
+                return False
     return True
-
-
-def _point_inside_closed_surface(
-    point: np.ndarray,
-    triangles: np.ndarray,
-) -> bool | None:
-    """Classify a point by the oriented solid angle of a closed triangle shell."""
-
-    relative = triangles - np.asarray(point, dtype=np.float64)
-    lengths = np.linalg.norm(relative, axis=2)
-    if not np.all(np.isfinite(lengths)) or np.any(
-        lengths <= np.finfo(np.float64).tiny
-    ):
-        return None
-    first = relative[:, 0]
-    second = relative[:, 1]
-    third = relative[:, 2]
-    numerator = np.einsum(
-        "ij,ij->i",
-        first,
-        np.cross(second, third),
-    )
-    denominator = (
-        lengths[:, 0] * lengths[:, 1] * lengths[:, 2]
-        + np.einsum("ij,ij->i", first, second) * lengths[:, 2]
-        + np.einsum("ij,ij->i", second, third) * lengths[:, 0]
-        + np.einsum("ij,ij->i", third, first) * lengths[:, 1]
-    )
-    angles = 2.0 * np.arctan2(numerator, denominator)
-    if not np.all(np.isfinite(angles)):
-        return None
-    magnitude = abs(float(angles.sum(dtype=np.float64)))
-    if magnitude >= 2.0 * math.pi:
-        return True
-    if magnitude <= 1e-6:
-        return False
-    return None
-
-
-def _component_surfaces_touch(
-    first_vertices: np.ndarray,
-    first_faces: np.ndarray,
-    second_vertices: np.ndarray,
-    second_faces: np.ndarray,
-) -> bool | None:
-    """Check small non-prismatic components, returning ``None`` if unbounded."""
-
-    if (
-        len(first_faces) > _GENERIC_COMPONENT_FACE_LIMIT
-        or len(second_faces) > _GENERIC_COMPONENT_FACE_LIMIT
-        or np.any(first_faces < 0)
-        or np.any(first_faces >= len(first_vertices))
-        or np.any(second_faces < 0)
-        or np.any(second_faces >= len(second_vertices))
-    ):
-        return None
-    first_triangles = first_vertices[first_faces].astype(np.float64)
-    second_triangles = second_vertices[second_faces].astype(np.float64)
-    second_minimum = np.min(second_triangles, axis=1)
-    second_maximum = np.max(second_triangles, axis=1)
-    candidate_count = 0
-    for triangle in first_triangles:
-        first_minimum = np.min(triangle, axis=0)
-        first_maximum = np.max(triangle, axis=0)
-        candidates = np.flatnonzero(
-            np.all(first_minimum <= second_maximum, axis=1)
-            & np.all(second_minimum <= first_maximum, axis=1)
-        )
-        candidate_count += len(candidates)
-        if candidate_count > _GENERIC_COMPONENT_PAIR_LIMIT:
-            return None
-        for index in candidates:
-            if _triangles_touch(triangle, second_triangles[int(index)]):
-                return True
-    first_point = first_vertices[int(first_faces[0, 0])].astype(np.float64)
-    second_point = second_vertices[int(second_faces[0, 0])].astype(np.float64)
-    first_inside_second = _point_inside_closed_surface(
-        first_point,
-        second_triangles,
-    )
-    second_inside_first = _point_inside_closed_surface(
-        second_point,
-        first_triangles,
-    )
-    if first_inside_second is None or second_inside_first is None:
-        return None
-    return first_inside_second or second_inside_first
 
 
 def _small_writer_topology_is_safe(
@@ -667,13 +372,18 @@ def _analyse_export_mesh(
             return False, None, "writer_coordinate_non_finite", None
         if len(np.unique(writer_vertices, axis=0)) != len(writer_vertices):
             return False, None, "float32_duplicate_vertex", None
-        safe, measured = _writer_mesh_metrics(
-            writer_vertices,
-            faces,
-            measure_coverage=measure_coverage,
-        )
+        triangles = writer_vertices[faces].astype(np.float64)
+        edge_a = triangles[:, 1] - triangles[:, 0]
+        edge_b = triangles[:, 2] - triangles[:, 0]
+        crosses = np.cross(edge_a, edge_b)
+        safe = not np.any(np.all(crosses == 0.0, axis=1))
         reason = None if safe else "float32_degenerate_triangle"
-        coverage = measured if safe else None
+        coverage = None
+        if safe and measure_coverage:
+            signed_volume_six = np.einsum(
+                "ij,ij->i", triangles[:, 0], crosses
+            ).sum(dtype=np.float64)
+            coverage = abs(float(signed_volume_six)) / 6.0
     if not safe:
         return False, None, reason, None
     try:
@@ -687,73 +397,21 @@ def _analyse_export_mesh(
             min_len=1,
         )
         if len(face_components) > 1:
-            writer_boundary_vertices = _writer_vertices_for_offset(
-                vertices,
-                scale,
-            )
-            if writer_boundary_vertices is None:
+            writer_vertices = _writer_mesh_vertices(vertices, scale)
+            if writer_vertices is None:
                 return False, None, "writer_coordinate_non_finite", None
-            component_faces_list = [
-                faces[np.asarray(component, dtype=np.int64)]
-                for component in face_components
-            ]
-            component_bounds = []
-            for component_faces in component_faces_list:
-                bounds = _component_writer_bounds(
-                    writer_boundary_vertices,
-                    component_faces,
+            profiles: list[tuple[_Polygon, float, float]] = []
+            for component in face_components:
+                profile = _vertical_prism_profile(
+                    writer_vertices,
+                    faces[np.asarray(component, dtype=np.int64)],
                 )
-                if bounds is None:
-                    return False, None, "writer_component_bounds_invalid", True
-                component_bounds.append(bounds)
-            candidate_pairs = _candidate_component_pairs(
-                np.asarray(component_bounds, dtype=np.float64)
-            )
-            component_profiles: dict[int, _WriterBoundaryProfile] = {}
-
-            def profile_for(index: int) -> _WriterBoundaryProfile | None:
-                profile = component_profiles.get(index)
                 if profile is None:
-                    profile = _writer_boundary_profile(
-                        writer_boundary_vertices,
-                        component_faces_list[index],
-                    )
-                    if profile is not None:
-                        component_profiles[index] = profile
-                return profile
-
-            for first_index, second_index in candidate_pairs:
-                first_profile = profile_for(first_index)
-                second_profile = profile_for(second_index)
-                if first_profile is not None and second_profile is not None:
-                    components_touch: bool | None = _profiles_touch(
-                        first_profile,
-                        second_profile,
-                    )
-                else:
-                    components_touch = _component_surfaces_touch(
-                        writer_boundary_vertices,
-                        component_faces_list[first_index],
-                        writer_boundary_vertices,
-                        component_faces_list[second_index],
-                    )
-                if components_touch is None:
-                    return (
-                        False,
-                        None,
-                        "writer_component_boundary_invalid",
-                        True,
-                    )
-                if components_touch:
-                    return (
-                        False,
-                        None,
-                        "writer_component_boundary_contact",
-                        True,
-                    )
+                    return False, None, "writer_component_not_vertical_prism", True
+                profiles.append(profile)
+            if not _prism_profiles_are_disjoint(profiles):
+                return False, None, "writer_component_boundary_contact", True
         return True, coverage, None, True
-    except _ComponentPairBudgetExceeded:
-        return False, None, "writer_component_pair_budget_exceeded", True
     except (IndexError, TypeError, ValueError, RuntimeError):
         return False, None, "watertight_check_failed", None
 
@@ -848,18 +506,6 @@ def _coverage_is_safe(expected_mm2: float, actual_mm2: float) -> bool:
         VECTOR_COVERAGE_ABS_TOL_MM2, expected_mm2 * VECTOR_COVERAGE_REL_TOL
     )
     return abs(actual_mm2 - expected_mm2) <= tolerance
-
-
-def _writer_volume_is_safe(expected_mm3: float, actual_mm3: float) -> bool:
-    """Compare generic-solid writer volumes with an explicit mm3 bound."""
-
-    if not math.isfinite(expected_mm3) or not math.isfinite(actual_mm3):
-        return False
-    tolerance = max(
-        _WRITER_VOLUME_ABS_TOL_MM3,
-        expected_mm3 * _WRITER_VOLUME_REL_TOL,
-    )
-    return abs(actual_mm3 - expected_mm3) <= tolerance
 
 
 def _attempt_geometry_metrics(
@@ -976,6 +622,256 @@ def prepare_geometry_for_float32(
     return prepared
 
 
+def _writer_footprint(poly: _Polygon, scale: float) -> _Polygonal | None:
+    """Map one source polygon through the exact float32 XY writer domain."""
+
+    def writer_ring(ring: _LinearRing) -> np.ndarray | None:
+        try:
+            coordinates = np.asarray(ring.coords, dtype=np.float64)[:, :2]
+        except (AttributeError, TypeError, ValueError):
+            return None
+        if len(coordinates) < 4 or not np.all(np.isfinite(coordinates)):
+            return None
+        with np.errstate(over="ignore", invalid="ignore"):
+            writer_coordinates = (coordinates * scale).astype(np.float32)
+        if not np.all(np.isfinite(writer_coordinates)):
+            return None
+        return writer_coordinates.astype(np.float64)
+
+    exterior = writer_ring(poly.exterior)
+    if exterior is None:
+        return None
+    holes: list[np.ndarray] = []
+    for ring in poly.interiors:
+        coordinates = writer_ring(ring)
+        if coordinates is None:
+            return None
+        holes.append(coordinates)
+    try:
+        footprint = _Polygon(exterior, holes)
+    except _GEOMETRY_ERRORS:
+        return None
+    if not footprint.is_valid:
+        footprint = _normalise_polygonal(footprint)
+        if footprint is None:
+            return None
+    if (
+        footprint.is_empty
+        or not math.isfinite(float(footprint.area))
+        or float(footprint.area) <= 0.0
+    ):
+        return None
+    return footprint
+
+
+def _component_intersects_earlier(
+    candidate: _Polygonal,
+    *,
+    index: int,
+    original_tree: _STRtree,
+    current_writer: list[_Polygonal],
+    search_margin_mm: float,
+    inspected_pairs: list[int],
+) -> bool | None:
+    """Check one candidate against accepted predecessors with bounded work."""
+
+    try:
+        search_geometry = candidate.buffer(
+            search_margin_mm,
+            cap_style="square",
+            join_style="mitre",
+        )
+        nearby = original_tree.query(search_geometry)
+    except _GEOMETRY_ERRORS:
+        return None
+    for raw_other_index in np.asarray(nearby).reshape(-1):
+        other_index = int(raw_other_index)
+        if other_index >= index:
+            continue
+        inspected_pairs[0] += 1
+        if inspected_pairs[0] > _COMPONENT_PAIR_LIMIT:
+            return None
+        try:
+            if candidate.intersects(current_writer[other_index]):
+                return True
+        except _GEOMETRY_ERRORS:
+            return None
+    return False
+
+
+def _writer_footprints_are_disjoint(
+    footprints: list[_Polygonal],
+) -> bool:
+    """Verify all final writer footprints without materialising all pairs."""
+
+    if len(footprints) < 2:
+        return True
+    try:
+        tree = _STRtree(footprints)
+    except _GEOMETRY_ERRORS:
+        return False
+    inspected_pairs = 0
+    for index, footprint in enumerate(footprints):
+        try:
+            nearby = tree.query(footprint, predicate="intersects")
+        except _GEOMETRY_ERRORS:
+            return False
+        for raw_other_index in np.asarray(nearby).reshape(-1):
+            other_index = int(raw_other_index)
+            if other_index <= index:
+                continue
+            inspected_pairs += 1
+            if inspected_pairs > _COMPONENT_PAIR_LIMIT:
+                return False
+            return False
+    return True
+
+
+def _prepare_component_footprints(
+    polygons: list[_Polygon],
+    *,
+    scale: float,
+    separation_mm: float,
+) -> tuple[list[_Polygon], list[tuple[float, float]]] | None:
+    """Return source polygons and source-space offsets safe for float32 IO."""
+
+    if not polygons:
+        return [], []
+    if any(
+        not isinstance(poly, _Polygon)
+        or poly.is_empty
+        or not poly.is_valid
+        for poly in polygons
+    ):
+        return None
+    if len(polygons) == 1:
+        return [polygons[0]], [(0.0, 0.0)]
+
+    original_writer: list[_Polygonal] = []
+    expected_areas: list[float] = []
+    for poly in polygons:
+        expected_area = _physical_area(poly, scale)
+        footprint = _writer_footprint(poly, scale)
+        if (
+            expected_area is None
+            or footprint is None
+            or not _coverage_is_safe(expected_area, float(footprint.area))
+        ):
+            return None
+        expected_areas.append(expected_area)
+        original_writer.append(footprint)
+    try:
+        original_tree = _STRtree(original_writer)
+    except _GEOMETRY_ERRORS:
+        return None
+
+    geometry_step = separation_mm / scale
+    offsets = (
+        (0.0, 0.0),
+        *((
+            dx * geometry_step * step,
+            dy * geometry_step * step,
+        )
+          for step in range(1, _COMPONENT_MAX_STEPS + 1)
+          for dx, dy in _COMPONENT_DIRECTIONS),
+    )
+    max_writer_shift = (
+        separation_mm * _COMPONENT_MAX_STEPS * math.sqrt(2.0)
+    )
+    prepared: list[_Polygon] = []
+    current_writer: list[_Polygonal] = []
+    selected_offsets: list[tuple[float, float]] = []
+    inspected_pairs = [0]
+
+    for index, poly in enumerate(polygons):
+        accepted: tuple[_Polygon, _Polygonal, tuple[float, float]] | None = None
+        for x_offset, y_offset in offsets:
+            try:
+                candidate = (
+                    poly
+                    if x_offset == 0.0 and y_offset == 0.0
+                    else _affinity.translate(
+                        poly,
+                        xoff=float(x_offset),
+                        yoff=float(y_offset),
+                    )
+                )
+            except _GEOMETRY_ERRORS:
+                continue
+            writer_candidate = _writer_footprint(candidate, scale)
+            if (
+                writer_candidate is None
+                or not _coverage_is_safe(
+                    expected_areas[index],
+                    float(writer_candidate.area),
+                )
+            ):
+                continue
+            intersects = _component_intersects_earlier(
+                writer_candidate,
+                index=index,
+                original_tree=original_tree,
+                current_writer=current_writer,
+                search_margin_mm=max_writer_shift,
+                inspected_pairs=inspected_pairs,
+            )
+            if intersects is None:
+                return None
+            if not intersects:
+                accepted = (
+                    candidate,
+                    writer_candidate,
+                    (float(x_offset), float(y_offset)),
+                )
+                break
+        if accepted is None:
+            return None
+        candidate, writer_candidate, offset = accepted
+        prepared.append(candidate)
+        current_writer.append(writer_candidate)
+        selected_offsets.append(offset)
+
+    if not _writer_footprints_are_disjoint(current_writer):
+        return None
+    return prepared, selected_offsets
+
+
+def prepare_component_footprints_for_float32(
+    polygons: list[_Polygon],
+    *,
+    xy_scale: float,
+    separation_mm: float = _FLOAT32_GRID_MM,
+) -> list[_Polygon] | None:
+    """Prepare independent prism footprints before extrusion.
+
+    在挤出前把独立轮廓映射到 3MF 实际使用的 float32 坐标域；若两个
+    壳体会因舍入而接触，则仅对后一个轮廓做有界的 0.0001 mm 级平移。
+
+    Args:
+        polygons: Independent source-space polygon footprints. /
+            源坐标中的独立多边形轮廓。
+        xy_scale: Source-coordinate to millimetre scale. /
+            源坐标到毫米的缩放。
+        separation_mm: Physical offset per bounded retry. /
+            每次有界重试的物理偏移量。
+
+    Returns:
+        Prepared polygons, or ``None`` when they cannot be represented safely. /
+        可安全写出的轮廓；无法安全表示时返回 ``None``。
+    """
+
+    scale = _positive_scale(xy_scale)
+    separation = _positive_scale(separation_mm)
+    if scale is None or separation is None:
+        return None
+    result = _prepare_component_footprints(
+        list(polygons),
+        scale=scale,
+        separation_mm=separation,
+    )
+    return result[0] if result is not None else None
+
+
 def separate_component_coordinates(
     meshes: list[trimesh.Trimesh],
     *,
@@ -1000,12 +896,11 @@ def separate_component_coordinates(
     scale = _positive_scale(xy_scale)
     if separation is None or scale is None:
         return False
-    geometry_separation = separation / scale
+    if not meshes:
+        return True
+
     vertices_by_mesh: list[np.ndarray] = []
-    faces_by_mesh: list[np.ndarray] = []
-    writer_by_mesh: list[np.ndarray] = []
-    initial_volume_by_mesh: list[float] = []
-    bounds_by_mesh: list[tuple[float, float, float, float, float, float]] = []
+    footprints: list[_Polygon] = []
     for mesh in meshes:
         arrays = _mesh_arrays(mesh)
         if arrays is None:
@@ -1013,203 +908,31 @@ def separate_component_coordinates(
         vertices, faces = arrays
         if not np.all(np.isfinite(vertices)):
             return False
-        writer = _writer_vertices_for_offset(vertices, scale)
-        if (
-            writer is None
-            or np.any(faces < 0)
-            or np.any(faces >= len(writer))
-            or np.any(
-                (faces[:, 0] == faces[:, 1])
-                | (faces[:, 1] == faces[:, 2])
-                | (faces[:, 2] == faces[:, 0])
-            )
-        ):
-            return False
-        if len(np.unique(writer, axis=0)) != len(writer):
-            return False
-        valid, initial_volume = _writer_mesh_metrics(
-            writer,
-            faces,
-            measure_coverage=True,
-        )
-        if (
-            not valid
-            or initial_volume is None
-            or not math.isfinite(initial_volume)
-        ):
-            return False
-        bounds = _component_writer_bounds(writer, faces)
-        if bounds is None:
+        profile = _vertical_prism_profile(vertices, faces)
+        if profile is None:
             return False
         vertices_by_mesh.append(vertices)
-        faces_by_mesh.append(faces)
-        writer_by_mesh.append(writer)
-        initial_volume_by_mesh.append(initial_volume)
-        bounds_by_mesh.append(bounds)
-    if not meshes:
-        return True
+        footprints.append(profile[0])
 
-    bounds_array = np.asarray(bounds_by_mesh, dtype=np.float64)
-    profiles: list[_WriterBoundaryProfile | None] = [None] * len(meshes)
-    profiles_ready = [False] * len(meshes)
-
-    def profile_for(index: int) -> _WriterBoundaryProfile | None:
-        if not profiles_ready[index]:
-            profiles[index] = _writer_boundary_profile(
-                writer_by_mesh[index],
-                faces_by_mesh[index],
-            )
-            profiles_ready[index] = True
-        return profiles[index]
-
-    def components_touch(first_index: int, second_index: int) -> bool | None:
-        first_profile = profile_for(first_index)
-        second_profile = profile_for(second_index)
-        if first_profile is not None and second_profile is not None:
-            return _profiles_touch(first_profile, second_profile)
-        return _component_surfaces_touch(
-            writer_by_mesh[first_index],
-            faces_by_mesh[first_index],
-            writer_by_mesh[second_index],
-            faces_by_mesh[second_index],
-        )
-
-    colliding_indexes: set[int] = set()
-    try:
-        for first_index, second_index in _candidate_component_pairs(bounds_array):
-            touches = components_touch(first_index, second_index)
-            if touches is None:
-                return False
-            if touches:
-                colliding_indexes.update((first_index, second_index))
-    except _ComponentPairBudgetExceeded:
-        return False
-    if not colliding_indexes:
-        return True
-
-    offsets = (
-        (0.0, 0.0, 0.0),
-        *((dx * geometry_separation * step,
-           dy * geometry_separation * step, 0.0)
-          for step in range(1, _COMPONENT_MAX_STEPS + 1)
-          for dx, dy in _COMPONENT_DIRECTIONS),
+    prepared = _prepare_component_footprints(
+        footprints,
+        scale=scale,
+        separation_mm=separation,
     )
-    selected = [(0.0, 0.0, 0.0) for _mesh in meshes]
-    anchored_index = min(colliding_indexes)
-    for index in sorted(colliding_indexes - {anchored_index}):
-        vertices = vertices_by_mesh[index]
-        faces = faces_by_mesh[index]
-        initial_volume = initial_volume_by_mesh[index]
-        original_profile = profile_for(index)
-        accepted: tuple[float, float, float] | None = None
-        accepted_writer: np.ndarray | None = None
-        accepted_profile: _WriterBoundaryProfile | None = None
-        accepted_bounds: tuple[float, float, float, float, float, float] | None = None
-        for offset in offsets:
-            writer_candidate = _writer_vertices_for_offset(
-                vertices,
-                scale,
-                offset,
-            )
-            if (
-                writer_candidate is None
-                or len(np.unique(writer_candidate, axis=0))
-                != len(writer_candidate)
-            ):
-                continue
-            valid, candidate_volume = _writer_mesh_metrics(
-                writer_candidate,
-                faces,
-                measure_coverage=True,
-            )
-            if (
-                not valid
-                or candidate_volume is None
-            ):
-                continue
-            candidate_profile = _writer_boundary_profile(
-                writer_candidate,
-                faces,
-            )
-            if original_profile is not None:
-                if (
-                    candidate_profile is None
-                    or not _coverage_is_safe(
-                        float(original_profile.footprint.area),
-                        float(candidate_profile.footprint.area),
-                    )
-                ):
-                    continue
-            elif not _writer_volume_is_safe(
-                initial_volume,
-                candidate_volume,
-            ):
-                continue
-            candidate_bounds = _component_writer_bounds(
-                writer_candidate,
-                faces,
-            )
-            if candidate_bounds is None:
-                continue
-            row = np.asarray(candidate_bounds, dtype=np.float64)
-            nearby = np.flatnonzero(
-                (row[0] <= bounds_array[:, 3])
-                & (bounds_array[:, 0] <= row[3])
-                & (row[1] <= bounds_array[:, 4])
-                & (bounds_array[:, 1] <= row[4])
-                & (row[2] <= bounds_array[:, 5])
-                & (bounds_array[:, 2] <= row[5])
-            )
-            touches_other = False
-            for other_index_raw in nearby:
-                other_index = int(other_index_raw)
-                if other_index == index:
-                    continue
-                other_profile = profile_for(other_index)
-                if candidate_profile is not None and other_profile is not None:
-                    touches = _profiles_touch(
-                        candidate_profile,
-                        other_profile,
-                    )
-                else:
-                    touches = _component_surfaces_touch(
-                        writer_candidate,
-                        faces,
-                        writer_by_mesh[other_index],
-                        faces_by_mesh[other_index],
-                    )
-                if touches is None or touches:
-                    touches_other = True
-                    break
-            if not touches_other:
-                accepted = offset
-                accepted_writer = writer_candidate
-                accepted_profile = candidate_profile
-                accepted_bounds = candidate_bounds
-                break
-        if accepted is None or accepted_writer is None or accepted_bounds is None:
-            return False
-        selected[index] = accepted
-        writer_by_mesh[index] = accepted_writer
-        profiles[index] = accepted_profile
-        profiles_ready[index] = True
-        bounds_by_mesh[index] = accepted_bounds
-        bounds_array[index] = accepted_bounds
-
-    try:
-        for first_index, second_index in _candidate_component_pairs(bounds_array):
-            touches = components_touch(first_index, second_index)
-            if touches is None or touches:
-                return False
-    except _ComponentPairBudgetExceeded:
+    if prepared is None:
         return False
+    _prepared_footprints, selected = prepared
 
     moved: list[tuple[trimesh.Trimesh, np.ndarray]] = []
     try:
         for mesh, vertices, offset in zip(meshes, vertices_by_mesh, selected):
-            if offset != (0.0, 0.0, 0.0):
+            if offset != (0.0, 0.0):
                 moved.append((mesh, vertices.copy()))
-                mesh.apply_translation(offset)
+                mesh.apply_translation((offset[0], offset[1], 0.0))
+        if not all(
+            mesh_is_float32_safe(mesh, xy_scale=scale) for mesh in meshes
+        ):
+            raise ValueError("writer-domain component validation failed")
     except (TypeError, ValueError, RuntimeError):
         for mesh, original in moved:
             mesh.vertices = original
@@ -1431,19 +1154,6 @@ def _meshes_are_export_safe(
                 rejected_reason="no_meshes",
             )
         return False
-    if len(meshes) > 1 and not separate_component_coordinates(
-        meshes,
-        separation_mm=_FLOAT32_GRID_MM,
-        xy_scale=scale,
-    ):
-        if rejection_metrics is not None:
-            rejection_metrics.update(
-                candidate_mesh_count=len(meshes),
-                watertight=None,
-                non_manifold_edge_count=None,
-                rejected_reason="component_coordinate_collision",
-            )
-        return False
     coverage_mm2 = 0.0
     for mesh in meshes:
         safe, measured, reason, watertight = _analyse_export_mesh(
@@ -1596,7 +1306,25 @@ def extrude_polygon_for_export(
                 failed_attempts.append(diagnostics)
                 continue
         try:
-            meshes = _extrude_indexed_parts(candidate)
+            candidate_parts = _polygon_parts(candidate)
+            if not candidate_parts:
+                raise ValueError(
+                    "Vector polygon repair produced no extrudable parts"
+                )
+            prepared_parts = prepare_component_footprints_for_float32(
+                candidate_parts,
+                xy_scale=scale,
+            )
+            if prepared_parts is None:
+                raise ValueError(
+                    "Vector polygon components cannot remain separate in float32"
+                )
+            prepared_candidate: _Polygonal = (
+                prepared_parts[0]
+                if len(prepared_parts) == 1
+                else _MultiPolygon(prepared_parts)
+            )
+            meshes = _extrude_indexed_parts(prepared_candidate)
             mesh_diagnostics = {}
             if _meshes_are_export_safe(
                 meshes,
