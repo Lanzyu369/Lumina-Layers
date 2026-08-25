@@ -256,7 +256,7 @@ def test_generate_routes_model_surface_session_to_overlay_worker(
         },
     )
 
-    async def fake_submit(_fn, *_args):
+    async def fake_submit(_fn, *_args, **_kwargs):
         out_path = tmp_path / "surface.3mf"
         out_path.write_bytes(b"3mf")
         return (
