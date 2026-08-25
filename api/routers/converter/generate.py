@@ -61,10 +61,15 @@ from api.workers.converter_workers import (
     worker_generate_model_surface_overlay,
 )
 from core.batch_layout import LayoutResult, XYBBox, layout_shelf_by_row
-from core.errors import CachedPreviewAnalysisError, VectorMeshMemoryBudgetError
+from core.errors import (
+    CachedPreviewAnalysisError,
+    VectorHostMemoryAdmissionError,
+    VectorMeshMemoryBudgetError,
+)
 from core.model_surface.types import ModelSurfaceError
 from core.naming import generate_preserved_upload_3mf_filename
 from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
+from core.vector_mesh_memory import resolve_vector_mesh_memory_budget_bytes
 from core.wipe_tower_placement import WIPE_TOWER_MANUAL_WARNING_CODE
 from utils.merged_bambu_3mf_writer import (
     MergedBambu3MFWriter,
@@ -2222,6 +2227,15 @@ async def convert_generate(
             image_path,
             lut_path,
             worker_params,
+            **(
+                {
+                    "host_memory_reservation_bytes": (
+                        resolve_vector_mesh_memory_budget_bytes()
+                    )
+                }
+                if core_modeling_mode == CoreModelingMode.VECTOR
+                else {}
+            ),
         )
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="3MF generation timed out")
@@ -2240,7 +2254,7 @@ async def convert_generate(
             status_code=409,
             detail=STANDARD_CACHED_ANALYSIS_INVALID_DETAIL,
         ) from exc
-    except VectorMeshMemoryBudgetError as exc:
+    except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as exc:
         _handle_core_error(exc, "3MF generation")
     except BrokenProcessPool as exc:
         raise HTTPException(
@@ -2754,6 +2768,9 @@ async def _generate_large_format_svg_native(
                     "tile_width_mm": tile_width_mm,
                     "tile_height_mm": tile_height_mm,
                 },
+                host_memory_reservation_bytes=(
+                    resolve_vector_mesh_memory_budget_bytes()
+                ),
             )
         finally:
             _remove_temp_path(native_heightmap_path)
@@ -2772,7 +2789,7 @@ async def _generate_large_format_svg_native(
         ) from e
     except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
         _handle_core_error(e, "large-format SVG generation")
-    except VectorMeshMemoryBudgetError as e:
+    except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as e:
         _handle_core_error(e, "large-format SVG generation")
     except BrokenProcessPool as e:
         _log_large_format_failure(
@@ -3259,7 +3276,24 @@ async def _generate_large_format_raster(
                     tile_label=f"R{r + 1}C{c + 1}",
                 )
                 tile_labels.append(label)
-                futures.append(pool.submit(worker_generate_model, tile_path, lut_path, tile_params))
+                futures.append(
+                    pool.submit(
+                        worker_generate_model,
+                        tile_path,
+                        lut_path,
+                        tile_params,
+                        **(
+                            {
+                                "host_memory_reservation_bytes": (
+                                    resolve_vector_mesh_memory_budget_bytes()
+                                )
+                            }
+                            if tile_params.get("modeling_mode")
+                            == CoreModelingMode.VECTOR.value
+                            else {}
+                        ),
+                    )
+                )
 
         for future_index, (label, fut) in enumerate(zip(tile_labels, futures)):
             try:
@@ -3285,7 +3319,7 @@ async def _generate_large_format_raster(
             except MemoryError:
                 _discard_pending_awaitables(futures, future_index + 1)
                 raise
-            except VectorMeshMemoryBudgetError as e:
+            except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as e:
                 _discard_pending_awaitables(futures, future_index + 1)
                 _handle_core_error(e, "large-format tile generation")
             except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
@@ -3602,7 +3636,7 @@ async def convert_generate_large_format(
                         or 0
                     ),
                 )
-            except VectorMeshMemoryBudgetError as exc:
+            except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as exc:
                 _handle_core_error(exc, "large-format SVG generation")
             except MemoryError:
                 # Starting a second, rasterized build after allocator failure
@@ -3711,7 +3745,7 @@ async def convert_generate_large_format(
                     warnings=fallback_warnings,
                     log_tile_failures=native_fallback_error is None,
                 )
-            except VectorMeshMemoryBudgetError as fallback_exc:
+            except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as fallback_exc:
                 _handle_core_error(
                     fallback_exc,
                     "large-format raster fallback generation",
@@ -4300,6 +4334,15 @@ async def convert_batch(
                 material_max_layer_count,
                 material_delta_e00_tolerance,
                 separate_backing,
+                **(
+                    {
+                        "host_memory_reservation_bytes": (
+                            resolve_vector_mesh_memory_budget_bytes()
+                        )
+                    }
+                    if modeling_mode == CoreModelingMode.VECTOR.value
+                    else {}
+                ),
             )
 
             # 3. Result processing (main thread)
@@ -4343,7 +4386,7 @@ async def convert_batch(
                     error="Batch item conversion timed out",
                 )
             )
-        except VectorMeshMemoryBudgetError as e:
+        except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as e:
             for prior_result in successful_entries:
                 _remove_temp_paths(
                     [

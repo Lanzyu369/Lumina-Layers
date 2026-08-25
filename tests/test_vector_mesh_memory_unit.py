@@ -10,9 +10,12 @@ import pytest
 from core.errors import VectorMeshMemoryBudgetError
 from core.vector_mesh_memory import (
     ByteBudgetLRU,
+    DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES,
     enforce_vector_mesh_memory_budget,
     estimate_vector_mesh_build_memory,
+    resolve_vector_mesh_memory_budget_bytes,
 )
+from core.task_parallelism_runtime import task_host_memory_budget_scope
 
 
 def test_byte_budget_lru_evicts_before_resident_bytes_exceed_limit() -> None:
@@ -84,6 +87,24 @@ def test_memory_budget_accepts_work_that_fits() -> None:
 
     assert report.estimated_peak_bytes == 900
     assert report.is_allowed is True
+
+
+def test_parent_host_reservation_tightens_worker_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pool-assigned cap bounds every later build/export memory guard."""
+
+    monkeypatch.delenv("LUMINA_VECTOR_MESH_MEMORY_BUDGET_MB", raising=False)
+    assert (
+        resolve_vector_mesh_memory_budget_bytes()
+        == DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
+    )
+    with task_host_memory_budget_scope(512):
+        assert resolve_vector_mesh_memory_budget_bytes() == 512
+    assert (
+        resolve_vector_mesh_memory_budget_bytes()
+        == DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
+    )
 
 
 def test_memory_budget_error_survives_process_pool_serialization() -> None:

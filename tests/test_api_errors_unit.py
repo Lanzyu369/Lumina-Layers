@@ -15,6 +15,7 @@ from core.errors import (
     CoreDependencyError,
     CoreProcessingError,
     CoreValidationError,
+    VectorHostMemoryAdmissionError,
     VectorMeshMemoryBudgetError,
 )
 
@@ -80,6 +81,22 @@ def test_vector_mesh_memory_budget_error_maps_to_actionable_422() -> None:
     assert exc.detail["stage"] == "preflight"
     assert exc.detail["memory_budget_bytes"] == 8 * 1024**3
     assert "simpl" in exc.detail["message"].lower()
+
+
+def test_vector_host_memory_admission_maps_to_retryable_503() -> None:
+    error = VectorHostMemoryAdmissionError(
+        requested_bytes=8,
+        reserved_bytes=24,
+        memory_budget_bytes=24,
+    )
+
+    exc = to_http_exception(error, "Vector generation")
+
+    assert exc.status_code == 503
+    assert exc.detail["code"] == "vector_host_memory_busy"
+    assert exc.detail["retryable"] is True
+    assert exc.detail["recovery_actions"] == ["retry_later"]
+    assert exc.headers == {"Retry-After": "5"}
 
 
 def test_core_dependency_error_maps_to_502() -> None:

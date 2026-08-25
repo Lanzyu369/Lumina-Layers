@@ -384,6 +384,42 @@ def test_fast_mode_preview_supports_timed_worker_submission() -> None:
         output_path.with_suffix(".log").unlink(missing_ok=True)
 
 
+def test_fast_mode_vector_preview_supports_memory_admission_metadata() -> None:
+    """Vector fast gate must accept pool-only reservation keyword arguments."""
+
+    output_path = (
+        log_quality_check.REPO_ROOT
+        / ".scratch"
+        / f"log-quality-vector-admission-{uuid.uuid4().hex}.json"
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "scripts/log_quality_check.py",
+                "--mode",
+                "fast",
+                "--workflow",
+                "replace",
+                "--output",
+                str(output_path),
+            ],
+            cwd=log_quality_check.REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        report = json.loads(output_path.read_text(encoding="utf-8"))
+        assert report["overall_passed"] is True
+    finally:
+        output_path.unlink(missing_ok=True)
+        output_path.with_suffix(".log").unlink(missing_ok=True)
+
+
 def test_mock_preview_worker_contract_binds_current_worker_signature() -> None:
     """Fast-gate preview caches must carry the real worker semantics."""
 

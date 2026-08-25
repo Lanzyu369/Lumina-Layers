@@ -47,11 +47,13 @@ class _InlineWorkerPool:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    async def submit(self, function, *args):
+    async def submit(self, function, *args, **kwargs):
+        del kwargs
         self.calls.append(function.__name__)
         return function(*args)
 
-    async def submit_timed(self, function, *args, timeout=None):
+    async def submit_timed(self, function, *args, timeout=None, **kwargs):
+        del timeout, kwargs
         self.calls.append(function.__name__)
         return function(*args), {}
 

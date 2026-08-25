@@ -67,7 +67,14 @@ _mock_pool = MagicMock(spec=WorkerPoolManager)
 class _InlineRealWorkerPool:
     """Execute the submitted top-level worker in the endpoint call."""
 
-    async def submit_timed(self, fn, *args, timeout=None):
+    async def submit_timed(
+        self,
+        fn,
+        *args,
+        timeout=None,
+        host_memory_reservation_bytes=None,
+    ):
+        del timeout, host_memory_reservation_bytes
         return fn(*args), {}
 
 
@@ -1951,6 +1958,12 @@ class TestSvgLargeFormatWarnings:
             )
 
         assert response.status_code == 200
+        assert (
+            _mock_pool.submit.call_args.kwargs[
+                "host_memory_reservation_bytes"
+            ]
+            == 8 * 1024**3
+        )
         body = response.json()
         assert "warnings" in body
         assert any("native vector large-format" in warning.lower() for warning in body["warnings"])

@@ -75,6 +75,41 @@ class VectorMeshMemoryBudgetError(CoreValidationError):
         )
 
 
+class VectorHostMemoryAdmissionError(CoreError):
+    """Reject a Vector task while other admitted tasks occupy host capacity.
+
+    当其他已准入的矢量任务占用主机容量时，暂时拒绝新任务。该错误表示
+    服务端繁忙，不表示当前 SVG 本身过于复杂。
+    """
+
+    code = "vector_host_memory_busy"
+    recoverable = True
+
+    def __init__(
+        self,
+        requested_bytes: int,
+        reserved_bytes: int,
+        memory_budget_bytes: int,
+        reason: str = "host_capacity_busy",
+    ) -> None:
+        self.requested_bytes = max(1, int(requested_bytes))
+        self.reserved_bytes = max(0, int(reserved_bytes))
+        self.memory_budget_bytes = max(1, int(memory_budget_bytes))
+        self.reason = str(reason)
+        detail = (
+            "The server cannot verify enough safe memory for another Vector "
+            "task right now. Wait for running jobs to finish, then retry; "
+            "you do not need to change this SVG."
+        )
+        super().__init__(detail=detail, error_type=self.code)
+        self.args = (
+            self.requested_bytes,
+            self.reserved_bytes,
+            self.memory_budget_bytes,
+            self.reason,
+        )
+
+
 class CoreDependencyError(CoreError):
     """Raised when optional dependencies or external resources are unavailable."""
 

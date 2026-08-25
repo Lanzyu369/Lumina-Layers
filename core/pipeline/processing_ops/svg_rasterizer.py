@@ -62,19 +62,17 @@ def _svg_canvas_height_width_ratio(svg_path: str) -> float | None:
             value *= px_per_unit
             return value if math.isfinite(value) and value > 0 else None
 
-        raw_width = root.attrib.get("width")
-        raw_height = root.attrib.get("height")
-        width = numeric_length(raw_width)
-        height = numeric_length(raw_height)
-        if width is not None and height is not None:
-            ratio = height / width
-            return ratio if math.isfinite(ratio) and ratio > 0 else None
-        if raw_width is not None or raw_height is not None:
-            # resvg may use an explicit viewport even when its unit cannot be
-            # resolved here. Falling back to a conflicting viewBox would make
-            # the pre-render memory cap ineffective, so fail closed.
-            return None
+        def is_full_percentage(raw: str | None) -> bool:
+            value = str(raw or "").strip()
+            if not value.endswith("%"):
+                return False
+            try:
+                percentage = float(value[:-1])
+            except ValueError:
+                return False
+            return math.isfinite(percentage) and percentage == 100.0
 
+        view_box_ratio = None
         view_box = root.attrib.get("viewBox") or root.attrib.get("viewbox")
         if view_box:
             values = [
@@ -84,7 +82,28 @@ def _svg_canvas_height_width_ratio(svg_path: str) -> float | None:
             ]
             if len(values) == 4 and values[2] > 0 and values[3] > 0:
                 ratio = values[3] / values[2]
-                return ratio if math.isfinite(ratio) and ratio > 0 else None
+                if math.isfinite(ratio) and ratio > 0:
+                    view_box_ratio = ratio
+
+        raw_width = root.attrib.get("width")
+        raw_height = root.attrib.get("height")
+        width = numeric_length(raw_width)
+        height = numeric_length(raw_height)
+        if width is not None and height is not None:
+            ratio = height / width
+            return ratio if math.isfinite(ratio) and ratio > 0 else None
+        if (
+            view_box_ratio is not None
+            and is_full_percentage(raw_width)
+            and is_full_percentage(raw_height)
+        ):
+            return view_box_ratio
+        if raw_width is not None or raw_height is not None:
+            # resvg may use an explicit viewport even when its unit cannot be
+            # resolved here. Falling back to a conflicting viewBox would make
+            # the pre-render memory cap ineffective, so fail closed.
+            return None
+        return view_box_ratio
     except (OSError, ET.ParseError, TypeError, ValueError, OverflowError):
         return None
     return None

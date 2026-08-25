@@ -703,6 +703,10 @@ class TestBatchWorkerPoolSubmit:
         assert call_args[0][22] == "0.2"
         assert call_args[0][23] is False
         assert call_args[0][36] is True
+        assert (
+            call_args.kwargs["host_memory_reservation_bytes"]
+            == 8 * 1024**3
+        )
 
     def test_batch_submits_material_archive_source_to_worker(self) -> None:
         """Batch endpoint forwards material-archive source params to worker."""

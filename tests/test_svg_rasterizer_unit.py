@@ -177,3 +177,69 @@ viewBox="0 0 10 10" preserveAspectRatio="xMinYMin meet">
     render_width = render_mock.call_args.kwargs["width"]
     assert render_width <= 6
     assert rendered.shape[0] * rendered.shape[1] <= 4_096
+
+
+def test_bounded_raster_accepts_percentage_canvas_with_finite_viewbox(
+    tmp_path: Path,
+) -> None:
+    """A 100% canvas inherits its bounded aspect ratio from the viewBox."""
+
+    pytest.importorskip("resvg_py")
+    from core.pipeline.processing_ops import svg_rasterizer
+    from core.vector_large_format import inspect_svg_large_format_support
+
+    svg_path = tmp_path / "percentage-canvas-clip.svg"
+    svg_path.write_text(
+        """<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%"
+viewBox="0 0 400 200">
+  <defs><clipPath id="clip"><rect width="400" height="200"/></clipPath></defs>
+  <rect width="400" height="200" clip-path="url(#clip)" fill="#336699"/>
+</svg>
+""",
+        encoding="utf-8",
+    )
+    assert not inspect_svg_large_format_support(str(svg_path))[
+        "native_tiling_supported"
+    ]
+
+    rendered = svg_rasterizer.rasterize_svg(
+        str(svg_path),
+        target_width_mm=4.0,
+        pixels_per_mm=20.0,
+        crop_to_content=False,
+        _min_quality_px=1,
+        _max_total_pixels=4_096,
+        _cache_result=False,
+    )
+
+    assert rendered.shape == (40, 80, 4)
+    assert rendered.shape[0] * rendered.shape[1] <= 4_096
+
+
+@pytest.mark.parametrize(
+    "canvas_attributes",
+    [
+        'width="99%" height="100%" viewBox="0 0 400 200"',
+        'width="100%" height="99%" viewBox="0 0 400 200"',
+        'width="100%" viewBox="0 0 400 200"',
+        'width="100%" height="100%" viewBox="0 0 nan 200"',
+        'width="100%" height="100%" viewBox="0 0 inf 200"',
+        'width="100%" height="100%" viewBox="0 0 400"',
+    ],
+)
+def test_percentage_canvas_ratio_fails_closed_without_exact_finite_contract(
+    tmp_path: Path,
+    canvas_attributes: str,
+) -> None:
+    """Only the exact 100%/100% plus finite viewBox contract is inferred."""
+
+    from core.pipeline.processing_ops.svg_rasterizer import (
+        _svg_canvas_height_width_ratio,
+    )
+
+    svg_path = tmp_path / "ambiguous-percentage-canvas.svg"
+    svg_path.write_text(
+        f'<svg xmlns="http://www.w3.org/2000/svg" {canvas_attributes}/>',
+        encoding="utf-8",
+    )
+    assert _svg_canvas_height_width_ratio(str(svg_path)) is None

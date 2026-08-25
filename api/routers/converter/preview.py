@@ -73,7 +73,8 @@ from core.material_dynamic_solver import (
     DynamicMaterialCandidateError,
     DynamicMaterialSolverError,
 )
-from core.errors import VectorMeshMemoryBudgetError
+from core.errors import VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError
+from core.vector_mesh_memory import resolve_vector_mesh_memory_budget_bytes
 from core.vector_large_format import inspect_svg_large_format_support, normalize_large_format_source_basename
 from utils.lut_manager import LUTManager
 
@@ -1237,6 +1238,15 @@ async def convert_preview(
             material_min_layer_count,
             material_max_layer_count,
             material_delta_e00_tolerance,
+            **(
+                {
+                    "host_memory_reservation_bytes": (
+                        resolve_vector_mesh_memory_budget_bytes()
+                    )
+                }
+                if modeling_mode == "vector"
+                else {}
+            ),
         )
         _t_worker = time.perf_counter() - _worker_t0
         worker_completed = True
@@ -1244,7 +1254,7 @@ async def convert_preview(
         raise HTTPException(status_code=504, detail="Preview generation timed out")
     except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
         _handle_core_error(e, "preview generation")
-    except VectorMeshMemoryBudgetError as e:
+    except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as e:
         _handle_core_error(e, "preview generation")
     except BrokenProcessPool as e:
         raise HTTPException(

@@ -11,6 +11,7 @@ import os
 from typing import Callable, Generic, TypeVar
 
 from core.errors import VectorMeshMemoryBudgetError
+from core.task_parallelism_runtime import current_task_host_memory_budget_bytes
 
 
 DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES = 8 * 1024 * 1024 * 1024
@@ -285,18 +286,25 @@ def estimate_vector_mesh_build_memory(
 
 
 def resolve_vector_mesh_memory_budget_bytes() -> int:
-    """Resolve the absolute worker RSS budget from a positive MiB override."""
+    """Resolve the worker RSS cap, including any parent host reservation."""
 
     raw_value = os.environ.get(_VECTOR_MESH_MEMORY_BUDGET_ENV)
     if raw_value is None or not raw_value.strip():
-        return DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
-    try:
-        value_mb = int(raw_value)
-    except ValueError:
-        return DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
-    if value_mb <= 0:
-        return DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
-    return value_mb * 1024 * 1024
+        configured_budget = DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
+    else:
+        try:
+            value_mb = int(raw_value)
+        except ValueError:
+            value_mb = 0
+        configured_budget = (
+            value_mb * 1024 * 1024
+            if value_mb > 0
+            else DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
+        )
+    host_reservation = current_task_host_memory_budget_bytes()
+    if host_reservation is None:
+        return configured_budget
+    return min(configured_budget, max(1, int(host_reservation)))
 
 
 def get_process_rss_bytes() -> int | None:

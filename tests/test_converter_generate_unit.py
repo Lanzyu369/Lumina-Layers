@@ -128,6 +128,42 @@ def test_large_format_svg_raster_fallback_passes_hard_pixel_budget(
         os.unlink(png_path)
 
 
+def test_large_format_svg_raster_fallback_accepts_percentage_viewbox(
+    tmp_path,
+) -> None:
+    """The real bounded fallback handles a 100% SVG canvas with clipPath."""
+
+    pytest.importorskip("resvg_py")
+    svg_path = tmp_path / "percentage-fallback.svg"
+    svg_path.write_text(
+        """<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%"
+viewBox="0 0 400 200">
+  <defs><clipPath id="clip"><rect width="400" height="200"/></clipPath></defs>
+  <rect width="400" height="200" clip-path="url(#clip)" fill="#336699"/>
+</svg>
+""",
+        encoding="utf-8",
+    )
+    with patch(
+        "api.routers.converter.generate.TEMP_DIR",
+        str(tmp_path),
+    ):
+        png_path, _warnings = _rasterize_svg_for_large_format_fallback(
+            svg_path=str(svg_path),
+            total_width_mm=4.0,
+            total_height_mm=2.0,
+            sid="test-session",
+            store=_test_store,
+        )
+
+    try:
+        with Image.open(png_path) as rendered:
+            assert rendered.width == 2 * rendered.height
+            assert rendered.width * rendered.height <= 12_000_000
+    finally:
+        os.unlink(png_path)
+
+
 async def _timed_submit_via_generate_mock(
     *args: object,
     **kwargs: object,
@@ -684,6 +720,12 @@ class TestGenerateParameterCompleteness:
 
         assert response.status_code == 200, response.text
         submitted_params = _mock_pool.submit.call_args.args[3]
+        assert (
+            _mock_pool.submit.call_args.kwargs[
+                "host_memory_reservation_bytes"
+            ]
+            == 8 * 1024**3
+        )
         assert submitted_params["vector_parse_clip_cache_path"] == "/tmp/vector-parse-cache.pkl"
 
     def test_color_card_generate_uses_source_palette(self) -> None:
@@ -746,6 +788,12 @@ class TestGenerateParameterCompleteness:
         assert submitted_image_path == captured["svg_path"]
         assert submitted_params["modeling_mode"] == CoreModelingMode.VECTOR
         assert submitted_params["vector_parse_clip_cache_path"] is None
+        assert (
+            _mock_pool.submit.call_args.kwargs[
+                "host_memory_reservation_bytes"
+            ]
+            == 8 * 1024**3
+        )
 
     def test_dynamic_color_card_rejects_before_svg_or_session_mutation(
         self,
@@ -916,6 +964,12 @@ class TestGenerateParameterCompleteness:
             "OrcaSlicer:bbl:bambu-lab-p1s:0.2"
         )
         assert submitted_params["build_plate_id"] == "smooth-high-temp-plate"
+        assert (
+            _mock_pool.submit.call_args.kwargs[
+                "host_memory_reservation_bytes"
+            ]
+            == 8 * 1024**3
+        )
 
     def test_color_card_endpoint_rejects_unsupported_plate_before_svg(
         self,
@@ -2348,7 +2402,15 @@ class TestGenerateRegistryFailureCleanup:
         zip_path.write_bytes(b"zip")
         captured_params = {}
 
-        async def _submit(_fn, _image_path, _lut_path, params):
+        async def _submit(
+            _fn,
+            _image_path,
+            _lut_path,
+            params,
+            *,
+            host_memory_reservation_bytes,
+        ):
+            assert host_memory_reservation_bytes == 8 * 1024**3
             captured_params.update(params)
             return {
                 "zip_path": str(zip_path),
@@ -2411,8 +2473,16 @@ class TestGenerateRegistryFailureCleanup:
         heightmap = np.arange(32, dtype=np.uint8).reshape(4, 8)
         captured_path = None
 
-        async def _submit(_fn, _image_path, _lut_path, params):
+        async def _submit(
+            _fn,
+            _image_path,
+            _lut_path,
+            params,
+            *,
+            host_memory_reservation_bytes,
+        ):
             nonlocal captured_path
+            assert host_memory_reservation_bytes == 8 * 1024**3
             captured_path = params["heightmap_path"]
             assert os.path.exists(captured_path)
             with Image.open(captured_path) as loaded:
@@ -5909,7 +5979,7 @@ class TestLargeFormatDimensionsAndRouting:
     ) -> None:
         """A normal 259×400 grid tiled at 210 mm must keep all four tiles."""
 
-        image_path = tmp_path / "source.png"
+        image_path = tmp_path / "source.jpg"
         lut_path = tmp_path / "lut.npy"
         matched_path = tmp_path / "matched.npy"
         mask_path = tmp_path / "mask.npy"
@@ -5924,7 +5994,15 @@ class TestLargeFormatDimensionsAndRouting:
             tuple[tuple[int, int], tuple[int, int]]
         ] = []
 
-        async def _submit(_fn, tile_path, _lut_path, tile_params):
+        async def _submit(
+            _fn,
+            tile_path,
+            _lut_path,
+            tile_params,
+            *,
+            host_memory_reservation_bytes,
+        ):
+            assert host_memory_reservation_bytes == 8 * 1024**3
             with Image.open(tile_path) as tile_image:
                 source_shape = (tile_image.height, tile_image.width)
             cache_shape = np.load(tile_params["material_matrix_path"]).shape[:2]
@@ -5937,7 +6015,7 @@ class TestLargeFormatDimensionsAndRouting:
         mock_pool = SimpleNamespace(submit=AsyncMock(side_effect=_submit))
         request = LargeFormatConvertGenerateRequest(
             lut_name="test_lut",
-            modeling_mode=ModelingMode.HIGH_FIDELITY,
+            modeling_mode=ModelingMode.VECTOR,
         )
         download_id: str | None = None
         try:

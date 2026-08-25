@@ -10,6 +10,7 @@ from core.errors import (
     CoreError,
     CoreProcessingError,
     CoreValidationError,
+    VectorHostMemoryAdmissionError,
     VectorMeshMemoryBudgetError,
 )
 from core.material_dynamic_solver import (
@@ -107,6 +108,23 @@ def to_http_exception(exc: Exception, context: str) -> HTTPException:
         )
     if isinstance(exc, DomainError):
         return HTTPException(status_code=exc.status_code, detail=exc.detail)
+    if isinstance(exc, VectorHostMemoryAdmissionError):
+        return HTTPException(
+            status_code=503,
+            detail={
+                "error": exc.code,
+                "code": exc.code,
+                "message": exc.detail,
+                "requested_bytes": exc.requested_bytes,
+                "reserved_bytes": exc.reserved_bytes,
+                "memory_budget_bytes": exc.memory_budget_bytes,
+                "reason": exc.reason,
+                "recoverable": exc.recoverable,
+                "retryable": True,
+                "recovery_actions": ["retry_later"],
+            },
+            headers={"Retry-After": "5"},
+        )
     if isinstance(exc, VectorMeshMemoryBudgetError):
         return HTTPException(
             status_code=422,
