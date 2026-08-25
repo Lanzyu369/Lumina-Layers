@@ -1254,7 +1254,9 @@ async def generate_puzzle(
                         if isinstance(applied_mask_snapshot, dict)
                         else {}
                     )
-                    has_snapshot_capability = bool(applied_snapshot_dict)
+                    has_snapshot_capability = (
+                        RECIPE_OVERRIDE_APPLIED_MASKS_KEY in session_data
+                    )
                     merged_region_masks: dict[str, np.ndarray] = {}
                     for override_item in dynamic_recipe_overrides:
                         override_region_id = str(

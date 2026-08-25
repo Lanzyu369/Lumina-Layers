@@ -8,7 +8,7 @@ selected_region_masks 清理）→ /generate 重新套用覆盖时必须仍能�
 （实时选区与 select-all 重算仅服务旧会话），撤销/重做与重置同步维护。
 """
 import pickle
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pytest
@@ -583,17 +583,24 @@ def test_corrupt_snapshot_with_live_mask_must_not_drift(_iso):
         "recipe": [1, 0, 1],
         "layer_order": "Top2Bottom",
     }]
-    with pytest.raises(HTTPException) as excinfo:
-        _prepare_recipe_override_worker_inputs(
-            cache=session_data.get("preview_cache"),
-            session_data=session_data,
-            recipe_overrides=overrides,
-            request=request,
-            sid=sid,
-            store=store,
-        )
+    with patch("api.routers.converter.generate.log.warning") as warning_mock:
+        with pytest.raises(HTTPException) as excinfo:
+            _prepare_recipe_override_worker_inputs(
+                cache=session_data.get("preview_cache"),
+                session_data=session_data,
+                recipe_overrides=overrides,
+                request=request,
+                sid=sid,
+                store=store,
+            )
     assert excinfo.value.status_code == 422
     assert region_id in str(excinfo.value.detail)
+    warning_mock.assert_called_once()
+    log_message = warning_mock.call_args.args[0]
+    log_fields = warning_mock.call_args.kwargs["extra"]
+    assert "falling back" not in log_message.lower()
+    assert log_fields.get("fallback_action") != "use_live_region_state"
+    assert log_fields["recovery_action"] == "reapply_color_replacement"
     store.close(sid)
 
 
@@ -645,6 +652,97 @@ def test_missing_entry_in_capable_snapshot_dict_is_rejected(_iso):
             store=store,
         )
     assert excinfo.value.status_code == 422
+    store.close(sid)
+
+
+@pytest.mark.parametrize(
+    "snapshot_container",
+    [{}, None, "corrupt-container"],
+    ids=["empty", "none", "corrupt"],
+)
+def test_present_snapshot_key_never_falls_back_to_live_mask(
+    _iso,
+    snapshot_container,
+):
+    """Modern sessions reject unusable snapshot containers instead of drifting."""
+    from api.routers.converter.generate import (
+        _prepare_recipe_override_worker_inputs,
+    )
+    from api.schemas.converter import ConvertGenerateRequest
+
+    store = _iso["store"]
+    sid = _seed_material_archive_session(store)
+    region_id = "__editor_selection__:7"
+    session_data = store.get(sid)
+    session_data[RECIPE_OVERRIDE_APPLIED_MASKS_KEY] = snapshot_container
+    live_mask = np.zeros((6, 6), dtype=bool)
+    live_mask[0, :4] = True
+    session_data["selected_region_masks"] = {region_id: live_mask}
+    overrides = [{
+        "region_id": region_id,
+        "recipe": [1, 0, 1],
+        "layer_order": "Top2Bottom",
+    }]
+    request = ConvertGenerateRequest(
+        lut_name="__material_archive__",
+        color_layers=3,
+        recipe_overrides=overrides,
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        _prepare_recipe_override_worker_inputs(
+            cache=session_data.get("preview_cache"),
+            session_data=session_data,
+            recipe_overrides=overrides,
+            request=request,
+            sid=sid,
+            store=store,
+        )
+
+    assert excinfo.value.status_code == 422
+    assert region_id in str(excinfo.value.detail)
+    store.close(sid)
+
+
+def test_legacy_session_without_snapshot_key_still_uses_live_mask(_iso):
+    """Only sessions that truly predate the snapshot key keep live-mask fallback."""
+    from api.routers.converter.generate import (
+        _prepare_recipe_override_worker_inputs,
+    )
+    from api.schemas.converter import ConvertGenerateRequest
+
+    store = _iso["store"]
+    sid = _seed_material_archive_session(store)
+    region_id = "__editor_selection__:7"
+    session_data = store.get(sid)
+    assert RECIPE_OVERRIDE_APPLIED_MASKS_KEY not in session_data
+    live_mask = np.zeros((6, 6), dtype=bool)
+    live_mask[0, :4] = True
+    session_data["selected_region_masks"] = {region_id: live_mask}
+    overrides = [{
+        "region_id": region_id,
+        "recipe": [1, 0, 1],
+        "layer_order": "Top2Bottom",
+    }]
+    request = ConvertGenerateRequest(
+        lut_name="__material_archive__",
+        color_layers=3,
+        recipe_overrides=overrides,
+    )
+
+    _matrix_path, masks_path = _prepare_recipe_override_worker_inputs(
+        cache=session_data.get("preview_cache"),
+        session_data=session_data,
+        recipe_overrides=overrides,
+        request=request,
+        sid=sid,
+        store=store,
+    )
+
+    assert masks_path is not None
+    with open(masks_path, "rb") as mask_file:
+        saved_masks = pickle.load(mask_file)
+    np.testing.assert_array_equal(saved_masks[region_id], live_mask)
     store.close(sid)
 
 

@@ -1086,15 +1086,16 @@ def _resolve_applied_override_mask_snapshot(
     mask = unpack_applied_region_mask(candidate, shape)
     if mask is None:
         log.warning(
-            "Applied recipe-override snapshot is invalid; falling back to live region state",
+            "Applied recipe-override snapshot is invalid; rejecting generation",
             extra={
                 "event": "recipe_override_snapshot_invalid",
                 "error_type": "RecipeOverrideSnapshotInvalid",
                 "error_message": (
                     "The stored override mask snapshot failed validation "
-                    "(shape, dtype, or content); live selection state will be tried."
+                    "(shape, dtype, or content); generation will be rejected "
+                    "to preserve the committed footprint."
                 ),
-                "fallback_action": "use_live_region_state",
+                "recovery_action": "reapply_color_replacement",
                 "session_id": sid,
                 "region_id": str(region_id),
             },
@@ -1665,20 +1666,20 @@ def _prepare_recipe_override_worker_inputs(
     # 会话共享的字典，否则打包的 ~H*W/8 字节条目会在首次生成时以裸
     # H*W 布尔数组的形式重新膨胀并驻留。
     resolved_override_masks: dict[str, np.ndarray] = {}
-    # Snapshot capability separates two eras. Sessions without the key (or
-    # with an empty one) predate applied-mask snapshots and keep the legacy
-    # mutable-source chain. Sessions WITH the key have committed footprints:
+    # Snapshot capability separates two eras. Sessions without the key
+    # predate applied-mask snapshots and keep the legacy mutable-source chain.
+    # Sessions WITH the key have committed footprints, even if the stored
+    # container is empty or invalid:
     # an id that is missing or fails validation there means committed state
     # is unreadable, and silently re-resolving it from live selection state
     # or a recomputed select-all region would drift the footprint — that is
     # a deterministic 422 instead.
-    # 快照能力区分两个时代。没有该键（或为空）的会话早于掩码快照，保留旧
-    # 的可变来源回退链。带该键的会话拥有已提交足迹：其中某个 id 缺失或校
-    # 验失败意味着已提交状态不可读，此时若从实时选区或重算 select-all 静
-    # 默回退会让足迹漂移——必须返回确定性 422。
-    applied_mask_snapshot = session_data.get(RECIPE_OVERRIDE_APPLIED_MASKS_KEY)
-    has_snapshot_capability = isinstance(applied_mask_snapshot, dict) and bool(
-        applied_mask_snapshot
+    # 快照能力区分两个时代。只有完全没有该键的会话才是旧会话并保留可变
+    # 来源回退链。只要键存在，即使容器为空或损坏，也表示会话拥有已提交足
+    # 迹；此时若从实时选区或重算 select-all 静默回退会让足迹漂移——必须
+    # 返回确定性 422。
+    has_snapshot_capability = (
+        RECIPE_OVERRIDE_APPLIED_MASKS_KEY in session_data
     )
 
     for item in recipe_overrides:
