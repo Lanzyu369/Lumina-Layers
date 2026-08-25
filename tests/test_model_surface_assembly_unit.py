@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import sys
 from types import SimpleNamespace
 import weakref
 
@@ -354,7 +355,8 @@ def test_owned_vector_footprint_guard_uses_bounded_workspace_before_projection(
         raise rejected
 
     monkeypatch.setattr(
-        "core.vector_engine._enforce_vector_scene_export_headroom",
+        sys.modules["core.vector_engine"],
+        "_enforce_vector_scene_export_headroom",
         reject,
     )
     monkeypatch.setattr(
@@ -416,7 +418,8 @@ def test_model_surface_boolean_guard_runs_before_split_copy_or_difference(
         raise rejected
 
     monkeypatch.setattr(
-        "core.vector_engine._enforce_vector_scene_export_headroom",
+        sys.modules["core.vector_engine"],
+        "_enforce_vector_scene_export_headroom",
         reject,
     )
     monkeypatch.setattr(
