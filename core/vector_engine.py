@@ -5877,9 +5877,13 @@ class VectorProcessor:
             )
         mirror_transform = None
         if is_single_sided and not is_5color and not enable_relief:
-            model_width_mm = bbox[2] * scale_factor
             mirror_transform = np.array(
-                [[-1.0, 0.0, 0.0, model_width_mm], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
+                [
+                    [-1.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0],
+                    [0.0, 0.0, 0.0, 1.0],
+                ]
             )
         backing_layer_count = max(1, int(round(thickness_mm / layer_h)))
         backing_height = backing_layer_count * layer_h
@@ -9919,11 +9923,17 @@ class VectorProcessor:
 
     @staticmethod
     def _fix_coordinates(mesh, svg_height_mm):
-        """Flip Y-axis from SVG (Y-down) to printer (Y-up) coordinate system."""
+        """Flip SVG's Y axis without translating writer-domain vertices.
+
+        Keep the existing ``svg_height_mm`` argument for caller compatibility.
+        Bed placement is emitted later as a 3MF build-item transform; adding
+        canvas or bed offsets to vertices here can collapse distinct points
+        when the writer converts them to float32.
+        """
+        del svg_height_mm
         transform = np.eye(4)
         transform[1, 1] = -1
         mesh.apply_transform(transform)
-        mesh.apply_translation([0, svg_height_mm, 0])
 
 
 def parse_svg_geometry(

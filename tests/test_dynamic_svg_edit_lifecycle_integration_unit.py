@@ -79,23 +79,45 @@ def _scene_z_span(scene: object) -> float:
     return float(bounds[1, 2] - bounds[0, 2])
 
 
-def _scene_xy_geometry_signature(scene: object) -> Counter[tuple[object, ...]]:
-    """Describe scene geometry while ignoring the preview-only Z mirror."""
+def _scene_xy_geometry_signature(
+    scene: object,
+    *,
+    translation_xy: tuple[float, float] = (0.0, 0.0),
+) -> Counter[tuple[object, ...]]:
+    """Describe final XY geometry after an optional scene-root translation."""
 
     signature: Counter[tuple[object, ...]] = Counter()
+    translation = np.asarray(translation_xy, dtype=np.float64)
+    assert translation.shape == (2,)
     for name, geometry in getattr(scene, "geometry", {}).items():
         vertices = np.asarray(getattr(geometry, "vertices"), dtype=np.float64)
         faces = np.asarray(getattr(geometry, "faces"))
         bounds = np.asarray(getattr(geometry, "bounds"), dtype=np.float64)
+        world_bounds = bounds[:, :2] + translation
         signature[
             (
                 str(name),
                 int(len(vertices)),
                 int(len(faces)),
-                tuple(np.round(bounds[:, :2].reshape(-1), 6)),
+                tuple(np.round(world_bounds.reshape(-1), 6)),
             )
         ] += 1
     return signature
+
+
+def _threemf_build_xy_translation(path: str) -> tuple[float, float]:
+    """Read the standard 3MF build-item XY placement transform."""
+
+    with zipfile.ZipFile(path) as archive:
+        root = ET.fromstring(archive.read("3D/3dmodel.model"))
+    build_item = next(
+        element
+        for element in root.iter()
+        if element.tag.rsplit("}", 1)[-1] == "item"
+    )
+    values = [float(value) for value in build_item.attrib["transform"].split()]
+    assert len(values) == 12
+    return values[9], values[10]
 
 
 def _threemf_z_span(payload: bytes) -> float:
@@ -229,14 +251,18 @@ def test_dynamic_svg_edit_lifecycle_keeps_native_geometry_and_export_recipes(
         return real_glb_export(*args, **kwargs)
 
     def capture_threemf_export(*args, **kwargs):
+        output_path = real_threemf_export(*args, **kwargs)
         threemf_snapshots.append(
             {
                 "slot_names": tuple(str(name) for name in kwargs["slot_names"]),
-                "geometry_signature": _scene_xy_geometry_signature(kwargs["scene"]),
+                "geometry_signature": _scene_xy_geometry_signature(
+                    kwargs["scene"],
+                    translation_xy=_threemf_build_xy_translation(output_path),
+                ),
                 "z_span": _scene_z_span(kwargs["scene"]),
             }
         )
-        return real_threemf_export(*args, **kwargs)
+        return output_path
 
     monkeypatch.setattr(
         material_lut_synthesis,
@@ -562,10 +588,14 @@ def test_dynamic_svg_global_replacement_rebuilds_exact_recipe_after_fresh_previe
         recipe = recipe_by_scene_id.get(id(kwargs["scene"]))
         assert recipe is not None
         threemf_recipes.append(recipe)
+        output_path = real_threemf_export(*args, **kwargs)
         threemf_geometry_signatures.append(
-            _scene_xy_geometry_signature(kwargs["scene"])
+            _scene_xy_geometry_signature(
+                kwargs["scene"],
+                translation_xy=_threemf_build_xy_translation(output_path),
+            )
         )
-        return real_threemf_export(*args, **kwargs)
+        return output_path
 
     def post_preview(form_data: dict[str, str]):
         return client.post(

@@ -8,6 +8,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import shapely as _shapely
 import trimesh
 from mapbox_earcut import triangulate_float64 as _triangulate_float64
 from shapely import affinity as _affinity
@@ -669,11 +670,11 @@ def _component_intersects_earlier(
     *,
     index: int,
     original_tree: _STRtree,
-    current_writer: list[_Polygonal],
+    current_writer: dict[int, _Polygonal],
     search_margin_mm: float,
     inspected_pairs: list[int],
 ) -> bool | None:
-    """Check one candidate against accepted predecessors with bounded work."""
+    """Check one candidate against already accepted parts with bounded work."""
 
     try:
         search_geometry = candidate.buffer(
@@ -686,17 +687,50 @@ def _component_intersects_earlier(
         return None
     for raw_other_index in np.asarray(nearby).reshape(-1):
         other_index = int(raw_other_index)
-        if other_index >= index:
+        if other_index == index:
+            continue
+        other = current_writer.get(other_index)
+        if other is None:
             continue
         inspected_pairs[0] += 1
         if inspected_pairs[0] > _COMPONENT_PAIR_LIMIT:
             return None
         try:
-            if candidate.intersects(current_writer[other_index]):
+            if candidate.intersects(other):
                 return True
         except _GEOMETRY_ERRORS:
             return None
     return False
+
+
+def _writer_footprint_contact_degrees(
+    footprints: list[_Polygonal],
+) -> list[int] | None:
+    """Return bounded writer-domain contact degrees for every footprint."""
+
+    degrees = [0] * len(footprints)
+    if len(footprints) < 2:
+        return degrees
+    try:
+        tree = _STRtree(footprints)
+    except _GEOMETRY_ERRORS:
+        return None
+    inspected_pairs = 0
+    for index, footprint in enumerate(footprints):
+        try:
+            nearby = tree.query(footprint, predicate="intersects")
+        except _GEOMETRY_ERRORS:
+            return None
+        for raw_other_index in np.asarray(nearby).reshape(-1):
+            other_index = int(raw_other_index)
+            if other_index <= index:
+                continue
+            inspected_pairs += 1
+            if inspected_pairs > _COMPONENT_PAIR_LIMIT:
+                return None
+            degrees[index] += 1
+            degrees[other_index] += 1
+    return degrees
 
 
 def _writer_footprints_are_disjoint(
@@ -704,27 +738,8 @@ def _writer_footprints_are_disjoint(
 ) -> bool:
     """Verify all final writer footprints without materialising all pairs."""
 
-    if len(footprints) < 2:
-        return True
-    try:
-        tree = _STRtree(footprints)
-    except _GEOMETRY_ERRORS:
-        return False
-    inspected_pairs = 0
-    for index, footprint in enumerate(footprints):
-        try:
-            nearby = tree.query(footprint, predicate="intersects")
-        except _GEOMETRY_ERRORS:
-            return False
-        for raw_other_index in np.asarray(nearby).reshape(-1):
-            other_index = int(raw_other_index)
-            if other_index <= index:
-                continue
-            inspected_pairs += 1
-            if inspected_pairs > _COMPONENT_PAIR_LIMIT:
-                return False
-            return False
-    return True
+    degrees = _writer_footprint_contact_degrees(footprints)
+    return degrees is not None and not any(degrees)
 
 
 def _prepare_component_footprints(
@@ -760,6 +775,18 @@ def _prepare_component_footprints(
             return None
         expected_areas.append(expected_area)
         original_writer.append(footprint)
+
+    # Most vector outlines already consist of disjoint float32 footprints.
+    # Prove that once with the exact writer-domain STRtree before entering the
+    # bounded repair search.  The repair search deliberately inspects a wider
+    # neighbourhood around every component; on dense but disjoint artwork that
+    # unnecessary work can exhaust the pair budget and reject valid geometry.
+    contact_degrees = _writer_footprint_contact_degrees(original_writer)
+    if contact_degrees is None:
+        return None
+    if not any(contact_degrees):
+        return list(polygons), [(0.0, 0.0)] * len(polygons)
+
     try:
         original_tree = _STRtree(original_writer)
     except _GEOMETRY_ERRORS:
@@ -778,12 +805,39 @@ def _prepare_component_footprints(
     max_writer_shift = (
         separation_mm * _COMPONENT_MAX_STEPS * math.sqrt(2.0)
     )
-    prepared: list[_Polygon] = []
-    current_writer: list[_Polygonal] = []
-    selected_offsets: list[tuple[float, float]] = []
+    prepared: list[_Polygon | None] = [None] * len(polygons)
+    current_writer: dict[int, _Polygonal] = {}
+    selected_offsets: list[tuple[float, float]] = [
+        (0.0, 0.0)
+    ] * len(polygons)
     inspected_pairs = [0]
 
-    for index, poly in enumerate(polygons):
+    # Components without writer-domain contacts are immutable obstacles and
+    # need no repair search.  Accept them first, then repair each contact graph
+    # from its highest-degree/largest anchor outwards.  Processing by source
+    # order can leave a large shared anchor until last, when no single bounded
+    # translation can avoid all of its already accepted neighbours.
+    for index, degree in enumerate(contact_degrees):
+        if degree != 0:
+            continue
+        prepared[index] = polygons[index]
+        current_writer[index] = original_writer[index]
+
+    repair_order = sorted(
+        (
+            index
+            for index, degree in enumerate(contact_degrees)
+            if degree > 0
+        ),
+        key=lambda index: (
+            -contact_degrees[index],
+            -expected_areas[index],
+            index,
+        ),
+    )
+
+    for index in repair_order:
+        poly = polygons[index]
         accepted: tuple[_Polygon, _Polygonal, tuple[float, float]] | None = None
         for x_offset, y_offset in offsets:
             try:
@@ -827,13 +881,16 @@ def _prepare_component_footprints(
         if accepted is None:
             return None
         candidate, writer_candidate, offset = accepted
-        prepared.append(candidate)
-        current_writer.append(writer_candidate)
-        selected_offsets.append(offset)
+        prepared[index] = candidate
+        current_writer[index] = writer_candidate
+        selected_offsets[index] = offset
 
-    if not _writer_footprints_are_disjoint(current_writer):
+    if any(candidate is None for candidate in prepared):
         return None
-    return prepared, selected_offsets
+    final_writer = [current_writer[index] for index in range(len(polygons))]
+    if not _writer_footprints_are_disjoint(final_writer):
+        return None
+    return [candidate for candidate in prepared if candidate is not None], selected_offsets
 
 
 def prepare_component_footprints_for_float32(
@@ -1067,42 +1124,37 @@ def _repair_polygon_ring_contacts(
     return _normalise_polygonal(repaired)
 
 
-def _extrude_polygon_unit_height_indexed(poly: _Polygon) -> trimesh.Trimesh:
-    """Build a unit-height prism from triangulation boundary indices."""
-    try:
-        vertices_2d, cap_faces = trimesh.creation.triangulate_polygon(
-            poly, engine="manifold"
-        )
-    except _RECOVERABLE_EXPORT_ERRORS:
-        rings = [
-            np.asarray(poly.exterior.coords, dtype=np.float64)[:-1, :2],
-            *[
-                np.asarray(ring.coords, dtype=np.float64)[:-1, :2]
-                for ring in poly.interiors
-            ],
-        ]
-        if any(len(ring) < 3 for ring in rings):
-            raise ValueError("Vector polygon contains a degenerate ring")
-        vertices_2d = np.vstack(rings)
-        ring_ends = np.cumsum([len(ring) for ring in rings], dtype=np.uint32)
-        cap_faces = _triangulate_float64(vertices_2d, ring_ends).reshape((-1, 3))
-
+def _validated_cap_triangulation(
+    vertices_2d: np.ndarray,
+    cap_faces: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float] | None:
+    """Return an oriented cap and non-branching boundary, or ``None``."""
     vertices_2d = np.asarray(vertices_2d, dtype=np.float64)
-    cap_faces = np.asarray(cap_faces, dtype=np.int64)
+    cap_faces = np.asarray(cap_faces, dtype=np.int64).copy()
     if (
         vertices_2d.ndim != 2 or vertices_2d.shape[1:] != (2,)
         or cap_faces.ndim != 2 or cap_faces.shape[1:] != (3,)
         or len(cap_faces) == 0 or np.any(cap_faces < 0)
         or np.any(cap_faces >= len(vertices_2d))
     ):
-        raise ValueError("Vector polygon triangulation produced no cap faces")
+        return None
     cap_a = vertices_2d[cap_faces[:, 1]] - vertices_2d[cap_faces[:, 0]]
     cap_b = vertices_2d[cap_faces[:, 2]] - vertices_2d[cap_faces[:, 0]]
     signed_area = cap_a[:, 0] * cap_b[:, 1] - cap_a[:, 1] * cap_b[:, 0]
-    if np.any(signed_area == 0.0):
-        raise ValueError("Vector polygon triangulation has degenerate cap faces")
-    if float(np.mean(signed_area)) < 0.0:
-        cap_faces = cap_faces[:, ::-1]
+    del cap_a, cap_b
+    # Earcut may retain a zero-area cap face for three exactly collinear
+    # boundary vertices. It contributes no coverage and must not become a 3MF
+    # triangle. Drop only those faces; the boundary, watertight and coverage
+    # checks below still fail closed if removing one opens or changes the prism.
+    non_degenerate = signed_area != 0.0
+    if not np.all(non_degenerate):
+        cap_faces = cap_faces[non_degenerate]
+        signed_area = signed_area[non_degenerate]
+    if len(cap_faces) == 0:
+        return None
+    clockwise = signed_area < 0.0
+    if np.any(clockwise):
+        cap_faces[clockwise] = cap_faces[clockwise][:, ::-1]
 
     oriented_edges = np.vstack(
         (cap_faces[:, [0, 1]], cap_faces[:, [1, 2]], cap_faces[:, [2, 0]])
@@ -1112,10 +1164,120 @@ def _extrude_polygon_unit_height_indexed(poly: _Polygon) -> trimesh.Trimesh:
         sorted_edges, axis=0, return_inverse=True, return_counts=True
     )
     if np.any(counts > 2):
-        raise ValueError("Vector cap triangulation produced non-manifold edges")
+        return None
     boundary = oriented_edges[counts[inverse] == 1]
     if len(boundary) == 0:
-        raise ValueError("Vector polygon triangulation produced no boundary")
+        return None
+    boundary_degree = np.bincount(
+        boundary.reshape(-1),
+        minlength=len(vertices_2d),
+    )
+    used_boundary_degree = boundary_degree[boundary_degree > 0]
+    if len(used_boundary_degree) == 0 or np.any(used_boundary_degree != 2):
+        return None
+    cap_area = float(np.abs(signed_area).sum(dtype=np.float64)) * 0.5
+    return vertices_2d, cap_faces, boundary, cap_area
+
+
+def _constrained_cap_triangulation(
+    poly: _Polygon,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Triangulate a difficult cap with GEOS constrained Delaunay."""
+
+    triangulate = getattr(_shapely, "constrained_delaunay_triangles", None)
+    get_parts = getattr(_shapely, "get_parts", None)
+    get_coordinates = getattr(_shapely, "get_coordinates", None)
+    get_num_coordinates = getattr(_shapely, "get_num_coordinates", None)
+    if not all(
+        callable(function)
+        for function in (
+            triangulate,
+            get_parts,
+            get_coordinates,
+            get_num_coordinates,
+        )
+    ):
+        raise ValueError("Constrained polygon triangulation is unavailable")
+    triangles = triangulate(poly)
+    triangle_parts = get_parts(triangles)
+    coordinate_counts = np.asarray(
+        get_num_coordinates(triangle_parts),
+        dtype=np.int64,
+    )
+    if len(coordinate_counts) == 0 or np.any(coordinate_counts != 4):
+        raise ValueError("Constrained triangulation produced non-triangles")
+    coordinates = np.asarray(
+        get_coordinates(triangle_parts),
+        dtype=np.float64,
+    )
+    if coordinates.shape != (len(coordinate_counts) * 4, 2):
+        raise ValueError("Constrained triangulation coordinates are malformed")
+    triangle_coordinates = coordinates.reshape((-1, 4, 2))[:, :3, :]
+    vertices_2d, inverse = np.unique(
+        triangle_coordinates.reshape((-1, 2)),
+        axis=0,
+        return_inverse=True,
+    )
+    cap_faces = inverse.reshape((-1, 3))
+    return vertices_2d, cap_faces
+
+
+def _triangulate_polygon_cap(
+    poly: _Polygon,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Try bounded cap triangulators from fastest to most robust."""
+
+    try:
+        vertices_2d, cap_faces = trimesh.creation.triangulate_polygon(
+            poly, engine="manifold"
+        )
+    except _RECOVERABLE_EXPORT_ERRORS:
+        pass
+    else:
+        validated = _validated_cap_triangulation(vertices_2d, cap_faces)
+        if (
+            validated is not None
+            and _coverage_is_safe(abs(float(poly.area)), validated[3])
+        ):
+            return validated[:3]
+        validated = None
+        del vertices_2d, cap_faces
+
+    rings = [
+        np.asarray(poly.exterior.coords, dtype=np.float64)[:-1, :2],
+        *[
+            np.asarray(ring.coords, dtype=np.float64)[:-1, :2]
+            for ring in poly.interiors
+        ],
+    ]
+    if any(len(ring) < 3 for ring in rings):
+        raise ValueError("Vector polygon contains a degenerate ring")
+    vertices_2d = np.vstack(rings)
+    ring_ends = np.cumsum([len(ring) for ring in rings], dtype=np.uint32)
+    cap_faces = _triangulate_float64(vertices_2d, ring_ends).reshape((-1, 3))
+    validated = _validated_cap_triangulation(vertices_2d, cap_faces)
+    if (
+        validated is not None
+        and _coverage_is_safe(abs(float(poly.area)), validated[3])
+    ):
+        return validated[:3]
+    validated = None
+    del rings, ring_ends, vertices_2d, cap_faces
+
+    vertices_2d, cap_faces = _constrained_cap_triangulation(poly)
+    validated = _validated_cap_triangulation(vertices_2d, cap_faces)
+    if (
+        validated is None
+        or not _coverage_is_safe(abs(float(poly.area)), validated[3])
+    ):
+        raise ValueError("Vector polygon triangulation has invalid topology")
+    return validated[:3]
+
+
+def _extrude_polygon_unit_height_indexed(poly: _Polygon) -> trimesh.Trimesh:
+    """Build a unit-height prism from triangulation boundary indices."""
+
+    vertices_2d, cap_faces, boundary = _triangulate_polygon_cap(poly)
 
     count = len(vertices_2d)
     bottom = np.column_stack((vertices_2d, np.zeros(count, dtype=np.float64)))
@@ -1131,12 +1293,71 @@ def _extrude_polygon_unit_height_indexed(poly: _Polygon) -> trimesh.Trimesh:
     )
 
 
-def _extrude_indexed_parts(geometry: _Polygonal) -> list[trimesh.Trimesh]:
-    """Extrude every polygon part as an independently indexed shell."""
+def _extrude_indexed_parts(
+    geometry: _Polygonal,
+    *,
+    xy_scale: float = 1.0,
+) -> list[trimesh.Trimesh]:
+    """Extrude polygon parts in the exact float32 3MF coordinate domain."""
+
+    scale = _positive_scale(xy_scale)
+    if scale is None:
+        raise ValueError("Vector polygon export requires a positive XY scale")
     parts = _polygon_parts(geometry)
     if not parts:
         raise ValueError("Vector polygon repair produced no extrudable parts")
-    return [_extrude_polygon_unit_height_indexed(part) for part in parts]
+
+    writer_parts_to_extrude: list[_Polygon] = []
+    for part in parts:
+        expected_area = _physical_area(part, scale)
+        writer_geometry = _writer_footprint(part, scale)
+        writer_parts = _polygon_parts(writer_geometry)
+        writer_area = (
+            sum(float(writer_part.area) for writer_part in writer_parts)
+            if writer_parts else None
+        )
+        if (
+            expected_area is None
+            or writer_area is None
+            or not _coverage_is_safe(expected_area, writer_area)
+        ):
+            raise ValueError(
+                "Vector polygon cannot preserve coverage in float32 writer space"
+            )
+        for writer_part in writer_parts:
+            ring_safe_part = _separate_polygon_ring_contacts(
+                writer_part,
+                _FLOAT32_GRID_MM,
+            )
+            if ring_safe_part is None:
+                raise ValueError(
+                    "Vector polygon rings cannot remain separate in float32"
+                )
+            writer_parts_to_extrude.append(ring_safe_part)
+
+    # A sub-float32 bridge can turn one source Polygon into multiple writer
+    # components that touch where the bridge vanished. Separate those new
+    # shells in 2D before allocating any mesh arrays.
+    prepared_writer_parts = prepare_component_footprints_for_float32(
+        writer_parts_to_extrude,
+        xy_scale=1.0,
+    )
+    if prepared_writer_parts is None:
+        raise ValueError(
+            "Vector polygon components cannot remain separate in float32"
+        )
+
+    meshes: list[trimesh.Trimesh] = []
+    for writer_part in prepared_writer_parts:
+        mesh = _extrude_polygon_unit_height_indexed(writer_part)
+        # Triangulation happens after the exact float32 mapping, so a cap
+        # cannot become degenerate only when the 3MF library casts it.
+        # Return source-space XY to preserve the existing caller contract.
+        mesh.vertices[:, :2] /= scale
+        meshes.append(mesh)
+    if not meshes:
+        raise ValueError("Vector polygon repair produced no extrudable parts")
+    return meshes
 
 
 def _meshes_are_export_safe(
@@ -1324,7 +1545,10 @@ def extrude_polygon_for_export(
                 if len(prepared_parts) == 1
                 else _MultiPolygon(prepared_parts)
             )
-            meshes = _extrude_indexed_parts(prepared_candidate)
+            meshes = _extrude_indexed_parts(
+                prepared_candidate,
+                xy_scale=scale,
+            )
             mesh_diagnostics = {}
             if _meshes_are_export_safe(
                 meshes,

@@ -459,7 +459,7 @@ class TestVectorBranchExport:
     @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
     @patch("core.vector_engine.VectorProcessor")
     def test_vector_export_centers_scene_on_selected_printer_bed(self, MockVP, mock_bambu_export, tmp_path):
-        """Vector branch should center ordinary final exports before Bambu 3MF writing."""
+        """3MF placement must not translate vertices before writer serialization."""
         from config import ModelingMode
 
         svg_file = tmp_path / "center-vector.svg"
@@ -474,6 +474,14 @@ class TestVectorBranchExport:
         mesh.metadata["name"] = "White"
         fake_scene.add_geometry(mesh, geom_name="White")
         MockVP.return_value = _build_fake_processor(fake_scene)
+
+        writer_bounds = None
+
+        def capture_writer_bounds(*_args, **kwargs):
+            nonlocal writer_bounds
+            writer_bounds = np.asarray(kwargs["scene"].bounds).copy()
+
+        mock_bambu_export.side_effect = capture_writer_bounds
 
         from core.converter import convert_image_to_3d
 
@@ -498,6 +506,13 @@ class TestVectorBranchExport:
 
         _, kwargs = mock_bambu_export.call_args
         exported_scene = kwargs["scene"]
+        assert writer_bounds is not None
+        writer_center_x = (writer_bounds[0][0] + writer_bounds[1][0]) / 2
+        writer_center_y = (writer_bounds[0][1] + writer_bounds[1][1]) / 2
+        assert writer_center_x == pytest.approx(0.0)
+        assert writer_center_y == pytest.approx(0.0)
+
+        # The retained scene is still centred afterwards for the GLB preview.
         bounds = exported_scene.bounds
         center_x = (bounds[0][0] + bounds[1][0]) / 2
         center_y = (bounds[0][1] + bounds[1][1]) / 2

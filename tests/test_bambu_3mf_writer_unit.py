@@ -2730,6 +2730,55 @@ class TestAnycubicWriterMetadata:
             "1 0 0 0 1 0 0 0 1 128 128 0.2"
         )
 
+    def test_bambu_export_centers_negative_local_vertices_with_build_transform(
+        self,
+        tmp_path,
+    ) -> None:
+        """Bed placement must not be baked into serialized mesh vertices."""
+
+        writer = writer_module.BambuStudio3MFWriter(
+            output_path=str(tmp_path / "bambu-p1s-local-coordinates.3mf"),
+            settings={},
+            color_mode="4-Color",
+            printer_id="bambu-p1s",
+            slicer="BambuStudio",
+            nozzle_size="0.4",
+        )
+        mesh = trimesh.creation.box(extents=[2, 4, 0.4])
+        mesh.apply_translation([-11, -22, 0])
+        writer.add_mesh(mesh, "White", (255, 255, 255))
+
+        out_path = writer.export()
+
+        with zipfile.ZipFile(out_path) as package:
+            model_root = ET.fromstring(package.read("3D/3dmodel.model"))
+            object_root = ET.fromstring(
+                package.read("3D/Objects/object_1.model")
+            )
+
+        core_ns = {
+            "m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
+        }
+        build_item = model_root.find("m:build/m:item", core_ns)
+        vertices = object_root.findall(".//m:vertex", core_ns)
+
+        assert build_item is not None
+        assert build_item.attrib["transform"] == (
+            "1 0 0 0 1 0 0 0 1 139 150 0.2"
+        )
+        assert min(float(vertex.attrib["x"]) for vertex in vertices) == pytest.approx(
+            -12.0
+        )
+        assert max(float(vertex.attrib["x"]) for vertex in vertices) == pytest.approx(
+            -10.0
+        )
+        assert min(float(vertex.attrib["y"]) for vertex in vertices) == pytest.approx(
+            -24.0
+        )
+        assert max(float(vertex.attrib["y"]) for vertex in vertices) == pytest.approx(
+            -20.0
+        )
+
     def test_h2d_0_2_bambu_version_uses_h2_family_client_stamp(self, tmp_path) -> None:
         writer = writer_module.BambuStudio3MFWriter(
             output_path=str(tmp_path / "h2d-0_2.3mf"),

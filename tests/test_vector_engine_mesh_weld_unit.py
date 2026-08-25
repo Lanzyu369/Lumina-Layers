@@ -78,6 +78,43 @@ def test_planar_coverage_uses_extrusion_metadata_without_volume_scan() -> None:
     assert coverage == pytest.approx(12.5)
 
 
+def test_svg_axis_flip_preserves_float32_triangle_area() -> None:
+    """Canvas placement must not collapse an otherwise printable cap face.
+
+    The topology service validates vertices in the writer's float32 domain.
+    Adding the SVG canvas height afterwards changes the float32 rounding
+    phase: this thin but non-zero triangle collapses at ``y ~= 100`` even
+    though it remains representable around the origin.  Coordinate fixing is
+    therefore limited to the exact sign flip; 3MF build-item metadata handles
+    bed placement separately.
+    """
+
+    mesh = trimesh.Trimesh(
+        vertices=np.asarray(
+            [
+                [0.0, 0.0, 0.0],
+                [2.0, 0.0, 0.0],
+                [1.0, 1.0e-6, 0.0],
+            ],
+            dtype=np.float64,
+        ),
+        faces=np.asarray([[0, 1, 2]], dtype=np.int64),
+        process=False,
+    )
+
+    VectorProcessor._fix_coordinates(mesh, svg_height_mm=100.0)
+
+    writer_vertices = np.asarray(mesh.vertices, dtype=np.float32).astype(
+        np.float64
+    )
+    edge_a = writer_vertices[1] - writer_vertices[0]
+    edge_b = writer_vertices[2] - writer_vertices[0]
+    doubled_area = float(np.linalg.norm(np.cross(edge_a, edge_b)))
+
+    assert doubled_area > 0.0
+    assert float(writer_vertices[:, 1].max()) <= 0.0
+
+
 def test_cap_planar_area_is_measured_from_generated_triangles() -> None:
     """Coverage metadata must be derived from the actual cap mesh."""
 

@@ -194,12 +194,12 @@ def _build_material_archive_outline_bridge_fixture() -> tuple[MagicMock, trimesh
 
 
 def _assert_material_archive_outline_mirrored(outline_mesh: trimesh.Trimesh) -> None:
-    """Assert the asymmetric fixture's Outline used the body X mirror."""
+    """Assert Outline uses the body's translation-free axis flips."""
     assert outline_mesh is not None
-    assert float(outline_mesh.bounds[0, 0]) == pytest.approx(25.0)
-    assert float(outline_mesh.bounds[1, 0]) == pytest.approx(95.0)
-    assert float(outline_mesh.bounds[0, 1]) == pytest.approx(15.0)
-    assert float(outline_mesh.bounds[1, 1]) == pytest.approx(70.0)
+    assert float(outline_mesh.bounds[0, 0]) == pytest.approx(-75.0)
+    assert float(outline_mesh.bounds[1, 0]) == pytest.approx(-5.0)
+    assert float(outline_mesh.bounds[0, 1]) == pytest.approx(-65.0)
+    assert float(outline_mesh.bounds[1, 1]) == pytest.approx(-10.0)
 
 
 def _outline_xy_footprint(mesh: trimesh.Trimesh) -> object:
@@ -554,14 +554,12 @@ def test_vector_outline_matches_single_sided_export_transform() -> None:
     )
 
     assert outline_mesh is not None
-    # Body transform order in VectorProcessor.build_mesh:
-    #   1. Y flip: y -> svg_height - y
-    #   2. Single-sided X mirror: x -> svg_width - x
-    # The ring expands that transformed body bbox by outline_width.
-    assert float(outline_mesh.bounds[0, 0]) == pytest.approx(25.0)
-    assert float(outline_mesh.bounds[1, 0]) == pytest.approx(95.0)
-    assert float(outline_mesh.bounds[0, 1]) == pytest.approx(15.0)
-    assert float(outline_mesh.bounds[1, 1]) == pytest.approx(70.0)
+    # Body and Outline only flip signs in vertex space.  The 3MF build item
+    # applies the common bed-placement translation after serialization.
+    assert float(outline_mesh.bounds[0, 0]) == pytest.approx(-75.0)
+    assert float(outline_mesh.bounds[1, 0]) == pytest.approx(-5.0)
+    assert float(outline_mesh.bounds[0, 1]) == pytest.approx(-65.0)
+    assert float(outline_mesh.bounds[1, 1]) == pytest.approx(-10.0)
 
 
 def test_vector_outline_material_archive_uses_processor_export_color_mode() -> None:
@@ -605,10 +603,10 @@ def test_vector_outline_material_archive_uses_processor_export_color_mode() -> N
     )
 
     assert outline_mesh is not None
-    assert float(outline_mesh.bounds[0, 0]) == pytest.approx(25.0)
-    assert float(outline_mesh.bounds[1, 0]) == pytest.approx(95.0)
-    assert float(outline_mesh.bounds[0, 1]) == pytest.approx(15.0)
-    assert float(outline_mesh.bounds[1, 1]) == pytest.approx(70.0)
+    assert float(outline_mesh.bounds[0, 0]) == pytest.approx(-75.0)
+    assert float(outline_mesh.bounds[1, 0]) == pytest.approx(-5.0)
+    assert float(outline_mesh.bounds[0, 1]) == pytest.approx(-65.0)
+    assert float(outline_mesh.bounds[1, 1]) == pytest.approx(-10.0)
 
 
 def test_vector_coating_covers_outline_expanded_footprint() -> None:
