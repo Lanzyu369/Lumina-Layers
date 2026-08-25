@@ -6,6 +6,7 @@ import json
 import logging
 from pathlib import Path
 import struct
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -15,6 +16,7 @@ from shapely.geometry import box
 from shapely.ops import unary_union
 
 from core.pipeline import vector_glb_preview
+from core.errors import VectorMeshMemoryBudgetError
 
 
 @pytest.fixture
@@ -545,6 +547,134 @@ def test_export_dispatch_v2_failure_falls_back_to_v1(
     assert result.endswith("preview.glb")
     assert calls == ["scene_reuse", "v1"]
     assert "vector_glb_v2_runtime_fallback" in _record_events(vector_glb_caplog)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        MemoryError("glb allocation failed"),
+        VectorMeshMemoryBudgetError(
+            "vector_glb_export",
+            9 * 1024**3,
+            8 * 1024**3,
+            1 * 1024**3,
+            1,
+            8,
+        ),
+    ],
+)
+def test_export_dispatch_memory_failure_never_retries_v1(
+    monkeypatch,
+    tmp_path: Path,
+    failure: BaseException,
+) -> None:
+    scene = trimesh.Scene()
+    scene.add_geometry(_box_mesh(), geom_name="Red")
+
+    def raise_memory(*_args, **_kwargs):
+        raise failure
+
+    def fail_v1(*_args, **_kwargs):
+        raise AssertionError("V1 must not run after allocator or budget failure")
+
+    monkeypatch.setenv("LUMINA_VECTOR_GLB_KERNEL", "v2")
+    monkeypatch.setattr(
+        vector_glb_preview,
+        "export_vector_glb_preview_v2_scene_reuse",
+        raise_memory,
+    )
+    monkeypatch.setattr(vector_glb_preview, "export_vector_glb_preview_v1", fail_v1)
+
+    with pytest.raises(type(failure)):
+        vector_glb_preview.export_vector_glb_preview(
+            scene=scene,
+            output_path=str(tmp_path / "preview.glb"),
+            structure_mode="Double-sided",
+            color_mode="4-Color (RYBW)",
+            preview_colors={"Red": [255, 0, 0, 255]},
+            slot_list=["Red"],
+            analysis=_analysis_for_v2_test(),
+            ctx={},
+        )
+
+
+def test_v2_rasterizer_import_memory_error_is_not_wrapped(
+    monkeypatch,
+) -> None:
+    """Import-time allocation failure must remain fatal to the GLB request."""
+
+    def fail_import():
+        raise MemoryError("injected rasterizer import allocation failure")
+
+    monkeypatch.setattr(
+        vector_glb_preview,
+        "_get_vector_v2_rasterizer_modules",
+        fail_import,
+    )
+    extrusion = vector_glb_preview.VectorPreviewExtrusion(
+        footprint=box(0, 0, 1, 1),
+        z_min=0.0,
+        z_max=0.08,
+    )
+
+    with pytest.raises(
+        MemoryError,
+        match="injected rasterizer import allocation failure",
+    ):
+        vector_glb_preview._mesh_from_extrusion_v2(
+            extrusion,
+            rgba=(255, 0, 0, 255),
+            pixels_per_mm=4.0,
+        )
+
+
+def test_export_dispatch_checks_scene_memory_before_any_kernel(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    scene = trimesh.Scene()
+    scene.add_geometry(_box_mesh(), geom_name="Red")
+    error = VectorMeshMemoryBudgetError(
+        "vector_glb_export",
+        9 * 1024**3,
+        8 * 1024**3,
+        1 * 1024**3,
+        1,
+        8,
+    )
+    monkeypatch.setattr(
+        sys.modules["core.vector_engine"],
+        "_enforce_vector_scene_export_headroom",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
+    )
+    monkeypatch.setattr(
+        vector_glb_preview,
+        "export_vector_glb_preview_v2_scene_reuse",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("V2 started before memory admission")
+        ),
+    )
+    monkeypatch.setattr(
+        vector_glb_preview,
+        "export_vector_glb_preview_v1",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("V1 started before memory admission")
+        ),
+    )
+
+    with pytest.raises(VectorMeshMemoryBudgetError) as raised:
+        vector_glb_preview.export_vector_glb_preview(
+            scene=scene,
+            output_path=str(tmp_path / "preview.glb"),
+            structure_mode="Double-sided",
+            color_mode="5-Color Extended",
+            preview_colors={"Red": [255, 0, 0, 255]},
+            slot_list=["Red"],
+            analysis=_analysis_for_v2_test(),
+            ctx={},
+        )
+
+    assert raised.value.stage == "vector_glb_export"
 
 
 def test_v2_scene_reuse_export_uses_material_color_and_quantization(

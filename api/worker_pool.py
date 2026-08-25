@@ -7,6 +7,8 @@ to a process pool, with timeout support and graceful shutdown.
 支持超时控制和优雅关闭。
 """
 
+from concurrent.futures import CancelledError as FutureCancelledError
+from concurrent.futures import Future as ConcurrentFuture
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
@@ -17,12 +19,16 @@ import os
 import sys
 import threading
 import time
+import uuid
 
 from api.structured_logging import get_logger
+from core.errors import VectorHostMemoryAdmissionError
 from core.task_parallelism_runtime import (
     OuterDemandPublisher,
+    task_host_memory_budget_scope,
     task_parallelism_runtime_scope,
 )
+from core.vector_mesh_memory import DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
 
 T = TypeVar("T")
 
@@ -32,6 +38,117 @@ _ENV_MAX_TASKS_PER_CHILD = "LUMINA_WORKER_MAX_TASKS_PER_CHILD"
 _DEFAULT_MAX_TASKS_PER_CHILD = 20
 _DARWIN_DEFAULT_MAX_TASKS_PER_CHILD = 1
 _TERMINATE_GRACE_SECONDS = 1.0
+_HOST_MEMORY_MIN_HEADROOM_BYTES = 2 * 1024**3
+_HOST_MEMORY_HEADROOM_DENOMINATOR = 10
+
+
+def _available_host_memory_bytes() -> int | None:
+    """Return current host-available memory when psutil is usable."""
+
+    try:
+        import psutil
+
+        return max(0, int(psutil.virtual_memory().available))
+    except (ImportError, AttributeError, OSError, RuntimeError, ValueError):
+        return None
+
+
+def _usable_host_memory_bytes(available_memory_bytes: int) -> int:
+    """Reserve non-worker headroom from one available-memory sample."""
+
+    available = max(0, int(available_memory_bytes))
+    headroom = max(
+        _HOST_MEMORY_MIN_HEADROOM_BYTES,
+        available // _HOST_MEMORY_HEADROOM_DENOMINATOR,
+    )
+    return max(0, available - headroom)
+
+
+class _HostMemoryReservationGate:
+    """Atomically bound participating tasks inside one production pool."""
+
+    def __init__(
+        self,
+        *,
+        memory_budget_bytes: int,
+        sample_live_memory: bool,
+    ) -> None:
+        self._memory_budget_bytes = max(1, int(memory_budget_bytes))
+        self._sample_live_memory = bool(sample_live_memory)
+        self._lock = threading.Lock()
+        self._reservations: dict[str, tuple[int, object]] = {}
+
+    @property
+    def memory_budget_bytes(self) -> int:
+        return self._memory_budget_bytes
+
+    @property
+    def reserved_bytes(self) -> int:
+        with self._lock:
+            return sum(amount for amount, _owner in self._reservations.values())
+
+    def acquire(
+        self,
+        requested_bytes: int,
+        *,
+        owner: object,
+    ) -> tuple[str, int]:
+        """Reserve one full task cap or raise before it enters the pool."""
+
+        requested = max(1, int(requested_bytes))
+        with self._lock:
+            reserved = sum(
+                amount for amount, _owner in self._reservations.values()
+            )
+            capacity = self._memory_budget_bytes
+            if self._sample_live_memory:
+                available = _available_host_memory_bytes()
+                if available is None:
+                    raise VectorHostMemoryAdmissionError(
+                        requested,
+                        reserved,
+                        capacity,
+                        "memory_probe_unavailable",
+                    )
+                capacity = min(
+                    capacity,
+                    _usable_host_memory_bytes(available),
+                )
+            # A reservation is also the worker-local safety budget.  Never
+            # silently shrink it to whatever happens to be free: Vector work
+            # performs bounded-but-nonzero parsing before the 3D mesh guard,
+            # so an arbitrarily small "successful" reservation would not be a
+            # meaningful admission guarantee.
+            task_budget = requested
+            if (
+                task_budget > self._memory_budget_bytes
+                or reserved + task_budget > capacity
+            ):
+                raise VectorHostMemoryAdmissionError(
+                    requested,
+                    reserved,
+                    capacity,
+                    "host_capacity_busy",
+                )
+            token = uuid.uuid4().hex
+            self._reservations[token] = (task_budget, owner)
+            return token, task_budget
+
+    def release(self, token: str) -> None:
+        """Idempotently release a reservation after its executor future ends."""
+
+        with self._lock:
+            self._reservations.pop(str(token), None)
+
+    def release_owner(self, owner: object) -> None:
+        """Release all reservations for an executor proven to be stopped."""
+
+        with self._lock:
+            for token, (_amount, reservation_owner) in list(
+                self._reservations.items()
+            ):
+                if reservation_owner is owner:
+                    self._reservations.pop(token, None)
 
 
 def _default_max_tasks_per_child() -> int:
@@ -109,6 +226,7 @@ def _run_in_worker_with_context(
     request_id: str | None,
     session_id: str | None,
     demand_snapshot_path: str | None,
+    host_memory_budget_bytes: int | None,
     *args: Any,
 ) -> T:
     """Replay parent-side contextvars inside the worker process before invoking fn.
@@ -122,9 +240,18 @@ def _run_in_worker_with_context(
         set_request_id(request_id)
     if session_id is not None:
         set_session_id(session_id)
-    if demand_snapshot_path is None:
+    if demand_snapshot_path is None and host_memory_budget_bytes is None:
         return fn(*args)
-    with task_parallelism_runtime_scope(demand_snapshot_path):
+    if demand_snapshot_path is None:
+        with task_host_memory_budget_scope(host_memory_budget_bytes):
+            return fn(*args)
+    if host_memory_budget_bytes is None:
+        with task_parallelism_runtime_scope(demand_snapshot_path):
+            return fn(*args)
+    with (
+        task_parallelism_runtime_scope(demand_snapshot_path),
+        task_host_memory_budget_scope(host_memory_budget_bytes),
+    ):
         return fn(*args)
 
 
@@ -133,6 +260,7 @@ def _run_in_worker_with_context_timed(
     request_id: str | None,
     session_id: str | None,
     demand_snapshot_path: str | None,
+    host_memory_budget_bytes: int | None,
     *args: Any,
 ) -> tuple[T, int, int]:
     """Run one contextualized task and return worker-local timing bounds."""
@@ -142,6 +270,7 @@ def _run_in_worker_with_context_timed(
         request_id,
         session_id,
         demand_snapshot_path,
+        host_memory_budget_bytes,
         *args,
     )
     worker_finished_ns = time.perf_counter_ns()
@@ -175,7 +304,9 @@ def _shutdown_executor(
         executor.shutdown(wait=wait)
 
 
-def _terminate_executor_workers(executor: ProcessPoolExecutor) -> int:
+def _terminate_executor_workers(
+    executor: ProcessPoolExecutor,
+) -> tuple[int, int]:
     """Terminate worker processes owned by a ProcessPoolExecutor.
 
     ``asyncio.wait_for`` can cancel the parent-side wait, but it cannot stop
@@ -190,9 +321,10 @@ def _terminate_executor_workers(executor: ProcessPoolExecutor) -> int:
 
     processes = getattr(executor, "_processes", None)
     if not processes:
-        return 0
+        return 0, 0
 
     terminated = 0
+    survivors = 0
     for proc in list(processes.values()):
         if proc is None or not proc.is_alive():
             continue
@@ -204,8 +336,27 @@ def _terminate_executor_workers(executor: ProcessPoolExecutor) -> int:
                 if callable(kill):
                     kill()
                     proc.join(timeout=_TERMINATE_GRACE_SECONDS)
-            terminated += 1
+            if proc.is_alive():
+                survivors += 1
+                _log.error(
+                    "Worker process survived terminate and kill",
+                    extra={
+                        "event": "worker_pool_process_terminate_failed",
+                        "pid": getattr(proc, "pid", None),
+                        "error_type": "WorkerStillAlive",
+                        "error_message": (
+                            "Worker process is still alive after terminate/kill"
+                        ),
+                    },
+                )
+            else:
+                terminated += 1
         except (OSError, RuntimeError, ValueError) as exc:
+            try:
+                still_alive = bool(proc.is_alive())
+            except (OSError, RuntimeError, ValueError):
+                still_alive = True
+            survivors += int(still_alive)
             _log.warning(
                 "Failed to terminate timed-out worker process",
                 extra={
@@ -215,7 +366,7 @@ def _terminate_executor_workers(executor: ProcessPoolExecutor) -> int:
                     "error_message": str(exc),
                 },
             )
-    return terminated
+    return terminated, survivors
 
 
 class WorkerPoolManager:
@@ -234,6 +385,7 @@ class WorkerPoolManager:
         self,
         max_workers: int | None = None,
         default_task_timeout: float | None = None,
+        host_memory_budget_bytes: int | None = None,
     ) -> None:
         """Initialize WorkerPoolManager.
         初始化 WorkerPoolManager。
@@ -244,6 +396,11 @@ class WorkerPoolManager:
             default_task_timeout (float | None): Default seconds before a task
                 times out. Non-positive values disable the default timeout.
                 (默认任务超时秒数；非正数表示禁用默认超时)
+            host_memory_budget_bytes (int | None): Optional fixed admission
+                ceiling, primarily for deterministic tests. Production derives
+                the ceiling from host-available memory with reserved headroom.
+                (可选的固定准入上限，主要用于确定性测试；生产环境会从主机
+                可用内存扣除余量后计算)
 
         The per-child recycle threshold is read once from
         ``LUMINA_WORKER_MAX_TASKS_PER_CHILD`` (default 20) so each pool instance
@@ -261,6 +418,29 @@ class WorkerPoolManager:
         self._demand_publisher: OuterDemandPublisher | None = (
             self._create_demand_publisher()
         )
+        available_memory = (
+            _available_host_memory_bytes()
+            if host_memory_budget_bytes is None
+            else None
+        )
+        resolved_host_budget = (
+            _usable_host_memory_bytes(available_memory)
+            if available_memory is not None
+            else (
+                int(host_memory_budget_bytes)
+                if host_memory_budget_bytes is not None
+                else DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
+            )
+        )
+        self._host_memory_gate = _HostMemoryReservationGate(
+            memory_budget_bytes=max(1, resolved_host_budget),
+            sample_live_memory=host_memory_budget_bytes is None,
+        )
+        self._active_task_lock = threading.Lock()
+        self._active_tasks: dict[
+            str,
+            tuple[object, OuterDemandPublisher | None, str | None],
+        ] = {}
 
     def _create_demand_publisher(self) -> OuterDemandPublisher | None:
         """Create isolated demand state without making it a startup dependency."""
@@ -302,6 +482,51 @@ class WorkerPoolManager:
                 },
             )
 
+    def _register_active_task(
+        self,
+        *,
+        owner: object,
+        publisher: OuterDemandPublisher | None,
+        reservation_token: str | None,
+    ) -> str:
+        """Track one executor task until its underlying work is truly done."""
+
+        token = uuid.uuid4().hex
+        with self._active_task_lock:
+            self._active_tasks[token] = (
+                owner,
+                publisher,
+                reservation_token,
+            )
+        self._update_demand(publisher, "increment")
+        return token
+
+    def _complete_active_task(self, token: str) -> None:
+        """Idempotently release demand and memory for one finished task."""
+
+        with self._active_task_lock:
+            state = self._active_tasks.pop(token, None)
+        if state is None:
+            return
+        _owner, publisher, reservation_token = state
+        if reservation_token is not None:
+            self._host_memory_gate.release(reservation_token)
+        self._update_demand(publisher, "decrement")
+
+    def _complete_executor_generation(self, owner: object) -> None:
+        """Complete every task owned by an executor confirmed to be stopped."""
+
+        with self._active_task_lock:
+            tokens = [
+                token
+                for token, (task_owner, _publisher, _reservation) in (
+                    self._active_tasks.items()
+                )
+                if task_owner is owner
+            ]
+        for token in tokens:
+            self._complete_active_task(token)
+
     def start(self) -> None:
         """Initialize the process pool.
         初始化进程池。
@@ -334,8 +559,13 @@ class WorkerPoolManager:
         with self._pool_lock:
             if self._pool is not failed_pool:
                 return
-            terminated = _terminate_executor_workers(failed_pool)
+            terminated, surviving_workers = _terminate_executor_workers(
+                failed_pool
+            )
             _shutdown_executor(failed_pool, wait=False, cancel_futures=True)
+            if surviving_workers == 0:
+                self._complete_executor_generation(failed_pool)
+                self._host_memory_gate.release_owner(failed_pool)
             self._pool = None
             _log.warning(
                 "Worker pool restarted after failed task",
@@ -344,6 +574,7 @@ class WorkerPoolManager:
                     "reason": reason,
                     "timeout_s": timeout,
                     "terminated_workers": terminated,
+                    "surviving_workers": surviving_workers,
                     "max_workers": self._max_workers,
                     "error_type": reason,
                     "error_message": error_message,
@@ -356,6 +587,7 @@ class WorkerPoolManager:
         fn: Callable[..., T],
         *args: Any,
         timeout: float | None = None,
+        host_memory_reservation_bytes: int | None = None,
     ) -> T:
         """Submit a CPU task to the pool and await result.
         提交 CPU 任务到进程池并等待结果。
@@ -368,6 +600,9 @@ class WorkerPoolManager:
             timeout (float | None): Max seconds to wait. ``None`` uses the
                 pool default; non-positive values disable timeout for this call.
                 (最大等待秒数；``None`` 使用池默认值；非正数表示本次调用不限时)
+            host_memory_reservation_bytes (int | None): Optional memory cap
+                reserved atomically in the parent before this task enters the
+                process pool. (可选；任务入池前由父进程原子预留的内存上限)
 
         Returns:
             T: Function return value. (函数返回值)
@@ -387,6 +622,7 @@ class WorkerPoolManager:
             args,
             timeout=timeout,
             include_timing=False,
+            host_memory_reservation_bytes=host_memory_reservation_bytes,
         )
         return result
 
@@ -395,6 +631,7 @@ class WorkerPoolManager:
         fn: Callable[..., T],
         *args: Any,
         timeout: float | None = None,
+        host_memory_reservation_bytes: int | None = None,
     ) -> tuple[T, dict[str, float]]:
         """Submit a CPU task and return separate pool timing metadata.
 
@@ -405,6 +642,8 @@ class WorkerPoolManager:
             fn: Top-level picklable worker function. 顶层可序列化 worker 函数。
             *args: Scalar arguments or file paths. 标量参数或文件路径。
             timeout: Optional per-call timeout. 可选的单次调用超时。
+            host_memory_reservation_bytes: Optional parent-side atomic memory
+                reservation. 可选的父进程原子内存预留。
 
         Returns:
             tuple: ``(worker_result, timing_seconds)``. worker 原始结果与秒级计时。
@@ -414,10 +653,33 @@ class WorkerPoolManager:
             args,
             timeout=timeout,
             include_timing=True,
+            host_memory_reservation_bytes=host_memory_reservation_bytes,
         )
         if timing is None:  # Defensive invariant; timed submissions set it.
             raise RuntimeError("Timed worker submission returned no timing")
         return result, timing
+
+    def _complete_future_task(
+        self,
+        completed: ConcurrentFuture[Any],
+        task_token: str,
+    ) -> None:
+        """Complete a task unless a broken pool may still have a live worker."""
+
+        if completed.cancelled():
+            self._complete_active_task(task_token)
+            return
+        try:
+            exception = completed.exception()
+        except FutureCancelledError:
+            self._complete_active_task(task_token)
+            return
+        if isinstance(exception, BrokenProcessPool):
+            # CPython marks futures broken before it terminates every worker.
+            # The restart path releases the executor generation only after all
+            # known child processes are confirmed stopped.
+            return
+        self._complete_active_task(task_token)
 
     async def _submit_internal(
         self,
@@ -426,6 +688,7 @@ class WorkerPoolManager:
         *,
         timeout: float | None,
         include_timing: bool,
+        host_memory_reservation_bytes: int | None,
     ) -> tuple[T, dict[str, float] | None]:
         """Run one task while preserving the public ``submit`` return contract."""
         pool = self._pool
@@ -450,20 +713,43 @@ class WorkerPoolManager:
             if demand_publisher is not None
             else None
         )
-        self._update_demand(demand_publisher, "increment")
+        reservation_token: str | None = None
+        task_host_memory_budget: int | None = None
+        if host_memory_reservation_bytes is not None:
+            reservation_token, task_host_memory_budget = (
+                self._host_memory_gate.acquire(
+                    host_memory_reservation_bytes,
+                    owner=pool,
+                )
+            )
+        active_task_token = self._register_active_task(
+            owner=pool,
+            publisher=demand_publisher,
+            reservation_token=reservation_token,
+        )
         submitted_ns = time.perf_counter_ns() if include_timing else None
+        executor_future = None
         try:
-            future = loop.run_in_executor(
-                pool,
+            executor_future = pool.submit(
                 worker_entry,
                 fn,
                 request_id,
                 session_id,
                 demand_snapshot_path,
+                task_host_memory_budget,
                 *args,
             )
+            executor_future.add_done_callback(
+                lambda completed, token=active_task_token: (
+                    self._complete_future_task(
+                        completed,
+                        token,
+                    )
+                )
+            )
+            future = asyncio.wrap_future(executor_future, loop=loop)
             raw_result = await asyncio.wait_for(
-                future,
+                asyncio.shield(future),
                 timeout=effective_timeout,
             )
             if not include_timing:
@@ -504,7 +790,8 @@ class WorkerPoolManager:
             )
             return result, timing
         except asyncio.TimeoutError:
-            future.cancel()
+            if executor_future is not None:
+                executor_future.cancel()
             self._restart_after_failed_pool(
                 pool,
                 reason="task_timeout",
@@ -515,7 +802,8 @@ class WorkerPoolManager:
             self._restart_after_failed_pool(pool, reason="broken_process_pool")
             raise
         finally:
-            self._update_demand(demand_publisher, "decrement")
+            if executor_future is None:
+                self._complete_active_task(active_task_token)
 
     def shutdown(self, wait: bool = True) -> None:
         """Shutdown the pool gracefully.
@@ -597,6 +885,24 @@ class WorkerPoolManager:
 
         publisher = self._demand_publisher
         return publisher.outstanding if publisher is not None else 0
+
+    @property
+    def host_memory_reserved_bytes(self) -> int:
+        """Return bytes promised to still-live executor futures.
+
+        返回已承诺给仍可能运行的 executor future 的主机内存字节数。
+        """
+
+        return self._host_memory_gate.reserved_bytes
+
+    @property
+    def host_memory_budget_bytes(self) -> int:
+        """Return this production pool's fixed host admission ceiling.
+
+        返回当前生产进程池的固定主机内存准入上限。
+        """
+
+        return self._host_memory_gate.memory_budget_bytes
 
     @property
     def max_tasks_per_child(self) -> int | None:

@@ -419,6 +419,155 @@ def test_vector_outline_height_matches_structure_mode(
     assert float(outline_mesh.bounds[1, 2]) == pytest.approx(expected_height)
 
 
+def test_vector_outline_uses_bounded_concatenation_and_runtime_guards() -> None:
+    """Multi-part Outline assembly must avoid Trimesh's copying helper."""
+
+    from core.pipeline import vector_branch
+    from core.pipeline.vector_branch import _generate_vector_outline_mesh
+    from core.vector_engine import _concatenate_meshes_fast
+
+    analysis = MagicMock()
+    analysis.matched_shapes = _matched_shapes_for_fixture()
+    analysis.scale_factor = 1.0
+    analysis.num_layers = 4
+    analysis.bbox = (0.0, 0.0, 100.0, 80.0)
+    ctx = {
+        "spacer_thick": 1.6,
+        "structure_mode": "Single-sided",
+        "color_mode": "8-Color Max",
+        "enable_coating": False,
+    }
+
+    simulated_mesh_bytes = 8 * 1024 * 1024
+    separated_component_counts: list[int] = []
+    original_separate = vector_branch.separate_component_coordinates
+
+    def record_separation(meshes):
+        separated_component_counts.append(len(meshes))
+        return original_separate(meshes)
+
+    with (
+        patch(
+            "core.vector_engine._enforce_vector_mesh_runtime_headroom",
+        ) as guard_mock,
+        patch(
+            "core.vector_engine._concatenate_meshes_fast",
+            wraps=_concatenate_meshes_fast,
+        ) as concatenate_mock,
+        patch(
+            "core.pipeline.vector_branch.trimesh.util.concatenate",
+            side_effect=AssertionError("unbounded outline concatenation used"),
+        ),
+        patch(
+            "core.vector_engine._mesh_array_storage_bytes",
+            return_value=simulated_mesh_bytes,
+        ),
+        patch(
+            "core.pipeline.vector_branch.separate_component_coordinates",
+            side_effect=record_separation,
+        ),
+    ):
+        outline_mesh = _generate_vector_outline_mesh(
+            analysis=analysis,
+            outline_width_mm=2.0,
+            base_aux_color=[255, 255, 255, 255],
+            base_aux_material_name="White",
+            ctx=ctx,
+        )
+
+    assert outline_mesh is not None
+    concatenate_mock.assert_called_once()
+    stages = {call.kwargs["stage"] for call in guard_mock.call_args_list}
+    assert "vector_outline_union" in stages
+    assert "vector_outline_assembly" in stages
+    separation_guard = next(
+        call
+        for call in guard_mock.call_args_list
+        if call.kwargs["stage"] == "vector_outline_coordinate_separation"
+    )
+    retained_bytes = separated_component_counts[0] * simulated_mesh_bytes
+    assert separation_guard.kwargs["estimated_additional_bytes"] >= (
+        retained_bytes * 6
+    )
+
+
+@pytest.mark.parametrize(
+    "fatal_error",
+    [
+        MemoryError("injected outline allocation failure"),
+        pytest.param(
+            None,
+            id="typed-budget-error",
+        ),
+    ],
+)
+def test_vector_preview_outline_propagates_fatal_memory_errors(
+    fatal_error,
+) -> None:
+    """Preview branch must preserve memory failures for API error mapping."""
+
+    from config import ModelingMode
+    from core.errors import VectorMeshMemoryBudgetError
+    from core.pipeline import vector_branch
+
+    if fatal_error is None:
+        fatal_error = VectorMeshMemoryBudgetError(
+            "vector_outline_union",
+            9 * 1024**3,
+            8 * 1024**3,
+            1 * 1024**3,
+            2,
+            100,
+        )
+    processor, _scene = _build_material_archive_outline_bridge_fixture()
+    raster_cache = {
+        "target_w": 100,
+        "target_h": 80,
+        "pixel_scale": 1.0,
+        "mask_solid": np.ones((80, 100), dtype=bool),
+        "backing_mask": None,
+        "material_matrix": np.zeros((80, 100, 6), dtype=np.uint8),
+        "matched_rgb": np.zeros((80, 100, 3), dtype=np.uint8),
+        "preview_rgba": np.zeros((80, 100, 4), dtype=np.uint8),
+        "quantized_image": np.zeros((80, 100), dtype=np.int32),
+    }
+    ctx = {
+        "image_path": "preview-outline-memory.svg",
+        "color_mode": "5-Color Extended",
+        "modeling_mode": ModelingMode.VECTOR,
+        "target_width_mm": 100.0,
+        "spacer_thick": 1.6,
+        "structure_mode": "Single-sided",
+        "backing_color_id": 0,
+        "material_source": "material_archive",
+        "enable_outline": True,
+        "outline_width": 5.0,
+    }
+
+    with (
+        patch.object(
+            vector_branch,
+            "_build_vector_processor",
+            return_value=processor,
+        ),
+        patch(
+            "core.vector_engine.VectorProcessor.build_preview_cache",
+            return_value=raster_cache,
+        ),
+        patch(
+            "core.vector_engine._serialize_vector_parse_clip_cache",
+            return_value=b"cache",
+        ),
+        patch.object(
+            vector_branch,
+            "_generate_vector_outline_mesh",
+            side_effect=fatal_error,
+        ),
+        pytest.raises(type(fatal_error)),
+    ):
+        vector_branch._run_vector_preview_branch(ctx)
+
+
 def test_double_sided_vector_outline_spans_both_coating_faces() -> None:
     """Material vector outlines must use export mode and effective layer height."""
     from core.pipeline.vector_branch import _generate_vector_outline_mesh

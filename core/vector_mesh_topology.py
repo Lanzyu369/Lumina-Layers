@@ -41,6 +41,7 @@ __all__ = [
 _FLOAT32_GRID_MM = 0.0001
 _FLOAT32_MAX = float(np.finfo(np.float32).max)
 _SMALL_MESH_FACE_LIMIT = 64
+_MESH_ANALYSIS_FACE_CHUNK_SIZE = 65_536
 _COMPONENT_PAIR_LIMIT = 250_000
 _COMPONENT_MAX_STEPS = 8
 _COMPONENT_DIRECTIONS = (
@@ -373,18 +374,33 @@ def _analyse_export_mesh(
             return False, None, "writer_coordinate_non_finite", None
         if len(np.unique(writer_vertices, axis=0)) != len(writer_vertices):
             return False, None, "float32_duplicate_vertex", None
-        triangles = writer_vertices[faces].astype(np.float64)
-        edge_a = triangles[:, 1] - triangles[:, 0]
-        edge_b = triangles[:, 2] - triangles[:, 0]
-        crosses = np.cross(edge_a, edge_b)
-        safe = not np.any(np.all(crosses == 0.0, axis=1))
-        reason = None if safe else "float32_degenerate_triangle"
-        coverage = None
-        if safe and measure_coverage:
-            signed_volume_six = np.einsum(
-                "ij,ij->i", triangles[:, 0], crosses
-            ).sum(dtype=np.float64)
-            coverage = abs(float(signed_volume_six)) / 6.0
+        safe = True
+        reason = None
+        signed_volume_six = 0.0
+        chunk_size = max(1, int(_MESH_ANALYSIS_FACE_CHUNK_SIZE))
+        for start in range(0, len(faces), chunk_size):
+            face_chunk = faces[start : start + chunk_size]
+            triangles = writer_vertices[face_chunk].astype(np.float64)
+            edge_a = triangles[:, 1] - triangles[:, 0]
+            edge_b = triangles[:, 2] - triangles[:, 0]
+            crosses = np.cross(edge_a, edge_b)
+            if np.any(np.all(crosses == 0.0, axis=1)):
+                safe = False
+                reason = "float32_degenerate_triangle"
+                break
+            if measure_coverage:
+                signed_volume_six += float(
+                    np.einsum(
+                        "ij,ij->i",
+                        triangles[:, 0],
+                        crosses,
+                    ).sum(dtype=np.float64)
+                )
+        coverage = (
+            abs(signed_volume_six) / 6.0
+            if safe and measure_coverage
+            else None
+        )
     if not safe:
         return False, None, reason, None
     try:

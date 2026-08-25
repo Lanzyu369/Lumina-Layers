@@ -37,6 +37,8 @@ from config import (
     TEMP_DIR,
     ModelingMode as CoreModelingMode,
 )
+from core.errors import VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError
+from core.vector_mesh_memory import resolve_vector_mesh_memory_budget_bytes
 
 from .common import (
     BATCH_DOWNLOAD_TTL_SECONDS,
@@ -45,6 +47,7 @@ from .common import (
     PREVIEW_CACHE_UNAVAILABLE_DETAIL,
     PREVIEW_COLOR_PALETTE_UNAVAILABLE_DETAIL,
     ROUTER_HANDLED_ERRORS,
+    _handle_core_error,
     _resolve_material_backing_index,
     _resolve_session_dynamic_material_settings,
     _require_session,
@@ -288,12 +291,17 @@ async def generate_color_card(
             svg_path,
             lut_path,
             params,
+            host_memory_reservation_bytes=(
+                resolve_vector_mesh_memory_budget_bytes()
+            ),
         )
     except asyncio.TimeoutError:
         raise HTTPException(
             status_code=504,
             detail="Color card 3MF generation timed out.",
         )
+    except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as exc:
+        _handle_core_error(exc, "color-card generation")
     except ROUTER_HANDLED_ERRORS:
         raise HTTPException(
             status_code=500,

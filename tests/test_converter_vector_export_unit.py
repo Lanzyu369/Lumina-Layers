@@ -19,6 +19,7 @@ sys.path.insert(0, _ROOT)
 import pytest
 import trimesh
 import numpy as np
+from core.errors import VectorMeshMemoryBudgetError
 from utils.bambu_3mf_writer import export_scene_with_bambu_metadata, BambuStudio3MFWriter
 
 
@@ -93,6 +94,71 @@ class TestVectorBranchExport:
         )
 
         mock_bambu_export.assert_called_once()
+
+    @patch("core.pipeline.vector_glb_preview.export_vector_glb_preview")
+    @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
+    @patch("core.vector_engine.VectorProcessor")
+    def test_glb_memory_budget_keeps_completed_3mf(
+        self,
+        MockVP,
+        mock_bambu_export,
+        mock_glb_export,
+        tmp_path,
+    ) -> None:
+        from config import ModelingMode
+        from core.converter import convert_image_to_3d
+
+        svg_file = tmp_path / "glb-budget.svg"
+        svg_file.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">'
+            '<rect width="20" height="20" fill="#ff0000"/>'
+            "</svg>",
+            encoding="utf-8",
+        )
+        scene = trimesh.Scene()
+        scene.add_geometry(
+            trimesh.creation.box(extents=(10.0, 10.0, 1.0)),
+            geom_name="White",
+        )
+        MockVP.return_value = _build_fake_processor(scene)
+        lut_path = tmp_path / "lut.npy"
+        np.save(lut_path, np.zeros(10))
+        error = VectorMeshMemoryBudgetError(
+            "vector_glb_preview_copy",
+            9 * 1024**3,
+            8 * 1024**3,
+            1 * 1024**3,
+            1,
+            8,
+        )
+
+        def _guard(_scene, *, stage: str, **_kwargs):
+            if stage == "vector_glb_preview_copy":
+                raise error
+
+        with patch(
+            "core.vector_engine._enforce_vector_scene_export_headroom",
+            side_effect=_guard,
+        ):
+            result = convert_image_to_3d(
+                image_path=str(svg_file),
+                lut_path=str(lut_path),
+                target_width_mm=20.0,
+                spacer_thick=1.2,
+                structure_mode="Single-sided",
+                color_mode="4-Color",
+                add_loop=False,
+                loop_width=5,
+                loop_length=20,
+                loop_hole=3,
+                loop_pos="Top",
+                modeling_mode=ModelingMode.VECTOR,
+            )
+
+        assert result[0] is not None
+        assert result[1] is None
+        mock_bambu_export.assert_called_once()
+        mock_glb_export.assert_not_called()
 
     @patch("core.pipeline.vector_glb_preview.export_vector_glb_preview")
     @patch("core.vector_engine.VectorProcessor")
@@ -257,20 +323,40 @@ class TestVectorBranchExport:
         dummy_lut = str(tmp_path / "dummy-material-backing.npy")
         np.save(dummy_lut, np.zeros(10))
 
-        convert_image_to_3d(
-            image_path=str(svg_file),
-            lut_path=dummy_lut,
-            target_width_mm=30.0,
-            spacer_thick=1.6,
-            structure_mode="Single-sided",
-            color_mode="4-Color",
-            add_loop=False,
-            loop_width=5,
-            loop_length=20,
-            loop_hole=3,
-            loop_pos="Top",
-            modeling_mode=ModelingMode.VECTOR,
-            backing_color_id=1,
+        with (
+            patch(
+                "trimesh.util.concatenate",
+                side_effect=AssertionError(
+                    "board merge must use the bounded vector concatenator"
+                ),
+            ),
+            patch(
+                "core.vector_engine._enforce_vector_mesh_runtime_headroom",
+            ) as memory_guard,
+        ):
+            convert_image_to_3d(
+                image_path=str(svg_file),
+                lut_path=dummy_lut,
+                target_width_mm=30.0,
+                spacer_thick=1.6,
+                structure_mode="Single-sided",
+                color_mode="4-Color",
+                add_loop=False,
+                loop_width=5,
+                loop_length=20,
+                loop_hole=3,
+                loop_pos="Top",
+                modeling_mode=ModelingMode.VECTOR,
+                backing_color_id=1,
+            )
+
+        assert any(
+            call.kwargs.get("stage") == "vector_board_merge"
+            for call in memory_guard.call_args_list
+        )
+        assert any(
+            call.kwargs.get("stage") == "vector_3mf_export"
+            for call in memory_guard.call_args_list
         )
 
         _, build_kwargs = fake_processor.build_mesh.call_args

@@ -38,9 +38,11 @@ inside each test instead of relying on ``caplog.at_level``.
 
 from __future__ import annotations
 
+import gc
 import logging
 import os
 import time
+import weakref
 import zipfile
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -48,6 +50,7 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
+import trimesh
 
 import api.workers.converter_workers as converter_workers_module  # noqa: F401  # imported for side-effect references in mocks
 from api.workers.converter_workers import (
@@ -332,6 +335,137 @@ def test_worker_exports_tile_with_placeholder_on_rasterize_exception(tmp_path, c
         assert warn.error_type == "RuntimeError"
         assert warn.fallback_action == "placeholder_written"
         assert "synthetic rasterize failure" in warn.error_message
+    finally:
+        if os.path.exists(result["zip_path"]):
+            os.unlink(result["zip_path"])
+
+
+def test_worker_propagates_cover_memory_error_without_export() -> None:
+    tiles = [_make_tile("R1C1")]
+    captured: list[dict] = []
+
+    with (
+        patch("core.pipeline.s03_color_replacement._normalize_color_replacements_input", return_value={}),
+        patch("core.vector_engine.VectorProcessor", _FakeVectorProcessor),
+        patch("core.vector_large_format.slice_vector_analysis_into_tiles", return_value=tiles),
+        patch(
+            "api.workers.converter_workers._rasterize_tile_for_cover",
+            side_effect=MemoryError("cover allocation failed"),
+        ),
+        patch(
+            "utils.bambu_3mf_writer.export_scene_with_bambu_metadata",
+            side_effect=_fake_export(captured),
+        ),
+        pytest.raises(MemoryError, match="cover allocation failed"),
+    ):
+        worker_generate_large_format_svg_native(
+            "image.svg",
+            "lut.npy",
+            _params_2x1(),
+        )
+
+    assert captured == []
+
+
+def test_worker_releases_previous_tile_scene_before_next_build() -> None:
+    tiles = [_make_tile("R1C1"), _make_tile("R1C2")]
+    scene_mesh_refs: list[weakref.ReferenceType[trimesh.Trimesh]] = []
+
+    class _ReleaseTrackingProcessor(_FakeVectorProcessor):
+        def build_mesh(self, **_kwargs):
+            if scene_mesh_refs:
+                gc.collect()
+                assert scene_mesh_refs[-1]() is None
+            mesh = trimesh.creation.box(extents=(1.0, 1.0, 0.08))
+            scene_mesh_refs.append(weakref.ref(mesh))
+            scene = trimesh.Scene()
+            scene.add_geometry(mesh, geom_name="Slot1")
+            return scene
+
+    with (
+        patch("core.pipeline.s03_color_replacement._normalize_color_replacements_input", return_value={}),
+        patch("core.vector_engine.VectorProcessor", _ReleaseTrackingProcessor),
+        patch("core.vector_large_format.slice_vector_analysis_into_tiles", return_value=tiles),
+        patch("api.workers.converter_workers._rasterize_tile_for_cover", return_value=None),
+        patch(
+            "utils.bambu_3mf_writer.export_scene_with_bambu_metadata",
+            new=_fake_export([]),
+        ),
+    ):
+        result = worker_generate_large_format_svg_native(
+            "image.svg",
+            "lut.npy",
+            _params_2x1(),
+        )
+
+    try:
+        assert result["tile_count"] == 2
+    finally:
+        if os.path.exists(result["zip_path"]):
+            os.unlink(result["zip_path"])
+
+
+def test_worker_releases_board_merge_sources_before_writer() -> None:
+    tiles = [
+        _make_tile(
+            "R1C1",
+            slot_names=("Slot1",),
+            preview_colors={0: [255, 0, 0, 255]},
+        )
+    ]
+    source_refs: dict[str, weakref.ReferenceType[trimesh.Trimesh]] = {}
+
+    class _BoardMergeProcessor(_FakeVectorProcessor):
+        def build_mesh(self, **_kwargs):
+            color = trimesh.creation.box(extents=(1.0, 1.0, 0.08))
+            color.visual.face_colors = [255, 0, 0, 255]
+            board = trimesh.creation.box(extents=(1.0, 1.0, 1.2))
+            board.visual.face_colors = [255, 255, 255, 255]
+            source_refs["color"] = weakref.ref(color)
+            source_refs["board"] = weakref.ref(board)
+            scene = trimesh.Scene()
+            scene.add_geometry(color, geom_name="Slot1")
+            scene.add_geometry(board, geom_name="Board")
+            return scene
+
+    def _assert_released_then_export(*, output_path: str, **_kwargs) -> None:
+        gc.collect()
+        assert source_refs["color"]() is None
+        assert source_refs["board"]() is None
+        with open(output_path, "wb") as handle:
+            handle.write(b"3mf")
+
+    with (
+        patch(
+            "core.pipeline.s03_color_replacement._normalize_color_replacements_input",
+            return_value={},
+        ),
+        patch("core.vector_engine.VectorProcessor", _BoardMergeProcessor),
+        patch(
+            "core.vector_large_format.slice_vector_analysis_into_tiles",
+            return_value=tiles,
+        ),
+        patch(
+            "api.workers.converter_workers._rasterize_tile_for_cover",
+            return_value=None,
+        ),
+        patch(
+            "utils.bambu_3mf_writer.export_scene_with_bambu_metadata",
+            side_effect=_assert_released_then_export,
+        ),
+    ):
+        result = worker_generate_large_format_svg_native(
+            "image.svg",
+            "lut.npy",
+            {
+                **_params_2x1(),
+                "total_width_mm": 60.0,
+                "tile_width_mm": 60.0,
+            },
+        )
+
+    try:
+        assert result["tile_count"] == 1
     finally:
         if os.path.exists(result["zip_path"]):
             os.unlink(result["zip_path"])
@@ -722,6 +856,66 @@ def test_rasterize_tile_for_cover_uses_canvas_relative_coordinates() -> None:
     )
 
 
+def test_rasterize_tile_cover_caps_full_canvas_for_ten_meter_layout() -> None:
+    """Cover pixels stay thumbnail-sized instead of growing with millimetres."""
+
+    canvas = np.zeros((512, 512, 4), dtype=np.uint8)
+    canvas[..., 3] = 255
+    captured_calls: list[dict] = []
+
+    def fake_canvas_fetch(**kwargs):
+        captured_calls.append(kwargs)
+        return canvas
+
+    tile = _make_tile(
+        "R1C1",
+        x0_mm=0.0,
+        y0_mm=0.0,
+        x1_mm=250.0,
+        y1_mm=250.0,
+    )
+    with patch(
+        "api.workers.converter_workers._get_or_rasterize_full_canvas",
+        side_effect=fake_canvas_fetch,
+    ):
+        image = _rasterize_tile_for_cover(
+            tile,
+            "large.svg",
+            total_width_mm=9999.0,
+            total_height_mm=9999.0,
+        )
+
+    assert image is not None
+    assert len(captured_calls) == 1
+    assert (
+        captured_calls[0]["pixels_per_mm"] * 9999.0
+        <= converter_workers_module._TILE_COVER_MAX_LONGEST_PX
+    )
+
+
+def test_cover_subprocess_disables_full_size_raster_cache(tmp_path) -> None:
+    """One-shot cover children must not retain a second full canvas copy."""
+
+    output_path = tmp_path / "cover.npy"
+    canvas = np.zeros((8, 8, 4), dtype=np.uint8)
+    with patch(
+        "core.pipeline.processing_ops.svg_rasterizer.rasterize_svg",
+        return_value=canvas,
+    ) as rasterize_mock:
+        converter_workers_module._rasterize_canvas_subprocess_entry(
+            "input.svg",
+            100.0,
+            2.0,
+            str(output_path),
+        )
+
+    assert output_path.exists()
+    assert rasterize_mock.call_args.kwargs["crop_to_content"] is False
+    assert rasterize_mock.call_args.kwargs["_min_quality_px"] == 1
+    assert rasterize_mock.call_args.kwargs["_max_longest_px"] == 512
+    assert rasterize_mock.call_args.kwargs["_cache_result"] is False
+
+
 # ---------------------------------------------------------------------------
 # Issue 1 regression — parent-process canvas cache avoids re-spawning
 # ---------------------------------------------------------------------------
@@ -787,7 +981,9 @@ def test_get_or_rasterize_full_canvas_caches_across_calls(tmp_path) -> None:
     assert len(runner_calls) == 1, (
         f"expected 1 subprocess spawn, got {len(runner_calls)}"
     )
-    # Cache returns are independent copies, not the original buffer.
-    assert first is not second
+    # The full canvas is immutable and shared; copying it once per tile would
+    # recreate the exact task-wide memory amplification this cache avoids.
+    assert first is second is third
+    assert first.flags.writeable is False
     np.testing.assert_array_equal(first, second)
     np.testing.assert_array_equal(first, third)

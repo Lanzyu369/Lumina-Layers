@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures.process import BrokenProcessPool
 from contextlib import suppress
 from copy import deepcopy
 import json
@@ -36,6 +37,7 @@ from api.schemas.converter import (
     ConvertGenerateRequest,
     LargeFormatConvertGenerateRequest,
     LargeFormatGenerateRequest,
+    MAX_LARGE_FORMAT_DIMENSION_MM,
     ModelingMode,
     StructureMode,
 )
@@ -59,10 +61,16 @@ from api.workers.converter_workers import (
     worker_generate_model_surface_overlay,
 )
 from core.batch_layout import LayoutResult, XYBBox, layout_shelf_by_row
-from core.errors import CachedPreviewAnalysisError, VectorTopologyError
+from core.errors import (
+    CachedPreviewAnalysisError,
+    VectorHostMemoryAdmissionError,
+    VectorMeshMemoryBudgetError,
+    VectorTopologyError,
+)
 from core.model_surface.types import ModelSurfaceError
 from core.naming import generate_preserved_upload_3mf_filename
 from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
+from core.vector_mesh_memory import resolve_vector_mesh_memory_budget_bytes
 from core.wipe_tower_placement import WIPE_TOWER_MANUAL_WARNING_CODE
 from utils.merged_bambu_3mf_writer import (
     MergedBambu3MFWriter,
@@ -82,6 +90,8 @@ from config import (
 from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
 from core.recipe_order import convert_recipe_between_orders
 from core.vector_large_format import (
+    MAX_LARGE_FORMAT_TILE_COUNT,
+    SVG_RASTER_FALLBACK_MAX_TOTAL_PIXELS,
     SVG_LARGE_FORMAT_DENSITY_REDUCED_WARNING,
     SVG_LARGE_FORMAT_FALLBACK_NATIVE_FAILURE,
     SVG_LARGE_FORMAT_FALLBACK_UNSUPPORTED_FEATURE,
@@ -91,6 +101,7 @@ from core.vector_large_format import (
     format_large_format_tile_label,
     inspect_svg_large_format_support,
     normalize_large_format_source_basename,
+    resolve_large_format_grid_shape,
 )
 from core.material_lut_synthesis import infer_material_archive_base_channel_idx
 from core.material_dynamic_solver import (
@@ -169,6 +180,9 @@ BATCH_MERGE_FAILED_DETAIL: str = (
 )
 BATCH_ITEM_FAILED_DETAIL: str = (
     "This file could not be converted. Re-upload it or check the server log for details."
+)
+BATCH_GENERATION_FAILED_DETAIL: str = (
+    "Batch generation worker became unavailable. Try the batch again."
 )
 MODEL_GENERATION_FAILED_DETAIL: str = (
     "3MF generation failed. Re-run preview and try generating the model again."
@@ -2223,6 +2237,15 @@ async def convert_generate(
             image_path,
             lut_path,
             worker_params,
+            **(
+                {
+                    "host_memory_reservation_bytes": (
+                        resolve_vector_mesh_memory_budget_bytes()
+                    )
+                }
+                if core_modeling_mode == CoreModelingMode.VECTOR
+                else {}
+            ),
         )
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="3MF generation timed out")
@@ -2245,6 +2268,13 @@ async def convert_generate(
         raise HTTPException(
             status_code=409,
             detail=STANDARD_CACHED_ANALYSIS_INVALID_DETAIL,
+        ) from exc
+    except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as exc:
+        _handle_core_error(exc, "3MF generation")
+    except BrokenProcessPool as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=MODEL_GENERATION_FAILED_DETAIL,
         ) from exc
     except ROUTER_HANDLED_ERRORS as exc:
         raise HTTPException(
@@ -2423,7 +2453,12 @@ def _resolve_large_format_dimensions(
 ) -> tuple[float, float]:
     ratio_w = float(cache.get("target_w") or 0.0)
     ratio_h = float(cache.get("target_h") or 0.0)
-    if ratio_w <= 0 or ratio_h <= 0:
+    if (
+        not math.isfinite(ratio_w)
+        or not math.isfinite(ratio_h)
+        or ratio_w <= 0
+        or ratio_h <= 0
+    ):
         raise HTTPException(status_code=409, detail="Preview cache is missing valid aspect ratio data.")
 
     aspect_ratio = ratio_w / ratio_h
@@ -2448,7 +2483,26 @@ def _resolve_large_format_dimensions(
                 detail="Provided width and height do not match the preview aspect ratio.",
             )
 
-    return float(requested_width), float(requested_height)
+    resolved_width = float(requested_width)
+    resolved_height = float(requested_height)
+    for name, value in (
+        ("width", resolved_width),
+        ("height", resolved_height),
+    ):
+        if (
+            not math.isfinite(value)
+            or value <= 0
+            or value > MAX_LARGE_FORMAT_DIMENSION_MM
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Large-format {name} must be finite and no greater "
+                    f"than {MAX_LARGE_FORMAT_DIMENSION_MM:g} mm."
+                ),
+            )
+
+    return resolved_width, resolved_height
 
 
 def _resolve_relief_global_max_height(session_data: dict, request) -> float | None:
@@ -2729,6 +2783,9 @@ async def _generate_large_format_svg_native(
                     "tile_width_mm": tile_width_mm,
                     "tile_height_mm": tile_height_mm,
                 },
+                host_memory_reservation_bytes=(
+                    resolve_vector_mesh_memory_budget_bytes()
+                ),
             )
         finally:
             _remove_temp_path(native_heightmap_path)
@@ -2747,6 +2804,19 @@ async def _generate_large_format_svg_native(
         ) from e
     except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
         _handle_core_error(e, "large-format SVG generation")
+    except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as e:
+        _handle_core_error(e, "large-format SVG generation")
+    except BrokenProcessPool as e:
+        _log_large_format_failure(
+            session_id=sid,
+            failure_kind="svg_native_worker_pool_broken",
+            error_type=type(e).__name__,
+            error_message=str(e),
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=LARGE_FORMAT_GENERATION_FAILED_DETAIL,
+        ) from e
     except ROUTER_HANDLED_ERRORS as e:
         _log_large_format_failure(
             session_id=sid,
@@ -2790,6 +2860,19 @@ async def _generate_large_format_svg_native(
         "grid_rows": result["grid_rows"],
         "warnings": list(warnings or []) + list(result.get("warnings", [])),
     }
+
+
+def _discard_pending_awaitables(awaitables: list, start_index: int) -> None:
+    """Cancel or close unconsumed tile submissions after a fatal failure."""
+
+    for pending in awaitables[max(0, int(start_index)) :]:
+        cancel = getattr(pending, "cancel", None)
+        if callable(cancel):
+            cancel()
+            continue
+        close = getattr(pending, "close", None)
+        if callable(close):
+            close()
 
 
 async def _generate_large_format_raster(
@@ -3208,9 +3291,26 @@ async def _generate_large_format_raster(
                     tile_label=f"R{r + 1}C{c + 1}",
                 )
                 tile_labels.append(label)
-                futures.append(pool.submit(worker_generate_model, tile_path, lut_path, tile_params))
+                futures.append(
+                    pool.submit(
+                        worker_generate_model,
+                        tile_path,
+                        lut_path,
+                        tile_params,
+                        **(
+                            {
+                                "host_memory_reservation_bytes": (
+                                    resolve_vector_mesh_memory_budget_bytes()
+                                )
+                            }
+                            if tile_params.get("modeling_mode")
+                            == CoreModelingMode.VECTOR.value
+                            else {}
+                        ),
+                    )
+                )
 
-        for label, fut in zip(tile_labels, futures):
+        for future_index, (label, fut) in enumerate(zip(tile_labels, futures)):
             try:
                 result = await fut
                 glb_path = result.get("glb_path")
@@ -3225,7 +3325,20 @@ async def _generate_large_format_raster(
                     errors.append(f"{label}: generation failed — {result.get('status_msg', 'unknown')}")
             except asyncio.TimeoutError:
                 errors.append(f"{label}: generation timed out")
+            except BrokenProcessPool as e:
+                _discard_pending_awaitables(futures, future_index + 1)
+                raise HTTPException(
+                    status_code=503,
+                    detail=LARGE_FORMAT_GENERATION_FAILED_DETAIL,
+                ) from e
+            except MemoryError:
+                _discard_pending_awaitables(futures, future_index + 1)
+                raise
+            except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as e:
+                _discard_pending_awaitables(futures, future_index + 1)
+                _handle_core_error(e, "large-format tile generation")
             except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
+                _discard_pending_awaitables(futures, future_index + 1)
                 _handle_core_error(e, "large-format tile generation")
             except ROUTER_HANDLED_ERRORS as e:
                 errors.append(f"{label}: {e}")
@@ -3298,7 +3411,14 @@ def _rasterize_svg_for_large_format_fallback(
         total_width_mm=total_width_mm,
         total_height_mm=total_height_mm,
     )
-    raster_rgba = rasterize_svg(svg_path, total_width_mm, pixels_per_mm=density)
+    raster_rgba = rasterize_svg(
+        svg_path,
+        total_width_mm,
+        pixels_per_mm=density,
+        _min_quality_px=1,
+        _max_total_pixels=SVG_RASTER_FALLBACK_MAX_TOTAL_PIXELS,
+        _cache_result=False,
+    )
     fd, png_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
     os.close(fd)
     save_completed = False
@@ -3416,6 +3536,16 @@ async def convert_generate_large_format(
         request,
         lf.target_height_mm,
     )
+    try:
+        resolve_large_format_grid_shape(
+            total_width_mm=total_w_mm,
+            total_height_mm=total_h_mm,
+            tile_width_mm=float(lf.tile_width_mm),
+            tile_height_mm=float(lf.tile_height_mm),
+            max_tiles=MAX_LARGE_FORMAT_TILE_COUNT,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if request.use_cached_matched_rgb is True:
         _require_large_format_cached_analysis_semantics(
             cache=cache,
@@ -3521,6 +3651,17 @@ async def convert_generate_large_format(
                         or 0
                     ),
                 )
+            except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as exc:
+                _handle_core_error(exc, "large-format SVG generation")
+            except MemoryError:
+                # Starting a second, rasterized build after allocator failure
+                # only increases pressure and can kill the worker host.
+                raise
+            except BrokenProcessPool as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail=LARGE_FORMAT_GENERATION_FAILED_DETAIL,
+                ) from exc
             except HTTPException as exc:
                 if exc.status_code not in {500, 504}:
                     raise
@@ -3619,6 +3760,18 @@ async def convert_generate_large_format(
                     warnings=fallback_warnings,
                     log_tile_failures=native_fallback_error is None,
                 )
+            except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as fallback_exc:
+                _handle_core_error(
+                    fallback_exc,
+                    "large-format raster fallback generation",
+                )
+            except MemoryError:
+                raise
+            except BrokenProcessPool as fallback_exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail=LARGE_FORMAT_GENERATION_FAILED_DETAIL,
+                ) from fallback_exc
             except Exception as fallback_exc:  # noqa: BLE001 - recovery boundary
                 if native_fallback_error is None:
                     raise
@@ -4196,6 +4349,15 @@ async def convert_batch(
                 material_max_layer_count,
                 material_delta_e00_tolerance,
                 separate_backing,
+                **(
+                    {
+                        "host_memory_reservation_bytes": (
+                            resolve_vector_mesh_memory_budget_bytes()
+                        )
+                    }
+                    if modeling_mode == CoreModelingMode.VECTOR.value
+                    else {}
+                ),
             )
 
             # 3. Result processing (main thread)
@@ -4239,6 +4401,42 @@ async def convert_batch(
                     error="Batch item conversion timed out",
                 )
             )
+        except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as e:
+            for prior_result in successful_entries:
+                _remove_temp_paths(
+                    [
+                        prior_result.get("threemf_path"),
+                        prior_result.get("preview_glb_path"),
+                        prior_result.get("metadata_sidecar_path"),
+                    ]
+                )
+            _remove_temp_path(temp_native_bundle_path)
+            _handle_core_error(e, "batch generation")
+        except MemoryError:
+            for prior_result in successful_entries:
+                _remove_temp_paths(
+                    [
+                        prior_result.get("threemf_path"),
+                        prior_result.get("preview_glb_path"),
+                        prior_result.get("metadata_sidecar_path"),
+                    ]
+                )
+            _remove_temp_path(temp_native_bundle_path)
+            raise
+        except BrokenProcessPool as e:
+            for prior_result in successful_entries:
+                _remove_temp_paths(
+                    [
+                        prior_result.get("threemf_path"),
+                        prior_result.get("preview_glb_path"),
+                        prior_result.get("metadata_sidecar_path"),
+                    ]
+                )
+            _remove_temp_path(temp_native_bundle_path)
+            raise HTTPException(
+                status_code=503,
+                detail=BATCH_GENERATION_FAILED_DETAIL,
+            ) from e
         except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
             for prior_result in successful_entries:
                 _remove_temp_paths(

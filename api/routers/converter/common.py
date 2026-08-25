@@ -651,6 +651,11 @@ def _validate_material_archive_relief_minimum_height(
 
 
 def _handle_core_error(e: Exception, context: str) -> NoReturn:
+    # Recoverable admission errors are already logged once at the rejecting
+    # core guard.  Re-logging them with a traceback here would turn an expected
+    # 422 into duplicate ERROR telemetry.
+    if bool(getattr(e, "recoverable", False)):
+        raise to_http_exception(e, context)
     log.exception(
         "Converter operation failed",
         extra={
