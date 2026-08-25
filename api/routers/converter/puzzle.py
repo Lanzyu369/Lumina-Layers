@@ -1228,18 +1228,18 @@ async def generate_puzzle(
             )
             if dynamic_recipe_overrides:
                 try:
-                    # Committed overrides resolve to their applied-time
-                    # snapshot first (exact footprint, immune to later
-                    # selection/content drift); live selection masks only
-                    # serve ids without a snapshot, and the select-all
-                    # style recomputation is intentionally not attempted
-                    # here. _prepare_piece_recipe_override_masks keeps
+                    # Committed overrides resolve ONLY to their applied-time
+                    # snapshot when the session carries snapshot capability;
+                    # a missing/invalid entry is an integrity failure and
+                    # must not silently re-resolve from mutable live state.
+                    # Live masks serve only legacy sessions without the
+                    # snapshot key. _prepare_piece_recipe_override_masks keeps
                     # validating shape/source-grid compatibility per entry.
-                    # 已提交的覆盖优先解析为 apply 时的快照（精确足迹，不受
-                    # 后续选区/内容漂移影响）；实时选区掩码只服务没有快照的
-                    # id；这里有意不做 select-all 式重算。每个条目的形状/
-                    # 栅格兼容性仍由 _prepare_piece_recipe_override_masks
-                    # 校验。
+                    # 会话具备快照能力时，已提交覆盖只解析为 apply 时的快照；
+                    # 缺失或校验失败属于完整性失败，绝不能从可变的实时选区
+                    # 静默重解析。实时掩码仅服务没有快照键的旧会话。每个条目
+                    # 的形状/栅格兼容性仍由
+                    # _prepare_piece_recipe_override_masks 校验。
                     live_region_masks = session_data.get("selected_region_masks")
                     live_region_dict = (
                         dict(live_region_masks)
@@ -1254,6 +1254,7 @@ async def generate_puzzle(
                         if isinstance(applied_mask_snapshot, dict)
                         else {}
                     )
+                    has_snapshot_capability = bool(applied_snapshot_dict)
                     merged_region_masks: dict[str, np.ndarray] = {}
                     for override_item in dynamic_recipe_overrides:
                         override_region_id = str(
@@ -1265,10 +1266,15 @@ async def generate_puzzle(
                             )
                         if override_region_id in merged_region_masks:
                             continue
-                        snapshot_entry = unpack_applied_region_mask(
-                            applied_snapshot_dict.get(override_region_id)
-                        )
-                        if snapshot_entry is not None:
+                        if has_snapshot_capability:
+                            snapshot_entry = unpack_applied_region_mask(
+                                applied_snapshot_dict.get(override_region_id)
+                            )
+                            if snapshot_entry is None:
+                                raise ValueError(
+                                    f"dynamic puzzle committed recipe override "
+                                    f"mask is missing or invalid: {override_region_id}"
+                                )
                             merged_region_masks[override_region_id] = snapshot_entry
                         elif isinstance(
                             live_region_dict.get(override_region_id), np.ndarray

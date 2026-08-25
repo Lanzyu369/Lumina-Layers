@@ -546,6 +546,199 @@ def test_new_preview_clears_overrides_and_applied_mask_snapshot(_iso):
     assert not fresh.get("editor_selection_mask")
 
 
+def test_corrupt_snapshot_with_live_mask_must_not_drift(_iso):
+    """复审复现 1：快照存在但损坏时不得静默退回可变实时选区。
+
+    会话已具备快照能力（dict 非空）且该覆盖条目损坏（形状不符）时，即使
+    实时选区仍能解析出同 id 掩码，也必须确定性 422，而不是把配方套到
+    "后来变化过的几何"上造成足迹漂移。
+    """
+    from api.routers.converter.generate import (
+        _prepare_recipe_override_worker_inputs,
+    )
+    from api.schemas.converter import ConvertGenerateRequest
+
+    store = _iso["store"]
+    sid = _seed_material_archive_session(store)
+    region_id = "__editor_selection__:7"
+    session_data = store.get(sid)
+    session_data[RECIPE_OVERRIDE_APPLIED_MASKS_KEY] = {
+        region_id: pack_applied_region_mask(np.ones((5, 5), dtype=bool)),
+    }
+    drifted_live = np.zeros((6, 6), dtype=bool)
+    drifted_live[0, :4] = True
+    session_data["selected_region_masks"] = {region_id: drifted_live}
+
+    request = ConvertGenerateRequest(
+        lut_name="__material_archive__",
+        color_layers=3,
+        recipe_overrides=[{
+            "region_id": region_id,
+            "recipe": [1, 0, 1],
+            "layer_order": "Top2Bottom",
+        }],
+    )
+    overrides = [{
+        "region_id": region_id,
+        "recipe": [1, 0, 1],
+        "layer_order": "Top2Bottom",
+    }]
+    with pytest.raises(HTTPException) as excinfo:
+        _prepare_recipe_override_worker_inputs(
+            cache=session_data.get("preview_cache"),
+            session_data=session_data,
+            recipe_overrides=overrides,
+            request=request,
+            sid=sid,
+            store=store,
+        )
+    assert excinfo.value.status_code == 422
+    assert region_id in str(excinfo.value.detail)
+    store.close(sid)
+
+
+def test_missing_entry_in_capable_snapshot_dict_is_rejected(_iso):
+    """复审复现 1b：具备快照能力的会话中条目缺失同样确定性拒绝。
+
+    非原子多写窗口可能产生"有快照键但缺该覆盖条目"的会话；此时静默回退
+    到实时选区会漂移足迹，必须报错要求重新替换。
+    """
+    from api.routers.converter.generate import (
+        _prepare_recipe_override_worker_inputs,
+    )
+    from api.schemas.converter import ConvertGenerateRequest
+
+    store = _iso["store"]
+    sid = _seed_material_archive_session(store)
+    region_id = "__editor_selection__:7"
+    other_region = "__editor_selection__:8"
+    session_data = store.get(sid)
+    other_mask = np.zeros((6, 6), dtype=bool)
+    other_mask[5, 5] = True
+    session_data[RECIPE_OVERRIDE_APPLIED_MASKS_KEY] = {
+        other_region: pack_applied_region_mask(other_mask),
+    }
+    live_mask = np.zeros((6, 6), dtype=bool)
+    live_mask[0, :4] = True
+    session_data["selected_region_masks"] = {region_id: live_mask}
+
+    request = ConvertGenerateRequest(
+        lut_name="__material_archive__",
+        color_layers=3,
+        recipe_overrides=[{
+            "region_id": region_id,
+            "recipe": [1, 0, 1],
+            "layer_order": "Top2Bottom",
+        }],
+    )
+    with pytest.raises(HTTPException) as excinfo:
+        _prepare_recipe_override_worker_inputs(
+            cache=session_data.get("preview_cache"),
+            session_data=session_data,
+            recipe_overrides=[{
+                "region_id": region_id,
+                "recipe": [1, 0, 1],
+                "layer_order": "Top2Bottom",
+            }],
+            request=request,
+            sid=sid,
+            store=store,
+        )
+    assert excinfo.value.status_code == 422
+    store.close(sid)
+
+
+def test_snapshot_capability_does_not_reinflate_into_session_store(_iso):
+    """复审复现 2：解包后的快照不得写回会话共享字典重新膨胀。
+
+    打包条目在首次生成后若以裸布尔数组形式出现在
+    selected_region_masks 中，内存版会话将永久持有放大后的数据。
+    """
+    from api.routers.converter.generate import (
+        _prepare_recipe_override_worker_inputs,
+    )
+    from api.schemas.converter import ConvertGenerateRequest
+
+    store = _iso["store"]
+    sid = _seed_material_archive_session(store)
+    region_ids = _select_red_region(client, sid)
+
+    resp = _apply_recipe_override(client, sid, region_ids)
+    assert resp.status_code == 200, resp.text
+    cleared = client.post("/api/convert/selection/mutate", json={
+        "session_id": sid,
+        "operation": "clear",
+        "base_selection_revision": 1,
+        "content_revision": 0,
+    })
+    assert cleared.status_code == 200, cleared.text
+    # Mirror the production failure sequence: the synthetic id is gone from
+    # live state before generate runs.
+    # 复刻生产故障序列：生成前实时状态里已没有合成 id。
+    assert region_ids[0] not in (
+        store.get(sid).get("selected_region_masks") or {}
+    )
+
+    session_data = store.get(sid)
+    request = ConvertGenerateRequest(
+        lut_name="__material_archive__",
+        color_layers=3,
+        recipe_overrides=[{
+            "region_id": region_ids[0],
+            "recipe": [0, 1, 0],
+            "layer_order": "Top2Bottom",
+        }],
+    )
+    mm_path, masks_path = _prepare_recipe_override_worker_inputs(
+        cache=session_data.get("preview_cache"),
+        session_data=session_data,
+        recipe_overrides=[{
+            "region_id": region_ids[0],
+            "recipe": [0, 1, 0],
+            "layer_order": "Top2Bottom",
+        }],
+        request=request,
+        sid=sid,
+        store=store,
+    )
+    assert mm_path is not None and masks_path is not None
+    # Worker inputs still carry the exact committed footprint…
+    # worker 输入仍携带精确的已提交足迹……
+    with open(masks_path, "rb") as mask_file:
+        saved_masks = pickle.load(mask_file)
+    expected = unpack_applied_region_mask(
+        store.get(sid)[RECIPE_OVERRIDE_APPLIED_MASKS_KEY][region_ids[0]]
+    )
+    np.testing.assert_array_equal(saved_masks[region_ids[0]], expected)
+    # …but the shared selection-state dict never gains the raw array back.
+    # ……但共享选区状态字典不会重新出现裸布尔数组。
+    assert region_ids[0] not in (
+        store.get(sid).get("selected_region_masks") or {}
+    )
+    store.close(sid)
+
+
+def test_history_budget_counts_session_field_arrays(_iso):
+    """历史字节预算必须计入 session_fields 内的数组（含打包掩码）。"""
+    from api.replacement_history import (
+        _stack_artifact_nbytes,
+        snapshot_replacement_state,
+    )
+
+    mask = np.zeros((32, 32), dtype=bool)
+    mask[:16, :] = True
+    checkpoint = snapshot_replacement_state(
+        {
+            RECIPE_OVERRIDE_APPLIED_MASKS_KEY: {"r1": pack_applied_region_mask(mask)},
+        },
+        label="budget_probe",
+        include_preview_cache=False,
+    )
+    expected_packed_bytes = ((32 * 32) // 8) * 1
+    assert checkpoint["session_fields_nbytes"] >= expected_packed_bytes
+    assert _stack_artifact_nbytes([checkpoint]) >= expected_packed_bytes
+
+
 def test_undo_redo_keeps_snapshot_in_sync_with_overrides(_iso):
     """撤销/重做时快照随 recipe_overrides 一起恢复。"""
     store = _iso["store"]

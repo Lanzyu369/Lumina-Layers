@@ -120,15 +120,22 @@ def snapshot_replacement_state(
     """
     preview_cache = session_data.get("preview_cache")
     fields = _SESSION_FIELD_KEYS if session_fields is None else session_fields
+    cloned_fields = {
+        key: _clone_value(session_data.get(key))
+        for key in fields
+        if key in session_data
+    }
     checkpoint: dict[str, Any] = {
         "label": str(label),
         "kind": kind,
         "created_at": time.time(),
-        "session_fields": {
-            key: _clone_value(session_data.get(key))
-            for key in fields
-            if key in session_data
-        },
+        "session_fields": cloned_fields,
+        # Session-field arrays (e.g. packed applied-override masks) must count
+        # toward the history byte budget, otherwise the configured limit never
+        # sees them and stack trimming under-accounts memory.
+        # 会话字段里的数组（如位压缩的覆盖掩码快照）必须计入历史字节预算，
+        # 否则配置的上限看不到这部分数据，栈裁剪会低估内存。
+        "session_fields_nbytes": _estimate_value_array_nbytes(cloned_fields),
         "artifact_paths": [],
         "artifact_nbytes": 0,
     }
@@ -385,7 +392,24 @@ def _stack_artifact_nbytes(stack: list[dict[str, Any]]) -> int:
             total += int(checkpoint.get("artifact_nbytes") or 0)
         except (TypeError, ValueError):
             continue
+        try:
+            total += int(checkpoint.get("session_fields_nbytes") or 0)
+        except (TypeError, ValueError):
+            continue
     return total
+
+
+def _estimate_value_array_nbytes(value: Any) -> int:
+    """Sum ``ndarray`` bytes inside an arbitrary cloned session value.
+    统计任意克隆会话值内 ndarray 的字节总量。
+    """
+    if isinstance(value, np.ndarray):
+        return int(value.nbytes)
+    if isinstance(value, dict):
+        return sum(_estimate_value_array_nbytes(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return sum(_estimate_value_array_nbytes(item) for item in value)
+    return 0
 
 
 def _copy_preview_cache_ref(ref: dict[str, Any]) -> dict[str, Any]:
