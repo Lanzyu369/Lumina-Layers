@@ -304,9 +304,15 @@ def test_worker_generate_model_forwards_fridge_magnet_params_intact() -> None:
         "modeling_mode": "high-fidelity",
     }
 
+    def _generate_with_transform_metadata(**kwargs):
+        metadata = kwargs.get("export_transform_metadata")
+        if isinstance(metadata, dict):
+            metadata.update({"x_mirrored": True, "mirror_span_mm": 80.0})
+        return "out.3mf", "out.glb", None, "OK", None
+
     with patch(
         "core.converter.generate_final_model",
-        return_value=("out.3mf", "out.glb", None, "OK", None),
+        side_effect=_generate_with_transform_metadata,
     ) as generate_final_model_mock:
         result = worker_generate_model("image.png", "lut.npy", params)
 
@@ -314,12 +320,22 @@ def test_worker_generate_model_forwards_fridge_magnet_params_intact() -> None:
         "threemf_path": "out.3mf",
         "glb_path": "out.glb",
         "status_msg": "OK",
+        "x_mirrored": True,
+        "mirror_span_mm": 80.0,
     }
-    generate_final_model_mock.assert_called_once_with(
-        image_path="image.png",
-        lut_path="lut.npy",
-        **params,
-    )
+    generate_final_model_mock.assert_called_once()
+    call_kwargs = generate_final_model_mock.call_args.kwargs
+    assert call_kwargs["image_path"] == "image.png"
+    assert call_kwargs["lut_path"] == "lut.npy"
+    assert {
+        key: value
+        for key, value in call_kwargs.items()
+        if key not in {"image_path", "lut_path", "export_transform_metadata"}
+    } == params
+    assert call_kwargs["export_transform_metadata"] == {
+        "x_mirrored": True,
+        "mirror_span_mm": 80.0,
+    }
 
 
 def test_worker_batch_convert_item_forwards_relief_params_intact() -> None:

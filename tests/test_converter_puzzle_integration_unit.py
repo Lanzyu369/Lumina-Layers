@@ -351,7 +351,13 @@ class TestGeneratePuzzleCanary:
             piece_index += 1
             path = tmp_path / f"piece-{piece_index}.3mf"
             path.write_bytes(b"piece-3mf")
-            return {"threemf_path": str(path), "glb_path": None, "status_msg": "ok"}
+            return {
+                "threemf_path": str(path),
+                "glb_path": None,
+                "status_msg": "ok",
+                "x_mirrored": False,
+                "mirror_span_mm": 1.0,
+            }
 
         def _assemble_stub(*, output_path: str, **_kwargs) -> str:
             with open(output_path, "wb") as handle:
@@ -429,7 +435,13 @@ class TestDynamicPuzzlePreviewReuse:
             piece_index += 1
             path = tmp_path / f"externalized-dynamic-piece-{piece_index}.3mf"
             path.write_bytes(b"piece-3mf")
-            return {"threemf_path": str(path), "glb_path": None, "status_msg": "ok"}
+            return {
+                "threemf_path": str(path),
+                "glb_path": None,
+                "status_msg": "ok",
+                "x_mirrored": False,
+                "mirror_span_mm": 1.0,
+            }
 
         def _assemble_stub(*, output_path: str, **_kwargs) -> str:
             Path(output_path).write_bytes(b"combined-3mf")
@@ -466,7 +478,13 @@ class TestDynamicPuzzlePreviewReuse:
             captured_params.append(args[3])
             path = tmp_path / f"dynamic-piece-{piece_index}.3mf"
             path.write_bytes(b"piece-3mf")
-            return {"threemf_path": str(path), "glb_path": None, "status_msg": "ok"}
+            return {
+                "threemf_path": str(path),
+                "glb_path": None,
+                "status_msg": "ok",
+                "x_mirrored": False,
+                "mirror_span_mm": 1.0,
+            }
 
         def _assemble_stub(*, output_path: str, **_kwargs) -> str:
             Path(output_path).write_bytes(b"combined-3mf")
@@ -573,7 +591,13 @@ class TestDynamicPuzzlePreviewReuse:
             captured_params.append(args[3])
             path = tmp_path / f"virtual-piece-{piece_index}.3mf"
             path.write_bytes(b"piece-3mf")
-            return {"threemf_path": str(path), "glb_path": None, "status_msg": "ok"}
+            return {
+                "threemf_path": str(path),
+                "glb_path": None,
+                "status_msg": "ok",
+                "x_mirrored": False,
+                "mirror_span_mm": 1.0,
+            }
 
         def _assemble_stub(*, output_path: str, **_kwargs) -> str:
             Path(output_path).write_bytes(b"combined-3mf")
@@ -655,7 +679,13 @@ class TestDynamicPuzzlePreviewReuse:
             piece_index += 1
             path = tmp_path / f"strict-snapshot-piece-{piece_index}.3mf"
             path.write_bytes(b"piece-3mf")
-            return {"threemf_path": str(path), "glb_path": None, "status_msg": "ok"}
+            return {
+                "threemf_path": str(path),
+                "glb_path": None,
+                "status_msg": "ok",
+                "x_mirrored": False,
+                "mirror_span_mm": 1.0,
+            }
 
         def _assemble_stub(*, output_path: str, **_kwargs) -> str:
             Path(output_path).write_bytes(b"combined-3mf")

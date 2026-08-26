@@ -1518,6 +1518,8 @@ def worker_generate_model(
             - threemf_path (str | None): Path to the generated .3mf file.
             - glb_path (str | None): Path to the generated .glb preview file.
             - status_msg (str): Status message from the converter.
+            - x_mirrored (bool, optional): Effective S09 X-mirror decision.
+            - mirror_span_mm (float, optional): Exact S09 X-mirror span.
     """
     # Lazy imports — executed inside the worker process
     import os
@@ -1582,10 +1584,12 @@ def worker_generate_model(
                 "outline_width": _outline_width_value,
             },
         )
+    export_transform_metadata: dict[str, object] = {}
     try:
         result_tuple = generate_final_model(
             image_path=image_path,
             lut_path=lut_path,
+            export_transform_metadata=export_transform_metadata,
             **normalized_params,
         )
     except VectorMeshMemoryBudgetError:
@@ -1627,11 +1631,21 @@ def worker_generate_model(
         },
     )
 
-    return {
+    result = {
         "threemf_path": threemf_path,
         "glb_path": glb_path,
         "status_msg": status_msg,
     }
+    x_mirrored = export_transform_metadata.get("x_mirrored")
+    mirror_span_mm = export_transform_metadata.get("mirror_span_mm")
+    if isinstance(x_mirrored, bool) and isinstance(mirror_span_mm, (int, float)):
+        result.update(
+            {
+                "x_mirrored": x_mirrored,
+                "mirror_span_mm": float(mirror_span_mm),
+            }
+        )
+    return result
 
 
 def worker_generate_model_surface_overlay(
