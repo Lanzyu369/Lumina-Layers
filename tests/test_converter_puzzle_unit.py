@@ -465,6 +465,7 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
         assembled_calls.append(
             {
                 "piece_count": len(piece_sources),
+                "offsets_x_mm": [source.offset_x_mm for source in piece_sources],
                 "printer_id": printer_id,
                 "slicer": slicer,
                 "nozzle_size": nozzle_size,
@@ -483,6 +484,7 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
     generate_body["params"]["params"].update(
         {
             "modeling_mode": "vector",
+            "structure_mode": "Single-sided",
             "enable_relief": True,
             "height_mode": "color",
             "color_height_map": {"#ff0000": 2.2, "#00ff00": 2.6},
@@ -544,6 +546,11 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
         )
     )
     first_piece = layout.pieces[0]
+    assert np.allclose(
+        assembled_calls[0]["offsets_x_mm"],
+        [piece.bbox_mm[0] for piece in layout.pieces],
+        atol=1e-9,
+    )
     first_boundary_path = Path(submitted_params[0]["piece_boundary_geometry_path"])
     with first_boundary_path.open("r", encoding="utf-8") as handle:
         boundary = json.load(handle)
@@ -574,6 +581,73 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
     assert min(boundary_y_values) >= 0.5 - 1e-6
     assert max(boundary_x_values) <= expected_worker_w - 0.5 + 1e-6
     assert max(boundary_y_values) <= expected_worker_h - 0.5 + 1e-6
+
+
+def test_generate_puzzle_places_face_down_single_sided_pieces_in_globally_mirrored_columns() -> None:
+    """Per-piece X mirrors must also mirror each piece's assembly column."""
+
+    session_id, _preview_cache = _make_session()
+    assembled_sources: list[Any] = []
+
+    async def _submit_stub(
+        _func: object,
+        _piece_image_path: str,
+        _lut_path: str,
+        _worker_params: dict[str, Any],
+    ) -> dict[str, Any]:
+        fd_piece, piece_path = tempfile.mkstemp(suffix=".3mf")
+        os.close(fd_piece)
+        Path(piece_path).write_bytes(b"piece-3mf")
+        return {"threemf_path": piece_path, "glb_path": None, "status_msg": "ok"}
+
+    def _assemble_stub(
+        *,
+        piece_sources: list[Any],
+        output_path: str,
+        **_kwargs: object,
+    ) -> str:
+        assembled_sources.extend(piece_sources)
+        Path(output_path).write_bytes(b"combined-3mf")
+        return output_path
+
+    body = _build_generate_body(session_id)
+    body["params"]["params"]["structure_mode"] = "Single-sided"
+    _mock_pool.submit = AsyncMock(side_effect=_submit_stub)
+
+    try:
+        with patch(
+            "api.routers.converter.puzzle.assemble_puzzle_3mf",
+            side_effect=_assemble_stub,
+        ):
+            response = client.post("/api/convert/generate-puzzle", json=body)
+    finally:
+        _test_store.close(session_id)
+
+    assert response.status_code == 200, response.text
+    layout = build_puzzle_layout(
+        PuzzleLayoutConfig(
+            width_px=120,
+            height_px=80,
+            total_width_mm=90.0,
+            total_height_mm=60.0,
+            style="regular",
+            sizing_mode="grid",
+            rows=2,
+            cols=3,
+            seed=7,
+            connector_style="classic",
+            irregularity_strength=0.35,
+            min_neck_width_mm=1.2,
+        )
+    )
+    expected_offsets = [
+        layout.total_width_mm - piece.bbox_mm[2]
+        for piece in layout.pieces
+    ]
+    actual_offsets = [source.offset_x_mm for source in assembled_sources]
+
+    assert len(actual_offsets) == len(expected_offsets)
+    assert np.allclose(actual_offsets, expected_offsets, atol=1e-9)
 
 
 def test_generate_puzzle_download_survives_source_session_close(tmp_path: Path) -> None:

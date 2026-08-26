@@ -33,10 +33,12 @@ from api.preview_cache_artifacts import (
     is_preview_cache_artifact_ref,
 )
 from api.schemas.converter import (
+    ColorMode,
     ConvertGenerateRequest,
     ModelingMode,
     PuzzleGenerateRequest,
     PuzzleLayoutPreviewRequest,
+    StructureMode,
 )
 from api.schemas.responses import PuzzleGenerateResponse, PuzzleLayoutPreviewResponse
 from api.selection_state import unpack_applied_region_mask
@@ -1424,11 +1426,26 @@ async def generate_puzzle(
             detail="Puzzle generation produced no non-transparent pieces.",
         )
 
+    # S09 mirrors ordinary face-down single-sided pieces inside each piece's
+    # local bounding box. Their assembly columns must therefore be mirrored
+    # across the complete puzzle width as well; otherwise connector tabs are
+    # paired with the wrong neighbouring holes. Face-up relief, cloisonne, and
+    # 5-color exports skip the S09 mirror and retain their original columns.
+    piece_exports_are_x_mirrored = (
+        generate_params.structure_mode == StructureMode.SINGLE_SIDED
+        and generate_params.color_mode != ColorMode.FIVE_COLOR_EXT
+        and not generate_params.enable_relief
+        and not generate_params.enable_cloisonne
+    )
     piece_sources = [
         PuzzlePiece3MFSource(
             label=piece.label,
             threemf_path=threemf_path,
-            offset_x_mm=piece.bbox_mm[0],
+            offset_x_mm=(
+                layout.total_width_mm - piece.bbox_mm[2]
+                if piece_exports_are_x_mirrored
+                else piece.bbox_mm[0]
+            ),
             offset_y_mm=layout.total_height_mm - piece.bbox_mm[3],
         )
         for piece, threemf_path in successful_entries
