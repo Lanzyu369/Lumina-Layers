@@ -208,6 +208,89 @@ class _MeshExportEntry:
     color_rgb: tuple[int, int, int]
 
 
+def _materialize_n3mf_mesh_view_arrays(mesh: object) -> tuple[np.ndarray, np.ndarray]:
+    """Materialize and validate the exact arrays consumed by the 3MF writer.
+    只生成一次并校验 3MF 写入器实际消费的数组。
+    """
+
+    source_vertices = np.asarray(getattr(mesh, "vertices", None))
+    source_faces = np.asarray(getattr(mesh, "faces", None))
+    if (
+        source_vertices.ndim != 2
+        or source_vertices.shape[1:] != (3,)
+        or len(source_vertices) == 0
+        or source_faces.ndim != 2
+        or source_faces.shape[1:] != (3,)
+        or len(source_faces) == 0
+    ):
+        raise ValueError("3MF mesh arrays must be non-empty Nx3 arrays")
+    if not np.all(np.isfinite(source_vertices)):
+        raise ValueError("3MF mesh vertices must be finite")
+    if np.any(source_faces < 0) or np.any(source_faces >= len(source_vertices)):
+        raise ValueError("3MF mesh face index is out of range")
+    if len(source_vertices) > np.iinfo(np.uint32).max:
+        raise ValueError("3MF mesh exceeds uint32 vertex indices")
+
+    from core.vector_mesh_topology import mesh_is_float32_safe
+
+    if not mesh_is_float32_safe(mesh, xy_scale=1.0):
+        raise ValueError("3MF mesh is unsafe in float32 writer coordinates")
+
+    vertices = np.ascontiguousarray(source_vertices, dtype=np.float32)
+    faces = np.ascontiguousarray(source_faces, dtype=np.uint32)
+    for start in range(0, len(faces), 65_536):
+        triangles = vertices[faces[start : start + 65_536]]
+        cross = np.cross(
+            triangles[:, 1] - triangles[:, 0],
+            triangles[:, 2] - triangles[:, 0],
+        )
+        if np.any(np.all(cross == 0.0, axis=1)):
+            raise ValueError("3MF mesh contains a float32-degenerate triangle")
+    vertices.setflags(write=False)
+    faces.setflags(write=False)
+    return vertices, faces
+
+
+def _queue_n3mf_mesh_object(
+    *,
+    builder: object,
+    n3mf: object,
+    entry: _MeshExportEntry,
+    material_group_id: int,
+    material_index: int,
+    retained_views: list[tuple[np.ndarray, np.ndarray]],
+) -> int:
+    """Queue one mesh through zero-copy arrays when the binding supports it."""
+
+    vertices, faces = _materialize_n3mf_mesh_view_arrays(entry.mesh)
+    add_zero_copy = getattr(builder, "add_mesh_object_zero_copy", None)
+    if callable(add_zero_copy):
+        object_id = add_zero_copy(
+            entry.object_name,
+            vertices,
+            faces,
+            material_group_id,
+            material_index,
+        )
+        retained_views.append((vertices, faces))
+        return int(object_id)
+
+    # neroued-3mf < 0.4 owns its input but also requires writable ndarrays.
+    # Keep this compatibility path isolated from the 0.4 zero-copy contract.
+    owning_mesh = n3mf.Mesh.from_arrays(
+        np.array(vertices, dtype=np.float32, order="C", copy=True),
+        np.array(faces, dtype=np.uint32, order="C", copy=True),
+    )
+    return int(
+        builder.add_mesh_object(
+            entry.object_name,
+            owning_mesh,
+            material_group_id,
+            material_index,
+        )
+    )
+
+
 @dataclass(frozen=True)
 class _FilamentProfile:
     family: str
@@ -2043,7 +2126,8 @@ class BambuStudio3MFWriter:
         orca_version = self._get_orca_slicer_version_tag()
         if orca_version:
             builder.add_metadata("OrcaSlicer", orca_version)
-        builder.add_metadata("BambuStudio:3mfVersion", "1")
+        if self.slicer != "QIDIStudio":
+            builder.add_metadata("BambuStudio:3mfVersion", "1")
         if self.slicer == "FlashStudio":
             for key, value in (
                 ("Copyright", ""),
@@ -2100,13 +2184,17 @@ class BambuStudio3MFWriter:
 
         object_ids: list[int] = []
         material_index_by_object: list[int] = []
+        retained_mesh_views: list[tuple[np.ndarray, np.ndarray]] = []
         for entry in self.objects:
-            n3mf_mesh = n3mf.Mesh.from_arrays(
-                np.ascontiguousarray(entry.mesh.vertices, dtype=np.float64),
-                np.ascontiguousarray(entry.mesh.faces, dtype=np.int64),
-            )
             material_index = material_indices[entry.material_name]
-            obj_id = builder.add_mesh_object(entry.object_name, n3mf_mesh, mat_group_id, material_index)
+            obj_id = _queue_n3mf_mesh_object(
+                builder=builder,
+                n3mf=n3mf,
+                entry=entry,
+                material_group_id=mat_group_id,
+                material_index=material_index,
+                retained_views=retained_mesh_views,
+            )
             builder.add_build_item(obj_id)
             object_ids.append(obj_id)
             material_index_by_object.append(material_index)

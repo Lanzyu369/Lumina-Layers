@@ -9,6 +9,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 import trimesh
 from PIL import Image
@@ -40,6 +41,137 @@ class _FakeBuilder:
 
     def add_custom_content_type(self, content_type: _FakeContentType) -> None:
         self.content_types.append(content_type)
+
+
+def test_mesh_queue_uses_read_only_float32_uint32_zero_copy_arrays() -> None:
+    mesh = trimesh.creation.box(extents=(2.0, 3.0, 0.2))
+    entry = writer_module._MeshExportEntry(
+        mesh=mesh,
+        object_name="White",
+        material_name="White",
+        color_rgb=(255, 255, 255),
+    )
+    retained: list[tuple[np.ndarray, np.ndarray]] = []
+
+    class OwningMesh:
+        @staticmethod
+        def from_arrays(*_args, **_kwargs):
+            raise AssertionError("owning Mesh.from_arrays path was used")
+
+    class ZeroCopyBuilder:
+        def __init__(self) -> None:
+            self.received = None
+
+        def add_mesh_object_zero_copy(
+            self,
+            name,
+            vertices,
+            faces,
+            material_group_id,
+            material_index,
+        ):
+            self.received = (
+                name,
+                vertices,
+                faces,
+                material_group_id,
+                material_index,
+            )
+            return 17
+
+        def add_mesh_object(self, *_args, **_kwargs):
+            raise AssertionError("owning add_mesh_object path was used")
+
+    builder = ZeroCopyBuilder()
+    object_id = writer_module._queue_n3mf_mesh_object(
+        builder=builder,
+        n3mf=SimpleNamespace(Mesh=OwningMesh),
+        entry=entry,
+        material_group_id=3,
+        material_index=2,
+        retained_views=retained,
+    )
+
+    assert object_id == 17
+    assert builder.received is not None
+    _name, vertices, faces, _pid, _pindex = builder.received
+    assert vertices.dtype == np.float32
+    assert faces.dtype == np.uint32
+    assert vertices.flags.c_contiguous and faces.flags.c_contiguous
+    assert not vertices.flags.writeable and not faces.flags.writeable
+    assert retained == [(vertices, faces)]
+    assert np.array_equal(vertices, np.asarray(mesh.vertices, dtype=np.float32))
+    assert np.array_equal(faces, np.asarray(mesh.faces, dtype=np.uint32))
+
+
+def test_mesh_queue_keeps_owning_compatibility_for_old_neroued_builds() -> None:
+    mesh = trimesh.creation.box(extents=(1.0, 1.0, 0.08))
+    entry = writer_module._MeshExportEntry(
+        mesh=mesh,
+        object_name="White",
+        material_name="White",
+        color_rgb=(255, 255, 255),
+    )
+    retained: list[tuple[np.ndarray, np.ndarray]] = []
+    captured = {}
+
+    class OwningMesh:
+        @staticmethod
+        def from_arrays(vertices, faces):
+            captured["arrays"] = (vertices, faces)
+            return "owning-mesh"
+
+    class LegacyBuilder:
+        def add_mesh_object(self, name, mesh_value, pid, pindex):
+            captured["object"] = (name, mesh_value, pid, pindex)
+            return 9
+
+    object_id = writer_module._queue_n3mf_mesh_object(
+        builder=LegacyBuilder(),
+        n3mf=SimpleNamespace(Mesh=OwningMesh),
+        entry=entry,
+        material_group_id=3,
+        material_index=0,
+        retained_views=retained,
+    )
+
+    assert object_id == 9
+    vertices, faces = captured["arrays"]
+    assert vertices.dtype == np.float32
+    assert faces.dtype == np.uint32
+    assert vertices.flags.writeable and faces.flags.writeable
+    assert captured["object"] == ("White", "owning-mesh", 3, 0)
+    assert retained == []
+
+
+def test_exported_xml_round_trips_validated_float32_vertices(tmp_path: Path) -> None:
+    mesh = trimesh.creation.box(extents=(1.234567, 2.345678, 0.08))
+    mesh.apply_translation((37.1234567, 91.7654321, 0.04))
+    expected = np.asarray(mesh.vertices, dtype=np.float32)
+    writer = BambuStudio3MFWriter(
+        str(tmp_path / "float32-round-trip.3mf"),
+        settings={},
+        color_mode="4-Color",
+        printer_id="bambu-p1s",
+        slicer="BambuStudio",
+        nozzle_size="0.4",
+    )
+    writer.add_mesh(mesh, "White", (255, 255, 255))
+
+    output_path = writer.export()
+
+    with zipfile.ZipFile(output_path) as package:
+        object_root = ET.fromstring(package.read("3D/Objects/object_1.model"))
+    core_ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+    serialized = np.asarray(
+        [
+            (vertex.attrib["x"], vertex.attrib["y"], vertex.attrib["z"])
+            for vertex in object_root.findall(".//m:vertex", core_ns)
+        ],
+        dtype=np.float32,
+    )
+
+    assert np.array_equal(serialized, expected)
 
 
 def _metadata_values(parent: ET.Element) -> dict[str, str]:
