@@ -354,6 +354,7 @@ def convert_image_to_3d(
     final_material_matrix_is_authoritative: bool = False,
     final_material_matrix_authority_mask_path: Optional[str] = None,
     cover_source_path: Optional[str] = None,
+    export_transform_metadata: Optional[Dict[str, object]] = None,
     material_dynamic_layer_count_enabled: bool = False,
     material_min_layer_count: int = 5,
     material_max_layer_count: int = 10,
@@ -372,6 +373,9 @@ def convert_image_to_3d(
             Defaults to ``image_path`` so普通模式与大画幅光栅模式下，每张
             3MF 都使用对应输入图作为封面图源。
             (可选的封面缩略图源路径；缺省镜像 ``image_path``)
+        export_transform_metadata: Optional mutable result populated with the
+            effective export transform. (可选的可变结果容器，用于返回实际导出
+            变换。)
         material_backing_material_index: Optional selected-material index used
             as the backing color when ``material_source`` is
             ``"material_archive"``. Native and legacy LUT flows ignore it.
@@ -625,6 +629,7 @@ def generate_final_model(
     final_material_matrix_is_authoritative: bool = False,
     final_material_matrix_authority_mask_path: Optional[str] = None,
     cover_source_path: Optional[str] = None,
+    export_transform_metadata: Optional[Dict[str, object]] = None,
     material_dynamic_layer_count_enabled: bool = False,
     material_min_layer_count: int = 5,
     material_max_layer_count: int = 10,
@@ -646,6 +651,8 @@ def generate_final_model(
             Forwarded to ``convert_image_to_3d`` which mirrors it onto the
             staged pipeline ctx; defaults to ``image_path``.
             (可选的封面缩略图源路径，最终透传到 staged pipeline ctx)
+        export_transform_metadata: Optional mutable result populated by the
+            export stage. (由导出阶段写入实际变换信息的可选可变结果容器。)
         device_profile_id: Optional generated machine registry device profile
             selection forwarded to ``convert_image_to_3d`` and 3MF export.
             (可选的机器注册表设备配置 ID，透传到主转换与 3MF 导出)
@@ -819,6 +826,7 @@ def generate_final_model(
         material_max_layer_count=material_max_layer_count,
         material_delta_e00_tolerance=material_delta_e00_tolerance,
         cover_source_path=cover_source_path,
+        export_transform_metadata=export_transform_metadata,
     )
 
 
