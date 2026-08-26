@@ -20,6 +20,7 @@ from api.routers.converter.generate import (
     MODEL_GENERATION_FAILED_DETAIL,
     _prepare_model_surface_overlay_worker_params,
     _should_use_model_surface_overlay,
+    _vector_task_memory_reservation_bytes,
 )
 from api.session_store import SessionStore
 from config import ModelingMode as CoreModelingMode, PrinterConfig
@@ -301,6 +302,13 @@ def test_generate_routes_model_surface_session_to_overlay_worker(
     assert submitted_image != str(original_image_path)
     assert submitted_lut == str(lut_path)
     assert submitted_params["surface_model_path"] == str(model_path)
+    assert pool.submit_timed.call_args.kwargs[
+        "host_memory_reservation_bytes"
+    ] == _vector_task_memory_reservation_bytes(
+        str(rendered_surface_art_path),
+        submitted_params,
+        lut_path=str(lut_path),
+    )
     assert submitted_params["surface_model_transform"] == {
         "rotation_deg": {"x": 10, "y": 20, "z": 30}
     }

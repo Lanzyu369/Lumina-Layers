@@ -12,6 +12,7 @@ from core.vector_mesh_memory import (
     ByteBudgetLRU,
     DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES,
     enforce_vector_mesh_memory_budget,
+    estimate_vector_task_memory_reservation_bytes,
     estimate_vector_mesh_build_memory,
     resolve_vector_mesh_memory_budget_bytes,
 )
@@ -103,6 +104,101 @@ def test_parent_host_reservation_tightens_worker_budget(
         assert resolve_vector_mesh_memory_budget_bytes() == 512
     assert (
         resolve_vector_mesh_memory_budget_bytes()
+        == DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
+    )
+
+
+def test_small_svg_task_reservation_uses_artifact_complexity(
+    tmp_path,
+) -> None:
+    """A real-size small SVG must not reserve the full 8 GiB ceiling."""
+
+    mib = 1024**2
+    gib = 1024**3
+    source_path = tmp_path / "source.svg"
+    source_path.write_bytes(b"x" * (2 * mib))
+    parse_cache_path = tmp_path / "parse-cache.pkl"
+    parse_cache_path.write_bytes(b"x" * (3 * mib // 2))
+
+    preview_bytes = estimate_vector_task_memory_reservation_bytes(
+        source_path,
+    )
+    generate_bytes = estimate_vector_task_memory_reservation_bytes(
+        source_path,
+        supporting_paths=(parse_cache_path,),
+    )
+
+    assert gib < preview_bytes < generate_bytes
+    assert generate_bytes <= 5 * gib // 4
+    assert generate_bytes < DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
+
+
+def test_large_svg_task_reservation_scales_without_exceeding_cap(
+    tmp_path,
+) -> None:
+    """Historical 55 MiB-class SVGs retain a multi-GiB safety promise."""
+
+    source_path = tmp_path / "large.svg"
+    with source_path.open("wb") as handle:
+        handle.truncate(55 * 1024**2)
+
+    reservation = estimate_vector_task_memory_reservation_bytes(source_path)
+
+    assert reservation >= 4 * 1024**3
+    assert reservation <= DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
+
+
+def test_large_resident_auxiliary_artifact_expands_task_reservation(
+    tmp_path,
+) -> None:
+    """Large model/cache inputs must be represented in the worker hard cap."""
+
+    source_path = tmp_path / "source.svg"
+    source_path.write_text("<svg/>", encoding="utf-8")
+    typical_model_path = tmp_path / "typical.stl"
+    large_model_path = tmp_path / "large.stl"
+    with typical_model_path.open("wb") as handle:
+        handle.truncate(13 * 1024**2)
+    with large_model_path.open("wb") as handle:
+        handle.truncate(64 * 1024**2)
+
+    source_only = estimate_vector_task_memory_reservation_bytes(source_path)
+    typical_model = estimate_vector_task_memory_reservation_bytes(
+        source_path,
+        resident_paths=(typical_model_path,),
+    )
+    large_model = estimate_vector_task_memory_reservation_bytes(
+        source_path,
+        resident_paths=(large_model_path,),
+    )
+
+    assert typical_model == source_only
+    assert large_model > 2 * 1024**3
+    assert large_model < DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
+
+
+def test_unknown_vector_source_reservation_fails_closed(tmp_path) -> None:
+    """Unreadable or non-SVG sources retain the configured worst-case cap."""
+
+    assert (
+        estimate_vector_task_memory_reservation_bytes(
+            tmp_path / "missing.svg",
+        )
+        == DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
+    )
+    raster_path = tmp_path / "source.png"
+    raster_path.write_bytes(b"png")
+    assert (
+        estimate_vector_task_memory_reservation_bytes(raster_path)
+        == DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
+    )
+    source_path = tmp_path / "source.svg"
+    source_path.write_text("<svg/>", encoding="utf-8")
+    assert (
+        estimate_vector_task_memory_reservation_bytes(
+            source_path,
+            resident_paths=(tmp_path / "missing-model.stl",),
+        )
         == DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
     )
 

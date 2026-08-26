@@ -38,6 +38,7 @@ from api.routers.converter.color_card import _COLOR_CARD_GENERATION_FAILED_DETAI
 from api.routers.converter.generate import _generate_large_format_raster
 from api.routers.converter.generate import _generate_large_format_svg_native
 from api.routers.converter.generate import _rasterize_svg_for_large_format_fallback
+from api.routers.converter.generate import _vector_task_memory_reservation_bytes
 from api.routers.converter.generate import LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL
 from api.routers.converter.generate import LARGE_FORMAT_GENERATION_FAILED_DETAIL
 from api.routers.converter.generate import MODEL_GENERATION_FAILED_DETAIL
@@ -64,6 +65,7 @@ from core.converter import (
     convert_image_to_3d,
 )
 from core.errors import VectorMeshMemoryBudgetError
+from core.vector_mesh_memory import estimate_vector_task_memory_reservation_bytes
 
 _test_store: SessionStore = SessionStore(ttl=1800)
 _test_registry: FileRegistry = FileRegistry()
@@ -126,6 +128,67 @@ def test_large_format_svg_raster_fallback_passes_hard_pixel_budget(
         assert rasterize.call_args.kwargs["_max_total_pixels"] == 12_000_000
     finally:
         os.unlink(png_path)
+
+
+def test_vector_task_reservation_includes_large_worker_inputs(tmp_path) -> None:
+    """A small SVG cannot hide a large model or cached worker artifact."""
+
+    source_path = tmp_path / "source.svg"
+    source_path.write_text("<svg/>", encoding="utf-8")
+    lut_path = tmp_path / "source.npy"
+    lut_path.write_bytes(b"lut")
+    model_path = tmp_path / "surface.stl"
+    with model_path.open("wb") as handle:
+        handle.truncate(64 * 1024**2)
+    material_matrix_path = tmp_path / "material-matrix.npy"
+    material_matrix = np.lib.format.open_memmap(
+        material_matrix_path,
+        mode="w+",
+        dtype=np.uint8,
+        shape=(20 * 1024**2,),
+    )
+    del material_matrix
+    heightmap_path = tmp_path / "heightmap.png"
+    Image.new("L", (4096, 4096), 0).save(heightmap_path)
+
+    model_only_reservation = _vector_task_memory_reservation_bytes(
+        str(source_path),
+        {"surface_model_path": str(model_path)},
+        lut_path=str(lut_path),
+    )
+
+    reservation = _vector_task_memory_reservation_bytes(
+        str(source_path),
+        {
+            "surface_model_path": str(model_path),
+            "converter_params": {
+                "heightmap_path": str(heightmap_path),
+                "material_matrix_path": str(material_matrix_path),
+            },
+        },
+        lut_path=str(lut_path),
+    )
+
+    assert reservation > model_only_reservation > 2 * 1024**3
+    assert reservation <= 8 * 1024**3
+
+
+def test_vector_task_reservation_fails_closed_for_material_archive(tmp_path) -> None:
+    """Implicit material runtimes cannot receive an optimistic file-only cap."""
+
+    source_path = tmp_path / "source.svg"
+    source_path.write_text("<svg/>", encoding="utf-8")
+
+    reservation = _vector_task_memory_reservation_bytes(
+        str(source_path),
+        {
+            "material_source": "material_archive",
+            "selected_materials": ["mat-a", "mat-b"],
+        },
+        lut_path="__material_archive__",
+    )
+
+    assert reservation == 8 * 1024**3
 
 
 def test_large_format_svg_raster_fallback_accepts_percentage_viewbox(
@@ -688,8 +751,16 @@ class TestGenerateParameterCompleteness:
         assert submitted_params["free_color_set"] is None
         assert submitted_params["enable_base_layer_height_modifier"] is True
 
-    def test_vector_generate_forwards_parse_clip_cache_path(self) -> None:
+    def test_vector_generate_forwards_parse_clip_cache_path(self, tmp_path) -> None:
         sid: str = _create_session_with_preview_and_files(_test_store)
+        source_path = tmp_path / "source.svg"
+        source_path.write_bytes(b"x" * (2 * 1024**2))
+        parse_cache_path = tmp_path / "vector-parse-cache.pkl"
+        parse_cache_path.write_bytes(b"x" * (3 * 1024**2 // 2))
+        lut_path = tmp_path / "test-lut.npy"
+        np.save(lut_path, np.zeros((1, 3), dtype=np.uint8))
+        _test_store.put(sid, "image_path", str(source_path))
+        _test_store.put(sid, "lut_path", str(lut_path))
         _test_store.put(
             sid,
             "preview_cache",
@@ -697,7 +768,7 @@ class TestGenerateParameterCompleteness:
                 "target_w": 120,
                 "target_h": 80,
                 "target_width_mm": 60.0,
-                "vector_parse_clip_cache_path": "/tmp/vector-parse-cache.pkl",
+                "vector_parse_clip_cache_path": str(parse_cache_path),
             },
         )
         _mock_pool.submit = AsyncMock(
@@ -720,16 +791,24 @@ class TestGenerateParameterCompleteness:
 
         assert response.status_code == 200, response.text
         submitted_params = _mock_pool.submit.call_args.args[3]
-        assert (
-            _mock_pool.submit.call_args.kwargs[
-                "host_memory_reservation_bytes"
-            ]
-            == 8 * 1024**3
+        reservation = _mock_pool.submit.call_args.kwargs[
+            "host_memory_reservation_bytes"
+        ]
+        assert reservation == estimate_vector_task_memory_reservation_bytes(
+            source_path,
+            supporting_paths=(parse_cache_path,),
+            resident_paths=(lut_path,),
         )
-        assert submitted_params["vector_parse_clip_cache_path"] == "/tmp/vector-parse-cache.pkl"
+        assert reservation <= 5 * 1024**3 // 4
+        assert submitted_params["vector_parse_clip_cache_path"] == str(
+            parse_cache_path
+        )
 
-    def test_color_card_generate_uses_source_palette(self) -> None:
+    def test_color_card_generate_uses_source_palette(self, tmp_path) -> None:
         sid: str = _create_session_with_preview_and_files(_test_store)
+        lut_path = tmp_path / "test-lut.npy"
+        np.save(lut_path, np.zeros((1, 3), dtype=np.uint8))
+        _test_store.put(sid, "lut_path", str(lut_path))
         _test_store.put(
             sid,
             "preview_cache",
@@ -788,12 +867,68 @@ class TestGenerateParameterCompleteness:
         assert submitted_image_path == captured["svg_path"]
         assert submitted_params["modeling_mode"] == CoreModelingMode.VECTOR
         assert submitted_params["vector_parse_clip_cache_path"] is None
-        assert (
-            _mock_pool.submit.call_args.kwargs[
-                "host_memory_reservation_bytes"
-            ]
-            == 8 * 1024**3
+        assert _mock_pool.submit.call_args.kwargs[
+            "host_memory_reservation_bytes"
+        ] == estimate_vector_task_memory_reservation_bytes(
+            str(captured["svg_path"]),
+            resident_paths=(lut_path,),
         )
+
+    def test_material_archive_color_card_keeps_full_host_reservation(
+        self,
+        tmp_path,
+    ) -> None:
+        """Generated cards still load implicit material solver runtimes."""
+
+        _test_store.clear_all()
+        output_path = tmp_path / "card.3mf"
+        output_path.write_bytes(b"3mf")
+        sid = _test_store.create()
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                "target_w": 4,
+                "target_h": 4,
+                "target_width_mm": 40.0,
+                "color_palette": [{"hex": "#ff0000"}],
+                "color_mode": "4-Color (RYBW)",
+                "color_conf": {"layer_count": 5},
+            },
+        )
+        _test_store.put(sid, "lut_path", "__material_archive__")
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["mat-a", "mat-b"])
+        _test_store.put(sid, "material_layer_count", 5)
+        _test_store.put(sid, "material_layer_height_mm", 0.08)
+        _test_store.put(sid, "material_grid_resolution", 32)
+
+        def _fake_generate_color_card_svg(_hex_colors, **_kwargs):
+            svg_path = tmp_path / "card.svg"
+            svg_path.write_text("<svg/>", encoding="utf-8")
+            return str(svg_path)
+
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": str(output_path),
+                "glb_path": None,
+                "status_msg": "OK",
+            },
+        )
+
+        with patch(
+            "core.color_card.generate_color_card_svg",
+            _fake_generate_color_card_svg,
+        ):
+            response = client.post(
+                "/api/convert/color-card",
+                json={"session_id": sid},
+            )
+
+        assert response.status_code == 200, response.text
+        assert _mock_pool.submit.call_args.kwargs[
+            "host_memory_reservation_bytes"
+        ] == 8 * 1024**3
 
     def test_dynamic_color_card_rejects_before_svg_or_session_mutation(
         self,
@@ -924,6 +1059,7 @@ class TestGenerateParameterCompleteness:
             svg_path = tmp_path / "card.svg"
             svg_path.write_text("<svg></svg>", encoding="utf-8")
             captured["hex_colors"] = list(hex_colors)
+            captured["svg_path"] = str(svg_path)
             return str(svg_path)
 
         _mock_pool.submit = AsyncMock(
@@ -964,11 +1100,10 @@ class TestGenerateParameterCompleteness:
             "OrcaSlicer:bbl:bambu-lab-p1s:0.2"
         )
         assert submitted_params["build_plate_id"] == "smooth-high-temp-plate"
-        assert (
-            _mock_pool.submit.call_args.kwargs[
-                "host_memory_reservation_bytes"
-            ]
-            == 8 * 1024**3
+        assert _mock_pool.submit.call_args.kwargs[
+            "host_memory_reservation_bytes"
+        ] == estimate_vector_task_memory_reservation_bytes(
+            str(captured["svg_path"]),
         )
 
     def test_color_card_endpoint_rejects_unsupported_plate_before_svg(
@@ -2410,7 +2545,10 @@ class TestGenerateRegistryFailureCleanup:
             *,
             host_memory_reservation_bytes,
         ):
-            assert host_memory_reservation_bytes == 8 * 1024**3
+            assert (
+                host_memory_reservation_bytes
+                == estimate_vector_task_memory_reservation_bytes(_image_path)
+            )
             captured_params.update(params)
             return {
                 "zip_path": str(zip_path),
@@ -2482,7 +2620,10 @@ class TestGenerateRegistryFailureCleanup:
             host_memory_reservation_bytes,
         ):
             nonlocal captured_path
-            assert host_memory_reservation_bytes == 8 * 1024**3
+            assert (
+                host_memory_reservation_bytes
+                == estimate_vector_task_memory_reservation_bytes(_image_path)
+            )
             captured_path = params["heightmap_path"]
             assert os.path.exists(captured_path)
             with Image.open(captured_path) as loaded:

@@ -40,6 +40,8 @@ _DARWIN_DEFAULT_MAX_TASKS_PER_CHILD = 1
 _TERMINATE_GRACE_SECONDS = 1.0
 _HOST_MEMORY_MIN_HEADROOM_BYTES = 2 * 1024**3
 _HOST_MEMORY_HEADROOM_DENOMINATOR = 10
+_HOST_MEMORY_SMALL_TASK_HEADROOM_BYTES = 1024**3
+_HOST_MEMORY_SMALL_TASK_MAX_BYTES = 2 * 1024**3
 
 
 def _available_host_memory_bytes() -> int | None:
@@ -114,6 +116,20 @@ class _HostMemoryReservationGate:
                     capacity,
                     _usable_host_memory_bytes(available),
                 )
+                if reserved == 0 and requested <= _HOST_MEMORY_SMALL_TASK_MAX_BYTES:
+                    # A low-memory desktop may have less than the normal 2 GiB
+                    # headroom available even when no Lumina work is running.
+                    # Admit exactly one fully budgeted small task while still
+                    # leaving 1 GiB for the OS/UI. Any concurrent task uses the
+                    # stricter normal capacity because ``reserved`` is nonzero.
+                    single_small_task_capacity = min(
+                        self._memory_budget_bytes,
+                        max(
+                            0,
+                            available - _HOST_MEMORY_SMALL_TASK_HEADROOM_BYTES,
+                        ),
+                    )
+                    capacity = max(capacity, single_small_task_capacity)
             # A reservation is also the worker-local safety budget.  Never
             # silently shrink it to whatever happens to be free: Vector work
             # performs bounded-but-nonzero parsing before the 3D mesh guard,
@@ -424,7 +440,10 @@ class WorkerPoolManager:
             else None
         )
         resolved_host_budget = (
-            _usable_host_memory_bytes(available_memory)
+            max(
+                DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES,
+                _usable_host_memory_bytes(available_memory),
+            )
             if available_memory is not None
             else (
                 int(host_memory_budget_bytes)
