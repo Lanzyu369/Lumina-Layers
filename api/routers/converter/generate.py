@@ -69,7 +69,10 @@ from core.errors import (
 from core.model_surface.types import ModelSurfaceError
 from core.naming import generate_preserved_upload_3mf_filename
 from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
-from core.vector_mesh_memory import resolve_vector_mesh_memory_budget_bytes
+from core.vector_mesh_memory import (
+    estimate_vector_task_memory_reservation_bytes,
+    resolve_vector_mesh_memory_budget_bytes,
+)
 from core.wipe_tower_placement import WIPE_TOWER_MANUAL_WARNING_CODE
 from utils.merged_bambu_3mf_writer import (
     MergedBambu3MFWriter,
@@ -186,6 +189,62 @@ BATCH_GENERATION_FAILED_DETAIL: str = (
 MODEL_GENERATION_FAILED_DETAIL: str = (
     "3MF generation failed. Re-run preview and try generating the model again."
 )
+
+
+def _vector_task_memory_reservation_bytes(
+    source_path: str,
+    params: dict | None = None,
+    *,
+    lut_path: str | None = None,
+) -> int:
+    """Resolve a task cap from every file the worker may retain."""
+
+    if (
+        str((params or {}).get("material_source") or "") == "material_archive"
+        or lut_path == "__material_archive__"
+    ):
+        # Material solvers create persisted or dynamic runtimes that have no
+        # complete parent-visible file list. Keep the configured cap instead
+        # of pretending the SVG alone bounds the worker's resident state.
+        return resolve_vector_mesh_memory_budget_bytes()
+
+    source_identity = os.path.abspath(os.fspath(source_path))
+    supporting_by_identity: dict[str, str] = {}
+    resident_by_identity: dict[str, str] = {}
+    pending_mappings = [params or {}]
+    while pending_mappings:
+        mapping = pending_mappings.pop()
+        for key, value in mapping.items():
+            if isinstance(value, dict):
+                pending_mappings.append(value)
+            if (
+                not str(key).endswith("_path")
+                or not isinstance(value, (str, os.PathLike))
+                or not value
+            ):
+                continue
+            path_value = os.fspath(value)
+            if path_value.startswith("__"):
+                continue
+            identity = os.path.abspath(path_value)
+            if identity == source_identity:
+                continue
+            if str(key) == "vector_parse_clip_cache_path":
+                supporting_by_identity[identity] = path_value
+                resident_by_identity.pop(identity, None)
+            elif identity not in supporting_by_identity:
+                resident_by_identity[identity] = path_value
+    if isinstance(lut_path, str) and lut_path and not lut_path.startswith("__"):
+        identity = os.path.abspath(lut_path)
+        if identity != source_identity and identity not in supporting_by_identity:
+            resident_by_identity[identity] = lut_path
+    return estimate_vector_task_memory_reservation_bytes(
+        source_path,
+        supporting_paths=tuple(supporting_by_identity.values()),
+        resident_paths=tuple(resident_by_identity.values()),
+    )
+
+
 MODEL_SURFACE_SOURCE_UNAVAILABLE_DETAIL: str = (
     "Surface model is unavailable. Re-upload the model, run preview, and try again."
 )
@@ -2230,7 +2289,11 @@ async def convert_generate(
             **(
                 {
                     "host_memory_reservation_bytes": (
-                        resolve_vector_mesh_memory_budget_bytes()
+                        _vector_task_memory_reservation_bytes(
+                            image_path,
+                            worker_params,
+                            lut_path=lut_path,
+                        )
                     )
                 }
                 if core_modeling_mode == CoreModelingMode.VECTOR
@@ -2769,7 +2832,11 @@ async def _generate_large_format_svg_native(
                     "tile_height_mm": tile_height_mm,
                 },
                 host_memory_reservation_bytes=(
-                    resolve_vector_mesh_memory_budget_bytes()
+                    _vector_task_memory_reservation_bytes(
+                        image_path,
+                        shared_params,
+                        lut_path=lut_path,
+                    )
                 ),
             )
         finally:
@@ -3285,7 +3352,11 @@ async def _generate_large_format_raster(
                         **(
                             {
                                 "host_memory_reservation_bytes": (
-                                    resolve_vector_mesh_memory_budget_bytes()
+                                    _vector_task_memory_reservation_bytes(
+                                        tile_path,
+                                        tile_params,
+                                        lut_path=lut_path,
+                                    )
                                 )
                             }
                             if tile_params.get("modeling_mode")
@@ -4337,7 +4408,10 @@ async def convert_batch(
                 **(
                     {
                         "host_memory_reservation_bytes": (
-                            resolve_vector_mesh_memory_budget_bytes()
+                            _vector_task_memory_reservation_bytes(
+                                temp_path,
+                                lut_path=lut_path,
+                            )
                         )
                     }
                     if modeling_mode == CoreModelingMode.VECTOR.value

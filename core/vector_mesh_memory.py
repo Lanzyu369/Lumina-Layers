@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import dataclass
 import os
+from pathlib import Path
 from typing import Callable, Generic, TypeVar
 
 from core.errors import VectorMeshMemoryBudgetError
@@ -20,6 +21,10 @@ _VECTOR_MESH_FIXED_WORKING_BYTES = 128 * 1024 * 1024
 _VECTOR_MESH_BYTES_PER_RUN_COORDINATE = 192
 _VECTOR_MESH_BYTES_PER_SOURCE_COORDINATE = 128
 _VECTOR_MESH_TOPOLOGY_BYTES_PER_GROUP_COORDINATE = 512
+_VECTOR_TASK_RESERVATION_BASE_BYTES = 1024**3
+_VECTOR_TASK_RESERVATION_BYTES_PER_ARTIFACT_BYTE = 64
+_VECTOR_TASK_INCLUDED_RESIDENT_BYTES = 16 * 1024**2
+_VECTOR_TASK_BYTES_PER_EXCESS_RESIDENT_BYTE = 32
 
 
 _KeyT = TypeVar("_KeyT")
@@ -305,6 +310,121 @@ def resolve_vector_mesh_memory_budget_bytes() -> int:
     if host_reservation is None:
         return configured_budget
     return min(configured_budget, max(1, int(host_reservation)))
+
+
+def estimate_vector_task_memory_reservation_bytes(
+    source_path: str | os.PathLike[str],
+    *,
+    supporting_paths: tuple[str | os.PathLike[str], ...] = (),
+    resident_paths: tuple[str | os.PathLike[str], ...] = (),
+    memory_budget_bytes: int | None = None,
+) -> int:
+    """Estimate a complete parent/worker cap from native SVG artifacts.
+
+    根据原生 SVG 及其缓存文件大小，估算父进程占位与 worker 上限。
+
+    The estimate is intentionally conservative: one GiB covers fixed Python,
+    geometry, and export working state, while each source/cache byte receives
+    a 64-byte expansion allowance. The worker's geometry-aware preflight
+    remains authoritative. Unknown, unreadable, or non-SVG sources retain the
+    configured worst-case cap instead of receiving an optimistic estimate.
+
+    Args:
+        source_path: Native SVG artifact submitted to the worker. 提交给
+            worker 的原生 SVG 文件。
+        supporting_paths: Parse/cache artifacts whose serialized complexity
+            can expand into geometry. 会展开为几何的解析或缓存文件。
+        resident_paths: Other worker inputs such as STL, heightmap, LUT, and
+            material arrays. STL、高度图、LUT、材料数组等其他常驻输入。
+        memory_budget_bytes: Optional configured upper bound. 可选的配置上限。
+
+    Returns:
+        int: Complete task reservation in bytes. 完整任务内存占位字节数。
+    """
+
+    configured_budget = max(
+        1,
+        int(
+            resolve_vector_mesh_memory_budget_bytes()
+            if memory_budget_bytes is None
+            else memory_budget_bytes
+        ),
+    )
+    source = Path(source_path)
+    if source.suffix.lower() != ".svg":
+        return configured_budget
+
+    try:
+        if not source.is_file():
+            return configured_budget
+        artifact_bytes = max(0, int(source.stat().st_size))
+        for supporting_path in supporting_paths:
+            artifact = Path(supporting_path)
+            if not artifact.is_file():
+                return configured_budget
+            artifact_bytes += max(0, int(artifact.stat().st_size))
+        resident_bytes = 0
+        resident_seen: set[str] = set()
+        for resident_path in resident_paths:
+            artifact = Path(resident_path)
+            identity = os.path.abspath(os.fspath(artifact))
+            if identity in resident_seen:
+                continue
+            resident_seen.add(identity)
+            if not artifact.is_file():
+                return configured_budget
+            resident_bytes += _resident_artifact_size_hint(artifact)
+    except (OSError, TypeError, ValueError, OverflowError):
+        return configured_budget
+
+    estimated_bytes = (
+        _VECTOR_TASK_RESERVATION_BASE_BYTES
+        + artifact_bytes * _VECTOR_TASK_RESERVATION_BYTES_PER_ARTIFACT_BYTE
+        + max(
+            0,
+            resident_bytes - _VECTOR_TASK_INCLUDED_RESIDENT_BYTES,
+        )
+        * _VECTOR_TASK_BYTES_PER_EXCESS_RESIDENT_BYTE
+    )
+    return min(configured_budget, max(1, int(estimated_bytes)))
+
+
+def _resident_artifact_size_hint(path: Path) -> int:
+    """Return retained bytes for a worker input without materializing it."""
+
+    file_bytes = max(0, int(path.stat().st_size))
+    suffix = path.suffix.lower()
+    if suffix == ".npy":
+        try:
+            import numpy as np
+
+            array = np.load(path, mmap_mode="r", allow_pickle=False)
+            try:
+                return max(file_bytes, int(array.nbytes))
+            finally:
+                mmap = getattr(array, "_mmap", None)
+                if mmap is not None:
+                    mmap.close()
+        except (ImportError, OSError, TypeError, ValueError, OverflowError):
+            return file_bytes
+    if suffix in {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}:
+        try:
+            from PIL import Image
+
+            with Image.open(path) as image:
+                sample_bytes = 4 if image.mode in {"F", "I"} else (
+                    2 if "16" in image.mode else 1
+                )
+                decoded_bytes = (
+                    max(1, int(image.width))
+                    * max(1, int(image.height))
+                    * max(1, len(image.getbands()))
+                    * sample_bytes
+                )
+            return max(file_bytes, decoded_bytes)
+        except (ImportError, OSError, TypeError, ValueError, OverflowError):
+            return file_bytes
+    return file_bytes
 
 
 def get_process_rss_bytes() -> int | None:

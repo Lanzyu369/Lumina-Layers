@@ -595,6 +595,54 @@ class TestSubmit:
             pool._pool = None
             pool.shutdown(wait=False)
 
+    def test_low_available_host_admits_only_one_small_vector_reservation(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A 16 GiB desktop can run one bounded small task under pressure."""
+
+        gib = 1024**3
+        available_bytes = 2_436_333_568
+        small_task_bytes = 5 * gib // 4
+        monkeypatch.setattr(
+            worker_pool,
+            "_available_host_memory_bytes",
+            lambda: available_bytes,
+        )
+        pool = WorkerPoolManager(max_workers=4)
+        first_owner = object()
+        second_owner = object()
+        try:
+            token, task_budget = pool._host_memory_gate.acquire(
+                small_task_bytes,
+                owner=first_owner,
+            )
+            assert task_budget == small_task_bytes
+            assert pool.host_memory_reserved_bytes == small_task_bytes
+
+            with pytest.raises(VectorHostMemoryAdmissionError) as raised:
+                pool._host_memory_gate.acquire(
+                    small_task_bytes,
+                    owner=second_owner,
+                )
+            assert raised.value.reserved_bytes == small_task_bytes
+            assert raised.value.reason == "host_capacity_busy"
+
+            pool._host_memory_gate.release(token)
+            assert pool.host_memory_reserved_bytes == 0
+
+            with pytest.raises(VectorHostMemoryAdmissionError) as raised:
+                pool._host_memory_gate.acquire(
+                    3 * gib // 2,
+                    owner=second_owner,
+                )
+            assert raised.value.reserved_bytes == 0
+            assert raised.value.memory_budget_bytes == (
+                available_bytes - gib
+            )
+        finally:
+            pool.shutdown(wait=False)
+
     @pytest.mark.asyncio
     async def test_cancelled_wait_keeps_host_reservation_until_worker_finishes(
         self,
