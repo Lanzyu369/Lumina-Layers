@@ -48,6 +48,7 @@ from api.schemas.responses import (
     LargeFormatGenerateResponse,
     WarningEntry,
 )
+from api.selection_state import unpack_applied_region_mask
 from api.session_store import SessionStore
 from api.structured_logging import get_logger
 from api.worker_pool import WorkerPoolManager
@@ -108,6 +109,7 @@ from .common import (
     PREVIEW_CACHE_INVALID_DETAIL,
     PREVIEW_CACHE_UNAVAILABLE_DETAIL,
     PREVIEW_COLOR_PALETTE_UNAVAILABLE_DETAIL,
+    RECIPE_OVERRIDE_APPLIED_MASKS_KEY,
     ROUTER_HANDLED_ERRORS,
     SOURCE_IMAGE_UNAVAILABLE_DETAIL,
     _ensure_material_matrix_signed_capacity,
@@ -1035,6 +1037,73 @@ def _recover_select_all_color_region_mask(
     return np.asarray(color_mask, dtype=bool)
 
 
+def _resolve_applied_override_mask_snapshot(
+    *,
+    session_data: dict,
+    sid: str,
+    region_id: object,
+    shape: tuple[int, int],
+) -> np.ndarray | None:
+    """Return the mask snapshotted when this override was applied, if usable.
+
+    The live selection state prunes synthetic ``__editor_selection__:<rev>``
+    region ids on every selection gesture, so an override applied earlier can
+    no longer be resolved from ``selected_region_masks``. The apply endpoint
+    snapshots the exact masks it used; this helper validates one snapshot
+    entry against the current material-matrix shape before handing it back.
+
+    实时选区状态会在每次选区手势时清理 __editor_selection__:<rev> 合成
+    条目，导致更早应用的覆盖无法再从 selected_region_masks 解析。apply
+    端点会快照当时使用的掩码；本函数取出对应条目并校验其与当前
+    material_matrix 的形状一致后才返回。
+
+    Args:
+        session_data (dict): Session data holding the applied-mask snapshot.
+            (携带已应用掩码快照的会话数据)
+        sid (str): Session id used for structured-log correlation. (用于结构化
+            日志关联的会话 id)
+        region_id (object): Override region id to resolve. (待解析的覆盖区域 id)
+        shape (tuple[int, int]): Expected ``(height, width)`` of the mask.
+            (掩码应有的 (高, 宽) 形状)
+
+    Returns:
+        np.ndarray | None: Boolean mask copy matching ``shape``, or ``None``
+        when no usable snapshot exists. (与 shape 匹配的布尔掩码副本；无可用
+        快照时为 None)
+    """
+    if not isinstance(region_id, str):
+        return None
+    applied_masks = session_data.get(RECIPE_OVERRIDE_APPLIED_MASKS_KEY)
+    if not isinstance(applied_masks, dict):
+        return None
+    candidate = applied_masks.get(region_id)
+    if candidate is None:
+        return None
+    # Unpacking also validates dtype/length/shape and rejects all-air masks,
+    # covering both packed entries and legacy raw boolean arrays.
+    # 解包同时校验 dtype/长度/形状并拒绝全空掩码，同时覆盖打包条目与旧版
+    # 裸布尔数组。
+    mask = unpack_applied_region_mask(candidate, shape)
+    if mask is None:
+        log.warning(
+            "Applied recipe-override snapshot is invalid; rejecting generation",
+            extra={
+                "event": "recipe_override_snapshot_invalid",
+                "error_type": "RecipeOverrideSnapshotInvalid",
+                "error_message": (
+                    "The stored override mask snapshot failed validation "
+                    "(shape, dtype, or content); generation will be rejected "
+                    "to preserve the committed footprint."
+                ),
+                "recovery_action": "reapply_color_replacement",
+                "session_id": sid,
+                "region_id": str(region_id),
+            },
+        )
+        return None
+    return mask
+
+
 def _parse_batch_color_height_map(value: str | None) -> dict[str, float] | None:
     if not value:
         return None
@@ -1589,25 +1658,87 @@ def _prepare_recipe_override_worker_inputs(
             detail="Recipe overrides cannot reduce the current optical layer count",
         )
 
+    # Masks resolved for this request, kept request-local so unpacked
+    # snapshots never re-inflate into the aliased in-memory session dict
+    # (a packed ~H*W/8-byte entry would otherwise persist back as a raw
+    # H*W boolean array on first generate).
+    # 本次请求解析出的掩码，严格请求局部：解包后的快照绝不写回与内存版
+    # 会话共享的字典，否则打包的 ~H*W/8 字节条目会在首次生成时以裸
+    # H*W 布尔数组的形式重新膨胀并驻留。
+    resolved_override_masks: dict[str, np.ndarray] = {}
+    # Snapshot capability separates two eras. Sessions without the key
+    # predate applied-mask snapshots and keep the legacy mutable-source chain.
+    # Sessions WITH the key have committed footprints, even if the stored
+    # container is empty or invalid:
+    # an id that is missing or fails validation there means committed state
+    # is unreadable, and silently re-resolving it from live selection state
+    # or a recomputed select-all region would drift the footprint — that is
+    # a deterministic 422 instead.
+    # 快照能力区分两个时代。只有完全没有该键的会话才是旧会话并保留可变
+    # 来源回退链。只要键存在，即使容器为空或损坏，也表示会话拥有已提交足
+    # 迹；此时若从实时选区或重算 select-all 静默回退会让足迹漂移——必须
+    # 返回确定性 422。
+    has_snapshot_capability = (
+        RECIPE_OVERRIDE_APPLIED_MASKS_KEY in session_data
+    )
+
     for item in recipe_overrides:
         region_id = item["region_id"]
         item_recipe = item["recipe"]
         item_layer_order = item["layer_order"]
-        region_mask = region_masks.get(region_id)
-        if region_mask is None:
-            region_mask = _recover_select_all_color_region_mask(
-                cache=cache,
-                cache_ref=cache_ref,
+        if has_snapshot_capability:
+            # A committed override must resolve to the exact footprint
+            # captured when it was applied; anything else is an integrity
+            # failure, not a fallback opportunity.
+            # 已提交覆盖必须解析到 apply 时的精确足迹；其余情况都是完整性
+            # 失败，而不是回退机会。
+            region_mask = _resolve_applied_override_mask_snapshot(
+                session_data=session_data,
+                sid=sid,
                 region_id=region_id,
+                shape=material_matrix_override.shape[:2],
             )
+            if region_mask is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Committed recipe override mask is missing or invalid "
+                        f"for this session: {region_id}. Re-apply the color "
+                        f"replacement, then generate again."
+                    ),
+                )
+            log.debug(
+                "Recipe override mask resolved from applied-time snapshot",
+                extra={
+                    "event": "recipe_override_mask_snapshot_resolved",
+                    "session_id": sid,
+                    "region_id": str(region_id),
+                },
+            )
+            resolved_override_masks[str(region_id)] = region_mask
+        else:
+            region_mask = region_masks.get(region_id)
             if region_mask is not None:
-                region_masks[region_id] = region_mask
-                store.put(sid, "selected_region_masks", region_masks)
-        if region_mask is None:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Region mask not found for recipe override: {region_id}",
-            )
+                resolved_override_masks[str(region_id)] = np.asarray(
+                    region_mask, dtype=bool
+                )
+            if region_mask is None:
+                region_mask = _recover_select_all_color_region_mask(
+                    cache=cache,
+                    cache_ref=cache_ref,
+                    region_id=region_id,
+                )
+                if region_mask is not None:
+                    region_masks[region_id] = region_mask
+                    store.put(sid, "selected_region_masks", region_masks)
+                    resolved_override_masks[str(region_id)] = np.asarray(
+                        region_mask, dtype=bool
+                    )
+            if region_mask is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Region mask not found for recipe override: {region_id}",
+                )
         recipe = convert_recipe_between_orders(
             list(item_recipe),
             item_layer_order,
@@ -1640,19 +1771,13 @@ def _prepare_recipe_override_worker_inputs(
     store.register_temp_file(sid, mm_temp_path)
 
     recipe_override_masks_path: str | None = None
-    if isinstance(region_masks, dict):
-        selected_masks = {
-            item["region_id"]: region_masks[item["region_id"]]
-            for item in recipe_overrides
-            if item["region_id"] in region_masks
-        }
-        if selected_masks:
-            fd, masks_temp_path = tempfile.mkstemp(suffix=".pkl", dir=TEMP_DIR)
-            os.close(fd)
-            with open(masks_temp_path, "wb") as f:
-                pickle.dump(selected_masks, f)
-            recipe_override_masks_path = masks_temp_path
-            store.register_temp_file(sid, masks_temp_path)
+    if resolved_override_masks:
+        fd, masks_temp_path = tempfile.mkstemp(suffix=".pkl", dir=TEMP_DIR)
+        os.close(fd)
+        with open(masks_temp_path, "wb") as f:
+            pickle.dump(resolved_override_masks, f)
+        recipe_override_masks_path = masks_temp_path
+        store.register_temp_file(sid, masks_temp_path)
 
     return mm_temp_path, recipe_override_masks_path
 

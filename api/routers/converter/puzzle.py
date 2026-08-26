@@ -39,6 +39,7 @@ from api.schemas.converter import (
     PuzzleLayoutPreviewRequest,
 )
 from api.schemas.responses import PuzzleGenerateResponse, PuzzleLayoutPreviewResponse
+from api.selection_state import unpack_applied_region_mask
 from api.session_store import SessionStore
 from api.structured_logging import get_logger
 from api.worker_pool import WorkerPoolManager
@@ -68,6 +69,7 @@ from .common import (
     LUT_DATA_UNAVAILABLE_DETAIL,
     PREVIEW_CACHE_INVALID_DETAIL,
     PREVIEW_CACHE_UNAVAILABLE_DETAIL,
+    RECIPE_OVERRIDE_APPLIED_MASKS_KEY,
     ROUTER_HANDLED_ERRORS,
     SOURCE_IMAGE_UNAVAILABLE_DETAIL,
     _handle_core_error,
@@ -1226,8 +1228,64 @@ async def generate_puzzle(
             )
             if dynamic_recipe_overrides:
                 try:
+                    # Committed overrides resolve ONLY to their applied-time
+                    # snapshot when the session carries snapshot capability;
+                    # a missing/invalid entry is an integrity failure and
+                    # must not silently re-resolve from mutable live state.
+                    # Live masks serve only legacy sessions without the
+                    # snapshot key. _prepare_piece_recipe_override_masks keeps
+                    # validating shape/source-grid compatibility per entry.
+                    # 会话具备快照能力时，已提交覆盖只解析为 apply 时的快照；
+                    # 缺失或校验失败属于完整性失败，绝不能从可变的实时选区
+                    # 静默重解析。实时掩码仅服务没有快照键的旧会话。每个条目
+                    # 的形状/栅格兼容性仍由
+                    # _prepare_piece_recipe_override_masks 校验。
+                    live_region_masks = session_data.get("selected_region_masks")
+                    live_region_dict = (
+                        dict(live_region_masks)
+                        if isinstance(live_region_masks, dict)
+                        else {}
+                    )
+                    applied_mask_snapshot = session_data.get(
+                        RECIPE_OVERRIDE_APPLIED_MASKS_KEY
+                    )
+                    applied_snapshot_dict = (
+                        applied_mask_snapshot
+                        if isinstance(applied_mask_snapshot, dict)
+                        else {}
+                    )
+                    has_snapshot_capability = (
+                        RECIPE_OVERRIDE_APPLIED_MASKS_KEY in session_data
+                    )
+                    merged_region_masks: dict[str, np.ndarray] = {}
+                    for override_item in dynamic_recipe_overrides:
+                        override_region_id = str(
+                            override_item.get("region_id") or ""
+                        ).strip()
+                        if not override_region_id:
+                            raise ValueError(
+                                "dynamic puzzle recipe override is missing region_id"
+                            )
+                        if override_region_id in merged_region_masks:
+                            continue
+                        if has_snapshot_capability:
+                            snapshot_entry = unpack_applied_region_mask(
+                                applied_snapshot_dict.get(override_region_id)
+                            )
+                            if snapshot_entry is None:
+                                raise ValueError(
+                                    f"dynamic puzzle committed recipe override "
+                                    f"mask is missing or invalid: {override_region_id}"
+                                )
+                            merged_region_masks[override_region_id] = snapshot_entry
+                        elif isinstance(
+                            live_region_dict.get(override_region_id), np.ndarray
+                        ):
+                            merged_region_masks[override_region_id] = live_region_dict[
+                                override_region_id
+                            ]
                     piece_override_masks = _prepare_piece_recipe_override_masks(
-                        region_masks=session_data.get("selected_region_masks"),
+                        region_masks=merged_region_masks,
                         recipe_overrides=dynamic_recipe_overrides,
                         piece=piece,
                         source_shape=dynamic_puzzle_analysis[1].shape,
