@@ -293,6 +293,9 @@ git commit -m "refactor(vector): build manifold runs by construction"
       at the existing nine-significant-digit setting.
 - [ ] Prove frozen packaging imports the required NumPy-overload-capable
       `neroued_3mf` build and still includes all printer profiles.
+- [ ] Pin the first released `neroued_3mf` version containing the already-
+      upstream NumPy `MeshView` overload; the installed 0.3.0 release is not
+      sufficient.
 - [ ] Measure export RSS. Open a separate upstream spool/shortest-format PR only
       if the zero-copy path still misses the agreed memory/size target.
 

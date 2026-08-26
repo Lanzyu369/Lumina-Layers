@@ -159,11 +159,13 @@ budget; it is not a prerequisite for replacing the meshing cores.
 
 ### 4. 3MF serialization
 
-Retain `neroued_3mf` and its material/profile packaging behavior. Its current
-Python binding already accepts C-contiguous float32 vertices and uint32/int32
-triangles through the non-owning `MeshView` path. Lumina must pass the validated
-final arrays directly to `DocumentBuilder.add_mesh_object()` instead of first
-calling owning `Mesh.from_arrays()`.
+Retain `neroued_3mf` and its material/profile packaging behavior. Upstream
+master already accepts C-contiguous float32 vertices and uint32/int32 triangles
+through the non-owning `MeshView` path, while the currently released 0.3.0
+Python package does not yet expose that overload. After it is released, Lumina
+must pin the first compatible version and pass validated final arrays directly
+to `DocumentBuilder.add_mesh_object()` instead of first calling owning
+`Mesh.from_arrays()`.
 
 Shortest-round-trip float32 formatting remains a useful upstream file-size
 optimization, not a prerequisite or memory-safety mechanism. A two-pass
