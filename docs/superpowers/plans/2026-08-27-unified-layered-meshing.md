@@ -285,6 +285,9 @@ git commit -m "refactor(vector): build manifold runs by construction"
 - [ ] Keep integer-grid topology and `shell_id` through construction; perform
       one final conversion to writer-domain arrays and validate those exact
       arrays before queuing the object.
+- [ ] Treat the raster core's pre-scale float32 check only as a lattice-
+      materialization audit; repeat collision/contact validation after all
+      physical scaling and placement on the exact 3MF arrays.
 - [ ] Retain the converted arrays for the lifetime of the built document so the
       non-owning `MeshView` references remain valid.
 - [ ] Keep ordinary external Trimesh compatibility by materializing each

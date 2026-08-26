@@ -157,6 +157,11 @@ the current Trimesh/Scene contract. An optional disk-spool output may be added
 later only if measured final-array residency still exceeds the acceptance
 budget; it is not a prerequisite for replacing the meshing cores.
 
+The raster builder's first float32 conversion occurs in unscaled voxel-lattice
+coordinates, so its local collision audit is only a lattice-materialization
+check. It must not be described as final writer-domain proof. The final audit is
+performed after S07 scaling/translation on the exact arrays passed to 3MF.
+
 ### 4. 3MF serialization
 
 Retain `neroued_3mf` and its material/profile packaging behavior. Upstream
