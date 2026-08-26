@@ -229,11 +229,14 @@ def _build_vector_pattern_scene(
         # The native vector engine has already prepared its single-sided
         # scene for direct face-down export. Normalize it back to a face-up
         # local pattern before embedding; the assembled model receives the
-        # final rigid face-down rotation as one unit.
+        # final rigid face-down rotation as one unit. Vector export now keeps
+        # its X/Y placement out of mesh vertices, so both axes live in the
+        # negative local quadrant here. Restore the historical model-surface
+        # canvas without changing the standalone 3MF writer-domain contract.
         normalize_for_embedding = np.asarray(
             [
-                [-1.0, 0.0, 0.0, logical_width_mm],
-                [0.0, 1.0, 0.0, 0.0],
+                [-1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, logical_height_mm],
                 [0.0, 0.0, -1.0, pattern_bounds[0, 2] + pattern_bounds[1, 2]],
                 [0.0, 0.0, 0.0, 1.0],
             ],
@@ -243,7 +246,16 @@ def _build_vector_pattern_scene(
             if isinstance(geometry, trimesh.Trimesh):
                 geometry.apply_transform(normalize_for_embedding)
         pattern_bounds = np.asarray(pattern_scene.bounds, dtype=np.float64)
-    elif face_orientation != "up":
+    elif face_orientation == "up":
+        # Up-facing vector scenes still use the translation-free SVG Y flip.
+        # Bring that local negative Y canvas back to the model-surface frame.
+        normalize_for_embedding = np.eye(4, dtype=np.float64)
+        normalize_for_embedding[1, 3] = logical_height_mm
+        for geometry in pattern_scene.geometry.values():
+            if isinstance(geometry, trimesh.Trimesh):
+                geometry.apply_transform(normalize_for_embedding)
+        pattern_bounds = np.asarray(pattern_scene.bounds, dtype=np.float64)
+    else:
         raise ModelSurfaceError(
             "Model-surface overlay requires a single display face."
         )

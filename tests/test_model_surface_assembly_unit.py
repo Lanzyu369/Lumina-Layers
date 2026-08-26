@@ -191,8 +191,8 @@ def test_native_vector_pattern_is_normalized_before_surface_assembly():
     artwork.apply_translation((3.0, 5.0, 0.04))
     export_mirror = np.asarray(
         [
-            [-1.0, 0.0, 0.0, 20.0],
-            [0.0, 1.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0, 0.0],
+            [0.0, -1.0, 0.0, 0.0],
             [0.0, 0.0, 1.0, 0.0],
             [0.0, 0.0, 0.0, 1.0],
         ]
@@ -223,7 +223,7 @@ def test_native_vector_pattern_is_normalized_before_surface_assembly():
 
     np.testing.assert_allclose(
         source_scene.geometry["Black"].bounds[:, 0],
-        [16.0, 18.0],
+        [-4.0, -2.0],
         atol=1e-6,
     )
     np.testing.assert_allclose(
@@ -235,7 +235,7 @@ def test_native_vector_pattern_is_normalized_before_surface_assembly():
 
 def test_native_vector_pattern_ownership_transfer_reuses_mesh_and_releases_scene():
     artwork = trimesh.creation.box(extents=(2.0, 2.0, 0.08))
-    artwork.apply_translation((2.0, 2.0, 0.04))
+    artwork.apply_translation((2.0, -2.0, 0.04))
     ctx = {
         "is_svg_vector": True,
         "scene": trimesh.Scene({"Black": artwork}),
@@ -258,6 +258,11 @@ def test_native_vector_pattern_ownership_transfer_reuses_mesh_and_releases_scene
     assert "scene" not in ctx
     assert "vector_analysis" not in ctx
     assert pattern.geometry["Black"] is artwork
+    np.testing.assert_allclose(
+        pattern.geometry["Black"].bounds[:, 1],
+        [7.0, 9.0],
+        atol=1e-6,
+    )
 
 
 def test_owned_model_surface_pipeline_does_not_copy_complete_scenes():
@@ -496,7 +501,7 @@ def test_model_surface_boolean_memory_error_is_fatal(monkeypatch):
 
 def test_native_vector_pattern_footprint_excludes_transparent_and_air_shapes():
     artwork = trimesh.creation.box(extents=(2.25, 2.0, 0.08))
-    artwork.apply_translation((16.875, 8.0, 0.04))
+    artwork.apply_translation((-3.125, -2.0, 0.04))
     source_scene = trimesh.Scene({"Black": artwork})
 
     pattern = _build_pattern_scene(

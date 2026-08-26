@@ -66,6 +66,7 @@ from core.errors import (
     CachedPreviewAnalysisError,
     VectorHostMemoryAdmissionError,
     VectorMeshMemoryBudgetError,
+    VectorTopologyError,
 )
 from core.model_surface.types import ModelSurfaceError
 from core.naming import generate_preserved_upload_3mf_filename
@@ -191,6 +192,15 @@ BATCH_GENERATION_FAILED_DETAIL: str = (
 MODEL_GENERATION_FAILED_DETAIL: str = (
     "3MF generation failed. Re-run preview and try generating the model again."
 )
+VECTOR_TOPOLOGY_UNREPAIRABLE_DETAIL: dict[str, str] = {
+    "code": "vector_topology_unrepairable",
+    "stage": "polygon_export",
+    "action": "simplify_or_revectorize",
+    "message": (
+        "The vector artwork contains geometry that cannot be exported safely. "
+        "Simplify or re-vectorize the artwork, then upload it again."
+    ),
+}
 
 
 def _vector_task_memory_reservation_bytes(
@@ -2427,6 +2437,11 @@ async def convert_generate(
         )
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="3MF generation timed out")
+    except VectorTopologyError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=dict(VECTOR_TOPOLOGY_UNREPAIRABLE_DETAIL),
+        ) from exc
     except ModelSurfaceError as exc:
         detail = public_model_surface_error_detail(exc)
         if detail is None:

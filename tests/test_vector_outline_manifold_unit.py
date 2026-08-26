@@ -11,6 +11,7 @@ import pytest
 from shapely.geometry import MultiPolygon, Polygon, box
 
 import core.pipeline.vector_branch as vector_branch
+from core.errors import VectorTopologyError
 from utils.bambu_3mf_writer import BambuStudio3MFWriter
 
 
@@ -182,7 +183,10 @@ def test_vector_outline_rejects_shared_topology_service_failure_without_fallback
 
     def fail_shared_topology_service(*_args, **_kwargs):
         service_calls.append(True)
-        raise ValueError("synthetic topology service failure")
+        raise VectorTopologyError(
+            "Vector polygon topology could not be repaired for export",
+            ({"attempt": "repair_0.001_mm"},),
+        )
 
     monkeypatch.setattr(
         vector_branch,

@@ -39,7 +39,11 @@ from shapely.validation import make_valid
 
 from api.structured_logging import get_logger
 from config import BedManager, PrinterConfig, normalize_nozzle_size
-from core.errors import CachedPreviewAnalysisError, VectorMeshMemoryBudgetError
+from core.errors import (
+    CachedPreviewAnalysisError,
+    VectorMeshMemoryBudgetError,
+    VectorTopologyError,
+)
 from core.geometry_utils import create_keychain_loop
 from core.pipeline import p06_bed_rendering, s09_export_3mf, vector_glb_preview
 from core.pipeline.pipeline_utils import extract_color_palette
@@ -51,6 +55,7 @@ from core.preview_analysis_cache import preview_analysis_reuse_is_required
 from core.vector_mesh_topology import (
     extrude_polygon_for_export,
     mesh_is_float32_safe,
+    prepare_component_footprints_for_float32,
     prepare_geometry_for_float32,
     separate_component_coordinates,
 )
@@ -879,14 +884,14 @@ def _resolve_vector_outline_export_size_mm(
     """Return the vector export width/height in millimetres, if available.
     返回 vector 导出宽高（毫米），不可可靠解析时返回 ``None``。
 
-    ``VectorProcessor.build_mesh`` derives its final coordinate transforms
-    from ``analysis.bbox[2:4] * analysis.scale_factor``. The outline helper
-    must use the same source so auxiliary outline geometry lands in the same
-    XY coordinate system as the colour and backing meshes.
+    ``VectorProcessor.build_mesh`` requires the same finite canvas dimensions
+    before it can construct body geometry.  The outline helper keeps this
+    guard so auxiliary geometry never applies an export transform to an
+    incomplete analysis object.
 
-    ``VectorProcessor.build_mesh`` 使用 ``analysis.bbox[2:4] *
-    analysis.scale_factor`` 计算最终坐标变换；Outline 必须使用同一来源，
-    才能与主体色块和底板落在同一个 XY 坐标系。
+    ``VectorProcessor.build_mesh`` 同样要求 ``analysis.bbox[2:4] *
+    analysis.scale_factor`` 是有限画布尺寸；Outline 保留这一门禁，避免对
+    不完整分析对象应用导出变换。
     """
     bbox_raw = getattr(analysis, "bbox", None)
     if not isinstance(bbox_raw, (list, tuple, np.ndarray)) or len(bbox_raw) < 4:
@@ -924,14 +929,10 @@ def _apply_vector_outline_export_transform(
     Y-down 坐标翻到打印坐标，再对非 5 色单面导出做 X 镜像。Outline 是在
     ``build_mesh`` 外部生成的，因此这里显式复用同一组变换。
     """
-    size_mm = _resolve_vector_outline_export_size_mm(analysis, scale_factor)
-    if size_mm is None:
+    if _resolve_vector_outline_export_size_mm(analysis, scale_factor) is None:
         return
-    width_mm, height_mm = size_mm
-
     y_flip = np.eye(4)
     y_flip[1, 1] = -1.0
-    y_flip[1, 3] = float(height_mm)
     outline_mesh.apply_transform(y_flip)
 
     structure_mode_text = str(ctx.get("structure_mode", "") or "")
@@ -950,7 +951,6 @@ def _apply_vector_outline_export_transform(
     if is_single_sided and not is_5color:
         mirror_x = np.eye(4)
         mirror_x[0, 0] = -1.0
-        mirror_x[0, 3] = float(width_mm)
         outline_mesh.apply_transform(mirror_x)
 
 
@@ -1205,6 +1205,24 @@ def _generate_vector_outline_mesh(
         )
         return None
 
+    prepared_polys = prepare_component_footprints_for_float32(
+        polys,
+        xy_scale=scale_factor,
+    )
+    if prepared_polys is None:
+        log.warning(
+            "Vector outline rejected: 2D writer preflight failed",
+            extra={
+                "event": "vector_outline_rejected_topology",
+                "error_type": "coordinate_collision",
+                "unsupported_reason": "outline_writer_footprint_preflight_failed",
+                "polygon_count": int(len(polys)),
+            },
+        )
+        return None
+    polys = prepared_polys
+    del prepared_polys
+
     meshes: list = []
     for poly_index, poly in enumerate(polys):
         polygon_geometry_bytes = _geometry_cache_storage_bytes(poly)
@@ -1223,7 +1241,7 @@ def _generate_vector_outline_mesh(
                 xy_scale=scale_factor,
                 prefer_fast=True,
             )
-        except COORDINATOR_HANDLED_ERRORS as exc:
+        except (VectorTopologyError, *COORDINATOR_HANDLED_ERRORS) as exc:
             log.warning(
                 "Vector outline rejected after polygon extrusion failure",
                 extra={
@@ -1264,10 +1282,20 @@ def _generate_vector_outline_mesh(
 
     retained_mesh_bytes = sum(_mesh_array_storage_bytes(mesh) for mesh in meshes)
     # The independent 3D shells are now the only geometry needed for export.
-    # Release union/buffer/ring intermediates before allocating writer-domain
-    # validation arrays or the final contiguous mesh.
+    # Release union/buffer/ring intermediates before transforming and checking
+    # the final writer coordinates or allocating the contiguous output mesh.
     del polys, prepared_ring, ring, expanded, union, source_geometries
     matched_shapes.clear()
+
+    for mesh in meshes:
+        _apply_vector_outline_export_transform(
+            mesh,
+            analysis=analysis,
+            ctx=ctx,
+            scale_factor=scale_factor,
+            export_color_mode=export_color_mode,
+        )
+
     _enforce_vector_mesh_runtime_headroom(
         stage="vector_outline_coordinate_separation",
         estimated_additional_bytes=max(
@@ -1303,36 +1331,6 @@ def _generate_vector_outline_mesh(
         )
         outline_mesh = _concatenate_meshes_fast(meshes)
         meshes.clear()
-
-    outline_mesh_bytes = _mesh_array_storage_bytes(outline_mesh)
-    _enforce_vector_mesh_runtime_headroom(
-        stage="vector_outline_writer_validation",
-        estimated_additional_bytes=max(
-            16 * 1024 * 1024,
-            outline_mesh_bytes * 3,
-        ),
-        shape_count=1,
-    )
-
-    _apply_vector_outline_export_transform(
-        outline_mesh,
-        analysis=analysis,
-        ctx=ctx,
-        scale_factor=scale_factor,
-        export_color_mode=export_color_mode,
-    )
-
-    if not mesh_is_float32_safe(outline_mesh):
-        log.warning(
-            "Vector outline rejected: writer-domain topology validation failed",
-            extra={
-                "event": "vector_outline_rejected_topology",
-                "error_type": "float32_topology_validation",
-                "unsupported_reason": "outline_writer_domain_non_manifold",
-                "polygon_count": int(len(meshes)),
-            },
-        )
-        return None
 
     rgba = list(base_aux_color)
     if len(rgba) < 4:
@@ -2936,9 +2934,6 @@ def _run_vector_branch(ctx: dict) -> dict:
             "initial_layer_line_width": _lw,
         }
 
-        if bool(ctx.get("center_on_bed", True)):
-            s09_export_3mf._center_scene_on_printer_bed(scene, ctx.get("printer_id", "bambu-h2d"))
-
         # ------------------------------------------------------------------
         # Vector cover thumbnail: rasterize the source SVG itself and
         # PNG-encode it in-memory. File managers and slicers should show
@@ -3069,6 +3064,17 @@ def _run_vector_branch(ctx: dict) -> dict:
                 "duration_ms": round(vector_timing["export_3mf_s"] * 1000, 3),
             },
         )
+
+        # Keep placement translations out of serialized mesh vertices.  The
+        # 3MF writer already centres the unmodified local mesh with the
+        # standard build-item transform.  Centre the retained scene only after
+        # the package is complete so the GLB preview keeps its historical bed
+        # coordinates without changing float32 topology in the 3MF.
+        if bool(ctx.get("center_on_bed", True)):
+            s09_export_3mf._center_scene_on_printer_bed(
+                scene,
+                ctx.get("printer_id", "bambu-h2d"),
+            )
 
         # 3. GLB preview
         _report_progress(ctx, 0.82, "\u751f\u6210 3D \u9884\u89c8\u4e2d... | Generating 3D preview...")

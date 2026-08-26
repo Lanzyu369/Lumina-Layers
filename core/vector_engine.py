@@ -84,7 +84,7 @@ except ImportError:  # Shapely < 2.1; keep the old union path available.
 from api.structured_logging import get_logger
 from config import PrinterConfig, ColorSystem, VectorConfig
 from core import geos_buffer_fast
-from core.errors import VectorMeshMemoryBudgetError
+from core.errors import VectorMeshMemoryBudgetError, VectorTopologyError
 from core.task_parallelism import (
     resolve_task_parallelism_plan,
     task_parallelism_worker_scope,
@@ -97,6 +97,8 @@ from core.vector_mesh_topology import (
     VECTOR_COVERAGE_REL_TOL as _VECTOR_COVERAGE_REL_TOL,
     extrude_polygon_for_export,
     mesh_is_float32_safe,
+    prepare_component_footprints_for_float32,
+    separate_component_coordinates,
 )
 from core.vector_mesh_memory import (
     ByteBudgetLRU,
@@ -6501,9 +6503,13 @@ class VectorProcessor:
             )
         mirror_transform = None
         if is_single_sided and not is_5color and not enable_relief:
-            model_width_mm = bbox[2] * scale_factor
             mirror_transform = np.array(
-                [[-1.0, 0.0, 0.0, model_width_mm], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
+                [
+                    [-1.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0],
+                    [0.0, 0.0, 0.0, 1.0],
+                ]
             )
         backing_layer_count = max(1, int(round(thickness_mm / layer_h)))
         backing_height = backing_layer_count * layer_h
@@ -10474,7 +10480,45 @@ class VectorProcessor:
             )
             return meshes
 
-        polys = geometry.geoms if hasattr(geometry, "geoms") else [geometry]
+        polys = list(geometry.geoms) if hasattr(geometry, "geoms") else [geometry]
+        polygon_parts = [
+            poly for poly in polys
+            if isinstance(poly, Polygon) and not poly.is_empty
+        ]
+        if len(polygon_parts) == len(polys) and len(polygon_parts) > 1:
+            prepared_parts = prepare_component_footprints_for_float32(
+                polygon_parts,
+                xy_scale=float(scale),
+            )
+            if prepared_parts is None:
+                raise VectorTopologyError(
+                    "Vector polygon topology could not be repaired for export",
+                    (
+                        {
+                            "attempt": "engine_geometry_2d_preflight",
+                            "geometry_type": getattr(
+                                geometry,
+                                "geom_type",
+                                None,
+                            ),
+                            "candidate_mesh_count": len(polygon_parts),
+                            "vertex_count": int(
+                                sum(
+                                    max(0, len(poly.exterior.coords) - 1)
+                                    + sum(
+                                        max(0, len(ring.coords) - 1)
+                                        for ring in poly.interiors
+                                    )
+                                    for poly in polygon_parts
+                                )
+                            ),
+                            "rejected_reason": (
+                                "writer_domain_component_preflight_failed"
+                            ),
+                        },
+                    ),
+                )
+            polys = prepared_parts
 
         for poly in polys:
             if poly.is_empty:
@@ -10646,6 +10690,24 @@ class VectorProcessor:
                 ):
                     m.metadata[_PLANAR_COVERAGE_METADATA_KEY] = planar_coverage_mm2
                 meshes.append(m)
+            except VectorTopologyError as e:
+                topology_attempts = [dict(attempt) for attempt in e.attempts]
+                rejected_reason = (
+                    topology_attempts[-1].get("rejected_reason")
+                    if topology_attempts else None
+                )
+                _log.warning(
+                    "Failed to extrude vector polygon",
+                    extra={
+                        "event": "vector_polygon_extrude_failed",
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                        "geometry_type": getattr(poly, "geom_type", None),
+                        "topology_attempts": topology_attempts,
+                        "topology_rejected_reason": rejected_reason,
+                    },
+                )
+                raise
             except VECTOR_HANDLED_ERRORS as e:
                 _log.warning(
                     "Failed to extrude vector polygon",
@@ -10664,11 +10726,17 @@ class VectorProcessor:
 
     @staticmethod
     def _fix_coordinates(mesh, svg_height_mm):
-        """Flip Y-axis from SVG (Y-down) to printer (Y-up) coordinate system."""
+        """Flip SVG's Y axis without translating writer-domain vertices.
+
+        Keep the existing ``svg_height_mm`` argument for caller compatibility.
+        Bed placement is emitted later as a 3MF build-item transform; adding
+        canvas or bed offsets to vertices here can collapse distinct points
+        when the writer converts them to float32.
+        """
+        del svg_height_mm
         transform = np.eye(4)
         transform[1, 1] = -1
         mesh.apply_transform(transform)
-        mesh.apply_translation([0, svg_height_mm, 0])
 
 
 def parse_svg_geometry(

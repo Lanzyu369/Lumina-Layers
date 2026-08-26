@@ -545,7 +545,7 @@ class TestVectorBranchExport:
     @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
     @patch("core.vector_engine.VectorProcessor")
     def test_vector_export_centers_scene_on_selected_printer_bed(self, MockVP, mock_bambu_export, tmp_path):
-        """Vector branch should center ordinary final exports before Bambu 3MF writing."""
+        """3MF placement must not translate vertices before writer serialization."""
         from config import ModelingMode
 
         svg_file = tmp_path / "center-vector.svg"
@@ -560,6 +560,14 @@ class TestVectorBranchExport:
         mesh.metadata["name"] = "White"
         fake_scene.add_geometry(mesh, geom_name="White")
         MockVP.return_value = _build_fake_processor(fake_scene)
+
+        writer_bounds = None
+
+        def capture_writer_bounds(*_args, **kwargs):
+            nonlocal writer_bounds
+            writer_bounds = np.asarray(kwargs["scene"].bounds).copy()
+
+        mock_bambu_export.side_effect = capture_writer_bounds
 
         from core.converter import convert_image_to_3d
 
@@ -584,6 +592,13 @@ class TestVectorBranchExport:
 
         _, kwargs = mock_bambu_export.call_args
         exported_scene = kwargs["scene"]
+        assert writer_bounds is not None
+        writer_center_x = (writer_bounds[0][0] + writer_bounds[1][0]) / 2
+        writer_center_y = (writer_bounds[0][1] + writer_bounds[1][1]) / 2
+        assert writer_center_x == pytest.approx(0.0)
+        assert writer_center_y == pytest.approx(0.0)
+
+        # The retained scene is still centred afterwards for the GLB preview.
         bounds = exported_scene.bounds
         center_x = (bounds[0][0] + bounds[1][0]) / 2
         center_y = (bounds[0][1] + bounds[1][1]) / 2
@@ -674,6 +689,60 @@ class TestVectorBranchExport:
         assert glb_path is None
         assert preview_img is None
         assert "no valid geometry" in msg.lower()
+        mock_bambu_export.assert_not_called()
+
+    @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
+    @patch("core.vector_engine.VectorProcessor")
+    def test_vector_topology_error_escapes_pipeline_for_api_mapping(
+        self,
+        MockVP,
+        mock_bambu_export,
+        tmp_path,
+    ):
+        """Typed topology failures must reach the worker/API boundary intact."""
+        from config import ModelingMode
+        from core.errors import VectorTopologyError
+        from core.converter import convert_image_to_3d
+
+        svg_file = tmp_path / "unrepairable.svg"
+        svg_file.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">'
+            '<rect x="0" y="0" width="10" height="10" fill="#ffffff"/>'
+            "</svg>"
+        )
+        dummy_lut = str(tmp_path / "unrepairable.npy")
+        np.save(dummy_lut, np.zeros(10))
+
+        topology_error = VectorTopologyError(
+            "Vector polygon topology could not be repaired for export",
+            (
+                {
+                    "attempt": "repair_0.001_mm",
+                    "rejected_reason": "float32_duplicate_vertex",
+                },
+            ),
+        )
+        fake_processor = _build_fake_processor(trimesh.Scene())
+        fake_processor.build_mesh.side_effect = topology_error
+        MockVP.return_value = fake_processor
+
+        with pytest.raises(VectorTopologyError) as exc:
+            convert_image_to_3d(
+                image_path=str(svg_file),
+                lut_path=dummy_lut,
+                target_width_mm=20.0,
+                spacer_thick=1.6,
+                structure_mode="Single-sided",
+                color_mode="4-Color",
+                add_loop=False,
+                loop_width=5,
+                loop_length=20,
+                loop_hole=3,
+                loop_pos="Top",
+                modeling_mode=ModelingMode.VECTOR,
+            )
+
+        assert exc.value is topology_error
         mock_bambu_export.assert_not_called()
 
     @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
