@@ -140,7 +140,10 @@ def test_high_fidelity_mesher_boundary_geometry_clips_to_polygon() -> None:
 
     voxel_matrix = np.full((1, 5, 5), 0, dtype=int)
     boundary_geometry = Polygon([(0.0, 0.0), (3.0, 0.0), (0.0, 5.0)])
-    mesher = HighFidelityMesher(disable_material_dilation=True, boundary_geometry=boundary_geometry)
+    mesher = HighFidelityMesher(
+        disable_material_dilation=True,
+        boundary_geometry=boundary_geometry,
+    )
 
     mesh = mesher.generate_mesh(voxel_matrix, 0, height_px=5)
 
@@ -148,42 +151,92 @@ def test_high_fidelity_mesher_boundary_geometry_clips_to_polygon() -> None:
     assert mesh.bounds[0, 0] == pytest.approx(0.0)
     assert mesh.bounds[1, 0] == pytest.approx(3.0)
     assert mesh.volume == pytest.approx(7.5, rel=1e-6)
+    assert mesh.metadata["raster_surface_stats"] == {
+        "patch_count": 1,
+        "lattice_patch_count": 0,
+        "boundary_polygon_count": 1,
+        "boundary_adapter_used": True,
+        "boundary_enabled": True,
+        "material_dilation_applied": False,
+    }
 
 
-def test_high_fidelity_mesher_keeps_interior_rects_on_fast_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fully interior rectangles should stay on rect extrusion while clipped rects use polygons."""
+def test_high_fidelity_mesher_combines_dilation_with_boundary_clipping() -> None:
+    voxel_matrix = np.full((1, 5, 5), -1, dtype=int)
+    voxel_matrix[0, 2, 2] = 0
+    boundary_geometry = Polygon([(1.0, 1.0), (4.0, 1.0), (1.0, 4.0)])
+    mesher = HighFidelityMesher(boundary_geometry=boundary_geometry)
+
+    mesh = mesher.generate_mesh(voxel_matrix, 0, height_px=5)
+
+    assert mesh is not None
+    assert mesh.is_watertight
+    assert mesh.volume == pytest.approx(4.5, rel=1e-6)
+    assert mesh.metadata["raster_surface_stats"] == {
+        "patch_count": 1,
+        "lattice_patch_count": 0,
+        "boundary_polygon_count": 1,
+        "boundary_adapter_used": True,
+        "boundary_enabled": True,
+        "material_dilation_applied": True,
+    }
+
+
+def test_high_fidelity_mesher_keeps_interior_cells_on_lattice_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Interior cells use the exact lattice surface; clipped cells use polygons."""
 
     voxel_matrix = np.full((1, 6, 6), -1, dtype=int)
     voxel_matrix[0, 1:3, 1:3] = 0
     voxel_matrix[0, 3:5, 3:5] = 0
     boundary_geometry = Polygon([(2.0, 2.0), (6.0, 2.0), (6.0, 6.0), (2.0, 6.0)])
-    mesher = HighFidelityMesher(disable_material_dilation=True, boundary_geometry=boundary_geometry)
+    mesher = HighFidelityMesher(
+        disable_material_dilation=True,
+        boundary_geometry=boundary_geometry,
+    )
 
-    recorded: dict[str, list[object]] = {"rects": [], "polygons": []}
-    original_rect_builder = HighFidelityMesher._build_mesh_from_layer_rects
+    recorded: dict[str, list[object]] = {"volumes": [], "polygons": []}
+    original_surface_builder = mesh_generators.build_labeled_surface_mesh
     original_polygon_builder = HighFidelityMesher._build_mesh_from_layer_polygons
 
-    def _record_rects(self, layer_rectangles, height_px):
-        recorded["rects"].extend(layer_rectangles)
-        return original_rect_builder(self, layer_rectangles, height_px)
+    def _record_surface(labels, **kwargs):
+        recorded["volumes"].append(np.asarray(labels).copy())
+        return original_surface_builder(labels, **kwargs)
 
     def _record_polygons(self, layer_polygons, height_px):
         recorded["polygons"].extend(layer_polygons)
         return original_polygon_builder(self, layer_polygons, height_px)
 
-    monkeypatch.setattr(HighFidelityMesher, "_build_mesh_from_layer_rects", _record_rects)
+    monkeypatch.setattr(
+        mesh_generators,
+        "build_labeled_surface_mesh",
+        _record_surface,
+    )
     monkeypatch.setattr(HighFidelityMesher, "_build_mesh_from_layer_polygons", _record_polygons)
 
     mesh = mesher.generate_mesh(voxel_matrix, 0, height_px=6)
 
     assert mesh is not None
-    assert len(recorded["rects"]) == 1
+    assert len(recorded["volumes"]) == 1
     assert len(recorded["polygons"]) == 1
-    rects = recorded["rects"][0][2]
+    interior_volume = recorded["volumes"][0]
     clipped = recorded["polygons"][0][2]
-    assert rects.shape == (1, 4)
-    assert tuple(rects[0]) == pytest.approx((3.0, 3.0, 5.0, 5.0))
+    assert int(np.count_nonzero(interior_volume)) == 4
+    assert np.all(interior_volume[0, 3:5, 3:5])
     assert clipped.bounds == pytest.approx((2.0, 2.0, 3.0, 3.0))
+    assert mesh.metadata["raster_surface_stats"] == {
+        "patch_count": (
+            mesh.metadata["layered_mesh_stats"]["merged_patch_count"] + 1
+        ),
+        "lattice_patch_count": mesh.metadata["layered_mesh_stats"][
+            "merged_patch_count"
+        ],
+        "boundary_polygon_count": 1,
+        "boundary_adapter_used": True,
+        "boundary_enabled": True,
+        "material_dilation_applied": False,
+    }
 
 
 def test_high_fidelity_mesher_logs_structured_boundary_clip_fallback(
@@ -194,7 +247,10 @@ def test_high_fidelity_mesher_logs_structured_boundary_clip_fallback(
 
     voxel_matrix = np.full((1, 4, 4), 0, dtype=int)
     boundary_geometry = Polygon([(0.0, 0.0), (3.0, 0.0), (0.0, 4.0)])
-    mesher = HighFidelityMesher(disable_material_dilation=True, boundary_geometry=boundary_geometry)
+    mesher = HighFidelityMesher(
+        disable_material_dilation=True,
+        boundary_geometry=boundary_geometry,
+    )
 
     class _BrokenRect:
         def intersection(self, _boundary):
@@ -206,6 +262,9 @@ def test_high_fidelity_mesher_logs_structured_boundary_clip_fallback(
     mesh = mesher.generate_mesh(voxel_matrix, 0, height_px=4)
 
     assert mesh is not None
+    assert mesh.metadata["integer_topology_scale"] == 2
+    assert mesh.metadata["raster_surface_stats"]["boundary_adapter_used"] is False
+    assert mesh.metadata["raster_surface_stats"]["boundary_enabled"] is True
     assert any(
         record.__dict__.get("event") == "boundary_polygon_clip_fallback"
         and record.__dict__.get("error_type") == "ValueError"

@@ -7,10 +7,34 @@ separate index domains for volumes that merely touch at an edge or a point.
 
 from __future__ import annotations
 
+import hashlib
+import math
 from dataclasses import asdict, dataclass
+from functools import lru_cache
+
 import numpy as np
 import trimesh
-from scipy import ndimage
+from scipy import ndimage, sparse
+
+
+_CUBOID_FACE_TEMPLATE = np.asarray(
+    [
+        [0, 2, 1],
+        [0, 3, 2],
+        [4, 5, 6],
+        [4, 6, 7],
+        [0, 1, 5],
+        [0, 5, 4],
+        [1, 2, 6],
+        [1, 6, 5],
+        [2, 3, 7],
+        [2, 7, 6],
+        [3, 0, 4],
+        [3, 4, 7],
+    ],
+    dtype=np.uint32,
+)
+_COMPONENT_SIGNATURE_MAX_WORKING_BYTES = 8 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -248,28 +272,45 @@ class _LatticeFloat32Audit:
                 )
             self._unsafe_float32_coordinates[float32_key] = exact_key
 
+    def merge(self, other: "_LatticeFloat32Audit") -> None:
+        """Merge an accepted component audit into the mesh-wide audit."""
 
-def _greedy_rectangles(mask: np.ndarray) -> list[tuple[int, int, int, int]]:
+        for float32_key, exact_key in other._unsafe_float32_coordinates.items():
+            previous = self._unsafe_float32_coordinates.get(float32_key)
+            if previous is not None and previous != exact_key:
+                raise ValueError(
+                    "Distinct exact lattice vertices collide in the float32 "
+                    "lattice float32 collision audit"
+                )
+            self._unsafe_float32_coordinates[float32_key] = exact_key
+        self.source_contact_normalized_edge_count += (
+            other.source_contact_normalized_edge_count
+        )
+
+
+class _DiagonalContactNormalizationRequired(ValueError):
+    """Signal that a compact first pass left an open edge or T-junction."""
+
+
+def _greedy_rectangles_python(
+    mask: np.ndarray,
+) -> list[tuple[int, int, int, int]]:
     """Cover a boolean plane with non-overlapping axis-aligned rectangles."""
 
-    rows, columns = mask.shape
+    rows, _columns = mask.shape
     used = np.zeros_like(mask, dtype=bool)
     rectangles: list[tuple[int, int, int, int]] = []
     for row in range(rows):
-        column = 0
-        while column < columns:
-            if not mask[row, column] or used[row, column]:
-                column += 1
+        available = mask[row] & ~used[row]
+        if not bool(np.any(available)):
+            continue
+        padded = np.pad(available, (1, 1), constant_values=False)
+        transitions = np.diff(padded.astype(np.int8))
+        starts = np.flatnonzero(transitions == 1)
+        ends = np.flatnonzero(transitions == -1)
+        for column, column_end in zip(starts, ends):
+            if used[row, column]:
                 continue
-
-            column_end = column + 1
-            while (
-                column_end < columns
-                and mask[row, column_end]
-                and not used[row, column_end]
-            ):
-                column_end += 1
-
             row_end = row + 1
             while row_end < rows:
                 candidate = mask[row_end, column:column_end]
@@ -277,11 +318,25 @@ def _greedy_rectangles(mask: np.ndarray) -> list[tuple[int, int, int, int]]:
                 if not bool(np.all(candidate)) or bool(np.any(already_used)):
                     break
                 row_end += 1
-
             used[row:row_end, column:column_end] = True
-            rectangles.append((column, row, column_end, row_end))
-            column = column_end
+            rectangles.append(
+                (int(column), row, int(column_end), row_end)
+            )
     return rectangles
+
+
+def merge_boolean_rectangles(mask: np.ndarray) -> np.ndarray:
+    """Merge a 2D boolean mask into exact non-overlapping rectangles.
+    将二维布尔掩码精确合并为互不重叠的矩形。
+    """
+
+    candidate = np.asarray(mask, dtype=bool)
+    if candidate.ndim != 2:
+        raise ValueError("rectangle merging expects a 2D boolean mask")
+    if not bool(np.any(candidate)):
+        return np.empty((0, 4), dtype=np.int32)
+    rectangles = _greedy_rectangles_python(candidate)
+    return np.asarray(rectangles, dtype=np.int32).reshape((-1, 4))
 
 
 def _append_plane_patch_arrays(
@@ -305,11 +360,9 @@ def _append_plane_patch_arrays(
         "-z": (0, 0, -1),
         "+z": (0, 0, 1),
     }
-    rectangles = _greedy_rectangles(mask)
-    if not rectangles:
+    rectangle_array = merge_boolean_rectangles(mask)
+    if len(rectangle_array) == 0:
         return
-    rectangle_array = np.asarray(rectangles, dtype=np.int32)
-    del rectangles
     u0, v0, u1, v1 = rectangle_array.T
     count = len(rectangle_array)
     corners = np.empty((count, 4, 3), dtype=np.int32)
@@ -573,6 +626,305 @@ def _split_patch_edges(
     return base_start, base_end, base_counts_by_edge
 
 
+def _make_rectangle_ring_triangle_offsets(
+    edge_lengths: tuple[int, int, int, int],
+) -> np.ndarray:
+    """Create local triangle indices for one split rectangle ring.
+
+    A diagonal between opposite rectangle corners creates two right-triangle
+    halves. Each half is filled as a zipper between its two subdivided legs.
+    This preserves every boundary segment, adds no center vertex, and emits the
+    minimum ``ring_length - 2`` non-degenerate triangles in linear time.
+    """
+
+    counts = tuple(int(value) for value in edge_lengths)
+    if any(value <= 0 for value in counts):
+        raise ValueError("Layered mesh rectangle ring has invalid edge lengths")
+    ring_length = sum(counts)
+    triangles: list[tuple[int, int, int]] = []
+
+    def ring_token(offset: int) -> int:
+        return offset % ring_length
+
+    def write_half(
+        *,
+        apex_offset: int,
+        backward_count: int,
+        forward_count: int,
+    ) -> None:
+        apex = ring_token(apex_offset)
+        backward_first = ring_token(apex_offset - 1)
+        forward_first = ring_token(apex_offset + 1)
+        triangles.append((apex, backward_first, forward_first))
+
+        for step in range(2, backward_count + 1):
+            triangles.append(
+                (
+                    ring_token(apex_offset - step + 1),
+                    ring_token(apex_offset - step),
+                    forward_first,
+                )
+            )
+
+        backward_end = ring_token(apex_offset - backward_count)
+        for step in range(2, forward_count + 1):
+            triangles.append(
+                (
+                    backward_end,
+                    ring_token(apex_offset + step),
+                    ring_token(apex_offset + step - 1),
+                )
+            )
+
+    first, second, third, fourth = counts
+    write_half(
+        apex_offset=first,
+        backward_count=first,
+        forward_count=second,
+    )
+    write_half(
+        apex_offset=first + second + third,
+        backward_count=third,
+        forward_count=fourth,
+    )
+    result = np.asarray(triangles, dtype=np.uint32)
+    if len(result) != ring_length - 2:
+        raise ValueError("Layered mesh rectangle triangle count mismatch")
+    result.setflags(write=False)
+    return result
+
+
+@lru_cache(maxsize=64)
+def _cached_rectangle_ring_triangle_offsets(
+    edge_lengths: tuple[int, int, int, int],
+) -> np.ndarray:
+    return _make_rectangle_ring_triangle_offsets(edge_lengths)
+
+
+def _rectangle_ring_triangle_offsets(
+    edge_lengths: np.ndarray,
+) -> np.ndarray:
+    """Return bounded-cache local triangles for one split rectangle.
+    返回带有有界缓存的分割矩形局部三角面。
+    """
+
+    counts = tuple(int(value) for value in edge_lengths)
+    if len(counts) != 4:
+        raise ValueError("Layered mesh rectangle ring must have four edges")
+    if sum(counts) <= 64:
+        return _cached_rectangle_ring_triangle_offsets(counts)
+    return _make_rectangle_ring_triangle_offsets(counts)
+
+
+def _segment_pairs_have_material(
+    first_segments: np.ndarray,
+    second_segments: np.ndarray,
+    *,
+    segment_start: np.ndarray,
+    segment_end: np.ndarray,
+    segment_normal: np.ndarray,
+    token_coordinates: np.ndarray,
+    component_labels: np.ndarray,
+    shell_id: int,
+) -> np.ndarray:
+    """Classify candidate pairings along four-incidence boundary segments."""
+
+    first_normals = segment_normal[first_segments].astype(np.int64)
+    second_normals = segment_normal[second_segments].astype(np.int64)
+    orthogonal = np.einsum("ij,ij->i", first_normals, second_normals) == 0
+    first_tokens = segment_start[first_segments]
+    second_tokens = segment_end[first_segments]
+    low = np.minimum(
+        token_coordinates[first_tokens],
+        token_coordinates[second_tokens],
+    )
+    high = np.maximum(
+        token_coordinates[first_tokens],
+        token_coordinates[second_tokens],
+    )
+    sample = np.floor_divide(
+        low + high - first_normals - second_normals,
+        4,
+    )
+    x, y, z = sample.T
+    inside = (
+        (x >= 0)
+        & (x < component_labels.shape[2])
+        & (y >= 0)
+        & (y < component_labels.shape[1])
+        & (z >= 0)
+        & (z < component_labels.shape[0])
+    )
+    occupied = np.zeros(len(first_segments), dtype=bool)
+    if bool(np.any(inside)):
+        occupied[inside] = (
+            component_labels[z[inside], y[inside], x[inside]] == shell_id
+        )
+    return orthogonal & occupied
+
+
+def _segment_pair_token_relations(
+    first_segments: np.ndarray,
+    second_segments: np.ndarray,
+    *,
+    segment_start: np.ndarray,
+    segment_end: np.ndarray,
+    token_coordinates: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return exact endpoint-equivalence relations for segment pairs."""
+
+    first_start = segment_start[first_segments]
+    first_end = segment_end[first_segments]
+    second_start = segment_start[second_segments]
+    second_end = segment_end[second_segments]
+    same_direction = np.all(
+        token_coordinates[first_start] == token_coordinates[second_start],
+        axis=1,
+    )
+    reverse_direction = np.all(
+        token_coordinates[first_start] == token_coordinates[second_end],
+        axis=1,
+    )
+    if not bool(np.all(same_direction ^ reverse_direction)):
+        raise ValueError("Layered mesh boundary segments do not match")
+    related_start = np.where(same_direction, second_start, second_end)
+    related_end = np.where(same_direction, second_end, second_start)
+    return (
+        np.concatenate((first_start, first_end)).astype(np.int64, copy=False),
+        np.concatenate((related_start, related_end)).astype(np.int64, copy=False),
+    )
+
+
+def _token_components_from_segment_pairs(
+    *,
+    token_count: int,
+    token_coordinates: np.ndarray,
+    segment_start: np.ndarray,
+    segment_end: np.ndarray,
+    segment_normal: np.ndarray,
+    segment_order: np.ndarray,
+    segment_group_starts: np.ndarray,
+    segment_group_counts: np.ndarray,
+    component_labels: np.ndarray,
+    shell_id: int,
+) -> np.ndarray:
+    """Resolve shared token identities with vectorized sparse connectivity."""
+
+    paired_first: list[np.ndarray] = []
+    paired_second: list[np.ndarray] = []
+
+    two_groups = np.flatnonzero(segment_group_counts == 2)
+    if len(two_groups) > 0:
+        two_starts = segment_group_starts[two_groups]
+        paired_first.append(segment_order[two_starts])
+        paired_second.append(segment_order[two_starts + 1])
+
+    four_groups = np.flatnonzero(segment_group_counts == 4)
+    if len(four_groups) > 0:
+        four_starts = segment_group_starts[four_groups]
+        instances = segment_order[four_starts[:, None] + np.arange(4)]
+        pair_01 = _segment_pairs_have_material(
+            instances[:, 0],
+            instances[:, 1],
+            segment_start=segment_start,
+            segment_end=segment_end,
+            segment_normal=segment_normal,
+            token_coordinates=token_coordinates,
+            component_labels=component_labels,
+            shell_id=shell_id,
+        )
+        pair_02 = _segment_pairs_have_material(
+            instances[:, 0],
+            instances[:, 2],
+            segment_start=segment_start,
+            segment_end=segment_end,
+            segment_normal=segment_normal,
+            token_coordinates=token_coordinates,
+            component_labels=component_labels,
+            shell_id=shell_id,
+        )
+        pair_03 = _segment_pairs_have_material(
+            instances[:, 0],
+            instances[:, 3],
+            segment_start=segment_start,
+            segment_end=segment_end,
+            segment_normal=segment_normal,
+            token_coordinates=token_coordinates,
+            component_labels=component_labels,
+            shell_id=shell_id,
+        )
+        pair_12 = _segment_pairs_have_material(
+            instances[:, 1],
+            instances[:, 2],
+            segment_start=segment_start,
+            segment_end=segment_end,
+            segment_normal=segment_normal,
+            token_coordinates=token_coordinates,
+            component_labels=component_labels,
+            shell_id=shell_id,
+        )
+        pair_13 = _segment_pairs_have_material(
+            instances[:, 1],
+            instances[:, 3],
+            segment_start=segment_start,
+            segment_end=segment_end,
+            segment_normal=segment_normal,
+            token_coordinates=token_coordinates,
+            component_labels=component_labels,
+            shell_id=shell_id,
+        )
+        pair_23 = _segment_pairs_have_material(
+            instances[:, 2],
+            instances[:, 3],
+            segment_start=segment_start,
+            segment_end=segment_end,
+            segment_normal=segment_normal,
+            token_coordinates=token_coordinates,
+            component_labels=component_labels,
+            shell_id=shell_id,
+        )
+        matching = np.column_stack(
+            (
+                pair_01 & pair_23,
+                pair_02 & pair_13,
+                pair_03 & pair_12,
+            )
+        )
+        if not bool(np.all(np.count_nonzero(matching, axis=1) == 1)):
+            raise ValueError("Layered mesh could not separate a diagonal edge contact")
+        matching_index = np.argmax(matching, axis=1)
+        first_lookup = np.asarray([[0, 2], [0, 1], [0, 1]], dtype=np.int64)
+        second_lookup = np.asarray([[1, 3], [2, 3], [3, 2]], dtype=np.int64)
+        rows = np.arange(len(instances))[:, None]
+        paired_first.append(instances[rows, first_lookup[matching_index]].reshape(-1))
+        paired_second.append(instances[rows, second_lookup[matching_index]].reshape(-1))
+
+    if not paired_first:
+        raise ValueError("Layered mesh boundary has no paired segments")
+    first_segments = np.concatenate(paired_first)
+    second_segments = np.concatenate(paired_second)
+    relation_first, relation_second = _segment_pair_token_relations(
+        first_segments,
+        second_segments,
+        segment_start=segment_start,
+        segment_end=segment_end,
+        token_coordinates=token_coordinates,
+    )
+    graph = sparse.csr_matrix(
+        (
+            np.ones(len(relation_first), dtype=np.uint8),
+            (relation_first, relation_second),
+        ),
+        shape=(token_count, token_count),
+    )
+    _component_count, token_to_vertex = sparse.csgraph.connected_components(
+        graph,
+        directed=False,
+        return_labels=True,
+    )
+    return token_to_vertex.astype(np.uint32, copy=False)
+
+
 def _mesh_arrays_from_patches(
     patches: _CompactPatches,
     *,
@@ -580,6 +932,7 @@ def _mesh_arrays_from_patches(
     component_labels: np.ndarray,
     shell_id: int,
     lattice_audit: _LatticeFloat32Audit | None = None,
+    normalize_diagonal_contacts: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
     patch_count = len(patches)
     if patch_count == 0:
@@ -601,12 +954,15 @@ def _mesh_arrays_from_patches(
     patch_base_offsets = np.empty(patch_count + 1, dtype=np.int64)
     patch_base_offsets[0] = 0
     np.cumsum(patch_base_counts, out=patch_base_offsets[1:])
-    base_nonmanifold = _diagonal_edge_contact_mask(
-        base_start,
-        base_end,
-        component_labels=component_labels,
-        shell_id=shell_id,
-    )
+    if normalize_diagonal_contacts:
+        base_nonmanifold = _diagonal_edge_contact_mask(
+            base_start,
+            base_end,
+            component_labels=component_labels,
+            shell_id=shell_id,
+        )
+    else:
+        base_nonmanifold = np.zeros(len(base_start), dtype=bool)
     if lattice_audit is not None:
         lattice_audit.source_contact_normalized_edge_count += int(
             np.count_nonzero(base_nonmanifold) // 4
@@ -616,15 +972,18 @@ def _mesh_arrays_from_patches(
         edge_axis,
     )
 
-    extra_by_patch = np.add.reduceat(
+    edge_base_offsets = np.empty(len(base_counts_by_edge) + 1, dtype=np.int64)
+    edge_base_offsets[0] = 0
+    np.cumsum(base_counts_by_edge, out=edge_base_offsets[1:])
+    extra_by_edge = np.add.reduceat(
         base_nonmanifold.astype(np.int32),
-        patch_base_offsets[:-1],
+        edge_base_offsets[:-1],
     )
-    ring_lengths = patch_base_counts + extra_by_patch
-    center_needed = ring_lengths != 4
+    ring_counts_by_edge = base_counts_by_edge + extra_by_edge
+    ring_lengths = ring_counts_by_edge.reshape((patch_count, 4)).sum(axis=1)
     boundary_token_count = int(ring_lengths.sum())
-    token_count = boundary_token_count + int(np.count_nonzero(center_needed))
-    face_count = int(np.where(center_needed, ring_lengths, 2).sum())
+    token_count = boundary_token_count
+    face_count = int((ring_lengths - 2).sum())
     if token_count > np.iinfo(np.uint32).max:
         raise ValueError("Layered surface component exceeds uint32 lattice indices")
 
@@ -633,73 +992,112 @@ def _mesh_arrays_from_patches(
     segment_start = np.empty(boundary_token_count, dtype=np.uint32)
     segment_end = np.empty(boundary_token_count, dtype=np.uint32)
     segment_normal = np.empty((boundary_token_count, 3), dtype=np.int8)
+    patch_token_offsets = np.empty(patch_count + 1, dtype=np.int64)
+    patch_token_offsets[0] = 0
+    np.cumsum(ring_lengths, out=patch_token_offsets[1:])
+    patch_face_offsets = np.empty(patch_count + 1, dtype=np.int64)
+    patch_face_offsets[0] = 0
+    np.cumsum(ring_lengths - 2, out=patch_face_offsets[1:])
 
-    token_cursor = 0
-    face_cursor = 0
-    segment_cursor = 0
-    for patch_index in range(patch_count):
-        base_begin = int(patch_base_offsets[patch_index])
-        base_finish = int(patch_base_offsets[patch_index + 1])
-        ring_length = int(ring_lengths[patch_index])
-        ring_begin = token_cursor
-        ring_position = 0
-        for base_index in range(base_begin, base_finish):
-            token_coordinates[ring_begin + ring_position] = base_start[base_index] * 2
-            ring_position += 1
-            if base_nonmanifold[base_index]:
+    if not bool(np.any(base_nonmanifold)):
+        token_coordinates[:] = base_start.astype(np.int64) * 2
+        segment_start[:] = np.arange(boundary_token_count, dtype=np.uint32)
+        segment_end[:] = segment_start + np.uint32(1)
+        segment_end[patch_token_offsets[1:] - 1] = patch_token_offsets[
+            :-1
+        ].astype(np.uint32)
+        segment_normal[:] = np.repeat(
+            patches.normals,
+            ring_lengths,
+            axis=0,
+        )
+
+        four_patch_indices = np.flatnonzero(ring_lengths == 4)
+        if len(four_patch_indices) > 0:
+            ring_begins = patch_token_offsets[four_patch_indices].astype(np.uint32)
+            face_begins = patch_face_offsets[four_patch_indices]
+            faces_by_token[face_begins] = np.column_stack(
+                (ring_begins, ring_begins + 2, ring_begins + 1)
+            )
+            faces_by_token[face_begins + 1] = np.column_stack(
+                (ring_begins, ring_begins + 3, ring_begins + 2)
+            )
+        non_four_patch_indices = np.flatnonzero(ring_lengths != 4)
+        for patch_index in non_four_patch_indices:
+            ring_begin = int(patch_token_offsets[patch_index])
+            face_begin = int(patch_face_offsets[patch_index])
+            triangle_offsets = _rectangle_ring_triangle_offsets(
+                ring_counts_by_edge[patch_index * 4 : (patch_index + 1) * 4]
+            )
+            np.add(
+                triangle_offsets,
+                np.uint32(ring_begin),
+                out=faces_by_token[
+                    face_begin : face_begin + len(triangle_offsets)
+                ],
+            )
+    else:
+        token_cursor = 0
+        for patch_index in range(patch_count):
+            base_begin = int(patch_base_offsets[patch_index])
+            base_finish = int(patch_base_offsets[patch_index + 1])
+            ring_length = int(ring_lengths[patch_index])
+            ring_begin = token_cursor
+            ring_position = 0
+            for base_index in range(base_begin, base_finish):
                 token_coordinates[ring_begin + ring_position] = (
-                    base_start[base_index] + base_end[base_index]
+                    base_start[base_index] * 2
                 )
                 ring_position += 1
-        if ring_position != ring_length:
-            raise ValueError("Layered mesh compact ring count mismatch")
+                if base_nonmanifold[base_index]:
+                    token_coordinates[ring_begin + ring_position] = (
+                        base_start[base_index] + base_end[base_index]
+                    )
+                    ring_position += 1
+            if ring_position != ring_length:
+                raise ValueError("Layered mesh compact ring count mismatch")
 
-        ring_indices = np.arange(
-            ring_begin,
-            ring_begin + ring_length,
-            dtype=np.uint32,
-        )
-        segment_start[segment_cursor : segment_cursor + ring_length] = ring_indices
-        segment_end[segment_cursor : segment_cursor + ring_length] = np.roll(
-            ring_indices,
-            -1,
-        )
-        segment_normal[segment_cursor : segment_cursor + ring_length] = (
-            patches.normals[patch_index]
-        )
-        segment_cursor += ring_length
+            ring_indices = np.arange(
+                ring_begin,
+                ring_begin + ring_length,
+                dtype=np.uint32,
+            )
+            segment_start[ring_begin : ring_begin + ring_length] = ring_indices
+            segment_end[ring_begin : ring_begin + ring_length] = np.roll(
+                ring_indices,
+                -1,
+            )
+            segment_normal[ring_begin : ring_begin + ring_length] = (
+                patches.normals[patch_index]
+            )
 
-        if ring_length == 4:
-            faces_by_token[face_cursor] = (
-                ring_indices[0],
-                ring_indices[2],
-                ring_indices[1],
-            )
-            faces_by_token[face_cursor + 1] = (
-                ring_indices[0],
-                ring_indices[3],
-                ring_indices[2],
-            )
-            face_cursor += 2
+            face_begin = int(patch_face_offsets[patch_index])
+            if ring_length == 4:
+                faces_by_token[face_begin] = (
+                    ring_indices[0],
+                    ring_indices[2],
+                    ring_indices[1],
+                )
+                faces_by_token[face_begin + 1] = (
+                    ring_indices[0],
+                    ring_indices[3],
+                    ring_indices[2],
+                )
+            else:
+                triangle_offsets = _rectangle_ring_triangle_offsets(
+                    ring_counts_by_edge[patch_index * 4 : (patch_index + 1) * 4]
+                )
+                np.add(
+                    triangle_offsets,
+                    np.uint32(ring_begin),
+                    out=faces_by_token[
+                        face_begin : face_begin + len(triangle_offsets)
+                    ],
+                )
             token_cursor += ring_length
-            continue
 
-        center_token = ring_begin + ring_length
-        corners = patches.corners[patch_index]
-        token_coordinates[center_token] = corners.min(axis=0) + corners.max(axis=0)
-        next_indices = np.roll(ring_indices, -1)
-        faces_by_token[face_cursor : face_cursor + ring_length, 0] = center_token
-        faces_by_token[face_cursor : face_cursor + ring_length, 1] = next_indices
-        faces_by_token[face_cursor : face_cursor + ring_length, 2] = ring_indices
-        face_cursor += ring_length
-        token_cursor += ring_length + 1
-
-    if (
-        token_cursor != token_count
-        or face_cursor != face_count
-        or segment_cursor != boundary_token_count
-    ):
-        raise ValueError("Layered mesh compact allocation count mismatch")
+        if token_cursor != token_count:
+            raise ValueError("Layered mesh compact allocation count mismatch")
     del (
         edge_first,
         edge_second,
@@ -709,9 +1107,12 @@ def _mesh_arrays_from_patches(
         patch_base_counts,
         patch_base_offsets,
         base_nonmanifold,
-        extra_by_patch,
+        edge_base_offsets,
+        extra_by_edge,
+        ring_counts_by_edge,
         ring_lengths,
-        center_needed,
+        patch_token_offsets,
+        patch_face_offsets,
     )
 
     doubled_coordinate_base = max(3, int(token_coordinates.max()) + 1)
@@ -734,12 +1135,6 @@ def _mesh_arrays_from_patches(
             segment_group_counts[:-1],
             out=segment_group_starts[1:],
         )
-    segment_group_ends = np.concatenate(
-        (
-            segment_group_starts[1:],
-            np.array([boundary_token_count], dtype=np.int64),
-        )
-    )
     if bool(np.any((segment_group_counts != 2) & (segment_group_counts != 4))):
         raise ValueError("Layered mesh boundary segment has unsupported incidence")
     del (
@@ -748,107 +1143,18 @@ def _mesh_arrays_from_patches(
         segment_inverse,
     )
 
-    parents = np.arange(token_count, dtype=np.uint32)
-
-    def find(token: int) -> int:
-        root = token
-        while int(parents[root]) != root:
-            root = int(parents[root])
-        while int(parents[token]) != token:
-            next_token = int(parents[token])
-            parents[token] = root
-            token = next_token
-        return root
-
-    def union(first: int, second: int) -> None:
-        first_root = find(first)
-        second_root = find(second)
-        if first_root == second_root:
-            return
-        if not np.array_equal(
-            token_coordinates[first_root],
-            token_coordinates[second_root],
-        ):
-            raise ValueError("Layered mesh attempted to join different coordinates")
-        parents[second_root] = first_root
-
-    def join_segment_pair(first_segment: int, second_segment: int) -> None:
-        first_tokens = (
-            int(segment_start[first_segment]),
-            int(segment_end[first_segment]),
-        )
-        second_tokens = (
-            int(segment_start[second_segment]),
-            int(segment_end[second_segment]),
-        )
-        if np.array_equal(
-            token_coordinates[first_tokens[0]],
-            token_coordinates[second_tokens[0]],
-        ):
-            union(first_tokens[0], second_tokens[0])
-            union(first_tokens[1], second_tokens[1])
-        elif np.array_equal(
-            token_coordinates[first_tokens[0]],
-            token_coordinates[second_tokens[1]],
-        ):
-            union(first_tokens[0], second_tokens[1])
-            union(first_tokens[1], second_tokens[0])
-        else:
-            raise ValueError("Layered mesh boundary segments do not match")
-
-    def pair_has_material(first_segment: int, second_segment: int) -> bool:
-        first_normal = segment_normal[first_segment].astype(np.float64)
-        second_normal = segment_normal[second_segment].astype(np.float64)
-        if float(np.dot(first_normal, second_normal)) != 0.0:
-            return False
-        first_token = int(segment_start[first_segment])
-        second_token = int(segment_end[first_segment])
-        low = np.minimum(
-            token_coordinates[first_token],
-            token_coordinates[second_token],
-        ).astype(np.float64)
-        high = np.maximum(
-            token_coordinates[first_token],
-            token_coordinates[second_token],
-        ).astype(np.float64)
-        sample = (low + high) * 0.25 - first_normal * 0.25 - second_normal * 0.25
-        x, y, z = (int(np.floor(value)) for value in sample)
-        return bool(
-            0 <= z < component_labels.shape[0]
-            and 0 <= y < component_labels.shape[1]
-            and 0 <= x < component_labels.shape[2]
-            and component_labels[z, y, x] == shell_id
-        )
-
-    for group_start, group_end in zip(segment_group_starts, segment_group_ends):
-        instances = segment_order[int(group_start) : int(group_end)]
-        if len(instances) == 2:
-            join_segment_pair(int(instances[0]), int(instances[1]))
-            continue
-        unpaired = {0, 1, 2, 3}
-        for first_index in range(4):
-            if first_index not in unpaired:
-                continue
-            matches = [
-                second_index
-                for second_index in sorted(unpaired)
-                if second_index != first_index
-                and pair_has_material(
-                    int(instances[first_index]),
-                    int(instances[second_index]),
-                )
-            ]
-            if len(matches) != 1:
-                raise ValueError(
-                    "Layered mesh could not separate a diagonal edge contact"
-                )
-            second_index = matches[0]
-            join_segment_pair(
-                int(instances[first_index]),
-                int(instances[second_index]),
-            )
-            unpaired.remove(first_index)
-            unpaired.remove(second_index)
+    token_to_vertex = _token_components_from_segment_pairs(
+        token_count=token_count,
+        token_coordinates=token_coordinates,
+        segment_start=segment_start,
+        segment_end=segment_end,
+        segment_normal=segment_normal,
+        segment_order=segment_order,
+        segment_group_starts=segment_group_starts,
+        segment_group_counts=segment_group_counts,
+        component_labels=component_labels,
+        shell_id=shell_id,
+    )
 
     del (
         segment_start,
@@ -856,22 +1162,132 @@ def _mesh_arrays_from_patches(
         segment_normal,
         segment_order,
         segment_group_starts,
-        segment_group_ends,
         segment_group_counts,
     )
 
-    for token in range(token_count):
-        parents[token] = find(token)
-    roots, token_to_vertex = np.unique(parents, return_inverse=True)
-    exact_world_doubled = token_coordinates[roots]
+    _vertex_labels, representative_tokens = np.unique(
+        token_to_vertex,
+        return_index=True,
+    )
+    exact_world_doubled = token_coordinates[representative_tokens]
     faces = token_to_vertex[faces_by_token].astype(np.uint32, copy=False)
-    del parents, roots, token_coordinates, token_to_vertex, faces_by_token
+    del (
+        _vertex_labels,
+        representative_tokens,
+        token_coordinates,
+        token_to_vertex,
+        faces_by_token,
+    )
 
     exact_world_doubled[:, 1] = int(height_px) * 2 - exact_world_doubled[:, 1]
     vertices = exact_world_doubled.astype(np.float32) * np.float32(0.5)
     if lattice_audit is not None:
         lattice_audit.observe(exact_world_doubled, vertices)
     return vertices, faces
+
+
+def _cuboid_component_arrays(
+    origins: np.ndarray,
+    ends: np.ndarray,
+    *,
+    height_px: int,
+    lattice_audit: _LatticeFloat32Audit,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Materialize many independent integer cuboids in one bounded batch."""
+
+    component_count = len(origins)
+    if component_count == 0 or origins.shape != ends.shape or origins.shape[1:] != (3,):
+        raise ValueError("Layered mesh cuboid batch has invalid bounds")
+    if bool(np.any(ends <= origins)):
+        raise ValueError("Layered mesh cuboid batch has empty bounds")
+    if component_count * 8 > np.iinfo(np.uint32).max:
+        raise ValueError("Layered mesh cuboid batch exceeds uint32 lattice indices")
+
+    x0, y0, z0 = origins.T.astype(np.int64, copy=False)
+    x1, y1, z1 = ends.T.astype(np.int64, copy=False)
+    world_y0 = np.int64(height_px) - y1
+    world_y1 = np.int64(height_px) - y0
+    exact_world_doubled = np.empty((component_count, 8, 3), dtype=np.int64)
+    exact_world_doubled[:, [0, 3, 4, 7], 0] = (x0 * 2)[:, None]
+    exact_world_doubled[:, [1, 2, 5, 6], 0] = (x1 * 2)[:, None]
+    exact_world_doubled[:, [0, 1, 4, 5], 1] = (world_y0 * 2)[:, None]
+    exact_world_doubled[:, [2, 3, 6, 7], 1] = (world_y1 * 2)[:, None]
+    exact_world_doubled[:, :4, 2] = (z0 * 2)[:, None]
+    exact_world_doubled[:, 4:, 2] = (z1 * 2)[:, None]
+
+    vertices = exact_world_doubled.reshape((-1, 3)).astype(np.float32)
+    vertices *= np.float32(0.5)
+    lattice_audit.observe(exact_world_doubled.reshape((-1, 3)), vertices)
+    offsets = (np.arange(component_count, dtype=np.uint32) * np.uint32(8)).reshape(
+        (-1, 1, 1)
+    )
+    faces = (_CUBOID_FACE_TEMPLATE[None, :, :] + offsets).reshape((-1, 3))
+    return vertices, faces
+
+
+def _translated_component_template_arrays(
+    template_vertices: np.ndarray,
+    template_faces: np.ndarray,
+    translations: np.ndarray,
+    *,
+    lattice_audit: _LatticeFloat32Audit,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Replicate one exact small-component topology at integer translations."""
+
+    instance_count = len(translations)
+    vertices_per_instance = len(template_vertices)
+    if instance_count == 0 or vertices_per_instance == 0 or len(template_faces) == 0:
+        raise ValueError("Layered mesh component template batch is empty")
+    total_vertices = instance_count * vertices_per_instance
+    if total_vertices > np.iinfo(np.uint32).max:
+        raise ValueError("Layered mesh component template exceeds uint32 indices")
+
+    exact_template_doubled = np.rint(
+        np.asarray(template_vertices, dtype=np.float64) * 2.0
+    ).astype(np.int64)
+    if not np.array_equal(
+        exact_template_doubled.astype(np.float64) * 0.5,
+        np.asarray(template_vertices, dtype=np.float64),
+    ):
+        raise ValueError("Layered mesh component template left the half-grid")
+
+    vertices = np.empty((total_vertices, 3), dtype=np.float32)
+    block_instances = max(1, 65_536 // vertices_per_instance)
+    for block_start in range(0, instance_count, block_instances):
+        block_end = min(block_start + block_instances, instance_count)
+        exact_block = (
+            exact_template_doubled[None, :, :]
+            + translations[block_start:block_end, None, :].astype(np.int64) * 2
+        ).reshape((-1, 3))
+        float32_block = exact_block.astype(np.float32) * np.float32(0.5)
+        lattice_audit.observe(exact_block, float32_block)
+        output_start = block_start * vertices_per_instance
+        output_end = block_end * vertices_per_instance
+        vertices[output_start:output_end] = float32_block
+
+    offsets = (
+        np.arange(instance_count, dtype=np.uint32) * np.uint32(vertices_per_instance)
+    ).reshape((-1, 1, 1))
+    faces = (
+        np.asarray(template_faces, dtype=np.uint32)[None, :, :] + offsets
+    ).reshape((-1, 3))
+    return vertices, faces
+
+
+def _component_bound_arrays(
+    component_bounds: list[tuple[slice, slice, slice] | None],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Convert SciPy Z/Y/X component slices into compact X/Y/Z arrays."""
+
+    origins = np.empty((len(component_bounds), 3), dtype=np.int32)
+    ends = np.empty_like(origins)
+    for index, bounds in enumerate(component_bounds):
+        if bounds is None:
+            raise ValueError("Layered mesh component labels are not contiguous")
+        z_bounds, y_bounds, x_bounds = bounds
+        origins[index] = (x_bounds.start, y_bounds.start, z_bounds.start)
+        ends[index] = (x_bounds.stop, y_bounds.stop, z_bounds.stop)
+    return origins, ends
 
 
 def _validate_component_arrays(
@@ -893,7 +1309,7 @@ def _validate_component_arrays(
     ):
         raise ValueError("Layered surface meshing produced an index-degenerate triangle")
 
-    signed_volume = 0.0
+    signed_six_volume_terms: list[float] = []
     for start in range(0, len(faces), 65_536):
         face_block = faces[start : start + 65_536]
         triangles = vertices[face_block].astype(np.float64, copy=False)
@@ -908,13 +1324,14 @@ def _validate_component_arrays(
             raise ValueError(
                 "Layered surface meshing produced a coordinate-degenerate triangle"
             )
-        signed_volume += float(
-            np.einsum(
-                "ij,ij->i",
-                triangles[:, 0],
-                np.cross(triangles[:, 1], triangles[:, 2]),
-            ).sum()
-            / 6.0
+        signed_six_volume_terms.append(
+            float(
+                np.einsum(
+                    "ij,ij->i",
+                    triangles[:, 0],
+                    np.cross(triangles[:, 1], triangles[:, 2]),
+                ).sum()
+            )
         )
 
     edge_keys = np.empty(len(faces) * 3, dtype=np.uint64)
@@ -938,9 +1355,81 @@ def _validate_component_arrays(
         and np.all(edge_keys[1:-1:2] != edge_keys[2::2])
     )
     if not paired:
-        raise ValueError("Layered surface meshing produced an open edge or T-junction")
-    if not np.isclose(signed_volume, float(expected_volume), rtol=0.0, atol=1e-9):
+        raise _DiagonalContactNormalizationRequired(
+            "Layered surface meshing produced an open edge or T-junction"
+        )
+    signed_volume = math.fsum(signed_six_volume_terms) / 6.0
+    volume_tolerance = max(
+        1e-9,
+        abs(float(expected_volume)) * np.finfo(np.float64).eps * 64.0,
+    )
+    if not np.isclose(
+        signed_volume,
+        float(expected_volume),
+        rtol=0.0,
+        atol=volume_tolerance,
+    ):
         raise ValueError("Layered surface meshing changed occupied volume")
+
+
+def _validated_component_arrays(
+    patches: _CompactPatches,
+    *,
+    height_px: int,
+    component_labels: np.ndarray,
+    shell_id: int,
+    expected_volume: int,
+    validate_output: bool,
+    lattice_audit: _LatticeFloat32Audit,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build one component compactly, normalizing only proven T-junctions."""
+
+    if not validate_output:
+        return _mesh_arrays_from_patches(
+            patches,
+            height_px=height_px,
+            component_labels=component_labels,
+            shell_id=shell_id,
+            lattice_audit=lattice_audit,
+            normalize_diagonal_contacts=True,
+        )
+
+    first_audit = _LatticeFloat32Audit()
+    try:
+        vertices, faces = _mesh_arrays_from_patches(
+            patches,
+            height_px=height_px,
+            component_labels=component_labels,
+            shell_id=shell_id,
+            lattice_audit=first_audit,
+            normalize_diagonal_contacts=False,
+        )
+        _validate_component_arrays(
+            vertices,
+            faces,
+            expected_volume=expected_volume,
+        )
+    except _DiagonalContactNormalizationRequired:
+        del vertices, faces
+        retry_audit = _LatticeFloat32Audit()
+        vertices, faces = _mesh_arrays_from_patches(
+            patches,
+            height_px=height_px,
+            component_labels=component_labels,
+            shell_id=shell_id,
+            lattice_audit=retry_audit,
+            normalize_diagonal_contacts=True,
+        )
+        _validate_component_arrays(
+            vertices,
+            faces,
+            expected_volume=expected_volume,
+        )
+        lattice_audit.merge(retry_audit)
+        return vertices, faces
+
+    lattice_audit.merge(first_audit)
+    return vertices, faces
 
 
 def _shifted_slices(
@@ -1037,14 +1526,195 @@ def build_labeled_surface_mesh(
     merged_patch_count = 0
     peak_component_patch_count = 0
     component_voxel_total = 0
+    processed_component_count = 0
+    component_chunk_count = 0
     vertex_offset = 0
     component_bounds = ndimage.find_objects(component_labels)
-    for shell_id, bounds in enumerate(component_bounds, start=1):
+    component_origins, component_ends = _component_bound_arrays(component_bounds)
+    component_sizes = np.bincount(
+        component_labels.reshape(-1),
+        minlength=int(component_count) + 1,
+    )[1:].astype(np.int64, copy=False)
+    component_dimensions = component_ends.astype(np.int64) - component_origins
+    component_bbox_volumes = np.prod(component_dimensions, axis=1)
+    cuboid_components = component_sizes == component_bbox_volumes
+
+    cuboid_indices = np.flatnonzero(cuboid_components)
+    if len(cuboid_indices) > 0:
+        cuboid_origins = component_origins[cuboid_indices]
+        cuboid_ends = component_ends[cuboid_indices]
+        cuboid_vertices, cuboid_faces = _cuboid_component_arrays(
+            cuboid_origins,
+            cuboid_ends,
+            height_px=int(height_px),
+            lattice_audit=lattice_audit,
+        )
+        if vertex_offset + len(cuboid_vertices) > np.iinfo(np.uint32).max:
+            raise ValueError("Layered surface mesh exceeds uint32 lattice indices")
+        vertex_chunks.append(cuboid_vertices)
+        face_chunks.append(cuboid_faces + np.uint32(vertex_offset))
+        vertex_offset += len(cuboid_vertices)
+
+        cuboid_dimensions = component_dimensions[cuboid_indices]
+        x_size, y_size, z_size = cuboid_dimensions.T
+        exposed_count += int(
+            np.sum(
+                2
+                * (
+                    x_size * y_size
+                    + x_size * z_size
+                    + y_size * z_size
+                )
+            )
+        )
+        cuboid_voxel_count = int(component_sizes[cuboid_indices].sum())
+        cuboid_count = len(cuboid_indices)
+        merged_patch_count += cuboid_count * 6
+        peak_component_patch_count = max(peak_component_patch_count, 6)
+        component_voxel_total += cuboid_voxel_count
+        processed_component_count += cuboid_count
+        component_chunk_count += 1
+        del (
+            cuboid_origins,
+            cuboid_ends,
+            cuboid_vertices,
+            cuboid_faces,
+            cuboid_dimensions,
+        )
+
+    non_cuboid_indices = np.flatnonzero(~cuboid_components)
+    signature_candidate_indices = non_cuboid_indices[
+        component_bbox_volumes[non_cuboid_indices]
+        <= _COMPONENT_SIGNATURE_MAX_WORKING_BYTES
+    ]
+    hashed_groups: dict[
+        tuple[tuple[int, ...], bytes],
+        list[list[int]],
+    ] = {}
+    for component_index in signature_candidate_indices:
+        bounds = component_bounds[component_index]
         if bounds is None:
-            continue
+            raise ValueError("Layered mesh component labels are not contiguous")
+        shell_id = int(component_index) + 1
+        local_component = component_labels[bounds] == shell_id
+        packed_component = np.packbits(local_component.reshape(-1))
+        signature_key = (
+            tuple(int(value) for value in local_component.shape),
+            hashlib.blake2b(packed_component, digest_size=16).digest(),
+        )
+        collision_groups = hashed_groups.setdefault(signature_key, [])
+        for collision_group in collision_groups:
+            representative_index = collision_group[0]
+            representative_bounds = component_bounds[representative_index]
+            if representative_bounds is None:
+                raise ValueError("Layered mesh component labels are not contiguous")
+            representative = (
+                component_labels[representative_bounds]
+                == representative_index + 1
+            )
+            if np.array_equal(local_component, representative):
+                collision_group.append(int(component_index))
+                break
+        else:
+            collision_groups.append([int(component_index)])
+
+    template_groups: list[list[int]] = []
+    individual_component_indices = list(
+        int(index)
+        for index in non_cuboid_indices[
+            component_bbox_volumes[non_cuboid_indices]
+            > _COMPONENT_SIGNATURE_MAX_WORKING_BYTES
+        ]
+    )
+    for collision_groups in hashed_groups.values():
+        for collision_group in collision_groups:
+            if len(collision_group) > 1:
+                template_groups.append(collision_group)
+            else:
+                individual_component_indices.extend(collision_group)
+
+    for component_indices in template_groups:
+        first_component_index = component_indices[0]
+        first_shell_id = first_component_index + 1
+        first_bounds = component_bounds[first_component_index]
+        if first_bounds is None:
+            raise ValueError("Layered mesh component labels are not contiguous")
+        local_component = component_labels[first_bounds] == first_shell_id
+        local_component_labels = local_component.astype(np.int32)
+        template_patches, template_exposed_count = _component_patches(
+            local_component,
+            shell_id=1,
+        )
+        template_patch_count = len(template_patches)
+        template_audit = _LatticeFloat32Audit()
+        component_voxel_count = int(component_sizes[first_component_index])
+        template_vertices, template_faces = _validated_component_arrays(
+            template_patches,
+            height_px=local_component.shape[1],
+            component_labels=local_component_labels,
+            shell_id=1,
+            expected_volume=component_voxel_count,
+            validate_output=effective_policy.validate_output,
+            lattice_audit=template_audit,
+        )
+
+        group_indices = np.asarray(component_indices, dtype=np.int64)
+        group_origins = component_origins[group_indices].astype(np.int64)
+        group_ends = component_ends[group_indices].astype(np.int64)
+        translations = np.column_stack(
+            (
+                group_origins[:, 0],
+                np.int64(height_px) - group_ends[:, 1],
+                group_origins[:, 2],
+            )
+        )
+        group_vertices, group_faces = _translated_component_template_arrays(
+            template_vertices,
+            template_faces,
+            translations,
+            lattice_audit=lattice_audit,
+        )
+        group_count = len(component_indices)
+        lattice_audit.source_contact_normalized_edge_count += (
+            template_audit.source_contact_normalized_edge_count * group_count
+        )
+        if vertex_offset + len(group_vertices) > np.iinfo(np.uint32).max:
+            raise ValueError("Layered surface mesh exceeds uint32 lattice indices")
+        vertex_chunks.append(group_vertices)
+        face_chunks.append(group_faces + np.uint32(vertex_offset))
+        vertex_offset += len(group_vertices)
+        exposed_count += template_exposed_count * group_count
+        merged_patch_count += template_patch_count * group_count
+        peak_component_patch_count = max(
+            peak_component_patch_count,
+            template_patch_count,
+        )
+        component_voxel_total += component_voxel_count * group_count
+        processed_component_count += group_count
+        component_chunk_count += 1
+        del (
+            local_component,
+            local_component_labels,
+            template_patches,
+            template_vertices,
+            template_faces,
+            template_audit,
+            group_indices,
+            group_origins,
+            group_ends,
+            translations,
+            group_vertices,
+            group_faces,
+        )
+
+    for component_index in individual_component_indices:
+        shell_id = int(component_index) + 1
+        bounds = component_bounds[component_index]
+        if bounds is None:
+            raise ValueError("Layered mesh component labels are not contiguous")
         local_labels = component_labels[bounds]
         local_component = local_labels == shell_id
-        component_voxel_count = int(np.count_nonzero(local_component))
+        component_voxel_count = int(component_sizes[component_index])
         z_origin = int(bounds[0].start or 0)
         y_origin = int(bounds[1].start or 0)
         x_origin = int(bounds[2].start or 0)
@@ -1054,20 +1724,16 @@ def build_labeled_surface_mesh(
             origin=(x_origin, y_origin, z_origin),
         )
         component_patch_count = len(compact_patches)
-        component_vertices, component_faces = _mesh_arrays_from_patches(
+        component_vertices, component_faces = _validated_component_arrays(
             compact_patches,
             height_px=int(height_px),
             component_labels=component_labels,
             shell_id=shell_id,
+            expected_volume=component_voxel_count,
+            validate_output=effective_policy.validate_output,
             lattice_audit=lattice_audit,
         )
         del compact_patches
-        if effective_policy.validate_output:
-            _validate_component_arrays(
-                component_vertices,
-                component_faces,
-                expected_volume=component_voxel_count,
-            )
 
         if vertex_offset + len(component_vertices) > np.iinfo(np.uint32).max:
             raise ValueError("Layered surface mesh exceeds uint32 lattice indices")
@@ -1081,11 +1747,32 @@ def build_labeled_surface_mesh(
             component_patch_count,
         )
         component_voxel_total += component_voxel_count
+        processed_component_count += 1
+        component_chunk_count += 1
         del component_vertices, component_faces, local_component
 
-    if len(vertex_chunks) != int(component_count) or component_voxel_total != voxel_count:
+    if (
+        processed_component_count != int(component_count)
+        or component_voxel_total != voxel_count
+    ):
         raise ValueError("Layered surface component assembly is incomplete")
-    del component_labels, component_bounds, local_labels, selected
+    del (
+        component_labels,
+        component_bounds,
+        component_origins,
+        component_ends,
+        component_sizes,
+        component_dimensions,
+        component_bbox_volumes,
+        cuboid_components,
+        cuboid_indices,
+        non_cuboid_indices,
+        signature_candidate_indices,
+        hashed_groups,
+        template_groups,
+        individual_component_indices,
+        selected,
+    )
 
     if len(vertex_chunks) == 1:
         lattice_vertices = vertex_chunks[0]
@@ -1113,7 +1800,7 @@ def build_labeled_surface_mesh(
         component_count=int(component_count),
         exposed_unit_face_count=exposed_count,
         merged_patch_count=merged_patch_count,
-        component_chunk_count=int(component_count),
+        component_chunk_count=component_chunk_count,
         peak_component_patch_count=peak_component_patch_count,
         vertex_count=lattice_vertex_count,
         face_count=lattice_face_count,
@@ -1135,4 +1822,5 @@ __all__ = [
     "LayeredMeshPolicy",
     "LayeredMeshStats",
     "build_labeled_surface_mesh",
+    "merge_boolean_rectangles",
 ]
