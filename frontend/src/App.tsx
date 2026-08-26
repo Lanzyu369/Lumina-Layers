@@ -47,6 +47,7 @@ import { collectConverterKeepFileIds, useConverterStore } from "./stores/convert
 import { useSettingsStore } from "./stores/settingsStore";
 import { useShallow } from "zustand/react/shallow";
 import { useElectronLanguageSync } from "./integrations/electron";
+import { HEADER_STATUS_PILL_SHAPE_CLASS } from "./components/ui/headerControls";
 
 import LutDetailsPanel from "./components/LutDetailsPanel";
 
@@ -136,8 +137,8 @@ function WidgetToggles() {
     <div className={`relative${hasWidgets ? '' : ' invisible pointer-events-none'}`} ref={dropdownRef}>
       <button
         data-testid="panel-controls-toggle"
-        className={`flex items-center gap-2 border px-4 py-2 text-sm font-semibold transition-colors duration-300 rounded-xl outline-none
-          ${isOpen ? 'border-transparent bg-blue-600 shadow-[var(--shadow-control-hover)] text-white' : 'border-slate-200/80 bg-slate-100 dark:border-slate-800/80 dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-800'}
+        className={`inline-flex h-9 shrink-0 items-center gap-2 rounded-full border px-3.5 text-sm font-semibold transition-colors duration-300 outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]
+          ${isOpen ? 'border-transparent bg-blue-600 shadow-[var(--shadow-control-hover)] text-white' : 'border-slate-200/80 bg-slate-100/85 text-slate-600 shadow-[var(--shadow-control)] hover:bg-slate-200/90 dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:bg-slate-800/80'}
         `}
         style={{ WebkitTapHighlightColor: 'transparent' }}
         onClick={() => setIsOpen(!isOpen)}
@@ -388,7 +389,7 @@ function AppContent() {
           {reproMode.enabled && (
             <span
               data-testid="repro-mode-badge"
-              className={`inline-flex items-center gap-1.5 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200 ${workspace.isCompact ? "px-2.5 py-1 text-xs" : "px-3 py-1 text-sm"}`}
+              className={`${HEADER_STATUS_PILL_SHAPE_CLASS} bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200 ${workspace.isCompact ? "px-3 text-xs" : "px-3.5 text-sm"}`}
               title={`复现模式 / Reproduction mode: ${reproMode.ticketId}`}
             >
               <span className="h-2 w-2 rounded-full bg-amber-400" />
@@ -398,11 +399,17 @@ function AppContent() {
             </span>
           )}
           {connected === null ? (
-            <span className="text-sm text-slate-500 dark:text-slate-400">{t("app_checking_backend")}</span>
+            <span
+              data-testid="health-badge-checking"
+              className={`${HEADER_STATUS_PILL_SHAPE_CLASS} border border-slate-200/80 bg-slate-100/85 text-slate-500 shadow-[var(--shadow-control)] dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-400 ${workspace.isCompact ? "px-3 text-xs" : "px-3.5 text-sm"}`}
+            >
+              <span className="h-2 w-2 animate-pulse rounded-full bg-slate-400" />
+              <span className={workspace.isCompact ? "hidden" : "hidden sm:inline"}>{t("app_checking_backend")}</span>
+            </span>
           ) : connected ? (
             <span
               data-testid="health-badge-ok"
-              className={`inline-flex items-center gap-1.5 rounded-full bg-green-100 text-green-700 dark:bg-green-900/60 dark:text-green-300 ${workspace.isCompact ? "px-2.5 py-1 text-xs" : "px-3 py-1 text-sm"}`}
+              className={`${HEADER_STATUS_PILL_SHAPE_CLASS} bg-green-100 text-green-700 dark:bg-green-900/60 dark:text-green-300 ${workspace.isCompact ? "px-3 text-xs" : "px-3.5 text-sm"}`}
             >
               <span className="h-2 w-2 rounded-full bg-green-400" />
               <span className={workspace.isCompact ? "hidden" : "hidden sm:inline"}>{t("app_backend_connected")}</span>
@@ -410,7 +417,7 @@ function AppContent() {
           ) : (
             <span
               data-testid="health-badge-fail"
-              className={`inline-flex items-center gap-1.5 rounded-full bg-red-100 text-red-700 dark:bg-red-900/60 dark:text-red-300 ${workspace.isCompact ? "px-2.5 py-1 text-xs" : "px-3 py-1 text-sm"}`}
+              className={`${HEADER_STATUS_PILL_SHAPE_CLASS} bg-red-100 text-red-700 dark:bg-red-900/60 dark:text-red-300 ${workspace.isCompact ? "px-3 text-xs" : "px-3.5 text-sm"}`}
             >
               <span className="h-2 w-2 rounded-full bg-red-400" />
               <span className={workspace.isCompact ? "hidden" : "hidden sm:inline"}>{t("app_backend_unreachable")}</span>
