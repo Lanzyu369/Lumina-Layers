@@ -22,6 +22,11 @@ describe("ThemeToggle", () => {
     useSettingsStore.setState({ theme: "light" });
     render(<ThemeToggle />);
     expect(screen.getByTestId("theme-icon-moon")).toBeInTheDocument();
+    // DESIGN.md forbids native ``title`` tooltips on header controls.
+    // DESIGN.md 禁止顶栏控件使用原生 ``title`` 提示。
+    expect(
+      screen.getByRole("button", { name: "切换主题" }),
+    ).not.toHaveAttribute("title");
   });
 
   it("renders sun icon in dark mode", () => {
