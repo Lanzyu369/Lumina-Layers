@@ -270,6 +270,13 @@ pip install -r requirements.txt
 
 ### 选项 3：桌面客户端（Electron）
 
+```bash
+# bash/zsh
+cd frontend && pnpm install && cd ..
+cd electron && pnpm install && cd ..
+cd electron && pnpm start
+```
+
 ```powershell
 # Windows PowerShell 5.1 不支持"&&"，请逐行执行
 cd frontend; pnpm install; cd ..

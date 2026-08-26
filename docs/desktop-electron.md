@@ -17,7 +17,7 @@
 按顺序执行以下四步；任何一步缺了，客户端都会在启动链路的对应环节失败。
 
 ```powershell
-# 1) 后端 Python 依赖（Python 3.14 已验证可用）
+# 1) 后端 Python 依赖（建议较新的 Python 3.x；CI 基准为 3.12，3.14 亦验证可用）
 pip install -r requirements.txt
 # requirements-glb-v2.txt 是可选的光栅预览依赖（rasterio），不装不影响启动
 
@@ -34,7 +34,7 @@ cd frontend; corepack pnpm install; cd ..
 cd electron; corepack pnpm install; cd ..
 ```
 
-**为什么不能合并成一个根目录 workspace**：2026-08 曾做过根目录 pnpm workspace 实验，因破坏 Docker 构建、与"各目录独立安装"的既有约定冲突而放弃。上游采用的方案是在各子目录内用 `pnpm-workspace.yaml` 的 `allowBuilds`/`onlyBuiltDependencies` 白名单批准安装脚本（如 esbuild）。保持现状即可。
+**为什么不能合并成一个根目录 workspace**：2026-08 曾做过根目录 pnpm workspace 实验，因破坏 Docker 构建、与"各目录独立安装"的既有约定冲突而放弃。上游采用的方案是在各子目录内分别声明安装脚本白名单：`frontend/` 用 `pnpm-workspace.yaml` 的 `allowBuilds`，`electron/` 用其 `package.json` 的 `pnpm.onlyBuiltDependencies`（如 esbuild、electron）。保持现状即可。
 
 ## 3. 启动桌面开发版
 
