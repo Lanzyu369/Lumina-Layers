@@ -742,6 +742,7 @@ function BatchPreviewModels({
         <group key={`${item.url}-${index}`} position={item.position}>
           <InteractiveModelViewer
             url={item.url}
+            sourceRole="batch"
             colorRemapMap={colorRemapMap}
             colorHeightMap={colorHeightMap}
             baseHeight={baseHeight}
@@ -1411,6 +1412,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
           <Suspense fallback={null}>
             <InteractiveModelViewer
               url={effectiveModelUrl}
+              sourceRole="generated"
               colorRemapMap={colorRemapMap}
               colorHeightMap={colorHeightMap}
               baseHeight={baseHeight}
@@ -1435,6 +1437,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
           <Suspense fallback={null}>
             <InteractiveModelViewer
               url={previewGlbUrl}
+              sourceRole="quick-preview"
               colorRemapMap={colorRemapMap}
               colorHeightMap={colorHeightMap}
               baseHeight={baseHeight}

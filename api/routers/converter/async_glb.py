@@ -364,7 +364,6 @@ def _run_glb_build_job(
                 "mask_build_s",
                 "mesh_loop_s",
                 "backing_s",
-                "outline_s",
                 "canvas_bounds_s",
                 "export_s",
                 "total_s",

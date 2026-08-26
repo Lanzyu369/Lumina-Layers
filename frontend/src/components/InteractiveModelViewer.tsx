@@ -47,6 +47,7 @@ export function extractHexFromMeshName(meshName: string): string {
 
 export interface InteractiveModelViewerProps {
   url: string;
+  sourceRole: InteractiveModelSourceRole;
   colorRemapMap: Record<string, string>;
   colorHeightMap: Record<string, number>;
   baseHeight: number;
@@ -67,10 +68,88 @@ export interface InteractiveModelViewerProps {
   colorLayerHeightMm?: number;
 }
 
+export type InteractiveModelSourceRole = "quick-preview" | "generated" | "batch";
+
+export interface PreparedInteractiveModelScene {
+  clone: THREE.Object3D;
+  sceneCenter: THREE.Vector3;
+}
+
 /** Default color layer thickness in mm (5 layers x 0.08mm). */
 export const DEFAULT_COLOR_LAYER_HEIGHT_MM = 0.4;
 const PREVIEW_CANVAS_BOUNDS_NODE_NAME = "preview_canvas_bounds";
+const EMBEDDED_OUTLINE_NODE_NAME = "Outline";
 const PREVIEW_LAYER_Z_EPSILON_MM = 0.002;
+
+function hasDiscardedAncestor(
+  object: THREE.Object3D,
+  root: THREE.Object3D,
+  shouldDiscard: (candidate: THREE.Object3D) => boolean,
+): boolean {
+  let parent = object.parent;
+  while (parent && parent !== root) {
+    if (shouldDiscard(parent)) {
+      return true;
+    }
+    parent = parent.parent;
+  }
+  return false;
+}
+
+/**
+ * Clone and center a model after removing role-specific non-model nodes.
+ * 克隆模型，并在移除当前来源不应参与预览的节点后计算居中位置。
+ */
+export function prepareInteractiveModelSceneClone(
+  sourceScene: THREE.Object3D,
+  sourceRole: InteractiveModelSourceRole,
+): PreparedInteractiveModelScene {
+  const clone = cloneObjectTreeWithOwnedResources(sourceScene);
+  const shouldDiscard = (candidate: THREE.Object3D): boolean => (
+    candidate.name.toLowerCase() === "bed"
+    || (
+      sourceRole === "quick-preview"
+      && candidate.name === EMBEDDED_OUTLINE_NODE_NAME
+    )
+  );
+  const discardedRoots: THREE.Object3D[] = [];
+  clone.traverse((candidate) => {
+    if (
+      candidate !== clone
+      && shouldDiscard(candidate)
+      && !hasDiscardedAncestor(candidate, clone, shouldDiscard)
+    ) {
+      discardedRoots.push(candidate);
+    }
+  });
+  for (const discardedRoot of discardedRoots) {
+    discardedRoot.removeFromParent();
+    disposeObjectTree(discardedRoot);
+  }
+
+  clone.updateMatrixWorld(true);
+  const box = new THREE.Box3();
+  const childBox = new THREE.Box3();
+  clone.traverse((child) => {
+    if (
+      child instanceof THREE.Mesh
+      && child.name !== PREVIEW_CANVAS_BOUNDS_NODE_NAME
+    ) {
+      childBox.setFromObject(child);
+      box.union(childBox);
+    }
+  });
+  if (box.isEmpty()) {
+    box.setFromObject(clone);
+  }
+
+  const sceneCenter = new THREE.Vector3();
+  box.getCenter(sceneCenter);
+  clone.position.set(-sceneCenter.x, -sceneCenter.y, -box.min.z);
+  clone.updateMatrixWorld(true);
+
+  return { clone, sceneCenter };
+}
 
 export function computePreviewLayerZPositions(spacerThick: number): {
   frontColorZ: number;
@@ -515,6 +594,7 @@ export function computeOutlinePreviewHeight(
 
 function InteractiveModelViewer({
   url,
+  sourceRole,
   colorRemapMap,
   colorHeightMap,
   baseHeight,
@@ -586,16 +666,10 @@ function InteractiveModelViewer({
     buildSummary,
   } = useMemo(() => {
     const buildStart = performance.now();
-    const clone = cloneObjectTreeWithOwnedResources(scene);
-
-    // Remove any baked-in bed mesh
-    const toRemove: THREE.Object3D[] = [];
-    clone.traverse((child) => {
-      if (child.name.toLowerCase() === "bed") {
-        toRemove.push(child);
-      }
-    });
-    toRemove.forEach((obj) => obj.removeFromParent());
+    const {
+      clone,
+      sceneCenter: center,
+    } = prepareInteractiveModelSceneClone(scene, sourceRole);
 
     // Convert all mesh materials to unlit (no lighting, no specular).
     // Trimesh-exported GLB uses MeshStandardMaterial which reflects the HDR
@@ -630,38 +704,6 @@ function InteractiveModelViewer({
         }
       }
     });
-
-    // Trimesh exports Z-up with image in XY plane.
-    // We want the image to face the camera (stand upright in XY),
-    // with thickness along +Z (toward camera).
-    // No rotation needed — keep the Trimesh coordinate system as-is,
-    // since Three.js XY plane is the screen plane.
-    clone.updateMatrixWorld(true);
-
-    // Compute the centering box from visible model geometry. The optional
-    // preview-canvas anchor is only for overlay placement and must not change
-    // legacy modelBounds used by keychain/fridge-magnet controls.
-    const box = new THREE.Box3();
-    const childBox = new THREE.Box3();
-    clone.traverse((child) => {
-      if (
-        child instanceof THREE.Mesh
-        && child.name !== PREVIEW_CANVAS_BOUNDS_NODE_NAME
-      ) {
-        childBox.setFromObject(child);
-        box.union(childBox);
-      }
-    });
-    if (box.isEmpty()) {
-      box.setFromObject(clone);
-    }
-
-    // Center on X and Y (model centered on bed), but place bottom at Z=0
-    // so the model sits on top of the bed platform (Z = -0.1).
-    const center = new THREE.Vector3();
-    box.getCenter(center);
-    clone.position.set(-center.x, -center.y, -box.min.z);
-    clone.updateMatrixWorld(true);
 
     // --- Extract full preview-canvas bounds anchor from GLB scene ---
     let extractedPreviewCanvasBounds: THREE.Mesh | null = null;
@@ -801,6 +843,7 @@ function InteractiveModelViewer({
 
     const buildSummary = {
       url,
+      source_role: sourceRole,
       build_ms: +(performance.now() - buildStart).toFixed(2),
       source_scene: summarizeObjectTree(scene),
       non_color_scene: summarizeObjectTree(clone),
@@ -827,7 +870,7 @@ function InteractiveModelViewer({
       puzzleOverlayBounds: resolvedPuzzleOverlayBounds,
       buildSummary,
     };
-  }, [scene, url]);
+  }, [scene, sourceRole, url]);
 
   useEffect(() => {
     postClientLog("preview: GLB scene processed (useMemo done)", {
