@@ -107,6 +107,10 @@ from core.vector_mesh_memory import (
     get_process_rss_bytes,
     resolve_vector_mesh_memory_budget_bytes,
 )
+from core.vector_layer_geometry import (
+    extrude_prepared_vector_run_group,
+    prepare_vector_run_group,
+)
 
 _log = get_logger(__name__)
 
@@ -6517,45 +6521,6 @@ class VectorProcessor:
         t0 = time.perf_counter()
         self.last_native_vector_mesh_stats = {}
 
-        def _run_length_extrude_with_optional_native(**kwargs):
-            native_enabled = bool(getattr(self, "enable_native_vector_mesh", False)) or str(
-                os.environ.get("LUMINA_VECTOR_NATIVE_MESH", "")
-            ).strip().lower() in {"1", "true", "yes", "on"}
-            if not native_enabled:
-                return self._run_length_extrude(**kwargs)
-            try:
-                from core.vector_native_mesh import run_length_extrude_native_hybrid
-            except (MemoryError, VectorMeshMemoryBudgetError):
-                raise
-            except Exception as exc:
-                _log.warning(
-                    "Native vector mesh availability check failed",
-                    extra={
-                        "event": "vector_native_mesh_availability_failed",
-                        "error_type": type(exc).__name__,
-                        "error_message": str(exc),
-                    },
-                )
-                return self._run_length_extrude(**kwargs)
-
-            try:
-                native_result = run_length_extrude_native_hybrid(**kwargs)
-                self.last_native_vector_mesh_stats = dict(native_result.stats)
-                if native_result.meshes_by_slot or not kwargs.get("matched_shapes"):
-                    return native_result.meshes_by_slot
-            except (MemoryError, VectorMeshMemoryBudgetError):
-                raise
-            except Exception as exc:
-                _log.warning(
-                    "Native vector mesh path failed; falling back to Python extrusion",
-                    extra={
-                        "event": "vector_native_mesh_fallback",
-                        "error_type": type(exc).__name__,
-                        "error_message": str(exc),
-                    },
-                )
-            return self._run_length_extrude(**kwargs)
-
         if enable_relief and is_single_sided and not is_5color:
             meshes_by_slot = self._build_relief_meshes(
                 matched_shapes=matched_shapes,
@@ -6576,7 +6541,7 @@ class VectorProcessor:
                 fridge_magnets=fridge_magnets,
             )
         elif is_5color:
-            meshes_by_slot = _run_length_extrude_with_optional_native(
+            meshes_by_slot = self._run_length_extrude(
                 matched_shapes=matched_shapes,
                 num_layers=num_layers,
                 layer_h=layer_h,
@@ -6593,7 +6558,7 @@ class VectorProcessor:
                 backing_height,
             )
         else:
-            meshes_by_slot = _run_length_extrude_with_optional_native(
+            meshes_by_slot = self._run_length_extrude(
                 matched_shapes=matched_shapes,
                 num_layers=num_layers,
                 layer_h=layer_h,
@@ -8158,15 +8123,16 @@ class VectorProcessor:
         layers into single volumes (run-length encoding).
 
         Before extrusion, shapes sharing the same (channel, layer-run) are
-        merged via ``unary_union`` + morphological closing to eliminate gaps
-        between adjacent same-colour regions (Fix 7).
+        prepared once on the canonical physical grid. Caps and walls are then
+        emitted from the same indexed rings, so accepted geometry is closed by
+        construction instead of being repaired after extrusion.
 
         When *face_up* is True the layer order is reversed so that
         recipe[N-1] sits at the lowest Z (just above *optical_z_base*)
         and recipe[0] at the highest Z — matching ``_build_voxel_matrix_faceup``
         semantics used by the raster path for 5-Color Extended.
         """
-        # --- Fix 7: group shapes by (channel, run) and merge ---
+        # Group shapes by (channel, run) before canonical preparation.
         # Key: (channel_id, run_start, run_end)  Value: list of geometries
         run_groups: dict[tuple, list] = {}
         skipped_empty = 0
@@ -8266,7 +8232,8 @@ class VectorProcessor:
 
         meshes_by_slot = {}
         stage_d_hist: dict[int, dict[int, int]] = {}
-        precision_cache = _new_vector_precision_cache()
+        last_prepared_key = None
+        last_prepared = None
         for (ch, run_start, run_end), geoms in run_groups.items():
             slot_name = slot_names[ch]
             if slot_name not in meshes_by_slot:
@@ -8289,100 +8256,6 @@ class VectorProcessor:
                 coordinate_count=group_geometry_bytes // 64,
             )
 
-            if len(geoms) > 1:
-                pre_union_area = 0.0
-                for g in geoms:
-                    try:
-                        pre_union_area += float(g.area)
-                    except (AttributeError, TypeError, ValueError):
-                        pass
-                # Normalize vertex coordinates to a fixed precision grid
-                # before unary_union to prevent GEOS floating-point
-                # precision boundary bugs that silently drop geometry.
-                # set_precision 将坐标对齐到规则浮点网格，打破 bezier 展平 +
-                # simplify + inflate/deflate 导致的 GEOS 精度边界（丢几何）。
-                snapped_geoms = []
-                for g in geoms:
-                    if g is not None and not g.is_empty:
-                        snap_key = (id(g), 0.001)
-                        if snap_key in precision_cache:
-                            g_snapped = precision_cache[snap_key]
-                        else:
-                            g_snapped = set_precision(g, grid_size=0.001)
-                            precision_cache[snap_key] = g_snapped
-                        if g_snapped is not None and not g_snapped.is_empty:
-                            snapped_geoms.append(g_snapped)
-                if snapped_geoms:
-                    geoms = snapped_geoms
-                try:
-                    unioned = _union_run_group_geometries(geoms)
-                    union_area = float(unioned.area) if unioned is not None and not unioned.is_empty else 0.0
-                    if pre_union_area > 0 and union_area < pre_union_area * 0.98:
-                        _log.debug(
-                            "Vector unary union area loss",
-                            extra={
-                                "event": "vector_diag_unary_union_area_loss",
-                                "channel": int(ch),
-                                "run_start": int(run_start),
-                                "run_end": int(run_end),
-                                "pre_union_area": round(pre_union_area, 6),
-                                "post_union_area": round(union_area, 6),
-                            },
-                        )
-                    merged = VectorProcessor._normalize_contours(unioned, close_delta_mm=0.03)
-                    if merged is None or merged.is_empty:
-                        _log.debug(
-                            "Vector normalize emptied geometry",
-                            extra={
-                                "event": "vector_appearance_diag_normalize_emptied",
-                                "channel": int(ch),
-                                "run_start": int(run_start),
-                                "run_end": int(run_end),
-                                "pre_normalize_area": round(union_area, 6),
-                            },
-                        )
-                        merged = unioned
-                    else:
-                        normalized_area = float(merged.area)
-                        if union_area > 0 and normalized_area < union_area * 0.98:
-                            _log.debug(
-                                "Vector normalize area loss",
-                                extra={
-                                    "event": "vector_diag_normalize_area_loss",
-                                    "channel": int(ch),
-                                    "run_start": int(run_start),
-                                    "run_end": int(run_end),
-                                    "pre_normalize_area": round(union_area, 6),
-                                    "post_normalize_area": round(normalized_area, 6),
-                                },
-                            )
-                except VECTOR_HANDLED_ERRORS as exc:
-                    _log.warning(
-                        "Vector run-group union failed; using source shells",
-                        extra={
-                            "event": "vector_run_group_union_failed",
-                            "error_type": type(exc).__name__,
-                            "error_message": str(exc),
-                            "shape_count": len(source_geoms),
-                        },
-                    )
-                    merged = GeometryCollection()
-            else:
-                merged = geoms[0]
-
-            merged_geometry_bytes = _geometry_cache_storage_bytes(merged)
-            _enforce_vector_mesh_runtime_headroom(
-                stage="run_group_merged_geometry",
-                estimated_additional_bytes=max(
-                    16 * 1024 * 1024,
-                    # 3D buffers, assembly output and float32 topology
-                    # validation coexist after the 2D union.
-                    merged_geometry_bytes * 16,
-                ),
-                shape_count=len(source_geoms),
-                coordinate_count=merged_geometry_bytes // 64,
-            )
-
             if face_up:
                 inv_start = (num_layers - 1) - run_end
                 inv_end = (num_layers - 1) - run_start
@@ -8392,18 +8265,56 @@ class VectorProcessor:
                 z_bot = run_start * layer_h
                 height = (run_end - run_start + 1) * layer_h
 
-            new_meshes = _extrude_source_geometries_with_coverage_guard(
-                source_geoms,
-                merged,
-                height=height,
-                z_offset=z_bot,
-                scale_factor=scale_factor,
-                extrude_cache=extrude_cache,
-                context=(
-                    "Vector extrusion for "
-                    f"channel {ch}, layers {run_start}-{run_end}"
-                ),
-            )
+            try:
+                prepared_key = (
+                    tuple(id(geometry) for geometry in source_geoms),
+                    float(scale_factor),
+                )
+                if prepared_key == last_prepared_key and last_prepared is not None:
+                    prepared = last_prepared
+                else:
+                    prepared = prepare_vector_run_group(
+                        source_geoms,
+                        scale_mm_per_svg_unit=float(scale_factor),
+                    )
+                    last_prepared_key = prepared_key
+                    last_prepared = prepared
+                estimated_mesh_bytes = max(
+                    16 * 1024 * 1024,
+                    int(prepared.stats.output_coordinate_count) * 256,
+                )
+                _enforce_vector_mesh_runtime_headroom(
+                    stage="run_group_canonical_geometry",
+                    estimated_additional_bytes=estimated_mesh_bytes,
+                    shape_count=len(source_geoms),
+                    coordinate_count=int(
+                        prepared.stats.output_coordinate_count
+                    ),
+                )
+                canonical_mesh = extrude_prepared_vector_run_group(
+                    prepared,
+                    height_mm=height,
+                    z_offset_mm=z_bot,
+                )
+            except VECTOR_FATAL_ERRORS:
+                raise
+            except VectorTopologyError:
+                raise
+            except VECTOR_HANDLED_ERRORS as exc:
+                raise VectorTopologyError(
+                    "Vector geometry could not be represented safely for export",
+                    (
+                        {
+                            "attempt": "canonical_physical_grid",
+                            "geometry_type": "run_group",
+                            "source_geometry_count": len(source_geoms),
+                            "rejected_reason": type(exc).__name__,
+                            "error_type": type(exc).__name__,
+                        },
+                    ),
+                ) from exc
+
+            new_meshes = [canonical_mesh]
             meshes_by_slot[slot_name]["meshes"].extend(new_meshes)
             for layer_idx in range(int(run_start), int(run_end) + 1):
                 layer_hist = stage_d_hist.setdefault(int(layer_idx), {})
@@ -8427,17 +8338,6 @@ class VectorProcessor:
                 "optical_z_base": float(optical_z_base),
             },
         )
-        if extrude_cache is not None:
-            try:
-                extrude_cache.precision_cache_peak_bytes = int(
-                    precision_cache.peak_bytes
-                )
-                extrude_cache.precision_cache_evictions = int(
-                    precision_cache.eviction_count
-                )
-            except AttributeError:
-                pass
-        precision_cache.clear()
         return meshes_by_slot
 
     # ── Stage 7: Double-sided helper ─────────────────────────────────────

@@ -8,6 +8,7 @@ from shapely.geometry import LineString, Polygon, box
 
 from core.vector_layer_geometry import (
     VectorLayerGeometryPolicy,
+    extrude_prepared_vector_run_group,
     prepare_vector_run_group,
 )
 
@@ -21,6 +22,12 @@ def _assert_grid_aligned(group) -> None:
             assert hole.dtype == np.int64
             assert hole.flags.c_contiguous
             assert not hole.flags.writeable
+
+
+def _edge_incidence_counts(mesh) -> np.ndarray:
+    edges = np.asarray(mesh.edges_sorted, dtype=np.int64)
+    _unique, counts = np.unique(edges, axis=0, return_counts=True)
+    return counts
 
 
 def test_shared_boundary_is_noded_once_without_an_internal_wall() -> None:
@@ -95,7 +102,7 @@ def test_near_duplicate_ring_points_collapse_on_the_physical_grid() -> None:
     assert prepared.stats.output_area_mm2 == pytest.approx(100.0, abs=1e-9)
 
 
-def test_float32_near_contact_is_coalesced_instead_of_serialized_as_touching_shells() -> None:
+def test_float32_near_contact_is_separated_instead_of_serialized_as_touching_shells() -> None:
     float32_gap = 9.5367431640625e-7
     source = [
         box(0.0, 0.0, 200.0, 200.0),
@@ -114,9 +121,10 @@ def test_float32_near_contact_is_coalesced_instead_of_serialized_as_touching_she
     )
 
     geometry = prepared.to_geometry()
-    assert geometry.geom_type == "Polygon"
+    assert geometry.geom_type == "MultiPolygon"
     assert geometry.is_valid
-    assert prepared.stats.coalesced_contact_group_count == 1
+    assert prepared.stats.separated_contact_group_count == 1
+    assert len(prepared.polygons) == 2
     assert geometry.hausdorff_distance(box(0.0, 0.0, 200.0, 200.0)) < 1.5
     _assert_grid_aligned(prepared)
 
@@ -173,3 +181,81 @@ def test_source_part_that_collapses_on_physical_grid_is_not_silently_dropped() -
             scale_mm_per_svg_unit=1.0,
             policy=VectorLayerGeometryPolicy(simplify_tolerance_mm=0.0),
         )
+
+
+def test_prepared_group_extrudes_directly_to_one_closed_indexed_mesh() -> None:
+    source = [
+        box(0.0, 0.0, 200.0, 200.0),
+        box(210.0, 0.0, 215.0, 5.0),
+    ]
+    prepared = prepare_vector_run_group(
+        source,
+        scale_mm_per_svg_unit=1.0,
+    )
+
+    mesh = extrude_prepared_vector_run_group(
+        prepared,
+        height_mm=0.2,
+        z_offset_mm=0.4,
+    )
+
+    assert mesh.is_watertight
+    assert mesh.is_winding_consistent
+    assert np.all(_edge_incidence_counts(mesh) == 2)
+    assert abs(float(mesh.volume)) == pytest.approx(40_025.0 * 0.2, abs=1e-5)
+    assert mesh.bounds == pytest.approx(
+        np.asarray([[0.0, 0.0, 0.4], [215.0, 200.0, 0.6]]),
+        abs=1e-7,
+    )
+    assert mesh.metadata["_lumina_planar_coverage_mm2"] == pytest.approx(40_025.0)
+
+
+def test_prepared_group_uses_the_same_ring_indices_for_caps_and_hole_walls() -> None:
+    source = Polygon(
+        [(0.0, 0.0), (20.0, 0.0), (20.0, 20.0), (0.0, 20.0)],
+        holes=[[(5.0, 5.0), (15.0, 5.0), (15.0, 15.0), (5.0, 15.0)]],
+    )
+    prepared = prepare_vector_run_group(
+        [source],
+        scale_mm_per_svg_unit=1.0,
+    )
+
+    mesh = extrude_prepared_vector_run_group(
+        prepared,
+        height_mm=1.0,
+        z_offset_mm=0.0,
+    )
+
+    assert mesh.is_watertight
+    assert mesh.is_winding_consistent
+    assert np.all(_edge_incidence_counts(mesh) == 2)
+    assert abs(float(mesh.volume)) == pytest.approx(300.0, abs=1e-8)
+
+
+def test_prepared_extrusion_is_valid_after_the_actual_float32_writer_cast() -> None:
+    float32_gap = 9.5367431640625e-7
+    prepared = prepare_vector_run_group(
+        [
+            box(0.0, 0.0, 200.0, 200.0),
+            Polygon(
+                [
+                    (200.0 + float32_gap, 100.0),
+                    (201.0, 99.0),
+                    (201.0, 101.0),
+                ]
+            ),
+        ],
+        scale_mm_per_svg_unit=1.0,
+    )
+    mesh = extrude_prepared_vector_run_group(
+        prepared,
+        height_mm=0.08,
+        z_offset_mm=0.0,
+    )
+
+    writer_vertices = np.asarray(mesh.vertices, dtype=np.float32)
+    triangles = writer_vertices[np.asarray(mesh.faces, dtype=np.int64)]
+    cross = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
+
+    assert not np.any(np.all(cross == 0.0, axis=1))
+    assert mesh.is_watertight

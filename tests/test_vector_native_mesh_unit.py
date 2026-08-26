@@ -2698,17 +2698,15 @@ def test_native_surface_validation_arrays_match_trimesh_decision() -> None:
     )
 
 
-def test_build_mesh_uses_native_hybrid_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_build_mesh_uses_canonical_path_when_legacy_native_flag_is_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     called = False
 
     def fake_native_hybrid(**kwargs):
         nonlocal called
         called = True
-        assert kwargs["scale_factor"] == pytest.approx(1.0)
-        return NativeVectorMeshResult(
-            meshes_by_slot={"White": {"meshes": [_box_mesh()], "mat_id": 0}},
-            stats={"native_meshes": 1, "fallback_groups": 0},
-        )
+        raise AssertionError("retired native/Python branch selection was used")
 
     monkeypatch.setattr(
         "core.vector_native_mesh.run_length_extrude_native_hybrid",
@@ -2723,48 +2721,35 @@ def test_build_mesh_uses_native_hybrid_when_enabled(monkeypatch: pytest.MonkeyPa
         structure_mode="Single-sided",
     )
 
-    assert called is True
+    assert called is False
     assert "White" in scene.geometry
-    assert processor.last_native_vector_mesh_stats == {"native_meshes": 1, "fallback_groups": 0}
+    assert processor.last_native_vector_mesh_stats == {}
 
 
-def test_build_mesh_does_not_retry_python_after_native_memory_rejection(
+def test_build_mesh_ignores_legacy_native_environment_switch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A native admission failure must not double the task's memory work."""
+    """The old environment switch cannot restore the two-engine fallback."""
 
-    error = VectorMeshMemoryBudgetError(
-        "native_extrude",
-        9 * 1024**3,
-        8 * 1024**3,
-        1 * 1024**3,
-        1,
-        5,
-    )
+    called = False
 
-    def reject_native(**_kwargs):
-        raise error
-
-    def fail_python_retry(*_args, **_kwargs):
-        raise AssertionError("memory rejection retried the Python mesh path")
+    def fail_native(**_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("retired native/Python branch selection was used")
 
     monkeypatch.setattr(
         "core.vector_native_mesh.run_length_extrude_native_hybrid",
-        reject_native,
+        fail_native,
     )
-    monkeypatch.setattr(
-        VectorProcessor,
-        "_run_length_extrude",
-        staticmethod(fail_python_retry),
-    )
+    monkeypatch.setenv("LUMINA_VECTOR_NATIVE_MESH", "1")
     processor = _processor()
-    processor.enable_native_vector_mesh = True
 
-    with pytest.raises(VectorMeshMemoryBudgetError) as raised:
-        processor.build_mesh(
-            analysis=_analysis(),
-            thickness_mm=0.0,
-            structure_mode="Single-sided",
-        )
+    scene = processor.build_mesh(
+        analysis=_analysis(),
+        thickness_mm=0.0,
+        structure_mode="Single-sided",
+    )
 
-    assert raised.value is error
+    assert called is False
+    assert "White" in scene.geometry

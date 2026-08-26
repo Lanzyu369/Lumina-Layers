@@ -2254,6 +2254,49 @@ def test_run_length_extrude_preserves_source_area_when_optimized_union_is_lossy(
     assert actual_volume == pytest.approx(expected_volume, rel=1e-6, abs=1e-6)
 
 
+def test_run_length_extrude_uses_canonical_2d_once_without_legacy_repair_ladders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Accepted run groups go straight from one 2D canonical form to indices."""
+
+    def legacy_path_used(*_args, **_kwargs):
+        raise AssertionError("legacy union/fallback/repair path must not run")
+
+    monkeypatch.setattr(
+        vector_engine,
+        "_union_run_group_geometries",
+        legacy_path_used,
+    )
+    monkeypatch.setattr(
+        vector_engine,
+        "_extrude_source_geometries_with_coverage_guard",
+        legacy_path_used,
+    )
+    monkeypatch.setattr(
+        vector_engine,
+        "extrude_polygon_for_export",
+        legacy_path_used,
+    )
+
+    meshes_by_slot = VectorProcessor._run_length_extrude(
+        matched_shapes=[
+            {"geometry": box(0.0, 0.0, 10.0, 10.0), "recipe": [0]},
+            {"geometry": box(10.0, 0.0, 20.0, 10.0), "recipe": [0]},
+        ],
+        num_layers=1,
+        layer_h=0.2,
+        num_channels=1,
+        slot_names=["White"],
+        scale_factor=1.0,
+        extrude_cache={},
+    )
+
+    meshes = meshes_by_slot["White"]["meshes"]
+    assert len(meshes) == 1
+    assert meshes[0].is_watertight
+    assert abs(float(meshes[0].volume)) == pytest.approx(40.0, abs=1e-8)
+
+
 def test_coverage_guard_skips_merged_3d_when_2d_union_already_lost_area(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2494,48 +2537,50 @@ def test_source_fallback_streams_multipolygon_components_before_chunking(
     assert vector_engine._extruded_planar_coverage_mm2(meshes, 0.2) == pytest.approx(30.0)
 
 
-def test_run_group_union_failure_does_not_retry_large_union(
+def test_canonical_run_group_failure_does_not_launch_a_second_geometry_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A failed GEOS union must move to source fallback, not union again."""
+    """A canonical 2D failure is reported once instead of launching fallback."""
 
-    union_calls = 0
+    prepare_calls = 0
 
-    def fail_sparse_union(_geometries):
-        raise ShapelyError("injected sparse union failure")
-
-    def fail_unary_union(_geometries):
-        nonlocal union_calls
-        union_calls += 1
-        raise ShapelyError("injected unary union failure")
+    def fail_preparation(*_args, **_kwargs):
+        nonlocal prepare_calls
+        prepare_calls += 1
+        raise ShapelyError("injected canonical geometry failure")
 
     monkeypatch.setattr(
         vector_engine,
-        "disjoint_subset_union_all",
-        fail_sparse_union,
+        "prepare_vector_run_group",
+        fail_preparation,
     )
-    monkeypatch.setattr(vector_engine, "unary_union", fail_unary_union)
+    monkeypatch.setattr(
+        vector_engine,
+        "extrude_prepared_vector_run_group",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("failed canonical geometry must not be extruded")
+        ),
+    )
 
     source_geometries = (
         box(0.0, 0.0, 1.0, 1.0),
         box(2.0, 0.0, 3.0, 1.0),
     )
-    meshes_by_slot = VectorProcessor._run_length_extrude(
-        matched_shapes=[
-            {"geometry": geometry, "recipe": [0]}
-            for geometry in source_geometries
-        ],
-        num_layers=1,
-        layer_h=0.2,
-        num_channels=1,
-        slot_names=["White"],
-        scale_factor=1.0,
-        extrude_cache=None,
-    )
+    with pytest.raises(VectorTopologyError):
+        VectorProcessor._run_length_extrude(
+            matched_shapes=[
+                {"geometry": geometry, "recipe": [0]}
+                for geometry in source_geometries
+            ],
+            num_layers=1,
+            layer_h=0.2,
+            num_channels=1,
+            slot_names=["White"],
+            scale_factor=1.0,
+            extrude_cache=None,
+        )
 
-    assert union_calls == 1
-    meshes = meshes_by_slot["White"]["meshes"]
-    assert vector_engine._extruded_planar_coverage_mm2(meshes, 0.2) == pytest.approx(2.0)
+    assert prepare_calls == 1
 
 
 def test_run_group_rechecks_memory_after_union_coordinate_amplification(
@@ -2580,8 +2625,8 @@ def test_run_group_rechecks_memory_after_union_coordinate_amplification(
         extrude_cache=None,
     )
 
-    assert "run_group_merged_geometry" in guarded_counts
-    assert guarded_counts["run_group_merged_geometry"] > guarded_counts[
+    assert "run_group_canonical_geometry" in guarded_counts
+    assert guarded_counts["run_group_canonical_geometry"] > guarded_counts[
         "run_group_geometry"
     ]
 
@@ -2664,18 +2709,20 @@ def test_run_length_extrude_separates_point_touching_multipolygon_shells() -> No
     assert abs(float(combined.volume)) == pytest.approx(0.4, abs=1e-6)
 
 
-def test_run_length_extrude_rejects_incomplete_fallback(
+def test_run_length_extrude_rejects_incomplete_canonical_geometry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """If primary and fallback extrusion lose area, generation must stop."""
+    """A canonical coverage failure must stop before any partial 3D result."""
 
     monkeypatch.setattr(
-        VectorProcessor,
-        "_extrude_geometry",
-        staticmethod(lambda *_args, **_kwargs: []),
+        vector_engine,
+        "prepare_vector_run_group",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ValueError("canonical coverage incomplete")
+        ),
     )
 
-    with pytest.raises(ValueError, match="coverage"):
+    with pytest.raises(VectorTopologyError) as exc:
         VectorProcessor._run_length_extrude(
             matched_shapes=[
                 {"geometry": box(0.0, 0.0, 2.0, 2.0), "recipe": [0]}
@@ -2687,23 +2734,24 @@ def test_run_length_extrude_rejects_incomplete_fallback(
             scale_factor=1.0,
             extrude_cache={},
         )
+    assert exc.value.attempts[-1]["attempt"] == "canonical_physical_grid"
 
 
-def test_run_length_extrude_does_not_retry_union_after_memory_error(
+def test_run_length_extrude_does_not_retry_after_canonical_memory_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """MemoryError must escape instead of launching a second large union."""
+    """MemoryError must escape instead of launching another mesh path."""
 
     monkeypatch.setattr(
         vector_engine,
-        "_union_run_group_geometries",
-        lambda _geometries: (_ for _ in ()).throw(MemoryError("budget")),
+        "prepare_vector_run_group",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(MemoryError("budget")),
     )
     monkeypatch.setattr(
         vector_engine,
-        "unary_union",
-        lambda _geometries: (_ for _ in ()).throw(
-            AssertionError("MemoryError triggered a second union")
+        "extrude_prepared_vector_run_group",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("MemoryError triggered 3D extrusion")
         ),
     )
 
@@ -2722,10 +2770,10 @@ def test_run_length_extrude_does_not_retry_union_after_memory_error(
         )
 
 
-def test_run_length_precision_cache_obeys_byte_budget(
+def test_run_length_canonical_path_does_not_retain_a_precision_cache(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Repeated snapped geometries may be recomputed instead of retained."""
+    """Physical-grid preparation owns precision without the legacy LRU."""
 
     real_set_precision = vector_engine.set_precision
     precision_calls = 0
@@ -2756,7 +2804,7 @@ def test_run_length_precision_cache_obeys_byte_budget(
         extrude_cache=None,
     )
 
-    assert precision_calls == 6
+    assert precision_calls == 0
 
 
 def test_merge_vertices_preserves_volume_of_disjoint_parts():

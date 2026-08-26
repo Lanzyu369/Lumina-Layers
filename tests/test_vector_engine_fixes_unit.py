@@ -2538,7 +2538,7 @@ class TestRunLengthExtrudeMerging:
         assert "White" in result
         assert "Cyan" in result
 
-    def test_same_run_group_uses_disjoint_subset_union_when_available(self):
+    def test_same_run_group_uses_canonical_spatial_partition(self):
         geoms = [
             Polygon([(0, 0), (5, 0), (5, 5), (0, 5)]),
             Polygon([(10, 0), (15, 0), (15, 5), (10, 5)]),
@@ -2549,28 +2549,18 @@ class TestRunLengthExtrudeMerging:
             for geom in geoms
         ]
 
-        def fake_disjoint_subset_union_all(items):
-            return shapely_unary_union(list(items))
+        canonical_results = []
+        real_prepare = vector_engine.prepare_vector_run_group
 
-        def fake_extrude(geometry, **_kwargs):
-            mesh = SimpleNamespace(
-                metadata={
-                    "_lumina_planar_coverage_mm2": float(geometry.area)
-                }
-            )
-            return [mesh]
+        def track_prepare(*args, **kwargs):
+            result = real_prepare(*args, **kwargs)
+            canonical_results.append(result)
+            return result
 
-        fast_union = mock.Mock(side_effect=fake_disjoint_subset_union_all)
-        with (
-            mock.patch.dict(
-                _union_run_group_geometries.__globals__,
-                {"disjoint_subset_union_all": fast_union},
-            ),
-            mock.patch.object(
-                VectorProcessor,
-                "_extrude_geometry",
-                side_effect=fake_extrude,
-            ),
+        with mock.patch.object(
+            vector_engine,
+            "prepare_vector_run_group",
+            side_effect=track_prepare,
         ):
             result = VectorProcessor._run_length_extrude(
                 matched,
@@ -2583,9 +2573,11 @@ class TestRunLengthExtrudeMerging:
             )
 
         assert "White" in result
-        assert fast_union.call_count == 1
+        assert len(canonical_results) == 1
+        assert canonical_results[0].stats.spatial_group_count == 3
+        assert canonical_results[0].stats.output_component_count == 3
 
-    def test_reuses_precision_snaps_for_geometry_across_run_groups(self):
+    def test_reuses_canonical_geometry_across_adjacent_run_groups(self):
         sq1 = Polygon([(0, 0), (5, 0), (5, 5), (0, 5)])
         sq2 = Polygon([(10, 0), (15, 0), (15, 5), (10, 5)])
         matched = [
@@ -2598,23 +2590,16 @@ class TestRunLengthExtrudeMerging:
             snap_calls.append((id(geom), grid_size))
             return geom
 
-        def fake_extrude(geometry, **_kwargs):
-            mesh = SimpleNamespace(
-                metadata={
-                    "_lumina_planar_coverage_mm2": float(geometry.area)
-                }
-            )
-            return [mesh]
-
+        prepare_spy = mock.Mock(wraps=vector_engine.prepare_vector_run_group)
         with (
             mock.patch.dict(
                 VectorProcessor._run_length_extrude.__globals__,
                 {"set_precision": spy_set_precision},
             ),
             mock.patch.object(
-                VectorProcessor,
-                "_extrude_geometry",
-                side_effect=fake_extrude,
+                vector_engine,
+                "prepare_vector_run_group",
+                prepare_spy,
             ),
         ):
             result = VectorProcessor._run_length_extrude(
@@ -2629,8 +2614,8 @@ class TestRunLengthExtrudeMerging:
 
         assert "White" in result
         assert "Cyan" in result
-        assert len(snap_calls) == 2
-        assert {call[0] for call in snap_calls} == {id(sq1), id(sq2)}
+        assert prepare_spy.call_count == 1
+        assert snap_calls == []
 
     def test_run_group_union_falls_back_when_disjoint_subset_union_fails(self):
         geoms = [
