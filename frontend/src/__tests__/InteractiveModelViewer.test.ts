@@ -11,13 +11,107 @@ import {
   isBatchedMaterialAppearanceMeshName,
   isBatchedMaterialPhysicalMeshName,
   isLayeredMaterialColorMeshName,
+  prepareInteractiveModelSceneClone,
   resolveLayeredMaterialPreviewTransform,
   resolvePreviewColorLayerHeightMm,
   shouldMirrorPreview,
   shouldApplyColorRemapToMeshName,
 } from "../components/InteractiveModelViewer";
 import { materializePositionAttributeForGeometryBake } from "../utils/threeQuantizedGeometry";
-import { disposeMaterial } from "../utils/threeDisposal";
+import {
+  disposeMaterial,
+  disposeMeshResources,
+  disposeObjectTree,
+} from "../utils/threeDisposal";
+
+function buildEmbeddedOutlineScene(): THREE.Group {
+  const root = new THREE.Group();
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(10, 10, 1),
+    new THREE.MeshBasicMaterial({ color: 0xff0000 }),
+  );
+  body.name = "color_ff0000";
+  body.position.set(5, 5, 0.5);
+  root.add(body);
+
+  const outline = new THREE.Mesh(
+    new THREE.BoxGeometry(12, 10, 1),
+    new THREE.MeshBasicMaterial({ color: 0xffffff }),
+  );
+  outline.name = "Outline";
+  outline.position.set(5, -95, 0.5);
+  root.add(outline);
+  root.updateMatrixWorld(true);
+  return root;
+}
+
+describe("prepareInteractiveModelSceneClone", () => {
+  it("drops and disposes a stale quick-preview Outline before centering", () => {
+    const source = buildEmbeddedOutlineScene();
+    const sourceOutline = source.getObjectByName("Outline");
+    const geometryDispose = vi.spyOn(
+      THREE.BufferGeometry.prototype,
+      "dispose",
+    );
+    const materialDispose = vi.spyOn(THREE.Material.prototype, "dispose");
+    const prepared = prepareInteractiveModelSceneClone(
+      source,
+      "quick-preview",
+    );
+    let detachedBody: THREE.Mesh | null = null;
+
+    try {
+      expect(source.getObjectByName("Outline")).toBe(sourceOutline);
+      expect(prepared.clone.getObjectByName("Outline")).toBeUndefined();
+      expect(prepared.sceneCenter.x).toBeCloseTo(5, 5);
+      expect(prepared.sceneCenter.y).toBeCloseTo(5, 5);
+      expect(prepared.sceneCenter.z).toBeCloseTo(0.5, 5);
+
+      const centeredBounds = new THREE.Box3().setFromObject(prepared.clone);
+      expect(centeredBounds.min.x).toBeCloseTo(-5, 5);
+      expect(centeredBounds.max.x).toBeCloseTo(5, 5);
+      expect(centeredBounds.min.y).toBeCloseTo(-5, 5);
+      expect(centeredBounds.max.y).toBeCloseTo(5, 5);
+      expect(centeredBounds.min.z).toBeCloseTo(0, 5);
+      expect(centeredBounds.max.z).toBeCloseTo(1, 5);
+
+      const colorObject = prepared.clone.getObjectByName("color_ff0000");
+      if (colorObject instanceof THREE.Mesh) {
+        detachedBody = colorObject;
+        colorObject.removeFromParent();
+      }
+      expect(prepared.clone.getObjectByName("Outline")).toBeUndefined();
+      expect(geometryDispose).toHaveBeenCalledTimes(1);
+      expect(materialDispose).toHaveBeenCalledTimes(1);
+    } finally {
+      disposeObjectTree(prepared.clone);
+      if (detachedBody) {
+        disposeMeshResources(detachedBody);
+      }
+      disposeObjectTree(source);
+      geometryDispose.mockRestore();
+      materialDispose.mockRestore();
+    }
+  });
+
+  it.each(["generated", "batch"] as const)(
+    "preserves embedded Outline geometry for %s models",
+    (sourceRole) => {
+      const source = buildEmbeddedOutlineScene();
+      const prepared = prepareInteractiveModelSceneClone(source, sourceRole);
+
+      try {
+        expect(prepared.clone.getObjectByName("Outline")).toBeDefined();
+        expect(prepared.sceneCenter.x).toBeCloseTo(5, 5);
+        expect(prepared.sceneCenter.y).toBeCloseTo(-45, 5);
+        expect(prepared.sceneCenter.z).toBeCloseTo(0.5, 5);
+      } finally {
+        disposeObjectTree(prepared.clone);
+        disposeObjectTree(source);
+      }
+    },
+  );
+});
 
 describe("extractHexFromMeshName", () => {
   it('extracts hex from "color_ff0000"', () => {
