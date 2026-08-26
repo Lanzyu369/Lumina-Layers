@@ -94,11 +94,11 @@ with these stages:
 2. Snap coordinates to one fixed physical grid. The initial policy is
    `0.0001 mm`, with coordinates kept as integer grid units inside the new
    preparation module.
-3. Build edge-matched layer coverage for regions that meet at material
-   boundaries. Canonical linework is noded and polygonized per effective layer,
-   then each resulting cell is labeled from the already resolved source
-   visibility/material ownership. Shared edges are canonicalized once, not
-   independently rounded per polygon.
+3. Partition the XY linework into spatially connected groups, then node and
+   polygonize each group once. Label each resulting cell from the already
+   resolved source visibility/material ownership and recipe. Shared edges are
+   canonicalized once, not independently rounded per polygon. The recipe is
+   mapped to Z runs afterwards; XY preparation is not repeated per print layer.
 4. Simplify canonical shared boundary chains with a maximum physical deviation
    of `0.005 mm`.
 5. Reconstruct polygon coverage and validate it against the unsimplified
@@ -139,36 +139,37 @@ algorithms. Pixel mode retains its block shape exactly.
 
 ### 3. Shared indexed chunk accumulator
 
-Both replacement engines emit `MeshChunk` values containing float32 vertices,
-uint32 local indices, material identity, and coverage/topology counters. A
-single accumulator owns:
+Both replacement engines emit indexed geometry whose canonical identity remains
+`int64` physical-grid XY coordinates plus integer layer Z and `shell_id` until
+final materialization. A single accumulator owns:
 
 - local-to-object index offsets;
 - exact integer-grid vertex identity within one material shell, without welding
   distinct source shells merely because their float coordinates become equal;
 - actual byte accounting;
 - final float32-domain degenerate/contact checks;
-- append-only, per-material disk spools for vertices and triangles, with a
-  configurable bounded in-memory working set;
+- compact per-material final arrays for the existing Scene contract;
 - material/object totals used by diagnostics and acceptance tests.
 
-Preview callers may materialize the bounded result as the current Trimesh/Scene
-contract. Final 3MF generation consumes chunks without creating a second full
-Trimesh copy.
+The accumulator converts once to float32/uint32 only after topology is complete,
+then validates the exact writer-domain arrays. Preview and generate callers keep
+the current Trimesh/Scene contract. An optional disk-spool output may be added
+later only if measured final-array residency still exceeds the acceptance
+budget; it is not a prerequisite for replacing the meshing cores.
 
 ### 4. 3MF serialization
 
-Retain `neroued_3mf` and its material/profile packaging behavior. Make the
-smallest required upstream change: a two-pass spool-backed mesh source that
-streams one logical object's vertices, then its offset-adjusted triangles,
-without constructing an owning full-size `Mesh` vector. Release that change and
-pin the resulting dependency version in Lumina. A second Lumina-local 3MF
-implementation is explicitly prohibited.
+Retain `neroued_3mf` and its material/profile packaging behavior. Its current
+Python binding already accepts C-contiguous float32 vertices and uint32/int32
+triangles through the non-owning `MeshView` path. Lumina must pass the validated
+final arrays directly to `DocumentBuilder.add_mesh_object()` instead of first
+calling owning `Mesh.from_arrays()`.
 
-The upstream change also uses shortest-round-trip float32 formatting to reduce
-XML size without lowering geometric precision. Decimal truncation is not a
-memory-safety tool. The Lumina PR remains unmerged until the released writer
-dependency is available and its frozen desktop packaging contract passes.
+Shortest-round-trip float32 formatting remains a useful upstream file-size
+optimization, not a prerequisite or memory-safety mechanism. A two-pass
+spool-backed upstream source is considered only if measured zero-copy export
+still misses the peak-memory target. A second Lumina-local 3MF implementation is
+explicitly prohibited.
 
 ## Precision and Topology Policy
 
@@ -205,8 +206,8 @@ artwork does not encounter a user-facing complexity rejection.
 
 - Admission uses an estimate derived from canonical 2D boundaries or exposed
   voxel surfaces, not a fixed 8 GiB reservation for every Vector request.
-- Mesh chunks and writer spools have explicit byte budgets and deterministic
-  cleanup.
+- Canonical integer buffers and final writer-domain arrays have explicit byte
+  accounting and deterministic lifetime boundaries.
 - A hard host/worker circuit breaker remains only for genuinely unrepresentable
   or resource-exhausting input.
 - Rejection occurs before large 3D allocation, uses a stable typed 422 error,
@@ -225,13 +226,15 @@ corresponding tests:
 - PR #562: remove source-shell/merged-mesh coverage fallback paths and duplicate
   full-mesh retention; preserve coverage regressions.
 - PRs #570 and #578: remove the multi-attempt topology repair ladder and
-  coordinate-separation recovery from the main path; preserve final topology
-  assertions, reason codes, and real regressions.
+  coordinate-separation recovery from the replaced main Vector run path;
+  preserve final topology assertions, reason codes, real regressions, and any
+  helpers still used by Outline until Outline adopts the new builder.
 - PR #577: remove the fixed full-budget reservation and ordinary
   `vector_too_complex` user path; preserve bounded-memory accounting, host
   health protection, and recovery tests in replacement form.
-- PR #575: preserve float32-safe serialization and its tests; replace fixed
-  nine-significant-digit output only with proven shortest-round-trip formatting.
+- PR #575: preserve float32-safe serialization and its tests; keep nine
+  significant digits unless a separate measured upstream change proves
+  shortest-round-trip formatting is smaller with identical float32 values.
 
 Dead helpers, caches, feature flags, translations, and tests that assert an
 obsolete implementation detail are deleted. Tests that assert user-visible
@@ -239,7 +242,9 @@ geometry, memory, or error contracts remain and are rerouted to the new engine.
 
 ## Mode Compatibility
 
-The single PR must demonstrate the following before rollout:
+The single PR must demonstrate the following before rollout. Auxiliary modes
+remain on their current adapters in this delivery; they are compatibility
+regressions, not additional topology rewrites.
 
 | Workflow | Required proof |
 | --- | --- |

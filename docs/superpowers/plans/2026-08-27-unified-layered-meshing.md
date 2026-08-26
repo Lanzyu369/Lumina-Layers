@@ -4,7 +4,7 @@
 
 **Goal:** Replace Lumina's independent-box raster meshes and repair-heavy Vector extrusion with one indexed, bounded-memory layered-meshing core that preserves printable coverage and produces closed Bambu/Orca-safe 3MF objects.
 
-**Architecture:** Keep every public preview/generate/pipeline interface stable. First build an exact indexed surface from the existing labeled voxel volume, then prepare native SVG run groups on one physical integer grid and feed the same indexed extrusion/output primitives. A chunk store owns memory accounting and writer handoff. Old coverage/topology repair ladders remain only until their replacement invariants pass, then are deleted from the production path.
+**Architecture:** Keep every public preview/generate/pipeline interface stable. First build an exact indexed surface from the existing labeled voxel volume, then prepare each spatially connected native SVG XY group once on one physical integer grid and feed the same indexed extrusion primitives. Canonical topology stays integer-valued until one final float32/uint32 materialization. Old coverage/topology repair ladders remain only until their replacement invariants pass, then are removed from the replaced main paths.
 
 **Tech Stack:** Python 3, NumPy, SciPy ndimage, Shapely 2, Trimesh, neroued_3mf, pytest/Hypothesis, FastAPI, React/Vitest, Bambu Studio CLI, OrcaSlicer CLI.
 
@@ -175,8 +175,9 @@ git commit -m "refactor(mesh): replace raster boxes with shared surfaces"
       coverage regressions.
 - [ ] Convert post-occlusion SVG geometries to millimeters before precision
       work and represent XY coordinates as integer units on a 0.0001 mm grid.
-- [ ] Node and polygonize the complete run-group linework once, then label each
-      cell from source ownership so a shared edge has one canonical coordinate.
+- [ ] Partition linework by spatial connectivity. Node and polygonize each XY
+      group once, then label each cell from source ownership/recipe so a shared
+      edge has one canonical coordinate; never repeat polygonization per layer.
 - [ ] Simplify only canonical shared chains with a maximum 0.005 mm deviation.
       Restore the unsimplified local component whenever component count, hole
       count, ownership, or strict coverage changes.
@@ -243,7 +244,8 @@ git commit -m "feat(vector): canonicalize layered geometry in millimeters"
 - [ ] Preserve typed topology reason codes for genuinely invalid input, but
       delete the accepted-input retry sequence (`fast/original/0.0001/0.001`),
       per-source 3D fallback retention, and obsolete automatic native/Python
-      engine fallback.
+      engine fallback from the main run path. Keep helpers still required by
+      Outline until Outline has an independently verified replacement caller.
 - [ ] Keep all existing run/material/Z ordering, single/double-sided, outline,
       coating, backing, and material-archive outputs unchanged.
 
@@ -270,54 +272,44 @@ git add core/vector_engine.py core/vector_mesh_topology.py \
 git commit -m "refactor(vector): build manifold runs by construction"
 ```
 
-## Task 6: Add bounded mesh chunks and streamed neroued_3mf handoff
+## Task 6: Materialize once and use neroued_3mf's zero-copy MeshView path
 
 **Files:**
-- Create: `core/mesh_chunk_store.py`
-- Create: `tests/test_mesh_chunk_store_unit.py`
-- Modify upstream: `neroued_3mf` C++/Python binding files selected by its own
-  repository layout after checkout
-- Modify: `requirements.txt`
 - Modify: `utils/bambu_3mf_writer.py`
 - Modify: `tests/test_bambu_3mf_writer_unit.py`
-- Modify: `lumina_studio.spec`
-- Modify: packaging resource tests that pin the frozen dependency contract
+- Modify: `tests/test_3mf_native_dependency_unit.py`
 
-- [ ] Add failing tests with a tiny byte budget proving chunks spill to
-      registered temporary files, preserve vertex/face order, clean up on
-      success/error, and never materialize a second complete contiguous mesh.
-- [ ] Implement an append-only per-object chunk store with uint32 local faces,
-      float32 output vertices, byte accounting, and deterministic cleanup.
-- [ ] Add a two-pass upstream neroued mesh-source API: iterate all vertices,
-      then all triangles with checked offsets. Keep existing `Mesh.from_arrays`
-      API compatible.
-- [ ] Add shortest-round-trip float32 formatting upstream and prove XML parsed
-      coordinates reproduce the exact input float32 bits.
-- [ ] Release/pin the upstream version; do not add a second 3MF writer in
-      Lumina.
-- [ ] Make `BambuStudio3MFWriter` choose the streamed source for chunk-backed
-      objects while retaining ordinary Trimesh compatibility.
-- [ ] Prove frozen `_MEIPASS` packaging imports the pinned library and includes
-      all printer profile resources.
+- [ ] Add failing tests proving the writer passes C-contiguous float32 vertices
+      and uint32 faces directly to `DocumentBuilder.add_mesh_object()` and never
+      calls owning `Mesh.from_arrays()` on the normal export path.
+- [ ] Keep integer-grid topology and `shell_id` through construction; perform
+      one final conversion to writer-domain arrays and validate those exact
+      arrays before queuing the object.
+- [ ] Retain the converted arrays for the lifetime of the built document so the
+      non-owning `MeshView` references remain valid.
+- [ ] Keep ordinary external Trimesh compatibility by materializing each
+      object's final arrays once, not by retaining a second owning neroued mesh.
+- [ ] Prove XML parsed coordinates reproduce the exact validated float32 values
+      at the existing nine-significant-digit setting.
+- [ ] Prove frozen packaging imports the required NumPy-overload-capable
+      `neroued_3mf` build and still includes all printer profiles.
+- [ ] Measure export RSS. Open a separate upstream spool/shortest-format PR only
+      if the zero-copy path still misses the agreed memory/size target.
 
 Representative RED/GREEN command:
 
 ```bash
 KMP_DUPLICATE_LIB_OK=TRUE OMP_NUM_THREADS=1 \
   /opt/homebrew/bin/python3 -m pytest \
-  tests/test_mesh_chunk_store_unit.py \
   tests/test_bambu_3mf_writer_unit.py \
+  tests/test_3mf_native_dependency_unit.py \
   tests/test_desktop_build_unit.py -q
 ```
 
-Commit the upstream repository separately with its own conventional commit and
-PR. In Lumina, commit only after a released/pinned dependency is installable:
-
 ```bash
-git add core/mesh_chunk_store.py requirements.txt \
-  utils/bambu_3mf_writer.py tests/test_mesh_chunk_store_unit.py \
-  tests/test_bambu_3mf_writer_unit.py lumina_studio.spec
-git commit -m "perf(3mf): stream indexed mesh objects to neroued"
+git add utils/bambu_3mf_writer.py tests/test_bambu_3mf_writer_unit.py \
+  tests/test_3mf_native_dependency_unit.py
+git commit -m "perf(3mf): use neroued zero-copy mesh views"
 ```
 
 ## Task 7: Replace coarse memory admission with actual output estimates
@@ -450,9 +442,10 @@ git diff --check origin/dev-refactor...HEAD
 - [ ] Obtain independent spec-compliance and code-quality reviews; address only
       reproducible blockers.
 - [ ] Push the topic branch normally and open one Lumina PR to `dev-refactor`.
-      Include the upstream neroued PR/release, exact heads, tests, benchmark
-      table, topology/coverage evidence, slicer evidence, limitations, and gray
-      rollback revision. Do not merge.
+      Include exact heads, tests, benchmark table, topology/coverage evidence,
+      zero-copy writer evidence, slicer evidence, limitations, and gray rollback
+      revision. Link a separate upstream neroued PR only if measurement proves
+      it is needed. Do not merge.
 
 Final commit if evidence tooling changed:
 
