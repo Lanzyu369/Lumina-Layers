@@ -103,6 +103,7 @@ from core.vector_mesh_topology import (
 from core.vector_mesh_memory import (
     ByteBudgetLRU,
     enforce_vector_mesh_memory_budget,
+    estimate_indexed_prism_memory,
     estimate_vector_mesh_build_memory,
     get_process_rss_bytes,
     resolve_vector_mesh_memory_budget_bytes,
@@ -6441,6 +6442,9 @@ class VectorProcessor:
             "estimated_additional_bytes": (
                 memory_estimate.estimated_additional_bytes
             ),
+            "estimated_preparation_bytes": (
+                memory_estimate.estimated_preparation_bytes
+            ),
             "current_rss_bytes": current_rss_bytes,
             "memory_budget_bytes": memory_budget_bytes,
         }
@@ -6448,7 +6452,7 @@ class VectorProcessor:
             memory_report = enforce_vector_mesh_memory_budget(
                 stage="preflight",
                 estimated_additional_bytes=(
-                    memory_estimate.estimated_additional_bytes
+                    memory_estimate.estimated_preparation_bytes
                 ),
                 memory_budget_bytes=memory_budget_bytes,
                 current_rss_bytes=current_rss_bytes,
@@ -8279,13 +8283,20 @@ class VectorProcessor:
                     )
                     last_prepared_key = prepared_key
                     last_prepared = prepared
-                estimated_mesh_bytes = max(
-                    16 * 1024 * 1024,
-                    int(prepared.stats.output_coordinate_count) * 256,
+                allocation_estimate = estimate_indexed_prism_memory(
+                    coordinate_count=int(
+                        prepared.stats.output_coordinate_count
+                    ),
+                    hole_count=int(prepared.stats.output_hole_count),
+                    component_count=int(
+                        prepared.stats.output_component_count
+                    ),
                 )
                 _enforce_vector_mesh_runtime_headroom(
                     stage="run_group_canonical_geometry",
-                    estimated_additional_bytes=estimated_mesh_bytes,
+                    estimated_additional_bytes=(
+                        allocation_estimate.estimated_additional_bytes
+                    ),
                     shape_count=len(source_geoms),
                     coordinate_count=int(
                         prepared.stats.output_coordinate_count

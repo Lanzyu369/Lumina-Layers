@@ -6,12 +6,15 @@ import pickle
 
 import numpy as np
 import pytest
+from PIL import Image
 
 from core.errors import VectorMeshMemoryBudgetError
 from core.vector_mesh_memory import (
     ByteBudgetLRU,
     DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES,
     enforce_vector_mesh_memory_budget,
+    estimate_indexed_prism_memory,
+    estimate_material_archive_runtime_bytes,
     estimate_vector_task_memory_reservation_bytes,
     estimate_vector_mesh_build_memory,
     resolve_vector_mesh_memory_budget_bytes,
@@ -73,7 +76,8 @@ def test_memory_budget_error_is_structured_and_actionable() -> None:
     assert error.estimated_peak_bytes == 1_100
     assert error.memory_budget_bytes == 1_000
     assert error.recoverable is True
-    assert "simpl" in str(error).lower()
+    assert "memory" in str(error).lower()
+    assert "too complex" not in str(error).lower()
 
 
 def test_memory_budget_accepts_work_that_fits() -> None:
@@ -128,9 +132,26 @@ def test_small_svg_task_reservation_uses_artifact_complexity(
         supporting_paths=(parse_cache_path,),
     )
 
-    assert gib < preview_bytes < generate_bytes
-    assert generate_bytes <= 5 * gib // 4
+    assert 768 * mib < preview_bytes < generate_bytes
+    assert generate_bytes < 5 * gib // 4
     assert generate_bytes < DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
+
+
+def test_material_archive_reservation_is_estimated_not_full_cap(tmp_path) -> None:
+    """Implicit material state adds a bounded cost instead of forcing 8 GiB."""
+
+    source_path = tmp_path / "source.svg"
+    source_path.write_bytes(b"x" * (2 * 1024**2))
+    implicit_bytes = estimate_material_archive_runtime_bytes(8)
+
+    reservation = estimate_vector_task_memory_reservation_bytes(
+        source_path,
+        implicit_resident_bytes=implicit_bytes,
+    )
+
+    assert implicit_bytes > 0
+    assert reservation < 2 * 1024**3
+    assert reservation < DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
 
 
 def test_large_svg_task_reservation_scales_without_exceeding_cap(
@@ -178,7 +199,7 @@ def test_large_resident_auxiliary_artifact_expands_task_reservation(
 
 
 def test_unknown_vector_source_reservation_fails_closed(tmp_path) -> None:
-    """Unreadable or non-SVG sources retain the configured worst-case cap."""
+    """Missing and unsupported sources retain the configured worst-case cap."""
 
     assert (
         estimate_vector_task_memory_reservation_bytes(
@@ -186,10 +207,10 @@ def test_unknown_vector_source_reservation_fails_closed(tmp_path) -> None:
         )
         == DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
     )
-    raster_path = tmp_path / "source.png"
-    raster_path.write_bytes(b"png")
+    unsupported_path = tmp_path / "source.bin"
+    unsupported_path.write_bytes(b"data")
     assert (
-        estimate_vector_task_memory_reservation_bytes(raster_path)
+        estimate_vector_task_memory_reservation_bytes(unsupported_path)
         == DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
     )
     source_path = tmp_path / "source.svg"
@@ -201,6 +222,16 @@ def test_unknown_vector_source_reservation_fails_closed(tmp_path) -> None:
         )
         == DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
     )
+
+
+def test_rasterized_svg_fallback_uses_decoded_pixel_cost(tmp_path) -> None:
+    raster_path = tmp_path / "fallback.png"
+    Image.new("RGBA", (800, 400), (0, 0, 0, 0)).save(raster_path)
+
+    reservation = estimate_vector_task_memory_reservation_bytes(raster_path)
+
+    assert 768 * 1024**2 < reservation < 2 * 1024**3
+    assert reservation < DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
 
 
 def test_memory_budget_error_survives_process_pool_serialization() -> None:
@@ -281,6 +312,24 @@ def test_build_estimate_accounts_for_backing_coating_and_topology_workspace() ->
     assert estimate.max_validation_coordinate_count == 10_000
     assert estimate.topology_validation_working_bytes > 0
     assert estimate.estimated_final_mesh_bytes > 0
+
+
+def test_indexed_prism_estimate_uses_exact_canonical_counts() -> None:
+    estimate = estimate_indexed_prism_memory(
+        coordinate_count=1_000,
+        hole_count=3,
+        component_count=4,
+    )
+
+    assert estimate.vertex_count == 2_000
+    assert estimate.face_count == 4_000 + 4 * 3 - 4 * 4
+    assert estimate.mesh_array_bytes == (
+        estimate.vertex_count * 3 * 8 + estimate.face_count * 3 * 8
+    )
+    assert estimate.writer_array_bytes == (
+        estimate.vertex_count * 3 * 4 + estimate.face_count * 3 * 4
+    )
+    assert estimate.estimated_additional_bytes > estimate.mesh_array_bytes
 
 
 def test_build_estimate_rejects_giant_single_group_before_topology_allocation() -> None:

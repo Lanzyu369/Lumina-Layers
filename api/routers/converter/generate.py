@@ -72,8 +72,8 @@ from core.model_surface.types import ModelSurfaceError
 from core.naming import generate_preserved_upload_3mf_filename
 from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
 from core.vector_mesh_memory import (
+    estimate_material_archive_runtime_bytes,
     estimate_vector_task_memory_reservation_bytes,
-    resolve_vector_mesh_memory_budget_bytes,
 )
 from core.wipe_tower_placement import WIPE_TOWER_MANUAL_WARNING_CODE
 from utils.merged_bambu_3mf_writer import (
@@ -211,14 +211,16 @@ def _vector_task_memory_reservation_bytes(
 ) -> int:
     """Resolve a task cap from every file the worker may retain."""
 
-    if (
+    material_archive = (
         str((params or {}).get("material_source") or "") == "material_archive"
         or lut_path == "__material_archive__"
-    ):
-        # Material solvers create persisted or dynamic runtimes that have no
-        # complete parent-visible file list. Keep the configured cap instead
-        # of pretending the SVG alone bounds the worker's resident state.
-        return resolve_vector_mesh_memory_budget_bytes()
+    )
+    raw_selected_materials = (params or {}).get("selected_materials") or ()
+    selected_material_count = (
+        len(raw_selected_materials)
+        if isinstance(raw_selected_materials, (list, tuple))
+        else 0
+    )
 
     source_identity = os.path.abspath(os.fspath(source_path))
     supporting_by_identity: dict[str, str] = {}
@@ -254,6 +256,11 @@ def _vector_task_memory_reservation_bytes(
         source_path,
         supporting_paths=tuple(supporting_by_identity.values()),
         resident_paths=tuple(resident_by_identity.values()),
+        implicit_resident_bytes=(
+            estimate_material_archive_runtime_bytes(selected_material_count)
+            if material_archive
+            else 0
+        ),
     )
 
 

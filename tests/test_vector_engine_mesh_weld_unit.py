@@ -11,6 +11,7 @@ from __future__ import annotations
 import gc
 import weakref
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -1939,6 +1940,73 @@ class TestBuildMeshShellTopology:
         assert processor.last_vector_mesh_memory_profile[
             "auxiliary_coordinate_count"
         ] == 10_000
+
+    def test_build_mesh_does_not_reject_uncanonicalized_output_estimate(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Only bounded 2D preparation is admitted before canonical counts exist."""
+
+        processor = VectorProcessor.__new__(VectorProcessor)
+        processor.color_mode = "4-Color (RYBW)"
+        geometry = box(0.0, 0.0, 2.0, 2.0)
+        analysis = VectorAnalysis(
+            shape_data=[],
+            clipped_shapes=[],
+            matched_shapes=[{"geometry": geometry, "recipe": [0]}],
+            silhouette=geometry,
+            scale_factor=1.0,
+            bbox=(0.0, 0.0, 2.0, 2.0),
+            color_conf={},
+            slot_names=["White"],
+            num_channels=1,
+            num_layers=1,
+            preview_colors={0: [255, 255, 255, 255]},
+        )
+        estimate = vector_engine.estimate_vector_mesh_build_memory(
+            analysis.matched_shapes,
+            num_layers=1,
+            double_sided=False,
+            precision_cache_budget_bytes=0,
+            extrude_cache_budget_bytes=0,
+            fallback_chunk_bytes=0,
+        )
+        inflated = SimpleNamespace(
+            **{
+                **estimate.__dict__,
+                "estimated_additional_bytes": 9 * 1024**3,
+                "estimated_preparation_bytes": 32 * 1024**2,
+            }
+        )
+        admitted: list[tuple[str, int]] = []
+
+        def record_admission(*, stage, estimated_additional_bytes, **_kwargs):
+            admitted.append((str(stage), int(estimated_additional_bytes)))
+            return SimpleNamespace(estimated_peak_bytes=estimated_additional_bytes)
+
+        monkeypatch.setattr(
+            vector_engine,
+            "estimate_vector_mesh_build_memory",
+            lambda *_args, **_kwargs: inflated,
+        )
+        monkeypatch.setattr(
+            vector_engine,
+            "enforce_vector_mesh_memory_budget",
+            record_admission,
+        )
+        monkeypatch.setattr(
+            VectorProcessor,
+            "_run_length_extrude",
+            staticmethod(lambda **_kwargs: {}),
+        )
+
+        processor.build_mesh(
+            analysis=analysis,
+            thickness_mm=0.0,
+            structure_mode="Single-sided",
+        )
+
+        assert admitted[0] == ("preflight", 32 * 1024**2)
 
     def test_build_mesh_fast_concat_does_not_depend_on_trimesh_generic_concatenate(
         self,

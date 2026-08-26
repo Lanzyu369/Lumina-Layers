@@ -154,12 +154,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "The SVG contains too many intersecting compound subpaths to process safely. Simplify or flatten the artwork, then upload it again.",
   },
   api_error_vector_mesh_memory_budget_exceeded: {
-    zh: "这份矢量图过于复杂，当前无法安全生成模型。请简化或展平 SVG 路径、缩小模型尺寸，或拆成多个文件后重试。",
-    en: "This Vector artwork is too complex to build safely. Simplify or flatten the SVG paths, reduce the model size, or split the artwork into smaller files, then try again.",
+    zh: "当前可用于本次生成的内存不足，系统已在大额分配前安全停止。请关闭占用内存的程序后重试；如果仍然不足，再降低输出尺寸。",
+    en: "There is not enough memory available for this generation. It stopped safely before the large allocation. Close memory-intensive applications and retry; reduce the output size only if the limit is reached again.",
   },
   api_error_vector_host_memory_busy: {
-    zh: "服务器当前无法确认有足够的安全内存处理新的矢量任务。请等待正在运行的任务完成后重试；无需修改这份 SVG。",
-    en: "The server cannot verify enough safe memory for another Vector task right now. Wait for running jobs to finish, then retry; you do not need to change this SVG.",
+    zh: "当前可用内存不足以启动这次矢量任务。请等待其他任务完成或关闭占用内存的程序后重试；无需修改这份 SVG。",
+    en: "There is not enough free memory to start this Vector task. Wait for other jobs or close memory-intensive applications, then retry; you do not need to change this SVG.",
   },
   api_error_source_svg_no_renderable_geometry: {
     zh: "SVG 中没有矢量模式可用的可见填充几何。请显示图稿，将描边和文字转换为填充路径，或切换到“高保真”模式。",
