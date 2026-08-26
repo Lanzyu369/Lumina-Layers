@@ -197,7 +197,7 @@ def test_vector_preview_keeps_model_surface_svg_native(tmp_path, preview_state):
 
     submitted_paths: list[str] = []
 
-    async def fake_submit(_fn, *args):
+    async def fake_submit(_fn, *args, **_kwargs):
         submitted_paths.append(str(args[0]))
         return _fake_worker_result(tmp_path), _fake_worker_pool_timing()
 

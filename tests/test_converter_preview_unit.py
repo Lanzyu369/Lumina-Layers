@@ -11,6 +11,7 @@ Validates:
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures.process import BrokenProcessPool
 import inspect
 import io
 import json
@@ -52,6 +53,8 @@ from config import TEMP_DIR
 from core.pipeline._input_validation_common import (
     VECTOR_NATIVE_REQUIRES_SVG_DETAIL,
 )
+from core.errors import VectorMeshMemoryBudgetError
+from core.vector_mesh_memory import estimate_vector_task_memory_reservation_bytes
 
 # Isolated store/registry per test module to avoid cross-test pollution
 _test_store: SessionStore = SessionStore(ttl=1800)
@@ -65,7 +68,14 @@ _mock_pool = MagicMock(spec=WorkerPoolManager)
 class _InlineRealWorkerPool:
     """Execute the submitted top-level worker in the endpoint call."""
 
-    async def submit_timed(self, fn, *args, timeout=None):
+    async def submit_timed(
+        self,
+        fn,
+        *args,
+        timeout=None,
+        host_memory_reservation_bytes=None,
+    ):
+        del timeout, host_memory_reservation_bytes
         return fn(*args), {}
 
 
@@ -808,6 +818,47 @@ class TestPreviewMaterialSourceValidation:
                 "replacement_hex": "#333333",
             }
         ]
+
+    def test_vector_material_archive_keeps_full_host_reservation(
+        self,
+        tmp_path,
+    ) -> None:
+        """Implicit material solver state must not use the SVG-only estimate."""
+
+        svg_path = tmp_path / "source.svg"
+        svg_path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" '
+            'width="20" height="20" viewBox="0 0 20 20">'
+            '<rect width="20" height="20" fill="#ffffff"/>'
+            "</svg>",
+            encoding="utf-8",
+        )
+        _mock_pool.submit = AsyncMock(return_value=_create_worker_result_files())
+
+        with (
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value=str(svg_path)),
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("source.svg", b"<svg/>", "image/svg+xml")},
+                data={
+                    "modeling_mode": "vector",
+                    "material_source": "material_archive",
+                    "selected_materials": json.dumps(["mat-a", "mat-b"]),
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        assert _mock_pool.submit.call_args.kwargs[
+            "host_memory_reservation_bytes"
+        ] == 8 * 1024**3
 
 
 # =========================================================================
@@ -1915,9 +1966,14 @@ class TestResponseContainsPaletteAndDimensions:
 class TestSvgLargeFormatWarnings:
     """Verify preview records SVG native large-format compatibility warnings."""
 
-    def test_preview_returns_and_stores_svg_large_format_warnings(self) -> None:
+    def test_preview_returns_and_stores_svg_large_format_warnings(
+        self,
+        tmp_path: Path,
+    ) -> None:
         worker_result = _create_worker_result_files()
         _mock_pool.submit = AsyncMock(return_value=worker_result)
+        lut_path = tmp_path / "test-lut.npy"
+        np.save(lut_path, np.zeros((1, 3), dtype=np.uint8))
 
         svg_bytes = io.BytesIO(
             (
@@ -1931,7 +1987,7 @@ class TestSvgLargeFormatWarnings:
         with (
             patch(
                 "api.routers.converter.preview.LUTManager.get_lut_path",
-                return_value="/tmp/fake.npy",
+                return_value=str(lut_path),
             ),
             patch(
                 "api.routers.converter.preview.generate_segmented_glb",
@@ -1949,6 +2005,15 @@ class TestSvgLargeFormatWarnings:
             )
 
         assert response.status_code == 200
+        submitted_source = _mock_pool.submit.call_args.args[1]
+        reservation = _mock_pool.submit.call_args.kwargs[
+            "host_memory_reservation_bytes"
+        ]
+        assert reservation == estimate_vector_task_memory_reservation_bytes(
+            submitted_source,
+            resident_paths=(lut_path,),
+        )
+        assert reservation < 8 * 1024**3
         body = response.json()
         assert "warnings" in body
         assert any("native vector large-format" in warning.lower() for warning in body["warnings"])
@@ -2227,6 +2292,33 @@ class TestGeneralExceptionReturns500:
         assert log_extra["error_message"] == response.json()["detail"]
         assert private_path not in log_extra["error_message"]
 
+    def test_preview_broken_worker_pool_returns_retryable_503(self) -> None:
+        buf = _make_test_image_buf()
+        _mock_pool.submit = AsyncMock(
+            side_effect=BrokenProcessPool("worker was killed")
+        )
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={"lut_name": "test_lut", "color_mode": "4-Color"},
+            )
+
+        assert response.status_code == 503
+        assert response.json()["detail"] == (
+            "Preview generation failed. Re-run preview and try again."
+        )
+
     def test_preview_vector_source_mismatch_returns_actionable_422(self) -> None:
         """Known VECTOR + raster validation errors must remain user-visible."""
         buf = _make_test_image_buf()
@@ -2259,6 +2351,40 @@ class TestGeneralExceptionReturns500:
             "error": "vector_native_requires_svg",
             "message": VECTOR_NATIVE_REQUIRES_SVG_DETAIL,
         }
+
+    def test_preview_memory_admission_returns_actionable_422(self) -> None:
+        buf = _make_test_image_buf()
+        _mock_pool.submit = AsyncMock(
+            side_effect=VectorMeshMemoryBudgetError(
+                "preflight",
+                9 * 1024**3,
+                8 * 1024**3,
+                1 * 1024**3,
+                4_200,
+                420_000,
+            )
+        )
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={"lut_name": "test_lut", "color_mode": "4-Color"},
+            )
+
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert detail["error"] == "vector_mesh_memory_budget_exceeded"
+        assert detail["recoverable"] is True
 
     @pytest.mark.parametrize(
         ("diagnostic", "modeling_mode"),

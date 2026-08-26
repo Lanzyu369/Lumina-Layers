@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 import math
 import xml.etree.ElementTree as ET
@@ -25,6 +26,8 @@ SVG_LARGE_FORMAT_DENSITY_REDUCED_WARNING = (
 
 SVG_LARGE_FORMAT_FALLBACK_UNSUPPORTED_FEATURE = "unsupported_svg_feature"
 SVG_LARGE_FORMAT_FALLBACK_NATIVE_FAILURE = "native_vector_failure"
+MAX_LARGE_FORMAT_TILE_COUNT = 10_000
+SVG_RASTER_FALLBACK_MAX_TOTAL_PIXELS = 12_000_000
 
 _UNSUPPORTED_LARGE_FORMAT_TAGS = {
     "text",
@@ -42,6 +45,40 @@ _UNSUPPORTED_LARGE_FORMAT_ATTRS = {
     "mask",
     "filter",
 }
+
+
+def resolve_large_format_grid_shape(
+    *,
+    total_width_mm: float,
+    total_height_mm: float,
+    tile_width_mm: float,
+    tile_height_mm: float,
+    max_tiles: int | None = None,
+) -> tuple[int, int]:
+    """Validate physical dimensions and return bounded grid columns/rows.
+
+    校验物理尺寸并返回受限的网格列数与行数。
+    """
+
+    dimensions = (
+        ("total_width_mm", total_width_mm),
+        ("total_height_mm", total_height_mm),
+        ("tile_width_mm", tile_width_mm),
+        ("tile_height_mm", tile_height_mm),
+    )
+    for name, value in dimensions:
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"{name} must be finite and positive")
+    cols = max(1, math.ceil(total_width_mm / tile_width_mm))
+    rows = max(1, math.ceil(total_height_mm / tile_height_mm))
+    tile_count = cols * rows
+    if max_tiles is not None and tile_count > max(1, int(max_tiles)):
+        raise ValueError(
+            f"Large-format grid would create {tile_count} tiles; "
+            f"the safe limit is {int(max_tiles)}. Increase tile size or "
+            "reduce the model dimensions."
+        )
+    return cols, rows
 
 
 @dataclass(frozen=True)
@@ -125,7 +162,7 @@ class SvgRasterFallbackDensityPlanner:
     total_height_mm: float
     desired_pixels_per_mm: float = 10.0
     min_pixels_per_mm: float = 2.0
-    max_total_pixels: int = 12_000_000
+    max_total_pixels: int = SVG_RASTER_FALLBACK_MAX_TOTAL_PIXELS
 
     def choose_density(self) -> tuple[float, list[str]]:
         """Choose a bounded raster fallback density for SVG large-format generation."""
@@ -137,7 +174,9 @@ class SvgRasterFallbackDensityPlanner:
         if max_ppm >= self.min_pixels_per_mm:
             chosen = max(self.min_pixels_per_mm, chosen)
         else:
-            chosen = max(chosen, 0.25)
+            # The pixel ceiling is a hard memory contract. A density floor
+            # here used to exceed it for extremely large direct callers.
+            chosen = max_ppm
         if chosen < self.desired_pixels_per_mm:
             warnings.append(SVG_LARGE_FORMAT_DENSITY_REDUCED_WARNING)
         return chosen, warnings
@@ -152,21 +191,17 @@ class VectorTileLayoutPlanner:
     tile_width_mm: float
     tile_height_mm: float
 
-    def build_tile_specs(self) -> list[VectorTileSpec]:
-        """Resolve tile bounds from total output size and tile size."""
+    def iter_tile_specs(self) -> Iterator[VectorTileSpec]:
+        """Yield tile bounds without materializing the complete grid.
 
-        for name, value in (
-            ("total_width_mm", self.total_width_mm),
-            ("total_height_mm", self.total_height_mm),
-            ("tile_width_mm", self.tile_width_mm),
-            ("tile_height_mm", self.tile_height_mm),
-        ):
-            if value <= 0:
-                raise ValueError(f"{name} must be positive")
-
-        cols = max(1, math.ceil(self.total_width_mm / self.tile_width_mm))
-        rows = max(1, math.ceil(self.total_height_mm / self.tile_height_mm))
-        specs: list[VectorTileSpec] = []
+        不预先构造完整网格列表，逐个产出 tile 边界。
+        """
+        cols, rows = resolve_large_format_grid_shape(
+            total_width_mm=self.total_width_mm,
+            total_height_mm=self.total_height_mm,
+            tile_width_mm=self.tile_width_mm,
+            tile_height_mm=self.tile_height_mm,
+        )
 
         for row in range(rows):
             for col in range(cols):
@@ -174,20 +209,22 @@ class VectorTileLayoutPlanner:
                 y0_mm = row * self.tile_height_mm
                 x1_mm = min(x0_mm + self.tile_width_mm, self.total_width_mm)
                 y1_mm = min(y0_mm + self.tile_height_mm, self.total_height_mm)
-                specs.append(
-                    VectorTileSpec(
-                        row=row + 1,
-                        col=col + 1,
-                        label=f"R{row + 1}C{col + 1}",
-                        x0_mm=float(x0_mm),
-                        y0_mm=float(y0_mm),
-                        x1_mm=float(x1_mm),
-                        y1_mm=float(y1_mm),
-                        width_mm=float(x1_mm - x0_mm),
-                        height_mm=float(y1_mm - y0_mm),
-                    )
+                yield VectorTileSpec(
+                    row=row + 1,
+                    col=col + 1,
+                    label=f"R{row + 1}C{col + 1}",
+                    x0_mm=float(x0_mm),
+                    y0_mm=float(y0_mm),
+                    x1_mm=float(x1_mm),
+                    y1_mm=float(y1_mm),
+                    width_mm=float(x1_mm - x0_mm),
+                    height_mm=float(y1_mm - y0_mm),
                 )
-        return specs
+
+    def build_tile_specs(self) -> list[VectorTileSpec]:
+        """Resolve all tile bounds for callers that explicitly need a list."""
+
+        return list(self.iter_tile_specs())
 
 
 class TileGeometrySlicer:
@@ -206,9 +243,13 @@ class TileGeometrySlicer:
 
         try:
             sliced = geometry.intersection(self.tile_box)
+        except MemoryError:
+            raise
         except Exception:
             try:
                 sliced = make_valid(geometry).intersection(self.tile_box)
+            except MemoryError:
+                raise
             except Exception:
                 return None
 
@@ -262,6 +303,19 @@ class VectorAnalysisTiler:
             tile_height_mm=self.tile_height_mm,
         ).build_tile_specs()
 
+    def iter_tile_specs(self) -> Iterator[VectorTileSpec]:
+        """Yield tile bounds without retaining the complete grid.
+
+        不保留完整网格，逐个产出 tile 边界。
+        """
+
+        return VectorTileLayoutPlanner(
+            total_width_mm=self.total_width_mm,
+            total_height_mm=self.total_height_mm,
+            tile_width_mm=self.tile_width_mm,
+            tile_height_mm=self.tile_height_mm,
+        ).iter_tile_specs()
+
     def _tile_svg_bounds(self, spec: VectorTileSpec) -> tuple[float, float, float, float]:
         scale = self.analysis.scale_factor
         return (
@@ -313,15 +367,21 @@ class VectorAnalysisTiler:
         )
         return SlicedVectorTile(spec=spec, analysis=tile_analysis)
 
+    def iter_tiles(self) -> Iterator[SlicedVectorTile]:
+        """Yield non-empty tile analyses without retaining previous tiles."""
+
+        for spec in self.iter_tile_specs():
+            tile = self._build_tile_analysis(spec)
+            if tile is not None:
+                yield tile
+                # Suspended generators retain local variables. Release the
+                # yielded analysis before building the next full tile.
+                tile = None
+
     def slice(self) -> list[SlicedVectorTile]:
         """Return every non-empty tile-local vector analysis."""
 
-        tiles: list[SlicedVectorTile] = []
-        for spec in self.build_tile_specs():
-            tile = self._build_tile_analysis(spec)
-            if tile is not None:
-                tiles.append(tile)
-        return tiles
+        return list(self.iter_tiles())
 
 
 def inspect_svg_large_format_support(svg_path: str) -> dict:
@@ -335,7 +395,7 @@ def choose_svg_raster_fallback_density(
     total_height_mm: float,
     desired_pixels_per_mm: float = 10.0,
     min_pixels_per_mm: float = 2.0,
-    max_total_pixels: int = 12_000_000,
+    max_total_pixels: int = SVG_RASTER_FALLBACK_MAX_TOTAL_PIXELS,
 ) -> tuple[float, list[str]]:
     """Choose a bounded raster fallback density for SVG large-format generation."""
 
@@ -389,13 +449,15 @@ def slice_vector_analysis_into_tiles(
     total_height_mm: float,
     tile_width_mm: float,
     tile_height_mm: float,
-) -> list[SlicedVectorTile]:
+    materialize: bool = True,
+) -> list[SlicedVectorTile] | Iterator[SlicedVectorTile]:
     """Partition a globally analyzed VectorAnalysis into non-empty tile-local analyses."""
 
-    return VectorAnalysisTiler(
+    tiler = VectorAnalysisTiler(
         analysis=analysis,
         total_width_mm=total_width_mm,
         total_height_mm=total_height_mm,
         tile_width_mm=tile_width_mm,
         tile_height_mm=tile_height_mm,
-    ).slice()
+    )
+    return tiler.slice() if materialize else tiler.iter_tiles()

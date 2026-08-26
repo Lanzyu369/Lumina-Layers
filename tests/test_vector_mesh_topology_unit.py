@@ -34,6 +34,40 @@ def _edge_incidence_counts(mesh) -> np.ndarray:
     return counts
 
 
+def test_float32_topology_analysis_gathers_faces_in_bounded_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Writer-domain validation may not build one `(faces, 3, 3)` array."""
+
+    mesh = trimesh.creation.icosphere(subdivisions=2, radius=1.0)
+    assert len(mesh.faces) > 64
+
+    class TrackingWriterVertices(np.ndarray):
+        def __getitem__(self, key):
+            if isinstance(key, np.ndarray) and key.ndim == 2:
+                assert len(key) <= 2, "all topology faces were gathered at once"
+            return super().__getitem__(key)
+
+    real_empty = vector_mesh_topology.np.empty
+
+    def tracked_empty(shape, *args, **kwargs):
+        array = real_empty(shape, *args, **kwargs)
+        dtype = kwargs.get("dtype", args[0] if args else None)
+        if tuple(shape) == tuple(mesh.vertices.shape) and np.dtype(dtype) == np.dtype(np.float32):
+            return array.view(TrackingWriterVertices)
+        return array
+
+    monkeypatch.setattr(vector_mesh_topology.np, "empty", tracked_empty)
+    monkeypatch.setattr(
+        vector_mesh_topology,
+        "_MESH_ANALYSIS_FACE_CHUNK_SIZE",
+        2,
+        raising=False,
+    )
+
+    assert mesh_is_float32_safe(mesh, xy_scale=1.0)
+
+
 def _near_duplicate_boundary_polygon() -> Polygon:
     """Return a valid ring whose distinct vertices collapse at float32 scale."""
 

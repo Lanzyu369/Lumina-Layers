@@ -341,11 +341,14 @@ def test_fast_mode_app_mounts_local_development_routes() -> None:
     """Fast log gate must exercise the full local development route baseline."""
 
     app = log_quality_check._build_fast_mode_app()
-    paths = {route.path for route in app.routes}
 
-    assert "/api/extractor/extract-single-stage" in paths
-    assert "/api/extractor/extract" in paths
-    assert "/api/calibration/generate-single-stage-kit" in paths
+    assert str(app.url_path_for("extractor_extract_single_stage")) == (
+        "/api/extractor/extract-single-stage"
+    )
+    assert str(app.url_path_for("extractor_extract")) == "/api/extractor/extract"
+    assert str(app.url_path_for("calibration_generate_single_stage_kit")) == (
+        "/api/calibration/generate-single-stage-kit"
+    )
 
 
 def test_fast_mode_preview_supports_timed_worker_submission() -> None:
@@ -366,6 +369,42 @@ def test_fast_mode_preview_supports_timed_worker_submission() -> None:
                 "fast",
                 "--workflow",
                 "lut_list,lut_colors,preview",
+                "--output",
+                str(output_path),
+            ],
+            cwd=log_quality_check.REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        report = json.loads(output_path.read_text(encoding="utf-8"))
+        assert report["overall_passed"] is True
+    finally:
+        output_path.unlink(missing_ok=True)
+        output_path.with_suffix(".log").unlink(missing_ok=True)
+
+
+def test_fast_mode_vector_preview_supports_memory_admission_metadata() -> None:
+    """Vector fast gate must accept pool-only reservation keyword arguments."""
+
+    output_path = (
+        log_quality_check.REPO_ROOT
+        / ".scratch"
+        / f"log-quality-vector-admission-{uuid.uuid4().hex}.json"
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "scripts/log_quality_check.py",
+                "--mode",
+                "fast",
+                "--workflow",
+                "replace",
                 "--output",
                 str(output_path),
             ],

@@ -284,6 +284,8 @@ def _decode_source(
                 return _composite_to_white(opened), None
         except (OSError, ValueError, SyntaxError, Image.DecompressionBombError) as exc:
             return None, _make_warning("source_decode_error", str(exc))
+        except MemoryError:
+            raise
         except Exception as exc:  # noqa: BLE001 - defensive: any decode failure
             return None, _make_warning("source_decode_error", str(exc))
 
@@ -302,6 +304,8 @@ def _decode_source(
                 return _composite_to_white(opened), None
         except (OSError, ValueError, SyntaxError, Image.DecompressionBombError) as exc:
             return None, _make_warning("source_decode_error", str(exc))
+        except MemoryError:
+            raise
         except Exception as exc:  # noqa: BLE001
             return None, _make_warning("source_decode_error", str(exc))
 
@@ -313,6 +317,8 @@ def _decode_source(
                     f"image size {source.size} has zero dimension",
                 )
             return _composite_to_white(source), None
+        except MemoryError:
+            raise
         except Exception as exc:  # noqa: BLE001
             return None, _make_warning("source_decode_error", str(exc))
 
@@ -380,6 +386,8 @@ def _encode_png(image: "Image.Image") -> bytes:
 
     try:
         Image.open(io.BytesIO(payload)).verify()
+    except MemoryError:
+        raise
     except Exception as exc:  # noqa: BLE001 - we re-raise as RuntimeError
         raise RuntimeError(f"PNG verify() failed: {exc}") from exc
 
@@ -531,6 +539,8 @@ def _build_cover_bundle_uncached(source: _CoverSource) -> CoverPngBundle:
             is_placeholder=False,
             warning=None,
         )
+    except MemoryError:
+        raise
     except Exception as exc:  # noqa: BLE001 - any encode failure → placeholder
         warning = {
             "error_type": _truncate("cover_encode_error", 256),

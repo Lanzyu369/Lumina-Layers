@@ -298,13 +298,50 @@ describe("apiClient", () => {
       language: "zh" as const,
       expected: "SVG 包含过多相交的复合子路径，无法安全处理。请简化或展平图稿后重新上传。",
     },
+    {
+      code: "vector_mesh_memory_budget_exceeded",
+      status: 422,
+      language: "en" as const,
+      expected:
+        "This Vector artwork is too complex to build safely. Simplify or flatten the SVG paths, reduce the model size, or split the artwork into smaller files, then try again.",
+    },
+    {
+      code: "vector_mesh_memory_budget_exceeded",
+      status: 422,
+      language: "zh" as const,
+      expected:
+        "这份矢量图过于复杂，当前无法安全生成模型。请简化或展平 SVG 路径、缩小模型尺寸，或拆成多个文件后重试。",
+    },
+    {
+      code: "vector_host_memory_busy",
+      status: 503,
+      language: "en" as const,
+      expected:
+        "The server cannot verify enough safe memory for another Vector task right now. Wait for running jobs to finish, then retry; you do not need to change this SVG.",
+    },
+    {
+      code: "vector_host_memory_busy",
+      status: 503,
+      language: "zh" as const,
+      expected:
+        "服务器当前无法确认有足够的安全内存处理新的矢量任务。请等待正在运行的任务完成后重试；无需修改这份 SVG。",
+    },
   ])(
     "translates converter source error $code in $language",
     async ({ code, status, language, expected }) => {
       useSettingsStore.setState({ language });
       const detail = {
         error: code,
-        message: "Safe server fallback for older clients.",
+        message:
+          status === 503
+            ? "Customer project alpha must remain private."
+            : "Safe server fallback for older clients.",
+        ...(status === 503
+          ? {
+              requested_bytes: 8589934592,
+              reason: "host_capacity_busy",
+            }
+          : {}),
       };
       const error = new Error(`Request failed with status code ${status}`);
       Object.assign(error, {
@@ -318,7 +355,20 @@ describe("apiClient", () => {
         .catch((err) => err);
 
       expect(rejected).toMatchObject({ message: expected });
-      expect(rejected.response?.data?.detail).toEqual(detail);
+      if (status === 503) {
+        expect(rejected.response?.data?.detail).toEqual({
+          error: code,
+          message: expected,
+        });
+        expect(JSON.stringify(rejected.response?.data)).not.toContain(
+          "Customer project alpha",
+        );
+        expect(JSON.stringify(rejected.response?.data)).not.toContain(
+          "requested_bytes",
+        );
+      } else {
+        expect(rejected.response?.data?.detail).toEqual(detail);
+      }
     },
   );
 

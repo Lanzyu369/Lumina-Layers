@@ -207,6 +207,11 @@ const STRUCTURED_DETAIL_TRANSLATION_KEYS: ReadonlyMap<string, string> = new Map(
   ["source_svg_invalid", "api_error_source_svg_invalid"],
   ["source_svg_too_complex", "api_error_source_svg_too_complex"],
   [
+    "vector_mesh_memory_budget_exceeded",
+    "api_error_vector_mesh_memory_budget_exceeded",
+  ],
+  ["vector_host_memory_busy", "api_error_vector_host_memory_busy"],
+  [
     "source_svg_no_renderable_geometry",
     "api_error_source_svg_no_renderable_geometry",
   ],
@@ -227,6 +232,9 @@ const STRUCTURED_DETAIL_TRANSLATION_KEYS: ReadonlyMap<string, string> = new Map(
   ],
   ["model_surface_boolean_failed", "api_error_model_surface_boolean_failed"],
 ]);
+
+const SERVER_SAFE_STRUCTURED_DETAIL_STATUSES: ReadonlyMap<string, number> =
+  new Map([["vector_host_memory_busy", 503]]);
 
 function extractReadableDetail(data: unknown): string | null {
   if (typeof data === "string" && data.trim()) {
@@ -266,6 +274,35 @@ function extractReadableDetail(data: unknown): string | null {
     return message.trim();
   }
   return null;
+}
+
+function extractServerSafeStructuredDetailCode(
+  data: unknown,
+  statusCode: number | null,
+): string | null {
+  if (!isRecord(data) || !isRecord(data.detail)) {
+    return null;
+  }
+  const errorCode = data.detail.error;
+  if (
+    typeof errorCode !== "string" ||
+    SERVER_SAFE_STRUCTURED_DETAIL_STATUSES.get(errorCode) !== statusCode
+  ) {
+    return null;
+  }
+  return errorCode;
+}
+
+function extractServerSafeStructuredDetailTranslation(
+  data: unknown,
+  statusCode: number | null,
+): string | null {
+  const errorCode = extractServerSafeStructuredDetailCode(data, statusCode);
+  if (!errorCode) {
+    return null;
+  }
+  const translationKey = STRUCTURED_DETAIL_TRANSLATION_KEYS.get(errorCode);
+  return translationKey ? tRuntime(translationKey) : null;
 }
 
 function isGenericHttpDetail(detail: string, statusCode: number | null): boolean {
@@ -407,6 +444,14 @@ function readableApiErrorMessage(
   requestId: string | null = null,
 ): string {
   if (isServerErrorStatus(statusCode)) {
+    // Server error bodies remain hidden by default.  The only exception is
+    // an allowlisted machine code translated entirely by this client; no
+    // server-provided free text is exposed.
+    const structuredTranslation =
+      extractServerSafeStructuredDetailTranslation(data, statusCode);
+    if (structuredTranslation) {
+      return structuredTranslation;
+    }
     return fallbackHttpStatusMessage(statusCode, requestId);
   }
   const detail = extractReadableDetail(data);
@@ -585,6 +630,18 @@ function buildReadableResponseData(
   readableMessage: string,
 ): unknown {
   if (isServerErrorStatus(statusCode)) {
+    const safeErrorCode = extractServerSafeStructuredDetailCode(
+      data,
+      statusCode,
+    );
+    if (safeErrorCode) {
+      return {
+        detail: {
+          error: safeErrorCode,
+          message: readableMessage,
+        },
+      };
+    }
     return { detail: readableMessage };
   }
   if (!isRecord(data)) {

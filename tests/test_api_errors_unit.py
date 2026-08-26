@@ -11,7 +11,13 @@ from api.errors import (
     ValidationDomainError,
     to_http_exception,
 )
-from core.errors import CoreDependencyError, CoreProcessingError, CoreValidationError
+from core.errors import (
+    CoreDependencyError,
+    CoreProcessingError,
+    CoreValidationError,
+    VectorHostMemoryAdmissionError,
+    VectorMeshMemoryBudgetError,
+)
 
 
 def test_validation_domain_error_maps_to_422() -> None:
@@ -54,6 +60,43 @@ def test_core_validation_error_maps_to_422() -> None:
     exc = to_http_exception(CoreValidationError("invalid"), "converter")
     assert exc.status_code == 422
     assert exc.detail == "invalid"
+
+
+def test_vector_mesh_memory_budget_error_maps_to_actionable_422() -> None:
+    error = VectorMeshMemoryBudgetError(
+        "preflight",
+        9 * 1024**3,
+        8 * 1024**3,
+        1 * 1024**3,
+        4_200,
+        420_000,
+    )
+
+    exc = to_http_exception(error, "3MF generation")
+
+    assert exc.status_code == 422
+    assert exc.detail["error"] == "vector_mesh_memory_budget_exceeded"
+    assert exc.detail["code"] == "vector_mesh_memory_budget_exceeded"
+    assert exc.detail["recoverable"] is True
+    assert exc.detail["stage"] == "preflight"
+    assert exc.detail["memory_budget_bytes"] == 8 * 1024**3
+    assert "simpl" in exc.detail["message"].lower()
+
+
+def test_vector_host_memory_admission_maps_to_retryable_503() -> None:
+    error = VectorHostMemoryAdmissionError(
+        requested_bytes=8,
+        reserved_bytes=24,
+        memory_budget_bytes=24,
+    )
+
+    exc = to_http_exception(error, "Vector generation")
+
+    assert exc.status_code == 503
+    assert exc.detail["code"] == "vector_host_memory_busy"
+    assert exc.detail["retryable"] is True
+    assert exc.detail["recovery_actions"] == ["retry_later"]
+    assert exc.headers == {"Retry-After": "5"}
 
 
 def test_core_dependency_error_maps_to_502() -> None:

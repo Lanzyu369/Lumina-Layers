@@ -1,0 +1,309 @@
+"""Bounded-memory contracts for Vector mesh generation."""
+
+from __future__ import annotations
+
+import pickle
+
+import numpy as np
+import pytest
+
+from core.errors import VectorMeshMemoryBudgetError
+from core.vector_mesh_memory import (
+    ByteBudgetLRU,
+    DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES,
+    enforce_vector_mesh_memory_budget,
+    estimate_vector_task_memory_reservation_bytes,
+    estimate_vector_mesh_build_memory,
+    resolve_vector_mesh_memory_budget_bytes,
+)
+from core.task_parallelism_runtime import task_host_memory_budget_scope
+
+
+def test_byte_budget_lru_evicts_before_resident_bytes_exceed_limit() -> None:
+    """Cache residency is governed by bytes, not an unbounded entry count."""
+
+    cache = ByteBudgetLRU(
+        max_bytes=24,
+        size_of=lambda value: int(value.nbytes),
+    )
+    first = np.zeros(2, dtype=np.int64)
+    second = np.ones(2, dtype=np.int64)
+
+    cache["first"] = first
+    cache["second"] = second
+
+    assert cache.get("first") is None
+    assert cache.get("second") is second
+    assert cache.resident_bytes == second.nbytes
+    assert cache.peak_bytes <= cache.max_bytes
+    assert cache.eviction_count == 1
+
+
+def test_byte_budget_lru_refuses_single_oversized_entry() -> None:
+    """One entry larger than the whole budget is used but never retained."""
+
+    cache = ByteBudgetLRU(
+        max_bytes=8,
+        size_of=lambda value: int(value.nbytes),
+    )
+
+    cache["oversized"] = np.zeros(2, dtype=np.int64)
+
+    assert len(cache) == 0
+    assert cache.resident_bytes == 0
+    assert cache.oversized_rejection_count == 1
+
+
+def test_memory_budget_error_is_structured_and_actionable() -> None:
+    """Unsafe work fails before OOM with a stable recoverable error contract."""
+
+    with pytest.raises(VectorMeshMemoryBudgetError) as raised:
+        enforce_vector_mesh_memory_budget(
+            stage="preflight",
+            estimated_additional_bytes=900,
+            memory_budget_bytes=1_000,
+            current_rss_bytes=200,
+            shape_count=42,
+            coordinate_count=4_200,
+        )
+
+    error = raised.value
+    assert error.code == "vector_mesh_memory_budget_exceeded"
+    assert error.stage == "preflight"
+    assert error.estimated_peak_bytes == 1_100
+    assert error.memory_budget_bytes == 1_000
+    assert error.recoverable is True
+    assert "simpl" in str(error).lower()
+
+
+def test_memory_budget_accepts_work_that_fits() -> None:
+    report = enforce_vector_mesh_memory_budget(
+        stage="preflight",
+        estimated_additional_bytes=700,
+        memory_budget_bytes=1_000,
+        current_rss_bytes=200,
+        shape_count=4,
+        coordinate_count=40,
+    )
+
+    assert report.estimated_peak_bytes == 900
+    assert report.is_allowed is True
+
+
+def test_parent_host_reservation_tightens_worker_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pool-assigned cap bounds every later build/export memory guard."""
+
+    monkeypatch.delenv("LUMINA_VECTOR_MESH_MEMORY_BUDGET_MB", raising=False)
+    assert (
+        resolve_vector_mesh_memory_budget_bytes()
+        == DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
+    )
+    with task_host_memory_budget_scope(512):
+        assert resolve_vector_mesh_memory_budget_bytes() == 512
+    assert (
+        resolve_vector_mesh_memory_budget_bytes()
+        == DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
+    )
+
+
+def test_small_svg_task_reservation_uses_artifact_complexity(
+    tmp_path,
+) -> None:
+    """A real-size small SVG must not reserve the full 8 GiB ceiling."""
+
+    mib = 1024**2
+    gib = 1024**3
+    source_path = tmp_path / "source.svg"
+    source_path.write_bytes(b"x" * (2 * mib))
+    parse_cache_path = tmp_path / "parse-cache.pkl"
+    parse_cache_path.write_bytes(b"x" * (3 * mib // 2))
+
+    preview_bytes = estimate_vector_task_memory_reservation_bytes(
+        source_path,
+    )
+    generate_bytes = estimate_vector_task_memory_reservation_bytes(
+        source_path,
+        supporting_paths=(parse_cache_path,),
+    )
+
+    assert gib < preview_bytes < generate_bytes
+    assert generate_bytes <= 5 * gib // 4
+    assert generate_bytes < DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
+
+
+def test_large_svg_task_reservation_scales_without_exceeding_cap(
+    tmp_path,
+) -> None:
+    """Historical 55 MiB-class SVGs retain a multi-GiB safety promise."""
+
+    source_path = tmp_path / "large.svg"
+    with source_path.open("wb") as handle:
+        handle.truncate(55 * 1024**2)
+
+    reservation = estimate_vector_task_memory_reservation_bytes(source_path)
+
+    assert reservation >= 4 * 1024**3
+    assert reservation <= DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
+
+
+def test_large_resident_auxiliary_artifact_expands_task_reservation(
+    tmp_path,
+) -> None:
+    """Large model/cache inputs must be represented in the worker hard cap."""
+
+    source_path = tmp_path / "source.svg"
+    source_path.write_text("<svg/>", encoding="utf-8")
+    typical_model_path = tmp_path / "typical.stl"
+    large_model_path = tmp_path / "large.stl"
+    with typical_model_path.open("wb") as handle:
+        handle.truncate(13 * 1024**2)
+    with large_model_path.open("wb") as handle:
+        handle.truncate(64 * 1024**2)
+
+    source_only = estimate_vector_task_memory_reservation_bytes(source_path)
+    typical_model = estimate_vector_task_memory_reservation_bytes(
+        source_path,
+        resident_paths=(typical_model_path,),
+    )
+    large_model = estimate_vector_task_memory_reservation_bytes(
+        source_path,
+        resident_paths=(large_model_path,),
+    )
+
+    assert typical_model == source_only
+    assert large_model > 2 * 1024**3
+    assert large_model < DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
+
+
+def test_unknown_vector_source_reservation_fails_closed(tmp_path) -> None:
+    """Unreadable or non-SVG sources retain the configured worst-case cap."""
+
+    assert (
+        estimate_vector_task_memory_reservation_bytes(
+            tmp_path / "missing.svg",
+        )
+        == DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
+    )
+    raster_path = tmp_path / "source.png"
+    raster_path.write_bytes(b"png")
+    assert (
+        estimate_vector_task_memory_reservation_bytes(raster_path)
+        == DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
+    )
+    source_path = tmp_path / "source.svg"
+    source_path.write_text("<svg/>", encoding="utf-8")
+    assert (
+        estimate_vector_task_memory_reservation_bytes(
+            source_path,
+            resident_paths=(tmp_path / "missing-model.stl",),
+        )
+        == DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
+    )
+
+
+def test_memory_budget_error_survives_process_pool_serialization() -> None:
+    """Worker admission diagnostics must reach the API process intact."""
+
+    error = VectorMeshMemoryBudgetError(
+        "assemble",
+        9 * 1024**3,
+        8 * 1024**3,
+        7 * 1024**3,
+        42,
+        4_200,
+    )
+
+    restored = pickle.loads(pickle.dumps(error))
+
+    assert isinstance(restored, VectorMeshMemoryBudgetError)
+    assert restored.stage == "assemble"
+    assert restored.estimated_peak_bytes == 9 * 1024**3
+    assert restored.memory_budget_bytes == 8 * 1024**3
+    assert restored.shape_count == 42
+    assert restored.coordinate_count == 4_200
+    assert str(restored) == str(error)
+
+
+def test_build_estimate_accounts_for_run_multiplicity_and_double_sided_output() -> None:
+    shapes = [
+        {
+            "geometry": _CoordinateCountGeometry(100),
+            "recipe": [0, 1, 0, 1],
+        },
+        {
+            "geometry": _CoordinateCountGeometry(50),
+            "recipe": [0, 0, 1, 1],
+        },
+    ]
+
+    single = estimate_vector_mesh_build_memory(
+        shapes,
+        num_layers=4,
+        double_sided=False,
+        precision_cache_budget_bytes=0,
+        extrude_cache_budget_bytes=0,
+        fallback_chunk_bytes=0,
+    )
+    double = estimate_vector_mesh_build_memory(
+        shapes,
+        num_layers=4,
+        double_sided=True,
+        precision_cache_budget_bytes=0,
+        extrude_cache_budget_bytes=0,
+        fallback_chunk_bytes=0,
+    )
+
+    assert single.shape_count == 2
+    assert single.coordinate_count == 150
+    assert single.run_count == 6
+    assert single.run_coordinate_references == 500
+    assert double.run_coordinate_references == 1_000
+    assert double.estimated_additional_bytes > single.estimated_additional_bytes
+
+
+def test_build_estimate_accounts_for_backing_coating_and_topology_workspace() -> None:
+    estimate = estimate_vector_mesh_build_memory(
+        [],
+        num_layers=4,
+        double_sided=False,
+        precision_cache_budget_bytes=0,
+        extrude_cache_budget_bytes=0,
+        fallback_chunk_bytes=0,
+        auxiliary_geometries=[_CoordinateCountGeometry(10_000)],
+        auxiliary_run_count=3,
+    )
+
+    assert estimate.coordinate_count == 0
+    assert estimate.auxiliary_coordinate_count == 10_000
+    assert estimate.auxiliary_coordinate_references == 30_000
+    assert estimate.max_validation_coordinate_count == 10_000
+    assert estimate.topology_validation_working_bytes > 0
+    assert estimate.estimated_final_mesh_bytes > 0
+
+
+def test_build_estimate_rejects_giant_single_group_before_topology_allocation() -> None:
+    estimate = estimate_vector_mesh_build_memory(
+        [
+            {
+                "geometry": _CoordinateCountGeometry(12_000_000),
+                "recipe": [0],
+            }
+        ],
+        num_layers=1,
+        double_sided=False,
+        precision_cache_budget_bytes=0,
+        extrude_cache_budget_bytes=0,
+        fallback_chunk_bytes=0,
+    )
+
+    assert estimate.max_validation_coordinate_count == 12_000_000
+    assert estimate.estimated_additional_bytes > 8 * 1024**3
+
+
+class _CoordinateCountGeometry:
+    """Tiny fixture that exposes complexity without allocating coordinates."""
+
+    def __init__(self, coordinate_count: int) -> None:
+        self.coordinate_count = int(coordinate_count)

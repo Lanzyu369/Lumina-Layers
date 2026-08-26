@@ -39,7 +39,7 @@ from shapely.validation import make_valid
 
 from api.structured_logging import get_logger
 from config import BedManager, PrinterConfig, normalize_nozzle_size
-from core.errors import CachedPreviewAnalysisError
+from core.errors import CachedPreviewAnalysisError, VectorMeshMemoryBudgetError
 from core.geometry_utils import create_keychain_loop
 from core.pipeline import p06_bed_rendering, s09_export_3mf, vector_glb_preview
 from core.pipeline.pipeline_utils import extract_color_palette
@@ -93,6 +93,12 @@ except ImportError as exc:
 # log audits attach handlers to ``lumina.core.pipeline.coordinator``).
 # 日志命名空间故意继续沿用 coordinator，保证抽离后日志可观察性零变更。
 log = get_logger("core.pipeline.coordinator")
+
+# Float32 collision repair temporarily holds dense arrays, NumPy uniqueness
+# workspaces, and per-vertex keys. A measured collision-heavy fixture peaked
+# at 5.43x retained mesh storage; seven leaves admission headroom without
+# changing topology or coverage semantics.
+_OUTLINE_COORDINATE_SEPARATION_WORKSPACE_FACTOR = 7
 
 # ---------------------------------------------------------------------------
 # Layer-0 (appearance face) diagnostics
@@ -231,6 +237,17 @@ def _make_vector_glb_preview_scene(
         return scene
     if not np.isfinite(z_min) or not np.isfinite(z_max) or z_max <= z_min:
         return scene
+
+    from core.vector_engine import _enforce_vector_scene_export_headroom
+
+    _enforce_vector_scene_export_headroom(
+        scene,
+        stage="vector_glb_preview_copy",
+        # This guard covers only the display-orientation copy. The exporter
+        # performs a second live-RSS check for chunking and GLB packing.
+        workspace_multiplier=2.0,
+        minimum_workspace_bytes=16 * 1024 * 1024,
+    )
 
     import trimesh as _trimesh
 
@@ -983,6 +1000,13 @@ def _generate_vector_outline_mesh(
         Caller is responsible for forcing ``ctx['enable_outline'] = False``
         on a ``None`` return.
     """
+    from core.vector_engine import (
+        _concatenate_meshes_fast,
+        _enforce_vector_mesh_runtime_headroom,
+        _geometry_cache_storage_bytes,
+        _mesh_array_storage_bytes,
+    )
+
     matched_shapes = list(getattr(analysis, "matched_shapes", []) or [])
     if not matched_shapes:
         log.warning(
@@ -995,6 +1019,27 @@ def _generate_vector_outline_mesh(
             },
         )
         return None
+
+    source_geometries = tuple(
+        item.get("geometry")
+        for item in matched_shapes
+        if isinstance(item, dict)
+        and item.get("geometry") is not None
+        and not getattr(item.get("geometry"), "is_empty", True)
+    )
+    source_geometry_bytes = sum(
+        _geometry_cache_storage_bytes(geometry)
+        for geometry in source_geometries
+    )
+    _enforce_vector_mesh_runtime_headroom(
+        stage="vector_outline_union",
+        estimated_additional_bytes=max(
+            16 * 1024 * 1024,
+            source_geometry_bytes * 8,
+        ),
+        shape_count=len(source_geometries),
+        coordinate_count=source_geometry_bytes // 64,
+    )
 
     union = _vector_outline_union_geometry(matched_shapes)
     if union is None:
@@ -1025,6 +1070,17 @@ def _generate_vector_outline_mesh(
     # 乘 scale_factor 得到 mm。这里把 outline_width_mm 反算到预缩放单位，
     # 再走同样的 apply_scale，保证最终 ring 宽度恰好是请求的 mm 数。
     width_units = float(outline_width_mm) / scale_factor
+
+    union_geometry_bytes = _geometry_cache_storage_bytes(union)
+    _enforce_vector_mesh_runtime_headroom(
+        stage="vector_outline_ring",
+        estimated_additional_bytes=max(
+            16 * 1024 * 1024,
+            union_geometry_bytes * 8,
+        ),
+        shape_count=len(source_geometries),
+        coordinate_count=union_geometry_bytes // 64,
+    )
 
     try:
         expanded = union.buffer(width_units, join_style="mitre", mitre_limit=2.0)
@@ -1151,6 +1207,16 @@ def _generate_vector_outline_mesh(
 
     meshes: list = []
     for poly_index, poly in enumerate(polys):
+        polygon_geometry_bytes = _geometry_cache_storage_bytes(poly)
+        _enforce_vector_mesh_runtime_headroom(
+            stage="vector_outline_polygon_extrusion",
+            estimated_additional_bytes=max(
+                16 * 1024 * 1024,
+                polygon_geometry_bytes * 16,
+            ),
+            shape_count=1,
+            coordinate_count=polygon_geometry_bytes // 64,
+        )
         try:
             pieces = extrude_polygon_for_export(
                 poly,
@@ -1196,6 +1262,22 @@ def _generate_vector_outline_mesh(
     if not meshes:
         return None
 
+    retained_mesh_bytes = sum(_mesh_array_storage_bytes(mesh) for mesh in meshes)
+    # The independent 3D shells are now the only geometry needed for export.
+    # Release union/buffer/ring intermediates before allocating writer-domain
+    # validation arrays or the final contiguous mesh.
+    del polys, prepared_ring, ring, expanded, union, source_geometries
+    matched_shapes.clear()
+    _enforce_vector_mesh_runtime_headroom(
+        stage="vector_outline_coordinate_separation",
+        estimated_additional_bytes=max(
+            16 * 1024 * 1024,
+            retained_mesh_bytes
+            * _OUTLINE_COORDINATE_SEPARATION_WORKSPACE_FACTOR,
+        ),
+        shape_count=len(meshes),
+    )
+
     if not separate_component_coordinates(meshes):
         log.warning(
             "Vector outline rejected: export-coordinate separation failed",
@@ -1211,7 +1293,26 @@ def _generate_vector_outline_mesh(
     if len(meshes) == 1:
         outline_mesh = meshes[0]
     else:
-        outline_mesh = trimesh.util.concatenate(meshes)
+        _enforce_vector_mesh_runtime_headroom(
+            stage="vector_outline_assembly",
+            estimated_additional_bytes=max(
+                16 * 1024 * 1024,
+                retained_mesh_bytes * 2,
+            ),
+            shape_count=len(meshes),
+        )
+        outline_mesh = _concatenate_meshes_fast(meshes)
+        meshes.clear()
+
+    outline_mesh_bytes = _mesh_array_storage_bytes(outline_mesh)
+    _enforce_vector_mesh_runtime_headroom(
+        stage="vector_outline_writer_validation",
+        estimated_additional_bytes=max(
+            16 * 1024 * 1024,
+            outline_mesh_bytes * 3,
+        ),
+        shape_count=1,
+    )
 
     _apply_vector_outline_export_transform(
         outline_mesh,
@@ -2051,6 +2152,8 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
         ctx["vector_timing"] = dict(preview_timing)
         _log_vector_preview_timings(preview_timing, ctx, analysis, raster_cache)
         return ctx
+    except (MemoryError, VectorMeshMemoryBudgetError):
+        raise
     except Exception as exc:
         ctx["error"] = f"[VECTOR_PREVIEW] {exc}"
         log.exception("Vector preview branch failed: %s", exc)
@@ -2150,6 +2253,9 @@ def _run_vector_branch(ctx: dict) -> dict:
     try:
         from core.vector_engine import (
             VectorProcessor,
+            _concatenate_meshes_fast,
+            _enforce_vector_mesh_runtime_headroom,
+            _mesh_array_storage_bytes,
             apply_matched_rgb_overrides_to_analysis,
             apply_recipe_overrides_to_analysis,
         )
@@ -2601,9 +2707,20 @@ def _run_vector_branch(ctx: dict) -> dict:
         if board_geom is not None and not separate_backing:
             target_geom = scene.geometry.get(target_slot) if target_slot else None
             if target_geom is not None:
-                import trimesh as _trimesh
-
-                merged = _trimesh.util.concatenate([target_geom, board_geom])
+                source_mesh_bytes = _mesh_array_storage_bytes(
+                    target_geom
+                ) + _mesh_array_storage_bytes(board_geom)
+                _enforce_vector_mesh_runtime_headroom(
+                    stage="vector_board_merge",
+                    estimated_additional_bytes=max(
+                        16 * 1024 * 1024,
+                        source_mesh_bytes * 2,
+                    ),
+                    shape_count=2,
+                )
+                merged = _concatenate_meshes_fast(
+                    [target_geom, board_geom]
+                )
                 target_color = vec_preview_colors.get(target_slot)
                 if target_color is None:
                     existing_colors = np.asarray(
@@ -2615,6 +2732,9 @@ def _run_vector_branch(ctx: dict) -> dict:
                 merged.metadata["name"] = target_slot
                 scene.geometry[target_slot] = merged
                 del scene.geometry["Board"]
+                # The scene now owns only the bounded concatenation result;
+                # release both original mesh arrays before outline/export.
+                del target_geom, board_geom, merged
                 log.debug(
                     "Vector board merged into backing material slot",
                     extra={
@@ -2829,6 +2949,14 @@ def _run_vector_branch(ctx: dict) -> dict:
         # 软件里的封面应展示原图外观，而不是匹配后的耗材分层预览。仍然不把
         # raw .svg 传给 CoverThumbnailBuilder，因为 Pillow 不能解码 SVG。
         if not ctx.get("svg_raster_preview_bytes"):
+            from core.vector_engine import _enforce_vector_scene_export_headroom
+
+            _enforce_vector_scene_export_headroom(
+                scene,
+                stage="vector_cover_export",
+                workspace_multiplier=0.0,
+                minimum_workspace_bytes=8 * 1024 * 1024,
+            )
             cover_render_t0 = time.perf_counter()
             try:
                 cover_rgba = rasterize_svg(
@@ -2836,6 +2964,9 @@ def _run_vector_branch(ctx: dict) -> dict:
                     target_width_mm,
                     pixels_per_mm=2.0,
                     crop_to_content=False,
+                    _min_quality_px=1,
+                    _max_longest_px=512,
+                    _cache_result=False,
                 )
                 from io import BytesIO as _CoverBytesIO
                 from PIL import Image as _CoverImage
@@ -2855,6 +2986,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                         "rgba_shape": [int(s) for s in cover_rgba.shape],
                     },
                 )
+                del cover_buffer, cover_pil, cover_rgba
             except (*COORDINATOR_HANDLED_ERRORS, ImportError) as cover_exc:
                 log.warning(
                     "Vector cover thumbnail render failed; will fall back to "
@@ -2881,6 +3013,19 @@ def _run_vector_branch(ctx: dict) -> dict:
             ctx.get("svg_raster_preview_bytes")
             or ctx.get("cover_source_path")
             or ctx.get("image_path")
+        )
+        from core.vector_engine import _enforce_vector_scene_export_headroom
+
+        _enforce_vector_scene_export_headroom(
+            scene,
+            stage="vector_3mf_export",
+            # The writer retains the source scene while building native mesh,
+            # document, XML, and ZIP buffers. Re-check live RSS at the actual
+            # export boundary instead of trusting the earlier build estimate.
+            # Measured whole-writer RSS reached 3.72x scene arrays with
+            # 9-decimal SVG-like coordinates; 5x leaves room for allocator
+            # and visual/template buffers outside the sampled arrays.
+            workspace_multiplier=5.0,
         )
         export_scene_with_bambu_metadata(
             scene=scene,
@@ -2952,6 +3097,21 @@ def _run_vector_branch(ctx: dict) -> dict:
                 extra={
                     "event": "vector_glb_exported",
                     "path": str(glb_path),
+                },
+            )
+        except VectorMeshMemoryBudgetError as e:
+            # The printable 3MF is already complete. GLB and the following 2D
+            # preview are optional generate-time artifacts, so a proactive
+            # budget rejection skips them without discarding the safe 3MF.
+            glb_path = None
+            skip_heavy_preview = True
+            log.warning(
+                "Vector preview GLB skipped by memory admission",
+                extra={
+                    "event": "vector_glb_exported_skipped",
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                    "reason": "memory_budget",
                 },
             )
         except COORDINATOR_HANDLED_ERRORS as e:
