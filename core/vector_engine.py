@@ -638,6 +638,108 @@ def _extrude_source_geometries_with_coverage_guard(
     return fallback_chunks
 
 
+def _extrude_source_geometries_best_effort(
+    source_geometries,
+    *,
+    height: float,
+    z_offset: float,
+    scale_factor: float,
+    extrude_cache,
+) -> tuple[list[trimesh.Trimesh], dict[str, object]]:
+    """Extrude independent source shells without rejecting the whole run.
+
+    当规范化合并失败时，按源分片有界挤出；单个坏分片不再阻断整组。
+
+    This is an availability fallback, not another topology-repair ladder.
+    Successfully extruded source shells keep independent vertex indices inside
+    bounded chunks, while locally unrepresentable parts are counted and
+    skipped. Chunks, rather than every tiny shell, become export leaves so
+    complex SVGs do not balloon into tens of thousands of 3MF objects. Fatal
+    memory-budget errors still escape immediately.
+    """
+
+    fallback_chunks: list[trimesh.Trimesh] = []
+    pending_meshes: list[trimesh.Trimesh] = []
+    pending_bytes = 0
+    source_part_count = 0
+    built_source_part_count = 0
+    failed_source_part_count = 0
+    failure_types: dict[str, int] = {}
+
+    def _flush_pending() -> None:
+        nonlocal pending_meshes, pending_bytes
+        if not pending_meshes:
+            return
+        _enforce_vector_mesh_runtime_headroom(
+            stage="source_shell_fallback_chunk",
+            estimated_additional_bytes=max(pending_bytes, 1),
+            shape_count=len(pending_meshes),
+        )
+        fallback_chunks.append(
+            _concatenate_meshes_fast(
+                pending_meshes,
+                preserve_export_parts=False,
+            )
+        )
+        pending_meshes.clear()
+        pending_meshes = []
+        pending_bytes = 0
+
+    chunk_budget = max(1, int(_VECTOR_FALLBACK_CHUNK_BYTES))
+    for source_geometry in source_geometries:
+        source_parts = (
+            tuple(source_geometry.geoms)
+            if getattr(source_geometry, "geom_type", "")
+            in {"MultiPolygon", "GeometryCollection"}
+            else (source_geometry,)
+        )
+        for source_part in source_parts:
+            if source_part is None or getattr(source_part, "is_empty", True):
+                continue
+            source_part_count += 1
+            try:
+                source_meshes = VectorProcessor._extrude_geometry(
+                    source_part,
+                    height=height,
+                    z_offset=z_offset,
+                    scale=scale_factor,
+                    extrude_cache=extrude_cache,
+                )
+            except VECTOR_FATAL_ERRORS:
+                raise
+            except (VectorTopologyError,) + VECTOR_HANDLED_ERRORS as exc:
+                failed_source_part_count += 1
+                error_name = type(exc).__name__
+                failure_types[error_name] = failure_types.get(error_name, 0) + 1
+                continue
+
+            if not source_meshes:
+                failed_source_part_count += 1
+                failure_types["empty_extrusion"] = (
+                    failure_types.get("empty_extrusion", 0) + 1
+                )
+                continue
+
+            built_source_part_count += 1
+            for source_mesh in source_meshes:
+                mesh_bytes = _mesh_array_storage_bytes(source_mesh)
+                if pending_meshes and pending_bytes + mesh_bytes > chunk_budget:
+                    _flush_pending()
+                pending_meshes.append(source_mesh)
+                pending_bytes += mesh_bytes
+                if pending_bytes >= chunk_budget:
+                    _flush_pending()
+            source_meshes.clear()
+
+    _flush_pending()
+    return fallback_chunks, {
+        "source_part_count": int(source_part_count),
+        "built_source_part_count": int(built_source_part_count),
+        "failed_source_part_count": int(failed_source_part_count),
+        "failure_types": failure_types,
+    }
+
+
 def _union_occluder_geometries(geometries):
     """Union occluder geometries using Shapely's disjoint-subset fast path."""
 
@@ -8367,6 +8469,13 @@ class VectorProcessor:
         stage_d_hist: dict[int, dict[int, int]] = {}
         last_prepared_key = None
         last_prepared = None
+        source_fallback_group_count = 0
+        source_fallback_geometry_count = 0
+        source_fallback_part_count = 0
+        source_fallback_built_part_count = 0
+        source_fallback_failed_part_count = 0
+        canonical_failure_types: dict[str, int] = {}
+        source_failure_types: dict[str, int] = {}
         for (ch, run_start, run_end), geoms in run_groups.items():
             slot_name = slot_names[ch]
             if slot_name not in meshes_by_slot:
@@ -8398,6 +8507,9 @@ class VectorProcessor:
                 z_bot = run_start * layer_h
                 height = (run_end - run_start + 1) * layer_h
 
+            canonical_error_name = None
+            prepared = None
+            canonical_mesh = None
             try:
                 prepared_key = (
                     tuple(id(geometry) for geometry in source_geoms),
@@ -8438,27 +8550,81 @@ class VectorProcessor:
                 )
             except VECTOR_FATAL_ERRORS:
                 raise
-            except VectorTopologyError:
-                raise
+            except VectorTopologyError as exc:
+                canonical_error_name = type(exc).__name__
+                exc.__traceback__ = None
             except VECTOR_HANDLED_ERRORS as exc:
-                raise VectorTopologyError(
-                    "Vector geometry could not be represented safely for export",
-                    (
-                        {
-                            "attempt": "canonical_physical_grid",
-                            "geometry_type": "run_group",
-                            "source_geometry_count": len(source_geoms),
-                            "rejected_reason": type(exc).__name__,
-                            "error_type": type(exc).__name__,
-                        },
-                    ),
-                ) from exc
+                canonical_error_name = type(exc).__name__
+                exc.__traceback__ = None
 
-            new_meshes = [canonical_mesh]
+            if canonical_error_name is None:
+                new_meshes = [canonical_mesh]
+            else:
+                # Do not keep failed canonical preparation alive beside the
+                # complete source-shell fallback.
+                prepared = None
+                canonical_mesh = None
+                last_prepared_key = None
+                last_prepared = None
+                new_meshes, fallback_stats = (
+                    _extrude_source_geometries_best_effort(
+                        source_geoms,
+                        height=height,
+                        z_offset=z_bot,
+                        scale_factor=scale_factor,
+                        extrude_cache=extrude_cache,
+                    )
+                )
+                source_fallback_group_count += 1
+                source_fallback_geometry_count += len(source_geoms)
+                source_fallback_part_count += int(
+                    fallback_stats["source_part_count"]
+                )
+                source_fallback_built_part_count += int(
+                    fallback_stats["built_source_part_count"]
+                )
+                source_fallback_failed_part_count += int(
+                    fallback_stats["failed_source_part_count"]
+                )
+                canonical_failure_types[canonical_error_name] = (
+                    canonical_failure_types.get(canonical_error_name, 0) + 1
+                )
+                for error_name, error_count in fallback_stats[
+                    "failure_types"
+                ].items():
+                    source_failure_types[error_name] = (
+                        source_failure_types.get(error_name, 0)
+                        + int(error_count)
+                    )
+
             meshes_by_slot[slot_name]["meshes"].extend(new_meshes)
             for layer_idx in range(int(run_start), int(run_end) + 1):
                 layer_hist = stage_d_hist.setdefault(int(layer_idx), {})
                 layer_hist[int(ch)] = layer_hist.get(int(ch), 0) + len(new_meshes)
+
+        if source_fallback_group_count:
+            _log.warning(
+                "Canonical vector run groups used source-shell fallback",
+                extra={
+                    "event": "vector_run_group_source_fallback",
+                    "error_type": "VectorRunGroupFallback",
+                    "error_message": (
+                        "Canonical run-group preparation failed; independent "
+                        "source shells were retained"
+                    ),
+                    "fallback_group_count": source_fallback_group_count,
+                    "source_geometry_count": source_fallback_geometry_count,
+                    "source_part_count": source_fallback_part_count,
+                    "built_source_part_count": (
+                        source_fallback_built_part_count
+                    ),
+                    "failed_source_part_count": (
+                        source_fallback_failed_part_count
+                    ),
+                    "canonical_failure_types": canonical_failure_types,
+                    "source_failure_types": source_failure_types,
+                },
+            )
 
         _log.debug(
             "Vector built meshes per layer/channel",

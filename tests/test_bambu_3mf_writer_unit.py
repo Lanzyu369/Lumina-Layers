@@ -218,7 +218,6 @@ def test_writer_expands_touching_runs_into_same_material_mesh_leaves(
     assert [entry.material_name for entry in writer.objects] == ["White", "White"]
     assert all(entry.mesh is combined for entry in writer.objects)
     assert all(entry.part_range is not None for entry in writer.objects)
-    assert all(not entry.require_topology_audit for entry in writer.objects)
 
     def fail_redundant_audit(*_args, **_kwargs):
         raise AssertionError("certified mesh leaf was re-audited")
@@ -231,7 +230,6 @@ def test_writer_expands_touching_runs_into_same_material_mesh_leaves(
         vertices, faces = writer_module._materialize_n3mf_mesh_view_arrays(
             entry.mesh,
             part_range=entry.part_range,
-            require_topology_audit=entry.require_topology_audit,
         )
         leaf = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
         assert mesh_is_float32_safe(leaf)
@@ -279,12 +277,10 @@ def test_certified_mesh_still_rejects_float32_degenerate_triangle() -> None:
     writer.add_mesh(mesh, "White", (255, 255, 255))
 
     entry = writer.objects[0]
-    assert entry.require_topology_audit is False
     with pytest.raises(ValueError, match="float32-degenerate triangle"):
         writer_module._materialize_n3mf_mesh_view_arrays(
             entry.mesh,
             part_range=entry.part_range,
-            require_topology_audit=entry.require_topology_audit,
         )
 
 
@@ -312,7 +308,6 @@ def test_writer_keeps_safe_conditional_components_in_one_mesh_object() -> None:
     vertices, _faces = writer_module._materialize_n3mf_mesh_view_arrays(
         writer.objects[0].mesh,
         contact_repair_ranges=writer.objects[0].contact_repair_ranges,
-        require_topology_audit=writer.objects[0].require_topology_audit,
     )
     np.testing.assert_array_equal(
         vertices,
@@ -348,7 +343,6 @@ def test_writer_repairs_unsafe_conditional_components_in_one_mesh_object() -> No
     vertices, faces = writer_module._materialize_n3mf_mesh_view_arrays(
         entry.mesh,
         contact_repair_ranges=entry.contact_repair_ranges,
-        require_topology_audit=entry.require_topology_audit,
     )
     assert len(np.unique(vertices, axis=0)) == len(vertices)
     assert len(faces) == len(mesh.faces)
@@ -394,7 +388,6 @@ def test_writer_repairs_one_connected_shell_with_local_diagonal_contact() -> Non
     vertices, faces = writer_module._materialize_n3mf_mesh_view_arrays(
         entry.mesh,
         contact_repair_ranges=entry.contact_repair_ranges,
-        require_topology_audit=entry.require_topology_audit,
     )
     repaired = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
     assert mesh_is_float32_safe(repaired)
@@ -420,7 +413,6 @@ def test_writer_preserves_a_closed_cavity_without_contact_perturbation() -> None
     vertices, faces = writer_module._materialize_n3mf_mesh_view_arrays(
         entry.mesh,
         contact_repair_ranges=entry.contact_repair_ranges,
-        require_topology_audit=entry.require_topology_audit,
     )
     np.testing.assert_array_equal(
         vertices,
@@ -446,16 +438,16 @@ def test_legacy_noncanonical_mesh_keeps_pre_zero_copy_writer_compatibility() -> 
     vertices, faces = writer_module._materialize_n3mf_mesh_view_arrays(
         entry.mesh,
         part_range=entry.part_range,
-        require_topology_audit=entry.require_topology_audit,
     )
 
-    assert entry.require_topology_audit is True
     assert vertices.dtype == np.float32
     assert faces.dtype == np.uint32
 
 
-def test_writer_rejects_untagged_open_mesh() -> None:
-    """Missing migration metadata must never become an open-mesh bypass."""
+def test_writer_does_not_run_full_topology_audit_for_untagged_mesh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Production export keeps only cheap array-domain validation."""
 
     open_mesh = trimesh.Trimesh(
         vertices=np.asarray(
@@ -478,13 +470,41 @@ def test_writer_rejects_untagged_open_mesh() -> None:
 
     writer.add_mesh(open_mesh, "White", (255, 255, 255))
     entry = writer.objects[0]
-    assert entry.require_topology_audit is True
-    with pytest.raises(ValueError, match="unsafe in float32"):
-        writer_module._materialize_n3mf_mesh_view_arrays(
-            entry.mesh,
-            part_range=entry.part_range,
-            require_topology_audit=entry.require_topology_audit,
-        )
+
+    def fail_redundant_audit(*_args, **_kwargs):
+        raise AssertionError("runtime full topology audit was called")
+
+    monkeypatch.setattr(
+        "core.vector_mesh_topology.mesh_is_float32_safe",
+        fail_redundant_audit,
+    )
+    vertices, faces = writer_module._materialize_n3mf_mesh_view_arrays(
+        entry.mesh,
+        part_range=entry.part_range,
+    )
+
+    assert vertices.dtype == np.float32
+    assert faces.dtype == np.uint32
+
+
+def test_writer_rejects_vertices_that_overflow_float32() -> None:
+    """Finite source coordinates must remain finite in the 3MF write domain."""
+
+    mesh = SimpleNamespace(
+        vertices=np.asarray(
+            [
+                [1.0e100, 0.0, 0.0],
+                [0.0, 1.0e100, 0.0],
+                [0.0, 0.0, 1.0e100],
+            ],
+            dtype=np.float64,
+        ),
+        faces=np.asarray([[0, 1, 2]], dtype=np.int64),
+    )
+
+    with np.errstate(over="ignore", invalid="ignore"):
+        with pytest.raises(ValueError, match="finite after float32 conversion"):
+            writer_module._materialize_n3mf_mesh_view_arrays(mesh)
 
 
 def test_exported_xml_round_trips_validated_float32_vertices(tmp_path: Path) -> None:

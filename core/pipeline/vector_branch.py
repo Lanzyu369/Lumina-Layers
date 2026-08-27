@@ -54,7 +54,6 @@ from core.pipeline.s08_auxiliary_meshes import (
 from core.preview_analysis_cache import preview_analysis_reuse_is_required
 from core.vector_mesh_topology import (
     extrude_polygon_for_export,
-    mesh_is_float32_safe,
     prepare_component_footprints_for_float32,
     prepare_geometry_for_float32,
     separate_component_coordinates,
@@ -3015,13 +3014,13 @@ def _run_vector_branch(ctx: dict) -> dict:
         _enforce_vector_scene_export_headroom(
             scene,
             stage="vector_3mf_export",
-            # The writer retains the source scene while building native mesh,
-            # document, XML, and ZIP buffers. Re-check live RSS at the actual
-            # export boundary instead of trusting the earlier build estimate.
-            # Measured whole-writer RSS reached 3.72x scene arrays with
-            # 9-decimal SVG-like coordinates; 5x leaves room for allocator
-            # and visual/template buffers outside the sampled arrays.
-            workspace_multiplier=5.0,
+            # neroued-3mf 0.4 consumes one retained float32/uint32 view per
+            # object. The previous 5x allowance described the removed full
+            # topology audit plus the old owning writer's repeated arrays and
+            # now rejects models that the zero-copy writer can safely stream.
+            # Keep a conservative 2x live-RSS allowance for converted arrays,
+            # native/ZIP buffers, allocator slack, and the compatibility path.
+            workspace_multiplier=2.0,
         )
         export_scene_with_bambu_metadata(
             scene=scene,

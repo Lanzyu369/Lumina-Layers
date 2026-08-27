@@ -261,7 +261,6 @@ def test_high_fidelity_mesher_keeps_interior_cells_on_lattice_path(
             entry.mesh,
             part_range=entry.part_range,
             contact_repair_ranges=entry.contact_repair_ranges,
-            require_topology_audit=entry.require_topology_audit,
         )
         assert len(vertices) > 0
         assert len(faces) > 0

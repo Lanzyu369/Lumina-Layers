@@ -2710,10 +2710,10 @@ def test_source_fallback_streams_multipolygon_components_before_chunking(
     assert vector_engine._extruded_planar_coverage_mm2(meshes, 0.2) == pytest.approx(30.0)
 
 
-def test_canonical_run_group_failure_does_not_launch_a_second_geometry_path(
+def test_canonical_run_group_failure_uses_one_bounded_source_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A canonical 2D failure is reported once instead of launching fallback."""
+    """A canonical 2D failure retries only as independent source shells."""
 
     prepare_calls = 0
 
@@ -2739,21 +2739,28 @@ def test_canonical_run_group_failure_does_not_launch_a_second_geometry_path(
         box(0.0, 0.0, 1.0, 1.0),
         box(2.0, 0.0, 3.0, 1.0),
     )
-    with pytest.raises(VectorTopologyError):
-        VectorProcessor._run_length_extrude(
-            matched_shapes=[
-                {"geometry": geometry, "recipe": [0]}
-                for geometry in source_geometries
-            ],
-            num_layers=1,
-            layer_h=0.2,
-            num_channels=1,
-            slot_names=["White"],
-            scale_factor=1.0,
-            extrude_cache=None,
-        )
+    meshes_by_slot = VectorProcessor._run_length_extrude(
+        matched_shapes=[
+            {"geometry": geometry, "recipe": [0]}
+            for geometry in source_geometries
+        ],
+        num_layers=1,
+        layer_h=0.2,
+        num_channels=1,
+        slot_names=["White"],
+        scale_factor=1.0,
+        extrude_cache=None,
+    )
 
     assert prepare_calls == 1
+    meshes = meshes_by_slot["White"]["meshes"]
+    assert len(meshes) == 1
+    assert meshes[0].is_watertight
+    assert abs(float(meshes[0].volume)) == pytest.approx(0.4, abs=1e-9)
+    components = meshes[0].split(only_watertight=False)
+    assert len(components) == 2
+    assert all(component.is_watertight for component in components)
+    assert get_mesh_export_part_ranges(meshes[0]) == ()
 
 
 def test_run_group_rechecks_memory_after_union_coordinate_amplification(
@@ -2882,10 +2889,10 @@ def test_run_length_extrude_separates_point_touching_multipolygon_shells() -> No
     assert abs(float(combined.volume)) == pytest.approx(0.4, abs=1e-6)
 
 
-def test_run_length_extrude_rejects_incomplete_canonical_geometry(
+def test_run_length_extrude_falls_back_to_source_shells_when_canonical_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A canonical coverage failure must stop before any partial 3D result."""
+    """A canonical failure must not reject independently extrudable sources."""
 
     monkeypatch.setattr(
         vector_engine,
@@ -2895,19 +2902,78 @@ def test_run_length_extrude_rejects_incomplete_canonical_geometry(
         ),
     )
 
-    with pytest.raises(VectorTopologyError) as exc:
-        VectorProcessor._run_length_extrude(
-            matched_shapes=[
-                {"geometry": box(0.0, 0.0, 2.0, 2.0), "recipe": [0]}
-            ],
-            num_layers=1,
-            layer_h=0.2,
-            num_channels=1,
-            slot_names=["White"],
-            scale_factor=1.0,
-            extrude_cache={},
-        )
-    assert exc.value.attempts[-1]["attempt"] == "canonical_physical_grid"
+    meshes_by_slot = VectorProcessor._run_length_extrude(
+        matched_shapes=[
+            {"geometry": box(0.0, 0.0, 2.0, 2.0), "recipe": [0]}
+        ],
+        num_layers=1,
+        layer_h=0.2,
+        num_channels=1,
+        slot_names=["White"],
+        scale_factor=1.0,
+        extrude_cache={},
+    )
+
+    meshes = meshes_by_slot["White"]["meshes"]
+    assert len(meshes) == 1
+    assert meshes[0].is_watertight
+    assert abs(float(meshes[0].volume)) == pytest.approx(0.8, abs=1e-9)
+
+
+def test_run_length_extrude_keeps_good_source_shell_when_one_fallback_part_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One bad source part must not suppress the rest of its run group."""
+
+    monkeypatch.setattr(
+        vector_engine,
+        "prepare_vector_run_group",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ValueError("canonical topology unavailable")
+        ),
+    )
+    real_extrude = VectorProcessor._extrude_geometry
+
+    def extrude_with_one_local_failure(geometry, *args, **kwargs):
+        if float(geometry.bounds[0]) > 1.0:
+            raise VectorTopologyError(
+                "one source shell failed",
+                ({"attempt": "test_source_shell"},),
+            )
+        return real_extrude(geometry, *args, **kwargs)
+
+    monkeypatch.setattr(
+        VectorProcessor,
+        "_extrude_geometry",
+        staticmethod(extrude_with_one_local_failure),
+    )
+    warning_extras: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        vector_engine._log,
+        "warning",
+        lambda _message, *, extra: warning_extras.append(extra),
+    )
+
+    meshes_by_slot = VectorProcessor._run_length_extrude(
+        matched_shapes=[
+            {"geometry": box(0.0, 0.0, 1.0, 1.0), "recipe": [0]},
+            {"geometry": box(2.0, 0.0, 3.0, 1.0), "recipe": [0]},
+        ],
+        num_layers=1,
+        layer_h=0.2,
+        num_channels=1,
+        slot_names=["White"],
+        scale_factor=1.0,
+        extrude_cache={},
+    )
+
+    meshes = meshes_by_slot["White"]["meshes"]
+    assert len(meshes) == 1
+    assert meshes[0].is_watertight
+    assert abs(float(meshes[0].volume)) == pytest.approx(0.2, abs=1e-9)
+    assert len(warning_extras) == 1
+    assert warning_extras[0]["event"] == "vector_run_group_source_fallback"
+    assert warning_extras[0]["failed_source_part_count"] == 1
 
 
 def test_run_length_extrude_does_not_retry_after_canonical_memory_error(
@@ -2941,6 +3007,57 @@ def test_run_length_extrude_does_not_retry_after_canonical_memory_error(
             scale_factor=1.0,
             extrude_cache=None,
         )
+
+
+def test_run_length_extrude_releases_failed_prepared_group_before_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed canonical 3D attempt must not overlap source-shell fallback."""
+
+    real_prepare = vector_engine.prepare_vector_run_group
+    real_fallback = vector_engine._extrude_source_geometries_best_effort
+    prepared_ref: weakref.ReferenceType | None = None
+
+    def capture_prepared(*args, **kwargs):
+        nonlocal prepared_ref
+        prepared = real_prepare(*args, **kwargs)
+        prepared_ref = weakref.ref(prepared)
+        return prepared
+
+    def fail_canonical_extrusion(*_args, **_kwargs):
+        raise ValueError("injected canonical extrusion failure")
+
+    def assert_released_then_fallback(*args, **kwargs):
+        gc.collect()
+        assert prepared_ref is not None
+        assert prepared_ref() is None
+        return real_fallback(*args, **kwargs)
+
+    monkeypatch.setattr(vector_engine, "prepare_vector_run_group", capture_prepared)
+    monkeypatch.setattr(
+        vector_engine,
+        "extrude_prepared_vector_run_group",
+        fail_canonical_extrusion,
+    )
+    monkeypatch.setattr(
+        vector_engine,
+        "_extrude_source_geometries_best_effort",
+        assert_released_then_fallback,
+    )
+
+    meshes_by_slot = VectorProcessor._run_length_extrude(
+        matched_shapes=[
+            {"geometry": box(0.0, 0.0, 2.0, 2.0), "recipe": [0]}
+        ],
+        num_layers=1,
+        layer_h=0.2,
+        num_channels=1,
+        slot_names=["White"],
+        scale_factor=1.0,
+        extrude_cache=None,
+    )
+
+    assert len(meshes_by_slot["White"]["meshes"]) == 1
 
 
 def test_run_length_canonical_path_does_not_retain_a_precision_cache(

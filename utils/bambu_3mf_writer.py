@@ -210,9 +210,6 @@ class _MeshExportEntry:
         contact_repair_ranges: Canonical shell ranges used only for bounded
             writer-domain contact separation. (仅用于有界写出域接触分离的规范
             壳体范围)
-        require_topology_audit: Whether the exact float32 writer-domain
-            topology contract applies to this canonical mesh. (是否要求规范网格
-            通过精确的 float32 写出域拓扑检查)
     """
 
     mesh: object
@@ -221,7 +218,6 @@ class _MeshExportEntry:
     color_rgb: tuple[int, int, int]
     part_range: MeshExportPartRange | None = None
     contact_repair_ranges: tuple[MeshExportPartRange, ...] = ()
-    require_topology_audit: bool = True
 
 
 def _expand_mesh_export_entries(
@@ -238,16 +234,12 @@ def _expand_mesh_export_entries(
 
     part_ranges = get_mesh_export_part_ranges(mesh)
     if not part_ranges:
-        # Untagged producers have not made the independent-closed-shell
-        # contract, so retain the compatibility audit for those uncommon
-        # inputs. Canonical Lumina producers attach validated part ranges.
         return [
             _MeshExportEntry(
                 mesh=mesh,
                 object_name=object_name,
                 material_name=material_name,
                 color_rgb=color_rgb,
-                require_topology_audit=True,
             )
         ]
 
@@ -259,7 +251,6 @@ def _expand_mesh_export_entries(
                 material_name=material_name,
                 color_rgb=color_rgb,
                 contact_repair_ranges=part_ranges,
-                require_topology_audit=False,
             )
         ]
 
@@ -284,7 +275,6 @@ def _expand_mesh_export_entries(
                 material_name=material_name,
                 color_rgb=color_rgb,
                 part_range=part,
-                require_topology_audit=False,
             )
         )
     return expanded
@@ -295,7 +285,6 @@ def _materialize_n3mf_mesh_view_arrays(
     *,
     part_range: MeshExportPartRange | None = None,
     contact_repair_ranges: tuple[MeshExportPartRange, ...] = (),
-    require_topology_audit: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Materialize and validate the exact arrays consumed by the 3MF writer.
     只生成一次并校验 3MF 写入器实际消费的数组。
@@ -321,7 +310,6 @@ def _materialize_n3mf_mesh_view_arrays(
 
     export_vertices = source_vertices
     export_faces = source_faces
-    audit_mesh = mesh
     if part_range is not None and contact_repair_ranges:
         raise ValueError("3MF mesh cannot combine part slicing and contact repair")
     if part_range is not None:
@@ -352,11 +340,6 @@ def _materialize_n3mf_mesh_view_arrays(
             out=export_faces,
             casting="unsafe",
         )
-        audit_mesh = _get_trimesh().Trimesh(
-            vertices=export_vertices,
-            faces=export_faces,
-            process=False,
-        )
     elif contact_repair_ranges:
         from core.mesh_writer_domain import (
             prepare_indexed_shells_for_float32_export,
@@ -367,14 +350,12 @@ def _materialize_n3mf_mesh_view_arrays(
             contact_repair_ranges,
         )
 
-    if require_topology_audit:
-        from core.vector_mesh_topology import mesh_is_float32_safe
-
-        if not mesh_is_float32_safe(audit_mesh, xy_scale=1.0):
-            raise ValueError("3MF mesh is unsafe in float32 writer coordinates")
-
     vertices = np.ascontiguousarray(export_vertices, dtype=np.float32)
     faces = np.ascontiguousarray(export_faces, dtype=np.uint32)
+    if not np.all(np.isfinite(vertices)):
+        raise ValueError(
+            "3MF mesh vertices must remain finite after float32 conversion"
+        )
     for start in range(0, len(faces), 65_536):
         triangles = vertices[faces[start : start + 65_536]]
         cross = np.cross(
@@ -403,7 +384,6 @@ def _queue_n3mf_mesh_object(
         entry.mesh,
         part_range=entry.part_range,
         contact_repair_ranges=entry.contact_repair_ranges,
-        require_topology_audit=entry.require_topology_audit,
     )
     add_zero_copy = getattr(builder, "add_mesh_object_zero_copy", None)
     if callable(add_zero_copy):

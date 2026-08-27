@@ -1895,7 +1895,6 @@ class TestS08AuxiliaryMeshes:
         vertices, faces = writer_module._materialize_n3mf_mesh_view_arrays(
             entry.mesh,
             contact_repair_ranges=entry.contact_repair_ranges,
-            require_topology_audit=entry.require_topology_audit,
         )
         assert len(np.unique(vertices, axis=0)) == len(vertices)
         assert len(faces) == len(coating.faces)
