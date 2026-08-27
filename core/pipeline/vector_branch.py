@@ -3032,56 +3032,74 @@ def _run_vector_branch(ctx: dict) -> dict:
         _report_progress(ctx, 0.82, "\u751f\u6210 3D \u9884\u89c8\u4e2d... | Generating 3D preview...")
         glb_path = None
         glb_t0 = time.perf_counter()
-        try:
-            glb_path = os.path.join(OUTPUT_DIR, generate_preview_filename(base_name))
-            glb_source_scene = _make_vector_glb_preview_scene(
-                scene,
-                structure_mode=structure_mode,
-                color_mode=vec_color_mode,
-                enable_relief=bool(ctx.get("enable_relief", False)),
-            )
-            vector_glb_preview.export_vector_glb_preview(
-                scene=glb_source_scene,
-                output_path=glb_path,
-                structure_mode=structure_mode,
-                color_mode=vec_color_mode,
-                preview_colors=vec_preview_colors,
-                slot_list=list(vec_slot_list),
-                analysis=analysis_for_glb,
-                ctx=ctx,
-            )
+        reusable_glb_path = ctx.get("preview_glb_path")
+        if (
+            isinstance(reusable_glb_path, str)
+            and os.path.isfile(reusable_glb_path)
+        ):
+            glb_path = reusable_glb_path
             log.debug(
-                "Vector preview GLB exported",
+                "Vector preview GLB reused",
                 extra={
-                    "event": "vector_glb_exported",
+                    "event": "vector_glb_reused",
                     "path": str(glb_path),
                 },
             )
-        except VectorMeshMemoryBudgetError as e:
-            # The printable 3MF is already complete. GLB and the following 2D
-            # preview are optional generate-time artifacts, so a proactive
-            # budget rejection skips them without discarding the safe 3MF.
-            glb_path = None
-            skip_heavy_preview = True
-            log.warning(
-                "Vector preview GLB skipped by memory admission",
-                extra={
-                    "event": "vector_glb_exported_skipped",
-                    "error_type": type(e).__name__,
-                    "error_message": str(e),
-                    "reason": "memory_budget",
-                },
-            )
-        except COORDINATOR_HANDLED_ERRORS as e:
-            glb_path = None
-            log.warning(
-                "Vector preview GLB export skipped",
-                extra={
-                    "event": "vector_glb_exported_skipped",
-                    "error_type": type(e).__name__,
-                    "error_message": str(e),
-                },
-            )
+        else:
+            try:
+                glb_path = os.path.join(
+                    OUTPUT_DIR,
+                    generate_preview_filename(base_name),
+                )
+                glb_source_scene = _make_vector_glb_preview_scene(
+                    scene,
+                    structure_mode=structure_mode,
+                    color_mode=vec_color_mode,
+                    enable_relief=bool(ctx.get("enable_relief", False)),
+                )
+                vector_glb_preview.export_vector_glb_preview(
+                    scene=glb_source_scene,
+                    output_path=glb_path,
+                    structure_mode=structure_mode,
+                    color_mode=vec_color_mode,
+                    preview_colors=vec_preview_colors,
+                    slot_list=list(vec_slot_list),
+                    analysis=analysis_for_glb,
+                    ctx=ctx,
+                )
+                log.debug(
+                    "Vector preview GLB exported",
+                    extra={
+                        "event": "vector_glb_exported",
+                        "path": str(glb_path),
+                    },
+                )
+            except VectorMeshMemoryBudgetError as e:
+                # The printable 3MF is already complete. GLB and the following
+                # 2D preview are optional generate-time artifacts, so a
+                # proactive budget rejection skips them without discarding the
+                # safe 3MF.
+                glb_path = None
+                skip_heavy_preview = True
+                log.warning(
+                    "Vector preview GLB skipped by memory admission",
+                    extra={
+                        "event": "vector_glb_exported_skipped",
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                        "reason": "memory_budget",
+                    },
+                )
+            except COORDINATOR_HANDLED_ERRORS as e:
+                glb_path = None
+                log.warning(
+                    "Vector preview GLB export skipped",
+                    extra={
+                        "event": "vector_glb_exported_skipped",
+                        "error_type": type(e).__name__,
+                        "error_message": str(e),
+                    },
+                )
         vector_timing["export_glb_s"] = time.perf_counter() - glb_t0
 
         # 4. 2D preview from analyzed geometry (same data as 3MF)

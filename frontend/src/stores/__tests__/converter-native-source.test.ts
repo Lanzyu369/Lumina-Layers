@@ -1953,7 +1953,7 @@ describe("native bundle converter flow", () => {
     ]);
   });
 
-  it("switches from a generated GLB to an async preview GLB that arrives later", async () => {
+  it("lets an ordinary raster use generated GLB until async preview arrives", async () => {
     vi.useFakeTimers();
     try {
       mocks.convertPreview.mockResolvedValueOnce({
@@ -2020,6 +2020,135 @@ describe("native bundle converter flow", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("waits for async segmented GLB instead of showing generated Vector GLB", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.convertPreview.mockResolvedValueOnce({
+        session_id: "session-vector-async",
+        status: "ok",
+        message: "Preview generated",
+        preview_url: "/api/files/vector-preview",
+        preview_glb_url: null,
+        palette: [],
+        dimensions: { width: 1110, height: 2407 },
+      });
+      mocks.getGlbStatus.mockResolvedValueOnce({
+        session_id: "session-vector-async",
+        status: "ready",
+        glb_url: "/api/files/segmented-vector-preview.glb",
+        job_token: "token-vector-preview",
+        error: null,
+        color_contours: null,
+      });
+      mocks.convertGenerate.mockResolvedValueOnce({
+        status: "ok",
+        message: "Model generated",
+        download_url: "/api/files/vector-model.3mf",
+        preview_3d_url: "/api/files/print-exact-vector.glb",
+      });
+
+      useConverterStore.setState({
+        imageFile: new File(["<svg/>"], "native-vector.svg", {
+          type: "image/svg+xml",
+        }),
+        source_version: "native",
+        lut_name: "",
+        target_width_mm: 111,
+        color_mode: ColorMode.FOUR_COLOR_RYBW,
+        modeling_mode: ModelingMode.VECTOR,
+        color_layers: 5,
+        layer_height_mm: 0.08,
+        quantize_colors: 48,
+        enable_cleanup: true,
+        hue_enable: false,
+        selectedNativeBrandKey: "brand-a",
+        selectedNativeDbNames: ["A2"],
+        nativeBrandGroups: [makePredictiveBrand()],
+      } as never);
+
+      await useConverterStore.getState().submitPreview();
+      await useConverterStore.getState().submitGenerate();
+
+      expect(useConverterStore.getState().modelUrl).toBeNull();
+      expect(useConverterStore.getState().previewGlbUrl).toBeNull();
+
+      await flushGlbPoll();
+      await flushGlbPoll(0);
+
+      expect(mocks.getGlbStatus).toHaveBeenCalledWith("session-vector-async");
+      expect(useConverterStore.getState().previewGlbUrl).toBe(
+        "/api/files/segmented-vector-preview.glb",
+      );
+      expect(useConverterStore.getState().modelUrl).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    [
+      "color relief",
+      {
+        enable_relief: true,
+        autoHeightMode: "darker-higher",
+        color_height_map: { "111111": 0.5 },
+      },
+    ],
+    ["coating", { enable_coating: true }],
+    ["keychain loop", { add_loop: true }],
+    [
+      "fridge magnet",
+      {
+        enable_fridge_magnet: true,
+        fridge_magnets: [
+          {
+            id: "magnet-round",
+            shape: "round",
+            preset_key: "round-18",
+            diameter_mm: 18,
+            width_mm: null,
+            height_mm: null,
+            thickness_mm: 2,
+            center_x_mm: 20,
+            center_y_mm: 25,
+          },
+        ],
+      },
+    ],
+    ["outline", { enable_outline: true }],
+    ["cloisonne", { enable_cloisonne: true }],
+    [
+      "model surface overlay",
+      {
+        modelSurfaceEnabled: true,
+        modelSurfaceModelFileId: "surface-model-id",
+        modelSurfaceSelection: { face_indices: [1] },
+        modelSurfaceFootprint: { width_mm: 111, height_mm: 241 },
+      },
+    ],
+  ])("keeps generated %s geometry authoritative", async (_label, overrides) => {
+    mocks.convertGenerate.mockResolvedValueOnce({
+      status: "ok",
+      message: "Model generated",
+      download_url: "/api/files/surface-model.3mf",
+      preview_3d_url: "/api/files/generated-surface.glb",
+    });
+    seedLegacyGenerateState("session-generated-surface", {
+      imageFile: new File(["<svg/>"], "native-vector.svg", {
+        type: "image/svg+xml",
+      }),
+      modeling_mode: ModelingMode.VECTOR,
+      previewGlbUrl: "/api/files/flat-preview.glb",
+      ...overrides,
+    } as never);
+
+    await useConverterStore.getState().submitGenerate();
+
+    expect(useConverterStore.getState().modelUrl).toBe(
+      "/api/files/generated-surface.glb",
+    );
   });
 
   it("clears a normal generated GLB after switching to heightmap before polling completes", async () => {

@@ -8703,35 +8703,65 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         const modelUrl = normalizeStoreResourceUrl(response.preview_3d_url);
         const downloadUrl = normalizeStoreResourceUrl(response.download_url);
         const latestState = useConverterStore.getState();
-        const requestedHeightmapModel =
-          state.enable_relief && state.autoHeightMode === "use-heightmap";
-        const shouldShowGeneratedHeightmapModel =
-          requestedHeightmapModel &&
-          latestState.enable_relief &&
-          latestState.autoHeightMode === "use-heightmap" &&
+        const requestedGeneratedGeometryModel =
+          state.enable_relief ||
+          state.enable_coating ||
+          state.add_loop ||
+          state.enable_fridge_magnet ||
+          state.enable_outline ||
+          state.enable_cloisonne ||
+          state.modelSurfaceEnabled;
+        const generatedGeometryRequestIsCurrent =
+          requestedGeneratedGeometryModel &&
+          latestState.enable_relief === state.enable_relief &&
+          latestState.enable_coating === state.enable_coating &&
+          latestState.add_loop === state.add_loop &&
+          latestState.enable_fridge_magnet === state.enable_fridge_magnet &&
+          latestState.enable_outline === state.enable_outline &&
+          latestState.enable_cloisonne === state.enable_cloisonne &&
+          latestState.modelSurfaceEnabled === state.modelSurfaceEnabled &&
+          latestState.autoHeightMode === state.autoHeightMode;
+        const shouldShowGeneratedGeometryModel =
+          generatedGeometryRequestIsCurrent &&
           _glbPollSequence === glbPollSequenceAtGenerateStart;
-        if (shouldShowGeneratedHeightmapModel) {
-          // A successful heightmap generation owns modelUrl. Cancel preview
-          // polls that started before it; any later poll may replace it.
+        const shouldWaitForSegmentedVectorPreview =
+          !requestedGeneratedGeometryModel &&
+          state.modeling_mode === ModelingModeEnum.VECTOR &&
+          state.imageFile !== null &&
+          isSvgFile(state.imageFile) &&
+          latestState.modeling_mode === ModelingModeEnum.VECTOR &&
+          latestState.imageFile === state.imageFile &&
+          !latestState.enable_relief &&
+          !latestState.enable_coating &&
+          !latestState.modelSurfaceEnabled;
+        if (shouldShowGeneratedGeometryModel) {
+          // A generated surface owns modelUrl. Cancel preview polls that
+          // started before it; any later preview explicitly requested by the
+          // user may replace it.
           _glbPollSequence += 1;
         }
+        const selectedGeneratedModelUrl = shouldShowGeneratedGeometryModel
+          ? modelUrl
+          : requestedGeneratedGeometryModel ||
+              shouldWaitForSegmentedVectorPreview ||
+              latestState.previewGlbUrl
+            ? null
+            : modelUrl;
         set({
           isGenerating: false,
           // Keep previewGlbUrl as the 3D viewer source: it renders the
           // pixel-level colour-mixed preview. The generate GLB contains the
           // exact per-material geometry used for 3MF export which looks like
           // solid single-colour blocks and confuses users. Only fall back to
-          // modelUrl when no preview GLB exists (e.g. raster flow), except
-          // heightmap relief where the generated GLB is the only preview that
-          // preserves per-pixel heightmap geometry.
+          // modelUrl when no preview GLB exists (e.g. raster flow). A planar
+          // native SVG waits for its segmented preview even while generate is
+          // running, so the browser never downloads the print-exact GLB.
+          // Advanced geometry that the segmented preview does not express
+          // remains owned by the generated model.
           // 保留 previewGlbUrl 作为 3D 预览源：它渲染像素级混色预览。
           // generate GLB 是 3MF 导出用的精确分材料几何，看起来是纯色块。
-          // 高度图浮雕例外：生成 GLB 才保留逐像素高度图几何。
-          modelUrl: shouldShowGeneratedHeightmapModel
-            ? modelUrl
-            : requestedHeightmapModel || latestState.previewGlbUrl
-              ? null
-              : modelUrl,
+          // 普通 SVG 等待 segmented GLB；高级几何仍由生成模型接管。
+          modelUrl: selectedGeneratedModelUrl,
           batchPreviewItems: [],
           downloadUrl,
           threemfDiskPath: null,
@@ -8741,7 +8771,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         });
         _logGenerateTimer("UI unlocked (isGenerating=false, modelUrl set)");
         _clientLog("generate: UI unlocked", {
-          model_url: modelUrl,
+          response_model_url: modelUrl,
+          selected_model_url: selectedGeneratedModelUrl,
+          awaiting_segmented_vector_preview:
+            shouldWaitForSegmentedVectorPreview,
           download_url: downloadUrl,
           has_legacy_threemf_disk_path: Boolean(response.threemf_disk_path),
           warning_count: (response.warnings ?? []).length,
