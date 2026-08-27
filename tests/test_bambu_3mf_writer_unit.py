@@ -173,7 +173,9 @@ def test_mesh_queue_keeps_owning_compatibility_for_old_neroued_builds() -> None:
     assert retained == []
 
 
-def test_writer_expands_touching_runs_into_same_material_mesh_leaves() -> None:
+def test_writer_expands_touching_runs_into_same_material_mesh_leaves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A slicer assembly keeps safe run topology without duplicating filaments."""
 
     lower = trimesh.creation.box(extents=(2.0, 2.0, 0.16))
@@ -216,7 +218,15 @@ def test_writer_expands_touching_runs_into_same_material_mesh_leaves() -> None:
     assert [entry.material_name for entry in writer.objects] == ["White", "White"]
     assert all(entry.mesh is combined for entry in writer.objects)
     assert all(entry.part_range is not None for entry in writer.objects)
-    assert all(entry.require_topology_audit for entry in writer.objects)
+    assert all(not entry.require_topology_audit for entry in writer.objects)
+
+    def fail_redundant_audit(*_args, **_kwargs):
+        raise AssertionError("certified mesh leaf was re-audited")
+
+    monkeypatch.setattr(
+        "core.vector_mesh_topology.mesh_is_float32_safe",
+        fail_redundant_audit,
+    )
     for entry in writer.objects:
         vertices, faces = writer_module._materialize_n3mf_mesh_view_arrays(
             entry.mesh,
@@ -236,6 +246,46 @@ def test_writer_expands_touching_runs_into_same_material_mesh_leaves() -> None:
         _metadata_values(part)["extruder"]
         for part in model_settings.findall("./object/part")
     ] == ["1", "1"]
+
+
+def test_certified_mesh_still_rejects_float32_degenerate_triangle() -> None:
+    """The cheap writer-domain guard remains active when full audit is skipped."""
+
+    epsilon = 9.5367431640625e-7
+    mesh = trimesh.Trimesh(
+        vertices=np.asarray(
+            [
+                [200.0, 0.0, 0.0],
+                [200.0 + epsilon, 0.0, 0.0],
+                [200.0, 1.0, 0.0],
+            ],
+            dtype=np.float64,
+        ),
+        faces=np.asarray([[0, 1, 2]], dtype=np.int64),
+        process=False,
+    )
+    set_mesh_export_part_ranges(
+        mesh,
+        (MeshExportPartRange(0, 3, 0, 1),),
+    )
+    writer = BambuStudio3MFWriter(
+        "float32-degenerate-certified.3mf",
+        settings={},
+        color_mode="4-Color",
+        printer_id="bambu-p2s",
+        slicer="BambuStudio",
+    )
+
+    writer.add_mesh(mesh, "White", (255, 255, 255))
+
+    entry = writer.objects[0]
+    assert entry.require_topology_audit is False
+    with pytest.raises(ValueError, match="float32-degenerate triangle"):
+        writer_module._materialize_n3mf_mesh_view_arrays(
+            entry.mesh,
+            part_range=entry.part_range,
+            require_topology_audit=entry.require_topology_audit,
+        )
 
 
 def test_writer_keeps_safe_conditional_components_in_one_mesh_object() -> None:

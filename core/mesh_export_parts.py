@@ -87,9 +87,14 @@ def set_mesh_export_part_ranges(
     *,
     only_when_combined_unsafe: bool = False,
 ) -> None:
-    """Attach and validate independently closed 3MF leaf ranges.
+    """Attach the trusted internal contract for independently closed leaves.
 
-    为合并网格附加并校验独立闭合的 3MF 子网格范围。
+    Callers must only attach ranges after constructing or validating every
+    leaf as an independently closed mesh. The 3MF writer may trust this
+    contract instead of repeating a full topology audit.
+
+    附加独立闭合分片的可信内部契约。调用方必须先完成闭合构造或验证；
+    3MF 写入器可以信任该契约，不再重复执行完整拓扑审计。
     """
 
     normalized = tuple(_coerce_part_range(value) for value in ranges)

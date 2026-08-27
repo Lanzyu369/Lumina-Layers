@@ -238,6 +238,9 @@ def _expand_mesh_export_entries(
 
     part_ranges = get_mesh_export_part_ranges(mesh)
     if not part_ranges:
+        # Untagged producers have not made the independent-closed-shell
+        # contract, so retain the compatibility audit for those uncommon
+        # inputs. Canonical Lumina producers attach validated part ranges.
         return [
             _MeshExportEntry(
                 mesh=mesh,
@@ -281,7 +284,7 @@ def _expand_mesh_export_entries(
                 material_name=material_name,
                 color_rgb=color_rgb,
                 part_range=part,
-                require_topology_audit=True,
+                require_topology_audit=False,
             )
         )
     return expanded
