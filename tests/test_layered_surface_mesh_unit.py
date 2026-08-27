@@ -455,6 +455,7 @@ def test_large_connected_checkerboard_relief_stays_compact_in_a_subprocess() -> 
 
         from core.layered_meshing import build_labeled_surface_mesh
 
+        baseline_peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         size = 256
         y, x = np.indices((size, size))
         labels = np.full((2, size, size), -1, dtype=np.int16)
@@ -463,6 +464,7 @@ def test_large_connected_checkerboard_relief_stays_compact_in_a_subprocess() -> 
         mesh = build_labeled_surface_mesh(labels, material_id=1, height_px=size)
         peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         if sys.platform != "darwin":
+            baseline_peak_rss *= 1024
             peak_rss *= 1024
         print(json.dumps({
             "vertices": len(mesh.vertices),
@@ -470,6 +472,7 @@ def test_large_connected_checkerboard_relief_stays_compact_in_a_subprocess() -> 
             "volume": float(mesh.volume),
             "watertight": bool(mesh.is_watertight),
             "peak_rss": int(peak_rss),
+            "peak_rss_increase": int(max(0, peak_rss - baseline_peak_rss)),
         }))
         """
     )
@@ -491,8 +494,9 @@ def test_large_connected_checkerboard_relief_stays_compact_in_a_subprocess() -> 
         "volume": 98_304.0,
         "watertight": True,
         "peak_rss": measured["peak_rss"],
+        "peak_rss_increase": measured["peak_rss_increase"],
     }
-    assert measured["peak_rss"] < 350 * 1024 * 1024
+    assert measured["peak_rss_increase"] < 350 * 1024 * 1024
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="resource peak RSS is POSIX-only")
@@ -507,6 +511,7 @@ def test_large_topology_retry_releases_the_rejected_first_pass() -> None:
 
         from core.layered_meshing import build_labeled_surface_mesh
 
+        baseline_peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         size = 256
         y, x = np.indices((size, size))
         labels = np.full((2, size, size), -1, dtype=np.int16)
@@ -519,6 +524,7 @@ def test_large_topology_retry_releases_the_rejected_first_pass() -> None:
         mesh = build_labeled_surface_mesh(labels, material_id=1, height_px=size)
         peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         if sys.platform != "darwin":
+            baseline_peak_rss *= 1024
             peak_rss *= 1024
         stats = mesh.metadata["layered_mesh_stats"]
         print(json.dumps({
@@ -528,6 +534,7 @@ def test_large_topology_retry_releases_the_rejected_first_pass() -> None:
             "watertight": bool(mesh.is_watertight),
             "normalized_edges": stats["source_contact_normalized_edge_count"],
             "peak_rss": int(peak_rss),
+            "peak_rss_increase": int(max(0, peak_rss - baseline_peak_rss)),
         }))
         """
     )
@@ -550,8 +557,9 @@ def test_large_topology_retry_releases_the_rejected_first_pass() -> None:
         "watertight": True,
         "normalized_edges": 32_640,
         "peak_rss": measured["peak_rss"],
+        "peak_rss_increase": measured["peak_rss_increase"],
     }
-    assert measured["peak_rss"] < 350 * 1024 * 1024
+    assert measured["peak_rss_increase"] < 350 * 1024 * 1024
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="resource peak RSS is POSIX-only")
@@ -566,6 +574,7 @@ def test_large_volume_validation_accepts_only_roundoff_scale_drift() -> None:
 
         from core.layered_meshing import build_labeled_surface_mesh
 
+        baseline_peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         size = 512
         y, x = np.indices((size, size))
         labels = np.full((2, size, size), -1, dtype=np.int16)
@@ -574,6 +583,7 @@ def test_large_volume_validation_accepts_only_roundoff_scale_drift() -> None:
         mesh = build_labeled_surface_mesh(labels, material_id=1, height_px=size)
         peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         if sys.platform != "darwin":
+            baseline_peak_rss *= 1024
             peak_rss *= 1024
         print(json.dumps({
             "vertices": len(mesh.vertices),
@@ -581,6 +591,7 @@ def test_large_volume_validation_accepts_only_roundoff_scale_drift() -> None:
             "volume": float(mesh.volume),
             "watertight": bool(mesh.is_watertight),
             "peak_rss": int(peak_rss),
+            "peak_rss_increase": int(max(0, peak_rss - baseline_peak_rss)),
         }))
         """
     )
@@ -602,5 +613,6 @@ def test_large_volume_validation_accepts_only_roundoff_scale_drift() -> None:
         "volume": 393_216.0,
         "watertight": True,
         "peak_rss": measured["peak_rss"],
+        "peak_rss_increase": measured["peak_rss_increase"],
     }
-    assert measured["peak_rss"] < 1_100 * 1024 * 1024
+    assert measured["peak_rss_increase"] < 1_100 * 1024 * 1024
