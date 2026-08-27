@@ -2087,7 +2087,9 @@ describe("native bundle converter flow", () => {
     }
   });
 
-  it.each([
+  const generatedVectorGeometryCases: Array<
+    [string, Record<string, unknown>]
+  > = [
     [
       "color relief",
       {
@@ -2128,28 +2130,59 @@ describe("native bundle converter flow", () => {
         modelSurfaceFootprint: { width_mm: 111, height_mm: 241 },
       },
     ],
-  ])("keeps generated %s geometry authoritative", async (_label, overrides) => {
-    mocks.convertGenerate.mockResolvedValueOnce({
-      status: "ok",
-      message: "Model generated",
-      download_url: "/api/files/surface-model.3mf",
-      preview_3d_url: "/api/files/generated-surface.glb",
-    });
-    seedLegacyGenerateState("session-generated-surface", {
-      imageFile: new File(["<svg/>"], "native-vector.svg", {
-        type: "image/svg+xml",
-      }),
-      modeling_mode: ModelingMode.VECTOR,
-      previewGlbUrl: "/api/files/flat-preview.glb",
-      ...overrides,
-    } as never);
+  ];
 
-    await useConverterStore.getState().submitGenerate();
+  it.each(generatedVectorGeometryCases)(
+    "keeps generated %s geometry authoritative",
+    async (_label, overrides) => {
+      mocks.convertGenerate.mockResolvedValueOnce({
+        status: "ok",
+        message: "Model generated",
+        download_url: "/api/files/surface-model.3mf",
+        preview_3d_url: "/api/files/generated-surface.glb",
+      });
+      seedLegacyGenerateState("session-generated-surface", {
+        imageFile: new File(["<svg/>"], "native-vector.svg", {
+          type: "image/svg+xml",
+        }),
+        modeling_mode: ModelingMode.VECTOR,
+        previewGlbUrl: "/api/files/flat-preview.glb",
+        ...overrides,
+      } as never);
 
-    expect(useConverterStore.getState().modelUrl).toBe(
-      "/api/files/generated-surface.glb",
-    );
-  });
+      await useConverterStore.getState().submitGenerate();
+
+      expect(useConverterStore.getState().modelUrl).toBe(
+        "/api/files/generated-surface.glb",
+      );
+      expect(useConverterStore.getState().previewGlbUrl).toBeNull();
+    },
+  );
+
+  it.each(generatedVectorGeometryCases)(
+    "hides the flat preview when generated %s GLB is unavailable",
+    async (_label, overrides) => {
+      mocks.convertGenerate.mockResolvedValueOnce({
+        status: "ok",
+        message: "Model generated without optional GLB",
+        download_url: "/api/files/surface-model.3mf",
+        preview_3d_url: null,
+      });
+      seedLegacyGenerateState("session-generated-surface", {
+        imageFile: new File(["<svg/>"], "native-vector.svg", {
+          type: "image/svg+xml",
+        }),
+        modeling_mode: ModelingMode.VECTOR,
+        previewGlbUrl: "/api/files/flat-preview.glb",
+        ...overrides,
+      } as never);
+
+      await useConverterStore.getState().submitGenerate();
+
+      expect(useConverterStore.getState().modelUrl).toBeNull();
+      expect(useConverterStore.getState().previewGlbUrl).toBeNull();
+    },
+  );
 
   it("clears a normal generated GLB after switching to heightmap before polling completes", async () => {
     vi.useFakeTimers();

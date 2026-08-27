@@ -8762,6 +8762,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           // generate GLB 是 3MF 导出用的精确分材料几何，看起来是纯色块。
           // 普通 SVG 等待 segmented GLB；高级几何仍由生成模型接管。
           modelUrl: selectedGeneratedModelUrl,
+          ...(shouldShowGeneratedGeometryModel
+            ? { previewGlbUrl: null }
+            : {}),
           batchPreviewItems: [],
           downloadUrl,
           threemfDiskPath: null,

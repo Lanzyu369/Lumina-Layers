@@ -2283,6 +2283,115 @@ class TestNativeVectorPreviewGlbReuse:
         assert submitted_params["preview_glb_path"] is None
         assert response.json()["preview_3d_url"] is None
 
+    @pytest.mark.parametrize(
+        "request_overrides",
+        [
+            {
+                "replacement_regions": [
+                    {
+                        "quantized_hex": "#ff0000",
+                        "matched_hex": "#ff0000",
+                        "replacement_hex": "#00ff00",
+                    }
+                ]
+            },
+            {
+                "recipe_overrides": [
+                    {
+                        "region_id": "region-1",
+                        "recipe": [0, 0, 0, 0, 0],
+                        "layer_order": "Top2Bottom",
+                    }
+                ]
+            },
+            {"free_color_set": ["#00ff00"]},
+        ],
+        ids=["replacement-regions", "recipe-overrides", "free-color-set"],
+    )
+    def test_native_vector_generate_rejects_preview_glb_for_new_edit_state(
+        self,
+        tmp_path,
+        request_overrides: dict[str, object],
+    ) -> None:
+        sid, out_path, _preview_path, _preview_id, _image_path = (
+            self._seed_ready_vector_preview(tmp_path)
+        )
+        if "recipe_overrides" in request_overrides:
+            _test_store.put(
+                sid,
+                "selected_region_masks",
+                {"region-1": np.ones((4, 4), dtype=bool)},
+            )
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": out_path,
+                "glb_path": None,
+                "status_msg": "OK",
+            }
+        )
+
+        response = client.post(
+            "/api/convert/generate",
+            json=self._payload(sid, **request_overrides),
+        )
+
+        assert response.status_code == 200, response.text
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_params["preview_glb_path"] is None
+        assert response.json()["preview_3d_url"] is None
+
+    def test_native_vector_generate_reuses_preview_glb_for_matching_edit_state(
+        self,
+        tmp_path,
+    ) -> None:
+        sid, out_path, preview_path, preview_id, _image_path = (
+            self._seed_ready_vector_preview(tmp_path)
+        )
+        replacement_regions = [
+            {
+                "quantized_hex": "#ff0000",
+                "matched_hex": "#ff0000",
+                "replacement_hex": "#00ff00",
+            }
+        ]
+        recipe_overrides = [
+            {
+                "region_id": "region-1",
+                "recipe": [0, 0, 0, 0, 0],
+                "layer_order": "Top2Bottom",
+            }
+        ]
+        _test_store.put(sid, "replacement_regions", replacement_regions)
+        _test_store.put(sid, "recipe_overrides", recipe_overrides)
+        _test_store.put(sid, "free_color_set", {"00ff00"})
+        _test_store.put(
+            sid,
+            "selected_region_masks",
+            {"region-1": np.ones((4, 4), dtype=bool)},
+        )
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": out_path,
+                "glb_path": preview_path,
+                "status_msg": "OK",
+            }
+        )
+
+        response = client.post(
+            "/api/convert/generate",
+            json=self._payload(
+                sid,
+                replacement_regions=replacement_regions,
+                recipe_overrides=recipe_overrides,
+                free_color_set=["#00FF00"],
+            ),
+        )
+
+        assert response.status_code == 200, response.text
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_params["preview_glb_path"] == preview_path
+        assert response.json()["preview_3d_url"] == f"/api/files/{preview_id}"
+
     def test_native_vector_generate_rejects_expired_preview_glb(
         self,
         tmp_path,

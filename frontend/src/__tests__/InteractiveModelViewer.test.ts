@@ -14,6 +14,7 @@ import {
   prepareInteractiveModelSceneClone,
   resolveLayeredMaterialPreviewTransform,
   resolvePreviewColorLayerHeightMm,
+  shouldApplyQuickPreviewGeometry,
   shouldMirrorPreview,
   shouldApplyColorRemapToMeshName,
 } from "../components/InteractiveModelViewer";
@@ -111,6 +112,14 @@ describe("prepareInteractiveModelSceneClone", () => {
       }
     },
   );
+});
+
+describe("shouldApplyQuickPreviewGeometry", () => {
+  it("allows procedural geometry only for segmented quick previews", () => {
+    expect(shouldApplyQuickPreviewGeometry("quick-preview")).toBe(true);
+    expect(shouldApplyQuickPreviewGeometry("generated")).toBe(false);
+    expect(shouldApplyQuickPreviewGeometry("batch")).toBe(false);
+  });
 });
 
 describe("extractHexFromMeshName", () => {

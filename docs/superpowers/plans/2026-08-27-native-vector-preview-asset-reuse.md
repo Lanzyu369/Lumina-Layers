@@ -198,7 +198,7 @@ Run `python3 start_all.py --kill` and verify no `api_server.py`, `start_all.py`,
 **Files:**
 - Review all changed files and the plan.
 
-- [ ] **Step 1: Inspect the final diff and run fresh verification**
+- [x] **Step 1: Inspect the final diff and run fresh verification**
 
 Check `git diff --check`, `git status --short`, the complete relevant test commands, and the R4C1 evidence. Confirm #585 files and commits are absent from the branch range.
 

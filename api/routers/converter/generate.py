@@ -1070,6 +1070,8 @@ def _can_reuse_planar_vector_preview_glb(
     session_material_source: str,
     is_native_svg: bool,
     uses_model_surface_overlay: bool,
+    preview_edit_state_matches: bool,
+    preview_edit_state_reason: str,
     preview_color_layers: object = _MISSING,
     preview_layer_height_mm: object = _MISSING,
 ) -> tuple[bool, str]:
@@ -1098,6 +1100,8 @@ def _can_reuse_planar_vector_preview_glb(
         return False, "cloisonne_enabled"
     if uses_model_surface_overlay:
         return False, "model_surface_overlay_enabled"
+    if not preview_edit_state_matches:
+        return False, preview_edit_state_reason
 
     return _preview_analysis_params_match(
         cache=cache,
@@ -1108,6 +1112,66 @@ def _can_reuse_planar_vector_preview_glb(
         preview_color_layers=preview_color_layers,
         preview_layer_height_mm=preview_layer_height_mm,
     )
+
+
+def _normalize_edit_record_list(value: object) -> list[object] | None:
+    """Normalize an edit record sequence without weakening ordered semantics."""
+
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        return None
+    return [deepcopy(item) for item in value]
+
+
+def _normalize_free_color_edit_set(value: object) -> frozenset[str] | None:
+    """Normalize free-colour values for request/session provenance checks."""
+
+    if value is None:
+        return frozenset()
+    if isinstance(value, str) or not isinstance(value, (set, frozenset, list, tuple)):
+        return None
+    return frozenset(
+        str(item).strip().replace("#", "").lower()
+        for item in value
+        if str(item).strip().replace("#", "")
+    )
+
+
+def _preview_edit_state_matches(
+    *,
+    preview_replacement_regions: object,
+    generated_replacement_regions: object,
+    preview_recipe_overrides: object,
+    generated_recipe_overrides: object,
+    preview_free_color_set: object,
+    generated_free_color_set: object,
+) -> tuple[bool, str]:
+    """Compare edits represented by the current GLB with generate-time edits."""
+
+    comparisons = (
+        (
+            "replacement_regions",
+            _normalize_edit_record_list(preview_replacement_regions),
+            _normalize_edit_record_list(generated_replacement_regions),
+        ),
+        (
+            "recipe_overrides",
+            _normalize_edit_record_list(preview_recipe_overrides),
+            _normalize_edit_record_list(generated_recipe_overrides),
+        ),
+        (
+            "free_color_set",
+            _normalize_free_color_edit_set(preview_free_color_set),
+            _normalize_free_color_edit_set(generated_free_color_set),
+        ),
+    )
+    for field_name, preview_value, generated_value in comparisons:
+        if preview_value is None or generated_value is None:
+            return False, f"preview_edit_state_invalid:{field_name}"
+        if preview_value != generated_value:
+            return False, f"preview_edit_state_mismatch:{field_name}"
+    return True, "preview_edit_state_match"
 
 
 def _cache_field_array(
@@ -2071,10 +2135,26 @@ async def convert_generate(
             for r in request.replacement_regions
         ]
     recipe_overrides = _resolve_recipe_overrides(session_data, request)
+    preview_recipe_overrides = _backfill_recipe_override_virtual_materials(
+        session_data,
+        _normalize_recipe_overrides(
+            session_data.get("recipe_overrides") or None
+        ),
+    )
 
     free_color_set = session_data.get("free_color_set") or None
     if request.free_color_set is not None:
         free_color_set = request.free_color_set
+    preview_edit_state_matches, preview_edit_state_reason = (
+        _preview_edit_state_matches(
+            preview_replacement_regions=session_data.get("replacement_regions"),
+            generated_replacement_regions=replacement_regions,
+            preview_recipe_overrides=preview_recipe_overrides,
+            generated_recipe_overrides=recipe_overrides,
+            preview_free_color_set=session_data.get("free_color_set"),
+            generated_free_color_set=free_color_set,
+        )
+    )
 
     # Color-card mode: generate SVG from cached palette, swap image_path,
     # and force VECTOR mode so the existing vector branch produces the 3MF.
@@ -2177,6 +2257,8 @@ async def convert_generate(
             and str(image_path).lower().endswith(".svg")
         ),
         uses_model_surface_overlay=_should_use_model_surface_overlay(session_data),
+        preview_edit_state_matches=preview_edit_state_matches,
+        preview_edit_state_reason=preview_edit_state_reason,
         preview_color_layers=session_data.get("color_layers", _MISSING),
         preview_layer_height_mm=session_data.get("layer_height_mm", _MISSING),
     )

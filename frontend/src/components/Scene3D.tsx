@@ -1459,7 +1459,10 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             />
           </Suspense>
         ) : null}
-        {batchPreviewItems.length === 0 && addLoop && modelBounds && (
+        {batchPreviewItems.length === 0 &&
+          !effectiveModelUrl &&
+          addLoop &&
+          modelBounds && (
           <KeychainRing3D
             enabled={addLoop}
             width={loopWidth}
@@ -1472,7 +1475,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             modelBounds={modelBounds}
             cameraPanModifierActive={isSpacePanActive}
           />
-        )}
+          )}
         {batchPreviewItems.length === 0 && enableFridgeMagnet && modelBounds && fridgeMagnets.length > 0 && (
           <FridgeMagnet3D
             enabled={enableFridgeMagnet}

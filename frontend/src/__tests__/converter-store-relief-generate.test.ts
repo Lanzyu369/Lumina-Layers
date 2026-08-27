@@ -541,9 +541,7 @@ describe("converter store relief generate flow", () => {
     await useConverterStore.getState().submitGenerate();
 
     expect(useConverterStore.getState().modelUrl).toBe("/api/files/model.glb");
-    expect(useConverterStore.getState().previewGlbUrl).toBe(
-      "/api/files/flat-preview.glb",
-    );
+    expect(useConverterStore.getState().previewGlbUrl).toBeNull();
   });
 
   it("clears stale color relief mapping when switching into heightmap mode", async () => {

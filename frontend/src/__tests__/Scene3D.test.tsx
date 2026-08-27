@@ -33,7 +33,13 @@ vi.mock("../components/BedPlatform", () => ({
     return <div data-testid="mock-bed-platform" />;
   },
 }));
-vi.mock("../components/KeychainRing3D", () => ({ default: () => null }));
+let capturedKeychainRingProps: Record<string, unknown> | null = null;
+vi.mock("../components/KeychainRing3D", () => ({
+  default: (props: Record<string, unknown>) => {
+    capturedKeychainRingProps = props;
+    return <div data-testid="mock-keychain-ring" />;
+  },
+}));
 let capturedModelSurfaceSelectorProps: Record<string, unknown> | null = null;
 vi.mock("../components/ModelSurfaceSelector3D", () => ({
   default: (props: Record<string, unknown>) => {
@@ -221,6 +227,7 @@ beforeEach(() => {
     capturedOrbitControlsProps = {};
     capturedInteractiveViewerProps = null;
     capturedBedPlatformProps = null;
+    capturedKeychainRingProps = null;
     capturedModelSurfaceSelectorProps = null;
     capturedFridgeMagnet3DProps = null;
     document.body.classList.remove("lumina-canvas-orbiting");
@@ -726,6 +733,44 @@ beforeEach(() => {
       render(<Scene3D modelUrl="/api/files/generated.glb" />);
 
       expect(capturedInteractiveViewerProps?.sourceRole).toBe("generated");
+    });
+
+    it("keeps the keychain proxy on a quick preview", () => {
+      useConverterStore.setState({
+        previewGlbUrl: "/api/files/quick-preview.glb",
+        add_loop: true,
+        modelBounds: {
+          minX: -20,
+          maxX: 20,
+          minY: -30,
+          maxY: 30,
+          maxZ: 2,
+        },
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedKeychainRingProps).not.toBeNull();
+    });
+
+    it("does not duplicate an embedded keychain on a generated model", () => {
+      useConverterStore.setState({
+        modelUrl: "/api/files/generated-with-keychain.glb",
+        previewGlbUrl: "/api/files/old-quick-preview.glb",
+        add_loop: true,
+        modelBounds: {
+          minX: -20,
+          maxX: 20,
+          minY: -30,
+          maxY: 30,
+          maxZ: 2,
+        },
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedInteractiveViewerProps?.sourceRole).toBe("generated");
+      expect(capturedKeychainRingProps).toBeNull();
     });
 
     it("preserves embedded auxiliaries in batch models", () => {

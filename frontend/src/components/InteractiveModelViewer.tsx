@@ -70,6 +70,12 @@ export interface InteractiveModelViewerProps {
 
 export type InteractiveModelSourceRole = "quick-preview" | "generated" | "batch";
 
+export function shouldApplyQuickPreviewGeometry(
+  sourceRole: InteractiveModelSourceRole,
+): boolean {
+  return sourceRole === "quick-preview";
+}
+
 export interface PreparedInteractiveModelScene {
   clone: THREE.Object3D;
   sceneCenter: THREE.Vector3;
@@ -617,6 +623,7 @@ function InteractiveModelViewer({
   const { scene } = useGLTF(url);
   const groupRef = useRef<THREE.Group>(null);
   useGltfCacheLifecycle(url, useGLTF.clear);
+  const applyQuickPreviewGeometry = shouldApplyQuickPreviewGeometry(sourceRole);
   const previewColorLayerHeightMm = resolvePreviewColorLayerHeightMm(colorLayerHeightMm);
 
   useEffect(() => {
@@ -681,7 +688,10 @@ function InteractiveModelViewer({
       if (
         child instanceof THREE.Mesh
         && child.material
-        && child.name !== "backing_plate"
+        && (
+          child.name !== "backing_plate"
+          || !applyQuickPreviewGeometry
+        )
         && child.name !== PREVIEW_CANVAS_BOUNDS_NODE_NAME
       ) {
         const previousMaterial = child.material;
@@ -760,15 +770,17 @@ function InteractiveModelViewer({
       // Detach from clone tree
       bp.removeFromParent();
 
-      // Apply independent MeshLambertMaterial (Requirement 4.1, 4.2, 4.3)
-      const previousBackingMaterial = bp.material;
-      const backingMat = new THREE.MeshLambertMaterial({
-        color: 0xf5f5f5,
-        side: THREE.DoubleSide,
-        toneMapped: true,
-      });
-      bp.material = backingMat;
-      disposeMaterial(previousBackingMaterial);
+      if (applyQuickPreviewGeometry) {
+        // Quick previews use a neutral backing regardless of LUT appearance.
+        const previousBackingMaterial = bp.material;
+        const backingMat = new THREE.MeshLambertMaterial({
+          color: 0xf5f5f5,
+          side: THREE.DoubleSide,
+          toneMapped: true,
+        });
+        bp.material = backingMat;
+        disposeMaterial(previousBackingMaterial);
+      }
     }
 
     // Separate color_ meshes from the rest (excluding backing_plate)
@@ -870,7 +882,7 @@ function InteractiveModelViewer({
       puzzleOverlayBounds: resolvedPuzzleOverlayBounds,
       buildSummary,
     };
-  }, [scene, sourceRole, url]);
+  }, [applyQuickPreviewGeometry, scene, sourceRole, url]);
 
   useEffect(() => {
     postClientLog("preview: GLB scene processed (useMemo done)", {
@@ -915,12 +927,15 @@ function InteractiveModelViewer({
   );
 
   // ---- White backing plate mesh ----
-  const isDoubleSided = shouldMirrorPreview(structureMode, enableRelief);
+  const isDoubleSided =
+    applyQuickPreviewGeometry && shouldMirrorPreview(structureMode, enableRelief);
   const backingMesh = useMemo(() => {
     // When GLB contains backing_plate: use it directly (Requirement 2.2, 2.4)
     if (backingPlateMesh) {
       return backingPlateMesh;
     }
+
+    if (!applyQuickPreviewGeometry) return null;
 
     // Fallback: create rectangular BoxGeometry when GLB has no backing_plate (Requirement 2.3)
     if (!modelBounds) return null;
@@ -941,7 +956,7 @@ function InteractiveModelViewer({
     const cy = (modelBounds.minY + modelBounds.maxY) / 2;
     mesh.position.set(cx, cy, spacerThick / 2);
     return mesh;
-  }, [backingPlateMesh, modelBounds, spacerThick]);
+  }, [applyQuickPreviewGeometry, backingPlateMesh, modelBounds, spacerThick]);
 
   useEffect(() => {
     return () => {
@@ -970,6 +985,8 @@ function InteractiveModelViewer({
 
   // Imperative Three.js mutations: color remap, relief scaling.
   useEffect(() => {
+    if (!applyQuickPreviewGeometry) return;
+
     const layerZ = computePreviewLayerZPositions(spacerThick);
 
     // ---- Backing plate Z positioning and scaling (Requirements 3.1, 3.2, 3.3, 3.4) ----
@@ -1106,12 +1123,15 @@ function InteractiveModelViewer({
         mirror.position.z = layerZ.mirrorColorZ; // grow downward from bottom of backing plate
       }
     }
-  }, [colorMeshes, mirrorMeshes, colorRemapMap, colorHeightMap, enableRelief, baseHeight, modelBounds, sceneCenter, spacerThick, isDoubleSided, backingMesh, backingPlateMesh, previewColorLayerHeightMm]);
+  }, [applyQuickPreviewGeometry, colorMeshes, mirrorMeshes, colorRemapMap, colorHeightMap, enableRelief, baseHeight, modelBounds, sceneCenter, spacerThick, isDoubleSided, backingMesh, backingPlateMesh, previewColorLayerHeightMm]);
 
   // Double-sided mirror meshes are defined above (before useEffect).
 
   return (
-    <group ref={groupRef} scale={[scaleX, scaleY, 1]}>
+    <group
+      ref={groupRef}
+      scale={applyQuickPreviewGeometry ? [scaleX, scaleY, 1] : [1, 1, 1]}
+    >
       <primitive object={nonColorObject} />
       {/* Double-sided: mirror color layers below the backing plate (Z < 0) */}
       {mirrorMeshes.map((mesh) => (
@@ -1125,7 +1145,7 @@ function InteractiveModelViewer({
       ))}
       {/* 外轮廓预览 */}
       <OutlineFrame3D
-        enabled={enableOutline}
+        enabled={applyQuickPreviewGeometry && enableOutline}
         outlineWidth={outlineWidth}
         backingPlateMesh={backingMesh}
         sourceMeshes={colorMeshes.length > 0 ? colorMeshes : undefined}
@@ -1135,7 +1155,7 @@ function InteractiveModelViewer({
       />
       {/* 景泰蓝金色线条预览 */}
       <CloisonneWire3D
-        enabled={enableCloisonne}
+        enabled={applyQuickPreviewGeometry && enableCloisonne}
         wireWidthMm={wireWidthMm}
         wireHeightMm={wireHeightMm}
         colorMeshes={colorMeshes}
