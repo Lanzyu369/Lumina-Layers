@@ -2087,60 +2087,12 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
                 "original_material_solver_info"
             ]
 
-        # Inject outline geometry into the preview cache. The SVG/vector shape
-        # union stays the declared geometry source; S11 copies this mesh into
-        # the preview GLB instead of deriving outline from backing/fridge masks.
-        # preview 分支负责生成来自矢量 shape union 的 outline mesh；S11 复用
-        # 这个 mesh 导出 GLB，避免从 backing / 冰箱贴 mask 重新推断轮廓。
-        if bool(ctx.get("enable_outline", False)):
-            try:
-                outline_width_mm = float(ctx.get("outline_width", 2.0) or 2.0)
-            except (TypeError, ValueError):
-                outline_width_mm = 2.0
-            outline_color, outline_material_name = (
-                _resolve_vector_outline_base_aux_style(
-                    ctx,
-                    dict(analysis.preview_colors),
-                    list(analysis.slot_names),
-                )
-            )
-            log.info(
-                "Vector outline preview generation started",
-                extra={
-                    "event": "vector_outline_init",
-                    "stage": "preview",
-                    "outline_width_mm": float(outline_width_mm),
-                    "shape_count": len(getattr(analysis, "matched_shapes", []) or []),
-                    "material_name": str(outline_material_name or ""),
-                    "color_mode": str(color_mode),
-                },
-            )
-            outline_mesh = _generate_vector_outline_mesh(
-                analysis=analysis,
-                outline_width_mm=outline_width_mm,
-                base_aux_color=outline_color,
-                base_aux_material_name=outline_material_name,
-                ctx=ctx,
-                export_color_mode=getattr(vec_processor, "color_mode", color_mode),
-            )
-            if outline_mesh is not None:
-                cache["outline_geometry"] = outline_mesh
-                cache["outline_added"] = True
-                ctx["outline_geometry"] = outline_mesh
-                ctx["outline_added"] = True
-                log.info(
-                    "Vector outline preview generation completed",
-                    extra={
-                        "event": "vector_outline_done",
-                        "stage": "preview",
-                        "outline_width_mm": float(outline_width_mm),
-                        "vertex_count": int(len(outline_mesh.vertices)),
-                        "face_count": int(len(outline_mesh.faces)),
-                        "material_name": str(outline_material_name or ""),
-                    },
-                )
-            else:
-                ctx["enable_outline"] = False
+        # Quick-preview GLBs contain only static colour/backing geometry.
+        # The UI owns the live Outline overlay so spacer, structure mode, and
+        # layer-height changes remain immediate. Physical export Outline meshes
+        # stay in the generate branch's 3MF writer-local coordinate domain.
+        # 快速预览仅携带静态色块和底板；实时描边由 UI 单一负责。用于最终导出的
+        # Outline 继续留在 generate 分支的 3MF writer-local 坐标域中。
 
         t0 = time.perf_counter()
         ctx = p06_bed_rendering.run(ctx)

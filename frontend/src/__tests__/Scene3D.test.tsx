@@ -10,7 +10,10 @@ vi.mock("../i18n/context", () => ({
 }));
 
 // Mock child components that live inside Canvas (R3F components)
-vi.mock("../components/ModelViewer", () => ({ default: () => null }));
+vi.mock("../components/ModelViewer", () => ({
+  default: () => null,
+  computeFitDistance: () => 100,
+}));
 let capturedInteractiveViewerProps: Record<string, unknown> | null = null;
 vi.mock("../components/InteractiveModelViewer", () => ({
   default: (props: Record<string, unknown>) => {
@@ -232,6 +235,7 @@ beforeEach(() => {
       useConverterStore.setState({
         isLoading: false,
         previewGlbUrl: null,
+        batchPreviewItems: [],
         previewPerformanceTiming: null,
         generatePerformanceTiming: null,
         previewImageUrl: null,
@@ -701,6 +705,47 @@ beforeEach(() => {
       expect(capturedInteractiveViewerProps?.hoverEnabled).toBeUndefined();
     });
 
+  });
+
+  describe("model source role wiring", () => {
+    it("marks segmented GLB URLs as quick previews", () => {
+      useConverterStore.setState({
+        previewGlbUrl: "/api/files/quick-preview.glb",
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedInteractiveViewerProps?.sourceRole).toBe("quick-preview");
+    });
+
+    it("marks final generated GLBs separately even when a preview URL remains", () => {
+      useConverterStore.setState({
+        previewGlbUrl: "/api/files/old-quick-preview.glb",
+      });
+
+      render(<Scene3D modelUrl="/api/files/generated.glb" />);
+
+      expect(capturedInteractiveViewerProps?.sourceRole).toBe("generated");
+    });
+
+    it("preserves embedded auxiliaries in batch models", () => {
+      useConverterStore.setState({
+        batchPreviewItems: [
+          {
+            url: "/api/files/batch-item.glb",
+            filename: "item.svg",
+            tx_mm: 0,
+            ty_mm: 0,
+            width_mm: 30,
+            depth_mm: 20,
+          },
+        ],
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedInteractiveViewerProps?.sourceRole).toBe("batch");
+    });
   });
 
   describe("model surface overlay staging", () => {
