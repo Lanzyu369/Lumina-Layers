@@ -50,7 +50,7 @@ pnpm start        # 或 corepack pnpm start
 3. **拉起前端**：spawn `node frontend/node_modules/vite/bin/vite.js`，等 4174 端口就绪；
 4. **开窗**：加载 `http://127.0.0.1:4174`，加载失败每 2 秒自动重试；期间显示 splash 过渡窗口。
 
-其他行为：单实例锁（重复启动会聚焦已有窗口）；关闭窗口弹双语确认框；确认退出时以 `taskkill /T /F` 收掉整棵子进程树，不会留后台残留。
+其他行为：单实例锁（重复启动会聚焦已有窗口）；关闭窗口弹双语确认框；确认退出时收掉整棵子进程树——Windows 下对整棵进程树执行 `taskkill /T /F`，macOS/Linux 下向 detached 进程组发送 `SIGTERM`（`process.kill(-pid, "SIGTERM")`，失败时回退到单进程 `SIGTERM`），不会留后台残留。
 
 ## 4. 打生产安装包
 
@@ -62,7 +62,7 @@ python scripts/build_desktop.py
 
 ## 5. 日志与排障
 
-日志位置（dev 与打包版相同）：`%APPDATA%\lumina-electron\logs\lumina-electron.log`，主进程和两个子进程的输出都汇到这里。后端自身的结构化日志仍在 `<repo>/logs/` 下。
+日志位置（dev 与打包版相同）：以 Electron `app.getPath("logs")` 为准，文件名为 `lumina-electron.log`（主进程和两个子进程的输出都汇到这里；后端自身的结构化日志仍在 `<repo>/logs/` 下）。Windows 示例：`%APPDATA%\lumina-electron\logs\lumina-electron.log`；macOS 示例：`~/Library/Logs/lumina-electron/lumina-electron.log`；Linux 遵循 XDG 规范。
 
 | 症状 | 原因 | 处理 |
 |---|---|---|
