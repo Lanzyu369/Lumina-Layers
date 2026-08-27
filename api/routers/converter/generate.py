@@ -1050,6 +1050,8 @@ def _can_reuse_preview_analysis(
         return False, "outline_enabled"
     if request.enable_coating:
         return False, "coating_enabled"
+    if request.add_loop:
+        return False, "keychain_loop_enabled"
 
     return _preview_analysis_params_match(
         cache=cache,

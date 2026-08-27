@@ -1648,6 +1648,50 @@ def worker_generate_model(
     return result
 
 
+def _export_optional_model_surface_preview_glb(
+    scene: object,
+    *,
+    output_dir: str,
+    log: logging.Logger,
+) -> str | None:
+    """Best-effort export of the final model-surface scene for the browser."""
+
+    import os
+    import tempfile
+
+    glb_path: str | None = None
+    try:
+        fd, glb_path = tempfile.mkstemp(suffix=".glb", dir=output_dir)
+        os.close(fd)
+        scene.export(glb_path, file_type="glb")
+        if not os.path.isfile(glb_path) or os.path.getsize(glb_path) <= 0:
+            raise OSError("model-surface preview GLB export produced no file")
+        return glb_path
+    except (
+        ImportError,
+        MemoryError,
+        OSError,
+        OverflowError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        _cleanup_worker_temp_paths(glb_path)
+        geometry = getattr(scene, "geometry", None)
+        log.warning(
+            "Optional model-surface preview GLB export failed",
+            extra={
+                "event": "worker_model_surface_glb_export_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "geometry_count": (
+                    len(geometry) if isinstance(geometry, dict) else None
+                ),
+            },
+        )
+        return None
+
+
 def worker_generate_model_surface_overlay(
     image_path: str,
     lut_path: str,
@@ -1790,6 +1834,12 @@ def worker_generate_model_surface_overlay(
         )
         raise
 
+    glb_path = _export_optional_model_surface_preview_glb(
+        overlay.scene,
+        output_dir=TEMP_DIR,
+        log=log,
+    )
+
     log.debug(
         "Worker model-surface generation complete",
         extra={
@@ -1797,12 +1847,14 @@ def worker_generate_model_surface_overlay(
             "duration_ms": round((_time.perf_counter() - _t_worker_start) * 1000, 3),
             "threemf_path": out_path,
             "threemf_bytes": os.path.getsize(out_path) if out_path and os.path.exists(out_path) else None,
+            "glb_path": glb_path,
+            "glb_bytes": os.path.getsize(glb_path) if glb_path and os.path.exists(glb_path) else None,
             "slot_count": len(overlay.slot_names),
         },
     )
     return {
         "threemf_path": out_path,
-        "glb_path": None,
+        "glb_path": glb_path,
         "status_msg": "Surface overlay model generated",
     }
 

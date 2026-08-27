@@ -1864,7 +1864,6 @@ class TestS11GlbPreview:
             "generate_segmented_glb",
             _unexpected_segmented_glb,
         )
-
         ctx = {
             "matched_rgb": np.full((2, 2, 3), [255, 0, 0], dtype=np.uint8),
             "mask_solid": np.ones((2, 2), dtype=bool),
@@ -1881,6 +1880,74 @@ class TestS11GlbPreview:
         assert glb_path is not None
         assert glb_path.endswith(".glb")
         assert (tmp_path / Path(glb_path).name).exists()
+
+    @pytest.mark.parametrize(
+        "generated_surface_params",
+        [
+            {"enable_relief": True, "height_mode": "color"},
+            {"enable_outline": True},
+            {"enable_cloisonne": True},
+            {"add_loop": True},
+            {"enable_coating": True},
+            {"enable_fridge_magnet": True},
+        ],
+        ids=[
+            "color-relief",
+            "outline",
+            "cloisonne",
+            "keychain",
+            "coating",
+            "fridge-magnet",
+        ],
+    )
+    def test_generated_surface_modes_export_final_pipeline_scene(
+        self,
+        monkeypatch,
+        tmp_path,
+        generated_surface_params,
+    ):
+        from core.pipeline import s11_glb_preview
+
+        scene = trimesh.Scene()
+        mesh = trimesh.creation.box(extents=(3.0, 2.0, 1.0))
+        scene.add_geometry(
+            mesh,
+            node_name="GeneratedSurface",
+            geom_name="GeneratedSurface",
+        )
+
+        def _unexpected_segmented_glb(*_args, **_kwargs):
+            raise AssertionError(
+                "generated-surface previews must use the final pipeline scene"
+            )
+
+        monkeypatch.setattr(s11_glb_preview, "OUTPUT_DIR", str(tmp_path))
+        monkeypatch.setattr(
+            s11_glb_preview,
+            "generate_segmented_glb",
+            _unexpected_segmented_glb,
+        )
+        stale_preview_path = tmp_path / "stale-flat-preview.glb"
+        stale_preview_path.write_bytes(b"stale flat preview")
+
+        ctx = {
+            "matched_rgb": np.full((2, 2, 3), [255, 0, 0], dtype=np.uint8),
+            "mask_solid": np.ones((2, 2), dtype=bool),
+            "pixel_scale": 1.0,
+            "image_path": str(tmp_path / "generated-surface-source.png"),
+            "scene": scene,
+            "preview_glb_path": str(stale_preview_path),
+            **generated_surface_params,
+        }
+
+        result = s11_glb_preview.run(ctx)
+
+        glb_path = result["glb_path"]
+        assert glb_path is not None
+        assert glb_path != str(stale_preview_path)
+        loaded = trimesh.load(glb_path, force="scene")
+        assert isinstance(loaded, trimesh.Scene)
+        assert len(loaded.geometry) == 1
 
 
 # ===========================================================================

@@ -1614,6 +1614,31 @@ class TestGenerateParameterCompleteness:
         assert submitted_params["reuse_preview_analysis"] is True
         assert submitted_params["preview_glb_path"] == str(preview_glb_path)
 
+        loop_response = client.post(
+            "/api/convert/generate",
+            json={
+                "session_id": sid,
+                "params": {
+                    "lut_name": "test_lut",
+                    "target_width_mm": 40.0,
+                    "color_mode": "4-Color (RYBW)",
+                    "modeling_mode": "high-fidelity",
+                    "color_layers": 5,
+                    "layer_height_mm": 0.08,
+                    "quantize_colors": 48,
+                    "enable_cleanup": True,
+                    "svg_pixels_per_mm": 10.0,
+                    "high_precision_3d_preview": False,
+                    "add_loop": True,
+                },
+            },
+        )
+
+        assert loop_response.status_code == 200, loop_response.text
+        loop_params = _mock_pool.submit.call_args.args[3]
+        assert loop_params["reuse_preview_analysis"] is False
+        assert loop_params["preview_glb_path"] is None
+
     def test_generate_reuses_preview_analysis_when_optional_layer_defaults_match(
         self,
         tmp_path,

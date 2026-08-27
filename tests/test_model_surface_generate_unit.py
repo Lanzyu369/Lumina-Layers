@@ -259,11 +259,13 @@ def test_generate_routes_model_surface_session_to_overlay_worker(
 
     async def fake_submit(_fn, *_args, **_kwargs):
         out_path = tmp_path / "surface.3mf"
+        glb_path = tmp_path / "surface.glb"
         out_path.write_bytes(b"3mf")
+        glb_path.write_bytes(b"generated surface glb")
         return (
             {
                 "threemf_path": str(out_path),
-                "glb_path": None,
+                "glb_path": str(glb_path),
                 "status_msg": "Surface OK",
             },
             {
@@ -328,7 +330,16 @@ def test_generate_routes_model_surface_session_to_overlay_worker(
         == 100
     )
     assert "surface_model_path" not in submitted_params["converter_params"]
-    assert response.json()["preview_3d_url"] is None
+    preview_url = response.json()["preview_3d_url"]
+    assert preview_url is not None
+    preview_file_id = preview_url.rsplit("/", 1)[-1]
+    preview_entry = registry.get_entry(preview_file_id)
+    assert preview_entry is not None
+    assert preview_entry["session_id"] == sid
+    assert preview_entry["lifecycle"] == "session_bound"
+    preview_response = client.get(preview_url)
+    assert preview_response.status_code == 200
+    assert preview_response.content == b"generated surface glb"
 
     download_url = response.json()["download_url"]
     download_file_id = download_url.rsplit("/", 1)[-1]
@@ -342,6 +353,8 @@ def test_generate_routes_model_surface_session_to_overlay_worker(
         json={"session_id": sid},
     )
     assert close_response.status_code == 200
+
+    assert client.get(preview_url).status_code == 404
 
     download_response = client.get(download_url)
     assert download_response.status_code == 200
@@ -566,7 +579,11 @@ def test_worker_generate_model_surface_overlay_exports_bambu_3mf(tmp_path):
         )
 
     assert Path(result["threemf_path"]).exists()
-    assert result["glb_path"] is None
+    assert result["glb_path"] is not None
+    assert Path(result["glb_path"]).is_file()
+    loaded_preview = trimesh.load(result["glb_path"], force="scene")
+    assert isinstance(loaded_preview, trimesh.Scene)
+    assert len(loaded_preview.geometry) == len(scene.geometry)
     assert result["status_msg"] == "Surface overlay model generated"
     assert captured["scene"] is scene
     assert captured["slot_names"] == ["surface_base", "red"]
@@ -577,6 +594,90 @@ def test_worker_generate_model_surface_overlay_exports_bambu_3mf(tmp_path):
     assert captured["enable_base_layer_height_modifier"] is False
     assert captured["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.4"
     Path(result["threemf_path"]).unlink(missing_ok=True)
+    Path(result["glb_path"]).unlink(missing_ok=True)
+
+
+def test_worker_keeps_3mf_when_optional_surface_glb_export_fails(tmp_path):
+    image_path = tmp_path / "surface-art.png"
+    lut_path = tmp_path / "lut.npy"
+    model_path = tmp_path / "plate.stl"
+    Image.new("RGB", (2, 2), (255, 0, 0)).save(image_path)
+    lut_path.write_bytes(b"lut")
+    model_path.write_bytes(b"solid plate\nendsolid plate\n")
+
+    scene = trimesh.Scene(
+        {"surface_base": trimesh.creation.box(extents=(2.0, 2.0, 1.0))}
+    )
+    overlay = OverlaySceneResult(
+        scene=scene,
+        slot_names=["surface_base"],
+        preview_colors={"surface_base": (245, 245, 245)},
+    )
+
+    def fake_export_scene_with_bambu_metadata(**kwargs):
+        Path(kwargs["output_path"]).write_bytes(b"3mf")
+        return kwargs["output_path"]
+
+    from api.workers.converter_workers import worker_generate_model_surface_overlay
+
+    with (
+        patch("config.TEMP_DIR", str(tmp_path)),
+        patch(
+            "core.model_surface.pipeline.build_surface_overlay_scene",
+            return_value=overlay,
+        ),
+        patch(
+            "core.vector_engine._enforce_vector_scene_export_headroom",
+        ),
+        patch(
+            "utils.bambu_3mf_writer.export_scene_with_bambu_metadata",
+            side_effect=fake_export_scene_with_bambu_metadata,
+        ),
+        patch.object(
+            trimesh.Scene,
+            "export",
+            side_effect=OSError("optional preview export unavailable"),
+        ) as export_glb,
+    ):
+        result = worker_generate_model_surface_overlay(
+            str(image_path),
+            str(lut_path),
+            {
+                "surface_model_path": str(model_path),
+                "surface_footprint": {
+                    "frame": {
+                        "origin": [0.0, 0.0, 1.0],
+                        "normal": [0.0, 0.0, 1.0],
+                        "u_axis": [1.0, 0.0, 0.0],
+                        "v_axis": [0.0, 1.0, 0.0],
+                    },
+                    "outer": [
+                        [-1.0, -1.0],
+                        [1.0, -1.0],
+                        [1.0, 1.0],
+                        [-1.0, 1.0],
+                        [-1.0, -1.0],
+                    ],
+                    "holes": [],
+                    "bounds_width_mm": 2.0,
+                    "bounds_height_mm": 2.0,
+                },
+                "surface_pocket_depth_mm": 0.08,
+                "converter_params": {
+                    "target_width_mm": 2.0,
+                    "backing_infill_density_percent": 100,
+                },
+            },
+        )
+
+    output_path = Path(result["threemf_path"])
+    try:
+        assert output_path.read_bytes() == b"3mf"
+        assert result["glb_path"] is None
+        export_glb.assert_called_once()
+        assert not list(tmp_path.glob("*.glb"))
+    finally:
+        output_path.unlink(missing_ok=True)
 
 
 def test_worker_model_surface_memory_guard_runs_before_3mf_writer(tmp_path):
@@ -746,6 +847,7 @@ def test_worker_generates_native_vector_surface_3mf_without_board_or_margin_stre
     )
 
     output_path = Path(result["threemf_path"])
+    preview_path = Path(result["glb_path"])
     try:
         assert output_path.exists()
         core_ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
@@ -813,6 +915,7 @@ def test_worker_generates_native_vector_surface_3mf_without_board_or_margin_stre
         assert max(color_z) < max(base_z)
     finally:
         output_path.unlink(missing_ok=True)
+        preview_path.unlink(missing_ok=True)
 
 
 def test_worker_preserves_surface_under_transparent_png(tmp_path):
@@ -881,6 +984,7 @@ def test_worker_preserves_surface_under_transparent_png(tmp_path):
     )
 
     output_path = Path(result["threemf_path"])
+    preview_path = Path(result["glb_path"])
     try:
         core_ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
         with zipfile.ZipFile(output_path, "r") as archive:
@@ -919,6 +1023,7 @@ def test_worker_preserves_surface_under_transparent_png(tmp_path):
         )
     finally:
         output_path.unlink(missing_ok=True)
+        preview_path.unlink(missing_ok=True)
 
 
 def test_model_surface_layer_height_rejects_nonuniform_dynamic_schedule():

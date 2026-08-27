@@ -1856,25 +1856,35 @@ def generate_realtime_glb(cache: dict, output_path: str) -> Optional[str]:
 
 
 def _should_export_pipeline_scene_for_glb(ctx: dict) -> bool:
-    """Return whether S11 should reuse the final pipeline scene for preview."""
+    """Return whether generated geometry needs the final scene in preview."""
 
-    return (
-        bool(ctx.get("enable_relief"))
-        and str(ctx.get("height_mode") or "").lower() == "heightmap"
-        and isinstance(ctx.get("scene"), trimesh.Scene)
+    generated_surface_enabled = any(
+        bool(ctx.get(key))
+        for key in (
+            "enable_relief",
+            "enable_outline",
+            "enable_cloisonne",
+            "add_loop",
+            "enable_coating",
+            "enable_fridge_magnet",
+        )
+    )
+    return generated_surface_enabled and isinstance(
+        ctx.get("scene"),
+        trimesh.Scene,
     )
 
 
 def _export_pipeline_scene_glb(ctx: dict, output_path: str) -> Optional[str]:
-    """Export the already-built pipeline scene for heightmap relief preview."""
+    """Export the already-built pipeline scene for generated-surface preview."""
 
     scene = ctx.get("scene")
     geometry_count = int(len(scene.geometry)) if isinstance(scene, trimesh.Scene) else 0
     if not isinstance(scene, trimesh.Scene) or len(scene.geometry) == 0:
         _log.warning(
-            "Heightmap relief GLB preview scene is unavailable",
+            "Generated-surface GLB preview scene is unavailable",
             extra={
-                "event": "heightmap_relief_glb_scene_unavailable",
+                "event": "generated_surface_glb_scene_unavailable",
                 "has_scene": isinstance(scene, trimesh.Scene),
                 "geometry_count": geometry_count,
             },
@@ -1885,9 +1895,9 @@ def _export_pipeline_scene_glb(ctx: dict, output_path: str) -> Optional[str]:
         scene.export(output_path, file_type="glb")
     except (OSError, ValueError, TypeError, RuntimeError) as exc:
         _log.warning(
-            "Heightmap relief scene GLB export failed",
+            "Generated-surface scene GLB export failed",
             extra={
-                "event": "heightmap_relief_glb_export_failed",
+                "event": "generated_surface_glb_export_failed",
                 "error_type": type(exc).__name__,
                 "error_message": str(exc),
                 "geometry_count": geometry_count,
@@ -1923,8 +1933,13 @@ def run(ctx: dict) -> dict:
     """
     _t0 = time.perf_counter()
 
+    export_pipeline_scene = _should_export_pipeline_scene_for_glb(ctx)
     reusable_glb_path = ctx.get("preview_glb_path")
-    if isinstance(reusable_glb_path, str) and os.path.exists(reusable_glb_path):
+    if (
+        not export_pipeline_scene
+        and isinstance(reusable_glb_path, str)
+        and os.path.exists(reusable_glb_path)
+    ):
         _prog = ctx.get("progress")
         if _prog is not None:
             _prog(0.90, "复用 3D 预览中... | Reusing 3D preview...")
@@ -1956,7 +1971,7 @@ def run(ctx: dict) -> dict:
         "target_h": height,
         "target_width_mm": target_width_mm,
     }
-    if _should_export_pipeline_scene_for_glb(ctx):
+    if export_pipeline_scene:
         glb_path = _export_pipeline_scene_glb(ctx, out_path)
     else:
         if bool(ctx.get("high_precision_3d_preview", False)):
