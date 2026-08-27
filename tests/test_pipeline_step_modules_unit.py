@@ -1831,6 +1831,75 @@ class TestS08AuxiliaryMeshes:
             assert coating.bounds[1, 0] >= outline.bounds[1, 0]
             assert coating.bounds[1, 1] >= outline.bounds[1, 1]
 
+    def test_double_sided_raster_coating_keeps_contact_ranges_for_writer(self):
+        """Copy/concatenate must retain point-contact shell ownership."""
+
+        from core.mesh_export_parts import (
+            get_mesh_export_part_ranges,
+            mesh_export_parts_are_conditional,
+        )
+        from core.mesh_generators import HighFidelityMesher
+        from core.pipeline.s08_auxiliary_meshes import run
+        from utils import bambu_3mf_writer as writer_module
+        from utils.bambu_3mf_writer import BambuStudio3MFWriter
+
+        mask_solid = np.asarray(
+            [[True, False], [False, True]],
+            dtype=bool,
+        )
+        total_layers = 4
+        result = run(
+            {
+                "scene": trimesh.Scene(),
+                "valid_slot_names": [],
+                "full_matrix": np.zeros((total_layers, 2, 2), dtype=int),
+                "mask_solid": mask_solid,
+                "matched_rgb": np.zeros((2, 2, 3), dtype=np.uint8),
+                "target_h": 2,
+                "target_w": 2,
+                "pixel_scale": 1.0,
+                "total_layers": total_layers,
+                "preview_colors": {0: [255, 255, 255, 255]},
+                "transform": np.eye(4),
+                "mesher": HighFidelityMesher(
+                    disable_material_dilation=True
+                ),
+                "structure_mode": "Double-sided",
+                "separate_backing": False,
+                "backing_metadata": {},
+                "enable_coating": True,
+                "coating_height_mm": PrinterConfig.LAYER_HEIGHT,
+                "enable_outline": False,
+                "free_color_set": None,
+                "add_loop": False,
+                "loop_info": None,
+                "boundary_geometry": None,
+            }
+        )
+        coating = result["scene"].geometry["Coating"]
+        ranges = get_mesh_export_part_ranges(coating)
+        assert len(ranges) == 4
+        assert mesh_export_parts_are_conditional(coating)
+
+        writer = BambuStudio3MFWriter(
+            "double-coating-contact.3mf",
+            settings={},
+            color_mode="4-Color",
+            printer_id="bambu-p2s",
+            slicer="BambuStudio",
+        )
+        writer.add_mesh(coating, "Coating", (255, 255, 255))
+        assert len(writer.objects) == 1
+        entry = writer.objects[0]
+        assert len(entry.contact_repair_ranges) == 4
+        vertices, faces = writer_module._materialize_n3mf_mesh_view_arrays(
+            entry.mesh,
+            contact_repair_ranges=entry.contact_repair_ranges,
+            require_topology_audit=entry.require_topology_audit,
+        )
+        assert len(np.unique(vertices, axis=0)) == len(vertices)
+        assert len(faces) == len(coating.faces)
+
 
 # ===========================================================================
 # S11 — s11_glb_preview 单元测试

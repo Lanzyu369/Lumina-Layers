@@ -10,8 +10,14 @@ from shapely.geometry import Polygon
 
 from config import ModelingMode
 from core import mesh_generators
+from core.mesh_export_parts import (
+    get_mesh_export_part_ranges,
+    mesh_export_parts_are_conditional,
+)
 from core.pipeline import s07_mesh_generation
 from core.mesh_generators import HighFidelityMesher, get_mesher
+from utils import bambu_3mf_writer as writer_module
+from utils.bambu_3mf_writer import BambuStudio3MFWriter
 
 
 def _make_split_voxel_matrix() -> np.ndarray:
@@ -237,6 +243,28 @@ def test_high_fidelity_mesher_keeps_interior_cells_on_lattice_path(
         "boundary_enabled": True,
         "material_dilation_applied": False,
     }
+    ranges = get_mesh_export_part_ranges(mesh)
+    assert len(ranges) == 2
+    assert not mesh_export_parts_are_conditional(mesh)
+
+    writer = BambuStudio3MFWriter(
+        "hybrid-boundary.3mf",
+        settings={},
+        color_mode="4-Color",
+        printer_id="bambu-p2s",
+        slicer="BambuStudio",
+    )
+    writer.add_mesh(mesh, "White", (255, 255, 255))
+    assert len(writer.objects) == 2
+    for entry in writer.objects:
+        vertices, faces = writer_module._materialize_n3mf_mesh_view_arrays(
+            entry.mesh,
+            part_range=entry.part_range,
+            contact_repair_ranges=entry.contact_repair_ranges,
+            require_topology_audit=entry.require_topology_audit,
+        )
+        assert len(vertices) > 0
+        assert len(faces) > 0
 
 
 def test_high_fidelity_mesher_logs_structured_boundary_clip_fallback(

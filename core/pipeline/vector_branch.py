@@ -2717,7 +2717,8 @@ def _run_vector_branch(ctx: dict) -> dict:
                     shape_count=2,
                 )
                 merged = _concatenate_meshes_fast(
-                    [target_geom, board_geom]
+                    [target_geom, board_geom],
+                    preserve_export_parts=True,
                 )
                 target_color = vec_preview_colors.get(target_slot)
                 if target_color is None:

@@ -26,6 +26,10 @@ from shapely.ops import polygonize, unary_union
 from shapely.validation import make_valid
 
 
+_MAX_EXACT_SIMPLIFICATION_COORDINATES = 128
+_MAX_CONTACT_TRANSLATION_GRID_UNITS = 4
+
+
 @dataclass(frozen=True)
 class VectorLayerGeometryPolicy:
     """Physical-grid and fidelity policy for one Vector run group.
@@ -126,13 +130,12 @@ def _polygon_parts(geometry: BaseGeometry) -> tuple[Polygon, ...]:
         return parts
     if not isinstance(geometry, (Polygon, MultiPolygon)):
         raise ValueError("Vector run group requires polygonal geometry")
-    candidate = make_valid(geometry) if not geometry.is_valid else geometry
-    if isinstance(candidate, Polygon):
-        parts = (candidate,)
-    elif isinstance(candidate, MultiPolygon):
-        parts = tuple(candidate.geoms)
+    if not geometry.is_valid:
+        return _polygon_parts(make_valid(geometry))
+    if isinstance(geometry, Polygon):
+        parts = (geometry,)
     else:
-        raise ValueError("Vector run group requires repairable polygonal geometry")
+        parts = tuple(geometry.geoms)
     if not parts or any(part.is_empty or float(part.area) <= 0.0 for part in parts):
         raise ValueError("Vector run group contains empty polygonal geometry")
     return parts
@@ -251,6 +254,19 @@ def _node_group_once(snapped: list[tuple[int, Polygon]]) -> BaseGeometry:
     return unary_union(accepted)
 
 
+def _resnap_noded_group(geometry: BaseGeometry, *, grid_mm: float) -> BaseGeometry:
+    """Snap rational segment intersections back onto the physical grid."""
+
+    snapped = set_precision(
+        geometry,
+        grid_size=float(grid_mm),
+        mode="valid_output",
+    )
+    if snapped is None or snapped.is_empty or not snapped.is_valid:
+        raise ValueError("Vector noded geometry could not be closed on the physical grid")
+    return snapped
+
+
 def _has_cross_polygon_contact(geometry: BaseGeometry) -> bool:
     if not isinstance(geometry, MultiPolygon):
         return False
@@ -261,6 +277,170 @@ def _has_cross_polygon_contact(geometry: BaseGeometry) -> bool:
         if any(int(index) > first_index for index in np.asarray(nearby).reshape(-1)):
             return True
     return False
+
+
+def _polygon_has_ring_contact(polygon: Polygon) -> bool:
+    """Return whether distinct boundary rings touch in physical space."""
+
+    if not polygon.interiors:
+        return False
+    shell_boundary = Polygon(polygon.exterior).boundary
+    holes = [Polygon(ring) for ring in polygon.interiors]
+    tree = STRtree(holes)
+    if len(tree.query(shell_boundary, predicate="intersects")) > 0:
+        return True
+    pairs = np.asarray(tree.query(holes, predicate="intersects"), dtype=np.int64)
+    return bool(pairs.size and np.any(pairs[0] < pairs[1]))
+
+
+def _ring_translation_candidates(*, grid_mm: float) -> list[tuple[float, float]]:
+    """Return deterministic sub-nozzle translations for touching holes."""
+
+    directions = (
+        (1, 0),
+        (-1, 0),
+        (0, 1),
+        (0, -1),
+        (1, 1),
+        (1, -1),
+        (-1, 1),
+        (-1, -1),
+    )
+    return [
+        (float(dx * radius) * grid_mm, float(dy * radius) * grid_mm)
+        for radius in range(1, _MAX_CONTACT_TRANSLATION_GRID_UNITS + 1)
+        for dx, dy in directions
+    ]
+
+
+def _translate_on_physical_grid(
+    polygon: Polygon,
+    *,
+    x_offset: float,
+    y_offset: float,
+    grid_mm: float,
+) -> Polygon | None:
+    """Translate and immediately restore exact physical-grid coordinates."""
+
+    translated = affinity.translate(
+        polygon,
+        xoff=float(x_offset),
+        yoff=float(y_offset),
+    )
+    snapped = set_precision(
+        translated,
+        grid_size=float(grid_mm),
+        mode="pointwise",
+    )
+    if not isinstance(snapped, Polygon) or snapped.is_empty or not snapped.is_valid:
+        return None
+    return snapped
+
+
+def _separate_polygon_ring_contacts(
+    polygon: Polygon,
+    *,
+    grid_mm: float,
+) -> tuple[Polygon, bool]:
+    """Separate point-touching holes without changing their area.
+
+    OGC-valid polygons may let a hole touch the shell or another hole at one
+    point.  A closed indexed prism cannot represent that weakly-simple contact:
+    the cap and the two wall rings need different indices at the same writer
+    coordinate.  Translate only the touching hole by a few writer-safe grid
+    units before triangulation.  The hole area is unchanged and the bounded
+    displacement is orders of magnitude below supported nozzle widths.
+    """
+
+    if not _polygon_has_ring_contact(polygon):
+        return polygon, False
+
+    shell = Polygon(polygon.exterior)
+    shell_boundary = shell.boundary
+    holes = [Polygon(ring) for ring in polygon.interiors]
+    translated = False
+    candidates = _ring_translation_candidates(grid_mm=float(grid_mm))
+    hole_tree = STRtree(holes)
+    shell_contacts = {
+        int(index)
+        for index in np.asarray(
+            hole_tree.query(shell_boundary, predicate="intersects")
+        ).reshape(-1)
+    }
+    touching_neighbors: dict[int, set[int]] = {}
+    pairs = np.asarray(
+        hole_tree.query(holes, predicate="intersects"),
+        dtype=np.int64,
+    )
+    if pairs.size:
+        for first_index, second_index in pairs.T:
+            first = int(first_index)
+            second = int(second_index)
+            if first >= second:
+                continue
+            touching_neighbors.setdefault(first, set()).add(second)
+            touching_neighbors.setdefault(second, set()).add(first)
+
+    touching_indices = sorted(shell_contacts | set(touching_neighbors))
+    maximum_relative_motion = float(grid_mm) * 12.0
+    for hole_index in touching_indices:
+        hole = holes[hole_index]
+        neighbor_indices = {
+            int(index)
+            for index in np.asarray(
+                hole_tree.query(
+                    hole,
+                    predicate="dwithin",
+                    distance=maximum_relative_motion,
+                )
+            ).reshape(-1)
+            if int(index) != hole_index
+        }
+        neighbor_indices.update(touching_neighbors.get(hole_index, ()))
+        requires_separation = (
+            shell_boundary.intersects(hole.boundary)
+            or any(hole.intersects(holes[index]) for index in neighbor_indices)
+        )
+        if not requires_separation:
+            continue
+
+        separated = None
+        for x_offset, y_offset in candidates:
+            candidate = _translate_on_physical_grid(
+                hole,
+                x_offset=x_offset,
+                y_offset=y_offset,
+                grid_mm=float(grid_mm),
+            )
+            if candidate is None:
+                continue
+            if (
+                shell.contains(candidate)
+                and shell_boundary.disjoint(candidate)
+                and all(
+                    candidate.disjoint(holes[index])
+                    for index in neighbor_indices
+                )
+            ):
+                separated = candidate
+                break
+        if separated is None:
+            raise ValueError(
+                "Vector point-touching rings could not remain independent"
+            )
+        holes[hole_index] = separated
+        translated = True
+
+    result = Polygon(
+        polygon.exterior.coords,
+        [hole.exterior.coords for hole in holes],
+    )
+    if result.is_empty or not result.is_valid or _polygon_has_ring_contact(result):
+        raise ValueError("Vector physical-grid output retains touching rings")
+    area_tolerance = max(1e-12, float(polygon.area) * 1e-12)
+    if abs(float(result.area) - float(polygon.area)) > area_tolerance:
+        raise ValueError("Vector ring separation changed printable coverage")
+    return result, translated
 
 
 def _contact_free_translation_candidates(
@@ -295,7 +475,7 @@ def _contact_free_translation_candidates(
     unique_directions = list(dict.fromkeys(all_directions))
     return [
         (float(dx * radius) * grid_mm, float(dy * radius) * grid_mm)
-        for radius in range(1, 5)
+        for radius in range(1, _MAX_CONTACT_TRANSLATION_GRID_UNITS + 1)
         for dx, dy in unique_directions
     ]
 
@@ -305,45 +485,79 @@ def _separate_unrepresentable_contacts(
     *,
     grid_mm: float,
 ) -> tuple[BaseGeometry, bool]:
-    """Move touching independent shells apart on the same physical grid."""
+    """Move all unrepresentable boundary contacts apart on one physical grid."""
 
-    if not _has_cross_polygon_contact(geometry):
-        return geometry, False
-
-    ordered_parts = sorted(
-        geometry.geoms,
-        key=lambda part: (-float(part.area), *part.bounds),
-    )
-    accepted: list[Polygon] = []
-    for part in ordered_parts:
-        contacts = [other for other in accepted if part.intersects(other)]
-        if not contacts:
-            accepted.append(part)
-            continue
-        separated = None
-        for x_offset, y_offset in _contact_free_translation_candidates(
+    source_parts = _polygon_parts(geometry)
+    separated_any = False
+    ring_safe_parts: list[Polygon] = []
+    for part in source_parts:
+        ring_safe_part, ring_separated = _separate_polygon_ring_contacts(
             part,
-            contacts,
             grid_mm=float(grid_mm),
-        ):
-            candidate = affinity.translate(part, xoff=x_offset, yoff=y_offset)
-            if not any(candidate.intersects(other) for other in accepted):
-                separated = candidate
-                break
-        if separated is None:
-            raise ValueError(
-                "Vector float32-near contacts could not remain independent"
-            )
-        accepted.append(separated)
+        )
+        ring_safe_parts.append(ring_safe_part)
+        separated_any = separated_any or ring_separated
 
-    result: BaseGeometry = (
-        accepted[0] if len(accepted) == 1 else MultiPolygon(accepted)
+    ring_safe_geometry: BaseGeometry = (
+        ring_safe_parts[0]
+        if len(ring_safe_parts) == 1
+        else MultiPolygon(ring_safe_parts)
     )
-    if result.is_empty or not result.is_valid or _has_cross_polygon_contact(result):
-        raise ValueError("Vector physical-grid output retains touching shells")
-    if geometry.hausdorff_distance(result) > float(grid_mm) * 6.0:
-        raise ValueError("Vector contact separation exceeded the physical-grid bound")
-    return result, True
+    has_cross_polygon_contact = _has_cross_polygon_contact(ring_safe_geometry)
+    if has_cross_polygon_contact:
+        ordered_parts = sorted(
+            ring_safe_parts,
+            key=lambda part: (-float(part.area), *part.bounds),
+        )
+        accepted: list[Polygon] = []
+        for part in ordered_parts:
+            contacts = [other for other in accepted if part.intersects(other)]
+            if not contacts:
+                accepted.append(part)
+                continue
+            separated = None
+            for x_offset, y_offset in _contact_free_translation_candidates(
+                part,
+                contacts,
+                grid_mm=float(grid_mm),
+            ):
+                candidate = _translate_on_physical_grid(
+                    part,
+                    x_offset=x_offset,
+                    y_offset=y_offset,
+                    grid_mm=float(grid_mm),
+                )
+                if candidate is None:
+                    continue
+                if not any(candidate.intersects(other) for other in accepted):
+                    separated = candidate
+                    break
+            if separated is None:
+                raise ValueError(
+                    "Vector float32-near contacts could not remain independent"
+                )
+            accepted.append(separated)
+            separated_any = True
+        result: BaseGeometry = (
+            accepted[0] if len(accepted) == 1 else MultiPolygon(accepted)
+        )
+    else:
+        result = ring_safe_geometry
+    if (
+        result.is_empty
+        or not result.is_valid
+        or _has_cross_polygon_contact(result)
+    ):
+        raise ValueError("Vector physical-grid output retains touching boundaries")
+    result_parts = _polygon_parts(result)
+    if any(_polygon_has_ring_contact(part) for part in result_parts):
+        raise ValueError("Vector physical-grid output retains touching boundaries")
+    source_area = math.fsum(float(part.area) for part in source_parts)
+    result_area = math.fsum(float(part.area) for part in result_parts)
+    area_tolerance = max(1e-12, abs(source_area) * 1e-12)
+    if abs(result_area - source_area) > area_tolerance:
+        raise ValueError("Vector contact separation changed printable coverage")
+    return result, separated_any
 
 
 def _simplify_or_restore(
@@ -357,6 +571,8 @@ def _simplify_or_restore(
         return geometry, False, False
     original_signature = _topology_signature(geometry)
     original_coordinates = sum(_coordinate_count(part) for part in _polygon_parts(geometry))
+    if original_coordinates > _MAX_EXACT_SIMPLIFICATION_COORDINATES:
+        return geometry, False, False
     simplified = geometry.simplify(tolerance, preserve_topology=True)
     simplified = set_precision(
         simplified,
@@ -456,6 +672,35 @@ def _prepared_polygons(
             }
         )
         if not owners:
+            # A printable micro-island can be narrower than the bounded
+            # contact-separation shift, leaving no positive-area overlap with
+            # its original position.  Recover only the nearest source within
+            # that same constructive movement bound; anything farther away is
+            # still rejected as lost ownership.
+            source_distances = [
+                float(polygon.distance(source_geometry))
+                for source_geometry in source_geometries
+            ]
+            nearest_distance = min(source_distances, default=math.inf)
+            ownership_distance_limit = (
+                float(grid_mm)
+                * (_MAX_CONTACT_TRANSLATION_GRID_UNITS + 1)
+                * math.sqrt(2.0)
+            )
+            distance_equality_tolerance = max(1e-12, float(grid_mm) * 1e-9)
+            if nearest_distance <= ownership_distance_limit:
+                owners = sorted(
+                    {
+                        source_index
+                        for source_index, distance in zip(
+                            source_indices,
+                            source_distances,
+                        )
+                        if distance
+                        <= nearest_distance + distance_equality_tolerance
+                    }
+                )
+        if not owners:
             raise ValueError("Vector canonical polygon lost its source ownership")
         prepared.append(
             PreparedVectorPolygon(
@@ -547,7 +792,10 @@ def prepare_vector_run_group(
         )
         if not snapped:
             raise ValueError("Vector physical-grid conversion removed a source group")
-        canonical = _node_group_once(snapped)
+        canonical = _resnap_noded_group(
+            _node_group_once(snapped),
+            grid_mm=grid_mm,
+        )
         canonical, separated = _separate_unrepresentable_contacts(
             canonical,
             grid_mm=grid_mm,
@@ -564,14 +812,34 @@ def prepare_vector_run_group(
         )
         simplified_group_count += int(simplified)
         restored_group_count += int(restored)
-        output.extend(
-            _prepared_polygons(
-                canonical,
-                grid_mm=grid_mm,
-                source_parts=physical_parts,
-                group_indices=group_indices,
-            )
+        prepared_group = _prepared_polygons(
+            canonical,
+            grid_mm=grid_mm,
+            source_parts=physical_parts,
+            group_indices=group_indices,
         )
+        if not prepared_group:
+            raise ValueError("Vector integer-grid conversion removed a source group")
+        prepared_geometries = [
+            polygon.to_geometry(grid_mm) for polygon in prepared_group
+        ]
+        if any(not geometry.is_valid for geometry in prepared_geometries):
+            raise ValueError("Vector integer-grid conversion produced invalid rings")
+        prepared_geometry: BaseGeometry = (
+            prepared_geometries[0]
+            if len(prepared_geometries) == 1
+            else MultiPolygon(prepared_geometries)
+        )
+        if (
+            not prepared_geometry.is_valid
+            or not _coverage_is_complete(
+                source_area,
+                float(prepared_geometry.area),
+                effective_policy,
+            )
+        ):
+            raise ValueError("Vector integer-grid conversion lost printable coverage")
+        output.extend(prepared_group)
 
     if not output:
         raise ValueError("Vector canonical preparation produced no polygons")
@@ -588,6 +856,8 @@ def prepare_vector_run_group(
         if len(output) == 1
         else MultiPolygon([polygon.to_geometry(grid_mm) for polygon in output])
     )
+    if not output_geometry.is_valid:
+        raise ValueError("Vector canonical preparation produced invalid aggregate geometry")
     output_coordinate_count = sum(
         len(polygon.exterior_units)
         + sum(len(hole) for hole in polygon.hole_units)
@@ -615,12 +885,6 @@ def prepare_vector_run_group(
         restored_group_count=restored_group_count,
         separated_contact_group_count=separated_contact_group_count,
     )
-    if not _coverage_is_complete(
-        source_area_mm2,
-        stats.output_area_mm2,
-        effective_policy,
-    ):
-        raise ValueError("Vector canonical preparation lost aggregate printable coverage")
     return PreparedVectorRunGroup(
         polygons=tuple(output),
         grid_mm=grid_mm,

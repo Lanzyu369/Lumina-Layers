@@ -1,7 +1,7 @@
 # Unified Layered Meshing Engine Design
 
-**Date:** 2026-08-26  
-**Status:** Approved in conversation; pending written-spec review  
+**Date:** 2026-08-26
+**Status:** Approved in conversation; pending written-spec review
 **Target:** One pull request to `dev-refactor`, followed by direct gray-server testing
 
 ## Summary

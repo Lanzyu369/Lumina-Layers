@@ -26,6 +26,11 @@ import numpy as np
 from PIL import Image
 
 from api.structured_logging import get_logger
+from core.mesh_export_parts import (
+    MeshExportPartRange,
+    get_mesh_export_part_ranges,
+    mesh_export_parts_are_conditional,
+)
 from core.backing_infill import (
     get_viewing_surface_solid_z_ranges,
     normalize_backing_infill_density_percent,
@@ -200,15 +205,95 @@ class _MeshExportEntry:
         material_name: Shared material/slot name used for global filament tables.
             (用于全局耗材表的共享材料或槽位名)
         color_rgb: RGB tuple for the shared material. (共享材料的 RGB 颜色)
+        part_range: Optional lazy view into one independently closed mesh leaf.
+            (可选的独立闭合网格叶子延迟切片范围)
+        contact_repair_ranges: Canonical shell ranges used only for bounded
+            writer-domain contact separation. (仅用于有界写出域接触分离的规范
+            壳体范围)
+        require_topology_audit: Whether the exact float32 writer-domain
+            topology contract applies to this canonical mesh. (是否要求规范网格
+            通过精确的 float32 写出域拓扑检查)
     """
 
     mesh: object
     object_name: str
     material_name: str
     color_rgb: tuple[int, int, int]
+    part_range: MeshExportPartRange | None = None
+    contact_repair_ranges: tuple[MeshExportPartRange, ...] = ()
+    require_topology_audit: bool = True
 
 
-def _materialize_n3mf_mesh_view_arrays(mesh: object) -> tuple[np.ndarray, np.ndarray]:
+def _expand_mesh_export_entries(
+    *,
+    mesh: object,
+    object_name: str,
+    material_name: str,
+    color_rgb: tuple[int, int, int],
+) -> list[_MeshExportEntry]:
+    """Expose independently closed leaves without copying parent vertices.
+
+    将合并网格中的独立闭合分片展开为 3MF 叶子对象，同时复用父网格顶点。
+    """
+
+    part_ranges = get_mesh_export_part_ranges(mesh)
+    if not part_ranges:
+        return [
+            _MeshExportEntry(
+                mesh=mesh,
+                object_name=object_name,
+                material_name=material_name,
+                color_rgb=color_rgb,
+                require_topology_audit=True,
+            )
+        ]
+
+    if mesh_export_parts_are_conditional(mesh):
+        return [
+            _MeshExportEntry(
+                mesh=mesh,
+                object_name=object_name,
+                material_name=material_name,
+                color_rgb=color_rgb,
+                contact_repair_ranges=part_ranges,
+                require_topology_audit=False,
+            )
+        ]
+
+    source_faces = np.asarray(getattr(mesh, "faces", None))
+    expanded: list[_MeshExportEntry] = []
+    for index, part in enumerate(part_ranges, start=1):
+        source_part_faces = source_faces[part.face_start : part.face_stop]
+        if (
+            np.any(source_part_faces < part.vertex_start)
+            or np.any(source_part_faces >= part.vertex_stop)
+        ):
+            raise ValueError("3MF mesh part references vertices outside its range")
+        leaf_name = (
+            object_name
+            if len(part_ranges) == 1
+            else f"{object_name}__part_{index}"
+        )
+        expanded.append(
+            _MeshExportEntry(
+                mesh=mesh,
+                object_name=leaf_name,
+                material_name=material_name,
+                color_rgb=color_rgb,
+                part_range=part,
+                require_topology_audit=True,
+            )
+        )
+    return expanded
+
+
+def _materialize_n3mf_mesh_view_arrays(
+    mesh: object,
+    *,
+    part_range: MeshExportPartRange | None = None,
+    contact_repair_ranges: tuple[MeshExportPartRange, ...] = (),
+    require_topology_audit: bool = True,
+) -> tuple[np.ndarray, np.ndarray]:
     """Materialize and validate the exact arrays consumed by the 3MF writer.
     只生成一次并校验 3MF 写入器实际消费的数组。
     """
@@ -231,13 +316,62 @@ def _materialize_n3mf_mesh_view_arrays(mesh: object) -> tuple[np.ndarray, np.nda
     if len(source_vertices) > np.iinfo(np.uint32).max:
         raise ValueError("3MF mesh exceeds uint32 vertex indices")
 
-    from core.vector_mesh_topology import mesh_is_float32_safe
+    export_vertices = source_vertices
+    export_faces = source_faces
+    audit_mesh = mesh
+    if part_range is not None and contact_repair_ranges:
+        raise ValueError("3MF mesh cannot combine part slicing and contact repair")
+    if part_range is not None:
+        if (
+            part_range.vertex_start < 0
+            or part_range.face_start < 0
+            or part_range.vertex_stop > len(source_vertices)
+            or part_range.face_stop > len(source_faces)
+            or part_range.vertex_stop <= part_range.vertex_start
+            or part_range.face_stop <= part_range.face_start
+        ):
+            raise ValueError("3MF mesh part range is out of bounds")
+        export_vertices = source_vertices[
+            part_range.vertex_start : part_range.vertex_stop
+        ]
+        source_part_faces = source_faces[
+            part_range.face_start : part_range.face_stop
+        ]
+        if (
+            np.any(source_part_faces < part_range.vertex_start)
+            or np.any(source_part_faces >= part_range.vertex_stop)
+        ):
+            raise ValueError("3MF mesh part references vertices outside its range")
+        export_faces = np.empty(source_part_faces.shape, dtype=np.int64)
+        np.subtract(
+            source_part_faces,
+            part_range.vertex_start,
+            out=export_faces,
+            casting="unsafe",
+        )
+        audit_mesh = _get_trimesh().Trimesh(
+            vertices=export_vertices,
+            faces=export_faces,
+            process=False,
+        )
+    elif contact_repair_ranges:
+        from core.mesh_writer_domain import (
+            prepare_indexed_shells_for_float32_export,
+        )
 
-    if not mesh_is_float32_safe(mesh, xy_scale=1.0):
-        raise ValueError("3MF mesh is unsafe in float32 writer coordinates")
+        export_vertices, export_faces = prepare_indexed_shells_for_float32_export(
+            mesh,
+            contact_repair_ranges,
+        )
 
-    vertices = np.ascontiguousarray(source_vertices, dtype=np.float32)
-    faces = np.ascontiguousarray(source_faces, dtype=np.uint32)
+    if require_topology_audit:
+        from core.vector_mesh_topology import mesh_is_float32_safe
+
+        if not mesh_is_float32_safe(audit_mesh, xy_scale=1.0):
+            raise ValueError("3MF mesh is unsafe in float32 writer coordinates")
+
+    vertices = np.ascontiguousarray(export_vertices, dtype=np.float32)
+    faces = np.ascontiguousarray(export_faces, dtype=np.uint32)
     for start in range(0, len(faces), 65_536):
         triangles = vertices[faces[start : start + 65_536]]
         cross = np.cross(
@@ -262,7 +396,12 @@ def _queue_n3mf_mesh_object(
 ) -> int:
     """Queue one mesh through zero-copy arrays when the binding supports it."""
 
-    vertices, faces = _materialize_n3mf_mesh_view_arrays(entry.mesh)
+    vertices, faces = _materialize_n3mf_mesh_view_arrays(
+        entry.mesh,
+        part_range=entry.part_range,
+        contact_repair_ranges=entry.contact_repair_ranges,
+        require_topology_audit=entry.require_topology_audit,
+    )
     add_zero_copy = getattr(builder, "add_mesh_object_zero_copy", None)
     if callable(add_zero_copy):
         object_id = add_zero_copy(
@@ -2006,8 +2145,8 @@ class BambuStudio3MFWriter:
 
         metadata = getattr(mesh, "metadata", {}) or {}
         material_name = str(metadata.get("bambu_material_name") or name)
-        self.objects.append(
-            _MeshExportEntry(
+        self.objects.extend(
+            _expand_mesh_export_entries(
                 mesh=mesh,
                 object_name=name,
                 material_name=material_name,

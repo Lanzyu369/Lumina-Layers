@@ -14,6 +14,11 @@ import trimesh
 
 import core.layered_meshing as layered_meshing
 from core.layered_meshing import build_labeled_surface_mesh
+from core.mesh_export_parts import (
+    get_mesh_export_part_ranges,
+    mesh_export_parts_are_conditional,
+)
+from core.vector_mesh_topology import mesh_is_float32_safe
 
 
 def _edge_incidence(mesh: trimesh.Trimesh) -> np.ndarray:
@@ -152,6 +157,21 @@ def test_edge_or_point_touching_voxels_keep_independent_index_domains(
 
     vertices = np.asarray(mesh.vertices)
     assert len(vertices) > len(np.unique(vertices, axis=0))
+    ranges = get_mesh_export_part_ranges(mesh)
+    assert len(ranges) == 2
+    assert mesh_export_parts_are_conditional(mesh)
+    for part in ranges:
+        part_vertices = vertices[part.vertex_start : part.vertex_stop]
+        part_faces = (
+            np.asarray(mesh.faces[part.face_start : part.face_stop], dtype=np.int64)
+            - part.vertex_start
+        )
+        leaf = trimesh.Trimesh(
+            vertices=part_vertices,
+            faces=part_faces,
+            process=False,
+        )
+        assert mesh_is_float32_safe(leaf)
 
     stats = mesh.metadata["layered_mesh_stats"]
     if occupied[0][0] == occupied[1][0]:

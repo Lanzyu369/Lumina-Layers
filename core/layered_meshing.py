@@ -16,6 +16,8 @@ import numpy as np
 import trimesh
 from scipy import ndimage, sparse
 
+from core.mesh_export_parts import MeshExportPartRange, set_mesh_export_part_ranges
+
 
 _CUBOID_FACE_TEMPLATE = np.asarray(
     [
@@ -1529,6 +1531,8 @@ def build_labeled_surface_mesh(
     processed_component_count = 0
     component_chunk_count = 0
     vertex_offset = 0
+    face_offset = 0
+    export_part_ranges: list[MeshExportPartRange] = []
     component_bounds = ndimage.find_objects(component_labels)
     component_origins, component_ends = _component_bound_arrays(component_bounds)
     component_sizes = np.bincount(
@@ -1553,7 +1557,29 @@ def build_labeled_surface_mesh(
             raise ValueError("Layered surface mesh exceeds uint32 lattice indices")
         vertex_chunks.append(cuboid_vertices)
         face_chunks.append(cuboid_faces + np.uint32(vertex_offset))
+        cuboid_count = len(cuboid_indices)
+        if (
+            len(cuboid_vertices) != cuboid_count * 8
+            or len(cuboid_faces) != cuboid_count * len(_CUBOID_FACE_TEMPLATE)
+        ):
+            raise ValueError("Layered cuboid component ranges are inconsistent")
+        for component_index in range(cuboid_count):
+            export_part_ranges.append(
+                MeshExportPartRange(
+                    vertex_start=vertex_offset + component_index * 8,
+                    vertex_stop=vertex_offset + (component_index + 1) * 8,
+                    face_start=(
+                        face_offset
+                        + component_index * len(_CUBOID_FACE_TEMPLATE)
+                    ),
+                    face_stop=(
+                        face_offset
+                        + (component_index + 1) * len(_CUBOID_FACE_TEMPLATE)
+                    ),
+                )
+            )
         vertex_offset += len(cuboid_vertices)
+        face_offset += len(cuboid_faces)
 
         cuboid_dimensions = component_dimensions[cuboid_indices]
         x_size, y_size, z_size = cuboid_dimensions.T
@@ -1568,7 +1594,6 @@ def build_labeled_surface_mesh(
             )
         )
         cuboid_voxel_count = int(component_sizes[cuboid_indices].sum())
-        cuboid_count = len(cuboid_indices)
         merged_patch_count += cuboid_count * 6
         peak_component_patch_count = max(peak_component_patch_count, 6)
         component_voxel_total += cuboid_voxel_count
@@ -1682,7 +1707,28 @@ def build_labeled_surface_mesh(
             raise ValueError("Layered surface mesh exceeds uint32 lattice indices")
         vertex_chunks.append(group_vertices)
         face_chunks.append(group_faces + np.uint32(vertex_offset))
+        vertices_per_component = len(template_vertices)
+        faces_per_component = len(template_faces)
+        if (
+            len(group_vertices) != group_count * vertices_per_component
+            or len(group_faces) != group_count * faces_per_component
+        ):
+            raise ValueError("Layered template component ranges are inconsistent")
+        for group_index in range(group_count):
+            export_part_ranges.append(
+                MeshExportPartRange(
+                    vertex_start=(
+                        vertex_offset + group_index * vertices_per_component
+                    ),
+                    vertex_stop=(
+                        vertex_offset + (group_index + 1) * vertices_per_component
+                    ),
+                    face_start=face_offset + group_index * faces_per_component,
+                    face_stop=face_offset + (group_index + 1) * faces_per_component,
+                )
+            )
         vertex_offset += len(group_vertices)
+        face_offset += len(group_faces)
         exposed_count += template_exposed_count * group_count
         merged_patch_count += template_patch_count * group_count
         peak_component_patch_count = max(
@@ -1739,7 +1785,16 @@ def build_labeled_surface_mesh(
             raise ValueError("Layered surface mesh exceeds uint32 lattice indices")
         vertex_chunks.append(component_vertices)
         face_chunks.append(component_faces + np.uint32(vertex_offset))
+        export_part_ranges.append(
+            MeshExportPartRange(
+                vertex_start=vertex_offset,
+                vertex_stop=vertex_offset + len(component_vertices),
+                face_start=face_offset,
+                face_stop=face_offset + len(component_faces),
+            )
+        )
         vertex_offset += len(component_vertices)
+        face_offset += len(component_faces)
         exposed_count += component_exposed
         merged_patch_count += component_patch_count
         peak_component_patch_count = max(
@@ -1814,6 +1869,11 @@ def build_labeled_surface_mesh(
     )
     mesh.metadata["layered_mesh_stats"] = asdict(stats)
     mesh.metadata["integer_topology_scale"] = 2
+    set_mesh_export_part_ranges(
+        mesh,
+        export_part_ranges,
+        only_when_combined_unsafe=True,
+    )
 
     return mesh
 

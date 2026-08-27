@@ -22,6 +22,7 @@ from api.workers.converter_workers import (
     LargeFormatCachedAnalysisError,
     worker_generate_large_format_svg_native,
 )
+from core.mesh_export_parts import get_mesh_export_part_ranges
 from core.vector_engine import (
     VectorAnalysis,
     VectorProcessor as _RealVectorProcessor,
@@ -204,6 +205,15 @@ def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
 
     result = None
     from core import vector_engine as vector_engine_module
+    from utils import bambu_3mf_writer as bambu_writer_module
+
+    captured_ranges = []
+    real_export = bambu_writer_module.export_scene_with_bambu_metadata
+
+    def _capture_export(**kwargs):
+        merged_mesh = kwargs["scene"].geometry["Red"]
+        captured_ranges.append(get_mesh_export_part_ranges(merged_mesh))
+        return real_export(**kwargs)
 
     with (
         patch(
@@ -221,6 +231,10 @@ def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
             "api.workers.converter_workers._rasterize_tile_for_cover",
             return_value=None,
         ),
+        patch(
+            "utils.bambu_3mf_writer.export_scene_with_bambu_metadata",
+            side_effect=_capture_export,
+        ),
     ):
         result = worker_generate_large_format_svg_native(
             "image.svg",
@@ -229,6 +243,9 @@ def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
         )
 
     bounded_concat.assert_called_once()
+    assert bounded_concat.call_args.kwargs["preserve_export_parts"] is True
+    assert len(captured_ranges) == 1
+    assert len(captured_ranges[0]) == 2
     assert any(
         call.kwargs.get("stage") == "large_format_vector_board_merge"
         for call in memory_guard.call_args_list

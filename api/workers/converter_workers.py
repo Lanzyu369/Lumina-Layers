@@ -2327,7 +2327,8 @@ def worker_generate_large_format_svg_native(
                         shape_count=2,
                     )
                     merged = _concatenate_meshes_fast(
-                        [target_geom, board_geom]
+                        [target_geom, board_geom],
+                        preserve_export_parts=True,
                     )
                     merged.visual.face_colors = target_geom.visual.face_colors
                     merged.metadata["name"] = target_slot

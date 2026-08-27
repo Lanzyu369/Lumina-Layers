@@ -24,6 +24,7 @@ from shapely.ops import unary_union
 
 import core.vector_engine as vector_engine
 from core.errors import VectorTopologyError
+from core.mesh_export_parts import get_mesh_export_part_ranges
 from core.vector_engine import (
     VectorAnalysis,
     VectorProcessor,
@@ -206,6 +207,54 @@ def test_fast_concat_preallocates_without_vstack_intermediates(
         float(left.volume + right.volume),
         rel=1e-6,
     )
+
+
+def test_fast_concat_can_preserve_independent_3mf_part_ranges() -> None:
+    """Touching closed runs stay separate at the final 3MF boundary."""
+
+    lower = trimesh.creation.box(extents=(2.0, 2.0, 0.16))
+    lower.apply_translation((0.0, 0.0, 0.08))
+    upper = trimesh.creation.box(extents=(2.0, 2.0, 0.24))
+    upper.apply_translation((0.0, 0.0, 0.28))
+
+    ordinary = _concatenate_meshes_fast([lower, upper])
+    exportable = _concatenate_meshes_fast(
+        [lower, upper],
+        preserve_export_parts=True,
+    )
+
+    assert not mesh_is_float32_safe(ordinary, xy_scale=1.0)
+    assert get_mesh_export_part_ranges(ordinary) == ()
+    ranges = get_mesh_export_part_ranges(exportable)
+    assert len(ranges) == 2
+    assert ranges[0].vertex_start == 0
+    assert ranges[0].vertex_stop == len(lower.vertices)
+    assert ranges[0].face_start == 0
+    assert ranges[0].face_stop == len(lower.faces)
+    assert ranges[1].vertex_start == len(lower.vertices)
+    assert ranges[1].vertex_stop == len(lower.vertices) + len(upper.vertices)
+    assert ranges[1].face_start == len(lower.faces)
+    assert ranges[1].face_stop == len(lower.faces) + len(upper.faces)
+
+
+def test_fast_concat_preserves_nested_ranges_through_single_item_copy() -> None:
+    """A one-item assembly must not erase already-established leaf ranges."""
+
+    lower = trimesh.creation.box(extents=(2.0, 2.0, 0.16))
+    lower.apply_translation((0.0, 0.0, 0.08))
+    upper = trimesh.creation.box(extents=(2.0, 2.0, 0.24))
+    upper.apply_translation((0.0, 0.0, 0.28))
+    nested = _concatenate_meshes_fast(
+        [lower, upper],
+        preserve_export_parts=True,
+    )
+
+    copied = _concatenate_meshes_fast(
+        [nested],
+        preserve_export_parts=True,
+    )
+
+    assert get_mesh_export_part_ranges(copied) == get_mesh_export_part_ranges(nested)
 
 
 def test_runtime_headroom_rejects_before_next_large_allocation(
@@ -2096,9 +2145,9 @@ class TestBuildMeshShellTopology:
 
         real_concatenate = vector_engine._concatenate_meshes_fast
 
-        def concatenate_after_cache_release(meshes):
+        def concatenate_after_cache_release(meshes, **kwargs):
             assert cache.resident_bytes == 0
-            return real_concatenate(meshes)
+            return real_concatenate(meshes, **kwargs)
 
         monkeypatch.setattr(
             vector_engine,
@@ -2165,27 +2214,26 @@ class TestBuildMeshShellTopology:
             scale=1.0,
         )[0]
         backing_ref: list[weakref.ReferenceType[trimesh.Trimesh]] = []
-        real_extrude = VectorProcessor._extrude_geometry
+        real_extrude = VectorProcessor._extrude_canonical_geometry_group
         real_concat = vector_engine._concatenate_meshes_fast
 
         def fake_run_length(*_args, **_kwargs):
             return {"Red": {"meshes": [red_source], "mat_id": 1}}
 
         def track_backing(geometry, *args, **kwargs):
-            meshes = real_extrude(geometry, *args, **kwargs)
-            if meshes:
-                backing_ref.append(weakref.ref(meshes[0]))
-            return meshes
+            mesh = real_extrude(geometry, *args, **kwargs)
+            backing_ref.append(weakref.ref(mesh))
+            return mesh
 
         concat_calls = 0
 
-        def verify_release_between_slots(meshes):
+        def verify_release_between_slots(meshes, **kwargs):
             nonlocal concat_calls
             concat_calls += 1
             if concat_calls == 2:
                 gc.collect()
                 assert backing_ref and backing_ref[0]() is None
-            return real_concat(meshes)
+            return real_concat(meshes, **kwargs)
 
         monkeypatch.setattr(
             VectorProcessor,
@@ -2194,7 +2242,7 @@ class TestBuildMeshShellTopology:
         )
         monkeypatch.setattr(
             VectorProcessor,
-            "_extrude_geometry",
+            "_extrude_canonical_geometry_group",
             staticmethod(track_backing),
         )
         monkeypatch.setattr(
@@ -2363,6 +2411,63 @@ def test_run_length_extrude_uses_canonical_2d_once_without_legacy_repair_ladders
     assert len(meshes) == 1
     assert meshes[0].is_watertight
     assert abs(float(meshes[0].volume)) == pytest.approx(40.0, abs=1e-8)
+
+
+def test_double_sided_top_groups_shapes_by_logical_material_run() -> None:
+    """Top-side part count must depend on layer runs, not SVG shape count."""
+
+    matched_shapes = [
+        {
+            "geometry": box(float(index * 2), 0.0, float(index * 2 + 1), 1.0),
+            "recipe": [0, 1],
+        }
+        for index in range(100)
+    ]
+    meshes_by_slot: dict[str, dict[str, object]] = {}
+
+    VectorProcessor._add_double_sided_layers(
+        matched_shapes=matched_shapes,
+        num_layers=2,
+        layer_h=0.08,
+        num_channels=2,
+        slot_names=["White", "Red"],
+        scale_factor=1.0,
+        top_z_start=1.6,
+        meshes_by_slot=meshes_by_slot,
+        extrude_cache={},
+    )
+
+    assert len(meshes_by_slot["White"]["meshes"]) == 1
+    assert len(meshes_by_slot["Red"]["meshes"]) == 1
+    assert all(
+        mesh.is_watertight
+        for data in meshes_by_slot.values()
+        for mesh in data["meshes"]
+    )
+
+
+def test_auxiliary_multi_island_group_becomes_one_safe_mesh_leaf() -> None:
+    """Backing/coating islands must not create one Production part per island."""
+
+    geometry = MultiPolygon(
+        [
+            box(float(index * 2), 0.0, float(index * 2 + 1), 1.0)
+            for index in range(100)
+        ]
+    )
+
+    mesh = VectorProcessor._extrude_canonical_geometry_group(
+        geometry,
+        height=0.08,
+        z_offset=-0.08,
+        scale=1.0,
+        stage="coating",
+    )
+
+    assert mesh.is_watertight
+    assert mesh.is_winding_consistent
+    assert np.all(_edge_incidence_counts(mesh) == 2)
+    assert abs(float(mesh.volume)) == pytest.approx(8.0, abs=1e-8)
 
 
 def test_coverage_guard_skips_merged_3d_when_2d_union_already_lost_area(

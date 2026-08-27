@@ -23,6 +23,10 @@ from shapely.affinity import translate
 
 from config import PrinterConfig
 from core.geometry_utils import create_keychain_loop
+from core.mesh_export_parts import (
+    copy_mesh_export_part_ranges,
+    set_concatenated_mesh_export_part_ranges,
+)
 from core.pipeline.preview_color_utils import (
     build_material_preview_warning_extra,
     resolve_material_preview,
@@ -679,6 +683,10 @@ def run(ctx: dict) -> dict:
                 coating_mesh.apply_transform(coat_transform)
                 if is_double_sided:
                     top_coating_mesh = coating_mesh.copy()
+                    copy_mesh_export_part_ranges(
+                        coating_mesh,
+                        top_coating_mesh,
+                    )
                     top_coating_mesh.apply_translation(
                         [
                             0.0,
@@ -686,8 +694,11 @@ def run(ctx: dict) -> dict:
                             (total_layers + coating_layers) * PrinterConfig.LAYER_HEIGHT,
                         ]
                     )
-                    coating_mesh = trimesh.util.concatenate(
-                        [coating_mesh, top_coating_mesh]
+                    coating_sources = [coating_mesh, top_coating_mesh]
+                    coating_mesh = trimesh.util.concatenate(coating_sources)
+                    set_concatenated_mesh_export_part_ranges(
+                        coating_mesh,
+                        coating_sources,
                     )
                 coating_mesh.visual.face_colors = [200, 200, 200, 80]  # Semi-transparent grey
                 coating_name = "Coating"

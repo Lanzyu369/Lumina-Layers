@@ -85,6 +85,13 @@ from api.structured_logging import get_logger
 from config import PrinterConfig, ColorSystem, VectorConfig
 from core import geos_buffer_fast
 from core.errors import VectorMeshMemoryBudgetError, VectorTopologyError
+from core.mesh_export_parts import (
+    MeshExportPartRange,
+    copy_mesh_export_part_ranges,
+    get_mesh_export_part_ranges,
+    mesh_export_parts_are_conditional,
+    set_mesh_export_part_ranges,
+)
 from core.task_parallelism import (
     resolve_task_parallelism_plan,
     task_parallelism_worker_scope,
@@ -1849,8 +1856,8 @@ def _cap_planar_area_mm2(vertices, faces) -> float | None:
     return area if math.isfinite(area) and area >= 0.0 else None
 
 
-def _concatenate_meshes_fast(meshes):
-    """Concatenate Trimesh vertices/faces for build_mesh's per-slot merge."""
+def _concatenate_meshes_fast(meshes, *, preserve_export_parts: bool = False):
+    """Concatenate meshes, optionally retaining closed 3MF leaf boundaries."""
 
     items = [mesh for mesh in meshes if mesh is not None]
     if not items:
@@ -1871,8 +1878,34 @@ def _concatenate_meshes_fast(meshes):
             vertices, faces = _vertices_faces(items[0])
             if vertices.size == 0 or faces.size == 0:
                 return trimesh.Trimesh(process=False)
-            return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
-        return items[0].copy()
+            combined = trimesh.Trimesh(
+                vertices=vertices,
+                faces=faces,
+                process=False,
+            )
+            nested_ranges: tuple[MeshExportPartRange, ...] = ()
+        else:
+            combined = items[0].copy()
+            nested_ranges = get_mesh_export_part_ranges(items[0])
+        if preserve_export_parts and len(combined.vertices) and len(combined.faces):
+            set_mesh_export_part_ranges(
+                combined,
+                nested_ranges
+                or (
+                    MeshExportPartRange(
+                        vertex_start=0,
+                        vertex_stop=len(combined.vertices),
+                        face_start=0,
+                        face_stop=len(combined.faces),
+                    ),
+                ),
+                only_when_combined_unsafe=(
+                    not isinstance(items[0], tuple)
+                    and bool(nested_ranges)
+                    and mesh_export_parts_are_conditional(items[0])
+                ),
+            )
+        return combined
 
     array_parts = []
     total_vertices = 0
@@ -1881,7 +1914,7 @@ def _concatenate_meshes_fast(meshes):
         vertices, faces = _vertices_faces(item)
         if vertices.size == 0 or faces.size == 0:
             continue
-        array_parts.append((vertices, faces))
+        array_parts.append((item, vertices, faces))
         total_vertices += len(vertices)
         total_faces += len(faces)
 
@@ -1894,7 +1927,8 @@ def _concatenate_meshes_fast(meshes):
     faces = np.empty((total_faces, 3), dtype=np.int64)
     vertex_cursor = 0
     face_cursor = 0
-    for source_vertices, source_faces in array_parts:
+    export_ranges: list[MeshExportPartRange] = []
+    for source_item, source_vertices, source_faces in array_parts:
         next_vertex = vertex_cursor + len(source_vertices)
         next_face = face_cursor + len(source_faces)
         vertices[vertex_cursor:next_vertex] = source_vertices
@@ -1904,9 +1938,37 @@ def _concatenate_meshes_fast(meshes):
             out=faces[face_cursor:next_face],
             casting="unsafe",
         )
+        if preserve_export_parts:
+            nested_ranges = (
+                get_mesh_export_part_ranges(source_item)
+                if not isinstance(source_item, tuple)
+                else ()
+            )
+            if nested_ranges:
+                export_ranges.extend(
+                    MeshExportPartRange(
+                        vertex_start=vertex_cursor + part.vertex_start,
+                        vertex_stop=vertex_cursor + part.vertex_stop,
+                        face_start=face_cursor + part.face_start,
+                        face_stop=face_cursor + part.face_stop,
+                    )
+                    for part in nested_ranges
+                )
+            else:
+                export_ranges.append(
+                    MeshExportPartRange(
+                        vertex_start=vertex_cursor,
+                        vertex_stop=next_vertex,
+                        face_start=face_cursor,
+                        face_stop=next_face,
+                    )
+                )
         vertex_cursor = next_vertex
         face_cursor = next_face
-    return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+    combined = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+    if preserve_export_parts:
+        set_mesh_export_part_ranges(combined, export_ranges)
+    return combined
 
 
 def _build_atomic_prism_mesh(
@@ -6620,13 +6682,13 @@ class VectorProcessor:
             )
             backing_meshes = []
             for slab in backing_slabs:
-                backing_meshes.extend(
-                    self._extrude_geometry(
+                backing_meshes.append(
+                    self._extrude_canonical_geometry_group(
                         slab["geometry"],
                         height=slab["height"],
                         z_offset=slab["z_offset"] + gap_offset,
                         scale=scale_factor,
-                        extrude_cache=extrude_cache,
+                        stage="backing",
                     )
                 )
             if backing_meshes:
@@ -6684,24 +6746,23 @@ class VectorProcessor:
                 requested_coating_height = layer_h
             coating_layers = max(1, int(round(requested_coating_height / layer_h)))
             coating_height = coating_layers * layer_h
-            coating_meshes = self._extrude_geometry(
-                coating_sil,
-                height=coating_height,
-                z_offset=-coating_height,
-                scale=scale_factor,
-                extrude_cache=extrude_cache,
-            )
+            coating_meshes = [
+                self._extrude_canonical_geometry_group(
+                    coating_sil,
+                    height=coating_height,
+                    z_offset=-coating_height,
+                    scale=scale_factor,
+                    stage="coating",
+                )
+            ]
             if is_double_sided and not is_5color:
                 top_surface_z = (2 * num_layers + backing_layer_count) * layer_h
-                coating_meshes.extend(
-                    self._extrude_geometry(
-                        coating_sil,
-                        height=coating_height,
-                        z_offset=top_surface_z,
-                        scale=scale_factor,
-                        extrude_cache=extrude_cache,
-                    )
+                top_coating = coating_meshes[0].copy()
+                copy_mesh_export_part_ranges(coating_meshes[0], top_coating)
+                top_coating.apply_translation(
+                    (0.0, 0.0, top_surface_z + coating_height)
                 )
+                coating_meshes.append(top_coating)
             if coating_meshes:
                 coating_name = "Coating"
                 meshes_by_slot[coating_name] = {
@@ -6782,7 +6843,10 @@ class VectorProcessor:
                 ),
                 shape_count=len(mesh_list),
             )
-            combined = _concatenate_meshes_fast(mesh_list)
+            combined = _concatenate_meshes_fast(
+                mesh_list,
+                preserve_export_parts=True,
+            )
             if hasattr(mesh_list, "clear"):
                 mesh_list.clear()
             # Independent prisms must remain independently indexed closed
@@ -8112,6 +8176,71 @@ class VectorProcessor:
         return runs_by_channel
 
     @staticmethod
+    def _extrude_canonical_geometry_group(
+        geometry,
+        *,
+        height: float,
+        z_offset: float,
+        scale: float,
+        stage: str,
+    ) -> trimesh.Trimesh:
+        """Build one safe mesh leaf for an auxiliary polygonal group.
+
+        将同一逻辑底板或涂层组一次性规范化并生成单个安全网格叶子。
+        """
+
+        geometry_bytes = _geometry_cache_storage_bytes(geometry)
+        _enforce_vector_mesh_runtime_headroom(
+            stage=f"{stage}_geometry",
+            estimated_additional_bytes=max(
+                16 * 1024 * 1024,
+                geometry_bytes * 4,
+            ),
+            shape_count=1,
+            coordinate_count=geometry_bytes // 64,
+        )
+        try:
+            prepared = prepare_vector_run_group(
+                (geometry,),
+                scale_mm_per_svg_unit=float(scale),
+            )
+            allocation_estimate = estimate_indexed_prism_memory(
+                coordinate_count=int(prepared.stats.output_coordinate_count),
+                hole_count=int(prepared.stats.output_hole_count),
+                component_count=int(prepared.stats.output_component_count),
+            )
+            _enforce_vector_mesh_runtime_headroom(
+                stage=f"{stage}_canonical_geometry",
+                estimated_additional_bytes=(
+                    allocation_estimate.estimated_additional_bytes
+                ),
+                shape_count=1,
+                coordinate_count=int(prepared.stats.output_coordinate_count),
+            )
+            return extrude_prepared_vector_run_group(
+                prepared,
+                height_mm=float(height),
+                z_offset_mm=float(z_offset),
+            )
+        except VECTOR_FATAL_ERRORS:
+            raise
+        except VectorTopologyError:
+            raise
+        except VECTOR_HANDLED_ERRORS as exc:
+            raise VectorTopologyError(
+                "Vector auxiliary geometry could not be represented safely for export",
+                (
+                    {
+                        "attempt": "canonical_physical_grid",
+                        "geometry_type": str(stage),
+                        "source_geometry_count": 1,
+                        "rejected_reason": type(exc).__name__,
+                        "error_type": type(exc).__name__,
+                    },
+                ),
+            ) from exc
+
+    @staticmethod
     def _run_length_extrude(
         matched_shapes,
         num_layers,
@@ -8368,39 +8497,27 @@ class VectorProcessor:
         """Mirror colour layers above the backing for double-sided mode.
 
         Layer Z order is inverted so the viewing surface faces upward on
-        the top side.
+        the top side. Shapes sharing one material/layer run are canonicalized
+        together, keeping the final 3MF part count independent of SVG shape
+        count.
         """
-        for item in matched_shapes:
-            geom = item["geometry"]
-            recipe = item["recipe"]
-            if geom is None or geom.is_empty:
-                continue
-
-            layers_to_use = min(num_layers, len(recipe))
-
-            runs_by_channel = VectorProcessor._build_channel_runs(recipe, layers_to_use, num_channels)
-            for ch, runs in runs_by_channel.items():
-                if ch >= len(slot_names):
-                    continue
-
-                slot_name = slot_names[ch]
-                if slot_name not in meshes_by_slot:
-                    meshes_by_slot[slot_name] = {"meshes": [], "mat_id": ch}
-
-                for run_start, run_end in runs:
-                    inv_start = (num_layers - 1) - run_end
-                    inv_end = (num_layers - 1) - run_start
-
-                    z_bot = top_z_start + inv_start * layer_h
-                    height = (inv_end - inv_start + 1) * layer_h
-                    new_meshes = VectorProcessor._extrude_geometry(
-                        geom,
-                        height=height,
-                        z_offset=z_bot,
-                        scale=scale_factor,
-                        extrude_cache=extrude_cache,
-                    )
-                    meshes_by_slot[slot_name]["meshes"].extend(new_meshes)
+        top_meshes_by_slot = VectorProcessor._run_length_extrude(
+            matched_shapes=matched_shapes,
+            num_layers=num_layers,
+            layer_h=layer_h,
+            num_channels=num_channels,
+            slot_names=slot_names,
+            scale_factor=scale_factor,
+            extrude_cache=extrude_cache,
+            face_up=True,
+            optical_z_base=top_z_start,
+        )
+        for slot_name, data in top_meshes_by_slot.items():
+            target = meshes_by_slot.setdefault(
+                slot_name,
+                {"meshes": [], "mat_id": data["mat_id"]},
+            )
+            target["meshes"].extend(data["meshes"])
 
     # ── SVG parsing ──────────────────────────────────────────────────────
 

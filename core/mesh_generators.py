@@ -27,6 +27,10 @@ from core.layered_meshing import (
     build_labeled_surface_mesh,
     merge_boolean_rectangles,
 )
+from core.mesh_export_parts import (
+    copy_mesh_export_part_ranges,
+    set_concatenated_mesh_export_part_ranges,
+)
 from core.vector_engine import VectorProcessor
 from core.vector_mesh_topology import (
     VECTOR_COVERAGE_ABS_TOL_MM2,
@@ -101,7 +105,11 @@ def _merge_mesh_list(meshes):
     # Adjacent prisms intentionally keep separate vertex indices. Welding
     # their coincident coordinates without removing both internal walls first
     # creates edges referenced by more than two triangles.
-    return trimesh.util.concatenate(clean_meshes) if len(clean_meshes) > 1 else clean_meshes[0]
+    if len(clean_meshes) == 1:
+        return clean_meshes[0]
+    combined = trimesh.util.concatenate(clean_meshes)
+    set_concatenated_mesh_export_part_ranges(combined, clean_meshes)
+    return combined
 
 
 def _extrude_polygon_geometry(geometry, height, z_offset, extrude_cache=None):
@@ -165,10 +173,13 @@ def _extrude_polygon_geometry(geometry, height, z_offset, extrude_cache=None):
                     "refusing partial export"
                 )
             if extrude_cache is not None and cache_key is not None:
-                extrude_cache[cache_key] = base_mesh.copy()
+                cached_copy = base_mesh.copy()
+                copy_mesh_export_part_ranges(base_mesh, cached_copy)
+                extrude_cache[cache_key] = cached_copy
             cached_base = base_mesh
 
         mesh = cached_base.copy()
+        copy_mesh_export_part_ranges(cached_base, mesh)
         mesh.apply_scale([1.0, 1.0, float(height)])
         mesh.apply_translation([0.0, 0.0, float(z_offset)])
         meshes.append(mesh)

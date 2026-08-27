@@ -13,7 +13,16 @@ import numpy as np
 import pytest
 import trimesh
 from PIL import Image
+from scipy.optimize import linprog
+from scipy.spatial import ConvexHull
 
+from core.layered_meshing import build_labeled_surface_mesh
+from core.mesh_export_parts import (
+    MeshExportPartRange,
+    get_mesh_export_part_ranges,
+    set_mesh_export_part_ranges,
+)
+from core.vector_mesh_topology import mesh_is_float32_safe
 from utils import bambu_3mf_writer as writer_module
 from utils.bambu_3mf_writer import BambuStudio3MFWriter, load_printer_template
 
@@ -41,6 +50,26 @@ class _FakeBuilder:
 
     def add_custom_content_type(self, content_type: _FakeContentType) -> None:
         self.content_types.append(content_type)
+
+
+def _convex_hulls_have_positive_interior_overlap(
+    first_vertices: np.ndarray,
+    second_vertices: np.ndarray,
+) -> bool:
+    """Return whether two convex hulls share a positive-radius interior ball."""
+
+    hulls = (ConvexHull(first_vertices), ConvexHull(second_vertices))
+    halfspaces = np.vstack([hull.equations[:, :3] for hull in hulls])
+    offsets = np.concatenate([hull.equations[:, 3] for hull in hulls])
+    normal_lengths = np.linalg.norm(halfspaces, axis=1)
+    result = linprog(
+        np.asarray([0.0, 0.0, 0.0, -1.0]),
+        A_ub=np.column_stack((halfspaces, normal_lengths)),
+        b_ub=-offsets,
+        bounds=[(None, None), (None, None), (None, None), (0.0, None)],
+        method="highs",
+    )
+    return bool(result.success and result.x[3] > 1e-9)
 
 
 def test_mesh_queue_uses_read_only_float32_uint32_zero_copy_arrays() -> None:
@@ -142,6 +171,270 @@ def test_mesh_queue_keeps_owning_compatibility_for_old_neroued_builds() -> None:
     assert vertices.flags.writeable and faces.flags.writeable
     assert captured["object"] == ("White", "owning-mesh", 3, 0)
     assert retained == []
+
+
+def test_writer_expands_touching_runs_into_same_material_mesh_leaves() -> None:
+    """A slicer assembly keeps safe run topology without duplicating filaments."""
+
+    lower = trimesh.creation.box(extents=(2.0, 2.0, 0.16))
+    lower.apply_translation((0.0, 0.0, 0.08))
+    upper = trimesh.creation.box(extents=(2.0, 2.0, 0.24))
+    upper.apply_translation((0.0, 0.0, 0.28))
+    combined = trimesh.util.concatenate((lower, upper))
+    set_mesh_export_part_ranges(
+        combined,
+        (
+            MeshExportPartRange(
+                0,
+                len(lower.vertices),
+                0,
+                len(lower.faces),
+            ),
+            MeshExportPartRange(
+                len(lower.vertices),
+                len(lower.vertices) + len(upper.vertices),
+                len(lower.faces),
+                len(lower.faces) + len(upper.faces),
+            ),
+        ),
+    )
+
+    writer = BambuStudio3MFWriter(
+        "touching-runs.3mf",
+        settings={},
+        color_mode="4-Color",
+        printer_id="bambu-p2s",
+        slicer="BambuStudio",
+    )
+    writer.add_mesh(combined, "White", (255, 255, 255))
+
+    assert len(writer.objects) == 2
+    assert [entry.object_name for entry in writer.objects] == [
+        "White__part_1",
+        "White__part_2",
+    ]
+    assert [entry.material_name for entry in writer.objects] == ["White", "White"]
+    assert all(entry.mesh is combined for entry in writer.objects)
+    assert all(entry.part_range is not None for entry in writer.objects)
+    assert all(entry.require_topology_audit for entry in writer.objects)
+    for entry in writer.objects:
+        vertices, faces = writer_module._materialize_n3mf_mesh_view_arrays(
+            entry.mesh,
+            part_range=entry.part_range,
+            require_topology_audit=entry.require_topology_audit,
+        )
+        leaf = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+        assert mesh_is_float32_safe(leaf)
+    palette, material_indices = writer._build_material_palette()
+    assert palette == [("White", (255, 255, 255))]
+    assert material_indices == {"White": 0}
+
+    model_settings = ET.fromstring(
+        writer._build_model_settings_bytes([2, 3], 4, [0, 0])
+    )
+    assert [
+        _metadata_values(part)["extruder"]
+        for part in model_settings.findall("./object/part")
+    ] == ["1", "1"]
+
+
+def test_writer_keeps_safe_conditional_components_in_one_mesh_object() -> None:
+    labels = np.full((1, 1, 3), -1, dtype=np.int16)
+    labels[0, 0, [0, 2]] = 4
+    mesh = build_labeled_surface_mesh(
+        labels,
+        material_id=4,
+        height_px=1,
+    )
+
+    writer = BambuStudio3MFWriter(
+        "safe-conditional-components.3mf",
+        settings={},
+        color_mode="4-Color",
+        printer_id="bambu-p2s",
+        slicer="BambuStudio",
+    )
+    writer.add_mesh(mesh, "White", (255, 255, 255))
+
+    assert len(writer.objects) == 1
+    assert writer.objects[0].part_range is None
+    assert len(writer.objects[0].contact_repair_ranges) == 2
+    vertices, _faces = writer_module._materialize_n3mf_mesh_view_arrays(
+        writer.objects[0].mesh,
+        contact_repair_ranges=writer.objects[0].contact_repair_ranges,
+        require_topology_audit=writer.objects[0].require_topology_audit,
+    )
+    np.testing.assert_array_equal(
+        vertices,
+        np.asarray(mesh.vertices, dtype=np.float32),
+    )
+
+
+def test_writer_repairs_unsafe_conditional_components_in_one_mesh_object() -> None:
+    labels = np.full((1, 2, 2), -1, dtype=np.int16)
+    labels[0, 0, 0] = 4
+    labels[0, 1, 1] = 4
+    mesh = build_labeled_surface_mesh(
+        labels,
+        material_id=4,
+        height_px=2,
+    )
+
+    writer = BambuStudio3MFWriter(
+        "unsafe-conditional-components.3mf",
+        settings={},
+        color_mode="4-Color",
+        printer_id="bambu-p2s",
+        slicer="BambuStudio",
+    )
+    writer.add_mesh(mesh, "White", (255, 255, 255))
+
+    assert len(writer.objects) == 1
+    entry = writer.objects[0]
+    assert entry.mesh is mesh
+    assert entry.part_range is None
+    assert len(entry.contact_repair_ranges) == 2
+
+    vertices, faces = writer_module._materialize_n3mf_mesh_view_arrays(
+        entry.mesh,
+        contact_repair_ranges=entry.contact_repair_ranges,
+        require_topology_audit=entry.require_topology_audit,
+    )
+    assert len(np.unique(vertices, axis=0)) == len(vertices)
+    assert len(faces) == len(mesh.faces)
+    assert np.max(
+        np.linalg.norm(
+            vertices.astype(np.float64)
+            - np.asarray(mesh.vertices, dtype=np.float32).astype(np.float64),
+            axis=1,
+        )
+    ) <= 0.0005
+    ranges = get_mesh_export_part_ranges(mesh)
+    first = vertices[ranges[0].vertex_start : ranges[0].vertex_stop]
+    second = vertices[ranges[1].vertex_start : ranges[1].vertex_stop]
+    assert not _convex_hulls_have_positive_interior_overlap(
+        first.astype(np.float64),
+        second.astype(np.float64),
+    )
+
+
+def test_writer_repairs_one_connected_shell_with_local_diagonal_contact() -> None:
+    labels = np.array(
+        [
+            [[4, -1], [4, 4]],
+            [[4, 4], [-1, -1]],
+        ],
+        dtype=np.int16,
+    )
+    mesh = build_labeled_surface_mesh(labels, material_id=4, height_px=2)
+    assert mesh is not None
+
+    writer = BambuStudio3MFWriter(
+        "connected-local-contact.3mf",
+        settings={},
+        color_mode="4-Color",
+        printer_id="bambu-p2s",
+        slicer="BambuStudio",
+    )
+    writer.add_mesh(mesh, "White", (255, 255, 255))
+
+    assert len(writer.objects) == 1
+    entry = writer.objects[0]
+    assert len(entry.contact_repair_ranges) == 1
+    vertices, faces = writer_module._materialize_n3mf_mesh_view_arrays(
+        entry.mesh,
+        contact_repair_ranges=entry.contact_repair_ranges,
+        require_topology_audit=entry.require_topology_audit,
+    )
+    repaired = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+    assert mesh_is_float32_safe(repaired)
+
+
+def test_writer_preserves_a_closed_cavity_without_contact_perturbation() -> None:
+    labels = np.full((3, 3, 3), 4, dtype=np.int16)
+    labels[1, 1, 1] = -1
+    mesh = build_labeled_surface_mesh(labels, material_id=4, height_px=3)
+    assert mesh is not None
+
+    writer = BambuStudio3MFWriter(
+        "closed-cavity.3mf",
+        settings={},
+        color_mode="4-Color",
+        printer_id="bambu-p2s",
+        slicer="BambuStudio",
+    )
+    writer.add_mesh(mesh, "White", (255, 255, 255))
+
+    entry = writer.objects[0]
+    assert len(entry.contact_repair_ranges) == 1
+    vertices, faces = writer_module._materialize_n3mf_mesh_view_arrays(
+        entry.mesh,
+        contact_repair_ranges=entry.contact_repair_ranges,
+        require_topology_audit=entry.require_topology_audit,
+    )
+    np.testing.assert_array_equal(
+        vertices,
+        np.asarray(mesh.vertices, dtype=np.float32),
+    )
+    assert len(faces) == len(mesh.faces)
+
+
+def test_legacy_noncanonical_mesh_keeps_pre_zero_copy_writer_compatibility() -> None:
+    """A valid untagged producer keeps the strict pre-0.4 writer contract."""
+
+    legacy_mesh = trimesh.creation.box(extents=(1.0, 1.0, 0.08))
+    writer = BambuStudio3MFWriter(
+        "legacy-closed-mesh.3mf",
+        settings={},
+        color_mode="4-Color",
+        printer_id="bambu-p2s",
+        slicer="BambuStudio",
+    )
+
+    writer.add_mesh(legacy_mesh, "White", (255, 255, 255))
+    entry = writer.objects[0]
+    vertices, faces = writer_module._materialize_n3mf_mesh_view_arrays(
+        entry.mesh,
+        part_range=entry.part_range,
+        require_topology_audit=entry.require_topology_audit,
+    )
+
+    assert entry.require_topology_audit is True
+    assert vertices.dtype == np.float32
+    assert faces.dtype == np.uint32
+
+
+def test_writer_rejects_untagged_open_mesh() -> None:
+    """Missing migration metadata must never become an open-mesh bypass."""
+
+    open_mesh = trimesh.Trimesh(
+        vertices=np.asarray(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+            ]
+        ),
+        faces=np.asarray([[0, 1, 2]]),
+        process=False,
+    )
+    writer = BambuStudio3MFWriter(
+        "legacy-open-mesh.3mf",
+        settings={},
+        color_mode="4-Color",
+        printer_id="bambu-p2s",
+        slicer="BambuStudio",
+    )
+
+    writer.add_mesh(open_mesh, "White", (255, 255, 255))
+    entry = writer.objects[0]
+    assert entry.require_topology_audit is True
+    with pytest.raises(ValueError, match="unsafe in float32"):
+        writer_module._materialize_n3mf_mesh_view_arrays(
+            entry.mesh,
+            part_range=entry.part_range,
+            require_topology_audit=entry.require_topology_audit,
+        )
 
 
 def test_exported_xml_round_trips_validated_float32_vertices(tmp_path: Path) -> None:
