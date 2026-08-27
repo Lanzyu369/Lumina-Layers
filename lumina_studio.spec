@@ -7,17 +7,12 @@ Usage:
 """
 
 import json
-import os
-import sysconfig
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all
 
 block_cipher = None
 ROOT = Path.cwd()
-NATIVE_EXT_SUFFIX = sysconfig.get_config_var("EXT_SUFFIX") or (".pyd" if os.name == "nt" else ".so")
-NATIVE_EXT_PATH = ROOT / f"clipper2_batch{NATIVE_EXT_SUFFIX}"
-native_binaries = [(str(NATIVE_EXT_PATH), ".")] if NATIVE_EXT_PATH.exists() else []
 GLB_V2_PACKAGES = ("rasterio", "manifold3d")
 GLB_V2_HIDDENIMPORTS = ("rasterio.features", "manifold3d")
 NEROUED_3MF_PACKAGE = "neroued_3mf"
@@ -102,12 +97,10 @@ backend_datas = [
     *glb_v2_datas,
 ]
 backend_binaries = [
-    *native_binaries,
     *neroued_3mf_binaries,
     *glb_v2_binaries,
 ]
 backend_hiddenimports = [
-    'clipper2_batch',
     *NEROUED_3MF_HIDDENIMPORTS,
     *neroued_3mf_hiddenimports,
     *GLB_V2_HIDDENIMPORTS,

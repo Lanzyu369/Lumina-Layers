@@ -10,7 +10,19 @@ from scripts.profile_vector_analyze_hotspots import (
     _profile_rows_from_raw_stats,
     _render_markdown,
     _write_synthetic_compound_fixture,
+    discover_svg_files,
 )
+
+
+def test_discover_svg_files_returns_sorted_svg_paths(tmp_path: Path) -> None:
+    (tmp_path / "nested").mkdir()
+    first = tmp_path / "a.svg"
+    second = tmp_path / "nested" / "b.SVG"
+    ignored = tmp_path / "nested" / "c.png"
+    for path in (first, second, ignored):
+        path.write_text("fixture", encoding="utf-8")
+
+    assert discover_svg_files(tmp_path) == [first, second]
 
 
 def test_write_synthetic_compound_fixture_is_reproducible(tmp_path: Path) -> None:

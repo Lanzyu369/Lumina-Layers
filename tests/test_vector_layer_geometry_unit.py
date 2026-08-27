@@ -342,6 +342,25 @@ def test_prepared_group_uses_the_same_ring_indices_for_caps_and_hole_walls() -> 
     assert abs(float(mesh.volume)) == pytest.approx(300.0, abs=1e-8)
 
 
+def test_simple_cap_rejects_overlapping_triangles_with_matching_area() -> None:
+    vertices = np.asarray(
+        [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
+        dtype=np.float64,
+    )
+    overlapping_faces = np.asarray(
+        [(0, 1, 2), (0, 1, 3)],
+        dtype=np.int64,
+    )
+
+    with pytest.raises(ValueError, match="boundary differs from its ring"):
+        vector_layer_geometry._validate_cap_indices(
+            vertices,
+            overlapping_faces,
+            np.asarray([4], dtype=np.int64),
+            expected_area_mm2=1.0,
+        )
+
+
 @pytest.mark.parametrize(
     "source",
     [

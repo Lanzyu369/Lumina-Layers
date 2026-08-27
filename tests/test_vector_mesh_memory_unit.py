@@ -273,7 +273,7 @@ def test_build_estimate_accounts_for_run_multiplicity_and_double_sided_output() 
         shapes,
         num_layers=4,
         double_sided=False,
-        precision_cache_budget_bytes=0,
+        precision_cache_budget_bytes=10**12,
         extrude_cache_budget_bytes=0,
         fallback_chunk_bytes=0,
     )
@@ -281,7 +281,6 @@ def test_build_estimate_accounts_for_run_multiplicity_and_double_sided_output() 
         shapes,
         num_layers=4,
         double_sided=True,
-        precision_cache_budget_bytes=0,
         extrude_cache_budget_bytes=0,
         fallback_chunk_bytes=0,
     )
@@ -290,6 +289,7 @@ def test_build_estimate_accounts_for_run_multiplicity_and_double_sided_output() 
     assert single.coordinate_count == 150
     assert single.run_count == 6
     assert single.run_coordinate_references == 500
+    assert single.estimated_additional_bytes < 10**12
     assert double.run_coordinate_references == 1_000
     assert double.estimated_additional_bytes > single.estimated_additional_bytes
 
@@ -299,7 +299,6 @@ def test_build_estimate_accounts_for_backing_coating_and_topology_workspace() ->
         [],
         num_layers=4,
         double_sided=False,
-        precision_cache_budget_bytes=0,
         extrude_cache_budget_bytes=0,
         fallback_chunk_bytes=0,
         auxiliary_geometries=[_CoordinateCountGeometry(10_000)],
@@ -342,7 +341,6 @@ def test_build_estimate_rejects_giant_single_group_before_topology_allocation() 
         ],
         num_layers=1,
         double_sided=False,
-        precision_cache_budget_bytes=0,
         extrude_cache_budget_bytes=0,
         fallback_chunk_bytes=0,
     )

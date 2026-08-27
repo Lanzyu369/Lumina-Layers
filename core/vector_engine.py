@@ -149,7 +149,6 @@ _ARC_SAMPLE_POSITIONS_10_TUPLE = tuple(float(value) for value in _ARC_SAMPLE_POS
 _VECTOR_LARGE_DISTANCE_WARN_LIMIT = 8
 _CAP_AREA_FACE_CHUNK_SIZE = 65_536
 _VECTOR_FALLBACK_CHUNK_BYTES = 64 * 1024 * 1024
-_VECTOR_PRECISION_CACHE_BYTES = 128 * 1024 * 1024
 _VECTOR_EXTRUDE_CACHE_BYTES = 256 * 1024 * 1024
 
 
@@ -205,18 +204,6 @@ def _extrude_cache_storage_bytes(value) -> int:
         except (TypeError, ValueError):
             continue
     return total
-
-
-def _new_vector_precision_cache() -> ByteBudgetLRU:
-    """Create the stage-scoped precision cache with an explicit byte budget."""
-
-    return ByteBudgetLRU(
-        max_bytes=_resolve_vector_cache_bytes(
-            "LUMINA_VECTOR_PRECISION_CACHE_MB",
-            _VECTOR_PRECISION_CACHE_BYTES,
-        ),
-        size_of=_geometry_cache_storage_bytes,
-    )
 
 
 def _new_vector_extrude_cache() -> ByteBudgetLRU:
@@ -6565,10 +6552,6 @@ class VectorProcessor:
                 2 if is_double_sided and not is_5color else 1
             )
 
-        precision_cache_budget_bytes = _resolve_vector_cache_bytes(
-            "LUMINA_VECTOR_PRECISION_CACHE_MB",
-            _VECTOR_PRECISION_CACHE_BYTES,
-        )
         extrude_cache_budget_bytes = _resolve_vector_cache_bytes(
             "LUMINA_VECTOR_EXTRUDE_CACHE_MB",
             _VECTOR_EXTRUDE_CACHE_BYTES,
@@ -6577,7 +6560,6 @@ class VectorProcessor:
             matched_shapes,
             num_layers=num_layers,
             double_sided=is_double_sided,
-            precision_cache_budget_bytes=precision_cache_budget_bytes,
             extrude_cache_budget_bytes=extrude_cache_budget_bytes,
             fallback_chunk_bytes=_VECTOR_FALLBACK_CHUNK_BYTES,
             auxiliary_geometries=auxiliary_geometries,
@@ -6687,8 +6669,6 @@ class VectorProcessor:
         backing_height = backing_layer_count * layer_h
 
         t0 = time.perf_counter()
-        self.last_native_vector_mesh_stats = {}
-
         if enable_relief and is_single_sided and not is_5color:
             meshes_by_slot = self._build_relief_meshes(
                 matched_shapes=matched_shapes,
@@ -6905,12 +6885,6 @@ class VectorProcessor:
         extrude_cache_evictions = int(
             getattr(extrude_cache, "eviction_count", 0)
         )
-        precision_cache_peak_bytes = int(
-            getattr(extrude_cache, "precision_cache_peak_bytes", 0)
-        )
-        precision_cache_evictions = int(
-            getattr(extrude_cache, "precision_cache_evictions", 0)
-        )
         extrude_cache.clear()
 
         # === Stage 8: Assemble scene (sorted by material ID) ===
@@ -6971,8 +6945,6 @@ class VectorProcessor:
         stage_timings["extrude_cache_entries"] = extrude_cache_entries
         stage_timings["extrude_cache_peak_bytes"] = extrude_cache_peak_bytes
         stage_timings["extrude_cache_evictions"] = extrude_cache_evictions
-        stage_timings["precision_cache_peak_bytes"] = precision_cache_peak_bytes
-        stage_timings["precision_cache_evictions"] = precision_cache_evictions
         self.last_stage_timings = stage_timings
 
         rss_stage_keys = (
@@ -6992,8 +6964,6 @@ class VectorProcessor:
                 "rss_sampled_max_bytes": rss_sampled_max_bytes,
                 "extrude_cache_peak_bytes": extrude_cache_peak_bytes,
                 "extrude_cache_evictions": extrude_cache_evictions,
-                "precision_cache_peak_bytes": precision_cache_peak_bytes,
-                "precision_cache_evictions": precision_cache_evictions,
             }
         )
         _log.debug(

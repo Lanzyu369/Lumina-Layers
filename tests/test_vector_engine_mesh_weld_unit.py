@@ -1688,6 +1688,9 @@ def test_relief_preflight_accounts_for_stepped_board_levels(
 
     def capture_estimate(*args, **kwargs):
         captured["auxiliary_run_count"] = int(kwargs["auxiliary_run_count"])
+        captured["precision_cache_budget_supplied"] = (
+            "precision_cache_budget_bytes" in kwargs
+        )
         return real_estimate(*args, **kwargs)
 
     reject = VectorMeshMemoryBudgetError(
@@ -1720,6 +1723,7 @@ def test_relief_preflight_accounts_for_stepped_board_levels(
         )
 
     assert captured["auxiliary_run_count"] >= 10
+    assert captured["precision_cache_budget_supplied"] is False
 
 
 def test_corner_touching_relief_stays_watertight_through_build_and_glb(
@@ -1912,7 +1916,6 @@ class TestBuildMeshShellTopology:
     ) -> None:
         """Unsafe complexity must return before union/extrusion starts."""
 
-        monkeypatch.delenv("LUMINA_VECTOR_NATIVE_MESH", raising=False)
         monkeypatch.setenv("LUMINA_VECTOR_MESH_MEMORY_BUDGET_MB", "1")
         processor = VectorProcessor.__new__(VectorProcessor)
         processor.color_mode = "4-Color (RYBW)"
@@ -1955,7 +1958,6 @@ class TestBuildMeshShellTopology:
     ) -> None:
         """Backing-only geometry must not bypass the early memory admission."""
 
-        monkeypatch.delenv("LUMINA_VECTOR_NATIVE_MESH", raising=False)
         monkeypatch.setenv("LUMINA_VECTOR_MESH_MEMORY_BUDGET_MB", "1")
 
         class BackingComplexity:
@@ -2016,7 +2018,6 @@ class TestBuildMeshShellTopology:
             analysis.matched_shapes,
             num_layers=1,
             double_sided=False,
-            precision_cache_budget_bytes=0,
             extrude_cache_budget_bytes=0,
             fallback_chunk_bytes=0,
         )
@@ -2061,7 +2062,6 @@ class TestBuildMeshShellTopology:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        monkeypatch.delenv("LUMINA_VECTOR_NATIVE_MESH", raising=False)
         left_mesh, right_mesh = self._two_adjacent_extrusions()
         processor = VectorProcessor.__new__(VectorProcessor)
 
@@ -2118,7 +2118,6 @@ class TestBuildMeshShellTopology:
     ) -> None:
         """Assembly must not retain cache/base arrays plus copied slot meshes."""
 
-        monkeypatch.delenv("LUMINA_VECTOR_NATIVE_MESH", raising=False)
         source_mesh = VectorProcessor._extrude_geometry(
             box(0.0, 0.0, 2.0, 2.0),
             height=0.2,
@@ -2206,7 +2205,6 @@ class TestBuildMeshShellTopology:
     ) -> None:
         """Board source arrays may not stay aliased after Board assembly."""
 
-        monkeypatch.delenv("LUMINA_VECTOR_NATIVE_MESH", raising=False)
         red_source = VectorProcessor._extrude_geometry(
             box(0.0, 0.0, 1.0, 1.0),
             height=0.08,
@@ -2284,7 +2282,6 @@ class TestBuildMeshShellTopology:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        monkeypatch.delenv("LUMINA_VECTOR_NATIVE_MESH", raising=False)
         source_mesh = VectorProcessor._extrude_geometry(
             box(0.0, 0.0, 2.0, 2.0),
             height=1.0,
@@ -3060,7 +3057,7 @@ def test_run_length_extrude_releases_failed_prepared_group_before_fallback(
     assert len(meshes_by_slot["White"]["meshes"]) == 1
 
 
-def test_run_length_canonical_path_does_not_retain_a_precision_cache(
+def test_run_length_canonical_path_does_not_use_legacy_precision_snapping(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Physical-grid preparation owns precision without the legacy LRU."""
@@ -3074,13 +3071,6 @@ def test_run_length_canonical_path_does_not_retain_a_precision_cache(
         return real_set_precision(*args, **kwargs)
 
     monkeypatch.setattr(vector_engine, "set_precision", counted_set_precision)
-    monkeypatch.setattr(
-        vector_engine,
-        "_VECTOR_PRECISION_CACHE_BYTES",
-        1,
-        raising=False,
-    )
-
     VectorProcessor._run_length_extrude(
         matched_shapes=[
             {"geometry": box(0.0, 0.0, 1.0, 1.0), "recipe": [0, 1, 0]},

@@ -82,11 +82,6 @@ def test_mesh_queue_uses_read_only_float32_uint32_zero_copy_arrays() -> None:
     )
     retained: list[tuple[np.ndarray, np.ndarray]] = []
 
-    class OwningMesh:
-        @staticmethod
-        def from_arrays(*_args, **_kwargs):
-            raise AssertionError("owning Mesh.from_arrays path was used")
-
     class ZeroCopyBuilder:
         def __init__(self) -> None:
             self.received = None
@@ -114,7 +109,6 @@ def test_mesh_queue_uses_read_only_float32_uint32_zero_copy_arrays() -> None:
     builder = ZeroCopyBuilder()
     object_id = writer_module._queue_n3mf_mesh_object(
         builder=builder,
-        n3mf=SimpleNamespace(Mesh=OwningMesh),
         entry=entry,
         material_group_id=3,
         material_index=2,
@@ -133,7 +127,7 @@ def test_mesh_queue_uses_read_only_float32_uint32_zero_copy_arrays() -> None:
     assert np.array_equal(faces, np.asarray(mesh.faces, dtype=np.uint32))
 
 
-def test_mesh_queue_keeps_owning_compatibility_for_old_neroued_builds() -> None:
+def test_mesh_queue_requires_the_supported_zero_copy_neroued_contract() -> None:
     mesh = trimesh.creation.box(extents=(1.0, 1.0, 0.08))
     entry = writer_module._MeshExportEntry(
         mesh=mesh,
@@ -144,32 +138,21 @@ def test_mesh_queue_keeps_owning_compatibility_for_old_neroued_builds() -> None:
     retained: list[tuple[np.ndarray, np.ndarray]] = []
     captured = {}
 
-    class OwningMesh:
-        @staticmethod
-        def from_arrays(vertices, faces):
-            captured["arrays"] = (vertices, faces)
-            return "owning-mesh"
-
     class LegacyBuilder:
         def add_mesh_object(self, name, mesh_value, pid, pindex):
             captured["object"] = (name, mesh_value, pid, pindex)
             return 9
 
-    object_id = writer_module._queue_n3mf_mesh_object(
-        builder=LegacyBuilder(),
-        n3mf=SimpleNamespace(Mesh=OwningMesh),
-        entry=entry,
-        material_group_id=3,
-        material_index=0,
-        retained_views=retained,
-    )
+    with pytest.raises(RuntimeError, match="add_mesh_object_zero_copy"):
+        writer_module._queue_n3mf_mesh_object(
+            builder=LegacyBuilder(),
+            entry=entry,
+            material_group_id=3,
+            material_index=0,
+            retained_views=retained,
+        )
 
-    assert object_id == 9
-    vertices, faces = captured["arrays"]
-    assert vertices.dtype == np.float32
-    assert faces.dtype == np.uint32
-    assert vertices.flags.writeable and faces.flags.writeable
-    assert captured["object"] == ("White", "owning-mesh", 3, 0)
+    assert captured == {}
     assert retained == []
 
 
@@ -419,6 +402,56 @@ def test_writer_preserves_a_closed_cavity_without_contact_perturbation() -> None
         np.asarray(mesh.vertices, dtype=np.float32),
     )
     assert len(faces) == len(mesh.faces)
+
+
+def test_writer_contact_repair_uses_one_final_triangle_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Certified parts skip per-component audits and share one final scan."""
+
+    labels = np.array(
+        [
+            [[4, -1], [4, 4]],
+            [[4, 4], [-1, -1]],
+        ],
+        dtype=np.int16,
+    )
+    mesh = build_labeled_surface_mesh(labels, material_id=4, height_px=2)
+    assert mesh is not None
+    writer = BambuStudio3MFWriter(
+        "single-scan.3mf",
+        settings={},
+        color_mode="4-Color",
+        printer_id="bambu-p2s",
+        slicer="BambuStudio",
+    )
+    writer.add_mesh(mesh, "White", (255, 255, 255))
+    entry = writer.objects[0]
+    assert entry.contact_repair_ranges
+
+    monkeypatch.setattr(
+        trimesh,
+        "Trimesh",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("certified part was rebuilt for a topology audit")
+        ),
+    )
+    original_cross = np.cross
+    cross_batch_sizes: list[int] = []
+
+    def counted_cross(*args, **kwargs):
+        cross_batch_sizes.append(len(args[0]))
+        return original_cross(*args, **kwargs)
+
+    monkeypatch.setattr(np, "cross", counted_cross)
+    vertices, faces = writer_module._materialize_n3mf_mesh_view_arrays(
+        entry.mesh,
+        contact_repair_ranges=entry.contact_repair_ranges,
+    )
+
+    assert cross_batch_sizes.count(len(faces)) == 1
+    assert vertices.dtype == np.float32
+    assert faces.dtype == np.uint32
 
 
 def test_legacy_noncanonical_mesh_keeps_pre_zero_copy_writer_compatibility() -> None:

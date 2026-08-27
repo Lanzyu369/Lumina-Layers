@@ -289,7 +289,7 @@ def estimate_vector_mesh_build_memory(
     *,
     num_layers: int,
     double_sided: bool,
-    precision_cache_budget_bytes: int,
+    precision_cache_budget_bytes: int | None = None,
     extrude_cache_budget_bytes: int,
     fallback_chunk_bytes: int,
     auxiliary_geometries=(),
@@ -302,6 +302,12 @@ def estimate_vector_mesh_build_memory(
     The estimate intentionally assumes the largest material may contain the
     whole final mesh during assembly. It is conservative without traversing or
     serializing coordinates into another full buffer.
+
+    ``precision_cache_budget_bytes`` is retained as an ignored keyword for
+    compatibility with older internal callers; the precision cache no longer
+    exists.
+    ``precision_cache_budget_bytes`` 仅为兼容旧内部调用而保留，不参与估算；
+    对应的精度缓存已移除。
     """
 
     shape_count = 0
@@ -369,7 +375,6 @@ def estimate_vector_mesh_build_memory(
             largest_slot_assembly_copy_bytes,
             retained_source_geometry_bytes,
             topology_validation_working_bytes,
-            max(0, int(precision_cache_budget_bytes)),
             max(0, int(extrude_cache_budget_bytes)),
             max(0, int(fallback_chunk_bytes)),
         )

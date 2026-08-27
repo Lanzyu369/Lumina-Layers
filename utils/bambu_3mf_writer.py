@@ -21,9 +21,12 @@ import zipfile
 import json
 import copy
 import re
-from typing import Any, BinaryIO, Iterable, List, Dict, Optional
+from typing import TYPE_CHECKING, Any, BinaryIO, Iterable, List, Dict, Optional
 import numpy as np
 from PIL import Image
+
+if TYPE_CHECKING:
+    import trimesh
 
 from api.structured_logging import get_logger
 from core.mesh_export_parts import (
@@ -53,9 +56,7 @@ from utils.bambu_3mf_cover import (
 
 log = get_logger(__name__)
 
-# Lazy imports: avoid >60s startup cost when imported via API.
-# Only loaded when export functions are actually called.
-_trimesh = None
+# Lazy import: avoid loading the native 3MF extension until export is requested.
 _n3mf = None
 _PREVIEW_PLACEHOLDER_PNG_BYTES: Optional[bytes] = None
 _RAW_ZIP_COPY_CHUNK_SIZE = 1024 * 1024
@@ -70,15 +71,6 @@ _CREATOR_5_MODEL_TOWER_CLEARANCE_MM = 7.5
 _ANYCUBIC_TOWER_MIN_FOOTPRINT_WIDTH_MM = 50.0
 _ANYCUBIC_TOWER_MIN_DEPTH_MM = 57.5
 _ELEGOO_CC2_PREFERRED_TOP_EDGE_CLEARANCE_MM = 32.0
-
-
-def _get_trimesh():
-    global _trimesh
-    if _trimesh is None:
-        import trimesh as _tm
-
-        _trimesh = _tm
-    return _trimesh
 
 
 def _get_n3mf():
@@ -372,7 +364,6 @@ def _materialize_n3mf_mesh_view_arrays(
 def _queue_n3mf_mesh_object(
     *,
     builder: object,
-    n3mf: object,
     entry: _MeshExportEntry,
     material_group_id: int,
     material_index: int,
@@ -386,31 +377,19 @@ def _queue_n3mf_mesh_object(
         contact_repair_ranges=entry.contact_repair_ranges,
     )
     add_zero_copy = getattr(builder, "add_mesh_object_zero_copy", None)
-    if callable(add_zero_copy):
-        object_id = add_zero_copy(
-            entry.object_name,
-            vertices,
-            faces,
-            material_group_id,
-            material_index,
+    if not callable(add_zero_copy):
+        raise RuntimeError(
+            "neroued-3mf must provide add_mesh_object_zero_copy"
         )
-        retained_views.append((vertices, faces))
-        return int(object_id)
-
-    # neroued-3mf < 0.4 owns its input but also requires writable ndarrays.
-    # Keep this compatibility path isolated from the 0.4 zero-copy contract.
-    owning_mesh = n3mf.Mesh.from_arrays(
-        np.array(vertices, dtype=np.float32, order="C", copy=True),
-        np.array(faces, dtype=np.uint32, order="C", copy=True),
+    object_id = add_zero_copy(
+        entry.object_name,
+        vertices,
+        faces,
+        material_group_id,
+        material_index,
     )
-    return int(
-        builder.add_mesh_object(
-            entry.object_name,
-            owning_mesh,
-            material_group_id,
-            material_index,
-        )
-    )
+    retained_views.append((vertices, faces))
+    return int(object_id)
 
 
 @dataclass(frozen=True)
@@ -2107,7 +2086,7 @@ class BambuStudio3MFWriter:
         self.preserve_template_filament_slots = preserve_template_filament_slots
         self._wipe_tower_placement_cache: WipeTowerPlacementResult | None = None
 
-    def add_mesh(self, mesh: _get_trimesh().Trimesh, name: str, color_rgb: tuple):
+    def add_mesh(self, mesh: trimesh.Trimesh, name: str, color_rgb: tuple):
         """Add a mesh object to the scene.
         将网格对象添加到场景中。
 
@@ -2311,7 +2290,6 @@ class BambuStudio3MFWriter:
             material_index = material_indices[entry.material_name]
             obj_id = _queue_n3mf_mesh_object(
                 builder=builder,
-                n3mf=n3mf,
                 entry=entry,
                 material_group_id=mat_group_id,
                 material_index=material_index,
@@ -4228,7 +4206,7 @@ def read_wipe_tower_placement_warnings(
 
 
 def export_scene_with_bambu_metadata(
-    scene: _get_trimesh().Scene,
+    scene: trimesh.Scene,
     output_path: str,
     slot_names: List[str],
     preview_colors: Dict,
@@ -4255,7 +4233,7 @@ def export_scene_with_bambu_metadata(
     将 Trimesh 场景导出为 BambuStudio/OrcaSlicer 兼容的 3MF 文件（含元数据）。
 
     Args:
-        scene (_get_trimesh().Scene): Trimesh Scene containing all meshes. (包含所有网格的场景)
+        scene (trimesh.Scene): Trimesh Scene containing all meshes. (包含所有网格的场景)
         output_path (str): Output .3mf file path. (输出 .3mf 文件路径)
         slot_names (List[str]): Actually used material names. (实际使用的材料名称列表)
         preview_colors (Dict): Material ID to RGBA color mapping. (材料 ID 到 RGBA 颜色映射)
