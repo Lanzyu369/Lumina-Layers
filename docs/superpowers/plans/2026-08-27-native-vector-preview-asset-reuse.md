@@ -202,7 +202,7 @@ Run `python3 start_all.py --kill` and verify no `api_server.py`, `start_all.py`,
 
 Check `git diff --check`, `git status --short`, the complete relevant test commands, and the R4C1 evidence. Confirm #585 files and commits are absent from the branch range.
 
-- [ ] **Step 2: Request an independent code review**
+- [x] **Step 2: Request an independent code review**
 
 Give the reviewer `BASE_SHA=cb736342e2d1aed382b98e45e36e44ac1287a3eb`, the final head SHA, this plan, and the user's five goals. Fix all Critical and Important findings, then re-run affected tests.
 
