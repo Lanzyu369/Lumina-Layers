@@ -206,10 +206,10 @@ Check `git diff --check`, `git status --short`, the complete relevant test comma
 
 Give the reviewer `BASE_SHA=cb736342e2d1aed382b98e45e36e44ac1287a3eb`, the final head SHA, this plan, and the user's five goals. Fix all Critical and Important findings, then re-run affected tests.
 
-- [ ] **Step 3: Commit and publish the isolated branch**
+- [x] **Step 3: Commit and publish the isolated branch**
 
 Use Conventional Commits with English then Chinese rationale in the commit body. Push `MOVIBALE/fix/native-vector-preview-asset-reuse` normally and open a PR against `dev-refactor`; do not merge and do not force-push.
 
-- [ ] **Step 4: Report exact delivery evidence**
+- [x] **Step 4: Report exact delivery evidence**
 
 Report branch, exact head, PR link, test counts, R4C1 URLs/sizes/timing/memory, 3MF comparison, and any remaining limitations.
