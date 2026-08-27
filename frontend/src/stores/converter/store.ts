@@ -8783,12 +8783,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           state.enable_outline ||
           state.enable_cloisonne ||
           state.modelSurfaceEnabled;
-        const generatedGeometryRequestIsCurrent =
-          requestedGeneratedGeometryModel &&
+        const generatedGeometryPreviewIdentityIsCurrent =
           captureGeneratedGeometryPreviewIdentity(latestState) ===
-            generatedGeometryPreviewIdentity;
+          generatedGeometryPreviewIdentity;
         const shouldShowGeneratedGeometryModel =
-          generatedGeometryRequestIsCurrent &&
+          requestedGeneratedGeometryModel &&
+          generatedGeometryPreviewIdentityIsCurrent &&
           _glbPollSequence === glbPollSequenceAtGenerateStart;
         const shouldWaitForSegmentedVectorPreview =
           !requestedGeneratedGeometryModel &&
@@ -8808,7 +8808,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }
         const selectedGeneratedModelUrl = shouldShowGeneratedGeometryModel
           ? modelUrl
-          : requestedGeneratedGeometryModel ||
+          : !generatedGeometryPreviewIdentityIsCurrent ||
+              requestedGeneratedGeometryModel ||
               shouldWaitForSegmentedVectorPreview ||
               latestState.previewGlbUrl
             ? null

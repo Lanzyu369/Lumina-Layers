@@ -597,7 +597,11 @@ def test_worker_generate_model_surface_overlay_exports_bambu_3mf(tmp_path):
     Path(result["glb_path"]).unlink(missing_ok=True)
 
 
-def test_worker_keeps_3mf_when_optional_surface_glb_export_fails(tmp_path):
+@pytest.mark.parametrize("glb_failure_mode", ["partial-error", "empty-file"])
+def test_worker_keeps_3mf_when_optional_surface_glb_export_fails(
+    tmp_path,
+    glb_failure_mode,
+):
     image_path = tmp_path / "surface-art.png"
     lut_path = tmp_path / "lut.npy"
     model_path = tmp_path / "plate.stl"
@@ -618,6 +622,12 @@ def test_worker_keeps_3mf_when_optional_surface_glb_export_fails(tmp_path):
         Path(kwargs["output_path"]).write_bytes(b"3mf")
         return kwargs["output_path"]
 
+    def fail_optional_glb_export(output_path, *_args, **_kwargs):
+        if glb_failure_mode == "partial-error":
+            Path(output_path).write_bytes(b"partial glb")
+            raise KeyError("optional preview export unavailable")
+        Path(output_path).write_bytes(b"")
+
     from api.workers.converter_workers import worker_generate_model_surface_overlay
 
     with (
@@ -636,7 +646,7 @@ def test_worker_keeps_3mf_when_optional_surface_glb_export_fails(tmp_path):
         patch.object(
             trimesh.Scene,
             "export",
-            side_effect=OSError("optional preview export unavailable"),
+            side_effect=fail_optional_glb_export,
         ) as export_glb,
     ):
         result = worker_generate_model_surface_overlay(

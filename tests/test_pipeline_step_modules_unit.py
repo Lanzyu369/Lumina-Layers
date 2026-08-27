@@ -1949,6 +1949,36 @@ class TestS11GlbPreview:
         assert isinstance(loaded, trimesh.Scene)
         assert len(loaded.geometry) == 1
 
+    @pytest.mark.parametrize("failure_mode", ["partial-error", "empty-file"])
+    def test_generated_surface_glb_failure_removes_partial_file(
+        self,
+        monkeypatch,
+        tmp_path,
+        failure_mode,
+    ):
+        from core.pipeline import s11_glb_preview
+
+        scene = trimesh.Scene(
+            {"GeneratedSurface": trimesh.creation.box(extents=(2.0, 2.0, 1.0))}
+        )
+        output_path = tmp_path / "partial-generated-surface.glb"
+
+        def fail_export(_scene, path, *_args, **_kwargs):
+            if failure_mode == "partial-error":
+                Path(path).write_bytes(b"partial glb")
+                raise OSError("generated-surface export unavailable")
+            Path(path).write_bytes(b"")
+
+        monkeypatch.setattr(trimesh.Scene, "export", fail_export)
+
+        result = s11_glb_preview._export_pipeline_scene_glb(
+            {"scene": scene},
+            str(output_path),
+        )
+
+        assert result is None
+        assert not output_path.exists()
+
 
 # ===========================================================================
 # S12 — s12_result_assembly 单元测试

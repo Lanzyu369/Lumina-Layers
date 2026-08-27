@@ -1667,15 +1667,7 @@ def _export_optional_model_surface_preview_glb(
         if not os.path.isfile(glb_path) or os.path.getsize(glb_path) <= 0:
             raise OSError("model-surface preview GLB export produced no file")
         return glb_path
-    except (
-        ImportError,
-        MemoryError,
-        OSError,
-        OverflowError,
-        RuntimeError,
-        TypeError,
-        ValueError,
-    ) as exc:
+    except Exception as exc:  # noqa: BLE001 — optional GLB after completed 3MF
         _cleanup_worker_temp_paths(glb_path)
         geometry = getattr(scene, "geometry", None)
         log.warning(

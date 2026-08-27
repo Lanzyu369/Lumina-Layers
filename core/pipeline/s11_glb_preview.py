@@ -1893,7 +1893,23 @@ def _export_pipeline_scene_glb(ctx: dict, output_path: str) -> Optional[str]:
 
     try:
         scene.export(output_path, file_type="glb")
-    except (OSError, ValueError, TypeError, RuntimeError) as exc:
+        if not os.path.isfile(output_path) or os.path.getsize(output_path) <= 0:
+            raise OSError("generated-surface GLB export produced no file")
+    except (
+        AttributeError,
+        ImportError,
+        LookupError,
+        MemoryError,
+        OSError,
+        OverflowError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        try:
+            os.unlink(output_path)
+        except OSError:
+            pass
         _log.warning(
             "Generated-surface scene GLB export failed",
             extra={
@@ -1905,7 +1921,7 @@ def _export_pipeline_scene_glb(ctx: dict, output_path: str) -> Optional[str]:
         )
         return None
 
-    return output_path if os.path.exists(output_path) else None
+    return output_path
 
 
 def run(ctx: dict) -> dict:

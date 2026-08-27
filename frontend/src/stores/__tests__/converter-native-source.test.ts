@@ -2313,6 +2313,76 @@ describe("native bundle converter flow", () => {
     },
   );
 
+  const generatedGeometryEnabledDuringGenerationCases: Array<
+    [string, Record<string, unknown>, Record<string, unknown>]
+  > = [
+    [
+      "raster relief",
+      { modeling_mode: ModelingMode.HIGH_FIDELITY },
+      {
+        enable_relief: true,
+        autoHeightMode: "darker-higher",
+        color_height_map: { "111111": 0.5 },
+      },
+    ],
+    [
+      "raster coating",
+      { modeling_mode: ModelingMode.HIGH_FIDELITY },
+      { enable_coating: true, coating_height_mm: 0.6 },
+    ],
+    [
+      "Vector model surface",
+      {
+        imageFile: new File(["<svg/>"], "native-vector.svg", {
+          type: "image/svg+xml",
+        }),
+        modeling_mode: ModelingMode.VECTOR,
+      },
+      {
+        modelSurfaceEnabled: true,
+        modelSurfaceModelFileId: "surface-model-id",
+        modelSurfaceSelection: { face_indices: [1] },
+        modelSurfaceFootprint: { width_mm: 111, height_mm: 241 },
+      },
+    ],
+  ];
+
+  it.each(generatedGeometryEnabledDuringGenerationCases)(
+    "does not display an old flat GLB after enabling %s during generation",
+    async (_label, initialOverrides, enabledOverrides) => {
+      const generation = deferred<{
+        status: string;
+        message: string;
+        download_url: string;
+        preview_3d_url: string;
+      }>();
+      mocks.convertGenerate.mockReturnValueOnce(generation.promise);
+      seedLegacyGenerateState("session-enable-generated-geometry", {
+        previewGlbUrl: null,
+        modelUrl: null,
+        ...initialOverrides,
+      } as never);
+
+      const submitGenerate = useConverterStore.getState().submitGenerate();
+      expect(mocks.convertGenerate).toHaveBeenCalledOnce();
+
+      useConverterStore.setState(enabledOverrides as never);
+      generation.resolve({
+        status: "ok",
+        message: "Old flat model generated",
+        download_url: "/api/files/old-flat-model.3mf",
+        preview_3d_url: "/api/files/old-flat-generated.glb",
+      });
+      await submitGenerate;
+
+      expect(useConverterStore.getState().modelUrl).toBeNull();
+      expect(useConverterStore.getState().previewGlbUrl).toBeNull();
+      expect(useConverterStore.getState().downloadUrl).toBe(
+        "/api/files/old-flat-model.3mf",
+      );
+    },
+  );
+
   it("clears a normal generated GLB after switching to heightmap before polling completes", async () => {
     vi.useFakeTimers();
     try {

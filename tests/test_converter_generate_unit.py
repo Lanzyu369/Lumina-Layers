@@ -2870,6 +2870,69 @@ class TestGenerateRegistryFailureCleanup:
                     os.unlink(path)
             _test_store.close(sid)
 
+    def test_generate_drops_new_glb_when_session_closes_during_worker(
+        self,
+        tmp_path,
+    ) -> None:
+        image_path = tmp_path / "source.png"
+        lut_path = tmp_path / "source.npy"
+        threemf_path = tmp_path / "result.3mf"
+        glb_path = tmp_path / "result.glb"
+        Image.fromarray(np.zeros((2, 2, 3), dtype=np.uint8)).save(image_path)
+        lut_path.write_bytes(b"lut")
+        threemf_path.write_bytes(b"3mf")
+        glb_path.write_bytes(b"glb")
+
+        sid = _test_store.create()
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {"target_w": 2, "target_h": 2, "target_width_mm": 20.0},
+        )
+        _test_store.put(sid, "image_path", str(image_path))
+        _test_store.put(sid, "lut_path", str(lut_path))
+        _test_store.put(sid, "replacement_regions", [])
+        _test_store.put(sid, "free_color_set", set())
+
+        async def close_session_then_return(*_args, **_kwargs):
+            _test_store.close(sid)
+            _test_registry.cleanup_session(sid)
+            return {
+                "threemf_path": str(threemf_path),
+                "glb_path": str(glb_path),
+                "status_msg": "OK",
+            }
+
+        _mock_pool.submit = AsyncMock(side_effect=close_session_then_return)
+
+        download_file_id: str | None = None
+        try:
+            response = client.post(
+                "/api/convert/generate",
+                json={"session_id": sid, "params": {"lut_name": "test_lut"}},
+            )
+
+            assert response.status_code == 200, response.text
+            payload = response.json()
+            assert payload["preview_3d_url"] is None
+            assert not glb_path.exists()
+            assert _test_registry.get_session_entries(sid) == {}
+            assert _test_store.get(sid) is None
+
+            download_file_id = payload["download_url"].rsplit("/", 1)[-1]
+            download_entry = _test_registry.get_entry(download_file_id)
+            assert download_entry is not None
+            assert download_entry["lifecycle"] == "ephemeral"
+            assert download_entry["session_id"] != sid
+            download_response = client.get(payload["download_url"])
+            assert download_response.status_code == 200
+            assert download_response.content == b"3mf"
+        finally:
+            if download_file_id is not None:
+                _test_registry.cleanup_file(download_file_id)
+            for path in (image_path, lut_path, threemf_path, glb_path):
+                path.unlink(missing_ok=True)
+
     def test_color_card_glb_registry_failure_preserves_downloaded_3mf(
         self,
         tmp_path,
