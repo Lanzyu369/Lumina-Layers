@@ -2132,6 +2132,97 @@ describe("native bundle converter flow", () => {
     ],
   ];
 
+  const staleGeneratedGeometryParameterCases: Array<
+    [
+      string,
+      Record<string, unknown>,
+      Record<string, unknown>,
+    ]
+  > = [
+    [
+      "relief height map",
+      {
+        enable_relief: true,
+        autoHeightMode: "darker-higher",
+        color_height_map: { "111111": 0.5 },
+      },
+      { color_height_map: { "111111": 1.5 } },
+    ],
+    [
+      "outline width",
+      { enable_outline: true, outline_width: 0.8 },
+      { outline_width: 1.6 },
+    ],
+    [
+      "keychain placement",
+      { add_loop: true, loop_offset_x: 0 },
+      { loop_offset_x: 4 },
+    ],
+    [
+      "cloisonne dimensions",
+      { enable_cloisonne: true, wire_height_mm: 0.4 },
+      { wire_height_mm: 1.2 },
+    ],
+    [
+      "coating height",
+      { enable_coating: true, coating_height_mm: 0.2 },
+      { coating_height_mm: 0.8 },
+    ],
+    [
+      "fridge magnet layout",
+      {
+        enable_fridge_magnet: true,
+        fridge_magnets: [
+          {
+            id: "magnet-round",
+            shape: "round",
+            preset_key: "round-18",
+            diameter_mm: 18,
+            width_mm: null,
+            height_mm: null,
+            thickness_mm: 2,
+            center_x_mm: 20,
+            center_y_mm: 25,
+          },
+        ],
+      },
+      {
+        fridge_magnets: [
+          {
+            id: "magnet-round",
+            shape: "round",
+            preset_key: "round-18",
+            diameter_mm: 18,
+            width_mm: null,
+            height_mm: null,
+            thickness_mm: 2,
+            center_x_mm: 24,
+            center_y_mm: 25,
+          },
+        ],
+      },
+    ],
+    [
+      "model surface placement",
+      {
+        modelSurfaceEnabled: true,
+        modelSurfaceModelFileId: "surface-model-id",
+        modelSurfaceSelection: { face_indices: [1] },
+        modelSurfaceFootprint: { width_mm: 111, height_mm: 241 },
+      },
+      {
+        modelSurfacePlacement: {
+          mode: "inset",
+          offset_x_mm: 2,
+          offset_y_mm: 0,
+          scale: 0.9,
+          rotation_deg: 0,
+          inset_mm: 1,
+        },
+      },
+    ],
+  ];
+
   it.each(generatedVectorGeometryCases)(
     "keeps generated %s geometry authoritative",
     async (_label, overrides) => {
@@ -2181,6 +2272,44 @@ describe("native bundle converter flow", () => {
 
       expect(useConverterStore.getState().modelUrl).toBeNull();
       expect(useConverterStore.getState().previewGlbUrl).toBeNull();
+    },
+  );
+
+  it.each(staleGeneratedGeometryParameterCases)(
+    "does not display a generated %s GLB after its parameters change",
+    async (_label, initialOverrides, changedOverrides) => {
+      const generation = deferred<{
+        status: string;
+        message: string;
+        download_url: string;
+        preview_3d_url: string;
+      }>();
+      mocks.convertGenerate.mockReturnValueOnce(generation.promise);
+      seedLegacyGenerateState("session-stale-generated-geometry", {
+        imageFile: new File(["<svg/>"], "native-vector.svg", {
+          type: "image/svg+xml",
+        }),
+        modeling_mode: ModelingMode.VECTOR,
+        previewGlbUrl: "/api/files/current-quick-preview.glb",
+        ...initialOverrides,
+      } as never);
+
+      const submitGenerate = useConverterStore.getState().submitGenerate();
+      expect(mocks.convertGenerate).toHaveBeenCalledOnce();
+
+      useConverterStore.setState(changedOverrides as never);
+      generation.resolve({
+        status: "ok",
+        message: "Model generated with old parameters",
+        download_url: "/api/files/stale-model.3mf",
+        preview_3d_url: "/api/files/stale-generated.glb",
+      });
+      await submitGenerate;
+
+      expect(useConverterStore.getState().modelUrl).toBeNull();
+      expect(useConverterStore.getState().previewGlbUrl).toBe(
+        "/api/files/current-quick-preview.glb",
+      );
     },
   );
 

@@ -1114,8 +1114,53 @@ def _can_reuse_planar_vector_preview_glb(
     )
 
 
-def _normalize_edit_record_list(value: object) -> list[object] | None:
-    """Normalize an edit record sequence without weakening ordered semantics."""
+def _normalize_hex_edit_value(value: object) -> str | None:
+    """Return one canonical six-digit edit colour or fail closed."""
+
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().removeprefix("#").lower()
+    if len(normalized) != 6:
+        return None
+    try:
+        int(normalized, 16)
+    except ValueError:
+        return None
+    return normalized
+
+
+def _normalize_replacement_edit_records(
+    value: object,
+) -> list[tuple[str, str]] | None:
+    """Normalize legacy and public replacement records to ordered mappings."""
+
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        return None
+
+    normalized_records: list[tuple[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            return None
+        source = item.get("matched_hex")
+        if source is None:
+            source = item.get("selected_color")
+        if source is None:
+            source = item.get("quantized_hex")
+        target = item.get("replacement_hex")
+        if target is None:
+            target = item.get("replacement_color")
+        normalized_source = _normalize_hex_edit_value(source)
+        normalized_target = _normalize_hex_edit_value(target)
+        if normalized_source is None or normalized_target is None:
+            return None
+        normalized_records.append((normalized_source, normalized_target))
+    return normalized_records
+
+
+def _normalize_recipe_edit_records(value: object) -> list[object] | None:
+    """Normalize recipe edits without weakening their ordered semantics."""
 
     if value is None:
         return []
@@ -1129,13 +1174,18 @@ def _normalize_free_color_edit_set(value: object) -> frozenset[str] | None:
 
     if value is None:
         return frozenset()
-    if isinstance(value, str) or not isinstance(value, (set, frozenset, list, tuple)):
+    if isinstance(value, str) or not isinstance(
+        value,
+        (set, frozenset, list, tuple),
+    ):
         return None
-    return frozenset(
-        str(item).strip().replace("#", "").lower()
-        for item in value
-        if str(item).strip().replace("#", "")
-    )
+    normalized_values: set[str] = set()
+    for item in value:
+        normalized_item = _normalize_hex_edit_value(item)
+        if normalized_item is None:
+            return None
+        normalized_values.add(normalized_item)
+    return frozenset(normalized_values)
 
 
 def _preview_edit_state_matches(
@@ -1152,13 +1202,13 @@ def _preview_edit_state_matches(
     comparisons = (
         (
             "replacement_regions",
-            _normalize_edit_record_list(preview_replacement_regions),
-            _normalize_edit_record_list(generated_replacement_regions),
+            _normalize_replacement_edit_records(preview_replacement_regions),
+            _normalize_replacement_edit_records(generated_replacement_regions),
         ),
         (
             "recipe_overrides",
-            _normalize_edit_record_list(preview_recipe_overrides),
-            _normalize_edit_record_list(generated_recipe_overrides),
+            _normalize_recipe_edit_records(preview_recipe_overrides),
+            _normalize_recipe_edit_records(generated_recipe_overrides),
         ),
         (
             "free_color_set",

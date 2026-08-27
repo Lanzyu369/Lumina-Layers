@@ -241,6 +241,7 @@ beforeEach(() => {
     // Reset store to defaults
       useConverterStore.setState({
         isLoading: false,
+        modelUrl: null,
         previewGlbUrl: null,
         batchPreviewItems: [],
         previewPerformanceTiming: null,
@@ -910,7 +911,7 @@ beforeEach(() => {
       expect(capturedInteractiveViewerProps).toBeNull();
     });
 
-    it("keeps the model surface editor visible after final generation returns a GLB", () => {
+    it("shows the generated model after model-surface generation returns a GLB", () => {
       const modelFile = new File(["solid"], "plate.stl");
       useConverterStore.setState({
         modelSurfaceEnabled: true,
@@ -924,13 +925,12 @@ beforeEach(() => {
 
       render(<Scene3D />);
 
-      expect(screen.getByTestId("mock-model-surface-selector")).toBeInTheDocument();
-      expect(capturedModelSurfaceSelectorProps).toMatchObject({
-        file: modelFile,
-        artworkUrl: "blob:art",
-        selectionReady: true,
+      expect(screen.queryByTestId("mock-model-surface-selector")).toBeNull();
+      expect(capturedModelSurfaceSelectorProps).toBeNull();
+      expect(capturedInteractiveViewerProps).toMatchObject({
+        url: "/api/files/generated-surface.glb",
+        sourceRole: "generated",
       });
-      expect(capturedInteractiveViewerProps).toBeNull();
     });
   });
 

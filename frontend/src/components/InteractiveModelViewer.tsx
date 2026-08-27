@@ -87,6 +87,44 @@ const PREVIEW_CANVAS_BOUNDS_NODE_NAME = "preview_canvas_bounds";
 const EMBEDDED_OUTLINE_NODE_NAME = "Outline";
 const PREVIEW_LAYER_Z_EPSILON_MM = 0.002;
 
+export function applyInteractiveModelPreviewMaterials(
+  root: THREE.Object3D,
+  sourceRole: InteractiveModelSourceRole,
+): void {
+  if (!shouldApplyQuickPreviewGeometry(sourceRole)) return;
+
+  root.traverse((child) => {
+    if (
+      !(child instanceof THREE.Mesh) ||
+      !child.material ||
+      child.name === "backing_plate" ||
+      child.name === PREVIEW_CANVAS_BOUNDS_NODE_NAME
+    ) {
+      return;
+    }
+    const previousMaterial = child.material;
+    const materials = Array.isArray(previousMaterial)
+      ? previousMaterial
+      : [previousMaterial];
+    const replacedMaterials: THREE.Material[] = [];
+    const previewMaterials = materials.map((material: THREE.Material) => {
+      if (material instanceof THREE.MeshStandardMaterial) {
+        replacedMaterials.push(material);
+        return createMatteMaterialFromStandard(material);
+      }
+      return material;
+    });
+    if (replacedMaterials.length === 0) return;
+
+    for (const material of replacedMaterials) {
+      disposeMaterial(material);
+    }
+    child.material = Array.isArray(previousMaterial)
+      ? previewMaterials
+      : previewMaterials[0];
+  });
+}
+
 function hasDiscardedAncestor(
   object: THREE.Object3D,
   root: THREE.Object3D,
@@ -678,42 +716,9 @@ function InteractiveModelViewer({
       sceneCenter: center,
     } = prepareInteractiveModelSceneClone(scene, sourceRole);
 
-    // Convert all mesh materials to unlit (no lighting, no specular).
-    // Trimesh-exported GLB uses MeshStandardMaterial which reflects the HDR
-    // environment map, causing unwanted glare on the color surfaces.
-    // We replace them with MeshBasicMaterial so chip colours equal the source
-    // hex exactly and stay decoupled from scene lighting.
-    // Skip backing_plate — it gets its own independent material below.
-    clone.traverse((child) => {
-      if (
-        child instanceof THREE.Mesh
-        && child.material
-        && (
-          child.name !== "backing_plate"
-          || !applyQuickPreviewGeometry
-        )
-        && child.name !== PREVIEW_CANVAS_BOUNDS_NODE_NAME
-      ) {
-        const previousMaterial = child.material;
-        const mats = Array.isArray(previousMaterial)
-          ? previousMaterial
-          : [previousMaterial];
-        const replacedMaterials: THREE.Material[] = [];
-        const newMats = mats.map((mat: THREE.Material) => {
-          if (mat instanceof THREE.MeshStandardMaterial) {
-            replacedMaterials.push(mat);
-            return createMatteMaterialFromStandard(mat);
-          }
-          return mat;
-        });
-        if (replacedMaterials.length > 0) {
-          for (const material of replacedMaterials) {
-            disposeMaterial(material);
-          }
-          child.material = Array.isArray(previousMaterial) ? newMats : newMats[0];
-        }
-      }
-    });
+    // Segmented quick previews use unlit materials so displayed chip colours
+    // stay exact. Generated and batch GLBs keep every embedded material.
+    applyInteractiveModelPreviewMaterials(clone, sourceRole);
 
     // --- Extract full preview-canvas bounds anchor from GLB scene ---
     let extractedPreviewCanvasBounds: THREE.Mesh | null = null;

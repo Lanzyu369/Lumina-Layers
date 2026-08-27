@@ -942,6 +942,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const updateFridgeMagnetCenter = useConverterStore((s) => s.updateFridgeMagnetCenter);
   const showModelSurfaceSelector =
     modelSurfaceEnabled &&
+    !effectiveModelUrl &&
     Boolean(modelSurfacePreviewUrl) &&
     Boolean(modelSurfaceFile) &&
     batchPreviewItems.length === 0;
