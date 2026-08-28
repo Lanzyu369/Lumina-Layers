@@ -2246,7 +2246,6 @@ class TestRunVectorBranchWiring:
             "vector_branch_init",
             "vector_matched_rgb_overrides_applied",
             "vector_3mf_exported",
-            "vector_glb_exported",
             "vector_2d_preview_skipped",
             "vector_timings",
             "vector_branch_done",

@@ -75,8 +75,6 @@ VECTOR_STRUCTURED_EVENTS = {
     "vector_recipe_overrides_load_failed",
     "vector_recipe_overrides_apply_failed",
     "vector_3mf_exported",
-    "vector_glb_exported",
-    "vector_glb_exported_skipped",
     "vector_2d_preview_skipped",
     "vector_2d_preview_done",
     "vector_2d_preview_failed",
