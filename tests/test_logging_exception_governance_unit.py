@@ -248,7 +248,6 @@ CONVERTER_STRUCTURED_EVENTS = {
     "converter_merge_colors_done",
     "converter_generate_large_format_done",
     "converter_generate_download_registration_failed",
-    "converter_generate_glb_registration_failed",
     "converter_crop_registration_failed",
     "color_card_download_registration_failed",
     "color_card_glb_registration_failed",
