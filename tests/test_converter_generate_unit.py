@@ -2241,6 +2241,31 @@ class TestNativeVectorPreviewGlbReuse:
         assert response.json()["preview_3d_url"] is None
         assert os.path.exists(preview_path)
 
+    def test_native_vector_missing_3mf_preserves_reused_preview_glb(
+        self,
+        tmp_path,
+    ) -> None:
+        sid, _out_path, preview_path, preview_id, _image_path = (
+            self._seed_ready_vector_preview(tmp_path)
+        )
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": None,
+                "glb_path": preview_path,
+                "status_msg": "worker returned no 3MF",
+            }
+        )
+
+        response = client.post(
+            "/api/convert/generate",
+            json=self._payload(sid),
+        )
+
+        assert response.status_code == 500
+        assert response.json()["detail"] == MODEL_GENERATION_FAILED_DETAIL
+        assert os.path.exists(preview_path)
+        assert set(_test_registry.get_session_entries(sid)) == {preview_id}
+
     @pytest.mark.parametrize(
         "request_overrides",
         [
@@ -2698,6 +2723,49 @@ class TestGenerateWorkerException:
 
 class TestGenerateRegistryFailureCleanup:
     """Final worker outputs should not leak when registry ownership fails."""
+
+    def test_generate_missing_3mf_discards_unexpected_worker_glb(
+        self,
+        tmp_path,
+    ) -> None:
+        image_path = tmp_path / "source.png"
+        lut_path = tmp_path / "source.npy"
+        glb_path = tmp_path / "unexpected.glb"
+        Image.fromarray(np.zeros((2, 2, 3), dtype=np.uint8)).save(image_path)
+        lut_path.write_bytes(b"lut")
+        glb_path.write_bytes(b"glb")
+
+        sid = _test_store.create()
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {"target_w": 2, "target_h": 2, "target_width_mm": 20.0},
+        )
+        _test_store.put(sid, "image_path", str(image_path))
+        _test_store.put(sid, "lut_path", str(lut_path))
+        _test_store.put(sid, "replacement_regions", [])
+        _test_store.put(sid, "free_color_set", set())
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": None,
+                "glb_path": str(glb_path),
+                "status_msg": "worker returned no 3MF",
+            }
+        )
+
+        try:
+            response = client.post(
+                "/api/convert/generate",
+                json={"session_id": sid, "params": {"lut_name": "test_lut"}},
+            )
+
+            assert response.status_code == 500
+            assert response.json()["detail"] == MODEL_GENERATION_FAILED_DETAIL
+            assert not glb_path.exists()
+            assert _test_registry.get_session_entries(sid) == {}
+        finally:
+            glb_path.unlink(missing_ok=True)
+            _test_store.close(sid)
 
     def test_generate_registry_failure_cleans_unregistered_worker_outputs(self) -> None:
         paths: list[str] = []

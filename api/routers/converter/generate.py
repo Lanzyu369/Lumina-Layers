@@ -2712,6 +2712,9 @@ async def convert_generate(
     )
 
     if not threemf_path or not os.path.exists(threemf_path):
+        if glb_path and not glb_reuses_preview_path:
+            _remove_temp_path(glb_path)
+            glb_path = None
         uses_surface_overlay = _should_use_model_surface_overlay(session_data)
         raise _model_generation_failure_exception(
             status_msg,
