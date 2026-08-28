@@ -17,7 +17,7 @@
 - Modify: `frontend/src/__tests__/converter-store-relief-generate.test.ts`
 - Modify: `frontend/src/stores/converter/store.ts`
 
-- [ ] **Step 1: Rewrite generated-model expectations as lightweight-preview expectations**
+- [x] **Step 1: Rewrite generated-model expectations as lightweight-preview expectations**
 
 Change the ordinary raster timing test so Generate finishes first with a legacy
 `preview_3d_url`, but the assertions are:
@@ -58,7 +58,7 @@ expect(useConverterStore.getState().previewGlbUrl).toBe(
 Update relief-store tests that expect `/api/files/model.glb` so the existing
 quick preview is retained and the Generate return value is `null`.
 
-- [ ] **Step 2: Run the frontend tests and verify RED**
+- [x] **Step 2: Run the frontend tests and verify RED**
 
 ```bash
 CI=true .venv/bin/python scripts/run_vitest.py run \
@@ -69,7 +69,7 @@ CI=true .venv/bin/python scripts/run_vitest.py run \
 Expected: failures show generated URLs becoming `modelUrl`, advanced settings
 clearing `previewGlbUrl`, and heightmap Generate cancelling its preview poll.
 
-- [ ] **Step 3: Remove generated ownership from `submitGenerate()`**
+- [x] **Step 3: Remove generated ownership from `submitGenerate()`**
 
 Delete `captureGeneratedGeometryPreviewIdentity()` and its private helpers when
 no caller remains. The normal single-item success state must be:
@@ -92,12 +92,12 @@ Do not clear `previewGlbUrl`, increment `_glbPollSequence`, or select
 `response.preview_3d_url`. Log it only as `response_model_url`, log
 `selected_model_url: null`, and return `null` after receiving the 3MF.
 
-- [ ] **Step 4: Run Step 2 tests and verify GREEN**
+- [x] **Step 4: Run Step 2 tests and verify GREEN**
 
 Expected: both files pass and all single-item Generate cases leave `modelUrl`
 null.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/src/stores/converter/store.ts \
@@ -116,7 +116,7 @@ download state only.
 - Modify: `frontend/src/components/Scene3D.tsx`
 - Verify: `frontend/src/__tests__/InteractiveModelViewer.test.ts`
 
-- [ ] **Step 1: Add failing selector/helper priority tests**
+- [x] **Step 1: Add failing selector/helper priority tests**
 
 With `modelSurfaceEnabled=true` and a stale/generated `modelUrl`, assert the
 existing mocked `ModelSurfaceSelector3D` renders and the generated viewer does
@@ -124,7 +124,7 @@ not. Add a keychain case with a legacy `modelUrl` and valid model bounds; assert
 the existing mocked procedural keychain helper still renders. Reuse current mock
 test IDs rather than adding production-only IDs.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 ```bash
 CI=true .venv/bin/python scripts/run_vitest.py run src/__tests__/Scene3D.test.tsx
@@ -132,7 +132,7 @@ CI=true .venv/bin/python scripts/run_vitest.py run src/__tests__/Scene3D.test.ts
 
 Expected: `!effectiveModelUrl` hides both the selector and keychain helper.
 
-- [ ] **Step 3: Restore preview-first rendering**
+- [x] **Step 3: Restore preview-first rendering**
 
 ```ts
 const showModelSurfaceSelector =
@@ -146,7 +146,7 @@ Keep the selector before URL-driven JSX branches and remove
 `!effectiveModelUrl` from the keychain helper. Do not change upload, selection,
 rotation, placement, or source-model loading.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 ```bash
 CI=true .venv/bin/python scripts/run_vitest.py run \
@@ -157,7 +157,7 @@ CI=true .venv/bin/python scripts/run_vitest.py run \
 Existing tests must still prove material, dimension, relief, outline,
 cloisonne, double-sided, fridge-magnet, and puzzle preview behavior.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/src/components/Scene3D.tsx \
@@ -173,7 +173,7 @@ git commit -m "fix(preview): preserve realtime surface interaction"
 - Modify: `api/routers/converter/generate.py`
 - Verify: `core/pipeline/vector_branch.py`
 
-- [ ] **Step 1: Write failing advanced reuse tests**
+- [x] **Step 1: Write failing advanced reuse tests**
 
 For a ready same-session native Vector preview whose provenance and edit state
 match, parameterize relief, coating, loop, fridge magnet, outline, and
@@ -192,7 +192,7 @@ registrations, source/parameter mismatches, and edit mismatches asserting
 `export_vector_glb_preview()` fail if called when an advanced request has a valid
 preview path; assert reuse happens only after 3MF export succeeds.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 ```bash
 .venv/bin/python -m pytest \
@@ -204,7 +204,7 @@ preview path; assert reuse happens only after 3MF export succeeds.
 Expected: advanced cases are rejected with `relief_enabled`, `coating_enabled`,
 or equivalent reasons.
 
-- [ ] **Step 3: Narrow reuse validation to asset identity**
+- [x] **Step 3: Narrow reuse validation to asset identity**
 
 Retain these `_can_reuse_planar_vector_preview_glb()` gates:
 
@@ -223,12 +223,12 @@ Then call `_preview_analysis_params_match()` as today. Remove only relief,
 coating, loop, fridge-magnet, outline, and cloisonne exclusions. Do not relax
 session, FileRegistry, expiry, existence, provenance, parameter, or edit checks.
 
-- [ ] **Step 4: Run Step 2 tests and verify GREEN**
+- [x] **Step 4: Run Step 2 tests and verify GREEN**
 
 Expected: valid advanced requests reuse the one registered lightweight preview;
 unsafe cases still fail closed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add api/routers/converter/generate.py \
@@ -247,7 +247,7 @@ git commit -m "fix(vector): reuse lightweight preview across live settings"
 - Modify: `api/workers/converter_workers.py`
 - Modify: `api/routers/converter/generate.py`
 
-- [ ] **Step 1: Write failing backend asset-boundary tests**
+- [x] **Step 1: Write failing backend asset-boundary tests**
 
 Replace S11 tests that expect final-scene export for heightmap, relief, outline,
 cloisonne, loop, coating, or fridge magnet. Patch `_export_pipeline_scene_glb`
@@ -272,7 +272,7 @@ registered, `preview_3d_url is None`, the GLB is not registered, and its temp
 file is removed. The separate existing-path reuse case still returns the
 already registered lightweight preview URL.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 ```bash
 .venv/bin/python -m pytest \
@@ -285,7 +285,7 @@ already registered lightweight preview URL.
 Expected: S11 exports final scenes, model-surface worker returns a GLB, and the
 route registers newly generated GLBs.
 
-- [ ] **Step 3: Make S11 preview-only and remove model-surface export**
+- [x] **Step 3: Make S11 preview-only and remove model-surface export**
 
 In `s11_glb_preview.run()`, reuse a valid `preview_glb_path` before all other
 decisions. Remove `_should_export_pipeline_scene_for_glb()` and
@@ -297,7 +297,7 @@ Delete `_export_optional_model_surface_preview_glb()` and return
 `"glb_path": None` after model-surface 3MF completion. Remove only now-dead GLB
 log fields/events; retain typed failures and 3MF behavior.
 
-- [ ] **Step 4: Publish only proven reused preview URLs**
+- [x] **Step 4: Publish only proven reused preview URLs**
 
 Keep `glb_reuses_preview_path` and its current-session/FileRegistry
 revalidation. Remove registration of any other worker GLB. Leave
@@ -305,12 +305,12 @@ revalidation. Remove registration of any other worker GLB. Leave
 delete a reused session-owned preview. Preserve the optional response field for
 schema compatibility.
 
-- [ ] **Step 5: Run Step 2 tests and verify GREEN**
+- [x] **Step 5: Run Step 2 tests and verify GREEN**
 
 Expected: no print scene is exported, reused registration stays singular, and
 new worker GLBs are cleaned without invalidating the 3MF.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add core/pipeline/s11_glb_preview.py \
@@ -329,7 +329,7 @@ git commit -m "fix(generate): keep print geometry out of browser GLBs"
 - Update: `docs/superpowers/plans/2026-08-27-native-vector-preview-asset-reuse.md`
 - Update: PR #586 body.
 
-- [ ] **Step 1: Run focused backend verification**
+- [x] **Step 1: Run focused backend verification**
 
 ```bash
 .venv/bin/python -m pytest \
@@ -343,7 +343,7 @@ git commit -m "fix(generate): keep print geometry out of browser GLBs"
   tests/test_s09_export_3mf_unit.py -v
 ```
 
-- [ ] **Step 2: Run focused frontend verification and build**
+- [x] **Step 2: Run focused frontend verification and build**
 
 ```bash
 CI=true .venv/bin/python scripts/run_vitest.py run \
@@ -357,7 +357,7 @@ CI=true .venv/bin/python scripts/run_vitest.py run \
 cd frontend && pnpm build
 ```
 
-- [ ] **Step 3: Run governance and smoke gates**
+- [x] **Step 3: Run governance and smoke gates**
 
 ```bash
 .venv/bin/python -m pytest \
@@ -368,7 +368,7 @@ CI=true .venv/bin/python scripts/run_smoke_tests.py
 .venv/bin/python scripts/log_quality_check.py --mode fast
 ```
 
-- [ ] **Step 4: Replay R4C1 in both timing orders**
+- [x] **Step 4: Replay R4C1 in both timing orders**
 
 Use
 `/Volumes/personal_folder/person_8ba86fa3823aff049badd414e7c525f2_20260814_130551_vector.svg`
@@ -378,7 +378,7 @@ transfer size, preview/generate elapsed time, heap samples, and backend peak RSS
 Acceptance: no print-scene GLB request; the segmented URL is the only selected
 model in both immediate and wait-first orderings.
 
-- [ ] **Step 5: Prove 3MF output is unaffected**
+- [x] **Step 5: Prove 3MF output is unaffected**
 
 Compare ZIP entries, CRCs, `3D/Objects/object_1.model`, project/slice metadata,
 material slots, and object/triangle counts. Only local source path/timestamp

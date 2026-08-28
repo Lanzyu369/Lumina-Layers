@@ -1,5 +1,15 @@
 # Native Vector Preview Asset Reuse Implementation Plan
 
+> **Final status (2026-08-28):** The conservative generated-surface ownership
+> described below was completed and verified, then superseded in the same PR by
+> the product decision that every single-item browser preview remains
+> lightweight. The final implementation is tracked in
+> `2026-08-28-lightweight-browser-preview-authority.md`: Generate now owns only
+> the exact 3MF download, preview/polling owns the browser GLB, and advanced
+> settings continue through the existing real-time/procedural preview layer.
+> The provenance, session, FileRegistry, expiry, and stale-response safeguards
+> from this plan remain in force.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Keep ordinary planar native Vector/SVG browser previews on the lightweight segmented GLB and reuse that registered asset during generation without changing printable geometry or download lifecycle.
