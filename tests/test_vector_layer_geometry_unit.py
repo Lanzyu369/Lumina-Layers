@@ -136,6 +136,384 @@ def test_stepped_volume_splits_local_edge_pinch_inside_connected_volume() -> Non
     assert len(np.unique(writer_vertices, axis=0)) == len(writer_vertices)
 
 
+def test_stepped_volume_closes_touching_hole_with_subgrid_sliver() -> None:
+    """A real Vector ring contact remains closed on the physical grid."""
+
+    shell = [
+        (0.6686, 0.0246), (0.6629, 0.0251), (0.0081, 0.3528),
+        (0.0081, 2.4854), (0.0378, 2.4928), (2.2483, 0.7548),
+        (2.2681, 0.7229), (2.2604, 0.6535), (2.2239, 0.6203),
+        (2.1627, 0.6230), (2.0140, 0.6883), (1.9758, 0.6796),
+        (1.9614, 0.6663), (1.9471, 0.6529), (1.9357, 0.6155),
+        (1.9446, 0.5775), (2.0617, 0.3575), (2.0588, 0.3211),
+        (2.0402, 0.2898), (2.0193, 0.2824), (1.9985, 0.2749),
+        (1.5769, 0.3303), (1.5311, 0.2770), (1.5154, 0.1532),
+        (1.4682, 0.1183), (1.4329, 0.1263), (0.5746, 0.6397),
+        (0.5415, 0.6453), (0.5372, 0.6426), (0.5133, 0.6272),
+        (0.5094, 0.6122), (0.5041, 0.6053), (0.5048, 0.5946),
+        (0.5016, 0.5821), (0.5070, 0.5652), (0.5082, 0.5477),
+        (0.5145, 0.5417), (0.5192, 0.5270), (0.6242, 0.4359),
+        (0.6622, 0.3992), (0.7574, 0.2684), (0.8182, 0.0894),
+        (0.8328, 0.0260), (0.8096, 0.0), (0.7400, 0.0),
+        (0.7216, 0.0202),
+    ]
+    hole = [(0.5333, 0.6429), (0.5289, 0.6373), (0.5372, 0.6426)]
+    geometry = Polygon(shell, holes=[hole])
+
+    mesh = build_vector_stepped_volume(
+        [{"geometry": geometry, "z_offset": 0.0, "height": 0.08}],
+        scale_mm_per_svg_unit=1.0,
+    )
+
+    _assert_closed_volume(mesh, geometry.area * 0.08)
+
+
+def test_stepped_arrangement_bounds_subgrid_ring_contact_rounding() -> None:
+    """A sub-nozzle sliver may round away but cannot reject the whole model."""
+
+    shell = [
+        (0.6686, 0.0246), (0.6629, 0.0251), (0.0081, 0.3528),
+        (0.0081, 2.4854), (0.0378, 2.4928), (2.2483, 0.7548),
+        (2.2681, 0.7229), (2.2604, 0.6535), (2.2239, 0.6203),
+        (2.1627, 0.6230), (2.0140, 0.6883), (1.9758, 0.6796),
+        (1.9614, 0.6663), (1.9471, 0.6529), (1.9357, 0.6155),
+        (1.9446, 0.5775), (2.0617, 0.3575), (2.0588, 0.3211),
+        (2.0402, 0.2898), (2.0193, 0.2824), (1.9985, 0.2749),
+        (1.5769, 0.3303), (1.5311, 0.2770), (1.5154, 0.1532),
+        (1.4682, 0.1183), (1.4329, 0.1263), (0.5746, 0.6397),
+        (0.5415, 0.6453), (0.5372, 0.6426), (0.5133, 0.6272),
+        (0.5094, 0.6122), (0.5041, 0.6053), (0.5048, 0.5946),
+        (0.5016, 0.5821), (0.5070, 0.5652), (0.5082, 0.5477),
+        (0.5145, 0.5417), (0.5192, 0.5270), (0.6242, 0.4359),
+        (0.6622, 0.3992), (0.7574, 0.2684), (0.8182, 0.0894),
+        (0.8328, 0.0260), (0.8096, 0.0), (0.7400, 0.0),
+        (0.7216, 0.0202),
+    ]
+    hole = [(0.5333, 0.6429), (0.5289, 0.6373), (0.5372, 0.6426)]
+    geometry = Polygon(shell, holes=[hole])
+
+    cells, occupancy = vector_layer_geometry._stepped_arrangement_cells(
+        [geometry],
+        grid_mm=0.0001,
+    )
+
+    assert cells
+    assert occupancy.shape == (len(cells), 1)
+    assert np.all(occupancy)
+    output_area = sum(float(cell.area) for cell in cells)
+    assert output_area <= geometry.area
+    assert geometry.area - output_area < (
+        VectorLayerGeometryPolicy().coverage_absolute_tolerance_mm2
+    )
+    assert all(
+        not vector_layer_geometry._polygon_has_ring_contact(cell)
+        for cell in cells
+    )
+
+
+def test_stepped_arrangement_nodes_new_crossings_on_the_physical_grid() -> None:
+    """Snap-round all intersecting boundaries as one line arrangement."""
+
+    first = Polygon([(11.0, 8.0), (18.0, 6.0), (0.0, 13.0)])
+    second = Polygon([(12.0, 13.0), (16.0, 6.0), (12.0, 8.0)])
+
+    cells, _occupancy = vector_layer_geometry._stepped_arrangement_cells(
+        [first, second],
+        grid_mm=1.0,
+    )
+
+    coordinates = np.vstack(
+        [
+            np.asarray(ring.coords, dtype=np.float64)
+            for cell in cells
+            for ring in (cell.exterior, *cell.interiors)
+        ]
+    )
+    assert np.max(np.abs(coordinates - np.rint(coordinates))) < 1e-12
+
+
+def test_stepped_volume_restores_collinear_boundary_after_zero_area_ear() -> None:
+    """Earcut's zero-area ear must not mask a printable boundary segment."""
+
+    geometry = Polygon(
+        [
+            (1.6296, 152.8639),
+            (1.6443, 152.8972),
+            (1.6590, 152.9305),
+            (0.9335, 151.9195),
+        ]
+    )
+
+    mesh = build_vector_stepped_volume(
+        [{"geometry": geometry, "z_offset": 0.0, "height": 0.08}],
+        scale_mm_per_svg_unit=1.0,
+    )
+
+    _assert_closed_volume(mesh, geometry.area * 0.08)
+
+
+def test_single_slab_uses_direct_prism_without_arrangement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An isolated material slab should not pay for the stepped arrangement."""
+
+    monkeypatch.setattr(
+        vector_layer_geometry,
+        "_build_stepped_component_mesh",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("single slab entered stepped arrangement")
+        ),
+    )
+    geometry = Polygon(
+        [(0.0, 0.0), (5.0, 0.0), (4.0, 3.0), (0.0, 2.0)]
+    )
+
+    mesh = build_vector_stepped_volume(
+        [{"geometry": geometry, "z_offset": 0.16, "height": 0.24}],
+        scale_mm_per_svg_unit=1.0,
+    )
+
+    _assert_closed_volume(mesh, geometry.area * 0.24)
+
+
+def test_single_slab_falls_back_to_arrangement_when_direct_prism_is_unsafe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fast path is optional; its failure must keep the canonical path."""
+
+    direct_calls = 0
+    arrangement_calls = 0
+    real_arrangement = vector_layer_geometry._build_stepped_component_mesh
+
+    def reject_direct(*_args, **_kwargs):
+        nonlocal direct_calls
+        direct_calls += 1
+        raise ValueError("writer-domain collision")
+
+    def record_arrangement(*args, **kwargs):
+        nonlocal arrangement_calls
+        arrangement_calls += 1
+        return real_arrangement(*args, **kwargs)
+
+    monkeypatch.setattr(
+        vector_layer_geometry,
+        "extrude_prepared_vector_run_group",
+        reject_direct,
+    )
+    monkeypatch.setattr(
+        vector_layer_geometry,
+        "_build_stepped_component_mesh",
+        record_arrangement,
+    )
+    geometry = box(0.0, 0.0, 4.0, 3.0)
+
+    mesh = build_vector_stepped_volume(
+        [{"geometry": geometry, "z_offset": 0.0, "height": 0.08}],
+        scale_mm_per_svg_unit=1.0,
+    )
+
+    _assert_closed_volume(mesh, geometry.area * 0.08)
+    assert direct_calls == 1
+    assert arrangement_calls == 1
+
+
+def test_stepped_arrangement_rejects_exact_float32_degenerate_face(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The local stepped builder certifies the writer-domain triangles."""
+
+    monkeypatch.setattr(
+        vector_layer_geometry,
+        "extrude_prepared_vector_run_group",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ValueError("force canonical arrangement")
+        ),
+    )
+
+    def collapse_first_face(vertices, faces, _contact_groups, *, grid_mm):
+        del grid_mm
+        collapsed = np.asarray(vertices, dtype=np.float64).copy()
+        first_face = np.asarray(faces[0], dtype=np.int64)
+        collapsed[first_face[1]] = collapsed[first_face[0]]
+        return collapsed
+
+    monkeypatch.setattr(
+        vector_layer_geometry,
+        "_materialize_stepped_contact_vertices",
+        collapse_first_face,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="float32-degenerate triangle",
+    ):
+        build_vector_stepped_volume(
+            [
+                {
+                    "geometry": box(0.0, 0.0, 4.0, 3.0),
+                    "z_offset": 0.0,
+                    "height": 0.08,
+                }
+            ],
+            scale_mm_per_svg_unit=1.0,
+        )
+
+
+def test_zero_area_ear_uses_constrained_cap_triangulation() -> None:
+    geometry = Polygon(
+        [
+            (1.6296, 152.8639),
+            (1.6443, 152.8972),
+            (1.6590, 152.9305),
+            (0.9335, 151.9195),
+        ]
+    )
+    prepared, rings = vector_layer_geometry._stepped_prepared_polygon(
+        geometry,
+        grid_mm=0.0001,
+    )
+    vertices_2d = np.vstack(rings).astype(np.float64) * 0.0001
+    ring_ends = np.cumsum([len(ring) for ring in rings], dtype=np.uint32)
+    earcut_faces = np.asarray(
+        vector_layer_geometry.triangulate_float64(vertices_2d, ring_ends),
+        dtype=np.int64,
+    ).reshape((-1, 3))
+    earcut_triangles = vertices_2d[earcut_faces]
+    earcut_twice_area = (
+        (earcut_triangles[:, 1, 0] - earcut_triangles[:, 0, 0])
+        * (earcut_triangles[:, 2, 1] - earcut_triangles[:, 0, 1])
+        - (earcut_triangles[:, 1, 1] - earcut_triangles[:, 0, 1])
+        * (earcut_triangles[:, 2, 0] - earcut_triangles[:, 0, 0])
+    )
+    raw_faces = vector_layer_geometry._canonical_cap_faces(
+        prepared,
+        vertices_2d,
+        ring_ends,
+        grid_mm=0.0001,
+    )
+
+    restored_faces = vector_layer_geometry._restore_noded_cap_boundary(
+        vertices_2d,
+        raw_faces,
+        ring_ends,
+    )
+    cap_faces = vector_layer_geometry._validate_cap_indices(
+        vertices_2d,
+        restored_faces,
+        ring_ends,
+        expected_area_mm2=geometry.area,
+    )
+
+    assert np.any(earcut_twice_area == 0.0)
+    assert len(np.asarray(raw_faces).reshape((-1, 3))) == 2
+    assert len(cap_faces) == 2
+
+
+def test_stepped_slabs_legalize_geometry_after_physical_scaling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scaled_bowtie = Polygon(
+        [(0.0, 0.0), (2.0, 2.0), (0.0, 2.0), (2.0, 0.0)]
+    )
+    assert not scaled_bowtie.is_valid
+    monkeypatch.setattr(
+        vector_layer_geometry.affinity,
+        "scale",
+        lambda *_args, **_kwargs: scaled_bowtie,
+    )
+
+    slabs, _grid_mm = vector_layer_geometry._stepped_slab_parts(
+        [{"geometry": box(0.0, 0.0, 1.0, 1.0), "z_offset": 0.0, "height": 0.08}],
+        scale_mm_per_svg_unit=1.0,
+        policy=VectorLayerGeometryPolicy(),
+    )
+
+    assert len(slabs) == 2
+    assert all(slab.geometry.is_valid for slab in slabs)
+
+
+def test_stepped_slabs_skip_only_geometry_collapsed_by_physical_grid() -> None:
+    printable = box(0.0, 0.0, 1.0, 1.0)
+    subgrid_sliver = box(2.0, 0.0, 2.00001, 1.0)
+
+    slabs, grid_mm = vector_layer_geometry._stepped_slab_parts(
+        [
+            {"geometry": printable, "z_offset": 0.0, "height": 0.08},
+            {"geometry": subgrid_sliver, "z_offset": 0.0, "height": 0.08},
+        ],
+        scale_mm_per_svg_unit=1.0,
+        policy=VectorLayerGeometryPolicy(),
+    )
+
+    assert grid_mm == pytest.approx(0.0001)
+    assert len(slabs) == 1
+    assert slabs[0].geometry.area == pytest.approx(printable.area)
+
+
+def test_stepped_component_group_keeps_slab_omitted_by_union_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = vector_layer_geometry._SteppedPhysicalSlab(
+        geometry=box(0.0, 0.0, 1.0, 1.0),
+        z_start_mm=0.0,
+        z_end_mm=0.08,
+    )
+    second = vector_layer_geometry._SteppedPhysicalSlab(
+        geometry=box(2.0, 0.0, 3.0, 1.0),
+        z_start_mm=0.0,
+        z_end_mm=0.08,
+    )
+    monkeypatch.setattr(
+        vector_layer_geometry,
+        "unary_union",
+        lambda _geometries: first.geometry,
+    )
+
+    groups = vector_layer_geometry._stepped_component_groups(
+        [first, second],
+        grid_mm=0.0001,
+    )
+
+    assert len(groups) == 2
+    assert {group[0].geometry.bounds for group in groups} == {
+        first.geometry.bounds,
+        second.geometry.bounds,
+    }
+
+
+def test_empty_stepped_arrangement_is_skipped_only_below_coverage_tolerance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        vector_layer_geometry,
+        "_stepped_arrangement_cells",
+        lambda *_args, **_kwargs: ([], np.empty((0, 1), dtype=bool)),
+    )
+    tiny = vector_layer_geometry._SteppedPhysicalSlab(
+        geometry=box(0.0, 0.0, 0.005, 1.0),
+        z_start_mm=0.0,
+        z_end_mm=0.08,
+    )
+    printable = vector_layer_geometry._SteppedPhysicalSlab(
+        geometry=box(0.0, 0.0, 1.0, 1.0),
+        z_start_mm=0.0,
+        z_end_mm=0.08,
+    )
+
+    assert (
+        vector_layer_geometry._build_stepped_component_mesh(
+            [tiny],
+            grid_mm=0.0001,
+        )
+        is None
+    )
+    with pytest.raises(ValueError, match="arrangement produced no cells"):
+        vector_layer_geometry._build_stepped_component_mesh(
+            [printable],
+            grid_mm=0.0001,
+        )
+
+
 def test_stepped_volume_keeps_noded_collinear_cap_boundaries() -> None:
     continuing = Polygon(
         [(6.0, 9.0), (9.0, 9.0), (9.25, 10.5), (6.0, 10.5)]
@@ -802,6 +1180,36 @@ def test_prepared_extrusion_is_valid_after_the_actual_float32_writer_cast() -> N
 
     assert not np.any(np.all(cross == 0.0, axis=1))
     assert mesh.is_watertight
+
+
+def test_prepared_extrusion_keeps_nonzero_submicron_triangle_closed() -> None:
+    """A tiny nonzero face stays in place instead of opening the shell."""
+
+    prepared = prepare_vector_run_group(
+        [Polygon([(0.0, 0.0), (0.0001, 0.0), (0.0, 0.0001)])],
+        scale_mm_per_svg_unit=1.0,
+        policy=VectorLayerGeometryPolicy(simplify_tolerance_mm=0.0),
+    )
+
+    mesh = extrude_prepared_vector_run_group(
+        prepared,
+        height_mm=0.08,
+        z_offset_mm=0.0,
+    )
+
+    writer_vertices = np.asarray(mesh.vertices, dtype=np.float32)
+    triangles = writer_vertices[np.asarray(mesh.faces, dtype=np.int64)]
+    cross = np.cross(
+        triangles[:, 1] - triangles[:, 0],
+        triangles[:, 2] - triangles[:, 0],
+    )
+    assert np.any(
+        np.sum(cross * cross, axis=1, dtype=np.float32)
+        <= np.float32(1e-12)
+    )
+    assert not np.any(np.all(cross == 0.0, axis=1))
+    assert mesh.is_watertight
+    assert np.all(_edge_incidence_counts(mesh) == 2)
 
 
 def test_best_effort_spatial_groups_keep_touching_sources_together() -> None:

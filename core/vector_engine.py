@@ -84,13 +84,6 @@ from api.structured_logging import get_logger
 from config import PrinterConfig, ColorSystem, VectorConfig
 from core import geos_buffer_fast
 from core.errors import VectorMeshMemoryBudgetError
-from core.mesh_export_parts import (
-    MeshExportPartRange,
-    copy_mesh_export_part_ranges,
-    get_mesh_export_part_ranges,
-    mesh_export_parts_are_conditional,
-    set_mesh_export_part_ranges,
-)
 from core.task_parallelism import (
     resolve_task_parallelism_plan,
     task_parallelism_worker_scope,
@@ -108,7 +101,6 @@ from core.vector_mesh_memory import (
 from core.vector_layer_geometry import (
     build_vector_stepped_volume,
     extrude_prepared_vector_run_group,
-    prepare_vector_run_group,
     prepare_vector_spatial_groups_best_effort,
 )
 
@@ -370,10 +362,42 @@ def _build_source_spatial_groups(
     into a separate 3MF object. Fatal memory errors still escape immediately.
     """
 
+    source_geometry_tuple = tuple(source_geometries)
+
+    def _build_local_stepped_fallback() -> trimesh.Trimesh | None:
+        merged_source = _union_run_group_geometries(source_geometry_tuple)
+        if merged_source is None or merged_source.is_empty:
+            return None
+        try:
+            return build_vector_stepped_volume(
+                [
+                    {
+                        "geometry": merged_source,
+                        "height": float(height),
+                        "z_offset": float(z_offset),
+                    }
+                ],
+                scale_mm_per_svg_unit=float(scale_factor),
+            )
+        except VECTOR_FATAL_ERRORS:
+            raise
+        except VECTOR_HANDLED_ERRORS:
+            return None
+
     preparation = prepare_vector_spatial_groups_best_effort(
-        tuple(source_geometries),
+        source_geometry_tuple,
         scale_mm_per_svg_unit=float(scale_factor),
     )
+    if int(preparation.failed_part_count) > 0:
+        fallback_mesh = _build_local_stepped_fallback()
+        if fallback_mesh is not None:
+            return [fallback_mesh], {
+                "source_part_count": int(preparation.source_part_count),
+                "built_source_part_count": int(preparation.source_part_count),
+                "failed_source_part_count": 0,
+                "failure_types": {},
+                "local_stepped_fallback_applied": True,
+            }
     output_chunks: list[trimesh.Trimesh] = []
     pending_meshes: list[trimesh.Trimesh] = []
     pending_bytes = 0
@@ -390,10 +414,7 @@ def _build_source_spatial_groups(
             shape_count=len(pending_meshes),
         )
         output_chunks.append(
-            _concatenate_meshes_fast(
-                pending_meshes,
-                preserve_export_parts=False,
-            )
+            _concatenate_meshes_fast(pending_meshes)
         )
         pending_meshes.clear()
         pending_meshes = []
@@ -423,6 +444,19 @@ def _build_source_spatial_groups(
         except VECTOR_FATAL_ERRORS:
             raise
         except VECTOR_HANDLED_ERRORS as exc:
+            fallback_mesh = _build_local_stepped_fallback()
+            if fallback_mesh is not None:
+                pending_meshes.clear()
+                output_chunks.clear()
+                return [fallback_mesh], {
+                    "source_part_count": int(preparation.source_part_count),
+                    "built_source_part_count": int(
+                        preparation.source_part_count
+                    ),
+                    "failed_source_part_count": 0,
+                    "failure_types": {},
+                    "local_stepped_fallback_applied": True,
+                }
             failed_extrusion_parts += int(prepared.stats.source_polygon_count)
             error_name = type(exc).__name__
             failure_types[error_name] = failure_types.get(error_name, 0) + 1
@@ -1502,8 +1536,8 @@ def _sample_arc_segment_points(segment, sample_count=10):
         return []
 
 
-def _concatenate_meshes_fast(meshes, *, preserve_export_parts: bool = False):
-    """Concatenate meshes, optionally retaining closed 3MF leaf boundaries."""
+def _concatenate_meshes_fast(meshes):
+    """Concatenate meshes as one object without retaining legacy leaf ranges."""
 
     items = [mesh for mesh in meshes if mesh is not None]
     if not items:
@@ -1524,34 +1558,12 @@ def _concatenate_meshes_fast(meshes, *, preserve_export_parts: bool = False):
             vertices, faces = _vertices_faces(items[0])
             if vertices.size == 0 or faces.size == 0:
                 return trimesh.Trimesh(process=False)
-            combined = trimesh.Trimesh(
+            return trimesh.Trimesh(
                 vertices=vertices,
                 faces=faces,
                 process=False,
             )
-            nested_ranges: tuple[MeshExportPartRange, ...] = ()
-        else:
-            combined = items[0].copy()
-            nested_ranges = get_mesh_export_part_ranges(items[0])
-        if preserve_export_parts and len(combined.vertices) and len(combined.faces):
-            set_mesh_export_part_ranges(
-                combined,
-                nested_ranges
-                or (
-                    MeshExportPartRange(
-                        vertex_start=0,
-                        vertex_stop=len(combined.vertices),
-                        face_start=0,
-                        face_stop=len(combined.faces),
-                    ),
-                ),
-                only_when_combined_unsafe=(
-                    not isinstance(items[0], tuple)
-                    and bool(nested_ranges)
-                    and mesh_export_parts_are_conditional(items[0])
-                ),
-            )
-        return combined
+        return items[0].copy()
 
     array_parts = []
     total_vertices = 0
@@ -1560,7 +1572,7 @@ def _concatenate_meshes_fast(meshes, *, preserve_export_parts: bool = False):
         vertices, faces = _vertices_faces(item)
         if vertices.size == 0 or faces.size == 0:
             continue
-        array_parts.append((item, vertices, faces))
+        array_parts.append((vertices, faces))
         total_vertices += len(vertices)
         total_faces += len(faces)
 
@@ -1573,8 +1585,7 @@ def _concatenate_meshes_fast(meshes, *, preserve_export_parts: bool = False):
     faces = np.empty((total_faces, 3), dtype=np.int64)
     vertex_cursor = 0
     face_cursor = 0
-    export_ranges: list[MeshExportPartRange] = []
-    for source_item, source_vertices, source_faces in array_parts:
+    for source_vertices, source_faces in array_parts:
         next_vertex = vertex_cursor + len(source_vertices)
         next_face = face_cursor + len(source_faces)
         vertices[vertex_cursor:next_vertex] = source_vertices
@@ -1584,37 +1595,9 @@ def _concatenate_meshes_fast(meshes, *, preserve_export_parts: bool = False):
             out=faces[face_cursor:next_face],
             casting="unsafe",
         )
-        if preserve_export_parts:
-            nested_ranges = (
-                get_mesh_export_part_ranges(source_item)
-                if not isinstance(source_item, tuple)
-                else ()
-            )
-            if nested_ranges:
-                export_ranges.extend(
-                    MeshExportPartRange(
-                        vertex_start=vertex_cursor + part.vertex_start,
-                        vertex_stop=vertex_cursor + part.vertex_stop,
-                        face_start=face_cursor + part.face_start,
-                        face_stop=face_cursor + part.face_stop,
-                    )
-                    for part in nested_ranges
-                )
-            else:
-                export_ranges.append(
-                    MeshExportPartRange(
-                        vertex_start=vertex_cursor,
-                        vertex_stop=next_vertex,
-                        face_start=face_cursor,
-                        face_stop=next_face,
-                    )
-                )
         vertex_cursor = next_vertex
         face_cursor = next_face
-    combined = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
-    if preserve_export_parts:
-        set_mesh_export_part_ranges(combined, export_ranges)
-    return combined
+    return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
 
 
 def _normalize_contours_cached(cache, geom, close_delta_mm=0.03):
@@ -5254,6 +5237,9 @@ class VectorProcessor:
         coating_height_mm = getattr(self, "coating_height_mm", 0.08)
         enable_outline = bool(getattr(self, "enable_outline", False))
         outline_width_mm = getattr(self, "outline_width_mm", 0.0)
+        merge_backing_into_material = bool(
+            getattr(self, "_merge_backing_into_material", False)
+        )
         structure_mode_value = str(getattr(structure_mode, "value", structure_mode))
         is_double_sided = (
             "双面" in structure_mode_value or "Double" in structure_mode_value
@@ -5420,6 +5406,7 @@ class VectorProcessor:
             )
         backing_layer_count = max(1, int(round(thickness_mm / layer_h)))
         backing_height = backing_layer_count * layer_h
+        deferred_vector_slabs = False
 
         t0 = time.perf_counter()
         if enable_relief and is_single_sided and not is_5color:
@@ -5439,6 +5426,7 @@ class VectorProcessor:
                 bbox=bbox,
                 enable_fridge_magnet=enable_fridge_magnet,
                 fridge_magnets=fridge_magnets,
+                merge_backing_into_material=merge_backing_into_material,
             )
         elif is_5color:
             meshes_by_slot = self._run_length_extrude(
@@ -5450,7 +5438,9 @@ class VectorProcessor:
                 scale_factor=scale_factor,
                 face_up=True,
                 optical_z_base=backing_height,
+                defer_materialization=True,
             )
+            deferred_vector_slabs = True
             _log.debug(
                 "5-Color face-up: %s optical layers above %.2fmm backing",
                 num_layers,
@@ -5464,7 +5454,9 @@ class VectorProcessor:
                 num_channels=num_channels,
                 slot_names=slot_names,
                 scale_factor=scale_factor,
+                defer_materialization=True,
             )
+            deferred_vector_slabs = True
         stage_timings["extrude_bottom_s"] = time.perf_counter() - t0
         stage_timings["vector_mesh_rss_after_extrude_bottom_bytes"] = int(
             get_process_rss_bytes() or 0
@@ -5512,9 +5504,37 @@ class VectorProcessor:
                 cavity_specs=cavity_specs,
                 outer_side=outer_side,
             )
-            backing_meshes = []
-            for slab in backing_slabs:
-                backing_meshes.append(
+            # Clamp the backing material slot to a valid index; fall back to 0
+            # when slot_names is empty (legacy defensive path).
+            slot_count = len(slot_names) if slot_names else 0
+            resolved_backing_mat_id = 0
+            if slot_count > 0:
+                try:
+                    candidate = int(backing_color_id)
+                except (TypeError, ValueError):
+                    candidate = 0
+                if 0 <= candidate < slot_count:
+                    resolved_backing_mat_id = candidate
+
+            backing_name = "Board"
+            if merge_backing_into_material and slot_count > 0:
+                backing_name = slot_names[resolved_backing_mat_id]
+
+            if deferred_vector_slabs:
+                backing_entry = meshes_by_slot.setdefault(
+                    backing_name,
+                    {"slabs": [], "mat_id": resolved_backing_mat_id},
+                )
+                backing_entry["slabs"].extend(
+                    {
+                        "geometry": slab["geometry"],
+                        "height": float(slab["height"]),
+                        "z_offset": float(slab["z_offset"]) + gap_offset,
+                    }
+                    for slab in backing_slabs
+                )
+            else:
+                backing_meshes = [
                     self._extrude_spatial_geometry_group(
                         slab["geometry"],
                         height=slab["height"],
@@ -5522,31 +5542,14 @@ class VectorProcessor:
                         scale=scale_factor,
                         stage="backing",
                     )
-                )
-            if backing_meshes:
-                backing_name = "Board"
-                # Clamp the backing material slot to a valid index; fall back
-                # to 0 when slot_names is empty (legacy defensive path).
-                # 钳制底板材质槽到合法索引；slot_names 为空时退回 0。
-                slot_count = len(slot_names) if slot_names else 0
-                resolved_backing_mat_id = 0
-                if slot_count > 0:
-                    try:
-                        candidate = int(backing_color_id)
-                    except (TypeError, ValueError):
-                        candidate = 0
-                    if 0 <= candidate < slot_count:
-                        resolved_backing_mat_id = candidate
-                if backing_name not in meshes_by_slot:
-                    meshes_by_slot[backing_name] = {
-                        "meshes": [],
-                        "mat_id": resolved_backing_mat_id,
-                    }
-                meshes_by_slot[backing_name]["meshes"].extend(backing_meshes)
-                # Transfer ownership to the material bucket.  Keeping this
-                # local list populated would retain every backing mesh even
-                # after the bucket is assembled and cleared below.
-                backing_meshes.clear()
+                    for slab in backing_slabs
+                ]
+                if backing_meshes:
+                    backing_entry = meshes_by_slot.setdefault(
+                        backing_name,
+                        {"meshes": [], "mat_id": resolved_backing_mat_id},
+                    )
+                    backing_entry["meshes"].extend(backing_meshes)
         stage_timings["backing_s"] = time.perf_counter() - t0
         stage_timings["vector_mesh_rss_after_backing_bytes"] = int(
             get_process_rss_bytes() or 0
@@ -5578,30 +5581,40 @@ class VectorProcessor:
                 requested_coating_height = layer_h
             coating_layers = max(1, int(round(requested_coating_height / layer_h)))
             coating_height = coating_layers * layer_h
-            coating_meshes = [
-                self._extrude_spatial_geometry_group(
-                    coating_sil,
-                    height=coating_height,
-                    z_offset=-coating_height,
-                    scale=scale_factor,
-                    stage="coating",
-                )
-            ]
+            coating_name = "Coating"
+            coating_z_offsets = [-coating_height]
             if is_double_sided and not is_5color:
-                top_surface_z = (2 * num_layers + backing_layer_count) * layer_h
-                top_coating = coating_meshes[0].copy()
-                copy_mesh_export_part_ranges(coating_meshes[0], top_coating)
-                top_coating.apply_translation(
-                    (0.0, 0.0, top_surface_z + coating_height)
+                coating_z_offsets.append(
+                    (2 * num_layers + backing_layer_count) * layer_h
                 )
-                coating_meshes.append(top_coating)
-            if coating_meshes:
-                coating_name = "Coating"
+            if deferred_vector_slabs:
+                meshes_by_slot[coating_name] = {
+                    "slabs": [
+                        {
+                            "geometry": coating_sil,
+                            "height": coating_height,
+                            "z_offset": z_offset,
+                        }
+                        for z_offset in coating_z_offsets
+                    ],
+                    "mat_id": max(num_channels, len(slot_names)),
+                }
+            else:
+                coating_meshes = [
+                    self._extrude_spatial_geometry_group(
+                        coating_sil,
+                        height=coating_height,
+                        z_offset=z_offset,
+                        scale=scale_factor,
+                        stage="coating",
+                    )
+                    for z_offset in coating_z_offsets
+                ]
                 meshes_by_slot[coating_name] = {
                     "meshes": coating_meshes,
                     "mat_id": max(num_channels, len(slot_names)),
                 }
-                preview_colors[coating_name] = [200, 200, 200, 80]
+            preview_colors[coating_name] = [200, 200, 200, 80]
         stage_timings["coating_s"] = time.perf_counter() - t0
         stage_timings["vector_mesh_rss_after_coating_bytes"] = int(
             get_process_rss_bytes() or 0
@@ -5621,11 +5634,22 @@ class VectorProcessor:
                 scale_factor,
                 top_z_start,
                 meshes_by_slot,
+                defer_materialization=deferred_vector_slabs,
             )
         stage_timings["extrude_top_s"] = time.perf_counter() - t0
         stage_timings["vector_mesh_rss_after_extrude_top_bytes"] = int(
             get_process_rss_bytes() or 0
         )
+
+        if deferred_vector_slabs:
+            materialize_t0 = time.perf_counter()
+            meshes_by_slot = self._materialize_vector_slabs(
+                meshes_by_slot,
+                scale_factor=scale_factor,
+            )
+            stage_timings["materialize_s"] = (
+                time.perf_counter() - materialize_t0
+            )
 
         # === Stage 8: Assemble scene (sorted by material ID) ===
         t0 = time.perf_counter()
@@ -5659,10 +5683,12 @@ class VectorProcessor:
                 ),
                 shape_count=len(mesh_list),
             )
-            combined = _concatenate_meshes_fast(
-                mesh_list,
-                preserve_export_parts=True,
-            )
+            if len(mesh_list) == 1:
+                combined = mesh_list[0]
+            else:
+                combined = _concatenate_meshes_fast(
+                    mesh_list,
+                )
             if hasattr(mesh_list, "clear"):
                 mesh_list.clear()
             # Independent prisms must remain independently indexed closed
@@ -5740,6 +5766,7 @@ class VectorProcessor:
         bbox,
         enable_fridge_magnet=False,
         fridge_magnets=None,
+        merge_backing_into_material=False,
     ):
         """Extrude existing SVG regions at configured heights.
 
@@ -5872,44 +5899,38 @@ class VectorProcessor:
                         (total_layers, channel, run_start, run_end), []
                     ).append(geometry)
 
-        meshes_by_slot: dict[str, dict] = {}
+        slabs_by_slot: dict[str, dict] = {}
         for (total_layers, channel, run_start, run_end), geometries in optical_groups.items():
             inverted_start = (int(num_layers) - 1) - run_end
             inverted_end = (int(num_layers) - 1) - run_start
             z_offset = (total_layers - int(num_layers) + inverted_start) * layer_h
             height = (inverted_end - inverted_start + 1) * layer_h
             slot_name = slot_names[channel]
-            entry = meshes_by_slot.setdefault(
+            entry = slabs_by_slot.setdefault(
                 slot_name,
-                {"meshes": [], "mat_id": channel},
+                {"slabs": [], "mat_id": channel},
             )
-            new_meshes, recovery_stats = _build_source_spatial_groups(
-                geometries,
-                height=height,
-                z_offset=z_offset,
-                scale_factor=scale_factor,
+            merged = _union_run_group_geometries(geometries)
+            if merged is None or merged.is_empty:
+                continue
+            entry["slabs"].append(
+                {
+                    "geometry": merged,
+                    "height": float(height),
+                    "z_offset": float(z_offset),
+                }
             )
-            entry["meshes"].extend(new_meshes)
-            if int(recovery_stats["failed_source_part_count"]) > 0:
-                _log.warning(
-                    "Vector relief omitted locally unbuildable spatial groups",
-                    extra={
-                        "event": "vector_relief_spatial_group_omitted",
-                        "error_type": "VectorSpatialGroupBuildFailure",
-                        "channel": int(channel),
-                        "run_start": int(run_start),
-                        "run_end": int(run_end),
-                        **recovery_stats,
-                    },
-                )
 
-        board_entry = meshes_by_slot.setdefault(
-            "Board",
-            {
-                "meshes": [],
-                "mat_id": int(backing_color_id),
-            },
-        )
+        resolved_backing_mat_id = 0
+        try:
+            backing_candidate = int(backing_color_id)
+        except (TypeError, ValueError):
+            backing_candidate = 0
+        if 0 <= backing_candidate < len(slot_names):
+            resolved_backing_mat_id = backing_candidate
+        backing_name = "Board"
+        if merge_backing_into_material and slot_names:
+            backing_name = slot_names[resolved_backing_mat_id]
         backing_volume_slabs = []
         full_backing_sil = _union_run_group_geometries(
             [
@@ -5952,12 +5973,24 @@ class VectorProcessor:
             )
             for slab in backing_slabs:
                 backing_volume_slabs.append(slab)
+        meshes_by_slot = VectorProcessor._materialize_vector_slabs(
+            slabs_by_slot,
+            scale_factor=scale_factor,
+        )
         board_mesh = build_vector_stepped_volume(
             backing_volume_slabs,
             scale_mm_per_svg_unit=scale_factor,
         )
         if board_mesh is not None and len(board_mesh.faces) > 0:
+            board_entry = meshes_by_slot.setdefault(
+                backing_name,
+                {"meshes": [], "mat_id": resolved_backing_mat_id},
+            )
             board_entry["meshes"].append(board_mesh)
+            if len(board_entry["meshes"]) > 1:
+                board_entry["meshes"] = [
+                    _concatenate_meshes_fast(board_entry["meshes"])
+                ]
         return meshes_by_slot
 
     def svg_to_mesh(
@@ -7034,14 +7067,14 @@ class VectorProcessor:
         scale_factor,
         face_up=False,
         optical_z_base=0.0,
+        defer_materialization=False,
     ):
-        """Extrude each shape per channel, merging consecutive same-channel
-        layers into single volumes (run-length encoding).
+        """Collect each material's runs and build one stepped solid.
 
-        Before extrusion, shapes sharing the same (channel, layer-run) are
-        prepared once on the canonical physical grid. Caps and walls are then
-        emitted from the same indexed rings, so accepted geometry is closed by
-        construction instead of being repaired after extrusion.
+        Shapes sharing the same material and Z run are unioned in 2D.  All of
+        one material's runs are then sent to the stepped-surface builder once,
+        so internal Z contacts never become extra 3MF parts.  Callers that also
+        need to add backing or coating slabs can defer that final materialization.
 
         When *face_up* is True the layer order is reversed so that
         recipe[N-1] sits at the lowest Z (just above *optical_z_base*)
@@ -7146,21 +7179,12 @@ class VectorProcessor:
             },
         )
 
-        meshes_by_slot = {}
+        slabs_by_slot: dict[str, dict[str, object]] = {}
         stage_d_hist: dict[int, dict[int, int]] = {}
-        last_prepared_key = None
-        last_prepared = None
-        spatial_recovery_group_count = 0
-        spatial_recovery_geometry_count = 0
-        spatial_recovery_part_count = 0
-        spatial_recovery_built_part_count = 0
-        spatial_recovery_failed_part_count = 0
-        canonical_failure_types: dict[str, int] = {}
-        source_failure_types: dict[str, int] = {}
         for (ch, run_start, run_end), geoms in run_groups.items():
             slot_name = slot_names[ch]
-            if slot_name not in meshes_by_slot:
-                meshes_by_slot[slot_name] = {"meshes": [], "mat_id": ch}
+            if slot_name not in slabs_by_slot:
+                slabs_by_slot[slot_name] = {"slabs": [], "mat_id": ch}
 
             source_geoms = tuple(
                 geom for geom in geoms if geom is not None and not geom.is_empty
@@ -7179,6 +7203,10 @@ class VectorProcessor:
                 coordinate_count=group_geometry_bytes // 64,
             )
 
+            run_geometry = _union_run_group_geometries(source_geoms)
+            if run_geometry is None or run_geometry.is_empty:
+                continue
+
             if face_up:
                 inv_start = (num_layers - 1) - run_end
                 inv_end = (num_layers - 1) - run_start
@@ -7188,119 +7216,25 @@ class VectorProcessor:
                 z_bot = run_start * layer_h
                 height = (run_end - run_start + 1) * layer_h
 
-            canonical_error_name = None
-            prepared = None
-            canonical_mesh = None
-            try:
-                prepared_key = (
-                    tuple(id(geometry) for geometry in source_geoms),
-                    float(scale_factor),
-                )
-                if prepared_key == last_prepared_key and last_prepared is not None:
-                    prepared = last_prepared
-                else:
-                    prepared = prepare_vector_run_group(
-                        source_geoms,
-                        scale_mm_per_svg_unit=float(scale_factor),
-                    )
-                    last_prepared_key = prepared_key
-                    last_prepared = prepared
-                allocation_estimate = estimate_indexed_prism_memory(
-                    coordinate_count=int(
-                        prepared.stats.output_coordinate_count
-                    ),
-                    hole_count=int(prepared.stats.output_hole_count),
-                    component_count=int(
-                        prepared.stats.output_component_count
-                    ),
-                )
-                _enforce_vector_mesh_runtime_headroom(
-                    stage="run_group_canonical_geometry",
-                    estimated_additional_bytes=(
-                        allocation_estimate.estimated_additional_bytes
-                    ),
-                    shape_count=len(source_geoms),
-                    coordinate_count=int(
-                        prepared.stats.output_coordinate_count
-                    ),
-                )
-                canonical_mesh = extrude_prepared_vector_run_group(
-                    prepared,
-                    height_mm=height,
-                    z_offset_mm=z_bot,
-                )
-            except VECTOR_FATAL_ERRORS:
-                raise
-            except VECTOR_HANDLED_ERRORS as exc:
-                canonical_error_name = type(exc).__name__
-                exc.__traceback__ = None
-
-            if canonical_error_name is None:
-                new_meshes = [canonical_mesh]
-            else:
-                # Release the failed whole-run candidate before rebuilding the
-                # same source through smaller canonical spatial groups.
-                prepared = None
-                canonical_mesh = None
-                last_prepared_key = None
-                last_prepared = None
-                new_meshes, recovery_stats = (
-                    _build_source_spatial_groups(
-                        source_geoms,
-                        height=height,
-                        z_offset=z_bot,
-                        scale_factor=scale_factor,
-                    )
-                )
-                spatial_recovery_group_count += 1
-                spatial_recovery_geometry_count += len(source_geoms)
-                spatial_recovery_part_count += int(
-                    recovery_stats["source_part_count"]
-                )
-                spatial_recovery_built_part_count += int(
-                    recovery_stats["built_source_part_count"]
-                )
-                spatial_recovery_failed_part_count += int(
-                    recovery_stats["failed_source_part_count"]
-                )
-                canonical_failure_types[canonical_error_name] = (
-                    canonical_failure_types.get(canonical_error_name, 0) + 1
-                )
-                for error_name, error_count in recovery_stats[
-                    "failure_types"
-                ].items():
-                    source_failure_types[error_name] = (
-                        source_failure_types.get(error_name, 0)
-                        + int(error_count)
-                    )
-
-            meshes_by_slot[slot_name]["meshes"].extend(new_meshes)
+            slabs = slabs_by_slot[slot_name]["slabs"]
+            assert isinstance(slabs, list)
+            slabs.append(
+                {
+                    "geometry": run_geometry,
+                    "z_offset": float(z_bot),
+                    "height": float(height),
+                }
+            )
             for layer_idx in range(int(run_start), int(run_end) + 1):
                 layer_hist = stage_d_hist.setdefault(int(layer_idx), {})
-                layer_hist[int(ch)] = layer_hist.get(int(ch), 0) + len(new_meshes)
+                layer_hist[int(ch)] = layer_hist.get(int(ch), 0) + 1
 
-        if spatial_recovery_group_count:
-            _log.warning(
-                "Canonical vector run groups required spatial recovery",
-                extra={
-                    "event": "vector_run_group_spatial_recovery",
-                    "error_type": "VectorRunGroupSpatialRecovery",
-                    "error_message": (
-                        "Whole-run preparation failed; canonical spatial "
-                        "groups retained the printable source regions"
-                    ),
-                    "recovery_group_count": spatial_recovery_group_count,
-                    "source_geometry_count": spatial_recovery_geometry_count,
-                    "source_part_count": spatial_recovery_part_count,
-                    "built_source_part_count": (
-                        spatial_recovery_built_part_count
-                    ),
-                    "failed_source_part_count": (
-                        spatial_recovery_failed_part_count
-                    ),
-                    "canonical_failure_types": canonical_failure_types,
-                    "source_failure_types": source_failure_types,
-                },
+        if defer_materialization:
+            result_by_slot = slabs_by_slot
+        else:
+            result_by_slot = VectorProcessor._materialize_vector_slabs(
+                slabs_by_slot,
+                scale_factor=scale_factor,
             )
 
         _log.debug(
@@ -7308,7 +7242,7 @@ class VectorProcessor:
             extra={
                 "event": "vector_diag_stage_d_built_meshes_per_layer_channel",
                 "per_layer_channel_mesh_count": stage_d_hist,
-                "slot_count": len(meshes_by_slot),
+                "slot_count": len(result_by_slot),
             },
         )
         _log.debug(
@@ -7316,11 +7250,66 @@ class VectorProcessor:
             extra={
                 "event": "vector_diag_debug_dump",
                 "run_summary": run_summary,
-                "slot_count": len(meshes_by_slot),
+                "slot_count": len(result_by_slot),
                 "face_up": bool(face_up),
                 "optical_z_base": float(optical_z_base),
             },
         )
+        return result_by_slot
+
+    @staticmethod
+    def _materialize_vector_slabs(slabs_by_slot, *, scale_factor):
+        """Extrude run slabs and concatenate them into one mesh per material."""
+
+        meshes_by_slot: dict[str, dict[str, object]] = {}
+        for slot_name, data in slabs_by_slot.items():
+            slabs = data.get("slabs", [])
+            if not slabs:
+                continue
+            material_meshes: list[trimesh.Trimesh] = []
+            failed_source_part_count = 0
+            failure_types: dict[str, int] = {}
+            for slab in slabs:
+                geometry = slab.get("geometry")
+                if geometry is None or getattr(geometry, "is_empty", True):
+                    continue
+                slab_meshes, recovery_stats = _build_source_spatial_groups(
+                    (geometry,),
+                    height=float(slab["height"]),
+                    z_offset=float(slab["z_offset"]),
+                    scale_factor=float(scale_factor),
+                )
+                material_meshes.extend(slab_meshes)
+                failed_source_part_count += int(
+                    recovery_stats["failed_source_part_count"]
+                )
+                for error_name, error_count in recovery_stats[
+                    "failure_types"
+                ].items():
+                    failure_types[error_name] = (
+                        failure_types.get(error_name, 0) + int(error_count)
+                    )
+            if hasattr(slabs, "clear"):
+                slabs.clear()
+            if failed_source_part_count:
+                _log.warning(
+                    "Vector material omitted locally unbuildable source parts",
+                    extra={
+                        "event": "vector_material_source_part_omitted",
+                        "error_type": "VectorSpatialGroupBuildFailure",
+                        "slot_name": str(slot_name),
+                        "failed_source_part_count": failed_source_part_count,
+                        "failure_types": failure_types,
+                    },
+                )
+            if not material_meshes:
+                continue
+            mesh = _concatenate_meshes_fast(material_meshes)
+            material_meshes.clear()
+            meshes_by_slot[slot_name] = {
+                "meshes": [mesh],
+                "mat_id": int(data["mat_id"]),
+            }
         return meshes_by_slot
 
     # ── Stage 7: Double-sided helper ─────────────────────────────────────
@@ -7335,6 +7324,7 @@ class VectorProcessor:
         scale_factor,
         top_z_start,
         meshes_by_slot,
+        defer_materialization=False,
     ):
         """Mirror colour layers above the backing for double-sided mode.
 
@@ -7352,13 +7342,15 @@ class VectorProcessor:
             scale_factor=scale_factor,
             face_up=True,
             optical_z_base=top_z_start,
+            defer_materialization=defer_materialization,
         )
+        payload_key = "slabs" if defer_materialization else "meshes"
         for slot_name, data in top_meshes_by_slot.items():
             target = meshes_by_slot.setdefault(
                 slot_name,
-                {"meshes": [], "mat_id": data["mat_id"]},
+                {payload_key: [], "mat_id": data["mat_id"]},
             )
-            target["meshes"].extend(data["meshes"])
+            target[payload_key].extend(data[payload_key])
 
     # ── SVG parsing ──────────────────────────────────────────────────────
 

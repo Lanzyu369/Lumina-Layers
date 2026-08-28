@@ -348,14 +348,6 @@ def _materialize_n3mf_mesh_view_arrays(
         raise ValueError(
             "3MF mesh vertices must remain finite after float32 conversion"
         )
-    for start in range(0, len(faces), 65_536):
-        triangles = vertices[faces[start : start + 65_536]]
-        cross = np.cross(
-            triangles[:, 1] - triangles[:, 0],
-            triangles[:, 2] - triangles[:, 0],
-        )
-        if np.any(np.all(cross == 0.0, axis=1)):
-            raise ValueError("3MF mesh contains a float32-degenerate triangle")
     vertices.setflags(write=False)
     faces.setflags(write=False)
     return vertices, faces
@@ -2317,6 +2309,10 @@ class BambuStudio3MFWriter:
         # 任意提高精度带来的文件体积成本。
         opts.vertex_precision = 9
         opts.compact_xml = True
+        # Removing an individual face from an otherwise closed indexed shell
+        # creates an open mesh. Vector geometry handles exact float32 collapse
+        # locally, so the writer must preserve the final topology verbatim.
+        opts.triangle_write_mode = n3mf.TriangleWriteMode.Keep
         if self.watermark and hasattr(n3mf, "WatermarkConfig"):
             opts.watermark = n3mf.WatermarkConfig(payload=self.watermark.encode("utf-8"))
         elif self.watermark:

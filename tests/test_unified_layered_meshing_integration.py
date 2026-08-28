@@ -9,6 +9,7 @@ from shapely.geometry import box
 import core.mesh_generators as mesh_generators
 import core.vector_engine as vector_engine
 from config import ModelingMode
+from core.mesh_export_parts import get_mesh_export_part_ranges
 from core.mesh_generators import get_mesher
 from core.vector_engine import VectorProcessor
 
@@ -58,7 +59,7 @@ def test_raster_and_rasterized_svg_modes_share_exact_surface_builder(
     assert mesh.metadata["layered_mesh_stats"]["source_voxel_count"] == 12
 
 
-def test_native_svg_runs_use_canonical_direct_extrusion(
+def test_native_svg_runs_avoid_whole_material_stepped_arrangement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source_geometries = [
@@ -66,26 +67,12 @@ def test_native_svg_runs_use_canonical_direct_extrusion(
         box(10.0, 0.0, 20.0, 10.0),
         box(30.0, 0.0, 35.0, 5.0),
     ]
-    prepare_calls = 0
-    extrude_calls = 0
-    real_prepare = vector_engine.prepare_vector_run_group
-    real_extrude = vector_engine.extrude_prepared_vector_run_group
-
-    def recording_prepare(*args, **kwargs):
-        nonlocal prepare_calls
-        prepare_calls += 1
-        return real_prepare(*args, **kwargs)
-
-    def recording_extrude(*args, **kwargs):
-        nonlocal extrude_calls
-        extrude_calls += 1
-        return real_extrude(*args, **kwargs)
-
-    monkeypatch.setattr(vector_engine, "prepare_vector_run_group", recording_prepare)
     monkeypatch.setattr(
         vector_engine,
-        "extrude_prepared_vector_run_group",
-        recording_extrude,
+        "build_vector_stepped_volume",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("ordinary Vector entered whole-material arrangement")
+        ),
     )
 
     by_slot = VectorProcessor._run_length_extrude(
@@ -101,13 +88,9 @@ def test_native_svg_runs_use_canonical_direct_extrusion(
     )
 
     mesh = by_slot["White"]["meshes"][0]
-    stats = mesh.metadata["vector_layer_geometry"]
-    assert prepare_calls == 1
-    assert extrude_calls == 1
-    assert stats["source_geometry_count"] == 3
-    assert stats["output_component_count"] == 2
-    assert stats["source_area_mm2"] == pytest.approx(225.0)
-    assert stats["output_area_mm2"] == pytest.approx(225.0)
+    assert len(by_slot["White"]["meshes"]) == 1
+    assert len(mesh.split(only_watertight=False)) == 2
+    assert get_mesh_export_part_ranges(mesh) == ()
     assert mesh.is_watertight
     assert np.all(_edge_incidence(mesh) == 2)
     assert float(mesh.volume) == pytest.approx(225.0 * 0.16)
@@ -158,6 +141,41 @@ def test_native_svg_relief_uses_direct_canonical_stepped_surface(
 
     board = by_slot["Board"]["meshes"][0]
     assert calls == 1
+    assert len(by_slot["Red"]["meshes"]) == 1
+    assert len(by_slot["White"]["meshes"]) == 1
     assert board.metadata["vector_stepped_geometry"]["component_count"] == 1
     assert board.is_watertight
     assert np.all(_edge_incidence(board) == 2)
+
+
+def test_native_svg_relief_keeps_alternating_runs_in_one_material_object() -> None:
+    by_slot = VectorProcessor._build_relief_meshes(
+        matched_shapes=[
+            {
+                "geometry": box(0.0, 0.0, 10.0, 10.0),
+                "recipe": [0, 1, 0],
+                "matched_rgb": (255, 0, 0),
+            }
+        ],
+        num_layers=3,
+        layer_h=0.08,
+        num_channels=2,
+        slot_names=["Red", "White"],
+        scale_factor=1.0,
+        backing_color_id=1,
+        default_height_mm=1.0,
+        height_mode="color",
+        color_height_map={"#ff0000": 1.04},
+        heightmap_path=None,
+        heightmap_max_height=None,
+        bbox=(0.0, 0.0, 10.0, 10.0),
+    )
+
+    assert len(by_slot["Red"]["meshes"]) == 1
+    assert len(by_slot["White"]["meshes"]) == 1
+    assert get_mesh_export_part_ranges(by_slot["Red"]["meshes"][0]) == ()
+    assert all(
+        mesh.is_watertight
+        for data in by_slot.values()
+        for mesh in data["meshes"]
+    )

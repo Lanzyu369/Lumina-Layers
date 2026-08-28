@@ -243,9 +243,8 @@ def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
         )
 
     bounded_concat.assert_called_once()
-    assert bounded_concat.call_args.kwargs["preserve_export_parts"] is True
     assert len(captured_ranges) == 1
-    assert len(captured_ranges[0]) == 2
+    assert captured_ranges[0] == ()
     assert any(
         call.kwargs.get("stage") == "large_format_vector_board_merge"
         for call in memory_guard.call_args_list
@@ -263,8 +262,13 @@ def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
             modifier_xml = tile_package.read(
                 "Metadata/layer_config_ranges.xml"
             )
+            model_settings_xml = tile_package.read(
+                "Metadata/model_settings.config"
+            )
 
         root = ET.fromstring(modifier_xml)
+        model_settings = ET.fromstring(model_settings_xml)
+        assert len(model_settings.findall("./object/part")) == 1
         range_element = root.find("./object/range")
         assert range_element is not None
         assert float(range_element.attrib["min_z"]) == pytest.approx(

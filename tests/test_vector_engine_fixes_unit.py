@@ -361,8 +361,16 @@ class TestNativeVectorRelief:
         )
 
         for slot_name in ("Material A", "Material B"):
-            flat_meshes = flat_result[slot_name]["meshes"]
-            relief_meshes = result[slot_name]["meshes"]
+            flat_meshes = [
+                component
+                for mesh in flat_result[slot_name]["meshes"]
+                for component in mesh.split(only_watertight=False)
+            ]
+            relief_meshes = [
+                component
+                for mesh in result[slot_name]["meshes"]
+                for component in mesh.split(only_watertight=False)
+            ]
             flat_front_intervals = sorted(
                 (float(mesh.bounds[0, 2]), float(mesh.bounds[1, 2]))
                 for mesh in flat_meshes
@@ -2533,7 +2541,7 @@ class TestRunLengthExtrudeMerging:
         assert "White" in result
         assert "Cyan" in result
 
-    def test_same_run_group_uses_canonical_spatial_partition(self):
+    def test_same_run_group_becomes_one_material_with_three_components(self):
         geoms = [
             Polygon([(0, 0), (5, 0), (5, 5), (0, 5)]),
             Polygon([(10, 0), (15, 0), (15, 5), (10, 5)]),
@@ -2544,57 +2552,33 @@ class TestRunLengthExtrudeMerging:
             for geom in geoms
         ]
 
-        canonical_results = []
-        real_prepare = vector_engine.prepare_vector_run_group
-
-        def track_prepare(*args, **kwargs):
-            result = real_prepare(*args, **kwargs)
-            canonical_results.append(result)
-            return result
-
-        with mock.patch.object(
-            vector_engine,
-            "prepare_vector_run_group",
-            side_effect=track_prepare,
-        ):
-            result = VectorProcessor._run_length_extrude(
-                matched,
-                num_layers=5,
-                layer_h=0.08,
-                num_channels=4,
-                slot_names=["White", "Cyan", "Magenta", "Yellow"],
-                scale_factor=1.0,
-            )
+        result = VectorProcessor._run_length_extrude(
+            matched,
+            num_layers=5,
+            layer_h=0.08,
+            num_channels=4,
+            slot_names=["White", "Cyan", "Magenta", "Yellow"],
+            scale_factor=1.0,
+        )
 
         assert "White" in result
-        assert len(canonical_results) == 1
-        assert canonical_results[0].stats.spatial_group_count == 3
-        assert canonical_results[0].stats.output_component_count == 3
+        assert len(result["White"]["meshes"]) == 1
+        assert len(
+            result["White"]["meshes"][0].split(only_watertight=False)
+        ) == 3
 
-    def test_reuses_canonical_geometry_across_adjacent_run_groups(self):
+    def test_materializes_each_material_once_across_adjacent_run_groups(self):
         sq1 = Polygon([(0, 0), (5, 0), (5, 5), (0, 5)])
         sq2 = Polygon([(10, 0), (15, 0), (15, 5), (10, 5)])
         matched = [
             {"geometry": sq1, "recipe": [0, 1, 0], "color": (255, 255, 255)},
             {"geometry": sq2, "recipe": [0, 1, 0], "color": (0, 255, 255)},
         ]
-        snap_calls = []
-
-        def spy_set_precision(geom, grid_size):
-            snap_calls.append((id(geom), grid_size))
-            return geom
-
-        prepare_spy = mock.Mock(wraps=vector_engine.prepare_vector_run_group)
-        with (
-            mock.patch.dict(
-                VectorProcessor._run_length_extrude.__globals__,
-                {"set_precision": spy_set_precision},
-            ),
-            mock.patch.object(
-                vector_engine,
-                "prepare_vector_run_group",
-                prepare_spy,
-            ),
+        stepped_spy = mock.Mock(wraps=vector_engine.build_vector_stepped_volume)
+        with mock.patch.object(
+            vector_engine,
+            "build_vector_stepped_volume",
+            stepped_spy,
         ):
             result = VectorProcessor._run_length_extrude(
                 matched,
@@ -2607,8 +2591,9 @@ class TestRunLengthExtrudeMerging:
 
         assert "White" in result
         assert "Cyan" in result
-        assert prepare_spy.call_count == 1
-        assert snap_calls == []
+        assert stepped_spy.call_count == 0
+        assert len(result["White"]["meshes"]) == 1
+        assert len(result["Cyan"]["meshes"]) == 1
 
     def test_run_group_union_falls_back_when_disjoint_subset_union_fails(self):
         geoms = [

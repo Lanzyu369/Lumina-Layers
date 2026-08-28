@@ -383,8 +383,8 @@ class TestVectorBranchExport:
 
     @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
     @patch("core.vector_engine.VectorProcessor")
-    def test_slot_names_keep_board_when_separate_backing_enabled(self, MockVP, mock_bambu_export, tmp_path):
-        """When separate_backing=True, Board should remain an exported slot."""
+    def test_separate_backing_reuses_selected_material_slot(self, MockVP, mock_bambu_export, tmp_path):
+        """Board stays editable without creating a synthetic filament."""
         from config import ModelingMode
 
         svg_file = tmp_path / "test3.svg"
@@ -400,7 +400,13 @@ class TestVectorBranchExport:
             m.metadata["name"] = name
             fake_scene.add_geometry(m, geom_name=name)
 
-        MockVP.return_value = _build_fake_processor(fake_scene)
+        fake_processor = _build_fake_processor(fake_scene)
+        fake_processor.analyze_svg.return_value.slot_names = ["White", "Cyan"]
+        fake_processor.analyze_svg.return_value.preview_colors = {
+            0: [255, 255, 255, 255],
+            1: [0, 255, 255, 255],
+        }
+        MockVP.return_value = fake_processor
 
         from core.converter import convert_image_to_3d
 
@@ -425,6 +431,11 @@ class TestVectorBranchExport:
 
         _, kwargs = mock_bambu_export.call_args
         assert kwargs["slot_names"] == ["White", "Cyan", "Board"]
+        assert kwargs["project_slot_names"] == ["White", "Cyan"]
+        assert (
+            kwargs["scene"].geometry["Board"].metadata["bambu_material_name"]
+            == "White"
+        )
 
     @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
     @patch("core.vector_engine.VectorProcessor")
@@ -479,7 +490,14 @@ class TestVectorBranchExport:
 
         _, export_kwargs = mock_bambu_export.call_args
         assert export_kwargs["slot_names"] == ["White", "Cyan", "Board"]
+        assert export_kwargs["project_slot_names"] == ["White", "Cyan"]
         assert export_kwargs["preview_colors"]["Board"] == [0, 255, 255, 255]
+        assert (
+            export_kwargs["scene"]
+            .geometry["Board"]
+            .metadata["bambu_material_name"]
+            == "Cyan"
+        )
 
     @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
     @patch("core.vector_engine.VectorProcessor")

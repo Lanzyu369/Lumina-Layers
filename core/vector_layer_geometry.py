@@ -1257,7 +1257,24 @@ def _canonical_cap_faces(
     """Triangulate canonical rings with a topology-appropriate kernel."""
 
     if not polygon.hole_units:
-        return triangulate_float64(vertices_2d, ring_ends)
+        earcut_faces = np.asarray(
+            triangulate_float64(vertices_2d, ring_ends),
+            dtype=np.int64,
+        ).reshape((-1, 3))
+        if (
+            len(earcut_faces) > 0
+            and np.all(earcut_faces >= 0)
+            and np.all(earcut_faces < len(vertices_2d))
+        ):
+            triangles = vertices_2d[earcut_faces]
+            signed_twice_area = (
+                (triangles[:, 1, 0] - triangles[:, 0, 0])
+                * (triangles[:, 2, 1] - triangles[:, 0, 1])
+                - (triangles[:, 1, 1] - triangles[:, 0, 1])
+                * (triangles[:, 2, 0] - triangles[:, 0, 0])
+            )
+            if not bool(np.any(signed_twice_area == 0.0)):
+                return earcut_faces
 
     polygon_geometry = polygon.to_geometry(grid_mm)
     triangles = shapely.constrained_delaunay_triangles(polygon_geometry)
@@ -1289,6 +1306,39 @@ def _canonical_cap_faces(
     ):
         raise ValueError("Vector constrained cap introduced a non-ring vertex")
     return order[positions].reshape((-1, 3))
+
+
+def _validate_float32_triangle_domain(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    *,
+    mesh_label: str,
+) -> None:
+    """Certify locally generated triangles in the actual 3MF writer domain."""
+
+    source_vertices = np.asarray(vertices)
+    source_faces = np.asarray(faces, dtype=np.int64)
+    for start in range(0, len(source_vertices), 65_536):
+        writer_block = np.asarray(
+            source_vertices[start : start + 65_536],
+            dtype=np.float32,
+        )
+        if not np.all(np.isfinite(writer_block)):
+            raise ValueError(f"{mesh_label} exceeds float32 writer space")
+
+    for start in range(0, len(source_faces), 65_536):
+        triangles = np.asarray(
+            source_vertices[source_faces[start : start + 65_536]],
+            dtype=np.float32,
+        )
+        cross = np.cross(
+            triangles[:, 1] - triangles[:, 0],
+            triangles[:, 2] - triangles[:, 0],
+        )
+        if np.any(np.all(cross == 0.0, axis=1)):
+            raise ValueError(
+                f"{mesh_label} contains a float32-degenerate triangle"
+            )
 
 
 def extrude_prepared_vector_run_group(
@@ -1358,7 +1408,11 @@ def extrude_prepared_vector_run_group(
         expected_area = float(polygon.to_geometry(prepared.grid_mm).area)
         cap_faces = _validate_cap_indices(
             vertices_2d,
-            raw_cap_faces,
+            _restore_noded_cap_boundary(
+                vertices_2d,
+                raw_cap_faces,
+                ring_ends,
+            ),
             ring_ends,
             expected_area_mm2=expected_area,
         )
@@ -1410,19 +1464,11 @@ def extrude_prepared_vector_run_group(
     if vertex_cursor != vertex_count or face_cursor != face_count:
         raise ValueError("Vector canonical mesh allocation count mismatch")
 
-    writer_vertices = vertices.astype(np.float32)
-    if not np.all(np.isfinite(writer_vertices)):
-        raise ValueError("Vector canonical mesh exceeds float32 writer space")
-    for start in range(0, len(faces), 65_536):
-        triangles = writer_vertices[faces[start : start + 65_536]]
-        cross = np.cross(
-            triangles[:, 1] - triangles[:, 0],
-            triangles[:, 2] - triangles[:, 0],
-        )
-        if np.any(np.all(cross == 0.0, axis=1)):
-            raise ValueError(
-                "Vector canonical mesh contains a float32-degenerate triangle"
-            )
+    _validate_float32_triangle_domain(
+        vertices,
+        faces,
+        mesh_label="Vector canonical mesh",
+    )
 
     mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
     mesh.metadata["_lumina_planar_coverage_mm2"] = float(
@@ -1478,6 +1524,48 @@ def _stepped_prepared_polygon(
     return prepared, _oriented_polygon_rings(prepared)
 
 
+def _extrude_single_stepped_slab(
+    slab: _SteppedPhysicalSlab,
+    *,
+    grid_mm: float,
+) -> trimesh.Trimesh:
+    """Extrude an isolated slab without building a multi-level arrangement."""
+
+    prepared_polygon, rings = _stepped_prepared_polygon(
+        slab.geometry,
+        grid_mm=grid_mm,
+    )
+    coordinate_count = sum(len(ring) for ring in rings)
+    integer_coordinate_bytes = sum(ring.nbytes for ring in rings)
+    area_mm2 = float(slab.geometry.area)
+    prepared = PreparedVectorRunGroup(
+        polygons=(prepared_polygon,),
+        grid_mm=float(grid_mm),
+        stats=VectorLayerGeometryStats(
+            source_geometry_count=1,
+            source_polygon_count=1,
+            source_component_count=1,
+            source_hole_count=len(prepared_polygon.hole_units),
+            source_area_mm2=area_mm2,
+            output_component_count=1,
+            output_hole_count=len(prepared_polygon.hole_units),
+            output_area_mm2=area_mm2,
+            input_coordinate_count=coordinate_count,
+            output_coordinate_count=coordinate_count,
+            integer_coordinate_bytes=integer_coordinate_bytes,
+            spatial_group_count=1,
+            simplified_group_count=0,
+            restored_group_count=0,
+            separated_contact_group_count=0,
+        ),
+    )
+    return extrude_prepared_vector_run_group(
+        prepared,
+        height_mm=slab.z_end_mm - slab.z_start_mm,
+        z_offset_mm=slab.z_start_mm,
+    )
+
+
 def _stepped_slab_parts(
     slabs: Sequence[dict],
     *,
@@ -1507,22 +1595,23 @@ def _stepped_slab_parts(
         if not all(math.isfinite(value) for value in (z_start, z_end)):
             raise ValueError("Vector stepped-volume Z range must be finite")
         for polygon in _polygon_parts(geometry):
-            physical = affinity.scale(
+            physical_geometry = affinity.scale(
                 polygon,
                 xfact=scale,
                 yfact=scale,
                 origin=(0.0, 0.0),
             )
-            physical_parts.append(
-                _PhysicalPart(source_index=slab_index, geometry=physical)
-            )
-            raw_slabs.append(
-                _SteppedPhysicalSlab(
-                    geometry=physical,
-                    z_start_mm=round(z_start, 9),
-                    z_end_mm=round(z_end, 9),
+            for physical in _polygon_parts(physical_geometry):
+                physical_parts.append(
+                    _PhysicalPart(source_index=slab_index, geometry=physical)
                 )
-            )
+                raw_slabs.append(
+                    _SteppedPhysicalSlab(
+                        geometry=physical,
+                        z_start_mm=round(z_start, 9),
+                        z_end_mm=round(z_end, 9),
+                    )
+                )
     if not raw_slabs:
         return [], float(policy.grid_mm)
 
@@ -1535,7 +1624,7 @@ def _stepped_slab_parts(
             mode="valid_output",
         )
         if snapped is None or snapped.is_empty:
-            raise ValueError("Vector stepped-volume grid removed a source slab")
+            continue
         for polygon in _polygon_parts(snapped):
             snapped_slabs.append(
                 _SteppedPhysicalSlab(
@@ -1557,14 +1646,39 @@ def _stepped_component_groups(
     footprint = unary_union([slab.geometry for slab in slabs])
     components = list(_polygon_parts(footprint))
     grouped: list[list[_SteppedPhysicalSlab]] = [[] for _ in components]
+    component_tree = STRtree(components)
+    orphan_components: list[Polygon] = []
+    orphan_groups: list[list[_SteppedPhysicalSlab]] = []
     for slab in slabs:
         representative = slab.geometry.representative_point()
-        for component_index, component in enumerate(components):
-            if component.covers(representative):
-                grouped[component_index].append(slab)
-                break
-        else:
-            raise ValueError("Vector stepped-volume slab lost its XY component")
+        matches = np.asarray(
+            component_tree.query(representative, predicate="covered_by"),
+            dtype=np.int64,
+        ).reshape(-1)
+        if len(matches) == 0:
+            nearby = np.asarray(
+                component_tree.query(slab.geometry, predicate="intersects"),
+                dtype=np.int64,
+            ).reshape(-1)
+            if len(nearby) > 0:
+                matches = np.asarray(
+                    [
+                        max(
+                            (int(index) for index in nearby),
+                            key=lambda index: float(
+                                components[index].intersection(slab.geometry).area
+                            ),
+                        )
+                    ],
+                    dtype=np.int64,
+                )
+        if len(matches) > 0:
+            grouped[int(np.min(matches))].append(slab)
+            continue
+        orphan_components.append(slab.geometry)
+        orphan_groups.append([slab])
+    components.extend(orphan_components)
+    grouped.extend(orphan_groups)
 
     accepted_footprints: list[Polygon] = []
     separated_groups: list[list[_SteppedPhysicalSlab]] = []
@@ -1685,9 +1799,15 @@ def _stepped_arrangement_cells(
     ]
     if not occupied_footprints:
         return [], np.empty((0, len(footprints)), dtype=bool)
-    linework = unary_union([footprint.boundary for footprint in occupied_footprints])
+    # Snap-round and node the complete line arrangement in one fixed-precision
+    # operation.  This keeps every resulting cell on the writer-safe physical
+    # grid and lets only genuinely sub-grid residue collapse there.
+    linework = shapely.unary_union(
+        [footprint.boundary for footprint in occupied_footprints],
+        grid_size=grid_mm,
+    )
     cells = [
-        set_precision(cell, grid_size=grid_mm, mode="valid_output")
+        cell
         for cell in polygonize(linework)
         if not cell.is_empty and float(cell.area) > 0.0
     ]
@@ -1701,31 +1821,31 @@ def _stepped_arrangement_cells(
         if not _polygon_has_ring_contact(cell):
             refined_cells.append(cell)
             continue
-        triangles = list(
+        raw_triangles = list(
             shapely.get_parts(shapely.constrained_delaunay_triangles(cell))
         )
-        if not triangles:
+        parts = []
+        for triangle in raw_triangles:
+            if not cell.covers(triangle.representative_point()):
+                continue
+            part = set_precision(
+                triangle,
+                grid_size=grid_mm,
+                mode="pointwise",
+            )
+            if (
+                not isinstance(part, Polygon)
+                or part.is_empty
+                or not part.is_valid
+                or float(part.area) <= 0.0
+                or _polygon_has_ring_contact(part)
+            ):
+                continue
+            parts.append(part)
+        if not parts:
             raise ValueError(
                 "Vector stepped-volume could not split a local ring contact"
             )
-        refined_linework = unary_union(
-            [cell.boundary, *(triangle.boundary for triangle in triangles)]
-        )
-        parts = [
-            set_precision(part, grid_size=grid_mm, mode="valid_output")
-            for part in polygonize(refined_linework)
-            if cell.covers(part.representative_point())
-        ]
-        parts = [
-            part
-            for part in parts
-            if (
-                isinstance(part, Polygon)
-                and not part.is_empty
-                and float(part.area) > 0.0
-                and not _polygon_has_ring_contact(part)
-            )
-        ]
         refined_area = math.fsum(float(part.area) for part in parts)
         area_tolerance = max(1e-12, float(cell.area) * 1e-12)
         if (
@@ -1852,12 +1972,17 @@ def _build_stepped_component_mesh(
     slabs: Sequence[_SteppedPhysicalSlab],
     *,
     grid_mm: float,
-) -> trimesh.Trimesh:
+) -> trimesh.Trimesh | None:
     """Build one stepped solid directly from noded caps and exposed walls."""
 
     z_levels, footprints = _stepped_interval_footprints(slabs, grid_mm=grid_mm)
     cells, occupancy = _stepped_arrangement_cells(footprints, grid_mm=grid_mm)
     if not cells:
+        component_footprint = unary_union([slab.geometry for slab in slabs])
+        if float(component_footprint.area) <= (
+            VectorLayerGeometryPolicy().coverage_absolute_tolerance_mm2
+        ):
+            return None
         raise ValueError("Vector stepped-volume arrangement produced no cells")
 
     prepared_cells: list[PreparedVectorPolygon] = []
@@ -2023,13 +2148,14 @@ def _build_stepped_component_mesh(
             ring_ends,
             grid_mm=grid_mm,
         )
+        restored_cap_faces = _restore_noded_cap_boundary(
+            vertices_2d,
+            raw_cap_faces,
+            ring_ends,
+        )
         cap_faces = _validate_cap_indices(
             vertices_2d,
-            _restore_noded_cap_boundary(
-                vertices_2d,
-                raw_cap_faces,
-                ring_ends,
-            ),
+            restored_cap_faces,
             ring_ends,
             expected_area_mm2=float(cells[cell_index].area),
         )
@@ -2120,6 +2246,11 @@ def _build_stepped_component_mesh(
         contact_groups,
         grid_mm=grid_mm,
     )
+    _validate_float32_triangle_domain(
+        vertex_array,
+        face_array,
+        mesh_label="Vector stepped-volume mesh",
+    )
     mesh = trimesh.Trimesh(
         vertices=vertex_array,
         faces=face_array,
@@ -2191,10 +2322,34 @@ def build_vector_stepped_volume(
     )
     if not snapped_slabs:
         return None
-    component_meshes = [
-        _build_stepped_component_mesh(group, grid_mm=grid_mm)
-        for group in _stepped_component_groups(snapped_slabs, grid_mm=grid_mm)
-    ]
+    component_meshes = []
+    component_groups = _stepped_component_groups(
+        snapped_slabs,
+        grid_mm=grid_mm,
+    )
+    for group in component_groups:
+        component_mesh = None
+        if len(group) == 1:
+            try:
+                component_mesh = _extrude_single_stepped_slab(
+                    group[0],
+                    grid_mm=grid_mm,
+                )
+            except ValueError:
+                # Writer-domain edge cases still use the complete arrangement;
+                # the shortcut must never change coverage or topology policy.
+                component_mesh = None
+        if component_mesh is None:
+            component_mesh = _build_stepped_component_mesh(
+                group,
+                grid_mm=grid_mm,
+            )
+        if component_mesh is not None:
+            component_meshes.append(component_mesh)
+    if not component_meshes:
+        return None
+    component_groups.clear()
+    snapped_slabs.clear()
     mesh = _concatenate_stepped_components(component_meshes)
     mesh.metadata["vector_stepped_geometry"] = {
         "grid_mm": float(grid_mm),

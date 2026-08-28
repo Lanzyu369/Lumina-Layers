@@ -220,8 +220,8 @@ def test_writer_expands_touching_runs_into_same_material_mesh_leaves() -> None:
     ] == ["1", "1"]
 
 
-def test_certified_mesh_still_rejects_float32_degenerate_triangle() -> None:
-    """The cheap writer-domain guard remains active when full audit is skipped."""
+def test_writer_materializes_float32_without_a_full_python_mesh_audit() -> None:
+    """The writer converts arrays without rescanning every triangle."""
 
     epsilon = 9.5367431640625e-7
     mesh = trimesh.Trimesh(
@@ -251,11 +251,61 @@ def test_certified_mesh_still_rejects_float32_degenerate_triangle() -> None:
     writer.add_mesh(mesh, "White", (255, 255, 255))
 
     entry = writer.objects[0]
-    with pytest.raises(ValueError, match="float32-degenerate triangle"):
-        writer_module._materialize_n3mf_mesh_view_arrays(
-            entry.mesh,
-            part_range=entry.part_range,
+    vertices, faces = writer_module._materialize_n3mf_mesh_view_arrays(
+        entry.mesh,
+        part_range=entry.part_range,
+    )
+
+    assert vertices.dtype == np.float32
+    assert faces.dtype == np.uint32
+    triangle = vertices[faces[0]]
+    assert np.all(
+        np.cross(triangle[1] - triangle[0], triangle[2] - triangle[0]) == 0.0
+    )
+
+
+def test_neroued_040_keeps_final_indexed_topology_during_export(tmp_path) -> None:
+    n3mf = writer_module._get_n3mf()
+    if not hasattr(n3mf, "TriangleWriteMode"):
+        pytest.skip("neroued-3mf 0.4 is required")
+
+    body = trimesh.creation.box(extents=(2.0, 2.0, 0.2))
+    epsilon = 9.5367431640625e-7
+    vertices = np.vstack(
+        (
+            np.asarray(body.vertices, dtype=np.float64),
+            np.asarray(
+                [
+                    [200.0, 0.0, 0.0],
+                    [200.0 + epsilon, 0.0, 0.0],
+                    [200.0, 1.0, 0.0],
+                ],
+                dtype=np.float64,
+            ),
         )
+    )
+    faces = np.vstack(
+        (
+            np.asarray(body.faces, dtype=np.int64),
+            np.asarray([[len(body.vertices), len(body.vertices) + 1, len(body.vertices) + 2]]),
+        )
+    )
+    mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+    output_path = tmp_path / "neroued-keep-indexed-topology.3mf"
+    writer = BambuStudio3MFWriter(
+        str(output_path),
+        settings={},
+        color_mode="4-Color",
+        printer_id="bambu-p2s",
+        slicer="BambuStudio",
+    )
+    writer.add_mesh(mesh, "White", (255, 255, 255))
+
+    writer.export()
+
+    with zipfile.ZipFile(output_path) as package:
+        _vertex_count, triangle_count = _count_object_model_geometry(package)
+    assert triangle_count == len(body.faces) + 1
 
 
 def test_writer_keeps_safe_conditional_components_in_one_mesh_object() -> None:
@@ -396,10 +446,10 @@ def test_writer_preserves_a_closed_cavity_without_contact_perturbation() -> None
     assert len(faces) == len(mesh.faces)
 
 
-def test_writer_contact_repair_uses_one_final_triangle_scan(
+def test_writer_contact_repair_does_not_rescan_all_triangles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Certified parts skip per-component audits and share one final scan."""
+    """The writer does not duplicate local geometry checks globally."""
 
     labels = np.array(
         [
@@ -441,7 +491,7 @@ def test_writer_contact_repair_uses_one_final_triangle_scan(
         contact_repair_ranges=entry.contact_repair_ranges,
     )
 
-    assert cross_batch_sizes.count(len(faces)) == 1
+    assert len(faces) not in cross_batch_sizes
     assert vertices.dtype == np.float32
     assert faces.dtype == np.uint32
 

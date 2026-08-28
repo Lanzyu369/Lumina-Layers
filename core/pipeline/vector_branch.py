@@ -2311,6 +2311,14 @@ def _run_vector_branch(ctx: dict) -> dict:
             "thickness_mm": spacer_thick,
             "structure_mode": structure_mode,
         }
+        # S08 consumers (notably model-surface embedding) intentionally take
+        # only the optical material meshes and discard ``Board``.  Keep the
+        # backing distinct until those consumers have extracted their display
+        # stack; final 3MF generation still folds it into the selected material.
+        vec_processor._merge_backing_into_material = (
+            not bool(separate_backing)
+            and ctx.get("stop_after_step") != "S08"
+        )
         try:
             build_mesh_signature = inspect.signature(vec_processor.build_mesh)
         except (TypeError, ValueError):
@@ -2469,7 +2477,6 @@ def _run_vector_branch(ctx: dict) -> dict:
                 )
                 merged = _concatenate_meshes_fast(
                     [target_geom, board_geom],
-                    preserve_export_parts=True,
                 )
                 target_color = vec_preview_colors.get(target_slot)
                 if target_color is None:
@@ -2507,13 +2514,14 @@ def _run_vector_branch(ctx: dict) -> dict:
             vec_preview_colors["Board"] = vec_preview_colors.get(
                 separate_backing_color_id, [255, 255, 255, 255]
             )
-            if "Board" not in vec_slot_list:
-                vec_slot_list = list(vec_slot_list) + ["Board"]
+            if target_slot:
+                board_geom.metadata["bambu_material_name"] = target_slot
             log.debug(
                 "Vector board kept as separate backing",
                 extra={
                     "event": "vector_board_separate",
                     "backing_slot_index": separate_backing_color_id,
+                    "material_name": str(target_slot or ""),
                     "separate_backing": True,
                 },
             )

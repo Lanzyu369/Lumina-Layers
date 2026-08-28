@@ -199,8 +199,8 @@ class TestRunLengthExtrude:
         assert "Cyan" in result
         assert len(result["Cyan"]["meshes"]) == 1  # single merged volume
 
-    def test_alternating_channels_no_merge(self):
-        """Alternating recipe [0,1,0,1,0] → no channel gets consecutive layers."""
+    def test_alternating_channels_stay_one_object_per_material(self):
+        """Alternating runs remain distinct shells inside one material object."""
         geom = box(0, 0, 10, 10)
         matched = self._make_matched(geom, [0, 1, 0, 1, 0])
 
@@ -213,10 +213,12 @@ class TestRunLengthExtrude:
             scale_factor=1.0,
         )
 
-        white_count = len(result.get("White", {}).get("meshes", []))
-        cyan_count = len(result.get("Cyan", {}).get("meshes", []))
-        assert white_count == 3  # layers 0, 2, 4 → three separate runs
-        assert cyan_count == 2  # layers 1, 3 → two separate runs
+        white_meshes = result.get("White", {}).get("meshes", [])
+        cyan_meshes = result.get("Cyan", {}).get("meshes", [])
+        assert len(white_meshes) == 1
+        assert len(cyan_meshes) == 1
+        assert len(white_meshes[0].split(only_watertight=False)) == 3
+        assert len(cyan_meshes[0].split(only_watertight=False)) == 2
 
     def test_run_merges_consecutive(self):
         """Recipe [2,2,2,0,0] → channel 2 gets one run (layers 0-2),
