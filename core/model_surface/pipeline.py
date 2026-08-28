@@ -20,7 +20,7 @@ from core.model_surface.assembly import (
 from core.model_surface.loader import load_model_surface_mesh
 from core.model_surface.slot_meshing import (
     build_printable_footprint_from_voxels,
-    build_slot_box_scene_from_voxels,
+    build_slot_surface_scene_from_voxels,
 )
 from core.model_surface.types import (
     MODEL_SURFACE_FATAL_ERRORS,
@@ -122,7 +122,7 @@ def _build_pattern_scene(
             ctx,
             np.asarray(full_matrix),
         )
-        pattern_scene = build_slot_box_scene_from_voxels(
+        pattern_scene = build_slot_surface_scene_from_voxels(
             full_matrix=pattern_matrix,
             slot_names=slot_names,
             preview_colors=preview_colors,

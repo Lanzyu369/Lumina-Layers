@@ -7,17 +7,17 @@ import trimesh
 from core.model_surface.pipeline import _build_pattern_scene
 from core.model_surface.slot_meshing import (
     build_printable_footprint_from_voxels,
-    build_slot_box_scene_from_voxels,
+    build_slot_surface_scene_from_voxels,
 )
 from core.model_surface.types import ModelSurfaceError
 
 
-def test_slot_box_scene_keeps_adjacent_prisms_topologically_closed():
+def test_slot_surface_scene_keeps_adjacent_voxels_topologically_closed():
     full_matrix = np.full((2, 3, 3), -1, dtype=np.int16)
     full_matrix[0, :, :] = 0
     full_matrix[1, :2, :2] = 0
 
-    scene = build_slot_box_scene_from_voxels(
+    scene = build_slot_surface_scene_from_voxels(
         full_matrix=full_matrix,
         slot_names=["White"],
         preview_colors={0: [255, 255, 255, 255]},
@@ -31,6 +31,7 @@ def test_slot_box_scene_keeps_adjacent_prisms_topologically_closed():
     open_edges, nonmanifold_edges = _edge_topology_counts(mesh)
     assert open_edges == 0
     assert nonmanifold_edges == 0
+    assert mesh.metadata["layered_mesh_stats"]["source_voxel_count"] == 13
 
 
 def test_printable_footprint_uses_valid_voxels_and_preserves_single_pixel_width():

@@ -89,7 +89,6 @@ VECTOR_STRUCTURED_EVENTS = {
     "vector_preview_timings",
     "vector_lut_palette_extract_failed",
     "vector_color_replacements_load_failed",
-    "vector_polygon_extrude_failed",
     "vector_recipe_region_mask_skipped",
     "vector_recipe_region_masks_missing",
     # Appearance-layer missing-color diagnostics (外观面缺色块排查日志)
@@ -115,7 +114,6 @@ VECTOR_STRUCTURED_EVENTS = {
     "vector_diag_after_matched_rgb_overrides_recipe0",
     "vector_diag_after_recipe_overrides_recipe0",
     "vector_diag_build_mesh_input_recipes",
-    "vector_diag_extrude_skipped_non_polygon",
     "vector_diag_extrude_skipped_empty",
     "vector_diag_debug_dump",
     # Per-layer per-channel A/B/C/D matrix to localize "which (layer, channel)
@@ -146,7 +144,6 @@ VECTOR_STRUCTURED_EVENTS = {
     "vector_outline_init",
     "vector_outline_done",
     "vector_outline_rejected_unsupported",
-    "vector_outline_polygon_extrude_failed",
 }
 EXTRACTOR_STRUCTURED_EVENTS = {
     "extractor_extract_done",

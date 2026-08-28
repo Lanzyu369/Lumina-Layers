@@ -6,12 +6,15 @@ import numpy as np
 import pytest
 from shapely.geometry import LineString, Point, Polygon, box
 from shapely.geometry.base import BaseGeometry
+from shapely.ops import unary_union
 
 import core.vector_layer_geometry as vector_layer_geometry
 from core.vector_layer_geometry import (
     VectorLayerGeometryPolicy,
+    build_vector_stepped_volume,
     extrude_prepared_vector_run_group,
     prepare_vector_run_group,
+    prepare_vector_spatial_groups_best_effort,
 )
 
 
@@ -30,6 +33,140 @@ def _edge_incidence_counts(mesh) -> np.ndarray:
     edges = np.asarray(mesh.edges_sorted, dtype=np.int64)
     _unique, counts = np.unique(edges, axis=0, return_counts=True)
     return counts
+
+
+def _assert_closed_volume(mesh, expected_volume: float) -> None:
+    assert mesh is not None
+    assert mesh.is_watertight
+    assert mesh.is_winding_consistent
+    assert np.all(_edge_incidence_counts(mesh) == 2)
+    assert abs(float(mesh.volume)) == pytest.approx(expected_volume, abs=1e-5)
+
+
+def test_stepped_volume_builds_cavity_and_height_transitions_directly() -> None:
+    outer = box(0.0, 0.0, 10.0, 10.0)
+    cavity = box(4.0, 4.0, 6.0, 6.0)
+
+    mesh = build_vector_stepped_volume(
+        [
+            {"geometry": outer, "z_offset": 0.0, "height": 0.4},
+            {
+                "geometry": outer.difference(cavity),
+                "z_offset": 0.4,
+                "height": 0.6,
+            },
+            {"geometry": outer, "z_offset": 1.0, "height": 0.4},
+        ],
+        scale_mm_per_svg_unit=1.0,
+    )
+
+    _assert_closed_volume(mesh, 137.6)
+
+
+def test_stepped_volume_nodes_shared_curve_once_without_repair() -> None:
+    left = Polygon([(0.0, 0.0), (5.0, 0.0), (6.0, 10.0), (0.0, 10.0)])
+    shared_midpoint = (5.5 + 1e-12, 5.0)
+    right_lower = Polygon(
+        [(5.0, 0.0), (10.0, 0.0), (10.0, 5.0), shared_midpoint]
+    )
+    right_upper = Polygon(
+        [shared_midpoint, (10.0, 5.0), (10.0, 10.0), (6.0, 10.0)]
+    )
+
+    mesh = build_vector_stepped_volume(
+        [
+            {"geometry": left, "z_offset": 0.0, "height": 1.8},
+            {"geometry": right_lower, "z_offset": 0.0, "height": 0.8},
+            {"geometry": right_upper, "z_offset": 0.0, "height": 1.4},
+        ],
+        scale_mm_per_svg_unit=1.0,
+    )
+
+    expected = left.area * 1.8 + right_lower.area * 0.8 + right_upper.area * 1.4
+    _assert_closed_volume(mesh, expected)
+
+
+def test_stepped_volume_keeps_corner_touching_shells_independent() -> None:
+    mesh = build_vector_stepped_volume(
+        [
+            {
+                "geometry": box(0.0, 0.0, 1.0, 1.0),
+                "z_offset": 0.0,
+                "height": 1.0,
+            },
+            {
+                "geometry": box(1.0, 1.0, 2.0, 2.0),
+                "z_offset": 0.0,
+                "height": 1.8,
+            },
+        ],
+        scale_mm_per_svg_unit=1.0,
+    )
+
+    _assert_closed_volume(mesh, 2.8)
+    assert len(mesh.split(only_watertight=False)) == 2
+    writer_vertices = np.asarray(mesh.vertices, dtype=np.float32)
+    assert len(np.unique(writer_vertices, axis=0)) == len(writer_vertices)
+
+
+def test_stepped_volume_splits_local_edge_pinch_inside_connected_volume() -> None:
+    mesh = build_vector_stepped_volume(
+        [
+            {
+                "geometry": box(0.0, 0.0, 1.0, 1.0),
+                "z_offset": 0.0,
+                "height": 0.3,
+            },
+            {
+                "geometry": box(-1.0, -1.0, 0.0, 0.5),
+                "z_offset": 0.1,
+                "height": 0.1,
+            },
+            {
+                "geometry": box(0.0, -0.5, 2.0, 1.0),
+                "z_offset": 0.2,
+                "height": 0.1,
+            },
+        ],
+        scale_mm_per_svg_unit=1.0,
+    )
+
+    _assert_closed_volume(mesh, 0.65)
+    writer_vertices = np.asarray(mesh.vertices, dtype=np.float32)
+    assert len(np.unique(writer_vertices, axis=0)) == len(writer_vertices)
+
+
+def test_stepped_volume_keeps_noded_collinear_cap_boundaries() -> None:
+    continuing = Polygon(
+        [(6.0, 9.0), (9.0, 9.0), (9.25, 10.5), (6.0, 10.5)]
+    )
+    lower_left = box(5.0, 9.0, 8.0, 12.0)
+    lower_right = box(6.0, 8.5, 10.0, 13.0)
+
+    mesh = build_vector_stepped_volume(
+        [
+            {
+                "geometry": continuing,
+                "z_offset": 0.24,
+                "height": 0.40,
+            },
+            {
+                "geometry": lower_right,
+                "z_offset": 0.24,
+                "height": 0.32,
+            },
+            {
+                "geometry": lower_left,
+                "z_offset": 0.24,
+                "height": 0.32,
+            },
+        ],
+        scale_mm_per_svg_unit=1.0,
+    )
+
+    lower_footprint = unary_union([continuing, lower_left, lower_right])
+    expected_volume = lower_footprint.area * 0.32 + continuing.area * 0.08
+    _assert_closed_volume(mesh, expected_volume)
 
 
 def test_shared_boundary_is_noded_once_without_an_internal_wall() -> None:
@@ -88,6 +225,37 @@ def test_independently_checked_grid_groups_do_not_false_fail_in_aggregate() -> N
     assert prepared.stats.source_area_mm2 - prepared.stats.output_area_mm2 > 0.01
     assert prepared.stats.output_area_mm2 == pytest.approx(2.5, abs=1e-12)
     assert len(prepared.polygons) == 5
+
+
+def test_grid_quantization_drift_does_not_drop_a_valid_outline_ring() -> None:
+    """Coverage is measured from the representable grid, not raw float input."""
+
+    rectangle = box(10.0, 10.0, 50.0, 50.0)
+    circle = Polygon(
+        [
+            (
+                70.0 + 15.0 * np.cos(theta),
+                30.0 + 15.0 * np.sin(theta),
+            )
+            for theta in np.linspace(0.0, 2.0 * np.pi, 64, endpoint=False)
+        ]
+    )
+    body = unary_union([rectangle, circle])
+    outline = body.buffer(
+        2.5998495286426193,
+        join_style="mitre",
+        mitre_limit=2.0,
+    ).difference(body)
+
+    prepared = prepare_vector_run_group(
+        [outline],
+        scale_mm_per_svg_unit=1.0,
+    )
+
+    assert prepared.to_geometry().is_valid
+    assert prepared.stats.output_component_count == 1
+    assert prepared.stats.output_hole_count == 2
+    assert prepared.stats.source_area_mm2 - prepared.stats.output_area_mm2 > 0.01
 
 
 def test_hole_and_physical_scale_survive_canonicalization() -> None:
@@ -634,3 +802,65 @@ def test_prepared_extrusion_is_valid_after_the_actual_float32_writer_cast() -> N
 
     assert not np.any(np.all(cross == 0.0, axis=1))
     assert mesh.is_watertight
+
+
+def test_best_effort_spatial_groups_keep_touching_sources_together() -> None:
+    result = prepare_vector_spatial_groups_best_effort(
+        [
+            box(0.0, 0.0, 10.0, 10.0),
+            box(10.0, 0.0, 20.0, 10.0),
+            box(100.0, 0.0, 105.0, 5.0),
+        ],
+        scale_mm_per_svg_unit=1.0,
+    )
+
+    assert len(result.groups) == 2
+    assert sorted(group.stats.source_polygon_count for group in result.groups) == [1, 2]
+    assert result.failed_group_count == 0
+    assert result.failed_part_count == 0
+
+
+def test_best_effort_spatial_groups_skip_only_one_remote_failed_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_prepare = vector_layer_geometry.prepare_vector_run_group
+
+    def prepare_or_fail(geometries, **kwargs):
+        if min(float(geometry.bounds[0]) for geometry in geometries) > 50.0:
+            raise ValueError("remote bad island")
+        return real_prepare(geometries, **kwargs)
+
+    monkeypatch.setattr(
+        vector_layer_geometry,
+        "prepare_vector_run_group",
+        prepare_or_fail,
+    )
+    result = prepare_vector_spatial_groups_best_effort(
+        [
+            box(0.0, 0.0, 10.0, 10.0),
+            box(100.0, 0.0, 105.0, 5.0),
+        ],
+        scale_mm_per_svg_unit=1.0,
+    )
+
+    assert len(result.groups) == 1
+    assert result.prepared_part_count == 1
+    assert result.failed_group_count == 1
+    assert result.failed_part_count == 1
+    assert result.failure_types == (("ValueError", 1),)
+
+
+def test_best_effort_spatial_groups_do_not_swallow_memory_exhaustion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        vector_layer_geometry,
+        "prepare_vector_run_group",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(MemoryError()),
+    )
+
+    with pytest.raises(MemoryError):
+        prepare_vector_spatial_groups_best_effort(
+            [box(0.0, 0.0, 1.0, 1.0)],
+            scale_mm_per_svg_unit=1.0,
+        )

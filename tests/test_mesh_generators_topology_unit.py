@@ -7,7 +7,7 @@ import pytest
 import trimesh
 
 import core.mesh_generators as mesh_generators
-from core.mesh_generators import HighFidelityMesher, VoxelMesher, _merge_mesh_list
+from core.mesh_generators import HighFidelityMesher, VoxelMesher
 
 
 def _indexed_edge_incidence(mesh: trimesh.Trimesh) -> np.ndarray:
@@ -102,104 +102,82 @@ def test_backing_label_uses_the_same_exact_closed_surface(mesher) -> None:
     _assert_closed_independent_shells(mesh)
 
 
-def test_merge_mesh_list_keeps_adjacent_prisms_as_closed_shells() -> None:
-    """Fallback concatenation must not weld touching watertight inputs."""
+def test_boundary_geometry_uses_only_the_layered_surface_builder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Puzzle boundaries must not enter any polygon-extrusion implementation."""
 
-    left = trimesh.creation.box(extents=[1.0, 1.0, 1.0])
-    right = trimesh.creation.box(extents=[1.0, 1.0, 1.0])
-    left.apply_translation([0.5, 0.5, 0.5])
-    right.apply_translation([1.5, 0.5, 0.5])
+    monkeypatch.setattr(
+        trimesh.creation,
+        "extrude_polygon",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("polygon extrusion called")
+        ),
+    )
+    labels = np.zeros((1, 5, 5), dtype=np.int16)
+    boundary = mesh_generators.Polygon(
+        [(0.0, 0.0), (3.0, 0.0), (0.0, 5.0)]
+    )
 
-    mesh = _merge_mesh_list([left, right])
+    mesh = HighFidelityMesher(
+        disable_material_dilation=True,
+        boundary_geometry=boundary,
+    ).generate_mesh(
+        labels,
+        0,
+        height_px=5,
+    )
 
     assert mesh is not None
-    np.testing.assert_allclose(mesh.bounds, [[0.0, 0.0, 0.0], [2.0, 1.0, 1.0]])
-    assert float(mesh.volume) == pytest.approx(2.0)
     _assert_closed_independent_shells(mesh)
-
-
-def test_boundary_polygon_extrusion_fails_closed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A clipped raster region may not be skipped after extrusion failure."""
-
-    monkeypatch.setattr(
-        mesh_generators.VectorProcessor,
-        "_extrude_geometry",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("broken")),
+    expected_mask = mesh_generators.rasterize_boundary_geometry(
+        boundary,
+        height_px=5,
+        width_px=5,
     )
-
-    with pytest.raises(ValueError, match="refusing partial export"):
-        mesh_generators._extrude_polygon_geometry(
-            mesh_generators.Polygon(
-                [(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0)]
-            ),
-            height=1.0,
-            z_offset=0.0,
-        )
+    assert float(mesh.volume) == pytest.approx(float(np.count_nonzero(expected_mask)))
+    assert mesh.metadata["raster_surface_stats"]["boundary_rasterized"] is True
 
 
-def test_boundary_polygon_extrusion_is_watertight() -> None:
-    mesh = mesh_generators._extrude_polygon_geometry(
-        mesh_generators.Polygon(
-            [
-                (0.0, 0.0),
-                (3.0, 0.0),
-                (3.0, 1.0),
-                (1.0, 1.0),
-                (1.0, 3.0),
-                (0.0, 3.0),
-            ]
-        ),
-        height=1.0,
-        z_offset=0.0,
-    )[0]
+def test_boundary_lattice_preserves_holes_and_independent_islands(
+) -> None:
+    """Center-sampled boundary masks keep holes and disconnected printable cells."""
 
-    _assert_closed_independent_shells(mesh)
-    assert float(mesh.volume) == pytest.approx(5.0)
-
-
-def test_boundary_polygon_extrusion_accepts_bounded_float32_normalization() -> None:
-    """Near-duplicate raster vertices may be normalized within the export bound."""
-
-    polygon = mesh_generators.Polygon(
+    boundary = mesh_generators.MultiPolygon(
         [
-            (2.0, 22.0),
-            (2.0, 23.0),
-            (1.9999999999999654, 23.0),
-            (1.2233571841820776, 22.223357184182078),
-            (1.2683026830235615, 22.0),
+            mesh_generators.Polygon(
+                [(0, 0), (4, 0), (4, 4), (0, 4)],
+                holes=[[(1, 1), (3, 1), (3, 3), (1, 3)]],
+            ),
+            mesh_generators.Polygon(
+                [(5, 5), (6, 5), (6, 6), (5, 6)]
+            ),
         ]
     )
+    labels = np.zeros((1, 6, 6), dtype=np.int16)
 
-    mesh = mesh_generators._extrude_polygon_geometry(
-        polygon,
-        height=1.0,
-        z_offset=0.0,
-    )[0]
-
-    _assert_closed_independent_shells(mesh)
-    assert abs(float(mesh.volume) - float(polygon.area)) <= 0.01
-
-
-def test_boundary_polygon_extrusion_rejects_lost_area(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A watertight but undersized triangulation must not pass silently."""
-
-    undersized = trimesh.creation.box(extents=[1.0, 1.0, 1.0])
-    undersized.apply_translation([0.5, 0.5, 0.5])
-    monkeypatch.setattr(
-        mesh_generators.VectorProcessor,
-        "_extrude_geometry",
-        lambda *_args, **_kwargs: [undersized.copy()],
+    mesh = HighFidelityMesher(
+        disable_material_dilation=True,
+        boundary_geometry=boundary,
+    ).generate_mesh(
+        labels,
+        0,
+        height_px=6,
     )
 
-    with pytest.raises(ValueError, match="coverage incomplete"):
-        mesh_generators._extrude_polygon_geometry(
-            mesh_generators.Polygon(
-                [(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0)]
-            ),
-            height=1.0,
-            z_offset=0.0,
-        )
+    assert mesh is not None
+    expected_mask = mesh_generators.rasterize_boundary_geometry(
+        boundary,
+        height_px=6,
+        width_px=6,
+    )
+    _assert_closed_independent_shells(mesh)
+    assert float(mesh.volume) == pytest.approx(float(np.count_nonzero(expected_mask)))
+    assert len(mesh.split(only_watertight=False)) == 2
+
+
+def test_retired_boundary_extrusion_helpers_are_absent() -> None:
+    """The old puzzle polygon adapter must not remain callable by accident."""
+
+    assert not hasattr(mesh_generators, "_extrude_polygon_geometry")
+    assert not hasattr(mesh_generators.BaseMesher, "_build_mesh_from_layer_polygons")

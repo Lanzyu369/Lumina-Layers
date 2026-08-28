@@ -198,7 +198,6 @@ class TestNativeVectorRelief:
             heightmap_path=None,
             heightmap_max_height=None,
             bbox=analysis.bbox,
-            extrude_cache={},
         )
 
         expected_optical_volume = sum(
@@ -351,7 +350,6 @@ class TestNativeVectorRelief:
             heightmap_path=None,
             heightmap_max_height=None,
             bbox=(0.0, 0.0, 10.0, 10.0),
-            extrude_cache={},
         )
         flat_result = VectorProcessor._run_length_extrude(
             matched_shapes=matched_shapes,
@@ -360,7 +358,6 @@ class TestNativeVectorRelief:
             num_channels=2,
             slot_names=["Material A", "Material B"],
             scale_factor=1.0,
-            extrude_cache={},
         )
 
         for slot_name in ("Material A", "Material B"):
@@ -2514,7 +2511,6 @@ class TestRunLengthExtrudeMerging:
             num_channels=4,
             slot_names=["White", "Cyan", "Magenta", "Yellow"],
             scale_factor=1.0,
-            extrude_cache={},
         )
         assert "White" in result
         assert len(result["White"]["meshes"]) > 0
@@ -2533,7 +2529,6 @@ class TestRunLengthExtrudeMerging:
             num_channels=4,
             slot_names=["White", "Cyan", "Magenta", "Yellow"],
             scale_factor=1.0,
-            extrude_cache={},
         )
         assert "White" in result
         assert "Cyan" in result
@@ -2569,7 +2564,6 @@ class TestRunLengthExtrudeMerging:
                 num_channels=4,
                 slot_names=["White", "Cyan", "Magenta", "Yellow"],
                 scale_factor=1.0,
-                extrude_cache={},
             )
 
         assert "White" in result
@@ -2609,7 +2603,6 @@ class TestRunLengthExtrudeMerging:
                 num_channels=4,
                 slot_names=["White", "Cyan", "Magenta", "Yellow"],
                 scale_factor=1.0,
-                extrude_cache={},
             )
 
         assert "White" in result
@@ -3510,66 +3503,12 @@ class TestNativeBundlePaletteOverride:
 
 
 # ---------------------------------------------------------------------------
-# Fix 10: Degenerate geometry repair in _extrude_geometry & _normalize_contours
+# Degenerate geometry normalization
 # ---------------------------------------------------------------------------
 
 
 class TestDegenerateGeometryRepair:
-    """Non-polygon sub-geometries should be repaired, not silently dropped."""
-
-    def test_extrude_repairs_linestring_in_geometrycollection(self):
-        """LineString inside GeometryCollection is repaired via buffer."""
-        from shapely.geometry import box, GeometryCollection, LineString
-        from shapely.ops import unary_union
-
-        # Simulate what GEOS can produce with precision issues: a valid
-        # polygon + a degenerate sliver (LineString) in one collection.
-        big_poly = box(0, 0, 10, 10)
-        sliver = LineString([(5, 5), (5.0001, 5.0001)])  # ~0.14 um long
-        degenerate = GeometryCollection([big_poly, sliver])
-
-        meshes = VectorProcessor._extrude_geometry(
-            degenerate, height=0.08, z_offset=0.0, scale=1.0
-        )
-        # Both the polygon and the repaired sliver should produce mesh.
-        # Before the fix, only the polygon would extrude (sliver silently
-        # dropped). After the fix, both produce mesh.
-        assert len(meshes) == 2, "Polygon and repaired LineString must both extrude"
-        assert all(mesh.is_watertight for mesh in meshes)
-
-    def test_extrude_repairs_point_in_geometrycollection(self):
-        """Point inside GeometryCollection is repaired via buffer."""
-        from shapely.geometry import box, GeometryCollection, Point
-
-        big_poly = box(0, 0, 10, 10)
-        pt = Point(5.0, 5.0)
-        degenerate = GeometryCollection([big_poly, pt])
-
-        meshes = VectorProcessor._extrude_geometry(
-            degenerate, height=0.08, z_offset=0.0, scale=1.0
-        )
-        assert len(meshes) == 2, "Polygon and repaired Point must both extrude"
-        assert all(mesh.is_watertight for mesh in meshes)
-
-    def test_extrude_empty_geometrycollection_produces_nothing(self):
-        """Empty GeometryCollection should produce no meshes."""
-        from shapely.geometry import GeometryCollection
-
-        empty_gc = GeometryCollection([])
-        meshes = VectorProcessor._extrude_geometry(
-            empty_gc, height=0.08, z_offset=0.0, scale=1.0
-        )
-        assert len(meshes) == 0
-
-    def test_extrude_multipolygon_still_works(self):
-        """Normal MultiPolygon extrudes all parts (no regression)."""
-        from shapely.geometry import MultiPolygon, box
-
-        mp = MultiPolygon([box(0, 0, 5, 5), box(6, 0, 11, 5)])
-        meshes = VectorProcessor._extrude_geometry(
-            mp, height=0.08, z_offset=0.0, scale=1.0
-        )
-        assert len(meshes) == 2
+    """Contour normalization keeps polygonal content deterministic."""
 
     def test_normalize_extracts_only_polygons_from_geometrycollection(self):
         """_normalize_contours drops non-polygon elements from GC."""
@@ -3635,7 +3574,6 @@ class TestDegenerateGeometryRepair:
             num_channels=4,
             slot_names=["White", "Cyan", "Magenta", "Yellow"],
             scale_factor=1.0,
-            extrude_cache={},
         )
         assert "White" in result
         # Should have at least 1 mesh (the repaired polygon)

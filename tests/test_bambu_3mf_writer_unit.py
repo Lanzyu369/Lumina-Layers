@@ -22,7 +22,6 @@ from core.mesh_export_parts import (
     get_mesh_export_part_ranges,
     set_mesh_export_part_ranges,
 )
-from core.vector_mesh_topology import mesh_is_float32_safe
 from utils import bambu_3mf_writer as writer_module
 from utils.bambu_3mf_writer import BambuStudio3MFWriter, load_printer_template
 
@@ -156,9 +155,7 @@ def test_mesh_queue_requires_the_supported_zero_copy_neroued_contract() -> None:
     assert retained == []
 
 
-def test_writer_expands_touching_runs_into_same_material_mesh_leaves(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_writer_expands_touching_runs_into_same_material_mesh_leaves() -> None:
     """A slicer assembly keeps safe run topology without duplicating filaments."""
 
     lower = trimesh.creation.box(extents=(2.0, 2.0, 0.16))
@@ -202,20 +199,14 @@ def test_writer_expands_touching_runs_into_same_material_mesh_leaves(
     assert all(entry.mesh is combined for entry in writer.objects)
     assert all(entry.part_range is not None for entry in writer.objects)
 
-    def fail_redundant_audit(*_args, **_kwargs):
-        raise AssertionError("certified mesh leaf was re-audited")
-
-    monkeypatch.setattr(
-        "core.vector_mesh_topology.mesh_is_float32_safe",
-        fail_redundant_audit,
-    )
     for entry in writer.objects:
         vertices, faces = writer_module._materialize_n3mf_mesh_view_arrays(
             entry.mesh,
             part_range=entry.part_range,
         )
         leaf = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
-        assert mesh_is_float32_safe(leaf)
+        assert leaf.is_watertight
+        assert leaf.is_winding_consistent
     palette, material_indices = writer._build_material_palette()
     assert palette == [("White", (255, 255, 255))]
     assert material_indices == {"White": 0}
@@ -373,7 +364,8 @@ def test_writer_repairs_one_connected_shell_with_local_diagonal_contact() -> Non
         contact_repair_ranges=entry.contact_repair_ranges,
     )
     repaired = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
-    assert mesh_is_float32_safe(repaired)
+    assert repaired.is_watertight
+    assert repaired.is_winding_consistent
 
 
 def test_writer_preserves_a_closed_cavity_without_contact_perturbation() -> None:
@@ -477,9 +469,7 @@ def test_legacy_noncanonical_mesh_keeps_pre_zero_copy_writer_compatibility() -> 
     assert faces.dtype == np.uint32
 
 
-def test_writer_does_not_run_full_topology_audit_for_untagged_mesh(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_writer_does_not_run_full_topology_audit_for_untagged_mesh() -> None:
     """Production export keeps only cheap array-domain validation."""
 
     open_mesh = trimesh.Trimesh(
@@ -504,13 +494,6 @@ def test_writer_does_not_run_full_topology_audit_for_untagged_mesh(
     writer.add_mesh(open_mesh, "White", (255, 255, 255))
     entry = writer.objects[0]
 
-    def fail_redundant_audit(*_args, **_kwargs):
-        raise AssertionError("runtime full topology audit was called")
-
-    monkeypatch.setattr(
-        "core.vector_mesh_topology.mesh_is_float32_safe",
-        fail_redundant_audit,
-    )
     vertices, faces = writer_module._materialize_n3mf_mesh_view_arrays(
         entry.mesh,
         part_range=entry.part_range,

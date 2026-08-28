@@ -109,10 +109,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "所选接口不支持此操作。",
     en: "This action is not supported by the selected API endpoint.",
   },
-  api_error_vector_topology_unrepairable: {
-    zh: "该矢量图稿包含无法安全导出的几何。请简化图稿或重新矢量化后，再上传重试。",
-    en: "The vector artwork contains geometry that cannot be exported safely. Simplify or re-vectorize the artwork, then upload it again.",
-  },
   api_error_http_408: {
     zh: "服务器未能在超时前完成请求。",
     en: "The request timed out before the server could finish.",

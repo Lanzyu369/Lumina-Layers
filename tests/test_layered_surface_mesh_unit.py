@@ -18,7 +18,6 @@ from core.mesh_export_parts import (
     get_mesh_export_part_ranges,
     mesh_export_parts_are_conditional,
 )
-from core.vector_mesh_topology import mesh_is_float32_safe
 
 
 def _edge_incidence(mesh: trimesh.Trimesh) -> np.ndarray:
@@ -171,7 +170,9 @@ def test_edge_or_point_touching_voxels_keep_independent_index_domains(
             faces=part_faces,
             process=False,
         )
-        assert mesh_is_float32_safe(leaf)
+        assert leaf.is_watertight
+        assert leaf.is_winding_consistent
+        assert np.all(_edge_incidence(leaf) == 2)
 
     stats = mesh.metadata["layered_mesh_stats"]
     if occupied[0][0] == occupied[1][0]:
@@ -500,7 +501,7 @@ def test_large_connected_checkerboard_relief_stays_compact_in_a_subprocess() -> 
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="resource peak RSS is POSIX-only")
-def test_large_topology_retry_releases_the_rejected_first_pass() -> None:
+def test_large_direct_contact_normalization_stays_bounded() -> None:
     script = textwrap.dedent(
         """
         import json

@@ -110,9 +110,32 @@ class PreparedVectorRunGroup:
 
 
 @dataclass(frozen=True)
+class PreparedVectorSpatialGroups:
+    """Best-effort canonical groups separated in writer-safe XY space.
+
+    在写入安全的 XY 空间中彼此分离的尽力规范组。
+    """
+
+    groups: tuple[PreparedVectorRunGroup, ...]
+    source_geometry_count: int
+    source_part_count: int
+    prepared_part_count: int
+    failed_group_count: int
+    failed_part_count: int
+    failure_types: tuple[tuple[str, int], ...]
+
+
+@dataclass(frozen=True)
 class _PhysicalPart:
     source_index: int
     geometry: Polygon
+
+
+@dataclass(frozen=True)
+class _SteppedPhysicalSlab:
+    geometry: Polygon
+    z_start_mm: float
+    z_end_mm: float
 
 
 def _polygon_parts(geometry: BaseGeometry) -> tuple[Polygon, ...]:
@@ -796,18 +819,23 @@ def prepare_vector_run_group(
             _node_group_once(snapped),
             grid_mm=grid_mm,
         )
+        # The physical grid is the export representation, not a repair
+        # candidate that must reproduce arbitrary input floats byte-for-byte.
+        # Every source polygon has already been checked for survival by
+        # ``_snapped_parts``.  Measure all later fidelity decisions against
+        # this representable geometry so harmless grid rounding cannot reject
+        # a complete Outline or native Vector group.
+        representable_area = float(canonical.area)
         canonical, separated = _separate_unrepresentable_contacts(
             canonical,
             grid_mm=grid_mm,
         )
         if separated:
             separated_contact_group_count += 1
-        if not _coverage_is_complete(source_area, float(canonical.area), effective_policy):
-            raise ValueError("Vector physical-grid conversion lost printable coverage")
 
         canonical, simplified, restored = _simplify_or_restore(
             canonical,
-            expected_area_mm2=source_area,
+            expected_area_mm2=representable_area,
             policy=effective_policy,
         )
         simplified_group_count += int(simplified)
@@ -833,7 +861,7 @@ def prepare_vector_run_group(
         if (
             not prepared_geometry.is_valid
             or not _coverage_is_complete(
-                source_area,
+                representable_area,
                 float(prepared_geometry.area),
                 effective_policy,
             )
@@ -892,6 +920,113 @@ def prepare_vector_run_group(
     )
 
 
+def prepare_vector_spatial_groups_best_effort(
+    geometries: Sequence[BaseGeometry],
+    *,
+    scale_mm_per_svg_unit: float,
+    policy: VectorLayerGeometryPolicy | None = None,
+) -> PreparedVectorSpatialGroups:
+    """Prepare independent nearby groups without reviving a legacy fallback.
+
+    使用同一规范算法独立准备邻近组，不再回到旧拓扑修复链。
+
+    Touching or writer-grid-near source parts are always prepared together.
+    A failed remote group is omitted while successful groups remain available;
+    memory exhaustion is never swallowed. This keeps local availability without
+    combining independently prepared touching shells in one 3MF object.
+
+    Args:
+        geometries: Source polygonal geometries in SVG units.
+            （SVG 单位中的源多边形几何）
+        scale_mm_per_svg_unit: Physical XY scale.（物理 XY 比例）
+        policy: Optional canonical geometry policy.（可选规范几何策略）
+
+    Returns:
+        Prepared groups plus deterministic failure counters.
+        （已准备组及确定性的失败计数）
+    """
+
+    effective_policy = policy or VectorLayerGeometryPolicy()
+    scale = float(scale_mm_per_svg_unit)
+    minimum_grid_mm = float(effective_policy.grid_mm)
+    if not math.isfinite(scale) or scale <= 0.0:
+        raise ValueError("Vector physical scale must be positive finite")
+    if not math.isfinite(minimum_grid_mm) or minimum_grid_mm <= 0.0:
+        raise ValueError("Vector physical grid must be positive finite")
+    if not geometries:
+        raise ValueError("Vector run group requires polygonal geometry")
+
+    physical_parts: list[_PhysicalPart] = []
+    for source_index, geometry in enumerate(geometries):
+        if geometry is None:
+            continue
+        for part in _polygon_parts(geometry):
+            physical_parts.append(
+                _PhysicalPart(
+                    source_index=source_index,
+                    geometry=affinity.scale(
+                        part,
+                        xfact=scale,
+                        yfact=scale,
+                        origin=(0.0, 0.0),
+                    ),
+                )
+            )
+    if not physical_parts:
+        raise ValueError("Vector run group requires polygonal geometry")
+
+    shared_grid_mm = _writer_safe_grid_mm(physical_parts, minimum_grid_mm)
+    group_policy = replace(effective_policy, grid_mm=shared_grid_mm)
+    spatial_groups = _nearby_groups(
+        physical_parts,
+        distance_mm=shared_grid_mm,
+    )
+    prepared_groups: list[PreparedVectorRunGroup] = []
+    prepared_part_count = 0
+    failed_group_count = 0
+    failed_part_count = 0
+    failure_types: dict[str, int] = {}
+    handled_errors = (
+        ValueError,
+        TypeError,
+        RuntimeError,
+        AttributeError,
+        OSError,
+        OverflowError,
+    )
+
+    for group_indices in spatial_groups:
+        group_geometries_mm = tuple(
+            physical_parts[index].geometry for index in group_indices
+        )
+        try:
+            prepared = prepare_vector_run_group(
+                group_geometries_mm,
+                scale_mm_per_svg_unit=1.0,
+                policy=group_policy,
+            )
+        except MemoryError:
+            raise
+        except handled_errors as exc:
+            failed_group_count += 1
+            failed_part_count += len(group_indices)
+            error_name = type(exc).__name__
+            failure_types[error_name] = failure_types.get(error_name, 0) + 1
+            continue
+        prepared_groups.append(prepared)
+        prepared_part_count += len(group_indices)
+
+    return PreparedVectorSpatialGroups(
+        groups=tuple(prepared_groups),
+        source_geometry_count=len(geometries),
+        source_part_count=len(physical_parts),
+        prepared_part_count=prepared_part_count,
+        failed_group_count=failed_group_count,
+        failed_part_count=failed_part_count,
+        failure_types=tuple(sorted(failure_types.items())),
+    )
+
+
 def _signed_twice_ring_area(coordinates: np.ndarray) -> float:
     values = np.asarray(coordinates, dtype=np.float64)
     return float(
@@ -916,6 +1051,142 @@ def _oriented_polygon_rings(polygon: PreparedVectorPolygon) -> list[np.ndarray]:
         else:
             oriented_rings.append(ring)
     return oriented_rings
+
+
+def _cap_expected_boundary_edges(ring_ends: np.ndarray) -> np.ndarray:
+    ring_starts = np.concatenate((np.asarray([0]), ring_ends[:-1])).astype(np.int64)
+    boundary_chunks = []
+    for ring_start, ring_end in zip(ring_starts, ring_ends.astype(np.int64)):
+        indices = np.arange(int(ring_start), int(ring_end), dtype=np.int64)
+        boundary_chunks.append(
+            np.sort(np.column_stack((indices, np.roll(indices, -1))), axis=1)
+        )
+    return np.vstack(boundary_chunks)
+
+
+def _straight_ring_chain(
+    vertices_2d: np.ndarray,
+    ring_ends: np.ndarray,
+    start_index: int,
+    end_index: int,
+) -> np.ndarray | None:
+    """Return the noded ring arc represented by one triangulator edge."""
+
+    ring_starts = np.concatenate((np.asarray([0]), ring_ends[:-1])).astype(np.int64)
+    for ring_start, ring_end in zip(ring_starts, ring_ends.astype(np.int64)):
+        if not (
+            int(ring_start) <= start_index < int(ring_end)
+            and int(ring_start) <= end_index < int(ring_end)
+        ):
+            continue
+        ring = np.arange(int(ring_start), int(ring_end), dtype=np.int64)
+        start_position = int(np.flatnonzero(ring == start_index)[0])
+        end_position = int(np.flatnonzero(ring == end_index)[0])
+        forward = np.concatenate(
+            (
+                ring[start_position:],
+                ring[: end_position + 1],
+            )
+        )
+        if start_position <= end_position:
+            forward = ring[start_position : end_position + 1]
+        backward = np.concatenate(
+            (
+                ring[: start_position + 1][::-1],
+                ring[end_position:][::-1],
+            )
+        )
+        if start_position >= end_position:
+            backward = ring[end_position : start_position + 1][::-1]
+
+        start = vertices_2d[start_index]
+        end = vertices_2d[end_index]
+        delta = end - start
+        squared_length = float(np.dot(delta, delta))
+        for candidate in (forward, backward):
+            if len(candidate) <= 2:
+                continue
+            coordinates = vertices_2d[candidate]
+            relative = coordinates - start
+            cross = relative[:, 0] * delta[1] - relative[:, 1] * delta[0]
+            projection = relative @ delta
+            if (
+                np.all(cross == 0.0)
+                and np.all(projection >= 0.0)
+                and np.all(projection <= squared_length)
+                and np.all(projection[1:] > projection[:-1])
+            ):
+                return candidate
+    return None
+
+
+def _restore_noded_cap_boundary(
+    vertices_2d: np.ndarray,
+    cap_faces: np.ndarray,
+    ring_ends: np.ndarray,
+) -> np.ndarray:
+    """Split cap triangles at collinear ring nodes omitted by triangulators."""
+
+    faces = np.asarray(cap_faces, dtype=np.int64).reshape((-1, 3))
+    expected_boundary = _cap_expected_boundary_edges(ring_ends)
+    expected_keys = {
+        (int(edge[0]), int(edge[1])) for edge in expected_boundary
+    }
+    for _split_index in range(len(vertices_2d)):
+        cap_edges = np.sort(
+            faces[:, [[0, 1], [1, 2], [2, 0]]].reshape((-1, 2)),
+            axis=1,
+        )
+        unique_edges, counts = np.unique(cap_edges, axis=0, return_counts=True)
+        boundary_edges = unique_edges[counts == 1]
+        unexpected = next(
+            (
+                edge
+                for edge in boundary_edges
+                if (int(edge[0]), int(edge[1])) not in expected_keys
+            ),
+            None,
+        )
+        if unexpected is None:
+            return faces
+
+        first = int(unexpected[0])
+        second = int(unexpected[1])
+        chain = _straight_ring_chain(
+            vertices_2d,
+            ring_ends,
+            first,
+            second,
+        )
+        if chain is None:
+            raise ValueError(
+                "Vector canonical cap introduced a non-ring boundary edge"
+            )
+        owning_faces = np.flatnonzero(
+            np.sum(np.isin(faces, [first, second]), axis=1) == 2
+        )
+        if len(owning_faces) != 1:
+            raise ValueError(
+                "Vector canonical cap boundary edge has ambiguous ownership"
+            )
+        face_index = int(owning_faces[0])
+        opposite = next(
+            int(index)
+            for index in faces[face_index]
+            if int(index) not in {first, second}
+        )
+        replacement = np.column_stack(
+            (
+                chain[:-1],
+                chain[1:],
+                np.full(len(chain) - 1, opposite, dtype=np.int64),
+            )
+        )
+        faces = np.concatenate(
+            (faces[:face_index], replacement, faces[face_index + 1 :]),
+            axis=0,
+        )
+    raise ValueError("Vector canonical cap could not restore all ring nodes")
 
 
 def _validate_cap_indices(
@@ -965,14 +1236,7 @@ def _validate_cap_indices(
         raise ValueError("Vector canonical cap has non-manifold edge incidence")
     cap_boundary = unique_edges[counts == 1]
 
-    ring_starts = np.concatenate((np.asarray([0]), ring_ends[:-1])).astype(np.int64)
-    boundary_chunks = []
-    for ring_start, ring_end in zip(ring_starts, ring_ends.astype(np.int64)):
-        indices = np.arange(int(ring_start), int(ring_end), dtype=np.int64)
-        boundary_chunks.append(
-            np.sort(np.column_stack((indices, np.roll(indices, -1))), axis=1)
-        )
-    expected_boundary = np.vstack(boundary_chunks)
+    expected_boundary = _cap_expected_boundary_edges(ring_ends)
     if not np.array_equal(
         cap_boundary[np.lexsort((cap_boundary[:, 1], cap_boundary[:, 0]))],
         expected_boundary[
@@ -1174,11 +1438,781 @@ def extrude_prepared_vector_run_group(
     return mesh
 
 
+def _stepped_ring_units(coordinates, *, grid_mm: float) -> np.ndarray:
+    """Keep every globally noded ring vertex on the physical integer grid."""
+
+    values = np.asarray(coordinates, dtype=np.float64)
+    if len(values) > 1 and np.array_equal(values[0], values[-1]):
+        values = values[:-1]
+    units = np.rint(values / float(grid_mm)).astype(np.int64)
+    if len(units) > 1:
+        keep = np.ones(len(units), dtype=bool)
+        keep[1:] = np.any(units[1:] != units[:-1], axis=1)
+        units = units[keep]
+    if len(units) > 1 and np.array_equal(units[0], units[-1]):
+        units = units[:-1]
+    if len(units) < 3:
+        raise ValueError("Vector stepped-volume ring collapsed below three points")
+    return np.ascontiguousarray(units)
+
+
+def _stepped_prepared_polygon(
+    polygon: Polygon,
+    *,
+    grid_mm: float,
+) -> tuple[PreparedVectorPolygon, list[np.ndarray]]:
+    """Convert one arrangement cell without discarding shared line nodes."""
+
+    oriented = orient(polygon, sign=1.0)
+    prepared = PreparedVectorPolygon(
+        exterior_units=_stepped_ring_units(
+            oriented.exterior.coords,
+            grid_mm=grid_mm,
+        ),
+        hole_units=tuple(
+            _stepped_ring_units(ring.coords, grid_mm=grid_mm)
+            for ring in oriented.interiors
+        ),
+        source_indices=(0,),
+    )
+    return prepared, _oriented_polygon_rings(prepared)
+
+
+def _stepped_slab_parts(
+    slabs: Sequence[dict],
+    *,
+    scale_mm_per_svg_unit: float,
+    policy: VectorLayerGeometryPolicy,
+) -> tuple[list[_SteppedPhysicalSlab], float]:
+    """Validate, scale, and snap all stepped slabs on one writer-safe grid."""
+
+    scale = float(scale_mm_per_svg_unit)
+    if not math.isfinite(scale) or scale <= 0.0:
+        raise ValueError("Vector stepped-volume scale must be positive finite")
+
+    physical_parts: list[_PhysicalPart] = []
+    raw_slabs: list[_SteppedPhysicalSlab] = []
+    for slab_index, slab in enumerate(slabs):
+        if not isinstance(slab, dict):
+            raise ValueError("Vector stepped-volume slabs must be mappings")
+        geometry = slab.get("geometry")
+        try:
+            z_start = float(slab.get("z_offset", 0.0))
+            height = float(slab.get("height", 0.0))
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("Vector stepped-volume slab has invalid height") from exc
+        if geometry is None or getattr(geometry, "is_empty", True) or height <= 1e-9:
+            continue
+        z_end = z_start + height
+        if not all(math.isfinite(value) for value in (z_start, z_end)):
+            raise ValueError("Vector stepped-volume Z range must be finite")
+        for polygon in _polygon_parts(geometry):
+            physical = affinity.scale(
+                polygon,
+                xfact=scale,
+                yfact=scale,
+                origin=(0.0, 0.0),
+            )
+            physical_parts.append(
+                _PhysicalPart(source_index=slab_index, geometry=physical)
+            )
+            raw_slabs.append(
+                _SteppedPhysicalSlab(
+                    geometry=physical,
+                    z_start_mm=round(z_start, 9),
+                    z_end_mm=round(z_end, 9),
+                )
+            )
+    if not raw_slabs:
+        return [], float(policy.grid_mm)
+
+    grid_mm = _writer_safe_grid_mm(physical_parts, float(policy.grid_mm))
+    snapped_slabs: list[_SteppedPhysicalSlab] = []
+    for slab in raw_slabs:
+        snapped = set_precision(
+            slab.geometry,
+            grid_size=grid_mm,
+            mode="valid_output",
+        )
+        if snapped is None or snapped.is_empty:
+            raise ValueError("Vector stepped-volume grid removed a source slab")
+        for polygon in _polygon_parts(snapped):
+            snapped_slabs.append(
+                _SteppedPhysicalSlab(
+                    geometry=polygon,
+                    z_start_mm=slab.z_start_mm,
+                    z_end_mm=slab.z_end_mm,
+                )
+            )
+    return snapped_slabs, grid_mm
+
+
+def _stepped_component_groups(
+    slabs: Sequence[_SteppedPhysicalSlab],
+    *,
+    grid_mm: float,
+) -> list[list[_SteppedPhysicalSlab]]:
+    """Keep point-only XY islands separate in writer coordinates."""
+
+    footprint = unary_union([slab.geometry for slab in slabs])
+    components = list(_polygon_parts(footprint))
+    grouped: list[list[_SteppedPhysicalSlab]] = [[] for _ in components]
+    for slab in slabs:
+        representative = slab.geometry.representative_point()
+        for component_index, component in enumerate(components):
+            if component.covers(representative):
+                grouped[component_index].append(slab)
+                break
+        else:
+            raise ValueError("Vector stepped-volume slab lost its XY component")
+
+    accepted_footprints: list[Polygon] = []
+    separated_groups: list[list[_SteppedPhysicalSlab]] = []
+    ordered = sorted(
+        zip(components, grouped),
+        key=lambda item: (-float(item[0].area), *item[0].bounds),
+    )
+    for component, group in ordered:
+        if not group:
+            continue
+        contacts = [
+            other
+            for other in accepted_footprints
+            if component.intersects(other)
+        ]
+        if not contacts:
+            accepted_footprints.append(component)
+            separated_groups.append(group)
+            continue
+
+        translated_component = None
+        translated_group = None
+        for x_offset, y_offset in _contact_free_translation_candidates(
+            component,
+            contacts,
+            grid_mm=grid_mm,
+        ):
+            candidate = _translate_on_physical_grid(
+                component,
+                x_offset=x_offset,
+                y_offset=y_offset,
+                grid_mm=grid_mm,
+            )
+            if candidate is None or any(
+                candidate.intersects(other) for other in accepted_footprints
+            ):
+                continue
+            translated_component = candidate
+            translated_group = [
+                _SteppedPhysicalSlab(
+                    geometry=set_precision(
+                        affinity.translate(
+                            slab.geometry,
+                            xoff=x_offset,
+                            yoff=y_offset,
+                        ),
+                        grid_size=grid_mm,
+                        mode="pointwise",
+                    ),
+                    z_start_mm=slab.z_start_mm,
+                    z_end_mm=slab.z_end_mm,
+                )
+                for slab in group
+            ]
+            break
+        if translated_component is None or translated_group is None:
+            raise ValueError(
+                "Vector stepped-volume point contact could not remain independent"
+            )
+        accepted_footprints.append(translated_component)
+        separated_groups.append(translated_group)
+    return separated_groups
+
+
+def _stepped_interval_footprints(
+    slabs: Sequence[_SteppedPhysicalSlab],
+    *,
+    grid_mm: float,
+) -> tuple[list[float], list[BaseGeometry | None]]:
+    """Resolve the occupied planar footprint for every consecutive Z band."""
+
+    z_levels = sorted(
+        {
+            value
+            for slab in slabs
+            for value in (slab.z_start_mm, slab.z_end_mm)
+        }
+    )
+    if len(z_levels) < 2:
+        raise ValueError("Vector stepped-volume requires a positive Z interval")
+    writer_z = np.asarray(z_levels, dtype=np.float32)
+    if np.any(writer_z[1:] <= writer_z[:-1]):
+        raise ValueError("Vector stepped-volume Z interval collapses in writer space")
+
+    footprints: list[BaseGeometry | None] = []
+    for z_start, z_end in zip(z_levels, z_levels[1:]):
+        z_mid = (z_start + z_end) * 0.5
+        active = [
+            slab.geometry
+            for slab in slabs
+            if slab.z_start_mm < z_mid < slab.z_end_mm
+        ]
+        if not active:
+            footprints.append(None)
+            continue
+        footprint = set_precision(
+            unary_union(active),
+            grid_size=grid_mm,
+            mode="valid_output",
+        )
+        if footprint is None or footprint.is_empty:
+            raise ValueError("Vector stepped-volume lost an occupied Z band")
+        footprints.append(footprint)
+    return z_levels, footprints
+
+
+def _stepped_arrangement_cells(
+    footprints: Sequence[BaseGeometry | None],
+    *,
+    grid_mm: float,
+) -> tuple[list[Polygon], np.ndarray]:
+    """Node all Z-band boundaries once and label their atomic XY cells."""
+
+    occupied_footprints = [
+        footprint
+        for footprint in footprints
+        if footprint is not None and not footprint.is_empty
+    ]
+    if not occupied_footprints:
+        return [], np.empty((0, len(footprints)), dtype=bool)
+    linework = unary_union([footprint.boundary for footprint in occupied_footprints])
+    cells = [
+        set_precision(cell, grid_size=grid_mm, mode="valid_output")
+        for cell in polygonize(linework)
+        if not cell.is_empty and float(cell.area) > 0.0
+    ]
+    cells = [
+        cell
+        for cell in cells
+        if isinstance(cell, Polygon) and not cell.is_empty
+    ]
+    refined_cells: list[Polygon] = []
+    for cell in cells:
+        if not _polygon_has_ring_contact(cell):
+            refined_cells.append(cell)
+            continue
+        triangles = list(
+            shapely.get_parts(shapely.constrained_delaunay_triangles(cell))
+        )
+        if not triangles:
+            raise ValueError(
+                "Vector stepped-volume could not split a local ring contact"
+            )
+        refined_linework = unary_union(
+            [cell.boundary, *(triangle.boundary for triangle in triangles)]
+        )
+        parts = [
+            set_precision(part, grid_size=grid_mm, mode="valid_output")
+            for part in polygonize(refined_linework)
+            if cell.covers(part.representative_point())
+        ]
+        parts = [
+            part
+            for part in parts
+            if (
+                isinstance(part, Polygon)
+                and not part.is_empty
+                and float(part.area) > 0.0
+                and not _polygon_has_ring_contact(part)
+            )
+        ]
+        refined_area = math.fsum(float(part.area) for part in parts)
+        area_tolerance = max(1e-12, float(cell.area) * 1e-12)
+        if (
+            not parts
+            or abs(refined_area - float(cell.area)) > area_tolerance
+        ):
+            raise ValueError(
+                "Vector stepped-volume ring-contact split changed coverage"
+            )
+        refined_cells.extend(parts)
+    cells = refined_cells
+    cells.sort(key=lambda cell: (*cell.bounds, float(cell.area)))
+    occupancy = np.zeros((len(cells), len(footprints)), dtype=bool)
+    for cell_index, cell in enumerate(cells):
+        point = cell.representative_point()
+        for interval_index, footprint in enumerate(footprints):
+            occupancy[cell_index, interval_index] = bool(
+                footprint is not None and footprint.covers(point)
+            )
+    keep = np.any(occupancy, axis=1)
+    return (
+        [cell for cell, retained in zip(cells, keep) if bool(retained)],
+        occupancy[keep],
+    )
+
+
+def _materialize_stepped_contact_vertices(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    contact_groups: Sequence[Sequence[int]],
+    *,
+    grid_mm: float,
+) -> np.ndarray:
+    """Give known local volume domains distinct float32 writer coordinates."""
+
+    groups = [tuple(int(index) for index in group) for group in contact_groups]
+    groups = [group for group in groups if len(group) > 1]
+    if not groups:
+        return vertices
+
+    contact_indices = np.asarray(
+        [index for group in groups for index in group],
+        dtype=np.int64,
+    )
+    contact_lookup = np.full(len(vertices), -1, dtype=np.int64)
+    contact_lookup[contact_indices] = np.arange(len(contact_indices), dtype=np.int64)
+    inward_sums = np.zeros((len(contact_indices), 3), dtype=np.float64)
+    for block_start in range(0, len(faces), 65_536):
+        face_block = faces[block_start : block_start + 65_536]
+        selected_faces = face_block[
+            np.any(contact_lookup[face_block] >= 0, axis=1)
+        ]
+        if len(selected_faces) == 0:
+            continue
+        triangles = vertices[selected_faces]
+        normals = np.cross(
+            triangles[:, 1] - triangles[:, 0],
+            triangles[:, 2] - triangles[:, 0],
+        )
+        normal_lengths = np.linalg.norm(normals, axis=1)
+        valid = normal_lengths > 0.0
+        normals[valid] /= normal_lengths[valid, None]
+        normals[~valid] = 0.0
+        for corner in range(3):
+            local_indices = contact_lookup[selected_faces[:, corner]]
+            selected = local_indices >= 0
+            np.add.at(
+                inward_sums,
+                local_indices[selected],
+                -normals[selected],
+            )
+
+    maximum_abs_coordinate = float(np.max(np.abs(vertices)))
+    writer_ulp = abs(float(np.spacing(np.float32(maximum_abs_coordinate))))
+    coordinate_quantum = min(
+        float(grid_mm) * 0.25,
+        max(writer_ulp, 1e-7),
+    )
+    output = vertices.copy()
+    contact_cursor = 0
+    for group in groups:
+        group_directions = inward_sums[
+            contact_cursor : contact_cursor + len(group)
+        ]
+        contact_cursor += len(group)
+        lengths = np.linalg.norm(group_directions, axis=1)
+        nonzero = lengths > 1e-12
+        group_directions[nonzero] /= lengths[nonzero, None]
+
+        radius = 1
+        while (2 * radius + 1) ** 3 - 1 < len(group):
+            radius += 1
+        codes = np.asarray(
+            [
+                (x_step, y_step, z_step)
+                for x_step in range(-radius, radius + 1)
+                for y_step in range(-radius, radius + 1)
+                for z_step in range(-radius, radius + 1)
+                if (x_step, y_step, z_step) != (0, 0, 0)
+            ],
+            dtype=np.float64,
+        )
+        code_lengths = np.linalg.norm(codes, axis=1)
+        unit_codes = codes / code_lengths[:, None]
+        unused = set(range(len(codes)))
+        for local_index, vertex_index in enumerate(group):
+            direction = group_directions[local_index]
+            scores = unit_codes @ direction
+            chosen = min(
+                unused,
+                key=lambda code_index: (
+                    -float(scores[code_index]),
+                    float(code_lengths[code_index]),
+                    tuple(float(value) for value in codes[code_index]),
+                ),
+            )
+            unused.remove(chosen)
+            output[vertex_index] += codes[chosen] * coordinate_quantum
+
+    return output.astype(np.float32).astype(np.float64)
+
+
+def _build_stepped_component_mesh(
+    slabs: Sequence[_SteppedPhysicalSlab],
+    *,
+    grid_mm: float,
+) -> trimesh.Trimesh:
+    """Build one stepped solid directly from noded caps and exposed walls."""
+
+    z_levels, footprints = _stepped_interval_footprints(slabs, grid_mm=grid_mm)
+    cells, occupancy = _stepped_arrangement_cells(footprints, grid_mm=grid_mm)
+    if not cells:
+        raise ValueError("Vector stepped-volume arrangement produced no cells")
+
+    prepared_cells: list[PreparedVectorPolygon] = []
+    cell_rings: list[list[np.ndarray]] = []
+    edge_owners: dict[
+        tuple[tuple[int, int], tuple[int, int]],
+        list[tuple[int, tuple[int, int], tuple[int, int]]],
+    ] = {}
+    for cell_index, cell in enumerate(cells):
+        prepared, rings = _stepped_prepared_polygon(cell, grid_mm=grid_mm)
+        prepared_cells.append(prepared)
+        cell_rings.append(rings)
+        for ring in rings:
+            for start, end in zip(ring, np.roll(ring, -1, axis=0)):
+                start_key = (int(start[0]), int(start[1]))
+                end_key = (int(end[0]), int(end[1]))
+                if start_key == end_key:
+                    raise ValueError("Vector stepped-volume contains a zero-length edge")
+                edge_key = tuple(sorted((start_key, end_key)))
+                edge_owners.setdefault(edge_key, []).append(
+                    (cell_index, start_key, end_key)
+                )
+    if any(len(owners) not in {1, 2} for owners in edge_owners.values()):
+        raise ValueError("Vector stepped-volume arrangement has ambiguous edge ownership")
+
+    coordinate_cells: dict[tuple[int, int], set[int]] = {}
+    coordinate_neighbors: dict[
+        tuple[int, int],
+        set[tuple[int, int]],
+    ] = {}
+    for edge, owners in edge_owners.items():
+        owner_cells = {int(owner[0]) for owner in owners}
+        for coordinate in edge:
+            coordinate_cells.setdefault(coordinate, set()).update(owner_cells)
+            if len(owner_cells) == 2:
+                coordinate_neighbors.setdefault(coordinate, set()).add(
+                    tuple(sorted(owner_cells))
+                )
+
+    interval_count = occupancy.shape[1]
+    local_domain_cache: dict[
+        tuple[int, int, int],
+        dict[tuple[int, int], int],
+    ] = {}
+
+    def local_vertex_domain(
+        cell_index: int,
+        interval_index: int,
+        coordinate: tuple[int, int] | np.ndarray,
+        z_index: int,
+    ) -> int:
+        """Identify only volume regions that meet through a local face."""
+
+        x_unit = int(coordinate[0])
+        y_unit = int(coordinate[1])
+        cache_key = (x_unit, y_unit, int(z_index))
+        cached = local_domain_cache.get(cache_key)
+        if cached is None:
+            adjacent_intervals = []
+            if z_index > 0:
+                adjacent_intervals.append(z_index - 1)
+            if z_index < interval_count:
+                adjacent_intervals.append(z_index)
+            incident_cells = coordinate_cells.get((x_unit, y_unit), set())
+            nodes = sorted(
+                (incident_cell, adjacent_interval)
+                for incident_cell in incident_cells
+                for adjacent_interval in adjacent_intervals
+                if occupancy[incident_cell, adjacent_interval]
+            )
+            parents = {node: node for node in nodes}
+
+            def find(node: tuple[int, int]) -> tuple[int, int]:
+                parent = parents[node]
+                while parent != parents[parent]:
+                    parents[parent] = parents[parents[parent]]
+                    parent = parents[parent]
+                while node != parent:
+                    next_node = parents[node]
+                    parents[node] = parent
+                    node = next_node
+                return parent
+
+            def union(first: tuple[int, int], second: tuple[int, int]) -> None:
+                first_root = find(first)
+                second_root = find(second)
+                if first_root != second_root:
+                    parents[second_root] = first_root
+
+            if len(adjacent_intervals) == 2:
+                lower_interval, upper_interval = adjacent_intervals
+                for incident_cell in incident_cells:
+                    lower = (incident_cell, lower_interval)
+                    upper = (incident_cell, upper_interval)
+                    if lower in parents and upper in parents:
+                        union(lower, upper)
+
+            for first_cell, second_cell in coordinate_neighbors.get(
+                (x_unit, y_unit),
+                set(),
+            ):
+                for adjacent_interval in adjacent_intervals:
+                    first = (first_cell, adjacent_interval)
+                    second = (second_cell, adjacent_interval)
+                    if first in parents and second in parents:
+                        union(first, second)
+
+            roots: dict[tuple[int, int], int] = {}
+            cached = {
+                node: roots.setdefault(find(node), len(roots))
+                for node in nodes
+            }
+            local_domain_cache[cache_key] = cached
+
+        owner = (int(cell_index), int(interval_index))
+        if owner not in cached:
+            raise ValueError(
+                "Vector stepped-volume vertex has no occupied local domain"
+            )
+        return cached[owner]
+
+    vertex_indices: dict[tuple[int, int, int, int], int] = {}
+    vertices: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, int, int]] = []
+
+    def vertex_index(
+        cell_index: int,
+        interval_index: int,
+        coordinate: tuple[int, int] | np.ndarray,
+        z_index: int,
+    ) -> int:
+        x_unit = int(coordinate[0])
+        y_unit = int(coordinate[1])
+        domain = local_vertex_domain(
+            cell_index,
+            interval_index,
+            coordinate,
+            z_index,
+        )
+        key = (domain, x_unit, y_unit, int(z_index))
+        existing = vertex_indices.get(key)
+        if existing is not None:
+            return existing
+        index = len(vertices)
+        vertex_indices[key] = index
+        vertices.append(
+            (
+                x_unit * grid_mm,
+                y_unit * grid_mm,
+                float(z_levels[z_index]),
+            )
+        )
+        return index
+
+    for cell_index, (prepared, rings) in enumerate(
+        zip(prepared_cells, cell_rings)
+    ):
+        vertices_2d = np.vstack(rings).astype(np.float64) * grid_mm
+        ring_ends = np.cumsum([len(ring) for ring in rings], dtype=np.uint32)
+        raw_cap_faces = _canonical_cap_faces(
+            prepared,
+            vertices_2d,
+            ring_ends,
+            grid_mm=grid_mm,
+        )
+        cap_faces = _validate_cap_indices(
+            vertices_2d,
+            _restore_noded_cap_boundary(
+                vertices_2d,
+                raw_cap_faces,
+                ring_ends,
+            ),
+            ring_ends,
+            expected_area_mm2=float(cells[cell_index].area),
+        )
+        flattened_units = np.vstack(rings)
+        for z_index in range(interval_count + 1):
+            below = z_index > 0 and bool(occupancy[cell_index, z_index - 1])
+            above = z_index < interval_count and bool(
+                occupancy[cell_index, z_index]
+            )
+            if below == above:
+                continue
+            occupied_interval = z_index - 1 if below else z_index
+            local_indices = np.asarray(
+                [
+                    vertex_index(
+                        cell_index,
+                        occupied_interval,
+                        coordinate,
+                        z_index,
+                    )
+                    for coordinate in flattened_units
+                ],
+                dtype=np.int64,
+            )
+            oriented_faces = cap_faces if below else cap_faces[:, ::-1]
+            faces.extend(
+                tuple(int(value) for value in local_indices[face])
+                for face in oriented_faces
+            )
+
+    for interval_index in range(interval_count):
+        for owners in edge_owners.values():
+            occupied = [
+                owner
+                for owner in owners
+                if occupancy[owner[0], interval_index]
+            ]
+            if len(occupied) != 1:
+                continue
+            cell_index, start, end = occupied[0]
+            start_bottom = vertex_index(
+                cell_index,
+                interval_index,
+                start,
+                interval_index,
+            )
+            end_bottom = vertex_index(
+                cell_index,
+                interval_index,
+                end,
+                interval_index,
+            )
+            start_top = vertex_index(
+                cell_index,
+                interval_index,
+                start,
+                interval_index + 1,
+            )
+            end_top = vertex_index(
+                cell_index,
+                interval_index,
+                end,
+                interval_index + 1,
+            )
+            faces.extend(
+                (
+                    (start_bottom, end_bottom, end_top),
+                    (start_bottom, end_top, start_top),
+                )
+            )
+
+    if not vertices or not faces:
+        raise ValueError("Vector stepped-volume construction produced no surface")
+    vertex_array = np.asarray(vertices, dtype=np.float64)
+    face_array = np.asarray(faces, dtype=np.int64)
+    contact_groups: list[list[int]] = []
+    for (x_unit, y_unit, z_index), domains in local_domain_cache.items():
+        indices = [
+            vertex_indices[(domain, x_unit, y_unit, z_index)]
+            for domain in sorted(set(domains.values()))
+            if (domain, x_unit, y_unit, z_index) in vertex_indices
+        ]
+        if len(indices) > 1:
+            contact_groups.append(indices)
+    vertex_array = _materialize_stepped_contact_vertices(
+        vertex_array,
+        face_array,
+        contact_groups,
+        grid_mm=grid_mm,
+    )
+    mesh = trimesh.Trimesh(
+        vertices=vertex_array,
+        faces=face_array,
+        process=False,
+    )
+    mesh.metadata["vector_stepped_geometry"] = {
+        "grid_mm": float(grid_mm),
+        "z_interval_count": int(interval_count),
+        "arrangement_cell_count": int(len(cells)),
+        "mesh_vertex_count": int(len(vertex_array)),
+        "mesh_face_count": int(len(face_array)),
+    }
+    return mesh
+
+
+def _concatenate_stepped_components(
+    meshes: Sequence[trimesh.Trimesh],
+) -> trimesh.Trimesh:
+    """Concatenate independent stepped components without welding indices."""
+
+    if not meshes:
+        raise ValueError("Vector stepped-volume has no component meshes")
+    if len(meshes) == 1:
+        return meshes[0]
+    vertex_count = sum(len(mesh.vertices) for mesh in meshes)
+    face_count = sum(len(mesh.faces) for mesh in meshes)
+    vertices = np.empty((vertex_count, 3), dtype=np.float64)
+    faces = np.empty((face_count, 3), dtype=np.int64)
+    vertex_cursor = 0
+    face_cursor = 0
+    for mesh in meshes:
+        next_vertex = vertex_cursor + len(mesh.vertices)
+        next_face = face_cursor + len(mesh.faces)
+        vertices[vertex_cursor:next_vertex] = np.asarray(
+            mesh.vertices,
+            dtype=np.float64,
+        )
+        np.add(
+            np.asarray(mesh.faces, dtype=np.int64),
+            vertex_cursor,
+            out=faces[face_cursor:next_face],
+        )
+        vertex_cursor = next_vertex
+        face_cursor = next_face
+    return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+
+
+def build_vector_stepped_volume(
+    slabs: Sequence[dict],
+    *,
+    scale_mm_per_svg_unit: float,
+    policy: VectorLayerGeometryPolicy | None = None,
+) -> trimesh.Trimesh | None:
+    """Build a native Vector stepped solid directly from canonical surfaces.
+    从规范表面直接构建原生 Vector 阶梯实体。
+
+    Every XY boundary is snapped and noded once before triangle allocation.
+    Caps and exposed walls then share the same indexed vertices; no boolean
+    mesh union, vertex welding, topology repair, or alternate 3D fallback is
+    involved. / 所有 XY 边界在分配三角面前只做一次网格化与节点化；顶面和
+    外露侧壁直接共享索引，不再执行网格布尔、合点、拓扑修补或备用三维路径。
+    """
+
+    effective_policy = policy or VectorLayerGeometryPolicy()
+    snapped_slabs, grid_mm = _stepped_slab_parts(
+        slabs,
+        scale_mm_per_svg_unit=scale_mm_per_svg_unit,
+        policy=effective_policy,
+    )
+    if not snapped_slabs:
+        return None
+    component_meshes = [
+        _build_stepped_component_mesh(group, grid_mm=grid_mm)
+        for group in _stepped_component_groups(snapped_slabs, grid_mm=grid_mm)
+    ]
+    mesh = _concatenate_stepped_components(component_meshes)
+    mesh.metadata["vector_stepped_geometry"] = {
+        "grid_mm": float(grid_mm),
+        "component_count": int(len(component_meshes)),
+        "mesh_vertex_count": int(len(mesh.vertices)),
+        "mesh_face_count": int(len(mesh.faces)),
+    }
+    return mesh
+
+
 __all__ = [
     "PreparedVectorPolygon",
     "PreparedVectorRunGroup",
+    "PreparedVectorSpatialGroups",
     "VectorLayerGeometryPolicy",
     "VectorLayerGeometryStats",
+    "build_vector_stepped_volume",
     "extrude_prepared_vector_run_group",
     "prepare_vector_run_group",
+    "prepare_vector_spatial_groups_best_effort",
 ]

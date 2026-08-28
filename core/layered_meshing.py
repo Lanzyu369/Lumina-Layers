@@ -45,7 +45,7 @@ class LayeredMeshPolicy:
     标签表面构建的验证策略。
     """
 
-    validate_output: bool = True
+    validate_output: bool = False
 
 
 @dataclass(frozen=True)
@@ -339,6 +339,39 @@ def merge_boolean_rectangles(mask: np.ndarray) -> np.ndarray:
         return np.empty((0, 4), dtype=np.int32)
     rectangles = _greedy_rectangles_python(candidate)
     return np.asarray(rectangles, dtype=np.int32).reshape((-1, 4))
+
+
+def group_identical_material_layers(
+    voxel_matrix: np.ndarray,
+    material_id: int,
+) -> list[tuple[int, int, np.ndarray]]:
+    """Group consecutive equal material masks without changing XY coverage.
+    合并连续且相同的材料掩码层，不改变 XY 覆盖。
+    """
+
+    volume = np.asarray(voxel_matrix)
+    if volume.ndim != 3:
+        raise ValueError("material layer grouping expects a 3D voxel matrix")
+    groups: list[tuple[int, int, np.ndarray]] = []
+    previous_mask: np.ndarray | None = None
+    start_z = 0
+    for z_index in range(volume.shape[0]):
+        current_mask = volume[z_index] == int(material_id)
+        if not bool(np.any(current_mask)):
+            if previous_mask is not None:
+                groups.append((start_z, z_index - 1, previous_mask))
+                previous_mask = None
+            continue
+        if previous_mask is None:
+            start_z = z_index
+            previous_mask = current_mask
+        elif not np.array_equal(current_mask, previous_mask):
+            groups.append((start_z, z_index - 1, previous_mask))
+            start_z = z_index
+            previous_mask = current_mask
+    if previous_mask is not None:
+        groups.append((start_z, volume.shape[0] - 1, previous_mask))
+    return groups
 
 
 def _append_plane_patch_arrays(
@@ -814,6 +847,7 @@ def _token_components_from_segment_pairs(
 
     paired_first: list[np.ndarray] = []
     paired_second: list[np.ndarray] = []
+    four_surface_segments: np.ndarray | None = None
 
     two_groups = np.flatnonzero(segment_group_counts == 2)
     if len(two_groups) > 0:
@@ -898,8 +932,11 @@ def _token_components_from_segment_pairs(
         first_lookup = np.asarray([[0, 2], [0, 1], [0, 1]], dtype=np.int64)
         second_lookup = np.asarray([[1, 3], [2, 3], [3, 2]], dtype=np.int64)
         rows = np.arange(len(instances))[:, None]
-        paired_first.append(instances[rows, first_lookup[matching_index]].reshape(-1))
-        paired_second.append(instances[rows, second_lookup[matching_index]].reshape(-1))
+        selected_first = instances[rows, first_lookup[matching_index]]
+        selected_second = instances[rows, second_lookup[matching_index]]
+        four_surface_segments = selected_first
+        paired_first.append(selected_first.reshape(-1))
+        paired_second.append(selected_second.reshape(-1))
 
     if not paired_first:
         raise ValueError("Layered mesh boundary has no paired segments")
@@ -924,6 +961,19 @@ def _token_components_from_segment_pairs(
         directed=False,
         return_labels=True,
     )
+    if four_surface_segments is not None:
+        surface_start = token_to_vertex[segment_start[four_surface_segments]]
+        surface_end = token_to_vertex[segment_end[four_surface_segments]]
+        surface_low = np.minimum(surface_start, surface_end)
+        surface_high = np.maximum(surface_start, surface_end)
+        collapsed = (
+            (surface_low[:, 0] == surface_low[:, 1])
+            & (surface_high[:, 0] == surface_high[:, 1])
+        )
+        if bool(np.any(collapsed)):
+            raise _DiagonalContactNormalizationRequired(
+                "Layered surface contact needs one local edge subdivision"
+            )
     return token_to_vertex.astype(np.uint32, copy=False)
 
 
@@ -1292,6 +1342,35 @@ def _component_bound_arrays(
     return origins, ends
 
 
+def _indexed_face_edges_are_paired(faces: np.ndarray) -> bool:
+    """Check indexed edge closure without scanning coordinates or volume.
+    仅检查索引边闭合，不扫描坐标或体积。
+    """
+
+    if faces.ndim != 2 or faces.shape[1] != 3 or len(faces) == 0:
+        return False
+    edge_keys = np.empty(len(faces) * 3, dtype=np.uint64)
+    output_offset = 0
+    for first_column, second_column in ((0, 1), (1, 2), (2, 0)):
+        for start in range(0, len(faces), 65_536):
+            face_block = faces[start : start + 65_536]
+            first = face_block[:, first_column]
+            second = face_block[:, second_column]
+            low = np.minimum(first, second).astype(np.uint64)
+            high = np.maximum(first, second).astype(np.uint64)
+            block_length = len(face_block)
+            edge_keys[output_offset : output_offset + block_length] = (
+                (low << np.uint64(32)) | high
+            )
+            output_offset += block_length
+    edge_keys.sort(kind="quicksort")
+    return bool(
+        len(edge_keys) % 2 == 0
+        and np.all(edge_keys[0::2] == edge_keys[1::2])
+        and np.all(edge_keys[1:-1:2] != edge_keys[2::2])
+    )
+
+
 def _validate_component_arrays(
     vertices: np.ndarray,
     faces: np.ndarray,
@@ -1336,27 +1415,7 @@ def _validate_component_arrays(
             )
         )
 
-    edge_keys = np.empty(len(faces) * 3, dtype=np.uint64)
-    output_offset = 0
-    for first_column, second_column in ((0, 1), (1, 2), (2, 0)):
-        for start in range(0, len(faces), 65_536):
-            face_block = faces[start : start + 65_536]
-            first = face_block[:, first_column]
-            second = face_block[:, second_column]
-            low = np.minimum(first, second).astype(np.uint64)
-            high = np.maximum(first, second).astype(np.uint64)
-            block_length = len(face_block)
-            edge_keys[output_offset : output_offset + block_length] = (
-                (low << np.uint64(32)) | high
-            )
-            output_offset += block_length
-    edge_keys.sort(kind="quicksort")
-    paired = bool(
-        len(edge_keys) % 2 == 0
-        and np.all(edge_keys[0::2] == edge_keys[1::2])
-        and np.all(edge_keys[1:-1:2] != edge_keys[2::2])
-    )
-    if not paired:
+    if not _indexed_face_edges_are_paired(faces):
         raise _DiagonalContactNormalizationRequired(
             "Layered surface meshing produced an open edge or T-junction"
         )
@@ -1384,17 +1443,27 @@ def _validated_component_arrays(
     validate_output: bool,
     lattice_audit: _LatticeFloat32Audit,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Build one component compactly, normalizing only proven T-junctions."""
+    """Build one component directly; reserve full audits for development."""
 
     if not validate_output:
-        return _mesh_arrays_from_patches(
-            patches,
-            height_px=height_px,
-            component_labels=component_labels,
-            shell_id=shell_id,
-            lattice_audit=lattice_audit,
-            normalize_diagonal_contacts=True,
-        )
+        try:
+            return _mesh_arrays_from_patches(
+                patches,
+                height_px=height_px,
+                component_labels=component_labels,
+                shell_id=shell_id,
+                lattice_audit=lattice_audit,
+                normalize_diagonal_contacts=False,
+            )
+        except _DiagonalContactNormalizationRequired:
+            return _mesh_arrays_from_patches(
+                patches,
+                height_px=height_px,
+                component_labels=component_labels,
+                shell_id=shell_id,
+                lattice_audit=lattice_audit,
+                normalize_diagonal_contacts=True,
+            )
 
     first_audit = _LatticeFloat32Audit()
     try:
@@ -1882,5 +1951,6 @@ __all__ = [
     "LayeredMeshPolicy",
     "LayeredMeshStats",
     "build_labeled_surface_mesh",
+    "group_identical_material_layers",
     "merge_boolean_rectangles",
 ]

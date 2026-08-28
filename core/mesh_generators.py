@@ -7,9 +7,9 @@ ARCHITECTURE:
 - Pixel Art Mode: exact labeled surfaces without material dilation
 
 TOPOLOGY: Same-material cells share one exposed surface; edge/point-only
-contacts retain independent closed index domains.
-
-The polygon extrusion adapter remains only for non-grid boundary fragments.
+contacts retain independent closed index domains. Puzzle boundaries are
+sampled onto that same printable pixel lattice before meshing; there is no
+secondary polygon-extrusion path.
 """
 
 import logging
@@ -17,24 +17,14 @@ from abc import ABC, abstractmethod
 
 import cv2
 import numpy as np
-import trimesh
-from shapely.affinity import affine_transform
-from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, box
+from shapely import contains_xy
+from shapely.geometry import GeometryCollection, MultiPolygon, Polygon
 from shapely.ops import unary_union
 
 from config import ModelingMode
 from core.layered_meshing import (
     build_labeled_surface_mesh,
-    merge_boolean_rectangles,
-)
-from core.mesh_export_parts import (
-    copy_mesh_export_part_ranges,
-    set_concatenated_mesh_export_part_ranges,
-)
-from core.vector_engine import VectorProcessor
-from core.vector_mesh_topology import (
-    VECTOR_COVERAGE_ABS_TOL_MM2,
-    VECTOR_COVERAGE_REL_TOL,
+    group_identical_material_layers,
 )
 
 log = logging.getLogger(__name__)
@@ -66,153 +56,44 @@ def _normalize_polygonal_geometry(geometry):
     return None
 
 
-def _iter_polygon_parts(geometry):
-    """Yield individual polygon parts from arbitrary polygonal geometry.
-    将任意多边形几何展开为单独 Polygon 片段。
+def rasterize_boundary_geometry(
+    geometry,
+    *,
+    height_px: int,
+    width_px: int,
+) -> np.ndarray:
+    """Sample a puzzle boundary onto the printable cell lattice.
+
+    将拼图边界按像素单元中心采样到统一可打印网格。
+
+    The converter already runs puzzle pieces at a fixed pixels-per-millimetre
+    resolution finer than the supported nozzle widths. Keeping the boundary
+    on this lattice lets all raster modes use one by-construction mesher and
+    removes the former polygon extrusion/topology-repair branch entirely.
+
+    Args:
+        geometry: Polygonal boundary in y-down pixel coordinates.
+            （y 向下像素坐标中的多边形边界）
+        height_px: Output mask height.（输出掩码高度）
+        width_px: Output mask width.（输出掩码宽度）
+
+    Returns:
+        Boolean ``(height_px, width_px)`` cell mask.（布尔单元掩码）
     """
+
+    height_px = int(height_px)
+    width_px = int(width_px)
+    if height_px <= 0 or width_px <= 0:
+        raise ValueError("Boundary raster dimensions must be positive")
     normalized = _normalize_polygonal_geometry(geometry)
     if normalized is None:
-        return ()
-    if isinstance(normalized, Polygon):
-        return (normalized,)
-    if isinstance(normalized, MultiPolygon):
-        return tuple(part for part in normalized.geoms if not part.is_empty)
-    return ()
-
-
-def _flip_geometry_to_world(geometry, height_px):
-    """Flip a y-down pixel-space geometry into y-up world coordinates.
-    将 y 向下的像素空间几何翻转到 y 向上的世界坐标。
-    """
-    normalized = _normalize_polygonal_geometry(geometry)
-    if normalized is None:
-        return None
-    world = affine_transform(
-        normalized,
-        [1.0, 0.0, 0.0, -1.0, 0.0, float(height_px)],
+        return np.zeros((height_px, width_px), dtype=bool)
+    x_centers = np.arange(width_px, dtype=np.float64) + 0.5
+    y_centers = np.arange(height_px, dtype=np.float64) + 0.5
+    return np.asarray(
+        contains_xy(normalized, x_centers[None, :], y_centers[:, None]),
+        dtype=bool,
     )
-    return _normalize_polygonal_geometry(world)
-
-
-def _merge_mesh_list(meshes):
-    """Concatenate meshes while retaining independent closed shells.
-    合并 mesh，同时保留各自独立的闭合壳体。
-    """
-    clean_meshes = [mesh for mesh in meshes if mesh is not None and len(mesh.faces) > 0]
-    if not clean_meshes:
-        return None
-
-    # Adjacent prisms intentionally keep separate vertex indices. Welding
-    # their coincident coordinates without removing both internal walls first
-    # creates edges referenced by more than two triangles.
-    if len(clean_meshes) == 1:
-        return clean_meshes[0]
-    combined = trimesh.util.concatenate(clean_meshes)
-    set_concatenated_mesh_export_part_ranges(combined, clean_meshes)
-    return combined
-
-
-def _extrude_polygon_geometry(geometry, height, z_offset, extrude_cache=None):
-    """Extrude polygonal geometry into 3D meshes.
-    将多边形几何挤出为 3D mesh。
-    """
-    meshes = []
-    if geometry is None or geometry.is_empty:
-        return meshes
-
-    for poly in _iter_polygon_parts(geometry):
-        if poly.is_empty or getattr(poly, "area", 0.0) <= 0.0:
-            continue
-
-        cache_key = None
-        cached_base = None
-        if extrude_cache is not None:
-            cache_key = (poly.wkb, round(float(height), 8))
-            cached_base = extrude_cache.get(cache_key)
-
-        if cached_base is None:
-            try:
-                base_meshes = VectorProcessor._extrude_geometry(
-                    poly,
-                    height=1.0,
-                    z_offset=0.0,
-                    scale=1.0,
-                    extrude_cache=None,
-                )
-                if not base_meshes:
-                    raise ValueError("indexed polygon extrusion returned no mesh")
-                base_mesh = _merge_mesh_list(base_meshes)
-                if base_mesh is None:
-                    raise ValueError("indexed polygon extrusion returned no mesh")
-            except (ValueError, TypeError, RuntimeError, AttributeError, OSError) as exc:
-                log.warning(
-                    "Failed to extrude polygon: %s",
-                    exc,
-                    extra={"event": "polygon_extrusion_failed", "error_type": type(exc).__name__},
-                )
-                raise ValueError(
-                    "Raster boundary polygon extrusion failed; refusing partial export"
-                ) from exc
-            if not bool(base_mesh.is_watertight):
-                raise ValueError(
-                    "Raster boundary polygon extrusion produced non-manifold topology"
-                )
-            expected_volume = float(poly.area)
-            actual_volume = abs(float(base_mesh.volume))
-            # VectorProcessor may remove float32-collapsed duplicate vertices
-            # after proving that the resulting area remains inside the shared
-            # export bound.  Reuse that same bound here so the raster wrapper
-            # does not reject an already-validated normalization.
-            coverage_tolerance = max(
-                VECTOR_COVERAGE_ABS_TOL_MM2,
-                expected_volume * VECTOR_COVERAGE_REL_TOL,
-            )
-            if actual_volume + coverage_tolerance < expected_volume:
-                raise ValueError(
-                    "Raster boundary polygon extrusion coverage incomplete; "
-                    "refusing partial export"
-                )
-            if extrude_cache is not None and cache_key is not None:
-                cached_copy = base_mesh.copy()
-                copy_mesh_export_part_ranges(base_mesh, cached_copy)
-                extrude_cache[cache_key] = cached_copy
-            cached_base = base_mesh
-
-        mesh = cached_base.copy()
-        copy_mesh_export_part_ranges(cached_base, mesh)
-        mesh.apply_scale([1.0, 1.0, float(height)])
-        mesh.apply_translation([0.0, 0.0, float(z_offset)])
-        meshes.append(mesh)
-
-    return meshes
-
-
-def _merge_layers_no_dilation(voxel_matrix, mat_id):
-    """Group consecutive Z-layers with identical masks (no dilation).
-    将连续相同掩码的 Z 层合并为组（不做膨胀）。
-    """
-    layer_groups = []
-    prev_mask = None
-    start_z = 0
-    for z in range(voxel_matrix.shape[0]):
-        curr_mask = voxel_matrix[z] == mat_id
-        if not np.any(curr_mask):
-            if prev_mask is not None:
-                layer_groups.append((start_z, z - 1, prev_mask))
-                prev_mask = None
-            continue
-        if prev_mask is None:
-            start_z = z
-            prev_mask = curr_mask
-        elif np.array_equal(curr_mask, prev_mask):
-            pass
-        else:
-            layer_groups.append((start_z, z - 1, prev_mask))
-            start_z = z
-            prev_mask = curr_mask
-    if prev_mask is not None:
-        layer_groups.append((start_z, voxel_matrix.shape[0] - 1, prev_mask))
-    return layer_groups
 
 
 def _mask_volume_from_layer_groups(layer_groups, shape):
@@ -281,58 +162,6 @@ class BaseMesher(ABC):
         """
         return self.generate_mesh(voxel_matrix, mat_id=-2, height_px=height_px)
 
-    @staticmethod
-    def _greedy_rect_merge(mask):
-        """Greedy rectangle merging on a 2D boolean mask.
-        贪婪矩形合并（2D 布尔掩码）。
-
-        Args:
-            mask (np.ndarray): (H, W) bool array. (布尔掩码)
-
-        Returns:
-            np.ndarray: (R, 4) float64 array of rectangles [x0, y0, x1, y1].
-                (矩形数组，像素坐标)
-        """
-        return merge_boolean_rectangles(mask).astype(np.float64, copy=False)
-
-    @staticmethod
-    def _merge_layers_no_dilation(voxel_matrix, mat_id):
-        """Group consecutive Z-layers with identical masks (no dilation).
-        将连续相同掩码的 Z 层合并为组（不做膨胀）。
-        """
-        return _merge_layers_no_dilation(voxel_matrix, mat_id)
-
-    def _build_mesh_from_layer_polygons(self, layer_polygons, height_px):
-        """Build trimesh from list of (z_bottom, z_top, geometry) tuples.
-        从层多边形列表构建 trimesh。
-        """
-        meshes = []
-        extrude_cache = {}
-
-        for z_bottom, z_top, geometry in layer_polygons:
-            if geometry is None or geometry.is_empty:
-                continue
-
-            height = float(z_top - z_bottom)
-            if height <= 0:
-                continue
-
-            world_geometry = _flip_geometry_to_world(geometry, height_px)
-            if world_geometry is None or world_geometry.is_empty:
-                continue
-
-            meshes.extend(
-                _extrude_polygon_geometry(
-                    world_geometry,
-                    height,
-                    z_bottom,
-                    extrude_cache=extrude_cache,
-                )
-            )
-
-        return _merge_mesh_list(meshes)
-
-
 class VoxelMesher(BaseMesher):
     """
     Pixel art mode mesh generator
@@ -375,13 +204,6 @@ class VoxelMesher(BaseMesher):
             )
         return mesh
 
-    @staticmethod
-    def _merge_layers_no_dilation(voxel_matrix, mat_id):
-        """Group consecutive Z-layers with identical masks (no dilation).
-        将连续相同掩码的 Z 层合并为组（不做膨胀）。"""
-        return _merge_layers_no_dilation(voxel_matrix, mat_id)
-
-
 class HighFidelityMesher(BaseMesher):
     """
     High-fidelity mode mesh generator
@@ -415,28 +237,6 @@ class HighFidelityMesher(BaseMesher):
         """
         self.disable_material_dilation = bool(disable_material_dilation)
         self.boundary_geometry = _normalize_polygonal_geometry(boundary_geometry)
-
-    @staticmethod
-    def _log_boundary_clip_fallback(exc, rect, mat_id):
-        """Emit structured logging when polygon clipping falls back to rect extrusion.
-        在多边形裁剪回退到矩形挤出时输出结构化日志。
-        """
-        x0, y0, x1, y1 = (float(value) for value in rect)
-        log.warning(
-            "Boundary clip fallback for material %s rect=(%.3f, %.3f, %.3f, %.3f): %s",
-            mat_id,
-            x0,
-            y0,
-            x1,
-            y1,
-            exc,
-            extra={
-                "event": "boundary_polygon_clip_fallback",
-                "material_id": mat_id,
-                "rect": [x0, y0, x1, y1],
-                "error_type": type(exc).__name__,
-            },
-        )
 
     def generate_mesh(
         self,
@@ -472,16 +272,13 @@ class HighFidelityMesher(BaseMesher):
         if use_no_dilation and not boundary_enabled:
             layer_groups = None
         elif use_no_dilation:
-            layer_groups = self._merge_layers_no_dilation(voxel_matrix, mat_id)
+            layer_groups = group_identical_material_layers(voxel_matrix, mat_id)
         else:
             layer_groups = self._merge_layers_with_dilation(voxel_matrix, mat_id)
         if layer_groups is not None and not layer_groups:
             return None
 
         mesh_type = "Backing" if mat_id == -2 else f"Mat ID {mat_id}"
-        grid_mesh = None
-        polygon_mesh = None
-        boundary_polygon_count = 0
         if layer_groups is not None:
             log.info(
                 "%s: merged %s layers into %s groups%s%s",
@@ -500,89 +297,31 @@ class HighFidelityMesher(BaseMesher):
                 },
             )
 
-        if not boundary_enabled:
-            if use_no_dilation:
-                effective_volume = np.asarray(voxel_matrix)
-                effective_material_id = mat_id
-            else:
-                effective_volume = _mask_volume_from_layer_groups(
-                    layer_groups,
-                    np.asarray(voxel_matrix).shape,
-                )
-                effective_material_id = True
-            grid_mesh = build_labeled_surface_mesh(
-                effective_volume,
-                material_id=effective_material_id,
-                height_px=height_px,
-            )
-            mesh = grid_mesh
+        if use_no_dilation and not boundary_enabled:
+            effective_volume = np.asarray(voxel_matrix)
+            effective_material_id = mat_id
         else:
-            interior_volume = np.zeros(np.asarray(voxel_matrix).shape, dtype=bool)
-            layer_polygons = []
-            for start_z, end_z, mask in layer_groups:
-                rects = self._greedy_rect_merge(mask)
-                if rects.shape[0] == 0:
-                    continue
-
-                clipped_geoms = []
-                for rect in rects:
-                    x0, y0, x1, y1 = rect
-                    rect_geom = box(float(x0), float(y0), float(x1), float(y1))
-                    try:
-                        clipped = _normalize_polygonal_geometry(
-                            rect_geom.intersection(boundary_geometry)
-                        )
-                    except (
-                        ValueError,
-                        TypeError,
-                        RuntimeError,
-                        AttributeError,
-                        OSError,
-                    ) as exc:
-                        self._log_boundary_clip_fallback(exc, rect, mat_id)
-                        interior_volume[
-                            start_z : end_z + 1,
-                            int(y0) : int(y1),
-                            int(x0) : int(x1),
-                        ] = True
-                        continue
-                    if clipped is None or clipped.is_empty:
-                        continue
-                    if clipped.equals(rect_geom):
-                        interior_volume[
-                            start_z : end_z + 1,
-                            int(y0) : int(y1),
-                            int(x0) : int(x1),
-                        ] = True
-                    else:
-                        clipped_geoms.append(clipped)
-
-                if clipped_geoms:
-                    layer_polygons.append(
-                        (
-                            float(start_z),
-                            float(end_z + 1),
-                            _normalize_polygonal_geometry(
-                                unary_union(clipped_geoms)
-                            ),
-                        )
-                    )
-
-            grid_mesh = build_labeled_surface_mesh(
-                interior_volume,
-                material_id=True,
-                height_px=height_px,
+            effective_volume = _mask_volume_from_layer_groups(
+                layer_groups,
+                np.asarray(voxel_matrix).shape,
             )
-            boundary_polygon_count = sum(
-                len(_iter_polygon_parts(geometry))
-                for _start_z, _end_z, geometry in layer_polygons
+            effective_material_id = True
+
+        if boundary_enabled:
+            boundary_mask = rasterize_boundary_geometry(
+                boundary_geometry,
+                height_px=np.asarray(voxel_matrix).shape[1],
+                width_px=np.asarray(voxel_matrix).shape[2],
             )
-            polygon_mesh = (
-                self._build_mesh_from_layer_polygons(layer_polygons, height_px)
-                if layer_polygons
-                else None
-            )
-            mesh = _merge_mesh_list([grid_mesh, polygon_mesh])
+            effective_volume = np.asarray(effective_volume, dtype=bool)
+            effective_volume &= boundary_mask[None, :, :]
+
+        grid_mesh = build_labeled_surface_mesh(
+            effective_volume,
+            material_id=effective_material_id,
+            height_px=height_px,
+        )
+        mesh = grid_mesh
         if mesh is not None:
             lattice_stats = (
                 grid_mesh.metadata.get("layered_mesh_stats", {})
@@ -594,18 +333,11 @@ class HighFidelityMesher(BaseMesher):
             lattice_patch_count = int(
                 lattice_stats.get("merged_patch_count", 0)
             )
-            patch_count = lattice_patch_count + boundary_polygon_count
-            if polygon_mesh is not None:
-                mesh.metadata.pop("integer_topology_scale", None)
-                if lattice_stats:
-                    mesh.metadata["layered_mesh_stats"] = dict(lattice_stats)
-                else:
-                    mesh.metadata.pop("layered_mesh_stats", None)
+            patch_count = lattice_patch_count
             mesh.metadata["raster_surface_stats"] = {
                 "patch_count": patch_count,
                 "lattice_patch_count": lattice_patch_count,
-                "boundary_polygon_count": boundary_polygon_count,
-                "boundary_adapter_used": bool(polygon_mesh is not None),
+                "boundary_rasterized": boundary_enabled,
                 "boundary_enabled": boundary_enabled,
                 "material_dilation_applied": not use_no_dilation,
             }

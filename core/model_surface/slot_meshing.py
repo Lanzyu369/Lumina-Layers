@@ -8,24 +8,9 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 import trimesh
 
-from core.mesh_generators import BaseMesher
-
-_BOX_FACE_TEMPLATE = np.array(
-    [
-        [0, 2, 1],
-        [0, 3, 2],
-        [4, 5, 6],
-        [4, 6, 7],
-        [0, 1, 5],
-        [0, 5, 4],
-        [1, 2, 6],
-        [1, 6, 5],
-        [2, 3, 7],
-        [2, 7, 6],
-        [3, 0, 4],
-        [3, 4, 7],
-    ],
-    dtype=np.int64,
+from core.layered_meshing import (
+    build_labeled_surface_mesh,
+    merge_boolean_rectangles,
 )
 
 
@@ -42,10 +27,10 @@ def build_printable_footprint_from_voxels(
 
     A pixel belongs to the footprint only when at least one displayed layer
     references a valid material slot. The pixel-corner coordinates and Y-axis
-    flip intentionally match :func:`build_slot_box_scene_from_voxels`.
+    flip intentionally match :func:`build_slot_surface_scene_from_voxels`.
 
     只有展示层中至少一层引用合法材料槽时，该像素才属于轮廓。像素角点坐标
-    和 Y 轴翻转规则与 :func:`build_slot_box_scene_from_voxels` 保持一致。
+    和 Y 轴翻转规则与 :func:`build_slot_surface_scene_from_voxels` 保持一致。
     """
 
     matrix = np.asarray(full_matrix)
@@ -60,7 +45,10 @@ def build_printable_footprint_from_voxels(
         (matrix >= 0) & (matrix < int(material_count)),
         axis=0,
     )
-    rectangles = BaseMesher._greedy_rect_merge(printable)
+    rectangles = merge_boolean_rectangles(printable).astype(
+        np.float64,
+        copy=False,
+    )
     if rectangles.shape[0] == 0:
         return sg.GeometryCollection()
 
@@ -80,7 +68,7 @@ def build_printable_footprint_from_voxels(
     return unary_union(boxes)
 
 
-def build_slot_box_scene_from_voxels(
+def build_slot_surface_scene_from_voxels(
     *,
     full_matrix: np.ndarray,
     slot_names: Sequence[str],
@@ -89,14 +77,13 @@ def build_slot_box_scene_from_voxels(
     pixel_scale: float,
     layer_heights_mm: Sequence[float],
 ) -> trimesh.Scene:
-    """Build a model-surface-safe slot scene from material voxels.
+    """Build a model-surface slot scene with the shared indexed core.
+    使用统一索引核心构建模型覆面材料场景。
 
-    This keeps each greedy rectangle prism topologically independent instead
-    of merging shared vertices between adjacent prisms. Bambu-family slicers
-    then see closed shells rather than multi-face shared edges.
-
-    根据材料体素构建适合模型覆面的材料场景。这里不合并相邻矩形柱的
-    共享顶点，避免 Bambu/Orca 将多面共边识别为非流形。
+    The common surface builder removes internal voxel interfaces and shares
+    final boundary indices. Its integer Z levels are then mapped once onto the
+    supplied physical layer-height schedule. / 统一表面构建器会移除内部体素
+    接口并共享最终边界索引，随后仅将整数 Z 层边界映射到给定物理层高。
     """
 
     if full_matrix.ndim != 3:
@@ -118,83 +105,35 @@ def build_slot_box_scene_from_voxels(
     transform[1, 1] = float(pixel_scale)
 
     for mat_id, slot_name in enumerate(slot_names):
-        layer_rectangles = _material_layer_rectangles(
+        mesh = build_labeled_surface_mesh(
             full_matrix,
-            mat_id,
-            layer_z_boundaries_mm,
+            material_id=mat_id,
+            height_px=target_h,
         )
-        mesh = _build_box_mesh_without_shared_vertices(layer_rectangles, target_h)
         if mesh is None:
             continue
+        vertices = np.asarray(mesh.vertices, dtype=np.float64).copy()
+        layer_indices = np.rint(vertices[:, 2]).astype(np.int64)
+        if (
+            np.any(layer_indices < 0)
+            or np.any(layer_indices >= len(layer_z_boundaries_mm))
+            or not np.allclose(
+                vertices[:, 2],
+                layer_indices,
+                rtol=0.0,
+                atol=1e-9,
+            )
+        ):
+            raise ValueError("Shared surface mesh left the model layer lattice.")
+        vertices[:, 2] = layer_z_boundaries_mm[layer_indices]
+        mesh.vertices = vertices
         mesh.apply_transform(transform)
         mesh.visual.face_colors = _coerce_rgba(preview_colors.get(mat_id))
         mesh.metadata["name"] = str(slot_name)
+        mesh.metadata["model_surface_physical_z_schedule"] = True
         scene.add_geometry(mesh, node_name=str(slot_name), geom_name=str(slot_name))
 
     return scene
-
-
-def _material_layer_rectangles(
-    full_matrix: np.ndarray,
-    mat_id: int,
-    layer_z_boundaries_mm: np.ndarray,
-) -> list[tuple[float, float, np.ndarray]]:
-    layer_rectangles: list[tuple[float, float, np.ndarray]] = []
-    for start_z, end_z, mask in BaseMesher._merge_layers_no_dilation(full_matrix, mat_id):
-        rects = BaseMesher._greedy_rect_merge(mask)
-        if rects.shape[0] > 0:
-            layer_rectangles.append(
-                (
-                    float(layer_z_boundaries_mm[int(start_z)]),
-                    float(layer_z_boundaries_mm[int(end_z) + 1]),
-                    rects,
-                )
-            )
-    return layer_rectangles
-
-
-def _build_box_mesh_without_shared_vertices(
-    layer_rectangles: Sequence[tuple[float, float, np.ndarray]],
-    height_px: int,
-) -> trimesh.Trimesh | None:
-    total_rects = sum(rects.shape[0] for _, _, rects in layer_rectangles)
-    if total_rects == 0:
-        return None
-
-    vertices = np.empty((total_rects * 8, 3), dtype=np.float64)
-    faces = np.empty((total_rects * 12, 3), dtype=np.int64)
-    rect_offset = 0
-
-    for z_bottom, z_top, rects in layer_rectangles:
-        rect_count = int(rects.shape[0])
-        if rect_count == 0:
-            continue
-
-        x0, y0, x1, y1 = rects[:, 0], rects[:, 1], rects[:, 2], rects[:, 3]
-        wy0 = float(height_px) - y1
-        wy1 = float(height_px) - y0
-
-        boxes = np.empty((rect_count, 8, 3), dtype=np.float64)
-        boxes[:, 0, :] = np.column_stack([x0, wy0, np.full(rect_count, z_bottom)])
-        boxes[:, 1, :] = np.column_stack([x1, wy0, np.full(rect_count, z_bottom)])
-        boxes[:, 2, :] = np.column_stack([x1, wy1, np.full(rect_count, z_bottom)])
-        boxes[:, 3, :] = np.column_stack([x0, wy1, np.full(rect_count, z_bottom)])
-        boxes[:, 4, :] = np.column_stack([x0, wy0, np.full(rect_count, z_top)])
-        boxes[:, 5, :] = np.column_stack([x1, wy0, np.full(rect_count, z_top)])
-        boxes[:, 6, :] = np.column_stack([x1, wy1, np.full(rect_count, z_top)])
-        boxes[:, 7, :] = np.column_stack([x0, wy1, np.full(rect_count, z_top)])
-
-        vertex_start = rect_offset * 8
-        vertices[vertex_start : vertex_start + rect_count * 8] = boxes.reshape(-1, 3)
-
-        face_start = rect_offset * 12
-        offsets = (np.arange(rect_count, dtype=np.int64) * 8 + vertex_start).reshape(-1, 1, 1)
-        faces[face_start : face_start + rect_count * 12] = (
-            _BOX_FACE_TEMPLATE.reshape(1, 12, 3) + offsets
-        ).reshape(-1, 3)
-        rect_offset += rect_count
-
-    return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
 
 
 def _coerce_rgba(value: object) -> np.ndarray:

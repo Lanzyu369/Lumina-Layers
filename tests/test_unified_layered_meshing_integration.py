@@ -98,7 +98,6 @@ def test_native_svg_runs_use_canonical_direct_extrusion(
         num_channels=1,
         slot_names=["White"],
         scale_factor=1.0,
-        extrude_cache=None,
     )
 
     mesh = by_slot["White"]["meshes"][0]
@@ -112,3 +111,53 @@ def test_native_svg_runs_use_canonical_direct_extrusion(
     assert mesh.is_watertight
     assert np.all(_edge_incidence(mesh) == 2)
     assert float(mesh.volume) == pytest.approx(225.0 * 0.16)
+
+
+def test_native_svg_relief_uses_direct_canonical_stepped_surface(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    real_builder = vector_engine.build_vector_stepped_volume
+
+    def recording_builder(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return real_builder(*args, **kwargs)
+
+    monkeypatch.setattr(
+        vector_engine,
+        "build_vector_stepped_volume",
+        recording_builder,
+    )
+    by_slot = VectorProcessor._build_relief_meshes(
+        matched_shapes=[
+            {
+                "geometry": box(0.0, 0.0, 10.0, 10.0),
+                "recipe": [0, 0],
+                "matched_rgb": (255, 0, 0),
+            },
+            {
+                "geometry": box(10.0, 0.0, 20.0, 10.0),
+                "recipe": [1, 1],
+                "matched_rgb": (255, 255, 255),
+            },
+        ],
+        num_layers=2,
+        layer_h=0.08,
+        num_channels=2,
+        slot_names=["Red", "White"],
+        scale_factor=1.0,
+        backing_color_id=0,
+        default_height_mm=1.0,
+        height_mode="color",
+        color_height_map={"#ff0000": 1.04, "#ffffff": 2.0},
+        heightmap_path=None,
+        heightmap_max_height=None,
+        bbox=(0.0, 0.0, 20.0, 10.0),
+    )
+
+    board = by_slot["Board"]["meshes"][0]
+    assert calls == 1
+    assert board.metadata["vector_stepped_geometry"]["component_count"] == 1
+    assert board.is_watertight
+    assert np.all(_edge_incidence(board) == 2)

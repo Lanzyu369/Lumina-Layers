@@ -5,11 +5,9 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict
 from dataclasses import dataclass
 import os
 from pathlib import Path
-from typing import Callable, Generic, TypeVar
 
 from core.errors import VectorMeshMemoryBudgetError
 from core.task_parallelism_runtime import current_task_host_memory_budget_bytes
@@ -20,7 +18,6 @@ _VECTOR_MESH_MEMORY_BUDGET_ENV = "LUMINA_VECTOR_MESH_MEMORY_BUDGET_MB"
 _VECTOR_MESH_FIXED_WORKING_BYTES = 128 * 1024 * 1024
 _VECTOR_MESH_BYTES_PER_RUN_COORDINATE = 144
 _VECTOR_MESH_BYTES_PER_SOURCE_COORDINATE = 64
-_VECTOR_MESH_TOPOLOGY_BYTES_PER_GROUP_COORDINATE = 1024
 _VECTOR_TASK_RESERVATION_BASE_BYTES = 768 * 1024**2
 _VECTOR_TASK_RESERVATION_BYTES_PER_ARTIFACT_BYTE = 64
 _VECTOR_TASK_RESERVATION_BYTES_PER_RASTER_BYTE = 16
@@ -28,80 +25,6 @@ _VECTOR_TASK_INCLUDED_RESIDENT_BYTES = 16 * 1024**2
 _VECTOR_TASK_BYTES_PER_EXCESS_RESIDENT_BYTE = 32
 _VECTOR_TASK_MATERIAL_ARCHIVE_BASE_BYTES = 256 * 1024**2
 _VECTOR_TASK_MATERIAL_ARCHIVE_BYTES_PER_MATERIAL = 32 * 1024**2
-
-
-_KeyT = TypeVar("_KeyT")
-_ValueT = TypeVar("_ValueT")
-
-
-class ByteBudgetLRU(Generic[_KeyT, _ValueT]):
-    """Small mapping-compatible LRU constrained by resident value bytes.
-
-    按缓存值常驻字节数限制的小型 LRU 映射。
-
-    Args:
-        max_bytes: Maximum retained value bytes. 最大常驻值字节数。
-        size_of: Deterministic value-size callback. 值字节估算回调。
-    """
-
-    def __init__(
-        self,
-        *,
-        max_bytes: int,
-        size_of: Callable[[_ValueT], int],
-    ) -> None:
-        self.max_bytes = max(0, int(max_bytes))
-        self._size_of = size_of
-        self._items: OrderedDict[_KeyT, tuple[_ValueT, int]] = OrderedDict()
-        self.resident_bytes = 0
-        self.peak_bytes = 0
-        self.peak_entry_count = 0
-        self.eviction_count = 0
-        self.oversized_rejection_count = 0
-
-    def __len__(self) -> int:
-        return len(self._items)
-
-    def __contains__(self, key: object) -> bool:
-        return key in self._items
-
-    def get(self, key: _KeyT, default=None):
-        item = self._items.get(key)
-        if item is None:
-            return default
-        self._items.move_to_end(key)
-        return item[0]
-
-    def __getitem__(self, key: _KeyT) -> _ValueT:
-        item = self._items[key]
-        self._items.move_to_end(key)
-        return item[0]
-
-    def __setitem__(self, key: _KeyT, value: _ValueT) -> None:
-        size_bytes = max(0, int(self._size_of(value)))
-        existing = self._items.pop(key, None)
-        if existing is not None:
-            self.resident_bytes -= existing[1]
-
-        if size_bytes > self.max_bytes or self.max_bytes == 0:
-            self.oversized_rejection_count += 1
-            return
-
-        while self._items and self.resident_bytes + size_bytes > self.max_bytes:
-            _old_key, (_old_value, old_size) = self._items.popitem(last=False)
-            self.resident_bytes -= old_size
-            self.eviction_count += 1
-
-        self._items[key] = (value, size_bytes)
-        self.resident_bytes += size_bytes
-        self.peak_bytes = max(self.peak_bytes, self.resident_bytes)
-        self.peak_entry_count = max(self.peak_entry_count, len(self._items))
-
-    def clear(self) -> None:
-        """Release all cached values while preserving lifetime statistics."""
-
-        self._items.clear()
-        self.resident_bytes = 0
 
 
 @dataclass(frozen=True)
@@ -134,11 +57,9 @@ class VectorMeshBuildMemoryEstimate:
     run_count: int
     run_coordinate_references: int
     auxiliary_coordinate_references: int
-    max_validation_coordinate_count: int
+    largest_prepared_group_coordinate_count: int
     estimated_final_mesh_bytes: int
-    topology_validation_working_bytes: int
     estimated_preparation_bytes: int
-    estimated_additional_bytes: int
 
 
 @dataclass(frozen=True)
@@ -289,9 +210,7 @@ def estimate_vector_mesh_build_memory(
     *,
     num_layers: int,
     double_sided: bool,
-    precision_cache_budget_bytes: int | None = None,
-    extrude_cache_budget_bytes: int,
-    fallback_chunk_bytes: int,
+    spatial_group_chunk_bytes: int,
     auxiliary_geometries=(),
     auxiliary_run_count: int = 0,
 ) -> VectorMeshBuildMemoryEstimate:
@@ -303,11 +222,9 @@ def estimate_vector_mesh_build_memory(
     whole final mesh during assembly. It is conservative without traversing or
     serializing coordinates into another full buffer.
 
-    ``precision_cache_budget_bytes`` is retained as an ignored keyword for
-    compatibility with older internal callers; the precision cache no longer
-    exists.
-    ``precision_cache_budget_bytes`` 仅为兼容旧内部调用而保留，不参与估算；
-    对应的精度缓存已移除。
+    ``spatial_group_chunk_bytes`` bounds material aggregation while preserving
+    independent canonical shell groups.
+    ``spatial_group_chunk_bytes`` 限制材质聚合峰值，同时保留独立规范壳体组。
     """
 
     shape_count = 0
@@ -345,7 +262,7 @@ def estimate_vector_mesh_build_memory(
     auxiliary_coordinate_references = (
         auxiliary_coordinate_count * auxiliary_runs
     )
-    max_validation_coordinate_count = max(
+    largest_prepared_group_coordinate_count = max(
         max(run_group_coordinate_counts.values(), default=0),
         auxiliary_coordinate_count if auxiliary_runs else 0,
     )
@@ -353,30 +270,14 @@ def estimate_vector_mesh_build_memory(
         (run_coordinate_references + auxiliary_coordinate_references)
         * _VECTOR_MESH_BYTES_PER_RUN_COORDINATE
     )
-    topology_validation_working_bytes = (
-        max_validation_coordinate_count
-        * _VECTOR_MESH_TOPOLOGY_BYTES_PER_GROUP_COORDINATE
-    )
     retained_source_geometry_bytes = (
         coordinate_count * _VECTOR_MESH_BYTES_PER_SOURCE_COORDINATE
     )
-    largest_slot_assembly_copy_bytes = estimated_final_mesh_bytes
     estimated_preparation_bytes = sum(
         (
             _VECTOR_MESH_FIXED_WORKING_BYTES,
             retained_source_geometry_bytes,
-            max_validation_coordinate_count * 256,
-        )
-    )
-    estimated_additional_bytes = sum(
-        (
-            _VECTOR_MESH_FIXED_WORKING_BYTES,
-            estimated_final_mesh_bytes,
-            largest_slot_assembly_copy_bytes,
-            retained_source_geometry_bytes,
-            topology_validation_working_bytes,
-            max(0, int(extrude_cache_budget_bytes)),
-            max(0, int(fallback_chunk_bytes)),
+            largest_prepared_group_coordinate_count * 256,
         )
     )
     return VectorMeshBuildMemoryEstimate(
@@ -386,11 +287,11 @@ def estimate_vector_mesh_build_memory(
         run_count=run_count,
         run_coordinate_references=run_coordinate_references,
         auxiliary_coordinate_references=auxiliary_coordinate_references,
-        max_validation_coordinate_count=max_validation_coordinate_count,
+        largest_prepared_group_coordinate_count=(
+            largest_prepared_group_coordinate_count
+        ),
         estimated_final_mesh_bytes=estimated_final_mesh_bytes,
-        topology_validation_working_bytes=topology_validation_working_bytes,
         estimated_preparation_bytes=estimated_preparation_bytes,
-        estimated_additional_bytes=estimated_additional_bytes,
     )
 
 

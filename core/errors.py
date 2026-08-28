@@ -131,32 +131,6 @@ class CoreProcessingError(CoreError):
         super().__init__(detail=detail, error_type="core_processing_error")
 
 
-class VectorTopologyError(CoreError):
-    """Report a bounded vector-topology rejection. / 报告有界矢量拓扑拒绝。
-
-    Args:
-        detail: Stable internal error summary. / 稳定的内部错误摘要。
-        attempts: Coordinate-free metrics for each failed ladder stage. /
-            每个失败阶梯的无坐标诊断指标。
-    """
-
-    def __init__(
-        self,
-        detail: str,
-        attempts: tuple[dict[str, object], ...],
-    ) -> None:
-        super().__init__(
-            detail=detail,
-            error_type="vector_topology_unrepairable",
-        )
-        self.attempts = tuple(dict(attempt) for attempt in attempts)
-
-    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
-        """Preserve diagnostics across process-pool serialization."""
-
-        return type(self), (str(self), self.attempts)
-
-
 class CachedPreviewAnalysisError(CoreError):
     """Raised when explicitly required preview analysis cannot be consumed.
 

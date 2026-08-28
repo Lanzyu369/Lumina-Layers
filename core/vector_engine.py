@@ -23,7 +23,6 @@ import io
 import pickle
 import warnings
 import math
-import gc
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from typing import Any
@@ -84,7 +83,7 @@ except ImportError:  # Shapely < 2.1; keep the old union path available.
 from api.structured_logging import get_logger
 from config import PrinterConfig, ColorSystem, VectorConfig
 from core import geos_buffer_fast
-from core.errors import VectorMeshMemoryBudgetError, VectorTopologyError
+from core.errors import VectorMeshMemoryBudgetError
 from core.mesh_export_parts import (
     MeshExportPartRange,
     copy_mesh_export_part_ranges,
@@ -99,16 +98,7 @@ from core.task_parallelism import (
 from core.vector_diagnostics import (
     SVG_INTERSECTING_COMPOUND_COMPLEXITY_DIAGNOSTIC,
 )
-from core.vector_mesh_topology import (
-    VECTOR_COVERAGE_ABS_TOL_MM2 as _VECTOR_COVERAGE_ABS_TOL_MM2,
-    VECTOR_COVERAGE_REL_TOL as _VECTOR_COVERAGE_REL_TOL,
-    extrude_polygon_for_export,
-    mesh_is_float32_safe,
-    prepare_component_footprints_for_float32,
-    separate_component_coordinates,
-)
 from core.vector_mesh_memory import (
-    ByteBudgetLRU,
     enforce_vector_mesh_memory_budget,
     estimate_indexed_prism_memory,
     estimate_vector_mesh_build_memory,
@@ -116,20 +106,16 @@ from core.vector_mesh_memory import (
     resolve_vector_mesh_memory_budget_bytes,
 )
 from core.vector_layer_geometry import (
+    build_vector_stepped_volume,
     extrude_prepared_vector_run_group,
     prepare_vector_run_group,
+    prepare_vector_spatial_groups_best_effort,
 )
 
 _log = get_logger(__name__)
 
 MIN_SHAPE_AREA_MM2 = 0.01
 BASE_COLOR_GAP_MM = 0.005
-_PLANAR_COVERAGE_METADATA_KEY = "_lumina_planar_coverage_mm2"
-# Polygons below one float64 epsilon in physical area are numerical residue,
-# not representable model detail.  Keep this many orders of magnitude below
-# any printable feature instead of reusing the user-facing shape-area filter.
-_FLOAT_RESIDUAL_AREA_MM2 = float(np.finfo(np.float64).eps)
-_FLOAT32_MAX_COORDINATE = float(np.finfo(np.float32).max)
 _MAX_BEZIER_DEPTH = 16
 
 # Supersample factor for the hard membership masks (mask_solid / matched_rgb /
@@ -147,24 +133,7 @@ _ARC_SAMPLE_POSITIONS_10 = np.linspace(0.1, 1.0, 10)
 _ARC_SAMPLE_POSITIONS_10.setflags(write=False)
 _ARC_SAMPLE_POSITIONS_10_TUPLE = tuple(float(value) for value in _ARC_SAMPLE_POSITIONS_10)
 _VECTOR_LARGE_DISTANCE_WARN_LIMIT = 8
-_CAP_AREA_FACE_CHUNK_SIZE = 65_536
-_VECTOR_FALLBACK_CHUNK_BYTES = 64 * 1024 * 1024
-_VECTOR_EXTRUDE_CACHE_BYTES = 256 * 1024 * 1024
-
-
-def _resolve_vector_cache_bytes(env_name: str, default_bytes: int) -> int:
-    """Resolve a positive MiB environment override for a Vector cache."""
-
-    raw_value = os.environ.get(env_name)
-    if raw_value is None or not raw_value.strip():
-        return max(0, int(default_bytes))
-    try:
-        value_mb = int(raw_value)
-    except ValueError:
-        return max(0, int(default_bytes))
-    if value_mb < 0:
-        return max(0, int(default_bytes))
-    return value_mb * 1024 * 1024
+_VECTOR_SPATIAL_GROUP_CHUNK_BYTES = 64 * 1024 * 1024
 
 
 def _geometry_cache_storage_bytes(geometry) -> int:
@@ -190,32 +159,6 @@ def _geometry_cache_storage_bytes(geometry) -> int:
     # Python wrappers add material overhead. Four times raw XY is conservative
     # enough for cache admission without serializing WKB (which itself allocates).
     return max(256, coordinate_count * 64)
-
-
-def _extrude_cache_storage_bytes(value) -> int:
-    """Return actual NumPy bytes retained by one base-extrusion cache entry."""
-
-    if not isinstance(value, tuple):
-        return 0
-    total = 0
-    for item in value[:2]:
-        try:
-            total += int(np.asarray(item).nbytes)
-        except (TypeError, ValueError):
-            continue
-    return total
-
-
-def _new_vector_extrude_cache() -> ByteBudgetLRU:
-    """Create the build-scoped base-extrusion cache with a byte budget."""
-
-    return ByteBudgetLRU(
-        max_bytes=_resolve_vector_cache_bytes(
-            "LUMINA_VECTOR_EXTRUDE_CACHE_MB",
-            _VECTOR_EXTRUDE_CACHE_BYTES,
-        ),
-        size_of=_extrude_cache_storage_bytes,
-    )
 
 
 def _enforce_vector_mesh_runtime_headroom(
@@ -410,259 +353,43 @@ def _union_run_group_geometries(geometries):
     return unary_union(geometries)
 
 
-def _extruded_planar_coverage_mm2(meshes, height: float) -> float | None:
-    """Read cached planar coverage, falling back to prism mesh volume."""
-
-    height_value = float(height)
-    if height_value <= 0.0:
-        return 0.0
-
-    mesh_list = tuple(meshes)
-    metadata_total = 0.0
-    metadata_complete = True
-    for mesh in mesh_list:
-        metadata = getattr(mesh, "metadata", None)
-        try:
-            coverage = float(metadata[_PLANAR_COVERAGE_METADATA_KEY])
-        except (KeyError, TypeError, ValueError):
-            metadata_complete = False
-            break
-        if not math.isfinite(coverage) or coverage < 0.0:
-            metadata_complete = False
-            break
-        metadata_total += coverage
-    if metadata_complete:
-        return metadata_total
-
-    total_volume = 0.0
-    for mesh in mesh_list:
-        try:
-            volume = abs(float(mesh.volume))
-        except (AttributeError, TypeError, ValueError):
-            return None
-        if not math.isfinite(volume):
-            return None
-        total_volume += volume
-    return total_volume / height_value
-
-
-def _vector_coverage_is_incomplete(
-    expected_mm2: float,
-    actual_mm2: float,
-) -> bool:
-    """Return whether one-sided planar coverage loss exceeds tolerance."""
-
-    expected = max(0.0, float(expected_mm2))
-    actual = max(0.0, float(actual_mm2))
-    tolerance = max(
-        _VECTOR_COVERAGE_ABS_TOL_MM2,
-        expected * _VECTOR_COVERAGE_REL_TOL,
-    )
-    return actual + tolerance < expected
-
-
-def _source_planar_coverage_mm2(geometries, scale_factor: float) -> float:
-    """Measure source coverage before any precision snap or run-group union.
-
-    在精度吸附或 run-group 合并前测量源几何覆盖面积。
-
-    Run-group shapes are already visibility-clipped by the SVG pipeline, so
-    summing their areas is both cheaper and more independent than asking the
-    same boolean operation under test to produce the expected value.
-    """
-
-    scale_sq = float(scale_factor) * float(scale_factor)
-    area = 0.0
-    for geometry in geometries:
-        if geometry is None or getattr(geometry, "is_empty", True):
-            continue
-        try:
-            geometry_area = max(0.0, float(geometry.area))
-        except (AttributeError, TypeError, ValueError, OverflowError) as exc:
-            raise ValueError("Unable to measure vector source coverage") from exc
-        if not math.isfinite(geometry_area):
-            raise ValueError("Vector source coverage is not finite")
-        area += geometry_area
-    return area * scale_sq
-
-
-def _extrude_source_geometries_with_coverage_guard(
-    source_geometries,
-    merged_geometry,
-    *,
-    height: float,
-    z_offset: float,
-    scale_factor: float,
-    extrude_cache,
-    context: str,
-):
-    """Extrude a coverage-safe union or bounded source-shell fallback.
-
-    挤出覆盖完整的合并几何；否则以有界分块按源壳体重建。
-
-    The cheap 2D decision runs before allocating a speculative merged mesh.
-    If only the 3D audit finds loss, that speculative result is released before
-    source extrusion begins. Fallback chunks concatenate indices without
-    welding, so every source prism remains an independent closed shell.
-    """
-
-    source_geoms = tuple(
-        geometry
-        for geometry in source_geometries
-        if geometry is not None and not getattr(geometry, "is_empty", True)
-    )
-    expected_area_mm2 = _source_planar_coverage_mm2(source_geoms, scale_factor)
-    merged_area_mm2 = _source_planar_coverage_mm2(
-        (merged_geometry,),
-        scale_factor,
-    )
-    use_source_fallback = _vector_coverage_is_incomplete(
-        expected_area_mm2,
-        merged_area_mm2,
-    )
-    if not use_source_fallback:
-        # Reuse only the byte-budgeted production cache. If the later 3D audit
-        # rejects this primary, clear it before any fallback allocation so a
-        # cached primary and its complete replacement never overlap.
-        primary_cache = (
-            extrude_cache
-            if isinstance(extrude_cache, ByteBudgetLRU)
-            else None
-        )
-        try:
-            meshes = VectorProcessor._extrude_geometry(
-                merged_geometry,
-                height=height,
-                z_offset=z_offset,
-                scale=scale_factor,
-                extrude_cache=primary_cache,
-            )
-        except Exception:
-            if primary_cache is not None:
-                primary_cache.clear()
-            raise
-        built_area_mm2 = _extruded_planar_coverage_mm2(meshes, height)
-        if (
-            built_area_mm2 is not None
-            and not _vector_coverage_is_incomplete(
-                expected_area_mm2,
-                built_area_mm2,
-            )
-        ):
-            return meshes
-        if primary_cache is not None:
-            primary_cache.clear()
-        if hasattr(meshes, "clear"):
-            meshes.clear()
-        del meshes
-        # Trimesh may retain array/cache reference cycles. This path is already
-        # the exceptional coverage fallback, so collect them before allocating
-        # the source-shell replacement rather than overlapping both full sets.
-        gc.collect()
-
-    fallback_chunks = []
-    pending_meshes = []
-    pending_bytes = 0
-
-    def _flush_pending() -> None:
-        nonlocal pending_meshes, pending_bytes
-        if not pending_meshes:
-            return
-        _enforce_vector_mesh_runtime_headroom(
-            stage="fallback_chunk",
-            estimated_additional_bytes=max(pending_bytes, 1),
-            shape_count=len(pending_meshes),
-        )
-        chunk_coverage = _extruded_planar_coverage_mm2(pending_meshes, height)
-        combined = _concatenate_meshes_fast(pending_meshes)
-        pending_meshes.clear()
-        pending_meshes = []
-        pending_bytes = 0
-        if chunk_coverage is not None:
-            combined.metadata[_PLANAR_COVERAGE_METADATA_KEY] = chunk_coverage
-        fallback_chunks.append(combined)
-
-    chunk_budget = max(1, int(_VECTOR_FALLBACK_CHUNK_BYTES))
-    for source_geometry in source_geoms:
-        source_parts = (
-            tuple(source_geometry.geoms)
-            if getattr(source_geometry, "geom_type", "") == "MultiPolygon"
-            else (source_geometry,)
-        )
-        for source_part in source_parts:
-            source_meshes = VectorProcessor._extrude_geometry(
-                source_part,
-                height=height,
-                z_offset=z_offset,
-                scale=scale_factor,
-                extrude_cache=extrude_cache,
-            )
-            for source_mesh in source_meshes:
-                mesh_bytes = _mesh_array_storage_bytes(source_mesh)
-                if pending_meshes and pending_bytes + mesh_bytes > chunk_budget:
-                    _flush_pending()
-                pending_meshes.append(source_mesh)
-                pending_bytes += mesh_bytes
-                if pending_bytes >= chunk_budget:
-                    _flush_pending()
-            source_meshes.clear()
-    _flush_pending()
-
-    fallback_area_mm2 = _extruded_planar_coverage_mm2(fallback_chunks, height)
-    if (
-        fallback_area_mm2 is None
-        or _vector_coverage_is_incomplete(expected_area_mm2, fallback_area_mm2)
-    ):
-        actual_area = (
-            "unavailable"
-            if fallback_area_mm2 is None
-            else f"{fallback_area_mm2:.6f}"
-        )
-        raise ValueError(
-            f"{context} coverage incomplete: expected "
-            f"{expected_area_mm2:.6f} mm^2, got {actual_area} after fallback"
-        )
-    return fallback_chunks
-
-
-def _extrude_source_geometries_best_effort(
+def _build_source_spatial_groups(
     source_geometries,
     *,
     height: float,
     z_offset: float,
     scale_factor: float,
-    extrude_cache,
 ) -> tuple[list[trimesh.Trimesh], dict[str, object]]:
-    """Extrude independent source shells without rejecting the whole run.
+    """Build writer-separated source groups without rejecting the whole run.
 
-    当规范化合并失败时，按源分片有界挤出；单个坏分片不再阻断整组。
+    当整组规范化失败时，仍只用同一个新生成器按空间组恢复。
 
-    This is an availability fallback, not another topology-repair ladder.
-    Successfully extruded source shells keep independent vertex indices inside
-    bounded chunks, while locally unrepresentable parts are counted and
-    skipped. Chunks, rather than every tiny shell, become export leaves so
-    complex SVGs do not balloon into tens of thousands of 3MF objects. Fatal
-    memory-budget errors still escape immediately.
+    Touching or writer-grid-near parts stay in one canonical group. Remote
+    groups are safely concatenated into bounded material chunks, so this path
+    neither revives the retired topology ladder nor expands every SVG island
+    into a separate 3MF object. Fatal memory errors still escape immediately.
     """
 
-    fallback_chunks: list[trimesh.Trimesh] = []
+    preparation = prepare_vector_spatial_groups_best_effort(
+        tuple(source_geometries),
+        scale_mm_per_svg_unit=float(scale_factor),
+    )
+    output_chunks: list[trimesh.Trimesh] = []
     pending_meshes: list[trimesh.Trimesh] = []
     pending_bytes = 0
-    source_part_count = 0
-    built_source_part_count = 0
-    failed_source_part_count = 0
-    failure_types: dict[str, int] = {}
+    failed_extrusion_parts = 0
+    failure_types = dict(preparation.failure_types)
 
     def _flush_pending() -> None:
         nonlocal pending_meshes, pending_bytes
         if not pending_meshes:
             return
         _enforce_vector_mesh_runtime_headroom(
-            stage="source_shell_fallback_chunk",
+            stage="source_spatial_group_chunk",
             estimated_additional_bytes=max(pending_bytes, 1),
             shape_count=len(pending_meshes),
         )
-        fallback_chunks.append(
+        output_chunks.append(
             _concatenate_meshes_fast(
                 pending_meshes,
                 preserve_export_parts=False,
@@ -672,56 +399,52 @@ def _extrude_source_geometries_best_effort(
         pending_meshes = []
         pending_bytes = 0
 
-    chunk_budget = max(1, int(_VECTOR_FALLBACK_CHUNK_BYTES))
-    for source_geometry in source_geometries:
-        source_parts = (
-            tuple(source_geometry.geoms)
-            if getattr(source_geometry, "geom_type", "")
-            in {"MultiPolygon", "GeometryCollection"}
-            else (source_geometry,)
+    chunk_budget = max(1, int(_VECTOR_SPATIAL_GROUP_CHUNK_BYTES))
+    for prepared in preparation.groups:
+        allocation_estimate = estimate_indexed_prism_memory(
+            coordinate_count=int(prepared.stats.output_coordinate_count),
+            hole_count=int(prepared.stats.output_hole_count),
+            component_count=int(prepared.stats.output_component_count),
         )
-        for source_part in source_parts:
-            if source_part is None or getattr(source_part, "is_empty", True):
-                continue
-            source_part_count += 1
-            try:
-                source_meshes = VectorProcessor._extrude_geometry(
-                    source_part,
-                    height=height,
-                    z_offset=z_offset,
-                    scale=scale_factor,
-                    extrude_cache=extrude_cache,
-                )
-            except VECTOR_FATAL_ERRORS:
-                raise
-            except (VectorTopologyError,) + VECTOR_HANDLED_ERRORS as exc:
-                failed_source_part_count += 1
-                error_name = type(exc).__name__
-                failure_types[error_name] = failure_types.get(error_name, 0) + 1
-                continue
+        _enforce_vector_mesh_runtime_headroom(
+            stage="source_spatial_group_canonical_geometry",
+            estimated_additional_bytes=(
+                allocation_estimate.estimated_additional_bytes
+            ),
+            shape_count=int(prepared.stats.source_polygon_count),
+            coordinate_count=int(prepared.stats.output_coordinate_count),
+        )
+        try:
+            source_mesh = extrude_prepared_vector_run_group(
+                prepared,
+                height_mm=float(height),
+                z_offset_mm=float(z_offset),
+            )
+        except VECTOR_FATAL_ERRORS:
+            raise
+        except VECTOR_HANDLED_ERRORS as exc:
+            failed_extrusion_parts += int(prepared.stats.source_polygon_count)
+            error_name = type(exc).__name__
+            failure_types[error_name] = failure_types.get(error_name, 0) + 1
+            continue
 
-            if not source_meshes:
-                failed_source_part_count += 1
-                failure_types["empty_extrusion"] = (
-                    failure_types.get("empty_extrusion", 0) + 1
-                )
-                continue
-
-            built_source_part_count += 1
-            for source_mesh in source_meshes:
-                mesh_bytes = _mesh_array_storage_bytes(source_mesh)
-                if pending_meshes and pending_bytes + mesh_bytes > chunk_budget:
-                    _flush_pending()
-                pending_meshes.append(source_mesh)
-                pending_bytes += mesh_bytes
-                if pending_bytes >= chunk_budget:
-                    _flush_pending()
-            source_meshes.clear()
+        mesh_bytes = _mesh_array_storage_bytes(source_mesh)
+        if pending_meshes and pending_bytes + mesh_bytes > chunk_budget:
+            _flush_pending()
+        pending_meshes.append(source_mesh)
+        pending_bytes += mesh_bytes
+        if pending_bytes >= chunk_budget:
+            _flush_pending()
 
     _flush_pending()
-    return fallback_chunks, {
-        "source_part_count": int(source_part_count),
-        "built_source_part_count": int(built_source_part_count),
+    failed_source_part_count = (
+        int(preparation.failed_part_count) + int(failed_extrusion_parts)
+    )
+    return output_chunks, {
+        "source_part_count": int(preparation.source_part_count),
+        "built_source_part_count": int(
+            preparation.source_part_count - failed_source_part_count
+        ),
         "failed_source_part_count": int(failed_source_part_count),
         "failure_types": failure_types,
     }
@@ -1779,172 +1502,6 @@ def _sample_arc_segment_points(segment, sample_count=10):
         return []
 
 
-def _signed_area_for_coords(coords):
-    """Return signed XY area for an open polygon coordinate array."""
-
-    if coords is None or len(coords) < 3:
-        return 0.0
-    x = coords[:, 0]
-    y = coords[:, 1]
-    return float(0.5 * np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y))
-
-
-def _convex_polygon_exterior_coords(poly):
-    """Return CCW exterior coordinates for a convex no-hole polygon, else None."""
-
-    if poly is None or poly.is_empty or not hasattr(poly, "exterior"):
-        return None
-    try:
-        if len(poly.interiors) > 0:
-            return None
-    except VECTOR_HANDLED_ERRORS:
-        return None
-
-    coords = np.asarray(poly.exterior.coords[:-1], dtype=np.float64)
-    if coords.ndim != 2 or coords.shape[0] < 3 or coords.shape[1] < 2:
-        return None
-    coords = coords[:, :2]
-    area = _signed_area_for_coords(coords)
-    if abs(area) < 1e-12:
-        return None
-
-    sign = 0
-    count = coords.shape[0]
-    for idx in range(count):
-        p0 = coords[idx]
-        p1 = coords[(idx + 1) % count]
-        p2 = coords[(idx + 2) % count]
-        edge_a = p1 - p0
-        edge_b = p2 - p1
-        cross = float(edge_a[0] * edge_b[1] - edge_a[1] * edge_b[0])
-        if abs(cross) < 1e-9:
-            return None
-        current = 1 if cross > 0 else -1
-        if sign and current != sign:
-            return None
-        sign = current
-
-    if area < 0:
-        coords = coords[::-1].copy()
-    return coords
-
-
-def _direct_convex_extrusion_base(poly, scale):
-    """Build a unit-height extrusion for convex no-hole polygons."""
-
-    coords = _convex_polygon_exterior_coords(poly)
-    if coords is None:
-        return None
-
-    scale_value = float(scale)
-    if not np.isfinite(scale_value) or scale_value <= 0:
-        return None
-
-    xy = coords * scale_value
-    count = xy.shape[0]
-    bottom = np.column_stack((xy, np.zeros(count, dtype=np.float64)))
-    top = np.column_stack((xy, np.ones(count, dtype=np.float64)))
-    vertices = np.vstack((bottom, top)).astype(np.float64, copy=False)
-
-    faces = []
-    for idx in range(1, count - 1):
-        faces.append((count, count + idx, count + idx + 1))
-        faces.append((0, idx + 1, idx))
-    for idx in range(count):
-        next_idx = (idx + 1) % count
-        faces.append((idx, next_idx, count + next_idx))
-        faces.append((idx, count + next_idx, count + idx))
-
-    return vertices, np.asarray(faces, dtype=np.int64)
-
-
-def _direct_convex_candidate_needs_float32_validation(vertices) -> bool:
-    """Detect writer-domain risks in the fixed direct-convex face layout."""
-
-    vertex_array = np.asarray(vertices, dtype=np.float64)
-    if (
-        vertex_array.ndim != 2
-        or vertex_array.shape[1] != 3
-        or len(vertex_array) < 6
-        or len(vertex_array) % 2
-    ):
-        return True
-
-    ring_size = len(vertex_array) // 2
-    writer_xy = []
-    seen = set()
-    for raw_x, raw_y in vertex_array[:ring_size, :2]:
-        if not (
-            -_FLOAT32_MAX_COORDINATE <= raw_x <= _FLOAT32_MAX_COORDINATE
-            and -_FLOAT32_MAX_COORDINATE <= raw_y <= _FLOAT32_MAX_COORDINATE
-        ):
-            return True
-        point = (float(np.float32(raw_x)), float(np.float32(raw_y)))
-        if point in seen:
-            return True
-        seen.add(point)
-        writer_xy.append(point)
-
-    origin_x, origin_y = writer_xy[0]
-    for index in range(1, ring_size - 1):
-        point_a = writer_xy[index]
-        point_b = writer_xy[index + 1]
-        cross = (
-            (point_a[0] - origin_x) * (point_b[1] - origin_y)
-            - (point_a[1] - origin_y) * (point_b[0] - origin_x)
-        )
-        if cross == 0.0:
-            return True
-    return False
-
-
-def _cap_planar_area_mm2(vertices, faces) -> float | None:
-    """Measure the bottom cap area of one unit-height extrusion."""
-
-    try:
-        vertex_array = np.asarray(vertices, dtype=np.float64)
-        face_array = np.asarray(faces, dtype=np.int64)
-        if (
-            vertex_array.ndim != 2
-            or vertex_array.shape[1] != 3
-            or face_array.ndim != 2
-            or face_array.shape[1] != 3
-            or len(vertex_array) == 0
-            or len(face_array) == 0
-        ):
-            return None
-    except (IndexError, TypeError, ValueError):
-        return None
-
-    chunk_size = max(1, int(_CAP_AREA_FACE_CHUNK_SIZE))
-    twice_area_total = 0.0
-    found_bottom = False
-    try:
-        for start in range(0, len(face_array), chunk_size):
-            face_chunk = face_array[start : start + chunk_size]
-            triangle_vertices = vertex_array[face_chunk]
-            z_values = triangle_vertices[:, :, 2]
-            horizontal = np.ptp(z_values, axis=1) <= 1e-9
-            bottom = horizontal & (np.max(np.abs(z_values), axis=1) <= 1e-9)
-            if not np.any(bottom):
-                continue
-            found_bottom = True
-            xy = triangle_vertices[bottom, :, :2]
-            edge_a = xy[:, 1] - xy[:, 0]
-            edge_b = xy[:, 2] - xy[:, 0]
-            twice_area = np.abs(
-                edge_a[:, 0] * edge_b[:, 1]
-                - edge_a[:, 1] * edge_b[:, 0]
-            )
-            twice_area_total += float(np.sum(twice_area, dtype=np.float64))
-    except (IndexError, TypeError, ValueError):
-        return None
-    if not found_bottom:
-        return None
-    area = twice_area_total * 0.5
-    return area if math.isfinite(area) and area >= 0.0 else None
-
-
 def _concatenate_meshes_fast(meshes, *, preserve_export_parts: bool = False):
     """Concatenate meshes, optionally retaining closed 3MF leaf boundaries."""
 
@@ -2058,801 +1615,6 @@ def _concatenate_meshes_fast(meshes, *, preserve_export_parts: bool = False):
     if preserve_export_parts:
         set_mesh_export_part_ranges(combined, export_ranges)
     return combined
-
-
-def _build_atomic_prism_mesh(
-    polygon: Polygon,
-    *,
-    z_start: float,
-    z_end: float,
-    scale_factor: float,
-) -> trimesh.Trimesh | None:
-    """Extrude one planar cell with deterministic shared-edge diagonals."""
-
-    z_start = float(z_start)
-    z_end = float(z_end)
-    if (
-        not math.isfinite(z_start)
-        or not math.isfinite(z_end)
-        or z_end <= z_start
-    ):
-        raise ValueError("Atomic prism requires a positive Z span")
-
-    base_meshes = VectorProcessor._extrude_geometry(
-        polygon,
-        height=z_end - z_start,
-        z_offset=z_start,
-        scale=scale_factor,
-    )
-    if not base_meshes:
-        return None
-    base = base_meshes[0]
-    base_vertices = np.asarray(base.vertices, dtype=np.float64)
-    base_faces = np.asarray(base.faces, dtype=np.int64)
-    face_z = base_vertices[base_faces, 2]
-    cap_mask = np.ptp(face_z, axis=1) <= 1e-9
-    bottom_mask = cap_mask & (
-        np.max(np.abs(face_z - float(z_start)), axis=1) <= 1e-9
-    )
-    bottom_faces = base_faces[bottom_mask]
-    if len(bottom_faces) == 0:
-        raise ValueError("Atomic prism extrusion produced no bottom cap faces")
-    bottom_edges = np.vstack(
-        (
-            bottom_faces[:, [0, 1]],
-            bottom_faces[:, [1, 2]],
-            bottom_faces[:, [2, 0]],
-        )
-    )
-    sorted_bottom_edges = np.sort(bottom_edges, axis=1)
-    _unique_edges, inverse, edge_counts = np.unique(
-        sorted_bottom_edges,
-        axis=0,
-        return_inverse=True,
-        return_counts=True,
-    )
-    boundary_edges = bottom_edges[edge_counts[inverse] == 1]
-    if len(boundary_edges) == 0:
-        raise ValueError("Atomic prism bottom cap produced no boundary edges")
-    parts = [
-        trimesh.Trimesh(
-            vertices=base_vertices.copy(),
-            faces=base_faces[cap_mask],
-            process=False,
-        )
-    ]
-
-    side_vertices = []
-    side_faces = []
-    for end_index, start_index in boundary_edges:
-        start_xy = tuple(base_vertices[int(start_index), :2])
-        end_xy = tuple(base_vertices[int(end_index), :2])
-        if start_xy == end_xy:
-            continue
-        vertex_offset = len(side_vertices)
-        side_vertices.extend(
-            [
-                (start_xy[0], start_xy[1], z_start),
-                (end_xy[0], end_xy[1], z_start),
-                (start_xy[0], start_xy[1], z_end),
-                (end_xy[0], end_xy[1], z_end),
-            ]
-        )
-        start_bottom = vertex_offset
-        end_bottom = vertex_offset + 1
-        start_top = vertex_offset + 2
-        end_top = vertex_offset + 3
-        if start_xy < end_xy:
-            side_faces.extend(
-                [
-                    (start_bottom, end_bottom, end_top),
-                    (start_bottom, end_top, start_top),
-                ]
-            )
-        else:
-            side_faces.extend(
-                [
-                    (start_top, start_bottom, end_bottom),
-                    (start_top, end_bottom, end_top),
-                ]
-            )
-
-    if side_faces:
-        parts.append(
-            trimesh.Trimesh(
-                vertices=np.asarray(side_vertices, dtype=np.float64),
-                faces=np.asarray(side_faces, dtype=np.int64),
-                process=False,
-            )
-        )
-    return _concatenate_meshes_fast(parts)
-
-
-def _linework_node_coordinates(linework) -> np.ndarray:
-    """Collect unique XY nodes from noded Shapely boundary linework."""
-
-    coordinates = []
-    pending = [linework]
-    while pending:
-        geometry = pending.pop()
-        if geometry is None or geometry.is_empty:
-            continue
-        if hasattr(geometry, "geoms"):
-            pending.extend(geometry.geoms)
-        elif hasattr(geometry, "coords"):
-            coordinates.extend((float(x), float(y)) for x, y, *_ in geometry.coords)
-    if not coordinates:
-        return np.empty((0, 2), dtype=np.float64)
-    return np.unique(np.asarray(coordinates, dtype=np.float64), axis=0)
-
-
-def _densify_ring_with_nodes(ring, nodes: np.ndarray) -> list[tuple[float, float]]:
-    """Insert every nearly-collinear overlay node into one polygon ring."""
-
-    source = [(float(x), float(y)) for x, y, *_ in ring.coords]
-    if len(source) < 2 or len(nodes) == 0:
-        return source
-    tolerance = 1e-10
-    densified = [source[0]]
-    for start, end in zip(source, source[1:]):
-        start_arr = np.asarray(start, dtype=np.float64)
-        vector = np.asarray(end, dtype=np.float64) - start_arr
-        length_sq = float(np.dot(vector, vector))
-        if length_sq <= tolerance * tolerance:
-            continue
-        lower = np.minimum(start_arr, np.asarray(end)) - tolerance
-        upper = np.maximum(start_arr, np.asarray(end)) + tolerance
-        candidates = nodes[np.all((nodes >= lower) & (nodes <= upper), axis=1)]
-        if len(candidates):
-            offsets = candidates - start_arr
-            cross = np.abs(vector[0] * offsets[:, 1] - vector[1] * offsets[:, 0])
-            parameters = offsets @ vector / length_sq
-            interior = (
-                (cross <= tolerance * np.sqrt(length_sq))
-                & (parameters > tolerance)
-                & (parameters < 1.0 - tolerance)
-            )
-            if np.any(interior):
-                selected = candidates[interior]
-                selected_parameters = parameters[interior]
-                for point in selected[np.argsort(selected_parameters)]:
-                    coordinate = (float(point[0]), float(point[1]))
-                    if coordinate != densified[-1]:
-                        densified.append(coordinate)
-        if end != densified[-1]:
-            densified.append(end)
-    if densified[-1] != densified[0]:
-        densified.append(densified[0])
-    return densified
-
-
-def _densify_polygon_with_nodes(polygon: Polygon, nodes: np.ndarray) -> Polygon:
-    """Return ``polygon`` with matching vertex splits on every shared edge."""
-
-    densified = Polygon(
-        _densify_ring_with_nodes(polygon.exterior, nodes),
-        [_densify_ring_with_nodes(interior, nodes) for interior in polygon.interiors],
-    )
-    return densified if densified.is_valid and not densified.is_empty else polygon
-
-
-def _split_mesh_t_junctions(mesh: trimesh.Trimesh) -> None:
-    """Split boundary triangle edges at existing collinear mesh vertices."""
-
-    tolerance = 1e-9
-    for _ in range(1024):
-        edges = np.asarray(mesh.edges_sorted, dtype=np.int64)
-        if len(edges) == 0:
-            return
-        _, inverse, counts = np.unique(
-            edges,
-            axis=0,
-            return_inverse=True,
-            return_counts=True,
-        )
-        boundary_rows = np.flatnonzero(counts[inverse] == 1)
-        if len(boundary_rows) == 0:
-            return
-
-        vertices = np.asarray(mesh.vertices, dtype=np.float64)
-        faces = np.asarray(mesh.faces, dtype=np.int64)
-        split_applied = False
-        for edge_row in boundary_rows:
-            edge = edges[edge_row]
-            edge_start = vertices[edge[0]]
-            edge_vector = vertices[edge[1]] - edge_start
-            length_sq = float(np.dot(edge_vector, edge_vector))
-            if length_sq <= tolerance * tolerance:
-                continue
-            offsets = vertices - edge_start
-            parameters = offsets @ edge_vector / length_sq
-            projections = edge_start + parameters[:, None] * edge_vector
-            distances = np.linalg.norm(vertices - projections, axis=1)
-            candidate_mask = (
-                (distances <= tolerance)
-                & (parameters > tolerance)
-                & (parameters < 1.0 - tolerance)
-            )
-            candidate_indices = np.flatnonzero(candidate_mask)
-            if len(candidate_indices) == 0:
-                continue
-
-            face_index = int(mesh.edges_face[edge_row])
-            face = faces[face_index]
-            directed_start = None
-            directed_end = None
-            opposite = None
-            for index in range(3):
-                start_index = int(face[index])
-                end_index = int(face[(index + 1) % 3])
-                if {start_index, end_index} == {int(edge[0]), int(edge[1])}:
-                    directed_start = start_index
-                    directed_end = end_index
-                    opposite = int(face[(index + 2) % 3])
-                    break
-            if directed_start is None or directed_end is None or opposite is None:
-                continue
-
-            direction = vertices[directed_end] - vertices[directed_start]
-            direction_length_sq = float(np.dot(direction, direction))
-            directed_parameters = (
-                (vertices[candidate_indices] - vertices[directed_start]) @ direction
-                / direction_length_sq
-            )
-            ordered_candidates = candidate_indices[np.argsort(directed_parameters)]
-            edge_chain = [directed_start, *ordered_candidates.tolist(), directed_end]
-            replacement_faces = np.asarray(
-                [
-                    (edge_chain[index], edge_chain[index + 1], opposite)
-                    for index in range(len(edge_chain) - 1)
-                ],
-                dtype=np.int64,
-            )
-            mesh.faces = np.vstack(
-                (faces[:face_index], replacement_faces, faces[face_index + 1 :])
-            )
-            split_applied = True
-            break
-        if not split_applied:
-            return
-
-
-def _finalize_prism_meshes(
-    prism_parts: list[trimesh.Trimesh],
-) -> trimesh.Trimesh | None:
-    """Remove internal faces while preserving point-touching solid shells."""
-
-    if not prism_parts:
-        return None
-
-    parents = list(range(len(prism_parts)))
-
-    def find(part_index: int) -> int:
-        while parents[part_index] != part_index:
-            parents[part_index] = parents[parents[part_index]]
-            part_index = parents[part_index]
-        return part_index
-
-    def union(left_index: int, right_index: int) -> None:
-        left_root = find(left_index)
-        right_root = find(right_index)
-        if left_root != right_root:
-            parents[right_root] = left_root
-
-    face_owners: dict[tuple[tuple[float, float, float], ...], int] = {}
-    for part_index, prism in enumerate(prism_parts):
-        vertices = np.asarray(prism.vertices, dtype=np.float64)
-        for face in np.asarray(prism.faces, dtype=np.int64):
-            coordinates = np.round(vertices[face], decimals=9)
-            face_key = tuple(sorted(tuple(point) for point in coordinates))
-            owner = face_owners.setdefault(face_key, part_index)
-            if owner != part_index:
-                union(part_index, owner)
-
-    grouped_parts: dict[int, list[trimesh.Trimesh]] = {}
-    for part_index, prism in enumerate(prism_parts):
-        grouped_parts.setdefault(find(part_index), []).append(prism)
-
-    finalized_groups = []
-    for connected_parts in grouped_parts.values():
-        combined = _concatenate_meshes_fast(connected_parts)
-        combined.merge_vertices()
-        sorted_faces = np.sort(np.asarray(combined.faces, dtype=np.int64), axis=1)
-        _, inverse, counts = np.unique(
-            sorted_faces,
-            axis=0,
-            return_inverse=True,
-            return_counts=True,
-        )
-        combined.update_faces(counts[inverse] == 1)
-        _split_mesh_t_junctions(combined)
-        combined.remove_unreferenced_vertices()
-        finalized_groups.append(combined)
-
-    return _concatenate_meshes_fast(finalized_groups)
-
-
-def _build_stepped_volume_mesh(
-    slabs: list[dict],
-    *,
-    scale_factor: float,
-) -> trimesh.Trimesh | None:
-    """Build a watertight stepped volume, preferring the native union kernel."""
-
-    _guard_relief_slab_noding(slabs)
-    prepared = _prepare_stepped_volume_slabs(slabs)
-    if prepared is None:
-        return None
-    valid_slabs, component_slabs = prepared
-
-    if _load_relief_manifold3d() is not None:
-        try:
-            native_mesh = _build_stepped_volume_mesh_manifold_prepared(
-                component_slabs,
-                scale_factor=scale_factor,
-            )
-            if _validate_stepped_volume_mesh(
-                native_mesh,
-                valid_slabs=valid_slabs,
-                component_count=len(component_slabs),
-                scale_factor=scale_factor,
-            ):
-                return native_mesh
-            # The exact Python fallback may be as large as the rejected
-            # native result. Release the complete native mesh before entering
-            # that fallback so both representations cannot overlap in RSS.
-            del native_mesh
-            raise ValueError("native relief mesh failed topology validation")
-        except VECTOR_HANDLED_ERRORS as exc:
-            _log.warning(
-                "Native relief mesh union failed; rebuilding with exact Python fallback",
-                extra={
-                    "event": "vector_relief_native_union_fallback",
-                    "error_type": type(exc).__name__,
-                    "error_message": str(exc),
-                    "fallback_kernel": "python_atomic_prisms",
-                },
-            )
-
-    return _build_stepped_volume_mesh_python_prepared(
-        component_slabs,
-        scale_factor=scale_factor,
-    )
-
-
-def _load_relief_manifold3d():
-    """Return the optional manifold3d module, or ``None`` when unavailable."""
-
-    try:
-        import manifold3d as m3d
-    except (ImportError, OSError):
-        return None
-    return m3d
-
-
-def _guard_relief_slab_noding(slabs: list[dict]) -> None:
-    """Admit relief linework before any footprint union allocates buffers."""
-
-    coordinate_count = 0
-    z_boundaries: set[float] = set()
-    shape_count = 0
-    for slab in slabs:
-        geometry = slab.get("geometry") if isinstance(slab, dict) else None
-        if geometry is None or getattr(geometry, "is_empty", True):
-            continue
-        try:
-            z_offset = float(slab.get("z_offset", 0.0))
-            height = float(slab.get("height", 0.0))
-        except (TypeError, ValueError, OverflowError):
-            continue
-        if not math.isfinite(z_offset) or not math.isfinite(height) or height <= 1e-9:
-            continue
-        shape_count += 1
-        coordinate_count += max(
-            1,
-            _geometry_cache_storage_bytes(geometry) // 64,
-        )
-        z_boundaries.add(round(z_offset, 9))
-        z_boundaries.add(round(z_offset + height, 9))
-
-    interval_count = max(1, len(z_boundaries) - 1)
-    coordinate_references = coordinate_count * interval_count
-    _enforce_vector_mesh_runtime_headroom(
-        stage="vector_relief_noding",
-        estimated_additional_bytes=max(
-            16 * 1024 * 1024,
-            coordinate_references * 1024,
-        ),
-        shape_count=shape_count * interval_count,
-        coordinate_count=coordinate_references,
-    )
-
-
-def _prepare_stepped_volume_slabs(
-    slabs: list[dict],
-) -> tuple[
-    list[tuple[Polygon, float, float]],
-    list[list[tuple[Polygon, float, float]]],
-] | None:
-    """Validate slab records and group them by area-connected XY footprint."""
-
-    valid_slabs = []
-    slab_geometries = []
-    for slab in slabs:
-        geometry = slab.get("geometry")
-        z_offset = float(slab.get("z_offset", 0.0))
-        height = float(slab.get("height", 0.0))
-        if geometry is None or geometry.is_empty or height <= 1e-9:
-            continue
-        z_end = z_offset + height
-        polygon_parts = (
-            [geometry]
-            if geometry.geom_type == "Polygon"
-            else list(geometry.geoms)
-            if geometry.geom_type == "MultiPolygon"
-            else []
-        )
-        for polygon in polygon_parts:
-            if polygon.is_empty or polygon.area <= 1e-12:
-                continue
-            valid_slabs.append((polygon, z_offset, z_end))
-            slab_geometries.append(polygon)
-
-    if not valid_slabs:
-        return None
-    combined_footprint = _union_run_group_geometries(slab_geometries)
-    components = (
-        [combined_footprint]
-        if combined_footprint.geom_type == "Polygon"
-        else list(combined_footprint.geoms)
-        if combined_footprint.geom_type == "MultiPolygon"
-        else []
-    )
-    component_slabs: list[list[tuple[Polygon, float, float]]] = [
-        [] for _component in components
-    ]
-    for geometry, z_offset, z_end in valid_slabs:
-        representative_point = geometry.representative_point()
-        for component_index, component in enumerate(components):
-            if component.covers(representative_point):
-                component_slabs[component_index].append((geometry, z_offset, z_end))
-                break
-
-    populated_components = [group for group in component_slabs if group]
-    if not populated_components:
-        return None
-    return valid_slabs, populated_components
-
-
-def _stepped_volume_expected_metrics(
-    valid_slabs: list[tuple[Polygon, float, float]],
-    *,
-    scale_factor: float,
-) -> tuple[np.ndarray, float] | None:
-    """Return expected bounds and volume directly from the slab union."""
-
-    scale = float(scale_factor)
-    if not np.isfinite(scale) or scale <= 0.0:
-        return None
-    z_boundaries = sorted(
-        {
-            round(z_value, 9)
-            for _geometry, z_start, z_end in valid_slabs
-            for z_value in (z_start, z_end)
-        }
-    )
-    if len(z_boundaries) < 2:
-        return None
-
-    volume = 0.0
-    active_footprints = []
-    for z_start, z_end in zip(z_boundaries, z_boundaries[1:]):
-        z_mid = (z_start + z_end) * 0.5
-        active = [
-            geometry
-            for geometry, slab_start, slab_end in valid_slabs
-            if slab_start < z_mid < slab_end
-        ]
-        if not active:
-            continue
-        footprint = _union_run_group_geometries(active)
-        if footprint is None or footprint.is_empty:
-            continue
-        active_footprints.append(footprint)
-        volume += float(footprint.area) * (z_end - z_start) * scale * scale
-    if not active_footprints or volume <= 0.0:
-        return None
-
-    footprint_union = _union_run_group_geometries(active_footprints)
-    min_x, min_y, max_x, max_y = footprint_union.bounds
-    bounds = np.asarray(
-        [
-            [min_x * scale, min_y * scale, z_boundaries[0]],
-            [max_x * scale, max_y * scale, z_boundaries[-1]],
-        ],
-        dtype=np.float64,
-    )
-    return bounds, volume
-
-
-def _validate_stepped_volume_mesh(
-    mesh: trimesh.Trimesh | None,
-    *,
-    valid_slabs: list[tuple[Polygon, float, float]],
-    component_count: int,
-    scale_factor: float,
-) -> bool:
-    """Reject incomplete or semantically different native-kernel results."""
-
-    if mesh is None or len(mesh.vertices) == 0 or len(mesh.faces) == 0:
-        return False
-    vertices = np.asarray(mesh.vertices, dtype=np.float64)
-    if not np.all(np.isfinite(vertices)) or not mesh.is_watertight:
-        return False
-    expected = _stepped_volume_expected_metrics(
-        valid_slabs,
-        scale_factor=scale_factor,
-    )
-    if expected is None:
-        return False
-    expected_bounds, expected_volume = expected
-    if not np.allclose(mesh.bounds, expected_bounds, rtol=1e-7, atol=5e-6):
-        return False
-    if not np.isclose(
-        abs(float(mesh.volume)),
-        expected_volume,
-        rtol=1e-6,
-        atol=1e-6,
-    ):
-        return False
-    # Native construction is performed independently for each area-connected
-    # footprint, so point-touching bodies cannot be fused.  Do not compare
-    # ``mesh.split`` here: an enclosed cavity adds a separate *surface shell*
-    # even though it is still part of one connected solid volume.
-    return component_count > 0
-
-
-def _manifold_polygon_contours(
-    polygon: Polygon,
-    *,
-    scale_factor: float,
-) -> list[np.ndarray]:
-    """Convert one Shapely polygon to open, scaled manifold contours."""
-
-    contours = []
-    for ring in (polygon.exterior, *polygon.interiors):
-        coordinates = np.asarray(ring.coords, dtype=np.float64)
-        if coordinates.ndim != 2 or coordinates.shape[0] < 4:
-            continue
-        coordinates = coordinates[:-1, :2] * float(scale_factor)
-        if len(coordinates) >= 3 and np.all(np.isfinite(coordinates)):
-            contours.append(coordinates)
-    return contours
-
-
-def _build_stepped_volume_mesh_manifold_prepared(
-    component_slabs: list[list[tuple[Polygon, float, float]]],
-    *,
-    scale_factor: float,
-) -> trimesh.Trimesh | None:
-    """Union extruded slabs per area-connected component with manifold3d."""
-
-    m3d = _load_relief_manifold3d()
-    if m3d is None:
-        return None
-    component_meshes = []
-    for grouped_slabs in component_slabs:
-        solids = []
-        slabs_by_z: dict[tuple[float, float], list[Polygon]] = {}
-        for polygon, z_start, z_end in grouped_slabs:
-            slabs_by_z.setdefault((z_start, z_end), []).append(polygon)
-        for (z_start, z_end), polygons in slabs_by_z.items():
-            contours = [
-                contour
-                for polygon in polygons
-                for contour in _manifold_polygon_contours(
-                    polygon,
-                    scale_factor=scale_factor,
-                )
-            ]
-            if not contours:
-                continue
-            section = m3d.CrossSection(contours, m3d.FillRule.EvenOdd)
-            solid = section.extrude(z_end - z_start).translate((0.0, 0.0, z_start))
-            if not solid.is_empty():
-                solids.append(solid)
-        if not solids:
-            return None
-        unioned = m3d.Manifold.batch_boolean(solids, m3d.OpType.Add)
-        if unioned.is_empty() or unioned.status() != m3d.Error.NoError:
-            return None
-        mesh_data = unioned.to_mesh()
-        vertices = np.asarray(mesh_data.vert_properties, dtype=np.float64)
-        faces = np.asarray(mesh_data.tri_verts, dtype=np.int64)
-        if vertices.ndim != 2 or vertices.shape[1] < 3 or faces.size == 0:
-            return None
-        component_mesh = trimesh.Trimesh(
-            vertices=vertices[:, :3].copy(),
-            faces=faces.copy(),
-            process=False,
-        )
-        if not component_mesh.is_watertight:
-            return None
-        component_meshes.append(component_mesh)
-    if len(component_meshes) != len(component_slabs):
-        return None
-    return _concatenate_meshes_fast(component_meshes)
-
-
-def _build_stepped_volume_mesh_manifold(
-    slabs: list[dict],
-    *,
-    scale_factor: float,
-) -> trimesh.Trimesh | None:
-    """Build slabs with manifold3d without applying the Python fallback."""
-
-    prepared = _prepare_stepped_volume_slabs(slabs)
-    if prepared is None:
-        return None
-    valid_slabs, component_slabs = prepared
-    mesh = _build_stepped_volume_mesh_manifold_prepared(
-        component_slabs,
-        scale_factor=scale_factor,
-    )
-    return (
-        mesh
-        if _validate_stepped_volume_mesh(
-            mesh,
-            valid_slabs=valid_slabs,
-            component_count=len(component_slabs),
-            scale_factor=scale_factor,
-        )
-        else None
-    )
-
-
-def _build_stepped_volume_mesh_python_prepared(
-    component_slabs: list[list[tuple[Polygon, float, float]]],
-    *,
-    scale_factor: float,
-) -> trimesh.Trimesh | None:
-    """Build every component with the exact atomic-prism fallback."""
-
-    component_meshes = []
-    for grouped_slabs in component_slabs:
-        mesh = _build_connected_stepped_volume_mesh_python(
-            grouped_slabs,
-            scale_factor=scale_factor,
-        )
-        if mesh is None:
-            return None
-        component_meshes.append(mesh)
-    return _concatenate_meshes_fast(component_meshes) if component_meshes else None
-
-
-def _build_stepped_volume_mesh_python(
-    slabs: list[dict],
-    *,
-    scale_factor: float,
-) -> trimesh.Trimesh | None:
-    """Build slabs with the exact Python algorithm and no native kernel."""
-
-    _guard_relief_slab_noding(slabs)
-    prepared = _prepare_stepped_volume_slabs(slabs)
-    if prepared is None:
-        return None
-    _valid_slabs, component_slabs = prepared
-    return _build_stepped_volume_mesh_python_prepared(
-        component_slabs,
-        scale_factor=scale_factor,
-    )
-
-
-def _build_connected_stepped_volume_mesh_python(
-    valid_slabs: list[tuple[Polygon, float, float]],
-    *,
-    scale_factor: float,
-) -> trimesh.Trimesh | None:
-    """Build one edge-connected stepped volume using only its own Z levels."""
-
-    z_boundaries: set[float] = set()
-    for _geometry, z_offset, z_end in valid_slabs:
-        z_boundaries.add(round(z_offset, 9))
-        z_boundaries.add(round(z_end, 9))
-
-    ordered_z = sorted(z_boundaries)
-    if len(ordered_z) < 2:
-        return None
-
-    interval_count = len(ordered_z) - 1
-    source_coordinate_count = sum(
-        max(1, _geometry_cache_storage_bytes(geometry) // 64)
-        for geometry, _z_offset, _z_end in valid_slabs
-    )
-    noding_coordinate_references = source_coordinate_count * interval_count
-    _enforce_vector_mesh_runtime_headroom(
-        stage="vector_relief_noding",
-        estimated_additional_bytes=max(
-            16 * 1024 * 1024,
-            noding_coordinate_references * 1024,
-        ),
-        shape_count=len(valid_slabs) * interval_count,
-        coordinate_count=noding_coordinate_references,
-    )
-
-    interval_footprints = []
-    for z_start, z_end in zip(ordered_z, ordered_z[1:]):
-        z_mid = (z_start + z_end) * 0.5
-        active_geometries = [
-            geometry
-            for geometry, slab_start, slab_end in valid_slabs
-            if slab_start < z_mid < slab_end
-        ]
-        footprint = (
-            _union_run_group_geometries(active_geometries)
-            if active_geometries
-            else None
-        )
-        interval_footprints.append((z_start, z_end, footprint))
-
-    footprints = [
-        footprint
-        for _z_start, _z_end, footprint in interval_footprints
-        if footprint is not None and not footprint.is_empty
-    ]
-    if not footprints:
-        return None
-    noded_boundaries = unary_union([footprint.boundary for footprint in footprints])
-    boundary_nodes = _linework_node_coordinates(noded_boundaries)
-    atomic_cells = [
-        _densify_polygon_with_nodes(cell, boundary_nodes)
-        for cell in polygonize(noded_boundaries)
-        if not cell.is_empty and cell.area > 1e-12
-    ]
-
-    nonempty_interval_count = sum(
-        1
-        for _z_start, _z_end, footprint in interval_footprints
-        if footprint is not None and not footprint.is_empty
-    )
-    atomic_coordinate_count = sum(
-        max(1, _geometry_cache_storage_bytes(cell) // 64)
-        for cell in atomic_cells
-    )
-    prism_coordinate_references = (
-        atomic_coordinate_count * nonempty_interval_count
-    )
-    _enforce_vector_mesh_runtime_headroom(
-        stage="vector_relief_atomic_prisms",
-        estimated_additional_bytes=max(
-            16 * 1024 * 1024,
-            # `_finalize_prism_meshes` builds Python tuple/dict ownership
-            # indices before concatenation. Tracemalloc calibration on
-            # connected prism sets is ~3.8x the old 512-byte coefficient;
-            # 4096 bytes also leaves room for native NumPy/GEOS allocations
-            # that tracemalloc cannot observe.
-            prism_coordinate_references * 4096,
-        ),
-        shape_count=len(atomic_cells) * nonempty_interval_count,
-        coordinate_count=prism_coordinate_references,
-    )
-
-    prism_parts: list[trimesh.Trimesh] = []
-    for z_start, z_end, footprint in interval_footprints:
-        if footprint is None or footprint.is_empty:
-            continue
-        for cell in atomic_cells:
-            if not footprint.covers(cell.representative_point()):
-                continue
-            prism = _build_atomic_prism_mesh(
-                cell,
-                z_start=z_start,
-                z_end=z_end,
-                scale_factor=scale_factor,
-            )
-            if prism is not None and len(prism.faces) > 0:
-                prism_parts.append(prism)
-    return _finalize_prism_meshes(prism_parts)
 
 
 def _normalize_contours_cached(cache, geom, close_delta_mm=0.03):
@@ -6552,16 +5314,11 @@ class VectorProcessor:
                 2 if is_double_sided and not is_5color else 1
             )
 
-        extrude_cache_budget_bytes = _resolve_vector_cache_bytes(
-            "LUMINA_VECTOR_EXTRUDE_CACHE_MB",
-            _VECTOR_EXTRUDE_CACHE_BYTES,
-        )
         memory_estimate = estimate_vector_mesh_build_memory(
             matched_shapes,
             num_layers=num_layers,
             double_sided=is_double_sided,
-            extrude_cache_budget_bytes=extrude_cache_budget_bytes,
-            fallback_chunk_bytes=_VECTOR_FALLBACK_CHUNK_BYTES,
+            spatial_group_chunk_bytes=_VECTOR_SPATIAL_GROUP_CHUNK_BYTES,
             auxiliary_geometries=auxiliary_geometries,
             auxiliary_run_count=auxiliary_run_count,
         )
@@ -6582,11 +5339,8 @@ class VectorProcessor:
             "estimated_final_mesh_bytes": (
                 memory_estimate.estimated_final_mesh_bytes
             ),
-            "topology_validation_working_bytes": (
-                memory_estimate.topology_validation_working_bytes
-            ),
-            "estimated_additional_bytes": (
-                memory_estimate.estimated_additional_bytes
+            "largest_prepared_group_coordinate_count": (
+                memory_estimate.largest_prepared_group_coordinate_count
             ),
             "estimated_preparation_bytes": (
                 memory_estimate.estimated_preparation_bytes
@@ -6649,7 +5403,6 @@ class VectorProcessor:
         silhouette = _physical_backing_geometry(analysis)
 
         # === Stage 5: Run-length extrude per channel ===
-        extrude_cache = _new_vector_extrude_cache()
         if enable_relief and (is_5color or not is_single_sided):
             raise ValueError(
                 "Native SVG relief supports only single-sided, non-5-Color "
@@ -6684,7 +5437,6 @@ class VectorProcessor:
                 heightmap_path=heightmap_path,
                 heightmap_max_height=heightmap_max_height,
                 bbox=bbox,
-                extrude_cache=extrude_cache,
                 enable_fridge_magnet=enable_fridge_magnet,
                 fridge_magnets=fridge_magnets,
             )
@@ -6696,7 +5448,6 @@ class VectorProcessor:
                 num_channels=num_channels,
                 slot_names=slot_names,
                 scale_factor=scale_factor,
-                extrude_cache=extrude_cache,
                 face_up=True,
                 optical_z_base=backing_height,
             )
@@ -6713,7 +5464,6 @@ class VectorProcessor:
                 num_channels=num_channels,
                 slot_names=slot_names,
                 scale_factor=scale_factor,
-                extrude_cache=extrude_cache,
             )
         stage_timings["extrude_bottom_s"] = time.perf_counter() - t0
         stage_timings["vector_mesh_rss_after_extrude_bottom_bytes"] = int(
@@ -6765,7 +5515,7 @@ class VectorProcessor:
             backing_meshes = []
             for slab in backing_slabs:
                 backing_meshes.append(
-                    self._extrude_canonical_geometry_group(
+                    self._extrude_spatial_geometry_group(
                         slab["geometry"],
                         height=slab["height"],
                         z_offset=slab["z_offset"] + gap_offset,
@@ -6829,7 +5579,7 @@ class VectorProcessor:
             coating_layers = max(1, int(round(requested_coating_height / layer_h)))
             coating_height = coating_layers * layer_h
             coating_meshes = [
-                self._extrude_canonical_geometry_group(
+                self._extrude_spatial_geometry_group(
                     coating_sil,
                     height=coating_height,
                     z_offset=-coating_height,
@@ -6871,21 +5621,11 @@ class VectorProcessor:
                 scale_factor,
                 top_z_start,
                 meshes_by_slot,
-                extrude_cache=extrude_cache,
             )
         stage_timings["extrude_top_s"] = time.perf_counter() - t0
         stage_timings["vector_mesh_rss_after_extrude_top_bytes"] = int(
             get_process_rss_bytes() or 0
         )
-
-        extrude_cache_entries = len(extrude_cache)
-        extrude_cache_peak_bytes = int(
-            getattr(extrude_cache, "peak_bytes", 0)
-        )
-        extrude_cache_evictions = int(
-            getattr(extrude_cache, "eviction_count", 0)
-        )
-        extrude_cache.clear()
 
         # === Stage 8: Assemble scene (sorted by material ID) ===
         t0 = time.perf_counter()
@@ -6942,9 +5682,6 @@ class VectorProcessor:
             get_process_rss_bytes() or 0
         )
         stage_timings["total_s"] = time.perf_counter() - t_total_start
-        stage_timings["extrude_cache_entries"] = extrude_cache_entries
-        stage_timings["extrude_cache_peak_bytes"] = extrude_cache_peak_bytes
-        stage_timings["extrude_cache_evictions"] = extrude_cache_evictions
         self.last_stage_timings = stage_timings
 
         rss_stage_keys = (
@@ -6959,12 +5696,8 @@ class VectorProcessor:
             (int(stage_timings.get(key, 0)) for key in rss_stage_keys),
             default=0,
         )
-        self.last_vector_mesh_memory_profile.update(
-            {
-                "rss_sampled_max_bytes": rss_sampled_max_bytes,
-                "extrude_cache_peak_bytes": extrude_cache_peak_bytes,
-                "extrude_cache_evictions": extrude_cache_evictions,
-            }
+        self.last_vector_mesh_memory_profile["rss_sampled_max_bytes"] = (
+            rss_sampled_max_bytes
         )
         _log.debug(
             "Vector mesh memory profile",
@@ -6986,7 +5719,6 @@ class VectorProcessor:
             stage_timings["assemble_s"],
             stage_timings["total_s"],
         )
-        _log.debug("Extrude cache entries: %s", stage_timings["extrude_cache_entries"])
         _log.debug("Scene complete: %s objects", len(scene.geometry))
         return scene
 
@@ -7006,7 +5738,6 @@ class VectorProcessor:
         heightmap_path,
         heightmap_max_height,
         bbox,
-        extrude_cache,
         enable_fridge_magnet=False,
         fridge_magnets=None,
     ):
@@ -7143,7 +5874,6 @@ class VectorProcessor:
 
         meshes_by_slot: dict[str, dict] = {}
         for (total_layers, channel, run_start, run_end), geometries in optical_groups.items():
-            merged = _union_run_group_geometries(geometries)
             inverted_start = (int(num_layers) - 1) - run_end
             inverted_end = (int(num_layers) - 1) - run_start
             z_offset = (total_layers - int(num_layers) + inverted_start) * layer_h
@@ -7153,30 +5883,33 @@ class VectorProcessor:
                 slot_name,
                 {"meshes": [], "mat_id": channel},
             )
-            entry["meshes"].extend(
-                _extrude_source_geometries_with_coverage_guard(
-                    geometries,
-                    merged,
-                    height=height,
-                    z_offset=z_offset,
-                    scale_factor=scale_factor,
-                    extrude_cache=extrude_cache,
-                    context=(
-                        "Vector relief extrusion for "
-                        f"channel {channel}, layers {run_start}-{run_end}"
-                    ),
-                )
+            new_meshes, recovery_stats = _build_source_spatial_groups(
+                geometries,
+                height=height,
+                z_offset=z_offset,
+                scale_factor=scale_factor,
             )
+            entry["meshes"].extend(new_meshes)
+            if int(recovery_stats["failed_source_part_count"]) > 0:
+                _log.warning(
+                    "Vector relief omitted locally unbuildable spatial groups",
+                    extra={
+                        "event": "vector_relief_spatial_group_omitted",
+                        "error_type": "VectorSpatialGroupBuildFailure",
+                        "channel": int(channel),
+                        "run_start": int(run_start),
+                        "run_end": int(run_end),
+                        **recovery_stats,
+                    },
+                )
 
         board_entry = meshes_by_slot.setdefault(
             "Board",
             {
                 "meshes": [],
                 "mat_id": int(backing_color_id),
-                "topology_finalized": True,
             },
         )
-        board_entry["topology_finalized"] = True
         backing_volume_slabs = []
         full_backing_sil = _union_run_group_geometries(
             [
@@ -7219,9 +5952,9 @@ class VectorProcessor:
             )
             for slab in backing_slabs:
                 backing_volume_slabs.append(slab)
-        board_mesh = _build_stepped_volume_mesh(
+        board_mesh = build_vector_stepped_volume(
             backing_volume_slabs,
-            scale_factor=scale_factor,
+            scale_mm_per_svg_unit=scale_factor,
         )
         if board_mesh is not None and len(board_mesh.faces) > 0:
             board_entry["meshes"].append(board_mesh)
@@ -8248,7 +6981,7 @@ class VectorProcessor:
         return runs_by_channel
 
     @staticmethod
-    def _extrude_canonical_geometry_group(
+    def _extrude_spatial_geometry_group(
         geometry,
         *,
         height: float,
@@ -8256,9 +6989,9 @@ class VectorProcessor:
         scale: float,
         stage: str,
     ) -> trimesh.Trimesh:
-        """Build one safe mesh leaf for an auxiliary polygonal group.
+        """Build one auxiliary mesh leaf through canonical spatial groups.
 
-        将同一逻辑底板或涂层组一次性规范化并生成单个安全网格叶子。
+        用统一规范空间组生成一个辅助网格叶子。
         """
 
         geometry_bytes = _geometry_cache_storage_bytes(geometry)
@@ -8271,46 +7004,25 @@ class VectorProcessor:
             shape_count=1,
             coordinate_count=geometry_bytes // 64,
         )
-        try:
-            prepared = prepare_vector_run_group(
-                (geometry,),
-                scale_mm_per_svg_unit=float(scale),
+        meshes, stats = _build_source_spatial_groups(
+            (geometry,),
+            height=float(height),
+            z_offset=float(z_offset),
+            scale_factor=float(scale),
+        )
+        if int(stats["failed_source_part_count"]) > 0:
+            _log.warning(
+                "Vector auxiliary geometry omitted locally unbuildable groups",
+                extra={
+                    "event": "vector_auxiliary_spatial_group_omitted",
+                    "error_type": "VectorSpatialGroupBuildFailure",
+                    "stage": str(stage),
+                    **stats,
+                },
             )
-            allocation_estimate = estimate_indexed_prism_memory(
-                coordinate_count=int(prepared.stats.output_coordinate_count),
-                hole_count=int(prepared.stats.output_hole_count),
-                component_count=int(prepared.stats.output_component_count),
-            )
-            _enforce_vector_mesh_runtime_headroom(
-                stage=f"{stage}_canonical_geometry",
-                estimated_additional_bytes=(
-                    allocation_estimate.estimated_additional_bytes
-                ),
-                shape_count=1,
-                coordinate_count=int(prepared.stats.output_coordinate_count),
-            )
-            return extrude_prepared_vector_run_group(
-                prepared,
-                height_mm=float(height),
-                z_offset_mm=float(z_offset),
-            )
-        except VECTOR_FATAL_ERRORS:
-            raise
-        except VectorTopologyError:
-            raise
-        except VECTOR_HANDLED_ERRORS as exc:
-            raise VectorTopologyError(
-                "Vector auxiliary geometry could not be represented safely for export",
-                (
-                    {
-                        "attempt": "canonical_physical_grid",
-                        "geometry_type": str(stage),
-                        "source_geometry_count": 1,
-                        "rejected_reason": type(exc).__name__,
-                        "error_type": type(exc).__name__,
-                    },
-                ),
-            ) from exc
+        if not meshes:
+            raise ValueError("Vector auxiliary geometry produced no printable group")
+        return _concatenate_meshes_fast(meshes)
 
     @staticmethod
     def _run_length_extrude(
@@ -8320,7 +7032,6 @@ class VectorProcessor:
         num_channels,
         slot_names,
         scale_factor,
-        extrude_cache=None,
         face_up=False,
         optical_z_base=0.0,
     ):
@@ -8439,11 +7150,11 @@ class VectorProcessor:
         stage_d_hist: dict[int, dict[int, int]] = {}
         last_prepared_key = None
         last_prepared = None
-        source_fallback_group_count = 0
-        source_fallback_geometry_count = 0
-        source_fallback_part_count = 0
-        source_fallback_built_part_count = 0
-        source_fallback_failed_part_count = 0
+        spatial_recovery_group_count = 0
+        spatial_recovery_geometry_count = 0
+        spatial_recovery_part_count = 0
+        spatial_recovery_built_part_count = 0
+        spatial_recovery_failed_part_count = 0
         canonical_failure_types: dict[str, int] = {}
         source_failure_types: dict[str, int] = {}
         for (ch, run_start, run_end), geoms in run_groups.items():
@@ -8520,9 +7231,6 @@ class VectorProcessor:
                 )
             except VECTOR_FATAL_ERRORS:
                 raise
-            except VectorTopologyError as exc:
-                canonical_error_name = type(exc).__name__
-                exc.__traceback__ = None
             except VECTOR_HANDLED_ERRORS as exc:
                 canonical_error_name = type(exc).__name__
                 exc.__traceback__ = None
@@ -8530,36 +7238,35 @@ class VectorProcessor:
             if canonical_error_name is None:
                 new_meshes = [canonical_mesh]
             else:
-                # Do not keep failed canonical preparation alive beside the
-                # complete source-shell fallback.
+                # Release the failed whole-run candidate before rebuilding the
+                # same source through smaller canonical spatial groups.
                 prepared = None
                 canonical_mesh = None
                 last_prepared_key = None
                 last_prepared = None
-                new_meshes, fallback_stats = (
-                    _extrude_source_geometries_best_effort(
+                new_meshes, recovery_stats = (
+                    _build_source_spatial_groups(
                         source_geoms,
                         height=height,
                         z_offset=z_bot,
                         scale_factor=scale_factor,
-                        extrude_cache=extrude_cache,
                     )
                 )
-                source_fallback_group_count += 1
-                source_fallback_geometry_count += len(source_geoms)
-                source_fallback_part_count += int(
-                    fallback_stats["source_part_count"]
+                spatial_recovery_group_count += 1
+                spatial_recovery_geometry_count += len(source_geoms)
+                spatial_recovery_part_count += int(
+                    recovery_stats["source_part_count"]
                 )
-                source_fallback_built_part_count += int(
-                    fallback_stats["built_source_part_count"]
+                spatial_recovery_built_part_count += int(
+                    recovery_stats["built_source_part_count"]
                 )
-                source_fallback_failed_part_count += int(
-                    fallback_stats["failed_source_part_count"]
+                spatial_recovery_failed_part_count += int(
+                    recovery_stats["failed_source_part_count"]
                 )
                 canonical_failure_types[canonical_error_name] = (
                     canonical_failure_types.get(canonical_error_name, 0) + 1
                 )
-                for error_name, error_count in fallback_stats[
+                for error_name, error_count in recovery_stats[
                     "failure_types"
                 ].items():
                     source_failure_types[error_name] = (
@@ -8572,24 +7279,24 @@ class VectorProcessor:
                 layer_hist = stage_d_hist.setdefault(int(layer_idx), {})
                 layer_hist[int(ch)] = layer_hist.get(int(ch), 0) + len(new_meshes)
 
-        if source_fallback_group_count:
+        if spatial_recovery_group_count:
             _log.warning(
-                "Canonical vector run groups used source-shell fallback",
+                "Canonical vector run groups required spatial recovery",
                 extra={
-                    "event": "vector_run_group_source_fallback",
-                    "error_type": "VectorRunGroupFallback",
+                    "event": "vector_run_group_spatial_recovery",
+                    "error_type": "VectorRunGroupSpatialRecovery",
                     "error_message": (
-                        "Canonical run-group preparation failed; independent "
-                        "source shells were retained"
+                        "Whole-run preparation failed; canonical spatial "
+                        "groups retained the printable source regions"
                     ),
-                    "fallback_group_count": source_fallback_group_count,
-                    "source_geometry_count": source_fallback_geometry_count,
-                    "source_part_count": source_fallback_part_count,
+                    "recovery_group_count": spatial_recovery_group_count,
+                    "source_geometry_count": spatial_recovery_geometry_count,
+                    "source_part_count": spatial_recovery_part_count,
                     "built_source_part_count": (
-                        source_fallback_built_part_count
+                        spatial_recovery_built_part_count
                     ),
                     "failed_source_part_count": (
-                        source_fallback_failed_part_count
+                        spatial_recovery_failed_part_count
                     ),
                     "canonical_failure_types": canonical_failure_types,
                     "source_failure_types": source_failure_types,
@@ -8628,7 +7335,6 @@ class VectorProcessor:
         scale_factor,
         top_z_start,
         meshes_by_slot,
-        extrude_cache=None,
     ):
         """Mirror colour layers above the backing for double-sided mode.
 
@@ -8644,7 +7350,6 @@ class VectorProcessor:
             num_channels=num_channels,
             slot_names=slot_names,
             scale_factor=scale_factor,
-            extrude_cache=extrude_cache,
             face_up=True,
             optical_z_base=top_z_start,
         )
@@ -10627,266 +9332,6 @@ class VectorProcessor:
             final_shapes.append(final_item)
 
         return final_shapes, scale_factor, (gx0, gy0, real_w, real_h)
-
-    # ── Geometry helpers ─────────────────────────────────────────────────
-
-    @staticmethod
-    def _extrude_geometry(geometry, height, z_offset, scale, extrude_cache=None):
-        """Extrude 2D Shapely geometry to 3D trimesh objects."""
-        meshes = []
-        if geometry is None or geometry.is_empty:
-            _log.debug(
-                "Vector extrusion skipped empty geometry",
-                extra={
-                    "event": "vector_diag_extrude_skipped_empty",
-                    "stage": "extrude_geometry",
-                },
-            )
-            return meshes
-
-        polys = list(geometry.geoms) if hasattr(geometry, "geoms") else [geometry]
-        polygon_parts = [
-            poly for poly in polys
-            if isinstance(poly, Polygon) and not poly.is_empty
-        ]
-        if len(polygon_parts) == len(polys) and len(polygon_parts) > 1:
-            prepared_parts = prepare_component_footprints_for_float32(
-                polygon_parts,
-                xy_scale=float(scale),
-            )
-            if prepared_parts is None:
-                raise VectorTopologyError(
-                    "Vector polygon topology could not be repaired for export",
-                    (
-                        {
-                            "attempt": "engine_geometry_2d_preflight",
-                            "geometry_type": getattr(
-                                geometry,
-                                "geom_type",
-                                None,
-                            ),
-                            "candidate_mesh_count": len(polygon_parts),
-                            "vertex_count": int(
-                                sum(
-                                    max(0, len(poly.exterior.coords) - 1)
-                                    + sum(
-                                        max(0, len(ring.coords) - 1)
-                                        for ring in poly.interiors
-                                    )
-                                    for poly in polygon_parts
-                                )
-                            ),
-                            "rejected_reason": (
-                                "writer_domain_component_preflight_failed"
-                            ),
-                        },
-                    ),
-                )
-            polys = prepared_parts
-
-        for poly in polys:
-            if poly.is_empty:
-                _log.debug(
-                    "Vector extrusion skipped empty polygon",
-                    extra={
-                        "event": "vector_diag_extrude_skipped_empty",
-                        "stage": "extrude_geometry_part",
-                    },
-                )
-                continue
-            if not hasattr(poly, "exterior"):
-                # Repair non-polygon geometry (LineString, Point, etc.)
-                # by buffering into a Polygon before extrusion.
-                # 修复非多边形几何（LineString/Point 等），buffer 成 Polygon 再挤出。
-                try:
-                    repaired = poly.buffer(0.01)
-                    if hasattr(repaired, "geoms"):
-                        for rp in repaired.geoms:
-                            if hasattr(rp, "exterior") and not rp.is_empty:
-                                poly = rp
-                                break
-                        else:
-                            if hasattr(repaired, "exterior") and not repaired.is_empty:
-                                poly = repaired
-                            else:
-                                _log.debug(
-                                    "Vector extrusion skipped non-polygon geometry",
-                                    extra={
-                                        "event": "vector_diag_extrude_skipped_non_polygon",
-                                        "geometry_type": getattr(poly, "geom_type", None),
-                                    },
-                                )
-                                continue
-                    elif hasattr(repaired, "exterior") and not repaired.is_empty:
-                        poly = repaired
-                    else:
-                        _log.debug(
-                            "Vector extrusion skipped non-polygon geometry",
-                            extra={
-                                "event": "vector_diag_extrude_skipped_non_polygon",
-                                "geometry_type": getattr(poly, "geom_type", None),
-                            },
-                        )
-                        continue
-                except VECTOR_FATAL_ERRORS:
-                    raise
-                except Exception:
-                    _log.debug(
-                        "Vector extrusion skipped non-polygon geometry",
-                        extra={
-                            "event": "vector_diag_extrude_skipped_non_polygon",
-                            "geometry_type": getattr(poly, "geom_type", None),
-                        },
-                    )
-                    continue
-            try:
-                physical_area_mm2 = (
-                    abs(float(poly.area)) * float(scale) * float(scale)
-                )
-            except (AttributeError, TypeError, ValueError, OverflowError):
-                physical_area_mm2 = math.inf
-            # GEOS can retain a nominal Polygon whose vertices differ by only
-            # one floating-point ULP after boolean operations.  Such residue
-            # has no representable physical cross-section and cannot form a
-            # valid prism.  The epsilon-sized cutoff is deliberately unrelated
-            # to printable-detail filtering: every larger positive-area shape
-            # must still extrude or fail closed below.  Run this after the
-            # historical non-polygon repair so LineString/Point inputs keep
-            # their existing best-effort behavior.
-            if physical_area_mm2 <= _FLOAT_RESIDUAL_AREA_MM2:
-                continue
-            try:
-                cache_key = None
-                cached_base = None
-                base_vertices = None
-                base_faces = None
-                planar_coverage_mm2 = None
-                if extrude_cache is not None:
-                    # Key excludes height: cache unit-height (h=1) base mesh,
-                    # then scale Z per call. Avoids re-triangulating equal
-                    # polygons that appear in multiple layer runs.
-                    cache_key = (poly, round(float(scale), 8))
-                    cached_base = extrude_cache.get(cache_key)
-
-                if cached_base is None:
-                    direct_base = _direct_convex_extrusion_base(poly, scale)
-                    if (
-                        direct_base is not None
-                        and _direct_convex_candidate_needs_float32_validation(
-                            direct_base[0]
-                        )
-                    ):
-                        direct_candidate = trimesh.Trimesh(
-                            vertices=direct_base[0],
-                            faces=direct_base[1],
-                            process=False,
-                        )
-                        if not mesh_is_float32_safe(
-                            direct_candidate,
-                            xy_scale=1.0,
-                        ):
-                            direct_base = None
-                    if direct_base is not None:
-                        base_vertices, base_faces = direct_base
-                    else:
-                        topology_meshes = extrude_polygon_for_export(
-                            poly,
-                            xy_scale=float(scale),
-                            prefer_fast=False,
-                        )
-                        m_base = (
-                            topology_meshes[0]
-                            if len(topology_meshes) == 1
-                            else trimesh.util.concatenate(topology_meshes)
-                        )
-                        base_vertices = np.asarray(m_base.vertices, dtype=np.float64).copy()
-                        if base_vertices.ndim == 2 and base_vertices.shape[1] >= 2:
-                            base_vertices[:, 0] *= float(scale)
-                            base_vertices[:, 1] *= float(scale)
-                        base_faces = np.asarray(m_base.faces, dtype=np.int64).copy()
-                    planar_coverage_mm2 = _cap_planar_area_mm2(
-                        base_vertices,
-                        base_faces,
-                    )
-                    if planar_coverage_mm2 is None:
-                        raise ValueError(
-                            "Vector polygon extrusion produced no measurable cap"
-                        )
-                    if _vector_coverage_is_incomplete(
-                        physical_area_mm2,
-                        planar_coverage_mm2,
-                    ):
-                        raise ValueError(
-                            "Vector polygon triangulation coverage incomplete: "
-                            f"expected {physical_area_mm2:.6f} mm^2, "
-                            f"got {planar_coverage_mm2:.6f} mm^2"
-                        )
-                    if extrude_cache is not None and cache_key is not None:
-                        extrude_cache[cache_key] = (
-                            base_vertices,
-                            base_faces,
-                            planar_coverage_mm2,
-                        )
-                else:
-                    if isinstance(cached_base, tuple) and len(cached_base) == 3:
-                        base_vertices, base_faces, planar_coverage_mm2 = cached_base
-                    elif isinstance(cached_base, tuple) and len(cached_base) == 2:
-                        base_vertices, base_faces = cached_base
-                        planar_coverage_mm2 = _cap_planar_area_mm2(
-                            base_vertices,
-                            base_faces,
-                        )
-                    else:
-                        # Backward-compatible with any in-process cache entries
-                        # created before the array-payload optimization.
-                        base_vertices = np.asarray(cached_base.vertices, dtype=np.float64)
-                        base_faces = np.asarray(cached_base.faces, dtype=np.int64)
-
-                vertices = np.asarray(base_vertices, dtype=np.float64).copy()
-                if vertices.ndim == 2 and vertices.shape[1] >= 3:
-                    vertices[:, 2] = vertices[:, 2] * float(height) + float(z_offset)
-                faces = np.asarray(base_faces, dtype=np.int64).copy()
-                m = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
-                if (
-                    planar_coverage_mm2 is not None
-                    and math.isfinite(planar_coverage_mm2)
-                    and planar_coverage_mm2 >= 0.0
-                ):
-                    m.metadata[_PLANAR_COVERAGE_METADATA_KEY] = planar_coverage_mm2
-                meshes.append(m)
-            except VectorTopologyError as e:
-                topology_attempts = [dict(attempt) for attempt in e.attempts]
-                rejected_reason = (
-                    topology_attempts[-1].get("rejected_reason")
-                    if topology_attempts else None
-                )
-                _log.warning(
-                    "Failed to extrude vector polygon",
-                    extra={
-                        "event": "vector_polygon_extrude_failed",
-                        "error_type": type(e).__name__,
-                        "error_message": str(e),
-                        "geometry_type": getattr(poly, "geom_type", None),
-                        "topology_attempts": topology_attempts,
-                        "topology_rejected_reason": rejected_reason,
-                    },
-                )
-                raise
-            except VECTOR_HANDLED_ERRORS as e:
-                _log.warning(
-                    "Failed to extrude vector polygon",
-                    extra={
-                        "event": "vector_polygon_extrude_failed",
-                        "error_type": type(e).__name__,
-                        "error_message": str(e),
-                        "geometry_type": getattr(poly, "geom_type", None),
-                    },
-                )
-                raise ValueError(
-                    "Vector polygon extrusion failed; refusing partial model export"
-                ) from e
-
-        return meshes
 
     @staticmethod
     def _fix_coordinates(mesh, svg_height_mm):
