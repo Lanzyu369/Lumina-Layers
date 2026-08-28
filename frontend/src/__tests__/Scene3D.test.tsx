@@ -754,7 +754,7 @@ beforeEach(() => {
       expect(capturedKeychainRingProps).not.toBeNull();
     });
 
-    it("does not duplicate an embedded keychain on a generated model", () => {
+    it("keeps the lightweight preview and keychain proxy ahead of a stale store model", () => {
       useConverterStore.setState({
         modelUrl: "/api/files/generated-with-keychain.glb",
         previewGlbUrl: "/api/files/old-quick-preview.glb",
@@ -770,8 +770,11 @@ beforeEach(() => {
 
       render(<Scene3D />);
 
-      expect(capturedInteractiveViewerProps?.sourceRole).toBe("generated");
-      expect(capturedKeychainRingProps).toBeNull();
+      expect(capturedInteractiveViewerProps).toMatchObject({
+        url: "/api/files/old-quick-preview.glb",
+        sourceRole: "quick-preview",
+      });
+      expect(capturedKeychainRingProps).not.toBeNull();
     });
 
     it("preserves embedded auxiliaries in batch models", () => {
@@ -911,7 +914,7 @@ beforeEach(() => {
       expect(capturedInteractiveViewerProps).toBeNull();
     });
 
-    it("shows the generated model after model-surface generation returns a GLB", () => {
+    it("keeps the realtime model-surface editor ahead of a generated GLB", () => {
       const modelFile = new File(["solid"], "plate.stl");
       useConverterStore.setState({
         modelSurfaceEnabled: true,
@@ -925,12 +928,13 @@ beforeEach(() => {
 
       render(<Scene3D />);
 
-      expect(screen.queryByTestId("mock-model-surface-selector")).toBeNull();
-      expect(capturedModelSurfaceSelectorProps).toBeNull();
-      expect(capturedInteractiveViewerProps).toMatchObject({
-        url: "/api/files/generated-surface.glb",
-        sourceRole: "generated",
+      expect(screen.getByTestId("mock-model-surface-selector")).toBeInTheDocument();
+      expect(capturedModelSurfaceSelectorProps).toMatchObject({
+        file: modelFile,
+        artworkUrl: "blob:art",
+        selectionReady: true,
       });
+      expect(capturedInteractiveViewerProps).toBeNull();
     });
   });
 

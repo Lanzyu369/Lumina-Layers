@@ -872,9 +872,10 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const wittyMsg = useWittyMessage(2000, isLoading && enableWittyLoading);
 
   const storeModelUrl = useConverterStore((s) => s.modelUrl);
-  const effectiveModelUrl = modelUrl ?? storeModelUrl;
   const batchPreviewItems = useConverterStore((s) => s.batchPreviewItems);
   const previewGlbUrl = useConverterStore((s) => s.previewGlbUrl);
+  const effectiveModelUrl =
+    modelUrl ?? (previewGlbUrl ? null : storeModelUrl);
   const modelSurfaceEnabled = useConverterStore((s) => s.modelSurfaceEnabled);
   const modelSurfaceFile = useConverterStore((s) => s.modelSurfaceFile);
   const modelSurfacePreviewUrl = useConverterStore((s) => s.modelSurfacePreviewUrl);
@@ -942,7 +943,6 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const updateFridgeMagnetCenter = useConverterStore((s) => s.updateFridgeMagnetCenter);
   const showModelSurfaceSelector =
     modelSurfaceEnabled &&
-    !effectiveModelUrl &&
     Boolean(modelSurfacePreviewUrl) &&
     Boolean(modelSurfaceFile) &&
     batchPreviewItems.length === 0;
@@ -1460,10 +1460,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             />
           </Suspense>
         ) : null}
-        {batchPreviewItems.length === 0 &&
-          !effectiveModelUrl &&
-          addLoop &&
-          modelBounds && (
+        {batchPreviewItems.length === 0 && addLoop && modelBounds && (
           <KeychainRing3D
             enabled={addLoop}
             width={loopWidth}
