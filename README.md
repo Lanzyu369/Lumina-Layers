@@ -285,6 +285,9 @@ pip install -r requirements.txt
 ### Option 3: Desktop Client (Electron)
 
 ```bash
+# Required: the desktop shell starts the Python backend for you.
+pip install -r requirements.txt
+
 # bash/zsh
 cd frontend && pnpm install && cd ..
 cd electron && pnpm install && cd ..
@@ -293,12 +296,13 @@ cd electron && pnpm start
 
 ```powershell
 # Windows PowerShell 5.1 does not support "&&"; run line by line
+pip install -r requirements.txt
 cd frontend; pnpm install; cd ..
 cd electron; pnpm install; cd ..
 cd electron; pnpm start
 ```
 
-The desktop shell spawns the Python backend and the Vite dev server automatically — no separate launcher needed. For packaging the Windows installer and troubleshooting, see the [Desktop (Electron) guide](docs/desktop-electron.md).
+The desktop shell spawns the Python backend and the Vite dev server automatically — no separate launcher needed, but its Python dependencies above are still required. For packaging the Windows installer and troubleshooting, see the [Desktop (Electron) guide](docs/desktop-electron.md).
 
 ### Configuration
 

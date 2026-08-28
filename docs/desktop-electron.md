@@ -8,13 +8,13 @@
 |---|---|---|---|---|
 | 纯 Web | `python start_all.py` | 本机 Python 直跑 | Vite 开发服务器 | 日常开发、浏览器调试 |
 | 桌面开发版 | `cd electron && pnpm start` | 主进程自动 spawn `python api_server.py` | 主进程自动 spawn Vite | 带原生窗口的开发调试 |
-| 桌面安装版 | `python scripts/build_desktop.py` 产出 NSIS 安装包 | PyInstaller 打包的 `lumina-backend.exe` | Vite 构建产物（本地文件加载） | 分发给最终用户 |
+| 桌面安装版 | `python scripts/build_desktop.py --workshop-seed-path <官方 seed>` 产出 NSIS 安装包 | PyInstaller 打包的 `lumina-backend.exe` | Vite 构建产物（本地文件加载） | 分发给最终用户 |
 
 桌面开发版不需要先手动跑 `start_all.py`：Electron 主进程就是总指挥，会自己拉起并看管后端和前端子进程。
 
 ## 2. 环境准备（一次性）
 
-按顺序执行以下四步；任何一步缺了，客户端都会在启动链路的对应环节失败。
+按顺序执行以下四步；打包安装版时还需要第 5 步。任何一步缺了，客户端都会在启动链路或构建链路的对应环节失败。
 
 ```powershell
 # 1) 后端 Python 依赖（建议较新的 Python 3.x；CI 基准为 3.12，3.14 亦验证可用）
@@ -32,6 +32,10 @@ cd frontend; corepack pnpm install; cd ..
 
 # 4) Electron 依赖（postinstall 会下载约 200MB 的 electron.exe 二进制）
 cd electron; corepack pnpm install; cd ..
+
+# 5) 仅打 Windows 安装包需要的 Python 构建工具
+#    PyInstaller 不包含在 requirements.txt，避免给普通 Web/桌面开发用户增加依赖。
+pip install pyinstaller
 ```
 
 **为什么不能合并成一个根目录 workspace**：2026-08 曾做过根目录 pnpm workspace 实验，因破坏 Docker 构建、与"各目录独立安装"的既有约定冲突而放弃。上游采用的方案是在各子目录内分别声明安装脚本白名单：`frontend/` 用 `pnpm-workspace.yaml` 的 `allowBuilds`，`electron/` 用其 `package.json` 的 `pnpm.onlyBuiltDependencies`（如 esbuild、electron）。保持现状即可。
@@ -45,7 +49,7 @@ pnpm start        # 或 corepack pnpm start
 
 主进程（`main.cjs`）的启动顺序，理解它有助于排查问题：
 
-1. **清理端口**：强杀占用 8000（后端）和 4174（前端）的残留进程——所以不要指望同时跑一个独立 Web 会话再开桌面版，后者会把前者杀掉；
+1. **清理端口**：Windows 用 `taskkill` 强制终止、macOS/Linux 用 `SIGTERM` 清理占用 8000（后端）和 4174（前端）的残留进程——所以不要指望同时跑一个独立 Web 会话再开桌面版，后者会终止前者；
 2. **拉起后端**：spawn `python api_server.py`，轮询 `/api/health`（超时后弹错误框退出）；
 3. **拉起前端**：spawn `node frontend/node_modules/vite/bin/vite.js`，等 4174 端口就绪；
 4. **开窗**：加载 `http://127.0.0.1:4174`，加载失败每 2 秒自动重试；期间显示 splash 过渡窗口。
@@ -54,15 +58,27 @@ pnpm start        # 或 corepack pnpm start
 
 ## 4. 打生产安装包
 
+此流程只产出 Windows NSIS 安装包。发布构建必须提供已经校验过的官方 `.lumina-workshop` seed；脚本不会在缺少它时悄悄产出不完整的发布包。
+
 ```powershell
-python scripts/build_desktop.py
+# 发布包：显式传入官方 Workshop seed
+$workshopSeed = "C:\path\to\official.lumina-workshop"
+python scripts/build_desktop.py --workshop-seed-path $workshopSeed
 ```
 
-脚本串联三步：Vite 构建前端 → PyInstaller 按 `lumina_studio.spec` 打后端 → electron-builder 出 NSIS 安装器。产物在 `electron/dist_electron/Lumina Studio Setup x.y.z.exe`。注意打包机必须先完成第 2 节的环境准备。
+也可设置 `WORKSHOP_SEED_PATH` 环境变量后执行同一命令。仅供本地开发验证、且明确接受不含官方 Workshop seed 的安装包时，使用：
+
+```powershell
+python scripts/build_desktop.py --allow-missing-workshop-seed
+```
+
+不要分发用 `--allow-missing-workshop-seed` 生成的安装包。脚本会依次构建 Vite 前端、PyInstaller 后端和 electron-builder 的 NSIS 安装器。产物在 `electron/dist_electron/Lumina Studio Setup x.y.z.exe`。注意打包机必须先完成第 2 节的环境准备（包括 `pyinstaller`）。
 
 ## 5. 日志与排障
 
-日志位置（dev 与打包版相同）：以 Electron `app.getPath("logs")` 为准，文件名为 `lumina-electron.log`（主进程和两个子进程的输出都汇到这里；后端自身的结构化日志仍在 `<repo>/logs/` 下）。Windows 示例：`%APPDATA%\lumina-electron\logs\lumina-electron.log`；macOS 示例：`~/Library/Logs/lumina-electron/lumina-electron.log`；Linux 遵循 XDG 规范。
+Electron 日志（开发版与打包版都适用）以 `app.getPath("logs")` 为准，文件名为 `lumina-electron.log`；主进程及两个子进程的 stdout/stderr 都会汇入这里。Windows 示例：`%APPDATA%\lumina-electron\logs\lumina-electron.log`；macOS 示例：`~/Library/Logs/lumina-electron/lumina-electron.log`；Linux 遵循 XDG 规范。
+
+开发版后端的结构化 JSON Lines 日志默认在 `<repo>/logs/`。打包版没有仓库目录，且当前 one-file PyInstaller 后端没有单独的稳定结构化日志落点；排障时请以 `lumina-electron.log` 为准，不要尝试在安装目录或 `<repo>/logs/` 查找它。
 
 | 症状 | 原因 | 处理 |
 |---|---|---|
@@ -71,6 +87,8 @@ python scripts/build_desktop.py
 | `pnpm` 无法识别 | 未全局启用 corepack | 用 `corepack pnpm ...` 替代，或管理员执行 `corepack enable` |
 | 窗口白屏且日志反复 retry | Vite 未就绪或被杀 | 看 4174 是否被无关进程占用；确认没和其他工具抢端口 |
 | 首次启动特别慢 | electron 二进制下载 + Vite 冷启动 | 正常现象，仅首次 |
+| 打包时报 Workshop seed required | 未提供官方 Workshop seed | 发布包传 `--workshop-seed-path <路径>`；仅本地开发验证才用 `--allow-missing-workshop-seed` |
+| 打包时报 `pyinstaller` 无法识别 | 未安装打包工具 | 执行 `pip install pyinstaller` 后重试 |
 
 应急清场（等价于主进程的开场动作）：
 
