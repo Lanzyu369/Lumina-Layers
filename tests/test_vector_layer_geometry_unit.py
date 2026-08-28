@@ -359,7 +359,9 @@ def test_stepped_arrangement_rejects_exact_float32_degenerate_face(
         )
 
 
-def test_zero_area_ear_uses_constrained_cap_triangulation() -> None:
+def test_zero_area_ear_uses_constrained_cap_triangulation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     geometry = Polygon(
         [
             (1.6296, 152.8639),
@@ -374,16 +376,17 @@ def test_zero_area_ear_uses_constrained_cap_triangulation() -> None:
     )
     vertices_2d = np.vstack(rings).astype(np.float64) * 0.0001
     ring_ends = np.cumsum([len(ring) for ring in rings], dtype=np.uint32)
-    earcut_faces = np.asarray(
-        vector_layer_geometry.triangulate_float64(vertices_2d, ring_ends),
-        dtype=np.int64,
-    ).reshape((-1, 3))
-    earcut_triangles = vertices_2d[earcut_faces]
-    earcut_twice_area = (
-        (earcut_triangles[:, 1, 0] - earcut_triangles[:, 0, 0])
-        * (earcut_triangles[:, 2, 1] - earcut_triangles[:, 0, 1])
-        - (earcut_triangles[:, 1, 1] - earcut_triangles[:, 0, 1])
-        * (earcut_triangles[:, 2, 0] - earcut_triangles[:, 0, 0])
+    earcut_calls = 0
+
+    def index_degenerate_earcut(_vertices, _ring_ends):
+        nonlocal earcut_calls
+        earcut_calls += 1
+        return np.asarray([0, 0, 1], dtype=np.uint32)
+
+    monkeypatch.setattr(
+        vector_layer_geometry,
+        "triangulate_float64",
+        index_degenerate_earcut,
     )
     raw_faces = vector_layer_geometry._canonical_cap_faces(
         prepared,
@@ -404,7 +407,12 @@ def test_zero_area_ear_uses_constrained_cap_triangulation() -> None:
         expected_area_mm2=geometry.area,
     )
 
-    assert np.any(earcut_twice_area == 0.0)
+    assert earcut_calls == 1
+    assert not np.any(
+        (raw_faces[:, 0] == raw_faces[:, 1])
+        | (raw_faces[:, 1] == raw_faces[:, 2])
+        | (raw_faces[:, 2] == raw_faces[:, 0])
+    )
     assert len(np.asarray(raw_faces).reshape((-1, 3))) == 2
     assert len(cap_faces) == 2
 
