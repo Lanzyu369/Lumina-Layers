@@ -67,17 +67,16 @@ The current quick-preview renderer remains responsible for live visual changes:
 - outline and cloisonne proxy geometry;
 - keychain and fridge-magnet helpers;
 - puzzle cut-line overlays;
-- coating and other existing preview-only visual layers.
+- the existing lightweight base presentation while coating is enabled.
 
 These changes must not wait for Generate and must not rebuild a print mesh.
 Where the existing preview request already refreshes the segmented asset, the
 300 ms auto-preview debounce and stale-request rejection remain intact.
 
-Heightmap relief may use a bounded-resolution preview surface if the segmented
-mesh cannot express per-pixel displacement. Such a surface is a preview-only
-asset with an explicit vertex/face budget; it must not reuse or expose the exact
-print mesh. This is the only new lightweight surface builder in scope if tests
-show the existing heightmap preview cannot meet the contract.
+Heightmap upload already derives a per-colour average `color_height_map` that
+the lightweight viewer applies in real time. Keep that bounded approximation in
+the browser; per-pixel heightmap geometry remains exact only inside the 3MF.
+This PR does not add a second heightmap mesh builder.
 
 ### 3. Keep model-surface preview unchanged
 
@@ -158,8 +157,8 @@ Automated coverage must prove:
    without duplicate registration or export, while the exact 3MF remains
    unchanged.
 7. Ordinary raster and heightmap paths do not fall back to a print-exact browser
-   GLB. If heightmap needs a separate preview surface, its complexity is capped
-   and tested.
+   GLB. Heightmap continues to use its existing per-colour lightweight height
+   approximation in the viewer.
 8. Preview cleanup and final-download TTL behavior remain correct when the
    source session is closed or switched during work.
 
