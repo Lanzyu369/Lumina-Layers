@@ -402,13 +402,18 @@ Compare ZIP entries, CRCs, `3D/Objects/object_1.model`, project/slice metadata,
 material slots, and object/triangle counts. Only local source path/timestamp
 text may differ. Escalate to Bambu/Orca only if print payloads differ.
 
-- [ ] **Step 6: Run independent review**
+- [x] **Step 6: Run independent review**
 
 Provide base `cb736342e2d1aed382b98e45e36e44ac1287a3eb`, final head, design,
 plan, and the lightweight-only requirement. Fix every Critical and Important
 finding and re-run affected tests.
 
-- [ ] **Step 7: Final hygiene and push**
+Independent review returned `valid_fix` at `e6f0872e`: no Critical, Important,
+or remaining Minor findings. The one initial Minor (an unexpected worker GLB
+could survive a missing-3MF failure) was fixed with paired cleanup/preservation
+tests and re-reviewed.
+
+- [x] **Step 7: Final hygiene and prepare push**
 
 ```bash
 git diff --check
@@ -417,11 +422,16 @@ python3 start_all.py --kill
 ```
 
 Confirm no backend, Vite, Vitest, esbuild, or worktree-owned Node process
-remains. Update the old plan status and PR #586 body, commit docs, and push
-`MOVIBALE/fix/native-vector-preview-asset-reuse` normally. Do not force push,
+remains. Update the old plan status and PR #586 body and commit docs. The
+ordinary push is performed as the delivery action in Step 8. Do not force push,
 merge, or enable auto-merge.
 
-- [ ] **Step 8: Report exact delivery evidence**
+- [ ] **Step 8: Push and report exact delivery evidence**
 
 Report final head, PR URL, exact test counts, R4C1 URLs/sizes/timing/memory, 3MF
 comparison, independent review outcome, CI state, and remaining limitations.
+
+Final local verification before delivery: focused backend `413 passed`;
+focused frontend `228 passed`; logging/Vector governance `88 passed, 1 skipped`;
+smoke backend `159 passed` and frontend `163 passed`; lint `0 errors` with 68
+pre-existing warnings; production build and fast log-quality gate passed.
