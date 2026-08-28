@@ -340,76 +340,6 @@ function isSvgFile(file: File): boolean {
   );
 }
 
-function sortedRecordEntries(
-  value: Record<string, unknown>,
-): Array<[string, unknown]> {
-  return Object.entries(value).sort(([left], [right]) =>
-    left.localeCompare(right),
-  );
-}
-
-function fileEditIdentity(file: File | null): object | null {
-  return file
-    ? {
-        name: file.name,
-        size: file.size,
-        type: file.type,
-        last_modified: file.lastModified,
-      }
-    : null;
-}
-
-function captureGeneratedGeometryPreviewIdentity(
-  state: ConverterState,
-): string {
-  return JSON.stringify({
-    modeling_mode: state.modeling_mode,
-    target_width_mm: state.target_width_mm,
-    target_height_mm: state.target_height_mm,
-    spacer_thick: state.spacer_thick,
-    backing_infill_density_percent: state.backing_infill_density_percent,
-    structure_mode: state.structure_mode,
-    separate_backing: state.separate_backing,
-    color_layers: state.color_layers,
-    layer_height_mm: state.layer_height_mm,
-    high_precision_3d_preview: state.high_precision_3d_preview,
-    add_loop: state.add_loop,
-    loop_width: state.loop_width,
-    loop_length: state.loop_length,
-    loop_hole: state.loop_hole,
-    loop_angle: state.loop_angle,
-    loop_offset_x: state.loop_offset_x,
-    loop_offset_y: state.loop_offset_y,
-    loop_position_preset: state.loop_position_preset,
-    enable_relief: state.enable_relief,
-    auto_height_mode: state.autoHeightMode,
-    color_height_map: sortedRecordEntries(state.color_height_map),
-    heightmap_max_height: state.heightmap_max_height,
-    heightmap_file: fileEditIdentity(state.heightmapFile),
-    heightmap_upload_session_id: state.heightmapUploadSessionId,
-    enable_outline: state.enable_outline,
-    outline_width: state.outline_width,
-    enable_cloisonne: state.enable_cloisonne,
-    wire_width_mm: state.wire_width_mm,
-    wire_height_mm: state.wire_height_mm,
-    enable_coating: state.enable_coating,
-    coating_height_mm: state.coating_height_mm,
-    enable_fridge_magnet: state.enable_fridge_magnet,
-    fridge_magnets: state.fridge_magnets,
-    replacement_regions: state.replacement_regions,
-    recipe_overrides: state.recipe_overrides,
-    free_color_set: Array.from(state.free_color_set).sort(),
-    color_remap_map: sortedRecordEntries(state.colorRemapMap),
-    model_surface_enabled: state.modelSurfaceEnabled,
-    model_surface_file_id: state.modelSurfaceModelFileId,
-    model_surface_selection_id: state.modelSurfaceSelectionId,
-    model_surface_selection: state.modelSurfaceSelection,
-    model_surface_footprint: state.modelSurfaceFootprint,
-    model_surface_placement: state.modelSurfacePlacement,
-    model_surface_rotation: state.modelSurfaceModelRotation,
-  });
-}
-
 // ========== Selection Mode Types ==========
 
 export type SelectionMode =
@@ -8376,7 +8306,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         return null;
       }
       const sessionId = state.sessionId;
-      const glbPollSequenceAtGenerateStart = _glbPollSequence;
       const sourceSelection = resolveConverterSourceSelection(state);
       if (!sourceSelection.isReady) {
         set({
@@ -8424,8 +8353,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         generateSettings.deviceProfileId,
         generateSettings.buildPlateId,
       );
-      const generatedGeometryPreviewIdentity =
-        captureGeneratedGeometryPreviewIdentity(state);
       set({
         isGenerating: true,
         error: null,
@@ -8772,66 +8699,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           download_url: response.download_url ?? null,
           has_legacy_threemf_disk_path: Boolean(response.threemf_disk_path),
         });
-        const modelUrl = normalizeStoreResourceUrl(response.preview_3d_url);
+        const responseModelUrl = normalizeStoreResourceUrl(
+          response.preview_3d_url,
+        );
         const downloadUrl = normalizeStoreResourceUrl(response.download_url);
-        const latestState = useConverterStore.getState();
-        const requestedGeneratedGeometryModel =
-          state.enable_relief ||
-          state.enable_coating ||
-          state.add_loop ||
-          state.enable_fridge_magnet ||
-          state.enable_outline ||
-          state.enable_cloisonne ||
-          state.modelSurfaceEnabled;
-        const generatedGeometryPreviewIdentityIsCurrent =
-          captureGeneratedGeometryPreviewIdentity(latestState) ===
-          generatedGeometryPreviewIdentity;
-        const shouldShowGeneratedGeometryModel =
-          requestedGeneratedGeometryModel &&
-          generatedGeometryPreviewIdentityIsCurrent &&
-          _glbPollSequence === glbPollSequenceAtGenerateStart;
-        const shouldWaitForSegmentedVectorPreview =
-          !requestedGeneratedGeometryModel &&
-          state.modeling_mode === ModelingModeEnum.VECTOR &&
-          state.imageFile !== null &&
-          isSvgFile(state.imageFile) &&
-          latestState.modeling_mode === ModelingModeEnum.VECTOR &&
-          latestState.imageFile === state.imageFile &&
-          !latestState.enable_relief &&
-          !latestState.enable_coating &&
-          !latestState.modelSurfaceEnabled;
-        if (shouldShowGeneratedGeometryModel) {
-          // A generated surface owns modelUrl. Cancel preview polls that
-          // started before it; any later preview explicitly requested by the
-          // user may replace it.
-          _glbPollSequence += 1;
-        }
-        const selectedGeneratedModelUrl = shouldShowGeneratedGeometryModel
-          ? modelUrl
-          : !generatedGeometryPreviewIdentityIsCurrent ||
-              requestedGeneratedGeometryModel ||
-              shouldWaitForSegmentedVectorPreview ||
-              latestState.previewGlbUrl
-            ? null
-            : modelUrl;
         set({
           isGenerating: false,
-          // Keep previewGlbUrl as the 3D viewer source: it renders the
-          // pixel-level colour-mixed preview. The generate GLB contains the
-          // exact per-material geometry used for 3MF export which looks like
-          // solid single-colour blocks and confuses users. Only fall back to
-          // modelUrl when no preview GLB exists (e.g. raster flow). A planar
-          // native SVG waits for its segmented preview even while generate is
-          // running, so the browser never downloads the print-exact GLB.
-          // Advanced geometry that the segmented preview does not express
-          // remains owned by the generated model.
-          // 保留 previewGlbUrl 作为 3D 预览源：它渲染像素级混色预览。
-          // generate GLB 是 3MF 导出用的精确分材料几何，看起来是纯色块。
-          // 普通 SVG 等待 segmented GLB；高级几何仍由生成模型接管。
-          modelUrl: selectedGeneratedModelUrl,
-          ...(shouldShowGeneratedGeometryModel
-            ? { previewGlbUrl: null }
-            : {}),
+          // Generate owns the exact downloadable 3MF only. Browser geometry
+          // remains preview-owned so async lightweight polling and real-time
+          // Three.js helpers continue without a print-scene GLB takeover.
+          // Generate 只拥有精确 3MF 下载；浏览器几何继续由轻量预览负责。
+          modelUrl: null,
           batchPreviewItems: [],
           downloadUrl,
           threemfDiskPath: null,
@@ -8839,12 +8717,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           generateWarnings: response.warnings ?? [],
           largeFormatWarnings: [],
         });
-        _logGenerateTimer("UI unlocked (isGenerating=false, modelUrl set)");
+        _logGenerateTimer("UI unlocked (isGenerating=false, 3MF set)");
         _clientLog("generate: UI unlocked", {
-          response_model_url: modelUrl,
-          selected_model_url: selectedGeneratedModelUrl,
-          awaiting_segmented_vector_preview:
-            shouldWaitForSegmentedVectorPreview,
+          response_model_url: responseModelUrl,
+          selected_model_url: null,
           download_url: downloadUrl,
           has_legacy_threemf_disk_path: Boolean(response.threemf_disk_path),
           warning_count: (response.warnings ?? []).length,
@@ -8861,7 +8737,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           warning_count: (response.warnings ?? []).length,
         });
         notifyCompletion("generation");
-        return modelUrl;
+        return null;
       } catch (err) {
         if (shouldIgnoreStaleGenerateResponse()) {
           return null;

@@ -427,7 +427,7 @@ describe("native bundle converter flow", () => {
     expect(state.sessionId).toBe("session-fresh");
     expect(state.downloadUrl).toBe("/api/files/fresh.3mf");
     expect(state.threemfDiskPath).toBeNull();
-    expect(state.modelUrl).toBe("/api/files/fresh.glb");
+    expect(state.modelUrl).toBeNull();
     expect(state.isGenerating).toBe(false);
     expect(state.error).toBeNull();
   });
@@ -784,7 +784,7 @@ describe("native bundle converter flow", () => {
     const state = useConverterStore.getState();
     expect(state.downloadUrl).toBe("/api/files/second.3mf");
     expect(state.threemfDiskPath).toBeNull();
-    expect(state.modelUrl).toBe("/api/files/second.glb");
+    expect(state.modelUrl).toBeNull();
     expect(state.error).toBeNull();
   });
 
@@ -1953,7 +1953,7 @@ describe("native bundle converter flow", () => {
     ]);
   });
 
-  it("lets an ordinary raster use generated GLB until async preview arrives", async () => {
+  it("keeps an ordinary raster on lightweight preview state until async GLB arrives", async () => {
     vi.useFakeTimers();
     try {
       mocks.convertPreview.mockResolvedValueOnce({
@@ -2002,9 +2002,8 @@ describe("native bundle converter flow", () => {
       await useConverterStore.getState().submitPreview();
       await useConverterStore.getState().submitGenerate();
 
-      expect(useConverterStore.getState().modelUrl).toBe(
-        "/api/files/generated-material-model.glb",
-      );
+      expect(useConverterStore.getState().modelUrl).toBeNull();
+      expect(useConverterStore.getState().previewGlbUrl).toBeNull();
 
       await flushGlbPoll();
       await flushGlbPoll(0);
@@ -2224,7 +2223,7 @@ describe("native bundle converter flow", () => {
   ];
 
   it.each(generatedVectorGeometryCases)(
-    "keeps generated %s geometry authoritative",
+    "keeps the lightweight preview authoritative for %s",
     async (_label, overrides) => {
       mocks.convertGenerate.mockResolvedValueOnce({
         status: "ok",
@@ -2243,15 +2242,15 @@ describe("native bundle converter flow", () => {
 
       await useConverterStore.getState().submitGenerate();
 
-      expect(useConverterStore.getState().modelUrl).toBe(
-        "/api/files/generated-surface.glb",
+      expect(useConverterStore.getState().modelUrl).toBeNull();
+      expect(useConverterStore.getState().previewGlbUrl).toBe(
+        "/api/files/flat-preview.glb",
       );
-      expect(useConverterStore.getState().previewGlbUrl).toBeNull();
     },
   );
 
   it.each(generatedVectorGeometryCases)(
-    "hides the flat preview when generated %s GLB is unavailable",
+    "keeps the lightweight %s preview when Generate returns no GLB",
     async (_label, overrides) => {
       mocks.convertGenerate.mockResolvedValueOnce({
         status: "ok",
@@ -2271,7 +2270,9 @@ describe("native bundle converter flow", () => {
       await useConverterStore.getState().submitGenerate();
 
       expect(useConverterStore.getState().modelUrl).toBeNull();
-      expect(useConverterStore.getState().previewGlbUrl).toBeNull();
+      expect(useConverterStore.getState().previewGlbUrl).toBe(
+        "/api/files/flat-preview.glb",
+      );
     },
   );
 
@@ -2383,7 +2384,7 @@ describe("native bundle converter flow", () => {
     },
   );
 
-  it("clears a normal generated GLB after switching to heightmap before polling completes", async () => {
+  it("keeps generated GLBs out of state while switching to heightmap", async () => {
     vi.useFakeTimers();
     try {
       mocks.getGlbStatus.mockResolvedValueOnce({
@@ -2405,9 +2406,7 @@ describe("native bundle converter flow", () => {
       useConverterStore.getState()._pollAsyncGlb();
       await useConverterStore.getState().submitGenerate();
 
-      expect(useConverterStore.getState().modelUrl).toBe(
-        "/api/files/generated-normal.glb",
-      );
+      expect(useConverterStore.getState().modelUrl).toBeNull();
 
       useConverterStore.getState().setEnableRelief(true);
       useConverterStore.getState().setAutoHeightMode("use-heightmap");
@@ -2423,7 +2422,7 @@ describe("native bundle converter flow", () => {
     }
   });
 
-  it("keeps a generated heightmap GLB by cancelling an older preview poll", async () => {
+  it("keeps polling the lightweight heightmap approximation after Generate", async () => {
     vi.useFakeTimers();
     try {
       mocks.getGlbStatus.mockResolvedValueOnce({
@@ -2453,18 +2452,18 @@ describe("native bundle converter flow", () => {
       expect(mocks.convertGenerate.mock.calls[0]?.[1]).toMatchObject({
         height_mode: "heightmap",
       });
-      expect(useConverterStore.getState().modelUrl).toBe(
-        "/api/files/generated-heightmap.glb",
-      );
+      expect(useConverterStore.getState().modelUrl).toBeNull();
 
       await flushGlbPoll();
       await flushGlbPoll(0);
 
-      expect(mocks.getGlbStatus).not.toHaveBeenCalled();
-      expect(useConverterStore.getState().previewGlbUrl).toBeNull();
-      expect(useConverterStore.getState().modelUrl).toBe(
-        "/api/files/generated-heightmap.glb",
+      expect(mocks.getGlbStatus).toHaveBeenCalledWith(
+        "session-heightmap-async",
       );
+      expect(useConverterStore.getState().previewGlbUrl).toBe(
+        "/api/files/flat-preview.glb",
+      );
+      expect(useConverterStore.getState().modelUrl).toBeNull();
     } finally {
       vi.useRealTimers();
     }
@@ -2633,7 +2632,7 @@ describe("native bundle converter flow", () => {
       target_width_mm: 90,
     });
     expect(params).not.toHaveProperty("lut_name");
-    expect(result).toBe("/api/files/native-model.glb");
+    expect(result).toBeNull();
     expect(useConverterStore.getState().downloadUrl).toBe("/api/files/native-model");
     expect(mocks.showBrowserCompletionNotification).not.toHaveBeenCalled();
   });
