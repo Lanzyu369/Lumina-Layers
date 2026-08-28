@@ -243,7 +243,9 @@ git commit -m "fix(vector): reuse lightweight preview across live settings"
 - Modify: `tests/test_pipeline_step_modules_unit.py`
 - Modify: `tests/test_model_surface_generate_unit.py`
 - Modify: `tests/test_converter_generate_unit.py`
+- Modify: `tests/test_converter_vector_export_unit.py`
 - Modify: `core/pipeline/s11_glb_preview.py`
+- Modify: `core/pipeline/vector_branch.py`
 - Modify: `api/workers/converter_workers.py`
 - Modify: `api/routers/converter/generate.py`
 
@@ -272,6 +274,10 @@ registered, `preview_3d_url is None`, the GLB is not registered, and its temp
 file is removed. The separate existing-path reuse case still returns the
 already registered lightweight preview URL.
 
+For native Vector, assert a missing or invalid `preview_glb_path` still returns
+the completed 3MF but `glb_path is None`, and the print-scene GLB exporter is
+never called.
+
 - [x] **Step 2: Run and verify RED**
 
 ```bash
@@ -297,6 +303,11 @@ Delete `_export_optional_model_surface_preview_glb()` and return
 `"glb_path": None` after model-surface 3MF completion. Remove only now-dead GLB
 log fields/events; retain typed failures and 3MF behavior.
 
+In the native Vector branch, reuse an already validated lightweight path when
+provided, but remove the fallback that serializes the exact print scene when
+the path is missing or stale. The async preview pipeline remains responsible
+for creating/rebuilding lightweight GLBs.
+
 - [x] **Step 4: Publish only proven reused preview URLs**
 
 Keep `glb_reuses_preview_path` and its current-session/FileRegistry
@@ -307,20 +318,27 @@ schema compatibility.
 
 - [x] **Step 5: Run Step 2 tests and verify GREEN**
 
-Expected: no print scene is exported, reused registration stays singular, and
-new worker GLBs are cleaned without invalidating the 3MF.
+Expected: no raster, model-surface, or native Vector print scene is exported as
+a GLB; reused registration stays singular, and unexpected worker GLBs are
+cleaned without invalidating the 3MF.
 
 - [x] **Step 6: Commit**
 
 ```bash
 git add core/pipeline/s11_glb_preview.py \
+  core/pipeline/vector_branch.py \
   api/workers/converter_workers.py \
   api/routers/converter/generate.py \
   tests/test_pipeline_step_modules_unit.py \
   tests/test_model_surface_generate_unit.py \
+  tests/test_converter_vector_export_unit.py \
   tests/test_converter_generate_unit.py
 git commit -m "fix(generate): keep print geometry out of browser GLBs"
 ```
+
+The native Vector fallback was additionally locked down in the follow-up
+commit `fix(vector): skip print-scene preview fallback` after static review
+found that an invalid reuse path still performed a discarded exact-GLB export.
 
 ### Task 5: Verify lifecycle, R4C1, and PR delivery
 

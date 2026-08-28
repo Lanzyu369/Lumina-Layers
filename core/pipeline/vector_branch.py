@@ -15,7 +15,7 @@ structured-logging event names.
 Public callables (re-exported by ``coordinator`` for backward compatibility):
 \u516c\u5171\u8c03\u7528\u70b9\uff08``coordinator`` \u91cd\u5bfc\u51fa\u4ee5\u4fdd\u8bc1\u5411\u540e\u517c\u5bb9\uff09\uff1a
 
-- ``_run_vector_branch(ctx) -> dict``: SVG \u2192 3MF/GLB/2D \u9884\u89c8 \u5b8c\u6574\u8f6c\u6362\u5206\u652f\u3002
+- ``_run_vector_branch(ctx) -> dict``: SVG \u2192 3MF/2D + reusable lightweight GLB reference.
 - ``_run_vector_preview_branch(ctx) -> dict``: SVG \u9884\u89c8\u7f13\u5b58\u6784\u5efa\u3002
 - ``_update_bambu_base_layer_ctx_for_vector(...)``: Bambu \u5e95\u677f\u53ec\u552e\u5c01\u88c5\u3002
 - ``_log_vector_timings(...)``: \u8ba1\u65f6\u660e\u7ec6\u8f93\u51fa\u3002
@@ -28,7 +28,6 @@ import math
 import os
 import time
 from copy import deepcopy
-from types import SimpleNamespace
 
 import cv2  # noqa: F401  -- imported for side-effect parity with coordinator
 import numpy as np
@@ -45,7 +44,7 @@ from core.errors import (
     VectorTopologyError,
 )
 from core.geometry_utils import create_keychain_loop
-from core.pipeline import p06_bed_rendering, s09_export_3mf, vector_glb_preview
+from core.pipeline import p06_bed_rendering, s09_export_3mf
 from core.pipeline.pipeline_utils import extract_color_palette
 from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
 from core.pipeline.s08_auxiliary_meshes import (
@@ -206,68 +205,6 @@ def _shape_recipe0_histogram(matched_shapes: list) -> dict:
         "recipe0_by_shape_count": by_shape,
         "recipe0_by_area": by_area_rounded,
     }
-
-
-def _make_vector_glb_preview_scene(
-    scene,
-    *,
-    structure_mode: object,
-    color_mode: object,
-    enable_relief: bool = False,
-):
-    """Return a display-oriented copy of a vector scene for GLB previews.
-
-    Flat single-sided 4-color vector exports place the backing above the color
-    layers for print assembly. The app preview is a display surface, so it
-    mirrors only that flat GLB source scene and keeps relief scenes unchanged.
-
-    单面 4 色矢量导出的打印 scene 会把底板放在颜色层上方；应用内 3D 预览是
-    展示面，因此只镜像 GLB 的输入 scene，不改变 3MF 导出的原始几何。
-    """
-
-    if enable_relief:
-        return scene
-
-    structure_value = str(structure_mode or "")
-    color_mode_value = str(color_mode or "")
-    is_single_sided = "单面" in structure_value or "Single" in structure_value
-    if not is_single_sided or "5-Color Extended" in color_mode_value:
-        return scene
-
-    try:
-        bounds = scene.bounds
-        z_min = float(bounds[0][2])
-        z_max = float(bounds[1][2])
-    except (AttributeError, IndexError, TypeError, ValueError):
-        return scene
-    if not np.isfinite(z_min) or not np.isfinite(z_max) or z_max <= z_min:
-        return scene
-
-    from core.vector_engine import _enforce_vector_scene_export_headroom
-
-    _enforce_vector_scene_export_headroom(
-        scene,
-        stage="vector_glb_preview_copy",
-        # This guard covers only the display-orientation copy. The exporter
-        # performs a second live-RSS check for chunking and GLB packing.
-        workspace_multiplier=2.0,
-        minimum_workspace_bytes=16 * 1024 * 1024,
-    )
-
-    import trimesh as _trimesh
-
-    preview_scene = _trimesh.Scene()
-    mirror_z = np.eye(4)
-    mirror_z[2, 2] = -1.0
-    mirror_z[2, 3] = z_min + z_max
-    for geom_name, source_geom in scene.geometry.items():
-        try:
-            geom = source_geom.copy()
-            geom.apply_transform(mirror_z)
-        except COORDINATOR_HANDLED_ERRORS:
-            geom = source_geom
-        preview_scene.add_geometry(geom, geom_name=geom_name)
-    return preview_scene
 
 
 def _per_layer_channel_histogram(material_matrix: object, mask_solid: object | None) -> dict:
@@ -2121,7 +2058,7 @@ def _run_vector_branch(ctx: dict) -> dict:
 
     \u5f53 S01 \u68c0\u6d4b\u5230 ``is_svg_vector=True`` \u65f6\u7531 ``run_raster_pipeline``
     \u8c03\u7528\u3002\u4f7f\u7528 ``core.vector_engine.VectorProcessor`` \u5b8c\u6210 SVG \u2192 3D
-    \u8f6c\u6362\uff0c\u5305\u62ec 3MF \u5bfc\u51fa\u3001GLB \u9884\u89c8\u548c 2D \u9884\u89c8\u751f\u6210\u3002
+    \u8f6c\u6362\uff0c\u5305\u62ec 3MF \u5bfc\u51fa\u3001\u8f7b\u91cf GLB \u5f15\u7528\u590d\u7528\u548c 2D \u9884\u89c8\u751f\u6210\u3002
 
     Args:
         ctx: \u7ecf\u8fc7 S01 \u9a8c\u8bc1\u540e\u7684 PipelineContext \u5b57\u5178
@@ -2132,9 +2069,8 @@ def _run_vector_branch(ctx: dict) -> dict:
     from config import (  # noqa: F401  -- ColorSystem kept for parity
         ColorSystem,
         MODELS_DIR,
-        OUTPUT_DIR,
     )
-    from core.naming import generate_model_filename, generate_preview_filename
+    from core.naming import generate_model_filename
     from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
     from utils import Stats
 
@@ -2807,20 +2743,10 @@ def _run_vector_branch(ctx: dict) -> dict:
         skip_heavy_preview = (
             os.getenv("LUMINA_VECTOR_SKIP_2D_PREVIEW", "0") == "1"
         )
-        analysis_for_glb = analysis
         if skip_heavy_preview or not need_2d_preview:
-            # GLB only needs the canvas anchor once mesh/outline work is done.
-            # Retaining the complete parse/match graph until GLB export makes
-            # its temporary meshes overlap with thousands of source shapes.
-            # 不需要 2D 预览时只保留 GLB 画布锚点，提前释放完整分析图。
-            analysis_for_glb = SimpleNamespace(
-                image_vectorizer_bounds=getattr(
-                    analysis,
-                    "image_vectorizer_bounds",
-                    None,
-                ),
-                scale_factor=getattr(analysis, "scale_factor", 1.0),
-            )
+            # Generate no longer builds a print-scene GLB. Release the parse
+            # graph as soon as neither caller nor the 2D preview needs it.
+            # generate 不再构建打印 scene GLB；不需要 2D 预览时立即释放分析图。
             analysis = None
         vec_processor = None
 
@@ -3028,8 +2954,9 @@ def _run_vector_branch(ctx: dict) -> dict:
                 ctx.get("printer_id", "bambu-h2d"),
             )
 
-        # 3. GLB preview
-        _report_progress(ctx, 0.82, "\u751f\u6210 3D \u9884\u89c8\u4e2d... | Generating 3D preview...")
+        # 3. Reuse an already validated lightweight GLB when available.
+        # Generate must never turn the exact print scene into a browser asset.
+        _report_progress(ctx, 0.82, "\u5b8c\u6210\u751f\u6210\u4e2d... | Finalizing generation...")
         glb_path = None
         glb_t0 = time.perf_counter()
         reusable_glb_path = ctx.get("preview_glb_path")
@@ -3045,61 +2972,6 @@ def _run_vector_branch(ctx: dict) -> dict:
                     "path": str(glb_path),
                 },
             )
-        else:
-            try:
-                glb_path = os.path.join(
-                    OUTPUT_DIR,
-                    generate_preview_filename(base_name),
-                )
-                glb_source_scene = _make_vector_glb_preview_scene(
-                    scene,
-                    structure_mode=structure_mode,
-                    color_mode=vec_color_mode,
-                    enable_relief=bool(ctx.get("enable_relief", False)),
-                )
-                vector_glb_preview.export_vector_glb_preview(
-                    scene=glb_source_scene,
-                    output_path=glb_path,
-                    structure_mode=structure_mode,
-                    color_mode=vec_color_mode,
-                    preview_colors=vec_preview_colors,
-                    slot_list=list(vec_slot_list),
-                    analysis=analysis_for_glb,
-                    ctx=ctx,
-                )
-                log.debug(
-                    "Vector preview GLB exported",
-                    extra={
-                        "event": "vector_glb_exported",
-                        "path": str(glb_path),
-                    },
-                )
-            except VectorMeshMemoryBudgetError as e:
-                # The printable 3MF is already complete. GLB and the following
-                # 2D preview are optional generate-time artifacts, so a
-                # proactive budget rejection skips them without discarding the
-                # safe 3MF.
-                glb_path = None
-                skip_heavy_preview = True
-                log.warning(
-                    "Vector preview GLB skipped by memory admission",
-                    extra={
-                        "event": "vector_glb_exported_skipped",
-                        "error_type": type(e).__name__,
-                        "error_message": str(e),
-                        "reason": "memory_budget",
-                    },
-                )
-            except COORDINATOR_HANDLED_ERRORS as e:
-                glb_path = None
-                log.warning(
-                    "Vector preview GLB export skipped",
-                    extra={
-                        "event": "vector_glb_exported_skipped",
-                        "error_type": type(e).__name__,
-                        "error_message": str(e),
-                    },
-                )
         vector_timing["export_glb_s"] = time.perf_counter() - glb_t0
 
         # 4. 2D preview from analyzed geometry (same data as 3MF)

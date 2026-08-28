@@ -19,7 +19,6 @@ sys.path.insert(0, _ROOT)
 import pytest
 import trimesh
 import numpy as np
-from core.errors import VectorMeshMemoryBudgetError
 from utils.bambu_3mf_writer import export_scene_with_bambu_metadata, BambuStudio3MFWriter
 
 
@@ -153,7 +152,7 @@ class TestVectorBranchExport:
     @patch("core.pipeline.vector_glb_preview.export_vector_glb_preview")
     @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
     @patch("core.vector_engine.VectorProcessor")
-    def test_missing_preview_glb_falls_back_to_normal_export(
+    def test_missing_preview_glb_skips_print_scene_export(
         self,
         MockVP,
         mock_bambu_export,
@@ -198,14 +197,14 @@ class TestVectorBranchExport:
                 preview_glb_path=str(missing_preview),
             )
 
-        assert result[1] != str(missing_preview)
+        assert result[1] is None
         mock_bambu_export.assert_called_once()
-        mock_glb_export.assert_called_once()
+        mock_glb_export.assert_not_called()
 
     @patch("core.pipeline.vector_glb_preview.export_vector_glb_preview")
     @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
     @patch("core.vector_engine.VectorProcessor")
-    def test_glb_memory_budget_keeps_completed_3mf(
+    def test_generate_without_preview_glb_returns_only_completed_3mf(
         self,
         MockVP,
         mock_bambu_export,
@@ -230,37 +229,20 @@ class TestVectorBranchExport:
         MockVP.return_value = _build_fake_processor(scene)
         lut_path = tmp_path / "lut.npy"
         np.save(lut_path, np.zeros(10))
-        error = VectorMeshMemoryBudgetError(
-            "vector_glb_preview_copy",
-            9 * 1024**3,
-            8 * 1024**3,
-            1 * 1024**3,
-            1,
-            8,
+        result = convert_image_to_3d(
+            image_path=str(svg_file),
+            lut_path=str(lut_path),
+            target_width_mm=20.0,
+            spacer_thick=1.2,
+            structure_mode="Single-sided",
+            color_mode="4-Color",
+            add_loop=False,
+            loop_width=5,
+            loop_length=20,
+            loop_hole=3,
+            loop_pos="Top",
+            modeling_mode=ModelingMode.VECTOR,
         )
-
-        def _guard(_scene, *, stage: str, **_kwargs):
-            if stage == "vector_glb_preview_copy":
-                raise error
-
-        with patch(
-            "core.vector_engine._enforce_vector_scene_export_headroom",
-            side_effect=_guard,
-        ):
-            result = convert_image_to_3d(
-                image_path=str(svg_file),
-                lut_path=str(lut_path),
-                target_width_mm=20.0,
-                spacer_thick=1.2,
-                structure_mode="Single-sided",
-                color_mode="4-Color",
-                add_loop=False,
-                loop_width=5,
-                loop_length=20,
-                loop_hole=3,
-                loop_pos="Top",
-                modeling_mode=ModelingMode.VECTOR,
-            )
 
         assert result[0] is not None
         assert result[1] is None
