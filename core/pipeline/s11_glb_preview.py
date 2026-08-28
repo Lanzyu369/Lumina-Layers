@@ -1855,75 +1855,6 @@ def generate_realtime_glb(cache: dict, output_path: str) -> Optional[str]:
         return None
 
 
-def _should_export_pipeline_scene_for_glb(ctx: dict) -> bool:
-    """Return whether generated geometry needs the final scene in preview."""
-
-    generated_surface_enabled = any(
-        bool(ctx.get(key))
-        for key in (
-            "enable_relief",
-            "enable_outline",
-            "enable_cloisonne",
-            "add_loop",
-            "enable_coating",
-            "enable_fridge_magnet",
-        )
-    )
-    return generated_surface_enabled and isinstance(
-        ctx.get("scene"),
-        trimesh.Scene,
-    )
-
-
-def _export_pipeline_scene_glb(ctx: dict, output_path: str) -> Optional[str]:
-    """Export the already-built pipeline scene for generated-surface preview."""
-
-    scene = ctx.get("scene")
-    geometry_count = int(len(scene.geometry)) if isinstance(scene, trimesh.Scene) else 0
-    if not isinstance(scene, trimesh.Scene) or len(scene.geometry) == 0:
-        _log.warning(
-            "Generated-surface GLB preview scene is unavailable",
-            extra={
-                "event": "generated_surface_glb_scene_unavailable",
-                "has_scene": isinstance(scene, trimesh.Scene),
-                "geometry_count": geometry_count,
-            },
-        )
-        return None
-
-    try:
-        scene.export(output_path, file_type="glb")
-        if not os.path.isfile(output_path) or os.path.getsize(output_path) <= 0:
-            raise OSError("generated-surface GLB export produced no file")
-    except (
-        AttributeError,
-        ImportError,
-        LookupError,
-        MemoryError,
-        OSError,
-        OverflowError,
-        RuntimeError,
-        TypeError,
-        ValueError,
-    ) as exc:
-        try:
-            os.unlink(output_path)
-        except OSError:
-            pass
-        _log.warning(
-            "Generated-surface scene GLB export failed",
-            extra={
-                "event": "generated_surface_glb_export_failed",
-                "error_type": type(exc).__name__,
-                "error_message": str(exc),
-                "geometry_count": geometry_count,
-            },
-        )
-        return None
-
-    return output_path
-
-
 def run(ctx: dict) -> dict:
     """Generate GLB 3D preview for the converted model.
     为转换后的模型生成 GLB 3D 预览。
@@ -1949,11 +1880,9 @@ def run(ctx: dict) -> dict:
     """
     _t0 = time.perf_counter()
 
-    export_pipeline_scene = _should_export_pipeline_scene_for_glb(ctx)
     reusable_glb_path = ctx.get("preview_glb_path")
     if (
-        not export_pipeline_scene
-        and isinstance(reusable_glb_path, str)
+        isinstance(reusable_glb_path, str)
         and os.path.exists(reusable_glb_path)
     ):
         _prog = ctx.get("progress")
@@ -1987,17 +1916,14 @@ def run(ctx: dict) -> dict:
         "target_h": height,
         "target_width_mm": target_width_mm,
     }
-    if export_pipeline_scene:
-        glb_path = _export_pipeline_scene_glb(ctx, out_path)
-    else:
-        if bool(ctx.get("high_precision_3d_preview", False)):
-            try:
-                glb_mesh_budget = int(ctx.get("quantize_colors") or 0)
-            except (TypeError, ValueError):
-                glb_mesh_budget = 0
-            if glb_mesh_budget > 128:
-                cache["glb_max_meshes"] = glb_mesh_budget
-        glb_path = generate_segmented_glb(cache, output_path=out_path)
+    if bool(ctx.get("high_precision_3d_preview", False)):
+        try:
+            glb_mesh_budget = int(ctx.get("quantize_colors") or 0)
+        except (TypeError, ValueError):
+            glb_mesh_budget = 0
+        if glb_mesh_budget > 128:
+            cache["glb_max_meshes"] = glb_mesh_budget
+    glb_path = generate_segmented_glb(cache, output_path=out_path)
 
     ctx["glb_path"] = glb_path
 

@@ -2730,7 +2730,6 @@ async def convert_generate(
     preview_3d_url: str | None = None
     download_id: str | None = None
     registration_complete = False
-    glb_registered = False
     try:
         try:
             download_filename = None
@@ -2793,43 +2792,6 @@ async def convert_generate(
                     "preview_url_current": preview_3d_url is not None,
                 },
             )
-        elif glb_path and os.path.exists(glb_path):
-            if store.get(sid) is None:
-                log.debug(
-                    "Generated GLB preview dropped after session close",
-                    extra={
-                        "event": "converter_generate_glb_session_closed",
-                        "session_id": sid,
-                    },
-                )
-            else:
-                try:
-                    glb_id = registry.register_path(sid, glb_path)
-                except Exception as exc:
-                    log.warning(
-                        "Generated GLB preview registration failed",
-                        extra={
-                            "event": "converter_generate_glb_registration_failed",
-                            "session_id": sid,
-                            "error_type": type(exc).__name__,
-                            "error_message": str(exc),
-                            "path": glb_path,
-                        },
-                    )
-                else:
-                    if store.get(sid) is None:
-                        with suppress(Exception):
-                            registry.cleanup_file(glb_id)
-                        log.debug(
-                            "Generated GLB preview dropped after session close",
-                            extra={
-                                "event": "converter_generate_glb_session_closed",
-                                "session_id": sid,
-                            },
-                        )
-                    else:
-                        glb_registered = True
-                        preview_3d_url = f"/api/files/{glb_id}"
         registration_complete = True
     finally:
         if download_id is None:
@@ -2837,7 +2799,7 @@ async def convert_generate(
         elif not registration_complete:
             with suppress(Exception):
                 registry.cleanup_file(download_id)
-        if glb_path and not glb_registered and not glb_reuses_preview_path:
+        if glb_path and not glb_reuses_preview_path:
             _remove_temp_path(glb_path)
 
     api_total = time.perf_counter() - api_t0

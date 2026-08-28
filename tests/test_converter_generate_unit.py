@@ -680,7 +680,7 @@ class TestGenerateParameterCompleteness:
         body = response.json()
         assert body["status"] == "ok"
         assert body["download_url"].startswith("/api/files/")
-        assert body["preview_3d_url"].startswith("/api/files/")
+        assert body["preview_3d_url"] is None
         assert body["threemf_disk_path"] is None
         assert "/tmp/out.3mf" not in response.text
 
@@ -2818,7 +2818,7 @@ class TestGenerateRegistryFailureCleanup:
                     path.unlink()
             _test_store.close(sid)
 
-    def test_generate_glb_registry_failure_preserves_downloaded_3mf(self) -> None:
+    def test_generate_discards_print_glb_and_preserves_downloaded_3mf(self) -> None:
         paths: list[str] = []
 
         def _make_file(suffix: str, payload: bytes) -> str:
@@ -2870,7 +2870,7 @@ class TestGenerateRegistryFailureCleanup:
             assert not os.path.exists(glb_path)
             assert os.path.exists(image_path)
             assert os.path.exists(lut_path)
-            assert registry.register_calls == 2
+            assert registry.register_calls == 1
             assert registry.first_file_id == download_file_id
             entry = registry.get_entry(registry.first_file_id)
             assert entry is not None

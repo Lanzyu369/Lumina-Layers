@@ -46,7 +46,15 @@ class TestS11GlbPreview:
             fail_generate,
         )
 
-        result = s11_glb_preview.run({"preview_glb_path": str(preview_glb_path)})
+        result = s11_glb_preview.run(
+            {
+                "preview_glb_path": str(preview_glb_path),
+                "enable_relief": True,
+                "scene": trimesh.Scene(
+                    {"PrintScene": trimesh.creation.box(extents=(1, 1, 1))}
+                ),
+            }
+        )
 
         assert result["glb_path"] == str(preview_glb_path)
         assert result["_hifi_timings"]["glb_preview_s"] >= 0.0
@@ -1840,7 +1848,7 @@ class TestS08AuxiliaryMeshes:
 class TestS11GlbPreview:
     """S11 GLB preview regression tests."""
 
-    def test_heightmap_relief_exports_pipeline_scene_instead_of_flat_segmented_glb(
+    def test_heightmap_relief_exports_lightweight_segmented_glb(
         self,
         monkeypatch,
         tmp_path,
@@ -1855,14 +1863,27 @@ class TestS11GlbPreview:
         )
         scene.add_geometry(mesh, node_name="ReliefRed", geom_name="ReliefRed")
 
-        def _unexpected_segmented_glb(*_args, **_kwargs):
-            raise AssertionError("heightmap relief preview must use pipeline scene")
+        segmented_path = tmp_path / "heightmap-lightweight.glb"
+
+        def _generate_segmented_glb(_cache, *, output_path):
+            assert output_path.endswith(".glb")
+            segmented_path.write_bytes(b"lightweight segmented glb")
+            return str(segmented_path)
 
         monkeypatch.setattr(s11_glb_preview, "OUTPUT_DIR", str(tmp_path))
         monkeypatch.setattr(
             s11_glb_preview,
             "generate_segmented_glb",
-            _unexpected_segmented_glb,
+            _generate_segmented_glb,
+        )
+        monkeypatch.setattr(
+            scene,
+            "export",
+            MagicMock(
+                side_effect=AssertionError(
+                    "print scene must not become preview GLB"
+                )
+            ),
         )
         ctx = {
             "matched_rgb": np.full((2, 2, 3), [255, 0, 0], dtype=np.uint8),
@@ -1878,8 +1899,8 @@ class TestS11GlbPreview:
 
         glb_path = result["glb_path"]
         assert glb_path is not None
-        assert glb_path.endswith(".glb")
-        assert (tmp_path / Path(glb_path).name).exists()
+        assert glb_path == str(segmented_path)
+        assert segmented_path.read_bytes() == b"lightweight segmented glb"
 
     @pytest.mark.parametrize(
         "generated_surface_params",
@@ -1900,7 +1921,7 @@ class TestS11GlbPreview:
             "fridge-magnet",
         ],
     )
-    def test_generated_surface_modes_export_final_pipeline_scene(
+    def test_generated_surface_modes_keep_existing_lightweight_preview(
         self,
         monkeypatch,
         tmp_path,
@@ -1917,9 +1938,7 @@ class TestS11GlbPreview:
         )
 
         def _unexpected_segmented_glb(*_args, **_kwargs):
-            raise AssertionError(
-                "generated-surface previews must use the final pipeline scene"
-            )
+            raise AssertionError("existing lightweight preview must be reused")
 
         monkeypatch.setattr(s11_glb_preview, "OUTPUT_DIR", str(tmp_path))
         monkeypatch.setattr(
@@ -1927,8 +1946,17 @@ class TestS11GlbPreview:
             "generate_segmented_glb",
             _unexpected_segmented_glb,
         )
-        stale_preview_path = tmp_path / "stale-flat-preview.glb"
-        stale_preview_path.write_bytes(b"stale flat preview")
+        lightweight_preview_path = tmp_path / "lightweight-preview.glb"
+        lightweight_preview_path.write_bytes(b"lightweight preview")
+        monkeypatch.setattr(
+            scene,
+            "export",
+            MagicMock(
+                side_effect=AssertionError(
+                    "print scene must not become preview GLB"
+                )
+            ),
+        )
 
         ctx = {
             "matched_rgb": np.full((2, 2, 3), [255, 0, 0], dtype=np.uint8),
@@ -1936,48 +1964,14 @@ class TestS11GlbPreview:
             "pixel_scale": 1.0,
             "image_path": str(tmp_path / "generated-surface-source.png"),
             "scene": scene,
-            "preview_glb_path": str(stale_preview_path),
+            "preview_glb_path": str(lightweight_preview_path),
             **generated_surface_params,
         }
 
         result = s11_glb_preview.run(ctx)
 
         glb_path = result["glb_path"]
-        assert glb_path is not None
-        assert glb_path != str(stale_preview_path)
-        loaded = trimesh.load(glb_path, force="scene")
-        assert isinstance(loaded, trimesh.Scene)
-        assert len(loaded.geometry) == 1
-
-    @pytest.mark.parametrize("failure_mode", ["partial-error", "empty-file"])
-    def test_generated_surface_glb_failure_removes_partial_file(
-        self,
-        monkeypatch,
-        tmp_path,
-        failure_mode,
-    ):
-        from core.pipeline import s11_glb_preview
-
-        scene = trimesh.Scene(
-            {"GeneratedSurface": trimesh.creation.box(extents=(2.0, 2.0, 1.0))}
-        )
-        output_path = tmp_path / "partial-generated-surface.glb"
-
-        def fail_export(_scene, path, *_args, **_kwargs):
-            if failure_mode == "partial-error":
-                Path(path).write_bytes(b"partial glb")
-                raise OSError("generated-surface export unavailable")
-            Path(path).write_bytes(b"")
-
-        monkeypatch.setattr(trimesh.Scene, "export", fail_export)
-
-        result = s11_glb_preview._export_pipeline_scene_glb(
-            {"scene": scene},
-            str(output_path),
-        )
-
-        assert result is None
-        assert not output_path.exists()
+        assert glb_path == str(lightweight_preview_path)
 
 
 # ===========================================================================
