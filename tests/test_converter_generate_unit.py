@@ -2244,7 +2244,6 @@ class TestNativeVectorPreviewGlbReuse:
     @pytest.mark.parametrize(
         "request_overrides",
         [
-            {"target_width_mm": 41.0},
             {
                 "enable_relief": True,
                 "height_mode": "color",
@@ -2273,7 +2272,6 @@ class TestNativeVectorPreviewGlbReuse:
             {"enable_cloisonne": True},
         ],
         ids=[
-            "parameter-mismatch",
             "relief",
             "coating",
             "keychain-loop",
@@ -2282,10 +2280,36 @@ class TestNativeVectorPreviewGlbReuse:
             "cloisonne",
         ],
     )
-    def test_native_vector_generate_rejects_unsafe_preview_glb_reuse(
+    def test_native_vector_generate_reuses_preview_glb_for_live_settings(
         self,
         tmp_path,
         request_overrides: dict[str, object],
+    ) -> None:
+        sid, out_path, preview_path, preview_id, _image_path = (
+            self._seed_ready_vector_preview(tmp_path)
+        )
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": out_path,
+                "glb_path": preview_path,
+                "status_msg": "OK",
+            }
+        )
+
+        response = client.post(
+            "/api/convert/generate",
+            json=self._payload(sid, **request_overrides),
+        )
+
+        assert response.status_code == 200, response.text
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_params["preview_glb_path"] == preview_path
+        assert response.json()["preview_3d_url"] == f"/api/files/{preview_id}"
+        assert set(_test_registry.get_session_entries(sid)) == {preview_id}
+
+    def test_native_vector_generate_rejects_parameter_mismatch_for_preview_glb(
+        self,
+        tmp_path,
     ) -> None:
         sid, out_path, _preview_path, _preview_id, _image_path = (
             self._seed_ready_vector_preview(tmp_path)
@@ -2300,7 +2324,7 @@ class TestNativeVectorPreviewGlbReuse:
 
         response = client.post(
             "/api/convert/generate",
-            json=self._payload(sid, **request_overrides),
+            json=self._payload(sid, target_width_mm=41.0),
         )
 
         assert response.status_code == 200, response.text

@@ -1079,27 +1079,19 @@ def _can_reuse_planar_vector_preview_glb(
 ) -> tuple[bool, str]:
     """Decide whether a native Vector generate may reuse its quick GLB.
 
-    普通平面 Vector 可复用已经就绪的分段预览；任何未被该预览表达的
-    高级几何（浮雕、涂层、挂环、磁铁槽、描边、掐丝或覆面）必须继续
-    导出生成模型。
+    The segmented asset owns browser geometry while relief, coating,
+    attachments, outlines, and cloisonne remain live viewer state. Reuse still
+    fails closed for a different source, preview provenance/edit identity, or
+    model-surface workflow.
+
+    分段资产负责浏览器几何；浮雕、涂层、附件、描边和景泰蓝继续由前端
+    实时表达。源文件、预览来源/编辑身份不一致或模型覆面流程仍安全拒绝。
     """
 
     if core_modeling_mode != CoreModelingMode.VECTOR:
         return False, "modeling_mode_not_vector"
     if not is_native_svg:
         return False, "source_not_native_svg"
-    if request.enable_relief:
-        return False, "relief_enabled"
-    if request.enable_coating:
-        return False, "coating_enabled"
-    if request.add_loop:
-        return False, "keychain_loop_enabled"
-    if request.enable_fridge_magnet:
-        return False, "fridge_magnet_enabled"
-    if request.enable_outline:
-        return False, "outline_enabled"
-    if request.enable_cloisonne:
-        return False, "cloisonne_enabled"
     if uses_model_surface_overlay:
         return False, "model_surface_overlay_enabled"
     if not preview_edit_state_matches:

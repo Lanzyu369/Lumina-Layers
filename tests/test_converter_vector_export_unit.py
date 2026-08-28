@@ -141,6 +141,8 @@ class TestVectorBranchExport:
                 loop_hole=3,
                 loop_pos="Top",
                 modeling_mode=ModelingMode.VECTOR,
+                enable_relief=True,
+                color_height_map={"#ff0000": 2.0},
                 preview_glb_path=str(preview_glb),
             )
 
