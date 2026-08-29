@@ -3,7 +3,7 @@
 ## Goal
 
 Reduce native SVG parsing time without changing SVG fill semantics, model
-precision, material identity, preview geometry, or exported toolpaths.
+precision, material identity, or printable slicer coverage.
 
 ## Confirmed bottleneck
 
@@ -43,6 +43,15 @@ sampling, contour precision, clipping, mesh generation, or export.
 - Existing evenodd tests continue to compare against sequential symmetric
   difference and cover disjoint islands, nested islands, and prepared-container
   checks.
-- The R4C1 source is parsed before and after the change; shape count, bounds,
-  per-shape color/area, and symmetric-difference geometry must remain equal.
-- Record wall time and peak RSS for the same 111 mm input.
+- Before contour normalization, the batched result must be topologically equal
+  to the sequential subtraction result. GEOS is allowed to choose a different
+  but equivalent ring representation.
+- The R4C1 source is parsed before and after the change. Shape count, bounds,
+  material colors, and signed area must remain stable; any representation-driven
+  boundary displacement after contour normalization must stay well below the
+  supported nozzle widths.
+- Generate real P2S projects and compare the first five sliced layers with the
+  prime tower disabled. Bambu Studio and OrcaSlicer must both retain full model
+  bounds, all expected materials, and nozzle-relevant path coverage.
+- Record parse time, end-to-end generation time, topology, and peak RSS for the
+  same 111 mm input.

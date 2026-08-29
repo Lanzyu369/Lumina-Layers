@@ -581,11 +581,12 @@ def _combine_evenodd_contained_disjoint_holes(items):
         if _geometries_have_pairwise_intersections(children):
             return None
 
-        result = container
-        for child in children:
-            result = result.difference(child)
-            if result is None or result.is_empty:
-                return None
+        hole_collection = _polygonal_union_for_disjoint_items(children)
+        if hole_collection is None or hole_collection.is_empty:
+            return None
+        result = container.difference(hole_collection)
+        if result is None or result.is_empty:
+            return None
         return result
     except ET.ParseError:
         return None

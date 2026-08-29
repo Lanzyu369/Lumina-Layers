@@ -23,6 +23,7 @@ from types import SimpleNamespace
 from unittest import mock
 import numpy as np
 import pytest
+import shapely
 from PIL import Image
 from svgelements import Arc, Path as SvgPath
 from shapely.geometry import (
@@ -640,6 +641,29 @@ class TestFillRuleSubpathMerging:
         assert merged is not None
         assert merged.area == pytest.approx(expected.area)
         assert merged.symmetric_difference(expected).area == pytest.approx(0.0)
+
+    def test_evenodd_helper_subtracts_disjoint_holes_in_one_geos_call(
+        self,
+        monkeypatch,
+    ):
+        """Verified independent holes should be subtracted as one GEOS batch."""
+        outer = box(0, 0, 100, 100)
+        holes = [box(x, 10, x + 4, 14) for x in range(10, 70, 10)]
+        expected = outer.difference(shapely_unary_union(holes))
+        real_difference = shapely.difference
+        calls = []
+
+        def recording_difference(left, right, **kwargs):
+            calls.append((left, right))
+            return real_difference(left, right, **kwargs)
+
+        monkeypatch.setattr(shapely, "difference", recording_difference)
+
+        merged = _combine_evenodd_polygons([outer, *holes])
+
+        assert len(calls) == 1
+        assert merged is not None
+        assert merged.symmetric_difference(expected).is_empty
 
     def test_evenodd_helper_uses_prepared_container_for_multiple_holes(self, monkeypatch):
         """Contained disjoint holes should reuse a prepared outer contour for contains checks."""
