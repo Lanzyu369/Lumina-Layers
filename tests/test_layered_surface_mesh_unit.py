@@ -48,6 +48,213 @@ def _assert_exact_closed_mesh(
     assert np.all(twice_area > 0.0)
 
 
+def test_rectangle_merging_uses_the_compiled_exact_kernel(monkeypatch) -> None:
+    mask = np.asarray(
+        [
+            [True, True, False, True],
+            [True, True, False, True],
+            [False, True, True, True],
+        ],
+        dtype=bool,
+    )
+    expected = np.asarray(
+        layered_meshing._greedy_rectangles_python(mask),
+        dtype=np.int32,
+    ).reshape((-1, 4))
+    calls: list[np.ndarray] = []
+
+    def compiled_kernel(candidate: np.ndarray) -> np.ndarray:
+        calls.append(candidate)
+        return expected.copy()
+
+    monkeypatch.setattr(layered_meshing, "_NUMBA_AVAILABLE", True, raising=False)
+    monkeypatch.setattr(
+        layered_meshing,
+        "_greedy_rectangles_numba",
+        compiled_kernel,
+        raising=False,
+    )
+
+    actual = layered_meshing.merge_boolean_rectangles(mask)
+
+    assert len(calls) == 1
+    assert calls[0] is mask
+    assert calls[0].flags.c_contiguous
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_compiled_rectangle_kernel_matches_reference_greedy_partition() -> None:
+    kernel = getattr(layered_meshing, "_greedy_rectangles_numba")
+    rng = np.random.default_rng(585)
+
+    for _ in range(512):
+        rows = int(rng.integers(1, 12))
+        columns = int(rng.integers(1, 40))
+        density = float(rng.uniform(0.05, 0.8))
+        mask = np.ascontiguousarray(
+            rng.random((rows, columns)) < density,
+            dtype=bool,
+        )
+        expected = np.asarray(
+            layered_meshing._greedy_rectangles_python(mask),
+            dtype=np.int32,
+        ).reshape((-1, 4))
+
+        actual = kernel(mask)
+
+        np.testing.assert_array_equal(actual, expected)
+
+
+def test_component_patch_extraction_skips_empty_coordinate_planes(
+    monkeypatch,
+) -> None:
+    component = np.ones((1, 64, 64), dtype=bool)
+    component[0, 32, 32] = False
+    observed_nonempty: list[bool] = []
+    real_append = layered_meshing._append_plane_patch_arrays
+
+    def recording_append(*args, **kwargs) -> None:
+        observed_nonempty.append(bool(np.any(kwargs["mask"])))
+        real_append(*args, **kwargs)
+
+    monkeypatch.setattr(
+        layered_meshing,
+        "_append_plane_patch_arrays",
+        recording_append,
+    )
+
+    patches, _exposed_count = layered_meshing._component_patches(
+        component,
+        shell_id=1,
+    )
+
+    assert len(patches) > 0
+    assert observed_nonempty == [True] * 10
+
+
+def test_patch_edge_splitting_uses_the_compiled_exact_kernel(monkeypatch) -> None:
+    edge_first = np.asarray([[0, 0, 0], [0, 0, 0]], dtype=np.int32)
+    edge_second = np.asarray([[4, 0, 0], [2, 0, 0]], dtype=np.int32)
+    edge_axis = np.zeros(2, dtype=np.int32)
+    expected = (
+        np.asarray([[0, 0, 0], [2, 0, 0]], dtype=np.int32),
+        np.asarray([[2, 0, 0], [4, 0, 0]], dtype=np.int32),
+        np.asarray([2, 1], dtype=np.int32),
+    )
+    calls: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+
+    def compiled_kernel(first, second, axis):
+        calls.append((first, second, axis))
+        return expected
+
+    monkeypatch.setattr(
+        layered_meshing,
+        "_split_patch_edges_numba",
+        compiled_kernel,
+        raising=False,
+    )
+
+    actual = layered_meshing._split_patch_edges(
+        edge_first,
+        edge_second,
+        edge_axis,
+    )
+
+    assert len(calls) == 1
+    assert all(
+        actual_array is expected_array
+        for actual_array, expected_array in zip(
+            calls[0],
+            (edge_first, edge_second, edge_axis),
+        )
+    )
+    for actual_array, expected_array in zip(actual, expected):
+        np.testing.assert_array_equal(actual_array, expected_array)
+
+
+def test_patch_edge_splitting_rejects_zero_length_edges_before_native_kernel(
+    monkeypatch,
+) -> None:
+    def unexpected_kernel(*_args):
+        raise AssertionError("native kernel must not receive a zero-length edge")
+
+    monkeypatch.setattr(
+        layered_meshing,
+        "_split_patch_edges_numba",
+        unexpected_kernel,
+    )
+
+    with pytest.raises(ValueError, match="zero-length edge"):
+        layered_meshing._split_patch_edges(
+            np.asarray([[4, 2, 1]], dtype=np.int32),
+            np.asarray([[4, 2, 1]], dtype=np.int32),
+            np.asarray([0], dtype=np.int32),
+        )
+
+
+def test_compiled_and_python_patch_edge_kernels_reject_zero_length_edges() -> None:
+    compiled_kernel = layered_meshing._split_patch_edges_numba
+    kernels = [compiled_kernel]
+    python_kernel = getattr(compiled_kernel, "py_func", None)
+    if python_kernel is not None:
+        kernels.append(python_kernel)
+
+    edge = np.asarray([[4, 2, 1]], dtype=np.int32)
+    axis = np.asarray([0], dtype=np.int32)
+    for kernel in kernels:
+        with pytest.raises(ValueError, match="zero-length edge"):
+            kernel(edge, edge.copy(), axis)
+
+
+def test_compiled_patch_edge_kernel_preserves_endpoint_order() -> None:
+    kernel = getattr(layered_meshing, "_split_patch_edges_numba")
+    edge_first = np.asarray(
+        [
+            [0, 0, 0],
+            [0, 0, 0],
+            [2, 0, 0],
+            [4, 0, 0],
+        ],
+        dtype=np.int32,
+    )
+    edge_second = np.asarray(
+        [
+            [4, 0, 0],
+            [2, 0, 0],
+            [4, 0, 0],
+            [0, 0, 0],
+        ],
+        dtype=np.int32,
+    )
+    edge_axis = np.zeros(4, dtype=np.int32)
+
+    starts, ends, counts = kernel(edge_first, edge_second, edge_axis)
+
+    np.testing.assert_array_equal(counts, [2, 1, 1, 2])
+    np.testing.assert_array_equal(
+        starts,
+        [
+            [0, 0, 0],
+            [2, 0, 0],
+            [0, 0, 0],
+            [2, 0, 0],
+            [4, 0, 0],
+            [2, 0, 0],
+        ],
+    )
+    np.testing.assert_array_equal(
+        ends,
+        [
+            [2, 0, 0],
+            [4, 0, 0],
+            [2, 0, 0],
+            [4, 0, 0],
+            [2, 0, 0],
+            [0, 0, 0],
+        ],
+    )
+
+
 @pytest.mark.parametrize(
     "edge_lengths",
     [(1, 1, 1, 1), (2, 1, 2, 1), (3, 2, 4, 2)],

@@ -16,6 +16,20 @@ import numpy as np
 import trimesh
 from scipy import ndimage, sparse
 
+try:
+    from numba import njit
+
+    _NUMBA_AVAILABLE = True
+except ImportError:  # pragma: no cover - exercised through import isolation
+    _NUMBA_AVAILABLE = False
+
+    def njit(*args, **_kwargs):
+        """Return a no-op decorator when Numba is not installed."""
+
+        if args and callable(args[0]):
+            return args[0]
+        return lambda function: function
+
 from core.mesh_export_parts import MeshExportPartRange, set_mesh_export_part_ranges
 
 
@@ -327,16 +341,76 @@ def _greedy_rectangles_python(
     return rectangles
 
 
+@njit(cache=True, fastmath=False, nogil=True)
+def _greedy_rectangles_numba(mask: np.ndarray) -> np.ndarray:
+    """Run the exact greedy partition without per-cell Python dispatch."""
+
+    rows, columns = mask.shape
+    true_count = 0
+    for row in range(rows):
+        for column in range(columns):
+            if mask[row, column]:
+                true_count += 1
+
+    rectangles = np.empty((true_count, 4), dtype=np.int32)
+    used = np.zeros(mask.shape, dtype=np.uint8)
+    rectangle_count = 0
+
+    for row in range(rows):
+        column = 0
+        while column < columns:
+            if not mask[row, column] or used[row, column] != 0:
+                column += 1
+                continue
+
+            column_end = column + 1
+            while (
+                column_end < columns
+                and mask[row, column_end]
+                and used[row, column_end] == 0
+            ):
+                column_end += 1
+
+            row_end = row + 1
+            while row_end < rows:
+                complete = True
+                for candidate_column in range(column, column_end):
+                    if (
+                        not mask[row_end, candidate_column]
+                        or used[row_end, candidate_column] != 0
+                    ):
+                        complete = False
+                        break
+                if not complete:
+                    break
+                row_end += 1
+
+            for mark_row in range(row, row_end):
+                for mark_column in range(column, column_end):
+                    used[mark_row, mark_column] = 1
+
+            rectangles[rectangle_count, 0] = column
+            rectangles[rectangle_count, 1] = row
+            rectangles[rectangle_count, 2] = column_end
+            rectangles[rectangle_count, 3] = row_end
+            rectangle_count += 1
+            column = column_end
+
+    return rectangles[:rectangle_count]
+
+
 def merge_boolean_rectangles(mask: np.ndarray) -> np.ndarray:
     """Merge a 2D boolean mask into exact non-overlapping rectangles.
     将二维布尔掩码精确合并为互不重叠的矩形。
     """
 
-    candidate = np.asarray(mask, dtype=bool)
+    candidate = np.ascontiguousarray(mask, dtype=bool)
     if candidate.ndim != 2:
         raise ValueError("rectangle merging expects a 2D boolean mask")
     if not bool(np.any(candidate)):
         return np.empty((0, 4), dtype=np.int32)
+    if _NUMBA_AVAILABLE:
+        return _greedy_rectangles_numba(candidate)
     rectangles = _greedy_rectangles_python(candidate)
     return np.asarray(rectangles, dtype=np.int32).reshape((-1, 4))
 
@@ -438,7 +512,6 @@ def _component_patches(
 ) -> tuple[_CompactPatches, int]:
     """Extract and merge the six exposed face families of one component."""
 
-    z_size, y_size, x_size = component.shape
     shell_chunks: list[np.ndarray] = []
     normal_chunks: list[np.ndarray] = []
     corner_chunks: list[np.ndarray] = []
@@ -447,8 +520,10 @@ def _component_patches(
     negative_x = np.empty_like(component)
     negative_x[:, :, 0] = component[:, :, 0]
     negative_x[:, :, 1:] = component[:, :, 1:] & ~component[:, :, :-1]
-    exposed_count += int(np.count_nonzero(negative_x))
-    for x in range(x_size):
+    negative_x_counts = np.count_nonzero(negative_x, axis=(0, 1))
+    exposed_count += int(negative_x_counts.sum())
+    for x_value in np.flatnonzero(negative_x_counts):
+        x = int(x_value)
         _append_plane_patch_arrays(
             shell_chunks,
             normal_chunks,
@@ -464,8 +539,10 @@ def _component_patches(
     positive_x = np.empty_like(component)
     positive_x[:, :, -1] = component[:, :, -1]
     positive_x[:, :, :-1] = component[:, :, :-1] & ~component[:, :, 1:]
-    exposed_count += int(np.count_nonzero(positive_x))
-    for x in range(x_size):
+    positive_x_counts = np.count_nonzero(positive_x, axis=(0, 1))
+    exposed_count += int(positive_x_counts.sum())
+    for x_value in np.flatnonzero(positive_x_counts):
+        x = int(x_value)
         _append_plane_patch_arrays(
             shell_chunks,
             normal_chunks,
@@ -481,8 +558,10 @@ def _component_patches(
     negative_y = np.empty_like(component)
     negative_y[:, 0, :] = component[:, 0, :]
     negative_y[:, 1:, :] = component[:, 1:, :] & ~component[:, :-1, :]
-    exposed_count += int(np.count_nonzero(negative_y))
-    for y in range(y_size):
+    negative_y_counts = np.count_nonzero(negative_y, axis=(0, 2))
+    exposed_count += int(negative_y_counts.sum())
+    for y_value in np.flatnonzero(negative_y_counts):
+        y = int(y_value)
         _append_plane_patch_arrays(
             shell_chunks,
             normal_chunks,
@@ -498,8 +577,10 @@ def _component_patches(
     positive_y = np.empty_like(component)
     positive_y[:, -1, :] = component[:, -1, :]
     positive_y[:, :-1, :] = component[:, :-1, :] & ~component[:, 1:, :]
-    exposed_count += int(np.count_nonzero(positive_y))
-    for y in range(y_size):
+    positive_y_counts = np.count_nonzero(positive_y, axis=(0, 2))
+    exposed_count += int(positive_y_counts.sum())
+    for y_value in np.flatnonzero(positive_y_counts):
+        y = int(y_value)
         _append_plane_patch_arrays(
             shell_chunks,
             normal_chunks,
@@ -515,8 +596,10 @@ def _component_patches(
     negative_z = np.empty_like(component)
     negative_z[0, :, :] = component[0, :, :]
     negative_z[1:, :, :] = component[1:, :, :] & ~component[:-1, :, :]
-    exposed_count += int(np.count_nonzero(negative_z))
-    for z in range(z_size):
+    negative_z_counts = np.count_nonzero(negative_z, axis=(1, 2))
+    exposed_count += int(negative_z_counts.sum())
+    for z_value in np.flatnonzero(negative_z_counts):
+        z = int(z_value)
         _append_plane_patch_arrays(
             shell_chunks,
             normal_chunks,
@@ -532,8 +615,10 @@ def _component_patches(
     positive_z = np.empty_like(component)
     positive_z[-1, :, :] = component[-1, :, :]
     positive_z[:-1, :, :] = component[:-1, :, :] & ~component[1:, :, :]
-    exposed_count += int(np.count_nonzero(positive_z))
-    for z in range(z_size):
+    positive_z_counts = np.count_nonzero(positive_z, axis=(1, 2))
+    exposed_count += int(positive_z_counts.sum())
+    for z_value in np.flatnonzero(positive_z_counts):
+        z = int(z_value)
         _append_plane_patch_arrays(
             shell_chunks,
             normal_chunks,
@@ -556,23 +641,150 @@ def _component_patches(
     )
 
 
-def _axis_event_grid(
+@njit(cache=True, fastmath=False, nogil=True)
+def _split_patch_edges_numba(
     edge_first: np.ndarray,
     edge_second: np.ndarray,
     edge_axis: np.ndarray,
-    *,
-    axis: int,
-    coordinate_minimum: np.ndarray,
-    grid_shape: tuple[int, int, int],
-) -> tuple[np.ndarray, np.ndarray]:
-    """Build endpoint events for one edge direction in component-local space."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Split edges at every collinear endpoint on the exact integer lattice."""
 
-    edge_indices = np.flatnonzero(edge_axis == axis)
-    events = np.zeros(grid_shape, dtype=bool)
-    for endpoints in (edge_first, edge_second):
-        local = endpoints[edge_indices] - coordinate_minimum
-        events[local[:, 2], local[:, 1], local[:, 0]] = True
-    return events, edge_indices
+    edge_count = len(edge_first)
+    coordinate_minimum = edge_first[0].copy()
+    coordinate_maximum = edge_first[0].copy()
+    for edge_index in range(edge_count):
+        zero_length = True
+        for dimension in range(3):
+            first_value = edge_first[edge_index, dimension]
+            second_value = edge_second[edge_index, dimension]
+            if first_value != second_value:
+                zero_length = False
+            if first_value < coordinate_minimum[dimension]:
+                coordinate_minimum[dimension] = first_value
+            if second_value < coordinate_minimum[dimension]:
+                coordinate_minimum[dimension] = second_value
+            if first_value > coordinate_maximum[dimension]:
+                coordinate_maximum[dimension] = first_value
+            if second_value > coordinate_maximum[dimension]:
+                coordinate_maximum[dimension] = second_value
+        if zero_length:
+            raise ValueError("Layered mesh patch contains a zero-length edge")
+
+    x_size = int(coordinate_maximum[0] - coordinate_minimum[0] + 1)
+    y_size = int(coordinate_maximum[1] - coordinate_minimum[1] + 1)
+    z_size = int(coordinate_maximum[2] - coordinate_minimum[2] + 1)
+    events = np.zeros((z_size, y_size, x_size), dtype=np.uint8)
+    base_counts_by_edge = np.empty(edge_count, dtype=np.int32)
+
+    for axis in range(3):
+        events.fill(0)
+        for edge_index in range(edge_count):
+            if edge_axis[edge_index] != axis:
+                continue
+            events[
+                edge_first[edge_index, 2] - coordinate_minimum[2],
+                edge_first[edge_index, 1] - coordinate_minimum[1],
+                edge_first[edge_index, 0] - coordinate_minimum[0],
+            ] = 1
+            events[
+                edge_second[edge_index, 2] - coordinate_minimum[2],
+                edge_second[edge_index, 1] - coordinate_minimum[1],
+                edge_second[edge_index, 0] - coordinate_minimum[0],
+            ] = 1
+
+        for edge_index in range(edge_count):
+            if edge_axis[edge_index] != axis:
+                continue
+            start_value = edge_first[edge_index, axis]
+            end_value = edge_second[edge_index, axis]
+            step = 1 if end_value > start_value else -1
+            value = start_value + step
+            segment_count = 0
+            while True:
+                x = edge_first[edge_index, 0]
+                y = edge_first[edge_index, 1]
+                z = edge_first[edge_index, 2]
+                if axis == 0:
+                    x = value
+                elif axis == 1:
+                    y = value
+                else:
+                    z = value
+                if events[
+                    z - coordinate_minimum[2],
+                    y - coordinate_minimum[1],
+                    x - coordinate_minimum[0],
+                ] != 0:
+                    segment_count += 1
+                if value == end_value:
+                    break
+                value += step
+            if segment_count <= 0:
+                raise ValueError("Layered mesh patch contains a zero-length edge")
+            base_counts_by_edge[edge_index] = segment_count
+
+    base_offsets_by_edge = np.empty(len(edge_first) + 1, dtype=np.int64)
+    base_offsets_by_edge[0] = 0
+    for edge_index in range(edge_count):
+        base_offsets_by_edge[edge_index + 1] = (
+            base_offsets_by_edge[edge_index]
+            + base_counts_by_edge[edge_index]
+        )
+    base_start = np.empty((int(base_offsets_by_edge[-1]), 3), dtype=np.int32)
+    base_end = np.empty_like(base_start)
+
+    for axis in range(3):
+        events.fill(0)
+        for edge_index in range(edge_count):
+            if edge_axis[edge_index] != axis:
+                continue
+            events[
+                edge_first[edge_index, 2] - coordinate_minimum[2],
+                edge_first[edge_index, 1] - coordinate_minimum[1],
+                edge_first[edge_index, 0] - coordinate_minimum[0],
+            ] = 1
+            events[
+                edge_second[edge_index, 2] - coordinate_minimum[2],
+                edge_second[edge_index, 1] - coordinate_minimum[1],
+                edge_second[edge_index, 0] - coordinate_minimum[0],
+            ] = 1
+
+        for edge_index in range(edge_count):
+            if edge_axis[edge_index] != axis:
+                continue
+            previous_value = edge_first[edge_index, axis]
+            end_value = edge_second[edge_index, axis]
+            step = 1 if end_value > previous_value else -1
+            value = previous_value + step
+            output_index = base_offsets_by_edge[edge_index]
+            while True:
+                x = edge_first[edge_index, 0]
+                y = edge_first[edge_index, 1]
+                z = edge_first[edge_index, 2]
+                if axis == 0:
+                    x = value
+                elif axis == 1:
+                    y = value
+                else:
+                    z = value
+                if events[
+                    z - coordinate_minimum[2],
+                    y - coordinate_minimum[1],
+                    x - coordinate_minimum[0],
+                ] != 0:
+                    base_start[output_index] = edge_first[edge_index]
+                    base_end[output_index] = edge_first[edge_index]
+                    base_start[output_index, axis] = previous_value
+                    base_end[output_index, axis] = value
+                    output_index += 1
+                    previous_value = value
+                if value == end_value:
+                    break
+                value += step
+            if output_index != base_offsets_by_edge[edge_index + 1]:
+                raise ValueError("Layered mesh patch split count changed")
+
+    return base_start, base_end, base_counts_by_edge
 
 
 def _split_patch_edges(
@@ -580,85 +792,22 @@ def _split_patch_edges(
     edge_second: np.ndarray,
     edge_axis: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Split patch edges at collinear endpoints with a bounded dense event grid."""
+    """Split patch edges with one exact native-compiled lattice kernel."""
 
-    coordinate_minimum = np.minimum(edge_first.min(axis=0), edge_second.min(axis=0))
-    coordinate_maximum = np.maximum(edge_first.max(axis=0), edge_second.max(axis=0))
-    grid_shape = tuple(
-        int(value) for value in (coordinate_maximum - coordinate_minimum + 1)[::-1]
-    )
-    base_counts_by_edge = np.empty(len(edge_first), dtype=np.int32)
-    axis_to_grid_dimension = (2, 1, 0)
-    for axis in range(3):
-        events, edge_indices = _axis_event_grid(
-            edge_first,
-            edge_second,
-            edge_axis,
-            axis=axis,
-            coordinate_minimum=coordinate_minimum,
-            grid_shape=grid_shape,
-        )
-        prefix = np.cumsum(
-            events,
-            axis=axis_to_grid_dimension[axis],
-            dtype=np.int32,
-        )
-        low = np.minimum(edge_first[edge_indices], edge_second[edge_indices])
-        high = np.maximum(edge_first[edge_indices], edge_second[edge_indices])
-        low -= coordinate_minimum
-        high -= coordinate_minimum
-        base_counts_by_edge[edge_indices] = (
-            prefix[high[:, 2], high[:, 1], high[:, 0]]
-            - prefix[low[:, 2], low[:, 1], low[:, 0]]
-        )
-        del events, edge_indices, prefix, low, high
-
-    if bool(np.any(base_counts_by_edge <= 0)):
+    first = np.ascontiguousarray(edge_first, dtype=np.int32)
+    second = np.ascontiguousarray(edge_second, dtype=np.int32)
+    axis = np.ascontiguousarray(edge_axis, dtype=np.int32)
+    if (
+        first.ndim != 2
+        or first.shape[1:] != (3,)
+        or second.shape != first.shape
+        or axis.shape != (len(first),)
+        or len(first) == 0
+    ):
+        raise ValueError("Layered mesh patch edges have invalid shape")
+    if bool(np.any(np.all(first == second, axis=1))):
         raise ValueError("Layered mesh patch contains a zero-length edge")
-    base_offsets_by_edge = np.empty(len(edge_first) + 1, dtype=np.int64)
-    base_offsets_by_edge[0] = 0
-    np.cumsum(base_counts_by_edge, out=base_offsets_by_edge[1:])
-    base_start = np.empty((int(base_offsets_by_edge[-1]), 3), dtype=np.int32)
-    base_end = np.empty_like(base_start)
-
-    single_segment = base_counts_by_edge == 1
-    single_positions = base_offsets_by_edge[:-1][single_segment]
-    base_start[single_positions] = edge_first[single_segment]
-    base_end[single_positions] = edge_second[single_segment]
-
-    for axis in range(3):
-        events, edge_indices = _axis_event_grid(
-            edge_first,
-            edge_second,
-            edge_axis,
-            axis=axis,
-            coordinate_minimum=coordinate_minimum,
-            grid_shape=grid_shape,
-        )
-        for edge_index in edge_indices[~single_segment[edge_indices]]:
-            low = np.minimum(edge_first[edge_index], edge_second[edge_index])
-            high = np.maximum(edge_first[edge_index], edge_second[edge_index])
-            local_low = low - coordinate_minimum
-            local_high = high - coordinate_minimum
-            if axis == 0:
-                line = events[local_low[2], local_low[1], local_low[0] : local_high[0] + 1]
-            elif axis == 1:
-                line = events[local_low[2], local_low[1] : local_high[1] + 1, local_low[0]]
-            else:
-                line = events[local_low[2] : local_high[2] + 1, local_low[1], local_low[0]]
-            values = np.flatnonzero(line).astype(np.int32) + low[axis]
-            if edge_second[edge_index, axis] < edge_first[edge_index, axis]:
-                values = values[::-1]
-            output_start = int(base_offsets_by_edge[edge_index])
-            for local_index in range(len(values) - 1):
-                start = edge_first[edge_index].copy()
-                end = edge_first[edge_index].copy()
-                start[axis] = values[local_index]
-                end[axis] = values[local_index + 1]
-                base_start[output_start + local_index] = start
-                base_end[output_start + local_index] = end
-        del events, edge_indices
-    return base_start, base_end, base_counts_by_edge
+    return _split_patch_edges_numba(first, second, axis)
 
 
 def _make_rectangle_ring_triangle_offsets(
