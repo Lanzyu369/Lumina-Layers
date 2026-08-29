@@ -34,6 +34,45 @@ def test_slot_surface_scene_keeps_adjacent_voxels_topologically_closed():
     assert mesh.metadata["layered_mesh_stats"]["source_voxel_count"] == 13
 
 
+def test_slot_surface_scene_maps_half_layer_vertices_to_nonuniform_heights():
+    full_matrix = np.array(
+        [
+            [[0, 0], [0, -1]],
+            [[-1, 0], [0, -1]],
+            [[0, 0], [0, -1]],
+        ],
+        dtype=np.int16,
+    )
+
+    scene = build_slot_surface_scene_from_voxels(
+        full_matrix=full_matrix,
+        slot_names=["Artwork"],
+        preview_colors={0: [255, 0, 0, 255]},
+        target_h=2,
+        pixel_scale=0.1,
+        layer_heights_mm=[0.04, 0.08, 0.10],
+    )
+
+    mesh = scene.geometry["Artwork"]
+    np.testing.assert_allclose(
+        np.unique(mesh.vertices[:, 2]),
+        [0.0, 0.04, 0.08, 0.12, 0.22],
+        rtol=0.0,
+        atol=1e-9,
+    )
+    open_edges, nonmanifold_edges = _edge_topology_counts(mesh)
+    assert open_edges == 0
+    assert nonmanifold_edges == 0
+    assert mesh.is_watertight
+    assert np.all(np.asarray(mesh.area_faces) > 0.0)
+    assert (
+        mesh.metadata["layered_mesh_stats"][
+            "source_contact_normalized_edge_count"
+        ]
+        == 1
+    )
+
+
 def test_printable_footprint_uses_valid_voxels_and_preserves_single_pixel_width():
     full_matrix = np.full((2, 3, 5), -1, dtype=np.int16)
     full_matrix[0, 0, 1:4] = 0

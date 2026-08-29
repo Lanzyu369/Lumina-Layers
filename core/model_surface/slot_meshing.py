@@ -81,9 +81,10 @@ def build_slot_surface_scene_from_voxels(
     使用统一索引核心构建模型覆面材料场景。
 
     The common surface builder removes internal voxel interfaces and shares
-    final boundary indices. Its integer Z levels are then mapped once onto the
-    supplied physical layer-height schedule. / 统一表面构建器会移除内部体素
-    接口并共享最终边界索引，随后仅将整数 Z 层边界映射到给定物理层高。
+    final boundary indices. Its integer or half-integer Z levels are then
+    mapped once onto the supplied physical layer-height schedule. / 统一表面
+    构建器会移除内部体素接口并共享最终边界索引，随后将整数或半整数 Z
+    格点映射到给定物理层高。
     """
 
     if full_matrix.ndim != 3:
@@ -113,19 +114,31 @@ def build_slot_surface_scene_from_voxels(
         if mesh is None:
             continue
         vertices = np.asarray(mesh.vertices, dtype=np.float64).copy()
-        layer_indices = np.rint(vertices[:, 2]).astype(np.int64)
+        lattice_z = vertices[:, 2]
+        if not np.all(np.isfinite(lattice_z)):
+            raise ValueError("Shared surface mesh left the model layer lattice.")
+        doubled_layer_positions = np.rint(lattice_z * 2.0).astype(np.int64)
+        maximum_doubled_layer = 2 * (len(layer_z_boundaries_mm) - 1)
         if (
-            np.any(layer_indices < 0)
-            or np.any(layer_indices >= len(layer_z_boundaries_mm))
+            np.any(doubled_layer_positions < 0)
+            or np.any(doubled_layer_positions > maximum_doubled_layer)
             or not np.allclose(
-                vertices[:, 2],
-                layer_indices,
+                lattice_z * 2.0,
+                doubled_layer_positions,
                 rtol=0.0,
                 atol=1e-9,
             )
         ):
             raise ValueError("Shared surface mesh left the model layer lattice.")
-        vertices[:, 2] = layer_z_boundaries_mm[layer_indices]
+        lower_layer_indices = doubled_layer_positions // 2
+        vertices[:, 2] = layer_z_boundaries_mm[lower_layer_indices]
+        half_layer = (doubled_layer_positions % 2) == 1
+        if np.any(half_layer):
+            half_layer_indices = lower_layer_indices[half_layer]
+            vertices[half_layer, 2] = 0.5 * (
+                layer_z_boundaries_mm[half_layer_indices]
+                + layer_z_boundaries_mm[half_layer_indices + 1]
+            )
         mesh.vertices = vertices
         mesh.apply_transform(transform)
         mesh.visual.face_colors = _coerce_rgba(preview_colors.get(mat_id))
