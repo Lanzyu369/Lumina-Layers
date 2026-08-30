@@ -868,6 +868,37 @@ class TestGlbStatusLifecycle:
         assert stale_path not in status["error"]
         assert calls == []
 
+    def test_session_close_removes_active_glb_and_vector_geometry(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Both lightweight display artifacts remain session-bound."""
+
+        sid = _seed_session(tmp_path)
+        cache = _native_vector_cache(sid, tmp_path)
+        geometry_path = Path(cache["vector_parse_clip_cache_path"])
+        glb_file_id = _test_registry.register_bytes(
+            sid,
+            b"active-vector-preview",
+            "active-vector-preview.glb",
+        )
+        glb_entry = _test_registry.get_entry(glb_file_id)
+        assert glb_entry is not None
+        glb_path = Path(glb_entry["path"])
+        cache["glb_url"] = f"/api/files/{glb_file_id}"
+        _test_store.put(sid, "preview_cache", cache)
+
+        response = client.post(
+            "/api/session/close",
+            json={"session_id": sid},
+        )
+
+        assert response.status_code == 200, response.text
+        assert _test_store.get(sid) is None
+        assert _test_registry.resolve(glb_file_id) is None
+        assert not glb_path.exists()
+        assert not geometry_path.exists()
+
 
 class TestJobTokenGuard:
     def test_newer_job_discards_older_result(

@@ -32,6 +32,8 @@ def _sample_payload(**overrides):
             "material_layer_height_mm": 0.16,
             "material_backing_material_dir_name": "BrandA",
             "preserve_upload_filename_for_3mf": True,
+            "enable_smooth_vector_preview": True,
+            "vector_preview_renderer": "vector_analytic",
             "workshop": {
                 "module_id": "lumina.bead-pattern",
                 "module_version": "1.0.0",
@@ -134,9 +136,12 @@ def test_basic_payload_renders_all_sections(tmp_path: Path) -> None:
     assert "## Session IDs for backend log grep" in md
     assert "sess-aaa" in md
     assert "preserve_upload_filename_for_3mf: True" in md
+    assert "enable_smooth_vector_preview: True" in md
+    assert "vector_preview_renderer: vector_analytic" in md
 
     summary = generate_summary_text("LUM-20260511-001", payload)
     assert "沿用上传文件名：开启" in summary
+    assert "矢量预览：平滑；当前轻量模型：平滑轮廓" in summary
 
 
 def test_dynamic_material_snapshot_and_repro_hint_are_rendered(tmp_path: Path) -> None:

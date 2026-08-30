@@ -136,6 +136,7 @@ import {
   rotateImageFile,
   type ImageRotationDegrees,
 } from "../../utils/imageRotation";
+import { resolveVectorPreviewRenderer } from "../../utils/vectorPreviewRenderer";
 import {
   canCommitPreviewResponse,
   capturePreviewCommitGuard,
@@ -7229,11 +7230,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       const requested = _get();
       if (
         !requested.sessionId ||
-        !isSvgImageFile(requested.imageFile) ||
-        requested.modeling_mode !== ModelingModeEnum.VECTOR ||
-        requested.modelSurfaceEnabled ||
-        requested.largeFormatEnabled ||
-        requested.batchPreviewItems.length > 0
+        resolveVectorPreviewRenderer(
+          requested,
+          enableSmoothVectorPreview,
+        ) === null
       ) {
         return;
       }
