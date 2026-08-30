@@ -29,19 +29,26 @@ from shapely.geometry import box
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 
-# Load core.vector_engine directly to skip the heavy core.__init__ chain
-# (matches the bootstrap used by other vector tests in this suite).
-# 直接按文件加载 vector_engine，避免 core 包的重依赖 import 链。
-_spec = importlib.util.spec_from_file_location(
-    "core.vector_engine", os.path.join(_ROOT, "core", "vector_engine.py")
-)
-_ve = importlib.util.module_from_spec(_spec)
-if "core" not in sys.modules:
-    _pkg = types.ModuleType("core")
-    _pkg.__path__ = [os.path.join(_ROOT, "core")]
-    sys.modules["core"] = _pkg
-sys.modules["core.vector_engine"] = _ve
-_spec.loader.exec_module(_ve)
+# Load core.vector_engine directly only when the suite has not loaded it yet.
+# Replacing an existing module leaves ``core.vector_engine`` on the package
+# pointing at the old object, so later monkeypatches can silently target a
+# different module from ``VectorProcessor`` during combined test runs.
+# 仅在测试进程尚未加载时直接载入，避免组合执行时产生两个模块对象。
+if "core.vector_engine" in sys.modules:
+    _ve = sys.modules["core.vector_engine"]
+else:
+    _spec = importlib.util.spec_from_file_location(
+        "core.vector_engine", os.path.join(_ROOT, "core", "vector_engine.py")
+    )
+    _ve = importlib.util.module_from_spec(_spec)
+    if "core" not in sys.modules:
+        _pkg = types.ModuleType("core")
+        _pkg.__path__ = [os.path.join(_ROOT, "core")]
+        sys.modules["core"] = _pkg
+    sys.modules["core.vector_engine"] = _ve
+    setattr(sys.modules["core"], "vector_engine", _ve)
+    assert _spec.loader is not None
+    _spec.loader.exec_module(_ve)
 
 VectorAnalysis = _ve.VectorAnalysis
 apply_recipe_overrides_to_analysis = _ve.apply_recipe_overrides_to_analysis
