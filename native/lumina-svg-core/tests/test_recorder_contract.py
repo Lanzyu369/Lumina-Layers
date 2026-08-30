@@ -61,6 +61,11 @@ def test_recorder_fails_closed_for_unsupported_attributes(
 @pytest.mark.parametrize(
     ("body", "reason"),
     [
+        ("<mask id='m'><rect width='1' height='1'/></mask>", "unsupported_mask"),
+        ("<marker id='m'/>", "unsupported_marker"),
+        ("<linearGradient id='g'/>", "unsupported_paint_server"),
+        ("<radialGradient id='g'/>", "unsupported_paint_server"),
+        ("<pattern id='p'/>", "unsupported_paint_server"),
         ("<foreignObject width='1' height='1'/>", "unsupported_element"),
         ("<script>1</script>", "unsupported_script"),
         ("<image href='data:image/png;base64,AA=='/>", "unsupported_image"),
