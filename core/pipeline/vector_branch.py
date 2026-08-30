@@ -1692,7 +1692,7 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
     quantize_colors = ctx.get("quantize_colors", 64)
     backing_color_id = ctx.get("backing_color_id", 0)
     lut_metadata = ctx.get("lut_metadata")
-    preview_timing: dict[str, float] = {}
+    preview_timing: dict[str, float | str | bool] = {}
     vector_preview_total_t0 = time.perf_counter()
     # Native dynamic-material matching needs the structured replacement records
     # so VectorProcessor can resolve all source fills behind one matched palette
@@ -1714,10 +1714,9 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
             color_replacements=vector_replacements,
         )
         preview_timing.update(
-            {
-                str(key): float(value)
-                for key, value in getattr(analysis, "stage_timings", {}).items()
-            }
+            _structured_timing_payload(
+                getattr(analysis, "stage_timings", {})
+            )
         )
         _record_material_parallelism(preview_timing, vec_processor)
         preview_timing["analyze_svg_s"] = time.perf_counter() - t0

@@ -110,7 +110,11 @@ def test_vector_preview_branch_preserves_backing_mask_in_cache() -> None:
             0: [255, 255, 255, 255],
             1: [255, 0, 0, 255],
         },
-        stage_timings={},
+        stage_timings={
+            "native_svg_s": 0.1,
+            "geometry_backend": "native",
+            "native_cache_hit": False,
+        },
         image_vectorizer_bounds=full_backing,
     )
     fake_processor = SimpleNamespace(analyze_svg=lambda **_kwargs: analysis)
@@ -151,6 +155,8 @@ def test_vector_preview_branch_preserves_backing_mask_in_cache() -> None:
 
     assert "error" not in result
     assert result["vector_timing"]["vector_preview_total_s"] >= 0.0
+    assert result["vector_timing"]["geometry_backend"] == "native"
+    assert result["vector_timing"]["native_cache_hit"] is False
     assert "backing_mask" in result["cache"]
     assert result["cache"]["backing_mask"].shape == result["cache"]["mask_solid"].shape
     assert np.count_nonzero(
