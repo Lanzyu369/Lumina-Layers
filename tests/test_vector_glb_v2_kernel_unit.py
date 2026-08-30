@@ -18,7 +18,7 @@ from shapely.ops import unary_union
 
 from core.pipeline import vector_glb_preview
 import core.vector_engine as vector_engine
-from core.errors import VectorMeshMemoryBudgetError
+from core.errors import VectorMeshMemoryBudgetError, VectorTopologyError
 
 
 @pytest.fixture
@@ -401,6 +401,72 @@ def test_analytic_extrusion_preserves_curve_hole_and_components() -> None:
         np.isclose(mesh.vertices[:, 0], 0.137, atol=1e-6)
     )
     assert len(mesh.split(only_watertight=False)) == 2
+
+
+def test_analytic_extrusion_skips_degenerate_repair_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    degenerate = box(0.0, 0.0, 1e-8, 1e-8)
+    visible = box(0.0, 0.0, 1.0, 1.0)
+    seen_areas: list[float] = []
+
+    def fake_extrude(polygon, **_kwargs):
+        seen_areas.append(float(polygon.area))
+        return [_box_mesh(z_min=0.0, z_max=1.0)]
+
+    monkeypatch.setattr(
+        vector_glb_preview,
+        "extrude_polygon_for_export",
+        fake_extrude,
+    )
+
+    mesh = vector_glb_preview._mesh_from_analytic_extrusion(
+        vector_glb_preview.VectorPreviewExtrusion(
+            footprint=visible,
+            footprints=(degenerate, visible),
+            footprints_validated=True,
+            z_min=0.2,
+            z_max=0.6,
+        )
+    )
+
+    assert mesh is not None
+    assert seen_areas == [pytest.approx(1.0)]
+
+
+def test_analytic_extrusion_raster_fallback_is_local_to_rejected_polygon(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fallback_calls: list[tuple[float, tuple[int, int, int, int], float]] = []
+
+    monkeypatch.setattr(
+        vector_glb_preview,
+        "extrude_polygon_for_export",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            VectorTopologyError("topology rejected", attempts=())
+        ),
+    )
+
+    def fake_raster_fallback(extrusion, *, rgba, pixels_per_mm):
+        fallback_calls.append((extrusion.footprint.area, rgba, pixels_per_mm))
+        return _box_mesh(z_min=extrusion.z_min, z_max=extrusion.z_max)
+
+    monkeypatch.setattr(
+        vector_glb_preview,
+        "_mesh_from_extrusion_v2",
+        fake_raster_fallback,
+    )
+
+    mesh = vector_glb_preview._mesh_from_analytic_extrusion(
+        vector_glb_preview.VectorPreviewExtrusion(
+            footprint=box(0.0, 0.0, 1.0, 1.0),
+            z_min=0.2,
+            z_max=0.6,
+        )
+    )
+
+    assert mesh is not None
+    assert fallback_calls == [(1.0, (255, 255, 255, 255), 10.0)]
 
 
 def test_analytic_glb_exports_height_key_extras_and_display_only_parts(

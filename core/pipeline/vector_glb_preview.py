@@ -30,7 +30,7 @@ from trimesh.visual.material import PBRMaterial
 
 from api.structured_logging import get_logger
 from config import PrinterConfig
-from core.errors import VectorMeshMemoryBudgetError
+from core.errors import VectorMeshMemoryBudgetError, VectorTopologyError
 from core.vector_engine import (
     _load_vector_parse_clip_cache_artifact_by_provenance,
     _rasterize_geometry_roi_mask,
@@ -56,6 +56,8 @@ _V2_VECTOR_COMPONENT_COMPOSE_CHUNK_SIZE = 64
 _VECTOR_QUICK_PREVIEW_MAX_BYTES = 64 * 1024 * 1024
 _VECTOR_QUICK_PREVIEW_MAX_SHAPES = 10_000
 _VECTOR_QUICK_PREVIEW_MAX_COORDINATES = 4_000_000
+_ANALYTIC_MIN_AREA_MM2 = 1e-12
+_ANALYTIC_TOPOLOGY_FALLBACK_PIXELS_PER_MM = 10.0
 
 VectorPreviewRole = Literal["color", "backing", "outline", "auxiliary"]
 
@@ -1877,12 +1879,19 @@ def _mesh_from_analytic_extrusion(
             extrusion.footprints or (extrusion.footprint,)
         )
     )
-    polygons = [
-        polygon
-        for footprint in footprints
-        for polygon in _polygon_components(footprint)
-        if not polygon.is_empty
-    ]
+    polygons: list[Polygon] = []
+    for footprint in footprints:
+        for polygon in _polygon_components(footprint):
+            try:
+                area = float(polygon.area)
+            except (TypeError, ValueError, AttributeError, OverflowError):
+                continue
+            if (
+                not polygon.is_empty
+                and np.isfinite(area)
+                and area > _ANALYTIC_MIN_AREA_MM2
+            ):
+                polygons.append(polygon)
     if not polygons:
         raise RuntimeError("Analytic Vector GLB extrusion has no Polygon footprints")
     z_height = float(extrusion.z_max) - float(extrusion.z_min)
@@ -1891,11 +1900,25 @@ def _mesh_from_analytic_extrusion(
 
     meshes: list[trimesh.Trimesh] = []
     for polygon in polygons:
-        pieces = extrude_polygon_for_export(
-            polygon,
-            xy_scale=1.0,
-            prefer_fast=True,
-        )
+        try:
+            pieces = extrude_polygon_for_export(
+                polygon,
+                xy_scale=1.0,
+                prefer_fast=True,
+            )
+        except VectorTopologyError:
+            meshes.append(
+                _mesh_from_extrusion_v2(
+                    VectorPreviewExtrusion(
+                        footprint=polygon,
+                        z_min=extrusion.z_min,
+                        z_max=extrusion.z_max,
+                    ),
+                    rgba=(255, 255, 255, 255),
+                    pixels_per_mm=_ANALYTIC_TOPOLOGY_FALLBACK_PIXELS_PER_MM,
+                )
+            )
+            continue
         for piece in pieces:
             vertices = np.asarray(piece.vertices, dtype=np.float64).copy()
             vertices[:, 2] = (

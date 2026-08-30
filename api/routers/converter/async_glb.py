@@ -46,6 +46,7 @@ from api.session_store import SessionStore
 from api.structured_logging import get_logger
 from config import OUTPUT_DIR
 from core.converter import generate_segmented_glb
+from core.errors import CoreError
 from core.naming import generate_segmented_glb_filename
 from core.pipeline.vector_glb_preview import (
     build_vector_quick_preview_parts,
@@ -57,6 +58,7 @@ from core.pipeline.vector_glb_preview import (
 from .common import NON_FATAL_GLB_ERRORS
 
 log = get_logger(__name__)
+_GLB_BUILD_ERRORS = NON_FATAL_GLB_ERRORS + (CoreError,)
 _GLB_CACHE_UNAVAILABLE_MESSAGE = (
     "3D preview cache is unavailable. Re-run preview before updating the 3D preview."
 )
@@ -239,7 +241,7 @@ def _build_preview_glb(
                 cache=cache,
                 output_path=output_path,
             )
-        except NON_FATAL_GLB_ERRORS as exc:
+        except _GLB_BUILD_ERRORS as exc:
             log.debug(
                 "Analytic Vector GLB unavailable; using segmented fallback",
                 extra={
@@ -526,7 +528,7 @@ def _run_glb_build_job(
                 "glb_url_set": cache_updates.get("glb_url") is not None,
             },
         )
-    except NON_FATAL_GLB_ERRORS as exc:
+    except _GLB_BUILD_ERRORS as exc:
         # Record the error so the status endpoint can surface it and the
         # frontend can stop polling. Do NOT re-raise — this is a detached
         # worker thread; propagation would only log at the ThreadPoolExecutor.
