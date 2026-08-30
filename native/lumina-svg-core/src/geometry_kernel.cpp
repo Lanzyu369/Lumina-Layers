@@ -49,6 +49,27 @@ struct PaintGeometry {
     SourceKind source_kind{SourceKind::Fill};
 };
 
+struct SourceBounds {
+    double min_x{std::numeric_limits<double>::infinity()};
+    double min_y{std::numeric_limits<double>::infinity()};
+    double max_x{-std::numeric_limits<double>::infinity()};
+    double max_y{-std::numeric_limits<double>::infinity()};
+
+    bool valid() const
+    {
+        return std::isfinite(min_x) && std::isfinite(min_y)
+            && max_x > min_x && max_y > min_y;
+    }
+
+    void include(const PointD& point)
+    {
+        min_x = std::min(min_x, point.x);
+        min_y = std::min(min_y, point.y);
+        max_x = std::max(max_x, point.x);
+        max_y = std::max(max_y, point.y);
+    }
+};
+
 bool isPositiveFinite(double value)
 {
     return std::isfinite(value) && value > 0;
@@ -70,6 +91,103 @@ PointD transformPoint(const lunasvg::Matrix& matrix, const PointD& point)
         matrix.a * point.x + matrix.c * point.y + matrix.e,
         matrix.b * point.x + matrix.d * point.y + matrix.f,
     };
+}
+
+double cubicCoordinate(double start, double control1, double control2,
+                       double end, double t)
+{
+    const double oneMinusT = 1.0 - t;
+    return oneMinusT * oneMinusT * oneMinusT * start
+        + 3.0 * oneMinusT * oneMinusT * t * control1
+        + 3.0 * oneMinusT * t * t * control2
+        + t * t * t * end;
+}
+
+void includeCubicExtrema(const PointD& start, const PointD& control1,
+                         const PointD& control2, const PointD& end,
+                         SourceBounds& bounds)
+{
+    bounds.include(start);
+    bounds.include(end);
+    auto includeCoordinateExtrema = [&](double p0, double p1, double p2,
+                                        double p3, bool xCoordinate) {
+        const double a = -p0 + 3.0 * p1 - 3.0 * p2 + p3;
+        const double b = 2.0 * (p0 - 2.0 * p1 + p2);
+        const double c = p1 - p0;
+        std::array<double, 2> roots{{-1, -1}};
+        size_t rootCount = 0;
+        if(std::abs(a) <= std::numeric_limits<double>::epsilon()) {
+            if(std::abs(b) > std::numeric_limits<double>::epsilon())
+                roots[rootCount++] = -c / b;
+        } else {
+            const double discriminant = b * b - 4.0 * a * c;
+            if(discriminant >= 0) {
+                const double root = std::sqrt(discriminant);
+                roots[rootCount++] = (-b + root) / (2.0 * a);
+                roots[rootCount++] = (-b - root) / (2.0 * a);
+            }
+        }
+        for(size_t index = 0; index < rootCount; ++index) {
+            const double t = roots[index];
+            if(t <= 0 || t >= 1)
+                continue;
+            PointD point;
+            if(xCoordinate) {
+                point.x = cubicCoordinate(p0, p1, p2, p3, t);
+                point.y = cubicCoordinate(start.y, control1.y, control2.y,
+                                          end.y, t);
+            } else {
+                point.x = cubicCoordinate(start.x, control1.x, control2.x,
+                                          end.x, t);
+                point.y = cubicCoordinate(p0, p1, p2, p3, t);
+            }
+            bounds.include(point);
+        }
+    };
+    includeCoordinateExtrema(start.x, control1.x, control2.x, end.x, true);
+    includeCoordinateExtrema(start.y, control1.y, control2.y, end.y, false);
+}
+
+SourceBounds exactFillBounds(const std::vector<lunasvg::PaintCommand>& commands)
+{
+    SourceBounds bounds;
+    for(const auto& command : commands) {
+        if(command.kind != lunasvg::PaintCommandKind::Fill)
+            continue;
+        size_t pointIndex = 0;
+        PointD current;
+        for(const auto verb : command.path_verbs) {
+            switch(verb) {
+            case lunasvg::PaintPathVerb::MoveTo:
+            case lunasvg::PaintPathVerb::LineTo: {
+                const auto& point = command.path_points.at(pointIndex++);
+                current = {point.x, point.y};
+                bounds.include(transformPoint(command.transform, current));
+                break;
+            }
+            case lunasvg::PaintPathVerb::CubicTo: {
+                const auto& first = command.path_points.at(pointIndex++);
+                const auto& second = command.path_points.at(pointIndex++);
+                const auto& last = command.path_points.at(pointIndex++);
+                const auto transformedStart = transformPoint(command.transform,
+                                                              current);
+                const auto transformedFirst = transformPoint(
+                    command.transform, {first.x, first.y});
+                const auto transformedSecond = transformPoint(
+                    command.transform, {second.x, second.y});
+                const auto transformedLast = transformPoint(
+                    command.transform, {last.x, last.y});
+                includeCubicExtrema(transformedStart, transformedFirst,
+                                    transformedSecond, transformedLast, bounds);
+                current = {last.x, last.y};
+                break;
+            }
+            case lunasvg::PaintPathVerb::Close:
+                break;
+            }
+        }
+    }
+    return bounds;
 }
 
 double pointLineDistance(const PointD& point,
@@ -303,25 +421,25 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
         result->reason_code = recording.reason_code;
         return result;
     }
-    if(!isPositiveFinite(recording.bounds.w)
-            || !std::isfinite(recording.bounds.x)
-            || !std::isfinite(recording.bounds.y)
-            || !std::isfinite(recording.bounds.h)) {
+    const auto sourceBounds = exactFillBounds(recording.commands);
+    if(!sourceBounds.valid()) {
         result->reason_code = "empty_geometry";
         return result;
     }
 
-    result->bbox = {{recording.bounds.x, recording.bounds.y,
-                     recording.bounds.w, recording.bounds.h}};
-    result->scale_factor = targetWidthMm / recording.bounds.w;
+    const double sourceWidth = sourceBounds.max_x - sourceBounds.min_x;
+    const double sourceHeight = sourceBounds.max_y - sourceBounds.min_y;
+    result->bbox = {{sourceBounds.min_x, sourceBounds.min_y,
+                     sourceWidth, sourceHeight}};
+    result->scale_factor = targetWidthMm / sourceWidth;
     result->max_flattening_error_mm = toleranceMm * 0.4;
     result->max_quantization_error_mm = toleranceMm * 0.2;
     const double gridStepMm = result->max_quantization_error_mm
         * std::sqrt(2.0);
     result->grid_to_source_unit = gridStepMm / result->scale_factor;
     const PhysicalDomain domain{
-        recording.bounds.x,
-        recording.bounds.y,
+        sourceBounds.min_x,
+        sourceBounds.min_y,
         result->scale_factor,
         gridStepMm,
         result->max_flattening_error_mm,
