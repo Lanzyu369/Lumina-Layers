@@ -16,6 +16,24 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-08-31",
+    title: {
+      zh: "Lumina Layers — 8 月更新速览",
+      en: "Lumina Layers — August updates",
+    },
+    sections: [
+      {
+        category: { zh: "矢量化", en: "Vectorisation" },
+        items: [
+          {
+            zh: "8 月 31 日：常见的纯色 SVG 现在能更快完成颜色区域分析；遇到复杂描边、透明或特效时会自动沿用兼容处理，成品结构和材料顺序保持不变。",
+            en: "August 31: Common flat-colour SVG files now complete colour-region analysis faster. Artwork with complex strokes, transparency, or effects automatically uses the compatibility path, preserving the finished structure and material order.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-08-23",
     title: {
       zh: "Lumina Layers — 8 月更新速览",
