@@ -16,7 +16,6 @@ license = "Apache-2.0"
 authors = [{ name = "Lumina Layer Studio" }]
 classifiers = [
   "Development Status :: 3 - Alpha",
-  "License :: OSI Approved :: Apache Software License",
   "Programming Language :: C++",
   "Programming Language :: Python :: 3.12",
 ]
@@ -54,4 +53,3 @@ build = [
 ]
 test-requires = ["pytest>=8,<10", "numpy>=2,<3"]
 test-command = "pytest {project}/tests -q"
-

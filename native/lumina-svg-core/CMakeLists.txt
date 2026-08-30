@@ -13,6 +13,29 @@ find_package(pybind11 CONFIG REQUIRED)
 include(cmake/Dependencies.cmake)
 lumina_fetch_native_svg_dependencies()
 
-# The extension target is added with the first recorder implementation. Keeping
-# dependency resolution here makes a source distribution independently buildable.
+pybind11_add_module(
+  _lumina_svg_core
+  MODULE
+  src/bindings.cpp
+  src/paint_command.cpp
+)
+target_include_directories(
+  _lumina_svg_core
+  PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(
+  _lumina_svg_core
+  PRIVATE
+  lunasvg::lunasvg
+  Clipper2
+)
+target_compile_definitions(_lumina_svg_core PRIVATE PYBIND11_DETAILED_ERROR_MESSAGES=1)
+set_target_properties(
+  _lumina_svg_core
+  PROPERTIES
+  CXX_VISIBILITY_PRESET hidden
+  VISIBILITY_INLINES_HIDDEN ON
+)
 
+install(TARGETS _lumina_svg_core LIBRARY DESTINATION . RUNTIME DESTINATION .)

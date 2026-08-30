@@ -6,7 +6,8 @@ binary distributions.
 
 ## LunaSVG
 
-- Upstream: https://github.com/sammycage/lunasvg
+- Maintained fork: https://github.com/Neroued/lunasvg
+- Original upstream: https://github.com/sammycage/lunasvg
 - Revision: `59690a23981489acc3f73b8db229ef57bb69c544`
 - License: MIT
 - Copyright: Samuel Ugochukwu and LunaSVG contributors
@@ -34,4 +35,3 @@ at `patches/lunasvg-paint-recorder.patch`.
 PlutoVG contains FreeType-derived stroker and raster files with their own
 file-level FreeType Project notices. Those notices remain verbatim in the
 corresponding PlutoVG source files and are included in source distributions.
-

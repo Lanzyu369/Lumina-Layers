@@ -1,0 +1,613 @@
+diff --git a/include/lunasvg.h b/include/lunasvg.h
+index 74f43bb..cc58776 100644
+--- a/include/lunasvg.h
++++ b/include/lunasvg.h
+@@ -23,6 +23,7 @@
+ #ifndef LUNASVG_H
+ #define LUNASVG_H
+ 
++#include <array>
+ #include <cstdint>
+ #include <memory>
+ #include <string>
+@@ -491,6 +492,64 @@ public:
+   float f{0}; ///< The vertical translation offset.
+ };
+ 
++/**
++ * Version of the stable paint-command schema exposed by the Lumina fork.
++ */
++inline constexpr uint32_t PAINT_COMMAND_SCHEMA_VERSION = 1;
++
++enum class PaintCommandKind : uint8_t {
++  Fill,
++  Stroke,
++  ClipBegin,
++  ClipEnd,
++  GroupBegin,
++  GroupEnd
++};
++
++enum class PaintPathVerb : uint8_t { MoveTo, LineTo, CubicTo, Close };
++enum class PaintFillRule : uint8_t { NonZero, EvenOdd };
++enum class PaintLineCap : uint8_t { Butt, Round, Square };
++enum class PaintLineJoin : uint8_t { Miter, Round, Bevel };
++
++struct LUNASVG_API PaintPoint {
++  float x{0};
++  float y{0};
++};
++
++struct LUNASVG_API PaintStrokeStyle {
++  float width{1};
++  float miter_limit{4};
++  float dash_offset{0};
++  PaintLineCap line_cap{PaintLineCap::Butt};
++  PaintLineJoin line_join{PaintLineJoin::Miter};
++  std::vector<float> dash_array;
++};
++
++/**
++ * A fully copied paint operation. No private LunaSVG object is exposed and
++ * every path remains in element-local coordinates until the consumer applies
++ * the complete affine transform.
++ */
++struct LUNASVG_API PaintCommand {
++  PaintCommandKind kind{PaintCommandKind::Fill};
++  std::vector<PaintPathVerb> path_verbs;
++  std::vector<PaintPoint> path_points;
++  Matrix transform;
++  std::array<uint8_t, 4> rgba{{0, 0, 0, 0}};
++  PaintFillRule fill_rule{PaintFillRule::NonZero};
++  PaintStrokeStyle stroke;
++  float group_opacity{1};
++  int32_t source_index{-1};
++  std::string source_kind;
++};
++
++struct LUNASVG_API PaintCommandList {
++  uint32_t schema_version{PAINT_COMMAND_SCHEMA_VERSION};
++  Box bounds;
++  std::vector<PaintCommand> commands;
++  std::vector<std::string> capability_issues;
++};
++
+ class SVGNode;
+ class SVGTextNode;
+ class SVGElement;
+@@ -816,6 +875,13 @@ public:
+    */
+   Element documentElement() const;
+ 
++  /**
++   * Records the resolved paint traversal without exposing the private scene
++   * tree. If any unsupported semantic is present, capability_issues is
++   * non-empty and commands is empty.
++   */
++  PaintCommandList recordPaintCommands() const;
++
+   Document(Document &&);
+   Document &operator=(Document &&);
+   ~Document();
+@@ -826,9 +892,15 @@ private:
+   Document &operator=(const Document &) = delete;
+   SVGRootElement *rootElement(bool layoutIfNeeded = false) const;
+   bool parse(const char *data, size_t length);
++  int32_t allocateSourceIndex();
++  void addCapabilityIssue(const std::string &reason);
+   std::unique_ptr<SVGRootElement> m_rootElement;
++  std::vector<std::string> m_capabilityIssues;
++  int32_t m_nextSourceIndex{0};
+   friend class SVGURIReference;
+   friend class SVGNode;
++  friend class SVGElement;
++  friend class SVGRenderState;
+ };
+ 
+ } // namespace lunasvg
+diff --git a/source/graphics.cpp b/source/graphics.cpp
+index 248c087..b5d9b5c 100644
+--- a/source/graphics.cpp
++++ b/source/graphics.cpp
+@@ -512,26 +512,36 @@ std::shared_ptr<Canvas> Canvas::create(const Rect& extents)
+ 
+ void Canvas::setColor(const Color& color)
+ {
+-    setColor(color.redF(), color.greenF(), color.blueF(), color.alphaF());
++    m_solidPaint = color;
++    m_hasSolidPaint = true;
++    plutovg_canvas_set_rgba(m_canvas, color.redF(), color.greenF(), color.blueF(), color.alphaF());
+ }
+ 
+ void Canvas::setColor(float r, float g, float b, float a)
+ {
++    auto toByte = [](float value) {
++        return static_cast<int>(std::lround(std::clamp(value, 0.f, 1.f) * 255.f));
++    };
++    m_solidPaint = Color(toByte(r), toByte(g), toByte(b), toByte(a));
++    m_hasSolidPaint = true;
+     plutovg_canvas_set_rgba(m_canvas, r, g, b, a);
+ }
+ 
+ void Canvas::setLinearGradient(float x1, float y1, float x2, float y2, SpreadMethod spread, const GradientStops& stops, const Transform& transform)
+ {
++    m_hasSolidPaint = false;
+     plutovg_canvas_set_linear_gradient(m_canvas, x1, y1, x2, y2, static_cast<plutovg_spread_method_t>(spread), stops.data(), stops.size(), &transform.matrix());
+ }
+ 
+ void Canvas::setRadialGradient(float cx, float cy, float r, float fx, float fy, SpreadMethod spread, const GradientStops& stops, const Transform& transform)
+ {
++    m_hasSolidPaint = false;
+     plutovg_canvas_set_radial_gradient(m_canvas, cx, cy, r, fx, fy, 0.f, static_cast<plutovg_spread_method_t>(spread), stops.data(), stops.size(), &transform.matrix());
+ }
+ 
+ void Canvas::setTexture(const Canvas& source, TextureType type, float opacity, const Transform& transform)
+ {
++    m_hasSolidPaint = false;
+     plutovg_canvas_set_texture(m_canvas, source.surface(), static_cast<plutovg_texture_type_t>(type), opacity, &transform.matrix());
+ }
+ 
+diff --git a/source/graphics.h b/source/graphics.h
+index 7e6bc12..152d3ef 100644
+--- a/source/graphics.h
++++ b/source/graphics.h
+@@ -518,6 +518,9 @@ public:
+     void setRadialGradient(float cx, float cy, float r, float fx, float fy, SpreadMethod spread, const GradientStops& stops, const Transform& transform);
+     void setTexture(const Canvas& source, TextureType type, float opacity, const Transform& transform);
+ 
++    bool hasSolidPaint() const { return m_hasSolidPaint; }
++    const Color& solidPaint() const { return m_solidPaint; }
++
+     void fillPath(const Path& path, FillRule fillRule, const Transform& transform);
+     void strokePath(const Path& path, const StrokeData& strokeData, const Transform& transform);
+ 
+@@ -553,6 +556,8 @@ private:
+     plutovg_surface_t* m_surface;
+     plutovg_canvas_t* m_canvas;
+     plutovg_matrix_t m_translation;
++    Color m_solidPaint{Color::Transparent};
++    bool m_hasSolidPaint{true};
+     const int m_x;
+     const int m_y;
+ };
+diff --git a/source/lunasvg.cpp b/source/lunasvg.cpp
+index 0a4399f..e7ab7a3 100644
+--- a/source/lunasvg.cpp
++++ b/source/lunasvg.cpp
+@@ -5,6 +5,8 @@
+ #include <cstring>
+ #include <fstream>
+ #include <cmath>
++#include <algorithm>
++#include <limits>
+ 
+ int lunasvg_version()
+ {
+@@ -520,6 +522,42 @@ Element Document::documentElement() const
+     return m_rootElement.get();
+ }
+ 
++PaintCommandList Document::recordPaintCommands() const
++{
++    PaintCommandList result;
++    result.bounds = boundingBox();
++    result.capability_issues = m_capabilityIssues;
++    if(!result.capability_issues.empty())
++        return result;
++
++    auto bounds = Rect(result.bounds);
++    auto canvas = Canvas::create(bounds);
++    SVGRenderState state(nullptr, nullptr, Transform::Identity,
++                         SVGRenderMode::Painting, canvas, &result);
++    rootElement(true)->render(state);
++    result.capability_issues = m_capabilityIssues;
++    if(!result.capability_issues.empty())
++        result.commands.clear();
++    return result;
++}
++
++int32_t Document::allocateSourceIndex()
++{
++    if(m_nextSourceIndex == std::numeric_limits<int32_t>::max()) {
++        addCapabilityIssue("numeric_range_error");
++        return -1;
++    }
++    return m_nextSourceIndex++;
++}
++
++void Document::addCapabilityIssue(const std::string& reason)
++{
++    if(std::find(m_capabilityIssues.begin(), m_capabilityIssues.end(), reason)
++            == m_capabilityIssues.end()) {
++        m_capabilityIssues.push_back(reason);
++    }
++}
++
+ SVGRootElement* Document::rootElement(bool layoutIfNeeded) const
+ {
+     if(layoutIfNeeded)
+diff --git a/source/svgelement.cpp b/source/svgelement.cpp
+index 7d62cc6..078c2eb 100644
+--- a/source/svgelement.cpp
++++ b/source/svgelement.cpp
+@@ -126,6 +126,7 @@ std::unique_ptr<SVGElement> SVGElement::create(Document* document, ElementID id)
+ SVGElement::SVGElement(Document* document, ElementID id)
+     : SVGNode(document)
+     , m_id(id)
++    , m_sourceIndex(document->allocateSourceIndex())
+ {
+ }
+ 
+@@ -1100,7 +1101,14 @@ void SVGClipPathElement::applyClipPath(SVGRenderState& state) const
+ 
+         if(shapeElement == nullptr || !shapeElement->isRenderable())
+             continue;
+-        state->clipPath(shapeElement->path(), shapeElement->clip_rule(), clipTransform * shapeElement->localTransform());
++        auto shapeTransform = clipTransform * shapeElement->localTransform();
++        auto clipState = SVGRenderState(shapeElement, &state, shapeTransform,
++                                        SVGRenderMode::Clipping, state.canvas(),
++                                        state.recorder());
++        clipState->setColor(Color::White);
++        clipState.recordPath(PaintCommandKind::ClipBegin, shapeElement->path(),
++                             shapeElement->clip_rule(), nullptr, shapeElement);
++        state->clipPath(shapeElement->path(), shapeElement->clip_rule(), shapeTransform);
+         return;
+     }
+ 
+diff --git a/source/svgelement.h b/source/svgelement.h
+index ff5d008..2750991 100644
+--- a/source/svgelement.h
++++ b/source/svgelement.h
+@@ -150,6 +150,7 @@ public:
+     SVGNode* lastChild() const;
+ 
+     ElementID id() const { return m_id; }
++    int32_t sourceIndex() const { return m_sourceIndex; }
+     const AttributeList& attributes() const { return m_attributes; }
+     const SVGPropertyList& properties() const { return m_properties; }
+     const SVGNodeList& children() const { return m_children; }
+@@ -212,6 +213,7 @@ private:
+     PointerEvents m_pointer_events = PointerEvents::Auto;
+ 
+     ElementID m_id;
++    int32_t m_sourceIndex{-1};
+     AttributeList m_attributes;
+     SVGPropertyList m_properties;
+     SVGNodeList m_children;
+diff --git a/source/svggeometryelement.cpp b/source/svggeometryelement.cpp
+index e2c9708..8896b84 100644
+--- a/source/svggeometryelement.cpp
++++ b/source/svggeometryelement.cpp
+@@ -147,14 +147,20 @@ void SVGGeometryElement::render(SVGRenderState& state) const
+     newState.beginGroup(blendInfo);
+     if(newState.mode() == SVGRenderMode::Clipping) {
+         newState->setColor(Color::White);
++        newState.recordPath(PaintCommandKind::ClipBegin, m_path, m_clip_rule);
+         newState->fillPath(m_path, m_clip_rule, newState.currentTransform());
+     } else {
+-        if(m_fill.applyPaint(newState))
++        if(m_fill.applyPaint(newState)) {
++            newState.recordPath(PaintCommandKind::Fill, m_path, m_fill_rule);
+             newState->fillPath(m_path, m_fill_rule, newState.currentTransform());
++        }
+         if(m_stroke.applyPaint(newState)) {
++            newState.recordPath(PaintCommandKind::Stroke, m_path, m_fill_rule, &m_strokeData);
+             newState->strokePath(m_path, m_strokeData, newState.currentTransform());
+         }
+ 
++        if(!m_markerPositions.empty())
++            newState.recordCapabilityIssue("unsupported_marker");
+         for(const auto& markerPosition : m_markerPositions) {
+             markerPosition.renderMarker(newState, m_strokeData.lineWidth());
+         }
+diff --git a/source/svgparser.cpp b/source/svgparser.cpp
+index 183937c..2dfb2e7 100644
+--- a/source/svgparser.cpp
++++ b/source/svgparser.cpp
+@@ -3,9 +3,83 @@
+ #include "svgparserutils.h"
+ 
+ #include <cassert>
++#include <cstdlib>
+ 
+ namespace lunasvg {
+ 
++static bool hasPrefix(std::string_view value, std::string_view prefix)
++{
++    return value.size() >= prefix.size()
++        && value.substr(0, prefix.size()) == prefix;
++}
++
++static bool isNonSemanticUnknownAttribute(std::string_view name)
++{
++    return name == "xmlns" || name == "version" || name == "role"
++        || name == "focusable" || name == "enable-background"
++        || hasPrefix(name, "xmlns:") || hasPrefix(name, "xml:")
++        || hasPrefix(name, "data-") || hasPrefix(name, "aria-")
++        || hasPrefix(name, "inkscape:") || hasPrefix(name, "sodipodi:");
++}
++
++static bool isPartialAlphaValue(std::string_view value)
++{
++    auto first = value.find_first_not_of(" \t\r\n");
++    if(first == std::string_view::npos)
++        return true;
++    auto last = value.find_last_not_of(" \t\r\n");
++    std::string text(value.substr(first, last - first + 1));
++    auto percent = !text.empty() && text.back() == '%';
++    if(percent)
++        text.pop_back();
++    char* end = nullptr;
++    auto parsed = std::strtof(text.c_str(), &end);
++    if(end == text.c_str() || *end != '\0')
++        return true;
++    if(percent)
++        parsed /= 100.f;
++    return parsed > 0.f && parsed < 1.f;
++}
++
++static std::string capabilityReasonForAttribute(std::string_view name,
++                                                std::string_view value,
++                                                bool known)
++{
++    if(name == "vector-effect")
++        return "unsupported_vector_effect";
++    if(name == "marker" || name == "marker-start"
++            || name == "marker-mid" || name == "marker-end")
++        return "unsupported_marker";
++    if(name == "paint-order")
++        return "unsupported_paint_order";
++    if(name == "filter" || name == "backdrop-filter")
++        return "unsupported_filter";
++    if(name == "mix-blend-mode" || name == "isolation")
++        return "unsupported_blend_mode";
++    if(hasPrefix(name, "on"))
++        return "unsupported_script";
++    if((name == "opacity" || name == "fill-opacity"
++            || name == "stroke-opacity") && isPartialAlphaValue(value))
++        return "unsupported_partial_alpha";
++    if(!known && !isNonSemanticUnknownAttribute(name))
++        return "unsupported_property";
++    return {};
++}
++
++static std::string capabilityReasonForElement(std::string_view name,
++                                              ElementID id)
++{
++    if(name == "script")
++        return "unsupported_script";
++    if(id == ElementID::Image)
++        return "unsupported_image";
++    if(id == ElementID::Text || id == ElementID::Tspan)
++        return "unsupported_text";
++    if(id == ElementID::Unknown)
++        return "unsupported_element";
++    return {};
++}
++
+ struct SimpleSelector;
+ 
+ using Selector = std::vector<SimpleSelector>;
+@@ -844,6 +918,9 @@ bool Document::parse(const char* data, size_t length)
+             ++ignoring;
+         } else {
+             auto id = elementid(buffer);
++            auto capabilityReason = capabilityReasonForElement(buffer, id);
++            if(!capabilityReason.empty())
++                addCapabilityIssue(capabilityReason);
+             if(id == ElementID::Unknown) {
+                 ignoring = 1;
+             } else {
+@@ -864,6 +941,7 @@ bool Document::parse(const char* data, size_t length)
+ 
+         skipOptionalSpaces(input);
+         while(readIdentifier(input, buffer)) {
++            const std::string attributeName(buffer);
+             skipOptionalSpaces(input);
+             if(!skipDelimiter(input, '='))
+                 return false;
+@@ -877,7 +955,11 @@ bool Document::parse(const char* data, size_t length)
+                 return false;
+             auto id = PropertyID::Unknown;
+             if(element != nullptr)
+-                id = propertyid(buffer);
++                id = propertyid(attributeName);
++            auto capabilityReason = capabilityReasonForAttribute(
++                attributeName, input.substr(0, n), id != PropertyID::Unknown);
++            if(element != nullptr && !capabilityReason.empty())
++                addCapabilityIssue(capabilityReason);
+             if(id != PropertyID::Unknown) {
+                 decodeText(input.substr(0, n), buffer);
+                 if(id == PropertyID::Style) {
+diff --git a/source/svgrenderstate.cpp b/source/svgrenderstate.cpp
+index 550d389..67b962e 100644
+--- a/source/svgrenderstate.cpp
++++ b/source/svgrenderstate.cpp
+@@ -1,5 +1,7 @@
+ #include "svgrenderstate.h"
+ 
++#include <array>
++
+ namespace lunasvg {
+ 
+ SVGBlendInfo::SVGBlendInfo(const SVGElement* element)
+@@ -27,6 +29,17 @@ bool SVGRenderState::hasCycleReference(const SVGElement* element) const
+ 
+ void SVGRenderState::beginGroup(const SVGBlendInfo& blendInfo)
+ {
++    if(m_recorder) {
++        if(blendInfo.masker())
++            recordCapabilityIssue("unsupported_mask");
++        if(blendInfo.opacity() > 0.f && blendInfo.opacity() < 1.f)
++            recordCapabilityIssue("unsupported_partial_alpha");
++        if(blendInfo.opacity() <= 0.f)
++            m_recordingSuppressed = true;
++        if(blendInfo.clipper() && blendInfo.clipper()->requiresMasking())
++            recordCapabilityIssue("unsupported_complex_clip");
++    }
++
+     auto requiresCompositing = blendInfo.requiresCompositing(m_mode);
+     if(requiresCompositing) {
+         auto boundingBox = m_currentTransform.mapRect(m_element->paintBoundingBox());
+@@ -43,6 +56,9 @@ void SVGRenderState::beginGroup(const SVGBlendInfo& blendInfo)
+ 
+ void SVGRenderState::endGroup(const SVGBlendInfo& blendInfo)
+ {
++    if(m_recorder && blendInfo.clipper() && !blendInfo.clipper()->requiresMasking())
++        recordBoundary(PaintCommandKind::ClipEnd);
++
+     if(m_canvas == m_parent->canvas()) {
+         m_canvas->restore();
+         return;
+@@ -58,4 +74,99 @@ void SVGRenderState::endGroup(const SVGBlendInfo& blendInfo)
+     m_parent->m_canvas->blendCanvas(*m_canvas, BlendMode::Src_Over, opacity);
+ }
+ 
++void SVGRenderState::recordCapabilityIssue(const std::string& reason,
++                                           const SVGElement* sourceElement)
++{
++    if(!m_recorder)
++        return;
++    auto source = sourceElement ? sourceElement : m_element;
++    if(source)
++        source->document()->addCapabilityIssue(reason);
++}
++
++void SVGRenderState::recordBoundary(PaintCommandKind kind,
++                                    const SVGElement* sourceElement)
++{
++    if(!m_recorder || m_recordingSuppressed)
++        return;
++    auto source = sourceElement ? sourceElement : m_element;
++    PaintCommand command;
++    command.kind = kind;
++    command.transform = Matrix(m_currentTransform);
++    command.source_index = source ? source->sourceIndex() : -1;
++    command.source_kind = kind == PaintCommandKind::ClipEnd ? "clip_end" : "group";
++    m_recorder->commands.emplace_back(std::move(command));
++}
++
++void SVGRenderState::recordPath(PaintCommandKind kind, const Path& path,
++                                FillRule fillRule,
++                                const StrokeData* strokeData,
++                                const SVGElement* sourceElement)
++{
++    if(!m_recorder || m_recordingSuppressed)
++        return;
++    auto source = sourceElement ? sourceElement : m_element;
++    if(!source)
++        return;
++    if(!m_canvas->hasSolidPaint()) {
++        recordCapabilityIssue("unsupported_paint_server", source);
++        return;
++    }
++
++    const auto& color = m_canvas->solidPaint();
++    if(color.alpha() == 0)
++        return;
++    if(color.alpha() != 255) {
++        recordCapabilityIssue("unsupported_partial_alpha", source);
++        return;
++    }
++
++    PaintCommand command;
++    command.kind = kind;
++    command.transform = Matrix(m_currentTransform);
++    command.rgba = {{color.red(), color.green(), color.blue(), color.alpha()}};
++    command.fill_rule = fillRule == FillRule::EvenOdd
++        ? PaintFillRule::EvenOdd : PaintFillRule::NonZero;
++    command.source_index = source->sourceIndex();
++    command.source_kind = kind == PaintCommandKind::Stroke ? "stroke"
++        : kind == PaintCommandKind::ClipBegin ? "clip" : "fill";
++
++    if(strokeData) {
++        command.stroke.width = strokeData->lineWidth();
++        command.stroke.miter_limit = strokeData->miterLimit();
++        command.stroke.dash_offset = strokeData->dashOffset();
++        command.stroke.line_cap = static_cast<PaintLineCap>(strokeData->lineCap());
++        command.stroke.line_join = static_cast<PaintLineJoin>(strokeData->lineJoin());
++        command.stroke.dash_array = strokeData->dashArray();
++    }
++
++    PathIterator iterator(path);
++    std::array<Point, 3> points;
++    while(!iterator.isDone()) {
++        auto pathCommand = iterator.currentSegment(points);
++        switch(pathCommand) {
++        case PathCommand::MoveTo:
++            command.path_verbs.push_back(PaintPathVerb::MoveTo);
++            command.path_points.push_back({points[0].x, points[0].y});
++            break;
++        case PathCommand::LineTo:
++            command.path_verbs.push_back(PaintPathVerb::LineTo);
++            command.path_points.push_back({points[0].x, points[0].y});
++            break;
++        case PathCommand::CubicTo:
++            command.path_verbs.push_back(PaintPathVerb::CubicTo);
++            command.path_points.push_back({points[0].x, points[0].y});
++            command.path_points.push_back({points[1].x, points[1].y});
++            command.path_points.push_back({points[2].x, points[2].y});
++            break;
++        case PathCommand::Close:
++            command.path_verbs.push_back(PaintPathVerb::Close);
++            break;
++        }
++        iterator.next();
++    }
++
++    m_recorder->commands.emplace_back(std::move(command));
++}
++
+ } // namespace lunasvg
+diff --git a/source/svgrenderstate.h b/source/svgrenderstate.h
+index 1e0d434..5d9b0cc 100644
+--- a/source/svgrenderstate.h
++++ b/source/svgrenderstate.h
+@@ -32,11 +32,12 @@ class SVGRenderState {
+ public:
+     SVGRenderState(const SVGElement* element, const SVGRenderState& parent, const Transform& localTransform)
+         : m_element(element), m_parent(&parent), m_currentTransform(parent.currentTransform() * localTransform)
+-        , m_mode(parent.mode()), m_canvas(parent.canvas())
++        , m_mode(parent.mode()), m_canvas(parent.canvas()), m_recorder(parent.recorder())
++        , m_recordingSuppressed(parent.recordingSuppressed())
+     {}
+ 
+-    SVGRenderState(const SVGElement* element, const SVGRenderState* parent, const Transform& currentTransform, SVGRenderMode mode, std::shared_ptr<Canvas> canvas)
+-        : m_element(element), m_parent(parent), m_currentTransform(currentTransform), m_mode(mode), m_canvas(std::move(canvas))
++    SVGRenderState(const SVGElement* element, const SVGRenderState* parent, const Transform& currentTransform, SVGRenderMode mode, std::shared_ptr<Canvas> canvas, PaintCommandList* recorder = nullptr)
++        : m_element(element), m_parent(parent), m_currentTransform(currentTransform), m_mode(mode), m_canvas(std::move(canvas)), m_recorder(recorder)
+     {}
+ 
+     Canvas& operator*() const { return *m_canvas; }
+@@ -47,6 +48,8 @@ public:
+     const Transform& currentTransform() const { return m_currentTransform; }
+     const SVGRenderMode mode() const { return m_mode; }
+     const std::shared_ptr<Canvas>& canvas() const { return m_canvas; }
++    PaintCommandList* recorder() const { return m_recorder; }
++    bool recordingSuppressed() const { return m_recordingSuppressed; }
+ 
+     Rect fillBoundingBox() const { return m_element->fillBoundingBox(); }
+     Rect paintBoundingBox() const { return m_element->paintBoundingBox(); }
+@@ -55,6 +58,13 @@ public:
+ 
+     void beginGroup(const SVGBlendInfo& blendInfo);
+     void endGroup(const SVGBlendInfo& blendInfo);
++    void recordPath(PaintCommandKind kind, const Path& path, FillRule fillRule,
++                    const StrokeData* strokeData = nullptr,
++                    const SVGElement* sourceElement = nullptr);
++    void recordBoundary(PaintCommandKind kind,
++                        const SVGElement* sourceElement = nullptr);
++    void recordCapabilityIssue(const std::string& reason,
++                               const SVGElement* sourceElement = nullptr);
+ 
+ private:
+     const SVGElement* m_element;
+@@ -62,6 +72,8 @@ private:
+     const Transform m_currentTransform;
+     const SVGRenderMode m_mode;
+     std::shared_ptr<Canvas> m_canvas;
++    PaintCommandList* m_recorder{nullptr};
++    bool m_recordingSuppressed{false};
+ };
+ 
+ } // namespace lunasvg

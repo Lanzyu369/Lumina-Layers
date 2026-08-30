@@ -24,10 +24,16 @@ function(lumina_fetch_native_svg_dependencies)
 
   FetchContent_Declare(
     lunasvg
-    GIT_REPOSITORY https://github.com/sammycage/lunasvg.git
+    GIT_REPOSITORY https://github.com/Neroued/lunasvg.git
     GIT_TAG ${LUMINA_LUNASVG_REVISION}
     GIT_SHALLOW FALSE
     GIT_PROGRESS TRUE
+    PATCH_COMMAND
+      ${CMAKE_COMMAND}
+      -DSOURCE_DIR=<SOURCE_DIR>
+      -DEXPECTED_REVISION=${LUMINA_LUNASVG_REVISION}
+      -DPATCH_FILE=${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../patches/lunasvg-paint-recorder.patch
+      -P ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ApplyLunaSvgPatch.cmake
   )
   FetchContent_Declare(
     clipper2
@@ -38,8 +44,5 @@ function(lumina_fetch_native_svg_dependencies)
     GIT_PROGRESS TRUE
   )
 
-  # Task 2 inserts the version-checked recorder patch before these projects are
-  # made available. The exact revisions above are already immutable.
   FetchContent_MakeAvailable(lunasvg clipper2)
 endfunction()
-
