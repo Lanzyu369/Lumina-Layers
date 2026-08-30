@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ColorMode } from "../../api/types";
+import { ColorMode, ModelingMode } from "../../api/types";
 import { useConverterStore } from "../../stores/converter";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useSingleStageStore } from "../../stores/singleStageStore";
@@ -160,7 +160,7 @@ describe("collectBugReportContext", () => {
         "artwork.svg",
         { type: "image/svg+xml" },
       ),
-      modeling_mode: "vector",
+      modeling_mode: ModelingMode.VECTOR,
       modelSurfaceEnabled: false,
       largeFormatEnabled: false,
       batchPreviewItems: [],
