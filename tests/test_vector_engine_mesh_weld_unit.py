@@ -11,6 +11,10 @@ import trimesh
 from shapely.geometry import MultiPolygon, Polygon, box
 
 import core.vector_engine as vector_engine
+from core.layered_coordinate_domain import (
+    LAYERED_COORDINATE_DOMAIN_KEY,
+    LayeredCoordinateDomain,
+)
 from core.mesh_export_parts import get_mesh_export_part_ranges
 from core.vector_engine import (
     VectorAnalysis,
@@ -51,6 +55,60 @@ def _run_one_material(geometries, *, height: float = 0.2):
         scale_factor=1.0,
     )
     return result["White"]["meshes"]
+
+
+def test_build_mesh_uses_one_canvas_writer_grid_for_all_material_runs() -> None:
+    """Remote material runs inherit the canvas writer grid, not local grids."""
+
+    target_width_mm = 20_000.0
+    canvas_width = 814.0
+    canvas_height = 947.0
+    scale_factor = target_width_mm / canvas_width
+    processor = VectorProcessor.__new__(VectorProcessor)
+    processor.color_mode = "4-Color (RYBW)"
+    processor.enable_fridge_magnet = False
+    processor.enable_coating = False
+    processor.enable_outline = False
+    processor.layer_height_mm = 0.08
+    processor._merge_backing_into_material = False
+    analysis = VectorAnalysis(
+        shape_data=[],
+        clipped_shapes=[],
+        matched_shapes=[
+            {"geometry": box(0.0, 0.0, 1.0, 1.0), "recipe": [0]},
+            {"geometry": box(2.0, 0.0, 3.0, 1.0), "recipe": [1]},
+        ],
+        silhouette=box(0.0, 0.0, canvas_width, canvas_height),
+        scale_factor=scale_factor,
+        bbox=(0.0, 0.0, canvas_width, canvas_height),
+        color_conf={},
+        slot_names=["White", "Red"],
+        num_channels=2,
+        num_layers=1,
+        preview_colors={
+            0: [255, 255, 255, 255],
+            1: [255, 0, 0, 255],
+        },
+    )
+
+    scene = processor.build_mesh(
+        analysis=analysis,
+        thickness_mm=0.0,
+        structure_mode="Single-sided",
+    )
+
+    domain = LayeredCoordinateDomain.from_metadata(
+        scene.metadata[LAYERED_COORDINATE_DOMAIN_KEY]
+    )
+    assert analysis.coordinate_domain == domain
+    assert domain.xy_grid_mm > 0.0001
+    assert {
+        (
+            mesh.metadata.get("vector_layer_geometry")
+            or mesh.metadata["vector_stepped_geometry"]
+        )["grid_mm"]
+        for mesh in scene.geometry.values()
+    } == {domain.xy_grid_mm}
 
 
 def test_run_length_keeps_large_body_and_printable_island() -> None:

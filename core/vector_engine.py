@@ -84,6 +84,10 @@ from api.structured_logging import get_logger
 from config import PrinterConfig, ColorSystem, VectorConfig
 from core import geos_buffer_fast
 from core.errors import VectorMeshMemoryBudgetError
+from core.layered_coordinate_domain import (
+    LAYERED_COORDINATE_DOMAIN_KEY,
+    LayeredCoordinateDomain,
+)
 from core.task_parallelism import (
     resolve_task_parallelism_plan,
     task_parallelism_worker_scope,
@@ -99,9 +103,11 @@ from core.vector_mesh_memory import (
     resolve_vector_mesh_memory_budget_bytes,
 )
 from core.vector_layer_geometry import (
+    VectorLayerGeometryPolicy,
     build_vector_stepped_volume,
     extrude_prepared_vector_run_group,
     prepare_vector_spatial_groups_best_effort,
+    resolve_vector_writer_grid_mm,
 )
 
 _log = get_logger(__name__)
@@ -351,6 +357,7 @@ def _build_source_spatial_groups(
     height: float,
     z_offset: float,
     scale_factor: float,
+    geometry_policy: VectorLayerGeometryPolicy | None = None,
 ) -> tuple[list[trimesh.Trimesh], dict[str, object]]:
     """Build writer-separated source groups without rejecting the whole run.
 
@@ -378,6 +385,7 @@ def _build_source_spatial_groups(
                     }
                 ],
                 scale_mm_per_svg_unit=float(scale_factor),
+                policy=geometry_policy,
             )
         except VECTOR_FATAL_ERRORS:
             raise
@@ -387,6 +395,7 @@ def _build_source_spatial_groups(
     preparation = prepare_vector_spatial_groups_best_effort(
         source_geometry_tuple,
         scale_mm_per_svg_unit=float(scale_factor),
+        policy=geometry_policy,
     )
     if int(preparation.failed_part_count) > 0:
         fallback_mesh = _build_local_stepped_fallback()
@@ -2441,6 +2450,7 @@ class VectorAnalysis:
     matched_rgb_override_metrics: dict = field(default_factory=dict)
     material_dynamic_layer_info: dict | None = None
     material_solver_info: dict | None = None
+    coordinate_domain: LayeredCoordinateDomain | None = None
 
 
 def _physical_backing_geometry(analysis: object) -> object | None:
@@ -5258,6 +5268,25 @@ class VectorProcessor:
         if not math.isfinite(layer_h) or layer_h <= 0:
             layer_h = float(PrinterConfig.LAYER_HEIGHT)
 
+        display_layer_count = int(num_layers)
+        if display_layer_count <= 0:
+            raise ValueError("Vector display layer count must be positive")
+        canvas_width_mm = float(bbox[2]) * float(scale_factor)
+        canvas_height_mm = float(bbox[3]) * float(scale_factor)
+        geometry_grid_mm = resolve_vector_writer_grid_mm(
+            max(abs(canvas_width_mm), abs(canvas_height_mm))
+        )
+        coordinate_domain = LayeredCoordinateDomain.from_canvas_and_layers(
+            width_mm=canvas_width_mm,
+            height_mm=canvas_height_mm,
+            xy_grid_mm=geometry_grid_mm,
+            layer_heights_mm=(layer_h,) * display_layer_count,
+        )
+        geometry_policy = VectorLayerGeometryPolicy(
+            grid_mm=coordinate_domain.xy_grid_mm
+        )
+        analysis.coordinate_domain = coordinate_domain
+
         raw_silhouette = getattr(analysis, "silhouette", None)
         if raw_silhouette is not None and not getattr(
             raw_silhouette,
@@ -5428,6 +5457,7 @@ class VectorProcessor:
                 enable_fridge_magnet=enable_fridge_magnet,
                 fridge_magnets=fridge_magnets,
                 merge_backing_into_material=merge_backing_into_material,
+                geometry_policy=geometry_policy,
             )
         elif is_5color:
             meshes_by_slot = self._run_length_extrude(
@@ -5440,6 +5470,7 @@ class VectorProcessor:
                 face_up=True,
                 optical_z_base=backing_height,
                 defer_materialization=True,
+                geometry_policy=geometry_policy,
             )
             deferred_vector_slabs = True
             _log.debug(
@@ -5456,6 +5487,7 @@ class VectorProcessor:
                 slot_names=slot_names,
                 scale_factor=scale_factor,
                 defer_materialization=True,
+                geometry_policy=geometry_policy,
             )
             deferred_vector_slabs = True
         stage_timings["extrude_bottom_s"] = time.perf_counter() - t0
@@ -5542,6 +5574,7 @@ class VectorProcessor:
                         z_offset=slab["z_offset"] + gap_offset,
                         scale=scale_factor,
                         stage="backing",
+                        geometry_policy=geometry_policy,
                     )
                     for slab in backing_slabs
                 ]
@@ -5608,6 +5641,7 @@ class VectorProcessor:
                         z_offset=z_offset,
                         scale=scale_factor,
                         stage="coating",
+                        geometry_policy=geometry_policy,
                     )
                     for z_offset in coating_z_offsets
                 ]
@@ -5636,6 +5670,7 @@ class VectorProcessor:
                 top_z_start,
                 meshes_by_slot,
                 defer_materialization=deferred_vector_slabs,
+                geometry_policy=geometry_policy,
             )
         stage_timings["extrude_top_s"] = time.perf_counter() - t0
         stage_timings["vector_mesh_rss_after_extrude_top_bytes"] = int(
@@ -5647,6 +5682,7 @@ class VectorProcessor:
             meshes_by_slot = self._materialize_vector_slabs(
                 meshes_by_slot,
                 scale_factor=scale_factor,
+                geometry_policy=geometry_policy,
             )
             stage_timings["materialize_s"] = (
                 time.perf_counter() - materialize_t0
@@ -5705,6 +5741,9 @@ class VectorProcessor:
             scene.add_geometry(combined, geom_name=name)
 
         stage_timings["assemble_s"] = time.perf_counter() - t0
+        scene.metadata[LAYERED_COORDINATE_DOMAIN_KEY] = (
+            coordinate_domain.to_metadata()
+        )
         stage_timings["vector_mesh_rss_after_assemble_bytes"] = int(
             get_process_rss_bytes() or 0
         )
@@ -5768,6 +5807,7 @@ class VectorProcessor:
         enable_fridge_magnet=False,
         fridge_magnets=None,
         merge_backing_into_material=False,
+        geometry_policy: VectorLayerGeometryPolicy | None = None,
     ):
         """Extrude existing SVG regions at configured heights.
 
@@ -5977,10 +6017,12 @@ class VectorProcessor:
         meshes_by_slot = VectorProcessor._materialize_vector_slabs(
             slabs_by_slot,
             scale_factor=scale_factor,
+            geometry_policy=geometry_policy,
         )
         board_mesh = build_vector_stepped_volume(
             backing_volume_slabs,
             scale_mm_per_svg_unit=scale_factor,
+            policy=geometry_policy,
         )
         if board_mesh is not None and len(board_mesh.faces) > 0:
             board_entry = meshes_by_slot.setdefault(
@@ -7022,6 +7064,7 @@ class VectorProcessor:
         z_offset: float,
         scale: float,
         stage: str,
+        geometry_policy: VectorLayerGeometryPolicy | None = None,
     ) -> trimesh.Trimesh:
         """Build one auxiliary mesh leaf through canonical spatial groups.
 
@@ -7043,6 +7086,7 @@ class VectorProcessor:
             height=float(height),
             z_offset=float(z_offset),
             scale_factor=float(scale),
+            geometry_policy=geometry_policy,
         )
         if int(stats["failed_source_part_count"]) > 0:
             _log.warning(
@@ -7069,6 +7113,7 @@ class VectorProcessor:
         face_up=False,
         optical_z_base=0.0,
         defer_materialization=False,
+        geometry_policy: VectorLayerGeometryPolicy | None = None,
     ):
         """Collect each material's runs and build one stepped solid.
 
@@ -7236,6 +7281,7 @@ class VectorProcessor:
             result_by_slot = VectorProcessor._materialize_vector_slabs(
                 slabs_by_slot,
                 scale_factor=scale_factor,
+                geometry_policy=geometry_policy,
             )
 
         _log.debug(
@@ -7259,7 +7305,12 @@ class VectorProcessor:
         return result_by_slot
 
     @staticmethod
-    def _materialize_vector_slabs(slabs_by_slot, *, scale_factor):
+    def _materialize_vector_slabs(
+        slabs_by_slot,
+        *,
+        scale_factor,
+        geometry_policy: VectorLayerGeometryPolicy | None = None,
+    ):
         """Extrude run slabs and concatenate them into one mesh per material."""
 
         meshes_by_slot: dict[str, dict[str, object]] = {}
@@ -7279,6 +7330,7 @@ class VectorProcessor:
                     height=float(slab["height"]),
                     z_offset=float(slab["z_offset"]),
                     scale_factor=float(scale_factor),
+                    geometry_policy=geometry_policy,
                 )
                 material_meshes.extend(slab_meshes)
                 failed_source_part_count += int(
@@ -7326,6 +7378,7 @@ class VectorProcessor:
         top_z_start,
         meshes_by_slot,
         defer_materialization=False,
+        geometry_policy: VectorLayerGeometryPolicy | None = None,
     ):
         """Mirror colour layers above the backing for double-sided mode.
 
@@ -7344,6 +7397,7 @@ class VectorProcessor:
             face_up=True,
             optical_z_base=top_z_start,
             defer_materialization=defer_materialization,
+            geometry_policy=geometry_policy,
         )
         payload_key = "slabs" if defer_materialization else "meshes"
         for slot_name, data in top_meshes_by_slot.items():
