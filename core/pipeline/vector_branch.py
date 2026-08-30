@@ -33,6 +33,7 @@ from types import SimpleNamespace
 import cv2  # noqa: F401  -- imported for side-effect parity with coordinator
 import numpy as np
 import trimesh
+from shapely import difference as shapely_difference
 from shapely.geometry import box
 from shapely.ops import unary_union
 from shapely.validation import make_valid
@@ -54,6 +55,7 @@ from core.preview_analysis_cache import preview_analysis_reuse_is_required
 from core.vector_layer_geometry import (
     extrude_prepared_vector_run_group,
     prepare_vector_run_group,
+    resolve_vector_writer_grid_mm,
 )
 
 # ---------------------------------------------------------------------------
@@ -1114,8 +1116,23 @@ def _generate_vector_outline_mesh(
         width_units,
     )
 
+    # Construct the ring directly in the same physical grid used by the 3MF
+    # mesh builder. GEOS otherwise retains zero-area floating-point slivers
+    # from buffer/difference overlays; treating those numerical artefacts as
+    # source polygons can reject an otherwise complete printable outline.
+    outline_writer_grid_mm = resolve_vector_writer_grid_mm(
+        max(
+            abs(float(coordinate)) * scale_factor
+            for geometry in (expanded, union)
+            for coordinate in geometry.bounds
+        )
+    )
     try:
-        ring = expanded.difference(union)
+        ring = shapely_difference(
+            expanded,
+            union,
+            grid_size=outline_writer_grid_mm / scale_factor,
+        )
     except COORDINATOR_HANDLED_ERRORS as exc:
         log.warning(
             "Vector outline rejected: difference failed",

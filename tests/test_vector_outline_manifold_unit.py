@@ -140,6 +140,27 @@ def test_vector_outline_uses_the_canonical_layered_builder(
     assert outline is not None and outline.is_watertight
 
 
+def test_vector_outline_drops_only_subgrid_boolean_dust(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    printable_ring = box(0.0, 0.0, 10.0, 10.0)
+    numerical_dust = Polygon(
+        [
+            (20.0, 0.0),
+            (20.0 + 1e-12, 0.0),
+            (20.0, 1.0),
+        ]
+    )
+    outline = _build_outline(
+        monkeypatch,
+        MultiPolygon([printable_ring, numerical_dust]),
+    )
+
+    assert outline is not None
+    assert outline.is_watertight
+    assert np.all(_edge_incidence_counts(outline) == 2)
+
+
 def test_vector_outline_omits_only_outline_when_canonical_build_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
