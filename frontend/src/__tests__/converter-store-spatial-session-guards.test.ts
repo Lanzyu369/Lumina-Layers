@@ -316,4 +316,18 @@ describe("spatial edit session guards", () => {
 
     expectSessionBUnchanged();
   });
+
+  it("ignores a gradient-group flatten response from an older preview revision", async () => {
+    const response = deferred<Awaited<ReturnType<typeof regionReplace>>>();
+    mockRegionReplace.mockReturnValueOnce(response.promise);
+
+    const request = useConverterStore
+      .getState()
+      .applyGradientReplaceForGroup(3);
+    advanceSameSessionRevision();
+    response.resolve(staleResponse());
+    await request;
+
+    expectSameSessionRevisionUnchanged();
+  });
 });

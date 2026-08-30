@@ -897,6 +897,11 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const colorHeightMap = useConverterStore((s) => s.color_height_map);
   const baseHeight = useConverterStore((s) => s.spacer_thick);
   const enableRelief = useConverterStore((s) => s.enable_relief);
+  const autoHeightMode = useConverterStore((s) => s.autoHeightMode);
+  const heightmapThumbnailUrl = useConverterStore((s) => s.heightmapThumbnailUrl);
+  const heightmapUploadSessionId = useConverterStore((s) => s.heightmapUploadSessionId);
+  const heightmapMaxHeight = useConverterStore((s) => s.heightmap_max_height);
+  const sessionId = useConverterStore((s) => s.sessionId);
   const spacerThick = useConverterStore((s) => s.spacer_thick);
   const structureMode = useConverterStore((s) => s.structure_mode);
   const enableOutline = useConverterStore((s) => s.enable_outline);
@@ -904,6 +909,8 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const enableCloisonne = useConverterStore((s) => s.enable_cloisonne);
   const wireWidthMm = useConverterStore((s) => s.wire_width_mm);
   const wireHeightMm = useConverterStore((s) => s.wire_height_mm);
+  const enableCoating = useConverterStore((s) => s.enable_coating);
+  const coatingHeightMm = useConverterStore((s) => s.coating_height_mm);
   const colorLayers = useConverterStore((s) => s.color_layers);
   const layerHeightMm = useConverterStore((s) => s.layer_height_mm);
   const puzzleEnabled = useConverterStore((s) => s.puzzleEnabled);
@@ -927,6 +934,14 @@ function Scene3D({ modelUrl }: Scene3DProps) {
       ? colorLayers * layerHeightMm
       : undefined,
   );
+  const heightmapReliefUrl =
+    enableRelief
+    && autoHeightMode === "use-heightmap"
+    && Boolean(sessionId)
+    && heightmapUploadSessionId === sessionId
+      ? heightmapThumbnailUrl
+      : null;
+  const heightmapArtworkUrl = previewBaseImageUrl ?? imagePreviewUrl;
 
   // Keychain ring params
   const addLoop = useConverterStore((s) => s.add_loop);
@@ -1465,6 +1480,12 @@ function Scene3D({ modelUrl }: Scene3DProps) {
               puzzleOverlayEnabled={puzzleEnabled && Boolean(puzzleOverlayUrl)}
               puzzleOverlayUrl={puzzleOverlayUrl}
               colorLayerHeightMm={colorLayerHeightMm}
+              heightmapReliefUrl={heightmapReliefUrl}
+              heightmapArtworkUrl={heightmapArtworkUrl}
+              heightmapReliefMaxHeightMm={heightmapMaxHeight}
+              enableCoating={enableCoating}
+              coatingHeightMm={coatingHeightMm}
+              printingLayerHeightMm={layerHeightMm ?? 0.08}
             />
           </Suspense>
         ) : null}

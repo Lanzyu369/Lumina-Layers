@@ -248,6 +248,15 @@ beforeEach(() => {
         generatePerformanceTiming: null,
         previewImageUrl: null,
         previewBaseImageUrl: null,
+        imagePreviewUrl: null,
+        sessionId: null,
+        enable_relief: false,
+        autoHeightMode: "darker-higher",
+        heightmapThumbnailUrl: null,
+        heightmapUploadSessionId: null,
+        enable_coating: false,
+        coating_height_mm: 0.08,
+        layer_height_mm: 0.08,
         puzzleEnabled: false,
         puzzleOverlayUrl: null,
         selectedColor: null,
@@ -713,6 +722,62 @@ beforeEach(() => {
       expect(capturedInteractiveViewerProps?.hoverEnabled).toBeUndefined();
     });
 
+  });
+
+  describe("lightweight creative preview wiring", () => {
+    it("passes a session-owned spatial heightmap and processed artwork to the quick preview", () => {
+      useConverterStore.setState({
+        sessionId: "session-a",
+        previewGlbUrl: "/api/files/mock-preview.glb",
+        previewBaseImageUrl: "/api/files/processed-colours.png",
+        enable_relief: true,
+        autoHeightMode: "use-heightmap",
+        heightmapThumbnailUrl: "/api/files/heightmap-thumb.png",
+        heightmapUploadSessionId: "session-a",
+        heightmap_max_height: 3.2,
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedInteractiveViewerProps).toMatchObject({
+        heightmapReliefUrl: "/api/files/heightmap-thumb.png",
+        heightmapArtworkUrl: "/api/files/processed-colours.png",
+        heightmapReliefMaxHeightMm: 3.2,
+      });
+    });
+
+    it("does not reuse a heightmap uploaded by another session", () => {
+      useConverterStore.setState({
+        sessionId: "session-b",
+        previewGlbUrl: "/api/files/mock-preview.glb",
+        previewBaseImageUrl: "/api/files/processed-colours.png",
+        enable_relief: true,
+        autoHeightMode: "use-heightmap",
+        heightmapThumbnailUrl: "/api/files/stale-heightmap-thumb.png",
+        heightmapUploadSessionId: "session-a",
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedInteractiveViewerProps?.heightmapReliefUrl).toBeNull();
+    });
+
+    it("passes the live coating controls to the quick preview", () => {
+      useConverterStore.setState({
+        previewGlbUrl: "/api/files/mock-preview.glb",
+        enable_coating: true,
+        coating_height_mm: 0.12,
+        layer_height_mm: 0.04,
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedInteractiveViewerProps).toMatchObject({
+        enableCoating: true,
+        coatingHeightMm: 0.12,
+        printingLayerHeightMm: 0.04,
+      });
+    });
   });
 
   describe("model source role wiring", () => {

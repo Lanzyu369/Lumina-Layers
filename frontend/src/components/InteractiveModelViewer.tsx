@@ -24,6 +24,8 @@ import { useGltfCacheLifecycle } from "./useGltfCacheLifecycle";
 import { materializePositionAttributeForGeometryBake } from "../utils/threeQuantizedGeometry";
 import type { PuzzleOverlayBounds } from "./puzzleOverlay3DUtils";
 import { createPreviewSpace } from "../utils/previewSpace";
+import HeightmapReliefSurface3D from "./HeightmapReliefSurface3D";
+import CoatingPreview3D from "./CoatingPreview3D";
 
 type LuminaWindow = Window & { __luminaPreviewStart?: number };
 
@@ -82,6 +84,12 @@ export interface InteractiveModelViewerProps {
   puzzleOverlayEnabled?: boolean;
   puzzleOverlayUrl?: string | null;
   colorLayerHeightMm?: number;
+  heightmapReliefUrl?: string | null;
+  heightmapArtworkUrl?: string | null;
+  heightmapReliefMaxHeightMm?: number;
+  enableCoating?: boolean;
+  coatingHeightMm?: number;
+  printingLayerHeightMm?: number;
 }
 
 export type InteractiveModelSourceRole = "quick-preview" | "generated" | "batch";
@@ -691,12 +699,30 @@ function InteractiveModelViewer({
   puzzleOverlayEnabled = false,
   puzzleOverlayUrl = null,
   colorLayerHeightMm = DEFAULT_COLOR_LAYER_HEIGHT_MM,
+  heightmapReliefUrl = null,
+  heightmapArtworkUrl = null,
+  heightmapReliefMaxHeightMm = 3.0,
+  enableCoating = false,
+  coatingHeightMm = 0.08,
+  printingLayerHeightMm = 0.08,
 }: InteractiveModelViewerProps) {
   const { scene } = useGLTF(url);
   const groupRef = useRef<THREE.Group>(null);
   useGltfCacheLifecycle(url, useGLTF.clear);
   const applyQuickPreviewGeometry = shouldApplyQuickPreviewGeometry(sourceRole);
   const previewColorLayerHeightMm = resolvePreviewColorLayerHeightMm(colorLayerHeightMm);
+  const spatialHeightmapEnabled = Boolean(
+    applyQuickPreviewGeometry
+    && enableRelief
+    && heightmapReliefUrl
+    && heightmapArtworkUrl,
+  );
+  const previewReliefHeightMap = useMemo(
+    () => spatialHeightmapEnabled
+      ? { __heightmap: Math.max(0.08, heightmapReliefMaxHeightMm) }
+      : colorHeightMap,
+    [colorHeightMap, heightmapReliefMaxHeightMm, spatialHeightmapEnabled],
+  );
 
   useEffect(() => {
     debugThreeLog("InteractiveModelViewer.lifecycle", {
@@ -968,10 +994,13 @@ function InteractiveModelViewer({
     spacerThick,
     structureMode,
     enableRelief,
-    colorHeightMap,
+    previewReliefHeightMap,
     modelBounds?.maxZ ?? 0,
     previewColorLayerHeightMm,
   );
+  const visibleColorHeightMm = spatialHeightmapEnabled
+    ? Math.max(0.08, heightmapReliefMaxHeightMm)
+    : Math.max(0, outlinePreviewHeight - Math.max(0, spacerThick));
 
   // ---- White backing plate mesh ----
   const isDoubleSided =
@@ -1096,8 +1125,10 @@ function InteractiveModelViewer({
                 heightSegments,
                 nativeMinZ,
                 nativeMaxZ,
-                colorHeightMap,
-                fallbackHeightMm: previewColorLayerHeightMm,
+                colorHeightMap: spatialHeightmapEnabled ? {} : colorHeightMap,
+                fallbackHeightMm: spatialHeightmapEnabled
+                  ? 0.08
+                  : previewColorLayerHeightMm,
               })
             : originalPositions;
           const positionAttribute = mesh.geometry.getAttribute("position");
@@ -1135,8 +1166,10 @@ function InteractiveModelViewer({
           nativeMaxZ,
           spacerThick,
           enableRelief,
-          colorHeightMap,
-          colorLayerHeightMm: previewColorLayerHeightMm,
+          colorHeightMap: spatialHeightmapEnabled ? {} : colorHeightMap,
+          colorLayerHeightMm: spatialHeightmapEnabled
+            ? 0.08
+            : previewColorLayerHeightMm,
         });
         mesh.visible = transform.visible;
         mesh.scale.z = transform.scaleZ;
@@ -1144,12 +1177,14 @@ function InteractiveModelViewer({
       } else if (enableRelief && baseHeight > 0) {
         mesh.visible = true;
         // Relief mode: each color gets its own height from colorHeightMap
-        const heightMm = resolvePreviewMeshReliefHeightMm({
-          meshName: mesh.name,
-          userData: mesh.userData,
-          colorHeightMap,
-          fallbackHeightMm: previewColorLayerHeightMm,
-        });
+        const heightMm = spatialHeightmapEnabled
+          ? 0.08
+          : resolvePreviewMeshReliefHeightMm({
+              meshName: mesh.name,
+              userData: mesh.userData,
+              colorHeightMap,
+              fallbackHeightMm: previewColorLayerHeightMm,
+            });
         mesh.scale.z = nativeH > 0 ? heightMm / nativeH : 1;
         mesh.position.z = spacerThick;
       } else {
@@ -1174,7 +1209,7 @@ function InteractiveModelViewer({
         mirror.position.z = layerZ.mirrorColorZ; // grow downward from bottom of backing plate
       }
     }
-  }, [applyQuickPreviewGeometry, colorMeshes, mirrorMeshes, colorRemapMap, colorHeightMap, enableRelief, baseHeight, modelBounds, sceneCenter, spacerThick, isDoubleSided, backingMesh, backingPlateMesh, previewColorLayerHeightMm]);
+  }, [applyQuickPreviewGeometry, colorMeshes, mirrorMeshes, colorRemapMap, colorHeightMap, enableRelief, baseHeight, modelBounds, sceneCenter, spacerThick, isDoubleSided, backingMesh, backingPlateMesh, previewColorLayerHeightMm, spatialHeightmapEnabled]);
 
   // Double-sided mirror meshes are defined above (before useEffect).
 
@@ -1200,6 +1235,28 @@ function InteractiveModelViewer({
         {colorMeshes.map((mesh) => (
           <primitive key={mesh.uuid} object={mesh} />
         ))}
+        <HeightmapReliefSurface3D
+          enabled={spatialHeightmapEnabled}
+          heightmapUrl={heightmapReliefUrl}
+          artworkUrl={heightmapArtworkUrl}
+          modelBounds={puzzleOverlayBounds ?? modelBounds}
+          spacerThickMm={spacerThick}
+          maximumHeightMm={heightmapReliefMaxHeightMm}
+        />
+        <CoatingPreview3D
+          enabled={applyQuickPreviewGeometry && enableCoating}
+          backingMesh={backingMesh}
+          coatingHeightMm={coatingHeightMm}
+          layerHeightMm={printingLayerHeightMm}
+          structureMode={structureMode}
+          enableRelief={enableRelief}
+          spacerThickMm={spacerThick}
+          visibleColorHeightMm={visibleColorHeightMm}
+          enableOutline={enableOutline}
+          outlineWidthMm={outlineWidth}
+          displayScale={previewSpace?.scaleX ?? 1}
+          rasterCellSize={rasterCellSize}
+        />
         <PuzzleOverlay3D
           enabled={puzzleOverlayEnabled}
           overlayUrl={puzzleOverlayUrl}
@@ -1207,7 +1264,7 @@ function InteractiveModelViewer({
           previewCanvasBounds={puzzleOverlayBounds}
           spacerThick={spacerThick}
           enableRelief={enableRelief}
-          colorHeightMap={colorHeightMap}
+          colorHeightMap={previewReliefHeightMap}
           enableOutline={enableOutline}
           enableCloisonne={enableCloisonne}
           wireHeightMm={wireHeightMm}

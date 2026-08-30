@@ -4704,6 +4704,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
                   state.fridge_magnets,
                 )
               : state.fridge_magnets,
+          threemfDiskPath: null,
+          downloadUrl: null,
         };
       }),
 
@@ -7876,6 +7878,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       const state = _get();
       const sid = state.sessionId;
       if (!sid) return;
+      const previewCommit = captureReplacementPreviewCommit(state);
       const groups = state.gradientGroups;
       if (!groups || groups.length === 0) return;
       const group = groups.find((g) => g.group_index === groupIndex);
@@ -7900,7 +7903,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set({ replacePreviewLoading: true, error: null });
       try {
         const response = await apiRegionReplace(sid, `#${rep}`, scope);
-        if (_get().sessionId !== sid) {
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) {
           return;
         }
         const updates: Partial<ConverterState> = {
@@ -7931,7 +7934,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }));
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (_get().sessionId !== sid) {
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) {
           return;
         }
         set({

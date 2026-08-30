@@ -17,6 +17,7 @@ import {
   extractBoundaryContour,
   offsetContour,
   createOutlineRingGeometry,
+  buildExpandedFootprintGeometry,
   resetOutlineFrameGeometryDisposeForTests,
 } from "../components/OutlineFrame3D";
 import { translations } from "../i18n/translations";
@@ -260,6 +261,139 @@ describe("OutlineFrame3D — Unit Tests", () => {
       expect(grid[1 * gridW + 1]).toBe(1);
       expect(grid[3 * gridW + 1]).toBe(1);
       expect(grid[1 * gridW + 3]).toBe(1);
+    });
+  });
+
+  describe("buildExpandedFootprintGeometry", () => {
+    it("builds a filled coating footprint that covers the outline expansion", () => {
+      const backingPlateMesh = makeBoxMesh(10, 10, 1);
+      const original = buildExpandedFootprintGeometry({
+        backingPlateMesh,
+        expansionMm: 0,
+        rasterCellSize: 1,
+      });
+      const expanded = buildExpandedFootprintGeometry({
+        backingPlateMesh,
+        expansionMm: 2,
+        rasterCellSize: 1,
+      });
+
+      expect(original).not.toBeNull();
+      expect(expanded).not.toBeNull();
+      original?.computeBoundingBox();
+      expanded?.computeBoundingBox();
+      expect(expanded!.boundingBox!.min.x).toBeLessThan(
+        original!.boundingBox!.min.x,
+      );
+      expect(expanded!.boundingBox!.min.y).toBeLessThan(
+        original!.boundingBox!.min.y,
+      );
+      expect(expanded!.boundingBox!.max.x).toBeGreaterThan(
+        original!.boundingBox!.max.x,
+      );
+      expect(expanded!.boundingBox!.max.y).toBeGreaterThan(
+        original!.boundingBox!.max.y,
+      );
+
+      original?.dispose();
+      expanded?.dispose();
+      backingPlateMesh.geometry.dispose();
+    });
+
+    it("keeps the backing-only coating edge when colors cover less area", () => {
+      const backingPlateMesh = makeBoxMesh(10, 10, 1);
+      const colorMesh = makeBoxMesh(4, 4, 1);
+      colorMesh.position.set(3, 3, 0);
+      const backingFootprint = buildExpandedFootprintGeometry({
+        backingPlateMesh,
+        expansionMm: 1,
+        rasterCellSize: 0.5,
+      });
+      const colorFootprint = buildExpandedFootprintGeometry({
+        backingPlateMesh,
+        sourceMeshes: [colorMesh],
+        expansionMm: 1,
+        rasterCellSize: 0.5,
+      });
+
+      expect(backingFootprint).not.toBeNull();
+      expect(colorFootprint).not.toBeNull();
+      backingFootprint?.computeBoundingBox();
+      colorFootprint?.computeBoundingBox();
+      expect(backingFootprint!.boundingBox!.min.x).toBeLessThan(
+        colorFootprint!.boundingBox!.min.x,
+      );
+      expect(backingFootprint!.boundingBox!.min.y).toBeLessThan(
+        colorFootprint!.boundingBox!.min.y,
+      );
+      expect(backingFootprint!.boundingBox!.max.x).toBeGreaterThan(
+        colorFootprint!.boundingBox!.max.x,
+      );
+      expect(backingFootprint!.boundingBox!.max.y).toBeGreaterThan(
+        colorFootprint!.boundingBox!.max.y,
+      );
+
+      backingFootprint?.dispose();
+      colorFootprint?.dispose();
+      backingPlateMesh.geometry.dispose();
+      colorMesh.geometry.dispose();
+    });
+
+    it("applies fallback backing translation and scale to the coating footprint", () => {
+      const backingPlateMesh = makeBoxMesh(4, 3, 1);
+      backingPlateMesh.position.set(10, -5, 0);
+      backingPlateMesh.scale.set(2, 3, 1);
+      const footprint = buildExpandedFootprintGeometry({
+        backingPlateMesh,
+        expansionMm: 0,
+        rasterCellSize: 0.5,
+      });
+
+      expect(footprint).not.toBeNull();
+      footprint?.computeBoundingBox();
+      expect(footprint!.boundingBox!.min.x).toBeGreaterThan(9);
+      expect(footprint!.boundingBox!.max.x).toBeGreaterThan(17);
+      expect(footprint!.boundingBox!.min.y).toBeLessThan(-4);
+      expect(footprint!.boundingBox!.max.y).toBeGreaterThan(3);
+
+      footprint?.dispose();
+      backingPlateMesh.geometry.dispose();
+    });
+
+    it("preserves a real design hole in the coating footprint", () => {
+      const backingPlateMesh = new THREE.Mesh(makeGeometry(
+        [
+          0, 0, 0, 6, 0, 0, 6, 6, 0, 0, 6, 0,
+          0, 0, 1, 6, 0, 1, 6, 6, 1, 0, 6, 1,
+          2, 2, 1, 4, 2, 1, 4, 4, 1, 2, 4, 1,
+        ],
+        [
+          0, 2, 1, 0, 3, 2,
+          4, 5, 8, 5, 9, 8,
+          5, 6, 9, 6, 10, 9,
+          6, 7, 10, 7, 11, 10,
+          7, 4, 11, 4, 8, 11,
+          0, 1, 5, 0, 5, 4,
+          1, 2, 6, 1, 6, 5,
+          2, 3, 7, 2, 7, 6,
+          3, 0, 4, 3, 4, 7,
+        ],
+      ));
+      const footprint = buildExpandedFootprintGeometry({
+        backingPlateMesh,
+        expansionMm: 0,
+        rasterCellSize: 0.5,
+      });
+
+      expect(footprint).not.toBeNull();
+      const raster = rasterizeMeshToGrid(footprint!, { cellSize: 0.5 });
+      expect(raster).not.toBeNull();
+      const centerX = Math.floor((3 - raster!.originX) / raster!.cellSize) + 1;
+      const centerY = Math.floor((3 - raster!.originY) / raster!.cellSize) + 1;
+      expect(raster!.grid[centerY * raster!.gridW + centerX]).toBe(0);
+
+      footprint?.dispose();
+      backingPlateMesh.geometry.dispose();
     });
   });
 
