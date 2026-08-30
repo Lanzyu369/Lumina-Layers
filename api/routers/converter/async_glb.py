@@ -225,8 +225,10 @@ def _build_preview_glb(
 ) -> tuple[str | None, str]:
     """Build the selected browser GLB, with safe analytic fallback."""
 
+    modeling_mode = cache.get("modeling_mode")
+    modeling_mode_value = getattr(modeling_mode, "value", modeling_mode)
     use_analytic = (
-        str(cache.get("modeling_mode") or "") == "vector"
+        modeling_mode_value == "vector"
         and bool(cache.get("enable_smooth_vector_preview", True))
     )
     if use_analytic:

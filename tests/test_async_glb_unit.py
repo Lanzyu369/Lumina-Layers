@@ -47,6 +47,7 @@ from api.preview_cache_artifacts import (
 )
 from api.routers.converter import async_glb as async_glb_module
 from api.session_store import SessionStore
+from config import ModelingMode
 
 _test_store: SessionStore = SessionStore(ttl=1800)
 _test_registry: FileRegistry = FileRegistry()
@@ -215,13 +216,16 @@ def _native_vector_cache(sid: str, tmp_path: Path) -> dict:
 
 
 class TestRendererDispatch:
+    @pytest.mark.parametrize("modeling_mode", ["vector", ModelingMode.VECTOR])
     def test_native_vector_prefers_analytic_renderer(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
+        modeling_mode: str | ModelingMode,
     ) -> None:
         sid = _seed_session(tmp_path)
         cache = _native_vector_cache(sid, tmp_path)
+        cache["modeling_mode"] = modeling_mode
         calls: list[str] = []
 
         monkeypatch.setattr(
