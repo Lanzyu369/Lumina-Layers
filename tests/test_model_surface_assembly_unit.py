@@ -11,6 +11,10 @@ import shapely.geometry as sg
 import trimesh
 
 from core.errors import VectorMeshMemoryBudgetError
+from core.vector_layer_geometry import (
+    VectorLayerGeometryPolicy,
+    build_vector_stepped_volume,
+)
 from core.model_surface.assembly import (
     MODEL_SURFACE_LOGICAL_XY_BOUNDS_KEY,
     OverlaySceneResult,
@@ -230,6 +234,84 @@ def test_native_vector_pattern_is_normalized_before_surface_assembly():
         pattern.geometry["Black"].bounds[:, 0],
         [2.0, 4.0],
         atol=1e-6,
+    )
+
+
+@pytest.mark.parametrize(
+    ("canvas_width", "canvas_height", "target_width_mm"),
+    [
+        pytest.param(1156.0, 819.0, 60.0, id="reported-svg"),
+        pytest.param(40000.0, 1.0, 10.0, id="positive-half-grid"),
+    ],
+)
+def test_native_vector_pattern_uses_canonical_grid_canvas_bounds(
+    canvas_width,
+    canvas_height,
+    target_width_mm,
+):
+    scale_factor = target_width_mm / canvas_width
+    artwork = build_vector_stepped_volume(
+        [
+            {
+                "geometry": sg.box(0.0, 0.0, canvas_width, canvas_height),
+                "height": 0.08,
+                "z_offset": 0.0,
+            }
+        ],
+        scale_mm_per_svg_unit=scale_factor,
+    )
+    assert artwork is not None
+    artwork.apply_transform(
+        np.asarray(
+            [
+                [-1.0, 0.0, 0.0, 0.0],
+                [0.0, -1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+    )
+    source_scene = trimesh.Scene({"Black": artwork})
+
+    pattern = _build_pattern_scene(
+        {
+            "is_svg_vector": True,
+            "scene": source_scene,
+            "vector_analysis": SimpleNamespace(
+                slot_names=("Black",),
+                num_channels=1,
+                bbox=(0.0, 0.0, canvas_width, canvas_height),
+                scale_factor=scale_factor,
+                num_layers=1,
+                matched_shapes=(),
+            ),
+            "layer_height_mm": 0.08,
+            "bambu_face_orientation": "down",
+        }
+    )
+
+    grid_mm = VectorLayerGeometryPolicy().grid_mm
+    expected_width_mm = (
+        np.floor(canvas_width * scale_factor / grid_mm + 0.5) * grid_mm
+    )
+    expected_height_mm = (
+        np.floor(canvas_height * scale_factor / grid_mm + 0.5) * grid_mm
+    )
+    expected_bounds = (0.0, 0.0, expected_width_mm, expected_height_mm)
+    assert pattern.metadata[MODEL_SURFACE_LOGICAL_XY_BOUNDS_KEY] == pytest.approx(
+        expected_bounds,
+        abs=1e-12,
+    )
+    assert _pattern_xy_bounds_mm(pattern.scene) == pytest.approx(
+        expected_bounds,
+        abs=1e-12,
+    )
+    np.testing.assert_allclose(
+        np.asarray(pattern.bounds)[:, :2],
+        [[0.0, 0.0], [expected_width_mm, expected_height_mm]],
+        rtol=0.0,
+        atol=1e-12,
     )
 
 

@@ -42,6 +42,74 @@ class VectorLayerGeometryPolicy:
     coverage_absolute_tolerance_mm2: float = 0.01
 
 
+def resolve_vector_writer_grid_mm(
+    maximum_abs_coordinate_mm: float,
+    *,
+    minimum_mm: float = VectorLayerGeometryPolicy().grid_mm,
+) -> float:
+    """Resolve the physical grid that remains distinct in float32 output.
+    计算在 float32 写出域中仍能保持坐标可区分的物理网格。
+
+    Args:
+        maximum_abs_coordinate_mm: Largest absolute XY coordinate in mm.
+            XY 坐标绝对值的毫米上限。
+        minimum_mm: Minimum canonical grid size in mm.
+            规范网格的最小毫米尺寸。
+
+    Returns:
+        Writer-safe canonical grid size in mm.
+        写出安全的规范网格尺寸（毫米）。
+    """
+
+    maximum_coordinate = float(maximum_abs_coordinate_mm)
+    minimum_grid = float(minimum_mm)
+    if (
+        not math.isfinite(maximum_coordinate)
+        or maximum_coordinate < 0.0
+        or not math.isfinite(minimum_grid)
+        or minimum_grid <= 0.0
+    ):
+        raise ValueError("Vector writer grid inputs must be finite and positive")
+    writer_value = np.float32(maximum_coordinate)
+    writer_ulp = abs(float(np.spacing(writer_value)))
+    if not math.isfinite(writer_ulp):
+        raise ValueError("Vector physical coordinates exceed float32 writer range")
+    return max(minimum_grid, writer_ulp * 4.0)
+
+
+def snap_vector_writer_coordinate_mm(
+    coordinate_mm: float,
+    *,
+    grid_mm: float,
+) -> float:
+    """Snap one coordinate with the same half-grid rule as GEOS.
+    使用与 GEOS 相同的半网格规则对单个坐标取整。
+
+    Args:
+        coordinate_mm: Coordinate in physical millimetres.
+            物理毫米坐标。
+        grid_mm: Canonical writer grid size in millimetres.
+            规范写出网格尺寸（毫米）。
+
+    Returns:
+        Coordinate snapped to the canonical writer grid.
+        吸附到规范写出网格后的坐标。
+    """
+
+    coordinate = float(coordinate_mm)
+    grid = float(grid_mm)
+    if (
+        not math.isfinite(coordinate)
+        or not math.isfinite(grid)
+        or grid <= 0.0
+    ):
+        raise ValueError("Vector writer coordinate inputs must be finite")
+    scaled_coordinate = coordinate / grid
+    if not math.isfinite(scaled_coordinate):
+        raise ValueError("Vector writer coordinate exceeds canonical grid range")
+    return float(math.floor(scaled_coordinate + 0.5) * grid)
+
+
 @dataclass(frozen=True)
 class PreparedVectorPolygon:
     """One canonical polygon stored only as compact integer rings.
@@ -665,11 +733,10 @@ def _writer_safe_grid_mm(parts: Sequence[_PhysicalPart], minimum_mm: float) -> f
         max(abs(float(value)) for value in part.geometry.bounds)
         for part in parts
     )
-    writer_value = np.float32(maximum_abs_coordinate)
-    writer_ulp = abs(float(np.spacing(writer_value)))
-    if not math.isfinite(writer_ulp):
-        raise ValueError("Vector physical coordinates exceed float32 writer range")
-    return max(float(minimum_mm), writer_ulp * 4.0)
+    return resolve_vector_writer_grid_mm(
+        maximum_abs_coordinate,
+        minimum_mm=float(minimum_mm),
+    )
 
 
 def _prepared_polygons(
@@ -2363,6 +2430,8 @@ def build_vector_stepped_volume(
 __all__ = [
     "PreparedVectorPolygon",
     "PreparedVectorRunGroup",
+    "resolve_vector_writer_grid_mm",
+    "snap_vector_writer_coordinate_mm",
     "PreparedVectorSpatialGroups",
     "VectorLayerGeometryPolicy",
     "VectorLayerGeometryStats",

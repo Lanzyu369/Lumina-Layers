@@ -7,6 +7,10 @@ import trimesh
 
 from config import PrinterConfig
 from core.converter import build_image_model_context
+from core.vector_layer_geometry import (
+    resolve_vector_writer_grid_mm,
+    snap_vector_writer_coordinate_mm,
+)
 from core.model_surface.assembly import (
     MODEL_SURFACE_DISPLAY_LAYER_HEIGHTS_KEY,
     MODEL_SURFACE_DISPLAY_Z_BOUNDS_KEY,
@@ -216,6 +220,26 @@ def _build_vector_pattern_scene(
 
     logical_width_mm = bbox[2] * scale_factor
     logical_height_mm = bbox[3] * scale_factor
+    if logical_width_mm <= 0.0 or logical_height_mm <= 0.0:
+        raise ModelSurfaceError(
+            "Converter produced an invalid native vector canvas."
+        )
+
+    # Native Vector geometry already lives on the writer-safe physical grid.
+    # Snap the transparent canvas through the same contract before using it
+    # for face normalization and model-surface scaling. This preserves canvas
+    # margins without treating sub-grid rounding as real XY overflow.
+    vector_grid_mm = resolve_vector_writer_grid_mm(
+        max(abs(logical_width_mm), abs(logical_height_mm)),
+    )
+    logical_width_mm = snap_vector_writer_coordinate_mm(
+        logical_width_mm,
+        grid_mm=vector_grid_mm,
+    )
+    logical_height_mm = snap_vector_writer_coordinate_mm(
+        logical_height_mm,
+        grid_mm=vector_grid_mm,
+    )
     if logical_width_mm <= 0.0 or logical_height_mm <= 0.0:
         raise ModelSurfaceError(
             "Converter produced an invalid native vector canvas."
