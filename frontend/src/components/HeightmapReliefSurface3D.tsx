@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
-import { mapHeightmapGrayscaleToHeights } from "./creativePreview3DUtils";
+import {
+  buildHeightmapSurfaceGeometry,
+  mapHeightmapGrayscaleToHeights,
+  sampleArtworkCells,
+} from "./creativePreview3DUtils";
 
 const MAX_HEIGHTMAP_GRID_EDGE = 160;
 const MIN_RELIEF_SURFACE_HEIGHT_MM = 0.08;
 const SURFACE_Z_EPSILON_MM = 0.003;
+const ARTWORK_ALPHA_TEST = 0.04;
 
 interface HeightmapBounds {
   minX: number;
@@ -14,7 +19,7 @@ interface HeightmapBounds {
 }
 
 interface HeightmapSurfaceResources {
-  mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshStandardMaterial>;
+  mesh: THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial[]>;
   artworkTexture: THREE.Texture;
 }
 
@@ -30,7 +35,7 @@ export interface HeightmapReliefSurface3DProps {
 function disposeSurfaceResources(resources: HeightmapSurfaceResources | null): void {
   if (!resources) return;
   resources.mesh.geometry.dispose();
-  resources.mesh.material.dispose();
+  for (const material of resources.mesh.material) material.dispose();
   resources.artworkTexture.dispose();
 }
 
@@ -86,9 +91,17 @@ function buildSurfaceResources({
   maximumHeightMm: number;
 }): HeightmapSurfaceResources | null {
   const image = heightmapTexture.image as CanvasImageSource | undefined;
-  if (!image) return null;
+  const artworkImage = artworkTexture.image as CanvasImageSource | undefined;
+  if (!image || !artworkImage) return null;
   const samples = readLightweightGrayscale(image);
   if (!samples) return null;
+  const artworkCells = sampleArtworkCells(
+    artworkImage,
+    samples.width - 1,
+    samples.height - 1,
+    Math.ceil(ARTWORK_ALPHA_TEST * 255),
+  );
+  if (!artworkCells) return null;
 
   const modelWidth = modelBounds.maxX - modelBounds.minX;
   const modelHeight = modelBounds.maxY - modelBounds.minY;
@@ -96,29 +109,21 @@ function buildSurfaceResources({
     return null;
   }
 
-  const geometry = new THREE.PlaneGeometry(
-    modelWidth,
-    modelHeight,
-    samples.width - 1,
-    samples.height - 1,
-  );
   const heights = mapHeightmapGrayscaleToHeights(
     samples.grayscale,
     MIN_RELIEF_SURFACE_HEIGHT_MM,
     maximumHeightMm,
   );
-  const positions = geometry.getAttribute("position") as THREE.BufferAttribute;
-  if (positions.count !== heights.length) {
-    geometry.dispose();
-    return null;
-  }
-  for (let index = 0; index < positions.count; index += 1) {
-    positions.setZ(index, heights[index] ?? MIN_RELIEF_SURFACE_HEIGHT_MM);
-  }
-  positions.needsUpdate = true;
-  geometry.computeVertexNormals();
-  geometry.computeBoundingBox();
-  geometry.computeBoundingSphere();
+  const geometry = buildHeightmapSurfaceGeometry({
+    modelWidth,
+    modelHeight,
+    sampleWidth: samples.width,
+    sampleHeight: samples.height,
+    heights,
+    skirtBaseHeightMm: MIN_RELIEF_SURFACE_HEIGHT_MM,
+    solidCellMask: artworkCells.solidMask,
+    solidCellColorsSrgb: artworkCells.colorsSrgb,
+  });
 
   artworkTexture.colorSpace = THREE.SRGBColorSpace;
   artworkTexture.generateMipmaps = false;
@@ -127,9 +132,8 @@ function buildSurfaceResources({
   artworkTexture.wrapS = THREE.ClampToEdgeWrapping;
   artworkTexture.wrapT = THREE.ClampToEdgeWrapping;
   artworkTexture.needsUpdate = true;
-  const material = new THREE.MeshStandardMaterial({
+  const materialOptions: THREE.MeshStandardMaterialParameters = {
     map: artworkTexture,
-    alphaTest: 0.04,
     side: THREE.DoubleSide,
     roughness: 0.72,
     metalness: 0,
@@ -137,8 +141,19 @@ function buildSurfaceResources({
     polygonOffset: true,
     polygonOffsetFactor: -1,
     polygonOffsetUnits: -1,
+  };
+  const surfaceMaterial = new THREE.MeshStandardMaterial({
+    ...materialOptions,
+    alphaTest: ARTWORK_ALPHA_TEST,
   });
-  const mesh = new THREE.Mesh(geometry, material);
+  const wallMaterial = new THREE.MeshStandardMaterial({
+    ...materialOptions,
+    map: null,
+    alphaTest: 0,
+    transparent: false,
+    vertexColors: true,
+  });
+  const mesh = new THREE.Mesh(geometry, [surfaceMaterial, wallMaterial]);
   mesh.name = "heightmap_relief_surface";
   mesh.position.set(
     (modelBounds.minX + modelBounds.maxX) / 2,
