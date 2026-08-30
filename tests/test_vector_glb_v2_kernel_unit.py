@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import pytest
 import numpy as np
 import trimesh
-from shapely.geometry import MultiPolygon, Polygon, box
+from shapely.geometry import GeometryCollection, LineString, MultiPolygon, Polygon, box
 from shapely.ops import unary_union
 
 from core.pipeline import vector_glb_preview
@@ -275,6 +275,78 @@ def test_analytic_parts_require_stable_height_identity() -> None:
         )
         is None
     )
+
+
+def test_analytic_parts_ignore_only_subpixel_clipped_slivers() -> None:
+    visible = box(0.0, 0.0, 1.0, 1.0)
+    subpixel_sliver = box(2.0, 0.0, 2.005, 0.005)
+    source = vector_glb_preview.VectorQuickPreviewSourceV1(
+        provenance="d" * 64,
+        shape_data=(),
+        clipped_shapes=(
+            {"geometry": visible, "color": (0, 0, 0)},
+            {"geometry": subpixel_sliver, "color": (0, 0, 0)},
+        ),
+        silhouette=visible,
+        image_vectorizer_bounds=box(0.0, 0.0, 3.0, 1.0),
+        scale_factor=10.0,
+        bbox=(0.0, 0.0, 3.0, 1.0),
+    )
+    matched_rgb = np.full((10, 30, 3), (20, 30, 40), dtype=np.uint8)
+    mask_solid = np.zeros((10, 30), dtype=bool)
+    mask_solid[:, :10] = True
+
+    parts = vector_glb_preview.build_vector_quick_preview_parts(
+        source=source,
+        matched_rgb=matched_rgb,
+        height_identity_rgb=matched_rgb.copy(),
+        mask_solid=mask_solid,
+        backing_rgba=(255, 255, 255, 255),
+        backing_thickness_mm=1.6,
+    )
+
+    assert parts is not None
+    color_parts = [part for part in parts if part.role == "color"]
+    assert sum(len(part.extrusions) for part in color_parts) == 1
+
+
+def test_analytic_parts_keep_polygon_components_from_repaired_geometry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _quick_source_for_classification()
+    original_scaled_geometry_mm = vector_glb_preview._scaled_geometry_mm
+    repaired = GeometryCollection(
+        [
+            box(0.0, 0.0, 4.0, 10.0),
+            box(6.0, 0.0, 10.0, 10.0),
+            LineString([(4.0, 5.0), (6.0, 5.0)]),
+        ]
+    )
+
+    def fake_scaled_geometry_mm(geometry, scale_factor):
+        if geometry.equals(box(0.0, 0.0, 1.0, 1.0)):
+            return repaired
+        return original_scaled_geometry_mm(geometry, scale_factor)
+
+    monkeypatch.setattr(
+        vector_glb_preview,
+        "_scaled_geometry_mm",
+        fake_scaled_geometry_mm,
+    )
+    matched_rgb = np.full((10, 30, 3), (20, 30, 40), dtype=np.uint8)
+
+    parts = vector_glb_preview.build_vector_quick_preview_parts(
+        source=source,
+        matched_rgb=matched_rgb,
+        height_identity_rgb=matched_rgb.copy(),
+        mask_solid=np.ones((10, 30), dtype=bool),
+        backing_rgba=(255, 255, 255, 255),
+        backing_thickness_mm=1.6,
+    )
+
+    assert parts is not None
+    color_parts = [part for part in parts if part.role == "color"]
+    assert sum(len(part.extrusions) for part in color_parts) == 4
 
 
 def _mesh_planar_footprint(mesh: trimesh.Trimesh):

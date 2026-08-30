@@ -1428,12 +1428,23 @@ def _dominant_preview_rgb(pixels: np.ndarray) -> tuple[int, int, int] | None:
     return ((code >> 16) & 0xFF, (code >> 8) & 0xFF, code & 0xFF)
 
 
-def _polygon_components(geometry: BaseGeometry) -> tuple[Polygon, ...]:
+def _polygon_components(geometry: BaseGeometry | None) -> tuple[Polygon, ...]:
     if isinstance(geometry, Polygon):
         return (geometry,)
-    if isinstance(geometry, MultiPolygon):
-        return tuple(geometry.geoms)
-    return ()
+    components: list[Polygon] = []
+    for child in getattr(geometry, "geoms", ()):  # MultiPolygon / repaired collection
+        components.extend(_polygon_components(child))
+    return tuple(components)
+
+
+def _is_subpixel_geometry(geometry: BaseGeometry, coord_scale: float) -> bool:
+    """Return whether a footprint covers at most one preview raster pixel."""
+
+    try:
+        pixel_area = abs(float(geometry.area)) * float(coord_scale) ** 2
+    except (TypeError, ValueError, AttributeError, OverflowError):
+        return False
+    return bool(np.isfinite(pixel_area) and pixel_area <= 1.0)
 
 
 def build_vector_quick_preview_parts(
@@ -1500,10 +1511,14 @@ def build_vector_quick_preview_parts(
                 coord_scale=coord_scale,
             )
             if rasterized is None:
+                if _is_subpixel_geometry(component, coord_scale):
+                    continue
                 return None
             y_slice, x_slice, component_mask = rasterized
             effective_mask = component_mask & solid_bool[y_slice, x_slice]
             if not np.any(effective_mask):
+                if _is_subpixel_geometry(component, coord_scale):
+                    continue
                 return None
             display_rgb = _dominant_preview_rgb(
                 display[y_slice, x_slice][effective_mask]
@@ -1514,9 +1529,12 @@ def build_vector_quick_preview_parts(
             if display_rgb is None or height_rgb is None:
                 return None
             scaled = _scaled_geometry_mm(component, source.scale_factor)
-            if not isinstance(scaled, Polygon):
+            scaled_components = _polygon_components(scaled)
+            if not scaled_components:
                 return None
-            grouped.setdefault((display_rgb, height_rgb), []).append(scaled)
+            grouped.setdefault((display_rgb, height_rgb), []).extend(
+                scaled_components
+            )
 
     if not grouped or len(grouped) > int(max_color_groups):
         return None
