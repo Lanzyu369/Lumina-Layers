@@ -20,6 +20,7 @@ def test_recorder_preserves_resolved_fill_then_stroke_order() -> None:
     assert result.status == "supported"
     assert result.reason_code == ""
     assert result.schema_version == 1
+    assert result.viewport == pytest.approx((0.0, 0.0, 20.0, 10.0))
     assert [command.kind for command in result.commands] == ["fill", "stroke"]
     assert tuple(result.commands[0].rgba) == (255, 0, 0, 255)
     assert tuple(result.commands[1].rgba) == (0, 0, 255, 255)

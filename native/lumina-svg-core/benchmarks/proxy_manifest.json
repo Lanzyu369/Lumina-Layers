@@ -23,21 +23,21 @@
     "python": "3.12.13"
   },
   "measurement": {
-    "kernel_seconds": 0.390931792,
-    "median_seconds": 0.44439975,
-    "peak_rss_bytes": 127975424,
-    "public_entrypoint_seconds": 0.44439975,
-    "range_seconds": 0.017698584,
-    "recorder_seconds": 0.052156625,
-    "result_conversion_seconds": 3.417e-06,
+    "kernel_seconds": 0.390343041,
+    "median_seconds": 0.44616375,
+    "peak_rss_bytes": 124780544,
+    "public_entrypoint_seconds": 0.44616375,
+    "range_seconds": 0.01348625,
+    "recorder_seconds": 0.054086125,
+    "result_conversion_seconds": 3.583e-06,
     "swap_delta_bytes": 0,
     "swap_measurement": "system_vm.swapusage",
     "threshold_passed": true,
     "threshold_seconds": 1.0,
     "warm_runs_seconds": [
-      0.44439975,
-      0.436743375,
-      0.454441959
+      0.438051625,
+      0.44616375,
+      0.451537875
     ],
     "warmup_runs": 1
   },

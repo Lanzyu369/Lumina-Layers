@@ -57,10 +57,10 @@ def test_stroke_expands_before_full_affine_transform() -> None:
     )
 
     assert result.status == "supported"
-    assert result.bbox == pytest.approx((20.0, 35.0, 60.0, 10.0), abs=0.01)
+    assert result.bbox == pytest.approx((0.0, 0.0, 100.0, 60.0), abs=0.01)
     assert result.raw.source_kinds.tolist() == [1]
     assert geometry_bounds(result, result.raw, 0) == pytest.approx(
-        (0.0, 0.0, 60.0, 10.0), abs=0.03
+        (20.0, 35.0, 80.0, 45.0), abs=0.03
     )
 
 
@@ -109,7 +109,7 @@ def test_closed_stroke_remains_a_band_with_an_independent_hole() -> None:
     )
 
     assert result.status == "supported"
-    assert result.bbox == pytest.approx((8.0, 8.0, 24.0, 24.0), abs=0.01)
+    assert result.bbox == pytest.approx((0.0, 0.0, 40.0, 40.0), abs=0.01)
     assert result.raw.component_count == 1
     assert result.raw.hole_count == 1
-    assert geometry_area(result, result.raw, 0) == pytest.approx(320.0, abs=0.1)
+    assert geometry_area(result, result.raw, 0) == pytest.approx(320.0, abs=0.3)

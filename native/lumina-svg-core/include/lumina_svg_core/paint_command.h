@@ -16,6 +16,7 @@ struct RecorderResult {
     std::string reason_code{"invalid_svg"};
     uint32_t schema_version{RECORDER_SCHEMA_VERSION};
     lunasvg::Box bounds;
+    lunasvg::Box viewport;
     std::vector<lunasvg::PaintCommand> commands;
 };
 

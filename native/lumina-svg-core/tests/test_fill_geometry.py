@@ -13,6 +13,16 @@ import lumina_svg_core
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
+def test_document_viewport_remains_part_of_lumina_bbox_contract() -> None:
+    result = lumina_svg_core.analyze_svg(
+        FIXTURES / "basic_fill_stroke.svg", 20.0, 0.02
+    )
+
+    assert result.status == "supported"
+    assert result.bbox == pytest.approx((0.0, 0.0, 20.0, 10.0), abs=1e-6)
+    assert result.scale_factor == pytest.approx(1.0)
+
+
 def test_non_uniform_transform_uses_one_model_space_error_budget() -> None:
     result = lumina_svg_core.analyze_svg(
         FIXTURES / "fill_rules_transforms.svg",
@@ -55,11 +65,11 @@ def test_exported_grid_stays_in_normalized_svg_analysis_domain() -> None:
         result.visible.coordinates.astype(np.float64)
         * result.grid_to_source_unit
     )
-    assert source_coordinates[:, 0].min() == pytest.approx(0.0, abs=0.01)
-    assert source_coordinates[:, 1].min() == pytest.approx(0.0, abs=0.01)
-    assert source_coordinates[:, 0].max() == pytest.approx(
-        result.bbox[2], abs=0.01
-    )
-    assert source_coordinates[:, 1].max() == pytest.approx(
-        result.bbox[3], abs=0.01
-    )
+    assert source_coordinates[:, 0].min() == pytest.approx(20.0, abs=0.01)
+    assert source_coordinates[:, 1].min() == pytest.approx(14.0, abs=0.01)
+    assert source_coordinates[:, 0].max() == pytest.approx(146.0, abs=0.01)
+    assert source_coordinates[:, 1].max() == pytest.approx(64.0, abs=0.01)
+    assert np.all(source_coordinates[:, 0] >= 0.0)
+    assert np.all(source_coordinates[:, 1] >= 0.0)
+    assert np.all(source_coordinates[:, 0] <= result.bbox[2] + 0.01)
+    assert np.all(source_coordinates[:, 1] <= result.bbox[3] + 0.01)

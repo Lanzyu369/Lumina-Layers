@@ -640,10 +640,18 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
         result->reason_code = recording.reason_code;
         return result;
     }
-    const auto sourceBounds = exactPaintBounds(recording.commands);
+    auto sourceBounds = exactPaintBounds(recording.commands);
     if(!sourceBounds.valid()) {
         result->reason_code = "empty_geometry";
         return result;
+    }
+    if(isPositiveFinite(recording.viewport.w)
+            && isPositiveFinite(recording.viewport.h)) {
+        sourceBounds.include(
+            {recording.viewport.x, recording.viewport.y});
+        sourceBounds.include(
+            {recording.viewport.x + recording.viewport.w,
+             recording.viewport.y + recording.viewport.h});
     }
 
     const double sourceWidth = sourceBounds.max_x - sourceBounds.min_x;

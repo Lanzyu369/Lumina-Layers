@@ -8,29 +8,29 @@
       "sha256": "41e96f40ba81f6a8b0f65ed37ebaf3569616c48a444b417483bd58576b6e7857",
       "status": "supported",
       "reason_code": "",
-      "bbox": [2.0, 1.0, 16.000000001, 6.000000018],
+      "bbox": [0.0, 0.0, 20.0, 10.0],
       "ordered_rgba": [[255, 0, 0, 255], [0, 0, 255, 255]],
       "raw_components": 2,
       "visible_components": 2,
       "visible_holes": 1,
       "area_by_rgba": {
-        "0-0-255-255": 79.997108,
-        "255-0-0-255": 16.003766
+        "0-0-255-255": 79.998466,
+        "255-0-0-255": 15.999693
       },
-      "fingerprint": "2c44039d9e5a93ed186c7cd804aa3598ec4d7e322dfdcd49020cd0ec7be290a0"
+      "fingerprint": "878f4f85f2564c6ca5435ebbd909330e93a5e85b0a0cc2cf07f414fb469fe150"
     },
     {
       "file": "fill_rules_transforms.svg",
       "sha256": "63e9014e46f43cc0ffe8fe070d5a8458852a563db9d1e21d0c09920dadfd001e",
       "status": "supported",
       "reason_code": "",
-      "bbox": [20.000000119, 14.000000149, 126.000000238, 50.000000745],
+      "bbox": [0.0, 0.0, 146.000000358, 80.0],
       "ordered_rgba": [[229, 57, 53, 255]],
       "raw_components": 2,
       "visible_components": 2,
       "visible_holes": 1,
-      "area_by_rgba": {"229-57-53-255": 3192.038574},
-      "fingerprint": "4cb4ca32f897094473535194197065b6d81a927bcd23738a7068ac50cc913be3"
+      "area_by_rgba": {"229-57-53-255": 3192.004045},
+      "fingerprint": "67118c04bc54b7a02fcfebcab6204789a7171382d399893b18ff626ab4941264"
     },
     {
       "file": "strokes_clips_occlusion.svg",
@@ -55,32 +55,32 @@
       "sha256": "c162228c501687f1067edb4d30c86a9c10d094c4781aa4586ed4a46fdb043f1c",
       "status": "supported",
       "reason_code": "",
-      "bbox": [2.0, 2.0, 27.999999983, 9.999999983],
+      "bbox": [0.0, 0.0, 40.0, 20.0],
       "ordered_rgba": [[0, 150, 136, 255], [38, 50, 56, 255], [0, 150, 136, 255], [38, 50, 56, 255]],
       "raw_components": 4,
       "visible_components": 4,
       "visible_holes": 2,
       "area_by_rgba": {
-        "0-150-136-255": 72.006765,
-        "38-50-56-255": 127.996187
+        "0-150-136-255": 72.008801,
+        "38-50-56-255": 127.970392
       },
-      "fingerprint": "43401034eb16a688a99c3ce77c4a2714ce8a02e7c04170589422c01a7b52a067"
+      "fingerprint": "27c6304193c051e047850c953eb2daeec60c5593882d2fefbb6cf4ab9a0d76fc"
     },
     {
       "file": "overlap_islands.svg",
       "sha256": "c42c01354ccc88bfcd27fe477d9518b4fe7c7b2444a762e7ba641f51eda5dd07",
       "status": "supported",
       "reason_code": "",
-      "bbox": [0.0, 0.0, 75.0, 40.0],
+      "bbox": [0.0, 0.0, 80.0, 50.0],
       "ordered_rgba": [[244, 67, 54, 255], [33, 150, 243, 255], [244, 67, 54, 255]],
       "raw_components": 4,
       "visible_components": 4,
       "visible_holes": 1,
       "area_by_rgba": {
-        "244-67-54-255": 1425.004488,
-        "33-150-243-255": 1099.989507
+        "244-67-54-255": 1424.985396,
+        "33-150-243-255": 1100.029812
       },
-      "fingerprint": "b37ac7869081c7eb304985de0010fef4aa00a17a26ed3577957ec409c966ac63"
+      "fingerprint": "37eb3e497504abf4df81577004ff27f0a81b186fb56491ac895571f0c38ab72d"
     }
   ]
 }

@@ -171,6 +171,10 @@ PYBIND11_MODULE(_lumina_svg_core, module)
             return py::make_tuple(value.bounds.x, value.bounds.y,
                                   value.bounds.w, value.bounds.h);
         })
+        .def_property_readonly("viewport", [](const lumina_svg_core::RecorderResult& value) {
+            return py::make_tuple(value.viewport.x, value.viewport.y,
+                                  value.viewport.w, value.viewport.h);
+        })
         .def_property_readonly("commands", &commands);
 
     py::class_<lumina_svg_core::GeometryCollectionView>(module, "GeometryCollection")
