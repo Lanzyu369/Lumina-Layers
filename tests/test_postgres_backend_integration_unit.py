@@ -77,6 +77,27 @@ def test_postgres_session_backend_crud_and_close(postgres_engine: object) -> Non
     )
     assert session_data["free_color_set"] == {"#000000", "#ffffff"}
 
+    store.put(
+        session_id,
+        "preview_cache",
+        {"glb_job_token": "current", "glb_url": None},
+    )
+    assert store.compare_and_set(
+        session_id,
+        "preview_cache",
+        {"glb_job_token": "current", "glb_url": "/api/files/ready"},
+        revision_path=("glb_job_token",),
+        expected_revision="current",
+    ) is True
+    assert store.compare_and_set(
+        session_id,
+        "preview_cache",
+        {"glb_job_token": "stale", "glb_url": "/api/files/stale"},
+        revision_path=("glb_job_token",),
+        expected_revision="stale",
+    ) is False
+    assert store.get(session_id)["preview_cache"]["glb_url"] == "/api/files/ready"
+
     fd, path = tempfile.mkstemp(suffix=".tmp")
     os.close(fd)
     store.register_temp_file(session_id, path)

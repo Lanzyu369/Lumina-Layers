@@ -20,11 +20,11 @@ Threading model / 线程模型:
 
 Job-token guard / 任务令牌保护:
     Each scheduling call writes a fresh ``job_token`` into the session's
-    ``preview_cache``. When a newer replace arrives while an older GLB
-    build is still running, the old worker simply notices its token no
-    longer matches the cache and discards its (now stale) result. This
-    prevents races between "batched colour swap still building" and a
-    subsequent region replace landing before the first GLB finishes.
+    ``preview_cache`` and atomically claims its cache revision. When a newer
+    edit arrives while an older GLB build is still running, the old worker
+    discards its result if either the token or the captured cache revision
+    changed. Late schedulers also claim the latest stored revision instead of
+    restoring their caller's stale snapshot.
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ from typing import Optional, TypedDict
 
 from api.file_registry import FileRegistry
 from api.preview_cache_artifacts import (
+    PREVIEW_CACHE_REVISION_KEY,
     hydrate_preview_cache_for_worker,
     is_preview_cache_artifact_ref,
     merge_preview_cache_metadata,
@@ -65,6 +66,7 @@ _GLB_CACHE_UNAVAILABLE_MESSAGE = (
 _GLB_BUILD_FAILED_MESSAGE = (
     "3D preview could not be updated. Re-run preview and try again."
 )
+_GLB_SCHEDULE_CAS_ATTEMPTS = 8
 
 
 class _GlbPreviewCacheUnavailableError(RuntimeError):
@@ -82,11 +84,30 @@ def _cache_value(cache: dict, key: str) -> object:
     return _cache_state(cache).get(key)
 
 
+def _cache_publication_guard(cache: dict) -> tuple[tuple[str, ...], object]:
+    revision = _cache_value(cache, PREVIEW_CACHE_REVISION_KEY)
+    if isinstance(revision, str) and revision:
+        path = (
+            ("metadata", PREVIEW_CACHE_REVISION_KEY)
+            if is_preview_cache_artifact_ref(cache)
+            else (PREVIEW_CACHE_REVISION_KEY,)
+        )
+        return path, revision
+    token_path = (
+        ("metadata", "glb_job_token")
+        if is_preview_cache_artifact_ref(cache)
+        else ("glb_job_token",)
+    )
+    return token_path, _cache_value(cache, "glb_job_token")
+
+
 def _with_cache_metadata(cache: dict, metadata: dict[str, object]) -> dict:
     if is_preview_cache_artifact_ref(cache):
         return merge_preview_cache_metadata(cache, metadata)
-    cache.update(metadata)
-    return cache
+    updated = dict(cache)
+    updated.update(metadata)
+    updated[PREVIEW_CACHE_REVISION_KEY] = uuid.uuid4().hex
+    return updated
 
 
 def _hydrate_cache_for_glb_worker(cache: dict) -> dict:
@@ -287,45 +308,76 @@ def schedule_glb_build(
     store: SessionStore,
     registry: FileRegistry,
     cache: dict,
+    *,
+    metadata_updates: dict[str, object] | None = None,
 ) -> str:
     """Start a background segmented-GLB rebuild for *session_id*.
 
-    Writes a fresh ``glb_job_token`` into *cache* (and clears any prior
-    ``glb_url`` / ``glb_error``) before persisting the cache back to the
-    store, so a concurrent :func:`get_glb_status` call sees ``pending``
-    immediately. Submits the build to :data:`_GLB_EXECUTOR` and returns the
-    job token so the caller can include it in the HTTP response for
-    observability.
-    为指定 session 触发后台 GLB 重建：先把新的 ``glb_job_token`` 写回 cache
-    并清空旧的 ``glb_url`` / ``glb_error``，再把重建任务提交给线程池；返回
-    任务 token 便于调用方把它写进响应体用于日志联调。
+    Atomically claims the latest stored cache with a fresh ``glb_job_token``
+    (and clears any prior ``glb_url`` / ``glb_error``), so a late scheduler
+    can never restore an older edit snapshot. Submits the claimed revision to
+    :data:`_GLB_EXECUTOR` and returns its job token for observability.
+    为指定 session 触发后台 GLB 重建：原子领取 store 中最新的
+    cache revision，写入新 ``glb_job_token`` 并清空旧结果，再提交给
+    线程池。晚到的调度请求不会把旧缓存快照写回 session。
 
     Args:
         session_id (str): SessionStore 中的 session id。
         store (SessionStore): 会话存储，用于 worker 重新读取最新 cache。
         registry (FileRegistry): 文件注册表，用于把生成的 GLB 路径映射为
             ``/api/files/<id>`` URL。
-        cache (dict): 已就绪的 preview_cache 字典 —— 调用方负责在调度前
-            把最新的 matched_rgb / material_matrix 等写入 cache。
+        cache (dict): 调用方刚提交的 preview_cache 快照；若它已过期，
+            调度器会改为原子领取 store 中的最新版本。
+        metadata_updates: Optional small metadata that must be applied to
+            whichever cache revision wins the claim. 需要应用到最终领取
+            版本上的可选小型元数据。
 
     Returns:
-        str: 新分配的 job_token，同时已写入 ``cache['glb_job_token']``。
+        str: 已原子写入最新 session cache 的 job_token。
     """
 
-    job_token = uuid.uuid4().hex
-    cache = _with_cache_metadata(
-        cache,
-        {
-            "glb_job_token": job_token,
-            # Clear any previous outcome so the status endpoint reports
-            # "pending" until this new job completes.
-            # 清空旧结果让状态查询立即返回 pending。
-            "glb_url": None,
-            "glb_error": None,
-            "glb_started_at": time.time(),
-        },
-    )
-    store.put(session_id, "preview_cache", cache)
+    candidate_cache = cache
+    claimed_metadata = dict(metadata_updates or {})
+    job_token: str | None = None
+    for _attempt in range(_GLB_SCHEDULE_CAS_ATTEMPTS):
+        revision_path, expected_revision = _cache_publication_guard(
+            candidate_cache
+        )
+        candidate_token = uuid.uuid4().hex
+        pending_cache = _with_cache_metadata(
+            candidate_cache,
+            {
+                **claimed_metadata,
+                "glb_job_token": candidate_token,
+                # Clear any previous outcome so the status endpoint reports
+                # "pending" until this new job completes.
+                # 清空旧结果让状态查询立即返回 pending。
+                "glb_url": None,
+                "glb_error": None,
+                "glb_started_at": time.time(),
+            },
+        )
+        claimed = store.compare_and_set(
+            session_id,
+            "preview_cache",
+            pending_cache,
+            revision_path=revision_path,
+            expected_revision=expected_revision,
+        )
+        if claimed:
+            job_token = candidate_token
+            break
+        session_data = store.get(session_id)
+        latest_cache = session_data.get("preview_cache") if session_data else None
+        if not isinstance(latest_cache, dict):
+            raise _GlbPreviewCacheUnavailableError(
+                _GLB_CACHE_UNAVAILABLE_MESSAGE
+            )
+        candidate_cache = latest_cache
+    if job_token is None:
+        raise RuntimeError(
+            "Preview cache changed repeatedly while scheduling the 3D preview."
+        )
 
     scheduled_perf_counter = time.perf_counter()
     _GLB_EXECUTOR.submit(
@@ -356,14 +408,12 @@ def _run_glb_build_job(
 ) -> None:
     """Worker body: regenerate the segmented GLB and write it back to cache.
 
-    Re-reads the latest ``preview_cache`` on entry so we always work on the
-    most recent matched_rgb / material_matrix snapshot (even if the caller
-    handed us a stale dict). If another scheduling call superseded us while
-    we were waiting, our ``job_token`` no longer matches and we silently
-    discard the result without touching cache — the newer job will be (or
-    is already) running and will fill ``glb_url`` itself.
-    Worker 主体：在任务开始时重新拉取最新 preview_cache，若 job_token 已被
-    新任务覆盖则直接放弃写回，避免新旧 GLB 相互覆盖。
+    Re-reads the claimed ``preview_cache`` on entry and captures both its
+    token and immutable cache revision before hydration/build. Any edit,
+    reschedule, close, or restore changes that revision, so stale results are
+    discarded before registration or by the final atomic publication.
+    Worker 主体：入口同时捕获 job token 与不可复用的 cache revision。
+    编辑、重调度、关闭或历史恢复任一发生后，旧结果都无法注册或写回。
     """
 
     t_start = time.perf_counter()
@@ -373,6 +423,10 @@ def _run_glb_build_job(
         else 0.0
     )
     glb_path: str | None = None
+    registered_glb_id: str | None = None
+    registered_glb_adopted = False
+    publication_revision_path: tuple[str, ...] | None = None
+    expected_publication_revision: object = None
     try:
         session_data = store.get(session_id)
         if session_data is None:
@@ -407,6 +461,10 @@ def _run_glb_build_job(
                 },
             )
             return
+        (
+            publication_revision_path,
+            expected_publication_revision,
+        ) = _cache_publication_guard(latest_cache)
 
         target_path = os.path.join(
             OUTPUT_DIR,
@@ -428,14 +486,12 @@ def _run_glb_build_job(
         session_data = store.get(session_id)
         latest_cache = session_data.get("preview_cache") if session_data else None
         if latest_cache is None:
-            _cleanup_unregistered_glb(
-                glb_path,
-                session_id=session_id,
-                job_token=job_token,
-                reason="session_missing_after_build",
-            )
             return
-        if _cache_value(latest_cache, "glb_job_token") != job_token:
+        if (
+            _cache_value(latest_cache, "glb_job_token") != job_token
+            or _cache_publication_guard(latest_cache)
+            != (publication_revision_path, expected_publication_revision)
+        ):
             log.debug(
                 "GLB build result discarded: superseded after completion",
                 extra={
@@ -445,27 +501,45 @@ def _run_glb_build_job(
                     "current_job_token": _cache_value(latest_cache, "glb_job_token"),
                 },
             )
-            _cleanup_unregistered_glb(
-                glb_path,
-                session_id=session_id,
-                job_token=job_token,
-                reason="superseded_after_build",
-            )
             return
 
         cache_updates: dict[str, object] = {}
         if glb_path and os.path.exists(glb_path):
-            try:
-                glb_id = registry.register_path(session_id, glb_path)
-            except NON_FATAL_GLB_ERRORS:
-                _cleanup_unregistered_glb(
-                    glb_path,
-                    session_id=session_id,
-                    job_token=job_token,
-                    reason="registry_failed",
+            registered_glb_id = registry.register_path(session_id, glb_path)
+            registered_session = store.get(session_id)
+            registered_cache = (
+                registered_session.get("preview_cache")
+                if registered_session is not None
+                else None
+            )
+            current_token = (
+                _cache_value(registered_cache, "glb_job_token")
+                if isinstance(registered_cache, dict)
+                else None
+            )
+            if (
+                registered_cache is None
+                or current_token != job_token
+                or _cache_publication_guard(registered_cache)
+                != (publication_revision_path, expected_publication_revision)
+            ):
+                log.debug(
+                    "GLB registration discarded after ownership changed",
+                    extra={
+                        "event": "converter_glb_discarded_after_registration",
+                        "session_id": session_id,
+                        "job_token": job_token,
+                        "current_job_token": current_token,
+                        "reason": (
+                            "session_missing"
+                            if registered_cache is None
+                            else "superseded"
+                        ),
+                    },
                 )
-                raise
-            cache_updates["glb_url"] = f"/api/files/{glb_id}"
+                return
+            latest_cache = registered_cache
+            cache_updates["glb_url"] = f"/api/files/{registered_glb_id}"
             cache_updates["glb_error"] = None
             cache_updates["glb_renderer"] = selected_renderer
             # color_contours is populated as a side effect of
@@ -490,8 +564,28 @@ def _run_glb_build_job(
             )
 
         cache_updates["glb_completed_at"] = time.time()
-        latest_cache = _with_cache_metadata(latest_cache, cache_updates)
-        store.put(session_id, "preview_cache", latest_cache)
+        completed_cache = _with_cache_metadata(latest_cache, cache_updates)
+        if publication_revision_path is None:
+            return
+        published = store.compare_and_set(
+            session_id,
+            "preview_cache",
+            completed_cache,
+            revision_path=publication_revision_path,
+            expected_revision=expected_publication_revision,
+        )
+        if not published:
+            log.debug(
+                "GLB result discarded during atomic publication",
+                extra={
+                    "event": "converter_glb_discarded_during_publish",
+                    "session_id": session_id,
+                    "job_token": job_token,
+                    "reason": "session_or_revision_changed",
+                },
+            )
+            return
+        registered_glb_adopted = True
         completed_at = time.perf_counter()
         execution_ms = max(0.0, (completed_at - t_start) * 1000.0)
         segmented_glb_timings = {}
@@ -548,9 +642,14 @@ def _run_glb_build_job(
         latest_cache = session_data.get("preview_cache") if session_data else None
         if latest_cache is None:
             return
-        if _cache_value(latest_cache, "glb_job_token") != job_token:
+        if (
+            publication_revision_path is None
+            or _cache_value(latest_cache, "glb_job_token") != job_token
+            or _cache_publication_guard(latest_cache)
+            != (publication_revision_path, expected_publication_revision)
+        ):
             return
-        latest_cache = _with_cache_metadata(
+        failed_cache = _with_cache_metadata(
             latest_cache,
             {
                 "glb_url": None,
@@ -558,7 +657,23 @@ def _run_glb_build_job(
                 "glb_completed_at": time.time(),
             },
         )
-        store.put(session_id, "preview_cache", latest_cache)
+        store.compare_and_set(
+            session_id,
+            "preview_cache",
+            failed_cache,
+            revision_path=publication_revision_path,
+            expected_revision=expected_publication_revision,
+        )
+    finally:
+        if registered_glb_id is not None and not registered_glb_adopted:
+            registry.cleanup_file(registered_glb_id)
+        elif glb_path is not None and not registered_glb_adopted:
+            _cleanup_unregistered_glb(
+                glb_path,
+                session_id=session_id,
+                job_token=job_token,
+                reason="preview_not_published",
+            )
 
 
 def get_glb_status(cache: dict) -> GlbStatus:

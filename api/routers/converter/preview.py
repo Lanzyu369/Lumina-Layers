@@ -31,7 +31,6 @@ from api.preview_cache_artifacts import (
     get_preview_cache_metadata,
     hydrate_preview_cache,
     is_preview_cache_artifact_ref,
-    merge_preview_cache_metadata,
 )
 from api.preview_cache_memory import (
     build_preview_cache_memory_profile,
@@ -2401,17 +2400,12 @@ def rebuild_vector_preview_renderer(
         ),
         "vector_preview_renderer": requested_renderer,
     }
-    updated_cache = (
-        merge_preview_cache_metadata(cache, renderer_metadata)
-        if is_preview_cache_artifact_ref(cache)
-        else {**cache, **renderer_metadata}
-    )
-    store.put(request.session_id, "preview_cache", updated_cache)
     job_token = schedule_glb_build(
         request.session_id,
         store,
         registry,
-        updated_cache,
+        cache,
+        metadata_updates=renderer_metadata,
     )
     log.info(
         "Vector preview renderer rebuild scheduled",
