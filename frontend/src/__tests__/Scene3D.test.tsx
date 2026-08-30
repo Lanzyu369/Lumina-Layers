@@ -33,7 +33,13 @@ vi.mock("../components/BedPlatform", () => ({
     return <div data-testid="mock-bed-platform" />;
   },
 }));
-vi.mock("../components/KeychainRing3D", () => ({ default: () => null }));
+let capturedKeychainRingProps: Record<string, unknown> | null = null;
+vi.mock("../components/KeychainRing3D", () => ({
+  default: (props: Record<string, unknown>) => {
+    capturedKeychainRingProps = props;
+    return <div data-testid="mock-keychain-ring" />;
+  },
+}));
 let capturedModelSurfaceSelectorProps: Record<string, unknown> | null = null;
 vi.mock("../components/ModelSurfaceSelector3D", () => ({
   default: (props: Record<string, unknown>) => {
@@ -221,6 +227,7 @@ beforeEach(() => {
     capturedOrbitControlsProps = {};
     capturedInteractiveViewerProps = null;
     capturedBedPlatformProps = null;
+    capturedKeychainRingProps = null;
     capturedModelSurfaceSelectorProps = null;
     capturedFridgeMagnet3DProps = null;
     document.body.classList.remove("lumina-canvas-orbiting");
@@ -234,6 +241,7 @@ beforeEach(() => {
     // Reset store to defaults
       useConverterStore.setState({
         isLoading: false,
+        modelUrl: null,
         previewGlbUrl: null,
         batchPreviewItems: [],
         previewPerformanceTiming: null,
@@ -728,6 +736,47 @@ beforeEach(() => {
       expect(capturedInteractiveViewerProps?.sourceRole).toBe("generated");
     });
 
+    it("keeps the keychain proxy on a quick preview", () => {
+      useConverterStore.setState({
+        previewGlbUrl: "/api/files/quick-preview.glb",
+        add_loop: true,
+        modelBounds: {
+          minX: -20,
+          maxX: 20,
+          minY: -30,
+          maxY: 30,
+          maxZ: 2,
+        },
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedKeychainRingProps).not.toBeNull();
+    });
+
+    it("keeps the lightweight preview and keychain proxy ahead of a stale store model", () => {
+      useConverterStore.setState({
+        modelUrl: "/api/files/generated-with-keychain.glb",
+        previewGlbUrl: "/api/files/old-quick-preview.glb",
+        add_loop: true,
+        modelBounds: {
+          minX: -20,
+          maxX: 20,
+          minY: -30,
+          maxY: 30,
+          maxZ: 2,
+        },
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedInteractiveViewerProps).toMatchObject({
+        url: "/api/files/old-quick-preview.glb",
+        sourceRole: "quick-preview",
+      });
+      expect(capturedKeychainRingProps).not.toBeNull();
+    });
+
     it("preserves embedded auxiliaries in batch models", () => {
       useConverterStore.setState({
         batchPreviewItems: [
@@ -865,7 +914,7 @@ beforeEach(() => {
       expect(capturedInteractiveViewerProps).toBeNull();
     });
 
-    it("keeps the model surface editor visible after final generation returns a GLB", () => {
+    it("keeps the realtime model-surface editor ahead of a generated GLB", () => {
       const modelFile = new File(["solid"], "plate.stl");
       useConverterStore.setState({
         modelSurfaceEnabled: true,

@@ -8306,7 +8306,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         return null;
       }
       const sessionId = state.sessionId;
-      const glbPollSequenceAtGenerateStart = _glbPollSequence;
       const sourceSelection = resolveConverterSourceSelection(state);
       if (!sourceSelection.isReady) {
         set({
@@ -8700,38 +8699,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           download_url: response.download_url ?? null,
           has_legacy_threemf_disk_path: Boolean(response.threemf_disk_path),
         });
-        const modelUrl = normalizeStoreResourceUrl(response.preview_3d_url);
+        const responseModelUrl = normalizeStoreResourceUrl(
+          response.preview_3d_url,
+        );
         const downloadUrl = normalizeStoreResourceUrl(response.download_url);
-        const latestState = useConverterStore.getState();
-        const requestedHeightmapModel =
-          state.enable_relief && state.autoHeightMode === "use-heightmap";
-        const shouldShowGeneratedHeightmapModel =
-          requestedHeightmapModel &&
-          latestState.enable_relief &&
-          latestState.autoHeightMode === "use-heightmap" &&
-          _glbPollSequence === glbPollSequenceAtGenerateStart;
-        if (shouldShowGeneratedHeightmapModel) {
-          // A successful heightmap generation owns modelUrl. Cancel preview
-          // polls that started before it; any later poll may replace it.
-          _glbPollSequence += 1;
-        }
         set({
           isGenerating: false,
-          // Keep previewGlbUrl as the 3D viewer source: it renders the
-          // pixel-level colour-mixed preview. The generate GLB contains the
-          // exact per-material geometry used for 3MF export which looks like
-          // solid single-colour blocks and confuses users. Only fall back to
-          // modelUrl when no preview GLB exists (e.g. raster flow), except
-          // heightmap relief where the generated GLB is the only preview that
-          // preserves per-pixel heightmap geometry.
-          // 保留 previewGlbUrl 作为 3D 预览源：它渲染像素级混色预览。
-          // generate GLB 是 3MF 导出用的精确分材料几何，看起来是纯色块。
-          // 高度图浮雕例外：生成 GLB 才保留逐像素高度图几何。
-          modelUrl: shouldShowGeneratedHeightmapModel
-            ? modelUrl
-            : requestedHeightmapModel || latestState.previewGlbUrl
-              ? null
-              : modelUrl,
+          // Generate owns the exact downloadable 3MF only. Browser geometry
+          // remains preview-owned so async lightweight polling and real-time
+          // Three.js helpers continue without a print-scene GLB takeover.
+          // Generate 只拥有精确 3MF 下载；浏览器几何继续由轻量预览负责。
+          modelUrl: null,
           batchPreviewItems: [],
           downloadUrl,
           threemfDiskPath: null,
@@ -8739,9 +8717,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           generateWarnings: response.warnings ?? [],
           largeFormatWarnings: [],
         });
-        _logGenerateTimer("UI unlocked (isGenerating=false, modelUrl set)");
+        _logGenerateTimer("UI unlocked (isGenerating=false, 3MF set)");
         _clientLog("generate: UI unlocked", {
-          model_url: modelUrl,
+          response_model_url: responseModelUrl,
+          selected_model_url: null,
           download_url: downloadUrl,
           has_legacy_threemf_disk_path: Boolean(response.threemf_disk_path),
           warning_count: (response.warnings ?? []).length,
@@ -8758,7 +8737,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           warning_count: (response.warnings ?? []).length,
         });
         notifyCompletion("generation");
-        return modelUrl;
+        return null;
       } catch (err) {
         if (shouldIgnoreStaleGenerateResponse()) {
           return null;

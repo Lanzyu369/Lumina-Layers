@@ -468,25 +468,13 @@ def _require_preview_cache_for_generate(
     return cache, None
 
 
-def _resolve_reusable_preview_glb_path(
+def _resolve_registered_preview_glb(
     *,
     cache: dict,
-    request: ConvertGenerateRequest,
     sid: str,
     registry: FileRegistry,
-    reuse_preview_analysis: bool,
-) -> str | None:
-    """Return a ready preview GLB path when generate can reuse preview analysis.
-
-    仅在预览分析参数已确认可复用、GLB 文件仍由同一 session 注册且高精度
-    预览开关一致时，才把现有预览 GLB 传给 worker。
-    """
-    if not reuse_preview_analysis:
-        return None
-
-    preview_high_precision = bool(cache.get("high_precision_3d_preview", False))
-    if preview_high_precision is not bool(request.high_precision_3d_preview):
-        return None
+) -> tuple[str, str] | None:
+    """Return the current session-owned preview GLB URL and disk path."""
 
     glb_url = cache.get("glb_url")
     if not isinstance(glb_url, str) or not glb_url.strip():
@@ -504,9 +492,51 @@ def _resolve_reusable_preview_glb_path(
     if resolved is None:
         return None
     preview_glb_path, _filename = resolved
-    if not os.path.exists(preview_glb_path):
+    if not os.path.isfile(preview_glb_path):
         return None
-    return preview_glb_path
+    return glb_url, preview_glb_path
+
+
+def _resolve_reusable_preview_glb_path(
+    *,
+    cache: dict,
+    request: ConvertGenerateRequest,
+    sid: str,
+    registry: FileRegistry,
+    reuse_preview_glb: bool,
+) -> str | None:
+    """Return a ready preview GLB path when generate can reuse that asset.
+
+    仅在预览参数已确认可复用、GLB 文件仍由同一 session 注册且高精度
+    预览开关一致时，才把现有预览 GLB 传给 worker。
+    """
+    if not reuse_preview_glb:
+        return None
+
+    preview_high_precision = bool(cache.get("high_precision_3d_preview", False))
+    if preview_high_precision is not bool(request.high_precision_3d_preview):
+        return None
+
+    resolved = _resolve_registered_preview_glb(
+        cache=cache,
+        sid=sid,
+        registry=registry,
+    )
+    return resolved[1] if resolved is not None else None
+
+
+def _paths_refer_to_same_file(left: str | None, right: str | None) -> bool:
+    """Return whether two non-empty paths identify the same filesystem path."""
+
+    if not left or not right:
+        return False
+    try:
+        return os.path.samefile(left, right)
+    except (FileNotFoundError, OSError, ValueError, TypeError):
+        try:
+            return os.path.realpath(left) == os.path.realpath(right)
+        except (OSError, ValueError, TypeError):
+            return False
 
 
 def _cache_field_path_or_tempfile(
@@ -1018,6 +1048,10 @@ def _can_reuse_preview_analysis(
         return False, "fridge_magnet_enabled"
     if request.enable_outline:
         return False, "outline_enabled"
+    if request.enable_coating:
+        return False, "coating_enabled"
+    if request.add_loop:
+        return False, "keychain_loop_enabled"
 
     return _preview_analysis_params_match(
         cache=cache,
@@ -1028,6 +1062,160 @@ def _can_reuse_preview_analysis(
         preview_color_layers=preview_color_layers,
         preview_layer_height_mm=preview_layer_height_mm,
     )
+
+
+def _can_reuse_planar_vector_preview_glb(
+    *,
+    cache: dict,
+    request: ConvertGenerateRequest,
+    core_modeling_mode: CoreModelingMode,
+    session_material_source: str,
+    is_native_svg: bool,
+    uses_model_surface_overlay: bool,
+    preview_edit_state_matches: bool,
+    preview_edit_state_reason: str,
+    preview_color_layers: object = _MISSING,
+    preview_layer_height_mm: object = _MISSING,
+) -> tuple[bool, str]:
+    """Decide whether a native Vector generate may reuse its quick GLB.
+
+    The segmented asset owns browser geometry while relief, coating,
+    attachments, outlines, and cloisonne remain live viewer state. Reuse still
+    fails closed for a different source, preview provenance/edit identity, or
+    model-surface workflow.
+
+    分段资产负责浏览器几何；浮雕、涂层、附件、描边和景泰蓝继续由前端
+    实时表达。源文件、预览来源/编辑身份不一致或模型覆面流程仍安全拒绝。
+    """
+
+    if core_modeling_mode != CoreModelingMode.VECTOR:
+        return False, "modeling_mode_not_vector"
+    if not is_native_svg:
+        return False, "source_not_native_svg"
+    if uses_model_surface_overlay:
+        return False, "model_surface_overlay_enabled"
+    if not preview_edit_state_matches:
+        return False, preview_edit_state_reason
+
+    return _preview_analysis_params_match(
+        cache=cache,
+        request=request,
+        core_modeling_mode=core_modeling_mode,
+        session_material_source=session_material_source,
+        target_width_mm=request.target_width_mm,
+        preview_color_layers=preview_color_layers,
+        preview_layer_height_mm=preview_layer_height_mm,
+    )
+
+
+def _normalize_hex_edit_value(value: object) -> str | None:
+    """Return one canonical six-digit edit colour or fail closed."""
+
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().removeprefix("#").lower()
+    if len(normalized) != 6:
+        return None
+    try:
+        int(normalized, 16)
+    except ValueError:
+        return None
+    return normalized
+
+
+def _normalize_replacement_edit_records(
+    value: object,
+) -> list[tuple[str, str]] | None:
+    """Normalize legacy and public replacement records to ordered mappings."""
+
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        return None
+
+    normalized_records: list[tuple[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            return None
+        source = item.get("matched_hex")
+        if source is None:
+            source = item.get("selected_color")
+        if source is None:
+            source = item.get("quantized_hex")
+        target = item.get("replacement_hex")
+        if target is None:
+            target = item.get("replacement_color")
+        normalized_source = _normalize_hex_edit_value(source)
+        normalized_target = _normalize_hex_edit_value(target)
+        if normalized_source is None or normalized_target is None:
+            return None
+        normalized_records.append((normalized_source, normalized_target))
+    return normalized_records
+
+
+def _normalize_recipe_edit_records(value: object) -> list[object] | None:
+    """Normalize recipe edits without weakening their ordered semantics."""
+
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        return None
+    return [deepcopy(item) for item in value]
+
+
+def _normalize_free_color_edit_set(value: object) -> frozenset[str] | None:
+    """Normalize free-colour values for request/session provenance checks."""
+
+    if value is None:
+        return frozenset()
+    if isinstance(value, str) or not isinstance(
+        value,
+        (set, frozenset, list, tuple),
+    ):
+        return None
+    normalized_values: set[str] = set()
+    for item in value:
+        normalized_item = _normalize_hex_edit_value(item)
+        if normalized_item is None:
+            return None
+        normalized_values.add(normalized_item)
+    return frozenset(normalized_values)
+
+
+def _preview_edit_state_matches(
+    *,
+    preview_replacement_regions: object,
+    generated_replacement_regions: object,
+    preview_recipe_overrides: object,
+    generated_recipe_overrides: object,
+    preview_free_color_set: object,
+    generated_free_color_set: object,
+) -> tuple[bool, str]:
+    """Compare edits represented by the current GLB with generate-time edits."""
+
+    comparisons = (
+        (
+            "replacement_regions",
+            _normalize_replacement_edit_records(preview_replacement_regions),
+            _normalize_replacement_edit_records(generated_replacement_regions),
+        ),
+        (
+            "recipe_overrides",
+            _normalize_recipe_edit_records(preview_recipe_overrides),
+            _normalize_recipe_edit_records(generated_recipe_overrides),
+        ),
+        (
+            "free_color_set",
+            _normalize_free_color_edit_set(preview_free_color_set),
+            _normalize_free_color_edit_set(generated_free_color_set),
+        ),
+    )
+    for field_name, preview_value, generated_value in comparisons:
+        if preview_value is None or generated_value is None:
+            return False, f"preview_edit_state_invalid:{field_name}"
+        if preview_value != generated_value:
+            return False, f"preview_edit_state_mismatch:{field_name}"
+    return True, "preview_edit_state_match"
 
 
 def _cache_field_array(
@@ -1991,10 +2179,26 @@ async def convert_generate(
             for r in request.replacement_regions
         ]
     recipe_overrides = _resolve_recipe_overrides(session_data, request)
+    preview_recipe_overrides = _backfill_recipe_override_virtual_materials(
+        session_data,
+        _normalize_recipe_overrides(
+            session_data.get("recipe_overrides") or None
+        ),
+    )
 
     free_color_set = session_data.get("free_color_set") or None
     if request.free_color_set is not None:
         free_color_set = request.free_color_set
+    preview_edit_state_matches, preview_edit_state_reason = (
+        _preview_edit_state_matches(
+            preview_replacement_regions=session_data.get("replacement_regions"),
+            generated_replacement_regions=replacement_regions,
+            preview_recipe_overrides=preview_recipe_overrides,
+            generated_recipe_overrides=recipe_overrides,
+            preview_free_color_set=session_data.get("free_color_set"),
+            generated_free_color_set=free_color_set,
+        )
+    )
 
     # Color-card mode: generate SVG from cached palette, swap image_path,
     # and force VECTOR mode so the existing vector branch produces the 3MF.
@@ -2084,6 +2288,24 @@ async def convert_generate(
         preview_color_layers=session_data.get("color_layers", _MISSING),
         preview_layer_height_mm=session_data.get("layer_height_mm", _MISSING),
     )
+    (
+        reuse_planar_vector_preview_glb,
+        reuse_planar_vector_preview_glb_reason,
+    ) = _can_reuse_planar_vector_preview_glb(
+        cache=cache,
+        request=request,
+        core_modeling_mode=core_modeling_mode,
+        session_material_source=str(session_material_source or "lut"),
+        is_native_svg=(
+            not generated_color_card_svg
+            and str(image_path).lower().endswith(".svg")
+        ),
+        uses_model_surface_overlay=_should_use_model_surface_overlay(session_data),
+        preview_edit_state_matches=preview_edit_state_matches,
+        preview_edit_state_reason=preview_edit_state_reason,
+        preview_color_layers=session_data.get("color_layers", _MISSING),
+        preview_layer_height_mm=session_data.get("layer_height_mm", _MISSING),
+    )
     if request.use_cached_matched_rgb:
         (
             matched_rgb_path,
@@ -2167,6 +2389,12 @@ async def convert_generate(
             "has_replacement_regions": bool(replacement_regions),
             "reuse_preview_analysis": reuse_preview_analysis,
             "reuse_preview_analysis_reason": reuse_preview_analysis_reason,
+            "reuse_planar_vector_preview_glb": (
+                reuse_planar_vector_preview_glb
+            ),
+            "reuse_planar_vector_preview_glb_reason": (
+                reuse_planar_vector_preview_glb_reason
+            ),
         },
     )
     if should_forward_cached_analysis:
@@ -2266,12 +2494,15 @@ async def convert_generate(
         reuse_preview_analysis = False
         reuse_preview_analysis_reason = "analysis_paths_unavailable"
 
+    reuse_preview_glb = (
+        reuse_preview_analysis or reuse_planar_vector_preview_glb
+    )
     preview_glb_path = _resolve_reusable_preview_glb_path(
         cache=cache,
         request=request,
         sid=body.session_id,
         registry=registry,
-        reuse_preview_analysis=reuse_preview_analysis,
+        reuse_preview_glb=reuse_preview_glb,
     )
 
     override_material_matrix_path, recipe_override_masks_path = _prepare_recipe_override_worker_inputs(
@@ -2475,8 +2706,15 @@ async def convert_generate(
     threemf_path: str | None = result.get("threemf_path")
     glb_path: str | None = result.get("glb_path")
     status_msg: str = result.get("status_msg", "")
+    glb_reuses_preview_path = _paths_refer_to_same_file(
+        glb_path,
+        preview_glb_path,
+    )
 
     if not threemf_path or not os.path.exists(threemf_path):
+        if glb_path and not glb_reuses_preview_path:
+            _remove_temp_path(glb_path)
+            glb_path = None
         uses_surface_overlay = _should_use_model_surface_overlay(session_data)
         raise _model_generation_failure_exception(
             status_msg,
@@ -2495,7 +2733,6 @@ async def convert_generate(
     preview_3d_url: str | None = None
     download_id: str | None = None
     registration_complete = False
-    glb_registered = False
     try:
         try:
             download_filename = None
@@ -2527,23 +2764,37 @@ async def convert_generate(
                 detail=MODEL_GENERATION_FAILED_DETAIL,
             ) from exc
 
-        if glb_path and os.path.exists(glb_path):
-            try:
-                glb_id = registry.register_path(sid, glb_path)
-            except Exception as exc:
-                log.warning(
-                    "Generated GLB preview registration failed",
-                    extra={
-                        "event": "converter_generate_glb_registration_failed",
-                        "session_id": sid,
-                        "error_type": type(exc).__name__,
-                        "error_message": str(exc),
-                        "path": glb_path,
-                    },
+        if glb_reuses_preview_path:
+            latest_session_data = store.get(sid)
+            latest_cache_value = (
+                latest_session_data.get("preview_cache")
+                if isinstance(latest_session_data, dict)
+                else None
+            )
+            if isinstance(latest_cache_value, dict):
+                latest_cache = (
+                    get_preview_cache_metadata(latest_cache_value)
+                    if is_preview_cache_artifact_ref(latest_cache_value)
+                    else latest_cache_value
                 )
-            else:
-                glb_registered = True
-                preview_3d_url = f"/api/files/{glb_id}"
+                current_preview = _resolve_registered_preview_glb(
+                    cache=latest_cache,
+                    sid=sid,
+                    registry=registry,
+                )
+                if current_preview is not None and _paths_refer_to_same_file(
+                    current_preview[1],
+                    glb_path,
+                ):
+                    preview_3d_url = current_preview[0]
+            log.debug(
+                "Generated model reused the registered preview GLB",
+                extra={
+                    "event": "converter_generate_glb_reused",
+                    "session_id": sid,
+                    "preview_url_current": preview_3d_url is not None,
+                },
+            )
         registration_complete = True
     finally:
         if download_id is None:
@@ -2551,7 +2802,7 @@ async def convert_generate(
         elif not registration_complete:
             with suppress(Exception):
                 registry.cleanup_file(download_id)
-        if glb_path and not glb_registered:
+        if glb_path and not glb_reuses_preview_path:
             _remove_temp_path(glb_path)
 
     api_total = time.perf_counter() - api_t0

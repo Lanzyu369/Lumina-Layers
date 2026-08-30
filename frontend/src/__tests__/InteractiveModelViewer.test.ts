@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
 import {
+  applyInteractiveModelPreviewMaterials,
   computePreviewLayerZPositions,
   applyPreviewMeshDisplayColor,
   buildBatchedPaletteUvEncoding,
@@ -14,6 +15,7 @@ import {
   prepareInteractiveModelSceneClone,
   resolveLayeredMaterialPreviewTransform,
   resolvePreviewColorLayerHeightMm,
+  shouldApplyQuickPreviewGeometry,
   shouldMirrorPreview,
   shouldApplyColorRemapToMeshName,
 } from "../components/InteractiveModelViewer";
@@ -111,6 +113,48 @@ describe("prepareInteractiveModelSceneClone", () => {
       }
     },
   );
+});
+
+describe("shouldApplyQuickPreviewGeometry", () => {
+  it("allows procedural geometry only for segmented quick previews", () => {
+    expect(shouldApplyQuickPreviewGeometry("quick-preview")).toBe(true);
+    expect(shouldApplyQuickPreviewGeometry("generated")).toBe(false);
+    expect(shouldApplyQuickPreviewGeometry("batch")).toBe(false);
+  });
+});
+
+describe("applyInteractiveModelPreviewMaterials", () => {
+  it.each(["generated", "batch"] as const)(
+    "preserves embedded MeshStandardMaterial for %s models",
+    (sourceRole) => {
+      const root = new THREE.Group();
+      const material = new THREE.MeshStandardMaterial({ color: 0x123456 });
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), material);
+      mesh.name = "color_123456";
+      root.add(mesh);
+
+      applyInteractiveModelPreviewMaterials(root, sourceRole);
+
+      expect(mesh.material).toBe(material);
+      expect(mesh.material).toBeInstanceOf(THREE.MeshStandardMaterial);
+      expect(material.color.getHexString(THREE.SRGBColorSpace)).toBe("123456");
+      disposeObjectTree(root);
+    },
+  );
+
+  it("converts quick-preview colour materials to matte materials", () => {
+    const root = new THREE.Group();
+    const material = new THREE.MeshStandardMaterial({ color: 0x123456 });
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), material);
+    mesh.name = "color_123456";
+    root.add(mesh);
+
+    applyInteractiveModelPreviewMaterials(root, "quick-preview");
+
+    expect(mesh.material).not.toBe(material);
+    expect(mesh.material).toBeInstanceOf(THREE.MeshBasicMaterial);
+    disposeObjectTree(root);
+  });
 });
 
 describe("extractHexFromMeshName", () => {
