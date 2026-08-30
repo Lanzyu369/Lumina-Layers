@@ -19,6 +19,7 @@ from core.vector_layer_geometry import (
     VectorLayerGeometryPolicy,
     build_vector_stepped_volume,
 )
+from core.vector_engine import VectorAnalysis, VectorProcessor
 from core.model_surface.assembly import (
     MODEL_SURFACE_DISPLAY_LAYER_HEIGHTS_KEY,
     MODEL_SURFACE_DISPLAY_Z_BOUNDS_KEY,
@@ -801,6 +802,87 @@ def test_pattern_display_bounds_accept_float32_writer_rounding():
     )
     assert _pattern_z_bounds_mm(pattern) == (0.0, writer_height_mm)
     assert _pattern_layer_heights_mm(pattern) == layer_heights_mm
+
+
+@pytest.mark.parametrize("layer_count", [5, 10])
+def test_real_gray_parameters_share_one_domain_across_four_materials(
+    layer_count: int,
+) -> None:
+    """The reported canvas survives margins, holes, islands, and contacts."""
+
+    canvas_width = 814.0
+    canvas_height = 947.0
+    target_width_mm = 115.59999084472656
+    scale_factor = target_width_mm / canvas_width
+    geometries = [
+        sg.Polygon(
+            [(50, 50), (220, 50), (220, 300), (50, 300)],
+            holes=[[(90, 90), (160, 90), (160, 180), (90, 180)]],
+        ),
+        sg.MultiPolygon(
+            [
+                sg.box(260, 60, 340, 150),
+                sg.box(350, 180, 450, 280),
+            ]
+        ),
+        sg.box(450, 280, 540, 370),
+        sg.Polygon([(700, 900), (760, 850), (814, 900), (780, 947)]),
+    ]
+    slot_names = ["White", "Red", "Yellow", "Blue"]
+    processor = VectorProcessor.__new__(VectorProcessor)
+    processor.color_mode = "4-Color (RYBW)"
+    processor.enable_fridge_magnet = False
+    processor.enable_coating = False
+    processor.enable_outline = False
+    processor.layer_height_mm = 0.08
+    processor._merge_backing_into_material = False
+    analysis = VectorAnalysis(
+        shape_data=[None] * 167,
+        clipped_shapes=[None] * 294,
+        matched_shapes=[
+            {
+                "geometry": geometry,
+                "recipe": [material_index] * layer_count,
+            }
+            for material_index, geometry in enumerate(geometries)
+        ],
+        silhouette=sg.GeometryCollection(geometries).buffer(0),
+        scale_factor=scale_factor,
+        bbox=(17.0, 23.0, canvas_width, canvas_height),
+        color_conf={},
+        slot_names=slot_names,
+        num_channels=4,
+        num_layers=layer_count,
+        preview_colors={
+            index: [index * 60, index * 40, index * 20, 255]
+            for index in range(4)
+        },
+    )
+    source_scene = processor.build_mesh(
+        analysis=analysis,
+        thickness_mm=0.0,
+        structure_mode="Single-sided",
+    )
+
+    pattern = _build_pattern_scene(
+        {
+            "is_svg_vector": True,
+            "scene": source_scene,
+            "vector_analysis": analysis,
+            "layer_height_mm": 0.08,
+            "bambu_face_orientation": "down",
+        }
+    )
+
+    domain = read_layered_coordinate_domain(
+        pattern.scene,
+        require_certified=True,
+    )
+    assert domain == analysis.coordinate_domain
+    assert tuple(pattern.geometry) == tuple(slot_names)
+    assert domain.layer_heights_mm == (0.08,) * layer_count
+    assert _pattern_xy_bounds_mm(pattern) == domain.writer_canvas_bounds_mm
+    assert _pattern_z_bounds_mm(pattern) == domain.writer_z_bounds_mm
 
 
 def test_build_embedded_overlay_scene_embeds_full_pattern_depth():
