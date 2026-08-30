@@ -6,6 +6,7 @@ from shapely.geometry import Polygon, box
 from shapely.ops import unary_union
 
 import core.vector_engine as vector_engine
+from core.native_svg_adapter import NativeSvgFallback
 from core.vector_engine import VectorProcessor
 
 
@@ -19,6 +20,19 @@ def _hole_areas(geom):
     if geom.geom_type == "Polygon":
         return sorted(Polygon(ring).area for ring in geom.interiors)
     return sorted(Polygon(ring).area for poly in geom.geoms for ring in poly.interiors)
+
+
+def _force_legacy_parser(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep legacy-internal unit tests isolated from an installed native wheel."""
+
+    monkeypatch.setattr(
+        vector_engine.native_svg_adapter,
+        "analyze_native_svg",
+        lambda *_args, **_kwargs: NativeSvgFallback(
+            reason_code="test_legacy_parser",
+            native_version="test",
+        ),
+    )
 
 
 def test_backing_close_alignment():
@@ -72,7 +86,8 @@ def test_slit_filter_closes_narrow_slits():
     assert len(filtered.geoms) == 2
 
 
-def test_color_layer_hole_filter_removes_small_holes(tmp_path):
+def test_color_layer_hole_filter_removes_small_holes(tmp_path, monkeypatch):
+    _force_legacy_parser(monkeypatch)
     outer = box(0, 0, 10, 10).exterior.coords
     small_hole = box(1, 1, 1 + math.sqrt(0.3), 1 + math.sqrt(0.3)).exterior.coords
     large_hole = box(5, 5, 6, 6).exterior.coords
@@ -115,6 +130,7 @@ def test_vector_parse_clip_cache_capacity_is_interaction_sized():
 
 
 def test_vector_parse_clip_cache_refreshes_hit_before_eviction(tmp_path, monkeypatch):
+    _force_legacy_parser(monkeypatch)
     monkeypatch.setattr(vector_engine, "_VECTOR_PARSE_CLIP_CACHE_MAX", 2)
     vector_engine._VECTOR_PARSE_CLIP_CACHE.clear()
 
@@ -213,6 +229,7 @@ def test_vector_parse_clip_cache_entry_is_not_mutated_by_later_filters(
     tmp_path,
     monkeypatch,
 ):
+    _force_legacy_parser(monkeypatch)
     svg_path = tmp_path / "cache_source.svg"
     svg_path.write_text("<svg/>", encoding="utf-8")
     original_geom = box(0, 0, 10, 10)
