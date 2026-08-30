@@ -1,0 +1,57 @@
+[build-system]
+requires = [
+  "scikit-build-core>=0.11,<2",
+  "pybind11>=2.13,<4",
+  "numpy>=2.0,<3",
+]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "lumina-svg-core"
+version = "0.1.0"
+description = "Print-oriented native SVG geometry analysis"
+readme = "README.md"
+requires-python = "==3.12.*"
+license = "Apache-2.0"
+authors = [{ name = "Lumina Layer Studio" }]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: C++",
+  "Programming Language :: Python :: 3.12",
+]
+dependencies = ["numpy>=2.0,<3"]
+
+[project.urls]
+Repository = "https://github.com/lumina-layer-studio/lumina-svg-core"
+
+[tool.scikit-build]
+cmake.version = ">=3.20"
+cmake.build-type = "Release"
+wheel.packages = ["python/lumina_svg_core"]
+wheel.install-dir = "lumina_svg_core"
+sdist.include = [
+  "CMakeLists.txt",
+  "cmake/**",
+  "include/**",
+  "patches/**",
+  "python/**",
+  "src/**",
+  "tests/**",
+  "LICENSE",
+  "THIRD_PARTY_NOTICES.md",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.cibuildwheel]
+build = [
+  "cp312-win_amd64",
+  "cp312-macosx_arm64",
+  "cp312-macosx_x86_64",
+  "cp312-manylinux_x86_64",
+]
+test-requires = ["pytest>=8,<10", "numpy>=2,<3"]
+test-command = "pytest {project}/tests -q"
+
