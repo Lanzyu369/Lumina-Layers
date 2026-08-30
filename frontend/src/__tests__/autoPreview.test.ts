@@ -593,4 +593,30 @@ describe("useAutoPreview", () => {
 
     expect(mockSubmitPreview).toHaveBeenCalledTimes(1);
   });
+
+  it("does not rebuild the full preview when the SVG renderer preference changes", () => {
+    renderHook(() => useAutoPreview());
+
+    act(() => {
+      useConverterStore.setState({
+        imageFile: fakeFile("preview.svg"),
+        lut_name: "my-lut",
+        modeling_mode: ModelingMode.VECTOR,
+        hasManualPreview: true,
+        sessionId: "vector-session",
+        previewImageUrl: "/api/files/current.png",
+        previewGlbUrl: "/api/files/current.glb",
+      });
+    });
+    act(() => {
+      useSettingsStore.getState().setEnableSmoothVectorPreview(false);
+      vi.advanceTimersByTime(500);
+    });
+
+    expect(mockSubmitPreview).not.toHaveBeenCalled();
+    expect(useConverterStore.getState().sessionId).toBe("vector-session");
+    expect(useConverterStore.getState().previewGlbUrl).toBe(
+      "/api/files/current.glb",
+    );
+  });
 });

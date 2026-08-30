@@ -68,6 +68,7 @@ import {
   cleanupSessionFiles as apiCleanupSessionFiles,
   uploadLut as apiUploadLut,
   getGlbStatus as apiGetGlbStatus,
+  rebuildVectorPreviewRenderer as apiRebuildVectorPreviewRenderer,
   uploadModelSurface as apiUploadModelSurface,
   selectModelSurface as apiSelectModelSurface,
 } from "../../api/converter";
@@ -2501,6 +2502,11 @@ export interface ConverterActions {
    */
   _pollAsyncGlb: () => void;
 
+  /** Rebuild only the lightweight GLB renderer for the current SVG session. */
+  rebuildVectorPreviewRenderer: (
+    enableSmoothVectorPreview: boolean,
+  ) => Promise<void>;
+
   // 模型边界
   setModelBounds: (bounds: ConverterState["modelBounds"]) => void;
 
@@ -3511,6 +3517,8 @@ const GLB_POLL_MAX_MS = 5 * 60_000;
 // 单调递增的 token：新轮询/切换 session 都会自增，旧循环下一轮检测到 token
 // 变了就退出，避免多路 polling 互相覆盖 previewGlbUrl。
 let _glbPollSequence = 0;
+let _vectorRendererRequestSequence = 0;
+let _vectorRendererRequestQueue: Promise<void> = Promise.resolve();
 let _generateRequestSequence = 0;
 let _batchRequestSequence = 0;
 let _activeFilenameEligibleGenerateSequence: number | null = null;
@@ -3528,6 +3536,7 @@ function _cancelPreviewWork(): void {
   _gradientGroupsAbortController?.abort();
   _gradientGroupsAbortController = null;
   _glbPollSequence += 1;
+  _vectorRendererRequestSequence += 1;
   _endPreviewTimer();
 }
 
@@ -7145,6 +7154,80 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       );
     },
 
+    rebuildVectorPreviewRenderer: async (
+      enableSmoothVectorPreview: boolean,
+    ) => {
+      const requested = _get();
+      if (
+        !requested.sessionId ||
+        !isSvgImageFile(requested.imageFile) ||
+        requested.modeling_mode !== ModelingModeEnum.VECTOR ||
+        requested.modelSurfaceEnabled ||
+        requested.largeFormatEnabled ||
+        requested.batchPreviewItems.length > 0
+      ) {
+        return;
+      }
+
+      const sessionId = requested.sessionId;
+      const previewRevision = requested.previewRequestRevision;
+      const sequence = ++_vectorRendererRequestSequence;
+      const runRequest = async (): Promise<void> => {
+        const beforeRequest = _get();
+        if (
+          sequence !== _vectorRendererRequestSequence ||
+          beforeRequest.sessionId !== sessionId ||
+          beforeRequest.previewRequestRevision !== previewRevision ||
+          useSettingsStore.getState().enableSmoothVectorPreview !==
+            enableSmoothVectorPreview
+        ) {
+          return;
+        }
+        try {
+          const response = await apiRebuildVectorPreviewRenderer(
+            sessionId,
+            enableSmoothVectorPreview,
+          );
+          const latest = _get();
+          if (
+            sequence !== _vectorRendererRequestSequence ||
+            latest.sessionId !== sessionId ||
+            latest.previewRequestRevision !== previewRevision ||
+            response.session_id !== sessionId ||
+            useSettingsStore.getState().enableSmoothVectorPreview !==
+              enableSmoothVectorPreview
+          ) {
+            return;
+          }
+          latest._pollAsyncGlb();
+        } catch (error) {
+          const latest = _get();
+          if (
+            sequence !== _vectorRendererRequestSequence ||
+            latest.sessionId !== sessionId ||
+            latest.previewRequestRevision !== previewRevision
+          ) {
+            return;
+          }
+          postClientLog("converter: vector renderer rebuild failed", {
+            scope: "converter",
+            phase: "vector-renderer-rebuild",
+            details: {
+              session_id: sessionId,
+              error: summarizeErrorForLog(error),
+            },
+          });
+        }
+      };
+
+      const queuedRequest = _vectorRendererRequestQueue.then(
+        runRequest,
+        runRequest,
+      );
+      _vectorRendererRequestQueue = queuedRequest.catch(() => undefined);
+      await queuedRequest;
+    },
+
     // --- 模型边界 ---
     setModelBounds: (bounds: ConverterState["modelBounds"]) =>
       set((state) => ({
@@ -7993,6 +8076,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           modeling_mode: state.modeling_mode,
           quantize_colors: state.quantize_colors,
           high_precision_3d_preview: state.high_precision_3d_preview,
+          enable_smooth_vector_preview:
+            useSettingsStore.getState().enableSmoothVectorPreview,
           enable_cleanup: state.enable_cleanup,
           enable_outline: state.enable_outline,
           outline_width: state.outline_width,

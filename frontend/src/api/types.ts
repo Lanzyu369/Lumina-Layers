@@ -119,6 +119,14 @@ export type ConvertPreviewRequest = ConvertSourceSelection & {
   surface_model_transform_json?: string;
 };
 
+export interface VectorPreviewRendererResponse {
+  session_id: string;
+  status: "pending";
+  job_token: string;
+  glb_url: null;
+  renderer: "vector_analytic" | "segmented";
+}
+
 export type ConvertGenerateRequest = ConvertPreviewRequest & {
   spacer_thick: number;
   backing_infill_density_percent?: number;
