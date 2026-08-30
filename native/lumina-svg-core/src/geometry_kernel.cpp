@@ -1,6 +1,7 @@
 #include "lumina_svg_core/geometry_kernel.h"
 
 #include "lumina_svg_core/paint_command.h"
+#include "lumina_svg_core/stroke_expander.h"
 
 #include <clipper2/clipper.h>
 
@@ -39,6 +40,7 @@ struct PhysicalDomain {
     double source_to_mm{0};
     double grid_step_mm{0};
     double flatten_budget_mm{0};
+    double stroke_quantization_budget_mm{0};
 };
 
 struct PaintGeometry {
@@ -190,6 +192,37 @@ SourceBounds exactFillBounds(const std::vector<lunasvg::PaintCommand>& commands)
     return bounds;
 }
 
+SourceBounds exactPaintBounds(const std::vector<lunasvg::PaintCommand>& commands)
+{
+    auto bounds = exactFillBounds(commands);
+    for(const auto& command : commands) {
+        if(command.kind != lunasvg::PaintCommandKind::Stroke)
+            continue;
+        const double singularValue = maximumSingularValue(command.transform);
+        if(!isPositiveFinite(singularValue))
+            continue;
+        double magnitude = std::max(1.0, static_cast<double>(command.stroke.width));
+        for(const auto& point : command.path_points) {
+            magnitude = std::max(magnitude, std::abs(static_cast<double>(point.x)));
+            magnitude = std::max(magnitude, std::abs(static_cast<double>(point.y)));
+        }
+        const double sourcePrecision = std::max(1.0e-7, magnitude * 1.0e-10);
+        const double localGridStep = std::max(
+            sourcePrecision * std::sqrt(2.0) / singularValue,
+            magnitude / 1.0e14);
+        const double localFlattenTolerance = std::max(
+            sourcePrecision / singularValue, localGridStep);
+        for(const auto& ring : expandStrokeLocal(
+                command, localFlattenTolerance, localGridStep)) {
+            for(const auto& point : ring) {
+                bounds.include(transformPoint(command.transform,
+                                              {point.x, point.y}));
+            }
+        }
+    }
+    return bounds;
+}
+
 double pointLineDistance(const PointD& point,
                          const PointD& lineStart,
                          const PointD& lineEnd)
@@ -335,6 +368,35 @@ Paths64 normalizeFill(const lunasvg::PaintCommand& command,
     return Clipper2Lib::Union(paths, clipperFillRule(command.fill_rule));
 }
 
+Paths64 normalizeStroke(const lunasvg::PaintCommand& command,
+                        const PhysicalDomain& domain)
+{
+    const double singularValue = maximumSingularValue(command.transform);
+    if(!isPositiveFinite(singularValue))
+        return {};
+    const double localFlattenTolerance = domain.flatten_budget_mm
+        / (domain.source_to_mm * singularValue);
+    const double localGridStep = domain.stroke_quantization_budget_mm
+        * std::sqrt(2.0) / (domain.source_to_mm * singularValue);
+    Paths64 paths;
+    for(const auto& ring : expandStrokeLocal(
+            command, localFlattenTolerance, localGridStep)) {
+        Path64 path;
+        path.reserve(ring.size());
+        for(const auto& point : ring) {
+            const auto gridPoint = toGridPoint(
+                {point.x, point.y}, command.transform, domain);
+            if(path.empty() || path.back() != gridPoint)
+                path.push_back(gridPoint);
+        }
+        if(path.size() > 1 && path.front() == path.back())
+            path.pop_back();
+        if(path.size() >= 3)
+            paths.emplace_back(std::move(path));
+    }
+    return Clipper2Lib::Union(paths, FillRule::NonZero);
+}
+
 Paths64 applyActiveClips(Paths64 paths,
                          const std::vector<Paths64>& activeClips)
 {
@@ -421,7 +483,7 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
         result->reason_code = recording.reason_code;
         return result;
     }
-    const auto sourceBounds = exactFillBounds(recording.commands);
+    const auto sourceBounds = exactPaintBounds(recording.commands);
     if(!sourceBounds.valid()) {
         result->reason_code = "empty_geometry";
         return result;
@@ -434,7 +496,9 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
     result->scale_factor = targetWidthMm / sourceWidth;
     result->max_flattening_error_mm = toleranceMm * 0.4;
     result->max_quantization_error_mm = toleranceMm * 0.2;
-    const double gridStepMm = result->max_quantization_error_mm
+    const double finalQuantizationBudgetMm = toleranceMm * 0.15;
+    const double strokeQuantizationBudgetMm = toleranceMm * 0.05;
+    const double gridStepMm = finalQuantizationBudgetMm
         * std::sqrt(2.0);
     result->grid_to_source_unit = gridStepMm / result->scale_factor;
     const PhysicalDomain domain{
@@ -443,6 +507,7 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
         result->scale_factor,
         gridStepMm,
         result->max_flattening_error_mm,
+        strokeQuantizationBudgetMm,
     };
 
     std::vector<Paths64> activeClips;
@@ -462,15 +527,20 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
             activeClips.pop_back();
             continue;
         }
-        if(command.kind != lunasvg::PaintCommandKind::Fill)
+        if(command.kind != lunasvg::PaintCommandKind::Fill
+                && command.kind != lunasvg::PaintCommandKind::Stroke)
             continue;
 
         PaintGeometry paint;
-        paint.paths = applyActiveClips(normalizeFill(command, domain), activeClips);
+        paint.paths = command.kind == lunasvg::PaintCommandKind::Stroke
+            ? normalizeStroke(command, domain)
+            : normalizeFill(command, domain);
+        paint.paths = applyActiveClips(std::move(paint.paths), activeClips);
         paint.rgba = command.rgba;
         paint.draw_index = drawIndex++;
         paint.source_index = command.source_index;
-        paint.source_kind = SourceKind::Fill;
+        paint.source_kind = command.kind == lunasvg::PaintCommandKind::Stroke
+            ? SourceKind::Stroke : SourceKind::Fill;
         paints.emplace_back(std::move(paint));
     }
     if(!activeClips.empty()) {

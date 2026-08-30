@@ -20,6 +20,7 @@ pybind11_add_module(
   src/geometry_kernel.cpp
   src/paint_command.cpp
   src/result.cpp
+  src/stroke_expander.cpp
 )
 target_include_directories(
   _lumina_svg_core
