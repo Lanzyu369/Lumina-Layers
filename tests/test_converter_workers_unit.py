@@ -302,6 +302,12 @@ def test_worker_generate_model_forwards_fridge_magnet_params_intact() -> None:
         "enable_fridge_magnet": True,
         "fridge_magnets": expected_fridge_magnets,
         "modeling_mode": "high-fidelity",
+        "original_matched_rgb_path": "original-rgb.npy",
+        "original_material_matrix_path": "original-material.npy",
+        "edit_projection": {
+            "mode": "delta",
+            "source_shape": [40, 80],
+        },
     }
 
     def _generate_with_transform_metadata(**kwargs):

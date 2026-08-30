@@ -3649,6 +3649,7 @@ def apply_recipe_overrides_to_analysis(
     max_width_px: int = 1600,
     min_overlap_ratio: float = 0.5,
     img_processor=None,
+    source_grid_shape: tuple[int, int] | None = None,
 ) -> None:
     """Apply user-declared per-region recipe overrides to a ``VectorAnalysis``.
     将用户通过自定义配方对话框声明的 per-region 覆盖回写到 ``VectorAnalysis``。
@@ -3696,6 +3697,11 @@ def apply_recipe_overrides_to_analysis(
         min_overlap_ratio: Minimum ratio of a shape's pixels that must fall
             inside a region mask before that region "claims" the shape.
             0.5 matches the "majority wins" rule used by the raster path.
+        source_grid_shape: Optional preview edit-grid ``(height, width)``.
+            When provided, SVG coordinates map directly to this immutable
+            grid instead of being re-rasterised at the new physical size.
+            （可选的预览编辑网格；提供后直接把 SVG 坐标映射到该网格，
+            不按变化后的物理尺寸重新栅格化。）
     """
     from core.recipe_order import convert_recipe_between_orders, pad_recipe_to_layer_count
     from core.pipeline.pipeline_utils import _hex_to_rgb_tuple
@@ -3711,15 +3717,33 @@ def apply_recipe_overrides_to_analysis(
     h_mm = real_h * sf
     if w_mm <= 0 or h_mm <= 0:
         return
-    ppm = float(pixels_per_mm)
-    w_px = max(1, int(round(w_mm * ppm)))
-    h_px = max(1, int(round(h_mm * ppm)))
-    if w_px > max_width_px:
-        ratio = max_width_px / w_px
-        w_px = max_width_px
-        h_px = max(1, int(round(h_px * ratio)))
-        ppm = w_px / w_mm
-    coord_scale = sf * ppm
+    if source_grid_shape is not None:
+        try:
+            h_px, w_px = (
+                int(source_grid_shape[0]),
+                int(source_grid_shape[1]),
+            )
+        except (TypeError, ValueError, IndexError, OverflowError) as exc:
+            raise ValueError("source recipe grid must contain two dimensions") from exc
+        if h_px <= 0 or w_px <= 0:
+            raise ValueError("source recipe grid dimensions must be positive")
+        # Geometry remains in source SVG coordinates. Mapping those coordinates
+        # directly to the edit grid preserves smooth paths across physical-size
+        # changes and avoids rasterising the newly scaled model first.
+        coord_scale: float | tuple[float, float] = (
+            w_px / real_w,
+            h_px / real_h,
+        )
+    else:
+        ppm = float(pixels_per_mm)
+        w_px = max(1, int(round(w_mm * ppm)))
+        h_px = max(1, int(round(h_mm * ppm)))
+        if w_px > max_width_px:
+            ratio = max_width_px / w_px
+            w_px = max_width_px
+            h_px = max(1, int(round(h_px * ratio)))
+            ppm = w_px / w_mm
+        coord_scale = sf * ppm
 
     # --- Normalise region masks to the preview grid ---
     normalised_masks: dict[str, np.ndarray] = {}
@@ -3850,10 +3874,14 @@ def apply_recipe_overrides_to_analysis(
         return []
 
     def _coords_to_pts(coords):
+        if isinstance(coord_scale, tuple):
+            scale_x, scale_y = coord_scale
+        else:
+            scale_x = scale_y = coord_scale
         pts = np.column_stack(
             [
-                coords[:, 0] * coord_scale,
-                coords[:, 1] * coord_scale,
+                coords[:, 0] * scale_x,
+                coords[:, 1] * scale_y,
             ]
         ).astype(np.int32)
         if len(pts) < 3:
@@ -4044,13 +4072,17 @@ def _iter_raster_polygon_components(geom) -> list:
 def _coords_to_raster_points(
     coords: np.ndarray,
     *,
-    coord_scale: float,
+    coord_scale: float | tuple[float, float],
 ) -> np.ndarray | None:
     """Convert geometry coordinates exactly like the legacy raster path."""
+    if isinstance(coord_scale, tuple):
+        scale_x, scale_y = coord_scale
+    else:
+        scale_x = scale_y = coord_scale
     pts = np.column_stack(
         [
-            coords[:, 0] * coord_scale,
-            coords[:, 1] * coord_scale,
+            coords[:, 0] * scale_x,
+            coords[:, 1] * scale_y,
         ]
     ).astype(np.int32)
     if len(pts) < 3:
@@ -4061,7 +4093,7 @@ def _coords_to_raster_points(
 def _geometry_raster_contours(
     geom,
     *,
-    coord_scale: float,
+    coord_scale: float | tuple[float, float],
 ) -> list[tuple[np.ndarray, list[np.ndarray]]]:
     """Build integer exterior/hole contours once for OpenCV rasterization."""
     contours: list[tuple[np.ndarray, list[np.ndarray]]] = []
@@ -4109,7 +4141,7 @@ def _rasterize_geometry_roi_mask(
     geom,
     *,
     canvas_shape: tuple[int, int],
-    coord_scale: float,
+    coord_scale: float | tuple[float, float],
 ) -> tuple[slice, slice, np.ndarray] | None:
     """Rasterize inside a conservative pixel ROI.
 
@@ -4267,12 +4299,15 @@ def _apply_matched_rgb_overrides_to_analysis_impl(
     analysis: "VectorAnalysis",
     *,
     matched_rgb: np.ndarray,
+    original_matched_rgb: np.ndarray | None = None,
     height_identity_rgb: np.ndarray | None = None,
     material_matrix: np.ndarray | None = None,
+    original_material_matrix: np.ndarray | None = None,
     mask_solid: np.ndarray,
     img_processor,
     pixels_per_mm: float = 10.0,
     max_width_px: int = 1600,
+    source_grid_shape: tuple[int, int] | None = None,
     strict: bool = False,
     metrics_out: dict[str, Any],
     prefer_cached_material_state: bool = False,
@@ -4380,15 +4415,30 @@ def _apply_matched_rgb_overrides_to_analysis_impl(
     if w_mm <= 0 or h_mm <= 0:
         return 0
 
-    ppm = float(pixels_per_mm)
-    w_px = max(1, int(round(w_mm * ppm)))
-    h_px = max(1, int(round(h_mm * ppm)))
-    if w_px > max_width_px:
-        ratio = max_width_px / w_px
-        w_px = max_width_px
-        h_px = max(1, int(round(h_px * ratio)))
-        ppm = w_px / w_mm
-    coord_scale = sf * ppm
+    if source_grid_shape is not None:
+        try:
+            h_px, w_px = (
+                int(source_grid_shape[0]),
+                int(source_grid_shape[1]),
+            )
+        except (TypeError, ValueError, IndexError, OverflowError) as exc:
+            raise ValueError("source edit grid must contain two dimensions") from exc
+        if h_px <= 0 or w_px <= 0:
+            raise ValueError("source edit grid dimensions must be positive")
+        coord_scale: float | tuple[float, float] = (
+            w_px / real_w,
+            h_px / real_h,
+        )
+    else:
+        ppm = float(pixels_per_mm)
+        w_px = max(1, int(round(w_mm * ppm)))
+        h_px = max(1, int(round(h_mm * ppm)))
+        if w_px > max_width_px:
+            ratio = max_width_px / w_px
+            w_px = max_width_px
+            h_px = max(1, int(round(h_px * ratio)))
+            ppm = w_px / w_mm
+        coord_scale = sf * ppm
 
     matched_arr = np.asarray(matched_rgb)
     raw_mask_arr = np.asarray(mask_solid)
@@ -4527,6 +4577,61 @@ def _apply_matched_rgb_overrides_to_analysis_impl(
             if strict:
                 raise ValueError(error_message)
 
+    edit_mask_arr = None
+    if original_matched_rgb is not None or original_material_matrix is not None:
+        edit_mask_arr = np.zeros((h_px, w_px), dtype=bool)
+        if original_matched_rgb is not None:
+            pristine_rgb = np.asarray(original_matched_rgb)
+            if pristine_rgb.shape != matched_arr.shape or pristine_rgb.dtype != np.uint8:
+                error_message = (
+                    "original_matched_rgb must match cached matched_rgb shape/dtype"
+                )
+                if strict:
+                    raise ValueError(error_message)
+                _log.warning(
+                    "Vector pristine RGB artifact is invalid; edit projection skipped",
+                    extra={
+                        "event": "vector_original_matched_rgb_invalid",
+                        "error_type": "ValueError",
+                        "error_message": error_message,
+                    },
+                )
+                return 0
+            edit_mask_arr |= np.any(matched_arr != pristine_rgb, axis=-1)
+        if original_material_matrix is not None:
+            pristine_matrix = np.asarray(original_material_matrix)
+            if (
+                matrix_arr is None
+                or pristine_matrix.ndim != 3
+                or pristine_matrix.shape[:2] != (h_px, w_px)
+                or not np.issubdtype(pristine_matrix.dtype, np.integer)
+            ):
+                error_message = (
+                    "original_material_matrix must match the cached material grid"
+                )
+                if strict:
+                    raise ValueError(error_message)
+                _log.warning(
+                    "Vector pristine material artifact is invalid; edit projection skipped",
+                    extra={
+                        "event": "vector_original_material_matrix_invalid",
+                        "error_type": "ValueError",
+                        "error_message": error_message,
+                    },
+                )
+                return 0
+            common_layers = min(
+                int(matrix_arr.shape[2]),
+                int(pristine_matrix.shape[2]),
+            )
+            if common_layers > 0:
+                edit_mask_arr |= np.any(
+                    matrix_arr[..., :common_layers]
+                    != pristine_matrix[..., :common_layers],
+                    axis=-1,
+                )
+        edit_mask_arr &= mask_arr
+
     if not analysis.matched_shapes:
         return 0
 
@@ -4659,6 +4764,8 @@ def _apply_matched_rgb_overrides_to_analysis_impl(
         )
         local_mask_solid = mask_arr[y_slice, x_slice]
         effective_mask = np.logical_and(shape_mask, local_mask_solid)
+        if edit_mask_arr is not None:
+            effective_mask &= edit_mask_arr[y_slice, x_slice]
         if not np.any(effective_mask):
             return None
         metrics_out["effective_pixel_count"] += int(
@@ -4886,32 +4993,42 @@ def apply_matched_rgb_overrides_to_analysis(
     analysis: "VectorAnalysis",
     *,
     matched_rgb: np.ndarray,
+    original_matched_rgb: np.ndarray | None = None,
     height_identity_rgb: np.ndarray | None = None,
     material_matrix: np.ndarray | None = None,
+    original_material_matrix: np.ndarray | None = None,
     mask_solid: np.ndarray,
     img_processor,
     pixels_per_mm: float = 10.0,
     max_width_px: int = 1600,
+    source_grid_shape: tuple[int, int] | None = None,
     strict: bool = False,
     prefer_cached_material_state: bool = False,
 ) -> int:
     """Project cached pixel edits into vector shapes with an exact local ROI.
 
-    The public signature and projection semantics remain unchanged; only each
-    connected component's temporary raster workspace is cropped to its pixel
-    bounds. 缓存像素编辑仍按原规则回写，只把临时栅格裁到连通分量范围。
+    Without pristine artifacts this preserves the legacy full-cache replay.
+    When pristine RGB/material artifacts and ``source_grid_shape`` are given,
+    only explicit edit deltas claim fresh vector components after dimensions
+    change. Each connected component still uses a tightly cropped raster ROI.
+
+    不提供原始基线时保持旧的整份缓存回写；提供原始 RGB、材料矩阵和源网格
+    后，只让明确编辑过的区域覆盖新尺寸矢量分析，且每个连通分量仍使用局部 ROI。
     """
     metrics: dict[str, Any] = {}
     try:
         return _apply_matched_rgb_overrides_to_analysis_impl(
             analysis,
             matched_rgb=matched_rgb,
+            original_matched_rgb=original_matched_rgb,
             height_identity_rgb=height_identity_rgb,
             material_matrix=material_matrix,
+            original_material_matrix=original_material_matrix,
             mask_solid=mask_solid,
             img_processor=img_processor,
             pixels_per_mm=pixels_per_mm,
             max_width_px=max_width_px,
+            source_grid_shape=source_grid_shape,
             strict=strict,
             metrics_out=metrics,
             prefer_cached_material_state=prefer_cached_material_state,
