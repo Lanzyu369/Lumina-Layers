@@ -176,6 +176,45 @@ def test_disabled_stroke_expansion_falls_back_before_semantics_change(
     )
 
 
+def test_enabled_strokes_remain_legacy_until_differential_parity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "core.native_svg_adapter._load_native_module",
+        lambda: _native_module(_native_result(source_kind=1)),
+    )
+
+    outcome = analyze_native_svg(
+        "fixture.svg", 20.0, 0.02, expand_stroke_to_fill=True
+    )
+
+    assert outcome == NativeSvgFallback(
+        reason_code="legacy_stroke_parity",
+        native_version="0.1.0",
+    )
+
+
+@pytest.mark.parametrize("element", ["style", "use", "svg:use"])
+def test_style_and_use_documents_preserve_legacy_reference_semantics(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    element: str,
+) -> None:
+    svg_path = tmp_path / "reference-policy.svg"
+    svg_path.write_text(f"<svg><{element}/></svg>", encoding="utf-8")
+    monkeypatch.setattr(
+        "core.native_svg_adapter._load_native_module",
+        lambda: _native_module(_native_result()),
+    )
+
+    outcome = analyze_native_svg(str(svg_path), 20.0, 0.02)
+
+    assert outcome == NativeSvgFallback(
+        reason_code="legacy_css_use_parity",
+        native_version="0.1.0",
+    )
+
+
 @pytest.mark.parametrize("reason_code", ["invalid_svg", "empty_geometry"])
 def test_invalid_svg_maps_to_existing_value_error_behavior(
     monkeypatch: pytest.MonkeyPatch,

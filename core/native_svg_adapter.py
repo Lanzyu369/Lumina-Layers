@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import importlib
+import mmap
+import re
 import time
 from types import ModuleType
 from typing import Any
@@ -17,6 +19,9 @@ from core.errors import NativeSvgInternalError, NativeSvgInvalidError
 NATIVE_RESULT_SCHEMA_VERSION = 1
 _SOURCE_KIND_FILL = 0
 _SOURCE_KIND_STROKE = 1
+_LEGACY_REFERENCE_TAG_RE = re.compile(
+    rb"<(?:[A-Za-z_][A-Za-z0-9_.-]*:)?(?:style|use)(?=[\s/>])"
+)
 
 
 @dataclass(frozen=True)
@@ -51,6 +56,18 @@ class NativeSvgGeometry:
 
 def _load_native_module() -> ModuleType:
     return importlib.import_module("lumina_svg_core")
+
+
+def _requires_legacy_reference_semantics(svg_path: str) -> bool:
+    try:
+        with open(svg_path, "rb") as handle:
+            if handle.seek(0, 2) <= 0:
+                return False
+            handle.seek(0)
+            with mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as data:
+                return _LEGACY_REFERENCE_TAG_RE.search(data) is not None
+    except (OSError, ValueError):
+        return False
 
 
 def native_runtime_identity() -> tuple[str, str, int]:
@@ -249,6 +266,11 @@ def analyze_native_svg(
             native_version="unavailable",
         )
     native_version = str(getattr(module, "__version__", "unknown"))
+    if _requires_legacy_reference_semantics(svg_path):
+        return NativeSvgFallback(
+            reason_code="legacy_css_use_parity",
+            native_version=native_version,
+        )
     call_started = time.perf_counter()
     result = module.analyze_svg(svg_path, target_width_mm, tolerance_mm)
     native_call_seconds = time.perf_counter() - call_started
@@ -267,9 +289,13 @@ def analyze_native_svg(
         )
 
     source_kinds = np.asarray(result.raw.source_kinds)
-    if not expand_stroke_to_fill and np.any(source_kinds == _SOURCE_KIND_STROKE):
+    if np.any(source_kinds == _SOURCE_KIND_STROKE):
         return NativeSvgFallback(
-            reason_code="legacy_stroke_policy",
+            reason_code=(
+                "legacy_stroke_parity"
+                if expand_stroke_to_fill
+                else "legacy_stroke_policy"
+            ),
             native_version=native_version,
         )
 
