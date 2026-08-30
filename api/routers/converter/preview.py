@@ -2380,7 +2380,11 @@ def rebuild_vector_preview_renderer(
     if not isinstance(cache, dict):
         raise HTTPException(status_code=409, detail=PREVIEW_CACHE_UNAVAILABLE_DETAIL)
     metadata = get_preview_cache_metadata(cache)
-    if str(metadata.get("modeling_mode") or "") != "vector":
+    modeling_mode = metadata.get("modeling_mode")
+    modeling_mode_value = str(
+        getattr(modeling_mode, "value", modeling_mode) or ""
+    ).strip().lower()
+    if modeling_mode_value != "vector":
         raise HTTPException(
             status_code=409,
             detail="The active session is not a native Vector preview.",

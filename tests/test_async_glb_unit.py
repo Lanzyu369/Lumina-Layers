@@ -398,13 +398,17 @@ class TestRendererDispatch:
 
 
 class TestRendererRebuildEndpoint:
+    @pytest.mark.parametrize("modeling_mode", ["vector", ModelingMode.VECTOR])
     def test_updates_renderer_only_and_schedules_same_session(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
+        modeling_mode: str | ModelingMode,
     ) -> None:
         sid = _seed_session(tmp_path)
         before = _native_vector_cache(sid, tmp_path)
+        before["modeling_mode"] = modeling_mode
+        _test_store.put(sid, "preview_cache", before)
         original_matched = before["matched_rgb"]
         scheduled: list[tuple[str, dict]] = []
 
