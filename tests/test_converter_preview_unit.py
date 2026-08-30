@@ -915,6 +915,54 @@ class TestSessionContainsPreviewCache:
         assert loaded_cache["target_h"] == 80
         np.testing.assert_array_equal(loaded_cache["matched_rgb"], _mock_matched_rgb)
 
+    @pytest.mark.parametrize(
+        ("form_data", "expected"),
+        [({}, True), ({"enable_smooth_vector_preview": "false"}, False)],
+    )
+    def test_preview_stores_smooth_vector_renderer_preference(
+        self,
+        form_data: dict[str, str],
+        expected: bool,
+    ) -> None:
+        """Renderer preference is server-owned session metadata with default-on semantics."""
+        buf = _make_test_image_buf()
+        _mock_pool.submit = AsyncMock(return_value=_create_worker_result_files())
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "lut_name": "test_lut",
+                    "color_mode": "4-Color",
+                    **form_data,
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        session_data = _test_store.get(response.json()["session_id"])
+        assert session_data is not None
+        cache_ref = session_data["preview_cache"]
+        cache_metadata = (
+            cache_ref["metadata"]
+            if is_preview_cache_artifact_ref(cache_ref)
+            else cache_ref
+        )
+        assert cache_metadata["enable_smooth_vector_preview"] is expected
+
     def test_preview_externalizes_cache_arrays_and_original_snapshot(
         self,
     ) -> None:

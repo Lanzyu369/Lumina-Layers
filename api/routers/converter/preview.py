@@ -933,6 +933,10 @@ async def convert_preview(
     use_lut_constrained: bool = Form(False, description="高精度LUT约束匹配"),
     auto_dynamic_range: bool = Form(False, description="自动动态范围压缩（实验性）"),
     high_precision_3d_preview: bool = Form(False, description="3D高精度颜色预览"),
+    enable_smooth_vector_preview: bool = Form(
+        True,
+        description="原生 SVG 使用解析式平滑轻量 3D 预览",
+    ),
     is_dark: bool = Form(True, description="深色主题"),
     material_source: str = Form("lut", description="颜色来源: lut | material_archive"),
     selected_materials: list[str] | str | None = Form(None, description="已选耗材目录名列表"),
@@ -1631,6 +1635,16 @@ async def convert_preview(
                 ),
             )
             raise
+    if cache_session_value is not None:
+        renderer_metadata = (
+            cache_session_value.get("metadata")
+            if is_preview_cache_artifact_ref(cache_session_value)
+            else cache_session_value
+        )
+        if isinstance(renderer_metadata, dict):
+            renderer_metadata["enable_smooth_vector_preview"] = bool(
+                enable_smooth_vector_preview
+            )
     store.put(session_id, "preview_cache", cache_session_value)
     schedule_visible_region_cache_prewarm(
         session_id,
