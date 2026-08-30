@@ -43,6 +43,21 @@ export function extractHexFromMeshName(meshName: string): string {
   return meshName.slice(6, 12);
 }
 
+/** Resolve stable relief identity, with legacy mesh names as a safe fallback. */
+export function resolvePreviewMeshHeightKey(
+  meshName: string,
+  userData: Record<string, unknown>,
+): string {
+  const metadataKey = userData.height_key;
+  if (
+    typeof metadataKey === "string" &&
+    /^[0-9a-fA-F]{6}$/.test(metadataKey)
+  ) {
+    return metadataKey.toLowerCase();
+  }
+  return extractHexFromMeshName(meshName).toLowerCase();
+}
+
 // ========== Component ==========
 
 export interface InteractiveModelViewerProps {
@@ -511,6 +526,24 @@ function resolveReliefHeightForHex(
     }
   }
   return undefined;
+}
+
+export function resolvePreviewMeshReliefHeightMm({
+  meshName,
+  userData,
+  colorHeightMap,
+  fallbackHeightMm,
+}: {
+  meshName: string;
+  userData: Record<string, unknown>;
+  colorHeightMap: Record<string, number>;
+  fallbackHeightMm: number;
+}): number {
+  const heightKey = resolvePreviewMeshHeightKey(meshName, userData);
+  return (
+    resolveReliefHeightForHex(colorHeightMap, heightKey) ??
+    resolvePreviewColorLayerHeightMm(fallbackHeightMm)
+  );
 }
 
 /**
@@ -1100,10 +1133,14 @@ function InteractiveModelViewer({
         mesh.scale.z = transform.scaleZ;
         mesh.position.z = transform.positionZ;
       } else if (enableRelief && baseHeight > 0) {
-        const origHex = extractHexFromMeshName(mesh.name);
         mesh.visible = true;
         // Relief mode: each color gets its own height from colorHeightMap
-        const heightMm = colorHeightMap[origHex] ?? previewColorLayerHeightMm;
+        const heightMm = resolvePreviewMeshReliefHeightMm({
+          meshName: mesh.name,
+          userData: mesh.userData,
+          colorHeightMap,
+          fallbackHeightMm: previewColorLayerHeightMm,
+        });
         mesh.scale.z = nativeH > 0 ? heightMm / nativeH : 1;
         mesh.position.z = spacerThick;
       } else {
