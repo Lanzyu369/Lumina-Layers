@@ -13,6 +13,7 @@ description = "Print-oriented native SVG geometry analysis"
 readme = "README.md"
 requires-python = "==3.12.*"
 license = "Apache-2.0"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 authors = [{ name = "Lumina Layer Studio" }]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -29,6 +30,7 @@ cmake.version = ">=3.20"
 cmake.build-type = "Release"
 wheel.packages = ["python/lumina_svg_core"]
 wheel.install-dir = "lumina_svg_core"
+install.components = ["lumina_svg_core"]
 sdist.include = [
   "CMakeLists.txt",
   "cmake/**",
@@ -52,4 +54,15 @@ build = [
   "cp312-manylinux_x86_64",
 ]
 test-requires = ["pytest>=8,<10", "numpy>=2,<3"]
-test-command = "pytest {project}/tests -q"
+test-command = "python {project}/tools/verify_wheel.py --installed && pytest {project}/tests -q"
+
+[tool.cibuildwheel.linux]
+manylinux-x86_64-image = "manylinux_2_28"
+repair-wheel-command = "python {project}/tools/verify_wheel.py {wheel} --contents-only && auditwheel repair -w {dest_dir} {wheel}"
+
+[tool.cibuildwheel.macos]
+environment = { MACOSX_DEPLOYMENT_TARGET = "12.0" }
+repair-wheel-command = "python {project}/tools/verify_wheel.py {wheel} --contents-only && delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"
+
+[tool.cibuildwheel.windows]
+repair-wheel-command = "python {project}/tools/verify_wheel.py {wheel} --contents-only && delvewheel repair -w {dest_dir} -v {wheel}"

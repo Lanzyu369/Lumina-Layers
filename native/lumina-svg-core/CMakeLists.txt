@@ -41,4 +41,8 @@ set_target_properties(
   VISIBILITY_INLINES_HIDDEN ON
 )
 
-install(TARGETS _lumina_svg_core LIBRARY DESTINATION . RUNTIME DESTINATION .)
+install(
+  TARGETS _lumina_svg_core
+  LIBRARY DESTINATION . COMPONENT lumina_svg_core
+  RUNTIME DESTINATION . COMPONENT lumina_svg_core
+)

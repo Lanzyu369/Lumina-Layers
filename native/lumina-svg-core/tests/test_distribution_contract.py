@@ -34,6 +34,10 @@ def test_python_distribution_is_exactly_versioned_for_cpython_312() -> None:
     assert metadata["project"]["version"] == "0.1.0"
     assert metadata["project"]["requires-python"] == "==3.12.*"
     assert metadata["project"]["license"] == "Apache-2.0"
+    assert metadata["project"]["license-files"] == [
+        "LICENSE",
+        "THIRD_PARTY_NOTICES.md",
+    ]
 
 
 def test_readme_declares_workspace_extraction_boundary() -> None:
