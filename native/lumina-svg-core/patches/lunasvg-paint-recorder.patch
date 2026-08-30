@@ -1,5 +1,5 @@
 diff --git a/include/lunasvg.h b/include/lunasvg.h
-index 74f43bb..cc58776 100644
+index 74f43bb..cbd1f59 100644
 --- a/include/lunasvg.h
 +++ b/include/lunasvg.h
 @@ -23,6 +23,7 @@
@@ -75,7 +75,7 @@ index 74f43bb..cc58776 100644
  class SVGNode;
  class SVGTextNode;
  class SVGElement;
-@@ -816,6 +875,13 @@ public:
+@@ -816,6 +875,16 @@ public:
     */
    Element documentElement() const;
  
@@ -86,15 +86,17 @@ index 74f43bb..cc58776 100644
 +   */
 +  PaintCommandList recordPaintCommands() const;
 +
++  /** @internal Records one deduplicated fail-closed capability reason. */
++  void addCapabilityIssue(const std::string &reason);
++
    Document(Document &&);
    Document &operator=(Document &&);
    ~Document();
-@@ -826,9 +892,15 @@ private:
+@@ -826,9 +895,14 @@ private:
    Document &operator=(const Document &) = delete;
    SVGRootElement *rootElement(bool layoutIfNeeded = false) const;
    bool parse(const char *data, size_t length);
 +  int32_t allocateSourceIndex();
-+  void addCapabilityIssue(const std::string &reason);
    std::unique_ptr<SVGRootElement> m_rootElement;
 +  std::vector<std::string> m_capabilityIssues;
 +  int32_t m_nextSourceIndex{0};
@@ -301,10 +303,10 @@ index e2c9708..8896b84 100644
              markerPosition.renderMarker(newState, m_strokeData.lineWidth());
          }
 diff --git a/source/svgparser.cpp b/source/svgparser.cpp
-index 183937c..2dfb2e7 100644
+index 183937c..bad802e 100644
 --- a/source/svgparser.cpp
 +++ b/source/svgparser.cpp
-@@ -3,9 +3,83 @@
+@@ -3,9 +3,94 @@
  #include "svgparserutils.h"
  
  #include <cassert>
@@ -350,6 +352,17 @@ index 183937c..2dfb2e7 100644
 +                                                std::string_view value,
 +                                                bool known)
 +{
++    auto firstValueCharacter = value.find_first_not_of(" \t\r\n");
++    if((name == "href" || name == "xlink:href")
++            && firstValueCharacter != std::string_view::npos
++            && value[firstValueCharacter] != '#')
++        return "unsupported_external_resource";
++    auto urlPosition = value.find("url(");
++    if(urlPosition != std::string_view::npos) {
++        auto urlValue = value.find_first_not_of(" \t\r\n'\"", urlPosition + 4);
++        if(urlValue != std::string_view::npos && value[urlValue] != '#')
++            return "unsupported_external_resource";
++    }
 +    if(name == "vector-effect")
 +        return "unsupported_vector_effect";
 +    if(name == "marker" || name == "marker-start"
@@ -388,7 +401,109 @@ index 183937c..2dfb2e7 100644
  struct SimpleSelector;
  
  using Selector = std::vector<SimpleSelector>;
-@@ -844,6 +918,9 @@ bool Document::parse(const char* data, size_t length)
+@@ -494,7 +579,9 @@ static bool parseSelectors(std::string_view& input, SelectorList& selectors)
+     return true;
+ }
+ 
+-static bool parseDeclarations(std::string_view& input, DeclarationList& declarations)
++static bool parseDeclarations(std::string_view& input,
++                              DeclarationList& declarations,
++                              Document* document)
+ {
+     if(!skipDelimiter(input, '{'))
+         return false;
+@@ -517,6 +604,10 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
+         declaration.specificity = 0x10;
+         declaration.id = csspropertyid(name);
+         declaration.value.assign(value);
++        auto capabilityReason = capabilityReasonForAttribute(
++            name, value, declaration.id != PropertyID::Unknown);
++        if(!capabilityReason.empty())
++            document->addCapabilityIssue(capabilityReason);
+         if(skipDelimiter(input, '!')) {
+             skipOptionalSpaces(input);
+             if(!skipString(input, "important"))
+@@ -531,19 +622,41 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
+     return skipDelimiter(input, '}');
+ }
+ 
+-static bool parseRule(std::string_view& input, Rule& rule)
++static bool parseRule(std::string_view& input, Rule& rule, Document* document)
+ {
+     if(!parseSelectors(input, rule.selectors))
+         return false;
+-    return parseDeclarations(input, rule.declarations);
++    return parseDeclarations(input, rule.declarations, document);
++}
++
++static bool hasUnsupportedSelector(const SelectorList& selectors)
++{
++    for(const auto& selector : selectors) {
++        for(const auto& simpleSelector : selector) {
++            if(simpleSelector.id == ElementID::Unknown)
++                return true;
++            for(const auto& attribute : simpleSelector.attributeSelectors) {
++                if(attribute.id == PropertyID::Unknown)
++                    return true;
++            }
++            for(const auto& pseudoClass : simpleSelector.pseudoClassSelectors) {
++                if(pseudoClass.type == PseudoClassSelector::Type::Unknown)
++                    return true;
++            }
++        }
++    }
++    return false;
+ }
+ 
+-static RuleDataList parseStyleSheet(std::string_view input)
++static RuleDataList parseStyleSheet(std::string_view input, Document* document)
+ {
+     RuleDataList rules;
+     while(!input.empty()) {
+         skipOptionalSpaces(input);
++        if(input.empty())
++            break;
+         if(skipDelimiter(input, '@')) {
++            document->addCapabilityIssue("unsupported_css_at_rule");
+             int depth = 0;
+             while(!input.empty()) {
+                 auto ch = input.front();
+@@ -562,8 +675,12 @@ static RuleDataList parseStyleSheet(std::string_view input)
+         }
+ 
+         Rule rule;
+-        if(!parseRule(input, rule))
++        if(!parseRule(input, rule, document)) {
++            document->addCapabilityIssue("unsupported_css_rule");
+             break;
++        }
++        if(hasUnsupportedSelector(rule.selectors))
++            document->addCapabilityIssue("unsupported_css_selector");
+         for(const auto& selector : rule.selectors) {
+             size_t specificity = 0;
+             for(const auto& simpleSelector : selector) {
+@@ -595,7 +712,8 @@ static SelectorList parseQuerySelectors(std::string_view input)
+     return selectors;
+ }
+ 
+-inline void parseInlineStyle(std::string_view input, SVGElement* element)
++inline void parseInlineStyle(std::string_view input, SVGElement* element,
++                             Document* document)
+ {
+     std::string name;
+     skipOptionalSpaces(input);
+@@ -610,6 +728,10 @@ inline void parseInlineStyle(std::string_view input, SVGElement* element)
+         }
+ 
+         auto id = csspropertyid(name);
++        auto capabilityReason = capabilityReasonForAttribute(
++            name, value, id != PropertyID::Unknown);
++        if(!capabilityReason.empty())
++            document->addCapabilityIssue(capabilityReason);
+         if(id != PropertyID::Unknown)
+             element->setAttribute(0x100, id, value);
+         skipOptionalSpacesOrDelimiter(input, ';');
+@@ -844,6 +966,9 @@ bool Document::parse(const char* data, size_t length)
              ++ignoring;
          } else {
              auto id = elementid(buffer);
@@ -398,7 +513,7 @@ index 183937c..2dfb2e7 100644
              if(id == ElementID::Unknown) {
                  ignoring = 1;
              } else {
-@@ -864,6 +941,7 @@ bool Document::parse(const char* data, size_t length)
+@@ -864,6 +989,7 @@ bool Document::parse(const char* data, size_t length)
  
          skipOptionalSpaces(input);
          while(readIdentifier(input, buffer)) {
@@ -406,7 +521,7 @@ index 183937c..2dfb2e7 100644
              skipOptionalSpaces(input);
              if(!skipDelimiter(input, '='))
                  return false;
-@@ -877,7 +955,11 @@ bool Document::parse(const char* data, size_t length)
+@@ -877,12 +1003,16 @@ bool Document::parse(const char* data, size_t length)
                  return false;
              auto id = PropertyID::Unknown;
              if(element != nullptr)
@@ -419,6 +534,21 @@ index 183937c..2dfb2e7 100644
              if(id != PropertyID::Unknown) {
                  decodeText(input.substr(0, n), buffer);
                  if(id == PropertyID::Style) {
+                     removeStyleComments(buffer);
+-                    parseInlineStyle(buffer, element);
++                    parseInlineStyle(buffer, element, this);
+                 } else {
+                     if(id == PropertyID::Id)
+                         m_rootElement->addElementById(buffer, element);
+@@ -920,7 +1050,7 @@ bool Document::parse(const char* data, size_t length)
+ 
+ void Document::applyStyleSheet(const std::string& content)
+ {
+-    auto rules = parseStyleSheet(content);
++    auto rules = parseStyleSheet(content, this);
+     if(!rules.empty()) {
+         std::sort(rules.begin(), rules.end());
+         m_rootElement->transverse([&rules](SVGElement* element) {
 diff --git a/source/svgrenderstate.cpp b/source/svgrenderstate.cpp
 index 550d389..67b962e 100644
 --- a/source/svgrenderstate.cpp

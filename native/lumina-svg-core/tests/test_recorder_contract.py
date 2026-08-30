@@ -99,3 +99,37 @@ def test_recorder_ignores_non_semantic_data_attributes() -> None:
 
     assert result.status == "supported"
     assert len(result.commands) == 1
+
+
+@pytest.mark.parametrize(
+    ("style", "reason"),
+    [
+        ("path { vector-effect: non-scaling-stroke; }", "unsupported_vector_effect"),
+        ("path { made-up-paint: 1; }", "unsupported_property"),
+        ("path:hover { fill: red; }", "unsupported_css_selector"),
+        ("@import url('external.css');", "unsupported_css_at_rule"),
+    ],
+)
+def test_recorder_fails_closed_for_ignored_css(
+    style: str,
+    reason: str,
+) -> None:
+    result = lumina_svg_core.record_paint_commands_svg(
+        "<svg viewBox='0 0 10 10'><style>"
+        f"{style}"
+        "</style><path d='M0 0H10V10Z'/></svg>"
+    )
+
+    assert result.status == "unsupported"
+    assert result.reason_code == reason
+    assert result.commands == ()
+
+
+def test_recorder_rejects_external_use_resource() -> None:
+    result = lumina_svg_core.record_paint_commands_svg(
+        "<svg viewBox='0 0 10 10'><use href='external.svg#shape'/></svg>"
+    )
+
+    assert result.status == "unsupported"
+    assert result.reason_code == "unsupported_external_resource"
+    assert result.commands == ()
