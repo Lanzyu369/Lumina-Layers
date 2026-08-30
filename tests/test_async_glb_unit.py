@@ -51,7 +51,6 @@ from api.preview_cache_artifacts import (
 from api.routers.converter import async_glb as async_glb_module
 from api.session_store import SessionStore
 from config import ModelingMode
-from core.errors import VectorTopologyError
 
 _test_store: SessionStore = SessionStore(ttl=1800)
 _test_registry: FileRegistry = FileRegistry()
@@ -352,7 +351,7 @@ class TestRendererDispatch:
         assert result is not None
         assert renderer == "segmented"
 
-    def test_analytic_topology_error_falls_back_without_stuck_pending_status(
+    def test_analytic_geometry_error_falls_back_without_stuck_pending_status(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -373,7 +372,7 @@ class TestRendererDispatch:
             async_glb_module,
             "export_vector_quick_preview_glb",
             lambda *_args, **_kwargs: (_ for _ in ()).throw(
-                VectorTopologyError("topology rejected", attempts=())
+                ValueError("preview geometry rejected")
             ),
         )
 

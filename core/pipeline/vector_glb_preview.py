@@ -31,12 +31,11 @@ from trimesh.visual.material import PBRMaterial
 
 from api.structured_logging import get_logger
 from config import PrinterConfig
-from core.errors import VectorMeshMemoryBudgetError, VectorTopologyError
+from core.errors import VectorMeshMemoryBudgetError
 from core.vector_engine import (
     _load_vector_parse_clip_cache_artifact_by_provenance,
     _rasterize_geometry_roi_mask,
 )
-from core.vector_mesh_topology import extrude_polygon_for_export
 from core.pipeline.s11_glb_preview import (
     PREVIEW_CANVAS_BOUNDS_NODE_NAME,
     _build_color_extruded_mesh_v2,
@@ -60,6 +59,15 @@ _VECTOR_QUICK_PREVIEW_MAX_COORDINATES = 4_000_000
 _VECTOR_QUICK_PREVIEW_MAX_SIMPLIFY_MM = 0.05
 _ANALYTIC_MIN_AREA_MM2 = 1e-12
 _ANALYTIC_TOPOLOGY_FALLBACK_PIXELS_PER_MM = 10.0
+_ANALYTIC_EXTRUSION_FALLBACK_ERRORS = (
+    AttributeError,
+    ImportError,
+    IndexError,
+    OverflowError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
 
 VectorPreviewRole = Literal["color", "backing", "outline", "auxiliary"]
 
@@ -2143,12 +2151,25 @@ def _mesh_from_analytic_extrusion(
     meshes: list[trimesh.Trimesh] = []
     for polygon in polygons:
         try:
-            pieces = extrude_polygon_for_export(
+            piece = trimesh.creation.extrude_polygon(
                 polygon,
-                xy_scale=1.0,
-                prefer_fast=True,
+                height=1.0,
+                engine="earcut",
             )
-        except VectorTopologyError:
+            vertices = np.asarray(piece.vertices)
+            faces = np.asarray(piece.faces)
+            if (
+                vertices.ndim != 2
+                or vertices.shape[1:] != (3,)
+                or faces.ndim != 2
+                or faces.shape[1:] != (3,)
+                or len(vertices) == 0
+                or len(faces) == 0
+                or not np.isfinite(vertices).all()
+                or not bool(piece.is_watertight)
+            ):
+                raise ValueError("Analytic Vector GLB extrusion is not usable")
+        except _ANALYTIC_EXTRUSION_FALLBACK_ERRORS:
             meshes.append(
                 _mesh_from_extrusion_v2(
                     VectorPreviewExtrusion(
@@ -2161,18 +2182,17 @@ def _mesh_from_analytic_extrusion(
                 )
             )
             continue
-        for piece in pieces:
-            vertices = np.asarray(piece.vertices, dtype=np.float64).copy()
-            vertices[:, 2] = (
-                vertices[:, 2] * z_height + float(extrusion.z_min)
+        vertices = np.asarray(piece.vertices, dtype=np.float64).copy()
+        vertices[:, 2] = (
+            vertices[:, 2] * z_height + float(extrusion.z_min)
+        )
+        meshes.append(
+            trimesh.Trimesh(
+                vertices=vertices,
+                faces=np.asarray(piece.faces, dtype=np.int64).copy(),
+                process=False,
             )
-            meshes.append(
-                trimesh.Trimesh(
-                    vertices=vertices,
-                    faces=np.asarray(piece.faces, dtype=np.int64).copy(),
-                    process=False,
-                )
-            )
+        )
     if not meshes:
         raise RuntimeError("Analytic Vector GLB extrusion returned no mesh")
     return (

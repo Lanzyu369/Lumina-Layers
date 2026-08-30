@@ -18,7 +18,7 @@ from shapely.ops import unary_union
 
 from core.pipeline import vector_glb_preview
 import core.vector_engine as vector_engine
-from core.errors import VectorMeshMemoryBudgetError, VectorTopologyError
+from core.errors import VectorMeshMemoryBudgetError
 
 
 @pytest.fixture
@@ -39,6 +39,15 @@ def _box_mesh(z_min: float = 0.0, z_max: float = 0.4) -> trimesh.Trimesh:
     mesh = trimesh.creation.box(extents=(2.0, 2.0, z_max - z_min))
     mesh.apply_translation((0.0, 0.0, (z_min + z_max) / 2.0))
     return mesh
+
+
+def test_analytic_preview_does_not_import_retired_print_topology_service() -> None:
+    """Preview extrusion must survive the canonical #585 mesh replacement."""
+
+    source = Path(vector_glb_preview.__file__).read_text(encoding="utf-8")
+
+    assert "core.vector_mesh_topology" not in source
+    assert "VectorTopologyError" not in source
 
 
 def _load_glb_json(path: Path) -> dict:
@@ -516,6 +525,8 @@ def test_analytic_extrusion_preserves_curve_hole_and_components() -> None:
     assert any(
         np.isclose(mesh.vertices[:, 0], 0.137, atol=1e-6)
     )
+    assert mesh.bounds[:, 2] == pytest.approx((0.2, 0.6), abs=1e-6)
+    assert mesh.is_watertight
     assert len(mesh.split(only_watertight=False)) == 2
 
 
@@ -528,11 +539,11 @@ def test_analytic_extrusion_skips_degenerate_repair_artifacts(
 
     def fake_extrude(polygon, **_kwargs):
         seen_areas.append(float(polygon.area))
-        return [_box_mesh(z_min=0.0, z_max=1.0)]
+        return _box_mesh(z_min=0.0, z_max=1.0)
 
     monkeypatch.setattr(
-        vector_glb_preview,
-        "extrude_polygon_for_export",
+        vector_glb_preview.trimesh.creation,
+        "extrude_polygon",
         fake_extrude,
     )
 
@@ -553,14 +564,20 @@ def test_analytic_extrusion_skips_degenerate_repair_artifacts(
 def test_analytic_extrusion_raster_fallback_is_local_to_rejected_polygon(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    accepted = box(0.0, 0.0, 1.0, 1.0)
+    rejected = box(2.0, 0.0, 3.0, 1.0)
+    original_extrude = vector_glb_preview.trimesh.creation.extrude_polygon
     fallback_calls: list[tuple[float, tuple[int, int, int, int], float]] = []
 
+    def selective_extrude(polygon, *args, **kwargs):
+        if polygon.bounds[0] >= 2.0:
+            raise ValueError("preview triangulation rejected")
+        return original_extrude(polygon, *args, **kwargs)
+
     monkeypatch.setattr(
-        vector_glb_preview,
-        "extrude_polygon_for_export",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            VectorTopologyError("topology rejected", attempts=())
-        ),
+        vector_glb_preview.trimesh.creation,
+        "extrude_polygon",
+        selective_extrude,
     )
 
     def fake_raster_fallback(extrusion, *, rgba, pixels_per_mm):
@@ -575,7 +592,9 @@ def test_analytic_extrusion_raster_fallback_is_local_to_rejected_polygon(
 
     mesh = vector_glb_preview._mesh_from_analytic_extrusion(
         vector_glb_preview.VectorPreviewExtrusion(
-            footprint=box(0.0, 0.0, 1.0, 1.0),
+            footprint=accepted,
+            footprints=(accepted, rejected),
+            footprints_validated=True,
             z_min=0.2,
             z_max=0.6,
         )
@@ -583,6 +602,32 @@ def test_analytic_extrusion_raster_fallback_is_local_to_rejected_polygon(
 
     assert mesh is not None
     assert fallback_calls == [(1.0, (255, 255, 255, 255), 10.0)]
+
+
+def test_analytic_extrusion_does_not_downgrade_memory_exhaustion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        vector_glb_preview.trimesh.creation,
+        "extrude_polygon",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(MemoryError()),
+    )
+    monkeypatch.setattr(
+        vector_glb_preview,
+        "_mesh_from_extrusion_v2",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("memory exhaustion must not use raster fallback")
+        ),
+    )
+
+    with pytest.raises(MemoryError):
+        vector_glb_preview._mesh_from_analytic_extrusion(
+            vector_glb_preview.VectorPreviewExtrusion(
+                footprint=box(0.0, 0.0, 1.0, 1.0),
+                z_min=0.2,
+                z_max=0.6,
+            )
+        )
 
 
 def test_analytic_glb_exports_height_key_extras_and_display_only_parts(
