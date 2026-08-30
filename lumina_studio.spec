@@ -17,6 +17,11 @@ GLB_V2_PACKAGES = ("rasterio", "manifold3d")
 GLB_V2_HIDDENIMPORTS = ("rasterio.features", "manifold3d")
 NEROUED_3MF_PACKAGE = "neroued_3mf"
 NEROUED_3MF_HIDDENIMPORTS = ("neroued_3mf", "neroued_3mf._neroued_3mf")
+LUMINA_SVG_CORE_PACKAGE = "lumina_svg_core"
+LUMINA_SVG_CORE_HIDDENIMPORTS = (
+    "lumina_svg_core",
+    "lumina_svg_core._lumina_svg_core",
+)
 
 
 def collect_glb_v2_package(package_name):
@@ -85,6 +90,14 @@ for glb_v2_package in GLB_V2_PACKAGES:
     neroued_3mf_hiddenimports,
 ) = collect_all(NEROUED_3MF_PACKAGE)
 
+# Native SVG is a required compiled dependency. A missing extension must stop
+# packaging instead of silently producing a legacy-only desktop executable.
+(
+    lumina_svg_core_datas,
+    lumina_svg_core_binaries,
+    lumina_svg_core_hiddenimports,
+) = collect_all(LUMINA_SVG_CORE_PACKAGE)
+
 backend_datas = [
     # Includes the app-owned Workshop Registry key set and offline snapshot in
     # assets/workshop-registry/ alongside the existing runtime assets.
@@ -94,15 +107,19 @@ backend_datas = [
     ('printer_profiles', 'printer_profiles'),
     ('bambu_config_template.json', '.'),
     *neroued_3mf_datas,
+    *lumina_svg_core_datas,
     *glb_v2_datas,
 ]
 backend_binaries = [
     *neroued_3mf_binaries,
+    *lumina_svg_core_binaries,
     *glb_v2_binaries,
 ]
 backend_hiddenimports = [
     *NEROUED_3MF_HIDDENIMPORTS,
     *neroued_3mf_hiddenimports,
+    *LUMINA_SVG_CORE_HIDDENIMPORTS,
+    *lumina_svg_core_hiddenimports,
     *GLB_V2_HIDDENIMPORTS,
     *glb_v2_hiddenimports,
 ]
@@ -138,7 +155,10 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,
+    # Electron starts the backend with windowsHide=true and pipes stdout.
+    # Keep a console-capable executable so CI and support diagnostics can read
+    # --native-svg-self-test JSON from the actual onefile binary.
+    console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
