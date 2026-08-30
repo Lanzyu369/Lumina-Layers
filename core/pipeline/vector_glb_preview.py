@@ -22,7 +22,8 @@ from typing import Literal
 import numpy as np
 import trimesh
 from shapely.affinity import scale as shapely_scale
-from shapely.geometry import MultiPolygon, Polygon
+from shapely.affinity import translate as shapely_translate
+from shapely.geometry import MultiPolygon, Polygon, shape as shapely_shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 from shapely.validation import make_valid
@@ -1416,19 +1417,123 @@ def _visible_backing_footprint(
     return None
 
 
-def _dominant_preview_rgb(pixels: np.ndarray) -> tuple[int, int, int] | None:
-    if pixels.ndim != 2 or pixels.shape[1] != 3 or len(pixels) == 0:
-        return None
-    codes = (
-        pixels[:, 0].astype(np.uint32) << np.uint32(16)
-        | pixels[:, 1].astype(np.uint32) << np.uint32(8)
-        | pixels[:, 2].astype(np.uint32)
-    )
-    unique, counts = np.unique(codes, return_counts=True)
-    if len(unique) == 0:
-        return None
-    code = int(unique[int(np.argmax(counts))])
+def _preview_rgb_codes(pixels: np.ndarray) -> np.ndarray:
+    values = np.asarray(pixels, dtype=np.uint64)
+    return values[..., 0] << 16 | values[..., 1] << 8 | values[..., 2]
+
+
+def _preview_rgb_from_code(code: int) -> tuple[int, int, int]:
     return ((code >> 16) & 0xFF, (code >> 8) & 0xFF, code & 0xFF)
+
+
+def _interior_preview_mask(mask: np.ndarray) -> np.ndarray:
+    """Remove the one-pixel raster edge where adjacent SVG shapes may vote."""
+
+    values = np.asarray(mask, dtype=bool)
+    if values.ndim != 2 or values.shape[0] < 3 or values.shape[1] < 3:
+        return np.zeros_like(values, dtype=bool)
+    padded = np.pad(values, 1, mode="constant", constant_values=False)
+    return (
+        padded[1:-1, 1:-1]
+        & padded[:-2, 1:-1]
+        & padded[2:, 1:-1]
+        & padded[1:-1, :-2]
+        & padded[1:-1, 2:]
+    )
+
+
+def _dominant_preview_code(codes: np.ndarray) -> np.uint64 | None:
+    values, counts = np.unique(codes, return_counts=True)
+    if len(values) == 0:
+        return None
+    return values[int(np.argmax(counts))]
+
+
+@lru_cache(maxsize=1)
+def _get_preview_mask_polygonizer():
+    from rasterio.features import shapes
+
+    return shapes
+
+
+@lru_cache(maxsize=1)
+def _get_preview_distance_transform():
+    from scipy.ndimage import distance_transform_edt
+
+    return distance_transform_edt
+
+
+def _propagate_preview_codes(
+    codes: np.ndarray,
+    *,
+    seed_mask: np.ndarray,
+    target_mask: np.ndarray,
+) -> np.ndarray | None:
+    """Assign every target pixel the nearest trusted interior classification."""
+
+    if not np.any(seed_mask):
+        return None
+    try:
+        distance_transform = _get_preview_distance_transform()
+        nearest_indices = distance_transform(
+            ~np.asarray(seed_mask, dtype=bool),
+            return_distances=False,
+            return_indices=True,
+        )
+        propagated = np.asarray(codes)[tuple(nearest_indices)]
+    except (ImportError, RuntimeError, TypeError, ValueError, MemoryError):
+        return None
+    if propagated.shape != target_mask.shape:
+        return None
+    return propagated
+
+
+def _polygonize_preview_classification(
+    mask: np.ndarray,
+    *,
+    component: Polygon,
+    x_offset: int,
+    y_offset: int,
+    coord_scale: float,
+) -> tuple[Polygon, ...] | None:
+    """Clip pixel-class boundaries to the original smooth SVG footprint."""
+
+    if not np.any(mask):
+        return ()
+    try:
+        rio_shapes = _get_preview_mask_polygonizer()
+        pixel_geometries = [
+            shapely_shape(mapping)
+            for mapping, value in rio_shapes(
+                np.asarray(mask, dtype=np.uint8),
+                mask=np.asarray(mask, dtype=bool),
+                connectivity=4,
+            )
+            if int(value) == 1
+        ]
+    except (ImportError, RuntimeError, TypeError, ValueError, AttributeError):
+        return None
+    if not pixel_geometries:
+        return None
+
+    try:
+        pixel_geometry = _valid_geometry(unary_union(pixel_geometries))
+        if pixel_geometry is None:
+            return None
+        source_geometry = shapely_translate(
+            shapely_scale(
+                pixel_geometry,
+                xfact=1.0 / coord_scale,
+                yfact=1.0 / coord_scale,
+                origin=(0.0, 0.0),
+            ),
+            xoff=float(x_offset) / coord_scale,
+            yoff=float(y_offset) / coord_scale,
+        )
+        clipped = _valid_geometry(source_geometry.intersection(component))
+    except (ValueError, TypeError, AttributeError):
+        return None
+    return _polygon_components(clipped)
 
 
 def _polygon_components(geometry: BaseGeometry | None) -> tuple[Polygon, ...]:
@@ -1481,12 +1586,15 @@ def build_vector_quick_preview_parts(
     backing_thickness_mm: float,
     max_color_groups: int = 128,
 ) -> list[VectorPreviewPart] | None:
-    """Classify analytic Vector footprints without deriving their boundaries.
+    """Classify smooth Vector footprints by current colour and height identity.
 
-    Pixel grids decide only current display colour and stable height identity;
-    every exported boundary remains the parsed SVG Polygon.
+    Original SVG boundaries stay analytic. When a spatial edit introduces
+    multiple classifications inside one SVG shape, only the new internal
+    boundary comes from the preview grid and is clipped to the smooth source
+    footprint.
 
-    像素网格只决定当前显示色和稳定高度身份，导出边界始终来自 SVG Polygon。
+    SVG 原始外轮廓始终保持解析几何；空间编辑在单个形状内部产生多种
+    分类时，仅新增的内部边界来自预览网格，并裁剪在平滑的源轮廓内。
     """
 
     display = np.asarray(matched_rgb)
@@ -1551,24 +1659,126 @@ def build_vector_quick_preview_parts(
                 if _is_subpixel_geometry(component, coord_scale):
                     continue
                 return None
-            display_rgb = _dominant_preview_rgb(
-                display[y_slice, x_slice][effective_mask]
+            display_codes = _preview_rgb_codes(display[y_slice, x_slice])
+            height_codes = _preview_rgb_codes(identity[y_slice, x_slice])
+            component_interior_mask = _interior_preview_mask(component_mask)
+            interior_mask = effective_mask & component_interior_mask
+            identity_sample_mask = (
+                interior_mask if np.any(interior_mask) else effective_mask
             )
-            height_rgb = _dominant_preview_rgb(
-                identity[y_slice, x_slice][effective_mask]
+            dominant_height_code = _dominant_preview_code(
+                height_codes[identity_sample_mask]
             )
-            if display_rgb is None or height_rgb is None:
+            if dominant_height_code is None:
                 return None
-            scaled = _scaled_geometry_mm(component, source.scale_factor)
-            scaled_components = _simplify_quick_preview_polygons(
-                _polygon_components(scaled),
-                simplify_tolerance_mm,
+            owned_effective_mask = effective_mask & (
+                height_codes == dominant_height_code
             )
-            if not scaled_components:
+            owned_interior_mask = interior_mask & (
+                height_codes == dominant_height_code
+            )
+            display_sample_mask = (
+                owned_interior_mask
+                if np.any(owned_interior_mask)
+                else owned_effective_mask
+            )
+            if not np.any(display_sample_mask):
                 return None
-            grouped.setdefault((display_rgb, height_rgb), []).extend(
-                scaled_components
+            has_interior_solid_hole = bool(
+                np.any(
+                    component_interior_mask
+                    & ~solid_bool[y_slice, x_slice]
+                )
             )
+            if np.any(owned_interior_mask):
+                unique_display_codes = np.unique(display_codes[display_sample_mask])
+            else:
+                dominant_display_code = _dominant_preview_code(
+                    display_codes[display_sample_mask]
+                )
+                if dominant_display_code is None:
+                    return None
+                unique_display_codes = np.asarray(
+                    [dominant_display_code],
+                    dtype=np.uint64,
+                )
+            preserve_entire_component = (
+                len(unique_display_codes) == 1
+                and not has_interior_solid_hole
+            )
+            classification_target_mask = (
+                effective_mask
+                if has_interior_solid_hole
+                else component_mask
+            )
+            propagated_display_codes = None
+            if not preserve_entire_component:
+                propagated_display_codes = _propagate_preview_codes(
+                    display_codes,
+                    seed_mask=display_sample_mask,
+                    target_mask=classification_target_mask,
+                )
+                if propagated_display_codes is None:
+                    return None
+            component_grouped = False
+            classified_source_components: list[Polygon] = []
+            for raw_display_code in unique_display_codes:
+                display_code = int(raw_display_code)
+                if preserve_entire_component:
+                    source_components = (component,)
+                else:
+                    source_components = _polygonize_preview_classification(
+                        classification_target_mask
+                        & (propagated_display_codes == raw_display_code),
+                        component=component,
+                        x_offset=int(x_slice.start or 0),
+                        y_offset=int(y_slice.start or 0),
+                        coord_scale=coord_scale,
+                    )
+                    if source_components is None:
+                        return None
+                    if not source_components:
+                        continue
+                    classified_source_components.extend(source_components)
+                scaled_components: list[Polygon] = []
+                for source_component in source_components:
+                    scaled = _scaled_geometry_mm(
+                        source_component,
+                        source.scale_factor,
+                    )
+                    scaled_components.extend(
+                        _simplify_quick_preview_polygons(
+                            _polygon_components(scaled),
+                            simplify_tolerance_mm,
+                        )
+                    )
+                if not scaled_components:
+                    continue
+                display_rgb = _preview_rgb_from_code(display_code)
+                height_rgb = _preview_rgb_from_code(int(dominant_height_code))
+                grouped.setdefault((display_rgb, height_rgb), []).extend(
+                    scaled_components
+                )
+                component_grouped = True
+                if len(grouped) > int(max_color_groups):
+                    return None
+            if not component_grouped:
+                return None
+            if not has_interior_solid_hole and not preserve_entire_component:
+                try:
+                    classified_coverage = _valid_geometry(
+                        unary_union(classified_source_components)
+                    )
+                    missing_area = (
+                        float(component.difference(classified_coverage).area)
+                        if classified_coverage is not None
+                        else float(component.area)
+                    )
+                except (ValueError, TypeError, AttributeError):
+                    return None
+                coverage_tolerance = max(1e-12, float(component.area) * 1e-9)
+                if missing_area > coverage_tolerance:
+                    return None
 
     if not grouped or len(grouped) > int(max_color_groups):
         return None

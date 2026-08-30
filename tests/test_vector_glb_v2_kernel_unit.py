@@ -260,6 +260,90 @@ def test_analytic_parts_group_by_display_and_height_identity() -> None:
     assert "preview_canvas_bounds" in names
 
 
+def test_analytic_parts_split_spatial_recolors_inside_one_svg_shape() -> None:
+    shape = box(0.0, 0.0, 2.0, 1.0)
+    source = vector_glb_preview.VectorQuickPreviewSourceV1(
+        provenance="f" * 64,
+        shape_data=(),
+        clipped_shapes=({"geometry": shape, "color": (0, 0, 0)},),
+        silhouette=shape,
+        image_vectorizer_bounds=shape,
+        scale_factor=10.0,
+        bbox=(0.0, 0.0, 2.0, 1.0),
+    )
+    matched_rgb = np.empty((10, 20, 3), dtype=np.uint8)
+    matched_rgb[:, :10] = (240, 20, 20)
+    matched_rgb[:, 10:] = (20, 20, 240)
+    height_identity_rgb = np.full_like(matched_rgb, (1, 2, 3))
+
+    parts = vector_glb_preview.build_vector_quick_preview_parts(
+        source=source,
+        matched_rgb=matched_rgb,
+        height_identity_rgb=height_identity_rgb,
+        mask_solid=np.ones((10, 20), dtype=bool),
+        backing_rgba=(255, 255, 255, 255),
+        backing_thickness_mm=1.6,
+    )
+
+    assert parts is not None
+    color_parts = [part for part in parts if part.role == "color"]
+    assert {part.rgba[:3] for part in color_parts} == {
+        (240, 20, 20),
+        (20, 20, 240),
+    }
+    by_color = {
+        part.rgba[:3]: unary_union(
+            [extrusion.footprint for extrusion in part.extrusions]
+        )
+        for part in color_parts
+    }
+    assert by_color[(240, 20, 20)].bounds == pytest.approx((0.0, 0.0, 10.0, 10.0))
+    assert by_color[(20, 20, 240)].bounds == pytest.approx((10.0, 0.0, 20.0, 10.0))
+    assert unary_union(list(by_color.values())).equals(box(0.0, 0.0, 20.0, 10.0))
+
+
+def test_analytic_parts_keep_smooth_boundary_when_edge_pixels_are_noisy() -> None:
+    shape = box(0.0, 0.0, 2.0, 1.0)
+    source = vector_glb_preview.VectorQuickPreviewSourceV1(
+        provenance="f" * 64,
+        shape_data=(),
+        clipped_shapes=({"geometry": shape, "color": (0, 0, 0)},),
+        silhouette=shape,
+        image_vectorizer_bounds=shape,
+        scale_factor=10.0,
+        bbox=(0.0, 0.0, 2.0, 1.0),
+    )
+    matched_rgb = np.empty((10, 20, 3), dtype=np.uint8)
+    matched_rgb[:, :10] = (240, 20, 20)
+    matched_rgb[:, 10:] = (20, 20, 240)
+    matched_rgb[0, :] = (20, 240, 20)
+    height_identity_rgb = np.full_like(matched_rgb, (1, 2, 3))
+
+    parts = vector_glb_preview.build_vector_quick_preview_parts(
+        source=source,
+        matched_rgb=matched_rgb,
+        height_identity_rgb=height_identity_rgb,
+        mask_solid=np.ones((10, 20), dtype=bool),
+        backing_rgba=(255, 255, 255, 255),
+        backing_thickness_mm=1.6,
+    )
+
+    assert parts is not None
+    color_parts = [part for part in parts if part.role == "color"]
+    assert {part.rgba[:3] for part in color_parts} == {
+        (240, 20, 20),
+        (20, 20, 240),
+    }
+    actual = unary_union(
+        [
+            extrusion.footprint
+            for part in color_parts
+            for extrusion in part.extrusions
+        ]
+    )
+    assert actual.equals(box(0.0, 0.0, 20.0, 10.0))
+
+
 def test_analytic_parts_require_stable_height_identity() -> None:
     source = _quick_source_for_classification()
     matched_rgb = np.full((10, 30, 3), (20, 30, 40), dtype=np.uint8)
