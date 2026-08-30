@@ -17,7 +17,9 @@ pybind11_add_module(
   _lumina_svg_core
   MODULE
   src/bindings.cpp
+  src/geometry_kernel.cpp
   src/paint_command.cpp
+  src/result.cpp
 )
 target_include_directories(
   _lumina_svg_core

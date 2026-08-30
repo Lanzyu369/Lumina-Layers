@@ -1,5 +1,8 @@
 #include "lumina_svg_core/paint_command.h"
+#include "lumina_svg_core/geometry_kernel.h"
+#include "lumina_svg_core/result.h"
 
+#include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
@@ -60,6 +63,64 @@ py::tuple commands(const lumina_svg_core::RecorderResult& result)
     return values;
 }
 
+py::capsule arrayOwner(const std::shared_ptr<lumina_svg_core::NativeResult>& owner)
+{
+    return py::capsule(
+        new std::shared_ptr<lumina_svg_core::NativeResult>(owner),
+        [](void* value) {
+            delete static_cast<std::shared_ptr<lumina_svg_core::NativeResult>*>(value);
+        });
+}
+
+template<typename T>
+py::array readOnlyVector(
+    const std::vector<T>& values,
+    const std::shared_ptr<lumina_svg_core::NativeResult>& owner)
+{
+    py::array array(
+        py::dtype::of<T>(),
+        {static_cast<py::ssize_t>(values.size())},
+        {static_cast<py::ssize_t>(sizeof(T))},
+        values.data(),
+        arrayOwner(owner));
+    array.attr("setflags")(false);
+    return array;
+}
+
+py::array coordinates(const lumina_svg_core::GeometryCollectionView& view)
+{
+    const auto& values = view.collection->coordinates;
+    py::array array(
+        py::dtype::of<int64_t>(),
+        {static_cast<py::ssize_t>(values.size() / 2), py::ssize_t(2)},
+        {static_cast<py::ssize_t>(sizeof(int64_t) * 2),
+         static_cast<py::ssize_t>(sizeof(int64_t))},
+        values.data(),
+        arrayOwner(view.owner));
+    array.attr("setflags")(false);
+    return array;
+}
+
+py::array rgba(const lumina_svg_core::GeometryCollectionView& view)
+{
+    const auto& values = view.collection->rgba;
+    py::array array(
+        py::dtype::of<uint8_t>(),
+        {static_cast<py::ssize_t>(values.size() / 4), py::ssize_t(4)},
+        {py::ssize_t(4), py::ssize_t(1)},
+        values.data(),
+        arrayOwner(view.owner));
+    array.attr("setflags")(false);
+    return array;
+}
+
+lumina_svg_core::GeometryCollectionView collectionView(
+    lumina_svg_core::NativeResult& result,
+    const lumina_svg_core::GeometryCollection& collection)
+{
+    return {result.shared_from_this(), &collection};
+}
+
 } // namespace
 
 PYBIND11_MODULE(_lumina_svg_core, module)
@@ -111,6 +172,63 @@ PYBIND11_MODULE(_lumina_svg_core, module)
         })
         .def_property_readonly("commands", &commands);
 
+    py::class_<lumina_svg_core::GeometryCollectionView>(module, "GeometryCollection")
+        .def_property_readonly("coordinates", &coordinates)
+        .def_property_readonly("ring_offsets", [](const lumina_svg_core::GeometryCollectionView& view) {
+            return readOnlyVector(view.collection->ring_offsets, view.owner);
+        })
+        .def_property_readonly("polygon_offsets", [](const lumina_svg_core::GeometryCollectionView& view) {
+            return readOnlyVector(view.collection->polygon_offsets, view.owner);
+        })
+        .def_property_readonly("geometry_offsets", [](const lumina_svg_core::GeometryCollectionView& view) {
+            return readOnlyVector(view.collection->geometry_offsets, view.owner);
+        })
+        .def_property_readonly("hole_parent", [](const lumina_svg_core::GeometryCollectionView& view) {
+            return readOnlyVector(view.collection->hole_parent, view.owner);
+        })
+        .def_property_readonly("rgba", &rgba)
+        .def_property_readonly("draw_indices", [](const lumina_svg_core::GeometryCollectionView& view) {
+            return readOnlyVector(view.collection->draw_indices, view.owner);
+        })
+        .def_property_readonly("source_indices", [](const lumina_svg_core::GeometryCollectionView& view) {
+            return readOnlyVector(view.collection->source_indices, view.owner);
+        })
+        .def_property_readonly("source_kinds", [](const lumina_svg_core::GeometryCollectionView& view) {
+            return readOnlyVector(view.collection->source_kinds, view.owner);
+        })
+        .def_property_readonly("geometry_count", [](const lumina_svg_core::GeometryCollectionView& view) {
+            return view.collection->geometryCount();
+        })
+        .def_property_readonly("component_count", [](const lumina_svg_core::GeometryCollectionView& view) {
+            return view.collection->componentCount();
+        })
+        .def_property_readonly("hole_count", [](const lumina_svg_core::GeometryCollectionView& view) {
+            return view.collection->holeCount();
+        });
+
+    py::class_<lumina_svg_core::NativeResult,
+               std::shared_ptr<lumina_svg_core::NativeResult>>(module, "NativeResult")
+        .def_readonly("status", &lumina_svg_core::NativeResult::status)
+        .def_readonly("reason_code", &lumina_svg_core::NativeResult::reason_code)
+        .def_readonly("schema_version", &lumina_svg_core::NativeResult::schema_version)
+        .def_property_readonly("bbox", [](const lumina_svg_core::NativeResult& value) {
+            return py::make_tuple(value.bbox[0], value.bbox[1],
+                                  value.bbox[2], value.bbox[3]);
+        })
+        .def_readonly("scale_factor", &lumina_svg_core::NativeResult::scale_factor)
+        .def_readonly("grid_to_source_unit", &lumina_svg_core::NativeResult::grid_to_source_unit)
+        .def_readonly("max_flattening_error_mm", &lumina_svg_core::NativeResult::max_flattening_error_mm)
+        .def_readonly("max_quantization_error_mm", &lumina_svg_core::NativeResult::max_quantization_error_mm)
+        .def_property_readonly("raw", [](lumina_svg_core::NativeResult& value) {
+            return collectionView(value, value.raw);
+        })
+        .def_property_readonly("visible", [](lumina_svg_core::NativeResult& value) {
+            return collectionView(value, value.visible);
+        })
+        .def_property_readonly("silhouette", [](lumina_svg_core::NativeResult& value) {
+            return collectionView(value, value.silhouette);
+        });
+
     module.def("record_paint_commands", [](const py::object& path) {
         auto filename = py::str(path).cast<std::string>();
         py::gil_scoped_release release;
@@ -121,4 +239,23 @@ PYBIND11_MODULE(_lumina_svg_core, module)
         py::gil_scoped_release release;
         return lumina_svg_core::recordPaintCommandsSvg(svg);
     }, py::arg("svg"));
+
+    module.def("analyze_svg", [](const py::object& path,
+                                  double targetWidthMm,
+                                  double toleranceMm) {
+        auto filename = py::str(path).cast<std::string>();
+        py::gil_scoped_release release;
+        return lumina_svg_core::analyzeSvg(filename, targetWidthMm,
+                                           toleranceMm);
+    }, py::arg("path"), py::arg("target_width_mm"),
+       py::arg("tolerance_mm"));
+
+    module.def("analyze_svg_svg", [](const std::string& svg,
+                                      double targetWidthMm,
+                                      double toleranceMm) {
+        py::gil_scoped_release release;
+        return lumina_svg_core::analyzeSvgData(svg, targetWidthMm,
+                                               toleranceMm);
+    }, py::arg("svg"), py::arg("target_width_mm"),
+       py::arg("tolerance_mm"));
 }
