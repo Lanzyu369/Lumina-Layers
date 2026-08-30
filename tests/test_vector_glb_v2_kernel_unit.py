@@ -349,6 +349,38 @@ def test_analytic_parts_keep_polygon_components_from_repaired_geometry(
     assert sum(len(part.extrusions) for part in color_parts) == 4
 
 
+def test_analytic_parts_simplify_only_below_half_preview_pixel() -> None:
+    top_edge = [
+        (x / 10.0, 1.0 if x % 2 == 0 else 0.99)
+        for x in range(99, -1, -1)
+    ]
+    detailed = Polygon([(0.0, 0.0), (10.0, 0.0), (10.0, 1.0), *top_edge])
+    source = vector_glb_preview.VectorQuickPreviewSourceV1(
+        provenance="e" * 64,
+        shape_data=(),
+        clipped_shapes=({"geometry": detailed, "color": (0, 0, 0)},),
+        silhouette=detailed,
+        image_vectorizer_bounds=box(0.0, 0.0, 10.0, 1.0),
+        scale_factor=1.0,
+        bbox=(0.0, 0.0, 10.0, 1.0),
+    )
+    matched_rgb = np.full((10, 100, 3), (20, 30, 40), dtype=np.uint8)
+
+    parts = vector_glb_preview.build_vector_quick_preview_parts(
+        source=source,
+        matched_rgb=matched_rgb,
+        height_identity_rgb=matched_rgb.copy(),
+        mask_solid=np.ones((10, 100), dtype=bool),
+        backing_rgba=(255, 255, 255, 255),
+        backing_thickness_mm=1.6,
+    )
+
+    color_part = next(part for part in parts if part.role == "color")
+    simplified = color_part.extrusions[0].footprint
+    assert len(simplified.exterior.coords) < len(detailed.exterior.coords)
+    assert simplified.hausdorff_distance(detailed) <= 0.0500001
+
+
 def _mesh_planar_footprint(mesh: trimesh.Trimesh):
     vertices = np.asarray(mesh.vertices)
     faces = np.asarray(mesh.faces)

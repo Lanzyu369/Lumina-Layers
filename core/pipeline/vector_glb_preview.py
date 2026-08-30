@@ -56,6 +56,7 @@ _V2_VECTOR_COMPONENT_COMPOSE_CHUNK_SIZE = 64
 _VECTOR_QUICK_PREVIEW_MAX_BYTES = 64 * 1024 * 1024
 _VECTOR_QUICK_PREVIEW_MAX_SHAPES = 10_000
 _VECTOR_QUICK_PREVIEW_MAX_COORDINATES = 4_000_000
+_VECTOR_QUICK_PREVIEW_MAX_SIMPLIFY_MM = 0.05
 _ANALYTIC_MIN_AREA_MM2 = 1e-12
 _ANALYTIC_TOPOLOGY_FALLBACK_PIXELS_PER_MM = 10.0
 
@@ -1449,6 +1450,27 @@ def _is_subpixel_geometry(geometry: BaseGeometry, coord_scale: float) -> bool:
     return bool(np.isfinite(pixel_area) and pixel_area <= 1.0)
 
 
+def _simplify_quick_preview_polygons(
+    polygons: tuple[Polygon, ...],
+    tolerance_mm: float,
+) -> tuple[Polygon, ...]:
+    """Simplify preview-only footprints without exceeding a display bound."""
+
+    if not np.isfinite(tolerance_mm) or tolerance_mm <= 0:
+        return polygons
+    simplified_polygons: list[Polygon] = []
+    for polygon in polygons:
+        try:
+            simplified = _valid_geometry(
+                polygon.simplify(tolerance_mm, preserve_topology=True)
+            )
+        except (ValueError, TypeError, AttributeError):
+            simplified = None
+        components = _polygon_components(simplified)
+        simplified_polygons.extend(components or (polygon,))
+    return tuple(simplified_polygons)
+
+
 def build_vector_quick_preview_parts(
     *,
     source: VectorQuickPreviewSourceV1,
@@ -1493,6 +1515,13 @@ def build_vector_quick_preview_parts(
         return None
     height, width = display.shape[:2]
     coord_scale = float(width) / real_width
+    pixels_per_mm = coord_scale / float(source.scale_factor)
+    if not np.isfinite(pixels_per_mm) or pixels_per_mm <= 0:
+        return None
+    simplify_tolerance_mm = min(
+        _VECTOR_QUICK_PREVIEW_MAX_SIMPLIFY_MM,
+        0.5 / pixels_per_mm,
+    )
     expected_height = max(1, int(round(real_height * coord_scale)))
     if abs(expected_height - height) > 1:
         return None
@@ -1531,7 +1560,10 @@ def build_vector_quick_preview_parts(
             if display_rgb is None or height_rgb is None:
                 return None
             scaled = _scaled_geometry_mm(component, source.scale_factor)
-            scaled_components = _polygon_components(scaled)
+            scaled_components = _simplify_quick_preview_polygons(
+                _polygon_components(scaled),
+                simplify_tolerance_mm,
+            )
             if not scaled_components:
                 return None
             grouped.setdefault((display_rgb, height_rgb), []).extend(
