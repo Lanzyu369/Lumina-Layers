@@ -46,3 +46,9 @@ def test_readme_declares_workspace_extraction_boundary() -> None:
     assert "independent repository" in readme
     assert "Lumina Studio" in readme
     assert "VectorAnalysis" not in readme
+
+
+def test_macos_source_builds_default_to_the_supported_deployment_target() -> None:
+    cmake = (PACKAGE_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+
+    assert 'CMAKE_OSX_DEPLOYMENT_TARGET "12.0"' in cmake

@@ -1,0 +1,57 @@
+{
+  "fixture": {
+    "byte_size": 3767519,
+    "canvas_user_units": [
+      2496.0,
+      3648.0
+    ],
+    "classification": "proxy",
+    "clip_count": 0,
+    "path": "test_images/benchmark.svg",
+    "path_count": 3097,
+    "real_r4c1_sha256": "da52ef12bdd37a0bd47970649a70582862331a606c151bff05bfb2f6e265f160",
+    "sha256": "d078cf4293623d934759c2688e13a00491e525055e7595069a0ecc4f078842fb",
+    "stroke_count": 0,
+    "transform_count": 3097
+  },
+  "host": {
+    "cpu_count": 10,
+    "machine": "arm64",
+    "platform": "macOS-26.5.2-arm64-arm-64bit",
+    "platform_release": "25.5.0",
+    "processor": "Apple M5",
+    "python": "3.12.13"
+  },
+  "measurement": {
+    "kernel_seconds": 0.390931792,
+    "median_seconds": 0.44439975,
+    "peak_rss_bytes": 127975424,
+    "public_entrypoint_seconds": 0.44439975,
+    "range_seconds": 0.017698584,
+    "recorder_seconds": 0.052156625,
+    "result_conversion_seconds": 3.417e-06,
+    "swap_delta_bytes": 0,
+    "swap_measurement": "system_vm.swapusage",
+    "threshold_passed": true,
+    "threshold_seconds": 1.0,
+    "warm_runs_seconds": [
+      0.44439975,
+      0.436743375,
+      0.454441959
+    ],
+    "warmup_runs": 1
+  },
+  "output": {
+    "coordinate_count": 128354,
+    "fingerprint": "0e754a10e4c75569f4c9eb6a2a7ca0c6ea63467934466e564a1928f80fabc224",
+    "hole_count": 293,
+    "material_count": 3097,
+    "region_count": 4676,
+    "status": "supported"
+  },
+  "parameters": {
+    "target_width_mm": 111.0,
+    "tolerance_mm": 0.02
+  },
+  "schema_version": 1
+}

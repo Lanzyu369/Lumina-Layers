@@ -1,5 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
 
+if(CMAKE_HOST_APPLE)
+  set(
+    CMAKE_OSX_DEPLOYMENT_TARGET "12.0"
+    CACHE STRING "Minimum supported macOS version" FORCE
+  )
+endif()
+
 project(lumina_svg_core VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)

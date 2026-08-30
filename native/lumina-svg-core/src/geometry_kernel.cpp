@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -43,12 +44,168 @@ struct PhysicalDomain {
     double stroke_quantization_budget_mm{0};
 };
 
+struct GridBounds {
+    int64_t min_x{0};
+    int64_t min_y{0};
+    int64_t max_x{0};
+    int64_t max_y{0};
+    bool valid{false};
+
+    void include(const Point64& point)
+    {
+        if(!valid) {
+            min_x = max_x = point.x;
+            min_y = max_y = point.y;
+            valid = true;
+            return;
+        }
+        min_x = std::min(min_x, point.x);
+        min_y = std::min(min_y, point.y);
+        max_x = std::max(max_x, point.x);
+        max_y = std::max(max_y, point.y);
+    }
+
+    void include(const GridBounds& other)
+    {
+        if(!other.valid)
+            return;
+        include(Point64(other.min_x, other.min_y));
+        include(Point64(other.max_x, other.max_y));
+    }
+
+    bool intersects(const GridBounds& other) const
+    {
+        return valid && other.valid
+            && min_x <= other.max_x && max_x >= other.min_x
+            && min_y <= other.max_y && max_y >= other.min_y;
+    }
+};
+
 struct PaintGeometry {
     Paths64 paths;
+    GridBounds bounds;
     std::array<uint8_t, 4> rgba{{0, 0, 0, 0}};
     int32_t draw_index{-1};
     int32_t source_index{-1};
     SourceKind source_kind{SourceKind::Fill};
+};
+
+GridBounds pathsBounds(const Paths64& paths)
+{
+    GridBounds bounds;
+    for(const auto& path : paths) {
+        for(const auto& point : path)
+            bounds.include(point);
+    }
+    return bounds;
+}
+
+class PackedBoundsIndex {
+public:
+    explicit PackedBoundsIndex(const std::vector<PaintGeometry>& paints)
+        : m_paints(paints)
+    {
+        m_indices.reserve(paints.size());
+        for(size_t index = 0; index < paints.size(); ++index) {
+            if(paints[index].bounds.valid)
+                m_indices.push_back(index);
+        }
+        if(!m_indices.empty())
+            buildNode(0, m_indices.size());
+    }
+
+    std::vector<size_t> laterOverlaps(size_t paintIndex) const
+    {
+        std::vector<size_t> matches;
+        if(m_nodes.empty() || !m_paints[paintIndex].bounds.valid)
+            return matches;
+        queryNode(0, paintIndex, m_paints[paintIndex].bounds, matches);
+        std::sort(matches.begin(), matches.end());
+        return matches;
+    }
+
+private:
+    static constexpr size_t LEAF_SIZE = 16;
+
+    struct Node {
+        GridBounds bounds;
+        size_t begin{0};
+        size_t end{0};
+        size_t left{0};
+        size_t right{0};
+        bool leaf{false};
+    };
+
+    size_t buildNode(size_t begin, size_t end)
+    {
+        const size_t nodeIndex = m_nodes.size();
+        m_nodes.emplace_back();
+        GridBounds bounds;
+        for(size_t offset = begin; offset < end; ++offset)
+            bounds.include(m_paints[m_indices[offset]].bounds);
+        m_nodes[nodeIndex].bounds = bounds;
+        m_nodes[nodeIndex].begin = begin;
+        m_nodes[nodeIndex].end = end;
+        if(end - begin <= LEAF_SIZE) {
+            m_nodes[nodeIndex].leaf = true;
+            return nodeIndex;
+        }
+
+        const auto width = static_cast<long double>(bounds.max_x)
+            - static_cast<long double>(bounds.min_x);
+        const auto height = static_cast<long double>(bounds.max_y)
+            - static_cast<long double>(bounds.min_y);
+        const bool splitX = width >= height;
+        std::sort(
+            m_indices.begin() + static_cast<std::ptrdiff_t>(begin),
+            m_indices.begin() + static_cast<std::ptrdiff_t>(end),
+            [&](size_t left, size_t right) {
+                const auto& leftBounds = m_paints[left].bounds;
+                const auto& rightBounds = m_paints[right].bounds;
+                const auto leftCenter = splitX
+                    ? static_cast<long double>(leftBounds.min_x)
+                        + static_cast<long double>(leftBounds.max_x)
+                    : static_cast<long double>(leftBounds.min_y)
+                        + static_cast<long double>(leftBounds.max_y);
+                const auto rightCenter = splitX
+                    ? static_cast<long double>(rightBounds.min_x)
+                        + static_cast<long double>(rightBounds.max_x)
+                    : static_cast<long double>(rightBounds.min_y)
+                        + static_cast<long double>(rightBounds.max_y);
+                return leftCenter == rightCenter
+                    ? left < right : leftCenter < rightCenter;
+            });
+        const size_t middle = begin + (end - begin) / 2;
+        const size_t left = buildNode(begin, middle);
+        const size_t right = buildNode(middle, end);
+        m_nodes[nodeIndex].left = left;
+        m_nodes[nodeIndex].right = right;
+        return nodeIndex;
+    }
+
+    void queryNode(size_t nodeIndex, size_t paintIndex,
+                   const GridBounds& query,
+                   std::vector<size_t>& matches) const
+    {
+        const auto& node = m_nodes[nodeIndex];
+        if(!node.bounds.intersects(query))
+            return;
+        if(node.leaf) {
+            for(size_t offset = node.begin; offset < node.end; ++offset) {
+                const size_t candidate = m_indices[offset];
+                if(candidate > paintIndex
+                        && m_paints[candidate].bounds.intersects(query))
+                    matches.push_back(candidate);
+            }
+            return;
+        }
+        queryNode(node.left, paintIndex, query, matches);
+        queryNode(node.right, paintIndex, query, matches);
+    }
+
+    const std::vector<PaintGeometry>& m_paints;
+    std::vector<size_t> m_indices;
+    std::vector<Node> m_nodes;
 };
 
 struct SourceBounds {
@@ -536,6 +693,7 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
             ? normalizeStroke(command, domain)
             : normalizeFill(command, domain);
         paint.paths = applyActiveClips(std::move(paint.paths), activeClips);
+        paint.bounds = pathsBounds(paint.paths);
         paint.rgba = command.rgba;
         paint.draw_index = drawIndex++;
         paint.source_index = command.source_index;
@@ -551,22 +709,23 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
     for(const auto& paint : paints)
         appendGeometry(result->raw, paint);
 
+    const PackedBoundsIndex boundsIndex(paints);
     std::vector<Paths64> visiblePaths(paints.size());
-    Paths64 laterPaint;
     for(size_t reverseIndex = paints.size(); reverseIndex > 0; --reverseIndex) {
         const size_t index = reverseIndex - 1;
-        visiblePaths[index] = laterPaint.empty()
-            ? paints[index].paths
-            : Clipper2Lib::Difference(paints[index].paths, laterPaint,
-                                      FillRule::NonZero);
-        if(laterPaint.empty())
-            laterPaint = paints[index].paths;
-        else {
-            auto combined = laterPaint;
-            combined.insert(combined.end(), paints[index].paths.begin(),
-                            paints[index].paths.end());
-            laterPaint = Clipper2Lib::Union(combined, FillRule::NonZero);
+        const auto overlaps = boundsIndex.laterOverlaps(index);
+        if(overlaps.empty()) {
+            visiblePaths[index] = paints[index].paths;
+            continue;
         }
+        Paths64 laterOverlaps;
+        for(const size_t overlapIndex : overlaps) {
+            const auto& paths = paints[overlapIndex].paths;
+            laterOverlaps.insert(laterOverlaps.end(), paths.begin(), paths.end());
+        }
+        laterOverlaps = Clipper2Lib::Union(laterOverlaps, FillRule::NonZero);
+        visiblePaths[index] = Clipper2Lib::Difference(
+            paints[index].paths, laterOverlaps, FillRule::NonZero);
     }
 
     for(size_t index = 0; index < paints.size(); ++index) {
@@ -575,8 +734,14 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
         appendGeometry(result->visible, visible);
     }
 
+    Paths64 allPaints;
+    for(const auto& paint : paints) {
+        allPaints.insert(allPaints.end(), paint.paths.begin(), paint.paths.end());
+    }
+
     PaintGeometry silhouette;
-    silhouette.paths = std::move(laterPaint);
+    silhouette.paths = Clipper2Lib::Union(allPaints, FillRule::NonZero);
+    silhouette.bounds = pathsBounds(silhouette.paths);
     silhouette.rgba = {{0, 0, 0, 255}};
     silhouette.draw_index = 0;
     silhouette.source_index = -1;
@@ -599,7 +764,17 @@ std::shared_ptr<NativeResult> analyzeWith(Loader&& loader,
         return result;
     }
     try {
-        return buildResult(loader(), targetWidthMm, toleranceMm);
+        const auto recorderStarted = std::chrono::steady_clock::now();
+        auto recording = loader();
+        const auto recorderFinished = std::chrono::steady_clock::now();
+        auto result = buildResult(
+            std::move(recording), targetWidthMm, toleranceMm);
+        const auto kernelFinished = std::chrono::steady_clock::now();
+        result->recorder_seconds = std::chrono::duration<double>(
+            recorderFinished - recorderStarted).count();
+        result->kernel_seconds = std::chrono::duration<double>(
+            kernelFinished - recorderFinished).count();
+        return result;
     } catch(const std::range_error&) {
         auto result = std::make_shared<NativeResult>();
         result->reason_code = "numeric_range_error";

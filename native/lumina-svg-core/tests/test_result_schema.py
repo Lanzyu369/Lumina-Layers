@@ -73,6 +73,19 @@ def test_result_buffers_are_typed_read_only_and_keep_owner_alive() -> None:
         assert np.array_equal(coordinates[start], coordinates[end - 1])
 
 
+def test_supported_result_exposes_non_overlapping_stage_timings() -> None:
+    result = lumina_svg_core.analyze_svg(
+        FIXTURES / "basic_fill_stroke.svg",
+        target_width_mm=20.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.recorder_seconds > 0
+    assert result.kernel_seconds > 0
+    assert result.result_conversion_seconds >= 0
+
+
 def test_unsupported_result_has_canonical_empty_collections() -> None:
     result = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 10 10'><text>x</text></svg>",

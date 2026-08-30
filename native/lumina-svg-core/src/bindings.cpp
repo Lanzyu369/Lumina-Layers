@@ -7,6 +7,7 @@
 #include <pybind11/stl.h>
 
 #include <array>
+#include <chrono>
 #include <string>
 
 namespace py = pybind11;
@@ -219,6 +220,9 @@ PYBIND11_MODULE(_lumina_svg_core, module)
         .def_readonly("grid_to_source_unit", &lumina_svg_core::NativeResult::grid_to_source_unit)
         .def_readonly("max_flattening_error_mm", &lumina_svg_core::NativeResult::max_flattening_error_mm)
         .def_readonly("max_quantization_error_mm", &lumina_svg_core::NativeResult::max_quantization_error_mm)
+        .def_readonly("recorder_seconds", &lumina_svg_core::NativeResult::recorder_seconds)
+        .def_readonly("kernel_seconds", &lumina_svg_core::NativeResult::kernel_seconds)
+        .def_readonly("result_conversion_seconds", &lumina_svg_core::NativeResult::result_conversion_seconds)
         .def_property_readonly("raw", [](lumina_svg_core::NativeResult& value) {
             return collectionView(value, value.raw);
         })
@@ -244,18 +248,34 @@ PYBIND11_MODULE(_lumina_svg_core, module)
                                   double targetWidthMm,
                                   double toleranceMm) {
         auto filename = py::str(path).cast<std::string>();
-        py::gil_scoped_release release;
-        return lumina_svg_core::analyzeSvg(filename, targetWidthMm,
-                                           toleranceMm);
+        std::shared_ptr<lumina_svg_core::NativeResult> result;
+        {
+            py::gil_scoped_release release;
+            result = lumina_svg_core::analyzeSvg(
+                filename, targetWidthMm, toleranceMm);
+        }
+        const auto conversionStarted = std::chrono::steady_clock::now();
+        auto value = py::cast(result);
+        result->result_conversion_seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - conversionStarted).count();
+        return value;
     }, py::arg("path"), py::arg("target_width_mm"),
        py::arg("tolerance_mm"));
 
     module.def("analyze_svg_svg", [](const std::string& svg,
                                       double targetWidthMm,
                                       double toleranceMm) {
-        py::gil_scoped_release release;
-        return lumina_svg_core::analyzeSvgData(svg, targetWidthMm,
-                                               toleranceMm);
+        std::shared_ptr<lumina_svg_core::NativeResult> result;
+        {
+            py::gil_scoped_release release;
+            result = lumina_svg_core::analyzeSvgData(
+                svg, targetWidthMm, toleranceMm);
+        }
+        const auto conversionStarted = std::chrono::steady_clock::now();
+        auto value = py::cast(result);
+        result->result_conversion_seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - conversionStarted).count();
+        return value;
     }, py::arg("svg"), py::arg("target_width_mm"),
        py::arg("tolerance_mm"));
 }

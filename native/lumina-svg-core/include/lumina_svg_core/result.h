@@ -44,6 +44,9 @@ struct NativeResult : public std::enable_shared_from_this<NativeResult> {
     double grid_to_source_unit{0};
     double max_flattening_error_mm{0};
     double max_quantization_error_mm{0};
+    double recorder_seconds{0};
+    double kernel_seconds{0};
+    double result_conversion_seconds{0};
     GeometryCollection raw;
     GeometryCollection visible;
     GeometryCollection silhouette;
