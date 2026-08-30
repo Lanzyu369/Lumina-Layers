@@ -191,6 +191,254 @@ def _wait_for_status(
     )
 
 
+def _native_vector_cache(sid: str, tmp_path: Path) -> dict:
+    session_data = _test_store.get(sid)
+    assert session_data is not None
+    cache = dict(session_data["preview_cache"])
+    geometry_path = tmp_path / "vector-geometry.pkl"
+    geometry_path.write_bytes(b"server-owned-vector-geometry")
+    _test_store.register_temp_file(sid, str(geometry_path))
+    cache.update(
+        {
+            "modeling_mode": "vector",
+            "enable_smooth_vector_preview": True,
+            "vector_parse_clip_cache_path": str(geometry_path),
+            "vector_parse_clip_cache_provenance": "d" * 64,
+            "height_identity_rgb": cache["matched_rgb"].copy(),
+            "preview_colors": {0: [255, 255, 255, 255]},
+            "backing_color_id": 0,
+            "spacer_thick": 1.6,
+        }
+    )
+    _test_store.put(sid, "preview_cache", cache)
+    return cache
+
+
+class TestRendererDispatch:
+    def test_native_vector_prefers_analytic_renderer(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        sid = _seed_session(tmp_path)
+        cache = _native_vector_cache(sid, tmp_path)
+        calls: list[str] = []
+
+        monkeypatch.setattr(
+            async_glb_module,
+            "load_vector_quick_preview_source",
+            lambda *_args, **_kwargs: object(),
+        )
+        monkeypatch.setattr(
+            async_glb_module,
+            "build_vector_quick_preview_parts",
+            lambda **_kwargs: [object()],
+        )
+
+        def export(_parts: list[object], *, output_path: str) -> str:
+            calls.append("analytic")
+            Path(output_path).write_bytes(b"analytic")
+            return output_path
+
+        monkeypatch.setattr(
+            async_glb_module,
+            "export_vector_quick_preview_glb",
+            export,
+        )
+        monkeypatch.setattr(
+            async_glb_module,
+            "generate_segmented_glb",
+            lambda *_args, **_kwargs: pytest.fail("segmented renderer should not run"),
+        )
+
+        output_path = tmp_path / "analytic.glb"
+        result, renderer = async_glb_module._build_preview_glb(
+            session_id=sid,
+            store=_test_store,
+            cache=cache,
+            output_path=str(output_path),
+        )
+
+        assert result == str(output_path)
+        assert renderer == "vector_analytic"
+        assert calls == ["analytic"]
+
+    @pytest.mark.parametrize(
+        ("cache_update", "register_geometry"),
+        [
+            ({"enable_smooth_vector_preview": False}, True),
+            ({"modeling_mode": "high-fidelity"}, True),
+            ({}, False),
+        ],
+    )
+    def test_renderer_falls_back_to_segmented_when_ineligible_or_stale(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        cache_update: dict,
+        register_geometry: bool,
+    ) -> None:
+        sid = _seed_session(tmp_path)
+        cache = _native_vector_cache(sid, tmp_path)
+        cache.update(cache_update)
+        if not register_geometry:
+            foreign_path = tmp_path / "foreign-vector-geometry.pkl"
+            foreign_path.write_bytes(b"not-session-owned")
+            cache["vector_parse_clip_cache_path"] = str(foreign_path)
+        _test_store.put(sid, "preview_cache", cache)
+        calls: list[str] = []
+
+        monkeypatch.setattr(
+            async_glb_module,
+            "load_vector_quick_preview_source",
+            lambda *_args, **_kwargs: pytest.fail(
+                "unowned or ineligible Vector source must not be loaded"
+            ),
+        )
+
+        def segmented(_cache: dict, *, output_path: str) -> str:
+            calls.append("segmented")
+            Path(output_path).write_bytes(b"segmented")
+            return output_path
+
+        monkeypatch.setattr(async_glb_module, "generate_segmented_glb", segmented)
+
+        output_path = tmp_path / "segmented.glb"
+        result, renderer = async_glb_module._build_preview_glb(
+            session_id=sid,
+            store=_test_store,
+            cache=cache,
+            output_path=str(output_path),
+        )
+
+        assert result == str(output_path)
+        assert renderer == "segmented"
+        assert calls == ["segmented"]
+
+    def test_valid_owned_source_with_invalid_payload_falls_back(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        sid = _seed_session(tmp_path)
+        cache = _native_vector_cache(sid, tmp_path)
+        monkeypatch.setattr(
+            async_glb_module,
+            "load_vector_quick_preview_source",
+            lambda *_args, **_kwargs: None,
+        )
+
+        def segmented(_cache: dict, *, output_path: str) -> str:
+            Path(output_path).write_bytes(b"segmented")
+            return output_path
+
+        monkeypatch.setattr(async_glb_module, "generate_segmented_glb", segmented)
+
+        result, renderer = async_glb_module._build_preview_glb(
+            session_id=sid,
+            store=_test_store,
+            cache=cache,
+            output_path=str(tmp_path / "fallback.glb"),
+        )
+
+        assert result is not None
+        assert renderer == "segmented"
+
+    def test_segmented_filenames_are_immutable_per_job(self) -> None:
+        first = async_glb_module.generate_segmented_glb_filename("same-session")
+        second = async_glb_module.generate_segmented_glb_filename("same-session")
+
+        assert first != second
+
+
+class TestRendererRebuildEndpoint:
+    def test_updates_renderer_only_and_schedules_same_session(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        sid = _seed_session(tmp_path)
+        before = _native_vector_cache(sid, tmp_path)
+        original_matched = before["matched_rgb"]
+        scheduled: list[tuple[str, dict]] = []
+
+        def schedule(
+            session_id: str,
+            _store: SessionStore,
+            _registry: FileRegistry,
+            cache: dict,
+        ) -> str:
+            scheduled.append((session_id, cache))
+            return "renderer-job-token"
+
+        monkeypatch.setattr(
+            "api.routers.converter.preview.schedule_glb_build",
+            schedule,
+        )
+
+        response = client.post(
+            "/api/convert/vector-preview-renderer",
+            json={
+                "session_id": sid,
+                "enable_smooth_vector_preview": False,
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json() == {
+            "session_id": sid,
+            "status": "pending",
+            "job_token": "renderer-job-token",
+            "glb_url": None,
+            "renderer": "segmented",
+        }
+        assert scheduled and scheduled[0][0] == sid
+        after = _test_store.get(sid)["preview_cache"]
+        assert after["enable_smooth_vector_preview"] is False
+        assert after["vector_preview_renderer"] == "segmented"
+        assert after["matched_rgb"] is original_matched
+        for key in before:
+            if key not in {
+                "enable_smooth_vector_preview",
+                "vector_preview_renderer",
+            }:
+                assert after[key] is before[key]
+
+    def test_rejects_missing_closed_and_non_vector_sessions(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        missing = client.post(
+            "/api/convert/vector-preview-renderer",
+            json={
+                "session_id": "missing-session",
+                "enable_smooth_vector_preview": True,
+            },
+        )
+        assert missing.status_code == 404
+
+        closed_sid = _seed_session(tmp_path)
+        _test_store.close(closed_sid)
+        closed = client.post(
+            "/api/convert/vector-preview-renderer",
+            json={
+                "session_id": closed_sid,
+                "enable_smooth_vector_preview": True,
+            },
+        )
+        assert closed.status_code == 404
+
+        raster_sid = _seed_session(tmp_path)
+        raster = client.post(
+            "/api/convert/vector-preview-renderer",
+            json={
+                "session_id": raster_sid,
+                "enable_smooth_vector_preview": True,
+            },
+        )
+        assert raster.status_code == 409
+
+
 class TestReplaceReturnsImmediately:
     def test_region_replace_returns_glb_url_none(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

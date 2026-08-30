@@ -1546,6 +1546,32 @@ class CleanupSessionFilesResponse(BaseModel):
     cleaned: int = Field(0, description="删除的文件数")
 
 
+class VectorPreviewRendererRequest(BaseModel):
+    """Select the lightweight browser renderer for an active Vector session.
+
+    为当前 Vector session 选择浏览器轻量预览 renderer。
+    """
+
+    session_id: str = Field(..., min_length=1, description="Session ID")
+    enable_smooth_vector_preview: bool = Field(
+        True,
+        description="Use analytic SVG polygons for the browser GLB preview.",
+    )
+
+
+class VectorPreviewRendererResponse(BaseModel):
+    """Pending state returned after scheduling a renderer-only rebuild.
+
+    仅重建 renderer 后返回的 pending 状态。
+    """
+
+    session_id: str
+    status: Literal["pending"] = "pending"
+    job_token: str
+    glb_url: None = None
+    renderer: Literal["vector_analytic", "segmented"]
+
+
 class BedSizeItem(BaseModel):
     """A single printer bed size option.
     单个打印热床尺寸选项。

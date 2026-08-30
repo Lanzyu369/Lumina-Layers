@@ -31,6 +31,7 @@ from api.preview_cache_artifacts import (
     get_preview_cache_metadata,
     hydrate_preview_cache,
     is_preview_cache_artifact_ref,
+    merge_preview_cache_metadata,
 )
 from api.preview_cache_memory import (
     build_preview_cache_memory_profile,
@@ -42,6 +43,8 @@ from api.schemas.converter import (
     BedSizeItem,
     BedSizeListResponse,
     ColorReplacementItem,
+    VectorPreviewRendererRequest,
+    VectorPreviewRendererResponse,
 )
 from api.schemas.lut import LutSourceSelection
 from api.schemas.responses import (
@@ -2356,6 +2359,70 @@ def get_segmented_glb_status(
             else None
         ),
     }
+
+
+@router.post(
+    "/vector-preview-renderer",
+    response_model=VectorPreviewRendererResponse,
+)
+def rebuild_vector_preview_renderer(
+    request: VectorPreviewRendererRequest,
+    store: SessionStore = Depends(get_session_store),
+    registry: FileRegistry = Depends(get_file_registry),
+) -> VectorPreviewRendererResponse:
+    """Rebuild only the browser GLB renderer for one native Vector session.
+
+    只为原生 Vector session 重建浏览器 GLB，不重跑 2D 预览或打印分析。
+    """
+
+    session_data = _require_session(store, request.session_id)
+    cache = session_data.get("preview_cache")
+    if not isinstance(cache, dict):
+        raise HTTPException(status_code=409, detail=PREVIEW_CACHE_UNAVAILABLE_DETAIL)
+    metadata = get_preview_cache_metadata(cache)
+    if str(metadata.get("modeling_mode") or "") != "vector":
+        raise HTTPException(
+            status_code=409,
+            detail="The active session is not a native Vector preview.",
+        )
+
+    requested_renderer = (
+        "vector_analytic"
+        if request.enable_smooth_vector_preview
+        else "segmented"
+    )
+    renderer_metadata = {
+        "enable_smooth_vector_preview": bool(
+            request.enable_smooth_vector_preview
+        ),
+        "vector_preview_renderer": requested_renderer,
+    }
+    updated_cache = (
+        merge_preview_cache_metadata(cache, renderer_metadata)
+        if is_preview_cache_artifact_ref(cache)
+        else {**cache, **renderer_metadata}
+    )
+    store.put(request.session_id, "preview_cache", updated_cache)
+    job_token = schedule_glb_build(
+        request.session_id,
+        store,
+        registry,
+        updated_cache,
+    )
+    log.info(
+        "Vector preview renderer rebuild scheduled",
+        extra={
+            "event": "converter_vector_preview_renderer_done",
+            "session_id": request.session_id,
+            "renderer": requested_renderer,
+            "job_token": job_token,
+        },
+    )
+    return VectorPreviewRendererResponse(
+        session_id=request.session_id,
+        job_token=job_token,
+        renderer=requested_renderer,
+    )
 
 
 @router.post("/upload-heightmap")

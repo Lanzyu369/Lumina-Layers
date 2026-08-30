@@ -47,6 +47,12 @@ from api.structured_logging import get_logger
 from config import OUTPUT_DIR
 from core.converter import generate_segmented_glb
 from core.naming import generate_segmented_glb_filename
+from core.pipeline.vector_glb_preview import (
+    build_vector_quick_preview_parts,
+    coerce_preview_rgba,
+    export_vector_quick_preview_glb,
+    load_vector_quick_preview_source,
+)
 
 from .common import NON_FATAL_GLB_ERRORS
 
@@ -125,6 +131,130 @@ def _cleanup_unregistered_glb(
                 "error_message": str(exc),
             },
         )
+
+
+def _session_owns_temp_path(
+    store: SessionStore,
+    session_id: str,
+    path: object,
+) -> bool:
+    if not isinstance(path, str) or not path:
+        return False
+    try:
+        candidate = os.path.realpath(path)
+        owned_paths = {
+            os.path.realpath(owned_path)
+            for owned_path in store.get_temp_file_paths(session_id)
+        }
+    except (OSError, TypeError):
+        return False
+    return candidate in owned_paths and os.path.isfile(candidate)
+
+
+def _vector_backing_rgba(cache: dict) -> tuple[int, int, int, int]:
+    preview_colors = cache.get("preview_colors")
+    if not isinstance(preview_colors, dict):
+        preview_colors = {}
+    try:
+        backing_index = int(cache.get("backing_color_id", 0) or 0)
+    except (TypeError, ValueError):
+        backing_index = 0
+    slot_names = cache.get("slot_names")
+    slot_name = None
+    if isinstance(slot_names, (list, tuple)) and 0 <= backing_index < len(slot_names):
+        slot_name = slot_names[backing_index]
+    for key in ("Board", backing_index, str(backing_index), slot_name):
+        if key is None:
+            continue
+        rgba = coerce_preview_rgba(preview_colors.get(key))
+        if rgba is not None:
+            return rgba
+
+    color_conf = cache.get("color_conf")
+    color_preview = (
+        color_conf.get("preview")
+        if isinstance(color_conf, dict)
+        else None
+    )
+    if isinstance(color_preview, dict):
+        for key in (backing_index, str(backing_index), slot_name):
+            rgba = coerce_preview_rgba(color_preview.get(key))
+            if rgba is not None:
+                return rgba
+    return (255, 255, 255, 255)
+
+
+def _try_build_analytic_vector_glb(
+    *,
+    session_id: str,
+    store: SessionStore,
+    cache: dict,
+    output_path: str,
+) -> str | None:
+    artifact_path = cache.get("vector_parse_clip_cache_path")
+    provenance = cache.get("vector_parse_clip_cache_provenance")
+    if not _session_owns_temp_path(store, session_id, artifact_path):
+        return None
+    if not isinstance(provenance, str):
+        return None
+    source = load_vector_quick_preview_source(
+        artifact_path,
+        expected_provenance=provenance,
+    )
+    if source is None:
+        return None
+    parts = build_vector_quick_preview_parts(
+        source=source,
+        matched_rgb=cache.get("matched_rgb"),
+        height_identity_rgb=cache.get("height_identity_rgb"),
+        mask_solid=cache.get("mask_solid"),
+        backing_rgba=_vector_backing_rgba(cache),
+        backing_thickness_mm=cache.get("spacer_thick", 1.6),
+    )
+    if not parts:
+        return None
+    return export_vector_quick_preview_glb(parts, output_path=output_path)
+
+
+def _build_preview_glb(
+    *,
+    session_id: str,
+    store: SessionStore,
+    cache: dict,
+    output_path: str,
+) -> tuple[str | None, str]:
+    """Build the selected browser GLB, with safe analytic fallback."""
+
+    use_analytic = (
+        str(cache.get("modeling_mode") or "") == "vector"
+        and bool(cache.get("enable_smooth_vector_preview", True))
+    )
+    if use_analytic:
+        try:
+            analytic_path = _try_build_analytic_vector_glb(
+                session_id=session_id,
+                store=store,
+                cache=cache,
+                output_path=output_path,
+            )
+        except NON_FATAL_GLB_ERRORS as exc:
+            log.debug(
+                "Analytic Vector GLB unavailable; using segmented fallback",
+                extra={
+                    "event": "converter_vector_glb_analytic_fallback",
+                    "session_id": session_id,
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
+            analytic_path = None
+        if analytic_path:
+            return analytic_path, "vector_analytic"
+
+    return (
+        generate_segmented_glb(cache, output_path=output_path),
+        "segmented",
+    )
 
 
 # Module-level executor shared by every session. ``max_workers=2`` keeps the
@@ -279,7 +409,12 @@ def _run_glb_build_job(
             generate_segmented_glb_filename(session_id),
         )
         build_cache = _hydrate_cache_for_glb_worker(latest_cache)
-        glb_path = generate_segmented_glb(build_cache, output_path=target_path)
+        glb_path, selected_renderer = _build_preview_glb(
+            session_id=session_id,
+            store=store,
+            cache=build_cache,
+            output_path=target_path,
+        )
 
         # Re-check the token post-build: another replace might have landed
         # while the heavy Shapely/trimesh work was running. Honour the
@@ -328,6 +463,7 @@ def _run_glb_build_job(
                 raise
             cache_updates["glb_url"] = f"/api/files/{glb_id}"
             cache_updates["glb_error"] = None
+            cache_updates["glb_renderer"] = selected_renderer
             # color_contours is populated as a side effect of
             # generate_segmented_glb; re-expose it here so follow-up calls
             # can pick up contour highlights without another round-trip.
@@ -384,6 +520,7 @@ def _run_glb_build_job(
                 "queue_wait_ms": round(queue_wait_ms, 3),
                 "execution_ms": round(execution_ms, 3),
                 "segmented_glb_timings": segmented_glb_timings,
+                "renderer": selected_renderer,
                 "glb_url_set": cache_updates.get("glb_url") is not None,
             },
         )

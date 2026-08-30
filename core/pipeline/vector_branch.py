@@ -1934,6 +1934,7 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
             ),
             "auto_dynamic_range": bool(ctx.get("auto_dynamic_range", False)),
             "backing_color_id": backing_color_id,
+            "spacer_thick": ctx.get("spacer_thick", 1.6),
             "is_dark": is_dark,
             "bed_label": BedManager.DEFAULT_BED,
             "lut_metadata": lut_metadata,
