@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import pytest
 import numpy as np
 import trimesh
-from shapely.geometry import box
+from shapely.geometry import MultiPolygon, Polygon, box
 from shapely.ops import unary_union
 
 from core.pipeline import vector_glb_preview
@@ -200,6 +200,165 @@ def test_load_vector_quick_preview_source_enforces_resource_caps(
         )
         is None
     )
+
+
+def _quick_source_for_classification() -> vector_glb_preview.VectorQuickPreviewSourceV1:
+    left = box(0.0, 0.0, 1.0, 1.0)
+    middle = box(1.0, 0.0, 2.0, 1.0)
+    right = box(2.0, 0.0, 3.0, 1.0)
+    return vector_glb_preview.VectorQuickPreviewSourceV1(
+        provenance="c" * 64,
+        shape_data=(),
+        clipped_shapes=(
+            {"geometry": MultiPolygon([left, middle]), "color": (0, 0, 0)},
+            {"geometry": right, "color": (0, 0, 0)},
+        ),
+        silhouette=box(0.0, 0.0, 3.0, 1.0),
+        image_vectorizer_bounds=box(0.0, 0.0, 3.0, 1.0),
+        scale_factor=10.0,
+        bbox=(0.0, 0.0, 3.0, 1.0),
+    )
+
+
+def test_analytic_parts_group_by_display_and_height_identity() -> None:
+    source = _quick_source_for_classification()
+    matched_rgb = np.zeros((10, 30, 3), dtype=np.uint8)
+    height_identity_rgb = np.zeros_like(matched_rgb)
+    mask_solid = np.ones((10, 30), dtype=bool)
+    matched_rgb[:, :20] = (240, 20, 20)
+    matched_rgb[:, 20:] = (20, 20, 240)
+    height_identity_rgb[:, :10] = (1, 2, 3)
+    height_identity_rgb[:, 10:20] = (4, 5, 6)
+    height_identity_rgb[:, 20:] = (1, 2, 3)
+
+    parts = vector_glb_preview.build_vector_quick_preview_parts(
+        source=source,
+        matched_rgb=matched_rgb,
+        height_identity_rgb=height_identity_rgb,
+        mask_solid=mask_solid,
+        backing_rgba=(250, 250, 250, 255),
+        backing_thickness_mm=1.6,
+    )
+
+    color_parts = [part for part in parts if part.role == "color"]
+    assert {
+        (part.rgba[:3], part.height_key)
+        for part in color_parts
+    } == {
+        ((240, 20, 20), "010203"),
+        ((240, 20, 20), "040506"),
+        ((20, 20, 240), "010203"),
+    }
+    assert sum(len(part.extrusions) for part in color_parts) == 3
+    assert {part.export_name for part in color_parts} == {
+        "color_f01414",
+        "color_f01414_1",
+        "color_1414f0",
+    }
+    names = {part.export_name for part in parts}
+    assert "backing_plate" in names
+    assert "preview_canvas_bounds" in names
+
+
+def test_analytic_parts_require_stable_height_identity() -> None:
+    source = _quick_source_for_classification()
+    matched_rgb = np.full((10, 30, 3), (20, 30, 40), dtype=np.uint8)
+
+    assert (
+        vector_glb_preview.build_vector_quick_preview_parts(
+            source=source,
+            matched_rgb=matched_rgb,
+            height_identity_rgb=None,
+            mask_solid=np.ones((10, 30), dtype=bool),
+            backing_rgba=(255, 255, 255, 255),
+            backing_thickness_mm=1.6,
+        )
+        is None
+    )
+
+
+def _mesh_planar_footprint(mesh: trimesh.Trimesh):
+    vertices = np.asarray(mesh.vertices)
+    faces = np.asarray(mesh.faces)
+    z_min = float(vertices[:, 2].min())
+    bottom_faces = faces[
+        np.all(np.isclose(vertices[faces, 2], z_min), axis=1)
+    ]
+    triangles = [
+        Polygon(vertices[face, :2])
+        for face in bottom_faces
+        if Polygon(vertices[face, :2]).area > 0
+    ]
+    return unary_union(triangles)
+
+
+def test_analytic_extrusion_preserves_curve_hole_and_components() -> None:
+    curved_with_hole = Polygon(
+        [
+            (0.137, 0.211),
+            (1.073, 0.047),
+            (2.183, 0.391),
+            (2.417, 1.319),
+            (1.829, 2.271),
+            (0.731, 2.419),
+            (0.083, 1.473),
+        ],
+        [[(0.831, 0.891), (1.439, 0.817), (1.527, 1.413), (0.913, 1.529)]],
+    )
+    disconnected = Polygon(
+        [(3.137, 0.211), (4.271, 0.083), (4.493, 1.291), (3.251, 1.407)]
+    )
+    extrusion = vector_glb_preview.VectorPreviewExtrusion(
+        footprint=curved_with_hole,
+        footprints=(curved_with_hole, disconnected),
+        footprints_validated=True,
+        z_min=0.2,
+        z_max=0.6,
+    )
+
+    mesh = vector_glb_preview._mesh_from_analytic_extrusion(extrusion)
+    footprint = _mesh_planar_footprint(mesh)
+    expected = unary_union([curved_with_hole, disconnected])
+
+    assert footprint.area == pytest.approx(expected.area, abs=0.01)
+    assert footprint.bounds == pytest.approx(expected.bounds, abs=1e-4)
+    polygons = list(footprint.geoms) if footprint.geom_type == "MultiPolygon" else [footprint]
+    assert len(polygons) == 2
+    assert sum(len(polygon.interiors) for polygon in polygons) == 1
+    assert any(
+        np.isclose(mesh.vertices[:, 0], 0.137, atol=1e-6)
+    )
+    assert len(mesh.split(only_watertight=False)) == 2
+
+
+def test_analytic_glb_exports_height_key_extras_and_display_only_parts(
+    tmp_path: Path,
+) -> None:
+    source = _quick_source_for_classification()
+    matched_rgb = np.full((10, 30, 3), (120, 80, 40), dtype=np.uint8)
+    identity = np.full((10, 30, 3), (9, 8, 7), dtype=np.uint8)
+    parts = vector_glb_preview.build_vector_quick_preview_parts(
+        source=source,
+        matched_rgb=matched_rgb,
+        height_identity_rgb=identity,
+        mask_solid=np.ones((10, 30), dtype=bool),
+        backing_rgba=(250, 250, 250, 255),
+        backing_thickness_mm=1.6,
+    )
+    out_path = tmp_path / "analytic.glb"
+
+    vector_glb_preview.export_vector_quick_preview_glb(
+        parts,
+        output_path=str(out_path),
+    )
+
+    gltf = _load_glb_json(out_path)
+    by_name = {mesh["name"]: mesh for mesh in gltf["meshes"]}
+    assert "color_785028" in by_name
+    assert by_name["color_785028"]["extras"]["height_key"] == "090807"
+    assert "backing_plate" in by_name
+    assert "preview_canvas_bounds" in by_name
+    assert not any("material_layer" in name for name in by_name)
 
 
 def test_vector_glb_kernel_defaults_to_v2(monkeypatch) -> None:

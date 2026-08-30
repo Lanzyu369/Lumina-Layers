@@ -33,7 +33,9 @@ from config import PrinterConfig
 from core.errors import VectorMeshMemoryBudgetError
 from core.vector_engine import (
     _load_vector_parse_clip_cache_artifact_by_provenance,
+    _rasterize_geometry_roi_mask,
 )
+from core.vector_mesh_topology import extrude_polygon_for_export
 from core.pipeline.s11_glb_preview import (
     PREVIEW_CANVAS_BOUNDS_NODE_NAME,
     _build_color_extruded_mesh_v2,
@@ -236,6 +238,7 @@ class VectorPreviewPart:
     role: VectorPreviewRole
     rgba: tuple[int, int, int, int]
     is_recolorable: bool
+    height_key: str | None = None
     extrusions: tuple[VectorPreviewExtrusion, ...] = field(default_factory=tuple)
     fallback_mesh: trimesh.Trimesh | None = None
 
@@ -1410,6 +1413,192 @@ def _visible_backing_footprint(
     return None
 
 
+def _dominant_preview_rgb(pixels: np.ndarray) -> tuple[int, int, int] | None:
+    if pixels.ndim != 2 or pixels.shape[1] != 3 or len(pixels) == 0:
+        return None
+    codes = (
+        pixels[:, 0].astype(np.uint32) << np.uint32(16)
+        | pixels[:, 1].astype(np.uint32) << np.uint32(8)
+        | pixels[:, 2].astype(np.uint32)
+    )
+    unique, counts = np.unique(codes, return_counts=True)
+    if len(unique) == 0:
+        return None
+    code = int(unique[int(np.argmax(counts))])
+    return ((code >> 16) & 0xFF, (code >> 8) & 0xFF, code & 0xFF)
+
+
+def _polygon_components(geometry: BaseGeometry) -> tuple[Polygon, ...]:
+    if isinstance(geometry, Polygon):
+        return (geometry,)
+    if isinstance(geometry, MultiPolygon):
+        return tuple(geometry.geoms)
+    return ()
+
+
+def build_vector_quick_preview_parts(
+    *,
+    source: VectorQuickPreviewSourceV1,
+    matched_rgb: np.ndarray,
+    height_identity_rgb: np.ndarray | None,
+    mask_solid: np.ndarray,
+    backing_rgba: tuple[int, int, int, int],
+    backing_thickness_mm: float,
+    max_color_groups: int = 128,
+) -> list[VectorPreviewPart] | None:
+    """Classify analytic Vector footprints without deriving their boundaries.
+
+    Pixel grids decide only current display colour and stable height identity;
+    every exported boundary remains the parsed SVG Polygon.
+
+    像素网格只决定当前显示色和稳定高度身份，导出边界始终来自 SVG Polygon。
+    """
+
+    display = np.asarray(matched_rgb)
+    identity = (
+        np.asarray(height_identity_rgb)
+        if height_identity_rgb is not None
+        else None
+    )
+    solid = np.asarray(mask_solid)
+    if (
+        identity is None
+        or display.ndim != 3
+        or display.shape[2] != 3
+        or display.dtype != np.uint8
+        or identity.shape != display.shape
+        or identity.dtype != np.uint8
+        or solid.shape != display.shape[:2]
+        or not np.issubdtype(solid.dtype, np.bool_)
+        or max_color_groups <= 0
+    ):
+        return None
+
+    real_width = float(source.bbox[2])
+    real_height = float(source.bbox[3])
+    if real_width <= 0 or real_height <= 0:
+        return None
+    height, width = display.shape[:2]
+    coord_scale = float(width) / real_width
+    expected_height = max(1, int(round(real_height * coord_scale)))
+    if abs(expected_height - height) > 1:
+        return None
+
+    grouped: dict[
+        tuple[tuple[int, int, int], tuple[int, int, int]],
+        list[Polygon],
+    ] = {}
+    solid_bool = solid.astype(bool, copy=False)
+    for item in source.clipped_shapes:
+        geometry = item.get("geometry") if isinstance(item, dict) else None
+        if not isinstance(geometry, (Polygon, MultiPolygon)):
+            return None
+        for component in _polygon_components(geometry):
+            rasterized = _rasterize_geometry_roi_mask(
+                component,
+                canvas_shape=(height, width),
+                coord_scale=coord_scale,
+            )
+            if rasterized is None:
+                return None
+            y_slice, x_slice, component_mask = rasterized
+            effective_mask = component_mask & solid_bool[y_slice, x_slice]
+            if not np.any(effective_mask):
+                return None
+            display_rgb = _dominant_preview_rgb(
+                display[y_slice, x_slice][effective_mask]
+            )
+            height_rgb = _dominant_preview_rgb(
+                identity[y_slice, x_slice][effective_mask]
+            )
+            if display_rgb is None or height_rgb is None:
+                return None
+            scaled = _scaled_geometry_mm(component, source.scale_factor)
+            if not isinstance(scaled, Polygon):
+                return None
+            grouped.setdefault((display_rgb, height_rgb), []).append(scaled)
+
+    if not grouped or len(grouped) > int(max_color_groups):
+        return None
+
+    try:
+        color_shell_height = float(PrinterConfig.LAYER_HEIGHT)
+    except (TypeError, ValueError):
+        color_shell_height = 0.08
+    if not np.isfinite(color_shell_height) or color_shell_height <= 0:
+        color_shell_height = 0.08
+
+    seen_names: set[str] = set()
+    parts: list[VectorPreviewPart] = []
+    for (display_rgb, height_rgb), footprints in grouped.items():
+        rgba = (*display_rgb, 255)
+        export_name = make_vector_glb_export_name(
+            source_name=f"{display_rgb[0]:02x}{display_rgb[1]:02x}{display_rgb[2]:02x}",
+            role="color",
+            rgba=rgba,
+            seen_names=seen_names,
+        )
+        parts.append(
+            VectorPreviewPart(
+                source_name=export_name,
+                export_name=export_name,
+                role="color",
+                rgba=rgba,
+                is_recolorable=True,
+                height_key=(
+                    f"{height_rgb[0]:02x}{height_rgb[1]:02x}{height_rgb[2]:02x}"
+                ),
+                extrusions=tuple(
+                    VectorPreviewExtrusion(
+                        footprint=footprint,
+                        z_min=0.0,
+                        z_max=color_shell_height,
+                    )
+                    for footprint in footprints
+                ),
+            )
+        )
+
+    backing = _visible_backing_footprint(
+        source.silhouette,
+        source.scale_factor,
+    )
+    if backing is not None:
+        try:
+            backing_height = max(
+                float(backing_thickness_mm),
+                color_shell_height,
+            )
+        except (TypeError, ValueError):
+            backing_height = color_shell_height
+        parts.append(
+            VectorPreviewPart(
+                source_name="Board",
+                export_name=make_vector_glb_export_name(
+                    source_name="Board",
+                    role="backing",
+                    rgba=backing_rgba,
+                    seen_names=seen_names,
+                ),
+                role="backing",
+                rgba=backing_rgba,
+                is_recolorable=False,
+                extrusions=(
+                    VectorPreviewExtrusion(
+                        footprint=backing,
+                        z_min=-backing_height,
+                        z_max=0.0,
+                    ),
+                ),
+            )
+        )
+
+    canvas_anchor = _build_preview_canvas_anchor_part(source)
+    if canvas_anchor is not None:
+        parts.append(canvas_anchor)
+    return parts
+
+
 def _recipe_channel_runs(recipe: list[int]) -> list[tuple[int, int, int]]:
     runs: list[tuple[int, int, int]] = []
     start = 0
@@ -1658,6 +1847,58 @@ def _mesh_from_extrusion_v2(
     return mesh
 
 
+def _mesh_from_analytic_extrusion(
+    extrusion: VectorPreviewExtrusion,
+) -> trimesh.Trimesh:
+    """Extrude parsed Polygon footprints directly without a pixel grid."""
+
+    footprints = (
+        tuple(extrusion.footprints or (extrusion.footprint,))
+        if extrusion.footprints_validated
+        else _valid_footprints_for_v2(
+            extrusion.footprints or (extrusion.footprint,)
+        )
+    )
+    polygons = [
+        polygon
+        for footprint in footprints
+        for polygon in _polygon_components(footprint)
+        if not polygon.is_empty
+    ]
+    if not polygons:
+        raise RuntimeError("Analytic Vector GLB extrusion has no Polygon footprints")
+    z_height = float(extrusion.z_max) - float(extrusion.z_min)
+    if not np.isfinite(z_height) or z_height <= 0:
+        raise RuntimeError("Analytic Vector GLB extrusion has non-positive height")
+
+    meshes: list[trimesh.Trimesh] = []
+    for polygon in polygons:
+        pieces = extrude_polygon_for_export(
+            polygon,
+            xy_scale=1.0,
+            prefer_fast=True,
+        )
+        for piece in pieces:
+            vertices = np.asarray(piece.vertices, dtype=np.float64).copy()
+            vertices[:, 2] = (
+                vertices[:, 2] * z_height + float(extrusion.z_min)
+            )
+            meshes.append(
+                trimesh.Trimesh(
+                    vertices=vertices,
+                    faces=np.asarray(piece.faces, dtype=np.int64).copy(),
+                    process=False,
+                )
+            )
+    if not meshes:
+        raise RuntimeError("Analytic Vector GLB extrusion returned no mesh")
+    return (
+        meshes[0]
+        if len(meshes) == 1
+        else trimesh.util.concatenate(meshes)
+    )
+
+
 def _valid_footprints_for_v2(
     footprints: tuple[BaseGeometry, ...] | list[BaseGeometry],
 ) -> tuple[BaseGeometry, ...]:
@@ -1761,6 +2002,78 @@ def export_vector_glb_preview_v2(
         "Vector GLB V2 exported",
         extra={
             "event": "vector_glb_v2_exported",
+            "path": str(output_path),
+            "part_count": len(parts),
+            "geometry_count": len(glb_scene.geometry),
+            "duration_ms": round((time.perf_counter() - t0) * 1000, 3),
+        },
+    )
+    return result
+
+
+def export_vector_quick_preview_glb(
+    parts: list[VectorPreviewPart],
+    *,
+    output_path: str,
+) -> str:
+    """Export a display-only GLB from analytic Vector footprints."""
+
+    t0 = time.perf_counter()
+    glb_scene = trimesh.Scene()
+    for part in parts:
+        if part.extrusions:
+            meshes = [
+                _mesh_from_analytic_extrusion(extrusion)
+                for extrusion in _batch_part_extrusions_for_v2(part)
+            ]
+        elif part.fallback_mesh is not None:
+            meshes = [_mesh_geometry_only_copy(part.fallback_mesh)]
+        else:
+            raise RuntimeError(
+                f"Analytic Vector GLB part has no geometry: {part.source_name}"
+            )
+        if not meshes:
+            raise RuntimeError(
+                f"Analytic Vector GLB part is empty: {part.source_name}"
+            )
+        if part.role == "color":
+            chunks = _pack_meshes_for_uint16_indices(meshes)
+        else:
+            combined = (
+                meshes[0]
+                if len(meshes) == 1
+                else trimesh.util.concatenate(meshes)
+            )
+            chunks = _scene_reuse_chunks_for_uint16_indices(combined)
+        for index, chunk in enumerate(chunks):
+            export_name = (
+                part.export_name
+                if len(chunks) == 1
+                else f"{part.export_name}_chunk{index + 1:03d}"
+            )
+            exported_mesh = _mesh_with_material_rgba(
+                chunk,
+                part.rgba,
+                material_name=f"{part.export_name}_material",
+            )
+            if part.height_key is not None:
+                exported_mesh.metadata["height_key"] = part.height_key
+            glb_scene.add_geometry(
+                exported_mesh,
+                geom_name=export_name,
+            )
+
+    if not glb_scene.geometry:
+        raise RuntimeError("Analytic Vector GLB export has no geometry")
+    result = _write_glb_scene(
+        glb_scene,
+        output_path,
+        optimize_v2_buffers=True,
+    )
+    log.info(
+        "Analytic Vector GLB exported",
+        extra={
+            "event": "vector_glb_analytic_exported",
             "path": str(output_path),
             "part_count": len(parts),
             "geometry_count": len(glb_scene.geometry),
