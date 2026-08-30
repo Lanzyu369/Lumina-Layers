@@ -886,6 +886,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const modelSurfaceLoading = useConverterStore((s) => s.modelSurfaceLoading);
   const modelSurfaceSelecting = useConverterStore((s) => s.modelSurfaceSelecting);
   const imagePreviewUrl = useConverterStore((s) => s.imagePreviewUrl);
+  const previewBaseImageUrl = useConverterStore((s) => s.previewBaseImageUrl);
   const selectModelSurfaceFace = useConverterStore((s) => s.selectModelSurfaceFace);
   const updateModelSurfacePlacement = useConverterStore((s) => s.updateModelSurfacePlacement);
   const updateModelSurfaceModelRotation = useConverterStore((s) => s.updateModelSurfaceModelRotation);
@@ -1374,7 +1375,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
         {showModelSurfaceSelector && modelSurfacePreviewUrl && modelSurfaceFile ? (
           <ModelSurfaceSelector3D
             file={modelSurfaceFile}
-            artworkUrl={imagePreviewUrl}
+            artworkUrl={previewBaseImageUrl ?? imagePreviewUrl}
             footprint={modelSurfaceFootprint}
             surfaceCandidates={modelSurfaceCandidates}
             placement={modelSurfacePlacement}

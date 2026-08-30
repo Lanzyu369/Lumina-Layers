@@ -859,6 +859,25 @@ beforeEach(() => {
       expect(capturedInteractiveViewerProps).toBeNull();
     });
 
+    it("uses the clean processed preview for model-surface artwork", () => {
+      const modelFile = new File(["solid"], "plate.stl");
+      useConverterStore.setState({
+        modelSurfaceEnabled: true,
+        modelSurfaceFile: modelFile,
+        modelSurfacePreviewUrl: "blob:model",
+        modelSurfaceSelectionId: "selection-1",
+        imagePreviewUrl: "blob:original-svg",
+        previewBaseImageUrl: "/api/files/processed-colours.png",
+        previewImageUrl: "/api/files/temporary-selection-highlight.png",
+      } as never);
+
+      render(<Scene3D />);
+
+      expect(capturedModelSurfaceSelectorProps?.artworkUrl).toBe(
+        "/api/files/processed-colours.png",
+      );
+    });
+
     it("reuses the scene bed platform while model surface rotate controls are active", () => {
       const modelFile = new File(["solid"], "plate.stl");
 

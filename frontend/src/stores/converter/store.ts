@@ -134,6 +134,12 @@ import {
   rotateImageFile,
   type ImageRotationDegrees,
 } from "../../utils/imageRotation";
+import {
+  canCommitPreviewResponse,
+  capturePreviewCommitGuard,
+  type PreviewCommitGuard,
+  type PreviewCommitOwner,
+} from "./previewCommitGuard";
 
 type LuminaWindow = Window & {
   __luminaGenerateStart?: number;
@@ -1330,13 +1336,22 @@ function getPreviewBaseUrl(
 
 let replacementPreviewEpoch = 0;
 
-function bumpReplacementPreviewEpoch(): number {
+function captureReplacementPreviewCommit(
+  owner: PreviewCommitOwner,
+): PreviewCommitGuard {
   replacementPreviewEpoch += 1;
-  return replacementPreviewEpoch;
+  return capturePreviewCommitGuard(owner, replacementPreviewEpoch);
 }
 
-function isCurrentReplacementPreviewEpoch(epoch: number): boolean {
-  return epoch === replacementPreviewEpoch;
+function isCurrentReplacementPreviewCommit(
+  current: PreviewCommitOwner,
+  guard: PreviewCommitGuard,
+): boolean {
+  return canCommitPreviewResponse(current, guard, replacementPreviewEpoch);
+}
+
+function invalidateReplacementPreviewCommits(): void {
+  replacementPreviewEpoch += 1;
 }
 
 let selectionMutationQueue: Promise<void> = Promise.resolve();
@@ -3537,6 +3552,7 @@ function _cancelPreviewWork(): void {
   _gradientGroupsAbortController = null;
   _glbPollSequence += 1;
   _vectorRendererRequestSequence += 1;
+  invalidateReplacementPreviewCommits();
   _endPreviewTimer();
 }
 
@@ -5598,7 +5614,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         colors,
         newHex,
       );
-      const epoch = bumpReplacementPreviewEpoch();
+      const previewCommit = captureReplacementPreviewCommit(state);
       set({
         colorRemapMap: newMap,
         remapHistory: newHistory,
@@ -5628,7 +5644,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             };
           }),
         );
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         const updates: Partial<ConverterState> = {
           replacePreviewLoading: false,
           previewImageUrl: normalizeResourceUrl(response.preview_url),
@@ -5643,7 +5659,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         set(updates);
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         // Roll the whole batch back — same semantics as the old loop.
         // 整批回滚，和旧循环语义一致。
         set({
@@ -5977,7 +5993,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         return;
       }
       const adjustmentSnapshot = createAdjustmentSnapshot(state);
-      const epoch = bumpReplacementPreviewEpoch();
+      const previewCommit = captureReplacementPreviewCommit(state);
       set({
         replacePreviewLoading: true,
         error: null,
@@ -5986,7 +6002,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       });
       try {
         const response = await apiRegionReplace(sid, `#${newHex}`);
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         if (_get().sessionId !== sid) {
           return;
         }
@@ -6027,7 +6043,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }));
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         if (_get().sessionId !== sid) {
           return;
         }
@@ -6052,7 +6068,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         return;
       }
       const hexNoHash = targetHex.replace(/^#/, "").toLowerCase();
-      const epoch = bumpReplacementPreviewEpoch();
+      const previewCommit = captureReplacementPreviewCommit(state);
       set({
         replacePreviewLoading: true,
         error: null,
@@ -6067,7 +6083,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           gradientGroupIndex: groupIndex,
           gradientRegionIndex: regionIndex,
         });
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         if (_get().sessionId !== sid) return;
         const updates: Partial<ConverterState> = {
           previewImageUrl: normalizeResourceUrl(response.preview_url),
@@ -6107,7 +6123,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }));
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         if (_get().sessionId !== sid) return;
         set({
           adjustmentHistory: state.adjustmentHistory,
@@ -6241,7 +6257,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }
       if (!targetHex) return;
 
-      const epoch = bumpReplacementPreviewEpoch();
+      const previewCommit = captureReplacementPreviewCommit(state);
       set({
         replacePreviewLoading: true,
         error: null,
@@ -6260,7 +6276,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             replacementColor: `#${targetHex}`,
           })),
         );
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         if (_get().sessionId !== sid) return;
         const updates: Partial<ConverterState> = {
           previewImageUrl: normalizeResourceUrl(response.preview_url),
@@ -6296,7 +6312,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }));
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         if (_get().sessionId !== sid) return;
         set({
           adjustmentHistory: state.adjustmentHistory,
@@ -6338,7 +6354,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         Math.min(256, Math.round(localQuantizeColors)),
       );
 
-      const epoch = bumpReplacementPreviewEpoch();
+      const previewCommit = captureReplacementPreviewCommit(state);
       set({
         replacePreviewLoading: true,
         error: null,
@@ -6357,7 +6373,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           })),
           clamped,
         );
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         if (_get().sessionId !== sid) return;
         const updates: Partial<ConverterState> = {
           previewImageUrl: normalizeResourceUrl(response.preview_url),
@@ -6411,7 +6427,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }));
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         if (_get().sessionId !== sid) return;
         set({
           adjustmentHistory: state.adjustmentHistory,
@@ -6431,7 +6447,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       const hexNoHash = targetHex.replace(/^#/, "").toLowerCase();
       if (!hexNoHash) return;
 
-      const epoch = bumpReplacementPreviewEpoch();
+      const previewCommit = captureReplacementPreviewCommit(state);
       set({
         replacePreviewLoading: true,
         error: null,
@@ -6450,7 +6466,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             replacementColor: `#${hexNoHash}`,
           })),
         );
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         if (_get().sessionId !== sid) return;
         const updates: Partial<ConverterState> = {
           previewImageUrl: normalizeResourceUrl(response.preview_url),
@@ -6482,7 +6498,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }));
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         if (_get().sessionId !== sid) return;
         set({
           adjustmentHistory: state.adjustmentHistory,
@@ -6528,7 +6544,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         hex: material.hex,
       }));
 
-      const epoch = bumpReplacementPreviewEpoch();
+      const previewCommit = captureReplacementPreviewCommit(state);
       set({
         replacePreviewLoading: true,
         error: null,
@@ -6550,7 +6566,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             ? { virtual_materials: clonedVirtuals }
             : {}),
         });
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         // After a custom recipe, the preview content changed, so any previous
         // selection mask is invalid. Clear the selection entirely rather than
         // trying to sync a stale mask. The user can re-select after the recipe
@@ -6559,6 +6575,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         if (currentSelection && currentSelection.selected_component_count > 0) {
           await _get().applySelectionMutation({ operation: "clear" });
         }
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         set((current) => ({
           replacePreviewLoading: false,
           previewImageUrl:
@@ -6601,7 +6618,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }));
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         set({
           adjustmentHistory: state.adjustmentHistory,
           adjustmentRedoHistory: state.adjustmentRedoHistory,
@@ -6673,7 +6690,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           const currentSelectionState = _get();
           const selectionRevision = currentSelectionState.selectionDocument?.selection_revision;
           if (selectionRevision !== undefined && currentSelectionState.sessionId) {
-            const epoch = bumpReplacementPreviewEpoch();
+            const previewCommit =
+              captureReplacementPreviewCommit(currentSelectionState);
             set({ replacePreviewLoading: true, error: null });
             try {
               const response = await apiRegionReplace(
@@ -6682,7 +6700,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
                 undefined,
                 selectionRevision,
               );
-              if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+              if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) {
+                return;
+              }
               const current = _get();
               set({
                 previewImageUrl: normalizeResourceUrl(response.preview_url),
@@ -6720,7 +6740,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
               }
               _get()._pollAsyncGlb();
             } catch (err) {
-              if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+              if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) {
+                return;
+              }
               set({
                 replacePreviewLoading: false,
                 error: visibleConverterError(err, "Selection color replacement failed"),
@@ -6751,7 +6773,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
               replacementColor: `#${pending.targetHex}`,
             }));
           if (batchItems.length === 0) break;
-          const epoch = bumpReplacementPreviewEpoch();
+          const previewCommit = captureReplacementPreviewCommit(curState);
           set({
             replacePreviewLoading: true,
             adjustmentHistory: [
@@ -6764,7 +6786,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           });
           try {
             const response = await apiRegionReplaceBatch(sid, batchItems);
-            if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+            if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) {
+              return;
+            }
             if (_get().sessionId !== sid) return;
             const updates: Partial<ConverterState> = {
               previewImageUrl: normalizeResourceUrl(response.preview_url),
@@ -6791,7 +6815,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             }));
             _get()._pollAsyncGlb();
           } catch (err) {
-            if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+            if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) {
+              return;
+            }
             if (_get().sessionId !== sid) return;
             set({
               adjustmentHistory: curState.adjustmentHistory,
@@ -6866,13 +6892,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }
       if (state.historyBusy || !state.historyCanUndo) return;
       const sid = state.sessionId;
-      const epoch = bumpReplacementPreviewEpoch();
+      const previewCommit = captureReplacementPreviewCommit(state);
       set({ historyBusy: true, replacePreviewLoading: true, error: null });
       try {
         const response = await apiReplacementHistory(sid, "undo");
         if (
-          !isCurrentReplacementPreviewEpoch(epoch) ||
-          _get().sessionId !== sid
+          !isCurrentReplacementPreviewCommit(_get(), previewCommit)
         ) return;
         set({
           ...buildHistoryRestoreState(response),
@@ -6890,8 +6915,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }
       } catch (err) {
         if (
-          !isCurrentReplacementPreviewEpoch(epoch) ||
-          _get().sessionId !== sid
+          !isCurrentReplacementPreviewCommit(_get(), previewCommit)
         ) return;
         set({
           historyBusy: false,
@@ -6917,13 +6941,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }
       if (state.historyBusy || !state.historyCanRedo) return;
       const sid = state.sessionId;
-      const epoch = bumpReplacementPreviewEpoch();
+      const previewCommit = captureReplacementPreviewCommit(state);
       set({ historyBusy: true, replacePreviewLoading: true, error: null });
       try {
         const response = await apiReplacementHistory(sid, "redo");
         if (
-          !isCurrentReplacementPreviewEpoch(epoch) ||
-          _get().sessionId !== sid
+          !isCurrentReplacementPreviewCommit(_get(), previewCommit)
         ) return;
         set({
           ...buildHistoryRestoreState(response),
@@ -6941,8 +6964,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }
       } catch (err) {
         if (
-          !isCurrentReplacementPreviewEpoch(epoch) ||
-          _get().sessionId !== sid
+          !isCurrentReplacementPreviewCommit(_get(), previewCommit)
         ) return;
         set({
           historyBusy: false,
@@ -6970,7 +6992,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
     clearAllRemaps: () => {
       const state = _get();
-      const epoch = bumpReplacementPreviewEpoch();
+      const previewCommit = captureReplacementPreviewCommit(state);
       const adjustmentSnapshot = createAdjustmentSnapshot(state);
       const nextAdjustmentHistory = hasAdjustmentState(state)
         ? [...state.adjustmentHistory, adjustmentSnapshot]
@@ -7012,7 +7034,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       if (state.sessionId) {
         apiResetReplacements(state.sessionId)
           .then((res) => {
-            if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+            if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) {
+              return;
+            }
             const url =
               normalizeResourceUrl(res?.preview_url) ??
               _get().originalPreviewUrl ??
@@ -7032,7 +7056,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             _get()._pollAsyncGlb();
           })
           .catch(() => {
-            if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+            if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) {
+              return;
+            }
             const fallback = _get().originalPreviewUrl;
             set({
               previewImageUrl: fallback,
@@ -9530,7 +9556,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       const state = _get();
       const sid = state.sessionId;
       if (!state.sessionId) return;
-      const epoch = bumpReplacementPreviewEpoch();
+      const previewCommit = captureReplacementPreviewCommit(state);
       set({ replacePreviewLoading: true, error: null });
       try {
         const response = await apiReplaceColor(
@@ -9538,7 +9564,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           `#${origHex}`,
           `#${newHex}`,
         );
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         if (_get().sessionId !== sid) return;
         const updates: Partial<ConverterState> = {
           replacePreviewLoading: false,
@@ -9554,7 +9580,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         set(updates);
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         if (_get().sessionId !== sid) return;
         // 回滚 colorRemapMap 到操作前状态
         const currentHistory = _get().remapHistory;
@@ -9581,7 +9607,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       const entries = Object.entries(state.colorRemapMap);
       if (!state.sessionId) return;
 
-      const epoch = bumpReplacementPreviewEpoch();
+      const previewCommit = captureReplacementPreviewCommit(state);
       set({ replacePreviewLoading: true, error: null });
       try {
         // Resolve each remap entry to its palette-backed selected_color
@@ -9601,7 +9627,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           };
         });
         const response = await apiReplaceColorsBatch(state.sessionId, pairs);
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         const updates: Partial<ConverterState> = {
           replacePreviewLoading: false,
           previewImageUrl: normalizeResourceUrl(response.preview_url),
@@ -9616,7 +9642,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         set(updates);
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         set({
           replacePreviewLoading: false,
           error: visibleConverterError(err, "颜色替换预览失败"),
