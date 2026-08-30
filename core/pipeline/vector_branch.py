@@ -1862,6 +1862,9 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
                     "image_vectorizer_bounds": analysis.image_vectorizer_bounds,
                     "scale_factor": analysis.scale_factor,
                     "bbox": analysis.bbox,
+                    "geometry_stage_timings": dict(
+                        analysis.stage_timings or {}
+                    ),
                 }
             cache["vector_parse_clip_cache_blob"] = _serialize_vector_parse_clip_cache(
                 cache_key,
