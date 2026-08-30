@@ -11,10 +11,10 @@ contract at the application boundary.
 
 The first production milestone targets R4C1-like static vector documents:
 filled paths, stroke-only paths, nested transforms, inherited styles, SVG fill
-rules, clipping, and ordinary opacity. Unsupported document-level semantics
-will cause the whole document to use the existing Python path during the
-transition. The native path must never skip an individual element and then
-claim success.
+rules, clipping, and effective alpha values of zero or one. Unsupported
+document-level semantics will cause the whole document to use the existing
+Python path during the transition. The native path must never skip an
+individual element and then claim success.
 
 ## Context
 
@@ -84,12 +84,30 @@ decision. Nothing in this dependency selection blocks that later change.
 
 ## Architecture
 
-### 1. Native document front end
+### 1. LunaSVG integration and native document front end
 
-LunaSVG loads the document, resolves its viewport/viewBox, inherited styles,
-references, element transforms, and computed fill/stroke properties. The
-adapter traverses the computed static scene in source draw order and emits a
-typed display list. Basic SVG elements are represented as paths after layout.
+The initial implementation pins a maintained LunaSVG fork starting from
+upstream commit `59690a23981489acc3f73b8db229ef57bb69c544`. The fork adds one
+narrow, versioned paint-command recorder at LunaSVG's actual render traversal
+boundary; `lumina-svg-core` does not reach directly into unversioned private
+classes from its main conversion code. The recorder emits computed fill,
+stroke, transform, clip push/pop, group boundaries, paint order, and source
+element identity after LunaSVG has resolved viewport/viewBox, inheritance,
+references, and layout.
+
+The fork also records every unknown or unsupported element, property, CSS
+rule, paint server, and external resource while parsing/layout occurs. The
+adapter completes this capability scan before returning any geometry. A
+feature that LunaSVG would otherwise ignore therefore makes the whole native
+document `Unsupported` instead of disappearing silently. Upgrade contract
+tests run the same capability and paint-command fixtures whenever the pinned
+LunaSVG revision changes. The recorder is kept as a small upstreamable patch;
+if upstream accepts an equivalent stable API, the fork is retired.
+
+The adapter turns the recorded static display list into print paint
+operations in exact source order. Basic SVG elements are represented as paths
+after layout. Fill and stroke are distinct paint operations rather than one
+combined shape.
 
 The front end classifies document capabilities before expensive geometry work.
 It returns one of:
@@ -111,10 +129,20 @@ physical tolerance in millimetres divided by that actual scale. It never
 assumes a 100-unit SVG width.
 
 Cubic and quadratic curves are subdivided adaptively until their geometric
-error is within the physical tolerance. Arcs are converted without fixed
-point-count sampling. Fill paths retain their nonzero/even-odd rule. Stroke
-paths retain width, joins, caps, miter limit, dash pattern, dash offset, and
-the complete accumulated transform before expansion.
+error is within their allocated physical error budget. Arcs are converted
+without fixed point-count sampling. The conversion from a global physical
+tolerance to a local path tolerance includes the largest singular value of
+the accumulated affine transform, so non-uniform scale and shear cannot
+silently loosen the model-space error bound.
+
+Fill paths retain their nonzero/even-odd rule. Stroke width, dashes, joins,
+caps, and miter limits are expanded in the path's local coordinate system,
+then the completed outline receives the full affine transform. Explicit
+`vector-effect`, marker geometry, unsupported `paint-order`, partial effective
+alpha, and group opacity that produces partial alpha cause whole-document
+fallback in version 0.1. Effective alpha zero is invisible; effective alpha
+one is accepted. This keeps reverse draw-order occlusion valid for the first
+release.
 
 ### 3. Integer polygon kernel
 
@@ -130,8 +158,14 @@ tolerance. Clipper2 performs:
 - final outer-ring/hole hierarchy construction.
 
 The grid is chosen once per document and checked for overflow. Quantization is
-not a second user-visible simplification setting: its maximum displacement is
-bounded by the same physical tolerance already used for curve flattening.
+not a second user-visible simplification setting. One document-level physical
+error budget is divided as follows: at most 40% for curve flattening, at most
+20% for integer quantization, and at least 40% reserved for the existing
+post-analysis normalization/simplification stages. The measured end-to-end
+boundary displacement must remain within the original requested physical
+tolerance. Topology tests additionally reject any budget allocation that
+collapses a component, hole, or separating gap which survives the current
+reference implementation.
 
 Draw-order occlusion uses a spatial index so a shape is compared only with
 later shapes whose bounding boxes overlap. Geometry is processed and released
@@ -140,24 +174,40 @@ copy of every intermediate representation.
 
 ### 4. Native result contract
 
-The public C++ result is a compact structure-of-arrays representation:
+The public C++ result is a compact structure-of-arrays representation with
+three explicit geometry collections: raw paint geometry before occlusion,
+visible geometry after occlusion, and the final silhouette. It contains:
 
-- document bounds and source-to-mm scale;
-- flat `int64` coordinate storage plus one document grid-to-millimetre scale;
+- original document bounds, analysis origin, and source-to-mm scale;
+- flat `int64` internal-grid coordinates plus grid-to-source-unit scale;
 - ring, polygon, component, and color-layer offsets;
 - outer/hole parent relationships;
 - RGBA fill/stroke identity and source draw order;
 - source-element index and source-kind diagnostics;
 - capability and warning reason codes.
 
+All exported geometry is converted back to the same normalized SVG analysis
+domain used by the current parser: `bbox` remains `(gx0, gy0, real_w,
+real_h)` in original SVG user units, geometry is shifted by `(-gx0, -gy0)`,
+and `scale_factor` remains `target_width_mm / real_w`. The internal millimetre
+grid is never exposed as a competing Lumina coordinate authority. In
+particular, PR #585's `LayeredCoordinateDomain` remains the only authoritative
+post-analysis grid; large-format tiling continues to use
+`tile_mm / scale_factor` exactly once.
+
 The C++ API owns no Python objects. Its public contract is independent of
 Lumina, Shapely, 3MF, and printer settings.
 
 ### 5. Python binding and Lumina adapter
 
-The Python package `lumina_svg_core` exposes NumPy-compatible buffers through
-an in-process pybind11 extension. It releases the GIL during parsing and
-geometry work.
+The Python package `lumina_svg_core` exposes read-only NumPy-compatible buffers
+through an in-process pybind11 extension. Coordinates use `int64`, offsets use
+`uint64`, colors use `uint8`, and draw/source indices use `int32`. Ring closure,
+empty collections, parent indices, and collection offsets are part of the
+versioned schema. Each zero-copy view retains a shared native result through a
+pybind capsule; it cannot outlive or mutate its backing storage. Checked size
+arithmetic precedes every allocation. The extension releases the GIL during
+parsing and geometry work.
 
 Lumina adds one adapter in `core/` that:
 
@@ -167,8 +217,13 @@ Lumina adds one adapter in `core/` that:
    invalid-SVG error;
 3. bulk-constructs any Shapely objects still required by existing consumers
    using Shapely's vectorized/ragged-array boundary rather than Python loops;
-4. returns the same `shape_data`, `clipped_shapes`, silhouette, scale, and
+4. returns raw `shape_data`, visible `clipped_shapes`, silhouette, scale, and
    bounds expected by `VectorAnalysis`.
+
+The adapter performs at most one checked `int64`-to-`float64` conversion for
+the Shapely boundary. C++ already returns disconnected components and the
+silhouette, so the adapter does not run a second union, make-valid, occlusion,
+or per-ring Python repair pass.
 
 The API, worker, preview, material matching, large-format, creative-mode,
 mesh, and writer layers continue to consume `VectorAnalysis`. No endpoint or
@@ -184,7 +239,7 @@ Lumina's generated and reported user SVGs:
 - nested affine transforms and viewBox/preserveAspectRatio layout;
 - presentation attributes, inline styles, inherited styles, and supported
   stylesheet selectors used by the compatibility corpus;
-- solid fill and solid stroke colors with opacity;
+- solid fill and solid stroke colors whose effective alpha is zero or one;
 - nonzero and even-odd fill rules;
 - stroke width, join, cap, miter limit, dash array, and dash offset;
 - clip paths that resolve to vector geometry;
@@ -193,9 +248,11 @@ Lumina's generated and reported user SVGs:
 The first release reports `Unsupported` for features that cannot be represented
 as discrete printable color regions without a documented policy, including
 embedded raster images, arbitrary filters, animation, scripts, and unresolved
-external resources. Gradient, mask, pattern, and text behavior must follow the
-current Lumina policy: either a proven native conversion with golden coverage
-or whole-document fallback. They are never silently flattened or skipped.
+external resources. Partial alpha, unsupported group opacity, `vector-effect`,
+markers, and unsupported paint order also return `Unsupported`. Gradient,
+mask, pattern, and text behavior must follow the current Lumina policy: either
+a proven native conversion with golden coverage or whole-document fallback.
+They are never silently flattened or skipped.
 
 ## Error and fallback behavior
 
@@ -259,19 +316,34 @@ Benchmarks separate cold import/build cost from warm document processing.
 Results report three or more warm runs, median and range, peak RSS, coordinate
 count, region count, and output fingerprint.
 
+The reference performance environment is Apple M5 (`Mac17,3`), 16 GiB RAM,
+macOS 26.5.2, Apple clang 21, arm64 Release build, OpenMP disabled, one caller
+thread, target width 111 mm, physical tolerance 0.02 mm, one discarded warm-up,
+and at least three measured warm runs. The benchmark report records this
+manifest so results from another host are labeled rather than compared as the
+same gate.
+
 Acceptance gates are:
 
-1. R4C1 or an explicitly labeled equivalent 14-15 MB static-path fixture:
-   warm median native parse/layout/flatten/clip at or below 1.0 second on the
-   reference host used for the comparison report.
-2. Across the supported benchmark corpus, the warm median native geometry
+1. The public Lumina entry point through complete `VectorAnalysis` return is
+   at or below 1.0 second warm median and 1.25 seconds warm p95 on the reference
+   host. The internal allocation is 0.70 seconds for native
+   parse/layout/flatten/clip, 0.20 seconds for NumPy/Shapely conversion, and
+   0.10 seconds for adapter/orchestration; each segment is reported separately.
+2. Before native-by-default release, the real R4C1 file with SHA-256
+   `da52ef12bdd37a0bd47970649a70582862331a606c151bff05bfb2f6e265f160`
+   must pass. Until it is recovered, the public proxy is explicitly labeled
+   and fixed by SHA-256, byte size, canvas, path count, stroke-only count,
+   transform count, clip count, and color/component/hole fingerprints.
+3. Across the supported benchmark corpus, the warm median native geometry
    stage is faster than the Python reference; individual tiny fixtures are
    correctness gates rather than timing gates.
-3. The available 55 MB regression SVG shows a material speedup and bounded
-   peak RSS; no swap exhaustion, worker death, or host instability occurs.
-4. Native-to-Python result conversion is measured separately and does not
+4. The available 55 MB regression SVG shows a material speedup, peak process
+   RSS at or below 2.0 GiB, and no measurable swap growth above 256 MiB; no
+   worker death or host instability occurs.
+5. Native-to-Python result conversion is measured separately and does not
    recreate a per-coordinate Python hot loop.
-5. Preview and 3MF output retain their established visual/geometry quality;
+6. Preview and 3MF output retain their established visual/geometry quality;
    performance is not accepted if a component, hole, or source color is lost.
 
 The one-second gate is an engineering target for common supported static
@@ -280,17 +352,24 @@ vectors, not a promise for every legal SVG document.
 ## Packaging and release
 
 `lumina-svg-core` uses CMake, pybind11, scikit-build-core, and cibuildwheel.
-CI builds and tests:
+LunaSVG, PlutoVG, and Clipper2 are statically linked into one extension with
+hidden symbols. The first release matrix is CPython 3.12 with:
 
-- Windows x86-64;
-- macOS arm64 and x86-64 where the product supports them;
-- Linux x86-64 with the product's manylinux baseline;
-- supported CPython versions used by Lumina packaging.
+- `win_amd64`, MSVC v143 and the standard Universal CRT;
+- `macosx_12_0_arm64` and `macosx_12_0_x86_64`;
+- `manylinux_2_28_x86_64`.
 
-The wheel contains the native extension and license notices. Lumina pins an
-exact released version in its dependency and desktop/PyInstaller inputs. A
-frozen-runtime contract test imports the native extension and processes a
-small SVG from the actual `_MEIPASS`-style environment.
+`delvewheel`, `delocate`, and `auditwheel` respectively verify and repair the
+three platform wheel families. Supporting another CPython minor or platform
+requires adding it to this matrix and passing the same ABI, correctness, and
+packaging tests; it is not assumed from a source-only build.
+
+The wheel contains the native extension and complete Apache, MIT, Boost, and
+FreeType license texts. Lumina pins an exact released version in its dependency
+and desktop/PyInstaller inputs. Clean virtual environments install and execute
+the wheel before publication. The actual `lumina_studio.spec` one-file backend
+is then built on Windows and processes a real small SVG through the native path
+from its extracted `_MEIPASS` environment; a bare import is not sufficient.
 
 ## Rollout sequence
 
@@ -305,8 +384,10 @@ small SVG from the actual `_MEIPASS`-style environment.
 5. Expand supported semantics only with a failing golden fixture first.
 6. Remove the Python parser only after every legacy fallback reason is either
    implemented natively or routed to the existing raster policy, every golden
-   fixture is native, and 30 consecutive grey-release days record no legacy
-   parser invocation for a successfully generated document.
+   fixture is native, the same release candidate passes the Windows, macOS,
+   and Linux reality suites, and 30 consecutive grey-release days record at
+   least 1,000 successful native documents with no legacy parser invocation
+   for a successfully generated document within the native support contract.
 
 ## Risks and controls
 
