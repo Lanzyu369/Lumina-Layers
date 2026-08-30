@@ -73,3 +73,26 @@ def test_exported_grid_stays_in_normalized_svg_analysis_domain() -> None:
     assert np.all(source_coordinates[:, 1] >= 0.0)
     assert np.all(source_coordinates[:, 0] <= result.bbox[2] + 0.01)
     assert np.all(source_coordinates[:, 1] <= result.bbox[3] + 0.01)
+
+
+def test_collinear_cubic_overshoot_is_not_flattened_to_its_short_chord() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 10 10'>"
+        "<path d='M0 5C100 5 -100 5 10 5' fill='none' "
+        "stroke='#000' stroke-width='1'/>"
+        "</svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.bbox[0] < -15.0
+    assert result.bbox[2] > 40.0
+    source_coordinates = (
+        result.raw.coordinates.astype(np.float64)
+        * result.grid_to_source_unit
+    )
+    assert source_coordinates[:, 0].min() == pytest.approx(0.0, abs=0.02)
+    assert source_coordinates[:, 0].max() == pytest.approx(
+        result.bbox[2], abs=0.02
+    )

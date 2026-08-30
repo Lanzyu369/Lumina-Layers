@@ -380,18 +380,23 @@ SourceBounds exactPaintBounds(const std::vector<lunasvg::PaintCommand>& commands
     return bounds;
 }
 
-double pointLineDistance(const PointD& point,
-                         const PointD& lineStart,
-                         const PointD& lineEnd)
+double pointSegmentDistance(const PointD& point,
+                            const PointD& segmentStart,
+                            const PointD& segmentEnd)
 {
-    const double dx = lineEnd.x - lineStart.x;
-    const double dy = lineEnd.y - lineStart.y;
-    const double length = std::hypot(dx, dy);
-    if(length <= std::numeric_limits<double>::epsilon())
-        return std::hypot(point.x - lineStart.x, point.y - lineStart.y);
-    return std::abs(dy * point.x - dx * point.y
-                    + lineEnd.x * lineStart.y - lineEnd.y * lineStart.x)
-        / length;
+    const double dx = segmentEnd.x - segmentStart.x;
+    const double dy = segmentEnd.y - segmentStart.y;
+    const double lengthSquared = dx * dx + dy * dy;
+    if(lengthSquared <= std::numeric_limits<double>::epsilon())
+        return std::hypot(point.x - segmentStart.x,
+                          point.y - segmentStart.y);
+    const double projection = std::clamp(
+        ((point.x - segmentStart.x) * dx
+         + (point.y - segmentStart.y) * dy) / lengthSquared,
+        0.0, 1.0);
+    return std::hypot(
+        point.x - (segmentStart.x + projection * dx),
+        point.y - (segmentStart.y + projection * dy));
 }
 
 void flattenCubic(const PointD& start, const PointD& control1,
@@ -400,8 +405,8 @@ void flattenCubic(const PointD& start, const PointD& control1,
                   std::vector<PointD>& output)
 {
     if(depth >= 32
-            || (pointLineDistance(control1, start, end) <= tolerance
-                && pointLineDistance(control2, start, end) <= tolerance)) {
+            || (pointSegmentDistance(control1, start, end) <= tolerance
+                && pointSegmentDistance(control2, start, end) <= tolerance)) {
         output.push_back(end);
         return;
     }

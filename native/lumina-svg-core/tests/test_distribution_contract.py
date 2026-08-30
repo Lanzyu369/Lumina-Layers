@@ -25,6 +25,29 @@ def test_distribution_pins_native_dependencies_and_licenses() -> None:
     assert "FreeType" in notices
 
 
+def test_distribution_carries_complete_third_party_license_texts() -> None:
+    licenses = PACKAGE_ROOT / "THIRD_PARTY_LICENSES"
+    expected_markers = {
+        "LunaSVG.txt": "Permission is hereby granted, free of charge",
+        "PlutoVG.txt": "Permission is hereby granted, free of charge",
+        "Clipper2.txt": "Boost Software License - Version 1.0",
+        "FreeType-Project.txt": "The FreeType Project LICENSE",
+        "stb.txt": "This software is available under 2 licenses",
+    }
+
+    for filename, marker in expected_markers.items():
+        license_text = (licenses / filename).read_text(encoding="utf-8")
+        assert marker in license_text
+
+    metadata = tomllib.loads(
+        (PACKAGE_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    assert "THIRD_PARTY_LICENSES/*" in metadata["project"]["license-files"]
+    assert "THIRD_PARTY_LICENSES/**" in metadata["tool"]["scikit-build"][
+        "sdist"
+    ]["include"]
+
+
 def test_python_distribution_is_exactly_versioned_for_cpython_312() -> None:
     metadata = tomllib.loads(
         (PACKAGE_ROOT / "pyproject.toml").read_text(encoding="utf-8")
@@ -37,6 +60,7 @@ def test_python_distribution_is_exactly_versioned_for_cpython_312() -> None:
     assert metadata["project"]["license-files"] == [
         "LICENSE",
         "THIRD_PARTY_NOTICES.md",
+        "THIRD_PARTY_LICENSES/*",
     ]
 
 

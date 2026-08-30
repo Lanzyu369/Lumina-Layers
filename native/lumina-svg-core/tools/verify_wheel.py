@@ -13,6 +13,17 @@ def verify_wheel(path: Path) -> None:
     assert any(name.endswith((".pyd", ".so")) for name in names)
     assert any(name.endswith("LICENSE") for name in names)
     assert any(name.endswith("THIRD_PARTY_NOTICES.md") for name in names)
+    for license_name in (
+        "Clipper2.txt",
+        "FreeType-Project.txt",
+        "LunaSVG.txt",
+        "PlutoVG.txt",
+        "stb.txt",
+    ):
+        assert any(
+            name.endswith(f"THIRD_PARTY_LICENSES/{license_name}")
+            for name in names
+        )
     assert not any(name.endswith((".a", ".lib")) for name in names)
     assert not any("/include/" in name or "/cmake/" in name for name in names)
 

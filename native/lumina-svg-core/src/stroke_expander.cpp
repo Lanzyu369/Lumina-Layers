@@ -20,18 +20,23 @@ struct LocalSubpath {
     bool closed{false};
 };
 
-double pointLineDistance(const LocalPoint& point,
-                         const LocalPoint& lineStart,
-                         const LocalPoint& lineEnd)
+double pointSegmentDistance(const LocalPoint& point,
+                            const LocalPoint& segmentStart,
+                            const LocalPoint& segmentEnd)
 {
-    const double dx = lineEnd.x - lineStart.x;
-    const double dy = lineEnd.y - lineStart.y;
-    const double length = std::hypot(dx, dy);
-    if(length <= std::numeric_limits<double>::epsilon())
-        return std::hypot(point.x - lineStart.x, point.y - lineStart.y);
-    return std::abs(dy * point.x - dx * point.y
-                    + lineEnd.x * lineStart.y - lineEnd.y * lineStart.x)
-        / length;
+    const double dx = segmentEnd.x - segmentStart.x;
+    const double dy = segmentEnd.y - segmentStart.y;
+    const double lengthSquared = dx * dx + dy * dy;
+    if(lengthSquared <= std::numeric_limits<double>::epsilon())
+        return std::hypot(point.x - segmentStart.x,
+                          point.y - segmentStart.y);
+    const double projection = std::clamp(
+        ((point.x - segmentStart.x) * dx
+         + (point.y - segmentStart.y) * dy) / lengthSquared,
+        0.0, 1.0);
+    return std::hypot(
+        point.x - (segmentStart.x + projection * dx),
+        point.y - (segmentStart.y + projection * dy));
 }
 
 void flattenCubic(const LocalPoint& start, const LocalPoint& control1,
@@ -39,8 +44,8 @@ void flattenCubic(const LocalPoint& start, const LocalPoint& control1,
                   double tolerance, unsigned depth, LocalPath& output)
 {
     if(depth >= 32
-            || (pointLineDistance(control1, start, end) <= tolerance
-                && pointLineDistance(control2, start, end) <= tolerance)) {
+            || (pointSegmentDistance(control1, start, end) <= tolerance
+                && pointSegmentDistance(control2, start, end) <= tolerance)) {
         output.push_back(end);
         return;
     }

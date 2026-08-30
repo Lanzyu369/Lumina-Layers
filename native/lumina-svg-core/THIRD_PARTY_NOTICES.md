@@ -2,7 +2,7 @@
 
 `lumina-svg-core` statically links the following pinned source dependencies.
 Their original notices and complete license texts are retained in source and
-binary distributions.
+binary distributions under `THIRD_PARTY_LICENSES/`.
 
 ## LunaSVG
 
@@ -33,5 +33,12 @@ at `patches/lunasvg-paint-recorder.patch`.
 ## FreeType-derived stroker and raster files
 
 PlutoVG contains FreeType-derived stroker and raster files with their own
-file-level FreeType Project notices. Those notices remain verbatim in the
-corresponding PlutoVG source files and are included in source distributions.
+file-level FreeType Project notices. The complete FreeType Project License is
+distributed as `THIRD_PARTY_LICENSES/FreeType-Project.txt`.
+Portions of this software are based in part on the work of the FreeType Team.
+
+## stb single-file libraries
+
+PlutoVG compiles the bundled stb image, image-write, and TrueType headers.
+Their dual MIT/public-domain notice is distributed as
+`THIRD_PARTY_LICENSES/stb.txt`.
