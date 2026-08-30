@@ -1,0 +1,144 @@
+"""Contract for complete Lumina native-SVG benchmark evidence."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+MANIFEST_PATH = REPO_ROOT / "progress" / "native-svg-fast-path-benchmark.json"
+PROXY_PATH = REPO_ROOT / "test_images" / "benchmark.svg"
+REAL_R4C1_SHA256 = (
+    "da52ef12bdd37a0bd47970649a70582862331a606c151bff05bfb2f6e265f160"
+)
+
+
+def _load_manifest() -> dict:
+    return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+def test_complete_vector_analysis_benchmark_is_reproducible() -> None:
+    manifest = _load_manifest()
+
+    assert manifest["schema_version"] == 1
+    assert manifest["entrypoint"] == (
+        "core.vector_engine.VectorProcessor.analyze_svg"
+    )
+
+    fixture = manifest["fixture"]
+    proxy_bytes = PROXY_PATH.read_bytes()
+    assert fixture["path"] == "test_images/benchmark.svg"
+    assert fixture["classification"] == "proxy"
+    assert fixture["sha256"] == hashlib.sha256(proxy_bytes).hexdigest()
+    assert fixture["sha256"] != REAL_R4C1_SHA256
+    assert fixture["byte_size"] == len(proxy_bytes)
+    assert len(fixture["canvas_user_units"]) == 2
+    for key in (
+        "path_count",
+        "stroke_count",
+        "stroke_only_count",
+        "transform_count",
+        "clip_count",
+    ):
+        assert fixture[key] >= 0
+
+    parameters = manifest["parameters"]
+    assert parameters == {
+        "target_width_mm": 111.0,
+        "tolerance_mm": 0.02,
+        "build_type": "Release",
+        "openmp_enabled": False,
+        "caller_threads": 1,
+    }
+
+    host = manifest["host"]
+    for key in (
+        "platform",
+        "platform_release",
+        "machine",
+        "processor",
+        "python",
+        "cpu_count",
+        "memory_bytes",
+    ):
+        assert host[key]
+
+    measurement = manifest["measurement"]
+    assert measurement["warmup_runs"] == 1
+    assert len(measurement["warm_runs_seconds"]) >= 3
+    assert measurement["cache_policy"] == {
+        "memory_cache_cleared_before_each_run": True,
+        "artifact_cache_disabled": True,
+    }
+    for key in (
+        "median_seconds",
+        "p95_seconds",
+        "range_seconds",
+        "native_recorder_seconds",
+        "native_kernel_seconds",
+        "native_binding_conversion_seconds",
+        "native_adapter_conversion_seconds",
+        "native_geometry_total_seconds",
+        "color_match_seconds",
+        "orchestration_seconds",
+    ):
+        assert measurement[key] >= 0
+    assert measurement["median_seconds"] > 0
+    assert measurement["p95_seconds"] >= min(
+        measurement["warm_runs_seconds"]
+    )
+    assert measurement["peak_rss_bytes"] > 0
+    assert measurement["swap_delta_bytes"] >= 0
+    assert measurement["median_threshold_seconds"] == 1.0
+    assert measurement["p95_threshold_seconds"] == 1.25
+    assert measurement["median_threshold_passed"] == (
+        measurement["median_seconds"] <= 1.0
+    )
+    assert measurement["p95_threshold_passed"] == (
+        measurement["p95_seconds"] <= 1.25
+    )
+
+    output = manifest["output"]
+    assert output["geometry_backend"] == "native"
+    assert output["native_cache_hit"] is False
+    assert output["raw_shape_count"] > 0
+    assert output["visible_shape_count"] > 0
+    assert output["matched_shape_count"] == output["visible_shape_count"]
+    assert output["silhouette_component_count"] > 0
+    assert output["coordinate_count"] > 0
+    assert len(output["fingerprint"]) == 64
+    assert output["stable_across_runs"] is True
+
+
+def test_real_r4c1_and_large_regression_are_not_substituted() -> None:
+    manifest = _load_manifest()
+
+    real = manifest["real_r4c1"]
+    assert real["classification"] == "real_r4c1"
+    assert real["sha256"] == REAL_R4C1_SHA256
+    assert real["byte_size"] == 14_467_678
+    assert real["status"] == "unsupported"
+    assert real["reason_code"] == "unsupported_vector_effect"
+    assert real["native_by_default_ready"] is False
+
+    large = manifest["large_regression"]
+    assert large["minimum_byte_size"] == 50 * 1024 * 1024
+    assert large["status"] in {"measured", "unavailable"}
+    assert large["classification"] == "large_regression"
+    assert large["classification"] != fixture_classification(manifest)
+    assert large["searched_roots"]
+    if large["status"] == "measured":
+        assert large["byte_size"] >= large["minimum_byte_size"]
+        assert len(large["sha256"]) == 64
+        assert large["peak_rss_bytes"] <= 2 * 1024**3
+        assert large["swap_delta_bytes"] <= 256 * 1024**2
+    else:
+        assert large["matching_files"] == []
+
+
+def fixture_classification(manifest: dict) -> str:
+    """Return the public proxy classification for an explicit comparison."""
+
+    return manifest["fixture"]["classification"]
