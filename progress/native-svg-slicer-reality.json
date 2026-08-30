@@ -1,0 +1,293 @@
+{
+  "artifacts": {
+    "analysis": {
+      "bbox": [
+        0.0,
+        0.0,
+        100.0,
+        60.0
+      ],
+      "matched_shape_count": 3,
+      "raw_shape_count": 3,
+      "scale_factor": 0.4,
+      "visible_shape_count": 3
+    },
+    "fixture": {
+      "path": "tests/fixtures/native_svg/clip_inherited_fill.svg",
+      "sha256": "1256936a15d17f9039a120271478b9df6a9c95c72f43bf140814ec97a3a40a01"
+    },
+    "geometry_backend": "native",
+    "glb": {
+      "byte_size": 6036,
+      "geometry_count": 5,
+      "path": "native-svg-reality.glb",
+      "sha256": "b927f70aac4e9863f3e0f398c6a097ac95fc628029ffe9bbb479e6f8002345e7"
+    },
+    "native_version": "0.1.0",
+    "projects": {
+      "BambuStudio": {
+        "build_item_count": 1,
+        "byte_size": 33071,
+        "material_count": 5,
+        "object_count": 6,
+        "part_names": [
+          "Blue",
+          "Board",
+          "Red",
+          "White",
+          "Yellow"
+        ],
+        "path": "native-svg-BambuStudio.3mf",
+        "sha256": "a369d31d75fe299eb47d1f4d2f9300c0e3c8cf437f82b52282a62627766731c4",
+        "triangle_count": 252
+      },
+      "OrcaSlicer": {
+        "build_item_count": 1,
+        "byte_size": 32107,
+        "material_count": 5,
+        "object_count": 6,
+        "part_names": [
+          "Blue",
+          "Board",
+          "Red",
+          "White",
+          "Yellow"
+        ],
+        "path": "native-svg-OrcaSlicer.3mf",
+        "sha256": "c1e2f452609a5bec0e2b7e5af4d17301033c8007634cea1fea6e0236a566e944",
+        "triangle_count": 252
+      }
+    },
+    "schema_version": 1,
+    "status": "generated"
+  },
+  "host": {
+    "machine": "arm64",
+    "platform": "macOS-26.5.2-arm64-arm-64bit",
+    "python": "3.12.13"
+  },
+  "schema_version": 1,
+  "slicers": {
+    "BambuStudio": {
+      "command": [
+        "/Applications/BambuStudio.app/Contents/MacOS/BambuStudio",
+        "--debug",
+        "1",
+        "--allow-newer-file",
+        "--slice",
+        "0",
+        "--outputdir",
+        "/private/tmp/lumina-native-svg-reality-20260831-e/toolpaths/BambuStudio/run-1-rm9kb9xt",
+        "/private/tmp/lumina-native-svg-reality-20260831-e/native-svg-BambuStudio.3mf"
+      ],
+      "duration_seconds": 0.24713,
+      "executable": "/Applications/BambuStudio.app/Contents/MacOS/BambuStudio",
+      "exit_code": 0,
+      "input": {
+        "build_item_count": 1,
+        "byte_size": 33071,
+        "material_count": 5,
+        "object_count": 6,
+        "part_names": [
+          "Blue",
+          "Board",
+          "Red",
+          "White",
+          "Yellow"
+        ],
+        "path": "native-svg-BambuStudio.3mf",
+        "sha256": "a369d31d75fe299eb47d1f4d2f9300c0e3c8cf437f82b52282a62627766731c4",
+        "triangle_count": 252
+      },
+      "reason": "",
+      "runs": [
+        {
+          "command": [
+            "/Applications/BambuStudio.app/Contents/MacOS/BambuStudio",
+            "--debug",
+            "1",
+            "--allow-newer-file",
+            "--slice",
+            "0",
+            "--outputdir",
+            "/private/tmp/lumina-native-svg-reality-20260831-e/toolpaths/BambuStudio/run-1-rm9kb9xt",
+            "/private/tmp/lumina-native-svg-reality-20260831-e/native-svg-BambuStudio.3mf"
+          ],
+          "duration_seconds": 0.121577,
+          "exit_code": 0,
+          "output_directory": "run-1-rm9kb9xt",
+          "reason": "",
+          "status": "passed",
+          "stderr_tail": "",
+          "stdout_tail": "[2026-08-31 05:15:30.117867] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
+          "toolpath": {
+            "extrusion_move_count": 5162,
+            "fingerprint": "28eaadb260b9eaf5a5140db4e62f9f5e0a2f30b210a32a9b5aea828e379105c1",
+            "motion_command_count": 6249,
+            "normalized_byte_size": 158672,
+            "tool_change_count": 13
+          },
+          "toolpath_files": [
+            "plate_1.gcode"
+          ]
+        },
+        {
+          "command": [
+            "/Applications/BambuStudio.app/Contents/MacOS/BambuStudio",
+            "--debug",
+            "1",
+            "--allow-newer-file",
+            "--slice",
+            "0",
+            "--outputdir",
+            "/private/tmp/lumina-native-svg-reality-20260831-e/toolpaths/BambuStudio/run-2-1kh0czxa",
+            "/private/tmp/lumina-native-svg-reality-20260831-e/native-svg-BambuStudio.3mf"
+          ],
+          "duration_seconds": 0.125553,
+          "exit_code": 0,
+          "output_directory": "run-2-1kh0czxa",
+          "reason": "",
+          "status": "passed",
+          "stderr_tail": "",
+          "stdout_tail": "[2026-08-31 05:15:30.247845] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
+          "toolpath": {
+            "extrusion_move_count": 5162,
+            "fingerprint": "28eaadb260b9eaf5a5140db4e62f9f5e0a2f30b210a32a9b5aea828e379105c1",
+            "motion_command_count": 6249,
+            "normalized_byte_size": 158672,
+            "tool_change_count": 13
+          },
+          "toolpath_files": [
+            "plate_1.gcode"
+          ]
+        }
+      ],
+      "stable_across_runs": true,
+      "status": "passed",
+      "stderr_tail": "",
+      "stdout_tail": "[2026-08-31 05:15:30.117867] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
+      "toolpath": {
+        "extrusion_move_count": 5162,
+        "fingerprint": "28eaadb260b9eaf5a5140db4e62f9f5e0a2f30b210a32a9b5aea828e379105c1",
+        "motion_command_count": 6249,
+        "normalized_byte_size": 158672,
+        "tool_change_count": 13
+      },
+      "toolpath_files": [
+        "plate_1.gcode"
+      ],
+      "version": "BambuStudio-02.07.01.62"
+    },
+    "OrcaSlicer": {
+      "command": [
+        "/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer",
+        "--debug",
+        "1",
+        "--allow-newer-file",
+        "--slice",
+        "0",
+        "--outputdir",
+        "/private/tmp/lumina-native-svg-reality-20260831-e/toolpaths/OrcaSlicer/run-1-_ytae_zv",
+        "/private/tmp/lumina-native-svg-reality-20260831-e/native-svg-OrcaSlicer.3mf"
+      ],
+      "duration_seconds": 0.242888,
+      "executable": "/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer",
+      "exit_code": 0,
+      "input": {
+        "build_item_count": 1,
+        "byte_size": 32107,
+        "material_count": 5,
+        "object_count": 6,
+        "part_names": [
+          "Blue",
+          "Board",
+          "Red",
+          "White",
+          "Yellow"
+        ],
+        "path": "native-svg-OrcaSlicer.3mf",
+        "sha256": "c1e2f452609a5bec0e2b7e5af4d17301033c8007634cea1fea6e0236a566e944",
+        "triangle_count": 252
+      },
+      "reason": "",
+      "runs": [
+        {
+          "command": [
+            "/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer",
+            "--debug",
+            "1",
+            "--allow-newer-file",
+            "--slice",
+            "0",
+            "--outputdir",
+            "/private/tmp/lumina-native-svg-reality-20260831-e/toolpaths/OrcaSlicer/run-1-_ytae_zv",
+            "/private/tmp/lumina-native-svg-reality-20260831-e/native-svg-OrcaSlicer.3mf"
+          ],
+          "duration_seconds": 0.122827,
+          "exit_code": 0,
+          "output_directory": "run-1-_ytae_zv",
+          "reason": "",
+          "status": "passed",
+          "stderr_tail": "",
+          "stdout_tail": "",
+          "toolpath": {
+            "extrusion_move_count": 5358,
+            "fingerprint": "2c8886b64c794555715b99be6a00afba3d4dbee68cd55b3f69363b76b2756c00",
+            "motion_command_count": 6724,
+            "normalized_byte_size": 168625,
+            "tool_change_count": 13
+          },
+          "toolpath_files": [
+            "plate_1.gcode"
+          ]
+        },
+        {
+          "command": [
+            "/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer",
+            "--debug",
+            "1",
+            "--allow-newer-file",
+            "--slice",
+            "0",
+            "--outputdir",
+            "/private/tmp/lumina-native-svg-reality-20260831-e/toolpaths/OrcaSlicer/run-2-fbi8ebp6",
+            "/private/tmp/lumina-native-svg-reality-20260831-e/native-svg-OrcaSlicer.3mf"
+          ],
+          "duration_seconds": 0.120061,
+          "exit_code": 0,
+          "output_directory": "run-2-fbi8ebp6",
+          "reason": "",
+          "status": "passed",
+          "stderr_tail": "",
+          "stdout_tail": "",
+          "toolpath": {
+            "extrusion_move_count": 5358,
+            "fingerprint": "2c8886b64c794555715b99be6a00afba3d4dbee68cd55b3f69363b76b2756c00",
+            "motion_command_count": 6724,
+            "normalized_byte_size": 168625,
+            "tool_change_count": 13
+          },
+          "toolpath_files": [
+            "plate_1.gcode"
+          ]
+        }
+      ],
+      "stable_across_runs": true,
+      "status": "passed",
+      "stderr_tail": "",
+      "stdout_tail": "",
+      "toolpath": {
+        "extrusion_move_count": 5358,
+        "fingerprint": "2c8886b64c794555715b99be6a00afba3d4dbee68cd55b3f69363b76b2756c00",
+        "motion_command_count": 6724,
+        "normalized_byte_size": 168625,
+        "tool_change_count": 13
+      },
+      "toolpath_files": [
+        "plate_1.gcode"
+      ],
+      "version": "OrcaSlicer-2.4.0"
+    }
+  },
+  "status": "passed"
+}

@@ -5,6 +5,21 @@ on:
     branches: [dev-refactor, main]
     paths:
       - "native/lumina-svg-core/**"
+      - "core/native_svg_adapter.py"
+      - "core/vector_engine.py"
+      - "tests/fixtures/native_svg/**"
+      - "tests/test_native_svg_*.py"
+      - "scripts/benchmark_native_svg_analysis.py"
+      - "scripts/verify_native_svg_slicer_outputs.py"
+      - "docs/native-svg-fast-path-validation.md"
+      - "progress/native-svg-fast-path-benchmark.json"
+      - "progress/native-svg-slicer-reality.json"
+      - "requirements-native-svg.txt"
+      - "requirements.txt"
+      - "requirements-glb-v2.txt"
+      - "Dockerfile"
+      - "lumina_studio.spec"
+      - "api_server.py"
       - ".github/workflows/native-svg-core.yml"
   workflow_dispatch:
 
@@ -34,13 +49,167 @@ jobs:
     env:
       CIBW_BUILD: ${{ matrix.build }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - uses: pypa/cibuildwheel@v4.2.0
         with:
           package-dir: native/lumina-svg-core
           output-dir: wheelhouse
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install and exercise the repaired wheel
+        shell: bash
+        run: |
+          python -m pip install --force-reinstall wheelhouse/*.whl pytest
+          python native/lumina-svg-core/tools/verify_wheel.py --installed
+          (cd native/lumina-svg-core && python -m pytest tests -q)
+          python - <<'PY'
+          from pathlib import Path
+          import lumina_svg_core
+
+          fixture = Path("native/lumina-svg-core/tests/fixtures/fill_rules_transforms.svg")
+          result = lumina_svg_core.analyze_svg(fixture, 111.0, 0.02)
+          assert result.status == "supported", result.reason_code
+          assert result.raw.geometry_count > 0
+          assert result.visible.geometry_count > 0
+          assert result.silhouette.geometry_count == 1
+          print(lumina_svg_core.__version__, result.visible.geometry_count)
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: lumina-svg-core-${{ matrix.id }}
           path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  product-artifacts:
+    name: product-artifacts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-glb-v2.txt
+      - name: Install Lumina production dependencies
+        run: >-
+          python -m pip install
+          -r requirements.txt
+          -r requirements-glb-v2.txt
+      - name: Exercise native product workflows
+        run: >-
+          python -m pytest
+          tests/test_native_svg_adapter_unit.py
+          tests/test_native_svg_differential_unit.py
+          tests/test_native_svg_fallback_properties.py
+          tests/test_native_svg_workflow_integration.py
+          tests/test_native_svg_packaging_contract_unit.py
+          -q
+      - name: Generate representative GLB and 3MF artifacts
+        run: >-
+          python scripts/verify_native_svg_slicer_outputs.py
+          --generate-only
+          --artifact-dir native-svg-reality
+          --report native-svg-reality/generation-report.json
+      - name: Record unavailable hosted-runner slicer boundary
+        shell: bash
+        run: |
+          set +e
+          python scripts/verify_native_svg_slicer_outputs.py \
+            --no-auto-detect \
+            --artifact-dir native-svg-reality \
+            --bambu-3mf native-svg-reality/native-svg-BambuStudio.3mf \
+            --orca-3mf native-svg-reality/native-svg-OrcaSlicer.3mf \
+            --report native-svg-reality/hosted-runner-slicer-report.json
+          reality_exit=$?
+          set -e
+          if [ "$reality_exit" -ne 20 ]; then
+            echo "Expected reality_dependency_unavailable (20), got $reality_exit"
+            exit 1
+          fi
+      - name: Measure the complete public VectorAnalysis path
+        run: >-
+          python scripts/benchmark_native_svg_analysis.py
+          --large-search-root workspace=${{ github.workspace }}
+          --output native-svg-reality/public-entry-benchmark.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lumina-native-svg-reality
+          path: native-svg-reality/
+          if-no-files-found: error
+
+  docker-reality:
+    name: docker-reality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the production Docker image
+        run: docker build --tag lumina-native-svg:${{ github.sha }} .
+      - name: Probe the installed native runtime through Lumina
+        run: >-
+          docker run --rm lumina-native-svg:${{ github.sha }}
+          python api_server.py --native-svg-self-test
+          tests/fixtures/native_svg/fill_rules_transforms.svg
+          > native-svg-docker-probe.json
+      - name: Exercise packaged product semantics
+        run: >-
+          docker run --rm lumina-native-svg:${{ github.sha }}
+          python -m pytest
+          tests/test_native_svg_workflow_integration.py
+          tests/test_native_svg_packaging_contract_unit.py
+          -q
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lumina-native-svg-docker-probe
+          path: native-svg-docker-probe.json
+          if-no-files-found: error
+
+  windows-onefile-reality:
+    name: windows-onefile-reality
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-glb-v2.txt
+      - name: Install desktop packaging dependencies
+        run: >-
+          python -m pip install
+          pyinstaller
+          -r requirements.txt
+          -r requirements-glb-v2.txt
+      - name: Build the production onefile executable
+        run: pyinstaller --noconfirm --clean lumina_studio.spec
+      - name: Probe the frozen native extension
+        shell: pwsh
+        run: |
+          $probeOutput = & .\dist\lumina-backend.exe `
+            --native-svg-self-test `
+            tests\fixtures\native_svg\fill_rules_transforms.svg 2>&1
+          $probeExit = $LASTEXITCODE
+          $probeOutput | Set-Content -Encoding utf8 native-svg-onefile-probe.jsonl
+          if ($probeExit -ne 0) {
+            $probeOutput | Write-Host
+            throw "Frozen native SVG probe exited with $probeExit"
+          }
+          $jsonLine = $probeOutput | Where-Object { $_ -match '^\{' } | Select-Object -Last 1
+          $payload = $jsonLine | ConvertFrom-Json
+          if ($payload.status -ne "ok" -or $payload.geometry_backend -ne "native") {
+            throw "Frozen probe did not execute the native backend"
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lumina-native-svg-windows-onefile
+          path: |
+            dist/lumina-backend.exe
+            native-svg-onefile-probe.jsonl
           if-no-files-found: error
