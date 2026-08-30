@@ -1958,6 +1958,7 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
                 _VECTOR_PARSE_CLIP_CACHE,
                 _serialize_vector_parse_clip_cache,
                 _vector_parse_clip_cache_key,
+                _vector_parse_clip_cache_provenance,
             )
 
             cache_key = _vector_parse_clip_cache_key(
@@ -1982,6 +1983,9 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
             cache["vector_parse_clip_cache_blob"] = _serialize_vector_parse_clip_cache(
                 cache_key,
                 cache_entry,
+            )
+            cache["vector_parse_clip_cache_provenance"] = (
+                _vector_parse_clip_cache_provenance(cache_key)
             )
         except COORDINATOR_HANDLED_ERRORS as exc:
             log.debug(

@@ -31,6 +31,9 @@ from trimesh.visual.material import PBRMaterial
 from api.structured_logging import get_logger
 from config import PrinterConfig
 from core.errors import VectorMeshMemoryBudgetError
+from core.vector_engine import (
+    _load_vector_parse_clip_cache_artifact_by_provenance,
+)
 from core.pipeline.s11_glb_preview import (
     PREVIEW_CANVAS_BOUNDS_NODE_NAME,
     _build_color_extruded_mesh_v2,
@@ -48,8 +51,157 @@ _GLTF_UINT16_MAX_INDEX = 65535
 _GLTF_QUANTIZATION_EXTENSION = "KHR_mesh_quantization"
 _V2_UINT16_CHUNK_VERTEX_LIMIT = _GLTF_UINT16_MAX_INDEX + 1
 _V2_VECTOR_COMPONENT_COMPOSE_CHUNK_SIZE = 64
+_VECTOR_QUICK_PREVIEW_MAX_BYTES = 64 * 1024 * 1024
+_VECTOR_QUICK_PREVIEW_MAX_SHAPES = 10_000
+_VECTOR_QUICK_PREVIEW_MAX_COORDINATES = 4_000_000
 
 VectorPreviewRole = Literal["color", "backing", "outline", "auxiliary"]
+
+
+@dataclass(frozen=True)
+class VectorQuickPreviewSourceV1:
+    """Validated session-owned geometry for rebuilding a lightweight preview.
+
+    用于重建轻量预览、已经过 provenance 与资源上限校验的会话几何。
+    """
+
+    provenance: str
+    shape_data: tuple[dict, ...]
+    clipped_shapes: tuple[dict, ...]
+    silhouette: BaseGeometry
+    image_vectorizer_bounds: BaseGeometry | None
+    scale_factor: float
+    bbox: tuple[float, float, float, float]
+
+
+def _quick_preview_geometry_coordinate_count(geometry: BaseGeometry) -> int | None:
+    if isinstance(geometry, Polygon):
+        return len(geometry.exterior.coords) + sum(
+            len(ring.coords) for ring in geometry.interiors
+        )
+    if isinstance(geometry, MultiPolygon):
+        total = 0
+        for polygon in geometry.geoms:
+            count = _quick_preview_geometry_coordinate_count(polygon)
+            if count is None:
+                return None
+            total += count
+        return total
+    return None
+
+
+def _validate_quick_preview_geometry(
+    geometry: object,
+) -> tuple[BaseGeometry, int] | None:
+    if not isinstance(geometry, (Polygon, MultiPolygon)):
+        return None
+    if geometry.is_empty or not geometry.is_valid:
+        return None
+    try:
+        bounds = np.asarray(geometry.bounds, dtype=np.float64)
+    except (TypeError, ValueError):
+        return None
+    if bounds.shape != (4,) or not np.isfinite(bounds).all():
+        return None
+    coordinate_count = _quick_preview_geometry_coordinate_count(geometry)
+    if coordinate_count is None or coordinate_count <= 0:
+        return None
+    return geometry, coordinate_count
+
+
+def load_vector_quick_preview_source(
+    path: str,
+    *,
+    expected_provenance: str,
+    max_bytes: int = _VECTOR_QUICK_PREVIEW_MAX_BYTES,
+    max_shapes: int = _VECTOR_QUICK_PREVIEW_MAX_SHAPES,
+    max_coordinates: int = _VECTOR_QUICK_PREVIEW_MAX_COORDINATES,
+) -> VectorQuickPreviewSourceV1 | None:
+    """Load one bounded Vector preview source with an external identity check.
+
+    ``expected_provenance`` must come from the owning session metadata; the
+    artifact's self-declared identity is never accepted on its own.
+
+    从会话持有的 provenance 校验并加载有资源上限的 Vector 预览源；不会仅凭
+    工件自报身份接受复用。
+    """
+
+    if not path or max_bytes <= 0 or max_shapes <= 0 or max_coordinates <= 0:
+        return None
+    try:
+        if os.path.getsize(path) > int(max_bytes):
+            return None
+    except OSError:
+        return None
+    entry = _load_vector_parse_clip_cache_artifact_by_provenance(
+        path,
+        expected_provenance,
+    )
+    if entry is None:
+        return None
+
+    shape_data = entry.get("shape_data")
+    clipped_shapes = entry.get("clipped_shapes")
+    if not isinstance(shape_data, list) or not isinstance(clipped_shapes, list):
+        return None
+    if len(shape_data) + len(clipped_shapes) > int(max_shapes):
+        return None
+
+    coordinate_count = 0
+    for items, geometry_key in (
+        (shape_data, "poly"),
+        (clipped_shapes, "geometry"),
+    ):
+        for item in items:
+            if not isinstance(item, dict):
+                return None
+            validated = _validate_quick_preview_geometry(item.get(geometry_key))
+            if validated is None:
+                return None
+            coordinate_count += validated[1]
+            if coordinate_count > int(max_coordinates):
+                return None
+
+    silhouette_result = _validate_quick_preview_geometry(entry.get("silhouette"))
+    if silhouette_result is None:
+        return None
+    silhouette, silhouette_coordinates = silhouette_result
+    coordinate_count += silhouette_coordinates
+
+    image_bounds = entry.get("image_vectorizer_bounds")
+    if image_bounds is not None:
+        bounds_result = _validate_quick_preview_geometry(image_bounds)
+        if bounds_result is None:
+            return None
+        image_bounds, bounds_coordinates = bounds_result
+        coordinate_count += bounds_coordinates
+    if coordinate_count > int(max_coordinates):
+        return None
+
+    try:
+        scale_factor = float(entry.get("scale_factor"))
+        bbox = tuple(float(value) for value in entry.get("bbox"))
+    except (TypeError, ValueError):
+        return None
+    if (
+        not np.isfinite(scale_factor)
+        or scale_factor <= 0
+        or len(bbox) != 4
+        or not np.isfinite(np.asarray(bbox, dtype=np.float64)).all()
+        or bbox[2] <= 0
+        or bbox[3] <= 0
+    ):
+        return None
+
+    return VectorQuickPreviewSourceV1(
+        provenance=expected_provenance,
+        shape_data=tuple(dict(item) for item in shape_data),
+        clipped_shapes=tuple(dict(item) for item in clipped_shapes),
+        silhouette=silhouette,
+        image_vectorizer_bounds=image_bounds,
+        scale_factor=scale_factor,
+        bbox=(bbox[0], bbox[1], bbox[2], bbox[3]),
+    )
 
 
 @dataclass(frozen=True)

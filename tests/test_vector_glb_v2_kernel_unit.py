@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+import pickle
 import struct
 import sys
 from types import SimpleNamespace
@@ -16,6 +17,7 @@ from shapely.geometry import box
 from shapely.ops import unary_union
 
 from core.pipeline import vector_glb_preview
+import core.vector_engine as vector_engine
 from core.errors import VectorMeshMemoryBudgetError
 
 
@@ -97,6 +99,106 @@ def _analysis_for_v2_test() -> SimpleNamespace:
             "Board": [240, 240, 240, 255],
             "Outline": [20, 20, 20, 255],
         },
+    )
+
+
+def _write_quick_preview_source(tmp_path: Path) -> tuple[Path, str]:
+    svg_path = tmp_path / "source.svg"
+    svg_path.write_text("<svg/>", encoding="utf-8")
+    geometry = box(0, 0, 4, 2)
+    cache_key = vector_engine._vector_parse_clip_cache_key(
+        str(svg_path),
+        target_width_mm=40.0,
+        sampling_precision=0.02,
+        expand_stroke_to_fill=False,
+        gradient_color_bands=None,
+    )
+    artifact_path = tmp_path / "parse_clip.pkl"
+    artifact_path.write_bytes(
+        vector_engine._serialize_vector_parse_clip_cache(
+            cache_key,
+            {
+                "shape_data": [
+                    {"poly": geometry, "color": (255, 0, 0), "draw_order": 0}
+                ],
+                "clipped_shapes": [
+                    {
+                        "geometry": geometry,
+                        "color": (255, 0, 0),
+                        "draw_order": 0,
+                    }
+                ],
+                "silhouette": geometry,
+                "image_vectorizer_bounds": box(0, 0, 4, 2),
+                "scale_factor": 10.0,
+                "bbox": (0, 0, 4, 2),
+            },
+        )
+    )
+    return artifact_path, vector_engine._vector_parse_clip_cache_provenance(cache_key)
+
+
+def test_load_vector_quick_preview_source_requires_expected_provenance(
+    tmp_path: Path,
+) -> None:
+    artifact_path, provenance = _write_quick_preview_source(tmp_path)
+
+    source = vector_glb_preview.load_vector_quick_preview_source(
+        str(artifact_path),
+        expected_provenance=provenance,
+    )
+
+    assert source is not None
+    assert source.provenance == provenance
+    assert source.scale_factor == pytest.approx(10.0)
+    assert source.bbox == pytest.approx((0.0, 0.0, 4.0, 2.0))
+    assert len(source.clipped_shapes) == 1
+    assert (
+        vector_glb_preview.load_vector_quick_preview_source(
+            str(artifact_path),
+            expected_provenance="0" * 64,
+        )
+        is None
+    )
+
+
+def test_load_vector_quick_preview_source_rejects_tampered_key(
+    tmp_path: Path,
+) -> None:
+    artifact_path, provenance = _write_quick_preview_source(tmp_path)
+    payload = pickle.loads(artifact_path.read_bytes())
+    payload["cache_key"] = (*payload["cache_key"][:1], 99.0, *payload["cache_key"][2:])
+    artifact_path.write_bytes(pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL))
+
+    assert (
+        vector_glb_preview.load_vector_quick_preview_source(
+            str(artifact_path),
+            expected_provenance=provenance,
+        )
+        is None
+    )
+
+
+def test_load_vector_quick_preview_source_enforces_resource_caps(
+    tmp_path: Path,
+) -> None:
+    artifact_path, provenance = _write_quick_preview_source(tmp_path)
+
+    assert (
+        vector_glb_preview.load_vector_quick_preview_source(
+            str(artifact_path),
+            expected_provenance=provenance,
+            max_bytes=4,
+        )
+        is None
+    )
+    assert (
+        vector_glb_preview.load_vector_quick_preview_source(
+            str(artifact_path),
+            expected_provenance=provenance,
+            max_coordinates=3,
+        )
+        is None
     )
 
 

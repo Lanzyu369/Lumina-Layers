@@ -21,6 +21,7 @@ import re
 import json
 import io
 import pickle
+import hashlib
 import warnings
 import math
 import gc
@@ -3445,14 +3446,28 @@ def _vector_parse_clip_cache_key(
 def _serialize_vector_parse_clip_cache(cache_key, cache_entry):
     """Serialize a verified parse/clip cache entry for session-bound reuse."""
 
+    provenance = _vector_parse_clip_cache_provenance(cache_key)
     return pickle.dumps(
         {
             "schema": _VECTOR_PARSE_CLIP_ARTIFACT_SCHEMA,
             "cache_key": tuple(cache_key),
+            "provenance": provenance,
             "entry": _copy_vector_parse_clip_cache_entry(cache_entry),
         },
         protocol=pickle.HIGHEST_PROTOCOL,
     )
+
+
+def _vector_parse_clip_cache_provenance(cache_key):
+    """Return a stable identity digest for one parse/clip cache key."""
+
+    canonical_key = json.dumps(
+        list(cache_key),
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical_key).hexdigest()
 
 
 def _copy_vector_parse_clip_cache_entry(cache_entry):
@@ -3474,21 +3489,28 @@ def _copy_vector_parse_clip_cache_entry(cache_entry):
     }
 
 
-def _load_vector_parse_clip_cache_artifact(path, expected_cache_key):
-    """Load a parse/clip artifact only when its key exactly matches."""
+def _read_vector_parse_clip_cache_artifact(path):
+    """Read and structurally validate one server-owned parse/clip artifact."""
 
     if not path:
         return None
     try:
         with open(path, "rb") as handle:
             payload = pickle.load(handle)
-    except VECTOR_HANDLED_ERRORS:
+    except (*VECTOR_HANDLED_ERRORS, pickle.PickleError, EOFError):
         return None
     if not isinstance(payload, dict):
         return None
     if payload.get("schema") != _VECTOR_PARSE_CLIP_ARTIFACT_SCHEMA:
         return None
-    if tuple(payload.get("cache_key") or ()) != tuple(expected_cache_key):
+    cache_key = tuple(payload.get("cache_key") or ())
+    if not cache_key:
+        return None
+    try:
+        actual_provenance = _vector_parse_clip_cache_provenance(cache_key)
+    except (TypeError, ValueError):
+        return None
+    if payload.get("provenance") != actual_provenance:
         return None
     entry = payload.get("entry")
     if not isinstance(entry, dict):
@@ -3502,7 +3524,32 @@ def _load_vector_parse_clip_cache_artifact(path, expected_cache_key):
     }
     if not required.issubset(entry):
         return None
-    return _copy_vector_parse_clip_cache_entry(entry)
+    return payload
+
+
+def _load_vector_parse_clip_cache_artifact(path, expected_cache_key):
+    """Load a parse/clip artifact only when its key exactly matches."""
+
+    payload = _read_vector_parse_clip_cache_artifact(path)
+    if payload is None:
+        return None
+    if tuple(payload["cache_key"]) != tuple(expected_cache_key):
+        return None
+    return _copy_vector_parse_clip_cache_entry(payload["entry"])
+
+
+def _load_vector_parse_clip_cache_artifact_by_provenance(
+    path,
+    expected_provenance,
+):
+    """Load a parse/clip artifact matching server-held provenance."""
+
+    if not isinstance(expected_provenance, str) or len(expected_provenance) != 64:
+        return None
+    payload = _read_vector_parse_clip_cache_artifact(path)
+    if payload is None or payload.get("provenance") != expected_provenance:
+        return None
+    return _copy_vector_parse_clip_cache_entry(payload["entry"])
 
 
 def _get_image_processor_class():

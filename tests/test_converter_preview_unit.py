@@ -1601,7 +1601,13 @@ class TestSessionContainsPreviewCache:
         fd, cache_path = tempfile.mkstemp(suffix=".pkl")
         os.close(fd)
         with open(cache_path, "wb") as handle:
-            pickle.dump(dict(_mock_cache), handle)
+            pickle.dump(
+                {
+                    **dict(_mock_cache),
+                    "vector_parse_clip_cache_provenance": "b" * 64,
+                },
+                handle,
+            )
         fd, vector_cache_path = tempfile.mkstemp(suffix=".pkl")
         os.close(fd)
         with open(vector_cache_path, "wb") as handle:
@@ -1644,6 +1650,7 @@ class TestSessionContainsPreviewCache:
         assert session_data is not None
         metadata = session_data["preview_cache"]["metadata"]
         assert metadata["vector_parse_clip_cache_path"] == vector_cache_path
+        assert metadata["vector_parse_clip_cache_provenance"] == "b" * 64
         with open(vector_cache_path, "rb") as handle:
             assert handle.read() == b"worker-owned-parse-clip-cache"
 
