@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20">
+  <style>
+    .tile { fill: #009688; stroke: #263238; stroke-width: 2 }
+  </style>
+  <defs>
+    <path id="unit" d="M1 1H9V9H1Z"/>
+  </defs>
+  <g class="tile">
+    <use href="#unit" x="2" y="2"/>
+    <use href="#unit" x="20" y="2"/>
+  </g>
+</svg>
