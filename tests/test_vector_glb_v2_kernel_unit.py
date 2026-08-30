@@ -229,6 +229,75 @@ def _quick_source_for_classification() -> vector_glb_preview.VectorQuickPreviewS
     )
 
 
+def test_analytic_parts_match_segmented_preview_world_y_orientation() -> None:
+    """Color, backing, and canvas anchor must share preview world-up Y."""
+
+    top_shape = box(0.2, 0.5, 1.2, 1.5)
+    silhouette = box(0.15, 0.35, 1.35, 1.65)
+    source = vector_glb_preview.VectorQuickPreviewSourceV1(
+        provenance="a" * 64,
+        shape_data=(),
+        clipped_shapes=({"geometry": top_shape, "color": (0, 0, 0)},),
+        silhouette=silhouette,
+        image_vectorizer_bounds=box(0.0, 0.25, 2.0, 1.75),
+        scale_factor=10.0,
+        bbox=(0.0, 0.0, 2.0, 4.0),
+    )
+    matched_rgb = np.full((40, 20, 3), (20, 30, 40), dtype=np.uint8)
+    mask_solid = np.zeros((40, 20), dtype=bool)
+    mask_solid[5:15, 2:12] = True
+
+    parts = vector_glb_preview.build_vector_quick_preview_parts(
+        source=source,
+        matched_rgb=matched_rgb,
+        height_identity_rgb=matched_rgb.copy(),
+        mask_solid=mask_solid,
+        backing_rgba=(255, 255, 255, 255),
+        backing_thickness_mm=1.6,
+    )
+
+    assert parts is not None
+    color = next(part for part in parts if part.role == "color")
+    footprint = unary_union(
+        [extrusion.footprint for extrusion in color.extrusions]
+    )
+    assert footprint.bounds == pytest.approx((2.0, 25.0, 12.0, 35.0))
+    backing = next(part for part in parts if part.role == "backing")
+    assert backing.extrusions[0].footprint.bounds == pytest.approx(
+        (0.0, 22.0, 15.0, 38.0)
+    )
+    canvas_anchor = next(part for part in parts if part.role == "auxiliary")
+    assert canvas_anchor.fallback_mesh is not None
+    assert canvas_anchor.fallback_mesh.bounds[:, :2].ravel() == pytest.approx(
+        (0.0, 22.5, 20.0, 37.5)
+    )
+
+
+def test_analytic_parts_share_segmented_preview_zero_z_origin() -> None:
+    """The browser owns layer placement, so asset slabs must start at Z=0."""
+
+    source = _quick_source_for_classification()
+    matched_rgb = np.full((10, 30, 3), (20, 30, 40), dtype=np.uint8)
+
+    parts = vector_glb_preview.build_vector_quick_preview_parts(
+        source=source,
+        matched_rgb=matched_rgb,
+        height_identity_rgb=matched_rgb.copy(),
+        mask_solid=np.ones((10, 30), dtype=bool),
+        backing_rgba=(255, 255, 255, 255),
+        backing_thickness_mm=1.6,
+    )
+
+    assert parts is not None
+    display_parts = [part for part in parts if part.role in {"color", "backing"}]
+    assert display_parts
+    assert {
+        extrusion.z_min
+        for part in display_parts
+        for extrusion in part.extrusions
+    } == {0.0}
+
+
 def test_analytic_parts_group_by_display_and_height_identity() -> None:
     source = _quick_source_for_classification()
     matched_rgb = np.zeros((10, 30, 3), dtype=np.uint8)

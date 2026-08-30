@@ -1186,6 +1186,8 @@ def build_vector_preview_parts_from_scene(
 
 def _build_preview_canvas_anchor_part(
     analysis: object | None,
+    *,
+    screen_to_world_canvas_height_mm: float | None = None,
 ) -> VectorPreviewPart | None:
     """Build coordinate-only canvas geometry for frontend overlay placement.
     构建仅用于前端叠线定位的画布坐标几何。
@@ -1209,7 +1211,18 @@ def _build_preview_canvas_anchor_part(
     mesh = _build_preview_canvas_bounds_mesh(width, height, scale_factor)
     if mesh is None:
         return None
-    mesh.apply_translation((min_x * scale_factor, min_y * scale_factor, 0.0))
+    anchor_y_mm = min_y * scale_factor
+    if screen_to_world_canvas_height_mm is not None:
+        if (
+            not np.isfinite(screen_to_world_canvas_height_mm)
+            or screen_to_world_canvas_height_mm <= 0
+        ):
+            return None
+        anchor_y_mm = (
+            float(screen_to_world_canvas_height_mm)
+            - max_y * scale_factor
+        )
+    mesh.apply_translation((min_x * scale_factor, anchor_y_mm, 0.0))
     return VectorPreviewPart(
         source_name=PREVIEW_CANVAS_BOUNDS_NODE_NAME,
         export_name=PREVIEW_CANVAS_BOUNDS_NODE_NAME,
@@ -1338,6 +1351,33 @@ def _scaled_geometry_mm(geometry: BaseGeometry, scale_factor: float) -> BaseGeom
                 yfact=scale_factor,
                 origin=(0.0, 0.0),
             )
+        )
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def _screen_geometry_to_preview_world_y(
+    geometry: BaseGeometry | None,
+    canvas_height_mm: float,
+) -> BaseGeometry | None:
+    """Map SVG screen-down Y coordinates to preview world-up coordinates."""
+
+    prepared = _valid_geometry(geometry)
+    if (
+        prepared is None
+        or not np.isfinite(canvas_height_mm)
+        or canvas_height_mm <= 0
+    ):
+        return None
+    try:
+        flipped = shapely_scale(
+            prepared,
+            xfact=1.0,
+            yfact=-1.0,
+            origin=(0.0, 0.0),
+        )
+        return _valid_geometry(
+            shapely_translate(flipped, yoff=float(canvas_height_mm))
         )
     except (ValueError, TypeError, AttributeError):
         return None
@@ -1632,6 +1672,7 @@ def build_vector_quick_preview_parts(
     height, width = display.shape[:2]
     coord_scale = float(width) / real_width
     pixels_per_mm = coord_scale / float(source.scale_factor)
+    canvas_height_mm = real_height * float(source.scale_factor)
     if not np.isfinite(pixels_per_mm) or pixels_per_mm <= 0:
         return None
     simplify_tolerance_mm = min(
@@ -1750,9 +1791,12 @@ def build_vector_quick_preview_parts(
                     classified_source_components.extend(source_components)
                 scaled_components: list[Polygon] = []
                 for source_component in source_components:
-                    scaled = _scaled_geometry_mm(
-                        source_component,
-                        source.scale_factor,
+                    scaled = _screen_geometry_to_preview_world_y(
+                        _scaled_geometry_mm(
+                            source_component,
+                            source.scale_factor,
+                        ),
+                        canvas_height_mm,
                     )
                     scaled_components.extend(
                         _simplify_quick_preview_polygons(
@@ -1833,6 +1877,7 @@ def build_vector_quick_preview_parts(
         source.silhouette,
         source.scale_factor,
     )
+    backing = _screen_geometry_to_preview_world_y(backing, canvas_height_mm)
     if backing is not None:
         try:
             backing_height = max(
@@ -1856,14 +1901,17 @@ def build_vector_quick_preview_parts(
                 extrusions=(
                     VectorPreviewExtrusion(
                         footprint=backing,
-                        z_min=-backing_height,
-                        z_max=0.0,
+                        z_min=0.0,
+                        z_max=backing_height,
                     ),
                 ),
             )
         )
 
-    canvas_anchor = _build_preview_canvas_anchor_part(source)
+    canvas_anchor = _build_preview_canvas_anchor_part(
+        source,
+        screen_to_world_canvas_height_mm=canvas_height_mm,
+    )
     if canvas_anchor is not None:
         parts.append(canvas_anchor)
     return parts
