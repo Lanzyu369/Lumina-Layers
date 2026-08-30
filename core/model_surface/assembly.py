@@ -11,6 +11,10 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 import trimesh
 
+from core.layered_coordinate_domain import (
+    LayeredCoordinateDomain,
+    read_layered_coordinate_domain,
+)
 from core.model_surface.types import (
     MODEL_SURFACE_FATAL_ERRORS,
     ModelSurfaceError,
@@ -681,6 +685,10 @@ def _available_surface_depth_mm(
 def _pattern_xy_bounds_mm(
     pattern_scene: trimesh.Scene,
 ) -> tuple[float, float, float, float]:
+    certified_domain = _certified_pattern_domain(pattern_scene)
+    if certified_domain is not None:
+        return certified_domain.writer_canvas_bounds_mm
+
     bounds = np.asarray(pattern_scene.bounds, dtype=np.float64)
     if bounds.shape != (2, 3) or not np.all(np.isfinite(bounds)):
         raise ModelSurfaceError("Overlay pattern scene has invalid bounds.")
@@ -762,6 +770,10 @@ def _first_triangle_hit_distance(
 
 
 def _pattern_z_bounds_mm(pattern_scene: trimesh.Scene) -> tuple[float, float]:
+    certified_domain = _certified_pattern_domain(pattern_scene)
+    if certified_domain is not None:
+        return certified_domain.writer_z_bounds_mm
+
     bounds = np.asarray(pattern_scene.bounds, dtype=np.float64)
     if bounds.shape != (2, 3) or not np.all(np.isfinite(bounds)):
         raise ModelSurfaceError("Overlay pattern scene has invalid bounds.")
@@ -785,6 +797,10 @@ def _pattern_z_bounds_mm(pattern_scene: trimesh.Scene) -> tuple[float, float]:
 
 
 def _pattern_layer_heights_mm(pattern_scene: trimesh.Scene) -> tuple[float, ...]:
+    certified_domain = _certified_pattern_domain(pattern_scene)
+    if certified_domain is not None:
+        return certified_domain.layer_heights_mm
+
     raw_heights = pattern_scene.metadata.get(
         MODEL_SURFACE_DISPLAY_LAYER_HEIGHTS_KEY
     )
@@ -804,6 +820,22 @@ def _pattern_layer_heights_mm(pattern_scene: trimesh.Scene) -> tuple[float, ...]
             "Overlay pattern layer heights do not match its logical Z depth."
         )
     return layer_heights
+
+
+def _certified_pattern_domain(
+    pattern_scene: trimesh.Scene,
+) -> LayeredCoordinateDomain | None:
+    """Return the producer-certified domain or preserve the legacy path."""
+
+    try:
+        return read_layered_coordinate_domain(
+            pattern_scene,
+            require_certified=True,
+        )
+    except ValueError as exc:
+        raise ModelSurfaceError(
+            "Overlay pattern coordinate-domain metadata is invalid."
+        ) from exc
 
 
 def _footprint_prism_to_surface_transform(

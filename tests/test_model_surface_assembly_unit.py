@@ -11,14 +11,22 @@ import shapely.geometry as sg
 import trimesh
 
 from core.errors import VectorMeshMemoryBudgetError
+from core.layered_coordinate_domain import (
+    LAYERED_COORDINATE_DOMAIN_CERTIFIED_KEY,
+    read_layered_coordinate_domain,
+)
 from core.vector_layer_geometry import (
     VectorLayerGeometryPolicy,
     build_vector_stepped_volume,
 )
 from core.model_surface.assembly import (
+    MODEL_SURFACE_DISPLAY_LAYER_HEIGHTS_KEY,
+    MODEL_SURFACE_DISPLAY_Z_BOUNDS_KEY,
     MODEL_SURFACE_LOGICAL_XY_BOUNDS_KEY,
     OverlaySceneResult,
+    _pattern_layer_heights_mm,
     _pattern_xy_bounds_mm,
+    _pattern_z_bounds_mm,
     apply_model_transform_to_overlay_scene,
     build_embedded_overlay_scene,
     cut_surface_pocket,
@@ -190,6 +198,41 @@ def test_build_embedded_overlay_scene_preserves_source_orientation_and_canvas_ma
     )
 
 
+def test_raster_pattern_publishes_one_certified_coordinate_domain() -> None:
+    full_matrix = np.zeros((2, 3, 5), dtype=np.int16)
+    pattern = _build_pattern_scene(
+        {
+            "full_matrix": full_matrix,
+            "slot_names": ["Artwork"],
+            "preview_colors": {0: [255, 0, 0, 255]},
+            "target_h": 3,
+            "pixel_scale": 0.2,
+            "color_layers": 2,
+            "layer_height_mm": 0.08,
+            "bambu_face_orientation": "down",
+        }
+    )
+
+    domain = read_layered_coordinate_domain(
+        pattern.scene,
+        require_certified=True,
+    )
+    assert domain is not None
+    assert domain.xy_grid_mm == 0.2
+    assert domain.canvas_max_units == (5, 3)
+    assert domain.layer_heights_mm == (0.08, 0.08)
+    assert _pattern_xy_bounds_mm(pattern) == domain.writer_canvas_bounds_mm
+    assert _pattern_z_bounds_mm(pattern) == domain.writer_z_bounds_mm
+
+
+def test_pattern_bounds_reject_malformed_certification_marker() -> None:
+    pattern = trimesh.Scene({"Artwork": trimesh.creation.box(extents=(1, 1, 1))})
+    pattern.metadata[LAYERED_COORDINATE_DOMAIN_CERTIFIED_KEY] = True
+
+    with pytest.raises(ModelSurfaceError, match="coordinate-domain"):
+        _pattern_xy_bounds_mm(pattern)
+
+
 def test_native_vector_pattern_is_normalized_before_surface_assembly():
     artwork = trimesh.creation.box(extents=(2.0, 6.0, 0.08))
     artwork.apply_translation((3.0, 5.0, 0.04))
@@ -298,21 +341,19 @@ def test_native_vector_pattern_uses_canonical_grid_canvas_bounds(
     expected_height_mm = (
         np.floor(canvas_height * scale_factor / grid_mm + 0.5) * grid_mm
     )
-    expected_bounds = (0.0, 0.0, expected_width_mm, expected_height_mm)
-    assert pattern.metadata[MODEL_SURFACE_LOGICAL_XY_BOUNDS_KEY] == pytest.approx(
-        expected_bounds,
-        abs=1e-12,
+    domain = read_layered_coordinate_domain(
+        pattern.scene,
+        require_certified=True,
     )
-    assert _pattern_xy_bounds_mm(pattern.scene) == pytest.approx(
-        expected_bounds,
-        abs=1e-12,
-    )
-    np.testing.assert_allclose(
-        np.asarray(pattern.bounds)[:, :2],
-        [[0.0, 0.0], [expected_width_mm, expected_height_mm]],
-        rtol=0.0,
-        atol=1e-12,
-    )
+    assert domain is not None
+    expected_bounds = domain.writer_canvas_bounds_mm
+    assert pattern.metadata[MODEL_SURFACE_LOGICAL_XY_BOUNDS_KEY] == expected_bounds
+    assert _pattern_xy_bounds_mm(pattern.scene) == expected_bounds
+    actual_bounds = np.asarray(pattern.bounds, dtype=np.float32).astype(np.float64)
+    assert actual_bounds[0, 0] >= expected_bounds[0]
+    assert actual_bounds[0, 1] >= expected_bounds[1]
+    assert actual_bounds[1, 0] <= expected_bounds[2]
+    assert actual_bounds[1, 1] <= expected_bounds[3]
 
 
 def test_native_vector_pattern_ownership_transfer_reuses_mesh_and_releases_scene():
@@ -413,7 +454,7 @@ def test_owned_vector_footprint_guard_uses_bounded_workspace_before_projection(
     monkeypatch,
 ):
     artwork = trimesh.creation.box(extents=(2.0, 2.0, 0.08))
-    artwork.apply_translation((2.0, 2.0, 0.04))
+    artwork.apply_translation((2.0, -2.0, 0.04))
     ctx = {
         "is_svg_vector": True,
         "scene": trimesh.Scene({"Black": artwork}),
@@ -688,6 +729,78 @@ def test_pattern_logical_xy_bounds_reject_geometry_outside_canvas():
 
     with pytest.raises(ModelSurfaceError, match="exceeds its logical XY bounds"):
         _pattern_xy_bounds_mm(pattern)
+
+
+def test_pattern_logical_xy_bounds_accept_float32_writer_rounding():
+    canvas_width = 814.0
+    canvas_height = 947.0
+    target_width_mm = 115.59999084472656
+    scale_factor = target_width_mm / canvas_width
+    logical_width_mm = 115.6
+    logical_height_mm = 134.488
+    writer_width_mm = max(
+        logical_width_mm,
+        float(np.float32(logical_width_mm)),
+    )
+    writer_height_mm = float(np.float32(logical_height_mm))
+    color = trimesh.creation.box(
+        extents=(writer_width_mm, writer_height_mm, 0.08)
+    )
+    color.apply_translation(
+        (-writer_width_mm / 2.0, -writer_height_mm / 2.0, 0.04)
+    )
+    pattern = _build_pattern_scene(
+        {
+            "is_svg_vector": True,
+            "scene": trimesh.Scene({"Artwork": color}),
+            "vector_analysis": SimpleNamespace(
+                slot_names=("Artwork",),
+                bbox=(0.0, 0.0, canvas_width, canvas_height),
+                scale_factor=scale_factor,
+                num_layers=1,
+            ),
+            "layer_height_mm": 0.08,
+            "bambu_face_orientation": "down",
+        }
+    )
+    domain = read_layered_coordinate_domain(
+        pattern.scene,
+        require_certified=True,
+    )
+    assert domain is not None
+    logical_bounds = domain.writer_canvas_bounds_mm
+
+    assert pattern.metadata[MODEL_SURFACE_LOGICAL_XY_BOUNDS_KEY] == logical_bounds
+    assert _pattern_xy_bounds_mm(pattern) == logical_bounds
+
+
+def test_pattern_display_bounds_accept_float32_writer_rounding():
+    logical_height_mm = 0.4
+    writer_height_mm = float(np.float32(logical_height_mm))
+    color = trimesh.creation.box(extents=(4.0, 4.0, writer_height_mm))
+    color.apply_translation((-2.0, -2.0, writer_height_mm / 2.0))
+    layer_heights_mm = (0.08,) * 5
+    pattern = _build_pattern_scene(
+        {
+            "is_svg_vector": True,
+            "scene": trimesh.Scene({"Artwork": color}),
+            "vector_analysis": SimpleNamespace(
+                slot_names=("Artwork",),
+                bbox=(0.0, 0.0, 4.0, 4.0),
+                scale_factor=1.0,
+                num_layers=5,
+            ),
+            "layer_height_mm": 0.08,
+            "bambu_face_orientation": "down",
+        }
+    )
+
+    assert pattern.metadata[MODEL_SURFACE_DISPLAY_Z_BOUNDS_KEY] == (
+        0.0,
+        writer_height_mm,
+    )
+    assert _pattern_z_bounds_mm(pattern) == (0.0, writer_height_mm)
+    assert _pattern_layer_heights_mm(pattern) == layer_heights_mm
 
 
 def test_build_embedded_overlay_scene_embeds_full_pattern_depth():

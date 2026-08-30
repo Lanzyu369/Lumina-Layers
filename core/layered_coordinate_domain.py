@@ -100,6 +100,7 @@ class LayeredCoordinateDomain:
     xy_grid_mm: float
     canvas_min_units: tuple[int, int]
     canvas_max_units: tuple[int, int]
+    layer_heights_mm: tuple[float, ...]
     layer_boundaries_mm: tuple[float, ...]
     writer_canvas_bounds_mm: tuple[float, float, float, float]
     writer_z_bounds_mm: tuple[float, float]
@@ -123,6 +124,12 @@ class LayeredCoordinateDomain:
         if any(low >= high for low, high in zip(min_units, max_units)):
             raise ValueError("Canvas unit bounds must have positive area")
 
+        layer_heights = _metadata_float_tuple(
+            self.layer_heights_mm,
+            name="layer_heights_mm",
+        )
+        if not layer_heights or any(value <= 0.0 for value in layer_heights):
+            raise ValueError("Layer heights must be finite and positive")
         boundaries = _metadata_float_tuple(
             self.layer_boundaries_mm,
             name="layer_boundaries_mm",
@@ -134,6 +141,12 @@ class LayeredCoordinateDomain:
             for previous, current in zip(boundaries, boundaries[1:])
         ):
             raise ValueError("Layer boundaries must be strictly increasing")
+        expected_boundaries = (0.0,) + tuple(
+            math.fsum(layer_heights[:index])
+            for index in range(1, len(layer_heights) + 1)
+        )
+        if boundaries != expected_boundaries:
+            raise ValueError("Layer boundaries do not match layer heights")
 
         writer_canvas = _metadata_float_tuple(
             self.writer_canvas_bounds_mm,
@@ -224,6 +237,7 @@ class LayeredCoordinateDomain:
             xy_grid_mm=grid,
             canvas_min_units=(0, 0),
             canvas_max_units=max_units,
+            layer_heights_mm=heights,
             layer_boundaries_mm=boundaries,
             writer_canvas_bounds_mm=(
                 _writer_lower_bound(0.0),
@@ -237,21 +251,6 @@ class LayeredCoordinateDomain:
             ),
         )
 
-    @property
-    def layer_heights_mm(self) -> tuple[float, ...]:
-        """Return nominal heights derived from the canonical boundaries.
-
-        返回由规范 Z 边界推导出的名义层高。
-        """
-
-        return tuple(
-            upper - lower
-            for lower, upper in zip(
-                self.layer_boundaries_mm,
-                self.layer_boundaries_mm[1:],
-            )
-        )
-
     def to_metadata(self) -> dict[str, Any]:
         """Serialize the domain into JSON-safe scene metadata.
 
@@ -263,6 +262,7 @@ class LayeredCoordinateDomain:
             "xy_grid_mm": float(self.xy_grid_mm),
             "canvas_min_units": list(self.canvas_min_units),
             "canvas_max_units": list(self.canvas_max_units),
+            "layer_heights_mm": list(self.layer_heights_mm),
             "layer_boundaries_mm": list(self.layer_boundaries_mm),
             "writer_canvas_bounds_mm": list(self.writer_canvas_bounds_mm),
             "writer_z_bounds_mm": list(self.writer_z_bounds_mm),
@@ -300,6 +300,10 @@ class LayeredCoordinateDomain:
                 value["canvas_max_units"],
                 name="canvas_max_units",
             )
+            layer_heights = _metadata_float_tuple(
+                value["layer_heights_mm"],
+                name="layer_heights_mm",
+            )
             boundaries = _metadata_float_tuple(
                 value["layer_boundaries_mm"],
                 name="layer_boundaries_mm",
@@ -323,10 +327,120 @@ class LayeredCoordinateDomain:
             xy_grid_mm=grid,
             canvas_min_units=min_units,
             canvas_max_units=max_units,
+            layer_heights_mm=layer_heights,
             layer_boundaries_mm=boundaries,
             writer_canvas_bounds_mm=writer_canvas,
             writer_z_bounds_mm=writer_z,
         )
+
+
+def attach_layered_coordinate_domain(
+    scene: object,
+    domain: LayeredCoordinateDomain,
+) -> None:
+    """Attach an untrusted domain description to a scene.
+
+    将尚未完成最终边界认证的坐标域描述附加到场景。
+
+    Args:
+        scene: Scene-like object with a mutable metadata mapping.
+            带可变 metadata 映射的场景对象。
+        domain: Validated coordinate domain to serialize.
+            要序列化的已验证坐标域。
+
+    Raises:
+        ValueError: If the scene cannot store metadata.
+            当场景无法存储元数据时抛出。
+    """
+
+    metadata = getattr(scene, "metadata", None)
+    if not isinstance(metadata, dict):
+        raise ValueError("Layered coordinate domain requires scene metadata")
+    metadata[LAYERED_COORDINATE_DOMAIN_KEY] = domain.to_metadata()
+    metadata.pop(LAYERED_COORDINATE_DOMAIN_CERTIFIED_KEY, None)
+
+
+def read_layered_coordinate_domain(
+    scene: object,
+    *,
+    require_certified: bool = False,
+) -> LayeredCoordinateDomain | None:
+    """Read a validated coordinate domain from scene metadata.
+
+    从场景元数据读取并验证坐标域。
+
+    Args:
+        scene: Scene-like object carrying metadata.
+            携带元数据的场景对象。
+        require_certified: Return only a producer-certified domain.
+            是否只返回生产者已认证的坐标域。
+
+    Returns:
+        The parsed domain, or ``None`` when no applicable domain exists.
+        解析后的坐标域；不存在适用坐标域时返回 ``None``。
+
+    Raises:
+        ValueError: If reserved metadata is malformed.
+            当保留元数据损坏时抛出。
+    """
+
+    metadata = getattr(scene, "metadata", None)
+    if not isinstance(metadata, Mapping):
+        return None
+    marker_present = LAYERED_COORDINATE_DOMAIN_CERTIFIED_KEY in metadata
+    if marker_present and metadata[LAYERED_COORDINATE_DOMAIN_CERTIFIED_KEY] is not True:
+        raise ValueError("Layered coordinate-domain certification is malformed")
+    if LAYERED_COORDINATE_DOMAIN_KEY not in metadata:
+        if marker_present:
+            raise ValueError("Certified layered coordinate domain is missing")
+        return None
+    domain = LayeredCoordinateDomain.from_metadata(
+        metadata[LAYERED_COORDINATE_DOMAIN_KEY]
+    )
+    if require_certified and not marker_present:
+        return None
+    return domain
+
+
+def certify_layered_pattern_scene(
+    scene: object,
+    domain: LayeredCoordinateDomain,
+) -> None:
+    """Certify final pattern bounds in the actual float32 writer domain.
+
+    在实际 float32 写出域中一次性认证最终图案边界。
+
+    Args:
+        scene: Final normalized scene before model-surface assembly.
+            进入模型覆面装配前已归一化的最终场景。
+        domain: The sole coordinate contract used to build the scene.
+            构建该场景时使用的唯一坐标契约。
+
+    Raises:
+        ValueError: If bounds are invalid or exceed the owned domain.
+            当边界无效或超出坐标域时抛出。
+    """
+
+    bounds = np.asarray(getattr(scene, "bounds", None), dtype=np.float64)
+    if bounds.shape != (2, 3) or not np.all(np.isfinite(bounds)):
+        raise ValueError("Layered pattern scene has invalid bounds")
+    writer_bounds = np.asarray(bounds, dtype=np.float32).astype(np.float64)
+    canvas = domain.writer_canvas_bounds_mm
+    if (
+        writer_bounds[0, 0] < canvas[0]
+        or writer_bounds[0, 1] < canvas[1]
+        or writer_bounds[1, 0] > canvas[2]
+        or writer_bounds[1, 1] > canvas[3]
+    ):
+        raise ValueError("Layered pattern geometry exceeds its XY domain")
+    z_bounds = domain.writer_z_bounds_mm
+    if (
+        writer_bounds[0, 2] < z_bounds[0]
+        or writer_bounds[1, 2] > z_bounds[1]
+    ):
+        raise ValueError("Layered pattern geometry exceeds its Z domain")
+    attach_layered_coordinate_domain(scene, domain)
+    scene.metadata[LAYERED_COORDINATE_DOMAIN_CERTIFIED_KEY] = True
 
 
 __all__ = [
@@ -334,4 +448,7 @@ __all__ = [
     "LAYERED_COORDINATE_DOMAIN_KEY",
     "LAYERED_COORDINATE_DOMAIN_VERSION",
     "LayeredCoordinateDomain",
+    "attach_layered_coordinate_domain",
+    "certify_layered_pattern_scene",
+    "read_layered_coordinate_domain",
 ]
