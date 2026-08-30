@@ -21,6 +21,7 @@ import {
 } from "../components/OutlineFrame3D";
 import { translations } from "../i18n/translations";
 import { materializePositionAttributeForGeometryBake } from "../utils/threeQuantizedGeometry";
+import { createPreviewSpace } from "../utils/previewSpace";
 
 // ========== Helpers ==========
 
@@ -203,6 +204,26 @@ describe("OutlineFrame3D — Unit Tests", () => {
         if (result!.grid[i] === 1) count++;
       }
       expect(count).toBeGreaterThan(0);
+    });
+
+    it("rasterizes the scaled display footprint before applying millimetre outline width", () => {
+      const geo = makeBoxGeometry(10, 20, 5);
+      const previewSpace = createPreviewSpace(
+        { minX: 0, maxX: 10, minY: 0, maxY: 20, maxZ: 5 },
+        2,
+        3,
+      );
+
+      const result = rasterizeMeshToGrid(geo, {
+        cellSize: 1,
+        previewSpace,
+      });
+
+      expect(result).not.toBeNull();
+      expect(result?.originX).toBeCloseTo(-5, 6);
+      expect(result?.originY).toBeCloseTo(-20, 6);
+      expect(result?.gridW).toBe(23);
+      expect(result?.gridH).toBe(63);
     });
 
     it("rasterizes baked quantized GLB geometry using millimetre coordinates", () => {

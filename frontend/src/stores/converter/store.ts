@@ -90,6 +90,8 @@ import {
   toAbsoluteReliefHeightMap,
 } from "../../utils/colorUtils";
 import { normalizeResourceUrl } from "../../utils/resourceUrl";
+import { computeScaleFactor } from "../../utils/scaleUtils";
+import { createPreviewSpace } from "../../utils/previewSpace";
 import {
   createFridgeMagnetFromPreset,
   getDefaultFridgeMagnetPresetKey,
@@ -859,14 +861,39 @@ function hasAdjustmentState(
   );
 }
 
+type FridgeMagnetLayoutState = Pick<
+  ConverterState,
+  | "modelBounds"
+  | "target_width_mm"
+  | "target_height_mm"
+  | "preview_width_mm"
+  | "preview_height_mm"
+>;
+
 function getFallbackModelBounds(
-  state: Pick<
-    ConverterState,
-    "modelBounds" | "target_width_mm" | "target_height_mm"
-  >,
+  state: FridgeMagnetLayoutState,
 ): NonNullable<ConverterState["modelBounds"]> {
   if (state.modelBounds) {
-    return state.modelBounds;
+    const { scaleX, scaleY } = computeScaleFactor(
+      state.target_width_mm,
+      state.target_height_mm,
+      state.preview_width_mm,
+      state.preview_height_mm,
+    );
+    const displayBounds = createPreviewSpace(
+      state.modelBounds,
+      scaleX,
+      scaleY,
+    ).displayBounds;
+    const width = displayBounds.maxX - displayBounds.minX;
+    const height = displayBounds.maxY - displayBounds.minY;
+    return {
+      minX: -width / 2,
+      maxX: width / 2,
+      minY: -height / 2,
+      maxY: height / 2,
+      maxZ: displayBounds.maxZ,
+    };
   }
 
   return {
@@ -879,23 +906,13 @@ function getFallbackModelBounds(
 }
 
 function getModelCenter(
-  state: Pick<
-    ConverterState,
-    "modelBounds" | "target_width_mm" | "target_height_mm"
-  >,
+  _state: FridgeMagnetLayoutState,
 ): { x: number; y: number } {
-  const bounds = getFallbackModelBounds(state);
-  return {
-    x: (bounds.minX + bounds.maxX) / 2,
-    y: (bounds.minY + bounds.maxY) / 2,
-  };
+  return { x: 0, y: 0 };
 }
 
 function getDefaultFridgeMagnetCount(
-  state: Pick<
-    ConverterState,
-    "modelBounds" | "target_width_mm" | "target_height_mm"
-  >,
+  state: FridgeMagnetLayoutState,
 ): number {
   const bounds = getFallbackModelBounds(state);
   const width = Math.max(bounds.maxX - bounds.minX, 0);
@@ -964,20 +981,19 @@ function buildFridgeMagnetLayoutRatios(count: number): Array<[number, number]> {
 }
 
 function buildSuggestedFridgeMagnetCenters(
-  state: Pick<
-    ConverterState,
-    "modelBounds" | "target_width_mm" | "target_height_mm"
-  >,
+  state: FridgeMagnetLayoutState,
   count: number,
 ): Array<{ x: number; y: number }> {
   const bounds = getFallbackModelBounds(state);
+  const boundsCenterX = (bounds.minX + bounds.maxX) / 2;
+  const boundsCenterY = (bounds.minY + bounds.maxY) / 2;
   const interpolate = (min: number, max: number, ratio: number) =>
     min + (max - min) * ratio;
 
   return buildFridgeMagnetLayoutRatios(Math.max(1, count)).map(
     ([xRatio, yRatio]) => ({
-      x: interpolate(bounds.minX, bounds.maxX, xRatio),
-      y: interpolate(bounds.minY, bounds.maxY, yRatio),
+      x: interpolate(bounds.minX, bounds.maxX, xRatio) - boundsCenterX,
+      y: interpolate(bounds.minY, bounds.maxY, yRatio) - boundsCenterY,
     }),
   );
 }
@@ -1005,12 +1021,22 @@ function clampFridgeMagnetLayoutCenter(
   const { width, height } = getFridgeMagnetLayoutSize(magnet);
   const halfWidth = width / 2;
   const halfHeight = height / 2;
+  const boundsCenterX = (bounds.minX + bounds.maxX) / 2;
+  const boundsCenterY = (bounds.minY + bounds.maxY) / 2;
   const clampAxis = (value: number, min: number, max: number) =>
     min > max ? (min + max) / 2 : clampValue(value, min, max);
 
   return {
-    x: clampAxis(center.x, bounds.minX + halfWidth, bounds.maxX - halfWidth),
-    y: clampAxis(center.y, bounds.minY + halfHeight, bounds.maxY - halfHeight),
+    x: clampAxis(
+      center.x,
+      bounds.minX - boundsCenterX + halfWidth,
+      bounds.maxX - boundsCenterX - halfWidth,
+    ),
+    y: clampAxis(
+      center.y,
+      bounds.minY - boundsCenterY + halfHeight,
+      bounds.maxY - boundsCenterY - halfHeight,
+    ),
   };
 }
 
@@ -1033,10 +1059,7 @@ function sanitizeOptionalFiniteNumber(
 }
 
 function layoutFridgeMagnetsByCenters(
-  state: Pick<
-    ConverterState,
-    "modelBounds" | "target_width_mm" | "target_height_mm"
-  >,
+  state: FridgeMagnetLayoutState,
   magnets: FridgeMagnetItem[],
   initialCenters?: Array<{ x: number; y: number }>,
 ): FridgeMagnetItem[] {
@@ -1143,6 +1166,8 @@ function canonicalizeFridgeMagnets(
     | "modelBounds"
     | "target_width_mm"
     | "target_height_mm"
+    | "preview_width_mm"
+    | "preview_height_mm"
     | "base_spacer_thick"
     | "enable_fridge_magnet"
     | "fridge_magnets"
@@ -1198,10 +1223,7 @@ function createNextFridgeMagnetId(fridgeMagnets: FridgeMagnetItem[]): string {
 }
 
 function buildDefaultFridgeMagnetLayout(
-  state: Pick<
-    ConverterState,
-    "modelBounds" | "target_width_mm" | "target_height_mm"
-  >,
+  state: FridgeMagnetLayoutState,
 ): FridgeMagnetItem[] {
   const magnets = buildSuggestedFridgeMagnetCenters(
     state,
@@ -1228,7 +1250,12 @@ function buildDefaultFridgeMagnetLayout(
 function autoLayoutFridgeMagnets(
   state: Pick<
     ConverterState,
-    "modelBounds" | "target_width_mm" | "target_height_mm" | "fridge_magnets"
+    | "modelBounds"
+    | "target_width_mm"
+    | "target_height_mm"
+    | "preview_width_mm"
+    | "preview_height_mm"
+    | "fridge_magnets"
   >,
 ): FridgeMagnetItem[] {
   const currentMagnets = state.fridge_magnets.map(normalizeFridgeMagnetItem);
@@ -1249,6 +1276,8 @@ function buildFridgeMagnetState(
     | "modelBounds"
     | "target_width_mm"
     | "target_height_mm"
+    | "preview_width_mm"
+    | "preview_height_mm"
     | "base_spacer_thick"
     | "enable_fridge_magnet"
     | "fridge_magnets"
@@ -4627,20 +4656,25 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set((state) => {
         const max = state.largeFormatEnabled ? 9999 : 400;
         const clamped = clampValue(width, 10, max);
-        if (state.aspectRatio) {
-          return {
-            target_width_mm: clamped,
-            target_height_mm: clampValue(
-              Math.round(clamped / state.aspectRatio),
-              10,
-              max,
-            ),
-            threemfDiskPath: null,
-            downloadUrl: null,
-          };
-        }
+        const dimensions = state.aspectRatio
+          ? {
+              target_width_mm: clamped,
+              target_height_mm: clampValue(
+                Math.round(clamped / state.aspectRatio),
+                10,
+                max,
+              ),
+            }
+          : { target_width_mm: clamped };
+        const fridgeMagnets = state.fridge_magnets.length > 0
+          ? canonicalizeFridgeMagnets(
+              { ...state, ...dimensions },
+              state.fridge_magnets,
+            )
+          : state.fridge_magnets;
         return {
-          target_width_mm: clamped,
+          ...dimensions,
+          fridge_magnets: fridgeMagnets,
           threemfDiskPath: null,
           downloadUrl: null,
         };
@@ -4650,17 +4684,26 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set((state) => {
         const max = state.largeFormatEnabled ? 9999 : 400;
         const clamped = clampValue(height, 10, max);
-        if (state.aspectRatio) {
-          return {
-            target_height_mm: clamped,
-            target_width_mm: clampValue(
-              Math.round(clamped * state.aspectRatio),
-              10,
-              max,
-            ),
-          };
-        }
-        return { target_height_mm: clamped };
+        const dimensions = state.aspectRatio
+          ? {
+              target_height_mm: clamped,
+              target_width_mm: clampValue(
+                Math.round(clamped * state.aspectRatio),
+                10,
+                max,
+              ),
+            }
+          : { target_height_mm: clamped };
+        return {
+          ...dimensions,
+          fridge_magnets:
+            state.fridge_magnets.length > 0
+              ? canonicalizeFridgeMagnets(
+                  { ...state, ...dimensions },
+                  state.fridge_magnets,
+                )
+              : state.fridge_magnets,
+        };
       }),
 
     setSpacerThick: (thick: number) =>

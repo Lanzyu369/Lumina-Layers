@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react";
 import * as THREE from "three";
 import { debugThreeLog } from "../utils/threeDebug";
+import type { PreviewSpace } from "../utils/previewSpace";
 
 // ========== Constants ==========
 
@@ -99,7 +100,11 @@ function inferDominantCellSizeFromCoords(coords: number[]): number | null {
  */
 export function rasterizeMeshToGrid(
   geometry: THREE.BufferGeometry,
-  options: { fillInteriorHoles?: boolean; cellSize?: number } = {},
+  options: {
+    fillInteriorHoles?: boolean;
+    cellSize?: number;
+    previewSpace?: PreviewSpace | null;
+  } = {},
 ): {
   grid: Uint8Array;
   gridW: number;
@@ -125,10 +130,14 @@ export function rasterizeMeshToGrid(
 
   // 2. Collect top-face vertex XY coordinates
   const tolerance = (maxZ - minZ) * 0.01 + 1e-6;
+  const toDisplayPoint = (x: number, y: number): [number, number] => {
+    const point = options.previewSpace?.toDisplayPoint({ x, y });
+    return point ? [point.x, point.y] : [x, y];
+  };
   const topPoints: [number, number][] = [];
   for (let i = 0; i < posAttr.count; i++) {
     if (Math.abs(posAttr.getZ(i) - maxZ) < tolerance) {
-      topPoints.push([posAttr.getX(i), posAttr.getY(i)]);
+      topPoints.push(toDisplayPoint(posAttr.getX(i), posAttr.getY(i)));
     }
   }
   if (topPoints.length < 3) return null;
@@ -219,10 +228,13 @@ export function rasterizeMeshToGrid(
   for (let i = 0; i < index.count; i += 3) {
     const a = index.getX(i), b = index.getX(i + 1), c = index.getX(i + 2);
     if (topVertexSet.has(a) && topVertexSet.has(b) && topVertexSet.has(c)) {
+      const [ax, ay] = toDisplayPoint(posAttr.getX(a), posAttr.getY(a));
+      const [bx, by] = toDisplayPoint(posAttr.getX(b), posAttr.getY(b));
+      const [cx, cy] = toDisplayPoint(posAttr.getX(c), posAttr.getY(c));
       fillTriangleInGrid(
-        posAttr.getX(a), posAttr.getY(a),
-        posAttr.getX(b), posAttr.getY(b),
-        posAttr.getX(c), posAttr.getY(c),
+        ax, ay,
+        bx, by,
+        cx, cy,
         grid, gridW, gridH, bMinX, bMinY, cellSize,
       );
     }
@@ -295,7 +307,11 @@ function buildRasterGeometryFromMeshes(meshes: THREE.Mesh[]): THREE.BufferGeomet
 
 export function rasterizeMeshesToGrid(
   meshes: THREE.Mesh[],
-  options: { fillInteriorHoles?: boolean; cellSize?: number } = {},
+  options: {
+    fillInteriorHoles?: boolean;
+    cellSize?: number;
+    previewSpace?: PreviewSpace | null;
+  } = {},
 ): {
   grid: Uint8Array;
   gridW: number;
@@ -725,6 +741,7 @@ export interface OutlineFrame3DProps {
   modelMaxZ: number;
   rasterCellSize?: number;
   fillInteriorHoles?: boolean;
+  previewSpace?: PreviewSpace | null;
 }
 
 /**
@@ -740,6 +757,7 @@ export default function OutlineFrame3D({
   modelMaxZ,
   rasterCellSize,
   fillInteriorHoles = false,
+  previewSpace = null,
 }: OutlineFrame3DProps) {
   const geometry = useMemo(() => {
     const buildStart = performance.now();
@@ -755,7 +773,11 @@ export default function OutlineFrame3D({
     // 1. Rasterize backing plate mesh to occupancy grid
     const rasterOptions = {
       fillInteriorHoles,
-      cellSize: rasterCellSize,
+      cellSize:
+        rasterCellSize && previewSpace
+          ? rasterCellSize * Math.min(previewSpace.scaleX, previewSpace.scaleY)
+          : rasterCellSize,
+      previewSpace,
     };
     const rasterResult = sourceMeshes && sourceMeshes.length > 0
       ? rasterizeMeshesToGrid(sourceMeshes, rasterOptions)
@@ -817,7 +839,7 @@ export default function OutlineFrame3D({
     });
 
     return geo;
-  }, [enabled, backingPlateMesh, sourceMeshes, outlineWidth, modelMaxZ, rasterCellSize, fillInteriorHoles]);
+  }, [enabled, backingPlateMesh, sourceMeshes, outlineWidth, modelMaxZ, rasterCellSize, fillInteriorHoles, previewSpace]);
 
   useEffect(() => {
     cancelPendingOutlineFrameGeometryDispose(geometry);

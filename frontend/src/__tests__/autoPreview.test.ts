@@ -437,6 +437,49 @@ describe("useAutoPreview", () => {
     );
   });
 
+  it("keeps an ordinary preview session and GLB while dimensions update live", () => {
+    renderHook(() => useAutoPreview());
+
+    act(() => {
+      establishMaterialPreviewBaseline();
+    });
+
+    act(() => {
+      useConverterStore.getState().setTargetWidthMm(160);
+      vi.advanceTimersByTime(300);
+    });
+
+    const state = useConverterStore.getState();
+    expect(state.target_width_mm).toBe(160);
+    expect(state.sessionId).toBe("material-session-old");
+    expect(state.previewImageUrl).toBe("/api/files/preview-old.png");
+    expect(state.previewGlbUrl).toBe("/api/files/preview-old.glb");
+    expect(state.previewAutoRefreshPending).toBe(false);
+    expect(mockSubmitPreview).not.toHaveBeenCalled();
+  });
+
+  it("keeps the dedicated large-format refresh when total dimensions change", () => {
+    renderHook(() => useAutoPreview());
+
+    act(() => {
+      establishMaterialPreviewBaseline();
+      useConverterStore.setState({ largeFormatEnabled: true });
+    });
+
+    act(() => {
+      useConverterStore.getState().setTargetWidthMm(320);
+    });
+
+    expect(useConverterStore.getState().sessionId).toBeNull();
+    expect(useConverterStore.getState().previewGlbUrl).toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+
+    expect(mockSubmitPreview).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     ["modeling mode", { modeling_mode: ModelingMode.PIXEL }],
     ["cleanup", { enable_cleanup: false }],
@@ -444,7 +487,6 @@ describe("useAutoPreview", () => {
     ["LUT-constrained matching", { use_lut_constrained: true }],
     ["automatic dynamic range", { auto_dynamic_range: true }],
     ["high-precision 3D", { high_precision_3d_preview: true }],
-    ["target width", { target_width_mm: 160 }],
     ["outline", { enable_outline: true }],
   ])("regenerates a material preview after %s changes", (_label, patch) => {
     renderHook(() => useAutoPreview());

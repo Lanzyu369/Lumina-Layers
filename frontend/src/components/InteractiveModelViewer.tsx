@@ -23,6 +23,7 @@ import PuzzleOverlay3D from "./PuzzleOverlay3D";
 import { useGltfCacheLifecycle } from "./useGltfCacheLifecycle";
 import { materializePositionAttributeForGeometryBake } from "../utils/threeQuantizedGeometry";
 import type { PuzzleOverlayBounds } from "./puzzleOverlay3DUtils";
+import { createPreviewSpace } from "../utils/previewSpace";
 
 type LuminaWindow = Window & { __luminaPreviewStart?: number };
 
@@ -922,6 +923,14 @@ function InteractiveModelViewer({
     };
   }, [applyQuickPreviewGeometry, scene, sourceRole, url]);
 
+  const previewSpace = useMemo(
+    () =>
+      applyQuickPreviewGeometry && modelBounds
+        ? createPreviewSpace(modelBounds, scaleX, scaleY)
+        : null,
+    [applyQuickPreviewGeometry, modelBounds, scaleX, scaleY],
+  );
+
   useEffect(() => {
     postClientLog("preview: GLB scene processed (useMemo done)", {
       startTime: _getPreviewStartTime(),
@@ -1170,21 +1179,40 @@ function InteractiveModelViewer({
   // Double-sided mirror meshes are defined above (before useEffect).
 
   return (
-    <group
-      ref={groupRef}
-      scale={applyQuickPreviewGeometry ? [scaleX, scaleY, 1] : [1, 1, 1]}
-    >
-      <primitive object={nonColorObject} />
-      {/* Double-sided: mirror color layers below the backing plate (Z < 0) */}
-      {mirrorMeshes.map((mesh) => (
-        <primitive key={mesh.uuid} object={mesh} />
-      ))}
-      {/* White backing plate — GLB-extracted shape or rectangular fallback (Z ∈ [0, spacerThick]) */}
-      {backingMesh && <primitive object={backingMesh} />}
-      {/* Color layers on top of backing plate (Z ≥ spacerThick) */}
-      {colorMeshes.map((mesh) => (
-        <primitive key={mesh.uuid} object={mesh} />
-      ))}
+    <group ref={groupRef}>
+      <group
+        name="preview-asset-space"
+        position={previewSpace
+          ? [previewSpace.assetGroupPosition.x, previewSpace.assetGroupPosition.y, 0]
+          : [0, 0, 0]}
+        scale={previewSpace
+          ? [previewSpace.scaleX, previewSpace.scaleY, 1]
+          : [1, 1, 1]}
+      >
+        <primitive object={nonColorObject} />
+        {/* Double-sided: mirror color layers below the backing plate (Z < 0) */}
+        {mirrorMeshes.map((mesh) => (
+          <primitive key={mesh.uuid} object={mesh} />
+        ))}
+        {/* White backing plate — GLB-extracted shape or rectangular fallback (Z ∈ [0, spacerThick]) */}
+        {backingMesh && <primitive object={backingMesh} />}
+        {/* Color layers on top of backing plate (Z ≥ spacerThick) */}
+        {colorMeshes.map((mesh) => (
+          <primitive key={mesh.uuid} object={mesh} />
+        ))}
+        <PuzzleOverlay3D
+          enabled={puzzleOverlayEnabled}
+          overlayUrl={puzzleOverlayUrl}
+          modelBounds={modelBounds}
+          previewCanvasBounds={puzzleOverlayBounds}
+          spacerThick={spacerThick}
+          enableRelief={enableRelief}
+          colorHeightMap={colorHeightMap}
+          enableOutline={enableOutline}
+          enableCloisonne={enableCloisonne}
+          wireHeightMm={wireHeightMm}
+        />
+      </group>
       {/* 外轮廓预览 */}
       <OutlineFrame3D
         enabled={applyQuickPreviewGeometry && enableOutline}
@@ -1194,6 +1222,7 @@ function InteractiveModelViewer({
         modelMaxZ={outlinePreviewHeight}
         rasterCellSize={rasterCellSize}
         fillInteriorHoles={enableFridgeMagnet}
+        previewSpace={previewSpace}
       />
       {/* 景泰蓝金色线条预览 */}
       <CloisonneWire3D
@@ -1204,18 +1233,8 @@ function InteractiveModelViewer({
         backingPlateMesh={backingMesh}
         spacerThick={spacerThick}
         colorLayerHeightMm={previewColorLayerHeightMm}
-      />
-      <PuzzleOverlay3D
-        enabled={puzzleOverlayEnabled}
-        overlayUrl={puzzleOverlayUrl}
-        modelBounds={modelBounds}
-        previewCanvasBounds={puzzleOverlayBounds}
-        spacerThick={spacerThick}
-        enableRelief={enableRelief}
-        colorHeightMap={colorHeightMap}
-        enableOutline={enableOutline}
-        enableCloisonne={enableCloisonne}
-        wireHeightMm={wireHeightMm}
+        rasterCellSize={rasterCellSize}
+        previewSpace={previewSpace}
       />
     </group>
   );

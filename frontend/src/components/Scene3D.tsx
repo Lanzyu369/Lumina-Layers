@@ -23,6 +23,7 @@ import ModelSurfaceSelector3D from "./ModelSurfaceSelector3D";
 import { useConverterStore } from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
 import { computeScaleFactor } from "../utils/scaleUtils";
+import { createPreviewSpace } from "../utils/previewSpace";
 import { resolveCameraClippingPlanes } from "../utils/cameraDepthPrecision";
 import { useI18n } from "../i18n/context";
 import { useThemeConfig } from "../hooks/useThemeConfig";
@@ -82,19 +83,18 @@ export interface PreviewCameraOrbitConfig {
   maxDistance: number;
 }
 
-function finitePositiveScale(value: number): number {
-  return Number.isFinite(value) && value > 0 ? value : 1;
-}
-
 export function computeScaledPreviewBounds(
   modelBounds: PreviewModelBounds,
   scaleX: number,
   scaleY: number,
 ): ScaledPreviewBounds {
-  const safeScaleX = finitePositiveScale(scaleX);
-  const safeScaleY = finitePositiveScale(scaleY);
-  const width = Math.max(0, modelBounds.maxX - modelBounds.minX) * safeScaleX;
-  const height = Math.max(0, modelBounds.maxY - modelBounds.minY) * safeScaleY;
+  const displayBounds = createPreviewSpace(
+    modelBounds,
+    scaleX,
+    scaleY,
+  ).displayBounds;
+  const width = Math.max(0, displayBounds.maxX - displayBounds.minX);
+  const height = Math.max(0, displayBounds.maxY - displayBounds.minY);
   const depth = Math.max(0, modelBounds.maxZ);
   return {
     width,
@@ -950,6 +950,13 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const modelSurfaceBusy =
     showModelSurfaceSelector && (modelSurfaceLoading || modelSurfaceSelecting);
   const modelBounds = useConverterStore((s) => s.modelBounds);
+  const displayModelBounds = useMemo(
+    () =>
+      modelBounds
+        ? createPreviewSpace(modelBounds, scaleX, scaleY).displayBounds
+        : null,
+    [modelBounds, scaleX, scaleY],
+  );
   const diagnosticsSamplingEnabled = diagnosticsVisible || getThreePerfDebugConfig().enabled;
   const hasPerformanceTiming = Boolean(previewPerformanceTiming || generatePerformanceTiming);
 
@@ -1461,7 +1468,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             />
           </Suspense>
         ) : null}
-        {batchPreviewItems.length === 0 && addLoop && modelBounds && (
+        {batchPreviewItems.length === 0 && addLoop && displayModelBounds && (
           <KeychainRing3D
             enabled={addLoop}
             width={loopWidth}
@@ -1471,18 +1478,16 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             offsetX={loopOffsetX}
             offsetY={loopOffsetY}
             positionPreset={loopPositionPreset}
-            modelBounds={modelBounds}
+            modelBounds={displayModelBounds}
             cameraPanModifierActive={isSpacePanActive}
           />
           )}
-        {batchPreviewItems.length === 0 && enableFridgeMagnet && modelBounds && fridgeMagnets.length > 0 && (
+        {batchPreviewItems.length === 0 && enableFridgeMagnet && displayModelBounds && fridgeMagnets.length > 0 && (
           <FridgeMagnet3D
             enabled={enableFridgeMagnet}
             magnets={fridgeMagnets}
             selectedMagnetId={selectedFridgeMagnetId}
-            modelBounds={modelBounds}
-            scaleX={scaleX}
-            scaleY={scaleY}
+            modelBounds={displayModelBounds}
             onSelectMagnet={selectFridgeMagnet}
             onUpdateMagnetCenter={updateFridgeMagnetCenter}
             cameraPanModifierActive={isSpacePanActive}

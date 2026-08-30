@@ -740,6 +740,10 @@ beforeEach(() => {
       useConverterStore.setState({
         previewGlbUrl: "/api/files/quick-preview.glb",
         add_loop: true,
+        target_width_mm: 80,
+        target_height_mm: 120,
+        preview_width_mm: 40,
+        preview_height_mm: 60,
         modelBounds: {
           minX: -20,
           maxX: 20,
@@ -752,6 +756,13 @@ beforeEach(() => {
       render(<Scene3D />);
 
       expect(capturedKeychainRingProps).not.toBeNull();
+      expect(capturedKeychainRingProps?.modelBounds).toEqual({
+        minX: -40,
+        maxX: 40,
+        minY: -60,
+        maxY: 60,
+        maxZ: 2,
+      });
     });
 
     it("keeps the lightweight preview and keychain proxy ahead of a stale store model", () => {
@@ -1071,10 +1082,16 @@ beforeEach(() => {
         enabled: true,
         magnets: fridgeMagnets,
         selectedMagnetId: "magnet-1",
-        modelBounds,
-        scaleX: 2,
-        scaleY: 2,
+        modelBounds: {
+          minX: -20,
+          maxX: 20,
+          minY: -20,
+          maxY: 20,
+          maxZ: 5,
+        },
       });
+      expect(capturedFridgeMagnet3DProps).not.toHaveProperty("scaleX");
+      expect(capturedFridgeMagnet3DProps).not.toHaveProperty("scaleY");
       expect(capturedFridgeMagnet3DProps?.onSelectMagnet).toBe(
         useConverterStore.getState().selectFridgeMagnet,
       );
