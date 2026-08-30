@@ -306,7 +306,7 @@ diff --git a/source/svgparser.cpp b/source/svgparser.cpp
 index 183937c..bad802e 100644
 --- a/source/svgparser.cpp
 +++ b/source/svgparser.cpp
-@@ -3,9 +3,101 @@
+@@ -3,9 +3,106 @@
  #include "svgparserutils.h"
  
  #include <cassert>
@@ -365,6 +365,9 @@ index 183937c..bad802e 100644
 +    }
 +    if(name == "vector-effect")
 +        return "unsupported_vector_effect";
++    if((name == "d" && value.find_first_of("Aa") != std::string_view::npos)
++            || name == "rx" || name == "ry")
++        return "unsupported_arc";
 +    if(name == "marker" || name == "marker-start"
 +            || name == "marker-mid" || name == "marker-end")
 +        return "unsupported_marker";
@@ -391,6 +394,8 @@ index 183937c..bad802e 100644
 +        return "unsupported_script";
 +    if(id == ElementID::Mask)
 +        return "unsupported_mask";
++    if(id == ElementID::Circle || id == ElementID::Ellipse)
++        return "unsupported_arc";
 +    if(id == ElementID::Marker)
 +        return "unsupported_marker";
 +    if(id == ElementID::LinearGradient || id == ElementID::RadialGradient
@@ -408,7 +413,7 @@ index 183937c..bad802e 100644
  struct SimpleSelector;
  
  using Selector = std::vector<SimpleSelector>;
-@@ -494,7 +586,9 @@ static bool parseSelectors(std::string_view& input, SelectorList& selectors)
+@@ -494,7 +591,9 @@ static bool parseSelectors(std::string_view& input, SelectorList& selectors)
      return true;
  }
  
@@ -419,7 +424,7 @@ index 183937c..bad802e 100644
  {
      if(!skipDelimiter(input, '{'))
          return false;
-@@ -517,6 +611,10 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
+@@ -517,6 +616,10 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
          declaration.specificity = 0x10;
          declaration.id = csspropertyid(name);
          declaration.value.assign(value);
@@ -430,7 +435,7 @@ index 183937c..bad802e 100644
          if(skipDelimiter(input, '!')) {
              skipOptionalSpaces(input);
              if(!skipString(input, "important"))
-@@ -531,19 +629,41 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
+@@ -531,19 +634,41 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
      return skipDelimiter(input, '}');
  }
  
@@ -475,7 +480,7 @@ index 183937c..bad802e 100644
              int depth = 0;
              while(!input.empty()) {
                  auto ch = input.front();
-@@ -562,8 +682,12 @@ static RuleDataList parseStyleSheet(std::string_view input)
+@@ -562,8 +687,12 @@ static RuleDataList parseStyleSheet(std::string_view input)
          }
  
          Rule rule;
@@ -489,7 +494,7 @@ index 183937c..bad802e 100644
          for(const auto& selector : rule.selectors) {
              size_t specificity = 0;
              for(const auto& simpleSelector : selector) {
-@@ -595,7 +719,8 @@ static SelectorList parseQuerySelectors(std::string_view input)
+@@ -595,7 +724,8 @@ static SelectorList parseQuerySelectors(std::string_view input)
      return selectors;
  }
  
@@ -499,7 +504,7 @@ index 183937c..bad802e 100644
  {
      std::string name;
      skipOptionalSpaces(input);
-@@ -610,6 +735,10 @@ inline void parseInlineStyle(std::string_view input, SVGElement* element)
+@@ -610,6 +740,10 @@ inline void parseInlineStyle(std::string_view input, SVGElement* element)
          }
  
          auto id = csspropertyid(name);
@@ -510,7 +515,7 @@ index 183937c..bad802e 100644
          if(id != PropertyID::Unknown)
              element->setAttribute(0x100, id, value);
          skipOptionalSpacesOrDelimiter(input, ';');
-@@ -844,6 +973,9 @@ bool Document::parse(const char* data, size_t length)
+@@ -844,6 +978,9 @@ bool Document::parse(const char* data, size_t length)
              ++ignoring;
          } else {
              auto id = elementid(buffer);
@@ -520,7 +525,7 @@ index 183937c..bad802e 100644
              if(id == ElementID::Unknown) {
                  ignoring = 1;
              } else {
-@@ -864,6 +996,7 @@ bool Document::parse(const char* data, size_t length)
+@@ -864,6 +1001,7 @@ bool Document::parse(const char* data, size_t length)
  
          skipOptionalSpaces(input);
          while(readIdentifier(input, buffer)) {
@@ -528,7 +533,7 @@ index 183937c..bad802e 100644
              skipOptionalSpaces(input);
              if(!skipDelimiter(input, '='))
                  return false;
-@@ -877,12 +1010,16 @@ bool Document::parse(const char* data, size_t length)
+@@ -877,12 +1015,16 @@ bool Document::parse(const char* data, size_t length)
                  return false;
              auto id = PropertyID::Unknown;
              if(element != nullptr)
@@ -547,7 +552,7 @@ index 183937c..bad802e 100644
                  } else {
                      if(id == PropertyID::Id)
                          m_rootElement->addElementById(buffer, element);
-@@ -920,7 +1057,7 @@ bool Document::parse(const char* data, size_t length)
+@@ -920,7 +1062,7 @@ bool Document::parse(const char* data, size_t length)
  
  void Document::applyStyleSheet(const std::string& content)
  {

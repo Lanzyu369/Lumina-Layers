@@ -25,15 +25,15 @@ parse/clip memory cache before every run. No artifact cache is configured.
 | Check | Result |
 |---|---:|
 | Proxy identity | SHA-256 `d078cf4293623d934759c2688e13a00491e525055e7595069a0ecc4f078842fb`, 3,767,519 bytes |
-| Complete warm runs | 0.523136875 s, 0.524795583 s, 0.525613333 s |
-| Warm median / gate | 0.524795583 s / 1.0 s — PASS |
-| Warm p95 / gate | 0.525531558 s / 1.25 s — PASS |
-| Native recorder | 0.043934375 s median |
-| Native kernel | 0.325129125 s median |
-| Binding conversion | 0.000003041 s median |
-| Shapely adapter conversion | 0.026693917 s median |
-| LUT color matching | 0.119133583 s median |
-| Peak process RSS | 243,712,000 bytes |
+| Complete warm runs | 0.523628084 s, 0.527352709 s, 0.523676542 s |
+| Warm median / gate | 0.523676542 s / 1.0 s — PASS |
+| Warm p95 / gate | 0.526985092 s / 1.25 s — PASS |
+| Native recorder | 0.044798542 s median |
+| Native kernel | 0.324229334 s median |
+| Binding conversion | 0.000002625 s median |
+| Shapely adapter conversion | 0.026722416 s median |
+| LUT color matching | 0.117186375 s median |
+| Peak process RSS | 245,219,328 bytes |
 | Measured swap growth | 0 bytes |
 | Complete output | 3,097 raw shapes, 4,676 visible/matched shapes, 128,354 coordinates |
 | Stable output fingerprint | `e5e5e4472f0470e5a8506304e94d2a1455566c61dad06e5e9f57ba5ce925aafb` |
@@ -56,7 +56,7 @@ for that separate regression fixture therefore remain pending; neither the
 ## Packaging evidence
 
 The standalone package built and installed as a clean CPython 3.12 macOS arm64
-wheel. Its 52 package tests passed against the installed extension. The sdist
+wheel. Its 56 package tests passed against the installed extension. The sdist
 and wheel both contain the complete LunaSVG, PlutoVG, Clipper2, FreeType, and
 stb license texts in addition to the Apache-2.0 project license.
 
@@ -149,8 +149,9 @@ python scripts/verify_native_svg_slicer_outputs.py \
   conversions. It does not run a second Python GEOS union, `make_valid`, or
   per-ring repair loop.
 - CSS reference semantics, existing legacy stroke policy, unsupported paint
-  semantics, and the real R4C1 `non-scaling-stroke` case fall back once for the
-  whole document. Production does not run a full shadow audit.
+  semantics, fixed-segment LunaSVG arc sources (`A`/`a`, circle, ellipse, and
+  rounded rectangle), and the real R4C1 `non-scaling-stroke` case fall back
+  once for the whole document. Production does not run a full shadow audit.
 - Publishing the standalone package to a separate GitHub repository and wheel
   index requires an owner/namespace decision. Until then,
   `requirements-native-svg.txt` installs the exact in-tree package. If split,

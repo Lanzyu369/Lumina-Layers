@@ -37,6 +37,10 @@ UNSUPPORTED_DOCUMENT_PARTS = [
     "<foreignObject width='1' height='1'/>",
     "<rect width='5' height='5' made-up-paint='1'/>",
     "<style>rect { made-up-paint: 1; }</style>",
+    "<path d='M1 5A4 4 0 0 1 9 5L1 5Z'/>",
+    "<circle cx='5' cy='5' r='4'/>",
+    "<ellipse cx='5' cy='5' rx='4' ry='2'/>",
+    "<rect x='1' y='1' width='8' height='8' rx='2'/>",
 ]
 
 

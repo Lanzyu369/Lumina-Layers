@@ -11,7 +11,10 @@ without importing application, printer, mesh, or UI code.
 Version 0.1 supports static solid fills, solid strokes, affine transforms,
 fill rules, vector clips, and source-order occlusion. Ambiguous document
 semantics return a stable whole-document unsupported result; no element is
-silently dropped.
+silently dropped. SVG arc path commands, circles, ellipses, and rounded
+rectangles also return `unsupported_arc` in 0.1 because LunaSVG's resolved
+path currently exposes only a fixed cubic approximation rather than the
+original arc parameters needed to honor Lumina's physical error budget.
 
 ## Build
 

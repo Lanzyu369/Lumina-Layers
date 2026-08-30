@@ -86,6 +86,28 @@ def test_recorder_fails_closed_for_unsupported_elements(
     assert result.commands == ()
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        "<path d='M1 5A4 4 0 0 1 9 5L1 5Z'/>",
+        "<circle cx='5' cy='5' r='4'/>",
+        "<ellipse cx='5' cy='5' rx='4' ry='2'/>",
+        "<rect x='1' y='1' width='8' height='8' rx='2'/>",
+    ],
+)
+def test_recorder_fails_closed_for_fixed_segment_arc_sources(
+    body: str,
+) -> None:
+    result = lumina_svg_core.record_paint_commands_svg(
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'>"
+        f"{body}</svg>"
+    )
+
+    assert result.status == "unsupported"
+    assert result.reason_code == "unsupported_arc"
+    assert result.commands == ()
+
+
 def test_recorder_reports_invalid_svg_without_partial_commands() -> None:
     result = lumina_svg_core.record_paint_commands_svg(
         "<svg><path d='M0 0H10V10Z'></svg"
