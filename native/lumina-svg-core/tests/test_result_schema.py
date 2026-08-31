@@ -179,3 +179,19 @@ def test_invalid_legacy_minimum_area_fails_deterministically(
     assert result.status == "invalid"
     assert result.reason_code == "invalid_physical_parameters"
     assert result.visible.geometry_count == 0
+
+
+@pytest.mark.parametrize("minimum_area", [-0.01, float("nan"), float("inf")])
+def test_invalid_legacy_component_area_fails_deterministically(
+    minimum_area: float,
+) -> None:
+    result = lumina_svg_core.analyze_svg(
+        FIXTURES / "basic_fill_stroke.svg",
+        target_width_mm=20.0,
+        tolerance_mm=0.02,
+        legacy_component_area_source_units_squared=minimum_area,
+    )
+
+    assert result.status == "invalid"
+    assert result.reason_code == "invalid_physical_parameters"
+    assert result.visible.geometry_count == 0

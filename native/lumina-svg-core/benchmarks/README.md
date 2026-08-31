@@ -7,7 +7,7 @@ timings, process peak RSS, system swap growth, and a deterministic result
 fingerprint.
 
 The measured fixture is `supported_scale_fixture.svg`, SHA-256
-`aedd2705dff8a61779418ddb4574aff7d2b22e19577fa798ebc669e4b60f9070`.
+`7f1fd4b2405989394c1a4fd6b59b117c4015ee2b9918b4dba5922c3e8ede472e`.
 `supported_scale_fixture_provenance.json` records its exact source SHA, the 64
 selected path indices, the disjoint 32-by-32 placement, and the 16 repetitions.
 The source paths and colors come from `test_images/benchmark.svg`; the source

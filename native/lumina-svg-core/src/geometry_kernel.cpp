@@ -175,6 +175,203 @@ bool isConvexRing(const Path64& ring)
     return clipper_safety_detail::isConvexClosedPath(ring);
 }
 
+struct AreaInterval {
+    long double lower{0};
+    long double upper{0};
+    bool valid{false};
+};
+
+struct BoundaryMeasure {
+    long double area_source_units_squared{0};
+    long double perimeter_source_units{0};
+    long double numeric_error_source_units_squared{0};
+    size_t ring_count{0};
+};
+
+long double signedDoubleAreaGrid(const Path64& ring)
+{
+    long double twiceArea = 0.0L;
+    if(ring.size() < 3)
+        return twiceArea;
+    for(size_t index = 0; index < ring.size(); ++index) {
+        const auto& first = ring[index];
+        const auto& second = ring[(index + 1) % ring.size()];
+        twiceArea += static_cast<long double>(first.x) * second.y
+            - static_cast<long double>(first.y) * second.x;
+    }
+    return twiceArea;
+}
+
+BoundaryMeasure measureBoundary(
+    const std::vector<const Path64*>& rings,
+    double gridToSourceUnit)
+{
+    BoundaryMeasure measure;
+    if(!(gridToSourceUnit > 0.0) || !std::isfinite(gridToSourceUnit))
+        return measure;
+    long double signedTwiceAreaGrid = 0.0L;
+    long double absoluteCrossSumGrid = 0.0L;
+    long double perimeterGrid = 0.0L;
+    for(const auto* ring : rings) {
+        if(ring == nullptr || ring->size() < 3)
+            continue;
+        ++measure.ring_count;
+        signedTwiceAreaGrid += signedDoubleAreaGrid(*ring);
+        for(size_t index = 0; index < ring->size(); ++index) {
+            const auto& first = (*ring)[index];
+            const auto& second = (*ring)[
+                (index + 1) % ring->size()];
+            const long double firstProduct =
+                static_cast<long double>(first.x) * second.y;
+            const long double secondProduct =
+                static_cast<long double>(first.y) * second.x;
+            absoluteCrossSumGrid += std::abs(firstProduct)
+                + std::abs(secondProduct);
+            perimeterGrid += std::hypot(
+                static_cast<long double>(second.x) - first.x,
+                static_cast<long double>(second.y) - first.y);
+        }
+    }
+    const long double sourceScale = gridToSourceUnit;
+    const long double sourceAreaScale = sourceScale * sourceScale;
+    measure.area_source_units_squared =
+        std::abs(signedTwiceAreaGrid) * 0.5L * sourceAreaScale;
+    measure.perimeter_source_units = perimeterGrid * sourceScale;
+    // Downstream GEOS computes area in binary64 after materializing the same
+    // integer coordinates. Bound cancellation/rounding separately from the
+    // geometric boundary uncertainty used below.
+    measure.numeric_error_source_units_squared =
+        absoluteCrossSumGrid * 0.5L * sourceAreaScale
+        * std::numeric_limits<double>::epsilon() * 64.0L;
+    return measure;
+}
+
+long double boundaryAreaUncertainty(
+    const BoundaryMeasure& measure,
+    double boundaryErrorSourceUnits)
+{
+    constexpr long double PI =
+        3.141592653589793238462643383279502884L;
+    const long double error = std::max(0.0, boundaryErrorSourceUnits);
+    // The symmetric difference is contained in the error-radius tube around
+    // every closed boundary. The standard rectifiable-curve tube bound is
+    // 2*r*length + pi*r^2 per ring.
+    return 2.0L * error * measure.perimeter_source_units
+        + PI * error * error * measure.ring_count
+        + measure.numeric_error_source_units_squared;
+}
+
+long double minimumTriangleAreaSourceUnitsSquared(
+    const Path64& ring,
+    double gridToSourceUnit)
+{
+    if(ring.size() < 3 || ring.size() > 4)
+        return 0.0L;
+    long double minimumTwiceArea =
+        std::numeric_limits<long double>::infinity();
+    for(size_t first = 0; first + 2 < ring.size(); ++first) {
+        for(size_t second = first + 1; second + 1 < ring.size(); ++second) {
+            for(size_t third = second + 1; third < ring.size(); ++third) {
+                const auto& a = ring[first];
+                const auto& b = ring[second];
+                const auto& c = ring[third];
+                const long double twiceArea = std::abs(
+                    (static_cast<long double>(b.x) - a.x)
+                        * (static_cast<long double>(c.y) - a.y)
+                    - (static_cast<long double>(b.y) - a.y)
+                        * (static_cast<long double>(c.x) - a.x));
+                minimumTwiceArea = std::min(minimumTwiceArea, twiceArea);
+            }
+        }
+    }
+    const long double scale = gridToSourceUnit;
+    return minimumTwiceArea * 0.5L * scale * scale;
+}
+
+AreaInterval conservativeAreaInterval(
+    const std::vector<const Path64*>& rings,
+    double gridToSourceUnit,
+    double nativeBoundaryErrorSourceUnits,
+    double legacySimplifyToleranceSourceUnits,
+    bool allowConvexVertexBound)
+{
+    const auto measure = measureBoundary(rings, gridToSourceUnit);
+    if(measure.ring_count == 0
+            || !std::isfinite(measure.area_source_units_squared)
+            || !std::isfinite(measure.perimeter_source_units)
+            || !std::isfinite(
+                measure.numeric_error_source_units_squared))
+        return {};
+
+    const long double nativeUncertainty = boundaryAreaUncertainty(
+        measure, nativeBoundaryErrorSourceUnits);
+    long double lower = std::max(
+        0.0L, measure.area_source_units_squared - nativeUncertainty);
+    long double upper = measure.area_source_units_squared
+        + nativeUncertainty;
+
+    // GEOS topology-preserving simplification selects existing vertices. A
+    // convex triangle cannot lose a vertex, and a convex quadrilateral can
+    // reduce only to a triangle whose minimum area is enumerable exactly.
+    // This keeps common rectangles native without weakening the generic
+    // boundary-tube proof used for broader geometry.
+    if(allowConvexVertexBound
+            && legacySimplifyToleranceSourceUnits > 0.0
+            && rings.size() == 1 && rings.front() != nullptr
+            && isConvexRing(*rings.front())
+            && rings.front()->size() >= 3
+            && rings.front()->size() <= 4) {
+        lower = std::max(
+            0.0L,
+            minimumTriangleAreaSourceUnitsSquared(
+                *rings.front(), gridToSourceUnit)
+                - nativeUncertainty);
+    } else {
+        const double combinedBoundaryError =
+            nativeBoundaryErrorSourceUnits
+            + legacySimplifyToleranceSourceUnits;
+        const long double combinedUncertainty = boundaryAreaUncertainty(
+            measure, combinedBoundaryError);
+        lower = std::max(
+            0.0L, measure.area_source_units_squared - combinedUncertainty);
+        upper = measure.area_source_units_squared + combinedUncertainty;
+    }
+    if(!std::isfinite(lower) || !std::isfinite(upper) || lower > upper)
+        return {};
+    return {lower, upper, true};
+}
+
+bool areaThresholdClassificationIsCertain(
+    const std::vector<const Path64*>& rings,
+    double gridToSourceUnit,
+    double thresholdSourceUnitsSquared,
+    double nativeBoundaryErrorSourceUnits,
+    double legacySimplifyToleranceSourceUnits,
+    bool keepAtThreshold,
+    bool allowConvexVertexBound)
+{
+    if(!(thresholdSourceUnitsSquared > 0.0))
+        return true;
+    const auto interval = conservativeAreaInterval(
+        rings, gridToSourceUnit, nativeBoundaryErrorSourceUnits,
+        legacySimplifyToleranceSourceUnits, allowConvexVertexBound);
+    if(!interval.valid)
+        return false;
+    const long double threshold = thresholdSourceUnitsSquared;
+    if(keepAtThreshold)
+        return interval.upper < threshold || interval.lower >= threshold;
+    return interval.upper <= threshold || interval.lower > threshold;
+}
+
+std::vector<const Path64*> pathViews(const Paths64& paths)
+{
+    std::vector<const Path64*> views;
+    views.reserve(paths.size());
+    for(const auto& path : paths)
+        views.push_back(&path);
+    return views;
+}
+
 bool hasSafeMiterCorners(const Paths64& paths)
 {
     constexpr long double MAX_SAFE_INTERIOR_COSINE = 0.49L;
@@ -533,9 +730,12 @@ void applyLegacyContourNormalization(
     const PhysicalDomain& domain,
     double closeDeltaSourceUnits,
     double minimumPaintAreaMm2,
+    double nativeBoundaryErrorSourceUnits,
+    double legacySimplifyToleranceSourceUnits,
     bool& identity,
     bool& compatible,
     bool& areaFilterIdentity,
+    bool& areaFilterCompatible,
     ComplexityBudget& complexityBudget)
 {
     auto normalizedGroups = applyLegacyContourCloseMany(
@@ -554,6 +754,20 @@ void applyLegacyContourNormalization(
         compatible = compatible && normalized.compatible;
         paint.paths = std::move(normalized.paths);
         if(minimumPaintAreaMm2 > 0.0 && !paint.paths.empty()) {
+            const double minimumPaintAreaSourceUnitsSquared =
+                minimumPaintAreaMm2
+                / (domain.source_to_mm * domain.source_to_mm);
+            if(!std::isfinite(minimumPaintAreaSourceUnitsSquared)
+                    || !areaThresholdClassificationIsCertain(
+                        pathViews(paint.paths),
+                        domain.grid_step_mm / domain.source_to_mm,
+                        minimumPaintAreaSourceUnitsSquared,
+                        nativeBoundaryErrorSourceUnits,
+                        legacySimplifyToleranceSourceUnits,
+                        false,
+                        true)) {
+                areaFilterCompatible = false;
+            }
             const double areaMm2 = std::abs(Clipper2Lib::Area(paint.paths))
                 * domain.grid_step_mm * domain.grid_step_mm;
             if(!std::isfinite(areaMm2))
@@ -2531,11 +2745,40 @@ void appendRing(GeometryCollection& collection, const Path64& ring,
     collection.hole_parent.push_back(parent);
 }
 
+struct AreaThresholdGuard {
+    double grid_to_source_unit{0};
+    double threshold_source_units_squared{0};
+    double native_boundary_error_source_units{0};
+    double legacy_simplify_tolerance_source_units{0};
+    bool allow_convex_vertex_bound{false};
+    bool compatible{true};
+};
+
 void appendOuterNode(GeometryCollection& collection, const PolyPath64& outer,
-                     ComplexityBudget& complexityBudget)
+                     ComplexityBudget& complexityBudget,
+                     AreaThresholdGuard* areaThresholdGuard)
 {
     if(outer.IsHole() || outer.Polygon().size() < 3)
         return;
+    if(areaThresholdGuard != nullptr && areaThresholdGuard->compatible) {
+        std::vector<const Path64*> componentRings;
+        componentRings.reserve(checkedSizeSum(outer.Count(), size_t{1}));
+        componentRings.push_back(&outer.Polygon());
+        for(size_t index = 0; index < outer.Count(); ++index) {
+            const auto* child = outer.Child(index);
+            if(child->IsHole())
+                componentRings.push_back(&child->Polygon());
+        }
+        areaThresholdGuard->compatible =
+            areaThresholdClassificationIsCertain(
+                componentRings,
+                areaThresholdGuard->grid_to_source_unit,
+                areaThresholdGuard->threshold_source_units_squared,
+                areaThresholdGuard->native_boundary_error_source_units,
+                areaThresholdGuard->legacy_simplify_tolerance_source_units,
+                true,
+                areaThresholdGuard->allow_convex_vertex_bound);
+    }
     const auto outerRingIndex = static_cast<int64_t>(
         collection.ring_offsets.size() - 1);
     appendRing(collection, outer.Polygon(), -1, complexityBudget);
@@ -2553,7 +2796,8 @@ void appendOuterNode(GeometryCollection& collection, const PolyPath64& outer,
 }
 
 void appendPolyTree(GeometryCollection& collection, const PolyTree64& tree,
-                    ComplexityBudget& complexityBudget)
+                    ComplexityBudget& complexityBudget,
+                    AreaThresholdGuard* areaThresholdGuard)
 {
     std::vector<const PolyPath64*> pending;
     pending.reserve(tree.Count());
@@ -2562,7 +2806,8 @@ void appendPolyTree(GeometryCollection& collection, const PolyTree64& tree,
     while(!pending.empty()) {
         const auto* outer = pending.back();
         pending.pop_back();
-        appendOuterNode(collection, *outer, complexityBudget);
+        appendOuterNode(
+            collection, *outer, complexityBudget, areaThresholdGuard);
         for(size_t holeIndex = outer->Count(); holeIndex > 0; --holeIndex) {
             const auto* hole = outer->Child(holeIndex - 1);
             for(size_t childIndex = hole->Count(); childIndex > 0;
@@ -2577,7 +2822,8 @@ void appendPolyTree(GeometryCollection& collection, const PolyTree64& tree,
 
 void appendGeometry(GeometryCollection& collection,
                     const PaintGeometry& geometry,
-                    ComplexityBudget& complexityBudget)
+                    ComplexityBudget& complexityBudget,
+                    AreaThresholdGuard* areaThresholdGuard = nullptr)
 {
     PolyTree64 tree;
     if(!geometry.paths.empty()) {
@@ -2586,7 +2832,8 @@ void appendGeometry(GeometryCollection& collection,
         clipper.AddSubject(geometry.paths);
         if(!clipper.Execute(ClipType::Union, FillRule::NonZero, tree))
             throw std::runtime_error("clipper_union_failed");
-        appendPolyTree(collection, tree, complexityBudget);
+        appendPolyTree(
+            collection, tree, complexityBudget, areaThresholdGuard);
     }
 
     if(collection.geometry_offsets.size()
@@ -2863,7 +3110,8 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
                                           double targetWidthMm,
                                           double toleranceMm,
                                           double legacyCloseDeltaSourceUnits,
-                                          double legacyMinimumPaintAreaFactor)
+                                          double legacyMinimumPaintAreaFactor,
+                                          double legacyComponentAreaSourceUnitsSquared)
 {
     auto result = std::make_shared<NativeResult>();
     const auto buildStarted = std::chrono::steady_clock::now();
@@ -3155,15 +3403,27 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
         return result;
     }
     auto paints = std::move(replay.paints);
-    const double maximumBoundaryErrorMm =
+    const double maximumRecordedBoundaryErrorSource =
         maximumRelevantBoundaryErrorSource(
-            topologyTrace, sourceBounds, recording.viewport)
-            * result->scale_factor
+            topologyTrace, sourceBounds, recording.viewport);
+    const double maximumBoundaryErrorMm =
+        maximumRecordedBoundaryErrorSource * result->scale_factor
         + result->max_quantization_error_mm;
     if(!std::isfinite(maximumBoundaryErrorMm)
             || maximumBoundaryErrorMm > toleranceMm * 0.6) {
         result->status = "unsupported";
         result->reason_code = "unsupported_input_precision";
+        return result;
+    }
+    const double nativeAreaBoundaryErrorSource =
+        std::sqrt(2.0) * maximumRecordedBoundaryErrorSource
+        + result->max_quantization_error_mm / result->scale_factor;
+    const double legacySimplifyToleranceSource =
+        toleranceMm / std::max(result->scale_factor, 1.0e-9) * 0.5;
+    if(!std::isfinite(nativeAreaBoundaryErrorSource)
+            || !std::isfinite(legacySimplifyToleranceSource)) {
+        result->status = "unsupported";
+        result->reason_code = "legacy_area_threshold_ambiguous";
         return result;
     }
     const SourceSegmentIndex topologyIndex(topologyTrace.segments);
@@ -3182,6 +3442,7 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
     bool legacyNormalizationIdentity = true;
     bool legacyNormalizationCompatible = true;
     bool legacyAreaFilterIdentity = true;
+    bool legacyAreaFilterCompatible = true;
     const double legacyAreaScaleAdjustment =
         result->scale_factor >= 1.0e-6
         ? 1.0
@@ -3191,9 +3452,15 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
         * legacyAreaScaleAdjustment;
     applyLegacyContourNormalization(
         paints, domain, legacyCloseDeltaSourceUnits,
-        legacyMinimumPaintAreaMm2, legacyNormalizationIdentity,
+        legacyMinimumPaintAreaMm2, nativeAreaBoundaryErrorSource,
+        legacySimplifyToleranceSource, legacyNormalizationIdentity,
         legacyNormalizationCompatible, legacyAreaFilterIdentity,
-        complexityBudget);
+        legacyAreaFilterCompatible, complexityBudget);
+    if(!legacyAreaFilterCompatible) {
+        result->status = "unsupported";
+        result->reason_code = "legacy_area_threshold_ambiguous";
+        return result;
+    }
     const auto compositeStarted = std::chrono::steady_clock::now();
     result->legacy_raw_seconds = std::chrono::duration<double>(
         compositeStarted - legacyRawStarted).count();
@@ -3218,14 +3485,37 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
         legacyNormalizationCompatible;
     result->legacy_area_filter_identity = legacyAreaFilterIdentity;
 
-    for(const auto& paint : paints)
-        appendGeometry(result->raw, paint, complexityBudget);
-
+    AreaThresholdGuard componentAreaGuard{
+        result->grid_to_source_unit,
+        legacyComponentAreaSourceUnitsSquared,
+        nativeAreaBoundaryErrorSource,
+        legacySimplifyToleranceSource,
+        false,
+        true,
+    };
+    GeometryCollection visibleCollection;
     for(size_t index = 0; index < paints.size(); ++index) {
         auto visible = paints[index];
         visible.paths = finalComposite.visible[index];
-        appendGeometry(result->visible, visible, complexityBudget);
+        // The convex vertex-selection bound is valid only when compositing
+        // left this paint byte-for-byte unchanged. Otherwise legacy GEOS
+        // simplifies raw paints before its Boolean difference, so a convex
+        // output ring does not prove which source vertices survived.
+        componentAreaGuard.allow_convex_vertex_bound =
+            visible.paths == paints[index].paths;
+        appendGeometry(
+            visibleCollection, visible, complexityBudget,
+            legacyComponentAreaSourceUnitsSquared > 0.0
+                ? &componentAreaGuard : nullptr);
     }
+    if(!componentAreaGuard.compatible) {
+        result->status = "unsupported";
+        result->reason_code = "legacy_area_threshold_ambiguous";
+        return result;
+    }
+    for(const auto& paint : paints)
+        appendGeometry(result->raw, paint, complexityBudget);
+    result->visible = std::move(visibleCollection);
 
     PaintGeometry silhouette;
     silhouette.paths = finalComposite.silhouette;
@@ -3253,13 +3543,17 @@ std::shared_ptr<NativeResult> analyzeWith(Loader&& loader,
                                           double toleranceMm,
                                           bool allowStrokes,
                                           double legacyCloseDeltaSourceUnits,
-                                          double legacyMinimumPaintAreaFactor)
+                                          double legacyMinimumPaintAreaFactor,
+                                          double legacyComponentAreaSourceUnitsSquared)
 {
     if(!isPositiveFinite(targetWidthMm) || !isPositiveFinite(toleranceMm)
             || !std::isfinite(legacyCloseDeltaSourceUnits)
             || legacyCloseDeltaSourceUnits < 0.0
             || !std::isfinite(legacyMinimumPaintAreaFactor)
-            || legacyMinimumPaintAreaFactor < 0.0) {
+            || legacyMinimumPaintAreaFactor < 0.0
+            || !std::isfinite(
+                legacyComponentAreaSourceUnitsSquared)
+            || legacyComponentAreaSourceUnitsSquared < 0.0) {
         auto result = std::make_shared<NativeResult>();
         result->reason_code = "invalid_physical_parameters";
         return result;
@@ -3307,7 +3601,8 @@ std::shared_ptr<NativeResult> analyzeWith(Loader&& loader,
         }
         auto result = buildResult(
             std::move(recording), targetWidthMm, toleranceMm,
-            legacyCloseDeltaSourceUnits, legacyMinimumPaintAreaFactor);
+            legacyCloseDeltaSourceUnits, legacyMinimumPaintAreaFactor,
+            legacyComponentAreaSourceUnitsSquared);
         const auto kernelFinished = std::chrono::steady_clock::now();
         result->recorder_seconds = std::chrono::duration<double>(
             recorderFinished - recorderStarted).count();
@@ -3356,12 +3651,14 @@ std::shared_ptr<NativeResult> analyzeSvg(const std::string& filename,
                                          double toleranceMm,
                                          bool allowStrokes,
                                          double legacyCloseDeltaSourceUnits,
-                                         double legacyMinimumPaintAreaFactor)
+                                         double legacyMinimumPaintAreaFactor,
+                                         double legacyComponentAreaSourceUnitsSquared)
 {
     return analyzeSvgPath(
         std::filesystem::u8path(filename),
         targetWidthMm, toleranceMm, allowStrokes,
-        legacyCloseDeltaSourceUnits, legacyMinimumPaintAreaFactor);
+        legacyCloseDeltaSourceUnits, legacyMinimumPaintAreaFactor,
+        legacyComponentAreaSourceUnitsSquared);
 }
 
 void setThreadLaunchFailureAfterForTesting(int64_t successfulLaunches)
@@ -3376,12 +3673,14 @@ std::shared_ptr<NativeResult> analyzeSvgPath(
     double toleranceMm,
     bool allowStrokes,
     double legacyCloseDeltaSourceUnits,
-    double legacyMinimumPaintAreaFactor)
+    double legacyMinimumPaintAreaFactor,
+    double legacyComponentAreaSourceUnitsSquared)
 {
     return analyzeWith(
         [&filename]() { return recordPaintCommandsPath(filename); },
         targetWidthMm, toleranceMm, allowStrokes,
-        legacyCloseDeltaSourceUnits, legacyMinimumPaintAreaFactor);
+        legacyCloseDeltaSourceUnits, legacyMinimumPaintAreaFactor,
+        legacyComponentAreaSourceUnitsSquared);
 }
 
 std::shared_ptr<NativeResult> analyzeSvgData(const std::string& svg,
@@ -3389,12 +3688,14 @@ std::shared_ptr<NativeResult> analyzeSvgData(const std::string& svg,
                                              double toleranceMm,
                                              bool allowStrokes,
                                              double legacyCloseDeltaSourceUnits,
-                                             double legacyMinimumPaintAreaFactor)
+                                             double legacyMinimumPaintAreaFactor,
+                                             double legacyComponentAreaSourceUnitsSquared)
 {
     return analyzeWith(
         [&svg]() { return recordPaintCommandsSvg(svg); },
         targetWidthMm, toleranceMm, allowStrokes,
-        legacyCloseDeltaSourceUnits, legacyMinimumPaintAreaFactor);
+        legacyCloseDeltaSourceUnits, legacyMinimumPaintAreaFactor,
+        legacyComponentAreaSourceUnitsSquared);
 }
 
 } // namespace lumina_svg_core

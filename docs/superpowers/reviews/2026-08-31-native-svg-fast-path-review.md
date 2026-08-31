@@ -8,8 +8,8 @@ the exact PR #585 dependency commit
 adapter, whole-document fallback policy, packaging, benchmark, and retained
 slicer evidence are in scope. Merging is explicitly out of scope.
 
-The first independent pass returned **Approved with fixes**. All five P1 and
-three P2 findings below were addressed before the exact-SHA re-review.
+The independent passes returned **Approved with fixes**. All six P1 and three
+P2 findings below were addressed before the exact-SHA re-review.
 
 ## Findings and dispositions
 
@@ -20,21 +20,22 @@ three P2 findings below were addressed before the exact-SHA re-review.
 | P1 | `<symbol>` content could be omitted without requesting fallback. | The pinned LunaSVG capability recorder now returns `unsupported_symbol`; direct and `<use>` product tests prove whole-document legacy parity. |
 | P1 | Explicit root `preserveAspectRatio` values could change viewport semantics. | Every valid explicit root value now returns `unsupported_preserve_aspect_ratio`; malformed values remain invalid and nested SVG keeps its existing fallback reason. Whitespace, `none`, `meet`, and `slice` cases are covered. |
 | P1 | Inline CSS comments could alter property tokenization and material identity. | Inline comments, including unterminated comments, now return `unsupported_css_comment`. Recorder and product differential tests verify material and topology parity through whole-document fallback. |
+| P1 | Recorder precision, native flattening/grid error, and legacy GEOS simplification could place raw or disconnected-component areas on opposite sides of the legacy thresholds. | The C++ kernel now computes conservative area intervals from all allocated error sources and requests whole-document fallback with `legacy_area_threshold_ambiguous` whenever either classification is not provable. Just-below/just-above tests cover both the dynamic raw-paint threshold and the fixed `0.01` component threshold; unsupported results remain canonically empty. |
 | P2 | Slicer evidence could count pure-E priming or auxiliary extrusion as material proof. | Evidence now requires positive extrusion with real XY movement inside a model feature, tracks G90/G91 and G92, preserves absolute E across tool changes, and excludes custom, prime/purge/wipe tower, skirt/brim, and support features. Both real slicers were rerun twice. |
-| P2 | The supported benchmark fixture recorded selected source indices without independently recomputing why they were safe. | `--verify` now ranks source paths by exact serialized XML byte length and reruns the complete standalone analysis plus all four legacy compatibility flags. It reproduces the checked-in 64-index tuple exactly. |
+| P2 | The supported benchmark fixture recorded selected source indices without independently recomputing why they were safe. | `--verify` now ranks source paths by exact serialized XML byte length, checks every candidate at the worst-precision placement, incrementally verifies the growing compound panel, and rechecks the final tiled document plus all four legacy compatibility flags. It reproduces the checked-in 64-index tuple exactly. |
 | P2 | Release builds used mutable Action tags and incompletely fixed build tools. | Workflow Actions are pinned to immutable commits. The sdist/wheel build inputs are exact versions of scikit-build-core, pybind11, NumPy, CMake, and Ninja; clean wheel and sdist installs passed the standalone suite. |
 
 ## Verification evidence
 
-- Standalone package: `386 passed`.
+- Standalone package: `393 passed`.
 - Lumina native SVG adapter, differential, fallback, packaging, slicer, and
-  workflow tests: `148 passed`, with four rasterio deprecation warnings.
-- Other changed-path/downstream tests: `97 passed`, `1 skipped` because
+  workflow tests: `152 passed`, with four rasterio deprecation warnings.
+- Other changed-path/downstream tests: `195 passed`, `1 skipped` because
   PowerShell is unavailable on the reference Mac.
 - Upload and streamed SVG limit tests: `7 passed`.
 - Logging governance unit tests: `21 passed`; fast governed workflow: PASS
   with 14 INFO lines, zero warning/error records, and zero catch-all events.
-- Smoke gate: backend `162 passed, 6211 deselected`; frontend `161 passed`;
+- Smoke gate: backend `162 passed, 6215 deselected`; frontend `161 passed`;
   lint reported zero errors and 68 pre-existing warnings.
 - Complete backend run before correcting the finite-stream upload test helper:
   `6311 passed, 37 skipped, 3 deselected, 22 failed`. Exact-node comparison
@@ -46,12 +47,12 @@ three P2 findings below were addressed before the exact-SHA re-review.
   one test skipped, but Vitest exited non-zero for a post-test dynamic-import
   rejection in `SettingsPanel.machineAdapter.test.tsx`. The exact base has the
   same unhandled rejection plus two additional assertion failures.
-- Public `VectorProcessor.analyze_svg` benchmark: 0.266817083 s warm median,
-  0.270735083 s p95, 230,440,960-byte peak RSS, zero measured swap growth.
+- Public `VectorProcessor.analyze_svg` benchmark: 0.224664375 s warm median,
+  0.227735625 s p95, 222,593,024-byte peak RSS, zero measured swap growth.
 - Real Bambu Studio and OrcaSlicer runs: both passed twice with stable
   normalized toolpath fingerprints and qualifying model extrusion for tools
   0 through 4.
-- Clean CPython 3.12 wheel and sdist installs each passed all 386 tests. The
+- Clean CPython 3.12 wheel and sdist installs each passed all 393 tests. The
   production macOS arm64 PyInstaller onefile probe executed the native backend
   and contained the extension plus all required license texts.
 

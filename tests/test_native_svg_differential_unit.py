@@ -239,6 +239,49 @@ def test_native_matches_legacy_per_component_minimum_area(
     )
 
 
+@pytest.mark.parametrize(
+    ("width", "expected_colors"),
+    [
+        ("0.099999", [(255, 0, 0)]),
+        ("0.100001", [(255, 0, 0), (0, 0, 255)]),
+    ],
+    ids=["just-below", "just-above"],
+)
+def test_component_area_threshold_uncertainty_falls_back(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    width: str,
+    expected_colors: list[tuple[int, int, int]],
+) -> None:
+    pytest.importorskip("lumina_svg_core")
+    path = tmp_path / "ambiguous-component-area.svg"
+    path.write_text(
+        "<svg viewBox='0 0 100 100'>"
+        "<rect width='50' height='50' fill='red'/>"
+        f"<rect x='90' y='90' width='{width}' height='{width}' "
+        "fill='blue'/></svg>",
+        encoding="utf-8",
+    )
+
+    selected = _run(
+        _processor(), path, backend="native", monkeypatch=monkeypatch
+    )
+    reference = _run(
+        _processor(), path, backend="legacy", monkeypatch=monkeypatch
+    )
+
+    assert selected.stage_timings["geometry_backend"] == "legacy"
+    assert selected.stage_timings["native_fallback_reason"] == (
+        "legacy_area_threshold_ambiguous"
+    )
+    assert _ordered_paint_colors(selected) == expected_colors
+    assert _ordered_paint_colors(selected) == _ordered_paint_colors(reference)
+    assert _ordered_material_identities(selected) == (
+        _ordered_material_identities(reference)
+    )
+    assert _census_by_color(selected) == _census_by_color(reference)
+
+
 @pytest.mark.parametrize("with_use", [False, True], ids=["direct", "use"])
 def test_symbol_requests_whole_document_legacy_fallback(
     tmp_path: Path,
@@ -1138,6 +1181,41 @@ def test_macro_viewbox_uses_legacy_scale_clamp_without_losing_material(
 
     assert selected.stage_timings["geometry_backend"] == "native"
     assert _ordered_paint_colors(selected) == [(255, 0, 0), (0, 0, 255)]
+    assert _ordered_paint_colors(selected) == _ordered_paint_colors(reference)
+    assert _ordered_material_identities(selected) == (
+        _ordered_material_identities(reference)
+    )
+    assert _census_by_color(selected) == _census_by_color(reference)
+
+
+@pytest.mark.parametrize("width", ["9980", "10020"])
+def test_macro_viewbox_dynamic_area_threshold_uncertainty_falls_back(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    width: str,
+) -> None:
+    pytest.importorskip("lumina_svg_core")
+    path = tmp_path / "macro-viewbox-ambiguous-area.svg"
+    path.write_text(
+        "<svg viewBox='0 0 1000000000 1000000000'>"
+        "<rect width='500000000' height='500000000' fill='red'/>"
+        f"<rect x='900000000' y='900000000' width='{width}' "
+        f"height='{width}' fill='blue'/></svg>",
+        encoding="utf-8",
+    )
+
+    selected = _run(
+        _processor(), path, backend="native", monkeypatch=monkeypatch
+    )
+    reference = _run(
+        _processor(), path, backend="legacy", monkeypatch=monkeypatch
+    )
+
+    assert selected.stage_timings["geometry_backend"] == "legacy"
+    assert selected.stage_timings["native_fallback_reason"] == (
+        "legacy_area_threshold_ambiguous"
+    )
+    assert _ordered_paint_colors(selected) == [(255, 0, 0)]
     assert _ordered_paint_colors(selected) == _ordered_paint_colors(reference)
     assert _ordered_material_identities(selected) == (
         _ordered_material_identities(reference)

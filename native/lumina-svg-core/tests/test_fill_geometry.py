@@ -186,6 +186,29 @@ def test_optional_legacy_area_filter_drops_only_subthreshold_paint() -> None:
     assert tuple(compatible.raw.rgba[0]) == (255, 0, 0, 255)
 
 
+@pytest.mark.parametrize("width", ["0.099999", "0.100001"])
+def test_component_area_threshold_uncertainty_is_unsupported(
+    width: str,
+) -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 100 100'>"
+        "<rect width='50' height='50' fill='red'/>"
+        f"<rect x='90' y='90' width='{width}' height='{width}' "
+        "fill='blue'/></svg>",
+        target_width_mm=111.0,
+        tolerance_mm=0.02,
+        legacy_close_delta_source_units=0.03,
+        legacy_minimum_paint_area_factor=0.25,
+        legacy_component_area_source_units_squared=0.01,
+    )
+
+    assert result.status == "unsupported"
+    assert result.reason_code == "legacy_area_threshold_ambiguous"
+    assert result.raw.geometry_count == 0
+    assert result.visible.geometry_count == 0
+    assert result.silhouette.geometry_count == 0
+
+
 def test_legacy_area_filter_preserves_scale_clamp_for_macro_viewbox() -> None:
     result = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 1000000000 1000000000'>"
@@ -203,6 +226,25 @@ def test_legacy_area_filter_preserves_scale_clamp_for_macro_viewbox() -> None:
     assert result.raw.geometry_count == 2
     assert result.legacy_area_filter_identity is True
     assert tuple(result.raw.rgba[1]) == (0, 0, 255, 255)
+
+
+@pytest.mark.parametrize("width", ["9980", "10020"])
+def test_dynamic_area_threshold_uncertainty_is_unsupported(
+    width: str,
+) -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 1000000000 1000000000'>"
+        "<rect width='500000000' height='500000000' fill='red'/>"
+        f"<rect x='900000000' y='900000000' width='{width}' "
+        f"height='{width}' fill='blue'/></svg>",
+        target_width_mm=111.0,
+        tolerance_mm=0.02,
+        legacy_close_delta_source_units=0.03,
+        legacy_minimum_paint_area_factor=0.25,
+    )
+
+    assert result.status == "unsupported"
+    assert result.reason_code == "legacy_area_threshold_ambiguous"
 
 
 @pytest.mark.parametrize(

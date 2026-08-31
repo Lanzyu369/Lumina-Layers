@@ -329,13 +329,15 @@ PYBIND11_MODULE(_lumina_svg_core, module)
                                   double toleranceMm,
                                   bool allowStrokes,
                                   double legacyCloseDeltaSourceUnits,
-                                  double legacyMinimumPaintAreaFactor) {
+                                  double legacyMinimumPaintAreaFactor,
+                                  double legacyComponentAreaSourceUnitsSquared) {
         std::shared_ptr<lumina_svg_core::NativeResult> result;
         {
             py::gil_scoped_release release;
             result = lumina_svg_core::analyzeSvgPath(
                 path, targetWidthMm, toleranceMm, allowStrokes,
-                legacyCloseDeltaSourceUnits, legacyMinimumPaintAreaFactor);
+                legacyCloseDeltaSourceUnits, legacyMinimumPaintAreaFactor,
+                legacyComponentAreaSourceUnitsSquared);
         }
         const auto conversionStarted = std::chrono::steady_clock::now();
         auto value = py::cast(result);
@@ -345,20 +347,23 @@ PYBIND11_MODULE(_lumina_svg_core, module)
     }, py::arg("path"), py::arg("target_width_mm"),
        py::arg("tolerance_mm"), py::arg("allow_strokes") = true,
        py::arg("legacy_close_delta_source_units") = 0.0,
-       py::arg("legacy_minimum_paint_area_factor") = 0.0);
+       py::arg("legacy_minimum_paint_area_factor") = 0.0,
+       py::arg("legacy_component_area_source_units_squared") = 0.0);
 
     module.def("analyze_svg_svg", [](const std::string& svg,
                                       double targetWidthMm,
                                       double toleranceMm,
                                       bool allowStrokes,
                                       double legacyCloseDeltaSourceUnits,
-                                      double legacyMinimumPaintAreaFactor) {
+                                      double legacyMinimumPaintAreaFactor,
+                                      double legacyComponentAreaSourceUnitsSquared) {
         std::shared_ptr<lumina_svg_core::NativeResult> result;
         {
             py::gil_scoped_release release;
             result = lumina_svg_core::analyzeSvgData(
                 svg, targetWidthMm, toleranceMm, allowStrokes,
-                legacyCloseDeltaSourceUnits, legacyMinimumPaintAreaFactor);
+                legacyCloseDeltaSourceUnits, legacyMinimumPaintAreaFactor,
+                legacyComponentAreaSourceUnitsSquared);
         }
         const auto conversionStarted = std::chrono::steady_clock::now();
         auto value = py::cast(result);
@@ -368,5 +373,6 @@ PYBIND11_MODULE(_lumina_svg_core, module)
     }, py::arg("svg"), py::arg("target_width_mm"),
        py::arg("tolerance_mm"), py::arg("allow_strokes") = true,
        py::arg("legacy_close_delta_source_units") = 0.0,
-       py::arg("legacy_minimum_paint_area_factor") = 0.0);
+       py::arg("legacy_minimum_paint_area_factor") = 0.0,
+       py::arg("legacy_component_area_source_units_squared") = 0.0);
 }

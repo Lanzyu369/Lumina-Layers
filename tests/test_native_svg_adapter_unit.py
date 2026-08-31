@@ -308,7 +308,9 @@ def test_adapter_disables_native_stroke_kernel_before_analysis(
         "fixture.svg", 20.0, 0.02, expand_stroke_to_fill=False
     )
 
-    assert calls == [("fixture.svg", 20.0, 0.02, False, 0.03, 0.25)]
+    assert calls == [
+        ("fixture.svg", 20.0, 0.02, False, 0.03, 0.25, 0.01)
+    ]
     assert outcome == NativeSvgFallback(
         reason_code="legacy_stroke_policy",
         native_version="0.1.1",

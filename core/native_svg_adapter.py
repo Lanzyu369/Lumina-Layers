@@ -310,6 +310,7 @@ def analyze_native_svg(
         False,
         _LEGACY_CONTOUR_CLOSE_DELTA_SOURCE_UNITS,
         0.25,
+        LEGACY_MIN_COMPONENT_AREA_SOURCE_UNITS_SQUARED,
     )
     native_call_seconds = time.perf_counter() - call_started
 

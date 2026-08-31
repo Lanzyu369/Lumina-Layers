@@ -27,6 +27,15 @@ Other dash placement uses an adaptive centerline length bound; if the one
 document-level physical error budget cannot be proved, the complete document
 returns `unsupported_input_precision` or `unsupported_topology_collapse`.
 
+The optional `legacy_close_delta_source_units`,
+`legacy_minimum_paint_area_factor`, and
+`legacy_component_area_source_units_squared` arguments are versioned adopter
+compatibility gates; zero disables the corresponding gate. Area classification
+accounts for recorder/input precision, flattening, integer-grid quantization,
+and downstream simplification together. If an enabled raw-paint or component
+threshold cannot be classified with certainty, the complete document returns
+`legacy_area_threshold_ambiguous` with empty geometry collections.
+
 The 0.1 recorder deliberately rejects nested `<svg>`, non-zero root viewBox
 origins, root transforms/positions, root `overflow="hidden"`, percentages
 without a root viewBox, and inherited `clip-rule` outside a direct clip-path

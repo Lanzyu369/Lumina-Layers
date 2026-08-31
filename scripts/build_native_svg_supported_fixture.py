@@ -23,7 +23,7 @@ SOURCE_SHA256 = (
     "d078cf4293623d934759c2688e13a00491e525055e7595069a0ecc4f078842fb"
 )
 EXPECTED_FIXTURE_SHA256 = (
-    "aedd2705dff8a61779418ddb4574aff7d2b22e19577fa798ebc669e4b60f9070"
+    "7f1fd4b2405989394c1a4fd6b59b117c4015ee2b9918b4dba5922c3e8ede472e"
 )
 SVG_NAMESPACE = "http://www.w3.org/2000/svg"
 GRID_SIDE = 32
@@ -33,24 +33,26 @@ SELECTION_TARGET_WIDTH_MM = 111.0
 SELECTION_TOLERANCE_MM = 0.02
 SELECTION_LEGACY_CLOSE_DELTA_SOURCE_UNITS = 0.03
 SELECTION_LEGACY_MINIMUM_PAINT_AREA_FACTOR = 0.25
+SELECTION_LEGACY_COMPONENT_AREA_SOURCE_UNITS_SQUARED = 0.01
+REQUIRED_RESULT_FLAGS = (
+    "legacy_area_filter_identity",
+    "legacy_contour_normalization_compatible",
+    "legacy_contour_normalization_identity",
+    "legacy_curve_tolerance_compatible",
+)
 
-# These are the 64 longest source paths that independently passed the v0.1
-# recorder, precision, topology, curve-tolerance, and legacy-close identity
-# gates when normalized into one cell of the fixed 32 x 32 canvas. The tuple
-# fixes the fixture bytes; ``--verify`` recomputes the selection from source.
+# These paths were considered in descending serialized-size order and accepted
+# only while the growing compound panel passed every v0.1 recorder, precision,
+# topology, curve-tolerance, and legacy-parity gate. The tuple fixes the
+# fixture bytes; ``--verify`` recomputes the selection from source and then
+# validates the complete tiled document.
 SELECTED_SOURCE_PATH_INDICES = (
     35,
-    99,
     74,
-    187,
     52,
     39,
-    139,
-    83,
     72,
     71,
-    221,
-    228,
     43,
     93,
     63,
@@ -62,36 +64,23 @@ SELECTED_SOURCE_PATH_INDICES = (
     109,
     339,
     59,
-    252,
-    204,
     159,
     154,
-    260,
     244,
     41,
-    439,
-    297,
     66,
     158,
-    429,
     136,
     150,
-    301,
     183,
     395,
     90,
     142,
-    398,
     143,
-    416,
-    294,
     134,
     212,
-    336,
     123,
     119,
-    438,
-    401,
     102,
     127,
     133,
@@ -103,6 +92,25 @@ SELECTED_SOURCE_PATH_INDICES = (
     160,
     235,
     193,
+    107,
+    224,
+    293,
+    241,
+    463,
+    200,
+    300,
+    410,
+    430,
+    210,
+    356,
+    237,
+    277,
+    545,
+    234,
+    56,
+    510,
+    278,
+    290,
 )
 
 
@@ -201,10 +209,79 @@ def _single_candidate_svg(
     group = ET.SubElement(
         fixture_root,
         f"{{{SVG_NAMESPACE}}}g",
-        {"transform": _placement_transform(bounds, 0)},
+        {
+            "transform": _placement_transform(
+                bounds, GRID_SIDE * GRID_SIDE - 1
+            )
+        },
     )
     group.append(copy.deepcopy(child))
     return ET.tostring(fixture_root, encoding="unicode")
+
+
+def _passes_required_gates(result: object) -> bool:
+    return bool(getattr(result, "status", "") == "supported") and all(
+        bool(getattr(result, flag, False))
+        for flag in REQUIRED_RESULT_FLAGS
+    )
+
+
+def _analyze_selection_payload(payload: bytes) -> object:
+    return lumina_svg_core.analyze_svg_svg(
+        payload.decode("utf-8"),
+        SELECTION_TARGET_WIDTH_MM,
+        SELECTION_TOLERANCE_MM,
+        False,
+        SELECTION_LEGACY_CLOSE_DELTA_SOURCE_UNITS,
+        SELECTION_LEGACY_MINIMUM_PAINT_AREA_FACTOR,
+        SELECTION_LEGACY_COMPONENT_AREA_SOURCE_UNITS_SQUARED,
+    )
+
+
+def _build_tiled_payload(
+    source_root: ET.Element,
+    selected_indices: tuple[int, ...],
+) -> bytes:
+    if not selected_indices or len(selected_indices) > 64:
+        raise ValueError("selected_path_count_out_of_range")
+    source_paths = _source_paths(source_root)
+    canvas = GRID_SIDE * CELL_USER_UNITS
+    fixture_root = ET.Element(
+        source_root.tag,
+        {
+            "version": "1.1",
+            "viewBox": f"0 0 {canvas:g} {canvas:g}",
+            "width": f"{canvas:g}",
+            "height": f"{canvas:g}",
+            "data-lumina-benchmark-source-sha256": SOURCE_SHA256,
+            "data-selection": "longest-64-safe-paths",
+        },
+    )
+    selected = [source_paths[index] for index in selected_indices]
+    selected_bounds = [
+        _paint_bounds(source_root, child) for child in selected
+    ]
+    repeats = GRID_SIDE * GRID_SIDE // 64
+    for repeat in range(repeats):
+        for source_offset, (source_index, child, bounds) in enumerate(
+            zip(selected_indices, selected, selected_bounds, strict=True)
+        ):
+            slot = repeat * 64 + source_offset
+            group = ET.SubElement(
+                fixture_root,
+                f"{{{SVG_NAMESPACE}}}g",
+                {
+                    "transform": _placement_transform(bounds, slot),
+                    "data-source-path-index": str(source_index),
+                    "data-repeat": str(repeat),
+                },
+            )
+            group.append(copy.deepcopy(child))
+    return ET.tostring(
+        fixture_root,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
 
 
 def select_longest_safe_path_indices(
@@ -238,16 +315,14 @@ def select_longest_safe_path_indices(
             False,
             SELECTION_LEGACY_CLOSE_DELTA_SOURCE_UNITS,
             SELECTION_LEGACY_MINIMUM_PAINT_AREA_FACTOR,
+            SELECTION_LEGACY_COMPONENT_AREA_SOURCE_UNITS_SQUARED,
         )
-        if result.status != "supported":
+        if not _passes_required_gates(result):
             continue
-        if not all(
-            bool(getattr(result, flag, False))
-            for flag in (
-                "legacy_area_filter_identity",
-                "legacy_contour_normalization_compatible",
-                "legacy_contour_normalization_identity",
-                "legacy_curve_tolerance_compatible",
+        tentative = (*selected, source_index)
+        if not _passes_required_gates(
+            _analyze_selection_payload(
+                _build_tiled_payload(source_root, tentative)
             )
         ):
             continue
@@ -261,50 +336,28 @@ def build_fixture_payload(source_path: Path) -> bytes:
     """Return canonical fixture bytes after verifying the real source SHA."""
 
     source_root = load_verified_source(source_path)
-    source_paths = _source_paths(source_root)
-
-    canvas = GRID_SIDE * CELL_USER_UNITS
-    fixture_root = ET.Element(
-        source_root.tag,
-        {
-            "version": "1.1",
-            "viewBox": f"0 0 {canvas:g} {canvas:g}",
-            "width": f"{canvas:g}",
-            "height": f"{canvas:g}",
-            "data-lumina-benchmark-source-sha256": SOURCE_SHA256,
-            "data-selection": "longest-64-safe-paths",
-        },
-    )
-    selected = [source_paths[index] for index in SELECTED_SOURCE_PATH_INDICES]
-    selected_bounds = [
-        _paint_bounds(source_root, child) for child in selected
-    ]
-    for slot in range(GRID_SIDE * GRID_SIDE):
-        source_offset = slot % len(selected)
-        source_index = SELECTED_SOURCE_PATH_INDICES[source_offset]
-        child = selected[source_offset]
-        group = ET.SubElement(
-            fixture_root,
-            f"{{{SVG_NAMESPACE}}}g",
-            {
-                "transform": _placement_transform(
-                    selected_bounds[source_offset], slot
-                ),
-                "data-source-path-index": str(source_index),
-                "data-repeat": str(slot // len(selected)),
-            },
-        )
-        group.append(copy.deepcopy(child))
-
-    payload = ET.tostring(
-        fixture_root,
-        encoding="utf-8",
-        xml_declaration=True,
+    payload = _build_tiled_payload(
+        source_root, SELECTED_SOURCE_PATH_INDICES
     )
     actual_fixture_sha256 = _sha256(payload)
     if actual_fixture_sha256 != EXPECTED_FIXTURE_SHA256:
         raise RuntimeError(
             f"unexpected_fixture_sha256:{actual_fixture_sha256}"
+        )
+    result = _analyze_selection_payload(payload)
+    if result.status != "supported":
+        raise RuntimeError(
+            "supported_scale_fixture_no_longer_supported:"
+            + str(result.reason_code)
+        )
+    missing_flags = [
+        flag for flag in REQUIRED_RESULT_FLAGS
+        if not bool(getattr(result, flag, False))
+    ]
+    if missing_flags:
+        raise RuntimeError(
+            "supported_scale_fixture_failed_parity_flags:"
+            + ",".join(missing_flags)
         )
     return payload
 
@@ -326,12 +379,12 @@ def provenance(payload: bytes) -> dict[str, object]:
             "verification_entrypoint": "lumina_svg_core.analyze_svg_svg",
             "target_width_mm": SELECTION_TARGET_WIDTH_MM,
             "tolerance_mm": SELECTION_TOLERANCE_MM,
-            "required_result_flags": [
-                "legacy_area_filter_identity",
-                "legacy_contour_normalization_compatible",
-                "legacy_contour_normalization_identity",
-                "legacy_curve_tolerance_compatible",
-            ],
+            "legacy_component_area_source_units_squared": (
+                SELECTION_LEGACY_COMPONENT_AREA_SOURCE_UNITS_SQUARED
+            ),
+            "individual_verification_slot": GRID_SIDE * GRID_SIDE - 1,
+            "complete_fixture_verified": True,
+            "required_result_flags": list(REQUIRED_RESULT_FLAGS),
             "source_path_indices": list(SELECTED_SOURCE_PATH_INDICES),
             "unique_source_path_count": len(SELECTED_SOURCE_PATH_INDICES),
             "repeat_count": 16,

@@ -94,7 +94,7 @@
         "<isolated-run-directory>",
         "native-svg-BambuStudio.3mf"
       ],
-      "duration_seconds": 0.523765,
+      "duration_seconds": 0.413717,
       "executable": "BambuStudio",
       "exit_code": 0,
       "input": {
@@ -134,14 +134,14 @@
             "<isolated-run-directory>",
             "native-svg-BambuStudio.3mf"
           ],
-          "duration_seconds": 0.361588,
+          "duration_seconds": 0.267226,
           "exit_code": 0,
           "missing_expected_tool_ids": [],
           "output_directory": "run-1",
           "reason": "",
           "status": "passed",
           "stderr_tail": "",
-          "stdout_tail": "[2026-08-31 14:45:38.996068] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
+          "stdout_tail": "[2026-08-31 16:06:07.674961] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
           "toolpath": {
             "extrusion_move_count": 4292,
             "fingerprint": "7f9f6915bf40d692cdeebdf8fa32c3159431a747e0e555e3ac0a6c1aa6843ec1",
@@ -181,14 +181,14 @@
             "<isolated-run-directory>",
             "native-svg-BambuStudio.3mf"
           ],
-          "duration_seconds": 0.162177,
+          "duration_seconds": 0.146491,
           "exit_code": 0,
           "missing_expected_tool_ids": [],
           "output_directory": "run-2",
           "reason": "",
           "status": "passed",
           "stderr_tail": "",
-          "stdout_tail": "[2026-08-31 14:45:39.303916] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
+          "stdout_tail": "[2026-08-31 16:06:07.916607] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
           "toolpath": {
             "extrusion_move_count": 4292,
             "fingerprint": "7f9f6915bf40d692cdeebdf8fa32c3159431a747e0e555e3ac0a6c1aa6843ec1",
@@ -220,7 +220,7 @@
       "stable_across_runs": true,
       "status": "passed",
       "stderr_tail": "",
-      "stdout_tail": "[2026-08-31 14:45:38.996068] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
+      "stdout_tail": "[2026-08-31 16:06:07.674961] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
       "toolpath": {
         "extrusion_move_count": 4292,
         "fingerprint": "7f9f6915bf40d692cdeebdf8fa32c3159431a747e0e555e3ac0a6c1aa6843ec1",
@@ -261,7 +261,7 @@
         "<isolated-run-directory>",
         "native-svg-OrcaSlicer.3mf"
       ],
-      "duration_seconds": 0.474637,
+      "duration_seconds": 0.397635,
       "executable": "OrcaSlicer",
       "exit_code": 0,
       "input": {
@@ -301,7 +301,7 @@
             "<isolated-run-directory>",
             "native-svg-OrcaSlicer.3mf"
           ],
-          "duration_seconds": 0.313783,
+          "duration_seconds": 0.248647,
           "exit_code": 0,
           "missing_expected_tool_ids": [],
           "output_directory": "run-1",
@@ -348,7 +348,7 @@
             "<isolated-run-directory>",
             "native-svg-OrcaSlicer.3mf"
           ],
-          "duration_seconds": 0.160854,
+          "duration_seconds": 0.148988,
           "exit_code": 0,
           "missing_expected_tool_ids": [],
           "output_directory": "run-2",

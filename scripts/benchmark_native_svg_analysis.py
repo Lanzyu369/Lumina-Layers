@@ -663,9 +663,9 @@ def _large_regression_record(
             "status": "unavailable",
             "matching_files": [],
             "note": (
-                "No SVG at or above 50 MiB was found; the 4.79 MB derived "
-                "supported-scale fixture, 3.77 MB source proxy, and 14.47 MB "
-                "real R4C1 fixture were not substituted."
+                "No SVG at or above 50 MiB was found; the smaller derived "
+                "supported-scale fixture, source proxy, and real R4C1 "
+                "fixture were not substituted."
             ),
         }
 
