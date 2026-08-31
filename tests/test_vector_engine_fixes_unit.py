@@ -709,6 +709,71 @@ class TestFillRuleSubpathMerging:
 class TestNormalizeContours:
     """Verify morphological close fills micro-gaps and preserves shape."""
 
+    def test_nearby_tiny_component_cannot_replace_a_valid_printable_component(self):
+        """A real clipped SVG fragment must retain its large component."""
+
+        source = shapely.from_wkt(
+            "MULTIPOLYGON (((1210.5180151367185 1521.0342871093744, "
+            "1201.4221069335936 1523.1806542968748, 1195.1013867187498 "
+            "1524.3925781249998, 1190.065390625 1525.09609375, "
+            "1187.0378735351565 1525.1098852539062, 1186.3080838012695 "
+            "1524.7391653442382, 1186.0280468750002 1524.04, "
+            "1189.6442187499997 1523.6747265625, 1192.8537292480466 "
+            "1522.6420733642576, 1195.018046875 1521.03, "
+            "1195.0104816576086 1521.019391304348, 1195.008046875 "
+            "1521.02, 1185.0704244973765 1522.0137622377624, "
+            "1185.018046875 1522.0299999999997, 1185.0069929289464 "
+            "1522.02, 1184.0221481441013 1522.02, 1184.018046875 "
+            "1522.03, 1183.9943088942307 1522.034747596154, "
+            "1183.371806640625 1522.702998046875, 1182.47875 "
+            "1523.028984375, 1179.0672802083334 1523.0201533333334, "
+            "1179.018046875 1523.03, 1179.0077455973023 "
+            "1523.020035444435, 1177.4327000656465 1523.2053349187474, "
+            "1174.81849609375 1524.04744140625, 1169.9849804687499 "
+            "1524.92626953125, 1169.3420271754742 1524.9338243532695, "
+            "1169.018046875 1525.03, 1171.028046875 1528.02, "
+            "1171.3132983398439 1528.0735522460936, 1171.8766500854492 "
+            "1527.8371847534181, 1172.098203125 1526.3845312500002, "
+            "1172.568046875 1525.97, 1181.3690844726561 "
+            "1527.025126953125, 1186.0186938476563 1526.7775866699221, "
+            "1191.4565942382812 1526.1443591308594, 1198.3346093750001 "
+            "1524.9211718749998, 1206.5880664062502 "
+            "1522.9423144531247, 1214.6949218749999 1520.556875, "
+            "1224.8210713545952 1517.087444715286, 1210.5180151367185 "
+            "1521.0342871093744)), ((1225.0180468749998 "
+            "1517.0299999999997, 1225.008046875 1517.02, "
+            "1224.8210713546036 1517.0874447152835, "
+            "1225.0180468749998 1517.0299999999997)))"
+        )
+
+        scalar = VectorProcessor._normalize_contours(source)
+        batch = vector_engine._normalize_contours_many([source])[0]
+
+        for result in (scalar, batch):
+            assert result.area > 100.0
+            assert source.difference(result).area < 0.01
+
+        # Closing two remote tall rectangles adds more area than the damaged
+        # SVG fragment loses.  A net-area guard therefore misses the loss;
+        # the source itself must remain covered by the closed result.
+        compensated_source = shapely_unary_union(
+            [
+                source,
+                box(0.0, 0.0, 1.0, 3000.0),
+                box(1.04, 0.0, 2.04, 3000.0),
+            ]
+        )
+        compensated_scalar = VectorProcessor._normalize_contours(
+            compensated_source
+        )
+        compensated_batch = vector_engine._normalize_contours_many(
+            [compensated_source]
+        )[0]
+
+        for result in (compensated_scalar, compensated_batch):
+            assert compensated_source.difference(result).area < 0.01
+            assert result.covers(box(1.001, 1000.0, 1.039, 2000.0))
+
     def test_fills_small_gap(self):
         """Two adjacent squares with a tiny gap should be merged."""
         sq1 = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])

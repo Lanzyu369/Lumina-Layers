@@ -397,13 +397,22 @@ def _build_source_spatial_groups(
         scale_mm_per_svg_unit=float(scale_factor),
         policy=geometry_policy,
     )
+    collapsed_source_part_count = int(
+        getattr(preparation, "collapsed_part_count", 0)
+    )
     if int(preparation.failed_part_count) > 0:
         fallback_mesh = _build_local_stepped_fallback()
         if fallback_mesh is not None:
+            built_source_part_count = max(
+                0,
+                int(preparation.source_part_count)
+                - collapsed_source_part_count,
+            )
             return [fallback_mesh], {
                 "source_part_count": int(preparation.source_part_count),
-                "built_source_part_count": int(preparation.source_part_count),
+                "built_source_part_count": built_source_part_count,
                 "failed_source_part_count": 0,
+                "collapsed_source_part_count": collapsed_source_part_count,
                 "failure_types": {},
                 "local_stepped_fallback_applied": True,
             }
@@ -457,12 +466,16 @@ def _build_source_spatial_groups(
             if fallback_mesh is not None:
                 pending_meshes.clear()
                 output_chunks.clear()
+                built_source_part_count = max(
+                    0,
+                    int(preparation.source_part_count)
+                    - collapsed_source_part_count,
+                )
                 return [fallback_mesh], {
                     "source_part_count": int(preparation.source_part_count),
-                    "built_source_part_count": int(
-                        preparation.source_part_count
-                    ),
+                    "built_source_part_count": built_source_part_count,
                     "failed_source_part_count": 0,
+                    "collapsed_source_part_count": collapsed_source_part_count,
                     "failure_types": {},
                     "local_stepped_fallback_applied": True,
                 }
@@ -485,10 +498,14 @@ def _build_source_spatial_groups(
     )
     return output_chunks, {
         "source_part_count": int(preparation.source_part_count),
-        "built_source_part_count": int(
-            preparation.source_part_count - failed_source_part_count
+        "built_source_part_count": max(
+            0,
+            int(preparation.source_part_count)
+            - failed_source_part_count
+            - collapsed_source_part_count,
         ),
         "failed_source_part_count": int(failed_source_part_count),
+        "collapsed_source_part_count": collapsed_source_part_count,
         "failure_types": failure_types,
     }
 
@@ -1637,15 +1654,68 @@ def _finish_normalized_contour(geom, inflated, deflated):
     if deflated is None or deflated.is_empty:
         return geom
     if deflated.is_valid and deflated.geom_type in ("Polygon", "MultiPolygon"):
-        return deflated
+        result = deflated
+    else:
+        result = make_valid(deflated)
+        if result is not None and result.geom_type == "GeometryCollection":
+            polys = [
+                part
+                for part in result.geoms
+                if part.geom_type in ("Polygon", "MultiPolygon")
+            ]
+            if polys:
+                result = MultiPolygon(polys) if len(polys) > 1 else polys[0]
+            else:
+                result = deflated
 
-    result = make_valid(deflated)
-    if result is not None and result.geom_type == "GeometryCollection":
-        polys = [g for g in result.geoms if g.geom_type in ("Polygon", "MultiPolygon")]
-        if polys:
-            result = MultiPolygon(polys) if len(polys) > 1 else polys[0]
-        else:
-            return deflated
+    # A morphological close is extensive by definition: it may bridge a
+    # narrow gap, but it must not remove valid source area. GEOS can violate
+    # that invariant for a valid MultiPolygon whose components nearly touch,
+    # returning only one component after the inward buffer. Compare source
+    # coverage, not net area: area added elsewhere must never compensate for
+    # a deleted printable component.
+    if (
+        geom.is_valid
+        and geom.geom_type in ("Polygon", "MultiPolygon")
+        and result is not None
+        and not result.is_empty
+        and result.geom_type in ("Polygon", "MultiPolygon")
+    ):
+        # DE-9IM cell ``IE`` asks whether any source interior lies in the
+        # result exterior.  Unlike ``covers()``, this deliberately ignores
+        # harmless boundary-only round-off, and unlike ``difference()`` it
+        # does not allocate another full overlay geometry on this hot path.
+        relate_pattern = getattr(geom, "relate_pattern", None)
+        if callable(relate_pattern) and not relate_pattern(
+            result,
+            "**F******",
+        ):
+            source_parts = (
+                tuple(geom.geoms)
+                if isinstance(geom, MultiPolygon)
+                else (geom,)
+            )
+            uncovered_parts = [
+                part
+                for part in source_parts
+                if not part.relate_pattern(result, "**F******")
+            ]
+            if uncovered_parts:
+                restored = unary_union([result, *uncovered_parts])
+                if (
+                    restored is not None
+                    and not restored.is_empty
+                    and restored.is_valid
+                    and restored.geom_type in ("Polygon", "MultiPolygon")
+                    # GEOS may report a spurious interior/exterior DE-9IM
+                    # contact immediately after union even when the exact
+                    # source difference is empty.  This overlay runs only on
+                    # the rare local-recovery branch, never on the normal hot
+                    # path.
+                    and geom.difference(restored).is_empty
+                ):
+                    return restored
+            return geom
     return result
 
 
@@ -6845,6 +6915,16 @@ class VectorProcessor:
         使用图像处理器已启用的色相保护匹配器，让 SVG 原生矢量路径与
         栅格/高保真路径保持一致。
         """
+        exact_index_for_rgb = getattr(
+            self.img_processor,
+            "exact_lut_index_for_rgb",
+            None,
+        )
+        if callable(exact_index_for_rgb):
+            exact_index = exact_index_for_rgb(query_rgb)
+            if exact_index is not None:
+                return int(exact_index), 0.0
+
         query_lab = self.img_processor._rgb_to_lab(
             np.array([query_rgb], dtype=np.uint8)
         )
@@ -6922,9 +7002,7 @@ class VectorProcessor:
                 if replacement_manager is not None:
                     replacement = replacement_manager.get_replacement(matched_rgb)
                     if replacement is not None:
-                        rep_lab = self.img_processor._rgb_to_lab(np.array([replacement], dtype=np.uint8))
-                        _, rep_index = self.img_processor.kdtree.query(rep_lab)
-                        lut_idx = int(rep_index[0])
+                        lut_idx, _ = self._match_lut_index_for_rgb(replacement)
                         matched_rgb = tuple(int(c) for c in self.img_processor.lut_rgb[lut_idx])
 
                 stack = self.img_processor.ref_stacks[lut_idx]
@@ -7320,6 +7398,7 @@ class VectorProcessor:
                 continue
             material_meshes: list[trimesh.Trimesh] = []
             failed_source_part_count = 0
+            collapsed_source_part_count = 0
             failure_types: dict[str, int] = {}
             for slab in slabs:
                 geometry = slab.get("geometry")
@@ -7335,6 +7414,9 @@ class VectorProcessor:
                 material_meshes.extend(slab_meshes)
                 failed_source_part_count += int(
                     recovery_stats["failed_source_part_count"]
+                )
+                collapsed_source_part_count += int(
+                    recovery_stats.get("collapsed_source_part_count", 0)
                 )
                 for error_name, error_count in recovery_stats[
                     "failure_types"
@@ -7352,7 +7434,21 @@ class VectorProcessor:
                         "error_type": "VectorSpatialGroupBuildFailure",
                         "slot_name": str(slot_name),
                         "failed_source_part_count": failed_source_part_count,
+                        "collapsed_source_part_count": (
+                            collapsed_source_part_count
+                        ),
                         "failure_types": failure_types,
+                    },
+                )
+            if collapsed_source_part_count:
+                _log.debug(
+                    "Vector material collapsed writer-zero residue",
+                    extra={
+                        "event": "vector_material_writer_zero_residue_collapsed",
+                        "slot_name": str(slot_name),
+                        "collapsed_source_part_count": (
+                            collapsed_source_part_count
+                        ),
                     },
                 )
             if not material_meshes:

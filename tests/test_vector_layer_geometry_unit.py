@@ -712,6 +712,45 @@ def test_float32_near_contact_is_separated_instead_of_serialized_as_touching_she
     _assert_grid_aligned(prepared)
 
 
+def test_contact_separation_searches_the_complete_bounded_writer_lattice() -> None:
+    """A wedged micro-island may need a non-cardinal two-by-one shift."""
+
+    lower_body = Polygon(
+        [(10.0, 11.0), (25.0, 3.0), (28.0, 0.0), (0.0, 0.0), (0.0, 17.0)]
+    )
+    upper_body = Polygon(
+        [(10.0, 19.0), (10.0, 29.0), (29.0, 29.0), (29.0, 19.0)]
+    )
+    wedged_island = Polygon(
+        [(19.0, 10.0), (10.0, 11.0), (10.0, 19.0)]
+    )
+    source = [lower_body, upper_body, wedged_island]
+
+    prepared = prepare_vector_run_group(
+        source,
+        scale_mm_per_svg_unit=1.0,
+        policy=VectorLayerGeometryPolicy(
+            grid_mm=1.0,
+            simplify_tolerance_mm=0.0,
+        ),
+    )
+    geometry = prepared.to_geometry()
+    mesh = extrude_prepared_vector_run_group(
+        prepared,
+        height_mm=0.2,
+        z_offset_mm=0.0,
+    )
+
+    assert geometry.is_valid
+    assert not vector_layer_geometry._has_cross_polygon_contact(geometry)
+    assert len(prepared.polygons) == 3
+    assert prepared.stats.output_area_mm2 == pytest.approx(
+        sum(part.area for part in source),
+        abs=1e-9,
+    )
+    _assert_closed_volume(mesh, sum(part.area for part in source) * 0.2)
+
+
 def test_contact_regularization_uses_constructive_bounds_not_global_hausdorff(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1234,6 +1273,151 @@ def test_best_effort_spatial_groups_keep_touching_sources_together() -> None:
     assert sorted(group.stats.source_polygon_count for group in result.groups) == [1, 2]
     assert result.failed_group_count == 0
     assert result.failed_part_count == 0
+
+
+def test_best_effort_filters_writer_zero_residue_before_grouping_printable_body() -> None:
+    """Sub-grid residue cannot poison a neighbouring printable component."""
+
+    printable_body = box(0.0, 0.0, 10.0, 10.0)
+    writer_zero_residue = Polygon(
+        [
+            (10.0, 5.0),
+            (10.00001, 5.0),
+            (10.0, 5.00001),
+        ]
+    )
+
+    result = prepare_vector_spatial_groups_best_effort(
+        [printable_body, writer_zero_residue],
+        scale_mm_per_svg_unit=1.0,
+        policy=VectorLayerGeometryPolicy(simplify_tolerance_mm=0.0),
+    )
+
+    assert result.source_part_count == 2
+    assert result.prepared_part_count == 1
+    assert result.collapsed_part_count == 1
+    assert result.failed_group_count == 0
+    assert result.failed_part_count == 0
+    assert len(result.groups) == 1
+    assert result.groups[0].stats.output_area_mm2 == pytest.approx(100.0)
+
+    mesh = extrude_prepared_vector_run_group(
+        result.groups[0],
+        height_mm=0.08,
+        z_offset_mm=0.0,
+    )
+    _assert_closed_volume(mesh, 8.0)
+
+
+def test_best_effort_recovers_roundoff_self_intersection_after_svg_scaling() -> None:
+    """A valid source must remain buildable when float scaling weakens it."""
+
+    source = Polygon(
+        [
+            (1395.9968859143326, 326.98215340313453),
+            (1395.352412326555, 325.37419180162914),
+            (1395.4469531249997, 324.4318164062503),
+            (1397.7680468750002, 321.26999999999936),
+            (1401.008046875, 313.02000000000004),
+            (1399.998046875, 301.01000000000005),
+            (1398.018046875, 302.02000000000004),
+            (1397.3122381591795, 297.512028503418),
+            (1396.4626806640615, 296.65283447265574),
+            (1395.008046875, 296.02000000000004),
+            (1395.026642064728, 297.0407941276575),
+            (1395.7118969726564, 297.80708251953126),
+            (1396.05306640625, 298.89119140625),
+            (1396.008046875, 303.02000000000004),
+            (1396.2063281249998, 319.180625),
+            (1395.9121640396118, 321.8818746948243),
+            (1395.25736328125, 322.09666015625004),
+            (1394.008046875, 322.02000000000004),
+            (1395.9968859143326, 326.98215340313453),
+        ]
+    )
+
+    result = prepare_vector_spatial_groups_best_effort(
+        [source],
+        scale_mm_per_svg_unit=0.07324046925016066,
+        policy=VectorLayerGeometryPolicy(simplify_tolerance_mm=0.0),
+    )
+
+    assert result.failed_group_count == 0
+    assert result.failed_part_count == 0
+    assert len(result.groups) == 1
+    assert result.groups[0].stats.output_area_mm2 == pytest.approx(
+        source.area * 0.07324046925016066**2,
+        abs=1e-6,
+    )
+
+
+def test_physical_grid_noding_keeps_acute_printable_cell() -> None:
+    """Grid-rounded representative points cannot erase an occupied cell."""
+
+    source = Polygon(
+        [
+            (120.33251435543465, 109.86227961377531),
+            (120.30129756933937, 109.86387836000425),
+            (120.27931100506714, 109.86855666256534),
+            (120.25539522378368, 109.86622921706018),
+            (120.1803603774402, 109.87007207510659),
+            (120.14159585642047, 109.8910137353536),
+            (120.11523215924144, 109.93495376157871),
+            (120.1157462797009, 109.93553119637409),
+            (120.48189367810778, 109.93540915387615),
+            (120.48189367810778, 110.15011958709547),
+            (120.55440174266545, 110.15513056162663),
+            (120.55440174266545, 109.71568774612567),
+            (120.47537391739046, 109.82683838346081),
+            (120.33257997754141, 109.8572220871734),
+        ]
+    )
+
+    prepared = prepare_vector_run_group(
+        [source],
+        scale_mm_per_svg_unit=1.0,
+        policy=VectorLayerGeometryPolicy(simplify_tolerance_mm=0.0),
+    )
+
+    assert len(prepared.polygons) == 1
+    assert prepared.stats.output_area_mm2 == pytest.approx(
+        0.05524372,
+        abs=1e-10,
+    )
+
+
+def test_writer_domain_finalization_reseparates_touching_integer_shells() -> None:
+    """Integer-ring reconstruction is the final shell-separation authority."""
+
+    left = vector_layer_geometry.PreparedVectorPolygon(
+        exterior_units=np.array(
+            [[0, 0], [10, 0], [10, 10], [0, 10]],
+            dtype=np.int64,
+        ),
+        hole_units=(),
+        source_indices=(0,),
+    )
+    right = vector_layer_geometry.PreparedVectorPolygon(
+        exterior_units=np.array(
+            [[10, 0], [20, 0], [20, 10], [10, 10]],
+            dtype=np.int64,
+        ),
+        hole_units=(),
+        source_indices=(1,),
+    )
+
+    finalized, changed = (
+        vector_layer_geometry._finalize_prepared_writer_geometry(
+            [left, right],
+            grid_mm=0.0001,
+        )
+    )
+
+    parts = list(finalized.geoms)
+    assert changed is True
+    assert finalized.is_valid
+    assert len(parts) == 2
+    assert parts[0].disjoint(parts[1])
 
 
 def test_best_effort_spatial_groups_skip_only_one_remote_failed_group(
