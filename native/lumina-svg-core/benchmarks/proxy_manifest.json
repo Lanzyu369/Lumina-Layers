@@ -7,7 +7,7 @@
     ],
     "classification": "derived_supported_scale",
     "clip_count": 0,
-    "path": "benchmarks/supported_scale_fixture.svg",
+    "path": "native/lumina-svg-core/benchmarks/supported_scale_fixture.svg",
     "path_count": 1024,
     "real_r4c1_sha256": "da52ef12bdd37a0bd47970649a70582862331a606c151bff05bfb2f6e265f160",
     "sha256": "aedd2705dff8a61779418ddb4574aff7d2b22e19577fa798ebc669e4b60f9070",
@@ -24,23 +24,21 @@
     "python": "3.12.13"
   },
   "measurement": {
-    "kernel_seconds": 0.136524833,
-    "median_seconds": 0.203834958,
-    "peak_rss_bytes": 119341056,
-    "public_entrypoint_seconds": 0.203834958,
-    "range_seconds": 0.005686542,
-    "recorder_seconds": 0.067628292,
+    "kernel_seconds": 0.140752542,
+    "median_seconds": 0.209378333,
+    "peak_rss_bytes": 117784576,
+    "public_entrypoint_seconds": 0.209378333,
+    "range_seconds": 0.008680375,
+    "recorder_seconds": 0.0682725,
     "result_conversion_seconds": 3.625e-06,
     "swap_delta_bytes": 0,
     "swap_measurement": "system_vm.swapusage",
     "threshold_passed": true,
     "threshold_seconds": 1.0,
     "warm_runs_seconds": [
-      0.207339292,
-      0.202070709,
-      0.20775725,
-      0.203834958,
-      0.203096375
+      0.210632042,
+      0.201951667,
+      0.209378333
     ],
     "warmup_runs": 1
   },

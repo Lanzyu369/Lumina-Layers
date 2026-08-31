@@ -60,7 +60,10 @@ def _make_upload_file(filename: str, content: bytes = b"test") -> MagicMock:
     """
     mock = MagicMock()
     mock.filename = filename
-    mock.read = AsyncMock(return_value=content)
+    # UploadFile.read() is a finite stream.  The SVG upload path reads in
+    # bounded chunks, so returning the payload forever would model an
+    # infinitely large upload instead of a small in-memory file.
+    mock.read = AsyncMock(side_effect=[content, b""])
     return mock
 
 

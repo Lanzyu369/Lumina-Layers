@@ -598,6 +598,10 @@ def test_recorder_keeps_exact_or_clamped_alpha_endpoints_supported(
         ("<image href='data:image/png;base64,AA=='/>", "unsupported_image"),
         ("<image href='#internal-image'/>", "unsupported_image"),
         ("<text x='0' y='1'>x</text>", "unsupported_text"),
+        (
+            "<symbol id='shape'><path d='M0 0H10V10H0Z'/></symbol>",
+            "unsupported_symbol",
+        ),
     ],
 )
 def test_recorder_fails_closed_for_unsupported_elements(
@@ -611,6 +615,31 @@ def test_recorder_fails_closed_for_unsupported_elements(
 
     assert result.status == "unsupported"
     assert result.reason_code == reason
+    assert result.commands == ()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        " xMidYMid meet",
+        "xMidYMid  meet",
+        "\txMidYMid meet",
+        "none",
+        "xMidYMid meet",
+        "xMidYMid slice",
+    ],
+)
+def test_root_explicit_preserve_aspect_ratio_fails_closed(
+    value: str,
+) -> None:
+    result = lumina_svg_core.record_paint_commands_svg(
+        "<svg width='20' height='10' viewBox='0 0 10 10' "
+        f"preserveAspectRatio='{value}'>"
+        "<path d='M0 0H10V10H0Z'/></svg>"
+    )
+
+    assert result.status == "unsupported"
+    assert result.reason_code == "unsupported_preserve_aspect_ratio"
     assert result.commands == ()
 
 
@@ -1002,6 +1031,27 @@ def test_recorder_rejects_unrecovered_inline_css_syntax(style: str) -> None:
 
     assert result.status == "unsupported"
     assert result.reason_code == "unsupported_css_rule"
+    assert result.commands == ()
+
+
+@pytest.mark.parametrize(
+    "style",
+    [
+        "fill:/*comment*/red",
+        "fi/*comment*/ll:red",
+        "fill:red/*comment*/",
+        "fill:/*unterminated",
+    ],
+)
+def test_recorder_fails_closed_for_inline_css_comments(style: str) -> None:
+    result = lumina_svg_core.record_paint_commands_svg(
+        "<svg viewBox='0 0 10 10'>"
+        f"<path style='{style}' d='M0 0H10V10H0Z'/>"
+        "</svg>"
+    )
+
+    assert result.status == "unsupported"
+    assert result.reason_code == "unsupported_css_comment"
     assert result.commands == ()
 
 

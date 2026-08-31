@@ -26,15 +26,15 @@ parse/clip memory cache before every run. No artifact cache is configured.
 |---|---:|
 | Supported-scale fixture | SHA-256 `aedd2705dff8a61779418ddb4574aff7d2b22e19577fa798ebc669e4b60f9070`, 4,786,900 bytes |
 | Source provenance | `test_images/benchmark.svg`, SHA-256 `d078cf4293623d934759c2688e13a00491e525055e7595069a0ecc4f078842fb` |
-| Complete warm runs | 0.263166208 s, 0.268387708 s, 0.257893541 s |
-| Warm median / gate | 0.263166208 s / 1.0 s — PASS |
-| Warm p95 / gate | 0.267865558 s / 1.25 s — PASS |
-| Native recorder | 0.068439750 s median |
-| Native kernel | 0.162982250 s median |
-| Binding conversion | 0.000003417 s median |
-| Shapely adapter conversion | 0.011380250 s median |
-| LUT color matching | 0.015410041 s median |
-| Peak process RSS | 218,497,024 bytes |
+| Complete warm runs | 0.271170416 s, 0.266817083 s, 0.257031583 s |
+| Warm median / gate | 0.266817083 s / 1.0 s — PASS |
+| Warm p95 / gate | 0.270735083 s / 1.25 s — PASS |
+| Native recorder | 0.068371167 s median |
+| Native kernel | 0.162913000 s median |
+| Binding conversion | 0.000003542 s median |
+| Shapely adapter conversion | 0.013386417 s median |
+| LUT color matching | 0.015459333 s median |
+| Peak process RSS | 230,440,960 bytes |
 | Measured swap growth | 0 bytes |
 | Complete output | 1,024 raw/visible/matched shapes, 76,848 coordinates |
 | Stable output fingerprint | `1e22f943cb285246c9551e32e7ea1d43adec7d2c7d8587fab9376cc2e9e10838` |
@@ -47,6 +47,14 @@ it deterministically returns `unsupported_topology_collapse` because it
 contains same-paint self-intersections/touches and legacy-close cases that
 cannot be proved equivalent. This fallback is a correctness result, not a
 performance pass.
+
+The fixture verifier does not trust the checked-in 64-index tuple by itself.
+Starting from the fixed source SHA, it re-sorts all paths by serialized XML
+byte length and runs the complete standalone analysis plus area, contour,
+curve-tolerance, precision, and topology parity gates on each candidate. The
+first 64 passing indices must exactly reproduce the checked-in selection. The
+standalone public-call median was 0.209378333 s with 117,784,576 bytes peak
+RSS and the same 76,848-coordinate output.
 
 The supported-scale fixture is not the real R4C1 document and is not the
 previously described 55 MB regression document. The real R4C1 fixture was
@@ -68,16 +76,19 @@ file is substituted for it.
 ## Packaging evidence
 
 The standalone package built and installed as a clean CPython 3.12 macOS arm64
-wheel. Its 373 package tests passed against the installed extension from
+wheel. Its 386 package tests passed against the installed extension from
 outside the source tree. The sdist and wheel both contain the complete LunaSVG,
 PlutoVG, Clipper2, FreeType, stb, and pybind11 license texts in addition to the
 Apache-2.0 project license. A separate clean CPython 3.12 environment also
-built the extension from that sdist and passed the same 373 tests. The sdist
+built the extension from that sdist and passed the same 386 tests. Release
+build inputs are fixed to scikit-build-core 1.0.3, pybind11 3.1.0, NumPy
+2.5.2, CMake 4.3.4, and Ninja 1.13.2; release Actions are referenced by full
+commit SHA. The sdist
 also contains both pinned dependency patches and the fixed supported-scale
 fixture/provenance. The local wheel SHA-256 was
-`1530c7f828e7fa3aa5e1f995cb9061e218f3fedf59c8d8f2726d7cfec1e905f1`;
+`7ba8b7ce02a1e228cd08861e774877f81eb10af6410c0b2effde3c38c19cc0e0`;
 the sdist SHA-256 was
-`f734647deb97e71020176fd3c1fc489150d6f8cc28828ec3e4d853394c134bae`.
+`8db2fdbab0c3c230857108f3d74abd5bdb9cc3500d505f839d1a0cfa29b4f56c`.
 
 A real macOS arm64 PyInstaller onefile binary was built from the production
 spec in an environment containing the complete `requirements.txt` dependency
@@ -85,9 +96,9 @@ set, then invoked through Lumina's `--native-svg-self-test` public probe. The
 probe returned native version `0.1.1`, result schema `1`, one raw geometry, two
 visible geometries, two silhouette components, and fingerprint
 `e98dcd0f413d8ea56e59f9f2e7feee240c6d9052dbdb9b3e76248e416e47b469`.
-Cold onefile extraction and execution took 20.38 seconds with peak RSS
-51,314,688 bytes and no swap growth. The 196 MiB binary SHA-256 was
-`05695d929cc8878e94ba761f0b7e749f5b3061ab37138eb395f183af67035aa6`.
+Cold onefile extraction and execution took 21.34 seconds with peak RSS
+51,773,440 bytes and no swap growth. The 196 MiB binary SHA-256 was
+`dc2e36a3b46dd8a462f1384ac68eb70b800415e1a88f49c7281f05b62933a3b2`.
 Archive inspection confirmed the compiled `_lumina_svg_core` extension and the
 project, LunaSVG, PlutoVG, Clipper2, FreeType, stb, and pybind11 licenses were
 present.
@@ -116,12 +127,17 @@ working/output directory.
 
 | Slicer | Input structure | Result | Normalized toolpath |
 |---|---|---|---|
-| Bambu Studio 02.07.01.62 | 6 objects, 252 triangles, 5 materials | PASS, exit 0; tools 0–4 all extrude | 6,290 motion commands, 4,926 extrusion moves, 13 tool changes, fingerprint `43f8dc5f9ffb50d601ac1b5daba0d4347ff3cdb2d86458715b9ff7cb49d8ebec` |
-| OrcaSlicer 2.4.0 | 6 objects, 252 triangles, 5 materials | PASS, exit 0; tools 0–4 all extrude | 6,697 motion commands, 5,154 extrusion moves, 13 tool changes, fingerprint `08b58a3d5b95295851a990b35aa11bdb0a55da5bf943980af5a096bf13380fc0` |
+| Bambu Studio 02.07.01.62 | 6 objects, 252 triangles, 5 materials | PASS, exit 0; tools 0–4 all extrude in model features | 6,290 motion commands, 4,292 model extrusion moves, 13 tool changes, fingerprint `7f9f6915bf40d692cdeebdf8fa32c3159431a747e0e555e3ac0a6c1aa6843ec1` |
+| OrcaSlicer 2.4.0 | 6 objects, 252 triangles, 5 materials | PASS, exit 0; tools 0–4 all extrude in model features | 6,697 motion commands, 4,557 model extrusion moves, 13 tool changes, fingerprint `efff1f6fc42577c4a6aba62b0f8a22d924e574012bc02e7efc7c1311c63bcf99` |
 
 Toolpath fingerprints exclude comments and blank lines, then hash normalized
-motion and tool-change commands. A zero exit without emitted extrusion from
-every 3MF-declared tool (0 through 4 here) is a failure. Each slicer ran twice
+motion, positioning-mode, and tool-change commands. Material evidence counts
+only positive extrusion on a command with real XY movement while the slicer
+marks a model feature; pure-E priming, custom startup, support, skirt/brim,
+and prime/wipe towers cannot satisfy the gate. Absolute E remains global
+across tool changes unless the G-code explicitly resets it. A zero exit
+without qualifying extrusion from every 3MF-declared tool (0 through 4 here)
+is a failure. Each slicer ran twice
 in separate fresh directories; both Bambu runs produced the same fingerprint
 and both Orca runs produced the same fingerprint.
 A missing slicer is reported as `reality_dependency_unavailable` with exit code

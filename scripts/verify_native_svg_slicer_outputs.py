@@ -33,6 +33,16 @@ _GCODE_WORD_RE = re.compile(
     r"([A-Z])([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?)",
     re.IGNORECASE,
 )
+_GCODE_FEATURE_RE = re.compile(r"^FEATURE:\s*(.+)$", re.IGNORECASE)
+_AUXILIARY_FEATURE_TOKENS = (
+    "brim",
+    "custom",
+    "prime tower",
+    "purge tower",
+    "skirt",
+    "support",
+    "wipe tower",
+)
 _POSIX_ABSOLUTE_PATH_RE = re.compile(
     r"(^|[\s\"'=(])(/[^\s\"'<>]+)", re.MULTILINE
 )
@@ -114,8 +124,17 @@ def _inspect_3mf(path: Path) -> dict[str, Any]:
     }
 
 
+def _is_model_feature(feature: str | None) -> bool:
+    if feature is None:
+        return False
+    normalized = " ".join(feature.lower().split())
+    return not any(
+        token in normalized for token in _AUXILIARY_FEATURE_TOKENS
+    )
+
+
 def _toolpath_metrics(payload: bytes) -> dict[str, Any]:
-    """Fingerprint motion state and count only positive extrusion deltas."""
+    """Fingerprint motion and count model-region planar extrusion only."""
 
     normalized_commands: list[str] = []
     motion_count = 0
@@ -123,10 +142,17 @@ def _toolpath_metrics(payload: bytes) -> dict[str, Any]:
     tool_change_count = 0
     active_tool = 0
     absolute_extrusion = True
-    extrusion_positions: dict[int, float] = {}
+    absolute_positioning = True
+    extrusion_position = 0.0
+    planar_positions: dict[str, float | None] = {"X": None, "Y": None}
+    active_feature: str | None = None
     positive_extrusion_by_tool: dict[int, int] = {}
     for raw_line in payload.decode("utf-8", errors="replace").splitlines():
-        command = raw_line.split(";", 1)[0].strip()
+        command_text, _separator, comment = raw_line.partition(";")
+        feature_match = _GCODE_FEATURE_RE.match(comment.strip())
+        if feature_match is not None:
+            active_feature = feature_match.group(1).strip()
+        command = command_text.strip()
         if not command:
             continue
         command = " ".join(command.upper().split())
@@ -137,11 +163,15 @@ def _toolpath_metrics(payload: bytes) -> dict[str, Any]:
         command_code = int(match.group(2))
         is_motion = command_letter == "G" and command_code in {0, 1, 2, 3}
         is_position_reset = command_letter == "G" and command_code == 92
+        is_positioning_mode = (
+            command_letter == "G" and command_code in {90, 91}
+        )
         is_extrusion_mode = command_letter == "M" and command_code in {82, 83}
         is_tool_change = command_letter == "T"
         if not (
             is_motion
             or is_position_reset
+            or is_positioning_mode
             or is_extrusion_mode
             or is_tool_change
         ):
@@ -158,25 +188,51 @@ def _toolpath_metrics(payload: bytes) -> dict[str, Any]:
         if is_extrusion_mode:
             absolute_extrusion = command_code == 82
             continue
+        if is_positioning_mode:
+            absolute_positioning = command_code == 90
+            continue
         if is_position_reset:
             if "E" in words:
-                extrusion_positions[active_tool] = words["E"]
+                extrusion_position = words["E"]
+            for axis in ("X", "Y"):
+                if axis in words:
+                    planar_positions[axis] = words[axis]
             continue
 
         motion_count += 1
+        has_planar_motion = False
+        for axis in ("X", "Y"):
+            if axis not in words:
+                continue
+            coordinate = words[axis]
+            previous_coordinate = planar_positions[axis]
+            if absolute_positioning:
+                if (
+                    previous_coordinate is None
+                    or coordinate != previous_coordinate
+                ):
+                    has_planar_motion = True
+                planar_positions[axis] = coordinate
+            else:
+                if coordinate != 0.0:
+                    has_planar_motion = True
+                planar_positions[axis] = (
+                    (previous_coordinate or 0.0) + coordinate
+                )
         if "E" not in words:
             continue
         extrusion_value = words["E"]
-        previous_position = extrusion_positions.get(active_tool, 0.0)
         if absolute_extrusion:
-            extrusion_delta = extrusion_value - previous_position
-            extrusion_positions[active_tool] = extrusion_value
+            extrusion_delta = extrusion_value - extrusion_position
+            extrusion_position = extrusion_value
         else:
             extrusion_delta = extrusion_value
-            extrusion_positions[active_tool] = (
-                previous_position + extrusion_value
-            )
-        if extrusion_delta > 0.0:
+            extrusion_position += extrusion_value
+        if (
+            extrusion_delta > 0.0
+            and has_planar_motion
+            and _is_model_feature(active_feature)
+        ):
             extrusion_count += 1
             positive_extrusion_by_tool[active_tool] = (
                 positive_extrusion_by_tool.get(active_tool, 0) + 1

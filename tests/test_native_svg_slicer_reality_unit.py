@@ -67,10 +67,12 @@ def test_three_mf_inspection_and_toolpath_fingerprint_are_deterministic(
     assert len(inspection["sha256"]) == 64
 
     first = _toolpath_metrics(
-        b"; generated 2026-08-31\nT0\nG1 X1 Y2 E0.1\nG1 Z0.2\n"
+        b"; generated 2026-08-31\n; FEATURE: Outer wall\n"
+        b"T0\nG1 X1 Y2 E0.1\nG1 Z0.2\n"
     )
     second = _toolpath_metrics(
         b"; generated at a different time\r\nT0\r\n"
+        b"; FEATURE: Outer wall\r\n"
         b"G1 X1 Y2 E0.1\r\nG1 Z0.2\r\n"
     )
     assert first == second
@@ -84,7 +86,7 @@ def test_toolpath_metrics_count_only_positive_extrusion_deltas() -> None:
     from scripts.verify_native_svg_slicer_outputs import _toolpath_metrics
 
     metrics = _toolpath_metrics(
-        b"M82\nT0\nG92 E0\n"
+        b"M82\nT0\nG92 E0\n; FEATURE: Outer wall\n"
         b"G1 X1 E0\n"
         b"G1 X2 E1\n"
         b"G1 X3 E0.5\n"
@@ -100,6 +102,36 @@ def test_toolpath_metrics_count_only_positive_extrusion_deltas() -> None:
 
     assert metrics["extrusion_move_count"] == 3
     assert metrics["positive_extrusion_by_tool"] == {"0": 2, "1": 1}
+    assert metrics["positive_extrusion_tool_ids"] == [0, 1]
+
+
+def test_toolpath_metrics_reject_pure_e_and_auxiliary_extrusion() -> None:
+    from scripts.verify_native_svg_slicer_outputs import _toolpath_metrics
+
+    metrics = _toolpath_metrics(
+        b"M83\nT0\n"
+        b"; FEATURE: Custom\nG1 E5\n"
+        b"; FEATURE: Prime tower\nG1 X10 Y10 E1\n"
+        b"; FEATURE: Outer wall\nG1 E0.5\n"
+    )
+
+    assert metrics["extrusion_move_count"] == 0
+    assert metrics["positive_extrusion_by_tool"] == {}
+    assert metrics["positive_extrusion_tool_ids"] == []
+
+
+def test_toolpath_metrics_keeps_absolute_e_global_across_tool_changes() -> None:
+    from scripts.verify_native_svg_slicer_outputs import _toolpath_metrics
+
+    metrics = _toolpath_metrics(
+        b"M82\nG92 E0\n; FEATURE: Outer wall\n"
+        b"T0\nG1 X1 Y1 E10\n"
+        b"T1\nG1 X2 Y2 E10\n"
+        b"G1 X3 Y3 E10.5\n"
+    )
+
+    assert metrics["extrusion_move_count"] == 2
+    assert metrics["positive_extrusion_by_tool"] == {"0": 1, "1": 1}
     assert metrics["positive_extrusion_tool_ids"] == [0, 1]
 
 
@@ -136,7 +168,7 @@ def test_slicer_process_is_isolated_in_its_artifact_directory(
         if "--help" in command:
             return 0, "BambuStudio-test:\n", "", 0.01
         (cwd / "plate_1.gcode").write_text(
-            "T0\nG1 X1 Y2 E0.1\n",
+            "; FEATURE: Outer wall\nT0\nG1 X1 Y2 E0.1\n",
             encoding="utf-8",
         )
         return 0, "", "", 0.01
@@ -192,7 +224,7 @@ def test_slicer_validation_requires_positive_extrusion_for_every_material(
         if "--help" in command:
             return 0, "BambuStudio-test:\n", "", 0.01
         (cwd / "plate_1.gcode").write_text(
-            "M83\nT0\nG1 X1 Y2 E0.1\n",
+            "M83\n; FEATURE: Outer wall\nT0\nG1 X1 Y2 E0.1\n",
             encoding="utf-8",
         )
         return 0, "", "", 0.01
@@ -275,7 +307,16 @@ def test_native_svg_workflow_covers_all_release_realities() -> None:
         assert job_or_probe in workflow
     assert "docker build" in workflow
     assert "pyinstaller --noconfirm --clean lumina_studio.spec" in workflow
-    assert "actions/upload-artifact@v4" in workflow
+    assert (
+        "actions/upload-artifact@"
+        "ea165f8d65b6e75b540449e92b4886f43607fa02 # v4"
+    ) in workflow
+    for pinned_action in (
+        "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+        "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+        "pypa/cibuildwheel@1828c10ab37f080699c7b81cea34097c684a7074",
+    ):
+        assert pinned_action in workflow
     assert "cd native/lumina-svg-core" in workflow
     assert '"shapely>=2,<3"' in workflow
     for path_filter in (

@@ -19,6 +19,9 @@ from core.errors import (
     NativeSvgResourceLimitError,
 )
 from core.native_svg_limits import NATIVE_SVG_MAX_BYTES
+from core.vector_geometry_contract import (
+    LEGACY_MIN_COMPONENT_AREA_SOURCE_UNITS_SQUARED,
+)
 
 
 NATIVE_RESULT_SCHEMA_VERSION = 1
@@ -216,7 +219,11 @@ def _visible_shapes(
         )
         color = _rgb_at(collection, geometry_index)
         for component in components:
-            if component.is_empty:
+            if (
+                component.is_empty
+                or float(component.area)
+                < LEGACY_MIN_COMPONENT_AREA_SOURCE_UNITS_SQUARED
+            ):
                 continue
             items.append(
                 {

@@ -1,8 +1,10 @@
 [build-system]
 requires = [
-  "scikit-build-core>=0.11,<2",
+  "scikit-build-core==1.0.3",
   "pybind11==3.1.0",
-  "numpy>=2.0,<3",
+  "numpy==2.5.2",
+  "cmake==4.3.4",
+  "ninja==1.13.2",
 ]
 build-backend = "scikit_build_core.build"
 
@@ -30,12 +32,13 @@ dependencies = ["numpy>=2.0,<3"]
 Repository = "https://github.com/lumina-layer-studio/lumina-svg-core"
 
 [tool.scikit-build]
-cmake.version = ">=3.20"
+cmake.version = "==4.3.4"
 cmake.build-type = "Release"
 wheel.packages = ["python/lumina_svg_core"]
 wheel.install-dir = "lumina_svg_core"
 install.components = ["lumina_svg_core"]
 sdist.include = [
+  ".github/**",
   "CMakeLists.txt",
   "cmake/**",
   "include/**",

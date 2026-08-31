@@ -4,6 +4,7 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <locale>
@@ -12,7 +13,6 @@
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -162,6 +162,14 @@ RecorderResult unsupportedNamespace()
     RecorderResult result;
     result.status = "unsupported";
     result.reason_code = "unsupported_namespace";
+    return result;
+}
+
+RecorderResult unsupportedXmlName()
+{
+    RecorderResult result;
+    result.status = "unsupported";
+    result.reason_code = "unsupported_xml_name";
     return result;
 }
 
@@ -814,7 +822,105 @@ enum class NamespaceValidation {
     Supported,
     Invalid,
     Unsupported,
+    UnsupportedXmlName,
 };
+
+enum class XmlNameValidation {
+    Ascii,
+    NonAscii,
+    Invalid,
+};
+
+bool decodeUtf8CodePoint(std::string_view value, size_t& offset,
+                         uint32_t& codePoint)
+{
+    if(offset >= value.size())
+        return false;
+    const auto first = static_cast<unsigned char>(value[offset]);
+    size_t length = 0;
+    if(first < 0x80) {
+        codePoint = first;
+        length = 1;
+    } else if((first & 0xE0) == 0xC0) {
+        codePoint = first & 0x1F;
+        length = 2;
+    } else if((first & 0xF0) == 0xE0) {
+        codePoint = first & 0x0F;
+        length = 3;
+    } else if((first & 0xF8) == 0xF0) {
+        codePoint = first & 0x07;
+        length = 4;
+    } else {
+        return false;
+    }
+    if(length > value.size() - offset)
+        return false;
+    for(size_t index = 1; index < length; ++index) {
+        const auto next = static_cast<unsigned char>(value[offset + index]);
+        if((next & 0xC0) != 0x80)
+            return false;
+        codePoint = (codePoint << 6) | (next & 0x3F);
+    }
+    if((length == 2 && codePoint < 0x80)
+            || (length == 3 && codePoint < 0x800)
+            || (length == 4 && codePoint < 0x10000)
+            || codePoint > 0x10FFFF
+            || (codePoint >= 0xD800 && codePoint <= 0xDFFF))
+        return false;
+    offset += length;
+    return true;
+}
+
+bool isXmlNameStartCodePoint(uint32_t value)
+{
+    return value == ':' || value == '_'
+        || (value >= 'A' && value <= 'Z')
+        || (value >= 'a' && value <= 'z')
+        || (value >= 0xC0 && value <= 0xD6)
+        || (value >= 0xD8 && value <= 0xF6)
+        || (value >= 0xF8 && value <= 0x2FF)
+        || (value >= 0x370 && value <= 0x37D)
+        || (value >= 0x37F && value <= 0x1FFF)
+        || (value >= 0x200C && value <= 0x200D)
+        || (value >= 0x2070 && value <= 0x218F)
+        || (value >= 0x2C00 && value <= 0x2FEF)
+        || (value >= 0x3001 && value <= 0xD7FF)
+        || (value >= 0xF900 && value <= 0xFDCF)
+        || (value >= 0xFDF0 && value <= 0xFFFD)
+        || (value >= 0x10000 && value <= 0xEFFFF);
+}
+
+bool isXmlNameCodePoint(uint32_t value)
+{
+    return isXmlNameStartCodePoint(value)
+        || value == '-' || value == '.'
+        || (value >= '0' && value <= '9')
+        || value == 0xB7
+        || (value >= 0x0300 && value <= 0x036F)
+        || (value >= 0x203F && value <= 0x2040);
+}
+
+XmlNameValidation validateXmlName(std::string_view value)
+{
+    if(value.empty())
+        return XmlNameValidation::Invalid;
+    bool nonAscii = false;
+    size_t offset = 0;
+    size_t index = 0;
+    while(offset < value.size()) {
+        uint32_t codePoint = 0;
+        if(!decodeUtf8CodePoint(value, offset, codePoint))
+            return XmlNameValidation::Invalid;
+        if((index == 0 && !isXmlNameStartCodePoint(codePoint))
+                || (index != 0 && !isXmlNameCodePoint(codePoint)))
+            return XmlNameValidation::Invalid;
+        nonAscii = nonAscii || codePoint >= 0x80;
+        ++index;
+    }
+    return nonAscii
+        ? XmlNameValidation::NonAscii
+        : XmlNameValidation::Ascii;
+}
 
 std::optional<std::string_view> qNamePrefix(std::string_view name)
 {
@@ -835,9 +941,13 @@ NamespaceValidation validateNamespaceBindings(std::string_view svg)
         "http://www.w3.org/2000/svg";
     constexpr std::string_view XLINK_NAMESPACE =
         "http://www.w3.org/1999/xlink";
-    using NamespaceBindings = std::unordered_map<std::string, std::string>;
-    NamespaceBindings predefined{{"xml", std::string(XML_NAMESPACE)}};
-    std::vector<NamespaceBindings> scopes;
+    auto prefixIsBound = [](std::string_view prefix, bool xlinkBound) {
+        return prefix == "xml" || (prefix == "xlink" && xlinkBound);
+    };
+    std::vector<bool> inheritedXlinkBindings;
+    std::vector<std::string_view> openElementNames;
+    bool xlinkBound = false;
+    bool unsupportedNamespaceSeen = false;
     size_t offset = 0;
     while((offset = svg.find('<', offset)) != std::string_view::npos) {
         if(startsWith(svg.substr(offset), "<!--")) {
@@ -879,19 +989,30 @@ NamespaceValidation validateNamespaceBindings(std::string_view svg)
                 ++cursor;
             const auto prefix = qNamePrefix(
                 svg.substr(nameStart, cursor - nameStart));
+            const auto closingName = svg.substr(
+                nameStart, cursor - nameStart);
+            const auto closingNameValidation = validateXmlName(closingName);
+            if(closingNameValidation == XmlNameValidation::Invalid)
+                return NamespaceValidation::Invalid;
+            if(closingNameValidation == XmlNameValidation::NonAscii)
+                return NamespaceValidation::UnsupportedXmlName;
             if(!prefix.has_value())
                 return NamespaceValidation::Invalid;
-            if(!prefix->empty()) {
-                const auto& bindings = scopes.empty()
-                    ? predefined : scopes.back();
-                if(bindings.find(std::string(*prefix)) == bindings.end())
-                    return NamespaceValidation::Invalid;
-            }
+            if(!prefix->empty()
+                    && !prefixIsBound(*prefix, xlinkBound)
+                    && !unsupportedNamespaceSeen)
+                return NamespaceValidation::Invalid;
+            if(openElementNames.empty()
+                    || openElementNames.back() != closingName)
+                return NamespaceValidation::Invalid;
             const auto end = svg.find('>', cursor);
             if(end == std::string_view::npos)
                 return NamespaceValidation::Supported;
-            if(!scopes.empty())
-                scopes.pop_back();
+            openElementNames.pop_back();
+            if(!inheritedXlinkBindings.empty()) {
+                xlinkBound = inheritedXlinkBindings.back();
+                inheritedXlinkBindings.pop_back();
+            }
             offset = end + 1;
             continue;
         }
@@ -899,13 +1020,24 @@ NamespaceValidation validateNamespaceBindings(std::string_view svg)
         XmlStartTagView tag;
         if(!parseStartTag(svg, offset, tag))
             return NamespaceValidation::Supported;
-        NamespaceBindings bindings = scopes.empty()
-            ? predefined : scopes.back();
+        const auto tagNameValidation = validateXmlName(tag.name);
+        if(tagNameValidation == XmlNameValidation::Invalid)
+            return NamespaceValidation::Invalid;
+        if(tagNameValidation == XmlNameValidation::NonAscii)
+            return NamespaceValidation::UnsupportedXmlName;
+        for(const auto& attribute : tag.attributes) {
+            const auto attributeNameValidation =
+                validateXmlName(attribute.name);
+            if(attributeNameValidation == XmlNameValidation::Invalid)
+                return NamespaceValidation::Invalid;
+            if(attributeNameValidation == XmlNameValidation::NonAscii)
+                return NamespaceValidation::UnsupportedXmlName;
+        }
+        const bool inheritedXlinkBound = xlinkBound;
         for(const auto& attribute : tag.attributes) {
             if(attribute.name == "xmlns") {
                 if(attribute.value != SVG_NAMESPACE)
-                    return NamespaceValidation::Unsupported;
-                bindings[""] = std::string(attribute.value);
+                    unsupportedNamespaceSeen = true;
                 continue;
             }
             if(!startsWith(attribute.name, "xmlns:"))
@@ -916,24 +1048,26 @@ NamespaceValidation validateNamespaceBindings(std::string_view svg)
                 return NamespaceValidation::Invalid;
             if(declaredPrefix == "xml") {
                 if(attribute.value != XML_NAMESPACE)
-                    return NamespaceValidation::Unsupported;
+                    unsupportedNamespaceSeen = true;
             } else if(declaredPrefix == "xlink") {
                 if(attribute.value != XLINK_NAMESPACE)
-                    return NamespaceValidation::Unsupported;
+                    unsupportedNamespaceSeen = true;
+                else
+                    xlinkBound = true;
             } else if(declaredPrefix == "xmlns"
                     || attribute.value.empty()) {
                 return NamespaceValidation::Invalid;
+            } else {
+                unsupportedNamespaceSeen = true;
             }
-            bindings[std::string(declaredPrefix)] =
-                std::string(attribute.value);
         }
 
         const auto elementPrefix = qNamePrefix(tag.name);
         if(!elementPrefix.has_value())
             return NamespaceValidation::Invalid;
         if(!elementPrefix->empty()
-                && bindings.find(std::string(*elementPrefix))
-                    == bindings.end())
+                && !prefixIsBound(*elementPrefix, xlinkBound)
+                && !unsupportedNamespaceSeen)
             return NamespaceValidation::Invalid;
         for(const auto& attribute : tag.attributes) {
             if(attribute.name == "xmlns"
@@ -943,15 +1077,21 @@ NamespaceValidation validateNamespaceBindings(std::string_view svg)
             if(!attributePrefix.has_value())
                 return NamespaceValidation::Invalid;
             if(!attributePrefix->empty()
-                    && bindings.find(std::string(*attributePrefix))
-                        == bindings.end())
+                    && !prefixIsBound(*attributePrefix, xlinkBound)
+                    && !unsupportedNamespaceSeen)
                 return NamespaceValidation::Invalid;
         }
-        if(!tag.self_closing)
-            scopes.push_back(std::move(bindings));
+        if(tag.self_closing) {
+            xlinkBound = inheritedXlinkBound;
+        } else {
+            inheritedXlinkBindings.push_back(inheritedXlinkBound);
+            openElementNames.push_back(tag.name);
+        }
         offset = tag.end + 1;
     }
-    return NamespaceValidation::Supported;
+    return unsupportedNamespaceSeen
+        ? NamespaceValidation::Unsupported
+        : NamespaceValidation::Supported;
 }
 
 bool exceedsXmlComplexity(std::string_view svg)
@@ -1066,6 +1206,8 @@ RecorderResult recordUtf8Svg(std::string_view svg)
         return {};
     if(namespaceValidation == NamespaceValidation::Unsupported)
         return unsupportedNamespace();
+    if(namespaceValidation == NamespaceValidation::UnsupportedXmlName)
+        return unsupportedXmlName();
     constexpr std::string_view UTF8_BOM{"\xEF\xBB\xBF", 3};
     if(startsWith(svg, UTF8_BOM))
         svg.remove_prefix(UTF8_BOM.size());

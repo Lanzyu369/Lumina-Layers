@@ -359,6 +359,59 @@ print(json.dumps({
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="resource is POSIX-only")
+def test_namespace_preflight_rejects_nested_binding_amplifier_early() -> None:
+    script = """
+import json
+import resource
+import sys
+from time import perf_counter
+import lumina_svg_core
+
+depth = 127
+bindings_per_level = 2_000
+opening_tags = []
+for level in range(depth):
+    bindings = " ".join(
+        f"xmlns:p{level}_{index}='urn:lumina:{level}:{index}'"
+        for index in range(bindings_per_level)
+    )
+    opening_tags.append(f"<g {bindings}>")
+svg = (
+    "<svg viewBox='0 0 10 10'>"
+    + "".join(opening_tags)
+    + "<rect width='10' height='10'/>"
+    + "</g>" * depth
+    + "</svg>"
+)
+before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+started = perf_counter()
+result = lumina_svg_core.record_paint_commands_svg(svg)
+elapsed = perf_counter() - started
+after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+unit = 1 if sys.platform == "darwin" else 1024
+print(json.dumps({
+    "status": result.status,
+    "reason": result.reason_code,
+    "elapsed": elapsed,
+    "rss_delta_bytes": max(0, after - before) * unit,
+}))
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=5.0,
+    )
+    evidence = json.loads(completed.stdout)
+
+    assert evidence["status"] == "unsupported"
+    assert evidence["reason"] == "unsupported_namespace"
+    assert evidence["elapsed"] < 1.0
+    assert evidence["rss_delta_bytes"] < 96 * 1024 * 1024
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="resource is POSIX-only")
 def test_self_intersection_budget_precedes_first_clipper_union() -> None:
     script = """
 import json

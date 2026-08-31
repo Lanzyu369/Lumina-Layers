@@ -29,11 +29,15 @@ SVG_NAMESPACE = "http://www.w3.org/2000/svg"
 GRID_SIDE = 32
 CELL_USER_UNITS = 500.0
 CELL_MARGIN_USER_UNITS = 25.0
+SELECTION_TARGET_WIDTH_MM = 111.0
+SELECTION_TOLERANCE_MM = 0.02
+SELECTION_LEGACY_CLOSE_DELTA_SOURCE_UNITS = 0.03
+SELECTION_LEGACY_MINIMUM_PAINT_AREA_FACTOR = 0.25
 
 # These are the 64 longest source paths that independently passed the v0.1
 # recorder, precision, topology, curve-tolerance, and legacy-close identity
-# gates when normalized into one cell of the fixed 32 x 32 canvas. The list is
-# data, not a runtime capability scan: changing it changes the fixture SHA.
+# gates when normalized into one cell of the fixed 32 x 32 canvas. The tuple
+# fixes the fixture bytes; ``--verify`` recomputes the selection from source.
 SELECTED_SOURCE_PATH_INDICES = (
     35,
     99,
@@ -106,6 +110,36 @@ def _sha256(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def load_verified_source(source_path: Path) -> ET.Element:
+    """Load the fixed source document after checking identity and shape count.
+
+    校验固定源文档的身份和路径数量后加载 XML 根节点。
+    """
+
+    source_payload = source_path.read_bytes()
+    actual_source_sha256 = _sha256(source_payload)
+    if actual_source_sha256 != SOURCE_SHA256:
+        raise ValueError(
+            f"unexpected_source_sha256:{actual_source_sha256}"
+        )
+
+    ET.register_namespace("", SVG_NAMESPACE)
+    source_root = ET.fromstring(source_payload)
+    if len(_source_paths(source_root)) != 3097:
+        raise ValueError(
+            f"unexpected_source_path_count:{len(_source_paths(source_root))}"
+        )
+    return source_root
+
+
+def _source_paths(source_root: ET.Element) -> list[ET.Element]:
+    return [
+        child
+        for child in source_root
+        if child.tag.rsplit("}", 1)[-1] == "path"
+    ]
+
+
 def _paint_bounds(root: ET.Element, child: ET.Element) -> tuple[float, ...]:
     probe = ET.Element(root.tag, root.attrib)
     probe.append(copy.deepcopy(child))
@@ -123,25 +157,111 @@ def _paint_bounds(root: ET.Element, child: ET.Element) -> tuple[float, ...]:
     return bounds
 
 
+def _placement_transform(
+    bounds: tuple[float, ...], slot: int
+) -> str:
+    x, y, width, height = bounds
+    cell_inner = CELL_USER_UNITS - 2.0 * CELL_MARGIN_USER_UNITS
+    scale = min(cell_inner / width, cell_inner / height)
+    column = slot % GRID_SIDE
+    row = slot // GRID_SIDE
+    translate_x = (
+        column * CELL_USER_UNITS
+        + CELL_MARGIN_USER_UNITS
+        + (cell_inner - scale * width) / 2.0
+        - scale * x
+    )
+    translate_y = (
+        row * CELL_USER_UNITS
+        + CELL_MARGIN_USER_UNITS
+        + (cell_inner - scale * height) / 2.0
+        - scale * y
+    )
+    return (
+        f"matrix({scale:.17g} 0 0 {scale:.17g} "
+        f"{translate_x:.17g} {translate_y:.17g})"
+    )
+
+
+def _single_candidate_svg(
+    source_root: ET.Element,
+    child: ET.Element,
+    bounds: tuple[float, ...],
+) -> str:
+    canvas = GRID_SIDE * CELL_USER_UNITS
+    fixture_root = ET.Element(
+        source_root.tag,
+        {
+            "version": "1.1",
+            "viewBox": f"0 0 {canvas:g} {canvas:g}",
+            "width": f"{canvas:g}",
+            "height": f"{canvas:g}",
+        },
+    )
+    group = ET.SubElement(
+        fixture_root,
+        f"{{{SVG_NAMESPACE}}}g",
+        {"transform": _placement_transform(bounds, 0)},
+    )
+    group.append(copy.deepcopy(child))
+    return ET.tostring(fixture_root, encoding="unicode")
+
+
+def select_longest_safe_path_indices(
+    source_root: ET.Element,
+) -> tuple[int, ...]:
+    """Recompute the longest 64 paths passing every native parity gate.
+
+    按序列化 XML 字节长度重新排序，并逐条执行完整原生分析与旧链路
+    兼容性门禁，返回前 64 个安全路径索引。
+    """
+
+    source_paths = _source_paths(source_root)
+    ranked_indices = sorted(
+        range(len(source_paths)),
+        key=lambda index: (
+            -len(ET.tostring(source_paths[index], encoding="utf-8")),
+            index,
+        ),
+    )
+    selected: list[int] = []
+    for source_index in ranked_indices:
+        child = source_paths[source_index]
+        try:
+            bounds = _paint_bounds(source_root, child)
+        except RuntimeError:
+            continue
+        result = lumina_svg_core.analyze_svg_svg(
+            _single_candidate_svg(source_root, child, bounds),
+            SELECTION_TARGET_WIDTH_MM,
+            SELECTION_TOLERANCE_MM,
+            False,
+            SELECTION_LEGACY_CLOSE_DELTA_SOURCE_UNITS,
+            SELECTION_LEGACY_MINIMUM_PAINT_AREA_FACTOR,
+        )
+        if result.status != "supported":
+            continue
+        if not all(
+            bool(getattr(result, flag, False))
+            for flag in (
+                "legacy_area_filter_identity",
+                "legacy_contour_normalization_compatible",
+                "legacy_contour_normalization_identity",
+                "legacy_curve_tolerance_compatible",
+            )
+        ):
+            continue
+        selected.append(source_index)
+        if len(selected) == len(SELECTED_SOURCE_PATH_INDICES):
+            return tuple(selected)
+    raise RuntimeError("insufficient_fail_closed_safe_source_paths")
+
+
 def build_fixture_payload(source_path: Path) -> bytes:
     """Return canonical fixture bytes after verifying the real source SHA."""
 
-    source_payload = source_path.read_bytes()
-    actual_source_sha256 = _sha256(source_payload)
-    if actual_source_sha256 != SOURCE_SHA256:
-        raise ValueError(
-            f"unexpected_source_sha256:{actual_source_sha256}"
-        )
-
-    ET.register_namespace("", SVG_NAMESPACE)
-    source_root = ET.fromstring(source_payload)
-    source_paths = [
-        child
-        for child in source_root
-        if child.tag.rsplit("}", 1)[-1] == "path"
-    ]
-    if len(source_paths) != 3097:
-        raise ValueError(f"unexpected_source_path_count:{len(source_paths)}")
+    source_root = load_verified_source(source_path)
+    source_paths = _source_paths(source_root)
 
     canvas = GRID_SIDE * CELL_USER_UNITS
     fixture_root = ET.Element(
@@ -159,34 +279,16 @@ def build_fixture_payload(source_path: Path) -> bytes:
     selected_bounds = [
         _paint_bounds(source_root, child) for child in selected
     ]
-    cell_inner = CELL_USER_UNITS - 2.0 * CELL_MARGIN_USER_UNITS
     for slot in range(GRID_SIDE * GRID_SIDE):
         source_offset = slot % len(selected)
         source_index = SELECTED_SOURCE_PATH_INDICES[source_offset]
         child = selected[source_offset]
-        x, y, width, height = selected_bounds[source_offset]
-        scale = min(cell_inner / width, cell_inner / height)
-        column = slot % GRID_SIDE
-        row = slot // GRID_SIDE
-        translate_x = (
-            column * CELL_USER_UNITS
-            + CELL_MARGIN_USER_UNITS
-            + (cell_inner - scale * width) / 2.0
-            - scale * x
-        )
-        translate_y = (
-            row * CELL_USER_UNITS
-            + CELL_MARGIN_USER_UNITS
-            + (cell_inner - scale * height) / 2.0
-            - scale * y
-        )
         group = ET.SubElement(
             fixture_root,
             f"{{{SVG_NAMESPACE}}}g",
             {
-                "transform": (
-                    f"matrix({scale:.17g} 0 0 {scale:.17g} "
-                    f"{translate_x:.17g} {translate_y:.17g})"
+                "transform": _placement_transform(
+                    selected_bounds[source_offset], slot
                 ),
                 "data-source-path-index": str(source_index),
                 "data-repeat": str(slot // len(selected)),
@@ -220,6 +322,16 @@ def provenance(payload: bytes) -> dict[str, object]:
         },
         "selection": {
             "policy": "longest_64_fail_closed_safe_paths_tiled_16_times",
+            "ranking": "serialized_xml_byte_length_descending_then_index",
+            "verification_entrypoint": "lumina_svg_core.analyze_svg_svg",
+            "target_width_mm": SELECTION_TARGET_WIDTH_MM,
+            "tolerance_mm": SELECTION_TOLERANCE_MM,
+            "required_result_flags": [
+                "legacy_area_filter_identity",
+                "legacy_contour_normalization_compatible",
+                "legacy_contour_normalization_identity",
+                "legacy_curve_tolerance_compatible",
+            ],
             "source_path_indices": list(SELECTED_SOURCE_PATH_INDICES),
             "unique_source_path_count": len(SELECTED_SOURCE_PATH_INDICES),
             "repeat_count": 16,
@@ -263,6 +375,10 @@ def main() -> None:
     payload = build_fixture_payload(args.source.resolve())
     output_path = args.output.resolve()
     if args.verify:
+        source_root = load_verified_source(args.source.resolve())
+        recomputed_indices = select_longest_safe_path_indices(source_root)
+        if recomputed_indices != SELECTED_SOURCE_PATH_INDICES:
+            raise SystemExit("supported_scale_selection_is_stale")
         if not output_path.is_file() or output_path.read_bytes() != payload:
             raise SystemExit("supported_scale_fixture_is_stale")
     else:

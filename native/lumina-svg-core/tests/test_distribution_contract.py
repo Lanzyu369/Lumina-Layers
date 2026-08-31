@@ -107,12 +107,31 @@ def test_python_distribution_is_exactly_versioned_for_cpython_312() -> None:
     assert metadata["project"]["version"] == "0.1.1"
     assert metadata["project"]["requires-python"] == "==3.12.*"
     assert metadata["project"]["license"] == "Apache-2.0"
-    assert "pybind11==3.1.0" in metadata["build-system"]["requires"]
+    assert metadata["build-system"]["requires"] == [
+        "scikit-build-core==1.0.3",
+        "pybind11==3.1.0",
+        "numpy==2.5.2",
+        "cmake==4.3.4",
+        "ninja==1.13.2",
+    ]
     assert metadata["project"]["license-files"] == [
         "LICENSE",
         "THIRD_PARTY_NOTICES.md",
         "THIRD_PARTY_LICENSES/*",
     ]
+
+
+def test_release_workflow_pins_actions_to_immutable_commits() -> None:
+    workflow = (
+        PACKAGE_ROOT / ".github" / "workflows" / "wheels.yml"
+    ).read_text(encoding="utf-8")
+
+    for pinned_action in (
+        "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803",
+        "pypa/cibuildwheel@1828c10ab37f080699c7b81cea34097c684a7074",
+        "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+    ):
+        assert pinned_action in workflow
 
 
 def test_readme_declares_workspace_extraction_boundary() -> None:

@@ -198,6 +198,131 @@ def test_native_differential_output_is_stable_across_uncached_runs(
 
 
 @pytest.mark.parametrize(
+    "body",
+    [
+        (
+            "<rect width='50' height='50' fill='red'/>"
+            "<rect x='90' y='90' width='.03' height='.03' fill='blue'/>"
+        ),
+        (
+            "<path fill='red' d='M0 0H50V50H0Z "
+            "M90 90H90.03V90.03H90Z'/>"
+        ),
+    ],
+    ids=["independent-paint", "same-paint-components"],
+)
+def test_native_matches_legacy_per_component_minimum_area(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    body: str,
+) -> None:
+    pytest.importorskip("lumina_svg_core")
+    path = tmp_path / "minimum-component-area.svg"
+    path.write_text(
+        f"<svg viewBox='0 0 100 100'>{body}</svg>",
+        encoding="utf-8",
+    )
+
+    selected = _run(
+        _processor(), path, backend="native", monkeypatch=monkeypatch
+    )
+    reference = _run(
+        _processor(), path, backend="legacy", monkeypatch=monkeypatch
+    )
+
+    assert selected.stage_timings["geometry_backend"] == "native"
+    assert _ordered_paint_colors(selected) == _ordered_paint_colors(reference)
+    assert _census_by_color(selected) == _census_by_color(reference)
+    assert all(
+        item["geometry"].area >= vector_engine.MIN_SHAPE_AREA_MM2
+        for item in selected.clipped_shapes
+    )
+
+
+@pytest.mark.parametrize("with_use", [False, True], ids=["direct", "use"])
+def test_symbol_requests_whole_document_legacy_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    with_use: bool,
+) -> None:
+    pytest.importorskip("lumina_svg_core")
+    use = "<use href='#shape'/>" if with_use else ""
+    path = tmp_path / "symbol.svg"
+    path.write_text(
+        "<svg viewBox='0 0 10 10'>"
+        "<symbol id='shape'><path fill='red' d='M0 0H10V10H0Z'/>"
+        "</symbol>"
+        f"{use}<rect x='2' y='2' width='4' height='4' fill='blue'/>"
+        "</svg>",
+        encoding="utf-8",
+    )
+
+    selected = _run(
+        _processor(), path, backend="native", monkeypatch=monkeypatch
+    )
+    reference = _run(
+        _processor(), path, backend="legacy", monkeypatch=monkeypatch
+    )
+
+    assert selected.stage_timings["geometry_backend"] == "legacy"
+    assert selected.stage_timings["native_fallback_reason"] == (
+        "unsupported_symbol"
+    )
+    assert _ordered_paint_colors(selected) == _ordered_paint_colors(reference)
+    assert _census_by_color(selected) == _census_by_color(reference)
+
+
+@pytest.mark.parametrize(
+    "preserve_aspect_ratio",
+    [
+        " xMidYMid meet",
+        "xMidYMid  meet",
+        "\txMidYMid meet",
+        "none",
+        "xMidYMid meet",
+        "xMidYMid slice",
+    ],
+    ids=[
+        "leading-space",
+        "repeated-space",
+        "leading-tab",
+        "none",
+        "meet",
+        "slice",
+    ],
+)
+def test_explicit_preserve_aspect_ratio_falls_back_with_legacy_parity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    preserve_aspect_ratio: str,
+) -> None:
+    pytest.importorskip("lumina_svg_core")
+    path = tmp_path / "preserve-aspect-ratio.svg"
+    path.write_text(
+        "<svg width='20' height='10' viewBox='0 0 10 10' "
+        f"preserveAspectRatio='{preserve_aspect_ratio}'>"
+        "<path fill='red' d='M0 0H10V10H0Z'/></svg>",
+        encoding="utf-8",
+    )
+
+    selected = _run(
+        _processor(), path, backend="native", monkeypatch=monkeypatch
+    )
+    reference = _run(
+        _processor(), path, backend="legacy", monkeypatch=monkeypatch
+    )
+
+    assert selected.stage_timings["geometry_backend"] == "legacy"
+    assert selected.stage_timings["native_fallback_reason"] == (
+        "unsupported_preserve_aspect_ratio"
+    )
+    assert selected.bbox == pytest.approx(reference.bbox, abs=0.001)
+    assert selected.scale_factor == pytest.approx(reference.scale_factor)
+    assert _ordered_paint_colors(selected) == _ordered_paint_colors(reference)
+    assert _census_by_color(selected) == _census_by_color(reference)
+
+
+@pytest.mark.parametrize(
     ("paint_attributes", "fallback_reason"),
     [
         ("fill='rebeccapurple'", "unsupported_color_syntax"),
@@ -282,6 +407,49 @@ def test_explicit_inherit_preserves_legacy_material_and_topology_by_fallback(
     assert selected.stage_timings["geometry_backend"] == "legacy"
     assert selected.stage_timings["native_fallback_reason"] == (
         "unsupported_legacy_explicit_inherit"
+    )
+    assert _ordered_paint_colors(selected) == _ordered_paint_colors(reference)
+    assert _ordered_material_identities(selected) == (
+        _ordered_material_identities(reference)
+    )
+    assert _census_by_color(selected) == _census_by_color(reference)
+
+
+@pytest.mark.parametrize(
+    "style",
+    [
+        "fill:/*comment*/red",
+        "fi/*comment*/ll:red",
+        "fill:red/*comment*/",
+        "fill:/*unterminated",
+    ],
+    ids=["after-colon", "inside-name", "value-tail", "unterminated"],
+)
+def test_inline_css_comments_preserve_legacy_material_identity_by_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    style: str,
+) -> None:
+    pytest.importorskip("lumina_svg_core")
+    path = tmp_path / "inline-css-comment.svg"
+    path.write_text(
+        "<svg viewBox='0 0 20 10'>"
+        f"<path style='{style}' d='M0 0H9V10H0Z'/>"
+        "<rect x='11' width='9' height='10' fill='blue'/>"
+        "</svg>",
+        encoding="utf-8",
+    )
+
+    selected = _run(
+        _processor(), path, backend="native", monkeypatch=monkeypatch
+    )
+    reference = _run(
+        _processor(), path, backend="legacy", monkeypatch=monkeypatch
+    )
+
+    assert selected.stage_timings["geometry_backend"] == "legacy"
+    assert selected.stage_timings["native_fallback_reason"] == (
+        "unsupported_css_comment"
     )
     assert _ordered_paint_colors(selected) == _ordered_paint_colors(reference)
     assert _ordered_material_identities(selected) == (

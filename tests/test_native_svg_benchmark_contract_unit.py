@@ -218,3 +218,11 @@ def test_supported_scale_fixture_is_exactly_reproducible() -> None:
     assert fixture_builder.provenance(payload) == provenance
     assert len(provenance["selection"]["source_path_indices"]) == 64
     assert provenance["fixture"]["path_count"] == 1024
+
+
+def test_supported_scale_selection_is_recomputed_from_full_native_gates() -> None:
+    source_root = fixture_builder.load_verified_source(SOURCE_PROXY_PATH)
+
+    assert fixture_builder.select_longest_safe_path_indices(source_root) == (
+        fixture_builder.SELECTED_SOURCE_PATH_INDICES
+    )

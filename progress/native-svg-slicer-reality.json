@@ -94,7 +94,7 @@
         "<isolated-run-directory>",
         "native-svg-BambuStudio.3mf"
       ],
-      "duration_seconds": 0.35738,
+      "duration_seconds": 0.523765,
       "executable": "BambuStudio",
       "exit_code": 0,
       "input": {
@@ -134,26 +134,26 @@
             "<isolated-run-directory>",
             "native-svg-BambuStudio.3mf"
           ],
-          "duration_seconds": 0.197217,
+          "duration_seconds": 0.361588,
           "exit_code": 0,
           "missing_expected_tool_ids": [],
           "output_directory": "run-1",
           "reason": "",
           "status": "passed",
           "stderr_tail": "",
-          "stdout_tail": "[2026-08-31 14:02:11.669645] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
+          "stdout_tail": "[2026-08-31 14:45:38.996068] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
           "toolpath": {
-            "extrusion_move_count": 4926,
-            "fingerprint": "43f8dc5f9ffb50d601ac1b5daba0d4347ff3cdb2d86458715b9ff7cb49d8ebec",
+            "extrusion_move_count": 4292,
+            "fingerprint": "7f9f6915bf40d692cdeebdf8fa32c3159431a747e0e555e3ac0a6c1aa6843ec1",
             "motion_command_count": 6290,
-            "normalized_byte_size": 159531,
+            "normalized_byte_size": 159695,
             "positive_extrusion_by_tool": {
-              "0": 1016,
-              "1": 1086,
-              "1000": 205,
-              "2": 169,
-              "3": 355,
-              "4": 2095
+              "0": 724,
+              "1": 992,
+              "1000": 192,
+              "2": 76,
+              "3": 258,
+              "4": 2050
             },
             "positive_extrusion_tool_ids": [
               0,
@@ -181,26 +181,26 @@
             "<isolated-run-directory>",
             "native-svg-BambuStudio.3mf"
           ],
-          "duration_seconds": 0.160163,
+          "duration_seconds": 0.162177,
           "exit_code": 0,
           "missing_expected_tool_ids": [],
           "output_directory": "run-2",
           "reason": "",
           "status": "passed",
           "stderr_tail": "",
-          "stdout_tail": "[2026-08-31 14:02:11.869777] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
+          "stdout_tail": "[2026-08-31 14:45:39.303916] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
           "toolpath": {
-            "extrusion_move_count": 4926,
-            "fingerprint": "43f8dc5f9ffb50d601ac1b5daba0d4347ff3cdb2d86458715b9ff7cb49d8ebec",
+            "extrusion_move_count": 4292,
+            "fingerprint": "7f9f6915bf40d692cdeebdf8fa32c3159431a747e0e555e3ac0a6c1aa6843ec1",
             "motion_command_count": 6290,
-            "normalized_byte_size": 159531,
+            "normalized_byte_size": 159695,
             "positive_extrusion_by_tool": {
-              "0": 1016,
-              "1": 1086,
-              "1000": 205,
-              "2": 169,
-              "3": 355,
-              "4": 2095
+              "0": 724,
+              "1": 992,
+              "1000": 192,
+              "2": 76,
+              "3": 258,
+              "4": 2050
             },
             "positive_extrusion_tool_ids": [
               0,
@@ -220,19 +220,19 @@
       "stable_across_runs": true,
       "status": "passed",
       "stderr_tail": "",
-      "stdout_tail": "[2026-08-31 14:02:11.669645] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
+      "stdout_tail": "[2026-08-31 14:45:38.996068] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
       "toolpath": {
-        "extrusion_move_count": 4926,
-        "fingerprint": "43f8dc5f9ffb50d601ac1b5daba0d4347ff3cdb2d86458715b9ff7cb49d8ebec",
+        "extrusion_move_count": 4292,
+        "fingerprint": "7f9f6915bf40d692cdeebdf8fa32c3159431a747e0e555e3ac0a6c1aa6843ec1",
         "motion_command_count": 6290,
-        "normalized_byte_size": 159531,
+        "normalized_byte_size": 159695,
         "positive_extrusion_by_tool": {
-          "0": 1016,
-          "1": 1086,
-          "1000": 205,
-          "2": 169,
-          "3": 355,
-          "4": 2095
+          "0": 724,
+          "1": 992,
+          "1000": 192,
+          "2": 76,
+          "3": 258,
+          "4": 2050
         },
         "positive_extrusion_tool_ids": [
           0,
@@ -261,7 +261,7 @@
         "<isolated-run-directory>",
         "native-svg-OrcaSlicer.3mf"
       ],
-      "duration_seconds": 0.326612,
+      "duration_seconds": 0.474637,
       "executable": "OrcaSlicer",
       "exit_code": 0,
       "input": {
@@ -301,7 +301,7 @@
             "<isolated-run-directory>",
             "native-svg-OrcaSlicer.3mf"
           ],
-          "duration_seconds": 0.16478,
+          "duration_seconds": 0.313783,
           "exit_code": 0,
           "missing_expected_tool_ids": [],
           "output_directory": "run-1",
@@ -310,17 +310,17 @@
           "stderr_tail": "",
           "stdout_tail": "",
           "toolpath": {
-            "extrusion_move_count": 5154,
-            "fingerprint": "08b58a3d5b95295851a990b35aa11bdb0a55da5bf943980af5a096bf13380fc0",
+            "extrusion_move_count": 4557,
+            "fingerprint": "efff1f6fc42577c4a6aba62b0f8a22d924e574012bc02e7efc7c1311c63bcf99",
             "motion_command_count": 6697,
-            "normalized_byte_size": 168637,
+            "normalized_byte_size": 168801,
             "positive_extrusion_by_tool": {
-              "0": 1042,
-              "1": 1147,
-              "1000": 194,
-              "2": 163,
-              "3": 370,
-              "4": 2238
+              "0": 761,
+              "1": 1059,
+              "1000": 185,
+              "2": 76,
+              "3": 276,
+              "4": 2200
             },
             "positive_extrusion_tool_ids": [
               0,
@@ -348,7 +348,7 @@
             "<isolated-run-directory>",
             "native-svg-OrcaSlicer.3mf"
           ],
-          "duration_seconds": 0.161832,
+          "duration_seconds": 0.160854,
           "exit_code": 0,
           "missing_expected_tool_ids": [],
           "output_directory": "run-2",
@@ -357,17 +357,17 @@
           "stderr_tail": "",
           "stdout_tail": "",
           "toolpath": {
-            "extrusion_move_count": 5154,
-            "fingerprint": "08b58a3d5b95295851a990b35aa11bdb0a55da5bf943980af5a096bf13380fc0",
+            "extrusion_move_count": 4557,
+            "fingerprint": "efff1f6fc42577c4a6aba62b0f8a22d924e574012bc02e7efc7c1311c63bcf99",
             "motion_command_count": 6697,
-            "normalized_byte_size": 168637,
+            "normalized_byte_size": 168801,
             "positive_extrusion_by_tool": {
-              "0": 1042,
-              "1": 1147,
-              "1000": 194,
-              "2": 163,
-              "3": 370,
-              "4": 2238
+              "0": 761,
+              "1": 1059,
+              "1000": 185,
+              "2": 76,
+              "3": 276,
+              "4": 2200
             },
             "positive_extrusion_tool_ids": [
               0,
@@ -389,17 +389,17 @@
       "stderr_tail": "",
       "stdout_tail": "",
       "toolpath": {
-        "extrusion_move_count": 5154,
-        "fingerprint": "08b58a3d5b95295851a990b35aa11bdb0a55da5bf943980af5a096bf13380fc0",
+        "extrusion_move_count": 4557,
+        "fingerprint": "efff1f6fc42577c4a6aba62b0f8a22d924e574012bc02e7efc7c1311c63bcf99",
         "motion_command_count": 6697,
-        "normalized_byte_size": 168637,
+        "normalized_byte_size": 168801,
         "positive_extrusion_by_tool": {
-          "0": 1042,
-          "1": 1147,
-          "1000": 194,
-          "2": 163,
-          "3": 370,
-          "4": 2238
+          "0": 761,
+          "1": 1059,
+          "1000": 185,
+          "2": 76,
+          "3": 276,
+          "4": 2200
         },
         "positive_extrusion_tool_ids": [
           0,

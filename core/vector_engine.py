@@ -89,6 +89,9 @@ from core.layered_coordinate_domain import (
     LAYERED_COORDINATE_DOMAIN_KEY,
     LayeredCoordinateDomain,
 )
+from core.vector_geometry_contract import (
+    LEGACY_MIN_COMPONENT_AREA_SOURCE_UNITS_SQUARED,
+)
 from core.task_parallelism import (
     resolve_task_parallelism_plan,
     task_parallelism_worker_scope,
@@ -113,7 +116,9 @@ from core.vector_layer_geometry import (
 
 _log = get_logger(__name__)
 
-MIN_SHAPE_AREA_MM2 = 0.01
+# Backward-compatible alias. The historical name says ``MM2``, but the
+# threshold is applied before geometry is scaled from SVG source coordinates.
+MIN_SHAPE_AREA_MM2 = LEGACY_MIN_COMPONENT_AREA_SOURCE_UNITS_SQUARED
 BASE_COLOR_GAP_MM = 0.005
 _MAX_BEZIER_DEPTH = 16
 

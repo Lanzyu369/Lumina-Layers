@@ -730,10 +730,10 @@ index e2c9708..8896b84 100644
              markerPosition.renderMarker(newState, m_strokeData.lineWidth());
          }
 diff --git a/source/svgparser.cpp b/source/svgparser.cpp
-index 183937c..f9e1c05 100644
+index 183937c..ac5af5e 100644
 --- a/source/svgparser.cpp
 +++ b/source/svgparser.cpp
-@@ -2,10 +2,588 @@
+@@ -2,10 +2,601 @@
  #include "svgelement.h"
  #include "svgparserutils.h"
  
@@ -1123,14 +1123,25 @@ index 183937c..f9e1c05 100644
 +
 +static std::string capabilityReasonForAttribute(
 +    std::string_view name, std::string_view value, bool known,
-+    ElementID elementId = ElementID::Unknown)
++    ElementID elementId = ElementID::Unknown,
++    bool isRootElement = false)
 +{
 +    if(elementId == ElementID::Image
 +            && (name == "href" || name == "xlink:href"))
 +        return "unsupported_image";
 +    if(name == "xml:base")
 +        return "unsupported_external_resource";
++    if(name == "style"
++            && (value.find("/*") != std::string_view::npos
++                || value.find("*/") != std::string_view::npos))
++        return "unsupported_css_comment";
 +    const auto normalizedValue = trimmedValue(value);
++    if(isRootElement && name == "preserveAspectRatio") {
++        SVGPreserveAspectRatio preserveAspectRatio(
++            PropertyID::PreserveAspectRatio);
++        if(preserveAspectRatio.parse(value))
++            return "unsupported_preserve_aspect_ratio";
++    }
 +    if(name == "xmlns") {
 +        if(normalizedValue != "http://www.w3.org/2000/svg")
 +            return "unsupported_namespace";
@@ -1295,6 +1306,8 @@ index 183937c..f9e1c05 100644
 +        return "unsupported_image";
 +    if(id == ElementID::Text || id == ElementID::Tspan)
 +        return "unsupported_text";
++    if(id == ElementID::Symbol)
++        return "unsupported_symbol";
 +    if(id == ElementID::Unknown)
 +        return "unsupported_element";
 +    return {};
@@ -1322,7 +1335,7 @@ index 183937c..f9e1c05 100644
  struct SimpleSelector;
  
  using Selector = std::vector<SimpleSelector>;
-@@ -494,7 +1072,9 @@ static bool parseSelectors(std::string_view& input, SelectorList& selectors)
+@@ -494,7 +1085,9 @@ static bool parseSelectors(std::string_view& input, SelectorList& selectors)
      return true;
  }
  
@@ -1333,7 +1346,7 @@ index 183937c..f9e1c05 100644
  {
      if(!skipDelimiter(input, '{'))
          return false;
-@@ -517,6 +1097,10 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
+@@ -517,6 +1110,10 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
          declaration.specificity = 0x10;
          declaration.id = csspropertyid(name);
          declaration.value.assign(value);
@@ -1344,7 +1357,7 @@ index 183937c..f9e1c05 100644
          if(skipDelimiter(input, '!')) {
              skipOptionalSpaces(input);
              if(!skipString(input, "important"))
-@@ -524,26 +1108,49 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
+@@ -524,26 +1121,49 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
              declaration.specificity = 0x1000;
          }
  
@@ -1398,7 +1411,7 @@ index 183937c..f9e1c05 100644
              int depth = 0;
              while(!input.empty()) {
                  auto ch = input.front();
-@@ -562,8 +1169,12 @@ static RuleDataList parseStyleSheet(std::string_view input)
+@@ -562,8 +1182,12 @@ static RuleDataList parseStyleSheet(std::string_view input)
          }
  
          Rule rule;
@@ -1412,7 +1425,7 @@ index 183937c..f9e1c05 100644
          for(const auto& selector : rule.selectors) {
              size_t specificity = 0;
              for(const auto& simpleSelector : selector) {
-@@ -595,14 +1206,18 @@ static SelectorList parseQuerySelectors(std::string_view input)
+@@ -595,14 +1219,18 @@ static SelectorList parseQuerySelectors(std::string_view input)
      return selectors;
  }
  
@@ -1434,7 +1447,7 @@ index 183937c..f9e1c05 100644
          std::string value;
          while(!input.empty() && input.front() != ';') {
              value.push_back(input.front());
-@@ -610,10 +1225,17 @@ inline void parseInlineStyle(std::string_view input, SVGElement* element)
+@@ -610,10 +1238,17 @@ inline void parseInlineStyle(std::string_view input, SVGElement* element)
          }
  
          auto id = csspropertyid(name);
@@ -1454,7 +1467,7 @@ index 183937c..f9e1c05 100644
  }
  
  inline void removeStyleComments(std::string& value)
-@@ -626,7 +1248,83 @@ inline void removeStyleComments(std::string& value)
+@@ -626,7 +1261,83 @@ inline void removeStyleComments(std::string& value)
      }
  }
  
@@ -1539,7 +1552,7 @@ index 183937c..f9e1c05 100644
  {
      output.clear();
      while(!input.empty()) {
-@@ -644,34 +1342,8 @@ inline bool decodeText(std::string_view input, std::string& output)
+@@ -644,34 +1355,8 @@ inline bool decodeText(std::string_view input, std::string& output)
              unsigned int cp;
              if(!parseInteger(input, cp, base))
                  return false;
@@ -1576,7 +1589,7 @@ index 183937c..f9e1c05 100644
          } else {
              if(skipString(input, "amp")) {
                  output.push_back('&');
-@@ -683,6 +1355,20 @@ inline bool decodeText(std::string_view input, std::string& output)
+@@ -683,6 +1368,20 @@ inline bool decodeText(std::string_view input, std::string& output)
                  output.push_back('\"');
              } else if(skipString(input, "apos")) {
                  output.push_back('\'');
@@ -1597,7 +1610,7 @@ index 183937c..f9e1c05 100644
              } else {
                  return false;
              }
-@@ -699,48 +1385,185 @@ inline bool decodeText(std::string_view input, std::string& output)
+@@ -699,48 +1398,185 @@ inline bool decodeText(std::string_view input, std::string& output)
  constexpr bool IS_STARTNAMECHAR(int c) { return IS_ALPHA(c) ||  c == '_' || c == ':'; }
  constexpr bool IS_NAMECHAR(int c) { return IS_STARTNAMECHAR(c) || IS_NUM(c) || c == '-' || c == '.'; }
  
@@ -1796,7 +1809,7 @@ index 183937c..f9e1c05 100644
      if(length >= 3) {
          auto buffer = (const uint8_t*)(data);
  
-@@ -755,12 +1578,16 @@ bool Document::parse(const char* data, size_t length)
+@@ -755,12 +1591,16 @@ bool Document::parse(const char* data, size_t length)
      while(!input.empty()) {
          if(currentElement) {
              auto text = input.substr(0, input.find('<'));
@@ -1814,7 +1827,7 @@ index 183937c..f9e1c05 100644
          }
  
          if(!skipDelimiter(input, '<'))
-@@ -771,6 +1598,18 @@ bool Document::parse(const char* data, size_t length)
+@@ -771,6 +1611,18 @@ bool Document::parse(const char* data, size_t length)
              auto n = input.find("?>");
              if(n == std::string_view::npos)
                  return false;
@@ -1833,7 +1846,7 @@ index 183937c..f9e1c05 100644
              input.remove_prefix(n + 2);
              continue;
          }
-@@ -780,21 +1619,36 @@ bool Document::parse(const char* data, size_t length)
+@@ -780,21 +1632,36 @@ bool Document::parse(const char* data, size_t length)
                  auto n = input.find("-->");
                  if(n == std::string_view::npos)
                      return false;
@@ -1873,7 +1886,7 @@ index 183937c..f9e1c05 100644
                  while(!input.empty() && input.front() != '>') {
                      if(input.front() == '[') {
                          int depth = 1;
-@@ -818,13 +1672,15 @@ bool Document::parse(const char* data, size_t length)
+@@ -818,13 +1685,15 @@ bool Document::parse(const char* data, size_t length)
          }
  
          if(skipDelimiter(input, '/')) {
@@ -1892,7 +1905,7 @@ index 183937c..f9e1c05 100644
                      return false;
                  currentElement = currentElement->parentElement();
              } else {
-@@ -839,11 +1695,24 @@ bool Document::parse(const char* data, size_t length)
+@@ -839,11 +1708,24 @@ bool Document::parse(const char* data, size_t length)
  
          if(!readIdentifier(input, buffer))
              return false;
@@ -1918,7 +1931,7 @@ index 183937c..f9e1c05 100644
              if(id == ElementID::Unknown) {
                  ignoring = 1;
              } else {
-@@ -863,7 +1732,17 @@ bool Document::parse(const char* data, size_t length)
+@@ -863,7 +1745,17 @@ bool Document::parse(const char* data, size_t length)
          }
  
          skipOptionalSpaces(input);
@@ -1936,7 +1949,7 @@ index 183937c..f9e1c05 100644
              skipOptionalSpaces(input);
              if(!skipDelimiter(input, '='))
                  return false;
-@@ -875,17 +1754,64 @@ bool Document::parse(const char* data, size_t length)
+@@ -875,17 +1767,65 @@ bool Document::parse(const char* data, size_t length)
              auto n = input.find(quote);
              if(n == std::string_view::npos)
                  return false;
@@ -1977,7 +1990,8 @@ index 183937c..f9e1c05 100644
 +                id = propertyid(attributeName);
 +            auto capabilityReason = capabilityReasonForAttribute(
 +                attributeName, buffer, id != PropertyID::Unknown,
-+                element ? element->id() : ElementID::Unknown);
++                element ? element->id() : ElementID::Unknown,
++                element == m_rootElement.get());
 +            if(element != nullptr && !capabilityReason.empty())
 +                addCapabilityIssue(capabilityReason);
 +            if(element != nullptr
@@ -2007,7 +2021,7 @@ index 183937c..f9e1c05 100644
                      element->setAttribute(0x1, id, buffer);
                  }
              }
-@@ -895,12 +1821,15 @@ bool Document::parse(const char* data, size_t length)
+@@ -895,12 +1835,15 @@ bool Document::parse(const char* data, size_t length)
          }
  
          if(skipDelimiter(input, '>')) {
@@ -2023,7 +2037,7 @@ index 183937c..f9e1c05 100644
              if(!skipDelimiter(input, '>'))
                  return false;
              if(ignoring > 0)
-@@ -911,16 +1840,34 @@ bool Document::parse(const char* data, size_t length)
+@@ -911,16 +1854,34 @@ bool Document::parse(const char* data, size_t length)
          return false;
      }
  
