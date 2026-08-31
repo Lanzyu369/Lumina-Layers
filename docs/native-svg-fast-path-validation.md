@@ -68,11 +68,10 @@ recovered separately:
 - Result: `unsupported_vector_effect`, whole-document fallback
 - Native-by-default R4C1 release gate: **not ready**
 
-No SVG at or above 50 MiB was found under the local Codex worktrees,
-Downloads, Desktop, or Documents roots. The 2 GiB RSS and 256 MiB swap gates
-for that separate regression fixture therefore remain pending; neither the
-smaller supported-scale fixture, source SVG, nor real R4C1 file is substituted
-for it.
+No SVG at or above 50 MiB was found under the workspace root recorded in the
+structured benchmark report. The 2 GiB RSS and 256 MiB swap gates for that
+separate regression fixture therefore remain pending; neither the smaller
+supported-scale fixture, source SVG, nor real R4C1 file is substituted for it.
 
 ## Packaging evidence
 

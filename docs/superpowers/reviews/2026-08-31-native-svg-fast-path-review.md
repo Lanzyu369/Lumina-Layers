@@ -8,7 +8,7 @@ the exact PR #585 dependency commit
 adapter, whole-document fallback policy, packaging, benchmark, and retained
 slicer evidence are in scope. Merging is explicitly out of scope.
 
-The independent passes returned **Approved with fixes**. All six P1 and three
+The independent passes returned **Approved with fixes**. All six P1 and five
 P2 findings below were addressed before the exact-SHA re-review.
 
 ## Findings and dispositions
@@ -24,6 +24,8 @@ P2 findings below were addressed before the exact-SHA re-review.
 | P2 | Slicer evidence could count pure-E priming or auxiliary extrusion as material proof. | Evidence now requires positive extrusion with real XY movement inside a model feature, tracks G90/G91 and G92, preserves absolute E across tool changes, and excludes custom, prime/purge/wipe tower, skirt/brim, and support features. Both real slicers were rerun twice. |
 | P2 | The supported benchmark fixture recorded selected source indices without independently recomputing why they were safe. | `--verify` now ranks source paths by exact serialized XML byte length, checks every candidate at the worst-precision placement, incrementally verifies the growing compound panel, and rechecks the final tiled document plus all four legacy compatibility flags. It reproduces the checked-in 64-index tuple exactly. |
 | P2 | Release builds used mutable Action tags and incompletely fixed build tools. | Workflow Actions are pinned to immutable commits. The sdist/wheel build inputs are exact versions of scikit-build-core, pybind11, NumPy, CMake, and Ninja; clean wheel and sdist installs passed the standalone suite. |
+| P2 | The dedicated product-artifacts CI job did not execute the benchmark contract that recomputes the 3,097-source-path ranking, per-candidate gates, incremental panel, and final fixture. | Added `tests/test_native_svg_benchmark_contract_unit.py` to the job's focused pytest list, so a stale generator, selected tuple, fixture, or provenance fails the PR gate. |
+| P2 | The validation narrative claimed a wider local search for the >=50 MiB regression SVG than the structured report recorded. | Narrowed the claim to the workspace root present in `searched_roots`; the missing large-file RSS/swap gate remains explicitly pending. |
 
 ## Verification evidence
 

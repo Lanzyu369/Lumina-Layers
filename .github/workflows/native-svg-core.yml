@@ -106,6 +106,7 @@ jobs:
         run: >-
           python -m pytest
           tests/test_native_svg_adapter_unit.py
+          tests/test_native_svg_benchmark_contract_unit.py
           tests/test_native_svg_differential_unit.py
           tests/test_native_svg_fallback_properties.py
           tests/test_native_svg_workflow_integration.py
