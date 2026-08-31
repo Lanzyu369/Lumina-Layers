@@ -157,57 +157,96 @@ def _collection_geometries(collection: Any, grid_to_source_unit: float):
     )
 
 
-def _rgb_at(collection: Any, geometry_index: int) -> tuple[int, int, int]:
+def _collection_paint_metadata(
+    collection: Any,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Validate and return the native per-paint metadata arrays.
+
+    验证并返回原生结果中逐 paint 的元数据数组。
+    """
+
     rgba = np.asarray(collection.rgba)
+    draw_indices = np.asarray(collection.draw_indices)
+    source_indices = np.asarray(collection.source_indices)
+    source_kinds = np.asarray(collection.source_kinds)
+    geometry_shape = (collection.geometry_count,)
     if rgba.ndim != 2 or rgba.shape != (collection.geometry_count, 4):
         raise NativeSvgInternalError(
             "The native SVG result returned invalid material metadata.",
             reason_code="invalid_material_schema",
         )
-    color = rgba[geometry_index]
-    return int(color[0]), int(color[1]), int(color[2])
-
-
-def _shape_data(collection: Any, geometries: np.ndarray) -> list[dict[str, Any]]:
-    source_kinds = np.asarray(collection.source_kinds)
-    if source_kinds.shape != (collection.geometry_count,):
+    if (
+        draw_indices.shape != geometry_shape
+        or source_indices.shape != geometry_shape
+    ):
+        raise NativeSvgInternalError(
+            "The native SVG result returned invalid draw-order metadata.",
+            reason_code="invalid_draw_schema",
+        )
+    if (
+        source_kinds.shape != geometry_shape
+        or np.any(
+            (source_kinds != _SOURCE_KIND_FILL)
+            & (source_kinds != _SOURCE_KIND_STROKE)
+        )
+    ):
         raise NativeSvgInternalError(
             "The native SVG result returned invalid source metadata.",
             reason_code="invalid_source_schema",
         )
+    return rgba, draw_indices, source_indices, source_kinds
+
+
+def _paint_metadata_at(
+    metadata: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    geometry_index: int,
+) -> dict[str, Any]:
+    """Return one stable exact-paint identity record.
+
+    返回一条稳定、精确的 paint 身份记录。
+    """
+
+    rgba_values, draw_indices, source_indices, source_kinds = metadata
+    rgba = tuple(int(value) for value in rgba_values[geometry_index])
+    native_paint_index = int(draw_indices[geometry_index])
+    native_source_index = int(source_indices[geometry_index])
+    source_kind_index = int(source_kinds[geometry_index])
+    return {
+        "color": rgba[:3],
+        "rgba": rgba,
+        "source_kind": (
+            "stroke_only"
+            if source_kind_index == _SOURCE_KIND_STROKE
+            else "fill"
+        ),
+        "native_draw_order": native_paint_index,
+        "native_paint_index": native_paint_index,
+        "native_source_index": native_source_index,
+        "native_paint_id": (native_source_index, native_paint_index),
+    }
+
+
+def _shape_data(collection: Any, geometries: np.ndarray) -> list[dict[str, Any]]:
+    metadata = _collection_paint_metadata(collection)
     items: list[dict[str, Any]] = []
     for geometry_index, geometry in enumerate(geometries):
         if geometry is None or geometry.is_empty:
             continue
-        source_kind = int(source_kinds[geometry_index])
-        items.append(
+        item = _paint_metadata_at(metadata, geometry_index)
+        item.update(
             {
                 "poly": geometry,
-                "color": _rgb_at(collection, geometry_index),
-                "source_kind": (
-                    "stroke_only"
-                    if source_kind == _SOURCE_KIND_STROKE
-                    else "fill"
-                ),
                 "geometry_normalized": True,
             }
         )
+        items.append(item)
     return items
 
 
 def _visible_shapes(
     collection: Any, geometries: np.ndarray
 ) -> list[dict[str, Any]]:
-    draw_indices = np.asarray(collection.draw_indices)
-    source_indices = np.asarray(collection.source_indices)
-    if (
-        draw_indices.shape != (collection.geometry_count,)
-        or source_indices.shape != (collection.geometry_count,)
-    ):
-        raise NativeSvgInternalError(
-            "The native SVG result returned invalid draw-order metadata.",
-            reason_code="invalid_draw_schema",
-        )
+    metadata = _collection_paint_metadata(collection)
     items: list[dict[str, Any]] = []
     for geometry_index, geometry in enumerate(geometries):
         if geometry is None or geometry.is_empty:
@@ -217,23 +256,24 @@ def _visible_shapes(
             if geometry.geom_type == "MultiPolygon"
             else (geometry,)
         )
-        color = _rgb_at(collection, geometry_index)
-        for component in components:
+        paint_metadata = _paint_metadata_at(metadata, geometry_index)
+        for component_index, component in enumerate(components):
             if (
                 component.is_empty
                 or float(component.area)
                 < LEGACY_MIN_COMPONENT_AREA_SOURCE_UNITS_SQUARED
             ):
                 continue
-            items.append(
+            item = dict(paint_metadata)
+            item.update(
                 {
                     "geometry": component,
-                    "color": color,
                     "draw_order": len(items),
-                    "native_draw_order": int(draw_indices[geometry_index]),
-                    "native_source_index": int(source_indices[geometry_index]),
+                    "native_component_index": component_index,
+                    "geometry_normalized": True,
                 }
             )
+            items.append(item)
     return items
 
 

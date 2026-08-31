@@ -229,14 +229,14 @@ def test_vector_parse_clip_artifact_skips_parse_and_clip(tmp_path):
     assert processor.parse_warnings == ["cached legacy parse warning"]
 
 
-def test_v2_native_artifact_is_ignored_after_semantic_revision(
+def test_v3_artifact_without_paint_identity_is_ignored(
     tmp_path,
     monkeypatch,
 ):
     _force_legacy_parser(monkeypatch)
     svg_path = tmp_path / "self-cross.svg"
     svg_path.write_text("<svg/>", encoding="utf-8")
-    artifact_path = tmp_path / "old-v2-parse-clip-cache.pkl"
+    artifact_path = tmp_path / "old-v3-parse-clip-cache.pkl"
     cache_key = vector_engine._vector_parse_clip_cache_key(
         str(svg_path),
         target_width_mm=10.0,
@@ -244,7 +244,6 @@ def test_v2_native_artifact_is_ignored_after_semantic_revision(
         expand_stroke_to_fill=False,
         gradient_color_bands=None,
     )
-    cache_key = (*cache_key[:-3], "native", "0.1.0", 1)
     stale_geom = box(0, 0, 2, 2)
     stale_entry = {
         "shape_data": [{"poly": stale_geom, "color": (255, 0, 0)}],
@@ -255,12 +254,12 @@ def test_v2_native_artifact_is_ignored_after_semantic_revision(
         "image_vectorizer_bounds": None,
         "scale_factor": 1.0,
         "bbox": (0, 0, 2, 2),
-        "parse_warnings": ["stale-v2-native-result"],
+        "parse_warnings": ["stale-v3-result-without-paint-identity"],
     }
     artifact_path.write_bytes(
         pickle.dumps(
             {
-                "schema": "lumina_vector_parse_clip_cache_v2",
+                "schema": "lumina_vector_parse_clip_cache_v3",
                 "cache_key": cache_key,
                 "entry": stale_entry,
             },

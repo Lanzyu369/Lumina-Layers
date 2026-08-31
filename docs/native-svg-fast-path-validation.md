@@ -57,6 +57,38 @@ each growing compound panel. The resulting 64 indices must exactly reproduce
 the checked-in selection. The standalone public-call median was 0.180260917 s
 with 106,151,936 bytes peak RSS and the same 67,104-coordinate output.
 
+## LUM-20260831-002/003 contract evidence
+
+The user-owned SVG reported by these tickets was inspected in place and was
+not copied into the repository. Its SHA-256 was independently verified as
+`2a6de43cbb798ccaed4abd057f5d4cc2e5c448b98586b75cd1edbd46bdfc0d1c`
+(4,797,183 bytes). At `target_width_mm=100` and `tolerance_mm=0.02`, the current
+v0.1 runtime reaches the deterministic `unsupported_complexity` guard, so this
+pull request does **not** claim native execution, performance, or end-to-end
+colour equivalence for that document.
+
+The ticket evidence nevertheless exposed two parser boundary contracts now
+frozen by small synthetic regressions:
+
+- Lumina's adapter retains exact `(r, g, b, a)`, source index, paint index, a
+  stable `(source index, paint index)` identity, and per-paint component index
+  through the parser's `shape_data` and `clipped_shapes` outputs.
+- `component_hierarchy.svg` proves that a supported native result reaches
+  `VectorAnalysis` without `_normalize_contours_many`, while retaining the
+  large component, its hole, and an independent shell. The adjacent-triangle
+  fixture is classified as one whole-document fallback rather than returning
+  a partial native result.
+
+The reported MaterialVectorMatcher uint8 Lab collision is evidence for why the
+parser must expose exact source metadata, but material selection, KDTree/Lab
+matching, dynamic recipes, and recipe propagation are intentionally unchanged
+here. The later canonical 2D-to-mesh repair-group redesign also remains outside
+this pull request. In particular, this change does not fix writer-grid
+degeneration of a repair group containing an approximately `1e-8 mm²` dust
+component. Native geometry remains separated by component with hole hierarchy
+intact so those follow-up changes do not need to reconstruct topology from a
+flattened union.
+
 The supported-scale fixture is not the real R4C1 document and is not the
 previously described 55 MB regression document. The real R4C1 fixture was
 recovered separately:

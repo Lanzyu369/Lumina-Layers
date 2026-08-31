@@ -140,6 +140,16 @@ def test_supported_result_preserves_lumina_coordinate_contract(
         (0.0, 0.0, 100.0, 50.0)
     )
     assert outcome.clipped_shapes[0]["color"] == (255, 0, 0)
+    assert outcome.shape_data[0]["rgba"] == (255, 0, 0, 255)
+    assert outcome.shape_data[0]["native_paint_index"] == 7
+    assert outcome.shape_data[0]["native_source_index"] == 3
+    assert outcome.shape_data[0]["native_paint_id"] == (3, 7)
+    assert outcome.clipped_shapes[0]["rgba"] == (255, 0, 0, 255)
+    assert outcome.clipped_shapes[0]["native_paint_index"] == 7
+    assert outcome.clipped_shapes[0]["native_source_index"] == 3
+    assert outcome.clipped_shapes[0]["native_paint_id"] == (3, 7)
+    assert outcome.clipped_shapes[0]["native_component_index"] == 0
+    assert outcome.clipped_shapes[0]["geometry_normalized"] is True
     assert outcome.geometry_backend == "native"
     assert outcome.stage_timings["native_bounds_s"] == 0.001
     assert outcome.stage_timings["native_replay_s"] == 0.002
@@ -148,6 +158,20 @@ def test_supported_result_preserves_lumina_coordinate_contract(
     assert outcome.stage_timings["native_composite_s"] == 0.005
     assert outcome.stage_timings["native_legacy_visible_s"] == 0.006
     assert outcome.stage_timings["native_export_s"] == 0.007
+
+
+def test_unknown_native_source_kind_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "core.native_svg_adapter._load_native_module",
+        lambda: _native_module(_native_result(source_kind=99)),
+    )
+
+    with pytest.raises(CoreProcessingError) as error:
+        analyze_native_svg("fixture.svg", 20.0, 0.02)
+
+    assert error.value.reason_code == "invalid_source_schema"
 
 
 def test_image_vectorizer_origin_preserves_normalized_viewport_anchor(

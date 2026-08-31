@@ -16,6 +16,7 @@ from core.layered_coordinate_domain import (
     LAYERED_COORDINATE_DOMAIN_KEY,
     LayeredCoordinateDomain,
 )
+from core.native_svg_adapter import NativeSvgFallback, analyze_native_svg
 from core.pipeline.vector_branch import (
     _generate_vector_outline_mesh,
     _inject_vector_keychain_loop,
@@ -154,6 +155,66 @@ def test_lumina_public_analysis_rejects_malformed_xml(
 
     with pytest.raises(ValueError, match="Invalid SVG"):
         _processor().analyze_svg(str(svg_path), 20.0)
+
+
+def test_native_analysis_preserves_component_hierarchy_without_geos_normalizer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Native output must not be partially replaced by legacy GEOS cleanup."""
+
+    pytest.importorskip("lumina_svg_core")
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("native analysis re-entered _normalize_contours_many")
+
+    monkeypatch.setattr(
+        "core.vector_engine._normalize_contours_many",
+        fail_if_called,
+    )
+    _processor_instance, analysis = _analyze(
+        "component_hierarchy.svg",
+        target_width_mm=5.0,
+    )
+
+    assert analysis.stage_timings["contour_normalize_s"] == 0.0
+    assert len(analysis.shape_data) == 1
+    raw_geometry = analysis.shape_data[0]["poly"]
+    assert raw_geometry.geom_type == "MultiPolygon"
+    assert len(raw_geometry.geoms) == 2
+    assert sum(len(component.interiors) for component in raw_geometry.geoms) == 1
+
+    assert len(analysis.clipped_shapes) == 2
+    assert {
+        item["native_component_index"] for item in analysis.clipped_shapes
+    } == {0, 1}
+    assert {
+        item["native_paint_id"] for item in analysis.clipped_shapes
+    } == {(1, 0)}
+    assert all(
+        item["rgba"] == (18, 52, 86, 255)
+        and item["geometry_normalized"] is True
+        for item in analysis.clipped_shapes
+    )
+    assert sorted(
+        len(item["geometry"].interiors)
+        for item in analysis.clipped_shapes
+    ) == [0, 1]
+
+
+def test_adjacent_triangle_is_whole_document_fallback_not_partial_native() -> None:
+    """Legacy-normalizer-sensitive topology must fail closed as one file."""
+
+    pytest.importorskip("lumina_svg_core")
+    outcome = analyze_native_svg(
+        str(FIXTURES / "legacy_normalizer_adjacent_triangle.svg"),
+        target_width_mm=40.0,
+        tolerance_mm=0.02,
+    )
+
+    assert outcome == NativeSvgFallback(
+        reason_code="legacy_contour_normalization_incompatible",
+        native_version="0.1.1",
+    )
 
 
 def test_native_image_vectorizer_preserves_preview_canvas_glb_anchor(
