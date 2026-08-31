@@ -8,6 +8,7 @@ import pytest
 from shapely.geometry import box
 
 from core import native_svg_adapter
+from core.errors import NativeSvgResourceLimitError
 from core.native_svg_adapter import NativeSvgFallback, NativeSvgGeometry
 from core.vector_engine import VectorProcessor
 import core.vector_engine as vector_engine
@@ -64,7 +65,7 @@ def _native_geometry() -> NativeSvgGeometry:
             "geometry_backend": "native",
             "native_fallback_reason": "",
         },
-        native_version="0.1.0",
+        native_version="0.1.1",
         native_schema_version=1,
     )
 
@@ -95,6 +96,30 @@ def test_supported_document_uses_native_without_legacy_parse(
     assert len(analysis.clipped_shapes) == 1
 
 
+def test_native_success_clears_warning_from_previous_legacy_document(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    svg_path = tmp_path / "supported-after-warning.svg"
+    svg_path.write_text("<svg/>", encoding="utf-8")
+    processor = _processor()
+    processor.parse_warnings = ["stale warning from another SVG"]
+    monkeypatch.setattr(
+        native_svg_adapter,
+        "analyze_native_svg",
+        lambda *_args, **_kwargs: _native_geometry(),
+    )
+    processor._parse_svg = lambda *_args: pytest.fail("legacy parser ran")
+    processor._clip_occlusion = lambda *_args, **_kwargs: pytest.fail(
+        "legacy GEOS clip ran"
+    )
+    vector_engine._VECTOR_PARSE_CLIP_CACHE.clear()
+
+    processor.analyze_svg(str(svg_path), 20.0)
+
+    assert processor.parse_warnings == []
+
+
 def test_unsupported_document_runs_one_complete_legacy_path(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -106,7 +131,7 @@ def test_unsupported_document_runs_one_complete_legacy_path(
         native_svg_adapter,
         "analyze_native_svg",
         lambda *_args, **_kwargs: NativeSvgFallback(
-            "unsupported_marker", "0.1.0"
+            "unsupported_marker", "0.1.1"
         ),
     )
     geometry = box(0, 0, 1, 1)
@@ -143,6 +168,54 @@ def test_unsupported_document_runs_one_complete_legacy_path(
     )
 
 
+def test_complexity_rejection_never_invokes_legacy_parser(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    svg_path = tmp_path / "resource-attack.svg"
+    svg_path.write_text("<svg/>", encoding="utf-8")
+    processor = _processor()
+
+    def reject_complexity(*_args, **_kwargs):
+        raise NativeSvgResourceLimitError()
+
+    monkeypatch.setattr(
+        native_svg_adapter,
+        "analyze_native_svg",
+        reject_complexity,
+    )
+    processor._parse_svg = lambda *_args: pytest.fail("legacy parser ran")
+    processor._clip_occlusion = lambda *_args, **_kwargs: pytest.fail(
+        "legacy GEOS clip ran"
+    )
+    vector_engine._VECTOR_PARSE_CLIP_CACHE.clear()
+
+    with pytest.raises(NativeSvgResourceLimitError):
+        processor.analyze_svg(str(svg_path), 20.0)
+
+
+def test_real_css_amplifier_is_rejected_without_legacy_retry(
+    tmp_path,
+) -> None:
+    pytest.importorskip("lumina_svg_core")
+    svg_path = tmp_path / "selector-amplifier.svg"
+    svg_path.write_text(
+        "<svg viewBox='0 0 10 10'><style>"
+        + "g " * 100_001
+        + "{fill:red}</style><rect width='10' height='10'/></svg>",
+        encoding="utf-8",
+    )
+    processor = _processor()
+    processor._parse_svg = lambda *_args: pytest.fail("legacy parser ran")
+    processor._clip_occlusion = lambda *_args, **_kwargs: pytest.fail(
+        "legacy GEOS clip ran"
+    )
+    vector_engine._VECTOR_PARSE_CLIP_CACHE.clear()
+
+    with pytest.raises(NativeSvgResourceLimitError):
+        processor.analyze_svg(str(svg_path), 20.0)
+
+
 def test_native_version_is_part_of_parse_clip_cache_identity(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -152,7 +225,7 @@ def test_native_version_is_part_of_parse_clip_cache_identity(
     monkeypatch.setattr(
         native_svg_adapter,
         "native_runtime_identity",
-        lambda: ("native", "0.1.0", 1),
+        lambda: ("native", "0.1.1", 1),
     )
     first = vector_engine._vector_parse_clip_cache_key(
         str(svg_path),
@@ -175,7 +248,7 @@ def test_native_version_is_part_of_parse_clip_cache_identity(
     )
 
     assert first != second
-    assert ("native", "0.1.0", 1) == first[-3:]
+    assert ("native", "0.1.1", 1) == first[-3:]
     assert ("native", "0.2.0", 2) == second[-3:]
 
 
@@ -211,5 +284,15 @@ def test_native_cache_hit_preserves_backend_identity(
     assert second.stage_timings["native_result_conversion_s"] == 0.0
     assert second.stage_timings["native_recorder_s"] == 0.0
     assert second.stage_timings["native_kernel_s"] == 0.0
+    for stage_name in (
+        "native_bounds_s",
+        "native_replay_s",
+        "native_topology_s",
+        "native_legacy_raw_s",
+        "native_composite_s",
+        "native_legacy_visible_s",
+        "native_export_s",
+    ):
+        assert second.stage_timings[stage_name] == 0.0
     assert second.stage_timings["native_binding_conversion_s"] == 0.0
     assert second.stage_timings["native_adapter_s"] == 0.0

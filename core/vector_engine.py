@@ -2325,7 +2325,7 @@ def _try_parse_strict_top_level_path_svg(processor, svg_path, target_width_mm):
 _LuminaImageProcessor = None
 _VECTOR_PARSE_CLIP_CACHE = {}
 _VECTOR_PARSE_CLIP_CACHE_MAX = 8
-_VECTOR_PARSE_CLIP_ARTIFACT_SCHEMA = "lumina_vector_parse_clip_cache_v2"
+_VECTOR_PARSE_CLIP_ARTIFACT_SCHEMA = "lumina_vector_parse_clip_cache_v3"
 
 
 def _vector_parse_clip_cache_key(
@@ -2384,6 +2384,7 @@ def _copy_vector_parse_clip_cache_entry(cache_entry):
         "image_vectorizer_bounds": cache_entry.get("image_vectorizer_bounds"),
         "scale_factor": cache_entry.get("scale_factor"),
         "bbox": cache_entry.get("bbox"),
+        "parse_warnings": list(cache_entry.get("parse_warnings") or []),
         "geometry_stage_timings": dict(
             cache_entry.get("geometry_stage_timings") or {}
         ),
@@ -4798,6 +4799,9 @@ class VectorProcessor:
             image_vectorizer_bounds = cached_entry.get("image_vectorizer_bounds")
             scale_factor = cached_entry["scale_factor"]
             bbox = cached_entry["bbox"]
+            self.parse_warnings = list(
+                working_entry.get("parse_warnings") or []
+            )
             stage_timings.update(
                 working_entry.get("geometry_stage_timings") or {}
             )
@@ -4808,6 +4812,13 @@ class VectorProcessor:
             stage_timings["native_result_conversion_s"] = 0.0
             stage_timings["native_recorder_s"] = 0.0
             stage_timings["native_kernel_s"] = 0.0
+            stage_timings["native_bounds_s"] = 0.0
+            stage_timings["native_replay_s"] = 0.0
+            stage_timings["native_topology_s"] = 0.0
+            stage_timings["native_legacy_raw_s"] = 0.0
+            stage_timings["native_composite_s"] = 0.0
+            stage_timings["native_legacy_visible_s"] = 0.0
+            stage_timings["native_export_s"] = 0.0
             stage_timings["native_binding_conversion_s"] = 0.0
             stage_timings["native_adapter_s"] = 0.0
             stage_timings["native_cache_hit"] = (
@@ -4834,6 +4845,7 @@ class VectorProcessor:
                 image_vectorizer_bounds = native_outcome.image_vectorizer_bounds
                 scale_factor = native_outcome.scale_factor
                 bbox = native_outcome.bbox
+                self.parse_warnings = []
                 stage_timings.update(native_outcome.stage_timings)
                 stage_timings["native_svg_s"] = native_attempt_seconds
                 stage_timings["parse_s"] = stage_timings.get(
@@ -4992,6 +5004,9 @@ class VectorProcessor:
                     "image_vectorizer_bounds": image_vectorizer_bounds,
                     "scale_factor": scale_factor,
                     "bbox": bbox,
+                    "parse_warnings": list(
+                        getattr(self, "parse_warnings", None) or []
+                    ),
                     "geometry_stage_timings": dict(stage_timings),
                 }
                 _VECTOR_PARSE_CLIP_CACHE[cache_key] = _copy_vector_parse_clip_cache_entry(cache_entry)

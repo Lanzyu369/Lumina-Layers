@@ -1,18 +1,19 @@
 {
   "fixture": {
-    "byte_size": 3767519,
+    "byte_size": 4786900,
     "canvas_user_units": [
-      2496.0,
-      3648.0
+      16000.0,
+      16000.0
     ],
-    "classification": "proxy",
+    "classification": "derived_supported_scale",
     "clip_count": 0,
-    "path": "test_images/benchmark.svg",
-    "path_count": 3097,
+    "path": "benchmarks/supported_scale_fixture.svg",
+    "path_count": 1024,
     "real_r4c1_sha256": "da52ef12bdd37a0bd47970649a70582862331a606c151bff05bfb2f6e265f160",
-    "sha256": "d078cf4293623d934759c2688e13a00491e525055e7595069a0ecc4f078842fb",
+    "sha256": "aedd2705dff8a61779418ddb4574aff7d2b22e19577fa798ebc669e4b60f9070",
+    "source_proxy_sha256": "d078cf4293623d934759c2688e13a00491e525055e7595069a0ecc4f078842fb",
     "stroke_count": 0,
-    "transform_count": 3097
+    "transform_count": 2048
   },
   "host": {
     "cpu_count": 10,
@@ -23,35 +24,37 @@
     "python": "3.12.13"
   },
   "measurement": {
-    "kernel_seconds": 0.390343041,
-    "median_seconds": 0.44616375,
-    "peak_rss_bytes": 124780544,
-    "public_entrypoint_seconds": 0.44616375,
-    "range_seconds": 0.01348625,
-    "recorder_seconds": 0.054086125,
-    "result_conversion_seconds": 3.583e-06,
+    "kernel_seconds": 0.136524833,
+    "median_seconds": 0.203834958,
+    "peak_rss_bytes": 119341056,
+    "public_entrypoint_seconds": 0.203834958,
+    "range_seconds": 0.005686542,
+    "recorder_seconds": 0.067628292,
+    "result_conversion_seconds": 3.625e-06,
     "swap_delta_bytes": 0,
     "swap_measurement": "system_vm.swapusage",
     "threshold_passed": true,
     "threshold_seconds": 1.0,
     "warm_runs_seconds": [
-      0.438051625,
-      0.44616375,
-      0.451537875
+      0.207339292,
+      0.202070709,
+      0.20775725,
+      0.203834958,
+      0.203096375
     ],
     "warmup_runs": 1
   },
   "output": {
-    "coordinate_count": 128354,
-    "fingerprint": "0e754a10e4c75569f4c9eb6a2a7ca0c6ea63467934466e564a1928f80fabc224",
-    "hole_count": 293,
-    "material_count": 3097,
-    "region_count": 4676,
+    "coordinate_count": 76848,
+    "fingerprint": "d9508da09abd16e8980f418f85df55cbd8b6da7a32608fd032105f189786f64d",
+    "hole_count": 16,
+    "material_count": 1024,
+    "region_count": 1024,
     "status": "supported"
   },
   "parameters": {
     "target_width_mm": 111.0,
     "tolerance_mm": 0.02
   },
-  "schema_version": 1
+  "schema_version": 2
 }

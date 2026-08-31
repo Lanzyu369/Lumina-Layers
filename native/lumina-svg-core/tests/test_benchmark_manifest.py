@@ -19,10 +19,15 @@ REAL_R4C1_SHA256 = (
 def test_proxy_manifest_contains_reproducible_full_entrypoint_evidence() -> None:
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 
-    assert manifest["schema_version"] == 1
-    assert manifest["fixture"]["classification"] == "proxy"
+    assert manifest["schema_version"] == 2
+    assert manifest["fixture"]["classification"] == (
+        "derived_supported_scale"
+    )
     assert manifest["fixture"]["sha256"] != REAL_R4C1_SHA256
     assert manifest["fixture"]["real_r4c1_sha256"] == REAL_R4C1_SHA256
+    assert manifest["fixture"]["source_proxy_sha256"] == (
+        "d078cf4293623d934759c2688e13a00491e525055e7595069a0ecc4f078842fb"
+    )
     assert manifest["fixture"]["byte_size"] > 0
     assert len(manifest["fixture"]["canvas_user_units"]) == 2
     for key in ("path_count", "stroke_count", "transform_count", "clip_count"):

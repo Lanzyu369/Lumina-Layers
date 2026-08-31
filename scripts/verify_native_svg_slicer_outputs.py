@@ -26,12 +26,19 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 DEPENDENCY_UNAVAILABLE_EXIT = 20
-_MOTION_RE = re.compile(r"^(?:N\d+\s+)?(?:G[0-3]|T\d+)(?:\s|$)", re.IGNORECASE)
-_EXTRUSION_RE = re.compile(
-    r"(?:^|\s)E[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:\s|$)",
+_GCODE_COMMAND_RE = re.compile(
+    r"^(?:N\d+\s+)?([GMT])(\d+)(?:\s|$)", re.IGNORECASE
+)
+_GCODE_WORD_RE = re.compile(
+    r"([A-Z])([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?)",
     re.IGNORECASE,
 )
-_TOOL_CHANGE_RE = re.compile(r"^(?:N\d+\s+)?T\d+(?:\s|$)", re.IGNORECASE)
+_POSIX_ABSOLUTE_PATH_RE = re.compile(
+    r"(^|[\s\"'=(])(/[^\s\"'<>]+)", re.MULTILINE
+)
+_WINDOWS_ABSOLUTE_PATH_RE = re.compile(
+    r"(^|[\s\"'=(])([A-Za-z]:\\[^\s\"'<>]+)", re.MULTILINE
+)
 
 
 def _sha256_file(path: Path) -> str:
@@ -86,6 +93,14 @@ def _inspect_3mf(path: Path) -> dict[str, Any]:
             elif key == "name" and value:
                 part_names.add(value)
     material_count = len(extruder_values) or base_material_count
+    try:
+        expected_tool_ids = sorted(
+            {int(value) - 1 for value in extruder_values}
+        )
+    except ValueError as exc:
+        raise ValueError("three_mf_invalid_extruder_metadata") from exc
+    if any(tool_id < 0 for tool_id in expected_tool_ids):
+        raise ValueError("three_mf_invalid_extruder_metadata")
     return {
         "path": path.name,
         "byte_size": path.stat().st_size,
@@ -94,35 +109,89 @@ def _inspect_3mf(path: Path) -> dict[str, Any]:
         "build_item_count": build_item_count,
         "triangle_count": triangle_count,
         "material_count": material_count,
+        "expected_tool_ids": expected_tool_ids,
         "part_names": sorted(part_names),
     }
 
 
 def _toolpath_metrics(payload: bytes) -> dict[str, Any]:
-    """Fingerprint semantic motion commands while ignoring volatile comments."""
+    """Fingerprint motion state and count only positive extrusion deltas."""
 
     normalized_commands: list[str] = []
     motion_count = 0
     extrusion_count = 0
     tool_change_count = 0
+    active_tool = 0
+    absolute_extrusion = True
+    extrusion_positions: dict[int, float] = {}
+    positive_extrusion_by_tool: dict[int, int] = {}
     for raw_line in payload.decode("utf-8", errors="replace").splitlines():
         command = raw_line.split(";", 1)[0].strip()
-        if not command or not _MOTION_RE.match(command):
+        if not command:
             continue
         command = " ".join(command.upper().split())
+        match = _GCODE_COMMAND_RE.match(command)
+        if match is None:
+            continue
+        command_letter = match.group(1).upper()
+        command_code = int(match.group(2))
+        is_motion = command_letter == "G" and command_code in {0, 1, 2, 3}
+        is_position_reset = command_letter == "G" and command_code == 92
+        is_extrusion_mode = command_letter == "M" and command_code in {82, 83}
+        is_tool_change = command_letter == "T"
+        if not (
+            is_motion
+            or is_position_reset
+            or is_extrusion_mode
+            or is_tool_change
+        ):
+            continue
         normalized_commands.append(command)
-        if _TOOL_CHANGE_RE.match(command):
+        words = {
+            letter.upper(): float(value)
+            for letter, value in _GCODE_WORD_RE.findall(command)
+        }
+        if is_tool_change:
             tool_change_count += 1
+            active_tool = command_code
+            continue
+        if is_extrusion_mode:
+            absolute_extrusion = command_code == 82
+            continue
+        if is_position_reset:
+            if "E" in words:
+                extrusion_positions[active_tool] = words["E"]
+            continue
+
+        motion_count += 1
+        if "E" not in words:
+            continue
+        extrusion_value = words["E"]
+        previous_position = extrusion_positions.get(active_tool, 0.0)
+        if absolute_extrusion:
+            extrusion_delta = extrusion_value - previous_position
+            extrusion_positions[active_tool] = extrusion_value
         else:
-            motion_count += 1
-            if _EXTRUSION_RE.search(f" {command} "):
-                extrusion_count += 1
+            extrusion_delta = extrusion_value
+            extrusion_positions[active_tool] = (
+                previous_position + extrusion_value
+            )
+        if extrusion_delta > 0.0:
+            extrusion_count += 1
+            positive_extrusion_by_tool[active_tool] = (
+                positive_extrusion_by_tool.get(active_tool, 0) + 1
+            )
     normalized = "\n".join(normalized_commands).encode("utf-8")
     return {
         "fingerprint": hashlib.sha256(normalized).hexdigest(),
         "normalized_byte_size": len(normalized),
         "motion_command_count": motion_count,
         "extrusion_move_count": extrusion_count,
+        "positive_extrusion_by_tool": {
+            str(tool_id): positive_extrusion_by_tool[tool_id]
+            for tool_id in sorted(positive_extrusion_by_tool)
+        },
+        "positive_extrusion_tool_ids": sorted(positive_extrusion_by_tool),
         "tool_change_count": tool_change_count,
     }
 
@@ -305,6 +374,34 @@ def _validation_command(
     ]
 
 
+def _portable_command_hint(
+    slicer_name: str,
+    project_path: Path,
+) -> list[str]:
+    return [
+        f"<{slicer_name}-executable>",
+        "--debug",
+        "1",
+        "--allow-newer-file",
+        "--slice",
+        "0",
+        "--outputdir",
+        "<isolated-run-directory>",
+        project_path.name,
+    ]
+
+
+def _portable_diagnostic_tail(value: str) -> str:
+    """Redact machine-local absolute paths from committed evidence."""
+
+    sanitized = _WINDOWS_ABSOLUTE_PATH_RE.sub(
+        lambda match: match.group(1) + "<absolute-path>", value
+    )
+    return _POSIX_ABSOLUTE_PATH_RE.sub(
+        lambda match: match.group(1) + "<absolute-path>", sanitized
+    )
+
+
 def _validate_slicer(
     slicer_name: str,
     executable: Path | None,
@@ -318,17 +415,7 @@ def _validate_slicer(
         raise ValueError("validation_runs_must_be_at_least_two")
     inspection = _inspect_3mf(project_path)
     output_base = output_root / slicer_name
-    command_hint = [
-        f"<{slicer_name}-executable>",
-        "--debug",
-        "1",
-        "--allow-newer-file",
-        "--slice",
-        "0",
-        "--outputdir",
-        "<isolated-run-directory>",
-        str(project_path),
-    ]
+    command_hint = _portable_command_hint(slicer_name, project_path)
     if executable is None:
         return {
             "status": "reality_dependency_unavailable",
@@ -359,15 +446,19 @@ def _validate_slicer(
                 {
                     "status": "failed",
                     "reason": type(exc).__name__,
-                    "error": str(exc),
-                    "command": command,
-                    "output_directory": output_dir.name,
+                    "error": _portable_diagnostic_tail(str(exc)),
+                    "command": command_hint,
+                    "output_directory": f"run-{run_index + 1}",
                 }
             )
             break
 
         payload, payload_paths = _toolpath_payloads(output_dir)
         toolpath = _toolpath_metrics(payload)
+        missing_expected_tool_ids = sorted(
+            set(inspection["expected_tool_ids"])
+            - set(toolpath["positive_extrusion_tool_ids"])
+        )
         if return_code != 0:
             run_status = "failed"
             run_reason = "slicer_exit_nonzero"
@@ -377,6 +468,9 @@ def _validate_slicer(
         elif toolpath["extrusion_move_count"] <= 0:
             run_status = "failed"
             run_reason = "toolpath_has_no_extrusion"
+        elif missing_expected_tool_ids:
+            run_status = "failed"
+            run_reason = "toolpath_missing_material_extrusion"
         else:
             run_status = "passed"
             run_reason = ""
@@ -384,14 +478,15 @@ def _validate_slicer(
             {
                 "status": run_status,
                 "reason": run_reason,
-                "command": command,
-                "output_directory": output_dir.name,
+                "command": command_hint,
+                "output_directory": f"run-{run_index + 1}",
                 "exit_code": return_code,
                 "duration_seconds": round(duration, 6),
-                "stdout_tail": stdout[-4000:],
-                "stderr_tail": stderr[-4000:],
+                "stdout_tail": _portable_diagnostic_tail(stdout[-4000:]),
+                "stderr_tail": _portable_diagnostic_tail(stderr[-4000:]),
                 "toolpath_files": payload_paths,
                 "toolpath": toolpath,
+                "missing_expected_tool_ids": missing_expected_tool_ids,
             }
         )
         if run_status != "passed":
@@ -421,11 +516,11 @@ def _validate_slicer(
         status = "passed"
         reason = ""
     representative = run_results[0]
-    version_cwd = output_base / representative["output_directory"]
+    version_cwd = output_dir
     return {
         "status": status,
         "reason": reason,
-        "executable": str(executable),
+        "executable": executable.name,
         "version": _slicer_version(executable, version_cwd),
         "command": representative.get("command"),
         "exit_code": representative.get("exit_code"),

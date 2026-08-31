@@ -21,8 +21,45 @@ boolean (default `True`). Callers that must preserve a separate legacy stroke
 policy can pass `False`; the recorder then returns
 `unsupported_stroke_policy` before running the geometry kernel.
 Dash arrays containing a zero-length entry return
-`unsupported_zero_length_dash` in 0.1 because zero-length dash caps and phase
-recovery require additional reference parity coverage.
+`unsupported_zero_length_dash` in 0.1 because exact zero-interval cap and
+phase parity is not yet proven for every open, closed, and degenerate path.
+Other dash placement uses an adaptive centerline length bound; if the one
+document-level physical error budget cannot be proved, the complete document
+returns `unsupported_input_precision` or `unsupported_topology_collapse`.
+
+The 0.1 recorder deliberately rejects nested `<svg>`, non-zero root viewBox
+origins, root transforms/positions, root `overflow="hidden"`, percentages
+without a root viewBox, and inherited `clip-rule` outside a direct clip-path
+geometry child. These restrictions have stable `unsupported_*` reason codes
+and preserve current Lumina behavior through whole-document fallback. They
+must not be interpreted as partially supported layout.
+
+`PaintStrokeStyle.line_cap` and `.line_join` are stable lowercase strings.
+`NativeResult.result_conversion_seconds` measures only creation of the Python
+wrapper around the owned C++ result; NumPy view creation and Lumina's one
+bulk int64-to-float64/Shapely conversion are measured by the Lumina adapter.
+
+## Fail-closed resource and precision policy
+
+Version 0.1 rejects a complete document with `unsupported_complexity` before
+unbounded parser, path expansion, topology, Boolean-composition, or result
+allocation work. The current package limits one input to 64 MiB, 250,000 XML
+elements, 128 levels of XML nesting, 16 `<use>` elements, 250,000 recorded
+paint commands, 4,000,000 recorded path verbs, and 8,000,000 recorded points.
+The geometry kernel additionally applies cumulative limits to generated points
+and rings, topology segments, Boolean input points, distinct overlap pairs, and
+returned coordinates. These are safety limits rather than a partial-rendering
+mode: exceeding any one of them returns no native geometry and asks Lumina to
+run the existing whole-document fallback.
+
+Inputs whose resolved float coordinates, transforms, stroke parameters, or
+operation history cannot satisfy the caller's physical tolerance return
+`unsupported_input_precision`. Non-finite resolved values, transform/path
+cancellation beyond the budget, and precision-sensitive dashed strokes are
+handled the same way. Duplicate nonempty XML `id` values return
+`unsupported_duplicate_id`, because reference selection would otherwise be
+ambiguous. All three reasons preserve the same whole-document fallback
+contract as other unsupported SVG semantics.
 
 ## Build
 

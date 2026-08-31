@@ -238,7 +238,7 @@ git commit -m "test(vector): verify native SVG product workflows"
 
 - [ ] **Step 1: Write failing dependency and frozen-runtime tests**
 
-Assert the local workspace dependency is exactly version 0.1.0, production Python is 3.12, PyInstaller collects `lumina_svg_core` and `_lumina_svg_core`, desktop dependency checks fail if it is absent, and `api_server.py --native-svg-self-test <small.svg>` analyzes actual geometry and prints a stable JSON fingerprint before exiting zero.
+Assert the local workspace dependency is exactly version 0.1.1, production Python is 3.12, PyInstaller collects `lumina_svg_core` and `_lumina_svg_core`, desktop dependency checks fail if it is absent, and `api_server.py --native-svg-self-test <small.svg>` analyzes actual geometry and prints a stable JSON fingerprint before exiting zero.
 
 - [ ] **Step 2: Run packaging tests and verify RED**
 
@@ -248,7 +248,7 @@ Expected: FAIL because native packaging is not declared.
 
 - [ ] **Step 3: Wire the workspace package without pretending it is published**
 
-`requirements-native-svg.txt` points to `./native/lumina-svg-core` and documents the replacement boundary `lumina-svg-core==0.1.0` after the external repository release. Docker copies the native source before `pip install` and uses Python 3.12. PyInstaller treats the compiled package as required, not optional.
+`requirements-native-svg.txt` points to `./native/lumina-svg-core` and documents the replacement boundary `lumina-svg-core==0.1.1` after the external repository release. Docker copies the native source before `pip install` and uses Python 3.12. PyInstaller treats the compiled package as required, not optional.
 
 - [ ] **Step 4: Add a real frozen probe**
 
@@ -284,7 +284,12 @@ Expected: FAIL until measured evidence exists.
 
 - [ ] **Step 3: Benchmark the complete public entry**
 
-Use target width 111 mm, tolerance 0.02 mm, one discarded warm-up, at least three measured runs, Release extension, OpenMP disabled, one caller thread, and the available proxy file with fixed SHA. Capture output correctness before accepting timing.
+Use target width 111 mm, tolerance 0.02 mm, one discarded warm-up, at least
+three measured runs, Release extension, OpenMP disabled, one caller thread,
+and the fixed-SHA derived supported-scale fixture. Capture output correctness
+before accepting timing. Record the unmodified source proxy separately as a
+whole-document fallback; do not weaken its topology/legacy-close checks to
+make it enter the performance measurement.
 
 - [ ] **Step 4: Search for and validate the 55 MB regression file without substitution**
 

@@ -94,6 +94,7 @@ def test_supported_result_preserves_paint_identity_census() -> None:
     )
 
     assert result.status == "supported"
+    assert result.legacy_curve_tolerance_compatible is True
     assert result.raw.geometry_count == result.visible.geometry_count == 2
     for collection in (result.raw, result.visible):
         assert collection.rgba.tolist() == [
@@ -141,6 +142,38 @@ def test_invalid_physical_parameters_fail_deterministically(
         FIXTURES / "basic_fill_stroke.svg",
         target_width_mm=target_width_mm,
         tolerance_mm=tolerance_mm,
+    )
+
+    assert result.status == "invalid"
+    assert result.reason_code == "invalid_physical_parameters"
+    assert result.visible.geometry_count == 0
+
+
+@pytest.mark.parametrize("close_delta", [-0.01, float("nan"), float("inf")])
+def test_invalid_legacy_close_delta_fails_deterministically(
+    close_delta: float,
+) -> None:
+    result = lumina_svg_core.analyze_svg(
+        FIXTURES / "basic_fill_stroke.svg",
+        target_width_mm=20.0,
+        tolerance_mm=0.02,
+        legacy_close_delta_source_units=close_delta,
+    )
+
+    assert result.status == "invalid"
+    assert result.reason_code == "invalid_physical_parameters"
+    assert result.visible.geometry_count == 0
+
+
+@pytest.mark.parametrize("minimum_area", [-0.01, float("nan"), float("inf")])
+def test_invalid_legacy_minimum_area_fails_deterministically(
+    minimum_area: float,
+) -> None:
+    result = lumina_svg_core.analyze_svg(
+        FIXTURES / "basic_fill_stroke.svg",
+        target_width_mm=20.0,
+        tolerance_mm=0.02,
+        legacy_minimum_paint_area_factor=minimum_area,
     )
 
     assert result.status == "invalid"

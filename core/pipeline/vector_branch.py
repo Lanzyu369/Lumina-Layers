@@ -1861,6 +1861,9 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
                     "image_vectorizer_bounds": analysis.image_vectorizer_bounds,
                     "scale_factor": analysis.scale_factor,
                     "bbox": analysis.bbox,
+                    "parse_warnings": list(
+                        getattr(vec_processor, "parse_warnings", None) or []
+                    ),
                     "geometry_stage_timings": dict(
                         analysis.stage_timings or {}
                     ),

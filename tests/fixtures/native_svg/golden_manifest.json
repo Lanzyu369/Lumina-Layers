@@ -6,20 +6,30 @@
     {
       "file": "fill_rules_transforms.svg",
       "sha256": "63e9014e46f43cc0ffe8fe070d5a8458852a563db9d1e21d0c09920dadfd001e",
+      "expected_backend": "native",
       "max_area_difference_mm2": 0.25,
       "max_symmetric_difference_mm2": 0.3
     },
     {
       "file": "overlap_islands.svg",
       "sha256": "c42c01354ccc88bfcd27fe477d9518b4fe7c7b2444a762e7ba641f51eda5dd07",
+      "expected_backend": "native",
       "max_area_difference_mm2": 0.1,
       "max_symmetric_difference_mm2": 0.8
     },
     {
       "file": "clip_inherited_fill.svg",
       "sha256": "1256936a15d17f9039a120271478b9df6a9c95c72f43bf140814ec97a3a40a01",
+      "expected_backend": "native",
       "max_area_difference_mm2": 0.2,
       "max_symmetric_difference_mm2": 0.8
+    },
+    {
+      "file": "irregular_silhouette.svg",
+      "sha256": "d1c8c186e5fe8664ff2b1788c2bb8244da7dc25ab78d25ee91c1f3c607f5d47e",
+      "expected_backend": "native",
+      "max_area_difference_mm2": 0.1,
+      "max_symmetric_difference_mm2": 0.2
     }
   ]
 }

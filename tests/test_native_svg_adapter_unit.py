@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import mmap as stdlib_mmap
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import shapely
 
-from core.errors import CoreProcessingError, CoreValidationError
+from core.errors import (
+    CoreProcessingError,
+    CoreValidationError,
+    NativeSvgResourceLimitError,
+)
 from core.native_svg_adapter import (
     NativeSvgFallback,
     NativeSvgGeometry,
@@ -55,6 +60,9 @@ def _native_result(
     reason_code: str = "",
     source_kind: int = 0,
     image_vectorizer_origin: bool = False,
+    legacy_normalization_identity: bool = True,
+    legacy_normalization_compatible: bool = True,
+    legacy_curve_tolerance_compatible: bool = True,
 ) -> SimpleNamespace:
     collection = _collection(source_kind=source_kind)
     return SimpleNamespace(
@@ -68,7 +76,24 @@ def _native_result(
         grid_to_source_unit=1.0,
         recorder_seconds=0.01,
         kernel_seconds=0.02,
+        bounds_seconds=0.001,
+        replay_seconds=0.002,
+        topology_seconds=0.003,
+        legacy_raw_seconds=0.004,
+        composite_seconds=0.005,
+        legacy_visible_seconds=0.006,
+        export_seconds=0.007,
         result_conversion_seconds=0.003,
+        legacy_contour_normalization_identity=(
+            legacy_normalization_identity
+        ),
+        legacy_contour_normalization_compatible=(
+            legacy_normalization_compatible
+        ),
+        legacy_area_filter_identity=True,
+        legacy_curve_tolerance_compatible=(
+            legacy_curve_tolerance_compatible
+        ),
         raw=collection,
         visible=collection,
         silhouette=collection,
@@ -85,7 +110,7 @@ def _native_module(
         return result
 
     return SimpleNamespace(
-        __version__="0.1.0",
+        __version__="0.1.1",
         analyze_svg=analyze_svg,
     )
 
@@ -116,6 +141,13 @@ def test_supported_result_preserves_lumina_coordinate_contract(
     )
     assert outcome.clipped_shapes[0]["color"] == (255, 0, 0)
     assert outcome.geometry_backend == "native"
+    assert outcome.stage_timings["native_bounds_s"] == 0.001
+    assert outcome.stage_timings["native_replay_s"] == 0.002
+    assert outcome.stage_timings["native_topology_s"] == 0.003
+    assert outcome.stage_timings["native_legacy_raw_s"] == 0.004
+    assert outcome.stage_timings["native_composite_s"] == 0.005
+    assert outcome.stage_timings["native_legacy_visible_s"] == 0.006
+    assert outcome.stage_timings["native_export_s"] == 0.007
 
 
 def test_image_vectorizer_origin_preserves_normalized_viewport_anchor(
@@ -174,6 +206,13 @@ def test_adapter_calls_one_vectorized_constructor_per_collection(
         "unsupported_marker",
         "unsupported_vector_effect",
         "unsupported_external_resource",
+        "unsupported_xml_encoding",
+        "unsupported_duplicate_id",
+        "unsupported_input_precision",
+        "unsupported_namespace",
+        "unsupported_explicit_inherit",
+        "unsupported_href_precedence",
+        "unsupported_quadratic",
     ],
 )
 def test_unsupported_native_result_requests_whole_document_fallback(
@@ -191,7 +230,44 @@ def test_unsupported_native_result_requests_whole_document_fallback(
 
     assert outcome == NativeSvgFallback(
         reason_code=reason_code,
-        native_version="0.1.0",
+        native_version="0.1.1",
+    )
+
+
+def test_native_complexity_limit_is_not_retried_by_legacy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "core.native_svg_adapter._load_native_module",
+        lambda: _native_module(
+            _native_result(
+                status="unsupported",
+                reason_code="unsupported_complexity",
+            )
+        ),
+    )
+
+    with pytest.raises(NativeSvgResourceLimitError) as error:
+        analyze_native_svg("fixture.svg", 20.0, 0.02)
+
+    assert error.value.reason_code == "unsupported_complexity"
+
+
+def test_legacy_curve_tolerance_mismatch_requests_whole_document_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "core.native_svg_adapter._load_native_module",
+        lambda: _native_module(
+            _native_result(legacy_curve_tolerance_compatible=False)
+        ),
+    )
+
+    outcome = analyze_native_svg("fixture.svg", 100.0, 0.02)
+
+    assert outcome == NativeSvgFallback(
+        reason_code="legacy_curve_tolerance_parity",
+        native_version="0.1.1",
     )
 
 
@@ -209,7 +285,7 @@ def test_disabled_stroke_expansion_falls_back_before_semantics_change(
 
     assert outcome == NativeSvgFallback(
         reason_code="legacy_stroke_policy",
-        native_version="0.1.0",
+        native_version="0.1.1",
     )
 
 
@@ -232,10 +308,10 @@ def test_adapter_disables_native_stroke_kernel_before_analysis(
         "fixture.svg", 20.0, 0.02, expand_stroke_to_fill=False
     )
 
-    assert calls == [("fixture.svg", 20.0, 0.02, False)]
+    assert calls == [("fixture.svg", 20.0, 0.02, False, 0.03, 0.25)]
     assert outcome == NativeSvgFallback(
         reason_code="legacy_stroke_policy",
-        native_version="0.1.0",
+        native_version="0.1.1",
     )
 
 
@@ -253,7 +329,7 @@ def test_enabled_strokes_remain_legacy_until_differential_parity(
 
     assert outcome == NativeSvgFallback(
         reason_code="legacy_stroke_parity",
-        native_version="0.1.0",
+        native_version="0.1.1",
     )
 
 
@@ -274,24 +350,131 @@ def test_style_and_use_documents_preserve_legacy_reference_semantics(
 
     assert outcome == NativeSvgFallback(
         reason_code="legacy_css_use_parity",
-        native_version="0.1.0",
+        native_version="0.1.1",
     )
 
 
-@pytest.mark.parametrize("reason_code", ["invalid_svg", "empty_geometry"])
+def test_reference_probe_detects_tag_across_streaming_chunk_boundary(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    svg_path = tmp_path / "split-reference.svg"
+    svg_path.write_bytes(
+        b"<svg>" + b" " * (64 * 1024 - 8) + b"<style/></svg>"
+    )
+    monkeypatch.setattr(
+        "core.native_svg_adapter._load_native_module",
+        lambda: _native_module(_native_result()),
+    )
+
+    outcome = analyze_native_svg(str(svg_path), 20.0, 0.02)
+
+    assert outcome == NativeSvgFallback(
+        reason_code="legacy_css_use_parity",
+        native_version="0.1.1",
+    )
+
+
+def test_oversized_sparse_file_reaches_native_limit_without_mmap_scan(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    svg_path = tmp_path / "oversized.svg"
+    with svg_path.open("wb") as handle:
+        handle.seek(64 * 1024 * 1024)
+        handle.write(b"\0")
+    calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr(
+        "core.native_svg_adapter._load_native_module",
+        lambda: _native_module(
+            _native_result(
+                status="unsupported",
+                reason_code="unsupported_complexity",
+            ),
+            calls,
+        ),
+    )
+
+    def fail_mmap(*_args, **_kwargs):
+        raise AssertionError("oversized input must not be memory-mapped")
+
+    monkeypatch.setattr(stdlib_mmap, "mmap", fail_mmap)
+
+    with pytest.raises(NativeSvgResourceLimitError):
+        analyze_native_svg(str(svg_path), 20.0, 0.02)
+
+    assert calls == []
+
+
 def test_invalid_svg_maps_to_existing_value_error_behavior(
     monkeypatch: pytest.MonkeyPatch,
-    reason_code: str,
 ) -> None:
     monkeypatch.setattr(
         "core.native_svg_adapter._load_native_module",
         lambda: _native_module(
-            _native_result(status="invalid", reason_code=reason_code)
+            _native_result(status="invalid", reason_code="invalid_svg")
         ),
     )
 
-    with pytest.raises(ValueError, match="valid filled shapes|Invalid SVG"):
+    with pytest.raises(ValueError, match="Invalid SVG"):
         analyze_native_svg("fixture.svg", 20.0, 0.02)
+
+
+def test_valid_native_empty_result_requests_legacy_compatibility_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "core.native_svg_adapter._load_native_module",
+        lambda: _native_module(
+            _native_result(status="invalid", reason_code="empty_geometry")
+        ),
+    )
+
+    outcome = analyze_native_svg("fixture.svg", 20.0, 0.02)
+
+    assert outcome == NativeSvgFallback(
+        reason_code="legacy_empty_geometry_parity",
+        native_version="0.1.1",
+    )
+
+
+def test_incompatible_native_contour_normalization_requests_whole_file_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "core.native_svg_adapter._load_native_module",
+        lambda: _native_module(
+            _native_result(legacy_normalization_compatible=False)
+        ),
+    )
+
+    outcome = analyze_native_svg("fixture.svg", 20.0, 0.02)
+
+    assert outcome == NativeSvgFallback(
+        reason_code="legacy_contour_normalization_incompatible",
+        native_version="0.1.1",
+    )
+
+
+def test_changed_native_contour_normalization_requests_whole_file_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "core.native_svg_adapter._load_native_module",
+        lambda: _native_module(
+            _native_result(
+                legacy_normalization_identity=False,
+                legacy_normalization_compatible=True,
+            )
+        ),
+    )
+
+    outcome = analyze_native_svg("fixture.svg", 20.0, 0.02)
+
+    assert outcome == NativeSvgFallback(
+        reason_code="legacy_contour_normalization_incompatible",
+        native_version="0.1.1",
+    )
 
 
 def test_numeric_range_error_is_a_core_validation_error(

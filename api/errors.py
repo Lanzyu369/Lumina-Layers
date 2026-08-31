@@ -10,6 +10,7 @@ from core.errors import (
     CoreError,
     CoreProcessingError,
     CoreValidationError,
+    NativeSvgResourceLimitError,
     VectorHostMemoryAdmissionError,
     VectorMeshMemoryBudgetError,
 )
@@ -145,6 +146,18 @@ def to_http_exception(exc: Exception, context: str) -> HTTPException:
                     "retry",
                     "reduce_output_size",
                 ],
+            },
+        )
+    if isinstance(exc, NativeSvgResourceLimitError):
+        return HTTPException(
+            status_code=422,
+            detail={
+                "error": exc.code,
+                "code": exc.code,
+                "message": exc.detail,
+                "reason": exc.reason_code,
+                "recoverable": exc.recoverable,
+                "recovery_actions": ["simplify_svg", "split_svg"],
             },
         )
     if isinstance(exc, CoreValidationError):

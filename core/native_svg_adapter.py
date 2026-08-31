@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import importlib
-import mmap
+import os
 import re
 import time
 from types import ModuleType
@@ -13,12 +13,20 @@ from typing import Any
 import numpy as np
 import shapely
 
-from core.errors import NativeSvgInternalError, NativeSvgInvalidError
+from core.errors import (
+    NativeSvgInternalError,
+    NativeSvgInvalidError,
+    NativeSvgResourceLimitError,
+)
+from core.native_svg_limits import NATIVE_SVG_MAX_BYTES
 
 
 NATIVE_RESULT_SCHEMA_VERSION = 1
+_REFERENCE_SCAN_CHUNK_BYTES = 64 * 1024
+_REFERENCE_SCAN_OVERLAP_BYTES = 256
 _SOURCE_KIND_FILL = 0
 _SOURCE_KIND_STROKE = 1
+_LEGACY_CONTOUR_CLOSE_DELTA_SOURCE_UNITS = 0.03
 _LEGACY_REFERENCE_TAG_RE = re.compile(
     rb"<(?:[A-Za-z_][A-Za-z0-9_.-]*:)?(?:style|use)(?=[\s/>])"
 )
@@ -61,11 +69,23 @@ def _load_native_module() -> ModuleType:
 def _requires_legacy_reference_semantics(svg_path: str) -> bool:
     try:
         with open(svg_path, "rb") as handle:
-            if handle.seek(0, 2) <= 0:
+            file_size = os.fstat(handle.fileno()).st_size
+            if file_size <= 0 or file_size > NATIVE_SVG_MAX_BYTES:
                 return False
-            handle.seek(0)
-            with mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as data:
-                return _LEGACY_REFERENCE_TAG_RE.search(data) is not None
+            remaining = file_size
+            overlap = b""
+            while remaining > 0:
+                chunk = handle.read(
+                    min(_REFERENCE_SCAN_CHUNK_BYTES, remaining)
+                )
+                if not chunk:
+                    break
+                window = overlap + chunk
+                if _LEGACY_REFERENCE_TAG_RE.search(window) is not None:
+                    return True
+                overlap = window[-_REFERENCE_SCAN_OVERLAP_BYTES:]
+                remaining -= len(chunk)
+            return False
     except (OSError, ValueError):
         return False
 
@@ -255,8 +275,17 @@ def analyze_native_svg(
     Raises:
         ValueError: The SVG is invalid or has no printable fill geometry.
         NativeSvgInvalidError: Physical input exceeds the numeric contract.
+        NativeSvgResourceLimitError: Input exceeds a deterministic resource
+            budget and must not be retried through the legacy parser.
         NativeSvgInternalError: ABI/schema/native processing failed.
     """
+
+    try:
+        if os.path.getsize(svg_path) > NATIVE_SVG_MAX_BYTES:
+            raise NativeSvgResourceLimitError()
+    except OSError:
+        # Preserve the native boundary's existing invalid-path behavior.
+        pass
 
     try:
         module = _load_native_module()
@@ -266,17 +295,14 @@ def analyze_native_svg(
             native_version="unavailable",
         )
     native_version = str(getattr(module, "__version__", "unknown"))
-    if _requires_legacy_reference_semantics(svg_path):
-        return NativeSvgFallback(
-            reason_code="legacy_css_use_parity",
-            native_version=native_version,
-        )
     call_started = time.perf_counter()
     result = module.analyze_svg(
         svg_path,
         target_width_mm,
         tolerance_mm,
         False,
+        _LEGACY_CONTOUR_CLOSE_DELTA_SOURCE_UNITS,
+        0.25,
     )
     native_call_seconds = time.perf_counter() - call_started
 
@@ -284,6 +310,8 @@ def analyze_native_svg(
         reason_code = str(
             result.reason_code or "unsupported_svg_semantics"
         )
+        if reason_code == "unsupported_complexity":
+            raise NativeSvgResourceLimitError(reason_code=reason_code)
         if reason_code == "unsupported_stroke_policy":
             reason_code = (
                 "legacy_stroke_parity"
@@ -295,11 +323,42 @@ def analyze_native_svg(
             native_version=native_version,
         )
     if result.status != "supported":
-        _invalid_result(str(result.reason_code or "unknown_error"))
+        reason_code = str(result.reason_code or "unknown_error")
+        if reason_code == "empty_geometry":
+            return NativeSvgFallback(
+                reason_code="legacy_empty_geometry_parity",
+                native_version=native_version,
+            )
+        _invalid_result(reason_code)
+    if _requires_legacy_reference_semantics(svg_path):
+        return NativeSvgFallback(
+            reason_code="legacy_css_use_parity",
+            native_version=native_version,
+        )
     if int(result.schema_version) != NATIVE_RESULT_SCHEMA_VERSION:
         raise NativeSvgInternalError(
             "The native SVG result schema is incompatible with Lumina.",
             reason_code="native_schema_mismatch",
+        )
+
+    if (
+        not bool(
+            getattr(result, "legacy_contour_normalization_identity", False)
+        )
+        or not bool(
+            getattr(result, "legacy_contour_normalization_compatible", False)
+        )
+    ):
+        return NativeSvgFallback(
+            reason_code="legacy_contour_normalization_incompatible",
+            native_version=native_version,
+        )
+    if not bool(
+        getattr(result, "legacy_curve_tolerance_compatible", False)
+    ):
+        return NativeSvgFallback(
+            reason_code="legacy_curve_tolerance_parity",
+            native_version=native_version,
         )
 
     source_kinds = np.asarray(result.raw.source_kinds)
@@ -332,7 +391,10 @@ def analyze_native_svg(
     shape_data = _shape_data(result.raw, raw_geometries)
     clipped_shapes = _visible_shapes(result.visible, visible_geometries)
     if not shape_data or not clipped_shapes:
-        raise ValueError("No valid filled shapes found in SVG.")
+        return NativeSvgFallback(
+            reason_code="legacy_empty_geometry_parity",
+            native_version=native_version,
+        )
     adapter_seconds = time.perf_counter() - adapter_started
 
     image_vectorizer_bounds = None
@@ -372,6 +434,27 @@ def analyze_native_svg(
             "native_kernel_s": float(
                 getattr(result, "kernel_seconds", 0.0)
             ),
+            "native_bounds_s": float(
+                getattr(result, "bounds_seconds", 0.0)
+            ),
+            "native_replay_s": float(
+                getattr(result, "replay_seconds", 0.0)
+            ),
+            "native_topology_s": float(
+                getattr(result, "topology_seconds", 0.0)
+            ),
+            "native_legacy_raw_s": float(
+                getattr(result, "legacy_raw_seconds", 0.0)
+            ),
+            "native_composite_s": float(
+                getattr(result, "composite_seconds", 0.0)
+            ),
+            "native_legacy_visible_s": float(
+                getattr(result, "legacy_visible_seconds", 0.0)
+            ),
+            "native_export_s": float(
+                getattr(result, "export_seconds", 0.0)
+            ),
             "native_result_conversion_s": (
                 native_result_conversion_seconds + adapter_seconds
             ),
@@ -380,6 +463,12 @@ def analyze_native_svg(
             "geometry_backend": "native",
             "native_version": native_version,
             "native_schema_version": int(result.schema_version),
+            "native_legacy_normalization_identity": bool(
+                result.legacy_contour_normalization_identity
+            ),
+            "native_legacy_area_filter_identity": bool(
+                result.legacy_area_filter_identity
+            ),
             "native_fallback_reason": "",
         },
         native_version=native_version,

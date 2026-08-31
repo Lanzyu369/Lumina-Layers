@@ -46,8 +46,21 @@ struct NativeResult : public std::enable_shared_from_this<NativeResult> {
     double grid_to_source_unit{0};
     double max_flattening_error_mm{0};
     double max_quantization_error_mm{0};
+    bool legacy_contour_normalization_identity{true};
+    bool legacy_contour_normalization_compatible{true};
+    bool legacy_area_filter_identity{true};
+    bool legacy_curve_tolerance_compatible{true};
     double recorder_seconds{0};
     double kernel_seconds{0};
+    double bounds_seconds{0};
+    double replay_seconds{0};
+    double topology_seconds{0};
+    double legacy_raw_seconds{0};
+    double composite_seconds{0};
+    double legacy_visible_seconds{0};
+    double export_seconds{0};
+    // Time to wrap this owned C++ result as a Python object. NumPy views and
+    // downstream float/Shapely materialization are measured by their callers.
     double result_conversion_seconds{0};
     GeometryCollection raw;
     GeometryCollection visible;

@@ -5,11 +5,14 @@ on:
     branches: [dev-refactor, main]
     paths:
       - "native/lumina-svg-core/**"
-      - "core/native_svg_adapter.py"
-      - "core/vector_engine.py"
+      - "core/**"
+      - "api/**"
+      - "utils/bambu_3mf_writer.py"
+      - "scripts/build_desktop.py"
       - "tests/fixtures/native_svg/**"
       - "tests/test_native_svg_*.py"
       - "scripts/benchmark_native_svg_analysis.py"
+      - "scripts/build_native_svg_supported_fixture.py"
       - "scripts/verify_native_svg_slicer_outputs.py"
       - "docs/native-svg-fast-path-validation.md"
       - "progress/native-svg-fast-path-benchmark.json"
@@ -193,9 +196,20 @@ jobs:
         shell: pwsh
         run: |
           $archiveEntries = & pyi-archive_viewer --list .\dist\lumina-backend.exe
-          $requiredEntry = 'lumina_svg_core[\\/]THIRD_PARTY_LICENSES[\\/]pybind11.txt'
-          if (-not ($archiveEntries -match $requiredEntry)) {
-            throw "Frozen executable is missing the pybind11 license"
+          $requiredEntries = @(
+            'lumina_svg_core[\\/]LICENSE',
+            'lumina_svg_core[\\/]THIRD_PARTY_NOTICES.md',
+            'lumina_svg_core[\\/]THIRD_PARTY_LICENSES[\\/]Clipper2.txt',
+            'lumina_svg_core[\\/]THIRD_PARTY_LICENSES[\\/]FreeType-Project.txt',
+            'lumina_svg_core[\\/]THIRD_PARTY_LICENSES[\\/]LunaSVG.txt',
+            'lumina_svg_core[\\/]THIRD_PARTY_LICENSES[\\/]PlutoVG.txt',
+            'lumina_svg_core[\\/]THIRD_PARTY_LICENSES[\\/]pybind11.txt',
+            'lumina_svg_core[\\/]THIRD_PARTY_LICENSES[\\/]stb.txt'
+          )
+          foreach ($requiredEntry in $requiredEntries) {
+            if (-not ($archiveEntries -match $requiredEntry)) {
+              throw "Frozen executable is missing required native notice: $requiredEntry"
+            }
           }
       - name: Probe the frozen native extension
         shell: pwsh

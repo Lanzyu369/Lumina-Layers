@@ -6,11 +6,18 @@ discards one warm-up, records at least three warm runs, captures native stage
 timings, process peak RSS, system swap growth, and a deterministic result
 fingerprint.
 
-The checked-in proxy is `test_images/benchmark.svg`. It is not the private R4C1
-artifact. The benchmark labels a fixture `real_r4c1` only when its SHA-256 is
-exactly
+The measured fixture is `supported_scale_fixture.svg`, SHA-256
+`aedd2705dff8a61779418ddb4574aff7d2b22e19577fa798ebc669e4b60f9070`.
+`supported_scale_fixture_provenance.json` records its exact source SHA, the 64
+selected path indices, the disjoint 32-by-32 placement, and the 16 repetitions.
+The source paths and colors come from `test_images/benchmark.svg`; the source
+document itself is intentionally not rewritten or claimed as supported. Its
+same-paint topology and legacy-close semantics require whole-document fallback.
+
+Neither file is the private R4C1 artifact. The benchmark labels a fixture
+`real_r4c1` only when its SHA-256 is exactly
 `da52ef12bdd37a0bd47970649a70582862331a606c151bff05bfb2f6e265f160`.
-The proxy result never counts as satisfaction of the real-file gate.
+The derived result never counts as satisfaction of the real-file gate.
 
 The exact R4C1 artifact was subsequently recovered from an untracked local
 browser-validation trace and verified by SHA-256. It is not copied into this
@@ -25,7 +32,7 @@ Reproduce from the Lumina repository root with an installed CPython 3.12 wheel:
 
 ```bash
 python native/lumina-svg-core/tools/benchmark.py \
-  --svg test_images/benchmark.svg \
+  --svg native/lumina-svg-core/benchmarks/supported_scale_fixture.svg \
   --target-width-mm 111 \
   --tolerance-mm 0.02 \
   --warm-runs 3 \

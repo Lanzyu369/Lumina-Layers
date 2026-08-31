@@ -1,16 +1,17 @@
 diff --git a/include/lunasvg.h b/include/lunasvg.h
-index 74f43bb..e5c5416 100644
+index 74f43bb..9aae01b 100644
 --- a/include/lunasvg.h
 +++ b/include/lunasvg.h
-@@ -23,6 +23,7 @@
+@@ -23,6 +23,8 @@
  #ifndef LUNASVG_H
  #define LUNASVG_H
  
 +#include <array>
++#include <cstddef>
  #include <cstdint>
  #include <memory>
  #include <string>
-@@ -491,6 +492,67 @@ public:
+@@ -491,6 +493,74 @@ public:
    float f{0}; ///< The vertical translation offset.
  };
  
@@ -64,6 +65,9 @@ index 74f43bb..e5c5416 100644
 +  int32_t source_index{-1};
 +  uint32_t relative_path_operation_count{0};
 +  uint32_t transform_operation_count{0};
++  double path_input_precision_error{0};
++  double transform_linear_precision_error{0};
++  double transform_translation_precision_error{0};
 +  std::string source_kind;
 +};
 +
@@ -73,12 +77,16 @@ index 74f43bb..e5c5416 100644
 +  bool image_vectorizer_origin{false};
 +  std::vector<PaintCommand> commands;
 +  std::vector<std::string> capability_issues;
++  size_t recorded_path_verb_count{0};
++  size_t recorded_path_point_count{0};
++  size_t recorded_dash_value_count{0};
++  bool complexity_exceeded{false};
 +};
 +
  class SVGNode;
  class SVGTextNode;
  class SVGElement;
-@@ -816,6 +878,16 @@ public:
+@@ -816,6 +886,16 @@ public:
     */
    Element documentElement() const;
  
@@ -95,7 +103,7 @@ index 74f43bb..e5c5416 100644
    Document(Document &&);
    Document &operator=(Document &&);
    ~Document();
-@@ -826,9 +898,15 @@ private:
+@@ -826,9 +906,15 @@ private:
    Document &operator=(const Document &) = delete;
    SVGRootElement *rootElement(bool layoutIfNeeded = false) const;
    bool parse(const char *data, size_t length);
@@ -370,15 +378,18 @@ index 0a4399f..f3a960f 100644
  {
      if(layoutIfNeeded)
 diff --git a/source/svgelement.cpp b/source/svgelement.cpp
-index 7d62cc6..65102ed 100644
+index 7d62cc6..6a653da 100644
 --- a/source/svgelement.cpp
 +++ b/source/svgelement.cpp
-@@ -7,9 +7,79 @@
+@@ -7,9 +7,200 @@
  #include "svgrenderstate.h"
  
  #include <cassert>
 +#include <cctype>
++#include <cmath>
++#include <cstdlib>
 +#include <limits>
++#include <vector>
  
  namespace lunasvg {
  
@@ -448,12 +459,130 @@ index 7d62cc6..65102ed 100644
 +    return count;
 +}
 +
++double maximumNumericMagnitude(std::string_view value)
++{
++    std::string owned(value);
++    const char* cursor = owned.c_str();
++    const char* end = cursor + owned.size();
++    double maximum = 0;
++    while(cursor < end) {
++        char* parsedEnd = nullptr;
++        const double parsed = std::strtod(cursor, &parsedEnd);
++        if(parsedEnd != cursor) {
++            maximum = std::max(maximum, std::abs(parsed));
++            cursor = parsedEnd;
++        } else {
++            ++cursor;
++        }
++    }
++    return maximum;
++}
++
++std::vector<double> numericValues(std::string_view value)
++{
++    std::vector<double> values;
++    std::string owned(value);
++    const char* cursor = owned.c_str();
++    const char* end = cursor + owned.size();
++    while(cursor < end) {
++        char* parsedEnd = nullptr;
++        const double parsed = std::strtod(cursor, &parsedEnd);
++        if(parsedEnd != cursor) {
++            values.push_back(parsed);
++            cursor = parsedEnd;
++        } else {
++            ++cursor;
++        }
++    }
++    return values;
++}
++
++double computeRelativePathPrecisionError(std::string_view value,
++                                         uint32_t operationCount)
++{
++    constexpr double OPERATION_ULPS = 4.0;
++    return maximumNumericMagnitude(value)
++        * std::numeric_limits<float>::epsilon()
++        * OPERATION_ULPS
++        * static_cast<double>(operationCount);
++}
++
++struct TransformPrecisionEstimate {
++    double linear{0};
++    double translation{0};
++};
++
++TransformPrecisionEstimate computeTransformPrecisionEstimate(
++    std::string_view value)
++{
++    constexpr double OPERATION_ULPS = 4.0;
++    constexpr double DEGREES_TO_RADIANS =
++        3.141592653589793238462643383279502884 / 180.0;
++    const double rounding = std::numeric_limits<float>::epsilon()
++        * OPERATION_ULPS;
++    TransformPrecisionEstimate estimate;
++    size_t offset = 0;
++    while(offset < value.size()) {
++        while(offset < value.size()
++                && !std::isalpha(static_cast<unsigned char>(value[offset])))
++            ++offset;
++        const size_t nameStart = offset;
++        while(offset < value.size()
++                && std::isalpha(static_cast<unsigned char>(value[offset])))
++            ++offset;
++        if(nameStart == offset)
++            break;
++        const auto name = value.substr(nameStart, offset - nameStart);
++        const auto open = value.find('(', offset);
++        if(open == std::string_view::npos)
++            break;
++        const auto close = value.find(')', open + 1);
++        if(close == std::string_view::npos)
++            break;
++        const auto arguments = value.substr(open + 1, close - open - 1);
++        const auto numbers = numericValues(arguments);
++        double magnitude = 0;
++        for(const double number : numbers)
++            magnitude = std::max(magnitude, std::abs(number));
++        if(name == "translate") {
++            estimate.translation += magnitude * rounding;
++        } else if(name == "scale") {
++            estimate.linear += magnitude * rounding;
++        } else if(name == "rotate") {
++            const double angle = numbers.empty()
++                ? 0 : std::abs(numbers.front());
++            const double operationLinearError =
++                angle * DEGREES_TO_RADIANS * rounding;
++            estimate.linear += operationLinearError;
++            if(numbers.size() == 3) {
++                const double centerMagnitude = std::max(
++                    std::abs(numbers[1]), std::abs(numbers[2]));
++                estimate.translation += centerMagnitude
++                    * (rounding + operationLinearError);
++            }
++        } else if(name == "skewX" || name == "skewY") {
++            estimate.linear += magnitude * DEGREES_TO_RADIANS * rounding;
++        } else if(name == "matrix") {
++            for(size_t numberIndex = 0;
++                    numberIndex < numbers.size(); ++numberIndex) {
++                const double parsed = numbers[numberIndex];
++                if(numberIndex < 4)
++                    estimate.linear += std::abs(parsed) * rounding;
++                else if(numberIndex < 6)
++                    estimate.translation += std::abs(parsed) * rounding;
++            }
++        }
++        offset = close + 1;
++    }
++    return estimate;
++}
++
 +} // namespace
 +
  ElementID elementid(std::string_view name)
  {
      static const struct {
-@@ -126,6 +196,7 @@ std::unique_ptr<SVGElement> SVGElement::create(Document* document, ElementID id)
+@@ -126,6 +317,7 @@ std::unique_ptr<SVGElement> SVGElement::create(Document* document, ElementID id)
  SVGElement::SVGElement(Document* document, ElementID id)
      : SVGNode(document)
      , m_id(id)
@@ -461,14 +590,20 @@ index 7d62cc6..65102ed 100644
  {
  }
  
-@@ -218,8 +289,13 @@ bool SVGElement::setAttribute(const Attribute& attribute)
+@@ -218,8 +410,19 @@ bool SVGElement::setAttribute(const Attribute& attribute)
  void SVGElement::parseAttribute(PropertyID id, const std::string& value)
  {
      rootElement()->setNeedsLayout();
-+    if(id == PropertyID::D)
++    if(id == PropertyID::D) {
 +        m_relativePathOperationCount = computeRelativePathOperationCount(value);
-+    else if(id == PropertyID::Transform)
++        m_relativePathPrecisionError = computeRelativePathPrecisionError(
++            value, m_relativePathOperationCount);
++    } else if(id == PropertyID::Transform) {
 +        m_transformOperationCount = computeTransformOperationCount(value);
++        const auto estimate = computeTransformPrecisionEstimate(value);
++        m_transformLinearPrecisionError = estimate.linear;
++        m_transformTranslationPrecisionError = estimate.translation;
++    }
      if(auto property = getProperty(id)) {
 -        property->parse(value);
 +        if(!property->parse(value))
@@ -476,7 +611,7 @@ index 7d62cc6..65102ed 100644
      }
  }
  
-@@ -665,9 +741,22 @@ void SVGSVGElement::render(SVGRenderState& state) const
+@@ -665,9 +868,22 @@ void SVGSVGElement::render(SVGRenderState& state) const
      SVGBlendInfo blendInfo(this);
      SVGRenderState newState(this, state, localTransform());
      newState.beginGroup(blendInfo);
@@ -501,7 +636,19 @@ index 7d62cc6..65102ed 100644
      newState.endGroup(blendInfo);
  }
  
-@@ -1100,7 +1189,14 @@ void SVGClipPathElement::applyClipPath(SVGRenderState& state) const
+@@ -691,9 +907,9 @@ SVGElement* SVGRootElement::getElementById(std::string_view id) const
+     return it->second;
+ }
+ 
+-void SVGRootElement::addElementById(const std::string& id, SVGElement* element)
++bool SVGRootElement::addElementById(const std::string& id, SVGElement* element)
+ {
+-    m_idCache.emplace(id, element);
++    return m_idCache.emplace(id, element).second;
+ }
+ 
+ void SVGRootElement::layout(SVGLayoutState& state)
+@@ -1100,7 +1316,14 @@ void SVGClipPathElement::applyClipPath(SVGRenderState& state) const
  
          if(shapeElement == nullptr || !shapeElement->isRenderable())
              continue;
@@ -518,29 +665,44 @@ index 7d62cc6..65102ed 100644
      }
  
 diff --git a/source/svgelement.h b/source/svgelement.h
-index ff5d008..e03cd89 100644
+index ff5d008..9037fb0 100644
 --- a/source/svgelement.h
 +++ b/source/svgelement.h
-@@ -150,6 +150,9 @@ public:
+@@ -150,6 +150,12 @@ public:
      SVGNode* lastChild() const;
  
      ElementID id() const { return m_id; }
 +    int32_t sourceIndex() const { return m_sourceIndex; }
 +    uint32_t relativePathOperationCount() const { return m_relativePathOperationCount; }
 +    uint32_t transformOperationCount() const { return m_transformOperationCount; }
++    double relativePathPrecisionError() const { return m_relativePathPrecisionError; }
++    double transformLinearPrecisionError() const { return m_transformLinearPrecisionError; }
++    double transformTranslationPrecisionError() const { return m_transformTranslationPrecisionError; }
      const AttributeList& attributes() const { return m_attributes; }
      const SVGPropertyList& properties() const { return m_properties; }
      const SVGNodeList& children() const { return m_children; }
-@@ -212,6 +215,9 @@ private:
+@@ -212,6 +218,12 @@ private:
      PointerEvents m_pointer_events = PointerEvents::Auto;
  
      ElementID m_id;
 +    int32_t m_sourceIndex{-1};
 +    uint32_t m_relativePathOperationCount{0};
 +    uint32_t m_transformOperationCount{0};
++    double m_relativePathPrecisionError{0};
++    double m_transformLinearPrecisionError{0};
++    double m_transformTranslationPrecisionError{0};
      AttributeList m_attributes;
      SVGPropertyList m_properties;
      SVGNodeList m_children;
+@@ -347,7 +359,7 @@ public:
+     SVGRootElement* layoutIfNeeded();
+ 
+     SVGElement* getElementById(std::string_view id) const;
+-    void addElementById(const std::string& id, SVGElement* element);
++    bool addElementById(const std::string& id, SVGElement* element);
+     void layout(SVGLayoutState& state) final;
+ 
+     void forceLayout();
 diff --git a/source/svggeometryelement.cpp b/source/svggeometryelement.cpp
 index e2c9708..8896b84 100644
 --- a/source/svggeometryelement.cpp
@@ -568,12 +730,14 @@ index e2c9708..8896b84 100644
              markerPosition.renderMarker(newState, m_strokeData.lineWidth());
          }
 diff --git a/source/svgparser.cpp b/source/svgparser.cpp
-index 183937c..f9a244d 100644
+index 183937c..f9e1c05 100644
 --- a/source/svgparser.cpp
 +++ b/source/svgparser.cpp
-@@ -3,9 +3,281 @@
+@@ -2,10 +2,588 @@
+ #include "svgelement.h"
  #include "svgparserutils.h"
  
++#include <array>
  #include <cassert>
 +#include <cctype>
 +#include <cmath>
@@ -630,6 +794,203 @@ index 183937c..f9a244d 100644
 +    return value.empty();
 +}
 +
++static bool isPartialAlphaValue(std::string_view value, bool allowPercentage)
++{
++    value = trimmedValue(value);
++    bool percentage = false;
++    if(allowPercentage && !value.empty() && value.back() == '%') {
++        percentage = true;
++        value.remove_suffix(1);
++    }
++    bool negative = false;
++    if(!value.empty() && (value.front() == '+' || value.front() == '-')) {
++        negative = value.front() == '-';
++        value.remove_prefix(1);
++    }
++    std::string digits;
++    size_t fractionDigits = 0;
++    bool foundDigit = false;
++    while(!value.empty() && IS_NUM(value.front())) {
++        digits.push_back(value.front());
++        value.remove_prefix(1);
++        foundDigit = true;
++    }
++    if(!value.empty() && value.front() == '.') {
++        value.remove_prefix(1);
++        while(!value.empty() && IS_NUM(value.front())) {
++            digits.push_back(value.front());
++            value.remove_prefix(1);
++            ++fractionDigits;
++            foundDigit = true;
++        }
++    }
++    int exponentSign = 1;
++    int64_t exponent = 0;
++    if(!value.empty() && (value.front() == 'e' || value.front() == 'E')) {
++        value.remove_prefix(1);
++        if(!value.empty() && (value.front() == '+' || value.front() == '-')) {
++            exponentSign = value.front() == '-' ? -1 : 1;
++            value.remove_prefix(1);
++        }
++        while(!value.empty() && IS_NUM(value.front())) {
++            exponent = std::min<int64_t>(
++                1000000000,
++                exponent * 10 + (value.front() - '0'));
++            value.remove_prefix(1);
++        }
++    }
++    if(!foundDigit || !value.empty() || negative)
++        return false;
++    const auto firstNonZero = digits.find_first_not_of('0');
++    if(firstNonZero == std::string::npos)
++        return false;
++    digits.erase(0, firstNonZero);
++    int64_t scale = exponentSign * exponent
++        - static_cast<int64_t>(fractionDigits);
++    while(digits.size() > 1 && digits.back() == '0') {
++        digits.pop_back();
++        ++scale;
++    }
++    const std::string_view threshold = percentage ? "100" : "1";
++    const int64_t decimalDigits = static_cast<int64_t>(digits.size()) + scale;
++    if(decimalDigits != static_cast<int64_t>(threshold.size()))
++        return decimalDigits < static_cast<int64_t>(threshold.size());
++    const size_t comparisonDigits = std::max(digits.size(), threshold.size());
++    for(size_t index = 0; index < comparisonDigits; ++index) {
++        const char digit = index < digits.size() ? digits[index] : '0';
++        const char thresholdDigit = index < threshold.size()
++            ? threshold[index] : '0';
++        if(digit != thresholdDigit)
++            return digit < thresholdDigit;
++    }
++    return false;
++}
++
++static bool hasPartialFunctionalColorAlpha(std::string_view value)
++{
++    const auto opening = value.find('(');
++    const auto closing = value.rfind(')');
++    if(opening == std::string_view::npos
++            || closing == std::string_view::npos || closing <= opening)
++        return false;
++    std::string functionName(trimmedValue(value.substr(0, opening)));
++    std::transform(
++        functionName.begin(), functionName.end(), functionName.begin(),
++        [](unsigned char character) {
++            return static_cast<char>(std::tolower(character));
++        });
++    if(functionName != "rgb" && functionName != "rgba"
++            && functionName != "hsl" && functionName != "hsla")
++        return false;
++    const auto parameters = value.substr(
++        opening + 1, closing - opening - 1);
++    size_t commaCount = 0;
++    size_t alphaStart = std::string_view::npos;
++    for(size_t index = 0; index < parameters.size(); ++index) {
++        if(parameters[index] != ',')
++            continue;
++        ++commaCount;
++        alphaStart = index + 1;
++    }
++    return commaCount == 3 && alphaStart != std::string_view::npos
++        && isPartialAlphaValue(parameters.substr(alphaStart), true);
++}
++
++static std::string lowerAscii(std::string_view value)
++{
++    std::string lowered(value);
++    std::transform(
++        lowered.begin(), lowered.end(), lowered.begin(),
++        [](unsigned char character) {
++            return static_cast<char>(std::tolower(character));
++        });
++    return lowered;
++}
++
++static bool isLegacyPaintKeyword(std::string_view value)
++{
++    // Keep v0.1 on the small named-color intersection whose values are
++    // identical in PlutoVG and Lumina's pinned svgelements parser. Other
++    // names (notably rebeccapurple and legacy's divergent aliceblue entry)
++    // use whole-document fallback instead of changing material identity.
++    static constexpr std::string_view names[] = {
++        "aqua", "black", "blue", "fuchsia", "gray", "green",
++        "lime", "maroon", "navy", "olive", "purple", "red",
++        "silver", "teal", "transparent", "white", "yellow",
++    };
++    const auto lowered = lowerAscii(value);
++    return std::find(std::begin(names), std::end(names), lowered)
++        != std::end(names);
++}
++
++static bool isLegacyHexColor(std::string_view value)
++{
++    if(value.empty() || value.front() != '#'
++            || (value.size() != 4 && value.size() != 5
++                && value.size() != 7 && value.size() != 9))
++        return false;
++    return std::all_of(
++        value.begin() + 1, value.end(),
++        [](unsigned char character) {
++            return std::isxdigit(character) != 0;
++        });
++}
++
++static bool isLegacyByteColorChannel(std::string_view value)
++{
++    value = trimmedValue(value);
++    if(value.empty() || value.size() > 3
++            || !std::all_of(value.begin(), value.end(), [](char character) {
++                return IS_NUM(character);
++            }))
++        return false;
++    unsigned channel = 0;
++    for(const char character : value)
++        channel = channel * 10u + static_cast<unsigned>(character - '0');
++    return channel <= 255u;
++}
++
++static bool isLegacyRgbFunction(std::string_view value)
++{
++    value = trimmedValue(value);
++    const auto lowered = lowerAscii(value);
++    const bool hasAlpha = hasPrefix(lowered, "rgba(");
++    if(!hasAlpha && !hasPrefix(lowered, "rgb("))
++        return false;
++    const size_t opening = hasAlpha ? 4 : 3;
++    if(value.size() <= opening + 1 || value[opening] != '('
++            || value.back() != ')')
++        return false;
++    auto parameters = value.substr(opening + 1, value.size() - opening - 2);
++    std::array<std::string_view, 4> values;
++    size_t valueCount = 0;
++    while(true) {
++        if(valueCount >= values.size())
++            return false;
++        const auto comma = parameters.find(',');
++        values[valueCount++] = comma == std::string_view::npos
++            ? parameters : parameters.substr(0, comma);
++        if(comma == std::string_view::npos)
++            break;
++        parameters.remove_prefix(comma + 1);
++    }
++    if(valueCount != (hasAlpha ? 4u : 3u)
++            || !isLegacyByteColorChannel(values[0])
++            || !isLegacyByteColorChannel(values[1])
++            || !isLegacyByteColorChannel(values[2]))
++        return false;
++    if(!hasAlpha)
++        return true;
++    const auto alpha = trimmedValue(values[3]);
++    return alpha == "0" || alpha == "1";
++}
++
++static bool isLegacyCompatibleColorSyntax(std::string_view value)
++{
++    return isLegacyPaintKeyword(value) || isLegacyHexColor(value)
++        || isLegacyRgbFunction(value);
++}
++
 +static bool isValidLengthValue(std::string_view value,
 +                               LengthNegativeMode negativeMode)
 +{
@@ -658,6 +1019,65 @@ index 183937c..f9a244d 100644
 +            return false;
 +    }
 +    return foundLength;
++}
++
++static bool containsUnstableFloatNumber(std::string_view value)
++{
++    while(!value.empty()) {
++        const char first = value.front();
++        if(!IS_NUM(first) && first != '+' && first != '-' && first != '.') {
++            value.remove_prefix(1);
++            continue;
++        }
++        auto remaining = value;
++        double number = 0.0;
++        if(!parseNumber(remaining, number)) {
++            value.remove_prefix(1);
++            continue;
++        }
++        const size_t consumed = value.size() - remaining.size();
++        if(consumed == 0) {
++            value.remove_prefix(1);
++            continue;
++        }
++        if(std::isfinite(number) && number != 0.0) {
++            const double magnitude = std::abs(number);
++            if(magnitude < std::numeric_limits<float>::min()
++                    || magnitude > std::numeric_limits<float>::max())
++                return true;
++        }
++        value.remove_prefix(consumed);
++    }
++    return false;
++}
++
++static bool isFloatGeometryAttribute(std::string_view name)
++{
++    return name == "d" || name == "points" || name == "transform"
++        || name == "viewBox" || name == "x" || name == "y"
++        || name == "x1" || name == "y1" || name == "x2" || name == "y2"
++        || name == "cx" || name == "cy" || name == "r"
++        || name == "rx" || name == "ry" || name == "width"
++        || name == "height" || name == "dx" || name == "dy"
++        || name == "stroke-width" || name == "stroke-dasharray"
++        || name == "stroke-dashoffset" || name == "stroke-miterlimit";
++}
++
++static bool isLengthGeometryAttribute(std::string_view name)
++{
++    return name == "x" || name == "y" || name == "x1" || name == "y1"
++        || name == "x2" || name == "y2" || name == "cx" || name == "cy"
++        || name == "r" || name == "rx" || name == "ry"
++        || name == "width" || name == "height" || name == "dx"
++        || name == "dy" || name == "stroke-width"
++        || name == "stroke-dasharray" || name == "stroke-dashoffset";
++}
++
++static bool containsFontRelativeLengthUnit(std::string_view value)
++{
++    const auto lowered = lowerAscii(value);
++    return lowered.find("em") != std::string::npos
++        || lowered.find("ex") != std::string::npos;
 +}
 +
 +static bool isValidLocalUrl(std::string_view value)
@@ -711,6 +1131,23 @@ index 183937c..f9a244d 100644
 +    if(name == "xml:base")
 +        return "unsupported_external_resource";
 +    const auto normalizedValue = trimmedValue(value);
++    if(name == "xmlns") {
++        if(normalizedValue != "http://www.w3.org/2000/svg")
++            return "unsupported_namespace";
++        return {};
++    }
++    if(name == "xmlns:xlink") {
++        if(normalizedValue != "http://www.w3.org/1999/xlink")
++            return "unsupported_namespace";
++        return {};
++    }
++    if(name == "xmlns:xml") {
++        if(normalizedValue != "http://www.w3.org/XML/1998/namespace")
++            return "unsupported_namespace";
++        return {};
++    }
++    if(hasPrefix(name, "xmlns:"))
++        return "unsupported_namespace";
 +    auto firstValueCharacter = value.find_first_not_of(" \t\r\n");
 +    if((name == "href" || name == "xlink:href")
 +            && firstValueCharacter != std::string_view::npos
@@ -722,12 +1159,18 @@ index 183937c..f9a244d 100644
 +        if(urlValue != std::string_view::npos && value[urlValue] != '#')
 +            return "unsupported_external_resource";
 +    }
++    if(known && normalizedValue == "inherit")
++        return "unsupported_legacy_explicit_inherit";
++    if(isLengthGeometryAttribute(name)
++            && containsFontRelativeLengthUnit(value))
++        return "unsupported_font_relative_length";
++    if(isFloatGeometryAttribute(name)
++            && containsUnstableFloatNumber(value))
++        return "unsupported_input_precision";
 +    const bool isPaintColor = name == "fill" || name == "stroke"
 +        || name == "color" || name == "stop-color"
 +        || name == "flood-color" || name == "lighting-color";
 +    if(isPaintColor) {
-+        if(normalizedValue == "inherit")
-+            return {};
 +        if(urlPosition != std::string_view::npos)
 +            return "unsupported_paint_server";
 +        if(normalizedValue.empty())
@@ -737,7 +1180,7 @@ index 183937c..f9a244d 100644
 +            return {};
 +        // LunaSVG 3.5 resolves currentColor in attribute insertion order.
 +        // Reject it until the pinned fork can resolve it deterministically.
-+        if(colorValue == "currentColor")
++        if(lowerAscii(colorValue) == "currentcolor")
 +            return "unsupported_color_reference";
 +        if(colorValue.size()
 +                > static_cast<size_t>(std::numeric_limits<int>::max()))
@@ -747,14 +1190,20 @@ index 183937c..f9a244d 100644
 +            &parsedColor, colorValue.data(), static_cast<int>(colorValue.size()));
 +        if(consumed != static_cast<int>(colorValue.size()))
 +            return "unsupported_color_syntax";
-+        if(parsedColor.a > 0.f && parsedColor.a < 1.f)
++        if((parsedColor.a > 0.f && parsedColor.a < 1.f)
++                || hasPartialFunctionalColorAlpha(colorValue))
 +            return "unsupported_partial_alpha";
++        if(!isLegacyCompatibleColorSyntax(colorValue))
++            return "unsupported_color_syntax";
 +    }
 +    if(name == "vector-effect")
 +        return "unsupported_vector_effect";
 +    if((name == "d" && value.find_first_of("Aa") != std::string_view::npos)
 +            || name == "rx" || name == "ry")
 +        return "unsupported_arc";
++    if(name == "d"
++            && value.find_first_of("QqTt") != std::string_view::npos)
++        return "unsupported_quadratic";
 +    if(name == "marker" || name == "marker-start"
 +            || name == "marker-mid" || name == "marker-end")
 +        return "unsupported_marker";
@@ -768,8 +1217,6 @@ index 183937c..f9a244d 100644
 +        return "unsupported_blend_mode";
 +    if(hasPrefix(name, "on"))
 +        return "unsupported_script";
-+    if(known && normalizedValue == "inherit")
-+        return {};
 +    if(name == "clip-path" && !isValidLocalUrl(value))
 +        return "unsupported_clip_path";
 +    if(name == "fill-rule" || name == "clip-rule") {
@@ -815,11 +1262,14 @@ index 183937c..f9a244d 100644
 +    }
 +    if(name == "opacity" || name == "fill-opacity"
 +            || name == "stroke-opacity" || name == "stop-opacity") {
++        if((name == "fill-opacity" || name == "stroke-opacity")
++                && !normalizedValue.empty()
++                && normalizedValue.back() == '%')
++            return "unsupported_opacity_syntax";
 +        float alpha = 0.f;
 +        if(!parseNumberValue(value, true, alpha))
 +            return "unsupported_property_value";
-+        alpha = std::clamp(alpha, 0.f, 1.f);
-+        if(alpha > 0.f && alpha < 1.f)
++        if(isPartialAlphaValue(value, true))
 +            return "unsupported_partial_alpha";
 +    }
 +    if(!known && !isNonSemanticUnknownAttribute(name))
@@ -850,10 +1300,29 @@ index 183937c..f9a244d 100644
 +    return {};
 +}
 +
++static std::string_view localElementName(std::string_view qualifiedName)
++{
++    const auto separator = qualifiedName.find(':');
++    if(separator == std::string_view::npos)
++        return qualifiedName;
++    if(separator == 0 || separator + 1 == qualifiedName.size()
++            || qualifiedName.find(':', separator + 1)
++                != std::string_view::npos)
++        return {};
++    return qualifiedName.substr(separator + 1);
++}
++
++static bool hasNonAscii(std::string_view value)
++{
++    return std::any_of(
++        value.begin(), value.end(),
++        [](unsigned char character) { return character >= 0x80; });
++}
++
  struct SimpleSelector;
  
  using Selector = std::vector<SimpleSelector>;
-@@ -494,7 +766,9 @@ static bool parseSelectors(std::string_view& input, SelectorList& selectors)
+@@ -494,7 +1072,9 @@ static bool parseSelectors(std::string_view& input, SelectorList& selectors)
      return true;
  }
  
@@ -864,7 +1333,7 @@ index 183937c..f9a244d 100644
  {
      if(!skipDelimiter(input, '{'))
          return false;
-@@ -517,6 +791,10 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
+@@ -517,6 +1097,10 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
          declaration.specificity = 0x10;
          declaration.id = csspropertyid(name);
          declaration.value.assign(value);
@@ -875,7 +1344,7 @@ index 183937c..f9a244d 100644
          if(skipDelimiter(input, '!')) {
              skipOptionalSpaces(input);
              if(!skipString(input, "important"))
-@@ -524,26 +802,49 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
+@@ -524,26 +1108,49 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
              declaration.specificity = 0x1000;
          }
  
@@ -929,7 +1398,7 @@ index 183937c..f9a244d 100644
              int depth = 0;
              while(!input.empty()) {
                  auto ch = input.front();
-@@ -562,8 +863,12 @@ static RuleDataList parseStyleSheet(std::string_view input)
+@@ -562,8 +1169,12 @@ static RuleDataList parseStyleSheet(std::string_view input)
          }
  
          Rule rule;
@@ -943,7 +1412,7 @@ index 183937c..f9a244d 100644
          for(const auto& selector : rule.selectors) {
              size_t specificity = 0;
              for(const auto& simpleSelector : selector) {
-@@ -595,14 +900,18 @@ static SelectorList parseQuerySelectors(std::string_view input)
+@@ -595,14 +1206,18 @@ static SelectorList parseQuerySelectors(std::string_view input)
      return selectors;
  }
  
@@ -965,7 +1434,7 @@ index 183937c..f9a244d 100644
          std::string value;
          while(!input.empty() && input.front() != ';') {
              value.push_back(input.front());
-@@ -610,10 +919,17 @@ inline void parseInlineStyle(std::string_view input, SVGElement* element)
+@@ -610,10 +1225,17 @@ inline void parseInlineStyle(std::string_view input, SVGElement* element)
          }
  
          auto id = csspropertyid(name);
@@ -985,7 +1454,7 @@ index 183937c..f9a244d 100644
  }
  
  inline void removeStyleComments(std::string& value)
-@@ -626,7 +942,83 @@ inline void removeStyleComments(std::string& value)
+@@ -626,7 +1248,83 @@ inline void removeStyleComments(std::string& value)
      }
  }
  
@@ -1070,7 +1539,7 @@ index 183937c..f9a244d 100644
  {
      output.clear();
      while(!input.empty()) {
-@@ -644,34 +1036,8 @@ inline bool decodeText(std::string_view input, std::string& output)
+@@ -644,34 +1342,8 @@ inline bool decodeText(std::string_view input, std::string& output)
              unsigned int cp;
              if(!parseInteger(input, cp, base))
                  return false;
@@ -1107,7 +1576,7 @@ index 183937c..f9a244d 100644
          } else {
              if(skipString(input, "amp")) {
                  output.push_back('&');
-@@ -683,6 +1049,20 @@ inline bool decodeText(std::string_view input, std::string& output)
+@@ -683,6 +1355,20 @@ inline bool decodeText(std::string_view input, std::string& output)
                  output.push_back('\"');
              } else if(skipString(input, "apos")) {
                  output.push_back('\'');
@@ -1128,7 +1597,91 @@ index 183937c..f9a244d 100644
              } else {
                  return false;
              }
-@@ -711,23 +1091,84 @@ inline bool readIdentifier(std::string_view& input, std::string& output)
+@@ -699,48 +1385,185 @@ inline bool decodeText(std::string_view input, std::string& output)
+ constexpr bool IS_STARTNAMECHAR(int c) { return IS_ALPHA(c) ||  c == '_' || c == ':'; }
+ constexpr bool IS_NAMECHAR(int c) { return IS_STARTNAMECHAR(c) || IS_NUM(c) || c == '-' || c == '.'; }
+ 
++constexpr bool isXmlNameStartCodePoint(uint32_t codepoint)
++{
++    return (codepoint < 0x80 && IS_STARTNAMECHAR(codepoint))
++        || (codepoint >= 0xC0 && codepoint <= 0xD6)
++        || (codepoint >= 0xD8 && codepoint <= 0xF6)
++        || (codepoint >= 0xF8 && codepoint <= 0x2FF)
++        || (codepoint >= 0x370 && codepoint <= 0x37D)
++        || (codepoint >= 0x37F && codepoint <= 0x1FFF)
++        || (codepoint >= 0x200C && codepoint <= 0x200D)
++        || (codepoint >= 0x2070 && codepoint <= 0x218F)
++        || (codepoint >= 0x2C00 && codepoint <= 0x2FEF)
++        || (codepoint >= 0x3001 && codepoint <= 0xD7FF)
++        || (codepoint >= 0xF900 && codepoint <= 0xFDCF)
++        || (codepoint >= 0xFDF0 && codepoint <= 0xFFFD)
++        || (codepoint >= 0x10000 && codepoint <= 0xEFFFF);
++}
++
++constexpr bool isXmlNameCodePoint(uint32_t codepoint)
++{
++    return isXmlNameStartCodePoint(codepoint)
++        || (codepoint < 0x80
++            && (IS_NUM(codepoint) || codepoint == '-' || codepoint == '.'))
++        || codepoint == 0xB7
++        || (codepoint >= 0x300 && codepoint <= 0x36F)
++        || (codepoint >= 0x203F && codepoint <= 0x2040);
++}
++
++inline bool decodeUtf8CodePoint(std::string_view input, uint32_t& codepoint,
++                                size_t& length)
++{
++    if(input.empty())
++        return false;
++    const auto lead = static_cast<uint8_t>(input.front());
++    uint32_t minimum = 0;
++    if(lead <= 0x7F) {
++        codepoint = lead;
++        length = 1;
++    } else if(lead >= 0xC2 && lead <= 0xDF) {
++        codepoint = lead & 0x1F;
++        length = 2;
++        minimum = 0x80;
++    } else if(lead >= 0xE0 && lead <= 0xEF) {
++        codepoint = lead & 0x0F;
++        length = 3;
++        minimum = 0x800;
++    } else if(lead >= 0xF0 && lead <= 0xF4) {
++        codepoint = lead & 0x07;
++        length = 4;
++        minimum = 0x10000;
++    } else {
++        return false;
++    }
++    if(length > input.size())
++        return false;
++    for(size_t offset = 1; offset < length; ++offset) {
++        const auto continuation = static_cast<uint8_t>(input[offset]);
++        if((continuation & 0xC0) != 0x80)
++            return false;
++        codepoint = (codepoint << 6) | (continuation & 0x3F);
++    }
++    return codepoint >= minimum;
++}
++
+ inline bool readIdentifier(std::string_view& input, std::string& output)
+ {
+-    if(input.empty() || !IS_STARTNAMECHAR(input.front()))
++    uint32_t codepoint = 0;
++    size_t length = 0;
++    if(!decodeUtf8CodePoint(input, codepoint, length)
++            || !isXmlNameStartCodePoint(codepoint))
+         return false;
+     output.clear();
+     do {
+-        output.push_back(input.front());
+-        input.remove_prefix(1);
+-    } while(!input.empty() && IS_NAMECHAR(input.front()));
++        output.append(input.substr(0, length));
++        input.remove_prefix(length);
++        if(!decodeUtf8CodePoint(input, codepoint, length))
++            break;
++    } while(isXmlNameCodePoint(codepoint));
      return true;
  }
  
@@ -1192,6 +1745,7 @@ index 183937c..f9a244d 100644
 +        return false;
      std::string buffer;
      std::string styleSheet;
++    std::vector<std::string> elementNames;
      SVGElement* currentElement = nullptr;
      int ignoring = 0;
 -    auto handleText = [&](std::string_view text, bool in_cdata) {
@@ -1202,6 +1756,8 @@ index 183937c..f9a244d 100644
 -        }
 -
 +    bool hasDoctype = false;
++    bool hasPercentageStyleOrAttribute = false;
++    bool rootOverflowHiddenAttribute = false;
 +    auto handleText = [&](std::string_view text, bool in_cdata) -> bool {
 +        if(text.empty())
 +            return true;
@@ -1222,7 +1778,12 @@ index 183937c..f9a244d 100644
          }
  
          if(currentElement->id() == ElementID::Style) {
-@@ -738,9 +1179,12 @@ bool Document::parse(const char* data, size_t length)
+             removeStyleComments(buffer);
++            if(buffer.find('%') != std::string::npos)
++                hasPercentageStyleOrAttribute = true;
+             styleSheet.append(buffer);
+         } else {
+             auto node = std::make_unique<SVGTextNode>(this);
              node->setData(buffer);
              currentElement->addChild(std::move(node));
          }
@@ -1235,7 +1796,7 @@ index 183937c..f9a244d 100644
      if(length >= 3) {
          auto buffer = (const uint8_t*)(data);
  
-@@ -755,12 +1199,16 @@ bool Document::parse(const char* data, size_t length)
+@@ -755,12 +1578,16 @@ bool Document::parse(const char* data, size_t length)
      while(!input.empty()) {
          if(currentElement) {
              auto text = input.substr(0, input.find('<'));
@@ -1253,7 +1814,7 @@ index 183937c..f9a244d 100644
          }
  
          if(!skipDelimiter(input, '<'))
-@@ -771,6 +1219,18 @@ bool Document::parse(const char* data, size_t length)
+@@ -771,6 +1598,18 @@ bool Document::parse(const char* data, size_t length)
              auto n = input.find("?>");
              if(n == std::string_view::npos)
                  return false;
@@ -1272,7 +1833,7 @@ index 183937c..f9a244d 100644
              input.remove_prefix(n + 2);
              continue;
          }
-@@ -780,21 +1240,36 @@ bool Document::parse(const char* data, size_t length)
+@@ -780,21 +1619,36 @@ bool Document::parse(const char* data, size_t length)
                  auto n = input.find("-->");
                  if(n == std::string_view::npos)
                      return false;
@@ -1289,11 +1850,12 @@ index 183937c..f9a244d 100644
              if(skipString(input, "[CDATA[")) {
 +                xmlDeclarationAllowed = false;
                  auto n = input.find("]]>");
-                 if(n == std::string_view::npos)
+-                if(n == std::string_view::npos)
++                if(n == std::string_view::npos || currentElement == nullptr)
++                    return false;
++                if(!handleText(input.substr(0, n), true))
                      return false;
 -                handleText(input.substr(0, n), true);
-+                if(!handleText(input.substr(0, n), true))
-+                    return false;
                  input.remove_prefix(n + 3);
                  continue;
              }
@@ -1311,29 +1873,70 @@ index 183937c..f9a244d 100644
                  while(!input.empty() && input.front() != '>') {
                      if(input.front() == '[') {
                          int depth = 1;
-@@ -844,6 +1319,9 @@ bool Document::parse(const char* data, size_t length)
+@@ -818,13 +1672,15 @@ bool Document::parse(const char* data, size_t length)
+         }
+ 
+         if(skipDelimiter(input, '/')) {
+-            if(currentElement == nullptr && ignoring == 0)
++            if(elementNames.empty())
+                 return false;
+             if(!readIdentifier(input, buffer))
+                 return false;
++            if(buffer != elementNames.back())
++                return false;
++            elementNames.pop_back();
+             if(ignoring == 0) {
+-                auto id = elementid(buffer);
+-                if(id != currentElement->id())
++                if(currentElement == nullptr)
+                     return false;
+                 currentElement = currentElement->parentElement();
+             } else {
+@@ -839,11 +1695,24 @@ bool Document::parse(const char* data, size_t length)
+ 
+         if(!readIdentifier(input, buffer))
+             return false;
++        const std::string elementName(buffer);
++        const auto localName = localElementName(elementName);
++        if(localName.empty())
++            return false;
++        if(hasNonAscii(elementName))
++            addCapabilityIssue("unsupported_xml_name");
++        if(localName.size() != elementName.size())
++            addCapabilityIssue("unsupported_namespace");
+         SVGElement* element = nullptr;
+         if(ignoring > 0) {
              ++ignoring;
          } else {
-             auto id = elementid(buffer);
-+            auto capabilityReason = capabilityReasonForElement(buffer, id);
+-            auto id = elementid(buffer);
++            auto id = elementid(localName);
++            auto capabilityReason = capabilityReasonForElement(localName, id);
 +            if(!capabilityReason.empty())
 +                addCapabilityIssue(capabilityReason);
++            if(id == ElementID::Svg && m_rootElement != nullptr)
++                addCapabilityIssue("unsupported_nested_svg");
              if(id == ElementID::Unknown) {
                  ignoring = 1;
              } else {
-@@ -863,7 +1341,11 @@ bool Document::parse(const char* data, size_t length)
+@@ -863,7 +1732,17 @@ bool Document::parse(const char* data, size_t length)
          }
  
          skipOptionalSpaces(input);
 +        std::unordered_set<std::string> attributeNames;
++        bool hasHref = false;
++        bool hasXlinkHref = false;
          while(readIdentifier(input, buffer)) {
 +            const std::string attributeName(buffer);
++            if(localElementName(attributeName).empty())
++                return false;
 +            if(!attributeNames.insert(attributeName).second)
 +                return false;
++            if(hasNonAscii(attributeName))
++                addCapabilityIssue("unsupported_xml_name");
              skipOptionalSpaces(input);
              if(!skipDelimiter(input, '='))
                  return false;
-@@ -875,14 +1357,27 @@ bool Document::parse(const char* data, size_t length)
+@@ -875,17 +1754,64 @@ bool Document::parse(const char* data, size_t length)
              auto n = input.find(quote);
              if(n == std::string_view::npos)
                  return false;
@@ -1341,6 +1944,27 @@ index 183937c..f9a244d 100644
 +                return false;
 +            if(!decodeText(input.substr(0, n), buffer, hasDoctype))
 +                return false;
++            if(element != nullptr
++                    && buffer.find('%') != std::string::npos)
++                hasPercentageStyleOrAttribute = true;
++            if(element == m_rootElement.get()) {
++                if(attributeName == "overflow"
++                        && trimmedValue(buffer) == "hidden")
++                    rootOverflowHiddenAttribute = true;
++                if(attributeName == "style") {
++                    const auto loweredStyle = lowerAscii(buffer);
++                    if(loweredStyle.find("overflow") != std::string::npos
++                            && loweredStyle.find("hidden")
++                                != std::string::npos)
++                        rootOverflowHiddenAttribute = true;
++                }
++            }
++            if(attributeName == "href")
++                hasHref = true;
++            else if(attributeName == "xlink:href")
++                hasXlinkHref = true;
++            if(element != nullptr && hasHref && hasXlinkHref)
++                addCapabilityIssue("unsupported_href_precedence");
 +            if(element == m_rootElement.get()
 +                    && attributeName == "data-lumina-origin"
 +                    && buffer == "image-vectorizer")
@@ -1356,6 +1980,18 @@ index 183937c..f9a244d 100644
 +                element ? element->id() : ElementID::Unknown);
 +            if(element != nullptr && !capabilityReason.empty())
 +                addCapabilityIssue(capabilityReason);
++            if(element != nullptr
++                    && (attributeName == "clip-rule"
++                        || (attributeName == "style"
++                            && lowerAscii(buffer).find("clip-rule")
++                                != std::string::npos))) {
++                const auto* parent = element->parentElement();
++                if(element->id() != ElementID::ClipPath
++                        && (parent == nullptr
++                            || parent->id() != ElementID::ClipPath))
++                    addCapabilityIssue(
++                        "unsupported_clip_rule_inheritance");
++            }
 +            if(id != PropertyID::Unknown && capabilityReason.empty()) {
                  if(id == PropertyID::Style) {
                      removeStyleComments(buffer);
@@ -1363,13 +1999,20 @@ index 183937c..f9a244d 100644
 +                    if(!parseInlineStyle(buffer, element, this))
 +                        addCapabilityIssue("unsupported_css_rule");
                  } else {
-                     if(id == PropertyID::Id)
-                         m_rootElement->addElementById(buffer, element);
-@@ -895,12 +1390,14 @@ bool Document::parse(const char* data, size_t length)
+-                    if(id == PropertyID::Id)
+-                        m_rootElement->addElementById(buffer, element);
++                    if(id == PropertyID::Id && !buffer.empty()
++                            && !m_rootElement->addElementById(buffer, element))
++                        addCapabilityIssue("unsupported_duplicate_id");
+                     element->setAttribute(0x1, id, buffer);
+                 }
+             }
+@@ -895,12 +1821,15 @@ bool Document::parse(const char* data, size_t length)
          }
  
          if(skipDelimiter(input, '>')) {
 +            xmlDeclarationAllowed = false;
++            elementNames.push_back(elementName);
              if(element != nullptr)
                  currentElement = element;
              continue;
@@ -1380,17 +2023,35 @@ index 183937c..f9a244d 100644
              if(!skipDelimiter(input, '>'))
                  return false;
              if(ignoring > 0)
-@@ -911,7 +1408,8 @@ bool Document::parse(const char* data, size_t length)
+@@ -911,16 +1840,34 @@ bool Document::parse(const char* data, size_t length)
          return false;
      }
  
 -    if(m_rootElement == nullptr || ignoring > 0 || !input.empty())
 +    if(m_rootElement == nullptr || currentElement != nullptr
++            || !elementNames.empty()
 +            || ignoring > 0 || !input.empty())
          return false;
      applyStyleSheet(styleSheet);
      m_rootElement->build();
-@@ -920,7 +1418,7 @@ bool Document::parse(const char* data, size_t length)
++    const auto& rootViewBox = m_rootElement->viewBox().value();
++    if(rootViewBox.isValid()
++            && (rootViewBox.x != 0.f || rootViewBox.y != 0.f))
++        addCapabilityIssue("unsupported_viewbox_origin");
++    const auto& rootTransform = m_rootElement->transform().value().matrix();
++    if(rootTransform.a != 1.f || rootTransform.b != 0.f
++            || rootTransform.c != 0.f || rootTransform.d != 1.f
++            || rootTransform.e != 0.f || rootTransform.f != 0.f)
++        addCapabilityIssue("unsupported_root_transform");
++    if(m_rootElement->x().value().value() != 0.f
++            || m_rootElement->y().value().value() != 0.f)
++        addCapabilityIssue("unsupported_root_position");
++    if(rootOverflowHiddenAttribute || m_rootElement->isOverflowHidden())
++        addCapabilityIssue("unsupported_root_overflow");
++    if(!rootViewBox.isValid() && hasPercentageStyleOrAttribute)
++        addCapabilityIssue("unsupported_percentage_without_viewbox");
+     return true;
+ }
  
  void Document::applyStyleSheet(const std::string& content)
  {
@@ -1400,18 +2061,45 @@ index 183937c..f9a244d 100644
          std::sort(rules.begin(), rules.end());
          m_rootElement->transverse([&rules](SVGElement* element) {
 diff --git a/source/svgrenderstate.cpp b/source/svgrenderstate.cpp
-index 550d389..924de1d 100644
+index 550d389..0a3965c 100644
 --- a/source/svgrenderstate.cpp
 +++ b/source/svgrenderstate.cpp
-@@ -1,5 +1,7 @@
+@@ -1,7 +1,34 @@
  #include "svgrenderstate.h"
  
 +#include <array>
 +
  namespace lunasvg {
  
++namespace {
++
++constexpr size_t MAX_RECORDED_COMMANDS = 250'000;
++constexpr size_t MAX_RECORDED_PATH_VERBS = 4'000'000;
++constexpr size_t MAX_RECORDED_PATH_POINTS = 8'000'000;
++constexpr size_t MAX_RECORDED_DASH_VALUES = 1'000'000;
++
++bool rejectRecorderComplexity(PaintCommandList* recorder,
++                              const SVGElement* source)
++{
++    if(recorder->complexity_exceeded)
++        return true;
++    recorder->complexity_exceeded = true;
++    if(source)
++        source->document()->addCapabilityIssue("unsupported_complexity");
++    return true;
++}
++
++bool exceeds(size_t current, size_t additional, size_t limit)
++{
++    return additional > limit || current > limit - additional;
++}
++
++} // namespace
++
  SVGBlendInfo::SVGBlendInfo(const SVGElement* element)
-@@ -27,6 +29,39 @@ bool SVGRenderState::hasCycleReference(const SVGElement* element) const
+     : m_clipper(element->clipper())
+     , m_masker(element->masker())
+@@ -27,6 +54,39 @@ bool SVGRenderState::hasCycleReference(const SVGElement* element) const
  
  void SVGRenderState::beginGroup(const SVGBlendInfo& blendInfo)
  {
@@ -1451,7 +2139,7 @@ index 550d389..924de1d 100644
      auto requiresCompositing = blendInfo.requiresCompositing(m_mode);
      if(requiresCompositing) {
          auto boundingBox = m_currentTransform.mapRect(m_element->paintBoundingBox());
-@@ -43,6 +78,12 @@ void SVGRenderState::beginGroup(const SVGBlendInfo& blendInfo)
+@@ -43,6 +103,12 @@ void SVGRenderState::beginGroup(const SVGBlendInfo& blendInfo)
  
  void SVGRenderState::endGroup(const SVGBlendInfo& blendInfo)
  {
@@ -1464,7 +2152,7 @@ index 550d389..924de1d 100644
      if(m_canvas == m_parent->canvas()) {
          m_canvas->restore();
          return;
-@@ -58,4 +99,101 @@ void SVGRenderState::endGroup(const SVGBlendInfo& blendInfo)
+@@ -58,4 +124,140 @@ void SVGRenderState::endGroup(const SVGBlendInfo& blendInfo)
      m_parent->m_canvas->blendCanvas(*m_canvas, BlendMode::Src_Over, opacity);
  }
  
@@ -1484,6 +2172,11 @@ index 550d389..924de1d 100644
 +    if(!m_recorder || m_recordingSuppressed)
 +        return;
 +    auto source = sourceElement ? sourceElement : m_element;
++    if(m_recorder->complexity_exceeded
++            || m_recorder->commands.size() >= MAX_RECORDED_COMMANDS) {
++        rejectRecorderComplexity(m_recorder, source);
++        return;
++    }
 +    PaintCommand command;
 +    command.kind = kind;
 +    command.transform = Matrix(m_currentTransform);
@@ -1502,6 +2195,11 @@ index 550d389..924de1d 100644
 +    auto source = sourceElement ? sourceElement : m_element;
 +    if(!source)
 +        return;
++    if(m_recorder->complexity_exceeded
++            || m_recorder->commands.size() >= MAX_RECORDED_COMMANDS) {
++        rejectRecorderComplexity(m_recorder, source);
++        return;
++    }
 +    if(!m_canvas->hasSolidPaint()) {
 +        recordCapabilityIssue("unsupported_paint_server", source);
 +        return;
@@ -1524,6 +2222,9 @@ index 550d389..924de1d 100644
 +    command.source_index = source->sourceIndex();
 +    command.relative_path_operation_count = source->relativePathOperationCount();
 +    command.transform_operation_count = m_transformOperationCount;
++    command.path_input_precision_error = source->relativePathPrecisionError();
++    command.transform_linear_precision_error = m_transformLinearPrecisionError;
++    command.transform_translation_precision_error = m_transformTranslationPrecisionError;
 +    command.source_kind = kind == PaintCommandKind::Stroke ? "stroke"
 +        : kind == PaintCommandKind::ClipBegin ? "clip" : "fill";
 +
@@ -1533,61 +2234,90 @@ index 550d389..924de1d 100644
 +        command.stroke.dash_offset = strokeData->dashOffset();
 +        command.stroke.line_cap = static_cast<PaintLineCap>(strokeData->lineCap());
 +        command.stroke.line_join = static_cast<PaintLineJoin>(strokeData->lineJoin());
-+        command.stroke.dash_array = strokeData->dashArray();
++        const auto& dashArray = strokeData->dashArray();
++        if(exceeds(
++                m_recorder->recorded_dash_value_count,
++                dashArray.size(), MAX_RECORDED_DASH_VALUES)) {
++            rejectRecorderComplexity(m_recorder, source);
++            return;
++        }
++        command.stroke.dash_array = dashArray;
++        m_recorder->recorded_dash_value_count += dashArray.size();
 +    }
 +
 +    PathIterator iterator(path);
 +    std::array<Point, 3> points;
++    bool hasDrawSegment = false;
 +    while(!iterator.isDone()) {
 +        auto pathCommand = iterator.currentSegment(points);
++        const size_t additionalPoints = pathCommand == PathCommand::CubicTo
++            ? 3 : pathCommand == PathCommand::Close ? 0 : 1;
++        if(exceeds(
++                m_recorder->recorded_path_verb_count, 1,
++                MAX_RECORDED_PATH_VERBS)
++                || exceeds(
++                    m_recorder->recorded_path_point_count,
++                    additionalPoints, MAX_RECORDED_PATH_POINTS)) {
++            rejectRecorderComplexity(m_recorder, source);
++            return;
++        }
++        ++m_recorder->recorded_path_verb_count;
++        m_recorder->recorded_path_point_count += additionalPoints;
 +        switch(pathCommand) {
 +        case PathCommand::MoveTo:
 +            command.path_verbs.push_back(PaintPathVerb::MoveTo);
 +            command.path_points.push_back({points[0].x, points[0].y});
 +            break;
 +        case PathCommand::LineTo:
++            hasDrawSegment = true;
 +            command.path_verbs.push_back(PaintPathVerb::LineTo);
 +            command.path_points.push_back({points[0].x, points[0].y});
 +            break;
 +        case PathCommand::CubicTo:
++            hasDrawSegment = true;
 +            command.path_verbs.push_back(PaintPathVerb::CubicTo);
 +            command.path_points.push_back({points[0].x, points[0].y});
 +            command.path_points.push_back({points[1].x, points[1].y});
 +            command.path_points.push_back({points[2].x, points[2].y});
 +            break;
 +        case PathCommand::Close:
++            hasDrawSegment = true;
 +            command.path_verbs.push_back(PaintPathVerb::Close);
 +            break;
 +        }
 +        iterator.next();
 +    }
 +
-+    m_recorder->commands.emplace_back(std::move(command));
++    if(kind != PaintCommandKind::Stroke || hasDrawSegment)
++        m_recorder->commands.emplace_back(std::move(command));
 +}
 +
  } // namespace lunasvg
 diff --git a/source/svgrenderstate.h b/source/svgrenderstate.h
-index 1e0d434..dfe2213 100644
+index 1e0d434..d02a8f1 100644
 --- a/source/svgrenderstate.h
 +++ b/source/svgrenderstate.h
-@@ -3,6 +3,10 @@
+@@ -3,6 +3,11 @@
  
  #include "svgelement.h"
  
 +#include <algorithm>
++#include <cmath>
 +#include <cstdint>
 +#include <limits>
 +
  namespace lunasvg {
  
  enum class SVGRenderMode {
-@@ -32,11 +36,14 @@ class SVGRenderState {
+@@ -32,11 +37,18 @@ class SVGRenderState {
  public:
      SVGRenderState(const SVGElement* element, const SVGRenderState& parent, const Transform& localTransform)
          : m_element(element), m_parent(&parent), m_currentTransform(parent.currentTransform() * localTransform)
 -        , m_mode(parent.mode()), m_canvas(parent.canvas())
 +        , m_mode(parent.mode()), m_canvas(parent.canvas()), m_recorder(parent.recorder())
 +        , m_transformOperationCount(combinedTransformOperationCount(element, &parent, localTransform))
++        , m_transformLinearPrecisionError(combinedLinearPrecisionError(element, &parent, localTransform))
++        , m_transformTranslationPrecisionError(combinedTranslationPrecisionError(element, &parent, localTransform))
 +        , m_recordingSuppressed(parent.recordingSuppressed())
      {}
  
@@ -1596,20 +2326,24 @@ index 1e0d434..dfe2213 100644
 +    SVGRenderState(const SVGElement* element, const SVGRenderState* parent, const Transform& currentTransform, SVGRenderMode mode, std::shared_ptr<Canvas> canvas, PaintCommandList* recorder = nullptr)
 +        : m_element(element), m_parent(parent), m_currentTransform(currentTransform), m_mode(mode), m_canvas(std::move(canvas)), m_recorder(recorder)
 +        , m_transformOperationCount(combinedTransformOperationCount(element, parent, currentTransform))
++        , m_transformLinearPrecisionError(combinedLinearPrecisionError(element, parent, currentTransform))
++        , m_transformTranslationPrecisionError(combinedTranslationPrecisionError(element, parent, currentTransform))
      {}
  
      Canvas& operator*() const { return *m_canvas; }
-@@ -47,6 +54,9 @@ public:
+@@ -47,6 +59,11 @@ public:
      const Transform& currentTransform() const { return m_currentTransform; }
      const SVGRenderMode mode() const { return m_mode; }
      const std::shared_ptr<Canvas>& canvas() const { return m_canvas; }
 +    PaintCommandList* recorder() const { return m_recorder; }
 +    bool recordingSuppressed() const { return m_recordingSuppressed; }
 +    uint32_t transformOperationCount() const { return m_transformOperationCount; }
++    double transformLinearPrecisionError() const { return m_transformLinearPrecisionError; }
++    double transformTranslationPrecisionError() const { return m_transformTranslationPrecisionError; }
  
      Rect fillBoundingBox() const { return m_element->fillBoundingBox(); }
      Rect paintBoundingBox() const { return m_element->paintBoundingBox(); }
-@@ -55,13 +65,41 @@ public:
+@@ -55,13 +72,99 @@ public:
  
      void beginGroup(const SVGBlendInfo& blendInfo);
      void endGroup(const SVGBlendInfo& blendInfo);
@@ -1622,6 +2356,62 @@ index 1e0d434..dfe2213 100644
 +                               const SVGElement* sourceElement = nullptr);
  
  private:
++    static double linearMagnitude(const Transform& transform)
++    {
++        const auto& matrix = transform.matrix();
++        return std::max(
++            std::abs(static_cast<double>(matrix.a))
++                + std::abs(static_cast<double>(matrix.c)),
++            std::abs(static_cast<double>(matrix.b))
++                + std::abs(static_cast<double>(matrix.d)));
++    }
++
++    static double translationMagnitude(const Transform& transform)
++    {
++        const auto& matrix = transform.matrix();
++        return std::max(
++            std::abs(static_cast<double>(matrix.e)),
++            std::abs(static_cast<double>(matrix.f)));
++    }
++
++    static double combinedLinearPrecisionError(
++        const SVGElement* element, const SVGRenderState* parent,
++        const Transform& localTransform)
++    {
++        const double parentError = parent
++            ? parent->transformLinearPrecisionError() : 0;
++        const double localError = element
++            ? element->transformLinearPrecisionError() : 0;
++        const double parentMagnitude = parent
++            ? linearMagnitude(parent->currentTransform()) : 1;
++        const double localMagnitude = linearMagnitude(localTransform);
++        return parentError * localMagnitude
++            + localError * parentMagnitude
++            + parentError * localError;
++    }
++
++    static double combinedTranslationPrecisionError(
++        const SVGElement* element, const SVGRenderState* parent,
++        const Transform& localTransform)
++    {
++        const double parentLinearError = parent
++            ? parent->transformLinearPrecisionError() : 0;
++        const double parentTranslationError = parent
++            ? parent->transformTranslationPrecisionError() : 0;
++        const double localLinearError = element
++            ? element->transformLinearPrecisionError() : 0;
++        const double localTranslationError = element
++            ? element->transformTranslationPrecisionError() : 0;
++        const double parentMagnitude = parent
++            ? linearMagnitude(parent->currentTransform()) : 1;
++        const double localTranslation = translationMagnitude(localTransform);
++        return parentTranslationError
++            + parentMagnitude * localTranslationError
++            + parentLinearError * localTranslation
++            + parentLinearError * localTranslationError
++            + localLinearError * localTranslation;
++    }
++
 +    static uint32_t combinedTransformOperationCount(
 +        const SVGElement* element, const SVGRenderState* parent,
 +        const Transform& localTransform)
@@ -1646,6 +2436,8 @@ index 1e0d434..dfe2213 100644
      std::shared_ptr<Canvas> m_canvas;
 +    PaintCommandList* m_recorder{nullptr};
 +    uint32_t m_transformOperationCount{0};
++    double m_transformLinearPrecisionError{0};
++    double m_transformTranslationPrecisionError{0};
 +    bool m_recordingSuppressed{false};
 +    bool m_recordedClipBoundary{false};
  };

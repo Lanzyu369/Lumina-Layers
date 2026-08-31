@@ -8,7 +8,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "lumina-svg-core"
-version = "0.1.0"
+version = "0.1.1"
 description = "Print-oriented native SVG geometry analysis"
 readme = "README.md"
 requires-python = "==3.12.*"
@@ -39,10 +39,12 @@ sdist.include = [
   "CMakeLists.txt",
   "cmake/**",
   "include/**",
+  "benchmarks/**",
   "patches/**",
   "python/**",
   "src/**",
   "tests/**",
+  "tools/**",
   "LICENSE",
   "THIRD_PARTY_NOTICES.md",
   "THIRD_PARTY_LICENSES/**",

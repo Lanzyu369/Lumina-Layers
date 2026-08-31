@@ -42,7 +42,7 @@ Expected: FAIL because the package and lock files do not exist.
 
 - [ ] **Step 3: Add the package metadata and immutable dependency pins**
 
-Use project name `lumina-svg-core`, version `0.1.0`, `requires-python = "==3.12.*"`, build requirements `scikit-build-core`, `pybind11`, and `numpy`, and these CMake cache options:
+Use project name `lumina-svg-core`, version `0.1.1`, `requires-python = "==3.12.*"`, build requirements `scikit-build-core`, `pybind11`, and `numpy`, and these CMake cache options:
 
 ```cmake
 set(LUMINA_LUNASVG_REVISION "59690a23981489acc3f73b8db229ef57bb69c544")
@@ -415,6 +415,8 @@ git commit -m "ci(native-svg): build and verify platform wheels"
 **Files:**
 - Create: `native/lumina-svg-core/tools/benchmark.py`
 - Create: `native/lumina-svg-core/benchmarks/proxy_manifest.json`
+- Create: `native/lumina-svg-core/benchmarks/supported_scale_fixture.svg`
+- Create: `native/lumina-svg-core/benchmarks/supported_scale_fixture_provenance.json`
 - Create: `native/lumina-svg-core/benchmarks/README.md`
 - Create: `native/lumina-svg-core/tests/test_benchmark_manifest.py`
 
@@ -434,9 +436,11 @@ The runner discards one warm-up, measures at least three runs, samples process p
 
 - [ ] **Step 4: Record local Apple M5 evidence**
 
-Run: `/opt/homebrew/bin/python3.12 native/lumina-svg-core/tools/benchmark.py --svg test_images/benchmark.svg --target-width-mm 111 --tolerance-mm 0.02 --warm-runs 3 --output native/lumina-svg-core/benchmarks/proxy_manifest.json`
+Run: `/opt/homebrew/bin/python3.12 native/lumina-svg-core/tools/benchmark.py --svg native/lumina-svg-core/benchmarks/supported_scale_fixture.svg --target-width-mm 111 --tolerance-mm 0.02 --warm-runs 3 --output native/lumina-svg-core/benchmarks/proxy_manifest.json`
 
-Expected: deterministic fingerprint, measured median/range/RSS, and an explicit `proxy` label.
+Expected: deterministic fingerprint, measured median/range/RSS, an explicit
+`derived_supported_scale` label, and separate fail-closed records for the
+unmodified source proxy and real R4C1.
 
 - [ ] **Step 5: Run the benchmark-manifest test and commit**
 

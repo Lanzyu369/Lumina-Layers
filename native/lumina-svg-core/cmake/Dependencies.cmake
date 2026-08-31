@@ -62,22 +62,40 @@ function(lumina_verify_dependency_sources lunasvg_dir clipper2_dir)
   endif()
 
   execute_process(
+    COMMAND git diff --no-ext-diff --binary
+    WORKING_DIRECTORY "${clipper2_dir}"
+    RESULT_VARIABLE clipper2_diff_result
+    OUTPUT_VARIABLE actual_clipper2_patch
+    ERROR_VARIABLE clipper2_diff_error
+  )
+  file(READ
+    "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../patches/clipper2-svg-miter-fallback.patch"
+    expected_clipper2_patch
+  )
+  if(NOT clipper2_diff_result EQUAL 0
+      OR NOT actual_clipper2_patch STREQUAL expected_clipper2_patch)
+    message(FATAL_ERROR
+      "Clipper2 source does not exactly match the approved SVG miter patch: ${clipper2_diff_error}"
+    )
+  endif()
+
+  execute_process(
     COMMAND git ls-files --others --exclude-standard
     WORKING_DIRECTORY "${lunasvg_dir}"
     OUTPUT_VARIABLE lunasvg_untracked
     OUTPUT_STRIP_TRAILING_WHITESPACE
   )
   execute_process(
-    COMMAND git status --porcelain --untracked-files=all
+    COMMAND git ls-files --others --exclude-standard
     WORKING_DIRECTORY "${clipper2_dir}"
-    OUTPUT_VARIABLE clipper2_status
+    OUTPUT_VARIABLE clipper2_untracked
     OUTPUT_STRIP_TRAILING_WHITESPACE
   )
   if(NOT lunasvg_untracked STREQUAL "")
     message(FATAL_ERROR "LunaSVG source contains unapproved untracked files")
   endif()
-  if(NOT clipper2_status STREQUAL "")
-    message(FATAL_ERROR "Clipper2 source is not clean at the approved revision")
+  if(NOT clipper2_untracked STREQUAL "")
+    message(FATAL_ERROR "Clipper2 source contains unapproved untracked files")
   endif()
 endfunction()
 
@@ -112,6 +130,11 @@ function(lumina_fetch_native_svg_dependencies)
     SOURCE_SUBDIR CPP
     GIT_SHALLOW FALSE
     GIT_PROGRESS TRUE
+    PATCH_COMMAND
+      ${CMAKE_COMMAND}
+      -DSOURCE_DIR=<SOURCE_DIR>
+      -DPATCH_FILE=${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../patches/clipper2-svg-miter-fallback.patch
+      -P ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ApplyClipper2Patch.cmake
   )
 
   FetchContent_MakeAvailable(lunasvg clipper2)

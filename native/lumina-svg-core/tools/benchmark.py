@@ -24,6 +24,12 @@ from fingerprint import result_fingerprint
 REAL_R4C1_SHA256 = (
     "da52ef12bdd37a0bd47970649a70582862331a606c151bff05bfb2f6e265f160"
 )
+SUPPORTED_SCALE_SHA256 = (
+    "aedd2705dff8a61779418ddb4574aff7d2b22e19577fa798ebc669e4b60f9070"
+)
+SUPPORTED_SCALE_SOURCE_SHA256 = (
+    "d078cf4293623d934759c2688e13a00491e525055e7595069a0ecc4f078842fb"
+)
 
 
 def _local_name(name: str) -> str:
@@ -205,16 +211,20 @@ def benchmark(
     if swap_after_source != swap_source:
         swap_source = f"{swap_source}->{swap_after_source}"
     public_median = _median(elapsed_values)
-    fixture_classification = (
-        "real_r4c1" if svg_sha256 == REAL_R4C1_SHA256 else "proxy"
-    )
+    if svg_sha256 == REAL_R4C1_SHA256:
+        fixture_classification = "real_r4c1"
+    elif svg_sha256 == SUPPORTED_SCALE_SHA256:
+        fixture_classification = "derived_supported_scale"
+    else:
+        fixture_classification = "explicit_supported_fixture"
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "fixture": {
             "path": path.as_posix(),
             "classification": fixture_classification,
             "sha256": svg_sha256,
             "real_r4c1_sha256": REAL_R4C1_SHA256,
+            "source_proxy_sha256": SUPPORTED_SCALE_SOURCE_SHA256,
             "byte_size": path.stat().st_size,
             **structure,
         },

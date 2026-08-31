@@ -23,11 +23,18 @@
       "path": "native-svg-reality.glb",
       "sha256": "58d840947240c572a51a04971aa784db789bbde0e1e0e1a391e3053172aed1c5"
     },
-    "native_version": "0.1.0",
+    "native_version": "0.1.1",
     "projects": {
       "BambuStudio": {
         "build_item_count": 1,
         "byte_size": 32810,
+        "expected_tool_ids": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
         "material_count": 5,
         "object_count": 6,
         "part_names": [
@@ -44,6 +51,13 @@
       "OrcaSlicer": {
         "build_item_count": 1,
         "byte_size": 31846,
+        "expected_tool_ids": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
         "material_count": 5,
         "object_count": 6,
         "part_names": [
@@ -70,22 +84,29 @@
   "slicers": {
     "BambuStudio": {
       "command": [
-        "/Applications/BambuStudio.app/Contents/MacOS/BambuStudio",
+        "<BambuStudio-executable>",
         "--debug",
         "1",
         "--allow-newer-file",
         "--slice",
         "0",
         "--outputdir",
-        "/private/tmp/lumina-native-svg-reality-final-2/toolpaths/BambuStudio/run-1-g2go2zne",
-        "/private/tmp/lumina-native-svg-reality-final-2/native-svg-BambuStudio.3mf"
+        "<isolated-run-directory>",
+        "native-svg-BambuStudio.3mf"
       ],
-      "duration_seconds": 0.354938,
-      "executable": "/Applications/BambuStudio.app/Contents/MacOS/BambuStudio",
+      "duration_seconds": 0.35738,
+      "executable": "BambuStudio",
       "exit_code": 0,
       "input": {
         "build_item_count": 1,
         "byte_size": 32810,
+        "expected_tool_ids": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
         "material_count": 5,
         "object_count": 6,
         "part_names": [
@@ -103,28 +124,45 @@
       "runs": [
         {
           "command": [
-            "/Applications/BambuStudio.app/Contents/MacOS/BambuStudio",
+            "<BambuStudio-executable>",
             "--debug",
             "1",
             "--allow-newer-file",
             "--slice",
             "0",
             "--outputdir",
-            "/private/tmp/lumina-native-svg-reality-final-2/toolpaths/BambuStudio/run-1-g2go2zne",
-            "/private/tmp/lumina-native-svg-reality-final-2/native-svg-BambuStudio.3mf"
+            "<isolated-run-directory>",
+            "native-svg-BambuStudio.3mf"
           ],
-          "duration_seconds": 0.235387,
+          "duration_seconds": 0.197217,
           "exit_code": 0,
-          "output_directory": "run-1-g2go2zne",
+          "missing_expected_tool_ids": [],
+          "output_directory": "run-1",
           "reason": "",
           "status": "passed",
           "stderr_tail": "",
-          "stdout_tail": "[2026-08-31 08:26:05.179205] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
+          "stdout_tail": "[2026-08-31 14:02:11.669645] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
           "toolpath": {
-            "extrusion_move_count": 5196,
-            "fingerprint": "a1f70248d30056f5857404321b558d7aca35eb58007a0d3500a6936773fc64a5",
+            "extrusion_move_count": 4926,
+            "fingerprint": "43f8dc5f9ffb50d601ac1b5daba0d4347ff3cdb2d86458715b9ff7cb49d8ebec",
             "motion_command_count": 6290,
-            "normalized_byte_size": 159163,
+            "normalized_byte_size": 159531,
+            "positive_extrusion_by_tool": {
+              "0": 1016,
+              "1": 1086,
+              "1000": 205,
+              "2": 169,
+              "3": 355,
+              "4": 2095
+            },
+            "positive_extrusion_tool_ids": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              1000
+            ],
             "tool_change_count": 13
           },
           "toolpath_files": [
@@ -133,28 +171,45 @@
         },
         {
           "command": [
-            "/Applications/BambuStudio.app/Contents/MacOS/BambuStudio",
+            "<BambuStudio-executable>",
             "--debug",
             "1",
             "--allow-newer-file",
             "--slice",
             "0",
             "--outputdir",
-            "/private/tmp/lumina-native-svg-reality-final-2/toolpaths/BambuStudio/run-2-lwwm13t7",
-            "/private/tmp/lumina-native-svg-reality-final-2/native-svg-BambuStudio.3mf"
+            "<isolated-run-directory>",
+            "native-svg-BambuStudio.3mf"
           ],
-          "duration_seconds": 0.119551,
+          "duration_seconds": 0.160163,
           "exit_code": 0,
-          "output_directory": "run-2-lwwm13t7",
+          "missing_expected_tool_ids": [],
+          "output_directory": "run-2",
           "reason": "",
           "status": "passed",
           "stderr_tail": "",
-          "stdout_tail": "[2026-08-31 08:26:05.375779] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
+          "stdout_tail": "[2026-08-31 14:02:11.869777] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
           "toolpath": {
-            "extrusion_move_count": 5196,
-            "fingerprint": "a1f70248d30056f5857404321b558d7aca35eb58007a0d3500a6936773fc64a5",
+            "extrusion_move_count": 4926,
+            "fingerprint": "43f8dc5f9ffb50d601ac1b5daba0d4347ff3cdb2d86458715b9ff7cb49d8ebec",
             "motion_command_count": 6290,
-            "normalized_byte_size": 159163,
+            "normalized_byte_size": 159531,
+            "positive_extrusion_by_tool": {
+              "0": 1016,
+              "1": 1086,
+              "1000": 205,
+              "2": 169,
+              "3": 355,
+              "4": 2095
+            },
+            "positive_extrusion_tool_ids": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              1000
+            ],
             "tool_change_count": 13
           },
           "toolpath_files": [
@@ -165,12 +220,28 @@
       "stable_across_runs": true,
       "status": "passed",
       "stderr_tail": "",
-      "stdout_tail": "[2026-08-31 08:26:05.179205] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
+      "stdout_tail": "[2026-08-31 14:02:11.669645] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
       "toolpath": {
-        "extrusion_move_count": 5196,
-        "fingerprint": "a1f70248d30056f5857404321b558d7aca35eb58007a0d3500a6936773fc64a5",
+        "extrusion_move_count": 4926,
+        "fingerprint": "43f8dc5f9ffb50d601ac1b5daba0d4347ff3cdb2d86458715b9ff7cb49d8ebec",
         "motion_command_count": 6290,
-        "normalized_byte_size": 159163,
+        "normalized_byte_size": 159531,
+        "positive_extrusion_by_tool": {
+          "0": 1016,
+          "1": 1086,
+          "1000": 205,
+          "2": 169,
+          "3": 355,
+          "4": 2095
+        },
+        "positive_extrusion_tool_ids": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          1000
+        ],
         "tool_change_count": 13
       },
       "toolpath_files": [
@@ -180,22 +251,29 @@
     },
     "OrcaSlicer": {
       "command": [
-        "/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer",
+        "<OrcaSlicer-executable>",
         "--debug",
         "1",
         "--allow-newer-file",
         "--slice",
         "0",
         "--outputdir",
-        "/private/tmp/lumina-native-svg-reality-final-2/toolpaths/OrcaSlicer/run-1-545ais0d",
-        "/private/tmp/lumina-native-svg-reality-final-2/native-svg-OrcaSlicer.3mf"
+        "<isolated-run-directory>",
+        "native-svg-OrcaSlicer.3mf"
       ],
-      "duration_seconds": 0.333408,
-      "executable": "/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer",
+      "duration_seconds": 0.326612,
+      "executable": "OrcaSlicer",
       "exit_code": 0,
       "input": {
         "build_item_count": 1,
         "byte_size": 31846,
+        "expected_tool_ids": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
         "material_count": 5,
         "object_count": 6,
         "part_names": [
@@ -213,28 +291,45 @@
       "runs": [
         {
           "command": [
-            "/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer",
+            "<OrcaSlicer-executable>",
             "--debug",
             "1",
             "--allow-newer-file",
             "--slice",
             "0",
             "--outputdir",
-            "/private/tmp/lumina-native-svg-reality-final-2/toolpaths/OrcaSlicer/run-1-545ais0d",
-            "/private/tmp/lumina-native-svg-reality-final-2/native-svg-OrcaSlicer.3mf"
+            "<isolated-run-directory>",
+            "native-svg-OrcaSlicer.3mf"
           ],
-          "duration_seconds": 0.21574,
+          "duration_seconds": 0.16478,
           "exit_code": 0,
-          "output_directory": "run-1-545ais0d",
+          "missing_expected_tool_ids": [],
+          "output_directory": "run-1",
           "reason": "",
           "status": "passed",
           "stderr_tail": "",
           "stdout_tail": "",
           "toolpath": {
-            "extrusion_move_count": 5347,
-            "fingerprint": "d8bb70105d78547b4ac2c80732d36640689dd526f9f9b811907752aabb651739",
+            "extrusion_move_count": 5154,
+            "fingerprint": "08b58a3d5b95295851a990b35aa11bdb0a55da5bf943980af5a096bf13380fc0",
             "motion_command_count": 6697,
-            "normalized_byte_size": 168269,
+            "normalized_byte_size": 168637,
+            "positive_extrusion_by_tool": {
+              "0": 1042,
+              "1": 1147,
+              "1000": 194,
+              "2": 163,
+              "3": 370,
+              "4": 2238
+            },
+            "positive_extrusion_tool_ids": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              1000
+            ],
             "tool_change_count": 13
           },
           "toolpath_files": [
@@ -243,28 +338,45 @@
         },
         {
           "command": [
-            "/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer",
+            "<OrcaSlicer-executable>",
             "--debug",
             "1",
             "--allow-newer-file",
             "--slice",
             "0",
             "--outputdir",
-            "/private/tmp/lumina-native-svg-reality-final-2/toolpaths/OrcaSlicer/run-2-xn8qgwph",
-            "/private/tmp/lumina-native-svg-reality-final-2/native-svg-OrcaSlicer.3mf"
+            "<isolated-run-directory>",
+            "native-svg-OrcaSlicer.3mf"
           ],
-          "duration_seconds": 0.117668,
+          "duration_seconds": 0.161832,
           "exit_code": 0,
-          "output_directory": "run-2-xn8qgwph",
+          "missing_expected_tool_ids": [],
+          "output_directory": "run-2",
           "reason": "",
           "status": "passed",
           "stderr_tail": "",
           "stdout_tail": "",
           "toolpath": {
-            "extrusion_move_count": 5347,
-            "fingerprint": "d8bb70105d78547b4ac2c80732d36640689dd526f9f9b811907752aabb651739",
+            "extrusion_move_count": 5154,
+            "fingerprint": "08b58a3d5b95295851a990b35aa11bdb0a55da5bf943980af5a096bf13380fc0",
             "motion_command_count": 6697,
-            "normalized_byte_size": 168269,
+            "normalized_byte_size": 168637,
+            "positive_extrusion_by_tool": {
+              "0": 1042,
+              "1": 1147,
+              "1000": 194,
+              "2": 163,
+              "3": 370,
+              "4": 2238
+            },
+            "positive_extrusion_tool_ids": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              1000
+            ],
             "tool_change_count": 13
           },
           "toolpath_files": [
@@ -277,10 +389,26 @@
       "stderr_tail": "",
       "stdout_tail": "",
       "toolpath": {
-        "extrusion_move_count": 5347,
-        "fingerprint": "d8bb70105d78547b4ac2c80732d36640689dd526f9f9b811907752aabb651739",
+        "extrusion_move_count": 5154,
+        "fingerprint": "08b58a3d5b95295851a990b35aa11bdb0a55da5bf943980af5a096bf13380fc0",
         "motion_command_count": 6697,
-        "normalized_byte_size": 168269,
+        "normalized_byte_size": 168637,
+        "positive_extrusion_by_tool": {
+          "0": 1042,
+          "1": 1147,
+          "1000": 194,
+          "2": 163,
+          "3": 370,
+          "4": 2238
+        },
+        "positive_extrusion_tool_ids": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          1000
+        ],
         "tool_change_count": 13
       },
       "toolpath_files": [

@@ -433,7 +433,7 @@ def test_native_analysis_preserves_recipe_tiling_puzzle_and_material_metadata() 
     )
 
     _, puzzle_analysis = _analyze(
-        "fill_rules_transforms.svg",
+        "irregular_silhouette.svg",
         target_width_mm=12.0,
     )
     preview_cache = VectorProcessor.build_preview_cache(

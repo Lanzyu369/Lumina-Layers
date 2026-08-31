@@ -33,10 +33,12 @@ def test_distribution_pins_native_dependencies_and_licenses() -> None:
     assert "FETCHCONTENT_SOURCE_DIR_" in dependencies
     assert "lumina_verify_dependency_sources" in dependencies
     assert "git diff --no-ext-diff --binary" in dependencies
-    assert "git status --porcelain --untracked-files=all" in dependencies
+    assert "clipper2-svg-miter-fallback.patch" in dependencies
     assert "LunaSVG" in notices
     assert "PlutoVG" in notices
     assert "Clipper2" in notices
+    assert "patches/clipper2-svg-miter-fallback.patch" in notices
+    assert "over-limit miter fallback" in notices
     assert "FreeType" in notices
     assert "pybind11" in notices
     assert "Version: 3.1.0" in notices
@@ -47,6 +49,29 @@ def test_distribution_pins_native_dependencies_and_licenses() -> None:
     assert "59690a23981489acc3f73b8db229ef57bb69c544" in patch_script
     assert "APPROVED_LUNASVG_REVISION" in patch_script
     assert "EXPECTED_REVISION" not in patch_script
+
+    clipper_patch_script = (
+        PACKAGE_ROOT / "cmake" / "ApplyClipper2Patch.cmake"
+    ).read_text(encoding="utf-8")
+    assert "21ebba05db8894f0c7217ad35ea518080f324946" in clipper_patch_script
+    assert "APPROVED_CLIPPER2_REVISION" in clipper_patch_script
+    assert "EXPECTED_REVISION" not in clipper_patch_script
+
+    metadata = tomllib.loads(
+        (PACKAGE_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    assert "patches/**" in metadata["tool"]["scikit-build"]["sdist"][
+        "include"
+    ]
+    assert (
+        PACKAGE_ROOT / "patches" / "clipper2-svg-miter-fallback.patch"
+    ).is_file()
+    sdist_includes = metadata["tool"]["scikit-build"]["sdist"]["include"]
+    assert "benchmarks/**" in sdist_includes
+    assert "tools/**" in sdist_includes
+    assert (
+        PACKAGE_ROOT / "benchmarks" / "supported_scale_fixture.svg"
+    ).is_file()
 
 
 def test_distribution_carries_complete_third_party_license_texts() -> None:
@@ -79,7 +104,7 @@ def test_python_distribution_is_exactly_versioned_for_cpython_312() -> None:
     )
 
     assert metadata["project"]["name"] == "lumina-svg-core"
-    assert metadata["project"]["version"] == "0.1.0"
+    assert metadata["project"]["version"] == "0.1.1"
     assert metadata["project"]["requires-python"] == "==3.12.*"
     assert metadata["project"]["license"] == "Apache-2.0"
     assert "pybind11==3.1.0" in metadata["build-system"]["requires"]

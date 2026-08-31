@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ._lumina_svg_core import (
+    _set_thread_launch_failure_after_for_testing,
     GeometryCollection,
     NativeResult,
     PaintCommand,
@@ -14,7 +15,7 @@ from ._lumina_svg_core import (
     record_paint_commands_svg,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 
 __all__ = [

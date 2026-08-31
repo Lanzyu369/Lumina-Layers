@@ -12,9 +12,14 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "verify_native_svg_slicer_outputs.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "native-svg-core.yml"
+CHECKED_IN_REPORT = ROOT / "progress" / "native-svg-slicer-reality.json"
 
 
-def _write_minimal_3mf(path: Path) -> None:
+def _write_minimal_3mf(
+    path: Path,
+    *,
+    extruders: tuple[str, ...] = ("1",),
+) -> None:
     model = b"""<?xml version="1.0" encoding="UTF-8"?>
 <model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
   <resources>
@@ -26,11 +31,17 @@ def _write_minimal_3mf(path: Path) -> None:
   <build><item objectid="1"/></build>
 </model>
 """
-    settings = b"""<?xml version="1.0" encoding="UTF-8"?>
-<config><object id="1"><metadata key="name" value="Red"/>
-<part id="1" subtype="normal_part"><metadata key="extruder" value="2"/>
-</part></object></config>
-"""
+    parts = "".join(
+        "<part id=\"{index}\" subtype=\"normal_part\">"
+        "<metadata key=\"extruder\" value=\"{extruder}\"/>"
+        "</part>".format(index=index, extruder=extruder)
+        for index, extruder in enumerate(extruders, start=1)
+    )
+    settings = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<config><object id="1"><metadata key="name" value="Red"/>'
+        f"{parts}</object></config>"
+    ).encode("utf-8")
     with zipfile.ZipFile(path, "w") as package:
         package.writestr("3D/3dmodel.model", model)
         package.writestr("Metadata/model_settings.config", settings)
@@ -52,6 +63,7 @@ def test_three_mf_inspection_and_toolpath_fingerprint_are_deterministic(
     assert inspection["build_item_count"] == 1
     assert inspection["triangle_count"] == 1
     assert inspection["material_count"] == 1
+    assert inspection["expected_tool_ids"] == [0]
     assert len(inspection["sha256"]) == 64
 
     first = _toolpath_metrics(
@@ -66,6 +78,29 @@ def test_three_mf_inspection_and_toolpath_fingerprint_are_deterministic(
     assert first["extrusion_move_count"] == 1
     assert first["tool_change_count"] == 1
     assert len(first["fingerprint"]) == 64
+
+
+def test_toolpath_metrics_count_only_positive_extrusion_deltas() -> None:
+    from scripts.verify_native_svg_slicer_outputs import _toolpath_metrics
+
+    metrics = _toolpath_metrics(
+        b"M82\nT0\nG92 E0\n"
+        b"G1 X1 E0\n"
+        b"G1 X2 E1\n"
+        b"G1 X3 E0.5\n"
+        b"G1 X4 E0.5\n"
+        b"M83\n"
+        b"G1 X5 E-0.2\n"
+        b"G1 X6 E0\n"
+        b"G1 X7 E0.25\n"
+        b"T1\nG92 E10\nM82\n"
+        b"G1 X8 E10\n"
+        b"G1 X9 E10.5\n"
+    )
+
+    assert metrics["extrusion_move_count"] == 3
+    assert metrics["positive_extrusion_by_tool"] == {"0": 2, "1": 1}
+    assert metrics["positive_extrusion_tool_ids"] == [0, 1]
 
 
 def test_slicer_command_treats_allow_newer_file_as_a_flag(
@@ -135,6 +170,46 @@ def test_slicer_process_is_isolated_in_its_artifact_directory(
     assert result["stable_across_runs"] is True
     assert len(result["runs"]) == 2
     assert len({run["toolpath"]["fingerprint"] for run in result["runs"]}) == 1
+    assert result["executable"] == "slicer"
+    assert result["command"][0] == "<BambuStudio-executable>"
+    assert result["command"][-1] == "fixture.3mf"
+    assert result["command"][-2] == "<isolated-run-directory>"
+    assert str(tmp_path) not in json.dumps(result)
+
+
+def test_slicer_validation_requires_positive_extrusion_for_every_material(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from scripts import verify_native_svg_slicer_outputs as reality
+
+    project = tmp_path / "two-materials.3mf"
+    _write_minimal_3mf(project, extruders=("1", "2"))
+    executable = tmp_path / "slicer"
+    executable.touch()
+
+    def fake_run_command(command, *, timeout_seconds, cwd=None):
+        if "--help" in command:
+            return 0, "BambuStudio-test:\n", "", 0.01
+        (cwd / "plate_1.gcode").write_text(
+            "M83\nT0\nG1 X1 Y2 E0.1\n",
+            encoding="utf-8",
+        )
+        return 0, "", "", 0.01
+
+    monkeypatch.setattr(reality, "_run_command", fake_run_command)
+    result = reality._validate_slicer(
+        "BambuStudio",
+        executable,
+        project,
+        tmp_path / "toolpaths",
+        timeout_seconds=10,
+        validation_runs=2,
+    )
+
+    assert result["status"] == "failed"
+    assert result["reason"] == "toolpath_missing_material_extrusion"
+    assert result["runs"][0]["missing_expected_tool_ids"] == [1]
 
 
 def test_cli_reports_missing_slicers_as_unavailable_not_passed(
@@ -203,3 +278,50 @@ def test_native_svg_workflow_covers_all_release_realities() -> None:
     assert "actions/upload-artifact@v4" in workflow
     assert "cd native/lumina-svg-core" in workflow
     assert '"shapely>=2,<3"' in workflow
+    for path_filter in (
+        '"core/**"',
+        '"api/**"',
+        '"utils/bambu_3mf_writer.py"',
+        '"scripts/build_desktop.py"',
+    ):
+        assert path_filter in workflow
+    for bundled_notice in (
+        "LICENSE",
+        "THIRD_PARTY_NOTICES.md",
+        "Clipper2.txt",
+        "FreeType-Project.txt",
+        "LunaSVG.txt",
+        "PlutoVG.txt",
+        "pybind11.txt",
+        "stb.txt",
+    ):
+        assert bundled_notice in workflow
+
+
+def test_checked_in_reality_report_is_portable_and_material_complete() -> None:
+    report_text = CHECKED_IN_REPORT.read_text(encoding="utf-8")
+    report = json.loads(report_text)
+
+    assert report["status"] == "passed"
+    assert "/Applications/" not in report_text
+    assert "/private/tmp/" not in report_text
+    assert ":\\" not in report_text
+    assert report["artifacts"]["native_version"] == "0.1.1"
+    for slicer_name in ("BambuStudio", "OrcaSlicer"):
+        slicer = report["slicers"][slicer_name]
+        expected_tool_ids = set(slicer["input"]["expected_tool_ids"])
+        assert expected_tool_ids == {0, 1, 2, 3, 4}
+        assert slicer["status"] == "passed"
+        assert slicer["stable_across_runs"] is True
+        assert slicer["command"][0] == f"<{slicer_name}-executable>"
+        assert slicer["command"][-2] == "<isolated-run-directory>"
+        for run_index, run in enumerate(slicer["runs"], start=1):
+            assert run["output_directory"] == f"run-{run_index}"
+            assert run["missing_expected_tool_ids"] == []
+            positive = {
+                int(tool_id): count
+                for tool_id, count in run["toolpath"][
+                    "positive_extrusion_by_tool"
+                ].items()
+            }
+            assert all(positive[tool_id] > 0 for tool_id in expected_tool_ids)

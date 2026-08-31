@@ -7,11 +7,24 @@ import json
 from pathlib import Path
 
 from scripts import benchmark_native_svg_analysis as benchmark
+from scripts import build_native_svg_supported_fixture as fixture_builder
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = REPO_ROOT / "progress" / "native-svg-fast-path-benchmark.json"
-PROXY_PATH = REPO_ROOT / "test_images" / "benchmark.svg"
+SOURCE_PROXY_PATH = REPO_ROOT / "test_images" / "benchmark.svg"
+SUPPORTED_FIXTURE_PATH = (
+    REPO_ROOT
+    / "native"
+    / "lumina-svg-core"
+    / "benchmarks"
+    / "supported_scale_fixture.svg"
+)
+SUPPORTED_PROVENANCE_PATH = (
+    SUPPORTED_FIXTURE_PATH.with_name(
+        "supported_scale_fixture_provenance.json"
+    )
+)
 REAL_R4C1_SHA256 = (
     "da52ef12bdd37a0bd47970649a70582862331a606c151bff05bfb2f6e265f160"
 )
@@ -24,18 +37,27 @@ def _load_manifest() -> dict:
 def test_complete_vector_analysis_benchmark_is_reproducible() -> None:
     manifest = _load_manifest()
 
-    assert manifest["schema_version"] == 1
+    assert manifest["schema_version"] == 2
     assert manifest["entrypoint"] == (
         "core.vector_engine.VectorProcessor.analyze_svg"
     )
 
     fixture = manifest["fixture"]
-    proxy_bytes = PROXY_PATH.read_bytes()
-    assert fixture["path"] == "test_images/benchmark.svg"
-    assert fixture["classification"] == "proxy"
-    assert fixture["sha256"] == hashlib.sha256(proxy_bytes).hexdigest()
+    fixture_bytes = SUPPORTED_FIXTURE_PATH.read_bytes()
+    assert fixture["path"] == (
+        "native/lumina-svg-core/benchmarks/supported_scale_fixture.svg"
+    )
+    assert fixture["classification"] == "derived_supported_scale"
+    assert fixture["sha256"] == hashlib.sha256(fixture_bytes).hexdigest()
+    assert fixture["sha256"] == fixture_builder.EXPECTED_FIXTURE_SHA256
     assert fixture["sha256"] != REAL_R4C1_SHA256
-    assert fixture["byte_size"] == len(proxy_bytes)
+    assert fixture["byte_size"] == len(fixture_bytes)
+    assert fixture["provenance"]["source"]["sha256"] == (
+        fixture_builder.SOURCE_SHA256
+    )
+    assert fixture["provenance"]["selection"][
+        "overlap_policy"
+    ] == "disjoint_cell_bounds"
     assert len(fixture["canvas_user_units"]) == 2
     for key in (
         "path_count",
@@ -80,6 +102,13 @@ def test_complete_vector_analysis_benchmark_is_reproducible() -> None:
         "range_seconds",
         "native_recorder_seconds",
         "native_kernel_seconds",
+        "native_bounds_seconds",
+        "native_replay_seconds",
+        "native_topology_seconds",
+        "native_legacy_raw_seconds",
+        "native_composite_seconds",
+        "native_legacy_visible_seconds",
+        "native_export_seconds",
         "native_binding_conversion_seconds",
         "native_adapter_conversion_seconds",
         "native_geometry_total_seconds",
@@ -119,6 +148,16 @@ def test_complete_vector_analysis_benchmark_is_reproducible() -> None:
 def test_real_r4c1_and_large_regression_are_not_substituted() -> None:
     manifest = _load_manifest()
 
+    source_proxy = manifest["source_proxy"]
+    source_bytes = SOURCE_PROXY_PATH.read_bytes()
+    assert source_proxy["classification"] == "real_proxy_fallback"
+    assert source_proxy["sha256"] == hashlib.sha256(source_bytes).hexdigest()
+    assert source_proxy["sha256"] == fixture_builder.SOURCE_SHA256
+    assert source_proxy["byte_size"] == len(source_bytes)
+    assert source_proxy["status"] == "unsupported"
+    assert source_proxy["reason_code"] == "unsupported_topology_collapse"
+    assert source_proxy["native_by_default_ready"] is False
+
     real = manifest["real_r4c1"]
     assert real["classification"] == "real_r4c1"
     assert real["sha256"] == REAL_R4C1_SHA256
@@ -145,7 +184,7 @@ def test_real_r4c1_and_large_regression_are_not_substituted() -> None:
 
 
 def fixture_classification(manifest: dict) -> str:
-    """Return the public proxy classification for an explicit comparison."""
+    """Return the performance-fixture classification for comparison."""
 
     return manifest["fixture"]["classification"]
 
@@ -167,3 +206,15 @@ def test_benchmark_threshold_failures_are_process_fatal() -> None:
         "measurement.median_threshold_passed",
         "large_regression.swap_delta_threshold_passed",
     ]
+
+
+def test_supported_scale_fixture_is_exactly_reproducible() -> None:
+    payload = fixture_builder.build_fixture_payload(SOURCE_PROXY_PATH)
+    provenance = json.loads(
+        SUPPORTED_PROVENANCE_PATH.read_text(encoding="utf-8")
+    )
+
+    assert payload == SUPPORTED_FIXTURE_PATH.read_bytes()
+    assert fixture_builder.provenance(payload) == provenance
+    assert len(provenance["selection"]["source_path_indices"]) == 64
+    assert provenance["fixture"]["path_count"] == 1024

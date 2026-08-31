@@ -34,7 +34,7 @@ def test_runtime_requirement_is_an_exact_workspace_package() -> None:
     pyproject = (
         ROOT / "native" / "lumina-svg-core" / "pyproject.toml"
     ).read_text(encoding="utf-8")
-    assert 'version = "0.1.0"' in pyproject
+    assert 'version = "0.1.1"' in pyproject
     assert 'requires-python = "==3.12.*"' in pyproject
 
 
@@ -104,7 +104,7 @@ def _geometry_outcome() -> NativeSvgGeometry:
         scale_factor=2.0,
         bbox=(0.0, 0.0, 10.0, 5.0),
         stage_timings={"geometry_backend": "native"},
-        native_version="0.1.0",
+        native_version="0.1.1",
         native_schema_version=1,
     )
 
@@ -147,7 +147,7 @@ def test_api_server_native_self_test_rejects_fallback(
         "core.native_svg_adapter.analyze_native_svg",
         lambda *_args, **_kwargs: NativeSvgFallback(
             reason_code="unsupported_marker",
-            native_version="0.1.0",
+            native_version="0.1.1",
         ),
     )
 
@@ -166,7 +166,13 @@ def test_api_server_native_self_test_rejects_fallback(
 
 def test_api_server_native_self_test_runs_real_installed_extension() -> None:
     pytest.importorskip("lumina_svg_core")
-    fixture = ROOT / "tests" / "fixtures" / "native_svg" / "fill_rules_transforms.svg"
+    fixture = (
+        ROOT
+        / "tests"
+        / "fixtures"
+        / "native_svg"
+        / "clip_inherited_fill.svg"
+    )
 
     completed = subprocess.run(
         [

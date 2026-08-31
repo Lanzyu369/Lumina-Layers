@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-import logging
 from unittest.mock import patch
 
 import numpy as np
 from shapely.geometry import box
 
 
-def test_log_vector_preview_timings_emits_stage_breakdown(caplog) -> None:
-    from core.pipeline.vector_branch import _log_vector_preview_timings
+def test_log_vector_preview_timings_emits_stage_breakdown() -> None:
+    from core.pipeline import vector_branch
 
     timings = {
         "material_img_processor_s": 0.1,
@@ -46,38 +45,36 @@ def test_log_vector_preview_timings_emits_stage_breakdown(caplog) -> None:
         "material_matrix": np.zeros((2, 2, 5), dtype=np.int16),
     }
 
-    target_logger = logging.getLogger("lumina.core.pipeline.coordinator")
-    target_logger.addHandler(caplog.handler)
-    caplog.set_level(logging.INFO, logger=target_logger.name)
-    try:
-        _log_vector_preview_timings(timings, ctx, analysis, raster_cache)
-    finally:
-        target_logger.removeHandler(caplog.handler)
+    with patch.object(vector_branch.log, "info") as info:
+        vector_branch._log_vector_preview_timings(
+            timings, ctx, analysis, raster_cache
+        )
 
-    records = [record for record in caplog.records if getattr(record, "event", None) == "vector_preview_timings"]
-    assert len(records) == 1
-    record = records[0]
-    assert record.duration_ms == 10000.0
-    assert record.timings["build_preview_cache_s"] == 4.0
-    assert record.timings["occlusion_s"] == 2.0
-    assert record.timings["material_parallelism_limit"] == "requested"
-    assert record.timings["material_parallelism_demand_fallback"] is False
-    assert record.is_material_archive is True
-    assert record.modeling_mode == "vector"
-    assert record.material_source == "material_archive"
-    assert record.material_count == 8
-    assert record.layer_count == 5
-    assert record.unique_fill_count == 1
-    assert record.grid_resolution == 2048
-    assert record.shape_count == 2
-    assert record.clipped_shape_count == 1
-    assert record.matched_shape_count == 1
-    assert record.preview_width_px == 100
-    assert record.preview_height_px == 50
-    assert record.solid_pixel_count == 3
-    assert record.material_matrix_shape == [2, 2, 5]
-    assert not hasattr(record, "image_path")
-    assert not hasattr(record, "actual_lut_path")
+    info.assert_called_once()
+    assert info.call_args.args == ("Vector preview timing breakdown",)
+    extra = info.call_args.kwargs["extra"]
+    assert extra["event"] == "vector_preview_timings"
+    assert extra["duration_ms"] == 10000.0
+    assert extra["timings"]["build_preview_cache_s"] == 4.0
+    assert extra["timings"]["occlusion_s"] == 2.0
+    assert extra["timings"]["material_parallelism_limit"] == "requested"
+    assert extra["timings"]["material_parallelism_demand_fallback"] is False
+    assert extra["is_material_archive"] is True
+    assert extra["modeling_mode"] == "vector"
+    assert extra["material_source"] == "material_archive"
+    assert extra["material_count"] == 8
+    assert extra["layer_count"] == 5
+    assert extra["unique_fill_count"] == 1
+    assert extra["grid_resolution"] == 2048
+    assert extra["shape_count"] == 2
+    assert extra["clipped_shape_count"] == 1
+    assert extra["matched_shape_count"] == 1
+    assert extra["preview_width_px"] == 100
+    assert extra["preview_height_px"] == 50
+    assert extra["solid_pixel_count"] == 3
+    assert extra["material_matrix_shape"] == [2, 2, 5]
+    assert "image_path" not in extra
+    assert "actual_lut_path" not in extra
 
 
 def test_vector_preview_branch_preserves_backing_mask_in_cache() -> None:
