@@ -8,8 +8,10 @@ the exact PR #585 dependency commit
 adapter, whole-document fallback policy, packaging, benchmark, and retained
 slicer evidence are in scope. Merging is explicitly out of scope.
 
-The independent passes returned **Approved with fixes**. All six P1 and five
-P2 findings below were addressed before the exact-SHA re-review.
+The original independent passes returned **Approved with fixes**. All six P1
+and five P2 findings from those passes were addressed before their exact-SHA
+re-review. A later ticket-evidence review found one additional parser-boundary
+P1 and one test-isolation P2; both are also recorded below.
 
 ## Findings and dispositions
 
@@ -26,12 +28,15 @@ P2 findings below were addressed before the exact-SHA re-review.
 | P2 | Release builds used mutable Action tags and incompletely fixed build tools. | Workflow Actions are pinned to immutable commits. The sdist/wheel build inputs are exact versions of scikit-build-core, pybind11, NumPy, CMake, and Ninja; clean wheel and sdist installs passed the standalone suite. |
 | P2 | The dedicated product-artifacts CI job did not execute the benchmark contract that recomputes the 3,097-source-path ranking, per-candidate gates, incremental panel, and final fixture. | Added `tests/test_native_svg_benchmark_contract_unit.py` to the job's focused pytest list, so a stale generator, selected tuple, fixture, or provenance fails the PR gate. |
 | P2 | The validation narrative claimed a wider local search for the >=50 MiB regression SVG than the structured report recorded. | Narrowed the claim to the workspace root present in `searched_roots`; the missing large-file RSS/swap gate remains explicitly pending. |
+| P1 | Lumina's adapter checked the shape but not the exact dtype of native paint metadata, allowing a mismatched ABI to be silently coerced by `int()`. | The adapter now requires `uint8` RGBA and `int32` draw/source/source-kind arrays, returning the existing fail-closed schema errors for every mismatch. Four wrong-dtype regressions cover the boundary. |
+| P2 | The component/hole and GEOS-normalizer-bypass test could pass from a pre-warmed global parse/clip cache without exercising the native adapter. | The workflow test now isolates the cache before and after every case, deliberately pre-warms then clears the exact key, records the uncached adapter call, and still fails if `_normalize_contours_many` is entered. |
 
 ## Verification evidence
 
 - Standalone package: `393 passed`.
-- Lumina native SVG adapter, differential, fallback, packaging, slicer, and
-  workflow tests: `152 passed`, with four rasterio deprecation warnings.
+- Lumina native SVG adapter, differential, fallback, packaging, slicer,
+  workflow, selection, and cache tests after the ticket-evidence fixes:
+  `179 passed`, with four rasterio deprecation warnings.
 - Other changed-path/downstream tests: `195 passed`, `1 skipped` because
   PowerShell is unavailable on the reference Mac.
 - Upload and streamed SVG limit tests: `7 passed`.
@@ -49,14 +54,23 @@ P2 findings below were addressed before the exact-SHA re-review.
   one test skipped, but Vitest exited non-zero for a post-test dynamic-import
   rejection in `SettingsPanel.machineAdapter.test.tsx`. The exact base has the
   same unhandled rejection plus two additional assertion failures.
-- Public `VectorProcessor.analyze_svg` benchmark: 0.224664375 s warm median,
-  0.227735625 s p95, 222,593,024-byte peak RSS, zero measured swap growth.
+- Post-ticket public `VectorProcessor.analyze_svg` benchmark:
+  0.174935958 s warm median, 0.177046046 s p95, 220,971,008-byte peak RSS,
+  zero measured swap growth, and the unchanged output fingerprint
+  `71de6894544ecfc02695ff33a52dfccb5bd2fd2313c41cf2312262f17f6b8f7b`.
 - Real Bambu Studio and OrcaSlicer runs: both passed twice with stable
   normalized toolpath fingerprints and qualifying model extrusion for tools
   0 through 4.
 - Clean CPython 3.12 wheel and sdist installs each passed all 393 tests. The
   production macOS arm64 PyInstaller onefile probe executed the native backend
   and contained the extension plus all required license texts.
+- Hosted run
+  [`33375769683`](https://github.com/lumina-layer-studio/Lumina-studio/actions/runs/33375769683)
+  completed every wheel build/install/probe, Docker product probe,
+  product-artifact workflow, and Windows production onefile build/probe.
+  Every native-SVG job then failed only at `actions/upload-artifact` because
+  the repository artifact-storage quota was exhausted; the run is therefore
+  not represented as a green CI conclusion.
 
 ## Honest release boundaries
 
@@ -66,7 +80,9 @@ P2 findings below were addressed before the exact-SHA re-review.
   RSS / 256 MiB swap gate remains pending rather than being substituted with a
   smaller file.
 - Windows, macOS x86_64, Linux wheel, Docker, and Windows production onefile
-  jobs are configured. They become evidence only after the pushed PR CI passes.
+  functional steps passed in hosted run `33375769683`; artifact retention and
+  the overall required-check conclusions remain blocked by GitHub's exhausted
+  artifact-storage quota.
 - Moving `lumina-svg-core` to a separate repository/package index still needs
   an owner and namespace decision. The in-tree library is publishable first;
   Lumina must then depend on its exact released version.
@@ -79,4 +95,11 @@ requested only the two evidence/CI P2 fixes recorded above. The closure review
 then examined `703ff9e62138800310f40e77e1f7e4a7900c52cc`, confirmed both P2s
 closed, and reported no remaining P0, P1, or P2 findings.
 
-Final independent verdict: **Approved**.
+The ticket-evidence review subsequently examined
+`cab62a6a4eaaf1339d7607aee42bd02737bb28fc`. It requested the exact metadata
+dtype gate and cache-isolated uncached-path test recorded above. The closure
+review examined `ca69502c5a9391e9d812ccc11a92868e5173cb1a`, ran the adapter and
+workflow tests against the real extension, found no P0, P1, or P2 issue, and
+returned **Approved**.
+
+Final independent verdict on the latest code SHA: **Approved**.

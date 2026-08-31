@@ -3,10 +3,10 @@
 ## Status
 
 This document records evidence for the first `lumina-svg-core` integration.
-It distinguishes checks that ran on the reference Mac from jobs that are only
-configured and must still pass on the pull request. The fast path is enabled
-only for documents whose complete semantics are supported; one unsupported
-feature requests one whole-document legacy fallback.
+It distinguishes checks that ran on the reference Mac from hosted checks and
+their artifact-retention status. The fast path is enabled only for documents
+whose complete semantics are supported; one unsupported feature requests one
+whole-document legacy fallback.
 
 The implementation is based on PR #585 commit
 `892906a90fe4152b5af0120830254228748878d7`. It remains a separate topic branch
@@ -72,12 +72,15 @@ frozen by small synthetic regressions:
 
 - Lumina's adapter retains exact `(r, g, b, a)`, source index, paint index, a
   stable `(source index, paint index)` identity, and per-paint component index
-  through the parser's `shape_data` and `clipped_shapes` outputs.
+  through the parser's `shape_data` and `clipped_shapes` outputs. The boundary
+  requires the standalone ABI's exact `uint8` RGBA and `int32` identity dtypes
+  instead of silently coercing mismatched arrays.
 - `component_hierarchy.svg` proves that a supported native result reaches
   `VectorAnalysis` without `_normalize_contours_many`, while retaining the
-  large component, its hole, and an independent shell. The adjacent-triangle
-  fixture is classified as one whole-document fallback rather than returning
-  a partial native result.
+  large component, its hole, and an independent shell. That test isolates and
+  deliberately bypasses a pre-warmed parse/clip cache, so it must execute the
+  uncached native adapter. The adjacent-triangle fixture is classified as one
+  whole-document fallback rather than returning a partial native result.
 
 The reported MaterialVectorMatcher uint8 Lab collision is evidence for why the
 parser must expose exact source metadata, but material selection, KDTree/Lab
@@ -88,6 +91,13 @@ degeneration of a repair group containing an approximately `1e-8 mm²` dust
 component. Native geometry remains separated by component with hole hierarchy
 intact so those follow-up changes do not need to reconstruct topology from a
 flattened union.
+
+After freezing these parser contracts, the complete public
+`VectorProcessor.analyze_svg` benchmark was rerun without memory or artifact
+cache hits. It reported a 0.174935958 s warm median, 0.177046046 s p95,
+220,971,008-byte peak RSS, zero measured swap growth, 1,024
+raw/visible/matched shapes, 67,104 coordinates, and the unchanged fingerprint
+`71de6894544ecfc02695ff33a52dfccb5bd2fd2313c41cf2312262f17f6b8f7b`.
 
 The supported-scale fixture is not the real R4C1 document and is not the
 previously described 55 MB regression document. The real R4C1 fixture was
@@ -135,8 +145,10 @@ Archive inspection confirmed the compiled `_lumina_svg_core` extension and the
 project, LunaSVG, PlutoVG, Clipper2, FreeType, stb, and pybind11 licenses were
 present.
 
-`.github/workflows/native-svg-core.yml` must provide the remaining pull-request
-evidence:
+Hosted workflow run
+[`33375769683`](https://github.com/lumina-layer-studio/Lumina-studio/actions/runs/33375769683)
+at commit `b726c1f765703ae41e63c2a7614dd21d8bcd1ed1` executed the following
+pull-request evidence successfully:
 
 - repaired CPython 3.12 wheels installed and exercised on Windows amd64,
   macOS arm64, macOS x86_64, and manylinux x86_64;
@@ -144,10 +156,18 @@ evidence:
 - Windows PyInstaller onefile build plus the same self-test from the frozen
   executable;
 - representative native GLB, Bambu 3MF, Orca 3MF, benchmark, and hosted-runner
-  dependency-boundary reports retained as `lumina-native-svg-reality`.
+  dependency-boundary reports generated for the
+  `lumina-native-svg-reality` artifact.
 
-These platforms are configured, not yet claimed as passed. Update this section
-with workflow URLs and conclusions after the topic branch is pushed.
+Every functional step listed above succeeded, including repaired-wheel tests,
+the Docker product probe, representative product semantics and benchmark, and
+the Windows production onefile build, notice verification, and frozen native
+probe. Each native-SVG job then failed at its final
+`actions/upload-artifact` step with GitHub's `Artifact storage quota has been
+hit` error. The functional platform evidence is retained here, but the workflow
+conclusion is accurately recorded as failure and no hosted artifacts were
+retained. The ticket-evidence adapter changes still require a fresh run after
+their topic-branch push.
 
 ## Real Bambu Studio and OrcaSlicer evidence
 
