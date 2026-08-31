@@ -25,6 +25,7 @@ from core.model_surface.assembly import (
     MODEL_SURFACE_DISPLAY_Z_BOUNDS_KEY,
     MODEL_SURFACE_LOGICAL_XY_BOUNDS_KEY,
     OverlaySceneResult,
+    PreparedSurfacePattern,
     _pattern_layer_heights_mm,
     _pattern_xy_bounds_mm,
     _pattern_z_bounds_mm,
@@ -804,12 +805,9 @@ def test_pattern_display_bounds_accept_float32_writer_rounding():
     assert _pattern_layer_heights_mm(pattern) == layer_heights_mm
 
 
-@pytest.mark.parametrize("layer_count", [5, 10])
-def test_real_gray_parameters_share_one_domain_across_four_materials(
+def _build_real_gray_vector_pattern(
     layer_count: int,
-) -> None:
-    """The reported canvas survives margins, holes, islands, and contacts."""
-
+) -> tuple[PreparedSurfacePattern, VectorAnalysis, list[str]]:
     canvas_width = 814.0
     canvas_height = 947.0
     target_width_mm = 115.59999084472656
@@ -873,6 +871,16 @@ def test_real_gray_parameters_share_one_domain_across_four_materials(
             "bambu_face_orientation": "down",
         }
     )
+    return pattern, analysis, slot_names
+
+
+@pytest.mark.parametrize("layer_count", [5, 10])
+def test_real_gray_parameters_share_one_domain_across_four_materials(
+    layer_count: int,
+) -> None:
+    """The reported canvas survives margins, holes, islands, and contacts."""
+
+    pattern, analysis, slot_names = _build_real_gray_vector_pattern(layer_count)
 
     domain = read_layered_coordinate_domain(
         pattern.scene,
@@ -883,6 +891,63 @@ def test_real_gray_parameters_share_one_domain_across_four_materials(
     assert domain.layer_heights_mm == (0.08,) * layer_count
     assert _pattern_xy_bounds_mm(pattern) == domain.writer_canvas_bounds_mm
     assert _pattern_z_bounds_mm(pattern) == domain.writer_z_bounds_mm
+
+
+def test_real_gray_backface_survives_y180_model_transform() -> None:
+    """The reported back face remains printable after its model rotation."""
+
+    layer_count = 5
+    pattern, _analysis, slot_names = _build_real_gray_vector_pattern(layer_count)
+    footprint_width_mm = 115.59999084472656
+    footprint_height_mm = 81.89998626708984
+    half_width = footprint_width_mm / 2.0
+    half_height = footprint_height_mm / 2.0
+    footprint = SurfaceFootprint(
+        frame=PlaneFrame(
+            origin=(0.0, 0.0, -1.9),
+            normal=(0.0, 0.0, -1.0),
+            u_axis=(1.0, 0.0, 0.0),
+            v_axis=(0.0, -1.0, 0.0),
+        ),
+        outer=(
+            (-half_width, -half_height),
+            (half_width, -half_height),
+            (half_width, half_height),
+            (-half_width, half_height),
+            (-half_width, -half_height),
+        ),
+        holes=(),
+        bounds_min=(-half_width, -half_height),
+        bounds_max=(half_width, half_height),
+        bounds_width_mm=footprint_width_mm,
+        bounds_height_mm=footprint_height_mm,
+        area_mm2=footprint_width_mm * footprint_height_mm,
+        hole_count=0,
+    )
+    base = trimesh.creation.box(
+        extents=(footprint_width_mm, footprint_height_mm, 3.8)
+    )
+    assembled = build_embedded_overlay_scene(
+        base_mesh=base,
+        pattern_scene=pattern,
+        footprint=footprint,
+        pocket_depth_mm=0.08 * layer_count,
+        base_slot_name="surface_base",
+        base_color=(245, 245, 245),
+        allow_uncut_base=True,
+    )
+    transformed = apply_model_transform_to_overlay_scene(
+        assembled,
+        {"rotation_deg": {"x": 0.0, "y": 180.0, "z": 0.0}},
+    )
+    oriented = orient_overlay_scene_for_print(transformed, "down")
+
+    assert oriented.slot_names == ["surface_base", *slot_names]
+    assert np.all(np.isfinite(np.asarray(oriented.scene.bounds)))
+    for slot_name in slot_names:
+        mesh = oriented.scene.geometry[slot_name]
+        assert isinstance(mesh, trimesh.Trimesh)
+        assert mesh.is_watertight
 
 
 def test_build_embedded_overlay_scene_embeds_full_pattern_depth():

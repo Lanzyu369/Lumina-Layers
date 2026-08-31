@@ -191,6 +191,7 @@ class PreparedVectorSpatialGroups:
     failed_group_count: int
     failed_part_count: int
     failure_types: tuple[tuple[str, int], ...]
+    collapsed_part_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -235,6 +236,26 @@ def _polygon_parts(geometry: BaseGeometry) -> tuple[Polygon, ...]:
 def _coordinate_count(geometry: Polygon) -> int:
     return len(geometry.exterior.coords) - 1 + sum(
         len(ring.coords) - 1 for ring in geometry.interiors
+    )
+
+
+def _scaled_physical_parts(
+    part: Polygon,
+    *,
+    source_index: int,
+    scale: float,
+) -> tuple[_PhysicalPart, ...]:
+    """Scale one source polygon and restore polygon validity at the boundary."""
+
+    physical = affinity.scale(
+        part,
+        xfact=float(scale),
+        yfact=float(scale),
+        origin=(0.0, 0.0),
+    )
+    return tuple(
+        _PhysicalPart(source_index=source_index, geometry=physical_part)
+        for physical_part in _polygon_parts(physical)
     )
 
 
@@ -338,6 +359,13 @@ def _node_group_once(snapped: list[tuple[int, Polygon]]) -> BaseGeometry:
     for cell in cells:
         point = cell.representative_point()
         nearby = source_tree.query(point, predicate="covered_by")
+        if len(nearby) == 0:
+            # A representative point inherits GEOS' fixed-precision model and
+            # can round from the inside of a thin acute cell to just outside
+            # its boundary. Confirm that ambiguous case against the complete
+            # arrangement cell; keep the point test as the normal fast path so
+            # adjacent source polygons may still jointly define other cells.
+            nearby = source_tree.query(cell, predicate="covered_by")
         if len(nearby) > 0:
             accepted.append(cell)
     if not accepted:
@@ -384,6 +412,54 @@ def _polygon_has_ring_contact(polygon: Polygon) -> bool:
     return bool(pairs.size and np.any(pairs[0] < pairs[1]))
 
 
+def _bounded_lattice_translation_candidates(
+    *,
+    grid_mm: float,
+    preferred_directions: Sequence[tuple[int, int]],
+) -> list[tuple[float, float]]:
+    """Return every bounded integer-grid shift in deterministic order.
+
+    Cardinal and diagonal moves retain their historical priority.  The rest
+    of each Chebyshev ring is then searched by Euclidean distance, so narrow
+    contact wedges can use shifts such as two grid units by one without
+    increasing the constructive displacement bound.
+    """
+
+    preferred = list(dict.fromkeys(preferred_directions))
+    result: list[tuple[float, float]] = []
+    for radius in range(1, _MAX_CONTACT_TRANSLATION_GRID_UNITS + 1):
+        ring = {
+            (dx, dy)
+            for dx in range(-radius, radius + 1)
+            for dy in range(-radius, radius + 1)
+            if max(abs(dx), abs(dy)) == radius
+        }
+        ordered_units: list[tuple[int, int]] = []
+        for direction_x, direction_y in preferred:
+            candidate = (direction_x * radius, direction_y * radius)
+            if candidate in ring:
+                ordered_units.append(candidate)
+                ring.remove(candidate)
+        ordered_units.extend(
+            sorted(
+                ring,
+                key=lambda offset: (
+                    offset[0] * offset[0] + offset[1] * offset[1],
+                    offset[0],
+                    offset[1],
+                ),
+            )
+        )
+        result.extend(
+            (
+                float(dx) * float(grid_mm),
+                float(dy) * float(grid_mm),
+            )
+            for dx, dy in ordered_units
+        )
+    return result
+
+
 def _ring_translation_candidates(*, grid_mm: float) -> list[tuple[float, float]]:
     """Return deterministic sub-nozzle translations for touching holes."""
 
@@ -397,11 +473,10 @@ def _ring_translation_candidates(*, grid_mm: float) -> list[tuple[float, float]]
         (-1, 1),
         (-1, -1),
     )
-    return [
-        (float(dx * radius) * grid_mm, float(dy * radius) * grid_mm)
-        for radius in range(1, _MAX_CONTACT_TRANSLATION_GRID_UNITS + 1)
-        for dx, dy in directions
-    ]
+    return _bounded_lattice_translation_candidates(
+        grid_mm=float(grid_mm),
+        preferred_directions=directions,
+    )
 
 
 def _translate_on_physical_grid(
@@ -563,12 +638,10 @@ def _contact_free_translation_candidates(
         (-1, 1),
         (-1, -1),
     ]
-    unique_directions = list(dict.fromkeys(all_directions))
-    return [
-        (float(dx * radius) * grid_mm, float(dy * radius) * grid_mm)
-        for radius in range(1, _MAX_CONTACT_TRANSLATION_GRID_UNITS + 1)
-        for dx, dy in unique_directions
-    ]
+    return _bounded_lattice_translation_candidates(
+        grid_mm=float(grid_mm),
+        preferred_directions=all_directions,
+    )
 
 
 def _separate_unrepresentable_contacts(
@@ -808,6 +881,38 @@ def _prepared_polygons(
     return prepared
 
 
+def _finalize_prepared_writer_geometry(
+    polygons: Sequence[PreparedVectorPolygon],
+    *,
+    grid_mm: float,
+) -> tuple[BaseGeometry, bool]:
+    """Validate and separate shells after integer-ring reconstruction."""
+
+    parts = [polygon.to_geometry(grid_mm) for polygon in polygons]
+    if not parts:
+        raise ValueError("Vector writer geometry requires prepared polygons")
+    if any(not part.is_valid for part in parts):
+        raise ValueError("Vector integer-grid conversion produced invalid rings")
+    aggregate: BaseGeometry = (
+        parts[0] if len(parts) == 1 else MultiPolygon(parts)
+    )
+    if (
+        aggregate.is_valid
+        and not _has_cross_polygon_contact(aggregate)
+        and not any(_polygon_has_ring_contact(part) for part in parts)
+    ):
+        return aggregate, False
+
+    # Keep the individually valid shells distinct while separating contacts.
+    # Passing an invalid touching MultiPolygon through make_valid would union
+    # them and erase the independent-shell contract.
+    separated, _ = _separate_unrepresentable_contacts(
+        GeometryCollection(parts),
+        grid_mm=float(grid_mm),
+    )
+    return separated, True
+
+
 def prepare_vector_run_group(
     geometries: Sequence[BaseGeometry],
     *,
@@ -839,14 +944,12 @@ def prepare_vector_run_group(
         if geometry is None:
             raise ValueError("Vector run group requires polygonal geometry")
         for part in _polygon_parts(geometry):
-            physical = affinity.scale(
-                part,
-                xfact=scale,
-                yfact=scale,
-                origin=(0.0, 0.0),
-            )
-            physical_parts.append(
-                _PhysicalPart(source_index=source_index, geometry=physical)
+            physical_parts.extend(
+                _scaled_physical_parts(
+                    part,
+                    source_index=source_index,
+                    scale=scale,
+                )
             )
             input_coordinate_count += _coordinate_count(part)
 
@@ -915,23 +1018,36 @@ def prepare_vector_run_group(
         )
         if not prepared_group:
             raise ValueError("Vector integer-grid conversion removed a source group")
-        prepared_geometries = [
-            polygon.to_geometry(grid_mm) for polygon in prepared_group
-        ]
-        if any(not geometry.is_valid for geometry in prepared_geometries):
-            raise ValueError("Vector integer-grid conversion produced invalid rings")
-        prepared_geometry: BaseGeometry = (
-            prepared_geometries[0]
-            if len(prepared_geometries) == 1
-            else MultiPolygon(prepared_geometries)
-        )
-        if (
-            not prepared_geometry.is_valid
-            or not _coverage_is_complete(
-                representable_area,
-                float(prepared_geometry.area),
-                effective_policy,
+        prepared_geometry, writer_separated = (
+            _finalize_prepared_writer_geometry(
+                prepared_group,
+                grid_mm=grid_mm,
             )
+        )
+        if writer_separated:
+            separated_contact_group_count += 1
+            prepared_group = _prepared_polygons(
+                prepared_geometry,
+                grid_mm=grid_mm,
+                source_parts=physical_parts,
+                group_indices=group_indices,
+            )
+            prepared_geometry, writer_separated_again = (
+                _finalize_prepared_writer_geometry(
+                    prepared_group,
+                    grid_mm=grid_mm,
+                )
+            )
+            if writer_separated_again:
+                raise ValueError(
+                    "Vector writer-domain shells could not remain independent"
+                )
+        if not prepared_geometry.is_valid:
+            raise ValueError("Vector writer-domain output retains shell contact")
+        if not _coverage_is_complete(
+            representable_area,
+            float(prepared_geometry.area),
+            effective_policy,
         ):
             raise ValueError("Vector integer-grid conversion lost printable coverage")
         output.extend(prepared_group)
@@ -1028,15 +1144,11 @@ def prepare_vector_spatial_groups_best_effort(
         if geometry is None:
             continue
         for part in _polygon_parts(geometry):
-            physical_parts.append(
-                _PhysicalPart(
+            physical_parts.extend(
+                _scaled_physical_parts(
+                    part,
                     source_index=source_index,
-                    geometry=affinity.scale(
-                        part,
-                        xfact=scale,
-                        yfact=scale,
-                        origin=(0.0, 0.0),
-                    ),
+                    scale=scale,
                 )
             )
     if not physical_parts:
@@ -1044,6 +1156,33 @@ def prepare_vector_spatial_groups_best_effort(
 
     shared_grid_mm = _writer_safe_grid_mm(physical_parts, minimum_grid_mm)
     group_policy = replace(effective_policy, grid_mm=shared_grid_mm)
+    source_part_count = len(physical_parts)
+    representable_parts: list[_PhysicalPart] = []
+    collapsed_part_count = 0
+    for part in physical_parts:
+        snapped = set_precision(
+            part.geometry,
+            grid_size=shared_grid_mm,
+            mode="valid_output",
+        )
+        if snapped is None or snapped.is_empty:
+            collapsed_part_count += 1
+            continue
+        representable_parts.append(part)
+    physical_parts = representable_parts
+
+    if not physical_parts:
+        return PreparedVectorSpatialGroups(
+            groups=(),
+            source_geometry_count=len(geometries),
+            source_part_count=source_part_count,
+            prepared_part_count=0,
+            collapsed_part_count=collapsed_part_count,
+            failed_group_count=0,
+            failed_part_count=0,
+            failure_types=(),
+        )
+
     spatial_groups = _nearby_groups(
         physical_parts,
         distance_mm=shared_grid_mm,
@@ -1086,8 +1225,9 @@ def prepare_vector_spatial_groups_best_effort(
     return PreparedVectorSpatialGroups(
         groups=tuple(prepared_groups),
         source_geometry_count=len(geometries),
-        source_part_count=len(physical_parts),
+        source_part_count=source_part_count,
         prepared_part_count=prepared_part_count,
+        collapsed_part_count=collapsed_part_count,
         failed_group_count=failed_group_count,
         failed_part_count=failed_part_count,
         failure_types=tuple(sorted(failure_types.items())),

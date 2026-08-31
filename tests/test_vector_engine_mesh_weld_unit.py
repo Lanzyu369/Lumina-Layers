@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 import xml.etree.ElementTree as ET
 
@@ -266,6 +267,85 @@ def test_incomplete_fast_preparation_uses_local_stepped_fallback(
     _assert_closed(meshes[0], volume=2.0)
     assert stats["failed_source_part_count"] == 0
     assert stats["local_stepped_fallback_applied"] is True
+
+
+def test_writer_zero_residue_is_not_counted_as_built_source_geometry() -> None:
+    """Diagnostics distinguish omitted sub-grid residue from built geometry."""
+
+    meshes, stats = vector_engine._build_source_spatial_groups(
+        (
+            box(0.0, 0.0, 10.0, 10.0),
+            Polygon(
+                [
+                    (10.0, 5.0),
+                    (10.00001, 5.0),
+                    (10.0, 5.00001),
+                ]
+            ),
+        ),
+        height=0.08,
+        z_offset=0.0,
+        scale_factor=1.0,
+    )
+
+    assert len(meshes) == 1
+    _assert_closed(meshes[0], volume=8.0)
+    assert stats["source_part_count"] == 2
+    assert stats["built_source_part_count"] == 1
+    assert stats["collapsed_source_part_count"] == 1
+    assert stats["failed_source_part_count"] == 0
+
+
+def test_material_level_reports_writer_zero_residue(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    mesh = trimesh.creation.box(extents=(1.0, 1.0, 0.08))
+    monkeypatch.setattr(
+        vector_engine,
+        "_build_source_spatial_groups",
+        lambda *_args, **_kwargs: (
+            [mesh],
+            {
+                "source_part_count": 2,
+                "built_source_part_count": 1,
+                "failed_source_part_count": 0,
+                "collapsed_source_part_count": 1,
+                "failure_types": {},
+            },
+        ),
+    )
+    target_logger = logging.getLogger("lumina.core.vector_engine")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.DEBUG, logger="lumina.core.vector_engine")
+    try:
+        result = VectorProcessor._materialize_vector_slabs(
+            {
+                "White": {
+                    "slabs": [
+                        {
+                            "geometry": box(0.0, 0.0, 1.0, 1.0),
+                            "height": 0.08,
+                            "z_offset": 0.0,
+                        }
+                    ],
+                    "mat_id": 0,
+                }
+            },
+            scale_factor=1.0,
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert "White" in result
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None)
+        == "vector_material_writer_zero_residue_collapsed"
+    ]
+    assert len(records) == 1
+    assert records[0].collapsed_source_part_count == 1
 
 
 def test_double_sided_groups_by_material_run_not_svg_shape_count() -> None:
