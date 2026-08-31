@@ -73,5 +73,10 @@ P2 findings below were addressed before the exact-SHA re-review.
 
 ## Exact-SHA re-review
 
-Pending. This section will record the reviewed commit and final independent
-verdict after the review-fix commit is created.
+The runtime and geometry review examined
+`07584903aad9d58b78088b8527b558d18bc64a28`. It found no P0 or P1 issue and
+requested only the two evidence/CI P2 fixes recorded above. The closure review
+then examined `703ff9e62138800310f40e77e1f7e4a7900c52cc`, confirmed both P2s
+closed, and reported no remaining P0, P1, or P2 findings.
+
+Final independent verdict: **Approved**.
