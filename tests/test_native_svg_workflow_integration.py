@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 import trimesh
 
+from core import vector_engine
 from core.pipeline import vector_glb_preview
 from core.layered_coordinate_domain import (
     LAYERED_COORDINATE_DOMAIN_KEY,
@@ -44,6 +45,15 @@ PALETTE_RGB = np.asarray(
     ],
     dtype=np.uint8,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_vector_parse_clip_cache():
+    vector_engine._VECTOR_PARSE_CLIP_CACHE.clear()
+    try:
+        yield
+    finally:
+        vector_engine._VECTOR_PARSE_CLIP_CACHE.clear()
 
 
 def _processor(*, matcher: object | None = None) -> VectorProcessor:
@@ -163,10 +173,26 @@ def test_native_analysis_preserves_component_hierarchy_without_geos_normalizer(
     """Native output must not be partially replaced by legacy GEOS cleanup."""
 
     pytest.importorskip("lumina_svg_core")
+    # Prove this contract cannot pass merely because the exact key was warm.
+    _analyze("component_hierarchy.svg", target_width_mm=5.0)
+    assert vector_engine._VECTOR_PARSE_CLIP_CACHE
+    vector_engine._VECTOR_PARSE_CLIP_CACHE.clear()
+    native_adapter_calls = 0
+    native_analyze_svg = vector_engine.native_svg_adapter.analyze_native_svg
+
+    def record_native_adapter_call(*args, **kwargs):
+        nonlocal native_adapter_calls
+        native_adapter_calls += 1
+        return native_analyze_svg(*args, **kwargs)
 
     def fail_if_called(*_args, **_kwargs):
         raise AssertionError("native analysis re-entered _normalize_contours_many")
 
+    monkeypatch.setattr(
+        vector_engine.native_svg_adapter,
+        "analyze_native_svg",
+        record_native_adapter_call,
+    )
     monkeypatch.setattr(
         "core.vector_engine._normalize_contours_many",
         fail_if_called,
@@ -176,6 +202,7 @@ def test_native_analysis_preserves_component_hierarchy_without_geos_normalizer(
         target_width_mm=5.0,
     )
 
+    assert native_adapter_calls == 1
     assert analysis.stage_timings["contour_normalize_s"] == 0.0
     assert len(analysis.shape_data) == 1
     raw_geometry = analysis.shape_data[0]["poly"]

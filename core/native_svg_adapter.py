@@ -170,7 +170,11 @@ def _collection_paint_metadata(
     source_indices = np.asarray(collection.source_indices)
     source_kinds = np.asarray(collection.source_kinds)
     geometry_shape = (collection.geometry_count,)
-    if rgba.ndim != 2 or rgba.shape != (collection.geometry_count, 4):
+    if (
+        rgba.ndim != 2
+        or rgba.shape != (collection.geometry_count, 4)
+        or rgba.dtype != np.dtype(np.uint8)
+    ):
         raise NativeSvgInternalError(
             "The native SVG result returned invalid material metadata.",
             reason_code="invalid_material_schema",
@@ -178,6 +182,8 @@ def _collection_paint_metadata(
     if (
         draw_indices.shape != geometry_shape
         or source_indices.shape != geometry_shape
+        or draw_indices.dtype != np.dtype(np.int32)
+        or source_indices.dtype != np.dtype(np.int32)
     ):
         raise NativeSvgInternalError(
             "The native SVG result returned invalid draw-order metadata.",
@@ -185,6 +191,7 @@ def _collection_paint_metadata(
         )
     if (
         source_kinds.shape != geometry_shape
+        or source_kinds.dtype != np.dtype(np.int32)
         or np.any(
             (source_kinds != _SOURCE_KIND_FILL)
             & (source_kinds != _SOURCE_KIND_STROKE)

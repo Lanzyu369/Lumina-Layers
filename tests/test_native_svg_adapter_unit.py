@@ -174,6 +174,35 @@ def test_unknown_native_source_kind_fails_closed(
     assert error.value.reason_code == "invalid_source_schema"
 
 
+@pytest.mark.parametrize(
+    ("field_name", "dtype", "reason_code"),
+    [
+        ("rgba", np.int16, "invalid_material_schema"),
+        ("draw_indices", np.int64, "invalid_draw_schema"),
+        ("source_indices", np.int64, "invalid_draw_schema"),
+        ("source_kinds", np.int64, "invalid_source_schema"),
+    ],
+)
+def test_native_paint_metadata_with_wrong_dtype_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    field_name: str,
+    dtype: type[np.generic],
+    reason_code: str,
+) -> None:
+    result = _native_result()
+    collection = result.raw
+    setattr(collection, field_name, getattr(collection, field_name).astype(dtype))
+    monkeypatch.setattr(
+        "core.native_svg_adapter._load_native_module",
+        lambda: _native_module(result),
+    )
+
+    with pytest.raises(CoreProcessingError) as error:
+        analyze_native_svg("fixture.svg", 20.0, 0.02)
+
+    assert error.value.reason_code == reason_code
+
+
 def test_image_vectorizer_origin_preserves_normalized_viewport_anchor(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
