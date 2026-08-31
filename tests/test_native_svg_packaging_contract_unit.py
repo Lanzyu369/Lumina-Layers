@@ -52,6 +52,16 @@ def test_docker_builds_native_runtime_with_python312_before_requirements() -> No
     assert "requirements-native-svg.txt" in dockerfile
 
 
+def test_wheel_commands_resolve_the_package_directory() -> None:
+    pyproject = (
+        ROOT / "native" / "lumina-svg-core" / "pyproject.toml"
+    ).read_text(encoding="utf-8")
+
+    assert pyproject.count("{package}/tools/verify_wheel.py") == 4
+    assert "pytest {package}/tests -q" in pyproject
+    assert "{project}/tools/verify_wheel.py" not in pyproject
+
+
 def test_pyinstaller_collects_native_svg_as_a_required_binary() -> None:
     spec = (ROOT / "lumina_studio.spec").read_text(encoding="utf-8")
 
