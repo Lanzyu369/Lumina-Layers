@@ -196,19 +196,22 @@ jobs:
       - name: Verify bundled native notices
         shell: pwsh
         run: |
-          $archiveEntries = & pyi-archive_viewer --list .\dist\lumina-backend.exe
+          $archiveEntries = & pyi-archive_viewer --list --brief .\dist\lumina-backend.exe
+          $normalizedArchiveEntries = $archiveEntries | ForEach-Object {
+            $_.Trim().Replace('\', '/')
+          }
           $requiredEntries = @(
-            'lumina_svg_core[\\/]LICENSE',
-            'lumina_svg_core[\\/]THIRD_PARTY_NOTICES.md',
-            'lumina_svg_core[\\/]THIRD_PARTY_LICENSES[\\/]Clipper2.txt',
-            'lumina_svg_core[\\/]THIRD_PARTY_LICENSES[\\/]FreeType-Project.txt',
-            'lumina_svg_core[\\/]THIRD_PARTY_LICENSES[\\/]LunaSVG.txt',
-            'lumina_svg_core[\\/]THIRD_PARTY_LICENSES[\\/]PlutoVG.txt',
-            'lumina_svg_core[\\/]THIRD_PARTY_LICENSES[\\/]pybind11.txt',
-            'lumina_svg_core[\\/]THIRD_PARTY_LICENSES[\\/]stb.txt'
+            'lumina_svg_core/LICENSE',
+            'lumina_svg_core/THIRD_PARTY_NOTICES.md',
+            'lumina_svg_core/THIRD_PARTY_LICENSES/Clipper2.txt',
+            'lumina_svg_core/THIRD_PARTY_LICENSES/FreeType-Project.txt',
+            'lumina_svg_core/THIRD_PARTY_LICENSES/LunaSVG.txt',
+            'lumina_svg_core/THIRD_PARTY_LICENSES/PlutoVG.txt',
+            'lumina_svg_core/THIRD_PARTY_LICENSES/pybind11.txt',
+            'lumina_svg_core/THIRD_PARTY_LICENSES/stb.txt'
           )
           foreach ($requiredEntry in $requiredEntries) {
-            if (-not ($archiveEntries -match $requiredEntry)) {
+            if ($normalizedArchiveEntries -notcontains $requiredEntry) {
               throw "Frozen executable is missing required native notice: $requiredEntry"
             }
           }

@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tomllib
 
 import pytest
 from shapely.geometry import box
@@ -62,6 +63,19 @@ def test_wheel_commands_resolve_the_package_directory() -> None:
     assert "{project}/tools/verify_wheel.py" not in pyproject
 
 
+def test_cibuildwheel_installs_test_dependencies_with_the_wheel() -> None:
+    pyproject_path = ROOT / "native" / "lumina-svg-core" / "pyproject.toml"
+    pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+
+    assert pyproject["project"]["optional-dependencies"]["test"] == [
+        "pytest>=8,<10",
+        "shapely>=2,<3",
+    ]
+    cibuildwheel = pyproject["tool"]["cibuildwheel"]
+    assert cibuildwheel["test-extras"] == ["test"]
+    assert "test-requires" not in cibuildwheel
+
+
 def test_pyinstaller_collects_native_svg_as_a_required_binary() -> None:
     spec = (ROOT / "lumina_studio.spec").read_text(encoding="utf-8")
 
@@ -91,6 +105,17 @@ def test_desktop_build_requires_native_svg_before_pyinstaller() -> None:
     )
     pyinstaller_index = build_script.index("pyinstaller lumina_studio.spec")
     assert dependency_check_index < pyinstaller_index
+
+
+def test_windows_onefile_notice_check_compares_normalized_archive_names() -> None:
+    workflow = (
+        ROOT / ".github" / "workflows" / "native-svg-core.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "pyi-archive_viewer --list --brief" in workflow
+    assert ".Trim().Replace('\\', '/')" in workflow
+    assert "-notcontains $requiredEntry" in workflow
+    assert "-match $requiredEntry" not in workflow
 
 
 def _geometry_outcome() -> NativeSvgGeometry:

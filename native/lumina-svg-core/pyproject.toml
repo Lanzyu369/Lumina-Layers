@@ -28,6 +28,9 @@ classifiers = [
 ]
 dependencies = ["numpy>=2.0,<3"]
 
+[project.optional-dependencies]
+test = ["pytest>=8,<10", "shapely>=2,<3"]
+
 [project.urls]
 Repository = "https://github.com/lumina-layer-studio/lumina-svg-core"
 
@@ -63,7 +66,7 @@ build = [
   "cp312-macosx_x86_64",
   "cp312-manylinux_x86_64",
 ]
-test-requires = ["pytest>=8,<10", "numpy>=2,<3", "shapely>=2,<3"]
+test-extras = ["test"]
 test-command = "python {package}/tools/verify_wheel.py --installed && pytest {package}/tests -q"
 
 [tool.cibuildwheel.linux]
