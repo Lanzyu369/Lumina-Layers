@@ -54,6 +54,7 @@ def _native_result(
     status: str = "supported",
     reason_code: str = "",
     source_kind: int = 0,
+    image_vectorizer_origin: bool = False,
 ) -> SimpleNamespace:
     collection = _collection(source_kind=source_kind)
     return SimpleNamespace(
@@ -61,6 +62,8 @@ def _native_result(
         reason_code=reason_code,
         schema_version=1,
         bbox=(10.0, 20.0, 100.0, 50.0),
+        viewport_bounds=(5.0, 6.0, 80.0, 40.0),
+        image_vectorizer_origin=image_vectorizer_origin,
         scale_factor=0.2,
         grid_to_source_unit=1.0,
         recorder_seconds=0.01,
@@ -72,10 +75,18 @@ def _native_result(
     )
 
 
-def _native_module(result: SimpleNamespace) -> SimpleNamespace:
+def _native_module(
+    result: SimpleNamespace,
+    calls: list[tuple[object, ...]] | None = None,
+) -> SimpleNamespace:
+    def analyze_svg(*args: object) -> SimpleNamespace:
+        if calls is not None:
+            calls.append(args)
+        return result
+
     return SimpleNamespace(
         __version__="0.1.0",
-        analyze_svg=lambda *_args, **_kwargs: result,
+        analyze_svg=analyze_svg,
     )
 
 
@@ -105,6 +116,32 @@ def test_supported_result_preserves_lumina_coordinate_contract(
     )
     assert outcome.clipped_shapes[0]["color"] == (255, 0, 0)
     assert outcome.geometry_backend == "native"
+
+
+def test_image_vectorizer_origin_preserves_normalized_viewport_anchor(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    svg_path = tmp_path / "vectorized.svg"
+    svg_path.write_text(
+        "<svg data-lumina-origin='image-vectorizer' viewBox='0 0 100 50'>"
+        "<rect x='10' y='10' width='20' height='20'/></svg>",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "core.native_svg_adapter._load_native_module",
+        lambda: _native_module(
+            _native_result(image_vectorizer_origin=True)
+        ),
+    )
+
+    outcome = analyze_native_svg(str(svg_path), 20.0, 0.02)
+
+    assert isinstance(outcome, NativeSvgGeometry)
+    assert outcome.image_vectorizer_bounds is not None
+    assert outcome.image_vectorizer_bounds.bounds == pytest.approx(
+        (5.0, 6.0, 85.0, 46.0)
+    )
 
 
 def test_adapter_calls_one_vectorized_constructor_per_collection(
@@ -170,6 +207,32 @@ def test_disabled_stroke_expansion_falls_back_before_semantics_change(
         "fixture.svg", 20.0, 0.02, expand_stroke_to_fill=False
     )
 
+    assert outcome == NativeSvgFallback(
+        reason_code="legacy_stroke_policy",
+        native_version="0.1.0",
+    )
+
+
+def test_adapter_disables_native_stroke_kernel_before_analysis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr(
+        "core.native_svg_adapter._load_native_module",
+        lambda: _native_module(
+            _native_result(
+                status="unsupported",
+                reason_code="unsupported_stroke_policy",
+            ),
+            calls,
+        ),
+    )
+
+    outcome = analyze_native_svg(
+        "fixture.svg", 20.0, 0.02, expand_stroke_to_fill=False
+    )
+
+    assert calls == [("fixture.svg", 20.0, 0.02, False)]
     assert outcome == NativeSvgFallback(
         reason_code="legacy_stroke_policy",
         native_version="0.1.0",

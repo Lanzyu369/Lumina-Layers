@@ -1,5 +1,10 @@
-if(NOT DEFINED SOURCE_DIR OR NOT DEFINED EXPECTED_REVISION OR NOT DEFINED PATCH_FILE)
-  message(FATAL_ERROR "Recorder patch verification requires SOURCE_DIR, EXPECTED_REVISION, and PATCH_FILE")
+set(
+  APPROVED_LUNASVG_REVISION
+  "59690a23981489acc3f73b8db229ef57bb69c544"
+)
+
+if(NOT DEFINED SOURCE_DIR OR NOT DEFINED PATCH_FILE)
+  message(FATAL_ERROR "Recorder patch verification requires SOURCE_DIR and PATCH_FILE")
 endif()
 
 execute_process(
@@ -13,9 +18,9 @@ execute_process(
 if(NOT revision_result EQUAL 0)
   message(FATAL_ERROR "Cannot verify LunaSVG revision: ${revision_error}")
 endif()
-if(NOT actual_revision STREQUAL EXPECTED_REVISION)
+if(NOT actual_revision STREQUAL APPROVED_LUNASVG_REVISION)
   message(FATAL_ERROR
-    "LunaSVG recorder patch is pinned to ${EXPECTED_REVISION}, got ${actual_revision}"
+    "LunaSVG recorder patch is pinned to ${APPROVED_LUNASVG_REVISION}, got ${actual_revision}"
   )
 endif()
 

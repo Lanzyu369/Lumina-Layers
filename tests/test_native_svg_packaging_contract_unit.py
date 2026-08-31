@@ -63,6 +63,12 @@ def test_pyinstaller_collects_native_svg_as_a_required_binary() -> None:
     assert "collect_all(LUMINA_SVG_CORE_PACKAGE)" in spec
     assert "console=True" in spec
 
+    native_cmake = (
+        ROOT / "native" / "lumina-svg-core" / "CMakeLists.txt"
+    ).read_text(encoding="utf-8")
+    assert "FILES LICENSE THIRD_PARTY_NOTICES.md" in native_cmake
+    assert "DIRECTORY THIRD_PARTY_LICENSES" in native_cmake
+
 
 def test_desktop_build_requires_native_svg_before_pyinstaller() -> None:
     build_script = (

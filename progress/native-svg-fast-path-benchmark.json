@@ -31,10 +31,7 @@
     "note": "No SVG at or above 50 MiB was found; the 3.77 MB proxy and 14.47 MB real R4C1 fixture were not substituted.",
     "rss_threshold_bytes": 2147483648,
     "searched_roots": [
-      "codex_worktrees",
-      "Downloads",
-      "Desktop",
-      "Documents"
+      "workspace"
     ],
     "status": "unavailable",
     "swap_delta_threshold_bytes": 268435456
@@ -50,37 +47,37 @@
       "artifact_cache_disabled": true,
       "memory_cache_cleared_before_each_run": true
     },
-    "color_match_seconds": 0.117186375,
-    "median_seconds": 0.523676542,
+    "color_match_seconds": 0.132253084,
+    "median_seconds": 0.754103,
     "median_threshold_passed": true,
     "median_threshold_seconds": 1.0,
-    "native_adapter_conversion_seconds": 0.026722416,
-    "native_binding_conversion_seconds": 2.625e-06,
-    "native_geometry_total_seconds": 0.397856792,
-    "native_kernel_seconds": 0.324229334,
-    "native_recorder_seconds": 0.044798542,
-    "orchestration_seconds": 0.008483333,
+    "native_adapter_conversion_seconds": 0.030305542,
+    "native_binding_conversion_seconds": 3.083e-06,
+    "native_geometry_total_seconds": 0.610972958,
+    "native_kernel_seconds": 0.546407292,
+    "native_recorder_seconds": 0.028779333,
+    "orchestration_seconds": 0.010873751,
     "p95_method": "linear_interpolation_r7",
-    "p95_seconds": 0.526985092,
+    "p95_seconds": 0.7589936,
     "p95_threshold_passed": true,
     "p95_threshold_seconds": 1.25,
-    "peak_rss_bytes": 245219328,
-    "range_seconds": 0.003724625,
+    "peak_rss_bytes": 227999744,
+    "range_seconds": 0.006598,
     "swap_delta_bytes": 0,
     "swap_measurement": "system_vm.swapusage",
     "warm_runs_seconds": [
-      0.523628084,
-      0.527352709,
-      0.523676542
+      0.754103,
+      0.752939,
+      0.759537
     ],
     "warmup_runs": 1
   },
   "output": {
-    "coordinate_count": 128354,
-    "fingerprint": "e5e5e4472f0470e5a8506304e94d2a1455566c61dad06e5e9f57ba5ce925aafb",
+    "coordinate_count": 138507,
+    "fingerprint": "aaeef75e60ccc3c8911bd2430fa36983ffdf583c65d6bc413658786509be7655",
     "geometry_backend": "native",
     "matched_recipe_count": 254,
-    "matched_shape_count": 4676,
+    "matched_shape_count": 6036,
     "native_cache_hit": false,
     "native_schema_version": 1,
     "native_version": "0.1.0",
@@ -89,7 +86,7 @@
     "silhouette_hole_count": 0,
     "source_color_count": 2921,
     "stable_across_runs": true,
-    "visible_shape_count": 4676
+    "visible_shape_count": 6036
   },
   "parameters": {
     "build_type": "Release",
@@ -100,7 +97,7 @@
   },
   "real_r4c1": {
     "byte_size": 14467678,
-    "capability_check_seconds": 0.058017667,
+    "capability_check_seconds": 0.082804709,
     "classification": "real_r4c1",
     "native_by_default_ready": false,
     "path": "private/R4C1.svg",

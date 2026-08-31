@@ -128,12 +128,16 @@ SVG viewport and requested model width. Curve flattening uses the requested
 physical tolerance in millimetres divided by that actual scale. It never
 assumes a 100-unit SVG width.
 
-Cubic and quadratic curves are subdivided adaptively until their geometric
-error is within their allocated physical error budget. Arcs are converted
-without fixed point-count sampling. The conversion from a global physical
-tolerance to a local path tolerance includes the largest singular value of
-the accumulated affine transform, so non-uniform scale and shear cannot
-silently loosen the model-space error bound.
+Cubic and quadratic curves that retain an error-bounded representation are
+subdivided adaptively until their geometric error is within their allocated
+physical error budget. The pinned LunaSVG version lowers SVG arcs to fixed
+cubic segments before the recorder can observe their original parameters.
+Version 0.1 therefore rejects original `A`/`a` commands, circles, ellipses,
+and rounded rectangles for whole-document fallback instead of treating those
+fixed segments as tolerance-bounded input. The conversion from a global
+physical tolerance to a local path tolerance includes the largest singular
+value of the accumulated affine transform, so non-uniform scale and shear
+cannot silently loosen the model-space error bound.
 
 Fill paths retain their nonzero/even-odd rule. Stroke width, dashes, joins,
 caps, and miter limits are expanded in the path's local coordinate system,
@@ -163,14 +167,20 @@ error budget is divided as follows: at most 40% for curve flattening, at most
 20% for integer quantization, and at least 40% reserved for the existing
 post-analysis normalization/simplification stages. The measured end-to-end
 boundary displacement must remain within the original requested physical
-tolerance. Topology tests additionally reject any budget allocation that
-collapses a component, hole, or separating gap which survives the current
-reference implementation.
+tolerance. The integer grid still preserves representable sub-tolerance
+slivers, holes, and gaps. A theoretical pairwise ambiguity becomes a
+document-level fallback only when the affected topology feature exceeds the
+one total physical tolerance; below that significance floor, CI differential
+tests enforce the declared boundary/area budget instead of running a complete
+alternate topology audit in production.
 
 Draw-order occlusion uses a spatial index so a shape is compared only with
-later shapes whose bounding boxes overlap. Geometry is processed and released
-in bounded batches; the implementation does not retain a complete alternate
-copy of every intermediate representation.
+later shapes whose bounding boxes overlap. Exact source segments are deduped,
+and topology candidate work has a fail-closed document cap. Version 0.1 keeps
+the raw, visible, and silhouette collections required by the public result
+contract, but it does not retain or compute a complete alternate shadow
+analysis. Clip sizing/bounds prepasses derive the one authoritative output
+scale and bbox only; they never supply alternate output geometry.
 
 ### 4. Native result contract
 
@@ -235,7 +245,10 @@ Version 0.1 must support the common static vector semantics already present in
 Lumina's generated and reported user SVGs:
 
 - `svg`, `g`, `defs`, `symbol`, and `use` structure;
-- `path`, `rect`, `circle`, `ellipse`, `line`, `polyline`, and `polygon`;
+- `path` without original arc commands, unrounded `rect`, `line`, `polyline`,
+  and `polygon`; circle, ellipse, rounded-rectangle, and arc sources fall back
+  in version 0.1 because the pinned recorder cannot prove their physical
+  flattening error;
 - nested affine transforms and viewBox/preserveAspectRatio layout;
 - presentation attributes, inline styles, inherited styles, and supported
   stylesheet selectors used by the compatibility corpus;
@@ -304,11 +317,16 @@ Required workflow fixtures cover:
 - large-format tiling;
 - Bambu Studio and OrcaSlicer opening/slicing of representative 3MF outputs.
 
-The original R4C1 file is currently unavailable locally. It must not be
-replaced or mislabeled by another fixture. Development proceeds with the
-available 55 MB related SVG, `test_images/benchmark.svg`, and synthetic
-R4C1-shaped fixtures; the original file is added to private reality validation
-when recovered.
+The original R4C1 file was recovered for private reality validation with
+SHA-256
+`da52ef12bdd37a0bd47970649a70582862331a606c151bff05bfb2f6e265f160`
+and size 14,467,678 bytes. It contains 3,410 stroke-only paths using
+`vector-effect="non-scaling-stroke"`, so version 0.1 correctly returns
+`unsupported_vector_effect` and performs one whole-document fallback. The
+native-by-default R4C1 release gate is therefore not met. The public 3.77 MB
+proxy remains the performance gate and is never labeled as R4C1. A separate
+previously described 55 MB regression document remains unavailable and is not
+silently substituted.
 
 ## Performance and resource acceptance
 

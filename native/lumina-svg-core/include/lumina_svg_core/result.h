@@ -40,6 +40,8 @@ struct NativeResult : public std::enable_shared_from_this<NativeResult> {
     std::string reason_code{"invalid_svg"};
     uint32_t schema_version{RESULT_SCHEMA_VERSION};
     std::array<double, 4> bbox{{0, 0, 0, 0}};
+    std::array<double, 4> viewport_bounds{{0, 0, 0, 0}};
+    bool image_vectorizer_origin{false};
     double scale_factor{0};
     double grid_to_source_unit{0};
     double max_flattening_error_mm{0};

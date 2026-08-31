@@ -274,7 +274,7 @@ git commit -m "build(vector): package native SVG runtime"
 
 - [ ] **Step 1: Write a failing complete-entry benchmark contract**
 
-Require public `VectorProcessor.analyze_svg` wall time, native parse/kernel time, NumPy/Shapely conversion time, adapter time, full color-match time, warm median/p95/range, peak RSS, swap delta, input SHA/size/structure counts, host manifest, and output fingerprint. The real R4C1 hash is a separate pending record; the proxy cannot satisfy it.
+Require public `VectorProcessor.analyze_svg` wall time, native parse/kernel time, NumPy/Shapely conversion time, adapter time, full color-match time, warm median/p95/range, peak RSS, swap delta, input SHA/size/structure counts, host manifest, and output fingerprint. The recovered real R4C1 hash and its `unsupported_vector_effect` fallback are a separate record; the proxy cannot satisfy it.
 
 - [ ] **Step 2: Run the contract test and verify RED**
 

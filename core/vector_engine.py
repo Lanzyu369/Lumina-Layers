@@ -4806,6 +4806,10 @@ class VectorProcessor:
             stage_timings["contour_normalize_s"] = 0.0
             stage_timings["native_svg_s"] = 0.0
             stage_timings["native_result_conversion_s"] = 0.0
+            stage_timings["native_recorder_s"] = 0.0
+            stage_timings["native_kernel_s"] = 0.0
+            stage_timings["native_binding_conversion_s"] = 0.0
+            stage_timings["native_adapter_s"] = 0.0
             stage_timings["native_cache_hit"] = (
                 stage_timings.get("geometry_backend") == "native"
             )
@@ -6929,6 +6933,35 @@ class VectorProcessor:
                         group_idx
                     )
             representative_by_color[rgb] = chosen
+
+        # Native integer-grid reconstruction can introduce area noise several
+        # orders of magnitude below the physical error budget. Do not let that
+        # noise choose a later SVG fill as a near-colour group's canonical
+        # query; for numerically tied dominant areas, preserve source order.
+        for group_members in representative_members:
+            max_area = max(
+                float(stats_by_color[member]["area"])
+                for member in group_members
+            )
+            dominant_members = [
+                member
+                for member in group_members
+                if math.isclose(
+                    float(stats_by_color[member]["area"]),
+                    max_area,
+                    rel_tol=1e-9,
+                    abs_tol=1e-12,
+                )
+            ]
+            canonical = min(
+                dominant_members,
+                key=lambda member: (
+                    int(stats_by_color[member]["first_index"]),
+                    member,
+                ),
+            )
+            for member in group_members:
+                representative_by_color[member] = canonical
 
         if all(
             representative_by_color.get(rgb, rgb) == rgb

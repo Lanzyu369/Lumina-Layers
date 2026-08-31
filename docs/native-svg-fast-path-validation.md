@@ -25,18 +25,18 @@ parse/clip memory cache before every run. No artifact cache is configured.
 | Check | Result |
 |---|---:|
 | Proxy identity | SHA-256 `d078cf4293623d934759c2688e13a00491e525055e7595069a0ecc4f078842fb`, 3,767,519 bytes |
-| Complete warm runs | 0.523628084 s, 0.527352709 s, 0.523676542 s |
-| Warm median / gate | 0.523676542 s / 1.0 s — PASS |
-| Warm p95 / gate | 0.526985092 s / 1.25 s — PASS |
-| Native recorder | 0.044798542 s median |
-| Native kernel | 0.324229334 s median |
-| Binding conversion | 0.000002625 s median |
-| Shapely adapter conversion | 0.026722416 s median |
-| LUT color matching | 0.117186375 s median |
-| Peak process RSS | 245,219,328 bytes |
+| Complete warm runs | 0.754103000 s, 0.752939000 s, 0.759537000 s |
+| Warm median / gate | 0.754103000 s / 1.0 s — PASS |
+| Warm p95 / gate | 0.758993600 s / 1.25 s — PASS |
+| Native recorder | 0.028779333 s median |
+| Native kernel | 0.546407292 s median |
+| Binding conversion | 0.000003083 s median |
+| Shapely adapter conversion | 0.030305542 s median |
+| LUT color matching | 0.132253084 s median |
+| Peak process RSS | 227,999,744 bytes |
 | Measured swap growth | 0 bytes |
-| Complete output | 3,097 raw shapes, 4,676 visible/matched shapes, 128,354 coordinates |
-| Stable output fingerprint | `e5e5e4472f0470e5a8506304e94d2a1455566c61dad06e5e9f57ba5ce925aafb` |
+| Complete output | 3,097 raw shapes, 6,036 visible/matched shapes, 138,507 coordinates |
+| Stable output fingerprint | `aaeef75e60ccc3c8911bd2430fa36983ffdf583c65d6bc413658786509be7655` |
 
 The proxy is not the real R4C1 document and is not the previously described
 55 MB regression document. The real R4C1 fixture was recovered separately:
@@ -56,17 +56,20 @@ for that separate regression fixture therefore remain pending; neither the
 ## Packaging evidence
 
 The standalone package built and installed as a clean CPython 3.12 macOS arm64
-wheel. Its 56 package tests passed against the installed extension. The sdist
-and wheel both contain the complete LunaSVG, PlutoVG, Clipper2, FreeType, and
-stb license texts in addition to the Apache-2.0 project license.
+wheel. Its 166 package tests passed against the installed extension from
+outside the source tree. The sdist and wheel both contain the complete LunaSVG,
+PlutoVG, Clipper2, FreeType, stb, and pybind11 license texts in addition to the
+Apache-2.0 project license. A separate clean CPython 3.12 environment also
+built the extension from that sdist and passed the same 166 tests.
 
 A real macOS arm64 PyInstaller onefile binary was built at a temporary output
 path and invoked through Lumina's `--native-svg-self-test` public probe. The
 probe returned native version `0.1.0`, result schema `1`, one raw geometry, two
 visible geometries, two silhouette components, and fingerprint
-`692e760e5fc54a88f2844fd6702c2ee940691bdef675a8a23de4ff1963197ae8`.
-Cold onefile extraction and execution took 19.80 seconds with peak RSS
-51,347,456 bytes and no swap growth.
+`e98dcd0f413d8ea56e59f9f2e7feee240c6d9052dbdb9b3e76248e416e47b469`.
+Cold onefile extraction and execution took 16.94 seconds with peak RSS
+51,085,312 bytes and no swap growth. The archive inspection also confirmed the
+compiled `_lumina_svg_core` extension and bundled pybind11 license were present.
 
 `.github/workflows/native-svg-core.yml` must provide the remaining pull-request
 evidence:
@@ -92,8 +95,8 @@ working/output directory.
 
 | Slicer | Input structure | Result | Normalized toolpath |
 |---|---|---|---|
-| Bambu Studio 02.07.01.62 | 6 objects, 252 triangles, 5 materials | PASS, exit 0 | 6,249 motion commands, 5,162 extrusion moves, 13 tool changes, fingerprint `28eaadb260b9eaf5a5140db4e62f9f5e0a2f30b210a32a9b5aea828e379105c1` |
-| OrcaSlicer 2.4.0 | 6 objects, 252 triangles, 5 materials | PASS, exit 0 | 6,724 motion commands, 5,358 extrusion moves, 13 tool changes, fingerprint `2c8886b64c794555715b99be6a00afba3d4dbee68cd55b3f69363b76b2756c00` |
+| Bambu Studio 02.07.01.62 | 6 objects, 252 triangles, 5 materials | PASS, exit 0 | 6,290 motion commands, 5,196 extrusion moves, 13 tool changes, fingerprint `a1f70248d30056f5857404321b558d7aca35eb58007a0d3500a6936773fc64a5` |
+| OrcaSlicer 2.4.0 | 6 objects, 252 triangles, 5 materials | PASS, exit 0 | 6,697 motion commands, 5,347 extrusion moves, 13 tool changes, fingerprint `d8bb70105d78547b4ac2c80732d36640689dd526f9f9b811907752aabb651739` |
 
 Toolpath fingerprints exclude comments and blank lines, then hash normalized
 motion and tool-change commands. A zero exit without emitted extrusion is a
@@ -131,6 +134,12 @@ python scripts/benchmark_native_svg_analysis.py \
   --output progress/native-svg-fast-path-benchmark.json
 ```
 
+The benchmark writes the report first and then exits non-zero when the public
+entry exceeds the 1.0 s median or 1.25 s p95 limits. When an explicit 50 MiB
+fixture is measured, the 2 GiB RSS and 256 MiB swap-delta limits are fatal too;
+an unavailable large fixture remains recorded as unavailable rather than being
+replaced by a smaller input.
+
 Generate retained product artifacts without requiring a slicer on the runner:
 
 ```bash
@@ -148,6 +157,11 @@ python scripts/verify_native_svg_slicer_outputs.py \
 - The production adapter performs three vectorized Shapely ragged-array
   conversions. It does not run a second Python GEOS union, `make_valid`, or
   per-ring repair loop.
+- After native composition, the C++ kernel performs a lightweight structural
+  and material census over the already-built result arrays: offset monotonicity,
+  closed rings, raw/visible paint identity, and a non-empty silhouette. This is
+  an invariant check only; it does not compute alternate geometry or run a
+  shadow parser.
 - CSS reference semantics, existing legacy stroke policy, unsupported paint
   semantics, fixed-segment LunaSVG arc sources (`A`/`a`, circle, ellipse, and
   rounded rectangle), and the real R4C1 `non-scaling-stroke` case fall back

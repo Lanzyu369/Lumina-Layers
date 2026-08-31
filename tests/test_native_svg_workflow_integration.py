@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 import trimesh
 
+from core.pipeline import vector_glb_preview
 from core.layered_coordinate_domain import (
     LAYERED_COORDINATE_DOMAIN_KEY,
     LayeredCoordinateDomain,
@@ -125,6 +126,88 @@ def _package_part_names(path: Path) -> set[str]:
             if metadata.attrib.get("key") == "name":
                 names.add(metadata.attrib.get("value", ""))
     return names
+
+
+def _world_node_mesh(scene: trimesh.Scene, node_name: str) -> trimesh.Trimesh:
+    transform, geometry_name = scene.graph.get(node_name)
+    mesh = scene.geometry[geometry_name].copy()
+    mesh.apply_transform(transform)
+    return mesh
+
+
+@pytest.mark.parametrize(
+    "svg",
+    [
+        "<svg><path d='M0 0H10V10Z'>",
+        "<svg><path d='M0 0H10V10Z' fill='red&bogus;'/></svg>",
+        "<svg><path d='M0 0H10V10Z&bogus;' fill='red'/></svg>",
+        "<svg><path d='M0 0H10V10Z' fill='red' fill='blue'/></svg>",
+    ],
+)
+def test_lumina_public_analysis_rejects_malformed_xml(
+    svg: str,
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("lumina_svg_core")
+    svg_path = tmp_path / "malformed.svg"
+    svg_path.write_text(svg, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Invalid SVG"):
+        _processor().analyze_svg(str(svg_path), 20.0)
+
+
+def test_native_image_vectorizer_preserves_preview_canvas_glb_anchor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("lumina_svg_core")
+    svg_path = tmp_path / "image-vectorizer.svg"
+    svg_path.write_text(
+        "<?xml version='1.0'?><!-- leading comment -->"
+        "<svg xmlns='http://www.w3.org/2000/svg' aria-label='1 > 0' "
+        "viewBox='0 0 20 20' "
+        "data-lumina-origin='image&#45;vectorizer'>"
+        "<rect x='0' y='0' width='4' height='20' fill='#dc143c'/>"
+        "<rect x='16' y='0' width='4' height='20' fill='#0064f0'/>"
+        "</svg>",
+        encoding="utf-8",
+    )
+    processor = _processor()
+    analysis = processor.analyze_svg(str(svg_path), 20.0)
+
+    assert analysis.stage_timings["geometry_backend"] == "native"
+    assert analysis.image_vectorizer_bounds is not None
+    assert analysis.image_vectorizer_bounds.bounds == pytest.approx(
+        (0.0, 0.0, 20.0, 20.0)
+    )
+
+    scene = processor.build_mesh(
+        analysis,
+        thickness_mm=1.2,
+        structure_mode="Single-sided",
+    )
+    output_path = tmp_path / "image-vectorizer-preview.glb"
+    monkeypatch.setenv("LUMINA_VECTOR_GLB_KERNEL", "v2")
+    vector_glb_preview.export_vector_glb_preview(
+        scene=scene,
+        output_path=str(output_path),
+        structure_mode="Single-sided",
+        color_mode="4-Color (RYBW)",
+        preview_colors=_preview_colors_with_names(analysis),
+        slot_list=list(analysis.slot_names),
+        analysis=analysis,
+        ctx={},
+    )
+
+    loaded = trimesh.load(output_path, force="scene")
+    anchor = _world_node_mesh(
+        loaded,
+        vector_glb_preview.PREVIEW_CANVAS_BOUNDS_NODE_NAME,
+    )
+    np.testing.assert_allclose(
+        anchor.bounds,
+        np.asarray([[0.0, 0.0, 0.0], [20.0, 20.0, 0.0]]),
+    )
 
 
 def test_native_analysis_builds_single_double_and_auxiliary_meshes() -> None:

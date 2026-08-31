@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <locale>
 #include <memory>
 #include <sstream>
@@ -31,7 +34,7 @@ lunasvg::Box documentViewport(lunasvg::Document& document)
             static_cast<float>(x), static_cast<float>(y),
             static_cast<float>(width), static_cast<float>(height));
     }
-    return lunasvg::Box(0, 0, document.width(), document.height());
+    return {};
 }
 
 RecorderResult finishRecording(std::unique_ptr<lunasvg::Document> document)
@@ -44,6 +47,7 @@ RecorderResult finishRecording(std::unique_ptr<lunasvg::Document> document)
     result.schema_version = recorded.schema_version;
     result.bounds = recorded.bounds;
     result.viewport = documentViewport(*document);
+    result.image_vectorizer_origin = recorded.image_vectorizer_origin;
     if(!recorded.capability_issues.empty()) {
         result.status = "unsupported";
         result.reason_code = recorded.capability_issues.front();
@@ -60,7 +64,20 @@ RecorderResult finishRecording(std::unique_ptr<lunasvg::Document> document)
 
 RecorderResult recordPaintCommands(const std::string& filename)
 {
-    return finishRecording(lunasvg::Document::loadFromFile(filename));
+    return recordPaintCommandsPath(std::filesystem::u8path(filename));
+}
+
+RecorderResult recordPaintCommandsPath(const std::filesystem::path& filename)
+{
+    std::ifstream stream(filename, std::ios::binary);
+    if(!stream)
+        return {};
+    std::string svg{
+        std::istreambuf_iterator<char>(stream),
+        std::istreambuf_iterator<char>()};
+    if(stream.bad())
+        return {};
+    return finishRecording(lunasvg::Document::loadFromData(svg));
 }
 
 RecorderResult recordPaintCommandsSvg(const std::string& svg)

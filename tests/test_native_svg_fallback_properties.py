@@ -183,3 +183,27 @@ def test_every_unknown_presentation_attribute_fails_closed(
 
     assert isinstance(outcome, NativeSvgFallback)
     assert outcome.reason_code == "unsupported_property"
+
+
+def test_internal_doctype_entity_falls_back_to_legacy_red_geometry(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("lumina_svg_core")
+    path = tmp_path / "internal-entity.svg"
+    path.write_text(
+        "<!DOCTYPE svg [<!ENTITY c '#f00'>]>"
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'>"
+        "<rect width='10' height='10' fill='&c;'/></svg>",
+        encoding="utf-8",
+    )
+    vector_engine._VECTOR_PARSE_CLIP_CACHE.clear()
+
+    analysis = _processor().analyze_svg(str(path), 20.0)
+
+    assert analysis.stage_timings["geometry_backend"] == "legacy"
+    assert analysis.stage_timings["native_fallback_reason"] == (
+        "unsupported_doctype"
+    )
+    assert [shape["color"] for shape in analysis.shape_data] == [
+        (255, 0, 0)
+    ]

@@ -300,7 +300,7 @@ Flatten locally, apply dash array/offset in local arclength, use ClipperOffset w
 
 - [ ] **Step 4: Apply clip scopes and occlusion in source order**
 
-Replay recorder group/clip commands as a stack. Intersect each paint with its active vector clips. Reject mask/group-opacity/partial-alpha scopes before geometry. Process paints in reverse draw order, query later overlapping bounds with an R-tree-equivalent packed bbox index, subtract only overlaps, and release temporary batches. Build the final silhouette in C++.
+Replay recorder group/clip commands as a stack. Intersect each paint with its active vector clips. Reject mask/group-opacity/partial-alpha scopes before geometry. Process paints in reverse draw order, query later overlapping bounds with an R-tree-equivalent packed bbox index, subtract only overlaps, and build the final silhouette in C++. Keep only the raw/visible/silhouette collections required by the result contract; do not compute a full alternate shadow analysis. Deduplicate exact source segments and fail closed when the topology-candidate cap is exceeded.
 
 - [ ] **Step 5: Run semantic tests and verify GREEN**
 
@@ -420,7 +420,7 @@ git commit -m "ci(native-svg): build and verify platform wheels"
 
 - [ ] **Step 1: Write a failing benchmark-manifest contract**
 
-Require fixture SHA-256, byte size, canvas, path/stroke/transform/clip counts, host manifest, at least three warm runs, median/range, peak RSS, swap delta, region count, coordinate count, and output fingerprint. Reserve the real R4C1 SHA `da52ef12bdd37a0bd47970649a70582862331a606c151bff05bfb2f6e265f160` without claiming the proxy is that file.
+Require fixture SHA-256, byte size, canvas, path/stroke/transform/clip counts, host manifest, at least three warm runs, median/range, peak RSS, swap delta, region count, coordinate count, and output fingerprint. Record the recovered real R4C1 SHA `da52ef12bdd37a0bd47970649a70582862331a606c151bff05bfb2f6e265f160` separately, including its fail-closed `unsupported_vector_effect` outcome, without claiming the proxy is that file.
 
 - [ ] **Step 2: Run the manifest test and verify RED**
 

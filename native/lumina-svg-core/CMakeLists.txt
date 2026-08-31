@@ -53,3 +53,13 @@ install(
   LIBRARY DESTINATION . COMPONENT lumina_svg_core
   RUNTIME DESTINATION . COMPONENT lumina_svg_core
 )
+install(
+  FILES LICENSE THIRD_PARTY_NOTICES.md
+  DESTINATION .
+  COMPONENT lumina_svg_core
+)
+install(
+  DIRECTORY THIRD_PARTY_LICENSES
+  DESTINATION .
+  COMPONENT lumina_svg_core
+)

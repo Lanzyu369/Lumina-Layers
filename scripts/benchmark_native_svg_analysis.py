@@ -703,6 +703,24 @@ def _benchmark_manifest(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _threshold_failures(manifest: dict[str, Any]) -> list[str]:
+    failures: list[str] = []
+    measurement = manifest["measurement"]
+    for name in ("median_threshold_passed", "p95_threshold_passed"):
+        if measurement.get(name) is not True:
+            failures.append(f"measurement.{name}")
+
+    large = manifest["large_regression"]
+    if large.get("status") == "measured":
+        for name in (
+            "rss_threshold_passed",
+            "swap_delta_threshold_passed",
+        ):
+            if large.get(name) is not True:
+                failures.append(f"large_regression.{name}")
+    return failures
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -751,6 +769,12 @@ def main() -> None:
         encoding="utf-8",
     )
     print(json.dumps(manifest, indent=2, sort_keys=True))
+    failures = _threshold_failures(manifest)
+    if failures:
+        raise SystemExit(
+            "Native SVG benchmark thresholds failed: "
+            + ", ".join(failures)
+        )
 
 
 if __name__ == "__main__":

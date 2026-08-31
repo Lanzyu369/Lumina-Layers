@@ -16,6 +16,14 @@ rectangles also return `unsupported_arc` in 0.1 because LunaSVG's resolved
 path currently exposes only a fixed cubic approximation rather than the
 original arc parameters needed to honor Lumina's physical error budget.
 
+`analyze_svg()` and `analyze_svg_svg()` accept an optional `allow_strokes`
+boolean (default `True`). Callers that must preserve a separate legacy stroke
+policy can pass `False`; the recorder then returns
+`unsupported_stroke_policy` before running the geometry kernel.
+Dash arrays containing a zero-length entry return
+`unsupported_zero_length_dash` in 0.1 because zero-length dash caps and phase
+recovery require additional reference parity coverage.
+
 ## Build
 
 ```bash

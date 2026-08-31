@@ -57,6 +57,10 @@ def _native_geometry() -> NativeSvgGeometry:
         stage_timings={
             "native_svg_s": 0.03,
             "native_result_conversion_s": 0.01,
+            "native_recorder_s": 0.004,
+            "native_kernel_s": 0.012,
+            "native_binding_conversion_s": 0.002,
+            "native_adapter_s": 0.006,
             "geometry_backend": "native",
             "native_fallback_reason": "",
         },
@@ -203,3 +207,9 @@ def test_native_cache_hit_preserves_backend_identity(
     assert first.stage_timings["geometry_backend"] == "native"
     assert second.stage_timings["geometry_backend"] == "native"
     assert second.stage_timings["native_cache_hit"] is True
+    assert second.stage_timings["native_svg_s"] == 0.0
+    assert second.stage_timings["native_result_conversion_s"] == 0.0
+    assert second.stage_timings["native_recorder_s"] == 0.0
+    assert second.stage_timings["native_kernel_s"] == 0.0
+    assert second.stage_timings["native_binding_conversion_s"] == 0.0
+    assert second.stage_timings["native_adapter_s"] == 0.0

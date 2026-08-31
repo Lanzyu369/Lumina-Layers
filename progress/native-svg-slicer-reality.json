@@ -18,16 +18,16 @@
     },
     "geometry_backend": "native",
     "glb": {
-      "byte_size": 6036,
+      "byte_size": 5964,
       "geometry_count": 5,
       "path": "native-svg-reality.glb",
-      "sha256": "b927f70aac4e9863f3e0f398c6a097ac95fc628029ffe9bbb479e6f8002345e7"
+      "sha256": "58d840947240c572a51a04971aa784db789bbde0e1e0e1a391e3053172aed1c5"
     },
     "native_version": "0.1.0",
     "projects": {
       "BambuStudio": {
         "build_item_count": 1,
-        "byte_size": 33071,
+        "byte_size": 32810,
         "material_count": 5,
         "object_count": 6,
         "part_names": [
@@ -38,12 +38,12 @@
           "Yellow"
         ],
         "path": "native-svg-BambuStudio.3mf",
-        "sha256": "a369d31d75fe299eb47d1f4d2f9300c0e3c8cf437f82b52282a62627766731c4",
+        "sha256": "038be1de8448b74343004d0724d9996d65b1007cc6fc7f4e740e0a6e6c2483e4",
         "triangle_count": 252
       },
       "OrcaSlicer": {
         "build_item_count": 1,
-        "byte_size": 32107,
+        "byte_size": 31846,
         "material_count": 5,
         "object_count": 6,
         "part_names": [
@@ -54,7 +54,7 @@
           "Yellow"
         ],
         "path": "native-svg-OrcaSlicer.3mf",
-        "sha256": "c1e2f452609a5bec0e2b7e5af4d17301033c8007634cea1fea6e0236a566e944",
+        "sha256": "d06f5e52401600469f3e50393c7a5ede974b08740c3a3bf1d77f781c344de27d",
         "triangle_count": 252
       }
     },
@@ -77,15 +77,15 @@
         "--slice",
         "0",
         "--outputdir",
-        "/private/tmp/lumina-native-svg-reality-20260831-e/toolpaths/BambuStudio/run-1-rm9kb9xt",
-        "/private/tmp/lumina-native-svg-reality-20260831-e/native-svg-BambuStudio.3mf"
+        "/private/tmp/lumina-native-svg-reality-final-2/toolpaths/BambuStudio/run-1-g2go2zne",
+        "/private/tmp/lumina-native-svg-reality-final-2/native-svg-BambuStudio.3mf"
       ],
-      "duration_seconds": 0.24713,
+      "duration_seconds": 0.354938,
       "executable": "/Applications/BambuStudio.app/Contents/MacOS/BambuStudio",
       "exit_code": 0,
       "input": {
         "build_item_count": 1,
-        "byte_size": 33071,
+        "byte_size": 32810,
         "material_count": 5,
         "object_count": 6,
         "part_names": [
@@ -96,7 +96,7 @@
           "Yellow"
         ],
         "path": "native-svg-BambuStudio.3mf",
-        "sha256": "a369d31d75fe299eb47d1f4d2f9300c0e3c8cf437f82b52282a62627766731c4",
+        "sha256": "038be1de8448b74343004d0724d9996d65b1007cc6fc7f4e740e0a6e6c2483e4",
         "triangle_count": 252
       },
       "reason": "",
@@ -110,21 +110,21 @@
             "--slice",
             "0",
             "--outputdir",
-            "/private/tmp/lumina-native-svg-reality-20260831-e/toolpaths/BambuStudio/run-1-rm9kb9xt",
-            "/private/tmp/lumina-native-svg-reality-20260831-e/native-svg-BambuStudio.3mf"
+            "/private/tmp/lumina-native-svg-reality-final-2/toolpaths/BambuStudio/run-1-g2go2zne",
+            "/private/tmp/lumina-native-svg-reality-final-2/native-svg-BambuStudio.3mf"
           ],
-          "duration_seconds": 0.121577,
+          "duration_seconds": 0.235387,
           "exit_code": 0,
-          "output_directory": "run-1-rm9kb9xt",
+          "output_directory": "run-1-g2go2zne",
           "reason": "",
           "status": "passed",
           "stderr_tail": "",
-          "stdout_tail": "[2026-08-31 05:15:30.117867] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
+          "stdout_tail": "[2026-08-31 08:26:05.179205] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
           "toolpath": {
-            "extrusion_move_count": 5162,
-            "fingerprint": "28eaadb260b9eaf5a5140db4e62f9f5e0a2f30b210a32a9b5aea828e379105c1",
-            "motion_command_count": 6249,
-            "normalized_byte_size": 158672,
+            "extrusion_move_count": 5196,
+            "fingerprint": "a1f70248d30056f5857404321b558d7aca35eb58007a0d3500a6936773fc64a5",
+            "motion_command_count": 6290,
+            "normalized_byte_size": 159163,
             "tool_change_count": 13
           },
           "toolpath_files": [
@@ -140,21 +140,21 @@
             "--slice",
             "0",
             "--outputdir",
-            "/private/tmp/lumina-native-svg-reality-20260831-e/toolpaths/BambuStudio/run-2-1kh0czxa",
-            "/private/tmp/lumina-native-svg-reality-20260831-e/native-svg-BambuStudio.3mf"
+            "/private/tmp/lumina-native-svg-reality-final-2/toolpaths/BambuStudio/run-2-lwwm13t7",
+            "/private/tmp/lumina-native-svg-reality-final-2/native-svg-BambuStudio.3mf"
           ],
-          "duration_seconds": 0.125553,
+          "duration_seconds": 0.119551,
           "exit_code": 0,
-          "output_directory": "run-2-1kh0czxa",
+          "output_directory": "run-2-lwwm13t7",
           "reason": "",
           "status": "passed",
           "stderr_tail": "",
-          "stdout_tail": "[2026-08-31 05:15:30.247845] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
+          "stdout_tail": "[2026-08-31 08:26:05.375779] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
           "toolpath": {
-            "extrusion_move_count": 5162,
-            "fingerprint": "28eaadb260b9eaf5a5140db4e62f9f5e0a2f30b210a32a9b5aea828e379105c1",
-            "motion_command_count": 6249,
-            "normalized_byte_size": 158672,
+            "extrusion_move_count": 5196,
+            "fingerprint": "a1f70248d30056f5857404321b558d7aca35eb58007a0d3500a6936773fc64a5",
+            "motion_command_count": 6290,
+            "normalized_byte_size": 159163,
             "tool_change_count": 13
           },
           "toolpath_files": [
@@ -165,12 +165,12 @@
       "stable_across_runs": true,
       "status": "passed",
       "stderr_tail": "",
-      "stdout_tail": "[2026-08-31 05:15:30.117867] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
+      "stdout_tail": "[2026-08-31 08:26:05.179205] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
       "toolpath": {
-        "extrusion_move_count": 5162,
-        "fingerprint": "28eaadb260b9eaf5a5140db4e62f9f5e0a2f30b210a32a9b5aea828e379105c1",
-        "motion_command_count": 6249,
-        "normalized_byte_size": 158672,
+        "extrusion_move_count": 5196,
+        "fingerprint": "a1f70248d30056f5857404321b558d7aca35eb58007a0d3500a6936773fc64a5",
+        "motion_command_count": 6290,
+        "normalized_byte_size": 159163,
         "tool_change_count": 13
       },
       "toolpath_files": [
@@ -187,15 +187,15 @@
         "--slice",
         "0",
         "--outputdir",
-        "/private/tmp/lumina-native-svg-reality-20260831-e/toolpaths/OrcaSlicer/run-1-_ytae_zv",
-        "/private/tmp/lumina-native-svg-reality-20260831-e/native-svg-OrcaSlicer.3mf"
+        "/private/tmp/lumina-native-svg-reality-final-2/toolpaths/OrcaSlicer/run-1-545ais0d",
+        "/private/tmp/lumina-native-svg-reality-final-2/native-svg-OrcaSlicer.3mf"
       ],
-      "duration_seconds": 0.242888,
+      "duration_seconds": 0.333408,
       "executable": "/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer",
       "exit_code": 0,
       "input": {
         "build_item_count": 1,
-        "byte_size": 32107,
+        "byte_size": 31846,
         "material_count": 5,
         "object_count": 6,
         "part_names": [
@@ -206,7 +206,7 @@
           "Yellow"
         ],
         "path": "native-svg-OrcaSlicer.3mf",
-        "sha256": "c1e2f452609a5bec0e2b7e5af4d17301033c8007634cea1fea6e0236a566e944",
+        "sha256": "d06f5e52401600469f3e50393c7a5ede974b08740c3a3bf1d77f781c344de27d",
         "triangle_count": 252
       },
       "reason": "",
@@ -220,21 +220,21 @@
             "--slice",
             "0",
             "--outputdir",
-            "/private/tmp/lumina-native-svg-reality-20260831-e/toolpaths/OrcaSlicer/run-1-_ytae_zv",
-            "/private/tmp/lumina-native-svg-reality-20260831-e/native-svg-OrcaSlicer.3mf"
+            "/private/tmp/lumina-native-svg-reality-final-2/toolpaths/OrcaSlicer/run-1-545ais0d",
+            "/private/tmp/lumina-native-svg-reality-final-2/native-svg-OrcaSlicer.3mf"
           ],
-          "duration_seconds": 0.122827,
+          "duration_seconds": 0.21574,
           "exit_code": 0,
-          "output_directory": "run-1-_ytae_zv",
+          "output_directory": "run-1-545ais0d",
           "reason": "",
           "status": "passed",
           "stderr_tail": "",
           "stdout_tail": "",
           "toolpath": {
-            "extrusion_move_count": 5358,
-            "fingerprint": "2c8886b64c794555715b99be6a00afba3d4dbee68cd55b3f69363b76b2756c00",
-            "motion_command_count": 6724,
-            "normalized_byte_size": 168625,
+            "extrusion_move_count": 5347,
+            "fingerprint": "d8bb70105d78547b4ac2c80732d36640689dd526f9f9b811907752aabb651739",
+            "motion_command_count": 6697,
+            "normalized_byte_size": 168269,
             "tool_change_count": 13
           },
           "toolpath_files": [
@@ -250,21 +250,21 @@
             "--slice",
             "0",
             "--outputdir",
-            "/private/tmp/lumina-native-svg-reality-20260831-e/toolpaths/OrcaSlicer/run-2-fbi8ebp6",
-            "/private/tmp/lumina-native-svg-reality-20260831-e/native-svg-OrcaSlicer.3mf"
+            "/private/tmp/lumina-native-svg-reality-final-2/toolpaths/OrcaSlicer/run-2-xn8qgwph",
+            "/private/tmp/lumina-native-svg-reality-final-2/native-svg-OrcaSlicer.3mf"
           ],
-          "duration_seconds": 0.120061,
+          "duration_seconds": 0.117668,
           "exit_code": 0,
-          "output_directory": "run-2-fbi8ebp6",
+          "output_directory": "run-2-xn8qgwph",
           "reason": "",
           "status": "passed",
           "stderr_tail": "",
           "stdout_tail": "",
           "toolpath": {
-            "extrusion_move_count": 5358,
-            "fingerprint": "2c8886b64c794555715b99be6a00afba3d4dbee68cd55b3f69363b76b2756c00",
-            "motion_command_count": 6724,
-            "normalized_byte_size": 168625,
+            "extrusion_move_count": 5347,
+            "fingerprint": "d8bb70105d78547b4ac2c80732d36640689dd526f9f9b811907752aabb651739",
+            "motion_command_count": 6697,
+            "normalized_byte_size": 168269,
             "tool_change_count": 13
           },
           "toolpath_files": [
@@ -277,10 +277,10 @@
       "stderr_tail": "",
       "stdout_tail": "",
       "toolpath": {
-        "extrusion_move_count": 5358,
-        "fingerprint": "2c8886b64c794555715b99be6a00afba3d4dbee68cd55b3f69363b76b2756c00",
-        "motion_command_count": 6724,
-        "normalized_byte_size": 168625,
+        "extrusion_move_count": 5347,
+        "fingerprint": "d8bb70105d78547b4ac2c80732d36640689dd526f9f9b811907752aabb651739",
+        "motion_command_count": 6697,
+        "normalized_byte_size": 168269,
         "tool_change_count": 13
       },
       "toolpath_files": [

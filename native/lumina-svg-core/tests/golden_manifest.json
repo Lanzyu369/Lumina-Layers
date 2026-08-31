@@ -17,7 +17,7 @@
         "0-0-255-255": 79.998466,
         "255-0-0-255": 15.999693
       },
-      "fingerprint": "878f4f85f2564c6ca5435ebbd909330e93a5e85b0a0cc2cf07f414fb469fe150"
+      "fingerprint": "62052e43181ac6039d598dd161cd4fd4b3c428fc8f85716e06b49aa744283906"
     },
     {
       "file": "fill_rules_transforms.svg",
@@ -29,8 +29,8 @@
       "raw_components": 2,
       "visible_components": 2,
       "visible_holes": 1,
-      "area_by_rgba": {"229-57-53-255": 3192.004045},
-      "fingerprint": "67118c04bc54b7a02fcfebcab6204789a7171382d399893b18ff626ab4941264"
+      "area_by_rgba": {"229-57-53-255": 3192.000041},
+      "fingerprint": "fc77756a1c2649bbc63aa62786120ee3381c51c7e80d96b2756d91fe96f8e295"
     },
     {
       "file": "strokes_clips_occlusion.svg",
@@ -43,12 +43,12 @@
       "visible_components": 7,
       "visible_holes": 0,
       "area_by_rgba": {
-        "142-36-170-255": 599.988492,
-        "239-83-80-255": 4349.895354,
-        "30-136-229-255": 550.010664,
-        "67-160-71-255": 499.99041
+        "142-36-170-255": 600.002634,
+        "239-83-80-255": 4349.993651,
+        "30-136-229-255": 550.002756,
+        "67-160-71-255": 500.000959
       },
-      "fingerprint": "80b7463d2211463730e0013a3b724909f198f1c39ec7487ca4289478d7322724"
+      "fingerprint": "6699eba17f02ef263a586c1286e7500374250712210ae6f8c63f4caf177a1336"
     },
     {
       "file": "css_use.svg",
@@ -61,10 +61,10 @@
       "visible_components": 4,
       "visible_holes": 2,
       "area_by_rgba": {
-        "0-150-136-255": 72.008801,
-        "38-50-56-255": 127.970392
+        "0-150-136-255": 71.991831,
+        "38-50-56-255": 128.015647
       },
-      "fingerprint": "27c6304193c051e047850c953eb2daeec60c5593882d2fefbb6cf4ab9a0d76fc"
+      "fingerprint": "6e68910768187573441e789051b799f385dc60eefcf10549aaaa92d3a6a2bf51"
     },
     {
       "file": "overlap_islands.svg",
@@ -77,10 +77,10 @@
       "visible_components": 4,
       "visible_holes": 1,
       "area_by_rgba": {
-        "244-67-54-255": 1424.985396,
-        "33-150-243-255": 1100.029812
+        "244-67-54-255": 1425.0,
+        "33-150-243-255": 1100.0
       },
-      "fingerprint": "37eb3e497504abf4df81577004ff27f0a81b186fb56491ac895571f0c38ab72d"
+      "fingerprint": "c9a809047e46fccba4a556776c392feb3ed4de9a6fc7b39c601e4dbb3e8caba7"
     }
   ]
 }

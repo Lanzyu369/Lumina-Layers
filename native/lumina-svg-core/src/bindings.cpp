@@ -4,10 +4,12 @@
 
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
+#include <pybind11/stl/filesystem.h>
 #include <pybind11/stl.h>
 
 #include <array>
 #include <chrono>
+#include <filesystem>
 #include <string>
 
 namespace py = pybind11;
@@ -161,6 +163,12 @@ PYBIND11_MODULE(_lumina_svg_core, module)
         .def_readonly("stroke", &lunasvg::PaintCommand::stroke)
         .def_readonly("group_opacity", &lunasvg::PaintCommand::group_opacity)
         .def_readonly("source_index", &lunasvg::PaintCommand::source_index)
+        .def_readonly(
+            "relative_path_operation_count",
+            &lunasvg::PaintCommand::relative_path_operation_count)
+        .def_readonly(
+            "transform_operation_count",
+            &lunasvg::PaintCommand::transform_operation_count)
         .def_readonly("source_kind", &lunasvg::PaintCommand::source_kind);
 
     py::class_<lumina_svg_core::RecorderResult>(module, "RecorderResult")
@@ -175,6 +183,8 @@ PYBIND11_MODULE(_lumina_svg_core, module)
             return py::make_tuple(value.viewport.x, value.viewport.y,
                                   value.viewport.w, value.viewport.h);
         })
+        .def_readonly("image_vectorizer_origin",
+                      &lumina_svg_core::RecorderResult::image_vectorizer_origin)
         .def_property_readonly("commands", &commands);
 
     py::class_<lumina_svg_core::GeometryCollectionView>(module, "GeometryCollection")
@@ -220,6 +230,14 @@ PYBIND11_MODULE(_lumina_svg_core, module)
             return py::make_tuple(value.bbox[0], value.bbox[1],
                                   value.bbox[2], value.bbox[3]);
         })
+        .def_property_readonly("viewport_bounds", [](const lumina_svg_core::NativeResult& value) {
+            return py::make_tuple(value.viewport_bounds[0],
+                                  value.viewport_bounds[1],
+                                  value.viewport_bounds[2],
+                                  value.viewport_bounds[3]);
+        })
+        .def_readonly("image_vectorizer_origin",
+                      &lumina_svg_core::NativeResult::image_vectorizer_origin)
         .def_readonly("scale_factor", &lumina_svg_core::NativeResult::scale_factor)
         .def_readonly("grid_to_source_unit", &lumina_svg_core::NativeResult::grid_to_source_unit)
         .def_readonly("max_flattening_error_mm", &lumina_svg_core::NativeResult::max_flattening_error_mm)
@@ -237,10 +255,9 @@ PYBIND11_MODULE(_lumina_svg_core, module)
             return collectionView(value, value.silhouette);
         });
 
-    module.def("record_paint_commands", [](const py::object& path) {
-        auto filename = py::str(path).cast<std::string>();
+    module.def("record_paint_commands", [](const std::filesystem::path& path) {
         py::gil_scoped_release release;
-        return lumina_svg_core::recordPaintCommands(filename);
+        return lumina_svg_core::recordPaintCommandsPath(path);
     }, py::arg("path"));
 
     module.def("record_paint_commands_svg", [](const std::string& svg) {
@@ -248,15 +265,15 @@ PYBIND11_MODULE(_lumina_svg_core, module)
         return lumina_svg_core::recordPaintCommandsSvg(svg);
     }, py::arg("svg"));
 
-    module.def("analyze_svg", [](const py::object& path,
+    module.def("analyze_svg", [](const std::filesystem::path& path,
                                   double targetWidthMm,
-                                  double toleranceMm) {
-        auto filename = py::str(path).cast<std::string>();
+                                  double toleranceMm,
+                                  bool allowStrokes) {
         std::shared_ptr<lumina_svg_core::NativeResult> result;
         {
             py::gil_scoped_release release;
-            result = lumina_svg_core::analyzeSvg(
-                filename, targetWidthMm, toleranceMm);
+            result = lumina_svg_core::analyzeSvgPath(
+                path, targetWidthMm, toleranceMm, allowStrokes);
         }
         const auto conversionStarted = std::chrono::steady_clock::now();
         auto value = py::cast(result);
@@ -264,16 +281,17 @@ PYBIND11_MODULE(_lumina_svg_core, module)
             std::chrono::steady_clock::now() - conversionStarted).count();
         return value;
     }, py::arg("path"), py::arg("target_width_mm"),
-       py::arg("tolerance_mm"));
+       py::arg("tolerance_mm"), py::arg("allow_strokes") = true);
 
     module.def("analyze_svg_svg", [](const std::string& svg,
                                       double targetWidthMm,
-                                      double toleranceMm) {
+                                      double toleranceMm,
+                                      bool allowStrokes) {
         std::shared_ptr<lumina_svg_core::NativeResult> result;
         {
             py::gil_scoped_release release;
             result = lumina_svg_core::analyzeSvgData(
-                svg, targetWidthMm, toleranceMm);
+                svg, targetWidthMm, toleranceMm, allowStrokes);
         }
         const auto conversionStarted = std::chrono::steady_clock::now();
         auto value = py::cast(result);
@@ -281,5 +299,5 @@ PYBIND11_MODULE(_lumina_svg_core, module)
             std::chrono::steady_clock::now() - conversionStarted).count();
         return value;
     }, py::arg("svg"), py::arg("target_width_mm"),
-       py::arg("tolerance_mm"));
+       py::arg("tolerance_mm"), py::arg("allow_strokes") = true);
 }

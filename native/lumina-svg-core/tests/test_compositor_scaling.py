@@ -34,8 +34,32 @@ def _elapsed(count: int) -> float:
     return elapsed
 
 
+def _overlapping_elapsed(count: int) -> float:
+    rectangles = "".join(
+        '<rect width="10" height="10" fill="#ff0000"/>'
+        for _ in range(count)
+    )
+    started = perf_counter()
+    result = lumina_svg_core.analyze_svg_svg(
+        f'<svg viewBox="0 0 10 10">{rectangles}</svg>',
+        target_width_mm=10.0,
+        tolerance_mm=0.02,
+    )
+    elapsed = perf_counter() - started
+    assert result.status == "supported"
+    assert result.visible.component_count == 1
+    return elapsed
+
+
 def test_disconnected_paints_do_not_scale_quadratically() -> None:
     small_elapsed = min(_elapsed(600) for _ in range(2))
     large_elapsed = min(_elapsed(2400) for _ in range(2))
 
     assert large_elapsed < small_elapsed * 8.0 + 0.05
+
+
+def test_fully_overlapping_paints_use_incremental_suffix_coverage() -> None:
+    small_elapsed = min(_overlapping_elapsed(200) for _ in range(2))
+    large_elapsed = min(_overlapping_elapsed(800) for _ in range(2))
+
+    assert large_elapsed < small_elapsed * 10.0 + 0.05

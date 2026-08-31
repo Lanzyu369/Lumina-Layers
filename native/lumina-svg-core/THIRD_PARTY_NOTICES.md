@@ -42,3 +42,13 @@ Portions of this software are based in part on the work of the FreeType Team.
 PlutoVG compiles the bundled stb image, image-write, and TrueType headers.
 Their dual MIT/public-domain notice is distributed as
 `THIRD_PARTY_LICENSES/stb.txt`.
+
+## pybind11
+
+- Source: https://github.com/pybind/pybind11
+- Version: 3.1.0
+- License: BSD-3-Clause
+- Copyright: Wenzel Jakob and pybind11 contributors
+
+The generated Python extension statically compiles pybind11 header code. Its
+complete license is distributed as `THIRD_PARTY_LICENSES/pybind11.txt`.

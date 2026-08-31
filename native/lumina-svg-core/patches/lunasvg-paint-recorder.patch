@@ -1,5 +1,5 @@
 diff --git a/include/lunasvg.h b/include/lunasvg.h
-index 74f43bb..cbd1f59 100644
+index 74f43bb..e5c5416 100644
 --- a/include/lunasvg.h
 +++ b/include/lunasvg.h
 @@ -23,6 +23,7 @@
@@ -10,7 +10,7 @@ index 74f43bb..cbd1f59 100644
  #include <cstdint>
  #include <memory>
  #include <string>
-@@ -491,6 +492,64 @@ public:
+@@ -491,6 +492,67 @@ public:
    float f{0}; ///< The vertical translation offset.
  };
  
@@ -62,12 +62,15 @@ index 74f43bb..cbd1f59 100644
 +  PaintStrokeStyle stroke;
 +  float group_opacity{1};
 +  int32_t source_index{-1};
++  uint32_t relative_path_operation_count{0};
++  uint32_t transform_operation_count{0};
 +  std::string source_kind;
 +};
 +
 +struct LUNASVG_API PaintCommandList {
 +  uint32_t schema_version{PAINT_COMMAND_SCHEMA_VERSION};
 +  Box bounds;
++  bool image_vectorizer_origin{false};
 +  std::vector<PaintCommand> commands;
 +  std::vector<std::string> capability_issues;
 +};
@@ -75,7 +78,7 @@ index 74f43bb..cbd1f59 100644
  class SVGNode;
  class SVGTextNode;
  class SVGElement;
-@@ -816,6 +875,16 @@ public:
+@@ -816,6 +878,16 @@ public:
     */
    Element documentElement() const;
  
@@ -92,13 +95,14 @@ index 74f43bb..cbd1f59 100644
    Document(Document &&);
    Document &operator=(Document &&);
    ~Document();
-@@ -826,9 +895,14 @@ private:
+@@ -826,9 +898,15 @@ private:
    Document &operator=(const Document &) = delete;
    SVGRootElement *rootElement(bool layoutIfNeeded = false) const;
    bool parse(const char *data, size_t length);
 +  int32_t allocateSourceIndex();
    std::unique_ptr<SVGRootElement> m_rootElement;
 +  std::vector<std::string> m_capabilityIssues;
++  bool m_imageVectorizerOrigin{false};
 +  int32_t m_nextSourceIndex{0};
    friend class SVGURIReference;
    friend class SVGNode;
@@ -108,16 +112,27 @@ index 74f43bb..cbd1f59 100644
  
  } // namespace lunasvg
 diff --git a/source/graphics.cpp b/source/graphics.cpp
-index 248c087..b5d9b5c 100644
+index 248c087..ea5ab31 100644
 --- a/source/graphics.cpp
 +++ b/source/graphics.cpp
-@@ -512,26 +512,36 @@ std::shared_ptr<Canvas> Canvas::create(const Rect& extents)
+@@ -510,33 +510,62 @@ std::shared_ptr<Canvas> Canvas::create(const Rect& extents)
+     return create(extents.x, extents.y, extents.w, extents.h);
+ }
  
++std::shared_ptr<Canvas> Canvas::createRecorder()
++{
++    auto canvas = std::shared_ptr<Canvas>(new Canvas(0, 0, 1, 1));
++    canvas->m_recordingOnly = true;
++    return canvas;
++}
++
  void Canvas::setColor(const Color& color)
  {
 -    setColor(color.redF(), color.greenF(), color.blueF(), color.alphaF());
 +    m_solidPaint = color;
 +    m_hasSolidPaint = true;
++    if(m_recordingOnly)
++        return;
 +    plutovg_canvas_set_rgba(m_canvas, color.redF(), color.greenF(), color.blueF(), color.alphaF());
  }
  
@@ -128,32 +143,143 @@ index 248c087..b5d9b5c 100644
 +    };
 +    m_solidPaint = Color(toByte(r), toByte(g), toByte(b), toByte(a));
 +    m_hasSolidPaint = true;
++    if(m_recordingOnly)
++        return;
      plutovg_canvas_set_rgba(m_canvas, r, g, b, a);
  }
  
  void Canvas::setLinearGradient(float x1, float y1, float x2, float y2, SpreadMethod spread, const GradientStops& stops, const Transform& transform)
  {
 +    m_hasSolidPaint = false;
++    if(m_recordingOnly)
++        return;
      plutovg_canvas_set_linear_gradient(m_canvas, x1, y1, x2, y2, static_cast<plutovg_spread_method_t>(spread), stops.data(), stops.size(), &transform.matrix());
  }
  
  void Canvas::setRadialGradient(float cx, float cy, float r, float fx, float fy, SpreadMethod spread, const GradientStops& stops, const Transform& transform)
  {
 +    m_hasSolidPaint = false;
++    if(m_recordingOnly)
++        return;
      plutovg_canvas_set_radial_gradient(m_canvas, cx, cy, r, fx, fy, 0.f, static_cast<plutovg_spread_method_t>(spread), stops.data(), stops.size(), &transform.matrix());
  }
  
  void Canvas::setTexture(const Canvas& source, TextureType type, float opacity, const Transform& transform)
  {
 +    m_hasSolidPaint = false;
++    if(m_recordingOnly)
++        return;
      plutovg_canvas_set_texture(m_canvas, source.surface(), static_cast<plutovg_texture_type_t>(type), opacity, &transform.matrix());
  }
  
+ void Canvas::fillPath(const Path& path, FillRule fillRule, const Transform& transform)
+ {
++    if(m_recordingOnly)
++        return;
+     plutovg_canvas_set_matrix(m_canvas, &m_translation);
+     plutovg_canvas_transform(m_canvas, &transform.matrix());
+     plutovg_canvas_set_fill_rule(m_canvas, static_cast<plutovg_fill_rule_t>(fillRule));
+@@ -546,6 +575,8 @@ void Canvas::fillPath(const Path& path, FillRule fillRule, const Transform& tran
+ 
+ void Canvas::strokePath(const Path& path, const StrokeData& strokeData, const Transform& transform)
+ {
++    if(m_recordingOnly)
++        return;
+     plutovg_canvas_set_matrix(m_canvas, &m_translation);
+     plutovg_canvas_transform(m_canvas, &transform.matrix());
+     plutovg_canvas_set_line_width(m_canvas, strokeData.lineWidth());
+@@ -560,6 +591,8 @@ void Canvas::strokePath(const Path& path, const StrokeData& strokeData, const Tr
+ 
+ void Canvas::fillText(const std::u32string_view& text, const Font& font, const Point& origin, const Transform& transform)
+ {
++    if(m_recordingOnly)
++        return;
+     plutovg_canvas_set_matrix(m_canvas, &m_translation);
+     plutovg_canvas_transform(m_canvas, &transform.matrix());
+     plutovg_canvas_set_fill_rule(m_canvas, PLUTOVG_FILL_RULE_NON_ZERO);
+@@ -570,6 +603,8 @@ void Canvas::fillText(const std::u32string_view& text, const Font& font, const P
+ 
+ void Canvas::strokeText(const std::u32string_view& text, float strokeWidth, const Font& font, const Point& origin, const Transform& transform)
+ {
++    if(m_recordingOnly)
++        return;
+     plutovg_canvas_set_matrix(m_canvas, &m_translation);
+     plutovg_canvas_transform(m_canvas, &transform.matrix());
+     plutovg_canvas_set_line_width(m_canvas, strokeWidth);
+@@ -585,6 +620,8 @@ void Canvas::strokeText(const std::u32string_view& text, float strokeWidth, cons
+ 
+ void Canvas::clipPath(const Path& path, FillRule clipRule, const Transform& transform)
+ {
++    if(m_recordingOnly)
++        return;
+     plutovg_canvas_set_matrix(m_canvas, &m_translation);
+     plutovg_canvas_transform(m_canvas, &transform.matrix());
+     plutovg_canvas_set_fill_rule(m_canvas, static_cast<plutovg_fill_rule_t>(clipRule));
+@@ -593,6 +630,8 @@ void Canvas::clipPath(const Path& path, FillRule clipRule, const Transform& tran
+ 
+ void Canvas::clipRect(const Rect& rect, FillRule clipRule, const Transform& transform)
+ {
++    if(m_recordingOnly)
++        return;
+     plutovg_canvas_set_matrix(m_canvas, &m_translation);
+     plutovg_canvas_transform(m_canvas, &transform.matrix());
+     plutovg_canvas_set_fill_rule(m_canvas, static_cast<plutovg_fill_rule_t>(clipRule));
+@@ -601,6 +640,8 @@ void Canvas::clipRect(const Rect& rect, FillRule clipRule, const Transform& tran
+ 
+ void Canvas::drawImage(const Bitmap& image, const Rect& dstRect, const Rect& srcRect, const Transform& transform)
+ {
++    if(m_recordingOnly)
++        return;
+     auto xScale = dstRect.w / srcRect.w;
+     auto yScale = dstRect.h / srcRect.h;
+     plutovg_matrix_t matrix = { xScale, 0, 0, yScale, -srcRect.x * xScale, -srcRect.y * yScale };
+@@ -615,6 +656,8 @@ void Canvas::drawImage(const Bitmap& image, const Rect& dstRect, const Rect& src
+ 
+ void Canvas::blendCanvas(const Canvas& canvas, BlendMode blendMode, float opacity)
+ {
++    if(m_recordingOnly)
++        return;
+     plutovg_matrix_t matrix = { 1, 0, 0, 1, static_cast<float>(canvas.x()), static_cast<float>(canvas.y()) };
+     plutovg_canvas_set_matrix(m_canvas, &m_translation);
+     plutovg_canvas_set_operator(m_canvas, static_cast<plutovg_operator_t>(blendMode));
+@@ -624,11 +667,15 @@ void Canvas::blendCanvas(const Canvas& canvas, BlendMode blendMode, float opacit
+ 
+ void Canvas::save()
+ {
++    if(m_recordingOnly)
++        return;
+     plutovg_canvas_save(m_canvas);
+ }
+ 
+ void Canvas::restore()
+ {
++    if(m_recordingOnly)
++        return;
+     plutovg_canvas_restore(m_canvas);
+ }
+ 
+@@ -644,6 +691,8 @@ int Canvas::height() const
+ 
+ void Canvas::convertToLuminanceMask()
+ {
++    if(m_recordingOnly)
++        return;
+     auto width = plutovg_surface_get_width(m_surface);
+     auto height = plutovg_surface_get_height(m_surface);
+     auto stride = plutovg_surface_get_stride(m_surface);
 diff --git a/source/graphics.h b/source/graphics.h
-index 7e6bc12..152d3ef 100644
+index 7e6bc12..9661d7c 100644
 --- a/source/graphics.h
 +++ b/source/graphics.h
-@@ -518,6 +518,9 @@ public:
+@@ -511,6 +511,7 @@ public:
+     static std::shared_ptr<Canvas> create(const Bitmap& bitmap);
+     static std::shared_ptr<Canvas> create(float x, float y, float width, float height);
+     static std::shared_ptr<Canvas> create(const Rect& extents);
++    static std::shared_ptr<Canvas> createRecorder();
+ 
+     void setColor(const Color& color);
+     void setColor(float r, float g, float b, float a);
+@@ -518,6 +519,9 @@ public:
      void setRadialGradient(float cx, float cy, float r, float fx, float fy, SpreadMethod spread, const GradientStops& stops, const Transform& transform);
      void setTexture(const Canvas& source, TextureType type, float opacity, const Transform& transform);
  
@@ -163,17 +289,18 @@ index 7e6bc12..152d3ef 100644
      void fillPath(const Path& path, FillRule fillRule, const Transform& transform);
      void strokePath(const Path& path, const StrokeData& strokeData, const Transform& transform);
  
-@@ -553,6 +556,8 @@ private:
+@@ -553,6 +557,9 @@ private:
      plutovg_surface_t* m_surface;
      plutovg_canvas_t* m_canvas;
      plutovg_matrix_t m_translation;
 +    Color m_solidPaint{Color::Transparent};
 +    bool m_hasSolidPaint{true};
++    bool m_recordingOnly{false};
      const int m_x;
      const int m_y;
  };
 diff --git a/source/lunasvg.cpp b/source/lunasvg.cpp
-index 0a4399f..e7ab7a3 100644
+index 0a4399f..f3a960f 100644
 --- a/source/lunasvg.cpp
 +++ b/source/lunasvg.cpp
 @@ -5,6 +5,8 @@
@@ -185,20 +312,34 @@ index 0a4399f..e7ab7a3 100644
  
  int lunasvg_version()
  {
-@@ -520,6 +522,42 @@ Element Document::documentElement() const
+@@ -520,6 +522,56 @@ Element Document::documentElement() const
      return m_rootElement.get();
  }
  
 +PaintCommandList Document::recordPaintCommands() const
 +{
 +    PaintCommandList result;
-+    result.bounds = boundingBox();
++    result.image_vectorizer_origin = m_imageVectorizerOrigin;
 +    result.capability_issues = m_capabilityIssues;
 +    if(!result.capability_issues.empty())
 +        return result;
 +
-+    auto bounds = Rect(result.bounds);
-+    auto canvas = Canvas::create(bounds);
++    rootElement(true)->transverse([this, &result](SVGElement* element) {
++        const auto& clipPath = element->getAttribute(PropertyID::Clip_Path);
++        if(!clipPath.empty() && clipPath != "none" && clipPath != "inherit"
++                && element->clipper() == nullptr)
++            result.capability_issues.emplace_back("unresolved_clip_path");
++        if(element->id() == ElementID::Use) {
++            auto useElement = static_cast<SVGUseElement*>(element);
++            if(useElement->getTargetElement(this) == nullptr)
++                result.capability_issues.emplace_back("unresolved_reference");
++        }
++    });
++    if(!result.capability_issues.empty())
++        return result;
++
++    result.bounds = boundingBox();
++    auto canvas = Canvas::createRecorder();
 +    SVGRenderState state(nullptr, nullptr, Transform::Identity,
 +                         SVGRenderMode::Painting, canvas, &result);
 +    rootElement(true)->render(state);
@@ -229,10 +370,90 @@ index 0a4399f..e7ab7a3 100644
  {
      if(layoutIfNeeded)
 diff --git a/source/svgelement.cpp b/source/svgelement.cpp
-index 7d62cc6..078c2eb 100644
+index 7d62cc6..65102ed 100644
 --- a/source/svgelement.cpp
 +++ b/source/svgelement.cpp
-@@ -126,6 +126,7 @@ std::unique_ptr<SVGElement> SVGElement::create(Document* document, ElementID id)
+@@ -7,9 +7,79 @@
+ #include "svgrenderstate.h"
+ 
+ #include <cassert>
++#include <cctype>
++#include <limits>
+ 
+ namespace lunasvg {
+ 
++namespace {
++
++uint32_t saturatingIncrement(uint32_t value)
++{
++    return value == std::numeric_limits<uint32_t>::max()
++        ? value : value + 1;
++}
++
++uint32_t computeRelativePathOperationCount(std::string_view value)
++{
++    uint32_t count = 0;
++    char command = 0;
++    bool previousWasExponent = false;
++    for(size_t index = 0; index < value.size(); ++index) {
++        const char current = value[index];
++        if(std::isalpha(static_cast<unsigned char>(current))) {
++            if(current != 'e' && current != 'E')
++                command = current;
++            previousWasExponent = current == 'e' || current == 'E';
++            continue;
++        }
++        const bool numberStart = std::isdigit(static_cast<unsigned char>(current))
++            || current == '.'
++            || ((current == '+' || current == '-') && !previousWasExponent);
++        if(numberStart && command >= 'a' && command <= 'z')
++            count = saturatingIncrement(count);
++        previousWasExponent = false;
++        if(numberStart) {
++            while(index + 1 < value.size()) {
++                const char next = value[index + 1];
++                if(std::isdigit(static_cast<unsigned char>(next)) || next == '.') {
++                    ++index;
++                    continue;
++                }
++                if((next == 'e' || next == 'E') && index + 2 < value.size()) {
++                    ++index;
++                    if(value[index + 1] == '+' || value[index + 1] == '-')
++                        ++index;
++                    continue;
++                }
++                break;
++            }
++        }
++    }
++    return count;
++}
++
++uint32_t computeTransformOperationCount(std::string_view value)
++{
++    uint32_t count = 0;
++    for(size_t index = 0; index < value.size(); ++index) {
++        if(!std::isalpha(static_cast<unsigned char>(value[index])))
++            continue;
++        while(index + 1 < value.size()
++                && std::isalpha(static_cast<unsigned char>(value[index + 1])))
++            ++index;
++        size_t next = index + 1;
++        while(next < value.size()
++                && std::isspace(static_cast<unsigned char>(value[next])))
++            ++next;
++        if(next < value.size() && value[next] == '(')
++            count = saturatingIncrement(count);
++    }
++    return count;
++}
++
++} // namespace
++
+ ElementID elementid(std::string_view name)
+ {
+     static const struct {
+@@ -126,6 +196,7 @@ std::unique_ptr<SVGElement> SVGElement::create(Document* document, ElementID id)
  SVGElement::SVGElement(Document* document, ElementID id)
      : SVGNode(document)
      , m_id(id)
@@ -240,7 +461,47 @@ index 7d62cc6..078c2eb 100644
  {
  }
  
-@@ -1100,7 +1101,14 @@ void SVGClipPathElement::applyClipPath(SVGRenderState& state) const
+@@ -218,8 +289,13 @@ bool SVGElement::setAttribute(const Attribute& attribute)
+ void SVGElement::parseAttribute(PropertyID id, const std::string& value)
+ {
+     rootElement()->setNeedsLayout();
++    if(id == PropertyID::D)
++        m_relativePathOperationCount = computeRelativePathOperationCount(value);
++    else if(id == PropertyID::Transform)
++        m_transformOperationCount = computeTransformOperationCount(value);
+     if(auto property = getProperty(id)) {
+-        property->parse(value);
++        if(!property->parse(value))
++            document()->addCapabilityIssue("unsupported_attribute_value");
+     }
+ }
+ 
+@@ -665,9 +741,22 @@ void SVGSVGElement::render(SVGRenderState& state) const
+     SVGBlendInfo blendInfo(this);
+     SVGRenderState newState(this, state, localTransform());
+     newState.beginGroup(blendInfo);
+-    if(isOverflowHidden())
+-        newState->clipRect(getClipRect(viewportSize), FillRule::NonZero, newState.currentTransform());
++    bool recordedViewportClip = false;
++    if(isOverflowHidden()) {
++        const auto clipRect = getClipRect(viewportSize);
++        if(newState.recorder() && !newState.recordingSuppressed()) {
++            Path clipPath;
++            clipPath.addRect(clipRect);
++            newState->setColor(Color::White);
++            newState.recordPath(PaintCommandKind::ClipBegin, clipPath,
++                                FillRule::NonZero, nullptr, this);
++            recordedViewportClip = true;
++        }
++        newState->clipRect(clipRect, FillRule::NonZero, newState.currentTransform());
++    }
+     renderChildren(newState);
++    if(recordedViewportClip)
++        newState.recordBoundary(PaintCommandKind::ClipEnd, this);
+     newState.endGroup(blendInfo);
+ }
+ 
+@@ -1100,7 +1189,14 @@ void SVGClipPathElement::applyClipPath(SVGRenderState& state) const
  
          if(shapeElement == nullptr || !shapeElement->isRenderable())
              continue;
@@ -257,22 +518,26 @@ index 7d62cc6..078c2eb 100644
      }
  
 diff --git a/source/svgelement.h b/source/svgelement.h
-index ff5d008..2750991 100644
+index ff5d008..e03cd89 100644
 --- a/source/svgelement.h
 +++ b/source/svgelement.h
-@@ -150,6 +150,7 @@ public:
+@@ -150,6 +150,9 @@ public:
      SVGNode* lastChild() const;
  
      ElementID id() const { return m_id; }
 +    int32_t sourceIndex() const { return m_sourceIndex; }
++    uint32_t relativePathOperationCount() const { return m_relativePathOperationCount; }
++    uint32_t transformOperationCount() const { return m_transformOperationCount; }
      const AttributeList& attributes() const { return m_attributes; }
      const SVGPropertyList& properties() const { return m_properties; }
      const SVGNodeList& children() const { return m_children; }
-@@ -212,6 +213,7 @@ private:
+@@ -212,6 +215,9 @@ private:
      PointerEvents m_pointer_events = PointerEvents::Auto;
  
      ElementID m_id;
 +    int32_t m_sourceIndex{-1};
++    uint32_t m_relativePathOperationCount{0};
++    uint32_t m_transformOperationCount{0};
      AttributeList m_attributes;
      SVGPropertyList m_properties;
      SVGNodeList m_children;
@@ -303,14 +568,18 @@ index e2c9708..8896b84 100644
              markerPosition.renderMarker(newState, m_strokeData.lineWidth());
          }
 diff --git a/source/svgparser.cpp b/source/svgparser.cpp
-index 183937c..bad802e 100644
+index 183937c..f9a244d 100644
 --- a/source/svgparser.cpp
 +++ b/source/svgparser.cpp
-@@ -3,9 +3,106 @@
+@@ -3,9 +3,281 @@
  #include "svgparserutils.h"
  
  #include <cassert>
-+#include <cstdlib>
++#include <cctype>
++#include <cmath>
++#include <cstdint>
++#include <limits>
++#include <unordered_set>
  
  namespace lunasvg {
  
@@ -320,48 +589,166 @@ index 183937c..bad802e 100644
 +        && value.substr(0, prefix.size()) == prefix;
 +}
 +
++static std::string_view::size_type findUrlFunction(std::string_view value)
++{
++    for(size_t index = 0; index + 4 <= value.size(); ++index) {
++        if((value[index] == 'u' || value[index] == 'U')
++                && (value[index + 1] == 'r' || value[index + 1] == 'R')
++                && (value[index + 2] == 'l' || value[index + 2] == 'L')
++                && value[index + 3] == '(')
++            return index;
++    }
++    return std::string_view::npos;
++}
++
 +static bool isNonSemanticUnknownAttribute(std::string_view name)
 +{
 +    return name == "xmlns" || name == "version" || name == "role"
 +        || name == "focusable" || name == "enable-background"
-+        || hasPrefix(name, "xmlns:") || hasPrefix(name, "xml:")
++        || name == "xml:lang" || hasPrefix(name, "xmlns:")
 +        || hasPrefix(name, "data-") || hasPrefix(name, "aria-")
 +        || hasPrefix(name, "inkscape:") || hasPrefix(name, "sodipodi:");
 +}
 +
-+static bool isPartialAlphaValue(std::string_view value)
++static std::string_view trimmedValue(std::string_view value)
 +{
 +    auto first = value.find_first_not_of(" \t\r\n");
 +    if(first == std::string_view::npos)
-+        return true;
++        return {};
 +    auto last = value.find_last_not_of(" \t\r\n");
-+    std::string text(value.substr(first, last - first + 1));
-+    auto percent = !text.empty() && text.back() == '%';
-+    if(percent)
-+        text.pop_back();
-+    char* end = nullptr;
-+    auto parsed = std::strtof(text.c_str(), &end);
-+    if(end == text.c_str() || *end != '\0')
-+        return true;
-+    if(percent)
-+        parsed /= 100.f;
-+    return parsed > 0.f && parsed < 1.f;
++    return value.substr(first, last - first + 1);
 +}
 +
-+static std::string capabilityReasonForAttribute(std::string_view name,
-+                                                std::string_view value,
-+                                                bool known)
++static bool parseNumberValue(std::string_view value, bool allowPercentage,
++                             float& parsed)
 +{
++    value = trimmedValue(value);
++    if(value.empty() || !parseNumber(value, parsed) || !std::isfinite(parsed))
++        return false;
++    if(allowPercentage && skipDelimiter(value, '%'))
++        parsed /= 100.f;
++    return value.empty();
++}
++
++static bool isValidLengthValue(std::string_view value,
++                               LengthNegativeMode negativeMode)
++{
++    Length length;
++    return length.parse(value, negativeMode);
++}
++
++static bool isValidDashArray(std::string_view value)
++{
++    value = trimmedValue(value);
++    if(value == "none")
++        return true;
++    bool foundLength = false;
++    while(!value.empty()) {
++        size_t count = 0;
++        while(count < value.size() && value[count] != ',' && !IS_WS(value[count]))
++            ++count;
++        if(count == 0 || !isValidLengthValue(
++                value.substr(0, count), LengthNegativeMode::Forbid))
++            return false;
++        foundLength = true;
++        value.remove_prefix(count);
++        if(value.empty())
++            break;
++        if(!skipOptionalSpacesOrComma(value))
++            return false;
++    }
++    return foundLength;
++}
++
++static bool isValidLocalUrl(std::string_view value)
++{
++    value = trimmedValue(value);
++    if(value == "none")
++        return true;
++    if(!skipString(value, "url") || !skipOptionalSpaces(value)
++            || !skipDelimiter(value, '(') || !skipOptionalSpaces(value))
++        return false;
++    char quote = 0;
++    if(!value.empty() && (value.front() == '\'' || value.front() == '"')) {
++        quote = value.front();
++        value.remove_prefix(1);
++        skipOptionalSpaces(value);
++    }
++    if(!skipDelimiter(value, '#'))
++        return false;
++    size_t identifierLength = 0;
++    while(identifierLength < value.size()
++            && value[identifierLength] != ')'
++            && (quote == 0 || value[identifierLength] != quote))
++        ++identifierLength;
++    if(identifierLength == 0)
++        return false;
++    value.remove_prefix(identifierLength);
++    skipOptionalSpaces(value);
++    if(quote != 0 && !skipDelimiter(value, quote))
++        return false;
++    skipOptionalSpaces(value);
++    if(!skipDelimiter(value, ')'))
++        return false;
++    skipOptionalSpaces(value);
++    return value.empty();
++}
++
++static bool matchesAny(std::string_view value, std::string_view first,
++                       std::string_view second = {}, std::string_view third = {})
++{
++    return value == first || (!second.empty() && value == second)
++        || (!third.empty() && value == third);
++}
++
++static std::string capabilityReasonForAttribute(
++    std::string_view name, std::string_view value, bool known,
++    ElementID elementId = ElementID::Unknown)
++{
++    if(elementId == ElementID::Image
++            && (name == "href" || name == "xlink:href"))
++        return "unsupported_image";
++    if(name == "xml:base")
++        return "unsupported_external_resource";
++    const auto normalizedValue = trimmedValue(value);
 +    auto firstValueCharacter = value.find_first_not_of(" \t\r\n");
 +    if((name == "href" || name == "xlink:href")
 +            && firstValueCharacter != std::string_view::npos
 +            && value[firstValueCharacter] != '#')
 +        return "unsupported_external_resource";
-+    auto urlPosition = value.find("url(");
++    auto urlPosition = findUrlFunction(value);
 +    if(urlPosition != std::string_view::npos) {
 +        auto urlValue = value.find_first_not_of(" \t\r\n'\"", urlPosition + 4);
 +        if(urlValue != std::string_view::npos && value[urlValue] != '#')
 +            return "unsupported_external_resource";
++    }
++    const bool isPaintColor = name == "fill" || name == "stroke"
++        || name == "color" || name == "stop-color"
++        || name == "flood-color" || name == "lighting-color";
++    if(isPaintColor) {
++        if(normalizedValue == "inherit")
++            return {};
++        if(urlPosition != std::string_view::npos)
++            return "unsupported_paint_server";
++        if(normalizedValue.empty())
++            return "unsupported_color_syntax";
++        const auto colorValue = normalizedValue;
++        if((name == "fill" || name == "stroke") && colorValue == "none")
++            return {};
++        // LunaSVG 3.5 resolves currentColor in attribute insertion order.
++        // Reject it until the pinned fork can resolve it deterministically.
++        if(colorValue == "currentColor")
++            return "unsupported_color_reference";
++        if(colorValue.size()
++                > static_cast<size_t>(std::numeric_limits<int>::max()))
++            return "unsupported_color_syntax";
++        plutovg_color_t parsedColor;
++        const auto consumed = plutovg_color_parse(
++            &parsedColor, colorValue.data(), static_cast<int>(colorValue.size()));
++        if(consumed != static_cast<int>(colorValue.size()))
++            return "unsupported_color_syntax";
++        if(parsedColor.a > 0.f && parsedColor.a < 1.f)
++            return "unsupported_partial_alpha";
 +    }
 +    if(name == "vector-effect")
 +        return "unsupported_vector_effect";
@@ -375,13 +762,66 @@ index 183937c..bad802e 100644
 +        return "unsupported_paint_order";
 +    if(name == "filter" || name == "backdrop-filter")
 +        return "unsupported_filter";
++    if(name == "mask")
++        return "unsupported_mask";
 +    if(name == "mix-blend-mode" || name == "isolation")
 +        return "unsupported_blend_mode";
 +    if(hasPrefix(name, "on"))
 +        return "unsupported_script";
-+    if((name == "opacity" || name == "fill-opacity"
-+            || name == "stroke-opacity") && isPartialAlphaValue(value))
-+        return "unsupported_partial_alpha";
++    if(known && normalizedValue == "inherit")
++        return {};
++    if(name == "clip-path" && !isValidLocalUrl(value))
++        return "unsupported_clip_path";
++    if(name == "fill-rule" || name == "clip-rule") {
++        if(!matchesAny(normalizedValue, "nonzero", "evenodd"))
++            return "unsupported_property_value";
++    }
++    if(name == "display" && !matchesAny(normalizedValue, "inline", "none"))
++        return "unsupported_property_value";
++    if(name == "visibility"
++            && !matchesAny(normalizedValue, "visible", "hidden", "collapse"))
++        return "unsupported_property_value";
++    if(name == "overflow"
++            && !matchesAny(normalizedValue, "visible", "hidden"))
++        return "unsupported_property_value";
++    if(name == "stroke-linecap"
++            && !matchesAny(normalizedValue, "butt", "round", "square"))
++        return "unsupported_property_value";
++    if(name == "stroke-linejoin"
++            && !matchesAny(normalizedValue, "miter", "round", "bevel"))
++        return "unsupported_property_value";
++    if(name == "pointer-events"
++            && normalizedValue != "none" && normalizedValue != "auto"
++            && normalizedValue != "stroke" && normalizedValue != "fill"
++            && normalizedValue != "painted" && normalizedValue != "visible"
++            && normalizedValue != "visibleStroke"
++            && normalizedValue != "visibleFill"
++            && normalizedValue != "visiblePainted"
++            && normalizedValue != "bounding-box"
++            && normalizedValue != "all")
++        return "unsupported_property_value";
++    if(name == "stroke-width"
++            && !isValidLengthValue(value, LengthNegativeMode::Forbid))
++        return "unsupported_property_value";
++    if(name == "stroke-dashoffset"
++            && !isValidLengthValue(value, LengthNegativeMode::Allow))
++        return "unsupported_property_value";
++    if(name == "stroke-dasharray" && !isValidDashArray(value))
++        return "unsupported_property_value";
++    if(name == "stroke-miterlimit") {
++        float miterLimit = 0.f;
++        if(!parseNumberValue(value, false, miterLimit) || miterLimit < 1.f)
++            return "unsupported_property_value";
++    }
++    if(name == "opacity" || name == "fill-opacity"
++            || name == "stroke-opacity" || name == "stop-opacity") {
++        float alpha = 0.f;
++        if(!parseNumberValue(value, true, alpha))
++            return "unsupported_property_value";
++        alpha = std::clamp(alpha, 0.f, 1.f);
++        if(alpha > 0.f && alpha < 1.f)
++            return "unsupported_partial_alpha";
++    }
 +    if(!known && !isNonSemanticUnknownAttribute(name))
 +        return "unsupported_property";
 +    return {};
@@ -413,7 +853,7 @@ index 183937c..bad802e 100644
  struct SimpleSelector;
  
  using Selector = std::vector<SimpleSelector>;
-@@ -494,7 +591,9 @@ static bool parseSelectors(std::string_view& input, SelectorList& selectors)
+@@ -494,7 +766,9 @@ static bool parseSelectors(std::string_view& input, SelectorList& selectors)
      return true;
  }
  
@@ -424,7 +864,7 @@ index 183937c..bad802e 100644
  {
      if(!skipDelimiter(input, '{'))
          return false;
-@@ -517,6 +616,10 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
+@@ -517,6 +791,10 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
          declaration.specificity = 0x10;
          declaration.id = csspropertyid(name);
          declaration.value.assign(value);
@@ -435,7 +875,16 @@ index 183937c..bad802e 100644
          if(skipDelimiter(input, '!')) {
              skipOptionalSpaces(input);
              if(!skipString(input, "important"))
-@@ -531,19 +634,41 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
+@@ -524,26 +802,49 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
+             declaration.specificity = 0x1000;
+         }
+ 
+-        if(declaration.id != PropertyID::Unknown)
++        if(declaration.id != PropertyID::Unknown
++                && capabilityReason.empty())
+             declarations.push_back(std::move(declaration));
+         skipOptionalSpacesOrDelimiter(input, ';');
+     } while(!input.empty() && input.front() != '}');
      return skipDelimiter(input, '}');
  }
  
@@ -480,7 +929,7 @@ index 183937c..bad802e 100644
              int depth = 0;
              while(!input.empty()) {
                  auto ch = input.front();
-@@ -562,8 +687,12 @@ static RuleDataList parseStyleSheet(std::string_view input)
+@@ -562,8 +863,12 @@ static RuleDataList parseStyleSheet(std::string_view input)
          }
  
          Rule rule;
@@ -494,28 +943,375 @@ index 183937c..bad802e 100644
          for(const auto& selector : rule.selectors) {
              size_t specificity = 0;
              for(const auto& simpleSelector : selector) {
-@@ -595,7 +724,8 @@ static SelectorList parseQuerySelectors(std::string_view input)
+@@ -595,14 +900,18 @@ static SelectorList parseQuerySelectors(std::string_view input)
      return selectors;
  }
  
 -inline void parseInlineStyle(std::string_view input, SVGElement* element)
-+inline void parseInlineStyle(std::string_view input, SVGElement* element,
++inline bool parseInlineStyle(std::string_view input, SVGElement* element,
 +                             Document* document)
  {
      std::string name;
      skipOptionalSpaces(input);
-@@ -610,6 +740,10 @@ inline void parseInlineStyle(std::string_view input, SVGElement* element)
+-    while(readCSSIdentifier(input, name)) {
++    while(!input.empty()) {
++        if(!readCSSIdentifier(input, name))
++            return false;
+         skipOptionalSpaces(input);
+         if(!skipDelimiter(input, ':'))
+-            return;
++            return false;
++        skipOptionalSpaces(input);
+         std::string value;
+         while(!input.empty() && input.front() != ';') {
+             value.push_back(input.front());
+@@ -610,10 +919,17 @@ inline void parseInlineStyle(std::string_view input, SVGElement* element)
          }
  
          auto id = csspropertyid(name);
+-        if(id != PropertyID::Unknown)
 +        auto capabilityReason = capabilityReasonForAttribute(
 +            name, value, id != PropertyID::Unknown);
 +        if(!capabilityReason.empty())
 +            document->addCapabilityIssue(capabilityReason);
-         if(id != PropertyID::Unknown)
++        if(id != PropertyID::Unknown && capabilityReason.empty())
              element->setAttribute(0x100, id, value);
-         skipOptionalSpacesOrDelimiter(input, ';');
-@@ -844,6 +978,9 @@ bool Document::parse(const char* data, size_t length)
+-        skipOptionalSpacesOrDelimiter(input, ';');
++        if(!input.empty())
++            input.remove_prefix(1);
++        skipOptionalSpaces(input);
+     }
++    return true;
+ }
+ 
+ inline void removeStyleComments(std::string& value)
+@@ -626,7 +942,83 @@ inline void removeStyleComments(std::string& value)
+     }
+ }
+ 
+-inline bool decodeText(std::string_view input, std::string& output)
++constexpr bool isXmlCharacter(uint32_t codepoint)
++{
++    return codepoint == 0x9 || codepoint == 0xA || codepoint == 0xD
++        || (codepoint >= 0x20 && codepoint <= 0xD7FF)
++        || (codepoint >= 0xE000 && codepoint <= 0xFFFD)
++        || (codepoint >= 0x10000 && codepoint <= 0x10FFFF);
++}
++
++inline bool appendXmlCharacter(uint32_t codepoint, std::string& output)
++{
++    if(!isXmlCharacter(codepoint))
++        return false;
++    if(codepoint < 0x80) {
++        output.push_back(static_cast<char>(codepoint));
++    } else if(codepoint < 0x800) {
++        output.push_back(static_cast<char>(0xC0 | (codepoint >> 6)));
++        output.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
++    } else if(codepoint < 0x10000) {
++        output.push_back(static_cast<char>(0xE0 | (codepoint >> 12)));
++        output.push_back(static_cast<char>(
++            0x80 | ((codepoint >> 6) & 0x3F)));
++        output.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
++    } else {
++        output.push_back(static_cast<char>(0xF0 | (codepoint >> 18)));
++        output.push_back(static_cast<char>(
++            0x80 | ((codepoint >> 12) & 0x3F)));
++        output.push_back(static_cast<char>(
++            0x80 | ((codepoint >> 6) & 0x3F)));
++        output.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
++    }
++    return true;
++}
++
++inline bool isValidXmlUtf8(std::string_view input)
++{
++    size_t index = 0;
++    while(index < input.size()) {
++        const auto lead = static_cast<uint8_t>(input[index]);
++        uint32_t codepoint = 0;
++        size_t length = 0;
++        uint32_t minimum = 0;
++        if(lead <= 0x7F) {
++            codepoint = lead;
++            length = 1;
++        } else if(lead >= 0xC2 && lead <= 0xDF) {
++            codepoint = lead & 0x1F;
++            length = 2;
++            minimum = 0x80;
++        } else if(lead >= 0xE0 && lead <= 0xEF) {
++            codepoint = lead & 0x0F;
++            length = 3;
++            minimum = 0x800;
++        } else if(lead >= 0xF0 && lead <= 0xF4) {
++            codepoint = lead & 0x07;
++            length = 4;
++            minimum = 0x10000;
++        } else {
++            return false;
++        }
++        if(index + length > input.size())
++            return false;
++        for(size_t offset = 1; offset < length; ++offset) {
++            const auto continuation = static_cast<uint8_t>(
++                input[index + offset]);
++            if((continuation & 0xC0) != 0x80)
++                return false;
++            codepoint = (codepoint << 6) | (continuation & 0x3F);
++        }
++        if(codepoint < minimum || !isXmlCharacter(codepoint))
++            return false;
++        index += length;
++    }
++    return true;
++}
++
++inline bool decodeText(std::string_view input, std::string& output,
++                       bool allowGeneralEntities = false)
+ {
+     output.clear();
+     while(!input.empty()) {
+@@ -644,34 +1036,8 @@ inline bool decodeText(std::string_view input, std::string& output)
+             unsigned int cp;
+             if(!parseInteger(input, cp, base))
+                 return false;
+-            char c[5] = {0, 0, 0, 0, 0};
+-            if(cp < 0x80) {
+-                c[1] = 0;
+-                c[0] = char(cp);
+-            } else if(cp < 0x800) {
+-                c[2] = 0;
+-                c[1] = char((cp & 0x3F) | 0x80);
+-                cp >>= 6;
+-                c[0] = char(cp | 0xC0);
+-            } else if(cp < 0x10000) {
+-                c[3] = 0;
+-                c[2] = char((cp & 0x3F) | 0x80);
+-                cp >>= 6;
+-                c[1] = char((cp & 0x3F) | 0x80);
+-                cp >>= 6;
+-                c[0] = char(cp | 0xE0);
+-            } else if(cp < 0x200000) {
+-                c[4] = 0;
+-                c[3] = char((cp & 0x3F) | 0x80);
+-                cp >>= 6;
+-                c[2] = char((cp & 0x3F) | 0x80);
+-                cp >>= 6;
+-                c[1] = char((cp & 0x3F) | 0x80);
+-                cp >>= 6;
+-                c[0] = char(cp | 0xF0);
+-            }
+-
+-            output.append(c);
++            if(!appendXmlCharacter(cp, output))
++                return false;
+         } else {
+             if(skipString(input, "amp")) {
+                 output.push_back('&');
+@@ -683,6 +1049,20 @@ inline bool decodeText(std::string_view input, std::string& output)
+                 output.push_back('\"');
+             } else if(skipString(input, "apos")) {
+                 output.push_back('\'');
++            } else if(allowGeneralEntities) {
++                const auto delimiter = input.find(';');
++                if(delimiter == std::string_view::npos || delimiter == 0)
++                    return false;
++                for(size_t index = 0; index < delimiter; ++index) {
++                    const char value = input[index];
++                    const bool valid = IS_ALPHA(value) || IS_NUM(value)
++                        || value == '_' || value == ':' || value == '-'
++                        || value == '.';
++                    if(!valid || (index == 0 && IS_NUM(value)))
++                        return false;
++                }
++                input.remove_prefix(delimiter);
++                output.push_back('?');
+             } else {
+                 return false;
+             }
+@@ -711,23 +1091,84 @@ inline bool readIdentifier(std::string_view& input, std::string& output)
+     return true;
+ }
+ 
++inline bool isValidXmlDeclaration(std::string_view input)
++{
++    bool foundVersion = false;
++    bool foundEncoding = false;
++    bool foundStandalone = false;
++    skipOptionalSpaces(input);
++    while(!input.empty()) {
++        std::string name;
++        if(!readIdentifier(input, name))
++            return false;
++        skipOptionalSpaces(input);
++        if(!skipDelimiter(input, '='))
++            return false;
++        skipOptionalSpaces(input);
++        if(input.empty() || (input.front() != '\'' && input.front() != '"'))
++            return false;
++        const char quote = input.front();
++        input.remove_prefix(1);
++        const auto end = input.find(quote);
++        if(end == std::string_view::npos)
++            return false;
++        const auto value = input.substr(0, end);
++        input.remove_prefix(end + 1);
++        if(name == "version") {
++            if(foundVersion || foundEncoding || foundStandalone
++                    || (value != "1.0" && value != "1.1"))
++                return false;
++            foundVersion = true;
++        } else if(name == "encoding") {
++            if(!foundVersion || foundEncoding || foundStandalone)
++                return false;
++            std::string normalized(value);
++            std::transform(
++                normalized.begin(), normalized.end(), normalized.begin(),
++                [](unsigned char character) {
++                    return static_cast<char>(std::tolower(character));
++                });
++            if(normalized != "utf-8")
++                return false;
++            foundEncoding = true;
++        } else if(name == "standalone") {
++            if(!foundVersion || foundStandalone
++                    || (value != "yes" && value != "no"))
++                return false;
++            foundStandalone = true;
++        } else {
++            return false;
++        }
++        if(!skipOptionalSpaces(input) && !input.empty())
++            return false;
++    }
++    return foundVersion;
++}
++
+ bool Document::parse(const char* data, size_t length)
+ {
++    if(data == nullptr || !isValidXmlUtf8(std::string_view(data, length)))
++        return false;
+     std::string buffer;
+     std::string styleSheet;
+     SVGElement* currentElement = nullptr;
+     int ignoring = 0;
+-    auto handleText = [&](std::string_view text, bool in_cdata) {
+-        if(text.empty() || currentElement == nullptr || ignoring > 0)
+-            return;
+-        if(currentElement->id() != ElementID::Text && currentElement->id() != ElementID::Tspan && currentElement->id() != ElementID::Style) {
+-            return;
+-        }
+-
++    bool hasDoctype = false;
++    auto handleText = [&](std::string_view text, bool in_cdata) -> bool {
++        if(text.empty())
++            return true;
++        if(!in_cdata && text.find("]]>") != std::string_view::npos)
++            return false;
+         if(in_cdata) {
+             buffer.assign(text);
+-        } else {
+-            decodeText(text, buffer);
++        } else if(!decodeText(text, buffer, hasDoctype)) {
++            return false;
++        }
++
++        if(currentElement == nullptr || ignoring > 0)
++            return true;
++        if(currentElement->id() != ElementID::Text && currentElement->id() != ElementID::Tspan && currentElement->id() != ElementID::Style) {
++            return true;
+         }
+ 
+         if(currentElement->id() == ElementID::Style) {
+@@ -738,9 +1179,12 @@ bool Document::parse(const char* data, size_t length)
+             node->setData(buffer);
+             currentElement->addChild(std::move(node));
+         }
++        return true;
+     };
+ 
+     std::string_view input(data, length);
++    bool xmlDeclarationAllowed = true;
++    bool hasXmlDeclaration = false;
+     if(length >= 3) {
+         auto buffer = (const uint8_t*)(data);
+ 
+@@ -755,12 +1199,16 @@ bool Document::parse(const char* data, size_t length)
+     while(!input.empty()) {
+         if(currentElement) {
+             auto text = input.substr(0, input.find('<'));
+-            handleText(text, false);
++            if(!handleText(text, false))
++                return false;
+             input.remove_prefix(text.length());
+         } else {
++            const auto sizeBeforeSpaces = input.size();
+             if(!skipOptionalSpaces(input)) {
+                 break;
+             }
++            if(input.size() != sizeBeforeSpaces)
++                xmlDeclarationAllowed = false;
+         }
+ 
+         if(!skipDelimiter(input, '<'))
+@@ -771,6 +1219,18 @@ bool Document::parse(const char* data, size_t length)
+             auto n = input.find("?>");
+             if(n == std::string_view::npos)
+                 return false;
++            if(buffer == "xml") {
++                if(!xmlDeclarationAllowed || hasXmlDeclaration
++                        || currentElement != nullptr
++                        || !isValidXmlDeclaration(input.substr(0, n)))
++                    return false;
++                hasXmlDeclaration = true;
++            } else if(buffer == "xml-stylesheet") {
++                addCapabilityIssue("unsupported_external_resource");
++            } else {
++                addCapabilityIssue("unsupported_processing_instruction");
++            }
++            xmlDeclarationAllowed = false;
+             input.remove_prefix(n + 2);
+             continue;
+         }
+@@ -780,21 +1240,36 @@ bool Document::parse(const char* data, size_t length)
+                 auto n = input.find("-->");
+                 if(n == std::string_view::npos)
+                     return false;
+-                handleText(input.substr(0, n), false);
++                const auto comment = input.substr(0, n);
++                if(comment.find("--") != std::string_view::npos
++                        || (!comment.empty() && comment.back() == '-'))
++                    return false;
++                xmlDeclarationAllowed = false;
+                 input.remove_prefix(n + 3);
+                 continue;
+             }
+ 
+             if(skipString(input, "[CDATA[")) {
++                xmlDeclarationAllowed = false;
+                 auto n = input.find("]]>");
+                 if(n == std::string_view::npos)
+                     return false;
+-                handleText(input.substr(0, n), true);
++                if(!handleText(input.substr(0, n), true))
++                    return false;
+                 input.remove_prefix(n + 3);
+                 continue;
+             }
+ 
+             if(skipString(input, "DOCTYPE")) {
++                xmlDeclarationAllowed = false;
++                hasDoctype = true;
++                auto headerEnd = std::min(input.find('['), input.find('>'));
++                const auto header = input.substr(0, headerEnd);
++                addCapabilityIssue(
++                    header.find("SYSTEM") != std::string_view::npos
++                            || header.find("PUBLIC") != std::string_view::npos
++                        ? "unsupported_external_resource"
++                        : "unsupported_doctype");
+                 while(!input.empty() && input.front() != '>') {
+                     if(input.front() == '[') {
+                         int depth = 1;
+@@ -844,6 +1319,9 @@ bool Document::parse(const char* data, size_t length)
              ++ignoring;
          } else {
              auto id = elementid(buffer);
@@ -525,34 +1321,76 @@ index 183937c..bad802e 100644
              if(id == ElementID::Unknown) {
                  ignoring = 1;
              } else {
-@@ -864,6 +1001,7 @@ bool Document::parse(const char* data, size_t length)
+@@ -863,7 +1341,11 @@ bool Document::parse(const char* data, size_t length)
+         }
  
          skipOptionalSpaces(input);
++        std::unordered_set<std::string> attributeNames;
          while(readIdentifier(input, buffer)) {
 +            const std::string attributeName(buffer);
++            if(!attributeNames.insert(attributeName).second)
++                return false;
              skipOptionalSpaces(input);
              if(!skipDelimiter(input, '='))
                  return false;
-@@ -877,12 +1015,16 @@ bool Document::parse(const char* data, size_t length)
+@@ -875,14 +1357,27 @@ bool Document::parse(const char* data, size_t length)
+             auto n = input.find(quote);
+             if(n == std::string_view::npos)
                  return false;
++            if(input.substr(0, n).find('<') != std::string_view::npos)
++                return false;
++            if(!decodeText(input.substr(0, n), buffer, hasDoctype))
++                return false;
++            if(element == m_rootElement.get()
++                    && attributeName == "data-lumina-origin"
++                    && buffer == "image-vectorizer")
++                m_imageVectorizerOrigin = true;
              auto id = PropertyID::Unknown;
              if(element != nullptr)
 -                id = propertyid(buffer);
+-            if(id != PropertyID::Unknown) {
+-                decodeText(input.substr(0, n), buffer);
 +                id = propertyid(attributeName);
 +            auto capabilityReason = capabilityReasonForAttribute(
-+                attributeName, input.substr(0, n), id != PropertyID::Unknown);
++                attributeName, buffer, id != PropertyID::Unknown,
++                element ? element->id() : ElementID::Unknown);
 +            if(element != nullptr && !capabilityReason.empty())
 +                addCapabilityIssue(capabilityReason);
-             if(id != PropertyID::Unknown) {
-                 decodeText(input.substr(0, n), buffer);
++            if(id != PropertyID::Unknown && capabilityReason.empty()) {
                  if(id == PropertyID::Style) {
                      removeStyleComments(buffer);
 -                    parseInlineStyle(buffer, element);
-+                    parseInlineStyle(buffer, element, this);
++                    if(!parseInlineStyle(buffer, element, this))
++                        addCapabilityIssue("unsupported_css_rule");
                  } else {
                      if(id == PropertyID::Id)
                          m_rootElement->addElementById(buffer, element);
-@@ -920,7 +1062,7 @@ bool Document::parse(const char* data, size_t length)
+@@ -895,12 +1390,14 @@ bool Document::parse(const char* data, size_t length)
+         }
+ 
+         if(skipDelimiter(input, '>')) {
++            xmlDeclarationAllowed = false;
+             if(element != nullptr)
+                 currentElement = element;
+             continue;
+         }
+ 
+         if(skipDelimiter(input, '/')) {
++            xmlDeclarationAllowed = false;
+             if(!skipDelimiter(input, '>'))
+                 return false;
+             if(ignoring > 0)
+@@ -911,7 +1408,8 @@ bool Document::parse(const char* data, size_t length)
+         return false;
+     }
+ 
+-    if(m_rootElement == nullptr || ignoring > 0 || !input.empty())
++    if(m_rootElement == nullptr || currentElement != nullptr
++            || ignoring > 0 || !input.empty())
+         return false;
+     applyStyleSheet(styleSheet);
+     m_rootElement->build();
+@@ -920,7 +1418,7 @@ bool Document::parse(const char* data, size_t length)
  
  void Document::applyStyleSheet(const std::string& content)
  {
@@ -562,7 +1400,7 @@ index 183937c..bad802e 100644
          std::sort(rules.begin(), rules.end());
          m_rootElement->transverse([&rules](SVGElement* element) {
 diff --git a/source/svgrenderstate.cpp b/source/svgrenderstate.cpp
-index 550d389..67b962e 100644
+index 550d389..924de1d 100644
 --- a/source/svgrenderstate.cpp
 +++ b/source/svgrenderstate.cpp
 @@ -1,5 +1,7 @@
@@ -573,35 +1411,60 @@ index 550d389..67b962e 100644
  namespace lunasvg {
  
  SVGBlendInfo::SVGBlendInfo(const SVGElement* element)
-@@ -27,6 +29,17 @@ bool SVGRenderState::hasCycleReference(const SVGElement* element) const
+@@ -27,6 +29,39 @@ bool SVGRenderState::hasCycleReference(const SVGElement* element) const
  
  void SVGRenderState::beginGroup(const SVGBlendInfo& blendInfo)
  {
 +    if(m_recorder) {
-+        if(blendInfo.masker())
-+            recordCapabilityIssue("unsupported_mask");
-+        if(blendInfo.opacity() > 0.f && blendInfo.opacity() < 1.f)
-+            recordCapabilityIssue("unsupported_partial_alpha");
-+        if(blendInfo.opacity() <= 0.f)
++        if(m_recordingSuppressed)
++            return;
++        if(blendInfo.opacity() <= 0.f) {
 +            m_recordingSuppressed = true;
-+        if(blendInfo.clipper() && blendInfo.clipper()->requiresMasking())
++            return;
++        }
++        if(blendInfo.masker()) {
++            recordCapabilityIssue("unsupported_mask");
++            m_recordingSuppressed = true;
++        }
++        if(blendInfo.opacity() < 1.f) {
++            recordCapabilityIssue("unsupported_partial_alpha");
++            m_recordingSuppressed = true;
++        }
++        if(blendInfo.clipper() && blendInfo.clipper()->requiresMasking()) {
 +            recordCapabilityIssue("unsupported_complex_clip");
++            m_recordingSuppressed = true;
++        }
++        if(m_recordingSuppressed)
++            return;
++        if(blendInfo.clipper()) {
++            const auto commandCount = m_recorder->commands.size();
++            blendInfo.clipper()->applyClipPath(*this);
++            m_recordedClipBoundary = m_recorder->commands.size() > commandCount;
++            if(!m_recordedClipBoundary) {
++                recordCapabilityIssue("unsupported_empty_clip");
++                m_recordingSuppressed = true;
++            }
++        }
++        return;
 +    }
 +
      auto requiresCompositing = blendInfo.requiresCompositing(m_mode);
      if(requiresCompositing) {
          auto boundingBox = m_currentTransform.mapRect(m_element->paintBoundingBox());
-@@ -43,6 +56,9 @@ void SVGRenderState::beginGroup(const SVGBlendInfo& blendInfo)
+@@ -43,6 +78,12 @@ void SVGRenderState::beginGroup(const SVGBlendInfo& blendInfo)
  
  void SVGRenderState::endGroup(const SVGBlendInfo& blendInfo)
  {
-+    if(m_recorder && blendInfo.clipper() && !blendInfo.clipper()->requiresMasking())
-+        recordBoundary(PaintCommandKind::ClipEnd);
++    if(m_recorder) {
++        if(m_recordedClipBoundary)
++            recordBoundary(PaintCommandKind::ClipEnd);
++        return;
++    }
 +
      if(m_canvas == m_parent->canvas()) {
          m_canvas->restore();
          return;
-@@ -58,4 +74,99 @@ void SVGRenderState::endGroup(const SVGBlendInfo& blendInfo)
+@@ -58,4 +99,101 @@ void SVGRenderState::endGroup(const SVGBlendInfo& blendInfo)
      m_parent->m_canvas->blendCanvas(*m_canvas, BlendMode::Src_Over, opacity);
  }
  
@@ -659,6 +1522,8 @@ index 550d389..67b962e 100644
 +    command.fill_rule = fillRule == FillRule::EvenOdd
 +        ? PaintFillRule::EvenOdd : PaintFillRule::NonZero;
 +    command.source_index = source->sourceIndex();
++    command.relative_path_operation_count = source->relativePathOperationCount();
++    command.transform_operation_count = m_transformOperationCount;
 +    command.source_kind = kind == PaintCommandKind::Stroke ? "stroke"
 +        : kind == PaintCommandKind::ClipBegin ? "clip" : "fill";
 +
@@ -702,15 +1567,27 @@ index 550d389..67b962e 100644
 +
  } // namespace lunasvg
 diff --git a/source/svgrenderstate.h b/source/svgrenderstate.h
-index 1e0d434..5d9b0cc 100644
+index 1e0d434..dfe2213 100644
 --- a/source/svgrenderstate.h
 +++ b/source/svgrenderstate.h
-@@ -32,11 +32,12 @@ class SVGRenderState {
+@@ -3,6 +3,10 @@
+ 
+ #include "svgelement.h"
+ 
++#include <algorithm>
++#include <cstdint>
++#include <limits>
++
+ namespace lunasvg {
+ 
+ enum class SVGRenderMode {
+@@ -32,11 +36,14 @@ class SVGRenderState {
  public:
      SVGRenderState(const SVGElement* element, const SVGRenderState& parent, const Transform& localTransform)
          : m_element(element), m_parent(&parent), m_currentTransform(parent.currentTransform() * localTransform)
 -        , m_mode(parent.mode()), m_canvas(parent.canvas())
 +        , m_mode(parent.mode()), m_canvas(parent.canvas()), m_recorder(parent.recorder())
++        , m_transformOperationCount(combinedTransformOperationCount(element, &parent, localTransform))
 +        , m_recordingSuppressed(parent.recordingSuppressed())
      {}
  
@@ -718,19 +1595,21 @@ index 1e0d434..5d9b0cc 100644
 -        : m_element(element), m_parent(parent), m_currentTransform(currentTransform), m_mode(mode), m_canvas(std::move(canvas))
 +    SVGRenderState(const SVGElement* element, const SVGRenderState* parent, const Transform& currentTransform, SVGRenderMode mode, std::shared_ptr<Canvas> canvas, PaintCommandList* recorder = nullptr)
 +        : m_element(element), m_parent(parent), m_currentTransform(currentTransform), m_mode(mode), m_canvas(std::move(canvas)), m_recorder(recorder)
++        , m_transformOperationCount(combinedTransformOperationCount(element, parent, currentTransform))
      {}
  
      Canvas& operator*() const { return *m_canvas; }
-@@ -47,6 +48,8 @@ public:
+@@ -47,6 +54,9 @@ public:
      const Transform& currentTransform() const { return m_currentTransform; }
      const SVGRenderMode mode() const { return m_mode; }
      const std::shared_ptr<Canvas>& canvas() const { return m_canvas; }
 +    PaintCommandList* recorder() const { return m_recorder; }
 +    bool recordingSuppressed() const { return m_recordingSuppressed; }
++    uint32_t transformOperationCount() const { return m_transformOperationCount; }
  
      Rect fillBoundingBox() const { return m_element->fillBoundingBox(); }
      Rect paintBoundingBox() const { return m_element->paintBoundingBox(); }
-@@ -55,6 +58,13 @@ public:
+@@ -55,13 +65,41 @@ public:
  
      void beginGroup(const SVGBlendInfo& blendInfo);
      void endGroup(const SVGBlendInfo& blendInfo);
@@ -743,13 +1622,32 @@ index 1e0d434..5d9b0cc 100644
 +                               const SVGElement* sourceElement = nullptr);
  
  private:
++    static uint32_t combinedTransformOperationCount(
++        const SVGElement* element, const SVGRenderState* parent,
++        const Transform& localTransform)
++    {
++        uint64_t count = parent ? parent->transformOperationCount() : 0;
++        if(element)
++            count += element->transformOperationCount();
++        const auto& matrix = localTransform.matrix();
++        const bool nonIdentity = matrix.a != 1.f || matrix.b != 0.f
++            || matrix.c != 0.f || matrix.d != 1.f
++            || matrix.e != 0.f || matrix.f != 0.f;
++        if(nonIdentity && (!element || element->transformOperationCount() == 0))
++            ++count;
++        return static_cast<uint32_t>(std::min<uint64_t>(
++            count, std::numeric_limits<uint32_t>::max()));
++    }
++
      const SVGElement* m_element;
-@@ -62,6 +72,8 @@ private:
+     const SVGRenderState* m_parent;
      const Transform m_currentTransform;
      const SVGRenderMode m_mode;
      std::shared_ptr<Canvas> m_canvas;
 +    PaintCommandList* m_recorder{nullptr};
++    uint32_t m_transformOperationCount{0};
 +    bool m_recordingSuppressed{false};
++    bool m_recordedClipBoundary{false};
  };
  
  } // namespace lunasvg

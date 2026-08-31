@@ -86,6 +86,30 @@ def test_supported_result_exposes_non_overlapping_stage_timings() -> None:
     assert result.result_conversion_seconds >= 0
 
 
+def test_supported_result_preserves_paint_identity_census() -> None:
+    result = lumina_svg_core.analyze_svg(
+        FIXTURES / "basic_fill_stroke.svg",
+        target_width_mm=20.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.raw.geometry_count == result.visible.geometry_count == 2
+    for collection in (result.raw, result.visible):
+        assert collection.rgba.tolist() == [
+            [255, 0, 0, 255],
+            [0, 0, 255, 255],
+        ]
+        assert collection.draw_indices.tolist() == [0, 1]
+        assert collection.source_indices.tolist() == [2, 2]
+        assert collection.source_kinds.tolist() == [0, 1]
+
+    assert result.silhouette.geometry_count == 1
+    assert result.silhouette.component_count == 1
+    assert result.silhouette.rgba.tolist() == [[0, 0, 0, 255]]
+    assert result.silhouette.source_kinds.tolist() == [2]
+
+
 def test_unsupported_result_has_canonical_empty_collections() -> None:
     result = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 10 10'><text>x</text></svg>",

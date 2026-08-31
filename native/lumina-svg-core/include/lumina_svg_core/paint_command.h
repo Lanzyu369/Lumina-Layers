@@ -4,6 +4,7 @@
 #include <lunasvg.h>
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -17,10 +18,12 @@ struct RecorderResult {
     uint32_t schema_version{RECORDER_SCHEMA_VERSION};
     lunasvg::Box bounds;
     lunasvg::Box viewport;
+    bool image_vectorizer_origin{false};
     std::vector<lunasvg::PaintCommand> commands;
 };
 
 RecorderResult recordPaintCommands(const std::string& filename);
+RecorderResult recordPaintCommandsPath(const std::filesystem::path& filename);
 RecorderResult recordPaintCommandsSvg(const std::string& svg);
 
 } // namespace lumina_svg_core

@@ -27,7 +27,7 @@ double pointSegmentDistance(const LocalPoint& point,
     const double dx = segmentEnd.x - segmentStart.x;
     const double dy = segmentEnd.y - segmentStart.y;
     const double lengthSquared = dx * dx + dy * dy;
-    if(lengthSquared <= std::numeric_limits<double>::epsilon())
+    if(lengthSquared == 0.0)
         return std::hypot(point.x - segmentStart.x,
                           point.y - segmentStart.y);
     const double projection = std::clamp(
@@ -71,9 +71,18 @@ std::vector<LocalSubpath> flattenPath(const lunasvg::PaintCommand& command,
     std::vector<LocalSubpath> output;
     LocalSubpath currentSubpath;
     LocalPoint currentPoint;
+    LocalPoint subpathStart;
+    bool hasCurrentPoint = false;
     size_t pointIndex = 0;
     auto finish = [&]() {
-        if(currentSubpath.points.size() >= 2)
+        currentSubpath.points.erase(
+            std::unique(
+                currentSubpath.points.begin(), currentSubpath.points.end(),
+                [](const LocalPoint& left, const LocalPoint& right) {
+                    return left.x == right.x && left.y == right.y;
+                }),
+            currentSubpath.points.end());
+        if(!currentSubpath.points.empty())
             output.emplace_back(std::move(currentSubpath));
         currentSubpath = {};
     };
@@ -84,11 +93,15 @@ std::vector<LocalSubpath> flattenPath(const lunasvg::PaintCommand& command,
             finish();
             const auto& point = command.path_points.at(pointIndex++);
             currentPoint = {point.x, point.y};
+            subpathStart = currentPoint;
+            hasCurrentPoint = true;
             currentSubpath.points.push_back(currentPoint);
             break;
         }
         case lunasvg::PaintPathVerb::LineTo: {
             const auto& point = command.path_points.at(pointIndex++);
+            if(currentSubpath.points.empty() && hasCurrentPoint)
+                currentSubpath.points.push_back(currentPoint);
             currentPoint = {point.x, point.y};
             currentSubpath.points.push_back(currentPoint);
             break;
@@ -100,6 +113,8 @@ std::vector<LocalSubpath> flattenPath(const lunasvg::PaintCommand& command,
             const LocalPoint control1{first.x, first.y};
             const LocalPoint control2{second.x, second.y};
             const LocalPoint end{last.x, last.y};
+            if(currentSubpath.points.empty() && hasCurrentPoint)
+                currentSubpath.points.push_back(currentPoint);
             flattenCubic(currentPoint, control1, control2, end,
                          tolerance, 0, currentSubpath.points);
             currentPoint = end;
@@ -108,6 +123,8 @@ std::vector<LocalSubpath> flattenPath(const lunasvg::PaintCommand& command,
         case lunasvg::PaintPathVerb::Close:
             currentSubpath.closed = true;
             finish();
+            if(hasCurrentPoint)
+                currentPoint = subpathStart;
             break;
         }
     }
@@ -202,6 +219,36 @@ std::vector<LocalSubpath> dashSubpath(const LocalSubpath& subpath,
         }
     }
     finishActive();
+    if(subpath.closed && !output.empty()) {
+        auto samePoint = [](const LocalPoint& left, const LocalPoint& right) {
+            const double scale = std::max({
+                1.0,
+                std::abs(left.x), std::abs(left.y),
+                std::abs(right.x), std::abs(right.y),
+            });
+            return std::hypot(left.x - right.x, left.y - right.y)
+                <= std::numeric_limits<double>::epsilon() * scale * 32.0;
+        };
+        if(output.size() >= 2
+                && samePoint(
+                    output.back().points.back(),
+                    output.front().points.front())) {
+            LocalSubpath merged = std::move(output.back());
+            output.pop_back();
+            const auto& first = output.front();
+            merged.points.insert(
+                merged.points.end(),
+                first.points.begin() + 1, first.points.end());
+            output.erase(output.begin());
+            output.insert(output.begin(), std::move(merged));
+        }
+        auto& seam = output.front();
+        if(seam.points.size() >= 2
+                && samePoint(seam.points.front(), seam.points.back())) {
+            seam.points.pop_back();
+            seam.closed = true;
+        }
+    }
     return output;
 }
 
@@ -235,6 +282,45 @@ int64_t quantizeLocal(double value)
     return static_cast<int64_t>(std::llround(value));
 }
 
+LocalPath pointCap(const LocalPoint& point,
+                   lunasvg::PaintLineCap cap,
+                   double radius,
+                   double flattenTolerance)
+{
+    constexpr double PI = 3.141592653589793238462643383279502884;
+    if(cap == lunasvg::PaintLineCap::Butt)
+        return {};
+    if(cap == lunasvg::PaintLineCap::Square) {
+        return {
+            {point.x - radius, point.y - radius},
+            {point.x + radius, point.y - radius},
+            {point.x + radius, point.y + radius},
+            {point.x - radius, point.y + radius},
+        };
+    }
+
+    const double cosine = std::clamp(
+        1.0 - flattenTolerance / radius, -1.0, 1.0);
+    const double halfAngle = std::acos(cosine);
+    const size_t segmentCount = std::clamp<size_t>(
+        halfAngle > 0
+            ? static_cast<size_t>(std::ceil(PI / halfAngle))
+            : 4096,
+        8, 4096);
+    LocalPath ring;
+    ring.reserve(segmentCount);
+    for(size_t index = 0; index < segmentCount; ++index) {
+        const double angle = 2.0 * PI
+            * static_cast<double>(index)
+            / static_cast<double>(segmentCount);
+        ring.push_back({
+            point.x + radius * std::cos(angle),
+            point.y + radius * std::sin(angle),
+        });
+    }
+    return ring;
+}
+
 } // namespace
 
 LocalPaths expandStrokeLocal(const lunasvg::PaintCommand& command,
@@ -261,6 +347,14 @@ LocalPaths expandStrokeLocal(const lunasvg::PaintCommand& command,
     const double delta = command.stroke.width * 0.5 / localGridStep;
     const double arcTolerance = localFlattenTolerance / localGridStep;
     for(const auto& subpath : strokeSubpaths) {
+        if(subpath.points.size() == 1) {
+            auto cap = pointCap(
+                subpath.points.front(), command.stroke.line_cap,
+                command.stroke.width * 0.5, localFlattenTolerance);
+            if(!cap.empty())
+                output.emplace_back(std::move(cap));
+            continue;
+        }
         Clipper2Lib::Path64 path;
         path.reserve(subpath.points.size());
         for(const auto& point : subpath.points) {

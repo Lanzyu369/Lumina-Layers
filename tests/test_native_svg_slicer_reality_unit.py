@@ -202,3 +202,4 @@ def test_native_svg_workflow_covers_all_release_realities() -> None:
     assert "pyinstaller --noconfirm --clean lumina_studio.spec" in workflow
     assert "actions/upload-artifact@v4" in workflow
     assert "cd native/lumina-svg-core" in workflow
+    assert '"shapely>=2,<3"' in workflow

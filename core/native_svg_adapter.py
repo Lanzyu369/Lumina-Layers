@@ -51,7 +51,7 @@ class NativeSvgGeometry:
     native_version: str
     native_schema_version: int
     geometry_backend: str = field(default="native", init=False)
-    image_vectorizer_bounds: None = field(default=None, init=False)
+    image_vectorizer_bounds: Any | None = None
 
 
 def _load_native_module() -> ModuleType:
@@ -272,12 +272,26 @@ def analyze_native_svg(
             native_version=native_version,
         )
     call_started = time.perf_counter()
-    result = module.analyze_svg(svg_path, target_width_mm, tolerance_mm)
+    result = module.analyze_svg(
+        svg_path,
+        target_width_mm,
+        tolerance_mm,
+        False,
+    )
     native_call_seconds = time.perf_counter() - call_started
 
     if result.status == "unsupported":
+        reason_code = str(
+            result.reason_code or "unsupported_svg_semantics"
+        )
+        if reason_code == "unsupported_stroke_policy":
+            reason_code = (
+                "legacy_stroke_parity"
+                if expand_stroke_to_fill
+                else "legacy_stroke_policy"
+            )
         return NativeSvgFallback(
-            reason_code=str(result.reason_code or "unsupported_svg_semantics"),
+            reason_code=reason_code,
             native_version=native_version,
         )
     if result.status != "supported":
@@ -321,6 +335,26 @@ def analyze_native_svg(
         raise ValueError("No valid filled shapes found in SVG.")
     adapter_seconds = time.perf_counter() - adapter_started
 
+    image_vectorizer_bounds = None
+    if bool(getattr(result, "image_vectorizer_origin", False)):
+        viewport_bounds = tuple(
+            float(value) for value in result.viewport_bounds
+        )
+        viewport_x, viewport_y, viewport_width, viewport_height = (
+            viewport_bounds
+        )
+        if (
+            np.all(np.isfinite(viewport_bounds))
+            and viewport_width > 0
+            and viewport_height > 0
+        ):
+            image_vectorizer_bounds = shapely.box(
+                viewport_x,
+                viewport_y,
+                viewport_x + viewport_width,
+                viewport_y + viewport_height,
+            )
+
     native_result_conversion_seconds = float(
         getattr(result, "result_conversion_seconds", 0.0)
     )
@@ -350,6 +384,7 @@ def analyze_native_svg(
         },
         native_version=native_version,
         native_schema_version=int(result.schema_version),
+        image_vectorizer_bounds=image_vectorizer_bounds,
     )
 
 

@@ -6,6 +6,8 @@ import hashlib
 import json
 from pathlib import Path
 
+from scripts import benchmark_native_svg_analysis as benchmark
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = REPO_ROOT / "progress" / "native-svg-fast-path-benchmark.json"
@@ -99,6 +101,8 @@ def test_complete_vector_analysis_benchmark_is_reproducible() -> None:
     assert measurement["p95_threshold_passed"] == (
         measurement["p95_seconds"] <= 1.25
     )
+    assert measurement["median_threshold_passed"] is True
+    assert measurement["p95_threshold_passed"] is True
 
     output = manifest["output"]
     assert output["geometry_backend"] == "native"
@@ -134,6 +138,8 @@ def test_real_r4c1_and_large_regression_are_not_substituted() -> None:
         assert len(large["sha256"]) == 64
         assert large["peak_rss_bytes"] <= 2 * 1024**3
         assert large["swap_delta_bytes"] <= 256 * 1024**2
+        assert large["rss_threshold_passed"] is True
+        assert large["swap_delta_threshold_passed"] is True
     else:
         assert large["matching_files"] == []
 
@@ -142,3 +148,22 @@ def fixture_classification(manifest: dict) -> str:
     """Return the public proxy classification for an explicit comparison."""
 
     return manifest["fixture"]["classification"]
+
+
+def test_benchmark_threshold_failures_are_process_fatal() -> None:
+    manifest = {
+        "measurement": {
+            "median_threshold_passed": False,
+            "p95_threshold_passed": True,
+        },
+        "large_regression": {
+            "status": "measured",
+            "rss_threshold_passed": True,
+            "swap_delta_threshold_passed": False,
+        },
+    }
+
+    assert benchmark._threshold_failures(manifest) == [
+        "measurement.median_threshold_passed",
+        "large_regression.swap_delta_threshold_passed",
+    ]

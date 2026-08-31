@@ -7,9 +7,10 @@ Usage:
 """
 
 import json
+from importlib.machinery import EXTENSION_SUFFIXES
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, get_module_file_attribute
 
 block_cipher = None
 ROOT = Path.cwd()
@@ -18,9 +19,10 @@ GLB_V2_HIDDENIMPORTS = ("rasterio.features", "manifold3d")
 NEROUED_3MF_PACKAGE = "neroued_3mf"
 NEROUED_3MF_HIDDENIMPORTS = ("neroued_3mf", "neroued_3mf._neroued_3mf")
 LUMINA_SVG_CORE_PACKAGE = "lumina_svg_core"
+LUMINA_SVG_CORE_EXTENSION = "lumina_svg_core._lumina_svg_core"
 LUMINA_SVG_CORE_HIDDENIMPORTS = (
     "lumina_svg_core",
-    "lumina_svg_core._lumina_svg_core",
+    LUMINA_SVG_CORE_EXTENSION,
 )
 
 
@@ -97,6 +99,27 @@ for glb_v2_package in GLB_V2_PACKAGES:
     lumina_svg_core_binaries,
     lumina_svg_core_hiddenimports,
 ) = collect_all(LUMINA_SVG_CORE_PACKAGE)
+lumina_svg_core_extension_path = Path(
+    get_module_file_attribute(LUMINA_SVG_CORE_EXTENSION)
+).resolve()
+if not any(
+    str(lumina_svg_core_extension_path).endswith(suffix)
+    for suffix in EXTENSION_SUFFIXES
+):
+    raise RuntimeError(
+        "Native SVG module did not resolve to a CPython extension: "
+        f"{lumina_svg_core_extension_path}"
+    )
+if not any(
+    Path(source_path).resolve() == lumina_svg_core_extension_path
+    for source_path, _destination in lumina_svg_core_binaries
+):
+    # Editable scikit-build installs place the extension beside site-packages
+    # while importing Python sources from the workspace. collect_all() cannot
+    # discover that split layout, so bundle the resolved extension explicitly.
+    lumina_svg_core_binaries.append(
+        (str(lumina_svg_core_extension_path), LUMINA_SVG_CORE_PACKAGE)
+    )
 
 backend_datas = [
     # Includes the app-owned Workshop Registry key set and offline snapshot in
