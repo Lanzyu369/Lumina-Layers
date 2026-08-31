@@ -79,14 +79,15 @@ fixture/provenance. The local wheel SHA-256 was
 the sdist SHA-256 was
 `f734647deb97e71020176fd3c1fc489150d6f8cc28828ec3e4d853394c134bae`.
 
-A real macOS arm64 PyInstaller onefile binary was built at a temporary output
-path and invoked through Lumina's `--native-svg-self-test` public probe. The
+A real macOS arm64 PyInstaller onefile binary was built from the production
+spec in an environment containing the complete `requirements.txt` dependency
+set, then invoked through Lumina's `--native-svg-self-test` public probe. The
 probe returned native version `0.1.1`, result schema `1`, one raw geometry, two
 visible geometries, two silhouette components, and fingerprint
 `e98dcd0f413d8ea56e59f9f2e7feee240c6d9052dbdb9b3e76248e416e47b469`.
-Cold onefile extraction and execution took 19.65 seconds with peak RSS
-49,938,432 bytes and no swap growth. The binary SHA-256 was
-`c220d9dbd57adba2efcca182606fe681d5cbf2048427ade48448272abab81297`.
+Cold onefile extraction and execution took 20.38 seconds with peak RSS
+51,314,688 bytes and no swap growth. The 196 MiB binary SHA-256 was
+`05695d929cc8878e94ba761f0b7e749f5b3061ab37138eb395f183af67035aa6`.
 Archive inspection confirmed the compiled `_lumina_svg_core` extension and the
 project, LunaSVG, PlutoVG, Clipper2, FreeType, stb, and pybind11 licenses were
 present.
