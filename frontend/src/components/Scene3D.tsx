@@ -777,6 +777,10 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const [diagnostics, setDiagnostics] = useState<SceneDiagnosticsSnapshot | null>(null);
   const [diagnosticsVisible, setDiagnosticsVisible] = useState(false);
   const [performanceVisible, setPerformanceVisible] = useState(false);
+  const [previewCanvasBoundsState, setPreviewCanvasBoundsState] = useState<{
+    sourceUrl: string;
+    bounds: PreviewModelBounds;
+  } | null>(null);
   const [modelSurfaceBedGridVisible, setModelSurfaceBedGridVisible] = useState(true);
 
   const cancelOrbitPanPointer = useCallback((spaceOnly: boolean) => {
@@ -789,6 +793,18 @@ function Scene3D({ modelUrl }: Scene3DProps) {
     if (canvas) {
       dispatchPointerCancel(canvas, activePointer.pointerId);
     }
+  }, []);
+
+  const handlePreviewCanvasBoundsChange = useCallback((
+    sourceUrl: string,
+    bounds: PreviewModelBounds | null,
+  ) => {
+    setPreviewCanvasBoundsState((current) => {
+      if (bounds) {
+        return { sourceUrl, bounds };
+      }
+      return current?.sourceUrl === sourceUrl ? null : current;
+    });
   }, []);
   const handleSpacePanDeactivate = useCallback(() => {
     cancelOrbitPanPointer(true);
@@ -1430,6 +1446,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
               puzzleOverlayEnabled={puzzleEnabled && Boolean(puzzleOverlayUrl)}
               puzzleOverlayUrl={puzzleOverlayUrl}
               colorLayerHeightMm={colorLayerHeightMm}
+              onPreviewCanvasBoundsChange={handlePreviewCanvasBoundsChange}
             />
           </Suspense>
         ) : previewGlbUrl ? (
@@ -1454,6 +1471,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
               puzzleOverlayEnabled={puzzleEnabled && Boolean(puzzleOverlayUrl)}
               puzzleOverlayUrl={puzzleOverlayUrl}
               colorLayerHeightMm={colorLayerHeightMm}
+              onPreviewCanvasBoundsChange={handlePreviewCanvasBoundsChange}
             />
           </Suspense>
         ) : null}
@@ -1469,6 +1487,11 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             positionPreset={loopPositionPreset}
             modelBounds={modelBounds}
             contours={colorContours}
+            contourCanvasBounds={
+              previewCanvasBoundsState?.sourceUrl === (effectiveModelUrl || previewGlbUrl)
+                ? previewCanvasBoundsState.bounds
+                : null
+            }
             cameraPanModifierActive={isSpacePanActive}
           />
         )}

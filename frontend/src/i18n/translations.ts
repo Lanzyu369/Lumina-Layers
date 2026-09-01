@@ -5657,8 +5657,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Y Offset",
   },
   loop_offset_y_hint: {
-    zh: "挂件环相对顶部接触点的垂直偏移（毫米）。正值向外移动；顶部居中且未旋转时，不允许向内侵入模型。",
-    en: "Vertical offset from the top contact point (in mm). Positive moves outward; an unrotated top-center loop cannot move inward into the model.",
+    zh: "挂件环相对当前预设吸附点的垂直偏移（毫米）。顶部居中且未旋转时，向内移动会限制在模型局部轮廓处。",
+    en: "Vertical offset from the current preset anchor (in mm). For an unrotated top-center loop, inward movement is clamped at the model's local contour.",
   },
   loop_preset_top_center: {
     zh: "上中",

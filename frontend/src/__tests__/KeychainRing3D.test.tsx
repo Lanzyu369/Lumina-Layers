@@ -129,6 +129,7 @@ describe("KeychainRing3D", () => {
             spike: [[[0, 0], [4, 0], [4, 60], [0, 60]]],
             body: [[[18, 0], [42, 0], [42, 58], [18, 58]]],
           }}
+          contourCanvasBounds={{ minX: -21, maxX: 21, minY: -30, maxY: 30 }}
         />,
       );
 
@@ -512,7 +513,7 @@ describe("computeLoopPosition", () => {
     };
 
     const pos = computeLoopPosition(
-      "top-center", contourBounds, 0, -25, contours, 8,
+      "top-center", contourBounds, 0, -25, contours, 8, contourBounds,
     );
 
     expect(pos).toEqual({ x: 0, y: 10 });
@@ -537,12 +538,41 @@ describe("computeLoopPosition", () => {
       };
 
       const pos = computeLoopPosition(
-        "top-center", contourBounds, 0, capturedOffsetY, contours, 7,
+        "top-center", contourBounds, 0, capturedOffsetY, contours, 7, contourBounds,
       );
 
       expect(pos).toEqual({ x: 0, y: 28 });
     },
   );
+
+  it("keeps full-canvas contour coordinates when backing bounds are wider", () => {
+    const contours = {
+      spike: [
+        [[10, 0], [20, 0], [20, 90], [10, 90]],
+      ],
+      body: [
+        [[40, 0], [60, 0], [60, 60], [40, 60]],
+      ],
+    };
+    const backingBounds = {
+      minX: -50,
+      maxX: 50,
+      minY: -50,
+      maxY: 50,
+    };
+
+    const pos = computeLoopPosition(
+      "top-center",
+      backingBounds,
+      0,
+      -10.5,
+      contours,
+      7,
+      backingBounds,
+    );
+
+    expect(pos).toEqual({ x: 0, y: 10 });
+  });
 
   it("works with asymmetric bounds", () => {
     const asymBounds = { minX: 0, maxX: 20, minY: -5, maxY: 25 };

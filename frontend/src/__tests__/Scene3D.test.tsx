@@ -30,7 +30,13 @@ vi.mock("../components/BedPlatform", () => ({
     return <div data-testid="mock-bed-platform" />;
   },
 }));
-vi.mock("../components/KeychainRing3D", () => ({ default: () => null }));
+let capturedKeychainRingProps: Record<string, unknown> | null = null;
+vi.mock("../components/KeychainRing3D", () => ({
+  default: (props: Record<string, unknown>) => {
+    capturedKeychainRingProps = props;
+    return null;
+  },
+}));
 let capturedModelSurfaceSelectorProps: Record<string, unknown> | null = null;
 vi.mock("../components/ModelSurfaceSelector3D", () => ({
   default: (props: Record<string, unknown>) => {
@@ -217,6 +223,7 @@ beforeEach(() => {
     capturedCanvasProps = {};
     capturedOrbitControlsProps = {};
     capturedInteractiveViewerProps = null;
+    capturedKeychainRingProps = null;
     capturedBedPlatformProps = null;
     capturedModelSurfaceSelectorProps = null;
     capturedFridgeMagnet3DProps = null;
@@ -701,6 +708,55 @@ beforeEach(() => {
       expect(capturedInteractiveViewerProps?.hoverEnabled).toBeUndefined();
     });
 
+  });
+
+  describe("keychain contour-coordinate wiring", () => {
+    it("passes the preview canvas bounds into the keychain contour mapper", () => {
+      useConverterStore.setState({
+        previewGlbUrl: "/api/files/mock-preview.glb",
+        add_loop: true,
+        modelBounds: {
+          minX: -50,
+          maxX: 50,
+          minY: -50,
+          maxY: 50,
+          maxZ: 2,
+        },
+      });
+
+      render(<Scene3D />);
+
+      const onBoundsChange = capturedInteractiveViewerProps
+        ?.onPreviewCanvasBoundsChange as ((
+          sourceUrl: string,
+          bounds: Record<string, number> | null,
+        ) => void) | undefined;
+      expect(onBoundsChange).toBeTypeOf("function");
+
+      const canvasBounds = {
+        minX: -50,
+        maxX: 50,
+        minY: -50,
+        maxY: 50,
+        maxZ: 0,
+      };
+      act(() => onBoundsChange?.("/api/files/mock-preview.glb", canvasBounds));
+
+      expect(capturedKeychainRingProps?.contourCanvasBounds).toEqual(canvasBounds);
+
+      act(() => {
+        useConverterStore.setState({ previewGlbUrl: "/api/files/next-preview.glb" });
+      });
+
+      expect(capturedKeychainRingProps?.contourCanvasBounds).toBeNull();
+
+      const nextCanvasBounds = { ...canvasBounds, minX: -40, maxX: 60 };
+      act(() => onBoundsChange?.("/api/files/next-preview.glb", nextCanvasBounds));
+      expect(capturedKeychainRingProps?.contourCanvasBounds).toEqual(nextCanvasBounds);
+
+      act(() => onBoundsChange?.("/api/files/mock-preview.glb", null));
+      expect(capturedKeychainRingProps?.contourCanvasBounds).toEqual(nextCanvasBounds);
+    });
   });
 
   describe("model surface overlay staging", () => {

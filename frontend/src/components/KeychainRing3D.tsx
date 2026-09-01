@@ -67,6 +67,13 @@ export function resetKeychainRingGeometryDisposeForTests(): void {
   pendingKeychainRingGeometryDisposals.clear();
 }
 
+export interface ContourCanvasBounds {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+}
+
 export interface KeychainRing3DProps {
   enabled: boolean;
   cameraPanModifierActive?: boolean;
@@ -85,6 +92,7 @@ export interface KeychainRing3DProps {
     maxZ: number;
   } | null;
   contours?: Record<string, number[][][]>;
+  contourCanvasBounds?: ContourCanvasBounds | null;
 }
 
 /**
@@ -144,45 +152,32 @@ export function createKeychainRingGeometry(
 
 function contourTopWithinBand(
   contours: Record<string, number[][][]> | undefined,
-  modelBounds: { minX: number; maxX: number; minY: number; maxY: number },
+  contourCanvasBounds: ContourCanvasBounds | null | undefined,
   centerX: number,
   contactWidth: number,
 ): number | null {
-  if (!contours || contactWidth <= 0) {
+  if (!contours || !contourCanvasBounds || contactWidth <= 0) {
     return null;
   }
 
   const polygons = Object.values(contours).flat();
-  let contourMinX = Number.POSITIVE_INFINITY;
-  let contourMaxX = Number.NEGATIVE_INFINITY;
-  let contourMinY = Number.POSITIVE_INFINITY;
-  let contourMaxY = Number.NEGATIVE_INFINITY;
-  for (const polygon of polygons) {
-    for (const point of polygon) {
-      if (point.length < 2 || !Number.isFinite(point[0]) || !Number.isFinite(point[1])) {
-        continue;
-      }
-      contourMinX = Math.min(contourMinX, point[0]);
-      contourMaxX = Math.max(contourMaxX, point[0]);
-      contourMinY = Math.min(contourMinY, point[1]);
-      contourMaxY = Math.max(contourMaxY, point[1]);
-    }
-  }
-
-  const contourWidth = contourMaxX - contourMinX;
-  const contourHeight = contourMaxY - contourMinY;
-  if (!Number.isFinite(contourWidth) || !Number.isFinite(contourHeight)) {
-    return null;
-  }
-  if (contourWidth <= 0 || contourHeight <= 0) {
+  if (
+    !Number.isFinite(contourCanvasBounds.minX)
+    || !Number.isFinite(contourCanvasBounds.maxX)
+    || !Number.isFinite(contourCanvasBounds.minY)
+    || !Number.isFinite(contourCanvasBounds.maxY)
+    || contourCanvasBounds.maxX <= contourCanvasBounds.minX
+    || contourCanvasBounds.maxY <= contourCanvasBounds.minY
+  ) {
     return null;
   }
 
-  const scaleX = (modelBounds.maxX - modelBounds.minX) / contourWidth;
-  const scaleY = (modelBounds.maxY - modelBounds.minY) / contourHeight;
+  // S11 emits contour points in full-canvas world-space millimetres with
+  // origin (0, 0). The GLB canvas anchor is the same rectangle after the
+  // viewer centers the scene, so only its world-space origin is required.
   const mapPoint = (point: number[]) => ({
-    x: modelBounds.minX + (point[0] - contourMinX) * scaleX,
-    y: modelBounds.minY + (point[1] - contourMinY) * scaleY,
+    x: contourCanvasBounds.minX + point[0],
+    y: contourCanvasBounds.minY + point[1],
   });
   const bandMinX = centerX - contactWidth / 2;
   const bandMaxX = centerX + contactWidth / 2;
@@ -253,6 +248,7 @@ export function computeLoopPosition(
   offsetY: number,
   contours?: Record<string, number[][][]>,
   contactWidth = 0,
+  contourCanvasBounds?: ContourCanvasBounds | null,
 ): { x: number; y: number } {
   return computeLoopPlacement(
     preset,
@@ -261,6 +257,7 @@ export function computeLoopPosition(
     offsetY,
     contours,
     contactWidth,
+    contourCanvasBounds,
   ).position;
 }
 
@@ -271,11 +268,12 @@ function computeLoopPlacement(
   offsetY: number,
   contours: Record<string, number[][][]> | undefined,
   contactWidth: number,
+  contourCanvasBounds: ContourCanvasBounds | null | undefined,
 ): { position: { x: number; y: number }; usesLocalContour: boolean } {
   const baseX = (modelBounds.minX + modelBounds.maxX) / 2;
   const x = baseX + offsetX;
   const localTop = preset === "top-center"
-    ? contourTopWithinBand(contours, modelBounds, x, contactWidth)
+    ? contourTopWithinBand(contours, contourCanvasBounds, x, contactWidth)
     : null;
   if (localTop !== null) {
     return {
@@ -312,6 +310,7 @@ function KeychainRing3D({
   positionPreset,
   modelBounds,
   contours,
+  contourCanvasBounds,
 }: KeychainRing3DProps) {
   const { controls, camera, gl } = useThree();
 
@@ -354,8 +353,18 @@ function KeychainRing3D({
       offsetY,
       Math.abs(angle) <= 1e-9 ? contours : undefined,
       width,
+      contourCanvasBounds,
     );
-  }, [positionPreset, modelBounds, offsetX, offsetY, angle, contours, width]);
+  }, [
+    positionPreset,
+    modelBounds,
+    offsetX,
+    offsetY,
+    angle,
+    contours,
+    width,
+    contourCanvasBounds,
+  ]);
   const position = placement?.position ?? null;
   const constrainToLocalContour = placement?.usesLocalContour ?? false;
 

@@ -65,6 +65,10 @@ export interface InteractiveModelViewerProps {
   puzzleOverlayEnabled?: boolean;
   puzzleOverlayUrl?: string | null;
   colorLayerHeightMm?: number;
+  onPreviewCanvasBoundsChange?: (
+    sourceUrl: string,
+    bounds: PuzzleOverlayBounds | null,
+  ) => void;
 }
 
 /** Default color layer thickness in mm (5 layers x 0.08mm). */
@@ -533,6 +537,7 @@ function InteractiveModelViewer({
   puzzleOverlayEnabled = false,
   puzzleOverlayUrl = null,
   colorLayerHeightMm = DEFAULT_COLOR_LAYER_HEIGHT_MM,
+  onPreviewCanvasBoundsChange,
 }: InteractiveModelViewerProps) {
   const { scene } = useGLTF(url);
   const groupRef = useRef<THREE.Group>(null);
@@ -843,6 +848,11 @@ function InteractiveModelViewer({
   useEffect(() => {
     useConverterStore.getState().setModelBounds(modelBounds);
   }, [modelBounds]);
+
+  useEffect(() => {
+    onPreviewCanvasBoundsChange?.(url, puzzleOverlayBounds);
+    return () => onPreviewCanvasBoundsChange?.(url, null);
+  }, [onPreviewCanvasBoundsChange, puzzleOverlayBounds, url]);
 
   useEffect(() => {
     return () => {
