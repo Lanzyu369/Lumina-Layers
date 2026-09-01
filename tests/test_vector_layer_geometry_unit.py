@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from shapely.geometry import MultiPolygon, Polygon, box
+from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, box
 
 import core.vector_layer_geometry as vector_layer_geometry
 from core.vector_layer_geometry import (
@@ -245,29 +245,46 @@ def test_different_run_bounds_remain_independently_closed() -> None:
 
 
 @pytest.mark.parametrize(
-    "source",
+    ("source", "contact"),
     [
-        Polygon(
-            [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)],
-            holes=[[(5.0, 0.0), (6.0, 1.0), (4.0, 1.0)]],
+        (
+            Polygon(
+                [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)],
+                holes=[[(5.0, 0.0), (6.0, 1.0), (4.0, 1.0)]],
+            ),
+            (5.0, 0.0),
         ),
-        Polygon(
-            [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)],
-            holes=[
-                [(2.0, 2.0), (5.0, 5.0), (2.0, 8.0)],
-                [(8.0, 2.0), (8.0, 8.0), (5.0, 5.0)],
-            ],
+        (
+            Polygon(
+                [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)],
+                holes=[
+                    [(2.0, 2.0), (5.0, 5.0), (2.0, 8.0)],
+                    [(8.0, 2.0), (8.0, 8.0), (5.0, 5.0)],
+                ],
+            ),
+            (5.0, 5.0),
         ),
     ],
     ids=("hole_touches_shell", "holes_touch_each_other"),
 )
-def test_point_touching_rings_are_separated_locally(source: Polygon) -> None:
+def test_point_touching_rings_split_cap_fans_without_moving_geometry(
+    source: Polygon,
+    contact: tuple[float, float],
+) -> None:
     mesh = build_vector_layered_volume(
         [{"geometry": source, "z_offset": 0.0, "height": 0.2}],
         scale_mm_per_svg_unit=1.0,
     )
 
     _assert_closed_volume(mesh, source.area * 0.2)
+    contact_units = np.rint(np.asarray(contact) / 0.0001).astype(np.int64)
+    vertex_units = np.rint(
+        np.asarray(mesh.vertices)[:, :2] / 0.0001
+    ).astype(np.int64)
+    contact_vertices = np.all(vertex_units == contact_units, axis=1)
+    # Each material fan owns an independent top/bottom index at the exact
+    # source contact. No ring is translated to manufacture a gap.
+    assert int(np.count_nonzero(contact_vertices)) >= 4
 
 
 def test_real_touching_hole_fixture_stays_closed() -> None:
@@ -351,11 +368,11 @@ def test_exact_integer_zero_area_ear_is_replaced_by_positive_faces() -> None:
         grid_mm=1.0,
     )
 
-    assert len(validated) == 3
+    assert len(validated.faces) == 3
     assert np.all(
         vector_layer_geometry._integer_triangle_signed_twice_area(
             vertices,
-            validated,
+            validated.faces,
             grid_mm=1.0,
         )
         != 0
@@ -456,6 +473,35 @@ def test_writer_zero_residue_does_not_remove_a_printable_body() -> None:
         [
             {
                 "geometry": MultiPolygon([printable, residue]),
+                "z_offset": 0.0,
+                "height": 0.08,
+            }
+        ],
+        scale_mm_per_svg_unit=1.0,
+    )
+
+    _assert_closed_volume(mesh, printable.area * 0.08)
+
+
+def test_make_valid_line_residue_does_not_reject_printable_collection() -> None:
+    printable = box(0.0, 0.0, 10.0, 10.0)
+    zero_area_residue = Polygon(
+        [
+            (11.0, 5.0),
+            (11.0, 5.0 + 1e-15),
+            (11.0, 5.0 + 2e-15),
+            (11.0, 5.0),
+        ]
+    )
+    assert not zero_area_residue.is_valid
+    assert zero_area_residue.area == 0.0
+
+    mesh = build_vector_layered_volume(
+        [
+            {
+                "geometry": GeometryCollection(
+                    [printable, zero_area_residue]
+                ),
                 "z_offset": 0.0,
                 "height": 0.08,
             }

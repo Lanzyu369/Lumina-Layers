@@ -2691,6 +2691,34 @@ class TestRunLengthExtrudeMerging:
             result["White"]["meshes"][0].split(only_watertight=False)
         ) == 3
 
+    def test_run_group_does_not_create_a_point_touching_hole(self):
+        left = Polygon(
+            [(0, 0), (2, 0), (1, 2), (2, 2), (2, 4), (0, 4)]
+        )
+        right = Polygon(
+            [(2, 0), (4, 0), (4, 4), (2, 4), (2, 2), (3, 2)]
+        )
+        matched = [
+            {"geometry": left, "recipe": [0], "color": (255, 255, 255)},
+            {"geometry": right, "recipe": [0], "color": (255, 255, 255)},
+        ]
+
+        result = VectorProcessor._run_length_extrude(
+            matched,
+            num_layers=1,
+            layer_h=0.08,
+            num_channels=4,
+            slot_names=["White", "Cyan", "Magenta", "Yellow"],
+            scale_factor=1.0,
+        )
+
+        mesh = result["White"]["meshes"][0]
+        assert mesh.is_watertight
+        assert abs(float(mesh.volume)) == pytest.approx(
+            (left.area + right.area) * 0.08
+        )
+        assert len(mesh.split(only_watertight=False)) == 1
+
     def test_materializes_each_material_once_across_adjacent_run_groups(self):
         sq1 = Polygon([(0, 0), (5, 0), (5, 5), (0, 5)])
         sq2 = Polygon([(10, 0), (15, 0), (15, 5), (10, 5)])

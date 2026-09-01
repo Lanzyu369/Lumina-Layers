@@ -19,13 +19,10 @@ import shapely
 import trimesh
 from mapbox_earcut import triangulate_float64
 from shapely import STRtree, affinity, set_precision
-from shapely.geometry import GeometryCollection, MultiPolygon, Polygon
+from shapely.geometry import GeometryCollection, LineString, MultiPolygon, Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely.geometry.polygon import orient
 from shapely.validation import make_valid
-
-
-_MAX_CONTACT_TRANSLATION_GRID_UNITS = 4
 
 
 @dataclass(frozen=True)
@@ -111,6 +108,7 @@ class _IndexedPolygon:
 
     exterior_units: np.ndarray
     hole_units: tuple[np.ndarray, ...]
+    coordinate_alias_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -122,7 +120,14 @@ class _IndexedRunGroup:
     area_mm2: float
     coordinate_count: int
     hole_count: int
-    separated_ring_contact_count: int
+
+
+@dataclass(frozen=True)
+class _ValidatedCap:
+    """One checked cap and its reusable directed boundary edges."""
+
+    faces: np.ndarray
+    boundary_edges: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -132,283 +137,123 @@ class _PhysicalLayerSlab:
     z_end_mm: float
 
 
+def _ring_with_contact_nodes(
+    ring: np.ndarray,
+    contact_coordinates: set[tuple[int, int]],
+) -> np.ndarray:
+    """Insert exact point contacts into every ring segment they lie on."""
+
+    if not contact_coordinates:
+        return ring
+    output: list[tuple[int, int]] = []
+    ring_size = len(ring)
+    for index in range(ring_size):
+        start = ring[index]
+        end = ring[(index + 1) % ring_size]
+        output.append((int(start[0]), int(start[1])))
+        delta_x = int(end[0]) - int(start[0])
+        delta_y = int(end[1]) - int(start[1])
+        squared_length = delta_x * delta_x + delta_y * delta_y
+        interior: list[tuple[int, tuple[int, int]]] = []
+        for coordinate in contact_coordinates:
+            relative_x = int(coordinate[0]) - int(start[0])
+            relative_y = int(coordinate[1]) - int(start[1])
+            projection = relative_x * delta_x + relative_y * delta_y
+            if (
+                relative_x * delta_y - relative_y * delta_x == 0
+                and 0 < projection < squared_length
+            ):
+                interior.append((projection, coordinate))
+        output.extend(coordinate for _projection, coordinate in sorted(interior))
+    return np.asarray(output, dtype=np.int64)
+
+
+def _node_indexed_polygon_ring_contacts(
+    polygon: _IndexedPolygon,
+) -> _IndexedPolygon:
+    """Represent every cross-ring point contact as an explicit ring vertex."""
+
+    rings = [polygon.exterior_units, *polygon.hole_units]
+    if len(rings) <= 1:
+        return polygon
+    ring_lines = [
+        LineString(np.vstack((ring, ring[:1])).astype(np.float64))
+        for ring in rings
+    ]
+    tree = STRtree(ring_lines)
+    pairs = np.asarray(
+        tree.query(ring_lines, predicate="intersects"),
+        dtype=np.int64,
+    )
+    contacts: list[set[tuple[int, int]]] = [set() for _ring in rings]
+    if pairs.size:
+        for first_raw, second_raw in pairs.T:
+            first = int(first_raw)
+            second = int(second_raw)
+            if first >= second:
+                continue
+            intersection = ring_lines[first].intersection(ring_lines[second])
+            for part in shapely.get_parts(intersection):
+                if part.geom_type != "Point":
+                    raise ValueError("Vector polygon rings overlap on the writer grid")
+                coordinate = np.asarray(part.coords[0], dtype=np.float64)
+                integer_coordinate = np.rint(coordinate).astype(np.int64)
+                if not np.array_equal(coordinate, integer_coordinate.astype(np.float64)):
+                    raise ValueError(
+                        "Vector polygon ring contact left the canonical grid"
+                    )
+                key = (int(integer_coordinate[0]), int(integer_coordinate[1]))
+                contacts[first].add(key)
+                contacts[second].add(key)
+
+    contact_occurrence_count = sum(len(items) for items in contacts)
+    unique_contacts = set().union(*contacts)
+    coordinate_alias_count = contact_occurrence_count - len(unique_contacts)
+    if coordinate_alias_count == 0:
+        return polygon
+
+    noded_rings = [
+        _ring_with_contact_nodes(ring, ring_contacts)
+        for ring, ring_contacts in zip(rings, contacts)
+    ]
+    return _IndexedPolygon(
+        exterior_units=noded_rings[0],
+        hole_units=tuple(noded_rings[1:]),
+        coordinate_alias_count=int(coordinate_alias_count),
+    )
+
+
+def _printable_polygon_parts(geometry: BaseGeometry) -> tuple[Polygon, ...]:
+    """Extract positive-area polygons while discarding dimensional residue."""
+
+    if isinstance(geometry, GeometryCollection):
+        return tuple(
+            polygon
+            for item in geometry.geoms
+            for polygon in _printable_polygon_parts(item)
+        )
+    if not isinstance(geometry, (Polygon, MultiPolygon)):
+        return ()
+    if geometry.is_empty or float(geometry.area) <= 0.0:
+        return ()
+    if not geometry.is_valid:
+        return _printable_polygon_parts(make_valid(geometry))
+    if isinstance(geometry, Polygon):
+        return (geometry,)
+    return tuple(
+        polygon
+        for item in geometry.geoms
+        for polygon in _printable_polygon_parts(item)
+    )
+
+
 def _polygon_parts(geometry: BaseGeometry) -> tuple[Polygon, ...]:
     """Return printable polygon parts, ignoring zero-area collection residue."""
 
-    if isinstance(geometry, GeometryCollection):
-        parts = tuple(
-            polygon
-            for item in geometry.geoms
-            if isinstance(item, (Polygon, MultiPolygon))
-            for polygon in _polygon_parts(item)
-        )
-        if not parts:
-            raise ValueError("Vector run group requires polygonal geometry")
-        return parts
-    if not isinstance(geometry, (Polygon, MultiPolygon)):
+    parts = _printable_polygon_parts(geometry)
+    if not parts:
         raise ValueError("Vector run group requires polygonal geometry")
-    if not geometry.is_valid:
-        return _polygon_parts(make_valid(geometry))
-    if isinstance(geometry, Polygon):
-        parts = (geometry,)
-    else:
-        parts = tuple(geometry.geoms)
-    if not parts or any(part.is_empty or float(part.area) <= 0.0 for part in parts):
-        raise ValueError("Vector run group contains empty polygonal geometry")
     return parts
-
-
-def _polygon_has_ring_contact(polygon: Polygon) -> bool:
-    """Return whether distinct boundary rings touch in physical space."""
-
-    if not polygon.interiors:
-        return False
-    shell_boundary = Polygon(polygon.exterior).boundary
-    holes = [Polygon(ring) for ring in polygon.interiors]
-    tree = STRtree(holes)
-    if len(tree.query(shell_boundary, predicate="intersects")) > 0:
-        return True
-    pairs = np.asarray(tree.query(holes, predicate="intersects"), dtype=np.int64)
-    return bool(pairs.size and np.any(pairs[0] < pairs[1]))
-
-
-def _bounded_lattice_translation_candidates(
-    *,
-    grid_mm: float,
-    preferred_directions: Sequence[tuple[int, int]],
-) -> list[tuple[float, float]]:
-    """Return every bounded integer-grid shift in deterministic order.
-
-    Cardinal and diagonal moves retain their historical priority.  The rest
-    of each Chebyshev ring is then searched by Euclidean distance, so narrow
-    contact wedges can use shifts such as two grid units by one without
-    increasing the constructive displacement bound.
-    """
-
-    preferred = list(dict.fromkeys(preferred_directions))
-    result: list[tuple[float, float]] = []
-    for radius in range(1, _MAX_CONTACT_TRANSLATION_GRID_UNITS + 1):
-        ring = {
-            (dx, dy)
-            for dx in range(-radius, radius + 1)
-            for dy in range(-radius, radius + 1)
-            if max(abs(dx), abs(dy)) == radius
-        }
-        ordered_units: list[tuple[int, int]] = []
-        for direction_x, direction_y in preferred:
-            candidate = (direction_x * radius, direction_y * radius)
-            if candidate in ring:
-                ordered_units.append(candidate)
-                ring.remove(candidate)
-        ordered_units.extend(
-            sorted(
-                ring,
-                key=lambda offset: (
-                    offset[0] * offset[0] + offset[1] * offset[1],
-                    offset[0],
-                    offset[1],
-                ),
-            )
-        )
-        result.extend(
-            (
-                float(dx) * float(grid_mm),
-                float(dy) * float(grid_mm),
-            )
-            for dx, dy in ordered_units
-        )
-    return result
-
-
-def _ring_translation_candidates(*, grid_mm: float) -> list[tuple[float, float]]:
-    """Return deterministic sub-nozzle translations for touching holes."""
-
-    directions = (
-        (1, 0),
-        (-1, 0),
-        (0, 1),
-        (0, -1),
-        (1, 1),
-        (1, -1),
-        (-1, 1),
-        (-1, -1),
-    )
-    return _bounded_lattice_translation_candidates(
-        grid_mm=float(grid_mm),
-        preferred_directions=directions,
-    )
-
-
-def _translate_on_physical_grid(
-    polygon: Polygon,
-    *,
-    x_offset: float,
-    y_offset: float,
-    grid_mm: float,
-) -> Polygon | None:
-    """Translate and immediately restore exact physical-grid coordinates."""
-
-    translated = affinity.translate(
-        polygon,
-        xoff=float(x_offset),
-        yoff=float(y_offset),
-    )
-    snapped = set_precision(
-        translated,
-        grid_size=float(grid_mm),
-        mode="pointwise",
-    )
-    if not isinstance(snapped, Polygon) or snapped.is_empty or not snapped.is_valid:
-        return None
-    return snapped
-
-
-def _separate_polygon_ring_contacts(
-    polygon: Polygon,
-    *,
-    grid_mm: float,
-) -> tuple[Polygon, bool]:
-    """Separate point-touching holes without changing their area.
-
-    OGC-valid polygons may let a hole touch the shell or another hole at one
-    point.  A closed indexed prism cannot represent that weakly-simple contact:
-    the cap and the two wall rings need different indices at the same writer
-    coordinate.  Translate only the touching hole by a few writer-safe grid
-    units before triangulation.  The hole area is unchanged and the bounded
-    displacement is orders of magnitude below supported nozzle widths.
-    """
-
-    if not _polygon_has_ring_contact(polygon):
-        return polygon, False
-
-    shell = _translate_on_physical_grid(
-        Polygon(polygon.exterior),
-        x_offset=0.0,
-        y_offset=0.0,
-        grid_mm=float(grid_mm),
-    )
-    if shell is None:
-        raise ValueError("Vector outer ring could not enter the writer grid")
-    shell_boundary = shell.boundary
-    holes = []
-    for ring in polygon.interiors:
-        snapped_hole = _translate_on_physical_grid(
-            Polygon(ring),
-            x_offset=0.0,
-            y_offset=0.0,
-            grid_mm=float(grid_mm),
-        )
-        if snapped_hole is None:
-            raise ValueError("Vector inner ring could not enter the writer grid")
-        holes.append(snapped_hole)
-    writer_area = float(shell.area) - math.fsum(float(hole.area) for hole in holes)
-    translated = False
-    candidates = _ring_translation_candidates(grid_mm=float(grid_mm))
-    hole_tree = STRtree(holes)
-    shell_contacts = {
-        int(index)
-        for index in np.asarray(
-            hole_tree.query(shell_boundary, predicate="intersects")
-        ).reshape(-1)
-    }
-    touching_neighbors: dict[int, set[int]] = {}
-    pairs = np.asarray(
-        hole_tree.query(holes, predicate="intersects"),
-        dtype=np.int64,
-    )
-    if pairs.size:
-        for first_index, second_index in pairs.T:
-            first = int(first_index)
-            second = int(second_index)
-            if first >= second:
-                continue
-            touching_neighbors.setdefault(first, set()).add(second)
-            touching_neighbors.setdefault(second, set()).add(first)
-
-    pending_indices = sorted(
-        shell_contacts | set(touching_neighbors),
-        key=lambda index: (
-            float(holes[index].area),
-            *holes[index].bounds,
-            int(index),
-        ),
-    )
-    maximum_relative_motion = float(grid_mm) * 12.0
-    while pending_indices:
-        deferred_indices: list[int] = []
-        moved_this_pass = False
-        for hole_index in pending_indices:
-            hole = holes[hole_index]
-            neighbor_indices = {
-                int(index)
-                for index in np.asarray(
-                    hole_tree.query(
-                        hole,
-                        predicate="dwithin",
-                        distance=maximum_relative_motion,
-                    )
-                ).reshape(-1)
-                if int(index) != hole_index
-            }
-            neighbor_indices.update(touching_neighbors.get(hole_index, ()))
-            requires_separation = (
-                shell_boundary.intersects(hole.boundary)
-                or any(
-                    hole.intersects(holes[index])
-                    for index in neighbor_indices
-                )
-            )
-            if not requires_separation:
-                continue
-
-            separated = None
-            for x_offset, y_offset in candidates:
-                candidate = _translate_on_physical_grid(
-                    hole,
-                    x_offset=x_offset,
-                    y_offset=y_offset,
-                    grid_mm=float(grid_mm),
-                )
-                if candidate is None:
-                    continue
-                if (
-                    shell.contains(candidate)
-                    and shell_boundary.disjoint(candidate)
-                    and all(
-                        candidate.disjoint(holes[index])
-                        for index in neighbor_indices
-                    )
-                ):
-                    separated = candidate
-                    break
-            if separated is None:
-                # A large ring may be boxed in by smaller point contacts (or
-                # vice versa).  Move every currently feasible neighbour first,
-                # then retry the blocked ring against the updated geometry.
-                deferred_indices.append(hole_index)
-                continue
-            holes[hole_index] = separated
-            translated = True
-            moved_this_pass = True
-
-        if not deferred_indices:
-            break
-        if not moved_this_pass:
-            raise ValueError(
-                "Vector point-touching rings could not remain independent"
-            )
-        pending_indices = deferred_indices
-
-    result = Polygon(
-        shell.exterior.coords,
-        [hole.exterior.coords for hole in holes],
-    )
-    if result.is_empty or not result.is_valid or _polygon_has_ring_contact(result):
-        raise ValueError("Vector physical-grid output retains touching rings")
-    area_tolerance = max(1e-12, abs(writer_area) * 1e-12)
-    if abs(float(result.area) - writer_area) > area_tolerance:
-        raise ValueError("Vector ring separation changed printable coverage")
-    return result, translated
 
 
 def _signed_twice_ring_area(coordinates: np.ndarray) -> float:
@@ -452,6 +297,28 @@ def _oriented_polygon_rings(polygon: _IndexedPolygon) -> list[np.ndarray]:
     return oriented_rings
 
 
+def _canonical_cap_face_count(
+    rings: Sequence[np.ndarray],
+    *,
+    coordinate_alias_count: int,
+) -> int:
+    """Return the planar-triangulation face count for possibly touching rings."""
+
+    vertex_count = sum(len(ring) for ring in rings)
+    coordinate_aliases = int(coordinate_alias_count)
+    if coordinate_aliases < 0:
+        raise ValueError("Vector canonical cap has invalid coordinate aliases")
+    face_count = (
+        vertex_count
+        + 2 * (len(rings) - 1)
+        - 2
+        - 2 * coordinate_aliases
+    )
+    if face_count <= 0:
+        raise ValueError("Vector canonical cap has no printable faces")
+    return int(face_count)
+
+
 def _cap_expected_boundary_edges(ring_ends: np.ndarray) -> np.ndarray:
     ring_starts = np.concatenate((np.asarray([0]), ring_ends[:-1])).astype(np.int64)
     boundary_chunks = []
@@ -461,6 +328,40 @@ def _cap_expected_boundary_edges(ring_ends: np.ndarray) -> np.ndarray:
             np.sort(np.column_stack((indices, np.roll(indices, -1))), axis=1)
         )
     return np.vstack(boundary_chunks)
+
+
+def _canonical_coordinate_edges(
+    vertices_2d: np.ndarray,
+    edges: np.ndarray,
+    *,
+    grid_mm: float,
+) -> np.ndarray:
+    """Return undirected boundary segments as canonical integer coordinates."""
+
+    integer_vertices = np.rint(
+        np.asarray(vertices_2d, dtype=np.float64) / float(grid_mm)
+    ).astype(np.int64)
+    pairs = integer_vertices[np.asarray(edges, dtype=np.int64).reshape((-1, 2))]
+    swap = (pairs[:, 0, 0] > pairs[:, 1, 0]) | (
+        (pairs[:, 0, 0] == pairs[:, 1, 0])
+        & (pairs[:, 0, 1] > pairs[:, 1, 1])
+    )
+    if bool(np.any(swap)):
+        pairs = pairs.copy()
+        pairs[swap] = pairs[swap, ::-1]
+    return pairs.reshape((-1, 4))
+
+
+def _sorted_coordinate_edges(edges: np.ndarray) -> np.ndarray:
+    """Sort canonical coordinate-edge rows deterministically."""
+
+    values = np.asarray(edges, dtype=np.int64).reshape((-1, 4))
+    if len(values) <= 1:
+        return values
+    order = np.lexsort(
+        (values[:, 3], values[:, 2], values[:, 1], values[:, 0])
+    )
+    return values[order]
 
 
 def _straight_ring_chain(
@@ -477,50 +378,51 @@ def _straight_ring_chain(
         np.asarray(vertices_2d, dtype=np.float64) / float(grid_mm)
     ).astype(np.int64)
     ring_starts = np.concatenate((np.asarray([0]), ring_ends[:-1])).astype(np.int64)
+    start_coordinate = integer_vertices[start_index]
+    end_coordinate = integer_vertices[end_index]
     for ring_start, ring_end in zip(ring_starts, ring_ends.astype(np.int64)):
-        if not (
-            int(ring_start) <= start_index < int(ring_end)
-            and int(ring_start) <= end_index < int(ring_end)
-        ):
-            continue
         ring = np.arange(int(ring_start), int(ring_end), dtype=np.int64)
-        start_position = int(np.flatnonzero(ring == start_index)[0])
-        end_position = int(np.flatnonzero(ring == end_index)[0])
-        forward = np.concatenate(
-            (
-                ring[start_position:],
-                ring[: end_position + 1],
-            )
+        ring_coordinates = integer_vertices[ring]
+        start_positions = np.flatnonzero(
+            np.all(ring_coordinates == start_coordinate, axis=1)
         )
-        if start_position <= end_position:
-            forward = ring[start_position : end_position + 1]
-        backward = np.concatenate(
-            (
-                ring[: start_position + 1][::-1],
-                ring[end_position:][::-1],
-            )
+        end_positions = np.flatnonzero(
+            np.all(ring_coordinates == end_coordinate, axis=1)
         )
-        if start_position >= end_position:
-            backward = ring[end_position : start_position + 1][::-1]
+        for start_position in start_positions:
+            for end_position in end_positions:
+                if int(start_position) == int(end_position):
+                    continue
+                ring_size = len(ring)
+                forward_length = (
+                    (int(end_position) - int(start_position)) % ring_size
+                ) + 1
+                backward_length = (
+                    (int(start_position) - int(end_position)) % ring_size
+                ) + 1
+                forward = ring[
+                    (int(start_position) + np.arange(forward_length)) % ring_size
+                ]
+                backward = ring[
+                    (int(start_position) - np.arange(backward_length)) % ring_size
+                ]
 
-        start = integer_vertices[start_index]
-        end = integer_vertices[end_index]
-        delta = end - start
-        squared_length = int(np.dot(delta, delta))
-        for candidate in (forward, backward):
-            if len(candidate) <= 2:
-                continue
-            coordinates = integer_vertices[candidate]
-            relative = coordinates - start
-            cross = relative[:, 0] * delta[1] - relative[:, 1] * delta[0]
-            projection = relative @ delta
-            if (
-                np.all(cross == 0.0)
-                and np.all(projection >= 0.0)
-                and np.all(projection <= squared_length)
-                and np.all(projection[1:] > projection[:-1])
-            ):
-                return candidate
+                delta = end_coordinate - start_coordinate
+                squared_length = int(np.dot(delta, delta))
+                for candidate in (forward, backward):
+                    if len(candidate) <= 2:
+                        continue
+                    coordinates = integer_vertices[candidate]
+                    relative = coordinates - start_coordinate
+                    cross = relative[:, 0] * delta[1] - relative[:, 1] * delta[0]
+                    projection = relative @ delta
+                    if (
+                        np.all(cross == 0.0)
+                        and np.all(projection >= 0.0)
+                        and np.all(projection <= squared_length)
+                        and np.all(projection[1:] > projection[:-1])
+                    ):
+                        return candidate
     return None
 
 
@@ -540,7 +442,12 @@ def _restore_noded_cap_boundary(
     )
     expected_boundary = _cap_expected_boundary_edges(ring_ends)
     expected_keys = {
-        (int(edge[0]), int(edge[1])) for edge in expected_boundary
+        tuple(int(value) for value in edge)
+        for edge in _canonical_coordinate_edges(
+            vertices_2d,
+            expected_boundary,
+            grid_mm=grid_mm,
+        )
     }
     for _split_index in range(len(vertices_2d)):
         cap_edges = np.sort(
@@ -549,11 +456,20 @@ def _restore_noded_cap_boundary(
         )
         unique_edges, counts = np.unique(cap_edges, axis=0, return_counts=True)
         boundary_edges = unique_edges[counts == 1]
+        boundary_coordinate_edges = _canonical_coordinate_edges(
+            vertices_2d,
+            boundary_edges,
+            grid_mm=grid_mm,
+        )
         unexpected = next(
             (
                 edge
-                for edge in boundary_edges
-                if (int(edge[0]), int(edge[1])) not in expected_keys
+                for edge, coordinate_edge in zip(
+                    boundary_edges,
+                    boundary_coordinate_edges,
+                )
+                if tuple(int(value) for value in coordinate_edge)
+                not in expected_keys
             ),
             None,
         )
@@ -600,6 +516,108 @@ def _restore_noded_cap_boundary(
     raise ValueError("Vector canonical cap could not restore all ring nodes")
 
 
+def _split_coincident_cap_fans(
+    vertices_2d: np.ndarray,
+    cap_faces: np.ndarray,
+    *,
+    grid_mm: float,
+    expected_coordinate_alias_count: int,
+) -> np.ndarray:
+    """Give every material fan at a point contact its own vertex index.
+
+    OGC-valid polygon rings may meet at one coordinate. Constrained
+    triangulators collapse those coordinate aliases to one index, which makes
+    the future vertical edge non-manifold. The printable cap already contains
+    one edge-connected triangle fan per boundary occurrence, so reuse the
+    existing coincident ring indices to separate those fans without moving a
+    coordinate or changing coverage.
+    """
+
+    faces = np.asarray(cap_faces, dtype=np.int64).reshape((-1, 3)).copy()
+    integer_vertices = np.rint(
+        np.asarray(vertices_2d, dtype=np.float64) / float(grid_mm)
+    ).astype(np.int64)
+    _coordinates, inverse, counts = np.unique(
+        integer_vertices,
+        axis=0,
+        return_inverse=True,
+        return_counts=True,
+    )
+    actual_coordinate_alias_count = int(np.sum(counts - 1, dtype=np.int64))
+    if actual_coordinate_alias_count != int(expected_coordinate_alias_count):
+        raise ValueError("Vector cap coordinate aliases differ from its rings")
+    for coordinate_group in np.flatnonzero(counts > 1):
+        aliases = np.flatnonzero(inverse == coordinate_group).astype(np.int64)
+        representative = int(aliases[0])
+        for alias in aliases[1:]:
+            faces[faces == int(alias)] = representative
+
+        incident_faces = np.flatnonzero(
+            np.any(faces == representative, axis=1)
+        ).astype(np.int64)
+        if len(incident_faces) == 0:
+            raise ValueError("Vector cap omitted a coincident boundary vertex")
+
+        neighbor_faces: dict[int, list[int]] = {}
+        face_neighbors: dict[int, tuple[int, ...]] = {}
+        for raw_face_index in incident_faces:
+            face_index = int(raw_face_index)
+            neighbors = tuple(
+                int(index)
+                for index in faces[face_index]
+                if int(index) != representative
+            )
+            if len(neighbors) != 2:
+                raise ValueError("Vector cap has a degenerate contact fan")
+            face_neighbors[face_index] = neighbors
+            for neighbor in neighbors:
+                neighbor_faces.setdefault(neighbor, []).append(face_index)
+
+        remaining = {int(index) for index in incident_faces}
+        components: list[list[int]] = []
+        while remaining:
+            pending = [min(remaining)]
+            remaining.remove(pending[0])
+            component: list[int] = []
+            while pending:
+                face_index = pending.pop()
+                component.append(face_index)
+                for neighbor in face_neighbors[face_index]:
+                    for adjacent in neighbor_faces[neighbor]:
+                        if adjacent in remaining:
+                            remaining.remove(adjacent)
+                            pending.append(adjacent)
+            components.append(sorted(component))
+
+        components.sort(key=lambda component: component[0])
+        if len(components) != len(aliases):
+            raise ValueError(
+                "Vector cap contact fans do not match boundary occurrences"
+            )
+        for alias, component in zip(aliases, components):
+            component_faces = faces[component].copy()
+            component_faces[component_faces == representative] = int(alias)
+            faces[component] = component_faces
+    return faces
+
+
+def _oriented_cap_boundary_edges(cap_faces: np.ndarray) -> np.ndarray:
+    """Return cap boundary edges in the owning CCW triangle direction."""
+
+    faces = np.asarray(cap_faces, dtype=np.int64).reshape((-1, 3))
+    directed_edges = faces[:, [[0, 1], [1, 2], [2, 0]]].reshape((-1, 2))
+    undirected_edges = np.sort(directed_edges, axis=1)
+    _unique_edges, first_indices, counts = np.unique(
+        undirected_edges,
+        axis=0,
+        return_index=True,
+        return_counts=True,
+    )
+    if np.any((counts != 1) & (counts != 2)):
+        raise ValueError("Vector canonical cap has non-manifold edge incidence")
+    return directed_edges[first_indices[counts == 1]]
+
+
 def _validate_cap_indices(
     vertices_2d: np.ndarray,
     cap_faces: np.ndarray,
@@ -607,7 +625,8 @@ def _validate_cap_indices(
     *,
     expected_area_mm2: float,
     grid_mm: float,
-) -> np.ndarray:
+    coordinate_alias_count: int = 0,
+) -> _ValidatedCap:
     """Orient and validate one Earcut cap without building a 3D fallback."""
 
     faces = np.asarray(cap_faces, dtype=np.int64).reshape((-1, 3))
@@ -642,24 +661,41 @@ def _validate_cap_indices(
     if abs(cap_area - expected_area_mm2) > area_tolerance:
         raise ValueError("Vector canonical cap triangulation changed coverage")
 
-    cap_edges = np.sort(
-        faces[:, [[0, 1], [1, 2], [2, 0]]].reshape((-1, 2)),
-        axis=1,
+    if coordinate_alias_count:
+        faces = _split_coincident_cap_fans(
+            vertices_2d,
+            faces,
+            grid_mm=grid_mm,
+            expected_coordinate_alias_count=int(coordinate_alias_count),
+        )
+    cap_boundary = _oriented_cap_boundary_edges(faces)
+    boundary_degrees = np.bincount(
+        cap_boundary.reshape(-1),
+        minlength=len(vertices_2d),
     )
-    unique_edges, counts = np.unique(cap_edges, axis=0, return_counts=True)
-    if np.any((counts != 1) & (counts != 2)):
-        raise ValueError("Vector canonical cap has non-manifold edge incidence")
-    cap_boundary = unique_edges[counts == 1]
+    used_boundary_vertices = np.unique(cap_boundary)
+    if np.any(boundary_degrees[used_boundary_vertices] != 2):
+        raise ValueError("Vector canonical cap retains a pinched boundary vertex")
 
     expected_boundary = _cap_expected_boundary_edges(ring_ends)
     if not np.array_equal(
-        cap_boundary[np.lexsort((cap_boundary[:, 1], cap_boundary[:, 0]))],
-        expected_boundary[
-            np.lexsort((expected_boundary[:, 1], expected_boundary[:, 0]))
-        ],
+        _sorted_coordinate_edges(
+            _canonical_coordinate_edges(
+                vertices_2d,
+                cap_boundary,
+                grid_mm=grid_mm,
+            )
+        ),
+        _sorted_coordinate_edges(
+            _canonical_coordinate_edges(
+                vertices_2d,
+                expected_boundary,
+                grid_mm=grid_mm,
+            )
+        ),
     ):
         raise ValueError("Vector canonical cap boundary differs from its rings")
-    return faces
+    return _ValidatedCap(faces=faces, boundary_edges=cap_boundary)
 
 
 def _triangle_signed_twice_area(triangles: np.ndarray) -> np.ndarray:
@@ -910,8 +946,11 @@ def _extrude_indexed_run_group(
         sum(len(ring) for ring in rings) for rings in polygon_rings
     ]
     cap_face_counts = [
-        vertex_count + 2 * (len(rings) - 1) - 2
-        for vertex_count, rings in zip(ring_vertex_counts, polygon_rings)
+        _canonical_cap_face_count(
+            rings,
+            coordinate_alias_count=int(polygon.coordinate_alias_count),
+        )
+        for polygon, rings in zip(prepared.polygons, polygon_rings)
     ]
     vertex_count = 2 * sum(ring_vertex_counts)
     face_count = sum(
@@ -948,7 +987,7 @@ def _extrude_indexed_run_group(
             polygon,
             grid_mm=float(prepared.grid_mm),
         )
-        cap_faces = _validate_cap_indices(
+        validated_cap = _validate_cap_indices(
             vertices_2d,
             _restore_noded_cap_boundary(
                 vertices_2d,
@@ -959,7 +998,9 @@ def _extrude_indexed_run_group(
             ring_ends,
             expected_area_mm2=expected_area,
             grid_mm=float(prepared.grid_mm),
+            coordinate_alias_count=int(polygon.coordinate_alias_count),
         )
+        cap_faces = validated_cap.faces
         if len(cap_faces) != expected_cap_face_count:
             raise ValueError("Vector canonical cap triangle count is inconsistent")
 
@@ -978,31 +1019,25 @@ def _extrude_indexed_run_group(
         faces[face_cursor : face_cursor + cap_count] = cap_faces + top_start
         face_cursor += cap_count
 
-        local_ring_start = 0
-        for ring in rings:
-            ring_indices = np.arange(
-                local_ring_start,
-                local_ring_start + len(ring),
-                dtype=np.int64,
+        boundary_edges = validated_cap.boundary_edges
+        if len(boundary_edges) != local_vertex_count:
+            raise ValueError("Vector canonical cap boundary edge count is inconsistent")
+        side_count = len(boundary_edges) * 2
+        faces[face_cursor : face_cursor + side_count : 2] = np.column_stack(
+            (
+                bottom_start + boundary_edges[:, 0],
+                bottom_start + boundary_edges[:, 1],
+                top_start + boundary_edges[:, 1],
             )
-            next_indices = np.roll(ring_indices, -1)
-            side_count = len(ring) * 2
-            faces[face_cursor : face_cursor + side_count : 2] = np.column_stack(
-                (
-                    bottom_start + ring_indices,
-                    bottom_start + next_indices,
-                    top_start + next_indices,
-                )
+        )
+        faces[face_cursor + 1 : face_cursor + side_count : 2] = np.column_stack(
+            (
+                bottom_start + boundary_edges[:, 0],
+                top_start + boundary_edges[:, 1],
+                top_start + boundary_edges[:, 0],
             )
-            faces[face_cursor + 1 : face_cursor + side_count : 2] = np.column_stack(
-                (
-                    bottom_start + ring_indices,
-                    top_start + next_indices,
-                    top_start + ring_indices,
-                )
-            )
-            face_cursor += side_count
-            local_ring_start += len(ring)
+        )
+        face_cursor += side_count
         vertex_cursor += local_vertex_count * 2
 
     if vertex_cursor != vertex_count or face_cursor != face_count:
@@ -1014,9 +1049,6 @@ def _extrude_indexed_run_group(
         "output_hole_count": int(prepared.hole_count),
         "output_area_mm2": float(prepared.area_mm2),
         "output_coordinate_count": int(prepared.coordinate_count),
-        "separated_ring_contact_count": int(
-            prepared.separated_ring_contact_count
-        ),
         "grid_mm": float(prepared.grid_mm),
         "mesh_vertex_count": int(vertex_count),
         "mesh_face_count": int(face_count),
@@ -1085,6 +1117,7 @@ def _indexed_polygon(
             for ring in oriented.interiors
         ),
     )
+    prepared = _node_indexed_polygon_ring_contacts(prepared)
     return prepared, _oriented_polygon_rings(prepared)
 
 
@@ -1245,15 +1278,9 @@ def _prepared_interval_group(
     coordinate_count = 0
     hole_count = 0
     area_mm2 = 0.0
-    separated_ring_contacts = 0
 
     for raw_polygon in footprints:
-        polygon, separated = _separate_polygon_ring_contacts(
-            raw_polygon,
-            grid_mm=float(grid_mm),
-        )
-        separated_ring_contacts += int(separated)
-        for simple_polygon in _polygon_parts(polygon):
+        for simple_polygon in _polygon_parts(raw_polygon):
             prepared, rings = _indexed_polygon(
                 simple_polygon,
                 grid_mm=float(grid_mm),
@@ -1271,7 +1298,6 @@ def _prepared_interval_group(
         area_mm2=float(area_mm2),
         coordinate_count=int(coordinate_count),
         hole_count=int(hole_count),
-        separated_ring_contact_count=int(separated_ring_contacts),
     )
 
 
