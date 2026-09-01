@@ -5,7 +5,10 @@ import type {
   WorkshopBugReportContext,
 } from "../api/feedback";
 import { useActionHistoryStore } from "../stores/actionHistoryStore";
-import { useConverterStore } from "../stores/converter";
+import {
+  resolveBugReportOriginalImageFile,
+  useConverterStore,
+} from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useSingleStageStore } from "../stores/singleStageStore";
 import { useWidgetStore } from "../stores/widgetStore";
@@ -96,7 +99,7 @@ export function collectBugReportOriginalImage(): File | null {
   ) {
     return null;
   }
-  return converter.imageFile ?? null;
+  return resolveBugReportOriginalImageFile(converter.imageFile);
 }
 
 function deriveWorkshopContext(
@@ -172,6 +175,7 @@ export function collectBugReportContext(): BugReportContextPayload {
     isConverterActive && sourceVersion === "legacy"
       ? [...converter.lut_names]
       : null;
+  const originalImageFile = resolveBugReportOriginalImageFile(converter.imageFile);
 
   return {
     url: typeof window !== "undefined" ? window.location.href : "",
@@ -215,7 +219,7 @@ export function collectBugReportContext(): BugReportContextPayload {
     active_original_image_ref: deriveOriginalImageRef(
       isConverterActive,
       converter.sessionId ?? null,
-      converter.imageFile ?? null,
+      originalImageFile,
       converter.batchMode,
       converter.batchFiles.length,
     ),

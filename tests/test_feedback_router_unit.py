@@ -10,8 +10,9 @@
 
 from __future__ import annotations
 
-import json
+import asyncio
 import hashlib
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -352,6 +353,54 @@ def test_bug_report_openapi_declares_json_and_multipart_bodies(
     ]["enum"] == ["too_large"]
 
 
+def test_bug_report_multipart_parser_caps_file_before_spooling() -> None:
+    from starlette.datastructures import Headers
+
+    from api.routers.feedback import _BugReportMultiPartParser
+
+    boundary = "lumina-stream-limit"
+    file_bytes = b"0123456789ABCDEF"
+    body = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="request_payload"\r\n\r\n'
+        "{}\r\n"
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="original_image"; '
+        'filename="source.png"\r\n'
+        "Content-Type: image/png\r\n\r\n"
+    ).encode("ascii") + file_bytes + f"\r\n--{boundary}--\r\n".encode("ascii")
+
+    async def parse() -> tuple[set[str], int, bytes]:
+        async def stream():
+            for offset in range(0, len(body), 7):
+                yield body[offset:offset + 7]
+
+        parser = _BugReportMultiPartParser(
+            Headers({"content-type": f"multipart/form-data; boundary={boundary}"}),
+            stream(),
+            max_file_size=8,
+            max_files=1,
+            max_fields=2,
+            max_part_size=1024,
+        )
+        form = await parser.parse()
+        try:
+            upload = form["original_image"]
+            assert isinstance(upload, UploadFile)
+            await upload.seek(0)
+            stored_bytes = await upload.read()
+            return parser.oversized_file_fields, upload.size or 0, stored_bytes
+        finally:
+            await form.close()
+
+    oversized_fields, stored_size, stored_bytes = asyncio.run(parse())
+
+    assert oversized_fields == {"original_image"}
+    assert stored_size <= 8
+    assert len(stored_bytes) <= 8
+    assert stored_bytes != file_bytes
+
+
 @pytest.mark.parametrize(
     ("filename", "mime_type", "original_bytes"),
     [
@@ -587,6 +636,57 @@ def test_submit_bug_report_oversized_original_does_not_block_text_report(
     assert ticket_json["attachments"]["original_image"]["status"] == "too_large"
     ticket_dir = next(feedback_root.glob(f"*/{data['ticket_id']}"))
     assert list(ticket_dir.glob("original.*")) == []
+
+
+def test_stream_oversized_original_does_not_block_text_report(
+    client: TestClient,
+    feedback_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import api.routers.feedback as feedback_router
+    from api.dependencies import get_file_registry
+
+    monkeypatch.setattr(feedback_router, "MAX_DIRECT_ORIGINAL_IMAGE_BYTES", 8)
+    session_id = "stream-oversized-fallback-session"
+    session_source = tmp_path / "session-source.png"
+    session_source.write_bytes(b"SESSION_FALLBACK")
+    get_file_registry().register_path(
+        session_id=session_id,
+        path=str(session_source),
+        filename=session_source.name,
+    )
+    payload = _payload(description="Stream-capped source still reports")
+    payload["context"]["active_session_ids"]["converter"] = session_id
+    payload["context"]["active_original_image_ref"] = {
+        "session_id": session_id,
+        "filename": "oversized.png",
+        "source": "converter",
+    }
+
+    response = client.post(
+        "/api/feedback/bug-report",
+        files={
+            "request_payload": (None, json.dumps(payload), "application/json"),
+            "original_image": (
+                "oversized.png",
+                b"0123456789ABCDEF",
+                "image/png",
+            ),
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["original_image_status"] == "session_fallback"
+    ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
+    assert ticket_json["description"] == "Stream-capped source still reports"
+    original = ticket_json["attachments"]["original_image"]
+    assert original["status"] == "attached"
+    assert original["capture_source"] == "file_registry"
+    assert original["direct_upload_status"] == "too_large"
+    ticket_dir = next(feedback_root.glob(f"*/{data['ticket_id']}"))
+    assert (ticket_dir / "original.png").read_bytes() == b"SESSION_FALLBACK"
 
 
 def test_submit_bug_report_unsupported_original_does_not_block_text_report(

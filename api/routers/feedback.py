@@ -15,16 +15,18 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from math import isfinite
 from pathlib import Path
-from typing import Any, AsyncIterator, Literal
+from typing import Any, AsyncGenerator, AsyncIterator, Literal
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
-from starlette.datastructures import UploadFile
+from starlette.datastructures import FormData, Headers, UploadFile
+from starlette.formparsers import MultiPartException, MultiPartParser
 
 from api.dependencies import get_file_registry, get_session_store
 from api.feedback_assembler import (
+    MAX_DIRECT_ORIGINAL_IMAGE_BYTES,
     collect_direct_original_upload,
     collect_sync_attachments,
     finalize_ticket_async,
@@ -708,6 +710,46 @@ def _dump_bug_report_request(
     return request.model_dump(mode="json", exclude=exclude)
 
 
+class _BugReportMultiPartParser(MultiPartParser):
+    """Bound multipart file spooling while continuing to parse form fields.
+
+    在流式解析阶段限制文件落盘量，同时继续解析其余表单字段。
+    """
+
+    def __init__(
+        self,
+        headers: Headers,
+        stream: AsyncGenerator[bytes, None],
+        *,
+        max_file_size: int,
+        max_files: int | float,
+        max_fields: int | float,
+        max_part_size: int,
+    ) -> None:
+        super().__init__(
+            headers,
+            stream,
+            max_files=max_files,
+            max_fields=max_fields,
+            max_part_size=max_part_size,
+        )
+        self._max_file_size = max_file_size
+        self._current_file_size = 0
+        self.oversized_file_fields: set[str] = set()
+
+    def on_part_begin(self) -> None:
+        super().on_part_begin()
+        self._current_file_size = 0
+
+    def on_part_data(self, data: bytes, start: int, end: int) -> None:
+        if self._current_part.file is not None:
+            self._current_file_size += end - start
+            if self._current_file_size > self._max_file_size:
+                self.oversized_file_fields.add(self._current_part.field_name)
+                return
+        super().on_part_data(data, start, end)
+
+
 async def _parse_bug_report_submission(
     http_request: Request,
 ) -> tuple[BugReportRequest, UploadFile | None, str | None]:
@@ -724,22 +766,40 @@ async def _parse_bug_report_submission(
     """
     content_type = http_request.headers.get("content-type", "").lower()
     is_multipart = content_type.startswith("multipart/form-data")
+    multipart_form: FormData | None = None
+    keep_upload_open = False
     try:
         if is_multipart:
-            form = await http_request.form(
+            parser = _BugReportMultiPartParser(
+                http_request.headers,
+                http_request.stream(),
+                max_file_size=MAX_DIRECT_ORIGINAL_IMAGE_BYTES,
                 max_files=1,
                 max_fields=2,
                 max_part_size=_MAX_SCREENSHOT_DATA_URL_LENGTH + 1_000_000,
             )
-            raw_payload = form.get("request_payload")
-            upload_value = form.get("original_image")
-            omission_value = form.get("original_image_omission_reason")
+            try:
+                multipart_form = await parser.parse()
+            except MultiPartException as exc:
+                raise HTTPException(status_code=400, detail=exc.message) from exc
+
+            raw_payload = multipart_form.get("request_payload")
+            upload_value = multipart_form.get("original_image")
+            omission_value = multipart_form.get("original_image_omission_reason")
             if not isinstance(raw_payload, str):
                 raise ValueError("request_payload must be a JSON string")
             payload_value = json.loads(raw_payload)
             original_upload = (
                 upload_value if isinstance(upload_value, UploadFile) else None
             )
+            uploaded_fields = {
+                field_name
+                for field_name, value in multipart_form.multi_items()
+                if isinstance(value, UploadFile)
+            }
+            unexpected_file_fields = uploaded_fields - {"original_image"}
+            if unexpected_file_fields:
+                raise ValueError("Only original_image may be uploaded as a file")
             if omission_value is not None and omission_value != "too_large":
                 raise ValueError(
                     "original_image_omission_reason must be 'too_large'"
@@ -751,7 +811,11 @@ async def _parse_bug_report_submission(
                 raise ValueError(
                     "original_image and original_image_omission_reason are exclusive"
                 )
+            if "original_image" in parser.oversized_file_fields:
+                original_upload = None
+                omission_reason = "too_large"
             request_model = BugReportRequest.model_validate(payload_value)
+            keep_upload_open = original_upload is not None
             return request_model, original_upload, omission_reason
 
         payload_value = await http_request.json()
@@ -792,6 +856,20 @@ async def _parse_bug_report_submission(
                 "ctx": {"error": str(exc)},
             }]
         ) from exc
+    finally:
+        if multipart_form is not None and not keep_upload_open:
+            try:
+                await multipart_form.close()
+            except OSError as exc:
+                log.warning(
+                    "Bug-report multipart form cleanup failed.",
+                    extra={
+                        "event": "feedback_attachment_collection_failed",
+                        "attachment_kind": "original_image",
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                    },
+                )
 
 
 async def _bug_report_submission_dependency(
@@ -808,9 +886,25 @@ async def _bug_report_submission_dependency(
         tuple: Validated payload, optional source image, and omission reason.
             / 已校验载荷、可选原图与省略原因。
     """
+    submission: tuple[BugReportRequest, UploadFile | None, str | None] | None = None
     try:
-        yield await _parse_bug_report_submission(http_request)
+        submission = await _parse_bug_report_submission(http_request)
+        yield submission
     finally:
+        original_upload = submission[1] if submission is not None else None
+        if original_upload is not None:
+            try:
+                await original_upload.close()
+            except OSError as exc:
+                log.warning(
+                    "Bug-report multipart upload cleanup failed.",
+                    extra={
+                        "event": "feedback_attachment_collection_failed",
+                        "attachment_kind": "original_image",
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                    },
+                )
         try:
             await http_request.close()
         except OSError as exc:

@@ -14,6 +14,7 @@ export {
   getMaterialArchiveReliefMinimumTotalHeight,
   inferDefaultMaterialBackingDirName,
   isDynamicMaterialActive,
+  resolveBugReportOriginalImageFile,
   resolveConverterSourceSelection,
 } from "./store";
 
