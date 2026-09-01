@@ -7,19 +7,16 @@ Usage:
 """
 
 import json
-import os
-import sysconfig
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all
 
 block_cipher = None
 ROOT = Path.cwd()
-NATIVE_EXT_SUFFIX = sysconfig.get_config_var("EXT_SUFFIX") or (".pyd" if os.name == "nt" else ".so")
-NATIVE_EXT_PATH = ROOT / f"clipper2_batch{NATIVE_EXT_SUFFIX}"
-native_binaries = [(str(NATIVE_EXT_PATH), ".")] if NATIVE_EXT_PATH.exists() else []
 GLB_V2_PACKAGES = ("rasterio", "manifold3d")
 GLB_V2_HIDDENIMPORTS = ("rasterio.features", "manifold3d")
+NEROUED_3MF_PACKAGE = "neroued_3mf"
+NEROUED_3MF_HIDDENIMPORTS = ("neroued_3mf", "neroued_3mf._neroued_3mf")
 
 
 def collect_glb_v2_package(package_name):
@@ -79,6 +76,15 @@ for glb_v2_package in GLB_V2_PACKAGES:
     glb_v2_binaries.extend(package_binaries)
     glb_v2_hiddenimports.extend(package_hiddenimports)
 
+# This is a required compiled dependency, unlike the optional GLB v2 packages.
+# Let packaging fail immediately if its extension or bundled runtime libraries
+# cannot be collected.
+(
+    neroued_3mf_datas,
+    neroued_3mf_binaries,
+    neroued_3mf_hiddenimports,
+) = collect_all(NEROUED_3MF_PACKAGE)
+
 backend_datas = [
     # Includes the app-owned Workshop Registry key set and offline snapshot in
     # assets/workshop-registry/ alongside the existing runtime assets.
@@ -87,14 +93,16 @@ backend_datas = [
     *collect_machine_registry_runtime_datas(ROOT / 'machine_registry'),
     ('printer_profiles', 'printer_profiles'),
     ('bambu_config_template.json', '.'),
+    *neroued_3mf_datas,
     *glb_v2_datas,
 ]
 backend_binaries = [
-    *native_binaries,
+    *neroued_3mf_binaries,
     *glb_v2_binaries,
 ]
 backend_hiddenimports = [
-    'clipper2_batch',
+    *NEROUED_3MF_HIDDENIMPORTS,
+    *neroued_3mf_hiddenimports,
     *GLB_V2_HIDDENIMPORTS,
     *glb_v2_hiddenimports,
 ]

@@ -439,12 +439,11 @@ def test_vector_outline_height_matches_structure_mode(
     assert float(outline_mesh.bounds[1, 2]) == pytest.approx(expected_height)
 
 
-def test_vector_outline_uses_bounded_concatenation_and_runtime_guards() -> None:
-    """Multi-part Outline assembly must avoid Trimesh's copying helper."""
+def test_vector_outline_uses_one_canonical_build_and_runtime_guards() -> None:
+    """Outline preparation stays on the unified physical-grid path."""
 
     from core.pipeline import vector_branch
     from core.pipeline.vector_branch import _generate_vector_outline_mesh
-    from core.vector_engine import _concatenate_meshes_fast
 
     analysis = MagicMock()
     analysis.matched_shapes = _matched_shapes_for_fixture()
@@ -458,34 +457,14 @@ def test_vector_outline_uses_bounded_concatenation_and_runtime_guards() -> None:
         "enable_coating": False,
     }
 
-    simulated_mesh_bytes = 8 * 1024 * 1024
-    separated_component_counts: list[int] = []
-    original_separate = vector_branch.separate_component_coordinates
-
-    def record_separation(meshes):
-        separated_component_counts.append(len(meshes))
-        return original_separate(meshes)
-
     with (
         patch(
             "core.vector_engine._enforce_vector_mesh_runtime_headroom",
         ) as guard_mock,
         patch(
-            "core.vector_engine._concatenate_meshes_fast",
-            wraps=_concatenate_meshes_fast,
-        ) as concatenate_mock,
-        patch(
-            "core.pipeline.vector_branch.trimesh.util.concatenate",
-            side_effect=AssertionError("unbounded outline concatenation used"),
-        ),
-        patch(
-            "core.vector_engine._mesh_array_storage_bytes",
-            return_value=simulated_mesh_bytes,
-        ),
-        patch(
-            "core.pipeline.vector_branch.separate_component_coordinates",
-            side_effect=record_separation,
-        ),
+            "core.pipeline.vector_branch.build_vector_layered_volume",
+            wraps=vector_branch.build_vector_layered_volume,
+        ) as build_mock,
     ):
         outline_mesh = _generate_vector_outline_mesh(
             analysis=analysis,
@@ -496,19 +475,11 @@ def test_vector_outline_uses_bounded_concatenation_and_runtime_guards() -> None:
         )
 
     assert outline_mesh is not None
-    concatenate_mock.assert_called_once()
+    build_mock.assert_called_once()
     stages = {call.kwargs["stage"] for call in guard_mock.call_args_list}
     assert "vector_outline_union" in stages
-    assert "vector_outline_assembly" in stages
-    separation_guard = next(
-        call
-        for call in guard_mock.call_args_list
-        if call.kwargs["stage"] == "vector_outline_coordinate_separation"
-    )
-    retained_bytes = separated_component_counts[0] * simulated_mesh_bytes
-    assert separation_guard.kwargs["estimated_additional_bytes"] >= (
-        retained_bytes * 6
-    )
+    assert "vector_outline_ring" in stages
+    assert "vector_outline_canonical_geometry" in stages
 
 
 def test_double_sided_vector_outline_spans_both_coating_faces() -> None:

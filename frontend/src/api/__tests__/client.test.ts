@@ -303,28 +303,28 @@ describe("apiClient", () => {
       status: 422,
       language: "en" as const,
       expected:
-        "This Vector artwork is too complex to build safely. Simplify or flatten the SVG paths, reduce the model size, or split the artwork into smaller files, then try again.",
+        "There is not enough memory available for this generation. It stopped safely before the large allocation. Close memory-intensive applications and retry; reduce the output size only if the limit is reached again.",
     },
     {
       code: "vector_mesh_memory_budget_exceeded",
       status: 422,
       language: "zh" as const,
       expected:
-        "这份矢量图过于复杂，当前无法安全生成模型。请简化或展平 SVG 路径、缩小模型尺寸，或拆成多个文件后重试。",
+        "当前可用于本次生成的内存不足，系统已在大额分配前安全停止。请关闭占用内存的程序后重试；如果仍然不足，再降低输出尺寸。",
     },
     {
       code: "vector_host_memory_busy",
       status: 503,
       language: "en" as const,
       expected:
-        "The server cannot verify enough safe memory for another Vector task right now. Wait for running jobs to finish, then retry; you do not need to change this SVG.",
+        "There is not enough free memory to start this Vector task. Wait for other jobs or close memory-intensive applications, then retry; you do not need to change this SVG.",
     },
     {
       code: "vector_host_memory_busy",
       status: 503,
       language: "zh" as const,
       expected:
-        "服务器当前无法确认有足够的安全内存处理新的矢量任务。请等待正在运行的任务完成后重试；无需修改这份 SVG。",
+        "当前可用内存不足以启动这次矢量任务。请等待其他任务完成或关闭占用内存的程序后重试；无需修改这份 SVG。",
     },
   ])(
     "translates converter source error $code in $language",
@@ -369,43 +369,6 @@ describe("apiClient", () => {
       } else {
         expect(rejected.response?.data?.detail).toEqual(detail);
       }
-    },
-  );
-
-  it.each([
-    {
-      language: "en" as const,
-      expected:
-        "The vector artwork contains geometry that cannot be exported safely. Simplify or re-vectorize the artwork, then upload it again.",
-    },
-    {
-      language: "zh" as const,
-      expected:
-        "该矢量图稿包含无法安全导出的几何。请简化图稿或重新矢量化后，再上传重试。",
-    },
-  ])(
-    "translates actionable vector topology recovery in $language",
-    async ({ language, expected }) => {
-      useSettingsStore.setState({ language });
-      const detail = {
-        code: "vector_topology_unrepairable",
-        stage: "polygon_export",
-        action: "simplify_or_revectorize",
-        message: "The vector artwork cannot be exported.",
-      };
-      const error = new Error("Request failed with status code 422");
-      Object.assign(error, {
-        config: { method: "post", url: "/convert/generate" },
-        response: { status: 422, data: { detail } },
-      });
-      apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
-
-      const rejected = await apiClient
-        .post("/convert/generate", {})
-        .catch((err) => err);
-
-      expect(rejected).toMatchObject({ message: expected });
-      expect(rejected.response?.data?.detail).toEqual(detail);
     },
   );
 

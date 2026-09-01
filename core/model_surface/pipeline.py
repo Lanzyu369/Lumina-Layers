@@ -7,6 +7,14 @@ import trimesh
 
 from config import PrinterConfig
 from core.converter import build_image_model_context
+from core.layered_coordinate_domain import (
+    LayeredCoordinateDomain,
+    certify_layered_pattern_scene,
+    read_layered_coordinate_domain,
+)
+from core.vector_layer_geometry import (
+    resolve_vector_writer_grid_mm,
+)
 from core.model_surface.assembly import (
     MODEL_SURFACE_DISPLAY_LAYER_HEIGHTS_KEY,
     MODEL_SURFACE_DISPLAY_Z_BOUNDS_KEY,
@@ -20,7 +28,7 @@ from core.model_surface.assembly import (
 from core.model_surface.loader import load_model_surface_mesh
 from core.model_surface.slot_meshing import (
     build_printable_footprint_from_voxels,
-    build_slot_box_scene_from_voxels,
+    build_slot_surface_scene_from_voxels,
 )
 from core.model_surface.types import (
     MODEL_SURFACE_FATAL_ERRORS,
@@ -122,7 +130,7 @@ def _build_pattern_scene(
             ctx,
             np.asarray(full_matrix),
         )
-        pattern_scene = build_slot_box_scene_from_voxels(
+        pattern_scene = build_slot_surface_scene_from_voxels(
             full_matrix=pattern_matrix,
             slot_names=slot_names,
             preview_colors=preview_colors,
@@ -130,19 +138,13 @@ def _build_pattern_scene(
             pixel_scale=float(pixel_scale),
             layer_heights_mm=layer_heights_mm,
         )
-        pattern_scene.metadata[MODEL_SURFACE_DISPLAY_Z_BOUNDS_KEY] = (
-            0.0,
-            float(sum(layer_heights_mm)),
+        domain = LayeredCoordinateDomain.from_canvas_and_layers(
+            width_mm=float(pattern_matrix.shape[2]) * float(pixel_scale),
+            height_mm=float(target_h) * float(pixel_scale),
+            xy_grid_mm=float(pixel_scale),
+            layer_heights_mm=layer_heights_mm,
         )
-        pattern_scene.metadata[MODEL_SURFACE_DISPLAY_LAYER_HEIGHTS_KEY] = (
-            layer_heights_mm
-        )
-        pattern_scene.metadata[MODEL_SURFACE_LOGICAL_XY_BOUNDS_KEY] = (
-            0.0,
-            0.0,
-            float(pattern_matrix.shape[2]) * float(pixel_scale),
-            float(target_h) * float(pixel_scale),
-        )
+        _certify_surface_pattern_scene(pattern_scene, domain)
         printable_footprint = build_printable_footprint_from_voxels(
             full_matrix=pattern_matrix,
             material_count=len(slot_names),
@@ -214,12 +216,43 @@ def _build_vector_pattern_scene(
             "Converter produced invalid native vector pattern metadata."
         )
 
-    logical_width_mm = bbox[2] * scale_factor
-    logical_height_mm = bbox[3] * scale_factor
-    if logical_width_mm <= 0.0 or logical_height_mm <= 0.0:
+    coordinate_domain = getattr(analysis, "coordinate_domain", None)
+    if coordinate_domain is not None and not isinstance(
+        coordinate_domain,
+        LayeredCoordinateDomain,
+    ):
         raise ModelSurfaceError(
-            "Converter produced an invalid native vector canvas."
+            "Converter produced invalid native vector coordinate metadata."
         )
+    if coordinate_domain is None:
+        try:
+            coordinate_domain = read_layered_coordinate_domain(source_scene)
+        except ValueError as exc:
+            raise ModelSurfaceError(
+                "Converter produced invalid native vector coordinate metadata."
+            ) from exc
+    if coordinate_domain is None:
+        logical_width_mm = bbox[2] * scale_factor
+        logical_height_mm = bbox[3] * scale_factor
+        if logical_width_mm <= 0.0 or logical_height_mm <= 0.0:
+            raise ModelSurfaceError(
+                "Converter produced an invalid native vector canvas."
+            )
+        vector_grid_mm = resolve_vector_writer_grid_mm(
+            max(abs(logical_width_mm), abs(logical_height_mm)),
+        )
+        coordinate_domain = LayeredCoordinateDomain.from_canvas_and_layers(
+            width_mm=logical_width_mm,
+            height_mm=logical_height_mm,
+            xy_grid_mm=vector_grid_mm,
+            layer_heights_mm=(layer_height_mm,) * layer_count,
+        )
+    if len(coordinate_domain.layer_heights_mm) != layer_count:
+        raise ModelSurfaceError(
+            "Converter vector layer schedule does not match its coordinate domain."
+        )
+
+    logical_bounds = coordinate_domain.writer_canvas_bounds_mm
 
     pattern_bounds = np.asarray(pattern_scene.bounds, dtype=np.float64)
     face_orientation = str(
@@ -236,7 +269,7 @@ def _build_vector_pattern_scene(
         normalize_for_embedding = np.asarray(
             [
                 [-1.0, 0.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0, logical_height_mm],
+                [0.0, 1.0, 0.0, logical_bounds[3]],
                 [0.0, 0.0, -1.0, pattern_bounds[0, 2] + pattern_bounds[1, 2]],
                 [0.0, 0.0, 0.0, 1.0],
             ],
@@ -250,7 +283,8 @@ def _build_vector_pattern_scene(
         # Up-facing vector scenes still use the translation-free SVG Y flip.
         # Bring that local negative Y canvas back to the model-surface frame.
         normalize_for_embedding = np.eye(4, dtype=np.float64)
-        normalize_for_embedding[1, 3] = logical_height_mm
+        normalize_for_embedding[1, 3] = logical_bounds[3]
+        normalize_for_embedding[2, 3] = -float(pattern_bounds[0, 2])
         for geometry in pattern_scene.geometry.values():
             if isinstance(geometry, trimesh.Trimesh):
                 geometry.apply_transform(normalize_for_embedding)
@@ -260,21 +294,7 @@ def _build_vector_pattern_scene(
             "Model-surface overlay requires a single display face."
         )
 
-    logical_z_min = float(pattern_bounds[0, 2])
-    layer_heights_mm = (layer_height_mm,) * layer_count
-    pattern_scene.metadata[MODEL_SURFACE_DISPLAY_Z_BOUNDS_KEY] = (
-        logical_z_min,
-        logical_z_min + float(sum(layer_heights_mm)),
-    )
-    pattern_scene.metadata[MODEL_SURFACE_DISPLAY_LAYER_HEIGHTS_KEY] = (
-        layer_heights_mm
-    )
-    pattern_scene.metadata[MODEL_SURFACE_LOGICAL_XY_BOUNDS_KEY] = (
-        0.0,
-        0.0,
-        logical_width_mm,
-        logical_height_mm,
-    )
+    _certify_surface_pattern_scene(pattern_scene, coordinate_domain)
     if _take_scene_ownership:
         from core.vector_engine import _enforce_vector_scene_export_headroom
 
@@ -290,6 +310,27 @@ def _build_vector_pattern_scene(
         scene=pattern_scene,
         printable_footprint=printable_footprint,
     )
+
+
+def _certify_surface_pattern_scene(
+    pattern_scene: trimesh.Scene,
+    domain: LayeredCoordinateDomain,
+) -> None:
+    """Publish compatibility metadata and certify one canonical pattern."""
+
+    pattern_scene.metadata[MODEL_SURFACE_DISPLAY_Z_BOUNDS_KEY] = (
+        domain.writer_z_bounds_mm
+    )
+    pattern_scene.metadata[MODEL_SURFACE_DISPLAY_LAYER_HEIGHTS_KEY] = (
+        domain.layer_heights_mm
+    )
+    pattern_scene.metadata[MODEL_SURFACE_LOGICAL_XY_BOUNDS_KEY] = (
+        domain.writer_canvas_bounds_mm
+    )
+    try:
+        certify_layered_pattern_scene(pattern_scene, domain)
+    except ValueError as exc:
+        raise ModelSurfaceError(str(exc)) from exc
 
 
 def _build_scene_printable_footprint(

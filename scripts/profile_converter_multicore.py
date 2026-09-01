@@ -1196,9 +1196,6 @@ def _parallelism_metadata(
     if requested == "":
         requested = "<empty>"
 
-    def _first_value(*values):
-        return next((value for value in values if value is not None), None)
-
     def _optional_int(value, *, minimum: int) -> int | None:
         if isinstance(value, bool):
             return None
@@ -1223,78 +1220,50 @@ def _parallelism_metadata(
     if kind == "raster":
         stage_timings = hifi_timings
         stage_prefix = "mesh_parallelism_"
-        native_timings: dict[str, Any] = {}
     else:
         stage_timings = vector_timings
         stage_prefix = "material_parallelism_"
-        native_timings = vector_timings
 
-    def _stage_or_native(stage_suffix: str, native_suffix: str):
-        return _first_value(
-            stage_timings.get(f"{stage_prefix}{stage_suffix}"),
-            native_timings.get(f"native_mesh_parallel_{native_suffix}"),
-        )
+    def _stage_value(suffix: str):
+        return stage_timings.get(f"{stage_prefix}{suffix}")
 
     return {
         "requested": requested,
         "observed_workers": _optional_int(
-            _stage_or_native("workers", "workers"),
-            minimum=1,
-        ),
-        "native_workers": _optional_int(
-            native_timings.get("native_mesh_parallel_workers"),
+            _stage_value("workers"),
             minimum=1,
         ),
         "effective_cpu": _optional_int(
-            _stage_or_native("effective_cpu", "effective_cpu"),
+            _stage_value("effective_cpu"),
             minimum=1,
         ),
         "cpu_topology": _optional_reason(
-            _stage_or_native("cpu_topology", "cpu_topology"),
+            _stage_value("cpu_topology"),
         ),
         "cpu_scheduling_policy": _optional_reason(
-            _stage_or_native(
-                "cpu_scheduling_policy",
-                "cpu_scheduling_policy",
-            ),
+            _stage_value("cpu_scheduling_policy"),
         ),
         "performance_cpu": _optional_int(
-            _stage_or_native("performance_cpu", "performance_cpu"),
+            _stage_value("performance_cpu"),
             minimum=1,
         ),
         "outer_demand": _optional_int(
-            _stage_or_native("outer_demand", "outer_demand"),
+            _stage_value("outer_demand"),
             minimum=1,
         ),
         "cpu_fair_share": _optional_int(
-            _stage_or_native("cpu_fair_share", "cpu_fair_share"),
+            _stage_value("cpu_fair_share"),
             minimum=1,
         ),
         "memory_ceiling": _optional_int(
-            _stage_or_native("memory_ceiling", "memory_ceiling"),
+            _stage_value("memory_ceiling"),
             minimum=1,
         ),
         "limiting_reason": _optional_reason(
-            _stage_or_native("limit", "limit"),
+            _stage_value("limit"),
         ),
         "demand_snapshot_fallback": _optional_bool(
-            _stage_or_native("demand_fallback", "demand_fallback"),
-        ),
-        "native_inflight_limit": _optional_int(
-            native_timings.get("native_mesh_parallel_inflight_limit"),
-            minimum=1,
-        ),
-        "native_max_estimated_batch_bytes": _optional_int(
-            native_timings.get(
-                "native_mesh_parallel_max_estimated_batch_bytes",
-            ),
-            minimum=0,
-        ),
-        "native_oversized_serial_batches": _optional_int(
-            native_timings.get(
-                "native_mesh_parallel_oversized_serial_batches",
-            ),
-            minimum=0,
+            _stage_value("demand_fallback"),
         ),
     }
 

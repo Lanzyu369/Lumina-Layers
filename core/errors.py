@@ -56,11 +56,11 @@ class VectorMeshMemoryBudgetError(CoreValidationError):
         estimated_gib = self.estimated_peak_bytes / (1024 ** 3)
         budget_gib = self.memory_budget_bytes / (1024 ** 3)
         detail = (
-            "This Vector model is too complex to process safely: estimated "
-            f"peak memory is {estimated_gib:.2f} GiB, above the configured "
-            f"{budget_gib:.2f} GiB budget. Simplify SVG paths, reduce the "
-            "model size, or split the artwork into smaller files, then try "
-            "again."
+            "The final Vector mesh cannot fit the memory currently available "
+            f"to this task: estimated peak {estimated_gib:.2f} GiB, safe "
+            f"limit {budget_gib:.2f} GiB. Generation stopped before the large "
+            "allocation. Free memory and retry; reduce the output size only "
+            "if the same limit is reached again."
         )
         super().__init__(detail)
         # Exception pickling reconstructs from ``args``. Keep this aligned with
@@ -96,11 +96,18 @@ class VectorHostMemoryAdmissionError(CoreError):
         self.reserved_bytes = max(0, int(reserved_bytes))
         self.memory_budget_bytes = max(1, int(memory_budget_bytes))
         self.reason = str(reason)
-        detail = (
-            "The server cannot verify enough safe memory for another Vector "
-            "task right now. Wait for running jobs to finish, then retry; "
-            "you do not need to change this SVG."
-        )
+        if self.reserved_bytes > 0:
+            detail = (
+                "Another Vector task is using the available generation "
+                "memory. Wait for it to finish, then retry; you do not need "
+                "to change this SVG."
+            )
+        else:
+            detail = (
+                "The device does not currently have enough free memory for "
+                "this Vector task. Close other memory-intensive applications "
+                "and retry; you do not need to change this SVG."
+            )
         super().__init__(detail=detail, error_type=self.code)
         self.args = (
             self.requested_bytes,
@@ -122,32 +129,6 @@ class CoreProcessingError(CoreError):
 
     def __init__(self, detail: str):
         super().__init__(detail=detail, error_type="core_processing_error")
-
-
-class VectorTopologyError(CoreError):
-    """Report a bounded vector-topology rejection. / 报告有界矢量拓扑拒绝。
-
-    Args:
-        detail: Stable internal error summary. / 稳定的内部错误摘要。
-        attempts: Coordinate-free metrics for each failed ladder stage. /
-            每个失败阶梯的无坐标诊断指标。
-    """
-
-    def __init__(
-        self,
-        detail: str,
-        attempts: tuple[dict[str, object], ...],
-    ) -> None:
-        super().__init__(
-            detail=detail,
-            error_type="vector_topology_unrepairable",
-        )
-        self.attempts = tuple(dict(attempt) for attempt in attempts)
-
-    def __reduce__(self) -> tuple[object, tuple[object, ...]]:
-        """Preserve diagnostics across process-pool serialization."""
-
-        return type(self), (str(self), self.attempts)
 
 
 class CachedPreviewAnalysisError(CoreError):

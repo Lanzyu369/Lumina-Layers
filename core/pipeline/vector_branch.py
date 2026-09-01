@@ -32,6 +32,7 @@ from copy import deepcopy
 import cv2  # noqa: F401  -- imported for side-effect parity with coordinator
 import numpy as np
 import trimesh
+from shapely import difference as shapely_difference
 from shapely.geometry import box
 from shapely.ops import unary_union
 from shapely.validation import make_valid
@@ -41,7 +42,6 @@ from config import BedManager, PrinterConfig, normalize_nozzle_size
 from core.errors import (
     CachedPreviewAnalysisError,
     VectorMeshMemoryBudgetError,
-    VectorTopologyError,
 )
 from core.geometry_utils import create_keychain_loop
 from core.pipeline import p06_bed_rendering, s09_export_3mf
@@ -51,12 +51,9 @@ from core.pipeline.s08_auxiliary_meshes import (
     _coerce_preview_rgba,
 )
 from core.preview_analysis_cache import preview_analysis_reuse_is_required
-from core.vector_mesh_topology import (
-    extrude_polygon_for_export,
-    mesh_is_float32_safe,
-    prepare_component_footprints_for_float32,
-    prepare_geometry_for_float32,
-    separate_component_coordinates,
+from core.vector_layer_geometry import (
+    build_vector_layered_volume,
+    resolve_vector_writer_grid_mm,
 )
 
 # ---------------------------------------------------------------------------
@@ -97,12 +94,6 @@ except ImportError as exc:
 # log audits attach handlers to ``lumina.core.pipeline.coordinator``).
 # 日志命名空间故意继续沿用 coordinator，保证抽离后日志可观察性零变更。
 log = get_logger("core.pipeline.coordinator")
-
-# Float32 collision repair temporarily holds dense arrays, NumPy uniqueness
-# workspaces, and per-vertex keys. A measured collision-heavy fixture peaked
-# at 5.43x retained mesh storage; seven leaves admission headroom without
-# changing topology or coverage semantics.
-_OUTLINE_COORDINATE_SEPARATION_WORKSPACE_FACTOR = 7
 
 # ---------------------------------------------------------------------------
 # Layer-0 (appearance face) diagnostics
@@ -909,9 +900,8 @@ def _generate_vector_outline_mesh(
            where ``outline_width_units = outline_width_mm / scale_factor``
            (vector geometry lives in pre-scale SVG units; ``build_mesh``
            multiplies by ``scale_factor`` during extrusion).
-        3. Extrude each polygon through the shared topology export service.
-        4. ``apply_scale`` by ``scale_factor`` so the mesh lands in the
-           same mm coordinate system as ``Board`` / colour slots.
+        3. Canonicalize the complete ring once on the physical writer grid.
+        4. Emit caps and walls from the same indexed boundary representation.
         5. Decorate with ``metadata['name'] = 'Outline'`` +
            ``bambu_material_name`` and apply face colour.
 
@@ -938,10 +928,8 @@ def _generate_vector_outline_mesh(
         on a ``None`` return.
     """
     from core.vector_engine import (
-        _concatenate_meshes_fast,
         _enforce_vector_mesh_runtime_headroom,
         _geometry_cache_storage_bytes,
-        _mesh_array_storage_bytes,
     )
 
     matched_shapes = list(getattr(analysis, "matched_shapes", []) or [])
@@ -999,10 +987,10 @@ def _generate_vector_outline_mesh(
         scale_factor = 1.0
 
     # ``analysis.matched_shapes[*].geometry`` lives in pre-scale SVG units;
-    # build_mesh multiplies by ``scale_factor`` during extrude. Convert the
+    # canonical preparation multiplies by ``scale_factor``. Convert the
     # outline_width_mm request back into the same pre-scale unit space so
     # the resulting ring is exactly ``outline_width_mm`` wide once scaled
-    # back up to mm by ``apply_scale`` below.
+    # to millimetres during canonical preparation.
     # matched_shapes 的几何处于"预缩放 SVG 单位空间"，build_mesh 在挤出时
     # 乘 scale_factor 得到 mm。这里把 outline_width_mm 反算到预缩放单位，
     # 再走同样的 apply_scale，保证最终 ring 宽度恰好是请求的 mm 数。
@@ -1064,8 +1052,23 @@ def _generate_vector_outline_mesh(
         width_units,
     )
 
+    # Construct the ring directly in the same physical grid used by the 3MF
+    # mesh builder. GEOS otherwise retains zero-area floating-point slivers
+    # from buffer/difference overlays; treating those numerical artefacts as
+    # source polygons can reject an otherwise complete printable outline.
+    outline_writer_grid_mm = resolve_vector_writer_grid_mm(
+        max(
+            abs(float(coordinate)) * scale_factor
+            for geometry in (expanded, union)
+            for coordinate in geometry.bounds
+        )
+    )
     try:
-        ring = expanded.difference(union)
+        ring = shapely_difference(
+            expanded,
+            union,
+            grid_size=outline_writer_grid_mm / scale_factor,
+        )
     except COORDINATOR_HANDLED_ERRORS as exc:
         log.warning(
             "Vector outline rejected: difference failed",
@@ -1091,23 +1094,6 @@ def _generate_vector_outline_mesh(
         )
         return None
 
-    prepared_ring = prepare_geometry_for_float32(
-        ring,
-        xy_scale=scale_factor,
-    )
-    if prepared_ring is None or getattr(prepared_ring, "is_empty", True):
-        log.warning(
-            "Vector outline rejected: float32 precision repair exceeded coverage guard",
-            extra={
-                "event": "vector_outline_rejected_topology",
-                "error_type": "float32_precision_loss",
-                "unsupported_reason": "outline_float32_precision_guard",
-                "shape_count": len(matched_shapes),
-            },
-        )
-        return None
-    ring = prepared_ring
-
     layer_h = _resolve_vector_layer_height_mm(ctx)
     z_min_mm, z_max_mm = _resolve_vector_outline_z_span(
         ctx,
@@ -1119,155 +1105,41 @@ def _generate_vector_outline_mesh(
     outline_layers = max(1, int(round(thickness_mm / layer_h)))
     outline_height_mm = float(outline_layers) * layer_h
 
-    # Iterate over the ring's polygonal parts (a ring around a multi-shape
-    # union is a MultiPolygon when the originals are disjoint) and extrude
-    # each piece independently. The topology service accepts a single Polygon,
-    # so we explode and concatenate the pieces.
-    # ring 通常是 MultiPolygon，逐个 Polygon 挤出再拼回。
-    polys = []
-    if hasattr(ring, "geoms"):
-        polys = [g for g in ring.geoms if hasattr(g, "exterior") and not g.is_empty]
-    elif hasattr(ring, "exterior"):
-        polys = [ring]
-
-    if not polys:
-        log.warning(
-            "Vector outline rejected: ring has no polygonal parts",
-            extra={
-                "event": "vector_outline_rejected_unsupported",
-                "error_type": "unsupported_subset",
-                "unsupported_reason": "D6_ring_non_polygon",
-                "shape_count": len(matched_shapes),
-            },
-        )
-        return None
-
-    prepared_polys = prepare_component_footprints_for_float32(
-        polys,
-        xy_scale=scale_factor,
-    )
-    if prepared_polys is None:
-        log.warning(
-            "Vector outline rejected: 2D writer preflight failed",
-            extra={
-                "event": "vector_outline_rejected_topology",
-                "error_type": "coordinate_collision",
-                "unsupported_reason": "outline_writer_footprint_preflight_failed",
-                "polygon_count": int(len(polys)),
-            },
-        )
-        return None
-    polys = prepared_polys
-    del prepared_polys
-
-    meshes: list = []
-    for poly_index, poly in enumerate(polys):
-        polygon_geometry_bytes = _geometry_cache_storage_bytes(poly)
-        _enforce_vector_mesh_runtime_headroom(
-            stage="vector_outline_polygon_extrusion",
-            estimated_additional_bytes=max(
-                16 * 1024 * 1024,
-                polygon_geometry_bytes * 16,
-            ),
-            shape_count=1,
-            coordinate_count=polygon_geometry_bytes // 64,
-        )
-        try:
-            pieces = extrude_polygon_for_export(
-                poly,
-                xy_scale=scale_factor,
-                prefer_fast=True,
-            )
-        except (VectorTopologyError, *COORDINATOR_HANDLED_ERRORS) as exc:
-            log.warning(
-                "Vector outline rejected after polygon extrusion failure",
-                extra={
-                    "event": "vector_outline_polygon_extrude_failed",
-                    "error_type": type(exc).__name__,
-                    "error_message": str(exc),
-                    "polygon_index": int(poly_index),
-                    "polygon_count": int(len(polys)),
-                    "unsupported_reason": "outline_polygon_topology_unrepairable",
-                },
-            )
-            return None
-        if not pieces or any(len(piece.vertices) == 0 for piece in pieces):
-            log.warning(
-                "Vector outline rejected: polygon extrusion returned empty mesh",
-                extra={
-                    "event": "vector_outline_rejected_topology",
-                    "error_type": "empty_mesh",
-                    "polygon_index": int(poly_index),
-                    "polygon_count": int(len(polys)),
-                    "unsupported_reason": "outline_polygon_empty_mesh",
-                },
-            )
-            return None
-        # Pre-scale → mm: scale XY by scale_factor and the unit-height Z
-        # by the complete Outline thickness.
-        # 预缩放空间 → mm：XY 乘 scale_factor，单位高度 Z 乘 Outline 总厚度。
-        for piece in pieces:
-            piece.apply_scale(
-                [scale_factor, scale_factor, outline_height_mm]
-            )
-            if z_min_mm != 0.0:
-                piece.apply_translation([0.0, 0.0, z_min_mm])
-            meshes.append(piece)
-
-    if not meshes:
-        return None
-
-    retained_mesh_bytes = sum(_mesh_array_storage_bytes(mesh) for mesh in meshes)
-    # The independent 3D shells are now the only geometry needed for export.
-    # Release union/buffer/ring intermediates before transforming and checking
-    # the final writer coordinates or allocating the contiguous output mesh.
-    del polys, prepared_ring, ring, expanded, union, source_geometries
-    matched_shapes.clear()
-
-    for mesh in meshes:
-        _apply_vector_outline_export_transform(
-            mesh,
-            analysis=analysis,
-            ctx=ctx,
-            scale_factor=scale_factor,
-            export_color_mode=export_color_mode,
-        )
-
+    ring_geometry_bytes = _geometry_cache_storage_bytes(ring)
     _enforce_vector_mesh_runtime_headroom(
-        stage="vector_outline_coordinate_separation",
+        stage="vector_outline_canonical_geometry",
         estimated_additional_bytes=max(
             16 * 1024 * 1024,
-            retained_mesh_bytes
-            * _OUTLINE_COORDINATE_SEPARATION_WORKSPACE_FACTOR,
+            ring_geometry_bytes * 16,
         ),
-        shape_count=len(meshes),
+        shape_count=1,
+        coordinate_count=ring_geometry_bytes // 64,
     )
-
-    if not separate_component_coordinates(meshes):
-        log.warning(
-            "Vector outline rejected: export-coordinate separation failed",
-            extra={
-                "event": "vector_outline_rejected_topology",
-                "error_type": "coordinate_collision",
-                "unsupported_reason": "outline_export_coordinate_collision",
-                "polygon_count": int(len(meshes)),
-            },
-        )
+    outline_mesh = build_vector_layered_volume(
+        [
+            {
+                "geometry": ring,
+                "height": outline_height_mm,
+                "z_offset": z_min_mm,
+            }
+        ],
+        scale_mm_per_svg_unit=scale_factor,
+    )
+    if outline_mesh is None:
         return None
 
-    if len(meshes) == 1:
-        outline_mesh = meshes[0]
-    else:
-        _enforce_vector_mesh_runtime_headroom(
-            stage="vector_outline_assembly",
-            estimated_additional_bytes=max(
-                16 * 1024 * 1024,
-                retained_mesh_bytes * 2,
-            ),
-            shape_count=len(meshes),
-        )
-        outline_mesh = _concatenate_meshes_fast(meshes)
-        meshes.clear()
+    # The new builder already emits millimetres and independent component
+    # ranges. Release the source geometry before applying only the historical
+    # final orientation transform.
+    del ring, expanded, union, source_geometries
+    matched_shapes.clear()
+    _apply_vector_outline_export_transform(
+        outline_mesh,
+        analysis=analysis,
+        ctx=ctx,
+        scale_factor=scale_factor,
+        export_color_mode=export_color_mode,
+    )
 
     rgba = list(base_aux_color)
     if len(rgba) < 4:
@@ -1730,67 +1602,6 @@ def _record_material_parallelism(
             max(1, int(plan.performance_cpu_capacity)),
         )
     timings.update(plan_fields)
-
-
-_NATIVE_MESH_TIMING_FIELDS = {
-    "native_group_count": "native_mesh_group_count",
-    "native_meshes": "native_mesh_output_count",
-    "fallback_groups": "native_mesh_fallback_count",
-    "pack_seconds": "native_mesh_pack_s",
-    "native_seconds": "native_mesh_compute_s",
-    "mesh_convert_seconds": "native_mesh_convert_s",
-    "surface_validation_seconds": "native_mesh_python_surface_validation_s",
-    "fallback_seconds": "native_mesh_fallback_s",
-    "native_parallel_workers": "native_mesh_parallel_workers",
-    "native_parallel_batch_count": "native_mesh_parallel_batch_count",
-    "native_parallel_source_geometry_count":
-        "native_mesh_parallel_source_geometry_count",
-    "native_parallel_limit_reason": "native_mesh_parallel_limit",
-    "native_parallel_effective_cpu":
-        "native_mesh_parallel_effective_cpu",
-    "native_parallel_cpu_topology":
-        "native_mesh_parallel_cpu_topology",
-    "native_parallel_cpu_scheduling_policy":
-        "native_mesh_parallel_cpu_scheduling_policy",
-    "native_parallel_performance_cpu":
-        "native_mesh_parallel_performance_cpu",
-    "native_parallel_outer_demand":
-        "native_mesh_parallel_outer_demand",
-    "native_parallel_cpu_fair_share":
-        "native_mesh_parallel_cpu_fair_share",
-    "native_parallel_memory_ceiling":
-        "native_mesh_parallel_memory_ceiling",
-    "native_parallel_demand_fallback":
-        "native_mesh_parallel_demand_fallback",
-    "native_parallel_inflight_limit":
-        "native_mesh_parallel_inflight_limit",
-    "native_parallel_max_estimated_batch_bytes":
-        "native_mesh_parallel_max_estimated_batch_bytes",
-    "native_parallel_oversized_serial_batches":
-        "native_mesh_parallel_oversized_serial_batches",
-    "native_parallel_wall_seconds": "native_mesh_parallel_wall_s",
-    "fallback_reason_native_merged_empty_native_mesh":
-        "native_mesh_fallback_native_merged_empty_count",
-}
-
-
-def _native_mesh_timing_fields(
-    stats,
-) -> dict[str, float | int | str | bool]:
-    """Return the bounded scalar native-mesh timing view."""
-
-    if not isinstance(stats, dict):
-        return {}
-    result: dict[str, float | int | str | bool] = {}
-    for source_name, output_name in _NATIVE_MESH_TIMING_FIELDS.items():
-        value = stats.get(source_name)
-        if isinstance(value, bool):
-            result[output_name] = value
-        elif isinstance(value, (int, float)):
-            result[output_name] = value
-        elif isinstance(value, str):
-            result[output_name] = value[:64]
-    return result
 
 
 def _run_vector_preview_branch(ctx: dict) -> dict:
@@ -2443,6 +2254,14 @@ def _run_vector_branch(ctx: dict) -> dict:
             "thickness_mm": spacer_thick,
             "structure_mode": structure_mode,
         }
+        # S08 consumers (notably model-surface embedding) intentionally take
+        # only the optical material meshes and discard ``Board``.  Keep the
+        # backing distinct until those consumers have extracted their display
+        # stack; final 3MF generation still folds it into the selected material.
+        vec_processor._merge_backing_into_material = (
+            not bool(separate_backing)
+            and ctx.get("stop_after_step") != "S08"
+        )
         try:
             build_mesh_signature = inspect.signature(vec_processor.build_mesh)
         except (TypeError, ValueError):
@@ -2517,11 +2336,6 @@ def _run_vector_branch(ctx: dict) -> dict:
         vector_timing["mesh_total_s"] = time.perf_counter() - mesh_t0
         if isinstance(getattr(vec_processor, "last_stage_timings", None), dict):
             vector_timing.update(vec_processor.last_stage_timings)
-        vector_timing.update(
-            _native_mesh_timing_fields(
-                getattr(vec_processor, "last_native_vector_mesh_stats", None)
-            )
-        )
         vector_timing["build_mesh_s"] = build_mesh_s
 
         _update_bambu_base_layer_ctx_for_vector(
@@ -2605,7 +2419,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                     shape_count=2,
                 )
                 merged = _concatenate_meshes_fast(
-                    [target_geom, board_geom]
+                    [target_geom, board_geom],
                 )
                 target_color = vec_preview_colors.get(target_slot)
                 if target_color is None:
@@ -2643,13 +2457,14 @@ def _run_vector_branch(ctx: dict) -> dict:
             vec_preview_colors["Board"] = vec_preview_colors.get(
                 separate_backing_color_id, [255, 255, 255, 255]
             )
-            if "Board" not in vec_slot_list:
-                vec_slot_list = list(vec_slot_list) + ["Board"]
+            if target_slot:
+                board_geom.metadata["bambu_material_name"] = target_slot
             log.debug(
                 "Vector board kept as separate backing",
                 extra={
                     "event": "vector_board_separate",
                     "backing_slot_index": separate_backing_color_id,
+                    "material_name": str(target_slot or ""),
                     "separate_backing": True,
                 },
             )
@@ -2892,13 +2707,13 @@ def _run_vector_branch(ctx: dict) -> dict:
         _enforce_vector_scene_export_headroom(
             scene,
             stage="vector_3mf_export",
-            # The writer retains the source scene while building native mesh,
-            # document, XML, and ZIP buffers. Re-check live RSS at the actual
-            # export boundary instead of trusting the earlier build estimate.
-            # Measured whole-writer RSS reached 3.72x scene arrays with
-            # 9-decimal SVG-like coordinates; 5x leaves room for allocator
-            # and visual/template buffers outside the sampled arrays.
-            workspace_multiplier=5.0,
+            # neroued-3mf 0.4 consumes one retained float32/uint32 view per
+            # object. The previous 5x allowance described the removed full
+            # topology audit plus the old owning writer's repeated arrays and
+            # now rejects models that the zero-copy writer can safely stream.
+            # Keep a conservative 2x live-RSS allowance for converted arrays,
+            # native/ZIP buffers, allocator slack, and the compatibility path.
+            workspace_multiplier=2.0,
         )
         export_scene_with_bambu_metadata(
             scene=scene,

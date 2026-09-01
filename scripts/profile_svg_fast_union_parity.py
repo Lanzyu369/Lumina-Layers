@@ -192,9 +192,9 @@ def _profile_summary(profile: cProfile.Profile, limit: int = 80) -> dict[str, ob
     selected_needles = (
         "_run_length_extrude",
         "_union_run_group_geometries",
-        "_extrude_geometry",
-        "extrude_polygon",
-        "triangulate_polygon",
+        "build_vector_layered_volume",
+        "_extrude_indexed_run_group",
+        "build_labeled_surface_mesh",
         "_normalize_contours",
         "polygonize",
         "buffer",

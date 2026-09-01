@@ -129,10 +129,9 @@ class VoxelMeshRenderer:
     the layout produces one ``trimesh.Trimesh``; renderer concatenates them
     into a ``trimesh.Scene``.
 
-    Bit-exact contract: when called with a layout produced from voxel data
-    that the legacy generator would have produced, the resulting
-    per-material meshes are identical to those that the legacy
-    ``_generate_voxel_mesh`` returns.
+    Compatibility contract: layouts preserve the established material IDs,
+    physical dimensions, and TL/TR/BR/BL direction semantics while the
+    shared mesher may use a different closed-surface triangulation.
     """
 
     output_format = "3mf"

@@ -75,8 +75,8 @@ from core.material_dynamic_solver import (
 )
 from core.errors import VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError
 from core.vector_mesh_memory import (
+    estimate_material_archive_runtime_bytes,
     estimate_vector_task_memory_reservation_bytes,
-    resolve_vector_mesh_memory_budget_bytes,
 )
 from core.vector_large_format import inspect_svg_large_format_support, normalize_large_format_source_basename
 from utils.lut_manager import LUTManager
@@ -1244,13 +1244,20 @@ async def convert_preview(
             **(
                 {
                     "host_memory_reservation_bytes": (
-                        # The material solver's implicit runtimes have no
-                        # complete parent-visible path list to estimate.
-                        resolve_vector_mesh_memory_budget_bytes()
-                        if material_source == "material_archive"
-                        else estimate_vector_task_memory_reservation_bytes(
+                        estimate_vector_task_memory_reservation_bytes(
                             temp_path,
-                            resident_paths=(lut_path,),
+                            resident_paths=(
+                                ()
+                                if material_source == "material_archive"
+                                else (lut_path,)
+                            ),
+                            implicit_resident_bytes=(
+                                estimate_material_archive_runtime_bytes(
+                                    len(_selected_mats or [])
+                                )
+                                if material_source == "material_archive"
+                                else 0
+                            ),
                         )
                     )
                 }
