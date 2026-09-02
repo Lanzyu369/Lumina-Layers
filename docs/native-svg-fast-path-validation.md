@@ -32,6 +32,14 @@ ring through the polygon collections. Those cases are reported separately as
 `fill_rule_cancelled`, `clipped_out`, or `stroke_collapse`. A collapsed
 subpath does not discard valid area from the same SVG.
 
+If ordinary error-bounded curve flattening reduces an area-capable closed
+Bezier to coincident or collinear samples, the kernel deterministically
+replays that source boundary at finer subdivision before classifying it. This
+keeps mathematically non-zero regions as polygons on both macOS architectures
+while true point, line, and zero-area paths remain fragment records. It is a
+source-geometry recovery step, not minimum-area filtering or printer-grid
+cleanup.
+
 Unsupported document semantics still request one whole-document legacy
 fallback. This is distinct from an unprintable geometric fragment: unsupported
 paint semantics cannot be combined safely with a partial native rendering,
@@ -72,7 +80,7 @@ Reference host: Apple M5, arm64, 16 GiB RAM, macOS 26.5.2, CPython
 | Gate | Result |
 |---|---:|
 | Fresh fixed-patch native build | PASS |
-| Standalone native suite | 540 passed |
+| Standalone native suite | 541 passed |
 | Lumina adapter/differential/workflow suite | 175 passed, 3 skipped |
 | Independent parser review | Ready: Yes; no blocking findings |
 | `git diff --check` | PASS |
@@ -98,16 +106,16 @@ a 0.02 mm physical tolerance, and includes stroke paint.
 | Documents | 508 |
 | Supported / unsupported / invalid | 474 / 34 / 0 |
 | Input paints | 1,804,382 |
-| Raw / visible output paints | 1,555,949 / 840,886 |
-| Raw / visible components | 1,709,547 / 877,117 |
-| Raw / visible holes | 1,325,305 / 209,339 |
-| Unprintable fragments | 4,322 |
-| Unprintable reasons | line-only 3,192; area-collapse 700; fill-rule-cancelled 430 |
+| Raw / visible output paints | 1,556,001 / 840,928 |
+| Raw / visible components | 1,709,605 / 877,173 |
+| Raw / visible holes | 1,325,305 / 209,395 |
+| Unprintable fragments | 4,272 |
+| Unprintable reasons | line-only 3,192; area-collapse 109; fill-rule-cancelled 971 |
 | Unsupported reasons | partial-alpha 31; complexity 3; internal errors 0 |
 | Supported documents with unexplained raw-paint loss | 0 |
 | Maximum visible-partition area delta | 1.3893777 source-unit²; 4.1888571e-8 relative |
-| Median / p95 / maximum document time | 1.2201 s / 13.4958 s / 87.1536 s |
-| Total time / peak process RSS | 1,739.0583 s / 1,351,188,480 bytes (1,288.59 MiB) |
+| Median / p95 / maximum document time | 1.2254 s / 13.4907 s / 87.6094 s |
+| Total time / peak process RSS | 1,739.3509 s / 1,156,841,472 bytes (1,103.25 MiB) |
 
 `raw_to_visible_area_delta` is expected to be non-zero where later paints
 occlude earlier paints. The loss detector is
@@ -120,6 +128,14 @@ fragments remain separate from both values. All 10 documents previously
 reported as `native_geometry_error` are supported after canonical export, and
 no supported document loses more raw paints than its recorded unprintable
 fragment count can explain.
+
+Compared with the preceding architecture-dependent build, deterministic
+collapsed-curve replay recovered 52 raw paints and 58 raw components. Of the
+591 former `area_collapse` records, 541 are now correctly identified after
+replay as `fill_rule_cancelled`, while the remaining net reduction of 50
+fragment records corresponds to recovered area-bearing paint. Supported,
+unsupported, and invalid document counts are unchanged; the worst visible
+partition error is also unchanged.
 
 Reproduce the anonymous audit with:
 
@@ -142,15 +158,15 @@ does not use an artifact cache.
 
 | Metric | Result |
 |---|---:|
-| Warm median / 1.0 s gate | 0.108105 s / PASS |
-| Warm p95 / 1.25 s gate | 0.109939 s / PASS |
-| Native recorder / kernel | 0.048531 s / 0.044133 s |
-| Native adapter conversion | 0.009493 s |
-| Peak RSS / swap growth | 199,032,832 bytes (189.81 MiB) / 0 bytes |
+| Warm median / 1.0 s gate | 0.107978 s / PASS |
+| Warm p95 / 1.25 s gate | 0.111877 s / PASS |
+| Native recorder / kernel | 0.048624 s / 0.043982 s |
+| Native adapter conversion | 0.009439 s |
+| Peak RSS / swap growth | 192,741,376 bytes (183.81 MiB) / 0 bytes |
 | Raw / visible shapes | 1,024 / 1,024 |
 
 The public 3,097-path source proxy is also supported by default; its native
-capability check took 0.517073 s. No repository SVG at or above 50 MiB was
+capability check took 0.519444 s. No repository SVG at or above 50 MiB was
 available, so the separate large-file benchmark is recorded as unavailable
 instead of substituting another fixture. The anonymous 508-document run above
 is the large real-world parser/RSS evidence for this revision.

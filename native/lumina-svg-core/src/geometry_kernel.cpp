@@ -1786,6 +1786,45 @@ void flattenCubic(const PointD& start, const PointD& control1,
         complexityBudget);
 }
 
+void flattenCubicWithMinimumDepth(
+    const PointD& start, const PointD& control1,
+    const PointD& control2, const PointD& end,
+    double tolerance, double sourceErrorScale,
+    unsigned depth, unsigned minimumDepth,
+    std::vector<PointD>& output,
+    std::vector<double>& incomingApproximationErrors,
+    ComplexityBudget& complexityBudget)
+{
+    if(depth >= minimumDepth) {
+        flattenCubic(
+            start, control1, control2, end,
+            tolerance, sourceErrorScale, depth,
+            output, incomingApproximationErrors, complexityBudget);
+        return;
+    }
+
+    const PointD p01{(start.x + control1.x) * 0.5,
+                     (start.y + control1.y) * 0.5};
+    const PointD p12{(control1.x + control2.x) * 0.5,
+                     (control1.y + control2.y) * 0.5};
+    const PointD p23{(control2.x + end.x) * 0.5,
+                     (control2.y + end.y) * 0.5};
+    const PointD p012{(p01.x + p12.x) * 0.5,
+                      (p01.y + p12.y) * 0.5};
+    const PointD p123{(p12.x + p23.x) * 0.5,
+                      (p12.y + p23.y) * 0.5};
+    const PointD center{(p012.x + p123.x) * 0.5,
+                        (p012.y + p123.y) * 0.5};
+    flattenCubicWithMinimumDepth(
+        start, p01, p012, center,
+        tolerance, sourceErrorScale, depth + 1, minimumDepth,
+        output, incomingApproximationErrors, complexityBudget);
+    flattenCubicWithMinimumDepth(
+        center, p123, p23, end,
+        tolerance, sourceErrorScale, depth + 1, minimumDepth,
+        output, incomingApproximationErrors, complexityBudget);
+}
+
 int64_t checkedQuantize(double value)
 {
     constexpr double safeCoordinate = 1.0e15;
@@ -2135,6 +2174,10 @@ bool refineCollapsedCurveBoundary(
     domain.complexity_budget->consumeGeneratedPoints();
     points.push_back(segments.front().start);
     incomingApproximationErrors.push_back(0.0);
+    // The normal error-bounded flattener may represent a small closed curve
+    // only by coincident endpoints. Sample its interior deterministically
+    // before deciding whether the authoritative geometry grid can retain it.
+    constexpr unsigned MINIMUM_COLLAPSE_REFINEMENT_DEPTH = 4;
     for(const auto& segment : segments) {
         if(!segment.cubic) {
             domain.complexity_budget->consumeGeneratedPoints();
@@ -2142,20 +2185,12 @@ bool refineCollapsedCurveBoundary(
             incomingApproximationErrors.push_back(0.0);
             continue;
         }
-        const auto p01 = midpoint(segment.start, segment.control1);
-        const auto p12 = midpoint(segment.control1, segment.control2);
-        const auto p23 = midpoint(segment.control2, segment.end);
-        const auto p012 = midpoint(p01, p12);
-        const auto p123 = midpoint(p12, p23);
-        const auto center = midpoint(p012, p123);
-        flattenCubic(
-            segment.start, p01, p012, center,
-            localTolerance, singularValue, 1, points,
-            incomingApproximationErrors, *domain.complexity_budget);
-        flattenCubic(
-            center, p123, p23, segment.end,
-            localTolerance, singularValue, 1, points,
-            incomingApproximationErrors, *domain.complexity_budget);
+        flattenCubicWithMinimumDepth(
+            segment.start, segment.control1, segment.control2, segment.end,
+            localTolerance, singularValue, 0,
+            MINIMUM_COLLAPSE_REFINEMENT_DEPTH,
+            points, incomingApproximationErrors,
+            *domain.complexity_budget);
     }
     return true;
 }
@@ -2249,6 +2284,12 @@ void finishSubpath(std::vector<PointD>& points,
     };
     if(points.empty())
         return;
+    bool curveBoundaryRefined = false;
+    if(points.size() < 3 && sourceAreaPotential) {
+        curveBoundaryRefined = refineCollapsedCurveBoundary(
+            sourceSegments, command.transform, domain,
+            points, incomingApproximationErrors);
+    }
     const auto distinctPointCount = [&]() {
         std::vector<PointD> distinct;
         distinct.reserve(std::min<size_t>(points.size(), 3));
@@ -2267,9 +2308,11 @@ void finishSubpath(std::vector<PointD>& points,
     };
     if(points.size() < 3) {
         fragmentIssues.push_back({
-            distinctPointCount() <= 1
-                ? UnprintableReason::PointOnly
-                : UnprintableReason::LineOnly,
+            sourceAreaPotential
+                ? UnprintableReason::AreaCollapse
+                : distinctPointCount() <= 1
+                    ? UnprintableReason::PointOnly
+                    : UnprintableReason::LineOnly,
             subpathIndex,
         });
         clearState();
@@ -2278,8 +2321,8 @@ void finishSubpath(std::vector<PointD>& points,
     bool sourceHasArea = hasNonCollinearTransformedPoints(
         points, command.transform);
     if(!sourceHasArea) {
-        if(sourceAreaPotential) {
-            refineCollapsedCurveBoundary(
+        if(sourceAreaPotential && !curveBoundaryRefined) {
+            curveBoundaryRefined = refineCollapsedCurveBoundary(
                 sourceSegments, command.transform, domain,
                 points, incomingApproximationErrors);
             sourceHasArea = hasNonCollinearTransformedPoints(
@@ -2298,18 +2341,31 @@ void finishSubpath(std::vector<PointD>& points,
             return;
         }
     }
-    Path64 path;
     if(domain.complexity_budget == nullptr)
         throw std::logic_error("missing_complexity_budget");
-    domain.complexity_budget->consumeGeneratedPoints(points.size());
-    path.reserve(points.size());
-    for(const auto& point : points) {
-        const auto gridPoint = toGridPoint(point, command.transform, domain);
-        if(path.empty() || path.back() != gridPoint)
-            path.push_back(gridPoint);
+    const auto quantizeBoundary = [&]() {
+        Path64 candidate;
+        domain.complexity_budget->consumeGeneratedPoints(points.size());
+        candidate.reserve(points.size());
+        for(const auto& point : points) {
+            const auto gridPoint = toGridPoint(
+                point, command.transform, domain);
+            if(candidate.empty() || candidate.back() != gridPoint)
+                candidate.push_back(gridPoint);
+        }
+        if(candidate.size() > 1 && candidate.front() == candidate.back())
+            candidate.pop_back();
+        return candidate;
+    };
+    auto path = quantizeBoundary();
+    if((path.size() < 3 || Clipper2Lib::Area(path) == 0.0)
+            && sourceAreaPotential && !curveBoundaryRefined) {
+        curveBoundaryRefined = refineCollapsedCurveBoundary(
+            sourceSegments, command.transform, domain,
+            points, incomingApproximationErrors);
+        if(curveBoundaryRefined)
+            path = quantizeBoundary();
     }
-    if(path.size() > 1 && path.front() == path.back())
-        path.pop_back();
     if(path.size() < 3 || Clipper2Lib::Area(path) == 0.0) {
         fragmentIssues.push_back({
             UnprintableReason::AreaCollapse,

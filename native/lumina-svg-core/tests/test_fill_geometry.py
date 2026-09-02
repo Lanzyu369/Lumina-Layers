@@ -867,7 +867,7 @@ def test_exact_rect_retains_large_coordinate_area_in_polygon_output() -> None:
     assert result.unprintable_fragments.count == 0
 
 
-def test_collapsed_quadratic_loop_does_not_reject_the_document() -> None:
+def test_small_quadratic_loop_preserves_its_real_area() -> None:
     result = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 1676 2238'>"
         "<rect width='100' height='100' fill='#f00'/>"
@@ -885,15 +885,17 @@ def test_collapsed_quadratic_loop_does_not_reject_the_document() -> None:
     )
 
     assert result.status == "supported"
-    assert result.raw.geometry_count == 1
-    assert result.raw.component_count == 1
-    assert result.unprintable_fragments.reason_codes == ("area_collapse",)
-    assert result.unprintable_fragments.rgba.tolist() == [
-        [58, 59, 112, 255]
+    assert result.raw.geometry_count == 2
+    assert result.raw.component_count == 2
+    assert result.raw.rgba.tolist() == [
+        [255, 0, 0, 255],
+        [58, 59, 112, 255],
     ]
+    assert geometry_area(result, result.raw, 1) > 0.0
+    assert result.unprintable_fragments.count == 0
 
 
-def test_collapsed_backtracking_curve_is_reported_without_document_failure() -> None:
+def test_small_backtracking_curve_preserves_its_real_area() -> None:
     result = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 2244 2804'>"
         "<rect width='100' height='100' fill='#f00'/>"
@@ -911,12 +913,14 @@ def test_collapsed_backtracking_curve_is_reported_without_document_failure() -> 
     )
 
     assert result.status == "supported"
-    assert result.raw.geometry_count == 1
-    assert result.raw.component_count == 1
-    assert result.unprintable_fragments.reason_codes == ("area_collapse",)
-    assert result.unprintable_fragments.rgba.tolist() == [
-        [173, 72, 14, 255]
+    assert result.raw.geometry_count == 2
+    assert result.raw.component_count == 2
+    assert result.raw.rgba.tolist() == [
+        [255, 0, 0, 255],
+        [173, 72, 14, 255],
     ]
+    assert geometry_area(result, result.raw, 1) > 0.0
+    assert result.unprintable_fragments.count == 0
 
 
 def test_small_curve_with_area_is_preserved_as_a_polygon() -> None:
@@ -934,6 +938,27 @@ def test_small_curve_with_area_is_preserved_as_a_polygon() -> None:
     assert result.status == "supported"
     assert result.raw.geometry_count == 2
     assert result.raw.component_count == 2
+    assert result.unprintable_fragments.count == 0
+
+
+def test_closed_cubic_bulge_is_refined_before_point_classification() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 100 100'>"
+        "<rect width='10' height='10' fill='#f00'/>"
+        "<path fill='#00f' d='M20 20 "
+        "C20.004 20.004 19.996 20.004 20 20Z'/></svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 2
+    assert result.raw.component_count == 2
+    assert result.raw.rgba.tolist() == [
+        [255, 0, 0, 255],
+        [0, 0, 255, 255],
+    ]
+    assert geometry_area(result, result.raw, 1) > 0.0
     assert result.unprintable_fragments.count == 0
 
 
