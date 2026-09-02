@@ -1,4 +1,8 @@
-import { useConverterStore } from "../stores/converter";
+import { ColorMode, StructureMode } from "../api/types";
+import {
+  resolveConverterSourceSelection,
+  useConverterStore,
+} from "../stores/converter";
 import { useWidgetStore } from "../stores/widgetStore";
 import type {
   WorkshopImageHandoff as SdkWorkshopImageHandoff,
@@ -29,13 +33,25 @@ const WORKSHOP_HANDOFF_MIN_MM = 0.5;
 const WORKSHOP_HANDOFF_MAX_MM = 9_999;
 const WORKSHOP_GRID_MIN_PITCH_MM = 0.01;
 const WORKSHOP_GRID_MAX_PITCH_MM = 9_999;
+const WORKSHOP_HANDOFF_MIN_THICKNESS_MM = 0.2;
+const WORKSHOP_HANDOFF_MAX_THICKNESS_MM = 50;
+const BACKING_LAYER_HEIGHT_MM = 0.08;
+const BACKING_MIN_THICKNESS_MM = 0.24;
+const BACKING_MAX_THICKNESS_MM = 10;
 const PHYSICAL_SIZE_TOLERANCE_MM = 1e-6;
+const SVG_ASPECT_RATIO_TOLERANCE = 1e-6;
 const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10] as const;
+
+function physicalSvgLength(value: number): string {
+  const rounded = Number(value.toFixed(6));
+  return `${Object.is(rounded, -0) ? 0 : rounded}mm`;
+}
 
 export type WorkshopHandoffValidationErrorCode =
   | "handoff-invalid-payload"
   | "handoff-binary-too-large"
   | "handoff-invalid-png"
+  | "handoff-invalid-svg"
   | "handoff-dimensions-invalid"
   | "handoff-image-empty"
   | "handoff-layout-invalid"
@@ -184,6 +200,19 @@ function validatePhysicalDimensions(
       "Workshop handoff physical dimensions are out of range.",
     );
   }
+  if (
+    handoff.recommendedTotalThicknessMm !== undefined &&
+    !finiteInRange(
+      handoff.recommendedTotalThicknessMm,
+      WORKSHOP_HANDOFF_MIN_THICKNESS_MM,
+      WORKSHOP_HANDOFF_MAX_THICKNESS_MM,
+    )
+  ) {
+    handoffError(
+      "handoff-physical-size-invalid",
+      "Workshop handoff total thickness is out of range.",
+    );
+  }
   const layout = handoff.layout;
   if (layout === undefined) {
     return;
@@ -220,6 +249,55 @@ function validatePhysicalDimensions(
       "Workshop physical dimensions do not match the grid pitch.",
     );
   }
+}
+
+function roundToBackingLayer(value: number): number {
+  return Number(
+    (Math.round(value / BACKING_LAYER_HEIGHT_MM) *
+      BACKING_LAYER_HEIGHT_MM).toFixed(2),
+  );
+}
+
+function recommendedBackingThicknessMm(
+  totalThicknessMm: number,
+): number {
+  const converter = useConverterStore.getState();
+  const sourceSelection = resolveConverterSourceSelection(converter);
+  const colorLayers = Math.max(
+    1,
+    Math.round(
+      converter.color_layers ??
+        sourceSelection.color_layers ??
+        converter.selectedLutInfo?.max_color_layers ??
+        5,
+    ),
+  );
+  const layerHeightMm =
+    converter.layer_height_mm ??
+    sourceSelection.layer_height_mm ??
+    converter.selectedLutInfo?.layer_height_mm ??
+    BACKING_LAYER_HEIGHT_MM;
+  const colorPasses =
+    converter.structure_mode === StructureMode.DOUBLE_SIDED &&
+    converter.color_mode !== ColorMode.FIVE_COLOR_EXT
+      ? 2
+      : 1;
+  const unquantizedBacking =
+    totalThicknessMm - colorLayers * layerHeightMm * colorPasses;
+  const clampedBacking = Math.min(
+    BACKING_MAX_THICKNESS_MM,
+    Math.max(BACKING_MIN_THICKNESS_MM, unquantizedBacking),
+  );
+  return roundToBackingLayer(clampedBacking);
+}
+
+function applyRecommendedTotalThickness(
+  totalThicknessMm: number | undefined,
+): void {
+  if (totalThicknessMm === undefined) return;
+  useConverterStore
+    .getState()
+    .setSpacerThick(recommendedBackingThicknessMm(totalThicknessMm));
 }
 
 function validateRecipeAndIdentity(
@@ -354,6 +432,7 @@ const defaultPngDecoder: WorkshopPngDecoder = {
 
 function safeHandoffFilename(
   handoff: SdkWorkshopImageHandoff,
+  extension: "png" | "svg" = "png",
 ): string {
   const safeModule = handoff.moduleId.replace(
     /[^A-Za-z0-9._-]+/g,
@@ -362,10 +441,170 @@ function safeHandoffFilename(
   const safeProject = handoff.projectId
     .replace(/[^A-Za-z0-9._-]+/g, "-")
     .slice(0, 96);
-  return `${safeModule}-${safeProject}.png`;
+  return `${safeModule}-${safeProject}.${extension}`;
+}
+
+const FORBIDDEN_SVG_ELEMENTS = new Set([
+  "script",
+  "foreignobject",
+  "iframe",
+  "object",
+  "embed",
+  "image",
+  "audio",
+  "video",
+  "link",
+  "meta",
+  "style",
+  "animate",
+  "animatemotion",
+  "animatetransform",
+  "set",
+  "mask",
+  "clippath",
+  "filter",
+  "pattern",
+]);
+
+function decodeAndValidateSvg(
+  bytes: ArrayBuffer,
+  expectedAspectRatio: number,
+  physicalWidthMm: number,
+  physicalHeightMm: number,
+): string {
+  if (
+    bytes.byteLength === 0 ||
+    bytes.byteLength > WORKSHOP_HANDOFF_MAX_BINARY_BYTES
+  ) {
+    return handoffError(
+      "handoff-binary-too-large",
+      "Workshop SVG is empty or exceeds the 64 MiB limit.",
+    );
+  }
+  let source: string;
+  try {
+    source = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return handoffError(
+      "handoff-invalid-svg",
+      "Workshop SVG is not valid UTF-8.",
+    );
+  }
+  if (source.includes("\0")) {
+    return handoffError(
+      "handoff-invalid-svg",
+      "Workshop SVG contains invalid null bytes.",
+    );
+  }
+
+  const documentNode = new DOMParser().parseFromString(
+    source,
+    "image/svg+xml",
+  );
+  const root = documentNode.documentElement;
+  if (
+    root.localName.toLowerCase() !== "svg" ||
+    root.namespaceURI !== "http://www.w3.org/2000/svg" ||
+    documentNode.querySelector("parsererror") !== null
+  ) {
+    return handoffError(
+      "handoff-invalid-svg",
+      "Workshop SVG markup is invalid.",
+    );
+  }
+
+  const viewBox = (root.getAttribute("viewBox") ?? "")
+    .trim()
+    .split(/[\s,]+/)
+    .map(Number);
+  if (
+    viewBox.length !== 4 ||
+    viewBox.some((value) => !Number.isFinite(value)) ||
+    viewBox[2] <= 0 ||
+    viewBox[3] <= 0
+  ) {
+    return handoffError(
+      "handoff-invalid-svg",
+      "Workshop SVG must declare a finite positive viewBox.",
+    );
+  }
+  const svgAspectRatio = viewBox[2] / viewBox[3];
+  if (
+    Math.abs(svgAspectRatio - expectedAspectRatio) >
+    SVG_ASPECT_RATIO_TOLERANCE *
+      Math.max(1, svgAspectRatio, expectedAspectRatio)
+  ) {
+    return handoffError(
+      "handoff-dimensions-invalid",
+      "Workshop SVG viewBox does not match the PNG fallback dimensions.",
+    );
+  }
+
+  for (const element of documentNode.querySelectorAll("*")) {
+    if (FORBIDDEN_SVG_ELEMENTS.has(element.localName.toLowerCase())) {
+      return handoffError(
+        "handoff-invalid-svg",
+        "Workshop SVG contains active, embedded, or unsupported content.",
+      );
+    }
+    for (const attribute of element.attributes) {
+      const name = attribute.name.toLowerCase();
+      const value = attribute.value.trim();
+      if (
+        name.startsWith("on") ||
+        ((name === "href" || name.endsWith(":href")) &&
+          !value.startsWith("#")) ||
+        /@import/i.test(value) ||
+        /url\((?!\s*['"]?#)/i.test(value) ||
+        /javascript\s*:/i.test(value)
+      ) {
+        return handoffError(
+          "handoff-invalid-svg",
+          "Workshop SVG contains an external or executable reference.",
+        );
+      }
+    }
+  }
+  const printableElements = root.querySelectorAll(
+    "path,rect,circle,ellipse,polygon,polyline,use",
+  );
+  const hasPrintableGeometry = [...printableElements].some(
+    (element) =>
+      element.closest("defs,mask,clipPath,symbol") === null &&
+      (element.localName.toLowerCase() !== "path" ||
+        (element.getAttribute("d") ?? "").trim().length > 0),
+  );
+  if (!hasPrintableGeometry) {
+    return handoffError(
+      "handoff-image-empty",
+      "Workshop SVG does not contain printable geometry.",
+    );
+  }
+  root.setAttribute("width", physicalSvgLength(physicalWidthMm));
+  root.setAttribute("height", physicalSvgLength(physicalHeightMm));
+  return new XMLSerializer().serializeToString(root);
 }
 
 export async function handoffWorkshopPngToConverter(
+  handoff: SdkWorkshopImageHandoff,
+  options?: WorkshopHandoffOptions,
+  dependencies: WorkshopPngHandoffDependencies = {},
+): Promise<WorkshopHandoffResult> {
+  return handoffWorkshopPayloadToConverter(
+    handoff,
+    options,
+    dependencies,
+  );
+}
+
+/**
+ * Loads the safest available Workshop source into the converter while keeping
+ * the PNG fallback, physical size, recipe, and material identity aligned.
+ *
+ * 将创意工坊提供的最安全图源载入转换器，同时保持 PNG 回退、物理尺寸、
+ * 配方与耗材身份一致。
+ */
+export async function handoffWorkshopPayloadToConverter(
   handoff: SdkWorkshopImageHandoff,
   options?: WorkshopHandoffOptions,
   dependencies: WorkshopPngHandoffDependencies = {},
@@ -422,17 +661,34 @@ export async function handoffWorkshopPngToConverter(
     );
   }
 
+  const svgSource =
+    handoff.svgBytes instanceof ArrayBuffer
+      ? decodeAndValidateSvg(
+          handoff.svgBytes,
+          handoff.pixelWidth / handoff.pixelHeight,
+          handoff.recommendedWidthMm,
+          handoff.recommendedHeightMm,
+        )
+      : null;
+
   const converter = useConverterStore.getState();
   const occupied =
     converter.imageFile !== null || converter.batchFiles.length > 0;
   if (occupied && !options?.replaceExisting) {
     return { status: "needs-confirmation" };
   }
-  const file = new File(
-    [handoff.pngBytes],
-    safeHandoffFilename(handoff),
-    { type: "image/png" },
-  );
+  const file =
+    svgSource === null
+      ? new File(
+          [handoff.pngBytes],
+          safeHandoffFilename(handoff),
+          { type: "image/png" },
+        )
+      : new File(
+          [svgSource],
+          safeHandoffFilename(handoff, "svg"),
+          { type: "image/svg+xml" },
+        );
   rememberWorkshopHandoffColorLibraryId(
     handoff.recipeSource,
     handoff.colorLibraryId,
@@ -447,6 +703,9 @@ export async function handoffWorkshopPngToConverter(
     targetHeightMm: handoff.recommendedHeightMm,
     source: handoff.recipeSource,
   });
+  applyRecommendedTotalThickness(
+    handoff.recommendedTotalThicknessMm,
+  );
   useWidgetStore.getState().setActiveTab("converter");
   return { status: "completed" };
 }

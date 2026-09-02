@@ -135,6 +135,11 @@ class PrinterConfig:
     NOZZLE_WIDTH: float = 0.42
     COLOR_LAYERS: int = 5
     BACKING_MM: float = 1.2
+    MAX_BACKING_THICKNESS_MM: float = 10.0
+    BACKING_INFILL_DENSITY_MIN_PERCENT: int = 5
+    BACKING_INFILL_DENSITY_DEFAULT_PERCENT: int = 100
+    BACKING_INFILL_DENSITY_MAX_PERCENT: int = 100
+    VIEWING_SURFACE_SOLID_DEPTH_MM: float = 3.0
     SHRINK_OFFSET: float = 0.02
 
 
@@ -712,6 +717,10 @@ LEGACY_SLICER_ID_ALIASES: dict[str, str] = {
     "flash studio": "FlashStudio",
     "flash studio desktop": "FlashStudio",
     "flashstudio": "FlashStudio",
+    "qidi": "QIDIStudio",
+    "qidi_studio": "QIDIStudio",
+    "qidi studio": "QIDIStudio",
+    "qidistudio": "QIDIStudio",
 }
 
 
@@ -881,6 +890,7 @@ SUPPORTED_SLICERS: list[dict[str, str]] = [
     {"id": "ElegooSlicer", "display_name": "ElegooSlicer"},
     {"id": "AnycubicSlicerNext", "display_name": "Anycubic Slicer Next"},
     {"id": "FlashStudio", "display_name": "Flash Studio Desktop"},
+    {"id": "QIDIStudio", "display_name": "QIDI Studio"},
 ]
 
 DEFAULT_SLICER_ID: str = "BambuStudio"
@@ -1202,6 +1212,58 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         template_file="flashforge_guider4_pro.json",
         slicer_templates={"FlashStudio": "flashforge_guider4_pro.json"},
         supported_nozzle_sizes=("0.25", "0.4"),
+    ),
+    "qidi-q2": PrinterProfile(
+        id="qidi-q2",
+        display_name="Q2",
+        brand="QIDI",
+        bed_width=270,
+        bed_depth=270,
+        bed_height=256,
+        nozzle_count=1,
+        is_dual_head=False,
+        template_file="qidi_q2.json",
+        slicer_templates={"QIDIStudio": "qidi_q2.json"},
+        supported_nozzle_sizes=("0.2", "0.4"),
+    ),
+    "qidi-q2c": PrinterProfile(
+        id="qidi-q2c",
+        display_name="Q2C",
+        brand="QIDI",
+        bed_width=270,
+        bed_depth=270,
+        bed_height=256,
+        nozzle_count=1,
+        is_dual_head=False,
+        template_file="qidi_q2c.json",
+        slicer_templates={"QIDIStudio": "qidi_q2c.json"},
+        supported_nozzle_sizes=("0.2", "0.4"),
+    ),
+    "qidi-x-max-4": PrinterProfile(
+        id="qidi-x-max-4",
+        display_name="X-Max 4",
+        brand="QIDI",
+        bed_width=390,
+        bed_depth=390,
+        bed_height=340,
+        nozzle_count=1,
+        is_dual_head=False,
+        template_file="qidi_x_max_4.json",
+        slicer_templates={"QIDIStudio": "qidi_x_max_4.json"},
+        supported_nozzle_sizes=("0.2", "0.4"),
+    ),
+    "qidi-x-plus-5": PrinterProfile(
+        id="qidi-x-plus-5",
+        display_name="X-Plus 5",
+        brand="QIDI",
+        bed_width=320,
+        bed_depth=320,
+        bed_height=300,
+        nozzle_count=1,
+        is_dual_head=False,
+        template_file="qidi_x_plus_5.json",
+        slicer_templates={"QIDIStudio": "qidi_x_plus_5.json"},
+        supported_nozzle_sizes=("0.4",),
     ),
 }
 

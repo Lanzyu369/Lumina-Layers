@@ -238,6 +238,14 @@ export interface ExtractorActions {
   submitConfirmPalette: () => Promise<void>;
 }
 
+function buildBasicMaterialType(material: string | null | undefined): string {
+  const normalized = (material || "PLA").trim() || "PLA";
+  if (/\s+Basic$/i.test(normalized)) {
+    return normalized;
+  }
+  return `${normalized} Basic`;
+}
+
 // ========== Default State ==========
 
 const DEFAULT_STATE: ExtractorState = {
@@ -1360,7 +1368,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         await confirmPalette({
           session_id: state.session_id,
           manufacturer: state.manufacturer.trim(),
-          type: state.type.trim(),
+          type: buildBasicMaterialType(state.defaultPalette[0]?.material),
           palette: state.defaultPalette.map((entry) => ({
             ...entry,
             color_name: entry.color_name?.trim() || null,

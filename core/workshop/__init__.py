@@ -7,7 +7,10 @@ from .errors import (
     WorkshopRegistryError,
     WorkshopReleaseError,
 )
-from .install_store import InstalledModuleState
+from .install_store import (
+    InstalledModuleState,
+    is_browser_trusted_workshop_module,
+)
 from .installer import WorkshopInstaller
 from .models import InspectedWorkshopPackage, WorkshopManifestV1
 from .package_validator import (
@@ -52,6 +55,7 @@ __all__ = [
     "download_registry_package",
     "extract_inspected_package",
     "inspect_workshop_package",
+    "is_browser_trusted_workshop_module",
     "load_registry_keys",
     "load_workshop_seed_lock",
     "verify_workshop_seed",

@@ -9,9 +9,14 @@ Creative Workshop module development and release guide
 `@lumina/workshop-sdk` 与宿主通信。
 
 正式模块运行在 `sandbox="allow-scripts"` 的 iframe 中。桌面版还会按已提交的模块
-frame 拦截网络、WebSocket、跳转、弹窗、权限和下载。普通浏览器无法提供同等级的
-请求防火墙，因此只运行预装官方 seed 和测试 fixture；社区模块需要桌面版，本地模块
-只有在显式不安全开发模式中才能用合成数据调试。
+frame 拦截网络、WebSocket、跳转、弹窗、权限和下载。普通浏览器只运行签名
+Registry 中标记为 `official` 的模块、预装官方 seed 和测试 fixture；Registry 社区
+模块、GitHub 模块和普通本地模块需要桌面版，本地模块只有在显式不安全开发模式中
+才能用合成数据调试。
+
+浏览器放行不会增加权限：iframe 不获得 `allow-same-origin`，固定 CSP 仍保持
+`default-src 'none'` 和 `connect-src 'none'`。模块只能使用 manifest 声明且由宿主
+实现的 RPC 能力；服务端安装状态仍是 `source` 与 `official` 身份的最终来源。
 
 这套边界对官方模块和第三方模块相同。不要尝试通过 `fetch`、CDN、动态 `import()`、
 `eval`、本地文件路径或父页面 DOM 绕过它。

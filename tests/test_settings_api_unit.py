@@ -11,6 +11,9 @@ Validates:
 
 import json
 import logging
+from pathlib import Path
+import shutil
+import sys
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -59,6 +62,8 @@ class TestGetSettings:
         assert settings["palette_mode"] == "swatch"
         assert settings["enable_crop_modal"] is True
         assert settings["device_profile_id"] == "BambuStudio:bbl:bambu-lab-h2d:0.4"
+        assert settings["build_plate_id"] == ""
+        assert settings["build_plate_selections"] == {}
         assert settings["nozzle_size"] == "0.4"
 
     def test_get_settings_rejects_untrusted_origin_by_default(self) -> None:
@@ -103,6 +108,10 @@ class TestGetSettings:
             "palette_mode": "grid",
             "enable_crop_modal": False,
             "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
+            "build_plate_id": "smooth-high-temp-plate",
+            "build_plate_selections": {
+                "OrcaSlicer:bbl:bambu-lab-p1s": "smooth-high-temp-plate"
+            },
             "nozzle_size": "0.2",
         }
         mock_file = MagicMock()
@@ -123,6 +132,10 @@ class TestGetSettings:
         assert settings["palette_mode"] == "grid"
         assert settings["enable_crop_modal"] is False
         assert settings["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.2"
+        assert settings["build_plate_id"] == "smooth-high-temp-plate"
+        assert settings["build_plate_selections"] == {
+            "OrcaSlicer:bbl:bambu-lab-p1s": "smooth-high-temp-plate"
+        }
         assert settings["nozzle_size"] == "0.2"
 
     def test_get_settings_allows_local_frontend_origin(self) -> None:
@@ -436,9 +449,43 @@ class TestGetPrinters:
             "display_name": "Flash Studio Desktop",
         } in response.json()["slicers"]
 
+    def test_get_printers_and_slicers_expose_qidi_studio_profiles(self) -> None:
+        printers_response = client.get("/api/system/printers")
+        slicers_response = client.get("/api/system/slicers")
+
+        assert printers_response.status_code == 200
+        assert slicers_response.status_code == 200
+        assert {
+            "id": "QIDIStudio",
+            "display_name": "QIDI Studio",
+        } in slicers_response.json()["slicers"]
+        expected_nozzles = {
+            "qidi-q2": ["0.2", "0.4"],
+            "qidi-q2c": ["0.2", "0.4"],
+            "qidi-x-max-4": ["0.2", "0.4"],
+            "qidi-x-plus-5": ["0.4"],
+        }
+        printers = {
+            printer["id"]: printer
+            for printer in printers_response.json()["printers"]
+            if printer["id"] in expected_nozzles
+        }
+        assert set(printers) == set(expected_nozzles)
+        for printer_id, nozzles in expected_nozzles.items():
+            printer = printers[printer_id]
+            assert printer["supported_slicers"] == ["QIDIStudio"]
+            assert [
+                profile["nozzle_size"]
+                for profile in printer["device_profiles"]
+                if profile["slicer_id"] == "QIDIStudio"
+            ] == nozzles
+
     def test_get_printers_attaches_registry_device_profiles(self, tmp_path, monkeypatch) -> None:
         registry_root = tmp_path / "machine_registry"
         registry_root.mkdir()
+        thumbnail_path = registry_root / "slicers/BambuStudio/assets/h2d.png"
+        thumbnail_path.parent.mkdir(parents=True)
+        thumbnail_path.write_bytes(b"h2d-thumbnail")
         (registry_root / "registry.json").write_text(
             json.dumps(
                 {
@@ -453,6 +500,20 @@ class TestGetPrinters:
                             "profile_format": "bambu_orca",
                             "application_metadata": "BambuStudio-02.07.01.57",
                             "sidecar_policy": "bambu_studio",
+                            "build_plates": [
+                                {
+                                    "id": "textured-pei-plate",
+                                    "display_name": "Textured PEI Plate",
+                                    "display_name_zh": "纹理PEI打印板",
+                                    "project_value": "Textured PEI Plate",
+                                    "plate_value": "Textured PEI Plate",
+                                    "sidecar_value": "textured_plate",
+                                    "image": "slicers/BambuStudio/build_plates/bed_pei.png",
+                                    "source_path": "resources/images/bed_pei.png",
+                                    "source_version": "02.07.01.57",
+                                    "revision": "sha256:plate",
+                                }
+                            ],
                             "machines": [
                                 {
                                     "machine_profile_id": "BambuStudio:bbl:bambu-lab-h2d",
@@ -463,6 +524,8 @@ class TestGetPrinters:
                                     "bed_depth": 320,
                                     "bed_height": 325,
                                     "thumbnail": "slicers/BambuStudio/assets/h2d.png",
+                                    "supported_build_plate_ids": ["textured-pei-plate"],
+                                    "default_build_plate_id": "textured-pei-plate",
                                     "nozzles": [
                                         {
                                             "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d:0.4",
@@ -493,11 +556,21 @@ class TestGetPrinters:
         assert h2d["device_profiles"] == [
             {
                 "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d:0.4",
+                "machine_profile_id": "BambuStudio:bbl:bambu-lab-h2d",
                 "slicer_id": "BambuStudio",
                 "nozzle_size": "0.4",
                 "source_profile_name": "Bambu Lab H2D 0.4 nozzle",
                 "revision": "sha256:abc",
                 "supported": True,
+                "build_plates": [
+                    {
+                        "id": "textured-pei-plate",
+                        "display_name": "Textured PEI Plate",
+                        "display_name_zh": "纹理PEI打印板",
+                        "image_url": "/api/system/machine-registry/assets/slicers/BambuStudio/build_plates/bed_pei.png",
+                    }
+                ],
+                "default_build_plate_id": "textured-pei-plate",
             }
         ]
 
@@ -508,6 +581,11 @@ class TestGetPrinters:
     ) -> None:
         registry_root = tmp_path / "machine_registry"
         registry_root.mkdir()
+        thumbnail_path = (
+            registry_root / "slicers/OrcaSlicer/assets/snapmaker-artisan.png"
+        )
+        thumbnail_path.parent.mkdir(parents=True)
+        thumbnail_path.write_bytes(b"snapmaker-thumbnail")
         (registry_root / "registry.json").write_text(
             json.dumps(
                 {
@@ -578,6 +656,116 @@ class TestGetPrinters:
         assert response.status_code == 200
         assert response.content == b"fake-thumbnail"
         assert response.headers["content-type"].startswith("image/png")
+
+    def test_machine_registry_asset_serves_from_frozen_bundle_root(
+        self,
+        tmp_path,
+        monkeypatch,
+    ) -> None:
+        frozen_root = tmp_path / "frozen"
+        asset_path = frozen_root / "machine_registry" / "build_plates" / "bed_pei.png"
+        asset_path.parent.mkdir(parents=True)
+        asset_path.write_bytes(b"frozen-neutral-plate")
+        unrelated_cwd = tmp_path / "cwd"
+        unrelated_cwd.mkdir()
+        monkeypatch.chdir(unrelated_cwd)
+        monkeypatch.delenv("LUMINA_MACHINE_REGISTRY_DIR", raising=False)
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setattr(sys, "_MEIPASS", str(frozen_root), raising=False)
+
+        response = client.get(
+            "/api/system/machine-registry/assets/build_plates/bed_pei.png"
+        )
+
+        assert response.status_code == 200
+        assert response.content == b"frozen-neutral-plate"
+
+    def test_frozen_minimal_registry_keeps_profiles_and_omits_thumbnails(
+        self,
+        tmp_path,
+        monkeypatch,
+    ) -> None:
+        source_root = Path(__file__).resolve().parents[1] / "machine_registry"
+        source_data = json.loads(
+            (source_root / "registry.json").read_text(encoding="utf-8")
+        )
+        frozen_root = tmp_path / "frozen"
+        registry_root = frozen_root / "machine_registry"
+        registry_root.mkdir(parents=True)
+        shutil.copy2(source_root / "registry.json", registry_root / "registry.json")
+
+        runtime_paths = {
+            str(plate["image"])
+            for slicer in source_data["slicers"]
+            for plate in slicer.get("build_plates", [])
+        }
+        runtime_paths.update(
+            str(nozzle["template"])
+            for slicer in source_data["slicers"]
+            for machine in slicer["machines"]
+            for nozzle in machine["nozzles"]
+        )
+        for relative_path in runtime_paths:
+            destination = registry_root / relative_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_root / relative_path, destination)
+
+        unrelated_cwd = tmp_path / "elsewhere"
+        unrelated_cwd.mkdir()
+        monkeypatch.chdir(unrelated_cwd)
+        monkeypatch.delenv("LUMINA_MACHINE_REGISTRY_DIR", raising=False)
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setattr(sys, "_MEIPASS", str(frozen_root), raising=False)
+
+        response = client.get("/api/system/printers")
+
+        assert response.status_code == 200
+        printers = response.json()["printers"]
+        actual_profiles = {
+            profile["device_profile_id"]: profile
+            for printer in printers
+            for profile in printer["device_profiles"]
+        }
+        expected_profiles = {
+            nozzle["device_profile_id"]: {
+                "build_plate_ids": machine.get("supported_build_plate_ids", []),
+                "default_build_plate_id": machine.get("default_build_plate_id", ""),
+            }
+            for slicer in source_data["slicers"]
+            for machine in slicer["machines"]
+            for nozzle in machine["nozzles"]
+        }
+        assert set(actual_profiles) == set(expected_profiles)
+        for profile_id, expected in expected_profiles.items():
+            actual = actual_profiles[profile_id]
+            assert [plate["id"] for plate in actual["build_plates"]] == expected[
+                "build_plate_ids"
+            ]
+            assert actual["default_build_plate_id"] == expected[
+                "default_build_plate_id"
+            ]
+        assert all(printer["thumbnail"] == "" for printer in printers)
+
+        plate_path = next(iter(sorted(
+            str(plate["image"])
+            for slicer in source_data["slicers"]
+            for plate in slicer.get("build_plates", [])
+        )))
+        plate_response = client.get(
+            f"/api/system/machine-registry/assets/{plate_path}"
+        )
+        assert plate_response.status_code == 200
+
+        old_thumbnail = next(
+            str(machine["thumbnail"])
+            for slicer in source_data["slicers"]
+            for machine in slicer["machines"]
+            if machine.get("thumbnail")
+        )
+        thumbnail_response = client.get(
+            f"/api/system/machine-registry/assets/{old_thumbnail}"
+        )
+        assert thumbnail_response.status_code == 404
 
     def test_machine_registry_asset_rejects_path_traversal(self, tmp_path, monkeypatch) -> None:
         registry_root = tmp_path / "machine_registry"

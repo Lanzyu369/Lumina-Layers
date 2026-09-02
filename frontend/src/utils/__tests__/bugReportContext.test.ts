@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ColorMode } from "../../api/types";
+import { ColorMode, ModelingMode } from "../../api/types";
 import { useConverterStore } from "../../stores/converter";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useSingleStageStore } from "../../stores/singleStageStore";
@@ -50,6 +50,8 @@ describe("collectBugReportContext", () => {
       theme: "dark",
       lastColorMode: "8-Color Max",
       lastLutName: "My LUT",
+      preserveUploadFilenameFor3mf: false,
+      enableSmoothVectorPreview: true,
     });
     useSingleStageStore.setState({
       sessionId: null,
@@ -116,6 +118,11 @@ describe("collectBugReportContext", () => {
         converter: "converter-session",
         single_stage: null,
       },
+      printer_id: useSettingsStore.getState().printerModel,
+      slicer: useSettingsStore.getState().slicerSoftware,
+      nozzle_size: useSettingsStore.getState().nozzleSize,
+      device_profile_id: useSettingsStore.getState().deviceProfileId,
+      build_plate_id: useSettingsStore.getState().buildPlateId,
       color_mode: "8-Color Max",
       lut_name: "My LUT",
       source_version: null,
@@ -129,6 +136,9 @@ describe("collectBugReportContext", () => {
       material_delta_e00_tolerance: null,
       material_layer_height_mm: null,
       material_backing_material_dir_name: null,
+      preserve_upload_filename_for_3mf: false,
+      enable_smooth_vector_preview: true,
+      vector_preview_renderer: null,
       recent_client_logs: [],
       action_history: [],
       session_history: [],
@@ -136,6 +146,42 @@ describe("collectBugReportContext", () => {
       active_final_artifact_ref: null,
       advanced_params: null,
       workshop: null,
+    });
+  });
+
+  it("captures the uploaded filename export preference for reproduction", () => {
+    useSettingsStore.setState({ preserveUploadFilenameFor3mf: true });
+
+    const context = collectBugReportContext();
+
+    expect(context.preserve_upload_filename_for_3mf).toBe(true);
+  });
+
+  it("captures the smooth SVG preference and selected lightweight renderer", () => {
+    useWidgetStore.setState({ activeTab: "converter" });
+    useSettingsStore.setState({ enableSmoothVectorPreview: true });
+    useConverterStore.setState({
+      imageFile: new File(
+        ['<svg xmlns="http://www.w3.org/2000/svg"/>'],
+        "artwork.svg",
+        { type: "image/svg+xml" },
+      ),
+      modeling_mode: ModelingMode.VECTOR,
+      modelSurfaceEnabled: false,
+      largeFormatEnabled: false,
+      batchPreviewItems: [],
+    });
+
+    expect(collectBugReportContext()).toMatchObject({
+      enable_smooth_vector_preview: true,
+      vector_preview_renderer: "vector_analytic",
+    });
+
+    useSettingsStore.setState({ enableSmoothVectorPreview: false });
+
+    expect(collectBugReportContext()).toMatchObject({
+      enable_smooth_vector_preview: false,
+      vector_preview_renderer: "segmented",
     });
   });
 
@@ -780,6 +826,9 @@ describe("collectBugReportContext", () => {
       "material_delta_e00_tolerance",
       "material_layer_height_mm",
       "material_backing_material_dir_name",
+      "preserve_upload_filename_for_3mf",
+      "enable_smooth_vector_preview",
+      "vector_preview_renderer",
       "recent_client_logs",
       "action_history",
       "session_history",

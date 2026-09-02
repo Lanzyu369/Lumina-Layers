@@ -78,14 +78,13 @@ export function colorRemapToReplacementRegions(
 
   for (const [origHex, newHex] of Object.entries(remapMap)) {
     const entry = palette.find((p) => p.matched_hex === origHex);
-    if (!entry) continue;
 
     // Backend expects #rrggbb format per API contract
     const ensureHash = (h: string) => (h.startsWith('#') ? h : `#${h}`);
 
     result.push({
-      quantized_hex: ensureHash(entry.quantized_hex),
-      matched_hex: ensureHash(entry.matched_hex),
+      quantized_hex: ensureHash(entry?.quantized_hex ?? origHex),
+      matched_hex: ensureHash(entry?.matched_hex ?? origHex),
       replacement_hex: ensureHash(newHex),
     });
   }

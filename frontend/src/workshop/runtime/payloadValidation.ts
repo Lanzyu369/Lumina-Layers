@@ -397,10 +397,12 @@ function validateHandoff(
         "colorLibraryId",
         "recipeSource",
       ],
-      ["layout"],
+      ["layout", "svgBytes", "recommendedTotalThicknessMm"],
     ) ||
     !boundedString(payload.projectId, 256) ||
     !(payload.pngBytes instanceof ArrayBuffer) ||
+    ("svgBytes" in payload &&
+      !(payload.svgBytes instanceof ArrayBuffer)) ||
     !Number.isInteger(payload.pixelWidth) ||
     !Number.isInteger(payload.pixelHeight) ||
     (payload.pixelWidth as number) <= 0 ||
@@ -409,6 +411,9 @@ function validateHandoff(
     !finiteNumber(payload.recommendedHeightMm) ||
     payload.recommendedWidthMm <= 0 ||
     payload.recommendedHeightMm <= 0 ||
+    ("recommendedTotalThicknessMm" in payload &&
+      (!finiteNumber(payload.recommendedTotalThicknessMm) ||
+        payload.recommendedTotalThicknessMm <= 0)) ||
     payload.preserveCanvasBounds !== true ||
     !(
       payload.colorLibraryId === null ||
@@ -423,10 +428,19 @@ function validateHandoff(
     moduleVersion: identity.moduleVersion,
     projectId: payload.projectId,
     pngBytes: payload.pngBytes,
+    ...(payload.svgBytes instanceof ArrayBuffer
+      ? { svgBytes: payload.svgBytes }
+      : {}),
     pixelWidth: payload.pixelWidth,
     pixelHeight: payload.pixelHeight,
     recommendedWidthMm: payload.recommendedWidthMm,
     recommendedHeightMm: payload.recommendedHeightMm,
+    ...(finiteNumber(payload.recommendedTotalThicknessMm)
+      ? {
+          recommendedTotalThicknessMm:
+            payload.recommendedTotalThicknessMm,
+        }
+      : {}),
     preserveCanvasBounds: true,
     colorLibraryId: payload.colorLibraryId,
     recipeSource: cloneProjectValue(payload.recipeSource),

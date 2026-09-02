@@ -109,6 +109,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "所选接口不支持此操作。",
     en: "This action is not supported by the selected API endpoint.",
   },
+  api_error_vector_topology_unrepairable: {
+    zh: "该矢量图稿包含无法安全导出的几何。请简化图稿或重新矢量化后，再上传重试。",
+    en: "The vector artwork contains geometry that cannot be exported safely. Simplify or re-vectorize the artwork, then upload it again.",
+  },
   api_error_http_408: {
     zh: "服务器未能在超时前完成请求。",
     en: "The request timed out before the server could finish.",
@@ -148,6 +152,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   api_error_source_svg_too_complex: {
     zh: "SVG 包含过多相交的复合子路径，无法安全处理。请简化或展平图稿后重新上传。",
     en: "The SVG contains too many intersecting compound subpaths to process safely. Simplify or flatten the artwork, then upload it again.",
+  },
+  api_error_vector_mesh_memory_budget_exceeded: {
+    zh: "这份矢量图过于复杂，当前无法安全生成模型。请简化或展平 SVG 路径、缩小模型尺寸，或拆成多个文件后重试。",
+    en: "This Vector artwork is too complex to build safely. Simplify or flatten the SVG paths, reduce the model size, or split the artwork into smaller files, then try again.",
+  },
+  api_error_vector_host_memory_busy: {
+    zh: "服务器当前无法确认有足够的安全内存处理新的矢量任务。请等待正在运行的任务完成后重试；无需修改这份 SVG。",
+    en: "The server cannot verify enough safe memory for another Vector task right now. Wait for running jobs to finish, then retry; you do not need to change this SVG.",
   },
   api_error_source_svg_no_renderable_geometry: {
     zh: "SVG 中没有矢量模式可用的可见填充几何。请显示图稿，将描边和文字转换为填充路径，或切换到“高保真”模式。",
@@ -1793,6 +1805,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "暂无分层颜色数据",
     en: "No layer color data",
   },
+  layer_faces_viewer_suffix: {
+    zh: "这层是观赏面",
+    en: "viewing face",
+  },
   viewer_hover_transparent: {
     zh: "透明",
     en: "Transparent",
@@ -1881,20 +1897,36 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "↩️ Undone",
   },
   palette_mode_select_all: {
-    zh: "全选",
-    en: "All",
-  },
-  palette_mode_current: {
-    zh: "当前",
-    en: "Current",
+    zh: "同颜色全选",
+    en: "Same color",
   },
   palette_mode_multi_select: {
-    zh: "多选",
-    en: "Multi",
+    zh: "点选色块",
+    en: "Pick blocks",
   },
-  palette_mode_region: {
-    zh: "局部区域",
-    en: "Region",
+  palette_mode_brush: {
+    zh: "选区画笔",
+    en: "Selection brush",
+  },
+  palette_selected_blocks: {
+    zh: "已选 {count} 个色块",
+    en: "{count} blocks selected",
+  },
+  palette_selected_colors: {
+    zh: "涉及 {count} 种颜色",
+    en: "{count} colors",
+  },
+  selection_brush_size: {
+    zh: "画笔大小",
+    en: "Brush size",
+  },
+  selection_brush_apply: {
+    zh: "执行画笔",
+    en: "Apply brush",
+  },
+  selection_brush_clear: {
+    zh: "清除笔迹",
+    en: "Clear stroke",
   },
   palette_multi_select_count: {
     zh: "已选 {count} 色",
@@ -2680,8 +2712,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "General",
   },
   "settings.category_general_desc": {
-    zh: "通知与界面体验偏好",
-    en: "Notifications and interface preferences",
+    zh: "通知、导出与界面体验偏好",
+    en: "Notifications, exports, and interface preferences",
   },
   "settings.category_conversion": {
     zh: "转换与精度",
@@ -2710,6 +2742,18 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   "settings.change_device": {
     zh: "更改设备",
     en: "Change Device",
+  },
+  "settings.build_plate": {
+    zh: "打印板",
+    en: "Build Plate",
+  },
+  "settings.build_plate_hint": {
+    zh: "选择会写入 3MF，并按切片软件与打印机型号分别记忆。",
+    en: "The choice is written to 3MF and remembered for each slicer and printer model.",
+  },
+  "settings.build_plate_fallback": {
+    zh: "之前选择的打印板已不可用，已改用该机型的默认打印板。",
+    en: "The previous build plate is no longer available, so this printer's default is selected.",
   },
   "settings.machine_dialog_title": {
     zh: "选择打印设备",
@@ -2778,6 +2822,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   "settings.witty_loading_desc": {
     zh: "加载过程中显示轻松的提示语。",
     en: "Show lighthearted messages while a task is loading.",
+  },
+  "settings.preserve_upload_filename_heading": {
+    zh: "导出 3MF 时沿用上传文件名",
+    en: "Use uploaded filename for 3MF exports",
+  },
+  "settings.preserve_upload_filename_description": {
+    zh: "开启后，普通单件生成会把“海报.png”下载为“海报.3mf”。默认关闭；批量、拼图和大画幅继续使用原有名称。",
+    en: "When enabled, a normal single-item export downloads “poster.png” as “poster.3mf”. It is off by default; batch, puzzle, and large-format exports keep their existing names.",
   },
   "settings.cache": {
     zh: "缓存管理",
@@ -2936,6 +2988,22 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   "settings.svg_pixels_per_mm_default_hint": {
     zh: "默认值为 10.0 像素/毫米。",
     en: "The default is 10.0 px/mm.",
+  },
+  "settings.smooth_vector_preview_heading": {
+    zh: "平滑 SVG 轻量预览",
+    en: "Smooth lightweight SVG preview",
+  },
+  "settings.smooth_vector_preview_description": {
+    zh: "优先用 SVG 原始轮廓生成平滑、轻量的浏览器 3D 模型；关闭后回退旧版像素分区预览。",
+    en: "Prefer smooth, lightweight browser 3D geometry from the original SVG outlines; turn it off to use the legacy pixel-segmented preview.",
+  },
+  "settings.smooth_vector_preview_hint": {
+    zh: "默认开启，仅影响原生矢量模式的浏览器 3D 显示，不改变 3MF、材料或打印质量。可在兼容性排查时临时关闭。",
+    en: "On by default. This affects only browser 3D display for native Vector mode; it does not change the 3MF, materials, or print quality. Turn it off temporarily for compatibility troubleshooting.",
+  },
+  "settings.smooth_vector_preview_help_aria": {
+    zh: "关于平滑 SVG 轻量预览",
+    en: "About smooth lightweight SVG preview",
   },
   "settings.auto_replace_gradient_heading": {
     zh: "自动清理渐变条纹",
@@ -4361,16 +4429,28 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Palette Confirmation",
   },
   ext_palette_metadata_hint: {
-    zh: "填写厂商、类型，并为每个颜色记录厂商命名",
-    en: "Set manufacturer, type, and vendor color names for each entry",
+    zh: "填写厂商、耗材类型，并为每个颜色记录厂商命名",
+    en: "Set manufacturer, material type, and vendor color names for each entry",
   },
   ext_manufacturer_label: {
     zh: "厂商",
     en: "Manufacturer",
   },
-  ext_type_label: {
-    zh: "类型",
-    en: "Type",
+  ext_manufacturer_placeholder: {
+    zh: "输入或选择厂商",
+    en: "Type or select manufacturer",
+  },
+  ext_manufacturer_loading: {
+    zh: "正在加载耗材品牌...",
+    en: "Loading material brands...",
+  },
+  ext_manufacturer_empty: {
+    zh: "当前耗材库暂无品牌，可直接手动输入",
+    en: "No brands in the current material library; you can type one",
+  },
+  ext_manufacturer_custom_hint: {
+    zh: "可使用当前手动输入的厂商",
+    en: "You can use the manually typed manufacturer",
   },
   ext_palette_internal_color_label: {
     zh: "内部通道",
@@ -4439,6 +4519,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   basic_crop_after_upload: {
     zh: "上传后裁剪",
     en: "Crop After Upload",
+  },
+  basic_crop_after_upload_hint: {
+    zh: "勾选后，每次上传图片会先弹出裁剪窗口，方便只保留想打印的部分。",
+    en: "When checked, a crop dialog opens after each upload so you can keep only the part you want to print.",
   },
   basic_image_rotation_label: {
     zh: "图像旋转",
@@ -4568,6 +4652,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "来源类型",
     en: "Source Type",
   },
+  basic_source_version_hint: {
+    zh: "选择配色数据从哪里来：\n• 传统 LUT：使用实际打印并扫描出的色卡数据，颜色最可靠。\n• 反推LUT：由品牌耗材数据推算出来，不需要自己打印色卡。\n• 耗材档案：使用你在「耗材提取」中创建的耗材，自由搭配组合。",
+    en: "Choose where the color data comes from:\n• Legacy LUT: data measured from actually printed color charts — most reliable.\n• Inferred LUT: computed from brand filament data, no printed chart needed.\n• Material Archive: freely combine materials you created in Material Extraction.",
+  },
   basic_source_version_legacy: {
     zh: "传统 LUT",
     en: "Legacy LUT",
@@ -4636,9 +4724,17 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "\u5c42\u9ad8",
     en: "Layer Height",
   },
+  basic_material_layer_height_hint: {
+    zh: "\u6253\u5370\u65f6\u6bcf\u4e00\u5c42\u7684\u539a\u5ea6\uff08\u6beb\u7c73\uff09\u3002\u8fd9\u91cc\u9009\u7684\u6570\u503c\u8981\u548c\u5207\u7247\u8f6f\u4ef6\u91cc\u7684\u5c42\u9ad8\u4e00\u81f4\uff0c\u5426\u5219\u53e0\u51fa\u6765\u7684\u989c\u8272\u4f1a\u4e0d\u51c6\u3002",
+    en: "Thickness of each printed layer (mm). Must match the layer height in your slicer, or the blended colors will be off.",
+  },
   basic_material_backing_label: {
     zh: "\u5e95\u677f\u8017\u6750",
     en: "Base Plate Material",
+  },
+  basic_material_backing_hint: {
+    zh: "\u57ab\u5728\u753b\u9762\u6700\u5e95\u4e0b\u7684\u8017\u6750\uff0c\u76f8\u5f53\u4e8e\u6574\u5e45\u56fe\u7684\u80cc\u666f\u8272\u3002\u901a\u5e38\u9009\u767d\u8272\uff0c\u989c\u8272\u8fd8\u539f\u6548\u679c\u6700\u597d\u3002",
+    en: "The material placed under the whole image, acting as its background color. White usually gives the most accurate colors.",
   },
   basic_material_backing_placeholder: {
     zh: "\u5148\u9009\u62e9\u8017\u6750",
@@ -5100,6 +5196,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "品牌",
     en: "Brand",
   },
+  basic_brand_hint: {
+    zh: "选择耗材品牌后，会加载该品牌对应的颜色数据用于配色。",
+    en: "Selecting a filament brand loads that brand's color data for color matching.",
+  },
   basic_brand_loading: {
     zh: "品牌目录加载中…",
     en: "Loading brands…",
@@ -5140,6 +5240,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "层数",
     en: "Layer Count",
   },
+  basic_native_layer_count_hint: {
+    zh: "叠色使用的打印层数。层数越多能表现的颜色越丰富，但打印时间也越长。可选范围由所选的颜色数据库决定。",
+    en: "Number of printed layers used for color blending. More layers allow richer colors but take longer to print. The available range depends on the selected color database.",
+  },
   basic_native_mode_placeholder: {
     zh: "请选择支持模式",
     en: "Select a supported mode",
@@ -5157,8 +5261,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Layer Height",
   },
   basic_layer_height_hint: {
-    zh: "每层叠色的打印高度（毫米）。较小的层高可获得更细腻的色彩过渡，但打印时间更长。",
-    en: "Print height per color layer (in mm). Smaller layer heights produce smoother color transitions but increase print time.",
+    zh: "打印时每一层的厚度（毫米）。请选择该色卡（LUT）制作时使用的层高，并在切片软件里设置相同数值，否则颜色会有偏差。",
+    en: "Thickness of each printed layer (mm). Choose the layer height the LUT was made with, and use the same value in your slicer — otherwise colors will drift.",
   },
   basic_supported_modes_label: {
     zh: "支持模式",
@@ -5172,9 +5276,17 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "模型辅助匹配",
     en: "Model-Assisted Matching",
   },
+  basic_model_enable_hint: {
+    zh: "在数据库配色的基础上，用预测模型补充数据库里没有实测过的颜色组合，通常能让颜色更接近原图。",
+    en: "Supplements database color matching with a predictive model that covers combinations not physically measured, usually bringing colors closer to the original image.",
+  },
   basic_model_only: {
     zh: "仅模型匹配",
     en: "Model only",
+  },
+  basic_model_only_hint: {
+    zh: "完全用预测模型配色，不使用数据库实测数据。主要用于对比测试模型效果，日常使用建议保持关闭。",
+    en: "Uses only the predictive model for color matching, ignoring measured database data. Mainly for testing the model; keep it off for everyday use.",
   },
   basic_model_threshold: {
     zh: "模型阈值",
@@ -5213,16 +5325,32 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Thickness",
   },
   basic_thickness_hint: {
-    zh: "底板的厚度（毫米）。每一格对应一层打印层（0.08 mm），影响成品的整体厚度。",
-    en: "Base plate thickness (in mm). Each tick equals one print layer (0.08 mm), affecting the overall thickness of the output.",
+    zh: "底板的厚度（毫米）。底板越厚成品越结实，但打印时间和耗材用量也会增加。滑块每格对应一层打印层。",
+    en: "Thickness of the base plate (mm). A thicker base is sturdier but takes more time and material to print. Each slider step equals one print layer.",
+  },
+  basic_backing_infill_density: {
+    zh: "背板填充率",
+    en: "Backing Infill",
+  },
+  basic_backing_infill_density_hint: {
+    zh: "控制深层背板的填充率。靠近观赏面的保护区域始终保持 100% 实心；浮雕和拼图模式固定为 100%。",
+    en: "Controls infill in the deeper backing. The protected zone next to the viewing surface always stays 100% solid; relief and puzzle modes stay at 100%.",
   },
   basic_structure_mode: {
     zh: "结构模式",
     en: "Structure Mode",
   },
+  basic_structure_mode_hint: {
+    zh: "决定成品的正反面结构：\n• 双面：正反两面都呈现画面，适合挂件、灯片等两面都会被看到的场景。\n• 单面：只有正面有画面，背面是平整底板，打印更快、更省耗材。",
+    en: "Controls the front/back structure of the print:\n• Double-sided: the image shows on both sides — good for pendants or light panels viewed from either side.\n• Single-sided: image on the front only, flat base plate on the back — faster and uses less material.",
+  },
   basic_modeling_mode: {
     zh: "建模模式",
     en: "Modeling Mode",
+  },
+  basic_modeling_mode_hint: {
+    zh: "决定图片如何变成 3D 模型：\n• 高保真：忠实还原照片细节，适合绝大多数图片（推荐）。\n• 像素艺术：保留方块像素感，适合像素画、马赛克风格。\n• 矢量模式：生成平滑的曲线轮廓，适合 Logo、图标等颜色分明的图形。\n• 验证色卡：生成用于校准颜色的标准色卡，仅在测试耗材颜色时使用。",
+    en: "Controls how the image becomes a 3D model:\n• High-Fidelity: faithfully reproduces photo detail — recommended for most images.\n• Pixel Art: keeps the blocky pixel look — for pixel art and mosaic styles.\n• Vector: smooth curved outlines — for logos, icons, and flat-color artwork.\n• Color Card: generates a calibration color chart — only for testing filament colors.",
   },
   basic_image_format_error: {
     zh: "仅支持 JPG/PNG/SVG/WebP/HEIC 格式",
@@ -5251,8 +5379,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Large Format Mode",
   },
   basic_large_format_hint: {
-    zh: "自动切割为多片 3MF 压缩包",
-    en: "Auto-tiled into a ZIP of 3MF files",
+    zh: "作品超过打印床尺寸时，自动把模型切成多块，分别打印后再拼接。会生成一个包含多个 3MF 文件的压缩包。",
+    en: "When the artwork exceeds the print bed, the model is automatically split into tiles to print separately and assemble afterwards. Produces a ZIP containing multiple 3MF files.",
   },
   large_format_warning_native_unavailable: {
     zh: "此 SVG 暂不支持原生大画幅切片，已改用栅格切片。",
@@ -5273,6 +5401,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   large_format_warning_density_reduced: {
     zh: "为避免超过像素预算，栅格切片清晰度已自动降低。",
     en: "Raster tiling density was reduced automatically to stay within the pixel budget.",
+  },
+  wipe_tower_manual_adjustment_title: {
+    zh: "打印前必须手动调整擦料塔",
+    en: "Manual wipe tower adjustment required",
+  },
+  wipe_tower_manual_adjustment_warning: {
+    zh: "文件已继续生成，但当前模型和擦料塔无法在所选热床上同时安全摆放。Lumina 没有缩小模型，也没有关闭擦料塔；请务必在切片软件中手动移动模型，或调整擦料塔的宽度和位置后再打印。",
+    en: "The file was generated, but the model and wipe tower cannot both fit safely on the selected bed. Lumina did not scale the model or disable the tower; before printing, move the model or adjust the tower width and position manually in the slicer.",
   },
   basic_tile_width: {
     zh: "切片宽度",
@@ -5325,56 +5461,56 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Quantize Colors",
   },
   adv_quantize_colors_hint: {
-    zh: "K-Means 聚类的色彩细节数量。值越大色彩过渡越细腻，但处理越慢；值越小色块越少、渲染越快。仅适用于高保真模式，矢量模式下不进行量化处理，此参数不生效。",
-    en: "Number of K-Means clusters for color quantization. Higher values produce smoother color transitions but increase processing time; lower values produce fewer color blocks and faster rendering. Only applies in High-Fidelity mode; this parameter has no effect in Vector mode as quantization is not performed.",
+    zh: "把图片归纳成多少种颜色再进行配色。数值越大，颜色过渡越细腻，但处理越慢；数值越小，色块越明显，处理越快。仅高保真模式有效，矢量模式下此参数不起作用。",
+    en: "How many colors the image is reduced to before color matching. Higher values give smoother color transitions but slower processing; lower values give more visible color blocks and faster processing. Only applies in High-Fidelity mode; has no effect in Vector mode.",
   },
   adv_isolated_pixel_cleanup: {
     zh: "孤立像素清理",
     en: "Isolated Pixel Cleanup",
   },
   adv_isolated_pixel_cleanup_hint: {
-    zh: "将色彩匹配后与 8 邻域完全不同的孤立像素替换为邻域众数邻居的对应值，不会造调色板外的新颜色。高保真模式下的 LUT 匹配、预测匹配与耗材档案路径均会应用此清理。",
-    en: "Replaces isolated pixels (whose material stack differs from all 8 neighbors) with values copied from the neighborhood-mode neighbor — palette-preserving by construction. Runs in High-Fidelity modeling mode across the legacy LUT, predictive matching, and material-archive pipelines.",
+    zh: "自动清理配色后画面上零星的孤立杂点（和周围颜色都不一样的单个像素），让色块更干净。只会借用周围已有的颜色，不会产生新颜色。",
+    en: "Automatically removes stray isolated dots left after color matching (single pixels that differ from all their neighbors), making color areas cleaner. Only reuses nearby existing colors — never introduces new ones.",
   },
   adv_separate_backing: {
     zh: "分离底板",
     en: "Separate Backing",
   },
   adv_separate_backing_hint: {
-    zh: "将底板层（通常是白色或背景色）作为独立颜色层输出，适用于需要单独处理底板的打印机或后处理流程。",
-    en: "Outputs the backing layer as a separate color layer, useful for printers or post-processing workflows that handle the backing layer independently.",
+    zh: "把底板（通常是白色背景）单独作为一个颜色部件输出，方便在切片软件里对底板单独换色或设置参数。",
+    en: "Outputs the base plate (usually the white background) as its own color part, so you can recolor or configure it separately in your slicer.",
   },
   adv_hue_protection: {
     zh: "色相保护",
     en: "Hue Protection",
   },
   adv_hue_protection_hint: {
-    zh: "在色彩匹配时优先保护色相，减少色相漂移。适合色彩准确度要求高、颜色种类多的图像。",
-    en: "Prioritizes hue preservation during color matching to reduce hue shift. Suitable for images requiring high color accuracy and a wide variety of colors.",
+    zh: "配色时优先保证颜色的色调不跑偏（例如红色不会变成偏橙）。适合颜色丰富、对还原准确度要求高的图片。",
+    en: "Prioritizes keeping color tones true during matching (e.g. reds won't drift toward orange). Good for colorful images where color accuracy matters.",
   },
   adv_unlock_quantize: {
     zh: "解锁量化颜色数",
     en: "Unlock quantize ceiling",
   },
   adv_unlock_quantize_hint: {
-    zh: "解锁后最高可拉到 8192，会显著增加内存占用与处理耗时，仅适合极端场景。",
-    en: "Unlocking raises the ceiling to 8192. This significantly increases memory and processing time; use only for extreme cases.",
+    zh: "解锁后颜色数量上限从 256 提升到 8192。会明显增加内存占用和处理时间，仅在确有需要时使用。",
+    en: "Unlocking raises the color count ceiling from 256 to 8192. This noticeably increases memory use and processing time; enable only when truly needed.",
   },
   adv_chroma_gate: {
     zh: "暗色彩度门槛",
     en: "Dark Chroma Gate",
   },
   adv_chroma_gate_hint: {
-    zh: "仅对色度低于此值的暗色区域启用色相保护。设为 0 则对所有暗色生效，设为较高值则仅对非常暗的阴影生效。推荐值: 15。",
-    en: "Applies hue protection only to dark areas whose chroma is below this threshold. Set to 0 to apply to all dark colors; higher values restrict it to very dark shadows. Recommended: 15.",
+    zh: "控制「色调保护」对暗部的作用范围：只有鲜艳程度低于此值的暗色区域才会被保护。设为 0 对所有暗色生效；数值越大，只保护越暗的阴影。推荐 15。",
+    en: "Controls how far hue protection reaches into dark areas: only dark regions less vivid than this value are protected. 0 protects all dark colors; higher values limit it to very dark shadows. Recommended: 15.",
   },
   adv_precise_color_matching: {
     zh: "高精度颜色匹配（实验性功能）",
     en: "Precise Color Matching (Experimental)",
   },
   adv_precise_color_matching_hint: {
-    zh: "将聚类中心约束在打印机可达颜色集合内，减少颜色偏移；性能可能略慢，仅在 LUT 颜色匹配模式生效。",
-    en: "Constrains cluster centers to printer-achievable colors, reducing color shifts. May be slightly slower; only effective in LUT color matching mode.",
+    zh: "配色时只使用打印机真正能打出来的颜色，减少成品和屏幕预览之间的色差。处理会稍慢一些，仅在传统 LUT 模式下有效。",
+    en: "Restricts color matching to colors your printer can actually produce, reducing the gap between the print and the on-screen preview. Slightly slower; only effective in Legacy LUT mode.",
   },
   adv_hue_protection_disabled_hint: {
     zh: "高精度匹配开启时，色相保护已被接管，无需手动启用。",
@@ -5389,16 +5525,16 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Auto Dynamic Range (Experimental)",
   },
   adv_auto_dynamic_range_hint: {
-    zh: "根据所选 LUT 或耗材档案的可达亮度范围，对原图 L* 进行压缩映射；高光与阴影使用软滚降以保留局部对比度，色度通道保持不变。",
-    en: "Compresses the source image's L* into the luminance range achievable by the selected LUT or material profile, using soft roll-offs in highlights and shadows to preserve local contrast while leaving chroma channels untouched.",
+    zh: "自动把图片的明暗范围调整到耗材实际能打出来的范围内，避免高光一片死白、阴影一片死黑，同时尽量保留画面的对比度。",
+    en: "Automatically fits the image's brightness range to what your filaments can actually reproduce, preventing blown-out highlights and crushed shadows while preserving as much contrast as possible.",
   },
   adv_high_precision_3d_preview: {
     zh: "3D高精度颜色预览",
     en: "High-precision 3D colour preview",
   },
   adv_high_precision_3d_preview_hint: {
-    zh: "开启后，3D 预览的颜色网格上限会提升到当前量化颜色数；可减少低频颜色被合并成灰色，但 GLB 生成和浏览器渲染会更慢。",
-    en: "When enabled, the 3D preview colour mesh limit is raised to the current quantized colour count. This reduces low-frequency colours being merged into greys, but GLB generation and browser rendering may be slower.",
+    zh: "让 3D 预览显示更多颜色、更接近成品效果，尤其能避免少量出现的颜色被合并成灰色。代价是生成预览和网页渲染会变慢。不影响最终打印文件。",
+    en: "Shows more colors in the 3D preview so it looks closer to the final print, especially preventing rare colors from being merged into gray. Preview generation and rendering get slower. Does not affect the exported print file.",
   },
 
   // ==================== Relief Settings ====================
@@ -5966,13 +6102,29 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "清空替换",
     en: "Clear Remaps",
   },
+  palette_redo: {
+    zh: "重做",
+    en: "Redo",
+  },
+  palette_clear_selection: {
+    zh: "全不选",
+    en: "Select none",
+  },
+  palette_selection_blink: {
+    zh: "选区闪烁",
+    en: "Blink selection",
+  },
+  palette_selection_blink_title: {
+    zh: "让当前选区整体呼吸闪烁：浅色区块变暗，深色区块发白；仅前端显示，不重新生成预览",
+    en: "Make the selected region pulse: light regions darken, dark regions brighten, without regenerating preview",
+  },
   palette_group_history: {
     zh: "历史",
     en: "History",
   },
   palette_group_mode: {
-    zh: "选择模式",
-    en: "Mode",
+    zh: "选择工具",
+    en: "Selection tools",
   },
   palette_group_free: {
     zh: "自由色",
@@ -5988,9 +6140,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   },
 
   // ==================== LUT Color Grid ====================
+  // Shown as an overlay while a replacement / undo-redo is being applied and
+  // the backend regenerates the preview. Key name kept for compatibility; the
+  // copy is intentionally neutral — it is not about loading LUT data.
+  // 替换/撤销重做进行中、后端重新出图时的遮罩文案。key 名保留兼容，文案
+  // 故意中性——它并不表示加载 LUT 数据。
   lut_grid_loading: {
-    zh: "加载 LUT 颜色中...",
-    en: "Loading LUT colors...",
+    zh: "正在更新预览...",
+    en: "Updating preview...",
   },
   lut_grid_select_lut: {
     zh: "请先选择 LUT 以加载可用颜色",
@@ -6345,8 +6502,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
 
   // ==================== Unified Uploader ====================
   upload_unified_hint: {
-    zh: "拖拽图片或点击上传（支持多选）",
-    en: "Drag & drop or click to upload (multi-select)",
+    zh: "拖拽图片或 Lumina 项目文件（图片支持多选）",
+    en: "Drop images or a Lumina project file (images support multi-select)",
   },
   upload_tap_to_change: {
     zh: "点击更换或追加",
@@ -6357,8 +6514,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Replace current image",
   },
   upload_unified_aria: {
-    zh: "拖拽图片或点击上传文件",
-    en: "Drag images or click to upload files",
+    zh: "拖拽图片或 Lumina 项目文件",
+    en: "Drop images or a Lumina project file",
   },
   upload_add_more: {
     zh: "添加更多图片",
@@ -6441,6 +6598,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   "batch.warnings.previewLimited.body": {
     zh: "批量 3MF 已包含全部成功模型；3D 预览会按当前热床尺寸自动显示可容纳的前若干个模型。",
     en: "The batch 3MF includes every successful model; the 3D preview automatically shows the first models that fit on the current print bed.",
+  },
+  "batch.warnings.wipeTowerManual.title": {
+    zh: "打印前必须手动调整擦料塔",
+    en: "Manual wipe tower adjustment required",
+  },
+  "batch.warnings.wipeTowerManual.body": {
+    zh: "批量 3MF 已继续生成，但全部模型与擦料塔无法在所选热床上同时安全摆放。Lumina 没有缩小模型，也没有关闭擦料塔；请务必在切片软件中手动调整后再打印。",
+    en: "The batch 3MF was generated, but the full model group and wipe tower cannot fit safely on the selected bed. Lumina did not scale the models or disable the tower; adjust them manually in the slicer before printing.",
   },
 
   // ==================== Slicer Selector ====================
@@ -7224,8 +7389,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Export Share Card",
   },
   recipe_export_sidecar_btn: {
-    zh: "导出 JSON",
-    en: "Export JSON",
+    zh: "保存项目",
+    en: "Save Project",
   },
   recipe_export_loading: {
     zh: "正在导出...",
@@ -7260,8 +7425,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "The export did not finish. Please try again.",
   },
   recipe_import_title: {
-    zh: "导入分享卡",
-    en: "Import Share Card",
+    zh: "恢复项目",
+    en: "Restore Project",
   },
   recipe_import_source_label: {
     zh: "来源",
@@ -7272,8 +7437,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "PNG Share Card",
   },
   recipe_import_source_json: {
-    zh: "JSON 配方文件",
-    en: "JSON Recipe File",
+    zh: "Lumina 项目文件",
+    en: "Lumina Project File",
   },
   recipe_import_version_label: {
     zh: "应用版本",
@@ -7332,8 +7497,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Released",
   },
   recipe_import_success: {
-    zh: "配方已恢复",
-    en: "Recipe restored",
+    zh: "项目已恢复",
+    en: "Project restored",
   },
   recipe_import_error: {
     zh: "导入失败：{error}",
@@ -7399,13 +7564,9 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "删除层",
     en: "Remove Layer",
   },
-  recipe_custom_move_up: {
-    zh: "上移",
-    en: "Move Up",
-  },
-  recipe_custom_move_down: {
-    zh: "下移",
-    en: "Move Down",
+  recipe_custom_drag_handle_label: {
+    zh: "按住可以拖拽更换层序",
+    en: "Hold and drag to reorder layers",
   },
   recipe_custom_predict: {
     zh: "预测颜色",
@@ -7448,16 +7609,16 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Target Regions: {count}",
   },
   recipe_custom_pattern_placeholder: {
-    zh: "层色搜索，例如 WRYB?",
-    en: "Pattern search, e.g. WRYB?",
+    zh: "输入配方，可以快速应用，例如 WRYBG",
+    en: "Enter a recipe to apply quickly, e.g. WRYBG",
   },
   recipe_custom_pattern_hint: {
-    zh: "按层颜色快速填充。字母=颜色首字母，?=保留当前层，-=可选分隔。",
-    en: "Quick-fill by layer pattern. Letter=color initial, ?=keep current, -=optional separator.",
+    zh: "可输入颜色字母快速应用。",
+    en: "Enter color letters to apply quickly.",
   },
   recipe_custom_pattern_apply: {
-    zh: "应用模式",
-    en: "Apply Pattern",
+    zh: "快速应用",
+    en: "Quick Apply",
   },
   recipe_custom_pattern_invalid: {
     zh: "无法识别的字符：{char}",
@@ -7480,8 +7641,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Confirm layer upgrade",
   },
   recipe_custom_predict_no_forward_model: {
-    zh: "当前 LUT 没带预测模型，无法算出这张配方的颜色。换一张带模型的 LUT，或者直接应用试试。",
-    en: "This LUT has no forward model, so the recipe colour can't be predicted. Switch to a LUT with a model, or apply directly to try it out.",
+    zh: "当前 LUT 没带预测模型，无法算出配方的颜色。",
+    en: "This LUT has no forward model, so the recipe color can't be predicted.",
   },
   recipe_custom_target_from_model: {
     zh: "来自模型",
@@ -7492,8 +7653,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Recipe History",
   },
   recipe_custom_history_empty: {
-    zh: "还没有自定义配方记录。应用一次后，这里会留下可一键复用的快照。",
-    en: "No custom recipes yet. After you apply one, a reusable snapshot will appear here.",
+    zh: "应用一次后，这里会留下用过的配方。目前还没有历史记录哦。",
+    en: "After you apply a recipe, it will appear here. No history yet.",
   },
   recipe_custom_history_layers: {
     zh: "{count} 层",
@@ -7538,6 +7699,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   recipe_import_warning_spatial_edits_not_serialized: {
     zh: "连通区域的局部改色仅属于当前会话，未写入分享配方；导入后需要重新应用。",
     en: "Connected-region color edits belong to the current session and were not saved in the shared recipe; reapply them after import.",
+  },
+  recipe_import_warning_region_recipes_not_restored: {
+    zh: "区域自定义配方依赖原预览会话中的选区，导入后不会直接激活；配方历史已保留，可重新选区后应用。",
+    en: "Region-specific recipes depend on selections from the original preview session, so they are not activated on import. Their recipe history is kept for reuse after selecting a new region.",
   },
   recipe_import_workshop_degraded: {
     zh: "分享卡中的创意工坊编辑数据已损坏或当前不可用；主图和转换参数仍可正常导入。",
@@ -7699,6 +7864,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "审查权限并打开候选版本",
     en: "Review permissions and open candidate",
   },
+  "workshop.manager.blocked": {
+    zh: "已被 Registry 阻止",
+    en: "Blocked by the Registry",
+  },
   "workshop.manager.desktopOnly": {
     zh: "仅桌面版可打开",
     en: "Desktop app required",
@@ -7764,8 +7933,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Desktop secure mode: community modules run in an isolated sandbox without network or filesystem-path access.",
   },
   "workshop.manager.runtime.browser-restricted": {
-    zh: "浏览器限制模式：只能运行随 Lumina 预装的官方模块；社区与未审核模块需要桌面版。",
-    en: "Browser restricted mode: only official modules bundled with Lumina can run; community and unreviewed modules require the desktop app.",
+    zh: "浏览器限制模式：预装官方模块和签名 Registry 中的官方模块可在受限沙箱运行；社区与未审核模块需要桌面版。",
+    en: "Browser restricted mode: bundled official modules and official modules from the signed Registry can run in the restricted sandbox; community and unreviewed modules require the desktop app.",
   },
   "workshop.manager.runtime.unsafe-development": {
     zh: "不安全开发模式：仅本地模块可用合成数据调试，不会获得真实图片、工程或色库。",

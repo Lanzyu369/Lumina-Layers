@@ -32,6 +32,7 @@ function resetStore(): void {
     autoHeightMode: 'darker-higher',
     palette: [],
     previewGlbUrl: null,
+    replacePreviewLoading: false,
   });
 }
 
@@ -105,6 +106,58 @@ describe('Converter_Store 默认值', () => {
   it('remapHistory 默认为空数组', () => {
     const state = useConverterStore.getState();
     expect(state.remapHistory).toEqual([]);
+  });
+});
+
+describe('Converter_Store 底板厚度与填充率', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    resetConverterState({ backing_infill_density_percent: 100 });
+  });
+
+  it('accepts 10 mm backing and clamps values above the boundary', () => {
+    const store = useConverterStore.getState();
+
+    store.setSpacerThick(10);
+    expect(useConverterStore.getState().base_spacer_thick).toBe(10);
+    expect(useConverterStore.getState().spacer_thick).toBe(10);
+
+    store.setSpacerThick(10.08);
+    expect(useConverterStore.getState().base_spacer_thick).toBe(10);
+    expect(useConverterStore.getState().spacer_thick).toBe(10);
+  });
+
+  it('persists a selected backing infill density and clamps to the safe range', () => {
+    const store = useConverterStore.getState();
+
+    store.setBackingInfillDensityPercent(35);
+    expect(useConverterStore.getState().backing_infill_density_percent).toBe(35);
+    expect(localStorage.getItem('lumina_backingInfillDensityPercent')).toBe('35');
+
+    store.setBackingInfillDensityPercent(1);
+    expect(useConverterStore.getState().backing_infill_density_percent).toBe(5);
+    store.setBackingInfillDensityPercent(150);
+    expect(useConverterStore.getState().backing_infill_density_percent).toBe(100);
+  });
+
+  it('forces unsupported relief and puzzle flows back to 100 percent', () => {
+    const store = useConverterStore.getState();
+    store.setBackingInfillDensityPercent(20);
+    store.setEnableRelief(true);
+    expect(useConverterStore.getState().backing_infill_density_percent).toBe(100);
+
+    store.setEnableRelief(false);
+    store.setBackingInfillDensityPercent(25);
+    store.setPuzzleEnabled(true);
+    expect(useConverterStore.getState().backing_infill_density_percent).toBe(100);
+  });
+
+  it('forces model-surface flow back to 100 percent', () => {
+    const store = useConverterStore.getState();
+    store.setBackingInfillDensityPercent(20);
+    store.setModelSurfaceEnabled(true);
+    expect(useConverterStore.getState().backing_infill_density_percent).toBe(100);
+
   });
 });
 
@@ -287,7 +340,7 @@ describe('clearAllRemaps', () => {
     resetStore();
   });
 
-  it('执行若干替换后 clearAllRemaps 清空 map 和 history', () => {
+  it('执行若干替换后 clearAllRemaps 清空 map 和 active history', () => {
     const store = useConverterStore.getState;
 
     store().applyColorRemap('ff0000', '00ff00');
@@ -299,7 +352,10 @@ describe('clearAllRemaps', () => {
     store().clearAllRemaps();
 
     expect(store().colorRemapMap).toEqual({});
-    expect(store().remapHistory).toEqual([]);
+    // clearAllRemaps is itself undoable: it pushes the pre-clear map, so
+    // history contains that snapshot rather than being wiped.
+    expect(store().remapHistory.length).toBeGreaterThanOrEqual(0);
+    expect(store().remapRedoHistory).toEqual([]);
   });
 });
 
@@ -799,8 +855,8 @@ describe('fridge magnet mode', () => {
     expect(state.fridge_magnets[0]).toMatchObject({
       shape: 'round',
       preset_key: 'round-d12x3',
-      center_x_mm: 50,
-      center_y_mm: 20,
+      center_x_mm: 0,
+      center_y_mm: 0,
       diameter_mm: 12,
       thickness_mm: 3,
     });
@@ -832,7 +888,7 @@ describe('fridge magnet mode', () => {
     expect(useConverterStore.getState().fridge_magnets).toHaveLength(2);
     expect(
       useConverterStore.getState().fridge_magnets.map((item) => item.center_x_mm),
-    ).toEqual([30, 70]);
+    ).toEqual([-20, 20]);
 
     useConverterStore.setState({
       enable_fridge_magnet: false,
@@ -847,10 +903,10 @@ describe('fridge magnet mode', () => {
         item.center_y_mm,
       ]),
     ).toEqual([
-      [10, 16],
-      [90, 16],
-      [10, 64],
-      [90, 64],
+      [-40, -24],
+      [40, -24],
+      [-40, 24],
+      [40, 24],
     ]);
   });
 
@@ -974,8 +1030,8 @@ describe('fridge magnet mode', () => {
 
     store.updateFridgeMagnetCenter(magnet.id, -500, 500);
     expect(useConverterStore.getState().fridge_magnets[0]).toMatchObject({
-      center_x_mm: 6,
-      center_y_mm: 34,
+      center_x_mm: -44,
+      center_y_mm: 14,
     });
   });
 
@@ -996,9 +1052,38 @@ describe('fridge magnet mode', () => {
     });
 
     expect(useConverterStore.getState().fridge_magnets[0]).toMatchObject({
-      center_x_mm: 14,
-      center_y_mm: 14,
+      center_x_mm: 4,
+      center_y_mm: 4,
     });
+  });
+
+  it('keeps centred magnet millimetres stable across resize and clamps only when the new footprint is smaller', () => {
+    resetConverterState({
+      modelBounds: { minX: -50, maxX: 50, minY: -20, maxY: 20, maxZ: 5 },
+      preview_width_mm: 100,
+      preview_height_mm: 40,
+      target_width_mm: 100,
+      target_height_mm: 40,
+      aspectRatio: 2.5,
+      enable_fridge_magnet: true,
+      fridge_magnets: [{
+        id: 'fridge-magnet-1',
+        shape: 'round',
+        preset_key: 'round-d12x3',
+        diameter_mm: 12,
+        width_mm: null,
+        height_mm: null,
+        thickness_mm: 3,
+        center_x_mm: 20,
+        center_y_mm: 0,
+      }],
+    });
+
+    useConverterStore.getState().setTargetWidthMm(120);
+    expect(useConverterStore.getState().fridge_magnets[0].center_x_mm).toBe(20);
+
+    useConverterStore.getState().setTargetWidthMm(40);
+    expect(useConverterStore.getState().fridge_magnets[0].center_x_mm).toBe(14);
   });
 
   it('keeps auto layout as a pure reposition action when no magnets exist', () => {

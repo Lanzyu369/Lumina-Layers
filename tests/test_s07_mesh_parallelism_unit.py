@@ -280,7 +280,7 @@ def test_s07_uses_exact_effective_worker_limit(
     assert result["_hifi_timings"]["mesh_parallelism_workers"] == worker_count
 
 
-def test_s07_worker_exception_stays_attached_to_original_material(
+def test_s07_worker_exception_fails_closed_with_original_material_context(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -304,12 +304,11 @@ def test_s07_worker_exception_stays_attached_to_original_material(
     )
     target_logger.addHandler(caplog.handler)
     try:
-        result = s07_mesh_generation.run(_make_context(3))
+        with pytest.raises(ValueError, match="refusing partial model export"):
+            s07_mesh_generation.run(_make_context(3))
     finally:
         target_logger.removeHandler(caplog.handler)
 
-    assert result["valid_slot_names"] == ["Material 0", "Material 2"]
-    assert list(result["scene"].geometry) == ["Material 0", "Material 2"]
     failure_records = [
         record
         for record in caplog.records

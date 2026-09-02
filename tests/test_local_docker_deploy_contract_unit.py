@@ -26,10 +26,21 @@ def test_local_docker_image_installs_glb_v2_dependencies() -> None:
     v2_requirements = _read_repo_text("requirements-glb-v2.txt")
     dockerfile = _read_repo_text("Dockerfile")
 
-    assert "rasterio" not in base_requirements
-    assert "manifold3d" not in base_requirements
-    assert "rasterio" in v2_requirements
-    assert "manifold3d" in v2_requirements
+    base_declared = {
+        line.partition("#")[0].strip().casefold().split(">=", 1)[0]
+        for line in base_requirements.splitlines()
+        if line.partition("#")[0].strip()
+    }
+    v2_declared = {
+        line.partition("#")[0].strip().casefold().split(">=", 1)[0]
+        for line in v2_requirements.splitlines()
+        if line.partition("#")[0].strip()
+    }
+
+    assert "rasterio" not in base_declared
+    assert "manifold3d" in base_declared
+    assert "rasterio" in v2_declared
+    assert "manifold3d" not in v2_declared
     assert "COPY requirements.txt requirements-glb-v2.txt /app/" in dockerfile
     assert "pip install --no-cache-dir -r requirements.txt -r requirements-glb-v2.txt" in dockerfile
 

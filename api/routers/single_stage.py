@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Reques
 from config import TEMP_DIR
 from api.colorchecker_artifacts import load_colorchecker_full_rgb, scale_corner_points
 from api.dependencies import get_file_registry, get_session_store
+from api.export_device_validation import validate_export_device_selection
 from api.file_bridge import ndarray_to_png_bytes, upload_to_ndarray, upload_to_tempfile
 from api.file_registry import FileRegistry
 from api.local_origin_guard import allow_public_gray_api, require_local_app_origin
@@ -110,6 +111,7 @@ from core.material_color_solver import (
     suggest_colors_for_target,
 )
 from core.material_lut_synthesis import load_multiple_materials
+from core.lut_details.identity import canonicalize_lut_manufacturer
 from core.single_stage import (
     delete_saved_stage_a_material_archive,
     export_saved_stage_a_material_archives,
@@ -485,6 +487,15 @@ def _saved_material_directory_name(material_summary: Any, fallback: str) -> str:
         if isinstance(directory_name, str) and directory_name.strip():
             return directory_name.strip()
     return fallback
+
+
+def _canonicalize_saved_material_brand(item: dict[str, object]) -> dict[str, object]:
+    """Return a response item with the LUT-canonical brand label."""
+
+    brand = item.get("brand")
+    if isinstance(brand, str) and brand.strip():
+        return {**item, "brand": canonicalize_lut_manufacturer(brand)}
+    return item
 
 
 def _parse_corner_points(raw_points: str, field_name: str) -> list[list[float]]:
@@ -1898,11 +1909,13 @@ async def extractor_list_gradient_card_materials(
                 else None
             )
             response_items.append(
-                {
-                    **public_material_response_item(item),
-                    "material_file_url": material_file_url,
-                    "stage_a_params_url": stage_a_params_url,
-                }
+                _canonicalize_saved_material_brand(
+                    {
+                        **public_material_response_item(item),
+                        "material_file_url": material_file_url,
+                        "stage_a_params_url": stage_a_params_url,
+                    }
+                )
             )
     except Exception as exc:
         log.error(
@@ -2110,6 +2123,13 @@ async def generate_material_swatch(
     """Generate a 3MF swatch file from collected material-archive recipes.
     根据收集的耗材档案配方列表生成 3MF 色块验证文件。
     """
+    validate_export_device_selection(
+        printer_id=payload.printer_id,
+        slicer=payload.slicer,
+        nozzle_size=payload.nozzle_size,
+        device_profile_id=payload.device_profile_id,
+        build_plate_id=payload.build_plate_id,
+    )
     from api.file_bridge import pil_to_png_bytes
     from api.structured_logging import get_request_id
     from core.material_recipe_swatch import (
@@ -2148,6 +2168,7 @@ async def generate_material_swatch(
         slicer=payload.slicer,
         nozzle_size=payload.nozzle_size,
         device_profile_id=payload.device_profile_id,
+        build_plate_id=payload.build_plate_id,
     )
 
     if not output_path:

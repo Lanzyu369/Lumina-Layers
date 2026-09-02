@@ -145,7 +145,7 @@ describe('Property 3: 颜色替换与撤销状态一致性', () => {
     );
   });
 
-  it('clearAllRemaps leaves colorRemapMap and remapHistory empty', () => {
+  it('clearAllRemaps clears the active map but keeps it undoable', () => {
     fc.assert(
       fc.property(arbOpSequence, (ops) => {
         resetStore();
@@ -159,12 +159,55 @@ describe('Property 3: 颜色替换与撤销状态一致性', () => {
           }
         }
 
+        const beforeClear = useConverterStore.getState();
+        const hadRemaps = Object.keys(beforeClear.colorRemapMap).length > 0;
+        const historyLenBefore = beforeClear.remapHistory.length;
+
         // Clear all
         useConverterStore.getState().clearAllRemaps();
 
         const state = useConverterStore.getState();
+        // The visible remap map is always emptied.
+        // 可见替换映射总是被清空。
         expect(state.colorRemapMap).toEqual({});
-        expect(state.remapHistory).toEqual([]);
+        // But "clear" is itself undoable in the local (session-less) flow: when
+        // there were active remaps, their pre-clear snapshot stays on the stack
+        // (one extra entry) instead of being wiped.
+        // 但"清空"本身在本地（无 session）流程里可撤销：若清空前有生效替换，
+        // 其清空前快照会保留在栈上（多一条），而不是被抹掉。
+        if (hadRemaps) {
+          expect(state.remapHistory).toHaveLength(historyLenBefore + 1);
+          expect(state.remapHistory[state.remapHistory.length - 1]).toEqual(
+            beforeClear.colorRemapMap,
+          );
+        } else {
+          expect(state.remapHistory).toHaveLength(historyLenBefore);
+        }
+      }),
+      { numRuns: 200 },
+    );
+  });
+
+  it('clearAllRemaps can be undone back to the pre-clear map', () => {
+    fc.assert(
+      fc.property(arbOpSequence, (ops) => {
+        resetStore();
+        for (const op of ops) {
+          if (op.type === 'apply') {
+            useConverterStore.getState().applyColorRemap(op.origHex, op.newHex);
+          } else {
+            useConverterStore.getState().undoColorRemap();
+          }
+        }
+
+        const beforeClear = useConverterStore.getState().colorRemapMap;
+        useConverterStore.getState().clearAllRemaps();
+        expect(useConverterStore.getState().colorRemapMap).toEqual({});
+
+        // Undoing the clear restores exactly the pre-clear map.
+        // 撤销"清空"能精确恢复到清空前的映射。
+        useConverterStore.getState().undoColorRemap();
+        expect(useConverterStore.getState().colorRemapMap).toEqual(beforeClear);
       }),
       { numRuns: 200 },
     );

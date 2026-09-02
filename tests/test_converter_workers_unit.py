@@ -302,11 +302,23 @@ def test_worker_generate_model_forwards_fridge_magnet_params_intact() -> None:
         "enable_fridge_magnet": True,
         "fridge_magnets": expected_fridge_magnets,
         "modeling_mode": "high-fidelity",
+        "original_matched_rgb_path": "original-rgb.npy",
+        "original_material_matrix_path": "original-material.npy",
+        "edit_projection": {
+            "mode": "delta",
+            "source_shape": [40, 80],
+        },
     }
+
+    def _generate_with_transform_metadata(**kwargs):
+        metadata = kwargs.get("export_transform_metadata")
+        if isinstance(metadata, dict):
+            metadata.update({"x_mirrored": True, "mirror_span_mm": 80.0})
+        return "out.3mf", "out.glb", None, "OK", None
 
     with patch(
         "core.converter.generate_final_model",
-        return_value=("out.3mf", "out.glb", None, "OK", None),
+        side_effect=_generate_with_transform_metadata,
     ) as generate_final_model_mock:
         result = worker_generate_model("image.png", "lut.npy", params)
 
@@ -314,12 +326,22 @@ def test_worker_generate_model_forwards_fridge_magnet_params_intact() -> None:
         "threemf_path": "out.3mf",
         "glb_path": "out.glb",
         "status_msg": "OK",
+        "x_mirrored": True,
+        "mirror_span_mm": 80.0,
     }
-    generate_final_model_mock.assert_called_once_with(
-        image_path="image.png",
-        lut_path="lut.npy",
-        **params,
-    )
+    generate_final_model_mock.assert_called_once()
+    call_kwargs = generate_final_model_mock.call_args.kwargs
+    assert call_kwargs["image_path"] == "image.png"
+    assert call_kwargs["lut_path"] == "lut.npy"
+    assert {
+        key: value
+        for key, value in call_kwargs.items()
+        if key not in {"image_path", "lut_path", "export_transform_metadata"}
+    } == params
+    assert call_kwargs["export_transform_metadata"] == {
+        "x_mirrored": True,
+        "mirror_span_mm": 80.0,
+    }
 
 
 def test_worker_batch_convert_item_forwards_relief_params_intact() -> None:
@@ -678,6 +700,7 @@ def test_worker_generate_preview_splits_vector_parse_clip_cache_blob(tmp_path) -
         "preview_rgba": preview_img.copy(),
         "color_conf": {},
         "vector_parse_clip_cache_blob": b"parse-clip-artifact",
+        "vector_parse_clip_cache_provenance": "a" * 64,
     }
 
     with (
@@ -705,6 +728,7 @@ def test_worker_generate_preview_splits_vector_parse_clip_cache_blob(tmp_path) -
         with open(result["cache_data_path"], "rb") as handle:
             restored_cache = pickle.load(handle)
         assert "vector_parse_clip_cache_blob" not in restored_cache
+        assert restored_cache["vector_parse_clip_cache_provenance"] == "a" * 64
         with open(result["vector_parse_clip_cache_path"], "rb") as handle:
             assert handle.read() == b"parse-clip-artifact"
     finally:
@@ -840,6 +864,7 @@ def test_worker_generate_large_format_svg_native_uses_sanitized_tile_prefix_in_z
         "tile_width_mm": 60.0,
         "tile_height_mm": 80.0,
         "spacer_thick": 1.2,
+        "backing_infill_density_percent": 25,
         "structure_mode": "Single-sided",
         "color_mode": "4-Color",
         "replacement_regions": [],
@@ -864,8 +889,87 @@ def test_worker_generate_large_format_svg_native_uses_sanitized_tile_prefix_in_z
             captured_export_kwargs[0]["device_profile_id"]
             == "BambuStudio:bbl:bambu-lab-h2d:0.4"
         )
+        assert captured_export_kwargs[0]["backing_infill_density_percent"] == 25
     finally:
         if os.path.exists(result["zip_path"]):
+            os.unlink(result["zip_path"])
+
+
+def test_worker_generate_large_format_svg_native_applies_coating_to_tile() -> None:
+    """A native SVG tile must inherit the requested transparent coating."""
+
+    build_calls: list[dict[str, object]] = []
+
+    class _FakeVectorProcessor:
+        def __init__(self, lut_path: str, color_mode: str) -> None:
+            self.lut_path = lut_path
+            self.color_mode = color_mode
+
+        def analyze_svg(self, **_kwargs):
+            return SimpleNamespace(num_layers=5)
+
+        def build_mesh(self, **kwargs):
+            build_calls.append(
+                {
+                    **kwargs,
+                    "enable_coating": getattr(self, "enable_coating", False),
+                    "coating_height_mm": getattr(self, "coating_height_mm", 0.08),
+                }
+            )
+            fake_geom = SimpleNamespace(vertices=[(0, 0, 0)], faces=[(0, 0, 0)])
+            return SimpleNamespace(geometry={"Slot1": fake_geom})
+
+    fake_tile = SimpleNamespace(
+        label="R1C1",
+        analysis=SimpleNamespace(
+            preview_colors={0: [255, 0, 0, 255]},
+            slot_names=["Slot1"],
+        ),
+    )
+    params = {
+        "tile_name_prefix": "coating",
+        "total_width_mm": 20.0,
+        "total_height_mm": 20.0,
+        "tile_width_mm": 20.0,
+        "tile_height_mm": 20.0,
+        "spacer_thick": 1.2,
+        "structure_mode": "Single-sided",
+        "color_mode": "4-Color",
+        "replacement_regions": [],
+        "separate_backing": False,
+        "enable_coating": True,
+        "coating_height_mm": 0.12,
+    }
+
+    result = None
+    with (
+        patch(
+            "core.pipeline.s03_color_replacement._normalize_color_replacements_input",
+            return_value={},
+        ),
+        patch("core.vector_engine.VectorProcessor", _FakeVectorProcessor),
+        patch(
+            "core.vector_large_format.slice_vector_analysis_into_tiles",
+            return_value=[fake_tile],
+        ),
+        patch("api.workers.converter_workers._rasterize_tile_for_cover", return_value=None),
+        patch(
+            "utils.bambu_3mf_writer.export_scene_with_bambu_metadata",
+            side_effect=lambda *, output_path, **_kwargs: open(output_path, "wb").close(),
+        ),
+    ):
+        result = worker_generate_large_format_svg_native(
+            "image.svg",
+            "lut.npy",
+            params,
+        )
+
+    try:
+        assert len(build_calls) == 1
+        assert build_calls[0]["enable_coating"] is True
+        assert build_calls[0]["coating_height_mm"] == pytest.approx(0.12)
+    finally:
+        if result is not None and os.path.exists(result["zip_path"]):
             os.unlink(result["zip_path"])
 
 

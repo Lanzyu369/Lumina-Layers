@@ -25,6 +25,7 @@ from api.routers.converter.puzzle import _require_puzzle_cache
 from api.routers.converter.replace import _require_preview_cache_fields
 from api.session_store import SessionStore
 from api.worker_pool import WorkerPoolManager
+from core.errors import VectorTopologyError
 
 
 VECTOR_SVG_REQUIRED_DETAIL = (
@@ -171,6 +172,44 @@ def test_generate_worker_exception_uses_public_error_language(tmp_path: Path) ->
     )
     assert private_path not in response.text
     assert "decode failed" not in response.text
+
+
+def test_generate_unrepairable_vector_topology_returns_actionable_422(
+    tmp_path: Path,
+) -> None:
+    attempt = {
+        "attempt": "repair_0.001_mm",
+        "rejected_reason": "float32_duplicate_vertex",
+        "vertex_count": 42,
+    }
+    pool = MagicMock(spec=WorkerPoolManager)
+    pool.submit_timed = AsyncMock(
+        side_effect=VectorTopologyError(
+            "Vector polygon topology could not be repaired for export",
+            (attempt,),
+        )
+    )
+
+    response = _post_generate_with_pool(
+        tmp_path,
+        pool,
+        source_suffix=".svg",
+        modeling_mode="vector",
+        request_modeling_mode="vector",
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "code": "vector_topology_unrepairable",
+        "stage": "polygon_export",
+        "action": "simplify_or_revectorize",
+        "message": (
+            "The vector artwork contains geometry that cannot be exported "
+            "safely. Simplify or re-vectorize the artwork, then upload it again."
+        ),
+    }
+    assert "float32_duplicate_vertex" not in response.text
+    assert "vertex_count" not in response.text
 
 
 def test_generate_missing_worker_output_uses_public_error_language(tmp_path: Path) -> None:

@@ -1,8 +1,4 @@
-# Optional native preview and SVG relief mesh-kernel dependencies.
-# Keep these outside requirements.txt so basic installs are not blocked on
-# platforms without native wheels or build tooling. Runtime default is the
-# v2 preview kernel and the fast watertight SVG relief union; install this file
-# to match the performance baseline. If these deps are absent, both paths keep
-# their exact Shapely/Trimesh fallback behavior.
+# Optional raster preview dependency. ``manifold3d`` is now a core runtime
+# dependency because final vector 3MF extrusion uses its exact indexed
+# triangulation to preserve slicer-visible contours.
 rasterio>=1.5.0
-manifold3d>=3.4.0

@@ -8,6 +8,11 @@ import {
   generateRecipeSwatch,
 } from "../api/fiveColor";
 import { useSettingsStore } from "./settingsStore";
+import {
+  captureGeneratedArtifactIdentity,
+  isGeneratedArtifactIdentityCurrent,
+  registerGeneratedArtifactInvalidator,
+} from "./generatedArtifactInvalidation";
 import { lutErrorToVisibleMessage } from "./lutErrorMessages";
 
 // ========== Collected Recipe ==========
@@ -44,6 +49,7 @@ const MAX_RECIPE_LENGTH = 6;
 let baseColorsRequestSequence = 0;
 let queryRequestSequence = 0;
 let matchColorRequestSequence = 0;
+let swatchRequestSequence = 0;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -519,6 +525,23 @@ export const useFiveColorStore = create<FiveColorState & FiveColorActions>()(
           swatchStructureMode,
         } = get();
         if (collectedRecipes.length === 0) return;
+        const settings = useSettingsStore.getState();
+        const requestIdentity = captureGeneratedArtifactIdentity(
+          settings.deviceProfileId,
+          settings.buildPlateId,
+        );
+        const requestSequence = ++swatchRequestSequence;
+        const isCurrentRequest = (): boolean => {
+          const latestSettings = useSettingsStore.getState();
+          return (
+            requestSequence === swatchRequestSequence &&
+            isGeneratedArtifactIdentityCurrent(
+              requestIdentity,
+              latestSettings.deviceProfileId,
+              latestSettings.buildPlateId,
+            )
+          );
+        };
         set({
           isGeneratingSwatch: true,
           error: null,
@@ -538,17 +561,20 @@ export const useFiveColorStore = create<FiveColorState & FiveColorActions>()(
             gap_mm: swatchGap,
             cols: swatchCols,
             structure_mode: swatchStructureMode,
-            printer_id: useSettingsStore.getState().printerModel,
-            slicer: useSettingsStore.getState().slicerSoftware,
-            nozzle_size: useSettingsStore.getState().nozzleSize,
-            device_profile_id: useSettingsStore.getState().deviceProfileId,
+            printer_id: settings.printerModel,
+            slicer: settings.slicerSoftware,
+            nozzle_size: settings.nozzleSize,
+            device_profile_id: settings.deviceProfileId,
+            build_plate_id: settings.buildPlateId,
           });
+          if (!isCurrentRequest()) return;
           set({
             swatchDownloadUrl: response.download_url,
             swatchPreviewUrl: response.preview_url,
             isGeneratingSwatch: false,
           });
         } catch (error) {
+          if (!isCurrentRequest()) return;
           set({
             error: fiveColorSwatchErrorMessage(error),
             isGeneratingSwatch: false,
@@ -614,3 +640,12 @@ export const useFiveColorStore = create<FiveColorState & FiveColorActions>()(
     },
   ),
 );
+
+registerGeneratedArtifactInvalidator(({ preservePreviews }) => {
+  swatchRequestSequence += 1;
+  useFiveColorStore.setState({
+    isGeneratingSwatch: false,
+    swatchDownloadUrl: null,
+    ...(preservePreviews ? {} : { swatchPreviewUrl: null }),
+  });
+});

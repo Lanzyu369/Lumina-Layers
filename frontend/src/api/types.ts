@@ -92,6 +92,7 @@ export type ConvertPreviewRequest = ConvertSourceSelection & {
   model_margin?: number | null;
   quantize_colors: number;
   high_precision_3d_preview?: boolean;
+  enable_smooth_vector_preview?: boolean;
   enable_cleanup: boolean;
   enable_outline?: boolean;
   outline_width?: number;
@@ -118,8 +119,17 @@ export type ConvertPreviewRequest = ConvertSourceSelection & {
   surface_model_transform_json?: string;
 };
 
+export interface VectorPreviewRendererResponse {
+  session_id: string;
+  status: "pending";
+  job_token: string;
+  glb_url: null;
+  renderer: "vector_analytic" | "segmented";
+}
+
 export type ConvertGenerateRequest = ConvertPreviewRequest & {
   spacer_thick: number;
+  backing_infill_density_percent?: number;
   structure_mode: StructureMode;
   separate_backing: boolean;
   add_loop: boolean;
@@ -151,6 +161,7 @@ export type ConvertGenerateRequest = ConvertPreviewRequest & {
   slicer?: string;
   nozzle_size?: string;
   device_profile_id?: string;
+  build_plate_id?: string;
   enable_base_layer_height_modifier?: boolean;
   use_cached_matched_rgb?: boolean;
 };
@@ -252,6 +263,8 @@ export interface RecipeOverrideApplyResponse
   preview_url: string;
   preview_glb_url?: string | null;
   override_count: number;
+  can_undo?: boolean;
+  can_redo?: boolean;
 }
 
 export interface RegionRecipeRequest {
@@ -431,6 +444,7 @@ export interface GenerateResponse {
   download_url: string;
   preview_3d_url?: string;
   threemf_disk_path?: string;
+  warnings?: string[];
   performance_timing?: PerformanceTiming | null;
 }
 
@@ -663,6 +677,7 @@ export interface CalibrationGenerateRequest {
   slicer?: string;
   nozzle_size?: string;
   device_profile_id?: string;
+  build_plate_id?: string;
 }
 
 // ========== Calibration Response Models ==========
@@ -695,6 +710,7 @@ export interface SingleStageKitGenerateRequest {
   slicer?: string;
   nozzle_size?: string;
   device_profile_id?: string;
+  build_plate_id?: string;
 }
 
 export interface SingleStageKitResponse {
@@ -1037,6 +1053,9 @@ export interface SavedMaterialLibraryItem {
   updated_at?: string | null;
   material_file_url: string | null;
   stage_a_params_url?: string | null;
+  /** Legacy private-path fields may still appear in old test fixtures/imports. */
+  archive_path?: string | null;
+  stage_a_params_path?: string | null;
   estimated_rgb: number[];
   layer_height_mm?: number | null;
   mean_delta_e?: number | null;
@@ -1733,7 +1752,11 @@ export interface BatchItemResult {
  */
 export interface WarningEntry {
   /** Stable machine-readable warning code; routes the i18n key on the frontend. */
-  code: "plate-overflow" | "preview-limited" | (string & {});
+  code:
+    | "plate-overflow"
+    | "preview-limited"
+    | "wipe_tower_manual_adjustment_required"
+    | (string & {});
   /** Server-rendered human-readable text; only used as fallback. */
   message: string;
 }
@@ -1782,6 +1805,7 @@ export interface BatchConvertParams {
   separate_backing?: boolean;
   target_width_mm: number;
   spacer_thick: number;
+  backing_infill_density_percent?: number;
   structure_mode: string;
   color_mode: string;
   modeling_mode: string;
@@ -1807,6 +1831,7 @@ export interface BatchConvertParams {
   slicer?: string;
   nozzle_size?: string;
   device_profile_id?: string;
+  build_plate_id?: string;
   enable_base_layer_height_modifier?: boolean;
 }
 
@@ -1917,6 +1942,7 @@ export interface RecipeSwatchRequest {
   slicer?: string;
   nozzle_size?: string;
   device_profile_id?: string;
+  build_plate_id?: string;
 }
 
 export interface RecipeSwatchResponse {
@@ -1946,6 +1972,7 @@ export interface MaterialRecipeSwatchRequest {
   slicer?: string;
   nozzle_size?: string;
   device_profile_id?: string;
+  build_plate_id?: string;
 }
 
 export interface MaterialRecipeSwatchResponse {
@@ -1964,9 +1991,11 @@ export interface ColorReplaceResponse extends DynamicMaterialResultResponse {
   preview_url: string;
   preview_3d_url?: string | null;
   replacement_count: number;
+  can_undo?: boolean;
+  can_redo?: boolean;
 }
 
-/** 全选点图时后端返回的原始源色拾取结果 */
+/** 同颜色全选点图时后端返回的当前匹配色拾取结果 */
 export interface SourceColorPickResponse {
   source_matched_hex: string;
   quantized_hex: string;
@@ -1981,13 +2010,51 @@ export interface ColorHighlightResponse {
 
 // ========== Region Detection & Replace Models ==========
 
+export interface SelectionComponentItem {
+  label: number;
+  region_id: string;
+  color_hex: string;
+  pixel_count: number;
+  bbox: number[];
+  anchor: number[];
+  contours?: number[][][];
+}
+
+export interface SelectionDocumentResponse {
+  selection_revision: number;
+  content_revision: number;
+  selected_pixel_count: number;
+  selected_component_count: number;
+  selected_color_hexes: string[];
+  region_ids: string[];
+  components: SelectionComponentItem[];
+  contours: number[][][];
+  can_undo: boolean;
+  can_redo: boolean;
+  brush_hit_component_count?: number | null;
+}
+
+export interface SelectionMutationRequest {
+  session_id: string;
+  operation: "point-toggle" | "same-color-toggle" | "brush-add" | "clear";
+  base_selection_revision: number;
+  content_revision: number;
+  x?: number;
+  y?: number;
+  color_hex?: string;
+  brush_radius?: number;
+  brush_points?: Array<{ x: number; y: number }>;
+}
+
 /** 连通区域检测响应 */
 export interface RegionDetectResponse {
   region_id: string;
   color_hex: string;
   pixel_count: number;
-  preview_url: string;
+  preview_url: string | null;
   contours?: number[][][] | null;
+  /** Diagnostic/legacy metadata only; visible selection must use contours. */
+  bbox?: [number, number, number, number] | null;
 }
 
 /** 区域替换响应 */
@@ -1996,6 +2063,8 @@ export interface RegionReplaceResponse extends DynamicMaterialResultResponse {
   preview_glb_url?: string | null;
   color_contours?: Record<string, number[][][]> | null;
   message: string;
+  can_undo?: boolean;
+  can_redo?: boolean;
   /**
    * Refreshed gradient-banding groups when the endpoint re-ran the
    * gradient-group analyser (e.g. ``/region-requantize``). Endpoints that
@@ -2005,17 +2074,69 @@ export interface RegionReplaceResponse extends DynamicMaterialResultResponse {
    * 保留已缓存的分组。
    */
   gradient_groups?: GradientGroupItem[] | null;
+  /**
+   * Authoritative shared selection after a selection-scoped region replace.
+   * 统一选区换色后端返回的权威选区状态；用于同步 revision/content_revision。
+   */
+  selection?: SelectionDocumentResponse | null;
+}
+
+export interface FreeColorMutationResponse {
+  status: string;
+  free_color_set: string[];
+  can_undo: boolean;
+  can_redo: boolean;
+}
+
+export interface ResetReplacementsResponse extends DynamicMaterialResultResponse {
+  status: string;
+  message: string;
+  preview_url: string;
+  preview_glb_url?: string | null;
+  can_undo?: boolean;
+  can_redo?: boolean;
+}
+
+export interface ReplacementHistoryResponse {
+  status: string;
+  action: "undo" | "redo";
+  label?: string | null;
+  entry_kind?: "content" | "selection";
+  selection?: SelectionDocumentResponse | null;
+  message: string;
+  preview_url: string;
+  preview_glb_url?: string | null;
+  can_undo: boolean;
+  can_redo: boolean;
+  replacement_regions: ColorReplacementItem[];
+  recipe_overrides: RecipeOverrideItem[];
+  recipe_override_count: number;
+  region_replacement_count?: number | null;
+  color_layers?: number | null;
+  layer_height_mm?: number | null;
+  gradient_groups?: GradientGroupItem[] | null;
+  free_color_set?: string[];
 }
 
 // ========== Printer Models ==========
 
 export interface DeviceProfileInfo {
   device_profile_id: string;
+  machine_profile_id?: string;
   slicer_id: string;
   nozzle_size: string;
   source_profile_name: string;
   revision: string;
   supported: boolean;
+  build_plates?: BuildPlateInfo[];
+  default_build_plate_id?: string;
+}
+
+export interface BuildPlateInfo {
+  id: string;
+  display_name: string;
+  display_name_zh?: string;
+  image_url: string;
 }
 
 export interface PrinterInfo {
@@ -2048,6 +2169,8 @@ export interface UserSettings {
   printer_model: string;
   slicer_software: string;
   device_profile_id: string;
+  build_plate_id: string;
+  build_plate_selections: Record<string, string>;
   custom_slicer_path: string;
   custom_slicer_id: string;
   nozzle_size: string;

@@ -450,6 +450,7 @@ def test_writer_skips_face_up_modifier_when_canonical_initial_height_is_missing(
         ("SnapmakerOrca", "snapmaker-u1"),
         ("ElegooSlicer", "elegoo-cc2"),
         ("AnycubicSlicerNext", "anycubic-kobra-s1"),
+        ("FlashStudio", "flashforge-ad5x"),
     ],
 )
 def test_bambu_family_layer_config_ranges_is_linked(

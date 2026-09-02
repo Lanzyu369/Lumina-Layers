@@ -12,7 +12,7 @@ import {
 const NUMERIC_FIELDS = [
   ["setTargetWidthMm", "target_width_mm", 10, 400],
   ["setTargetHeightMm", "target_height_mm", 10, 400],
-  ["setSpacerThick", "spacer_thick", 0.2, 3.5],
+  ["setSpacerThick", "spacer_thick", 0.2, 10],
   ["setQuantizeColors", "quantize_colors", 8, 256],
   ["setLoopWidth", "loop_width", 2, 10],
   ["setLoopLength", "loop_length", 4, 15],

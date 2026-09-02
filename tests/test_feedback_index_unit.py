@@ -31,6 +31,9 @@ def _sample_payload(**overrides):
             "material_layer_count": 10,
             "material_layer_height_mm": 0.16,
             "material_backing_material_dir_name": "BrandA",
+            "preserve_upload_filename_for_3mf": True,
+            "enable_smooth_vector_preview": True,
+            "vector_preview_renderer": "vector_analytic",
             "workshop": {
                 "module_id": "lumina.bead-pattern",
                 "module_version": "1.0.0",
@@ -132,6 +135,13 @@ def test_basic_payload_renders_all_sections(tmp_path: Path) -> None:
     assert "## Reproduction Suggestion" in md
     assert "## Session IDs for backend log grep" in md
     assert "sess-aaa" in md
+    assert "preserve_upload_filename_for_3mf: True" in md
+    assert "enable_smooth_vector_preview: True" in md
+    assert "vector_preview_renderer: vector_analytic" in md
+
+    summary = generate_summary_text("LUM-20260511-001", payload)
+    assert "沿用上传文件名：开启" in summary
+    assert "矢量预览：平滑；当前轻量模型：平滑轮廓" in summary
 
 
 def test_dynamic_material_snapshot_and_repro_hint_are_rendered(tmp_path: Path) -> None:
@@ -342,10 +352,14 @@ def _full_advanced_params() -> dict[str, object]:
             "target_height_mm": 80.0,
             "spacer_thick": 0.2,
             "base_spacer_thick": 0.2,
+            "backing_infill_density_percent": 35,
         },
         "generation": {
             "structure_mode": "flat",
             "modeling_mode": "high_fidelity",
+            "wipe_tower_warning_codes": [
+                "wipe_tower_manual_adjustment_required"
+            ],
         },
         "relief": {"enable_relief": True},
         "outline": {"enable_outline": True},
@@ -377,6 +391,7 @@ def test_index_renders_advanced_params_section_with_eight_toggles(tmp_path: Path
     assert "## Advanced Generation Parameters" in md
     # Dimensions line with × separator and mm unit.
     assert "Dimensions: 120.0 × 80.0 mm" in md
+    assert "Backing: 0.2 mm / 35% infill" in md
     # All eight toggle state lines must be present.
     assert "- enable_relief: enabled" in md
     assert "- enable_outline: enabled" in md
@@ -387,6 +402,10 @@ def test_index_renders_advanced_params_section_with_eight_toggles(tmp_path: Path
     assert "- puzzleEnabled: disabled" in md
     assert "- largeFormatEnabled: enabled" in md
     assert "- spatial_edit_count: 3" in md
+    assert (
+        "- wipe_tower_warning_codes: "
+        "wipe_tower_manual_adjustment_required"
+    ) in md
 
     # Section ordering: Workflow Snapshot → Advanced Generation Parameters → Recent Actions.
     idx_snapshot = md.index("## Workflow Snapshot")
@@ -489,7 +508,10 @@ def test_summary_renders_active_toggles_line() -> None:
     payload = _payload_with_advanced(advanced)
 
     summary = generate_summary_text("LUM-20260511-001", payload)
-    expected_line = "尺寸 120.0×80.0 mm，已开启：浮雕、描边、景泰蓝、冰箱贴、拼图、大幅面。"
+    expected_line = (
+        "尺寸 120.0×80.0 mm，底板 0.2 mm / 35% 填充，"
+        "已开启：浮雕、描边、景泰蓝、冰箱贴、拼图、大幅面。"
+    )
     assert expected_line in summary
 
     # Line placement: after the workflow line, before 最近操作：.

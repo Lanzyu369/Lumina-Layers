@@ -67,6 +67,9 @@ def _payload(**overrides: Any) -> dict[str, Any]:
             "material_layer_count": None,
             "material_layer_height_mm": None,
             "material_backing_material_dir_name": None,
+            "preserve_upload_filename_for_3mf": False,
+            "enable_smooth_vector_preview": True,
+            "vector_preview_renderer": "vector_analytic",
             "recent_client_logs": [
                 {
                     "timestamp": "2026-05-10T01:02:03.000Z",
@@ -151,6 +154,64 @@ def test_bug_report_context_preserves_dynamic_material_scalars() -> None:
     assert dumped["material_delta_e00_tolerance"] == pytest.approx(0.4)
 
 
+def test_bug_report_context_preserves_build_plate_selection() -> None:
+    from api.routers.feedback import BugReportContext
+
+    context = dict(_payload()["context"])
+    context.update(
+        {
+            "printer_id": "bambu-h2d",
+            "slicer": "BambuStudio",
+            "nozzle_size": "0.4",
+            "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d:0.4",
+            "build_plate_id": "smooth-pei-plate",
+        }
+    )
+
+    dumped = BugReportContext.model_validate(context).model_dump()
+
+    assert dumped["build_plate_id"] == "smooth-pei-plate"
+    assert dumped["device_profile_id"] == "BambuStudio:bbl:bambu-lab-h2d:0.4"
+
+
+def test_bug_report_context_preserves_upload_filename_preference() -> None:
+    from api.routers.feedback import BugReportContext
+
+    context = dict(_payload()["context"])
+    context["preserve_upload_filename_for_3mf"] = True
+
+    dumped = BugReportContext.model_validate(context).model_dump()
+
+    assert dumped["preserve_upload_filename_for_3mf"] is True
+
+    context.pop("preserve_upload_filename_for_3mf")
+    legacy_dumped = BugReportContext.model_validate(context).model_dump()
+    assert legacy_dumped["preserve_upload_filename_for_3mf"] is None
+
+
+def test_bug_report_context_preserves_vector_preview_renderer() -> None:
+    from api.routers.feedback import BugReportContext
+
+    context = dict(_payload()["context"])
+    context.update(
+        {
+            "enable_smooth_vector_preview": True,
+            "vector_preview_renderer": "vector_analytic",
+        }
+    )
+
+    dumped = BugReportContext.model_validate(context).model_dump()
+
+    assert dumped["enable_smooth_vector_preview"] is True
+    assert dumped["vector_preview_renderer"] == "vector_analytic"
+
+    context.pop("enable_smooth_vector_preview")
+    context.pop("vector_preview_renderer")
+    legacy_dumped = BugReportContext.model_validate(context).model_dump()
+    assert legacy_dumped["enable_smooth_vector_preview"] is None
+    assert legacy_dumped["vector_preview_renderer"] is None
+
+
 @pytest.fixture()
 def feedback_root(tmp_path: Path) -> Path:
     root = tmp_path / "feedback_root"
@@ -208,6 +269,9 @@ def test_submit_bug_report_accepts_full_payload_and_logs_canary(
     assert ticket_json["schema_version"] == 3
     assert ticket_json["ticket_id"] == data["ticket_id"]
     assert ticket_json["description"] == payload["description"]
+    assert ticket_json["context"]["preserve_upload_filename_for_3mf"] is False
+    assert ticket_json["context"]["enable_smooth_vector_preview"] is True
+    assert ticket_json["context"]["vector_preview_renderer"] == "vector_analytic"
     assert ticket_json["attachments"]["screenshot"]["status"] == "attached"
 
     canaries = [

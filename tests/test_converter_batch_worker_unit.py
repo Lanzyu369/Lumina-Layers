@@ -162,6 +162,9 @@ def test_batch_compute_xy_bbox_supports_svg_alpha_bbox(tmp_path) -> None:
         target_width_mm=40.0,
         pixels_per_mm=3.0,
         crop_to_content=False,
+        _min_quality_px=1,
+        _max_longest_px=2048,
+        _cache_result=False,
     )
 
 
@@ -223,12 +226,14 @@ def batch_worker_artifacts(tmp_path):
                 slicer="OrcaSlicer",
                 nozzle_size="0.2",
                 enable_base_layer_height_modifier=False,
+                backing_infill_density_percent=25,
             )
             forwarded = convert_mock.call_args.kwargs
             assert forwarded["printer_id"] == "bambu-p1s"
             assert forwarded["slicer"] == "OrcaSlicer"
             assert forwarded["nozzle_size"] == "0.2"
             assert forwarded["enable_base_layer_height_modifier"] is False
+            assert forwarded["backing_infill_density_percent"] == 25
 
         yield artifact_prefix, image_path, result
     finally:

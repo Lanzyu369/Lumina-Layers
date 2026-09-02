@@ -1984,7 +1984,7 @@ class LUTManager:
                 ]
             recipe_indices = cls._normalize_resolved_layer_recipe(
                 recipe_indices,
-                max_color_layers=int(metadata.max_color_layers or PrinterConfig.COLOR_LAYERS),
+                max_color_layers=getattr(metadata, "max_color_layers", 5),
             )
             rgb_list.append(row_rgb)
             stacks_list.append(recipe_indices)
@@ -2091,15 +2091,35 @@ class LUTManager:
         return -1
 
     @staticmethod
+    def _normalize_resolved_five_layer_recipe(recipe_indices: list[int]) -> list[int]:
+        return LUTManager._normalize_resolved_recipe_width(recipe_indices, 5)
+
+    @staticmethod
+    def _normalize_resolved_recipe_width(recipe_indices: list[int], expected_width: int) -> list[int]:
+        try:
+            width = int(expected_width)
+        except (TypeError, ValueError):
+            width = 5
+        if width <= 0:
+            width = 5
+        if len(recipe_indices) == width:
+            return recipe_indices
+        return [-1] * width
+
+    @staticmethod
     def _normalize_resolved_layer_recipe(
         recipe_indices: list[int],
         *,
         max_color_layers: int = PrinterConfig.COLOR_LAYERS,
     ) -> list[int]:
-        supported_widths = (5, 6) if int(max_color_layers) >= 6 else (5,)
+        try:
+            layer_count = int(max_color_layers)
+        except (TypeError, ValueError):
+            layer_count = PrinterConfig.COLOR_LAYERS
+        supported_widths = (5, 6) if layer_count >= 6 else (5,)
         if len(recipe_indices) in supported_widths:
             return recipe_indices
-        return [-1, -1, -1, -1, -1]
+        return LUTManager._normalize_resolved_recipe_width(recipe_indices, layer_count)
 
     @staticmethod
     def _infer_native_colordb_recipe_layer_count(
@@ -2796,6 +2816,10 @@ class LUTManager:
                                 (强制输出不带 V2 扩展块的 V1 结构)
         """
         meta_dict = metadata.to_dict()
+        if stacks is not None:
+            stack_array = np.asarray(stacks)
+            if stack_array.ndim == 2 and stack_array.shape[1] > 0:
+                meta_dict["max_color_layers"] = int(stack_array.shape[1])
         if legacy_save or not preserve_extensions:
             for key in list(metadata.extensions.keys()):
                 meta_dict.pop(key, None)

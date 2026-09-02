@@ -112,7 +112,9 @@ export function useAutoPreview(): void {
       state.materialLayerCount,
       state.materialLayerHeightMm,
       state.materialBackingMaterialDirName,
-      state.target_width_mm,
+      state.largeFormatEnabled
+        ? [state.target_width_mm, state.target_height_mm]
+        : null,
       state.color_mode,
       state.modeling_mode,
       state.quantize_colors,

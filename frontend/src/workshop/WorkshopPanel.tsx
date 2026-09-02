@@ -39,13 +39,16 @@ import {
   type WorkshopFrameProps,
 } from "./runtime/WorkshopFrame";
 import {
+  canRunWorkshopInBrowser,
   compareWorkshopSemver,
+  isBrowserTrustedWorkshopModule,
   WORKSHOP_RUNTIME_CLOSE_GRACE_MS,
   type WorkshopRuntimeMode,
 } from "./runtime/health";
 import {
   createSyntheticWorkshopHandlers,
   createWorkshopManagerHandlers,
+  createWorkshopUiState,
 } from "./runtime/handlers";
 import {
   type WorkshopAuditStatus,
@@ -135,7 +138,12 @@ function newestInstallableVersion(
 function sourceKey(
   module: InstalledWorkshopModule,
 ): "official" | "community" | "unreviewed" {
-  if (module.official) {
+  if (
+    isBrowserTrustedWorkshopModule(
+      module.source,
+      module.official,
+    )
+  ) {
     return "official";
   }
   return module.source === "registry"
@@ -166,7 +174,12 @@ function moduleAuditStatus(
   if (catalogVersion?.state === "active") {
     return "verified";
   }
-  if (module.source === "seed" && module.official) {
+  if (
+    isBrowserTrustedWorkshopModule(
+      module.source,
+      module.official,
+    )
+  ) {
     return "official";
   }
   if (module.source === "github" || module.source === "local") {
@@ -195,16 +208,23 @@ function canOpenModule(
     | "desktop-secure"
     | "browser-restricted"
     | "unsafe-development",
+  catalogModule?: WorkshopCatalogModule,
+  version?: string | null,
 ): boolean {
-  if (runtimeMode === "desktop-secure") {
-    return true;
+  const catalogVersion = catalogModule?.versions.find(
+    (candidate) => candidate.version === version,
+  );
+  if (
+    module.source === "registry" &&
+    (catalogVersion?.state === "blocked" ||
+      catalogVersion?.revocation != null)
+  ) {
+    return false;
   }
-  if (module.source === "seed" && module.official) {
-    return true;
-  }
-  return (
-    runtimeMode === "unsafe-development" &&
-    module.source === "local"
+  return canRunWorkshopInBrowser(
+    module.source,
+    module.official,
+    frameRuntimeMode(runtimeMode),
   );
 }
 
@@ -287,7 +307,34 @@ function InstalledCard({
     catalogModule,
     module.active_version,
   );
-  const openAllowed = canOpenModule(module, runtimeMode);
+  const activeOpenAllowed = canOpenModule(
+    module,
+    runtimeMode,
+    catalogModule,
+    module.active_version,
+  );
+  const candidateOpenAllowed = canOpenModule(
+    module,
+    runtimeMode,
+    catalogModule,
+    module.candidate_version,
+  );
+  const activeBlocked =
+    module.source === "registry" &&
+    !activeOpenAllowed &&
+    canRunWorkshopInBrowser(
+      module.source,
+      module.official,
+      frameRuntimeMode(runtimeMode),
+    );
+  const candidateBlocked =
+    module.source === "registry" &&
+    !candidateOpenAllowed &&
+    canRunWorkshopInBrowser(
+      module.source,
+      module.official,
+      frameRuntimeMode(runtimeMode),
+    );
   const title = detail
     ? localized(detail.name, lang)
     : module.module_id;
@@ -370,24 +417,28 @@ function InstalledCard({
           {module.active_version ? (
             <Button
               label={
-                openAllowed
+                activeBlocked
+                  ? t("workshop.manager.blocked")
+                  : activeOpenAllowed
                   ? t("workshop.manager.open")
                   : t("workshop.manager.desktopOnly")
               }
               onClick={() => onOpen(module.active_version as string)}
-              disabled={!module.enabled || !openAllowed}
+              disabled={!module.enabled || !activeOpenAllowed}
               className="flex-1"
             />
           ) : null}
           {module.candidate_version ? (
             <Button
               label={
-                openAllowed
+                candidateBlocked
+                  ? t("workshop.manager.blocked")
+                  : candidateOpenAllowed
                   ? t("workshop.manager.reviewCandidate")
                   : t("workshop.manager.desktopOnly")
               }
               onClick={onOpenCandidate}
-              disabled={!module.enabled || !openAllowed}
+              disabled={!module.enabled || !candidateOpenAllowed}
               variant={
                 module.active_version ? "secondary" : undefined
               }
@@ -457,7 +508,10 @@ export function WorkshopPanel({
   runtimeMode: runtimeModeOverride,
   FrameComponent = WorkshopFrame,
 }: WorkshopPanelProps) {
-  const { t, lang } = useI18n();
+  const { t } = useI18n();
+  const language = useSettingsStore((state) => state.language);
+  const lang = language;
+  const theme = useSettingsStore((state) => state.theme);
   const workspace = useWorkspaceMode();
   const view = useWorkshopStore((state) => state.view);
   const activeModule = useWorkshopStore(
@@ -749,6 +803,14 @@ export function WorkshopPanel({
     () => createSyntheticWorkshopHandlers(),
     [],
   );
+  const uiState = useMemo(
+    () =>
+      createWorkshopUiState(
+        language === "zh" ? "zh-CN" : "en-US",
+        theme,
+      ),
+    [language, theme],
+  );
 
   const runModuleMutation = useCallback(
     async (
@@ -793,7 +855,12 @@ export function WorkshopPanel({
       );
       if (
         installed?.candidate_version &&
-        canOpenModule(installed, runtimeMode)
+        canOpenModule(
+          installed,
+          runtimeMode,
+          catalogById.get(installed.module_id),
+          installed.candidate_version,
+        )
       ) {
         openModule(
           installed.module_id,
@@ -801,7 +868,13 @@ export function WorkshopPanel({
         );
       }
     },
-    [api, openModule, runModuleMutation, runtimeMode],
+    [
+      api,
+      catalogById,
+      openModule,
+      runModuleMutation,
+      runtimeMode,
+    ],
   );
 
   const requestStagedCandidate = useCallback(
@@ -809,7 +882,12 @@ export function WorkshopPanel({
       const candidateVersion = module.candidate_version;
       if (
         candidateVersion === null ||
-        !canOpenModule(module, runtimeMode)
+        !canOpenModule(
+          module,
+          runtimeMode,
+          catalogById.get(module.module_id),
+          candidateVersion,
+        )
       ) {
         return;
       }
@@ -839,7 +917,7 @@ export function WorkshopPanel({
       }
       confirm();
     },
-    [openModule, runtimeMode, t],
+    [catalogById, openModule, runtimeMode, t],
   );
 
   const requestUpdate = useCallback(
@@ -1047,31 +1125,28 @@ export function WorkshopPanel({
   if (selectedModule && selectedVersion && activeModule) {
     return (
       <div
-        className={cx(
-          resolvePanelSurfaceClass(workspace.mode),
-          "flex min-h-0 flex-col gap-4",
-        )}
+        data-testid="workshop-runtime-shell"
+        className="flex h-full min-h-0 w-full overflow-hidden"
       >
-        <div className="mx-auto flex min-h-0 w-full max-w-[96rem] flex-1 flex-col gap-4">
-          <div className="flex items-center justify-between gap-3">
-            <button
-              type="button"
-              onClick={handleReturnHome}
-              disabled={returningHome}
-              className="inline-flex min-h-10 items-center gap-2 rounded-xl px-3 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-200/70 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--focus-ring)] dark:text-slate-300 dark:hover:bg-slate-800/70 dark:hover:text-slate-50"
-            >
-              <span aria-hidden="true">←</span>
-              {t("workshop.back")}
-            </button>
-            <span className="text-xs text-slate-500 dark:text-slate-400">
-              {t("workshop.manager.activeMeta")
-                .replace(
-                  "{name}",
-                  localized(selectedVersion.name, lang),
-                )
-                .replace("{version}", selectedVersion.version)}
-            </span>
-          </div>
+        <nav
+          aria-label={t("workshop.title")}
+          className="relative z-20 flex w-9 shrink-0 items-start justify-center border-r border-[color:var(--surface-outline)] bg-[color:var(--surface-section-muted)] pt-1"
+        >
+          <button
+            type="button"
+            onClick={handleReturnHome}
+            disabled={returningHome}
+            className="inline-grid size-8 shrink-0 place-items-center rounded-lg text-slate-600 transition-colors hover:bg-[color:var(--surface-panel)] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--focus-ring)] dark:text-slate-300"
+            aria-label={t("workshop.back")}
+            title={t("workshop.back")}
+          >
+            <span aria-hidden="true">←</span>
+          </button>
+        </nav>
+        <div
+          data-testid="workshop-module-viewport"
+          className="h-full min-h-0 min-w-0 flex-1 overflow-hidden"
+        >
           <FrameComponent
             module={{
               moduleId: activeModule.moduleId,
@@ -1098,6 +1173,7 @@ export function WorkshopPanel({
             }}
             runtimeMode={frameRuntimeMode(runtimeMode)}
             handlers={handlers}
+            uiState={uiState}
             syntheticHandlers={syntheticHandlers}
             prepareCandidate={prepareCandidate}
             activateCandidate={activateCandidate}

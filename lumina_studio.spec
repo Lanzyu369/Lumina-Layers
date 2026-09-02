@@ -6,6 +6,7 @@ Usage:
     pyinstaller lumina_studio.spec
 """
 
+import json
 import os
 import sysconfig
 from pathlib import Path
@@ -33,6 +34,40 @@ def collect_glb_v2_package(package_name):
         return [], [], []
 
 
+def collect_machine_registry_runtime_datas(registry_root):
+    """Collect only files required by the packaged machine-registry runtime."""
+
+    registry_root = Path(registry_root).resolve()
+    registry_path = registry_root / "registry.json"
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    relative_paths = {Path("registry.json")}
+    for slicer in registry["slicers"]:
+        relative_paths.update(
+            Path(plate["image"]) for plate in slicer.get("build_plates", [])
+        )
+        for machine in slicer["machines"]:
+            relative_paths.update(
+                Path(nozzle["template"]) for nozzle in machine["nozzles"]
+            )
+
+    datas = []
+    for relative_path in sorted(relative_paths, key=lambda path: path.as_posix()):
+        source_path = (registry_root / relative_path).resolve()
+        try:
+            source_path.relative_to(registry_root)
+        except ValueError as exc:
+            raise ValueError(
+                f"Machine registry runtime path escapes registry root: {relative_path}"
+            ) from exc
+        if not source_path.is_file():
+            raise FileNotFoundError(
+                f"Machine registry runtime file is missing: {relative_path}"
+            )
+        destination = Path("machine_registry") / relative_path.parent
+        datas.append((str(source_path), destination.as_posix()))
+    return datas
+
+
 glb_v2_datas = []
 glb_v2_binaries = []
 glb_v2_hiddenimports = []
@@ -48,6 +83,10 @@ backend_datas = [
     # Includes the app-owned Workshop Registry key set and offline snapshot in
     # assets/workshop-registry/ alongside the existing runtime assets.
     ('assets', 'assets'),
+    # Runtime registry contract only: registry, Lumina plate art, and referenced templates.
+    *collect_machine_registry_runtime_datas(ROOT / 'machine_registry'),
+    ('printer_profiles', 'printer_profiles'),
+    ('bambu_config_template.json', '.'),
     *glb_v2_datas,
 ]
 backend_binaries = [

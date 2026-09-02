@@ -53,7 +53,15 @@
               "revision": "sha256:5b43e4d40b04d38e3b6534b58bc24e1b37407a28e2baba7c942409408405ad0c",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "cool-plate",
+            "engineering-plate",
+            "smooth-pei-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "BambuStudio:bbl:bambu-lab-a1-mini",
@@ -97,7 +105,13 @@
               "revision": "sha256:31f3af1975eb158e85595ecb814eb563f892ab41c0dab474741d5bbe60a4d19f",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-pei-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "BambuStudio:bbl:bambu-lab-a2l",
@@ -141,7 +155,14 @@
               "revision": "sha256:b599f16d47192e4d135ee8109c78f303edaaf6f26abeb881755b36cf5403d5f8",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "engineering-plate",
+            "smooth-pei-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "BambuStudio:bbl:bambu-lab-h2c",
@@ -185,7 +206,13 @@
               "revision": "sha256:974fc4063f8fa22182e764af22f53b58c594aff1a63926703295c426943ea8ab",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "engineering-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "BambuStudio:bbl:bambu-lab-h2d",
@@ -229,7 +256,14 @@
               "revision": "sha256:01b86d86525b51515eb9f15e9b7df54744160b0f6f10404fc8bc2b41670b8f9e",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "engineering-plate",
+            "smooth-pei-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "BambuStudio:bbl:bambu-lab-h2d-pro",
@@ -273,7 +307,14 @@
               "revision": "sha256:af95b34c3687bf8a786577876521d5ac2fade25aa97503b1debc22c040b79614",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "engineering-plate",
+            "smooth-pei-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "BambuStudio:bbl:bambu-lab-h2s",
@@ -317,7 +358,14 @@
               "revision": "sha256:ccc53c9572aac4eb59d88839f39741be6f3bb231811285589f29611c79167a69",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "engineering-plate",
+            "smooth-pei-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "BambuStudio:bbl:bambu-lab-p1p",
@@ -361,7 +409,15 @@
               "revision": "sha256:81f822a602122391d4fc8edee484ce5d99be9b584e4769c57a790e1845b764f2",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "cool-plate",
+            "engineering-plate",
+            "smooth-pei-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "BambuStudio:bbl:bambu-lab-p1s",
@@ -405,7 +461,15 @@
               "revision": "sha256:90ffa6252b2643a42b1deb7e94f8515d57585677e183b6ada935debb3abdb069",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "cool-plate",
+            "engineering-plate",
+            "smooth-pei-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "BambuStudio:bbl:bambu-lab-p2s",
@@ -449,7 +513,14 @@
               "revision": "sha256:788058c0a048f1956f7e0a36cdcd3782618934692f139df825c0eab59d8d8140",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "engineering-plate",
+            "smooth-pei-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "BambuStudio:bbl:bambu-lab-x1",
@@ -493,7 +564,15 @@
               "revision": "sha256:ceeddefdc1846f3d06d5ec57501052bab3be333a54ca80279d48aeaccc66c905",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "cool-plate",
+            "engineering-plate",
+            "smooth-pei-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "BambuStudio:bbl:bambu-lab-x1-carbon",
@@ -537,7 +616,15 @@
               "revision": "sha256:565afa55a954aacf8ee8891e5832e32dda7ff19f3974f2a48ae1f9c7b89da527",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "cool-plate",
+            "engineering-plate",
+            "smooth-pei-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "BambuStudio:bbl:bambu-lab-x1e",
@@ -581,7 +668,15 @@
               "revision": "sha256:a8572a3a375c542dcabda5968ed4eb6dae7ffc9b35a345eca0cc44a48c87f97c",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "cool-plate",
+            "engineering-plate",
+            "smooth-pei-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "BambuStudio:bbl:bambu-lab-x2d",
@@ -625,7 +720,76 @@
               "revision": "sha256:4b343138a8938537ae35bb4f89bef7da36cd88b1d1604af7755d8dbb83817676",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "engineering-plate",
+            "smooth-pei-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
+        }
+      ],
+      "build_plates": [
+        {
+          "id": "cool-plate",
+          "display_name": "Cool Plate",
+          "display_name_zh": "低温打印板",
+          "project_value": "Cool Plate",
+          "plate_value": "Cool Plate",
+          "sidecar_value": "cool_plate",
+          "image": "build_plates/bed_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:ec9e479ca9e0a3f6cd1b34bd0d6df8f01310cb1582c93af059e058b9ac3430ee"
+        },
+        {
+          "id": "engineering-plate",
+          "display_name": "Engineering Plate",
+          "display_name_zh": "工程材料打印板",
+          "project_value": "Engineering Plate",
+          "plate_value": "Engineering Plate",
+          "sidecar_value": "eng_plate",
+          "image": "build_plates/bed_engineering.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_engineering.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:b5b312435337c4d2ecad1cc34bec7c30f935b22bc34706f0d233b5881017d663"
+        },
+        {
+          "id": "smooth-pei-plate",
+          "display_name": "Smooth PEI Plate / High Temp Plate",
+          "display_name_zh": "光面PEI打印板 / 高温打印板",
+          "project_value": "High Temp Plate",
+          "plate_value": "High Temp Plate",
+          "sidecar_value": "hot_plate",
+          "image": "build_plates/bed_high_templ.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_high_templ.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:80b041086db7c12a8a6ed6fcd6f9529e36e94587d6728bad4695bccebcd6b847"
+        },
+        {
+          "id": "textured-pei-plate",
+          "display_name": "Textured PEI Plate",
+          "display_name_zh": "纹理PEI打印板",
+          "project_value": "Textured PEI Plate",
+          "plate_value": "Textured PEI Plate",
+          "sidecar_value": "textured_plate",
+          "image": "build_plates/bed_pei.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:183612b224eed2ae82a2895051240347e38556c985f29620318fe871b225c6c6"
+        },
+        {
+          "id": "supertack-plate",
+          "display_name": "Bambu Cool Plate SuperTack",
+          "display_name_zh": "增稳低温打印板",
+          "project_value": "Supertack Plate",
+          "plate_value": "Supertack Plate",
+          "sidecar_value": "supertack_plate",
+          "image": "build_plates/bed_cool_supertack.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool_supertack.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:76052da6aa89bbfbaeed24840172ef64ace64d488ee324658455d24438f22ea2"
         }
       ]
     },
@@ -680,7 +844,16 @@
               "revision": "sha256:aed6a3022a613fc21d666d5939fd84bbab11273bedb60cebe7ca1423a313fbaa",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-a1-mini",
@@ -724,7 +897,14 @@
               "revision": "sha256:4c09af32c448c266f84be9e92f39d89318f725310f23e7c1af852f6037e7c1ee",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-h2d",
@@ -768,7 +948,14 @@
               "revision": "sha256:a3e507b3b5c8043fe157d1ec73f4aab9738489e40d48ecacfed12d6a8a030c55",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-h2d-pro",
@@ -812,7 +999,14 @@
               "revision": "sha256:eca7fe18b6ec6ed472cedefdf2b93e5e383d49d0bf5cb70f6125e1d85ca973d4",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-h2s",
@@ -856,7 +1050,14 @@
               "revision": "sha256:5b3bda7d2cbe3f6937493999e994181bbf70c462c0f9046c9383e860fb54e1df",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-p1p",
@@ -900,7 +1101,16 @@
               "revision": "sha256:6cef2d3c16768657c2252c05cde42627a85ae51df13af5ce4c550df5e3cb6bbf",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-p1s",
@@ -944,7 +1154,16 @@
               "revision": "sha256:ba62f5984e2f62e75046700bcfe7c2812768ae2c86c6f3b16fbcde3067190854",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-p2s",
@@ -988,7 +1207,14 @@
               "revision": "sha256:855ae3848b6d4b530267418b68181adf9176619ec94a1684f32ce09d4de25283",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-x1",
@@ -1032,7 +1258,16 @@
               "revision": "sha256:f661ae756365715ac8f2b732c64b236247068a9a2064ba83c21bd490e0ec441f",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-x1-carbon",
@@ -1076,7 +1311,16 @@
               "revision": "sha256:15c23e1fae651cbca7b262e9d2231cb6a6f8878e6d876bbb00519d8dbe1547e0",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-x1e",
@@ -1120,7 +1364,16 @@
               "revision": "sha256:f789ed22d43dd08052f9467632681d694286bcf55ddf7d3107a9412070e0d72e",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-x2d",
@@ -1164,7 +1417,89 @@
               "revision": "sha256:8e90dcac87712fbdfd8b48dfc510aa64d0f08bc6256b693dfc54830a511355b1",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
+        }
+      ],
+      "build_plates": [
+        {
+          "id": "smooth-cool-plate",
+          "display_name": "Smooth Cool Plate",
+          "display_name_zh": "光滑的低温打印床",
+          "project_value": "Cool Plate",
+          "plate_value": "Cool Plate",
+          "sidecar_value": "cool_plate",
+          "image": "build_plates/bed_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:ec9e479ca9e0a3f6cd1b34bd0d6df8f01310cb1582c93af059e058b9ac3430ee"
+        },
+        {
+          "id": "engineering-plate",
+          "display_name": "Engineering Plate",
+          "display_name_zh": "工程材料热床",
+          "project_value": "Engineering Plate",
+          "plate_value": "Engineering Plate",
+          "sidecar_value": "eng_plate",
+          "image": "build_plates/bed_engineering.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_engineering.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:b5b312435337c4d2ecad1cc34bec7c30f935b22bc34706f0d233b5881017d663"
+        },
+        {
+          "id": "smooth-high-temp-plate",
+          "display_name": "Smooth High Temp Plate",
+          "display_name_zh": "光滑高温打印热床",
+          "project_value": "High Temp Plate",
+          "plate_value": "High Temp Plate",
+          "sidecar_value": "hot_plate",
+          "image": "build_plates/bed_high_templ.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_high_templ.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:80b041086db7c12a8a6ed6fcd6f9529e36e94587d6728bad4695bccebcd6b847"
+        },
+        {
+          "id": "textured-pei-plate",
+          "display_name": "Textured PEI Plate",
+          "display_name_zh": "纹理PEI热床",
+          "project_value": "Textured PEI Plate",
+          "plate_value": "Textured PEI Plate",
+          "sidecar_value": "textured_plate",
+          "image": "build_plates/bed_pei.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:183612b224eed2ae82a2895051240347e38556c985f29620318fe871b225c6c6"
+        },
+        {
+          "id": "textured-cool-plate",
+          "display_name": "Textured Cool Plate",
+          "display_name_zh": "纹理的低温打印床",
+          "project_value": "Textured Cool Plate",
+          "plate_value": "Textured Cool Plate",
+          "sidecar_value": "textured_cool_plate",
+          "image": "build_plates/bed_pei_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:d02ac630d91af8d5092b77f9f2ecfe3e90079cce2cf30f247bf0d14af481bb65"
+        },
+        {
+          "id": "supertack-plate",
+          "display_name": "Cool Plate (SuperTack)",
+          "display_name_zh": "低温打印板（超强粘附）",
+          "project_value": "Supertack Plate",
+          "plate_value": "Supertack Plate",
+          "sidecar_value": "supertack_plate",
+          "image": "build_plates/bed_cool_supertack.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool_supertack.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:76052da6aa89bbfbaeed24840172ef64ace64d488ee324658455d24438f22ea2"
         }
       ]
     },
@@ -1219,7 +1554,16 @@
               "revision": "sha256:f4f42c3fe8f00f88982ed9d4027a93a110658bb03816f28a1e7600aadd809289",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "OrcaSlicer:elegoo:elegoo-centauri-carbon",
@@ -1263,7 +1607,16 @@
               "revision": "sha256:4e91df8599e05dc9c10d5d6313e2695cfa096d4b3c1a272259d3fb4ee84896b3",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "OrcaSlicer:elegoo:elegoo-centauri-carbon-2",
@@ -1307,7 +1660,90 @@
               "revision": "sha256:e3ff89be83949c77220b1bfe15c7b7c50e48e4549abbc4ec2a7a1ba2d073ce0d",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
+        }
+      ],
+      "build_plates": [
+        {
+          "id": "smooth-cool-plate",
+          "display_name": "Smooth Cool Plate",
+          "display_name_zh": "光滑的低温打印床",
+          "project_value": "Cool Plate",
+          "plate_value": "Cool Plate",
+          "sidecar_value": "cool_plate",
+          "image": "build_plates/bed_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:ec9e479ca9e0a3f6cd1b34bd0d6df8f01310cb1582c93af059e058b9ac3430ee"
+        },
+        {
+          "id": "engineering-plate",
+          "display_name": "Engineering Plate",
+          "display_name_zh": "工程材料热床",
+          "project_value": "Engineering Plate",
+          "plate_value": "Engineering Plate",
+          "sidecar_value": "eng_plate",
+          "image": "build_plates/bed_engineering.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_engineering.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:b5b312435337c4d2ecad1cc34bec7c30f935b22bc34706f0d233b5881017d663"
+        },
+        {
+          "id": "smooth-high-temp-plate",
+          "display_name": "Smooth High Temp Plate",
+          "display_name_zh": "光滑高温打印热床",
+          "project_value": "High Temp Plate",
+          "plate_value": "High Temp Plate",
+          "sidecar_value": "hot_plate",
+          "image": "build_plates/bed_high_templ.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_high_templ.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:80b041086db7c12a8a6ed6fcd6f9529e36e94587d6728bad4695bccebcd6b847"
+        },
+        {
+          "id": "textured-pei-plate",
+          "display_name": "Textured PEI Plate",
+          "display_name_zh": "纹理PEI热床",
+          "project_value": "Textured PEI Plate",
+          "plate_value": "Textured PEI Plate",
+          "sidecar_value": "textured_plate",
+          "image": "build_plates/bed_pei.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:183612b224eed2ae82a2895051240347e38556c985f29620318fe871b225c6c6"
+        },
+        {
+          "id": "textured-cool-plate",
+          "display_name": "Textured Cool Plate",
+          "display_name_zh": "纹理的低温打印床",
+          "project_value": "Textured Cool Plate",
+          "plate_value": "Textured Cool Plate",
+          "sidecar_value": "textured_cool_plate",
+          "image": "build_plates/bed_pei_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:d02ac630d91af8d5092b77f9f2ecfe3e90079cce2cf30f247bf0d14af481bb65"
+        },
+        {
+          "id": "supertack-plate",
+          "display_name": "Cool Plate (SuperTack)",
+          "display_name_zh": "低温打印板（超强粘附）",
+          "project_value": "Supertack Plate",
+          "plate_value": "Supertack Plate",
+          "sidecar_value": "supertack_plate",
+          "image": "build_plates/bed_cool_supertack.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool_supertack.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:76052da6aa89bbfbaeed24840172ef64ace64d488ee324658455d24438f22ea2"
         }
       ]
     },
@@ -1346,7 +1782,90 @@
               "revision": "sha256:bb81f69be0859b68eb387a0772ddc7059752fdee4d2ca3ec20963615c8ba29af",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
+        }
+      ],
+      "build_plates": [
+        {
+          "id": "smooth-cool-plate",
+          "display_name": "Smooth Cool Plate",
+          "display_name_zh": "光滑的低温打印床",
+          "project_value": "Cool Plate",
+          "plate_value": "Cool Plate",
+          "sidecar_value": "cool_plate",
+          "image": "build_plates/bed_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:ec9e479ca9e0a3f6cd1b34bd0d6df8f01310cb1582c93af059e058b9ac3430ee"
+        },
+        {
+          "id": "engineering-plate",
+          "display_name": "Engineering Plate",
+          "display_name_zh": "工程材料热床",
+          "project_value": "Engineering Plate",
+          "plate_value": "Engineering Plate",
+          "sidecar_value": "eng_plate",
+          "image": "build_plates/bed_engineering.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_engineering.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:b5b312435337c4d2ecad1cc34bec7c30f935b22bc34706f0d233b5881017d663"
+        },
+        {
+          "id": "smooth-high-temp-plate",
+          "display_name": "Smooth High Temp Plate",
+          "display_name_zh": "光滑高温打印热床",
+          "project_value": "High Temp Plate",
+          "plate_value": "High Temp Plate",
+          "sidecar_value": "hot_plate",
+          "image": "build_plates/bed_high_templ.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_high_templ.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:80b041086db7c12a8a6ed6fcd6f9529e36e94587d6728bad4695bccebcd6b847"
+        },
+        {
+          "id": "textured-pei-plate",
+          "display_name": "Textured PEI Plate",
+          "display_name_zh": "纹理PEI热床",
+          "project_value": "Textured PEI Plate",
+          "plate_value": "Textured PEI Plate",
+          "sidecar_value": "textured_plate",
+          "image": "build_plates/bed_pei.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:183612b224eed2ae82a2895051240347e38556c985f29620318fe871b225c6c6"
+        },
+        {
+          "id": "textured-cool-plate",
+          "display_name": "Textured Cool Plate",
+          "display_name_zh": "纹理的低温打印床",
+          "project_value": "Textured Cool Plate",
+          "plate_value": "Textured Cool Plate",
+          "sidecar_value": "textured_cool_plate",
+          "image": "build_plates/bed_pei_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:d02ac630d91af8d5092b77f9f2ecfe3e90079cce2cf30f247bf0d14af481bb65"
+        },
+        {
+          "id": "supertack-plate",
+          "display_name": "Cool Plate (SuperTack)",
+          "display_name_zh": "低温打印板（超强粘附）",
+          "project_value": "Supertack Plate",
+          "plate_value": "Supertack Plate",
+          "sidecar_value": "supertack_plate",
+          "image": "build_plates/bed_cool_supertack.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool_supertack.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:76052da6aa89bbfbaeed24840172ef64ace64d488ee324658455d24438f22ea2"
         }
       ]
     },
@@ -1401,7 +1920,85 @@
               "revision": "sha256:49893cf1f38f09150812ec9be4b4fe372ab1226709e742e57cc034d62ad14b0a",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "textured-pei-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
+        }
+      ],
+      "build_plates": [
+        {
+          "id": "smooth-cool-plate",
+          "display_name": "Smooth Cool Plate",
+          "display_name_zh": "光滑的低温打印床",
+          "project_value": "Cool Plate",
+          "plate_value": "Cool Plate",
+          "sidecar_value": "cool_plate",
+          "image": "build_plates/bed_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:ec9e479ca9e0a3f6cd1b34bd0d6df8f01310cb1582c93af059e058b9ac3430ee"
+        },
+        {
+          "id": "engineering-plate",
+          "display_name": "Engineering Plate",
+          "display_name_zh": "工程材料热床",
+          "project_value": "Engineering Plate",
+          "plate_value": "Engineering Plate",
+          "sidecar_value": "eng_plate",
+          "image": "build_plates/bed_engineering.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_engineering.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:b5b312435337c4d2ecad1cc34bec7c30f935b22bc34706f0d233b5881017d663"
+        },
+        {
+          "id": "smooth-high-temp-plate",
+          "display_name": "Smooth High Temp Plate",
+          "display_name_zh": "光滑高温打印热床",
+          "project_value": "High Temp Plate",
+          "plate_value": "High Temp Plate",
+          "sidecar_value": "hot_plate",
+          "image": "build_plates/bed_high_templ.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_high_templ.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:80b041086db7c12a8a6ed6fcd6f9529e36e94587d6728bad4695bccebcd6b847"
+        },
+        {
+          "id": "textured-pei-plate",
+          "display_name": "Textured PEI Plate",
+          "display_name_zh": "纹理PEI热床",
+          "project_value": "Textured PEI Plate",
+          "plate_value": "Textured PEI Plate",
+          "sidecar_value": "textured_plate",
+          "image": "build_plates/bed_pei.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:183612b224eed2ae82a2895051240347e38556c985f29620318fe871b225c6c6"
+        },
+        {
+          "id": "textured-cool-plate",
+          "display_name": "Textured Cool Plate",
+          "display_name_zh": "纹理的低温打印床",
+          "project_value": "Textured Cool Plate",
+          "plate_value": "Textured Cool Plate",
+          "sidecar_value": "textured_cool_plate",
+          "image": "build_plates/bed_pei_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:d02ac630d91af8d5092b77f9f2ecfe3e90079cce2cf30f247bf0d14af481bb65"
+        },
+        {
+          "id": "supertack-plate",
+          "display_name": "Cool Plate (SuperTack)",
+          "display_name_zh": "低温打印板（超强粘附）",
+          "project_value": "Supertack Plate",
+          "plate_value": "Supertack Plate",
+          "sidecar_value": "supertack_plate",
+          "image": "build_plates/bed_cool_supertack.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool_supertack.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:76052da6aa89bbfbaeed24840172ef64ace64d488ee324658455d24438f22ea2"
         }
       ]
     },
@@ -1456,7 +2053,12 @@
               "revision": "sha256:879a11777d67ceb16a2da77cc29230171b9836bbb6a769864d92bb78ae189494",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "textured-pei-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "ElegooSlicer:elegoo:elegoo-centauri-carbon",
@@ -1500,7 +2102,12 @@
               "revision": "sha256:3d75ff8196d936fe45a512863d69c986bceecc53ff2fd1f22a125799c68132dc",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "textured-pei-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "ElegooSlicer:elegoo:elegoo-centauri-carbon-2",
@@ -1544,7 +2151,86 @@
               "revision": "sha256:45a7673ea36c1a8117f268481278d78e76b9721c4ea7c2a4f7d8533af49e50b7",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "textured-pei-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
+        }
+      ],
+      "build_plates": [
+        {
+          "id": "smooth-cool-plate",
+          "display_name": "Smooth Cool Plate",
+          "display_name_zh": "光滑的低温打印床",
+          "project_value": "Cool Plate",
+          "plate_value": "Cool Plate",
+          "sidecar_value": "cool_plate",
+          "image": "build_plates/bed_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:ec9e479ca9e0a3f6cd1b34bd0d6df8f01310cb1582c93af059e058b9ac3430ee"
+        },
+        {
+          "id": "engineering-plate",
+          "display_name": "Engineering Plate",
+          "display_name_zh": "工程耗材热床",
+          "project_value": "Engineering Plate",
+          "plate_value": "Engineering Plate",
+          "sidecar_value": "eng_plate",
+          "image": "build_plates/bed_engineering.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_engineering.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:b5b312435337c4d2ecad1cc34bec7c30f935b22bc34706f0d233b5881017d663"
+        },
+        {
+          "id": "smooth-high-temp-plate",
+          "display_name": "Smooth High Temp Plate",
+          "display_name_zh": "光滑高温打印热床",
+          "project_value": "High Temp Plate",
+          "plate_value": "High Temp Plate",
+          "sidecar_value": "hot_plate",
+          "image": "build_plates/bed_high_templ.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_high_templ.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:80b041086db7c12a8a6ed6fcd6f9529e36e94587d6728bad4695bccebcd6b847"
+        },
+        {
+          "id": "textured-pei-plate",
+          "display_name": "Textured PEI Plate",
+          "display_name_zh": "纹理PEI热床",
+          "project_value": "Textured PEI Plate",
+          "plate_value": "Textured PEI Plate",
+          "sidecar_value": "textured_plate",
+          "image": "build_plates/bed_pei.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:183612b224eed2ae82a2895051240347e38556c985f29620318fe871b225c6c6"
+        },
+        {
+          "id": "textured-cool-plate",
+          "display_name": "Textured Cool Plate",
+          "display_name_zh": "纹理的低温打印床",
+          "project_value": "Textured Cool Plate",
+          "plate_value": "Textured Cool Plate",
+          "sidecar_value": "textured_cool_plate",
+          "image": "build_plates/bed_pei_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:d02ac630d91af8d5092b77f9f2ecfe3e90079cce2cf30f247bf0d14af481bb65"
+        },
+        {
+          "id": "supertack-plate",
+          "display_name": "Cool Plate (SuperTack)",
+          "display_name_zh": "低温打印板（超强粘附）",
+          "project_value": "Supertack Plate",
+          "plate_value": "Supertack Plate",
+          "sidecar_value": "supertack_plate",
+          "image": "build_plates/bed_cool_supertack.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool_supertack.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:76052da6aa89bbfbaeed24840172ef64ace64d488ee324658455d24438f22ea2"
         }
       ]
     },
@@ -1575,7 +2261,16 @@
               "revision": "sha256:9160121867ffa16fef55ad67eed0a67b0faca7f42bd8edda5bc329b37762c117",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-1-max",
@@ -1595,7 +2290,16 @@
               "revision": "sha256:cd7fd5775f00227a6dbee1aaff1406a949aa48e8ed9871c0686b9d0014d90d2e",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-1-plus",
@@ -1615,7 +2319,16 @@
               "revision": "sha256:f137117c94ffd531d00490bbeddb3b1316eb8f59b7429591dbb59fc95ac2cc1e",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-2",
@@ -1635,7 +2348,16 @@
               "revision": "sha256:4bb1a22f6cb607d7195d5e15321f30764f6e4e25bfe53847b070a447fb3e9f06",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-2-max",
@@ -1655,7 +2377,16 @@
               "revision": "sha256:46b7878583a015c0afd2172d538ecd3d29f4757cf3a1c2cc50c48e99a6dfdb9c",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-2-neo",
@@ -1675,7 +2406,16 @@
               "revision": "sha256:1fbfb5c6fdeaf2150d0deb91977a20454147952a2b73c34f460bf2439f541177",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-2-plus",
@@ -1695,7 +2435,16 @@
               "revision": "sha256:3a695b91838e4e80ecc843dc43e7bb65ce5bf07cb8eb353cddb75c1d844a8008",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-2-pro",
@@ -1715,7 +2464,16 @@
               "revision": "sha256:802651e0d36a0a840a3947a61818be751da06dd8e1821cc56a0235e277ae0304",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-3",
@@ -1759,7 +2517,16 @@
               "revision": "sha256:c73d5549e08b7e9134fc1a639fe26982b6ff2ebf13b81114df676e8edc12ae5b",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-3-max",
@@ -1795,7 +2562,16 @@
               "revision": "sha256:4fdcd7976edf780bb569283ff582d1c11bcc320b0d269cc6945c5e8ff10c2f3d",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-3-v2",
@@ -1839,7 +2615,16 @@
               "revision": "sha256:6a647456336964852bcd80b2079a15ec059632174c170eebd967bb871365d662",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-4",
@@ -1883,7 +2668,16 @@
               "revision": "sha256:0c6a68296ebef7b2a451da30cf6f613ce50a6bacb18ca452299334ec8846cdce",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-s1",
@@ -1927,7 +2721,15 @@
               "revision": "sha256:7b0daa0d4bf115f8600eb48a79eb5901e2fd4772e1e2ff78e8ec9b3870d56469",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-s1-max",
@@ -1971,7 +2773,16 @@
               "revision": "sha256:baf18104d8860b931cb5dc817c2f0267d7a53d15698a4fe4a11dbfd08058844e",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-x",
@@ -2015,10 +2826,93 @@
               "revision": "sha256:72f30d27f011be6327ee5c699e978a6776a51a8e7ae5d2c1cc5827b4af367ef0",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         }
       ],
-      "client_version": "1.4.1.2 20260604104233"
+      "client_version": "1.4.1.2 20260604104233",
+      "build_plates": [
+        {
+          "id": "smooth-cool-plate",
+          "display_name": "Cool Plate",
+          "display_name_zh": "低温打印板",
+          "project_value": "Cool Plate",
+          "plate_value": "Cool Plate",
+          "sidecar_value": "cool_plate",
+          "image": "build_plates/bed_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:ec9e479ca9e0a3f6cd1b34bd0d6df8f01310cb1582c93af059e058b9ac3430ee"
+        },
+        {
+          "id": "engineering-plate",
+          "display_name": "Engineering Plate",
+          "display_name_zh": "工程材料打印板",
+          "project_value": "Engineering Plate",
+          "plate_value": "Engineering Plate",
+          "sidecar_value": "eng_plate",
+          "image": "build_plates/bed_engineering.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_engineering.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:b5b312435337c4d2ecad1cc34bec7c30f935b22bc34706f0d233b5881017d663"
+        },
+        {
+          "id": "smooth-high-temp-plate",
+          "display_name": "High Temp Plate",
+          "display_name_zh": "光滑高温打印热床",
+          "project_value": "High Temp Plate",
+          "plate_value": "High Temp Plate",
+          "sidecar_value": "hot_plate",
+          "image": "build_plates/bed_high_templ.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_high_templ.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:80b041086db7c12a8a6ed6fcd6f9529e36e94587d6728bad4695bccebcd6b847"
+        },
+        {
+          "id": "textured-pei-plate",
+          "display_name": "Textured PEI Plate",
+          "display_name_zh": "纹理 PEI 打印板",
+          "project_value": "Textured PEI Plate",
+          "plate_value": "Textured PEI Plate",
+          "sidecar_value": "textured_plate",
+          "image": "build_plates/bed_pei.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:183612b224eed2ae82a2895051240347e38556c985f29620318fe871b225c6c6"
+        },
+        {
+          "id": "textured-cool-plate",
+          "display_name": "Textured Cool Plate",
+          "display_name_zh": "增稳低温打印板",
+          "project_value": "Textured Cool Plate",
+          "plate_value": "Textured Cool Plate",
+          "sidecar_value": "textured_cool_plate",
+          "image": "build_plates/bed_pei_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:d02ac630d91af8d5092b77f9f2ecfe3e90079cce2cf30f247bf0d14af481bb65"
+        },
+        {
+          "id": "supertack-plate",
+          "display_name": "Cool Plate (SuperTack)",
+          "display_name_zh": "低温打印板（SuperTack）",
+          "project_value": "Supertack Plate",
+          "plate_value": "Supertack Plate",
+          "sidecar_value": "supertack_plate",
+          "image": "build_plates/bed_cool_supertack.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool_supertack.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:76052da6aa89bbfbaeed24840172ef64ace64d488ee324658455d24438f22ea2"
+        }
+      ]
     },
     {
       "slicer_id": "FlashStudio",
@@ -2055,7 +2949,16 @@
               "revision": "sha256:eb2db708a32c0a0cd4321e9476ca1509cd682b1a62c552c13d4e026d51bcdad0",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "FlashStudio:flashforge:flashforge-creator-5",
@@ -2083,7 +2986,16 @@
               "revision": "sha256:66c185dfc74c9403ccd745380c660d315453d5ab60524eb9edeec14c9982ee60",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "FlashStudio:flashforge:flashforge-creator-5-pro",
@@ -2111,7 +3023,16 @@
               "revision": "sha256:0137bf2510d8d92f06f18b83e07ab6d971b92d75c6cd7f6c510d1b7da2a3e1f2",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "FlashStudio:flashforge:flashforge-guider-3-ultra",
@@ -2131,7 +3052,9 @@
               "revision": "sha256:e85f3618040edbdf7dec9125ce7dbf76f57a5a2b19b0cf9e8bc044d507bcfcc2",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [],
+          "default_build_plate_id": ""
         },
         {
           "machine_profile_id": "FlashStudio:flashforge:flashforge-guider4",
@@ -2159,7 +3082,16 @@
               "revision": "sha256:7cbadd0c783f685942c9914d9262791aff8ebfb155ff2cbf27ac632ce2cf314d",
               "supported": true
             }
-          ]
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
         },
         {
           "machine_profile_id": "FlashStudio:flashforge:flashforge-guider4-pro",
@@ -2187,10 +3119,209 @@
               "revision": "sha256:aabf7d1dde6636f5ac3e9bc30c38523d50cdb28b53443ce272c07b0f986df4fc",
               "supported": true
             }
+          ],
+          "supported_build_plate_ids": [
+            "smooth-cool-plate",
+            "engineering-plate",
+            "smooth-high-temp-plate",
+            "textured-pei-plate",
+            "textured-cool-plate",
+            "supertack-plate"
+          ],
+          "default_build_plate_id": "textured-pei-plate"
+        }
+      ],
+      "client_version": "",
+      "build_plates": [
+        {
+          "id": "smooth-cool-plate",
+          "display_name": "Smooth Cool Plate",
+          "display_name_zh": "光滑的低温打印床",
+          "project_value": "Cool Plate",
+          "plate_value": "Cool Plate",
+          "sidecar_value": "cool_plate",
+          "image": "build_plates/bed_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:ec9e479ca9e0a3f6cd1b34bd0d6df8f01310cb1582c93af059e058b9ac3430ee"
+        },
+        {
+          "id": "engineering-plate",
+          "display_name": "Engineering Plate",
+          "display_name_zh": "工程材料热床",
+          "project_value": "Engineering Plate",
+          "plate_value": "Engineering Plate",
+          "sidecar_value": "eng_plate",
+          "image": "build_plates/bed_engineering.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_engineering.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:b5b312435337c4d2ecad1cc34bec7c30f935b22bc34706f0d233b5881017d663"
+        },
+        {
+          "id": "smooth-high-temp-plate",
+          "display_name": "Smooth High Temp Plate",
+          "display_name_zh": "光滑高温打印热床",
+          "project_value": "High Temp Plate",
+          "plate_value": "High Temp Plate",
+          "sidecar_value": "hot_plate",
+          "image": "build_plates/bed_high_templ.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_high_templ.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:80b041086db7c12a8a6ed6fcd6f9529e36e94587d6728bad4695bccebcd6b847"
+        },
+        {
+          "id": "textured-pei-plate",
+          "display_name": "Textured PEI Plate",
+          "display_name_zh": "纹理PEI热床",
+          "project_value": "Textured PEI Plate",
+          "plate_value": "Textured PEI Plate",
+          "sidecar_value": "textured_plate",
+          "image": "build_plates/bed_pei.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:183612b224eed2ae82a2895051240347e38556c985f29620318fe871b225c6c6"
+        },
+        {
+          "id": "textured-cool-plate",
+          "display_name": "Textured Cool Plate",
+          "display_name_zh": "纹理的低温打印床",
+          "project_value": "Textured Cool Plate",
+          "plate_value": "Textured Cool Plate",
+          "sidecar_value": "textured_cool_plate",
+          "image": "build_plates/bed_pei_cool.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_pei_cool.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:d02ac630d91af8d5092b77f9f2ecfe3e90079cce2cf30f247bf0d14af481bb65"
+        },
+        {
+          "id": "supertack-plate",
+          "display_name": "Cool Plate (SuperTack)",
+          "display_name_zh": "低温打印板（超强粘附）",
+          "project_value": "Supertack Plate",
+          "plate_value": "Supertack Plate",
+          "sidecar_value": "supertack_plate",
+          "image": "build_plates/bed_cool_supertack.png",
+          "source_path": "LuminaStudio:generated/build_plates/bed_cool_supertack.png",
+          "source_version": "lumina-neutral-v1",
+          "revision": "sha256:76052da6aa89bbfbaeed24840172ef64ace64d488ee324658455d24438f22ea2"
+        }
+      ]
+    },
+    {
+      "slicer_id": "QIDIStudio",
+      "display_name": "QIDI Studio",
+      "source_kind": "local_install",
+      "source_version": "02.07.02.60",
+      "profile_format": "bambu_orca",
+      "application_metadata": "QIDIStudio-02.07.02.60",
+      "sidecar_policy": "qidi_studio",
+      "machines": [
+        {
+          "machine_profile_id": "QIDIStudio:qidi:q2",
+          "display_name": "Q2",
+          "brand": "QIDI",
+          "vendor_key": "Q Series",
+          "bed_width": 270,
+          "bed_depth": 270,
+          "bed_height": 256,
+          "thumbnail": "slicers/QIDIStudio/02.07.02.60/assets/q2_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "QIDIStudio:qidi:q2:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Q2 0.2 nozzle",
+              "template": "slicers/QIDIStudio/02.07.02.60/metadata_templates/q2_0_2.json",
+              "revision": "sha256:3720ca449065bb7af66c96f60886f0d46fe48f055a0d19f9124875ee36cf76f4",
+              "supported": true
+            },
+            {
+              "device_profile_id": "QIDIStudio:qidi:q2:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Q2 0.4 nozzle",
+              "template": "slicers/QIDIStudio/02.07.02.60/metadata_templates/q2_0_4.json",
+              "revision": "sha256:43e37eb7d191a980394932065bc62b45af69795fd5ecccdc4a76e6e6678dde37",
+              "supported": true
+            }
+          ]
+        },
+        {
+          "machine_profile_id": "QIDIStudio:qidi:q2c",
+          "display_name": "Q2C",
+          "brand": "QIDI",
+          "vendor_key": "Q Series",
+          "bed_width": 270,
+          "bed_depth": 270,
+          "bed_height": 256,
+          "thumbnail": "slicers/QIDIStudio/02.07.02.60/assets/q2c_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "QIDIStudio:qidi:q2c:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "Q2C 0.2 nozzle",
+              "template": "slicers/QIDIStudio/02.07.02.60/metadata_templates/q2c_0_2.json",
+              "revision": "sha256:21e5321310fb95ba21740ba5a5656eeb36f3b35db6f45755a4b0b7c42aa60861",
+              "supported": true
+            },
+            {
+              "device_profile_id": "QIDIStudio:qidi:q2c:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Q2C 0.4 nozzle",
+              "template": "slicers/QIDIStudio/02.07.02.60/metadata_templates/q2c_0_4.json",
+              "revision": "sha256:2e1ab2e85ae95087f8aaa7ab46e2ea02f68524e5b4fb5fc8c211e9ed7ded7eac",
+              "supported": true
+            }
+          ]
+        },
+        {
+          "machine_profile_id": "QIDIStudio:qidi:x-max-4",
+          "display_name": "X-Max 4",
+          "brand": "QIDI",
+          "vendor_key": "X 4 Series",
+          "bed_width": 390,
+          "bed_depth": 390,
+          "bed_height": 340,
+          "thumbnail": "slicers/QIDIStudio/02.07.02.60/assets/x-max-4_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "QIDIStudio:qidi:x-max-4:0.2",
+              "nozzle_size": "0.2",
+              "source_profile_name": "X-Max 4 0.2 nozzle",
+              "template": "slicers/QIDIStudio/02.07.02.60/metadata_templates/x-max-4_0_2.json",
+              "revision": "sha256:af44af53057fbfadb27b8d3b4092ce185781ddf4288e02b634f392730fd1bc7e",
+              "supported": true
+            },
+            {
+              "device_profile_id": "QIDIStudio:qidi:x-max-4:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "X-Max 4 0.4 nozzle",
+              "template": "slicers/QIDIStudio/02.07.02.60/metadata_templates/x-max-4_0_4.json",
+              "revision": "sha256:de1aa06641a5436a5e8ae3917445db267aadd40e524d3f31526ae0a46740ae46",
+              "supported": true
+            }
+          ]
+        },
+        {
+          "machine_profile_id": "QIDIStudio:qidi:x-plus-5",
+          "display_name": "X-Plus 5",
+          "brand": "QIDI",
+          "vendor_key": "X 5 Series",
+          "bed_width": 320,
+          "bed_depth": 320,
+          "bed_height": 300,
+          "thumbnail": "slicers/QIDIStudio/02.07.02.60/assets/x-plus-5_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "QIDIStudio:qidi:x-plus-5:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "X-Plus 5 0.4 nozzle",
+              "template": "slicers/QIDIStudio/02.07.02.60/metadata_templates/x-plus-5_0_4.json",
+              "revision": "sha256:aeb2ad1d89353e543f05efc86ce81ef0d4938680540c1acab5a356b25b9b931b",
+              "supported": true
+            }
           ]
         }
       ],
-      "client_version": ""
+      "client_version": "02.07.02.60"
     }
   ]
 }

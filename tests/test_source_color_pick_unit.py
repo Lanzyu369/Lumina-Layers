@@ -74,7 +74,7 @@ def _seed_artifact_preview_session(store: SessionStore, tmp_path) -> str:
     return sid
 
 
-def test_source_color_pick_returns_original_source_color_after_replacement(
+def test_source_color_pick_returns_current_visible_color_after_replacement(
     client_with_store: tuple[TestClient, SessionStore],
 ) -> None:
     client, store = client_with_store
@@ -87,12 +87,12 @@ def test_source_color_pick_returns_original_source_color_after_replacement(
 
     assert response.status_code == 200
     assert response.json() == {
-        "source_matched_hex": "#ff0000",
+        "source_matched_hex": "#0000ff",
         "quantized_hex": "#f00808",
     }
 
 
-def test_source_color_pick_reads_original_from_artifact_cache(
+def test_source_color_pick_reads_current_visible_color_from_artifact_cache(
     client_with_store: tuple[TestClient, SessionStore],
     tmp_path,
 ) -> None:
@@ -112,7 +112,7 @@ def test_source_color_pick_reads_original_from_artifact_cache(
 
     assert response.status_code == 200
     assert response.json() == {
-        "source_matched_hex": "#ff0000",
+        "source_matched_hex": "#0000ff",
         "quantized_hex": "#f00808",
     }
 

@@ -828,6 +828,8 @@ class RecipeOverrideApplyResponse(DynamicMaterialResultResponse):
     source: str
     runtime_mode_key: str | None = None
     override_count: int = 0
+    can_undo: bool = False
+    can_redo: bool = False
 
 
 class RegionRecipeEntry(BaseModel):
@@ -903,6 +905,8 @@ class ColorReplaceResponse(DynamicMaterialResultResponse):
     preview_url: str
     preview_3d_url: str | None = None
     replacement_count: int
+    can_undo: bool = False
+    can_redo: bool = False
 
 
 class MergePreviewResponse(BaseModel):
@@ -925,6 +929,7 @@ class GenerateResponse(_NoPublic3mfDiskPathMixin):
     download_url: str
     preview_3d_url: Optional[str] = None
     threemf_disk_path: Optional[str] = None
+    warnings: list[str] = Field(default_factory=list)
     performance_timing: Optional[PerformanceTimingResponse] = None
 
 
@@ -1213,3 +1218,5 @@ class ResetReplacementsResponse(DynamicMaterialResultResponse):
     message: str
     preview_url: str
     preview_glb_url: str | None = None
+    can_undo: bool = False
+    can_redo: bool = False

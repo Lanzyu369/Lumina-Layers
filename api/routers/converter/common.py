@@ -20,6 +20,7 @@ from api.preview_cache_artifacts import (
     hydrate_preview_cache,
     is_preview_cache_artifact_ref,
 )
+from api.selection_state import RECIPE_OVERRIDE_APPLIED_MASKS_KEY
 from api.session_store import SessionStore
 from api.structured_logging import bind_session_id, get_logger
 from config import PrinterConfig
@@ -48,6 +49,11 @@ from .source_validation import (
 
 EPHEMERAL_PREVIEW_TTL_SECONDS = 600
 BATCH_DOWNLOAD_TTL_SECONDS = 3600
+# Canonical definition lives in api.selection_state (importable by
+# replacement_history without router-layer cycles); imported above and
+# re-exported so converter routers keep a single import site.
+# 规范定义在 api.selection_state（replacement_history 可无环导入）；顶部
+# 导入后由此再导出，转换器路由仍从单一入口导入。
 VECTOR_NATIVE_REQUIRES_SVG_ERROR = "vector_native_requires_svg"
 MODEL_SURFACE_PUBLIC_ERROR_MESSAGES: dict[str, str] = {
     MODEL_SURFACE_EMPTY_GEOMETRY: (
@@ -103,7 +109,8 @@ REGION_SELECTION_REQUIRED_DETAIL = (
     "then try again."
 )
 GRADIENT_REGION_METADATA_UNAVAILABLE_DETAIL = (
-    "Gradient region data is unavailable. Re-run preview and try again."
+    "Gradient region data is unavailable: gradient_region_id_map is missing. "
+    "Re-run preview and try again."
 )
 GRADIENT_REGION_METADATA_STALE_DETAIL = (
     "Gradient region data no longer matches the preview. Re-run preview and try again."
@@ -650,6 +657,11 @@ def _validate_material_archive_relief_minimum_height(
 
 
 def _handle_core_error(e: Exception, context: str) -> NoReturn:
+    # Recoverable admission errors are already logged once at the rejecting
+    # core guard.  Re-logging them with a traceback here would turn an expected
+    # 422 into duplicate ERROR telemetry.
+    if bool(getattr(e, "recoverable", False)):
+        raise to_http_exception(e, context)
     log.exception(
         "Converter operation failed",
         extra={

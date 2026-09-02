@@ -202,7 +202,7 @@ export function computeArtworkPlacementDragUpdate({
   if (tool === "move") {
     const nextOffset: Numeric2 = [
       startPlacement.offset_x_mm + currentPoint[0] - startPoint[0],
-      startPlacement.offset_y_mm - (currentPoint[1] - startPoint[1]),
+      startPlacement.offset_y_mm + currentPoint[1] - startPoint[1],
     ];
     const snappedOffset = surfaceBounds && artworkSizeMm
       ? snapArtworkOffsetToSurfaceEdges({

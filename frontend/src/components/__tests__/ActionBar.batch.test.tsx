@@ -75,6 +75,7 @@ describe("ActionBar — auto batch mode", () => {
       modelUrl: null,
       threemfDiskPath: null,
       downloadUrl: null,
+      generateWarnings: [],
     });
     vi.mocked(recipeImportFlow.exportShareCard).mockResolvedValue(undefined);
     vi.mocked(recipeImportFlow.exportSidecar).mockResolvedValue(undefined);
@@ -94,6 +95,20 @@ describe("ActionBar — auto batch mode", () => {
     expect(screen.getByText("预览")).toBeInTheDocument();
     expect(screen.getByText("生成")).toBeInTheDocument();
     expect(screen.queryByText("批量生成")).not.toBeInTheDocument();
+  });
+
+  it("shows a mandatory manual-adjustment warning for a generated wipe tower conflict", () => {
+    useConverterStore.setState({
+      downloadUrl: "/api/files/model.3mf",
+      generateWarnings: ["wipe_tower_manual_adjustment_required"],
+    });
+
+    render(<ActionBar />);
+
+    expect(screen.getByText("打印前必须手动调整擦料塔")).toBeInTheDocument();
+    expect(
+      screen.getByText(/没有缩小模型，也没有关闭擦料塔/),
+    ).toBeInTheDocument();
   });
 
   // --- BatchMode (batchFiles has items → batchMode true) ---
@@ -364,7 +379,7 @@ describe("ActionBar — auto batch mode", () => {
     expect(screen.queryByText(/成功.*总计/)).not.toBeInTheDocument();
   });
 
-  it("renders cumulative multi-select overlay on top of the current highlighted preview image", () => {
+  it("does not duplicate the authoritative selection overlay in the action-bar thumbnail", () => {
     useConverterStore.setState({
       selectionMode: "multi-select",
       sessionId: "session-1",
@@ -395,8 +410,8 @@ describe("ActionBar — auto batch mode", () => {
 
     const previewImage = screen.getByRole("img", { name: "预览结果" });
     expect(previewImage).toHaveAttribute("data-src", "/api/files/highlight-last-region");
-    expect(screen.getByTestId("preview-multi-select-overlay")).toBeInTheDocument();
-    expect(screen.getAllByTestId("preview-multi-select-polygon")).toHaveLength(1);
+    expect(screen.queryByTestId("preview-multi-select-overlay")).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId("preview-multi-select-polygon")).toHaveLength(0);
   });
 
   it("redraws the 2D hover magnifier after the preview buffer image loads asynchronously", async () => {
@@ -571,7 +586,7 @@ describe("ActionBar — auto batch mode", () => {
     render(<ActionBar />);
 
     expect(screen.getByRole("button", { name: "导出分享卡" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "导出 JSON" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "保存项目" })).toBeDisabled();
     expect(
       screen.getByText("模型覆面暂不支持配方导出，因为配方无法包含上传模型和选面。"),
     ).toBeInTheDocument();
@@ -653,7 +668,7 @@ describe("ActionBar — auto batch mode", () => {
 
     render(<ActionBar />);
 
-    fireEvent.click(screen.getByRole("button", { name: "导出 JSON" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存项目" }));
 
     await waitFor(() => {
       expect(

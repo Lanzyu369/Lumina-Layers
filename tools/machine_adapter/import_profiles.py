@@ -13,10 +13,16 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from config import format_native_nozzle_size
+from tools.machine_adapter.build_plates import (
+    copy_native_build_plate_assets,
+    intersect_machine_build_plate_scopes,
+    resolve_machine_build_plates,
+)
 from tools.machine_adapter.emitter import build_device_registry_entry
 from tools.machine_adapter.providers import get_provider
 from tools.machine_adapter.resolver import (
     ResolvedMachineProfile,
+    resolve_machine_model_settings,
     resolve_machine_profiles,
 )
 
@@ -30,6 +36,13 @@ _ELEGOO_CENTAURI_MODELS = {
 _SNAPMAKER_U1_MODEL = "snapmaker u1"
 _MAX_THUMBNAIL_DIMENSION = 1000
 _FLASHSTUDIO_MAX_SUPPORTED_NOZZLE_MM = 0.4
+_QIDI_STUDIO_SUPPORTED_MODELS = {
+    "q2",
+    "q2c",
+    "x-max 4",
+    "x-plus 5",
+}
+_QIDI_STUDIO_MAX_SUPPORTED_NOZZLE_MM = 0.4
 
 
 @dataclass(frozen=True)
@@ -253,6 +266,46 @@ def _select_flashstudio_multicolor_profiles(
     )
 
 
+def _select_qidi_studio_profiles(
+    profiles: list[ResolvedMachineProfile],
+    *,
+    source_root: Path,
+    vendor_key: str,
+) -> list[ResolvedMachineProfile]:
+    """Select QIDI Box-capable models and their native <=0.4 mm presets.
+
+    以 QIDI Studio 02.07.02.60 的正式 ``machine_list`` 为边界，只导入
+    用户提供原生 3MF 样例覆盖的 Q2、Q2C、X-Max 4 与 X-Plus 5。喷嘴口径
+    继续以软件清单为准，并遵守 Lumina 不支持大于 0.4 mm 的边界。
+    """
+
+    registered_names = _registered_machine_profile_names(
+        source_root=source_root,
+        vendor_key=vendor_key,
+    )
+    if not registered_names:
+        return []
+
+    selected: list[ResolvedMachineProfile] = []
+    for profile in profiles:
+        if profile.name.strip().casefold() not in registered_names:
+            continue
+        model_key = _profile_model_key(profile.name, profile.settings)
+        if model_key not in _QIDI_STUDIO_SUPPORTED_MODELS:
+            continue
+        nozzle_size = _profile_nozzle_size(profile)
+        if float(nozzle_size) > _QIDI_STUDIO_MAX_SUPPORTED_NOZZLE_MM:
+            continue
+        selected.append(profile)
+    return sorted(
+        selected,
+        key=lambda profile: (
+            _profile_model_key(profile.name, profile.settings),
+            float(_profile_nozzle_size(profile)),
+        ),
+    )
+
+
 def _should_import_profile(
     *,
     provider_id: str,
@@ -337,6 +390,7 @@ def run_import(
     machine_name: str | None = None,
     application_metadata: str | None = None,
     client_version: str | None = None,
+    build_plate_source_roots: dict[str, Path] | None = None,
 ) -> ImportResult:
     source = ImportSource(
         slicer_id=slicer_id,
@@ -350,6 +404,7 @@ def run_import(
     slicer_payload, templates, device_count = _collect_import_payload(
         source,
         output_root=output_root,
+        build_plate_source_roots=build_plate_source_roots,
     )
     _write_import_payload(output_root=output_root, slicers=[slicer_payload], templates=templates)
     return ImportResult(device_count=device_count)
@@ -360,6 +415,7 @@ def _collect_import_payload(
     *,
     output_root: Path,
     asset_roots: tuple[AssetRoot, ...] = (),
+    build_plate_source_roots: dict[str, Path] | None = None,
 ) -> tuple[dict[str, Any], list[tuple[str, dict[str, Any]]], int]:
     slicer_id = source.slicer_id
     source_root = source.source_root
@@ -367,7 +423,16 @@ def _collect_import_payload(
     vendor_keys = source.vendor_keys
     machine_name = source.machine_name
     provider = get_provider(slicer_id)
+    build_plates = copy_native_build_plate_assets(
+        slicer_id=provider.slicer_id,
+        source_root=source_root,
+        source_version=source_version,
+        output_root=output_root,
+        source_roots=build_plate_source_roots,
+    )
+    available_build_plate_ids = {str(plate["id"]) for plate in build_plates}
     machines: dict[str, dict[str, Any]] = {}
+    machine_plate_resolutions: dict[str, list[tuple[list[str], str]]] = {}
     templates: list[tuple[str, dict[str, Any]]] = []
     seen_device_profile_ids: set[str] = set()
     seen_template_paths: set[str] = set()
@@ -379,6 +444,12 @@ def _collect_import_payload(
             continue
         if provider.slicer_id == "FlashStudio" and vendor_key.casefold() == "flashforge":
             profiles = _select_flashstudio_multicolor_profiles(
+                profiles,
+                source_root=source_root,
+                vendor_key=vendor_key,
+            )
+        elif provider.slicer_id == "QIDIStudio":
+            profiles = _select_qidi_studio_profiles(
                 profiles,
                 source_root=source_root,
                 vendor_key=vendor_key,
@@ -416,6 +487,29 @@ def _collect_import_payload(
                 output_root=output_root,
                 asset_roots=asset_roots,
             )
+            machine_model_settings = resolve_machine_model_settings(
+                root=source_root,
+                vendor_key=profile.vendor_key,
+                printer_model=str(
+                    profile.settings.get("printer_model") or entry["display_name"]
+                ),
+            )
+            build_plate_settings = {
+                **machine_model_settings,
+                **profile.settings,
+            }
+            supported_build_plate_ids, default_build_plate_id = (
+                resolve_machine_build_plates(
+                    slicer_id=provider.slicer_id,
+                    settings=build_plate_settings,
+                    available_plate_ids=available_build_plate_ids,
+                    source_version=source_version,
+                    machine_profile_id=machine_id,
+                )
+            )
+            machine_plate_resolutions.setdefault(machine_id, []).append(
+                (supported_build_plate_ids, default_build_plate_id)
+            )
             machine = machines.setdefault(
                 machine_id,
                 {
@@ -427,6 +521,8 @@ def _collect_import_payload(
                     "bed_depth": entry["bed_depth"],
                     "bed_height": entry["bed_height"],
                     "thumbnail": thumbnail or entry["thumbnail"],
+                    "supported_build_plate_ids": supported_build_plate_ids,
+                    "default_build_plate_id": default_build_plate_id,
                     "nozzles": [],
                 },
             )
@@ -441,6 +537,13 @@ def _collect_import_payload(
                 }
             )
             templates.append((template_path, template))
+
+    for machine_id, resolutions in machine_plate_resolutions.items():
+        supported_build_plate_ids, default_build_plate_id = (
+            intersect_machine_build_plate_scopes(resolutions)
+        )
+        machines[machine_id]["supported_build_plate_ids"] = supported_build_plate_ids
+        machines[machine_id]["default_build_plate_id"] = default_build_plate_id
 
     if source.application_metadata is not None:
         application_metadata = source.application_metadata
@@ -465,6 +568,7 @@ def _collect_import_payload(
         "profile_format": provider.profile_format,
         "application_metadata": application_metadata,
         "sidecar_policy": provider.sidecar_policy,
+        "build_plates": build_plates,
         "machines": list(machines.values()),
     }
     if client_version is not None:
@@ -518,11 +622,15 @@ def run_import_sources(
         for vendor_key in source.vendor_keys
     )
     all_asset_roots = (*source_asset_roots, *asset_search_roots)
+    build_plate_source_roots = {
+        source.slicer_id: source.source_root for source in sources
+    }
     for source in sources:
         slicer_payload, source_templates, source_device_count = _collect_import_payload(
             source,
             output_root=output_root,
             asset_roots=all_asset_roots,
+            build_plate_source_roots=build_plate_source_roots,
         )
         if source_device_count == 0:
             continue

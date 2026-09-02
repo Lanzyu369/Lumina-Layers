@@ -46,6 +46,7 @@ from api.schemas.system import (
 )
 from api.session_store import SessionStore
 from api.structured_logging import get_logger
+from core.machine_registry import resolve_machine_registry_root
 
 router = APIRouter(prefix="/api/system", tags=["System"])
 log = get_logger(__name__)
@@ -240,7 +241,7 @@ def _try_load_machine_registry():
     """Load optional generated machine registry, returning None on absence/failure.
     加载可选的生成机器注册表；不存在或读取失败时返回 None。
     """
-    registry_root = Path(os.environ.get("LUMINA_MACHINE_REGISTRY_DIR", "machine_registry"))
+    registry_root = resolve_machine_registry_root()
     registry_path = registry_root / "registry.json"
     if not registry_path.exists():
         return None
@@ -325,18 +326,57 @@ def _registry_machines_by_key() -> dict[tuple[str, str], dict[str, object]]:
         profiles.append(
             DeviceProfileInfo(
                 device_profile_id=device.device_profile_id,
+                machine_profile_id=device.machine_profile_id,
                 slicer_id=device.slicer_id,
                 nozzle_size=device.nozzle_size,
                 source_profile_name=device.source_profile_name,
                 revision=device.revision,
                 supported=device.supported,
+                build_plates=[
+                    {
+                        "id": plate.id,
+                        "display_name": plate.display_name,
+                        "display_name_zh": plate.display_name_zh,
+                        "image_url": (
+                            "/api/system/machine-registry/assets/" + plate.image
+                        ),
+                    }
+                    for plate in device.build_plates
+                ],
+                default_build_plate_id=device.default_build_plate_id,
             )
         )
     return machines_by_key
 
 
 def _machine_registry_root() -> Path:
-    return Path(os.environ.get("LUMINA_MACHINE_REGISTRY_DIR", "machine_registry")).resolve()
+    return resolve_machine_registry_root()
+
+
+def _first_existing_registry_thumbnail(*candidates: object) -> str:
+    registry_root = _machine_registry_root().resolve()
+    for candidate in candidates:
+        relative_value = str(candidate or "").strip()
+        if not relative_value:
+            continue
+        relative_path = Path(relative_value)
+        if relative_path.is_absolute():
+            continue
+        requested = (registry_root / relative_path).resolve()
+        try:
+            inside_registry = (
+                os.path.commonpath([str(registry_root), str(requested)])
+                == str(registry_root)
+            )
+        except ValueError:
+            inside_registry = False
+        if not inside_registry:
+            continue
+        if requested.suffix.lower() not in MACHINE_REGISTRY_ASSET_MEDIA_TYPES:
+            continue
+        if requested.is_file():
+            return relative_path.as_posix()
+    return ""
 
 
 def _purge_subdir(subdir: str) -> tuple[int, int]:
@@ -669,7 +709,10 @@ def get_printers() -> PrinterListResponse:
                 bed_height=p.bed_height,
                 supported_nozzle_sizes=unique_nozzles,
                 supported_slicers=unique_slicers,
-                thumbnail=str(registry_machine.get("thumbnail") or p.thumbnail),
+                thumbnail=_first_existing_registry_thumbnail(
+                    registry_machine.get("thumbnail"),
+                    p.thumbnail,
+                ),
                 device_profiles=registry_device_profiles,
             )
         )
@@ -705,7 +748,9 @@ def get_printers() -> PrinterListResponse:
                 supported_slicers=_unique_preserve_order(
                     [profile.slicer_id for profile in device_profiles]
                 ),
-                thumbnail=str(registry_machine.get("thumbnail") or ""),
+                thumbnail=_first_existing_registry_thumbnail(
+                    registry_machine.get("thumbnail"),
+                ),
                 device_profiles=device_profiles,
             )
         )

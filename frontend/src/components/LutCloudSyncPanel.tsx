@@ -18,9 +18,9 @@ import { tRuntime } from "../i18n/runtime";
 import Button from "./ui/Button";
 import {
   StatusBanner,
-  mutedSectionCardClass,
+  cardPadClass,
   resolvePanelSurfaceClass,
-  resolveSectionCardClass,
+  wellPadClass,
 } from "./ui/panelPrimitives";
 
 const CLOUD_LUT_PAGE_SIZE = 100;
@@ -263,7 +263,7 @@ export default function LutCloudSyncPanel() {
       data-testid="lut-cloud-sync-panel"
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
     >
-      <section className={`${mutedSectionCardClass} grid gap-4 px-4 py-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center`}>
+      <section className={`${cardPadClass} grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center`}>
         <div className="min-w-0">
           <p className="text-sm font-semibold text-slate-900 dark:text-slate-50">
             {t("lut_sync_title")}
@@ -334,7 +334,7 @@ export default function LutCloudSyncPanel() {
         </StatusBanner>
       )}
 
-      <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}>
+      <section className={`${cardPadClass} flex flex-col gap-4`}>
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <label className="min-w-0 flex-1">
             <span className="sr-only">{t("lut_sync_search_placeholder")}</span>
@@ -343,7 +343,7 @@ export default function LutCloudSyncPanel() {
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
               placeholder={t("lut_sync_search_placeholder")}
-              className="min-h-11 w-full rounded-[22px] border border-slate-200/80 bg-[var(--surface-panel)] px-4 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] transition-all duration-200 hover:border-slate-300 focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:text-slate-100 dark:hover:border-slate-600"
+              className="min-h-11 w-full rounded-[10px] border border-slate-200/80 bg-[var(--surface-panel)] px-4 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] transition-all duration-200 hover:border-slate-300 focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:text-slate-100 dark:hover:border-slate-600"
             />
           </label>
           {hasMoreCatalogEntries && (
@@ -363,7 +363,7 @@ export default function LutCloudSyncPanel() {
         ) : filteredItems.length === 0 ? (
           <div
             data-testid="lut-cloud-empty"
-            className="rounded-[22px] border border-dashed border-slate-300/80 px-4 py-8 text-center text-sm text-slate-500 dark:border-slate-700/80 dark:text-slate-400"
+            className={`${wellPadClass} py-8 text-center text-sm text-slate-500 dark:text-slate-400`}
           >
             {t("lut_sync_catalog_empty")}
           </div>
@@ -389,12 +389,12 @@ export default function LutCloudSyncPanel() {
                 <article
                   key={installKey}
                   data-testid="lut-cloud-catalog-card"
-                  className="relative flex min-w-0 flex-col gap-4 rounded-[22px] border border-slate-200/80 bg-[var(--surface-panel)] p-4 shadow-[var(--shadow-control)] dark:border-slate-800/80"
+                  className={`${wellPadClass} relative flex min-w-0 flex-col gap-4 p-4`}
                 >
                   {entry.channel === "official" ? (
                     <span
                       data-testid="lut-cloud-official-badge"
-                      className="absolute right-3 top-3 rounded-bl-xl rounded-tr-2xl border border-amber-300/80 bg-amber-100 px-2 py-1 text-[11px] font-bold text-amber-800 shadow-sm dark:border-amber-400/40 dark:bg-amber-400/15 dark:text-amber-100"
+                      className="absolute right-3 top-3 rounded-bl-lg rounded-tr-[10px] bg-amber-100 px-2 py-1 text-[11px] font-bold text-amber-800 dark:bg-amber-400/15 dark:text-amber-100"
                     >
                       {t("mat_sync_official_badge")}
                     </span>

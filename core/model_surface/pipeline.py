@@ -22,7 +22,18 @@ from core.model_surface.slot_meshing import (
     build_printable_footprint_from_voxels,
     build_slot_box_scene_from_voxels,
 )
-from core.model_surface.types import ModelSurfaceError, SurfaceFootprint
+from core.model_surface.types import (
+    MODEL_SURFACE_FATAL_ERRORS,
+    ModelSurfaceError,
+    SurfaceFootprint,
+)
+
+
+# Shapely materializes one Polygon object per upward cap triangle before its
+# union. Independent RSS probes reached 26.811x the retained scene arrays, so
+# keep a conservative, stage-specific margin instead of reusing the writer's
+# much smaller workspace factor.
+_MODEL_SURFACE_VECTOR_FOOTPRINT_WORKSPACE_MULTIPLIER = 32.0
 
 
 def build_surface_overlay_scene(
@@ -51,7 +62,16 @@ def build_surface_overlay_scene(
     )
     if ctx.get("error"):
         raise ModelSurfaceError(str(ctx["error"]))
-    pattern_scene = _build_pattern_scene(ctx)
+    face_orientation = str(ctx.get("bambu_face_orientation", "down") or "down")
+    pattern_scene = _build_pattern_scene(
+        ctx,
+        _take_vector_scene_ownership=True,
+    )
+    # This context is private to the model-surface request. Pattern building
+    # has either transferred the native mesh arrays or materialized the voxel
+    # pattern, so retaining converter analysis/cache state only inflates peak
+    # RSS during the boolean and writer stages.
+    ctx.clear()
     if len(pattern_scene.geometry) == 0:
         raise ModelSurfaceError("Converter did not produce an overlay pattern scene.")
     overlay = build_embedded_overlay_scene(
@@ -61,20 +81,30 @@ def build_surface_overlay_scene(
         pocket_depth_mm=pocket_depth_mm,
         base_slot_name="surface_base",
         base_color=(245, 245, 245),
+        _take_pattern_ownership=True,
     )
     transformed_overlay = apply_model_transform_to_overlay_scene(
         overlay,
         model_transform,
+        _copy_scene=False,
     )
     return orient_overlay_scene_for_print(
         transformed_overlay,
-        str(ctx.get("bambu_face_orientation", "down") or "down"),
+        face_orientation,
+        _copy_scene=False,
     )
 
 
-def _build_pattern_scene(ctx: dict) -> PreparedSurfacePattern:
+def _build_pattern_scene(
+    ctx: dict,
+    *,
+    _take_vector_scene_ownership: bool = False,
+) -> PreparedSurfacePattern:
     if ctx.get("is_svg_vector"):
-        return _build_vector_pattern_scene(ctx)
+        return _build_vector_pattern_scene(
+            ctx,
+            _take_scene_ownership=_take_vector_scene_ownership,
+        )
 
     full_matrix = ctx.get("full_matrix")
     slot_names = ctx.get("slot_names")
@@ -126,11 +156,19 @@ def _build_pattern_scene(ctx: dict) -> PreparedSurfacePattern:
     raise ModelSurfaceError("Converter did not produce a display voxel stack.")
 
 
-def _build_vector_pattern_scene(ctx: dict) -> PreparedSurfacePattern:
+def _build_vector_pattern_scene(
+    ctx: dict,
+    *,
+    _take_scene_ownership: bool = False,
+) -> PreparedSurfacePattern:
     """Extract native vector color layers for model-surface assembly."""
 
-    source_scene = ctx.get("scene")
-    analysis = ctx.get("vector_analysis")
+    if _take_scene_ownership:
+        source_scene = ctx.pop("scene", None)
+        analysis = ctx.pop("vector_analysis", None)
+    else:
+        source_scene = ctx.get("scene")
+        analysis = ctx.get("vector_analysis")
     if not isinstance(source_scene, trimesh.Scene) or analysis is None:
         raise ModelSurfaceError(
             "Converter did not produce a native vector pattern scene."
@@ -143,7 +181,7 @@ def _build_vector_pattern_scene(ctx: dict) -> PreparedSurfacePattern:
         if not isinstance(mesh, trimesh.Trimesh) or len(mesh.faces) == 0:
             continue
         pattern_scene.add_geometry(
-            mesh.copy(),
+            mesh if _take_scene_ownership else mesh.copy(),
             node_name=name,
             geom_name=name,
         )
@@ -191,11 +229,14 @@ def _build_vector_pattern_scene(ctx: dict) -> PreparedSurfacePattern:
         # The native vector engine has already prepared its single-sided
         # scene for direct face-down export. Normalize it back to a face-up
         # local pattern before embedding; the assembled model receives the
-        # final rigid face-down rotation as one unit.
+        # final rigid face-down rotation as one unit. Vector export now keeps
+        # its X/Y placement out of mesh vertices, so both axes live in the
+        # negative local quadrant here. Restore the historical model-surface
+        # canvas without changing the standalone 3MF writer-domain contract.
         normalize_for_embedding = np.asarray(
             [
-                [-1.0, 0.0, 0.0, logical_width_mm],
-                [0.0, 1.0, 0.0, 0.0],
+                [-1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, logical_height_mm],
                 [0.0, 0.0, -1.0, pattern_bounds[0, 2] + pattern_bounds[1, 2]],
                 [0.0, 0.0, 0.0, 1.0],
             ],
@@ -205,7 +246,16 @@ def _build_vector_pattern_scene(ctx: dict) -> PreparedSurfacePattern:
             if isinstance(geometry, trimesh.Trimesh):
                 geometry.apply_transform(normalize_for_embedding)
         pattern_bounds = np.asarray(pattern_scene.bounds, dtype=np.float64)
-    elif face_orientation != "up":
+    elif face_orientation == "up":
+        # Up-facing vector scenes still use the translation-free SVG Y flip.
+        # Bring that local negative Y canvas back to the model-surface frame.
+        normalize_for_embedding = np.eye(4, dtype=np.float64)
+        normalize_for_embedding[1, 3] = logical_height_mm
+        for geometry in pattern_scene.geometry.values():
+            if isinstance(geometry, trimesh.Trimesh):
+                geometry.apply_transform(normalize_for_embedding)
+        pattern_bounds = np.asarray(pattern_scene.bounds, dtype=np.float64)
+    else:
         raise ModelSurfaceError(
             "Model-surface overlay requires a single display face."
         )
@@ -225,6 +275,16 @@ def _build_vector_pattern_scene(ctx: dict) -> PreparedSurfacePattern:
         logical_width_mm,
         logical_height_mm,
     )
+    if _take_scene_ownership:
+        from core.vector_engine import _enforce_vector_scene_export_headroom
+
+        _enforce_vector_scene_export_headroom(
+            pattern_scene,
+            stage="model_surface_vector_footprint",
+            workspace_multiplier=(
+                _MODEL_SURFACE_VECTOR_FOOTPRINT_WORKSPACE_MULTIPLIER
+            ),
+        )
     printable_footprint = _build_scene_printable_footprint(pattern_scene)
     return PreparedSurfacePattern(
         scene=pattern_scene,
@@ -261,6 +321,8 @@ def _build_scene_printable_footprint(
             if not slot_footprint.is_empty:
                 slot_footprints.append(slot_footprint)
         footprint = shapely.union_all(slot_footprints)
+    except MODEL_SURFACE_FATAL_ERRORS:
+        raise
     except Exception as exc:
         raise ModelSurfaceError(
             "Converter produced an invalid native vector footprint."

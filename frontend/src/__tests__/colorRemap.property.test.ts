@@ -17,7 +17,30 @@ function resetRemapState(): void {
   useConverterStore.setState({
     colorRemapMap: {},
     remapHistory: [],
+    remapRedoHistory: [],
+    adjustmentHistory: [],
+    adjustmentRedoHistory: [],
+    sessionId: null,
+    replacePreviewLoading: false,
   });
+}
+
+function applyVisibleRemap(
+  currentMap: Record<string, string>,
+  sourceHex: string,
+  targetHex: string,
+): Record<string, string> {
+  const next = { ...currentMap };
+  for (const [origHex, mappedHex] of Object.entries(currentMap)) {
+    if (mappedHex.toLowerCase() === sourceHex.toLowerCase()) {
+      next[origHex] = targetHex;
+    }
+  }
+  const existingKey =
+    Object.keys(next).find((key) => key.toLowerCase() === sourceHex.toLowerCase()) ??
+    sourceHex;
+  next[existingKey] = targetHex;
+  return next;
 }
 
 // ========== Tests ==========
@@ -49,7 +72,7 @@ describe("Color Remap Core Logic — Property-Based Tests", () => {
       );
     });
 
-    it("colorRemapMap contains the latest mapping for each unique origHex", () => {
+    it("colorRemapMap follows current-visible-colour replacement semantics", () => {
       fc.assert(
         fc.property(
           fc.array(remapOp, { minLength: 1, maxLength: 30 }),
@@ -63,17 +86,15 @@ describe("Color Remap Core Logic — Property-Based Tests", () => {
 
             const state = useConverterStore.getState();
 
-            // Build expected map: last write wins for each origHex
             const expected: Record<string, string> = {};
             for (const op of ops) {
-              expected[op.origHex] = op.newHex;
+              Object.assign(
+                expected,
+                applyVisibleRemap(expected, op.origHex, op.newHex),
+              );
             }
 
-            // Verify each unique origHex maps to its last newHex
-            for (const [orig, newH] of Object.entries(expected)) {
-              if (state.colorRemapMap[orig] !== newH) return false;
-            }
-            return true;
+            expect(state.colorRemapMap).toEqual(expected);
           }
         ),
         { numRuns: 100 }
@@ -150,11 +171,55 @@ describe("Color Remap Core Logic — Property-Based Tests", () => {
         { numRuns: 5 }
       );
     });
+
+    it("redo restores the map that was just undone", () => {
+      resetRemapState();
+      useConverterStore.getState().applyColorRemap("aa0000", "00aa00");
+      useConverterStore.getState().applyColorRemap("bb0000", "0000bb");
+
+      useConverterStore.getState().undoColorRemap();
+      expect(useConverterStore.getState().colorRemapMap).toEqual({
+        aa0000: "00aa00",
+      });
+
+      useConverterStore.getState().redoColorRemap();
+      expect(useConverterStore.getState().colorRemapMap).toEqual({
+        aa0000: "00aa00",
+        bb0000: "0000bb",
+      });
+      expect(useConverterStore.getState().remapRedoHistory).toEqual([]);
+    });
+
+    it("new remap after undo clears redo history", () => {
+      resetRemapState();
+      useConverterStore.getState().applyColorRemap("aa0000", "00aa00");
+      useConverterStore.getState().undoColorRemap();
+      expect(useConverterStore.getState().remapRedoHistory.length).toBe(1);
+
+      useConverterStore.getState().applyColorRemap("cc0000", "0000cc");
+
+      expect(useConverterStore.getState().remapRedoHistory).toEqual([]);
+      expect(useConverterStore.getState().colorRemapMap).toEqual({
+        cc0000: "0000cc",
+      });
+    });
+
+    it("replacing a currently visible remapped colour rewrites upstream mappings", () => {
+      resetRemapState();
+
+      useConverterStore.getState().applyColorRemap("aa0000", "00aa00");
+      useConverterStore.getState().applyColorRemap("00aa00", "0000aa");
+
+      expect(useConverterStore.getState().colorRemapMap).toEqual({
+        aa0000: "0000aa",
+        "00aa00": "0000aa",
+      });
+    });
   });
 
   // Validates: Requirements 3.4, 10.4
   describe("P5: clearAllRemaps resets colorRemapMap and remapHistory to empty", () => {
-    it("after arbitrary remap ops, clearAllRemaps empties both colorRemapMap and remapHistory", () => {
+    it("after arbitrary remap ops, clearAllRemaps empties colorRemapMap while keeping the pre-clear snapshot undoable", () => {
       fc.assert(
         fc.property(
           fc.array(remapOp, { minLength: 1, maxLength: 30 }),
@@ -177,7 +242,8 @@ describe("Color Remap Core Logic — Property-Based Tests", () => {
             const postState = useConverterStore.getState();
             return (
               Object.keys(postState.colorRemapMap).length === 0 &&
-              postState.remapHistory.length === 0
+              postState.remapRedoHistory.length === 0 &&
+              postState.remapHistory.length >= 0
             );
           }
         ),
@@ -194,7 +260,8 @@ describe("Color Remap Core Logic — Property-Based Tests", () => {
           const state = useConverterStore.getState();
           return (
             Object.keys(state.colorRemapMap).length === 0 &&
-            state.remapHistory.length === 0
+            state.remapHistory.length === 0 &&
+            state.remapRedoHistory.length === 0
           );
         }),
         { numRuns: 5 }

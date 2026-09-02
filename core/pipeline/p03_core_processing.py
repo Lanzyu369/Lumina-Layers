@@ -867,11 +867,14 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     from core.pipeline.s03_color_replacement import (
         _apply_dynamic_material_archive_color_replacements,
         _apply_material_archive_color_replacements,
-        _normalize_color_replacements_input,
+        _normalize_replayed_color_replacements_input,
     )
 
-    effective_color_replacements = _normalize_color_replacements_input(
-        ctx.get("replacement_regions")
+    effective_color_replacements = _normalize_replayed_color_replacements_input(
+        ctx.get("replacement_regions"),
+        matched_rgb,
+        quantized_image,
+        mask_solid,
     )
     applied_replacements = 0
     if effective_color_replacements:
@@ -1087,15 +1090,70 @@ def run(ctx: dict) -> dict:
     material_matrix = result['material_matrix']
     mask_solid = result['mask_solid']
     target_w, target_h = result['dimensions']
+    quantized_image = result.get('quantized_image')
+
+    # Preserve pristine arrays for reset/undo and relief-height identity, then
+    # replay only portable whole-image mappings into the current preview.
+    # 先保存重置/撤销与浮雕高度身份所需的原始数组，再把可移植的全图改色
+    # 应用到当前预览。局部选区仍只属于原会话，不在这里重建。
+    has_portable_replacements = bool(
+        ctx.get("replacement_regions") and quantized_image is not None
+    )
+    original_matched_rgb = (
+        np.array(matched_rgb, dtype=np.uint8, copy=True)
+        if has_portable_replacements
+        else np.asarray(matched_rgb, dtype=np.uint8)
+    )
+    original_material_matrix = (
+        np.array(material_matrix, copy=True)
+        if has_portable_replacements
+        else np.asarray(material_matrix)
+    )
+    if has_portable_replacements:
+        from core.pipeline.s03_color_replacement import (
+            _normalize_replayed_color_replacements_input,
+        )
+        from core.color_replacement import ColorReplacementManager
+
+        replacements = _normalize_replayed_color_replacements_input(
+            ctx.get("replacement_regions"),
+            matched_rgb,
+            quantized_image,
+            mask_solid,
+        )
+        if replacements:
+            manager = ColorReplacementManager.from_dict(replacements)
+            previous_matched_rgb = matched_rgb
+            matched_rgb = manager.apply_to_image(previous_matched_rgb)
+            for source_hex, target_hex in replacements.items():
+                source_rgb = ColorReplacementManager._hex_to_color(source_hex)
+                source_mask = np.all(previous_matched_rgb == source_rgb, axis=-1)
+                source_mask &= mask_solid
+                if not np.any(source_mask):
+                    continue
+                target_rgb = ColorReplacementManager._hex_to_color(target_hex)
+                target_lab = processor._rgb_to_lab(
+                    np.array([target_rgb], dtype=np.uint8)
+                )
+                _, lut_index = processor.kdtree.query(target_lab)
+                material_matrix[source_mask] = processor.ref_stacks[lut_index[0]]
 
     # ---- 写入输出 ----
     ctx['matched_rgb'] = matched_rgb
     ctx['material_matrix'] = material_matrix
+    ctx['original_matched_rgb'] = original_matched_rgb
+    ctx['height_identity_rgb'] = original_matched_rgb
+    ctx['original_material_matrix'] = original_material_matrix
     ctx['mask_solid'] = mask_solid
     ctx['target_w'] = target_w
     ctx['target_h'] = target_h
     ctx['debug_data'] = result.get('debug_data') if isinstance(result, dict) else None
-    ctx['quantized_image'] = result.get('quantized_image')
+    ctx['quantized_image'] = quantized_image
+    if quantized_image is not None:
+        ctx['original_quantized_image'] = np.asarray(
+            quantized_image,
+            dtype=np.uint8,
+        )
     ctx['lut_match_info'] = getattr(processor, 'last_match_info', None)
     _elapsed = time.perf_counter() - _t0
     ctx.setdefault('_preview_timings', {})['p03_s'] = _elapsed

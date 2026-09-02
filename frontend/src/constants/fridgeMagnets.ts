@@ -206,6 +206,6 @@ export function resolveFridgeMagnetSpacerThick(
   return clampFridgeMagnetValue(
     Math.max(baseSpacerThick, requiredSpacerThick),
     0.2,
-    3.5,
+    10,
   );
 }

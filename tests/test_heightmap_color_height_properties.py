@@ -17,6 +17,7 @@ from hypothesis import strategies as st
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from config import PrinterConfig
+from core.heightmap_loader import HeightmapLoader
 
 # Constants
 BASE_THICKNESS: float = PrinterConfig.LAYER_HEIGHT  # 0.08mm
@@ -36,7 +37,7 @@ def compute_color_height_map(
     average grayscale value at those positions, and map to a height in
     [base_thickness, max_relief_height].
 
-    Formula: height = max_relief_height - (avg_gray / 255.0) * (max_relief_height - base_thickness)
+    Formula: height = base_thickness + (avg_gray / 255.0) * (max_relief_height - base_thickness)
 
     Args:
         grayscale: (H, W) uint8 grayscale heightmap (already resized to match matched_rgb).
@@ -50,6 +51,11 @@ def compute_color_height_map(
         Dict mapping hex key (6-char lowercase, no '#') to height in mm.
     """
     color_height_map: dict[str, float] = {}
+    height_matrix = HeightmapLoader._map_grayscale_to_height(
+        grayscale,
+        max_relief_height,
+        base_thickness,
+    )
 
     for entry in palette:
         color_rgb = np.array(entry["color"], dtype=np.uint8)
@@ -63,8 +69,7 @@ def compute_color_height_map(
             color_height_map[hex_key] = base_thickness
             continue
 
-        avg_gray = float(np.mean(grayscale[color_mask]))
-        height = max_relief_height - (avg_gray / 255.0) * (max_relief_height - base_thickness)
+        height = float(np.mean(height_matrix[color_mask]))
         color_height_map[hex_key] = round(height, 4)
 
     return color_height_map
@@ -149,7 +154,7 @@ def test_heightmap_color_height_bounded(data):
     For any valid grayscale heightmap and palette, the color_height_map
     computed from the heightmap should satisfy:
     (a) Every height value is in [base_thickness, max_relief_height]
-    (b) The height equals max_relief_height - (avg_gray / 255.0) * (max_relief_height - base_thickness)
+    (b) The height equals base_thickness + (avg_gray / 255.0) * (max_relief_height - base_thickness)
         where avg_gray is the mean grayscale at matching pixel positions
     """
     grayscale, matched_rgb, palette, max_relief_height, mask_solid = data
@@ -196,7 +201,9 @@ def test_heightmap_color_height_bounded(data):
             )
         else:
             avg_gray = float(np.mean(grayscale[color_mask]))
-            expected_height = max_relief_height - (avg_gray / 255.0) * (max_relief_height - BASE_THICKNESS)
+            expected_height = BASE_THICKNESS + (avg_gray / 255.0) * (
+                max_relief_height - BASE_THICKNESS
+            )
             expected_rounded = round(expected_height, 4)
             assert abs(height - expected_rounded) < 1e-4, (
                 f"Color {hex_key}: height {height:.4f} != expected {expected_rounded:.4f} "

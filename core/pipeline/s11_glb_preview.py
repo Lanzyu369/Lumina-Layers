@@ -129,50 +129,6 @@ def _get_v2_mesh_kernel_modules():
     return rio_shapes, m3d
 
 
-def _clone_outline_geometry_for_glb(outline_geometry: object) -> Optional[trimesh.Trimesh]:
-    """Return a safe GLB-export copy of cached vector outline geometry.
-    返回可安全导出到 GLB 的矢量外轮廓网格副本。
-
-    Vector preview caches store the outline as a ``trimesh.Trimesh`` generated
-    from SVG shape geometry. ``generate_segmented_glb`` owns the preview GLB
-    scene, so it must copy that mesh instead of mutating cache state shared by
-    downstream preview/generate code.
-    矢量预览缓存中的外轮廓来自 SVG 几何；这里复制后再加入 GLB，避免修改缓存。
-    """
-    if outline_geometry is None:
-        return None
-
-    try:
-        if isinstance(outline_geometry, trimesh.Trimesh):
-            outline_mesh = outline_geometry.copy()
-        else:
-            vertices = np.asarray(getattr(outline_geometry, "vertices"), dtype=float)
-            faces = np.asarray(getattr(outline_geometry, "faces"), dtype=np.int64)
-            outline_mesh = trimesh.Trimesh(
-                vertices=vertices.copy(),
-                faces=faces.copy(),
-                process=False,
-            )
-    except (AttributeError, TypeError, ValueError):
-        return None
-
-    if len(outline_mesh.vertices) == 0 or len(outline_mesh.faces) == 0:
-        return None
-
-    try:
-        face_colors = np.asarray(outline_mesh.visual.face_colors, dtype=np.uint8)
-    except (AttributeError, TypeError, ValueError):
-        face_colors = np.empty((0, 4), dtype=np.uint8)
-    if face_colors.ndim != 2 or face_colors.shape[0] != len(outline_mesh.faces):
-        outline_mesh.visual.face_colors = np.tile(
-            np.array([245, 245, 245, 255], dtype=np.uint8),
-            (len(outline_mesh.faces), 1),
-        )
-
-    outline_mesh.metadata["name"] = "Outline"
-    return outline_mesh
-
-
 def _v2_available(log_warning: bool = True) -> bool:
     """Return True if the v2 stack (``rasterio.features`` + ``manifold3d``) imports.
 
@@ -1371,10 +1327,6 @@ def generate_segmented_glb(
               that differs from the visible colour pixels. SVG/vector preview
               caches use this to keep the GLB backing aligned with the native
               vector ``Board`` mesh.
-            - outline_geometry: optional ``trimesh.Trimesh`` generated from
-              SVG/vector shape geometry. When present, it is copied into the
-              preview GLB as the ``Outline`` node so the user-visible 3D
-              preview matches the requested outline setting.
             - target_w, target_h: pixel dimensions
             - target_width_mm: physical width in mm; missing/null legacy
               values fall back to ``PrinterConfig.NOZZLE_WIDTH`` per pixel.
@@ -1771,29 +1723,6 @@ def generate_segmented_glb(
             _log.debug(f"Backing plate added ({backing_mesh.vertices.shape[0]} vertices)")
         _t_backing = time.perf_counter() - _t
 
-        # 4.6 Add vector outline geometry when the preview branch supplied it.
-        # The outline source remains the SVG shape union created upstream; S11
-        # only copies that mesh into the GLB scene so the 3D preview reflects
-        # the same outline the generate/export branch already uses.
-        # 若矢量预览分支提供了 outline mesh，这里只复制进 GLB，不重新推断几何来源。
-        _t = time.perf_counter()
-        outline_mesh = _clone_outline_geometry_for_glb(cache.get("outline_geometry"))
-        if outline_mesh is not None:
-            scene.add_geometry(
-                outline_mesh,
-                node_name="Outline",
-                geom_name="Outline",
-            )
-            _log.debug(
-                "Vector outline added to segmented GLB preview",
-                extra={
-                    "event": "segmented_glb_outline_added",
-                    "vertex_count": int(len(outline_mesh.vertices)),
-                    "face_count": int(len(outline_mesh.faces)),
-                },
-            )
-        _t_outline = time.perf_counter() - _t
-
         _t = time.perf_counter()
         canvas_bounds_mesh = _build_preview_canvas_bounds_mesh(
             width=width,
@@ -1827,7 +1756,6 @@ def generate_segmented_glb(
             "mask_build_s": _t_mask_build,
             "mesh_loop_s": _t_mesh_loop,
             "backing_s": _t_backing,
-            "outline_s": _t_outline,
             "canvas_bounds_s": _t_canvas_bounds,
             "export_s": _t_export,
             "total_s": _t_glb_total,
@@ -1837,7 +1765,7 @@ def generate_segmented_glb(
             f"Timing: downsample={_t_downsample:.2f}s, "
             f"unique={_t_unique:.2f}s, merge={_t_merge:.2f}s, mask_build={_t_mask_build:.2f}s, "
             f"mesh_loop={_t_mesh_loop:.2f}s, backing={_t_backing:.2f}s, "
-            f"outline={_t_outline:.2f}s, canvas_bounds={_t_canvas_bounds:.2f}s, "
+            f"canvas_bounds={_t_canvas_bounds:.2f}s, "
             f"export={_t_export:.2f}s, total={_t_glb_total:.2f}s"
         )
         return glb_path
@@ -1927,49 +1855,6 @@ def generate_realtime_glb(cache: dict, output_path: str) -> Optional[str]:
         return None
 
 
-def _should_export_pipeline_scene_for_glb(ctx: dict) -> bool:
-    """Return whether S11 should reuse the final pipeline scene for preview."""
-
-    return (
-        bool(ctx.get("enable_relief"))
-        and str(ctx.get("height_mode") or "").lower() == "heightmap"
-        and isinstance(ctx.get("scene"), trimesh.Scene)
-    )
-
-
-def _export_pipeline_scene_glb(ctx: dict, output_path: str) -> Optional[str]:
-    """Export the already-built pipeline scene for heightmap relief preview."""
-
-    scene = ctx.get("scene")
-    geometry_count = int(len(scene.geometry)) if isinstance(scene, trimesh.Scene) else 0
-    if not isinstance(scene, trimesh.Scene) or len(scene.geometry) == 0:
-        _log.warning(
-            "Heightmap relief GLB preview scene is unavailable",
-            extra={
-                "event": "heightmap_relief_glb_scene_unavailable",
-                "has_scene": isinstance(scene, trimesh.Scene),
-                "geometry_count": geometry_count,
-            },
-        )
-        return None
-
-    try:
-        scene.export(output_path, file_type="glb")
-    except (OSError, ValueError, TypeError, RuntimeError) as exc:
-        _log.warning(
-            "Heightmap relief scene GLB export failed",
-            extra={
-                "event": "heightmap_relief_glb_export_failed",
-                "error_type": type(exc).__name__,
-                "error_message": str(exc),
-                "geometry_count": geometry_count,
-            },
-        )
-        return None
-
-    return output_path if os.path.exists(output_path) else None
-
-
 def run(ctx: dict) -> dict:
     """Generate GLB 3D preview for the converted model.
     为转换后的模型生成 GLB 3D 预览。
@@ -1986,9 +1871,6 @@ def run(ctx: dict) -> dict:
         - loop_added (bool): 挂件环是否已添加
         - image_path (str): 原始图像路径
         - modeling_mode (ModelingMode): 建模模式
-        - enable_outline (bool): 启用描边
-        - outline_width (float): 描边宽度
-        - outline_added (bool): 描边是否已添加
         - target_h (int): 图像高度（像素）
         - transform (np.ndarray): 4x4 变换矩阵
         - preview_glb_path (str | None): 可复用的已生成预览 GLB 路径
@@ -1999,7 +1881,10 @@ def run(ctx: dict) -> dict:
     _t0 = time.perf_counter()
 
     reusable_glb_path = ctx.get("preview_glb_path")
-    if isinstance(reusable_glb_path, str) and os.path.exists(reusable_glb_path):
+    if (
+        isinstance(reusable_glb_path, str)
+        and os.path.exists(reusable_glb_path)
+    ):
         _prog = ctx.get("progress")
         if _prog is not None:
             _prog(0.90, "复用 3D 预览中... | Reusing 3D preview...")
@@ -2031,17 +1916,14 @@ def run(ctx: dict) -> dict:
         "target_h": height,
         "target_width_mm": target_width_mm,
     }
-    if _should_export_pipeline_scene_for_glb(ctx):
-        glb_path = _export_pipeline_scene_glb(ctx, out_path)
-    else:
-        if bool(ctx.get("high_precision_3d_preview", False)):
-            try:
-                glb_mesh_budget = int(ctx.get("quantize_colors") or 0)
-            except (TypeError, ValueError):
-                glb_mesh_budget = 0
-            if glb_mesh_budget > 128:
-                cache["glb_max_meshes"] = glb_mesh_budget
-        glb_path = generate_segmented_glb(cache, output_path=out_path)
+    if bool(ctx.get("high_precision_3d_preview", False)):
+        try:
+            glb_mesh_budget = int(ctx.get("quantize_colors") or 0)
+        except (TypeError, ValueError):
+            glb_mesh_budget = 0
+        if glb_mesh_budget > 128:
+            cache["glb_max_meshes"] = glb_mesh_budget
+    glb_path = generate_segmented_glb(cache, output_path=out_path)
 
     ctx["glb_path"] = glb_path
 

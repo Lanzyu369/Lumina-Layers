@@ -33,7 +33,7 @@ import tempfile
 import uuid
 import xml.etree.ElementTree as ET
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -296,6 +296,10 @@ class _SourceAssembly:
     per_item_model_basename: str
     min_x: float
     min_y: float
+    max_x: float
+    max_y: float
+    min_z: float
+    max_z: float
     source_assembly_part_metadata: ET.Element | None
     source_plate_metadata: ET.Element | None
     component_transforms: tuple[str, ...]
@@ -351,6 +355,19 @@ def _apply_transform_xy(
     x = m[0] * vx + m[1] * vy + m[2] * vz + m[9]
     y = m[3] * vx + m[4] * vy + m[5] * vz + m[10]
     return x, y
+
+
+def _apply_transform_xyz(
+    matrix: list[float], vx: float, vy: float, vz: float
+) -> tuple[float, float, float]:
+    """Apply a 3x4 row-major affine transform and return all coordinates."""
+
+    m = matrix
+    return (
+        m[0] * vx + m[1] * vy + m[2] * vz + m[9],
+        m[3] * vx + m[4] * vy + m[5] * vz + m[10],
+        m[6] * vx + m[7] * vy + m[8] * vz + m[11],
+    )
 
 
 def _validate_slots(slots: Sequence[MaterialSlot]) -> None:
@@ -516,6 +533,10 @@ def _parse_source_assembly(item_idx: int, item: MergedItem) -> _SourceAssembly:
             # applying source component transforms to each vertex.
             min_x = float("inf")
             min_y = float("inf")
+            max_x = float("-inf")
+            max_y = float("-inf")
+            min_z = float("inf")
+            max_z = float("-inf")
             for comp_idx, (_, obj) in enumerate(ordered_mesh_objs):
                 mesh = obj.find(_qname_core("mesh"))
                 if mesh is None:
@@ -543,12 +564,32 @@ def _parse_source_assembly(item_idx: int, item: MergedItem) -> _SourceAssembly:
                             f"vertex coordinate ({x_str!r}, {y_str!r})"
                         ) from exc
                     # Apply component transform to vertex
-                    tx, ty = _apply_transform_xy(transform_matrix, vx, vy, vz)
+                    tx, ty, tz = _apply_transform_xyz(
+                        transform_matrix,
+                        vx,
+                        vy,
+                        vz,
+                    )
                     if tx < min_x:
                         min_x = tx
                     if ty < min_y:
                         min_y = ty
-            if min_x == float("inf") or min_y == float("inf"):
+                    if tx > max_x:
+                        max_x = tx
+                    if ty > max_y:
+                        max_y = ty
+                    if tz < min_z:
+                        min_z = tz
+                    if tz > max_z:
+                        max_z = tz
+            if (
+                min_x == float("inf")
+                or min_y == float("inf")
+                or max_x == float("-inf")
+                or max_y == float("-inf")
+                or min_z == float("inf")
+                or max_z == float("-inf")
+            ):
                 raise MergedWriteError(
                     f"MergedItem[{item_idx}].source_3mf_path has no vertices to "
                     "compute XY bbox"
@@ -617,6 +658,10 @@ def _parse_source_assembly(item_idx: int, item: MergedItem) -> _SourceAssembly:
                 per_item_model_basename=os.path.basename(per_item_zip_path),
                 min_x=min_x,
                 min_y=min_y,
+                max_x=max_x,
+                max_y=max_y,
+                min_z=min_z,
+                max_z=max_z,
                 source_assembly_part_metadata=source_assembly_part_md,
                 source_plate_metadata=source_plate_md,
                 component_transforms=tuple(component_transforms),
@@ -750,7 +795,8 @@ def _serialize_per_item_model_n3mf(
 
     doc = builder.build()
     opts = n3mf.WriteOptions()
-    opts.vertex_precision = 6
+    # Match the normal 3MF writer and preserve every float32 vertex value.
+    opts.vertex_precision = 9
     opts.compact_xml = True
 
     # Write to temp file and extract the per-item model bytes.
@@ -967,6 +1013,115 @@ def _first_source_project_settings(
     return None
 
 
+def _infer_printer_id_from_settings(settings: dict[str, Any]) -> str:
+    """Resolve Lumina's printer id from native project-setting labels."""
+
+    from config import list_printer_profiles
+
+    haystack = " ".join(
+        str(settings.get(key) or "")
+        for key in ("printer_model", "printer_settings_id")
+    ).casefold()
+    profiles = sorted(
+        list_printer_profiles(),
+        key=lambda profile: len(profile.display_name),
+        reverse=True,
+    )
+    for profile in profiles:
+        labels = (
+            profile.display_name,
+            profile.id,
+            profile.id.replace("-", " "),
+        )
+        if any(label.casefold() in haystack for label in labels):
+            return profile.id
+    return "bambu-h2d"
+
+
+def _infer_slicer_from_application(application: str | None) -> str:
+    """Resolve the slicer family from the source 3MF application label."""
+
+    label = str(application or "").casefold()
+    if "orca" in label and "snapmaker" not in label:
+        return "OrcaSlicer"
+    if "elegoo" in label:
+        return "ElegooSlicer"
+    if "snapmaker" in label:
+        return "SnapmakerOrca"
+    if "flash" in label:
+        return "FlashStudio"
+    if "anycubic" in label:
+        return "AnycubicSlicerNext"
+    return "BambuStudio"
+
+
+def _build_merged_placement_writer(
+    items: Sequence[MergedItem],
+    assemblies: Sequence[_SourceAssembly],
+    output_path: Path,
+):
+    """Create a metadata writer configured for the merged source machine."""
+
+    from utils.bambu_3mf_writer import BambuStudio3MFWriter
+
+    source_settings = _first_source_project_settings(assemblies) or {}
+    nozzle_size = source_settings.get("nozzle_diameter")
+    if isinstance(nozzle_size, list):
+        nozzle_size = nozzle_size[0] if nozzle_size else None
+    return BambuStudio3MFWriter(
+        output_path=str(output_path),
+        settings=source_settings,
+        color_mode=_color_mode_for_slot_count(
+            len(_collect_project_slots(items))
+        ),
+        printer_id=_infer_printer_id_from_settings(source_settings),
+        slicer=_infer_slicer_from_application(
+            _first_source_root_metadata(assemblies, "Application")
+        ),
+        nozzle_size=nozzle_size,
+        enable_base_layer_height_modifier=False,
+    )
+
+
+def _resolve_merged_wipe_tower_placement(
+    items: Sequence[MergedItem],
+    assemblies: Sequence[_SourceAssembly],
+    output_path: Path,
+):
+    """Solve one tower layout around the complete merged model group."""
+
+    from core.wipe_tower_placement import Rect, solve_wipe_tower_placement
+
+    placement_writer = _build_merged_placement_writer(
+        items,
+        assemblies,
+        output_path,
+    )
+    model_bounds = Rect(
+        min(item.tx_mm for item in items),
+        min(item.ty_mm for item in items),
+        max(item.tx_mm + assembly.max_x - assembly.min_x for item, assembly in zip(items, assemblies)),
+        max(item.ty_mm + assembly.max_y - assembly.min_y for item, assembly in zip(items, assemblies)),
+    )
+    model_height = max(
+        assembly.max_z - assembly.min_z for assembly in assemblies
+    )
+    request = placement_writer._build_wipe_tower_placement_request(
+        placement_writer.settings,
+        model_bounds=model_bounds,
+        model_height=model_height,
+        material_count=len(_collect_project_slots(items)),
+    )
+    if request is None:
+        placement = None
+        translation = (0.0, 0.0)
+    else:
+        request = replace(request, model_translation_locked=True)
+        placement = solve_wipe_tower_placement(request)
+        translation = placement.model_translation
+    return placement_writer, placement, translation
+
+
 def _resize_project_setting_arrays(
     settings: dict[str, Any],
     slot_count: int,
@@ -997,6 +1152,9 @@ def _build_project_settings_bytes_for_merge(
     items: Sequence[MergedItem],
     assemblies: Sequence[_SourceAssembly],
     output_path: Path,
+    *,
+    placement_writer=None,
+    placement=None,
 ) -> bytes:
     """Build non-empty project settings for the merged batch 3MF.
 
@@ -1025,7 +1183,38 @@ def _build_project_settings_bytes_for_merge(
     if settings.get("filament_ids") is not None:
         settings["filament_ids"] = [str(slot.material_id) for slot in project_slots]
     settings.setdefault("single_extruder_multi_material", "1")
-    settings.setdefault("enable_prime_tower", "1")
+    settings["enable_prime_tower"] = "1"
+    printer_settings_id = settings.get("printer_settings_id")
+    if isinstance(printer_settings_id, str) and printer_settings_id.strip():
+        settings["print_compatible_printers"] = [printer_settings_id]
+
+    if placement is not None and placement_writer is not None:
+        settings["wipe_tower_x"] = placement_writer._replace_first_config_number(
+            settings.get("wipe_tower_x"),
+            placement.tower_x,
+        )
+        settings["wipe_tower_y"] = placement_writer._replace_first_config_number(
+            settings.get("wipe_tower_y"),
+            placement.tower_y,
+        )
+        settings["prime_tower_width"] = placement_writer._format_number(
+            placement.tower_width
+        )
+        settings["wipe_tower_rotation_angle"] = placement_writer._format_number(
+            placement.tower_rotation
+        )
+        from utils.bambu_3mf_writer import _normalize_difference_index
+
+        settings["different_settings_to_system"] = _normalize_difference_index(
+            settings.get("different_settings_to_system"),
+            (
+                "wipe_tower_x",
+                "wipe_tower_y",
+                "prime_tower_width",
+                "wipe_tower_rotation_angle",
+                "enable_prime_tower",
+            ),
+        )
 
     colours = settings.get("filament_colour")
     if not isinstance(colours, list) or not colours:
@@ -1188,6 +1377,9 @@ def _build_bambu_metadata_files(
     assembly_object_ids: Sequence[int],
     output_path: Path,
     model_settings_bytes: bytes,
+    *,
+    placement_writer=None,
+    placement=None,
 ) -> dict[str, bytes]:
     """Build all Bambu metadata parts for the merged package."""
 
@@ -1195,7 +1387,11 @@ def _build_bambu_metadata_files(
     metadata_files: dict[str, bytes] = {
         "Metadata/model_settings.config": model_settings_bytes,
         "Metadata/project_settings.config": _build_project_settings_bytes_for_merge(
-            items, assemblies, output_path
+            items,
+            assemblies,
+            output_path,
+            placement_writer=placement_writer,
+            placement=placement,
         ),
         "Metadata/slice_info.config": _first_metadata_part(
             assemblies, "Metadata/slice_info.config"
@@ -1213,6 +1409,12 @@ def _build_bambu_metadata_files(
     custom_gcode = _first_metadata_part(assemblies, "Metadata/custom_gcode_per_layer.xml")
     if custom_gcode is not None:
         metadata_files["Metadata/custom_gcode_per_layer.xml"] = custom_gcode
+
+    if placement_writer is not None:
+        placement_writer._wipe_tower_placement_cache = placement
+        metadata_files[
+            "Metadata/lumina_wipe_tower_placement.json"
+        ] = placement_writer._build_wipe_tower_placement_metadata_bytes()
 
     # Thumbnails are not essential for slicing, but copying existing ones keeps
     # the merged 3MF closer to packages produced by the single writer.
@@ -1406,6 +1608,23 @@ class MergedBambu3MFWriter:
         """
         import neroued_3mf as n3mf
         import uuid as _uuid
+
+        placement_writer, placement, group_translation = (
+            _resolve_merged_wipe_tower_placement(
+                items,
+                assemblies,
+                output_path,
+            )
+        )
+        if group_translation != (0.0, 0.0):
+            items = tuple(
+                replace(
+                    item,
+                    tx_mm=item.tx_mm + group_translation[0],
+                    ty_mm=item.ty_mm + group_translation[1],
+                )
+                for item in items
+            )
 
         N = len(items)
         next_id = 1
@@ -1617,6 +1836,8 @@ class MergedBambu3MFWriter:
             assembly_object_ids,
             output_path,
             config_bytes,
+            placement_writer=placement_writer,
+            placement=placement,
         )
         metadata_paths = list(bambu_metadata_files.keys())
         top_rels_bytes = _build_top_relationships_bytes(metadata_paths)

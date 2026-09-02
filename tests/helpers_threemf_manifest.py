@@ -269,6 +269,17 @@ def expected_family_signature(printer_id: str, slicer: str, nozzle_size: str) ->
             "requires_cut_information": False,
             "requires_custom_gcode": False,
         }
+    if slicer == "QIDIStudio":
+        return {
+            "application": "QIDIStudio-02.07.02.60",
+            "slice_header": {
+                "X-QDT-Client-Type": "slicer",
+                "X-QDT-Client-Version": "02.07.02.60",
+            },
+            "requires_filament_sequence": True,
+            "requires_cut_information": True,
+            "requires_custom_gcode": False,
+        }
     raise ValueError(f"Unsupported slicer family: {slicer}")
 
 

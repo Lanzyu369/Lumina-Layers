@@ -89,6 +89,74 @@ describe("canvasPreviewUtils", () => {
     ).toBeNull()
   })
 
+  it("returns an unclamped flagged sample outside the image when allowOutOfImage is set", () => {
+    // 指针在图像左侧 80px（imageRect.x=100），pixelX 应为未夹取的 -40。
+    const sample = mapPointerToCanvasPreviewHoverSample({
+      clientX: 30,
+      clientY: 60,
+      containerRect: {
+        left: 10,
+        top: 20,
+        width: 400,
+        height: 200,
+      },
+      imageRect: {
+        x: 100,
+        y: 0,
+        width: 200,
+        height: 200,
+      },
+      naturalWidth: 100,
+      naturalHeight: 100,
+      scale: 1,
+      translate: { x: 0, y: 0 },
+      allowOutOfImage: true,
+    })
+
+    expect(sample).toEqual({
+      containerX: 20,
+      containerY: 40,
+      containerWidth: 400,
+      containerHeight: 200,
+      containerLeft: 10,
+      containerTop: 20,
+      pixelX: -40,
+      pixelY: 20,
+      naturalWidth: 100,
+      naturalHeight: 100,
+      isOutOfImage: true,
+    })
+  })
+
+  it("omits the out-of-image flag for in-image samples even when allowOutOfImage is set", () => {
+    const sample = mapPointerToCanvasPreviewHoverSample({
+      clientX: 210,
+      clientY: 120,
+      containerRect: {
+        left: 10,
+        top: 20,
+        width: 400,
+        height: 200,
+      },
+      imageRect: {
+        x: 100,
+        y: 0,
+        width: 200,
+        height: 200,
+      },
+      naturalWidth: 100,
+      naturalHeight: 100,
+      scale: 1,
+      translate: { x: 0, y: 0 },
+      allowOutOfImage: true,
+    })
+
+    expect(sample).not.toBeNull()
+    expect(sample?.isOutOfImage).toBeUndefined()
+    expect(sample?.pixelX).toBe(50)
+    expect(sample?.pixelY).toBe(50)
+  })
+
   it("builds a preview buffer from the loaded image", () => {
     const drawImage = vi.fn()
     const getContext = vi.fn(() => ({ drawImage }))

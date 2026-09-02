@@ -92,11 +92,12 @@ enabled in this distribution deployment.
 ```
 
 该路径通过 `LUMINA_GLB_KERNEL=v2` 启用 `rasterio + manifold3d` 挤出实现；
-如果依赖不可用或运行时失败，后端仍会回退到旧的 Shapely v1 路径。
-这些原生依赖保存在 `requirements-glb-v2.txt`，由 Docker 镜像安装；普通
-`pip install -r requirements.txt` 仍只安装基础依赖；若普通本地安装也要匹配
-当前 v2 性能基准，需额外安装 `requirements-glb-v2.txt`。缺少这些依赖时，
-位图 GLB 路径会带 WARNING 回退 V1。
+如果 `rasterio` 不可用或运行时失败，后端仍会回退到旧的 Shapely v1 路径。
+`manifold3d` 是最终 SVG/vector 3MF 安全挤出的基础依赖，已包含在
+`requirements.txt`；可选的 `rasterio` 保存在 `requirements-glb-v2.txt`，由
+Docker 镜像安装。普通本地安装若也要匹配当前位图 v2 性能基准，需额外安装
+`requirements-glb-v2.txt`。缺少 `rasterio` 时，位图 GLB 路径会带 WARNING
+回退 V1。
 `LUMINA_VECTOR_GLB_KERNEL=v2` 启用 SVG/vector 最终生成链路的 preview GLB
 scene-reuse exporter；遇到不支持的复杂几何时整次回退 V1。
 

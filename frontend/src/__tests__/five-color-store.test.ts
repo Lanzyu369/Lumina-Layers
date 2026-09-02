@@ -93,6 +93,14 @@ function resetStore() {
   });
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 describe("fiveColorStore LUT switching", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -196,6 +204,89 @@ describe("fiveColorStore LUT switching", () => {
         device_profile_id: "BambuStudio:bbl:bambu-lab-h2d:0.2",
       }),
     );
+  });
+
+  it("keeps a newer swatch request active when an old plate response resolves", async () => {
+    const stale = deferred<Awaited<ReturnType<typeof generateRecipeSwatch>>>();
+    const fresh = deferred<Awaited<ReturnType<typeof generateRecipeSwatch>>>();
+    mockGenerateRecipeSwatch
+      .mockReturnValueOnce(stale.promise)
+      .mockReturnValueOnce(fresh.promise);
+    useSettingsStore.setState({
+      ...DEFAULT_SETTINGS,
+      printerModel: "bambu-h2d",
+      slicerSoftware: "BambuStudio",
+      nozzleSize: "0.4",
+      deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.4",
+      buildPlateId: "engineering-plate",
+    });
+    useFiveColorStore.setState({
+      lutName: "test-lut",
+      collectedRecipes: [staleRecipe],
+    });
+
+    const staleRequest = useFiveColorStore.getState().generateSwatch();
+    useSettingsStore
+      .getState()
+      .setBuildPlateForMachine(
+        "BambuStudio:bbl:bambu-lab-h2d",
+        "textured-pei-plate",
+      );
+    const stateAfterPlateChange = useFiveColorStore.getState();
+
+    const freshRequest = useFiveColorStore.getState().generateSwatch();
+    expect(mockGenerateRecipeSwatch.mock.calls[0][0].build_plate_id).toBe(
+      "engineering-plate",
+    );
+    expect(mockGenerateRecipeSwatch.mock.calls[1][0].build_plate_id).toBe(
+      "textured-pei-plate",
+    );
+
+    stale.resolve({
+      status: "ok",
+      message: "stale",
+      download_url: "/api/files/stale-swatch.3mf",
+      preview_url: "/api/files/stale-swatch.png",
+      recipe_count: 1,
+    });
+    await staleRequest;
+    const stateAfterStaleResponse = useFiveColorStore.getState();
+
+    fresh.resolve({
+      status: "ok",
+      message: "fresh",
+      download_url: "/api/files/fresh-swatch.3mf",
+      preview_url: "/api/files/fresh-swatch.png",
+      recipe_count: 1,
+    });
+    await freshRequest;
+
+    expect(stateAfterPlateChange).toMatchObject({
+      isGeneratingSwatch: false,
+      swatchDownloadUrl: null,
+      swatchPreviewUrl: null,
+    });
+    expect(stateAfterStaleResponse).toMatchObject({
+      isGeneratingSwatch: true,
+      swatchDownloadUrl: null,
+      swatchPreviewUrl: null,
+    });
+    expect(useFiveColorStore.getState()).toMatchObject({
+      isGeneratingSwatch: false,
+      swatchDownloadUrl: "/api/files/fresh-swatch.3mf",
+      swatchPreviewUrl: "/api/files/fresh-swatch.png",
+    });
+
+    useSettingsStore
+      .getState()
+      .setBuildPlateForMachine(
+        "BambuStudio:bbl:bambu-lab-h2d",
+        "smooth-pei-plate",
+      );
+    expect(useFiveColorStore.getState()).toMatchObject({
+      swatchDownloadUrl: null,
+      swatchPreviewUrl: "/api/files/fresh-swatch.png",
+    });
   });
 
   it("maps base color loading failures to a localized error key", async () => {

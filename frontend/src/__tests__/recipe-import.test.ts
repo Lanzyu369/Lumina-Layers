@@ -110,8 +110,11 @@ function createTestRecipe(overrides?: Partial<LuminaRecipe>): LuminaRecipe {
           target_width_mm: 80,
           target_height_mm: 60,
           quantize_colors: 32,
+          quantize_colors_unlocked: true,
           enable_cleanup: true,
           hue_enable: false,
+          use_lut_constrained: true,
+          auto_dynamic_range: true,
           chroma_gate: 0,
         },
         geometry: {
@@ -243,7 +246,10 @@ describe("recipe/importRecipe", () => {
       expect(state.lut_name).toBe("MyLUT");
       expect(state.target_width_mm).toBe(80);
       expect(state.target_height_mm).toBe(60);
+      expect(state.quantize_colors_unlocked).toBe(true);
       expect(state.hue_enable).toBe(false);
+      expect(state.use_lut_constrained).toBe(true);
+      expect(state.auto_dynamic_range).toBe(true);
 
       // Geometry
       expect(state.spacer_thick).toBe(0.6);
@@ -312,6 +318,24 @@ describe("recipe/importRecipe", () => {
 
       // No warnings for fingerprint match
       expect(warnings).toHaveLength(0);
+    });
+
+    it("uses legacy-safe defaults for omitted project matching flags", () => {
+      const recipe = createTestRecipe();
+      delete recipe.recipe.converter!.base.quantize_colors_unlocked;
+      delete recipe.recipe.converter!.base.use_lut_constrained;
+      delete recipe.recipe.converter!.base.auto_dynamic_range;
+      recipe.recipe.converter!.base.quantize_colors = 512;
+
+      const { state } = restoreConverterRecipe(
+        recipe,
+        LOCAL_LUTS,
+        LOCAL_FINGERPRINTS,
+      );
+
+      expect(state.quantize_colors_unlocked).toBe(true);
+      expect(state.use_lut_constrained).toBe(false);
+      expect(state.auto_dynamic_range).toBe(false);
     });
 
     it("restores converter source parameters used by share cards", () => {
@@ -629,7 +653,7 @@ describe("recipe/importRecipe", () => {
         },
       ]);
       expect(state.base_spacer_thick).toBe(0.7);
-      expect(state.spacer_thick).toBe(3.5);
+      expect(state.spacer_thick).toBe(3.52);
     });
 
     it("adds warning for name-only LUT match", () => {

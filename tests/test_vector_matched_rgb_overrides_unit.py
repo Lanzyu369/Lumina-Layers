@@ -694,6 +694,66 @@ def test_roi_projection_records_bounded_pixel_work_metrics() -> None:
     )
 
 
+def test_dimension_change_projects_only_edited_vector_components() -> None:
+    """Old edit pixels map to fresh smooth paths without replacing untouched shapes."""
+
+    edited_geometry = box(1.0, 1.0, 4.0, 4.0)
+    untouched_geometry = box(7.0, 2.0, 10.0, 6.0)
+    analysis = VectorAnalysis(
+        shape_data=[],
+        clipped_shapes=[],
+        matched_shapes=[
+            {
+                "geometry": edited_geometry,
+                "color": (0, 255, 0),
+                "matched_rgb": (0, 255, 0),
+                "height_identity_rgb": (0, 255, 0),
+                "recipe": [2, 2, 2, 2, 2],
+            },
+            {
+                "geometry": untouched_geometry,
+                "color": (0, 0, 255),
+                "matched_rgb": (0, 0, 255),
+                "height_identity_rgb": (0, 0, 255),
+                "recipe": [3, 3, 3, 3, 3],
+            },
+        ],
+        silhouette=edited_geometry.union(untouched_geometry),
+        scale_factor=2.0,
+        bbox=(0.0, 0.0, 12.0, 8.0),
+        color_conf={"slots": ["W", "R", "G", "B"], "preview": {}},
+        slot_names=["W", "R", "G", "B"],
+        num_channels=4,
+        num_layers=5,
+        preview_colors={},
+    )
+    pristine_rgb = np.full((80, 120, 3), [255, 255, 255], dtype=np.uint8)
+    edited_rgb = pristine_rgb.copy()
+    edited_rgb[10:41, 10:41] = [255, 0, 0]
+    pristine_material = np.zeros((80, 120, 5), dtype=np.int16)
+    edited_material = pristine_material.copy()
+    edited_material[10:41, 10:41] = 1
+
+    changed = apply_matched_rgb_overrides_to_analysis(
+        analysis,
+        matched_rgb=edited_rgb,
+        original_matched_rgb=pristine_rgb,
+        height_identity_rgb=pristine_rgb,
+        material_matrix=edited_material,
+        original_material_matrix=pristine_material,
+        mask_solid=np.ones((80, 120), dtype=bool),
+        img_processor=_build_fake_img_processor(),
+        source_grid_shape=(80, 120),
+        strict=True,
+    )
+
+    assert changed == 1
+    assert tuple(analysis.matched_shapes[0]["matched_rgb"]) == (255, 0, 0)
+    assert analysis.matched_shapes[0]["recipe"] == [1, 1, 1, 1, 1]
+    assert tuple(analysis.matched_shapes[1]["matched_rgb"]) == (0, 0, 255)
+    assert analysis.matched_shapes[1]["recipe"] == [3, 3, 3, 3, 3]
+
+
 def test_roi_projection_caches_repeated_rgb_lut_queries() -> None:
     geometry = MultiPolygon(
         [
@@ -2246,7 +2306,6 @@ class TestRunVectorBranchWiring:
             "vector_branch_init",
             "vector_matched_rgb_overrides_applied",
             "vector_3mf_exported",
-            "vector_glb_exported",
             "vector_2d_preview_skipped",
             "vector_timings",
             "vector_branch_done",

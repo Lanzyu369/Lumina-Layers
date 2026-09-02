@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from concurrent.futures.process import BrokenProcessPool
 import json
 import os
 import pickle
@@ -36,10 +37,13 @@ from api.preview_cache_memory import (
     get_process_rss_bytes,
     should_log_preview_cache_memory_profile_at_info,
 )
+from api.replacement_history import clear_replacement_history
 from api.schemas.converter import (
     BedSizeItem,
     BedSizeListResponse,
     ColorReplacementItem,
+    VectorPreviewRendererRequest,
+    VectorPreviewRendererResponse,
 )
 from api.schemas.lut import LutSourceSelection
 from api.schemas.responses import (
@@ -50,6 +54,7 @@ from api.schemas.responses import (
 )
 from api.session_store import SessionStore
 from api.structured_logging import bind_session_id, get_logger
+from api.visible_region_cache import schedule_visible_region_cache_prewarm
 from api.worker_pool import WorkerPoolManager
 from api.workers.converter_workers import worker_generate_preview
 from config import (
@@ -69,6 +74,11 @@ from core.image_preprocessor import ImagePreprocessor
 from core.material_dynamic_solver import (
     DynamicMaterialCandidateError,
     DynamicMaterialSolverError,
+)
+from core.errors import VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError
+from core.vector_mesh_memory import (
+    estimate_vector_task_memory_reservation_bytes,
+    resolve_vector_mesh_memory_budget_bytes,
 )
 from core.vector_large_format import inspect_svg_large_format_support, normalize_large_format_source_basename
 from utils.lut_manager import LUTManager
@@ -925,6 +935,10 @@ async def convert_preview(
     use_lut_constrained: bool = Form(False, description="高精度LUT约束匹配"),
     auto_dynamic_range: bool = Form(False, description="自动动态范围压缩（实验性）"),
     high_precision_3d_preview: bool = Form(False, description="3D高精度颜色预览"),
+    enable_smooth_vector_preview: bool = Form(
+        True,
+        description="原生 SVG 使用解析式平滑轻量 3D 预览",
+    ),
     is_dark: bool = Form(True, description="深色主题"),
     material_source: str = Form("lut", description="颜色来源: lut | material_archive"),
     selected_materials: list[str] | str | None = Form(None, description="已选耗材目录名列表"),
@@ -1233,6 +1247,22 @@ async def convert_preview(
             material_min_layer_count,
             material_max_layer_count,
             material_delta_e00_tolerance,
+            **(
+                {
+                    "host_memory_reservation_bytes": (
+                        # The material solver's implicit runtimes have no
+                        # complete parent-visible path list to estimate.
+                        resolve_vector_mesh_memory_budget_bytes()
+                        if material_source == "material_archive"
+                        else estimate_vector_task_memory_reservation_bytes(
+                            temp_path,
+                            resident_paths=(lut_path,),
+                        )
+                    )
+                }
+                if modeling_mode == "vector"
+                else {}
+            ),
         )
         _t_worker = time.perf_counter() - _worker_t0
         worker_completed = True
@@ -1240,6 +1270,13 @@ async def convert_preview(
         raise HTTPException(status_code=504, detail="Preview generation timed out")
     except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
         _handle_core_error(e, "preview generation")
+    except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as e:
+        _handle_core_error(e, "preview generation")
+    except BrokenProcessPool as e:
+        raise HTTPException(
+            status_code=503,
+            detail=_PREVIEW_GENERATION_FAILED_DETAIL,
+        ) from e
     except ROUTER_HANDLED_ERRORS as e:
         public_detail = _public_pipeline_validation_detail(
             e,
@@ -1600,7 +1637,23 @@ async def convert_preview(
                 ),
             )
             raise
+    if cache_session_value is not None:
+        renderer_metadata = (
+            cache_session_value.get("metadata")
+            if is_preview_cache_artifact_ref(cache_session_value)
+            else cache_session_value
+        )
+        if isinstance(renderer_metadata, dict):
+            renderer_metadata["enable_smooth_vector_preview"] = bool(
+                enable_smooth_vector_preview
+            )
     store.put(session_id, "preview_cache", cache_session_value)
+    schedule_visible_region_cache_prewarm(
+        session_id,
+        store,
+        cache_data,
+        generation=0,
+    )
     if worker_gradient_groups is not None and worker_gradient_region_id_map is not None:
         store.put(session_id, "gradient_groups", worker_gradient_groups)
         store.put(
@@ -1682,7 +1735,7 @@ async def convert_preview(
             _material_backing_index,
         )
     store.put(session_id, "replacement_regions", parsed_replacement_regions or [])
-    store.put(session_id, "replacement_history", [])
+    clear_replacement_history(session_id, store)
     store.put(session_id, "free_color_set", set())
     if svg_large_format_policy is not None:
         store.put(session_id, "svg_large_format_policy", svg_large_format_policy)
@@ -2307,6 +2360,69 @@ def get_segmented_glb_status(
     }
 
 
+@router.post(
+    "/vector-preview-renderer",
+    response_model=VectorPreviewRendererResponse,
+)
+def rebuild_vector_preview_renderer(
+    request: VectorPreviewRendererRequest,
+    store: SessionStore = Depends(get_session_store),
+    registry: FileRegistry = Depends(get_file_registry),
+) -> VectorPreviewRendererResponse:
+    """Rebuild only the browser GLB renderer for one native Vector session.
+
+    只为原生 Vector session 重建浏览器 GLB，不重跑 2D 预览或打印分析。
+    """
+
+    session_data = _require_session(store, request.session_id)
+    cache = session_data.get("preview_cache")
+    if not isinstance(cache, dict):
+        raise HTTPException(status_code=409, detail=PREVIEW_CACHE_UNAVAILABLE_DETAIL)
+    metadata = get_preview_cache_metadata(cache)
+    modeling_mode = metadata.get("modeling_mode")
+    modeling_mode_value = str(
+        getattr(modeling_mode, "value", modeling_mode) or ""
+    ).strip().lower()
+    if modeling_mode_value != "vector":
+        raise HTTPException(
+            status_code=409,
+            detail="The active session is not a native Vector preview.",
+        )
+
+    requested_renderer = (
+        "vector_analytic"
+        if request.enable_smooth_vector_preview
+        else "segmented"
+    )
+    renderer_metadata = {
+        "enable_smooth_vector_preview": bool(
+            request.enable_smooth_vector_preview
+        ),
+        "vector_preview_renderer": requested_renderer,
+    }
+    job_token = schedule_glb_build(
+        request.session_id,
+        store,
+        registry,
+        cache,
+        metadata_updates=renderer_metadata,
+    )
+    log.info(
+        "Vector preview renderer rebuild scheduled",
+        extra={
+            "event": "converter_vector_preview_renderer_done",
+            "session_id": request.session_id,
+            "renderer": requested_renderer,
+            "job_token": job_token,
+        },
+    )
+    return VectorPreviewRendererResponse(
+        session_id=request.session_id,
+        job_token=job_token,
+        renderer=requested_renderer,
+    )
+
+
 @router.post("/upload-heightmap")
 async def upload_heightmap(
     heightmap: UploadFile = File(..., description="高度图文件"),
@@ -2368,6 +2484,11 @@ async def upload_heightmap(
     # 7. Compute per-color average height from heightmap
     base_thickness: float = PrinterConfig.LAYER_HEIGHT  # 0.08mm
     mask_solid: np.ndarray | None = cache.get("mask_solid")
+    height_matrix = HeightmapLoader._map_grayscale_to_height(
+        grayscale_resized,
+        max_relief_height,
+        base_thickness,
+    )
 
     color_height_map: dict[str, float] = {}
     palette_data: list[dict] = cache.get("color_palette", [])
@@ -2387,11 +2508,7 @@ async def upload_heightmap(
             color_height_map[hex_key] = base_thickness
             continue
 
-        # Average grayscale value at matching pixel positions
-        avg_gray = float(np.mean(grayscale_resized[color_mask]))
-
-        # Map to height range [base_thickness, max_relief_height]
-        height = max_relief_height - (avg_gray / 255.0) * (max_relief_height - base_thickness)
+        height = float(np.mean(height_matrix[color_mask]))
         color_height_map[hex_key] = round(height, 4)
 
     # 8. Store heightmap data in session

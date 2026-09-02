@@ -304,10 +304,25 @@ def _format_advanced_params_section(context: dict[str, Any]) -> str:
     if isinstance(dims, dict):
         width = dims.get("target_width_mm", _MISSING)
         height = dims.get("target_height_mm", _MISSING)
+        backing_thickness = dims.get(
+            "base_spacer_thick",
+            dims.get("spacer_thick", _MISSING),
+        )
+        backing_infill = dims.get(
+            "backing_infill_density_percent",
+            _MISSING,
+        )
     else:
         width = _MISSING
         height = _MISSING
+        backing_thickness = _MISSING
+        backing_infill = _MISSING
     lines.append(f"- Dimensions: {_safe_str(width)} × {_safe_str(height)} mm")
+    lines.append(
+        "- Backing: "
+        f"{_safe_str(backing_thickness)} mm / "
+        f"{_safe_str(backing_infill)}% infill"
+    )
 
     # Generation mode fields.
     generation = ap.get("generation")
@@ -322,6 +337,13 @@ def _format_advanced_params_section(context: dict[str, Any]) -> str:
     lines.append(f"- structure_mode: {_safe_str(structure_mode)}")
     lines.append(f"- modeling_mode: {_safe_str(modeling_mode)}")
     lines.append(f"- svg_pixels_per_mm: {_safe_str(svg_pixels_per_mm)}")
+    if isinstance(generation, dict):
+        warning_codes = generation.get("wipe_tower_warning_codes")
+        if isinstance(warning_codes, list) and warning_codes:
+            lines.append(
+                "- wipe_tower_warning_codes: "
+                + ", ".join(_safe_str(code) for code in warning_codes[:8])
+            )
 
     # Feature toggle states.
     for group_key, toggle_key in _INDEX_TOGGLE_GROUPS:
@@ -415,6 +437,11 @@ def _format_advanced_params_summary_line(context: dict[str, Any]) -> str:
     dims = ap.get("dimensions") if isinstance(ap.get("dimensions"), dict) else {}
     width = dims.get("target_width_mm", "?")
     height = dims.get("target_height_mm", "?")
+    backing_thickness = dims.get(
+        "base_spacer_thick",
+        dims.get("spacer_thick", "?"),
+    )
+    backing_infill = dims.get("backing_infill_density_percent", "?")
 
     active_labels: list[str] = []
     for group_key, toggle_key, label in _SUMMARY_TOGGLE_CHECKS:
@@ -422,7 +449,10 @@ def _format_advanced_params_summary_line(context: dict[str, Any]) -> str:
         if isinstance(group, dict) and group.get(toggle_key) is True:
             active_labels.append(label)
     toggles_str = "、".join(active_labels) if active_labels else "无"
-    return f"尺寸 {width}×{height} mm，已开启：{toggles_str}。"
+    return (
+        f"尺寸 {width}×{height} mm，底板 {backing_thickness} mm / "
+        f"{backing_infill}% 填充，已开启：{toggles_str}。"
+    )
 
 
 def _render_advanced_params_summary_safe(context: dict[str, Any]) -> str:
@@ -536,6 +566,9 @@ def generate_index_markdown(
         "material_delta_e00_tolerance",
         "material_layer_height_mm",
         "material_backing_material_dir_name",
+        "preserve_upload_filename_for_3mf",
+        "enable_smooth_vector_preview",
+        "vector_preview_renderer",
     ):
         snapshot_lines.append(f"- {key}: {_safe_str(context.get(key))}")
 
@@ -625,6 +658,31 @@ def generate_summary_text(ticket_id: str, payload: dict[str, Any]) -> str:
     layer_count = context.get("material_layer_count")
     layer_height = context.get("material_layer_height_mm")
     backing = context.get("material_backing_material_dir_name") or "(无)"
+    preserve_upload_filename = context.get("preserve_upload_filename_for_3mf")
+    if preserve_upload_filename is True:
+        upload_filename_line = "沿用上传文件名：开启。"
+    elif preserve_upload_filename is False:
+        upload_filename_line = "沿用上传文件名：关闭。"
+    else:
+        upload_filename_line = "沿用上传文件名：(未采集)。"
+
+    smooth_vector_preview = context.get("enable_smooth_vector_preview")
+    vector_preview_renderer = context.get("vector_preview_renderer")
+    if smooth_vector_preview is True:
+        vector_preference_label = "平滑"
+    elif smooth_vector_preview is False:
+        vector_preference_label = "兼容模式"
+    else:
+        vector_preference_label = "(未采集)"
+    renderer_labels = {
+        "vector_analytic": "平滑轮廓",
+        "segmented": "分段模型",
+        None: "(当前不适用)",
+    }
+    vector_renderer_line = (
+        f"矢量预览：{vector_preference_label}；当前轻量模型："
+        f"{renderer_labels.get(vector_preview_renderer, '(未知)')}。"
+    )
 
     action_history = context.get("action_history") or []
     recent = list(_iter_list(action_history))[-5:]
@@ -690,6 +748,8 @@ def generate_summary_text(ticket_id: str, payload: dict[str, Any]) -> str:
         f"\"{description}\"\n\n"
         f"提交时工作流：{active_tab} Tab / {source_version} 模式 / "
         f"颜色模式 {color_mode} / LUT {lut_name}。{material_block}\n\n"
+        f"{upload_filename_line}\n\n"
+        f"{vector_renderer_line}\n\n"
         f"{workshop_block}"
         f"{advanced_line}\n\n"
         f"最近操作：{' → '.join(action_lines) if action_lines else '(无记录)'}。\n\n"

@@ -323,11 +323,21 @@ def _generate_recipes(
 
     if "5-Color Extended" in color_mode:
         if "2" in str(page_choice):
-            # Page 2: 1444 colors from get_top_5color_extended_page2_stacks()
+            # Page 2 must use the same 6-layer recipe order as the generated
+            # calibration board; otherwise JSON export stores the wrong
+            # material decisions even when the sampled RGB colors are correct.
             try:
-                from core.calibration import get_top_5color_extended_page2_stacks
+                from core.calibration import select_extended_1444_colors
 
-                top_stacks = get_top_5color_extended_page2_stacks()
+                base_stacks = []
+                for i in range(1024):
+                    digits = []
+                    temp = i
+                    for _ in range(5):
+                        digits.append(temp % 4)
+                        temp //= 4
+                    base_stacks.append(tuple(reversed(digits)))
+                top_stacks = select_extended_1444_colors(base_stacks)
                 stacks = [list(s) for s in top_stacks[:total_cells]]
                 return np.array(stacks, dtype=np.int32)
             except (OSError, ValueError, ImportError) as exc:
@@ -696,6 +706,8 @@ def run_extraction(
         page_choice,
         eight_color_full_export=eight_color_full_export,
     )
+    if isinstance(stacks, np.ndarray) and stacks.ndim == 2 and stacks.shape[1] > 0:
+        metadata.max_color_layers = int(stacks.shape[1])
     LUTManager.save_keyed_json(LUT_FILE_PATH, rgb_flat, stacks, metadata)
     prev = cv2.resize(extracted, (512, 512), interpolation=cv2.INTER_NEAREST)
 

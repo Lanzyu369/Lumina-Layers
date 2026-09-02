@@ -12,10 +12,16 @@ import {
   type CompletionNotificationKind,
 } from "../utils/browserNotifications";
 import { clampValue } from "./converter";
+import {
+  captureGeneratedArtifactIdentity,
+  isGeneratedArtifactIdentityCurrent,
+  registerGeneratedArtifactInvalidator,
+} from "./generatedArtifactInvalidation";
 import { useSettingsStore } from "./settingsStore";
 
 export type CalibrationWorkflow = "legacy" | "single-stage";
 const SINGLE_STAGE_LAYER_HEIGHT_OPTIONS = [0.04, 0.08, 0.1] as const;
+let calibrationGenerateSequence = 0;
 
 function notifyCompletion(kind: CompletionNotificationKind): void {
   const settings = useSettingsStore.getState();
@@ -195,9 +201,25 @@ export const useCalibrationStore = create<
 
   submitLegacyGenerate: async () => {
     const state = get();
+    const settings = useSettingsStore.getState();
+    const requestIdentity = captureGeneratedArtifactIdentity(
+      settings.deviceProfileId,
+      settings.buildPlateId,
+    );
+    const requestSequence = ++calibrationGenerateSequence;
+    const isCurrentRequest = (): boolean => {
+      const latestSettings = useSettingsStore.getState();
+      return (
+        requestSequence === calibrationGenerateSequence &&
+        isGeneratedArtifactIdentityCurrent(
+          requestIdentity,
+          latestSettings.deviceProfileId,
+          latestSettings.buildPlateId,
+        )
+      );
+    };
     set({ isLoading: true, error: null, lastSubmittedWorkflow: "legacy" });
     try {
-      const settings = useSettingsStore.getState();
       const response = await calibrationGenerate({
         color_mode: state.color_mode,
         block_size: state.block_size,
@@ -208,7 +230,9 @@ export const useCalibrationStore = create<
         slicer: settings.slicerSoftware,
         nozzle_size: settings.nozzleSize,
         device_profile_id: settings.deviceProfileId,
+        build_plate_id: settings.buildPlateId,
       });
+      if (!isCurrentRequest()) return;
       set({
         downloadUrl: response.download_url,
         threemfDiskPath: null,
@@ -222,6 +246,7 @@ export const useCalibrationStore = create<
       });
       notifyCompletion("calibration");
     } catch (err) {
+      if (!isCurrentRequest()) return;
       set({
         error: calibrationErrorToVisibleMessage(err),
         isLoading: false,
@@ -231,13 +256,29 @@ export const useCalibrationStore = create<
 
   submitSingleStageGenerate: async () => {
     const state = get();
+    const settings = useSettingsStore.getState();
+    const requestIdentity = captureGeneratedArtifactIdentity(
+      settings.deviceProfileId,
+      settings.buildPlateId,
+    );
+    const requestSequence = ++calibrationGenerateSequence;
+    const isCurrentRequest = (): boolean => {
+      const latestSettings = useSettingsStore.getState();
+      return (
+        requestSequence === calibrationGenerateSequence &&
+        isGeneratedArtifactIdentityCurrent(
+          requestIdentity,
+          latestSettings.deviceProfileId,
+          latestSettings.buildPlateId,
+        )
+      );
+    };
     set({
       isLoading: true,
       error: null,
       lastSubmittedWorkflow: "single-stage",
     });
     try {
-      const settings = useSettingsStore.getState();
       const response = await generateSingleStageKit({
         palette: buildSingleStagePalette(state.materialDefault),
         substrate_id: state.substrateId,
@@ -248,7 +289,9 @@ export const useCalibrationStore = create<
         slicer: settings.slicerSoftware,
         nozzle_size: settings.nozzleSize,
         device_profile_id: settings.deviceProfileId,
+        build_plate_id: settings.buildPlateId,
       });
+      if (!isCurrentRequest()) return;
       set({
         downloadUrl: response.kit_download_url,
         threemfDiskPath: null,
@@ -261,6 +304,7 @@ export const useCalibrationStore = create<
       });
       notifyCompletion("calibration");
     } catch (err) {
+      if (!isCurrentRequest()) return;
       set({
         error: calibrationErrorToVisibleMessage(err),
         isLoading: false,
@@ -280,3 +324,23 @@ export const useCalibrationStore = create<
   setError: (error: string | null) => set({ error }),
   clearError: () => set({ error: null }),
 }));
+
+registerGeneratedArtifactInvalidator(({ preservePreviews }) => {
+  calibrationGenerateSequence += 1;
+  useCalibrationStore.setState({
+    isLoading: false,
+    error: null,
+    downloadUrl: null,
+    threemfDiskPath: null,
+    statusMessage: null,
+    manifestUrl: null,
+    singleStageJobs: [],
+    ...(preservePreviews
+      ? {}
+      : {
+          previewImageUrl: null,
+          layerImageUrls: null,
+          modelUrl: null,
+        }),
+  });
+});

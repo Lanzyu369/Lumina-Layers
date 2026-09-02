@@ -3,7 +3,7 @@ import { motion } from "framer-motion";
 import { useI18n } from "../i18n/context";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import Dropdown from "./ui/Dropdown";
-import { StatusBanner, desktopPrimaryColumnClass, desktopSecondaryColumnClass, resolveDesktopSplitLayoutClass, resolvePanelSurfaceClass, resolveSectionCardClass, mutedSectionCardClass } from "./ui/panelPrimitives";
+import { StatusBanner, cardPadClass, desktopPrimaryColumnClass, desktopSecondaryColumnClass, resolveDesktopSplitLayoutClass, resolvePanelSurfaceClass, wellClass, wellPadClass } from "./ui/panelPrimitives";
 import { useLutDetailsStore, filterLutDetailsCatalog } from "../stores/lutDetailsStore";
 import {
   LutScatterChart,
@@ -85,7 +85,7 @@ function InfoField({
   value: string;
 }) {
   return (
-    <div className="panel-section-muted rounded-2xl px-3 py-2">
+    <div className={`${wellPadClass} px-3 py-2`}>
       <dt className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
         {label}
       </dt>
@@ -627,12 +627,10 @@ const LutDetailsLoadedPrimaryColumn = memo(function LutDetailsLoadedPrimaryColum
   detail,
   detailLoading,
   t,
-  workspaceMode,
 }: {
   detail: LutDetailsResponse;
   detailLoading: boolean;
   t: (key: string) => string;
-  workspaceMode: ReturnType<typeof useWorkspaceMode>["mode"];
 }) {
   const capabilities = detail.capabilities ?? [];
   const supportedModes = detail.supported_modes ?? [];
@@ -640,7 +638,7 @@ const LutDetailsLoadedPrimaryColumn = memo(function LutDetailsLoadedPrimaryColum
 
   return (
     <div data-testid="lut-details-loaded-view" className="flex flex-col gap-5">
-      <section className={`${resolveSectionCardClass(workspaceMode)} flex flex-col gap-4`}>
+      <section className={`${cardPadClass} flex flex-col gap-4`}>
         <div className="flex items-start justify-between gap-3">
           <div>
             <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">{t("lut_details_summary_title")}</h3>
@@ -659,7 +657,7 @@ const LutDetailsLoadedPrimaryColumn = memo(function LutDetailsLoadedPrimaryColum
           <InfoField label={t("lut_details_summary_path")} value={detail.path} />
         </dl>
       </section>
-      <section className={`${resolveSectionCardClass(workspaceMode)} flex flex-col gap-4`}>
+      <section className={`${cardPadClass} flex flex-col gap-4`}>
         <div>
           <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">{t("lut_details_metadata_title")}</h3>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{t("lut_details_metadata_desc")}</p>
@@ -691,10 +689,10 @@ const LutDetailsLoadedPrimaryColumn = memo(function LutDetailsLoadedPrimaryColum
           <ChipList items={supportedModes.map((mode) => formatModeItem(mode, t))} emptyLabel={t("lut_details_supported_modes_empty")} />
         </div>
       </section>
-      <details data-testid="lut-details-raw-metadata" className={`${resolveSectionCardClass(workspaceMode)} group`}>
+      <details data-testid="lut-details-raw-metadata" className={`${cardPadClass} group`}>
         <summary className="cursor-pointer list-none text-base font-semibold text-slate-900 outline-none dark:text-slate-50">{t("lut_details_raw_metadata_title")}</summary>
         {rawMetadataDescription ? <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">{rawMetadataDescription}</p> : null}
-        <pre className="dock-scrollbar mt-4 max-h-96 overflow-auto rounded-[22px] border border-slate-200/80 bg-slate-950/95 p-4 text-xs leading-6 text-slate-100 dark:border-slate-700/80">{JSON.stringify(detail.raw_metadata, null, 2)}</pre>
+        <pre className="dock-scrollbar mt-4 max-h-96 overflow-auto rounded-[10px] bg-slate-950/95 p-4 text-xs leading-6 text-slate-100">{JSON.stringify(detail.raw_metadata, null, 2)}</pre>
       </details>
     </div>
   );
@@ -713,7 +711,6 @@ const LutDetailsLoadedPrimaryColumn = memo(function LutDetailsLoadedPrimaryColum
  */
 export const LutColorDistributionCharts = memo(function LutColorDistributionCharts({
   source,
-  workspaceMode,
 }: {
   source: {
     fingerprint: string;
@@ -723,7 +720,7 @@ export const LutColorDistributionCharts = memo(function LutColorDistributionChar
     rgb_points: LutDetailsResponse["rgb_points"];
     coverage_stats: LutDetailsResponse["coverage_stats"];
   };
-  workspaceMode: ReturnType<typeof useWorkspaceMode>["mode"];
+  workspaceMode?: ReturnType<typeof useWorkspaceMode>["mode"];
 }) {
   const { t } = useI18n();
   const [labChartView, setLabChartView] = useState<"2d" | "3d">("2d");
@@ -798,7 +795,7 @@ export const LutColorDistributionCharts = memo(function LutColorDistributionChar
     bRange: formatNumberRange(source.coverage_stats.b_range.min, source.coverage_stats.b_range.max),
   });
   const labChartViewToggle = (
-    <div className="panel-section-muted inline-flex overflow-hidden rounded-full">
+    <div className="panel-well inline-flex overflow-hidden rounded-full">
       <button
         type="button"
         className={`min-w-11 px-3 py-1.5 text-sm font-medium transition-colors ${
@@ -840,7 +837,7 @@ export const LutColorDistributionCharts = memo(function LutColorDistributionChar
           xLabel={t("lut_details_lab_chart_x")}
           yLabel={t("lut_details_lab_chart_y")}
           emptyMessage={t("lut_details_no_chart_points")}
-          className={resolveSectionCardClass(workspaceMode)}
+          className={cardPadClass}
           showLabels={false}
           plotShape="square"
           footer={labChartFooter}
@@ -848,7 +845,7 @@ export const LutColorDistributionCharts = memo(function LutColorDistributionChar
           squareViewportClassName="mx-auto block w-full max-w-[680px] aspect-square max-h-[680px]"
         />
       ) : (
-        <section className={resolveSectionCardClass(workspaceMode)}>
+        <section className={cardPadClass}>
           <div className="mb-4 flex items-start justify-between gap-3">
             <div className="flex-1 min-w-0">
               <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">{t("lut_details_lab_chart_title")}</h3>
@@ -883,7 +880,7 @@ export const LutColorDistributionCharts = memo(function LutColorDistributionChar
         xLabel={t("lut_details_rgb_chart_x")}
         yLabel={t("lut_details_rgb_chart_y")}
         emptyMessage={t("lut_details_no_chart_points")}
-        className={resolveSectionCardClass(workspaceMode)}
+        className={cardPadClass}
         showLabels={false}
         plotShape="square"
         footer={replaceTokens(t("lut_details_rgb_chart_footer"), {
@@ -902,7 +899,7 @@ export const LutColorDistributionCharts = memo(function LutColorDistributionChar
         xLabel={t("lut_details_hue_lightness_chart_x")}
         yLabel={t("lut_details_hue_lightness_chart_y")}
         emptyMessage={t("lut_details_no_chart_points")}
-        className={resolveSectionCardClass(workspaceMode)}
+        className={cardPadClass}
         showLabels={false}
         plotShape="wide"
         footer={appendSummaryPart(
@@ -923,7 +920,7 @@ export const LutColorDistributionCharts = memo(function LutColorDistributionChar
         xLabel={t("lut_details_hue_chroma_chart_x")}
         yLabel={t("lut_details_hue_chroma_chart_y")}
         emptyMessage={t("lut_details_no_chart_points")}
-        className={resolveSectionCardClass(workspaceMode)}
+        className={cardPadClass}
         showLabels={false}
         plotShape="wide"
         footer={appendSummaryPart(
@@ -951,7 +948,7 @@ const LutDetailsLoadedSecondaryColumn = memo(function LutDetailsLoadedSecondaryC
 
   return (
     <div className="flex flex-col gap-5">
-      <section className={`${resolveSectionCardClass(workspaceMode)} flex flex-col gap-4`}>
+      <section className={`${cardPadClass} flex flex-col gap-4`}>
         <div className="flex items-start justify-between gap-3">
           <div>
             <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">{t("lut_details_palette_title")}</h3>
@@ -960,7 +957,7 @@ const LutDetailsLoadedSecondaryColumn = memo(function LutDetailsLoadedSecondaryC
           <span className="text-xs text-slate-500 dark:text-slate-400">{replaceTokens(t("lut_details_palette_count"), { count: palette.length })}</span>
         </div>
         {palette.length > 0 ? (
-          <div className="panel-section overflow-hidden rounded-[24px]">
+          <div className={`${wellClass} overflow-hidden`}>
             <table className="w-full border-collapse">
               <thead>
                 <tr className="border-b border-slate-200/70 text-left text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:border-slate-800/70 dark:text-slate-400">
@@ -972,7 +969,7 @@ const LutDetailsLoadedSecondaryColumn = memo(function LutDetailsLoadedSecondaryC
               <tbody>{palette.map((item, index) => renderPaletteRow(item, index, t))}</tbody>
             </table>
           </div>
-        ) : <div className={`${mutedSectionCardClass} px-4 py-5 text-sm leading-6 text-slate-500 dark:text-slate-400`}>{t("lut_details_no_palette")}</div>}
+        ) : <div className={`${wellPadClass} px-4 py-5 text-sm leading-6 text-slate-500 dark:text-slate-400`}>{t("lut_details_no_palette")}</div>}
       </section>
       {/* The four scatter charts (Lab a-b, RGB isometric, Hue × Lightness,
           Hue × Saturation) are rendered by the shared component so the
@@ -998,20 +995,18 @@ function EmptyCard({
   title,
   description,
   emptyMessage,
-  workspaceMode,
 }: {
   title: string;
   description: string;
   emptyMessage: string;
-  workspaceMode: ReturnType<typeof useWorkspaceMode>["mode"];
 }) {
   return (
-    <section className={`${resolveSectionCardClass(workspaceMode)} flex flex-col gap-4`}>
+    <section className={`${cardPadClass} flex flex-col gap-4`}>
       <div>
         <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">{title}</h3>
         <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{description}</p>
       </div>
-      <div className={`${mutedSectionCardClass} px-4 py-5 text-sm leading-6 text-slate-500 dark:text-slate-400`}>
+      <div className={`${wellPadClass} px-4 py-5 text-sm leading-6 text-slate-500 dark:text-slate-400`}>
         {emptyMessage}
       </div>
     </section>
@@ -1134,7 +1129,7 @@ export default function LutDetailsPanel() {
     >
       <div data-testid="lut-details-layout" className={resolveDesktopSplitLayoutClass(workspace.mode)}>
         <div data-testid="lut-details-primary-column" className={desktopPrimaryColumnClass}>
-          <section data-testid="lut-details-selection-card" className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}>
+          <section data-testid="lut-details-selection-card" className={`${cardPadClass} flex flex-col gap-4`}>
             <div className="flex flex-col gap-1.5">
               <label className="text-sm font-medium text-slate-700 dark:text-slate-200" htmlFor="lut-details-query">
                 {t("lut_details_query_label")}
@@ -1145,7 +1140,7 @@ export default function LutDetailsPanel() {
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder={t("lut_details_query_placeholder")}
-                className="min-h-11 rounded-[22px] border border-slate-200/80 bg-slate-50 px-3.5 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] transition-all duration-200 hover:border-slate-300 hover:bg-slate-100 focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900/72 dark:text-slate-100 dark:hover:border-slate-600"
+                className="min-h-11 rounded-[10px] border border-slate-200/80 bg-slate-50 px-3.5 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] transition-all duration-200 hover:border-slate-300 hover:bg-slate-100 focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900/72 dark:text-slate-100 dark:hover:border-slate-600"
               />
             </div>
 
@@ -1175,7 +1170,7 @@ export default function LutDetailsPanel() {
               type="button"
               onClick={handleLoadSelected}
               disabled={catalogLoading || !canLoadSelectedLut}
-              className="inline-flex min-h-11 items-center justify-center rounded-[22px] bg-blue-500 px-4 py-2 text-sm font-medium text-white shadow-[var(--shadow-control)] transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600 dark:disabled:bg-slate-700 dark:disabled:text-slate-300"
+              className="inline-flex min-h-11 items-center justify-center rounded-[10px] bg-blue-500 px-4 py-2 text-sm font-medium text-white shadow-[var(--shadow-control)] transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600 dark:disabled:bg-slate-700 dark:disabled:text-slate-300"
             >
               {t("lut_details_load_action")}
             </button>
@@ -1218,7 +1213,6 @@ export default function LutDetailsPanel() {
               detail={visibleLoadedDetail}
               detailLoading={detailLoading}
               t={t}
-              workspaceMode={workspace.mode}
             />
           ) : (
             <div className="flex flex-col gap-5">
@@ -1226,17 +1220,15 @@ export default function LutDetailsPanel() {
                 title={t("lut_details_summary_title")}
                 description={t("lut_details_no_detail")}
                 emptyMessage={t("lut_details_no_detail")}
-                workspaceMode={workspace.mode}
               />
               <EmptyCard
                 title={t("lut_details_metadata_title")}
                 description={t("lut_details_metadata_desc")}
                 emptyMessage={t("lut_details_no_detail")}
-                workspaceMode={workspace.mode}
               />
-              <details data-testid="lut-details-raw-metadata" className={`${resolveSectionCardClass(workspace.mode)} group`}>
+              <details data-testid="lut-details-raw-metadata" className={`${cardPadClass} group`}>
                 <summary className="cursor-pointer list-none text-base font-semibold text-slate-900 outline-none dark:text-slate-50">{t("lut_details_raw_metadata_title")}</summary>
-                <pre className="dock-scrollbar mt-4 max-h-96 overflow-auto rounded-[22px] border border-slate-200/80 bg-slate-950/95 p-4 text-xs leading-6 text-slate-100 dark:border-slate-700/80">
+                <pre className="dock-scrollbar mt-4 max-h-96 overflow-auto rounded-[10px] bg-slate-950/95 p-4 text-xs leading-6 text-slate-100">
                   {t("lut_details_no_raw_metadata")}
                 </pre>
               </details>
@@ -1257,31 +1249,26 @@ export default function LutDetailsPanel() {
                 title={t("lut_details_palette_title")}
                 description={t("lut_details_palette_desc")}
                 emptyMessage={t("lut_details_no_palette")}
-                workspaceMode={workspace.mode}
               />
               <EmptyCard
                 title={t("lut_details_lab_chart_title")}
                 description={t("lut_details_lab_chart_desc")}
                 emptyMessage={t("lut_details_no_chart_points")}
-                workspaceMode={workspace.mode}
               />
               <EmptyCard
                 title={t("lut_details_rgb_chart_title")}
                 description={t("lut_details_rgb_chart_desc")}
                 emptyMessage={t("lut_details_no_chart_points")}
-                workspaceMode={workspace.mode}
               />
               <EmptyCard
                 title={t("lut_details_hue_lightness_chart_title")}
                 description={t("lut_details_hue_lightness_chart_desc")}
                 emptyMessage={t("lut_details_no_chart_points")}
-                workspaceMode={workspace.mode}
               />
               <EmptyCard
                 title={t("lut_details_hue_chroma_chart_title")}
                 description={t("lut_details_hue_chroma_chart_desc")}
                 emptyMessage={t("lut_details_no_chart_points")}
-                workspaceMode={workspace.mode}
               />
             </div>
           )}

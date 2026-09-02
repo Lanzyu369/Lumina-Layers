@@ -29,10 +29,90 @@ describe("device setting changes invalidate generated 3MF artifacts", () => {
   });
 
   it("clears generated artifacts when nozzle size changes", async () => {
+    useConverterStore.setState({
+      previewGlbUrl: "/api/files/nozzle-preview.glb",
+      previewImageUrl: "/api/files/nozzle-preview.png",
+      layerImages: [
+        {
+          layer_index: 0,
+          name: "Layer 1",
+          url: "/api/files/nozzle-layer.png",
+        },
+      ],
+    });
     useSettingsStore.getState().setNozzleSize("0.2");
 
     expect(useConverterStore.getState().modelUrl).toBeNull();
+    expect(useConverterStore.getState().previewGlbUrl).toBeNull();
+    expect(useConverterStore.getState().previewImageUrl).toBeNull();
+    expect(useConverterStore.getState().layerImages).toEqual([]);
     expect(useConverterStore.getState().threemfDiskPath).toBeNull();
     expect(useConverterStore.getState().downloadUrl).toBeNull();
+  });
+
+  it("keeps converter previews while clearing build-plate-specific downloads", () => {
+    const batchPreviewItems = [
+      {
+        url: "/api/files/batch-preview.glb",
+        filename: "preview.png",
+        tx_mm: 0,
+        ty_mm: 0,
+        width_mm: 20,
+        depth_mm: 20,
+      },
+    ];
+    useConverterStore.setState({
+      modelUrl: "/api/files/model-only-preview.glb",
+      previewGlbUrl: null,
+      batchPreviewItems,
+      batchResult: {
+        status: "ok",
+        message: "old batch",
+        download_url: "/api/files/old-batch.3mf",
+        threemf_disk_path: null,
+        preview_3d_url: null,
+        results: [],
+        warnings: [],
+      },
+    });
+
+    useSettingsStore
+      .getState()
+      .setBuildPlateForMachine(
+        "BambuStudio:bbl:bambu-lab-h2d",
+        "textured-pei-plate",
+      );
+
+    expect(useConverterStore.getState()).toMatchObject({
+      modelUrl: "/api/files/model-only-preview.glb",
+      previewGlbUrl: null,
+      batchPreviewItems,
+      batchResult: null,
+      threemfDiskPath: null,
+      downloadUrl: null,
+    });
+  });
+
+  it("does not invalidate artifacts when the selected build plate is unchanged", () => {
+    useSettingsStore.setState({
+      deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.4",
+      buildPlateId: "textured-pei-plate",
+      buildPlateSelections: {
+        "BambuStudio:bbl:bambu-lab-h2d": "textured-pei-plate",
+      },
+    });
+
+    useSettingsStore
+      .getState()
+      .setBuildPlateForMachine(
+        "BambuStudio:bbl:bambu-lab-h2d",
+        "textured-pei-plate",
+      );
+
+    expect(useConverterStore.getState()).toMatchObject({
+      modelUrl: "/api/files/fake-preview-glb",
+      threemfDiskPath: "E:/fake/model.3mf",
+      downloadUrl: "/api/files/fake-3mf",
+    });
   });
 });

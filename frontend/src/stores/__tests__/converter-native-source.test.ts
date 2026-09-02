@@ -202,6 +202,7 @@ describe("native bundle converter flow", () => {
     useSettingsStore.setState({
       enableCompletionNotifications: false,
       language: "zh",
+      preserveUploadFilenameFor3mf: false,
     });
   });
 
@@ -426,9 +427,268 @@ describe("native bundle converter flow", () => {
     expect(state.sessionId).toBe("session-fresh");
     expect(state.downloadUrl).toBe("/api/files/fresh.3mf");
     expect(state.threemfDiskPath).toBeNull();
-    expect(state.modelUrl).toBe("/api/files/fresh.glb");
+    expect(state.modelUrl).toBeNull();
     expect(state.isGenerating).toBe(false);
     expect(state.error).toBeNull();
+  });
+
+  it("invalidates an in-flight regular result when the build plate changes", async () => {
+    const stale = deferred<{
+      status: string;
+      message: string;
+      download_url: string;
+      preview_3d_url: string;
+    }>();
+    const fresh = deferred<{
+      status: string;
+      message: string;
+      download_url: string;
+      preview_3d_url: string;
+    }>();
+    mocks.convertGenerate
+      .mockReturnValueOnce(stale.promise)
+      .mockReturnValueOnce(fresh.promise);
+    useSettingsStore.setState({
+      deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.4",
+      buildPlateId: "engineering-plate",
+    });
+    seedLegacyGenerateState("session-plate-race", {
+      downloadUrl: "/api/files/previous-plate.3mf",
+      threemfDiskPath: "/tmp/previous-plate.3mf",
+      modelUrl: "/api/files/previous-plate.glb",
+      previewGlbUrl: "/api/files/current-preview.glb",
+    });
+
+    const staleRequest = useConverterStore.getState().submitGenerate();
+    useSettingsStore
+      .getState()
+      .setBuildPlateForMachine(
+        "BambuStudio:bbl:bambu-lab-h2d",
+        "textured-pei-plate",
+      );
+
+    const stateAfterPlateChange = useConverterStore.getState();
+
+    const freshRequest = useConverterStore.getState().submitGenerate();
+    expect(mocks.convertGenerate.mock.calls[0][1].build_plate_id).toBe(
+      "engineering-plate",
+    );
+    expect(mocks.convertGenerate.mock.calls[1][1].build_plate_id).toBe(
+      "textured-pei-plate",
+    );
+
+    stale.resolve({
+      status: "ok",
+      message: "stale",
+      download_url: "/api/files/stale-plate.3mf",
+      preview_3d_url: "/api/files/stale-plate.glb",
+    });
+    await staleRequest;
+
+    const stateAfterStaleResponse = useConverterStore.getState();
+
+    fresh.resolve({
+      status: "ok",
+      message: "fresh",
+      download_url: "/api/files/fresh-plate.3mf",
+      preview_3d_url: "/api/files/fresh-plate.glb",
+    });
+    await freshRequest;
+
+    expect(stateAfterPlateChange).toMatchObject({
+      isGenerating: false,
+      downloadUrl: null,
+      threemfDiskPath: null,
+      modelUrl: "/api/files/previous-plate.glb",
+      previewGlbUrl: "/api/files/current-preview.glb",
+    });
+    expect(stateAfterStaleResponse).toMatchObject({
+      isGenerating: true,
+      downloadUrl: null,
+      modelUrl: "/api/files/previous-plate.glb",
+      previewGlbUrl: "/api/files/current-preview.glb",
+    });
+    expect(useConverterStore.getState()).toMatchObject({
+      isGenerating: false,
+      downloadUrl: "/api/files/fresh-plate.3mf",
+      previewGlbUrl: "/api/files/current-preview.glb",
+    });
+  });
+
+  it("does not restore a color-card artifact generated for the previous plate", async () => {
+    const pending = deferred<{
+      status: string;
+      message: string;
+      download_url: string;
+      preview_3d_url: string;
+    }>();
+    mocks.convertGenerate.mockReturnValueOnce(pending.promise);
+    useSettingsStore.setState({
+      deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.4",
+      buildPlateId: "engineering-plate",
+    });
+    seedLegacyGenerateState("color-card-plate", {
+      modeling_mode: ModelingMode.COLOR_CARD,
+    });
+
+    const request = useConverterStore.getState().submitGenerate();
+    useSettingsStore
+      .getState()
+      .setBuildPlateForMachine(
+        "BambuStudio:bbl:bambu-lab-h2d",
+        "textured-pei-plate",
+      );
+    pending.resolve({
+      status: "ok",
+      message: "stale color card",
+      download_url: "/api/files/stale-color-card.3mf",
+      preview_3d_url: "/api/files/stale-color-card.glb",
+    });
+    await request;
+
+    expect(useConverterStore.getState()).toMatchObject({
+      isGenerating: false,
+      downloadUrl: null,
+      modelUrl: null,
+    });
+  });
+
+  it("ignores an in-flight regular result when the filename preference changes", async () => {
+    const pending = deferred<{
+      status: string;
+      message: string;
+      download_url: string;
+      preview_3d_url: string;
+    }>();
+    mocks.convertGenerate.mockReturnValueOnce(pending.promise);
+    seedLegacyGenerateState("session-filename-preference", {
+      modelUrl: "/api/files/existing-model.glb",
+      previewGlbUrl: "/api/files/existing-preview.glb",
+    });
+
+    const request = useConverterStore.getState().submitGenerate();
+    expect(mocks.convertGenerate).toHaveBeenCalledWith(
+      "session-filename-preference",
+      expect.any(Object),
+      false,
+    );
+
+    useSettingsStore.getState().setPreserveUploadFilenameFor3mf(true);
+
+    expect(useConverterStore.getState()).toMatchObject({
+      isGenerating: false,
+      downloadUrl: null,
+      threemfDiskPath: null,
+      modelUrl: "/api/files/existing-model.glb",
+      previewGlbUrl: "/api/files/existing-preview.glb",
+    });
+
+    pending.resolve({
+      status: "ok",
+      message: "stale naming preference",
+      download_url: "/api/files/stale-name.3mf",
+      preview_3d_url: "/api/files/stale-name.glb",
+    });
+    await request;
+
+    expect(useConverterStore.getState()).toMatchObject({
+      isGenerating: false,
+      downloadUrl: null,
+      threemfDiskPath: null,
+      modelUrl: "/api/files/existing-model.glb",
+      previewGlbUrl: "/api/files/existing-preview.glb",
+    });
+  });
+
+  it("invalidates a pending regular result after the page switches to puzzle mode", async () => {
+    const pending = deferred<{
+      status: string;
+      message: string;
+      download_url: string;
+      preview_3d_url: string;
+    }>();
+    mocks.convertGenerate.mockReturnValueOnce(pending.promise);
+    seedLegacyGenerateState("session-regular-before-puzzle", {
+      modelUrl: "/api/files/existing-model.glb",
+      previewGlbUrl: "/api/files/existing-preview.glb",
+    });
+
+    const request = useConverterStore.getState().submitGenerate();
+    expect(mocks.convertGenerate).toHaveBeenCalledOnce();
+
+    useConverterStore.setState({ puzzleEnabled: true });
+    useSettingsStore.getState().setPreserveUploadFilenameFor3mf(true);
+
+    expect(useConverterStore.getState()).toMatchObject({
+      isGenerating: false,
+      downloadUrl: null,
+      threemfDiskPath: null,
+      modelUrl: "/api/files/existing-model.glb",
+      previewGlbUrl: "/api/files/existing-preview.glb",
+    });
+
+    pending.resolve({
+      status: "ok",
+      message: "stale regular result",
+      download_url: "/api/files/stale-regular.3mf",
+      preview_3d_url: "/api/files/stale-regular.glb",
+    });
+    await request;
+
+    expect(useConverterStore.getState()).toMatchObject({
+      downloadUrl: null,
+      threemfDiskPath: null,
+      modelUrl: "/api/files/existing-model.glb",
+      previewGlbUrl: "/api/files/existing-preview.glb",
+    });
+  });
+
+  it("keeps a pending large-format result after the page exits large-format mode", async () => {
+    const pending = deferred<{
+      status: string;
+      message: string;
+      download_url: string;
+      tile_count: number;
+      grid_cols: number;
+      grid_rows: number;
+      warnings: string[];
+    }>();
+    mocks.convertGenerateLargeFormat.mockReturnValueOnce(pending.promise);
+    seedLegacyGenerateState("session-large-before-ordinary", {
+      largeFormatEnabled: true,
+      modelUrl: "/api/files/existing-model.glb",
+      previewGlbUrl: "/api/files/existing-preview.glb",
+    });
+
+    const request = useConverterStore.getState().submitGenerate();
+    expect(mocks.convertGenerateLargeFormat).toHaveBeenCalledOnce();
+
+    useConverterStore.setState({ largeFormatEnabled: false });
+    useSettingsStore.getState().setPreserveUploadFilenameFor3mf(true);
+
+    expect(useConverterStore.getState()).toMatchObject({
+      isGenerating: true,
+      downloadUrl: null,
+      modelUrl: "/api/files/existing-model.glb",
+      previewGlbUrl: "/api/files/existing-preview.glb",
+    });
+
+    pending.resolve({
+      status: "ok",
+      message: "large-format result",
+      download_url: "/api/files/large-result.zip",
+      tile_count: 4,
+      grid_cols: 2,
+      grid_rows: 2,
+      warnings: [],
+    });
+    await request;
+
+    expect(useConverterStore.getState()).toMatchObject({
+      isGenerating: false,
+      downloadUrl: "/api/files/large-result.zip",
+      threemfDiskPath: null,
+    });
   });
 
   it("clears loading without applying a stale generate response after only the session changes", async () => {
@@ -524,7 +784,7 @@ describe("native bundle converter flow", () => {
     const state = useConverterStore.getState();
     expect(state.downloadUrl).toBe("/api/files/second.3mf");
     expect(state.threemfDiskPath).toBeNull();
-    expect(state.modelUrl).toBe("/api/files/second.glb");
+    expect(state.modelUrl).toBeNull();
     expect(state.error).toBeNull();
   });
 
@@ -605,6 +865,51 @@ describe("native bundle converter flow", () => {
     expect(state.puzzleWarnings).toEqual([]);
   });
 
+  it("does not restore a puzzle artifact generated for the previous plate", async () => {
+    const pending = deferred<{
+      status: string;
+      message: string;
+      download_url: string;
+      threemf_disk_path: string;
+      piece_count: number;
+      grid_cols: number;
+      grid_rows: number;
+      warnings: string[];
+    }>();
+    mocks.convertGeneratePuzzle.mockReturnValueOnce(pending.promise);
+    useSettingsStore.setState({
+      deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.4",
+      buildPlateId: "engineering-plate",
+    });
+    seedLegacyGenerateState("puzzle-plate", { puzzleEnabled: true });
+
+    const request = useConverterStore.getState().submitGenerate();
+    useSettingsStore
+      .getState()
+      .setBuildPlateForMachine(
+        "BambuStudio:bbl:bambu-lab-h2d",
+        "textured-pei-plate",
+      );
+    pending.resolve({
+      status: "ok",
+      message: "stale puzzle",
+      download_url: "/api/files/stale-puzzle-plate.3mf",
+      threemf_disk_path: "/tmp/stale-puzzle-plate.3mf",
+      piece_count: 4,
+      grid_cols: 2,
+      grid_rows: 2,
+      warnings: ["stale"],
+    });
+    await request;
+
+    expect(useConverterStore.getState()).toMatchObject({
+      isGenerating: false,
+      downloadUrl: null,
+      puzzleResolvedPieceCount: null,
+      puzzleWarnings: [],
+    });
+  });
+
   it("ignores a stale large-format generate response after the session changes", async () => {
     const stale = deferred<{
       status: string;
@@ -649,6 +954,50 @@ describe("native bundle converter flow", () => {
     expect(state.sessionId).toBe("large-fresh");
     expect(state.downloadUrl).toBe("/api/files/fresh-large.zip");
     expect(state.largeFormatWarnings).toEqual([]);
+  });
+
+  it("does not restore a large-format artifact generated for the previous plate", async () => {
+    const pending = deferred<{
+      status: string;
+      message: string;
+      download_url: string;
+      tile_count: number;
+      grid_cols: number;
+      grid_rows: number;
+      warnings: string[];
+    }>();
+    mocks.convertGenerateLargeFormat.mockReturnValueOnce(pending.promise);
+    useSettingsStore.setState({
+      deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.4",
+      buildPlateId: "engineering-plate",
+    });
+    seedLegacyGenerateState("large-format-plate", {
+      largeFormatEnabled: true,
+    });
+
+    const request = useConverterStore.getState().submitGenerate();
+    useSettingsStore
+      .getState()
+      .setBuildPlateForMachine(
+        "BambuStudio:bbl:bambu-lab-h2d",
+        "textured-pei-plate",
+      );
+    pending.resolve({
+      status: "ok",
+      message: "stale large-format",
+      download_url: "/api/files/stale-large-format-plate.zip",
+      tile_count: 4,
+      grid_cols: 2,
+      grid_rows: 2,
+      warnings: ["stale"],
+    });
+    await request;
+
+    expect(useConverterStore.getState()).toMatchObject({
+      isGenerating: false,
+      downloadUrl: null,
+      largeFormatWarnings: [],
+    });
   });
 
   it("defaults native layer count to 5 when entering native mode without a valid current selection", () => {
@@ -1604,7 +1953,7 @@ describe("native bundle converter flow", () => {
     ]);
   });
 
-  it("switches from a generated GLB to an async preview GLB that arrives later", async () => {
+  it("keeps an ordinary raster on lightweight preview state until async GLB arrives", async () => {
     vi.useFakeTimers();
     try {
       mocks.convertPreview.mockResolvedValueOnce({
@@ -1653,9 +2002,8 @@ describe("native bundle converter flow", () => {
       await useConverterStore.getState().submitPreview();
       await useConverterStore.getState().submitGenerate();
 
-      expect(useConverterStore.getState().modelUrl).toBe(
-        "/api/files/generated-material-model.glb",
-      );
+      expect(useConverterStore.getState().modelUrl).toBeNull();
+      expect(useConverterStore.getState().previewGlbUrl).toBeNull();
 
       await flushGlbPoll();
       await flushGlbPoll(0);
@@ -1673,7 +2021,370 @@ describe("native bundle converter flow", () => {
     }
   });
 
-  it("clears a normal generated GLB after switching to heightmap before polling completes", async () => {
+  it("waits for async segmented GLB instead of showing generated Vector GLB", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.convertPreview.mockResolvedValueOnce({
+        session_id: "session-vector-async",
+        status: "ok",
+        message: "Preview generated",
+        preview_url: "/api/files/vector-preview",
+        preview_glb_url: null,
+        palette: [],
+        dimensions: { width: 1110, height: 2407 },
+      });
+      mocks.getGlbStatus.mockResolvedValueOnce({
+        session_id: "session-vector-async",
+        status: "ready",
+        glb_url: "/api/files/segmented-vector-preview.glb",
+        job_token: "token-vector-preview",
+        error: null,
+        color_contours: null,
+      });
+      mocks.convertGenerate.mockResolvedValueOnce({
+        status: "ok",
+        message: "Model generated",
+        download_url: "/api/files/vector-model.3mf",
+        preview_3d_url: "/api/files/print-exact-vector.glb",
+      });
+
+      useConverterStore.setState({
+        imageFile: new File(["<svg/>"], "native-vector.svg", {
+          type: "image/svg+xml",
+        }),
+        source_version: "native",
+        lut_name: "",
+        target_width_mm: 111,
+        color_mode: ColorMode.FOUR_COLOR_RYBW,
+        modeling_mode: ModelingMode.VECTOR,
+        color_layers: 5,
+        layer_height_mm: 0.08,
+        quantize_colors: 48,
+        enable_cleanup: true,
+        hue_enable: false,
+        selectedNativeBrandKey: "brand-a",
+        selectedNativeDbNames: ["A2"],
+        nativeBrandGroups: [makePredictiveBrand()],
+      } as never);
+
+      await useConverterStore.getState().submitPreview();
+      await useConverterStore.getState().submitGenerate();
+
+      expect(useConverterStore.getState().modelUrl).toBeNull();
+      expect(useConverterStore.getState().previewGlbUrl).toBeNull();
+
+      await flushGlbPoll();
+      await flushGlbPoll(0);
+
+      expect(mocks.getGlbStatus).toHaveBeenCalledWith("session-vector-async");
+      expect(useConverterStore.getState().previewGlbUrl).toBe(
+        "/api/files/segmented-vector-preview.glb",
+      );
+      expect(useConverterStore.getState().modelUrl).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  const generatedVectorGeometryCases: Array<
+    [string, Record<string, unknown>]
+  > = [
+    [
+      "color relief",
+      {
+        enable_relief: true,
+        autoHeightMode: "darker-higher",
+        color_height_map: { "111111": 0.5 },
+      },
+    ],
+    ["coating", { enable_coating: true }],
+    ["keychain loop", { add_loop: true }],
+    [
+      "fridge magnet",
+      {
+        enable_fridge_magnet: true,
+        fridge_magnets: [
+          {
+            id: "magnet-round",
+            shape: "round",
+            preset_key: "round-18",
+            diameter_mm: 18,
+            width_mm: null,
+            height_mm: null,
+            thickness_mm: 2,
+            center_x_mm: 20,
+            center_y_mm: 25,
+          },
+        ],
+      },
+    ],
+    ["outline", { enable_outline: true }],
+    ["cloisonne", { enable_cloisonne: true }],
+    [
+      "model surface overlay",
+      {
+        modelSurfaceEnabled: true,
+        modelSurfaceModelFileId: "surface-model-id",
+        modelSurfaceSelection: { face_indices: [1] },
+        modelSurfaceFootprint: { width_mm: 111, height_mm: 241 },
+      },
+    ],
+  ];
+
+  const staleGeneratedGeometryParameterCases: Array<
+    [
+      string,
+      Record<string, unknown>,
+      Record<string, unknown>,
+    ]
+  > = [
+    [
+      "relief height map",
+      {
+        enable_relief: true,
+        autoHeightMode: "darker-higher",
+        color_height_map: { "111111": 0.5 },
+      },
+      { color_height_map: { "111111": 1.5 } },
+    ],
+    [
+      "outline width",
+      { enable_outline: true, outline_width: 0.8 },
+      { outline_width: 1.6 },
+    ],
+    [
+      "keychain placement",
+      { add_loop: true, loop_offset_x: 0 },
+      { loop_offset_x: 4 },
+    ],
+    [
+      "cloisonne dimensions",
+      { enable_cloisonne: true, wire_height_mm: 0.4 },
+      { wire_height_mm: 1.2 },
+    ],
+    [
+      "coating height",
+      { enable_coating: true, coating_height_mm: 0.2 },
+      { coating_height_mm: 0.8 },
+    ],
+    [
+      "fridge magnet layout",
+      {
+        enable_fridge_magnet: true,
+        fridge_magnets: [
+          {
+            id: "magnet-round",
+            shape: "round",
+            preset_key: "round-18",
+            diameter_mm: 18,
+            width_mm: null,
+            height_mm: null,
+            thickness_mm: 2,
+            center_x_mm: 20,
+            center_y_mm: 25,
+          },
+        ],
+      },
+      {
+        fridge_magnets: [
+          {
+            id: "magnet-round",
+            shape: "round",
+            preset_key: "round-18",
+            diameter_mm: 18,
+            width_mm: null,
+            height_mm: null,
+            thickness_mm: 2,
+            center_x_mm: 24,
+            center_y_mm: 25,
+          },
+        ],
+      },
+    ],
+    [
+      "model surface placement",
+      {
+        modelSurfaceEnabled: true,
+        modelSurfaceModelFileId: "surface-model-id",
+        modelSurfaceSelection: { face_indices: [1] },
+        modelSurfaceFootprint: { width_mm: 111, height_mm: 241 },
+      },
+      {
+        modelSurfacePlacement: {
+          mode: "inset",
+          offset_x_mm: 2,
+          offset_y_mm: 0,
+          scale: 0.9,
+          rotation_deg: 0,
+          inset_mm: 1,
+        },
+      },
+    ],
+  ];
+
+  it.each(generatedVectorGeometryCases)(
+    "keeps the lightweight preview authoritative for %s",
+    async (_label, overrides) => {
+      mocks.convertGenerate.mockResolvedValueOnce({
+        status: "ok",
+        message: "Model generated",
+        download_url: "/api/files/surface-model.3mf",
+        preview_3d_url: "/api/files/generated-surface.glb",
+      });
+      seedLegacyGenerateState("session-generated-surface", {
+        imageFile: new File(["<svg/>"], "native-vector.svg", {
+          type: "image/svg+xml",
+        }),
+        modeling_mode: ModelingMode.VECTOR,
+        previewGlbUrl: "/api/files/flat-preview.glb",
+        ...overrides,
+      } as never);
+
+      await useConverterStore.getState().submitGenerate();
+
+      expect(useConverterStore.getState().modelUrl).toBeNull();
+      expect(useConverterStore.getState().previewGlbUrl).toBe(
+        "/api/files/flat-preview.glb",
+      );
+    },
+  );
+
+  it.each(generatedVectorGeometryCases)(
+    "keeps the lightweight %s preview when Generate returns no GLB",
+    async (_label, overrides) => {
+      mocks.convertGenerate.mockResolvedValueOnce({
+        status: "ok",
+        message: "Model generated without optional GLB",
+        download_url: "/api/files/surface-model.3mf",
+        preview_3d_url: null,
+      });
+      seedLegacyGenerateState("session-generated-surface", {
+        imageFile: new File(["<svg/>"], "native-vector.svg", {
+          type: "image/svg+xml",
+        }),
+        modeling_mode: ModelingMode.VECTOR,
+        previewGlbUrl: "/api/files/flat-preview.glb",
+        ...overrides,
+      } as never);
+
+      await useConverterStore.getState().submitGenerate();
+
+      expect(useConverterStore.getState().modelUrl).toBeNull();
+      expect(useConverterStore.getState().previewGlbUrl).toBe(
+        "/api/files/flat-preview.glb",
+      );
+    },
+  );
+
+  it.each(staleGeneratedGeometryParameterCases)(
+    "does not display a generated %s GLB after its parameters change",
+    async (_label, initialOverrides, changedOverrides) => {
+      const generation = deferred<{
+        status: string;
+        message: string;
+        download_url: string;
+        preview_3d_url: string;
+      }>();
+      mocks.convertGenerate.mockReturnValueOnce(generation.promise);
+      seedLegacyGenerateState("session-stale-generated-geometry", {
+        imageFile: new File(["<svg/>"], "native-vector.svg", {
+          type: "image/svg+xml",
+        }),
+        modeling_mode: ModelingMode.VECTOR,
+        previewGlbUrl: "/api/files/current-quick-preview.glb",
+        ...initialOverrides,
+      } as never);
+
+      const submitGenerate = useConverterStore.getState().submitGenerate();
+      expect(mocks.convertGenerate).toHaveBeenCalledOnce();
+
+      useConverterStore.setState(changedOverrides as never);
+      generation.resolve({
+        status: "ok",
+        message: "Model generated with old parameters",
+        download_url: "/api/files/stale-model.3mf",
+        preview_3d_url: "/api/files/stale-generated.glb",
+      });
+      await submitGenerate;
+
+      expect(useConverterStore.getState().modelUrl).toBeNull();
+      expect(useConverterStore.getState().previewGlbUrl).toBe(
+        "/api/files/current-quick-preview.glb",
+      );
+    },
+  );
+
+  const generatedGeometryEnabledDuringGenerationCases: Array<
+    [string, Record<string, unknown>, Record<string, unknown>]
+  > = [
+    [
+      "raster relief",
+      { modeling_mode: ModelingMode.HIGH_FIDELITY },
+      {
+        enable_relief: true,
+        autoHeightMode: "darker-higher",
+        color_height_map: { "111111": 0.5 },
+      },
+    ],
+    [
+      "raster coating",
+      { modeling_mode: ModelingMode.HIGH_FIDELITY },
+      { enable_coating: true, coating_height_mm: 0.6 },
+    ],
+    [
+      "Vector model surface",
+      {
+        imageFile: new File(["<svg/>"], "native-vector.svg", {
+          type: "image/svg+xml",
+        }),
+        modeling_mode: ModelingMode.VECTOR,
+      },
+      {
+        modelSurfaceEnabled: true,
+        modelSurfaceModelFileId: "surface-model-id",
+        modelSurfaceSelection: { face_indices: [1] },
+        modelSurfaceFootprint: { width_mm: 111, height_mm: 241 },
+      },
+    ],
+  ];
+
+  it.each(generatedGeometryEnabledDuringGenerationCases)(
+    "does not display an old flat GLB after enabling %s during generation",
+    async (_label, initialOverrides, enabledOverrides) => {
+      const generation = deferred<{
+        status: string;
+        message: string;
+        download_url: string;
+        preview_3d_url: string;
+      }>();
+      mocks.convertGenerate.mockReturnValueOnce(generation.promise);
+      seedLegacyGenerateState("session-enable-generated-geometry", {
+        previewGlbUrl: null,
+        modelUrl: null,
+        ...initialOverrides,
+      } as never);
+
+      const submitGenerate = useConverterStore.getState().submitGenerate();
+      expect(mocks.convertGenerate).toHaveBeenCalledOnce();
+
+      useConverterStore.setState(enabledOverrides as never);
+      generation.resolve({
+        status: "ok",
+        message: "Old flat model generated",
+        download_url: "/api/files/old-flat-model.3mf",
+        preview_3d_url: "/api/files/old-flat-generated.glb",
+      });
+      await submitGenerate;
+
+      expect(useConverterStore.getState().modelUrl).toBeNull();
+      expect(useConverterStore.getState().previewGlbUrl).toBeNull();
+      expect(useConverterStore.getState().downloadUrl).toBe(
+        "/api/files/old-flat-model.3mf",
+      );
+    },
+  );
+
+  it("keeps generated GLBs out of state while switching to heightmap", async () => {
     vi.useFakeTimers();
     try {
       mocks.getGlbStatus.mockResolvedValueOnce({
@@ -1695,9 +2406,7 @@ describe("native bundle converter flow", () => {
       useConverterStore.getState()._pollAsyncGlb();
       await useConverterStore.getState().submitGenerate();
 
-      expect(useConverterStore.getState().modelUrl).toBe(
-        "/api/files/generated-normal.glb",
-      );
+      expect(useConverterStore.getState().modelUrl).toBeNull();
 
       useConverterStore.getState().setEnableRelief(true);
       useConverterStore.getState().setAutoHeightMode("use-heightmap");
@@ -1713,7 +2422,7 @@ describe("native bundle converter flow", () => {
     }
   });
 
-  it("keeps a generated heightmap GLB by cancelling an older preview poll", async () => {
+  it("keeps polling the lightweight heightmap approximation after Generate", async () => {
     vi.useFakeTimers();
     try {
       mocks.getGlbStatus.mockResolvedValueOnce({
@@ -1743,18 +2452,18 @@ describe("native bundle converter flow", () => {
       expect(mocks.convertGenerate.mock.calls[0]?.[1]).toMatchObject({
         height_mode: "heightmap",
       });
-      expect(useConverterStore.getState().modelUrl).toBe(
-        "/api/files/generated-heightmap.glb",
-      );
+      expect(useConverterStore.getState().modelUrl).toBeNull();
 
       await flushGlbPoll();
       await flushGlbPoll(0);
 
-      expect(mocks.getGlbStatus).not.toHaveBeenCalled();
-      expect(useConverterStore.getState().previewGlbUrl).toBeNull();
-      expect(useConverterStore.getState().modelUrl).toBe(
-        "/api/files/generated-heightmap.glb",
+      expect(mocks.getGlbStatus).toHaveBeenCalledWith(
+        "session-heightmap-async",
       );
+      expect(useConverterStore.getState().previewGlbUrl).toBe(
+        "/api/files/flat-preview.glb",
+      );
+      expect(useConverterStore.getState().modelUrl).toBeNull();
     } finally {
       vi.useRealTimers();
     }
@@ -1845,6 +2554,7 @@ describe("native bundle converter flow", () => {
       model_enable: true,
       model_only: true,
     } as never);
+    useSettingsStore.setState({ enableSmoothVectorPreview: false });
 
     await useConverterStore.getState().submitPreview();
 
@@ -1859,6 +2569,7 @@ describe("native bundle converter flow", () => {
     expect(params).not.toHaveProperty("model_only");
     expect(params).not.toHaveProperty("model_threshold");
     expect(params).not.toHaveProperty("model_margin");
+    expect(params.enable_smooth_vector_preview).toBe(false);
   });
 
   it("submitGenerate sends native bundle fields in the JSON body", async () => {
@@ -1923,7 +2634,7 @@ describe("native bundle converter flow", () => {
       target_width_mm: 90,
     });
     expect(params).not.toHaveProperty("lut_name");
-    expect(result).toBe("/api/files/native-model.glb");
+    expect(result).toBeNull();
     expect(useConverterStore.getState().downloadUrl).toBe("/api/files/native-model");
     expect(mocks.showBrowserCompletionNotification).not.toHaveBeenCalled();
   });

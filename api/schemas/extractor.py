@@ -199,7 +199,8 @@ class ConfirmPaletteRequest(BaseModel):
     Attributes:
         session_id: Extraction session ID. (提取会话 ID)
         manufacturer: LUT / color DB manufacturer. (厂商)
-        type: LUT / color DB type. (类型)
+        type: Optional LUT / color DB type. Defaults from material when blank.
+            (可选类型；为空时根据耗材类型自动生成)
         palette: User-confirmed palette entries. (用户确认的调色板数组)
     """
 

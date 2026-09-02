@@ -16,7 +16,18 @@ vi.mock('../i18n/context', () => ({
   useI18n: () => ({ t: (key: string) => key, lang: 'zh' as const }),
 }));
 
+const ORIGINAL_STORE_ACTIONS = {
+  setSelectedColor: useConverterStore.getState().setSelectedColor,
+  toggleColorInSelection: useConverterStore.getState().toggleColorInSelection,
+  detectRegion: useConverterStore.getState().detectRegion,
+  detectAndAccumulateRegion: useConverterStore.getState().detectAndAccumulateRegion,
+  removeRegionFromSelection: useConverterStore.getState().removeRegionFromSelection,
+  clearSelection: useConverterStore.getState().clearSelection,
+  fetchLayerImages: useConverterStore.getState().fetchLayerImages,
+};
+
 const OriginalImage = globalThis.Image;
+let sharedGetImageDataMock: ReturnType<typeof vi.fn>;
 
 class MockResizeObserver {
   private readonly callback: ResizeObserverCallback;
@@ -84,7 +95,7 @@ class TestImage {
 }
 
 function createCanvasContext(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
-  return {
+  const context = {
     canvas,
     clearRect: vi.fn(),
     save: vi.fn(),
@@ -96,17 +107,17 @@ function createCanvasContext(canvas: HTMLCanvasElement): CanvasRenderingContext2
     beginPath: vi.fn(),
     moveTo: vi.fn(),
     lineTo: vi.fn(),
+    closePath: vi.fn(),
     stroke: vi.fn(),
-    getImageData: vi.fn((x: number, y: number) => {
-      if (x === 10 && y === 20) {
-        return { data: new Uint8ClampedArray([171, 205, 239, 255]) };
-      }
-      return { data: new Uint8ClampedArray([17, 34, 51, 255]) };
-    }),
+    fill: vi.fn(),
+    getImageData: sharedGetImageDataMock,
     imageSmoothingEnabled: true,
     strokeStyle: '',
     lineWidth: 1,
+    lineJoin: '',
+    lineCap: '',
   } as unknown as CanvasRenderingContext2D;
+  return context;
 }
 
 function installCanvasContextMock(): void {
@@ -187,12 +198,19 @@ describe('ColorPreview2D hover inspector', () => {
       }
     } as typeof Image;
 
+    sharedGetImageDataMock = vi.fn((x: number, y: number) => {
+      if (x === 10 && y === 20) {
+        return { data: new Uint8ClampedArray([171, 205, 239, 255]) };
+      }
+      return { data: new Uint8ClampedArray([17, 34, 51, 255]) };
+    });
     installCanvasContextMock();
     sourceColorPickMock.mockReset();
     sourceColorPickMock.mockRejectedValue(new Error('source color pick unavailable'));
 
     useConverterStore.setState({
       ...DEFAULT_STATE,
+      ...ORIGINAL_STORE_ACTIONS,
       previewBaseImageUrl: '/preview.png',
       previewImageUrl: '/preview.png',
       previewPixelWidth: 100,
@@ -229,6 +247,7 @@ describe('ColorPreview2D hover inspector', () => {
     mockPreviewRect(container);
 
     expect(surface.tagName).toBe('CANVAS');
+    expect(screen.queryByRole('button', { name: 'zoom_reset' })).not.toBeInTheDocument();
     expect(container).toHaveClass('h-full');
     expect(container).toHaveClass('w-full');
     expect(container.querySelector('img')).toBeNull();
@@ -316,7 +335,7 @@ describe('ColorPreview2D hover inspector', () => {
     expect(canvasCreateCount).toBe(initialCanvasCreateCount);
   });
 
-  it('selects the original source palette color after the displayed preview has been replaced', async () => {
+  it('selects the current visible palette color immediately after the displayed preview has been replaced', async () => {
     let resolvePick: (value: { source_matched_hex: string; quantized_hex: string }) => void = () => {};
     sourceColorPickMock.mockReturnValueOnce(
       new Promise((resolve) => {
@@ -380,21 +399,77 @@ describe('ColorPreview2D hover inspector', () => {
     const getImageDataMock = context?.getImageData as unknown as ReturnType<typeof vi.fn>;
     getImageDataMock.mockReturnValue({ data: new Uint8ClampedArray([0, 0, 255, 255]) });
 
-    await act(async () => {
-      fireEvent.click(container, { clientX: 120, clientY: 150 });
-    });
+    fireEvent.click(container, { clientX: 120, clientY: 150 });
     expect(sourceColorPickMock).toHaveBeenCalledWith('session-main-2d', 23, 50);
+    expect(useConverterStore.getState().selectedColors).toEqual(new Set(['0000FF']));
+    expect(useConverterStore.getState().selectedColor).toBe('0000FF');
+
+    await act(async () => {
+      resolvePick({
+        source_matched_hex: '#0000ff',
+        quantized_hex: '#0000f0',
+      });
+      await Promise.resolve();
+    });
+
+    expect(useConverterStore.getState().selectedColors).toEqual(new Set(['0000FF']));
+    expect(useConverterStore.getState().selectedColors.has('AA0000')).toBe(false);
+    expect(useConverterStore.getState().selectedColor).toBe('0000FF');
+  });
+
+  it('corrects an optimistic same-colour selection when the backend returns the current unhighlighted colour', async () => {
+    let resolvePick: (value: { source_matched_hex: string; quantized_hex: string }) => void = () => {};
+    sourceColorPickMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolvePick = resolve;
+      }),
+    );
+
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      previewBaseImageUrl: '/preview-highlight.png',
+      previewImageUrl: '/preview-highlight.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      selectionMode: 'select-all',
+      palette: [{
+        quantized_hex: 'AA0000',
+        matched_hex: 'AA0000',
+        pixel_count: 10,
+        percentage: 100,
+      } satisfies PaletteEntry],
+      selectedColors: new Set<string>(),
+      sessionId: 'session-main-2d',
+      preview_width_mm: 80,
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+    });
+
+    render(<ColorPreview2D />);
+
+    flushPendingImages('/preview-highlight.png');
+
+    const container = screen.getByTestId('color-preview-2d-container');
+    mockPreviewRect(container);
+    const context = getVisiblePreviewContext();
+    const getImageDataMock = context?.getImageData as unknown as ReturnType<typeof vi.fn>;
+    getImageDataMock.mockReturnValue({ data: new Uint8ClampedArray([0, 200, 255, 255]) });
+
+    fireEvent.click(container, { clientX: 120, clientY: 150 });
+    expect(useConverterStore.getState().selectedColors).toEqual(new Set(['00C8FF']));
 
     await act(async () => {
       resolvePick({
         source_matched_hex: '#aa0000',
-        quantized_hex: '#a80000',
+        quantized_hex: '#aa0000',
       });
       await Promise.resolve();
     });
 
     expect(useConverterStore.getState().selectedColors).toEqual(new Set(['AA0000']));
-    expect(useConverterStore.getState().selectedColors.has('0000FF')).toBe(false);
     expect(useConverterStore.getState().selectedColor).toBe('AA0000');
   });
 
@@ -442,6 +517,617 @@ describe('ColorPreview2D hover inspector', () => {
     expect(sourceColorPickMock).toHaveBeenCalledWith('session-main-2d', 10, 20);
     expect(toggleColorInSelection).toHaveBeenCalledWith('ABCDEF');
     expect(setSelectedColor).toHaveBeenCalledWith('ABCDEF');
+  });
+
+  it('uses the server pick when the local preview pixel cannot be sampled', async () => {
+    let resolvePick: (value: { source_matched_hex: string; quantized_hex: string }) => void = () => {};
+    sourceColorPickMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolvePick = resolve;
+      }),
+    );
+
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      previewBaseImageUrl: '/preview.png',
+      previewImageUrl: '/preview.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      selectionMode: 'select-all',
+      palette: [{
+        quantized_hex: 'A80000',
+        matched_hex: 'AA0000',
+        pixel_count: 10,
+        percentage: 100,
+      } satisfies PaletteEntry],
+      selectedColors: new Set<string>(),
+      sessionId: 'session-main-2d',
+      preview_width_mm: 80,
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+    });
+
+    render(<ColorPreview2D />);
+
+    flushPendingImages('/preview.png');
+
+    const container = screen.getByTestId('color-preview-2d-container');
+    mockPreviewRect(container);
+    const context = getVisiblePreviewContext();
+    const getImageDataMock = context?.getImageData as unknown as ReturnType<typeof vi.fn>;
+    getImageDataMock.mockReturnValue({ data: new Uint8ClampedArray([0, 0, 0, 0]) });
+
+    await act(async () => {
+      fireEvent.click(container, { clientX: 120, clientY: 150 });
+      await Promise.resolve();
+    });
+    expect(sourceColorPickMock).toHaveBeenCalledWith('session-main-2d', 23, 50);
+    expect(useConverterStore.getState().selectedColors.size).toBe(0);
+
+    await act(async () => {
+      resolvePick({
+        source_matched_hex: '#aa0000',
+        quantized_hex: '#a80000',
+      });
+      await Promise.resolve();
+    });
+
+    expect(useConverterStore.getState().selectedColors).toEqual(new Set(['AA0000']));
+    expect(useConverterStore.getState().selectedColor).toBe('AA0000');
+  });
+
+  it('optimistically sets the clicked palette colour in single-select mode before region detection returns', async () => {
+    const detectRegion = vi.fn(
+      () => new Promise<void>(() => {
+        // Keep the request pending so the assertion proves the immediate path.
+      }),
+    );
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      previewBaseImageUrl: '/preview.png',
+      previewImageUrl: '/preview.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      selectionMode: 'current',
+      palette: [{
+        quantized_hex: 'ABCDEF',
+        matched_hex: 'ABCDEF',
+        pixel_count: 10,
+        percentage: 100,
+      } satisfies PaletteEntry],
+      selectedColor: null,
+      sessionId: 'session-main-2d',
+      preview_width_mm: 80,
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+      detectRegion,
+    } as never);
+
+    render(<ColorPreview2D />);
+
+    flushPendingImages('/preview.png');
+
+    const container = screen.getByTestId('color-preview-2d-container');
+    mockPreviewRect(container);
+
+    await act(async () => {
+      fireEvent.click(container, { clientX: 80, clientY: 60 });
+      await Promise.resolve();
+    });
+
+    expect(detectRegion).toHaveBeenCalledWith(10, 20);
+    expect(useConverterStore.getState().selectedColor).toBe('ABCDEF');
+  });
+
+  it('keeps click selection active immediately after the preview image load event', async () => {
+    const detectRegion = vi.fn(
+      () => new Promise<void>(() => {
+        // Keep pending: this test only needs to prove the click is not dropped.
+      }),
+    );
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      ...ORIGINAL_STORE_ACTIONS,
+      previewBaseImageUrl: '/fresh-preview.png',
+      previewImageUrl: '/fresh-preview.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      selectionMode: 'current',
+      palette: [{
+        quantized_hex: 'ABCDEF',
+        matched_hex: 'ABCDEF',
+        pixel_count: 10,
+        percentage: 100,
+      } satisfies PaletteEntry],
+      selectedColor: null,
+      sessionId: 'session-main-2d',
+      preview_width_mm: 80,
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+      detectRegion,
+    } as never);
+
+    render(<ColorPreview2D />);
+
+    const container = screen.getByTestId('color-preview-2d-container');
+    mockPreviewRect(container);
+    sharedGetImageDataMock.mockReturnValue({
+      data: new Uint8ClampedArray([0xab, 0xcd, 0xef, 255]),
+    });
+    const freshPreviewImage = getPendingImages('/fresh-preview.png').at(-1);
+    expect(freshPreviewImage).toBeDefined();
+
+    act(() => {
+      freshPreviewImage?.dispatchLoad();
+      fireEvent.click(container, { clientX: 80, clientY: 60 });
+    });
+
+    expect(detectRegion).toHaveBeenCalledWith(10, 20);
+    expect(useConverterStore.getState().selectedColor).toBe('ABCDEF');
+  });
+
+  it('keeps the existing shared selection visible while adding a clicked component optimistically', async () => {
+    const applySelectionMutation = vi.fn(async () => {});
+    const data = new Uint8ClampedArray(100 * 100 * 4);
+    for (let pixel = 0; pixel < 100 * 100; pixel += 1) {
+      data.set([17, 17, 17, 255], pixel * 4);
+    }
+    for (const [x, y] of [[10, 20], [11, 20], [10, 21], [11, 21]]) {
+      data.set([34, 34, 34, 255], (y * 100 + x) * 4);
+    }
+    sharedGetImageDataMock.mockReturnValue({ data });
+
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      ...ORIGINAL_STORE_ACTIONS,
+      previewBaseImageUrl: '/preview.png',
+      previewImageUrl: '/preview.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      preview_width_mm: 100,
+      selectionMode: 'multi-select',
+      selectionTool: 'point',
+      selectionDocument: {
+        selection_revision: 1,
+        content_revision: 10,
+        selected_pixel_count: 4,
+        selected_component_count: 1,
+        selected_color_hexes: ['#111111'],
+        region_ids: ['old-region'],
+        components: [
+          {
+            label: 1,
+            region_id: 'old-region',
+            color_hex: '#111111',
+            pixel_count: 4,
+            bbox: [0, 0, 2, 2],
+            anchor: [0, 0],
+          },
+        ],
+        contours: [
+          [[0, 100], [2, 100], [2, 98], [0, 98]],
+        ],
+        can_undo: false,
+        can_redo: false,
+      },
+      applySelectionMutation,
+      sessionId: 'session-main-2d',
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+    });
+
+    render(<ColorPreview2D />);
+
+    flushPendingImages('/preview.png');
+    const container = screen.getByTestId('color-preview-2d-container');
+    mockPreviewRect(container);
+
+    await act(async () => {
+      fireEvent.click(container, { clientX: 80, clientY: 60 });
+      await Promise.resolve();
+    });
+
+    const document = useConverterStore.getState().selectionDocument;
+    expect(document?.selected_component_count).toBe(2);
+    expect(document?.components.map((component) => component.region_id)).toEqual([
+      'old-region',
+      expect.stringContaining('__optimistic_selection__'),
+    ]);
+    expect(document?.contours).toHaveLength(2);
+    expect(applySelectionMutation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: 'point-toggle',
+        optimisticDocument: expect.objectContaining({
+          selected_component_count: 2,
+          selected_pixel_count: 8,
+          components: expect.arrayContaining([
+            expect.objectContaining({ region_id: 'old-region' }),
+            expect.objectContaining({ region_id: expect.stringContaining('__optimistic_selection__') }),
+          ]),
+          contours: expect.arrayContaining([
+            [[0, 100], [2, 100], [2, 98], [0, 98]],
+          ]),
+        }),
+      }),
+    );
+  });
+
+  it('does not render same-colour contours while a single-select region detection is still pending', async () => {
+    const detectRegion = vi.fn(
+      () => new Promise<void>(() => {
+        // Keep pending: the test verifies no whole-colour contour flashes
+        // before the region-specific response arrives.
+      }),
+    );
+
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      ...ORIGINAL_STORE_ACTIONS,
+      previewBaseImageUrl: '/preview.png',
+      previewImageUrl: '/preview.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      preview_width_mm: 80,
+      selectionMode: 'current',
+      palette: [{
+        quantized_hex: 'ABCDEF',
+        matched_hex: 'ABCDEF',
+        pixel_count: 10,
+        percentage: 100,
+      } satisfies PaletteEntry],
+      colorContours: {
+        ABCDEF: [
+          [
+            [0, 0],
+            [80, 0],
+            [80, 80],
+            [0, 80],
+          ],
+        ],
+      },
+      selectedColor: null,
+      regionData: null,
+      detectRegion,
+      sessionId: 'session-main-2d',
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+    });
+
+    const { container: rendered } = render(<ColorPreview2D />);
+
+    flushPendingImages('/preview.png');
+
+    const container = screen.getByTestId('color-preview-2d-container');
+    mockPreviewRect(container);
+
+    act(() => {
+      fireEvent.click(container, { clientX: 80, clientY: 60 });
+    });
+
+    expect(useConverterStore.getState().selectedColor).toBe('ABCDEF');
+    expect(detectRegion).toHaveBeenCalledWith(10, 20);
+    expect(rendered.querySelector('[data-testid="selection-contour-compat"]')).toBeNull();
+    expect(rendered.querySelector('[data-testid="selection-marching-ants-white"]')).toBeNull();
+    expect(rendered.querySelector('[data-testid="selection-marching-ants-black"]')).toBeNull();
+  });
+
+  it('immediately deselects the current region when the selected region is clicked again', async () => {
+    const detectRegion = vi.fn();
+
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      ...ORIGINAL_STORE_ACTIONS,
+      previewBaseImageUrl: '/preview.png',
+      previewImageUrl: '/region-mask.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      preview_width_mm: 80,
+      selectionMode: 'current',
+      selectedColor: 'AABBCC',
+      regionData: {
+        regionId: 'region-1',
+        colorHex: '#AABBCC',
+        pixelCount: 42,
+        previewUrl: '/region-mask.png',
+        contours: [
+          [
+            [0, 0],
+            [80, 0],
+            [80, 80],
+            [0, 80],
+          ],
+        ],
+      },
+      detectRegion,
+      sessionId: 'session-main-2d',
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+    });
+
+    render(<ColorPreview2D />);
+
+    flushPendingImages('/preview.png');
+
+    const container = screen.getByTestId('color-preview-2d-container');
+    mockPreviewRect(container);
+    sharedGetImageDataMock.mockReturnValue({
+      data: new Uint8ClampedArray([0xaa, 0xbb, 0xcc, 255]),
+    });
+
+    act(() => {
+      fireEvent.click(container, { clientX: 120, clientY: 150 });
+    });
+
+    expect(detectRegion).not.toHaveBeenCalled();
+    expect(useConverterStore.getState().regionData).toBeNull();
+    expect(useConverterStore.getState().selectedColor).toBeNull();
+    expect(useConverterStore.getState().previewImageUrl).toBe('/preview.png');
+  });
+
+  it('can locally deselect a selected region when preview width metadata is missing', async () => {
+    const detectRegion = vi.fn();
+
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      ...ORIGINAL_STORE_ACTIONS,
+      previewBaseImageUrl: '/preview.png',
+      previewImageUrl: '/preview.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      preview_width_mm: null,
+      selectionMode: 'current',
+      selectedColor: 'AABBCC',
+      regionData: {
+        regionId: 'region-1',
+        colorHex: '#AABBCC',
+        pixelCount: 42,
+        previewUrl: '/preview.png',
+        contours: [
+          [
+            [0, 0],
+            [80, 0],
+            [80, 80],
+            [0, 80],
+          ],
+        ],
+      },
+      detectRegion,
+      sessionId: 'session-main-2d',
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+    });
+
+    render(<ColorPreview2D />);
+
+    flushPendingImages('/preview.png');
+
+    const container = screen.getByTestId('color-preview-2d-container');
+    mockPreviewRect(container);
+    sharedGetImageDataMock.mockReturnValue({
+      data: new Uint8ClampedArray([0xaa, 0xbb, 0xcc, 255]),
+    });
+
+    act(() => {
+      fireEvent.click(container, { clientX: 120, clientY: 150 });
+    });
+
+    expect(detectRegion).not.toHaveBeenCalled();
+    expect(useConverterStore.getState().regionData).toBeNull();
+  });
+
+  it('does not treat a region bbox as a selected-shape fallback when contour hit-testing misses', async () => {
+    const detectAndAccumulateRegion = vi.fn();
+
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      ...ORIGINAL_STORE_ACTIONS,
+      previewBaseImageUrl: '/preview.png',
+      previewImageUrl: '/preview.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      preview_width_mm: 100,
+      selectionMode: 'multi-select',
+      selectedColor: 'AABBCC',
+      selectedRegions: [
+        {
+          regionId: 'region-thin',
+          colorHex: '#AABBCC',
+          pixelCount: 10,
+          previewUrl: '/region-thin.png',
+          contours: [
+            [
+              [0, 0],
+              [1, 0],
+              [1, 1],
+              [0, 1],
+            ],
+          ],
+          bbox: [20, 45, 10, 10],
+        },
+      ],
+      detectAndAccumulateRegion,
+      sessionId: 'session-main-2d',
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+    });
+
+    render(<ColorPreview2D />);
+
+    flushPendingImages('/preview.png');
+
+    const container = screen.getByTestId('color-preview-2d-container');
+    mockPreviewRect(container);
+    sharedGetImageDataMock.mockReturnValue({
+      data: new Uint8ClampedArray([0xaa, 0xbb, 0xcc, 255]),
+    });
+
+    act(() => {
+      fireEvent.click(container, { clientX: 120, clientY: 150 });
+    });
+
+    expect(detectAndAccumulateRegion).toHaveBeenCalledWith(
+      expect.any(Number),
+      expect.any(Number),
+    );
+    expect(useConverterStore.getState().selectedRegions.map((region) => region.regionId)).toEqual([
+      'region-thin',
+    ]);
+  });
+
+  it('immediately removes a clicked selected region in multi-select mode without waiting for detection', async () => {
+    const detectAndAccumulateRegion = vi.fn();
+
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      ...ORIGINAL_STORE_ACTIONS,
+      previewBaseImageUrl: '/preview.png',
+      previewImageUrl: '/preview.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      preview_width_mm: 80,
+      selectionMode: 'multi-select',
+      selectedColor: 'DDEEFF',
+      selectedRegions: [
+        {
+          regionId: 'region-1',
+          colorHex: '#AABBCC',
+          pixelCount: 42,
+          previewUrl: '/region-1.png',
+          contours: [
+            [
+              [0, 0],
+              [80, 0],
+              [80, 80],
+              [0, 80],
+            ],
+          ],
+        },
+        {
+          regionId: 'region-2',
+          colorHex: '#DDEEFF',
+          pixelCount: 24,
+          previewUrl: '/region-2.png',
+          contours: [
+            [
+              [90, 0],
+              [100, 0],
+              [100, 10],
+              [90, 10],
+            ],
+          ],
+        },
+      ],
+      detectAndAccumulateRegion,
+      sessionId: 'session-main-2d',
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+    });
+
+    render(<ColorPreview2D />);
+
+    flushPendingImages('/preview.png');
+
+    const container = screen.getByTestId('color-preview-2d-container');
+    mockPreviewRect(container);
+    sharedGetImageDataMock.mockReturnValue({
+      data: new Uint8ClampedArray([0xaa, 0xbb, 0xcc, 255]),
+    });
+
+    act(() => {
+      fireEvent.click(container, { clientX: 120, clientY: 150 });
+    });
+
+    expect(detectAndAccumulateRegion).not.toHaveBeenCalled();
+    expect(useConverterStore.getState().selectedRegions.map((region) => region.regionId)).toEqual([
+      'region-2',
+    ]);
+    expect(useConverterStore.getState().selectedColor).toBe('DDEEFF');
+    expect(useConverterStore.getState().previewImageUrl).toBe('/region-2.png');
+  });
+
+  it('does not remove an existing multi-select region when a different-colour click geometrically overlaps its contour', async () => {
+    const detectAndAccumulateRegion = vi.fn();
+
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      ...ORIGINAL_STORE_ACTIONS,
+      previewBaseImageUrl: '/preview.png',
+      previewImageUrl: '/preview.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      preview_width_mm: 80,
+      selectionMode: 'multi-select',
+      selectedColor: 'AABBCC',
+      selectedRegions: [
+        {
+          regionId: 'region-1',
+          colorHex: '#AABBCC',
+          pixelCount: 42,
+          previewUrl: '/region-1.png',
+          contours: [
+            [
+              [0, 0],
+              [80, 0],
+              [80, 80],
+              [0, 80],
+            ],
+          ],
+        },
+      ],
+      detectAndAccumulateRegion,
+      sessionId: 'session-main-2d',
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+    });
+
+    render(<ColorPreview2D />);
+
+    flushPendingImages('/preview.png');
+
+    const container = screen.getByTestId('color-preview-2d-container');
+    mockPreviewRect(container);
+    sharedGetImageDataMock.mockReturnValue({
+      data: new Uint8ClampedArray([0xdd, 0xee, 0xff, 255]),
+    });
+
+    act(() => {
+      fireEvent.click(container, { clientX: 120, clientY: 150 });
+    });
+
+    expect(detectAndAccumulateRegion).toHaveBeenCalledWith(23, 50);
+    expect(useConverterStore.getState().selectedRegions.map((region) => region.regionId)).toEqual([
+      'region-1',
+    ]);
   });
 
   it('ignores stale source-color picks after leaving select-all mode', async () => {
@@ -568,7 +1254,10 @@ describe('ColorPreview2D hover inspector', () => {
     // (2) No SVG contour polygons may be rendered: the cyan mask is
     // already baked into the loaded image, and ``colorContours`` would
     // otherwise outline pixels that are outside of the region.
-    expect(container.querySelector('polygon')).toBeNull();
+    expect(container.querySelector('[data-testid="selection-marching-ants-overlay"]')).toBeNull();
+    expect(container.querySelector('[data-testid="selection-contour-compat"]')).toBeNull();
+    expect(container.querySelector('[data-testid="selection-marching-ants-white"]')).toBeNull();
+    expect(container.querySelector('[data-testid="selection-marching-ants-black"]')).toBeNull();
   });
 
   it('keeps SVG contour overlays aligned on top of the shared canvas preview surface', async () => {
@@ -605,6 +1294,124 @@ describe('ColorPreview2D hover inspector', () => {
       layerImages: [],
     });
 
+    render(<ColorPreview2D />);
+    const surface = screen.getByTestId('color-preview-2d-container');
+
+    mockPreviewRect(surface);
+
+    flushPendingImages('/preview.png');
+
+    const compatPolygon = screen.getByTestId('selection-contour-compat');
+    expect(compatPolygon).toHaveAttribute('points', '50,300 110,300 110,240');
+
+    // 轮廓已迁移到 imageRect 投影：viewBox 为容器尺寸，坐标按图像 fit 矩形
+    // 换算，与画布绘制严格对齐（renderMarchingAntsScreenOverlay）。
+    const whiteAnts = screen.getByTestId('selection-marching-ants-white');
+    const blackAnts = screen.getByTestId('selection-marching-ants-black');
+    expect(whiteAnts).toHaveAttribute('d', 'M 50 300 L 110 300 L 110 240 Z');
+    expect(blackAnts).toHaveAttribute('d', whiteAnts.getAttribute('d'));
+    expect(whiteAnts).toHaveAttribute('stroke', '#ffffff');
+    expect(blackAnts).toHaveAttribute('stroke', '#1a1a1a');
+    for (const path of [whiteAnts, blackAnts]) {
+      expect(path).toHaveAttribute('stroke-width', '1');
+      expect(path).toHaveAttribute('stroke-dasharray', '4 4');
+      expect(path).toHaveAttribute('vector-effect', 'non-scaling-stroke');
+    }
+  });
+
+  it('adds a frontend canvas pulse layer for blinking selection without replacing the real contour', async () => {
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      previewBaseImageUrl: '/preview.png',
+      previewImageUrl: '/preview.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      selectionMode: 'multi-select',
+      selectedColor: '222222',
+      selectionBlinkEnabled: true,
+      selectedRegions: [
+        {
+          regionId: 'region-light',
+          colorHex: '#eeeeee',
+          pixelCount: 42,
+          previewUrl: '/preview.png',
+          contours: [
+            [
+              [0, 0],
+              [20, 0],
+              [20, 20],
+            ],
+          ],
+        },
+        {
+          regionId: 'region-dark',
+          colorHex: '#222222',
+          pixelCount: 24,
+          previewUrl: '/preview.png',
+          contours: [
+            [
+              [30, 0],
+              [50, 0],
+              [50, 20],
+            ],
+          ],
+        },
+      ],
+      colorContours: {},
+      preview_width_mm: 100,
+      sessionId: 'session-main-2d',
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+    });
+
+    const { container, unmount } = render(<ColorPreview2D />);
+
+    mockPreviewRect(screen.getByTestId('color-preview-2d-container'));
+    flushPendingImages('/preview.png');
+
+    expect(container.querySelector('polygon')).not.toBeNull();
+    const blinkCanvas = screen.getByTestId('selection-blink-canvas');
+    expect(blinkCanvas).toBeInTheDocument();
+    expect(blinkCanvas).toHaveStyle({ zIndex: '6' });
+
+    unmount();
+  });
+
+  it('renders pixel-space region contours when preview width metadata is missing', async () => {
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      previewBaseImageUrl: '/preview.png',
+      previewImageUrl: '/preview.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      selectionMode: 'current',
+      selectedColor: 'AABBCC',
+      regionData: {
+        regionId: 'region-1',
+        colorHex: '#AABBCC',
+        pixelCount: 42,
+        previewUrl: '/preview.png',
+        contours: [
+          [
+            [0, 0],
+            [20, 0],
+            [20, 20],
+          ],
+        ],
+      },
+      colorContours: {},
+      preview_width_mm: null,
+      sessionId: 'session-main-2d',
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+    });
+
     const { container } = render(<ColorPreview2D />);
     const surface = screen.getByTestId('color-preview-2d-container');
 
@@ -614,7 +1421,48 @@ describe('ColorPreview2D hover inspector', () => {
 
     const polygon = container.querySelector('polygon');
     expect(polygon).not.toBeNull();
-    expect(polygon).toHaveAttribute('points', '0,100 20,100 20,80');
+    expect(polygon).toHaveAttribute('points', '50,300 110,300 110,240');
+  });
+
+  it('renders same-colour contours even when contour keys include a hash or different case', async () => {
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      previewBaseImageUrl: '/preview.png',
+      previewImageUrl: '/preview.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      selectionMode: 'select-all',
+      selectedColor: null,
+      selectedColors: new Set(['AABBCC']),
+      colorContours: {
+        '#aabbcc': [
+          [
+            [0, 0],
+            [20, 0],
+            [20, 20],
+          ],
+        ],
+      },
+      gradientSelection: null,
+      preview_width_mm: 100,
+      sessionId: 'session-main-2d',
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+    });
+
+    const { container } = render(<ColorPreview2D />);
+    const surface = screen.getByTestId('color-preview-2d-container');
+
+    mockPreviewRect(surface);
+
+    flushPendingImages('/preview.png');
+
+    const polygon = container.querySelector('polygon');
+    expect(polygon).not.toBeNull();
+    expect(polygon).toHaveAttribute('points', '50,300 110,300 110,240');
   });
 
   it('blocks hover and wheel interactions while replacePreviewLoading is active', () => {
@@ -817,6 +1665,218 @@ describe('ColorPreview2D hover inspector', () => {
     expect(detectRegion).toHaveBeenCalledWith(23, 50);
   });
 
+  it('routes left-button pointerup to selection even when the browser click event is missing', () => {
+    const detectRegion = vi.fn();
+
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      previewBaseImageUrl: '/preview.png',
+      previewImageUrl: '/preview.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      selectionMode: 'current',
+      detectRegion,
+      sessionId: 'session-main-2d',
+      preview_width_mm: 80,
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+    });
+
+    render(<ColorPreview2D />);
+
+    flushPendingImages('/preview.png');
+
+    const container = screen.getByTestId('color-preview-2d-container');
+    mockPreviewRect(container);
+
+    act(() => {
+      fireEvent.pointerDown(container, {
+        button: 0,
+        pointerId: 11,
+        clientX: 120,
+        clientY: 150,
+      });
+      fireEvent.pointerUp(container, {
+        button: 0,
+        pointerId: 11,
+        clientX: 120,
+        clientY: 150,
+      });
+    });
+
+    expect(detectRegion).toHaveBeenCalledTimes(1);
+    expect(detectRegion).toHaveBeenCalledWith(23, 50);
+  });
+
+  it('does not duplicate selection when pointerup is followed by a browser click', () => {
+    const detectRegion = vi.fn();
+
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      previewBaseImageUrl: '/preview.png',
+      previewImageUrl: '/preview.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      selectionMode: 'current',
+      detectRegion,
+      sessionId: 'session-main-2d',
+      preview_width_mm: 80,
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+    });
+
+    render(<ColorPreview2D />);
+
+    flushPendingImages('/preview.png');
+
+    const container = screen.getByTestId('color-preview-2d-container');
+    mockPreviewRect(container);
+
+    act(() => {
+      fireEvent.pointerDown(container, {
+        button: 0,
+        pointerId: 12,
+        clientX: 120,
+        clientY: 150,
+      });
+      fireEvent.pointerUp(container, {
+        button: 0,
+        pointerId: 12,
+        clientX: 120,
+        clientY: 150,
+      });
+      fireEvent.click(container, { clientX: 120, clientY: 150, button: 0 });
+    });
+
+    expect(detectRegion).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes consecutive multi-select pointerup clicks without requiring browser click events', () => {
+    const detectAndAccumulateRegion = vi.fn();
+
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      ...ORIGINAL_STORE_ACTIONS,
+      previewBaseImageUrl: '/preview.png',
+      previewImageUrl: '/preview.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      selectionMode: 'multi-select',
+      detectAndAccumulateRegion,
+      selectedRegions: [],
+      sessionId: 'session-main-2d',
+      preview_width_mm: 80,
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+    } as never);
+
+    render(<ColorPreview2D />);
+
+    flushPendingImages('/preview.png');
+
+    const container = screen.getByTestId('color-preview-2d-container');
+    mockPreviewRect(container);
+
+    act(() => {
+      fireEvent.pointerDown(container, {
+        button: 0,
+        pointerId: 21,
+        clientX: 120,
+        clientY: 150,
+      });
+      fireEvent.pointerUp(container, {
+        button: 0,
+        pointerId: 21,
+        clientX: 120,
+        clientY: 150,
+      });
+      fireEvent.pointerDown(container, {
+        button: 0,
+        pointerId: 22,
+        clientX: 200,
+        clientY: 150,
+      });
+      fireEvent.pointerUp(container, {
+        button: 0,
+        pointerId: 22,
+        clientX: 200,
+        clientY: 150,
+      });
+    });
+
+    expect(detectAndAccumulateRegion).toHaveBeenCalledTimes(2);
+    expect(detectAndAccumulateRegion).toHaveBeenNthCalledWith(
+      1,
+      expect.any(Number),
+      expect.any(Number),
+    );
+    expect(detectAndAccumulateRegion).toHaveBeenNthCalledWith(
+      2,
+      expect.any(Number),
+      expect.any(Number),
+    );
+  });
+
+  it('does not treat a moved left-button pointer gesture as a color selection click', () => {
+    const detectRegion = vi.fn();
+
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      previewBaseImageUrl: '/preview.png',
+      previewImageUrl: '/preview.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      selectionMode: 'current',
+      detectRegion,
+      sessionId: 'session-main-2d',
+      preview_width_mm: 80,
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+    });
+
+    render(<ColorPreview2D />);
+
+    flushPendingImages('/preview.png');
+
+    const container = screen.getByTestId('color-preview-2d-container');
+    mockPreviewRect(container);
+
+    act(() => {
+      fireEvent.pointerDown(container, {
+        button: 0,
+        pointerId: 31,
+        clientX: 120,
+        clientY: 150,
+      });
+      fireEvent.pointerMove(container, {
+        button: 0,
+        pointerId: 31,
+        clientX: 130,
+        clientY: 150,
+      });
+      fireEvent.pointerUp(container, {
+        button: 0,
+        pointerId: 31,
+        clientX: 130,
+        clientY: 150,
+      });
+    });
+
+    expect(detectRegion).not.toHaveBeenCalled();
+  });
+
   it('keeps the color-picking cursor after zooming the workstation preview', () => {
     render(<ColorPreview2D />);
 
@@ -863,6 +1923,72 @@ describe('ColorPreview2D hover inspector', () => {
 
     act(() => {
       fireEvent.wheel(container, { clientX: 120, clientY: 150, deltaY: -100 });
+      fireEvent.click(container, { clientX: 120, clientY: 150, button: 0 });
+    });
+
+    expect(detectRegion).toHaveBeenCalledWith(23, 50);
+  });
+
+  it('keeps left-click color selection active after a right-button pan gesture', () => {
+    const detectRegion = vi.fn();
+
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      previewBaseImageUrl: '/preview.png',
+      previewImageUrl: '/preview.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      selectionMode: 'current',
+      detectRegion,
+      sessionId: 'session-main-2d',
+      preview_width_mm: 80,
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+    });
+
+    render(<ColorPreview2D />);
+
+    flushPendingImages('/preview.png');
+
+    const container = screen.getByTestId('color-preview-2d-container');
+    mockPreviewRect(container);
+    Object.defineProperty(container, 'setPointerCapture', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    Object.defineProperty(container, 'releasePointerCapture', {
+      configurable: true,
+      value: vi.fn(),
+    });
+
+    act(() => {
+      fireEvent.pointerDown(container, {
+        button: 2,
+        pointerId: 7,
+        clientX: 120,
+        clientY: 120,
+      });
+      fireEvent.pointerMove(container, {
+        button: 2,
+        pointerId: 7,
+        clientX: 140,
+        clientY: 140,
+      });
+      fireEvent.pointerUp(container, {
+        button: 2,
+        pointerId: 7,
+        clientX: 140,
+        clientY: 140,
+      });
+      fireEvent.pointerDown(container, {
+        button: 0,
+        pointerId: 8,
+        clientX: 120,
+        clientY: 150,
+      });
       fireEvent.click(container, { clientX: 120, clientY: 150, button: 0 });
     });
 
@@ -1176,5 +2302,59 @@ describe('ColorPreview2D hover inspector', () => {
     fetchLayerImages.mockClear();
 
     expect(fetchLayerImages).not.toHaveBeenCalled();
+  });
+
+  it('restores the system cursor outside the image so the pointer never turns invisible', () => {
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      ...ORIGINAL_STORE_ACTIONS,
+      previewBaseImageUrl: '/preview.png',
+      previewImageUrl: '/preview.png',
+      previewPixelWidth: 100,
+      previewPixelHeight: 100,
+      selectionMode: 'region',
+      selectionTool: 'brush',
+      brushSizePx: 24,
+      sessionId: 'session-main-2d',
+      preview_width_mm: 80,
+      bed_label: '256 x 256 mm',
+      bedSizes: [],
+      fetchLayerImages: vi.fn(async () => {}),
+      layerImagesLoading: false,
+      layerImages: [],
+    });
+
+    render(<ColorPreview2D />);
+
+    const container = screen.getByTestId('color-preview-2d-container');
+    // 必须在图片 load 之前 mock 尺寸：surface 在 mount 时测量容器，
+    // load 后重渲染才携带有效的 viewport（screenSpaceOverlay 依赖它）。
+    mockPreviewRect(container);
+
+    flushPendingImages('/preview.png');
+
+    // 未悬停：保持系统十字光标，不渲染指示圈。
+    expect(container).toHaveClass('cursor-crosshair');
+    expect(screen.queryByTestId('selection-brush-cursor')).not.toBeInTheDocument();
+
+    // 图像内悬停：隐藏系统光标，指示圈接管（跟随指针）。
+    act(() => {
+      fireEvent.pointerMove(container, { pointerId: 1, clientX: 120, clientY: 150 });
+    });
+
+    expect(container).toHaveClass('cursor-none');
+    const insideCursor = screen.getByTestId('selection-brush-cursor');
+    expect(insideCursor.style.left).toBe('120px');
+    expect(insideCursor.style.top).toBe('150px');
+
+    // 移出图像（图像显示在容器 x∈[50,350]）：系统光标立刻恢复可见，
+    // 指示圈退场——任何时刻都不会出现"光标隐身"。
+    act(() => {
+      fireEvent.pointerMove(container, { pointerId: 1, clientX: 20, clientY: 150 });
+    });
+
+    expect(container).toHaveClass('cursor-crosshair');
+    expect(container).not.toHaveClass('cursor-none');
+    expect(screen.queryByTestId('selection-brush-cursor')).not.toBeInTheDocument();
   });
 });

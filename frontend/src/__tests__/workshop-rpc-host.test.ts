@@ -44,6 +44,50 @@ afterEach(() => {
 });
 
 describe("createWorkshopRpcHost", () => {
+  it("emits UI state events only to sessions that advertised support", () => {
+    const uiState = {
+      locale: "en-US" as const,
+      theme: "light" as const,
+      tokens: { "--lumina-surface": "#ffffff" },
+    };
+    const legacyPort: WorkshopMessagePort = {
+      onmessage: null,
+      onmessageerror: null,
+      postMessage: vi.fn(),
+      start: vi.fn(),
+      close: vi.fn(),
+    };
+    const capablePort: WorkshopMessagePort = {
+      onmessage: null,
+      onmessageerror: null,
+      postMessage: vi.fn(),
+      start: vi.fn(),
+      close: vi.fn(),
+    };
+    const legacyHost = createWorkshopRpcHost(hostOptions({}));
+    const capableHost = createWorkshopRpcHost({
+      ...hostOptions({}),
+      supportedEvents: new Set(["ui.stateChanged"]),
+    });
+    legacyHost.attach(legacyPort);
+    capableHost.attach(capablePort);
+
+    expect(legacyHost.emit("ui.stateChanged", uiState)).toBe(false);
+    expect(legacyPort.postMessage).not.toHaveBeenCalled();
+    expect(capableHost.emit("ui.stateChanged", uiState)).toBe(true);
+    expect(capablePort.postMessage).toHaveBeenCalledWith({
+      protocol: "lumina-workshop-rpc",
+      version: 1,
+      kind: "event",
+      event: "ui.stateChanged",
+      payload: uiState,
+    });
+
+    capableHost.close();
+    expect(capableHost.emit("ui.stateChanged", uiState)).toBe(false);
+    expect(capablePort.postMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps every v1 method on the explicit capability table", () => {
     expect(METHOD_PERMISSION).toEqual({
       "image.pick": "image.pick",
@@ -351,6 +395,85 @@ describe("createWorkshopRpcHost", () => {
       }),
       expect.any(Object),
     );
+  });
+
+  it("passes optional native SVG and total thickness through the v1 handoff", async () => {
+    const handler = vi.fn().mockResolvedValue({ status: "completed" });
+    const host = createWorkshopRpcHost(
+      hostOptions(
+        { "handoff.image": handler },
+        ["handoff.image"],
+      ),
+    );
+    const svgBytes = Uint8Array.from(
+      new TextEncoder().encode(
+        '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0L1 0L1 1Z"/></svg>',
+      ),
+    ).buffer;
+
+    const response = await host.dispatch(
+      request("handoff.image", {
+        moduleId: "fixture.hello",
+        moduleVersion: "1.0.0",
+        projectId: "project-svg",
+        pngBytes: new ArrayBuffer(23),
+        svgBytes,
+        pixelWidth: 1,
+        pixelHeight: 1,
+        recommendedWidthMm: 2.6,
+        recommendedHeightMm: 2.6,
+        recommendedTotalThicknessMm: 1.85,
+        preserveCanvasBounds: true,
+        colorLibraryId: null,
+        recipeSource: {},
+      }),
+    );
+
+    expect(response).toMatchObject({ ok: true });
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        svgBytes,
+        recommendedTotalThicknessMm: 1.85,
+      }),
+      expect.anything(),
+    );
+  });
+
+  it.each([
+    { svgBytes: "not-bytes", recommendedTotalThicknessMm: 1.85 },
+    { svgBytes: new ArrayBuffer(8), recommendedTotalThicknessMm: 0 },
+    { svgBytes: new ArrayBuffer(8), recommendedTotalThicknessMm: NaN },
+  ])("rejects invalid optional native handoff fields", async (optional) => {
+    const handler = vi.fn();
+    const host = createWorkshopRpcHost(
+      hostOptions(
+        { "handoff.image": handler },
+        ["handoff.image"],
+      ),
+    );
+
+    const response = await host.dispatch(
+      request("handoff.image", {
+        moduleId: "fixture.hello",
+        moduleVersion: "1.0.0",
+        projectId: "project-svg-invalid",
+        pngBytes: new ArrayBuffer(24),
+        pixelWidth: 1,
+        pixelHeight: 1,
+        recommendedWidthMm: 2.6,
+        recommendedHeightMm: 2.6,
+        preserveCanvasBounds: true,
+        colorLibraryId: null,
+        recipeSource: {},
+        ...optional,
+      }),
+    );
+
+    expect(response).toMatchObject({
+      ok: false,
+      error: { code: "rpc-payload-invalid" },
+    });
+    expect(handler).not.toHaveBeenCalled();
   });
 
   it("validates and reconstructs project payloads before calling handlers", async () => {

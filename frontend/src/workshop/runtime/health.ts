@@ -161,6 +161,13 @@ export function desktopModuleUrl(
   return `lumina-workshop://${moduleId}/${version}/ui/index.html`;
 }
 
+export function isBrowserTrustedWorkshopModule(
+  source: WorkshopInstallSource,
+  official: boolean,
+): boolean {
+  return official && (source === "registry" || source === "seed");
+}
+
 export function canRunWorkshopInBrowser(
   source: WorkshopInstallSource,
   official: boolean,
@@ -172,7 +179,7 @@ export function canRunWorkshopInBrowser(
   if (source === "fixture") {
     return true;
   }
-  if (source === "seed" && official) {
+  if (isBrowserTrustedWorkshopModule(source, official)) {
     return true;
   }
   return mode === "browser-unsafe-development" && source === "local";

@@ -15,6 +15,7 @@ Validates:
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures.process import BrokenProcessPool
 import io
 import inspect
 import json
@@ -33,6 +34,7 @@ from api.dependencies import get_file_registry, get_session_store, get_worker_po
 from api.file_registry import FileRegistry
 from api.session_store import SessionStore
 from api.worker_pool import WorkerPoolManager
+from core.errors import VectorMeshMemoryBudgetError
 from utils.merged_bambu_3mf_writer import MergedWriteError
 
 _test_store: SessionStore = SessionStore(ttl=1800)
@@ -448,6 +450,66 @@ class TestBatchAllFailed:
         assert body["preview_3d_url"] is None
         assert body["preview_items"] == []
 
+    def test_batch_memory_admission_returns_actionable_422(self) -> None:
+        _mock_pool.submit = AsyncMock(
+            side_effect=VectorMeshMemoryBudgetError(
+                "preflight",
+                9 * 1024**3,
+                8 * 1024**3,
+                1 * 1024**3,
+                4_200,
+                420_000,
+            ),
+        )
+
+        with (
+            patch(
+                "api.routers.converter.generate.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.generate.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[("images", _make_test_image_buf("complex.png"))],
+                data={"lut_name": "test_lut"},
+            )
+
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"]["code"] == (
+            "vector_mesh_memory_budget_exceeded"
+        )
+
+    def test_batch_broken_worker_pool_stops_before_next_item(self) -> None:
+        _mock_pool.submit = AsyncMock(
+            side_effect=BrokenProcessPool("worker was killed")
+        )
+
+        with (
+            patch(
+                "api.routers.converter.generate.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.generate.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[
+                    ("images", _make_test_image_buf("complex-1.png")),
+                    ("images", _make_test_image_buf("complex-2.png")),
+                ],
+                data={"lut_name": "test_lut"},
+            )
+
+        assert response.status_code == 503
+        assert _mock_pool.submit.await_count == 1
+
     def test_batch_worker_missing_output_sanitizes_status_message(self) -> None:
         private_path = "/Users/min/private/batch-output/missing.3mf"
         log_calls: list[tuple[str, str, dict[str, object]]] = []
@@ -641,6 +703,10 @@ class TestBatchWorkerPoolSubmit:
         assert call_args[0][22] == "0.2"
         assert call_args[0][23] is False
         assert call_args[0][36] is True
+        assert (
+            call_args.kwargs["host_memory_reservation_bytes"]
+            == 8 * 1024**3
+        )
 
     def test_batch_submits_material_archive_source_to_worker(self) -> None:
         """Batch endpoint forwards material-archive source params to worker."""
@@ -1276,6 +1342,48 @@ class TestBatchMergeFlow:
         # All results are success
         assert len(body["results"]) == 3
         assert all(r["status"] == "success" for r in body["results"])
+
+    def test_merged_wipe_tower_warning_is_returned_with_download(self) -> None:
+        _mock_pool.submit = AsyncMock(
+            return_value=_make_worker_result("img.png", 30.0, 20.0),
+        )
+
+        with (
+            patch(
+                "api.routers.converter.generate.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.generate.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write",
+                _noop_3mf_write,
+            ),
+            patch(
+                "api.routers.converter.generate.read_wipe_tower_placement_warnings",
+                return_value=["wipe_tower_manual_adjustment_required"],
+            ),
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[("images", _make_test_image_buf("img.png"))],
+                data={"lut_name": "test_lut"},
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["download_url"] is not None
+        assert body["warnings"] == [
+            {
+                "code": "wipe_tower_manual_adjustment_required",
+                "message": (
+                    "文件已继续生成，但当前模型和擦料塔无法在所选热床上同时安全摆放。"
+                    "请务必在切片软件中手动移动模型，或调整擦料塔的宽度和位置后再打印。"
+                ),
+            }
+        ]
 
     def test_preview_registration_failure_preserves_final_download(self) -> None:
         """Preview registration failure should not discard the merged 3MF."""

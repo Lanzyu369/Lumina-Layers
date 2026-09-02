@@ -20,6 +20,8 @@ export {
 
 export type {
   SelectionMode,
+  SelectionTool,
+  SelectionDocument,
   RegionData,
   PendingReplacement,
   ModelSurfacePlacement,

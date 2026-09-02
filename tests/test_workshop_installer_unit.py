@@ -314,6 +314,27 @@ def test_existing_module_identity_cannot_be_replaced_by_local_source(
     assert not installer.version_path("fixture.hello", "1.1.0").exists()
 
 
+@pytest.mark.parametrize("source", ["github", "local"])
+def test_untrusted_install_source_cannot_claim_official_identity(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    installer = installer_for(tmp_path)
+
+    with pytest.raises(
+        WorkshopInstallError,
+        match="only Registry or seed installs may be official",
+    ):
+        install_candidate(
+            installer,
+            package(tmp_path, "1.0.0"),
+            source=source,
+            official=True,
+        )
+
+    assert installer.get("fixture.hello") is None
+
+
 def test_same_module_candidate_installs_are_serialized(
     tmp_path: Path,
 ) -> None:

@@ -76,9 +76,12 @@ domain errors; installed bytes remain under `LUMINA_WORKSHOP_DATA_DIR`.
 - safe README/license/gallery details;
 - fixed-header runtime HTML and bounded static public assets.
 
-Community runtime HTML requires the per-launch desktop token. The token is
-passed only from Electron main process to the loopback backend and never enters
-preload, renderer state, logs, bug reports, or response headers.
+Official modules installed from the signed Registry, and official seed modules,
+may run in the restricted browser sandbox without the desktop token. Community
+Registry, GitHub, and local runtime HTML still require the per-launch desktop
+token. The token is passed only from Electron main process to the loopback
+backend and never enters preload, renderer state, logs, bug reports, or response
+headers.
 
 ### Frontend host
 
@@ -162,7 +165,7 @@ mode.
 | recipe envelope | Bounded generic JSON allowing a module to restore editing | project database or source image |
 | color library | Host-normalized LUT/material/native palette snapshot | raw LUT or material filesystem |
 | handoff | Host-validated image and metadata transition into converter | direct store mutation |
-| browser restricted mode | Mode that runs official seed/fixtures only | secure community runtime |
+| browser restricted mode | Mode that runs signed-Registry official modules, official seed, and fixtures only | secure community runtime |
 | unsafe development mode | Explicit local-package mode using synthetic data | production browser sandbox |
 
 ## Focused verification

@@ -15,6 +15,7 @@ import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.dependencies import get_file_registry
+from api.export_device_validation import validate_export_device_selection
 from api.file_registry import FileRegistry
 from api.schemas.five_color import (
     BaseColorEntry,
@@ -436,6 +437,13 @@ def generate_swatch(
     """Generate a 3MF swatch file from collected recipes.
     根据收集的配方列表生成 3MF 色块验证文件。
     """
+    validate_export_device_selection(
+        printer_id=request.printer_id,
+        slicer=request.slicer,
+        nozzle_size=request.nozzle_size,
+        device_profile_id=request.device_profile_id,
+        build_plate_id=request.build_plate_id,
+    )
     from api.file_bridge import pil_to_png_bytes
     from core.recipe_swatch import RecipeSwatchItem, generate_recipe_swatch
 
@@ -482,6 +490,7 @@ def generate_swatch(
         slicer=request.slicer,
         nozzle_size=request.nozzle_size,
         device_profile_id=request.device_profile_id,
+        build_plate_id=request.build_plate_id,
     )
 
     if not output_path:

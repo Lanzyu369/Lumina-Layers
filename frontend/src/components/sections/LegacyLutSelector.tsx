@@ -183,7 +183,7 @@ export default function LegacyLutSelector({
       )}
 
       {manufacturer ? (
-        <div className="flex flex-col gap-3 rounded-lg border border-slate-200/60 bg-slate-100/50 p-3 dark:border-slate-700/40 dark:bg-slate-900/40">
+        <div className="flex min-w-0 flex-col gap-3 rounded-lg border border-slate-200/60 bg-slate-100/50 p-3 dark:border-slate-700/40 dark:bg-slate-900/40">
           <div className="text-xs text-slate-500 dark:text-slate-400">
             {labels.brandInfo ?? "Brand Info"}:
             <span className="ml-1 text-slate-700 dark:text-slate-200">
@@ -198,6 +198,7 @@ export default function LegacyLutSelector({
           <div className="text-xs text-slate-500 dark:text-slate-400">
             {labels.vendor ?? "Vendor"}: {brandInfo?.vendor || manufacturer}
           </div>
+
           <div className="text-xs text-slate-500 dark:text-slate-400">
             {labels.database ?? labels.lut}:
             <span className="ml-1 whitespace-normal break-words text-slate-700 dark:text-slate-200">

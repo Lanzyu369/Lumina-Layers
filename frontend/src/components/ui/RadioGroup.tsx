@@ -6,6 +6,7 @@ import {
   workstationChoiceRowDisabledClass,
   workstationFieldLabelClass,
 } from "./panelPrimitives";
+import HelpDot from "./HelpDot";
 
 interface RadioGroupProps {
   label: string;
@@ -14,6 +15,8 @@ interface RadioGroupProps {
   onChange: (value: string) => void;
   disabled?: boolean;
   disabledValues?: string[];
+  /** Optional hint text; renders a HelpDot after the group label. */
+  tooltip?: string;
 }
 
 export default function RadioGroup({
@@ -23,12 +26,18 @@ export default function RadioGroup({
   onChange,
   disabled = false,
   disabledValues = [],
+  tooltip,
 }: RadioGroupProps) {
   const groupId = useId();
 
   return (
     <fieldset className="flex flex-col gap-1.5" disabled={disabled}>
-      <legend className={workstationFieldLabelClass}>{label}</legend>
+      <legend className={workstationFieldLabelClass}>
+        <span className="flex items-center gap-1.5">
+          <span>{label}</span>
+          {tooltip && <HelpDot title={label} description={tooltip} />}
+        </span>
+      </legend>
       <div className="grid gap-2">
         {options.map((opt) => {
           const isDisabled = disabled || disabledValues.includes(opt.value);

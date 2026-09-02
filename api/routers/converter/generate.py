@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures.process import BrokenProcessPool
 from contextlib import suppress
 from copy import deepcopy
 import json
@@ -19,9 +20,10 @@ from pathlib import Path
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from PIL import Image
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, StrictBool, ValidationError
 
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
+from api.export_device_validation import validate_export_device_selection
 from api.file_bridge import ensure_png_tempfile
 from api.file_registry import FileRegistry
 from api.preview_cache_artifacts import (
@@ -35,6 +37,7 @@ from api.schemas.converter import (
     ConvertGenerateRequest,
     LargeFormatConvertGenerateRequest,
     LargeFormatGenerateRequest,
+    MAX_LARGE_FORMAT_DIMENSION_MM,
     ModelingMode,
     StructureMode,
 )
@@ -47,6 +50,7 @@ from api.schemas.responses import (
     LargeFormatGenerateResponse,
     WarningEntry,
 )
+from api.selection_state import unpack_applied_region_mask
 from api.session_store import SessionStore
 from api.structured_logging import get_logger
 from api.worker_pool import WorkerPoolManager
@@ -58,15 +62,27 @@ from api.workers.converter_workers import (
     worker_generate_model_surface_overlay,
 )
 from core.batch_layout import LayoutResult, XYBBox, layout_shelf_by_row
-from core.errors import CachedPreviewAnalysisError
+from core.errors import (
+    CachedPreviewAnalysisError,
+    VectorHostMemoryAdmissionError,
+    VectorMeshMemoryBudgetError,
+    VectorTopologyError,
+)
 from core.model_surface.types import ModelSurfaceError
+from core.naming import generate_preserved_upload_3mf_filename
 from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
+from core.vector_mesh_memory import (
+    estimate_vector_task_memory_reservation_bytes,
+    resolve_vector_mesh_memory_budget_bytes,
+)
+from core.wipe_tower_placement import WIPE_TOWER_MANUAL_WARNING_CODE
 from utils.merged_bambu_3mf_writer import (
     MergedBambu3MFWriter,
     MergedItem,
     MaterialSlot as WriterMaterialSlot,
 )
 from config import (
+    PrinterConfig,
     SVG_PIXELS_PER_MM_DEFAULT,
     SVG_PIXELS_PER_MM_MAX,
     SVG_PIXELS_PER_MM_MIN,
@@ -78,6 +94,8 @@ from config import (
 from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
 from core.recipe_order import convert_recipe_between_orders
 from core.vector_large_format import (
+    MAX_LARGE_FORMAT_TILE_COUNT,
+    SVG_RASTER_FALLBACK_MAX_TOTAL_PIXELS,
     SVG_LARGE_FORMAT_DENSITY_REDUCED_WARNING,
     SVG_LARGE_FORMAT_FALLBACK_NATIVE_FAILURE,
     SVG_LARGE_FORMAT_FALLBACK_UNSUPPORTED_FEATURE,
@@ -87,6 +105,7 @@ from core.vector_large_format import (
     format_large_format_tile_label,
     inspect_svg_large_format_support,
     normalize_large_format_source_basename,
+    resolve_large_format_grid_shape,
 )
 from core.material_lut_synthesis import infer_material_archive_base_channel_idx
 from core.material_dynamic_solver import (
@@ -94,6 +113,7 @@ from core.material_dynamic_solver import (
     DynamicMaterialSolverError,
 )
 from core.single_stage import record_material_usage
+from utils.bambu_3mf_writer import read_wipe_tower_placement_warnings
 from utils.lut_manager import LUTManager
 
 from .common import (
@@ -103,6 +123,7 @@ from .common import (
     PREVIEW_CACHE_INVALID_DETAIL,
     PREVIEW_CACHE_UNAVAILABLE_DETAIL,
     PREVIEW_COLOR_PALETTE_UNAVAILABLE_DETAIL,
+    RECIPE_OVERRIDE_APPLIED_MASKS_KEY,
     ROUTER_HANDLED_ERRORS,
     SOURCE_IMAGE_UNAVAILABLE_DETAIL,
     _ensure_material_matrix_signed_capacity,
@@ -141,6 +162,10 @@ BATCH_PREVIEW_UNAVAILABLE_MESSAGE: str = (
     "批量 3MF 下载已生成；网页 3D 预览暂不可用 / The batch 3MF download "
     "is ready; the browser 3D preview is temporarily unavailable."
 )
+BATCH_WIPE_TOWER_MANUAL_ADJUSTMENT_MESSAGE: str = (
+    "文件已继续生成，但当前模型和擦料塔无法在所选热床上同时安全摆放。"
+    "请务必在切片软件中手动移动模型，或调整擦料塔的宽度和位置后再打印。"
+)
 LARGE_FORMAT_GENERATION_FAILED_DETAIL: str = (
     "Large-format generation failed. Try again or check the server log for details."
 )
@@ -161,9 +186,77 @@ BATCH_MERGE_FAILED_DETAIL: str = (
 BATCH_ITEM_FAILED_DETAIL: str = (
     "This file could not be converted. Re-upload it or check the server log for details."
 )
+BATCH_GENERATION_FAILED_DETAIL: str = (
+    "Batch generation worker became unavailable. Try the batch again."
+)
 MODEL_GENERATION_FAILED_DETAIL: str = (
     "3MF generation failed. Re-run preview and try generating the model again."
 )
+VECTOR_TOPOLOGY_UNREPAIRABLE_DETAIL: dict[str, str] = {
+    "code": "vector_topology_unrepairable",
+    "stage": "polygon_export",
+    "action": "simplify_or_revectorize",
+    "message": (
+        "The vector artwork contains geometry that cannot be exported safely. "
+        "Simplify or re-vectorize the artwork, then upload it again."
+    ),
+}
+
+
+def _vector_task_memory_reservation_bytes(
+    source_path: str,
+    params: dict | None = None,
+    *,
+    lut_path: str | None = None,
+) -> int:
+    """Resolve a task cap from every file the worker may retain."""
+
+    if (
+        str((params or {}).get("material_source") or "") == "material_archive"
+        or lut_path == "__material_archive__"
+    ):
+        # Material solvers create persisted or dynamic runtimes that have no
+        # complete parent-visible file list. Keep the configured cap instead
+        # of pretending the SVG alone bounds the worker's resident state.
+        return resolve_vector_mesh_memory_budget_bytes()
+
+    source_identity = os.path.abspath(os.fspath(source_path))
+    supporting_by_identity: dict[str, str] = {}
+    resident_by_identity: dict[str, str] = {}
+    pending_mappings = [params or {}]
+    while pending_mappings:
+        mapping = pending_mappings.pop()
+        for key, value in mapping.items():
+            if isinstance(value, dict):
+                pending_mappings.append(value)
+            if (
+                not str(key).endswith("_path")
+                or not isinstance(value, (str, os.PathLike))
+                or not value
+            ):
+                continue
+            path_value = os.fspath(value)
+            if path_value.startswith("__"):
+                continue
+            identity = os.path.abspath(path_value)
+            if identity == source_identity:
+                continue
+            if str(key) == "vector_parse_clip_cache_path":
+                supporting_by_identity[identity] = path_value
+                resident_by_identity.pop(identity, None)
+            elif identity not in supporting_by_identity:
+                resident_by_identity[identity] = path_value
+    if isinstance(lut_path, str) and lut_path and not lut_path.startswith("__"):
+        identity = os.path.abspath(lut_path)
+        if identity != source_identity and identity not in supporting_by_identity:
+            resident_by_identity[identity] = lut_path
+    return estimate_vector_task_memory_reservation_bytes(
+        source_path,
+        supporting_paths=tuple(supporting_by_identity.values()),
+        resident_paths=tuple(resident_by_identity.values()),
+    )
+
+
 MODEL_SURFACE_SOURCE_UNAVAILABLE_DETAIL: str = (
     "Surface model is unavailable. Re-upload the model, run preview, and try again."
 )
@@ -205,6 +298,7 @@ class _GenerateBody(BaseModel):
 
     session_id: str
     params: ConvertGenerateRequest
+    preserve_upload_filename_for_3mf: StrictBool = False
 
 
 def _should_use_model_surface_overlay(session_data: dict) -> bool:
@@ -287,6 +381,9 @@ def _prepare_model_surface_converter_params(
     converter_params["enable_cloisonne"] = False
     converter_params["enable_coating"] = False
     converter_params["enable_base_layer_height_modifier"] = False
+    converter_params["backing_infill_density_percent"] = (
+        PrinterConfig.BACKING_INFILL_DENSITY_DEFAULT_PERCENT
+    )
     return converter_params
 
 
@@ -371,25 +468,13 @@ def _require_preview_cache_for_generate(
     return cache, None
 
 
-def _resolve_reusable_preview_glb_path(
+def _resolve_registered_preview_glb(
     *,
     cache: dict,
-    request: ConvertGenerateRequest,
     sid: str,
     registry: FileRegistry,
-    reuse_preview_analysis: bool,
-) -> str | None:
-    """Return a ready preview GLB path when generate can reuse preview analysis.
-
-    仅在预览分析参数已确认可复用、GLB 文件仍由同一 session 注册且高精度
-    预览开关一致时，才把现有预览 GLB 传给 worker。
-    """
-    if not reuse_preview_analysis:
-        return None
-
-    preview_high_precision = bool(cache.get("high_precision_3d_preview", False))
-    if preview_high_precision is not bool(request.high_precision_3d_preview):
-        return None
+) -> tuple[str, str] | None:
+    """Return the current session-owned preview GLB URL and disk path."""
 
     glb_url = cache.get("glb_url")
     if not isinstance(glb_url, str) or not glb_url.strip():
@@ -407,9 +492,51 @@ def _resolve_reusable_preview_glb_path(
     if resolved is None:
         return None
     preview_glb_path, _filename = resolved
-    if not os.path.exists(preview_glb_path):
+    if not os.path.isfile(preview_glb_path):
         return None
-    return preview_glb_path
+    return glb_url, preview_glb_path
+
+
+def _resolve_reusable_preview_glb_path(
+    *,
+    cache: dict,
+    request: ConvertGenerateRequest,
+    sid: str,
+    registry: FileRegistry,
+    reuse_preview_glb: bool,
+) -> str | None:
+    """Return a ready preview GLB path when generate can reuse that asset.
+
+    仅在预览参数已确认可复用、GLB 文件仍由同一 session 注册且高精度
+    预览开关一致时，才把现有预览 GLB 传给 worker。
+    """
+    if not reuse_preview_glb:
+        return None
+
+    preview_high_precision = bool(cache.get("high_precision_3d_preview", False))
+    if preview_high_precision is not bool(request.high_precision_3d_preview):
+        return None
+
+    resolved = _resolve_registered_preview_glb(
+        cache=cache,
+        sid=sid,
+        registry=registry,
+    )
+    return resolved[1] if resolved is not None else None
+
+
+def _paths_refer_to_same_file(left: str | None, right: str | None) -> bool:
+    """Return whether two non-empty paths identify the same filesystem path."""
+
+    if not left or not right:
+        return False
+    try:
+        return os.path.samefile(left, right)
+    except (FileNotFoundError, OSError, ValueError, TypeError):
+        try:
+            return os.path.realpath(left) == os.path.realpath(right)
+        except (OSError, ValueError, TypeError):
+            return False
 
 
 def _cache_field_path_or_tempfile(
@@ -610,6 +737,122 @@ def _resolve_validated_large_format_cached_analysis_paths(
     )
 
 
+def _resolve_validated_edit_projection_paths(
+    *,
+    cache: dict,
+    cache_ref: dict | None,
+    sid: str,
+    store: SessionStore,
+    matched_rgb_path: str,
+    material_matrix_path: str,
+    invalid_detail: str,
+) -> tuple[str, str, tuple[int, int]]:
+    """Resolve pristine baselines needed to replay edits after resizing.
+
+    尺寸变化时，当前缓存值本身不足以区分“用户编辑”和“旧尺寸分析”。
+    因此必须同时拥有同一 session 的 pristine RGB / 材料矩阵，缺失或网格
+    不一致时 fail closed，绝不把整张旧模型状态串到新尺寸。
+    """
+
+    try:
+        original_matched_rgb_path = _cache_field_path_or_tempfile(
+            cache=cache,
+            cache_ref=cache_ref,
+            field_name="original_matched_rgb",
+            sid=sid,
+            store=store,
+        )
+        original_material_matrix_path = _cache_field_path_or_tempfile(
+            cache=cache,
+            cache_ref=cache_ref,
+            field_name="original_material_matrix",
+            sid=sid,
+            store=store,
+        )
+        if not original_matched_rgb_path or not original_material_matrix_path:
+            raise ValueError("pristine preview edit artifacts are incomplete")
+
+        matched_shape, matched_dtype = _load_large_format_cache_array_spec(
+            matched_rgb_path
+        )
+        material_shape, material_dtype = _load_large_format_cache_array_spec(
+            material_matrix_path
+        )
+        original_rgb_shape, original_rgb_dtype = (
+            _load_large_format_cache_array_spec(original_matched_rgb_path)
+        )
+        original_material_shape, original_material_dtype = (
+            _load_large_format_cache_array_spec(original_material_matrix_path)
+        )
+        if (
+            len(matched_shape) != 3
+            or matched_shape[2] != 3
+            or matched_dtype != np.dtype(np.uint8)
+            or original_rgb_shape != matched_shape
+            or original_rgb_dtype != np.dtype(np.uint8)
+        ):
+            raise ValueError("pristine RGB does not match the edited RGB grid")
+        source_shape = (int(matched_shape[0]), int(matched_shape[1]))
+        if (
+            len(material_shape) != 3
+            or material_shape[:2] != source_shape
+            or material_shape[2] <= 0
+            or not np.issubdtype(material_dtype, np.integer)
+            or len(original_material_shape) != 3
+            or original_material_shape[:2] != source_shape
+            or original_material_shape[2] <= 0
+            or not np.issubdtype(original_material_dtype, np.integer)
+        ):
+            raise ValueError(
+                "pristine material matrix does not match the edited grid"
+            )
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+        KeyError,
+        EOFError,
+        zipfile.BadZipFile,
+    ) as exc:
+        raise HTTPException(status_code=409, detail=invalid_detail) from exc
+
+    return (
+        original_matched_rgb_path,
+        original_material_matrix_path,
+        source_shape,
+    )
+
+
+def _build_edit_projection_metadata(
+    *,
+    cache: dict,
+    source_shape: tuple[int, int] | None,
+    mode: str,
+    invalid_detail: str,
+) -> dict[str, object]:
+    """Build validated, worker-safe normalized edit-grid metadata."""
+
+    try:
+        if source_shape is None:
+            source_shape = (
+                int(cache["target_h"]),
+                int(cache["target_w"]),
+            )
+        source_h, source_w = (int(source_shape[0]), int(source_shape[1]))
+    except (KeyError, TypeError, ValueError, IndexError, OverflowError) as exc:
+        raise HTTPException(status_code=409, detail=invalid_detail) from exc
+    if (
+        source_h <= 0
+        or source_w <= 0
+        or mode not in {"delta", "recipe_masks"}
+    ):
+        raise HTTPException(status_code=409, detail=invalid_detail)
+    return {
+        "mode": mode,
+        "source_shape": [source_h, source_w],
+    }
+
+
 def _require_loadable_material_archive_cache_path(
     path: str | None,
     field_name: str,
@@ -767,6 +1010,7 @@ def _preview_analysis_params_match(
     target_width_mm: float | None,
     preview_color_layers: object = _MISSING,
     preview_layer_height_mm: object = _MISSING,
+    compare_target_width: bool = True,
 ) -> tuple[bool, str]:
     """Compare request semantics with the analysis stored by preview.
 
@@ -789,7 +1033,6 @@ def _preview_analysis_params_match(
     )
 
     checks = (
-        ("target_width_mm", target_width_mm, "float"),
         ("color_mode", request.color_mode, "enum"),
         ("modeling_mode", core_modeling_mode, "enum"),
         ("color_layers", color_layers_expected, color_layers_kind),
@@ -807,6 +1050,13 @@ def _preview_analysis_params_match(
         ("svg_pixels_per_mm", request.svg_pixels_per_mm, "float"),
         ("material_source", str(session_material_source or "lut"), "raw"),
     )
+    if compare_target_width and not _preview_analysis_param_matches(
+        cache,
+        "target_width_mm",
+        target_width_mm,
+        kind="float",
+    ):
+        return False, "param_mismatch:target_width_mm"
     for key, expected, kind in checks:
         if kind == "raw":
             if cache.get(key, _MISSING) != expected:
@@ -871,6 +1121,7 @@ def _require_standard_cached_analysis_semantics(
         target_width_mm=request.target_width_mm,
         preview_color_layers=preview_color_layers,
         preview_layer_height_mm=preview_layer_height_mm,
+        compare_target_width=False,
     )
     if not matches:
         raise HTTPException(
@@ -921,6 +1172,10 @@ def _can_reuse_preview_analysis(
         return False, "fridge_magnet_enabled"
     if request.enable_outline:
         return False, "outline_enabled"
+    if request.enable_coating:
+        return False, "coating_enabled"
+    if request.add_loop:
+        return False, "keychain_loop_enabled"
 
     return _preview_analysis_params_match(
         cache=cache,
@@ -931,6 +1186,160 @@ def _can_reuse_preview_analysis(
         preview_color_layers=preview_color_layers,
         preview_layer_height_mm=preview_layer_height_mm,
     )
+
+
+def _can_reuse_planar_vector_preview_glb(
+    *,
+    cache: dict,
+    request: ConvertGenerateRequest,
+    core_modeling_mode: CoreModelingMode,
+    session_material_source: str,
+    is_native_svg: bool,
+    uses_model_surface_overlay: bool,
+    preview_edit_state_matches: bool,
+    preview_edit_state_reason: str,
+    preview_color_layers: object = _MISSING,
+    preview_layer_height_mm: object = _MISSING,
+) -> tuple[bool, str]:
+    """Decide whether a native Vector generate may reuse its quick GLB.
+
+    The segmented asset owns browser geometry while relief, coating,
+    attachments, outlines, and cloisonne remain live viewer state. Reuse still
+    fails closed for a different source, preview provenance/edit identity, or
+    model-surface workflow.
+
+    分段资产负责浏览器几何；浮雕、涂层、附件、描边和景泰蓝继续由前端
+    实时表达。源文件、预览来源/编辑身份不一致或模型覆面流程仍安全拒绝。
+    """
+
+    if core_modeling_mode != CoreModelingMode.VECTOR:
+        return False, "modeling_mode_not_vector"
+    if not is_native_svg:
+        return False, "source_not_native_svg"
+    if uses_model_surface_overlay:
+        return False, "model_surface_overlay_enabled"
+    if not preview_edit_state_matches:
+        return False, preview_edit_state_reason
+
+    return _preview_analysis_params_match(
+        cache=cache,
+        request=request,
+        core_modeling_mode=core_modeling_mode,
+        session_material_source=session_material_source,
+        target_width_mm=request.target_width_mm,
+        preview_color_layers=preview_color_layers,
+        preview_layer_height_mm=preview_layer_height_mm,
+    )
+
+
+def _normalize_hex_edit_value(value: object) -> str | None:
+    """Return one canonical six-digit edit colour or fail closed."""
+
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().removeprefix("#").lower()
+    if len(normalized) != 6:
+        return None
+    try:
+        int(normalized, 16)
+    except ValueError:
+        return None
+    return normalized
+
+
+def _normalize_replacement_edit_records(
+    value: object,
+) -> list[tuple[str, str]] | None:
+    """Normalize legacy and public replacement records to ordered mappings."""
+
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        return None
+
+    normalized_records: list[tuple[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            return None
+        source = item.get("matched_hex")
+        if source is None:
+            source = item.get("selected_color")
+        if source is None:
+            source = item.get("quantized_hex")
+        target = item.get("replacement_hex")
+        if target is None:
+            target = item.get("replacement_color")
+        normalized_source = _normalize_hex_edit_value(source)
+        normalized_target = _normalize_hex_edit_value(target)
+        if normalized_source is None or normalized_target is None:
+            return None
+        normalized_records.append((normalized_source, normalized_target))
+    return normalized_records
+
+
+def _normalize_recipe_edit_records(value: object) -> list[object] | None:
+    """Normalize recipe edits without weakening their ordered semantics."""
+
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        return None
+    return [deepcopy(item) for item in value]
+
+
+def _normalize_free_color_edit_set(value: object) -> frozenset[str] | None:
+    """Normalize free-colour values for request/session provenance checks."""
+
+    if value is None:
+        return frozenset()
+    if isinstance(value, str) or not isinstance(
+        value,
+        (set, frozenset, list, tuple),
+    ):
+        return None
+    normalized_values: set[str] = set()
+    for item in value:
+        normalized_item = _normalize_hex_edit_value(item)
+        if normalized_item is None:
+            return None
+        normalized_values.add(normalized_item)
+    return frozenset(normalized_values)
+
+
+def _preview_edit_state_matches(
+    *,
+    preview_replacement_regions: object,
+    generated_replacement_regions: object,
+    preview_recipe_overrides: object,
+    generated_recipe_overrides: object,
+    preview_free_color_set: object,
+    generated_free_color_set: object,
+) -> tuple[bool, str]:
+    """Compare edits represented by the current GLB with generate-time edits."""
+
+    comparisons = (
+        (
+            "replacement_regions",
+            _normalize_replacement_edit_records(preview_replacement_regions),
+            _normalize_replacement_edit_records(generated_replacement_regions),
+        ),
+        (
+            "recipe_overrides",
+            _normalize_recipe_edit_records(preview_recipe_overrides),
+            _normalize_recipe_edit_records(generated_recipe_overrides),
+        ),
+        (
+            "free_color_set",
+            _normalize_free_color_edit_set(preview_free_color_set),
+            _normalize_free_color_edit_set(generated_free_color_set),
+        ),
+    )
+    for field_name, preview_value, generated_value in comparisons:
+        if preview_value is None or generated_value is None:
+            return False, f"preview_edit_state_invalid:{field_name}"
+        if preview_value != generated_value:
+            return False, f"preview_edit_state_mismatch:{field_name}"
+    return True, "preview_edit_state_match"
 
 
 def _cache_field_array(
@@ -1020,6 +1429,73 @@ def _recover_select_all_color_region_mask(
     if not np.any(color_mask):
         return None
     return np.asarray(color_mask, dtype=bool)
+
+
+def _resolve_applied_override_mask_snapshot(
+    *,
+    session_data: dict,
+    sid: str,
+    region_id: object,
+    shape: tuple[int, int],
+) -> np.ndarray | None:
+    """Return the mask snapshotted when this override was applied, if usable.
+
+    The live selection state prunes synthetic ``__editor_selection__:<rev>``
+    region ids on every selection gesture, so an override applied earlier can
+    no longer be resolved from ``selected_region_masks``. The apply endpoint
+    snapshots the exact masks it used; this helper validates one snapshot
+    entry against the current material-matrix shape before handing it back.
+
+    实时选区状态会在每次选区手势时清理 __editor_selection__:<rev> 合成
+    条目，导致更早应用的覆盖无法再从 selected_region_masks 解析。apply
+    端点会快照当时使用的掩码；本函数取出对应条目并校验其与当前
+    material_matrix 的形状一致后才返回。
+
+    Args:
+        session_data (dict): Session data holding the applied-mask snapshot.
+            (携带已应用掩码快照的会话数据)
+        sid (str): Session id used for structured-log correlation. (用于结构化
+            日志关联的会话 id)
+        region_id (object): Override region id to resolve. (待解析的覆盖区域 id)
+        shape (tuple[int, int]): Expected ``(height, width)`` of the mask.
+            (掩码应有的 (高, 宽) 形状)
+
+    Returns:
+        np.ndarray | None: Boolean mask copy matching ``shape``, or ``None``
+        when no usable snapshot exists. (与 shape 匹配的布尔掩码副本；无可用
+        快照时为 None)
+    """
+    if not isinstance(region_id, str):
+        return None
+    applied_masks = session_data.get(RECIPE_OVERRIDE_APPLIED_MASKS_KEY)
+    if not isinstance(applied_masks, dict):
+        return None
+    candidate = applied_masks.get(region_id)
+    if candidate is None:
+        return None
+    # Unpacking also validates dtype/length/shape and rejects all-air masks,
+    # covering both packed entries and legacy raw boolean arrays.
+    # 解包同时校验 dtype/长度/形状并拒绝全空掩码，同时覆盖打包条目与旧版
+    # 裸布尔数组。
+    mask = unpack_applied_region_mask(candidate, shape)
+    if mask is None:
+        log.warning(
+            "Applied recipe-override snapshot is invalid; rejecting generation",
+            extra={
+                "event": "recipe_override_snapshot_invalid",
+                "error_type": "RecipeOverrideSnapshotInvalid",
+                "error_message": (
+                    "The stored override mask snapshot failed validation "
+                    "(shape, dtype, or content); generation will be rejected "
+                    "to preserve the committed footprint."
+                ),
+                "recovery_action": "reapply_color_replacement",
+                "session_id": sid,
+                "region_id": str(region_id),
+            },
+        )
+        return None
+    return mask
 
 
 def _parse_batch_color_height_map(value: str | None) -> dict[str, float] | None:
@@ -1576,25 +2052,87 @@ def _prepare_recipe_override_worker_inputs(
             detail="Recipe overrides cannot reduce the current optical layer count",
         )
 
+    # Masks resolved for this request, kept request-local so unpacked
+    # snapshots never re-inflate into the aliased in-memory session dict
+    # (a packed ~H*W/8-byte entry would otherwise persist back as a raw
+    # H*W boolean array on first generate).
+    # 本次请求解析出的掩码，严格请求局部：解包后的快照绝不写回与内存版
+    # 会话共享的字典，否则打包的 ~H*W/8 字节条目会在首次生成时以裸
+    # H*W 布尔数组的形式重新膨胀并驻留。
+    resolved_override_masks: dict[str, np.ndarray] = {}
+    # Snapshot capability separates two eras. Sessions without the key
+    # predate applied-mask snapshots and keep the legacy mutable-source chain.
+    # Sessions WITH the key have committed footprints, even if the stored
+    # container is empty or invalid:
+    # an id that is missing or fails validation there means committed state
+    # is unreadable, and silently re-resolving it from live selection state
+    # or a recomputed select-all region would drift the footprint — that is
+    # a deterministic 422 instead.
+    # 快照能力区分两个时代。只有完全没有该键的会话才是旧会话并保留可变
+    # 来源回退链。只要键存在，即使容器为空或损坏，也表示会话拥有已提交足
+    # 迹；此时若从实时选区或重算 select-all 静默回退会让足迹漂移——必须
+    # 返回确定性 422。
+    has_snapshot_capability = (
+        RECIPE_OVERRIDE_APPLIED_MASKS_KEY in session_data
+    )
+
     for item in recipe_overrides:
         region_id = item["region_id"]
         item_recipe = item["recipe"]
         item_layer_order = item["layer_order"]
-        region_mask = region_masks.get(region_id)
-        if region_mask is None:
-            region_mask = _recover_select_all_color_region_mask(
-                cache=cache,
-                cache_ref=cache_ref,
+        if has_snapshot_capability:
+            # A committed override must resolve to the exact footprint
+            # captured when it was applied; anything else is an integrity
+            # failure, not a fallback opportunity.
+            # 已提交覆盖必须解析到 apply 时的精确足迹；其余情况都是完整性
+            # 失败，而不是回退机会。
+            region_mask = _resolve_applied_override_mask_snapshot(
+                session_data=session_data,
+                sid=sid,
                 region_id=region_id,
+                shape=material_matrix_override.shape[:2],
             )
+            if region_mask is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Committed recipe override mask is missing or invalid "
+                        f"for this session: {region_id}. Re-apply the color "
+                        f"replacement, then generate again."
+                    ),
+                )
+            log.debug(
+                "Recipe override mask resolved from applied-time snapshot",
+                extra={
+                    "event": "recipe_override_mask_snapshot_resolved",
+                    "session_id": sid,
+                    "region_id": str(region_id),
+                },
+            )
+            resolved_override_masks[str(region_id)] = region_mask
+        else:
+            region_mask = region_masks.get(region_id)
             if region_mask is not None:
-                region_masks[region_id] = region_mask
-                store.put(sid, "selected_region_masks", region_masks)
-        if region_mask is None:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Region mask not found for recipe override: {region_id}",
-            )
+                resolved_override_masks[str(region_id)] = np.asarray(
+                    region_mask, dtype=bool
+                )
+            if region_mask is None:
+                region_mask = _recover_select_all_color_region_mask(
+                    cache=cache,
+                    cache_ref=cache_ref,
+                    region_id=region_id,
+                )
+                if region_mask is not None:
+                    region_masks[region_id] = region_mask
+                    store.put(sid, "selected_region_masks", region_masks)
+                    resolved_override_masks[str(region_id)] = np.asarray(
+                        region_mask, dtype=bool
+                    )
+            if region_mask is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Region mask not found for recipe override: {region_id}",
+                )
         recipe = convert_recipe_between_orders(
             list(item_recipe),
             item_layer_order,
@@ -1627,19 +2165,13 @@ def _prepare_recipe_override_worker_inputs(
     store.register_temp_file(sid, mm_temp_path)
 
     recipe_override_masks_path: str | None = None
-    if isinstance(region_masks, dict):
-        selected_masks = {
-            item["region_id"]: region_masks[item["region_id"]]
-            for item in recipe_overrides
-            if item["region_id"] in region_masks
-        }
-        if selected_masks:
-            fd, masks_temp_path = tempfile.mkstemp(suffix=".pkl", dir=TEMP_DIR)
-            os.close(fd)
-            with open(masks_temp_path, "wb") as f:
-                pickle.dump(selected_masks, f)
-            recipe_override_masks_path = masks_temp_path
-            store.register_temp_file(sid, masks_temp_path)
+    if resolved_override_masks:
+        fd, masks_temp_path = tempfile.mkstemp(suffix=".pkl", dir=TEMP_DIR)
+        os.close(fd)
+        with open(masks_temp_path, "wb") as f:
+            pickle.dump(resolved_override_masks, f)
+        recipe_override_masks_path = masks_temp_path
+        store.register_temp_file(sid, masks_temp_path)
 
     return mm_temp_path, recipe_override_masks_path
 
@@ -1703,6 +2235,13 @@ async def convert_generate(
     cache, cache_ref = _require_preview_cache_for_generate(session_data)
 
     request = body.params
+    validate_export_device_selection(
+        printer_id=request.printer_id,
+        slicer=request.slicer,
+        nozzle_size=request.nozzle_size,
+        device_profile_id=request.device_profile_id,
+        build_plate_id=request.build_plate_id,
+    )
     _validate_native_vector_relief_compatibility(request)
 
     # Retrieve paths stored during preview
@@ -1764,10 +2303,26 @@ async def convert_generate(
             for r in request.replacement_regions
         ]
     recipe_overrides = _resolve_recipe_overrides(session_data, request)
+    preview_recipe_overrides = _backfill_recipe_override_virtual_materials(
+        session_data,
+        _normalize_recipe_overrides(
+            session_data.get("recipe_overrides") or None
+        ),
+    )
 
     free_color_set = session_data.get("free_color_set") or None
     if request.free_color_set is not None:
         free_color_set = request.free_color_set
+    preview_edit_state_matches, preview_edit_state_reason = (
+        _preview_edit_state_matches(
+            preview_replacement_regions=session_data.get("replacement_regions"),
+            generated_replacement_regions=replacement_regions,
+            preview_recipe_overrides=preview_recipe_overrides,
+            generated_recipe_overrides=recipe_overrides,
+            preview_free_color_set=session_data.get("free_color_set"),
+            generated_free_color_set=free_color_set,
+        )
+    )
 
     # Color-card mode: generate SVG from cached palette, swap image_path,
     # and force VECTOR mode so the existing vector branch produces the 3MF.
@@ -1833,12 +2388,53 @@ async def convert_generate(
     # 2a. Serialize cached matched_rgb to temp file if requested
     # 当存在区域替换时，将缓存的 matched_rgb 序列化为临时文件供 Worker 使用
     matched_rgb_path: str | None = None
+    original_matched_rgb_path: str | None = None
     height_identity_rgb_path: str | None = None
     mask_solid_path: str | None = None
     material_matrix_path: str | None = None
+    original_material_matrix_path: str | None = None
     quantized_image_path: str | None = None
+    generation_analysis_target_width_mm = request.target_width_mm
+    if _should_use_model_surface_overlay(session_data):
+        surface_target_width_mm = session_data.get("surface_target_width_mm")
+        if surface_target_width_mm is not None:
+            try:
+                generation_analysis_target_width_mm = float(
+                    surface_target_width_mm
+                )
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail=MODEL_SURFACE_CONFIG_UNAVAILABLE_DETAIL,
+                ) from exc
+            if (
+                not math.isfinite(generation_analysis_target_width_mm)
+                or generation_analysis_target_width_mm <= 0
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=MODEL_SURFACE_CONFIG_UNAVAILABLE_DETAIL,
+                )
+    preview_target_width_matches = _preview_analysis_param_matches(
+        cache,
+        "target_width_mm",
+        generation_analysis_target_width_mm,
+        kind="float",
+    )
+    cached_edit_projection_required = bool(
+        not preview_target_width_matches and request.use_cached_matched_rgb
+    )
+    recipe_mask_projection_required = bool(
+        not preview_target_width_matches
+        and recipe_overrides
+        and not request.use_cached_matched_rgb
+    )
+    edit_projection_required = (
+        cached_edit_projection_required or recipe_mask_projection_required
+    )
     requires_dynamic_quantized_analysis = bool(
         dynamic_material_settings[0]
+        and not edit_projection_required
         and core_modeling_mode
         in {
             CoreModelingMode.HIGH_FIDELITY,
@@ -1854,6 +2450,24 @@ async def convert_generate(
         replacement_regions=replacement_regions,
         recipe_overrides=recipe_overrides,
         free_color_set=free_color_set,
+        preview_color_layers=session_data.get("color_layers", _MISSING),
+        preview_layer_height_mm=session_data.get("layer_height_mm", _MISSING),
+    )
+    (
+        reuse_planar_vector_preview_glb,
+        reuse_planar_vector_preview_glb_reason,
+    ) = _can_reuse_planar_vector_preview_glb(
+        cache=cache,
+        request=request,
+        core_modeling_mode=core_modeling_mode,
+        session_material_source=str(session_material_source or "lut"),
+        is_native_svg=(
+            not generated_color_card_svg
+            and str(image_path).lower().endswith(".svg")
+        ),
+        uses_model_surface_overlay=_should_use_model_surface_overlay(session_data),
+        preview_edit_state_matches=preview_edit_state_matches,
+        preview_edit_state_reason=preview_edit_state_reason,
         preview_color_layers=session_data.get("color_layers", _MISSING),
         preview_layer_height_mm=session_data.get("layer_height_mm", _MISSING),
     )
@@ -1887,6 +2501,37 @@ async def convert_generate(
                 _MISSING,
             ),
         )
+        if cached_edit_projection_required:
+            (
+                original_matched_rgb_path,
+                original_material_matrix_path,
+                edit_projection_source_shape,
+            ) = _resolve_validated_edit_projection_paths(
+                cache=cache,
+                cache_ref=cache_ref,
+                sid=body.session_id,
+                store=store,
+                matched_rgb_path=matched_rgb_path,
+                material_matrix_path=material_matrix_path,
+                invalid_detail=STANDARD_CACHED_ANALYSIS_INVALID_DETAIL,
+            )
+            edit_projection = _build_edit_projection_metadata(
+                cache=cache,
+                source_shape=edit_projection_source_shape,
+                mode="delta",
+                invalid_detail=STANDARD_CACHED_ANALYSIS_INVALID_DETAIL,
+            )
+        else:
+            edit_projection = None
+    elif recipe_mask_projection_required:
+        edit_projection = _build_edit_projection_metadata(
+            cache=cache,
+            source_shape=None,
+            mode="recipe_masks",
+            invalid_detail=STANDARD_CACHED_ANALYSIS_INVALID_DETAIL,
+        )
+    else:
+        edit_projection = None
     if reuse_preview_analysis or request.use_cached_matched_rgb:
         effective_color_layers, effective_layer_height_mm = (
             _resolve_effective_cached_layer_settings(
@@ -1940,6 +2585,12 @@ async def convert_generate(
             "has_replacement_regions": bool(replacement_regions),
             "reuse_preview_analysis": reuse_preview_analysis,
             "reuse_preview_analysis_reason": reuse_preview_analysis_reason,
+            "reuse_planar_vector_preview_glb": (
+                reuse_planar_vector_preview_glb
+            ),
+            "reuse_planar_vector_preview_glb_reason": (
+                reuse_planar_vector_preview_glb_reason
+            ),
         },
     )
     if should_forward_cached_analysis:
@@ -2039,12 +2690,15 @@ async def convert_generate(
         reuse_preview_analysis = False
         reuse_preview_analysis_reason = "analysis_paths_unavailable"
 
+    reuse_preview_glb = (
+        reuse_preview_analysis or reuse_planar_vector_preview_glb
+    )
     preview_glb_path = _resolve_reusable_preview_glb_path(
         cache=cache,
         request=request,
         sid=body.session_id,
         registry=registry,
-        reuse_preview_analysis=reuse_preview_analysis,
+        reuse_preview_glb=reuse_preview_glb,
     )
 
     override_material_matrix_path, recipe_override_masks_path = _prepare_recipe_override_worker_inputs(
@@ -2063,6 +2717,9 @@ async def convert_generate(
     params: dict = {
         "target_width_mm": request.target_width_mm,
         "spacer_thick": request.spacer_thick,
+        "backing_infill_density_percent": (
+            request.backing_infill_density_percent
+        ),
         "structure_mode": request.structure_mode.value,
         "color_mode": request.color_mode.value,
         "color_layers": request.color_layers,
@@ -2125,21 +2782,25 @@ async def convert_generate(
         "auto_dynamic_range": request.auto_dynamic_range,
         "high_precision_3d_preview": request.high_precision_3d_preview,
         "matched_rgb_path": matched_rgb_path,
+        "original_matched_rgb_path": original_matched_rgb_path,
         "height_identity_rgb_path": height_identity_rgb_path,
         "mask_solid_path": mask_solid_path,
         "material_matrix_path": material_matrix_path,
+        "original_material_matrix_path": original_material_matrix_path,
         "quantized_image_path": quantized_image_path,
         "reuse_preview_analysis": (
             REQUIRED_PREVIEW_ANALYSIS_REUSE
-            if request.use_cached_matched_rgb
+            if request.use_cached_matched_rgb and not edit_projection_required
             else reuse_preview_analysis
         ),
+        "edit_projection": edit_projection,
         "preview_glb_path": preview_glb_path,
         "vector_parse_clip_cache_path": vector_parse_clip_cache_path,
         "printer_id": request.printer_id,
         "slicer": request.slicer,
         "nozzle_size": request.nozzle_size,
         "device_profile_id": request.device_profile_id,
+        "build_plate_id": request.build_plate_id,
         "enable_base_layer_height_modifier": request.enable_base_layer_height_modifier,
         "material_source": session_material_source,
         "material_dynamic_layer_count_enabled": dynamic_material_settings[0],
@@ -2168,6 +2829,14 @@ async def convert_generate(
     worker_fn = worker_generate_model
     worker_params = params
     if _should_use_model_surface_overlay(session_data):
+        if request.backing_infill_density_percent < 100:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Sparse backing infill is not supported for model surface "
+                    "generation; use 100% backing infill."
+                ),
+            )
         worker_fn = worker_generate_model_surface_overlay
         worker_params = _prepare_model_surface_overlay_worker_params(
             session_data,
@@ -2182,9 +2851,27 @@ async def convert_generate(
             image_path,
             lut_path,
             worker_params,
+            **(
+                {
+                    "host_memory_reservation_bytes": (
+                        _vector_task_memory_reservation_bytes(
+                            image_path,
+                            worker_params,
+                            lut_path=lut_path,
+                        )
+                    )
+                }
+                if core_modeling_mode == CoreModelingMode.VECTOR
+                else {}
+            ),
         )
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="3MF generation timed out")
+    except VectorTopologyError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=dict(VECTOR_TOPOLOGY_UNREPAIRABLE_DETAIL),
+        ) from exc
     except ModelSurfaceError as exc:
         detail = public_model_surface_error_detail(exc)
         if detail is None:
@@ -2200,6 +2887,13 @@ async def convert_generate(
             status_code=409,
             detail=STANDARD_CACHED_ANALYSIS_INVALID_DETAIL,
         ) from exc
+    except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as exc:
+        _handle_core_error(exc, "3MF generation")
+    except BrokenProcessPool as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=MODEL_GENERATION_FAILED_DETAIL,
+        ) from exc
     except ROUTER_HANDLED_ERRORS as exc:
         raise HTTPException(
             status_code=500,
@@ -2211,8 +2905,15 @@ async def convert_generate(
     threemf_path: str | None = result.get("threemf_path")
     glb_path: str | None = result.get("glb_path")
     status_msg: str = result.get("status_msg", "")
+    glb_reuses_preview_path = _paths_refer_to_same_file(
+        glb_path,
+        preview_glb_path,
+    )
 
     if not threemf_path or not os.path.exists(threemf_path):
+        if glb_path and not glb_reuses_preview_path:
+            _remove_temp_path(glb_path)
+            glb_path = None
         uses_surface_overlay = _should_use_model_surface_overlay(session_data)
         raise _model_generation_failure_exception(
             status_msg,
@@ -2224,17 +2925,27 @@ async def convert_generate(
             surface_overlay=uses_surface_overlay,
         )
 
+    placement_warnings = read_wipe_tower_placement_warnings(threemf_path)
+
     # Register output files via FileRegistry
     sid = body.session_id
     preview_3d_url: str | None = None
     download_id: str | None = None
     registration_complete = False
-    glb_registered = False
     try:
         try:
+            download_filename = None
+            if (
+                body.preserve_upload_filename_for_3mf
+                and not generated_color_card_svg
+            ):
+                download_filename = generate_preserved_upload_3mf_filename(
+                    session_data.get("source_basename")
+                )
             download_id = registry.register_path(
                 str(uuid.uuid4()),
                 threemf_path,
+                filename=download_filename,
                 ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
             )
         except ROUTER_HANDLED_ERRORS as exc:
@@ -2252,23 +2963,37 @@ async def convert_generate(
                 detail=MODEL_GENERATION_FAILED_DETAIL,
             ) from exc
 
-        if glb_path and os.path.exists(glb_path):
-            try:
-                glb_id = registry.register_path(sid, glb_path)
-            except Exception as exc:
-                log.warning(
-                    "Generated GLB preview registration failed",
-                    extra={
-                        "event": "converter_generate_glb_registration_failed",
-                        "session_id": sid,
-                        "error_type": type(exc).__name__,
-                        "error_message": str(exc),
-                        "path": glb_path,
-                    },
+        if glb_reuses_preview_path:
+            latest_session_data = store.get(sid)
+            latest_cache_value = (
+                latest_session_data.get("preview_cache")
+                if isinstance(latest_session_data, dict)
+                else None
+            )
+            if isinstance(latest_cache_value, dict):
+                latest_cache = (
+                    get_preview_cache_metadata(latest_cache_value)
+                    if is_preview_cache_artifact_ref(latest_cache_value)
+                    else latest_cache_value
                 )
-            else:
-                glb_registered = True
-                preview_3d_url = f"/api/files/{glb_id}"
+                current_preview = _resolve_registered_preview_glb(
+                    cache=latest_cache,
+                    sid=sid,
+                    registry=registry,
+                )
+                if current_preview is not None and _paths_refer_to_same_file(
+                    current_preview[1],
+                    glb_path,
+                ):
+                    preview_3d_url = current_preview[0]
+            log.debug(
+                "Generated model reused the registered preview GLB",
+                extra={
+                    "event": "converter_generate_glb_reused",
+                    "session_id": sid,
+                    "preview_url_current": preview_3d_url is not None,
+                },
+            )
         registration_complete = True
     finally:
         if download_id is None:
@@ -2276,7 +3001,7 @@ async def convert_generate(
         elif not registration_complete:
             with suppress(Exception):
                 registry.cleanup_file(download_id)
-        if glb_path and not glb_registered:
+        if glb_path and not glb_reuses_preview_path:
             _remove_temp_path(glb_path)
 
     api_total = time.perf_counter() - api_t0
@@ -2342,6 +3067,7 @@ async def convert_generate(
         download_url=f"/api/files/{download_id}",
         preview_3d_url=preview_3d_url,
         threemf_disk_path=None,
+        warnings=placement_warnings,
         performance_timing=performance_timing,
     )
 
@@ -2365,7 +3091,12 @@ def _resolve_large_format_dimensions(
 ) -> tuple[float, float]:
     ratio_w = float(cache.get("target_w") or 0.0)
     ratio_h = float(cache.get("target_h") or 0.0)
-    if ratio_w <= 0 or ratio_h <= 0:
+    if (
+        not math.isfinite(ratio_w)
+        or not math.isfinite(ratio_h)
+        or ratio_w <= 0
+        or ratio_h <= 0
+    ):
         raise HTTPException(status_code=409, detail="Preview cache is missing valid aspect ratio data.")
 
     aspect_ratio = ratio_w / ratio_h
@@ -2390,7 +3121,26 @@ def _resolve_large_format_dimensions(
                 detail="Provided width and height do not match the preview aspect ratio.",
             )
 
-    return float(requested_width), float(requested_height)
+    resolved_width = float(requested_width)
+    resolved_height = float(requested_height)
+    for name, value in (
+        ("width", resolved_width),
+        ("height", resolved_height),
+    ):
+        if (
+            not math.isfinite(value)
+            or value <= 0
+            or value > MAX_LARGE_FORMAT_DIMENSION_MM
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Large-format {name} must be finite and no greater "
+                    f"than {MAX_LARGE_FORMAT_DIMENSION_MM:g} mm."
+                ),
+            )
+
+    return resolved_width, resolved_height
 
 
 def _resolve_relief_global_max_height(session_data: dict, request) -> float | None:
@@ -2458,6 +3208,9 @@ def _resolve_large_format_shared_params(
 
     params = {
         "spacer_thick": request.spacer_thick,
+        "backing_infill_density_percent": (
+            request.backing_infill_density_percent
+        ),
         "structure_mode": request.structure_mode.value,
         "color_mode": request.color_mode.value,
         "color_layers": request.color_layers,
@@ -2523,6 +3276,7 @@ def _resolve_large_format_shared_params(
         "slicer": request.slicer,
         "nozzle_size": request.nozzle_size,
         "device_profile_id": request.device_profile_id,
+        "build_plate_id": request.build_plate_id,
         "enable_base_layer_height_modifier": request.enable_base_layer_height_modifier,
         "relief_global_max_height": relief_global_max_height,
         "material_dynamic_layer_count_enabled": dynamic_material_settings[0],
@@ -2667,6 +3421,13 @@ async def _generate_large_format_svg_native(
                     "tile_width_mm": tile_width_mm,
                     "tile_height_mm": tile_height_mm,
                 },
+                host_memory_reservation_bytes=(
+                    _vector_task_memory_reservation_bytes(
+                        image_path,
+                        shared_params,
+                        lut_path=lut_path,
+                    )
+                ),
             )
         finally:
             _remove_temp_path(native_heightmap_path)
@@ -2685,6 +3446,19 @@ async def _generate_large_format_svg_native(
         ) from e
     except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
         _handle_core_error(e, "large-format SVG generation")
+    except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as e:
+        _handle_core_error(e, "large-format SVG generation")
+    except BrokenProcessPool as e:
+        _log_large_format_failure(
+            session_id=sid,
+            failure_kind="svg_native_worker_pool_broken",
+            error_type=type(e).__name__,
+            error_message=str(e),
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=LARGE_FORMAT_GENERATION_FAILED_DETAIL,
+        ) from e
     except ROUTER_HANDLED_ERRORS as e:
         _log_large_format_failure(
             session_id=sid,
@@ -2728,6 +3502,19 @@ async def _generate_large_format_svg_native(
         "grid_rows": result["grid_rows"],
         "warnings": list(warnings or []) + list(result.get("warnings", [])),
     }
+
+
+def _discard_pending_awaitables(awaitables: list, start_index: int) -> None:
+    """Cancel or close unconsumed tile submissions after a fatal failure."""
+
+    for pending in awaitables[max(0, int(start_index)) :]:
+        cancel = getattr(pending, "cancel", None)
+        if callable(cancel):
+            cancel()
+            continue
+        close = getattr(pending, "close", None)
+        if callable(close):
+            close()
 
 
 async def _generate_large_format_raster(
@@ -3146,9 +3933,30 @@ async def _generate_large_format_raster(
                     tile_label=f"R{r + 1}C{c + 1}",
                 )
                 tile_labels.append(label)
-                futures.append(pool.submit(worker_generate_model, tile_path, lut_path, tile_params))
+                futures.append(
+                    pool.submit(
+                        worker_generate_model,
+                        tile_path,
+                        lut_path,
+                        tile_params,
+                        **(
+                            {
+                                "host_memory_reservation_bytes": (
+                                    _vector_task_memory_reservation_bytes(
+                                        tile_path,
+                                        tile_params,
+                                        lut_path=lut_path,
+                                    )
+                                )
+                            }
+                            if tile_params.get("modeling_mode")
+                            == CoreModelingMode.VECTOR.value
+                            else {}
+                        ),
+                    )
+                )
 
-        for label, fut in zip(tile_labels, futures):
+        for future_index, (label, fut) in enumerate(zip(tile_labels, futures)):
             try:
                 result = await fut
                 glb_path = result.get("glb_path")
@@ -3163,7 +3971,20 @@ async def _generate_large_format_raster(
                     errors.append(f"{label}: generation failed — {result.get('status_msg', 'unknown')}")
             except asyncio.TimeoutError:
                 errors.append(f"{label}: generation timed out")
+            except BrokenProcessPool as e:
+                _discard_pending_awaitables(futures, future_index + 1)
+                raise HTTPException(
+                    status_code=503,
+                    detail=LARGE_FORMAT_GENERATION_FAILED_DETAIL,
+                ) from e
+            except MemoryError:
+                _discard_pending_awaitables(futures, future_index + 1)
+                raise
+            except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as e:
+                _discard_pending_awaitables(futures, future_index + 1)
+                _handle_core_error(e, "large-format tile generation")
             except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
+                _discard_pending_awaitables(futures, future_index + 1)
                 _handle_core_error(e, "large-format tile generation")
             except ROUTER_HANDLED_ERRORS as e:
                 errors.append(f"{label}: {e}")
@@ -3236,7 +4057,14 @@ def _rasterize_svg_for_large_format_fallback(
         total_width_mm=total_width_mm,
         total_height_mm=total_height_mm,
     )
-    raster_rgba = rasterize_svg(svg_path, total_width_mm, pixels_per_mm=density)
+    raster_rgba = rasterize_svg(
+        svg_path,
+        total_width_mm,
+        pixels_per_mm=density,
+        _min_quality_px=1,
+        _max_total_pixels=SVG_RASTER_FALLBACK_MAX_TOTAL_PIXELS,
+        _cache_result=False,
+    )
     fd, png_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
     os.close(fd)
     save_completed = False
@@ -3265,6 +4093,13 @@ async def convert_generate_large_format(
 
     lf = body.params
     request = lf.params
+    validate_export_device_selection(
+        printer_id=request.printer_id,
+        slicer=request.slicer,
+        nozzle_size=request.nozzle_size,
+        device_profile_id=request.device_profile_id,
+        build_plate_id=request.build_plate_id,
+    )
     _validate_native_vector_relief_compatibility(request)
 
     if _has_requested_fridge_magnet_cavities(request):
@@ -3347,6 +4182,16 @@ async def convert_generate_large_format(
         request,
         lf.target_height_mm,
     )
+    try:
+        resolve_large_format_grid_shape(
+            total_width_mm=total_w_mm,
+            total_height_mm=total_h_mm,
+            tile_width_mm=float(lf.tile_width_mm),
+            tile_height_mm=float(lf.tile_height_mm),
+            max_tiles=MAX_LARGE_FORMAT_TILE_COUNT,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if request.use_cached_matched_rgb is True:
         _require_large_format_cached_analysis_semantics(
             cache=cache,
@@ -3452,6 +4297,17 @@ async def convert_generate_large_format(
                         or 0
                     ),
                 )
+            except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as exc:
+                _handle_core_error(exc, "large-format SVG generation")
+            except MemoryError:
+                # Starting a second, rasterized build after allocator failure
+                # only increases pressure and can kill the worker host.
+                raise
+            except BrokenProcessPool as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail=LARGE_FORMAT_GENERATION_FAILED_DETAIL,
+                ) from exc
             except HTTPException as exc:
                 if exc.status_code not in {500, 504}:
                     raise
@@ -3550,6 +4406,18 @@ async def convert_generate_large_format(
                     warnings=fallback_warnings,
                     log_tile_failures=native_fallback_error is None,
                 )
+            except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as fallback_exc:
+                _handle_core_error(
+                    fallback_exc,
+                    "large-format raster fallback generation",
+                )
+            except MemoryError:
+                raise
+            except BrokenProcessPool as fallback_exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail=LARGE_FORMAT_GENERATION_FAILED_DETAIL,
+                ) from fallback_exc
             except Exception as fallback_exc:  # noqa: BLE001 - recovery boundary
                 if native_fallback_error is None:
                     raise
@@ -3810,7 +4678,18 @@ async def convert_batch(
     material_grid_resolution: int | None = Form(None, description="耗材穷举缓存网格分辨率"),
     material_backing_material_index: int | None = Form(None, ge=0, description="耗材档案底板耗材索引"),
     target_width_mm: float = Form(60.0, description="目标宽度 (mm)"),
-    spacer_thick: float = Form(1.2, description="底板厚度 (mm)"),
+    spacer_thick: float = Form(
+        1.2,
+        ge=0.2,
+        le=PrinterConfig.MAX_BACKING_THICKNESS_MM,
+        description="底板厚度 (mm)",
+    ),
+    backing_infill_density_percent: int = Form(
+        PrinterConfig.BACKING_INFILL_DENSITY_DEFAULT_PERCENT,
+        ge=PrinterConfig.BACKING_INFILL_DENSITY_MIN_PERCENT,
+        le=PrinterConfig.BACKING_INFILL_DENSITY_MAX_PERCENT,
+        description="深层底板填充率 (%)",
+    ),
     separate_backing: bool = Form(
         False,
         description="Emit backing as a separate object / 将底板作为独立对象输出",
@@ -3848,6 +4727,7 @@ async def convert_batch(
     slicer: str = Form("BambuStudio", description="切片器"),
     nozzle_size: str = Form("0.4", description="喷嘴直径"),
     device_profile_id: str | None = Form(None, description="机器注册表设备配置 ID"),
+    build_plate_id: str | None = Form(None, description="切片软件原生打印板 ID"),
     enable_base_layer_height_modifier: bool = Form(
         True,
         description="启用底板粗层高优化",
@@ -3868,6 +4748,13 @@ async def convert_batch(
         separate_backing: Emit the backing as a separate mesh object when true.
             (为 true 时将底板作为独立网格对象输出。)
     """
+    validate_export_device_selection(
+        printer_id=printer_id,
+        slicer=slicer,
+        nozzle_size=nozzle_size,
+        device_profile_id=device_profile_id,
+        build_plate_id=build_plate_id,
+    )
     # Resolve color source (main thread). Batch must mirror the single-image
     # preview/generate source selection contract: traditional LUT, native
     # reverse-LUT bundle, or material archives.
@@ -4008,6 +4895,14 @@ async def convert_batch(
                 status_code=422,
                 detail="Batch relief requires color_height_map",
             )
+        if enable_relief and backing_infill_density_percent < 100:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Sparse backing infill is not supported with relief mode; "
+                    "use 100% backing infill."
+                ),
+            )
         if enable_relief and resolved_modeling_mode == CoreModelingMode.VECTOR:
             if (
                 structure_mode != StructureMode.SINGLE_SIDED.value
@@ -4093,11 +4988,25 @@ async def convert_batch(
                 auto_dynamic_range,
                 high_precision_3d_preview,
                 device_profile_id,
+                build_plate_id,
+                backing_infill_density_percent,
                 material_dynamic_layer_count_enabled,
                 material_min_layer_count,
                 material_max_layer_count,
                 material_delta_e00_tolerance,
                 separate_backing,
+                **(
+                    {
+                        "host_memory_reservation_bytes": (
+                            _vector_task_memory_reservation_bytes(
+                                temp_path,
+                                lut_path=lut_path,
+                            )
+                        )
+                    }
+                    if modeling_mode == CoreModelingMode.VECTOR.value
+                    else {}
+                ),
             )
 
             # 3. Result processing (main thread)
@@ -4141,6 +5050,42 @@ async def convert_batch(
                     error="Batch item conversion timed out",
                 )
             )
+        except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as e:
+            for prior_result in successful_entries:
+                _remove_temp_paths(
+                    [
+                        prior_result.get("threemf_path"),
+                        prior_result.get("preview_glb_path"),
+                        prior_result.get("metadata_sidecar_path"),
+                    ]
+                )
+            _remove_temp_path(temp_native_bundle_path)
+            _handle_core_error(e, "batch generation")
+        except MemoryError:
+            for prior_result in successful_entries:
+                _remove_temp_paths(
+                    [
+                        prior_result.get("threemf_path"),
+                        prior_result.get("preview_glb_path"),
+                        prior_result.get("metadata_sidecar_path"),
+                    ]
+                )
+            _remove_temp_path(temp_native_bundle_path)
+            raise
+        except BrokenProcessPool as e:
+            for prior_result in successful_entries:
+                _remove_temp_paths(
+                    [
+                        prior_result.get("threemf_path"),
+                        prior_result.get("preview_glb_path"),
+                        prior_result.get("metadata_sidecar_path"),
+                    ]
+                )
+            _remove_temp_path(temp_native_bundle_path)
+            raise HTTPException(
+                status_code=503,
+                detail=BATCH_GENERATION_FAILED_DETAIL,
+            ) from e
         except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
             for prior_result in successful_entries:
                 _remove_temp_paths(
@@ -4286,6 +5231,16 @@ async def convert_batch(
             plate_width_mm=plate_width_mm,
             plate_depth_mm=plate_depth_mm,
         )
+
+        for warning_code in read_wipe_tower_placement_warnings(merged_3mf_path):
+            if warning_code != WIPE_TOWER_MANUAL_WARNING_CODE:
+                continue
+            warnings.append(
+                WarningEntry(
+                    code=warning_code,
+                    message=BATCH_WIPE_TOWER_MANUAL_ADJUSTMENT_MESSAGE,
+                )
+            )
 
         # Step 4: FileRegistry registration
         stage = "file_registry"

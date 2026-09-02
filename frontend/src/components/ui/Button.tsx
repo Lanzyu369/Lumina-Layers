@@ -36,10 +36,10 @@ export default function Button({
 
   const sizeClasses =
     size === "sm"
-      ? "min-h-8 rounded-xl px-3 py-1.5 text-xs"
+      ? "min-h-8 rounded-lg px-3 py-1.5 text-xs"
       : size === "icon"
       ? "h-9 w-9 shrink-0 rounded-full p-0 text-sm"
-      : "min-h-11 rounded-2xl px-4 py-2.5 text-sm";
+      : "min-h-11 rounded-[10px] px-4 py-2.5 text-sm";
 
   return (
     <motion.button

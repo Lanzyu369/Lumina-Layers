@@ -116,6 +116,7 @@ def assemble_puzzle_3mf(
     nozzle_size: str = "0.4",
     overview_png_bytes: bytes | None = None,
     device_profile_id: str | None = None,
+    build_plate_id: str | None = None,
 ) -> str:
     """Assemble multiple puzzle piece 3MF files into one grouped 3MF.
     将多个拼图单块 3MF 组装为一个按块分组的统一 3MF。
@@ -260,6 +261,7 @@ def assemble_puzzle_3mf(
         slicer=slicer,
         nozzle_size=nozzle_size,
         device_profile_id=device_profile_id,
+        build_plate_id=build_plate_id,
         enable_base_layer_height_modifier=False,
     )
     _set_root_model_metadata(combined_root, "Application", writer._get_app_version_str())
@@ -285,12 +287,14 @@ def assemble_puzzle_3mf(
         slicer=slicer,
         nozzle_size=nozzle_size,
         device_profile_id=device_profile_id,
+        build_plate_id=build_plate_id,
     )
     base_files["Metadata/slice_info.config"] = _build_combined_slice_info_bytes(
         printer_id=printer_id,
         slicer=slicer,
         nozzle_size=nozzle_size,
         device_profile_id=device_profile_id,
+        build_plate_id=build_plate_id,
     )
     _update_combined_filament_sequence(
         base_files=base_files,
@@ -298,6 +302,7 @@ def assemble_puzzle_3mf(
         slicer=slicer,
         nozzle_size=nozzle_size,
         device_profile_id=device_profile_id,
+        build_plate_id=build_plate_id,
     )
     if overview_png_bytes is not None:
         for preview_asset_path in (
@@ -535,6 +540,7 @@ def _build_combined_project_settings_bytes(
     slicer: str,
     nozzle_size: str,
     device_profile_id: str | None,
+    build_plate_id: str | None,
 ) -> bytes:
     """Build combined ``project_settings.config`` with a stable global palette.
 
@@ -561,6 +567,7 @@ def _build_combined_project_settings_bytes(
             slicer=slicer,
             nozzle_size=nozzle_size,
             device_profile_id=device_profile_id,
+            build_plate_id=build_plate_id,
             enable_base_layer_height_modifier=False,
         )
         settings = writer._get_base_config_template()
@@ -574,6 +581,7 @@ def _build_combined_project_settings_bytes(
         slicer=slicer,
         nozzle_size=nozzle_size,
         device_profile_id=device_profile_id,
+        build_plate_id=build_plate_id,
     )
     _replace_material_project_settings(settings, material_settings)
 
@@ -602,6 +610,7 @@ def _build_project_material_settings(
     slicer: str,
     nozzle_size: str,
     device_profile_id: str | None,
+    build_plate_id: str | None,
 ) -> dict[str, object]:
     """Build slicer material arrays from the selected global puzzle palette.
 
@@ -616,6 +625,7 @@ def _build_project_material_settings(
         slicer=slicer,
         nozzle_size=nozzle_size,
         device_profile_id=device_profile_id,
+        build_plate_id=build_plate_id,
         enable_base_layer_height_modifier=False,
     )
     writer._set_project_palette(material_names, preview_colors or {})
@@ -649,6 +659,7 @@ def _build_combined_slice_info_bytes(
     slicer: str,
     nozzle_size: str,
     device_profile_id: str | None,
+    build_plate_id: str | None,
 ) -> bytes:
     """Build fresh ``slice_info.config`` bytes for the combined package.
 
@@ -663,6 +674,7 @@ def _build_combined_slice_info_bytes(
         slicer=slicer,
         nozzle_size=nozzle_size,
         device_profile_id=device_profile_id,
+        build_plate_id=build_plate_id,
         enable_base_layer_height_modifier=False,
     )
     return writer._build_slice_info_bytes()
@@ -675,6 +687,7 @@ def _update_combined_filament_sequence(
     slicer: str,
     nozzle_size: str,
     device_profile_id: str | None,
+    build_plate_id: str | None,
 ) -> None:
     """Refresh slicer-specific filament-sequence metadata for the combined package.
 
@@ -689,6 +702,7 @@ def _update_combined_filament_sequence(
         slicer=slicer,
         nozzle_size=nozzle_size,
         device_profile_id=device_profile_id,
+        build_plate_id=build_plate_id,
         enable_base_layer_height_modifier=False,
     )
     if not writer._should_emit_bambu_aux_parts():

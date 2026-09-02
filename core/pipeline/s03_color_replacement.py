@@ -16,8 +16,11 @@ import time
 from collections import deque
 from copy import deepcopy
 import pickle
+import cv2
 import numpy as np
 
+from core.edit_projection import EditProjectionGrid
+from core.errors import CachedPreviewAnalysisError
 from core.pipeline.material_dynamic_layers import (
     _record_dynamic_material_error,
     _solve_dynamic_material_targets,
@@ -25,6 +28,188 @@ from core.pipeline.material_dynamic_layers import (
 from core.pipeline.pipeline_utils import _hex_to_rgb_tuple
 
 _log = get_logger(__name__)
+
+
+def _load_required_edit_array(path: object, *, field_name: str) -> np.ndarray:
+    """Load one fail-closed preview edit artifact."""
+
+    if not isinstance(path, (str, bytes)) or not path:
+        raise CachedPreviewAnalysisError(
+            f"Required preview edit artifact is missing: {field_name}"
+        )
+    try:
+        loaded = np.load(path, allow_pickle=False)
+    except (OSError, ValueError, TypeError) as exc:
+        raise CachedPreviewAnalysisError(
+            f"Required preview edit artifact is unreadable: {field_name}"
+        ) from exc
+    if not isinstance(loaded, np.ndarray):
+        raise CachedPreviewAnalysisError(
+            f"Required preview edit artifact is invalid: {field_name}"
+        )
+    return loaded
+
+
+def _resolve_edit_projection_grid(
+    ctx: dict,
+    *,
+    target_shape: tuple[int, int],
+) -> tuple[EditProjectionGrid, str]:
+    """Validate edit projection metadata and return its discrete grid."""
+
+    projection = ctx.get("edit_projection")
+    if not isinstance(projection, dict):
+        raise CachedPreviewAnalysisError(
+            "Required edit projection metadata is invalid"
+        )
+    source_shape_raw = projection.get("source_shape")
+    mode = str(projection.get("mode") or "")
+    if (
+        not isinstance(source_shape_raw, (list, tuple))
+        or len(source_shape_raw) != 2
+        or mode not in {"delta", "recipe_masks"}
+    ):
+        raise CachedPreviewAnalysisError(
+            "Required edit projection source grid is invalid"
+        )
+    try:
+        source_shape = (int(source_shape_raw[0]), int(source_shape_raw[1]))
+        grid = EditProjectionGrid(source_shape, target_shape)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise CachedPreviewAnalysisError(
+            "Required edit projection grid is invalid"
+        ) from exc
+    return grid, mode
+
+
+def _replay_projected_preview_edits(
+    ctx: dict,
+    *,
+    fresh_matched_rgb: np.ndarray,
+    fresh_material_matrix: np.ndarray,
+    target_mask_solid: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, EditProjectionGrid]:
+    """Replay only committed preview deltas onto a fresh current-size grid.
+
+    仅把预览期真正修改过的像素投影到当前尺寸的新分析；未编辑像素及
+    浮雕高度身份继续以当前尺寸的重新分析结果为准。
+    """
+
+    grid, mode = _resolve_edit_projection_grid(
+        ctx,
+        target_shape=tuple(int(value) for value in target_mask_solid.shape),
+    )
+    if mode != "delta":
+        raise CachedPreviewAnalysisError("Preview edit projection mode is not delta")
+    source_shape = grid.source_shape
+
+    edited_rgb = _load_required_edit_array(
+        ctx.get("matched_rgb_path"),
+        field_name="matched_rgb",
+    )
+    pristine_rgb = _load_required_edit_array(
+        ctx.get("original_matched_rgb_path"),
+        field_name="original_matched_rgb",
+    )
+    source_solid_raw = _load_required_edit_array(
+        ctx.get("mask_solid_path"),
+        field_name="mask_solid",
+    )
+    edited_material = _load_required_edit_array(
+        ctx.get("material_matrix_path"),
+        field_name="material_matrix",
+    )
+    pristine_material = _load_required_edit_array(
+        ctx.get("original_material_matrix_path"),
+        field_name="original_material_matrix",
+    )
+
+    fresh_rgb = np.asarray(fresh_matched_rgb)
+    fresh_material = np.asarray(fresh_material_matrix)
+    target_solid = np.asarray(target_mask_solid, dtype=bool)
+    source_solid = np.asarray(source_solid_raw, dtype=bool)
+    arrays_are_valid = (
+        edited_rgb.shape == (*source_shape, 3)
+        and pristine_rgb.shape == edited_rgb.shape
+        and edited_rgb.dtype == np.uint8
+        and pristine_rgb.dtype == np.uint8
+        and source_solid_raw.shape == source_shape
+        and source_solid_raw.dtype == np.bool_
+        and edited_material.ndim == 3
+        and pristine_material.ndim == 3
+        and edited_material.shape[:2] == source_shape
+        and pristine_material.shape[:2] == source_shape
+        and edited_material.shape[2] > 0
+        and pristine_material.shape[2] > 0
+        and np.issubdtype(edited_material.dtype, np.integer)
+        and np.issubdtype(pristine_material.dtype, np.integer)
+        and fresh_rgb.ndim == 3
+        and fresh_rgb.shape == (*grid.target_shape, 3)
+        and fresh_material.ndim == 3
+        and fresh_material.shape[:2] == grid.target_shape
+        and fresh_material.shape[2] > 0
+        and target_solid.shape == grid.target_shape
+    )
+    if not arrays_are_valid:
+        raise CachedPreviewAnalysisError(
+            "Required preview edit artifacts are structurally incompatible"
+        )
+
+    rgb_change_mask = grid.project_change_mask(
+        edited_rgb,
+        pristine_rgb,
+        source_solid=source_solid,
+        target_solid=target_solid,
+    )
+    replayed_rgb = np.asarray(fresh_rgb, dtype=np.uint8).copy()
+    replayed_rgb[rgb_change_mask] = grid.sample_target_mask(
+        edited_rgb,
+        rgb_change_mask,
+    )
+
+    common_source_layers = min(
+        int(edited_material.shape[2]),
+        int(pristine_material.shape[2]),
+    )
+    material_source_change = np.any(
+        edited_material[..., :common_source_layers]
+        != pristine_material[..., :common_source_layers],
+        axis=-1,
+    )
+    material_source_change &= source_solid
+    material_change_mask = grid.project_mask(
+        material_source_change,
+        target_solid=target_solid,
+    )
+    replayed_material = np.array(fresh_material, copy=True)
+    copied_layers = min(
+        int(edited_material.shape[2]),
+        int(replayed_material.shape[2]),
+    )
+    replayed_material_slice = replayed_material[..., :copied_layers]
+    replayed_material_slice[material_change_mask] = grid.sample_target_mask(
+        edited_material[..., :copied_layers],
+        material_change_mask,
+    )
+
+    _log.debug(
+        "Preview edit deltas projected onto fresh analysis",
+        extra={
+            "event": "preview_edit_projection_applied",
+            "source_shape": list(grid.source_shape),
+            "target_shape": list(grid.target_shape),
+            "rgb_changed_pixels": int(np.count_nonzero(rgb_change_mask)),
+            "material_changed_pixels": int(
+                np.count_nonzero(material_change_mask)
+            ),
+        },
+    )
+    return (
+        replayed_rgb,
+        replayed_material,
+        np.asarray(fresh_rgb, dtype=np.uint8).copy(),
+        grid,
+    )
 
 
 def _resize_spatial_nearest(
@@ -694,6 +879,90 @@ def _normalize_color_replacements_input(color_replacements):
     return {}
 
 
+def _normalize_replayed_color_replacements_input(
+    replacement_records: object,
+    matched_rgb: np.ndarray | None,
+    quantized_image: np.ndarray | None,
+    mask_solid: np.ndarray | None,
+) -> dict[str, str]:
+    """Resolve portable whole-image edits against the active material map.
+    按当前耗材映射重新解析项目中的全图改色。
+
+    ``matched_hex`` belongs to the material set used when a project was
+    saved. ``quantized_hex`` identifies the stable source-image color, so it
+    can locate the corresponding current matches after a LUT or material
+    change. Malformed or legacy records retain the historical matched-color
+    fallback.
+
+    Args:
+        replacement_records: Saved API-format replacement records.
+            (保存的 API 格式替换记录。)
+        matched_rgb: Current material-matched RGB image. (当前匹配图。)
+        quantized_image: Current quantized source image. (当前量化源图。)
+        mask_solid: Current printable-pixel mask. (当前实体像素掩码。)
+
+    Returns:
+        Current matched-color to target-color mappings.
+        (当前匹配色到目标色的映射。)
+    """
+    fallback = _normalize_color_replacements_input(replacement_records)
+    if not isinstance(replacement_records, list):
+        return fallback
+    if matched_rgb is None or quantized_image is None:
+        return fallback
+
+    matched = np.asarray(matched_rgb)
+    quantized = np.asarray(quantized_image)
+    if matched.ndim != 3 or matched.shape[-1] != 3:
+        return fallback
+    if quantized.shape != matched.shape:
+        return fallback
+
+    solid = np.asarray(mask_solid, dtype=bool)
+    if solid.shape != matched.shape[:2]:
+        solid = np.ones(matched.shape[:2], dtype=bool)
+
+    resolved: dict[str, str] = {}
+    for item in replacement_records:
+        if not isinstance(item, dict):
+            continue
+        item_fallback = _normalize_color_replacements_input([item])
+        if not item_fallback:
+            continue
+        fallback_source, replacement_hex = next(iter(item_fallback.items()))
+        quantized_hex = item.get("quantized") or item.get("quantized_hex")
+        if not isinstance(quantized_hex, str):
+            resolved[fallback_source] = replacement_hex
+            continue
+        try:
+            quantized_rgb = np.asarray(
+                _hex_to_rgb_tuple(quantized_hex),
+                dtype=quantized.dtype,
+            )
+        except (TypeError, ValueError):
+            resolved[fallback_source] = replacement_hex
+            continue
+
+        source_mask = np.all(quantized == quantized_rgb, axis=-1) & solid
+        if not np.any(source_mask):
+            resolved[fallback_source] = replacement_hex
+            continue
+
+        current_matches = np.unique(matched[source_mask], axis=0)
+        if current_matches.size == 0:
+            resolved[fallback_source] = replacement_hex
+            continue
+        for current_rgb in current_matches:
+            current_hex = "#{:02x}{:02x}{:02x}".format(
+                int(current_rgb[0]),
+                int(current_rgb[1]),
+                int(current_rgb[2]),
+            )
+            resolved[current_hex] = replacement_hex
+
+    return resolved
+
+
 def _apply_region_replacement(image_rgb, region_mask, replacement_rgb):
     """Apply replacement color only within region_mask coverage area.
     仅在 region_mask 覆盖区域应用替换色。
@@ -768,6 +1037,24 @@ def _compute_connected_region_mask_4n(quantized_image, mask_solid, x, y):
         return np.zeros((h, w), dtype=bool)
 
     target = quantized_image[y, x]
+    eligible = (
+        np.all(quantized_image == target, axis=-1)
+        & np.asarray(mask_solid, dtype=bool)
+    )
+    if not eligible[y, x]:
+        return np.zeros((h, w), dtype=bool)
+
+    # Fast path: OpenCV's native flood fill is much faster than a Python
+    # deque loop on large previews while preserving 4-neighbour semantics.
+    try:
+        fill = np.ascontiguousarray(eligible.astype(np.uint8))
+        cv2.floodFill(fill, None, (int(x), int(y)), 2, flags=4)
+        return fill == 2
+    except cv2.error:
+        # Keep the previous pure-Python path as a conservative fallback for
+        # unusual OpenCV builds or unexpected array layouts.
+        pass
+
     out = np.zeros((h, w), dtype=bool)
     q = deque([(x, y)])
     out[y, x] = True
@@ -776,7 +1063,7 @@ def _compute_connected_region_mask_4n(quantized_image, mask_solid, x, y):
         cx, cy = q.popleft()
         for nx, ny in ((cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)):
             if 0 <= nx < w and 0 <= ny < h and not out[ny, nx]:
-                if mask_solid[ny, nx] and np.array_equal(quantized_image[ny, nx], target):
+                if eligible[ny, nx]:
                     out[ny, nx] = True
                     q.append((nx, ny))
 
@@ -916,8 +1203,37 @@ def run(ctx: dict) -> dict:
         ctx.get("material_dynamic_layer_count_enabled", False)
     )
 
+    edit_projection_grid = None
+    height_identity_rgb = None
+    if ctx.get("edit_projection") is not None:
+        edit_projection_grid, edit_projection_mode = (
+            _resolve_edit_projection_grid(
+                ctx,
+                target_shape=tuple(int(value) for value in mask_solid.shape),
+            )
+        )
+        if edit_projection_mode == "delta":
+            (
+                matched_rgb,
+                material_matrix,
+                height_identity_rgb,
+                edit_projection_grid,
+            ) = _replay_projected_preview_edits(
+                ctx,
+                fresh_matched_rgb=matched_rgb,
+                fresh_material_matrix=material_matrix,
+                target_mask_solid=mask_solid,
+            )
+        else:
+            # Recipe masks are self-describing edit deltas. They need only the
+            # normalized source grid; RGB/material baselines are unnecessary.
+            height_identity_rgb = np.asarray(
+                matched_rgb,
+                dtype=np.uint8,
+            ).copy()
+
     # ---- Override matched_rgb with pre-computed array if provided ----
-    if matched_rgb_path is not None:
+    if matched_rgb_path is not None and edit_projection_grid is None:
         try:
             override_rgb = np.asarray(
                 np.load(matched_rgb_path, allow_pickle=False),
@@ -990,8 +1306,7 @@ def run(ctx: dict) -> dict:
     # spatial contract is defined by the final pre-replacement matched RGB.
     # Resolve cached matched_rgb first; then load the explicit identity or,
     # for legacy callers, snapshot that final matched plane.
-    height_identity_rgb = None
-    if height_identity_rgb_path is not None:
+    if height_identity_rgb_path is not None and edit_projection_grid is None:
         try:
             loaded_identity = np.load(
                 height_identity_rgb_path,
@@ -1018,7 +1333,7 @@ def run(ctx: dict) -> dict:
     if height_identity_rgb is None:
         height_identity_rgb = np.asarray(matched_rgb, dtype=np.uint8).copy()
 
-    if material_matrix_path is not None:
+    if material_matrix_path is not None and edit_projection_grid is None:
         try:
             override_material_matrix = np.load(
                 material_matrix_path,
@@ -1058,7 +1373,12 @@ def run(ctx: dict) -> dict:
     # ---- Apply global color replacements ----
     effective_color_replacements = _normalize_color_replacements_input(color_replacements)
     if replacement_regions:
-        api_format_replacements = _normalize_color_replacements_input(replacement_regions)
+        api_format_replacements = _normalize_replayed_color_replacements_input(
+            replacement_regions,
+            matched_rgb,
+            ctx.get("quantized_image"),
+            mask_solid,
+        )
         if api_format_replacements:
             effective_color_replacements.update(api_format_replacements)
             # Remove API-format items (no mask) from replacement_regions to avoid
@@ -1187,6 +1507,19 @@ def run(ctx: dict) -> dict:
             region_masks = {}
 
         if isinstance(region_masks, dict):
+            if edit_projection_grid is not None:
+                try:
+                    region_masks = {
+                        str(region_id): edit_projection_grid.project_mask(
+                            np.asarray(region_mask, dtype=bool),
+                            target_solid=mask_solid,
+                        )
+                        for region_id, region_mask in region_masks.items()
+                    }
+                except (TypeError, ValueError) as exc:
+                    raise CachedPreviewAnalysisError(
+                        "Required recipe edit mask could not be projected"
+                    ) from exc
             target_order = (
                 getattr(lut_metadata, "layer_order", "Top2Bottom")
                 if lut_metadata is not None

@@ -109,6 +109,9 @@ async def run_material_sync_refresh_once(*, reason: str) -> dict[str, Any] | Non
             "installed_count": result.get("installed_count"),
             "skipped_count": result.get("skipped_count"),
             "failed_count": result.get("failed_count"),
+            "catalog_not_modified": bool(
+                result.get("catalog_not_modified", False)
+            ),
         },
     )
     return result

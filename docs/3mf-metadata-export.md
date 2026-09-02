@@ -18,12 +18,14 @@ The current export stack covers all printer/slicer combinations registered in
 
 At the time of writing:
 
-- 26 printer profiles are registered
-- 37 base metadata templates exist under `printer_profiles/`
-- 31 sibling `*_0_2.json` templates exist for `0.2` nozzle exports
+- 30 printer profiles are registered
+- 41 base metadata templates exist under `printer_profiles/`
+- 34 sibling `*_0_2.json` templates exist for `0.2` nozzle exports
 - Flashforge AD5X / Creator 5 / Creator 5 Pro / Guider4 / Guider4 Pro provide
   native `0.25` / `0.4` templates for Flash Studio Desktop
 - Flashforge Guider 3 Ultra provides a native `0.4` template
+- QIDI Q2 / Q2C / X-Max 4 provide native `0.2` / `0.4` templates for
+  QIDI Studio; X-Plus 5 provides its native `0.4` template
 
 ## Core Files
 
@@ -80,6 +82,9 @@ Important:
   by scanning every JSON left in the install directory. Only native presets at
   or below Lumina's `0.4` mm boundary are bundled; same-diameter standard and HF
   Guider4 presets are de-duplicated in favor of the standard preset.
+- QIDI Studio profiles are bounded by the formal `Q Series`, `X 4 Series`, and
+  `X 5 Series` manifests. Lumina exposes the four models backed by supplied
+  native 3MF fixtures and keeps only native nozzle presets at or below `0.4` mm.
 - `supported_nozzle_sizes` is exposed for every currently supported printer.
 
 ## Metadata Package Layout
@@ -110,6 +115,10 @@ Family-specific rules:
 - `FlashStudio`
   Omits Bambu-only aux sidecars, uses the native BBL client header, and does
   not emit an `OrcaSlicer-Version` tag.
+- `QIDIStudio`
+  Uses the native QDT client header, retains `filament_sequence.json` and
+  `cut_information.xml`, emits `plate_1.json`, and uses QIDI package-cover
+  relationship URIs.
 
 ## Nozzle Variant Rules
 
@@ -174,6 +183,7 @@ Rules currently used by the writer:
 - Elegoo: `ElegooSlicer-1.3.2.9`
 - Anycubic: `BambuStudio-1.3.9.4`
 - Flash Studio Desktop: `BambuStudio-2.3.2`
+- QIDI Studio: `QIDIStudio-02.07.02.60`
 
 Flash Studio keeps three versions separate:
 
@@ -195,6 +205,17 @@ filament arrays are contracted to the active project palette rather than a
 generic eight-slot template. These are format metadata only;
 Lumina remains authoritative for layer height, line widths, wall generation,
 temperatures, speeds, infill, support, and brim.
+
+QIDI Studio `02.07.02.60` uses the same value for its installed profile bundle,
+`Application`, project settings version, and `X-QDT-Client-Version`. Its native
+model metadata also contains `QIDIStudio:3mfVersion=1` and
+`OrcaSlicer=2.1.0.14`. The four supplied saved projects establish the supported
+machine boundary: Q2, Q2C, X-Max 4, and X-Plus 5. Q2, Q2C, and X-Max 4 expose
+`0.2` / `0.4`; X-Plus 5 exposes `0.4` only. The QIDI-specific fields are routing
+and package metadata; Lumina remains authoritative for process values.
+All four native reference projects explicitly disable the skirt
+(`skirt_loops=0`) and draft shield; Lumina writes those fields explicitly so
+QIDI Studio cannot fall back to a local process default that enables them.
 
 The H2-family `0.2` branch intentionally uses the newer Bambu client stamp
 because those machine/process presets are aligned to the newer H2 system family.
@@ -451,6 +472,45 @@ for relief geometry.
 模式关闭修改器，导出与 writer 边界还会再次检查，避免任何调用方误给浮雕
 写入全局 LCR 区间。
 
+### Backing sparse-infill contract / 背板稀疏填充契约
+
+`PrinterConfig.VIEWING_SURFACE_SOLID_DEPTH_MM` is the single project-level
+source of truth for the protected viewing-surface depth (default `3.0 mm`).
+The writer stores the requested deep-backing density in
+`Metadata/project_settings.config` as `sparse_infill_density`, then adds
+`sparse_infill_density=100%` object-height overrides to
+`Metadata/layer_config_ranges.xml` for the protected zones. The range builder
+splits overlaps with the existing coarse `layer_height` override into sorted,
+non-overlapping ranges.
+
+`PrinterConfig.VIEWING_SURFACE_SOLID_DEPTH_MM` 是观赏面保护深度的唯一项目级
+配置来源，默认值为 `3.0 mm`。writer 把用户选择的深层底板填充率写入
+`Metadata/project_settings.config` 的 `sparse_infill_density`，再通过
+`Metadata/layer_config_ranges.xml` 为观赏面保护区覆盖
+`sparse_infill_density=100%`。区间构建器会把该覆盖与已有的粗层高覆盖拆分为
+按 Z 排序且互不重叠的区间。
+
+| Orientation / 朝向 | Protected solid range / 实心保护区 |
+|---|---|
+| `down` | `[0, color_height + solid_depth]` |
+| `up` | `[base_height - solid_depth, base_height + color_height]` |
+| `double` | Both viewing-side ranges; overlapping ranges are merged / 两侧观赏面区间，相交时合并 |
+
+If the complete backing fits inside the protected depth (or inside both depths
+for a double-sided model), the effective global density is promoted to `100%`
+and no density-only range is needed. Sparse relief is rejected because its
+variable backing boundary cannot be protected by a single global Z range.
+Sparse puzzle generation is also rejected because puzzle assembly intentionally
+removes source object-height ranges. Raster, vector, native large-format, and
+batch exports all forward the same density and geometry context; merged batch
+archives remap the one-based model-object indexes while preserving the ranges.
+
+当整块底板不超过保护深度（双面模型则不超过两侧保护深度之和）时，实际全局
+填充率会提升为 `100%`，无需额外的密度区间。浮雕底板边界随位置变化，无法用
+单一全局 Z 区间可靠保护，因此稀疏浮雕会被拒绝；拼图装配会主动移除源对象的
+高度区间，因此也拒绝稀疏拼图。光栅、矢量、原生大画幅和批量导出统一透传
+密度与几何上下文，批量合并时会重映射从 1 开始的模型对象序号并保留区间。
+
 ### Turning it Off / 关闭方式
 
 - UI: **Settings → Slicer Settings → Base-plate layer-height modifier**（仅当
@@ -460,7 +520,8 @@ for relief geometry.
 - Config: set `"enable_base_layer_height_modifier": false` in `user_settings.json`
 
 Bambu-family slicer IDs (see `frontend/src/utils/settingsOptionIds.ts`):
-`BambuStudio`, `OrcaSlicer`, `SnapmakerOrca`, `ElegooSlicer`, `AnycubicSlicerNext`.
+`BambuStudio`, `OrcaSlicer`, `SnapmakerOrca`, `ElegooSlicer`,
+`AnycubicSlicerNext`, `FlashStudio`, `QIDIStudio`.
 
 ### Regression Tests / 回归测试入口
 
@@ -475,6 +536,9 @@ Bambu-family slicer IDs (see `frontend/src/utils/settingsOptionIds.ts`):
 - `tests/test_converter_generate_unit.py::TestConverterEntryAcceptsBaseLayerModifierKwarg`
   — signature contract (prevents API↔worker kwargs drift)
 - `tests/test_bambu_3mf_writer_unit.py` — writer-level kwargs plumbing
+- `tests/test_backing_infill_contract_unit.py` — 10 mm boundary, canonical
+  solid depth, orientation ranges, thin-backing promotion, and generated 3MF
+  process metadata
 - `frontend/src/components/__tests__/SettingsPanel.baseLayerHeightModifier.test.tsx`
   — UI gating by slicer family + translation assertions
 - `frontend/src/__tests__/settingsOptionIds.test.ts` — `isBambuFamilySlicer`

@@ -13,6 +13,7 @@ import {
   RECIPE_IMPORT_WARNING_LUT_DEGRADED,
   RECIPE_IMPORT_WARNING_LUT_MISSING,
   RECIPE_IMPORT_WARNING_SPATIAL_EDITS_NOT_SERIALIZED,
+  RECIPE_IMPORT_WARNING_REGION_RECIPES_NOT_RESTORED,
   restoreConverterRecipe,
 } from "../recipe/importRecipe";
 import { annotateSpatialEditCompatibility } from "../recipe/importFlow";
@@ -20,6 +21,7 @@ import { embedRecipeInPng, extractRecipeFromPng, hasLuminaRecipe } from "../reci
 import { migrateRecipe } from "../recipe/migration";
 import { DEFAULT_STATE } from "../stores/converter";
 import { DEFAULT_SETTINGS } from "../stores/settingsStore";
+import type { SettingsState } from "../stores/settingsStore";
 import type { ConverterState } from "../stores/converter/store";
 import type { LutInfo, ColorReplacementItem } from "../api/types";
 import { ColorMode } from "../api/types";
@@ -54,13 +56,21 @@ const LOCAL_FP: Record<string, string> = {
   BWLUT: "fp_bw",
 };
 
-async function buildTestRecipe(stateOverrides: Partial<ConverterState> = {}, fingerprint?: string): Promise<{
+async function buildTestRecipe(
+  stateOverrides: Partial<ConverterState> = {},
+  fingerprint?: string,
+  settingsOverrides: Partial<SettingsState> = {},
+): Promise<{
   recipe: LuminaRecipe;
   state: ConverterState;
 }> {
   const state = { ...DEFAULT_STATE, ...stateOverrides } as ConverterState;
   const fp = fingerprint ?? (LOCAL_FP[state.lut_name] || "unknown_fp");
-  const converterRecipe = exportConverterRecipe(state, DEFAULT_SETTINGS, fp);
+  const converterRecipe = exportConverterRecipe(
+    state,
+    { ...DEFAULT_SETTINGS, ...settingsOverrides },
+    fp,
+  );
   const imageFile = new File([new Uint8Array([1, 2, 3, 4])], "photo.png", { type: "image/png" });
   const assets = await buildRecipeAssets(imageFile, state.heightmapFile);
   const cover: RecipeCover = { width: 100, height: 75, mime_type: "image/png" };
@@ -217,14 +227,7 @@ describe("recipe integration", () => {
         LOCAL_FP,
       );
 
-      expect(restored.recipe_overrides).toHaveLength(2);
-      expect(restored.recipe_overrides![0]).toEqual({
-        region_id: "r1",
-        recipe: [0, 1, 2, 4],
-        layer_order: "Top2Bottom",
-        virtual_materials: [{ name: "Matte Black", hex: "#101010" }],
-      });
-      expect(restored.recipe_overrides![1].recipe).toEqual([1, 1, 0, 2]);
+      expect(restored.recipe_overrides).toEqual([]);
 
       expect(restored.customRecipeHistory).toHaveLength(1);
       const history = restored.customRecipeHistory![0];
@@ -239,7 +242,9 @@ describe("recipe integration", () => {
         { name: "Matte Black", hex: "#101010" },
       ]);
       expect(history.createdAtMs).toBe(1_700_000_000_000);
-      expect(warnings).toHaveLength(0);
+      expect(warnings).toContain(
+        RECIPE_IMPORT_WARNING_REGION_RECIPES_NOT_RESTORED,
+      );
 
       const embedded = await embedRecipeInPng(
         createMinimalPng(),
@@ -257,7 +262,7 @@ describe("recipe integration", () => {
       });
     });
 
-    it("exports schema_version 3 and imports legacy v1 without warnings", async () => {
+    it("exports schema_version 3 and imports legacy defaults without warnings", async () => {
       const { recipe } = await buildTestRecipe({ lut_name: "TestLUT" });
       expect(recipe.schema_version).toBe(3);
 
@@ -278,6 +283,20 @@ describe("recipe integration", () => {
       );
       expect(restored.recipe_overrides).toEqual([]);
       expect(restored.customRecipeHistory).toEqual([]);
+      expect(restored.backing_infill_density_percent).toBe(100);
+
+      const legacyV2 = JSON.parse(JSON.stringify(recipe)) as LuminaRecipe;
+      legacyV2.schema_version = 2;
+      if (legacyV2.recipe.converter) {
+        delete legacyV2.recipe.converter.geometry
+          .backing_infill_density_percent;
+      }
+      const { state: restoredV2 } = restoreConverterRecipe(
+        migrateRecipe(legacyV2),
+        LOCAL_LUTS,
+        LOCAL_FP,
+      );
+      expect(restoredV2.backing_infill_density_percent).toBe(100);
     });
 
     it("large format parameters round-trip", async () => {
@@ -302,12 +321,19 @@ describe("recipe integration", () => {
   describe("PNG embed → extract round-trip", () => {
     it("recipe survives PNG embedding and extraction", async () => {
       const workshopSource = createBeadRecipeSourceFixture();
-      const { recipe } = await buildTestRecipe({
-        lut_name: "TestLUT",
-        target_width_mm: 80,
-        enable_relief: true,
-        workshopSource,
-      });
+      const { recipe } = await buildTestRecipe(
+        {
+          lut_name: "TestLUT",
+          target_width_mm: 80,
+          enable_relief: true,
+          workshopSource,
+        },
+        undefined,
+        {
+          deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.4",
+          buildPlateId: "textured-pei-plate",
+        },
+      );
 
       const png = createMinimalPng();
       const embedded = await embedRecipeInPng(png, recipe, recipe.integrity.recipe_sha256);
@@ -319,6 +345,9 @@ describe("recipe integration", () => {
       expect(extracted!.recipe.converter!.base.target_width_mm).toBe(80);
       expect(extracted!.recipe.converter!.relief.enable_relief).toBe(true);
       expect(extracted!.recipe.converter!.base.lut.name).toBe("TestLUT");
+      expect(extracted!.recipe.converter!.device.build_plate_id).toBe(
+        "textured-pei-plate",
+      );
       expect(extracted!.recipe.workshop).toEqual(workshopSource);
     });
 
@@ -355,24 +384,69 @@ describe("recipe integration", () => {
   describe("JSON sidecar round-trip", () => {
     it("export → JSON file → parse → import", async () => {
       const workshopSource = createBeadRecipeSourceFixture();
-      const { recipe } = await buildTestRecipe({
-        lut_name: "TestLUT",
-        target_width_mm: 60,
-        add_loop: true,
-        workshopSource,
-      });
+      const { recipe } = await buildTestRecipe(
+        {
+          lut_name: "TestLUT",
+          target_width_mm: 60,
+          add_loop: true,
+          quantize_colors_unlocked: true,
+          use_lut_constrained: true,
+          auto_dynamic_range: true,
+          workshopSource,
+        },
+        undefined,
+        {
+          deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.4",
+          buildPlateId: "textured-pei-plate",
+        },
+      );
 
       const jsonStr = JSON.stringify(recipe, null, 2);
       const jsonFile = new File([jsonStr], "card.lumina.json", { type: "application/json" });
 
       const parsed = await parseRecipeFile(jsonFile);
       expect(parsed.source).toBe("json");
+      expect(parsed.recipe.recipe.converter!.device.build_plate_id).toBe(
+        "textured-pei-plate",
+      );
 
       const { state: restored } = restoreConverterRecipe(parsed.recipe, LOCAL_LUTS, LOCAL_FP);
       expect(restored.lut_name).toBe("TestLUT");
       expect(restored.target_width_mm).toBe(60);
       expect(restored.add_loop).toBe(true);
+      expect(restored.quantize_colors_unlocked).toBe(true);
+      expect(restored.use_lut_constrained).toBe(true);
+      expect(restored.auto_dynamic_range).toBe(true);
       expect(restored.workshopSource).toEqual(workshopSource);
+    });
+  });
+
+  describe("PNG project round-trip", () => {
+    it("preserves output-affecting matching flags", async () => {
+      const { recipe } = await buildTestRecipe({
+        lut_name: "TestLUT",
+        quantize_colors_unlocked: true,
+        use_lut_constrained: true,
+        auto_dynamic_range: true,
+      });
+      const embedded = await embedRecipeInPng(
+        createMinimalPng(),
+        recipe,
+        recipe.integrity.recipe_sha256,
+      );
+      const parsed = await parseRecipeFile(
+        new File([embedded], "project.png", { type: "image/png" }),
+      );
+
+      const { state: restored } = restoreConverterRecipe(
+        parsed.recipe,
+        LOCAL_LUTS,
+        LOCAL_FP,
+      );
+
+      expect(restored.quantize_colors_unlocked).toBe(true);
+      expect(restored.use_lut_constrained).toBe(true);
+      expect(restored.auto_dynamic_range).toBe(true);
     });
   });
 

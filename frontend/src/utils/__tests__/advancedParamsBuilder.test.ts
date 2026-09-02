@@ -192,6 +192,23 @@ describe("buildAdvancedParams — active-tab guard", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildAdvancedParams — groups populated when toggles enabled", () => {
+  it("captures generated wipe-tower warning codes for bug reproduction", () => {
+    const result = buildAdvancedParams(
+      makeState({
+        generateWarnings: [
+          "wipe_tower_manual_adjustment_required",
+          "wipe_tower_manual_adjustment_required",
+        ],
+      }),
+      "converter",
+      { maxBytes: 8192 },
+    ) as AdvancedParamsFull;
+
+    expect(result.generation.wipe_tower_warning_codes).toEqual([
+      "wipe_tower_manual_adjustment_required",
+    ]);
+  });
+
   it("captures dynamic material generation settings", () => {
     const result = buildAdvancedParams(
       makeState({
@@ -296,6 +313,9 @@ describe("buildAdvancedParams — groups populated when toggles enabled", () => 
 
     // Dimensions / generation are always present and scalar-filled.
     expect(result.dimensions.target_width_mm).toBe(state.target_width_mm);
+    expect(result.dimensions.backing_infill_density_percent).toBe(
+      state.backing_infill_density_percent,
+    );
     expect(result.generation.structure_mode).toBe(state.structure_mode);
     expect(result.model_surface).toEqual({
       enabled: true,
@@ -1131,6 +1151,7 @@ const arbConverterState: fc.Arbitrary<ConverterState> = fc
     target_height_mm: arbPositiveFinite,
     spacer_thick: arbPositiveFinite,
     base_spacer_thick: arbPositiveFinite,
+    backing_infill_density_percent: fc.integer({ min: 5, max: 100 }),
 
     // Generation group (scalars + booleans).
     color_layers: fc.option(fc.integer({ min: 1, max: 64 }), { nil: null }),

@@ -9,6 +9,10 @@ import {
   type WorkshopPermissionName,
   type WorkshopRpcMethod,
   type WorkshopRpcResponse,
+  type WorkshopUiState,
+} from "@lumina/workshop-sdk";
+import type {
+  WorkshopImageHandoff as PublicWorkshopImageHandoff,
 } from "@lumina/workshop-sdk";
 
 export {
@@ -22,7 +26,6 @@ export type {
   LocalizedText,
   WorkshopColorEntry,
   WorkshopColorLibrary,
-  WorkshopImageHandoff,
   WorkshopManifestV1,
   WorkshopPermissionName,
   WorkshopPickedImage,
@@ -36,6 +39,16 @@ export type {
   WorkshopUiState,
 } from "@lumina/workshop-sdk";
 
+/**
+ * Backward-compatible host extension for richer image handoff sources.
+ * 宿主对图像交接的向后兼容扩展，用于接收更完整的图源与成品厚度。
+ */
+export interface WorkshopImageHandoff
+  extends PublicWorkshopImageHandoff {
+  svgBytes?: ArrayBuffer;
+  recommendedTotalThicknessMm?: number;
+}
+
 export interface WorkshopModuleIdentity {
   readonly moduleId: string;
   readonly moduleVersion: string;
@@ -48,6 +61,23 @@ export interface WorkshopRpcEnvelopeShape {
   requestId: string;
   method: string;
   payload: unknown;
+}
+
+/**
+ * Optional v1 host events. Modules must advertise each event during the
+ * ready handshake before the host sends it.
+ */
+export const WORKSHOP_RPC_EVENT_NAMES = ["ui.stateChanged"] as const;
+
+export type WorkshopRpcEventName =
+  (typeof WORKSHOP_RPC_EVENT_NAMES)[number];
+
+export interface WorkshopRpcEventEnvelope {
+  protocol: "lumina-workshop-rpc";
+  version: typeof WORKSHOP_RPC_VERSION;
+  kind: "event";
+  event: WorkshopRpcEventName;
+  payload: WorkshopUiState;
 }
 
 export const WORKSHOP_RPC_METHODS = [
@@ -111,6 +141,19 @@ export function errorResponseEnvelope(
       message,
       retryable,
     },
+  };
+}
+
+export function eventEnvelope(
+  event: WorkshopRpcEventName,
+  payload: WorkshopUiState,
+): WorkshopRpcEventEnvelope {
+  return {
+    protocol: "lumina-workshop-rpc",
+    version: WORKSHOP_RPC_VERSION,
+    kind: "event",
+    event,
+    payload,
   };
 }
 

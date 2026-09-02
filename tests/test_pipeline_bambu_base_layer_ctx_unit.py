@@ -347,6 +347,7 @@ def test_vector_branch_passes_bambu_modifier_kwargs_to_exporter(tmp_path) -> Non
             "layer_height_mm": 0.12,
             "enable_coating": True,
             "coating_height_mm": 0.08,
+            "backing_infill_density_percent": 35,
         }
 
         result = coordinator._run_vector_branch(ctx)
@@ -356,6 +357,7 @@ def test_vector_branch_passes_bambu_modifier_kwargs_to_exporter(tmp_path) -> Non
     assert captured["base_height_mm"] == pytest.approx(1.56)
     assert captured["color_height_mm"] == pytest.approx(1.92)
     assert captured["face_orientation"] == "up"
+    assert captured["backing_infill_density_percent"] == 35
 
 
 def test_vector_relief_does_not_forward_enabled_base_modifier(tmp_path) -> None:

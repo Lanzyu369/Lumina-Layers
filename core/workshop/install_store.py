@@ -24,6 +24,19 @@ from .models import (
 MAX_INSTALL_STATE_BYTES = 2 * 1024 * 1024
 _STATE_LOCKS_GUARD = threading.Lock()
 _STATE_LOCKS: dict[str, threading.RLock] = {}
+_BROWSER_TRUSTED_SOURCES = frozenset({"registry", "seed"})
+
+
+def is_browser_trusted_workshop_module(
+    source: str,
+    official: bool,
+) -> bool:
+    """Return whether server-persisted identity may run in a browser.
+
+    判断服务端持久化的模块身份是否可以在浏览器沙箱中运行。
+    """
+
+    return official and source in _BROWSER_TRUSTED_SOURCES
 
 
 def _shared_state_lock(path: Path) -> threading.RLock:

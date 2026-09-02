@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { useConverterStore } from '../stores/converter';
 import type { PaletteEntry, LutColorEntry } from '../api/types';
+import { _clearClientLogBufferForTests } from '../utils/clientLog';
+import { mutateEditorSelection } from '../api/converter';
 
 const customRecipeDialogProps = vi.hoisted(() => ({
   latest: null as null | {
@@ -18,6 +20,7 @@ vi.mock('../api/converter', async () => {
     ...original,
     fetchLutColors: vi.fn().mockResolvedValue({ colors: [] }),
     replaceColor: vi.fn().mockResolvedValue({ preview_url: '/api/files/mock' }),
+    mutateEditorSelection: vi.fn(),
   };
 });
 
@@ -68,11 +71,18 @@ const LUT_COLORS: LutColorEntry[] = [
 ];
 
 function resetStore() {
+  _clearClientLogBufferForTests();
   useConverterStore.setState({
     palette: [],
     selectedColor: null,
     colorRemapMap: {},
     remapHistory: [],
+    remapRedoHistory: [],
+    adjustmentHistory: [],
+    adjustmentRedoHistory: [],
+    replacement_regions: [],
+    recipe_overrides: [],
+    regionReplacementCount: 0,
     lutColors: [],
     lutColorsLoading: false,
     lutColorsLutName: '',
@@ -80,6 +90,9 @@ function resetStore() {
     color_height_map: {},
     heightmap_max_height: 5.0,
     replacePreviewLoading: false,
+    historyCanUndo: false,
+    historyCanRedo: false,
+    historyBusy: false,
     originalPreviewUrl: null,
     previewImageUrl: null,
     sessionId: null,
@@ -310,6 +323,11 @@ describe('PalettePanel 双色显示', () => {
     fireEvent.click(firstItem);
 
     expect(useConverterStore.getState().selectedColor).toBe('ee0000');
+
+    fireEvent.click(firstItem);
+
+    expect(useConverterStore.getState().selectedColor).toBeNull();
+    expect(useConverterStore.getState().selectedColors.size).toBe(0);
   });
 
   it('全选模式连续选择 6 个源色时保持全部高亮且已选条不换行挤压列表', async () => {
@@ -391,7 +409,7 @@ describe('PalettePanel 双色显示', () => {
     );
   });
 
-  it('选择模式工具组在窄宽度下允许按钮换行且文字保持单行居中', async () => {
+  it('选择工具组在窄宽度下允许按钮换行且文字保持单行居中', async () => {
     const PalettePanel = await importPalettePanel();
 
     useConverterStore.setState({
@@ -407,19 +425,286 @@ describe('PalettePanel 双色显示', () => {
 
     render(<PalettePanel />);
 
-    const modeGroup = screen.getByRole('group', { name: '选择模式' });
+    const modeGroup = screen.getByRole('group', { name: '选择工具' });
     const modeControls = modeGroup.lastElementChild;
 
     expect(modeControls).toHaveClass('grid');
     expect(modeControls).toHaveClass('min-h-9');
+    expect(modeControls).toHaveClass('grid-cols-[repeat(auto-fit,minmax(6.75rem,1fr))]');
     expect(modeControls).not.toHaveClass('h-9');
 
-    for (const label of ['全选', '当前', '多选', '局部区域']) {
+    for (const label of ['同颜色全选', '点选色块', '选区画笔', '全不选', '选区闪烁']) {
       const button = screen.getByRole('button', { name: label });
       expect(button).toHaveClass('w-full');
       expect(screen.getByText(label)).toHaveClass('whitespace-nowrap');
       expect(screen.getByText(label)).toHaveClass('leading-none');
     }
+  });
+
+  it('选择工具里的选区闪烁按钮只切换前端显示状态', async () => {
+    const PalettePanel = await importPalettePanel();
+
+    useConverterStore.setState({
+      palette: PALETTE,
+      selectionMode: 'current',
+      selectionBlinkEnabled: false,
+      colorRemapMap: {},
+      remapHistory: [],
+      enable_relief: false,
+      color_height_map: {},
+      heightmap_max_height: 5.0,
+    });
+
+    render(<PalettePanel />);
+
+    const blinkButton = screen.getByRole('button', { name: '选区闪烁' });
+    expect(useConverterStore.getState().selectionBlinkEnabled).toBe(false);
+
+    fireEvent.click(blinkButton);
+    expect(useConverterStore.getState().selectionBlinkEnabled).toBe(true);
+    expect(blinkButton).toHaveAttribute(
+      'title',
+      '让当前选区整体呼吸闪烁：浅色区块变暗，深色区块发白；仅前端显示，不重新生成预览',
+    );
+  });
+
+  it('已有自定义配方覆盖时历史撤销按钮保持可用', async () => {
+    const PalettePanel = await importPalettePanel();
+
+    useConverterStore.setState({
+      palette: PALETTE,
+      selectedColor: null,
+      selectedColors: new Set<string>(),
+      selectedRegions: [],
+      regionData: null,
+      selectionMode: 'select-all',
+      recipe_overrides: [
+        {
+          region_id: 'region-1',
+          recipe: [0, 1, 2],
+          layer_order: 'Top2Bottom',
+        },
+      ],
+      colorRemapMap: {},
+      remapHistory: [],
+      remapRedoHistory: [],
+      adjustmentHistory: [],
+      adjustmentRedoHistory: [],
+      regionReplacementCount: 0,
+      enable_relief: false,
+      color_height_map: {},
+      heightmap_max_height: 5.0,
+    });
+
+    render(<PalettePanel />);
+
+    expect(screen.getByRole('button', { name: '撤销' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '重做' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '清空替换' })).toBeEnabled();
+  });
+
+  it('会话中的首次选区历史可直接撤销', async () => {
+    const PalettePanel = await importPalettePanel();
+
+    useConverterStore.setState({
+      palette: PALETTE,
+      sessionId: 'selection-session',
+      colorRemapMap: {},
+      remapHistory: [],
+      remapRedoHistory: [],
+      adjustmentHistory: [],
+      adjustmentRedoHistory: [],
+      regionReplacementCount: 0,
+      historyCanUndo: true,
+      historyCanRedo: false,
+      historyBusy: false,
+    });
+
+    render(<PalettePanel />);
+
+    expect(screen.getByRole('button', { name: '撤销' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '重做' })).toBeDisabled();
+  });
+
+  it('会话撤销后无需本地重做记录即可重做', async () => {
+    const PalettePanel = await importPalettePanel();
+
+    useConverterStore.setState({
+      palette: PALETTE,
+      sessionId: 'selection-session',
+      remapRedoHistory: [],
+      adjustmentRedoHistory: [],
+      historyCanUndo: false,
+      historyCanRedo: true,
+      historyBusy: false,
+    });
+
+    render(<PalettePanel />);
+
+    expect(screen.getByRole('button', { name: '撤销' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '重做' })).toBeEnabled();
+  });
+
+  it('会话历史操作进行中时禁用撤销和重做', async () => {
+    const PalettePanel = await importPalettePanel();
+
+    useConverterStore.setState({
+      palette: PALETTE,
+      sessionId: 'selection-session',
+      colorRemapMap: { ee0000: '00ee00' },
+      remapHistory: [{}],
+      remapRedoHistory: [{ ee0000: '00ee00' }],
+      historyCanUndo: true,
+      historyCanRedo: true,
+      historyBusy: true,
+    });
+
+    render(<PalettePanel />);
+
+    expect(screen.getByRole('button', { name: '撤销' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '重做' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '清空替换' })).toBeEnabled();
+  });
+
+  it('无会话时继续使用本地撤销和重做历史', async () => {
+    const PalettePanel = await importPalettePanel();
+
+    useConverterStore.setState({
+      palette: PALETTE,
+      sessionId: null,
+      colorRemapMap: {},
+      remapHistory: [{}],
+      remapRedoHistory: [{ ee0000: '00ee00' }],
+      historyCanUndo: false,
+      historyCanRedo: false,
+      historyBusy: false,
+    });
+
+    render(<PalettePanel />);
+
+    expect(screen.getByRole('button', { name: '撤销' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '重做' })).toBeEnabled();
+  });
+
+  it('点击统一选区里的已选色块会取消对应单块', async () => {
+    const PalettePanel = await importPalettePanel();
+    const mockMutateEditorSelection = vi.mocked(mutateEditorSelection);
+    mockMutateEditorSelection.mockResolvedValueOnce({
+      selection_revision: 6,
+      content_revision: 9,
+      selected_pixel_count: 20,
+      selected_component_count: 1,
+      selected_color_hexes: ['#00ee00'],
+      region_ids: ['region-green'],
+      components: [
+        {
+          label: 2,
+          region_id: 'region-green',
+          color_hex: '#00ee00',
+          pixel_count: 20,
+          bbox: [5, 0, 4, 5],
+          anchor: [6, 2],
+          contours: [[[5, 0], [9, 0], [9, 5], [5, 5]]],
+        },
+      ],
+      contours: [
+        [[5, 0], [9, 0], [9, 5], [5, 5]],
+      ],
+      can_undo: true,
+      can_redo: false,
+    });
+
+    useConverterStore.setState({
+      palette: PALETTE,
+      selectedColor: '00ee00',
+      selectedColors: new Set<string>(['ee0000', '00ee00']),
+      selectionMode: 'multi-select',
+      selectionTool: 'point',
+      selectionDocument: {
+        selection_revision: 5,
+        content_revision: 9,
+        selected_pixel_count: 30,
+        selected_component_count: 2,
+        selected_color_hexes: ['#ee0000', '#00ee00'],
+        region_ids: ['region-red', 'region-green'],
+        components: [
+          {
+            label: 1,
+            region_id: 'region-red',
+            color_hex: '#ee0000',
+            pixel_count: 10,
+            bbox: [0, 0, 2, 5],
+            anchor: [1, 2],
+            contours: [[[0, 0], [2, 0], [2, 5], [0, 5]]],
+          },
+          {
+            label: 2,
+            region_id: 'region-green',
+            color_hex: '#00ee00',
+            pixel_count: 20,
+            bbox: [5, 0, 4, 5],
+            anchor: [6, 2],
+            contours: [[[5, 0], [9, 0], [9, 5], [5, 5]]],
+          },
+        ],
+        contours: [
+          [[0, 0], [2, 0], [2, 5], [0, 5]],
+          [[5, 0], [9, 0], [9, 5], [5, 5]],
+        ],
+        can_undo: false,
+        can_redo: false,
+      },
+      selectedRegions: [
+        {
+          regionId: 'region-red',
+          colorHex: '#ee0000',
+          pixelCount: 10,
+          previewUrl: '/api/files/base.png',
+          clickX: 1,
+          clickY: 2,
+        },
+        {
+          regionId: 'region-green',
+          colorHex: '#00ee00',
+          pixelCount: 20,
+          previewUrl: '/api/files/base.png',
+          clickX: 6,
+          clickY: 2,
+        },
+      ],
+      colorRemapMap: {},
+      remapHistory: [],
+      enable_relief: false,
+      color_height_map: {},
+      heightmap_max_height: 5.0,
+      sessionId: 'palette-session',
+      previewBaseImageUrl: '/api/files/base.png',
+      previewImageUrl: '/api/files/base.png',
+    });
+
+    render(<PalettePanel />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTitle('#ee0000 (10px) — 点击取消选择'));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const state = useConverterStore.getState();
+    expect(state.selectionDocument?.selected_component_count).toBe(1);
+    expect(state.selectionDocument?.region_ids).toEqual(['region-green']);
+    expect(state.selectedRegions.map((region) => region.regionId)).toEqual(['region-green']);
+    expect(screen.getByRole('button', { name: '撤销' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '重做' })).toBeDisabled();
+    expect(mockMutateEditorSelection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: 'point-toggle',
+        x: 1,
+        y: 2,
+        base_selection_revision: 5,
+        content_revision: 9,
+      }),
+    );
   });
 
   it('当前模式下点击调色板不响应', async () => {
@@ -442,6 +727,69 @@ describe('PalettePanel 双色显示', () => {
     fireEvent.click(firstItem);
 
     expect(useConverterStore.getState().selectedColor).toBeNull();
+  });
+
+  it('全不选按钮会清空所有选择状态', async () => {
+    const PalettePanel = await importPalettePanel();
+
+    useConverterStore.setState({
+      palette: PALETTE,
+      selectedColor: 'ee0000',
+      selectedColors: new Set<string>(['ee0000']),
+      selectedRegions: [
+        {
+          regionId: 'region-1',
+          colorHex: '#ee0000',
+          pixelCount: 10,
+          previewUrl: '/api/files/region-1.png',
+        },
+      ],
+      regionData: {
+        regionId: 'region-1',
+        colorHex: '#ee0000',
+        pixelCount: 10,
+        previewUrl: '/api/files/region-1.png',
+      },
+      selectionMode: 'select-all',
+      colorRemapMap: {},
+      remapHistory: [],
+      enable_relief: false,
+      color_height_map: {},
+      heightmap_max_height: 5.0,
+      previewBaseImageUrl: '/api/files/base.png',
+      previewImageUrl: '/api/files/region-1.png',
+    });
+
+    render(<PalettePanel />);
+
+    fireEvent.click(screen.getByRole('button', { name: '全不选' }));
+
+    const state = useConverterStore.getState();
+    expect(state.selectedColor).toBeNull();
+    expect(state.selectedColors.size).toBe(0);
+    expect(state.selectedRegions).toEqual([]);
+    expect(state.regionData).toBeNull();
+    expect(state.previewImageUrl).toBe('/api/files/base.png');
+  });
+
+  it('????????????', async () => {
+    const PalettePanel = await importPalettePanel();
+
+    useConverterStore.setState({
+      palette: PALETTE,
+      selectedColor: null,
+      selectionMode: 'current',
+      colorRemapMap: {},
+      remapHistory: [],
+      enable_relief: false,
+      color_height_map: {},
+      heightmap_max_height: 5.0,
+      sessionId: 'session-1',
+    });
+
+    render(<PalettePanel />);
+
+    expect(screen.queryByRole('button', { name: '??????' })).not.toBeInTheDocument();
   });
 
   it('palette 为空时显示提示文本', async () => {

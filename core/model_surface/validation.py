@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import trimesh
 
-from core.model_surface.types import ModelSurfaceError
+from core.model_surface.types import MODEL_SURFACE_FATAL_ERRORS, ModelSurfaceError
 
 MODEL_SURFACE_MESH_NOT_WATERTIGHT = "model_surface_mesh_not_watertight"
 MODEL_SURFACE_MESH_NOT_VOLUME = "model_surface_mesh_not_volume"
@@ -38,6 +38,8 @@ def validate_model_surface_mesh_for_boolean(mesh: trimesh.Trimesh) -> None:
 
 def prepare_model_surface_mesh_for_boolean(
     mesh: trimesh.Trimesh,
+    *,
+    _take_ownership: bool = False,
 ) -> trimesh.Trimesh:
     """Return a validated single-volume mesh for model-surface booleans.
 
@@ -47,6 +49,9 @@ def prepare_model_surface_mesh_for_boolean(
         mesh: Source triangle mesh. Independent positive volumes are unioned;
             reversed inner shells are preserved as cavity geometry.
             源三角网格；独立正体积会合并，反向内壳则保留为空腔几何。
+        _take_ownership: Internal opt-in allowing an already validated single
+            body to be returned without a full array copy. 内部所有权转移开关；
+            已验证的单实体可直接复用，避免完整数组复制。
 
     Returns:
         A copied or unioned volume mesh with source metadata preserved.
@@ -58,14 +63,24 @@ def prepare_model_surface_mesh_for_boolean(
     """
 
     validate_model_surface_mesh_for_boolean(mesh)
+    if _take_ownership:
+        try:
+            if int(mesh.body_count) <= 1:
+                return mesh
+        except MODEL_SURFACE_FATAL_ERRORS:
+            raise
+        except (AttributeError, TypeError, ValueError):
+            pass
     parts = list(mesh.split(only_watertight=True))
     if len(parts) <= 1:
-        return mesh.copy()
+        return mesh if _take_ownership else mesh.copy()
     if not all(part.is_volume for part in parts):
-        return mesh.copy()
+        return mesh if _take_ownership else mesh.copy()
 
     try:
         result = trimesh.boolean.union(parts, engine="manifold")
+    except MODEL_SURFACE_FATAL_ERRORS:
+        raise
     except Exception as exc:
         raise ModelSurfaceError(MODEL_SURFACE_BOOLEAN_FAILED) from exc
     if not isinstance(result, trimesh.Trimesh) or not result.is_volume:

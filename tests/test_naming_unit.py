@@ -17,6 +17,7 @@ from core.naming import (
     generate_batch_filename,
     generate_calibration_filename,
     generate_model_filename,
+    generate_preserved_upload_3mf_filename,
     generate_preview_filename,
     generate_segmented_glb_filename,
     parse_filename,
@@ -133,6 +134,90 @@ class TestEdgeCases:
     def test_sanitize_replaces_forbidden(self):
         result = _sanitize('a<b>c:d"e/f\\g|h?i*j')
         assert result == "a_b_c_d_e_f_g_h_i_j"
+
+
+@pytest.mark.parametrize(
+    ("source_basename", "expected"),
+    [
+        ("海报", "海报.3mf"),
+        ("海报 final", "海报 final.3mf"),
+        ("海报.final", "海报.final.3mf"),
+        ('bad<name>:*', "bad_name___.3mf"),
+        ("tmpabcd1234_poster", "poster.3mf"),
+        ("line\nbreak", "line_break.3mf"),
+        ("  poster.  ", "poster.3mf"),
+    ],
+)
+def test_generate_preserved_upload_3mf_filename(source_basename, expected):
+    assert generate_preserved_upload_3mf_filename(source_basename) == expected
+
+
+@pytest.mark.parametrize(
+    "source_basename",
+    [
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{index}" for index in range(1, 10)),
+        *(f"LPT{index}" for index in range(1, 10)),
+        "con",
+        "PrN",
+        "AuX.foo",
+        "nUl.final",
+        "cOm9.part",
+        "lPt1.part",
+        "COM¹",
+        "COM²",
+        "COM³",
+        "LPT¹",
+        "LPT²",
+        "LPT³",
+        "CON .foo",
+        "COM1 .part",
+    ],
+)
+def test_generate_preserved_upload_3mf_filename_prefixes_windows_reserved_names(
+    source_basename,
+):
+    assert (
+        generate_preserved_upload_3mf_filename(source_basename)
+        == f"_{source_basename}.3mf"
+    )
+
+
+@pytest.mark.parametrize("source_basename", ["CONSOLE", "COM0", "COM10", "LPT0", "LPT10"])
+def test_generate_preserved_upload_3mf_filename_keeps_non_reserved_names(
+    source_basename,
+):
+    assert (
+        generate_preserved_upload_3mf_filename(source_basename)
+        == f"{source_basename}.3mf"
+    )
+
+
+@pytest.mark.parametrize(
+    ("source_basename", "expected"),
+    [
+        ("a" * 400, f"{'a' * 251}.3mf"),
+        ("界" * 100, f"{'界' * 83}.3mf"),
+    ],
+)
+def test_generate_preserved_upload_3mf_filename_limits_utf8_component_bytes(
+    source_basename,
+    expected,
+):
+    result = generate_preserved_upload_3mf_filename(source_basename)
+
+    assert result == expected
+    assert len(result.encode("utf-8")) <= 255
+
+
+@pytest.mark.parametrize("source_basename", [None, "", "   ", ".", ".."])
+def test_generate_preserved_upload_3mf_filename_returns_none_without_safe_stem(
+    source_basename,
+):
+    assert generate_preserved_upload_3mf_filename(source_basename) is None
 
 
 # =========================================================================

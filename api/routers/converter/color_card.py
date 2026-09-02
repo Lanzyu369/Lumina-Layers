@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
+from api.export_device_validation import validate_export_device_selection
 from api.file_registry import FileRegistry
 from api.preview_cache_artifacts import (
     get_preview_cache_metadata,
@@ -30,7 +31,17 @@ from api.session_store import SessionStore
 from api.structured_logging import get_logger
 from api.worker_pool import WorkerPoolManager
 from api.workers.converter_workers import worker_generate_model
-from config import TEMP_DIR, ModelingMode as CoreModelingMode
+from config import (
+    DEFAULT_PRINTER_ID,
+    DEFAULT_SLICER_ID,
+    TEMP_DIR,
+    ModelingMode as CoreModelingMode,
+)
+from core.errors import VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError
+from core.vector_mesh_memory import (
+    estimate_vector_task_memory_reservation_bytes,
+    resolve_vector_mesh_memory_budget_bytes,
+)
 
 from .common import (
     BATCH_DOWNLOAD_TTL_SECONDS,
@@ -39,6 +50,7 @@ from .common import (
     PREVIEW_CACHE_UNAVAILABLE_DETAIL,
     PREVIEW_COLOR_PALETTE_UNAVAILABLE_DETAIL,
     ROUTER_HANDLED_ERRORS,
+    _handle_core_error,
     _resolve_material_backing_index,
     _resolve_session_dynamic_material_settings,
     _require_session,
@@ -99,6 +111,17 @@ class ColorCardRequest(BaseModel):
         default=True,
         description="Render hex labels below each swatch. 在色块下方显示十六进制色值。",
     )
+    printer_id: str = Field(DEFAULT_PRINTER_ID, description="Printer profile ID.")
+    slicer: str = Field(DEFAULT_SLICER_ID, description="Slicer software ID.")
+    nozzle_size: str = Field("0.4", description="Nozzle size.")
+    device_profile_id: str | None = Field(
+        None,
+        description="Machine registry device profile ID.",
+    )
+    build_plate_id: str | None = Field(
+        None,
+        description="Slicer-native build plate ID.",
+    )
 
 
 @router.post("/color-card", response_model=GenerateResponse)
@@ -117,6 +140,14 @@ async def generate_color_card(
     4. Register and return the download URL.
     """
     api_t0 = time.perf_counter()
+
+    validate_export_device_selection(
+        printer_id=body.printer_id,
+        slicer=body.slicer,
+        nozzle_size=body.nozzle_size,
+        device_profile_id=body.device_profile_id,
+        build_plate_id=body.build_plate_id,
+    )
 
     # 1. Session + cache validation
     session_data = _require_session(store, body.session_id)
@@ -236,9 +267,11 @@ async def generate_color_card(
         "matched_rgb_path": None,
         "mask_solid_path": None,
         "material_matrix_path": None,
-        "printer_id": "bambu-h2d",
-        "slicer": "BambuStudio",
-        "nozzle_size": "0.4",
+        "printer_id": body.printer_id,
+        "slicer": body.slicer,
+        "nozzle_size": body.nozzle_size,
+        "device_profile_id": body.device_profile_id,
+        "build_plate_id": body.build_plate_id,
         "enable_base_layer_height_modifier": False,
         "material_source": session_material_source,
     }
@@ -261,12 +294,24 @@ async def generate_color_card(
             svg_path,
             lut_path,
             params,
+            host_memory_reservation_bytes=(
+                # The material solver's implicit runtimes have no complete
+                # parent-visible path list to estimate safely.
+                resolve_vector_mesh_memory_budget_bytes()
+                if session_material_source == "material_archive"
+                else estimate_vector_task_memory_reservation_bytes(
+                    svg_path,
+                    resident_paths=(lut_path,),
+                )
+            ),
         )
     except asyncio.TimeoutError:
         raise HTTPException(
             status_code=504,
             detail="Color card 3MF generation timed out.",
         )
+    except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as exc:
+        _handle_core_error(exc, "color-card generation")
     except ROUTER_HANDLED_ERRORS:
         raise HTTPException(
             status_code=500,

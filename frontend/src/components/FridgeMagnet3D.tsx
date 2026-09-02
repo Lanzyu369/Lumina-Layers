@@ -53,8 +53,6 @@ export interface FridgeMagnet3DProps {
   cameraPanModifierActive?: boolean;
   modelBounds: FridgeMagnetModelBounds | null;
   magnets: FridgeMagnetItem[];
-  scaleX: number;
-  scaleY: number;
   selectedMagnetId: string | null;
   onSelectMagnet: (id: string | null) => void;
   onUpdateMagnetCenter: (id: string, centerX: number, centerY: number) => void;
@@ -83,10 +81,20 @@ export function clampFridgeMagnetCenter(
 ): { x: number; y: number } {
   const halfWidth = (dimensions?.width ?? 0) / 2;
   const halfHeight = (dimensions?.height ?? 0) / 2;
+  const boundsCenterX = (modelBounds.minX + modelBounds.maxX) / 2;
+  const boundsCenterY = (modelBounds.minY + modelBounds.maxY) / 2;
 
   return {
-    x: clampToRange(centerX, modelBounds.minX + halfWidth, modelBounds.maxX - halfWidth),
-    y: clampToRange(centerY, modelBounds.minY + halfHeight, modelBounds.maxY - halfHeight),
+    x: clampToRange(
+      centerX,
+      modelBounds.minX - boundsCenterX + halfWidth,
+      modelBounds.maxX - boundsCenterX - halfWidth,
+    ),
+    y: clampToRange(
+      centerY,
+      modelBounds.minY - boundsCenterY + halfHeight,
+      modelBounds.maxY - boundsCenterY - halfHeight,
+    ),
   };
 }
 
@@ -161,17 +169,23 @@ export function getFridgeMagnetGeometryKey(
 
 export function getFridgeMagnetProxyPosition(
   magnet: FridgeMagnetItem,
-  scaleX = 1,
-  scaleY = 1,
+  modelBounds?: Pick<FridgeMagnetModelBounds, "minX" | "maxX" | "minY" | "maxY">,
 ): [number, number, number] | null {
   const dimensions = getFridgeMagnetProxyDimensions(magnet);
   if (!dimensions) {
     return null;
   }
 
+  const boundsCenterX = modelBounds
+    ? (modelBounds.minX + modelBounds.maxX) / 2
+    : 0;
+  const boundsCenterY = modelBounds
+    ? (modelBounds.minY + modelBounds.maxY) / 2
+    : 0;
+
   return [
-    magnet.center_x_mm * scaleX,
-    magnet.center_y_mm * scaleY,
+    boundsCenterX + magnet.center_x_mm,
+    boundsCenterY + magnet.center_y_mm,
     FRIDGE_MAGNET_SPACER_CLEARANCE_MM + dimensions.thickness / 2,
   ];
 }
@@ -195,8 +209,6 @@ function FridgeMagnetProxy({
   magnet,
   cameraPanModifierActive,
   modelBounds,
-  scaleX,
-  scaleY,
   isSelected,
   onSelectMagnet,
   onUpdateMagnetCenter,
@@ -204,8 +216,6 @@ function FridgeMagnetProxy({
   magnet: FridgeMagnetItem;
   cameraPanModifierActive: boolean;
   modelBounds: FridgeMagnetModelBounds;
-  scaleX: number;
-  scaleY: number;
   isSelected: boolean;
   onSelectMagnet: (id: string | null) => void;
   onUpdateMagnetCenter: (id: string, centerX: number, centerY: number) => void;
@@ -261,8 +271,8 @@ function FridgeMagnetProxy({
   useEffect(() => () => edgeGeometry?.dispose(), [edgeGeometry]);
 
   const position = useMemo(
-    () => getFridgeMagnetProxyPosition(magnet, scaleX, scaleY),
-    [magnet, scaleX, scaleY],
+    () => getFridgeMagnetProxyPosition(magnet, modelBounds),
+    [magnet, modelBounds],
   );
 
   const visual = isDragging
@@ -314,8 +324,8 @@ function FridgeMagnetProxy({
       };
       getInitialDragPoint(
         event,
-        magnet.center_x_mm * scaleX,
-        magnet.center_y_mm * scaleY,
+        position?.[0] ?? magnet.center_x_mm,
+        position?.[1] ?? magnet.center_y_mm,
         dragPlane.current,
         dragStartWorld.current,
       );
@@ -330,8 +340,7 @@ function FridgeMagnetProxy({
       magnet.id,
       cameraPanModifierActive,
       onSelectMagnet,
-      scaleX,
-      scaleY,
+      position,
       setControlsEnabled,
     ],
   );
@@ -384,8 +393,8 @@ function FridgeMagnetProxy({
       const deltaX = dragIntersect.current.x - dragStartWorld.current.x;
       const deltaY = dragIntersect.current.y - dragStartWorld.current.y;
       const nextCenter = clampFridgeMagnetCenter(
-        dragStartCenter.current.x + deltaX / scaleX,
-        dragStartCenter.current.y + deltaY / scaleY,
+        dragStartCenter.current.x + deltaX,
+        dragStartCenter.current.y + deltaY,
         modelBounds,
         dimensions,
       );
@@ -414,8 +423,6 @@ function FridgeMagnetProxy({
     magnet.id,
     modelBounds,
     onUpdateMagnetCenter,
-    scaleX,
-    scaleY,
   ]);
 
   useEffect(() => {
@@ -472,8 +479,6 @@ function FridgeMagnet3D({
   cameraPanModifierActive = false,
   modelBounds,
   magnets,
-  scaleX,
-  scaleY,
   selectedMagnetId,
   onSelectMagnet,
   onUpdateMagnetCenter,
@@ -490,8 +495,6 @@ function FridgeMagnet3D({
           magnet={magnet}
           cameraPanModifierActive={cameraPanModifierActive}
           modelBounds={modelBounds}
-          scaleX={scaleX}
-          scaleY={scaleY}
           isSelected={magnet.id === selectedMagnetId}
           onSelectMagnet={onSelectMagnet}
           onUpdateMagnetCenter={onUpdateMagnetCenter}

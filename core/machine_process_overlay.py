@@ -13,6 +13,11 @@ PROTECTED_LUMINA_PROCESS_SETTINGS: dict[str, Any] = {
     "initial_layer_height": "0.08",
     "initial_layer_print_height": "0.08",
     "wall_loops": "1",
+    "wall_generator": "arachne",
+    "skirt_loops": "0",
+    "skirt_distance": "2",
+    "skirt_height": "1",
+    "draft_shield": "disabled",
     "top_shell_layers": "0",
     "bottom_shell_layers": "1",
     "bottom_surface_pattern": "monotonicline",
@@ -124,7 +129,7 @@ def _load_lumina_line_width_contract(
         template = json.loads(template_path.read_text(encoding="utf-8"))
     except (StopIteration, OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
         return {}
-    keys = (*_PROTECTED_LINE_WIDTH_KEYS, "initial_layer_line_width", "initial_layer_print_height")
+    keys = (*_PROTECTED_LINE_WIDTH_KEYS, "initial_layer_line_width")
     return {key: str(template[key]) for key in keys if key in template}
 
 
@@ -160,6 +165,12 @@ def apply_lumina_process_overlay(
     """
     merged = deepcopy(native_settings)
     merged.update(PROTECTED_LUMINA_PROCESS_SETTINGS)
+    # Orca 2.4's precise-wall correction can delete a large printable region
+    # when Arachne is used with Lumina's intentional one-wall artwork process.
+    # Bambu Studio already ships the equivalent profile with this disabled.
+    orca_precise_wall_override = slicer_id == "OrcaSlicer"
+    if orca_precise_wall_override:
+        merged["precise_outer_wall"] = "0"
     profile_name = source_profile_name or merged.get("printer_model")
     if _has_meaningful_value(profile_name):
         merged["printer_settings_id"] = str(profile_name)
@@ -174,10 +185,6 @@ def apply_lumina_process_overlay(
     merged["initial_layer_line_width"] = template_line_widths.get(
         "initial_layer_line_width",
         initial_line_width,
-    )
-    merged["initial_layer_print_height"] = template_line_widths.get(
-        "initial_layer_print_height",
-        merged["initial_layer_print_height"],
     )
     merged["nozzle_temperature"] = ["220"] * slot_count
     merged["nozzle_temperature_initial_layer"] = ["220"] * slot_count
@@ -198,4 +205,11 @@ def apply_lumina_process_overlay(
     merged["different_settings_to_system"] = _merge_difference_index(
         merged.get("different_settings_to_system")
     )
+    if orca_precise_wall_override:
+        merged["different_settings_to_system"] = _merge_difference_index(
+            [
+                *merged["different_settings_to_system"],
+                "precise_outer_wall",
+            ]
+        )
     return merged

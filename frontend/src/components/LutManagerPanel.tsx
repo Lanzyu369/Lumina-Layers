@@ -8,11 +8,13 @@ import { motion } from "framer-motion";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import {
   StatusBanner,
+  cardPadClass,
   desktopPrimaryColumnClass,
   desktopSecondaryColumnClass,
   resolveDesktopSplitLayoutClass,
   resolvePanelSurfaceClass,
-  resolveSectionCardClass,
+  wellClass,
+  wellPadClass,
 } from "./ui/panelPrimitives";
 
 function localizeLutCapability(
@@ -150,7 +152,7 @@ export default function LutManagerPanel() {
       >
       <div className={resolveDesktopSplitLayoutClass(workspace.mode)}>
           <div className={desktopPrimaryColumnClass}>
-           <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`} data-testid="primary-dropdown">
+           <section className={`${cardPadClass} flex flex-col gap-3`} data-testid="primary-dropdown">
             <Dropdown
               label={t("lut_manager_primary_label")}
               value={primaryName}
@@ -165,7 +167,7 @@ export default function LutManagerPanel() {
               </StatusBanner>
             )}
             {primaryInfo && (
-              <div className="rounded-2xl border border-slate-200/80 bg-slate-100/70 px-3 py-2 text-sm text-slate-600 dark:border-slate-700/80 dark:bg-slate-900/55 dark:text-slate-300">
+              <div className={`${wellPadClass} text-sm text-slate-600 dark:text-slate-300`}>
                 <div>
                   {t("lut_manager_mode_summary")
                     .replace("{mode}", primaryInfo.color_mode)
@@ -181,7 +183,7 @@ export default function LutManagerPanel() {
             )}
           </section>
 
-           <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`}>
+           <section className={`${cardPadClass} flex flex-col gap-3`}>
             <Slider
               label={t("lut_manager_dedup_label")}
               tooltip={t("lut_manager_dedup_hint")}
@@ -235,14 +237,14 @@ export default function LutManagerPanel() {
         </div>
 
         <div className={desktopSecondaryColumnClass}>
-           <section data-testid="secondary-list" className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-3`}>
+           <section data-testid="secondary-list" className={`${cardPadClass} flex flex-col gap-3`}>
             <div className="flex items-center justify-between gap-3">
               <label className="text-sm font-medium text-slate-700 dark:text-slate-200">{t("lut_manager_secondary_label")}</label>
               <span className="text-xs text-slate-500 dark:text-slate-400">
                 {t("lut_manager_selected_count").replace("{count}", String(secondaryNames.length))}
               </span>
             </div>
-            <div className="max-h-64 overflow-y-auto rounded-[24px] border border-slate-200/80 bg-slate-100/70 p-2 shadow-[var(--shadow-control)] xl:max-h-[70vh] dark:border-slate-700/80 dark:bg-slate-900/55">
+            <div className={`${wellClass} max-h-64 overflow-y-auto p-2 xl:max-h-[70vh]`}>
               {filteredSecondaryOptions.length === 0 ? (
                 <p className="px-2 py-3 text-sm text-slate-500 dark:text-slate-400">
                   {primaryName ? t("lut_manager_no_secondary") : t("lut_manager_select_primary_first")}
@@ -253,7 +255,7 @@ export default function LutManagerPanel() {
                   return (
                     <label
                       key={name}
-                      className="flex cursor-pointer items-center gap-3 rounded-2xl px-3 py-2 text-sm text-slate-700 transition-colors hover:bg-slate-100/80 dark:text-slate-200 dark:hover:bg-slate-900/75"
+                      className="flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-700 transition-colors hover:bg-white/55 dark:text-slate-200 dark:hover:bg-slate-900/55"
                     >
                       <input
                         type="checkbox"

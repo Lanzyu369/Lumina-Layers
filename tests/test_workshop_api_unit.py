@@ -130,6 +130,7 @@ def registry_index_for(
     module_id: str = "fixture.hello",
     version: str = "1.0.0",
     state: str = "active",
+    official: bool = False,
 ):
     asset_name = f"{module_id}-{version}.lumina-workshop"
     revocation = None
@@ -149,7 +150,7 @@ def registry_index_for(
             {
                 "moduleId": module_id,
                 "repository": REPOSITORY,
-                "official": False,
+                "official": official,
                 "publisher": "Fixture Publisher",
                 "name": {
                     "zh-CN": "测试模块",
@@ -209,8 +210,10 @@ def registry_index_for(
 class FakeRegistryClient:
     def __init__(self, index) -> None:
         self.index = index
+        self.refresh_calls = 0
 
     def refresh(self) -> RegistryRefreshResult:
+        self.refresh_calls += 1
         return RegistryRefreshResult(
             source="remote",
             verified=True,
@@ -260,6 +263,25 @@ def install_direct(
         ".lumina-workshop"
     ).rsplit("-", 1)
     installer.activate(module_id, version)
+
+
+def rewrite_persisted_official_flag(
+    installer: WorkshopInstaller,
+    module_id: str,
+) -> None:
+    """Simulate a forged official flag in persisted server state."""
+
+    payload = json.loads(installer.state_path.read_text(encoding="utf-8"))
+    module = next(
+        item
+        for item in payload["modules"]
+        if item["module_id"] == module_id
+    )
+    module["official"] = True
+    installer.state_path.write_text(
+        json.dumps(payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
 
 def test_workshop_v1_routes_are_registered(api_bundle) -> None:
@@ -472,6 +494,23 @@ def test_registry_install_uses_exact_verified_candidate(
     assert response.json()["module"]["candidate_version"] == "1.0.0"
 
 
+def test_registry_install_request_cannot_declare_official_identity(
+    api_bundle,
+) -> None:
+    client, _installer, _archive, _registry = api_bundle
+
+    response = client.post(
+        "/api/workshop/v1/install/registry",
+        json={
+            "module_id": "fixture.hello",
+            "version": "1.0.0",
+            "official": True,
+        },
+    )
+
+    assert response.status_code == 422
+
+
 def test_registry_install_retries_one_transient_read_timeout(
     api_bundle,
     monkeypatch: pytest.MonkeyPatch,
@@ -606,7 +645,7 @@ def test_github_install_rejects_encoded_repository_segments(
 def test_community_runtime_requires_desktop_token(
     api_bundle,
 ) -> None:
-    client, installer, archive, _registry = api_bundle
+    client, installer, archive, registry = api_bundle
     install_direct(installer, archive)
     url = (
         "/api/workshop/v1/modules/"
@@ -619,6 +658,160 @@ def test_community_runtime_requires_desktop_token(
         headers={
             "X-Lumina-Workshop-Desktop-Token": "wrong",
         },
+    )
+    assert registry.refresh_calls == 0
+    allowed = client.get(
+        url,
+        headers={
+            "X-Lumina-Workshop-Desktop-Token": "desktop-token",
+        },
+    )
+
+    assert missing.status_code == 403
+    assert wrong.status_code == 403
+    assert allowed.status_code == 200
+    assert registry.refresh_calls == 1
+
+
+def test_community_runtime_without_desktop_host_is_deterministic(
+    api_bundle,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, installer, archive, _registry = api_bundle
+    install_direct(installer, archive)
+    monkeypatch.delenv(
+        "LUMINA_WORKSHOP_DESKTOP_TOKEN",
+        raising=False,
+    )
+
+    response = client.get(
+        "/api/workshop/v1/modules/"
+        "fixture.hello/1.0.0/runtime"
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": (
+            "Community Workshop modules require the Lumina desktop "
+            "sandbox."
+        )
+    }
+
+
+def test_official_registry_runtime_runs_without_desktop_token(
+    api_bundle,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _installer, archive, registry = api_bundle
+    registry.index = registry_index_for(archive, official=True)
+    monkeypatch.setattr(
+        workshop_router,
+        "download_registry_package",
+        lambda _candidate: archive,
+    )
+
+    installed = client.post(
+        "/api/workshop/v1/install/registry",
+        json={"module_id": "fixture.hello", "version": "1.0.0"},
+    )
+    activated = client.post(
+        "/api/workshop/v1/modules/fixture.hello/activate",
+        json={"version": "1.0.0"},
+    )
+    response = client.get(
+        "/api/workshop/v1/modules/fixture.hello/1.0.0/runtime"
+    )
+
+    assert installed.status_code == 200
+    assert installed.json()["module"]["source"] == "registry"
+    assert installed.json()["module"]["official"] is True
+    assert activated.status_code == 200
+    assert response.status_code == 200
+    assert response.headers["content-security-policy"].startswith(
+        "default-src 'none';"
+    )
+    assert "connect-src 'none'" in response.headers[
+        "content-security-policy"
+    ]
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert "camera=()" in response.headers["permissions-policy"]
+    assert "clipboard-read=()" in response.headers[
+        "permissions-policy"
+    ]
+    assert (
+        response.text.index("Content-Security-Policy")
+        < response.text.index("<script>")
+    )
+    assert "desktop-token" not in response.text
+
+
+def test_signed_registry_block_prevents_new_runtime_start(
+    api_bundle,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _installer, archive, registry = api_bundle
+    registry.index = registry_index_for(archive, official=True)
+    blocked_index = registry_index_for(
+        archive,
+        official=True,
+        state="blocked",
+    )
+    monkeypatch.setattr(
+        workshop_router,
+        "download_registry_package",
+        lambda _candidate: archive,
+    )
+    installed = client.post(
+        "/api/workshop/v1/install/registry",
+        json={"module_id": "fixture.hello", "version": "1.0.0"},
+    )
+    activated = client.post(
+        "/api/workshop/v1/modules/fixture.hello/activate",
+        json={"version": "1.0.0"},
+    )
+    registry.index = blocked_index
+    url = (
+        "/api/workshop/v1/modules/"
+        "fixture.hello/1.0.0/runtime"
+    )
+
+    browser_response = client.get(url)
+    desktop_response = client.get(
+        url,
+        headers={
+            "X-Lumina-Workshop-Desktop-Token": "desktop-token",
+        },
+    )
+
+    assert installed.status_code == 200
+    assert activated.status_code == 200
+    assert browser_response.status_code == 409
+    assert desktop_response.status_code == 409
+    assert browser_response.json() == {
+        "detail": "The Workshop module version is blocked."
+    }
+    assert desktop_response.json() == browser_response.json()
+
+
+@pytest.mark.parametrize("source", ["github", "local"])
+def test_untrusted_source_cannot_bypass_token_with_official_flag(
+    api_bundle,
+    source: str,
+) -> None:
+    client, installer, archive, _registry = api_bundle
+    install_direct(installer, archive, source=source)
+    rewrite_persisted_official_flag(installer, "fixture.hello")
+    url = (
+        "/api/workshop/v1/modules/"
+        "fixture.hello/1.0.0/runtime"
+    )
+
+    missing = client.get(url)
+    wrong = client.get(
+        url,
+        headers={"X-Lumina-Workshop-Desktop-Token": "wrong"},
     )
     allowed = client.get(
         url,
@@ -643,6 +836,26 @@ def test_disabled_module_runtime_cannot_be_loaded(api_bundle) -> None:
         headers={
             "X-Lumina-Workshop-Desktop-Token": "desktop-token",
         },
+    )
+
+    assert response.status_code == 409
+
+
+def test_disabled_official_registry_runtime_cannot_be_loaded(
+    api_bundle,
+) -> None:
+    client, installer, archive, _registry = api_bundle
+    install_direct(
+        installer,
+        archive,
+        source="registry",
+        official=True,
+    )
+    installer.set_enabled("fixture.hello", False)
+
+    response = client.get(
+        "/api/workshop/v1/modules/"
+        "fixture.hello/1.0.0/runtime"
     )
 
     assert response.status_code == 409
@@ -811,7 +1024,8 @@ def test_official_seed_restore_is_unavailable_without_bundled_resource(
 def test_runtime_and_lifecycle_errors_are_deterministic(
     api_bundle,
 ) -> None:
-    client, _installer, _archive, _registry = api_bundle
+    client, installer, archive, _registry = api_bundle
+    install_direct(installer, archive)
 
     runtime = client.get(
         "/api/workshop/v1/modules/missing.module/1.0.0/runtime",
@@ -822,7 +1036,21 @@ def test_runtime_and_lifecycle_errors_are_deterministic(
     rollback = client.post(
         "/api/workshop/v1/modules/missing.module/rollback",
     )
+    invalid_version = client.get(
+        "/api/workshop/v1/modules/fixture.hello/9.9.9/runtime",
+        headers={
+            "X-Lumina-Workshop-Desktop-Token": "desktop-token",
+        },
+    )
+    invalid_identity = client.get(
+        "/api/workshop/v1/modules/fixture_hello/1.0.0/runtime",
+        headers={
+            "X-Lumina-Workshop-Desktop-Token": "desktop-token",
+        },
+    )
 
     assert runtime.status_code == 404
     assert rollback.status_code == 404
+    assert invalid_version.status_code == 404
+    assert invalid_identity.status_code == 422
     assert "Traceback" not in runtime.text

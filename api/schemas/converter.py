@@ -10,7 +10,8 @@ including preview, generate, batch, color replacement, and color merging.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Dict, List, Optional, Set, Tuple
+from math import ceil
+from typing import Dict, List, Literal, Optional, Set, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -18,19 +19,26 @@ from api.dynamic_material_settings import normalize_dynamic_material_settings
 from api.schemas.dynamic_material import DynamicMaterialResultResponse
 from api.schemas.lut import LutSourceSelection
 from config import (
+    PrinterConfig,
     SVG_PIXELS_PER_MM_DEFAULT,
     SVG_PIXELS_PER_MM_MAX,
     SVG_PIXELS_PER_MM_MIN,
     normalize_svg_pixels_per_mm,
 )
 
-MAX_BACKING_THICKNESS_MM = 3.5
+MAX_BACKING_THICKNESS_MM = PrinterConfig.MAX_BACKING_THICKNESS_MM
+FRIDGE_MAGNET_SHELL_THICKNESS_MM = 0.4
+MAX_FRIDGE_MAGNET_THICKNESS_MM = (
+    MAX_BACKING_THICKNESS_MM - FRIDGE_MAGNET_SHELL_THICKNESS_MM
+)
+MAX_FRIDGE_MAGNETS = 20
 MAX_RELIEF_EXTRA_HEIGHT_MM = 15.0
 MAX_RELIEF_TOTAL_HEIGHT_MM = MAX_BACKING_THICKNESS_MM + MAX_RELIEF_EXTRA_HEIGHT_MM
 # Minimum accepted by API handoff workflows; ordinary converter UI keeps its
 # existing 10 mm control limit. API 交接流程允许的最小宽度；普通转换器界面
 # 仍保留现有的 10 mm 控件下限。
 MIN_TARGET_WIDTH_MM = 0.5
+MAX_LARGE_FORMAT_DIMENSION_MM = 9999.0
 SVG_PIXELS_PER_MM_DESCRIPTION = (
     "高保真 SVG 采样密度（px/mm）；仅高保真模式处理 SVG 时生效，"
     "直接矢量模式不使用此参数"
@@ -233,13 +241,20 @@ class FridgeMagnetItem(BaseModel):
             (磁铁槽中心 Y 坐标，单位毫米)
     """
 
+    model_config = ConfigDict(allow_inf_nan=False)
+
     id: str = Field(..., description="磁铁槽项 ID")
     shape: FridgeMagnetShape = Field(..., description="磁铁形状: round | rect")
     preset_key: str = Field(..., description="磁铁预设键")
     diameter_mm: float | None = Field(None, gt=0, description="圆形磁铁直径 (mm)")
     width_mm: float | None = Field(None, gt=0, description="矩形磁铁宽度 (mm)")
     height_mm: float | None = Field(None, gt=0, description="矩形磁铁高度 (mm)")
-    thickness_mm: float = Field(..., gt=0, description="磁铁厚度 (mm)")
+    thickness_mm: float = Field(
+        ...,
+        gt=0,
+        le=MAX_FRIDGE_MAGNET_THICKNESS_MM,
+        description="磁铁厚度 (mm)",
+    )
     center_x_mm: float = Field(..., description="磁铁槽中心 X (mm)")
     center_y_mm: float = Field(..., description="磁铁槽中心 Y (mm)")
 
@@ -430,6 +445,9 @@ class ConvertGenerateRequest(LutSourceSelection):
             目标宽度 (mm)。
         spacer_thick: Backing plate thickness in millimeters.
             底板厚度 (mm)。
+        backing_infill_density_percent: Sparse-infill density used only below
+            the protected viewing-surface zone.（仅用于观赏面保护区以下深层底板的
+            稀疏填充百分比。）
         structure_mode: Print structure mode.
             打印结构模式。
         color_mode: Color system mode.
@@ -499,6 +517,12 @@ class ConvertGenerateRequest(LutSourceSelection):
         description="目标宽度 (mm)",
     )
     spacer_thick: float = Field(1.2, ge=0.2, le=MAX_BACKING_THICKNESS_MM, description="底板厚度 (mm)")
+    backing_infill_density_percent: int = Field(
+        PrinterConfig.BACKING_INFILL_DENSITY_DEFAULT_PERCENT,
+        ge=PrinterConfig.BACKING_INFILL_DENSITY_MIN_PERCENT,
+        le=PrinterConfig.BACKING_INFILL_DENSITY_MAX_PERCENT,
+        description="深层底板填充率 (%)",
+    )
     structure_mode: StructureMode = Field(StructureMode.DOUBLE_SIDED, description="打印结构模式")
     color_mode: ColorMode = Field(ColorMode.FOUR_COLOR_RYBW, description="颜色模式")
     modeling_mode: ModelingMode = Field(ModelingMode.HIGH_FIDELITY, description="建模模式")
@@ -546,7 +570,11 @@ class ConvertGenerateRequest(LutSourceSelection):
     loop_hole: float = Field(2.5, ge=1, le=5, description="环孔直径 (mm)")
     loop_pos: Optional[Tuple[float, float]] = Field(None, description="环位置 (x, y)")
     enable_fridge_magnet: bool = Field(False, description="启用冰箱贴磁铁槽")
-    fridge_magnets: List[FridgeMagnetItem] = Field(default_factory=list, description="冰箱贴磁铁槽列表")
+    fridge_magnets: List[FridgeMagnetItem] = Field(
+        default_factory=list,
+        max_length=MAX_FRIDGE_MAGNETS,
+        description="冰箱贴磁铁槽列表",
+    )
     loop_angle: float = Field(0.0, ge=-180, le=180, description="环旋转角度 (度)")
     loop_offset_x: float = Field(0.0, ge=-200, le=200, description="环 X 偏移 (mm)")
     loop_offset_y: float = Field(0.0, ge=-200, le=200, description="环 Y 偏移 (mm)")
@@ -583,6 +611,10 @@ class ConvertGenerateRequest(LutSourceSelection):
         None,
         description="Generated machine registry device profile ID",
     )
+    build_plate_id: Optional[str] = Field(
+        None,
+        description="Validated slicer-native build plate ID",
+    )
     enable_base_layer_height_modifier: bool = Field(
         True,
         description="Bambu 切片器：底板层高修改器开关（底板用 nozzle×0.5 粗层高打印）",
@@ -601,6 +633,35 @@ class ConvertGenerateRequest(LutSourceSelection):
     @classmethod
     def validate_svg_pixels_per_mm(cls, value: float) -> float:
         return normalize_svg_pixels_per_mm(value)
+
+    @model_validator(mode="after")
+    def validate_sparse_backing_contract(self) -> "ConvertGenerateRequest":
+        """Reject geometry whose variable surface cannot use one safe Z range.
+        拒绝无法用统一 Z 区间保护观赏面的可变高度几何。
+        """
+        if self.enable_relief and self.backing_infill_density_percent < 100:
+            raise ValueError(
+                "Sparse backing infill is not supported with relief mode; "
+                "use 100% backing infill."
+            )
+        if self.enable_fridge_magnet and self.fridge_magnets:
+            deepest_cavity_mm = max(
+                magnet.thickness_mm for magnet in self.fridge_magnets
+            )
+            required_backing_mm = round(
+                ceil(
+                    (
+                        deepest_cavity_mm
+                        + FRIDGE_MAGNET_SHELL_THICKNESS_MM
+                    )
+                    / PrinterConfig.LAYER_HEIGHT
+                    - 1e-9
+                )
+                * PrinterConfig.LAYER_HEIGHT,
+                10,
+            )
+            self.spacer_thick = max(self.spacer_thick, required_backing_mm)
+        return self
 
     @model_validator(mode="after")
     def validate_dynamic_material_settings(self) -> "ConvertGenerateRequest":
@@ -629,9 +690,27 @@ class LargeFormatGenerateRequest(BaseModel):
             所有切片共享的生成参数。
     """
 
-    target_height_mm: float | None = Field(None, gt=0, description="总输出高度 (mm)")
-    tile_width_mm: float = Field(250.0, gt=0, description="切片宽度 (mm)")
-    tile_height_mm: float = Field(250.0, gt=0, description="切片高度 (mm)")
+    target_height_mm: float | None = Field(
+        None,
+        gt=0,
+        le=MAX_LARGE_FORMAT_DIMENSION_MM,
+        allow_inf_nan=False,
+        description="总输出高度 (mm)",
+    )
+    tile_width_mm: float = Field(
+        250.0,
+        gt=0,
+        le=MAX_LARGE_FORMAT_DIMENSION_MM,
+        allow_inf_nan=False,
+        description="切片宽度 (mm)",
+    )
+    tile_height_mm: float = Field(
+        250.0,
+        gt=0,
+        le=MAX_LARGE_FORMAT_DIMENSION_MM,
+        allow_inf_nan=False,
+        description="切片高度 (mm)",
+    )
     params: "LargeFormatConvertGenerateRequest" = Field(..., description="生成参数")
 
 
@@ -643,7 +722,8 @@ class LargeFormatConvertGenerateRequest(ConvertGenerateRequest):
     target_width_mm: float | None = Field(
         None,
         ge=MIN_TARGET_WIDTH_MM,
-        le=9999,
+        le=MAX_LARGE_FORMAT_DIMENSION_MM,
+        allow_inf_nan=False,
         description="目标宽度 (mm)",
     )
 
@@ -748,6 +828,18 @@ class PuzzleGenerateRequest(PuzzleLayoutPreviewRequest):
 
     params: ConvertGenerateRequest = Field(..., description="每块共享的生成参数")
 
+    @model_validator(mode="after")
+    def validate_sparse_backing_contract(self) -> "PuzzleGenerateRequest":
+        """Reject sparse infill because puzzle assembly strips object ranges.
+        拼图装配会移除对象高度范围，因此拒绝稀疏底板填充。
+        """
+        if self.params.backing_infill_density_percent < 100:
+            raise ValueError(
+                "Sparse backing infill is not supported for puzzle generation; "
+                "use 100% backing infill."
+            )
+        return self
+
 
 class ConvertBatchRequest(BaseModel):
     """Request model for batch image conversion.
@@ -823,10 +915,24 @@ class ColorReplaceBatchRequest(BaseModel):
 
     session_id: str = Field(..., description="Session ID")
     replacements: list[ColorReplacePair] = Field(
-        ...,
-        min_length=1,
-        description="批量替换对列表（有序累积应用）",
+        default_factory=list,
+        description="批量替换对列表（可为空，空列表表示重放为无全局颜色替换）",
     )
+
+
+class FreeColorMutationRequest(BaseModel):
+    """Set or clear free-colour flags as one undoable content action."""
+
+    session_id: str = Field(..., description="Session ID")
+    action: Literal["toggle", "clear", "replace"]
+    color_hexes: list[str] = Field(default_factory=list)
+
+
+class FreeColorMutationResponse(BaseModel):
+    status: str = "ok"
+    free_color_set: list[str] = Field(default_factory=list)
+    can_undo: bool = False
+    can_redo: bool = False
 
 
 class ResetReplacementsRequest(BaseModel):
@@ -1006,14 +1112,14 @@ class ColorHighlightResponse(BaseModel):
 
 
 class SourceColorPickRequest(BaseModel):
-    """Request model for resolving a preview pixel's original source color.
-    解析预览像素原始源色的请求模型。
+    """Request model for resolving a preview pixel's current matched color.
+    解析预览像素当前匹配色的请求模型。
 
-    Used by ``POST /api/convert/source-color-pick`` when Select all mode
-    needs to map a clicked preview coordinate back to the original matched
-    palette colour, even after the displayed preview has been recoloured.
-    用于 ``POST /api/convert/source-color-pick``：全选模式点图时，按点击
-    坐标回查原始匹配色，即使当前展示图已经被换色也不受影响。
+    Used by ``POST /api/convert/source-color-pick`` when the Same-color
+    selection tool maps a clicked preview coordinate to the colour the user
+    currently sees after replacements or recipe overrides.
+    用于 ``POST /api/convert/source-color-pick``：同颜色全选点图时，按
+    当前预览状态回查点击像素颜色，会跟随替换和自定义配方后的结果。
 
     Attributes:
         session_id: Active session identifier. (Session ID)
@@ -1027,18 +1133,64 @@ class SourceColorPickRequest(BaseModel):
 
 
 class SourceColorPickResponse(BaseModel):
-    """Response model for a preview pixel's source and quantized colors.
-    预览像素对应源色和量化色的响应模型。
+    """Response model for a preview pixel's current matched and quantized colors.
+    预览像素对应当前匹配色和量化色的响应模型。
 
     Attributes:
-        source_matched_hex: Original matched source colour as ``#rrggbb``.
-            原始匹配源色，格式为 ``#rrggbb``。
+        source_matched_hex: Current matched colour as ``#rrggbb``.
+            当前匹配色，格式为 ``#rrggbb``。字段名为兼容旧前端保留。
         quantized_hex: Quantized source colour at the same pixel as ``#rrggbb``.
             同一像素的量化原色，格式为 ``#rrggbb``。
     """
 
-    source_matched_hex: str = Field(..., description="原始匹配源色 (#rrggbb)")
+    source_matched_hex: str = Field(..., description="当前匹配色 (#rrggbb)")
     quantized_hex: str = Field(..., description="量化原色 (#rrggbb)")
+
+
+class SelectionPoint(BaseModel):
+    """One image-space point in a staged selection brush stroke."""
+
+    x: float = Field(..., ge=0, description="预览像素 X 坐标")
+    y: float = Field(..., ge=0, description="预览像素 Y 坐标")
+
+
+class SelectionMutationRequest(BaseModel):
+    """Mutate the shared editor selection without changing preview content."""
+
+    session_id: str = Field(..., description="Session ID")
+    operation: Literal["point-toggle", "same-color-toggle", "brush-add", "clear"]
+    base_selection_revision: int = Field(..., ge=0, description="客户端选区版本")
+    content_revision: int = Field(..., ge=0, description="可见区域缓存内容版本")
+    x: int | None = Field(None, ge=0)
+    y: int | None = Field(None, ge=0)
+    color_hex: str | None = None
+    brush_radius: float | None = Field(None, gt=0, le=4096)
+    brush_points: list[SelectionPoint] = Field(default_factory=list, max_length=10000)
+
+
+class SelectionComponentItem(BaseModel):
+    label: int
+    region_id: str
+    color_hex: str
+    pixel_count: int
+    bbox: list[int]
+    anchor: list[int]
+
+
+class SelectionDocumentResponse(BaseModel):
+    """Authoritative shared selection summary and union boundary."""
+
+    selection_revision: int
+    content_revision: int
+    selected_pixel_count: int
+    selected_component_count: int
+    selected_color_hexes: list[str] = Field(default_factory=list)
+    region_ids: list[str] = Field(default_factory=list)
+    components: list[SelectionComponentItem] = Field(default_factory=list)
+    contours: list[list[list[float]]] = Field(default_factory=list)
+    can_undo: bool = False
+    can_redo: bool = False
+    brush_hit_component_count: int | None = None
 
 
 class RegionDetectRequest(BaseModel):
@@ -1059,6 +1211,10 @@ class RegionDetectRequest(BaseModel):
     session_id: str = Field(..., description="Session ID")
     x: int = Field(..., ge=0, description="点击像素 X 坐标")
     y: int = Field(..., ge=0, description="点击像素 Y 坐标")
+    include_preview: bool = Field(
+        False,
+        description="是否生成高亮预览 PNG；默认 false，仅显式请求时生成",
+    )
 
 
 class RegionDetectResponse(BaseModel):
@@ -1066,21 +1222,28 @@ class RegionDetectResponse(BaseModel):
     连通区域检测的响应模型。
 
     Returns the detected region metadata including a unique identifier,
-    the region color, pixel count, and a highlighted preview image URL.
-    返回检测到的区域元数据，包括唯一标识、区域颜色、像素数量和高亮预览图 URL。
+    the region color, pixel count, optional contours, and optionally a
+    highlighted preview image URL when ``include_preview`` is true.
+    返回检测到的区域元数据，包括唯一标识、区域颜色、像素数量、可选轮廓；
+    仅在 ``include_preview`` 为 true 时返回高亮预览图 URL。
 
     Attributes:
         region_id: Unique identifier for the detected region. (区域唯一标识)
         color_hex: Hex color of the region. (区域颜色 hex)
         pixel_count: Number of pixels in the region. (区域像素数量)
-        preview_url: URL of the highlighted preview image. (高亮预览图 URL)
+        preview_url: URL of the highlighted preview image when explicitly
+            requested, otherwise null. (显式请求时的高亮预览图 URL；默认 null)
     """
 
     region_id: str = Field(..., description="区域唯一标识")
     color_hex: str = Field(..., description="区域颜色 hex")
     pixel_count: int = Field(..., description="区域像素数量")
-    preview_url: str = Field(..., description="高亮预览图 URL")
+    preview_url: str | None = Field(None, description="高亮预览图 URL；默认不生成，可为 null")
     contours: list[list[list[float]]] | None = Field(None, description="区域轮廓坐标（世界坐标 mm），用于 3D 高亮")
+    bbox: tuple[int, int, int, int] | None = Field(
+        None,
+        description="区域像素 bbox: (x, y, width, height)，仅用于诊断和旧客户端兼容，不作为可视选区形状",
+    )
 
 
 class RegionReplaceRequest(BaseModel):
@@ -1146,6 +1309,11 @@ class RegionReplaceRequest(BaseModel):
             "gradient_group_index."
         ),
     )
+    selection_revision: int | None = Field(
+        None,
+        ge=0,
+        description="统一编辑选区版本；提供时优先使用共享 selection mask",
+    )
 
 
 class RegionReplaceBatchItem(BaseModel):
@@ -1153,11 +1321,11 @@ class RegionReplaceBatchItem(BaseModel):
     批量区域替换中的单条记录。
 
     Each item defines its own mask source: click coordinates (flood-fill
-    on the quantised preview) OR gradient group/region indices (mask
+    on the current visible preview colour) OR gradient group/region indices (mask
     rebuilt from the cached region_id_map) — exactly the same sources as
     the non-batch :class:`RegionReplaceRequest`. Items are applied in
     order so the final preview reflects the cumulative result.
-    每条 item 自己定义 mask 来源：点击坐标（泛洪填充）或渐变 group/region
+    每条 item 自己定义 mask 来源：点击坐标（按当前可见预览色泛洪填充）或渐变 group/region
     索引（从缓存的 region_id_map 重建 mask），与 :class:`RegionReplaceRequest`
     一致。items 按顺序累积作用到 matched_rgb，最终预览是综合结果。
 
@@ -1272,6 +1440,44 @@ class RegionRequantizeRequest(BaseModel):
     )
 
 
+class ReplacementHistoryRequest(BaseModel):
+    """Request model for replacement undo/redo.
+    替换历史撤销/重做请求。
+    """
+
+    session_id: str = Field(..., description="Session ID")
+    action: Literal["undo", "redo"] = Field(..., description="历史操作：undo 或 redo")
+
+
+class ReplacementHistoryResponse(BaseModel):
+    """Response model for replacement undo/redo.
+    替换历史撤销/重做响应。
+    """
+
+    status: str = Field("ok", description="操作状态")
+    action: Literal["undo", "redo"] = Field(..., description="执行的历史操作")
+    label: str | None = Field(None, description="被恢复的 checkpoint 标签")
+    entry_kind: Literal["content", "selection"] = Field(
+        "content", description="恢复的是内容操作还是选区操作"
+    )
+    selection: SelectionDocumentResponse | None = Field(
+        None, description="恢复选区操作后的当前选区摘要"
+    )
+    message: str = Field("Replacement history restored", description="操作结果消息")
+    preview_url: str = Field(..., description="恢复后的预览图 URL")
+    preview_glb_url: str | None = Field(None, description="异步 GLB URL；通常为 null")
+    can_undo: bool = Field(False, description="是否还可撤销")
+    can_redo: bool = Field(False, description="是否还可重做")
+    replacement_regions: list[dict] = Field(default_factory=list, description="当前颜色替换记录")
+    recipe_overrides: list[dict] = Field(default_factory=list, description="当前区域配方覆盖")
+    recipe_override_count: int = Field(0, description="区域配方覆盖数量")
+    region_replacement_count: int = Field(0, description="区域级像素修改次数")
+    color_layers: int | None = Field(None, description="当前颜色层数")
+    layer_height_mm: float | None = Field(None, description="当前层高")
+    gradient_groups: Optional[List["GradientGroupItem"]] = Field(None, description="当前渐变分组")
+    free_color_set: list[str] = Field(default_factory=list, description="恢复后的自由色集合")
+
+
 class RegionReplaceResponse(DynamicMaterialResultResponse):
     """Response model for region color replacement.
     区域颜色替换的响应模型。
@@ -1299,11 +1505,17 @@ class RegionReplaceResponse(DynamicMaterialResultResponse):
     preview_glb_url: Optional[str] = Field(None, description="重新生成的分段 GLB URL")
     color_contours: Optional[dict] = Field(None, description="更新后的颜色轮廓数据")
     message: str = Field("Region replaced", description="操作结果消息")
+    can_undo: bool = Field(False, description="是否可撤销颜色调整")
+    can_redo: bool = Field(False, description="是否可重做颜色调整")
     gradient_groups: Optional[List["GradientGroupItem"]] = Field(
         None,
         description=(
             "更新后的渐变分组（仅在端点重跑了 gradient-group 分析时提供）"
         ),
+    )
+    selection: Optional[SelectionDocumentResponse] = Field(
+        None,
+        description="共享选区换色后的权威选区状态（仅 selection mask 路径返回）",
     )
 
 
@@ -1332,6 +1544,32 @@ class CleanupSessionFilesResponse(BaseModel):
 
     status: str = Field("success")
     cleaned: int = Field(0, description="删除的文件数")
+
+
+class VectorPreviewRendererRequest(BaseModel):
+    """Select the lightweight browser renderer for an active Vector session.
+
+    为当前 Vector session 选择浏览器轻量预览 renderer。
+    """
+
+    session_id: str = Field(..., min_length=1, description="Session ID")
+    enable_smooth_vector_preview: bool = Field(
+        True,
+        description="Use analytic SVG polygons for the browser GLB preview.",
+    )
+
+
+class VectorPreviewRendererResponse(BaseModel):
+    """Pending state returned after scheduling a renderer-only rebuild.
+
+    仅重建 renderer 后返回的 pending 状态。
+    """
+
+    session_id: str
+    status: Literal["pending"] = "pending"
+    job_token: str
+    glb_url: None = None
+    renderer: Literal["vector_analytic", "segmented"]
 
 
 class BedSizeItem(BaseModel):

@@ -1,5 +1,13 @@
 # Design System Inspired by Apple
 
+## Color Workstation Selection Invariants
+
+- **Tool is not selection:** switching between Same color, Pick blocks, and Selection brush never clears or rewrites the shared selection.
+- **The server mask is authoritative:** every tool edits one revisioned union mask; the frontend may render an exact local flood-fill immediately, but stale responses cannot overwrite a newer intent.
+- **No approximate flash:** click feedback uses strict RGB, 4-connected local flood-fill against the unhighlighted preview buffer. Bounding boxes and whole-image same-colour contours are never optimistic placeholders.
+- **Content commits squash selection gestures:** point/brush/clear gestures are undoable until a replacement, free-colour, recipe, or gradient operation consumes them; that content action becomes one history item and undoing it preserves the execution-time selection.
+- **Selection display is derived once:** touching regions are unioned before contour tracing, then shown as non-scaling marching ants; internal shared edges are not rendered.
+
 ## 1. Visual Theme & Atmosphere
 
 Apple's web language is a precision editorial system that alternates between gallery-like calm and retail-density information blocks. The visual tone stays restrained: broad neutral canvases, quiet chrome, and product imagery given almost all of the expressive weight. The interface is engineered to disappear so hardware, materials, and finish options become the narrative foreground.
@@ -127,13 +135,15 @@ Typography is the stabilizer. SF Pro Display carries hero and merchandising hier
 
 #### Placement Standard (放置标准)
 
-All hover tooltip hints across all tabs follow this single source of truth. A visible `?` chip is shown for every control that has a hint — there is no hidden/implicit tooltip.
+All hover tooltip hints across all tabs follow this single source of truth. A visible info icon (ⓘ, stroke-style, no background — rendered by `HelpDot`) is shown for every control that has a hint — there is no hidden/implicit tooltip.
 
 | Trigger type | When used | Implementation |
 |---|---|---|
 | **Switch** | Label needs a hint | `<HelpDot title={...} description={...} />` placed inline after the label text, inside the label row |
-| **Slider** | Label or value meaning is not obvious | `Slider` component prop: `tooltip={t("...")}` — renders a visible `?` chip inline after the label |
-| **Checkbox** | The option's effect needs explanation | `Checkbox` component prop: `tooltip={t("...")}` — renders a visible `?` chip inline after the label |
+| **Slider** | Label or value meaning is not obvious | `Slider` component prop: `tooltip={t("...")}` — renders a visible ⓘ icon inline after the label |
+| **Checkbox** | The option's effect needs explanation | `Checkbox` component prop: `tooltip={t("...")}` — renders a visible ⓘ icon inline after the label |
+| **Dropdown** | The choice needs explanation | `Dropdown` component prop: `tooltip={t("...")}` — renders a visible ⓘ icon after the label (ignored when `labelAccessory` is set) |
+| **RadioGroup** | The group or its options need explanation | `RadioGroup` component prop: `tooltip={t("...")}` — renders a visible ⓘ icon after the group legend; multi-line hints (one line per option) are supported via `\n` |
 
 #### Reference Implementation (参考实现)
 
@@ -147,7 +157,7 @@ Image-to-Vector tab (`VectorizerPanel.tsx`) is the canonical reference:
 </span>
 <Switch checked={...} onChange={...} />
 
-// Slider: tooltip prop (renders visible ? chip via internal HelpDot)
+// Slider: tooltip prop (renders visible ⓘ icon via internal HelpDot)
 <Slider
   label={t("vec.smoothness")}
   tooltip={t("vec.hint_smoothness")}
@@ -156,7 +166,7 @@ Image-to-Vector tab (`VectorizerPanel.tsx`) is the canonical reference:
   onChange={(v) => setParam("smoothness", v)}
 />
 
-// Checkbox: tooltip prop (renders visible ? chip via internal HelpDot)
+// Checkbox: tooltip prop (renders visible ⓘ icon via internal HelpDot)
 <Checkbox
   label={t("vec.svg_enable_stroke")}
   tooltip={t("vec.hint_svg_enable_stroke")}
@@ -167,11 +177,117 @@ Image-to-Vector tab (`VectorizerPanel.tsx`) is the canonical reference:
 
 #### Key Rules (关键规则)
 
-- **Do not** use native `title` attribute or custom `?` spans; always use `HelpDot` (for Switch) or the `tooltip` prop (for Slider/Checkbox)
+- **Do not** use native `title` attribute or custom `?`/`ⓘ` spans; always use `HelpDot` (for Switch) or the `tooltip` prop (for Slider/Checkbox/Dropdown/RadioGroup)
 - **Do not** add hint text as a visible paragraph below the control; use the tooltip popover
 - Hint text must be bilingual (`zh` + `en`) in `translations.ts` with a `*_hint` suffix key
-- The `?` chip visual style is fixed in `HelpDot`; do not recreate it inline
-- Every control that has a hint **must** display a visible `?` chip — never use a hidden/implicit-only tooltip
+- The ⓘ icon visual style is fixed in `HelpDot` (stroke-style `InfoIcon`, no background); do not recreate it inline
+- Every control that has a hint **must** display a visible ⓘ icon — never use a hidden/implicit-only tooltip
+- Hint copy is written for end users: describe the visible effect and the trade-off, avoid algorithm terms (e.g. no "K-Means", "8-neighborhood", "L\* roll-off")
+
+### Hierarchy v2 — 单层卡片 + 凹槽 + 分割线 (Single-Card Layering)
+
+> Lumina-specific override. This is the source of truth for panel structure across all tabs and supersedes any generic "rounded card" guidance above. 本节是 Lumina 各面板结构的唯一真源，覆盖上文通用的圆角卡片写法。
+
+#### The problem it solves (要解决的问题)
+
+Earlier panels expressed every level of grouping with its own rounded-rectangle bordered card, often nested 2–3 deep, plus colored-border "chips" for sub-groups. The result was visual noise: borders competing with borders, radii competing with radii, and no reliable way to tell which box was a level above which. Depth cues stopped meaning anything because *everything* was a box.
+早期面板把每一层分组都做成带边框的圆角卡片，常常嵌套 2–3 层，子分组还用彩色边框小卡片区分。结果是边框套边框、圆角套圆角，层级反而读不出来——因为"什么都是盒子"，盒子就不再表达层级。
+
+#### The core rule (核心规则)
+
+**One bordered "card" level per page. Everything inside a card is expressed with either a well or a hairline divider — never another bordered rounded box.**
+**每页只有一层带边框的"卡片"。卡片内部只用"凹槽 (well)"或"发丝分割线"表达分组，绝不再嵌套带边框的圆角盒子。**
+
+Three primitives, three jobs:
+
+| Primitive | Role | Visual signature |
+|---|---|---|
+| **Card** (`.panel-card`) | The one bordered container per logical section | Solid-ish fill + 1px outline + soft drop shadow, radius 16px |
+| **Well** (`.panel-well`) | Inset region *inside* a card (e.g. a preview strip, a swatch tray, a status readout) | Tinted fill, **no border**, radius 10px — reads as "pressed into" the card |
+| **Divider** (`.panel-divider`) | Separates mid-level groups *inside* a card | Single hairline rule, no box at all |
+
+Grouping strength, weakest → strongest: **whitespace → group header → divider → well → card.** Reach for the weakest device that still reads. A divider with a small-caps header is almost always enough to separate two groups inside one card; promote to a well only when the inner content is itself a cluster of controls that needs a contained surface.
+分组强度由弱到强：**留白 → 组标题 → 分割线 → 凹槽 → 卡片**。优先用能读懂的最弱手段。卡内两个分组，"分割线 + 小标题"通常就够；只有当内部本身是一簇需要独立托底面的控件时，才升级成凹槽。
+
+#### Making dividers "一眼可辨" (visibility, per the original concern)
+
+A plain hairline can be too quiet to separate two sizeable blocks. Boost visibility *without* adding a full border box:
+1. Pair the divider with a **small-caps group header** (colored dot optional) directly under it — the label does most of the "this is a new section" signaling.
+2. Give the card itself a **soft edge shadow** (`--shadow-card`) so the card边界 stays crisp against the page while internal dividers stay light. The contrast between "card edge = shadowed" and "internal divider = flat hairline" is itself a legibility cue.
+3. Where a block genuinely needs to pop, promote it to a **well** (tinted fill) rather than thickening a border — fill contrast is more legible than line weight and never competes with the card outline.
+
+#### Shadow boundary rule (边框阴影规则)
+
+Shadow is an **outer-boundary tool only**. `--shadow-card` belongs to `.panel-card` and is used to make the one true section boundary read clearly against the page. Inner groups inside a card must not add local shadows, glow, raised borders, or shadowed mini-cards. If an inner group needs more visual weight, promote it to `.panel-well` and rely on fill contrast; if it still needs separation, pair the well with a header or divider — do not add a second elevation level.
+阴影只用于**外层边界**：`--shadow-card` 只属于 `.panel-card`，用于让唯一的章节卡片边界清楚。卡片内部的分组禁止再加局部投影、发光、凸起边框或带阴影小卡片。内部区块需要更醒目时，升级成 `.panel-well`，靠填充色对比；仍需区分时加组标题或分割线，不增加第二层 elevation。
+
+#### Radius ladder (圆角阶梯)
+
+Radii step **down** as you go inward so outer and inner shapes never compete:
+
+| Level | Radius | Applies to |
+|---|---|---|
+| Card | `16px` (`rounded-2xl`) | `.panel-card` section shells |
+| Control / Well | `10px` (`rounded-[10px]`) | wells, inputs, dropdown trigger, primary/secondary buttons (md) |
+| Small control | `8px` (`rounded-lg`) | small buttons, dropdown menu items, swatch tiles |
+| Chip / banner | `6px` | status banners, hue-filter pills stay `rounded-full` by intent |
+
+Never flatten everything to one radius, and never let an inner element's radius meet or exceed its container's.
+
+#### Status banners (状态提示)
+
+Banners are **not** cards. They use a **3px left accent bar + tinted fill**, radius 6px, no full border. Tone drives the accent color and fill (info/success/warning/error). This stops hints and results from reading as "yet another nested card."
+提示条不是卡片：**左侧 3px 色条 + 淡色底**，6px 圆角，无完整边框。色调决定色条与底色。
+
+#### Group headers (组标题)
+
+Small-caps eyebrow: `text-[11px] font-semibold uppercase tracking-[0.18em]`, muted color. For color-workstation toolbar groups, a **colored dot** prefixes the label to carry category — this replaces the old colored-border mini-cards. Category color lives in a 1.5×1.5 dot, not in a box outline.
+
+#### Token & primitive reference (令牌与原语)
+
+CSS layer — `frontend/src/index.css`:
+- `--surface-card` / `--surface-card-outline` — card fill + outline (light & `.dark`)
+- `--surface-well` — well tint
+- `--surface-divider` — hairline color
+- `--shadow-card` — the single soft edge shadow used for cards
+- classes: `.panel-card`, `.panel-well`, `.panel-divider`, `.status-banner[data-tone="…"]`
+
+JS layer — `frontend/src/components/ui/panelPrimitives.tsx`:
+- `cardClass` (`panel-card rounded-2xl`), `cardPadClass` (adds `px-5 py-5`)
+- `wellClass` (`panel-well rounded-[10px]`), `wellPadClass` (adds `px-3 py-2.5`)
+- `cardDividerClass` (`panel-divider border-t`)
+- `groupHeaderClass` (small-caps eyebrow)
+
+#### Migration mapping (旧 → 新)
+
+| Old | New |
+|---|---|
+| `sectionCardClass` / `resolveSectionCardClass` (28px card) | `cardPadClass` (16px card) |
+| `workstationPanelCardClass` (28px muted card) | `cardClass` + explicit padding |
+| `workstationInsetCardClass` (22px bordered inset) | `wellPadClass` (borderless well) |
+| Colored-border `ToolbarGroup` chips | Borderless group: colored dot + small-caps label |
+| `border-t border-slate-200/60 … dark:border-slate-700/60` | `border-t panel-divider` |
+| Full-border status box | `.status-banner` left accent bar |
+
+#### Do / Don't
+
+**Do**
+- Keep exactly one bordered card per logical section; use wells and dividers inside it.
+- Let the card's soft shadow define its edge; keep internal separators as flat hairlines.
+- Use shadow only on `.panel-card`; use `.panel-well` fill contrast, headers, and dividers for all inner grouping.
+- Use a group header (+ optional colored dot) as the primary "new section" signal.
+- Step radii down when nesting.
+
+**Don't**
+- Don't nest a bordered rounded box inside another bordered rounded box.
+- Don't add shadows, glow, or raised borders to groups inside a card.
+- Don't use colored borders to categorize sub-groups — use a dot on the label.
+- Don't thicken borders to make a block stand out — promote it to a well instead.
+- Don't give status hints a full border; they get a left accent bar.
+
+#### Demo scope (首版落地范围)
+
+First pass applied to the **Settings** page (`SettingsPanel.tsx`) and the **Color Adjustment** workstation (`PalettePanel.tsx`, `LutColorGrid.tsx`, `MaterialColorPicker.tsx`, via `Color2DOverlay.tsx`). Shared controls (`Button`, `Dropdown`) had their radii brought onto the ladder. Remaining tabs (LUT / Material / Vector) still use the legacy `mutedSectionCardClass` and are pending migration.
 
 ## 5. Layout Principles
 
@@ -191,12 +307,15 @@ Image-to-Vector tab (`VectorizerPanel.tsx`) is the canonical reference:
 - **Contrast-led separation:** section transitions rely more on surface changes than decorative separators.
 
 ### Border Radius Scale
-- **5px:** tiny utility links/tags and minor small shells.
-- **8px-12px:** standard controls and compact fields.
-- **16px-18px:** cards, module frames, and commerce panels.
-- **28px-36px:** larger module and spotlight containers.
-- **56px / 100px / 980px:** capsules, large pills, and signature elongated CTA forms.
-- **50%:** circular media and selection controls.
+
+> For Lumina panels, the **Hierarchy v2 radius ladder** (§4) is authoritative and intentionally caps cards at 16px so inner controls (10px/8px) stay a clear step below. The larger tiers below are Apple-reference context, not targets for our panel chrome.
+
+- **6px:** status banners and small chips.
+- **8px:** small buttons, menu items, swatch tiles.
+- **10px:** standard controls, inputs, and wells.
+- **16px:** the single card level per section.
+- **rounded-full:** hue-filter pills, icon buttons, and circular selection controls.
+- **(reference only) 28px-980px:** Apple's spotlight shells and elongated capsules — not used for Lumina panel structure.
 
 ## 6. Depth & Elevation
 

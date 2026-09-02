@@ -19,6 +19,8 @@ import {
   resolveCanvasPreviewImageRect,
   type CanvasPreviewBuffer,
   type CanvasPreviewHoverSample,
+  type CanvasPreviewPoint,
+  type CanvasPreviewRect,
   type CanvasPreviewRenderingQuality,
 } from "./canvasPreviewUtils"
 import { useI18n } from "../../i18n/context"
@@ -30,6 +32,15 @@ import {
 export interface CanvasPreviewSurfaceReadyPayload {
   image: HTMLImageElement
   previewBuffer: CanvasPreviewBuffer | null
+}
+
+export interface CanvasPreviewSurfaceViewport {
+  containerSize: { width: number; height: number }
+  naturalSize: { width: number; height: number }
+  imageRect: CanvasPreviewRect
+  imageScreenRect: CanvasPreviewRect
+  scale: number
+  translate: CanvasPreviewPoint
 }
 
 interface CanvasPreviewSurfaceDragContext {
@@ -44,6 +55,7 @@ interface CanvasPreviewSurfaceProps {
   surfaceClassName?: string
   imageClassName?: string
   overlay?: ReactNode
+  screenSpaceOverlay?: ReactNode | ((viewport: CanvasPreviewSurfaceViewport) => ReactNode)
   floatingOverlay?: ReactNode
   interactionsDisabled?: boolean
   resetLabel?: string
@@ -57,13 +69,26 @@ interface CanvasPreviewSurfaceProps {
   spacePanEnabled?: boolean
   renderingQuality?: CanvasPreviewRenderingQuality
   onHoverSample?: (sample: CanvasPreviewHoverSample | null) => void
-  onClickSample?: (sample: CanvasPreviewHoverSample, event: ReactMouseEvent<HTMLDivElement>) => void
+  onClickSample?: (
+    sample: CanvasPreviewHoverSample,
+    event: ReactMouseEvent<HTMLDivElement> | PointerEvent<HTMLDivElement>,
+  ) => void
+  onStrokeStart?: (sample: CanvasPreviewHoverSample, event: PointerEvent<HTMLDivElement>) => void
+  onStrokeMove?: (sample: CanvasPreviewHoverSample, event: PointerEvent<HTMLDivElement>) => void
+  onStrokeEnd?: (sample: CanvasPreviewHoverSample | null, event: PointerEvent<HTMLDivElement>) => void
+  onStrokeCancel?: () => void
   onScaleChange?: (scale: number) => void
   onSurfaceReady?: (payload: CanvasPreviewSurfaceReadyPayload | null) => void
   canStartDrag?: (
     event: PointerEvent<HTMLDivElement>,
     context: CanvasPreviewSurfaceDragContext,
   ) => boolean
+  /**
+   * 为 true 时，指针移出图像渲染区域（只要仍在容器内）hover 采样不再返回 null，
+   * 而是返回带 isOutOfImage 标记的采样点。配合选区画笔等"光标需越过图像边缘"
+   * 的场景使用。笔划采样（onStrokeStart/Move/End）不受影响，仍然仅限图像内部。
+   */
+  allowOutOfImageHover?: boolean
 }
 
 export default function CanvasPreviewSurface({
@@ -74,6 +99,7 @@ export default function CanvasPreviewSurface({
   surfaceClassName,
   imageClassName,
   overlay,
+  screenSpaceOverlay,
   floatingOverlay,
   interactionsDisabled = false,
   resetLabel,
@@ -88,9 +114,14 @@ export default function CanvasPreviewSurface({
   renderingQuality = "default",
   onHoverSample,
   onClickSample,
+  onStrokeStart,
+  onStrokeMove,
+  onStrokeEnd,
+  onStrokeCancel,
   onScaleChange,
   onSurfaceReady,
   canStartDrag,
+  allowOutOfImageHover = false,
 }: CanvasPreviewSurfaceProps) {
   const { t } = useI18n()
   const containerRef = useRef<HTMLDivElement>(null)
@@ -99,12 +130,29 @@ export default function CanvasPreviewSurface({
   const hoverSampleCallbackRef = useRef(onHoverSample)
   const surfaceReadyCallbackRef = useRef(onSurfaceReady)
   const clickSampleCallbackRef = useRef(onClickSample)
+  const allowOutOfImageHoverRef = useRef(allowOutOfImageHover)
+  const strokeStartCallbackRef = useRef(onStrokeStart)
+  const strokeMoveCallbackRef = useRef(onStrokeMove)
+  const strokeEndCallbackRef = useRef(onStrokeEnd)
+  const strokeCancelCallbackRef = useRef(onStrokeCancel)
   const scaleChangeCallbackRef = useRef(onScaleChange)
   const lastPointerClientRef = useRef<{ x: number; y: number } | null>(null)
   const dragStartRef = useRef({ x: 0, y: 0 })
   const translateAtDragStartRef = useRef({ x: 0, y: 0 })
   const dragMovedRef = useRef(false)
   const activePointerIdRef = useRef<number | null>(null)
+  const activeStrokePointerIdRef = useRef<number | null>(null)
+  const clickCandidateRef = useRef<{
+    pointerId: number
+    startX: number
+    startY: number
+    moved: boolean
+  } | null>(null)
+  const pointerUpClickRef = useRef<{
+    clientX: number
+    clientY: number
+    timeStamp: number
+  } | null>(null)
   const activeDragButtonRef = useRef<number | null>(null)
   const activeDragSourceRef = useRef<"pointer" | "space-left" | null>(null)
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
@@ -157,8 +205,13 @@ export default function CanvasPreviewSurface({
   const translateRef = useRef(translate)
 
   hoverSampleCallbackRef.current = onHoverSample
+  allowOutOfImageHoverRef.current = allowOutOfImageHover
   surfaceReadyCallbackRef.current = onSurfaceReady
   clickSampleCallbackRef.current = onClickSample
+  strokeStartCallbackRef.current = onStrokeStart
+  strokeMoveCallbackRef.current = onStrokeMove
+  strokeEndCallbackRef.current = onStrokeEnd
+  strokeCancelCallbackRef.current = onStrokeCancel
   scaleChangeCallbackRef.current = onScaleChange
   naturalSizeRef.current = naturalSize
   scaleRef.current = scale
@@ -212,9 +265,22 @@ export default function CanvasPreviewSurface({
         naturalHeight: currentNaturalSize.height,
         scale: scaleRef.current,
         translate: translateRef.current,
+        allowOutOfImage: allowOutOfImageHoverRef.current,
       })
     },
     [],
+  )
+
+  // 笔划（画笔落笔）采样永远限制在图像内部，不受 allowOutOfImageHover 影响。
+  const mapPointerToStrokeSample = useCallback(
+    (clientX: number, clientY: number): CanvasPreviewHoverSample | null => {
+      const sample = mapPointerToHoverSample(clientX, clientY)
+      if (sample?.isOutOfImage) {
+        return null
+      }
+      return sample
+    },
+    [mapPointerToHoverSample],
   )
 
   const syncHoverSample = useCallback(() => {
@@ -260,6 +326,7 @@ export default function CanvasPreviewSurface({
     lastPointerClientRef.current = null
     dragMovedRef.current = false
     finishActiveDrag(undefined, true)
+    activeStrokePointerIdRef.current = null
     emitHoverSample(null)
   }, [emitHoverSample, finishActiveDrag, src])
 
@@ -271,6 +338,7 @@ export default function CanvasPreviewSurface({
     lastPointerClientRef.current = null
     dragMovedRef.current = false
     finishActiveDrag(undefined, true)
+    activeStrokePointerIdRef.current = null
     emitHoverSample(null)
   }, [emitHoverSample, finishActiveDrag, interactionsDisabled])
 
@@ -318,7 +386,9 @@ export default function CanvasPreviewSurface({
       setScale(1)
       setTranslate({ x: 0, y: 0 })
       updateContainerSize()
-      setNaturalSize({ width: image.naturalWidth, height: image.naturalHeight })
+      const nextNaturalSize = { width: image.naturalWidth, height: image.naturalHeight }
+      naturalSizeRef.current = nextNaturalSize
+      setNaturalSize(nextNaturalSize)
       notifySurfaceReady({
         image,
         previewBuffer: createCanvasPreviewBuffer(image),
@@ -351,6 +421,25 @@ export default function CanvasPreviewSurface({
     () => resolveCanvasPreviewImageRect(containerSize, naturalSize),
     [containerSize, naturalSize],
   )
+  const viewport = useMemo<CanvasPreviewSurfaceViewport | null>(() => {
+    if (!imageRect) {
+      return null
+    }
+
+    return {
+      containerSize,
+      naturalSize,
+      imageRect,
+      imageScreenRect: {
+        x: translate.x + imageRect.x * scale,
+        y: translate.y + imageRect.y * scale,
+        width: imageRect.width * scale,
+        height: imageRect.height * scale,
+      },
+      scale,
+      translate,
+    }
+  }, [containerSize, imageRect, naturalSize, scale, translate])
   const loadFailed = failedSrc === src
 
   useEffect(() => {
@@ -445,6 +534,7 @@ export default function CanvasPreviewSurface({
       if (interactionsDisabled) {
         event.preventDefault()
         lastPointerClientRef.current = null
+        clickCandidateRef.current = null
         emitHoverSample(null)
         return
       }
@@ -453,15 +543,44 @@ export default function CanvasPreviewSurface({
         && isSpacePanActiveRef.current
         && event.button === 0
       const isMiddleButtonDrag = middleButtonPanEnabled && event.button === 1
+
+      // Space+left is an explicit pan intent and must win over brush strokes:
+      // otherwise the brush tool (which registers onStrokeStart) would silently
+      // swallow space-pan inside the image.
+      // 空格+左键是明确的平移意图，优先级高于画笔笔划；否则画笔工具
+      // （注册了 onStrokeStart）会在图像内把空格平移静默吞掉。
+      if (!isSpaceLeftDrag && onStrokeStart && event.button === 0) {
+        const sample = mapPointerToStrokeSample(event.clientX, event.clientY)
+        if (sample) {
+          event.preventDefault()
+          activeStrokePointerIdRef.current = event.pointerId
+          clickCandidateRef.current = null
+          event.currentTarget.setPointerCapture?.(event.pointerId)
+          strokeStartCallbackRef.current?.(sample, event)
+          return
+        }
+      }
+
       const dragAllowed = isSpaceLeftDrag || isMiddleButtonDrag || (canStartDrag
         ? canStartDrag(event, { scale: scaleRef.current })
         : true)
       if (!dragAllowed) {
+        clickCandidateRef.current = event.button === 0
+          ? {
+              pointerId: event.pointerId,
+              startX: event.clientX,
+              startY: event.clientY,
+              moved: false,
+            }
+          : null
+        dragMovedRef.current = false
+        activePointerIdRef.current = null
         return
       }
 
       event.preventDefault()
       lastPointerClientRef.current = null
+      clickCandidateRef.current = null
       emitHoverSample(null)
       // A Space+left gesture must never fall through to the normal click
       // selection path, even when the pointer barely moves.
@@ -478,8 +597,11 @@ export default function CanvasPreviewSurface({
       emitHoverSample,
       interactionsDisabled,
       isSpacePanActiveRef,
+      mapPointerToHoverSample,
       middleButtonPanEnabled,
+      onStrokeStart,
       spacePanEnabled,
+      translate,
     ],
   )
 
@@ -487,8 +609,28 @@ export default function CanvasPreviewSurface({
     (event: PointerEvent<HTMLDivElement>) => {
       if (interactionsDisabled) {
         lastPointerClientRef.current = null
+        clickCandidateRef.current = null
         emitHoverSample(null)
         return
+      }
+
+      if (activeStrokePointerIdRef.current === event.pointerId) {
+        const sample = mapPointerToStrokeSample(event.clientX, event.clientY)
+        if (sample) strokeMoveCallbackRef.current?.(sample, event)
+        // 笔划期间画笔指示圈需要持续跟随指针：越过图像边缘时照常更新 hover
+        // 采样（消费方据此切换系统光标/隐藏指示圈；笔迹点本身仅限图像内）。
+        lastPointerClientRef.current = { x: event.clientX, y: event.clientY }
+        emitHoverSample(mapPointerToHoverSample(event.clientX, event.clientY))
+        return
+      }
+
+      const clickCandidate = clickCandidateRef.current
+      if (clickCandidate && clickCandidate.pointerId === event.pointerId) {
+        const dx = event.clientX - clickCandidate.startX
+        const dy = event.clientY - clickCandidate.startY
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+          clickCandidate.moved = true
+        }
       }
 
       if (activePointerIdRef.current === event.pointerId) {
@@ -515,18 +657,67 @@ export default function CanvasPreviewSurface({
     [emitHoverSample, interactionsDisabled, mapPointerToHoverSample],
   )
 
+  const endPointerDrag = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    if (activePointerIdRef.current !== null && activePointerIdRef.current === event.pointerId) {
+      event.currentTarget.releasePointerCapture?.(event.pointerId)
+    }
+    activePointerIdRef.current = null
+    activeStrokePointerIdRef.current = null
+    activeDragButtonRef.current = null
+    activeDragSourceRef.current = null
+  }, [])
+
   const handlePointerUp = useCallback((event: PointerEvent<HTMLDivElement>) => {
-    finishActiveDrag(event.pointerId)
-  }, [finishActiveDrag])
+    if (activeStrokePointerIdRef.current === event.pointerId) {
+      const sample = mapPointerToStrokeSample(event.clientX, event.clientY)
+      activeStrokePointerIdRef.current = null
+      event.currentTarget.releasePointerCapture?.(event.pointerId)
+      strokeEndCallbackRef.current?.(sample, event)
+      return
+    }
+    const clickCandidate = clickCandidateRef.current
+    clickCandidateRef.current = null
+    if (
+      !interactionsDisabled &&
+      event.button === 0 &&
+      !dragMovedRef.current &&
+      clickCandidate?.pointerId === event.pointerId &&
+      !clickCandidate.moved
+    ) {
+      const sample = mapPointerToHoverSample(event.clientX, event.clientY)
+      // 允许越界 hover 采样时，落在图像之外的"点击"不下发（那些坐标没有
+      // 可操作的像素，消费方语义未定义）。
+      if (sample && !sample.isOutOfImage) {
+        pointerUpClickRef.current = {
+          clientX: event.clientX,
+          clientY: event.clientY,
+          timeStamp: event.timeStamp,
+        }
+        clickSampleCallbackRef.current?.(sample, event)
+      }
+    }
+    endPointerDrag(event)
+  }, [endPointerDrag, interactionsDisabled, mapPointerToHoverSample, mapPointerToStrokeSample])
 
   const handlePointerCancel = useCallback((event: PointerEvent<HTMLDivElement>) => {
-    finishActiveDrag(event.pointerId, true)
+    if (activeStrokePointerIdRef.current === event.pointerId) {
+      activeStrokePointerIdRef.current = null
+      strokeCancelCallbackRef.current?.()
+    }
+    endPointerDrag(event)
+    dragMovedRef.current = false
+    clickCandidateRef.current = null
     lastPointerClientRef.current = null
     emitHoverSample(null)
-  }, [emitHoverSample, finishActiveDrag])
+  }, [emitHoverSample, endPointerDrag])
 
   const handleLostPointerCapture = useCallback(() => {
+    if (activeStrokePointerIdRef.current !== null) {
+      activeStrokePointerIdRef.current = null
+      strokeCancelCallbackRef.current?.()
+    }
     activePointerIdRef.current = null
+    clickCandidateRef.current = null
     activeDragButtonRef.current = null
     activeDragSourceRef.current = null
   }, [])
@@ -536,6 +727,7 @@ export default function CanvasPreviewSurface({
       return
     }
     dragMovedRef.current = false
+    clickCandidateRef.current = null
     lastPointerClientRef.current = null
     emitHoverSample(null)
   }, [emitHoverSample])
@@ -566,13 +758,26 @@ export default function CanvasPreviewSurface({
         return
       }
 
+      const pointerUpClick = pointerUpClickRef.current
+      if (
+        pointerUpClick &&
+        Math.abs(pointerUpClick.clientX - event.clientX) <= 1 &&
+        Math.abs(pointerUpClick.clientY - event.clientY) <= 1 &&
+        event.timeStamp >= pointerUpClick.timeStamp &&
+        event.timeStamp - pointerUpClick.timeStamp < 1000
+      ) {
+        pointerUpClickRef.current = null
+        return
+      }
+      pointerUpClickRef.current = null
+
       if (dragMovedRef.current) {
         dragMovedRef.current = false
         return
       }
 
       const sample = mapPointerToHoverSample(event.clientX, event.clientY)
-      if (!sample) {
+      if (!sample || sample.isOutOfImage) {
         return
       }
 
@@ -646,6 +851,13 @@ export default function CanvasPreviewSurface({
             >
               {overlay}
             </div>
+          </div>
+        ) : null}
+        {screenSpaceOverlay && viewport ? (
+          <div className="pointer-events-none absolute inset-0">
+            {typeof screenSpaceOverlay === "function"
+              ? screenSpaceOverlay(viewport)
+              : screenSpaceOverlay}
           </div>
         ) : null}
       </div>

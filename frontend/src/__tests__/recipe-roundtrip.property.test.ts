@@ -101,7 +101,8 @@ describe("recipe round-trip properties", () => {
       ),
       target_width_mm: fc.integer({ min: 10, max: 400 }),
       target_height_mm: fc.integer({ min: 10, max: 400 }),
-      spacer_thick: fc.double({ min: 0.2, max: 3.5, noNaN: true }),
+      spacer_thick: fc.double({ min: 0.2, max: 10, noNaN: true }),
+      backing_infill_density_percent: fc.integer({ min: 5, max: 100 }),
       quantize_colors: fc.integer({ min: 2, max: 128 }),
       high_precision_3d_preview: fc.boolean(),
       enable_cleanup: fc.boolean(),
@@ -127,7 +128,7 @@ describe("recipe round-trip properties", () => {
       labelsEnabled: fc.boolean(),
       engraveBackLabels: fc.boolean(),
       enable_fridge_magnet: fc.boolean(),
-      base_spacer_thick: fc.double({ min: 0.2, max: 3.5, noNaN: true }),
+      base_spacer_thick: fc.double({ min: 0.2, max: 10, noNaN: true }),
       fridge_magnets: fc.array(
         fc.oneof(
           fc.record({
@@ -166,11 +167,15 @@ describe("recipe round-trip properties", () => {
 
     fc.assert(
       fc.property(arbState, (overrides) => {
+        const baseSpacerThick = overrides.enable_fridge_magnet
+          ? overrides.base_spacer_thick
+          : overrides.spacer_thick;
         const state = {
           ...DEFAULT_STATE,
           ...overrides,
+          base_spacer_thick: baseSpacerThick,
           spacer_thick: resolveFridgeMagnetSpacerThick(
-            overrides.base_spacer_thick,
+            baseSpacerThick,
             overrides.enable_fridge_magnet,
             overrides.fridge_magnets,
           ),
@@ -226,7 +231,7 @@ describe("recipe round-trip properties", () => {
           ? "Single-sided"
           : state.structure_mode;
         const expectedSpacerThick = resolveFridgeMagnetSpacerThick(
-          overrides.base_spacer_thick,
+          baseSpacerThick,
           overrides.enable_fridge_magnet,
           overrides.fridge_magnets,
         );
@@ -271,12 +276,17 @@ describe("recipe round-trip properties", () => {
         expect(restored.connectorStyle).toBe(overrides.connectorStyle);
         expect(restored.labelsEnabled).toBe(overrides.labelsEnabled);
         expect(restored.engraveBackLabels).toBe(false);
-        expect(recipe.geometry.spacer_thick).toBe(overrides.base_spacer_thick);
+        expect(recipe.geometry.spacer_thick).toBe(baseSpacerThick);
         expect(restored.enable_fridge_magnet).toBe(overrides.enable_fridge_magnet);
         expect(restored.fridge_magnets).toEqual(overrides.fridge_magnets);
-        expect(restored.base_spacer_thick).toBe(overrides.base_spacer_thick);
+        expect(restored.base_spacer_thick).toBe(baseSpacerThick);
         expect(restored.spacer_thick).toBe(expectedSpacerThick);
         expect(restored.structure_mode).toBe(expectedStructureMode);
+        expect(restored.backing_infill_density_percent).toBe(
+          restored.enable_relief || restored.puzzleEnabled
+            ? 100
+            : overrides.backing_infill_density_percent,
+        );
       }),
       { numRuns: 50 },
     );

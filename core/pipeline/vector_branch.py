@@ -15,7 +15,7 @@ structured-logging event names.
 Public callables (re-exported by ``coordinator`` for backward compatibility):
 \u516c\u5171\u8c03\u7528\u70b9\uff08``coordinator`` \u91cd\u5bfc\u51fa\u4ee5\u4fdd\u8bc1\u5411\u540e\u517c\u5bb9\uff09\uff1a
 
-- ``_run_vector_branch(ctx) -> dict``: SVG \u2192 3MF/GLB/2D \u9884\u89c8 \u5b8c\u6574\u8f6c\u6362\u5206\u652f\u3002
+- ``_run_vector_branch(ctx) -> dict``: SVG \u2192 3MF/2D + reusable lightweight GLB reference.
 - ``_run_vector_preview_branch(ctx) -> dict``: SVG \u9884\u89c8\u7f13\u5b58\u6784\u5efa\u3002
 - ``_update_bambu_base_layer_ctx_for_vector(...)``: Bambu \u5e95\u677f\u53ec\u552e\u5c01\u88c5\u3002
 - ``_log_vector_timings(...)``: \u8ba1\u65f6\u660e\u7ec6\u8f93\u51fa\u3002
@@ -28,7 +28,6 @@ import math
 import os
 import time
 from copy import deepcopy
-from types import SimpleNamespace
 
 import cv2  # noqa: F401  -- imported for side-effect parity with coordinator
 import numpy as np
@@ -39,15 +38,26 @@ from shapely.validation import make_valid
 
 from api.structured_logging import get_logger
 from config import BedManager, PrinterConfig, normalize_nozzle_size
-from core.errors import CachedPreviewAnalysisError
+from core.errors import (
+    CachedPreviewAnalysisError,
+    VectorMeshMemoryBudgetError,
+    VectorTopologyError,
+)
 from core.geometry_utils import create_keychain_loop
-from core.pipeline import p06_bed_rendering, s09_export_3mf, vector_glb_preview
+from core.pipeline import p06_bed_rendering, s09_export_3mf
 from core.pipeline.pipeline_utils import extract_color_palette
 from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
 from core.pipeline.s08_auxiliary_meshes import (
     _coerce_preview_rgba,
 )
 from core.preview_analysis_cache import preview_analysis_reuse_is_required
+from core.vector_mesh_topology import (
+    extrude_polygon_for_export,
+    mesh_is_float32_safe,
+    prepare_component_footprints_for_float32,
+    prepare_geometry_for_float32,
+    separate_component_coordinates,
+)
 
 # ---------------------------------------------------------------------------
 # Cycle-safe re-import of small helpers that originate in coordinator.
@@ -88,6 +98,11 @@ except ImportError as exc:
 # 日志命名空间故意继续沿用 coordinator，保证抽离后日志可观察性零变更。
 log = get_logger("core.pipeline.coordinator")
 
+# Float32 collision repair temporarily holds dense arrays, NumPy uniqueness
+# workspaces, and per-vertex keys. A measured collision-heavy fixture peaked
+# at 5.43x retained mesh storage; seven leaves admission headroom without
+# changing topology or coverage semantics.
+_OUTLINE_COORDINATE_SEPARATION_WORKSPACE_FACTOR = 7
 
 # ---------------------------------------------------------------------------
 # Layer-0 (appearance face) diagnostics
@@ -190,57 +205,6 @@ def _shape_recipe0_histogram(matched_shapes: list) -> dict:
         "recipe0_by_shape_count": by_shape,
         "recipe0_by_area": by_area_rounded,
     }
-
-
-def _make_vector_glb_preview_scene(
-    scene,
-    *,
-    structure_mode: object,
-    color_mode: object,
-    enable_relief: bool = False,
-):
-    """Return a display-oriented copy of a vector scene for GLB previews.
-
-    Flat single-sided 4-color vector exports place the backing above the color
-    layers for print assembly. The app preview is a display surface, so it
-    mirrors only that flat GLB source scene and keeps relief scenes unchanged.
-
-    单面 4 色矢量导出的打印 scene 会把底板放在颜色层上方；应用内 3D 预览是
-    展示面，因此只镜像 GLB 的输入 scene，不改变 3MF 导出的原始几何。
-    """
-
-    if enable_relief:
-        return scene
-
-    structure_value = str(structure_mode or "")
-    color_mode_value = str(color_mode or "")
-    is_single_sided = "单面" in structure_value or "Single" in structure_value
-    if not is_single_sided or "5-Color Extended" in color_mode_value:
-        return scene
-
-    try:
-        bounds = scene.bounds
-        z_min = float(bounds[0][2])
-        z_max = float(bounds[1][2])
-    except (AttributeError, IndexError, TypeError, ValueError):
-        return scene
-    if not np.isfinite(z_min) or not np.isfinite(z_max) or z_max <= z_min:
-        return scene
-
-    import trimesh as _trimesh
-
-    preview_scene = _trimesh.Scene()
-    mirror_z = np.eye(4)
-    mirror_z[2, 2] = -1.0
-    mirror_z[2, 3] = z_min + z_max
-    for geom_name, source_geom in scene.geometry.items():
-        try:
-            geom = source_geom.copy()
-            geom.apply_transform(mirror_z)
-        except COORDINATOR_HANDLED_ERRORS:
-            geom = source_geom
-        preview_scene.add_geometry(geom, geom_name=geom_name)
-    return preview_scene
 
 
 def _per_layer_channel_histogram(material_matrix: object, mask_solid: object | None) -> dict:
@@ -857,14 +821,14 @@ def _resolve_vector_outline_export_size_mm(
     """Return the vector export width/height in millimetres, if available.
     返回 vector 导出宽高（毫米），不可可靠解析时返回 ``None``。
 
-    ``VectorProcessor.build_mesh`` derives its final coordinate transforms
-    from ``analysis.bbox[2:4] * analysis.scale_factor``. The outline helper
-    must use the same source so auxiliary outline geometry lands in the same
-    XY coordinate system as the colour and backing meshes.
+    ``VectorProcessor.build_mesh`` requires the same finite canvas dimensions
+    before it can construct body geometry.  The outline helper keeps this
+    guard so auxiliary geometry never applies an export transform to an
+    incomplete analysis object.
 
-    ``VectorProcessor.build_mesh`` 使用 ``analysis.bbox[2:4] *
-    analysis.scale_factor`` 计算最终坐标变换；Outline 必须使用同一来源，
-    才能与主体色块和底板落在同一个 XY 坐标系。
+    ``VectorProcessor.build_mesh`` 同样要求 ``analysis.bbox[2:4] *
+    analysis.scale_factor`` 是有限画布尺寸；Outline 保留这一门禁，避免对
+    不完整分析对象应用导出变换。
     """
     bbox_raw = getattr(analysis, "bbox", None)
     if not isinstance(bbox_raw, (list, tuple, np.ndarray)) or len(bbox_raw) < 4:
@@ -902,14 +866,10 @@ def _apply_vector_outline_export_transform(
     Y-down 坐标翻到打印坐标，再对非 5 色单面导出做 X 镜像。Outline 是在
     ``build_mesh`` 外部生成的，因此这里显式复用同一组变换。
     """
-    size_mm = _resolve_vector_outline_export_size_mm(analysis, scale_factor)
-    if size_mm is None:
+    if _resolve_vector_outline_export_size_mm(analysis, scale_factor) is None:
         return
-    width_mm, height_mm = size_mm
-
     y_flip = np.eye(4)
     y_flip[1, 1] = -1.0
-    y_flip[1, 3] = float(height_mm)
     outline_mesh.apply_transform(y_flip)
 
     structure_mode_text = str(ctx.get("structure_mode", "") or "")
@@ -928,7 +888,6 @@ def _apply_vector_outline_export_transform(
     if is_single_sided and not is_5color:
         mirror_x = np.eye(4)
         mirror_x[0, 0] = -1.0
-        mirror_x[0, 3] = float(width_mm)
         outline_mesh.apply_transform(mirror_x)
 
 
@@ -950,8 +909,7 @@ def _generate_vector_outline_mesh(
            where ``outline_width_units = outline_width_mm / scale_factor``
            (vector geometry lives in pre-scale SVG units; ``build_mesh``
            multiplies by ``scale_factor`` during extrusion).
-        3. Extrude ring with ``trimesh.creation.extrude_polygon`` to the
-           same backing thickness used by the rest of the vector scene.
+        3. Extrude each polygon through the shared topology export service.
         4. ``apply_scale`` by ``scale_factor`` so the mesh lands in the
            same mm coordinate system as ``Board`` / colour slots.
         5. Decorate with ``metadata['name'] = 'Outline'`` +
@@ -979,6 +937,13 @@ def _generate_vector_outline_mesh(
         Caller is responsible for forcing ``ctx['enable_outline'] = False``
         on a ``None`` return.
     """
+    from core.vector_engine import (
+        _concatenate_meshes_fast,
+        _enforce_vector_mesh_runtime_headroom,
+        _geometry_cache_storage_bytes,
+        _mesh_array_storage_bytes,
+    )
+
     matched_shapes = list(getattr(analysis, "matched_shapes", []) or [])
     if not matched_shapes:
         log.warning(
@@ -991,6 +956,27 @@ def _generate_vector_outline_mesh(
             },
         )
         return None
+
+    source_geometries = tuple(
+        item.get("geometry")
+        for item in matched_shapes
+        if isinstance(item, dict)
+        and item.get("geometry") is not None
+        and not getattr(item.get("geometry"), "is_empty", True)
+    )
+    source_geometry_bytes = sum(
+        _geometry_cache_storage_bytes(geometry)
+        for geometry in source_geometries
+    )
+    _enforce_vector_mesh_runtime_headroom(
+        stage="vector_outline_union",
+        estimated_additional_bytes=max(
+            16 * 1024 * 1024,
+            source_geometry_bytes * 8,
+        ),
+        shape_count=len(source_geometries),
+        coordinate_count=source_geometry_bytes // 64,
+    )
 
     union = _vector_outline_union_geometry(matched_shapes)
     if union is None:
@@ -1021,6 +1007,17 @@ def _generate_vector_outline_mesh(
     # 乘 scale_factor 得到 mm。这里把 outline_width_mm 反算到预缩放单位，
     # 再走同样的 apply_scale，保证最终 ring 宽度恰好是请求的 mm 数。
     width_units = float(outline_width_mm) / scale_factor
+
+    union_geometry_bytes = _geometry_cache_storage_bytes(union)
+    _enforce_vector_mesh_runtime_headroom(
+        stage="vector_outline_ring",
+        estimated_additional_bytes=max(
+            16 * 1024 * 1024,
+            union_geometry_bytes * 8,
+        ),
+        shape_count=len(source_geometries),
+        coordinate_count=union_geometry_bytes // 64,
+    )
 
     try:
         expanded = union.buffer(width_units, join_style="mitre", mitre_limit=2.0)
@@ -1094,6 +1091,23 @@ def _generate_vector_outline_mesh(
         )
         return None
 
+    prepared_ring = prepare_geometry_for_float32(
+        ring,
+        xy_scale=scale_factor,
+    )
+    if prepared_ring is None or getattr(prepared_ring, "is_empty", True):
+        log.warning(
+            "Vector outline rejected: float32 precision repair exceeded coverage guard",
+            extra={
+                "event": "vector_outline_rejected_topology",
+                "error_type": "float32_precision_loss",
+                "unsupported_reason": "outline_float32_precision_guard",
+                "shape_count": len(matched_shapes),
+            },
+        )
+        return None
+    ring = prepared_ring
+
     layer_h = _resolve_vector_layer_height_mm(ctx)
     z_min_mm, z_max_mm = _resolve_vector_outline_z_span(
         ctx,
@@ -1103,12 +1117,12 @@ def _generate_vector_outline_mesh(
     )
     thickness_mm = max(layer_h, z_max_mm - z_min_mm)
     outline_layers = max(1, int(round(thickness_mm / layer_h)))
-    extrude_height_units = float(outline_layers)  # height in pre-scale units
+    outline_height_mm = float(outline_layers) * layer_h
 
     # Iterate over the ring's polygonal parts (a ring around a multi-shape
     # union is a MultiPolygon when the originals are disjoint) and extrude
-    # each piece independently. trimesh.creation.extrude_polygon accepts a
-    # single Polygon, so we explode and concatenate the pieces.
+    # each piece independently. The topology service accepts a single Polygon,
+    # so we explode and concatenate the pieces.
     # ring 通常是 MultiPolygon，逐个 Polygon 挤出再拼回。
     polys = []
     if hasattr(ring, "geoms"):
@@ -1128,45 +1142,132 @@ def _generate_vector_outline_mesh(
         )
         return None
 
+    prepared_polys = prepare_component_footprints_for_float32(
+        polys,
+        xy_scale=scale_factor,
+    )
+    if prepared_polys is None:
+        log.warning(
+            "Vector outline rejected: 2D writer preflight failed",
+            extra={
+                "event": "vector_outline_rejected_topology",
+                "error_type": "coordinate_collision",
+                "unsupported_reason": "outline_writer_footprint_preflight_failed",
+                "polygon_count": int(len(polys)),
+            },
+        )
+        return None
+    polys = prepared_polys
+    del prepared_polys
+
     meshes: list = []
-    for poly in polys:
+    for poly_index, poly in enumerate(polys):
+        polygon_geometry_bytes = _geometry_cache_storage_bytes(poly)
+        _enforce_vector_mesh_runtime_headroom(
+            stage="vector_outline_polygon_extrusion",
+            estimated_additional_bytes=max(
+                16 * 1024 * 1024,
+                polygon_geometry_bytes * 16,
+            ),
+            shape_count=1,
+            coordinate_count=polygon_geometry_bytes // 64,
+        )
         try:
-            piece = trimesh.creation.extrude_polygon(poly, height=extrude_height_units)
-        except COORDINATOR_HANDLED_ERRORS as exc:
+            pieces = extrude_polygon_for_export(
+                poly,
+                xy_scale=scale_factor,
+                prefer_fast=True,
+            )
+        except (VectorTopologyError, *COORDINATOR_HANDLED_ERRORS) as exc:
             log.warning(
-                "Vector outline polygon extrude skipped",
+                "Vector outline rejected after polygon extrusion failure",
                 extra={
                     "event": "vector_outline_polygon_extrude_failed",
                     "error_type": type(exc).__name__,
                     "error_message": str(exc),
+                    "polygon_index": int(poly_index),
+                    "polygon_count": int(len(polys)),
+                    "unsupported_reason": "outline_polygon_topology_unrepairable",
                 },
             )
-            continue
-        if piece is None or len(piece.vertices) == 0:
-            continue
-        # Pre-scale → mm: scale XY by scale_factor, Z by layer_height_mm so
-        # the outline sits in the same coordinate system as colour slots.
-        # 预缩放空间 → mm：XY 乘 scale_factor，Z 乘 layer_h，与色层同坐标系。
-        piece.apply_scale([scale_factor, scale_factor, layer_h])
-        if z_min_mm != 0.0:
-            piece.apply_translation([0.0, 0.0, z_min_mm])
-        meshes.append(piece)
+            return None
+        if not pieces or any(len(piece.vertices) == 0 for piece in pieces):
+            log.warning(
+                "Vector outline rejected: polygon extrusion returned empty mesh",
+                extra={
+                    "event": "vector_outline_rejected_topology",
+                    "error_type": "empty_mesh",
+                    "polygon_index": int(poly_index),
+                    "polygon_count": int(len(polys)),
+                    "unsupported_reason": "outline_polygon_empty_mesh",
+                },
+            )
+            return None
+        # Pre-scale → mm: scale XY by scale_factor and the unit-height Z
+        # by the complete Outline thickness.
+        # 预缩放空间 → mm：XY 乘 scale_factor，单位高度 Z 乘 Outline 总厚度。
+        for piece in pieces:
+            piece.apply_scale(
+                [scale_factor, scale_factor, outline_height_mm]
+            )
+            if z_min_mm != 0.0:
+                piece.apply_translation([0.0, 0.0, z_min_mm])
+            meshes.append(piece)
 
     if not meshes:
+        return None
+
+    retained_mesh_bytes = sum(_mesh_array_storage_bytes(mesh) for mesh in meshes)
+    # The independent 3D shells are now the only geometry needed for export.
+    # Release union/buffer/ring intermediates before transforming and checking
+    # the final writer coordinates or allocating the contiguous output mesh.
+    del polys, prepared_ring, ring, expanded, union, source_geometries
+    matched_shapes.clear()
+
+    for mesh in meshes:
+        _apply_vector_outline_export_transform(
+            mesh,
+            analysis=analysis,
+            ctx=ctx,
+            scale_factor=scale_factor,
+            export_color_mode=export_color_mode,
+        )
+
+    _enforce_vector_mesh_runtime_headroom(
+        stage="vector_outline_coordinate_separation",
+        estimated_additional_bytes=max(
+            16 * 1024 * 1024,
+            retained_mesh_bytes
+            * _OUTLINE_COORDINATE_SEPARATION_WORKSPACE_FACTOR,
+        ),
+        shape_count=len(meshes),
+    )
+
+    if not separate_component_coordinates(meshes):
+        log.warning(
+            "Vector outline rejected: export-coordinate separation failed",
+            extra={
+                "event": "vector_outline_rejected_topology",
+                "error_type": "coordinate_collision",
+                "unsupported_reason": "outline_export_coordinate_collision",
+                "polygon_count": int(len(meshes)),
+            },
+        )
         return None
 
     if len(meshes) == 1:
         outline_mesh = meshes[0]
     else:
-        outline_mesh = trimesh.util.concatenate(meshes)
-
-    _apply_vector_outline_export_transform(
-        outline_mesh,
-        analysis=analysis,
-        ctx=ctx,
-        scale_factor=scale_factor,
-        export_color_mode=export_color_mode,
-    )
+        _enforce_vector_mesh_runtime_headroom(
+            stage="vector_outline_assembly",
+            estimated_additional_bytes=max(
+                16 * 1024 * 1024,
+                retained_mesh_bytes * 2,
+            ),
+            shape_count=len(meshes),
+        )
+        outline_mesh = _concatenate_meshes_fast(meshes)
+        meshes.clear()
 
     rgba = list(base_aux_color)
     if len(rgba) < 4:
@@ -1833,6 +1934,7 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
             ),
             "auto_dynamic_range": bool(ctx.get("auto_dynamic_range", False)),
             "backing_color_id": backing_color_id,
+            "spacer_thick": ctx.get("spacer_thick", 1.6),
             "is_dark": is_dark,
             "bed_label": BedManager.DEFAULT_BED,
             "lut_metadata": lut_metadata,
@@ -1857,6 +1959,7 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
                 _VECTOR_PARSE_CLIP_CACHE,
                 _serialize_vector_parse_clip_cache,
                 _vector_parse_clip_cache_key,
+                _vector_parse_clip_cache_provenance,
             )
 
             cache_key = _vector_parse_clip_cache_key(
@@ -1881,6 +1984,9 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
             cache["vector_parse_clip_cache_blob"] = _serialize_vector_parse_clip_cache(
                 cache_key,
                 cache_entry,
+            )
+            cache["vector_parse_clip_cache_provenance"] = (
+                _vector_parse_clip_cache_provenance(cache_key)
             )
         except COORDINATOR_HANDLED_ERRORS as exc:
             log.debug(
@@ -1924,60 +2030,12 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
                 "original_material_solver_info"
             ]
 
-        # Inject outline geometry into the preview cache. The SVG/vector shape
-        # union stays the declared geometry source; S11 copies this mesh into
-        # the preview GLB instead of deriving outline from backing/fridge masks.
-        # preview 分支负责生成来自矢量 shape union 的 outline mesh；S11 复用
-        # 这个 mesh 导出 GLB，避免从 backing / 冰箱贴 mask 重新推断轮廓。
-        if bool(ctx.get("enable_outline", False)):
-            try:
-                outline_width_mm = float(ctx.get("outline_width", 2.0) or 2.0)
-            except (TypeError, ValueError):
-                outline_width_mm = 2.0
-            outline_color, outline_material_name = (
-                _resolve_vector_outline_base_aux_style(
-                    ctx,
-                    dict(analysis.preview_colors),
-                    list(analysis.slot_names),
-                )
-            )
-            log.info(
-                "Vector outline preview generation started",
-                extra={
-                    "event": "vector_outline_init",
-                    "stage": "preview",
-                    "outline_width_mm": float(outline_width_mm),
-                    "shape_count": len(getattr(analysis, "matched_shapes", []) or []),
-                    "material_name": str(outline_material_name or ""),
-                    "color_mode": str(color_mode),
-                },
-            )
-            outline_mesh = _generate_vector_outline_mesh(
-                analysis=analysis,
-                outline_width_mm=outline_width_mm,
-                base_aux_color=outline_color,
-                base_aux_material_name=outline_material_name,
-                ctx=ctx,
-                export_color_mode=getattr(vec_processor, "color_mode", color_mode),
-            )
-            if outline_mesh is not None:
-                cache["outline_geometry"] = outline_mesh
-                cache["outline_added"] = True
-                ctx["outline_geometry"] = outline_mesh
-                ctx["outline_added"] = True
-                log.info(
-                    "Vector outline preview generation completed",
-                    extra={
-                        "event": "vector_outline_done",
-                        "stage": "preview",
-                        "outline_width_mm": float(outline_width_mm),
-                        "vertex_count": int(len(outline_mesh.vertices)),
-                        "face_count": int(len(outline_mesh.faces)),
-                        "material_name": str(outline_material_name or ""),
-                    },
-                )
-            else:
-                ctx["enable_outline"] = False
+        # Quick-preview GLBs contain only static colour/backing geometry.
+        # The UI owns the live Outline overlay so spacer, structure mode, and
+        # layer-height changes remain immediate. Physical export Outline meshes
+        # stay in the generate branch's 3MF writer-local coordinate domain.
+        # 快速预览仅携带静态色块和底板；实时描边由 UI 单一负责。用于最终导出的
+        # Outline 继续留在 generate 分支的 3MF writer-local 坐标域中。
 
         t0 = time.perf_counter()
         ctx = p06_bed_rendering.run(ctx)
@@ -1986,6 +2044,8 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
         ctx["vector_timing"] = dict(preview_timing)
         _log_vector_preview_timings(preview_timing, ctx, analysis, raster_cache)
         return ctx
+    except (MemoryError, VectorMeshMemoryBudgetError):
+        raise
     except Exception as exc:
         ctx["error"] = f"[VECTOR_PREVIEW] {exc}"
         log.exception("Vector preview branch failed: %s", exc)
@@ -2003,7 +2063,7 @@ def _run_vector_branch(ctx: dict) -> dict:
 
     \u5f53 S01 \u68c0\u6d4b\u5230 ``is_svg_vector=True`` \u65f6\u7531 ``run_raster_pipeline``
     \u8c03\u7528\u3002\u4f7f\u7528 ``core.vector_engine.VectorProcessor`` \u5b8c\u6210 SVG \u2192 3D
-    \u8f6c\u6362\uff0c\u5305\u62ec 3MF \u5bfc\u51fa\u3001GLB \u9884\u89c8\u548c 2D \u9884\u89c8\u751f\u6210\u3002
+    \u8f6c\u6362\uff0c\u5305\u62ec 3MF \u5bfc\u51fa\u3001\u8f7b\u91cf GLB \u5f15\u7528\u590d\u7528\u548c 2D \u9884\u89c8\u751f\u6210\u3002
 
     Args:
         ctx: \u7ecf\u8fc7 S01 \u9a8c\u8bc1\u540e\u7684 PipelineContext \u5b57\u5178
@@ -2014,9 +2074,8 @@ def _run_vector_branch(ctx: dict) -> dict:
     from config import (  # noqa: F401  -- ColorSystem kept for parity
         ColorSystem,
         MODELS_DIR,
-        OUTPUT_DIR,
     )
-    from core.naming import generate_model_filename, generate_preview_filename
+    from core.naming import generate_model_filename
     from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
     from utils import Stats
 
@@ -2035,9 +2094,22 @@ def _run_vector_branch(ctx: dict) -> dict:
     requested_color_layers = ctx.get("color_layers")
     lut_metadata = ctx.get("lut_metadata")
     matched_rgb_path = ctx.get("matched_rgb_path")
+    original_matched_rgb_path = ctx.get("original_matched_rgb_path")
     height_identity_rgb_path = ctx.get("height_identity_rgb_path")
     mask_solid_path = ctx.get("mask_solid_path")
     material_matrix_path = ctx.get("material_matrix_path")
+    original_material_matrix_path = ctx.get("original_material_matrix_path")
+    edit_projection = ctx.get("edit_projection")
+    edit_projection_source_shape = None
+    edit_projection_mode = None
+    if isinstance(edit_projection, dict):
+        edit_projection_mode = str(edit_projection.get("mode") or "")
+        source_shape = edit_projection.get("source_shape")
+        if isinstance(source_shape, (list, tuple)) and len(source_shape) == 2:
+            edit_projection_source_shape = (
+                int(source_shape[0]),
+                int(source_shape[1]),
+            )
     vector_preview_pixels_per_mm = 10.0
     try:
         backing_color_id = int(ctx.get("backing_color_id", 0) or 0)
@@ -2085,6 +2157,9 @@ def _run_vector_branch(ctx: dict) -> dict:
     try:
         from core.vector_engine import (
             VectorProcessor,
+            _concatenate_meshes_fast,
+            _enforce_vector_mesh_runtime_headroom,
+            _mesh_array_storage_bytes,
             apply_matched_rgb_overrides_to_analysis,
             apply_recipe_overrides_to_analysis,
         )
@@ -2129,6 +2204,9 @@ def _run_vector_branch(ctx: dict) -> dict:
         # "2D \u9884\u89c8\u53d8\u4e86\u3001\u6700\u7ec8\u6a21\u578b\u6ca1\u53d8" \u7684\u73b0\u8c61\u3002
         cached_analysis_required = preview_analysis_reuse_is_required(
             ctx.get("reuse_preview_analysis")
+        ) or (
+            edit_projection_mode == "delta"
+            and edit_projection_source_shape is not None
         )
         if cached_analysis_required and not (
             matched_rgb_path and mask_solid_path and material_matrix_path
@@ -2136,13 +2214,19 @@ def _run_vector_branch(ctx: dict) -> dict:
             raise CachedPreviewAnalysisError(
                 "Required vector preview analysis artifacts are incomplete"
             )
-        if matched_rgb_path and mask_solid_path:
+        if (
+            matched_rgb_path
+            and mask_solid_path
+            and edit_projection_mode != "recipe_masks"
+        ):
             matched_rgb_override_t0 = time.perf_counter()
             cached_matched_rgb = None
             raw_mask_solid = None
             cached_mask_solid = None
             cached_material_matrix = None
             cached_height_identity_rgb = None
+            cached_original_matched_rgb = None
+            cached_original_material_matrix = None
             try:
                 cached_matched_rgb = np.load(
                     matched_rgb_path,
@@ -2173,6 +2257,25 @@ def _run_vector_branch(ctx: dict) -> dict:
                         allow_pickle=False,
                         mmap_mode="r",
                     )
+                if original_matched_rgb_path:
+                    cached_original_matched_rgb = np.load(
+                        original_matched_rgb_path,
+                        allow_pickle=False,
+                        mmap_mode="r",
+                    )
+                if original_material_matrix_path:
+                    cached_original_material_matrix = np.load(
+                        original_material_matrix_path,
+                        allow_pickle=False,
+                        mmap_mode="r",
+                    )
+                if edit_projection_source_shape is not None and (
+                    cached_original_matched_rgb is None
+                    or cached_original_material_matrix is None
+                ):
+                    raise CachedPreviewAnalysisError(
+                        "Required vector pristine edit artifacts are incomplete"
+                    )
 
                 # Diagnostic 2/4: material_matrix loaded from disk (post pad).
                 if cached_material_matrix is not None:
@@ -2194,11 +2297,14 @@ def _run_vector_branch(ctx: dict) -> dict:
                 rewritten = apply_matched_rgb_overrides_to_analysis(
                     analysis,
                     matched_rgb=cached_matched_rgb,
+                    original_matched_rgb=cached_original_matched_rgb,
                     height_identity_rgb=cached_height_identity_rgb,
                     material_matrix=cached_material_matrix,
+                    original_material_matrix=cached_original_material_matrix,
                     mask_solid=cached_mask_solid,
                     img_processor=vec_processor.img_processor,
                     pixels_per_mm=vector_preview_pixels_per_mm,
+                    source_grid_shape=edit_projection_source_shape,
                     strict=cached_analysis_required,
                     prefer_cached_material_state=bool(
                         ctx.get("material_dynamic_layer_count_enabled", False)
@@ -2291,6 +2397,8 @@ def _run_vector_branch(ctx: dict) -> dict:
                     cached_mask_solid,
                     cached_material_matrix,
                     cached_height_identity_rgb,
+                    cached_original_matched_rgb,
+                    cached_original_material_matrix,
                 )
 
         # 1a. Apply per-region recipe overrides (custom recipe dialog +
@@ -2348,6 +2456,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                         base_channel_idx=base_channel_idx,
                         img_processor=vec_processor.img_processor,
                         pixels_per_mm=vector_preview_pixels_per_mm,
+                        source_grid_shape=edit_projection_source_shape,
                     )
 
                     # Diagnostic 4/4: shape recipe[0] distribution after
@@ -2536,9 +2645,20 @@ def _run_vector_branch(ctx: dict) -> dict:
         if board_geom is not None and not separate_backing:
             target_geom = scene.geometry.get(target_slot) if target_slot else None
             if target_geom is not None:
-                import trimesh as _trimesh
-
-                merged = _trimesh.util.concatenate([target_geom, board_geom])
+                source_mesh_bytes = _mesh_array_storage_bytes(
+                    target_geom
+                ) + _mesh_array_storage_bytes(board_geom)
+                _enforce_vector_mesh_runtime_headroom(
+                    stage="vector_board_merge",
+                    estimated_additional_bytes=max(
+                        16 * 1024 * 1024,
+                        source_mesh_bytes * 2,
+                    ),
+                    shape_count=2,
+                )
+                merged = _concatenate_meshes_fast(
+                    [target_geom, board_geom]
+                )
                 target_color = vec_preview_colors.get(target_slot)
                 if target_color is None:
                     existing_colors = np.asarray(
@@ -2550,6 +2670,9 @@ def _run_vector_branch(ctx: dict) -> dict:
                 merged.metadata["name"] = target_slot
                 scene.geometry[target_slot] = merged
                 del scene.geometry["Board"]
+                # The scene now owns only the bounded concatenation result;
+                # release both original mesh arrays before outline/export.
+                del target_geom, board_geom, merged
                 log.debug(
                     "Vector board merged into backing material slot",
                     extra={
@@ -2672,20 +2795,10 @@ def _run_vector_branch(ctx: dict) -> dict:
         skip_heavy_preview = (
             os.getenv("LUMINA_VECTOR_SKIP_2D_PREVIEW", "0") == "1"
         )
-        analysis_for_glb = analysis
         if skip_heavy_preview or not need_2d_preview:
-            # GLB only needs the canvas anchor once mesh/outline work is done.
-            # Retaining the complete parse/match graph until GLB export makes
-            # its temporary meshes overlap with thousands of source shapes.
-            # 不需要 2D 预览时只保留 GLB 画布锚点，提前释放完整分析图。
-            analysis_for_glb = SimpleNamespace(
-                image_vectorizer_bounds=getattr(
-                    analysis,
-                    "image_vectorizer_bounds",
-                    None,
-                ),
-                scale_factor=getattr(analysis, "scale_factor", 1.0),
-            )
+            # Generate no longer builds a print-scene GLB. Release the parse
+            # graph as soon as neither caller nor the 2D preview needs it.
+            # generate 不再构建打印 scene GLB；不需要 2D 预览时立即释放分析图。
             analysis = None
         vec_processor = None
 
@@ -2751,9 +2864,6 @@ def _run_vector_branch(ctx: dict) -> dict:
             "initial_layer_line_width": _lw,
         }
 
-        if bool(ctx.get("center_on_bed", True)):
-            s09_export_3mf._center_scene_on_printer_bed(scene, ctx.get("printer_id", "bambu-h2d"))
-
         # ------------------------------------------------------------------
         # Vector cover thumbnail: rasterize the source SVG itself and
         # PNG-encode it in-memory. File managers and slicers should show
@@ -2764,6 +2874,14 @@ def _run_vector_branch(ctx: dict) -> dict:
         # 软件里的封面应展示原图外观，而不是匹配后的耗材分层预览。仍然不把
         # raw .svg 传给 CoverThumbnailBuilder，因为 Pillow 不能解码 SVG。
         if not ctx.get("svg_raster_preview_bytes"):
+            from core.vector_engine import _enforce_vector_scene_export_headroom
+
+            _enforce_vector_scene_export_headroom(
+                scene,
+                stage="vector_cover_export",
+                workspace_multiplier=0.0,
+                minimum_workspace_bytes=8 * 1024 * 1024,
+            )
             cover_render_t0 = time.perf_counter()
             try:
                 cover_rgba = rasterize_svg(
@@ -2771,6 +2889,9 @@ def _run_vector_branch(ctx: dict) -> dict:
                     target_width_mm,
                     pixels_per_mm=2.0,
                     crop_to_content=False,
+                    _min_quality_px=1,
+                    _max_longest_px=512,
+                    _cache_result=False,
                 )
                 from io import BytesIO as _CoverBytesIO
                 from PIL import Image as _CoverImage
@@ -2790,6 +2911,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                         "rgba_shape": [int(s) for s in cover_rgba.shape],
                     },
                 )
+                del cover_buffer, cover_pil, cover_rgba
             except (*COORDINATOR_HANDLED_ERRORS, ImportError) as cover_exc:
                 log.warning(
                     "Vector cover thumbnail render failed; will fall back to "
@@ -2817,6 +2939,19 @@ def _run_vector_branch(ctx: dict) -> dict:
             or ctx.get("cover_source_path")
             or ctx.get("image_path")
         )
+        from core.vector_engine import _enforce_vector_scene_export_headroom
+
+        _enforce_vector_scene_export_headroom(
+            scene,
+            stage="vector_3mf_export",
+            # The writer retains the source scene while building native mesh,
+            # document, XML, and ZIP buffers. Re-check live RSS at the actual
+            # export boundary instead of trusting the earlier build estimate.
+            # Measured whole-writer RSS reached 3.72x scene arrays with
+            # 9-decimal SVG-like coordinates; 5x leaves room for allocator
+            # and visual/template buffers outside the sampled arrays.
+            workspace_multiplier=5.0,
+        )
         export_scene_with_bambu_metadata(
             scene=scene,
             output_path=out_path,
@@ -2836,8 +2971,12 @@ def _run_vector_branch(ctx: dict) -> dict:
             base_height_mm=float(ctx.get("bambu_base_height_mm", 0.0)),
             color_height_mm=float(ctx.get("bambu_color_height_mm", 0.0)),
             face_orientation=str(ctx.get("bambu_face_orientation", "down")),
+            backing_infill_density_percent=int(
+                ctx.get("backing_infill_density_percent", 100)
+            ),
             cover_source=vector_cover_source,
             device_profile_id=ctx.get("device_profile_id") or None,
+            build_plate_id=ctx.get("build_plate_id") or None,
             preserve_template_filament_slots=(
                 False
                 if str(ctx.get("material_source") or "lut") == "material_archive"
@@ -2856,43 +2995,33 @@ def _run_vector_branch(ctx: dict) -> dict:
             },
         )
 
-        # 3. GLB preview
-        _report_progress(ctx, 0.82, "\u751f\u6210 3D \u9884\u89c8\u4e2d... | Generating 3D preview...")
+        # Keep placement translations out of serialized mesh vertices.  The
+        # 3MF writer already centres the unmodified local mesh with the
+        # standard build-item transform.  Centre the retained scene only after
+        # the package is complete so the GLB preview keeps its historical bed
+        # coordinates without changing float32 topology in the 3MF.
+        if bool(ctx.get("center_on_bed", True)):
+            s09_export_3mf._center_scene_on_printer_bed(
+                scene,
+                ctx.get("printer_id", "bambu-h2d"),
+            )
+
+        # 3. Reuse an already validated lightweight GLB when available.
+        # Generate must never turn the exact print scene into a browser asset.
+        _report_progress(ctx, 0.82, "\u5b8c\u6210\u751f\u6210\u4e2d... | Finalizing generation...")
         glb_path = None
         glb_t0 = time.perf_counter()
-        try:
-            glb_path = os.path.join(OUTPUT_DIR, generate_preview_filename(base_name))
-            glb_source_scene = _make_vector_glb_preview_scene(
-                scene,
-                structure_mode=structure_mode,
-                color_mode=vec_color_mode,
-                enable_relief=bool(ctx.get("enable_relief", False)),
-            )
-            vector_glb_preview.export_vector_glb_preview(
-                scene=glb_source_scene,
-                output_path=glb_path,
-                structure_mode=structure_mode,
-                color_mode=vec_color_mode,
-                preview_colors=vec_preview_colors,
-                slot_list=list(vec_slot_list),
-                analysis=analysis_for_glb,
-                ctx=ctx,
-            )
+        reusable_glb_path = ctx.get("preview_glb_path")
+        if (
+            isinstance(reusable_glb_path, str)
+            and os.path.isfile(reusable_glb_path)
+        ):
+            glb_path = reusable_glb_path
             log.debug(
-                "Vector preview GLB exported",
+                "Vector preview GLB reused",
                 extra={
-                    "event": "vector_glb_exported",
+                    "event": "vector_glb_reused",
                     "path": str(glb_path),
-                },
-            )
-        except COORDINATOR_HANDLED_ERRORS as e:
-            glb_path = None
-            log.warning(
-                "Vector preview GLB export skipped",
-                extra={
-                    "event": "vector_glb_exported_skipped",
-                    "error_type": type(e).__name__,
-                    "error_message": str(e),
                 },
             )
         vector_timing["export_glb_s"] = time.perf_counter() - glb_t0

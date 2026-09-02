@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from "framer-motion";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   listGradientCardMaterials,
@@ -20,6 +20,11 @@ import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import { useI18n } from "../i18n/context";
 import { tRuntime } from "../i18n/runtime";
 import { useSettingsStore } from "../stores/settingsStore";
+import {
+  captureGeneratedArtifactIdentity,
+  isGeneratedArtifactIdentityCurrent,
+  registerGeneratedArtifactInvalidator,
+} from "../stores/generatedArtifactInvalidation";
 import Button from "./ui/Button";
 import {
   StatusBanner,
@@ -164,6 +169,20 @@ export default function MaterialRecipeQueryPanel() {
   const [swatchDownloadUrl, setSwatchDownloadUrl] = useState<string | null>(null);
   const [swatchPreviewUrl, setSwatchPreviewUrl] = useState<string | null>(null);
   const [collapsedBrandGroupKeys, setCollapsedBrandGroupKeys] = useState<string[]>([]);
+  const swatchRequestSequenceRef = useRef(0);
+
+  useEffect(
+    () =>
+      registerGeneratedArtifactInvalidator(({ preservePreviews }) => {
+        swatchRequestSequenceRef.current += 1;
+        setIsGeneratingSwatch(false);
+        setSwatchDownloadUrl(null);
+        if (!preservePreviews) {
+          setSwatchPreviewUrl(null);
+        }
+      }),
+    [],
+  );
 
   const canAddToCollection = result !== null && result.predicted_hex !== undefined;
   const isAlreadyCollected = useMemo(() => {
@@ -205,12 +224,28 @@ export default function MaterialRecipeQueryPanel() {
 
   const handleGenerateSwatch = useCallback(async () => {
     if (collectedRecipes.length === 0) return;
+    const settings = useSettingsStore.getState();
+    const requestIdentity = captureGeneratedArtifactIdentity(
+      settings.deviceProfileId,
+      settings.buildPlateId,
+    );
+    const requestSequence = ++swatchRequestSequenceRef.current;
+    const isCurrentRequest = (): boolean => {
+      const latestSettings = useSettingsStore.getState();
+      return (
+        requestSequence === swatchRequestSequenceRef.current &&
+        isGeneratedArtifactIdentityCurrent(
+          requestIdentity,
+          latestSettings.deviceProfileId,
+          latestSettings.buildPlateId,
+        )
+      );
+    };
     setIsGeneratingSwatch(true);
     setError(null);
     setSwatchDownloadUrl(null);
     setSwatchPreviewUrl(null);
     try {
-      const settings = useSettingsStore.getState();
       const response = await generateMaterialRecipeSwatch({
         recipes: collectedRecipes.map((r) => ({
           directory_names: [...r.directoryNames].reverse(),
@@ -226,17 +261,22 @@ export default function MaterialRecipeQueryPanel() {
         slicer: settings.slicerSoftware,
         nozzle_size: settings.nozzleSize,
         device_profile_id: settings.deviceProfileId,
+        build_plate_id: settings.buildPlateId,
       });
+      if (!isCurrentRequest()) return;
       setSwatchDownloadUrl(response.download_url);
       setSwatchPreviewUrl(response.preview_url ?? null);
     } catch (err) {
+      if (!isCurrentRequest()) return;
       const message = resolveMaterialRecipeError(
         err,
         t("material_recipe_generate_swatch_failed"),
       );
       setError(message);
     } finally {
-      setIsGeneratingSwatch(false);
+      if (isCurrentRequest()) {
+        setIsGeneratingSwatch(false);
+      }
     }
   }, [collectedRecipes, swatchBlockSize, swatchGap, swatchCols, swatchStructureMode, t]);
 

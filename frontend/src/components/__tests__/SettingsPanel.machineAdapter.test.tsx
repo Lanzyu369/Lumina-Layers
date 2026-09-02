@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 vi.mock("../../api/system", () => ({
   clearCache: vi.fn(),
@@ -25,6 +25,7 @@ const SLICERS: SlicerOption[] = [
   { id: "BambuStudio", display_name: "Bambu Studio" },
   { id: "OrcaSlicer", display_name: "OrcaSlicer" },
   { id: "FlashStudio", display_name: "Flash Studio Desktop" },
+  { id: "QIDIStudio", display_name: "QIDI Studio" },
 ];
 
 const PRINTERS: PrinterInfo[] = [
@@ -49,11 +50,27 @@ const PRINTERS: PrinterInfo[] = [
       },
       {
         device_profile_id: "BambuStudio:bbl:bambu-lab-h2d:0.4",
+        machine_profile_id: "BambuStudio:bbl:bambu-lab-h2d",
         slicer_id: "BambuStudio",
         nozzle_size: "0.4",
         source_profile_name: "Bambu Lab H2D 0.4 nozzle",
         revision: "sha256:bambu",
         supported: true,
+        build_plates: [
+          {
+            id: "textured-pei-plate",
+            display_name: "Textured PEI Plate",
+            display_name_zh: "纹理PEI打印板",
+            image_url: "/api/system/machine-registry/assets/slicers/BambuStudio/build_plates/bed_pei.png",
+          },
+          {
+            id: "smooth-pei-plate",
+            display_name: "Smooth PEI Plate / High Temp Plate",
+            display_name_zh: "光面PEI打印板 / 高温打印板",
+            image_url: "/api/system/machine-registry/assets/slicers/BambuStudio/build_plates/bed_high_templ.png",
+          },
+        ],
+        default_build_plate_id: "textured-pei-plate",
       },
       {
         device_profile_id: "BambuStudio:bbl:bambu-lab-h2d:0.6",
@@ -114,10 +131,32 @@ const PRINTERS: PrinterInfo[] = [
     thumbnail: "slicers/FlashStudio/02.01.01.00/assets/flashforge-guider-3-ultra_cover.png",
     device_profiles: ["0.4"].map((nozzleSize) => ({
       device_profile_id: `FlashStudio:flashforge:flashforge-guider-3-ultra:${nozzleSize}`,
+      machine_profile_id: "FlashStudio:flashforge:flashforge-guider-3-ultra",
       slicer_id: "FlashStudio",
       nozzle_size: nozzleSize,
       source_profile_name: `Flashforge Guider 3 Ultra ${nozzleSize} Nozzle`,
       revision: `sha256:flash-guider-${nozzleSize}`,
+      supported: true,
+      build_plates: [],
+      default_build_plate_id: "",
+    })),
+  },
+  {
+    id: "qidi-q2",
+    display_name: "Q2",
+    brand: "QIDI",
+    bed_width: 270,
+    bed_depth: 270,
+    bed_height: 256,
+    supported_nozzle_sizes: ["0.2", "0.4"],
+    supported_slicers: ["QIDIStudio"],
+    thumbnail: "slicers/QIDIStudio/02.07.02.60/assets/q2_cover.png",
+    device_profiles: ["0.2", "0.4"].map((nozzleSize) => ({
+      device_profile_id: `QIDIStudio:qidi:q2:${nozzleSize}`,
+      slicer_id: "QIDIStudio",
+      nozzle_size: nozzleSize,
+      source_profile_name: `Q2 ${nozzleSize} nozzle`,
+      revision: `sha256:qidi-q2-${nozzleSize}`,
       supported: true,
     })),
   },
@@ -202,6 +241,100 @@ describe("SettingsPanel machine adapter registry UI", () => {
         "BambuStudio:bbl:bambu-lab-h2d:0.4",
       );
     });
+  });
+
+  it("shows native plates as a horizontal strip without stretching artwork", async () => {
+    renderPanel();
+
+    const strip = await screen.findByTestId("build-plate-horizontal-strip");
+    expect(strip).toHaveClass("flex", "overflow-x-auto");
+    expect(strip).toHaveAttribute("role", "radiogroup");
+    const textured = within(strip).getByRole("radio", {
+      name: "纹理PEI打印板",
+    });
+    const smooth = within(strip).getByRole("radio", {
+      name: "光面PEI打印板 / 高温打印板",
+    });
+    expect(textured).toHaveAttribute("aria-checked", "true");
+    const artwork = textured.querySelector("img");
+    expect(artwork).not.toBeNull();
+    expect(artwork).toHaveClass("max-h-full", "max-w-full", "object-contain");
+
+    fireEvent.click(smooth);
+    expect(useSettingsStore.getState().buildPlateId).toBe("smooth-pei-plate");
+    expect(
+      useSettingsStore.getState().buildPlateSelections[
+        "BambuStudio:bbl:bambu-lab-h2d"
+      ],
+    ).toBe("smooth-pei-plate");
+  });
+
+  it("moves radio focus with arrow keys and stores the focused plate", async () => {
+    renderPanel();
+
+    const strip = await screen.findByTestId("build-plate-horizontal-strip");
+    const textured = within(strip).getByRole("radio", {
+      name: "纹理PEI打印板",
+    });
+    const smooth = within(strip).getByRole("radio", {
+      name: "光面PEI打印板 / 高温打印板",
+    });
+
+    expect(textured).toHaveAttribute("tabindex", "0");
+    expect(smooth).toHaveAttribute("tabindex", "-1");
+    textured.focus();
+
+    expect(fireEvent.keyDown(textured, { key: "ArrowRight" })).toBe(false);
+    expect(smooth).toHaveFocus();
+    await waitFor(() => {
+      expect(useSettingsStore.getState().buildPlateId).toBe("smooth-pei-plate");
+      expect(smooth).toHaveAttribute("tabindex", "0");
+      expect(textured).toHaveAttribute("tabindex", "-1");
+    });
+  });
+
+  it("clears the active plate for machines without plates and restores the remembered choice", async () => {
+    renderPanel();
+
+    const strip = await screen.findByTestId("build-plate-horizontal-strip");
+    fireEvent.click(
+      within(strip).getByRole("radio", {
+        name: "光面PEI打印板 / 高温打印板",
+      }),
+    );
+    expect(useSettingsStore.getState().buildPlateId).toBe("smooth-pei-plate");
+
+    act(() => {
+      const settings = useSettingsStore.getState();
+      settings.setSlicerSoftware("FlashStudio");
+      settings.setPrinterModel("flashforge-guider-3-ultra");
+      settings.setNozzleSize("0.4");
+      settings.setDeviceProfileId(
+        "FlashStudio:flashforge:flashforge-guider-3-ultra:0.4",
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("build-plate-selector")).not.toBeInTheDocument();
+      expect(useSettingsStore.getState().buildPlateId).toBe("");
+    });
+
+    act(() => {
+      const settings = useSettingsStore.getState();
+      settings.setSlicerSoftware("BambuStudio");
+      settings.setPrinterModel("bambu-h2d");
+      settings.setNozzleSize("0.4");
+      settings.setDeviceProfileId("BambuStudio:bbl:bambu-lab-h2d:0.4");
+    });
+
+    await waitFor(() => {
+      expect(useSettingsStore.getState().buildPlateId).toBe("smooth-pei-plate");
+    });
+    expect(
+      useSettingsStore.getState().buildPlateSelections[
+        "BambuStudio:bbl:bambu-lab-h2d"
+      ],
+    ).toBe("smooth-pei-plate");
   });
 
   it("renders visual printer cards and selecting one updates the active machine", async () => {
@@ -340,6 +473,31 @@ describe("SettingsPanel machine adapter registry UI", () => {
     expect(
       screen.queryByTestId("machine-adapter-nozzle-flashforge-guider-3-ultra-0_8"),
     ).not.toBeInTheDocument();
+  });
+
+  it("shows QIDI Studio's native Q2 nozzles and device profile ids", async () => {
+    useSettingsStore.setState({
+      printerModel: "qidi-q2",
+      slicerSoftware: "QIDIStudio",
+      nozzleSize: "0.4",
+      deviceProfileId: "QIDIStudio:qidi:q2:0.4",
+    });
+    renderPanel();
+
+    await openMachineDialog();
+    await screen.findByTestId("machine-adapter-card-qidi-q2");
+    const nozzle02 = await screen.findByTestId("machine-adapter-nozzle-qidi-q2-0_2");
+    const nozzle04 = await screen.findByTestId("machine-adapter-nozzle-qidi-q2-0_4");
+    expect(nozzle02).toHaveTextContent(/0\.2\s*(mm|毫米)/);
+    expect(nozzle04).toHaveTextContent(/0\.4\s*(mm|毫米)/);
+    expect(screen.queryByTestId("machine-adapter-nozzle-qidi-q2-0_6")).not.toBeInTheDocument();
+
+    fireEvent.click(nozzle02);
+    await waitFor(() => {
+      expect(useSettingsStore.getState().deviceProfileId).toBe(
+        "QIDIStudio:qidi:q2:0.2",
+      );
+    });
   });
 
   it("shows a visible error when printer options fail to load", async () => {

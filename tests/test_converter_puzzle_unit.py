@@ -228,6 +228,8 @@ def _build_generate_body(session_id: str) -> dict[str, Any]:
                 "printer_id": "bambu-h2d",
                 "slicer": "BambuStudio",
                 "nozzle_size": "0.2",
+                "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d:0.2",
+                "build_plate_id": "smooth-pei-plate",
             },
         },
     }
@@ -376,6 +378,37 @@ def test_generate_puzzle_worker_missing_output_uses_public_error_detail(tmp_path
     assert raw_status in logged_error
 
 
+def test_generate_puzzle_rejects_piece_missing_export_transform_metadata(
+    tmp_path: Path,
+) -> None:
+    """A successful piece file without S09 transform metadata is unsafe to assemble."""
+
+    session_id, _preview_cache = _make_session()
+    piece_path = tmp_path / "piece-without-transform-metadata.3mf"
+    piece_path.write_bytes(b"piece-3mf")
+    _mock_pool.submit = AsyncMock(
+        return_value={
+            "threemf_path": str(piece_path),
+            "glb_path": None,
+            "status_msg": "ok",
+        }
+    )
+
+    try:
+        with patch.object(puzzle_router.log, "error") as log_error:
+            response = client.post(
+                "/api/convert/generate-puzzle",
+                json=_build_generate_body(session_id),
+            )
+    finally:
+        _test_store.close(session_id)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == puzzle_router._PUZZLE_PIECE_GENERATION_FAILED_DETAIL
+    logged_error = log_error.call_args.kwargs["extra"]["error_message"]
+    assert "export transform metadata unavailable" in logged_error
+
+
 def test_generate_puzzle_inherits_dynamic_settings_and_maps_typed_error() -> None:
     from core.material_dynamic_solver import DynamicMaterialCandidateError
 
@@ -445,7 +478,13 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
         os.close(fd_piece)
         with open(piece_path, "wb") as handle:
             handle.write(b"piece-3mf")
-        return {"threemf_path": piece_path, "glb_path": None, "status_msg": "ok"}
+        return {
+            "threemf_path": piece_path,
+            "glb_path": None,
+            "status_msg": "ok",
+            "x_mirrored": False,
+            "mirror_span_mm": round(float(worker_params["target_width_mm"]) * 10.0) / 10.0,
+        }
 
     def _assemble_stub(
         *,
@@ -457,14 +496,17 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
         slicer: str,
         nozzle_size: str = "0.4",
         device_profile_id: str | None = None,
+        build_plate_id: str | None = None,
         overview_png_bytes: bytes | None = None,
     ) -> str:
         assembled_calls.append(
             {
                 "piece_count": len(piece_sources),
+                "offsets_x_mm": [source.offset_x_mm for source in piece_sources],
                 "printer_id": printer_id,
                 "slicer": slicer,
                 "nozzle_size": nozzle_size,
+                "build_plate_id": build_plate_id,
                 "slot_names": slot_names,
                 "overview_bytes": overview_png_bytes,
             }
@@ -479,6 +521,7 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
     generate_body["params"]["params"].update(
         {
             "modeling_mode": "vector",
+            "structure_mode": "Single-sided",
             "enable_relief": True,
             "height_mode": "color",
             "color_height_map": {"#ff0000": 2.2, "#00ff00": 2.6},
@@ -518,6 +561,7 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
     assert assembled_calls[0]["printer_id"] == "bambu-h2d"
     assert assembled_calls[0]["slicer"] == "BambuStudio"
     assert assembled_calls[0]["nozzle_size"] == "0.2"
+    assert assembled_calls[0]["build_plate_id"] == "smooth-pei-plate"
     assert assembled_calls[0]["slot_names"] == ["White"]
     assert isinstance(assembled_calls[0]["overview_bytes"], bytes)
     assert assembled_calls[0]["overview_bytes"].startswith(b"\x89PNG")
@@ -539,6 +583,11 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
         )
     )
     first_piece = layout.pieces[0]
+    assert np.allclose(
+        assembled_calls[0]["offsets_x_mm"],
+        [piece.bbox_mm[0] for piece in layout.pieces],
+        atol=1e-9,
+    )
     first_boundary_path = Path(submitted_params[0]["piece_boundary_geometry_path"])
     with first_boundary_path.open("r", encoding="utf-8") as handle:
         boundary = json.load(handle)
@@ -571,6 +620,82 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
     assert max(boundary_y_values) <= expected_worker_h - 0.5 + 1e-6
 
 
+def test_generate_puzzle_places_face_down_single_sided_pieces_with_actual_mirror_span() -> None:
+    """Assembly placement should use the exact X-mirror span reported by S09."""
+
+    session_id, _preview_cache = _make_session()
+    assembled_sources: list[Any] = []
+
+    async def _submit_stub(
+        _func: object,
+        _piece_image_path: str,
+        _lut_path: str,
+        worker_params: dict[str, Any],
+    ) -> dict[str, Any]:
+        fd_piece, piece_path = tempfile.mkstemp(suffix=".3mf")
+        os.close(fd_piece)
+        Path(piece_path).write_bytes(b"piece-3mf")
+        mirror_span_mm = round(float(worker_params["target_width_mm"]) * 10.0) / 10.0
+        return {
+            "threemf_path": piece_path,
+            "glb_path": None,
+            "status_msg": "ok",
+            "x_mirrored": True,
+            "mirror_span_mm": mirror_span_mm,
+        }
+
+    def _assemble_stub(
+        *,
+        piece_sources: list[Any],
+        output_path: str,
+        **_kwargs: object,
+    ) -> str:
+        assembled_sources.extend(piece_sources)
+        Path(output_path).write_bytes(b"combined-3mf")
+        return output_path
+
+    body = _build_generate_body(session_id)
+    body["params"]["params"]["structure_mode"] = "Single-sided"
+    _mock_pool.submit = AsyncMock(side_effect=_submit_stub)
+
+    try:
+        with patch(
+            "api.routers.converter.puzzle.assemble_puzzle_3mf",
+            side_effect=_assemble_stub,
+        ):
+            response = client.post("/api/convert/generate-puzzle", json=body)
+    finally:
+        _test_store.close(session_id)
+
+    assert response.status_code == 200, response.text
+    layout = build_puzzle_layout(
+        PuzzleLayoutConfig(
+            width_px=120,
+            height_px=80,
+            total_width_mm=90.0,
+            total_height_mm=60.0,
+            style="regular",
+            sizing_mode="grid",
+            rows=2,
+            cols=3,
+            seed=7,
+            connector_style="classic",
+            irregularity_strength=0.35,
+            min_neck_width_mm=1.2,
+        )
+    )
+    expected_offsets = [
+        layout.total_width_mm
+        - piece.bbox_mm[0]
+        - round((piece.bbox_mm[2] - piece.bbox_mm[0]) * 10.0) / 10.0
+        for piece in layout.pieces
+    ]
+    actual_offsets = [source.offset_x_mm for source in assembled_sources]
+
+    assert len(actual_offsets) == len(expected_offsets)
+    assert np.allclose(actual_offsets, expected_offsets, atol=1e-9)
+
+
 def test_generate_puzzle_download_survives_source_session_close(tmp_path: Path) -> None:
     """Final puzzle 3MF downloads should outlive the source session.
     拼图最终 3MF 下载应在源 session 关闭后仍可访问。
@@ -592,7 +717,13 @@ def test_generate_puzzle_download_survives_source_session_close(tmp_path: Path) 
         piece_index += 1
         piece_path = tmp_path / f"piece-{piece_index}.3mf"
         piece_path.write_bytes(b"piece-3mf")
-        return {"threemf_path": str(piece_path), "glb_path": None, "status_msg": "ok"}
+        return {
+            "threemf_path": str(piece_path),
+            "glb_path": None,
+            "status_msg": "ok",
+            "x_mirrored": False,
+            "mirror_span_mm": 1.0,
+        }
 
     def _assemble_stub(*, output_path: str, **_kwargs: object) -> str:
         Path(output_path).write_bytes(b"combined-3mf")
@@ -659,7 +790,13 @@ def test_generate_puzzle_deletes_combined_output_when_assembly_fails(tmp_path: P
         piece_index += 1
         piece_path = tmp_path / f"piece-{piece_index}.3mf"
         piece_path.write_bytes(b"piece-3mf")
-        return {"threemf_path": str(piece_path), "glb_path": None, "status_msg": "ok"}
+        return {
+            "threemf_path": str(piece_path),
+            "glb_path": None,
+            "status_msg": "ok",
+            "x_mirrored": False,
+            "mirror_span_mm": 1.0,
+        }
 
     def _assemble_failure_stub(*, output_path: str, **_kwargs: object) -> str:
         combined_paths.append(output_path)
@@ -791,7 +928,13 @@ def test_generate_puzzle_resizes_heightmap_crop_to_worker_grid() -> None:
         os.close(fd_piece)
         with open(piece_path, "wb") as handle:
             handle.write(b"piece-3mf")
-        return {"threemf_path": piece_path, "glb_path": None, "status_msg": "ok"}
+        return {
+            "threemf_path": piece_path,
+            "glb_path": None,
+            "status_msg": "ok",
+            "x_mirrored": False,
+            "mirror_span_mm": 1.0,
+        }
 
     def _assemble_stub(
         *,
@@ -803,6 +946,7 @@ def test_generate_puzzle_resizes_heightmap_crop_to_worker_grid() -> None:
         slicer: str,
         nozzle_size: str = "0.4",
         device_profile_id: str | None = None,
+        build_plate_id: str | None = None,
         overview_png_bytes: bytes | None = None,
     ) -> str:
         with open(output_path, "wb") as handle:
@@ -872,7 +1016,13 @@ def test_generate_puzzle_emits_hybrid_boundary_log_for_each_piece() -> None:
         os.close(fd_piece)
         with open(piece_path, "wb") as handle:
             handle.write(b"piece-3mf")
-        return {"threemf_path": piece_path, "glb_path": None, "status_msg": "ok"}
+        return {
+            "threemf_path": piece_path,
+            "glb_path": None,
+            "status_msg": "ok",
+            "x_mirrored": False,
+            "mirror_span_mm": 1.0,
+        }
 
     def _assemble_stub(
         *,
@@ -884,6 +1034,7 @@ def test_generate_puzzle_emits_hybrid_boundary_log_for_each_piece() -> None:
         slicer: str,
         nozzle_size: str = "0.4",
         device_profile_id: str | None = None,
+        build_plate_id: str | None = None,
         overview_png_bytes: bytes | None = None,
     ) -> str:
         with open(output_path, "wb") as handle:
@@ -959,7 +1110,13 @@ def test_generate_puzzle_reuses_cached_layout_after_preview() -> None:
         os.close(fd_piece)
         with open(piece_path, "wb") as handle:
             handle.write(b"piece-3mf")
-        return {"threemf_path": piece_path, "glb_path": None, "status_msg": "ok"}
+        return {
+            "threemf_path": piece_path,
+            "glb_path": None,
+            "status_msg": "ok",
+            "x_mirrored": False,
+            "mirror_span_mm": 1.0,
+        }
 
     def _assemble_stub(
         *,
@@ -971,6 +1128,7 @@ def test_generate_puzzle_reuses_cached_layout_after_preview() -> None:
         slicer: str,
         nozzle_size: str = "0.4",
         device_profile_id: str | None = None,
+        build_plate_id: str | None = None,
         overview_png_bytes: bytes | None = None,
     ) -> str:
         with open(output_path, "wb") as handle:
@@ -1109,7 +1267,13 @@ def test_generate_puzzle_filters_fully_transparent_pieces_during_layout() -> Non
         os.close(fd_piece)
         with open(piece_path, "wb") as handle:
             handle.write(b"piece-3mf")
-        return {"threemf_path": piece_path, "glb_path": None, "status_msg": "ok"}
+        return {
+            "threemf_path": piece_path,
+            "glb_path": None,
+            "status_msg": "ok",
+            "x_mirrored": False,
+            "mirror_span_mm": 1.0,
+        }
 
     def _assemble_stub(
         *,
@@ -1121,6 +1285,7 @@ def test_generate_puzzle_filters_fully_transparent_pieces_during_layout() -> Non
         slicer: str,
         nozzle_size: str = "0.4",
         device_profile_id: str | None = None,
+        build_plate_id: str | None = None,
         overview_png_bytes: bytes | None = None,
     ) -> str:
         with open(output_path, "wb") as handle:
@@ -1197,7 +1362,7 @@ def test_worker_generate_model_handles_tiny_piece_with_large_quantize_request() 
     params = {
         "target_width_mm": 10.0,
         "spacer_thick": 1.2,
-        "structure_mode": "Double-sided",
+        "structure_mode": "Single-sided",
         "color_mode": "4-Color (RYBW)",
         "add_loop": False,
         "loop_width": 4.0,
@@ -1244,6 +1409,8 @@ def test_worker_generate_model_handles_tiny_piece_with_large_quantize_request() 
         assert result["threemf_path"].endswith(".3mf")
         assert isinstance(result["status_msg"], str)
         assert result["status_msg"]
+        assert result["x_mirrored"] is True
+        assert result["mirror_span_mm"] == 10.0
     finally:
         for path in (image_path, lut_path):
             if path.exists():
@@ -1398,4 +1565,9 @@ def test_worker_generate_model_preserves_svg_puzzle_piece_dimensions_for_matched
 
         assert isinstance(result["threemf_path"], str)
         assert result["threemf_path"].endswith(".3mf")
+        assert result["x_mirrored"] is False
+        assert np.isclose(
+            result["mirror_span_mm"],
+            round(float(params["target_width_mm"]) * 10.0) / 10.0,
+        )
         assert not any("matched_rgb_path shape" in str(call.args[0]) for call in warning_mock.call_args_list)

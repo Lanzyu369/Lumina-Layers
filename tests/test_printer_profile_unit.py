@@ -7,6 +7,7 @@ Covers:
   - Task 0.2 nozzle support: profile metadata and nozzle-size-aware resolution
 """
 
+import json
 from pathlib import Path
 import pytest
 
@@ -107,6 +108,9 @@ class TestNormalizeSettingsIdentifiers:
 
     def test_normalize_flash_studio_software_id(self) -> None:
         assert normalize_slicer_software_id("flash studio desktop") == "FlashStudio"
+
+    def test_normalize_qidi_studio_software_id(self) -> None:
+        assert normalize_slicer_software_id("qidi studio") == "QIDIStudio"
 
 
 class TestProfileRequiredFields:
@@ -210,6 +214,41 @@ class TestLoadPrinterTemplate:
         assert template["filament_vendor"] == ["Flashforge"] * 8
         assert "Flashforge" in str(template["default_filament_profile"])
 
+    @pytest.mark.parametrize(
+        ("printer_id", "model", "nozzle_size"),
+        [
+            ("qidi-q2", "Q2", "0.2"),
+            ("qidi-q2", "Q2", "0.4"),
+            ("qidi-q2c", "Q2C", "0.2"),
+            ("qidi-q2c", "Q2C", "0.4"),
+            ("qidi-x-max-4", "X-Max 4", "0.2"),
+            ("qidi-x-max-4", "X-Max 4", "0.4"),
+            ("qidi-x-plus-5", "X-Plus 5", "0.4"),
+        ],
+    )
+    def test_qidi_templates_keep_native_machine_and_lumina_process_identity(
+        self,
+        printer_id: str,
+        model: str,
+        nozzle_size: str,
+    ) -> None:
+        profile = get_printer_profile(printer_id)
+        template_name = profile.get_template_file("QIDIStudio", nozzle_size=nozzle_size)
+        template = load_printer_template(
+            printer_id,
+            slicer="QIDIStudio",
+            nozzle_size=nozzle_size,
+        )
+
+        assert (Path("printer_profiles") / template_name).exists()
+        assert template["printer_model"] == model
+        assert template["printer_settings_id"] == f"{model} {nozzle_size} nozzle"
+        assert template["printer_variant"] == nozzle_size
+        assert template["nozzle_diameter"] == [nozzle_size]
+        assert template["version"] == "02.07.02.60"
+        assert template["layer_height"] == "0.08"
+        assert template["line_width"] == ("0.22" if nozzle_size == "0.2" else "0.42")
+
     def test_load_printer_template_reads_0_2_variant(self) -> None:
         template = load_printer_template("bambu-p1s", nozzle_size=0.2)
         assert template["nozzle_diameter"] == ["0.2"]
@@ -305,3 +344,96 @@ class TestCheckedInNozzleVariants:
         ]
 
         assert not missing, f"Missing 0.2 template siblings: {missing}"
+
+
+class TestLuminaLayerHeightContract:
+    """Slicer layers must not span multiple physical Lumina material layers."""
+
+    def test_first_layer_print_height_matches_0_08_model_layer(self) -> None:
+        profiles_dir = Path(__file__).resolve().parents[1] / "printer_profiles"
+        template_names: set[str] = set()
+        for profile in list_printer_profiles():
+            slicers = {*profile.slicer_templates, "BambuStudio", "OrcaSlicer"}
+            for slicer in slicers:
+                for nozzle_size in ("0.4", "0.2"):
+                    template_names.add(
+                        profile.get_template_file(
+                            slicer,
+                            nozzle_size=nozzle_size,
+                        )
+                    )
+
+        mismatches = []
+        for template_name in sorted(template_names):
+            template_path = profiles_dir / template_name
+            if not template_path.is_file():
+                continue
+            settings = json.loads(template_path.read_text(encoding="utf-8"))
+            layer_height = str(settings.get("layer_height") or "").strip()
+            first_layer_height = str(
+                settings.get("initial_layer_print_height") or ""
+            ).strip()
+            if layer_height == "0.08" and first_layer_height != layer_height:
+                mismatches.append(
+                    (template_name, layer_height, first_layer_height)
+                )
+
+        assert mismatches == []
+
+
+class TestSlicerTemplateCompatibilityContract:
+    """Generated projects must be sliceable by their declared printer."""
+
+    @pytest.mark.parametrize("nozzle_size", ["0.4", "0.2"])
+    def test_orca_p2s_process_declares_its_p2s_printer(
+        self,
+        nozzle_size: str,
+    ) -> None:
+        profile = get_printer_profile("bambu-p2s")
+        template_name = profile.get_template_file(
+            "OrcaSlicer",
+            nozzle_size=nozzle_size,
+        )
+        template_path = (
+            Path(__file__).resolve().parents[1]
+            / "printer_profiles"
+            / template_name
+        )
+        template = json.loads(template_path.read_text(encoding="utf-8"))
+
+        assert template["print_compatible_printers"] == [
+            template["printer_settings_id"]
+        ]
+
+@pytest.mark.parametrize(
+    ("slicer", "nozzle_size"),
+    (
+        ("BambuStudio", "0.4"),
+        ("BambuStudio", "0.2"),
+        ("OrcaSlicer", "0.4"),
+        ("OrcaSlicer", "0.2"),
+    ),
+)
+def test_a1_mini_waiting_temperature_compensation_is_marked_as_flush(
+    slicer: str,
+    nozzle_size: str,
+) -> None:
+    """Keep the purge-chute extrusion out of printable-bed validation.
+
+    保证废料口补偿挤出被标记为冲刷路径，不参与热床边界校验。
+    """
+
+    _PRINTER_TEMPLATE_CACHE.clear()
+    template = load_printer_template(
+        "bambu-a1-mini",
+        slicer=slicer,
+        nozzle_size=nozzle_size,
+    )
+    gcode = str(template["change_filament_gcode"])
+    marker = "Compensate for filament spillage during waiting temperature"
+    marker_offset = gcode.index(marker)
+    flush_start = gcode.rfind("; FLUSH_START", 0, marker_offset)
+    flush_end = gcode.find("; FLUSH_END", marker_offset)
+
+    assert flush_start >= 0
+    assert flush_end > marker_offset

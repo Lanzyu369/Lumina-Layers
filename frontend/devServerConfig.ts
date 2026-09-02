@@ -4,6 +4,7 @@ export const DEFAULT_API_PROXY_TARGET = "http://localhost:8000";
 export const DEFAULT_ALLOWED_HOSTS = ["online.luminastudio.com.cn"] as const;
 
 interface DevServerEnv {
+  PORT?: string;
   VITE_DEV_HOST?: string;
   VITE_DEV_PORT?: string;
   VITE_API_PROXY_TARGET?: string;
@@ -43,7 +44,7 @@ export function resolveDevServerConfig(env: DevServerEnv) {
 
   return {
     host: env.VITE_DEV_HOST?.trim() || DEFAULT_DEV_HOST,
-    port: parsePort(env.VITE_DEV_PORT) ?? DEFAULT_DEV_PORT,
+    port: parsePort(env.PORT) ?? parsePort(env.VITE_DEV_PORT) ?? DEFAULT_DEV_PORT,
     strictPort: true,
     allowedHosts,
   };

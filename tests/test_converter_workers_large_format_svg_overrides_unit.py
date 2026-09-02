@@ -199,14 +199,24 @@ def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
         nozzle_size="0.4",
         enable_base_layer_height_modifier=True,
         enable_relief=False,
+        backing_color_id=1,
     )
 
     result = None
+    from core import vector_engine as vector_engine_module
+
     with (
         patch(
             "core.pipeline.vector_branch._build_vector_processor",
             return_value=_FlatVectorProcessor(),
         ),
+        patch(
+            "core.vector_engine._concatenate_meshes_fast",
+            wraps=vector_engine_module._concatenate_meshes_fast,
+        ) as bounded_concat,
+        patch(
+            "core.vector_engine._enforce_vector_mesh_runtime_headroom",
+        ) as memory_guard,
         patch(
             "api.workers.converter_workers._rasterize_tile_for_cover",
             return_value=None,
@@ -217,6 +227,16 @@ def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
             "lut.npy",
             params,
         )
+
+    bounded_concat.assert_called_once()
+    assert any(
+        call.kwargs.get("stage") == "large_format_vector_board_merge"
+        for call in memory_guard.call_args_list
+    )
+    assert any(
+        call.kwargs.get("stage") == "large_format_vector_3mf_export"
+        for call in memory_guard.call_args_list
+    )
 
     try:
         with zipfile.ZipFile(result["zip_path"]) as package:
@@ -1023,7 +1043,7 @@ def test_native_worker_pads_non_override_shapes_with_lut_base_channel(
 
 
 @pytest.mark.parametrize("separate_backing", [False, True])
-@pytest.mark.parametrize("layer_height_mm", [0.10, 0.12])
+@pytest.mark.parametrize("layer_height_mm", [0.04, 0.06, 0.10, 0.12])
 def test_native_worker_uses_material_archive_vector_semantics_per_tile(
     tmp_path,
     separate_backing: bool,
@@ -1045,6 +1065,7 @@ def test_native_worker_uses_material_archive_vector_semantics_per_tile(
         "preview": dict(analysis.preview_colors),
     }
     analysis.num_channels = 3
+    analysis.num_layers = 7
     analysis.matched_shapes[0]["recipe"] = [0] * 7
 
     backing_ids: list[int] = []
@@ -1105,6 +1126,8 @@ def test_native_worker_uses_material_archive_vector_semantics_per_tile(
     )
     params.update(
         material_source="material_archive",
+        spacer_thick=10.0,
+        backing_infill_density_percent=20,
         separate_backing=separate_backing,
         selected_materials=[
             "brand/archive-red",
@@ -1170,6 +1193,14 @@ def test_native_worker_uses_material_archive_vector_semantics_per_tile(
             exported[0]["settings"]["initial_layer_height"]
             == expected_layer_height
         )
+        expected_base_height = round(10.0 / layer_height_mm) * layer_height_mm
+        assert exported[0]["base_height_mm"] == pytest.approx(
+            expected_base_height
+        )
+        assert exported[0]["color_height_mm"] == pytest.approx(
+            7 * layer_height_mm
+        )
+        assert exported[0]["backing_infill_density_percent"] == 20
     finally:
         if result is not None and os.path.exists(result["zip_path"]):
             os.unlink(result["zip_path"])

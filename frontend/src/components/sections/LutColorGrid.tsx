@@ -5,7 +5,7 @@ import { hexToRgb, sortByColorDistance } from "../../utils/colorUtils";
 import { isCardModeAvailable } from "../../utils/cardUtils";
 import type { LutColorEntry, LutColorsCard } from "../../api/types";
 import { useI18n } from "../../i18n/context";
-import { cx, workstationInsetCardClass, workstationPanelCardClass } from "../ui/panelPrimitives";
+import { cx, cardClass, wellPadClass } from "../ui/panelPrimitives";
 import MaterialColorPicker from "./MaterialColorPicker";
 
 export type HueCategory =
@@ -114,7 +114,7 @@ const ColorSwatch = memo(function ColorSwatch({
       aria-selected={isTarget}
       onClick={onClick}
       onDoubleClick={(e) => { e.stopPropagation(); onDoubleClick(); }}
-      className={`relative flex w-full min-w-0 flex-col items-center rounded-[18px] border px-1 py-1.5 transition-colors ${
+      className={`relative flex w-full min-w-0 flex-col items-center rounded-[10px] border px-1 py-1.5 transition-colors ${
         isTarget
           ? "border-amber-400 bg-amber-400/10 ring-2 ring-amber-400/30"
           : "border-transparent hover:border-slate-300 hover:bg-slate-100/70 dark:hover:border-slate-600 dark:hover:bg-slate-900/75"
@@ -122,7 +122,7 @@ const ColorSwatch = memo(function ColorSwatch({
       title={`${entry.hex} · ${isFav ? t("lut_grid_dblclick_unfav") : t("lut_grid_dblclick_fav")}`}
     >
       <span
-        className="block h-[clamp(1.1rem,1.7vw,1.3rem)] w-[clamp(1.1rem,1.7vw,1.3rem)] rounded-lg border border-slate-300/80 dark:border-slate-600/80"
+        className="block h-[clamp(1.1rem,1.7vw,1.3rem)] w-[clamp(1.1rem,1.7vw,1.3rem)] rounded-md border border-slate-300/80 dark:border-slate-600/80"
         style={{ backgroundColor: entry.hex }}
       />
       {isFav && (
@@ -216,7 +216,7 @@ function LutColorGridInner() {
           <p className="mb-2 text-[clamp(0.65rem,0.8vw,0.7rem)] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">{title}</p>
         )}
         <div
-          className="rounded-[22px] border border-slate-200/80 bg-slate-100/70 p-2 shadow-[var(--shadow-control)] dark:border-slate-700/80 dark:bg-slate-900/60"
+          className="panel-well rounded-[10px] p-2"
           style={{
             display: "grid",
             gridTemplateColumns: `repeat(${cols}, ${CARD_CELL_SIZE})`,
@@ -394,7 +394,7 @@ function LutColorGridInner() {
   return (
     <div className="relative h-full">
       {replacePreviewLoading && (
-        <div className="absolute inset-0 z-10 flex items-center justify-center rounded-[28px] bg-slate-950/40">
+        <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-slate-950/40">
           <p className="text-xs text-slate-100">{t("lut_grid_loading")}</p>
         </div>
       )}
@@ -403,10 +403,10 @@ function LutColorGridInner() {
       ) : lutColors.length === 0 ? (
         <p className="py-4 text-sm text-slate-500 dark:text-slate-400">{t("lut_grid_select_lut")}</p>
       ) : (
-        <div className={cx(workstationPanelCardClass, "flex h-full flex-col gap-3")}>
+        <div className={cx(cardClass, "flex h-full flex-col gap-3 px-4 py-4")}>
           {/* Confirmation preview bar */}
           {pendingReplacement && (
-            <div className={cx(workstationInsetCardClass, "flex flex-col gap-2 px-3 py-2")}>
+            <div className={cx(wellPadClass, "flex flex-col gap-2 px-3 py-2")}>
               <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                 {/* Source color swatch(es) */}
                 <div className="flex min-w-0 flex-wrap items-center gap-0.5">
@@ -414,7 +414,7 @@ function LutColorGridInner() {
                     pendingReplacement.sourceColors.map((hex) => (
                       <span
                         key={hex}
-                        className="inline-block h-5 w-5 rounded-lg border border-slate-400/80 dark:border-slate-500/80"
+                        className="inline-block h-5 w-5 rounded-md border border-slate-400/80 dark:border-slate-500/80"
                         style={{ backgroundColor: `#${hex}` }}
                         title={`#${hex}`}
                       />
@@ -425,7 +425,7 @@ function LutColorGridInner() {
                       return (
                         <span
                           key={region.regionId}
-                          className="inline-block h-5 w-5 rounded-lg border border-slate-400/80 dark:border-slate-500/80"
+                          className="inline-block h-5 w-5 rounded-md border border-slate-400/80 dark:border-slate-500/80"
                           style={{ backgroundColor: `#${hex}` }}
                           title={`#${hex} (${region.pixelCount}px)`}
                         />
@@ -433,7 +433,7 @@ function LutColorGridInner() {
                     })
                   ) : (
                     <span
-                      className="inline-block h-5 w-5 rounded-lg border border-slate-400/80 dark:border-slate-500/80"
+                      className="inline-block h-5 w-5 rounded-md border border-slate-400/80 dark:border-slate-500/80"
                       style={{ backgroundColor: `#${pendingReplacement.sourceHex}` }}
                       title={`#${pendingReplacement.sourceHex}`}
                     />
@@ -443,7 +443,7 @@ function LutColorGridInner() {
                 <span className="text-xs text-slate-400">→</span>
                 {/* Target color swatch */}
                 <span
-                  className="inline-block h-5 w-5 shrink-0 rounded-lg border border-slate-400/80 dark:border-slate-500/80"
+                  className="inline-block h-5 w-5 shrink-0 rounded-md border border-slate-400/80 dark:border-slate-500/80"
                   style={{ backgroundColor: `#${pendingReplacement.targetHex}` }}
                   title={`#${pendingReplacement.targetHex}`}
                 />
@@ -493,7 +493,7 @@ function LutColorGridInner() {
             placeholder={t("lut_grid_search_placeholder_short")}
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
-            className="w-full rounded-2xl border border-slate-200/80 bg-slate-100/78 px-3 py-2 text-[clamp(0.65rem,0.85vw,0.75rem)] text-slate-700 outline-none shadow-[var(--shadow-control)] focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900/72 dark:text-slate-100"
+            className="w-full rounded-[10px] border border-slate-200/80 bg-slate-100/78 px-3 py-2 text-[clamp(0.65rem,0.85vw,0.75rem)] text-slate-700 outline-none shadow-[var(--shadow-control)] focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900/72 dark:text-slate-100"
           />
 
           {/* Hue filter bar + mode toggle */}

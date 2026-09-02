@@ -1,10 +1,11 @@
 import type {
   WorkshopImageHandoff,
   WorkshopProjectRecord as SdkWorkshopProjectRecord,
+  WorkshopUiState,
 } from "../contracts";
 import { createBrowserWorkshopFileServices } from "../browserFiles";
 import { readWorkshopColorLibrary } from "../colorLibrary";
-import { handoffWorkshopPngToConverter } from "../converterHandoff";
+import { handoffWorkshopPayloadToConverter } from "../converterHandoff";
 import type { ManagedWorkshopProjectStorage } from "../projectStorage";
 import type { WorkshopDiagnosticSummary } from "../types";
 import type {
@@ -29,6 +30,26 @@ interface ProjectSavePayload {
 
 interface ProjectIdPayload {
   projectId: string;
+}
+
+export function createWorkshopUiState(
+  locale: "zh-CN" | "en-US",
+  theme: "light" | "dark",
+): WorkshopUiState {
+  return {
+    locale,
+    theme,
+    tokens: {
+      "--lumina-surface": theme === "dark" ? "#111827" : "#ffffff",
+      "--lumina-surface-muted":
+        theme === "dark" ? "#1f2937" : "#f5f5f7",
+      "--lumina-text": theme === "dark" ? "#f8fafc" : "#1d1d1f",
+      "--lumina-text-muted":
+        theme === "dark" ? "#cbd5e1" : "#6e6e73",
+      "--lumina-accent": "#0071e3",
+      "--lumina-border": theme === "dark" ? "#475569" : "#d2d2d7",
+    },
+  };
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -173,7 +194,7 @@ export function createWorkshopManagerHandlers(
       const isConfirmedRetry =
         pendingReplacement?.moduleId === context.identity.moduleId &&
         pendingReplacement.projectId === handoff.projectId;
-      const result = await handoffWorkshopPngToConverter(handoff, {
+      const result = await handoffWorkshopPayloadToConverter(handoff, {
         replaceExisting: isConfirmedRetry,
       });
       pendingReplacement =
@@ -186,26 +207,8 @@ export function createWorkshopManagerHandlers(
       return result;
     },
 
-    "ui.getState": () => {
-      const theme = options.theme();
-      return {
-        locale: options.locale(),
-        theme,
-        tokens: {
-          "--lumina-surface":
-            theme === "dark" ? "#111827" : "#ffffff",
-          "--lumina-surface-muted":
-            theme === "dark" ? "#1f2937" : "#f5f5f7",
-          "--lumina-text":
-            theme === "dark" ? "#f8fafc" : "#1d1d1f",
-          "--lumina-text-muted":
-            theme === "dark" ? "#cbd5e1" : "#6e6e73",
-          "--lumina-accent": "#0071e3",
-          "--lumina-border":
-            theme === "dark" ? "#475569" : "#d2d2d7",
-        },
-      };
-    },
+    "ui.getState": () =>
+      createWorkshopUiState(options.locale(), options.theme()),
 
     "status.progress": () => undefined,
 
@@ -305,18 +308,7 @@ export function createSyntheticWorkshopHandlers(): WorkshopRpcHandlers {
       ],
     }),
     "handoff.image": () => ({ status: "completed" }),
-    "ui.getState": () => ({
-      locale: "en-US",
-      theme: "light",
-      tokens: {
-        "--lumina-surface": "#ffffff",
-        "--lumina-surface-muted": "#f5f5f7",
-        "--lumina-text": "#1d1d1f",
-        "--lumina-text-muted": "#6e6e73",
-        "--lumina-accent": "#0071e3",
-        "--lumina-border": "#d2d2d7",
-      },
-    }),
+    "ui.getState": () => createWorkshopUiState("en-US", "light"),
     "status.progress": () => undefined,
     "status.error": () => undefined,
     "status.diagnostics": () => undefined,

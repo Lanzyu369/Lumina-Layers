@@ -16,6 +16,94 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-08-30",
+    title: {
+      zh: "Lumina Layers — 8 月更新速览",
+      en: "Lumina Layers — August updates",
+    },
+    sections: [
+      {
+        category: { zh: "预览 & 交互", en: "Preview & Interaction" },
+        items: [
+          {
+            zh: "SVG 矢量作品现在默认使用平滑 SVG 轻量预览；修改尺寸和常用创意效果时，画面会直接跟着更新。需要兼容旧显示方式时，可在设置里关闭这个选项。",
+            en: "SVG artwork now uses a smooth lightweight SVG preview by default, with size and common creative changes reflected directly in the viewer. You can switch back to the previous display style in Settings when needed.",
+          },
+          {
+            zh: "点击生成后，画面会继续使用轻量预览，不会先加载体积很大的打印模型；下载的 3MF 仍按当前设置精确生成。",
+            en: "After you select Generate, the viewer keeps using the lightweight model instead of loading the much larger print model, while the downloaded 3MF is still generated precisely from your current settings.",
+          },
+          {
+            zh: "模型覆面现在会显示改色后的实际画面，不再退回原始颜色；SVG 轮廓也会保持平滑。",
+            en: "The model-surface preview now shows the genuinely recoloured artwork instead of reverting to its original colours, while SVG edges stay smooth.",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    version: "2026-08-23",
+    title: {
+      zh: "Lumina Layers — 8 月更新速览",
+      en: "Lumina Layers — August updates",
+    },
+    sections: [
+      {
+        category: { zh: "新功能", en: "New" },
+        items: [
+          {
+            zh: "8 月 23 日：新增 QIDI Studio 支持，可直接为 Q2、Q2C、X-Max 4 和 X-Plus 5 生成适配的多色 3MF。喷嘴选项按软件内的机型清单提供且最大为 0.4 毫米；导出文件保留 Lumina 工艺参数。",
+            en: "August 23: Added QIDI Studio support for multicolour 3MF exports targeting the Q2, Q2C, X-Max 4, and X-Plus 5. Nozzle choices follow QIDI Studio's machine list and are capped at 0.4 mm, while Lumina process settings remain intact.",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    version: "2026-08-14",
+    title: {
+      zh: "Lumina Layers — 8 月更新",
+      en: "Lumina Layers — August Update",
+    },
+    sections: [
+      {
+        category: { zh: "新功能", en: "New" },
+        items: [
+          {
+            zh: "现在可以把原图、输出参数、全图改色和自定义配方历史一起保存为 Lumina 项目文件，之后恢复项目继续比较不同设置或耗材；局部区域改色仍会明确提示仅保留在当前会话。",
+            en: "You can now save the source artwork, output settings, whole-image colour changes, and custom recipe history as a Lumina project, then restore it to compare other settings or filaments. Spatial colour edits still show a clear current-session-only notice.",
+          },
+          {
+            zh: "设置里现在可以直接选择切片软件原生打印板；Lumina 会按切片软件与打印机型号分别记忆，并把选择写进生成的 3MF。",
+            en: "You can now choose a slicer's native build plate in Settings. Lumina remembers it for each slicer and printer model, then writes the choice into generated 3MF files.",
+          },
+          {
+            zh: "底板厚度现在最高可设为 10 mm，并可单独调节深层底板填充率；靠近观赏面的区域仍会自动保持实心。",
+            en: "Backing thickness can now be set up to 10 mm, with a separate infill control for deeper backing while the viewing-surface zone automatically stays solid.",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    version: "2026-08-13",
+    title: {
+      zh: "Lumina Layers — 8 月更新",
+      en: "Lumina Layers — August Update",
+    },
+    sections: [
+      {
+        category: { zh: "新功能", en: "New" },
+        items: [
+          {
+            zh: "设置里新增“导出 3MF 时沿用上传文件名”开关，默认关闭；开启后，普通单件作品会把“海报.png”下载为“海报.3mf”，批量、拼图和大画幅仍使用原有名称。",
+            en: "Settings now include an optional “Use uploaded filename for 3MF exports” switch. It is off by default; when enabled, a normal single-item “poster.png” downloads as “poster.3mf”, while batch, puzzle, and large-format exports keep their existing names.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-08-08",
     title: {
       zh: "Lumina Layers — 材料配方颜色一致性",

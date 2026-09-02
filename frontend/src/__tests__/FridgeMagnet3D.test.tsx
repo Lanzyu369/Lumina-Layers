@@ -88,8 +88,6 @@ describe("FridgeMagnet3D", () => {
         enabled={false}
         modelBounds={modelBounds}
         magnets={[roundMagnet]}
-        scaleX={1}
-        scaleY={1}
         selectedMagnetId={null}
         onSelectMagnet={vi.fn()}
         onUpdateMagnetCenter={vi.fn()}
@@ -102,8 +100,6 @@ describe("FridgeMagnet3D", () => {
         enabled={true}
         modelBounds={null}
         magnets={[roundMagnet]}
-        scaleX={1}
-        scaleY={1}
         selectedMagnetId={null}
         onSelectMagnet={vi.fn()}
         onUpdateMagnetCenter={vi.fn()}
@@ -118,8 +114,6 @@ describe("FridgeMagnet3D", () => {
         enabled={true}
         modelBounds={modelBounds}
         magnets={[roundMagnet, rectMagnet]}
-        scaleX={1}
-        scaleY={1}
         selectedMagnetId={rectMagnet.id}
         onSelectMagnet={vi.fn()}
         onUpdateMagnetCenter={vi.fn()}
@@ -157,8 +151,6 @@ describe("FridgeMagnet3D", () => {
         enabled={true}
         modelBounds={modelBounds}
         magnets={[roundMagnet]}
-        scaleX={1}
-        scaleY={1}
         selectedMagnetId={null}
         onSelectMagnet={onSelectMagnet}
         onUpdateMagnetCenter={onUpdateMagnetCenter}
@@ -191,8 +183,6 @@ describe("FridgeMagnet3D", () => {
         enabled={true}
         modelBounds={modelBounds}
         magnets={[roundMagnet]}
-        scaleX={1}
-        scaleY={1}
         selectedMagnetId={null}
         onSelectMagnet={onSelectMagnet}
         onUpdateMagnetCenter={onUpdateMagnetCenter}
@@ -224,8 +214,6 @@ describe("FridgeMagnet3D", () => {
         cameraPanModifierActive={true}
         modelBounds={modelBounds}
         magnets={[roundMagnet]}
-        scaleX={1}
-        scaleY={1}
         selectedMagnetId={null}
         onSelectMagnet={onSelectMagnet}
         onUpdateMagnetCenter={onUpdateMagnetCenter}
@@ -248,8 +236,6 @@ describe("FridgeMagnet3D", () => {
         enabled={true}
         modelBounds={modelBounds}
         magnets={[roundMagnet]}
-        scaleX={1}
-        scaleY={1}
         selectedMagnetId={null}
         onSelectMagnet={vi.fn()}
         onUpdateMagnetCenter={onUpdateMagnetCenter}
@@ -285,8 +271,6 @@ describe("FridgeMagnet3D", () => {
         enabled={true}
         modelBounds={modelBounds}
         magnets={[roundMagnet]}
-        scaleX={1}
-        scaleY={1}
         selectedMagnetId={null}
         onSelectMagnet={vi.fn()}
         onUpdateMagnetCenter={onUpdateMagnetCenter}
@@ -317,8 +301,6 @@ describe("FridgeMagnet3D", () => {
         enabled={true}
         modelBounds={modelBounds}
         magnets={[roundMagnet]}
-        scaleX={1}
-        scaleY={1}
         selectedMagnetId={null}
         onSelectMagnet={vi.fn()}
         onUpdateMagnetCenter={onUpdateMagnetCenter}
@@ -364,8 +346,6 @@ describe("FridgeMagnet3D", () => {
           enabled={true}
           modelBounds={modelBounds}
           magnets={[magnet]}
-          scaleX={1}
-          scaleY={1}
           selectedMagnetId={null}
           onSelectMagnet={vi.fn()}
           onUpdateMagnetCenter={handleUpdateMagnetCenter}
@@ -405,8 +385,6 @@ describe("FridgeMagnet3D", () => {
         enabled={true}
         modelBounds={modelBounds}
         magnets={[roundMagnet]}
-        scaleX={1}
-        scaleY={1}
         selectedMagnetId={null}
         onSelectMagnet={vi.fn()}
         onUpdateMagnetCenter={vi.fn()}
@@ -424,14 +402,12 @@ describe("FridgeMagnet3D", () => {
     expect(document.body.style.cursor).toBe("default");
   });
 
-  it("scales proxy placement without scaling the proxy footprint itself", () => {
+  it("places the proxy at the same centred millimetres used by generate", () => {
     const { container } = render(
       <FridgeMagnet3D
         enabled={true}
         modelBounds={modelBounds}
         magnets={[rectMagnet]}
-        scaleX={2}
-        scaleY={3}
         selectedMagnetId={null}
         onSelectMagnet={vi.fn()}
         onUpdateMagnetCenter={vi.fn()}
@@ -440,12 +416,12 @@ describe("FridgeMagnet3D", () => {
 
     const proxy = container.querySelector('group[name="fridge-magnet-proxy-magnet-rect"]');
     expect(proxy).not.toBeNull();
-    expect(proxy?.getAttribute("position")).toBe("8,-9,1.4");
+    expect(proxy?.getAttribute("position")).toBe("4,-3,1.4");
     expect(proxy?.getAttribute("scale")).toBeNull();
     expect(container.querySelector("group[scale]")).toBeNull();
   });
 
-  it("converts scaled world-space drag movement back into raw preview-space center updates", () => {
+  it("stores drag movement in the same absolute millimetres sent to generate", () => {
     const onUpdateMagnetCenter = vi.fn();
 
     const { container } = render(
@@ -453,8 +429,6 @@ describe("FridgeMagnet3D", () => {
         enabled={true}
         modelBounds={modelBounds}
         magnets={[roundMagnet]}
-        scaleX={2}
-        scaleY={2}
         selectedMagnetId={null}
         onSelectMagnet={vi.fn()}
         onUpdateMagnetCenter={onUpdateMagnetCenter}
@@ -471,11 +445,11 @@ describe("FridgeMagnet3D", () => {
 
     const [id, centerX, centerY] = onUpdateMagnetCenter.mock.lastCall ?? [];
     expect(id).toBe(roundMagnet.id);
-    expect(centerX).toBeCloseTo(2, 6);
-    expect(centerY).toBeCloseTo(2, 6);
+    expect(centerX).toBeCloseTo(4, 6);
+    expect(centerY).toBeCloseTo(4, 6);
   });
 
-  it("uses the latest scale props when drag starts after a re-render", () => {
+  it("does not reinterpret centred millimetres after display bounds change", () => {
     const onUpdateMagnetCenter = vi.fn();
     const onSelectMagnet = vi.fn();
 
@@ -484,8 +458,6 @@ describe("FridgeMagnet3D", () => {
         enabled={true}
         modelBounds={modelBounds}
         magnets={[rectMagnet]}
-        scaleX={1}
-        scaleY={1}
         selectedMagnetId={null}
         onSelectMagnet={onSelectMagnet}
         onUpdateMagnetCenter={onUpdateMagnetCenter}
@@ -495,10 +467,14 @@ describe("FridgeMagnet3D", () => {
     rerender(
       <FridgeMagnet3D
         enabled={true}
-        modelBounds={modelBounds}
+        modelBounds={{
+          minX: -20,
+          maxX: 20,
+          minY: -30,
+          maxY: 30,
+          maxZ: 8,
+        }}
         magnets={[rectMagnet]}
-        scaleX={2}
-        scaleY={2}
         selectedMagnetId={null}
         onSelectMagnet={onSelectMagnet}
         onUpdateMagnetCenter={onUpdateMagnetCenter}
@@ -513,8 +489,8 @@ describe("FridgeMagnet3D", () => {
 
     const [id, centerX, centerY] = onUpdateMagnetCenter.mock.lastCall ?? [];
     expect(id).toBe(rectMagnet.id);
-    expect(centerX).toBeCloseTo(2, 6);
-    expect(centerY).toBeCloseTo(2, 6);
+    expect(centerX).toBeCloseTo(4, 6);
+    expect(centerY).toBeCloseTo(4, 6);
   });
 
   it("keeps the geometry cache key stable when only the magnet center changes", () => {

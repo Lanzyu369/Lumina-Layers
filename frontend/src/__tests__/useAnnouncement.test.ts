@@ -27,9 +27,67 @@ function makeEntry(version: string): AnnouncementEntry {
 }
 
 describe("useAnnouncement", () => {
-  it("announces consistent material recipe colours", () => {
-    expect(ANNOUNCEMENTS[0]?.version).toBe("2026-08-08");
-    const items = ANNOUNCEMENTS[0]?.sections.flatMap((section) => section.items) ?? [];
+  it("announces smooth SVG previews and the compatibility setting", () => {
+    const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-08-30");
+    const items = entry?.sections.flatMap((section) => section.items) ?? [];
+
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("平滑 SVG 轻量预览") &&
+          item.zh.includes("尺寸") &&
+          item.zh.includes("设置") &&
+          item.en.includes("smooth lightweight SVG preview") &&
+          item.en.includes("size") &&
+          item.en.includes("Settings"),
+      ),
+    ).toBe(true);
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("模型覆面") &&
+          item.zh.includes("改色") &&
+          item.en.includes("model-surface") &&
+          item.en.includes("recoloured"),
+      ),
+    ).toBe(true);
+  });
+
+  it("announces the optional uploaded filename setting", () => {
+    const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-08-13");
+    const items = entry?.sections.flatMap((section) => section.items) ?? [];
+
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("导出 3MF 时沿用上传文件名") &&
+          item.zh.includes("默认关闭") &&
+          item.zh.includes("批量、拼图和大画幅") &&
+          item.en.includes("Use uploaded filename for 3MF exports") &&
+          item.en.includes("off by default") &&
+          item.en.includes("batch, puzzle, and large-format"),
+      ),
+    ).toBe(true);
+  });
+
+  it("announces slicer-native build plate selection", () => {
+    const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-08-14");
+    const items = entry?.sections.flatMap((section) => section.items) ?? [];
+
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("切片软件原生打印板") &&
+          item.zh.includes("写进生成的 3MF") &&
+          item.en.includes("native build plate") &&
+          item.en.includes("generated 3MF files"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps consistent material recipe colours in announcement history", () => {
+    const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-08-08");
+    const items = entry?.sections.flatMap((section) => section.items) ?? [];
 
     expect(
       items.some(
@@ -55,6 +113,23 @@ describe("useAnnouncement", () => {
           item.en.includes("Material-profile") &&
           item.en.toLowerCase().includes("simulated recipe colours") &&
           item.en.toLowerCase().includes("relief"),
+      ),
+    ).toBe(true);
+  });
+
+  it("announces backing thickness and infill controls in the latest update", () => {
+    const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-08-14");
+    const items = entry?.sections.flatMap((section) => section.items) ?? [];
+
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("10 mm") &&
+          item.zh.includes("填充率") &&
+          item.zh.includes("观赏面") &&
+          item.en.includes("10 mm") &&
+          item.en.toLowerCase().includes("infill") &&
+          item.en.toLowerCase().includes("viewing-surface"),
       ),
     ).toBe(true);
   });
@@ -101,6 +176,24 @@ describe("useAnnouncement", () => {
           item.en.includes("preinstalled") &&
           item.en.includes("uninstalled") &&
           item.en.includes("Lumina"),
+      ),
+    ).toBe(true);
+  });
+
+  it("announces QIDI Studio and its machine-specific nozzle support", () => {
+    const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-08-23");
+    const items = entry?.sections.flatMap((section) => section.items) ?? [];
+
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("QIDI Studio") &&
+          item.zh.includes("Q2C") &&
+          item.zh.includes("X-Max 4") &&
+          item.zh.includes("X-Plus 5") &&
+          item.zh.includes("0.4") &&
+          item.en.includes("QIDI Studio") &&
+          item.en.includes("Lumina process settings"),
       ),
     ).toBe(true);
   });

@@ -51,6 +51,13 @@ function cloneVirtualMaterials(
   }));
 }
 
+function normalizeBackingInfillDensityPercent(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 100;
+  }
+  return Math.min(100, Math.max(5, Math.round(value)));
+}
+
 function normalizeImportedDynamicLayerCount(
   value: unknown,
   fallback: number,
@@ -105,6 +112,8 @@ export const RECIPE_IMPORT_WARNING_BACK_LABELS_UNAVAILABLE =
   "recipe_import_warning_back_labels_unavailable";
 export const RECIPE_IMPORT_WARNING_SPATIAL_EDITS_NOT_SERIALIZED =
   "recipe_import_warning_spatial_edits_not_serialized";
+export const RECIPE_IMPORT_WARNING_REGION_RECIPES_NOT_RESTORED =
+  "recipe_import_warning_region_recipes_not_restored";
 export const RECIPE_IMPORT_WARNING_WORKSHOP_DEGRADED =
   "recipe_import_workshop_degraded";
 
@@ -492,6 +501,9 @@ export function restoreConverterRecipe(
       };
     },
   );
+  if (recipeOverrides.length > 0) {
+    warnings.push(RECIPE_IMPORT_WARNING_REGION_RECIPES_NOT_RESTORED);
+  }
 
   // V2+ optional: custom_recipe_history — fromModel is forced to false on import
   // because we left the original session's forward-model context.
@@ -630,9 +642,13 @@ export function restoreConverterRecipe(
     target_width_mm: conv.base.target_width_mm,
     target_height_mm: conv.base.target_height_mm,
     quantize_colors: conv.base.quantize_colors,
+    quantize_colors_unlocked:
+      conv.base.quantize_colors_unlocked ?? conv.base.quantize_colors > 256,
     high_precision_3d_preview: Boolean(conv.base.high_precision_3d_preview),
     enable_cleanup: conv.base.enable_cleanup,
     hue_enable: dynamicMaterialEnabled ? false : conv.base.hue_enable,
+    use_lut_constrained: Boolean(conv.base.use_lut_constrained),
+    auto_dynamic_range: Boolean(conv.base.auto_dynamic_range),
     chroma_gate: conv.base.chroma_gate,
     selectedNativeBrandKey: source?.selected_native_brand_key ?? "",
     selectedNativeDbNames: [...(source?.selected_native_db_names ?? [])],
@@ -665,6 +681,12 @@ export function restoreConverterRecipe(
       normalizedFridgeMagnets,
     ),
     base_spacer_thick: conv.geometry.spacer_thick,
+    backing_infill_density_percent:
+      conv.relief.enable_relief || puzzleEnabled
+        ? 100
+        : normalizeBackingInfillDensityPercent(
+            conv.geometry.backing_infill_density_percent,
+          ),
     structure_mode: (
       fridgeMagnetEnabled
         ? "Single-sided"
@@ -702,7 +724,13 @@ export function restoreConverterRecipe(
     // Color ops
     replacement_regions: replacementRegions,
     free_color_set: freeColorSet,
-    recipe_overrides: recipeOverrides,
+    // Region IDs and masks belong to the old preview session. Keep the
+    // serialized field for file compatibility, but never activate those
+    // overrides in a fresh session; history entries remain available for the
+    // user to apply after selecting a new region.
+    // 区域 ID 与掩码属于旧预览会话。文件字段继续保留以兼容旧项目，但新会话
+    // 不直接激活；用户可重新选区后从自定义配方历史中应用。
+    recipe_overrides: [],
     customRecipeHistory: customRecipeHistory,
     // Clear remap state — replacement_regions already contains merged data
     colorRemapMap: {},

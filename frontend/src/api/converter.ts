@@ -22,18 +22,23 @@ import type {
   GradientGroupsResponse,
   RegionDetectResponse,
   RegionReplaceResponse,
+  FreeColorMutationResponse,
   RecipePredictRequest,
   RecipePredictResponse,
   RecipeOverrideApplyRequest,
   RecipeOverrideApplyResponse,
-  DynamicMaterialResultResponse,
   RegionRecipeRequest,
   RegionRecipeResponse,
+  ResetReplacementsResponse,
+  ReplacementHistoryResponse,
+  SelectionDocumentResponse,
+  SelectionMutationRequest,
   AutoDetectColorsResponse,
   ModelSurfaceHitTriangle,
   ModelSurfaceModelTransform,
   ModelSurfaceSelectResponse,
   ModelSurfaceUploadResponse,
+  VectorPreviewRendererResponse,
 } from "./types";
 
 /** 上传图片 + 参数，获取 2D 预览（返回 JSON，含 session_id 和 preview_url） */
@@ -70,10 +75,15 @@ export async function convertPreview(
 export async function convertGenerate(
   sessionId: string,
   params: ConvertGenerateRequest,
+  preserveUploadFilenameFor3mf = false,
 ): Promise<GenerateResponse> {
   const response = await apiClient.post<GenerateResponse>(
     "/convert/generate",
-    { session_id: sessionId, params },
+    {
+      session_id: sessionId,
+      preserve_upload_filename_for_3mf: preserveUploadFilenameFor3mf,
+      params,
+    },
     { timeout: 0 },
   );
   return response.data;
@@ -113,8 +123,17 @@ export async function selectModelSurface(
 }
 
 /** 生成验证色卡 3MF：从当前 session 的调色板生成可打印的色块色卡 */
+export interface ColorCardDeviceSelection {
+  printer_id: string;
+  slicer: string;
+  nozzle_size: string;
+  device_profile_id?: string;
+  build_plate_id?: string;
+}
+
 export async function generateColorCard(
   sessionId: string,
+  device: ColorCardDeviceSelection,
   targetWidthMm: number = 100,
   spacerThick: number = 0.48,
   showLabels: boolean = true,
@@ -126,6 +145,7 @@ export async function generateColorCard(
       target_width_mm: targetWidthMm,
       spacer_thick: spacerThick,
       show_labels: showLabels,
+      ...device,
     },
     { timeout: 0 },
   );
@@ -357,7 +377,7 @@ export async function replaceColorsBatch(
   return response.data;
 }
 
-/** 按预览像素坐标读取原始匹配源色，避免换色后的展示图影响全选点色。 */
+/** 按预览像素坐标读取当前匹配色，用于同颜色全选跟随用户已替换/自定义后的预览。 */
 export async function sourceColorPick(
   sessionId: string,
   x: number,
@@ -446,15 +466,44 @@ export async function colorHighlight(
   return response.data;
 }
 
+/** Read the shared, revisioned editor selection. */
+export async function getEditorSelection(
+  sessionId: string,
+): Promise<SelectionDocumentResponse> {
+  const response = await apiClient.get<SelectionDocumentResponse>(
+    `/convert/selection/${encodeURIComponent(sessionId)}`,
+  );
+  return response.data;
+}
+
+/** Apply one point, same-colour, brush, or clear mutation to the shared selection. */
+export async function mutateEditorSelection(
+  request: SelectionMutationRequest,
+): Promise<SelectionDocumentResponse> {
+  const response = await apiClient.post<SelectionDocumentResponse>(
+    "/convert/selection/mutate",
+    request,
+    { timeout: 3_600_000 },
+  );
+  return response.data;
+}
+
 /** 检测点击位置的连通区域 */
 export async function detectRegion(
   sessionId: string,
   x: number,
   y: number,
+  options?: { includePreview?: boolean },
 ): Promise<RegionDetectResponse> {
+  const body: Record<string, unknown> = {
+    session_id: sessionId,
+    x,
+    y,
+    include_preview: options?.includePreview ?? false,
+  };
   const response = await apiClient.post<RegionDetectResponse>(
     "/convert/region-detect",
-    { session_id: sessionId, x, y },
+    body,
     { timeout: 3_600_000 },
   );
   return response.data;
@@ -484,11 +533,15 @@ export async function regionReplace(
   sessionId: string,
   replacementColor: string,
   scope?: GradientRegionReplaceScope,
+  selectionRevision?: number,
 ): Promise<RegionReplaceResponse> {
   const body: Record<string, unknown> = {
     session_id: sessionId,
     replacement_color: replacementColor,
   };
+  if (selectionRevision !== undefined) {
+    body.selection_revision = selectionRevision;
+  }
   if (scope) {
     body.gradient_group_index = scope.gradientGroupIndex;
     if (scope.gradientRegionIndex !== undefined) {
@@ -640,6 +693,22 @@ export async function getGlbStatus(
   return response.data;
 }
 
+/** Rebuild only the browser GLB renderer for an active native Vector session. */
+export async function rebuildVectorPreviewRenderer(
+  sessionId: string,
+  enableSmoothVectorPreview: boolean,
+): Promise<VectorPreviewRendererResponse> {
+  const response = await apiClient.post<VectorPreviewRendererResponse>(
+    "/convert/vector-preview-renderer",
+    {
+      session_id: sessionId,
+      enable_smooth_vector_preview: enableSmoothVectorPreview,
+    },
+    { timeout: 30_000 },
+  );
+  return response.data;
+}
+
 /** Predict a custom recipe color against the active preview session/source. */
 export async function predictCustomRecipe(
   request: RecipeOverrideApplyRequest | RecipePredictRequest,
@@ -706,12 +775,20 @@ export async function predictRecipe(
   return response.data;
 }
 
-/** 重置所有颜色替换响应 */
-export interface ResetReplacementsResponse extends DynamicMaterialResultResponse {
-  status: string;
-  message: string;
-  preview_url: string;
-  preview_glb_url?: string | null;
+export async function mutateFreeColors(
+  sessionId: string,
+  action: "toggle" | "clear" | "replace",
+  colorHexes: string[] = [],
+): Promise<FreeColorMutationResponse> {
+  const response = await apiClient.post<FreeColorMutationResponse>(
+    "/convert/free-colors",
+    {
+      session_id: sessionId,
+      action,
+      color_hexes: colorHexes,
+    },
+  );
+  return response.data;
 }
 
 /** 重置所有颜色替换，恢复原始预览 */
@@ -721,6 +798,19 @@ export async function resetReplacements(
   const response = await apiClient.post<ResetReplacementsResponse>(
     "/convert/reset-replacements",
     { session_id: sessionId },
+    { timeout: 3_600_000 },
+  );
+  return response.data;
+}
+
+/** 撤销或重做一次颜色调整。 */
+export async function replacementHistory(
+  sessionId: string,
+  action: "undo" | "redo",
+): Promise<ReplacementHistoryResponse> {
+  const response = await apiClient.post<ReplacementHistoryResponse>(
+    "/convert/replacement-history",
+    { session_id: sessionId, action },
     { timeout: 3_600_000 },
   );
   return response.data;

@@ -19,11 +19,15 @@ import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 
+import numpy as np
 import pytest
 import trimesh
 
 from config import TEMP_DIR
-from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
+from utils.bambu_3mf_writer import (
+    export_scene_with_bambu_metadata,
+    read_wipe_tower_placement_warnings,
+)
 from utils.merged_bambu_3mf_writer import (
     MergedBambu3MFWriter,
     MergedItem,
@@ -38,13 +42,31 @@ def _make_source_3mf(
     offset_x: float = 0.0,
     offset_y: float = 0.0,
     *,
+    width_mm: float = 10.0,
+    depth_mm: float = 8.0,
+    height_mm: float = 2.0,
+    printer_id: str = "bambu-h2d",
+    slicer: str = "BambuStudio",
     enable_base_layer_height_modifier: bool = False,
+    backing_infill_density_percent: int = 100,
+    base_height_mm: float = 0.8,
+    color_height_mm: float = 2.4,
+    mesh_override: trimesh.Trimesh | None = None,
 ) -> Path:
     """Create a minimal real Bambu 3MF with one slot."""
     os.makedirs(TEMP_DIR, exist_ok=True)
     scene = trimesh.Scene()
-    box = trimesh.creation.box(extents=[10.0, 8.0, 2.0])
-    box.apply_translation([offset_x + 5.0, offset_y + 4.0, 1.0])
+    if mesh_override is None:
+        box = trimesh.creation.box(extents=[width_mm, depth_mm, height_mm])
+        box.apply_translation(
+            [
+                offset_x + width_mm / 2.0,
+                offset_y + depth_mm / 2.0,
+                height_mm / 2.0,
+            ]
+        )
+    else:
+        box = mesh_override.copy()
     box.metadata["bambu_material_name"] = "Bambu PLA Black"
     scene.add_geometry(box, geom_name="Bambu PLA Black")
 
@@ -57,10 +79,13 @@ def _make_source_3mf(
         preview_colors={"Bambu PLA Black": (16, 16, 16, 255)},
         settings={},
         color_mode="4-Color",
+        printer_id=printer_id,
+        slicer=slicer,
         enable_base_layer_height_modifier=enable_base_layer_height_modifier,
-        base_height_mm=0.8,
-        color_height_mm=2.4,
+        base_height_mm=base_height_mm,
+        color_height_mm=color_height_mm,
         face_orientation="down",
+        backing_infill_density_percent=backing_infill_density_percent,
     )
     return Path(path)
 
@@ -341,6 +366,200 @@ class TestMergedWriterBambuCompatibility:
                 except OSError:
                     pass
 
+    def test_per_item_model_preserves_adjacent_float32_vertices(self) -> None:
+        """Merged serialization must not collapse distinct float32 vertices."""
+
+        x0 = np.float32(200.0)
+        x1 = np.nextafter(x0, np.float32(np.inf), dtype=np.float32)
+        precision_mesh = trimesh.Trimesh(
+            vertices=np.array(
+                [
+                    [x0, 0.0, 0.0],
+                    [x1, 0.0, 0.0],
+                    [x0, 1.0, 0.0],
+                    [x0, 0.0, 1.0],
+                ],
+                dtype=np.float64,
+            ),
+            faces=np.array(
+                [[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
+                dtype=np.int64,
+            ),
+            process=False,
+        )
+        assert precision_mesh.is_watertight
+        source = _make_source_3mf(mesh_override=precision_mesh)
+        item = MergedItem(
+            source_filename="precision.png",
+            source_3mf_path=source,
+            slots=(MaterialSlot(0, "Black", "#101010", "GFL00"),),
+            tx_mm=0.0,
+            ty_mm=0.0,
+        )
+        fd, out_path = tempfile.mkstemp(
+            suffix=".3mf",
+            dir=TEMP_DIR,
+            prefix="integ_precision_merged_",
+        )
+        os.close(fd)
+
+        def mesh_coordinates(package_path: Path) -> tuple[
+            list[tuple[float, float, float]],
+            list[tuple[int, int, int]],
+        ]:
+            with zipfile.ZipFile(package_path) as package:
+                root = ET.fromstring(package.read("3D/Objects/object_1.model"))
+            coordinates = [
+                (
+                    float(vertex.get("x", "0")),
+                    float(vertex.get("y", "0")),
+                    float(vertex.get("z", "0")),
+                )
+                for vertex in root.findall(f".//{{{_NS_CORE}}}vertex")
+            ]
+            faces = [
+                (
+                    int(triangle.get("v1", "0")),
+                    int(triangle.get("v2", "0")),
+                    int(triangle.get("v3", "0")),
+                )
+                for triangle in root.findall(f".//{{{_NS_CORE}}}triangle")
+            ]
+            return coordinates, faces
+
+        try:
+            MergedBambu3MFWriter().write(
+                [item],
+                Path(out_path),
+                plate_width_mm=300.0,
+                plate_depth_mm=300.0,
+            )
+
+            source_coordinates, _source_faces = mesh_coordinates(source)
+            merged_coordinates, merged_faces = mesh_coordinates(Path(out_path))
+            assert len(set(source_coordinates)) == len(source_coordinates)
+            assert len(set(merged_coordinates)) == len(merged_coordinates)
+            np.testing.assert_array_equal(
+                np.asarray(merged_coordinates, dtype=np.float32),
+                np.asarray(source_coordinates, dtype=np.float32),
+            )
+            assert all(
+                len({merged_coordinates[index] for index in face}) == 3
+                for face in merged_faces
+            )
+        finally:
+            source.unlink(missing_ok=True)
+            Path(out_path).unlink(missing_ok=True)
+
+    def test_merged_output_recomputes_wipe_tower_for_full_group(self) -> None:
+        src1 = _make_source_3mf(
+            width_mm=50.0,
+            depth_mm=60.0,
+            printer_id="bambu-a1-mini",
+        )
+        src2 = _make_source_3mf(
+            width_mm=50.0,
+            depth_mm=60.0,
+            printer_id="bambu-a1-mini",
+        )
+        items = [
+            MergedItem(
+                source_filename="left.png",
+                source_3mf_path=src1,
+                slots=(MaterialSlot(0, "Black", "#101010", "GFL00"),),
+                tx_mm=10.0,
+                ty_mm=10.0,
+            ),
+            MergedItem(
+                source_filename="right.png",
+                source_3mf_path=src2,
+                slots=(MaterialSlot(0, "Black", "#101010", "GFL00"),),
+                tx_mm=120.0,
+                ty_mm=10.0,
+            ),
+        ]
+        fd, out_path = tempfile.mkstemp(
+            suffix=".3mf",
+            dir=TEMP_DIR,
+            prefix="integ_wipe_group_",
+        )
+        os.close(fd)
+
+        try:
+            MergedBambu3MFWriter().write(
+                items,
+                Path(out_path),
+                plate_width_mm=180.0,
+                plate_depth_mm=180.0,
+            )
+
+            with zipfile.ZipFile(out_path) as package:
+                placement = json.loads(
+                    package.read("Metadata/lumina_wipe_tower_placement.json")
+                )
+                settings = json.loads(
+                    package.read("Metadata/project_settings.config")
+                )
+
+            model_bounds = placement["model_bounds_mm"]
+            model_outer = placement["model_outer_bounds_mm"]
+            tower_outer = placement["tower"]["outer_bounds_mm"]
+            assert model_bounds[2] - model_bounds[0] == pytest.approx(160.0)
+            assert model_bounds[3] - model_bounds[1] == pytest.approx(60.0)
+            assert placement["requires_manual_adjustment"] is False
+            assert settings["enable_prime_tower"] == "1"
+            assert float(settings["wipe_tower_x"][0]) == pytest.approx(
+                placement["tower"]["x_mm"]
+            )
+            assert float(settings["wipe_tower_y"][0]) == pytest.approx(
+                placement["tower"]["y_mm"]
+            )
+            assert (
+                model_outer[2] <= tower_outer[0]
+                or tower_outer[2] <= model_outer[0]
+                or model_outer[3] <= tower_outer[1]
+                or tower_outer[3] <= model_outer[1]
+            )
+            assert read_wipe_tower_placement_warnings(out_path) == []
+        finally:
+            for path in (src1, src2, Path(out_path)):
+                path.unlink(missing_ok=True)
+
+    def test_impossible_merged_layout_embeds_manual_warning(self) -> None:
+        source = _make_source_3mf(
+            width_mm=179.0,
+            depth_mm=179.0,
+            printer_id="bambu-a1-mini",
+        )
+        item = MergedItem(
+            source_filename="full-bed.png",
+            source_3mf_path=source,
+            slots=(MaterialSlot(0, "Black", "#101010", "GFL00"),),
+            tx_mm=0.5,
+            ty_mm=0.5,
+        )
+        fd, out_path = tempfile.mkstemp(
+            suffix=".3mf",
+            dir=TEMP_DIR,
+            prefix="integ_wipe_manual_",
+        )
+        os.close(fd)
+
+        try:
+            MergedBambu3MFWriter().write(
+                [item],
+                Path(out_path),
+                plate_width_mm=180.0,
+                plate_depth_mm=180.0,
+            )
+
+            assert read_wipe_tower_placement_warnings(out_path) == [
+                "wipe_tower_manual_adjustment_required"
+            ]
+        finally:
+            source.unlink(missing_ok=True)
+            Path(out_path).unlink(missing_ok=True)
+
     def test_project_process_and_filament_presets_are_preserved(self) -> None:
         """Merged 3MF keeps source project process/device/filament presets."""
         os.makedirs(TEMP_DIR, exist_ok=True)
@@ -366,6 +585,8 @@ class TestMergedWriterBambuCompatibility:
             printer_id="bambu-p1s",
             slicer="OrcaSlicer",
             nozzle_size="0.2",
+            device_profile_id="OrcaSlicer:bbl:bambu-lab-p1s:0.2",
+            build_plate_id="engineering-plate",
             enable_base_layer_height_modifier=False,
         )
 
@@ -417,10 +638,23 @@ class TestMergedWriterBambuCompatibility:
                     "printer_model",
                     "printer_settings_id",
                     "default_print_profile",
-                    "filament_settings_id",
                     "nozzle_diameter",
                 ):
                     assert merged_project.get(key) == src_project.get(key)
+                assert merged_project["filament_settings_id"] == (
+                    src_project["filament_settings_id"][:1]
+                )
+                assert merged_project["curr_bed_type"] == "Engineering Plate"
+
+                merged_model_settings = ET.fromstring(
+                    out_zip.read("Metadata/model_settings.config")
+                )
+                merged_plate = merged_model_settings.find("plate")
+                assert merged_plate is not None
+                assert {
+                    metadata.get("key"): metadata.get("value")
+                    for metadata in merged_plate.findall("metadata")
+                }["bed_type"] == "Engineering Plate"
         finally:
             for p in (Path(src_path), Path(out_path)):
                 try:
@@ -433,10 +667,16 @@ class TestMergedWriterBambuCompatibility:
         src1 = _make_source_3mf(
             offset_x=0.0,
             enable_base_layer_height_modifier=True,
+            backing_infill_density_percent=20,
+            base_height_mm=10.0,
+            color_height_mm=0.4,
         )
         src2 = _make_source_3mf(
             offset_x=15.0,
             enable_base_layer_height_modifier=True,
+            backing_infill_density_percent=20,
+            base_height_mm=10.0,
+            color_height_mm=0.4,
         )
 
         items = [
@@ -491,6 +731,35 @@ class TestMergedWriterBambuCompatibility:
                 ]
                 assert layer_object_ids == ["1", "2"]
                 assert layer_object_ids != build_ids
+                for layer_object in layer_root.findall("object"):
+                    ranges = layer_object.findall("range")
+                    assert [
+                        (
+                            float(item.get("min_z", "nan")),
+                            float(item.get("max_z", "nan")),
+                        )
+                        for item in ranges
+                    ] == pytest.approx(
+                        [(0.0, 0.4), (0.4, 3.4), (3.4, 10.4)]
+                    )
+                    density_options = [
+                        next(
+                            (
+                                option.text
+                                for option in item.findall("option")
+                                if option.get("opt_key")
+                                == "sparse_infill_density"
+                            ),
+                            None,
+                        )
+                        for item in ranges
+                    ]
+                    assert density_options == ["100%", "100%", None]
+
+                merged_project = json.loads(
+                    zf.read("Metadata/project_settings.config").decode("utf-8")
+                )
+                assert merged_project["sparse_infill_density"] == "20%"
 
                 cut_root = ET.fromstring(zf.read("Metadata/cut_information.xml"))
                 cut_object_ids = [

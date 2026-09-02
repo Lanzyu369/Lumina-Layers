@@ -1,6 +1,28 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+
+vi.mock("../api/converter", async () => {
+  const actual = await vi.importActual<typeof import("../api/converter")>(
+    "../api/converter",
+  );
+  return {
+    ...actual,
+    mutateFreeColors: vi.fn(),
+  };
+});
+
 import { useConverterStore } from "../stores/converter";
 import { translations } from "../i18n/translations";
+import { mutateFreeColors } from "../api/converter";
+
+const mockMutateFreeColors = vi.mocked(mutateFreeColors);
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 // ========== Helpers ==========
 
@@ -11,6 +33,8 @@ function resetStore(): void {
     threemfDiskPath: null,
     downloadUrl: null,
     palette: [],
+    sessionId: null,
+    selectionDocument: null,
   });
 }
 
@@ -18,6 +42,7 @@ function resetStore(): void {
 
 describe("Feature: free-color-mode — Unit Tests", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     resetStore();
   });
 
@@ -35,6 +60,84 @@ describe("Feature: free-color-mode — Unit Tests", () => {
       useConverterStore.getState().toggleFreeColor("ff0000");
       expect(useConverterStore.getState().free_color_set.has("ff0000")).toBe(false);
       expect(useConverterStore.getState().free_color_set.size).toBe(0);
+    });
+
+    it("serializes rapid server-backed toggles for the same color", async () => {
+      const first = deferred<Awaited<ReturnType<typeof mutateFreeColors>>>();
+      const second = deferred<Awaited<ReturnType<typeof mutateFreeColors>>>();
+      mockMutateFreeColors
+        .mockReturnValueOnce(first.promise)
+        .mockReturnValueOnce(second.promise);
+      useConverterStore.setState({ sessionId: "session-a" });
+
+      useConverterStore.getState().toggleFreeColor("ff0000");
+      useConverterStore.getState().toggleFreeColor("ff0000");
+
+      await vi.waitFor(() => expect(mockMutateFreeColors).toHaveBeenCalledTimes(1));
+      first.resolve({
+        status: "ok",
+        free_color_set: ["ff0000"],
+        can_undo: true,
+        can_redo: false,
+      });
+      await vi.waitFor(() => expect(mockMutateFreeColors).toHaveBeenCalledTimes(2));
+      second.resolve({
+        status: "ok",
+        free_color_set: [],
+        can_undo: true,
+        can_redo: false,
+      });
+
+      await vi.waitFor(() => {
+        expect(useConverterStore.getState().free_color_set).toEqual(new Set());
+      });
+      expect(mockMutateFreeColors).toHaveBeenNthCalledWith(
+        1,
+        "session-a",
+        "toggle",
+        ["ff0000"],
+      );
+      expect(mockMutateFreeColors).toHaveBeenNthCalledWith(
+        2,
+        "session-a",
+        "toggle",
+        ["ff0000"],
+      );
+    });
+
+    it("does not let a stalled session block a new session", async () => {
+      const stalled = deferred<Awaited<ReturnType<typeof mutateFreeColors>>>();
+      mockMutateFreeColors
+        .mockReturnValueOnce(stalled.promise)
+        .mockResolvedValueOnce({
+          status: "ok",
+          free_color_set: ["00ff00"],
+          can_undo: true,
+          can_redo: false,
+        });
+      useConverterStore.setState({ sessionId: "session-a" });
+      useConverterStore.getState().toggleFreeColor("ff0000");
+      await vi.waitFor(() => expect(mockMutateFreeColors).toHaveBeenCalledTimes(1));
+
+      useConverterStore.setState({ sessionId: "session-b" });
+      useConverterStore.getState().toggleFreeColor("00ff00");
+
+      await vi.waitFor(() => {
+        expect(mockMutateFreeColors).toHaveBeenCalledTimes(2);
+        expect(useConverterStore.getState().free_color_set).toEqual(
+          new Set(["00ff00"]),
+        );
+      });
+      stalled.resolve({
+        status: "ok",
+        free_color_set: ["ff0000"],
+        can_undo: true,
+        can_redo: false,
+      });
+      await Promise.resolve();
+      expect(useConverterStore.getState().free_color_set).toEqual(
+        new Set(["00ff00"]),
+      );
     });
   });
 

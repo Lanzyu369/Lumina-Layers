@@ -98,7 +98,13 @@ function createTestRecipe(): LuminaRecipe {
           irregularity_strength: 0.35,
           min_neck_width_mm: 1.2,
         },
-        device: { printer_id: "bambu-h2d", slicer: "BambuStudio", nozzle_size: "0.2" },
+        device: {
+          printer_id: "bambu-h2d",
+          slicer: "BambuStudio",
+          nozzle_size: "0.2",
+          device_profile_id: "BambuStudio:bbl:bambu-lab-h2d:0.2",
+          build_plate_id: "textured-pei-plate",
+        },
       },
     },
     integrity: {
@@ -126,6 +132,9 @@ describe("recipe/pngMetadata", () => {
       expect(extracted!.schema_version).toBe(1);
       expect(extracted!.recipe.converter!.base.lut.name).toBe("Test LUT");
       expect(extracted!.recipe.converter!.base.target_width_mm).toBe(80);
+      expect(extracted!.recipe.converter!.device.build_plate_id).toBe(
+        "textured-pei-plate",
+      );
     });
 
     it("preserves all recipe fields through round-trip", async () => {

@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import time
 import uuid
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
@@ -165,6 +166,66 @@ class PostgresSessionBackend(SessionStore):
                 .where(_SESSIONS.c.id == session_uuid)
                 .values(data=encode_session_value(data), last_seen_at=now, expires_at=self._expiry_from(now))
             )
+
+    def compare_and_set(
+        self,
+        session_id: str,
+        key: str,
+        value: Any,
+        *,
+        revision_path: tuple[str, ...],
+        expected_revision: Any,
+    ) -> bool:
+        """Atomically replace a value when its revision field still matches.
+        仅当当前值的 revision 字段仍匹配时，原子替换该 session 字段。
+
+        Args:
+            session_id: Owning session id. (所属 session id。)
+            key: Top-level session field to replace. (待替换的顶层字段。)
+            value: Complete replacement value. (完整的新值。)
+            revision_path: Mapping-key path used to find the revision token.
+                (用于定位版本 token 的映射键路径。)
+            expected_revision: Revision that must still be current.
+                (提交时必须仍然有效的版本值。)
+
+        Returns:
+            ``True`` only when the active session was updated. A missing,
+            closing, retired, or superseded session returns ``False``.
+            仅在活动 session 成功写入时返回 ``True``；不存在、关闭中、
+            已退役或版本已被替换时返回 ``False``。
+        """
+
+        session_uuid = self._session_uuid(session_id)
+        with self._engine.begin() as conn:
+            now = self._now()
+            self._prune_retired(conn, now)
+            row = conn.execute(
+                select(_SESSIONS.c.data, _SESSIONS.c.state)
+                .where(_SESSIONS.c.id == session_uuid)
+                .with_for_update()
+            ).first()
+            if row is None or row._mapping["state"] != "active":
+                return False
+            data = decode_session_value(row._mapping["data"] or {})
+            current = data.get(key)
+            revision: Any = current
+            for field in revision_path:
+                if not isinstance(revision, Mapping) or field not in revision:
+                    return False
+                revision = revision[field]
+            if not revision_path or revision != expected_revision:
+                return False
+            data[key] = value
+            conn.execute(
+                update(_SESSIONS)
+                .where(_SESSIONS.c.id == session_uuid)
+                .values(
+                    data=encode_session_value(data),
+                    last_seen_at=now,
+                    expires_at=self._expiry_from(now),
+                )
+            )
+            return True
 
     def register_temp_file(self, session_id: str, path: str) -> None:
         """注册临时文件路径，session 清理时一并删除。"""

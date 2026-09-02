@@ -13,6 +13,7 @@ import {
   selectVisibleCloisonneColorMeshes,
 } from "../components/CloisonneWire3D";
 import { materializePositionAttributeForGeometryBake } from "../utils/threeQuantizedGeometry";
+import { createPreviewSpace } from "../utils/previewSpace";
 
 // ========== Helpers ==========
 
@@ -294,6 +295,28 @@ describe("CloisonneWire3D — Unit Tests", () => {
       for (let i = 0; i < edges.length; i++) {
         expect(edges[i]).toBe(0);
       }
+    });
+
+    it("rasterizes colour boundaries in scaled display space", () => {
+      const mesh = createRectMesh(0, 0, 4, 2);
+      const previewSpace = createPreviewSpace(
+        { minX: 0, maxX: 4, minY: 0, maxY: 2, maxZ: 1 },
+        2,
+        3,
+      );
+
+      const grid = rasterizeColorMeshesToGrid(
+        [mesh],
+        1,
+        -2,
+        -2,
+        8,
+        6,
+        previewSpace,
+      );
+
+      expect(grid[0]).toBe(0);
+      expect(grid[grid.length - 1]).toBe(0);
     });
 
     it("rasterizes baked quantized GLB color meshes using millimetre coordinates", () => {

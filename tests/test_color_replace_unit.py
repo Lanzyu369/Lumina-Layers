@@ -53,7 +53,7 @@ def _create_session_with_preview() -> str:
     matched[:2, 2:] = [0, 255, 0]   # green
     _test_store.put(sid, "preview_cache", {"matched_rgb": matched})
     _test_store.put(sid, "replacement_regions", [])
-    _test_store.put(sid, "replacement_history", [])
+    _test_store.put(sid, "replacement_undo_stack", [])
     return sid
 
 
@@ -147,7 +147,11 @@ class TestSuccessfulReplacement:
 
 
 class TestReplacementHistory:
-    """Verify replacement_history captures pre-change snapshots."""
+    """Verify replacement_history captures pre-change snapshots.
+
+    撤销/重做改为服务端 checkpoint 机制后，快照入 ``replacement_undo_stack``，
+    每个 checkpoint 的 ``session_fields`` 保存变更前的 ``replacement_regions``。
+    """
 
     def test_history_snapshot_saved_before_change(self) -> None:
         sid = _create_session_with_preview()
@@ -162,9 +166,10 @@ class TestReplacementHistory:
             },
         )
         data = _test_store.get(sid)
-        # History should have one entry: the empty list before first change
-        assert len(data["replacement_history"]) == 1
-        assert data["replacement_history"][0] == []
+        undo_stack = data.get("replacement_undo_stack", [])
+        # One checkpoint captured before the first change: no regions yet.
+        assert len(undo_stack) == 1
+        assert undo_stack[0]["session_fields"]["replacement_regions"] == []
 
         # Second replacement
         client.post(
@@ -176,8 +181,9 @@ class TestReplacementHistory:
             },
         )
         data = _test_store.get(sid)
-        assert len(data["replacement_history"]) == 2
-        # Second snapshot should contain the first replacement
-        assert len(data["replacement_history"][1]) == 1
+        undo_stack = data.get("replacement_undo_stack", [])
+        assert len(undo_stack) == 2
+        # Second snapshot should contain the first replacement region.
+        assert len(undo_stack[1]["session_fields"]["replacement_regions"]) == 1
         assert data["replacement_regions"][-1]["selected_color"] == "#00ff00"
         assert data["replacement_count"] if "replacement_count" in data else True

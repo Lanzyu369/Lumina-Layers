@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   uploadHeightmap: vi.fn(),
   fetchGradientGroups: vi.fn(),
   fetchSessionLutInfo: vi.fn(),
+  mutateFreeColors: vi.fn(),
   showBrowserCompletionNotification: vi.fn(),
 }));
 
@@ -24,6 +25,7 @@ vi.mock("../api/converter", async () => {
     convertGeneratePuzzle: mocks.convertGeneratePuzzle,
     uploadHeightmap: mocks.uploadHeightmap,
     fetchGradientGroups: mocks.fetchGradientGroups,
+    mutateFreeColors: mocks.mutateFreeColors,
   };
 });
 
@@ -191,6 +193,14 @@ describe("converter store relief generate flow", () => {
     });
     mocks.fetchGradientGroups.mockResolvedValue({ groups: [] });
     mocks.fetchSessionLutInfo.mockResolvedValue(null);
+    mocks.mutateFreeColors.mockImplementation(
+      async (_sessionId: string, _action: string, colors: string[]) => ({
+        status: "ok",
+        free_color_set: colors,
+        can_undo: true,
+        can_redo: false,
+      }),
+    );
     mocks.showBrowserCompletionNotification.mockReset();
   });
 
@@ -208,7 +218,7 @@ describe("converter store relief generate flow", () => {
 
     const result = await useConverterStore.getState().submitFullPipeline();
 
-    expect(result).toBe("/api/files/model.glb");
+    expect(result).toBeNull();
     expect(mocks.convertPreview).toHaveBeenCalledOnce();
     expect(mocks.convertGenerate).toHaveBeenCalledOnce();
     const [, generateParams] = mocks.convertGenerate.mock.calls[0];
@@ -221,6 +231,149 @@ describe("converter store relief generate flow", () => {
       }),
     );
     expect(useConverterStore.getState().error).toBeNull();
+  });
+
+  it("replays imported whole-image mappings and keeps portable project color data", async () => {
+    const useConverterStore = await loadStore();
+    const historyEntry = {
+      id: "saved-recipe",
+      recipe: [0, 1, 2, 3],
+      layerOrder: "Top2Bottom",
+      predictedRgb: [20, 30, 40] as [number, number, number],
+      predictedLab: [10, 0, 0] as [number, number, number],
+      hex: "141e28",
+      fromModel: false,
+      createdAtMs: 456,
+    };
+    useConverterStore.setState({
+      ...baseReadyState(),
+      sessionId: null,
+      palette: [],
+      replacement_regions: [
+        {
+          quantized_hex: "111111",
+          matched_hex: "111111",
+          replacement_hex: "eeeeee",
+        },
+      ],
+      free_color_set: new Set(["eeeeee"]),
+      customRecipeHistory: [historyEntry],
+      regionReplacementCount: 0,
+    });
+
+    await useConverterStore.getState().submitPreview();
+
+    const [, previewParams] = mocks.convertPreview.mock.calls[0];
+    expect(previewParams.replacement_regions).toEqual([
+      {
+        quantized_hex: "111111",
+        matched_hex: "111111",
+        replacement_hex: "eeeeee",
+      },
+    ]);
+    const state = useConverterStore.getState();
+    expect(state.replacement_regions).toEqual([
+      {
+        quantized_hex: "111111",
+        matched_hex: "111111",
+        replacement_hex: "eeeeee",
+      },
+    ]);
+    expect(state.free_color_set).toEqual(new Set(["eeeeee"]));
+    expect(state.customRecipeHistory).toEqual([historyEntry]);
+    expect(state.regionReplacementCount).toBe(0);
+    expect(state.recipe_overrides).toEqual([]);
+    expect(mocks.mutateFreeColors).toHaveBeenCalledWith(
+      "session-relief",
+      "replace",
+      ["eeeeee"],
+    );
+  });
+
+  it("keeps portable whole-image color work when the material selection changes", async () => {
+    const useConverterStore = await loadStore();
+    const historyEntry = {
+      id: "saved-recipe",
+      recipe: [0, 1, 2, 3],
+      layerOrder: "Top2Bottom",
+      predictedRgb: [20, 30, 40] as [number, number, number],
+      predictedLab: [10, 0, 0] as [number, number, number],
+      hex: "141e28",
+      fromModel: false,
+      createdAtMs: 456,
+    };
+    useConverterStore.setState({
+      ...baseReadyState(),
+      source_version: "material",
+      selectedMaterialDirNames: ["old-material"],
+      materialBackingMaterialDirName: "old-material",
+      sessionId: "old-session",
+      palette: [
+        {
+          quantized_hex: "101010",
+          matched_hex: "111111",
+          pixel_count: 12,
+          percentage: 100,
+        },
+      ],
+      colorRemapMap: { "111111": "eeeeee" },
+      replacement_regions: [
+        {
+          quantized_hex: "222222",
+          matched_hex: "222222",
+          replacement_hex: "dddddd",
+        },
+      ],
+      free_color_set: new Set(["eeeeee"]),
+      customRecipeHistory: [historyEntry],
+      recipe_overrides: [
+        {
+          region_id: "old-session-region",
+          recipe: [0, 1, 2, 3],
+          layer_order: "Top2Bottom",
+        },
+      ],
+      regionReplacementCount: 1,
+      hasManualPreview: true,
+    });
+
+    useConverterStore
+      .getState()
+      .setSelectedMaterialDirNames(["next-material"]);
+
+    const state = useConverterStore.getState();
+    expect(state.sessionId).toBeNull();
+    expect(state.colorRemapMap).toEqual({});
+    expect(state.replacement_regions).toEqual([
+      {
+        quantized_hex: "222222",
+        matched_hex: "222222",
+        replacement_hex: "dddddd",
+      },
+      {
+        quantized_hex: "#101010",
+        matched_hex: "#111111",
+        replacement_hex: "#eeeeee",
+      },
+    ]);
+    expect(state.free_color_set).toEqual(new Set(["eeeeee"]));
+    expect(state.customRecipeHistory).toEqual([historyEntry]);
+    expect(state.recipe_overrides).toEqual([]);
+    expect(state.regionReplacementCount).toBe(0);
+
+    useConverterStore.getState().setMaterialDynamicLayerCountEnabled(true);
+    useConverterStore.getState().setMaterialMinLayerCount(4);
+    useConverterStore.getState().setMaterialMaxLayerCount(7);
+    useConverterStore
+      .getState()
+      .setMaterialBackingMaterialDirName("next-material");
+
+    const dynamicState = useConverterStore.getState();
+    expect(dynamicState.replacement_regions).toEqual(
+      state.replacement_regions,
+    );
+    expect(dynamicState.free_color_set).toEqual(new Set(["eeeeee"]));
+    expect(dynamicState.customRecipeHistory).toEqual([historyEntry]);
   });
 
   it("sends manual relief color heights as absolute total heights without mutating the store map", async () => {
@@ -300,6 +453,29 @@ describe("converter store relief generate flow", () => {
     expect(useConverterStore.getState().generatePerformanceTiming).toBeNull();
   });
 
+  it("stores manual wipe-tower warnings while keeping the generated download", async () => {
+    const useConverterStore = await loadStore();
+    mocks.convertGenerate.mockResolvedValue({
+      ...generateResponse(),
+      warnings: ["wipe_tower_manual_adjustment_required"],
+    });
+    useConverterStore.setState({
+      ...baseReadyState(),
+      sessionId: "session-relief",
+      palette: PREVIEW_PALETTE,
+      generateWarnings: [],
+    });
+
+    await useConverterStore.getState().submitGenerate();
+
+    expect(useConverterStore.getState().downloadUrl).toBe(
+      "/api/files/model.3mf",
+    );
+    expect(useConverterStore.getState().generateWarnings).toEqual([
+      "wipe_tower_manual_adjustment_required",
+    ]);
+  });
+
   it("sends auto-built relief heights as store values plus spacer thickness", async () => {
     const useConverterStore = await loadStore();
     useConverterStore.setState({
@@ -347,7 +523,7 @@ describe("converter store relief generate flow", () => {
     expect(generateParams.heightmap_max_height).toBeCloseTo(4.2, 10);
   });
 
-  it("shows the generated GLB after heightmap relief generation even when a preview GLB exists", async () => {
+  it("keeps the lightweight GLB after heightmap relief generation", async () => {
     const useConverterStore = await loadStore();
     useConverterStore.setState({
       ...baseReadyState(),
@@ -362,9 +538,10 @@ describe("converter store relief generate flow", () => {
       heightmap_max_height: 3,
     });
 
-    await useConverterStore.getState().submitGenerate();
+    const result = await useConverterStore.getState().submitGenerate();
 
-    expect(useConverterStore.getState().modelUrl).toBe("/api/files/model.glb");
+    expect(result).toBeNull();
+    expect(useConverterStore.getState().modelUrl).toBeNull();
     expect(useConverterStore.getState().previewGlbUrl).toBe(
       "/api/files/flat-preview.glb",
     );
@@ -667,7 +844,7 @@ describe("converter store relief generate flow", () => {
 
     const result = await useConverterStore.getState().submitFullPipeline();
 
-    expect(result).toBe("/api/files/model.glb");
+    expect(result).toBeNull();
     expect(mocks.convertPreview).toHaveBeenCalledOnce();
     expect(mocks.uploadHeightmap).toHaveBeenCalledWith(
       file,

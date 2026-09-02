@@ -1799,10 +1799,7 @@
     "prime_tower_width": "240",
     "prime_volume": "45",
     "print_compatible_printers": [
-        "Bambu Lab X1 Carbon 0.4 nozzle",
-        "Bambu Lab X1 0.4 nozzle",
-        "Bambu Lab P1S 0.4 nozzle",
-        "Bambu Lab X1E 0.4 nozzle"
+        "Bambu Lab P2S 0.4 nozzle"
     ],
     "print_extruder_id": [
         "1",

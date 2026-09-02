@@ -15,6 +15,7 @@ import { useWidgetStore } from "../stores/widgetStore";
 import { useWorkshopStore } from "../workshop/store";
 import { buildAdvancedParams } from "./advancedParamsBuilder";
 import { getRecentClientLogs } from "./clientLog";
+import { resolveVectorPreviewRenderer } from "./vectorPreviewRenderer";
 
 declare const __LUMINA_VERSION__: string | undefined;
 
@@ -175,6 +176,12 @@ export function collectBugReportContext(): BugReportContextPayload {
     isConverterActive && sourceVersion === "legacy"
       ? [...converter.lut_names]
       : null;
+  const vectorPreviewRenderer = isConverterActive
+    ? resolveVectorPreviewRenderer(
+        converter,
+        settings.enableSmoothVectorPreview,
+      )
+    : null;
   const originalImageFile = resolveBugReportOriginalImageFile(converter.imageFile);
 
   return {
@@ -191,6 +198,11 @@ export function collectBugReportContext(): BugReportContextPayload {
       converter: converter.sessionId ?? null,
       single_stage: singleStage.sessionId ?? null,
     },
+    printer_id: settings.printerModel,
+    slicer: settings.slicerSoftware,
+    nozzle_size: settings.nozzleSize,
+    device_profile_id: settings.deviceProfileId,
+    build_plate_id: settings.buildPlateId,
     color_mode: colorMode,
     lut_name: lutName,
     ...(lutNames ? { lut_names: lutNames } : {}),
@@ -213,6 +225,10 @@ export function collectBugReportContext(): BugReportContextPayload {
       : null,
     material_layer_height_mm: isMaterialSource ? converter.materialLayerHeightMm : null,
     material_backing_material_dir_name: isMaterialSource ? converter.materialBackingMaterialDirName : null,
+    preserve_upload_filename_for_3mf:
+      settings.preserveUploadFilenameFor3mf,
+    enable_smooth_vector_preview: settings.enableSmoothVectorPreview,
+    vector_preview_renderer: vectorPreviewRenderer,
     recent_client_logs: getRecentClientLogs(),
     action_history: actionExport.history,
     session_history: actionExport.session_history,

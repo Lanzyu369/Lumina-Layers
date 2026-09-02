@@ -73,7 +73,10 @@ const COLOR_MODE_DOTS: Record<string, string[]> = {
 const DOT_CLS = "inline-block size-2 rounded-full shrink-0 ring-1 ring-black/10 dark:ring-white/20";
 const THICKNESS_LAYER_STEP_MM = 0.08;
 const THICKNESS_SLIDER_MIN_MM = 0.24;
-const THICKNESS_SLIDER_MAX_MM = 3.44;
+const THICKNESS_SLIDER_MAX_MM = 10;
+const BACKING_INFILL_DENSITY_MIN_PERCENT = 5;
+const BACKING_INFILL_DENSITY_MAX_PERCENT = 100;
+const BACKING_INFILL_DENSITY_STEP_PERCENT = 5;
 const GENERIC_HTTP_STATUS_ERROR_RE =
   /(?:Request failed with status code|HTTP(?:\s+error)?|status(?:\s+code)?)\s*\d{3}\b/i;
 const STARTUP_LUT_RETRY_DELAY_MS = 5_000;
@@ -123,6 +126,10 @@ function isInsideUnifiedUploaderDropZone(target: EventTarget | null): boolean {
 
 function isInsideModelSurfaceDropZone(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(target.closest("[data-model-surface-drop-zone='true']"));
+}
+
+function isInsideLocalFileDropZone(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest("[data-local-file-drop-zone='true']"));
 }
 
 const LARGE_FORMAT_PREVIEW_FALLBACK_PREFIX =
@@ -304,6 +311,7 @@ export default function BasicSettings() {
     target_width_mm,
     target_height_mm,
     spacer_thick,
+    backing_infill_density_percent,
     structure_mode,
     modeling_mode,
     enable_relief,
@@ -385,6 +393,7 @@ export default function BasicSettings() {
     target_width_mm: s.target_width_mm,
     target_height_mm: s.target_height_mm,
     spacer_thick: s.spacer_thick,
+    backing_infill_density_percent: s.backing_infill_density_percent,
     structure_mode: s.structure_mode,
     modeling_mode: s.modeling_mode,
     enable_relief: s.enable_relief,
@@ -552,6 +561,9 @@ export default function BasicSettings() {
   const setTargetWidthMm = useConverterStore((s) => s.setTargetWidthMm);
   const setTargetHeightMm = useConverterStore((s) => s.setTargetHeightMm);
   const setSpacerThick = useConverterStore((s) => s.setSpacerThick);
+  const setBackingInfillDensityPercent = useConverterStore(
+    (s) => s.setBackingInfillDensityPercent,
+  );
   const setStructureMode = useConverterStore((s) => s.setStructureMode);
   const setModelingMode = useConverterStore((s) => s.setModelingMode);
   const setEnableCrop = useConverterStore((s) => s.setEnableCrop);
@@ -604,6 +616,10 @@ export default function BasicSettings() {
       const modelFile = files.find(isSupportedModelSurfaceFile);
       const imageFiles = files.filter((file) => isValidImageType(file.type, file.name));
 
+      if (!modelFile && isInsideLocalFileDropZone(target)) {
+        return false;
+      }
+
       if (!modelFile && imageFiles.length === 0) {
         return false;
       }
@@ -624,7 +640,12 @@ export default function BasicSettings() {
   useEffect(() => {
     const handleWindowDragOver = (event: DragEvent) => {
       if (!hasDraggedFiles(event)) return;
-      setDropImportIntent(getDropImportIntent(Array.from(event.dataTransfer?.files ?? [])));
+      const intent = getDropImportIntent(Array.from(event.dataTransfer?.files ?? []));
+      if (isInsideLocalFileDropZone(event.target) && intent !== "model" && intent !== "mixed") {
+        setDropImportIntent(null);
+        return;
+      }
+      setDropImportIntent(intent);
       event.preventDefault();
     };
     const handleWindowDragLeave = (event: DragEvent) => {
@@ -1306,6 +1327,7 @@ export default function BasicSettings() {
         <>
           <Checkbox
             label={t("basic_crop_after_upload")}
+            tooltip={t("basic_crop_after_upload_hint")}
             checked={enableCrop}
             onChange={setEnableCrop}
           />
@@ -1457,6 +1479,7 @@ export default function BasicSettings() {
 
       <RadioGroup
         label={t("basic_source_version_label")}
+        tooltip={t("basic_source_version_hint")}
         value={source_version}
         options={sourceVersionOptions}
         onChange={(value) => setSourceVersion(value as "legacy" | "native" | "material")}
@@ -1558,6 +1581,7 @@ export default function BasicSettings() {
 
           <Dropdown
             label={t("basic_material_layer_height_label")}
+            tooltip={t("basic_material_layer_height_hint")}
             value={String(materialLayerHeightMm)}
             options={materialLayerHeightOptions}
             onChange={(v) => setMaterialLayerHeightMm(Number(v))}
@@ -1565,6 +1589,7 @@ export default function BasicSettings() {
 
           <Dropdown
             label={t("basic_material_backing_label")}
+            tooltip={t("basic_material_backing_hint")}
             value={resolvedMaterialBackingDirName}
             options={materialBackingOptions}
             onChange={(v) => setMaterialBackingMaterialDirName(v || null)}
@@ -1650,6 +1675,7 @@ export default function BasicSettings() {
                   />
                   <Dropdown
                     label={t("basic_layer_height_label")}
+                    tooltip={t("basic_layer_height_hint")}
                     value={String(layer_height_mm ?? selectedLutInfo.layer_height_mm ?? 0.08)}
                     options={supportedLayerHeightOptions}
                     onChange={(value) => setLayerHeightMm(Number(value))}
@@ -1677,6 +1703,7 @@ export default function BasicSettings() {
             <div className="min-w-0 flex-1">
               <Dropdown
                 label={t("basic_brand_label")}
+                tooltip={t("basic_brand_hint")}
                 value={selectedNativeBrand?.brand_key ?? ""}
                 options={nativeBrandOptions}
                 onChange={setNativeBrandKey}
@@ -1722,6 +1749,7 @@ export default function BasicSettings() {
 
               <Slider
                 label={t("basic_native_layer_count_label")}
+                tooltip={t("basic_native_layer_count_hint")}
                 value={nativeLayerCount}
                 min={1}
                 max={15}
@@ -1746,11 +1774,13 @@ export default function BasicSettings() {
                   <div className="grid gap-2">
                     <Checkbox
                       label={t("basic_model_enable")}
+                      tooltip={t("basic_model_enable_hint")}
                       checked={model_enable}
                       onChange={setModelEnable}
                     />
                     <Checkbox
                       label={t("basic_model_only")}
+                      tooltip={t("basic_model_only_hint")}
                       checked={model_only}
                       onChange={setModelOnly}
                     />
@@ -1861,8 +1891,23 @@ export default function BasicSettings() {
       />
 
       {!modelSurfaceEnabled && (
+        <Slider
+          label={t("basic_backing_infill_density")}
+          tooltip={t("basic_backing_infill_density_hint")}
+          value={backing_infill_density_percent}
+          min={BACKING_INFILL_DENSITY_MIN_PERCENT}
+          max={BACKING_INFILL_DENSITY_MAX_PERCENT}
+          step={BACKING_INFILL_DENSITY_STEP_PERCENT}
+          unit="%"
+          onChange={setBackingInfillDensityPercent}
+          disabled={enable_relief || puzzleEnabled}
+        />
+      )}
+
+      {!modelSurfaceEnabled && (
         <RadioGroup
           label={t("basic_structure_mode")}
+          tooltip={t("basic_structure_mode_hint")}
           value={structure_mode}
           options={structureModeOptions}
           onChange={(v) => setStructureMode(v as StructureMode)}
@@ -1873,6 +1918,7 @@ export default function BasicSettings() {
 
       <RadioGroup
         label={t("basic_modeling_mode")}
+        tooltip={t("basic_modeling_mode_hint")}
         value={modeling_mode}
         options={modelingModeOptions}
         onChange={(v) => setModelingMode(v as ModelingMode)}

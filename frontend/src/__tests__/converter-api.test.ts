@@ -9,8 +9,10 @@ import {
   convertPuzzleLayoutPreview,
   beaconCleanupSessionFiles,
   cleanupSessionFiles,
+  detectRegion,
   fetchLutList,
   getFileUrl,
+  generateColorCard,
 } from "../api/converter";
 import { fetchLutCatalog } from "../api/lut";
 import {
@@ -52,6 +54,7 @@ describe("convertPreview", () => {
     enable_outline: true,
     outline_width: 2.5,
     svg_pixels_per_mm: 25.5,
+    enable_smooth_vector_preview: false,
     hue_weight: 0,
     chroma_gate: 0,
     is_dark: false,
@@ -87,6 +90,7 @@ describe("convertPreview", () => {
     expect(fd.get("enable_outline")).toBe("true");
     expect(fd.get("outline_width")).toBe("2.5");
     expect(fd.get("svg_pixels_per_mm")).toBe("25.5");
+    expect(fd.get("enable_smooth_vector_preview")).toBe("false");
 
     // 不应设置 responseType: blob（后端返回 JSON）
     expect(config).toMatchObject({ timeout: 0 });
@@ -428,7 +432,7 @@ describe("convertGenerate", () => {
     fridge_magnets: [],
   };
 
-  it("sends JSON body with session_id and params", async () => {
+  it("defaults the upload-filename preference off in the JSON body", async () => {
     const fakeResponse = {
       status: "ok",
       message: "Model generated",
@@ -443,14 +447,29 @@ describe("convertGenerate", () => {
     const [url, body, config] = mockPost.mock.calls[0];
     expect(url).toBe("/convert/generate");
 
-    // 后端期望 JSON body: { session_id, params }
+    // 后端期望命名偏好位于 params 外层，避免进入模型生成参数。
     expect(body).toEqual({
       session_id: "sess-abc",
+      preserve_upload_filename_for_3mf: false,
       params: generateParams,
     });
 
     expect(config).toMatchObject({ timeout: 0 });
     expect(result).toEqual(fakeResponse);
+  });
+
+  it("sends the enabled upload-filename preference outside params", async () => {
+    mockPost.mockResolvedValueOnce({
+      data: { status: "ok", message: "done", download_url: "/api/files/x" },
+    });
+
+    await convertGenerate("sess-enabled", generateParams, true);
+
+    expect(mockPost.mock.calls[0][1]).toEqual({
+      session_id: "sess-enabled",
+      preserve_upload_filename_for_3mf: true,
+      params: generateParams,
+    });
   });
 
   it("includes optional fields in params when provided", async () => {
@@ -581,9 +600,62 @@ describe("convertGenerate", () => {
     expect(url).toBe("/convert/generate");
     expect(body).toEqual({
       session_id: "sess-native",
+      preserve_upload_filename_for_3mf: false,
       params: nativeParams,
     });
   });
+});
+
+describe("detectRegion", () => {
+  it("defaults to the no-PNG fast path", async () => {
+    const fakeResponse = {
+      region_id: "region-1",
+      color_hex: "#ffffff",
+      pixel_count: 8,
+      preview_url: null,
+      contours: [],
+    };
+    mockPost.mockResolvedValueOnce({ data: fakeResponse });
+
+    const result = await detectRegion("sess-region", 3, 4);
+
+    expect(mockPost).toHaveBeenCalledWith(
+      "/convert/region-detect",
+      {
+        session_id: "sess-region",
+        x: 3,
+        y: 4,
+        include_preview: false,
+      },
+      { timeout: 3_600_000 },
+    );
+    expect(result).toEqual(fakeResponse);
+  });
+
+  it("only requests a highlight PNG when includePreview is explicitly true", async () => {
+    const fakeResponse = {
+      region_id: "region-1",
+      color_hex: "#ffffff",
+      pixel_count: 8,
+      preview_url: "/api/files/region-highlight.png",
+      contours: [],
+    };
+    mockPost.mockResolvedValueOnce({ data: fakeResponse });
+
+    await detectRegion("sess-region", 3, 4, { includePreview: true });
+
+    expect(mockPost).toHaveBeenCalledWith(
+      "/convert/region-detect",
+      {
+        session_id: "sess-region",
+        x: 3,
+        y: 4,
+        include_preview: true,
+      },
+      { timeout: 3_600_000 },
+    );
+  });
+
 });
 
 describe("convertGenerateLargeFormat", () => {
@@ -640,6 +712,48 @@ describe("convertGenerateLargeFormat", () => {
     expect(body).toEqual({ session_id: "sess-large", params });
     expect(config).toMatchObject({ timeout: 0 });
     expect(result.warnings).toEqual(fakeResponse.warnings);
+  });
+});
+
+describe("generateColorCard", () => {
+  it("forwards the complete device and build plate selection", async () => {
+    const response = {
+      status: "ok",
+      message: "generated",
+      download_url: "/api/files/card",
+    };
+    mockPost.mockResolvedValueOnce({ data: response });
+
+    const result = await generateColorCard(
+      "sess-card",
+      {
+        printer_id: "bambu-p1s",
+        slicer: "OrcaSlicer",
+        nozzle_size: "0.2",
+        device_profile_id: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
+        build_plate_id: "smooth-high-temp-plate",
+      },
+      120,
+      0.6,
+      false,
+    );
+
+    expect(mockPost).toHaveBeenCalledWith(
+      "/convert/color-card",
+      {
+        session_id: "sess-card",
+        target_width_mm: 120,
+        spacer_thick: 0.6,
+        show_labels: false,
+        printer_id: "bambu-p1s",
+        slicer: "OrcaSlicer",
+        nozzle_size: "0.2",
+        device_profile_id: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
+        build_plate_id: "smooth-high-temp-plate",
+      },
+      { timeout: 0 },
+    );
+    expect(result).toEqual(response);
   });
 });
 

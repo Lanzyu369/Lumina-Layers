@@ -17,6 +17,13 @@
   --surface-border: transparent;
   --surface-outline: rgba(148, 163, 184, 0.22);
   --surface-text-muted: rgb(100, 116, 139);
+  --surface-card: rgba(255, 255, 255, 0.92);
+  --surface-card-outline: rgba(148, 163, 184, 0.38);
+  --surface-well: rgba(100, 116, 139, 0.09);
+  --surface-divider: rgba(148, 163, 184, 0.32);
+  --shadow-card:
+    0 1px 2px rgba(15, 23, 42, 0.05),
+    0 20px 44px -32px rgba(15, 23, 42, 0.3);
   --shadow-panel-soft: none;
   --shadow-panel-elevated: none;
   --shadow-panel-top: none;
@@ -82,6 +89,13 @@
   --surface-border: transparent;
   --surface-outline: rgba(71, 85, 105, 0.42);
   --surface-text-muted: rgb(148, 163, 184);
+  --surface-card: rgba(15, 23, 42, 0.88);
+  --surface-card-outline: rgba(100, 116, 139, 0.5);
+  --surface-well: rgba(148, 163, 184, 0.1);
+  --surface-divider: rgba(100, 116, 139, 0.45);
+  --shadow-card:
+    0 1px 2px rgba(0, 0, 0, 0.3),
+    0 20px 44px -32px rgba(0, 0, 0, 0.6);
   --shadow-panel-soft: none;
   --shadow-panel-elevated: none;
   --shadow-panel-top: none;
@@ -154,34 +168,57 @@ body.lumina-canvas-orbiting [data-widget-id] {
   box-shadow: none;
 }
 
+/* Hierarchy v2: exactly one bordered "card" level. Everything inside a card
+ * is either a well (tinted, borderless inset) or divided by hairlines.
+ * 层级 v2：全页只有一层带边框的“卡片”；卡片内部只允许“凹槽”（有底色无边框）
+ * 和分割线，禁止再嵌套带边框的圆角矩形。 */
+.panel-card {
+  background: var(--surface-card);
+  border: 1px solid var(--surface-card-outline);
+  box-shadow: var(--shadow-card);
+}
+
+.panel-well {
+  background: var(--surface-well);
+  border: 1px solid transparent;
+}
+
+.panel-divider {
+  border-color: var(--surface-divider);
+}
+
 .surface-divider {
   background: var(--surface-outline);
 }
 
+/* Status banners: left accent bar instead of a fully bordered rounded box,
+ * so hints stop reading as yet another nested card.
+ * 状态提示：左侧色条 + 淡底，不再是一圈完整边框的圆角盒子。 */
 .status-banner {
-  border-radius: 1rem;
-  border: 1px solid transparent;
-  padding: 0.75rem 0.875rem;
+  border-radius: 6px;
+  border: 0;
+  border-left: 3px solid transparent;
+  padding: 0.625rem 0.875rem;
 }
 
 .status-banner[data-tone="info"] {
   background: var(--info-soft);
-  border-color: var(--info-border);
+  border-left-color: rgb(59, 130, 246);
 }
 
 .status-banner[data-tone="success"] {
   background: var(--success-soft);
-  border-color: var(--success-border);
+  border-left-color: rgb(34, 197, 94);
 }
 
 .status-banner[data-tone="warning"] {
   background: var(--warning-soft);
-  border-color: var(--warning-border);
+  border-left-color: rgb(245, 158, 11);
 }
 
 .status-banner[data-tone="error"] {
   background: var(--error-soft);
-  border-color: var(--error-border);
+  border-left-color: rgb(239, 68, 68);
 }
 
 .dock-scrollbar {
@@ -226,6 +263,44 @@ body.lumina-canvas-orbiting [data-widget-id] {
 
 .dark .dock-scrollbar:hover::-webkit-scrollbar-thumb {
   background-color: rgba(96, 165, 250, 0.5);
+}
+
+.selection-marching-ants {
+  stroke-linecap: butt;
+  stroke-linejoin: round;
+}
+
+.selection-marching-ants--white {
+  animation: selection-marching-ants-white 0.5s linear infinite;
+}
+
+.selection-marching-ants--black {
+  animation: selection-marching-ants-black 0.5s linear infinite;
+}
+
+@keyframes selection-marching-ants-white {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: -8;
+  }
+}
+
+@keyframes selection-marching-ants-black {
+  from {
+    stroke-dashoffset: 4;
+  }
+  to {
+    stroke-dashoffset: -4;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .selection-marching-ants--white,
+  .selection-marching-ants--black {
+    animation: none;
+  }
 }
 
 @keyframes custom-spin {

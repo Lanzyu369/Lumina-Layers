@@ -331,6 +331,7 @@ def convert_image_to_3d(
     slicer: str = "BambuStudio",
     nozzle_size: str = "0.4",
     device_profile_id: Optional[str] = None,
+    build_plate_id: Optional[str] = None,
     enable_base_layer_height_modifier: bool = True,
     center_on_bed: bool = True,
     relief_global_max_height: Optional[float] = None,
@@ -348,10 +349,15 @@ def convert_image_to_3d(
     high_precision_3d_preview: bool = False,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
     *,
+    backing_infill_density_percent: int = 100,
     height_identity_rgb_path: Optional[str] = None,
+    original_matched_rgb_path: Optional[str] = None,
+    original_material_matrix_path: Optional[str] = None,
+    edit_projection: Optional[Dict[str, object]] = None,
     final_material_matrix_is_authoritative: bool = False,
     final_material_matrix_authority_mask_path: Optional[str] = None,
     cover_source_path: Optional[str] = None,
+    export_transform_metadata: Optional[Dict[str, object]] = None,
     material_dynamic_layer_count_enabled: bool = False,
     material_min_layer_count: int = 5,
     material_max_layer_count: int = 10,
@@ -370,6 +376,9 @@ def convert_image_to_3d(
             Defaults to ``image_path`` so普通模式与大画幅光栅模式下，每张
             3MF 都使用对应输入图作为封面图源。
             (可选的封面缩略图源路径；缺省镜像 ``image_path``)
+        export_transform_metadata: Optional mutable result populated with the
+            effective export transform. (可选的可变结果容器，用于返回实际导出
+            变换。)
         material_backing_material_index: Optional selected-material index used
             as the backing color when ``material_source`` is
             ``"material_archive"``. Native and legacy LUT flows ignore it.
@@ -378,6 +387,11 @@ def convert_image_to_3d(
         device_profile_id: Optional generated machine registry device profile
             selection forwarded to 3MF export.
             (可选的机器注册表设备配置 ID，透传给 3MF 导出)
+        build_plate_id: Optional native slicer build-plate selection forwarded
+            to 3MF export. (可选的切片软件原生打印板 ID，透传给 3MF 导出)
+        backing_infill_density_percent: Deep-backing sparse-infill percentage;
+            viewing-surface protection is added by the 3MF writer.
+            (深层底板稀疏填充百分比；观赏面保护由 3MF 写入器添加)
         material_dynamic_layer_count_enabled: Enable exact dynamic effective
             layers for material archives. (为耗材档案启用精确动态有效层数)
         material_min_layer_count: Minimum dynamic effective layers. (动态最小
@@ -397,6 +411,12 @@ def convert_image_to_3d(
             positional callers retain their original argument binding.
             (可选的 ``.npy`` 路径，保存颜色替换前、用于浮雕高度查找的稳定逐像素
             RGB 身份；该参数仅允许关键字传入，以保持旧位置参数调用语义不变)
+        original_matched_rgb_path: Pristine RGB used to isolate preview-time
+            display edits. (用于隔离预览期显示替色的原始 RGB)
+        original_material_matrix_path: Pristine material matrix used to
+            isolate recipe edits. (用于隔离配方编辑的原始材料矩阵)
+        edit_projection: Source-grid metadata for normalized edit replay on a
+            fresh-size analysis. (把编辑归一化重放到当前尺寸新分析的源网格元数据)
         final_material_matrix_is_authoritative: Preserve a precomputed final
             material matrix after color mappings update display RGB.
             (颜色映射更新显示 RGB 后，仍保留预计算的最终材料矩阵)
@@ -595,6 +615,7 @@ def generate_final_model(
     slicer: str = "BambuStudio",
     nozzle_size: str = "0.4",
     device_profile_id: Optional[str] = None,
+    build_plate_id: Optional[str] = None,
     enable_base_layer_height_modifier: bool = True,
     center_on_bed: bool = True,
     relief_global_max_height: Optional[float] = None,
@@ -612,10 +633,15 @@ def generate_final_model(
     material_backing_material_index: Optional[int] = None,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
     *,
+    backing_infill_density_percent: int = 100,
     height_identity_rgb_path: Optional[str] = None,
+    original_matched_rgb_path: Optional[str] = None,
+    original_material_matrix_path: Optional[str] = None,
+    edit_projection: Optional[Dict[str, object]] = None,
     final_material_matrix_is_authoritative: bool = False,
     final_material_matrix_authority_mask_path: Optional[str] = None,
     cover_source_path: Optional[str] = None,
+    export_transform_metadata: Optional[Dict[str, object]] = None,
     material_dynamic_layer_count_enabled: bool = False,
     material_min_layer_count: int = 5,
     material_max_layer_count: int = 10,
@@ -637,9 +663,17 @@ def generate_final_model(
             Forwarded to ``convert_image_to_3d`` which mirrors it onto the
             staged pipeline ctx; defaults to ``image_path``.
             (可选的封面缩略图源路径，最终透传到 staged pipeline ctx)
+        export_transform_metadata: Optional mutable result populated by the
+            export stage. (由导出阶段写入实际变换信息的可选可变结果容器。)
         device_profile_id: Optional generated machine registry device profile
             selection forwarded to ``convert_image_to_3d`` and 3MF export.
             (可选的机器注册表设备配置 ID，透传到主转换与 3MF 导出)
+        build_plate_id: Optional native slicer build-plate selection forwarded
+            to ``convert_image_to_3d`` and 3MF export.
+            (可选的切片软件原生打印板 ID，透传到主转换与 3MF 导出)
+        backing_infill_density_percent: Deep-backing sparse-infill percentage
+            forwarded to the 3MF writer.（透传到 3MF 写入器的深层底板稀疏填充
+            百分比）
         material_dynamic_layer_count_enabled: Enable exact dynamic effective
             layers. (启用精确动态有效层数)
         material_min_layer_count: Minimum dynamic effective layers. (动态最小
@@ -653,6 +687,12 @@ def generate_final_model(
             keyword-only to preserve all legacy positional argument bindings.
             (可选的 ``.npy`` 路径，保存浮雕高度查找使用的稳定逐像素源 RGB 身份；
             该参数仅允许关键字传入，以保持全部旧位置参数调用语义不变)
+        original_matched_rgb_path: Pristine RGB used to isolate preview-time
+            display edits. (用于隔离预览期显示替色的原始 RGB)
+        original_material_matrix_path: Pristine material matrix used to
+            isolate recipe edits. (用于隔离配方编辑的原始材料矩阵)
+        edit_projection: Source-grid metadata for normalized edit replay on a
+            fresh-size analysis. (把编辑归一化重放到当前尺寸新分析的源网格元数据)
         final_material_matrix_is_authoritative: Preserve a precomputed final
             material matrix after color mappings update display RGB.
             (颜色映射更新显示 RGB 后，仍保留预计算的最终材料矩阵)
@@ -733,6 +773,7 @@ def generate_final_model(
         model_margin,
         quantize_colors,
         svg_pixels_per_mm=svg_pixels_per_mm,
+        backing_infill_density_percent=backing_infill_density_percent,
         blur_kernel=0,
         smooth_sigma=10,
         color_replacements=color_replacements,
@@ -760,6 +801,9 @@ def generate_final_model(
         chroma_gate=chroma_gate,
         matched_rgb_path=matched_rgb_path,
         height_identity_rgb_path=height_identity_rgb_path,
+        original_matched_rgb_path=original_matched_rgb_path,
+        original_material_matrix_path=original_material_matrix_path,
+        edit_projection=edit_projection,
         mask_solid_path=mask_solid_path,
         quantized_image_path=quantized_image_path,
         material_matrix_path=material_matrix_path,
@@ -776,6 +820,7 @@ def generate_final_model(
         slicer=slicer,
         nozzle_size=nozzle_size,
         device_profile_id=device_profile_id,
+        build_plate_id=build_plate_id,
         enable_base_layer_height_modifier=enable_base_layer_height_modifier,
         center_on_bed=center_on_bed,
         relief_global_max_height=relief_global_max_height,
@@ -802,6 +847,7 @@ def generate_final_model(
         material_max_layer_count=material_max_layer_count,
         material_delta_e00_tolerance=material_delta_e00_tolerance,
         cover_source_path=cover_source_path,
+        export_transform_metadata=export_transform_metadata,
     )
 
 

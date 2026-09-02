@@ -859,4 +859,215 @@ describe("CanvasPreviewSurface", () => {
     expect(releasePointerCapture).toHaveBeenCalledWith(7)
     expect(translate).toHaveBeenCalledWith(18, 14)
   })
+
+  it("keeps emitting hover samples outside the image when allowOutOfImageHover is set", () => {
+    const hoverSamples: Array<unknown> = []
+    installCanvasContextMock(() => ({
+      clearRect: vi.fn(),
+      save: vi.fn(),
+      restore: vi.fn(),
+      setTransform: vi.fn(),
+      translate: vi.fn(),
+      scale: vi.fn(),
+      drawImage: vi.fn(),
+    } as unknown as CanvasRenderingContext2D))
+
+    render(
+      <CanvasPreviewSurface
+        src="/preview.png"
+        alt="Preview"
+        allowOutOfImageHover
+        onHoverSample={(sample) => hoverSamples.push(sample)}
+      />,
+    )
+
+    const surface = screen.getByTestId("canvas-preview-surface")
+    Object.defineProperty(surface, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        left: 10,
+        top: 20,
+        width: 200,
+        height: 100,
+        right: 210,
+        bottom: 120,
+        x: 10,
+        y: 20,
+        toJSON: () => ({}),
+      }),
+    })
+
+    act(() => {
+      latestImage?.dispatchLoad()
+    })
+
+    // 图像 100×50 恰好铺满 200×100 容器（fitScale=2）：clientX=9 → 容器内、图像外左侧。
+    fireEvent.pointerMove(surface, { pointerId: 1, clientX: 9, clientY: 60 })
+
+    const outsideSample = hoverSamples[hoverSamples.length - 1] as {
+      containerX: number
+      pixelX: number
+      isOutOfImage?: true
+    }
+    expect(outsideSample).not.toBeNull()
+    expect(outsideSample.isOutOfImage).toBe(true)
+    expect(outsideSample.containerX).toBe(-1)
+    expect(outsideSample.pixelX).toBeLessThan(0)
+  })
+
+  it("still reports null hover outside the image by default", () => {
+    const hoverSamples: Array<unknown> = []
+    installCanvasContextMock(() => ({
+      clearRect: vi.fn(),
+      save: vi.fn(),
+      restore: vi.fn(),
+      setTransform: vi.fn(),
+      translate: vi.fn(),
+      scale: vi.fn(),
+      drawImage: vi.fn(),
+    } as unknown as CanvasRenderingContext2D))
+
+    render(
+      <CanvasPreviewSurface
+        src="/preview.png"
+        alt="Preview"
+        onHoverSample={(sample) => hoverSamples.push(sample)}
+      />,
+    )
+
+    const surface = screen.getByTestId("canvas-preview-surface")
+    Object.defineProperty(surface, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        left: 10,
+        top: 20,
+        width: 200,
+        height: 100,
+        right: 210,
+        bottom: 120,
+        x: 10,
+        y: 20,
+        toJSON: () => ({}),
+      }),
+    })
+
+    act(() => {
+      latestImage?.dispatchLoad()
+    })
+
+    fireEvent.pointerMove(surface, { pointerId: 1, clientX: 9, clientY: 60 })
+
+    expect(hoverSamples[hoverSamples.length - 1]).toBeNull()
+  })
+
+  it("keeps the brush hover sample flowing while a stroke crosses the image edge", () => {
+    const hoverSamples: Array<unknown> = []
+    const strokeMoves: Array<unknown> = []
+    installCanvasContextMock(() => ({
+      clearRect: vi.fn(),
+      save: vi.fn(),
+      restore: vi.fn(),
+      setTransform: vi.fn(),
+      translate: vi.fn(),
+      scale: vi.fn(),
+      drawImage: vi.fn(),
+    } as unknown as CanvasRenderingContext2D))
+
+    render(
+      <CanvasPreviewSurface
+        src="/preview.png"
+        alt="Preview"
+        allowOutOfImageHover
+        onHoverSample={(sample) => hoverSamples.push(sample)}
+        onStrokeStart={() => {}}
+        onStrokeMove={(sample) => strokeMoves.push(sample)}
+        onStrokeEnd={() => {}}
+      />,
+    )
+
+    const surface = screen.getByTestId("canvas-preview-surface")
+    Object.defineProperty(surface, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        left: 10,
+        top: 20,
+        width: 200,
+        height: 100,
+        right: 210,
+        bottom: 120,
+        x: 10,
+        y: 20,
+        toJSON: () => ({}),
+      }),
+    })
+    Object.defineProperty(surface, "setPointerCapture", {
+      configurable: true,
+      value: vi.fn(),
+    })
+    Object.defineProperty(surface, "releasePointerCapture", {
+      configurable: true,
+      value: vi.fn(),
+    })
+
+    act(() => {
+      latestImage?.dispatchLoad()
+    })
+
+    // 从图像内起笔 → 拖出左边缘：笔迹点停止，但画笔 hover 采样必须继续流动。
+    fireEvent.pointerDown(surface, { pointerId: 3, clientX: 60, clientY: 60, button: 0 })
+    fireEvent.pointerMove(surface, { pointerId: 3, clientX: 9, clientY: 60 })
+
+    expect(strokeMoves.length).toBe(0)
+    const lastHover = hoverSamples[hoverSamples.length - 1] as { isOutOfImage?: true } | null
+    expect(lastHover).not.toBeNull()
+    expect(lastHover?.isOutOfImage).toBe(true)
+  })
+
+  it("suppresses click samples that land outside the image when allowOutOfImageHover is set", () => {
+    const clickSamples: Array<unknown> = []
+    installCanvasContextMock(() => ({
+      clearRect: vi.fn(),
+      save: vi.fn(),
+      restore: vi.fn(),
+      setTransform: vi.fn(),
+      translate: vi.fn(),
+      scale: vi.fn(),
+      drawImage: vi.fn(),
+    } as unknown as CanvasRenderingContext2D))
+
+    render(
+      <CanvasPreviewSurface
+        src="/preview.png"
+        alt="Preview"
+        allowOutOfImageHover
+        onClickSample={(sample) => clickSamples.push(sample)}
+      />,
+    )
+
+    const surface = screen.getByTestId("canvas-preview-surface")
+    Object.defineProperty(surface, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        left: 10,
+        top: 20,
+        width: 200,
+        height: 100,
+        right: 210,
+        bottom: 120,
+        x: 10,
+        y: 20,
+        toJSON: () => ({}),
+      }),
+    })
+
+    act(() => {
+      latestImage?.dispatchLoad()
+    })
+
+    fireEvent.pointerDown(surface, { pointerId: 5, clientX: 9, clientY: 60, button: 0 })
+    fireEvent.pointerUp(surface, { pointerId: 5, clientX: 9, clientY: 60, button: 0 })
+    fireEvent.click(surface, { clientX: 9, clientY: 60 })
+
+    expect(clickSamples.length).toBe(0)
+  })
 })

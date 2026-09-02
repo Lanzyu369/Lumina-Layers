@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import BasicSettings from "../components/sections/BasicSettings";
 import BedSizeSelector from "../components/sections/BedSizeSelector";
+import ReliefSettings from "../components/sections/ReliefSettings";
 import { useConverterStore } from "../stores/converter";
 import { DEFAULT_SETTINGS, useSettingsStore } from "../stores/settingsStore";
 import * as converterApi from "../api/converter";
@@ -499,7 +500,9 @@ describe("BasicSettings", () => {
   it("renders UnifiedUploader in empty state", () => {
     render(<BasicSettings />);
     // UnifiedUploader shows the translated upload hint in empty state
-    expect(screen.getByText("拖拽图片或点击上传（支持多选）")).toBeInTheDocument();
+    expect(
+      screen.getByText("拖拽图片或 Lumina 项目文件（图片支持多选）"),
+    ).toBeInTheDocument();
   });
 
   it("routes a model file dropped anywhere in the converter to model surface upload", async () => {
@@ -565,6 +568,76 @@ describe("BasicSettings", () => {
     });
     expect(converterApi.uploadModelSurface).not.toHaveBeenCalled();
     expect(useConverterStore.getState().modelSurfaceFile).toBeNull();
+  });
+
+  it("keeps a dropped relief heightmap out of the main image uploader", async () => {
+    const heightmap = new File(["heightmap"], "heightmap.png", {
+      type: "image/png",
+    });
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:heightmap");
+    useConverterStore.setState({
+      enable_relief: true,
+      autoHeightMode: "use-heightmap",
+      heightmapFile: null,
+      heightmapThumbnailUrl: null,
+    });
+
+    render(
+      <>
+        <BasicSettings />
+        <ReliefSettings />
+      </>,
+    );
+
+    fireEvent.drop(
+      screen.getByRole("button", { name: "拖拽图片或点击上传" }),
+      {
+        dataTransfer: {
+          files: [heightmap],
+          types: ["Files"],
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(useConverterStore.getState().heightmapFile).toBe(heightmap);
+    });
+    expect(useConverterStore.getState().imageFile).toBeNull();
+  });
+
+  it("still routes model files dropped on a local image uploader to model surface upload", async () => {
+    const model = new File(["solid"], "relief-source.stl", {
+      type: "application/octet-stream",
+    });
+    useConverterStore.setState({
+      enable_relief: true,
+      autoHeightMode: "use-heightmap",
+      heightmapFile: null,
+    });
+
+    render(
+      <>
+        <BasicSettings />
+        <ReliefSettings />
+      </>,
+    );
+
+    fireEvent.drop(
+      screen.getByRole("button", { name: "拖拽图片或点击上传" }),
+      {
+        dataTransfer: {
+          files: [model],
+          types: ["Files"],
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(converterApi.uploadModelSurface).toHaveBeenCalledWith(model);
+    });
+    expect(useConverterStore.getState().modelSurfaceFile).toBe(model);
+    expect(useConverterStore.getState().heightmapFile).toBeNull();
+    expect(useConverterStore.getState().imageFile).toBeNull();
   });
 
   it("routes model and image files dropped together from a folder into the full surface workflow", async () => {
@@ -1012,12 +1085,17 @@ describe("BasicSettings", () => {
       expect(screen.getByText(/品牌信息/)).toBeInTheDocument();
       expect(screen.getAllByText(/数据库/).length).toBeGreaterThan(0);
     });
-    expect(screen.getByRole("checkbox", { name: "A 4C" })).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "A 4C Alt" })).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "A 8C" })).toBeInTheDocument();
+    const fourColor = screen.getByRole("checkbox", { name: "A 4C" });
+    const alternateFourColor = screen.getByRole("checkbox", {
+      name: "A 4C Alt",
+    });
+    const eightColor = screen.getByRole("checkbox", { name: "A 8C" });
+    expect(fourColor).toBeEnabled();
+    expect(alternateFourColor).toBeEnabled();
+    expect(eightColor).toBeEnabled();
 
-    fireEvent.click(screen.getByRole("checkbox", { name: "A 4C" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "A 8C" }));
+    fireEvent.click(fourColor);
+    fireEvent.click(eightColor);
 
     await waitFor(() => {
       expect(useConverterStore.getState().lut_names).toEqual([
@@ -1033,18 +1111,17 @@ describe("BasicSettings", () => {
     fireEvent.click(screen.getByRole("combobox", { name: "LUT 品牌" }));
     fireEvent.click(screen.getByRole("option", { name: "Brand A" }));
 
-    await waitFor(() =>
-      expect(screen.getByRole("checkbox", { name: "A 4C" })).toBeEnabled(),
-    );
-    fireEvent.click(screen.getByRole("checkbox", { name: "A 4C" }));
+    const fourColor = await screen.findByRole("checkbox", { name: "A 4C" });
+    fireEvent.click(fourColor);
 
     await waitFor(() => {
       expect(useConverterStore.getState().lut_name).toBe("Brand A - A4");
     });
-    expect(screen.getByRole("checkbox", { name: "A 4C" })).toBeChecked();
+    expect(fourColor).toBeChecked();
+    expect(screen.getByText(/数据库/).parentElement).toHaveTextContent("A 4C");
   });
 
-  it("keeps the LUT dropdown disabled until LUTManager names are mapped", () => {
+  it("hides LUT choices until LUTManager names are mapped", () => {
     useConverterStore.setState({
       selectedLegacyManufacturer: "Brand A",
       lutListFull: [],
@@ -1055,6 +1132,7 @@ describe("BasicSettings", () => {
     render(<BasicSettings />);
 
     expect(screen.queryByRole("checkbox", { name: "A 4C" })).not.toBeInTheDocument();
+    expect(screen.getByText("品牌目录加载中…")).toBeInTheDocument();
     expect(useConverterStore.getState().lut_name).toBe("");
   });
 
