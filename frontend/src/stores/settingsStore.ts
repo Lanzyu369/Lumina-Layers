@@ -128,6 +128,11 @@ export interface SettingsState {
   enableFancyLoading: boolean;
   enableWittyLoading: boolean;
   enableCompletionNotifications: boolean;
+  /**
+   * Prefer analytic native-SVG browser geometry. This affects only the
+   * lightweight 3D preview; exact 3MF generation never consumes it.
+   */
+  enableSmoothVectorPreview: boolean;
   preserveUploadFilenameFor3mf: boolean;
   paletteMode: "swatch" | "card";
   printerModel: string;
@@ -189,6 +194,7 @@ export interface SettingsActions {
   setEnableFancyLoading: (enabled: boolean) => void;
   setEnableWittyLoading: (enabled: boolean) => void;
   setEnableCompletionNotifications: (enabled: boolean) => void;
+  setEnableSmoothVectorPreview: (enabled: boolean) => void;
   setPreserveUploadFilenameFor3mf: (enabled: boolean) => void;
   setPaletteMode: (mode: "swatch" | "card") => void;
   setPrinterModel: (id: string) => void;
@@ -224,6 +230,7 @@ export const DEFAULT_SETTINGS: SettingsState = {
   enableFancyLoading: true,
   enableWittyLoading: true,
   enableCompletionNotifications: false,
+  enableSmoothVectorPreview: true,
   preserveUploadFilenameFor3mf: false,
   paletteMode: "swatch",
   printerModel: "bambu-h2d",
@@ -491,6 +498,9 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
 
       setEnableCompletionNotifications: (enabled: boolean) =>
         set({ enableCompletionNotifications: enabled }),
+
+      setEnableSmoothVectorPreview: (enabled: boolean) =>
+        set({ enableSmoothVectorPreview: enabled }),
 
       setPreserveUploadFilenameFor3mf: (enabled: boolean) => {
         if (get().preserveUploadFilenameFor3mf === enabled) {

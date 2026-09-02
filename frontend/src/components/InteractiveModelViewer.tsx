@@ -23,6 +23,9 @@ import PuzzleOverlay3D from "./PuzzleOverlay3D";
 import { useGltfCacheLifecycle } from "./useGltfCacheLifecycle";
 import { materializePositionAttributeForGeometryBake } from "../utils/threeQuantizedGeometry";
 import type { PuzzleOverlayBounds } from "./puzzleOverlay3DUtils";
+import { createPreviewSpace } from "../utils/previewSpace";
+import HeightmapReliefSurface3D from "./HeightmapReliefSurface3D";
+import CoatingPreview3D from "./CoatingPreview3D";
 
 type LuminaWindow = Window & { __luminaPreviewStart?: number };
 
@@ -41,6 +44,21 @@ function _getPreviewStartTime(): number | null {
  */
 export function extractHexFromMeshName(meshName: string): string {
   return meshName.slice(6, 12);
+}
+
+/** Resolve stable relief identity, with legacy mesh names as a safe fallback. */
+export function resolvePreviewMeshHeightKey(
+  meshName: string,
+  userData: Record<string, unknown>,
+): string {
+  const metadataKey = userData.height_key;
+  if (
+    typeof metadataKey === "string" &&
+    /^[0-9a-fA-F]{6}$/.test(metadataKey)
+  ) {
+    return metadataKey.toLowerCase();
+  }
+  return extractHexFromMeshName(meshName).toLowerCase();
 }
 
 // ========== Component ==========
@@ -66,6 +84,12 @@ export interface InteractiveModelViewerProps {
   puzzleOverlayEnabled?: boolean;
   puzzleOverlayUrl?: string | null;
   colorLayerHeightMm?: number;
+  heightmapReliefUrl?: string | null;
+  heightmapArtworkUrl?: string | null;
+  heightmapReliefMaxHeightMm?: number;
+  enableCoating?: boolean;
+  coatingHeightMm?: number;
+  printingLayerHeightMm?: number;
 }
 
 export type InteractiveModelSourceRole = "quick-preview" | "generated" | "batch";
@@ -513,6 +537,24 @@ function resolveReliefHeightForHex(
   return undefined;
 }
 
+export function resolvePreviewMeshReliefHeightMm({
+  meshName,
+  userData,
+  colorHeightMap,
+  fallbackHeightMm,
+}: {
+  meshName: string;
+  userData: Record<string, unknown>;
+  colorHeightMap: Record<string, number>;
+  fallbackHeightMm: number;
+}): number {
+  const heightKey = resolvePreviewMeshHeightKey(meshName, userData);
+  return (
+    resolveReliefHeightForHex(colorHeightMap, heightKey) ??
+    resolvePreviewColorLayerHeightMm(fallbackHeightMm)
+  );
+}
+
 /**
  * Resolve visibility and Z placement for one material-archive layer mesh.
  * 计算耗材档案单个分层网格在普通或浮雕预览中的可见性与 Z 轴变换。
@@ -657,12 +699,30 @@ function InteractiveModelViewer({
   puzzleOverlayEnabled = false,
   puzzleOverlayUrl = null,
   colorLayerHeightMm = DEFAULT_COLOR_LAYER_HEIGHT_MM,
+  heightmapReliefUrl = null,
+  heightmapArtworkUrl = null,
+  heightmapReliefMaxHeightMm = 3.0,
+  enableCoating = false,
+  coatingHeightMm = 0.08,
+  printingLayerHeightMm = 0.08,
 }: InteractiveModelViewerProps) {
   const { scene } = useGLTF(url);
   const groupRef = useRef<THREE.Group>(null);
   useGltfCacheLifecycle(url, useGLTF.clear);
   const applyQuickPreviewGeometry = shouldApplyQuickPreviewGeometry(sourceRole);
   const previewColorLayerHeightMm = resolvePreviewColorLayerHeightMm(colorLayerHeightMm);
+  const spatialHeightmapEnabled = Boolean(
+    applyQuickPreviewGeometry
+    && enableRelief
+    && heightmapReliefUrl
+    && heightmapArtworkUrl,
+  );
+  const previewReliefHeightMap = useMemo(
+    () => spatialHeightmapEnabled
+      ? { __heightmap: Math.max(0.08, heightmapReliefMaxHeightMm) }
+      : colorHeightMap,
+    [colorHeightMap, heightmapReliefMaxHeightMm, spatialHeightmapEnabled],
+  );
 
   useEffect(() => {
     debugThreeLog("InteractiveModelViewer.lifecycle", {
@@ -889,6 +949,14 @@ function InteractiveModelViewer({
     };
   }, [applyQuickPreviewGeometry, scene, sourceRole, url]);
 
+  const previewSpace = useMemo(
+    () =>
+      applyQuickPreviewGeometry && modelBounds
+        ? createPreviewSpace(modelBounds, scaleX, scaleY)
+        : null,
+    [applyQuickPreviewGeometry, modelBounds, scaleX, scaleY],
+  );
+
   useEffect(() => {
     postClientLog("preview: GLB scene processed (useMemo done)", {
       startTime: _getPreviewStartTime(),
@@ -926,10 +994,13 @@ function InteractiveModelViewer({
     spacerThick,
     structureMode,
     enableRelief,
-    colorHeightMap,
+    previewReliefHeightMap,
     modelBounds?.maxZ ?? 0,
     previewColorLayerHeightMm,
   );
+  const visibleColorHeightMm = spatialHeightmapEnabled
+    ? Math.max(0.08, heightmapReliefMaxHeightMm)
+    : Math.max(0, outlinePreviewHeight - Math.max(0, spacerThick));
 
   // ---- White backing plate mesh ----
   const isDoubleSided =
@@ -1054,8 +1125,10 @@ function InteractiveModelViewer({
                 heightSegments,
                 nativeMinZ,
                 nativeMaxZ,
-                colorHeightMap,
-                fallbackHeightMm: previewColorLayerHeightMm,
+                colorHeightMap: spatialHeightmapEnabled ? {} : colorHeightMap,
+                fallbackHeightMm: spatialHeightmapEnabled
+                  ? 0.08
+                  : previewColorLayerHeightMm,
               })
             : originalPositions;
           const positionAttribute = mesh.geometry.getAttribute("position");
@@ -1093,17 +1166,25 @@ function InteractiveModelViewer({
           nativeMaxZ,
           spacerThick,
           enableRelief,
-          colorHeightMap,
-          colorLayerHeightMm: previewColorLayerHeightMm,
+          colorHeightMap: spatialHeightmapEnabled ? {} : colorHeightMap,
+          colorLayerHeightMm: spatialHeightmapEnabled
+            ? 0.08
+            : previewColorLayerHeightMm,
         });
         mesh.visible = transform.visible;
         mesh.scale.z = transform.scaleZ;
         mesh.position.z = transform.positionZ;
       } else if (enableRelief && baseHeight > 0) {
-        const origHex = extractHexFromMeshName(mesh.name);
         mesh.visible = true;
         // Relief mode: each color gets its own height from colorHeightMap
-        const heightMm = colorHeightMap[origHex] ?? previewColorLayerHeightMm;
+        const heightMm = spatialHeightmapEnabled
+          ? 0.08
+          : resolvePreviewMeshReliefHeightMm({
+              meshName: mesh.name,
+              userData: mesh.userData,
+              colorHeightMap,
+              fallbackHeightMm: previewColorLayerHeightMm,
+            });
         mesh.scale.z = nativeH > 0 ? heightMm / nativeH : 1;
         mesh.position.z = spacerThick;
       } else {
@@ -1128,26 +1209,67 @@ function InteractiveModelViewer({
         mirror.position.z = layerZ.mirrorColorZ; // grow downward from bottom of backing plate
       }
     }
-  }, [applyQuickPreviewGeometry, colorMeshes, mirrorMeshes, colorRemapMap, colorHeightMap, enableRelief, baseHeight, modelBounds, sceneCenter, spacerThick, isDoubleSided, backingMesh, backingPlateMesh, previewColorLayerHeightMm]);
+  }, [applyQuickPreviewGeometry, colorMeshes, mirrorMeshes, colorRemapMap, colorHeightMap, enableRelief, baseHeight, modelBounds, sceneCenter, spacerThick, isDoubleSided, backingMesh, backingPlateMesh, previewColorLayerHeightMm, spatialHeightmapEnabled]);
 
   // Double-sided mirror meshes are defined above (before useEffect).
 
   return (
-    <group
-      ref={groupRef}
-      scale={applyQuickPreviewGeometry ? [scaleX, scaleY, 1] : [1, 1, 1]}
-    >
-      <primitive object={nonColorObject} />
-      {/* Double-sided: mirror color layers below the backing plate (Z < 0) */}
-      {mirrorMeshes.map((mesh) => (
-        <primitive key={mesh.uuid} object={mesh} />
-      ))}
-      {/* White backing plate — GLB-extracted shape or rectangular fallback (Z ∈ [0, spacerThick]) */}
-      {backingMesh && <primitive object={backingMesh} />}
-      {/* Color layers on top of backing plate (Z ≥ spacerThick) */}
-      {colorMeshes.map((mesh) => (
-        <primitive key={mesh.uuid} object={mesh} />
-      ))}
+    <group ref={groupRef}>
+      <group
+        name="preview-asset-space"
+        position={previewSpace
+          ? [previewSpace.assetGroupPosition.x, previewSpace.assetGroupPosition.y, 0]
+          : [0, 0, 0]}
+        scale={previewSpace
+          ? [previewSpace.scaleX, previewSpace.scaleY, 1]
+          : [1, 1, 1]}
+      >
+        <primitive object={nonColorObject} />
+        {/* Double-sided: mirror color layers below the backing plate (Z < 0) */}
+        {mirrorMeshes.map((mesh) => (
+          <primitive key={mesh.uuid} object={mesh} />
+        ))}
+        {/* White backing plate — GLB-extracted shape or rectangular fallback (Z ∈ [0, spacerThick]) */}
+        {backingMesh && <primitive object={backingMesh} />}
+        {/* Color layers on top of backing plate (Z ≥ spacerThick) */}
+        {colorMeshes.map((mesh) => (
+          <primitive key={mesh.uuid} object={mesh} />
+        ))}
+        <HeightmapReliefSurface3D
+          enabled={spatialHeightmapEnabled}
+          heightmapUrl={heightmapReliefUrl}
+          artworkUrl={heightmapArtworkUrl}
+          modelBounds={puzzleOverlayBounds ?? modelBounds}
+          spacerThickMm={spacerThick}
+          maximumHeightMm={heightmapReliefMaxHeightMm}
+        />
+        <CoatingPreview3D
+          enabled={applyQuickPreviewGeometry && enableCoating}
+          backingMesh={backingMesh}
+          coatingHeightMm={coatingHeightMm}
+          layerHeightMm={printingLayerHeightMm}
+          structureMode={structureMode}
+          enableRelief={enableRelief}
+          spacerThickMm={spacerThick}
+          visibleColorHeightMm={visibleColorHeightMm}
+          enableOutline={enableOutline}
+          outlineWidthMm={outlineWidth}
+          displayScale={previewSpace?.scaleX ?? 1}
+          rasterCellSize={rasterCellSize}
+        />
+        <PuzzleOverlay3D
+          enabled={puzzleOverlayEnabled}
+          overlayUrl={puzzleOverlayUrl}
+          modelBounds={modelBounds}
+          previewCanvasBounds={puzzleOverlayBounds}
+          spacerThick={spacerThick}
+          enableRelief={enableRelief}
+          colorHeightMap={previewReliefHeightMap}
+          enableOutline={enableOutline}
+          enableCloisonne={enableCloisonne}
+          wireHeightMm={wireHeightMm}
+        />
+      </group>
       {/* 外轮廓预览 */}
       <OutlineFrame3D
         enabled={applyQuickPreviewGeometry && enableOutline}
@@ -1157,6 +1279,7 @@ function InteractiveModelViewer({
         modelMaxZ={outlinePreviewHeight}
         rasterCellSize={rasterCellSize}
         fillInteriorHoles={enableFridgeMagnet}
+        previewSpace={previewSpace}
       />
       {/* 景泰蓝金色线条预览 */}
       <CloisonneWire3D
@@ -1167,18 +1290,8 @@ function InteractiveModelViewer({
         backingPlateMesh={backingMesh}
         spacerThick={spacerThick}
         colorLayerHeightMm={previewColorLayerHeightMm}
-      />
-      <PuzzleOverlay3D
-        enabled={puzzleOverlayEnabled}
-        overlayUrl={puzzleOverlayUrl}
-        modelBounds={modelBounds}
-        previewCanvasBounds={puzzleOverlayBounds}
-        spacerThick={spacerThick}
-        enableRelief={enableRelief}
-        colorHeightMap={colorHeightMap}
-        enableOutline={enableOutline}
-        enableCloisonne={enableCloisonne}
-        wireHeightMm={wireHeightMm}
+        rasterCellSize={rasterCellSize}
+        previewSpace={previewSpace}
       />
     </group>
   );

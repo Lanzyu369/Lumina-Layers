@@ -248,6 +248,15 @@ beforeEach(() => {
         generatePerformanceTiming: null,
         previewImageUrl: null,
         previewBaseImageUrl: null,
+        imagePreviewUrl: null,
+        sessionId: null,
+        enable_relief: false,
+        autoHeightMode: "darker-higher",
+        heightmapThumbnailUrl: null,
+        heightmapUploadSessionId: null,
+        enable_coating: false,
+        coating_height_mm: 0.08,
+        layer_height_mm: 0.08,
         puzzleEnabled: false,
         puzzleOverlayUrl: null,
         selectedColor: null,
@@ -715,6 +724,62 @@ beforeEach(() => {
 
   });
 
+  describe("lightweight creative preview wiring", () => {
+    it("passes a session-owned spatial heightmap and processed artwork to the quick preview", () => {
+      useConverterStore.setState({
+        sessionId: "session-a",
+        previewGlbUrl: "/api/files/mock-preview.glb",
+        previewBaseImageUrl: "/api/files/processed-colours.png",
+        enable_relief: true,
+        autoHeightMode: "use-heightmap",
+        heightmapThumbnailUrl: "/api/files/heightmap-thumb.png",
+        heightmapUploadSessionId: "session-a",
+        heightmap_max_height: 3.2,
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedInteractiveViewerProps).toMatchObject({
+        heightmapReliefUrl: "/api/files/heightmap-thumb.png",
+        heightmapArtworkUrl: "/api/files/processed-colours.png",
+        heightmapReliefMaxHeightMm: 3.2,
+      });
+    });
+
+    it("does not reuse a heightmap uploaded by another session", () => {
+      useConverterStore.setState({
+        sessionId: "session-b",
+        previewGlbUrl: "/api/files/mock-preview.glb",
+        previewBaseImageUrl: "/api/files/processed-colours.png",
+        enable_relief: true,
+        autoHeightMode: "use-heightmap",
+        heightmapThumbnailUrl: "/api/files/stale-heightmap-thumb.png",
+        heightmapUploadSessionId: "session-a",
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedInteractiveViewerProps?.heightmapReliefUrl).toBeNull();
+    });
+
+    it("passes the live coating controls to the quick preview", () => {
+      useConverterStore.setState({
+        previewGlbUrl: "/api/files/mock-preview.glb",
+        enable_coating: true,
+        coating_height_mm: 0.12,
+        layer_height_mm: 0.04,
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedInteractiveViewerProps).toMatchObject({
+        enableCoating: true,
+        coatingHeightMm: 0.12,
+        printingLayerHeightMm: 0.04,
+      });
+    });
+  });
+
   describe("model source role wiring", () => {
     it("marks segmented GLB URLs as quick previews", () => {
       useConverterStore.setState({
@@ -740,6 +805,10 @@ beforeEach(() => {
       useConverterStore.setState({
         previewGlbUrl: "/api/files/quick-preview.glb",
         add_loop: true,
+        target_width_mm: 80,
+        target_height_mm: 120,
+        preview_width_mm: 40,
+        preview_height_mm: 60,
         modelBounds: {
           minX: -20,
           maxX: 20,
@@ -752,6 +821,13 @@ beforeEach(() => {
       render(<Scene3D />);
 
       expect(capturedKeychainRingProps).not.toBeNull();
+      expect(capturedKeychainRingProps?.modelBounds).toEqual({
+        minX: -40,
+        maxX: 40,
+        minY: -60,
+        maxY: 60,
+        maxZ: 2,
+      });
     });
 
     it("keeps the lightweight preview and keychain proxy ahead of a stale store model", () => {
@@ -857,6 +933,25 @@ beforeEach(() => {
       expect(capturedModelSurfaceSelectorProps?.bedGridVisible).toBe(true);
       expect(capturedModelSurfaceSelectorProps?.onBedGridVisibleChange).toEqual(expect.any(Function));
       expect(capturedInteractiveViewerProps).toBeNull();
+    });
+
+    it("uses the clean processed preview for model-surface artwork", () => {
+      const modelFile = new File(["solid"], "plate.stl");
+      useConverterStore.setState({
+        modelSurfaceEnabled: true,
+        modelSurfaceFile: modelFile,
+        modelSurfacePreviewUrl: "blob:model",
+        modelSurfaceSelectionId: "selection-1",
+        imagePreviewUrl: "blob:original-svg",
+        previewBaseImageUrl: "/api/files/processed-colours.png",
+        previewImageUrl: "/api/files/temporary-selection-highlight.png",
+      } as never);
+
+      render(<Scene3D />);
+
+      expect(capturedModelSurfaceSelectorProps?.artworkUrl).toBe(
+        "/api/files/processed-colours.png",
+      );
     });
 
     it("reuses the scene bed platform while model surface rotate controls are active", () => {
@@ -1052,10 +1147,16 @@ beforeEach(() => {
         enabled: true,
         magnets: fridgeMagnets,
         selectedMagnetId: "magnet-1",
-        modelBounds,
-        scaleX: 2,
-        scaleY: 2,
+        modelBounds: {
+          minX: -20,
+          maxX: 20,
+          minY: -20,
+          maxY: 20,
+          maxZ: 5,
+        },
       });
+      expect(capturedFridgeMagnet3DProps).not.toHaveProperty("scaleX");
+      expect(capturedFridgeMagnet3DProps).not.toHaveProperty("scaleY");
       expect(capturedFridgeMagnet3DProps?.onSelectMagnet).toBe(
         useConverterStore.getState().selectFridgeMagnet,
       );

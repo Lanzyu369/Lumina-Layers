@@ -200,6 +200,19 @@ describe("SettingsPanel information architecture", () => {
     expect(
       screen.getByRole("switch", { name: "自动清理渐变条纹" }),
     ).toBeInTheDocument();
+    expect(screen.getAllByText("平滑 SVG 轻量预览")).toHaveLength(1);
+    const smoothVectorSwitch = screen.getByRole("switch", {
+      name: "平滑 SVG 轻量预览",
+    });
+    expect(smoothVectorSwitch).toBeChecked();
+
+    fireEvent.click(smoothVectorSwitch);
+
+    expect(smoothVectorSwitch).not.toBeChecked();
+    expect(useSettingsStore.getState().enableSmoothVectorPreview).toBe(false);
+    expect(
+      screen.getByLabelText("关于平滑 SVG 轻量预览"),
+    ).toBeInTheDocument();
   });
 
   it("offers the default-off uploaded filename switch under General", () => {

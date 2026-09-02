@@ -7,6 +7,7 @@ import importlib
 import inspect
 import json
 import pickle
+import time
 import zipfile
 from collections import Counter
 from pathlib import Path
@@ -39,6 +40,30 @@ _MATERIALS = ["white", "red", "blue", "yellow"]
 _EXPECTED_MAX_LAYERS = 7
 _LAYER_HEIGHT_MM = 0.08
 _BACKING_THICKNESS_MM = 1.2
+
+
+def _wait_for_lightweight_glb(
+    client: TestClient,
+    session_id: str,
+    *,
+    timeout_s: float = 5.0,
+) -> str:
+    """Return the async lightweight preview URL once it becomes ready."""
+
+    deadline = time.perf_counter() + timeout_s
+    last_status: dict[str, object] = {}
+    while time.perf_counter() < deadline:
+        response = client.get(f"/api/convert/glb-status/{session_id}")
+        assert response.status_code == 200, response.text
+        last_status = response.json()
+        if last_status.get("status") == "ready":
+            glb_url = last_status.get("glb_url")
+            assert isinstance(glb_url, str)
+            return glb_url
+        time.sleep(0.02)
+    raise AssertionError(
+        f"lightweight GLB did not become ready: {last_status}"
+    )
 
 
 class _InlineWorkerPool:
@@ -447,32 +472,27 @@ def test_dynamic_svg_edit_lifecycle_keeps_native_geometry_and_export_recipes(
         assert normal_response.status_code == 200, normal_response.text
         normal_payload = normal_response.json()
         normal_threemf = client.get(normal_payload["download_url"])
-        normal_glb = client.get(normal_payload["preview_3d_url"])
+        normal_glb_url = normal_payload["preview_3d_url"] or (
+            _wait_for_lightweight_glb(client, session_id)
+        )
+        normal_glb = client.get(normal_glb_url)
         assert normal_threemf.status_code == 200
         assert normal_threemf.content.startswith(b"PK")
         assert normal_glb.status_code == 200
         assert normal_glb.content.startswith(b"glTF")
         assert len(build_snapshots) == 1
-        assert len(glb_snapshots) == 1
+        # Generate exports the exact 3MF only. Browser geometry stays on the
+        # independently built lightweight preview asset.
+        assert glb_snapshots == []
         assert len(threemf_snapshots) == 1
 
         normal_build = build_snapshots[0]
-        normal_glb_snapshot = glb_snapshots[0]
         normal_threemf_snapshot = threemf_snapshots[0]
         assert normal_build["dynamic_enabled"]
         assert normal_build["num_layers"] == _EXPECTED_MAX_LAYERS
         assert print_recipe in normal_build["recipes"]
-        assert normal_glb_snapshot["analysis_is_lightweight"]
-        assert (
-            normal_glb_snapshot["geometry_signature"]
-            == normal_threemf_snapshot["geometry_signature"]
-        )
         normal_z_span = _threemf_z_span(normal_threemf.content)
         assert normal_z_span == pytest.approx(
-            normal_threemf_snapshot["z_span"],
-            abs=1e-6,
-        )
-        assert normal_glb_snapshot["z_span"] == pytest.approx(
             normal_threemf_snapshot["z_span"],
             abs=1e-6,
         )
@@ -704,10 +724,14 @@ def test_dynamic_svg_global_replacement_rebuilds_exact_recipe_after_fresh_previe
         assert normal_response.status_code == 200, normal_response.text
         normal_payload = normal_response.json()
         assert client.get(normal_payload["download_url"]).content.startswith(b"PK")
-        assert client.get(normal_payload["preview_3d_url"]).content.startswith(b"glTF")
+        preview_url = normal_payload["preview_3d_url"] or (
+            _wait_for_lightweight_glb(client, session_id)
+        )
+        assert client.get(preview_url).content.startswith(b"glTF")
         assert len(build_recipes) == 1
         assert expected_print_recipe in build_recipes[0]
-        assert glb_geometry_signatures == threemf_geometry_signatures
+        assert glb_geometry_signatures == []
+        assert threemf_geometry_signatures
         assert threemf_recipes == build_recipes
 
         build_recipes.clear()

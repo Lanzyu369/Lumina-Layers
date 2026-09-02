@@ -1228,6 +1228,161 @@ class TestS03ColorReplacement:
             result["height_identity_rgb"], cached_matched
         )
 
+    def test_dimension_change_projects_only_preview_edit_deltas(self, tmp_path):
+        """Fresh-size raster analysis stays authoritative outside edited pixels."""
+
+        from core.pipeline.s03_color_replacement import run
+
+        ctx = self._make_valid_ctx()
+        fresh_rgb = np.full((4, 4, 3), [80, 90, 100], dtype=np.uint8)
+        fresh_material = np.full((4, 4, 5), 3, dtype=np.int16)
+        ctx["matched_rgb"] = fresh_rgb.copy()
+        ctx["material_matrix"] = fresh_material.copy()
+
+        pristine_rgb = np.zeros((2, 2, 3), dtype=np.uint8)
+        edited_rgb = pristine_rgb.copy()
+        edited_rgb[0, 0] = [220, 30, 40]
+        pristine_material = np.zeros((2, 2, 5), dtype=np.int16)
+        edited_material = pristine_material.copy()
+        edited_material[0, 0] = [1, 1, 1, 1, 1]
+        source_solid = np.ones((2, 2), dtype=bool)
+
+        paths = {}
+        for name, value in (
+            ("matched_rgb", edited_rgb),
+            ("original_matched_rgb", pristine_rgb),
+            ("material_matrix", edited_material),
+            ("original_material_matrix", pristine_material),
+            ("mask_solid", source_solid),
+        ):
+            path = tmp_path / f"{name}.npy"
+            np.save(path, value)
+            paths[name] = str(path)
+        ctx.update(
+            {
+                "matched_rgb_path": paths["matched_rgb"],
+                "original_matched_rgb_path": paths["original_matched_rgb"],
+                "material_matrix_path": paths["material_matrix"],
+                "original_material_matrix_path": paths[
+                    "original_material_matrix"
+                ],
+                "mask_solid_path": paths["mask_solid"],
+                "edit_projection": {
+                    "mode": "delta",
+                    "source_shape": [2, 2],
+                },
+            }
+        )
+
+        result = run(ctx)
+
+        expected_rgb = fresh_rgb.copy()
+        expected_rgb[:2, :2] = [220, 30, 40]
+        np.testing.assert_array_equal(result["matched_rgb"], expected_rgb)
+        expected_material = fresh_material.copy()
+        expected_material[:2, :2] = [1, 1, 1, 1, 1]
+        np.testing.assert_array_equal(
+            result["material_matrix"], expected_material
+        )
+        # Display edits never redefine relief height identity.
+        np.testing.assert_array_equal(result["height_identity_rgb"], fresh_rgb)
+
+    def test_dimension_change_fails_closed_when_pristine_artifact_disappears(
+        self,
+        tmp_path,
+    ) -> None:
+        """Required edit replay cannot silently fall back to stale or no edits."""
+
+        from core.errors import CachedPreviewAnalysisError
+        from core.pipeline.s03_color_replacement import run
+
+        ctx = self._make_valid_ctx()
+        edited_path = tmp_path / "matched.npy"
+        matrix_path = tmp_path / "material.npy"
+        pristine_matrix_path = tmp_path / "original-material.npy"
+        mask_path = tmp_path / "mask.npy"
+        np.save(edited_path, np.zeros((2, 2, 3), dtype=np.uint8))
+        np.save(matrix_path, np.zeros((2, 2, 5), dtype=np.int16))
+        np.save(pristine_matrix_path, np.zeros((2, 2, 5), dtype=np.int16))
+        np.save(mask_path, np.ones((2, 2), dtype=bool))
+        ctx.update(
+            {
+                "matched_rgb_path": str(edited_path),
+                "original_matched_rgb_path": str(tmp_path / "missing.npy"),
+                "material_matrix_path": str(matrix_path),
+                "original_material_matrix_path": str(pristine_matrix_path),
+                "mask_solid_path": str(mask_path),
+                "edit_projection": {
+                    "mode": "delta",
+                    "source_shape": [2, 2],
+                },
+            }
+        )
+
+        with pytest.raises(CachedPreviewAnalysisError):
+            run(ctx)
+
+    def test_dimension_change_projects_recipe_override_footprint(self, tmp_path):
+        """Recipe masks use the same normalized grid as colour-edit deltas."""
+
+        import pickle
+
+        from core.pipeline.s03_color_replacement import run
+
+        ctx = self._make_valid_ctx()
+        ctx["matched_rgb"] = np.full((4, 4, 3), 80, dtype=np.uint8)
+        ctx["material_matrix"] = np.zeros((4, 4, 5), dtype=np.int16)
+        source_rgb = np.zeros((2, 2, 3), dtype=np.uint8)
+        source_material = np.zeros((2, 2, 5), dtype=np.int16)
+        source_solid = np.ones((2, 2), dtype=bool)
+        paths = {}
+        for name, value in (
+            ("matched_rgb", source_rgb),
+            ("original_matched_rgb", source_rgb),
+            ("material_matrix", source_material),
+            ("original_material_matrix", source_material),
+            ("mask_solid", source_solid),
+        ):
+            path = tmp_path / f"recipe-{name}.npy"
+            np.save(path, value)
+            paths[name] = str(path)
+        masks_path = tmp_path / "recipe-masks.pkl"
+        with masks_path.open("wb") as handle:
+            pickle.dump(
+                {"region-A": np.array([[True, False], [False, False]])},
+                handle,
+            )
+        ctx.update(
+            {
+                "matched_rgb_path": paths["matched_rgb"],
+                "original_matched_rgb_path": paths["original_matched_rgb"],
+                "material_matrix_path": paths["material_matrix"],
+                "original_material_matrix_path": paths[
+                    "original_material_matrix"
+                ],
+                "mask_solid_path": paths["mask_solid"],
+                "edit_projection": {
+                    "mode": "recipe_masks",
+                    "source_shape": [2, 2],
+                },
+                "recipe_overrides": [
+                    {
+                        "region_id": "region-A",
+                        "recipe": [2, 2, 2, 2, 2],
+                        "layer_order": "Top2Bottom",
+                    }
+                ],
+                "recipe_override_masks_path": str(masks_path),
+                "color_layers": 5,
+            }
+        )
+
+        result = run(ctx)
+
+        expected = np.zeros((4, 4, 5), dtype=np.int16)
+        expected[:2, :2] = 2
+        np.testing.assert_array_equal(result["material_matrix"], expected)
+
     def test_identity_validates_against_final_matched_grid_not_s02_grid(
         self,
         tmp_path,

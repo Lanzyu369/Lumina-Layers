@@ -256,6 +256,7 @@ CONVERTER_STRUCTURED_EVENTS = {
     "converter_auto_detect_colors_failed",
     "converter_auto_detect_temp_cleanup_failed",
     "converter_cleanup_session_files_done",
+    "converter_vector_preview_renderer_done",
     # Auxiliary material-archive usage tracking. The success path has no
     # dedicated event (per-archive bookkeeping piggybacks on the existing
     # ``converter_generate_*`` events); only the failure path is logged so

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ColorMode } from "../../api/types";
+import { ColorMode, ModelingMode } from "../../api/types";
 import { useConverterStore } from "../../stores/converter";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useSingleStageStore } from "../../stores/singleStageStore";
@@ -45,6 +45,7 @@ describe("collectBugReportContext", () => {
       lastColorMode: "8-Color Max",
       lastLutName: "My LUT",
       preserveUploadFilenameFor3mf: false,
+      enableSmoothVectorPreview: true,
     });
     useSingleStageStore.setState({
       sessionId: null,
@@ -130,6 +131,8 @@ describe("collectBugReportContext", () => {
       material_layer_height_mm: null,
       material_backing_material_dir_name: null,
       preserve_upload_filename_for_3mf: false,
+      enable_smooth_vector_preview: true,
+      vector_preview_renderer: null,
       recent_client_logs: [],
       action_history: [],
       session_history: [],
@@ -146,6 +149,34 @@ describe("collectBugReportContext", () => {
     const context = collectBugReportContext();
 
     expect(context.preserve_upload_filename_for_3mf).toBe(true);
+  });
+
+  it("captures the smooth SVG preference and selected lightweight renderer", () => {
+    useWidgetStore.setState({ activeTab: "converter" });
+    useSettingsStore.setState({ enableSmoothVectorPreview: true });
+    useConverterStore.setState({
+      imageFile: new File(
+        ['<svg xmlns="http://www.w3.org/2000/svg"/>'],
+        "artwork.svg",
+        { type: "image/svg+xml" },
+      ),
+      modeling_mode: ModelingMode.VECTOR,
+      modelSurfaceEnabled: false,
+      largeFormatEnabled: false,
+      batchPreviewItems: [],
+    });
+
+    expect(collectBugReportContext()).toMatchObject({
+      enable_smooth_vector_preview: true,
+      vector_preview_renderer: "vector_analytic",
+    });
+
+    useSettingsStore.setState({ enableSmoothVectorPreview: false });
+
+    expect(collectBugReportContext()).toMatchObject({
+      enable_smooth_vector_preview: false,
+      vector_preview_renderer: "segmented",
+    });
   });
 
   it("collects only bounded workshop diagnostics while the workshop tab is active", () => {
@@ -730,6 +761,8 @@ describe("collectBugReportContext", () => {
       "material_layer_height_mm",
       "material_backing_material_dir_name",
       "preserve_upload_filename_for_3mf",
+      "enable_smooth_vector_preview",
+      "vector_preview_renderer",
       "recent_client_logs",
       "action_history",
       "session_history",

@@ -302,6 +302,12 @@ def test_worker_generate_model_forwards_fridge_magnet_params_intact() -> None:
         "enable_fridge_magnet": True,
         "fridge_magnets": expected_fridge_magnets,
         "modeling_mode": "high-fidelity",
+        "original_matched_rgb_path": "original-rgb.npy",
+        "original_material_matrix_path": "original-material.npy",
+        "edit_projection": {
+            "mode": "delta",
+            "source_shape": [40, 80],
+        },
     }
 
     def _generate_with_transform_metadata(**kwargs):
@@ -694,6 +700,7 @@ def test_worker_generate_preview_splits_vector_parse_clip_cache_blob(tmp_path) -
         "preview_rgba": preview_img.copy(),
         "color_conf": {},
         "vector_parse_clip_cache_blob": b"parse-clip-artifact",
+        "vector_parse_clip_cache_provenance": "a" * 64,
     }
 
     with (
@@ -721,6 +728,7 @@ def test_worker_generate_preview_splits_vector_parse_clip_cache_blob(tmp_path) -
         with open(result["cache_data_path"], "rb") as handle:
             restored_cache = pickle.load(handle)
         assert "vector_parse_clip_cache_blob" not in restored_cache
+        assert restored_cache["vector_parse_clip_cache_provenance"] == "a" * 64
         with open(result["vector_parse_clip_cache_path"], "rb") as handle:
             assert handle.read() == b"parse-clip-artifact"
     finally:

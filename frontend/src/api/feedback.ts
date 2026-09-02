@@ -78,6 +78,10 @@ export interface BugReportContextPayload {
   material_backing_material_dir_name: string | null;
   /** Client-local preference used to name ordinary single-item 3MF downloads. */
   preserve_upload_filename_for_3mf?: boolean;
+  /** Personal browser preference; never part of print or share-card state. */
+  enable_smooth_vector_preview?: boolean;
+  /** Lightweight renderer selected for the active native SVG session. */
+  vector_preview_renderer?: "vector_analytic" | "segmented" | null;
   recent_client_logs: ReadonlyArray<ClientLogEntry>;
   /**
    * Recent user actions with workflow snapshots; populated by the

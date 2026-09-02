@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+import pickle
 import struct
 import sys
 from types import SimpleNamespace
@@ -12,10 +13,11 @@ from types import SimpleNamespace
 import pytest
 import numpy as np
 import trimesh
-from shapely.geometry import box
+from shapely.geometry import GeometryCollection, LineString, MultiPolygon, Polygon, box
 from shapely.ops import unary_union
 
 from core.pipeline import vector_glb_preview
+import core.vector_engine as vector_engine
 from core.errors import VectorMeshMemoryBudgetError
 
 
@@ -37,6 +39,15 @@ def _box_mesh(z_min: float = 0.0, z_max: float = 0.4) -> trimesh.Trimesh:
     mesh = trimesh.creation.box(extents=(2.0, 2.0, z_max - z_min))
     mesh.apply_translation((0.0, 0.0, (z_min + z_max) / 2.0))
     return mesh
+
+
+def test_analytic_preview_does_not_import_retired_print_topology_service() -> None:
+    """Preview extrusion must survive the canonical #585 mesh replacement."""
+
+    source = Path(vector_glb_preview.__file__).read_text(encoding="utf-8")
+
+    assert "core.vector_mesh_topology" not in source
+    assert "VectorTopologyError" not in source
 
 
 def _load_glb_json(path: Path) -> dict:
@@ -98,6 +109,624 @@ def _analysis_for_v2_test() -> SimpleNamespace:
             "Outline": [20, 20, 20, 255],
         },
     )
+
+
+def _write_quick_preview_source(tmp_path: Path) -> tuple[Path, str]:
+    svg_path = tmp_path / "source.svg"
+    svg_path.write_text("<svg/>", encoding="utf-8")
+    geometry = box(0, 0, 4, 2)
+    cache_key = vector_engine._vector_parse_clip_cache_key(
+        str(svg_path),
+        target_width_mm=40.0,
+        sampling_precision=0.02,
+        expand_stroke_to_fill=False,
+        gradient_color_bands=None,
+    )
+    artifact_path = tmp_path / "parse_clip.pkl"
+    artifact_path.write_bytes(
+        vector_engine._serialize_vector_parse_clip_cache(
+            cache_key,
+            {
+                "shape_data": [
+                    {"poly": geometry, "color": (255, 0, 0), "draw_order": 0}
+                ],
+                "clipped_shapes": [
+                    {
+                        "geometry": geometry,
+                        "color": (255, 0, 0),
+                        "draw_order": 0,
+                    }
+                ],
+                "silhouette": geometry,
+                "image_vectorizer_bounds": box(0, 0, 4, 2),
+                "scale_factor": 10.0,
+                "bbox": (0, 0, 4, 2),
+            },
+        )
+    )
+    return artifact_path, vector_engine._vector_parse_clip_cache_provenance(cache_key)
+
+
+def test_load_vector_quick_preview_source_requires_expected_provenance(
+    tmp_path: Path,
+) -> None:
+    artifact_path, provenance = _write_quick_preview_source(tmp_path)
+
+    source = vector_glb_preview.load_vector_quick_preview_source(
+        str(artifact_path),
+        expected_provenance=provenance,
+    )
+
+    assert source is not None
+    assert source.provenance == provenance
+    assert source.scale_factor == pytest.approx(10.0)
+    assert source.bbox == pytest.approx((0.0, 0.0, 4.0, 2.0))
+    assert len(source.clipped_shapes) == 1
+    assert (
+        vector_glb_preview.load_vector_quick_preview_source(
+            str(artifact_path),
+            expected_provenance="0" * 64,
+        )
+        is None
+    )
+
+
+def test_load_vector_quick_preview_source_rejects_tampered_key(
+    tmp_path: Path,
+) -> None:
+    artifact_path, provenance = _write_quick_preview_source(tmp_path)
+    payload = pickle.loads(artifact_path.read_bytes())
+    payload["cache_key"] = (*payload["cache_key"][:1], 99.0, *payload["cache_key"][2:])
+    artifact_path.write_bytes(pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL))
+
+    assert (
+        vector_glb_preview.load_vector_quick_preview_source(
+            str(artifact_path),
+            expected_provenance=provenance,
+        )
+        is None
+    )
+
+
+def test_load_vector_quick_preview_source_enforces_resource_caps(
+    tmp_path: Path,
+) -> None:
+    artifact_path, provenance = _write_quick_preview_source(tmp_path)
+
+    assert (
+        vector_glb_preview.load_vector_quick_preview_source(
+            str(artifact_path),
+            expected_provenance=provenance,
+            max_bytes=4,
+        )
+        is None
+    )
+    assert (
+        vector_glb_preview.load_vector_quick_preview_source(
+            str(artifact_path),
+            expected_provenance=provenance,
+            max_coordinates=3,
+        )
+        is None
+    )
+
+
+def _quick_source_for_classification() -> vector_glb_preview.VectorQuickPreviewSourceV1:
+    left = box(0.0, 0.0, 1.0, 1.0)
+    middle = box(1.0, 0.0, 2.0, 1.0)
+    right = box(2.0, 0.0, 3.0, 1.0)
+    return vector_glb_preview.VectorQuickPreviewSourceV1(
+        provenance="c" * 64,
+        shape_data=(),
+        clipped_shapes=(
+            {"geometry": MultiPolygon([left, middle]), "color": (0, 0, 0)},
+            {"geometry": right, "color": (0, 0, 0)},
+        ),
+        silhouette=box(0.0, 0.0, 3.0, 1.0),
+        image_vectorizer_bounds=box(0.0, 0.0, 3.0, 1.0),
+        scale_factor=10.0,
+        bbox=(0.0, 0.0, 3.0, 1.0),
+    )
+
+
+def test_analytic_parts_match_segmented_preview_world_y_orientation() -> None:
+    """Color, backing, and canvas anchor must share preview world-up Y."""
+
+    top_shape = box(0.2, 0.5, 1.2, 1.5)
+    silhouette = box(0.15, 0.35, 1.35, 1.65)
+    source = vector_glb_preview.VectorQuickPreviewSourceV1(
+        provenance="a" * 64,
+        shape_data=(),
+        clipped_shapes=({"geometry": top_shape, "color": (0, 0, 0)},),
+        silhouette=silhouette,
+        image_vectorizer_bounds=box(0.0, 0.25, 2.0, 1.75),
+        scale_factor=10.0,
+        bbox=(0.0, 0.0, 2.0, 4.0),
+    )
+    matched_rgb = np.full((40, 20, 3), (20, 30, 40), dtype=np.uint8)
+    mask_solid = np.zeros((40, 20), dtype=bool)
+    mask_solid[5:15, 2:12] = True
+
+    parts = vector_glb_preview.build_vector_quick_preview_parts(
+        source=source,
+        matched_rgb=matched_rgb,
+        height_identity_rgb=matched_rgb.copy(),
+        mask_solid=mask_solid,
+        backing_rgba=(255, 255, 255, 255),
+        backing_thickness_mm=1.6,
+    )
+
+    assert parts is not None
+    color = next(part for part in parts if part.role == "color")
+    footprint = unary_union(
+        [extrusion.footprint for extrusion in color.extrusions]
+    )
+    assert footprint.bounds == pytest.approx((2.0, 25.0, 12.0, 35.0))
+    backing = next(part for part in parts if part.role == "backing")
+    assert backing.extrusions[0].footprint.bounds == pytest.approx(
+        (0.0, 22.0, 15.0, 38.0)
+    )
+    canvas_anchor = next(part for part in parts if part.role == "auxiliary")
+    assert canvas_anchor.fallback_mesh is not None
+    assert canvas_anchor.fallback_mesh.bounds[:, :2].ravel() == pytest.approx(
+        (0.0, 22.5, 20.0, 37.5)
+    )
+
+
+def test_analytic_parts_share_segmented_preview_zero_z_origin() -> None:
+    """The browser owns layer placement, so asset slabs must start at Z=0."""
+
+    source = _quick_source_for_classification()
+    matched_rgb = np.full((10, 30, 3), (20, 30, 40), dtype=np.uint8)
+
+    parts = vector_glb_preview.build_vector_quick_preview_parts(
+        source=source,
+        matched_rgb=matched_rgb,
+        height_identity_rgb=matched_rgb.copy(),
+        mask_solid=np.ones((10, 30), dtype=bool),
+        backing_rgba=(255, 255, 255, 255),
+        backing_thickness_mm=1.6,
+    )
+
+    assert parts is not None
+    display_parts = [part for part in parts if part.role in {"color", "backing"}]
+    assert display_parts
+    assert {
+        extrusion.z_min
+        for part in display_parts
+        for extrusion in part.extrusions
+    } == {0.0}
+
+
+def test_analytic_parts_group_by_display_and_height_identity() -> None:
+    source = _quick_source_for_classification()
+    matched_rgb = np.zeros((10, 30, 3), dtype=np.uint8)
+    height_identity_rgb = np.zeros_like(matched_rgb)
+    mask_solid = np.ones((10, 30), dtype=bool)
+    matched_rgb[:, :20] = (240, 20, 20)
+    matched_rgb[:, 20:] = (20, 20, 240)
+    height_identity_rgb[:, :10] = (1, 2, 3)
+    height_identity_rgb[:, 10:20] = (4, 5, 6)
+    height_identity_rgb[:, 20:] = (1, 2, 3)
+
+    parts = vector_glb_preview.build_vector_quick_preview_parts(
+        source=source,
+        matched_rgb=matched_rgb,
+        height_identity_rgb=height_identity_rgb,
+        mask_solid=mask_solid,
+        backing_rgba=(250, 250, 250, 255),
+        backing_thickness_mm=1.6,
+    )
+
+    color_parts = [part for part in parts if part.role == "color"]
+    assert {
+        (part.rgba[:3], part.height_key)
+        for part in color_parts
+    } == {
+        ((240, 20, 20), "010203"),
+        ((240, 20, 20), "040506"),
+        ((20, 20, 240), "010203"),
+    }
+    assert sum(len(part.extrusions) for part in color_parts) == 3
+    assert {part.export_name for part in color_parts} == {
+        "color_f01414",
+        "color_f01414_1",
+        "color_1414f0",
+    }
+    names = {part.export_name for part in parts}
+    assert "backing_plate" in names
+    assert "preview_canvas_bounds" in names
+
+
+def test_analytic_parts_split_spatial_recolors_inside_one_svg_shape() -> None:
+    shape = box(0.0, 0.0, 2.0, 1.0)
+    source = vector_glb_preview.VectorQuickPreviewSourceV1(
+        provenance="f" * 64,
+        shape_data=(),
+        clipped_shapes=({"geometry": shape, "color": (0, 0, 0)},),
+        silhouette=shape,
+        image_vectorizer_bounds=shape,
+        scale_factor=10.0,
+        bbox=(0.0, 0.0, 2.0, 1.0),
+    )
+    matched_rgb = np.empty((10, 20, 3), dtype=np.uint8)
+    matched_rgb[:, :10] = (240, 20, 20)
+    matched_rgb[:, 10:] = (20, 20, 240)
+    height_identity_rgb = np.full_like(matched_rgb, (1, 2, 3))
+
+    parts = vector_glb_preview.build_vector_quick_preview_parts(
+        source=source,
+        matched_rgb=matched_rgb,
+        height_identity_rgb=height_identity_rgb,
+        mask_solid=np.ones((10, 20), dtype=bool),
+        backing_rgba=(255, 255, 255, 255),
+        backing_thickness_mm=1.6,
+    )
+
+    assert parts is not None
+    color_parts = [part for part in parts if part.role == "color"]
+    assert {part.rgba[:3] for part in color_parts} == {
+        (240, 20, 20),
+        (20, 20, 240),
+    }
+    by_color = {
+        part.rgba[:3]: unary_union(
+            [extrusion.footprint for extrusion in part.extrusions]
+        )
+        for part in color_parts
+    }
+    assert by_color[(240, 20, 20)].bounds == pytest.approx((0.0, 0.0, 10.0, 10.0))
+    assert by_color[(20, 20, 240)].bounds == pytest.approx((10.0, 0.0, 20.0, 10.0))
+    assert unary_union(list(by_color.values())).equals(box(0.0, 0.0, 20.0, 10.0))
+
+
+def test_analytic_parts_keep_smooth_boundary_when_edge_pixels_are_noisy() -> None:
+    shape = box(0.0, 0.0, 2.0, 1.0)
+    source = vector_glb_preview.VectorQuickPreviewSourceV1(
+        provenance="f" * 64,
+        shape_data=(),
+        clipped_shapes=({"geometry": shape, "color": (0, 0, 0)},),
+        silhouette=shape,
+        image_vectorizer_bounds=shape,
+        scale_factor=10.0,
+        bbox=(0.0, 0.0, 2.0, 1.0),
+    )
+    matched_rgb = np.empty((10, 20, 3), dtype=np.uint8)
+    matched_rgb[:, :10] = (240, 20, 20)
+    matched_rgb[:, 10:] = (20, 20, 240)
+    matched_rgb[0, :] = (20, 240, 20)
+    height_identity_rgb = np.full_like(matched_rgb, (1, 2, 3))
+
+    parts = vector_glb_preview.build_vector_quick_preview_parts(
+        source=source,
+        matched_rgb=matched_rgb,
+        height_identity_rgb=height_identity_rgb,
+        mask_solid=np.ones((10, 20), dtype=bool),
+        backing_rgba=(255, 255, 255, 255),
+        backing_thickness_mm=1.6,
+    )
+
+    assert parts is not None
+    color_parts = [part for part in parts if part.role == "color"]
+    assert {part.rgba[:3] for part in color_parts} == {
+        (240, 20, 20),
+        (20, 20, 240),
+    }
+    actual = unary_union(
+        [
+            extrusion.footprint
+            for part in color_parts
+            for extrusion in part.extrusions
+        ]
+    )
+    assert actual.equals(box(0.0, 0.0, 20.0, 10.0))
+
+
+def test_analytic_parts_require_stable_height_identity() -> None:
+    source = _quick_source_for_classification()
+    matched_rgb = np.full((10, 30, 3), (20, 30, 40), dtype=np.uint8)
+
+    assert (
+        vector_glb_preview.build_vector_quick_preview_parts(
+            source=source,
+            matched_rgb=matched_rgb,
+            height_identity_rgb=None,
+            mask_solid=np.ones((10, 30), dtype=bool),
+            backing_rgba=(255, 255, 255, 255),
+            backing_thickness_mm=1.6,
+        )
+        is None
+    )
+
+
+def test_analytic_parts_ignore_only_subpixel_clipped_slivers() -> None:
+    visible = box(0.0, 0.0, 1.0, 1.0)
+    subpixel_sliver = box(2.0, 0.0, 2.005, 0.005)
+    source = vector_glb_preview.VectorQuickPreviewSourceV1(
+        provenance="d" * 64,
+        shape_data=(),
+        clipped_shapes=(
+            {"geometry": visible, "color": (0, 0, 0)},
+            {"geometry": subpixel_sliver, "color": (0, 0, 0)},
+        ),
+        silhouette=visible,
+        image_vectorizer_bounds=box(0.0, 0.0, 3.0, 1.0),
+        scale_factor=10.0,
+        bbox=(0.0, 0.0, 3.0, 1.0),
+    )
+    matched_rgb = np.full((10, 30, 3), (20, 30, 40), dtype=np.uint8)
+    mask_solid = np.zeros((10, 30), dtype=bool)
+    mask_solid[:, :10] = True
+
+    parts = vector_glb_preview.build_vector_quick_preview_parts(
+        source=source,
+        matched_rgb=matched_rgb,
+        height_identity_rgb=matched_rgb.copy(),
+        mask_solid=mask_solid,
+        backing_rgba=(255, 255, 255, 255),
+        backing_thickness_mm=1.6,
+    )
+
+    assert parts is not None
+    color_parts = [part for part in parts if part.role == "color"]
+    assert sum(len(part.extrusions) for part in color_parts) == 1
+
+
+def test_analytic_parts_keep_polygon_components_from_repaired_geometry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _quick_source_for_classification()
+    original_scaled_geometry_mm = vector_glb_preview._scaled_geometry_mm
+    repaired = GeometryCollection(
+        [
+            box(0.0, 0.0, 4.0, 10.0),
+            box(6.0, 0.0, 10.0, 10.0),
+            LineString([(4.0, 5.0), (6.0, 5.0)]),
+        ]
+    )
+
+    def fake_scaled_geometry_mm(geometry, scale_factor):
+        if geometry.equals(box(0.0, 0.0, 1.0, 1.0)):
+            return repaired
+        return original_scaled_geometry_mm(geometry, scale_factor)
+
+    monkeypatch.setattr(
+        vector_glb_preview,
+        "_scaled_geometry_mm",
+        fake_scaled_geometry_mm,
+    )
+    matched_rgb = np.full((10, 30, 3), (20, 30, 40), dtype=np.uint8)
+
+    parts = vector_glb_preview.build_vector_quick_preview_parts(
+        source=source,
+        matched_rgb=matched_rgb,
+        height_identity_rgb=matched_rgb.copy(),
+        mask_solid=np.ones((10, 30), dtype=bool),
+        backing_rgba=(255, 255, 255, 255),
+        backing_thickness_mm=1.6,
+    )
+
+    assert parts is not None
+    color_parts = [part for part in parts if part.role == "color"]
+    assert sum(len(part.extrusions) for part in color_parts) == 4
+
+
+def test_analytic_parts_simplify_only_below_half_preview_pixel() -> None:
+    top_edge = [
+        (x / 10.0, 1.0 if x % 2 == 0 else 0.99)
+        for x in range(99, -1, -1)
+    ]
+    detailed = Polygon([(0.0, 0.0), (10.0, 0.0), (10.0, 1.0), *top_edge])
+    source = vector_glb_preview.VectorQuickPreviewSourceV1(
+        provenance="e" * 64,
+        shape_data=(),
+        clipped_shapes=({"geometry": detailed, "color": (0, 0, 0)},),
+        silhouette=detailed,
+        image_vectorizer_bounds=box(0.0, 0.0, 10.0, 1.0),
+        scale_factor=1.0,
+        bbox=(0.0, 0.0, 10.0, 1.0),
+    )
+    matched_rgb = np.full((10, 100, 3), (20, 30, 40), dtype=np.uint8)
+
+    parts = vector_glb_preview.build_vector_quick_preview_parts(
+        source=source,
+        matched_rgb=matched_rgb,
+        height_identity_rgb=matched_rgb.copy(),
+        mask_solid=np.ones((10, 100), dtype=bool),
+        backing_rgba=(255, 255, 255, 255),
+        backing_thickness_mm=1.6,
+    )
+
+    color_part = next(part for part in parts if part.role == "color")
+    simplified = color_part.extrusions[0].footprint
+    assert len(simplified.exterior.coords) < len(detailed.exterior.coords)
+    assert simplified.hausdorff_distance(detailed) <= 0.0500001
+
+
+def _mesh_planar_footprint(mesh: trimesh.Trimesh):
+    vertices = np.asarray(mesh.vertices)
+    faces = np.asarray(mesh.faces)
+    z_min = float(vertices[:, 2].min())
+    bottom_faces = faces[
+        np.all(np.isclose(vertices[faces, 2], z_min), axis=1)
+    ]
+    triangles = [
+        Polygon(vertices[face, :2])
+        for face in bottom_faces
+        if Polygon(vertices[face, :2]).area > 0
+    ]
+    return unary_union(triangles)
+
+
+def test_analytic_extrusion_preserves_curve_hole_and_components() -> None:
+    curved_with_hole = Polygon(
+        [
+            (0.137, 0.211),
+            (1.073, 0.047),
+            (2.183, 0.391),
+            (2.417, 1.319),
+            (1.829, 2.271),
+            (0.731, 2.419),
+            (0.083, 1.473),
+        ],
+        [[(0.831, 0.891), (1.439, 0.817), (1.527, 1.413), (0.913, 1.529)]],
+    )
+    disconnected = Polygon(
+        [(3.137, 0.211), (4.271, 0.083), (4.493, 1.291), (3.251, 1.407)]
+    )
+    extrusion = vector_glb_preview.VectorPreviewExtrusion(
+        footprint=curved_with_hole,
+        footprints=(curved_with_hole, disconnected),
+        footprints_validated=True,
+        z_min=0.2,
+        z_max=0.6,
+    )
+
+    mesh = vector_glb_preview._mesh_from_analytic_extrusion(extrusion)
+    footprint = _mesh_planar_footprint(mesh)
+    expected = unary_union([curved_with_hole, disconnected])
+
+    assert footprint.area == pytest.approx(expected.area, abs=0.01)
+    assert footprint.bounds == pytest.approx(expected.bounds, abs=1e-4)
+    polygons = list(footprint.geoms) if footprint.geom_type == "MultiPolygon" else [footprint]
+    assert len(polygons) == 2
+    assert sum(len(polygon.interiors) for polygon in polygons) == 1
+    assert any(
+        np.isclose(mesh.vertices[:, 0], 0.137, atol=1e-6)
+    )
+    assert mesh.bounds[:, 2] == pytest.approx((0.2, 0.6), abs=1e-6)
+    assert mesh.is_watertight
+    assert len(mesh.split(only_watertight=False)) == 2
+
+
+def test_analytic_extrusion_skips_degenerate_repair_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    degenerate = box(0.0, 0.0, 1e-8, 1e-8)
+    visible = box(0.0, 0.0, 1.0, 1.0)
+    seen_areas: list[float] = []
+
+    def fake_extrude(polygon, **_kwargs):
+        seen_areas.append(float(polygon.area))
+        return _box_mesh(z_min=0.0, z_max=1.0)
+
+    monkeypatch.setattr(
+        vector_glb_preview.trimesh.creation,
+        "extrude_polygon",
+        fake_extrude,
+    )
+
+    mesh = vector_glb_preview._mesh_from_analytic_extrusion(
+        vector_glb_preview.VectorPreviewExtrusion(
+            footprint=visible,
+            footprints=(degenerate, visible),
+            footprints_validated=True,
+            z_min=0.2,
+            z_max=0.6,
+        )
+    )
+
+    assert mesh is not None
+    assert seen_areas == [pytest.approx(1.0)]
+
+
+def test_analytic_extrusion_raster_fallback_is_local_to_rejected_polygon(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    accepted = box(0.0, 0.0, 1.0, 1.0)
+    rejected = box(2.0, 0.0, 3.0, 1.0)
+    original_extrude = vector_glb_preview.trimesh.creation.extrude_polygon
+    fallback_calls: list[tuple[float, tuple[int, int, int, int], float]] = []
+
+    def selective_extrude(polygon, *args, **kwargs):
+        if polygon.bounds[0] >= 2.0:
+            raise ValueError("preview triangulation rejected")
+        return original_extrude(polygon, *args, **kwargs)
+
+    monkeypatch.setattr(
+        vector_glb_preview.trimesh.creation,
+        "extrude_polygon",
+        selective_extrude,
+    )
+
+    def fake_raster_fallback(extrusion, *, rgba, pixels_per_mm):
+        fallback_calls.append((extrusion.footprint.area, rgba, pixels_per_mm))
+        return _box_mesh(z_min=extrusion.z_min, z_max=extrusion.z_max)
+
+    monkeypatch.setattr(
+        vector_glb_preview,
+        "_mesh_from_extrusion_v2",
+        fake_raster_fallback,
+    )
+
+    mesh = vector_glb_preview._mesh_from_analytic_extrusion(
+        vector_glb_preview.VectorPreviewExtrusion(
+            footprint=accepted,
+            footprints=(accepted, rejected),
+            footprints_validated=True,
+            z_min=0.2,
+            z_max=0.6,
+        )
+    )
+
+    assert mesh is not None
+    assert fallback_calls == [(1.0, (255, 255, 255, 255), 10.0)]
+
+
+def test_analytic_extrusion_does_not_downgrade_memory_exhaustion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        vector_glb_preview.trimesh.creation,
+        "extrude_polygon",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(MemoryError()),
+    )
+    monkeypatch.setattr(
+        vector_glb_preview,
+        "_mesh_from_extrusion_v2",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("memory exhaustion must not use raster fallback")
+        ),
+    )
+
+    with pytest.raises(MemoryError):
+        vector_glb_preview._mesh_from_analytic_extrusion(
+            vector_glb_preview.VectorPreviewExtrusion(
+                footprint=box(0.0, 0.0, 1.0, 1.0),
+                z_min=0.2,
+                z_max=0.6,
+            )
+        )
+
+
+def test_analytic_glb_exports_height_key_extras_and_display_only_parts(
+    tmp_path: Path,
+) -> None:
+    source = _quick_source_for_classification()
+    matched_rgb = np.full((10, 30, 3), (120, 80, 40), dtype=np.uint8)
+    identity = np.full((10, 30, 3), (9, 8, 7), dtype=np.uint8)
+    parts = vector_glb_preview.build_vector_quick_preview_parts(
+        source=source,
+        matched_rgb=matched_rgb,
+        height_identity_rgb=identity,
+        mask_solid=np.ones((10, 30), dtype=bool),
+        backing_rgba=(250, 250, 250, 255),
+        backing_thickness_mm=1.6,
+    )
+    out_path = tmp_path / "analytic.glb"
+
+    vector_glb_preview.export_vector_quick_preview_glb(
+        parts,
+        output_path=str(out_path),
+    )
+
+    gltf = _load_glb_json(out_path)
+    by_name = {mesh["name"]: mesh for mesh in gltf["meshes"]}
+    assert "color_785028" in by_name
+    assert by_name["color_785028"]["extras"]["height_key"] == "090807"
+    assert "backing_plate" in by_name
+    assert "preview_canvas_bounds" in by_name
+    assert not any("material_layer" in name for name in by_name)
 
 
 def test_vector_glb_kernel_defaults_to_v2(monkeypatch) -> None:

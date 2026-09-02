@@ -6,6 +6,7 @@ import pytest
 from api import preview_cache_artifacts
 from api.preview_cache_artifacts import (
     ARTIFACT_SCHEMA,
+    PREVIEW_CACHE_REVISION_KEY,
     PreviewCacheRevisionConflict,
     estimate_preview_cache_bytes,
     externalize_preview_cache,
@@ -551,8 +552,11 @@ def test_persist_preview_cache_preserves_legacy_session_shape() -> None:
 
     persisted = persist_preview_cache(session_id, store, cache)
 
-    assert persisted is cache
-    assert store.get(session_id)["preview_cache"] is cache
+    assert not is_preview_cache_artifact_ref(persisted)
+    assert store.get(session_id)["preview_cache"] is persisted
+    assert persisted is not cache
+    assert isinstance(persisted[PREVIEW_CACHE_REVISION_KEY], str)
+    np.testing.assert_array_equal(persisted["matched_rgb"], cache["matched_rgb"])
 
 
 def test_preview_cache_transaction_hydrates_requested_fields_and_commits_dirty_only(

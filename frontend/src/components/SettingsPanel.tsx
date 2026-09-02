@@ -160,6 +160,12 @@ export default function SettingsPanel() {
   const setEnableCompletionNotifications = useSettingsStore(
     (s) => s.setEnableCompletionNotifications,
   );
+  const enableSmoothVectorPreview = useSettingsStore(
+    (s) => s.enableSmoothVectorPreview,
+  );
+  const setEnableSmoothVectorPreview = useSettingsStore(
+    (s) => s.setEnableSmoothVectorPreview,
+  );
   const preserveUploadFilenameFor3mf = useSettingsStore(
     (s) => s.preserveUploadFilenameFor3mf,
   );
@@ -1076,6 +1082,32 @@ export default function SettingsPanel() {
                     />
                   </WikiTooltip>
                 </div>
+              </div>
+
+              <div
+                data-testid="settings-smooth-vector-preview-section"
+                className="flex items-start justify-between gap-4 border-t border-slate-200/60 pt-5 dark:border-slate-700/60"
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+                      {t("settings.smooth_vector_preview_heading")}
+                    </h3>
+                    <HelpDot
+                      title={t("settings.smooth_vector_preview_heading")}
+                      description={t("settings.smooth_vector_preview_hint")}
+                      ariaLabel={t("settings.smooth_vector_preview_help_aria")}
+                    />
+                  </div>
+                  <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                    {t("settings.smooth_vector_preview_description")}
+                  </p>
+                </div>
+                <Switch
+                  checked={enableSmoothVectorPreview}
+                  onChange={setEnableSmoothVectorPreview}
+                  ariaLabel={t("settings.smooth_vector_preview_heading")}
+                />
               </div>
             </section>
           )}

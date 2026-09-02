@@ -146,6 +146,17 @@ describe("Property 3: 参数变更使 threemfDiskPath 失效", () => {
     );
   });
 
+  it("setTargetHeightMm invalidates threemfDiskPath for any valid height", () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 10, max: 400 }), (height) => {
+        seedThreemfPath();
+        useConverterStore.getState().setTargetHeightMm(height);
+        return expectInvalidated();
+      }),
+      { numRuns: 100 }
+    );
+  });
+
   it("setSpacerThick invalidates threemfDiskPath for any valid thickness", () => {
     fc.assert(
       fc.property(fc.double({ min: 0.2, max: 3.5, noNaN: true }), (thick) => {

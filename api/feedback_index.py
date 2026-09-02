@@ -562,6 +562,8 @@ def generate_index_markdown(
         "material_layer_height_mm",
         "material_backing_material_dir_name",
         "preserve_upload_filename_for_3mf",
+        "enable_smooth_vector_preview",
+        "vector_preview_renderer",
     ):
         snapshot_lines.append(f"- {key}: {_safe_str(context.get(key))}")
 
@@ -659,6 +661,24 @@ def generate_summary_text(ticket_id: str, payload: dict[str, Any]) -> str:
     else:
         upload_filename_line = "沿用上传文件名：(未采集)。"
 
+    smooth_vector_preview = context.get("enable_smooth_vector_preview")
+    vector_preview_renderer = context.get("vector_preview_renderer")
+    if smooth_vector_preview is True:
+        vector_preference_label = "平滑"
+    elif smooth_vector_preview is False:
+        vector_preference_label = "兼容模式"
+    else:
+        vector_preference_label = "(未采集)"
+    renderer_labels = {
+        "vector_analytic": "平滑轮廓",
+        "segmented": "分段模型",
+        None: "(当前不适用)",
+    }
+    vector_renderer_line = (
+        f"矢量预览：{vector_preference_label}；当前轻量模型："
+        f"{renderer_labels.get(vector_preview_renderer, '(未知)')}。"
+    )
+
     action_history = context.get("action_history") or []
     recent = list(_iter_list(action_history))[-5:]
     action_lines: list[str] = []
@@ -719,6 +739,7 @@ def generate_summary_text(ticket_id: str, payload: dict[str, Any]) -> str:
         f"提交时工作流：{active_tab} Tab / {source_version} 模式 / "
         f"颜色模式 {color_mode} / LUT {lut_name}。{material_block}\n\n"
         f"{upload_filename_line}\n\n"
+        f"{vector_renderer_line}\n\n"
         f"{workshop_block}"
         f"{advanced_line}\n\n"
         f"最近操作：{' → '.join(action_lines) if action_lines else '(无记录)'}。\n\n"

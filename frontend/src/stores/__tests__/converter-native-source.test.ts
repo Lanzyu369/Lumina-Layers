@@ -2554,6 +2554,7 @@ describe("native bundle converter flow", () => {
       model_enable: true,
       model_only: true,
     } as never);
+    useSettingsStore.setState({ enableSmoothVectorPreview: false });
 
     await useConverterStore.getState().submitPreview();
 
@@ -2568,6 +2569,7 @@ describe("native bundle converter flow", () => {
     expect(params).not.toHaveProperty("model_only");
     expect(params).not.toHaveProperty("model_threshold");
     expect(params).not.toHaveProperty("model_margin");
+    expect(params.enable_smooth_vector_preview).toBe(false);
   });
 
   it("submitGenerate sends native bundle fields in the JSON body", async () => {

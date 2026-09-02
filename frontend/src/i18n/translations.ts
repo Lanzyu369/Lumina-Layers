@@ -2969,6 +2969,22 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "默认值为 10.0 像素/毫米。",
     en: "The default is 10.0 px/mm.",
   },
+  "settings.smooth_vector_preview_heading": {
+    zh: "平滑 SVG 轻量预览",
+    en: "Smooth lightweight SVG preview",
+  },
+  "settings.smooth_vector_preview_description": {
+    zh: "优先用 SVG 原始轮廓生成平滑、轻量的浏览器 3D 模型；关闭后回退旧版像素分区预览。",
+    en: "Prefer smooth, lightweight browser 3D geometry from the original SVG outlines; turn it off to use the legacy pixel-segmented preview.",
+  },
+  "settings.smooth_vector_preview_hint": {
+    zh: "默认开启，仅影响原生矢量模式的浏览器 3D 显示，不改变 3MF、材料或打印质量。可在兼容性排查时临时关闭。",
+    en: "On by default. This affects only browser 3D display for native Vector mode; it does not change the 3MF, materials, or print quality. Turn it off temporarily for compatibility troubleshooting.",
+  },
+  "settings.smooth_vector_preview_help_aria": {
+    zh: "关于平滑 SVG 轻量预览",
+    en: "About smooth lightweight SVG preview",
+  },
   "settings.auto_replace_gradient_heading": {
     zh: "自动清理渐变条纹",
     en: "Clean gradient banding automatically",

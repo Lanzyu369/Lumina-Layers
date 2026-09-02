@@ -4,6 +4,7 @@ import apiClient from "./api/client";
 import type { HealthResponse } from "./api/types";
 import { trackLuminaEvent } from "./analytics/umami";
 import { useAutoPreview } from "./hooks/useAutoPreview";
+import { useVectorPreviewRenderer } from "./hooks/useVectorPreviewRenderer";
 import { useAnnouncement } from "./hooks/useAnnouncement";
 import { usePuzzleLayoutPreview } from "./hooks/usePuzzleLayoutPreview";
 import { useSessionLease } from "./hooks/useSessionLease";
@@ -232,6 +233,7 @@ function AppContent() {
   useSessionLease(singleStageSessionId, "single_stage");
   useActionHistoryBootstrap();
   useAutoPreview();
+  useVectorPreviewRenderer();
   usePuzzleLayoutPreview();
   useElectronLanguageSync();
   const workspace = useWorkspaceMode();

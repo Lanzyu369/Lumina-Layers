@@ -30,9 +30,18 @@ const mockReplaceColor = vi.mocked(replaceColor);
 const mockReplaceColorsBatch = vi.mocked(replaceColorsBatch);
 const mockApplyRecipeOverride = vi.mocked(applyRecipeOverride);
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 function seedStore(overrides: Partial<ConverterState> = {}) {
   useConverterStore.setState({
     sessionId: "sess-abc",
+    previewRequestRevision: 20,
     previewImageUrl: "/api/files/preview-old",
     previewBaseImageUrl: "/api/files/preview-old",
     previewGlbUrl: null,
@@ -166,5 +175,41 @@ describe("layer image cache invalidation after custom recipe apply", () => {
     // as the user hovers or the auto-fetch effect fires.
     // 保留面板可见性，用户下一次 hover / 自动 fetch 生效时会立刻刷新。
     expect(state.layerImagesOpen).toBe(true);
+  });
+
+  it("ignores a custom recipe response from an older preview revision", async () => {
+    const response = deferred<RecipeOverrideApplyResponse>();
+    mockApplyRecipeOverride.mockReturnValueOnce(response.promise);
+    seedStore();
+
+    const request = useConverterStore
+      .getState()
+      .applyCustomRecipeOverride(["region-1"], [1, 1], "Top2Bottom");
+    useConverterStore.setState({
+      previewRequestRevision: 21,
+      previewImageUrl: "/api/files/new-revision",
+      previewBaseImageUrl: "/api/files/new-revision",
+      previewGlbUrl: "/api/files/new-revision.glb",
+      replacePreviewLoading: false,
+    });
+    response.resolve({
+      status: "ok",
+      message: "stale",
+      rgb: [1, 2, 3],
+      lab: [1, 2, 3],
+      source: "predictive",
+      preview_url: "/api/files/stale-recipe",
+      preview_glb_url: "/api/files/stale-recipe.glb",
+      override_count: 1,
+    });
+    await request;
+
+    expect(useConverterStore.getState()).toMatchObject({
+      previewRequestRevision: 21,
+      previewImageUrl: "/api/files/new-revision",
+      previewBaseImageUrl: "/api/files/new-revision",
+      previewGlbUrl: "/api/files/new-revision.glb",
+      replacePreviewLoading: false,
+    });
   });
 });
