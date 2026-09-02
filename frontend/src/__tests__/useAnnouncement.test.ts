@@ -27,6 +27,32 @@ function makeEntry(version: string): AnnouncementEntry {
 }
 
 describe("useAnnouncement", () => {
+  it("announces smooth SVG previews and the compatibility setting", () => {
+    const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-08-30");
+    const items = entry?.sections.flatMap((section) => section.items) ?? [];
+
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("平滑 SVG 轻量预览") &&
+          item.zh.includes("尺寸") &&
+          item.zh.includes("设置") &&
+          item.en.includes("smooth lightweight SVG preview") &&
+          item.en.includes("size") &&
+          item.en.includes("Settings"),
+      ),
+    ).toBe(true);
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("模型覆面") &&
+          item.zh.includes("改色") &&
+          item.en.includes("model-surface") &&
+          item.en.includes("recoloured"),
+      ),
+    ).toBe(true);
+  });
+
   it("announces the optional uploaded filename setting", () => {
     const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-08-13");
     const items = entry?.sections.flatMap((section) => section.items) ?? [];

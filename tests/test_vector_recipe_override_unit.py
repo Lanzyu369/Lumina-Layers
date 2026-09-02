@@ -289,3 +289,32 @@ class TestApplyRecipeOverridesToAnalysis:
 
         # All masks rejected → overrides skipped, recipe untouched.
         assert analysis.matched_shapes[0]["recipe"] == [2, 2, 2]
+
+    def test_dimension_change_maps_recipe_mask_to_fresh_vector_geometry(self):
+        """Recipe footprints stay normalized when current physical size changes."""
+
+        shape_inside = {"geometry": box(1, 1, 4, 4), "recipe": [2, 2, 2]}
+        shape_outside = {"geometry": box(6, 6, 9, 9), "recipe": [1, 1, 1]}
+        analysis = _make_analysis(
+            [shape_inside, shape_outside],
+            scale_factor=2.0,
+        )
+        source_mask = np.zeros((100, 100), dtype=bool)
+        source_mask[10:41, 10:41] = True
+
+        apply_recipe_overrides_to_analysis(
+            analysis,
+            recipe_overrides=[
+                {
+                    "region_id": "region-A",
+                    "recipe": [0, 3, 3],
+                    "layer_order": "Top2Bottom",
+                }
+            ],
+            region_masks={"region-A": source_mask},
+            target_layers=3,
+            source_grid_shape=(100, 100),
+        )
+
+        assert analysis.matched_shapes[0]["recipe"] == [0, 3, 3]
+        assert analysis.matched_shapes[1]["recipe"] == [1, 1, 1]

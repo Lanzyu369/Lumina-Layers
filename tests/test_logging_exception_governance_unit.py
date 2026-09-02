@@ -75,8 +75,6 @@ VECTOR_STRUCTURED_EVENTS = {
     "vector_recipe_overrides_load_failed",
     "vector_recipe_overrides_apply_failed",
     "vector_3mf_exported",
-    "vector_glb_exported",
-    "vector_glb_exported_skipped",
     "vector_2d_preview_skipped",
     "vector_2d_preview_done",
     "vector_2d_preview_failed",
@@ -242,7 +240,6 @@ CONVERTER_STRUCTURED_EVENTS = {
     "converter_merge_colors_done",
     "converter_generate_large_format_done",
     "converter_generate_download_registration_failed",
-    "converter_generate_glb_registration_failed",
     "converter_crop_registration_failed",
     "color_card_download_registration_failed",
     "color_card_glb_registration_failed",
@@ -253,6 +250,7 @@ CONVERTER_STRUCTURED_EVENTS = {
     "converter_auto_detect_colors_failed",
     "converter_auto_detect_temp_cleanup_failed",
     "converter_cleanup_session_files_done",
+    "converter_vector_preview_renderer_done",
     # Auxiliary material-archive usage tracking. The success path has no
     # dedicated event (per-archive bookkeeping piggybacks on the existing
     # ``converter_generate_*`` events); only the failure path is logged so
@@ -324,8 +322,6 @@ FEEDBACK_STRUCTURED_EVENTS = {
     "feedback_screenshot_too_large",
     "feedback_screenshot_invalid",
     "feedback_dump_failed",
-    "feedback_ticket_sequence_exhausted",
-    "feedback_ticket_scan_failed",
     "feedback_ticket_assembly_interrupted",
     "feedback_startup_cleanup_failed",
     "feedback_config_invalid_env",

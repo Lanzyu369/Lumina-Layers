@@ -204,4 +204,55 @@ describe("replacement undo/redo preserves relief height identity", () => {
       expect(pollAsyncGlb).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    { action: "undo" as const, historyCanUndo: true, historyCanRedo: false },
+    { action: "redo" as const, historyCanUndo: false, historyCanRedo: true },
+  ])(
+    "ignores a stale $action response after the preview revision changes",
+    async ({ action, historyCanUndo, historyCanRedo }) => {
+      const response = deferred<ReplacementHistoryResponse>();
+      mockReplacementHistory.mockReturnValueOnce(response.promise);
+      const pollAsyncGlb = vi.fn();
+      seedStore({
+        sessionId: "same-session",
+        previewRequestRevision: 30,
+        historyCanUndo,
+        historyCanRedo,
+        _pollAsyncGlb: pollAsyncGlb,
+      });
+
+      const request =
+        action === "undo"
+          ? useConverterStore.getState().undoColorRemap()
+          : useConverterStore.getState().redoColorRemap();
+      useConverterStore.setState({
+        previewRequestRevision: 31,
+        previewImageUrl: "/api/files/new-revision",
+        previewBaseImageUrl: "/api/files/new-revision",
+        previewGlbUrl: "/api/files/new-revision.glb",
+        historyBusy: false,
+        replacePreviewLoading: false,
+      });
+      response.resolve(
+        historyResponse({
+          action,
+          preview_url: "/api/files/stale-revision",
+          preview_glb_url: "/api/files/stale-revision.glb",
+        }),
+      );
+      await request;
+
+      expect(useConverterStore.getState()).toMatchObject({
+        sessionId: "same-session",
+        previewRequestRevision: 31,
+        previewImageUrl: "/api/files/new-revision",
+        previewBaseImageUrl: "/api/files/new-revision",
+        previewGlbUrl: "/api/files/new-revision.glb",
+        historyBusy: false,
+        replacePreviewLoading: false,
+      });
+      expect(pollAsyncGlb).not.toHaveBeenCalled();
+    },
+  );
 });

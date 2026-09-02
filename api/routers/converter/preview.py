@@ -42,6 +42,8 @@ from api.schemas.converter import (
     BedSizeItem,
     BedSizeListResponse,
     ColorReplacementItem,
+    VectorPreviewRendererRequest,
+    VectorPreviewRendererResponse,
 )
 from api.schemas.lut import LutSourceSelection
 from api.schemas.responses import (
@@ -933,6 +935,10 @@ async def convert_preview(
     use_lut_constrained: bool = Form(False, description="高精度LUT约束匹配"),
     auto_dynamic_range: bool = Form(False, description="自动动态范围压缩（实验性）"),
     high_precision_3d_preview: bool = Form(False, description="3D高精度颜色预览"),
+    enable_smooth_vector_preview: bool = Form(
+        True,
+        description="原生 SVG 使用解析式平滑轻量 3D 预览",
+    ),
     is_dark: bool = Form(True, description="深色主题"),
     material_source: str = Form("lut", description="颜色来源: lut | material_archive"),
     selected_materials: list[str] | str | None = Form(None, description="已选耗材目录名列表"),
@@ -1638,6 +1644,16 @@ async def convert_preview(
                 ),
             )
             raise
+    if cache_session_value is not None:
+        renderer_metadata = (
+            cache_session_value.get("metadata")
+            if is_preview_cache_artifact_ref(cache_session_value)
+            else cache_session_value
+        )
+        if isinstance(renderer_metadata, dict):
+            renderer_metadata["enable_smooth_vector_preview"] = bool(
+                enable_smooth_vector_preview
+            )
     store.put(session_id, "preview_cache", cache_session_value)
     schedule_visible_region_cache_prewarm(
         session_id,
@@ -2349,6 +2365,69 @@ def get_segmented_glb_status(
             else None
         ),
     }
+
+
+@router.post(
+    "/vector-preview-renderer",
+    response_model=VectorPreviewRendererResponse,
+)
+def rebuild_vector_preview_renderer(
+    request: VectorPreviewRendererRequest,
+    store: SessionStore = Depends(get_session_store),
+    registry: FileRegistry = Depends(get_file_registry),
+) -> VectorPreviewRendererResponse:
+    """Rebuild only the browser GLB renderer for one native Vector session.
+
+    只为原生 Vector session 重建浏览器 GLB，不重跑 2D 预览或打印分析。
+    """
+
+    session_data = _require_session(store, request.session_id)
+    cache = session_data.get("preview_cache")
+    if not isinstance(cache, dict):
+        raise HTTPException(status_code=409, detail=PREVIEW_CACHE_UNAVAILABLE_DETAIL)
+    metadata = get_preview_cache_metadata(cache)
+    modeling_mode = metadata.get("modeling_mode")
+    modeling_mode_value = str(
+        getattr(modeling_mode, "value", modeling_mode) or ""
+    ).strip().lower()
+    if modeling_mode_value != "vector":
+        raise HTTPException(
+            status_code=409,
+            detail="The active session is not a native Vector preview.",
+        )
+
+    requested_renderer = (
+        "vector_analytic"
+        if request.enable_smooth_vector_preview
+        else "segmented"
+    )
+    renderer_metadata = {
+        "enable_smooth_vector_preview": bool(
+            request.enable_smooth_vector_preview
+        ),
+        "vector_preview_renderer": requested_renderer,
+    }
+    job_token = schedule_glb_build(
+        request.session_id,
+        store,
+        registry,
+        cache,
+        metadata_updates=renderer_metadata,
+    )
+    log.info(
+        "Vector preview renderer rebuild scheduled",
+        extra={
+            "event": "converter_vector_preview_renderer_done",
+            "session_id": request.session_id,
+            "renderer": requested_renderer,
+            "job_token": job_token,
+        },
+    )
+    return VectorPreviewRendererResponse(
+        session_id=request.session_id,
+        job_token=job_token,
+        renderer=requested_renderer,
+    )
 
 
 @router.post("/upload-heightmap")

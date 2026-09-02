@@ -25,6 +25,14 @@ import { replaceColorsBatch } from "../api/converter";
 // submitReplacePreview 改走批量端点，mock 跟随更新。
 const mockReplaceColorsBatch = vi.mocked(replaceColorsBatch);
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 vi.stubGlobal(
   "URL",
   Object.assign(globalThis.URL ?? {}, {
@@ -159,5 +167,52 @@ describe("replace preview behavior", () => {
       ),
       { numRuns: 100 },
     );
+  });
+
+  it("does not commit an old replacement after the preview revision changes", async () => {
+    const response = deferred<ColorReplaceResponse>();
+    mockReplaceColorsBatch.mockReturnValueOnce(response.promise);
+    useConverterStore.setState({
+      sessionId: "same-session",
+      previewRequestRevision: 10,
+      colorRemapMap: { aabbcc: "ddeeff" },
+      palette: [
+        {
+          quantized_hex: "aabbcc",
+          matched_hex: "aabbcc",
+          pixel_count: 10,
+          percentage: 100,
+        },
+      ],
+      previewImageUrl: "/api/files/current.png",
+      previewBaseImageUrl: "/api/files/current.png",
+      previewGlbUrl: "/api/files/current.glb",
+      replacePreviewLoading: false,
+    });
+
+    const request = useConverterStore.getState().submitReplacePreview();
+    useConverterStore.setState({
+      previewRequestRevision: 11,
+      previewImageUrl: "/api/files/new-revision.png",
+      previewBaseImageUrl: "/api/files/new-revision.png",
+      previewGlbUrl: "/api/files/new-revision.glb",
+      replacePreviewLoading: false,
+    });
+    response.resolve({
+      status: "ok",
+      message: "stale",
+      preview_url: "/api/files/stale.png",
+      preview_3d_url: "/api/files/stale.glb",
+      replacement_count: 1,
+    });
+    await request;
+
+    expect(useConverterStore.getState()).toMatchObject({
+      previewRequestRevision: 11,
+      previewImageUrl: "/api/files/new-revision.png",
+      previewBaseImageUrl: "/api/files/new-revision.png",
+      previewGlbUrl: "/api/files/new-revision.glb",
+      replacePreviewLoading: false,
+    });
   });
 });

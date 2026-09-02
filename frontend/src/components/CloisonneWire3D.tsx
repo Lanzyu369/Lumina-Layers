@@ -7,6 +7,7 @@ import {
   extrudeRectangles,
 } from "./OutlineFrame3D";
 import { debugThreeLog, summarizeMeshList } from "../utils/threeDebug";
+import type { PreviewSpace } from "../utils/previewSpace";
 
 const GEOMETRY_DISPOSE_DELAY_MS = 0;
 const pendingCloisonneWireGeometryDisposals = new Map<
@@ -76,6 +77,7 @@ export function rasterizeColorMeshesToGrid(
   originY: number,
   gridW: number,
   gridH: number,
+  previewSpace?: PreviewSpace | null,
 ): Int16Array {
   const grid = new Int16Array(gridW * gridH);
   grid.fill(-1);
@@ -100,6 +102,13 @@ export function rasterizeColorMeshesToGrid(
     if (maxZ <= minZ) continue;
 
     const tolerance = (maxZ - minZ) * 0.01 + 1e-6;
+    const toDisplayPoint = (vertexIndex: number): { x: number; y: number } => {
+      const point = {
+        x: posAttr.getX(vertexIndex),
+        y: posAttr.getY(vertexIndex),
+      };
+      return previewSpace?.toDisplayPoint(point) ?? point;
+    };
 
     // Build set of top-face vertex indices
     const topVertexSet = new Set<number>();
@@ -115,10 +124,13 @@ export function rasterizeColorMeshesToGrid(
       const b = index.getX(t + 1);
       const c = index.getX(t + 2);
       if (topVertexSet.has(a) && topVertexSet.has(b) && topVertexSet.has(c)) {
+        const pointA = toDisplayPoint(a);
+        const pointB = toDisplayPoint(b);
+        const pointC = toDisplayPoint(c);
         fillTriangleInColorGrid(
-          posAttr.getX(a), posAttr.getY(a),
-          posAttr.getX(b), posAttr.getY(b),
-          posAttr.getX(c), posAttr.getY(c),
+          pointA.x, pointA.y,
+          pointB.x, pointB.y,
+          pointC.x, pointC.y,
           grid, gridW, gridH,
           originX, originY, cellSize, colorIndex,
         );
@@ -380,6 +392,8 @@ export interface CloisonneWire3DProps {
   backingPlateMesh: THREE.Mesh | null;
   spacerThick: number;
   colorLayerHeightMm?: number;
+  rasterCellSize?: number;
+  previewSpace?: PreviewSpace | null;
 }
 
 /**
@@ -394,6 +408,8 @@ export interface CloisonneWire3DProps {
 function deriveGridParams(
   backingPlateMesh: THREE.Mesh | null,
   colorMeshes: THREE.Mesh[],
+  previewSpace: PreviewSpace | null,
+  requestedCellSize?: number,
 ): {
   cellSize: number;
   originX: number;
@@ -403,7 +419,10 @@ function deriveGridParams(
 } | null {
   // Try backing plate first (preferred — matches OutlineFrame3D behavior)
   if (backingPlateMesh) {
-    const result = rasterizeMeshToGrid(backingPlateMesh.geometry);
+    const result = rasterizeMeshToGrid(backingPlateMesh.geometry, {
+      cellSize: requestedCellSize,
+      previewSpace,
+    });
     if (result) {
       return {
         cellSize: result.cellSize,
@@ -437,7 +456,12 @@ function deriveGridParams(
     const tolerance = (maxZ - minZ) * 0.01 + 1e-6;
     for (let v = 0; v < posAttr.count; v++) {
       if (Math.abs(posAttr.getZ(v) - maxZ) < tolerance) {
-        allTopPoints.push([posAttr.getX(v), posAttr.getY(v)]);
+        const point = {
+          x: posAttr.getX(v),
+          y: posAttr.getY(v),
+        };
+        const displayPoint = previewSpace?.toDisplayPoint(point) ?? point;
+        allTopPoints.push([displayPoint.x, displayPoint.y]);
       }
     }
   }
@@ -462,7 +486,9 @@ function deriveGridParams(
   ).sort((a, b) => a - b);
 
   let cellSize: number;
-  if (uniqueXs.length >= 4) {
+  if (Number.isFinite(requestedCellSize) && (requestedCellSize ?? 0) > 1e-6) {
+    cellSize = requestedCellSize!;
+  } else if (uniqueXs.length >= 4) {
     const gaps: number[] = [];
     for (let i = 1; i < uniqueXs.length; i++) {
       const gap = uniqueXs[i] - uniqueXs[i - 1];
@@ -514,6 +540,8 @@ export default function CloisonneWire3D({
   backingPlateMesh,
   spacerThick,
   colorLayerHeightMm,
+  rasterCellSize,
+  previewSpace = null,
 }: CloisonneWire3DProps) {
   const resolvedColorLayerHeightMm = resolveCloisonneColorLayerHeightMm(colorLayerHeightMm);
   const geometry = useMemo(() => {
@@ -525,7 +553,15 @@ export default function CloisonneWire3D({
     if (wireWidthMm <= 0 || wireHeightMm <= 0) return null;
 
     // 1. Derive grid parameters (cellSize, origin, dimensions)
-    const gridParams = deriveGridParams(backingPlateMesh, visibleColorMeshes);
+    const displayCellSize = rasterCellSize && previewSpace
+      ? rasterCellSize * Math.min(previewSpace.scaleX, previewSpace.scaleY)
+      : rasterCellSize;
+    const gridParams = deriveGridParams(
+      backingPlateMesh,
+      visibleColorMeshes,
+      previewSpace,
+      displayCellSize,
+    );
     if (!gridParams) return null;
 
     const { cellSize, originX, originY, gridW, gridH } = gridParams;
@@ -533,6 +569,7 @@ export default function CloisonneWire3D({
     // 2. Rasterize all color meshes to a shared color grid
     const colorGrid = rasterizeColorMeshesToGrid(
       visibleColorMeshes, cellSize, originX, originY, gridW, gridH,
+      previewSpace,
     );
 
     // 3. Detect color edges via 4-neighbor comparison
@@ -587,7 +624,7 @@ export default function CloisonneWire3D({
     });
 
     return geo;
-  }, [enabled, wireWidthMm, wireHeightMm, colorMeshes, backingPlateMesh, spacerThick, resolvedColorLayerHeightMm]);
+  }, [enabled, wireWidthMm, wireHeightMm, colorMeshes, backingPlateMesh, spacerThick, resolvedColorLayerHeightMm, rasterCellSize, previewSpace]);
 
   useEffect(() => {
     cancelPendingCloisonneWireGeometryDispose(geometry);

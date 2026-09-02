@@ -21,6 +21,7 @@ import pytest
 
 from api.feedback_assembler import (
     SyncCollectionResult,
+    collect_direct_original_upload,
     collect_sync_attachments,
     finalize_ticket_async,
     run_startup_cleanup,
@@ -67,6 +68,135 @@ class _MockSessionStore:
 
     def get(self, session_id: str) -> dict[str, Any] | None:
         return self._sessions.get(session_id)
+
+
+class _ChunkedUpload:
+    def __init__(self, *chunks: bytes | Exception) -> None:
+        self.filename = "source.png"
+        self.size = None
+        self._chunks = list(chunks)
+
+    async def seek(self, _offset: int) -> None:
+        return None
+
+    async def read(self, _size: int) -> bytes:
+        if not self._chunks:
+            return b""
+        value = self._chunks.pop(0)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+
+def test_direct_original_short_read_failure_removes_partial_file(
+    tmp_path: Path,
+) -> None:
+    ticket_dir = tmp_path / "LUM-202608-deadbeef"
+    ticket_dir.mkdir()
+    upload = _ChunkedUpload(b"PARTIAL", OSError("read failed"))
+
+    result = asyncio.run(
+        collect_direct_original_upload(
+            ticket_dir,
+            upload,  # type: ignore[arg-type]
+            session_id=None,
+        )
+    )
+
+    assert result["status"] == "failed"
+    assert result["direct_upload_status"] == "failed"
+    assert result["error_type"] == "OSError"
+    assert not (ticket_dir / "original.png").exists()
+
+
+def test_direct_original_stream_limit_removes_partial_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ticket_dir = tmp_path / "LUM-202608-c0ffee00"
+    ticket_dir.mkdir()
+    upload = _ChunkedUpload(b"123", b"45")
+    monkeypatch.setattr(
+        "api.feedback_assembler.MAX_DIRECT_ORIGINAL_IMAGE_BYTES",
+        4,
+    )
+
+    result = asyncio.run(
+        collect_direct_original_upload(
+            ticket_dir,
+            upload,  # type: ignore[arg-type]
+            session_id=None,
+        )
+    )
+
+    assert result["status"] == "too_large"
+    assert result["direct_upload_status"] == "too_large"
+    assert result["error_type"] == "OriginalImageTooLarge"
+    assert not (ticket_dir / "original.png").exists()
+
+
+def test_direct_original_short_write_removes_partial_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ticket_dir = tmp_path / "LUM-202608-5a07a11e"
+    ticket_dir.mkdir()
+    destination = ticket_dir / "original.png"
+    upload = _ChunkedUpload(b"ORIGINAL_BYTES")
+    real_path_open = Path.open
+
+    class _ShortWriter:
+        def __enter__(self):
+            self._output = real_path_open(destination, "xb")
+            return self
+
+        def write(self, chunk: bytes) -> int:
+            self._output.write(chunk[:1])
+            return 1
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            self._output.close()
+
+    def _short_open(path: Path, mode: str):
+        assert path == destination
+        assert mode == "xb"
+        return _ShortWriter()
+
+    monkeypatch.setattr(Path, "open", _short_open)
+
+    result = asyncio.run(
+        collect_direct_original_upload(
+            ticket_dir,
+            upload,  # type: ignore[arg-type]
+            session_id=None,
+        )
+    )
+
+    assert result["status"] == "failed"
+    assert result["direct_upload_status"] == "failed"
+    assert result["error_type"] == "OSError"
+    assert not destination.exists()
+
+
+def test_direct_original_collision_does_not_delete_existing_file(
+    tmp_path: Path,
+) -> None:
+    ticket_dir = tmp_path / "LUM-202608-1ee7c0de"
+    ticket_dir.mkdir()
+    destination = ticket_dir / "original.png"
+    destination.write_bytes(b"EXISTING")
+
+    result = asyncio.run(
+        collect_direct_original_upload(
+            ticket_dir,
+            _ChunkedUpload(b"NEW"),  # type: ignore[arg-type]
+            session_id=None,
+        )
+    )
+
+    assert result["status"] == "failed"
+    assert result["error_type"] == "FileExistsError"
+    assert destination.read_bytes() == b"EXISTING"
 
 
 def _make_entry(
@@ -828,6 +958,7 @@ def test_collect_original_image_falls_back_to_session_image_path(
     assert result.original_image["status"] == "attached"
     assert result.original_image["filename"] == "original.png"
     assert result.original_image["size_bytes"] == len(b"ORIGINAL_PNG")
+    assert result.original_image["capture_source"] == "session_store"
     assert (ticket_dir / "original.png").read_bytes() == b"ORIGINAL_PNG"
 
 
@@ -904,6 +1035,7 @@ def test_collect_original_image_registry_hit_takes_priority_over_session_path(
     )
 
     assert result.original_image["status"] == "attached"
+    assert result.original_image["capture_source"] == "file_registry"
     assert (ticket_dir / "original.png").read_bytes() == b"REGISTRY"
 
 
@@ -950,6 +1082,7 @@ def test_collect_original_image_stale_registry_falls_back_to_session_path(
     )
 
     assert result.original_image["status"] == "attached"
+    assert result.original_image["capture_source"] == "session_store"
     assert (ticket_dir / "original.png").read_bytes() == b"SESSION"
 
 

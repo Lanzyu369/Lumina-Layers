@@ -92,6 +92,7 @@ export type ConvertPreviewRequest = ConvertSourceSelection & {
   model_margin?: number | null;
   quantize_colors: number;
   high_precision_3d_preview?: boolean;
+  enable_smooth_vector_preview?: boolean;
   enable_cleanup: boolean;
   enable_outline?: boolean;
   outline_width?: number;
@@ -117,6 +118,14 @@ export type ConvertPreviewRequest = ConvertSourceSelection & {
   surface_placement_json?: string;
   surface_model_transform_json?: string;
 };
+
+export interface VectorPreviewRendererResponse {
+  session_id: string;
+  status: "pending";
+  job_token: string;
+  glb_url: null;
+  renderer: "vector_analytic" | "segmented";
+}
 
 export type ConvertGenerateRequest = ConvertPreviewRequest & {
   spacer_thick: number;

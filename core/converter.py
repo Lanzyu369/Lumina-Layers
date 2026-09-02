@@ -351,6 +351,9 @@ def convert_image_to_3d(
     *,
     backing_infill_density_percent: int = 100,
     height_identity_rgb_path: Optional[str] = None,
+    original_matched_rgb_path: Optional[str] = None,
+    original_material_matrix_path: Optional[str] = None,
+    edit_projection: Optional[Dict[str, object]] = None,
     final_material_matrix_is_authoritative: bool = False,
     final_material_matrix_authority_mask_path: Optional[str] = None,
     cover_source_path: Optional[str] = None,
@@ -408,6 +411,12 @@ def convert_image_to_3d(
             positional callers retain their original argument binding.
             (可选的 ``.npy`` 路径，保存颜色替换前、用于浮雕高度查找的稳定逐像素
             RGB 身份；该参数仅允许关键字传入，以保持旧位置参数调用语义不变)
+        original_matched_rgb_path: Pristine RGB used to isolate preview-time
+            display edits. (用于隔离预览期显示替色的原始 RGB)
+        original_material_matrix_path: Pristine material matrix used to
+            isolate recipe edits. (用于隔离配方编辑的原始材料矩阵)
+        edit_projection: Source-grid metadata for normalized edit replay on a
+            fresh-size analysis. (把编辑归一化重放到当前尺寸新分析的源网格元数据)
         final_material_matrix_is_authoritative: Preserve a precomputed final
             material matrix after color mappings update display RGB.
             (颜色映射更新显示 RGB 后，仍保留预计算的最终材料矩阵)
@@ -626,6 +635,9 @@ def generate_final_model(
     *,
     backing_infill_density_percent: int = 100,
     height_identity_rgb_path: Optional[str] = None,
+    original_matched_rgb_path: Optional[str] = None,
+    original_material_matrix_path: Optional[str] = None,
+    edit_projection: Optional[Dict[str, object]] = None,
     final_material_matrix_is_authoritative: bool = False,
     final_material_matrix_authority_mask_path: Optional[str] = None,
     cover_source_path: Optional[str] = None,
@@ -675,6 +687,12 @@ def generate_final_model(
             keyword-only to preserve all legacy positional argument bindings.
             (可选的 ``.npy`` 路径，保存浮雕高度查找使用的稳定逐像素源 RGB 身份；
             该参数仅允许关键字传入，以保持全部旧位置参数调用语义不变)
+        original_matched_rgb_path: Pristine RGB used to isolate preview-time
+            display edits. (用于隔离预览期显示替色的原始 RGB)
+        original_material_matrix_path: Pristine material matrix used to
+            isolate recipe edits. (用于隔离配方编辑的原始材料矩阵)
+        edit_projection: Source-grid metadata for normalized edit replay on a
+            fresh-size analysis. (把编辑归一化重放到当前尺寸新分析的源网格元数据)
         final_material_matrix_is_authoritative: Preserve a precomputed final
             material matrix after color mappings update display RGB.
             (颜色映射更新显示 RGB 后，仍保留预计算的最终材料矩阵)
@@ -783,6 +801,9 @@ def generate_final_model(
         chroma_gate=chroma_gate,
         matched_rgb_path=matched_rgb_path,
         height_identity_rgb_path=height_identity_rgb_path,
+        original_matched_rgb_path=original_matched_rgb_path,
+        original_material_matrix_path=original_material_matrix_path,
+        edit_projection=edit_projection,
         mask_solid_path=mask_solid_path,
         quantized_image_path=quantized_image_path,
         material_matrix_path=material_matrix_path,

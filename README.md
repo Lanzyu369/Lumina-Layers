@@ -282,6 +282,28 @@ runtime paths, and auto-update setup.
 pip install -r requirements.txt
 ```
 
+### Option 3: Desktop Client (Electron)
+
+```bash
+# Required: the desktop shell starts the Python backend for you.
+python3 -m pip install -r requirements.txt
+
+# bash/zsh
+cd frontend && pnpm install && cd ..
+cd electron && pnpm install && cd ..
+cd electron && pnpm start
+```
+
+```powershell
+# Windows PowerShell 5.1 does not support "&&"; run line by line
+python -m pip install -r requirements.txt
+cd frontend; pnpm install; cd ..
+cd electron; pnpm install; cd ..
+cd electron; pnpm start
+```
+
+The desktop shell spawns the Python backend and the Vite dev server automatically — no separate launcher needed, but its Python dependencies above are still required. For packaging the Windows installer and troubleshooting, see the [Desktop (Electron) guide](docs/desktop-electron.md).
+
 ### Configuration
 
 Lumina Studio reads optional local environment overrides from `.env.local`. Use `.env.example` as the template for SMTP-backed bug-report delivery, and never commit real secrets. Store your real SMTP password only in `.env.local`.
