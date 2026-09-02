@@ -317,6 +317,41 @@ def test_real_touching_hole_fixture_stays_closed() -> None:
     _assert_closed_volume(mesh, source.area * 0.08)
 
 
+def test_holed_cap_is_independent_of_arbitrary_ring_starts() -> None:
+    shell = [
+        (-2.54, -56.96),
+        (-1.62, -58.47),
+        (25.44, 100.77),
+        (0.16, 76.39),
+    ]
+    holes = [
+        [(2.65, 1.67), (2.39, 1.54), (0.58, 0.64), (1.6, 1.15)],
+        [(0.49, 2.95), (1.6, 1.15), (0.5, 2.93)],
+        [(0.65, 0.74), (0.58, 0.64), (0.64, 0.73)],
+        [(0.1, 0.43), (0.58, 0.64), (0.02, 0.38)],
+        [(0.66, 1.47), (0.96, 1.26), (0.63, 1.49)],
+    ]
+    source = Polygon(shell, holes=holes)
+    rotated_source = Polygon(
+        shell[1:] + shell[:1],
+        holes=[ring[1:] + ring[:1] for ring in holes],
+    )
+
+    assert source.is_valid
+    assert rotated_source.equals(source)
+
+    meshes = [
+        build_vector_layered_volume(
+            [{"geometry": geometry, "z_offset": 0.0, "height": 0.08}],
+            scale_mm_per_svg_unit=1.0,
+        )
+        for geometry in (source, rotated_source)
+    ]
+
+    for mesh in meshes:
+        _assert_closed_volume(mesh, source.area * 0.08)
+
+
 def test_collinear_ear_keeps_every_boundary_segment() -> None:
     source = Polygon(
         [

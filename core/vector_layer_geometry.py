@@ -282,6 +282,18 @@ def _indexed_polygon_area_mm2(
     return twice_area_units * float(grid_mm) * float(grid_mm) * 0.5
 
 
+def _canonicalize_ring_start(coordinates: np.ndarray) -> np.ndarray:
+    """Give an open ring one start independent of its SVG serialization."""
+
+    values = np.asarray(coordinates)
+    start_index = int(np.lexsort((values[:, 0], values[:, 1]))[0])
+    if start_index == 0:
+        return values
+    return np.ascontiguousarray(
+        np.concatenate((values[start_index:], values[:start_index]), axis=0)
+    )
+
+
 def _oriented_polygon_rings(polygon: _IndexedPolygon) -> list[np.ndarray]:
     rings = [polygon.exterior_units, *polygon.hole_units]
     oriented_rings: list[np.ndarray] = []
@@ -291,9 +303,10 @@ def _oriented_polygon_rings(polygon: _IndexedPolygon) -> list[np.ndarray]:
             raise ValueError("Vector canonical ring has zero signed area")
         should_be_positive = index == 0
         if (signed_area > 0.0) != should_be_positive:
-            oriented_rings.append(np.ascontiguousarray(ring[::-1]))
+            oriented_ring = np.ascontiguousarray(ring[::-1])
         else:
-            oriented_rings.append(ring)
+            oriented_ring = ring
+        oriented_rings.append(_canonicalize_ring_start(oriented_ring))
     return oriented_rings
 
 
@@ -1118,7 +1131,13 @@ def _indexed_polygon(
         ),
     )
     prepared = _node_indexed_polygon_ring_contacts(prepared)
-    return prepared, _oriented_polygon_rings(prepared)
+    canonical_rings = _oriented_polygon_rings(prepared)
+    canonical = _IndexedPolygon(
+        exterior_units=canonical_rings[0],
+        hole_units=tuple(canonical_rings[1:]),
+        coordinate_alias_count=int(prepared.coordinate_alias_count),
+    )
+    return canonical, canonical_rings
 
 
 def _physical_layer_slabs(
