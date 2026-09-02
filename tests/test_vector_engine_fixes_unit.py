@@ -45,7 +45,6 @@ from core.vector_engine import (
     _union_run_group_geometries,
     _combine_evenodd_polygons,
     VectorProcessor,
-    MIN_SHAPE_AREA_MM2,
 )
 
 
@@ -2511,13 +2510,49 @@ class TestSplitDisconnectedShapes:
         assert len(result) == 2
         assert all(r["color"] == (0, 255, 0) for r in result)
 
-    def test_tiny_fragments_filtered(self):
+    def test_components_are_not_filtered_without_physical_scale_context(self):
         big = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
         tiny = Polygon([(20, 20), (20.001, 20), (20.001, 20.001), (20, 20.001)])
         mp = MultiPolygon([big, tiny])
         data = [{"poly": mp, "color": (0, 0, 255)}]
         result = VectorProcessor._split_disconnected_shapes(data)
-        assert len(result) == 1
+        assert len(result) == 2
+
+    def test_scaled_svg_component_keeps_printable_physical_area(self, tmp_path):
+        svg_path = tmp_path / "small-svg-large-print.svg"
+        svg_path.write_text(
+            """
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1">
+              <path d="M0 0H0.1V0.05H0Z" fill="#000000"/>
+            </svg>
+            """,
+            encoding="utf-8",
+        )
+
+        processor = TestVectorNegativeSpacePreview()._processor()
+        analysis = processor.analyze_svg(
+            str(svg_path),
+            target_width_mm=200.0,
+        )
+
+        assert analysis.scale_factor == pytest.approx(200.0)
+        assert len(analysis.clipped_shapes) == 1
+        physical_area_mm2 = (
+            float(analysis.clipped_shapes[0]["geometry"].area)
+            * analysis.scale_factor**2
+        )
+        assert physical_area_mm2 == pytest.approx(200.0)
+
+        scene = processor.build_mesh(
+            analysis,
+            thickness_mm=0.16,
+            structure_mode="Single-sided",
+        )
+        black_mesh = scene.geometry["Black"]
+        expected_height_mm = analysis.num_layers * 0.08
+        assert abs(float(black_mesh.volume)) == pytest.approx(
+            200.0 * expected_height_mm
+        )
 
     def test_geometry_collection(self):
         p = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
@@ -2656,6 +2691,34 @@ class TestRunLengthExtrudeMerging:
             result["White"]["meshes"][0].split(only_watertight=False)
         ) == 3
 
+    def test_run_group_does_not_create_a_point_touching_hole(self):
+        left = Polygon(
+            [(0, 0), (2, 0), (1, 2), (2, 2), (2, 4), (0, 4)]
+        )
+        right = Polygon(
+            [(2, 0), (4, 0), (4, 4), (2, 4), (2, 2), (3, 2)]
+        )
+        matched = [
+            {"geometry": left, "recipe": [0], "color": (255, 255, 255)},
+            {"geometry": right, "recipe": [0], "color": (255, 255, 255)},
+        ]
+
+        result = VectorProcessor._run_length_extrude(
+            matched,
+            num_layers=1,
+            layer_h=0.08,
+            num_channels=4,
+            slot_names=["White", "Cyan", "Magenta", "Yellow"],
+            scale_factor=1.0,
+        )
+
+        mesh = result["White"]["meshes"][0]
+        assert mesh.is_watertight
+        assert abs(float(mesh.volume)) == pytest.approx(
+            (left.area + right.area) * 0.08
+        )
+        assert len(mesh.split(only_watertight=False)) == 1
+
     def test_materializes_each_material_once_across_adjacent_run_groups(self):
         sq1 = Polygon([(0, 0), (5, 0), (5, 5), (0, 5)])
         sq2 = Polygon([(10, 0), (15, 0), (15, 5), (10, 5)])
@@ -2663,10 +2726,17 @@ class TestRunLengthExtrudeMerging:
             {"geometry": sq1, "recipe": [0, 1, 0], "color": (255, 255, 255)},
             {"geometry": sq2, "recipe": [0, 1, 0], "color": (0, 255, 255)},
         ]
-        stepped_spy = mock.Mock(wraps=vector_engine.build_vector_stepped_volume)
+        slab_counts = []
+        build_layered_volume = vector_engine.build_vector_layered_volume
+
+        def record_layered_volume(slabs, **kwargs):
+            slab_counts.append(len(slabs))
+            return build_layered_volume(slabs, **kwargs)
+
+        stepped_spy = mock.Mock(side_effect=record_layered_volume)
         with mock.patch.object(
             vector_engine,
-            "build_vector_stepped_volume",
+            "build_vector_layered_volume",
             stepped_spy,
         ):
             result = VectorProcessor._run_length_extrude(
@@ -2680,7 +2750,8 @@ class TestRunLengthExtrudeMerging:
 
         assert "White" in result
         assert "Cyan" in result
-        assert stepped_spy.call_count == 0
+        assert stepped_spy.call_count == 2
+        assert sorted(slab_counts) == [1, 2]
         assert len(result["White"]["meshes"]) == 1
         assert len(result["Cyan"]["meshes"]) == 1
 

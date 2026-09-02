@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import logging
-from types import SimpleNamespace
 import xml.etree.ElementTree as ET
 
 import numpy as np
@@ -105,8 +103,7 @@ def test_build_mesh_uses_one_canvas_writer_grid_for_all_material_runs() -> None:
     assert domain.xy_grid_mm > 0.0001
     assert {
         (
-            mesh.metadata.get("vector_layer_geometry")
-            or mesh.metadata["vector_stepped_geometry"]
+            mesh.metadata["vector_layer_geometry"]
         )["grid_mm"]
         for mesh in scene.geometry.values()
     } == {domain.xy_grid_mm}
@@ -167,6 +164,41 @@ def test_vector_slanted_runs_form_one_material_object() -> None:
     assert writer.objects[0].object_name == "White"
 
 
+def test_materialize_vector_slabs_builds_one_continuous_material_volume() -> None:
+    """Adjacent runs of one material must not retain coincident internal caps."""
+
+    geometry = box(0.0, 0.0, 4.0, 3.0)
+    result = VectorProcessor._materialize_vector_slabs(
+        {
+            "White": {
+                "mat_id": 0,
+                "slabs": [
+                    {
+                        "geometry": geometry,
+                        "z_offset": 0.0,
+                        "height": 0.08,
+                    },
+                    {
+                        "geometry": geometry,
+                        "z_offset": 0.08,
+                        "height": 0.08,
+                    },
+                ],
+            }
+        },
+        scale_factor=1.0,
+    )
+
+    mesh = result["White"]["meshes"][0]
+    triangles = np.asarray(mesh.vertices)[np.asarray(mesh.faces, dtype=np.int64)]
+    internal_caps = np.all(
+        np.isclose(triangles[:, :, 2], 0.08, rtol=0.0, atol=1e-12),
+        axis=1,
+    )
+    assert not np.any(internal_caps)
+    _assert_closed(mesh, volume=4.0 * 3.0 * 0.16)
+
+
 def test_run_length_keeps_point_touching_shells_independent() -> None:
     geometry = MultiPolygon(
         [
@@ -182,35 +214,12 @@ def test_run_length_keeps_point_touching_shells_independent() -> None:
     assert len(combined.split(only_watertight=False)) == 2
 
 
-def test_run_length_avoids_whole_material_stepped_arrangement(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Independent closed runs are concatenated without a global arrangement."""
-
-    monkeypatch.setattr(
-        vector_engine,
-        "build_vector_stepped_volume",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("ordinary Vector entered whole-material arrangement")
-        ),
-    )
-
-    combined = _concatenate_meshes_fast(
-        _run_one_material(
-            [box(0.0, 0.0, 1.0, 1.0), box(2.0, 0.0, 3.0, 1.0)]
-        )
-    )
-
-    _assert_closed(combined, volume=0.4)
-    assert len(combined.split(only_watertight=False)) == 2
-
-
 def test_run_length_does_not_retry_memory_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
         vector_engine,
-        "_build_source_spatial_groups",
+        "build_vector_layered_volume",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(MemoryError("budget")),
     )
 
@@ -218,134 +227,38 @@ def test_run_length_does_not_retry_memory_error(
         _run_one_material([box(0.0, 0.0, 1.0, 1.0)])
 
 
-def test_failed_fast_extrusion_uses_local_stepped_fallback(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        vector_engine,
-        "extrude_prepared_vector_run_group",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            ValueError("local cap triangulation failed")
-        ),
-    )
+def test_materialization_keeps_body_when_subgrid_residue_collapses() -> None:
+    """Writer-zero residue cannot poison a neighbouring printable body."""
 
-    meshes, stats = vector_engine._build_source_spatial_groups(
-        (box(0.0, 0.0, 4.0, 3.0),),
-        height=0.08,
-        z_offset=0.16,
-        scale_factor=1.0,
-    )
-
-    assert len(meshes) == 1
-    _assert_closed(meshes[0], volume=4.0 * 3.0 * 0.08)
-    assert stats["failed_source_part_count"] == 0
-    assert stats["local_stepped_fallback_applied"] is True
-
-
-def test_incomplete_fast_preparation_uses_local_stepped_fallback(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        vector_engine,
-        "prepare_vector_spatial_groups_best_effort",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            groups=(),
-            source_part_count=1,
-            failed_part_count=1,
-            failure_types=(("ValueError", 1),),
-        ),
-    )
-
-    meshes, stats = vector_engine._build_source_spatial_groups(
-        (box(0.0, 0.0, 2.0, 5.0),),
-        height=0.2,
-        z_offset=0.0,
-        scale_factor=1.0,
-    )
-
-    assert len(meshes) == 1
-    _assert_closed(meshes[0], volume=2.0)
-    assert stats["failed_source_part_count"] == 0
-    assert stats["local_stepped_fallback_applied"] is True
-
-
-def test_writer_zero_residue_is_not_counted_as_built_source_geometry() -> None:
-    """Diagnostics distinguish omitted sub-grid residue from built geometry."""
-
-    meshes, stats = vector_engine._build_source_spatial_groups(
-        (
+    geometry = MultiPolygon(
+        [
             box(0.0, 0.0, 10.0, 10.0),
             Polygon(
                 [
-                    (10.0, 5.0),
-                    (10.00001, 5.0),
-                    (10.0, 5.00001),
+                    (11.0, 5.0),
+                    (11.00001, 5.0),
+                    (11.0, 5.00001),
                 ]
             ),
-        ),
-        height=0.08,
-        z_offset=0.0,
+        ]
+    )
+    result = VectorProcessor._materialize_vector_slabs(
+        {
+            "White": {
+                "slabs": [
+                    {
+                        "geometry": geometry,
+                        "height": 0.08,
+                        "z_offset": 0.0,
+                    }
+                ],
+                "mat_id": 0,
+            }
+        },
         scale_factor=1.0,
     )
 
-    assert len(meshes) == 1
-    _assert_closed(meshes[0], volume=8.0)
-    assert stats["source_part_count"] == 2
-    assert stats["built_source_part_count"] == 1
-    assert stats["collapsed_source_part_count"] == 1
-    assert stats["failed_source_part_count"] == 0
-
-
-def test_material_level_reports_writer_zero_residue(
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    mesh = trimesh.creation.box(extents=(1.0, 1.0, 0.08))
-    monkeypatch.setattr(
-        vector_engine,
-        "_build_source_spatial_groups",
-        lambda *_args, **_kwargs: (
-            [mesh],
-            {
-                "source_part_count": 2,
-                "built_source_part_count": 1,
-                "failed_source_part_count": 0,
-                "collapsed_source_part_count": 1,
-                "failure_types": {},
-            },
-        ),
-    )
-    target_logger = logging.getLogger("lumina.core.vector_engine")
-    target_logger.addHandler(caplog.handler)
-    caplog.set_level(logging.DEBUG, logger="lumina.core.vector_engine")
-    try:
-        result = VectorProcessor._materialize_vector_slabs(
-            {
-                "White": {
-                    "slabs": [
-                        {
-                            "geometry": box(0.0, 0.0, 1.0, 1.0),
-                            "height": 0.08,
-                            "z_offset": 0.0,
-                        }
-                    ],
-                    "mat_id": 0,
-                }
-            },
-            scale_factor=1.0,
-        )
-    finally:
-        target_logger.removeHandler(caplog.handler)
-
-    assert "White" in result
-    records = [
-        record
-        for record in caplog.records
-        if getattr(record, "event", None)
-        == "vector_material_writer_zero_residue_collapsed"
-    ]
-    assert len(records) == 1
-    assert records[0].collapsed_source_part_count == 1
+    _assert_closed(result["White"]["meshes"][0], volume=8.0)
 
 
 def test_double_sided_groups_by_material_run_not_svg_shape_count() -> None:

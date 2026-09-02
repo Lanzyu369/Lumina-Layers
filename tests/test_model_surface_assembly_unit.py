@@ -17,7 +17,7 @@ from core.layered_coordinate_domain import (
 )
 from core.vector_layer_geometry import (
     VectorLayerGeometryPolicy,
-    build_vector_stepped_volume,
+    build_vector_layered_volume,
 )
 from core.vector_engine import VectorAnalysis, VectorProcessor
 from core.model_surface.assembly import (
@@ -295,7 +295,7 @@ def test_native_vector_pattern_uses_canonical_grid_canvas_bounds(
     target_width_mm,
 ):
     scale_factor = target_width_mm / canvas_width
-    artwork = build_vector_stepped_volume(
+    artwork = build_vector_layered_volume(
         [
             {
                 "geometry": sg.box(0.0, 0.0, canvas_width, canvas_height),

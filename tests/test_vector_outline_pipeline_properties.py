@@ -462,13 +462,9 @@ def test_vector_outline_uses_one_canonical_build_and_runtime_guards() -> None:
             "core.vector_engine._enforce_vector_mesh_runtime_headroom",
         ) as guard_mock,
         patch(
-            "core.pipeline.vector_branch.prepare_vector_run_group",
-            wraps=vector_branch.prepare_vector_run_group,
-        ) as prepare_mock,
-        patch(
-            "core.pipeline.vector_branch.extrude_prepared_vector_run_group",
-            wraps=vector_branch.extrude_prepared_vector_run_group,
-        ) as extrude_mock,
+            "core.pipeline.vector_branch.build_vector_layered_volume",
+            wraps=vector_branch.build_vector_layered_volume,
+        ) as build_mock,
     ):
         outline_mesh = _generate_vector_outline_mesh(
             analysis=analysis,
@@ -479,8 +475,7 @@ def test_vector_outline_uses_one_canonical_build_and_runtime_guards() -> None:
         )
 
     assert outline_mesh is not None
-    prepare_mock.assert_called_once()
-    extrude_mock.assert_called_once()
+    build_mock.assert_called_once()
     stages = {call.kwargs["stage"] for call in guard_mock.call_args_list}
     assert "vector_outline_union" in stages
     assert "vector_outline_ring" in stages

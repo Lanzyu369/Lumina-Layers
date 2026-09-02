@@ -59,7 +59,7 @@ def test_raster_and_rasterized_svg_modes_share_exact_surface_builder(
     assert mesh.metadata["layered_mesh_stats"]["source_voxel_count"] == 12
 
 
-def test_native_svg_runs_avoid_whole_material_stepped_arrangement(
+def test_native_svg_runs_use_one_layered_constructor_per_material(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source_geometries = [
@@ -67,12 +67,18 @@ def test_native_svg_runs_avoid_whole_material_stepped_arrangement(
         box(10.0, 0.0, 20.0, 10.0),
         box(30.0, 0.0, 35.0, 5.0),
     ]
+    calls = 0
+    real_builder = vector_engine.build_vector_layered_volume
+
+    def recording_builder(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return real_builder(*args, **kwargs)
+
     monkeypatch.setattr(
         vector_engine,
-        "build_vector_stepped_volume",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("ordinary Vector entered whole-material arrangement")
-        ),
+        "build_vector_layered_volume",
+        recording_builder,
     )
 
     by_slot = VectorProcessor._run_length_extrude(
@@ -88,6 +94,7 @@ def test_native_svg_runs_avoid_whole_material_stepped_arrangement(
     )
 
     mesh = by_slot["White"]["meshes"][0]
+    assert calls == 1
     assert len(by_slot["White"]["meshes"]) == 1
     assert len(mesh.split(only_watertight=False)) == 2
     assert get_mesh_export_part_ranges(mesh) == ()
@@ -96,11 +103,11 @@ def test_native_svg_runs_avoid_whole_material_stepped_arrangement(
     assert float(mesh.volume) == pytest.approx(225.0 * 0.16)
 
 
-def test_native_svg_relief_uses_direct_canonical_stepped_surface(
+def test_native_svg_relief_uses_one_canonical_volume_per_output_material(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = 0
-    real_builder = vector_engine.build_vector_stepped_volume
+    real_builder = vector_engine.build_vector_layered_volume
 
     def recording_builder(*args, **kwargs):
         nonlocal calls
@@ -109,7 +116,7 @@ def test_native_svg_relief_uses_direct_canonical_stepped_surface(
 
     monkeypatch.setattr(
         vector_engine,
-        "build_vector_stepped_volume",
+        "build_vector_layered_volume",
         recording_builder,
     )
     by_slot = VectorProcessor._build_relief_meshes(
@@ -140,10 +147,10 @@ def test_native_svg_relief_uses_direct_canonical_stepped_surface(
     )
 
     board = by_slot["Board"]["meshes"][0]
-    assert calls == 1
+    assert calls == len(by_slot) == 3
+    assert len(by_slot["Board"]["meshes"]) == 1
     assert len(by_slot["Red"]["meshes"]) == 1
     assert len(by_slot["White"]["meshes"]) == 1
-    assert board.metadata["vector_stepped_geometry"]["component_count"] == 1
     assert board.is_watertight
     assert np.all(_edge_incidence(board) == 2)
 

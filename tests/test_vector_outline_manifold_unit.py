@@ -115,28 +115,18 @@ def test_vector_outline_uses_the_canonical_layered_builder(
         box(2.0, 2.0, 8.0, 8.0)
     )
     _patch_ring(monkeypatch, ring)
-    real_prepare = vector_branch.prepare_vector_run_group
-    real_extrude = vector_branch.extrude_prepared_vector_run_group
+    real_builder = vector_branch.build_vector_layered_volume
     calls: list[str] = []
 
-    def record_prepare(*args, **kwargs):
-        calls.append("prepare")
-        return real_prepare(*args, **kwargs)
+    def record_builder(*args, **kwargs):
+        calls.append("build")
+        return real_builder(*args, **kwargs)
 
-    def record_extrude(*args, **kwargs):
-        calls.append("extrude")
-        return real_extrude(*args, **kwargs)
-
-    monkeypatch.setattr(vector_branch, "prepare_vector_run_group", record_prepare)
-    monkeypatch.setattr(
-        vector_branch,
-        "extrude_prepared_vector_run_group",
-        record_extrude,
-    )
+    monkeypatch.setattr(vector_branch, "build_vector_layered_volume", record_builder)
 
     outline = _build_outline(monkeypatch, ring)
 
-    assert calls == ["prepare", "extrude"]
+    assert calls == ["build"]
     assert outline is not None and outline.is_watertight
 
 
@@ -161,7 +151,7 @@ def test_vector_outline_drops_only_subgrid_boolean_dust(
     assert np.all(_edge_incidence_counts(outline) == 2)
 
 
-def test_vector_outline_omits_only_outline_when_canonical_build_fails(
+def test_vector_outline_never_hides_a_failed_geometry_build(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ring = box(0.0, 0.0, 10.0, 10.0).difference(
@@ -170,13 +160,14 @@ def test_vector_outline_omits_only_outline_when_canonical_build_fails(
     _patch_ring(monkeypatch, ring)
     monkeypatch.setattr(
         vector_branch,
-        "prepare_vector_run_group",
+        "build_vector_layered_volume",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             ValueError("synthetic canonical failure")
         ),
     )
 
-    assert _build_outline(monkeypatch, ring) is None
+    with pytest.raises(ValueError, match="synthetic canonical failure"):
+        _build_outline(monkeypatch, ring)
 
 
 def test_vector_outline_keeps_disconnected_shells_writer_safe(

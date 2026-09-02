@@ -89,7 +89,7 @@ def estimate_indexed_prism_memory(
     """Estimate one direct extrusion from its canonical ring counts.
 
     根据规范环的实际计数估算一次直接挤出的内存。顶点数和三角面数与
-    ``extrude_prepared_vector_run_group`` 的预分配公式完全相同。
+    预分配公式与分层索引棱柱构建器完全相同。
     """
 
     coordinates = max(0, int(coordinate_count))

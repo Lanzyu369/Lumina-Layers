@@ -90,9 +90,6 @@ from core.layered_coordinate_domain import (
     LAYERED_COORDINATE_DOMAIN_KEY,
     LayeredCoordinateDomain,
 )
-from core.vector_geometry_contract import (
-    LEGACY_MIN_COMPONENT_AREA_SOURCE_UNITS_SQUARED,
-)
 from core.task_parallelism import (
     resolve_task_parallelism_plan,
     task_parallelism_worker_scope,
@@ -109,17 +106,12 @@ from core.vector_mesh_memory import (
 )
 from core.vector_layer_geometry import (
     VectorLayerGeometryPolicy,
-    build_vector_stepped_volume,
-    extrude_prepared_vector_run_group,
-    prepare_vector_spatial_groups_best_effort,
+    build_vector_layered_volume,
     resolve_vector_writer_grid_mm,
 )
 
 _log = get_logger(__name__)
 
-# Backward-compatible alias. The historical name says ``MM2``, but the
-# threshold is applied before geometry is scaled from SVG source coordinates.
-MIN_SHAPE_AREA_MM2 = LEGACY_MIN_COMPONENT_AREA_SOURCE_UNITS_SQUARED
 BASE_COLOR_GAP_MM = 0.005
 _MAX_BEZIER_DEPTH = 16
 
@@ -356,165 +348,6 @@ def _union_run_group_geometries(geometries):
         except VECTOR_HANDLED_ERRORS:
             pass
     return unary_union(geometries)
-
-
-def _build_source_spatial_groups(
-    source_geometries,
-    *,
-    height: float,
-    z_offset: float,
-    scale_factor: float,
-    geometry_policy: VectorLayerGeometryPolicy | None = None,
-) -> tuple[list[trimesh.Trimesh], dict[str, object]]:
-    """Build writer-separated source groups without rejecting the whole run.
-
-    当整组规范化失败时，仍只用同一个新生成器按空间组恢复。
-
-    Touching or writer-grid-near parts stay in one canonical group. Remote
-    groups are safely concatenated into bounded material chunks, so this path
-    neither revives the retired topology ladder nor expands every SVG island
-    into a separate 3MF object. Fatal memory errors still escape immediately.
-    """
-
-    source_geometry_tuple = tuple(source_geometries)
-
-    def _build_local_stepped_fallback() -> trimesh.Trimesh | None:
-        merged_source = _union_run_group_geometries(source_geometry_tuple)
-        if merged_source is None or merged_source.is_empty:
-            return None
-        try:
-            return build_vector_stepped_volume(
-                [
-                    {
-                        "geometry": merged_source,
-                        "height": float(height),
-                        "z_offset": float(z_offset),
-                    }
-                ],
-                scale_mm_per_svg_unit=float(scale_factor),
-                policy=geometry_policy,
-            )
-        except VECTOR_FATAL_ERRORS:
-            raise
-        except VECTOR_HANDLED_ERRORS:
-            return None
-
-    preparation = prepare_vector_spatial_groups_best_effort(
-        source_geometry_tuple,
-        scale_mm_per_svg_unit=float(scale_factor),
-        policy=geometry_policy,
-    )
-    collapsed_source_part_count = int(
-        getattr(preparation, "collapsed_part_count", 0)
-    )
-    if int(preparation.failed_part_count) > 0:
-        fallback_mesh = _build_local_stepped_fallback()
-        if fallback_mesh is not None:
-            built_source_part_count = max(
-                0,
-                int(preparation.source_part_count)
-                - collapsed_source_part_count,
-            )
-            return [fallback_mesh], {
-                "source_part_count": int(preparation.source_part_count),
-                "built_source_part_count": built_source_part_count,
-                "failed_source_part_count": 0,
-                "collapsed_source_part_count": collapsed_source_part_count,
-                "failure_types": {},
-                "local_stepped_fallback_applied": True,
-            }
-    output_chunks: list[trimesh.Trimesh] = []
-    pending_meshes: list[trimesh.Trimesh] = []
-    pending_bytes = 0
-    failed_extrusion_parts = 0
-    failure_types = dict(preparation.failure_types)
-
-    def _flush_pending() -> None:
-        nonlocal pending_meshes, pending_bytes
-        if not pending_meshes:
-            return
-        _enforce_vector_mesh_runtime_headroom(
-            stage="source_spatial_group_chunk",
-            estimated_additional_bytes=max(pending_bytes, 1),
-            shape_count=len(pending_meshes),
-        )
-        output_chunks.append(
-            _concatenate_meshes_fast(pending_meshes)
-        )
-        pending_meshes.clear()
-        pending_meshes = []
-        pending_bytes = 0
-
-    chunk_budget = max(1, int(_VECTOR_SPATIAL_GROUP_CHUNK_BYTES))
-    for prepared in preparation.groups:
-        allocation_estimate = estimate_indexed_prism_memory(
-            coordinate_count=int(prepared.stats.output_coordinate_count),
-            hole_count=int(prepared.stats.output_hole_count),
-            component_count=int(prepared.stats.output_component_count),
-        )
-        _enforce_vector_mesh_runtime_headroom(
-            stage="source_spatial_group_canonical_geometry",
-            estimated_additional_bytes=(
-                allocation_estimate.estimated_additional_bytes
-            ),
-            shape_count=int(prepared.stats.source_polygon_count),
-            coordinate_count=int(prepared.stats.output_coordinate_count),
-        )
-        try:
-            source_mesh = extrude_prepared_vector_run_group(
-                prepared,
-                height_mm=float(height),
-                z_offset_mm=float(z_offset),
-            )
-        except VECTOR_FATAL_ERRORS:
-            raise
-        except VECTOR_HANDLED_ERRORS as exc:
-            fallback_mesh = _build_local_stepped_fallback()
-            if fallback_mesh is not None:
-                pending_meshes.clear()
-                output_chunks.clear()
-                built_source_part_count = max(
-                    0,
-                    int(preparation.source_part_count)
-                    - collapsed_source_part_count,
-                )
-                return [fallback_mesh], {
-                    "source_part_count": int(preparation.source_part_count),
-                    "built_source_part_count": built_source_part_count,
-                    "failed_source_part_count": 0,
-                    "collapsed_source_part_count": collapsed_source_part_count,
-                    "failure_types": {},
-                    "local_stepped_fallback_applied": True,
-                }
-            failed_extrusion_parts += int(prepared.stats.source_polygon_count)
-            error_name = type(exc).__name__
-            failure_types[error_name] = failure_types.get(error_name, 0) + 1
-            continue
-
-        mesh_bytes = _mesh_array_storage_bytes(source_mesh)
-        if pending_meshes and pending_bytes + mesh_bytes > chunk_budget:
-            _flush_pending()
-        pending_meshes.append(source_mesh)
-        pending_bytes += mesh_bytes
-        if pending_bytes >= chunk_budget:
-            _flush_pending()
-
-    _flush_pending()
-    failed_source_part_count = (
-        int(preparation.failed_part_count) + int(failed_extrusion_parts)
-    )
-    return output_chunks, {
-        "source_part_count": int(preparation.source_part_count),
-        "built_source_part_count": max(
-            0,
-            int(preparation.source_part_count)
-            - failed_source_part_count
-            - collapsed_source_part_count,
-        ),
-        "failed_source_part_count": int(failed_source_part_count),
-        "collapsed_source_part_count": collapsed_source_part_count,
-        "failure_types": failure_types,
-    }
 
 
 def _union_occluder_geometries(geometries):
@@ -4619,32 +4452,31 @@ class VectorProcessor:
     def _split_disconnected_shapes(shape_data):
         """Split MultiPolygon / GeometryCollection shapes into individual Polygons.
 
-        Mirrors ``ChromaPrint3D::SplitDisconnectedShapes``.  Shapely already
-        distinguishes exterior rings from holes inside ``Polygon`` objects, so
-        no explicit containment-depth analysis is needed.
+        Physical-size filtering already happens in the parser with the resolved
+        SVG-to-mm scale.  This helper intentionally performs no second area
+        threshold because its inputs are still expressed in SVG user units.
+        Shapely already distinguishes exterior rings from holes inside
+        ``Polygon`` objects, so no containment-depth analysis is needed.
         """
+
+        def polygon_parts(geometry):
+            if geometry is None or geometry.is_empty:
+                return
+            if geometry.geom_type == "Polygon":
+                if float(geometry.area) > 0.0:
+                    yield geometry
+                return
+            if geometry.geom_type in {"MultiPolygon", "GeometryCollection"}:
+                for child in geometry.geoms:
+                    yield from polygon_parts(child)
+
         result = []
         for item in shape_data:
-            geom = item["poly"]
-            if geom is None or geom.is_empty:
+            parts = tuple(polygon_parts(item.get("poly")))
+            if len(parts) == 1 and parts[0] is item.get("poly"):
+                result.append(item)
                 continue
-            if geom.geom_type == "Polygon":
-                if geom.area >= MIN_SHAPE_AREA_MM2:
-                    result.append(item)
-            elif geom.geom_type == "MultiPolygon":
-                for poly in geom.geoms:
-                    if not poly.is_empty and poly.area >= MIN_SHAPE_AREA_MM2:
-                        result.append({**item, "poly": poly})
-            elif geom.geom_type == "GeometryCollection":
-                for g in geom.geoms:
-                    if g.is_empty or not hasattr(g, "area") or g.area < MIN_SHAPE_AREA_MM2:
-                        continue
-                    if g.geom_type == "Polygon":
-                        result.append({**item, "poly": g})
-                    elif g.geom_type == "MultiPolygon":
-                        for poly in g.geoms:
-                            if not poly.is_empty and poly.area >= MIN_SHAPE_AREA_MM2:
-                                result.append({**item, "poly": poly})
+            result.extend({**item, "poly": polygon} for polygon in parts)
         return result
 
     @staticmethod
@@ -6400,7 +6232,7 @@ class VectorProcessor:
             scale_factor=scale_factor,
             geometry_policy=geometry_policy,
         )
-        board_mesh = build_vector_stepped_volume(
+        board_mesh = build_vector_layered_volume(
             backing_volume_slabs,
             scale_mm_per_svg_unit=scale_factor,
             policy=geometry_policy,
@@ -7499,26 +7331,20 @@ class VectorProcessor:
             shape_count=1,
             coordinate_count=geometry_bytes // 64,
         )
-        meshes, stats = _build_source_spatial_groups(
-            (geometry,),
-            height=float(height),
-            z_offset=float(z_offset),
-            scale_factor=float(scale),
-            geometry_policy=geometry_policy,
+        mesh = build_vector_layered_volume(
+            [
+                {
+                    "geometry": geometry,
+                    "height": float(height),
+                    "z_offset": float(z_offset),
+                }
+            ],
+            scale_mm_per_svg_unit=float(scale),
+            policy=geometry_policy,
         )
-        if int(stats["failed_source_part_count"]) > 0:
-            _log.warning(
-                "Vector auxiliary geometry omitted locally unbuildable groups",
-                extra={
-                    "event": "vector_auxiliary_spatial_group_omitted",
-                    "error_type": "VectorSpatialGroupBuildFailure",
-                    "stage": str(stage),
-                    **stats,
-                },
-            )
-        if not meshes:
+        if mesh is None:
             raise ValueError("Vector auxiliary geometry produced no printable group")
-        return _concatenate_meshes_fast(meshes)
+        return mesh
 
     @staticmethod
     def _run_length_extrude(
@@ -7729,72 +7555,22 @@ class VectorProcessor:
         scale_factor,
         geometry_policy: VectorLayerGeometryPolicy | None = None,
     ):
-        """Extrude run slabs and concatenate them into one mesh per material."""
+        """Build one continuous canonical volume per material."""
 
         meshes_by_slot: dict[str, dict[str, object]] = {}
         for slot_name, data in slabs_by_slot.items():
             slabs = data.get("slabs", [])
             if not slabs:
                 continue
-            material_meshes: list[trimesh.Trimesh] = []
-            failed_source_part_count = 0
-            collapsed_source_part_count = 0
-            failure_types: dict[str, int] = {}
-            for slab in slabs:
-                geometry = slab.get("geometry")
-                if geometry is None or getattr(geometry, "is_empty", True):
-                    continue
-                slab_meshes, recovery_stats = _build_source_spatial_groups(
-                    (geometry,),
-                    height=float(slab["height"]),
-                    z_offset=float(slab["z_offset"]),
-                    scale_factor=float(scale_factor),
-                    geometry_policy=geometry_policy,
-                )
-                material_meshes.extend(slab_meshes)
-                failed_source_part_count += int(
-                    recovery_stats["failed_source_part_count"]
-                )
-                collapsed_source_part_count += int(
-                    recovery_stats.get("collapsed_source_part_count", 0)
-                )
-                for error_name, error_count in recovery_stats[
-                    "failure_types"
-                ].items():
-                    failure_types[error_name] = (
-                        failure_types.get(error_name, 0) + int(error_count)
-                    )
+            mesh = build_vector_layered_volume(
+                slabs,
+                scale_mm_per_svg_unit=float(scale_factor),
+                policy=geometry_policy,
+            )
             if hasattr(slabs, "clear"):
                 slabs.clear()
-            if failed_source_part_count:
-                _log.warning(
-                    "Vector material omitted locally unbuildable source parts",
-                    extra={
-                        "event": "vector_material_source_part_omitted",
-                        "error_type": "VectorSpatialGroupBuildFailure",
-                        "slot_name": str(slot_name),
-                        "failed_source_part_count": failed_source_part_count,
-                        "collapsed_source_part_count": (
-                            collapsed_source_part_count
-                        ),
-                        "failure_types": failure_types,
-                    },
-                )
-            if collapsed_source_part_count:
-                _log.debug(
-                    "Vector material collapsed writer-zero residue",
-                    extra={
-                        "event": "vector_material_writer_zero_residue_collapsed",
-                        "slot_name": str(slot_name),
-                        "collapsed_source_part_count": (
-                            collapsed_source_part_count
-                        ),
-                    },
-                )
-            if not material_meshes:
+            if mesh is None:
                 continue
-            mesh = _concatenate_meshes_fast(material_meshes)
-            material_meshes.clear()
             meshes_by_slot[slot_name] = {
                 "meshes": [mesh],
                 "mat_id": int(data["mat_id"]),

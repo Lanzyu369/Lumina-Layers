@@ -52,8 +52,7 @@ from core.pipeline.s08_auxiliary_meshes import (
 )
 from core.preview_analysis_cache import preview_analysis_reuse_is_required
 from core.vector_layer_geometry import (
-    extrude_prepared_vector_run_group,
-    prepare_vector_run_group,
+    build_vector_layered_volume,
     resolve_vector_writer_grid_mm,
 )
 
@@ -1116,32 +1115,23 @@ def _generate_vector_outline_mesh(
         shape_count=1,
         coordinate_count=ring_geometry_bytes // 64,
     )
-    try:
-        prepared_outline = prepare_vector_run_group(
-            (ring,),
-            scale_mm_per_svg_unit=scale_factor,
-        )
-        outline_mesh = extrude_prepared_vector_run_group(
-            prepared_outline,
-            height_mm=outline_height_mm,
-            z_offset_mm=z_min_mm,
-        )
-    except COORDINATOR_HANDLED_ERRORS as exc:
-        log.warning(
-            "Vector outline omitted after canonical construction failure",
-            extra={
-                "event": "vector_outline_canonical_build_failed",
-                "error_type": type(exc).__name__,
-                "error_message": str(exc),
-                "shape_count": len(matched_shapes),
-            },
-        )
+    outline_mesh = build_vector_layered_volume(
+        [
+            {
+                "geometry": ring,
+                "height": outline_height_mm,
+                "z_offset": z_min_mm,
+            }
+        ],
+        scale_mm_per_svg_unit=scale_factor,
+    )
+    if outline_mesh is None:
         return None
 
     # The new builder already emits millimetres and independent component
     # ranges. Release the source geometry before applying only the historical
     # final orientation transform.
-    del prepared_outline, ring, expanded, union, source_geometries
+    del ring, expanded, union, source_geometries
     matched_shapes.clear()
     _apply_vector_outline_export_transform(
         outline_mesh,
