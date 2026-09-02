@@ -17,9 +17,47 @@
 
 namespace lumina_svg_core {
 
+inline size_t clipperPathPointCount(const Clipper2Lib::Paths64& paths)
+{
+    size_t count = 0;
+    for(const auto& path : paths)
+        count = checkedSizeSum(count, path.size());
+    return count;
+}
+
+inline void preflightClipperOutput(
+    const Clipper2Lib::Paths64& first,
+    const Clipper2Lib::Paths64* second,
+    size_t intersectionCandidates,
+    ComplexityBudget& complexityBudget)
+{
+    size_t inputPoints = clipperPathPointCount(first);
+    size_t inputRings = first.size();
+    if(second != nullptr) {
+        inputPoints = checkedSizeSum(
+            inputPoints, clipperPathPointCount(*second));
+        inputRings = checkedSizeSum(inputRings, second->size());
+    }
+    // A segment-pair intersection can add at most one split point to each
+    // participating boundary. Collinear overlap endpoints already exist in
+    // the input. This bounds the complete Boolean output before Clipper owns
+    // any result allocation.
+    const size_t splitPoints = checkedSizeProduct(
+        intersectionCandidates, size_t{2});
+    const size_t outputPointUpperBound = checkedSizeSum(
+        inputPoints, splitPoints);
+    const size_t outputRingUpperBound = std::max(
+        inputRings,
+        checkedSizeSum(outputPointUpperBound, size_t{2}) / 3);
+    complexityBudget.requireTransientPointCapacity(
+        outputPointUpperBound);
+    complexityBudget.requireClipperOutputDocumentCapacity(
+        outputPointUpperBound, outputRingUpperBound);
+}
+
 namespace clipper_safety_detail {
 
-inline constexpr size_t MAX_CANDIDATES_PER_OPERATION = 2'000'000;
+inline constexpr size_t MAX_CANDIDATES_PER_OPERATION = 20'000'000;
 inline constexpr size_t DIRECT_CANDIDATE_THRESHOLD = 4'096;
 
 struct SegmentBounds {
@@ -70,6 +108,36 @@ inline bool segmentsIntersect(const IndexedSegment& first,
     };
     return straddles(firstStart, firstEnd)
         && straddles(secondStart, secondEnd);
+}
+
+inline bool segmentsHavePositiveLengthCollinearOverlap(
+    const IndexedSegment& first, const IndexedSegment& second)
+{
+    if(Clipper2Lib::CrossProductSign(
+            first.first, first.second, second.first) != 0
+            || Clipper2Lib::CrossProductSign(
+                first.first, first.second, second.second) != 0)
+        return false;
+    const long double firstDx = static_cast<long double>(first.second.x)
+        - static_cast<long double>(first.first.x);
+    const long double firstDy = static_cast<long double>(first.second.y)
+        - static_cast<long double>(first.first.y);
+    if(std::abs(firstDx) >= std::abs(firstDy)) {
+        const int64_t overlapStart = std::max(
+            std::min(first.first.x, first.second.x),
+            std::min(second.first.x, second.second.x));
+        const int64_t overlapEnd = std::min(
+            std::max(first.first.x, first.second.x),
+            std::max(second.first.x, second.second.x));
+        return overlapStart < overlapEnd;
+    }
+    const int64_t overlapStart = std::max(
+        std::min(first.first.y, first.second.y),
+        std::min(second.first.y, second.second.y));
+    const int64_t overlapEnd = std::min(
+        std::max(first.first.y, first.second.y),
+        std::max(second.first.y, second.second.y));
+    return overlapStart < overlapEnd;
 }
 
 inline long double squaredPointSegmentDistance(
@@ -165,18 +233,38 @@ public:
           m_complexityBudget(complexityBudget),
           m_crossOperandsOnly(crossOperandsOnly)
     {
-        m_indices.resize(m_segments.size());
-        std::iota(m_indices.begin(), m_indices.end(), size_t{0});
+        if(m_crossOperandsOnly) {
+            // Cross-operand checks index only the second operand and query
+            // only the first. Indexing and querying both sides repeated every
+            // tree walk while same-operand candidates were discarded later.
+            const auto secondOperand = std::find_if(
+                m_segments.begin(), m_segments.end(),
+                [](const IndexedSegment& segment) {
+                    return segment.operand_id != 0;
+                });
+            m_querySegmentCount = static_cast<size_t>(
+                secondOperand - m_segments.begin());
+            m_indices.resize(m_segments.size() - m_querySegmentCount);
+            std::iota(
+                m_indices.begin(), m_indices.end(), m_querySegmentCount);
+        } else {
+            m_querySegmentCount = m_segments.size();
+            m_indices.resize(m_segments.size());
+            std::iota(m_indices.begin(), m_indices.end(), size_t{0});
+        }
         if(!m_indices.empty())
             buildNode(0, m_indices.size());
     }
 
-    void requireBoundedCandidates()
+    size_t requireBoundedCandidates()
     {
-        for(size_t index = 0; index < m_segments.size(); ++index)
+        for(size_t index = 0; index < m_querySegmentCount; ++index)
             queryNode(0, index, m_segments[index].bounds);
+        m_complexityBudget.consumeClipperIntersectionWork(
+            checkedSizeSum(m_queryWork, m_comparisonWork));
         m_complexityBudget.consumeClipperIntersectionCandidates(
             m_candidateCount);
+        return m_candidateCount;
     }
 
     bool hasNonAdjacentSegmentsWithinDistance(int64_t distance)
@@ -186,17 +274,73 @@ public:
         const long double distanceSquared =
             static_cast<long double>(distance) * distance;
         size_t queryWork = 0;
+        size_t comparisonWork = 0;
         size_t candidateCount = 0;
         for(size_t index = 0; index < m_segments.size(); ++index) {
             if(queryNearbyNode(
                     0, index,
                     expandedBounds(m_segments[index].bounds, distance),
-                    distanceSquared, queryWork, candidateCount)) {
+                    distanceSquared, queryWork, comparisonWork,
+                    candidateCount)) {
+                m_complexityBudget.consumeClipperIntersectionWork(
+                    checkedSizeSum(queryWork, comparisonWork));
                 m_complexityBudget.consumeClipperIntersectionCandidates(
                     candidateCount);
                 return true;
             }
         }
+        m_complexityBudget.consumeClipperIntersectionWork(
+            checkedSizeSum(queryWork, comparisonWork));
+        m_complexityBudget.consumeClipperIntersectionCandidates(
+            candidateCount);
+        return false;
+    }
+
+    size_t requireBoundedProximityCandidates(int64_t distance)
+    {
+        if(distance < 0)
+            throw std::invalid_argument("negative proximity distance");
+        const long double distanceSquared =
+            static_cast<long double>(distance) * distance;
+        size_t queryWork = 0;
+        size_t comparisonWork = 0;
+        size_t candidateCount = 0;
+        for(size_t index = 0; index < m_segments.size(); ++index) {
+            countNearbyNode(
+                0, index,
+                expandedBounds(m_segments[index].bounds, distance),
+                distanceSquared, queryWork, comparisonWork,
+                candidateCount);
+        }
+        m_complexityBudget.consumeClipperIntersectionWork(
+            checkedSizeSum(queryWork, comparisonWork));
+        m_complexityBudget.consumeClipperIntersectionCandidates(
+            candidateCount);
+        return candidateCount;
+    }
+
+    bool hasCrossOperandCollinearOverlap(
+        double firstErrorX, double firstErrorY,
+        double secondErrorX, double secondErrorY)
+    {
+        size_t queryWork = 0;
+        size_t comparisonWork = 0;
+        size_t candidateCount = 0;
+        for(size_t index = 0; index < m_querySegmentCount; ++index) {
+            if(queryCollinearNode(
+                    0, index, m_segments[index].bounds,
+                    firstErrorX, firstErrorY,
+                    secondErrorX, secondErrorY,
+                    queryWork, comparisonWork, candidateCount)) {
+                m_complexityBudget.consumeClipperIntersectionWork(
+                    checkedSizeSum(queryWork, comparisonWork));
+                m_complexityBudget.consumeClipperIntersectionCandidates(
+                    candidateCount);
+                return true;
+            }
+        }
+        m_complexityBudget.consumeClipperIntersectionWork(
+            checkedSizeSum(queryWork, comparisonWork));
         m_complexityBudget.consumeClipperIntersectionCandidates(
             candidateCount);
         return false;
@@ -204,7 +348,21 @@ public:
 
 private:
     static constexpr size_t LEAF_SIZE = 12;
-    static constexpr size_t MAX_INDEX_QUERY_WORK = 8'000'000;
+
+    static void consumeIntersectionWork(
+        size_t& queryWork, size_t& comparisonWork, bool comparison)
+    {
+        constexpr size_t limit =
+            ComplexityBudget::MAX_CLIPPER_INTERSECTION_COMPARISONS;
+        if(comparisonWork >= limit
+                || queryWork >= limit - comparisonWork)
+            throw ComplexityLimitError(
+                "clipper_intersection_comparisons");
+        if(comparison)
+            ++comparisonWork;
+        else
+            ++queryWork;
+    }
 
     struct Node {
         SegmentBounds bounds;
@@ -266,8 +424,8 @@ private:
     void queryNode(size_t nodeIndex, size_t segmentIndex,
                    const SegmentBounds& query)
     {
-        if(++m_queryWork > MAX_INDEX_QUERY_WORK)
-            throw ComplexityLimitError("clipper_index_query_work");
+        consumeIntersectionWork(
+            m_queryWork, m_comparisonWork, false);
         const auto& node = m_nodes[nodeIndex];
         if(!node.bounds.intersects(query))
             return;
@@ -278,6 +436,8 @@ private:
                     continue;
                 const auto& segment = m_segments[segmentIndex];
                 const auto& candidate = m_segments[candidateIndex];
+                consumeIntersectionWork(
+                    m_queryWork, m_comparisonWork, true);
                 if((m_crossOperandsOnly
                         && segment.operand_id == candidate.operand_id)
                     || adjacentEdges(segment, candidate)
@@ -300,10 +460,10 @@ private:
                          const SegmentBounds& query,
                          long double distanceSquared,
                          size_t& queryWork,
+                         size_t& comparisonWork,
                          size_t& candidateCount) const
     {
-        if(++queryWork > MAX_INDEX_QUERY_WORK)
-            throw ComplexityLimitError("clipper_index_query_work");
+        consumeIntersectionWork(queryWork, comparisonWork, false);
         const auto& node = m_nodes[nodeIndex];
         if(!node.bounds.intersects(query))
             return false;
@@ -314,6 +474,8 @@ private:
                     continue;
                 const auto& segment = m_segments[segmentIndex];
                 const auto& candidate = m_segments[candidateIndex];
+                consumeIntersectionWork(
+                    queryWork, comparisonWork, true);
                 if(adjacentEdges(segment, candidate)
                         || !candidate.bounds.intersects(query))
                     continue;
@@ -328,10 +490,118 @@ private:
         }
         return queryNearbyNode(
                    node.left, segmentIndex, query, distanceSquared,
-                   queryWork, candidateCount)
+                   queryWork, comparisonWork, candidateCount)
             || queryNearbyNode(
                    node.right, segmentIndex, query, distanceSquared,
-                   queryWork, candidateCount);
+                   queryWork, comparisonWork, candidateCount);
+    }
+
+    void countNearbyNode(size_t nodeIndex, size_t segmentIndex,
+                         const SegmentBounds& query,
+                         long double distanceSquared,
+                         size_t& queryWork,
+                         size_t& comparisonWork,
+                         size_t& candidateCount) const
+    {
+        consumeIntersectionWork(queryWork, comparisonWork, false);
+        const auto& node = m_nodes[nodeIndex];
+        if(!node.bounds.intersects(query))
+            return;
+        if(node.leaf) {
+            for(size_t offset = node.begin; offset < node.end; ++offset) {
+                const size_t candidateIndex = m_indices[offset];
+                if(candidateIndex <= segmentIndex)
+                    continue;
+                const auto& segment = m_segments[segmentIndex];
+                const auto& candidate = m_segments[candidateIndex];
+                consumeIntersectionWork(
+                    queryWork, comparisonWork, true);
+                if(adjacentEdges(segment, candidate)
+                        || !candidate.bounds.intersects(query)
+                        || !segmentsWithinDistance(
+                            segment, candidate, distanceSquared))
+                    continue;
+                if(++candidateCount > MAX_CANDIDATES_PER_OPERATION)
+                    throw ComplexityLimitError(
+                        "clipper_offset_proximity_candidates");
+            }
+            return;
+        }
+        countNearbyNode(
+            node.left, segmentIndex, query, distanceSquared,
+            queryWork, comparisonWork, candidateCount);
+        countNearbyNode(
+            node.right, segmentIndex, query, distanceSquared,
+            queryWork, comparisonWork, candidateCount);
+    }
+
+    bool queryCollinearNode(size_t nodeIndex, size_t segmentIndex,
+                            const SegmentBounds& query,
+                            double firstErrorX, double firstErrorY,
+                            double secondErrorX, double secondErrorY,
+                            size_t& queryWork,
+                            size_t& comparisonWork,
+                            size_t& candidateCount) const
+    {
+        consumeIntersectionWork(queryWork, comparisonWork, false);
+        const auto& node = m_nodes[nodeIndex];
+        if(!node.bounds.intersects(query))
+            return false;
+        if(node.leaf) {
+            for(size_t offset = node.begin; offset < node.end; ++offset) {
+                const size_t candidateIndex = m_indices[offset];
+                if(candidateIndex <= segmentIndex)
+                    continue;
+                const auto& segment = m_segments[segmentIndex];
+                const auto& candidate = m_segments[candidateIndex];
+                consumeIntersectionWork(
+                    queryWork, comparisonWork, true);
+                if(segment.operand_id == candidate.operand_id
+                        || !candidate.bounds.intersects(query))
+                    continue;
+                if(++candidateCount > MAX_CANDIDATES_PER_OPERATION)
+                    throw ComplexityLimitError(
+                        "clipper_collinear_candidates");
+                if(!segmentsHavePositiveLengthCollinearOverlap(
+                        segment, candidate))
+                    continue;
+                const auto normalError = [](
+                    const IndexedSegment& edge,
+                    double errorX, double errorY) {
+                    const long double dx =
+                        static_cast<long double>(edge.second.x)
+                        - static_cast<long double>(edge.first.x);
+                    const long double dy =
+                        static_cast<long double>(edge.second.y)
+                        - static_cast<long double>(edge.first.y);
+                    return std::abs(dy) * errorX
+                        + std::abs(dx) * errorY;
+                };
+                const bool segmentHasNormalError = normalError(
+                    segment,
+                    segment.operand_id == 0 ? firstErrorX : secondErrorX,
+                    segment.operand_id == 0 ? firstErrorY : secondErrorY)
+                    > 0.0L;
+                const bool candidateHasNormalError = normalError(
+                    candidate,
+                    candidate.operand_id == 0 ? firstErrorX : secondErrorX,
+                    candidate.operand_id == 0 ? firstErrorY : secondErrorY)
+                    > 0.0L;
+                if(segmentHasNormalError != candidateHasNormalError)
+                    return true;
+            }
+            return false;
+        }
+        return queryCollinearNode(
+                   node.left, segmentIndex, query,
+                   firstErrorX, firstErrorY,
+                   secondErrorX, secondErrorY,
+                   queryWork, comparisonWork, candidateCount)
+            || queryCollinearNode(
+                   node.right, segmentIndex, query,
+                   firstErrorX, firstErrorY,
+                   secondErrorX, secondErrorY,
+                   queryWork, comparisonWork, candidateCount);
     }
 
     std::vector<IndexedSegment> m_segments;
@@ -339,7 +609,9 @@ private:
     std::vector<Node> m_nodes;
     ComplexityBudget& m_complexityBudget;
     bool m_crossOperandsOnly{false};
+    size_t m_querySegmentCount{0};
     size_t m_queryWork{0};
+    size_t m_comparisonWork{0};
     size_t m_candidateCount{0};
 };
 
@@ -471,17 +743,87 @@ inline size_t allPairCount(size_t count)
         : checkedSizeProduct(count, (count - 1) / 2);
 }
 
-inline void requireBoundedDirectCandidates(
+inline size_t requireBoundedDirectCandidates(
     size_t candidateCount, ComplexityBudget& complexityBudget)
 {
     if(candidateCount > MAX_CANDIDATES_PER_OPERATION)
         throw ComplexityLimitError("clipper_candidates_per_operation");
     complexityBudget.consumeClipperIntersectionCandidates(candidateCount);
+    return candidateCount;
+}
+
+inline size_t requireBoundedDirectIntersections(
+    const std::vector<IndexedSegment>& segments,
+    ComplexityBudget& complexityBudget,
+    bool crossOperandsOnly = false)
+{
+    size_t comparisonCount = 0;
+    size_t candidateCount = 0;
+    const auto compare = [&](const IndexedSegment& first,
+                             const IndexedSegment& second) {
+        if(adjacentEdges(first, second))
+            return;
+        if(comparisonCount
+                >= ComplexityBudget::
+                    MAX_CLIPPER_INTERSECTION_COMPARISONS)
+            throw ComplexityLimitError(
+                "clipper_intersection_comparisons");
+        ++comparisonCount;
+        if(!first.bounds.intersects(second.bounds)
+                || !segmentsIntersect(first, second))
+            return;
+        if(++candidateCount > MAX_CANDIDATES_PER_OPERATION)
+            throw ComplexityLimitError(
+                "clipper_candidates_per_operation");
+    };
+    if(crossOperandsOnly) {
+        std::vector<std::pair<size_t, size_t>> operandRanges;
+        size_t rangeStart = 0;
+        while(rangeStart < segments.size()) {
+            size_t rangeEnd = rangeStart + 1;
+            while(rangeEnd < segments.size()
+                    && segments[rangeEnd].operand_id
+                        == segments[rangeStart].operand_id)
+                ++rangeEnd;
+            operandRanges.emplace_back(rangeStart, rangeEnd);
+            rangeStart = rangeEnd;
+        }
+        for(size_t firstRange = 0;
+                firstRange < operandRanges.size(); ++firstRange) {
+            for(size_t secondRange = firstRange + 1;
+                    secondRange < operandRanges.size(); ++secondRange) {
+                for(size_t firstIndex = operandRanges[firstRange].first;
+                        firstIndex < operandRanges[firstRange].second;
+                        ++firstIndex) {
+                    for(size_t secondIndex = operandRanges[secondRange].first;
+                            secondIndex < operandRanges[secondRange].second;
+                            ++secondIndex) {
+                        compare(segments[firstIndex], segments[secondIndex]);
+                    }
+                }
+            }
+        }
+        complexityBudget.consumeClipperIntersectionWork(
+            comparisonCount);
+        complexityBudget.consumeClipperIntersectionCandidates(candidateCount);
+        return candidateCount;
+    }
+    for(size_t firstIndex = 0; firstIndex < segments.size(); ++firstIndex) {
+        const auto& first = segments[firstIndex];
+        for(size_t secondIndex = firstIndex + 1;
+                secondIndex < segments.size(); ++secondIndex) {
+            const auto& second = segments[secondIndex];
+            compare(first, second);
+        }
+    }
+    complexityBudget.consumeClipperIntersectionWork(comparisonCount);
+    complexityBudget.consumeClipperIntersectionCandidates(candidateCount);
+    return candidateCount;
 }
 
 } // namespace clipper_safety_detail
 
-inline void requireBoundedClipperIntersections(
+inline size_t requireBoundedClipperIntersections(
     const Clipper2Lib::Paths64& paths,
     ComplexityBudget& complexityBudget,
     bool closed = true)
@@ -493,7 +835,7 @@ inline void requireBoundedClipperIntersections(
             && clipper_safety_detail::isSingleConvexClosedPath(paths)) {
         clipper_safety_detail::requireBoundedDirectCandidates(
             count, complexityBudget);
-        return;
+        return 0;
     }
     // A direct all-pairs upper bound is cheap only for small inputs. Charging
     // that pessimistic bound for every medium-sized paint can exhaust the
@@ -504,9 +846,13 @@ inline void requireBoundedClipperIntersections(
         clipper_safety_detail::allPairCount(count);
     if(directCandidates
             <= clipper_safety_detail::DIRECT_CANDIDATE_THRESHOLD) {
-        clipper_safety_detail::requireBoundedDirectCandidates(
-            directCandidates, complexityBudget);
-        return;
+        std::vector<clipper_safety_detail::IndexedSegment> segments;
+        segments.reserve(count);
+        size_t nextPathId = 0;
+        clipper_safety_detail::appendSegments(
+            paths, closed, 0, nextPathId, segments);
+        return clipper_safety_detail::requireBoundedDirectIntersections(
+            segments, complexityBudget);
     }
     std::vector<clipper_safety_detail::IndexedSegment> segments;
     segments.reserve(count);
@@ -515,10 +861,10 @@ inline void requireBoundedClipperIntersections(
         paths, closed, 0, nextPathId, segments);
     clipper_safety_detail::BoundedIntersectionIndex index(
         std::move(segments), complexityBudget);
-    index.requireBoundedCandidates();
+    return index.requireBoundedCandidates();
 }
 
-inline void requireBoundedClipperIntersections(
+inline size_t requireBoundedClipperIntersections(
     const Clipper2Lib::Paths64& first,
     const Clipper2Lib::Paths64& second,
     ComplexityBudget& complexityBudget)
@@ -527,6 +873,8 @@ inline void requireBoundedClipperIntersections(
         clipper_safety_detail::segmentCount(first, true);
     const size_t secondCount =
         clipper_safety_detail::segmentCount(second, true);
+    if(firstCount == 0 || secondCount == 0)
+        return 0;
     const size_t count = checkedSizeSum(firstCount, secondCount);
     complexityBudget.ensureClipperIndexSegmentCapacity(count);
     if(clipper_safety_detail::isSingleConvexClosedPath(first)
@@ -534,17 +882,22 @@ inline void requireBoundedClipperIntersections(
         // Two convex polygon boundaries have only linear crossing complexity.
         // Charge their combined edge count without turning
         // a proven-safe large convex pair into an all-pairs rejection.
-        clipper_safety_detail::requireBoundedDirectCandidates(
+        return clipper_safety_detail::requireBoundedDirectCandidates(
             count, complexityBudget);
-        return;
     }
     const size_t directCandidates = checkedSizeProduct(
         firstCount, secondCount);
     if(directCandidates
             <= clipper_safety_detail::DIRECT_CANDIDATE_THRESHOLD) {
-        clipper_safety_detail::requireBoundedDirectCandidates(
-            directCandidates, complexityBudget);
-        return;
+        std::vector<clipper_safety_detail::IndexedSegment> segments;
+        segments.reserve(count);
+        size_t nextPathId = 0;
+        clipper_safety_detail::appendSegments(
+            first, true, 0, nextPathId, segments);
+        clipper_safety_detail::appendSegments(
+            second, true, 1, nextPathId, segments);
+        return clipper_safety_detail::requireBoundedDirectIntersections(
+            segments, complexityBudget, true);
     }
     std::vector<clipper_safety_detail::IndexedSegment> segments;
     segments.reserve(count);
@@ -555,48 +908,42 @@ inline void requireBoundedClipperIntersections(
         second, true, 1, nextPathId, segments);
     clipper_safety_detail::BoundedIntersectionIndex index(
         std::move(segments), complexityBudget, true);
-    index.requireBoundedCandidates();
+    return index.requireBoundedCandidates();
 }
 
-inline void requireBoundedClipperIntersectionsAcrossGroups(
-    const std::vector<const Clipper2Lib::Paths64*>& groups,
+inline bool hasCollinearOverlapAcrossOperands(
+    const Clipper2Lib::Paths64& first,
+    const Clipper2Lib::Paths64& second,
+    double firstErrorX, double firstErrorY,
+    double secondErrorX, double secondErrorY,
     ComplexityBudget& complexityBudget)
 {
-    size_t totalSegments = 0;
-    size_t directCandidates = 0;
-    for(const auto* group : groups) {
-        if(group == nullptr)
-            throw std::logic_error("missing_clipper_path_group");
-        const size_t count =
-            clipper_safety_detail::segmentCount(*group, true);
-        directCandidates = checkedSizeSum(
-            directCandidates,
-            checkedSizeProduct(totalSegments, count));
-        totalSegments = checkedSizeSum(totalSegments, count);
-    }
-    complexityBudget.ensureClipperIndexSegmentCapacity(totalSegments);
-    if(directCandidates
-            <= clipper_safety_detail::DIRECT_CANDIDATE_THRESHOLD) {
-        clipper_safety_detail::requireBoundedDirectCandidates(
-            directCandidates, complexityBudget);
-        return;
-    }
-
+    const size_t firstCount =
+        clipper_safety_detail::segmentCount(first, true);
+    const size_t secondCount =
+        clipper_safety_detail::segmentCount(second, true);
+    if(firstCount == 0 || secondCount == 0)
+        return false;
+    const size_t count = checkedSizeSum(firstCount, secondCount);
+    complexityBudget.ensureClipperIndexSegmentCapacity(count);
     std::vector<clipper_safety_detail::IndexedSegment> segments;
-    segments.reserve(totalSegments);
+    segments.reserve(count);
     size_t nextPathId = 0;
-    for(size_t index = 0; index < groups.size(); ++index) {
-        clipper_safety_detail::appendSegments(
-            *groups[index], true, index, nextPathId, segments);
-    }
+    clipper_safety_detail::appendSegments(
+        first, true, 0, nextPathId, segments);
+    clipper_safety_detail::appendSegments(
+        second, true, 1, nextPathId, segments);
     clipper_safety_detail::BoundedIntersectionIndex index(
         std::move(segments), complexityBudget, true);
-    index.requireBoundedCandidates();
+    return index.hasCrossOperandCollinearOverlap(
+        firstErrorX, firstErrorY, secondErrorX, secondErrorY);
 }
 
-inline void requireBoundedClipperOffset(
+inline size_t requireBoundedClipperOffset(
     const Clipper2Lib::Paths64& paths,
     ComplexityBudget& complexityBudget,
+    double offsetDistance,
+    double miterLimit = 2.0,
     bool closed = true)
 {
     const size_t count =
@@ -606,13 +953,24 @@ inline void requireBoundedClipperOffset(
             && clipper_safety_detail::isSingleConvexClosedPath(paths)) {
         clipper_safety_detail::requireBoundedDirectCandidates(
             count, complexityBudget);
-        return;
+        return 0;
     }
-    // Offsetting can make two previously disjoint edges meet, so a spatial
-    // intersection index over the input is not a safe upper bound. Limit and
-    // charge the complete pair set before Clipper allocates the offset graph.
-    clipper_safety_detail::requireBoundedDirectCandidates(
-        clipper_safety_detail::allPairCount(count), complexityBudget);
+    const double extension = std::abs(offsetDistance)
+        * 2.0 * std::max(2.0, std::abs(miterLimit));
+    // INT64_MAX rounds to 2^63 when converted to double.  Reject that
+    // representable boundary explicitly before the floating-to-integer cast.
+    if(!std::isfinite(extension) || extension >= 0x1p63)
+        throw ComplexityLimitError("clipper_offset_range");
+    const int64_t interactionDistance = static_cast<int64_t>(
+        std::ceil(extension));
+    std::vector<clipper_safety_detail::IndexedSegment> segments;
+    segments.reserve(count);
+    size_t nextPathId = 0;
+    clipper_safety_detail::appendSegments(
+        paths, closed, 0, nextPathId, segments);
+    clipper_safety_detail::BoundedIntersectionIndex index(
+        std::move(segments), complexityBudget);
+    return index.requireBoundedProximityCandidates(interactionDistance);
 }
 
 inline bool hasNonAdjacentSegmentsWithinDistance(

@@ -17,7 +17,7 @@ from core.layered_coordinate_domain import (
     LAYERED_COORDINATE_DOMAIN_KEY,
     LayeredCoordinateDomain,
 )
-from core.native_svg_adapter import NativeSvgFallback, analyze_native_svg
+from core.native_svg_adapter import NativeSvgGeometry, analyze_native_svg
 from core.pipeline.vector_branch import (
     _generate_vector_outline_mesh,
     _inject_vector_keychain_loop,
@@ -228,8 +228,8 @@ def test_native_analysis_preserves_component_hierarchy_without_geos_normalizer(
     ) == [0, 1]
 
 
-def test_adjacent_triangle_is_whole_document_fallback_not_partial_native() -> None:
-    """Legacy-normalizer-sensitive topology must fail closed as one file."""
+def test_native_adjacent_triangle_preserves_large_component_hole_and_shells() -> None:
+    """Native adaptation must not repeat the destructive GEOS normalizer."""
 
     pytest.importorskip("lumina_svg_core")
     outcome = analyze_native_svg(
@@ -238,10 +238,17 @@ def test_adjacent_triangle_is_whole_document_fallback_not_partial_native() -> No
         tolerance_mm=0.02,
     )
 
-    assert outcome == NativeSvgFallback(
-        reason_code="legacy_contour_normalization_incompatible",
-        native_version="0.1.1",
-    )
+    assert isinstance(outcome, NativeSvgGeometry)
+    assert len(outcome.shape_data) == 1
+    raw_geometry = outcome.shape_data[0]["poly"]
+    assert raw_geometry.geom_type == "MultiPolygon"
+    assert len(raw_geometry.geoms) == 3
+    assert sum(len(component.interiors) for component in raw_geometry.geoms) == 1
+    assert raw_geometry.area == pytest.approx(301.3, abs=0.001)
+    assert len(outcome.clipped_shapes) == 3
+    assert sorted(
+        item["geometry"].area for item in outcome.clipped_shapes
+    ) == pytest.approx([0.5, 16.0, 284.8], abs=0.001)
 
 
 def test_native_image_vectorizer_preserves_preview_canvas_glb_anchor(

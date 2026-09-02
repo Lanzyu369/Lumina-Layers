@@ -3,6 +3,7 @@
 
 #include <lunasvg.h>
 
+#include <cstdint>
 #include <stdexcept>
 #include <vector>
 
@@ -16,21 +17,33 @@ struct LocalPoint {
 };
 
 using LocalPath = std::vector<LocalPoint>;
-using LocalPaths = std::vector<LocalPath>;
+
+struct ExpandedStrokePath {
+    LocalPath points;
+    int32_t source_subpath_index{-1};
+};
+
+struct StrokeExpansion {
+    std::vector<ExpandedStrokePath> paths;
+    std::vector<int32_t> collapsed_subpath_indices;
+};
 
 class StrokeInputPrecisionError : public std::runtime_error {
 public:
-    StrokeInputPrecisionError()
-        : std::runtime_error("stroke input precision is ambiguous")
+    explicit StrokeInputPrecisionError(
+        const char* detail = "stroke_input_precision")
+        : std::runtime_error(detail)
     {}
 };
 
 // Flattens and dashes in local coordinates, then expands the centerline with
 // Clipper2 before the caller applies the complete affine transform.
-LocalPaths expandStrokeLocal(const lunasvg::PaintCommand& command,
-                             double localFlattenTolerance,
-                             double localGridStep,
-                             ComplexityBudget& complexityBudget);
+StrokeExpansion expandStrokeLocal(
+    const lunasvg::PaintCommand& command,
+    double localFlattenTolerance,
+    double localGridStep,
+    ComplexityBudget& complexityBudget,
+    bool enforcePhysicalTolerance = true);
 
 } // namespace lumina_svg_core
 

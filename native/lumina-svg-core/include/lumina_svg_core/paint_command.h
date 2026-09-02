@@ -10,7 +10,7 @@
 
 namespace lumina_svg_core {
 
-inline constexpr uint32_t RECORDER_SCHEMA_VERSION = 1;
+inline constexpr uint32_t RECORDER_SCHEMA_VERSION = 3;
 
 struct RecorderResult {
     std::string status{"invalid"};
@@ -19,6 +19,7 @@ struct RecorderResult {
     lunasvg::Box bounds;
     lunasvg::Box viewport;
     bool image_vectorizer_origin{false};
+    bool has_non_scaling_stroke{false};
     std::vector<lunasvg::PaintCommand> commands;
 };
 

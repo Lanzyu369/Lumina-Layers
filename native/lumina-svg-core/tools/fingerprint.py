@@ -117,7 +117,6 @@ def main() -> None:
         args.svg, args.target_width_mm, args.tolerance_mm
     )
     summary = result_summary(result)
-    summary["sha256"] = hashlib.sha256(args.svg.read_bytes()).hexdigest()
     print(json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2))
 
 

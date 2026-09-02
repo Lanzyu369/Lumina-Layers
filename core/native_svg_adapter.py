@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import importlib
 import os
-import re
 import time
 from types import ModuleType
 from typing import Any
@@ -19,20 +18,11 @@ from core.errors import (
     NativeSvgResourceLimitError,
 )
 from core.native_svg_limits import NATIVE_SVG_MAX_BYTES
-from core.vector_geometry_contract import (
-    LEGACY_MIN_COMPONENT_AREA_SOURCE_UNITS_SQUARED,
-)
 
 
-NATIVE_RESULT_SCHEMA_VERSION = 1
-_REFERENCE_SCAN_CHUNK_BYTES = 64 * 1024
-_REFERENCE_SCAN_OVERLAP_BYTES = 256
+NATIVE_RESULT_SCHEMA_VERSION = 3
 _SOURCE_KIND_FILL = 0
 _SOURCE_KIND_STROKE = 1
-_LEGACY_CONTOUR_CLOSE_DELTA_SOURCE_UNITS = 0.03
-_LEGACY_REFERENCE_TAG_RE = re.compile(
-    rb"<(?:[A-Za-z_][A-Za-z0-9_.-]*:)?(?:style|use)(?=[\s/>])"
-)
 
 
 @dataclass(frozen=True)
@@ -44,6 +34,22 @@ class NativeSvgFallback:
 
     reason_code: str
     native_version: str
+
+
+@dataclass(frozen=True)
+class NativeSvgUnprintableFragment:
+    """One non-area SVG fragment excluded from polygon collections.
+
+    一段因不具备二维面积而未进入 Polygon 集合的 SVG 片段。
+    """
+
+    reason_code: str
+    rgba: tuple[int, int, int, int]
+    source_kind: str
+    native_draw_order: int
+    native_source_index: int
+    native_paint_id: tuple[int, int]
+    subpath_index: int
 
 
 @dataclass
@@ -61,36 +67,15 @@ class NativeSvgGeometry:
     stage_timings: dict[str, Any]
     native_version: str
     native_schema_version: int
+    unprintable_fragments: tuple[NativeSvgUnprintableFragment, ...] = field(
+        default_factory=tuple
+    )
     geometry_backend: str = field(default="native", init=False)
     image_vectorizer_bounds: Any | None = None
 
 
 def _load_native_module() -> ModuleType:
     return importlib.import_module("lumina_svg_core")
-
-
-def _requires_legacy_reference_semantics(svg_path: str) -> bool:
-    try:
-        with open(svg_path, "rb") as handle:
-            file_size = os.fstat(handle.fileno()).st_size
-            if file_size <= 0 or file_size > NATIVE_SVG_MAX_BYTES:
-                return False
-            remaining = file_size
-            overlap = b""
-            while remaining > 0:
-                chunk = handle.read(
-                    min(_REFERENCE_SCAN_CHUNK_BYTES, remaining)
-                )
-                if not chunk:
-                    break
-                window = overlap + chunk
-                if _LEGACY_REFERENCE_TAG_RE.search(window) is not None:
-                    return True
-                overlap = window[-_REFERENCE_SCAN_OVERLAP_BYTES:]
-                remaining -= len(chunk)
-            return False
-    except (OSError, ValueError):
-        return False
 
 
 def native_runtime_identity() -> tuple[str, str, int]:
@@ -108,28 +93,79 @@ def native_runtime_identity() -> tuple[str, str, int]:
         module = _load_native_module()
     except (ImportError, OSError):
         return ("legacy", "native_dependency_unavailable", 0)
+    try:
+        runtime_schema = int(getattr(module, "RESULT_SCHEMA_VERSION"))
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        runtime_schema = 0
     return (
         "native",
         str(getattr(module, "__version__", "unknown")),
-        NATIVE_RESULT_SCHEMA_VERSION,
+        runtime_schema,
     )
+
+
+def _native_array(
+    value: Any,
+    *,
+    dtype: np.dtype[Any],
+    ndim: int,
+    reason_code: str,
+) -> np.ndarray:
+    """Validate one immutable C-contiguous native ABI array.
+
+    验证一个只读、C 连续的原生 ABI 数组。
+    """
+
+    if (
+        not isinstance(value, np.ndarray)
+        or value.dtype != dtype
+        or value.ndim != ndim
+        or not value.flags.c_contiguous
+        or value.flags.writeable
+    ):
+        raise NativeSvgInternalError(
+            "The native SVG result returned an incompatible NumPy array.",
+            reason_code=reason_code,
+        )
+    return value
 
 
 def _collection_geometries(collection: Any, grid_to_source_unit: float):
-    coordinates = np.multiply(
-        np.asarray(collection.coordinates),
-        grid_to_source_unit,
-        dtype=np.float64,
+    integer_coordinates = _native_array(
+        collection.coordinates,
+        dtype=np.dtype(np.int64),
+        ndim=2,
+        reason_code="invalid_coordinate_schema",
     )
-    if coordinates.ndim != 2 or coordinates.shape[1] != 2:
+    if integer_coordinates.shape[1:] != (2,):
         raise NativeSvgInternalError(
             "The native SVG result returned an invalid coordinate array.",
             reason_code="invalid_coordinate_schema",
         )
+    coordinates = np.multiply(
+        integer_coordinates,
+        grid_to_source_unit,
+        dtype=np.float64,
+    )
     offsets = (
-        np.asarray(collection.ring_offsets),
-        np.asarray(collection.polygon_offsets),
-        np.asarray(collection.geometry_offsets),
+        _native_array(
+            collection.ring_offsets,
+            dtype=np.dtype(np.uint64),
+            ndim=1,
+            reason_code="invalid_offset_schema",
+        ),
+        _native_array(
+            collection.polygon_offsets,
+            dtype=np.dtype(np.uint64),
+            ndim=1,
+            reason_code="invalid_offset_schema",
+        ),
+        _native_array(
+            collection.geometry_offsets,
+            dtype=np.dtype(np.uint64),
+            ndim=1,
+            reason_code="invalid_offset_schema",
+        ),
     )
     expected_endpoints = (
         len(coordinates),
@@ -150,6 +186,65 @@ def _collection_geometries(collection: Any, grid_to_source_unit: float):
                 "The native SVG result returned invalid ragged offsets.",
                 reason_code="invalid_offset_schema",
             )
+    ring_count = len(offsets[0]) - 1
+    geometry_count = len(offsets[2]) - 1
+    if int(collection.geometry_count) != geometry_count:
+        raise NativeSvgInternalError(
+            "The native SVG result returned an inconsistent geometry count.",
+            reason_code="invalid_offset_schema",
+        )
+    hole_parent = _native_array(
+        collection.hole_parent,
+        dtype=np.dtype(np.int64),
+        ndim=1,
+        reason_code="invalid_hole_schema",
+    )
+    if hole_parent.shape != (ring_count,):
+        raise NativeSvgInternalError(
+            "The native SVG result returned invalid hole metadata.",
+            reason_code="invalid_hole_schema",
+        )
+    ring_starts = offsets[0][:-1]
+    ring_ends = offsets[0][1:]
+    ring_starts_index = ring_starts.astype(np.intp, copy=False)
+    ring_ends_index = ring_ends.astype(np.intp, copy=False)
+    if ring_count and (
+        np.any(ring_ends - ring_starts < 4)
+        or not np.array_equal(
+            integer_coordinates[ring_starts_index],
+            integer_coordinates[ring_ends_index - 1],
+        )
+    ):
+        raise NativeSvgInternalError(
+            "The native SVG result returned an invalid closed ring.",
+            reason_code="invalid_ring_schema",
+        )
+    if ring_count and np.any(
+        (hole_parent < -1)
+        | (hole_parent >= np.arange(ring_count, dtype=np.int64))
+    ):
+        raise NativeSvgInternalError(
+            "The native SVG result returned invalid hole metadata.",
+            reason_code="invalid_hole_schema",
+        )
+    polygon_starts = offsets[1][:-1]
+    polygon_ends = offsets[1][1:]
+    if len(polygon_starts):
+        if np.any(polygon_starts >= polygon_ends):
+            raise NativeSvgInternalError(
+                "The native SVG result returned invalid component hierarchy.",
+                reason_code="invalid_hole_schema",
+            )
+        expected_parents = np.repeat(
+            polygon_starts.astype(np.int64, copy=False),
+            (polygon_ends - polygon_starts).astype(np.intp, copy=False),
+        )
+        expected_parents[polygon_starts.astype(np.intp, copy=False)] = -1
+        if not np.array_equal(hole_parent, expected_parents):
+            raise NativeSvgInternalError(
+                "The native SVG result returned invalid component hierarchy.",
+                reason_code="invalid_hole_schema",
+            )
     return shapely.from_ragged_array(
         shapely.GeometryType.MULTIPOLYGON,
         coordinates,
@@ -165,15 +260,34 @@ def _collection_paint_metadata(
     验证并返回原生结果中逐 paint 的元数据数组。
     """
 
-    rgba = np.asarray(collection.rgba)
-    draw_indices = np.asarray(collection.draw_indices)
-    source_indices = np.asarray(collection.source_indices)
-    source_kinds = np.asarray(collection.source_kinds)
+    rgba = _native_array(
+        collection.rgba,
+        dtype=np.dtype(np.uint8),
+        ndim=2,
+        reason_code="invalid_material_schema",
+    )
+    draw_indices = _native_array(
+        collection.draw_indices,
+        dtype=np.dtype(np.int32),
+        ndim=1,
+        reason_code="invalid_draw_schema",
+    )
+    source_indices = _native_array(
+        collection.source_indices,
+        dtype=np.dtype(np.int32),
+        ndim=1,
+        reason_code="invalid_draw_schema",
+    )
+    source_kinds = _native_array(
+        collection.source_kinds,
+        dtype=np.dtype(np.int32),
+        ndim=1,
+        reason_code="invalid_source_schema",
+    )
     geometry_shape = (collection.geometry_count,)
     if (
         rgba.ndim != 2
         or rgba.shape != (collection.geometry_count, 4)
-        or rgba.dtype != np.dtype(np.uint8)
     ):
         raise NativeSvgInternalError(
             "The native SVG result returned invalid material metadata.",
@@ -182,8 +296,6 @@ def _collection_paint_metadata(
     if (
         draw_indices.shape != geometry_shape
         or source_indices.shape != geometry_shape
-        or draw_indices.dtype != np.dtype(np.int32)
-        or source_indices.dtype != np.dtype(np.int32)
     ):
         raise NativeSvgInternalError(
             "The native SVG result returned invalid draw-order metadata.",
@@ -191,7 +303,6 @@ def _collection_paint_metadata(
         )
     if (
         source_kinds.shape != geometry_shape
-        or source_kinds.dtype != np.dtype(np.int32)
         or np.any(
             (source_kinds != _SOURCE_KIND_FILL)
             & (source_kinds != _SOURCE_KIND_STROKE)
@@ -233,6 +344,113 @@ def _paint_metadata_at(
     }
 
 
+def _unprintable_fragments(
+    collection: Any,
+) -> tuple[NativeSvgUnprintableFragment, ...]:
+    """Validate and convert non-area fragment diagnostics.
+
+    验证并转换不具备二维面积的片段诊断。
+    """
+
+    count = int(collection.count)
+    if count < 0:
+        raise NativeSvgInternalError(
+            "The native SVG result returned an invalid fragment count.",
+            reason_code="invalid_fragment_schema",
+        )
+    reason_codes = tuple(str(value) for value in collection.reason_codes)
+    reason_ids = _native_array(
+        collection.reason_ids,
+        dtype=np.dtype(np.int32),
+        ndim=1,
+        reason_code="invalid_fragment_schema",
+    )
+    rgba = _native_array(
+        collection.rgba,
+        dtype=np.dtype(np.uint8),
+        ndim=2,
+        reason_code="invalid_fragment_schema",
+    )
+    draw_indices = _native_array(
+        collection.draw_indices,
+        dtype=np.dtype(np.int32),
+        ndim=1,
+        reason_code="invalid_fragment_schema",
+    )
+    source_indices = _native_array(
+        collection.source_indices,
+        dtype=np.dtype(np.int32),
+        ndim=1,
+        reason_code="invalid_fragment_schema",
+    )
+    source_kinds = _native_array(
+        collection.source_kinds,
+        dtype=np.dtype(np.int32),
+        ndim=1,
+        reason_code="invalid_fragment_schema",
+    )
+    subpath_indices = _native_array(
+        collection.subpath_indices,
+        dtype=np.dtype(np.int32),
+        ndim=1,
+        reason_code="invalid_fragment_schema",
+    )
+    if (
+        len(reason_codes) != count
+        or reason_ids.shape != (count,)
+        or rgba.shape != (count, 4)
+        or draw_indices.shape != (count,)
+        or source_indices.shape != (count,)
+        or source_kinds.shape != (count,)
+        or subpath_indices.shape != (count,)
+        or np.any(
+            (source_kinds != _SOURCE_KIND_FILL)
+            & (source_kinds != _SOURCE_KIND_STROKE)
+        )
+    ):
+        raise NativeSvgInternalError(
+            "The native SVG result returned invalid fragment metadata.",
+            reason_code="invalid_fragment_schema",
+        )
+    allowed_reasons = {
+        "empty_path",
+        "point_only",
+        "line_only",
+        "area_collapse",
+        "fill_rule_cancelled",
+        "clipped_out",
+        "stroke_collapse",
+    }
+    if any(reason not in allowed_reasons for reason in reason_codes):
+        raise NativeSvgInternalError(
+            "The native SVG result returned an unknown fragment reason.",
+            reason_code="invalid_fragment_schema",
+        )
+
+    fragments: list[NativeSvgUnprintableFragment] = []
+    for index, reason_code in enumerate(reason_codes):
+        exact_rgba = tuple(int(value) for value in rgba[index])
+        draw_index = int(draw_indices[index])
+        source_index = int(source_indices[index])
+        source_kind_index = int(source_kinds[index])
+        fragments.append(
+            NativeSvgUnprintableFragment(
+                reason_code=reason_code,
+                rgba=exact_rgba,
+                source_kind=(
+                    "stroke_only"
+                    if source_kind_index == _SOURCE_KIND_STROKE
+                    else "fill"
+                ),
+                native_draw_order=draw_index,
+                native_source_index=source_index,
+                native_paint_id=(source_index, draw_index),
+                subpath_index=int(subpath_indices[index]),
+            )
+        )
+    return tuple(fragments)
+
+
 def _shape_data(collection: Any, geometries: np.ndarray) -> list[dict[str, Any]]:
     metadata = _collection_paint_metadata(collection)
     items: list[dict[str, Any]] = []
@@ -265,11 +483,7 @@ def _visible_shapes(
         )
         paint_metadata = _paint_metadata_at(metadata, geometry_index)
         for component_index, component in enumerate(components):
-            if (
-                component.is_empty
-                or float(component.area)
-                < LEGACY_MIN_COMPONENT_AREA_SOURCE_UNITS_SQUARED
-            ):
+            if component.is_empty:
                 continue
             item = dict(paint_metadata)
             item.update(
@@ -286,7 +500,9 @@ def _visible_shapes(
 
 def _invalid_result(reason_code: str) -> None:
     if reason_code == "empty_geometry":
-        raise ValueError("No valid filled shapes found in SVG.")
+        # Preserve VectorProcessor's established public error contract even
+        # when the native fill-only policy removes every recorded stroke.
+        raise ValueError("No valid shapes found in SVG")
     if reason_code == "invalid_svg":
         raise ValueError("Invalid SVG document.")
     if reason_code in {"invalid_physical_parameters", "numeric_range_error"}:
@@ -318,8 +534,10 @@ def analyze_native_svg(
         target_width_mm: Requested physical model width. 目标模型物理宽度。
         tolerance_mm: One total physical error budget. 统一物理误差预算。
         expand_stroke_to_fill: Preserve Lumina's existing stroke policy. If
-            false, a document containing recorded strokes falls back instead
-            of changing legacy behavior. 是否沿用 Lumina 的描边展开策略。
+            false, stroke paint operations are ignored just as in the legacy
+            fill-only path; if true, unsupported stroke semantics fail closed.
+            是否沿用 Lumina 的描边展开策略；关闭时与旧填充链一致忽略描边，
+            开启时遇到不支持的描边语义会整份文档回退。
 
     Returns:
         Native-compatible geometry on success, or a whole-document fallback
@@ -354,10 +572,7 @@ def analyze_native_svg(
         svg_path,
         target_width_mm,
         tolerance_mm,
-        False,
-        _LEGACY_CONTOUR_CLOSE_DELTA_SOURCE_UNITS,
-        0.25,
-        LEGACY_MIN_COMPONENT_AREA_SOURCE_UNITS_SQUARED,
+        bool(expand_stroke_to_fill),
     )
     native_call_seconds = time.perf_counter() - call_started
 
@@ -365,70 +580,42 @@ def analyze_native_svg(
         reason_code = str(
             result.reason_code or "unsupported_svg_semantics"
         )
-        if reason_code == "unsupported_complexity":
+        if reason_code in {
+            "unsupported_complexity",
+            "unsupported_input_complexity",
+        }:
             raise NativeSvgResourceLimitError(reason_code=reason_code)
-        if reason_code == "unsupported_stroke_policy":
-            reason_code = (
-                "legacy_stroke_parity"
-                if expand_stroke_to_fill
-                else "legacy_stroke_policy"
-            )
         return NativeSvgFallback(
             reason_code=reason_code,
             native_version=native_version,
         )
     if result.status != "supported":
         reason_code = str(result.reason_code or "unknown_error")
-        if reason_code == "empty_geometry":
-            return NativeSvgFallback(
-                reason_code="legacy_empty_geometry_parity",
-                native_version=native_version,
-            )
         _invalid_result(reason_code)
-    if _requires_legacy_reference_semantics(svg_path):
-        return NativeSvgFallback(
-            reason_code="legacy_css_use_parity",
-            native_version=native_version,
-        )
     if int(result.schema_version) != NATIVE_RESULT_SCHEMA_VERSION:
         raise NativeSvgInternalError(
             "The native SVG result schema is incompatible with Lumina.",
             reason_code="native_schema_mismatch",
         )
 
-    if (
-        not bool(
-            getattr(result, "legacy_contour_normalization_identity", False)
-        )
-        or not bool(
-            getattr(result, "legacy_contour_normalization_compatible", False)
-        )
-    ):
-        return NativeSvgFallback(
-            reason_code="legacy_contour_normalization_incompatible",
-            native_version=native_version,
-        )
-    if not bool(
-        getattr(result, "legacy_curve_tolerance_compatible", False)
-    ):
-        return NativeSvgFallback(
-            reason_code="legacy_curve_tolerance_parity",
-            native_version=native_version,
-        )
-
-    source_kinds = np.asarray(result.raw.source_kinds)
-    if np.any(source_kinds == _SOURCE_KIND_STROKE):
-        return NativeSvgFallback(
-            reason_code=(
-                "legacy_stroke_parity"
-                if expand_stroke_to_fill
-                else "legacy_stroke_policy"
-            ),
-            native_version=native_version,
-        )
-
     adapter_started = time.perf_counter()
     grid_to_source_unit = float(result.grid_to_source_unit)
+    scale_factor = float(result.scale_factor)
+    bbox = tuple(float(value) for value in result.bbox)
+    if (
+        not np.isfinite(grid_to_source_unit)
+        or grid_to_source_unit <= 0.0
+        or not np.isfinite(scale_factor)
+        or scale_factor <= 0.0
+        or len(bbox) != 4
+        or not np.all(np.isfinite(bbox))
+        or bbox[2] <= 0.0
+        or bbox[3] <= 0.0
+    ):
+        raise NativeSvgInternalError(
+            "The native SVG result returned an invalid coordinate domain.",
+            reason_code="invalid_coordinate_domain",
+        )
     raw_geometries = _collection_geometries(
         result.raw, grid_to_source_unit
     )
@@ -438,6 +625,31 @@ def analyze_native_svg(
     silhouette_geometries = _collection_geometries(
         result.silhouette, grid_to_source_unit
     )
+    input_paint_count = int(result.input_paint_count)
+    if (
+        input_paint_count < 0
+        or input_paint_count < int(result.raw.geometry_count)
+    ):
+        raise NativeSvgInternalError(
+            "The native SVG result returned an invalid paint count.",
+            reason_code="invalid_fragment_schema",
+        )
+    unprintable_fragments = _unprintable_fragments(
+        result.unprintable_fragments
+    )
+    unprintable_reason_counts: dict[str, int] = {}
+    for fragment in unprintable_fragments:
+        unprintable_reason_counts[fragment.reason_code] = (
+            unprintable_reason_counts.get(fragment.reason_code, 0) + 1
+        )
+    if (
+        int(result.raw.geometry_count) == 0
+        and int(result.visible.geometry_count) == 0
+        and int(result.silhouette.geometry_count) == 0
+    ):
+        # The native parser successfully classified the document, but Lumina's
+        # product pipeline still has no area-bearing shape to analyze.
+        _invalid_result("empty_geometry")
     if len(silhouette_geometries) != 1 or silhouette_geometries[0].is_empty:
         raise NativeSvgInternalError(
             "The native SVG result returned an invalid silhouette.",
@@ -446,10 +658,7 @@ def analyze_native_svg(
     shape_data = _shape_data(result.raw, raw_geometries)
     clipped_shapes = _visible_shapes(result.visible, visible_geometries)
     if not shape_data or not clipped_shapes:
-        return NativeSvgFallback(
-            reason_code="legacy_empty_geometry_parity",
-            native_version=native_version,
-        )
+        _invalid_result("empty_geometry")
     adapter_seconds = time.perf_counter() - adapter_started
 
     image_vectorizer_bounds = None
@@ -479,8 +688,8 @@ def analyze_native_svg(
         shape_data=shape_data,
         clipped_shapes=clipped_shapes,
         silhouette=silhouette_geometries[0],
-        scale_factor=float(result.scale_factor),
-        bbox=tuple(float(value) for value in result.bbox),
+        scale_factor=scale_factor,
+        bbox=bbox,
         stage_timings={
             "native_svg_s": native_call_seconds,
             "native_recorder_s": float(
@@ -498,14 +707,14 @@ def analyze_native_svg(
             "native_topology_s": float(
                 getattr(result, "topology_seconds", 0.0)
             ),
-            "native_legacy_raw_s": float(
-                getattr(result, "legacy_raw_seconds", 0.0)
+            "native_normalize_raw_s": float(
+                getattr(result, "normalization_raw_seconds", 0.0)
             ),
             "native_composite_s": float(
                 getattr(result, "composite_seconds", 0.0)
             ),
-            "native_legacy_visible_s": float(
-                getattr(result, "legacy_visible_seconds", 0.0)
+            "native_normalize_visible_s": float(
+                getattr(result, "normalization_visible_seconds", 0.0)
             ),
             "native_export_s": float(
                 getattr(result, "export_seconds", 0.0)
@@ -518,16 +727,20 @@ def analyze_native_svg(
             "geometry_backend": "native",
             "native_version": native_version,
             "native_schema_version": int(result.schema_version),
-            "native_legacy_normalization_identity": bool(
-                result.legacy_contour_normalization_identity
-            ),
-            "native_legacy_area_filter_identity": bool(
-                result.legacy_area_filter_identity
-            ),
             "native_fallback_reason": "",
+            "native_input_paint_count": input_paint_count,
+            "native_raw_paint_count": int(result.raw.geometry_count),
+            "native_output_paint_count": int(result.visible.geometry_count),
+            "native_component_count": int(result.visible.component_count),
+            "native_hole_count": int(result.visible.hole_count),
+            "native_unprintable_fragment_count": len(
+                unprintable_fragments
+            ),
+            "native_unprintable_reasons": unprintable_reason_counts,
         },
         native_version=native_version,
         native_schema_version=int(result.schema_version),
+        unprintable_fragments=unprintable_fragments,
         image_vectorizer_bounds=image_vectorizer_bounds,
     )
 
@@ -535,6 +748,7 @@ def analyze_native_svg(
 __all__ = [
     "NativeSvgFallback",
     "NativeSvgGeometry",
+    "NativeSvgUnprintableFragment",
     "analyze_native_svg",
     "native_runtime_identity",
 ]

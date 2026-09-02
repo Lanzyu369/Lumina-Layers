@@ -11,31 +11,22 @@
 #include <memory>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 namespace lumina_svg_core {
 namespace {
 
-constexpr size_t MAX_SVG_BYTES = 64 * 1024 * 1024;
+constexpr size_t MAX_SVG_BYTES = 256 * 1024 * 1024;
 constexpr size_t MAX_XML_ELEMENTS = 250'000;
 constexpr size_t MAX_XML_DEPTH = 128;
-constexpr size_t MAX_USE_ELEMENTS = 16;
-constexpr size_t MAX_ATTRIBUTES_PER_ELEMENT = 4'096;
-constexpr size_t MAX_CSS_BYTES = 1024 * 1024;
-constexpr size_t MAX_CSS_RULES = 20'000;
-constexpr size_t MAX_CSS_DECLARATIONS = 100'000;
-constexpr size_t MAX_CSS_SELECTOR_TOKENS = 100'000;
-constexpr size_t MAX_CSS_RULE_MATCH_WORK = 5'000'000;
-constexpr size_t MAX_CSS_SELECTOR_MATCH_WORK = 20'000'000;
-constexpr size_t MAX_CSS_DECLARATION_MATCH_WORK = 20'000'000;
-constexpr size_t MAX_PATH_TOKENS_PER_ATTRIBUTE = 500'000;
-constexpr size_t MAX_PATH_TOKENS = 2'000'000;
-constexpr size_t MAX_POINT_VALUES_PER_ATTRIBUTE = 500'000;
-constexpr size_t MAX_POINT_VALUES = 1'000'000;
-constexpr size_t MAX_DASH_VALUES = 100'000;
+constexpr size_t MAX_XML_ATTRIBUTES = 2'000'000;
+constexpr size_t MAX_XML_ATTRIBUTES_PER_ELEMENT = 32'768;
+constexpr size_t MAX_XML_ATTRIBUTE_BYTES = MAX_SVG_BYTES;
 
 RecorderResult finishRecording(std::unique_ptr<lunasvg::Document> document);
 
@@ -181,14 +172,6 @@ RecorderResult unsupportedDoctype()
     return result;
 }
 
-RecorderResult unsupportedFontRelativeLength()
-{
-    RecorderResult result;
-    result.status = "unsupported";
-    result.reason_code = "unsupported_font_relative_length";
-    return result;
-}
-
 struct XmlAttributeView {
     std::string_view name;
     std::string_view value;
@@ -199,7 +182,6 @@ struct XmlStartTagView {
     std::vector<XmlAttributeView> attributes;
     size_t end{std::string_view::npos};
     bool self_closing{false};
-    bool attribute_limit_exceeded{false};
 };
 
 bool parseStartTag(std::string_view svg, size_t offset,
@@ -262,10 +244,6 @@ bool parseStartTag(std::string_view svg, size_t offset,
         const auto valueEnd = svg.find(quote, cursor);
         if(valueEnd == std::string_view::npos)
             return false;
-        if(tag.attributes.size() >= MAX_ATTRIBUTES_PER_ELEMENT) {
-            tag.attribute_limit_exceeded = true;
-            return true;
-        }
         tag.attributes.push_back({
             attributeName,
             svg.substr(valueStart, valueEnd - valueStart),
@@ -273,355 +251,6 @@ bool parseStartTag(std::string_view svg, size_t offset,
         cursor = valueEnd + 1;
     }
     return false;
-}
-
-bool consumeCount(size_t count, size_t limit, size_t& total)
-{
-    if(count > limit || total > limit - count)
-        return false;
-    total += count;
-    return true;
-}
-
-bool isAsciiDigit(char value)
-{
-    return value >= '0' && value <= '9';
-}
-
-bool startsNumericToken(std::string_view value, size_t index)
-{
-    const char current = value[index];
-    const char previous = index == 0 ? '\0' : value[index - 1];
-    const char next = index + 1 < value.size() ? value[index + 1] : '\0';
-    if(current == '+' || current == '-') {
-        return previous != 'e' && previous != 'E'
-            && (isAsciiDigit(next) || next == '.');
-    }
-    if(current == '.')
-        return isAsciiDigit(next) && !isAsciiDigit(previous);
-    if(!isAsciiDigit(current))
-        return false;
-    return !isAsciiDigit(previous) && previous != '.'
-        && previous != '+' && previous != '-'
-        && previous != 'e' && previous != 'E';
-}
-
-bool isCssIdentifierCharacter(char value)
-{
-    const auto character = static_cast<unsigned char>(value);
-    return std::isalnum(character) || value == '_' || value == '-';
-}
-
-bool containsFontRelativeLengthUnit(std::string_view value)
-{
-    for(size_t index = 0; index < value.size(); ++index) {
-        if(!startsNumericToken(value, index))
-            continue;
-        size_t cursor = index;
-        if(value[cursor] == '+' || value[cursor] == '-')
-            ++cursor;
-        while(cursor < value.size() && isAsciiDigit(value[cursor]))
-            ++cursor;
-        if(cursor < value.size() && value[cursor] == '.') {
-            ++cursor;
-            while(cursor < value.size() && isAsciiDigit(value[cursor]))
-                ++cursor;
-        }
-        if(cursor < value.size()
-                && (value[cursor] == 'e' || value[cursor] == 'E')) {
-            size_t exponent = cursor + 1;
-            if(exponent < value.size()
-                    && (value[exponent] == '+' || value[exponent] == '-'))
-                ++exponent;
-            const size_t exponentDigits = exponent;
-            while(exponent < value.size()
-                    && isAsciiDigit(value[exponent]))
-                ++exponent;
-            if(exponent > exponentDigits)
-                cursor = exponent;
-        }
-        while(cursor < value.size() && isXmlSpace(value[cursor]))
-            ++cursor;
-        if(cursor + 1 >= value.size()
-                || (value[cursor] != 'e' && value[cursor] != 'E')
-                || (value[cursor + 1] != 'm'
-                    && value[cursor + 1] != 'M'
-                    && value[cursor + 1] != 'x'
-                    && value[cursor + 1] != 'X'))
-            continue;
-        const size_t afterUnit = cursor + 2;
-        if(afterUnit == value.size()
-                || !isCssIdentifierCharacter(value[afterUnit]))
-            return true;
-    }
-    return false;
-}
-
-bool consumeNumericTokens(std::string_view value, size_t localLimit,
-                          size_t totalLimit, size_t& total)
-{
-    size_t local = 0;
-    for(size_t index = 0; index < value.size(); ++index) {
-        if(!startsNumericToken(value, index))
-            continue;
-        if(!consumeCount(1, localLimit, local)
-                || !consumeCount(1, totalLimit, total))
-            return false;
-    }
-    return true;
-}
-
-struct ParserAllocationBudget {
-    size_t xml_elements{0};
-    size_t css_bytes{0};
-    size_t css_rules{0};
-    size_t css_declarations{0};
-    size_t stylesheet_declarations{0};
-    size_t css_selector_tokens{0};
-    size_t path_tokens{0};
-    size_t point_values{0};
-    size_t dash_values{0};
-};
-
-bool consumeDashValuesFromCss(std::string_view css,
-                              ParserAllocationBudget& budget)
-{
-    constexpr std::string_view PROPERTY = "stroke-dasharray";
-    size_t offset = 0;
-    while((offset = css.find(PROPERTY, offset)) != std::string_view::npos) {
-        const auto colon = css.find(':', offset + PROPERTY.size());
-        if(colon == std::string_view::npos)
-            return true;
-        auto end = css.find_first_of(";}", colon + 1);
-        if(end == std::string_view::npos)
-            end = css.size();
-        if(!consumeNumericTokens(
-                css.substr(colon + 1, end - colon - 1),
-                MAX_DASH_VALUES, MAX_DASH_VALUES,
-                budget.dash_values))
-            return false;
-        offset = end;
-    }
-    return true;
-}
-
-bool consumeCss(std::string_view css, bool inlineStyle,
-                ParserAllocationBudget& budget)
-{
-    if(!consumeCount(css.size(), MAX_CSS_BYTES, budget.css_bytes))
-        return false;
-    size_t braceDepth = 0;
-    char quote = 0;
-    bool inComment = false;
-    bool inSelectorIdentifier = false;
-    bool selectorHasToken = false;
-    bool pendingDescendantCombinator = false;
-    auto consumeSelectorToken = [&]() {
-        return consumeCount(
-            1, MAX_CSS_SELECTOR_TOKENS,
-            budget.css_selector_tokens);
-    };
-    for(size_t index = 0; index < css.size(); ++index) {
-        const char value = css[index];
-        if(inComment) {
-            if(value == '*' && index + 1 < css.size()
-                    && css[index + 1] == '/') {
-                inComment = false;
-                ++index;
-            }
-            continue;
-        }
-        if(quote != 0) {
-            if(value == '\\' && index + 1 < css.size()) {
-                ++index;
-                continue;
-            }
-            if(value == quote)
-                quote = 0;
-            continue;
-        }
-        if(value == '/' && index + 1 < css.size()
-                && css[index + 1] == '*') {
-            inComment = true;
-            ++index;
-            continue;
-        }
-        if(value == '\'' || value == '"') {
-            quote = value;
-            continue;
-        }
-        if(value == '{') {
-            if(!consumeCount(1, MAX_CSS_RULES, budget.css_rules)
-                    || (!inlineStyle && !selectorHasToken))
-                return false;
-            ++braceDepth;
-            inSelectorIdentifier = false;
-            selectorHasToken = false;
-            pendingDescendantCombinator = false;
-            continue;
-        }
-        if(value == '}') {
-            if(braceDepth > 0)
-                --braceDepth;
-            inSelectorIdentifier = false;
-            selectorHasToken = false;
-            pendingDescendantCombinator = false;
-            continue;
-        }
-        if(!inlineStyle && braceDepth == 0) {
-            if(isXmlSpace(value)) {
-                pendingDescendantCombinator = selectorHasToken;
-                inSelectorIdentifier = false;
-                continue;
-            }
-            if(isCssIdentifierCharacter(value)) {
-                if(!inSelectorIdentifier) {
-                    if(pendingDescendantCombinator
-                            && !consumeSelectorToken())
-                        return false;
-                    if(!consumeSelectorToken())
-                        return false;
-                }
-                inSelectorIdentifier = true;
-                selectorHasToken = true;
-                pendingDescendantCombinator = false;
-                continue;
-            }
-            inSelectorIdentifier = false;
-            pendingDescendantCombinator = false;
-            if(value == ',' || value == '.' || value == '#'
-                    || value == ':' || value == '[' || value == ']'
-                    || value == '*' || value == '>' || value == '+'
-                    || value == '~' || value == '|') {
-                if(!consumeSelectorToken())
-                    return false;
-                selectorHasToken = value != ',';
-            }
-            continue;
-        }
-        if(value == ':' && (inlineStyle || braceDepth > 0)) {
-            if(!consumeCount(
-                    1, MAX_CSS_DECLARATIONS,
-                    budget.css_declarations))
-                return false;
-            if(!inlineStyle
-                    && !consumeCount(
-                        1, MAX_CSS_DECLARATIONS,
-                        budget.stylesheet_declarations))
-                return false;
-        }
-    }
-    return consumeDashValuesFromCss(css, budget);
-}
-
-bool consumePathTokens(std::string_view path,
-                       ParserAllocationBudget& budget)
-{
-    size_t local = 0;
-    for(size_t index = 0; index < path.size(); ++index) {
-        const auto value = static_cast<unsigned char>(path[index]);
-        if(!std::isalpha(value) && !startsNumericToken(path, index))
-            continue;
-        if(!consumeCount(1, MAX_PATH_TOKENS_PER_ATTRIBUTE, local)
-                || !consumeCount(
-                    1, MAX_PATH_TOKENS, budget.path_tokens))
-            return false;
-    }
-    return true;
-}
-
-std::string_view localXmlName(std::string_view name)
-{
-    const auto separator = name.rfind(':');
-    return separator == std::string_view::npos
-        ? name : name.substr(separator + 1);
-}
-
-struct XmlEndTagView {
-    size_t start{std::string_view::npos};
-    size_t end{std::string_view::npos};
-};
-
-bool findMatchingXmlEndTag(std::string_view svg, size_t offset,
-                           std::string_view expectedName,
-                           XmlEndTagView& endTag)
-{
-    while((offset = svg.find('<', offset)) != std::string_view::npos) {
-        const auto remainder = svg.substr(offset);
-        if(startsWith(remainder, "<!--")) {
-            const auto end = svg.find("-->", offset + 4);
-            if(end == std::string_view::npos)
-                return false;
-            offset = end + 3;
-            continue;
-        }
-        if(startsWith(remainder, "<![CDATA[")) {
-            const auto end = svg.find("]]>", offset + 9);
-            if(end == std::string_view::npos)
-                return false;
-            offset = end + 3;
-            continue;
-        }
-        if(startsWith(remainder, "<?")) {
-            const auto end = svg.find("?>", offset + 2);
-            if(end == std::string_view::npos)
-                return false;
-            offset = end + 2;
-            continue;
-        }
-        if(!startsWith(remainder, "</")) {
-            ++offset;
-            continue;
-        }
-        size_t cursor = offset + 2;
-        while(cursor < svg.size() && isXmlSpace(svg[cursor]))
-            ++cursor;
-        const size_t nameStart = cursor;
-        while(cursor < svg.size() && !isXmlSpace(svg[cursor])
-                && svg[cursor] != '>')
-            ++cursor;
-        const auto name = svg.substr(nameStart, cursor - nameStart);
-        while(cursor < svg.size() && isXmlSpace(svg[cursor]))
-            ++cursor;
-        if(cursor >= svg.size())
-            return false;
-        if(svg[cursor] == '>' && name == expectedName) {
-            endTag = {offset, cursor};
-            return true;
-        }
-        offset = cursor + 1;
-    }
-    return false;
-}
-
-bool exceedsCssApplicationWork(const ParserAllocationBudget& budget)
-{
-    const auto exceedsProduct = [](size_t left, size_t right,
-                                   size_t limit) {
-        return left != 0 && right > limit / left;
-    };
-    return exceedsProduct(
-               budget.xml_elements, budget.css_rules,
-               MAX_CSS_RULE_MATCH_WORK)
-        || exceedsProduct(
-               budget.xml_elements, budget.css_selector_tokens,
-               MAX_CSS_SELECTOR_MATCH_WORK)
-        || exceedsProduct(
-               budget.xml_elements, budget.stylesheet_declarations,
-               MAX_CSS_DECLARATION_MATCH_WORK);
-}
-
-bool isFontRelativeLengthAttribute(std::string_view name)
-{
-    name = localXmlName(name);
-    return name == "x" || name == "y" || name == "x1" || name == "y1"
-        || name == "x2" || name == "y2" || name == "cx" || name == "cy"
-        || name == "r" || name == "rx" || name == "ry"
-        || name == "width" || name == "height" || name == "dx"
-        || name == "dy" || name == "stroke-width"
-        || name == "stroke-dasharray" || name == "stroke-dashoffset"
-        || name == "font-size" || name == "letter-spacing"
-        || name == "word-spacing";
 }
 
 bool hasDoctypeDeclaration(std::string_view svg)
@@ -655,167 +284,6 @@ bool hasDoctypeDeclaration(std::string_view svg)
         ++offset;
     }
     return false;
-}
-
-bool hasUnsupportedFontRelativeLengths(std::string_view svg)
-{
-    size_t offset = 0;
-    bool sawRootSvg = false;
-    while((offset = svg.find('<', offset)) != std::string_view::npos) {
-        if(startsWith(svg.substr(offset), "<!--")) {
-            const auto end = svg.find("-->", offset + 4);
-            if(end == std::string_view::npos)
-                return false;
-            offset = end + 3;
-            continue;
-        }
-        if(startsWith(svg.substr(offset), "<![CDATA[")) {
-            const auto end = svg.find("]]>", offset + 9);
-            if(end == std::string_view::npos)
-                return false;
-            offset = end + 3;
-            continue;
-        }
-        if(startsWith(svg.substr(offset), "<?")) {
-            const auto end = svg.find("?>", offset + 2);
-            if(end == std::string_view::npos)
-                return false;
-            offset = end + 2;
-            continue;
-        }
-        if(startsWith(svg.substr(offset), "<!")) {
-            const auto end = svg.find('>', offset + 2);
-            if(end == std::string_view::npos)
-                return false;
-            offset = end + 1;
-            continue;
-        }
-        if(offset + 1 < svg.size() && svg[offset + 1] == '/') {
-            const auto end = svg.find('>', offset + 2);
-            if(end == std::string_view::npos)
-                return false;
-            offset = end + 1;
-            continue;
-        }
-
-        XmlStartTagView tag;
-        if(!parseStartTag(svg, offset, tag))
-            return false;
-        if(localXmlName(tag.name) == "svg") {
-            if(sawRootSvg)
-                return false;
-            sawRootSvg = true;
-        }
-        for(const auto& attribute : tag.attributes) {
-            if((isFontRelativeLengthAttribute(attribute.name)
-                    || localXmlName(attribute.name) == "style")
-                    && containsFontRelativeLengthUnit(attribute.value))
-                return true;
-        }
-        if(!tag.self_closing && localXmlName(tag.name) == "style") {
-            XmlEndTagView close;
-            if(!findMatchingXmlEndTag(
-                    svg, tag.end + 1, tag.name, close))
-                return false;
-            if(containsFontRelativeLengthUnit(
-                    svg.substr(
-                        tag.end + 1,
-                        close.start - tag.end - 1)))
-                return true;
-            offset = close.end + 1;
-            continue;
-        }
-        offset = tag.end + 1;
-    }
-    return false;
-}
-
-bool exceedsParserAllocationBudgets(std::string_view svg)
-{
-    ParserAllocationBudget budget;
-    size_t offset = 0;
-    while((offset = svg.find('<', offset)) != std::string_view::npos) {
-        if(startsWith(svg.substr(offset), "<!--")) {
-            const auto end = svg.find("-->", offset + 4);
-            if(end == std::string_view::npos)
-                return false;
-            offset = end + 3;
-            continue;
-        }
-        if(startsWith(svg.substr(offset), "<![CDATA[")) {
-            const auto end = svg.find("]]>", offset + 9);
-            if(end == std::string_view::npos)
-                return false;
-            offset = end + 3;
-            continue;
-        }
-        if(startsWith(svg.substr(offset), "<?")) {
-            const auto end = svg.find("?>", offset + 2);
-            if(end == std::string_view::npos)
-                return false;
-            offset = end + 2;
-            continue;
-        }
-        if(startsWith(svg.substr(offset), "<!")) {
-            const auto end = svg.find('>', offset + 2);
-            if(end == std::string_view::npos)
-                return false;
-            offset = end + 1;
-            continue;
-        }
-        if(offset + 1 < svg.size() && svg[offset + 1] == '/') {
-            const auto end = svg.find('>', offset + 2);
-            if(end == std::string_view::npos)
-                return false;
-            offset = end + 1;
-            continue;
-        }
-
-        XmlStartTagView tag;
-        if(!parseStartTag(svg, offset, tag))
-            return false;
-        if(tag.attribute_limit_exceeded)
-            return true;
-        if(!consumeCount(
-                1, MAX_XML_ELEMENTS, budget.xml_elements))
-            return true;
-        for(const auto& attribute : tag.attributes) {
-            if(attribute.name == "d") {
-                if(!consumePathTokens(attribute.value, budget))
-                    return true;
-            } else if(attribute.name == "points") {
-                if(!consumeNumericTokens(
-                        attribute.value, MAX_POINT_VALUES_PER_ATTRIBUTE,
-                        MAX_POINT_VALUES, budget.point_values))
-                    return true;
-            } else if(attribute.name == "stroke-dasharray") {
-                if(!consumeNumericTokens(
-                        attribute.value, MAX_DASH_VALUES,
-                        MAX_DASH_VALUES, budget.dash_values))
-                    return true;
-            } else if(attribute.name == "style") {
-                if(!consumeCss(attribute.value, true, budget))
-                    return true;
-            }
-        }
-
-        if(!tag.self_closing && localXmlName(tag.name) == "style") {
-            XmlEndTagView close;
-            if(!findMatchingXmlEndTag(
-                    svg, tag.end + 1, tag.name, close))
-                return true;
-            if(!consumeCss(
-                    svg.substr(
-                        tag.end + 1,
-                        close.start - tag.end - 1),
-                    false, budget))
-                return true;
-            offset = close.end + 1;
-            continue;
-        }
-        offset = tag.end + 1;
-    }
-    return exceedsCssApplicationWork(budget);
 }
 
 enum class NamespaceValidation {
@@ -933,6 +401,65 @@ std::optional<std::string_view> qNamePrefix(std::string_view name)
     return name.substr(0, separator);
 }
 
+bool namespaceUriEquals(std::string_view encoded,
+                        std::string_view expected)
+{
+    size_t expectedOffset = 0;
+    while(!encoded.empty()) {
+        char decoded = encoded.front();
+        if(decoded != '&') {
+            encoded.remove_prefix(1);
+        } else {
+            const auto end = encoded.find(';');
+            if(end == std::string_view::npos)
+                return false;
+            const auto reference = encoded.substr(1, end - 1);
+            if(reference == "amp") decoded = '&';
+            else if(reference == "lt") decoded = '<';
+            else if(reference == "gt") decoded = '>';
+            else if(reference == "quot") decoded = '"';
+            else if(reference == "apos") decoded = '\'';
+            else if(!reference.empty() && reference.front() == '#') {
+                size_t offset = 1;
+                int base = 10;
+                if(offset < reference.size()
+                        && (reference[offset] == 'x'
+                            || reference[offset] == 'X')) {
+                    base = 16;
+                    ++offset;
+                }
+                if(offset == reference.size())
+                    return false;
+                uint32_t value = 0;
+                for(; offset < reference.size(); ++offset) {
+                    const unsigned char digit = reference[offset];
+                    uint32_t numeric = 0;
+                    if(digit >= '0' && digit <= '9')
+                        numeric = digit - '0';
+                    else if(base == 16 && digit >= 'a' && digit <= 'f')
+                        numeric = digit - 'a' + 10;
+                    else if(base == 16 && digit >= 'A' && digit <= 'F')
+                        numeric = digit - 'A' + 10;
+                    else
+                        return false;
+                    if(value > (0x7FU - numeric)
+                            / static_cast<uint32_t>(base))
+                        return false;
+                    value = value * static_cast<uint32_t>(base) + numeric;
+                }
+                decoded = static_cast<char>(value);
+            } else {
+                return false;
+            }
+            encoded.remove_prefix(end + 1);
+        }
+        if(expectedOffset >= expected.size()
+                || expected[expectedOffset++] != decoded)
+            return false;
+    }
+    return expectedOffset == expected.size();
+}
+
 NamespaceValidation validateNamespaceBindings(std::string_view svg)
 {
     constexpr std::string_view XML_NAMESPACE =
@@ -941,13 +468,26 @@ NamespaceValidation validateNamespaceBindings(std::string_view svg)
         "http://www.w3.org/2000/svg";
     constexpr std::string_view XLINK_NAMESPACE =
         "http://www.w3.org/1999/xlink";
-    auto prefixIsBound = [](std::string_view prefix, bool xlinkBound) {
-        return prefix == "xml" || (prefix == "xlink" && xlinkBound);
+    struct NamespaceChange {
+        std::string_view prefix;
+        bool existed{false};
+        std::string_view previous;
     };
-    std::vector<bool> inheritedXlinkBindings;
+    std::unordered_map<std::string_view, std::string_view> bindings;
+    bindings.emplace("xml", XML_NAMESPACE);
+    std::vector<std::vector<NamespaceChange>> namespaceScopes;
     std::vector<std::string_view> openElementNames;
-    bool xlinkBound = false;
     bool unsupportedNamespaceSeen = false;
+    const auto restoreBindings = [&bindings](
+        const std::vector<NamespaceChange>& changes) {
+        for(auto change = changes.rbegin(); change != changes.rend();
+                ++change) {
+            if(change->existed)
+                bindings.insert_or_assign(change->prefix, change->previous);
+            else
+                bindings.erase(change->prefix);
+        }
+    };
     size_t offset = 0;
     while((offset = svg.find('<', offset)) != std::string_view::npos) {
         if(startsWith(svg.substr(offset), "<!--")) {
@@ -987,8 +527,6 @@ NamespaceValidation validateNamespaceBindings(std::string_view svg)
             while(cursor < svg.size()
                     && !isXmlSpace(svg[cursor]) && svg[cursor] != '>')
                 ++cursor;
-            const auto prefix = qNamePrefix(
-                svg.substr(nameStart, cursor - nameStart));
             const auto closingName = svg.substr(
                 nameStart, cursor - nameStart);
             const auto closingNameValidation = validateXmlName(closingName);
@@ -996,11 +534,7 @@ NamespaceValidation validateNamespaceBindings(std::string_view svg)
                 return NamespaceValidation::Invalid;
             if(closingNameValidation == XmlNameValidation::NonAscii)
                 return NamespaceValidation::UnsupportedXmlName;
-            if(!prefix.has_value())
-                return NamespaceValidation::Invalid;
-            if(!prefix->empty()
-                    && !prefixIsBound(*prefix, xlinkBound)
-                    && !unsupportedNamespaceSeen)
+            if(!qNamePrefix(closingName).has_value())
                 return NamespaceValidation::Invalid;
             if(openElementNames.empty()
                     || openElementNames.back() != closingName)
@@ -1009,10 +543,10 @@ NamespaceValidation validateNamespaceBindings(std::string_view svg)
             if(end == std::string_view::npos)
                 return NamespaceValidation::Supported;
             openElementNames.pop_back();
-            if(!inheritedXlinkBindings.empty()) {
-                xlinkBound = inheritedXlinkBindings.back();
-                inheritedXlinkBindings.pop_back();
-            }
+            if(namespaceScopes.empty())
+                return NamespaceValidation::Invalid;
+            restoreBindings(namespaceScopes.back());
+            namespaceScopes.pop_back();
             offset = end + 1;
             continue;
         }
@@ -1033,11 +567,21 @@ NamespaceValidation validateNamespaceBindings(std::string_view svg)
             if(attributeNameValidation == XmlNameValidation::NonAscii)
                 return NamespaceValidation::UnsupportedXmlName;
         }
-        const bool inheritedXlinkBound = xlinkBound;
+        std::vector<NamespaceChange> changes;
+        const auto bindPrefix = [&bindings, &changes](
+            std::string_view prefix, std::string_view uri) {
+            const auto existing = bindings.find(prefix);
+            changes.push_back({
+                prefix,
+                existing != bindings.end(),
+                existing == bindings.end()
+                    ? std::string_view{} : existing->second,
+            });
+            bindings.insert_or_assign(prefix, uri);
+        };
         for(const auto& attribute : tag.attributes) {
             if(attribute.name == "xmlns") {
-                if(attribute.value != SVG_NAMESPACE)
-                    unsupportedNamespaceSeen = true;
+                bindPrefix(std::string_view{}, attribute.value);
                 continue;
             }
             if(!startsWith(attribute.name, "xmlns:"))
@@ -1047,28 +591,35 @@ NamespaceValidation validateNamespaceBindings(std::string_view svg)
                     || declaredPrefix.find(':') != std::string_view::npos)
                 return NamespaceValidation::Invalid;
             if(declaredPrefix == "xml") {
-                if(attribute.value != XML_NAMESPACE)
+                if(!namespaceUriEquals(attribute.value, XML_NAMESPACE))
                     unsupportedNamespaceSeen = true;
-            } else if(declaredPrefix == "xlink") {
-                if(attribute.value != XLINK_NAMESPACE)
-                    unsupportedNamespaceSeen = true;
-                else
-                    xlinkBound = true;
             } else if(declaredPrefix == "xmlns"
                     || attribute.value.empty()) {
                 return NamespaceValidation::Invalid;
-            } else {
+            } else if(declaredPrefix == "xlink"
+                    && !namespaceUriEquals(
+                        attribute.value, XLINK_NAMESPACE)) {
                 unsupportedNamespaceSeen = true;
             }
+            bindPrefix(declaredPrefix, attribute.value);
         }
 
         const auto elementPrefix = qNamePrefix(tag.name);
         if(!elementPrefix.has_value())
             return NamespaceValidation::Invalid;
-        if(!elementPrefix->empty()
-                && !prefixIsBound(*elementPrefix, xlinkBound)
-                && !unsupportedNamespaceSeen)
-            return NamespaceValidation::Invalid;
+        if(elementPrefix->empty()) {
+            const auto defaultBinding = bindings.find(std::string_view{});
+            if(defaultBinding != bindings.end()
+                    && !namespaceUriEquals(
+                        defaultBinding->second, SVG_NAMESPACE))
+                unsupportedNamespaceSeen = true;
+        } else {
+            const auto binding = bindings.find(*elementPrefix);
+            if(binding == bindings.end())
+                return NamespaceValidation::Invalid;
+            if(!namespaceUriEquals(binding->second, SVG_NAMESPACE))
+                unsupportedNamespaceSeen = true;
+        }
         for(const auto& attribute : tag.attributes) {
             if(attribute.name == "xmlns"
                     || startsWith(attribute.name, "xmlns:"))
@@ -1076,15 +627,24 @@ NamespaceValidation validateNamespaceBindings(std::string_view svg)
             const auto attributePrefix = qNamePrefix(attribute.name);
             if(!attributePrefix.has_value())
                 return NamespaceValidation::Invalid;
-            if(!attributePrefix->empty()
-                    && !prefixIsBound(*attributePrefix, xlinkBound)
-                    && !unsupportedNamespaceSeen)
+            if(attributePrefix->empty())
+                continue;
+            const auto binding = bindings.find(*attributePrefix);
+            if(binding == bindings.end())
                 return NamespaceValidation::Invalid;
+            if(*attributePrefix == "xlink"
+                    && !namespaceUriEquals(
+                        binding->second, XLINK_NAMESPACE))
+                unsupportedNamespaceSeen = true;
+            if(*attributePrefix != "xlink"
+                    && namespaceUriEquals(
+                        binding->second, XLINK_NAMESPACE))
+                unsupportedNamespaceSeen = true;
         }
         if(tag.self_closing) {
-            xlinkBound = inheritedXlinkBound;
+            restoreBindings(changes);
         } else {
-            inheritedXlinkBindings.push_back(inheritedXlinkBound);
+            namespaceScopes.push_back(std::move(changes));
             openElementNames.push_back(tag.name);
         }
         offset = tag.end + 1;
@@ -1100,7 +660,8 @@ bool exceedsXmlComplexity(std::string_view svg)
         return true;
 
     size_t elementCount = 0;
-    size_t useElementCount = 0;
+    size_t attributeCount = 0;
+    size_t attributeBytes = 0;
     size_t depth = 0;
     size_t offset = 0;
     while((offset = svg.find('<', offset)) != std::string_view::npos) {
@@ -1139,17 +700,14 @@ bool exceedsXmlComplexity(std::string_view svg)
             ++cursor;
         while(cursor < svg.size() && isXmlSpace(svg[cursor]))
             ++cursor;
-        const size_t nameStart = cursor;
         while(cursor < svg.size()
                 && !isXmlSpace(svg[cursor])
                 && svg[cursor] != '/' && svg[cursor] != '>')
             ++cursor;
-        auto localName = svg.substr(nameStart, cursor - nameStart);
-        const auto namespaceSeparator = localName.rfind(':');
-        if(namespaceSeparator != std::string_view::npos)
-            localName.remove_prefix(namespaceSeparator + 1);
+        const size_t attributesStart = cursor;
         char quote = 0;
         size_t tagEnd = std::string_view::npos;
+        size_t elementAttributeCount = 0;
         for(; cursor < svg.size(); ++cursor) {
             const char value = svg[cursor];
             if(quote != 0) {
@@ -1161,6 +719,10 @@ bool exceedsXmlComplexity(std::string_view svg)
                 quote = value;
                 continue;
             }
+            if(value == '='
+                    && ++elementAttributeCount
+                        > MAX_XML_ATTRIBUTES_PER_ELEMENT)
+                return true;
             if(value == '>') {
                 tagEnd = cursor;
                 break;
@@ -1173,9 +735,15 @@ bool exceedsXmlComplexity(std::string_view svg)
             if(depth > 0)
                 --depth;
         } else {
-            if(++elementCount > MAX_XML_ELEMENTS)
+            if(elementAttributeCount > MAX_XML_ATTRIBUTES - attributeCount)
                 return true;
-            if(localName == "use" && ++useElementCount > MAX_USE_ELEMENTS)
+            attributeCount += elementAttributeCount;
+            const size_t elementAttributeBytes = tagEnd - attributesStart;
+            if(elementAttributeBytes
+                    > MAX_XML_ATTRIBUTE_BYTES - attributeBytes)
+                return true;
+            attributeBytes += elementAttributeBytes;
+            if(++elementCount > MAX_XML_ELEMENTS)
                 return true;
             size_t last = tagEnd;
             while(last > offset && isXmlSpace(svg[last - 1]))
@@ -1197,10 +765,6 @@ RecorderResult recordUtf8Svg(std::string_view svg)
         return unsupportedDoctype();
     if(exceedsXmlComplexity(svg))
         return unsupportedComplexity();
-    if(exceedsParserAllocationBudgets(svg))
-        return unsupportedComplexity();
-    if(hasUnsupportedFontRelativeLengths(svg))
-        return unsupportedFontRelativeLength();
     const auto namespaceValidation = validateNamespaceBindings(svg);
     if(namespaceValidation == NamespaceValidation::Invalid)
         return {};
@@ -1211,28 +775,39 @@ RecorderResult recordUtf8Svg(std::string_view svg)
     constexpr std::string_view UTF8_BOM{"\xEF\xBB\xBF", 3};
     if(startsWith(svg, UTF8_BOM))
         svg.remove_prefix(UTF8_BOM.size());
-    return finishRecording(lunasvg::Document::loadFromData(std::string(svg)));
+    try {
+        return finishRecording(
+            lunasvg::Document::loadFromData(std::string(svg)));
+    } catch(const std::length_error&) {
+        return unsupportedComplexity();
+    }
 }
 
 lunasvg::Box documentViewport(lunasvg::Document& document)
 {
+    // Paint commands already include the root viewBox-to-viewport transform.
+    // Keep the viewport in that same recorded coordinate domain. Returning
+    // the raw viewBox origin here would combine source and post-transform
+    // coordinates when the kernel computes Lumina's canonical bbox.
     auto text = document.documentElement().getAttribute("viewBox");
     std::replace(text.begin(), text.end(), ',', ' ');
     std::istringstream stream(text);
     stream.imbue(std::locale::classic());
-    double x = 0;
-    double y = 0;
-    double width = 0;
-    double height = 0;
+    double sourceX = 0;
+    double sourceY = 0;
+    double sourceWidth = 0;
+    double sourceHeight = 0;
     std::string trailing;
-    if(stream >> x >> y >> width >> height
+    if(stream >> sourceX >> sourceY >> sourceWidth >> sourceHeight
             && !(stream >> trailing)
-            && std::isfinite(x) && std::isfinite(y)
-            && std::isfinite(width) && std::isfinite(height)
-            && width > 0 && height > 0) {
-        return lunasvg::Box(
-            static_cast<float>(x), static_cast<float>(y),
-            static_cast<float>(width), static_cast<float>(height));
+            && std::isfinite(sourceX) && std::isfinite(sourceY)
+            && std::isfinite(sourceWidth) && std::isfinite(sourceHeight)
+            && sourceWidth > 0 && sourceHeight > 0) {
+        const float width = document.width();
+        const float height = document.height();
+        if(std::isfinite(width) && std::isfinite(height)
+                && width > 0 && height > 0)
+            return lunasvg::Box(0, 0, width, height);
     }
     return {};
 }
@@ -1257,6 +832,12 @@ RecorderResult finishRecording(std::unique_ptr<lunasvg::Document> document)
     result.status = "supported";
     result.reason_code.clear();
     result.commands = std::move(recorded.commands);
+    result.has_non_scaling_stroke = std::any_of(
+        result.commands.begin(), result.commands.end(),
+        [](const lunasvg::PaintCommand& command) {
+            return command.kind == lunasvg::PaintCommandKind::Stroke
+                && command.non_scaling_stroke;
+        });
     return result;
 }
 

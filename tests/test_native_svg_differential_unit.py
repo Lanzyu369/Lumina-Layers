@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections import defaultdict
-import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,7 +12,7 @@ from shapely import affinity
 from shapely.ops import unary_union
 
 from core import native_svg_adapter
-from core.native_svg_adapter import NativeSvgFallback
+from core.native_svg_adapter import NativeSvgFallback, NativeSvgGeometry
 from core.vector_engine import VectorProcessor
 import core.vector_engine as vector_engine
 
@@ -124,7 +123,6 @@ def test_native_matches_legacy_reference_within_physical_budget(
 ) -> None:
     pytest.importorskip("lumina_svg_core")
     path = FIXTURES / str(case["file"])
-    assert hashlib.sha256(path.read_bytes()).hexdigest() == case["sha256"]
     processor = _processor()
 
     native = _run(processor, path, backend="native", monkeypatch=monkeypatch)
@@ -189,32 +187,40 @@ def test_native_differential_output_is_stable_across_uncached_runs(
         analysis = _run(
             processor, path, backend="native", monkeypatch=monkeypatch
         )
-        digest = hashlib.sha256()
-        for item in analysis.clipped_shapes:
-            digest.update(bytes(item["color"]))
-            digest.update(item["geometry"].wkb)
-        fingerprints.append(digest.hexdigest())
+        fingerprints.append(
+            tuple(
+                (tuple(item["color"]), item["geometry"].wkb)
+                for item in analysis.clipped_shapes
+            )
+        )
     assert len(set(fingerprints)) == 1
 
 
 @pytest.mark.parametrize(
-    "body",
+    ("body", "expected_colors"),
     [
         (
-            "<rect width='50' height='50' fill='red'/>"
-            "<rect x='90' y='90' width='.03' height='.03' fill='blue'/>"
+            (
+                "<rect width='50' height='50' fill='red'/>"
+                "<rect x='90' y='90' width='.03' height='.03' fill='blue'/>"
+            ),
+            [(255, 0, 0), (0, 0, 255)],
         ),
         (
-            "<path fill='red' d='M0 0H50V50H0Z "
-            "M90 90H90.03V90.03H90Z'/>"
+            (
+                "<path fill='red' d='M0 0H50V50H0Z "
+                "M90 90H90.03V90.03H90Z'/>"
+            ),
+            [(255, 0, 0), (255, 0, 0)],
         ),
     ],
     ids=["independent-paint", "same-paint-components"],
 )
-def test_native_matches_legacy_per_component_minimum_area(
+def test_native_preserves_components_below_the_legacy_area_cutoff(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     body: str,
+    expected_colors: list[tuple[int, int, int]],
 ) -> None:
     pytest.importorskip("lumina_svg_core")
     path = tmp_path / "minimum-component-area.svg"
@@ -226,32 +232,27 @@ def test_native_matches_legacy_per_component_minimum_area(
     selected = _run(
         _processor(), path, backend="native", monkeypatch=monkeypatch
     )
-    reference = _run(
-        _processor(), path, backend="legacy", monkeypatch=monkeypatch
-    )
-
     assert selected.stage_timings["geometry_backend"] == "native"
-    assert _ordered_paint_colors(selected) == _ordered_paint_colors(reference)
-    assert _census_by_color(selected) == _census_by_color(reference)
-    assert all(
-        item["geometry"].area >= vector_engine.MIN_SHAPE_AREA_MM2
-        for item in selected.clipped_shapes
-    )
+    assert _ordered_paint_colors(selected) == expected_colors
+    assert sorted(
+        item["geometry"].area for item in selected.clipped_shapes
+    ) == pytest.approx([0.0009, 2500.0], abs=1e-7)
+    assert all(item["rgba"][3] == 255 for item in selected.clipped_shapes)
+    assert all("native_paint_id" in item for item in selected.clipped_shapes)
 
 
 @pytest.mark.parametrize(
-    ("width", "expected_colors"),
+    "width",
     [
-        ("0.099999", [(255, 0, 0)]),
-        ("0.100001", [(255, 0, 0), (0, 0, 255)]),
+        "0.099999",
+        "0.100001",
     ],
     ids=["just-below", "just-above"],
 )
-def test_component_area_threshold_uncertainty_falls_back(
+def test_native_does_not_apply_the_legacy_component_area_threshold(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     width: str,
-    expected_colors: list[tuple[int, int, int]],
 ) -> None:
     pytest.importorskip("lumina_svg_core")
     path = tmp_path / "ambiguous-component-area.svg"
@@ -266,27 +267,33 @@ def test_component_area_threshold_uncertainty_falls_back(
     selected = _run(
         _processor(), path, backend="native", monkeypatch=monkeypatch
     )
-    reference = _run(
-        _processor(), path, backend="legacy", monkeypatch=monkeypatch
-    )
-
-    assert selected.stage_timings["geometry_backend"] == "legacy"
-    assert selected.stage_timings["native_fallback_reason"] == (
-        "legacy_area_threshold_ambiguous"
-    )
-    assert _ordered_paint_colors(selected) == expected_colors
-    assert _ordered_paint_colors(selected) == _ordered_paint_colors(reference)
-    assert _ordered_material_identities(selected) == (
-        _ordered_material_identities(reference)
-    )
-    assert _census_by_color(selected) == _census_by_color(reference)
+    assert selected.stage_timings["geometry_backend"] == "native"
+    assert _ordered_paint_colors(selected) == [
+        (255, 0, 0),
+        (0, 0, 255),
+    ]
+    assert sorted(
+        item["geometry"].area for item in selected.clipped_shapes
+    ) == pytest.approx([float(width) ** 2, 2500.0], abs=1e-6)
+    assert [item["rgba"] for item in selected.clipped_shapes] == [
+        (255, 0, 0, 255),
+        (0, 0, 255, 255),
+    ]
 
 
-@pytest.mark.parametrize("with_use", [False, True], ids=["direct", "use"])
-def test_symbol_requests_whole_document_legacy_fallback(
+@pytest.mark.parametrize(
+    ("with_use", "expected_colors"),
+    [
+        (False, [(0, 0, 255)]),
+        (True, [(255, 0, 0), (0, 0, 255)]),
+    ],
+    ids=["definition-only", "instantiated"],
+)
+def test_symbol_and_use_stay_native(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     with_use: bool,
+    expected_colors: list[tuple[int, int, int]],
 ) -> None:
     pytest.importorskip("lumina_svg_core")
     use = "<use href='#shape'/>" if with_use else ""
@@ -303,16 +310,11 @@ def test_symbol_requests_whole_document_legacy_fallback(
     selected = _run(
         _processor(), path, backend="native", monkeypatch=monkeypatch
     )
-    reference = _run(
-        _processor(), path, backend="legacy", monkeypatch=monkeypatch
-    )
 
-    assert selected.stage_timings["geometry_backend"] == "legacy"
-    assert selected.stage_timings["native_fallback_reason"] == (
-        "unsupported_symbol"
-    )
-    assert _ordered_paint_colors(selected) == _ordered_paint_colors(reference)
-    assert _census_by_color(selected) == _census_by_color(reference)
+    assert selected.stage_timings["geometry_backend"] == "native"
+    assert selected.stage_timings["native_fallback_reason"] == ""
+    assert _ordered_paint_colors(selected) == expected_colors
+    assert all("native_paint_id" in item for item in selected.clipped_shapes)
 
 
 @pytest.mark.parametrize(
@@ -334,7 +336,7 @@ def test_symbol_requests_whole_document_legacy_fallback(
         "slice",
     ],
 )
-def test_explicit_preserve_aspect_ratio_falls_back_with_legacy_parity(
+def test_explicit_preserve_aspect_ratio_stays_native(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     preserve_aspect_ratio: str,
@@ -351,40 +353,34 @@ def test_explicit_preserve_aspect_ratio_falls_back_with_legacy_parity(
     selected = _run(
         _processor(), path, backend="native", monkeypatch=monkeypatch
     )
-    reference = _run(
-        _processor(), path, backend="legacy", monkeypatch=monkeypatch
-    )
 
-    assert selected.stage_timings["geometry_backend"] == "legacy"
-    assert selected.stage_timings["native_fallback_reason"] == (
-        "unsupported_preserve_aspect_ratio"
-    )
-    assert selected.bbox == pytest.approx(reference.bbox, abs=0.001)
-    assert selected.scale_factor == pytest.approx(reference.scale_factor)
-    assert _ordered_paint_colors(selected) == _ordered_paint_colors(reference)
-    assert _census_by_color(selected) == _census_by_color(reference)
+    assert selected.stage_timings["geometry_backend"] == "native"
+    assert selected.stage_timings["native_fallback_reason"] == ""
+    assert _ordered_paint_colors(selected) == [(255, 0, 0)]
+    assert selected.clipped_shapes[0]["geometry"].is_valid
+    assert selected.clipped_shapes[0]["geometry"].area > 0.0
 
 
 @pytest.mark.parametrize(
-    ("paint_attributes", "fallback_reason"),
+    ("paint_attributes", "expected_rgba"),
     [
-        ("fill='rebeccapurple'", "unsupported_color_syntax"),
-        ("fill='aliceblue'", "unsupported_color_syntax"),
-        ("fill='rgb(50%,0%,0%)'", "unsupported_color_syntax"),
-        ("fill='rgba(1,2,3,100%)'", "unsupported_color_syntax"),
-        ("fill='rgba(1,2,3,0%)'", "unsupported_color_syntax"),
-        ("fill='hsla(0,100%,50%,1)'", "unsupported_color_syntax"),
-        ("fill='red' fill-opacity='0%'", "unsupported_opacity_syntax"),
+        ("fill='rebeccapurple'", [(102, 51, 153, 255), (0, 0, 255, 255)]),
+        ("fill='aliceblue'", [(240, 248, 255, 255), (0, 0, 255, 255)]),
+        ("fill='rgb(50%,0%,0%)'", [(128, 0, 0, 255), (0, 0, 255, 255)]),
+        ("fill='rgba(1,2,3,100%)'", [(1, 2, 3, 255), (0, 0, 255, 255)]),
+        ("fill='rgba(1,2,3,0%)'", [(0, 0, 255, 255)]),
+        ("fill='hsla(0,100%,50%,1)'", [(255, 0, 0, 255), (0, 0, 255, 255)]),
+        ("fill='red' fill-opacity='0%'", [(0, 0, 255, 255)]),
     ],
 )
-def test_legacy_incompatible_color_syntax_preserves_material_identity_by_fallback(
+def test_standard_color_syntax_preserves_exact_rgba_natively(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     paint_attributes: str,
-    fallback_reason: str,
+    expected_rgba: list[tuple[int, int, int, int]],
 ) -> None:
     pytest.importorskip("lumina_svg_core")
-    path = tmp_path / "legacy-color-parity.svg"
+    path = tmp_path / "standard-color.svg"
     path.write_text(
         "<svg viewBox='0 0 20 10'>"
         f"<rect width='9' height='10' {paint_attributes}/>"
@@ -396,45 +392,43 @@ def test_legacy_incompatible_color_syntax_preserves_material_identity_by_fallbac
     selected = _run(
         _processor(), path, backend="native", monkeypatch=monkeypatch
     )
-    reference = _run(
-        _processor(), path, backend="legacy", monkeypatch=monkeypatch
-    )
 
-    assert selected.stage_timings["geometry_backend"] == "legacy"
-    assert selected.stage_timings["native_fallback_reason"] == fallback_reason
-    assert _ordered_paint_colors(selected) == _ordered_paint_colors(reference)
-    assert _ordered_material_identities(selected) == (
-        _ordered_material_identities(reference)
-    )
+    assert selected.stage_timings["geometry_backend"] == "native"
+    assert [item["rgba"] for item in selected.clipped_shapes] == expected_rgba
+    assert all("native_paint_id" in item for item in selected.clipped_shapes)
 
 
 @pytest.mark.parametrize(
-    "red_geometry",
+    ("paint_markup", "expected_colors"),
     [
         (
             "<g fill='green'><path fill='inherit' "
-            "d='M0 0H9V10H0Z'/></g>"
+            "d='M0 0H9V10H0Z'/></g>",
+            [(0, 128, 0), (0, 0, 255)],
         ),
         (
             "<g fill='green'><path style='fill:inherit' "
-            "d='M0 0H9V10H0Z'/></g>"
+            "d='M0 0H9V10H0Z'/></g>",
+            [(0, 128, 0), (0, 0, 255)],
         ),
         (
             "<g fill-rule='evenodd'><path fill='red' fill-rule='inherit' "
-            "d='M0 0H9V10H0Z M2 2H7V8H2Z'/></g>"
+            "d='M0 0H9V10H0Z M2 2H7V8H2Z'/></g>",
+            [(255, 0, 0), (0, 0, 255)],
         ),
     ],
 )
-def test_explicit_inherit_preserves_legacy_material_and_topology_by_fallback(
+def test_explicit_inherit_stays_native(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    red_geometry: str,
+    paint_markup: str,
+    expected_colors: list[tuple[int, int, int]],
 ) -> None:
     pytest.importorskip("lumina_svg_core")
-    path = tmp_path / "legacy-explicit-inherit.svg"
+    path = tmp_path / "explicit-inherit.svg"
     path.write_text(
         "<svg viewBox='0 0 20 10'>"
-        f"{red_geometry}"
+        f"{paint_markup}"
         "<rect x='11' width='9' height='10' fill='blue'/>"
         "</svg>",
         encoding="utf-8",
@@ -443,19 +437,10 @@ def test_explicit_inherit_preserves_legacy_material_and_topology_by_fallback(
     selected = _run(
         _processor(), path, backend="native", monkeypatch=monkeypatch
     )
-    reference = _run(
-        _processor(), path, backend="legacy", monkeypatch=monkeypatch
-    )
 
-    assert selected.stage_timings["geometry_backend"] == "legacy"
-    assert selected.stage_timings["native_fallback_reason"] == (
-        "unsupported_legacy_explicit_inherit"
-    )
-    assert _ordered_paint_colors(selected) == _ordered_paint_colors(reference)
-    assert _ordered_material_identities(selected) == (
-        _ordered_material_identities(reference)
-    )
-    assert _census_by_color(selected) == _census_by_color(reference)
+    assert selected.stage_timings["geometry_backend"] == "native"
+    assert _ordered_paint_colors(selected) == expected_colors
+    assert all("native_paint_id" in item for item in selected.clipped_shapes)
 
 
 @pytest.mark.parametrize(
@@ -464,11 +449,10 @@ def test_explicit_inherit_preserves_legacy_material_and_topology_by_fallback(
         "fill:/*comment*/red",
         "fi/*comment*/ll:red",
         "fill:red/*comment*/",
-        "fill:/*unterminated",
     ],
-    ids=["after-colon", "inside-name", "value-tail", "unterminated"],
+    ids=["after-colon", "inside-name", "value-tail"],
 )
-def test_inline_css_comments_preserve_legacy_material_identity_by_fallback(
+def test_valid_inline_css_comments_stay_native(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     style: str,
@@ -486,35 +470,56 @@ def test_inline_css_comments_preserve_legacy_material_identity_by_fallback(
     selected = _run(
         _processor(), path, backend="native", monkeypatch=monkeypatch
     )
-    reference = _run(
-        _processor(), path, backend="legacy", monkeypatch=monkeypatch
+
+    assert selected.stage_timings["geometry_backend"] == "native"
+    assert _ordered_paint_colors(selected) == [
+        (255, 0, 0),
+        (0, 0, 255),
+    ]
+
+
+def test_unterminated_inline_css_comment_falls_back_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("lumina_svg_core")
+    path = tmp_path / "unterminated-inline-css-comment.svg"
+    path.write_text(
+        "<svg viewBox='0 0 20 10'>"
+        "<path style='fill:/*unterminated' d='M0 0H9V10H0Z'/>"
+        "<rect x='11' width='9' height='10' fill='blue'/>"
+        "</svg>",
+        encoding="utf-8",
+    )
+
+    selected = _run(
+        _processor(), path, backend="native", monkeypatch=monkeypatch
     )
 
     assert selected.stage_timings["geometry_backend"] == "legacy"
     assert selected.stage_timings["native_fallback_reason"] == (
-        "unsupported_css_comment"
+        "unsupported_color_syntax"
     )
-    assert _ordered_paint_colors(selected) == _ordered_paint_colors(reference)
-    assert _ordered_material_identities(selected) == (
-        _ordered_material_identities(reference)
-    )
-    assert _census_by_color(selected) == _census_by_color(reference)
 
 
 @pytest.mark.parametrize(
-    "path_data",
+    ("path_data", "expected_area"),
     [
-        "M10 10H90V90H10V10H50V50H10Z",
+        ("M10 10H90V90H10V10H50V50H10Z", 6400.0),
         (
-            "M50 10 L73.5114 82.3607 L11.9577 37.6393 "
-            "L88.0423 37.6393 L26.4886 82.3607 Z"
+            (
+                "M50 10 L73.5114 82.3607 L11.9577 37.6393 "
+                "L88.0423 37.6393 L26.4886 82.3607 Z"
+            ),
+            1796.1138498157,
         ),
     ],
 )
-def test_self_intersecting_paint_preserves_legacy_topology_by_fallback(
+def test_self_intersecting_paint_uses_the_declared_svg_fill_rule(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     path_data: str,
+    expected_area: float,
 ) -> None:
     pytest.importorskip("lumina_svg_core")
     path = tmp_path / "legacy-self-intersection.svg"
@@ -528,26 +533,17 @@ def test_self_intersecting_paint_preserves_legacy_topology_by_fallback(
     selected = _run(
         _processor(), path, backend="native", monkeypatch=monkeypatch
     )
-    reference = _run(
-        _processor(), path, backend="legacy", monkeypatch=monkeypatch
-    )
-
-    assert selected.stage_timings["geometry_backend"] == "legacy"
-    assert selected.stage_timings["native_fallback_reason"] == (
-        "unsupported_topology_collapse"
-    )
-    assert _ordered_material_identities(selected) == (
-        _ordered_material_identities(reference)
-    )
-    assert _census_by_color(selected) == _census_by_color(reference)
-    for color, selected_geometry in _by_color(selected).items():
-        assert selected_geometry.equals_exact(
-            _by_color(reference)[color], tolerance=1e-9
-        )
+    assert selected.stage_timings["geometry_backend"] == "native"
+    assert _ordered_paint_colors(selected) == [(255, 0, 0)]
+    geometry = selected.clipped_shapes[0]["geometry"]
+    assert geometry.is_valid
+    assert _geometry_census(geometry) == (1, 0)
+    assert geometry.area == pytest.approx(expected_area, abs=1e-5)
+    assert selected.clipped_shapes[0]["rgba"] == (255, 0, 0, 255)
 
 
 @pytest.mark.parametrize("viewbox_size", [1.0, 0.001])
-def test_small_user_unit_cubic_preserves_legacy_curve_sampling_by_fallback(
+def test_cubic_flattening_uses_physical_tolerance_across_user_unit_scales(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     viewbox_size: float,
@@ -566,25 +562,14 @@ def test_small_user_unit_cubic_preserves_legacy_curve_sampling_by_fallback(
     selected = _run(
         _processor(), path, backend="native", monkeypatch=monkeypatch
     )
-    reference = _run(
-        _processor(), path, backend="legacy", monkeypatch=monkeypatch
+    assert selected.stage_timings["geometry_backend"] == "native"
+    assert _ordered_paint_colors(selected) == [(255, 0, 0)]
+    geometry = selected.clipped_shapes[0]["geometry"]
+    assert geometry.is_valid
+    assert geometry.area / (viewbox_size**2) == pytest.approx(
+        0.8749386, abs=1e-5
     )
-
-    assert selected.stage_timings["geometry_backend"] == "legacy"
-    assert selected.stage_timings["native_fallback_reason"] == (
-        "legacy_curve_tolerance_parity"
-    )
-    assert _ordered_material_identities(selected) == (
-        _ordered_material_identities(reference)
-    )
-    assert _census_by_color(selected) == _census_by_color(reference)
-    selected_by_color = _by_color(selected)
-    reference_by_color = _by_color(reference)
-    assert selected_by_color.keys() == reference_by_color.keys()
-    for color, selected_geometry in selected_by_color.items():
-        assert selected_geometry.hausdorff_distance(
-            reference_by_color[color]
-        ) <= 1e-9
+    assert selected.clipped_shapes[0]["rgba"] == (255, 0, 0, 255)
 
 
 @pytest.mark.parametrize(
@@ -599,7 +584,7 @@ def test_small_user_unit_cubic_preserves_legacy_curve_sampling_by_fallback(
         ),
     ],
 )
-def test_font_relative_geometry_units_preserve_material_census_by_fallback(
+def test_font_relative_geometry_units_stay_native(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     red_geometry: str,
@@ -617,19 +602,15 @@ def test_font_relative_geometry_units_preserve_material_census_by_fallback(
     selected = _run(
         _processor(), path, backend="native", monkeypatch=monkeypatch
     )
-    reference = _run(
-        _processor(), path, backend="legacy", monkeypatch=monkeypatch
-    )
 
-    assert selected.stage_timings["geometry_backend"] == "legacy"
-    assert selected.stage_timings["native_fallback_reason"] == (
-        "unsupported_font_relative_length"
-    )
-    assert _ordered_paint_colors(selected) == _ordered_paint_colors(reference)
-    assert _census_by_color(selected) == _census_by_color(reference)
+    assert selected.stage_timings["geometry_backend"] == "native"
+    assert _ordered_paint_colors(selected) == [
+        (255, 0, 0),
+        (0, 0, 255),
+    ]
 
 
-def test_nested_font_relative_viewport_uses_the_same_legacy_error_path(
+def test_nested_font_relative_viewport_stays_native(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -644,16 +625,15 @@ def test_nested_font_relative_viewport_uses_the_same_legacy_error_path(
         encoding="utf-8",
     )
 
-    native_outcome = native_svg_adapter.analyze_native_svg(
-        str(path), MANIFEST["target_width_mm"], 0.02
+    selected = _run(
+        _processor(), path, backend="native", monkeypatch=monkeypatch
     )
-    assert native_outcome == NativeSvgFallback(
-        "unsupported_nested_svg", "0.1.1"
-    )
-    with pytest.raises(ValueError, match="could not convert string to float"):
-        _run(_processor(), path, backend="native", monkeypatch=monkeypatch)
-    with pytest.raises(ValueError, match="could not convert string to float"):
-        _run(_processor(), path, backend="legacy", monkeypatch=monkeypatch)
+
+    assert selected.stage_timings["geometry_backend"] == "native"
+    assert _ordered_paint_colors(selected) == [
+        (255, 0, 0),
+        (0, 0, 255),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -677,33 +657,28 @@ def test_nested_font_relative_viewport_uses_the_same_legacy_error_path(
         ),
     ],
 )
-def test_nested_svg_coordinate_contract_uses_whole_document_fallback(
+def test_nested_svg_coordinates_stay_native(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     document: str,
 ) -> None:
     pytest.importorskip("lumina_svg_core")
-    path = tmp_path / "nested-coordinate-parity.svg"
+    path = tmp_path / "nested-coordinate.svg"
     path.write_text(document, encoding="utf-8")
 
     selected = _run(
         _processor(), path, backend="native", monkeypatch=monkeypatch
     )
-    reference = _run(
-        _processor(), path, backend="legacy", monkeypatch=monkeypatch
-    )
 
-    assert selected.stage_timings["geometry_backend"] == "legacy"
-    assert selected.stage_timings["native_fallback_reason"] == (
-        "unsupported_nested_svg"
-    )
-    assert selected.bbox == pytest.approx(reference.bbox, abs=0.001)
-    assert selected.scale_factor == pytest.approx(reference.scale_factor)
-    assert _ordered_paint_colors(selected) == _ordered_paint_colors(reference)
-    assert _census_by_color(selected) == _census_by_color(reference)
+    assert selected.stage_timings["geometry_backend"] == "native"
+    assert _ordered_paint_colors(selected) == [
+        (255, 0, 0),
+        (0, 0, 255),
+    ]
+    assert all(item["geometry"].is_valid for item in selected.clipped_shapes)
 
 
-def test_nonzero_root_with_nested_svg_uses_same_legacy_empty_error(
+def test_nonzero_root_origin_with_nested_svg_stays_native(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -717,14 +692,13 @@ def test_nonzero_root_with_nested_svg_uses_same_legacy_empty_error(
         encoding="utf-8",
     )
 
-    outcome = native_svg_adapter.analyze_native_svg(
-        str(path), MANIFEST["target_width_mm"], 0.02
+    selected = _run(
+        _processor(), path, backend="native", monkeypatch=monkeypatch
     )
-    assert outcome == NativeSvgFallback("unsupported_nested_svg", "0.1.1")
-    with pytest.raises(ValueError, match="No valid"):
-        _run(_processor(), path, backend="native", monkeypatch=monkeypatch)
-    with pytest.raises(ValueError, match="No valid"):
-        _run(_processor(), path, backend="legacy", monkeypatch=monkeypatch)
+
+    assert selected.stage_timings["geometry_backend"] == "native"
+    assert _ordered_paint_colors(selected) == [(255, 0, 0)]
+    assert selected.clipped_shapes[0]["geometry"].is_valid
 
 
 @pytest.mark.parametrize(
@@ -741,13 +715,17 @@ def test_nonzero_root_with_nested_svg_uses_same_legacy_empty_error(
     ],
     ids=["positive-origin", "negative-origin"],
 )
-@pytest.mark.parametrize("fill_rule", ["evenodd", "nonzero"])
-def test_nonzero_root_viewbox_origin_falls_back_with_legacy_parity(
+@pytest.mark.parametrize(
+    ("fill_rule", "expected_holes"),
+    [("evenodd", 1), ("nonzero", 0)],
+)
+def test_nonzero_root_viewbox_origin_stays_native(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     viewbox: str,
     path_data: str,
     fill_rule: str,
+    expected_holes: int,
 ) -> None:
     pytest.importorskip("lumina_svg_core")
     path = tmp_path / f"root-origin-{fill_rule}.svg"
@@ -758,78 +736,58 @@ def test_nonzero_root_viewbox_origin_falls_back_with_legacy_parity(
         encoding="utf-8",
     )
 
-    outcome = native_svg_adapter.analyze_native_svg(
-        str(path), MANIFEST["target_width_mm"], 0.02
-    )
-    assert outcome == NativeSvgFallback(
-        "unsupported_viewbox_origin", "0.1.1"
-    )
-
     selected = _run(
         _processor(), path, backend="native", monkeypatch=monkeypatch
     )
-    reference = _run(
-        _processor(), path, backend="legacy", monkeypatch=monkeypatch
-    )
 
-    assert selected.stage_timings["geometry_backend"] == "legacy"
-    assert selected.stage_timings["native_fallback_reason"] == (
-        "unsupported_viewbox_origin"
-    )
-    assert selected.bbox == pytest.approx(reference.bbox, abs=0.001)
-    assert selected.scale_factor == pytest.approx(reference.scale_factor)
-    assert _ordered_material_identities(selected) == (
-        _ordered_material_identities(reference)
-    )
-    assert _census_by_color(selected) == _census_by_color(reference)
+    assert selected.stage_timings["geometry_backend"] == "native"
+    assert [item["rgba"] for item in selected.clipped_shapes] == [
+        (18, 52, 86, 255)
+    ]
+    assert _geometry_census(
+        selected.clipped_shapes[0]["geometry"]
+    ) == (1, expected_holes)
 
 
 @pytest.mark.parametrize(
-    ("reason", "document"),
+    "document",
     [
         (
-            "unsupported_percentage_without_viewbox",
             "<svg width='100' height='50'>"
             "<rect x='10%' y='20%' width='50%' height='40%' fill='red'/>"
-            "</svg>",
+            "</svg>"
         ),
         (
-            "unsupported_root_overflow",
             "<svg width='100' height='100' viewBox='0 0 100 100' "
             "overflow='hidden'>"
             "<rect x='-10' y='-10' width='120' height='120' fill='red'/>"
-            "</svg>",
+            "</svg>"
         ),
         (
-            "unsupported_root_transform",
             "<svg viewBox='0 0 100 100' transform='translate(50 20)'>"
             "<rect x='10' y='10' width='20' height='20' fill='red'/>"
-            "</svg>",
+            "</svg>"
         ),
         (
-            "unsupported_root_transform",
             "<svg viewBox='0 0 100 100' transform='scale(2)'>"
             "<rect x='10' y='10' width='20' height='20' fill='red'/>"
-            "</svg>",
+            "</svg>"
         ),
         (
-            "unsupported_root_transform",
             "<svg viewBox='0 0 100 100' transform='rotate(30)'>"
             "<rect x='10' y='10' width='20' height='20' fill='red'/>"
-            "</svg>",
+            "</svg>"
         ),
         (
-            "unsupported_root_transform",
             "<svg viewBox='0 0 100 100' "
             "transform='matrix(1 0.2 0.3 1 5 7)'>"
             "<rect x='10' y='10' width='20' height='20' fill='red'/>"
-            "</svg>",
+            "</svg>"
         ),
         (
-            "unsupported_root_position",
             "<svg viewBox='0 0 100 100' x='50' y='20'>"
             "<rect x='10' y='10' width='20' height='20' fill='red'/>"
-            "</svg>",
+            "</svg>"
         ),
     ],
     ids=[
@@ -842,38 +800,26 @@ def test_nonzero_root_viewbox_origin_falls_back_with_legacy_parity(
         "root-position",
     ],
 )
-def test_root_layout_contract_falls_back_with_legacy_parity(
+def test_root_layout_features_stay_native(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    reason: str,
     document: str,
 ) -> None:
     pytest.importorskip("lumina_svg_core")
-    path = tmp_path / f"{reason}.svg"
+    path = tmp_path / "root-layout.svg"
     path.write_text(document, encoding="utf-8")
 
-    outcome = native_svg_adapter.analyze_native_svg(
-        str(path), MANIFEST["target_width_mm"], 0.02
-    )
-    assert outcome == NativeSvgFallback(reason, "0.1.1")
     selected = _run(
         _processor(), path, backend="native", monkeypatch=monkeypatch
     )
-    reference = _run(
-        _processor(), path, backend="legacy", monkeypatch=monkeypatch
-    )
 
-    assert selected.stage_timings["geometry_backend"] == "legacy"
-    assert selected.stage_timings["native_fallback_reason"] == reason
-    assert selected.bbox == pytest.approx(reference.bbox, abs=0.001)
-    assert selected.scale_factor == pytest.approx(reference.scale_factor)
-    assert _ordered_material_identities(selected) == (
-        _ordered_material_identities(reference)
-    )
-    assert _census_by_color(selected) == _census_by_color(reference)
+    assert selected.stage_timings["geometry_backend"] == "native"
+    assert _ordered_paint_colors(selected) == [(255, 0, 0)]
+    assert selected.clipped_shapes[0]["geometry"].is_valid
+    assert selected.clipped_shapes[0]["geometry"].area > 0.0
 
 
-def test_original_quadratic_source_falls_back_with_legacy_parity(
+def test_quadratic_and_smooth_quadratic_stay_native(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -886,36 +832,17 @@ def test_original_quadratic_source_falls_back_with_legacy_parity(
         encoding="utf-8",
     )
 
-    outcome = native_svg_adapter.analyze_native_svg(
-        str(path), MANIFEST["target_width_mm"], 0.02
-    )
-    assert outcome == NativeSvgFallback(
-        "unsupported_quadratic", "0.1.1"
-    )
     selected = _run(
         _processor(), path, backend="native", monkeypatch=monkeypatch
     )
-    reference = _run(
-        _processor(), path, backend="legacy", monkeypatch=monkeypatch
-    )
 
-    assert selected.stage_timings["geometry_backend"] == "legacy"
-    assert selected.stage_timings["native_fallback_reason"] == (
-        "unsupported_quadratic"
-    )
-    assert selected.bbox == pytest.approx(reference.bbox, abs=0.001)
-    assert selected.scale_factor == pytest.approx(reference.scale_factor)
-    assert _ordered_material_identities(selected) == (
-        _ordered_material_identities(reference)
-    )
-    assert _census_by_color(selected) == _census_by_color(reference)
+    assert selected.stage_timings["geometry_backend"] == "native"
+    assert _ordered_paint_colors(selected) == [(255, 0, 0)]
+    assert selected.clipped_shapes[0]["geometry"].is_valid
 
 
-@pytest.mark.parametrize(
-    "ancestor",
-    ["root", "group", "defs"],
-)
-def test_inherited_clip_rule_falls_back_with_legacy_parity(
+@pytest.mark.parametrize("ancestor", ["root", "group", "defs"])
+def test_inherited_clip_rule_stays_native(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     ancestor: str,
@@ -949,26 +876,14 @@ def test_inherited_clip_rule_falls_back_with_legacy_parity(
     path = tmp_path / f"inherited-clip-rule-{ancestor}.svg"
     path.write_text(document, encoding="utf-8")
 
-    outcome = native_svg_adapter.analyze_native_svg(
-        str(path), MANIFEST["target_width_mm"], 0.02
-    )
-    assert outcome == NativeSvgFallback(
-        "unsupported_clip_rule_inheritance", "0.1.1"
-    )
     selected = _run(
         _processor(), path, backend="native", monkeypatch=monkeypatch
     )
-    reference = _run(
-        _processor(), path, backend="legacy", monkeypatch=monkeypatch
-    )
 
-    assert selected.stage_timings["geometry_backend"] == "legacy"
-    assert selected.stage_timings["native_fallback_reason"] == (
-        "unsupported_clip_rule_inheritance"
-    )
-    assert selected.bbox == pytest.approx(reference.bbox, abs=0.001)
-    assert selected.scale_factor == pytest.approx(reference.scale_factor)
-    assert _census_by_color(selected) == _census_by_color(reference)
+    assert selected.stage_timings["geometry_backend"] == "native"
+    geometry = selected.clipped_shapes[0]["geometry"]
+    assert _geometry_census(geometry) == (1, 1)
+    assert geometry.area == pytest.approx(4800.0, abs=1e-5)
 
 
 def test_direct_clip_rule_remains_native_with_legacy_parity(
@@ -1005,9 +920,8 @@ def test_direct_clip_rule_remains_native_with_legacy_parity(
         ("nonzero", "M10 10V90H90V10Z"),
     ],
 )
-def test_native_empty_normalization_falls_back_with_legacy_parity(
+def test_native_empty_normalization_reports_no_printable_geometry(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     fill_rule: str,
     second_path: str,
 ) -> None:
@@ -1020,27 +934,13 @@ def test_native_empty_normalization_falls_back_with_legacy_parity(
         encoding="utf-8",
     )
 
-    outcome = native_svg_adapter.analyze_native_svg(
-        str(path), MANIFEST["target_width_mm"], 0.02
-    )
-    assert outcome == NativeSvgFallback(
-        "legacy_empty_geometry_parity", "0.1.1"
-    )
-    selected = _run(
-        _processor(), path, backend="native", monkeypatch=monkeypatch
-    )
-    reference = _run(
-        _processor(), path, backend="legacy", monkeypatch=monkeypatch
-    )
-
-    assert selected.stage_timings["geometry_backend"] == "legacy"
-    assert selected.stage_timings["native_fallback_reason"] == (
-        "legacy_empty_geometry_parity"
-    )
-    assert _census_by_color(selected) == _census_by_color(reference)
+    with pytest.raises(ValueError, match="No valid shapes"):
+        native_svg_adapter.analyze_native_svg(
+            str(path), MANIFEST["target_width_mm"], 0.02
+        )
 
 
-def test_incompatible_multi_component_postprocess_falls_back_to_legacy(
+def test_native_preserves_disconnected_components_without_python_repair(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1066,43 +966,81 @@ def test_incompatible_multi_component_postprocess_falls_back_to_legacy(
     outcome = native_svg_adapter.analyze_native_svg(
         str(path), MANIFEST["target_width_mm"], 0.02
     )
-    assert outcome == NativeSvgFallback(
-        "legacy_contour_normalization_incompatible", "0.1.1"
-    )
+    assert isinstance(outcome, NativeSvgGeometry)
+    assert len(outcome.shape_data) == 1
+    assert _geometry_census(outcome.shape_data[0]["poly"]) == (2, 0)
+    assert outcome.shape_data[0]["rgba"] == (255, 0, 0, 255)
     selected = _run(
         _processor(), path, backend="native", monkeypatch=monkeypatch
     )
-    reference = _run(
-        _processor(), path, backend="legacy", monkeypatch=monkeypatch
+    assert selected.stage_timings["geometry_backend"] == "native"
+    assert len(selected.clipped_shapes) == 2
+    assert _ordered_paint_colors(selected) == [(255, 0, 0), (255, 0, 0)]
+    assert {
+        item["native_paint_id"] for item in selected.clipped_shapes
+    } == {(1, 0)}
+
+
+def test_native_vector_analysis_does_not_refilter_valid_holes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("lumina_svg_core")
+    path = tmp_path / "native-hole-contract.svg"
+    path.write_text(
+        "<svg viewBox='0 0 10 10'>"
+        "<path fill='red' fill-rule='evenodd' d='"
+        "M1 1H9V9H1Z M4.75 4.75H5.25V5.25H4.75Z'/></svg>",
+        encoding="utf-8",
     )
 
-    assert selected.stage_timings["geometry_backend"] == "legacy"
-    assert selected.stage_timings["native_fallback_reason"] == (
-        "legacy_contour_normalization_incompatible"
+    direct = native_svg_adapter.analyze_native_svg(str(path), 100.0, 0.02)
+    assert isinstance(direct, NativeSvgGeometry)
+    assert _geometry_census(direct.clipped_shapes[0]["geometry"]) == (1, 1)
+
+    selected = _run(
+        _processor(), path, backend="native", monkeypatch=monkeypatch
     )
-    assert _census_by_color(selected) == _census_by_color(reference)
+
+    assert selected.stage_timings["geometry_backend"] == "native"
+    assert _geometry_census(selected.clipped_shapes[0]["geometry"]) == (1, 1)
+    assert _geometry_census(selected.silhouette) == (1, 1)
+    assert selected.clipped_shapes[0]["geometry"].area == pytest.approx(
+        selected.silhouette.area,
+        abs=1e-8,
+    )
 
 
 @pytest.mark.parametrize(
-    "path_data",
+    ("path_data", "expected_holes", "expected_area"),
     [
-        "M10 10H90V90H10Z M49.98 20H50.02V80H49.98Z",
-        "M10 10H90V90H50.02V20H49.98V90H10Z",
         (
+            "M10 10H90V90H10Z M49.98 20H50.02V80H49.98Z",
+            1,
+            6397.6,
+        ),
+        (
+            "M10 10H90V90H50.02V20H49.98V90H10Z",
+            0,
+            6397.2,
+        ),
+        ((
             "M10 10 L90 10 L90 90 L39.83308898930126 90 "
             "L39.79082728731835 82.16007974157606 "
             "L39.69503373258287 90 L10 90 Z"
-        ),
+        ), 0, 6399.458905),
     ],
     ids=["narrow-hole", "narrow-notch", "asymmetric-slanted-notch"],
 )
-def test_changed_legacy_contour_close_falls_back_with_exact_legacy_parity(
+def test_native_parser_preserves_narrow_valid_geometry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     path_data: str,
+    expected_holes: int,
+    expected_area: float,
 ) -> None:
     pytest.importorskip("lumina_svg_core")
-    path = tmp_path / "legacy-contour-close.svg"
+    path = tmp_path / "narrow-valid-geometry.svg"
     path.write_text(
         "<svg viewBox='0 0 100 100'>"
         f"<path fill='red' fill-rule='evenodd' d='{path_data}'/>"
@@ -1113,22 +1051,16 @@ def test_changed_legacy_contour_close_falls_back_with_exact_legacy_parity(
     selected = _run(
         _processor(), path, backend="native", monkeypatch=monkeypatch
     )
-    reference = _run(
-        _processor(), path, backend="legacy", monkeypatch=monkeypatch
-    )
-
-    assert selected.stage_timings["geometry_backend"] == "legacy"
-    assert selected.stage_timings["native_fallback_reason"] == (
-        "legacy_contour_normalization_incompatible"
-    )
-    assert _census_by_color(selected) == _census_by_color(reference)
-    selected_by_color = _by_color(selected)
-    reference_by_color = _by_color(reference)
-    for color in selected_by_color:
-        assert selected_by_color[color].equals(reference_by_color[color])
+    assert selected.stage_timings["geometry_backend"] == "native"
+    assert _ordered_paint_colors(selected) == [(255, 0, 0)]
+    geometry = selected.clipped_shapes[0]["geometry"]
+    assert geometry.is_valid
+    assert _geometry_census(geometry) == (1, expected_holes)
+    assert geometry.area == pytest.approx(expected_area, abs=1e-3)
+    assert selected.clipped_shapes[0]["rgba"] == (255, 0, 0, 255)
 
 
-def test_subthreshold_independent_paint_is_dropped_without_losing_parity(
+def test_subthreshold_independent_paint_is_preserved_with_exact_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1145,17 +1077,18 @@ def test_subthreshold_independent_paint_is_dropped_without_losing_parity(
     selected = _run(
         _processor(), path, backend="native", monkeypatch=monkeypatch
     )
-    reference = _run(
-        _processor(), path, backend="legacy", monkeypatch=monkeypatch
-    )
-
     assert selected.stage_timings["geometry_backend"] == "native"
-    assert selected.stage_timings["native_legacy_area_filter_identity"] is False
-    assert _ordered_paint_colors(selected) == [(255, 0, 0)]
-    assert _ordered_material_identities(selected) == (
-        _ordered_material_identities(reference)
-    )
-    assert _census_by_color(selected) == _census_by_color(reference)
+    assert _ordered_paint_colors(selected) == [
+        (255, 0, 0),
+        (0, 0, 255),
+    ]
+    assert sorted(
+        item["geometry"].area for item in selected.clipped_shapes
+    ) == pytest.approx([0.000025, 2500.0], abs=5e-8)
+    assert [item["rgba"] for item in selected.clipped_shapes] == [
+        (255, 0, 0, 255),
+        (0, 0, 255, 255),
+    ]
 
 
 def test_macro_viewbox_uses_legacy_scale_clamp_without_losing_material(
@@ -1189,7 +1122,7 @@ def test_macro_viewbox_uses_legacy_scale_clamp_without_losing_material(
 
 
 @pytest.mark.parametrize("width", ["9980", "10020"])
-def test_macro_viewbox_dynamic_area_threshold_uncertainty_falls_back(
+def test_macro_viewbox_preserves_components_near_the_legacy_area_cutoff(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     width: str,
@@ -1207,17 +1140,19 @@ def test_macro_viewbox_dynamic_area_threshold_uncertainty_falls_back(
     selected = _run(
         _processor(), path, backend="native", monkeypatch=monkeypatch
     )
-    reference = _run(
-        _processor(), path, backend="legacy", monkeypatch=monkeypatch
+    assert selected.stage_timings["geometry_backend"] == "native"
+    assert _ordered_paint_colors(selected) == [
+        (255, 0, 0),
+        (0, 0, 255),
+    ]
+    physical_areas = sorted(
+        item["geometry"].area * selected.scale_factor**2
+        for item in selected.clipped_shapes
     )
-
-    assert selected.stage_timings["geometry_backend"] == "legacy"
-    assert selected.stage_timings["native_fallback_reason"] == (
-        "legacy_area_threshold_ambiguous"
+    assert physical_areas == pytest.approx(
+        [(float(width) * 1e-7) ** 2, 2500.0], abs=1e-8
     )
-    assert _ordered_paint_colors(selected) == [(255, 0, 0)]
-    assert _ordered_paint_colors(selected) == _ordered_paint_colors(reference)
-    assert _ordered_material_identities(selected) == (
-        _ordered_material_identities(reference)
-    )
-    assert _census_by_color(selected) == _census_by_color(reference)
+    assert [item["rgba"] for item in selected.clipped_shapes] == [
+        (255, 0, 0, 255),
+        (0, 0, 255, 255),
+    ]

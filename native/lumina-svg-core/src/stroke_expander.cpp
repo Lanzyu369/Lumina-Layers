@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -22,6 +23,7 @@ struct LocalSubpath {
     LocalPath points;
     bool closed{false};
     bool has_draw_segment{false};
+    int32_t source_subpath_index{-1};
 };
 
 double pointSegmentDistance(const LocalPoint& point,
@@ -59,7 +61,7 @@ void flattenCubic(const LocalPoint& start, const LocalPoint& control1,
     const double arcLengthUncertainty = std::max(
         0.0, controlPolygonLength - chordLength);
     if(!std::isfinite(arcLengthUncertainty))
-        throw StrokeInputPrecisionError();
+        throw StrokeInputPrecisionError("nonfinite_cubic_arc_length");
     const bool withinGeometricTolerance =
         pointSegmentDistance(control1, start, end) <= tolerance
         && pointSegmentDistance(control2, start, end) <= tolerance;
@@ -70,7 +72,7 @@ void flattenCubic(const LocalPoint& start, const LocalPoint& control1,
         return;
     }
     if(depth >= 32 || !(arcLengthErrorBudget > 0.0))
-        throw StrokeInputPrecisionError();
+        throw StrokeInputPrecisionError("cubic_flattening_depth");
     const LocalPoint p01{(start.x + control1.x) * 0.5,
                          (start.y + control1.y) * 0.5};
     const LocalPoint p12{(control1.x + control2.x) * 0.5,
@@ -104,6 +106,7 @@ std::vector<LocalSubpath> flattenPath(const lunasvg::PaintCommand& command,
     LocalPoint subpathStart;
     bool hasCurrentPoint = false;
     size_t pointIndex = 0;
+    int32_t nextSubpathIndex = 0;
     auto finish = [&]() {
         currentSubpath.points.erase(
             std::unique(
@@ -122,6 +125,7 @@ std::vector<LocalSubpath> flattenPath(const lunasvg::PaintCommand& command,
         switch(verb) {
         case lunasvg::PaintPathVerb::MoveTo: {
             finish();
+            currentSubpath.source_subpath_index = nextSubpathIndex++;
             const auto& point = command.path_points.at(pointIndex++);
             currentPoint = {point.x, point.y};
             subpathStart = currentPoint;
@@ -174,7 +178,7 @@ std::vector<LocalSubpath> flattenPath(const lunasvg::PaintCommand& command,
     return output;
 }
 
-std::vector<double> normalizedDashArray(const std::vector<float>& source)
+std::vector<double> normalizedDashArray(const std::vector<double>& source)
 {
     constexpr size_t MAX_DASH_VALUES = 100'000;
     if(source.size() > MAX_DASH_VALUES)
@@ -233,7 +237,7 @@ double commandPathLengthUpperBound(const lunasvg::PaintCommand& command)
             break;
         }
         if(!std::isfinite(length))
-            throw StrokeInputPrecisionError();
+            throw StrokeInputPrecisionError("nonfinite_path_length");
     }
     return length;
 }
@@ -300,6 +304,7 @@ std::vector<LocalSubpath> dashSubpath(const LocalSubpath& subpath,
 
     std::vector<LocalSubpath> output;
     LocalSubpath active;
+    active.source_subpath_index = subpath.source_subpath_index;
     auto advanceDash = [&]() {
         size_t guard = 0;
         do {
@@ -315,6 +320,7 @@ std::vector<LocalSubpath> dashSubpath(const LocalSubpath& subpath,
             output.emplace_back(std::move(active));
         }
         active = {};
+        active.source_subpath_index = subpath.source_subpath_index;
     };
 
     // An offset exactly at the end of a painted dash contributes a
@@ -325,6 +331,7 @@ std::vector<LocalSubpath> dashSubpath(const LocalSubpath& subpath,
             complexityBudget.consumeGeneratedPoints();
             complexityBudget.consumeGeneratedRings();
             LocalSubpath pointSubpath;
+            pointSubpath.source_subpath_index = subpath.source_subpath_index;
             pointSubpath.points.push_back(subpath.points.front());
             pointSubpath.has_draw_segment = true;
             output.emplace_back(std::move(pointSubpath));
@@ -350,16 +357,30 @@ std::vector<LocalSubpath> dashSubpath(const LocalSubpath& subpath,
                 advanceDash();
             const bool isPainted = dashIndex % 2 == 0;
             const double step = std::min(segmentRemaining, dashRemaining);
-            const LocalPoint next{cursor.x + ux * step, cursor.y + uy * step};
-            const double nextSegmentRemaining = segmentRemaining - step;
+            bool consumesSegment = step == segmentRemaining;
+            LocalPoint next = consumesSegment
+                ? end
+                : LocalPoint{cursor.x + ux * step, cursor.y + uy * step};
+            // Repeated decimal dash lengths can leave a one-ULP scalar
+            // remainder after the computed coordinate has already reached the
+            // exact segment endpoint. Finish the segment at that endpoint
+            // instead of attempting a zero-progress iteration.
+            if(!consumesSegment
+                    && next.x == end.x && next.y == end.y)
+                consumesSegment = true;
+            const double nextSegmentRemaining = consumesSegment
+                ? 0.0 : segmentRemaining - step;
             const double nextDashRemaining = dashRemaining - step;
-            if(!(step > 0.0)
-                    || (next.x == cursor.x && next.y == cursor.y)
-                    || (nextSegmentRemaining == segmentRemaining
-                        && step < segmentRemaining)
-                    || (nextDashRemaining == dashRemaining
-                        && step < dashRemaining))
-                throw StrokeInputPrecisionError();
+            if(!(step > 0.0))
+                throw StrokeInputPrecisionError("dash_nonpositive_step");
+            if(next.x == cursor.x && next.y == cursor.y)
+                throw StrokeInputPrecisionError("dash_coordinate_progress");
+            if(nextSegmentRemaining == segmentRemaining
+                    && step < segmentRemaining)
+                throw StrokeInputPrecisionError("dash_segment_progress");
+            if(nextDashRemaining == dashRemaining
+                    && step < dashRemaining)
+                throw StrokeInputPrecisionError("dash_pattern_progress");
             if(isPainted) {
                 if(active.points.empty())
                     complexityBudget.consumeGeneratedPoints();
@@ -379,6 +400,35 @@ std::vector<LocalSubpath> dashSubpath(const LocalSubpath& subpath,
         }
     }
     finishActive();
+    if(subpath.closed && output.size() == 1
+            && output.front().points.size() >= 3
+            && output.front().points.front().x
+                == output.front().points.back().x
+            && output.front().points.front().y
+                == output.front().points.back().y) {
+        output.front().points.pop_back();
+        output.front().closed = true;
+    }
+    if(subpath.closed && output.size() >= 2
+            && output.front().points.size() >= 2
+            && output.back().points.size() >= 2
+            && output.front().points.front().x
+                == subpath.points.front().x
+            && output.front().points.front().y
+                == subpath.points.front().y
+            && output.back().points.back().x
+                == subpath.points.front().x
+            && output.back().points.back().y
+                == subpath.points.front().y) {
+        LocalSubpath wrapped = std::move(output.back());
+        output.pop_back();
+        auto& head = output.front();
+        wrapped.points.insert(
+            wrapped.points.end(),
+            head.points.begin() + 1, head.points.end());
+        wrapped.has_draw_segment = true;
+        head = std::move(wrapped);
+    }
     return output;
 }
 
@@ -397,6 +447,8 @@ void simplifyOpenSubpath(LocalSubpath& subpath, double tolerance,
         ranges.pop_back();
         size_t splitIndex = begin;
         double maximumDistance = 0.0;
+        complexityBudget.consumeStrokeSimplificationComparisons(
+            end - begin - 1);
         for(size_t index = begin + 1; index < end; ++index) {
             const double distance = pointSegmentDistance(
                 subpath.points[index], subpath.points[begin],
@@ -473,18 +525,18 @@ int64_t quantizeLocal(double value)
 {
     constexpr double safeCoordinate = 1.0e15;
     if(!std::isfinite(value) || std::abs(value) > safeCoordinate)
-        throw std::range_error("numeric_range_error");
+        throw StrokeInputPrecisionError("local_coordinate_range");
     return static_cast<int64_t>(std::llround(value));
 }
 
-double floatUlp(float value)
+double storedUlp(double value)
 {
     if(!std::isfinite(value))
         return std::numeric_limits<double>::infinity();
-    const float upward = std::nextafter(
-        value, std::numeric_limits<float>::infinity());
-    const float downward = std::nextafter(
-        value, -std::numeric_limits<float>::infinity());
+    const double upward = std::nextafter(
+        value, std::numeric_limits<double>::infinity());
+    const double downward = std::nextafter(
+        value, -std::numeric_limits<double>::infinity());
     return std::max(
         std::abs(static_cast<double>(upward) - value),
         std::abs(static_cast<double>(value) - downward));
@@ -496,16 +548,50 @@ double miterThreshold(double miterLimit)
         ? 1.0 : 2.0 / (miterLimit * miterLimit) - 1.0;
 }
 
-void requireStableMiterLimit(const Clipper2Lib::Path64& path,
-                             bool closed,
-                             const lunasvg::PaintStrokeStyle& stroke)
+struct LocalJoinGeometry {
+    double cosine{1.0};
+    double incoming_length{0.0};
+    double outgoing_length{0.0};
+};
+
+std::optional<LocalJoinGeometry> localJoinGeometry(
+    const LocalPath& points, size_t index, bool closed)
+{
+    if(points.size() < 3 || (!closed
+            && (index == 0 || index + 1 == points.size())))
+        return std::nullopt;
+    const size_t previousIndex = index == 0
+        ? points.size() - 1 : index - 1;
+    const size_t nextIndex = (index + 1) % points.size();
+    const double incomingX = points[index].x - points[previousIndex].x;
+    const double incomingY = points[index].y - points[previousIndex].y;
+    const double outgoingX = points[nextIndex].x - points[index].x;
+    const double outgoingY = points[nextIndex].y - points[index].y;
+    const double incomingLength = std::hypot(incomingX, incomingY);
+    const double outgoingLength = std::hypot(outgoingX, outgoingY);
+    if(!(std::isfinite(incomingLength) && incomingLength > 0)
+            || !(std::isfinite(outgoingLength) && outgoingLength > 0))
+        return std::nullopt;
+    return LocalJoinGeometry{
+        std::clamp(
+            (incomingX * outgoingX + incomingY * outgoingY)
+                / (incomingLength * outgoingLength),
+            -1.0, 1.0),
+        incomingLength,
+        outgoingLength,
+    };
+}
+
+bool hasStableMiterClassification(
+    const LocalSubpath& subpath, double centerlineQuantizationError,
+    const lunasvg::PaintStrokeStyle& stroke)
 {
     constexpr double STROKE_OPERATION_ULPS = 4.0;
     if(stroke.line_join != lunasvg::PaintLineJoin::Miter
-            || path.size() < 3)
-        return;
+            || subpath.points.size() < 3)
+        return true;
 
-    const double limitError = floatUlp(stroke.miter_limit)
+    const double limitError = storedUlp(stroke.miter_limit)
         * STROKE_OPERATION_ULPS;
     const double minimumLimit = std::max(
         1.0, static_cast<double>(stroke.miter_limit) - limitError);
@@ -513,46 +599,120 @@ void requireStableMiterLimit(const Clipper2Lib::Path64& path,
         + limitError;
     const double minimumThreshold = miterThreshold(maximumLimit);
     const double maximumThreshold = miterThreshold(minimumLimit);
-    const size_t firstIndex = closed ? 0 : 1;
-    const size_t endIndex = closed ? path.size() : path.size() - 1;
+    const size_t firstIndex = subpath.closed ? 0 : 1;
+    const size_t endIndex = subpath.closed
+        ? subpath.points.size() : subpath.points.size() - 1;
     for(size_t index = firstIndex; index < endIndex; ++index) {
-        const size_t previousIndex = index == 0
-            ? path.size() - 1 : index - 1;
-        const size_t nextIndex = (index + 1) % path.size();
-        const double incomingX = static_cast<double>(path[index].x)
-            - static_cast<double>(path[previousIndex].x);
-        const double incomingY = static_cast<double>(path[index].y)
-            - static_cast<double>(path[previousIndex].y);
-        const double outgoingX = static_cast<double>(path[nextIndex].x)
-            - static_cast<double>(path[index].x);
-        const double outgoingY = static_cast<double>(path[nextIndex].y)
-            - static_cast<double>(path[index].y);
-        const double incomingLength = std::hypot(incomingX, incomingY);
-        const double outgoingLength = std::hypot(outgoingX, outgoingY);
-        if(!(std::isfinite(incomingLength) && incomingLength > 0)
-                || !(std::isfinite(outgoingLength) && outgoingLength > 0))
+        const auto geometry = localJoinGeometry(
+            subpath.points, index, subpath.closed);
+        if(!geometry)
             continue;
-        // Clipper2 compares the dot product of the two edge normals against
-        // 2 / miter_limit^2 - 1. The normal dot product is the same as the
-        // dot product of the normalized edge directions.
-        const double cosine = std::clamp(
-            (incomingX * outgoingX + incomingY * outgoingY)
-                / (incomingLength * outgoingLength),
-            -1.0, 1.0);
-        if(cosine > 0.999)
-            continue;
-        const bool alwaysMiter = cosine > maximumThreshold;
-        const bool possiblyMiter = cosine > minimumThreshold;
-        if(alwaysMiter != possiblyMiter)
-            throw StrokeInputPrecisionError();
+        const double incomingVectorError = 2.0
+            * centerlineQuantizationError;
+        const double outgoingVectorError = incomingVectorError;
+        if(geometry->incoming_length <= incomingVectorError
+                || geometry->outgoing_length <= outgoingVectorError)
+            return false;
+        const double incomingDirectionError = 2.0 * incomingVectorError
+            / (geometry->incoming_length - incomingVectorError);
+        const double outgoingDirectionError = 2.0 * outgoingVectorError
+            / (geometry->outgoing_length - outgoingVectorError);
+        const double cosineError = incomingDirectionError
+            + outgoingDirectionError
+            + incomingDirectionError * outgoingDirectionError;
+        const double minimumCosine = std::max(
+            -1.0, geometry->cosine - cosineError);
+        const double maximumCosine = std::min(
+            1.0, geometry->cosine + cosineError);
+        const bool alwaysMiter = minimumCosine > maximumThreshold;
+        const bool alwaysBevel = maximumCosine <= minimumThreshold;
+        if(!alwaysMiter && !alwaysBevel)
+            return false;
     }
+    return true;
+}
+
+double strokeQuantizationAmplification(
+    const LocalSubpath& subpath,
+    const lunasvg::PaintStrokeStyle& stroke,
+    double radius)
+{
+    constexpr double POSITION_SAFETY = 16.0;
+    double amplification = 2.0;
+    if(subpath.points.size() < 2)
+        return amplification;
+    const double limitError = storedUlp(stroke.miter_limit) * 4.0;
+    const double maximumLimit = std::max(
+        1.0, static_cast<double>(stroke.miter_limit) + limitError);
+    const double threshold = miterThreshold(maximumLimit);
+    const size_t firstIndex = subpath.closed ? 0 : 1;
+    const size_t endIndex = subpath.closed
+        ? subpath.points.size() : subpath.points.size() - 1;
+    for(size_t index = firstIndex; index < endIndex; ++index) {
+        const auto geometry = localJoinGeometry(
+            subpath.points, index, subpath.closed);
+        if(!geometry)
+            continue;
+        const double minimumLength = std::min(
+            geometry->incoming_length, geometry->outgoing_length);
+        double joinRatio = 1.0;
+        if(stroke.line_join == lunasvg::PaintLineJoin::Miter
+                && geometry->cosine > threshold) {
+            const double denominator = 1.0 + geometry->cosine;
+            if(!(denominator > 0.0))
+                throw StrokeInputPrecisionError("miter_denominator");
+            joinRatio = std::min(
+                maximumLimit, std::sqrt(2.0 / denominator));
+        }
+        const double candidate = 2.0
+            + POSITION_SAFETY * radius
+                * joinRatio * joinRatio / minimumLength;
+        if(!std::isfinite(candidate))
+            throw StrokeInputPrecisionError("stroke_grid_amplification");
+        amplification = std::max(amplification, candidate);
+    }
+    if(!subpath.closed
+            && stroke.line_cap != lunasvg::PaintLineCap::Butt) {
+        const double firstLength = std::hypot(
+            subpath.points[1].x - subpath.points[0].x,
+            subpath.points[1].y - subpath.points[0].y);
+        const size_t last = subpath.points.size() - 1;
+        const double lastLength = std::hypot(
+            subpath.points[last].x - subpath.points[last - 1].x,
+            subpath.points[last].y - subpath.points[last - 1].y);
+        const double minimumLength = std::min(firstLength, lastLength);
+        if(std::isfinite(minimumLength) && minimumLength > 0.0)
+            amplification = std::max(
+                amplification,
+                2.0 + POSITION_SAFETY * radius / minimumLength);
+    }
+    return amplification;
+}
+
+double effectiveStrokeGridStep(
+    const LocalSubpath& subpath,
+    const lunasvg::PaintStrokeStyle& stroke,
+    double radius, double maximumGridStep)
+{
+    const double amplification = strokeQuantizationAmplification(
+        subpath, stroke, radius);
+    double gridStep = maximumGridStep / amplification;
+    for(size_t attempt = 0; attempt < 16; ++attempt) {
+        if(std::isfinite(gridStep) && gridStep > 0.0
+                && hasStableMiterClassification(
+                    subpath, gridStep / std::sqrt(2.0), stroke))
+            return gridStep;
+        gridStep *= 0.25;
+    }
+    throw StrokeInputPrecisionError("miter_classification_grid");
 }
 
 LocalPath pointCap(const LocalPoint& point,
                    lunasvg::PaintLineCap cap,
                    double radius,
                    double flattenTolerance,
-                   ComplexityBudget& complexityBudget)
+                   ComplexityBudget& complexityBudget,
+                   bool enforcePhysicalTolerance)
 {
     constexpr double PI = 3.141592653589793238462643383279502884;
     if(cap == lunasvg::PaintLineCap::Butt)
@@ -571,11 +731,15 @@ LocalPath pointCap(const LocalPoint& point,
     const double cosine = std::clamp(
         1.0 - flattenTolerance / radius, -1.0, 1.0);
     const double halfAngle = std::acos(cosine);
-    const size_t segmentCount = std::clamp<size_t>(
-        halfAngle > 0
-            ? static_cast<size_t>(std::ceil(PI / halfAngle))
-            : 4096,
-        8, 4096);
+    const double requiredSegments = halfAngle > 0
+        ? std::ceil(PI / halfAngle)
+        : std::numeric_limits<double>::infinity();
+    if(!std::isfinite(requiredSegments))
+        throw ComplexityLimitError("stroke_point_cap_segments");
+    if(enforcePhysicalTolerance && requiredSegments > 4096.0)
+        throw ComplexityLimitError("stroke_point_cap_segments");
+    const size_t segmentCount = std::max<size_t>(
+        8, static_cast<size_t>(std::min(requiredSegments, 4096.0)));
     complexityBudget.consumeGeneratedPoints(segmentCount);
     complexityBudget.consumeGeneratedRings();
     LocalPath ring;
@@ -594,10 +758,11 @@ LocalPath pointCap(const LocalPoint& point,
 
 } // namespace
 
-LocalPaths expandStrokeLocal(const lunasvg::PaintCommand& command,
-                             double localFlattenTolerance,
-                             double localGridStep,
-                             ComplexityBudget& complexityBudget)
+StrokeExpansion expandStrokeLocal(const lunasvg::PaintCommand& command,
+                                  double localFlattenTolerance,
+                                  double localGridStep,
+                                  ComplexityBudget& complexityBudget,
+                                  bool enforcePhysicalTolerance)
 {
     if(!(std::isfinite(command.stroke.width) && command.stroke.width > 0)
             || !(std::isfinite(localFlattenTolerance)
@@ -642,34 +807,72 @@ LocalPaths expandStrokeLocal(const lunasvg::PaintCommand& command,
                               std::make_move_iterator(dashed.end()));
     }
 
-    LocalPaths output;
-    const double delta = command.stroke.width * 0.5 / localGridStep;
+    StrokeExpansion output;
     const double offsetArcTolerance = requiresOffsetArcBudget
         ? localFlattenTolerance - centerlineBudget
         : localFlattenTolerance;
-    const double arcTolerance = offsetArcTolerance / localGridStep;
     for(const auto& subpath : strokeSubpaths) {
         if(subpath.points.size() == 1) {
             auto cap = pointCap(
                 subpath.points.front(), command.stroke.line_cap,
                 command.stroke.width * 0.5, offsetArcTolerance,
-                complexityBudget);
+                complexityBudget, enforcePhysicalTolerance);
             if(!cap.empty())
-                output.emplace_back(std::move(cap));
+                output.paths.push_back({
+                    std::move(cap), subpath.source_subpath_index,
+                });
             continue;
         }
+        double effectiveGridStep = effectiveStrokeGridStep(
+            subpath, command.stroke, command.stroke.width * 0.5,
+            localGridStep);
+        // This is an int64 numeric-range floor, not a print-resolution grid.
+        // Exact short segments can require a very fine directional grid for
+        // square or round caps, but Clipper's offset radius must still remain
+        // representable. The 1e15 cell domain remains far below any physical
+        // cleanup threshold and preserves the source segment itself.
+        effectiveGridStep = std::max(
+            effectiveGridStep,
+            std::abs(static_cast<double>(command.stroke.width))
+                * 0.5 / 1.0e15);
+        // Keep both the discarded bounds pass and the final replay comfortably
+        // inside Clipper's robust integer range. This floor is relative to the
+        // path origin, so large source offsets do not erase short segments.
+        // It is a numeric representation limit, not a printer-resolution grid.
+        const auto& origin = subpath.points.front();
+        double localMagnitude = std::abs(
+            static_cast<double>(command.stroke.width)) * 0.5;
+        for(const auto& point : subpath.points) {
+            localMagnitude = std::max(
+                localMagnitude, std::abs(point.x - origin.x));
+            localMagnitude = std::max(
+                localMagnitude, std::abs(point.y - origin.y));
+        }
+        effectiveGridStep = std::max(
+            effectiveGridStep, localMagnitude / 5.0e14);
+        const double delta = command.stroke.width * 0.5
+            / effectiveGridStep;
+        const double arcTolerance = offsetArcTolerance
+            / effectiveGridStep;
+        if(!(std::isfinite(delta) && delta > 0.0 && delta <= 1.0e15))
+            throw StrokeInputPrecisionError("stroke_offset_range");
+        const LocalPoint quantizationOrigin = subpath.points.front();
         Clipper2Lib::Path64 path;
         path.reserve(subpath.points.size());
         for(const auto& point : subpath.points) {
             const Clipper2Lib::Point64 quantized(
-                quantizeLocal(point.x / localGridStep),
-                quantizeLocal(point.y / localGridStep));
+                quantizeLocal(
+                    (point.x - quantizationOrigin.x) / effectiveGridStep),
+                quantizeLocal(
+                    (point.y - quantizationOrigin.y) / effectiveGridStep));
             if(path.empty() || path.back() != quantized)
                 path.push_back(quantized);
         }
-        if(path.size() < 2)
+        if(path.size() < 2) {
+            output.collapsed_subpath_indices.push_back(
+                subpath.source_subpath_index);
             continue;
-        requireStableMiterLimit(path, subpath.closed, command.stroke);
+        }
         const size_t worstCaseVerticesPerPoint =
             command.stroke.line_join == lunasvg::PaintLineJoin::Round
                 || (!subpath.closed
@@ -678,14 +881,29 @@ LocalPaths expandStrokeLocal(const lunasvg::PaintCommand& command,
             ? checkedSizeSum(
                 offsetArcStepUpperBound(delta, arcTolerance), size_t{2})
             : 4;
+        const size_t outputPointUpperBound = checkedSizeProduct(
+            path.size(), worstCaseVerticesPerPoint);
         complexityBudget.ensureGeneratedPointCapacity(
-            checkedSizeProduct(path.size(), worstCaseVerticesPerPoint));
+            outputPointUpperBound);
+        complexityBudget.requireTransientPointCapacity(
+            outputPointUpperBound);
+        complexityBudget.requireClipperOutputDocumentCapacity(
+            outputPointUpperBound,
+            checkedSizeSum(outputPointUpperBound, size_t{2}) / 3);
         requireBoundedClipperOffset(
-            {path}, complexityBudget, subpath.closed);
+            {path}, complexityBudget, delta,
+            command.stroke.miter_limit, subpath.closed);
         auto expanded = Clipper2Lib::InflatePaths(
             {path}, delta, joinType(command.stroke.line_join),
             endType(command.stroke.line_cap, subpath.closed),
             command.stroke.miter_limit, arcTolerance);
+        size_t expandedPointCount = 0;
+        for(const auto& ring : expanded)
+            expandedPointCount = checkedSizeSum(
+                expandedPointCount, ring.size());
+        complexityBudget.consumeClipperOutputPoints(expandedPointCount);
+        complexityBudget.consumeClipperOutputRings(expanded.size());
+        const size_t outputSizeBefore = output.paths.size();
         for(const auto& ring : expanded) {
             if(ring.size() < 3)
                 continue;
@@ -694,11 +912,18 @@ LocalPaths expandStrokeLocal(const lunasvg::PaintCommand& command,
             LocalPath localRing;
             localRing.reserve(ring.size());
             for(const auto& point : ring) {
-                localRing.push_back({point.x * localGridStep,
-                                     point.y * localGridStep});
+                localRing.push_back({
+                    quantizationOrigin.x + point.x * effectiveGridStep,
+                    quantizationOrigin.y + point.y * effectiveGridStep,
+                });
             }
-            output.emplace_back(std::move(localRing));
+            output.paths.push_back({
+                std::move(localRing), subpath.source_subpath_index,
+            });
         }
+        if(output.paths.size() == outputSizeBefore)
+            output.collapsed_subpath_indices.push_back(
+                subpath.source_subpath_index);
     }
     return output;
 }

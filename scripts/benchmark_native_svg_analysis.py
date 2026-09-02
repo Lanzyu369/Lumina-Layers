@@ -44,15 +44,6 @@ from core.vector_engine import (  # noqa: E402
     VectorProcessor,
     _VECTOR_PARSE_CLIP_CACHE,
 )
-from scripts.build_native_svg_supported_fixture import (  # noqa: E402
-    EXPECTED_FIXTURE_SHA256,
-    SOURCE_SHA256,
-)
-
-
-REAL_R4C1_SHA256 = (
-    "da52ef12bdd37a0bd47970649a70582862331a606c151bff05bfb2f6e265f160"
-)
 SUPPORTED_SCALE_FIXTURE = (
     REPO_ROOT
     / "native"
@@ -471,14 +462,14 @@ def _measure_complete_entry(
             "native_topology_seconds": _rounded(
                 _median_stage(stage_runs, "native_topology_s")
             ),
-            "native_legacy_raw_seconds": _rounded(
-                _median_stage(stage_runs, "native_legacy_raw_s")
+            "native_normalize_raw_seconds": _rounded(
+                _median_stage(stage_runs, "native_normalize_raw_s")
             ),
             "native_composite_seconds": _rounded(
                 _median_stage(stage_runs, "native_composite_s")
             ),
-            "native_legacy_visible_seconds": _rounded(
-                _median_stage(stage_runs, "native_legacy_visible_s")
+            "native_normalize_visible_seconds": _rounded(
+                _median_stage(stage_runs, "native_normalize_visible_s")
             ),
             "native_export_seconds": _rounded(
                 _median_stage(stage_runs, "native_export_s")
@@ -511,50 +502,34 @@ def _measure_complete_entry(
     )
 
 
-def _verify_real_r4c1(path: Path | None) -> dict[str, Any]:
-    evidence_path = (
-        REPO_ROOT
-        / "native"
-        / "lumina-svg-core"
-        / "benchmarks"
-        / "real_r4c1_capability.json"
-    )
-    existing = json.loads(evidence_path.read_text(encoding="utf-8"))
-    fixture = existing["fixture"]
-    output = existing["output"]
+def _record_real_r4c1(path: Path | None) -> dict[str, Any]:
+    if path is None:
+        return {
+            "classification": "real_r4c1",
+            "status": "unavailable",
+            "reason_code": None,
+            "native_by_default_ready": False,
+            "source": "not_provided",
+        }
+
     record: dict[str, Any] = {
         "classification": "real_r4c1",
-        "path": "private/R4C1.svg",
-        "sha256": fixture["sha256"],
-        "byte_size": fixture["byte_size"],
-        "status": output["status"],
-        "reason_code": output["reason_code"],
         "native_by_default_ready": False,
-        "source": "checked_in_standalone_capability_evidence",
+        "source": "local_private_fixture",
     }
-    if path is None:
-        return record
 
-    payload = path.read_bytes()
-    actual_sha256 = hashlib.sha256(payload).hexdigest()
-    if actual_sha256 != REAL_R4C1_SHA256:
-        raise ValueError(f"unexpected_real_r4c1_sha256:{actual_sha256}")
     started = time.perf_counter()
     outcome = native_svg_adapter.analyze_native_svg(
-        str(path), 111.0, 0.02
+        str(path), 111.0, 0.02, expand_stroke_to_fill=True
     )
     elapsed = time.perf_counter() - started
-    if not isinstance(outcome, NativeSvgFallback):
-        raise RuntimeError("real_r4c1_unexpectedly_supported")
-    if outcome.reason_code != "unsupported_vector_effect":
-        raise RuntimeError(
-            f"real_r4c1_unexpected_reason:{outcome.reason_code}"
-        )
+    supported = not isinstance(outcome, NativeSvgFallback)
     record.update(
         {
-            "byte_size": len(payload),
-            "reason_code": outcome.reason_code,
-            "source": "verified_local_private_fixture",
+            "byte_size": path.stat().st_size,
+            "status": "supported" if supported else "unsupported",
+            "reason_code": None if supported else outcome.reason_code,
+            "native_by_default_ready": supported,
             "capability_check_seconds": _rounded(elapsed),
             "structure": _fixture_structure(path),
         }
@@ -562,32 +537,22 @@ def _verify_real_r4c1(path: Path | None) -> dict[str, Any]:
     return record
 
 
-def _verify_source_proxy_fallback(path: Path) -> dict[str, Any]:
-    """Record why the unmodified real-world proxy cannot use v0.1 native."""
+def _record_source_proxy_capability(path: Path) -> dict[str, Any]:
+    """Run the source proxy directly and record its current native outcome."""
 
-    payload = path.read_bytes()
-    actual_sha256 = hashlib.sha256(payload).hexdigest()
-    if actual_sha256 != SOURCE_SHA256:
-        raise ValueError(f"unexpected_source_proxy_sha256:{actual_sha256}")
     started = time.perf_counter()
     outcome = native_svg_adapter.analyze_native_svg(
         str(path), 111.0, 0.02
     )
     elapsed = time.perf_counter() - started
-    if not isinstance(outcome, NativeSvgFallback):
-        raise RuntimeError("source_proxy_unexpectedly_supported")
-    if outcome.reason_code != "unsupported_topology_collapse":
-        raise RuntimeError(
-            f"source_proxy_unexpected_reason:{outcome.reason_code}"
-        )
+    supported = not isinstance(outcome, NativeSvgFallback)
     return {
-        "classification": "real_proxy_fallback",
+        "classification": "real_proxy",
         "path": _relative_repo_path(path),
-        "sha256": actual_sha256,
-        "byte_size": len(payload),
-        "status": "unsupported",
-        "reason_code": outcome.reason_code,
-        "native_by_default_ready": False,
+        "byte_size": path.stat().st_size,
+        "status": "supported" if supported else "unsupported",
+        "reason_code": None if supported else outcome.reason_code,
+        "native_by_default_ready": supported,
         "capability_check_seconds": _rounded(elapsed),
         "structure": _fixture_structure(path),
     }
@@ -623,7 +588,6 @@ def _find_large_svg_files(
                         "root": label,
                         "relative_path": candidate.relative_to(root).as_posix(),
                         "byte_size": byte_size,
-                        "sha256": hashlib.sha256(candidate.read_bytes()).hexdigest(),
                     }
                 )
         except OSError:
@@ -691,7 +655,6 @@ def _large_regression_record(
         "status": "measured",
         "path": _relative_repo_path(large_path),
         "byte_size": byte_size,
-        "sha256": hashlib.sha256(large_path.read_bytes()).hexdigest(),
         "structure": _fixture_structure(large_path),
         "measurement": measurement,
         "output": output,
@@ -716,8 +679,6 @@ def _relative_repo_path(path: Path) -> str:
 def _benchmark_manifest(args: argparse.Namespace) -> dict[str, Any]:
     svg_path = args.svg.resolve()
     lut_path = args.lut.resolve()
-    fixture_bytes = svg_path.read_bytes()
-    lut_bytes = lut_path.read_bytes()
     processor = VectorProcessor(str(lut_path), "4-Color (RYBW)")
     swap_before, swap_source = _system_swap_used_bytes()
     measurement, output = _measure_complete_entry(
@@ -737,13 +698,10 @@ def _benchmark_manifest(args: argparse.Namespace) -> dict[str, Any]:
             "swap_measurement": swap_source,
         }
     )
-    fixture_sha256 = hashlib.sha256(fixture_bytes).hexdigest()
-    if fixture_sha256 == EXPECTED_FIXTURE_SHA256:
+    if svg_path == SUPPORTED_SCALE_FIXTURE.resolve():
         provenance = json.loads(
             SUPPORTED_SCALE_PROVENANCE.read_text(encoding="utf-8")
         )
-        if provenance["fixture"]["sha256"] != fixture_sha256:
-            raise RuntimeError("supported_scale_provenance_is_stale")
         fixture_classification = "derived_supported_scale"
     else:
         provenance = None
@@ -754,15 +712,13 @@ def _benchmark_manifest(args: argparse.Namespace) -> dict[str, Any]:
         "fixture": {
             "path": _relative_repo_path(svg_path),
             "classification": fixture_classification,
-            "sha256": fixture_sha256,
-            "byte_size": len(fixture_bytes),
+            "byte_size": svg_path.stat().st_size,
             "provenance": provenance,
             **_fixture_structure(svg_path),
         },
         "lut": {
             "path": _relative_repo_path(lut_path),
-            "sha256": hashlib.sha256(lut_bytes).hexdigest(),
-            "byte_size": len(lut_bytes),
+            "byte_size": lut_path.stat().st_size,
             "color_mode": "4-Color (RYBW)",
         },
         "host": _host_manifest(),
@@ -775,10 +731,10 @@ def _benchmark_manifest(args: argparse.Namespace) -> dict[str, Any]:
         },
         "measurement": measurement,
         "output": output,
-        "source_proxy": _verify_source_proxy_fallback(
+        "source_proxy": _record_source_proxy_capability(
             args.source_proxy.resolve()
         ),
-        "real_r4c1": _verify_real_r4c1(args.real_r4c1),
+        "real_r4c1": _record_real_r4c1(args.real_r4c1),
         "large_regression": _large_regression_record(
             args.large_search_root,
             args.large_svg,

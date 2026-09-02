@@ -21,4 +21,9 @@ uint64_t GeometryCollection::holeCount() const
         [](int64_t parent) { return parent >= 0; }));
 }
 
+uint64_t UnprintableFragmentCollection::count() const
+{
+    return static_cast<uint64_t>(reason_ids.size());
+}
+
 } // namespace lumina_svg_core

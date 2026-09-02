@@ -194,7 +194,7 @@ def test_complexity_rejection_never_invokes_legacy_parser(
         processor.analyze_svg(str(svg_path), 20.0)
 
 
-def test_real_css_amplifier_is_rejected_without_legacy_retry(
+def test_large_legal_selector_is_processed_without_legacy_retry(
     tmp_path,
 ) -> None:
     pytest.importorskip("lumina_svg_core")
@@ -212,8 +212,10 @@ def test_real_css_amplifier_is_rejected_without_legacy_retry(
     )
     vector_engine._VECTOR_PARSE_CLIP_CACHE.clear()
 
-    with pytest.raises(NativeSvgResourceLimitError):
-        processor.analyze_svg(str(svg_path), 20.0)
+    analysis = processor.analyze_svg(str(svg_path), 20.0)
+
+    assert analysis.stage_timings["geometry_backend"] == "native"
+    assert len(analysis.clipped_shapes) == 1
 
 
 def test_native_version_is_part_of_parse_clip_cache_identity(
@@ -288,9 +290,9 @@ def test_native_cache_hit_preserves_backend_identity(
         "native_bounds_s",
         "native_replay_s",
         "native_topology_s",
-        "native_legacy_raw_s",
+        "native_normalize_raw_s",
         "native_composite_s",
-        "native_legacy_visible_s",
+        "native_normalize_visible_s",
         "native_export_s",
     ):
         assert second.stage_timings[stage_name] == 0.0

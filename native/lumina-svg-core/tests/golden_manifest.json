@@ -5,7 +5,6 @@
   "cases": [
     {
       "file": "basic_fill_stroke.svg",
-      "sha256": "41e96f40ba81f6a8b0f65ed37ebaf3569616c48a444b417483bd58576b6e7857",
       "status": "supported",
       "reason_code": "",
       "bbox": [0.0, 0.0, 20.0, 10.0],
@@ -14,27 +13,25 @@
       "visible_components": 2,
       "visible_holes": 1,
       "area_by_rgba": {
-        "0-0-255-255": 79.998466,
-        "255-0-0-255": 15.999693
+        "0-0-255-255": 80.0,
+        "255-0-0-255": 16.0
       },
-      "fingerprint": "62052e43181ac6039d598dd161cd4fd4b3c428fc8f85716e06b49aa744283906"
+      "fingerprint": "d617ec16ed7f742e7f0729ba335598682fef246ef8a190903fa1d972f9180f64"
     },
     {
       "file": "fill_rules_transforms.svg",
-      "sha256": "63e9014e46f43cc0ffe8fe070d5a8458852a563db9d1e21d0c09920dadfd001e",
       "status": "supported",
       "reason_code": "",
-      "bbox": [0.0, 0.0, 146.000000358, 80.0],
+      "bbox": [0.0, 0.0, 146.0, 80.0],
       "ordered_rgba": [[229, 57, 53, 255]],
       "raw_components": 2,
       "visible_components": 2,
       "visible_holes": 1,
-      "area_by_rgba": {"229-57-53-255": 3192.000041},
-      "fingerprint": "fc77756a1c2649bbc63aa62786120ee3381c51c7e80d96b2756d91fe96f8e295"
+      "area_by_rgba": {"229-57-53-255": 3192.0},
+      "fingerprint": "e9e506247c9e325c26c54d573262a768059ec4cded5e17d0fcddc70832bf34d2"
     },
     {
       "file": "strokes_clips_occlusion.svg",
-      "sha256": "34b48ba3fe64b2b8dc84b1c6fdc75a8b2e26cb56d9f540f6a0c4e5b62fe720b4",
       "status": "supported",
       "reason_code": "",
       "bbox": [0.0, 0.0, 100.0, 60.0],
@@ -43,16 +40,15 @@
       "visible_components": 7,
       "visible_holes": 0,
       "area_by_rgba": {
-        "142-36-170-255": 600.002634,
-        "239-83-80-255": 4349.993651,
-        "30-136-229-255": 550.002756,
-        "67-160-71-255": 500.000959
+        "142-36-170-255": 600.0,
+        "239-83-80-255": 4350.0,
+        "30-136-229-255": 550.0,
+        "67-160-71-255": 500.0
       },
-      "fingerprint": "6699eba17f02ef263a586c1286e7500374250712210ae6f8c63f4caf177a1336"
+      "fingerprint": "2a6aa36b307a2e3377c13d0d6ed735280c7e89c229b1fc0fadfd2b5ab371ea82"
     },
     {
       "file": "css_use.svg",
-      "sha256": "c162228c501687f1067edb4d30c86a9c10d094c4781aa4586ed4a46fdb043f1c",
       "status": "supported",
       "reason_code": "",
       "bbox": [0.0, 0.0, 40.0, 20.0],
@@ -61,14 +57,13 @@
       "visible_components": 4,
       "visible_holes": 2,
       "area_by_rgba": {
-        "0-150-136-255": 71.991831,
-        "38-50-56-255": 128.015647
+        "0-150-136-255": 72.0,
+        "38-50-56-255": 128.0
       },
-      "fingerprint": "6e68910768187573441e789051b799f385dc60eefcf10549aaaa92d3a6a2bf51"
+      "fingerprint": "651687488454d0e7294ad8de86f1cb79c19a4bfe43e54fafc1bba8377df0c045"
     },
     {
       "file": "overlap_islands.svg",
-      "sha256": "c42c01354ccc88bfcd27fe477d9518b4fe7c7b2444a762e7ba641f51eda5dd07",
       "status": "supported",
       "reason_code": "",
       "bbox": [0.0, 0.0, 80.0, 50.0],
@@ -80,7 +75,7 @@
         "244-67-54-255": 1425.0,
         "33-150-243-255": 1100.0
       },
-      "fingerprint": "c9a809047e46fccba4a556776c392feb3ed4de9a6fc7b39c601e4dbb3e8caba7"
+      "fingerprint": "3b31b7724ab643f7748e980337ceae9337553c79a3412b25f4b1cfc2dca4d5f4"
     }
   ]
 }

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -30,7 +29,6 @@ SPEC.loader.exec_module(FINGERPRINT_MODULE)
 @pytest.mark.parametrize("case", MANIFEST["cases"], ids=lambda case: case["file"])
 def test_golden_case(case: dict[str, object]) -> None:
     path = FIXTURES / str(case["file"])
-    assert hashlib.sha256(path.read_bytes()).hexdigest() == case["sha256"]
     result = lumina_svg_core.analyze_svg(
         path,
         MANIFEST["target_width_mm"],

@@ -83,7 +83,7 @@ _UPLOAD_IMAGE_UNREADABLE_DETAIL = (
 _SVG_UPLOAD_TOO_LARGE_DETAIL = {
     "code": "native_svg_upload_too_large",
     "message": (
-        "SVG upload exceeds the 64 MiB safety limit. "
+        "SVG upload exceeds the 256 MiB safety limit. "
         "Simplify the document or split it into smaller SVG files."
     ),
     "max_bytes": NATIVE_SVG_MAX_BYTES,

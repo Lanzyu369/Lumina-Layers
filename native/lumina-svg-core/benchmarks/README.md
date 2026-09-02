@@ -6,27 +6,18 @@ discards one warm-up, records at least three warm runs, captures native stage
 timings, process peak RSS, system swap growth, and a deterministic result
 fingerprint.
 
-The measured fixture is `supported_scale_fixture.svg`, SHA-256
-`7f1fd4b2405989394c1a4fd6b59b117c4015ee2b9918b4dba5922c3e8ede472e`.
-`supported_scale_fixture_provenance.json` records its exact source SHA, the 64
-selected path indices, the disjoint 32-by-32 placement, and the 16 repetitions.
+The measured fixture is `supported_scale_fixture.svg`.
+`supported_scale_fixture_provenance.json` records the 64 selected path indices,
+the disjoint 32-by-32 placement, and the 16 repetitions.
 The source paths and colors come from `test_images/benchmark.svg`; the source
-document itself is intentionally not rewritten or claimed as supported. Its
-same-paint topology and legacy-close semantics require whole-document fallback.
+document is also checked directly as a 3,097-path real proxy and currently
+completes through the native engine. The tiled fixture remains the reproducible
+performance gate because it has disjoint cell bounds and a stable workload.
 
-Neither file is the private R4C1 artifact. The benchmark labels a fixture
-`real_r4c1` only when its SHA-256 is exactly
-`da52ef12bdd37a0bd47970649a70582862331a606c151bff05bfb2f6e265f160`.
-The derived result never counts as satisfaction of the real-file gate.
-
-The exact R4C1 artifact was subsequently recovered from an untracked local
-browser-validation trace and verified by SHA-256. It is not copied into this
-repository. `real_r4c1_capability.json` records the result honestly: all 3,410
-stroke paths request `vector-effect="non-scaling-stroke"`, which version 0.1
-deliberately classifies as `unsupported_vector_effect`. The whole document must
-therefore use Lumina's legacy fallback, and the native-by-default R4C1 release
-gate remains closed. Its roughly 0.06-second result is capability-classification
-time, not a successful geometry performance claim.
+Neither file is the private R4C1 artifact. Callers label explicitly supplied
+inputs; the benchmark does not identify or reject source files by hash. When
+the private R4C1 input is not supplied, the report records it as unavailable
+instead of carrying forward a capability result from an older parser.
 
 Reproduce from the Lumina repository root with an installed CPython 3.12 wheel:
 
@@ -36,6 +27,7 @@ python native/lumina-svg-core/tools/benchmark.py \
   --target-width-mm 111 \
   --tolerance-mm 0.02 \
   --warm-runs 3 \
+  --classification derived_supported_scale \
   --output native/lumina-svg-core/benchmarks/proxy_manifest.json
 ```
 

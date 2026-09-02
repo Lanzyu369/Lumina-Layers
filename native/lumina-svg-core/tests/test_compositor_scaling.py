@@ -35,9 +35,25 @@ def _elapsed(count: int) -> float:
 
 
 def _overlapping_elapsed(count: int) -> float:
+    # Keep every lower paint distinct so an exact-duplicate shortcut cannot
+    # hide quadratic overlap enumeration.  The final rectangle covers every
+    # earlier paint, so an incremental suffix coverage stays constant-sized.
     rectangles = "".join(
-        '<rect width="10" height="10" fill="#ff0000"/>'
-        for _ in range(count)
+        (
+            f'<rect x="{index / (count * 20):.9g}" '
+            f'y="{index / (count * 20):.9g}" '
+            f'width="{9 - index / (count * 10):.9g}" '
+            f'height="{9 - index / (count * 10):.9g}" '
+            f'fill="#{index % 251:02x}0000"/>'
+        )
+        for index in range(count - 1)
+    )
+    # Two final half-planes jointly cover the canvas.  Neither paint alone is
+    # a rectangular occluder for the other lower paints, so an implementation
+    # that rebuilds a union from every later paint still does quadratic work.
+    rectangles += (
+        '<rect width="5" height="10" fill="#0000ff"/>'
+        '<rect x="5" width="5" height="10" fill="#00ff00"/>'
     )
     started = perf_counter()
     result = lumina_svg_core.analyze_svg_svg(
@@ -47,7 +63,29 @@ def _overlapping_elapsed(count: int) -> float:
     )
     elapsed = perf_counter() - started
     assert result.status == "supported"
-    assert result.visible.component_count == 1
+    assert result.visible.component_count == 2
+    return elapsed
+
+
+def _distributed_components_elapsed(count: int) -> float:
+    extent = count * 4 + 2
+    paints = "".join(
+        (
+            f'<path d="M{index * 2} {index * 2}h1v1h-1z '
+            f'M{extent - index * 2} {extent - index * 2}h1v1h-1z" '
+            f'fill="#{index % 251:02x}0000"/>'
+        )
+        for index in range(count)
+    )
+    started = perf_counter()
+    result = lumina_svg_core.analyze_svg_svg(
+        f'<svg viewBox="0 0 {extent + 2} {extent + 2}">{paints}</svg>',
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+    elapsed = perf_counter() - started
+    assert result.status == "supported", result.reason_code
+    assert result.visible.component_count == count * 2
     return elapsed
 
 
@@ -63,3 +101,14 @@ def test_fully_overlapping_paints_use_incremental_suffix_coverage() -> None:
     large_elapsed = min(_overlapping_elapsed(800) for _ in range(2))
 
     assert large_elapsed < small_elapsed * 10.0 + 0.05
+
+
+def test_distributed_visible_components_use_hierarchical_coverage() -> None:
+    small_elapsed = min(
+        _distributed_components_elapsed(150) for _ in range(2)
+    )
+    large_elapsed = min(
+        _distributed_components_elapsed(600) for _ in range(2)
+    )
+
+    assert large_elapsed < small_elapsed * 10.0 + 0.1

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import platform
@@ -19,17 +18,6 @@ import xml.etree.ElementTree as ET
 import lumina_svg_core
 
 from fingerprint import result_fingerprint
-
-
-REAL_R4C1_SHA256 = (
-    "da52ef12bdd37a0bd47970649a70582862331a606c151bff05bfb2f6e265f160"
-)
-SUPPORTED_SCALE_SHA256 = (
-    "7f1fd4b2405989394c1a4fd6b59b117c4015ee2b9918b4dba5922c3e8ede472e"
-)
-SUPPORTED_SCALE_SOURCE_SHA256 = (
-    "d078cf4293623d934759c2688e13a00491e525055e7595069a0ecc4f078842fb"
-)
 
 
 def _local_name(name: str) -> str:
@@ -173,10 +161,10 @@ def benchmark(
     target_width_mm: float,
     tolerance_mm: float,
     warm_runs: int,
+    classification: str = "explicit_supported_fixture",
 ) -> dict[str, Any]:
     if warm_runs < 3:
         raise ValueError("warm_runs_must_be_at_least_three")
-    svg_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
     structure = _fixture_structure(path)
     swap_before, swap_source = _system_swap_used_bytes()
 
@@ -211,20 +199,11 @@ def benchmark(
     if swap_after_source != swap_source:
         swap_source = f"{swap_source}->{swap_after_source}"
     public_median = _median(elapsed_values)
-    if svg_sha256 == REAL_R4C1_SHA256:
-        fixture_classification = "real_r4c1"
-    elif svg_sha256 == SUPPORTED_SCALE_SHA256:
-        fixture_classification = "derived_supported_scale"
-    else:
-        fixture_classification = "explicit_supported_fixture"
     return {
         "schema_version": 2,
         "fixture": {
             "path": path.as_posix(),
-            "classification": fixture_classification,
-            "sha256": svg_sha256,
-            "real_r4c1_sha256": REAL_R4C1_SHA256,
-            "source_proxy_sha256": SUPPORTED_SCALE_SOURCE_SHA256,
+            "classification": classification,
             "byte_size": path.stat().st_size,
             **structure,
         },
@@ -267,6 +246,10 @@ def main() -> None:
     parser.add_argument("--target-width-mm", type=float, default=111.0)
     parser.add_argument("--tolerance-mm", type=float, default=0.02)
     parser.add_argument("--warm-runs", type=int, default=3)
+    parser.add_argument(
+        "--classification",
+        default="explicit_supported_fixture",
+    )
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     manifest = benchmark(
@@ -274,6 +257,7 @@ def main() -> None:
         args.target_width_mm,
         args.tolerance_mm,
         args.warm_runs,
+        args.classification,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(

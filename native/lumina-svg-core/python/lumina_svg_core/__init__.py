@@ -3,19 +3,21 @@
 from __future__ import annotations
 
 from ._lumina_svg_core import (
-    _set_thread_launch_failure_after_for_testing,
     GeometryCollection,
     NativeResult,
     PaintCommand,
     PaintStrokeStyle,
+    RECORDER_SCHEMA_VERSION,
+    RESULT_SCHEMA_VERSION,
     RecorderResult,
+    UnprintableFragmentCollection,
     analyze_svg,
     analyze_svg_svg,
     record_paint_commands,
     record_paint_commands_svg,
 )
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
 
 __all__ = [
@@ -24,6 +26,9 @@ __all__ = [
     "GeometryCollection",
     "NativeResult",
     "RecorderResult",
+    "UnprintableFragmentCollection",
+    "RECORDER_SCHEMA_VERSION",
+    "RESULT_SCHEMA_VERSION",
     "__version__",
     "analyze_svg",
     "analyze_svg_svg",

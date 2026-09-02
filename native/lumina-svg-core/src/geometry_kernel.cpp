@@ -9,7 +9,6 @@
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -17,20 +16,16 @@
 #include <exception>
 #include <limits>
 #include <memory>
-#include <mutex>
 #include <numeric>
+#include <optional>
 #include <stdexcept>
 #include <string>
-#include <system_error>
-#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 namespace lumina_svg_core {
 namespace {
-
-std::atomic<int64_t> g_threadLaunchFailureAfterForTesting{-1};
 
 using Clipper2Lib::ClipType;
 using Clipper2Lib::Clipper64;
@@ -46,29 +41,28 @@ struct PointD {
     double y{0};
 };
 
-struct SourceSegment {
+struct SourceBoundarySegment {
     PointD start;
+    PointD control1;
+    PointD control2;
     PointD end;
-    size_t contour_id{0};
-    size_t edge_index{0};
-    size_t edge_count{0};
-    int64_t operation_id{0};
-    bool reject_same_operation_intersections{true};
-    double input_precision_error_source{0};
-    double approximation_error_source{0};
+    bool cubic{false};
 };
 
 struct TopologyTrace {
-    std::vector<SourceSegment> segments;
-    size_t next_contour_id{0};
-    ComplexityBudget* complexity_budget{nullptr};
+    struct BoundaryError {
+        double min_x{0};
+        double min_y{0};
+        double max_x{0};
+        double max_y{0};
+        double maximum_error_source{0};
+    };
 
-    void append(SourceSegment segment)
+    std::vector<BoundaryError> boundaries;
+
+    void append(BoundaryError boundary)
     {
-        if(complexity_budget == nullptr)
-            throw std::logic_error("missing_complexity_budget");
-        complexity_budget->consumeTopologySegments(1);
-        segments.emplace_back(std::move(segment));
+        boundaries.emplace_back(std::move(boundary));
     }
 };
 
@@ -118,15 +112,32 @@ struct GridBounds {
             && min_x <= other.max_x && max_x >= other.min_x
             && min_y <= other.max_y && max_y >= other.min_y;
     }
+
 };
 
 struct PaintGeometry {
     Paths64 paths;
     GridBounds bounds;
+    double boundary_error_source{0};
+    double input_precision_error_x_source{0};
+    double input_precision_error_y_source{0};
     std::array<uint8_t, 4> rgba{{0, 0, 0, 0}};
     int32_t draw_index{-1};
     int32_t source_index{-1};
     SourceKind source_kind{SourceKind::Fill};
+};
+
+struct FragmentIssue {
+    UnprintableReason reason{UnprintableReason::EmptyPath};
+    int32_t subpath_index{-1};
+};
+
+struct PrecisionPaths {
+    Paths64 paths;
+    double boundary_error_source{0};
+    double input_precision_error_x_source{0};
+    double input_precision_error_y_source{0};
+    std::vector<FragmentIssue> fragment_issues;
 };
 
 GridBounds pathsBounds(const Paths64& paths)
@@ -135,6 +146,19 @@ GridBounds pathsBounds(const Paths64& paths)
     for(const auto& path : paths) {
         for(const auto& point : path)
             bounds.include(point);
+    }
+    return bounds;
+}
+
+std::vector<GridBounds> individualPathBounds(const Paths64& paths)
+{
+    std::vector<GridBounds> bounds;
+    bounds.reserve(paths.size());
+    for(const auto& path : paths) {
+        GridBounds pathBounds;
+        for(const auto& point : path)
+            pathBounds.include(point);
+        bounds.emplace_back(pathBounds);
     }
     return bounds;
 }
@@ -164,651 +188,49 @@ void consumeClipperOutput(ComplexityBudget& complexityBudget,
     complexityBudget.consumeClipperOutputRings(paths.size());
 }
 
-struct LegacyContourCloseResult {
-    Paths64 paths;
-    bool identity{true};
-    bool compatible{true};
-};
-
-bool isConvexRing(const Path64& ring)
+void preflightBoolean(ComplexityBudget& complexityBudget,
+                      const Paths64& paths)
 {
-    return clipper_safety_detail::isConvexClosedPath(ring);
-}
-
-struct AreaInterval {
-    long double lower{0};
-    long double upper{0};
-    bool valid{false};
-};
-
-struct BoundaryMeasure {
-    long double area_source_units_squared{0};
-    long double perimeter_source_units{0};
-    long double numeric_error_source_units_squared{0};
-    size_t ring_count{0};
-};
-
-long double signedDoubleAreaGrid(const Path64& ring)
-{
-    long double twiceArea = 0.0L;
-    if(ring.size() < 3)
-        return twiceArea;
-    for(size_t index = 0; index < ring.size(); ++index) {
-        const auto& first = ring[index];
-        const auto& second = ring[(index + 1) % ring.size()];
-        twiceArea += static_cast<long double>(first.x) * second.y
-            - static_cast<long double>(first.y) * second.x;
-    }
-    return twiceArea;
-}
-
-BoundaryMeasure measureBoundary(
-    const std::vector<const Path64*>& rings,
-    double gridToSourceUnit)
-{
-    BoundaryMeasure measure;
-    if(!(gridToSourceUnit > 0.0) || !std::isfinite(gridToSourceUnit))
-        return measure;
-    long double signedTwiceAreaGrid = 0.0L;
-    long double absoluteCrossSumGrid = 0.0L;
-    long double perimeterGrid = 0.0L;
-    for(const auto* ring : rings) {
-        if(ring == nullptr || ring->size() < 3)
-            continue;
-        ++measure.ring_count;
-        signedTwiceAreaGrid += signedDoubleAreaGrid(*ring);
-        for(size_t index = 0; index < ring->size(); ++index) {
-            const auto& first = (*ring)[index];
-            const auto& second = (*ring)[
-                (index + 1) % ring->size()];
-            const long double firstProduct =
-                static_cast<long double>(first.x) * second.y;
-            const long double secondProduct =
-                static_cast<long double>(first.y) * second.x;
-            absoluteCrossSumGrid += std::abs(firstProduct)
-                + std::abs(secondProduct);
-            perimeterGrid += std::hypot(
-                static_cast<long double>(second.x) - first.x,
-                static_cast<long double>(second.y) - first.y);
-        }
-    }
-    const long double sourceScale = gridToSourceUnit;
-    const long double sourceAreaScale = sourceScale * sourceScale;
-    measure.area_source_units_squared =
-        std::abs(signedTwiceAreaGrid) * 0.5L * sourceAreaScale;
-    measure.perimeter_source_units = perimeterGrid * sourceScale;
-    // Downstream GEOS computes area in binary64 after materializing the same
-    // integer coordinates. Bound cancellation/rounding separately from the
-    // geometric boundary uncertainty used below.
-    measure.numeric_error_source_units_squared =
-        absoluteCrossSumGrid * 0.5L * sourceAreaScale
-        * std::numeric_limits<double>::epsilon() * 64.0L;
-    return measure;
-}
-
-long double boundaryAreaUncertainty(
-    const BoundaryMeasure& measure,
-    double boundaryErrorSourceUnits)
-{
-    constexpr long double PI =
-        3.141592653589793238462643383279502884L;
-    const long double error = std::max(0.0, boundaryErrorSourceUnits);
-    // The symmetric difference is contained in the error-radius tube around
-    // every closed boundary. The standard rectifiable-curve tube bound is
-    // 2*r*length + pi*r^2 per ring.
-    return 2.0L * error * measure.perimeter_source_units
-        + PI * error * error * measure.ring_count
-        + measure.numeric_error_source_units_squared;
-}
-
-long double minimumTriangleAreaSourceUnitsSquared(
-    const Path64& ring,
-    double gridToSourceUnit)
-{
-    if(ring.size() < 3 || ring.size() > 4)
-        return 0.0L;
-    long double minimumTwiceArea =
-        std::numeric_limits<long double>::infinity();
-    for(size_t first = 0; first + 2 < ring.size(); ++first) {
-        for(size_t second = first + 1; second + 1 < ring.size(); ++second) {
-            for(size_t third = second + 1; third < ring.size(); ++third) {
-                const auto& a = ring[first];
-                const auto& b = ring[second];
-                const auto& c = ring[third];
-                const long double twiceArea = std::abs(
-                    (static_cast<long double>(b.x) - a.x)
-                        * (static_cast<long double>(c.y) - a.y)
-                    - (static_cast<long double>(b.y) - a.y)
-                        * (static_cast<long double>(c.x) - a.x));
-                minimumTwiceArea = std::min(minimumTwiceArea, twiceArea);
-            }
-        }
-    }
-    const long double scale = gridToSourceUnit;
-    return minimumTwiceArea * 0.5L * scale * scale;
-}
-
-AreaInterval conservativeAreaInterval(
-    const std::vector<const Path64*>& rings,
-    double gridToSourceUnit,
-    double nativeBoundaryErrorSourceUnits,
-    double legacySimplifyToleranceSourceUnits,
-    bool allowConvexVertexBound)
-{
-    const auto measure = measureBoundary(rings, gridToSourceUnit);
-    if(measure.ring_count == 0
-            || !std::isfinite(measure.area_source_units_squared)
-            || !std::isfinite(measure.perimeter_source_units)
-            || !std::isfinite(
-                measure.numeric_error_source_units_squared))
-        return {};
-
-    const long double nativeUncertainty = boundaryAreaUncertainty(
-        measure, nativeBoundaryErrorSourceUnits);
-    long double lower = std::max(
-        0.0L, measure.area_source_units_squared - nativeUncertainty);
-    long double upper = measure.area_source_units_squared
-        + nativeUncertainty;
-
-    // GEOS topology-preserving simplification selects existing vertices. A
-    // convex triangle cannot lose a vertex, and a convex quadrilateral can
-    // reduce only to a triangle whose minimum area is enumerable exactly.
-    // This keeps common rectangles native without weakening the generic
-    // boundary-tube proof used for broader geometry.
-    if(allowConvexVertexBound
-            && legacySimplifyToleranceSourceUnits > 0.0
-            && rings.size() == 1 && rings.front() != nullptr
-            && isConvexRing(*rings.front())
-            && rings.front()->size() >= 3
-            && rings.front()->size() <= 4) {
-        lower = std::max(
-            0.0L,
-            minimumTriangleAreaSourceUnitsSquared(
-                *rings.front(), gridToSourceUnit)
-                - nativeUncertainty);
-    } else {
-        const double combinedBoundaryError =
-            nativeBoundaryErrorSourceUnits
-            + legacySimplifyToleranceSourceUnits;
-        const long double combinedUncertainty = boundaryAreaUncertainty(
-            measure, combinedBoundaryError);
-        lower = std::max(
-            0.0L, measure.area_source_units_squared - combinedUncertainty);
-        upper = measure.area_source_units_squared + combinedUncertainty;
-    }
-    if(!std::isfinite(lower) || !std::isfinite(upper) || lower > upper)
-        return {};
-    return {lower, upper, true};
-}
-
-bool areaThresholdClassificationIsCertain(
-    const std::vector<const Path64*>& rings,
-    double gridToSourceUnit,
-    double thresholdSourceUnitsSquared,
-    double nativeBoundaryErrorSourceUnits,
-    double legacySimplifyToleranceSourceUnits,
-    bool keepAtThreshold,
-    bool allowConvexVertexBound)
-{
-    if(!(thresholdSourceUnitsSquared > 0.0))
-        return true;
-    const auto interval = conservativeAreaInterval(
-        rings, gridToSourceUnit, nativeBoundaryErrorSourceUnits,
-        legacySimplifyToleranceSourceUnits, allowConvexVertexBound);
-    if(!interval.valid)
-        return false;
-    const long double threshold = thresholdSourceUnitsSquared;
-    if(keepAtThreshold)
-        return interval.upper < threshold || interval.lower >= threshold;
-    return interval.upper <= threshold || interval.lower > threshold;
-}
-
-std::vector<const Path64*> pathViews(const Paths64& paths)
-{
-    std::vector<const Path64*> views;
-    views.reserve(paths.size());
-    for(const auto& path : paths)
-        views.push_back(&path);
-    return views;
-}
-
-bool hasSafeMiterCorners(const Paths64& paths)
-{
-    constexpr long double MAX_SAFE_INTERIOR_COSINE = 0.49L;
-    for(const auto& ring : paths) {
-        if(ring.size() < 3)
-            return false;
-        for(size_t index = 0; index < ring.size(); ++index) {
-            const auto& previous = ring[
-                (index + ring.size() - 1) % ring.size()];
-            const auto& current = ring[index];
-            const auto& next = ring[(index + 1) % ring.size()];
-            const long double incomingX =
-                static_cast<long double>(previous.x) - current.x;
-            const long double incomingY =
-                static_cast<long double>(previous.y) - current.y;
-            const long double outgoingX =
-                static_cast<long double>(next.x) - current.x;
-            const long double outgoingY =
-                static_cast<long double>(next.y) - current.y;
-            const long double lengthProduct =
-                std::hypot(incomingX, incomingY)
-                * std::hypot(outgoingX, outgoingY);
-            if(!(lengthProduct > 0.0L))
-                return false;
-            const long double cosine =
-                (incomingX * outgoingX + incomingY * outgoingY)
-                / lengthProduct;
-            // Clipper and GEOS both use a miter limit of 2.0. Stay strictly
-            // away from the 60-degree fallback boundary on either side of a
-            // ring so equal outward/inward offsets use true miters.
-            if(cosine >= MAX_SAFE_INTERIOR_COSINE)
-                return false;
-        }
-    }
-    return true;
-}
-
-bool hasProvableMiterRoundTrip(const Paths64& paths,
-                               double deltaGrid,
-                               ComplexityBudget& complexityBudget)
-{
-    if(paths.empty() || !(deltaGrid >= 0.5)
-            || !hasSafeMiterCorners(paths))
-        return false;
-    if(paths.size() == 1 && isConvexRing(paths.front()))
-        return true;
-    constexpr double INTERACTION_CLEARANCE_MULTIPLIER = 4.0;
-    const double clearance = std::ceil(
-        deltaGrid * INTERACTION_CLEARANCE_MULTIPLIER);
-    if(!std::isfinite(clearance)
-            || clearance > static_cast<double>(
-                std::numeric_limits<int64_t>::max()))
-        return false;
-    return !hasNonAdjacentSegmentsWithinDistance(
-        paths, static_cast<int64_t>(clearance), complexityBudget);
-}
-
-bool hasMultipleComponentsWithNonConvexOuter(
-    const Paths64& paths,
-    ComplexityBudget& complexityBudget)
-{
-    if(paths.size() < 2)
-        return false;
     consumeBooleanInputs(complexityBudget, paths);
-    requireBoundedClipperIntersections(paths, complexityBudget);
-    PolyTree64 tree;
-    Clipper64 clipper;
-    clipper.AddSubject(paths);
-    if(!clipper.Execute(ClipType::Union, FillRule::NonZero, tree))
-        throw std::runtime_error("clipper_union_failed");
-
-    struct OuterShape {
-        bool convex;
-        size_t vertex_count;
-        double area;
-    };
-    std::vector<OuterShape> outerShapes;
-    outerShapes.reserve(tree.Count());
-    std::vector<const PolyPath64*> pending;
-    pending.reserve(tree.Count());
-    for(size_t index = tree.Count(); index > 0; --index)
-        pending.push_back(tree.Child(index - 1));
-    while(!pending.empty()) {
-        const auto* outer = pending.back();
-        pending.pop_back();
-        if(!outer->IsHole()) {
-            const auto& polygon = outer->Polygon();
-            outerShapes.push_back({
-                isConvexRing(polygon),
-                polygon.size(),
-                std::abs(Clipper2Lib::Area(polygon)),
-            });
-        }
-        for(size_t holeIndex = outer->Count(); holeIndex > 0; --holeIndex) {
-            const auto* hole = outer->Child(holeIndex - 1);
-            for(size_t childIndex = hole->Count(); childIndex > 0;
-                    --childIndex) {
-                pending.push_back(hole->Child(childIndex - 1));
-            }
-        }
-    }
-    if(outerShapes.size() <= 1
-            || std::all_of(
-                outerShapes.begin(), outerShapes.end(),
-                [](const OuterShape& shape) { return shape.convex; }))
-        return false;
-
-    // The checked-in R4C1-like corpus contains a narrow, independently
-    // differential-tested class: one concave main shell plus one small
-    // triangular accent. Keep that class native, but reject broader concave
-    // multi-shell morphology where GEOS miter-close can discard a peer shell.
-    if(outerShapes.size() == 2) {
-        const auto triangle = std::find_if(
-            outerShapes.begin(), outerShapes.end(),
-            [](const OuterShape& shape) {
-                return shape.convex && shape.vertex_count == 3;
-            });
-        if(triangle != outerShapes.end()) {
-            const double totalArea = outerShapes[0].area + outerShapes[1].area;
-            if(triangle->area * 10.0 <= totalArea)
-                return false;
-        }
-    }
-    return true;
+    const size_t candidates = requireBoundedClipperIntersections(
+        paths, complexityBudget);
+    preflightClipperOutput(
+        paths, nullptr, candidates, complexityBudget);
 }
 
-LegacyContourCloseResult applyLegacyContourClose(
-    const Paths64& paths,
-    const PhysicalDomain& domain,
-    double closeDeltaSourceUnits,
-    bool checkMultiComponentCompatibility,
-    ComplexityBudget& complexityBudget)
+void preflightBoolean(ComplexityBudget& complexityBudget,
+                      const Paths64& first,
+                      const Paths64& second)
 {
-    constexpr double MAX_SAFE_OFFSET_GRID = 1.0e14;
-    if(paths.empty() || closeDeltaSourceUnits <= 0.0)
-        return {paths, true, true};
-    const size_t inputPointCount = pathPointCount(paths);
-    const bool compatible = !checkMultiComponentCompatibility
-        || !hasMultipleComponentsWithNonConvexOuter(
-            paths, complexityBudget);
-    const double deltaGrid = closeDeltaSourceUnits
-        * domain.source_to_mm / domain.grid_step_mm;
-    if(!std::isfinite(deltaGrid) || deltaGrid > MAX_SAFE_OFFSET_GRID)
-        return {paths, false, false};
-    if(deltaGrid < 0.5)
-        return {paths, true, compatible};
-    if(hasProvableMiterRoundTrip(
-            paths, deltaGrid, complexityBudget))
-        return {paths, true, compatible};
-
-    complexityBudget.ensureGeneratedPointCapacity(
-        checkedSizeProduct(inputPointCount, size_t{4}));
-    requireBoundedClipperOffset(paths, complexityBudget);
-    auto inflated = Clipper2Lib::InflatePaths(
-        paths, deltaGrid, Clipper2Lib::JoinType::Miter,
-        Clipper2Lib::EndType::Polygon, 2.0);
-    const size_t inflatedPointCount = pathPointCount(inflated);
-    complexityBudget.consumeGeneratedPoints(inflatedPointCount);
-    complexityBudget.consumeGeneratedRings(inflated.size());
-    if(inflated.empty())
-        return {paths, true, compatible};
-
-    requireBoundedClipperOffset(inflated, complexityBudget);
-    auto closed = Clipper2Lib::InflatePaths(
-        inflated, -deltaGrid, Clipper2Lib::JoinType::Miter,
-        Clipper2Lib::EndType::Polygon, 2.0);
-    const size_t closedPointCount = pathPointCount(closed);
-    complexityBudget.consumeGeneratedPoints(closedPointCount);
-    complexityBudget.consumeGeneratedRings(closed.size());
-    if(closed.empty())
-        return {paths, true, compatible};
-
-    consumeBooleanInputs(complexityBudget, paths, &closed);
-    requireBoundedClipperIntersections(
-        paths, closed, complexityBudget);
-    auto difference = Clipper2Lib::Xor(
-        paths, closed, FillRule::NonZero);
-    consumeClipperOutput(complexityBudget, difference);
-    const bool identity = difference.empty();
-    // A multi-component concave paint is only a compatibility risk when the
-    // legacy close actually changes it. Identity closes are covered by the
-    // differential corpus and do not need a blanket whole-file fallback.
-    return {std::move(closed), identity, compatible || identity};
+    consumeBooleanInputs(complexityBudget, first, &second);
+    const size_t candidates = requireBoundedClipperIntersections(
+        first, second, complexityBudget);
+    preflightClipperOutput(
+        first, &second, candidates, complexityBudget);
 }
 
-template<typename PathGroupAt>
-std::vector<LegacyContourCloseResult> applyLegacyContourCloseMany(
-    size_t groupCount,
-    PathGroupAt pathGroupAt,
-    const PhysicalDomain& domain,
-    double closeDeltaSourceUnits,
-    bool checkMultiComponentCompatibility,
-    ComplexityBudget& complexityBudget)
+void preflightNormalizedBoolean(ComplexityBudget& complexityBudget,
+                                const Paths64& paths)
 {
-    constexpr size_t MIN_PARALLEL_GROUPS = 64;
-    constexpr size_t MAX_WORKERS = 4;
-    constexpr double MAX_SAFE_OFFSET_GRID = 1.0e14;
-    const double deltaGrid = closeDeltaSourceUnits
-        * domain.source_to_mm / domain.grid_step_mm;
-    if(groupCount < MIN_PARALLEL_GROUPS
-            || closeDeltaSourceUnits <= 0.0
-            || !std::isfinite(deltaGrid)
-            || deltaGrid < 0.5
-            || deltaGrid > MAX_SAFE_OFFSET_GRID) {
-        std::vector<LegacyContourCloseResult> results;
-        results.reserve(groupCount);
-        for(size_t index = 0; index < groupCount; ++index) {
-            results.push_back(applyLegacyContourClose(
-                pathGroupAt(index), domain, closeDeltaSourceUnits,
-                checkMultiComponentCompatibility, complexityBudget));
-        }
-        return results;
-    }
-
-    std::vector<size_t> parallelIndices;
-    parallelIndices.reserve(groupCount);
-    std::vector<uint8_t> isParallelGroup(groupCount, uint8_t{0});
-    size_t parallelInputPointCount = 0;
-    size_t parallelCandidateReservation = 0;
-    for(size_t index = 0; index < groupCount; ++index) {
-        const auto& group = pathGroupAt(index);
-        if(group.size() != 1 || !isConvexRing(group.front())
-                || hasProvableMiterRoundTrip(
-                    group, deltaGrid, complexityBudget))
-            continue;
-        parallelIndices.push_back(index);
-        isParallelGroup[index] = uint8_t{1};
-        parallelInputPointCount = checkedSizeSum(
-            parallelInputPointCount, group.front().size());
-        parallelCandidateReservation = checkedSizeSum(
-            parallelCandidateReservation,
-            checkedSizeProduct(group.front().size(), size_t{8}));
-    }
-    if(parallelIndices.size() < MIN_PARALLEL_GROUPS) {
-        std::vector<LegacyContourCloseResult> results;
-        results.reserve(groupCount);
-        for(size_t index = 0; index < groupCount; ++index) {
-            results.push_back(applyLegacyContourClose(
-                pathGroupAt(index), domain, closeDeltaSourceUnits,
-                checkMultiComponentCompatibility, complexityBudget));
-        }
-        return results;
-    }
-
-    // The parallel class is deliberately limited to one convex closed ring.
-    // With Clipper's miter/square fallback, one offset emits at most two
-    // vertices per input vertex and remains one convex ring. The two passes
-    // therefore generate at most 2N + 4N points and two rings; the final XOR
-    // receives at most N + 4N input points. Reserve those conservative totals
-    // on the single document budget before any worker can allocate. Workers
-    // use private accounting only for local enforcement and never charge the
-    // global budget after allocation.
-    complexityBudget.consumeGeneratedPoints(
-        checkedSizeProduct(parallelInputPointCount, size_t{6}));
-    complexityBudget.consumeGeneratedRings(
-        checkedSizeProduct(parallelIndices.size(), size_t{2}));
-    complexityBudget.consumeBooleanInputPoints(
-        checkedSizeProduct(parallelInputPointCount, size_t{5}));
-    complexityBudget.consumeClipperIntersectionCandidates(
-        parallelCandidateReservation);
-    complexityBudget.consumeClipperOutputPoints(
-        checkedSizeProduct(parallelInputPointCount, size_t{5}));
-    complexityBudget.consumeClipperOutputRings(
-        checkedSizeProduct(parallelIndices.size(), size_t{4}));
-
-    const size_t hardwareWorkers = std::max(
-        size_t{2}, static_cast<size_t>(std::thread::hardware_concurrency()));
-    const size_t workerCount = std::min({
-        MAX_WORKERS,
-        hardwareWorkers,
-        parallelIndices.size(),
-    });
-    std::vector<LegacyContourCloseResult> results(groupCount);
-    std::atomic<size_t> nextParallelIndex{0};
-    std::atomic<bool> failed{false};
-    std::exception_ptr firstException;
-    std::mutex exceptionMutex;
-    auto recordException = [&]() {
-        std::lock_guard<std::mutex> lock(exceptionMutex);
-        if(firstException == nullptr)
-            firstException = std::current_exception();
-        failed.store(true, std::memory_order_relaxed);
-    };
-    auto worker = [&]() {
-        ComplexityBudget localBudget;
-        while(!failed.load(std::memory_order_relaxed)) {
-            const size_t parallelIndex = nextParallelIndex.fetch_add(
-                1, std::memory_order_relaxed);
-            if(parallelIndex >= parallelIndices.size())
-                return;
-            const size_t index = parallelIndices[parallelIndex];
-            try {
-                results[index] = applyLegacyContourClose(
-                    pathGroupAt(index), domain, closeDeltaSourceUnits,
-                    checkMultiComponentCompatibility, localBudget);
-            } catch(...) {
-                recordException();
-                return;
-            }
-        }
-    };
-
-    std::vector<std::thread> workers;
-    workers.reserve(workerCount);
-    try {
-        for(size_t index = 0; index < workerCount; ++index) {
-            const int64_t remaining =
-                g_threadLaunchFailureAfterForTesting.load(
-                    std::memory_order_relaxed);
-            if(remaining == 0) {
-                throw std::system_error(
-                    std::make_error_code(
-                        std::errc::resource_unavailable_try_again),
-                    "injected thread launch failure");
-            }
-            if(remaining > 0) {
-                g_threadLaunchFailureAfterForTesting.fetch_sub(
-                    1, std::memory_order_relaxed);
-            }
-            workers.emplace_back(worker);
-        }
-    } catch(...) {
-        failed.store(true, std::memory_order_relaxed);
-        for(auto& thread : workers) {
-            if(thread.joinable())
-                thread.join();
-        }
-        throw;
-    }
-
-    // The main thread handles every broader geometry class serially while
-    // convex workers run. Only this thread touches the remaining global
-    // budget, so accounting stays race-free and document-wide.
-    try {
-        for(size_t index = 0; index < groupCount; ++index) {
-            if(failed.load(std::memory_order_relaxed))
-                break;
-            if(isParallelGroup[index] != 0)
-                continue;
-            results[index] = applyLegacyContourClose(
-                pathGroupAt(index), domain, closeDeltaSourceUnits,
-                checkMultiComponentCompatibility, complexityBudget);
-        }
-    } catch(...) {
-        recordException();
-    }
-    for(auto& thread : workers)
-        thread.join();
-    if(firstException != nullptr)
-        std::rethrow_exception(firstException);
-    return results;
+    consumeBooleanInputs(complexityBudget, paths);
+    // A single normalized operand has no boundary intersections left to
+    // discover. Charging another full segment-index pass here duplicated the
+    // work already completed by Clipper and rejected large valid documents.
+    preflightClipperOutput(paths, nullptr, 0, complexityBudget);
 }
 
-void applyLegacyContourNormalization(
-    std::vector<PaintGeometry>& paints,
-    const PhysicalDomain& domain,
-    double closeDeltaSourceUnits,
-    double minimumPaintAreaMm2,
-    double nativeBoundaryErrorSourceUnits,
-    double legacySimplifyToleranceSourceUnits,
-    bool& identity,
-    bool& compatible,
-    bool& areaFilterIdentity,
-    bool& areaFilterCompatible,
-    ComplexityBudget& complexityBudget)
+void preflightNormalizedBoolean(ComplexityBudget& complexityBudget,
+                                const Paths64& first,
+                                const Paths64& second)
 {
-    auto normalizedGroups = applyLegacyContourCloseMany(
-        paints.size(),
-        [&paints](size_t index) -> const Paths64& {
-            return paints[index].paths;
-        },
-        domain, closeDeltaSourceUnits, true, complexityBudget);
-    std::vector<PaintGeometry> retained;
-    retained.reserve(paints.size());
-    for(size_t index = 0; index < paints.size(); ++index) {
-        auto& paint = paints[index];
-        bool dropForMinimumArea = false;
-        auto& normalized = normalizedGroups[index];
-        identity = identity && normalized.identity;
-        compatible = compatible && normalized.compatible;
-        paint.paths = std::move(normalized.paths);
-        if(minimumPaintAreaMm2 > 0.0 && !paint.paths.empty()) {
-            const double minimumPaintAreaSourceUnitsSquared =
-                minimumPaintAreaMm2
-                / (domain.source_to_mm * domain.source_to_mm);
-            if(!std::isfinite(minimumPaintAreaSourceUnitsSquared)
-                    || !areaThresholdClassificationIsCertain(
-                        pathViews(paint.paths),
-                        domain.grid_step_mm / domain.source_to_mm,
-                        minimumPaintAreaSourceUnitsSquared,
-                        nativeBoundaryErrorSourceUnits,
-                        legacySimplifyToleranceSourceUnits,
-                        false,
-                        true)) {
-                areaFilterCompatible = false;
-            }
-            const double areaMm2 = std::abs(Clipper2Lib::Area(paint.paths))
-                * domain.grid_step_mm * domain.grid_step_mm;
-            if(!std::isfinite(areaMm2))
-                throw std::range_error("legacy_area_filter_overflow");
-            if(areaMm2 <= minimumPaintAreaMm2) {
-                areaFilterIdentity = false;
-                dropForMinimumArea = true;
-            }
-        }
-        paint.bounds = pathsBounds(paint.paths);
-        if(!dropForMinimumArea)
-            retained.push_back(std::move(paint));
-    }
-    paints = std::move(retained);
-}
-
-void applyLegacyContourNormalization(
-    std::vector<Paths64>& geometries,
-    const PhysicalDomain& domain,
-    double closeDeltaSourceUnits,
-    bool& identity,
-    bool& compatible,
-    ComplexityBudget& complexityBudget)
-{
-    auto normalizedGroups = applyLegacyContourCloseMany(
-        geometries.size(),
-        [&geometries](size_t index) -> const Paths64& {
-            return geometries[index];
-        },
-        domain, closeDeltaSourceUnits, false, complexityBudget);
-    for(size_t index = 0; index < geometries.size(); ++index) {
-        auto& normalized = normalizedGroups[index];
-        identity = identity && normalized.identity;
-        // These paths are outputs of the Boolean compositor, just as the
-        // legacy post-clip inputs are outputs of GEOS difference. Their ring
-        // orientation is canonical rather than inherited from source
-        // subpaths, so the source-orientation miter-close hazard does not
-        // apply here. Raw paints are checked by the overload above.
-        (void)compatible;
-        geometries[index] = std::move(normalized.paths);
-    }
+    consumeBooleanInputs(complexityBudget, first, &second);
+    // Cross-product charging turns many small, sparse Boolean operations into
+    // a false document-limit failure. The bounded intersection helper charges
+    // the actual direct/index work and candidates before Clipper runs.
+    const size_t candidates = requireBoundedClipperIntersections(
+        first, second, complexityBudget);
+    preflightClipperOutput(
+        first, &second, candidates, complexityBudget);
 }
 
 class PackedBoundsIndex {
@@ -826,23 +248,25 @@ public:
     }
 
     std::vector<size_t> laterOverlaps(
-        size_t paintIndex,
-        size_t maxMatches = std::numeric_limits<size_t>::max()) const
+        size_t paintIndex, ComplexityBudget& complexityBudget) const
     {
         std::vector<size_t> matches;
-        if(m_nodes.empty() || !m_paints[paintIndex].bounds.valid
-                || maxMatches == 0)
+        if(m_nodes.empty() || !m_paints[paintIndex].bounds.valid)
             return matches;
         queryNode(
             0, paintIndex, m_paints[paintIndex].bounds,
-            maxMatches, matches);
-        std::sort(matches.begin(), matches.end());
+            complexityBudget, matches);
         return matches;
     }
 
-    bool hasLaterOverlap(size_t paintIndex) const
+    bool hasLaterOverlap(
+        size_t paintIndex, ComplexityBudget& complexityBudget) const
     {
-        return !laterOverlaps(paintIndex, 1).empty();
+        if(m_nodes.empty() || !m_paints[paintIndex].bounds.valid)
+            return false;
+        return queryAnyNode(
+            0, paintIndex, m_paints[paintIndex].bounds,
+            complexityBudget);
     }
 
 private:
@@ -905,35 +329,222 @@ private:
     }
 
     void queryNode(size_t nodeIndex, size_t paintIndex,
-                   const GridBounds& query, size_t maxMatches,
+                   const GridBounds& query,
+                   ComplexityBudget& complexityBudget,
                    std::vector<size_t>& matches) const
     {
-        if(matches.size() >= maxMatches)
-            return;
         const auto& node = m_nodes[nodeIndex];
         if(!node.bounds.intersects(query))
             return;
         if(node.leaf) {
-            for(size_t offset = node.begin;
-                    offset < node.end && matches.size() < maxMatches;
-                    ++offset) {
+            for(size_t offset = node.begin; offset < node.end; ++offset) {
                 const size_t candidate = m_indices[offset];
-                if(candidate > paintIndex
-                        && m_paints[candidate].bounds.intersects(query))
+                if(candidate <= paintIndex)
+                    continue;
+                complexityBudget.consumeCompositorBoundsCandidates();
+                if(m_paints[candidate].bounds.intersects(query))
                     matches.push_back(candidate);
             }
             return;
         }
         queryNode(
-            node.left, paintIndex, query, maxMatches, matches);
+            node.left, paintIndex, query, complexityBudget, matches);
         queryNode(
-            node.right, paintIndex, query, maxMatches, matches);
+            node.right, paintIndex, query, complexityBudget, matches);
+    }
+
+    bool queryAnyNode(size_t nodeIndex, size_t paintIndex,
+                      const GridBounds& query,
+                      ComplexityBudget& complexityBudget) const
+    {
+        const auto& node = m_nodes[nodeIndex];
+        if(!node.bounds.intersects(query))
+            return false;
+        if(node.leaf) {
+            for(size_t offset = node.begin; offset < node.end; ++offset) {
+                const size_t candidate = m_indices[offset];
+                if(candidate <= paintIndex)
+                    continue;
+                complexityBudget.consumeCompositorBoundsCandidates();
+                if(m_paints[candidate].bounds.intersects(query))
+                    return true;
+            }
+            return false;
+        }
+        return queryAnyNode(
+                   node.left, paintIndex, query, complexityBudget)
+            || queryAnyNode(
+                   node.right, paintIndex, query, complexityBudget);
     }
 
     const std::vector<PaintGeometry>& m_paints;
     std::vector<size_t> m_indices;
     std::vector<Node> m_nodes;
 };
+
+class PackedGridBoundsIndex {
+public:
+    explicit PackedGridBoundsIndex(std::vector<GridBounds> bounds)
+        : m_bounds(std::move(bounds))
+    {
+        m_indices.reserve(m_bounds.size());
+        for(size_t index = 0; index < m_bounds.size(); ++index) {
+            if(m_bounds[index].valid)
+                m_indices.push_back(index);
+        }
+        if(!m_indices.empty())
+            buildNode(0, m_indices.size());
+    }
+
+    bool intersects(const GridBounds& query,
+                    ComplexityBudget& complexityBudget) const
+    {
+        return !m_nodes.empty()
+            && queryNode(0, query, complexityBudget);
+    }
+
+    std::vector<size_t> matches(
+        const GridBounds& query,
+        ComplexityBudget& complexityBudget) const
+    {
+        std::vector<size_t> matches;
+        if(!m_nodes.empty())
+            queryMatches(0, query, complexityBudget, matches);
+        return matches;
+    }
+
+    std::vector<GridBounds> releaseBounds()
+    {
+        m_indices.clear();
+        m_nodes.clear();
+        return std::move(m_bounds);
+    }
+
+private:
+    static constexpr size_t LEAF_SIZE = 16;
+
+    struct Node {
+        GridBounds bounds;
+        size_t begin{0};
+        size_t end{0};
+        size_t left{0};
+        size_t right{0};
+        bool leaf{false};
+    };
+
+    size_t buildNode(size_t begin, size_t end)
+    {
+        const size_t nodeIndex = m_nodes.size();
+        m_nodes.emplace_back();
+        GridBounds bounds;
+        for(size_t offset = begin; offset < end; ++offset)
+            bounds.include(m_bounds[m_indices[offset]]);
+        m_nodes[nodeIndex].bounds = bounds;
+        m_nodes[nodeIndex].begin = begin;
+        m_nodes[nodeIndex].end = end;
+        if(end - begin <= LEAF_SIZE) {
+            m_nodes[nodeIndex].leaf = true;
+            return nodeIndex;
+        }
+
+        const auto width = static_cast<long double>(bounds.max_x)
+            - static_cast<long double>(bounds.min_x);
+        const auto height = static_cast<long double>(bounds.max_y)
+            - static_cast<long double>(bounds.min_y);
+        const bool splitX = width >= height;
+        std::sort(
+            m_indices.begin() + static_cast<std::ptrdiff_t>(begin),
+            m_indices.begin() + static_cast<std::ptrdiff_t>(end),
+            [&](size_t left, size_t right) {
+                const auto& leftBounds = m_bounds[left];
+                const auto& rightBounds = m_bounds[right];
+                const auto leftCenter = splitX
+                    ? static_cast<long double>(leftBounds.min_x)
+                        + static_cast<long double>(leftBounds.max_x)
+                    : static_cast<long double>(leftBounds.min_y)
+                        + static_cast<long double>(leftBounds.max_y);
+                const auto rightCenter = splitX
+                    ? static_cast<long double>(rightBounds.min_x)
+                        + static_cast<long double>(rightBounds.max_x)
+                    : static_cast<long double>(rightBounds.min_y)
+                        + static_cast<long double>(rightBounds.max_y);
+                return leftCenter == rightCenter
+                    ? left < right : leftCenter < rightCenter;
+            });
+        const size_t middle = begin + (end - begin) / 2;
+        const size_t left = buildNode(begin, middle);
+        const size_t right = buildNode(middle, end);
+        m_nodes[nodeIndex].left = left;
+        m_nodes[nodeIndex].right = right;
+        return nodeIndex;
+    }
+
+    bool queryNode(size_t nodeIndex, const GridBounds& query,
+                   ComplexityBudget& complexityBudget) const
+    {
+        const auto& node = m_nodes[nodeIndex];
+        if(!node.bounds.intersects(query))
+            return false;
+        if(node.leaf) {
+            for(size_t offset = node.begin; offset < node.end; ++offset) {
+                complexityBudget.consumeCompositorBoundsCandidates();
+                if(m_bounds[m_indices[offset]].intersects(query))
+                    return true;
+            }
+            return false;
+        }
+        return queryNode(node.left, query, complexityBudget)
+            || queryNode(node.right, query, complexityBudget);
+    }
+
+    void queryMatches(size_t nodeIndex, const GridBounds& query,
+                      ComplexityBudget& complexityBudget,
+                      std::vector<size_t>& matches) const
+    {
+        const auto& node = m_nodes[nodeIndex];
+        if(!node.bounds.intersects(query))
+            return;
+        if(node.leaf) {
+            for(size_t offset = node.begin; offset < node.end; ++offset) {
+                const size_t candidate = m_indices[offset];
+                complexityBudget.consumeCompositorBoundsCandidates();
+                if(m_bounds[candidate].intersects(query))
+                    matches.push_back(candidate);
+            }
+            return;
+        }
+        queryMatches(
+            node.left, query, complexityBudget, matches);
+        queryMatches(
+            node.right, query, complexityBudget, matches);
+    }
+
+    std::vector<GridBounds> m_bounds;
+    std::vector<size_t> m_indices;
+    std::vector<Node> m_nodes;
+};
+
+bool pathBoundsIntersectAcross(const Paths64& first,
+                               const Paths64& second,
+                               ComplexityBudget& complexityBudget)
+{
+    if(first.empty() || second.empty())
+        return false;
+    auto firstBounds = individualPathBounds(first);
+    auto secondBounds = individualPathBounds(second);
+    const auto* queries = &firstBounds;
+    auto* indexed = &secondBounds;
+    if(firstBounds.size() > secondBounds.size()) {
+        queries = &secondBounds;
+        indexed = &firstBounds;
+    }
+    const PackedGridBoundsIndex index(std::move(*indexed));
+    for(const auto& query : *queries) {
+        if(index.intersects(query, complexityBudget))
+            return true;
+    }
+    return false;
+}
 
 struct SourceBounds {
     double min_x{std::numeric_limits<double>::infinity()};
@@ -947,6 +558,13 @@ struct SourceBounds {
             && max_x > min_x && max_y > min_y;
     }
 
+    bool finiteExtent() const
+    {
+        return std::isfinite(min_x) && std::isfinite(min_y)
+            && std::isfinite(max_x) && std::isfinite(max_y)
+            && max_x >= min_x && max_y >= min_y;
+    }
+
     void include(const PointD& point)
     {
         min_x = std::min(min_x, point.x);
@@ -958,6 +576,14 @@ struct SourceBounds {
     void include(const SourceBounds& other)
     {
         if(!other.valid())
+            return;
+        include(PointD{other.min_x, other.min_y});
+        include(PointD{other.max_x, other.max_y});
+    }
+
+    void includeFiniteExtent(const SourceBounds& other)
+    {
+        if(!other.finiteExtent())
             return;
         include(PointD{other.min_x, other.min_y});
         include(PointD{other.max_x, other.max_y});
@@ -978,18 +604,12 @@ struct SourceBounds {
     }
 };
 
-class TopologyCollapseError : public std::runtime_error {
-public:
-    TopologyCollapseError()
-        : std::runtime_error("topology_collapse")
-    {}
-};
-
 class InputPrecisionError : public std::runtime_error {
 public:
-    InputPrecisionError()
-        : std::runtime_error("input_precision")
+    explicit InputPrecisionError(const char* detail = "input_precision")
+        : std::runtime_error(detail)
     {}
+
 };
 
 bool isPositiveFinite(double value)
@@ -997,7 +617,7 @@ bool isPositiveFinite(double value)
     return std::isfinite(value) && value > 0;
 }
 
-double maximumSingularValue(const lunasvg::Matrix& matrix)
+double maximumSingularValue(const lunasvg::PaintTransform& matrix)
 {
     const double aa = matrix.a * matrix.a + matrix.b * matrix.b;
     const double bb = matrix.c * matrix.c + matrix.d * matrix.d;
@@ -1007,7 +627,8 @@ double maximumSingularValue(const lunasvg::Matrix& matrix)
     return std::sqrt(std::max(0.0, (aa + bb + discriminant) * 0.5));
 }
 
-PointD transformPoint(const lunasvg::Matrix& matrix, const PointD& point)
+PointD transformPoint(const lunasvg::PaintTransform& matrix,
+                      const PointD& point)
 {
     return {
         matrix.a * point.x + matrix.c * point.y + matrix.e,
@@ -1028,7 +649,18 @@ double floatUlp(float value)
         std::abs(static_cast<double>(value) - downward));
 }
 
-bool isIdentityMatrix(const lunasvg::Matrix& matrix)
+double storedDoubleUlp(double value)
+{
+    if(!std::isfinite(value))
+        return std::numeric_limits<double>::infinity();
+    const double upward = std::nextafter(
+        value, std::numeric_limits<double>::infinity());
+    const double downward = std::nextafter(
+        value, -std::numeric_limits<double>::infinity());
+    return std::max(upward - value, value - downward);
+}
+
+bool isIdentityMatrix(const lunasvg::PaintTransform& matrix)
 {
     return matrix.a == 1.0f && matrix.b == 0.0f
         && matrix.c == 0.0f && matrix.d == 1.0f
@@ -1040,6 +672,24 @@ struct CoordinatePrecisionError {
     double y{0};
 };
 
+CoordinatePrecisionError pathInputPrecisionError(
+    const lunasvg::PaintCommand& command)
+{
+    const bool hasAxisMetadata =
+        command.path_input_precision_error_x > 0.0
+        || command.path_input_precision_error_y > 0.0;
+    if(hasAxisMetadata) {
+        return {
+            command.path_input_precision_error_x,
+            command.path_input_precision_error_y,
+        };
+    }
+    return {
+        command.path_input_precision_error,
+        command.path_input_precision_error,
+    };
+}
+
 struct StrokePathMetrics {
     double maximum_length{0};
     double maximum_length_error{0};
@@ -1049,13 +699,167 @@ double localPointPrecisionMagnitude(
     const lunasvg::PaintCommand& command,
     const PointD& point)
 {
-    const double operationUlps = 4.0
-        + static_cast<double>(command.relative_path_operation_count);
+    constexpr double operationUlps = 4.0;
+    const auto inputError = pathInputPrecisionError(command);
     return std::hypot(
-        floatUlp(static_cast<float>(point.x)) * operationUlps
-            + command.path_input_precision_error,
-        floatUlp(static_cast<float>(point.y)) * operationUlps
-            + command.path_input_precision_error);
+        (command.path_coordinates_exact
+                ? 0.0
+                : floatUlp(static_cast<float>(point.x)) * operationUlps)
+            + inputError.x,
+        (command.path_coordinates_exact
+                ? 0.0
+                : floatUlp(static_cast<float>(point.y)) * operationUlps)
+            + inputError.y);
+}
+
+struct StrokePrecisionSegment {
+    PointD start;
+    PointD end;
+    PointD start_tangent_point;
+    PointD end_tangent_point;
+};
+
+bool distinctPoints(const PointD& first, const PointD& second)
+{
+    return first.x != second.x || first.y != second.y;
+}
+
+double strokeInputPrecisionAmplification(
+    const lunasvg::PaintCommand& command)
+{
+    constexpr double POSITION_SAFETY = 16.0;
+    const double radius = std::abs(
+        static_cast<double>(command.stroke.width)) * 0.5;
+    const double limitError = storedDoubleUlp(
+        command.stroke.miter_limit) * 4.0;
+    const double maximumLimit = std::max(
+        1.0, static_cast<double>(command.stroke.miter_limit) + limitError);
+    const double threshold = maximumLimit <= 1.0
+        ? 1.0 : 2.0 / (maximumLimit * maximumLimit) - 1.0;
+    double amplification = 1.0;
+    std::vector<StrokePrecisionSegment> segments;
+    PointD current;
+    PointD subpathStart;
+    bool hasCurrentPoint = false;
+    size_t pointIndex = 0;
+
+    const auto includeSegmentDirection = [&](const StrokePrecisionSegment& segment) {
+        const double startLength = std::hypot(
+            segment.start_tangent_point.x - segment.start.x,
+            segment.start_tangent_point.y - segment.start.y);
+        const double endLength = std::hypot(
+            segment.end.x - segment.end_tangent_point.x,
+            segment.end.y - segment.end_tangent_point.y);
+        const double minimumLength = std::min(startLength, endLength);
+        if(!(std::isfinite(minimumLength) && minimumLength > 0.0))
+            return;
+        const double candidate = 1.0
+            + POSITION_SAFETY * radius / minimumLength;
+        if(!std::isfinite(candidate))
+            throw InputPrecisionError("stroke_direction_precision");
+        amplification = std::max(amplification, candidate);
+    };
+    const auto includeJoin = [&](const StrokePrecisionSegment& incoming,
+                                 const StrokePrecisionSegment& outgoing) {
+        if(command.stroke.line_join != lunasvg::PaintLineJoin::Miter)
+            return;
+        const double incomingX = incoming.end.x
+            - incoming.end_tangent_point.x;
+        const double incomingY = incoming.end.y
+            - incoming.end_tangent_point.y;
+        const double outgoingX = outgoing.start_tangent_point.x
+            - outgoing.start.x;
+        const double outgoingY = outgoing.start_tangent_point.y
+            - outgoing.start.y;
+        const double incomingLength = std::hypot(incomingX, incomingY);
+        const double outgoingLength = std::hypot(outgoingX, outgoingY);
+        if(!(std::isfinite(incomingLength) && incomingLength > 0.0)
+                || !(std::isfinite(outgoingLength)
+                    && outgoingLength > 0.0))
+            return;
+        const double cosine = std::clamp(
+            (incomingX * outgoingX + incomingY * outgoingY)
+                / (incomingLength * outgoingLength),
+            -1.0, 1.0);
+        if(cosine <= threshold)
+            return;
+        const double denominator = 1.0 + cosine;
+        if(!(denominator > 0.0))
+            throw InputPrecisionError("stroke_miter_precision");
+        const double joinRatio = std::min(
+            maximumLimit, std::sqrt(2.0 / denominator));
+        const double minimumLength = std::min(
+            incomingLength, outgoingLength);
+        const double candidate = 1.0
+            + POSITION_SAFETY * radius * joinRatio * joinRatio
+                / minimumLength;
+        if(!std::isfinite(candidate))
+            throw InputPrecisionError("stroke_miter_precision");
+        amplification = std::max(amplification, candidate);
+    };
+    const auto finishSubpath = [&](bool closed) {
+        for(const auto& segment : segments)
+            includeSegmentDirection(segment);
+        for(size_t index = 1; index < segments.size(); ++index)
+            includeJoin(segments[index - 1], segments[index]);
+        if(closed && segments.size() > 1)
+            includeJoin(segments.back(), segments.front());
+        segments.clear();
+    };
+    const auto appendLine = [&](const PointD& end) {
+        if(!hasCurrentPoint)
+            return;
+        if(distinctPoints(current, end)) {
+            segments.push_back({current, end, end, current});
+        }
+        current = end;
+    };
+
+    for(const auto verb : command.path_verbs) {
+        switch(verb) {
+        case lunasvg::PaintPathVerb::MoveTo: {
+            finishSubpath(false);
+            const auto& point = command.path_points.at(pointIndex++);
+            current = {point.x, point.y};
+            subpathStart = current;
+            hasCurrentPoint = true;
+            break;
+        }
+        case lunasvg::PaintPathVerb::LineTo: {
+            const auto& point = command.path_points.at(pointIndex++);
+            appendLine({point.x, point.y});
+            break;
+        }
+        case lunasvg::PaintPathVerb::CubicTo: {
+            const auto& first = command.path_points.at(pointIndex++);
+            const auto& second = command.path_points.at(pointIndex++);
+            const auto& last = command.path_points.at(pointIndex++);
+            const PointD control1{first.x, first.y};
+            const PointD control2{second.x, second.y};
+            const PointD end{last.x, last.y};
+            if(hasCurrentPoint && distinctPoints(current, end)) {
+                PointD startTangent = distinctPoints(current, control1)
+                    ? control1 : (distinctPoints(current, control2)
+                        ? control2 : end);
+                PointD endTangent = distinctPoints(end, control2)
+                    ? control2 : (distinctPoints(end, control1)
+                        ? control1 : current);
+                segments.push_back({
+                    current, end, startTangent, endTangent,
+                });
+            }
+            current = end;
+            break;
+        }
+        case lunasvg::PaintPathVerb::Close:
+            appendLine(subpathStart);
+            finishSubpath(true);
+            current = subpathStart;
+            break;
+        }
+    }
+    finishSubpath(false);
+    return amplification;
 }
 
 StrokePathMetrics strokePathMetrics(const lunasvg::PaintCommand& command)
@@ -1150,9 +954,10 @@ double strokeDashPrecisionError(const lunasvg::PaintCommand& command)
 
     double patternLength = 0;
     double patternLengthError = 0;
-    for(const float value : command.stroke.dash_array) {
+    for(const double value : command.stroke.dash_array) {
         patternLength += std::abs(static_cast<double>(value));
-        patternLengthError += floatUlp(value) * STROKE_OPERATION_ULPS;
+        patternLengthError += storedDoubleUlp(value)
+            * STROKE_OPERATION_ULPS;
     }
     if(command.stroke.dash_array.size() % 2 == 1) {
         patternLength *= 2.0;
@@ -1162,7 +967,7 @@ double strokeDashPrecisionError(const lunasvg::PaintCommand& command)
     if(!isPositiveFinite(minimumPatternLength))
         return std::numeric_limits<double>::infinity();
 
-    const double offsetError = floatUlp(command.stroke.dash_offset)
+    const double offsetError = storedDoubleUlp(command.stroke.dash_offset)
         * STROKE_OPERATION_ULPS;
     const auto pathMetrics = strokePathMetrics(command);
     const double offsetCycles = std::ceil(
@@ -1184,34 +989,42 @@ CoordinatePrecisionError transformedPointPrecisionError(
     const PointD& point,
     bool includeStoredCoordinatePrecision = true)
 {
-    const double pathOperationUlps = 4.0
-        + static_cast<double>(command.relative_path_operation_count);
+    constexpr double pathOperationUlps = 4.0;
     const double transformOperationUlps = 4.0 * std::max(
         1.0, static_cast<double>(command.transform_operation_count));
     const auto& matrix = command.transform;
+    const auto inputError = pathInputPrecisionError(command);
     const double pointErrorX = (includeStoredCoordinatePrecision
+            && !command.path_coordinates_exact
             ? floatUlp(static_cast<float>(point.x)) * pathOperationUlps
-            : 0.0) + command.path_input_precision_error;
+            : 0.0) + inputError.x;
     const double pointErrorY = (includeStoredCoordinatePrecision
+            && !command.path_coordinates_exact
             ? floatUlp(static_cast<float>(point.y)) * pathOperationUlps
-            : 0.0) + command.path_input_precision_error;
+            : 0.0) + inputError.y;
 
     const double errorA = (includeStoredCoordinatePrecision
+            && !command.transform_coordinates_exact
             ? floatUlp(matrix.a) * transformOperationUlps : 0.0)
         + command.transform_linear_precision_error;
     const double errorB = (includeStoredCoordinatePrecision
+            && !command.transform_coordinates_exact
             ? floatUlp(matrix.b) * transformOperationUlps : 0.0)
         + command.transform_linear_precision_error;
     const double errorC = (includeStoredCoordinatePrecision
+            && !command.transform_coordinates_exact
             ? floatUlp(matrix.c) * transformOperationUlps : 0.0)
         + command.transform_linear_precision_error;
     const double errorD = (includeStoredCoordinatePrecision
+            && !command.transform_coordinates_exact
             ? floatUlp(matrix.d) * transformOperationUlps : 0.0)
         + command.transform_linear_precision_error;
     const double errorE = (includeStoredCoordinatePrecision
+            && !command.transform_coordinates_exact
             ? floatUlp(matrix.e) * transformOperationUlps : 0.0)
         + command.transform_translation_precision_error;
     const double errorF = (includeStoredCoordinatePrecision
+            && !command.transform_coordinates_exact
             ? floatUlp(matrix.f) * transformOperationUlps : 0.0)
         + command.transform_translation_precision_error;
     const double errorX = std::abs(static_cast<double>(matrix.a))
@@ -1334,22 +1147,59 @@ CoordinatePrecisionError commandPrecisionError(
             command, includeStoredCoordinatePrecision)
         : CoordinatePrecisionError{};
     if(command.kind == lunasvg::PaintCommandKind::Stroke) {
+        if(command.stroke_direction_input_ambiguous
+                || (command.isolated_stroke_direction_input_ambiguous
+                    && (command.stroke.line_cap
+                            == lunasvg::PaintLineCap::Square
+                        || (command.stroke.line_cap
+                                == lunasvg::PaintLineCap::Round
+                            && !command.stroke.dash_array.empty()))))
+            throw InputPrecisionError("stroke_direction_precision");
+        double localPointErrorX = 0.0;
+        double localPointErrorY = 0.0;
+        const auto inputError = pathInputPrecisionError(command);
         for(const auto& point : command.path_points) {
             const auto pointError = transformedPointPrecisionError(
                 command, {point.x, point.y},
                 includeStoredCoordinatePrecision);
             error.x = std::max(error.x, pointError.x);
             error.y = std::max(error.y, pointError.y);
+            localPointErrorX = std::max(
+                localPointErrorX,
+                (includeStoredCoordinatePrecision
+                    && !command.path_coordinates_exact
+                    ? floatUlp(point.x) * STROKE_OPERATION_ULPS : 0.0)
+                    + inputError.x);
+            localPointErrorY = std::max(
+                localPointErrorY,
+                (includeStoredCoordinatePrecision
+                    && !command.path_coordinates_exact
+                    ? floatUlp(point.y) * STROKE_OPERATION_ULPS : 0.0)
+                    + inputError.y);
         }
+        const double inputAmplification =
+            strokeInputPrecisionAmplification(command);
+        const double additionalLocalErrorX = localPointErrorX
+            * (inputAmplification - 1.0);
+        const double additionalLocalErrorY = localPointErrorY
+            * (inputAmplification - 1.0);
+        error.x += std::abs(static_cast<double>(command.transform.a))
+                * additionalLocalErrorX
+            + std::abs(static_cast<double>(command.transform.c))
+                * additionalLocalErrorY;
+        error.y += std::abs(static_cast<double>(command.transform.b))
+                * additionalLocalErrorX
+            + std::abs(static_cast<double>(command.transform.d))
+                * additionalLocalErrorY;
     }
     if(command.kind == lunasvg::PaintCommandKind::Stroke) {
-        const double widthError = floatUlp(command.stroke.width)
+        const double widthError = storedDoubleUlp(command.stroke.width)
             * STROKE_OPERATION_ULPS;
         double expansionRatio = command.stroke.line_cap
                 == lunasvg::PaintLineCap::Square
             ? std::sqrt(2.0) : 1.0;
         if(command.stroke.line_join == lunasvg::PaintLineJoin::Miter) {
-            const double miterLimitError = floatUlp(
+            const double miterLimitError = storedDoubleUlp(
                 command.stroke.miter_limit) * STROKE_OPERATION_ULPS;
             expansionRatio = std::max(
                 expansionRatio,
@@ -1373,23 +1223,70 @@ CoordinatePrecisionError commandPrecisionError(
                 (std::abs(static_cast<double>(command.stroke.width)) * 0.5
                     + widthError * 0.5) * expansionRatio
                 + dashError;
-            const double errorA = floatUlp(command.transform.a)
-                * transformOperationUlps
+            const double errorA = (command.transform_coordinates_exact
+                    ? 0.0 : floatUlp(command.transform.a)
+                        * transformOperationUlps)
                 + command.transform_linear_precision_error;
-            const double errorB = floatUlp(command.transform.b)
-                * transformOperationUlps
+            const double errorB = (command.transform_coordinates_exact
+                    ? 0.0 : floatUlp(command.transform.b)
+                        * transformOperationUlps)
                 + command.transform_linear_precision_error;
-            const double errorC = floatUlp(command.transform.c)
-                * transformOperationUlps
+            const double errorC = (command.transform_coordinates_exact
+                    ? 0.0 : floatUlp(command.transform.c)
+                        * transformOperationUlps)
                 + command.transform_linear_precision_error;
-            const double errorD = floatUlp(command.transform.d)
-                * transformOperationUlps
+            const double errorD = (command.transform_coordinates_exact
+                    ? 0.0 : floatUlp(command.transform.d)
+                        * transformOperationUlps)
                 + command.transform_linear_precision_error;
             error.x += localExpansion * (errorA + errorC);
             error.y += localExpansion * (errorB + errorD);
         }
     }
+    const double loweringError = command.path_lowering_precision_error;
+    if(loweringError > 0.0) {
+        error.x += loweringError * std::hypot(
+            static_cast<double>(command.transform.a),
+            static_cast<double>(command.transform.c));
+        error.y += loweringError * std::hypot(
+            static_cast<double>(command.transform.b),
+            static_cast<double>(command.transform.d));
+    }
     return error;
+}
+
+lunasvg::PaintCommand nonScalingStrokeGeometryCommand(
+    const lunasvg::PaintCommand& command)
+{
+    auto transformed = command;
+    CoordinatePrecisionError maximumInputError;
+    for(size_t index = 0; index < command.path_points.size(); ++index) {
+        const auto& sourcePoint = command.path_points[index];
+        const PointD source{sourcePoint.x, sourcePoint.y};
+        const auto point = transformPoint(command.transform, source);
+        const auto error = transformedPointPrecisionError(command, source);
+        maximumInputError.x = std::max(maximumInputError.x, error.x);
+        maximumInputError.y = std::max(maximumInputError.y, error.y);
+        transformed.path_points[index] = {point.x, point.y};
+    }
+    transformed.transform = {};
+    transformed.transform_coordinates_exact = true;
+    transformed.transform_operation_count = 0;
+    transformed.transform_linear_precision_error = 0.0;
+    transformed.transform_translation_precision_error = 0.0;
+    transformed.path_input_precision_error = std::hypot(
+        maximumInputError.x, maximumInputError.y);
+    transformed.path_input_precision_error_x = maximumInputError.x;
+    transformed.path_input_precision_error_y = maximumInputError.y;
+    transformed.path_lowering_precision_error =
+        command.path_lowering_precision_error
+        * maximumSingularValue(command.transform);
+    transformed.path_coordinates_exact = command.path_coordinates_exact
+        && command.transform_coordinates_exact
+        && maximumInputError.x == 0.0
+        && maximumInputError.y == 0.0;
+    transformed.non_scaling_stroke = false;
+    return transformed;
 }
 
 double maximumInputPrecisionErrorSource(
@@ -1409,9 +1306,18 @@ double maximumInputPrecisionErrorSource(
                 && command.kind != lunasvg::PaintCommandKind::Stroke
                 && command.kind != lunasvg::PaintCommandKind::ClipBegin)
             continue;
-        const auto error = commandPrecisionError(
-            command, includeStoredCoordinatePrecision);
-        maximumError = std::max({maximumError, error.x, error.y});
+        const auto error = command.kind == lunasvg::PaintCommandKind::Stroke
+                && command.non_scaling_stroke
+            ? commandPrecisionError(
+                nonScalingStrokeGeometryCommand(command),
+                includeStoredCoordinatePrecision)
+            : commandPrecisionError(
+                command, includeStoredCoordinatePrecision);
+        // A slanted edge projects both coordinate errors onto its normal.
+        // Reserve their Euclidean envelope here so the later flattening
+        // budget can use only the genuinely remaining physical tolerance.
+        maximumError = std::max(
+            maximumError, std::hypot(error.x, error.y));
     }
     return maximumError;
 }
@@ -1420,62 +1326,46 @@ void requireFiniteRecording(
     const std::vector<lunasvg::PaintCommand>& commands,
     const lunasvg::Box& viewport)
 {
-    const auto finiteMatrix = [](const lunasvg::Matrix& matrix) {
+    const auto finiteMatrix = [](const lunasvg::PaintTransform& matrix) {
         return std::isfinite(matrix.a) && std::isfinite(matrix.b)
             && std::isfinite(matrix.c) && std::isfinite(matrix.d)
             && std::isfinite(matrix.e) && std::isfinite(matrix.f);
     };
     if(!std::isfinite(viewport.x) || !std::isfinite(viewport.y)
             || !std::isfinite(viewport.w) || !std::isfinite(viewport.h))
-        throw InputPrecisionError();
+        throw InputPrecisionError("nonfinite_viewport");
     for(const auto& command : commands) {
         if(!finiteMatrix(command.transform)
                 || !std::isfinite(command.path_input_precision_error)
                 || command.path_input_precision_error < 0
+                || !std::isfinite(command.path_input_precision_error_x)
+                || command.path_input_precision_error_x < 0
+                || !std::isfinite(command.path_input_precision_error_y)
+                || command.path_input_precision_error_y < 0
+                || !std::isfinite(command.path_lowering_precision_error)
+                || command.path_lowering_precision_error < 0
+                || !std::isfinite(command.source_fill_area_upper_bound)
+                || command.source_fill_area_upper_bound < 0
                 || !std::isfinite(command.transform_linear_precision_error)
                 || command.transform_linear_precision_error < 0
                 || !std::isfinite(
                     command.transform_translation_precision_error)
                 || command.transform_translation_precision_error < 0)
-            throw InputPrecisionError();
+            throw InputPrecisionError("nonfinite_command_metadata");
         for(const auto& point : command.path_points) {
             if(!std::isfinite(point.x) || !std::isfinite(point.y))
-                throw InputPrecisionError();
+                throw InputPrecisionError("nonfinite_path_point");
         }
         if(command.kind != lunasvg::PaintCommandKind::Stroke)
             continue;
         if(!std::isfinite(command.stroke.width)
                 || !std::isfinite(command.stroke.miter_limit)
                 || !std::isfinite(command.stroke.dash_offset))
-            throw InputPrecisionError();
-        for(const float dashValue : command.stroke.dash_array) {
+            throw InputPrecisionError("nonfinite_stroke_metadata");
+        for(const double dashValue : command.stroke.dash_array) {
             if(!std::isfinite(dashValue))
-                throw InputPrecisionError();
+                throw InputPrecisionError("nonfinite_dash_value");
         }
-    }
-}
-
-void requireBoundedRecording(
-    const std::vector<lunasvg::PaintCommand>& commands)
-{
-    constexpr size_t MAX_RECORDED_COMMANDS = 250'000;
-    constexpr size_t MAX_RECORDED_VERBS = 4'000'000;
-    constexpr size_t MAX_RECORDED_POINTS = 8'000'000;
-    constexpr size_t MAX_RECORDED_DASH_VALUES = 1'000'000;
-    if(commands.size() > MAX_RECORDED_COMMANDS)
-        throw ComplexityLimitError();
-    size_t verbs = 0;
-    size_t points = 0;
-    size_t dashValues = 0;
-    for(const auto& command : commands) {
-        verbs = checkedSizeSum(verbs, command.path_verbs.size());
-        points = checkedSizeSum(points, command.path_points.size());
-        dashValues = checkedSizeSum(
-            dashValues, command.stroke.dash_array.size());
-        if(verbs > MAX_RECORDED_VERBS
-                || points > MAX_RECORDED_POINTS
-                || dashValues > MAX_RECORDED_DASH_VALUES)
-            throw ComplexityLimitError();
     }
 }
 
@@ -1550,8 +1440,11 @@ SourceBounds exactFillBounds(
     std::vector<SourceBounds>* collectedSubpathBounds = nullptr)
 {
     SourceBounds bounds;
+    const bool strokeCommand =
+        command.kind == lunasvg::PaintCommandKind::Stroke;
     if(command.kind == lunasvg::PaintCommandKind::Fill
-            || command.kind == lunasvg::PaintCommandKind::ClipBegin) {
+            || command.kind == lunasvg::PaintCommandKind::ClipBegin
+            || strokeCommand) {
         size_t pointIndex = 0;
         PointD current;
         PointD subpathStart;
@@ -1584,8 +1477,12 @@ SourceBounds exactFillBounds(
                     }
                 }
             }
-            if(hasNonCollinearPoints) {
-                bounds.include(subpathBounds);
+            if((strokeCommand && !supportPoints.empty())
+                    || hasNonCollinearPoints) {
+                if(strokeCommand)
+                    bounds.includeFiniteExtent(subpathBounds);
+                else
+                    bounds.include(subpathBounds);
                 if(collectedSubpathBounds != nullptr)
                     collectedSubpathBounds->push_back(subpathBounds);
             }
@@ -1668,37 +1565,79 @@ SourceBounds exactFillBounds(
 SourceBounds exactPaintBounds(const lunasvg::PaintCommand& command,
                               ComplexityBudget& complexityBudget)
 {
-    auto bounds = exactFillBounds(command);
+    const auto nonScalingCommand = command.kind
+                == lunasvg::PaintCommandKind::Stroke
+            && command.non_scaling_stroke
+        ? std::optional<lunasvg::PaintCommand>(
+            nonScalingStrokeGeometryCommand(command))
+        : std::nullopt;
+    const auto& geometryCommand = nonScalingCommand
+        ? *nonScalingCommand : command;
+    auto bounds = exactFillBounds(geometryCommand);
     if(command.kind == lunasvg::PaintCommandKind::Stroke) {
-        const double singularValue = maximumSingularValue(command.transform);
-        if(!isPositiveFinite(singularValue))
-            return bounds;
-        double magnitude = std::abs(
-            static_cast<double>(command.stroke.width));
-        for(const auto& point : command.path_points) {
-            magnitude = std::max(magnitude, std::abs(static_cast<double>(point.x)));
-            magnitude = std::max(magnitude, std::abs(static_cast<double>(point.y)));
-        }
-        if(!isPositiveFinite(magnitude))
-            return bounds;
-        // This sizing replay runs before source units have been mapped to
-        // millimetres.  Its precision therefore has to scale with the input;
-        // an absolute source-unit floor would erase otherwise valid artwork
-        // expressed in very small user units.
-        const double sourcePrecision = magnitude * 1.0e-10;
-        const double localGridStep = std::max(
-            sourcePrecision * std::sqrt(2.0) / singularValue,
-            magnitude / 1.0e14);
-        const double localFlattenTolerance = std::max(
-            sourcePrecision / singularValue, localGridStep);
-        for(const auto& ring : expandStrokeLocal(
-                command, localFlattenTolerance, localGridStep,
-                complexityBudget)) {
-            for(const auto& point : ring) {
-                bounds.include(transformPoint(command.transform,
-                                              {point.x, point.y}));
+        const bool hasDrawSegment = std::any_of(
+            geometryCommand.path_verbs.begin(),
+            geometryCommand.path_verbs.end(),
+            [](lunasvg::PaintPathVerb verb) {
+                return verb != lunasvg::PaintPathVerb::MoveTo;
+            });
+        if(hasDrawSegment && bounds.finiteExtent()
+                && geometryCommand.stroke.line_join
+                    == lunasvg::PaintLineJoin::Round
+                && geometryCommand.stroke.line_cap
+                    == lunasvg::PaintLineCap::Round) {
+            const double radius = std::abs(
+                static_cast<double>(geometryCommand.stroke.width)) * 0.5;
+            const auto& matrix = geometryCommand.transform;
+            const double paddingX = radius * std::hypot(
+                static_cast<double>(matrix.a),
+                static_cast<double>(matrix.c));
+            const double paddingY = radius * std::hypot(
+                static_cast<double>(matrix.b),
+                static_cast<double>(matrix.d));
+            if(std::isfinite(paddingX) && std::isfinite(paddingY)) {
+                bounds.min_x -= paddingX;
+                bounds.max_x += paddingX;
+                bounds.min_y -= paddingY;
+                bounds.max_y += paddingY;
+                return bounds;
             }
         }
+        const double singularValue = maximumSingularValue(
+            geometryCommand.transform);
+        const bool hasFinitePathBounds = std::isfinite(bounds.min_x)
+            && std::isfinite(bounds.min_y)
+            && std::isfinite(bounds.max_x)
+            && std::isfinite(bounds.max_y)
+            && bounds.max_x >= bounds.min_x
+            && bounds.max_y >= bounds.min_y;
+        if(!isPositiveFinite(singularValue) || !hasFinitePathBounds)
+            return bounds;
+        const double pathScale = std::max({
+            bounds.max_x - bounds.min_x,
+            bounds.max_y - bounds.min_y,
+            std::abs(static_cast<double>(geometryCommand.stroke.width)),
+        });
+        if(!isPositiveFinite(pathScale))
+            return bounds;
+        // This discarded sizing pass is relative to the local artwork span,
+        // not its absolute coordinate magnitude or the printer tolerance. It
+        // therefore finds the actual stroke bbox without erasing short paths
+        // at large offsets and without changing the returned geometry grid.
+        const double localFlattenTolerance = pathScale * 1.0e-6;
+        const double localGridStep = pathScale * 1.0e-10;
+        SourceBounds expandedBounds;
+        const auto expansion = expandStrokeLocal(
+            geometryCommand, localFlattenTolerance, localGridStep,
+            complexityBudget, false);
+        for(const auto& expandedPath : expansion.paths) {
+            for(const auto& point : expandedPath.points) {
+                expandedBounds.include(transformPoint(
+                    geometryCommand.transform, {point.x, point.y}));
+            }
+        }
+        if(expandedBounds.valid())
+            bounds = expandedBounds;
     }
     return bounds;
 }
@@ -1783,419 +1722,6 @@ double pointSegmentDistance(const PointD& point,
         point.y - (segmentStart.y + projection * dy));
 }
 
-SourceBounds segmentBounds(const SourceSegment& segment)
-{
-    SourceBounds bounds;
-    bounds.include(segment.start);
-    bounds.include(segment.end);
-    return bounds;
-}
-
-bool boundsWithinDistance(const SourceBounds& left,
-                          const SourceBounds& right,
-                          double distance)
-{
-    return left.min_x <= right.max_x + distance
-        && left.max_x + distance >= right.min_x
-        && left.min_y <= right.max_y + distance
-        && left.max_y + distance >= right.min_y;
-}
-
-long double orientation(const PointD& first, const PointD& second,
-                        const PointD& third)
-{
-    return static_cast<long double>(second.x - first.x)
-            * static_cast<long double>(third.y - first.y)
-        - static_cast<long double>(second.y - first.y)
-            * static_cast<long double>(third.x - first.x);
-}
-
-enum class SegmentIntersection {
-    None,
-    Proper,
-    TouchingOrOverlapping,
-};
-
-bool pointOnSegment(const PointD& point, const SourceSegment& segment)
-{
-    return orientation(segment.start, segment.end, point) == 0.0L
-        && point.x >= std::min(segment.start.x, segment.end.x)
-        && point.x <= std::max(segment.start.x, segment.end.x)
-        && point.y >= std::min(segment.start.y, segment.end.y)
-        && point.y <= std::max(segment.start.y, segment.end.y);
-}
-
-SegmentIntersection segmentIntersection(const SourceSegment& left,
-                                        const SourceSegment& right)
-{
-    const long double leftStart = orientation(
-        left.start, left.end, right.start);
-    const long double leftEnd = orientation(
-        left.start, left.end, right.end);
-    const long double rightStart = orientation(
-        right.start, right.end, left.start);
-    const long double rightEnd = orientation(
-        right.start, right.end, left.end);
-    if(((leftStart > 0 && leftEnd < 0)
-            || (leftStart < 0 && leftEnd > 0))
-            && ((rightStart > 0 && rightEnd < 0)
-                || (rightStart < 0 && rightEnd > 0)))
-        return SegmentIntersection::Proper;
-    if((leftStart == 0.0L && pointOnSegment(right.start, left))
-            || (leftEnd == 0.0L && pointOnSegment(right.end, left))
-            || (rightStart == 0.0L && pointOnSegment(left.start, right))
-            || (rightEnd == 0.0L && pointOnSegment(left.end, right)))
-        return SegmentIntersection::TouchingOrOverlapping;
-    return SegmentIntersection::None;
-}
-
-double segmentDistance(const SourceSegment& left,
-                       const SourceSegment& right)
-{
-    if(segmentIntersection(left, right) != SegmentIntersection::None)
-        return 0.0;
-    return std::min({
-        pointSegmentDistance(left.start, right.start, right.end),
-        pointSegmentDistance(left.end, right.start, right.end),
-        pointSegmentDistance(right.start, left.start, left.end),
-        pointSegmentDistance(right.end, left.start, left.end),
-    });
-}
-
-bool adjacentContourEdges(const SourceSegment& left,
-                          const SourceSegment& right)
-{
-    if(left.contour_id != right.contour_id)
-        return false;
-    const size_t difference = left.edge_index > right.edge_index
-        ? left.edge_index - right.edge_index
-        : right.edge_index - left.edge_index;
-    return difference == 1
-        || difference + 1 == left.edge_count;
-}
-
-class SourceSegmentIndex {
-public:
-    explicit SourceSegmentIndex(const std::vector<SourceSegment>& segments)
-    {
-        buildUniqueSegments(segments);
-        m_indices.resize(m_segments.size());
-        std::iota(m_indices.begin(), m_indices.end(), size_t{0});
-        if(!m_indices.empty())
-            buildNode(0, m_indices.size());
-    }
-
-    bool hasUnstableSegments(
-        double quantizationErrorSource,
-        double maximumIntersectionDisplacementSource,
-        double minimumSignificantGapSource,
-        double minimumSignificantIntersectionMarginSource) const
-    {
-        if(m_unstableDuplicate)
-            return true;
-        if(!std::isfinite(quantizationErrorSource)
-                || quantizationErrorSource < 0
-                || !std::isfinite(maximumIntersectionDisplacementSource)
-                || maximumIntersectionDisplacementSource <= 0
-                || !std::isfinite(minimumSignificantGapSource)
-                || minimumSignificantGapSource <= 0
-                || !std::isfinite(
-                    minimumSignificantIntersectionMarginSource)
-                || minimumSignificantIntersectionMarginSource <= 0)
-            return true;
-        size_t candidateChecks = 0;
-        for(size_t index = 0; index < m_segments.size(); ++index) {
-            if(queryNode(
-                    0, index, segmentBounds(m_segments[index]),
-                    quantizationErrorSource,
-                    maximumIntersectionDisplacementSource,
-                    minimumSignificantGapSource,
-                    minimumSignificantIntersectionMarginSource,
-                    candidateChecks))
-                return true;
-        }
-        return false;
-    }
-
-private:
-    static constexpr size_t LEAF_SIZE = 12;
-    static constexpr size_t MAX_CANDIDATE_CHECKS = 2'000'000;
-
-    struct Node {
-        SourceBounds bounds;
-        size_t begin{0};
-        size_t end{0};
-        size_t left{0};
-        size_t right{0};
-        double maximum_boundary_error{0};
-        bool leaf{false};
-    };
-
-    static bool pointLess(const PointD& left, const PointD& right)
-    {
-        return left.x < right.x
-            || (left.x == right.x && left.y < right.y);
-    }
-
-    static std::pair<PointD, PointD> canonicalEndpoints(
-        const SourceSegment& segment)
-    {
-        return pointLess(segment.end, segment.start)
-            ? std::make_pair(segment.end, segment.start)
-            : std::make_pair(segment.start, segment.end);
-    }
-
-    static bool sameUndirectedSegment(const SourceSegment& left,
-                                      const SourceSegment& right)
-    {
-        const auto leftEndpoints = canonicalEndpoints(left);
-        const auto rightEndpoints = canonicalEndpoints(right);
-        return leftEndpoints.first.x == rightEndpoints.first.x
-            && leftEndpoints.first.y == rightEndpoints.first.y
-            && leftEndpoints.second.x == rightEndpoints.second.x
-            && leftEndpoints.second.y == rightEndpoints.second.y;
-    }
-
-    void buildUniqueSegments(const std::vector<SourceSegment>& segments)
-    {
-        std::vector<size_t> sortedIndices(segments.size());
-        std::iota(sortedIndices.begin(), sortedIndices.end(), size_t{0});
-        std::sort(
-            sortedIndices.begin(), sortedIndices.end(),
-            [&](size_t leftIndex, size_t rightIndex) {
-                const auto left = canonicalEndpoints(segments[leftIndex]);
-                const auto right = canonicalEndpoints(segments[rightIndex]);
-                if(pointLess(left.first, right.first))
-                    return true;
-                if(pointLess(right.first, left.first))
-                    return false;
-                if(pointLess(left.second, right.second))
-                    return true;
-                if(pointLess(right.second, left.second))
-                    return false;
-                return leftIndex < rightIndex;
-            });
-        size_t begin = 0;
-        while(begin < sortedIndices.size()) {
-            size_t end = begin + 1;
-            while(end < sortedIndices.size()
-                    && sameUndirectedSegment(
-                        segments[sortedIndices[begin]],
-                        segments[sortedIndices[end]]))
-                ++end;
-            std::vector<int64_t> strictOperationIds;
-            strictOperationIds.reserve(end - begin);
-            SourceSegment representative = segments[sortedIndices[begin]];
-            for(size_t offset = begin; offset < end; ++offset) {
-                const auto& segment = segments[sortedIndices[offset]];
-                if(segment.reject_same_operation_intersections)
-                    strictOperationIds.push_back(segment.operation_id);
-                representative.reject_same_operation_intersections =
-                    representative.reject_same_operation_intersections
-                    || segment.reject_same_operation_intersections;
-                representative.input_precision_error_source = std::max(
-                    representative.input_precision_error_source,
-                    segment.input_precision_error_source);
-                representative.approximation_error_source = std::max(
-                    representative.approximation_error_source,
-                    segment.approximation_error_source);
-            }
-            std::sort(
-                strictOperationIds.begin(), strictOperationIds.end());
-            if(std::adjacent_find(
-                    strictOperationIds.begin(), strictOperationIds.end())
-                    != strictOperationIds.end())
-                m_unstableDuplicate = true;
-            m_segments.emplace_back(std::move(representative));
-            begin = end;
-        }
-    }
-
-    static bool robustProperCrossing(const SourceSegment& left,
-                                     const SourceSegment& right,
-                                     double errorDistance,
-                                     double inputErrorDistance,
-                                     double maximumDisplacement)
-    {
-        const double leftDx = left.end.x - left.start.x;
-        const double leftDy = left.end.y - left.start.y;
-        const double rightDx = right.end.x - right.start.x;
-        const double rightDy = right.end.y - right.start.y;
-        const double lengthProduct = std::hypot(leftDx, leftDy)
-            * std::hypot(rightDx, rightDy);
-        if(!(lengthProduct > 0))
-            return false;
-        const double sineAngle = std::abs(
-            leftDx * rightDy - leftDy * rightDx) / lengthProduct;
-        if(!(sineAngle > 0)
-                || inputErrorDistance / sineAngle > maximumDisplacement)
-            return false;
-        return pointSegmentDistance(
-                   left.start, right.start, right.end) > errorDistance
-            && pointSegmentDistance(
-                   left.end, right.start, right.end) > errorDistance
-            && pointSegmentDistance(
-                   right.start, left.start, left.end) > errorDistance
-            && pointSegmentDistance(
-                   right.end, left.start, left.end) > errorDistance;
-    }
-
-    static double minimumEndpointMargin(const SourceSegment& left,
-                                        const SourceSegment& right)
-    {
-        return std::min({
-            pointSegmentDistance(left.start, right.start, right.end),
-            pointSegmentDistance(left.end, right.start, right.end),
-            pointSegmentDistance(right.start, left.start, left.end),
-            pointSegmentDistance(right.end, left.start, left.end),
-        });
-    }
-
-    size_t buildNode(size_t begin, size_t end)
-    {
-        const size_t nodeIndex = m_nodes.size();
-        m_nodes.emplace_back();
-        SourceBounds bounds;
-        for(size_t offset = begin; offset < end; ++offset) {
-            const auto& segment = m_segments[m_indices[offset]];
-            bounds.include(segment.start);
-            bounds.include(segment.end);
-            m_nodes[nodeIndex].maximum_boundary_error = std::max(
-                m_nodes[nodeIndex].maximum_boundary_error,
-                segment.input_precision_error_source
-                    + segment.approximation_error_source);
-        }
-        m_nodes[nodeIndex].bounds = bounds;
-        m_nodes[nodeIndex].begin = begin;
-        m_nodes[nodeIndex].end = end;
-        if(end - begin <= LEAF_SIZE) {
-            m_nodes[nodeIndex].leaf = true;
-            return nodeIndex;
-        }
-        const bool splitX = bounds.max_x - bounds.min_x
-            >= bounds.max_y - bounds.min_y;
-        const size_t middle = begin + (end - begin) / 2;
-        std::nth_element(
-            m_indices.begin() + static_cast<std::ptrdiff_t>(begin),
-            m_indices.begin() + static_cast<std::ptrdiff_t>(middle),
-            m_indices.begin() + static_cast<std::ptrdiff_t>(end),
-            [&](size_t left, size_t right) {
-                const auto leftBounds = segmentBounds(m_segments[left]);
-                const auto rightBounds = segmentBounds(m_segments[right]);
-                const double leftCenter = splitX
-                    ? leftBounds.min_x + leftBounds.max_x
-                    : leftBounds.min_y + leftBounds.max_y;
-                const double rightCenter = splitX
-                    ? rightBounds.min_x + rightBounds.max_x
-                    : rightBounds.min_y + rightBounds.max_y;
-                return leftCenter == rightCenter
-                    ? left < right : leftCenter < rightCenter;
-            });
-        const size_t left = buildNode(begin, middle);
-        const size_t right = buildNode(middle, end);
-        m_nodes[nodeIndex].left = left;
-        m_nodes[nodeIndex].right = right;
-        return nodeIndex;
-    }
-
-    bool queryNode(size_t nodeIndex, size_t segmentIndex,
-                   const SourceBounds& query, double quantizationErrorSource,
-                   double maximumIntersectionDisplacementSource,
-                   double minimumSignificantGapSource,
-                   double minimumSignificantIntersectionMarginSource,
-                   size_t& candidateChecks) const
-    {
-        const auto& node = m_nodes[nodeIndex];
-        const auto& segment = m_segments[segmentIndex];
-        const double nodeDistance = quantizationErrorSource * 2.0
-            + segment.input_precision_error_source
-            + segment.approximation_error_source
-            + node.maximum_boundary_error;
-        const double nodeSearchDistance =
-            nodeDistance > minimumSignificantGapSource
-                ? nodeDistance : 0.0;
-        if(!boundsWithinDistance(query, node.bounds, nodeSearchDistance))
-            return false;
-        if(node.leaf) {
-            for(size_t offset = node.begin; offset < node.end; ++offset) {
-                const size_t candidateIndex = m_indices[offset];
-                if(candidateIndex <= segmentIndex)
-                    continue;
-                const auto& candidate = m_segments[candidateIndex];
-                const double pairDistance = quantizationErrorSource * 2.0
-                    + segment.input_precision_error_source
-                    + candidate.input_precision_error_source
-                    + segment.approximation_error_source
-                    + candidate.approximation_error_source;
-                const double pairInputDistance = quantizationErrorSource * 2.0
-                    + segment.input_precision_error_source
-                    + candidate.input_precision_error_source;
-                const double pairSearchDistance =
-                    pairDistance > minimumSignificantGapSource
-                        ? pairDistance : 0.0;
-                if(adjacentContourEdges(segment, candidate)
-                        || !boundsWithinDistance(
-                            query, segmentBounds(candidate),
-                            pairSearchDistance))
-                    continue;
-                if(++candidateChecks > MAX_CANDIDATE_CHECKS)
-                    return true;
-                const auto intersection = segmentIntersection(
-                    segment, candidate);
-                if(intersection != SegmentIntersection::None) {
-                    // LunaSVG/Clipper and Lumina's legacy Shapely/make_valid
-                    // path intentionally differ on self-crossing, T-junction,
-                    // and partially overlapping contours. Numerical stability
-                    // cannot establish semantic parity, so v0.1 rejects every
-                    // non-adjacent intersection within one source fill paint,
-                    // including crossings or contacts between its subpaths.
-                    // Stroke shells are generated geometry whose deliberate
-                    // dash-cap contacts are normalized below, not independent
-                    // source subpaths.
-                    if(segment.operation_id == candidate.operation_id
-                            && segment.reject_same_operation_intersections
-                            && candidate.reject_same_operation_intersections)
-                        return true;
-                    if(intersection == SegmentIntersection::Proper) {
-                        if(robustProperCrossing(
-                                segment, candidate, pairDistance,
-                                pairInputDistance,
-                                maximumIntersectionDisplacementSource))
-                            continue;
-                        if(minimumEndpointMargin(segment, candidate)
-                                <= minimumSignificantIntersectionMarginSource)
-                            continue;
-                        return true;
-                    }
-                    continue;
-                }
-                const double distance = segmentDistance(segment, candidate);
-                if(distance <= pairDistance
-                        && distance > minimumSignificantGapSource)
-                    return true;
-            }
-            return false;
-        }
-        return queryNode(
-                   node.left, segmentIndex, query, quantizationErrorSource,
-                   maximumIntersectionDisplacementSource,
-                   minimumSignificantGapSource,
-                   minimumSignificantIntersectionMarginSource,
-                   candidateChecks)
-            || queryNode(
-                   node.right, segmentIndex, query, quantizationErrorSource,
-                   maximumIntersectionDisplacementSource,
-                   minimumSignificantGapSource,
-                   minimumSignificantIntersectionMarginSource,
-                   candidateChecks);
-    }
-
-    std::vector<SourceSegment> m_segments;
-    std::vector<size_t> m_indices;
-    std::vector<Node> m_nodes;
-    bool m_unstableDuplicate{false};
-};
-
 double maximumRelevantBoundaryErrorSource(
     const TopologyTrace& trace,
     const SourceBounds& sourceBounds,
@@ -2208,19 +1734,16 @@ double maximumRelevantBoundaryErrorSource(
         floatUlp(viewport.w) * VIEWPORT_OPERATION_ULPS,
         floatUlp(viewport.h) * VIEWPORT_OPERATION_ULPS,
     });
-    for(const auto& segment : trace.segments) {
-        const auto bounds = segmentBounds(segment);
+    for(const auto& boundary : trace.boundaries) {
         const bool intersectsResultDomain =
-            bounds.min_x <= sourceBounds.max_x
-            && bounds.max_x >= sourceBounds.min_x
-            && bounds.min_y <= sourceBounds.max_y
-            && bounds.max_y >= sourceBounds.min_y;
+            boundary.min_x <= sourceBounds.max_x
+            && boundary.max_x >= sourceBounds.min_x
+            && boundary.min_y <= sourceBounds.max_y
+            && boundary.max_y >= sourceBounds.min_y;
         if(!intersectsResultDomain)
             continue;
         maximumError = std::max(
-            maximumError,
-            segment.input_precision_error_source
-                + segment.approximation_error_source);
+            maximumError, boundary.maximum_error_source);
     }
     return maximumError;
 }
@@ -2272,7 +1795,7 @@ int64_t checkedQuantize(double value)
 }
 
 Point64 toGridPoint(const PointD& local,
-                    const lunasvg::Matrix& transform,
+                    const lunasvg::PaintTransform& transform,
                     const PhysicalDomain& domain)
 {
     const auto source = transformPoint(transform, local);
@@ -2285,7 +1808,7 @@ Point64 toGridPoint(const PointD& local,
 
 bool hasNonCollinearTransformedPoints(
     const std::vector<PointD>& points,
-    const lunasvg::Matrix& transform)
+    const lunasvg::PaintTransform& transform)
 {
     if(points.size() < 3)
         return false;
@@ -2312,10 +1835,333 @@ bool hasNonCollinearTransformedPoints(
     return false;
 }
 
+long double triangleArea(const PointD& first, const PointD& second,
+                         const PointD& third)
+{
+    return std::abs(
+        (static_cast<long double>(second.x) - first.x)
+                * (static_cast<long double>(third.y) - first.y)
+            - (static_cast<long double>(second.y) - first.y)
+                * (static_cast<long double>(third.x) - first.x))
+        * 0.5L;
+}
+
+long double cubicControlHullArea(const std::array<PointD, 4>& cubic)
+{
+    std::array<PointD, 4> points = cubic;
+    std::sort(points.begin(), points.end(), [](const auto& left,
+                                               const auto& right) {
+        return left.x == right.x ? left.y < right.y : left.x < right.x;
+    });
+    std::array<PointD, 8> hull;
+    size_t hullSize = 0;
+    const auto cross = [](const PointD& first, const PointD& second,
+                          const PointD& third) {
+        return (static_cast<long double>(second.x) - first.x)
+                * (static_cast<long double>(third.y) - first.y)
+            - (static_cast<long double>(second.y) - first.y)
+                * (static_cast<long double>(third.x) - first.x);
+    };
+    for(const auto& point : points) {
+        while(hullSize >= 2
+                && cross(hull[hullSize - 2], hull[hullSize - 1], point)
+                    <= 0.0L)
+            --hullSize;
+        hull[hullSize++] = point;
+    }
+    const size_t lowerSize = hullSize;
+    for(size_t index = points.size(); index > 1; --index) {
+        const auto& point = points[index - 2];
+        while(hullSize > lowerSize
+                && cross(hull[hullSize - 2], hull[hullSize - 1], point)
+                    <= 0.0L)
+            --hullSize;
+        hull[hullSize++] = point;
+    }
+    if(hullSize > 1)
+        --hullSize;
+    if(hullSize < 3)
+        return 0.0L;
+    long double twiceArea = 0.0L;
+    for(size_t index = 0; index < hullSize; ++index) {
+        const auto& current = hull[index];
+        const auto& next = hull[(index + 1) % hullSize];
+        twiceArea += static_cast<long double>(current.x) * next.y
+            - static_cast<long double>(current.y) * next.x;
+    }
+    return std::abs(twiceArea) * 0.5L;
+}
+
+PointD midpoint(const PointD& first, const PointD& second)
+{
+    return {(first.x + second.x) * 0.5, (first.y + second.y) * 0.5};
+}
+
+void appendCubicAreaEnvelope(
+    const std::array<PointD, 4>& cubic,
+    unsigned depth,
+    std::vector<PointD>& boundary,
+    long double& bulgeArea)
+{
+    if(depth == 0) {
+        boundary.push_back(cubic[3]);
+        bulgeArea += cubicControlHullArea(cubic);
+        return;
+    }
+    const auto p01 = midpoint(cubic[0], cubic[1]);
+    const auto p12 = midpoint(cubic[1], cubic[2]);
+    const auto p23 = midpoint(cubic[2], cubic[3]);
+    const auto p012 = midpoint(p01, p12);
+    const auto p123 = midpoint(p12, p23);
+    const auto center = midpoint(p012, p123);
+    appendCubicAreaEnvelope(
+        {{cubic[0], p01, p012, center}}, depth - 1,
+        boundary, bulgeArea);
+    appendCubicAreaEnvelope(
+        {{center, p123, p23, cubic[3]}}, depth - 1,
+        boundary, bulgeArea);
+}
+
+long double translatedGridArea(const Path64& path)
+{
+    if(path.size() < 3)
+        return 0.0L;
+    const auto anchor = path.front();
+    long double twiceArea = 0.0L;
+    for(size_t index = 0; index < path.size(); ++index) {
+        const auto& current = path[index];
+        const auto& next = path[(index + 1) % path.size()];
+        const long double currentX = static_cast<long double>(
+            current.x - anchor.x);
+        const long double currentY = static_cast<long double>(
+            current.y - anchor.y);
+        const long double nextX = static_cast<long double>(
+            next.x - anchor.x);
+        const long double nextY = static_cast<long double>(
+            next.y - anchor.y);
+        twiceArea += currentX * nextY - currentY * nextX;
+    }
+    return std::abs(twiceArea) * 0.5L;
+}
+
+long double polylineFilledAreaUpperBound(
+    const std::vector<PointD>& boundary,
+    ComplexityBudget& complexityBudget)
+{
+    if(boundary.size() < 3)
+        return 0.0L;
+    double minX = std::numeric_limits<double>::infinity();
+    double minY = std::numeric_limits<double>::infinity();
+    double maxX = -std::numeric_limits<double>::infinity();
+    double maxY = -std::numeric_limits<double>::infinity();
+    long double perimeter = 0.0L;
+    for(size_t index = 0; index < boundary.size(); ++index) {
+        const auto& point = boundary[index];
+        const auto& next = boundary[(index + 1) % boundary.size()];
+        minX = std::min(minX, point.x);
+        minY = std::min(minY, point.y);
+        maxX = std::max(maxX, point.x);
+        maxY = std::max(maxY, point.y);
+        perimeter += std::hypot(
+            static_cast<long double>(next.x) - point.x,
+            static_cast<long double>(next.y) - point.y);
+    }
+    const double span = std::max(maxX - minX, maxY - minY);
+    if(!isPositiveFinite(span) || !std::isfinite(perimeter))
+        return std::numeric_limits<long double>::infinity();
+
+    // Rebase before quantization so Clipper measures the filled polyline area
+    // rather than losing a thin loop to cancellation at a large SVG offset.
+    // The swept-boundary term covers every point moved by grid rounding.
+    constexpr double LOCAL_AREA_GRID_CELLS = 1.0e8;
+    constexpr long double PI =
+        3.141592653589793238462643383279502884L;
+    const double scale = LOCAL_AREA_GRID_CELLS / span;
+    if(!isPositiveFinite(scale))
+        return std::numeric_limits<long double>::infinity();
+    Path64 path;
+    path.reserve(boundary.size());
+    for(const auto& point : boundary) {
+        const Point64 gridPoint{
+            static_cast<int64_t>(std::llround((point.x - minX) * scale)),
+            static_cast<int64_t>(std::llround((point.y - minY) * scale)),
+        };
+        if(path.empty() || path.back() != gridPoint)
+            path.push_back(gridPoint);
+    }
+    if(path.size() > 1 && path.front() == path.back())
+        path.pop_back();
+
+    long double filledArea = 0.0L;
+    size_t normalizedPointCount = 0;
+    if(path.size() >= 3) {
+        Paths64 sourcePaths;
+        sourcePaths.emplace_back(std::move(path));
+        preflightBoolean(complexityBudget, sourcePaths);
+        const auto normalized = Clipper2Lib::Union(
+            sourcePaths, FillRule::NonZero);
+        consumeClipperOutput(complexityBudget, normalized);
+        for(const auto& ring : normalized) {
+            filledArea += translatedGridArea(ring);
+            normalizedPointCount += ring.size();
+        }
+        filledArea /= static_cast<long double>(scale)
+            * static_cast<long double>(scale);
+    }
+    const long double roundingRadius = std::sqrt(0.5L)
+        / static_cast<long double>(scale);
+    const long double sweptBoundaryArea =
+        2.0L * perimeter * roundingRadius
+        + 4.0L * PI * roundingRadius * roundingRadius;
+    const long double arithmeticAreaError =
+        static_cast<long double>(normalizedPointCount + 1)
+        * std::numeric_limits<long double>::epsilon()
+        * 32.0L * static_cast<long double>(span)
+        * static_cast<long double>(span);
+    return filledArea + sweptBoundaryArea + arithmeticAreaError;
+}
+
+double sourceAreaUpperBound(
+    const std::vector<SourceBoundarySegment>& segments,
+    const lunasvg::PaintTransform& transform,
+    ComplexityBudget& complexityBudget)
+{
+    if(segments.empty())
+        return 0.0;
+    constexpr unsigned AREA_ENVELOPE_SUBDIVISIONS = 4;
+    size_t maximumBoundaryPoints = 1;
+    for(const auto& segment : segments) {
+        maximumBoundaryPoints = checkedSizeSum(
+            maximumBoundaryPoints,
+            segment.cubic
+                ? size_t{1} << AREA_ENVELOPE_SUBDIVISIONS
+                : size_t{1});
+    }
+    complexityBudget.requireTransientPointCapacity(maximumBoundaryPoints);
+    std::vector<PointD> boundary;
+    boundary.reserve(maximumBoundaryPoints);
+    boundary.push_back(transformPoint(transform, segments.front().start));
+    long double bulgeArea = 0.0L;
+    for(const auto& segment : segments) {
+        if(!segment.cubic) {
+            boundary.push_back(transformPoint(transform, segment.end));
+            continue;
+        }
+        appendCubicAreaEnvelope(
+            {{
+                transformPoint(transform, segment.start),
+                transformPoint(transform, segment.control1),
+                transformPoint(transform, segment.control2),
+                transformPoint(transform, segment.end),
+            }},
+            AREA_ENVELOPE_SUBDIVISIONS, boundary, bulgeArea);
+    }
+
+    const auto& anchor = boundary.front();
+    long double fanArea = 0.0L;
+    for(size_t index = 1; index + 1 < boundary.size(); ++index)
+        fanArea += triangleArea(anchor, boundary[index], boundary[index + 1]);
+    const long double filledArea = polylineFilledAreaUpperBound(
+        boundary, complexityBudget);
+    return static_cast<double>(
+        std::min(fanArea, filledArea) + bulgeArea);
+}
+
+double sourcePrecisionEnvelopeAreaUpperBound(
+    const std::vector<SourceBoundarySegment>& segments,
+    const lunasvg::PaintTransform& transform,
+    const CoordinatePrecisionError& precisionError)
+{
+    if(segments.empty()
+            || !std::isfinite(precisionError.x)
+            || !std::isfinite(precisionError.y))
+        return std::numeric_limits<double>::infinity();
+    double minimumX = std::numeric_limits<double>::infinity();
+    double minimumY = std::numeric_limits<double>::infinity();
+    double maximumX = -std::numeric_limits<double>::infinity();
+    double maximumY = -std::numeric_limits<double>::infinity();
+    const auto include = [&](const PointD& point) {
+        const auto transformed = transformPoint(transform, point);
+        minimumX = std::min(minimumX, transformed.x);
+        minimumY = std::min(minimumY, transformed.y);
+        maximumX = std::max(maximumX, transformed.x);
+        maximumY = std::max(maximumY, transformed.y);
+    };
+    for(const auto& segment : segments) {
+        include(segment.start);
+        if(segment.cubic) {
+            include(segment.control1);
+            include(segment.control2);
+        }
+        include(segment.end);
+    }
+    const long double width =
+        static_cast<long double>(maximumX) - minimumX
+        + 2.0L * precisionError.x;
+    const long double height =
+        static_cast<long double>(maximumY) - minimumY
+        + 2.0L * precisionError.y;
+    const long double area = width * height;
+    if(!(width >= 0.0L) || !(height >= 0.0L)
+            || !std::isfinite(area))
+        return std::numeric_limits<double>::infinity();
+    return static_cast<double>(area);
+}
+
+bool refineCollapsedCurveBoundary(
+    const std::vector<SourceBoundarySegment>& segments,
+    const lunasvg::PaintTransform& transform,
+    const PhysicalDomain& domain,
+    std::vector<PointD>& points,
+    std::vector<double>& incomingApproximationErrors)
+{
+    const bool hasCurve = std::any_of(
+        segments.begin(), segments.end(),
+        [](const SourceBoundarySegment& segment) {
+            return segment.cubic;
+        });
+    if(!hasCurve || segments.empty() || domain.complexity_budget == nullptr)
+        return false;
+    const double singularValue = maximumSingularValue(transform);
+    if(!isPositiveFinite(singularValue))
+        return false;
+    const double localTolerance = domain.flatten_budget_mm
+        / (domain.source_to_mm * singularValue);
+    if(!isPositiveFinite(localTolerance))
+        return false;
+
+    points.clear();
+    incomingApproximationErrors.clear();
+    domain.complexity_budget->consumeGeneratedPoints();
+    points.push_back(segments.front().start);
+    incomingApproximationErrors.push_back(0.0);
+    for(const auto& segment : segments) {
+        if(!segment.cubic) {
+            domain.complexity_budget->consumeGeneratedPoints();
+            points.push_back(segment.end);
+            incomingApproximationErrors.push_back(0.0);
+            continue;
+        }
+        const auto p01 = midpoint(segment.start, segment.control1);
+        const auto p12 = midpoint(segment.control1, segment.control2);
+        const auto p23 = midpoint(segment.control2, segment.end);
+        const auto p012 = midpoint(p01, p12);
+        const auto p123 = midpoint(p12, p23);
+        const auto center = midpoint(p012, p123);
+        flattenCubic(
+            segment.start, p01, p012, center,
+            localTolerance, singularValue, 1, points,
+            incomingApproximationErrors, *domain.complexity_budget);
+        flattenCubic(
+            center, p123, p23, segment.end,
+            localTolerance, singularValue, 1, points,
+            incomingApproximationErrors, *domain.complexity_budget);
+    }
+    return true;
+}
+
 void traceClosedContour(const std::vector<PointD>& localPoints,
-                        const lunasvg::Matrix& transform,
-                        int64_t operationId,
-                        bool rejectSameOperationIntersections,
+                        const lunasvg::PaintTransform& transform,
                         const CoordinatePrecisionError& precisionError,
                         const std::vector<double>& incomingApproximationErrors,
                         TopologyTrace* trace)
@@ -2350,7 +2196,6 @@ void traceClosedContour(const std::vector<PointD>& localPoints,
     }
     if(points.size() < 3)
         return;
-    const size_t contourId = trace->next_contour_id++;
     for(size_t index = 0; index < points.size(); ++index) {
         const auto& start = points[index];
         const auto& end = points[(index + 1) % points.size()];
@@ -2364,53 +2209,95 @@ void traceClosedContour(const std::vector<PointD>& localPoints,
                 + std::abs(dx) * precisionError.y) / length
             : std::max(precisionError.x, precisionError.y);
         trace->append({
-            start, end, contourId, index, points.size(),
-            operationId, rejectSameOperationIntersections,
-            normalPrecisionError,
-            incomingErrors[(index + 1) % points.size()],
+            std::min(start.x, end.x),
+            std::min(start.y, end.y),
+            std::max(start.x, end.x),
+            std::max(start.y, end.y),
+            normalPrecisionError
+                + incomingErrors[(index + 1) % points.size()],
         });
     }
 }
 
 void traceClosedContour(const std::vector<PointD>& localPoints,
-                        const lunasvg::Matrix& transform,
-                        int64_t operationId,
-                        bool rejectSameOperationIntersections,
+                        const lunasvg::PaintTransform& transform,
                         const CoordinatePrecisionError& precisionError,
                         double approximationErrorSource,
                         TopologyTrace* trace)
 {
     traceClosedContour(
-        localPoints, transform, operationId,
-        rejectSameOperationIntersections, precisionError,
+        localPoints, transform, precisionError,
         std::vector<double>(localPoints.size(), approximationErrorSource),
         trace);
 }
 
 void finishSubpath(std::vector<PointD>& points,
                    std::vector<double>& incomingApproximationErrors,
+                   std::vector<SourceBoundarySegment>& sourceSegments,
                    const lunasvg::PaintCommand& command,
+                   bool sourceAreaPotential,
+                   int32_t subpathIndex,
                    const PhysicalDomain& domain,
                    const CoordinatePrecisionError& precisionError,
-                   Paths64& paths)
+                   Paths64& paths,
+                   std::vector<FragmentIssue>& fragmentIssues)
 {
-    if(points.size() < 3) {
+    const auto clearState = [&]() {
         points.clear();
         incomingApproximationErrors.clear();
+        sourceSegments.clear();
+    };
+    if(points.empty())
+        return;
+    const auto distinctPointCount = [&]() {
+        std::vector<PointD> distinct;
+        distinct.reserve(std::min<size_t>(points.size(), 3));
+        for(const auto& point : points) {
+            const bool seen = std::any_of(
+                distinct.begin(), distinct.end(),
+                [&](const PointD& value) {
+                    return value.x == point.x && value.y == point.y;
+                });
+            if(!seen)
+                distinct.push_back(point);
+            if(distinct.size() >= 3)
+                break;
+        }
+        return distinct.size();
+    };
+    if(points.size() < 3) {
+        fragmentIssues.push_back({
+            distinctPointCount() <= 1
+                ? UnprintableReason::PointOnly
+                : UnprintableReason::LineOnly,
+            subpathIndex,
+        });
+        clearState();
         return;
     }
-    const bool sourceHasArea = hasNonCollinearTransformedPoints(
+    bool sourceHasArea = hasNonCollinearTransformedPoints(
         points, command.transform);
-    if(!sourceHasArea)
-        throw InputPrecisionError();
-    traceClosedContour(
-        points, command.transform,
-        static_cast<int64_t>(command.source_index) * 8
-            + static_cast<int64_t>(command.kind),
-        true,
-        precisionError,
-        incomingApproximationErrors,
-        domain.topology_trace);
+    if(!sourceHasArea) {
+        if(sourceAreaPotential) {
+            refineCollapsedCurveBoundary(
+                sourceSegments, command.transform, domain,
+                points, incomingApproximationErrors);
+            sourceHasArea = hasNonCollinearTransformedPoints(
+                points, command.transform);
+        }
+        if(!sourceHasArea) {
+            fragmentIssues.push_back({
+                sourceAreaPotential
+                    ? UnprintableReason::AreaCollapse
+                    : distinctPointCount() <= 1
+                        ? UnprintableReason::PointOnly
+                        : UnprintableReason::LineOnly,
+                subpathIndex,
+            });
+            clearState();
+            return;
+        }
+    }
     Path64 path;
     if(domain.complexity_budget == nullptr)
         throw std::logic_error("missing_complexity_budget");
@@ -2423,19 +2310,28 @@ void finishSubpath(std::vector<PointD>& points,
     }
     if(path.size() > 1 && path.front() == path.back())
         path.pop_back();
-    if(sourceHasArea && (path.size() < 3
-            || Clipper2Lib::Area(path) == 0.0))
-        throw TopologyCollapseError();
+    if(path.size() < 3 || Clipper2Lib::Area(path) == 0.0) {
+        fragmentIssues.push_back({
+            UnprintableReason::AreaCollapse,
+            subpathIndex,
+        });
+        clearState();
+        return;
+    }
+    traceClosedContour(
+        points, command.transform, precisionError,
+        incomingApproximationErrors,
+        domain.topology_trace);
     if(path.size() >= 3) {
         domain.complexity_budget->consumeGeneratedRings();
         paths.emplace_back(std::move(path));
     }
-    points.clear();
-    incomingApproximationErrors.clear();
+    clearState();
 }
 
 Paths64 flattenFill(const lunasvg::PaintCommand& command,
-                    const PhysicalDomain& domain)
+                    const PhysicalDomain& domain,
+                    std::vector<FragmentIssue>& fragmentIssues)
 {
     if(domain.complexity_budget == nullptr)
         throw std::logic_error("missing_complexity_budget");
@@ -2448,11 +2344,15 @@ Paths64 flattenFill(const lunasvg::PaintCommand& command,
     Paths64 paths;
     std::vector<PointD> subpath;
     std::vector<double> incomingApproximationErrors;
+    std::vector<SourceBoundarySegment> sourceSegments;
     CoordinatePrecisionError subpathPrecisionError;
     PointD current;
     PointD subpathStart;
     bool hasCurrentPoint = false;
     size_t pointIndex = 0;
+    size_t sourceSubpathIndex = 0;
+    int32_t currentSubpathIndex = -1;
+    bool sourceAreaPotential = true;
     auto includePointPrecision = [&](const PointD& point) {
         const auto error = transformedPointPrecisionError(
             command, point);
@@ -2468,9 +2368,18 @@ Paths64 flattenFill(const lunasvg::PaintCommand& command,
         switch(verb) {
         case lunasvg::PaintPathVerb::MoveTo: {
             finishSubpath(
-                subpath, incomingApproximationErrors, command, domain,
-                subpathPrecisionError, paths);
+                subpath, incomingApproximationErrors, sourceSegments,
+                command,
+                sourceAreaPotential, currentSubpathIndex, domain,
+                subpathPrecisionError, paths, fragmentIssues);
             subpathPrecisionError = {};
+            sourceAreaPotential = sourceSubpathIndex
+                    < command.source_subpath_area_potential.size()
+                ? command.source_subpath_area_potential[sourceSubpathIndex]
+                    != 0
+                : true;
+            currentSubpathIndex = static_cast<int32_t>(sourceSubpathIndex);
+            ++sourceSubpathIndex;
             const auto& point = command.path_points.at(pointIndex++);
             includePrecision(point);
             current = {point.x, point.y};
@@ -2490,6 +2399,7 @@ Paths64 flattenFill(const lunasvg::PaintCommand& command,
                 subpath.push_back(current);
                 incomingApproximationErrors.push_back(0.0);
             }
+            sourceSegments.push_back({current, {}, {}, {point.x, point.y}, false});
             current = {point.x, point.y};
             complexityBudget.consumeGeneratedPoints();
             subpath.push_back(current);
@@ -2512,6 +2422,9 @@ Paths64 flattenFill(const lunasvg::PaintCommand& command,
                 subpath.push_back(current);
                 incomingApproximationErrors.push_back(0.0);
             }
+            sourceSegments.push_back({
+                current, control1, control2, end, true,
+            });
             flattenCubic(current, control1, control2, end,
                          localTolerance, singularValue, 0, subpath,
                          incomingApproximationErrors, complexityBudget);
@@ -2520,8 +2433,10 @@ Paths64 flattenFill(const lunasvg::PaintCommand& command,
         }
         case lunasvg::PaintPathVerb::Close:
             finishSubpath(
-                subpath, incomingApproximationErrors, command, domain,
-                subpathPrecisionError, paths);
+                subpath, incomingApproximationErrors, sourceSegments,
+                command,
+                sourceAreaPotential, currentSubpathIndex, domain,
+                subpathPrecisionError, paths, fragmentIssues);
             subpathPrecisionError = {};
             if(hasCurrentPoint)
                 current = subpathStart;
@@ -2529,8 +2444,11 @@ Paths64 flattenFill(const lunasvg::PaintCommand& command,
         }
     }
     finishSubpath(
-        subpath, incomingApproximationErrors, command, domain,
-        subpathPrecisionError, paths);
+        subpath, incomingApproximationErrors, sourceSegments, command,
+        sourceAreaPotential, currentSubpathIndex, domain,
+        subpathPrecisionError, paths, fragmentIssues);
+    if(command.path_verbs.empty())
+        fragmentIssues.push_back({UnprintableReason::EmptyPath, -1});
     return paths;
 }
 
@@ -2540,50 +2458,99 @@ FillRule clipperFillRule(lunasvg::PaintFillRule fillRule)
         ? FillRule::EvenOdd : FillRule::NonZero;
 }
 
-Paths64 normalizeFill(const lunasvg::PaintCommand& command,
-                      const PhysicalDomain& domain)
+double boundaryErrorSince(const PhysicalDomain& domain, size_t traceStart)
 {
-    auto paths = flattenFill(command, domain);
-    consumeBooleanInputs(*domain.complexity_budget, paths);
-    requireBoundedClipperIntersections(
-        paths, *domain.complexity_budget);
+    double maximumError = 0.0;
+    if(domain.topology_trace != nullptr) {
+        for(size_t index = traceStart;
+                index < domain.topology_trace->boundaries.size(); ++index) {
+            maximumError = std::max(
+                maximumError,
+                domain.topology_trace->boundaries[index]
+                    .maximum_error_source);
+        }
+    }
+    const double gridToSource =
+        domain.grid_step_mm / domain.source_to_mm;
+    return maximumError + gridToSource / std::sqrt(2.0);
+}
+
+PrecisionPaths normalizeFill(const lunasvg::PaintCommand& command,
+                             const PhysicalDomain& domain)
+{
+    const size_t traceStart = domain.topology_trace == nullptr
+        ? 0 : domain.topology_trace->boundaries.size();
+    std::vector<FragmentIssue> fragmentIssues;
+    auto paths = flattenFill(command, domain, fragmentIssues);
+    const bool hadAreaPaths = !paths.empty();
+    preflightBoolean(*domain.complexity_budget, paths);
+    double boundaryErrorSource = boundaryErrorSince(domain, traceStart);
+    const auto inputPrecision = commandPrecisionError(command, false);
     auto normalized = Clipper2Lib::Union(
         paths, clipperFillRule(command.fill_rule));
     consumeClipperOutput(*domain.complexity_budget, normalized);
-    return normalized;
+    if(hadAreaPaths && normalized.empty()) {
+        fragmentIssues.push_back({
+            UnprintableReason::FillRuleCancelled,
+            -1,
+        });
+    }
+    return {
+        std::move(normalized), boundaryErrorSource,
+        inputPrecision.x, inputPrecision.y,
+        std::move(fragmentIssues),
+    };
 }
 
-Paths64 normalizeStroke(const lunasvg::PaintCommand& command,
-                        const PhysicalDomain& domain)
+PrecisionPaths normalizeStroke(const lunasvg::PaintCommand& command,
+                               const PhysicalDomain& domain)
 {
-    const double singularValue = maximumSingularValue(command.transform);
+    const size_t traceStart = domain.topology_trace == nullptr
+        ? 0 : domain.topology_trace->boundaries.size();
+    const auto nonScalingCommand = command.non_scaling_stroke
+        ? std::optional<lunasvg::PaintCommand>(
+            nonScalingStrokeGeometryCommand(command))
+        : std::nullopt;
+    const auto& geometryCommand = nonScalingCommand
+        ? *nonScalingCommand : command;
+    const double singularValue = maximumSingularValue(
+        geometryCommand.transform);
     if(!isPositiveFinite(singularValue))
         return {};
     const double localFlattenTolerance = domain.flatten_budget_mm
         / (domain.source_to_mm * singularValue);
-    const double localGridStep = domain.stroke_quantization_budget_mm
-        * std::sqrt(2.0) / (domain.source_to_mm * singularValue);
+    // Stroke offsetting uses the same authoritative numeric grid as fills.
+    // A tolerance-sized secondary grid would be print-resolution snapping at
+    // the parser boundary and can erase real short stroked regions before the
+    // downstream physical cleanup stage sees them.
+    const double localGridStep = domain.grid_step_mm
+        / (domain.source_to_mm * singularValue);
     Paths64 paths;
+    std::vector<FragmentIssue> fragmentIssues;
     if(domain.complexity_budget == nullptr)
         throw std::logic_error("missing_complexity_budget");
     auto& complexityBudget = *domain.complexity_budget;
-    const auto precisionError = commandPrecisionError(command);
-    for(const auto& ring : expandStrokeLocal(
-            command, localFlattenTolerance, localGridStep,
-            complexityBudget)) {
+    const auto precisionError = commandPrecisionError(geometryCommand);
+    const auto expansion = expandStrokeLocal(
+        geometryCommand, localFlattenTolerance, localGridStep,
+        complexityBudget);
+    for(const int32_t subpathIndex : expansion.collapsed_subpath_indices) {
+        fragmentIssues.push_back({
+            UnprintableReason::StrokeCollapse,
+            subpathIndex,
+        });
+    }
+    for(const auto& expandedPath : expansion.paths) {
+        const auto& ring = expandedPath.points;
         std::vector<PointD> localPoints;
         complexityBudget.consumeGeneratedPoints(ring.size());
         localPoints.reserve(ring.size());
         for(const auto& point : ring)
             localPoints.push_back({point.x, point.y});
         traceClosedContour(
-            localPoints, command.transform,
-            static_cast<int64_t>(command.source_index) * 8
-                + static_cast<int64_t>(command.kind),
-            false,
-            precisionError,
+            localPoints, geometryCommand.transform, precisionError,
             (domain.flatten_budget_mm
-                + domain.stroke_quantization_budget_mm)
+                + domain.grid_step_mm / std::sqrt(2.0))
                 / domain.source_to_mm,
             domain.topology_trace);
         Path64 path;
@@ -2591,46 +2558,141 @@ Paths64 normalizeStroke(const lunasvg::PaintCommand& command,
         path.reserve(ring.size());
         for(const auto& point : ring) {
             const auto gridPoint = toGridPoint(
-                {point.x, point.y}, command.transform, domain);
+                {point.x, point.y}, geometryCommand.transform, domain);
             if(path.empty() || path.back() != gridPoint)
                 path.push_back(gridPoint);
         }
         if(path.size() > 1 && path.front() == path.back())
             path.pop_back();
-        if(path.size() < 3 || Clipper2Lib::Area(path) == 0.0)
-            throw TopologyCollapseError();
+        if(path.size() < 3 || Clipper2Lib::Area(path) == 0.0) {
+            fragmentIssues.push_back({
+                UnprintableReason::StrokeCollapse,
+                expandedPath.source_subpath_index,
+            });
+            continue;
+        }
         if(path.size() >= 3) {
             complexityBudget.consumeGeneratedRings();
             paths.emplace_back(std::move(path));
         }
     }
-    consumeBooleanInputs(complexityBudget, paths);
-    requireBoundedClipperIntersections(paths, complexityBudget);
+    preflightBoolean(complexityBudget, paths);
+    double boundaryErrorSource = boundaryErrorSince(domain, traceStart);
+    const auto inputPrecision = commandPrecisionError(
+        geometryCommand, false);
     auto normalized = Clipper2Lib::Union(paths, FillRule::NonZero);
     consumeClipperOutput(complexityBudget, normalized);
-    return normalized;
+    if(normalized.empty() && fragmentIssues.empty()) {
+        const bool hasPoint = std::any_of(
+            command.path_verbs.begin(), command.path_verbs.end(),
+            [](lunasvg::PaintPathVerb verb) {
+                return verb == lunasvg::PaintPathVerb::MoveTo;
+            });
+        fragmentIssues.push_back({
+            hasPoint
+                ? UnprintableReason::StrokeCollapse
+                : UnprintableReason::EmptyPath,
+            -1,
+        });
+    }
+    return {
+        std::move(normalized), boundaryErrorSource,
+        inputPrecision.x, inputPrecision.y,
+        std::move(fragmentIssues),
+    };
 }
 
-Paths64 applyActiveClips(Paths64 paths,
-                         const std::vector<Paths64>& activeClips,
-                         ComplexityBudget& complexityBudget)
+PrecisionPaths applyActiveClips(
+    PrecisionPaths geometry,
+    const std::vector<PrecisionPaths>& activeClips,
+    const PhysicalDomain& domain)
 {
     for(const auto& clip : activeClips) {
-        consumeBooleanInputs(complexityBudget, paths, &clip);
-        requireBoundedClipperIntersections(
-            paths, clip, complexityBudget);
-        paths = Clipper2Lib::Intersect(paths, clip, FillRule::NonZero);
-        consumeClipperOutput(complexityBudget, paths);
-        if(paths.empty())
+        const bool hadArea = !geometry.paths.empty();
+        preflightBoolean(
+            *domain.complexity_budget, geometry.paths, clip.paths);
+        geometry.boundary_error_source = std::max(
+            geometry.boundary_error_source,
+            clip.boundary_error_source);
+        geometry.input_precision_error_x_source = std::max(
+            geometry.input_precision_error_x_source,
+            clip.input_precision_error_x_source);
+        geometry.input_precision_error_y_source = std::max(
+            geometry.input_precision_error_y_source,
+            clip.input_precision_error_y_source);
+        geometry.paths = Clipper2Lib::Intersect(
+            geometry.paths, clip.paths, FillRule::NonZero);
+        consumeClipperOutput(
+            *domain.complexity_budget, geometry.paths);
+        if(hadArea && geometry.paths.empty()) {
+            geometry.fragment_issues.push_back({
+                UnprintableReason::ClippedOut,
+                -1,
+            });
             break;
+        }
     }
-    return paths;
+    return geometry;
 }
 
 struct PaintReplay {
     std::vector<PaintGeometry> paints;
+    UnprintableFragmentCollection unprintable_fragments;
     std::string reason_code;
 };
+
+void appendUnprintableFragment(
+    UnprintableFragmentCollection& fragments,
+    UnprintableReason reason,
+    const std::array<uint8_t, 4>& rgba,
+    int32_t drawIndex,
+    int32_t sourceIndex,
+    SourceKind sourceKind,
+    int32_t subpathIndex)
+{
+    if(fragments.reason_ids.size() == fragments.reason_ids.max_size()
+            || fragments.rgba.size() > fragments.rgba.max_size() - 4
+            || fragments.draw_indices.size()
+                == fragments.draw_indices.max_size()
+            || fragments.source_indices.size()
+                == fragments.source_indices.max_size()
+            || fragments.source_kinds.size()
+                == fragments.source_kinds.max_size()
+            || fragments.subpath_indices.size()
+                == fragments.subpath_indices.max_size())
+        throw ComplexityLimitError();
+    fragments.reason_ids.push_back(static_cast<int32_t>(reason));
+    fragments.rgba.insert(
+        fragments.rgba.end(), rgba.begin(), rgba.end());
+    fragments.draw_indices.push_back(drawIndex);
+    fragments.source_indices.push_back(sourceIndex);
+    fragments.source_kinds.push_back(static_cast<int32_t>(sourceKind));
+    fragments.subpath_indices.push_back(subpathIndex);
+}
+
+void appendUnprintableFragment(
+    UnprintableFragmentCollection& fragments,
+    const FragmentIssue& issue,
+    const lunasvg::PaintCommand& command,
+    int32_t drawIndex)
+{
+    appendUnprintableFragment(
+        fragments, issue.reason, command.rgba, drawIndex,
+        command.source_index,
+        command.kind == lunasvg::PaintCommandKind::Stroke
+            ? SourceKind::Stroke : SourceKind::Fill,
+        issue.subpath_index);
+}
+
+void appendUnprintableFragment(
+    UnprintableFragmentCollection& fragments,
+    UnprintableReason reason,
+    const PaintGeometry& paint)
+{
+    appendUnprintableFragment(
+        fragments, reason, paint.rgba, paint.draw_index,
+        paint.source_index, paint.source_kind, -1);
+}
 
 PaintReplay replayPaintCommands(
     const std::vector<lunasvg::PaintCommand>& commands,
@@ -2639,7 +2701,7 @@ PaintReplay replayPaintCommands(
     if(domain.complexity_budget == nullptr)
         throw std::logic_error("missing_complexity_budget");
     PaintReplay replay;
-    std::vector<Paths64> activeClips;
+    std::vector<PrecisionPaths> activeClips;
     replay.paints.reserve(commands.size());
     int32_t drawIndex = 0;
     for(const auto& command : commands) {
@@ -2659,16 +2721,27 @@ PaintReplay replayPaintCommands(
                 && command.kind != lunasvg::PaintCommandKind::Stroke)
             continue;
 
+        const int32_t paintDrawIndex = drawIndex++;
         PaintGeometry paint;
-        paint.paths = command.kind == lunasvg::PaintCommandKind::Stroke
+        auto geometry = command.kind == lunasvg::PaintCommandKind::Stroke
             ? normalizeStroke(command, domain)
             : normalizeFill(command, domain);
-        paint.paths = applyActiveClips(
-            std::move(paint.paths), activeClips,
-            *domain.complexity_budget);
+        geometry = applyActiveClips(
+            std::move(geometry), activeClips, domain);
+        for(const auto& issue : geometry.fragment_issues) {
+            appendUnprintableFragment(
+                replay.unprintable_fragments,
+                issue, command, paintDrawIndex);
+        }
+        paint.paths = std::move(geometry.paths);
+        paint.boundary_error_source = geometry.boundary_error_source;
+        paint.input_precision_error_x_source =
+            geometry.input_precision_error_x_source;
+        paint.input_precision_error_y_source =
+            geometry.input_precision_error_y_source;
         paint.bounds = pathsBounds(paint.paths);
         paint.rgba = command.rgba;
-        paint.draw_index = drawIndex++;
+        paint.draw_index = paintDrawIndex;
         paint.source_index = command.source_index;
         paint.source_kind = command.kind == lunasvg::PaintCommandKind::Stroke
             ? SourceKind::Stroke : SourceKind::Fill;
@@ -2745,40 +2818,11 @@ void appendRing(GeometryCollection& collection, const Path64& ring,
     collection.hole_parent.push_back(parent);
 }
 
-struct AreaThresholdGuard {
-    double grid_to_source_unit{0};
-    double threshold_source_units_squared{0};
-    double native_boundary_error_source_units{0};
-    double legacy_simplify_tolerance_source_units{0};
-    bool allow_convex_vertex_bound{false};
-    bool compatible{true};
-};
-
 void appendOuterNode(GeometryCollection& collection, const PolyPath64& outer,
-                     ComplexityBudget& complexityBudget,
-                     AreaThresholdGuard* areaThresholdGuard)
+                     ComplexityBudget& complexityBudget)
 {
     if(outer.IsHole() || outer.Polygon().size() < 3)
         return;
-    if(areaThresholdGuard != nullptr && areaThresholdGuard->compatible) {
-        std::vector<const Path64*> componentRings;
-        componentRings.reserve(checkedSizeSum(outer.Count(), size_t{1}));
-        componentRings.push_back(&outer.Polygon());
-        for(size_t index = 0; index < outer.Count(); ++index) {
-            const auto* child = outer.Child(index);
-            if(child->IsHole())
-                componentRings.push_back(&child->Polygon());
-        }
-        areaThresholdGuard->compatible =
-            areaThresholdClassificationIsCertain(
-                componentRings,
-                areaThresholdGuard->grid_to_source_unit,
-                areaThresholdGuard->threshold_source_units_squared,
-                areaThresholdGuard->native_boundary_error_source_units,
-                areaThresholdGuard->legacy_simplify_tolerance_source_units,
-                true,
-                areaThresholdGuard->allow_convex_vertex_bound);
-    }
     const auto outerRingIndex = static_cast<int64_t>(
         collection.ring_offsets.size() - 1);
     appendRing(collection, outer.Polygon(), -1, complexityBudget);
@@ -2796,8 +2840,7 @@ void appendOuterNode(GeometryCollection& collection, const PolyPath64& outer,
 }
 
 void appendPolyTree(GeometryCollection& collection, const PolyTree64& tree,
-                    ComplexityBudget& complexityBudget,
-                    AreaThresholdGuard* areaThresholdGuard)
+                    ComplexityBudget& complexityBudget)
 {
     std::vector<const PolyPath64*> pending;
     pending.reserve(tree.Count());
@@ -2806,8 +2849,7 @@ void appendPolyTree(GeometryCollection& collection, const PolyTree64& tree,
     while(!pending.empty()) {
         const auto* outer = pending.back();
         pending.pop_back();
-        appendOuterNode(
-            collection, *outer, complexityBudget, areaThresholdGuard);
+        appendOuterNode(collection, *outer, complexityBudget);
         for(size_t holeIndex = outer->Count(); holeIndex > 0; --holeIndex) {
             const auto* hole = outer->Child(holeIndex - 1);
             for(size_t childIndex = hole->Count(); childIndex > 0;
@@ -2820,21 +2862,52 @@ void appendPolyTree(GeometryCollection& collection, const PolyTree64& tree,
     }
 }
 
-void appendGeometry(GeometryCollection& collection,
-                    const PaintGeometry& geometry,
-                    ComplexityBudget& complexityBudget,
-                    AreaThresholdGuard* areaThresholdGuard = nullptr)
+size_t requireBoundedPolyTreeOutput(
+    const PolyTree64& tree, ComplexityBudget& complexityBudget)
 {
-    PolyTree64 tree;
-    if(!geometry.paths.empty()) {
-        consumeBooleanInputs(complexityBudget, geometry.paths);
-        Clipper64 clipper;
-        clipper.AddSubject(geometry.paths);
-        if(!clipper.Execute(ClipType::Union, FillRule::NonZero, tree))
-            throw std::runtime_error("clipper_union_failed");
-        appendPolyTree(
-            collection, tree, complexityBudget, areaThresholdGuard);
+    size_t pointCount = 0;
+    size_t ringCount = 0;
+    std::vector<const PolyPath64*> pending;
+    pending.reserve(tree.Count());
+    for(size_t index = 0; index < tree.Count(); ++index)
+        pending.push_back(tree.Child(index));
+    while(!pending.empty()) {
+        const auto* node = pending.back();
+        pending.pop_back();
+        if(node->Polygon().size() >= 3) {
+            pointCount = checkedSizeSum(
+                pointCount, node->Polygon().size());
+            ringCount = checkedSizeSum(ringCount, size_t{1});
+        }
+        for(size_t index = 0; index < node->Count(); ++index)
+            pending.push_back(node->Child(index));
     }
+    complexityBudget.consumeClipperOutputPoints(pointCount);
+    complexityBudget.consumeClipperOutputRings(ringCount);
+    return ringCount;
+}
+
+bool appendGeometry(GeometryCollection& collection,
+                    const PaintGeometry& geometry,
+                    ComplexityBudget& complexityBudget)
+{
+    if(geometry.paths.empty())
+        return false;
+    PolyTree64 tree;
+    preflightNormalizedBoolean(complexityBudget, geometry.paths);
+    Clipper64 clipper;
+    clipper.AddSubject(geometry.paths);
+    if(!clipper.Execute(ClipType::Union, FillRule::NonZero, tree))
+        throw std::runtime_error("clipper_union_failed");
+    requireBoundedPolyTreeOutput(tree, complexityBudget);
+    // A Paths64 difference can contain a redundant oriented ring at a
+    // touching boundary. Rebuilding the canonical PolyTree may remove that
+    // ring without removing any filled area. Ring-count equality is therefore
+    // not a validity invariant; only an empty canonical tree is a collapse.
+    const size_t polygonCountBefore = collection.polygon_offsets.size();
+    appendPolyTree(collection, tree, complexityBudget);
+    if(collection.polygon_offsets.size() == polygonCountBefore)
+        return false;
 
     if(collection.geometry_offsets.size()
             == collection.geometry_offsets.max_size()
@@ -2853,6 +2926,7 @@ void appendGeometry(GeometryCollection& collection,
     collection.source_indices.push_back(geometry.source_index);
     collection.source_kinds.push_back(
         static_cast<int32_t>(geometry.source_kind));
+    return true;
 }
 
 bool offsetsAreValid(const std::vector<uint64_t>& offsets,
@@ -2902,6 +2976,11 @@ bool collectionLayoutIsValid(const GeometryCollection& collection)
                 == collection.polygon_offsets[index - 1])
             return false;
     }
+    for(size_t index = 1; index < collection.geometry_offsets.size(); ++index) {
+        if(collection.geometry_offsets[index]
+                == collection.geometry_offsets[index - 1])
+            return false;
+    }
     for(size_t index = 0; index < collection.hole_parent.size(); ++index) {
         const int64_t parent = collection.hole_parent[index];
         if(parent < -1 || parent >= static_cast<int64_t>(index))
@@ -2910,34 +2989,31 @@ bool collectionLayoutIsValid(const GeometryCollection& collection)
     return true;
 }
 
-bool materialCensusMatches(const GeometryCollection& collection,
-                           const std::vector<PaintGeometry>& paints)
+bool unprintableLayoutIsValid(
+    const UnprintableFragmentCollection& fragments)
 {
-    if(collection.geometryCount() != paints.size())
-        return false;
-    for(size_t index = 0; index < paints.size(); ++index) {
-        const auto& paint = paints[index];
-        if(!std::equal(
-                paint.rgba.begin(), paint.rgba.end(),
-                collection.rgba.begin() + static_cast<ptrdiff_t>(index * 4))
-                || collection.draw_indices[index] != paint.draw_index
-                || collection.source_indices[index] != paint.source_index
-                || collection.source_kinds[index]
-                    != static_cast<int32_t>(paint.source_kind))
-            return false;
-    }
-    return true;
+    const uint64_t count = fragments.count();
+    return fragments.rgba.size() == count * 4
+        && fragments.draw_indices.size() == count
+        && fragments.source_indices.size() == count
+        && fragments.source_kinds.size() == count
+        && fragments.subpath_indices.size() == count;
 }
 
-bool resultCensusIsValid(const NativeResult& result,
-                         const std::vector<PaintGeometry>& paints)
+bool resultCensusIsValid(const NativeResult& result)
 {
-    return collectionLayoutIsValid(result.raw)
+    const bool layoutsValid = collectionLayoutIsValid(result.raw)
         && collectionLayoutIsValid(result.visible)
         && collectionLayoutIsValid(result.silhouette)
-        && materialCensusMatches(result.raw, paints)
-        && materialCensusMatches(result.visible, paints)
-        && result.silhouette.geometryCount() == 1
+        && unprintableLayoutIsValid(result.unprintable_fragments)
+        && result.raw.geometryCount() <= result.input_paint_count
+        && result.visible.geometryCount() <= result.raw.geometryCount();
+    if(!layoutsValid)
+        return false;
+    if(result.raw.geometryCount() == 0
+            && result.visible.geometryCount() == 0)
+        return result.silhouette.geometryCount() == 0;
+    return result.silhouette.geometryCount() == 1
         && result.silhouette.componentCount() > 0
         && result.silhouette.rgba
             == std::vector<uint8_t>({0, 0, 0, 255})
@@ -2951,6 +3027,169 @@ struct CompositedPaths {
     std::vector<Paths64> visible;
     Paths64 silhouette;
 };
+
+struct CoverageBatch {
+    Paths64 paths;
+    std::unique_ptr<PackedGridBoundsIndex> index;
+    GridBounds bounds;
+    size_t paint_count{0};
+
+    size_t weight() const
+    {
+        return paint_count;
+    }
+};
+
+Paths64 mergeNormalizedCoverage(Paths64 left, Paths64 right,
+                                ComplexityBudget& complexityBudget)
+{
+    if(left.empty())
+        return right;
+    if(right.empty())
+        return left;
+
+    const auto leftBounds = individualPathBounds(left);
+    const PackedGridBoundsIndex rightIndex(individualPathBounds(right));
+    const size_t leftCount = left.size();
+    const size_t totalCount = checkedSizeSum(leftCount, right.size());
+    std::vector<size_t> parents(totalCount);
+    std::vector<uint8_t> ranks(totalCount, 0);
+    std::iota(parents.begin(), parents.end(), size_t{0});
+    const auto findRoot = [&](size_t item) {
+        size_t root = item;
+        while(parents[root] != root)
+            root = parents[root];
+        while(parents[item] != item) {
+            const size_t parent = parents[item];
+            parents[item] = root;
+            item = parent;
+        }
+        return root;
+    };
+    const auto unite = [&](size_t first, size_t second) {
+        size_t firstRoot = findRoot(first);
+        size_t secondRoot = findRoot(second);
+        if(firstRoot == secondRoot)
+            return;
+        if(ranks[firstRoot] < ranks[secondRoot])
+            std::swap(firstRoot, secondRoot);
+        parents[secondRoot] = firstRoot;
+        if(ranks[firstRoot] == ranks[secondRoot])
+            ++ranks[firstRoot];
+    };
+
+    bool hasCrossOverlap = false;
+    for(size_t index = 0; index < leftBounds.size(); ++index) {
+        const auto matches = rightIndex.matches(
+            leftBounds[index], complexityBudget);
+        for(const size_t match : matches) {
+            unite(index, checkedSizeSum(leftCount, match));
+            hasCrossOverlap = true;
+        }
+    }
+    if(!hasCrossOverlap) {
+        left.reserve(totalCount);
+        for(auto& path : right)
+            left.emplace_back(std::move(path));
+        return left;
+    }
+
+    constexpr size_t NO_GROUP = std::numeric_limits<size_t>::max();
+    std::vector<size_t> rootGroups(totalCount, NO_GROUP);
+    std::vector<Paths64> groups;
+    groups.reserve(totalCount);
+    const auto appendToGroup = [&](size_t item, Path64 path) {
+        const size_t root = findRoot(item);
+        size_t& groupIndex = rootGroups[root];
+        if(groupIndex == NO_GROUP) {
+            groupIndex = groups.size();
+            groups.emplace_back();
+        }
+        groups[groupIndex].emplace_back(std::move(path));
+    };
+    for(size_t index = 0; index < left.size(); ++index)
+        appendToGroup(index, std::move(left[index]));
+    for(size_t index = 0; index < right.size(); ++index)
+        appendToGroup(leftCount + index, std::move(right[index]));
+
+    Paths64 merged;
+    for(auto& group : groups) {
+        if(group.size() == 1) {
+            merged.emplace_back(std::move(group.front()));
+            continue;
+        }
+        preflightBoolean(complexityBudget, group);
+        auto normalized = Clipper2Lib::Union(
+            group, FillRule::NonZero);
+        consumeClipperOutput(complexityBudget, normalized);
+        const size_t required = checkedSizeSum(
+            merged.size(), normalized.size());
+        merged.reserve(required);
+        for(auto& path : normalized)
+            merged.emplace_back(std::move(path));
+    }
+    return merged;
+}
+
+std::vector<Paths64> partitionNormalizedPaths(
+    const Paths64& paths, ComplexityBudget& complexityBudget)
+{
+    if(paths.empty())
+        return {};
+    if(paths.size() == 1)
+        return {paths};
+
+    const auto bounds = individualPathBounds(paths);
+    const PackedGridBoundsIndex index(bounds);
+    std::vector<size_t> parents(paths.size());
+    std::vector<uint8_t> ranks(paths.size(), 0);
+    std::iota(parents.begin(), parents.end(), size_t{0});
+    const auto findRoot = [&](size_t item) {
+        size_t root = item;
+        while(parents[root] != root)
+            root = parents[root];
+        while(parents[item] != item) {
+            const size_t parent = parents[item];
+            parents[item] = root;
+            item = parent;
+        }
+        return root;
+    };
+    const auto unite = [&](size_t first, size_t second) {
+        size_t firstRoot = findRoot(first);
+        size_t secondRoot = findRoot(second);
+        if(firstRoot == secondRoot)
+            return;
+        if(ranks[firstRoot] < ranks[secondRoot])
+            std::swap(firstRoot, secondRoot);
+        parents[secondRoot] = firstRoot;
+        if(ranks[firstRoot] == ranks[secondRoot])
+            ++ranks[firstRoot];
+    };
+    for(size_t pathIndex = 0; pathIndex < paths.size(); ++pathIndex) {
+        const auto matches = index.matches(
+            bounds[pathIndex], complexityBudget);
+        for(const size_t match : matches) {
+            if(match > pathIndex)
+                unite(pathIndex, match);
+        }
+    }
+
+    constexpr size_t NO_GROUP = std::numeric_limits<size_t>::max();
+    std::vector<size_t> rootGroups(paths.size(), NO_GROUP);
+    std::vector<Paths64> groups;
+    groups.reserve(paths.size());
+    for(size_t pathIndex = 0; pathIndex < paths.size(); ++pathIndex) {
+        const size_t root = findRoot(pathIndex);
+        size_t& groupIndex = rootGroups[root];
+        if(groupIndex == NO_GROUP) {
+            groupIndex = groups.size();
+            groups.emplace_back();
+        }
+        groups[groupIndex].push_back(paths[pathIndex]);
+    }
+    return groups;
+}
 
 uint64_t pathsFingerprint(const Paths64& paths)
 {
@@ -2985,133 +3224,134 @@ bool hasExactLaterPaint(
     return false;
 }
 
-struct OverlapWorkPlan {
-    std::vector<std::vector<size_t>> later_overlaps;
-    std::vector<bool> exact_later_duplicate;
-};
-
-OverlapWorkPlan buildBoundedOverlapWorkPlan(
-    const PackedBoundsIndex& boundsIndex,
-    const std::vector<PaintGeometry>& paints,
-    ComplexityBudget& complexityBudget)
+CompositedPaths compositePaints(const std::vector<PaintGeometry>& paints,
+                                const PhysicalDomain& domain)
 {
-    OverlapWorkPlan plan;
-    plan.later_overlaps.resize(paints.size());
-    plan.exact_later_duplicate.resize(paints.size(), false);
-    size_t overlapPairCount = 0;
+    auto& complexityBudget = *domain.complexity_budget;
+    CompositedPaths composited;
+    composited.visible.resize(paints.size());
+    size_t retainedPointCount = 0;
+    size_t retainedRingCount = 0;
+    const auto retainGeometry = [&](const Paths64& paths) {
+        const size_t points = pathPointCount(paths);
+        if(points > ComplexityBudget::MAX_RETAINED_GEOMETRY_POINTS
+                - retainedPointCount
+                || paths.size()
+                    > ComplexityBudget::MAX_RETAINED_GEOMETRY_RINGS
+                        - retainedRingCount)
+            throw ComplexityLimitError("retained_geometry");
+        retainedPointCount += points;
+        retainedRingCount += paths.size();
+    };
+
+    // Keep later paint coverage in binary-sized spatial batches. Overlapping
+    // paths are normalized while batches merge, and each resulting path has a
+    // packed bounds entry. A subject component therefore queries at most
+    // log2(N) indexes and sends only spatially relevant coverage rings to
+    // Clipper, without rebuilding the entire later-paint suffix per draw.
+    std::vector<CoverageBatch> coverageBatches;
     std::unordered_multimap<uint64_t, size_t> laterFingerprints;
     laterFingerprints.reserve(paints.size());
+    const auto mergeCoverage = [&](CoverageBatch left,
+                                   CoverageBatch right) {
+        CoverageBatch merged;
+        if(!left.bounds.intersects(right.bounds)) {
+            left.paths.reserve(checkedSizeSum(
+                left.paths.size(), right.paths.size()));
+            for(auto& path : right.paths)
+                left.paths.emplace_back(std::move(path));
+            merged.paths = std::move(left.paths);
+        } else {
+            merged.paths = mergeNormalizedCoverage(
+                std::move(left.paths), std::move(right.paths),
+                complexityBudget);
+        }
+        merged.paint_count = checkedSizeSum(
+            left.paint_count, right.paint_count);
+        merged.index = std::make_unique<PackedGridBoundsIndex>(
+            individualPathBounds(merged.paths));
+        merged.bounds = left.bounds;
+        merged.bounds.include(right.bounds);
+        return merged;
+    };
+
     for(size_t reverseIndex = paints.size(); reverseIndex > 0; --reverseIndex) {
         const size_t index = reverseIndex - 1;
         const uint64_t fingerprint = pathsFingerprint(paints[index].paths);
         if(hasExactLaterPaint(
                 laterFingerprints, paints, index, fingerprint)) {
-            plan.exact_later_duplicate[index] = true;
+            composited.visible[index] = {};
         } else {
-            const size_t remaining =
-                ComplexityBudget::MAX_OVERLAP_PAIRS - overlapPairCount;
-            auto overlaps = boundsIndex.laterOverlaps(
-                index, remaining + 1);
-            if(overlaps.size() > remaining)
-                throw ComplexityLimitError();
-            overlapPairCount = checkedSizeSum(
-                overlapPairCount, overlaps.size());
-            plan.later_overlaps[index] = std::move(overlaps);
+            Paths64 visible;
+            for(auto& subject : partitionNormalizedPaths(
+                    paints[index].paths, complexityBudget)) {
+                const GridBounds subjectBounds = pathsBounds(subject);
+                Paths64 occluders;
+                for(const auto& batch : coverageBatches) {
+                    if(!batch.bounds.intersects(subjectBounds))
+                        continue;
+                    const auto matches = batch.index->matches(
+                        subjectBounds, complexityBudget);
+                    occluders.reserve(checkedSizeSum(
+                        occluders.size(), matches.size()));
+                    for(const size_t match : matches)
+                        occluders.push_back(batch.paths.at(match));
+                }
+                if(!occluders.empty()) {
+                    preflightNormalizedBoolean(
+                        complexityBudget, subject, occluders);
+                    subject = Clipper2Lib::Difference(
+                        subject, occluders, FillRule::NonZero);
+                    consumeClipperOutput(complexityBudget, subject);
+                }
+                const size_t required = checkedSizeSum(
+                    visible.size(), subject.size());
+                visible.reserve(required);
+                for(auto& path : subject)
+                    visible.emplace_back(std::move(path));
+            }
+            retainGeometry(visible);
+            composited.visible[index] = std::move(visible);
+            if(!composited.visible[index].empty()) {
+                CoverageBatch batch;
+                // Coverage is the union of source paint regions, not the
+                // partitioned visible pieces. Integer difference can place a
+                // visible boundary one grid unit inside its occluder; using
+                // those pieces for the silhouette would turn that numeric
+                // seam into a false component. The raw paint is exact input
+                // coverage, while the visible bounds index below remains the
+                // spatial accelerator for lower-paint subtraction.
+                batch.paths = paints[index].paths;
+                batch.paint_count = 1;
+                batch.index = std::make_unique<PackedGridBoundsIndex>(
+                    individualPathBounds(batch.paths));
+                batch.bounds = pathsBounds(batch.paths);
+                while(!coverageBatches.empty()
+                        && coverageBatches.back().weight()
+                            == batch.weight()) {
+                    auto previous = std::move(coverageBatches.back());
+                    coverageBatches.pop_back();
+                    batch = mergeCoverage(
+                        std::move(previous), std::move(batch));
+                }
+                coverageBatches.emplace_back(std::move(batch));
+            }
         }
         laterFingerprints.emplace(fingerprint, index);
     }
-    complexityBudget.consumeOverlapPairs(overlapPairCount);
-    return plan;
-}
 
-CompositedPaths compositePaints(const std::vector<PaintGeometry>& paints,
-                                ComplexityBudget& complexityBudget)
-{
-    CompositedPaths composited;
-    composited.visible.resize(paints.size());
-    const PackedBoundsIndex boundsIndex(paints);
-    const auto overlapPlan = buildBoundedOverlapWorkPlan(
-        boundsIndex, paints, complexityBudget);
-    for(size_t reverseIndex = paints.size(); reverseIndex > 0; --reverseIndex) {
-        const size_t index = reverseIndex - 1;
-        if(overlapPlan.exact_later_duplicate[index]) {
-            composited.visible[index] = {};
-        } else {
-            const auto& overlaps = overlapPlan.later_overlaps[index];
-            if(overlaps.empty()) {
-                composited.visible[index] = paints[index].paths;
-            } else {
-                size_t overlapPathCount = 0;
-                size_t overlapPointCount = pathPointCount(
-                    paints[index].paths);
-                for(const size_t overlapIndex : overlaps) {
-                    overlapPathCount = checkedSizeSum(
-                        overlapPathCount,
-                        paints[overlapIndex].paths.size());
-                    overlapPointCount = checkedSizeSum(
-                        overlapPointCount,
-                        pathPointCount(paints[overlapIndex].paths));
-                }
-                complexityBudget.consumeBooleanInputPoints(
-                    overlapPointCount);
-                Paths64 laterOverlaps;
-                laterOverlaps.reserve(overlapPathCount);
-                for(const size_t overlapIndex : overlaps) {
-                    const auto& paths = paints[overlapIndex].paths;
-                    laterOverlaps.insert(
-                        laterOverlaps.end(), paths.begin(), paths.end());
-                }
-                requireBoundedClipperIntersections(
-                    paints[index].paths, laterOverlaps,
-                    complexityBudget);
-                composited.visible[index] = Clipper2Lib::Difference(
-                    paints[index].paths,
-                    laterOverlaps,
-                    FillRule::NonZero);
-                consumeClipperOutput(
-                    complexityBudget, composited.visible[index]);
-            }
-        }
+    for(auto& batch : coverageBatches) {
+        composited.silhouette = mergeNormalizedCoverage(
+            std::move(composited.silhouette),
+            std::move(batch.paths), complexityBudget);
     }
-
-    Paths64 allPaints;
-    size_t allPaintPathCount = 0;
-    size_t allPaintPointCount = 0;
-    for(size_t index = 0; index < paints.size(); ++index) {
-        if(overlapPlan.exact_later_duplicate[index]
-                || paints[index].paths.empty())
-            continue;
-        allPaintPathCount = checkedSizeSum(
-            allPaintPathCount, paints[index].paths.size());
-        allPaintPointCount = checkedSizeSum(
-            allPaintPointCount, pathPointCount(paints[index].paths));
-    }
-    complexityBudget.consumeBooleanInputPoints(allPaintPointCount);
-    allPaints.reserve(allPaintPathCount);
-    for(size_t index = 0; index < paints.size(); ++index) {
-        if(overlapPlan.exact_later_duplicate[index])
-            continue;
-        const auto& paths = paints[index].paths;
-        allPaints.insert(allPaints.end(), paths.begin(), paths.end());
-    }
-    // Preserve the legacy silhouette's raw-paint union and its canonical
-    // vertex ordering. Every non-duplicate overlapping paint pair was already
-    // bounded by the guarded Difference call above; disjoint pairs have
-    // disjoint bounds, and exact earlier duplicates are omitted. Repeating a
-    // global intersection scan here would add work without a stronger bound.
-    composited.silhouette = Clipper2Lib::Union(
-        allPaints, FillRule::NonZero);
-    consumeClipperOutput(
-        complexityBudget, composited.silhouette);
+    retainGeometry(composited.silhouette);
     return composited;
 }
 
 std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
                                           double targetWidthMm,
-                                          double toleranceMm,
-                                          double legacyCloseDeltaSourceUnits,
-                                          double legacyMinimumPaintAreaFactor,
-                                          double legacyComponentAreaSourceUnitsSquared)
+                                          double toleranceMm)
 {
     auto result = std::make_shared<NativeResult>();
     const auto buildStarted = std::chrono::steady_clock::now();
@@ -3125,7 +3365,12 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
         result->reason_code = recording.reason_code;
         return result;
     }
-    requireBoundedRecording(recording.commands);
+    result->input_paint_count = static_cast<uint64_t>(std::count_if(
+        recording.commands.begin(), recording.commands.end(),
+        [](const lunasvg::PaintCommand& command) {
+            return command.kind == lunasvg::PaintCommandKind::Fill
+                || command.kind == lunasvg::PaintCommandKind::Stroke;
+        }));
     requireFiniteRecording(recording.commands, recording.viewport);
     ComplexityBudget complexityBudget;
     result->max_flattening_error_mm = toleranceMm * 0.4;
@@ -3134,6 +3379,10 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
         [](const lunasvg::PaintCommand& command) {
             return command.kind == lunasvg::PaintCommandKind::ClipBegin;
         });
+    const double maximumInputErrorSource =
+        maximumInputPrecisionErrorSource(
+            recording.commands, recording.viewport,
+            !hasClipCommands);
     SourceBounds sourceBounds = exactPaintBounds(
         recording.commands, complexityBudget);
     includeViewport(sourceBounds, recording.viewport);
@@ -3143,26 +3392,6 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
     }
     const double initialScale = targetWidthMm
         / (sourceBounds.max_x - sourceBounds.min_x);
-    const bool hasCubicCommands = std::any_of(
-        recording.commands.begin(), recording.commands.end(),
-        [](const lunasvg::PaintCommand& command) {
-            return std::find(
-                       command.path_verbs.begin(),
-                       command.path_verbs.end(),
-                       lunasvg::PaintPathVerb::CubicTo)
-                != command.path_verbs.end();
-        });
-    const double legacyCurveToleranceSource = toleranceMm
-        / std::max(targetWidthMm / 100.0, 0.01);
-    const double legacyCurveToleranceMm =
-        legacyCurveToleranceSource * initialScale;
-    result->legacy_curve_tolerance_compatible = !hasCubicCommands
-        || (std::isfinite(legacyCurveToleranceMm)
-            && legacyCurveToleranceMm <= toleranceMm * 0.4);
-    const double maximumInputErrorSource =
-        maximumInputPrecisionErrorSource(
-            recording.commands, recording.viewport,
-            !hasClipCommands);
     if(!isPositiveFinite(initialScale)
             || !std::isfinite(maximumInputErrorSource)
             || maximumInputErrorSource * initialScale
@@ -3177,7 +3406,7 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
         [](const lunasvg::PaintCommand& command) {
             return command.kind == lunasvg::PaintCommandKind::Stroke;
         });
-    const double finalFlatteningBudgetMm = toleranceMm
+    const double maximumFinalFlatteningBudgetMm = toleranceMm
         * (hasClipCommands ? 0.35 : 0.4);
     const double finalQuantizationBudgetMm = toleranceMm
         * (hasClipCommands ? 0.05 : 0.15);
@@ -3191,13 +3420,14 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
     } else {
         boundsPlan.coordinate_bounds = sourceBounds;
     }
-    if(hasClipCommands) {
-        if(!boundsPlan.coordinate_bounds.valid()
-                || !boundsPlan.clipped_paint_bounds.valid()) {
-            result->status = "unsupported";
-            result->reason_code = "unsupported_clipped_geometry";
-            return result;
-        }
+    if(hasClipCommands && !boundsPlan.coordinate_bounds.valid()) {
+        result->status = "unsupported";
+        result->reason_code = "unsupported_clipped_geometry";
+        return result;
+    }
+    const bool needsClipBoundsPass = hasClipCommands
+        && boundsPlan.clipped_paint_bounds.valid();
+    if(needsClipBoundsPass) {
         const double coordinateWidth =
             boundsPlan.coordinate_bounds.max_x
             - boundsPlan.coordinate_bounds.min_x;
@@ -3367,15 +3597,33 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
     }
     result->max_quantization_error_mm = gridStepMm / std::sqrt(2.0);
     result->grid_to_source_unit = gridStepMm / result->scale_factor;
-    if(maximumInputErrorSource * result->scale_factor
-                + result->max_quantization_error_mm
+    const double inputAndQuantizationErrorMm =
+        maximumInputErrorSource * result->scale_factor
+        + result->max_quantization_error_mm;
+    if(inputAndQuantizationErrorMm
             > toleranceMm * 0.6) {
         result->status = "unsupported";
         result->reason_code = "unsupported_input_precision";
         return result;
     }
+    // Input decoding, curve flattening, and grid quantization share one
+    // physical boundary budget. A fixed flattening slice needlessly rejects
+    // accurate paths whose conservative input allowance is larger than the
+    // common case. Tighten flattening for those paths instead of charging
+    // both stages independently and falling back.
+    const double remainingBoundaryBudgetMm =
+        toleranceMm * 0.6 - inputAndQuantizationErrorMm;
+    const double finalFlatteningBudgetMm = std::min(
+        maximumFinalFlatteningBudgetMm,
+        remainingBoundaryBudgetMm
+            * 0.95);
+    if(!isPositiveFinite(finalFlatteningBudgetMm)) {
+        result->status = "unsupported";
+        result->reason_code = "unsupported_input_precision";
+        return result;
+    }
+    result->max_flattening_error_mm = finalFlatteningBudgetMm;
     TopologyTrace topologyTrace;
-    topologyTrace.complexity_budget = &complexityBudget;
     const PhysicalDomain domain{
         sourceBounds.min_x,
         sourceBounds.min_y,
@@ -3398,8 +3646,13 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
         result->reason_code = replay.reason_code;
         return result;
     }
+    result->unprintable_fragments = std::move(
+        replay.unprintable_fragments);
     if(!hasNonEmptyPaint(replay.paints)) {
-        result->reason_code = "empty_geometry";
+        if(!resultCensusIsValid(*result))
+            throw std::runtime_error("native_result_census_failed");
+        result->status = "supported";
+        result->reason_code.clear();
         return result;
     }
     auto paints = std::move(replay.paints);
@@ -3415,106 +3668,57 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
         result->reason_code = "unsupported_input_precision";
         return result;
     }
-    const double nativeAreaBoundaryErrorSource =
-        std::sqrt(2.0) * maximumRecordedBoundaryErrorSource
-        + result->max_quantization_error_mm / result->scale_factor;
-    const double legacySimplifyToleranceSource =
-        toleranceMm / std::max(result->scale_factor, 1.0e-9) * 0.5;
-    if(!std::isfinite(nativeAreaBoundaryErrorSource)
-            || !std::isfinite(legacySimplifyToleranceSource)) {
-        result->status = "unsupported";
-        result->reason_code = "legacy_area_threshold_ambiguous";
-        return result;
-    }
-    const SourceSegmentIndex topologyIndex(topologyTrace.segments);
-    if(topologyIndex.hasUnstableSegments(
-            result->max_quantization_error_mm / result->scale_factor,
-            toleranceMm * 0.6 / result->scale_factor,
-            toleranceMm / result->scale_factor,
-            toleranceMm / result->scale_factor)) {
-        result->status = "unsupported";
-        result->reason_code = "unsupported_topology_collapse";
-        return result;
-    }
-    const auto legacyRawStarted = std::chrono::steady_clock::now();
+    const auto rawNormalizationStarted = std::chrono::steady_clock::now();
     result->topology_seconds = std::chrono::duration<double>(
-        legacyRawStarted - topologyStarted).count();
-    bool legacyNormalizationIdentity = true;
-    bool legacyNormalizationCompatible = true;
-    bool legacyAreaFilterIdentity = true;
-    bool legacyAreaFilterCompatible = true;
-    const double legacyAreaScaleAdjustment =
-        result->scale_factor >= 1.0e-6
-        ? 1.0
-        : std::pow(result->scale_factor / 1.0e-6, 2.0);
-    const double legacyMinimumPaintAreaMm2 =
-        toleranceMm * toleranceMm * legacyMinimumPaintAreaFactor
-        * legacyAreaScaleAdjustment;
-    applyLegacyContourNormalization(
-        paints, domain, legacyCloseDeltaSourceUnits,
-        legacyMinimumPaintAreaMm2, nativeAreaBoundaryErrorSource,
-        legacySimplifyToleranceSource, legacyNormalizationIdentity,
-        legacyNormalizationCompatible, legacyAreaFilterIdentity,
-        legacyAreaFilterCompatible, complexityBudget);
-    if(!legacyAreaFilterCompatible) {
-        result->status = "unsupported";
-        result->reason_code = "legacy_area_threshold_ambiguous";
-        return result;
-    }
-    const auto compositeStarted = std::chrono::steady_clock::now();
-    result->legacy_raw_seconds = std::chrono::duration<double>(
-        compositeStarted - legacyRawStarted).count();
+        rawNormalizationStarted - topologyStarted).count();
     if(!hasNonEmptyPaint(paints)) {
         result->reason_code = "empty_geometry";
         return result;
     }
-    auto finalComposite = compositePaints(paints, complexityBudget);
-    const auto legacyVisibleStarted = std::chrono::steady_clock::now();
-    result->composite_seconds = std::chrono::duration<double>(
-        legacyVisibleStarted - compositeStarted).count();
-    applyLegacyContourNormalization(
-        finalComposite.visible, domain, legacyCloseDeltaSourceUnits,
-        legacyNormalizationIdentity,
-        legacyNormalizationCompatible, complexityBudget);
-    const auto exportStarted = std::chrono::steady_clock::now();
-    result->legacy_visible_seconds = std::chrono::duration<double>(
-        exportStarted - legacyVisibleStarted).count();
-    result->legacy_contour_normalization_identity =
-        legacyNormalizationIdentity;
-    result->legacy_contour_normalization_compatible =
-        legacyNormalizationCompatible;
-    result->legacy_area_filter_identity = legacyAreaFilterIdentity;
 
-    AreaThresholdGuard componentAreaGuard{
-        result->grid_to_source_unit,
-        legacyComponentAreaSourceUnitsSquared,
-        nativeAreaBoundaryErrorSource,
-        legacySimplifyToleranceSource,
-        false,
-        true,
-    };
+    std::vector<PaintGeometry> exportablePaints;
+    exportablePaints.reserve(paints.size());
+    for(auto& paint : paints) {
+        if(paint.paths.empty())
+            continue;
+        if(appendGeometry(result->raw, paint, complexityBudget)) {
+            exportablePaints.emplace_back(std::move(paint));
+        } else {
+            appendUnprintableFragment(
+                result->unprintable_fragments,
+                UnprintableReason::AreaCollapse, paint);
+        }
+    }
+    paints = std::move(exportablePaints);
+    const auto compositeStarted = std::chrono::steady_clock::now();
+    result->normalization_raw_seconds = std::chrono::duration<double>(
+        compositeStarted - rawNormalizationStarted).count();
+    if(paints.empty()) {
+        if(!resultCensusIsValid(*result))
+            throw std::runtime_error("native_result_census_failed");
+        result->status = "supported";
+        result->reason_code.clear();
+        return result;
+    }
+    auto finalComposite = compositePaints(paints, domain);
+    const auto exportStarted = std::chrono::steady_clock::now();
+    result->composite_seconds = std::chrono::duration<double>(
+        exportStarted - compositeStarted).count();
+    result->normalization_visible_seconds = 0.0;
+
     GeometryCollection visibleCollection;
     for(size_t index = 0; index < paints.size(); ++index) {
         auto visible = paints[index];
         visible.paths = finalComposite.visible[index];
-        // The convex vertex-selection bound is valid only when compositing
-        // left this paint byte-for-byte unchanged. Otherwise legacy GEOS
-        // simplifies raw paints before its Boolean difference, so a convex
-        // output ring does not prove which source vertices survived.
-        componentAreaGuard.allow_convex_vertex_bound =
-            visible.paths == paints[index].paths;
-        appendGeometry(
-            visibleCollection, visible, complexityBudget,
-            legacyComponentAreaSourceUnitsSquared > 0.0
-                ? &componentAreaGuard : nullptr);
+        visible.bounds = pathsBounds(visible.paths);
+        if(!visible.paths.empty()
+                && !appendGeometry(
+                    visibleCollection, visible, complexityBudget)) {
+            appendUnprintableFragment(
+                result->unprintable_fragments,
+                UnprintableReason::AreaCollapse, visible);
+        }
     }
-    if(!componentAreaGuard.compatible) {
-        result->status = "unsupported";
-        result->reason_code = "legacy_area_threshold_ambiguous";
-        return result;
-    }
-    for(const auto& paint : paints)
-        appendGeometry(result->raw, paint, complexityBudget);
     result->visible = std::move(visibleCollection);
 
     PaintGeometry silhouette;
@@ -3524,9 +3728,12 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
     silhouette.draw_index = 0;
     silhouette.source_index = -1;
     silhouette.source_kind = SourceKind::Silhouette;
-    appendGeometry(result->silhouette, silhouette, complexityBudget);
+    if(!silhouette.paths.empty()
+            && !appendGeometry(
+                result->silhouette, silhouette, complexityBudget))
+        throw std::runtime_error("silhouette_hierarchy_collapse");
 
-    if(!resultCensusIsValid(*result, paints))
+    if(!resultCensusIsValid(*result))
         throw std::runtime_error("native_result_census_failed");
 
     result->export_seconds = std::chrono::duration<double>(
@@ -3541,19 +3748,19 @@ template<typename Loader>
 std::shared_ptr<NativeResult> analyzeWith(Loader&& loader,
                                           double targetWidthMm,
                                           double toleranceMm,
-                                          bool allowStrokes,
-                                          double legacyCloseDeltaSourceUnits,
-                                          double legacyMinimumPaintAreaFactor,
-                                          double legacyComponentAreaSourceUnitsSquared)
+                                          bool allowStrokes)
 {
-    if(!isPositiveFinite(targetWidthMm) || !isPositiveFinite(toleranceMm)
-            || !std::isfinite(legacyCloseDeltaSourceUnits)
-            || legacyCloseDeltaSourceUnits < 0.0
-            || !std::isfinite(legacyMinimumPaintAreaFactor)
-            || legacyMinimumPaintAreaFactor < 0.0
-            || !std::isfinite(
-                legacyComponentAreaSourceUnitsSquared)
-            || legacyComponentAreaSourceUnitsSquared < 0.0) {
+    uint64_t inputPaintCount = 0;
+    double completedRecorderSeconds = 0.0;
+    auto countPaintCommands = [](const RecorderResult& recording) {
+        return static_cast<uint64_t>(std::count_if(
+            recording.commands.begin(), recording.commands.end(),
+            [](const lunasvg::PaintCommand& command) {
+                return command.kind == lunasvg::PaintCommandKind::Fill
+                    || command.kind == lunasvg::PaintCommandKind::Stroke;
+            }));
+    };
+    if(!isPositiveFinite(targetWidthMm) || !isPositiveFinite(toleranceMm)) {
         auto result = std::make_shared<NativeResult>();
         result->reason_code = "invalid_physical_parameters";
         return result;
@@ -3562,6 +3769,9 @@ std::shared_ptr<NativeResult> analyzeWith(Loader&& loader,
         const auto recorderStarted = std::chrono::steady_clock::now();
         auto recording = loader();
         const auto recorderFinished = std::chrono::steady_clock::now();
+        completedRecorderSeconds = std::chrono::duration<double>(
+            recorderFinished - recorderStarted).count();
+        inputPaintCount = countPaintCommands(recording);
         if(allowStrokes && recording.status == "supported"
                 && std::any_of(
                     recording.commands.begin(), recording.commands.end(),
@@ -3578,68 +3788,80 @@ std::shared_ptr<NativeResult> analyzeWith(Loader&& loader,
             auto result = std::make_shared<NativeResult>();
             result->status = "unsupported";
             result->reason_code = "unsupported_zero_length_dash";
-            result->recorder_seconds = std::chrono::duration<double>(
-                recorderFinished - recorderStarted).count();
+            result->input_paint_count = inputPaintCount;
+            result->recorder_seconds = completedRecorderSeconds;
             return result;
         }
-        if(!allowStrokes && recording.status == "supported"
-                && std::any_of(
+        if(!allowStrokes && recording.status == "supported") {
+            recording.commands.erase(
+                std::remove_if(
                     recording.commands.begin(), recording.commands.end(),
                     [](const lunasvg::PaintCommand& command) {
                         return command.kind
                             == lunasvg::PaintCommandKind::Stroke;
+                    }),
+                recording.commands.end());
+            inputPaintCount = countPaintCommands(recording);
+        }
+        if(recording.status == "supported"
+                && std::any_of(
+                    recording.commands.begin(), recording.commands.end(),
+                    [](const lunasvg::PaintCommand& command) {
+                        return command.has_partial_alpha;
                     })) {
             auto result = std::make_shared<NativeResult>();
             result->status = "unsupported";
-            result->reason_code = "unsupported_stroke_policy";
-            const auto kernelFinished = std::chrono::steady_clock::now();
-            result->recorder_seconds = std::chrono::duration<double>(
-                recorderFinished - recorderStarted).count();
-            result->kernel_seconds = std::chrono::duration<double>(
-                kernelFinished - recorderFinished).count();
+            result->reason_code = "unsupported_partial_alpha";
+            result->input_paint_count = inputPaintCount;
+            result->recorder_seconds = completedRecorderSeconds;
             return result;
         }
         auto result = buildResult(
-            std::move(recording), targetWidthMm, toleranceMm,
-            legacyCloseDeltaSourceUnits, legacyMinimumPaintAreaFactor,
-            legacyComponentAreaSourceUnitsSquared);
+            std::move(recording), targetWidthMm, toleranceMm);
         const auto kernelFinished = std::chrono::steady_clock::now();
         result->recorder_seconds = std::chrono::duration<double>(
             recorderFinished - recorderStarted).count();
         result->kernel_seconds = std::chrono::duration<double>(
             kernelFinished - recorderFinished).count();
         return result;
-    } catch(const TopologyCollapseError&) {
-        auto result = std::make_shared<NativeResult>();
-        result->status = "unsupported";
-        result->reason_code = "unsupported_topology_collapse";
-        return result;
     } catch(const InputPrecisionError&) {
         auto result = std::make_shared<NativeResult>();
         result->status = "unsupported";
         result->reason_code = "unsupported_input_precision";
+        result->input_paint_count = inputPaintCount;
+        result->recorder_seconds = completedRecorderSeconds;
         return result;
     } catch(const StrokeInputPrecisionError&) {
         auto result = std::make_shared<NativeResult>();
         result->status = "unsupported";
         result->reason_code = "unsupported_input_precision";
+        result->input_paint_count = inputPaintCount;
+        result->recorder_seconds = completedRecorderSeconds;
         return result;
     } catch(const ComplexityLimitError&) {
         auto result = std::make_shared<NativeResult>();
         result->status = "unsupported";
         result->reason_code = "unsupported_complexity";
+        result->input_paint_count = inputPaintCount;
+        result->recorder_seconds = completedRecorderSeconds;
         return result;
     } catch(const std::range_error&) {
         auto result = std::make_shared<NativeResult>();
         result->reason_code = "numeric_range_error";
+        result->input_paint_count = inputPaintCount;
+        result->recorder_seconds = completedRecorderSeconds;
         return result;
     } catch(const std::bad_alloc&) {
         auto result = std::make_shared<NativeResult>();
         result->reason_code = "allocation_failed";
+        result->input_paint_count = inputPaintCount;
+        result->recorder_seconds = completedRecorderSeconds;
         return result;
     } catch(const std::exception&) {
         auto result = std::make_shared<NativeResult>();
         result->reason_code = "native_geometry_error";
+        result->input_paint_count = inputPaintCount;
+        result->recorder_seconds = completedRecorderSeconds;
         return result;
     }
 }
@@ -3649,53 +3871,32 @@ std::shared_ptr<NativeResult> analyzeWith(Loader&& loader,
 std::shared_ptr<NativeResult> analyzeSvg(const std::string& filename,
                                          double targetWidthMm,
                                          double toleranceMm,
-                                         bool allowStrokes,
-                                         double legacyCloseDeltaSourceUnits,
-                                         double legacyMinimumPaintAreaFactor,
-                                         double legacyComponentAreaSourceUnitsSquared)
+                                         bool allowStrokes)
 {
     return analyzeSvgPath(
         std::filesystem::u8path(filename),
-        targetWidthMm, toleranceMm, allowStrokes,
-        legacyCloseDeltaSourceUnits, legacyMinimumPaintAreaFactor,
-        legacyComponentAreaSourceUnitsSquared);
-}
-
-void setThreadLaunchFailureAfterForTesting(int64_t successfulLaunches)
-{
-    g_threadLaunchFailureAfterForTesting.store(
-        successfulLaunches, std::memory_order_relaxed);
+        targetWidthMm, toleranceMm, allowStrokes);
 }
 
 std::shared_ptr<NativeResult> analyzeSvgPath(
     const std::filesystem::path& filename,
     double targetWidthMm,
     double toleranceMm,
-    bool allowStrokes,
-    double legacyCloseDeltaSourceUnits,
-    double legacyMinimumPaintAreaFactor,
-    double legacyComponentAreaSourceUnitsSquared)
+    bool allowStrokes)
 {
     return analyzeWith(
         [&filename]() { return recordPaintCommandsPath(filename); },
-        targetWidthMm, toleranceMm, allowStrokes,
-        legacyCloseDeltaSourceUnits, legacyMinimumPaintAreaFactor,
-        legacyComponentAreaSourceUnitsSquared);
+        targetWidthMm, toleranceMm, allowStrokes);
 }
 
 std::shared_ptr<NativeResult> analyzeSvgData(const std::string& svg,
                                              double targetWidthMm,
                                              double toleranceMm,
-                                             bool allowStrokes,
-                                             double legacyCloseDeltaSourceUnits,
-                                             double legacyMinimumPaintAreaFactor,
-                                             double legacyComponentAreaSourceUnitsSquared)
+                                             bool allowStrokes)
 {
     return analyzeWith(
         [&svg]() { return recordPaintCommandsSvg(svg); },
-        targetWidthMm, toleranceMm, allowStrokes,
-        legacyCloseDeltaSourceUnits, legacyMinimumPaintAreaFactor,
-        legacyComponentAreaSourceUnitsSquared);
+        targetWidthMm, toleranceMm, allowStrokes);
 }
 
 } // namespace lumina_svg_core

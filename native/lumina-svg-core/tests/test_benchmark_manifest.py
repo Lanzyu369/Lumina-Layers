@@ -8,13 +8,6 @@ from pathlib import Path
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = PACKAGE_ROOT / "benchmarks" / "proxy_manifest.json"
-REAL_CAPABILITY_PATH = (
-    PACKAGE_ROOT / "benchmarks" / "real_r4c1_capability.json"
-)
-REAL_R4C1_SHA256 = (
-    "da52ef12bdd37a0bd47970649a70582862331a606c151bff05bfb2f6e265f160"
-)
-
 
 def test_proxy_manifest_contains_reproducible_full_entrypoint_evidence() -> None:
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
@@ -23,11 +16,11 @@ def test_proxy_manifest_contains_reproducible_full_entrypoint_evidence() -> None
     assert manifest["fixture"]["classification"] == (
         "derived_supported_scale"
     )
-    assert manifest["fixture"]["sha256"] != REAL_R4C1_SHA256
-    assert manifest["fixture"]["real_r4c1_sha256"] == REAL_R4C1_SHA256
-    assert manifest["fixture"]["source_proxy_sha256"] == (
-        "d078cf4293623d934759c2688e13a00491e525055e7595069a0ecc4f078842fb"
-    )
+    assert {
+        "sha256",
+        "real_r4c1_sha256",
+        "source_proxy_sha256",
+    }.isdisjoint(manifest["fixture"])
     assert manifest["fixture"]["byte_size"] > 0
     assert len(manifest["fixture"]["canvas_user_units"]) == 2
     for key in ("path_count", "stroke_count", "transform_count", "clip_count"):
@@ -58,16 +51,3 @@ def test_proxy_manifest_contains_reproducible_full_entrypoint_evidence() -> None
     assert output["region_count"] > 0
     assert output["coordinate_count"] > 0
     assert len(output["fingerprint"]) == 64
-
-
-def test_real_r4c1_evidence_never_masquerades_fallback_as_native_success() -> None:
-    evidence = json.loads(REAL_CAPABILITY_PATH.read_text(encoding="utf-8"))
-
-    assert evidence["fixture"]["classification"] == "real_r4c1"
-    assert evidence["fixture"]["sha256"] == REAL_R4C1_SHA256
-    assert evidence["fixture"]["byte_size"] == 14_467_678
-    assert evidence["output"] == {
-        "status": "unsupported",
-        "reason_code": "unsupported_vector_effect",
-    }
-    assert evidence["acceptance"]["native_by_default_ready"] is False

@@ -9,12 +9,22 @@
 
 namespace lumina_svg_core {
 
-inline constexpr uint32_t RESULT_SCHEMA_VERSION = 1;
+inline constexpr uint32_t RESULT_SCHEMA_VERSION = 3;
 
 enum class SourceKind : int32_t {
     Fill = 0,
     Stroke = 1,
     Silhouette = 2,
+};
+
+enum class UnprintableReason : int32_t {
+    EmptyPath = 0,
+    PointOnly = 1,
+    LineOnly = 2,
+    AreaCollapse = 3,
+    FillRuleCancelled = 4,
+    ClippedOut = 5,
+    StrokeCollapse = 6,
 };
 
 struct GeometryCollection {
@@ -35,6 +45,17 @@ struct GeometryCollection {
     uint64_t holeCount() const;
 };
 
+struct UnprintableFragmentCollection {
+    std::vector<int32_t> reason_ids;
+    std::vector<uint8_t> rgba;
+    std::vector<int32_t> draw_indices;
+    std::vector<int32_t> source_indices;
+    std::vector<int32_t> source_kinds;
+    std::vector<int32_t> subpath_indices;
+
+    uint64_t count() const;
+};
+
 struct NativeResult : public std::enable_shared_from_this<NativeResult> {
     std::string status{"invalid"};
     std::string reason_code{"invalid_svg"};
@@ -46,30 +67,33 @@ struct NativeResult : public std::enable_shared_from_this<NativeResult> {
     double grid_to_source_unit{0};
     double max_flattening_error_mm{0};
     double max_quantization_error_mm{0};
-    bool legacy_contour_normalization_identity{true};
-    bool legacy_contour_normalization_compatible{true};
-    bool legacy_area_filter_identity{true};
-    bool legacy_curve_tolerance_compatible{true};
     double recorder_seconds{0};
     double kernel_seconds{0};
     double bounds_seconds{0};
     double replay_seconds{0};
     double topology_seconds{0};
-    double legacy_raw_seconds{0};
+    double normalization_raw_seconds{0};
     double composite_seconds{0};
-    double legacy_visible_seconds{0};
+    double normalization_visible_seconds{0};
     double export_seconds{0};
     // Time to wrap this owned C++ result as a Python object. NumPy views and
     // downstream float/Shapely materialization are measured by their callers.
     double result_conversion_seconds{0};
+    uint64_t input_paint_count{0};
     GeometryCollection raw;
     GeometryCollection visible;
     GeometryCollection silhouette;
+    UnprintableFragmentCollection unprintable_fragments;
 };
 
 struct GeometryCollectionView {
     std::shared_ptr<NativeResult> owner;
     const GeometryCollection* collection{nullptr};
+};
+
+struct UnprintableFragmentCollectionView {
+    std::shared_ptr<NativeResult> owner;
+    const UnprintableFragmentCollection* collection{nullptr};
 };
 
 } // namespace lumina_svg_core

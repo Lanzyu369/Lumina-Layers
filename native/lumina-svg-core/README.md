@@ -8,40 +8,41 @@ The package is developed temporarily inside the Lumina Studio workspace. Its
 directory is deliberately self-contained so it can become an independent repository
 without importing application, printer, mesh, or UI code.
 
-Version 0.1 supports static solid fills, solid strokes, affine transforms,
-fill rules, vector clips, and source-order occlusion. Ambiguous document
+Version 0.2 supports static solid fills, solid strokes, affine transforms,
+fill rules, vector clips, CSS selectors, same-document `<use>` references,
+basic shapes (including circles, ellipses, and rounded rectangles), SVG path
+arcs, nested SVG viewports, root layout/transform semantics, marker paint and
+marker viewport clipping, and source-order occlusion. It preserves exact
+resolved RGBA plus stable paint/source identity in schema 3. Ambiguous document
 semantics return a stable whole-document unsupported result; no element is
-silently dropped. SVG arc path commands, circles, ellipses, and rounded
-rectangles also return `unsupported_arc` in 0.1 because LunaSVG's resolved
-path currently exposes only a fixed cubic approximation rather than the
-original arc parameters needed to honor Lumina's physical error budget.
+silently dropped.
 
 `analyze_svg()` and `analyze_svg_svg()` accept an optional `allow_strokes`
 boolean (default `True`). Callers that must preserve a separate legacy stroke
-policy can pass `False`; the recorder then returns
-`unsupported_stroke_policy` before running the geometry kernel.
+policy can pass `False`; the core then removes stroke paint operations while
+preserving fills from the same document.
 Dash arrays containing a zero-length entry return
-`unsupported_zero_length_dash` in 0.1 because exact zero-interval cap and
+`unsupported_zero_length_dash` in 0.2 because exact zero-interval cap and
 phase parity is not yet proven for every open, closed, and degenerate path.
 Other dash placement uses an adaptive centerline length bound; if the one
 document-level physical error budget cannot be proved, the complete document
-returns `unsupported_input_precision` or `unsupported_topology_collapse`.
+returns `unsupported_input_precision`. Individual stroke rings that collapse
+on the authoritative parser grid are reported as `stroke_collapse` fragments
+without discarding unrelated area-bearing paint operations.
 
-The optional `legacy_close_delta_source_units`,
-`legacy_minimum_paint_area_factor`, and
-`legacy_component_area_source_units_squared` arguments are versioned adopter
-compatibility gates; zero disables the corresponding gate. Area classification
-accounts for recorder/input precision, flattening, integer-grid quantization,
-and downstream simplification together. If an enabled raw-paint or component
-threshold cannot be classified with certainty, the complete document returns
-`legacy_area_threshold_ambiguous` with empty geometry collections.
+The parser performs no morphological close, print-grid snapping, minimum-area
+filter, triangulation, or mesh repair. Every area-bearing paint is exported as
+Polygon/MultiPolygon data. Empty paths, point/line-only subpaths, and numeric
+area collapses are excluded from those collections and reported separately in
+`NativeResult.unprintable_fragments` with exact RGBA and stable paint/source
+identity, without failing unrelated paint operations.
 
-The 0.1 recorder deliberately rejects nested `<svg>`, non-zero root viewBox
-origins, root transforms/positions, root `overflow="hidden"`, percentages
-without a root viewBox, and inherited `clip-rule` outside a direct clip-path
-geometry child. These restrictions have stable `unsupported_*` reason codes
-and preserve current Lumina behavior through whole-document fallback. They
-must not be interpreted as partially supported layout.
+The recorder resolves non-zero root viewBox origins, root positions and
+transforms, percentage lengths, inherited `clip-rule`, nested viewport
+transforms/clips, and marker overflow before emitting paint commands. Features
+that still need raster compositing or external resources, such as partial
+alpha, masks, gradients/patterns, text, and images, return a stable
+`unsupported_*` result for the complete document.
 
 `PaintStrokeStyle.line_cap` and `.line_join` are stable lowercase strings.
 `NativeResult.result_conversion_seconds` measures only creation of the Python
@@ -50,16 +51,23 @@ bulk int64-to-float64/Shapely conversion are measured by the Lumina adapter.
 
 ## Fail-closed resource and precision policy
 
-Version 0.1 rejects a complete document with `unsupported_complexity` before
-unbounded parser, path expansion, topology, Boolean-composition, or result
-allocation work. The current package limits one input to 64 MiB, 250,000 XML
-elements, 128 levels of XML nesting, 16 `<use>` elements, 250,000 recorded
-paint commands, 4,000,000 recorded path verbs, and 8,000,000 recorded points.
-The geometry kernel additionally applies cumulative limits to generated points
-and rings, topology segments, Boolean input points, distinct overlap pairs, and
-returned coordinates. These are safety limits rather than a partial-rendering
-mode: exceeding any one of them returns no native geometry and asks Lumina to
-run the existing whole-document fallback.
+Version 0.2 keeps only hard resource boundaries needed to avoid unbounded
+allocation or recursion: one input is limited to 256 MiB, 250,000 XML elements,
+250,000 XML attributes, 64 MiB of attribute text, and 128 levels of XML
+nesting; the recorder is limited to 250,000 paint commands, 16 million path
+verbs, 16 million path points, and 1 million dash values. Streaming parser
+counters stop oversized path, point-list, transform, CSS, and XML work before
+large intermediate allocations. They count actual parsing work rather than
+guessing whether ordinary SVG structure might be expensive. Encoding and
+namespace checks are limited to XML correctness, not document identity.
+
+The geometry kernel checks integer overflow, curve-generation work, and the
+measured candidates plus actual input/output size of Clipper operations.
+Nested axis-aligned rectangle occluders are reduced by an exact containment
+proof; all other paints retain normal SVG paint-order compositing. A genuine
+resource failure returns empty native geometry with `unsupported_complexity`;
+none is a partial-rendering mode and Lumina does not retry it through the
+legacy parser.
 
 Inputs whose resolved float coordinates, transforms, stroke parameters, or
 operation history cannot satisfy the caller's physical tolerance return

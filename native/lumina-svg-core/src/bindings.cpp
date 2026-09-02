@@ -60,6 +60,22 @@ const char* lineJoinName(lunasvg::PaintLineJoin lineJoin)
     return "unknown";
 }
 
+const char* unprintableReasonName(
+    lumina_svg_core::UnprintableReason reason)
+{
+    using Reason = lumina_svg_core::UnprintableReason;
+    switch(reason) {
+    case Reason::EmptyPath: return "empty_path";
+    case Reason::PointOnly: return "point_only";
+    case Reason::LineOnly: return "line_only";
+    case Reason::AreaCollapse: return "area_collapse";
+    case Reason::FillRuleCancelled: return "fill_rule_cancelled";
+    case Reason::ClippedOut: return "clipped_out";
+    case Reason::StrokeCollapse: return "stroke_collapse";
+    }
+    return "unknown";
+}
+
 py::tuple pathVerbs(const lunasvg::PaintCommand& command)
 {
     py::tuple values(command.path_verbs.size());
@@ -137,6 +153,32 @@ py::array rgba(const lumina_svg_core::GeometryCollectionView& view)
     return array;
 }
 
+py::array unprintableRgba(
+    const lumina_svg_core::UnprintableFragmentCollectionView& view)
+{
+    const auto& values = view.collection->rgba;
+    py::array array(
+        py::dtype::of<uint8_t>(),
+        {static_cast<py::ssize_t>(values.size() / 4), py::ssize_t(4)},
+        {py::ssize_t(4), py::ssize_t(1)},
+        values.data(),
+        arrayOwner(view.owner));
+    array.attr("setflags")(false);
+    return array;
+}
+
+py::tuple unprintableReasonCodes(
+    const lumina_svg_core::UnprintableFragmentCollectionView& view)
+{
+    const auto& values = view.collection->reason_ids;
+    py::tuple reasons(values.size());
+    for(size_t index = 0; index < values.size(); ++index) {
+        reasons[index] = unprintableReasonName(
+            static_cast<lumina_svg_core::UnprintableReason>(values[index]));
+    }
+    return reasons;
+}
+
 lumina_svg_core::GeometryCollectionView collectionView(
     lumina_svg_core::NativeResult& result,
     const lumina_svg_core::GeometryCollection& collection)
@@ -144,11 +186,21 @@ lumina_svg_core::GeometryCollectionView collectionView(
     return {result.shared_from_this(), &collection};
 }
 
+lumina_svg_core::UnprintableFragmentCollectionView unprintableView(
+    lumina_svg_core::NativeResult& result)
+{
+    return {result.shared_from_this(), &result.unprintable_fragments};
+}
+
 } // namespace
 
 PYBIND11_MODULE(_lumina_svg_core, module)
 {
     module.doc() = "Native SVG paint recorder and print geometry kernel";
+    module.attr("RECORDER_SCHEMA_VERSION") =
+        py::int_(lumina_svg_core::RECORDER_SCHEMA_VERSION);
+    module.attr("RESULT_SCHEMA_VERSION") =
+        py::int_(lumina_svg_core::RESULT_SCHEMA_VERSION);
 
     py::class_<lunasvg::PaintStrokeStyle>(module, "PaintStrokeStyle")
         .def_property_readonly("width", [](const lunasvg::PaintStrokeStyle& value) { return value.width; })
@@ -186,7 +238,12 @@ PYBIND11_MODULE(_lumina_svg_core, module)
             return value.fill_rule == lunasvg::PaintFillRule::EvenOdd
                 ? "evenodd" : "nonzero";
         })
+        .def_readonly("has_partial_alpha",
+                      &lunasvg::PaintCommand::has_partial_alpha)
         .def_readonly("stroke", &lunasvg::PaintCommand::stroke)
+        .def_readonly(
+            "non_scaling_stroke",
+            &lunasvg::PaintCommand::non_scaling_stroke)
         .def_readonly("group_opacity", &lunasvg::PaintCommand::group_opacity)
         .def_readonly("source_index", &lunasvg::PaintCommand::source_index)
         .def_readonly(
@@ -199,11 +256,41 @@ PYBIND11_MODULE(_lumina_svg_core, module)
             "path_input_precision_error",
             &lunasvg::PaintCommand::path_input_precision_error)
         .def_readonly(
+            "path_input_precision_error_x",
+            &lunasvg::PaintCommand::path_input_precision_error_x)
+        .def_readonly(
+            "path_input_precision_error_y",
+            &lunasvg::PaintCommand::path_input_precision_error_y)
+        .def_readonly(
+            "path_lowering_precision_error",
+            &lunasvg::PaintCommand::path_lowering_precision_error)
+        .def_readonly(
+            "path_coordinates_exact",
+            &lunasvg::PaintCommand::path_coordinates_exact)
+        .def_readonly(
+            "transform_coordinates_exact",
+            &lunasvg::PaintCommand::transform_coordinates_exact)
+        .def_readonly(
+            "source_fill_area_upper_bound",
+            &lunasvg::PaintCommand::source_fill_area_upper_bound)
+        .def_readonly(
+            "source_has_lowered_curve",
+            &lunasvg::PaintCommand::source_has_lowered_curve)
+        .def_readonly(
+            "stroke_direction_input_ambiguous",
+            &lunasvg::PaintCommand::stroke_direction_input_ambiguous)
+        .def_readonly(
+            "isolated_stroke_direction_input_ambiguous",
+            &lunasvg::PaintCommand::isolated_stroke_direction_input_ambiguous)
+        .def_readonly(
             "transform_linear_precision_error",
             &lunasvg::PaintCommand::transform_linear_precision_error)
         .def_readonly(
             "transform_translation_precision_error",
             &lunasvg::PaintCommand::transform_translation_precision_error)
+        .def_readonly(
+            "source_subpath_area_potential",
+            &lunasvg::PaintCommand::source_subpath_area_potential)
         .def_readonly("source_kind", &lunasvg::PaintCommand::source_kind);
 
     py::class_<lumina_svg_core::RecorderResult>(module, "RecorderResult")
@@ -220,6 +307,8 @@ PYBIND11_MODULE(_lumina_svg_core, module)
         })
         .def_readonly("image_vectorizer_origin",
                       &lumina_svg_core::RecorderResult::image_vectorizer_origin)
+        .def_readonly("has_non_scaling_stroke",
+                      &lumina_svg_core::RecorderResult::has_non_scaling_stroke)
         .def_property_readonly("commands", &commands);
 
     py::class_<lumina_svg_core::GeometryCollectionView>(module, "GeometryCollection")
@@ -256,6 +345,41 @@ PYBIND11_MODULE(_lumina_svg_core, module)
             return view.collection->holeCount();
         });
 
+    py::class_<lumina_svg_core::UnprintableFragmentCollectionView>(
+        module, "UnprintableFragmentCollection")
+        .def_property_readonly(
+            "count",
+            [](const lumina_svg_core::UnprintableFragmentCollectionView& view) {
+                return view.collection->count();
+            })
+        .def_property_readonly("reason_codes", &unprintableReasonCodes)
+        .def_property_readonly(
+            "reason_ids",
+            [](const lumina_svg_core::UnprintableFragmentCollectionView& view) {
+                return readOnlyVector(view.collection->reason_ids, view.owner);
+            })
+        .def_property_readonly("rgba", &unprintableRgba)
+        .def_property_readonly(
+            "draw_indices",
+            [](const lumina_svg_core::UnprintableFragmentCollectionView& view) {
+                return readOnlyVector(view.collection->draw_indices, view.owner);
+            })
+        .def_property_readonly(
+            "source_indices",
+            [](const lumina_svg_core::UnprintableFragmentCollectionView& view) {
+                return readOnlyVector(view.collection->source_indices, view.owner);
+            })
+        .def_property_readonly(
+            "source_kinds",
+            [](const lumina_svg_core::UnprintableFragmentCollectionView& view) {
+                return readOnlyVector(view.collection->source_kinds, view.owner);
+            })
+        .def_property_readonly(
+            "subpath_indices",
+            [](const lumina_svg_core::UnprintableFragmentCollectionView& view) {
+                return readOnlyVector(view.collection->subpath_indices, view.owner);
+            });
+
     py::class_<lumina_svg_core::NativeResult,
                std::shared_ptr<lumina_svg_core::NativeResult>>(module, "NativeResult")
         .def_readonly("status", &lumina_svg_core::NativeResult::status)
@@ -277,28 +401,17 @@ PYBIND11_MODULE(_lumina_svg_core, module)
         .def_readonly("grid_to_source_unit", &lumina_svg_core::NativeResult::grid_to_source_unit)
         .def_readonly("max_flattening_error_mm", &lumina_svg_core::NativeResult::max_flattening_error_mm)
         .def_readonly("max_quantization_error_mm", &lumina_svg_core::NativeResult::max_quantization_error_mm)
-        .def_readonly(
-            "legacy_contour_normalization_identity",
-            &lumina_svg_core::NativeResult::legacy_contour_normalization_identity)
-        .def_readonly(
-            "legacy_contour_normalization_compatible",
-            &lumina_svg_core::NativeResult::legacy_contour_normalization_compatible)
-        .def_readonly(
-            "legacy_area_filter_identity",
-            &lumina_svg_core::NativeResult::legacy_area_filter_identity)
-        .def_readonly(
-            "legacy_curve_tolerance_compatible",
-            &lumina_svg_core::NativeResult::legacy_curve_tolerance_compatible)
         .def_readonly("recorder_seconds", &lumina_svg_core::NativeResult::recorder_seconds)
         .def_readonly("kernel_seconds", &lumina_svg_core::NativeResult::kernel_seconds)
         .def_readonly("bounds_seconds", &lumina_svg_core::NativeResult::bounds_seconds)
         .def_readonly("replay_seconds", &lumina_svg_core::NativeResult::replay_seconds)
         .def_readonly("topology_seconds", &lumina_svg_core::NativeResult::topology_seconds)
-        .def_readonly("legacy_raw_seconds", &lumina_svg_core::NativeResult::legacy_raw_seconds)
+        .def_readonly("normalization_raw_seconds", &lumina_svg_core::NativeResult::normalization_raw_seconds)
         .def_readonly("composite_seconds", &lumina_svg_core::NativeResult::composite_seconds)
-        .def_readonly("legacy_visible_seconds", &lumina_svg_core::NativeResult::legacy_visible_seconds)
+        .def_readonly("normalization_visible_seconds", &lumina_svg_core::NativeResult::normalization_visible_seconds)
         .def_readonly("export_seconds", &lumina_svg_core::NativeResult::export_seconds)
         .def_readonly("result_conversion_seconds", &lumina_svg_core::NativeResult::result_conversion_seconds)
+        .def_readonly("input_paint_count", &lumina_svg_core::NativeResult::input_paint_count)
         .def_property_readonly("raw", [](lumina_svg_core::NativeResult& value) {
             return collectionView(value, value.raw);
         })
@@ -307,6 +420,9 @@ PYBIND11_MODULE(_lumina_svg_core, module)
         })
         .def_property_readonly("silhouette", [](lumina_svg_core::NativeResult& value) {
             return collectionView(value, value.silhouette);
+        })
+        .def_property_readonly("unprintable_fragments", [](lumina_svg_core::NativeResult& value) {
+            return unprintableView(value);
         });
 
     module.def("record_paint_commands", [](const std::filesystem::path& path) {
@@ -319,25 +435,15 @@ PYBIND11_MODULE(_lumina_svg_core, module)
         return lumina_svg_core::recordPaintCommandsSvg(svg);
     }, py::arg("svg"));
 
-    module.def(
-        "_set_thread_launch_failure_after_for_testing",
-        &lumina_svg_core::setThreadLaunchFailureAfterForTesting,
-        py::arg("successful_launches"));
-
     module.def("analyze_svg", [](const std::filesystem::path& path,
                                   double targetWidthMm,
                                   double toleranceMm,
-                                  bool allowStrokes,
-                                  double legacyCloseDeltaSourceUnits,
-                                  double legacyMinimumPaintAreaFactor,
-                                  double legacyComponentAreaSourceUnitsSquared) {
+                                  bool allowStrokes) {
         std::shared_ptr<lumina_svg_core::NativeResult> result;
         {
             py::gil_scoped_release release;
             result = lumina_svg_core::analyzeSvgPath(
-                path, targetWidthMm, toleranceMm, allowStrokes,
-                legacyCloseDeltaSourceUnits, legacyMinimumPaintAreaFactor,
-                legacyComponentAreaSourceUnitsSquared);
+                path, targetWidthMm, toleranceMm, allowStrokes);
         }
         const auto conversionStarted = std::chrono::steady_clock::now();
         auto value = py::cast(result);
@@ -345,25 +451,17 @@ PYBIND11_MODULE(_lumina_svg_core, module)
             std::chrono::steady_clock::now() - conversionStarted).count();
         return value;
     }, py::arg("path"), py::arg("target_width_mm"),
-       py::arg("tolerance_mm"), py::arg("allow_strokes") = true,
-       py::arg("legacy_close_delta_source_units") = 0.0,
-       py::arg("legacy_minimum_paint_area_factor") = 0.0,
-       py::arg("legacy_component_area_source_units_squared") = 0.0);
+       py::arg("tolerance_mm"), py::arg("allow_strokes") = true);
 
     module.def("analyze_svg_svg", [](const std::string& svg,
                                       double targetWidthMm,
                                       double toleranceMm,
-                                      bool allowStrokes,
-                                      double legacyCloseDeltaSourceUnits,
-                                      double legacyMinimumPaintAreaFactor,
-                                      double legacyComponentAreaSourceUnitsSquared) {
+                                      bool allowStrokes) {
         std::shared_ptr<lumina_svg_core::NativeResult> result;
         {
             py::gil_scoped_release release;
             result = lumina_svg_core::analyzeSvgData(
-                svg, targetWidthMm, toleranceMm, allowStrokes,
-                legacyCloseDeltaSourceUnits, legacyMinimumPaintAreaFactor,
-                legacyComponentAreaSourceUnitsSquared);
+                svg, targetWidthMm, toleranceMm, allowStrokes);
         }
         const auto conversionStarted = std::chrono::steady_clock::now();
         auto value = py::cast(result);
@@ -371,8 +469,5 @@ PYBIND11_MODULE(_lumina_svg_core, module)
             std::chrono::steady_clock::now() - conversionStarted).count();
         return value;
     }, py::arg("svg"), py::arg("target_width_mm"),
-       py::arg("tolerance_mm"), py::arg("allow_strokes") = true,
-       py::arg("legacy_close_delta_source_units") = 0.0,
-       py::arg("legacy_minimum_paint_area_factor") = 0.0,
-       py::arg("legacy_component_area_source_units_squared") = 0.0);
+       py::arg("tolerance_mm"), py::arg("allow_strokes") = true);
 }

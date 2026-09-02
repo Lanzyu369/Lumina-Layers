@@ -22,16 +22,33 @@ public:
 
 class ComplexityBudget {
 public:
-    static constexpr size_t MAX_GENERATED_POINTS = 4'000'000;
-    static constexpr size_t MAX_GENERATED_RINGS = 250'000;
-    static constexpr size_t MAX_TOPOLOGY_SEGMENTS = 1'000'000;
-    static constexpr size_t MAX_BOOLEAN_INPUT_POINTS = 8'000'000;
-    static constexpr size_t MAX_OVERLAP_PAIRS = 50'000;
-    static constexpr size_t MAX_RESULT_POINTS = 4'000'000;
-    static constexpr size_t MAX_CLIPPER_INDEX_SEGMENTS = 1'000'000;
-    static constexpr size_t MAX_CLIPPER_INTERSECTION_CANDIDATES = 20'000'000;
+    static constexpr size_t MAX_GENERATED_POINTS = 64'000'000;
+    static constexpr size_t MAX_GENERATED_RINGS = 1'000'000;
+    static constexpr size_t MAX_BOOLEAN_INPUT_POINTS_PER_OPERATION =
+        16'000'000;
+    static constexpr size_t MAX_BOOLEAN_INPUT_POINTS_PER_DOCUMENT =
+        256'000'000;
+    static constexpr size_t MAX_TRANSIENT_POINTS_PER_OPERATION = 16'000'000;
+    static constexpr size_t MAX_RESULT_POINTS = 16'000'000;
+    static constexpr size_t MAX_RETAINED_GEOMETRY_POINTS = 16'000'000;
+    static constexpr size_t MAX_RETAINED_GEOMETRY_RINGS = 1'000'000;
+    static constexpr size_t MAX_CLIPPER_INDEX_SEGMENTS = 4'000'000;
+    static constexpr size_t MAX_CLIPPER_INTERSECTION_CANDIDATES = 100'000'000;
+    static constexpr size_t MAX_CLIPPER_INTERSECTION_COMPARISONS =
+        256'000'000;
+    static constexpr size_t MAX_CLIPPER_INTERSECTION_CANDIDATES_PER_DOCUMENT =
+        100'000'000;
+    static constexpr size_t MAX_CLIPPER_INTERSECTION_COMPARISONS_PER_DOCUMENT =
+        512'000'000;
     static constexpr size_t MAX_CLIPPER_OUTPUT_POINTS = 16'000'000;
     static constexpr size_t MAX_CLIPPER_OUTPUT_RINGS = 1'000'000;
+    static constexpr size_t MAX_CLIPPER_OUTPUT_POINTS_PER_DOCUMENT =
+        256'000'000;
+    static constexpr size_t MAX_CLIPPER_OUTPUT_RINGS_PER_DOCUMENT =
+        16'000'000;
+    static constexpr size_t MAX_COMPOSITOR_BOUNDS_CANDIDATES = 100'000'000;
+    static constexpr size_t MAX_STROKE_SIMPLIFICATION_COMPARISONS =
+        50'000'000;
 
     void consumeGeneratedPoints(size_t count = 1)
     {
@@ -54,25 +71,27 @@ public:
             "generated_rings");
     }
 
-    void consumeTopologySegments(size_t count)
+    void requireBooleanInputPointCapacity(size_t count) const
     {
-        consume(
-            m_topologySegments, count, MAX_TOPOLOGY_SEGMENTS,
-            "topology_segments");
+        ensure(
+            0, count, MAX_BOOLEAN_INPUT_POINTS_PER_OPERATION,
+            "boolean_input_points");
     }
 
     void consumeBooleanInputPoints(size_t count)
     {
+        requireBooleanInputPointCapacity(count);
         consume(
-            m_booleanInputPoints, count, MAX_BOOLEAN_INPUT_POINTS,
-            "boolean_input_points");
+            m_booleanInputPoints, count,
+            MAX_BOOLEAN_INPUT_POINTS_PER_DOCUMENT,
+            "boolean_input_points_document");
     }
 
-    void consumeOverlapPairs(size_t count)
+    void requireTransientPointCapacity(size_t count) const
     {
-        consume(
-            m_overlapPairs, count, MAX_OVERLAP_PAIRS,
-            "overlap_pairs");
+        ensure(
+            0, count, MAX_TRANSIENT_POINTS_PER_OPERATION,
+            "transient_points");
     }
 
     void consumeResultPoints(size_t count)
@@ -88,28 +107,102 @@ public:
             throw ComplexityLimitError("clipper_index_segments");
     }
 
-    void consumeClipperIntersectionCandidates(size_t count = 1)
+    void requireClipperIntersectionCandidateCapacity(size_t count) const
     {
-        consume(
-            m_clipperIntersectionCandidates, count,
+        ensure(
+            0, count,
             MAX_CLIPPER_INTERSECTION_CANDIDATES,
             "clipper_intersection_candidates");
     }
 
-    void consumeClipperOutputPoints(size_t count)
+    void requireClipperIntersectionWorkCapacity(size_t count) const
     {
+        ensure(
+            0, count,
+            MAX_CLIPPER_INTERSECTION_COMPARISONS,
+            "clipper_intersection_comparisons");
+    }
+
+    void consumeClipperIntersectionCandidates(size_t count)
+    {
+        requireClipperIntersectionCandidateCapacity(count);
         consume(
-            m_clipperOutputPoints, count,
+            m_clipperIntersectionCandidates, count,
+            MAX_CLIPPER_INTERSECTION_CANDIDATES_PER_DOCUMENT,
+            "clipper_intersection_candidates_document");
+    }
+
+    void consumeClipperIntersectionWork(size_t count)
+    {
+        requireClipperIntersectionWorkCapacity(count);
+        consume(
+            m_clipperIntersectionComparisons, count,
+            MAX_CLIPPER_INTERSECTION_COMPARISONS_PER_DOCUMENT,
+            "clipper_intersection_comparisons_document");
+    }
+
+    void requireClipperOutputPointCapacity(size_t count) const
+    {
+        ensure(
+            0, count,
             MAX_CLIPPER_OUTPUT_POINTS,
             "clipper_output_points");
     }
 
+    void requireClipperOutputRingCapacity(size_t count) const
+    {
+        ensure(
+            0, count, MAX_CLIPPER_OUTPUT_RINGS,
+            "clipper_output_rings");
+    }
+
+    void requireClipperOutputDocumentCapacity(
+        size_t pointCount, size_t ringCount) const
+    {
+        requireClipperOutputPointCapacity(pointCount);
+        requireClipperOutputRingCapacity(ringCount);
+        ensure(
+            m_clipperOutputPoints, pointCount,
+            MAX_CLIPPER_OUTPUT_POINTS_PER_DOCUMENT,
+            "clipper_output_points_document");
+        ensure(
+            m_clipperOutputRings, ringCount,
+            MAX_CLIPPER_OUTPUT_RINGS_PER_DOCUMENT,
+            "clipper_output_rings_document");
+    }
+
+    void consumeClipperOutputPoints(size_t count)
+    {
+        requireClipperOutputPointCapacity(count);
+        consume(
+            m_clipperOutputPoints, count,
+            MAX_CLIPPER_OUTPUT_POINTS_PER_DOCUMENT,
+            "clipper_output_points_document");
+    }
+
     void consumeClipperOutputRings(size_t count)
     {
+        requireClipperOutputRingCapacity(count);
         consume(
             m_clipperOutputRings, count,
-            MAX_CLIPPER_OUTPUT_RINGS,
-            "clipper_output_rings");
+            MAX_CLIPPER_OUTPUT_RINGS_PER_DOCUMENT,
+            "clipper_output_rings_document");
+    }
+
+    void consumeCompositorBoundsCandidates(size_t count = 1)
+    {
+        consume(
+            m_compositorBoundsCandidates, count,
+            MAX_COMPOSITOR_BOUNDS_CANDIDATES,
+            "compositor_bounds_candidates");
+    }
+
+    void consumeStrokeSimplificationComparisons(size_t count = 1)
+    {
+        consume(
+            m_strokeSimplificationComparisons, count,
+            MAX_STROKE_SIMPLIFICATION_COMPARISONS,
+            "stroke_simplification_comparisons");
     }
 
 private:
@@ -129,13 +222,14 @@ private:
 
     size_t m_generatedPoints{0};
     size_t m_generatedRings{0};
-    size_t m_topologySegments{0};
     size_t m_booleanInputPoints{0};
-    size_t m_overlapPairs{0};
     size_t m_resultPoints{0};
     size_t m_clipperIntersectionCandidates{0};
+    size_t m_clipperIntersectionComparisons{0};
     size_t m_clipperOutputPoints{0};
     size_t m_clipperOutputRings{0};
+    size_t m_compositorBoundsCandidates{0};
+    size_t m_strokeSimplificationComparisons{0};
 };
 
 inline size_t checkedSizeProduct(size_t left, size_t right)

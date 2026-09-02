@@ -7,7 +7,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 import shapely
-from shapely.geometry import LineString, Polygon, box
+from shapely.geometry import LineString, MultiLineString, Polygon, box
+from shapely.affinity import translate
 
 import lumina_svg_core
 
@@ -117,6 +118,193 @@ def test_clip_and_later_paint_define_visible_geometry() -> None:
     )
     assert result.silhouette.component_count == 1
     assert result.silhouette.hole_count == 0
+
+
+@pytest.mark.parametrize(
+    ("overflow", "expected_maximum"),
+    [("", 12.0), ("hidden", 12.0), ("visible", 20.0)],
+    ids=["default-hidden", "explicit-hidden", "visible"],
+)
+def test_marker_viewport_overflow_is_recorded_as_geometry_clip(
+    overflow: str,
+    expected_maximum: float,
+) -> None:
+    overflow_attribute = f" overflow='{overflow}'" if overflow else ""
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 30 20'><defs>"
+        "<marker id='m' markerWidth='2' markerHeight='2' refX='0' refY='0'"
+        f"{overflow_attribute}>"
+        "<rect x='0' y='0' width='10' height='10' fill='red'/>"
+        "</marker></defs>"
+        "<path d='M1 10L10 10' fill='none' stroke='none' "
+        "marker-end='url(#m)'/></svg>",
+        target_width_mm=30.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 1
+    assert geometry_bounds(result, result.raw, 0) == pytest.approx(
+        (10.0, 10.0, expected_maximum, expected_maximum), abs=0.02
+    )
+
+
+def test_auto_marker_direction_precision_never_silently_exceeds_budget() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 1000000 1000001'><defs>"
+        "<marker id='m' markerUnits='userSpaceOnUse' markerWidth='1000000' "
+        "markerHeight='10' refX='0' refY='5' orient='auto' "
+        "overflow='visible'>"
+        "<path d='M0 0L1000000 5L0 10Z' fill='blue'/>"
+        "</marker></defs>"
+        "<path d='M10 1000000L20 1000000.003' fill='none' stroke='none' "
+        "marker-end='url(#m)'/></svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "unsupported"
+    assert result.reason_code == "unsupported_input_precision"
+
+
+@pytest.mark.parametrize(
+    "source_geometry",
+    [
+        "<line x1='10' y1='1000000' x2='20' y2='1000000.003'/>",
+        "<polyline points='10 1000000 20 1000000.003'/>",
+    ],
+    ids=["line", "polyline"],
+)
+def test_primitive_auto_marker_direction_precision_fails_closed(
+    source_geometry: str,
+) -> None:
+    source_geometry = source_geometry[:-2] + (
+        " fill='none' stroke='none' marker-end='url(#m)'/>"
+    )
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 1000000 1000001'><defs>"
+        "<marker id='m' markerUnits='userSpaceOnUse' markerWidth='1000000' "
+        "markerHeight='10' refX='0' refY='5' orient='auto' "
+        "overflow='visible'>"
+        "<path d='M0 0L1000000 5L0 10Z' fill='blue'/>"
+        "</marker></defs>"
+        f"{source_geometry}</svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "unsupported"
+    assert result.reason_code == "unsupported_input_precision"
+
+
+def test_exact_shared_boundary_does_not_split_the_silhouette() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 9 5'>"
+        "<rect x='.1' width='5' height='5' fill='red'/>"
+        "<path d='M5.1 0H9V5H5.1Z' fill='blue'/></svg>",
+        target_width_mm=90.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.silhouette.component_count == 1
+    assert geometry_area(result, result.silhouette, 0) == pytest.approx(
+        44.5, abs=1e-7
+    )
+
+
+@pytest.mark.parametrize("width", ["51%", "5.1px"])
+def test_resolved_length_shared_boundary_does_not_split_silhouette(
+    width: str,
+) -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 10 5'>"
+        f"<rect width='{width}' height='5' fill='red'/>"
+        "<path d='M5.1 0H9V5H5.1Z' fill='blue'/></svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.reason_code == ""
+    assert result.silhouette.component_count == 1
+    assert geometry_area(result, result.silhouette, 0) == pytest.approx(
+        45.0, abs=1e-7
+    )
+
+
+def test_percentage_ellipse_radii_follow_viewport_axes() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 200 100'>"
+        "<ellipse cx='100' cy='50' rx='50%' ry='50%' fill='red'/>"
+        "</svg>",
+        target_width_mm=200.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 1
+    assert geometry_bounds(result, result.raw, 0) == pytest.approx(
+        (0.0, 0.0, 200.0, 100.0), abs=0.02
+    )
+
+
+def test_short_stroke_subpath_is_reported_without_losing_valid_stroke() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 10 10'>"
+        "<path d='M1 5H9 M1 7h1e-14' fill='none' stroke='blue' "
+        "stroke-width='1' stroke-linecap='butt'/></svg>",
+        target_width_mm=10.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 1
+    assert result.unprintable_fragments.reason_codes == ("stroke_collapse",)
+    assert result.unprintable_fragments.subpath_indices.tolist() == [1]
+
+
+def test_partial_paint_alpha_falls_back_before_native_compositing() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 20 10'>"
+        "<rect width='10' height='10' fill='rgba(40,40,39,0.996)'/>"
+        "<rect x='10' width='10' height='10' fill='#00ff0080'/>"
+        "</svg>",
+        target_width_mm=20.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "unsupported"
+    assert result.reason_code == "unsupported_partial_alpha"
+    assert result.input_paint_count == 2
+    assert result.raw.geometry_count == 0
+    assert result.visible.geometry_count == 0
+
+
+@pytest.mark.parametrize(
+    "paint",
+    [
+        "fill='red' fill-opacity='0.99999999'",
+        "fill='red' fill-opacity='1e-50'",
+        "fill='rgba(1,2,3,0.99999999)'",
+        "fill='rgba(1,2,3,1e-50)'",
+        "color='rgba(1,2,3,0.99999999)' fill='currentColor'",
+    ],
+)
+def test_source_partial_alpha_near_endpoints_falls_back(
+    paint: str,
+) -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 10 10'>"
+        f"<rect width='10' height='10' {paint}/>"
+        "</svg>",
+        target_width_mm=10.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "unsupported"
+    assert result.reason_code == "unsupported_partial_alpha"
+    assert result.raw.geometry_count == 0
 
 
 def test_dash_array_is_applied_in_local_arclength() -> None:
@@ -326,12 +514,22 @@ def test_zero_length_dashed_subpath_respects_dash_phase_and_cap(
     )
 
     assert result.status == "supported"
-    assert result.raw.geometry_count == 2
-    assert tuple(result.raw.source_kinds) == (1, 0)
-    assert geometry_area(result, result.raw, 0) == pytest.approx(
-        expected_area, abs=0.08
-    )
-    assert result.raw.component_count == (2 if expected_area else 1)
+    if expected_area:
+        assert result.raw.geometry_count == 2
+        assert tuple(result.raw.source_kinds) == (1, 0)
+        assert geometry_area(result, result.raw, 0) == pytest.approx(
+            expected_area, abs=0.08
+        )
+        assert result.raw.component_count == 2
+        assert result.unprintable_fragments.count == 0
+    else:
+        assert result.raw.geometry_count == 1
+        assert tuple(result.raw.source_kinds) == (0,)
+        assert result.raw.component_count == 1
+        assert result.unprintable_fragments.reason_codes == (
+            "stroke_collapse",
+        )
+        assert result.unprintable_fragments.source_kinds.tolist() == [1]
 
 
 @pytest.mark.parametrize("linecap", ["round", "square"])
@@ -372,7 +570,7 @@ def test_pure_moveto_is_dropped_without_hiding_a_later_zero_length_line() -> Non
 
 
 @pytest.mark.parametrize("unit_scale", [1e-17, 1.0, 1e17])
-def test_closed_dash_caps_are_invariant_across_user_unit_scales(
+def test_closed_dash_wrap_join_is_invariant_across_user_unit_scales(
     unit_scale: float,
 ) -> None:
     result = lumina_svg_core.analyze_svg_svg(
@@ -395,44 +593,36 @@ def test_closed_dash_caps_are_invariant_across_user_unit_scales(
     physical_area = (
         geometry_area(result, result.raw, 0) * result.scale_factor**2
     )
-    # Two butt-capped dash pairs meet without replacing their caps by a join.
+    # A painted dash that crosses the closed-subpath seam keeps the corner
+    # join; the seam is not converted into two artificial caps.
     # The zero-origin root viewport is 14 mm wide after public normalization.
-    assert physical_area == pytest.approx(39.0, abs=0.1)
+    assert physical_area == pytest.approx(40.0, abs=0.1)
 
 
-@pytest.mark.parametrize("linecap", ["butt", "round", "square"])
 @pytest.mark.parametrize(
-    ("dash_array", "dash_offset"),
-    [("50 10", 0), ("40 10", 0), ("10 10", 5)],
-    ids=["covers-perimeter", "equals-perimeter", "two-pairs-across-seam"],
+    "dash_array",
+    ["50 10", "40 10"],
+    ids=["covers-perimeter", "equals-perimeter"],
 )
-def test_closed_dashed_path_keeps_caps_at_seam_like_equivalent_open_path(
-    linecap: str,
+def test_closed_dash_covering_perimeter_is_independent_of_linecap(
     dash_array: str,
-    dash_offset: int,
 ) -> None:
-    common_style = (
-        "fill='none' stroke='#000' stroke-width='2' "
-        f"stroke-linecap='{linecap}' stroke-linejoin='bevel' "
-        f"stroke-dasharray='{dash_array}' stroke-dashoffset='{dash_offset}'"
-    )
-    closed = lumina_svg_core.analyze_svg_svg(
-        "<svg viewBox='0 0 20 20'>"
-        f"<path d='M5 5H15V15H5Z' {common_style}/></svg>",
-        target_width_mm=20.0,
-        tolerance_mm=0.02,
-    )
-    equivalent_open = lumina_svg_core.analyze_svg_svg(
-        "<svg viewBox='0 0 20 20'>"
-        f"<path d='M5 5H15V15H5L5 5' {common_style}/></svg>",
-        target_width_mm=20.0,
-        tolerance_mm=0.02,
-    )
+    geometries = []
+    for linecap in ("butt", "round", "square"):
+        result = lumina_svg_core.analyze_svg_svg(
+            "<svg viewBox='0 0 20 20'>"
+            "<path d='M5 5H15V15H5Z' fill='none' stroke='#000' "
+            "stroke-width='2' stroke-linejoin='bevel' "
+            f"stroke-linecap='{linecap}' stroke-dasharray='{dash_array}'/>"
+            "</svg>",
+            target_width_mm=20.0,
+            tolerance_mm=0.02,
+        )
+        assert result.status == "supported"
+        geometries.append(geometry_shape(result, result.raw, 0))
 
-    assert closed.status == equivalent_open.status == "supported"
-    closed_geometry = geometry_shape(closed, closed.raw, 0)
-    open_geometry = geometry_shape(equivalent_open, equivalent_open.raw, 0)
-    assert closed_geometry.symmetric_difference(open_geometry).area < 0.02
+    assert geometries[0].symmetric_difference(geometries[1]).area < 0.02
+    assert geometries[0].symmetric_difference(geometries[2]).area < 0.02
 
 
 def test_zero_length_dash_entry_fails_closed_before_expansion() -> None:
@@ -451,35 +641,48 @@ def test_zero_length_dash_entry_fails_closed_before_expansion() -> None:
     assert result.raw.geometry_count == 0
 
 
-def test_dash_offset_float_rounding_exceeding_error_budget_fails_closed() -> None:
-    result = lumina_svg_core.analyze_svg_svg(
+def test_large_dash_offset_preserves_exact_source_value() -> None:
+    svg = (
         "<svg viewBox='0 0 100 10'>"
         "<path d='M0 5H100' fill='none' stroke='#000' stroke-width='2' "
         "stroke-dasharray='3 3' stroke-dashoffset='16777217'/>"
-        "</svg>",
+        "</svg>"
+    )
+    recording = lumina_svg_core.record_paint_commands_svg(svg)
+    result = lumina_svg_core.analyze_svg_svg(
+        svg,
         target_width_mm=100.0,
         tolerance_mm=0.02,
     )
 
-    assert result.status == "unsupported"
-    assert result.reason_code == "unsupported_input_precision"
-    assert result.raw.geometry_count == 0
+    assert recording.commands[0].stroke.dash_offset == 16777217.0
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 1
+    assert result.raw.component_count == 17
 
 
-def test_dash_pattern_rounding_accumulated_by_large_offset_fails_closed() -> None:
+def test_large_dash_cycle_preserves_exact_decimal_pattern() -> None:
     dash_array = " ".join(["0.100000001"] * 32)
-    result = lumina_svg_core.analyze_svg_svg(
+    svg = (
         "<svg viewBox='0 0 100 10'>"
         "<path d='M0 5H100' fill='none' stroke='#000' stroke-width='2' "
         f"stroke-dasharray='{dash_array}' stroke-dashoffset='10000000'/>"
-        "</svg>",
+        "</svg>"
+    )
+    recording = lumina_svg_core.record_paint_commands_svg(svg)
+    result = lumina_svg_core.analyze_svg_svg(
+        svg,
         target_width_mm=100.0,
         tolerance_mm=0.02,
     )
 
-    assert result.status == "unsupported"
-    assert result.reason_code == "unsupported_input_precision"
-    assert result.raw.geometry_count == 0
+    assert recording.commands[0].stroke.dash_array == pytest.approx(
+        (0.100000001,) * 32,
+        abs=0.0,
+    )
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 1
+    assert result.raw.component_count > 0
 
 
 @pytest.mark.parametrize("limit_delta", [-0.05, 0.05])
@@ -568,6 +771,321 @@ def test_miter_limit_rounding_at_join_threshold_fails_closed() -> None:
     assert result.raw.geometry_count == 0
 
 
+@pytest.mark.parametrize("tolerance_mm", [0.02, 0.002])
+def test_acute_miter_centerline_quantization_stays_in_total_error_budget(
+    tolerance_mm: float,
+) -> None:
+    angle = np.deg2rad(0.25)
+    length = 40.0
+    center = np.array([50.0, 50.0])
+    first = center + np.array(
+        [length * np.cos(angle), -length * np.sin(angle)]
+    )
+    last = center + np.array(
+        [length * np.cos(angle), length * np.sin(angle)]
+    )
+    centerline = LineString([first, center, last])
+    reference = centerline.buffer(
+        0.5,
+        cap_style="flat",
+        join_style="mitre",
+        mitre_limit=1000.0,
+    )
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 100 100'>"
+        f"<path d='M{first[0]:.15g} {first[1]:.15g} L50 50 "
+        f"L{last[0]:.15g} {last[1]:.15g}' fill='none' stroke='#000' "
+        "stroke-width='1' stroke-linecap='butt' stroke-linejoin='miter' "
+        "stroke-miterlimit='1000'/></svg>",
+        target_width_mm=100.0,
+        tolerance_mm=tolerance_mm,
+    )
+
+    if result.status == "unsupported":
+        assert result.reason_code == "unsupported_input_precision"
+        return
+    actual = translate(
+        geometry_shape(result, result.raw, 0),
+        xoff=result.bbox[0],
+        yoff=result.bbox[1],
+    )
+    assert (
+        actual.boundary.hausdorff_distance(reference.boundary)
+        * result.scale_factor
+        <= tolerance_mm
+    )
+
+
+@pytest.mark.parametrize("tolerance_mm", [0.002, 0.001, 0.0005])
+def test_acute_miter_uses_exact_source_directions(
+    tolerance_mm: float,
+) -> None:
+    angle = np.deg2rad(0.05)
+    length = 40.0
+    center = np.array([50.0, 50.0])
+    first = center + np.array(
+        [length * np.cos(angle), -length * np.sin(angle)]
+    )
+    last = center + np.array(
+        [length * np.cos(angle), length * np.sin(angle)]
+    )
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 100 100'>"
+        f"<path d='M{first[0]:.15g} {first[1]:.15g} L50 50 "
+        f"L{last[0]:.15g} {last[1]:.15g}' fill='none' stroke='#000' "
+        "stroke-width='1' stroke-linecap='butt' stroke-linejoin='miter' "
+        "stroke-miterlimit='5000'/></svg>",
+        target_width_mm=100.0,
+        tolerance_mm=tolerance_mm,
+    )
+
+    assert result.status == "supported"
+    assert result.reason_code == ""
+    assert result.raw.geometry_count == 1
+
+
+def test_short_stroke_direction_is_preserved() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 100 100'>"
+        "<path d='M500.00013 50.00013 L500.00513 50.00023' "
+        "transform='translate(-450 0)' fill='none' stroke='black' "
+        "stroke-width='10' stroke-linecap='butt'/></svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 1
+    assert result.unprintable_fragments.count == 0
+
+
+def test_exact_arc_lowering_error_is_not_amplified_as_endpoint_noise() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 100 100'>"
+        "<path d='M10 10 A24 23.65 -66.8 0 1 10.01 10.001 "
+        "L20 10 L20 20 Z' fill='red' stroke='black' "
+        "stroke-width='2' stroke-linecap='round' "
+        "stroke-linejoin='round' vector-effect='non-scaling-stroke'/>"
+        "</svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported", result.reason_code
+    assert result.reason_code == ""
+    assert result.raw.geometry_count == 2
+    assert result.unprintable_fragments.count == 0
+
+
+def test_dense_round_stroke_uses_exact_minkowski_bounds() -> None:
+    points = " ".join(
+        f"L{-10.0 + index * 0.001:.3f} "
+        f"{10.0 + (index % 2) * 0.0001:.4f}"
+        for index in range(3000)
+    )
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 20 20'>"
+        f"<path d='M-10 10 {points}' fill='none' stroke='black' "
+        "stroke-width='2' stroke-linecap='round' "
+        "stroke-linejoin='round'/></svg>",
+        target_width_mm=20.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported", result.reason_code
+    assert result.raw.geometry_count == 1
+    assert result.bbox[0] == pytest.approx(-11.0, abs=0.001)
+    assert result.bbox[2] == pytest.approx(31.0, abs=0.001)
+
+
+@pytest.mark.parametrize(
+    "line_cap",
+    ["square", "round", "butt"],
+)
+def test_exact_short_line_preserves_all_area_bearing_caps(
+    line_cap: str,
+) -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 100 100'>"
+        "<path d='M500.00013 50.00013 L500.0001301 50.0001301' "
+        "transform='translate(-450 0)' fill='none' stroke='black' "
+        f"stroke-width='10' stroke-linecap='{line_cap}'/></svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.reason_code == ""
+    assert result.raw.geometry_count == 1
+    assert result.unprintable_fragments.count == 0
+
+
+def test_exact_short_round_dash_phase_remains_printable() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 100 100'>"
+        "<rect x='0' y='0' width='1' height='1' fill='red'/>"
+        "<path d='M500.00013 50.00013 L500.000131 50.000131' "
+        "transform='translate(-450 0)' fill='none' stroke='blue' "
+        "stroke-width='10' stroke-linecap='round' "
+        "stroke-dasharray='1 1' stroke-dashoffset='1.99999988'/></svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 2
+    assert result.unprintable_fragments.count == 0
+
+
+@pytest.mark.parametrize(
+    "path_data",
+    [
+        "M500.00013 50.00013 L500.0001301 50.0001301 V70",
+        "M500.00013 50.00013 H500.0001301 V70",
+        "M500.00013 50.00013 V50.0001301 H520",
+        "M500.00013 50.00013 L510 60 L500.0001301 50.0001301 Z",
+    ],
+    ids=["line", "horizontal", "vertical", "close"],
+)
+def test_short_line_direction_next_to_other_segments_is_preserved(
+    path_data: str,
+) -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 100 100'>"
+        f"<path d='{path_data}' transform='translate(-450 0)' "
+        "fill='none' stroke='black' stroke-width='10' "
+        "stroke-linecap='round' stroke-linejoin='miter'/></svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 1
+    assert result.unprintable_fragments.count == 0
+
+
+@pytest.mark.parametrize(
+    "path_data",
+    [
+        "M500.00013 50.00013 "
+        "C500.0001301 50.0001301 501 60 510 60",
+        "M500 60 C509 60 509.9999999 50.0001301 "
+        "510 50.00013",
+        "M500.00013 50.00013 "
+        "Q500.0001301 50.0001301 510 60",
+        "M500 60 Q509.9999999 50.0001301 510 50.00013",
+    ],
+    ids=[
+        "cubic-start-tangent",
+        "cubic-end-tangent",
+        "quadratic-start-tangent",
+        "quadratic-end-tangent",
+    ],
+)
+def test_curve_endpoint_tangent_uses_exact_source_coordinates(
+    path_data: str,
+) -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 100 100'>"
+        f"<path d='{path_data}' transform='translate(-450 0)' "
+        "fill='none' stroke='black' stroke-width='.2' "
+        "stroke-linecap='butt' stroke-linejoin='round'/></svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.reason_code == ""
+    assert result.raw.geometry_count == 1
+
+
+@pytest.mark.parametrize(
+    ("line_cap", "line_join"),
+    [
+        ("butt", "miter"),
+        ("round", "miter"),
+        ("square", "bevel"),
+    ],
+)
+def test_closed_dash_wrap_uses_join_at_seam(
+    line_cap: str,
+    line_join: str,
+) -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 40 40'>"
+        "<path d='M10 10H30V30H10Z' fill='none' stroke='black' "
+        "stroke-width='4' stroke-dasharray='10 10' "
+        f"stroke-dashoffset='5' stroke-linecap='{line_cap}' "
+        f"stroke-linejoin='{line_join}'/></svg>",
+        target_width_mm=40.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported", result.reason_code
+    actual = geometry_shape(result, result.raw, 0)
+    centerlines = MultiLineString(
+        [
+            [(10, 15), (10, 10), (15, 10)],
+            [(25, 10), (30, 10), (30, 15)],
+            [(30, 25), (30, 30), (25, 30)],
+            [(15, 30), (10, 30), (10, 25)],
+        ]
+    )
+    reference = centerlines.buffer(
+        2.0,
+        cap_style={"butt": "flat"}.get(line_cap, line_cap),
+        join_style={"miter": "mitre"}.get(line_join, line_join),
+        mitre_limit=4.0,
+        quad_segs=64,
+    )
+
+    assert actual.boundary.hausdorff_distance(reference.boundary) <= 0.02
+    assert actual.symmetric_difference(reference).area <= 0.2
+
+
+def test_round_point_cap_fails_closed_when_error_needs_over_4096_segments(
+) -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 100 100'>"
+        "<path d='M50 50' fill='none' stroke='#000' stroke-width='100' "
+        "stroke-linecap='round'/></svg>",
+        target_width_mm=100.0,
+        tolerance_mm=1.0e-6,
+    )
+
+    assert result.status == "unsupported"
+    assert result.reason_code in {
+        "unsupported_complexity",
+        "unsupported_input_precision",
+    }
+    assert result.raw.geometry_count == 0
+
+
+def test_collapsed_stroke_fragment_does_not_discard_valid_paint() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 100 100'>"
+        "<rect width='10' height='10' fill='red'/>"
+        "<path d='M20 20L80 20' fill='none' stroke='blue' "
+        "stroke-width='1' stroke-linecap='butt' "
+        "transform='matrix(1 0 0 0.000000000001 0 0)'/>"
+        "</svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 1
+    assert result.raw.rgba.tolist() == [[255, 0, 0, 255]]
+    assert result.unprintable_fragments.reason_codes == (
+        "stroke_collapse",
+    )
+    assert result.unprintable_fragments.rgba.tolist() == [
+        [0, 0, 255, 255],
+    ]
+    assert result.unprintable_fragments.draw_indices.tolist() == [1]
+    assert result.unprintable_fragments.source_kinds.tolist() == [1]
+
+
 def test_dashed_cubic_uses_total_arclength_error_budget() -> None:
     cubic_commands = " ".join(
         f"C{index + 0.25} 2 {index + 0.75} 0 {index + 1} 1"
@@ -586,7 +1104,6 @@ def test_dashed_cubic_uses_total_arclength_error_budget() -> None:
         assert result.reason_code in {
             "unsupported_complexity",
             "unsupported_input_precision",
-            "unsupported_topology_collapse",
         }
         assert result.raw.geometry_count == 0
         return
@@ -626,6 +1143,11 @@ def test_dashed_cubic_uses_total_arclength_error_budget() -> None:
         join_style="round",
         quad_segs=16,
     )
+    reference = translate(
+        reference,
+        xoff=-result.bbox[0],
+        yoff=-result.bbox[1],
+    )
     actual = geometry_shape(result, result.raw, 0)
     physical_boundary_error = (
         actual.boundary.hausdorff_distance(reference.boundary)
@@ -635,7 +1157,7 @@ def test_dashed_cubic_uses_total_arclength_error_budget() -> None:
     assert physical_boundary_error <= 0.02
 
 
-def test_nested_svg_coordinate_semantics_fail_closed_to_legacy() -> None:
+def test_nested_svg_coordinate_semantics_are_clipped_natively() -> None:
     result = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 40 20'>"
         "<svg x='10' y='5' width='10' height='10' viewBox='0 0 10 10'>"
@@ -645,12 +1167,12 @@ def test_nested_svg_coordinate_semantics_fail_closed_to_legacy() -> None:
         tolerance_mm=0.02,
     )
 
-    assert result.status == "unsupported"
-    assert result.reason_code == "unsupported_nested_svg"
-    assert result.raw.geometry_count == 0
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 1
+    assert result.raw.component_count == 1
 
 
-def test_explicit_root_overflow_hidden_falls_back_to_legacy() -> None:
+def test_explicit_root_overflow_hidden_is_clipped_natively() -> None:
     result = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 10 10' overflow='hidden'>"
         "<path d='M-10 0H20V10H-10Z' fill='#f00'/>"
@@ -659,9 +1181,9 @@ def test_explicit_root_overflow_hidden_falls_back_to_legacy() -> None:
         tolerance_mm=0.02,
     )
 
-    assert result.status == "unsupported"
-    assert result.reason_code == "unsupported_root_overflow"
-    assert result.raw.geometry_count == 0
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 1
+    assert result.raw.component_count == 1
 
 
 @pytest.mark.parametrize("outlier", [1_000.0, 1_000_000_000.0])
@@ -709,18 +1231,66 @@ def test_clip_bounds_prepass_respects_end_to_end_boundary_budget() -> None:
     assert physical.boundary.hausdorff_distance(expected.boundary) <= 0.02
 
 
-def test_stroke_policy_can_fail_before_geometry_kernel_expansion() -> None:
+def test_disabled_stroke_policy_omits_strokes_without_losing_fills() -> None:
     result = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 40 20'>"
-        "<path d='M0 10H40' fill='none' stroke='#000' stroke-width='4'/>"
+        "<path d='M2 2H38V18H2Z' fill='#f00' stroke='#00f' "
+        "stroke-width='4' vector-effect='non-scaling-stroke'/>"
         "</svg>",
         target_width_mm=40.0,
         tolerance_mm=0.02,
         allow_strokes=False,
     )
 
-    assert result.status == "unsupported"
-    assert result.reason_code == "unsupported_stroke_policy"
-    assert result.raw.geometry_count == 0
-    assert result.visible.geometry_count == 0
-    assert result.silhouette.geometry_count == 0
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 1
+    assert result.raw.source_kinds.tolist() == [0]
+    assert geometry_bounds(result, result.raw, 0) == pytest.approx(
+        (2.0, 2.0, 38.0, 18.0), abs=0.02
+    )
+
+
+@pytest.mark.parametrize(
+    "vector_effect",
+    ["non-scaling-stroke", "non-scaling&#45;stroke"],
+    ids=["literal", "decoded-entity"],
+)
+def test_non_scaling_stroke_is_expanded_when_strokes_are_enabled(
+    vector_effect: str,
+) -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 40 20'>"
+        "<path d='M2 2H38V18H2Z' fill='#f00' stroke='#00f' "
+        f"stroke-width='4' vector-effect='{vector_effect}'/>"
+        "</svg>",
+        target_width_mm=40.0,
+        tolerance_mm=0.02,
+        allow_strokes=True,
+    )
+
+    assert result.status == "supported"
+    assert result.reason_code == ""
+    assert result.input_paint_count == 2
+    assert result.raw.geometry_count == 2
+    assert result.raw.source_kinds.tolist() == [0, 1]
+    assert geometry_area(result, result.raw, 1) == pytest.approx(
+        416.0, abs=0.02
+    )
+
+
+def test_non_scaling_stroke_expands_after_the_element_transform() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 30 20'>"
+        "<path d='M1 5H6' transform='scale(4 2)' fill='none' "
+        "stroke='#00f' stroke-width='2' stroke-linecap='butt' "
+        "vector-effect='non-scaling-stroke'/>"
+        "</svg>",
+        target_width_mm=30.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 1
+    assert geometry_area(result, result.raw, 0) == pytest.approx(
+        40.0, abs=0.02
+    )

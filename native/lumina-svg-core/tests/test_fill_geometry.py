@@ -14,6 +14,29 @@ import lumina_svg_core
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
+def geometry_area(result, collection, geometry_index: int) -> float:
+    polygon_start = collection.geometry_offsets[geometry_index]
+    polygon_end = collection.geometry_offsets[geometry_index + 1]
+    area = 0.0
+    for polygon_index in range(polygon_start, polygon_end):
+        ring_start = collection.polygon_offsets[polygon_index]
+        ring_end = collection.polygon_offsets[polygon_index + 1]
+        for ring_index in range(ring_start, ring_end):
+            point_start = collection.ring_offsets[ring_index]
+            point_end = collection.ring_offsets[ring_index + 1]
+            ring = (
+                collection.coordinates[point_start:point_end].astype(
+                    np.float64
+                )
+                * result.grid_to_source_unit
+            )
+            area += 0.5 * np.sum(
+                ring[:-1, 0] * ring[1:, 1]
+                - ring[1:, 0] * ring[:-1, 1]
+            )
+    return abs(area)
+
+
 def _normalized_coordinate_bounds(result):
     coordinates = (
         np.asarray(result.raw.coordinates, dtype=np.float64)
@@ -27,6 +50,296 @@ def _normalized_coordinate_bounds(result):
     )
 
 
+def _assert_same_geometry(left, right) -> None:
+    assert left.status == right.status == "supported"
+    assert left.bbox == pytest.approx(right.bbox, abs=1e-12)
+    assert left.scale_factor == pytest.approx(right.scale_factor, abs=1e-12)
+    for name in ("raw", "visible", "silhouette"):
+        left_collection = getattr(left, name)
+        right_collection = getattr(right, name)
+        np.testing.assert_array_equal(
+            left_collection.coordinates,
+            right_collection.coordinates,
+        )
+        np.testing.assert_array_equal(
+            left_collection.ring_offsets,
+            right_collection.ring_offsets,
+        )
+        np.testing.assert_array_equal(
+            left_collection.polygon_offsets,
+            right_collection.polygon_offsets,
+        )
+        np.testing.assert_array_equal(
+            left_collection.geometry_offsets,
+            right_collection.geometry_offsets,
+        )
+
+
+@pytest.mark.parametrize(
+    ("quadratic_path", "cubic_path"),
+    [
+        (
+            "M0 0Q3 6 6 0L6 6H0Z",
+            "M0 0C2 4 4 4 6 0L6 6H0Z",
+        ),
+        (
+            "M12 10q3 6 6 0l0 6h-6z",
+            "M12 10c2 4 4 4 6 0l0 6h-6z",
+        ),
+    ],
+)
+def test_quadratic_degree_elevation_matches_exact_cubic_geometry(
+    quadratic_path: str,
+    cubic_path: str,
+) -> None:
+    def analyze(path_data: str):
+        return lumina_svg_core.analyze_svg_svg(
+            "<svg viewBox='0 0 24 24'>"
+            "<path transform='matrix(1.25 .2 -.3 .75 4 -3)' "
+            f"d='{path_data}'/></svg>",
+            target_width_mm=100.0,
+            tolerance_mm=0.02,
+        )
+
+    _assert_same_geometry(analyze(quadratic_path), analyze(cubic_path))
+
+
+def test_path_arc_stays_inside_total_physical_error_budget() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 10 10'>"
+        "<path d='M1 5A4 4 0 0 1 9 5L1 5Z'/></svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    coordinates = (
+        np.asarray(result.raw.coordinates, dtype=np.float64)
+        * result.grid_to_source_unit
+    )
+    points = coordinates[:-1]
+    endpoints = np.roll(points, -1, axis=0)
+    segment_lengths = np.linalg.norm(endpoints - points, axis=1)
+    curved = segment_lengths < 1.0
+    midpoints = (points[curved] + endpoints[curved]) * 0.5
+    radial_errors = np.abs(
+        np.linalg.norm(midpoints - np.asarray([5.0, 5.0]), axis=1) - 4.0
+    )
+    assert float(radial_errors.max()) * result.scale_factor <= 0.02
+
+
+@pytest.mark.parametrize("origin", [1000000.0, -1000000.0])
+def test_nonzero_root_viewbox_uses_the_recorded_coordinate_domain(
+    origin: float,
+) -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        f"<svg viewBox='{origin:g} 0 10 10'>"
+        f"<rect x='{origin:g}' width='10' height='10'/></svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.bbox == pytest.approx((0.0, 0.0, 10.0, 10.0), abs=1e-9)
+    assert result.scale_factor == pytest.approx(10.0, abs=1e-9)
+    assert _normalized_coordinate_bounds(result) == pytest.approx(
+        (0.0, 0.0, 10.0, 10.0), abs=1e-8
+    )
+
+
+def test_circle_primitive_stays_inside_total_physical_error_budget() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 200 200'>"
+        "<circle cx='100' cy='100' r='100'/></svg>",
+        target_width_mm=200.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    coordinates = (
+        np.asarray(result.raw.coordinates[:-1], dtype=np.float64)
+        * result.grid_to_source_unit
+    )
+    radial_error = np.abs(
+        np.linalg.norm(coordinates - np.asarray([100.0, 100.0]), axis=1)
+        - 100.0
+    )
+    assert float(radial_error.max()) * result.scale_factor <= 0.02
+
+
+def test_extreme_arc_rotation_matches_modulo_full_turns() -> None:
+    def analyze(rotation_degrees: str):
+        return lumina_svg_core.analyze_svg_svg(
+            "<svg viewBox='0 0 10 10'>"
+            "<path d='M0 0A1000000000 1 "
+            f"{rotation_degrees} 0 1 1 0L1 1H0Z'/></svg>",
+            target_width_mm=100.0,
+            tolerance_mm=0.02,
+        )
+
+    huge_rotation = analyze("1000000000")
+    reduced_rotation = analyze("280")
+
+    _assert_same_geometry(huge_rotation, reduced_rotation)
+    assert huge_rotation.raw.geometry_count == 1
+    assert geometry_area(huge_rotation, huge_rotation.raw, 0) > 0.0
+
+
+def test_near_closed_large_arc_preserves_the_almost_complete_disk() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 100 100'>"
+        "<path d='M50.00013 50.00013 "
+        "A40 40 0 1 1 50.00213 50.00014 Z' fill='black'/>"
+        "</svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 1
+    assert geometry_area(result, result.raw, 0) == pytest.approx(
+        5026.548245743669,
+        abs=1.0,
+    )
+
+
+def test_high_eccentricity_arc_keeps_its_nonzero_area_for_downstream() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 100 100'>"
+        "<path d='M50.1428117305 49.5646840912 "
+        "A4.8162023429 0.0000001239 108.1628465385 0 1 "
+        "51.1496945796 46.4955265175 Z'/></svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 1
+    assert result.raw.component_count == 1
+    assert result.unprintable_fragments.count == 0
+    assert geometry_area(result, result.raw, 0) > 0.0
+
+
+def test_large_source_coordinates_keep_area_after_exact_transform() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 100 100'>"
+        "<rect x='0' y='50' width='1' height='1' fill='red'/>"
+        "<path d='M0 999999975 L100 999999975 "
+        "L100 1000000025 L0 1000000025 Z' "
+        "transform='translate(0 -999999975)' fill='blue'/></svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 2
+    assert result.raw.rgba.tolist() == [
+        [255, 0, 0, 255],
+        [0, 0, 255, 255],
+    ]
+    assert geometry_area(result, result.raw, 1) == pytest.approx(5000.0)
+    assert result.unprintable_fragments.count == 0
+
+
+def test_occlusion_uses_exact_path_endpoint_topology() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 100 100'>"
+        "<rect x='0' y='0' width='100' height='50' fill='red'/>"
+        "<path transform='translate(0 -500)' "
+        "d='M0 499.99999 L100 500.00009 L100 550 L0 550 Z' "
+        "fill='blue'/></svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.reason_code == ""
+    assert result.raw.geometry_count == 2
+    assert result.visible.geometry_count == 2
+    assert result.silhouette.component_count == 1
+    assert result.unprintable_fragments.count == 0
+
+
+def test_visible_export_keeps_valid_paint_when_clip_ring_is_redundant() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 100 100'>"
+        "<rect width='100' height='100' fill='#010203'/>"
+        "<path fill='#eddedb' fill-rule='evenodd' "
+        "d='M5 5H95V95H5Z M30 30L20 33L10 60L50 60Z'/>"
+        "<path fill='#a85d67' "
+        "d='M30 30Q31 30 29.5 30.5Q25 34 20.5 33.2"
+        "Q20 32 20 33L30 30Z'/>"
+        "</svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.reason_code == ""
+    assert result.raw.draw_indices.tolist() == [0, 1, 2]
+    assert result.visible.draw_indices.tolist() == [0, 1, 2]
+    assert geometry_area(result, result.visible, 1) > 7000.0
+    assert sum(
+        geometry_area(result, result.visible, index)
+        for index in range(result.visible.geometry_count)
+    ) == pytest.approx(
+        geometry_area(result, result.silhouette, 0),
+        abs=1e-5,
+    )
+    assert result.unprintable_fragments.count == 0
+
+
+@pytest.mark.parametrize(
+    ("axis", "expected_geometry_count", "expected_fragment_reasons"),
+    [
+        ("X", 1, ()),
+        ("Y", 0, ("area_collapse",)),
+    ],
+)
+def test_near_singular_skew_respects_recorded_coordinate_precision(
+    axis: str,
+    expected_geometry_count: int,
+    expected_fragment_reasons: tuple[str, ...],
+) -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 100 100'>"
+        "<rect x='10' y='0' width='1' height='.00001' "
+        f"transform='skew{axis}(89.99999)' fill='black'/>"
+        "</svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.reason_code == ""
+    assert result.raw.geometry_count == expected_geometry_count
+    assert (
+        result.unprintable_fragments.reason_codes
+        == expected_fragment_reasons
+    )
+
+
+def test_hierarchy_collapse_does_not_hide_an_independent_valid_paint() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 100 100'>"
+        "<rect x='10' y='0' width='1' height='.00001' "
+        "transform='skewY(89.99999)' fill='#123456'/>"
+        "<rect x='20' y='20' width='10' height='10' fill='#abcdef'/>"
+        "</svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.reason_code == ""
+    assert result.raw.geometry_count == 1
+    assert result.raw.rgba.tolist() == [[171, 205, 239, 255]]
+    assert result.unprintable_fragments.reason_codes == ("area_collapse",)
+    assert result.unprintable_fragments.rgba.tolist() == [
+        [18, 52, 86, 255]
+    ]
+
+
 def test_document_viewport_remains_part_of_lumina_bbox_contract() -> None:
     result = lumina_svg_core.analyze_svg(
         FIXTURES / "basic_fill_stroke.svg", 20.0, 0.02
@@ -37,13 +350,12 @@ def test_document_viewport_remains_part_of_lumina_bbox_contract() -> None:
     assert result.scale_factor == pytest.approx(1.0)
 
 
-def test_legacy_contour_normalization_identity_is_explicit() -> None:
+def test_parser_preserves_narrow_hole_and_notch_without_morphology() -> None:
     rectangle = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 100 100'>"
         "<path fill='red' d='M10 10H90V90H10Z'/></svg>",
         target_width_mm=100.0,
         tolerance_mm=0.02,
-        legacy_close_delta_source_units=0.03,
     )
     narrow_hole = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 100 100'>"
@@ -52,7 +364,6 @@ def test_legacy_contour_normalization_identity_is_explicit() -> None:
         "</svg>",
         target_width_mm=100.0,
         tolerance_mm=0.02,
-        legacy_close_delta_source_units=0.03,
     )
     narrow_notch = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 100 100'>"
@@ -60,49 +371,50 @@ def test_legacy_contour_normalization_identity_is_explicit() -> None:
         "d='M10 10H90V90H50.02V20H49.98V90H10Z'/></svg>",
         target_width_mm=100.0,
         tolerance_mm=0.02,
-        legacy_close_delta_source_units=0.03,
     )
 
-    assert rectangle.status == "supported"
-    assert rectangle.legacy_contour_normalization_identity is True
-    assert rectangle.legacy_contour_normalization_compatible is True
-    assert narrow_hole.status == "supported"
-    assert narrow_hole.legacy_contour_normalization_identity is False
-    assert narrow_hole.legacy_contour_normalization_compatible is True
-    assert narrow_hole.raw.hole_count == 0
-    assert narrow_notch.status == "supported"
-    assert narrow_notch.legacy_contour_normalization_identity is False
-    assert narrow_notch.legacy_contour_normalization_compatible is True
+    assert rectangle.status == narrow_hole.status == narrow_notch.status == (
+        "supported"
+    )
+    assert rectangle.raw.component_count == 1
+    assert rectangle.raw.hole_count == 0
+    assert narrow_hole.raw.hole_count == 1
     assert narrow_notch.raw.hole_count == 0
 
 
-def test_legacy_close_keeps_miter_limit_boundary_shapes_on_offset_path() -> None:
+def test_parser_keeps_miter_limit_boundary_shape() -> None:
     result = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 100 100'>"
         "<path d='M0 0L10 0L5 8.660254Z'/></svg>",
         target_width_mm=100.0,
         tolerance_mm=0.02,
-        legacy_close_delta_source_units=0.03,
     )
 
     assert result.status == "supported"
-    assert result.legacy_contour_normalization_identity is False
+    assert result.raw.geometry_count == 1
+    assert result.raw.component_count == 1
 
 
-def test_spacious_concave_ring_has_provable_miter_round_trip() -> None:
-    result = lumina_svg_core.analyze_svg_svg(
+def test_spacious_concave_ring_is_deterministic() -> None:
+    svg = (
         "<svg viewBox='0 0 100 100'>"
-        "<path d='M0 0H100V100H60V60H40V100H0Z'/></svg>",
+        "<path d='M0 0H100V100H60V60H40V100H0Z'/></svg>"
+    )
+    result = lumina_svg_core.analyze_svg_svg(
+        svg,
         target_width_mm=100.0,
         tolerance_mm=0.02,
-        legacy_close_delta_source_units=0.03,
+    )
+    unclosed = lumina_svg_core.analyze_svg_svg(
+        svg,
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
     )
 
-    assert result.status == "supported"
-    assert result.legacy_contour_normalization_identity is True
+    _assert_same_geometry(result, unclosed)
 
 
-def test_slanted_micro_notch_is_not_claimed_as_identity() -> None:
+def test_slanted_micro_notch_remains_valid() -> None:
     result = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 100 100'><path fill='red' d='"
         "M10 10 L90 10 L90 90 L39.83308898930126 90 "
@@ -110,14 +422,14 @@ def test_slanted_micro_notch_is_not_claimed_as_identity() -> None:
         "L39.69503373258287 90 L10 90 Z'/></svg>",
         target_width_mm=100.0,
         tolerance_mm=0.02,
-        legacy_close_delta_source_units=0.03,
     )
 
     assert result.status == "supported"
-    assert result.legacy_contour_normalization_identity is False
+    assert result.raw.geometry_count == 1
+    assert result.raw.component_count == 1
 
 
-def test_legacy_contour_normalization_marks_unsafe_multi_component_shape() -> None:
+def test_parser_preserves_every_disconnected_component() -> None:
     result = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 100 100'><path fill='red' d='"
         "M55.52831753041504 66.3046688201546 "
@@ -134,60 +446,49 @@ def test_legacy_contour_normalization_marks_unsafe_multi_component_shape() -> No
         "L44.810623640889176 62.01470293567081 Z'/></svg>",
         target_width_mm=100.0,
         tolerance_mm=0.02,
-        legacy_close_delta_source_units=0.03,
     )
 
     assert result.status == "supported"
     assert result.raw.component_count == 2
-    assert result.legacy_contour_normalization_identity is False
-    assert result.legacy_contour_normalization_compatible is False
 
 
-def test_legacy_close_allows_proven_small_triangular_island_shape() -> None:
+def test_parser_preserves_small_triangular_island() -> None:
     result = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 100 100'><path fill='red' d='"
         "M0 0H50V50H25V10H24.96V50H0Z "
         "M70 70L72 70L71 72Z'/></svg>",
         target_width_mm=100.0,
         tolerance_mm=0.02,
-        legacy_close_delta_source_units=0.03,
     )
 
     assert result.status == "supported"
     assert result.raw.component_count == 2
-    assert result.legacy_contour_normalization_identity is False
-    assert result.legacy_contour_normalization_compatible is True
 
 
-def test_optional_legacy_area_filter_drops_only_subthreshold_paint() -> None:
+def test_native_core_never_drops_a_subthreshold_paint() -> None:
     svg = (
         "<svg viewBox='0 0 100 100'>"
         "<rect width='50' height='50' fill='red'/>"
         "<rect x='90' y='90' width='.005' height='.005' fill='blue'/>"
         "</svg>"
     )
-    standalone = lumina_svg_core.analyze_svg_svg(
+    result = lumina_svg_core.analyze_svg_svg(
         svg,
         target_width_mm=100.0,
         tolerance_mm=0.02,
-    )
-    compatible = lumina_svg_core.analyze_svg_svg(
-        svg,
-        target_width_mm=100.0,
-        tolerance_mm=0.02,
-        legacy_close_delta_source_units=0.03,
-        legacy_minimum_paint_area_factor=0.25,
     )
 
-    assert standalone.status == compatible.status == "supported"
-    assert standalone.raw.geometry_count == 2
-    assert compatible.raw.geometry_count == 1
-    assert compatible.legacy_area_filter_identity is False
-    assert tuple(compatible.raw.rgba[0]) == (255, 0, 0, 255)
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 2
+    assert result.raw.component_count == 2
+    assert result.raw.rgba.tolist() == [
+        [255, 0, 0, 255],
+        [0, 0, 255, 255],
+    ]
 
 
 @pytest.mark.parametrize("width", ["0.099999", "0.100001"])
-def test_component_area_threshold_uncertainty_is_unsupported(
+def test_components_near_the_old_area_cutoff_remain_native(
     width: str,
 ) -> None:
     result = lumina_svg_core.analyze_svg_svg(
@@ -197,19 +498,14 @@ def test_component_area_threshold_uncertainty_is_unsupported(
         "fill='blue'/></svg>",
         target_width_mm=111.0,
         tolerance_mm=0.02,
-        legacy_close_delta_source_units=0.03,
-        legacy_minimum_paint_area_factor=0.25,
-        legacy_component_area_source_units_squared=0.01,
     )
 
-    assert result.status == "unsupported"
-    assert result.reason_code == "legacy_area_threshold_ambiguous"
-    assert result.raw.geometry_count == 0
-    assert result.visible.geometry_count == 0
-    assert result.silhouette.geometry_count == 0
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 2
+    assert result.visible.geometry_count == 2
 
 
-def test_legacy_area_filter_preserves_scale_clamp_for_macro_viewbox() -> None:
+def test_macro_viewbox_preserves_every_paint_without_area_filter() -> None:
     result = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 1000000000 1000000000'>"
         "<rect width='500000000' height='500000000' fill='red'/>"
@@ -217,19 +513,16 @@ def test_legacy_area_filter_preserves_scale_clamp_for_macro_viewbox() -> None:
         "height='50000' fill='blue'/></svg>",
         target_width_mm=100.0,
         tolerance_mm=0.02,
-        legacy_close_delta_source_units=0.03,
-        legacy_minimum_paint_area_factor=0.25,
     )
 
     assert result.status == "supported"
     assert result.scale_factor == pytest.approx(1.0e-7)
     assert result.raw.geometry_count == 2
-    assert result.legacy_area_filter_identity is True
     assert tuple(result.raw.rgba[1]) == (0, 0, 255, 255)
 
 
 @pytest.mark.parametrize("width", ["9980", "10020"])
-def test_dynamic_area_threshold_uncertainty_is_unsupported(
+def test_macro_components_near_the_old_area_cutoff_remain_native(
     width: str,
 ) -> None:
     result = lumina_svg_core.analyze_svg_svg(
@@ -239,12 +532,11 @@ def test_dynamic_area_threshold_uncertainty_is_unsupported(
         f"height='{width}' fill='blue'/></svg>",
         target_width_mm=111.0,
         tolerance_mm=0.02,
-        legacy_close_delta_source_units=0.03,
-        legacy_minimum_paint_area_factor=0.25,
     )
 
-    assert result.status == "unsupported"
-    assert result.reason_code == "legacy_area_threshold_ambiguous"
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 2
+    assert result.visible.geometry_count == 2
 
 
 @pytest.mark.parametrize(
@@ -253,6 +545,7 @@ def test_dynamic_area_threshold_uncertainty_is_unsupported(
         "M1000000 1000000 ",
         "M1000000 1000000L2000000 2000000 ",
         "M1000000 1000000H2000000Z ",
+        "M1000000 1000000L1500000 1500000L2000000 2000000Z ",
     ],
 )
 def test_non_painting_subpaths_do_not_expand_bbox_or_reduce_scale(
@@ -294,7 +587,7 @@ def test_non_uniform_transform_uses_one_model_space_error_budget() -> None:
         "translate(100000000 0) translate(-99999999 0)",
     ],
 )
-def test_transform_cancellation_fails_closed_before_geometry_replay(
+def test_exact_transform_cancellation_preserves_geometry(
     transform: str,
 ) -> None:
     result = lumina_svg_core.analyze_svg_svg(
@@ -305,12 +598,50 @@ def test_transform_cancellation_fails_closed_before_geometry_replay(
         tolerance_mm=0.02,
     )
 
-    assert result.status == "unsupported"
-    assert result.reason_code == "unsupported_input_precision"
-    assert result.raw.geometry_count == 0
+    assert result.status == "supported"
+    assert result.reason_code == ""
+    assert result.raw.geometry_count == 1
+    assert geometry_area(result, result.raw, 0) == pytest.approx(1.0)
 
 
-def test_relative_path_cancellation_fails_closed_before_geometry_replay() -> None:
+def test_standalone_non_painting_collinear_path_is_ignored() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 10 10'>"
+        "<path d='M1 1L2 2L3 3Z' fill='#f00'/>"
+        "<rect width='10' height='10' fill='#00f'/>"
+        "</svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 1
+    assert result.raw.rgba.tolist() == [[0, 0, 255, 255]]
+
+
+def test_small_source_triangle_remains_an_area_component(
+) -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 100000000 10'>"
+        "<rect width='100000000' height='10' fill='#f00'/>"
+        "<path d='M99999990 0L99999991 0L99999990 1Z' fill='#00f'/>"
+        "</svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 2
+    assert result.raw.component_count == 2
+    assert result.raw.rgba.tolist() == [
+        [255, 0, 0, 255],
+        [0, 0, 255, 255],
+    ]
+    assert geometry_area(result, result.raw, 1) == pytest.approx(0.5)
+    assert result.unprintable_fragments.count == 0
+
+
+def test_relative_path_cancellation_preserves_exact_area() -> None:
     result = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 10 10'>"
         "<path d='m100000000 0 m1 0 m-100000000 0 "
@@ -320,9 +651,13 @@ def test_relative_path_cancellation_fails_closed_before_geometry_replay() -> Non
         tolerance_mm=0.02,
     )
 
-    assert result.status == "unsupported"
-    assert result.reason_code == "unsupported_input_precision"
-    assert result.raw.geometry_count == 0
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 1
+    assert geometry_area(result, result.raw, 0) == pytest.approx(1.0)
+    assert result.unprintable_fragments.reason_codes == (
+        "point_only",
+        "point_only",
+    )
 
 
 def test_composed_transform_overflow_fails_closed_without_dropping_paint() -> None:
@@ -512,7 +847,7 @@ def test_precision_grid_preserves_a_visible_sliver_after_occlusion() -> None:
     assert result.visible.component_count == 2
 
 
-def test_float_recorder_collapse_fails_closed_before_material_loss() -> None:
+def test_exact_rect_retains_large_coordinate_area_in_polygon_output() -> None:
     result = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 100000000 10'>"
         "<rect width='100000000' height='10' fill='#f00'/>"
@@ -522,9 +857,124 @@ def test_float_recorder_collapse_fails_closed_before_material_loss() -> None:
         tolerance_mm=0.02,
     )
 
-    assert result.status == "unsupported"
-    assert result.reason_code == "unsupported_input_precision"
-    assert result.raw.geometry_count == 0
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 2
+    assert result.raw.component_count == 2
+    assert result.raw.rgba.tolist() == [
+        [255, 0, 0, 255],
+        [0, 0, 255, 255],
+    ]
+    assert result.unprintable_fragments.count == 0
+
+
+def test_collapsed_quadratic_loop_does_not_reject_the_document() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 1676 2238'>"
+        "<rect width='100' height='100' fill='#f00'/>"
+        "<g transform='scale(1.10045962 1.10029499)'>"
+        "<path fill='#3a3b70' fill-rule='evenodd' d='"
+        "M1015.260009765625 1215.760009765625 "
+        "Q1014.8200073242188 1215.1199951171875 "
+        "1014.4600219726562 1214.47998046875 "
+        "Q1014.4500122070312 1214.47998046875 "
+        "1014.4600219726562 1214.47998046875 "
+        "Q1014.8300170898438 1215.1099853515625 "
+        "1015.260009765625 1215.760009765625Z'/></g></svg>",
+        target_width_mm=111.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 1
+    assert result.raw.component_count == 1
+    assert result.unprintable_fragments.reason_codes == ("area_collapse",)
+    assert result.unprintable_fragments.rgba.tolist() == [
+        [58, 59, 112, 255]
+    ]
+
+
+def test_collapsed_backtracking_curve_is_reported_without_document_failure() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 2244 2804'>"
+        "<rect width='100' height='100' fill='#f00'/>"
+        "<g transform='scale(1.42476190 1.42479675)'>"
+        "<path fill='#ad480e' fill-rule='evenodd' d='"
+        "M1446.219970703125 1235.4000244140625 "
+        "Q1445.72998046875 1235.6300048828125 "
+        "1445.0699462890625 1236.260009765625 "
+        "Q1445.06005859375 1236.27001953125 "
+        "1445.0699462890625 1236.260009765625 "
+        "Q1445.7099609375 1235.5999755859375 "
+        "1446.219970703125 1235.4000244140625Z'/></g></svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 1
+    assert result.raw.component_count == 1
+    assert result.unprintable_fragments.reason_codes == ("area_collapse",)
+    assert result.unprintable_fragments.rgba.tolist() == [
+        [173, 72, 14, 255]
+    ]
+
+
+def test_small_curve_with_area_is_preserved_as_a_polygon() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 1572 1572'>"
+        "<rect width='100' height='100' fill='#f00'/>"
+        "<path fill='#91766c' d='M1265 245.9199981689453 "
+        "Q1264.7900390625 245.41000366210938 "
+        "1264.8599853515625 244.52000427246094 "
+        "L1265 245.9199981689453Z'/></svg>",
+        target_width_mm=111.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 2
+    assert result.raw.component_count == 2
+    assert result.unprintable_fragments.count == 0
+
+
+def test_exact_rect_retains_thin_large_coordinate_component() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 100000000 100000000'>"
+        "<rect width='100000000' height='100000000' fill='#f00'/>"
+        "<rect x='99999990' width='1' height='100000000' fill='#00f'/>"
+        "</svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 2
+    assert result.raw.component_count == 2
+    assert result.raw.rgba.tolist() == [
+        [255, 0, 0, 255],
+        [0, 0, 255, 255],
+    ]
+    assert result.unprintable_fragments.count == 0
+
+
+def test_collapsed_curved_sliver_is_refined_instead_of_rejected() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 4804 6900'>"
+        "<rect width='100' height='100' fill='#f00'/>"
+        "<g transform='scale(3.27025187 3.27014218)'>"
+        "<path fill='#91766c' d='M159.77000427246094 951.52001953125 "
+        "Q159.5500030517578 951.1799926757812 "
+        "159.55999755859375 950.7100219726562 "
+        "Q159.8000030517578 951.0499877929688 "
+        "159.77000427246094 951.52001953125Z'/></g></svg>",
+        target_width_mm=111.0,
+        tolerance_mm=0.02,
+        allow_strokes=False,
+    )
+
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 2
+    assert result.raw.component_count == 2
 
 
 def test_exact_line_gap_in_curved_contours_does_not_spend_curve_budget() -> None:
@@ -555,7 +1005,7 @@ def test_sub_tolerance_curve_gap_is_preserved_on_the_integer_grid() -> None:
 
 
 @pytest.mark.parametrize("viewbox_size", [1.0, 0.001])
-def test_small_user_unit_cubic_falls_back_for_legacy_tolerance_parity(
+def test_small_user_unit_cubic_uses_the_same_physical_tolerance(
     viewbox_size: float,
 ) -> None:
     result = lumina_svg_core.analyze_svg_svg(
@@ -569,11 +1019,10 @@ def test_small_user_unit_cubic_falls_back_for_legacy_tolerance_parity(
     )
 
     assert result.status == "supported"
-    assert result.legacy_curve_tolerance_compatible is False
     assert result.raw.geometry_count == 1
 
 
-def test_robust_non_adjacent_self_intersection_fails_closed() -> None:
+def test_robust_non_adjacent_self_intersection_uses_svg_fill_rule() -> None:
     result = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 20 20'>"
         "<path d='M0 0L10 10L0 10L10 0L20 20L0 20Z' fill='#f00'/>"
@@ -582,12 +1031,12 @@ def test_robust_non_adjacent_self_intersection_fails_closed() -> None:
         tolerance_mm=0.02,
     )
 
-    assert result.status == "unsupported"
-    assert result.reason_code == "unsupported_topology_collapse"
-    assert result.raw.geometry_count == 0
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 1
+    assert result.raw.component_count > 0
 
 
-def test_non_adjacent_shared_endpoint_overlap_fails_closed() -> None:
+def test_non_adjacent_shared_endpoint_overlap_uses_evenodd_fill() -> None:
     result = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 100 100'>"
         "<path d='M10 10H90V90H10V10H50V50H10Z' "
@@ -596,12 +1045,12 @@ def test_non_adjacent_shared_endpoint_overlap_fails_closed() -> None:
         tolerance_mm=0.02,
     )
 
-    assert result.status == "unsupported"
-    assert result.reason_code == "unsupported_topology_collapse"
-    assert result.raw.geometry_count == 0
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 1
+    assert result.raw.component_count > 0
 
 
-def test_non_adjacent_collinear_self_overlap_fails_closed() -> None:
+def test_non_adjacent_collinear_self_overlap_uses_nonzero_fill() -> None:
     result = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 20 10'>"
         "<path d='M0 0H10V1L5 0H15V10H0Z' fill='#f00'/>"
@@ -610,11 +1059,11 @@ def test_non_adjacent_collinear_self_overlap_fails_closed() -> None:
         tolerance_mm=0.02,
     )
 
-    assert result.status == "unsupported"
-    assert result.reason_code == "unsupported_topology_collapse"
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 1
 
 
-def test_intersecting_subpaths_in_one_paint_fail_closed() -> None:
+def test_intersecting_subpaths_in_one_paint_are_unioned_by_fill_rule() -> None:
     result = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 20 20'>"
         "<path d='M0 0H10V10H0Z M5 -5H6V15H5Z' fill='#f00'/>"
@@ -623,11 +1072,12 @@ def test_intersecting_subpaths_in_one_paint_fail_closed() -> None:
         tolerance_mm=0.02,
     )
 
-    assert result.status == "unsupported"
-    assert result.reason_code == "unsupported_topology_collapse"
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 1
+    assert result.raw.component_count == 1
 
 
-def test_relative_path_rounding_chain_is_charged_to_input_budget() -> None:
+def test_relative_path_rounding_chain_uses_exact_source_coordinates() -> None:
     relative_steps = "h.03 " * 8000
     result = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 1100000 10'>"
@@ -637,11 +1087,54 @@ def test_relative_path_rounding_chain_is_charged_to_input_budget() -> None:
         tolerance_mm=0.02,
     )
 
-    assert result.status == "unsupported"
-    assert result.reason_code == "unsupported_input_precision"
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 1
+    assert geometry_area(result, result.raw, 0) == pytest.approx(2400.0)
 
 
-def test_transform_rounding_chain_is_charged_to_input_budget() -> None:
+def test_canceling_relative_steps_do_not_consume_the_full_precision_budget(
+) -> None:
+    def first_ring_area(result) -> float:
+        coordinates = (
+            np.asarray(result.raw.coordinates, dtype=np.float64)
+            * result.grid_to_source_unit
+        )
+        ring_end = int(result.raw.ring_offsets[0])
+        ring = coordinates[:ring_end]
+        return abs(
+            float(
+                np.sum(
+                    ring[:-1, 0] * ring[1:, 1]
+                    - ring[1:, 0] * ring[:-1, 1]
+                )
+            )
+        ) * 0.5
+
+    canceling_steps = " ".join(["h.01 h-.01"] * 40)
+    noisy = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 2048 2048'>"
+        f"<path d='M1960 100 {canceling_steps} "
+        "c0 10 10 10 10 0 v10 h-10 z' fill='#f00'/>"
+        "</svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+    reference = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 2048 2048'>"
+        "<path d='M1960 100 c0 10 10 10 10 0 v10 h-10 z' "
+        "fill='#f00'/></svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert noisy.status == reference.status == "supported"
+    assert first_ring_area(noisy) == pytest.approx(
+        first_ring_area(reference),
+        abs=2e-4,
+    )
+
+
+def test_transform_rounding_chain_uses_exact_composition() -> None:
     transforms = "translate(.03 0) " * 8000
     result = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 1100000 10'>"
@@ -651,11 +1144,12 @@ def test_transform_rounding_chain_is_charged_to_input_budget() -> None:
         tolerance_mm=0.02,
     )
 
-    assert result.status == "unsupported"
-    assert result.reason_code == "unsupported_input_precision"
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 1
+    assert geometry_area(result, result.raw, 0) == pytest.approx(2400.0)
 
 
-def test_shallow_crossing_exceeding_intersection_budget_fails_closed() -> None:
+def test_shallow_crossing_is_resolved_by_svg_paint_order() -> None:
     result = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 1 2'>"
         "<path d='M0 0H1V1H0Z' fill='#f00'/>"
@@ -665,8 +1159,27 @@ def test_shallow_crossing_exceeding_intersection_budget_fails_closed() -> None:
         tolerance_mm=0.02,
     )
 
-    assert result.status == "unsupported"
-    assert result.reason_code == "unsupported_topology_collapse"
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 2
+    assert result.visible.geometry_count == 2
+    assert result.silhouette.component_count == 1
+
+
+def test_collinear_transformed_paints_use_recorded_shared_boundary() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 10 10'>"
+        "<rect transform='translate(.1 0)' width='5' height='5' "
+        "fill='#f00'/>"
+        "<rect x='5.1' width='4' height='5' fill='#00f'/>"
+        "</svg>",
+        target_width_mm=10.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported", result.reason_code
+    assert result.raw.geometry_count == 2
+    assert result.visible.geometry_count == 2
+    assert result.silhouette.component_count == 1
 
 
 def test_exported_grid_stays_in_normalized_svg_analysis_domain() -> None:
@@ -713,7 +1226,7 @@ def test_collinear_cubic_overshoot_is_not_flattened_to_its_short_chord() -> None
     )
 
 
-def test_close_then_draw_that_overlaps_same_paint_fails_closed() -> None:
+def test_close_then_draw_that_overlaps_same_paint_is_supported() -> None:
     result = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 30 10'>"
         "<path d='M0 0L10 0L0 10Z L30 0L30 10Z' fill='#f00'/>"
@@ -722,8 +1235,8 @@ def test_close_then_draw_that_overlaps_same_paint_fails_closed() -> None:
         tolerance_mm=0.02,
     )
 
-    assert result.status == "unsupported"
-    assert result.reason_code == "unsupported_topology_collapse"
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 1
 
 
 def test_width_and_height_without_viewbox_do_not_expand_geometry_bbox() -> None:

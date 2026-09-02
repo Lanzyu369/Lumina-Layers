@@ -4890,9 +4890,9 @@ class VectorProcessor:
             stage_timings["native_bounds_s"] = 0.0
             stage_timings["native_replay_s"] = 0.0
             stage_timings["native_topology_s"] = 0.0
-            stage_timings["native_legacy_raw_s"] = 0.0
+            stage_timings["native_normalize_raw_s"] = 0.0
             stage_timings["native_composite_s"] = 0.0
-            stage_timings["native_legacy_visible_s"] = 0.0
+            stage_timings["native_normalize_visible_s"] = 0.0
             stage_timings["native_export_s"] = 0.0
             stage_timings["native_binding_conversion_s"] = 0.0
             stage_timings["native_adapter_s"] = 0.0
@@ -5339,15 +5339,18 @@ class VectorProcessor:
                 num_channels,
                 num_layers=num_layers,
             )
-        min_hole_area_mm2 = float(getattr(VectorConfig, "MIN_COLOR_HOLE_AREA_MM2", 1.0))
-        for idx, item in enumerate(clipped_shapes):
-            filtered_geometry = VectorProcessor._filter_backing_holes(
-                item["geometry"],
-                min_hole_area_mm2=min_hole_area_mm2,
+        if stage_timings.get("geometry_backend") != "native":
+            min_hole_area_mm2 = float(
+                getattr(VectorConfig, "MIN_COLOR_HOLE_AREA_MM2", 1.0)
             )
-            item["geometry"] = filtered_geometry
-            if idx < len(matched_shapes):
-                matched_shapes[idx]["geometry"] = filtered_geometry
+            for idx, item in enumerate(clipped_shapes):
+                filtered_geometry = VectorProcessor._filter_backing_holes(
+                    item["geometry"],
+                    min_hole_area_mm2=min_hole_area_mm2,
+                )
+                item["geometry"] = filtered_geometry
+                if idx < len(matched_shapes):
+                    matched_shapes[idx]["geometry"] = filtered_geometry
         stage_timings["color_match_s"] = max(
             0.0,
             time.perf_counter()

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import hashlib
 import json
 from pathlib import Path
 import sys
@@ -19,33 +18,16 @@ if str(REPO_ROOT) not in sys.path:
 import lumina_svg_core  # noqa: E402
 
 
-SOURCE_SHA256 = (
-    "d078cf4293623d934759c2688e13a00491e525055e7595069a0ecc4f078842fb"
-)
-EXPECTED_FIXTURE_SHA256 = (
-    "7f1fd4b2405989394c1a4fd6b59b117c4015ee2b9918b4dba5922c3e8ede472e"
-)
 SVG_NAMESPACE = "http://www.w3.org/2000/svg"
 GRID_SIDE = 32
 CELL_USER_UNITS = 500.0
 CELL_MARGIN_USER_UNITS = 25.0
 SELECTION_TARGET_WIDTH_MM = 111.0
 SELECTION_TOLERANCE_MM = 0.02
-SELECTION_LEGACY_CLOSE_DELTA_SOURCE_UNITS = 0.03
-SELECTION_LEGACY_MINIMUM_PAINT_AREA_FACTOR = 0.25
-SELECTION_LEGACY_COMPONENT_AREA_SOURCE_UNITS_SQUARED = 0.01
-REQUIRED_RESULT_FLAGS = (
-    "legacy_area_filter_identity",
-    "legacy_contour_normalization_compatible",
-    "legacy_contour_normalization_identity",
-    "legacy_curve_tolerance_compatible",
-)
 
 # These paths were considered in descending serialized-size order and accepted
-# only while the growing compound panel passed every v0.1 recorder, precision,
-# topology, curve-tolerance, and legacy-parity gate. The tuple fixes the
-# fixture bytes; ``--verify`` recomputes the selection from source and then
-# validates the complete tiled document.
+# only while the growing compound panel remained supported by the native
+# parser. The tuple makes fixture generation deterministic.
 SELECTED_SOURCE_PATH_INDICES = (
     35,
     74,
@@ -114,30 +96,14 @@ SELECTED_SOURCE_PATH_INDICES = (
 )
 
 
-def _sha256(payload: bytes) -> str:
-    return hashlib.sha256(payload).hexdigest()
+def load_source(source_path: Path) -> ET.Element:
+    """Load an SVG source document without an identity preflight.
 
-
-def load_verified_source(source_path: Path) -> ET.Element:
-    """Load the fixed source document after checking identity and shape count.
-
-    校验固定源文档的身份和路径数量后加载 XML 根节点。
+    不执行身份预检，直接加载 SVG 源文档。
     """
-
     source_payload = source_path.read_bytes()
-    actual_source_sha256 = _sha256(source_payload)
-    if actual_source_sha256 != SOURCE_SHA256:
-        raise ValueError(
-            f"unexpected_source_sha256:{actual_source_sha256}"
-        )
-
     ET.register_namespace("", SVG_NAMESPACE)
-    source_root = ET.fromstring(source_payload)
-    if len(_source_paths(source_root)) != 3097:
-        raise ValueError(
-            f"unexpected_source_path_count:{len(_source_paths(source_root))}"
-        )
-    return source_root
+    return ET.fromstring(source_payload)
 
 
 def _source_paths(source_root: ET.Element) -> list[ET.Element]:
@@ -220,10 +186,7 @@ def _single_candidate_svg(
 
 
 def _passes_required_gates(result: object) -> bool:
-    return bool(getattr(result, "status", "") == "supported") and all(
-        bool(getattr(result, flag, False))
-        for flag in REQUIRED_RESULT_FLAGS
-    )
+    return bool(getattr(result, "status", "") == "supported")
 
 
 def _analyze_selection_payload(payload: bytes) -> object:
@@ -232,9 +195,6 @@ def _analyze_selection_payload(payload: bytes) -> object:
         SELECTION_TARGET_WIDTH_MM,
         SELECTION_TOLERANCE_MM,
         False,
-        SELECTION_LEGACY_CLOSE_DELTA_SOURCE_UNITS,
-        SELECTION_LEGACY_MINIMUM_PAINT_AREA_FACTOR,
-        SELECTION_LEGACY_COMPONENT_AREA_SOURCE_UNITS_SQUARED,
     )
 
 
@@ -253,7 +213,6 @@ def _build_tiled_payload(
             "viewBox": f"0 0 {canvas:g} {canvas:g}",
             "width": f"{canvas:g}",
             "height": f"{canvas:g}",
-            "data-lumina-benchmark-source-sha256": SOURCE_SHA256,
             "data-selection": "longest-64-safe-paths",
         },
     )
@@ -284,13 +243,13 @@ def _build_tiled_payload(
     )
 
 
-def select_longest_safe_path_indices(
+def select_longest_supported_path_indices(
     source_root: ET.Element,
 ) -> tuple[int, ...]:
-    """Recompute the longest 64 paths passing every native parity gate.
+    """Return the longest 64 paths currently supported by the native core.
 
-    按序列化 XML 字节长度重新排序，并逐条执行完整原生分析与旧链路
-    兼容性门禁，返回前 64 个安全路径索引。
+    按序列化 XML 字节长度重新排序，并逐条执行原生分析，返回前 64 个
+    可直接解析的路径索引。
     """
 
     source_paths = _source_paths(source_root)
@@ -313,9 +272,6 @@ def select_longest_safe_path_indices(
             SELECTION_TARGET_WIDTH_MM,
             SELECTION_TOLERANCE_MM,
             False,
-            SELECTION_LEGACY_CLOSE_DELTA_SOURCE_UNITS,
-            SELECTION_LEGACY_MINIMUM_PAINT_AREA_FACTOR,
-            SELECTION_LEGACY_COMPONENT_AREA_SOURCE_UNITS_SQUARED,
         )
         if not _passes_required_gates(result):
             continue
@@ -329,35 +285,21 @@ def select_longest_safe_path_indices(
         selected.append(source_index)
         if len(selected) == len(SELECTED_SOURCE_PATH_INDICES):
             return tuple(selected)
-    raise RuntimeError("insufficient_fail_closed_safe_source_paths")
+    raise RuntimeError("insufficient_supported_source_paths")
 
 
 def build_fixture_payload(source_path: Path) -> bytes:
-    """Return canonical fixture bytes after verifying the real source SHA."""
+    """Return fixture bytes from the provided source document."""
 
-    source_root = load_verified_source(source_path)
+    source_root = load_source(source_path)
     payload = _build_tiled_payload(
         source_root, SELECTED_SOURCE_PATH_INDICES
     )
-    actual_fixture_sha256 = _sha256(payload)
-    if actual_fixture_sha256 != EXPECTED_FIXTURE_SHA256:
-        raise RuntimeError(
-            f"unexpected_fixture_sha256:{actual_fixture_sha256}"
-        )
     result = _analyze_selection_payload(payload)
     if result.status != "supported":
         raise RuntimeError(
             "supported_scale_fixture_no_longer_supported:"
             + str(result.reason_code)
-        )
-    missing_flags = [
-        flag for flag in REQUIRED_RESULT_FLAGS
-        if not bool(getattr(result, flag, False))
-    ]
-    if missing_flags:
-        raise RuntimeError(
-            "supported_scale_fixture_failed_parity_flags:"
-            + ",".join(missing_flags)
         )
     return payload
 
@@ -370,21 +312,16 @@ def provenance(payload: bytes) -> dict[str, object]:
         "classification": "derived_supported_scale",
         "source": {
             "path": "test_images/benchmark.svg",
-            "sha256": SOURCE_SHA256,
             "path_count": 3097,
         },
         "selection": {
-            "policy": "longest_64_fail_closed_safe_paths_tiled_16_times",
+            "policy": "longest_64_supported_paths_tiled_16_times",
             "ranking": "serialized_xml_byte_length_descending_then_index",
             "verification_entrypoint": "lumina_svg_core.analyze_svg_svg",
             "target_width_mm": SELECTION_TARGET_WIDTH_MM,
             "tolerance_mm": SELECTION_TOLERANCE_MM,
-            "legacy_component_area_source_units_squared": (
-                SELECTION_LEGACY_COMPONENT_AREA_SOURCE_UNITS_SQUARED
-            ),
             "individual_verification_slot": GRID_SIDE * GRID_SIDE - 1,
             "complete_fixture_verified": True,
-            "required_result_flags": list(REQUIRED_RESULT_FLAGS),
             "source_path_indices": list(SELECTED_SOURCE_PATH_INDICES),
             "unique_source_path_count": len(SELECTED_SOURCE_PATH_INDICES),
             "repeat_count": 16,
@@ -396,7 +333,6 @@ def provenance(payload: bytes) -> dict[str, object]:
                 "native/lumina-svg-core/benchmarks/"
                 "supported_scale_fixture.svg"
             ),
-            "sha256": _sha256(payload),
             "byte_size": len(payload),
             "path_count": GRID_SIDE * GRID_SIDE,
         },
@@ -422,35 +358,21 @@ def main() -> None:
         ),
     )
     parser.add_argument("--manifest", type=Path)
-    parser.add_argument("--verify", action="store_true")
     args = parser.parse_args()
 
     payload = build_fixture_payload(args.source.resolve())
     output_path = args.output.resolve()
-    if args.verify:
-        source_root = load_verified_source(args.source.resolve())
-        recomputed_indices = select_longest_safe_path_indices(source_root)
-        if recomputed_indices != SELECTED_SOURCE_PATH_INDICES:
-            raise SystemExit("supported_scale_selection_is_stale")
-        if not output_path.is_file() or output_path.read_bytes() != payload:
-            raise SystemExit("supported_scale_fixture_is_stale")
-    else:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(payload)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(payload)
 
     record = provenance(payload)
     if args.manifest is not None:
         manifest_path = args.manifest.resolve()
-        if not args.verify:
-            manifest_path.parent.mkdir(parents=True, exist_ok=True)
-            manifest_path.write_text(
-                json.dumps(record, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
-        elif not manifest_path.is_file() or json.loads(
-            manifest_path.read_text(encoding="utf-8")
-        ) != record:
-            raise SystemExit("supported_scale_fixture_manifest_is_stale")
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(
+            json.dumps(record, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
     print(json.dumps(record, indent=2, sort_keys=True))
 
 

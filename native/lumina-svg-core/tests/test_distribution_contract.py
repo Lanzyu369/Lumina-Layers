@@ -98,13 +98,21 @@ def test_distribution_carries_complete_third_party_license_texts() -> None:
     ]["include"]
 
 
+def test_clipper_offset_range_rejects_double_two_to_the_63_boundary() -> None:
+    safety = (PACKAGE_ROOT / "src" / "clipper_safety.h").read_text(
+        encoding="utf-8"
+    )
+
+    assert "extension >= 0x1p63" in safety
+
+
 def test_python_distribution_is_exactly_versioned_for_cpython_312() -> None:
     metadata = tomllib.loads(
         (PACKAGE_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     )
 
     assert metadata["project"]["name"] == "lumina-svg-core"
-    assert metadata["project"]["version"] == "0.1.1"
+    assert metadata["project"]["version"] == "0.2.0"
     assert metadata["project"]["requires-python"] == "==3.12.*"
     assert metadata["project"]["license"] == "Apache-2.0"
     assert metadata["build-system"]["requires"] == [
@@ -154,6 +162,50 @@ def test_runtime_package_installs_notices_for_frozen_distributions() -> None:
     assert "FILES LICENSE THIRD_PARTY_NOTICES.md" in cmake
     assert "DIRECTORY THIRD_PARTY_LICENSES" in cmake
     assert cmake.count("COMPONENT lumina_svg_core") >= 3
+
+
+def test_clipper_work_limits_cover_each_operation_and_the_document() -> None:
+    budget = (PACKAGE_ROOT / "src" / "complexity_budget.h").read_text(
+        encoding="utf-8"
+    )
+    safety = (PACKAGE_ROOT / "src" / "clipper_safety.h").read_text(
+        encoding="utf-8"
+    )
+
+    assert "requireClipperIntersectionWorkCapacity" in budget
+    assert "consumeClipperIntersectionWork" in budget
+    assert "consumeClipperIntersectionCandidates" in budget
+    assert "consumeIntersectionWork" in safety
+    assert "m_clipperIntersectionCandidates" in budget
+    assert "m_clipperIntersectionComparisons" in budget
+    assert "m_booleanInputPoints" in budget
+    assert "m_clipperOutputPoints" in budget
+    assert "requireClipperOutputDocumentCapacity" in budget
+    assert "preflightClipperOutput" in safety
+    assert "requireClipperOutputDocumentCapacity(" in safety
+
+    stroke_expander = (
+        PACKAGE_ROOT / "src" / "stroke_expander.cpp"
+    ).read_text(encoding="utf-8")
+    assert "requireClipperOutputDocumentCapacity(" in stroke_expander
+
+
+def test_normalized_pair_boolean_charges_exact_document_work_budget() -> None:
+    geometry_kernel = (
+        PACKAGE_ROOT / "src" / "geometry_kernel.cpp"
+    ).read_text(encoding="utf-8")
+    normalized_pair = geometry_kernel.split(
+        "void preflightNormalizedBoolean(ComplexityBudget& complexityBudget,\n"
+        "                                const Paths64& first,\n"
+        "                                const Paths64& second)",
+        1,
+    )[1].split("\n}\n\nclass PackedBoundsIndex", 1)[0]
+    assert (
+        "requireBoundedClipperIntersections(\n"
+        "        first, second, complexityBudget)"
+        in normalized_pair
+    )
+    assert "CHEAP_CROSS_PRODUCT_LIMIT" not in normalized_pair
 
 
 def test_cmake_revision_cache_arguments_cannot_override_pins(
