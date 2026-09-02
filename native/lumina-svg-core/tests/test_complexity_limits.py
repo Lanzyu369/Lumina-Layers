@@ -809,7 +809,7 @@ def test_css_deferred_capabilities_fail_before_quadratic_retention() -> None:
     assert elapsed < 2.0
 
 
-def test_use_clone_budget_counts_reparsed_attribute_bytes() -> None:
+def test_use_clone_budget_preflights_reparsed_attribute_bytes() -> None:
     path_data = "M0 0 " + "L1 1 " * 10_000
     use_count = 1_001
     uses = "<use href='#source'/>" * use_count
@@ -827,6 +827,83 @@ def test_use_clone_budget_counts_reparsed_attribute_bytes() -> None:
     assert result.reason_code == "unsupported_complexity"
     assert result.commands == ()
     assert elapsed < 5.0
+
+
+def test_use_clone_budget_preflights_nested_reference_amplification() -> None:
+    path_data = "M0 0 " + "L1 1 " * 10_000
+    use_count = 1_001
+    uses = "<use href='#wrapper'/>" * use_count
+    svg = (
+        "<svg viewBox='0 0 2 2'><defs>"
+        f"<path id='source' d='{path_data}'/>"
+        "<g id='wrapper'><use href='#source'/></g>"
+        f"</defs>{uses}</svg>"
+    )
+
+    started = perf_counter()
+    result = lumina_svg_core.record_paint_commands_svg(svg)
+    elapsed = perf_counter() - started
+
+    assert result.status == "unsupported"
+    assert result.reason_code == "unsupported_complexity"
+    assert result.commands == ()
+    assert elapsed < 5.0
+
+
+def test_nested_use_does_not_copy_already_built_shadow_children() -> None:
+    uses = "<use href='#wrapper'/>" * 3
+    svg = (
+        "<svg viewBox='0 0 2 2'><defs>"
+        "<rect id='red' width='1' height='1' fill='#123456'/>"
+        "<rect id='blue' x='1' width='1' height='1' fill='#abcdef'/>"
+        "<g id='wrapper'><use href='#red'/><use href='#blue'/></g>"
+        f"</defs>{uses}</svg>"
+    )
+
+    result = lumina_svg_core.record_paint_commands_svg(svg)
+
+    assert result.status == "supported"
+    assert result.reason_code == ""
+    assert tuple(command.rgba for command in result.commands) == (
+        (18, 52, 86, 255),
+        (171, 205, 239, 255),
+    ) * 3
+
+
+def test_known_unsupported_text_skips_use_clone_amplification() -> None:
+    text = "x" * 20_000
+    uses = "<use href='#source'/>" * 1_000
+    svg = (
+        "<svg viewBox='0 0 2 2'><defs>"
+        f"<text id='source'>{text}</text>"
+        f"</defs>{uses}</svg>"
+    )
+
+    started = perf_counter()
+    result = lumina_svg_core.record_paint_commands_svg(svg)
+    elapsed = perf_counter() - started
+
+    assert result.status == "unsupported"
+    assert result.reason_code == "unsupported_text"
+    assert result.commands == ()
+    assert elapsed < 2.0
+
+
+def test_use_clone_preflight_preserves_bounded_path_reuse() -> None:
+    use_count = 1_001
+    uses = "<use href='#source'/>" * use_count
+    svg = (
+        "<svg viewBox='0 0 2 2'><defs>"
+        "<path id='source' d='M0 0 L1 0 L0 1 Z' fill='#123456'/>"
+        f"</defs>{uses}</svg>"
+    )
+
+    result = lumina_svg_core.record_paint_commands_svg(svg)
+
+    assert result.status == "supported"
+    assert result.reason_code == ""
+    assert len(result.commands) == use_count
+    assert all(command.rgba == (18, 52, 86, 255) for command in result.commands)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="resource is POSIX-only")

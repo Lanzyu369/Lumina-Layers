@@ -60,6 +60,12 @@ counters stop oversized path, point-list, transform, CSS, and XML work before
 large intermediate allocations. They count actual parsing work rather than
 guessing whether ordinary SVG structure might be expensive. Encoding and
 namespace checks are limited to XML correctness, not document identity.
+Before the first same-document `<use>` expansion, the recorder totals the
+attribute bytes and recursive expansion work of all statically resolvable
+references. Repeated targets are cached together with their ancestor-cycle
+context. Generated `<use>` shadow children are not recopied as source DOM; the
+running counter remains a backstop for every actual clone. Documents already
+known to use unsupported SVG semantics skip clone expansion.
 
 The geometry kernel checks integer overflow, curve-generation work, and the
 measured candidates plus actual input/output size of Clipper operations.

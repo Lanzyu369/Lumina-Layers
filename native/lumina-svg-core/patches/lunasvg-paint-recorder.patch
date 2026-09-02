@@ -1,5 +1,5 @@
 diff --git a/include/lunasvg.h b/include/lunasvg.h
-index 74f43bb..fc0b986 100644
+index 74f43bb..405c5fc 100644
 --- a/include/lunasvg.h
 +++ b/include/lunasvg.h
 @@ -23,6 +23,8 @@
@@ -107,7 +107,7 @@ index 74f43bb..fc0b986 100644
  class SVGNode;
  class SVGTextNode;
  class SVGElement;
-@@ -816,6 +907,40 @@ public:
+@@ -816,6 +907,43 @@ public:
     */
    Element documentElement() const;
  
@@ -130,6 +130,9 @@ index 74f43bb..fc0b986 100644
 +  /** @internal Accounts attribute bytes reparsed while cloning <use>. */
 +  bool consumeUseCloneWork(size_t count);
 +
++  /** @internal Preflights inevitable aggregate <use> clone work. */
++  bool preflightUseCloneWork();
++
 +  /** @internal Accounts path verbs and points before PlutoVG allocation. */
 +  bool consumePathParseWork(size_t verbs, size_t points);
 +
@@ -148,7 +151,7 @@ index 74f43bb..fc0b986 100644
    Document(Document &&);
    Document &operator=(Document &&);
    ~Document();
-@@ -826,9 +951,26 @@ private:
+@@ -826,9 +954,27 @@ private:
    Document &operator=(const Document &) = delete;
    SVGRootElement *rootElement(bool layoutIfNeeded = false) const;
    bool parse(const char *data, size_t length);
@@ -160,6 +163,7 @@ index 74f43bb..fc0b986 100644
 +  size_t m_useExpansionDepth{0};
 +  size_t m_useExpansionWork{0};
 +  size_t m_useCloneWork{0};
++  uint8_t m_useClonePreflightState{0};
 +  size_t m_parsedPathVerbCount{0};
 +  size_t m_parsedPathPointCount{0};
 +  size_t m_transformParseWork{0};
@@ -884,7 +888,7 @@ index 0a4399f..b3c4e97 100644
  {
      if(layoutIfNeeded)
 diff --git a/source/svgelement.cpp b/source/svgelement.cpp
-index 7d62cc6..084f748 100644
+index 7d62cc6..b314fc4 100644
 --- a/source/svgelement.cpp
 +++ b/source/svgelement.cpp
 @@ -3,13 +3,1422 @@
@@ -2486,7 +2490,16 @@ index 7d62cc6..084f748 100644
      m_children.push_back(std::move(child));
      return &*m_children.back();
  }
-@@ -432,10 +1915,23 @@ void SVGElement::cloneChildren(SVGElement* parentElement) const
+@@ -428,14 +1911,32 @@ Size SVGElement::currentViewportSize() const
+ void SVGElement::cloneChildren(SVGElement* parentElement) const
+ {
+     for(const auto& child : m_children) {
++        if(m_id == ElementID::Use
++                && static_cast<const SVGUseElement*>(this)
++                    ->isGeneratedChild(child.get())) {
++            continue;
++        }
+         parentElement->addChild(child->clone(true));
      }
  }
  
@@ -2510,7 +2523,7 @@ index 7d62cc6..084f748 100644
      if(deep) { cloneChildren(element.get()); }
      return element;
  }
-@@ -455,6 +1951,8 @@ void SVGElement::layoutElement(const SVGLayoutState& state)
+@@ -455,6 +1956,8 @@ void SVGElement::layoutElement(const SVGLayoutState& state)
      m_clipper = getClipper(state.clip_path());
      m_masker = getMasker(state.mask());
      m_opacity = state.opacity();
@@ -2519,7 +2532,7 @@ index 7d62cc6..084f748 100644
  
      m_font_size = state.font_size();
      m_display = state.display();
-@@ -596,28 +2094,56 @@ SVGGraphicsElement::SVGGraphicsElement(Document* document, ElementID id)
+@@ -596,28 +2099,56 @@ SVGGraphicsElement::SVGGraphicsElement(Document* document, ElementID id)
      addProperty(m_transform);
  }
  
@@ -2584,7 +2597,7 @@ index 7d62cc6..084f748 100644
      return strokeData;
  }
  
-@@ -646,7 +2172,8 @@ Transform SVGSVGElement::localTransform() const
+@@ -646,7 +2177,8 @@ Transform SVGSVGElement::localTransform() const
      };
  
      if(isRootElement())
@@ -2594,7 +2607,7 @@ index 7d62cc6..084f748 100644
      return SVGGraphicsElement::localTransform() * Transform::translated(viewportRect.x, viewportRect.y) * viewBoxToViewTransform(viewportRect.size());
  }
  
-@@ -665,9 +2192,22 @@ void SVGSVGElement::render(SVGRenderState& state) const
+@@ -665,9 +2197,22 @@ void SVGSVGElement::render(SVGRenderState& state) const
      SVGBlendInfo blendInfo(this);
      SVGRenderState newState(this, state, localTransform());
      newState.beginGroup(blendInfo);
@@ -2619,7 +2632,7 @@ index 7d62cc6..084f748 100644
      newState.endGroup(blendInfo);
  }
  
-@@ -691,9 +2231,9 @@ SVGElement* SVGRootElement::getElementById(std::string_view id) const
+@@ -691,9 +2236,9 @@ SVGElement* SVGRootElement::getElementById(std::string_view id) const
      return it->second;
  }
  
@@ -2631,16 +2644,17 @@ index 7d62cc6..084f748 100644
  }
  
  void SVGRootElement::layout(SVGLayoutState& state)
-@@ -782,6 +2322,8 @@ void SVGUseElement::render(SVGRenderState& state) const
+@@ -782,13 +2327,16 @@ void SVGUseElement::render(SVGRenderState& state) const
  
  void SVGUseElement::build()
  {
-+    if(!document()->beginUseExpansion())
++    if(!document()->preflightUseCloneWork() || !document()->beginUseExpansion())
 +        return;
      if(auto targetElement = getTargetElement(document())) {
          if(auto newElement = cloneTargetElement(targetElement)) {
-             addChild(std::move(newElement));
-@@ -789,6 +2331,7 @@ void SVGUseElement::build()
+-            addChild(std::move(newElement));
++            m_generatedChild = addChild(std::move(newElement));
+         }
      }
  
      SVGGraphicsElement::build();
@@ -2648,7 +2662,7 @@ index 7d62cc6..084f748 100644
  }
  
  inline bool isDisallowedElement(const SVGElement* element)
-@@ -833,10 +2376,16 @@ std::unique_ptr<SVGElement> SVGUseElement::cloneTargetElement(SVGElement* target
+@@ -833,10 +2381,16 @@ std::unique_ptr<SVGElement> SVGUseElement::cloneTargetElement(SVGElement* target
      }
  
      auto newElement = SVGElement::create(document(), tagId);
@@ -2665,7 +2679,7 @@ index 7d62cc6..084f748 100644
                  newElement->setAttribute(attribute);
              }
          }
-@@ -1016,9 +2565,22 @@ void SVGMarkerElement::renderMarker(SVGRenderState& state, const Point& origin,
+@@ -1016,9 +2570,22 @@ void SVGMarkerElement::renderMarker(SVGRenderState& state, const Point& origin,
      SVGBlendInfo blendInfo(this);
      SVGRenderState newState(this, state, markerTransform(origin, angle, strokeWidth));
      newState.beginGroup(blendInfo);
@@ -2690,7 +2704,7 @@ index 7d62cc6..084f748 100644
      newState.endGroup(blendInfo);
  }
  
-@@ -1078,29 +2640,66 @@ inline const SVGGeometryElement* toSVGGeometryElement(const SVGNode* node)
+@@ -1078,29 +2645,66 @@ inline const SVGGeometryElement* toSVGGeometryElement(const SVGNode* node)
  
  void SVGClipPathElement::applyClipPath(SVGRenderState& state) const
  {
@@ -2775,8 +2789,260 @@ index 7d62cc6..084f748 100644
          return;
      }
  
+@@ -1222,4 +2826,251 @@ void SVGMaskElement::layoutElement(const SVGLayoutState& state)
+     SVGElement::layoutElement(state);
+ }
+ 
++namespace {
++
++constexpr size_t MAX_USE_CLONE_WORK = 50'000'000;
++constexpr size_t MAX_USE_EXPANSION_DEPTH = 128;
++constexpr size_t MAX_USE_EXPANSION_WORK = 250'000;
++
++struct UseCloneEstimate {
++    size_t cloneWork{0};
++    size_t expansionWork{0};
++};
++
++struct UseCloneCacheKey {
++    int32_t targetSourceIndex;
++    size_t activeDepth;
++    std::vector<int32_t> ancestorSourceIds;
++
++    bool operator<(const UseCloneCacheKey& other) const
++    {
++        if(targetSourceIndex != other.targetSourceIndex)
++            return targetSourceIndex < other.targetSourceIndex;
++        if(activeDepth != other.activeDepth)
++            return activeDepth < other.activeDepth;
++        return ancestorSourceIds < other.ancestorSourceIds;
++    }
++};
++
++bool addCloneWork(size_t amount, UseCloneEstimate& estimate)
++{
++    if(amount > MAX_USE_CLONE_WORK - estimate.cloneWork)
++        return false;
++    estimate.cloneWork += amount;
++    return true;
++}
++
++bool addExpansionWork(size_t amount, UseCloneEstimate& estimate)
++{
++    if(amount > MAX_USE_EXPANSION_WORK - estimate.expansionWork)
++        return false;
++    estimate.expansionWork += amount;
++    return true;
++}
++
++bool addEstimate(const UseCloneEstimate& addition,
++                 UseCloneEstimate& estimate)
++{
++    return addCloneWork(addition.cloneWork, estimate)
++        && addExpansionWork(addition.expansionWork, estimate);
++}
++
++bool addCloneAttributeWork(const AttributeList& attributes,
++                           UseCloneEstimate& estimate)
++{
++    for(const auto& attribute : attributes) {
++        if(!addCloneWork(attribute.value().size() + 1, estimate))
++            return false;
++    }
++    return true;
++}
++
++bool addCloneSubtreeWork(const SVGElement* element,
++                         UseCloneEstimate& estimate)
++{
++    if(!addCloneAttributeWork(element->attributes(), estimate))
++        return false;
++    for(const auto& child : element->children()) {
++        if(auto childElement = toSVGElement(child)) {
++            if(!addCloneSubtreeWork(childElement, estimate))
++                return false;
++        }
++    }
++    return true;
++}
++
++class UseClonePreflight {
++public:
++    explicit UseClonePreflight(Document* document)
++        : m_document(document)
++    {}
++
++    bool estimate(const SVGElement* root)
++    {
++        std::vector<int32_t> ancestorSourceIds;
++        return estimateBuiltElement(root, true, ancestorSourceIds, 0,
++                                    m_estimate);
++    }
++
++private:
++    using AncestorSourceIds = std::vector<int32_t>;
++
++    static void appendElementId(const SVGElement* element,
++                                AncestorSourceIds& ancestorSourceIds)
++    {
++        if(!element->getAttribute(PropertyID::Id).empty())
++            ancestorSourceIds.push_back(element->sourceIndex());
++    }
++
++    static bool containsTargetId(const SVGElement* targetElement,
++                                 const AncestorSourceIds& ancestorSourceIds)
++    {
++        return std::find(ancestorSourceIds.begin(), ancestorSourceIds.end(),
++                         targetElement->sourceIndex())
++            != ancestorSourceIds.end();
++    }
++
++    bool estimateBuiltElement(const SVGElement* element,
++                              bool originalInstance,
++                              const AncestorSourceIds& ancestorSourceIds,
++                              size_t activeDepth,
++                              UseCloneEstimate& estimate)
++    {
++        if(element->id() == ElementID::Use) {
++            return estimateUse(
++                static_cast<const SVGUseElement*>(element), originalInstance,
++                true, ancestorSourceIds, activeDepth, estimate);
++        }
++
++        auto childAncestors = ancestorSourceIds;
++        appendElementId(element, childAncestors);
++        for(const auto& child : element->children()) {
++            if(auto childElement = toSVGElement(child)) {
++                if(!estimateBuiltElement(childElement, originalInstance,
++                                         childAncestors, activeDepth,
++                                         estimate)) {
++                    return false;
++                }
++            }
++        }
++        return true;
++    }
++
++    bool estimateUse(const SVGUseElement* useElement,
++                     bool originalInstance,
++                     bool includeSourceChildren,
++                     const AncestorSourceIds& ancestorSourceIds,
++                     size_t activeDepth,
++                     UseCloneEstimate& estimate)
++    {
++        if(activeDepth >= MAX_USE_EXPANSION_DEPTH
++                || !addExpansionWork(1, estimate)) {
++            return false;
++        }
++
++        auto childAncestors = ancestorSourceIds;
++        appendElementId(useElement, childAncestors);
++        auto* targetElement = useElement->getTargetElement(m_document);
++        const bool canClone = targetElement != nullptr
++            && (!originalInstance || targetElement != useElement)
++            && !isDisallowedElement(targetElement)
++            && !containsTargetId(targetElement, ancestorSourceIds);
++
++        if(canClone) {
++            if(targetElement->id() == ElementID::Svg
++                    || targetElement->id() == ElementID::Symbol) {
++                for(const auto& attribute : useElement->attributes()) {
++                    if(attribute.id() != PropertyID::Width
++                            && attribute.id() != PropertyID::Height) {
++                        continue;
++                    }
++                    if(!addCloneWork(attribute.value().size() + 1, estimate))
++                        return false;
++                }
++            }
++            if(!estimateClonedTarget(targetElement, childAncestors,
++                                     activeDepth + 1, estimate)) {
++                return false;
++            }
++        }
++
++        if(includeSourceChildren) {
++            for(const auto& child : useElement->children()) {
++                if(auto childElement = toSVGElement(child)) {
++                    if(!estimateBuiltElement(childElement, originalInstance,
++                                             childAncestors, activeDepth + 1,
++                                             estimate)) {
++                        return false;
++                    }
++                }
++            }
++        }
++        return true;
++    }
++
++    bool estimateClonedTarget(const SVGElement* targetElement,
++                              const AncestorSourceIds& ancestorSourceIds,
++                              size_t activeDepth,
++                              UseCloneEstimate& estimate)
++    {
++        const UseCloneCacheKey key{
++            targetElement->sourceIndex(), activeDepth, ancestorSourceIds};
++        const auto cached = m_targetCache.find(key);
++        if(cached != m_targetCache.end())
++            return addEstimate(cached->second, estimate);
++
++        UseCloneEstimate targetEstimate;
++        if(targetElement->id() == ElementID::Use) {
++            if(!addCloneAttributeWork(targetElement->attributes(),
++                                      targetEstimate)
++                    || !estimateUse(
++                        static_cast<const SVGUseElement*>(targetElement),
++                        false, false, ancestorSourceIds, activeDepth,
++                        targetEstimate)) {
++                return false;
++            }
++        } else {
++            if(!addCloneSubtreeWork(targetElement, targetEstimate))
++                return false;
++            auto childAncestors = ancestorSourceIds;
++            appendElementId(targetElement, childAncestors);
++            for(const auto& child : targetElement->children()) {
++                if(auto childElement = toSVGElement(child)) {
++                    if(!estimateBuiltElement(childElement, false,
++                                             childAncestors, activeDepth,
++                                             targetEstimate)) {
++                        return false;
++                    }
++                }
++            }
++        }
++
++        m_targetCache.emplace(key, targetEstimate);
++        return addEstimate(targetEstimate, estimate);
++    }
++
++    Document* m_document;
++    std::map<UseCloneCacheKey, UseCloneEstimate> m_targetCache;
++    UseCloneEstimate m_estimate;
++};
++
++} // namespace
++
++bool Document::preflightUseCloneWork()
++{
++    if(!m_capabilityIssues.empty()) {
++        m_useClonePreflightState = 2;
++        return false;
++    }
++    if(m_useClonePreflightState != 0)
++        return m_useClonePreflightState == 1;
++
++    UseClonePreflight preflight(this);
++    const bool withinBudget = preflight.estimate(m_rootElement.get());
++    if(!withinBudget)
++        addCapabilityIssue("unsupported_complexity");
++    m_useClonePreflightState = withinBudget ? 1 : 2;
++    return withinBudget;
++}
++
+ } // namespace lunasvg
 diff --git a/source/svgelement.h b/source/svgelement.h
-index ff5d008..7435c6c 100644
+index ff5d008..012e1e6 100644
 --- a/source/svgelement.h
 +++ b/source/svgelement.h
 @@ -80,6 +80,14 @@ private:
@@ -2922,6 +3188,25 @@ index ff5d008..7435c6c 100644
      void layout(SVGLayoutState& state) final;
  
      void forceLayout();
+@@ -370,6 +436,10 @@ public:
+     Transform localTransform() const final;
+     void render(SVGRenderState& state) const final;
+     void build() final;
++    bool isGeneratedChild(const SVGNode* child) const
++    {
++        return child == m_generatedChild;
++    }
+ 
+ private:
+     std::unique_ptr<SVGElement> cloneTargetElement(SVGElement* targetElement);
+@@ -377,6 +447,7 @@ private:
+     SVGLength m_y;
+     SVGLength m_width;
+     SVGLength m_height;
++    SVGNode* m_generatedChild{nullptr};
+ };
+ 
+ class SVGImageElement final : public SVGGraphicsElement {
 diff --git a/source/svggeometryelement.cpp b/source/svggeometryelement.cpp
 index e2c9708..d2dc5ee 100644
 --- a/source/svggeometryelement.cpp
