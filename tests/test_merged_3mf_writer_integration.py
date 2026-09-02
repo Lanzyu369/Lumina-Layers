@@ -525,6 +525,83 @@ class TestMergedWriterBambuCompatibility:
             for path in (src1, src2, Path(out_path)):
                 path.unlink(missing_ok=True)
 
+    def test_merged_output_can_disable_wipe_tower_auto_placement(self) -> None:
+        src1 = _make_source_3mf(
+            width_mm=50.0,
+            depth_mm=60.0,
+            printer_id="bambu-a1-mini",
+        )
+        src2 = _make_source_3mf(
+            width_mm=50.0,
+            depth_mm=60.0,
+            printer_id="bambu-a1-mini",
+        )
+        items = [
+            MergedItem(
+                source_filename="left.png",
+                source_3mf_path=src1,
+                slots=(MaterialSlot(0, "Black", "#101010", "GFL00"),),
+                tx_mm=10.0,
+                ty_mm=10.0,
+            ),
+            MergedItem(
+                source_filename="right.png",
+                source_3mf_path=src2,
+                slots=(MaterialSlot(0, "Black", "#101010", "GFL00"),),
+                tx_mm=120.0,
+                ty_mm=10.0,
+            ),
+        ]
+        fd, out_path = tempfile.mkstemp(
+            suffix=".3mf",
+            dir=TEMP_DIR,
+            prefix="integ_wipe_disabled_",
+        )
+        os.close(fd)
+
+        try:
+            with zipfile.ZipFile(src1) as source_package:
+                source_settings = json.loads(
+                    source_package.read("Metadata/project_settings.config")
+                )
+
+            MergedBambu3MFWriter().write(
+                items,
+                Path(out_path),
+                plate_width_mm=180.0,
+                plate_depth_mm=180.0,
+                enable_wipe_tower_auto_placement=False,
+            )
+
+            with zipfile.ZipFile(out_path) as package:
+                placement = json.loads(
+                    package.read("Metadata/lumina_wipe_tower_placement.json")
+                )
+                settings = json.loads(
+                    package.read("Metadata/project_settings.config")
+                )
+
+            assert placement == {
+                "schema_version": 1,
+                "enabled": False,
+                "available": False,
+                "adapted": False,
+                "requires_manual_adjustment": False,
+                "warning_code": None,
+                "reason": "disabled_by_user",
+            }
+            for key in (
+                "wipe_tower_x",
+                "wipe_tower_y",
+                "prime_tower_width",
+                "wipe_tower_rotation_angle",
+            ):
+                assert settings[key] == source_settings[key]
+            assert read_wipe_tower_placement_warnings(out_path) == []
+        finally:
+            for path in (src1, src2, Path(out_path)):
+                path.unlink(missing_ok=True)
+
     def test_impossible_merged_layout_embeds_manual_warning(self) -> None:
         source = _make_source_3mf(
             width_mm=179.0,

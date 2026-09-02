@@ -78,6 +78,8 @@ export interface BugReportContextPayload {
   material_backing_material_dir_name: string | null;
   /** Client-local preference used to name ordinary single-item 3MF downloads. */
   preserve_upload_filename_for_3mf?: boolean;
+  /** 3MF export preference controlling automatic model/tower layout. */
+  enable_wipe_tower_auto_placement?: boolean;
   /** Personal browser preference; never part of print or share-card state. */
   enable_smooth_vector_preview?: boolean;
   /** Lightweight renderer selected for the active native SVG session. */

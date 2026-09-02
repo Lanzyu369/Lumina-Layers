@@ -2967,6 +2967,9 @@ def _run_vector_branch(ctx: dict) -> dict:
                 bool(ctx.get("enable_base_layer_height_modifier", True))
                 and not bool(ctx.get("enable_relief", False))
             ),
+            enable_wipe_tower_auto_placement=bool(
+                ctx.get("enable_wipe_tower_auto_placement", True)
+            ),
             enable_relief=bool(ctx.get("enable_relief", False)),
             base_height_mm=float(ctx.get("bambu_base_height_mm", 0.0)),
             color_height_mm=float(ctx.get("bambu_color_height_mm", 0.0)),

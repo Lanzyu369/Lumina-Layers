@@ -629,8 +629,9 @@ class TestBatchWorkerPoolSubmit:
             ),
             patch(
                 "utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write",
-                _noop_3mf_write,
-            ),
+                autospec=True,
+                side_effect=_noop_3mf_write,
+            ) as merged_write_mock,
         ):
             response = client.post(
                 "/api/convert/batch",
@@ -658,6 +659,7 @@ class TestBatchWorkerPoolSubmit:
                     "slicer": "OrcaSlicer",
                     "nozzle_size": "0.2",
                     "enable_base_layer_height_modifier": "false",
+                    "enable_wipe_tower_auto_placement": "false",
                     "high_precision_3d_preview": "true",
                 },
             )
@@ -703,6 +705,16 @@ class TestBatchWorkerPoolSubmit:
         assert call_args[0][22] == "0.2"
         assert call_args[0][23] is False
         assert call_args[0][36] is True
+        worker_args = inspect.signature(worker_batch_convert_item).bind(
+            *call_args.args[1:]
+        ).arguments
+        assert worker_args["enable_wipe_tower_auto_placement"] is False
+        assert (
+            merged_write_mock.call_args.kwargs[
+                "enable_wipe_tower_auto_placement"
+            ]
+            is False
+        )
         assert (
             call_args.kwargs["host_memory_reservation_bytes"]
             == 8 * 1024**3
@@ -1205,7 +1217,15 @@ def _make_worker_result(
     }
 
 
-def _noop_3mf_write(self, items, output_path, *, plate_width_mm, plate_depth_mm):
+def _noop_3mf_write(
+    self,
+    items,
+    output_path,
+    *,
+    plate_width_mm,
+    plate_depth_mm,
+    enable_wipe_tower_auto_placement=True,
+):
     """No-op replacement for MergedBambu3MFWriter.write that creates an empty file."""
     Path(output_path).write_bytes(b"fake-merged-3mf")
 
@@ -1227,7 +1247,15 @@ class TestBatchMergeFlow:
         )
         writer_plate_dims: list[tuple[float, float]] = []
 
-        def _tracking_3mf_write(self, items, output_path, *, plate_width_mm, plate_depth_mm):
+        def _tracking_3mf_write(
+            self,
+            items,
+            output_path,
+            *,
+            plate_width_mm,
+            plate_depth_mm,
+            enable_wipe_tower_auto_placement=True,
+        ):
             writer_plate_dims.append((plate_width_mm, plate_depth_mm))
             Path(output_path).write_bytes(b"fake-merged-3mf")
 
@@ -1681,7 +1709,15 @@ class TestBatchMergeFlow:
 
         written_item_counts: list[int] = []
 
-        def _tracking_3mf_write(self, items, output_path, *, plate_width_mm, plate_depth_mm):
+        def _tracking_3mf_write(
+            self,
+            items,
+            output_path,
+            *,
+            plate_width_mm,
+            plate_depth_mm,
+            enable_wipe_tower_auto_placement=True,
+        ):
             written_item_counts.append(len(items))
             Path(output_path).write_bytes(b"fake-merged-3mf")
 
@@ -1757,7 +1793,15 @@ class TestBatchMergeFlow:
 
         write_call_items_count = []
 
-        def _tracking_3mf_write(self, items, output_path, *, plate_width_mm, plate_depth_mm):
+        def _tracking_3mf_write(
+            self,
+            items,
+            output_path,
+            *,
+            plate_width_mm,
+            plate_depth_mm,
+            enable_wipe_tower_auto_placement=True,
+        ):
             write_call_items_count.append(len(items))
             Path(output_path).write_bytes(b"fake-merged-3mf")
 
@@ -1890,7 +1934,15 @@ class TestBatchMergeFlow:
         private_path = "/Users/min/private/batch-output/merged.3mf"
         raw_error_message = f"cannot write {private_path}: Permission denied"
 
-        def _failing_3mf_write(self, items, output_path, *, plate_width_mm, plate_depth_mm):
+        def _failing_3mf_write(
+            self,
+            items,
+            output_path,
+            *,
+            plate_width_mm,
+            plate_depth_mm,
+            enable_wipe_tower_auto_placement=True,
+        ):
             raise MergedWriteError(raw_error_message)
 
         # Capture _safe_log calls to verify structured log emission

@@ -65,6 +65,12 @@ _CREATOR_5_MODEL_TOWER_CLEARANCE_MM = 7.5
 _ANYCUBIC_TOWER_MIN_FOOTPRINT_WIDTH_MM = 50.0
 _ANYCUBIC_TOWER_MIN_DEPTH_MM = 57.5
 _ELEGOO_CC2_PREFERRED_TOP_EDGE_CLEARANCE_MM = 32.0
+_WIPE_TOWER_OVERRIDE_KEYS = (
+    "wipe_tower_x",
+    "wipe_tower_y",
+    "prime_tower_width",
+    "wipe_tower_rotation_angle",
+)
 
 
 def _get_trimesh():
@@ -328,11 +334,20 @@ def _is_flashstudio_registry_profile(profile: Any) -> bool:
 def _apply_snapmaker_u1_native_project_shape(
     settings: dict[str, Any],
     profile: Any,
+    *,
+    preserved_difference_keys: Iterable[str] = (),
 ) -> None:
     if not _is_snapmaker_u1_registry_profile(profile):
         return
     settings.pop("inherits_group", None)
-    settings.pop("different_settings_to_system", None)
+    required_keys = tuple(preserved_difference_keys)
+    if required_keys:
+        settings["different_settings_to_system"] = _normalize_difference_index(
+            None,
+            required_keys,
+        )
+    else:
+        settings.pop("different_settings_to_system", None)
 
 
 def _replace_nozzle_label(value: object, old_label: str, new_label: str) -> object:
@@ -1752,6 +1767,7 @@ class BambuStudio3MFWriter:
         watermark: str = "LuminaStudio",
         *,
         enable_base_layer_height_modifier: bool = True,
+        enable_wipe_tower_auto_placement: bool = True,
         enable_relief: bool = False,
         base_height_mm: float = 0.0,
         color_height_mm: float = 0.0,
@@ -1776,6 +1792,9 @@ class BambuStudio3MFWriter:
             watermark (str): Watermark text embedded in the 3MF ZIP structure. (嵌入 3MF ZIP 结构的水印文本)
             enable_base_layer_height_modifier (bool): Whether to emit layer_config_ranges.xml.
                 （是否输出 layer_config_ranges.xml）
+            enable_wipe_tower_auto_placement (bool): Whether to adapt the model and
+                wipe-tower layout to the selected build area.（是否按所选打印区域自动
+                调整模型与擦料塔的摆放和擦料塔尺寸。）
             enable_relief (bool): Whether variable-height relief geometry is enabled. Relief
                 exports never emit ``layer_config_ranges.xml`` because no single global
                 backing range is safe.（是否启用可变高度浮雕；浮雕不存在全局安全的
@@ -1860,6 +1879,9 @@ class BambuStudio3MFWriter:
         self.enable_base_layer_height_modifier = bool(
             enable_base_layer_height_modifier
         ) and not self.enable_relief
+        self.enable_wipe_tower_auto_placement = bool(
+            enable_wipe_tower_auto_placement
+        )
         self.base_height_mm = float(base_height_mm)
         self.color_height_mm = float(color_height_mm)
         normalized_face_orientation = str(face_orientation).strip().lower()
@@ -2612,6 +2634,8 @@ class BambuStudio3MFWriter:
         需要人工调整，绝不缩放模型或关闭擦料塔。
         """
 
+        if not self.enable_wipe_tower_auto_placement:
+            return None
         if self._wipe_tower_placement_cache is not None:
             return self._wipe_tower_placement_cache
         if not self.objects:
@@ -3395,7 +3419,17 @@ class BambuStudio3MFWriter:
         """
 
         placement = self._get_wipe_tower_placement()
-        if placement is None:
+        if not self.enable_wipe_tower_auto_placement:
+            payload: dict[str, Any] = {
+                "schema_version": 1,
+                "enabled": False,
+                "available": False,
+                "adapted": False,
+                "requires_manual_adjustment": False,
+                "warning_code": None,
+                "reason": "disabled_by_user",
+            }
+        elif placement is None:
             log.warning(
                 "Printable area unavailable for wipe-tower validation",
                 extra={
@@ -3410,8 +3444,9 @@ class BambuStudio3MFWriter:
                     "slicer": self.slicer,
                 },
             )
-            payload: dict[str, Any] = {
+            payload = {
                 "schema_version": 1,
+                "enabled": True,
                 "available": False,
                 "adapted": False,
                 "requires_manual_adjustment": True,
@@ -3421,6 +3456,7 @@ class BambuStudio3MFWriter:
         else:
             payload = {
                 "schema_version": 1,
+                "enabled": True,
                 "available": True,
                 "adapted": placement.adapted,
                 "requires_manual_adjustment": placement.requires_manual_adjustment,
@@ -3577,14 +3613,7 @@ class BambuStudio3MFWriter:
                 placement.tower_rotation
             )
             if placement.adapted:
-                applied_override_keys.extend(
-                    (
-                        "wipe_tower_x",
-                        "wipe_tower_y",
-                        "prime_tower_width",
-                        "wipe_tower_rotation_angle",
-                    )
-                )
+                applied_override_keys.extend(_WIPE_TOWER_OVERRIDE_KEYS)
 
         # Ensure BambuStudio/Orca's "modified-from-system-default" index
         # includes every key we actually overrode; otherwise the slicer
@@ -3603,6 +3632,11 @@ class BambuStudio3MFWriter:
         _apply_snapmaker_u1_native_project_shape(
             settings,
             self._registry_device_profile,
+            preserved_difference_keys=(
+                _WIPE_TOWER_OVERRIDE_KEYS
+                if placement is not None and placement.adapted
+                else ()
+            ),
         )
 
         return json.dumps(settings, indent=4, ensure_ascii=False).encode("utf-8")
@@ -4031,6 +4065,7 @@ def export_scene_with_bambu_metadata(
     project_slot_names: Optional[List[str]] = None,
     *,
     enable_base_layer_height_modifier: bool = True,
+    enable_wipe_tower_auto_placement: bool = True,
     enable_relief: bool = False,
     base_height_mm: float = 0.0,
     color_height_mm: float = 0.0,
@@ -4060,6 +4095,9 @@ def export_scene_with_bambu_metadata(
             in exported project metadata when available. (可选，导出项目元数据时应保留的完整来源调色板/材料名称)
         enable_base_layer_height_modifier (bool): Whether to emit layer_config_ranges.xml.
             （是否输出 layer_config_ranges.xml）
+        enable_wipe_tower_auto_placement (bool): Whether to adapt the model and
+            wipe-tower layout to the selected build area.（是否按所选打印区域自动
+            调整模型与擦料塔的摆放和擦料塔尺寸。）
         enable_relief (bool): Whether variable-height relief geometry is enabled. Relief
             exports never emit ``layer_config_ranges.xml``.（是否启用可变高度浮雕；
             浮雕导出始终不输出 ``layer_config_ranges.xml``。）
@@ -4137,6 +4175,9 @@ def export_scene_with_bambu_metadata(
         "enable_relief": bool(enable_relief),
         "enable_base_layer_height_modifier": bool(
             enable_base_layer_height_modifier
+        ),
+        "enable_wipe_tower_auto_placement": bool(
+            enable_wipe_tower_auto_placement
         ),
         "base_height_mm": float(base_height_mm),
         "color_height_mm": float(color_height_mm),

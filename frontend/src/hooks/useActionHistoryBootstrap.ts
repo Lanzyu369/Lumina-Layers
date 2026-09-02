@@ -92,6 +92,7 @@ function readSnapshot(): WorkflowSnapshot {
       maxBytes: 4096,
       svgPixelsPerMm: settings.svgPixelsPerMm,
       materialDeltaE00Tolerance: settings.materialDeltaE00Tolerance,
+      enableWipeTowerAutoPlacement: settings.enableWipeTowerAutoPlacement,
     }),
   };
 }

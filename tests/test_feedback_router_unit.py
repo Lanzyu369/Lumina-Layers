@@ -68,6 +68,7 @@ def _payload(**overrides: Any) -> dict[str, Any]:
             "material_layer_height_mm": None,
             "material_backing_material_dir_name": None,
             "preserve_upload_filename_for_3mf": False,
+            "enable_wipe_tower_auto_placement": False,
             "enable_smooth_vector_preview": True,
             "vector_preview_renderer": "vector_analytic",
             "recent_client_logs": [
@@ -187,6 +188,21 @@ def test_bug_report_context_preserves_upload_filename_preference() -> None:
     context.pop("preserve_upload_filename_for_3mf")
     legacy_dumped = BugReportContext.model_validate(context).model_dump()
     assert legacy_dumped["preserve_upload_filename_for_3mf"] is None
+
+
+def test_bug_report_context_preserves_wipe_tower_auto_placement() -> None:
+    from api.routers.feedback import BugReportContext
+
+    context = dict(_payload()["context"])
+    context["enable_wipe_tower_auto_placement"] = False
+
+    dumped = BugReportContext.model_validate(context).model_dump()
+
+    assert dumped["enable_wipe_tower_auto_placement"] is False
+
+    context.pop("enable_wipe_tower_auto_placement")
+    legacy_dumped = BugReportContext.model_validate(context).model_dump()
+    assert legacy_dumped["enable_wipe_tower_auto_placement"] is None
 
 
 def test_bug_report_context_preserves_vector_preview_renderer() -> None:

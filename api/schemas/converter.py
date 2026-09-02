@@ -619,6 +619,10 @@ class ConvertGenerateRequest(LutSourceSelection):
         True,
         description="Bambu 切片器：底板层高修改器开关（底板用 nozzle×0.5 粗层高打印）",
     )
+    enable_wipe_tower_auto_placement: bool = Field(
+        True,
+        description="自动调整擦料塔位置和尺寸以避开模型",
+    )
     use_cached_matched_rgb: bool = Field(
         False,
         description="使用 Session 缓存的 matched_rgb 而非从原始图像重新处理",

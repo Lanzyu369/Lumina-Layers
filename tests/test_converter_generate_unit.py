@@ -1876,6 +1876,7 @@ class TestGenerateParameterCompleteness:
             "params": {
                 "lut_name": "test_lut",
                 "enable_base_layer_height_modifier": False,
+                "enable_wipe_tower_auto_placement": False,
             },
         }
 
@@ -1892,6 +1893,7 @@ class TestGenerateParameterCompleteness:
         assert response.status_code == 200
         submitted_params = _mock_pool.submit.call_args.args[3]
         assert submitted_params["enable_base_layer_height_modifier"] is False
+        assert submitted_params["enable_wipe_tower_auto_placement"] is False
 
     def test_generated_download_survives_source_session_close(self) -> None:
         fd_img, image_path = tempfile.mkstemp(suffix=".png")
@@ -2063,6 +2065,7 @@ class TestGenerateParameterCompleteness:
         assert response.status_code == 200
         submitted_params = _mock_pool.submit.call_args.args[3]
         assert submitted_params["enable_base_layer_height_modifier"] is True
+        assert submitted_params["enable_wipe_tower_auto_placement"] is True
 
 
 class TestNativeVectorPreviewGlbReuse:
@@ -10068,6 +10071,16 @@ class TestConverterEntryAcceptsBaseLayerModifierKwarg:
         params = inspect.signature(convert_image_to_3d).parameters
         assert "enable_base_layer_height_modifier" in params
         assert params["enable_base_layer_height_modifier"].default is True
+
+    def test_converter_signatures_accept_wipe_tower_auto_placement(self) -> None:
+        import inspect
+
+        from core.converter import convert_image_to_3d, generate_final_model
+
+        for entry_point in (convert_image_to_3d, generate_final_model):
+            params = inspect.signature(entry_point).parameters
+            assert "enable_wipe_tower_auto_placement" in params
+            assert params["enable_wipe_tower_auto_placement"].default is True
 
     def test_convert_image_to_3d_signature_accepts_material_backing_index(self) -> None:
         import inspect

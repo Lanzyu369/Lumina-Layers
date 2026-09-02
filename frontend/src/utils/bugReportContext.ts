@@ -227,6 +227,8 @@ export function collectBugReportContext(): BugReportContextPayload {
     material_backing_material_dir_name: isMaterialSource ? converter.materialBackingMaterialDirName : null,
     preserve_upload_filename_for_3mf:
       settings.preserveUploadFilenameFor3mf,
+    enable_wipe_tower_auto_placement:
+      settings.enableWipeTowerAutoPlacement,
     enable_smooth_vector_preview: settings.enableSmoothVectorPreview,
     vector_preview_renderer: vectorPreviewRenderer,
     recent_client_logs: getRecentClientLogs(),
@@ -244,6 +246,7 @@ export function collectBugReportContext(): BugReportContextPayload {
       maxBytes: 8192,
       svgPixelsPerMm: settings.svgPixelsPerMm,
       materialDeltaE00Tolerance: settings.materialDeltaE00Tolerance,
+      enableWipeTowerAutoPlacement: settings.enableWipeTowerAutoPlacement,
     }),
     workshop: deriveWorkshopContext(isWorkshopActive),
   };

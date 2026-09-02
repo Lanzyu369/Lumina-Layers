@@ -150,6 +150,12 @@ export default function SettingsPanel() {
   const setEnableBaseLayerHeightModifier = useSettingsStore(
     (s) => s.setEnableBaseLayerHeightModifier,
   );
+  const enableWipeTowerAutoPlacement = useSettingsStore(
+    (s) => s.enableWipeTowerAutoPlacement,
+  );
+  const setEnableWipeTowerAutoPlacement = useSettingsStore(
+    (s) => s.setEnableWipeTowerAutoPlacement,
+  );
   const setLastBedLabel = useSettingsStore((s) => s.setLastBedLabel);
   const syncToBackend = useSettingsStore((s) => s.syncToBackend);
   const enableWittyLoading = useSettingsStore((s) => s.enableWittyLoading);
@@ -749,6 +755,30 @@ export default function SettingsPanel() {
                   {t("settings.build_plate_fallback")}
                 </StatusBanner>
               )}
+
+              <div
+                data-testid="wipe-tower-auto-placement-row"
+                className="flex items-center justify-between gap-3 border-t border-slate-200/60 pt-5 dark:border-slate-700/60"
+              >
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <span className="text-sm font-medium text-slate-900 dark:text-slate-50">
+                    {t("settings.wipe_tower_auto_placement")}
+                  </span>
+                  <HelpDot
+                    title={t("settings.wipe_tower_auto_placement")}
+                    description={t("settings.wipe_tower_auto_placement_desc")}
+                    placement="left"
+                  />
+                </div>
+                <Switch
+                  checked={enableWipeTowerAutoPlacement}
+                  onChange={(enabled) => {
+                    setEnableWipeTowerAutoPlacement(enabled);
+                    void syncToBackend();
+                  }}
+                  ariaLabel={t("settings.wipe_tower_auto_placement")}
+                />
+              </div>
 
               {supportsLayerConfigRanges(resolvedSlicerSoftware) && (
                 <div

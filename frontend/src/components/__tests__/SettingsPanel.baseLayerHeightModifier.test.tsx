@@ -60,6 +60,7 @@ describe("SettingsPanel base-layer-height modifier", () => {
     useSettingsStore.setState({
       ...DEFAULT_SETTINGS,
       enableBaseLayerHeightModifier: true,
+      enableWipeTowerAutoPlacement: true,
       printerModel: "bambu-h2d",
       slicerSoftware: "BambuStudio",
       nozzleSize: "0.4",
@@ -161,6 +162,28 @@ describe("SettingsPanel base-layer-height modifier", () => {
       expect(systemApi.saveSettings).toHaveBeenCalledWith(
         expect.objectContaining({
           enable_base_layer_height_modifier: false,
+        }),
+      );
+    });
+  });
+
+  it("toggles wipe-tower auto placement and syncs the setting", async () => {
+    renderPanel();
+
+    const toggle = await screen.findByRole("switch", {
+      name: "擦料塔自动摆放",
+    });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+
+    fireEvent.click(toggle);
+
+    expect(
+      useSettingsStore.getState().enableWipeTowerAutoPlacement,
+    ).toBe(false);
+    await waitFor(() => {
+      expect(systemApi.saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          enable_wipe_tower_auto_placement: false,
         }),
       );
     });
