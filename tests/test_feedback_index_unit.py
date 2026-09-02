@@ -294,6 +294,44 @@ def test_attachment_failure_detail_is_visible_in_index(tmp_path: Path) -> None:
     assert "error=OSError: Screenshot could not be saved." in md
 
 
+@pytest.mark.parametrize(
+    ("status", "capture_source", "direct_status"),
+    [
+        ("attached", "browser_upload", "attached"),
+        ("attached", "file_registry", "too_large"),
+        ("too_large", None, "too_large"),
+        ("unavailable_after_cleanup", None, "not_provided"),
+    ],
+)
+def test_original_image_capture_state_is_visible_in_index_and_summary(
+    tmp_path: Path,
+    status: str,
+    capture_source: str | None,
+    direct_status: str,
+) -> None:
+    """Operators can distinguish direct, fallback, oversized, and missing sources."""
+    payload = _sample_payload()
+    payload["attachments"]["original_image"].update(
+        {
+            "status": status,
+            "capture_source": capture_source,
+            "direct_upload_status": direct_status,
+        }
+    )
+
+    markdown = generate_index_markdown("LUM-202608-deadbeef", tmp_path, payload)
+    summary = generate_summary_text("LUM-202608-deadbeef", payload)
+
+    expected_capture = capture_source or "(无)"
+    if capture_source:
+        assert f"capture={capture_source}" in markdown
+    assert f"direct={direct_status}" in markdown
+    assert f"来源={expected_capture}" in summary
+    assert f"直接上传={direct_status}" in summary
+    assert status in markdown
+    assert status in summary
+
+
 # ---------------------------------------------------------------------------
 # Advanced Generation Parameters rendering (task 7.3)
 # ---------------------------------------------------------------------------

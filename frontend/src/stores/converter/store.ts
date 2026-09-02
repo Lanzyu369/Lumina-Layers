@@ -275,6 +275,26 @@ function isRawFileConverter(file: File): boolean {
   return RAW_EXTENSIONS_CONVERTER.has(ext);
 }
 
+const bugReportOriginalImageFiles = new WeakMap<File, File>();
+
+function rememberDerivedImageSource(derivedFile: File, currentFile: File): void {
+  bugReportOriginalImageFiles.set(
+    derivedFile,
+    bugReportOriginalImageFiles.get(currentFile) ?? currentFile,
+  );
+}
+
+/** Resolve the user-selected source behind a cropped or rotated converter file.
+ *
+ * 获取裁剪或旋转后的 Converter 文件所对应的用户原始输入文件。
+ */
+export function resolveBugReportOriginalImageFile(
+  currentFile: File | null,
+): File | null {
+  if (!currentFile) return null;
+  return bugReportOriginalImageFiles.get(currentFile) ?? currentFile;
+}
+
 function visibleConverterError(error: unknown, fallback: string): string {
   return apiErrorToVisibleMessage(error, fallback);
 }
@@ -3789,6 +3809,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           state.imagePreviewUrl,
           degrees,
         );
+        rememberDerivedImageSource(rotatedFile, state.imageFile);
         _get().setImageFile(rotatedFile);
       } catch (err) {
         set({
@@ -8955,9 +8976,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
         // Fetch cropped image as Blob to create a new File
         const blob = await downloadResourceBlob(croppedFullUrl);
-        const croppedFile = new File([blob], state.imageFile.name, {
+        const sourceBaseName = state.imageFile.name.replace(/\.[^.]+$/, "") || "image";
+        const croppedFile = new File([blob], `${sourceBaseName}_cropped.png`, {
           type: "image/png",
         });
+        rememberDerivedImageSource(croppedFile, state.imageFile);
 
         const currentState = _get();
         if (currentState.imageFile !== state.imageFile) {

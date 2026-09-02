@@ -5,7 +5,10 @@ import type {
   WorkshopBugReportContext,
 } from "../api/feedback";
 import { useActionHistoryStore } from "../stores/actionHistoryStore";
-import { useConverterStore } from "../stores/converter";
+import {
+  resolveBugReportOriginalImageFile,
+  useConverterStore,
+} from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useSingleStageStore } from "../stores/singleStageStore";
 import { useWidgetStore } from "../stores/widgetStore";
@@ -49,25 +52,55 @@ function deriveFinalArtifact(isConverterActive: boolean): FinalArtifactRef | nul
 
 /**
  * Reference to the source image the user uploaded in the currently active
- * workstream. We only record identifying metadata here; the backend reads
- * the actual bytes through its own FileRegistry using ``session_id``.
+ * workstream. The JSON contains identifying metadata only. Eligible
+ * single-image Converter reports send exact bytes separately as multipart;
+ * the backend retains FileRegistry/SessionStore lookup as a fallback.
  *
- * 指向当前活动工作流中用户上传的原图的引用；只带元信息，真实内容由后端
- * 通过 session_id 去 FileRegistry 取。
+ * 指向当前活动工作流中用户上传的原图的引用；JSON 只带元信息。
+ * 符合条件的单图 Converter 会用 multipart 另行发送原始字节，后端仍保留
+ * FileRegistry/SessionStore 降级。
  */
 function deriveOriginalImageRef(
   isConverterActive: boolean,
   converterSessionId: string | null,
+  imageFile: File | null,
+  batchMode: boolean,
+  batchFileCount: number,
 ): OriginalImageRef | null {
-  if (isConverterActive) {
-    if (!converterSessionId) return null;
+  if (!isConverterActive) {
+    return null;
+  }
+  if (!batchMode && batchFileCount === 0 && imageFile) {
     return {
       session_id: converterSessionId,
-      filename: null,
+      filename: imageFile.name || null,
       source: "converter",
     };
   }
-  return null;
+  return converterSessionId
+    ? {
+        session_id: converterSessionId,
+        filename: null,
+        source: "converter",
+      }
+    : null;
+}
+
+/** Return the exact source file for the active single-image Converter flow.
+ *
+ * 返回当前单图 Converter 工作流的原始 File；批处理或其他标签页返回 null。
+ */
+export function collectBugReportOriginalImage(): File | null {
+  const widget = useWidgetStore.getState();
+  const converter = useConverterStore.getState();
+  if (
+    widget.activeTab !== "converter" ||
+    converter.batchMode ||
+    converter.batchFiles.length > 0
+  ) {
+    return null;
+  }
+  return resolveBugReportOriginalImageFile(converter.imageFile);
 }
 
 function deriveWorkshopContext(
@@ -149,6 +182,7 @@ export function collectBugReportContext(): BugReportContextPayload {
         settings.enableSmoothVectorPreview,
       )
     : null;
+  const originalImageFile = resolveBugReportOriginalImageFile(converter.imageFile);
 
   return {
     url: typeof window !== "undefined" ? window.location.href : "",
@@ -201,6 +235,9 @@ export function collectBugReportContext(): BugReportContextPayload {
     active_original_image_ref: deriveOriginalImageRef(
       isConverterActive,
       converter.sessionId ?? null,
+      originalImageFile,
+      converter.batchMode,
+      converter.batchFiles.length,
     ),
     active_final_artifact_ref: deriveFinalArtifact(isConverterActive),
     advanced_params: buildAdvancedParams(converter, widget.activeTab, {

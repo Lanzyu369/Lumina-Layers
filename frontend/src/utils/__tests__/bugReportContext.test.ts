@@ -8,7 +8,10 @@ import { useWidgetStore } from "../../stores/widgetStore";
 import type { AdvancedParamsFull } from "../../types/actionHistory";
 import { useWorkshopStore } from "../../workshop/store";
 import { _clearClientLogBufferForTests, postClientLog } from "../clientLog";
-import { collectBugReportContext } from "../bugReportContext";
+import {
+  collectBugReportContext,
+  collectBugReportOriginalImage,
+} from "../bugReportContext";
 
 declare const __LUMINA_VERSION__: string;
 
@@ -23,6 +26,9 @@ describe("collectBugReportContext", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     useConverterStore.setState({
       sessionId: "converter-session",
+      imageFile: null,
+      batchMode: false,
+      batchFiles: [],
       source_version: "legacy",
       selectedNativeBrandKey: "",
       selectedNativeDbNames: [],
@@ -659,13 +665,73 @@ describe("collectBugReportContext", () => {
       downloadUrl: "/api/files/old-3mf",
       threemfDiskPath: "/tmp/old-model.3mf",
       largeFormatEnabled: false,
+      imageFile: new File(["stale"], "stale.png", { type: "image/png" }),
     });
 
     const context = collectBugReportContext();
 
     expect(context.active_original_image_ref).toBeNull();
+    expect(collectBugReportOriginalImage()).toBeNull();
     expect(context.advanced_params).toBeNull();
     expect(context.active_final_artifact_ref).toBeNull();
+  });
+
+  it("captures an active converter source before a session exists", () => {
+    const original = new File(["<svg/>"], "before-preview.svg", {
+      type: "image/svg+xml",
+    });
+    useWidgetStore.setState({ activeTab: "converter" });
+    useConverterStore.setState({
+      sessionId: null,
+      imageFile: original,
+    });
+
+    const context = collectBugReportContext();
+
+    expect(context.active_original_image_ref).toEqual({
+      session_id: null,
+      filename: "before-preview.svg",
+      source: "converter",
+    });
+    expect(collectBugReportOriginalImage()).toBe(original);
+  });
+
+  it("preserves the session fallback when no live converter File exists", () => {
+    useWidgetStore.setState({ activeTab: "converter" });
+    useConverterStore.setState({
+      sessionId: "fallback-session",
+      imageFile: null,
+      batchMode: false,
+      batchFiles: [],
+    });
+
+    const context = collectBugReportContext();
+
+    expect(context.active_original_image_ref).toEqual({
+      session_id: "fallback-session",
+      filename: null,
+      source: "converter",
+    });
+    expect(collectBugReportOriginalImage()).toBeNull();
+  });
+
+  it("keeps batch session fallback without attaching a stale single image", () => {
+    useWidgetStore.setState({ activeTab: "converter" });
+    useConverterStore.setState({
+      sessionId: "batch-session",
+      imageFile: new File(["stale"], "stale.png", { type: "image/png" }),
+      batchMode: true,
+      batchFiles: [new File(["batch"], "batch.png", { type: "image/png" })],
+    });
+
+    const context = collectBugReportContext();
+
+    expect(context.active_original_image_ref).toEqual({
+      session_id: "batch-session",
+      filename: null,
+      source: "converter",
+    });
+    expect(collectBugReportOriginalImage()).toBeNull();
   });
 
   it("captures active gradient-card extract session for bug-report log lookup", () => {

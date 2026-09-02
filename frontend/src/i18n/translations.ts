@@ -238,8 +238,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "{message} Request ID: {requestId}.",
   },
   bug_report_modal_privacy_note: {
-    zh: "本反馈仅发送到 Lumina Studio 开发者邮箱，用于定位和回复问题。",
-    en: "This report is sent only to the Lumina Studio developer mailbox for triage and follow-up.",
+    zh: "反馈会保存在本机。当前为单图转换时，最多 100 MiB 的原始输入图片会一并保存；低于邮件附件上限且本机邮件可用时也会作为附件发送。原图不会通过官方转发服务发送。",
+    en: "The report is saved on this device. For a single-image conversion, the original input up to 100 MiB is also saved and attached when it fits the email limit and local email is available. The original is never sent through the official relay.",
   },
   bug_report_modal_submit: {
     zh: "发送",
@@ -1082,8 +1082,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Local email delivery did not succeed. Do you agree to forward this report to the Lumina Studio official bug collection service?",
   },
   bug_report_relay_privacy: {
-    zh: "转发内容包含你的问题描述、可选邮箱、截图和自动收集的环境信息，仅用于定位和回复问题。",
-    en: "The forwarded report includes your description, optional email, screenshot, and automatically collected diagnostic context, only for triage and follow-up.",
+    zh: "转发内容包含你的问题描述、可选邮箱、截图和自动收集的环境信息，仅用于定位和回复问题；不会包含转换原图。",
+    en: "The forwarded report includes your description, optional email, screenshot, and automatically collected diagnostic context for triage and follow-up; it does not include the converter source image.",
   },
   bug_report_relay_send: {
     zh: "同意并转发",
@@ -1144,6 +1144,26 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   bug_report_success_email_unconfigured: {
     zh: "本机未配置邮件，报告已保存到本地。请选择官方转发或手动发送。",
     en: "Local email is not configured; the report was saved locally. Choose official forwarding or send it manually.",
+  },
+  bug_report_success_original_attached: {
+    zh: "转换原图已按原始字节随工单保存。",
+    en: "The converter source image was saved byte-for-byte with the ticket.",
+  },
+  bug_report_success_original_session_fallback: {
+    zh: "转换原图已从当前转换会话恢复并随工单保存。",
+    en: "The converter source image was recovered from the current session and saved with the ticket.",
+  },
+  bug_report_success_original_not_applicable: {
+    zh: "本次未附带转换原图；仅当前单图转换会自动附带。",
+    en: "No converter source image was attached; automatic capture applies only to the active single-image conversion.",
+  },
+  bug_report_success_original_too_large: {
+    zh: "原图超过 100 MiB，未随工单保存；问题描述和其他诊断信息已提交。",
+    en: "The source image exceeded 100 MiB and was not saved; the description and other diagnostics were submitted.",
+  },
+  bug_report_success_original_failed: {
+    zh: "原图保存失败；问题描述和其他诊断信息已提交。",
+    en: "The source image could not be saved; the description and other diagnostics were submitted.",
   },
   bug_report_success_dump_path_label: {
     zh: "本地路径",

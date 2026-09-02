@@ -328,8 +328,6 @@ FEEDBACK_STRUCTURED_EVENTS = {
     "feedback_screenshot_too_large",
     "feedback_screenshot_invalid",
     "feedback_dump_failed",
-    "feedback_ticket_sequence_exhausted",
-    "feedback_ticket_scan_failed",
     "feedback_ticket_assembly_interrupted",
     "feedback_startup_cleanup_failed",
     "feedback_config_invalid_env",

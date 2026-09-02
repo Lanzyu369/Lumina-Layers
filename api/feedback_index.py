@@ -172,6 +172,11 @@ def _format_attachments_table(attachments: Any) -> str:
         detail_parts: list[str] = []
         if entry.get("sha256"):
             detail_parts.append(f"sha256={entry['sha256'][:12]}…")
+        if kind == "original_image":
+            if entry.get("capture_source"):
+                detail_parts.append(f"capture={entry['capture_source']}")
+            if entry.get("direct_upload_status"):
+                detail_parts.append(f"direct={entry['direct_upload_status']}")
         if kind == "lut":
             if entry.get("kind"):
                 detail_parts.append(f"kind={entry['kind']}")
@@ -534,7 +539,7 @@ def generate_index_markdown(
 
     为 ``ticket_id`` 渲染人类可读的 index.md。
     Args:
-        ticket_id: Short ticket id (``LUM-YYYYMMDD-NNN``).
+        ticket_id: Short ticket id (``LUM-YYYYMM-xxxxxxxx`` for new tickets).
         ticket_dir: Ticket directory (used only for relative-path hints).
         payload: Loaded ticket.json payload (best-effort parsed).
     Returns:
@@ -707,7 +712,12 @@ def generate_summary_text(ticket_id: str, payload: dict[str, Any]) -> str:
             continue
         status = entry.get("status", "unknown")
         filename = entry.get("filename") or "(无)"
-        attachment_lines.append(f"- {kind}: {status} → {filename}")
+        detail = ""
+        if kind == "original_image":
+            capture_source = entry.get("capture_source") or "(无)"
+            direct_status = entry.get("direct_upload_status") or "(未知)"
+            detail = f"（来源={capture_source}，直接上传={direct_status}）"
+        attachment_lines.append(f"- {kind}: {status} → {filename}{detail}")
 
     material_block = ""
     if source_version == "material":
