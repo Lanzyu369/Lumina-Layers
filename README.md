@@ -286,7 +286,7 @@ pip install -r requirements.txt
 
 ```bash
 # Required: the desktop shell starts the Python backend for you.
-pip install -r requirements.txt
+python3 -m pip install -r requirements.txt
 
 # bash/zsh
 cd frontend && pnpm install && cd ..
@@ -296,7 +296,7 @@ cd electron && pnpm start
 
 ```powershell
 # Windows PowerShell 5.1 does not support "&&"; run line by line
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 cd frontend; pnpm install; cd ..
 cd electron; pnpm install; cd ..
 cd electron; pnpm start

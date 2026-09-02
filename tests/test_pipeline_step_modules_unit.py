@@ -46,7 +46,15 @@ class TestS11GlbPreview:
             fail_generate,
         )
 
-        result = s11_glb_preview.run({"preview_glb_path": str(preview_glb_path)})
+        result = s11_glb_preview.run(
+            {
+                "preview_glb_path": str(preview_glb_path),
+                "enable_relief": True,
+                "scene": trimesh.Scene(
+                    {"PrintScene": trimesh.creation.box(extents=(1, 1, 1))}
+                ),
+            }
+        )
 
         assert result["glb_path"] == str(preview_glb_path)
         assert result["_hifi_timings"]["glb_preview_s"] >= 0.0
@@ -1220,6 +1228,161 @@ class TestS03ColorReplacement:
             result["height_identity_rgb"], cached_matched
         )
 
+    def test_dimension_change_projects_only_preview_edit_deltas(self, tmp_path):
+        """Fresh-size raster analysis stays authoritative outside edited pixels."""
+
+        from core.pipeline.s03_color_replacement import run
+
+        ctx = self._make_valid_ctx()
+        fresh_rgb = np.full((4, 4, 3), [80, 90, 100], dtype=np.uint8)
+        fresh_material = np.full((4, 4, 5), 3, dtype=np.int16)
+        ctx["matched_rgb"] = fresh_rgb.copy()
+        ctx["material_matrix"] = fresh_material.copy()
+
+        pristine_rgb = np.zeros((2, 2, 3), dtype=np.uint8)
+        edited_rgb = pristine_rgb.copy()
+        edited_rgb[0, 0] = [220, 30, 40]
+        pristine_material = np.zeros((2, 2, 5), dtype=np.int16)
+        edited_material = pristine_material.copy()
+        edited_material[0, 0] = [1, 1, 1, 1, 1]
+        source_solid = np.ones((2, 2), dtype=bool)
+
+        paths = {}
+        for name, value in (
+            ("matched_rgb", edited_rgb),
+            ("original_matched_rgb", pristine_rgb),
+            ("material_matrix", edited_material),
+            ("original_material_matrix", pristine_material),
+            ("mask_solid", source_solid),
+        ):
+            path = tmp_path / f"{name}.npy"
+            np.save(path, value)
+            paths[name] = str(path)
+        ctx.update(
+            {
+                "matched_rgb_path": paths["matched_rgb"],
+                "original_matched_rgb_path": paths["original_matched_rgb"],
+                "material_matrix_path": paths["material_matrix"],
+                "original_material_matrix_path": paths[
+                    "original_material_matrix"
+                ],
+                "mask_solid_path": paths["mask_solid"],
+                "edit_projection": {
+                    "mode": "delta",
+                    "source_shape": [2, 2],
+                },
+            }
+        )
+
+        result = run(ctx)
+
+        expected_rgb = fresh_rgb.copy()
+        expected_rgb[:2, :2] = [220, 30, 40]
+        np.testing.assert_array_equal(result["matched_rgb"], expected_rgb)
+        expected_material = fresh_material.copy()
+        expected_material[:2, :2] = [1, 1, 1, 1, 1]
+        np.testing.assert_array_equal(
+            result["material_matrix"], expected_material
+        )
+        # Display edits never redefine relief height identity.
+        np.testing.assert_array_equal(result["height_identity_rgb"], fresh_rgb)
+
+    def test_dimension_change_fails_closed_when_pristine_artifact_disappears(
+        self,
+        tmp_path,
+    ) -> None:
+        """Required edit replay cannot silently fall back to stale or no edits."""
+
+        from core.errors import CachedPreviewAnalysisError
+        from core.pipeline.s03_color_replacement import run
+
+        ctx = self._make_valid_ctx()
+        edited_path = tmp_path / "matched.npy"
+        matrix_path = tmp_path / "material.npy"
+        pristine_matrix_path = tmp_path / "original-material.npy"
+        mask_path = tmp_path / "mask.npy"
+        np.save(edited_path, np.zeros((2, 2, 3), dtype=np.uint8))
+        np.save(matrix_path, np.zeros((2, 2, 5), dtype=np.int16))
+        np.save(pristine_matrix_path, np.zeros((2, 2, 5), dtype=np.int16))
+        np.save(mask_path, np.ones((2, 2), dtype=bool))
+        ctx.update(
+            {
+                "matched_rgb_path": str(edited_path),
+                "original_matched_rgb_path": str(tmp_path / "missing.npy"),
+                "material_matrix_path": str(matrix_path),
+                "original_material_matrix_path": str(pristine_matrix_path),
+                "mask_solid_path": str(mask_path),
+                "edit_projection": {
+                    "mode": "delta",
+                    "source_shape": [2, 2],
+                },
+            }
+        )
+
+        with pytest.raises(CachedPreviewAnalysisError):
+            run(ctx)
+
+    def test_dimension_change_projects_recipe_override_footprint(self, tmp_path):
+        """Recipe masks use the same normalized grid as colour-edit deltas."""
+
+        import pickle
+
+        from core.pipeline.s03_color_replacement import run
+
+        ctx = self._make_valid_ctx()
+        ctx["matched_rgb"] = np.full((4, 4, 3), 80, dtype=np.uint8)
+        ctx["material_matrix"] = np.zeros((4, 4, 5), dtype=np.int16)
+        source_rgb = np.zeros((2, 2, 3), dtype=np.uint8)
+        source_material = np.zeros((2, 2, 5), dtype=np.int16)
+        source_solid = np.ones((2, 2), dtype=bool)
+        paths = {}
+        for name, value in (
+            ("matched_rgb", source_rgb),
+            ("original_matched_rgb", source_rgb),
+            ("material_matrix", source_material),
+            ("original_material_matrix", source_material),
+            ("mask_solid", source_solid),
+        ):
+            path = tmp_path / f"recipe-{name}.npy"
+            np.save(path, value)
+            paths[name] = str(path)
+        masks_path = tmp_path / "recipe-masks.pkl"
+        with masks_path.open("wb") as handle:
+            pickle.dump(
+                {"region-A": np.array([[True, False], [False, False]])},
+                handle,
+            )
+        ctx.update(
+            {
+                "matched_rgb_path": paths["matched_rgb"],
+                "original_matched_rgb_path": paths["original_matched_rgb"],
+                "material_matrix_path": paths["material_matrix"],
+                "original_material_matrix_path": paths[
+                    "original_material_matrix"
+                ],
+                "mask_solid_path": paths["mask_solid"],
+                "edit_projection": {
+                    "mode": "recipe_masks",
+                    "source_shape": [2, 2],
+                },
+                "recipe_overrides": [
+                    {
+                        "region_id": "region-A",
+                        "recipe": [2, 2, 2, 2, 2],
+                        "layer_order": "Top2Bottom",
+                    }
+                ],
+                "recipe_override_masks_path": str(masks_path),
+                "color_layers": 5,
+            }
+        )
+
+        result = run(ctx)
+
+        expected = np.zeros((4, 4, 5), dtype=np.int16)
+        expected[:2, :2] = 2
+        np.testing.assert_array_equal(result["material_matrix"], expected)
+
     def test_identity_validates_against_final_matched_grid_not_s02_grid(
         self,
         tmp_path,
@@ -1840,7 +2003,7 @@ class TestS08AuxiliaryMeshes:
 class TestS11GlbPreview:
     """S11 GLB preview regression tests."""
 
-    def test_heightmap_relief_exports_pipeline_scene_instead_of_flat_segmented_glb(
+    def test_heightmap_relief_exports_lightweight_segmented_glb(
         self,
         monkeypatch,
         tmp_path,
@@ -1855,16 +2018,28 @@ class TestS11GlbPreview:
         )
         scene.add_geometry(mesh, node_name="ReliefRed", geom_name="ReliefRed")
 
-        def _unexpected_segmented_glb(*_args, **_kwargs):
-            raise AssertionError("heightmap relief preview must use pipeline scene")
+        segmented_path = tmp_path / "heightmap-lightweight.glb"
+
+        def _generate_segmented_glb(_cache, *, output_path):
+            assert output_path.endswith(".glb")
+            segmented_path.write_bytes(b"lightweight segmented glb")
+            return str(segmented_path)
 
         monkeypatch.setattr(s11_glb_preview, "OUTPUT_DIR", str(tmp_path))
         monkeypatch.setattr(
             s11_glb_preview,
             "generate_segmented_glb",
-            _unexpected_segmented_glb,
+            _generate_segmented_glb,
         )
-
+        monkeypatch.setattr(
+            scene,
+            "export",
+            MagicMock(
+                side_effect=AssertionError(
+                    "print scene must not become preview GLB"
+                )
+            ),
+        )
         ctx = {
             "matched_rgb": np.full((2, 2, 3), [255, 0, 0], dtype=np.uint8),
             "mask_solid": np.ones((2, 2), dtype=bool),
@@ -1879,8 +2054,79 @@ class TestS11GlbPreview:
 
         glb_path = result["glb_path"]
         assert glb_path is not None
-        assert glb_path.endswith(".glb")
-        assert (tmp_path / Path(glb_path).name).exists()
+        assert glb_path == str(segmented_path)
+        assert segmented_path.read_bytes() == b"lightweight segmented glb"
+
+    @pytest.mark.parametrize(
+        "generated_surface_params",
+        [
+            {"enable_relief": True, "height_mode": "color"},
+            {"enable_outline": True},
+            {"enable_cloisonne": True},
+            {"add_loop": True},
+            {"enable_coating": True},
+            {"enable_fridge_magnet": True},
+        ],
+        ids=[
+            "color-relief",
+            "outline",
+            "cloisonne",
+            "keychain",
+            "coating",
+            "fridge-magnet",
+        ],
+    )
+    def test_generated_surface_modes_keep_existing_lightweight_preview(
+        self,
+        monkeypatch,
+        tmp_path,
+        generated_surface_params,
+    ):
+        from core.pipeline import s11_glb_preview
+
+        scene = trimesh.Scene()
+        mesh = trimesh.creation.box(extents=(3.0, 2.0, 1.0))
+        scene.add_geometry(
+            mesh,
+            node_name="GeneratedSurface",
+            geom_name="GeneratedSurface",
+        )
+
+        def _unexpected_segmented_glb(*_args, **_kwargs):
+            raise AssertionError("existing lightweight preview must be reused")
+
+        monkeypatch.setattr(s11_glb_preview, "OUTPUT_DIR", str(tmp_path))
+        monkeypatch.setattr(
+            s11_glb_preview,
+            "generate_segmented_glb",
+            _unexpected_segmented_glb,
+        )
+        lightweight_preview_path = tmp_path / "lightweight-preview.glb"
+        lightweight_preview_path.write_bytes(b"lightweight preview")
+        monkeypatch.setattr(
+            scene,
+            "export",
+            MagicMock(
+                side_effect=AssertionError(
+                    "print scene must not become preview GLB"
+                )
+            ),
+        )
+
+        ctx = {
+            "matched_rgb": np.full((2, 2, 3), [255, 0, 0], dtype=np.uint8),
+            "mask_solid": np.ones((2, 2), dtype=bool),
+            "pixel_scale": 1.0,
+            "image_path": str(tmp_path / "generated-surface-source.png"),
+            "scene": scene,
+            "preview_glb_path": str(lightweight_preview_path),
+            **generated_surface_params,
+        }
+
+        result = s11_glb_preview.run(ctx)
+
+        glb_path = result["glb_path"]
+        assert glb_path == str(lightweight_preview_path)
 
 
 # ===========================================================================

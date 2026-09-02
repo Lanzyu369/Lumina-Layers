@@ -230,10 +230,13 @@ def test_build_email_message_attaches_small_files_from_attachments_dir(
         attachments_dir=attachments_dir,
     )
 
-    attachment_names = {a.get_filename() for a in msg.iter_attachments()}
+    attachments = list(msg.iter_attachments())
+    attachment_names = {a.get_filename() for a in attachments}
     assert "LUM-20260511-001.json" in attachment_names  # the JSON dump
     assert "original.png" in attachment_names
     assert "index.md" in attachment_names
+    original = next(a for a in attachments if a.get_filename() == "original.png")
+    assert original.get_payload(decode=True) == b"PNGDATA"
     body = msg.get_body(preferencelist=("plain",)).get_content()
     assert "Oversized attachments" not in body
 
@@ -252,7 +255,7 @@ def test_build_email_message_skips_oversized_files(
 
     attachments_dir = tmp_path / "LUM-20260511-002"
     attachments_dir.mkdir()
-    big = attachments_dir / "materials.zip"
+    big = attachments_dir / "original.heic"
     big.write_bytes(b"x" * (2 * 1024 * 1024))  # 2 MB
     small = attachments_dir / "summary.txt"
     small.write_text("ok", encoding="utf-8")
@@ -267,11 +270,11 @@ def test_build_email_message_skips_oversized_files(
     )
 
     attachment_names = {a.get_filename() for a in msg.iter_attachments()}
-    assert "materials.zip" not in attachment_names
+    assert "original.heic" not in attachment_names
     assert "summary.txt" in attachment_names
     body = msg.get_body(preferencelist=("plain",)).get_content()
     assert "Oversized attachments" in body
-    assert "materials.zip" in body
+    assert "original.heic" in body
     assert str(big) not in body
     assert tmp_path.as_posix() not in body
 

@@ -5,7 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from fastapi import HTTPException
-from core.errors import CoreDependencyError, CoreError, CoreProcessingError, CoreValidationError
+from core.errors import (
+    CoreDependencyError,
+    CoreError,
+    CoreProcessingError,
+    CoreValidationError,
+    VectorHostMemoryAdmissionError,
+    VectorMeshMemoryBudgetError,
+)
 from core.material_dynamic_solver import (
     DynamicMaterialCandidateError,
     DynamicMaterialSolverError,
@@ -101,6 +108,41 @@ def to_http_exception(exc: Exception, context: str) -> HTTPException:
         )
     if isinstance(exc, DomainError):
         return HTTPException(status_code=exc.status_code, detail=exc.detail)
+    if isinstance(exc, VectorHostMemoryAdmissionError):
+        return HTTPException(
+            status_code=503,
+            detail={
+                "error": exc.code,
+                "code": exc.code,
+                "message": exc.detail,
+                "requested_bytes": exc.requested_bytes,
+                "reserved_bytes": exc.reserved_bytes,
+                "memory_budget_bytes": exc.memory_budget_bytes,
+                "reason": exc.reason,
+                "recoverable": exc.recoverable,
+                "retryable": True,
+                "recovery_actions": ["retry_later"],
+            },
+            headers={"Retry-After": "5"},
+        )
+    if isinstance(exc, VectorMeshMemoryBudgetError):
+        return HTTPException(
+            status_code=422,
+            detail={
+                "error": exc.code,
+                "code": exc.code,
+                "message": exc.detail,
+                "stage": exc.stage,
+                "estimated_peak_bytes": exc.estimated_peak_bytes,
+                "memory_budget_bytes": exc.memory_budget_bytes,
+                "recoverable": exc.recoverable,
+                "recovery_actions": [
+                    "simplify_svg_paths",
+                    "reduce_model_size",
+                    "split_artwork",
+                ],
+            },
+        )
     if isinstance(exc, CoreValidationError):
         return HTTPException(status_code=422, detail=exc.detail)
     if isinstance(exc, CoreDependencyError):

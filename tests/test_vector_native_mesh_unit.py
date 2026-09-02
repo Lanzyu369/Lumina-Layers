@@ -10,6 +10,8 @@ from __future__ import annotations
 import threading
 import time
 import sys
+import gc
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -25,6 +27,7 @@ import core.vector_native_mesh as vector_native_mesh
 from core import task_parallelism
 from core.system_capacity import EffectiveCpuCapacity
 from core.task_parallelism import AdaptiveParallelismPlan
+from core.errors import VectorMeshMemoryBudgetError
 from core.vector_engine import VectorAnalysis, VectorProcessor
 from core.vector_native_mesh import NativeVectorMeshResult, run_length_extrude_native_hybrid
 
@@ -245,6 +248,7 @@ def test_native_batch_cost_grows_with_points_rings_and_groups() -> None:
     assert more_points.estimated_bytes > small.estimated_bytes
     assert more_groups.group_count > small.group_count
     assert more_groups.estimated_bytes > small.estimated_bytes
+    assert vector_native_mesh.NATIVE_BATCH_INPUT_BYTES_PER_POINT >= 128
 
 
 def test_native_batch_cost_counts_geometry_types_without_mutation() -> None:
@@ -723,15 +727,17 @@ def test_parallel_batches_keep_shapely_surface_rejection(
     )
     shapes = _parallel_batch_shapes()
     fallback_caches = []
-    original_fallback = vector_native_mesh._fallback_extrude_group
+    original_fallback = (
+        vector_native_mesh._extrude_source_geometries_with_coverage_guard
+    )
 
-    def record_fallback_cache(geoms, **kwargs):
+    def record_fallback_cache(geoms, merged, **kwargs):
         fallback_caches.append(kwargs["extrude_cache"])
-        return original_fallback(geoms, **kwargs)
+        return original_fallback(geoms, merged, **kwargs)
 
     monkeypatch.setattr(
         vector_native_mesh,
-        "_fallback_extrude_group",
+        "_extrude_source_geometries_with_coverage_guard",
         record_fallback_cache,
     )
 
@@ -838,6 +844,205 @@ def test_parallel_native_call_error_keeps_per_batch_fallback(
     assert _native_result_mesh_signature(parallel) == _native_result_mesh_signature(
         serial
     )
+
+
+def test_native_memory_error_is_not_converted_to_python_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Native allocation failure must abort instead of allocating fallback too."""
+
+    monkeypatch.setenv("LUMINA_VECTOR_PARALLELISM", "1")
+
+    def fail_native(*_args, **_kwargs):
+        raise MemoryError("injected native allocation failure")
+
+    with pytest.raises(MemoryError, match="injected native allocation failure"):
+        run_length_extrude_native_hybrid(
+            matched_shapes=[{"geometry": _square(), "recipe": [0]}],
+            num_layers=1,
+            layer_h=0.08,
+            num_channels=1,
+            slot_names=["White"],
+            scale_factor=1.0,
+            native_module=_guarded_module(
+                merge_run_groups_to_meshes=fail_native,
+            ),
+        )
+
+
+def test_serial_surface_reject_releases_native_arrays_before_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rejected native candidate must not overlap the Python rebuild."""
+
+    monkeypatch.setenv("LUMINA_VECTOR_PARALLELISM", "1")
+    array_refs: list[weakref.ReferenceType[np.ndarray]] = []
+    released_at_fallback: list[bool] = []
+
+    def merge(_groups, **kwargs):
+        vertices, faces = _box_mesh_buffers(
+            height=float(kwargs["height"]),
+            z_offset=float(kwargs["z_offset"]),
+        )
+        vertex_array = np.asarray(vertices, dtype=np.float64)
+        face_array = np.asarray(faces, dtype=np.int64)
+        array_refs.extend((weakref.ref(vertex_array), weakref.ref(face_array)))
+        return [(vertex_array, face_array)]
+
+    def record_fallback(*_args, **_kwargs):
+        gc.collect()
+        released_at_fallback.append(all(ref() is None for ref in array_refs))
+
+    monkeypatch.setattr(
+        vector_native_mesh,
+        "_native_source_coverage_matches_arrays",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(vector_native_mesh, "_fallback_key", record_fallback)
+
+    run_length_extrude_native_hybrid(
+        matched_shapes=[{"geometry": _square(), "recipe": [0]}],
+        num_layers=1,
+        layer_h=0.08,
+        num_channels=1,
+        slot_names=["White"],
+        scale_factor=1.0,
+        native_module=_guarded_module(merge_run_groups_to_meshes=merge),
+    )
+
+    assert released_at_fallback == [True]
+
+
+def test_parallel_surface_reject_releases_native_arrays_before_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Computed batch outcomes must not retain rejected native arrays."""
+
+    batch_items = _native_batch_items(1)
+    cheap_costs = [
+        vector_native_mesh._estimate_native_jobs_cost(jobs)
+        for (_height_z, jobs) in batch_items
+    ]
+    representative_bytes = cheap_costs[0].estimated_bytes
+    array_refs: list[weakref.ReferenceType[np.ndarray]] = []
+    released_at_fallback: list[bool] = []
+
+    def merge(_groups, **kwargs):
+        vertices, faces = _box_mesh_buffers(
+            height=float(kwargs["height"]),
+            z_offset=float(kwargs["z_offset"]),
+        )
+        vertex_array = np.asarray(vertices, dtype=np.float64)
+        face_array = np.asarray(faces, dtype=np.int64)
+        array_refs.extend((weakref.ref(vertex_array), weakref.ref(face_array)))
+        return [(vertex_array, face_array)]
+
+    def record_fallback(*_args, **_kwargs):
+        gc.collect()
+        released_at_fallback.append(all(ref() is None for ref in array_refs))
+
+    monkeypatch.setattr(
+        vector_native_mesh,
+        "_native_source_coverage_matches_arrays",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(vector_native_mesh, "_fallback_key", record_fallback)
+
+    result, error = vector_native_mesh._try_run_native_batches_parallel(
+        module=_guarded_module(merge_run_groups_to_meshes=merge),
+        batch_items=batch_items,
+        run_group_count=1,
+        source_geometry_count=1,
+        parallelism_plan=_native_plan(
+            2,
+            available_memory_bytes=1024**3 + representative_bytes * 2,
+        ),
+        cheap_batch_costs=cheap_costs,
+        representative_batch_bytes=representative_bytes,
+        scale_factor=1.0,
+        slot_names=["White"],
+        extrude_cache=None,
+    )
+
+    assert error == ""
+    assert result is not None
+    assert released_at_fallback == [True]
+
+
+def test_split_surface_reject_releases_entire_native_batch_before_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Split retry must discard all rejected candidates before rebuilding."""
+
+    polygons = [_square(), _square_at(4.0)]
+    retry_groups = [
+        vector_native_mesh._geometry_to_paths(poly)
+        for poly in polygons
+    ]
+    array_refs: list[weakref.ReferenceType[np.ndarray]] = []
+    released_at_fallback: list[bool] = []
+
+    def merge_split(**_kwargs):
+        meshes = []
+        for index in range(2):
+            vertices, faces = _box_mesh_buffers(z_offset=index * 0.08)
+            vertex_array = np.asarray(vertices, dtype=np.float64)
+            face_array = np.asarray(faces, dtype=np.int64)
+            array_refs.extend(
+                (weakref.ref(vertex_array), weakref.ref(face_array))
+            )
+            meshes.append((vertex_array, face_array))
+        return meshes
+
+    def record_fallback(*_args, **_kwargs):
+        gc.collect()
+        released_at_fallback.append(all(ref() is None for ref in array_refs))
+
+    monkeypatch.setattr(
+        vector_native_mesh,
+        "_should_consider_native_split",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        vector_native_mesh,
+        "_should_retry_native_split",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        vector_native_mesh,
+        "_merge_native_split_retry_groups_to_meshes",
+        merge_split,
+    )
+    monkeypatch.setattr(
+        vector_native_mesh,
+        "_surface_validation_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        vector_native_mesh,
+        "_native_mesh_surface_is_acceptable",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(vector_native_mesh, "_fallback_key", record_fallback)
+
+    result = vector_native_mesh._retry_native_group_as_reference_polygons_unchecked(
+        module=SimpleNamespace(),
+        key=(0, 0, 0),
+        geoms=polygons,
+        original_path_count=2,
+        height=0.08,
+        z_bot=0.0,
+        scale_factor=1.0,
+        slot_names=["White"],
+        meshes_by_slot={},
+        extrude_cache=None,
+        stats=vector_native_mesh._empty_stats(),
+        path_cache=None,
+        prepared_retry_groups=retry_groups,
+    )
+
+    assert result is True
+    assert released_at_fallback == [True, True]
 
 
 def test_parallel_executor_failure_reruns_serial_without_partial_output(
@@ -1144,6 +1349,77 @@ def test_native_hybrid_reuses_geometry_paths_across_run_groups(
     assert result.stats["native_path_cache_misses"] == 1
     assert result.stats["native_meshes"] == 3
     assert result.stats["fallback_groups"] == 0
+
+
+def test_native_path_cache_is_byte_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    geometry_to_paths_calls = 0
+    original_geometry_to_paths = vector_native_mesh._geometry_to_paths
+
+    def counting_geometry_to_paths(geom):
+        nonlocal geometry_to_paths_calls
+        geometry_to_paths_calls += 1
+        return original_geometry_to_paths(geom)
+
+    def fake_merge_run_groups_to_meshes(groups, **kwargs):
+        return [
+            _box_mesh_buffers(
+                height=float(kwargs["height"]),
+                z_offset=float(kwargs["z_offset"]),
+            )
+            for _group in groups
+        ]
+
+    monkeypatch.setattr(vector_native_mesh, "_geometry_to_paths", counting_geometry_to_paths)
+    monkeypatch.setattr(vector_native_mesh, "NATIVE_PATH_CACHE_BUDGET_BYTES", 1)
+    square = _square()
+    result = run_length_extrude_native_hybrid(
+        matched_shapes=[{"geometry": square, "recipe": [0, 1, 0]}],
+        num_layers=3,
+        layer_h=0.08,
+        num_channels=2,
+        slot_names=["White", "Red"],
+        scale_factor=1.0,
+        native_module=_guarded_module(
+            merge_run_groups_to_meshes=fake_merge_run_groups_to_meshes,
+        ),
+    )
+
+    assert geometry_to_paths_calls == 3
+    assert result.stats["native_path_cache_peak_bytes"] <= 1
+    assert result.stats["native_path_cache_oversized_rejections"] == 3
+
+
+def test_native_buffer_coalescing_uses_one_bounded_allocation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_raw = _box_mesh_buffers(height=0.08, z_offset=0.0)
+    second_raw = _box_mesh_buffers(height=0.08, z_offset=0.08)
+    first = (np.asarray(first_raw[0]), np.asarray(first_raw[1]))
+    second = (np.asarray(second_raw[0]), np.asarray(second_raw[1]))
+    guard_calls: list[dict[str, int | str]] = []
+
+    monkeypatch.setattr(
+        vector_native_mesh,
+        "_enforce_vector_mesh_runtime_headroom",
+        lambda **kwargs: guard_calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        vector_native_mesh.np,
+        "vstack",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("native buffer coalescing must not vstack full copies")
+        ),
+    )
+
+    mesh = vector_native_mesh._coalesced_mesh_from_buffers([first, second])
+
+    assert mesh is not None
+    assert len(mesh.vertices) == len(first[0]) + len(second[0])
+    assert len(mesh.faces) == len(first[1]) + len(second[1])
+    assert guard_calls
+    assert guard_calls[0]["stage"] == "native_buffer_coalescing"
 
 
 def test_native_hybrid_falls_back_when_native_mesh_is_empty() -> None:
@@ -2450,3 +2726,45 @@ def test_build_mesh_uses_native_hybrid_when_enabled(monkeypatch: pytest.MonkeyPa
     assert called is True
     assert "White" in scene.geometry
     assert processor.last_native_vector_mesh_stats == {"native_meshes": 1, "fallback_groups": 0}
+
+
+def test_build_mesh_does_not_retry_python_after_native_memory_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A native admission failure must not double the task's memory work."""
+
+    error = VectorMeshMemoryBudgetError(
+        "native_extrude",
+        9 * 1024**3,
+        8 * 1024**3,
+        1 * 1024**3,
+        1,
+        5,
+    )
+
+    def reject_native(**_kwargs):
+        raise error
+
+    def fail_python_retry(*_args, **_kwargs):
+        raise AssertionError("memory rejection retried the Python mesh path")
+
+    monkeypatch.setattr(
+        "core.vector_native_mesh.run_length_extrude_native_hybrid",
+        reject_native,
+    )
+    monkeypatch.setattr(
+        VectorProcessor,
+        "_run_length_extrude",
+        staticmethod(fail_python_retry),
+    )
+    processor = _processor()
+    processor.enable_native_vector_mesh = True
+
+    with pytest.raises(VectorMeshMemoryBudgetError) as raised:
+        processor.build_mesh(
+            analysis=_analysis(),
+            thickness_mm=0.0,
+            structure_mode="Single-sided",
+        )
+
+    assert raised.value is error

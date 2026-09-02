@@ -87,6 +87,22 @@ def test_load_bug_repro_copies_all_known_attachments(tmp_path: Path) -> None:
     assert result.attachments_missing == ["client_logs.jsonl"]
 
 
+def test_load_bug_repro_locates_new_random_monthly_ticket(tmp_path: Path) -> None:
+    feedback_root = tmp_path / "feedback"
+    repro_root = tmp_path / "repro_sessions"
+    ticket_id = "LUM-202605-deadbeef"
+    source_dir = _write_ticket(feedback_root, ticket_id)
+
+    result = load_bug_repro(
+        ticket_id,
+        feedback_root=feedback_root,
+        repro_root=repro_root,
+    )
+
+    assert result.source_dir == source_dir
+    assert (result.repro_dir / "original.png").read_bytes() == b"PNG"
+
+
 def test_load_bug_repro_extracts_materials_zip(tmp_path: Path) -> None:
     feedback_root = tmp_path / "feedback"
     repro_root = tmp_path / "repro_sessions"
@@ -130,6 +146,28 @@ def test_load_bug_repro_raises_when_ticket_missing(tmp_path: Path) -> None:
             feedback_root=feedback_root,
             repro_root=tmp_path / "repro_sessions",
         )
+
+
+@pytest.mark.parametrize(
+    "ticket_id",
+    ["..", "LUM-202605-../../", "LUM-202605-DEADBEEF", "arbitrary-ticket"],
+)
+def test_load_bug_repro_rejects_invalid_ticket_ids_without_path_escape(
+    tmp_path: Path,
+    ticket_id: str,
+) -> None:
+    feedback_root = tmp_path / "feedback"
+    feedback_root.mkdir()
+    repro_root = tmp_path / "repro_sessions"
+
+    with pytest.raises(FileNotFoundError):
+        load_bug_repro(
+            ticket_id,
+            feedback_root=feedback_root,
+            repro_root=repro_root,
+        )
+
+    assert not repro_root.exists()
 
 
 def test_load_bug_repro_writes_manifest_with_actions(tmp_path: Path) -> None:

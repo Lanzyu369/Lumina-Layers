@@ -11,6 +11,7 @@ from copy import deepcopy
 import hashlib
 import os
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ from config import TEMP_DIR
 
 
 ARTIFACT_SCHEMA = "preview_cache_artifact_v1"
+PREVIEW_CACHE_REVISION_KEY = "preview_cache_revision"
 PREVIEW_CACHE_MAX_BYTES_ENV = "LUMINA_PREVIEW_CACHE_MAX_BYTES"
 LARGE_ARRAY_FIELDS = {
     "matched_rgb",
@@ -104,6 +106,7 @@ class _PreviewCacheTransaction(MutableMapping[str, Any]):
                 raise PreviewCacheRevisionConflict(
                     "In-memory preview cache was replaced during transaction"
                 )
+            self._cache[PREVIEW_CACHE_REVISION_KEY] = uuid.uuid4().hex
             self._store.put(self._session_id, "preview_cache", self._cache)
             self._start_cache = self._cache
             return self._cache
@@ -190,6 +193,27 @@ def is_preview_cache_artifact_ref(value: object) -> bool:
         bool: 对象包含预期工件 schema 时返回 True。
     """
     return isinstance(value, dict) and value.get("schema") == ARTIFACT_SCHEMA
+
+
+def refresh_preview_cache_revision(cache: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy with a fresh cache-state revision.
+
+    返回带有全新缓存状态版本的副本。
+
+    Args:
+        cache: Plain preview cache or artifact manifest.
+            普通预览缓存或 artifact manifest。
+
+    Returns:
+        A same-shape cache value whose revision cannot be reused by an older
+        asynchronous preview worker.
+        与输入形态相同、且旧异步预览任务无法复用其版本的缓存值。
+    """
+    if is_preview_cache_artifact_ref(cache):
+        return merge_preview_cache_metadata(cache, {})
+    updated = dict(cache)
+    updated[PREVIEW_CACHE_REVISION_KEY] = uuid.uuid4().hex
+    return updated
 
 
 @contextmanager
@@ -306,6 +330,7 @@ def externalize_preview_cache_to_artifacts(
         for key, value in cache.items()
         if not isinstance(value, np.ndarray)
     }
+    metadata[PREVIEW_CACHE_REVISION_KEY] = uuid.uuid4().hex
     artifact_paths: list[str] = []
     artifact_dir = Path(root_dir) if root_dir is not None else Path(TEMP_DIR)
     field_refs_by_array_id: dict[tuple[int, bool], dict[str, Any]] = {}
@@ -603,6 +628,7 @@ def save_preview_cache_fields(
     _require_artifact_ref(ref)
     updated = _copy_ref(ref)
     updated["manifest_revision"] = int(updated.get("manifest_revision", 0)) + 1
+    updated["metadata"][PREVIEW_CACHE_REVISION_KEY] = uuid.uuid4().hex
     artifact_dir = _artifact_dir_for_ref(updated)
 
     for field_name, array in dirty_fields.items():
@@ -647,14 +673,16 @@ def persist_preview_cache(
         dict[str, Any]: 实际写入 `preview_cache` 的值。
     """
     if is_preview_cache_artifact_ref(cache):
-        store.put(session_id, "preview_cache", cache)
-        return cache
+        updated = refresh_preview_cache_revision(cache)
+        store.put(session_id, "preview_cache", updated)
+        return updated
 
     session_data = store.get(session_id) or {}
     current_cache = session_data.get("preview_cache")
     if not is_preview_cache_artifact_ref(current_cache):
-        store.put(session_id, "preview_cache", cache)
-        return cache
+        updated = refresh_preview_cache_revision(cache)
+        store.put(session_id, "preview_cache", updated)
+        return updated
 
     array_fields = {
         key: value
@@ -695,6 +723,7 @@ def merge_preview_cache_metadata(
     updated = _copy_ref(ref)
     updated["manifest_revision"] = int(updated.get("manifest_revision", 0)) + 1
     updated["metadata"].update(deepcopy(metadata))
+    updated["metadata"][PREVIEW_CACHE_REVISION_KEY] = uuid.uuid4().hex
     return updated
 
 

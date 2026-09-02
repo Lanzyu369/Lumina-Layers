@@ -199,14 +199,24 @@ def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
         nozzle_size="0.4",
         enable_base_layer_height_modifier=True,
         enable_relief=False,
+        backing_color_id=1,
     )
 
     result = None
+    from core import vector_engine as vector_engine_module
+
     with (
         patch(
             "core.pipeline.vector_branch._build_vector_processor",
             return_value=_FlatVectorProcessor(),
         ),
+        patch(
+            "core.vector_engine._concatenate_meshes_fast",
+            wraps=vector_engine_module._concatenate_meshes_fast,
+        ) as bounded_concat,
+        patch(
+            "core.vector_engine._enforce_vector_mesh_runtime_headroom",
+        ) as memory_guard,
         patch(
             "api.workers.converter_workers._rasterize_tile_for_cover",
             return_value=None,
@@ -217,6 +227,16 @@ def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
             "lut.npy",
             params,
         )
+
+    bounded_concat.assert_called_once()
+    assert any(
+        call.kwargs.get("stage") == "large_format_vector_board_merge"
+        for call in memory_guard.call_args_list
+    )
+    assert any(
+        call.kwargs.get("stage") == "large_format_vector_3mf_export"
+        for call in memory_guard.call_args_list
+    )
 
     try:
         with zipfile.ZipFile(result["zip_path"]) as package:

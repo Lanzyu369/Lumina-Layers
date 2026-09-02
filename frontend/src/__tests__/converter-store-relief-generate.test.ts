@@ -218,7 +218,7 @@ describe("converter store relief generate flow", () => {
 
     const result = await useConverterStore.getState().submitFullPipeline();
 
-    expect(result).toBe("/api/files/model.glb");
+    expect(result).toBeNull();
     expect(mocks.convertPreview).toHaveBeenCalledOnce();
     expect(mocks.convertGenerate).toHaveBeenCalledOnce();
     const [, generateParams] = mocks.convertGenerate.mock.calls[0];
@@ -523,7 +523,7 @@ describe("converter store relief generate flow", () => {
     expect(generateParams.heightmap_max_height).toBeCloseTo(4.2, 10);
   });
 
-  it("shows the generated GLB after heightmap relief generation even when a preview GLB exists", async () => {
+  it("keeps the lightweight GLB after heightmap relief generation", async () => {
     const useConverterStore = await loadStore();
     useConverterStore.setState({
       ...baseReadyState(),
@@ -538,9 +538,10 @@ describe("converter store relief generate flow", () => {
       heightmap_max_height: 3,
     });
 
-    await useConverterStore.getState().submitGenerate();
+    const result = await useConverterStore.getState().submitGenerate();
 
-    expect(useConverterStore.getState().modelUrl).toBe("/api/files/model.glb");
+    expect(result).toBeNull();
+    expect(useConverterStore.getState().modelUrl).toBeNull();
     expect(useConverterStore.getState().previewGlbUrl).toBe(
       "/api/files/flat-preview.glb",
     );
@@ -843,7 +844,7 @@ describe("converter store relief generate flow", () => {
 
     const result = await useConverterStore.getState().submitFullPipeline();
 
-    expect(result).toBe("/api/files/model.glb");
+    expect(result).toBeNull();
     expect(mocks.convertPreview).toHaveBeenCalledOnce();
     expect(mocks.uploadHeightmap).toHaveBeenCalledWith(
       file,

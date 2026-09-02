@@ -75,8 +75,6 @@ VECTOR_STRUCTURED_EVENTS = {
     "vector_recipe_overrides_load_failed",
     "vector_recipe_overrides_apply_failed",
     "vector_3mf_exported",
-    "vector_glb_exported",
-    "vector_glb_exported_skipped",
     "vector_2d_preview_skipped",
     "vector_2d_preview_done",
     "vector_2d_preview_failed",
@@ -138,13 +136,14 @@ VECTOR_STRUCTURED_EVENTS = {
     # worker 忠实写入 ctx 的 DEBUG 级确认事件；登记到事件清单白名单，但不
     # 进入每请求 INFO 预算。
     "vector_outline_normalized",
-    # Spec svg-vector-outline-support / Task 3.3: vector_branch.py +
-    # vector_preview_branch inject an Outline mesh derived from
-    # analysis.matched_shapes. INFO double-step (init/done) stays under the
-    # 8 INFO/request budget; rejected_unsupported is WARNING-only.
-    # 规范 svg-vector-outline-support / Task 3.3：vector / preview 双端注入
-    # Outline mesh，几何来源为 analysis.matched_shapes union；init/done 双段
-    # INFO 不超出每请求 8 条预算，rejected_unsupported 为 WARNING。
+    # Spec svg-vector-outline-support / Task 3.3: the generate branch injects
+    # an Outline mesh derived from analysis.matched_shapes. Quick preview uses
+    # the live UI overlay instead. The INFO double-step (init/done) stays under
+    # the 8 INFO/request budget; rejected_unsupported is WARNING-only.
+    # 规范 svg-vector-outline-support / Task 3.3：仅 generate 分支注入来自
+    # analysis.matched_shapes union 的 Outline mesh；快速预览由 UI 实时
+    # overlay 负责。init/done 双段 INFO 不超出每请求 8 条预算，
+    # rejected_unsupported 为 WARNING。
     "vector_outline_init",
     "vector_outline_done",
     "vector_outline_rejected_unsupported",
@@ -247,7 +246,6 @@ CONVERTER_STRUCTURED_EVENTS = {
     "converter_merge_colors_done",
     "converter_generate_large_format_done",
     "converter_generate_download_registration_failed",
-    "converter_generate_glb_registration_failed",
     "converter_crop_registration_failed",
     "color_card_download_registration_failed",
     "color_card_glb_registration_failed",
@@ -258,6 +256,7 @@ CONVERTER_STRUCTURED_EVENTS = {
     "converter_auto_detect_colors_failed",
     "converter_auto_detect_temp_cleanup_failed",
     "converter_cleanup_session_files_done",
+    "converter_vector_preview_renderer_done",
     # Auxiliary material-archive usage tracking. The success path has no
     # dedicated event (per-archive bookkeeping piggybacks on the existing
     # ``converter_generate_*`` events); only the failure path is logged so
@@ -329,8 +328,6 @@ FEEDBACK_STRUCTURED_EVENTS = {
     "feedback_screenshot_too_large",
     "feedback_screenshot_invalid",
     "feedback_dump_failed",
-    "feedback_ticket_sequence_exhausted",
-    "feedback_ticket_scan_failed",
     "feedback_ticket_assembly_interrupted",
     "feedback_startup_cleanup_failed",
     "feedback_config_invalid_env",

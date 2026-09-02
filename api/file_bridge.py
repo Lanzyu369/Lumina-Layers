@@ -66,9 +66,13 @@ _PASSTHROUGH_IMAGE_EXTENSIONS: set[str] = {
     ".tiff",
     ".webp",
 }
-_SUPPORTED_UPLOAD_IMAGE_EXTENSIONS = (
+SUPPORTED_UPLOAD_IMAGE_EXTENSIONS = frozenset(
     _PASSTHROUGH_IMAGE_EXTENSIONS | HEIC_EXTENSIONS | RAW_EXTENSIONS
 )
+"""Canonical filename extensions accepted by converter image uploads.
+
+Converter 图像上传所接受的标准文件扩展名集合。
+"""
 _GZIP_CHUNK_SIZE = 1024 * 1024
 _GLB_GZIP_MIN_BYTES = 1024
 _UPLOAD_CHUNK_SIZE = 1024 * 1024
@@ -239,7 +243,7 @@ async def ensure_png_tempfile(file: UploadFile) -> str:
         (不支持的图像类型、依赖缺失或解码失败)
     """
     ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in _SUPPORTED_UPLOAD_IMAGE_EXTENSIONS:
+    if ext not in SUPPORTED_UPLOAD_IMAGE_EXTENSIONS:
         raise HTTPException(status_code=422, detail=_UNSUPPORTED_IMAGE_UPLOAD_DETAIL)
 
     raw_path = await upload_to_tempfile(file)

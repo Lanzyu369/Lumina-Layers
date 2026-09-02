@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react";
 import * as THREE from "three";
 import { debugThreeLog } from "../utils/threeDebug";
+import type { PreviewSpace } from "../utils/previewSpace";
 
 // ========== Constants ==========
 
@@ -99,7 +100,11 @@ function inferDominantCellSizeFromCoords(coords: number[]): number | null {
  */
 export function rasterizeMeshToGrid(
   geometry: THREE.BufferGeometry,
-  options: { fillInteriorHoles?: boolean; cellSize?: number } = {},
+  options: {
+    fillInteriorHoles?: boolean;
+    cellSize?: number;
+    previewSpace?: PreviewSpace | null;
+  } = {},
 ): {
   grid: Uint8Array;
   gridW: number;
@@ -125,10 +130,14 @@ export function rasterizeMeshToGrid(
 
   // 2. Collect top-face vertex XY coordinates
   const tolerance = (maxZ - minZ) * 0.01 + 1e-6;
+  const toDisplayPoint = (x: number, y: number): [number, number] => {
+    const point = options.previewSpace?.toDisplayPoint({ x, y });
+    return point ? [point.x, point.y] : [x, y];
+  };
   const topPoints: [number, number][] = [];
   for (let i = 0; i < posAttr.count; i++) {
     if (Math.abs(posAttr.getZ(i) - maxZ) < tolerance) {
-      topPoints.push([posAttr.getX(i), posAttr.getY(i)]);
+      topPoints.push(toDisplayPoint(posAttr.getX(i), posAttr.getY(i)));
     }
   }
   if (topPoints.length < 3) return null;
@@ -219,10 +228,13 @@ export function rasterizeMeshToGrid(
   for (let i = 0; i < index.count; i += 3) {
     const a = index.getX(i), b = index.getX(i + 1), c = index.getX(i + 2);
     if (topVertexSet.has(a) && topVertexSet.has(b) && topVertexSet.has(c)) {
+      const [ax, ay] = toDisplayPoint(posAttr.getX(a), posAttr.getY(a));
+      const [bx, by] = toDisplayPoint(posAttr.getX(b), posAttr.getY(b));
+      const [cx, cy] = toDisplayPoint(posAttr.getX(c), posAttr.getY(c));
       fillTriangleInGrid(
-        posAttr.getX(a), posAttr.getY(a),
-        posAttr.getX(b), posAttr.getY(b),
-        posAttr.getX(c), posAttr.getY(c),
+        ax, ay,
+        bx, by,
+        cx, cy,
         grid, gridW, gridH, bMinX, bMinY, cellSize,
       );
     }
@@ -295,7 +307,11 @@ function buildRasterGeometryFromMeshes(meshes: THREE.Mesh[]): THREE.BufferGeomet
 
 export function rasterizeMeshesToGrid(
   meshes: THREE.Mesh[],
-  options: { fillInteriorHoles?: boolean; cellSize?: number } = {},
+  options: {
+    fillInteriorHoles?: boolean;
+    cellSize?: number;
+    previewSpace?: PreviewSpace | null;
+  } = {},
 ): {
   grid: Uint8Array;
   gridW: number;
@@ -725,6 +741,136 @@ export interface OutlineFrame3DProps {
   modelMaxZ: number;
   rasterCellSize?: number;
   fillInteriorHoles?: boolean;
+  previewSpace?: PreviewSpace | null;
+}
+
+interface PreparedExpandedFootprint {
+  originalGrid: Uint8Array;
+  dilatedGrid: Uint8Array;
+  originalWidth: number;
+  originalHeight: number;
+  paddedWidth: number;
+  paddedHeight: number;
+  originX: number;
+  originY: number;
+  cellSize: number;
+  expansionPixels: number;
+  pad: number;
+}
+
+export interface ExpandedFootprintGeometryOptions {
+  backingPlateMesh: THREE.Mesh | null;
+  sourceMeshes?: THREE.Mesh[];
+  expansionMm: number;
+  rasterCellSize?: number;
+  fillInteriorHoles?: boolean;
+  previewSpace?: PreviewSpace | null;
+}
+
+function prepareExpandedFootprint({
+  backingPlateMesh,
+  sourceMeshes,
+  expansionMm,
+  rasterCellSize,
+  fillInteriorHoles = false,
+  previewSpace = null,
+}: ExpandedFootprintGeometryOptions): PreparedExpandedFootprint | null {
+  const rasterMeshes = sourceMeshes && sourceMeshes.length > 0
+    ? sourceMeshes
+    : backingPlateMesh
+      ? [backingPlateMesh]
+      : [];
+  if (rasterMeshes.length === 0 || expansionMm < 0) return null;
+
+  const rasterOptions = {
+    fillInteriorHoles,
+    cellSize:
+      rasterCellSize && previewSpace
+        ? rasterCellSize * Math.min(previewSpace.scaleX, previewSpace.scaleY)
+        : rasterCellSize,
+    previewSpace,
+  };
+  const backingHasPlanarTransform = backingPlateMesh
+    ? Math.abs(backingPlateMesh.position.x) > 1e-9
+      || Math.abs(backingPlateMesh.position.y) > 1e-9
+      || Math.abs(backingPlateMesh.rotation.x) > 1e-9
+      || Math.abs(backingPlateMesh.rotation.y) > 1e-9
+      || Math.abs(backingPlateMesh.rotation.z) > 1e-9
+      || Math.abs(backingPlateMesh.scale.x - 1) > 1e-9
+      || Math.abs(backingPlateMesh.scale.y - 1) > 1e-9
+    : false;
+  const rasterResult = sourceMeshes && sourceMeshes.length > 0
+    ? rasterizeMeshesToGrid(sourceMeshes, rasterOptions)
+    : backingPlateMesh && backingHasPlanarTransform
+      ? rasterizeMeshesToGrid([backingPlateMesh], rasterOptions)
+      : backingPlateMesh
+        ? rasterizeMeshToGrid(backingPlateMesh.geometry, rasterOptions)
+        : null;
+  if (!rasterResult) return null;
+
+  const {
+    grid: originalGrid,
+    gridW: originalWidth,
+    gridH: originalHeight,
+    originX,
+    originY,
+    cellSize,
+  } = rasterResult;
+  const expansionPixels = expansionMm > 0
+    ? Math.max(1, Math.round(expansionMm / cellSize))
+    : 0;
+  const pad = expansionPixels + 1;
+  const paddedWidth = originalWidth + 2 * pad;
+  const paddedHeight = originalHeight + 2 * pad;
+  const paddedGrid = new Uint8Array(paddedWidth * paddedHeight);
+  for (let y = 0; y < originalHeight; y += 1) {
+    for (let x = 0; x < originalWidth; x += 1) {
+      if (originalGrid[y * originalWidth + x] === 1) {
+        paddedGrid[(y + pad) * paddedWidth + (x + pad)] = 1;
+      }
+    }
+  }
+
+  return {
+    originalGrid: paddedGrid,
+    dilatedGrid: dilateGrid(
+      paddedGrid,
+      paddedWidth,
+      paddedHeight,
+      expansionPixels,
+    ),
+    originalWidth,
+    originalHeight,
+    paddedWidth,
+    paddedHeight,
+    originX,
+    originY,
+    cellSize,
+    expansionPixels,
+    pad,
+  };
+}
+
+/** Build a filled, low-resolution footprint including any outline expansion. */
+// eslint-disable-next-line react-refresh/only-export-components -- canonical geometry helpers live with the outline rasterizer
+export function buildExpandedFootprintGeometry(
+  options: ExpandedFootprintGeometryOptions,
+): THREE.BufferGeometry | null {
+  const prepared = prepareExpandedFootprint(options);
+  if (!prepared) return null;
+  const rects = greedyRectMerge(
+    prepared.dilatedGrid,
+    prepared.paddedWidth,
+    prepared.paddedHeight,
+  );
+  return extrudeRectangles(
+    rects,
+    prepared.originX - prepared.cellSize,
+    prepared.originY - prepared.cellSize,
+    prepared.cellSize,
+    1,
+    prepared.pad,
+  );
 }
 
 /**
@@ -740,62 +886,43 @@ export default function OutlineFrame3D({
   modelMaxZ,
   rasterCellSize,
   fillInteriorHoles = false,
+  previewSpace = null,
 }: OutlineFrame3DProps) {
   const geometry = useMemo(() => {
     const buildStart = performance.now();
-    const rasterMeshes = sourceMeshes && sourceMeshes.length > 0
-      ? sourceMeshes
-      : backingPlateMesh
-        ? [backingPlateMesh]
-        : [];
-    if (!enabled || rasterMeshes.length === 0 || outlineWidth <= 0 || modelMaxZ <= 0) {
+    if (!enabled || outlineWidth <= 0 || modelMaxZ <= 0) {
       return null;
     }
-
-    // 1. Rasterize backing plate mesh to occupancy grid
-    const rasterOptions = {
+    const prepared = prepareExpandedFootprint({
+      backingPlateMesh,
+      sourceMeshes,
+      expansionMm: outlineWidth,
+      rasterCellSize,
       fillInteriorHoles,
-      cellSize: rasterCellSize,
-    };
-    const rasterResult = sourceMeshes && sourceMeshes.length > 0
-      ? rasterizeMeshesToGrid(sourceMeshes, rasterOptions)
-      : backingPlateMesh
-        ? rasterizeMeshToGrid(backingPlateMesh.geometry, rasterOptions)
-        : null;
-    if (!rasterResult) return null;
+      previewSpace,
+    });
+    if (!prepared) return null;
 
-    const { grid: originalGrid, gridW: origW, gridH: origH, originX, originY, cellSize } = rasterResult;
-
-    // 2. Convert outlineWidth (mm) to grid pixels
-    const outlineWidthPx = Math.max(1, Math.round(outlineWidth / cellSize));
-
-    // 3. Pad the grid (same as backend: pad = outlineWidthPx + 1)
-    const pad = outlineWidthPx + 1;
-    const paddedW = origW + 2 * pad;
-    const paddedH = origH + 2 * pad;
-    const paddedGrid = new Uint8Array(paddedW * paddedH);
-
-    // Copy original grid into padded grid
-    for (let y = 0; y < origH; y++) {
-      for (let x = 0; x < origW; x++) {
-        if (originalGrid[y * origW + x] === 1) {
-          paddedGrid[(y + pad) * paddedW + (x + pad)] = 1;
-        }
-      }
-    }
-
-    // 4. Dilate the padded grid by outlineWidthPx
-    const dilated = dilateGrid(paddedGrid, paddedW, paddedH, outlineWidthPx);
-
-    // 5. Create ring mask = dilated - original (in padded space)
-    const ring = createRingMask(dilated, paddedGrid, paddedW, paddedH);
-
-    // 6. Greedy rectangle merge
-    const rects = greedyRectMerge(ring, paddedW, paddedH);
+    const ring = createRingMask(
+      prepared.dilatedGrid,
+      prepared.originalGrid,
+      prepared.paddedWidth,
+      prepared.paddedHeight,
+    );
+    const rects = greedyRectMerge(
+      ring,
+      prepared.paddedWidth,
+      prepared.paddedHeight,
+    );
     if (rects.length === 0) return null;
-
-    // 7. Extrude rectangles to 3D boxes
-    const geo = extrudeRectangles(rects, originX - cellSize, originY - cellSize, cellSize, modelMaxZ, pad);
+    const geo = extrudeRectangles(
+      rects,
+      prepared.originX - prepared.cellSize,
+      prepared.originY - prepared.cellSize,
+      prepared.cellSize,
+      modelMaxZ,
+      prepared.pad,
+    );
     if (!geo) return null;
 
     const posAttr = geo.getAttribute("position");
@@ -806,18 +933,18 @@ export default function OutlineFrame3D({
     debugThreeLog("OutlineFrame3D.build", {
       build_ms: +(performance.now() - buildStart).toFixed(2),
       outline_width_mm: outlineWidth,
-      outline_width_px: outlineWidthPx,
-      grid_w: origW,
-      grid_h: origH,
-      padded_w: paddedW,
-      padded_h: paddedH,
+      outline_width_px: prepared.expansionPixels,
+      grid_w: prepared.originalWidth,
+      grid_h: prepared.originalHeight,
+      padded_w: prepared.paddedWidth,
+      padded_h: prepared.paddedHeight,
       rect_count: rects.length,
       vertex_count: posAttr.count,
       triangle_count: triangleCount,
     });
 
     return geo;
-  }, [enabled, backingPlateMesh, sourceMeshes, outlineWidth, modelMaxZ, rasterCellSize, fillInteriorHoles]);
+  }, [enabled, backingPlateMesh, sourceMeshes, outlineWidth, modelMaxZ, rasterCellSize, fillInteriorHoles, previewSpace]);
 
   useEffect(() => {
     cancelPendingOutlineFrameGeometryDispose(geometry);

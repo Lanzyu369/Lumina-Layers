@@ -38,6 +38,7 @@ import type {
   ModelSurfaceModelTransform,
   ModelSurfaceSelectResponse,
   ModelSurfaceUploadResponse,
+  VectorPreviewRendererResponse,
 } from "./types";
 
 /** 上传图片 + 参数，获取 2D 预览（返回 JSON，含 session_id 和 preview_url） */
@@ -687,6 +688,22 @@ export async function getGlbStatus(
 ): Promise<GlbStatusResponse> {
   const response = await apiClient.get<GlbStatusResponse>(
     `/convert/glb-status/${encodeURIComponent(sessionId)}`,
+    { timeout: 30_000 },
+  );
+  return response.data;
+}
+
+/** Rebuild only the browser GLB renderer for an active native Vector session. */
+export async function rebuildVectorPreviewRenderer(
+  sessionId: string,
+  enableSmoothVectorPreview: boolean,
+): Promise<VectorPreviewRendererResponse> {
+  const response = await apiClient.post<VectorPreviewRendererResponse>(
+    "/convert/vector-preview-renderer",
+    {
+      session_id: sessionId,
+      enable_smooth_vector_preview: enableSmoothVectorPreview,
+    },
     { timeout: 30_000 },
   );
   return response.data;

@@ -272,7 +272,7 @@ pip install -r requirements.txt
 
 ```bash
 # 必需：桌面外壳会自动启动 Python 后端，但仍需先安装其依赖。
-pip install -r requirements.txt
+python3 -m pip install -r requirements.txt
 
 # bash/zsh
 cd frontend && pnpm install && cd ..
@@ -282,7 +282,7 @@ cd electron && pnpm start
 
 ```powershell
 # Windows PowerShell 5.1 不支持"&&"，请逐行执行
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 cd frontend; pnpm install; cd ..
 cd electron; pnpm install; cd ..
 cd electron; pnpm start

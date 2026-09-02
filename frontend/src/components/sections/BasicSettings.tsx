@@ -128,6 +128,10 @@ function isInsideModelSurfaceDropZone(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(target.closest("[data-model-surface-drop-zone='true']"));
 }
 
+function isInsideLocalFileDropZone(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest("[data-local-file-drop-zone='true']"));
+}
+
 const LARGE_FORMAT_PREVIEW_FALLBACK_PREFIX =
   "Native vector large-format is unavailable for this SVG; large-format generation will fall back to raster tiling.";
 const LARGE_FORMAT_GENERATE_FALLBACK_WARNING =
@@ -612,6 +616,10 @@ export default function BasicSettings() {
       const modelFile = files.find(isSupportedModelSurfaceFile);
       const imageFiles = files.filter((file) => isValidImageType(file.type, file.name));
 
+      if (!modelFile && isInsideLocalFileDropZone(target)) {
+        return false;
+      }
+
       if (!modelFile && imageFiles.length === 0) {
         return false;
       }
@@ -632,7 +640,12 @@ export default function BasicSettings() {
   useEffect(() => {
     const handleWindowDragOver = (event: DragEvent) => {
       if (!hasDraggedFiles(event)) return;
-      setDropImportIntent(getDropImportIntent(Array.from(event.dataTransfer?.files ?? [])));
+      const intent = getDropImportIntent(Array.from(event.dataTransfer?.files ?? []));
+      if (isInsideLocalFileDropZone(event.target) && intent !== "model" && intent !== "mixed") {
+        setDropImportIntent(null);
+        return;
+      }
+      setDropImportIntent(intent);
       event.preventDefault();
     };
     const handleWindowDragLeave = (event: DragEvent) => {

@@ -34,3 +34,17 @@ def test_load_model_surface_mesh_warns_for_tiny_inch_like_model(tmp_path):
     loaded = load_model_surface_mesh(path)
 
     assert loaded.summary.unit_warning == "model_dimensions_look_like_inches"
+
+
+def test_load_model_surface_mesh_memory_error_is_fatal(tmp_path, monkeypatch):
+    path = tmp_path / "large.stl"
+    path.write_bytes(b"solid large\nendsolid large\n")
+    monkeypatch.setattr(
+        "core.model_surface.loader.trimesh.load_mesh",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            MemoryError("model load allocation")
+        ),
+    )
+
+    with pytest.raises(MemoryError, match="model load allocation"):
+        load_model_surface_mesh(path)

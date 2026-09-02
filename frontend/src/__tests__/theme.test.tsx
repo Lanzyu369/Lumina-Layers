@@ -18,16 +18,21 @@ beforeEach(() => {
 // ========== ThemeToggle Component Tests ==========
 
 describe("ThemeToggle", () => {
-  it("renders moon icon (🌙) in light mode", () => {
+  it("renders moon icon in light mode", () => {
     useSettingsStore.setState({ theme: "light" });
     render(<ThemeToggle />);
-    expect(screen.getByRole("button", { name: "切换主题" })).toHaveTextContent("🌙");
+    expect(screen.getByTestId("theme-icon-moon")).toBeInTheDocument();
+    // DESIGN.md forbids native ``title`` tooltips on header controls.
+    // DESIGN.md 禁止顶栏控件使用原生 ``title`` 提示。
+    expect(
+      screen.getByRole("button", { name: "切换主题" }),
+    ).not.toHaveAttribute("title");
   });
 
-  it("renders sun icon (☀️) in dark mode", () => {
+  it("renders sun icon in dark mode", () => {
     useSettingsStore.setState({ theme: "dark" });
     render(<ThemeToggle />);
-    expect(screen.getByRole("button", { name: "切换主题" })).toHaveTextContent("☀️");
+    expect(screen.getByTestId("theme-icon-sun")).toBeInTheDocument();
   });
 
   it("toggles theme from light to dark on click", () => {

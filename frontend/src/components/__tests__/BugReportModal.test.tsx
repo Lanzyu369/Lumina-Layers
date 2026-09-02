@@ -8,10 +8,14 @@ vi.mock("../../api/feedback", () => ({
 
 vi.mock("../../utils/bugReportContext", () => ({
   collectBugReportContext: vi.fn(),
+  collectBugReportOriginalImage: vi.fn(),
 }));
 
 import { relayBugReport, submitBugReport } from "../../api/feedback";
-import { collectBugReportContext } from "../../utils/bugReportContext";
+import {
+  collectBugReportContext,
+  collectBugReportOriginalImage,
+} from "../../utils/bugReportContext";
 import { BugReportModal } from "../BugReportModal";
 
 function createBugReportContext(
@@ -162,6 +166,7 @@ describe("BugReportModal", () => {
       value: undefined,
     });
     vi.mocked(collectBugReportContext).mockReturnValue(createBugReportContext());
+    vi.mocked(collectBugReportOriginalImage).mockReturnValue(null);
   });
 
   it("disables submit until description has content", () => {
@@ -290,6 +295,105 @@ describe("BugReportModal", () => {
       });
     });
     expect(await screen.findByRole("status")).toHaveTextContent("工单号：abc12345");
+  });
+
+  it("submits the active converter source and reports exact attachment success", async () => {
+    const original = new File(["<svg/>"], "source.svg", {
+      type: "image/svg+xml",
+    });
+    vi.mocked(collectBugReportOriginalImage).mockReturnValue(original);
+    vi.mocked(collectBugReportContext).mockReturnValue(
+      createBugReportContext({
+        active_original_image_ref: {
+          session_id: null,
+          filename: "source.svg",
+          source: "converter",
+        },
+      }),
+    );
+    vi.mocked(submitBugReport).mockResolvedValueOnce({
+      ticket_id: "LUM-202608-deadbeef",
+      emailed: false,
+      email_status: "unconfigured",
+      relay_available: false,
+      dump_path: "feedback/2026-08/LUM-202608-deadbeef",
+      original_image_status: "attached",
+    });
+
+    render(<BugReportModal open onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText("问题描述"), {
+      target: { value: "Preview failed before a session existed." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => {
+      expect(submitBugReport).toHaveBeenCalledWith(
+        expect.objectContaining({
+          description: "Preview failed before a session existed.",
+        }),
+        original,
+      );
+    });
+    const status = await screen.findByTestId("bug-report-original-image-status");
+    expect(status).toHaveAttribute("data-status", "attached");
+    expect(status).toHaveTextContent("转换原图已按原始字节随工单保存");
+  });
+
+  it("warns when an oversized original could not be saved", async () => {
+    const original = new File(["x"], "oversized.png", { type: "image/png" });
+    vi.mocked(collectBugReportOriginalImage).mockReturnValue(original);
+    vi.mocked(collectBugReportContext).mockReturnValue(
+      createBugReportContext({
+        active_original_image_ref: {
+          session_id: null,
+          filename: "oversized.png",
+          source: "converter",
+        },
+      }),
+    );
+    vi.mocked(submitBugReport).mockResolvedValueOnce({
+      ticket_id: "LUM-202608-c0ffee00",
+      emailed: false,
+      email_status: "unconfigured",
+      relay_available: false,
+      dump_path: "feedback/2026-08/LUM-202608-c0ffee00",
+      original_image_status: "too_large",
+    });
+
+    render(<BugReportModal open onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText("问题描述"), {
+      target: { value: "Large source failed." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    const status = await screen.findByTestId("bug-report-original-image-status");
+    expect(status).toHaveAttribute("data-status", "too_large");
+    expect(status).toHaveTextContent("原图超过 100 MiB");
+  });
+
+  it.each([
+    ["session_fallback", "转换原图已从当前转换会话恢复"],
+    ["failed", "原图保存失败"],
+    ["not_applicable", "本次未附带转换原图"],
+  ] as const)("shows the %s original-image result", async (imageStatus, text) => {
+    vi.mocked(submitBugReport).mockResolvedValueOnce({
+      ticket_id: "LUM-202608-0123abcd",
+      emailed: false,
+      email_status: "unconfigured",
+      relay_available: false,
+      dump_path: "feedback/2026-08/LUM-202608-0123abcd",
+      original_image_status: imageStatus,
+    });
+
+    render(<BugReportModal open onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText("问题描述"), {
+      target: { value: "Check source attachment status." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    const status = await screen.findByTestId("bug-report-original-image-status");
+    expect(status).toHaveAttribute("data-status", imageStatus);
+    expect(status).toHaveTextContent(text);
   });
 
   it("submits an attached screenshot data URL", async () => {

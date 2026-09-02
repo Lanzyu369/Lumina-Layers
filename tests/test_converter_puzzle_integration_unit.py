@@ -17,6 +17,7 @@ from api.dependencies import get_file_registry, get_session_store, get_worker_po
 from api.file_registry import FileRegistry
 from api.preview_cache_artifacts import externalize_preview_cache
 from api.routers.converter import puzzle as puzzle_router
+from api.selection_state import RECIPE_OVERRIDE_APPLIED_MASKS_KEY
 from api.session_store import SessionStore
 from api.worker_pool import WorkerPoolManager
 from core.puzzle import PuzzlePiece
@@ -350,7 +351,13 @@ class TestGeneratePuzzleCanary:
             piece_index += 1
             path = tmp_path / f"piece-{piece_index}.3mf"
             path.write_bytes(b"piece-3mf")
-            return {"threemf_path": str(path), "glb_path": None, "status_msg": "ok"}
+            return {
+                "threemf_path": str(path),
+                "glb_path": None,
+                "status_msg": "ok",
+                "x_mirrored": False,
+                "mirror_span_mm": 1.0,
+            }
 
         def _assemble_stub(*, output_path: str, **_kwargs) -> str:
             with open(output_path, "wb") as handle:
@@ -428,7 +435,13 @@ class TestDynamicPuzzlePreviewReuse:
             piece_index += 1
             path = tmp_path / f"externalized-dynamic-piece-{piece_index}.3mf"
             path.write_bytes(b"piece-3mf")
-            return {"threemf_path": str(path), "glb_path": None, "status_msg": "ok"}
+            return {
+                "threemf_path": str(path),
+                "glb_path": None,
+                "status_msg": "ok",
+                "x_mirrored": False,
+                "mirror_span_mm": 1.0,
+            }
 
         def _assemble_stub(*, output_path: str, **_kwargs) -> str:
             Path(output_path).write_bytes(b"combined-3mf")
@@ -465,7 +478,13 @@ class TestDynamicPuzzlePreviewReuse:
             captured_params.append(args[3])
             path = tmp_path / f"dynamic-piece-{piece_index}.3mf"
             path.write_bytes(b"piece-3mf")
-            return {"threemf_path": str(path), "glb_path": None, "status_msg": "ok"}
+            return {
+                "threemf_path": str(path),
+                "glb_path": None,
+                "status_msg": "ok",
+                "x_mirrored": False,
+                "mirror_span_mm": 1.0,
+            }
 
         def _assemble_stub(*, output_path: str, **_kwargs) -> str:
             Path(output_path).write_bytes(b"combined-3mf")
@@ -537,6 +556,7 @@ class TestDynamicPuzzlePreviewReuse:
         session_id = _seed_dynamic_puzzle_generate_session(store, tmp_path)
         session_data = store.get(session_id)
         assert session_data is not None
+        assert RECIPE_OVERRIDE_APPLIED_MASKS_KEY not in session_data
         cache = dict(session_data["preview_cache"])
         virtual_mask = np.zeros((80, 120), dtype=bool)
         virtual_mask[:40, :60] = True
@@ -571,7 +591,13 @@ class TestDynamicPuzzlePreviewReuse:
             captured_params.append(args[3])
             path = tmp_path / f"virtual-piece-{piece_index}.3mf"
             path.write_bytes(b"piece-3mf")
-            return {"threemf_path": str(path), "glb_path": None, "status_msg": "ok"}
+            return {
+                "threemf_path": str(path),
+                "glb_path": None,
+                "status_msg": "ok",
+                "x_mirrored": False,
+                "mirror_span_mm": 1.0,
+            }
 
         def _assemble_stub(*, output_path: str, **_kwargs) -> str:
             Path(output_path).write_bytes(b"combined-3mf")
@@ -607,6 +633,77 @@ class TestDynamicPuzzlePreviewReuse:
         assert masks["virtual-region"].shape == np.load(
             params["mask_solid_path"], allow_pickle=False
         ).shape
+
+    @pytest.mark.parametrize(
+        "snapshot_container",
+        [{}, None, "corrupt-container"],
+        ids=["empty", "none", "corrupt"],
+    )
+    def test_dynamic_puzzle_present_snapshot_key_never_uses_live_mask(
+        self,
+        puzzle_harness,
+        tmp_path,
+        snapshot_container,
+    ) -> None:
+        """Modern puzzle sessions reject unusable snapshots before workers run."""
+
+        store: SessionStore = puzzle_harness["store"]
+        pool: MagicMock = puzzle_harness["pool"]
+        client: TestClient = puzzle_harness["client"]
+        session_id = _seed_dynamic_puzzle_generate_session(store, tmp_path)
+        session_data = store.get(session_id)
+        assert session_data is not None
+        region_id = "virtual-region"
+        live_mask = np.zeros((80, 120), dtype=bool)
+        live_mask[:40, :60] = True
+        store.put(
+            session_id,
+            "recipe_overrides",
+            [{
+                "region_id": region_id,
+                "recipe": [2, 1, 2, 1, 0, 0],
+                "layer_order": "Top2Bottom",
+            }],
+        )
+        store.put(session_id, "selected_region_masks", {region_id: live_mask})
+        store.put(
+            session_id,
+            RECIPE_OVERRIDE_APPLIED_MASKS_KEY,
+            snapshot_container,
+        )
+
+        piece_index = 0
+
+        async def _submit_stub(*_args, **_kwargs) -> dict[str, object]:
+            nonlocal piece_index
+            piece_index += 1
+            path = tmp_path / f"strict-snapshot-piece-{piece_index}.3mf"
+            path.write_bytes(b"piece-3mf")
+            return {
+                "threemf_path": str(path),
+                "glb_path": None,
+                "status_msg": "ok",
+                "x_mirrored": False,
+                "mirror_span_mm": 1.0,
+            }
+
+        def _assemble_stub(*, output_path: str, **_kwargs) -> str:
+            Path(output_path).write_bytes(b"combined-3mf")
+            return output_path
+
+        pool.submit = AsyncMock(side_effect=_submit_stub)
+        with patch(
+            "api.routers.converter.puzzle.assemble_puzzle_3mf",
+            side_effect=_assemble_stub,
+        ):
+            response = client.post(
+                "/api/convert/generate-puzzle",
+                json=_generate_puzzle_body(session_id),
+            )
+
+        assert response.status_code == 409
+        assert "Re-run preview" in response.json()["detail"]
+        pool.submit.assert_not_called()
 
     def test_dynamic_puzzle_rejects_backing_override_mismatch(
         self,

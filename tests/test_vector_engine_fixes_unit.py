@@ -3267,6 +3267,36 @@ class TestImageVectorizerViewportBounds:
         assert bounds is None
 
 
+def test_parse_svg_does_not_downgrade_memory_error_to_invalid_geometry(
+    tmp_path,
+    monkeypatch,
+):
+    """Allocation failure while sampling a path must abort the request."""
+
+    svg_path = tmp_path / "memory-error.svg"
+    svg_path.write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">'
+        '<path d="M0,0 L10,0 L10,10 L0,10 Z" fill="#ff0000"/>'
+        "</svg>",
+        encoding="utf-8",
+    )
+    processor = VectorProcessor.__new__(VectorProcessor)
+    processor.sampling_precision = 0.02
+    processor._parse_expand_stroke_to_fill = True
+    processor._parse_single_subpath_fast_path = True
+    processor._parse_direct_top_level_paths_fast_path = False
+
+    monkeypatch.setattr(
+        vector_engine.Path,
+        "segments",
+        mock.Mock(side_effect=MemoryError("injected SVG path allocation failure")),
+    )
+
+    with pytest.raises(MemoryError, match="injected SVG path allocation failure"):
+        processor._parse_svg(str(svg_path), target_width_mm=10.0)
+
+
 # ---------------------------------------------------------------------------
 # Fix 9: Merged LUT palette override in vector pipeline
 # ---------------------------------------------------------------------------

@@ -1429,7 +1429,7 @@ class TestVectorCoatingBuildMeshRegression:
 
 class TestVectorSingleSidedMirrorRegression:
 
-    def test_build_mesh_mirrors_non_5color_single_sided_x_coordinates(self):
+    def test_build_mesh_mirrors_non_5color_without_vertex_translation(self):
         processor = _make_parse_only_processor()
         processor.color_mode = "8-Color Max"
         analysis = VectorAnalysis(
@@ -1450,8 +1450,10 @@ class TestVectorSingleSidedMirrorRegression:
         scene = processor.build_mesh(analysis=analysis, thickness_mm=0.0, structure_mode="Single-sided")
         bounds = scene.geometry["Cyan"].bounds
 
-        assert bounds[0][0] == pytest.approx(6.0)
-        assert bounds[1][0] == pytest.approx(10.0)
+        # The X sign flip preserves viewing orientation.  Placement is kept
+        # out of vertex coordinates and emitted as a 3MF build transform.
+        assert bounds[0][0] == pytest.approx(-4.0)
+        assert bounds[1][0] == pytest.approx(0.0)
 
     def test_build_mesh_does_not_mirror_5color_single_sided_x_coordinates(self):
         processor = _make_parse_only_processor()

@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import gc
+from unittest.mock import patch
+import weakref
+
+import pytest
 from shapely.geometry import Polygon, box
 
 from core.vector_engine import VectorAnalysis
@@ -109,6 +114,110 @@ def test_slice_vector_analysis_omits_empty_tiles() -> None:
     assert [tile.label for tile in tiles] == ["R1C1"]
 
 
+def test_slice_vector_analysis_can_stream_tiles_without_materializing_all() -> None:
+    shape = {
+        "geometry": box(0.0, 0.0, 120.0, 80.0),
+        "recipe": [1, 1, 1, 1, 1],
+        "draw_order": 0,
+        "matched_rgb": (255, 0, 0),
+        "color": (255, 0, 0),
+    }
+    analysis = _make_analysis(matched_shapes=[shape])
+    built_specs: list[str] = []
+    original = VectorAnalysisTiler._build_tile_analysis
+
+    def _tracked_build(self, spec):
+        built_specs.append(spec.label)
+        return original(self, spec)
+
+    with patch.object(VectorAnalysisTiler, "_build_tile_analysis", new=_tracked_build):
+        tiles = slice_vector_analysis_into_tiles(
+            analysis=analysis,
+            total_width_mm=120.0,
+            total_height_mm=80.0,
+            tile_width_mm=40.0,
+            tile_height_mm=40.0,
+            materialize=False,
+        )
+        assert built_specs == []
+        first = next(iter(tiles))
+
+    assert first.label == "R1C1"
+    assert built_specs == ["R1C1"]
+
+
+def test_streaming_tiler_does_not_build_the_complete_spec_list() -> None:
+    """The first tile must be available without allocating every grid spec."""
+
+    analysis = _make_analysis(
+        matched_shapes=[
+            {
+                "geometry": box(0.0, 0.0, 2.0, 2.0),
+                "recipe": [1, 1, 1, 1, 1],
+            }
+        ]
+    )
+    tiler = VectorAnalysisTiler(
+        analysis=analysis,
+        total_width_mm=500.0,
+        total_height_mm=500.0,
+        tile_width_mm=1.0,
+        tile_height_mm=1.0,
+    )
+
+    with patch.object(
+        VectorAnalysisTiler,
+        "build_tile_specs",
+        side_effect=AssertionError("complete tile spec list was materialized"),
+    ):
+        first = next(tiler.iter_tiles())
+
+    assert first.label == "R1C1"
+
+
+def test_streaming_tiler_releases_previous_tile_before_building_next() -> None:
+    analysis = _make_analysis(
+        matched_shapes=[
+            {
+                "geometry": box(0.0, 0.0, 120.0, 80.0),
+                "recipe": [1, 1, 1, 1, 1],
+            }
+        ]
+    )
+    tile_refs: list[weakref.ReferenceType] = []
+
+    def _tracked_build(_self, spec):
+        if tile_refs:
+            gc.collect()
+            assert tile_refs[-1]() is None
+        tile = type("TrackedTile", (), {"label": spec.label})()
+        tile_refs.append(weakref.ref(tile))
+        return tile
+
+    with patch.object(
+        VectorAnalysisTiler,
+        "_build_tile_analysis",
+        new=_tracked_build,
+    ):
+        tiles = iter(
+            slice_vector_analysis_into_tiles(
+                analysis=analysis,
+                total_width_mm=120.0,
+                total_height_mm=80.0,
+                tile_width_mm=60.0,
+                tile_height_mm=80.0,
+                materialize=False,
+            )
+        )
+        first = next(tiles)
+        assert first.label == "R1C1"
+        del first
+        gc.collect()
+        second = next(tiles)
+
+    assert second.label == "R1C2"
+
+
 def test_slice_vector_analysis_preserves_hole_geometry() -> None:
     ring = Polygon(
         [(10.0, 10.0), (70.0, 10.0), (70.0, 70.0), (10.0, 70.0)],
@@ -160,6 +269,34 @@ def test_slice_vector_analysis_retains_thin_stroke_geometry() -> None:
 
     assert [tile.label for tile in tiles] == ["R1C1", "R1C2"]
     assert all(tile.analysis.matched_shapes[0]["geometry"].area > 0.0 for tile in tiles)
+
+
+def test_tile_geometry_slicer_propagates_memory_error_without_repair_retry() -> None:
+    """Allocator failure must not start a second GEOS intersection."""
+
+    class _MemoryFailingGeometry:
+        is_empty = False
+
+        def intersection(self, _tile_box):
+            raise MemoryError("injected tile intersection allocation failure")
+
+    from core.vector_large_format import TileGeometrySlicer
+
+    geometry_slicer = TileGeometrySlicer(
+        box(0.0, 0.0, 60.0, 80.0),
+        xoff=0.0,
+        yoff=0.0,
+    )
+    with (
+        patch(
+            "core.vector_large_format.make_valid",
+            side_effect=AssertionError("MemoryError triggered repair retry"),
+        ) as make_valid_mock,
+        pytest.raises(MemoryError, match="tile intersection allocation failure"),
+    ):
+        geometry_slicer.slice_geometry(_MemoryFailingGeometry())
+
+    make_valid_mock.assert_not_called()
 
 
 def test_build_tile_specs_rejects_non_positive_dimensions() -> None:
@@ -270,6 +407,23 @@ def test_choose_svg_raster_fallback_density_stays_within_pixel_budget() -> None:
 
     assert density > 0.0
     assert density * density * 4000.0 * 4000.0 <= 12_000_000 * 1.001
+    assert warnings
+
+
+def test_raster_fallback_density_never_floors_above_pixel_budget() -> None:
+    """Extreme direct callers must still obey the declared pixel ceiling."""
+
+    width_mm = 1_000_000_000.0
+    height_mm = 1_000_000_000.0
+    density, warnings = choose_svg_raster_fallback_density(
+        total_width_mm=width_mm,
+        total_height_mm=height_mm,
+        desired_pixels_per_mm=10.0,
+        min_pixels_per_mm=2.0,
+        max_total_pixels=12_000_000,
+    )
+
+    assert density * density * width_mm * height_mm <= 12_000_000 * 1.001
     assert warnings
 
 

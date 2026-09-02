@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -17,6 +19,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.datastructures import UploadFile
 
 UNTRUSTED_ORIGIN_HEADERS = {"Origin": "https://attacker.example"}
 LOCAL_FRONTEND_ORIGIN_HEADERS = {"Origin": "http://localhost:5174"}
@@ -65,6 +68,8 @@ def _payload(**overrides: Any) -> dict[str, Any]:
             "material_layer_height_mm": None,
             "material_backing_material_dir_name": None,
             "preserve_upload_filename_for_3mf": False,
+            "enable_smooth_vector_preview": True,
+            "vector_preview_renderer": "vector_analytic",
             "recent_client_logs": [
                 {
                     "timestamp": "2026-05-10T01:02:03.000Z",
@@ -184,6 +189,29 @@ def test_bug_report_context_preserves_upload_filename_preference() -> None:
     assert legacy_dumped["preserve_upload_filename_for_3mf"] is None
 
 
+def test_bug_report_context_preserves_vector_preview_renderer() -> None:
+    from api.routers.feedback import BugReportContext
+
+    context = dict(_payload()["context"])
+    context.update(
+        {
+            "enable_smooth_vector_preview": True,
+            "vector_preview_renderer": "vector_analytic",
+        }
+    )
+
+    dumped = BugReportContext.model_validate(context).model_dump()
+
+    assert dumped["enable_smooth_vector_preview"] is True
+    assert dumped["vector_preview_renderer"] == "vector_analytic"
+
+    context.pop("enable_smooth_vector_preview")
+    context.pop("vector_preview_renderer")
+    legacy_dumped = BugReportContext.model_validate(context).model_dump()
+    assert legacy_dumped["enable_smooth_vector_preview"] is None
+    assert legacy_dumped["vector_preview_renderer"] is None
+
+
 @pytest.fixture()
 def feedback_root(tmp_path: Path) -> Path:
     root = tmp_path / "feedback_root"
@@ -242,6 +270,8 @@ def test_submit_bug_report_accepts_full_payload_and_logs_canary(
     assert ticket_json["ticket_id"] == data["ticket_id"]
     assert ticket_json["description"] == payload["description"]
     assert ticket_json["context"]["preserve_upload_filename_for_3mf"] is False
+    assert ticket_json["context"]["enable_smooth_vector_preview"] is True
+    assert ticket_json["context"]["vector_preview_renderer"] == "vector_analytic"
     assert ticket_json["attachments"]["screenshot"]["status"] == "attached"
 
     canaries = [
@@ -361,6 +391,396 @@ def test_submit_bug_report_accepts_description_only(client: TestClient) -> None:
     assert data["emailed"] is False
     assert data["email_status"] == "unconfigured"
     assert data["assembly_status"] in ("in_progress", "done", "partial_failed")
+
+
+def test_bug_report_openapi_declares_json_and_multipart_bodies(
+    client: TestClient,
+) -> None:
+    schema = client.get("/openapi.json").json()
+    request_body = schema["paths"]["/api/feedback/bug-report"]["post"][
+        "requestBody"
+    ]
+
+    assert request_body["required"] is True
+    content = request_body["content"]
+    assert content["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/BugReportRequest",
+    }
+    multipart_schema = content["multipart/form-data"]["schema"]
+    assert multipart_schema["required"] == ["request_payload"]
+    assert multipart_schema["properties"]["original_image"] == {
+        "type": "string",
+        "format": "binary",
+    }
+    assert multipart_schema["properties"][
+        "original_image_omission_reason"
+    ]["enum"] == ["too_large"]
+
+
+def test_bug_report_multipart_parser_caps_file_before_spooling() -> None:
+    from starlette.datastructures import Headers
+
+    from api.routers.feedback import _BugReportMultiPartParser
+
+    boundary = "lumina-stream-limit"
+    file_bytes = b"0123456789ABCDEF"
+    body = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="request_payload"\r\n\r\n'
+        "{}\r\n"
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="original_image"; '
+        'filename="source.png"\r\n'
+        "Content-Type: image/png\r\n\r\n"
+    ).encode("ascii") + file_bytes + f"\r\n--{boundary}--\r\n".encode("ascii")
+
+    async def parse() -> tuple[set[str], int, bytes]:
+        async def stream():
+            for offset in range(0, len(body), 7):
+                yield body[offset:offset + 7]
+
+        parser = _BugReportMultiPartParser(
+            Headers({"content-type": f"multipart/form-data; boundary={boundary}"}),
+            stream(),
+            max_file_size=8,
+            max_files=1,
+            max_fields=2,
+            max_part_size=1024,
+        )
+        form = await parser.parse()
+        try:
+            upload = form["original_image"]
+            assert isinstance(upload, UploadFile)
+            await upload.seek(0)
+            stored_bytes = await upload.read()
+            return parser.oversized_file_fields, upload.size or 0, stored_bytes
+        finally:
+            await form.close()
+
+    oversized_fields, stored_size, stored_bytes = asyncio.run(parse())
+
+    assert oversized_fields == {"original_image"}
+    assert stored_size <= 8
+    assert len(stored_bytes) <= 8
+    assert stored_bytes != file_bytes
+
+
+@pytest.mark.parametrize(
+    ("filename", "mime_type", "original_bytes"),
+    [
+        ("source.png", "image/png", b"\x89PNG\r\nEXACT_SOURCE"),
+        (
+            "source.svg",
+            "image/svg+xml",
+            b'<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>',
+        ),
+        ("source.heic", "image/heic", b"ftypheic\x00EXACT_SOURCE"),
+        ("source.raw", "application/octet-stream", b"RAW_EXACT_SOURCE"),
+    ],
+)
+def test_submit_bug_report_multipart_saves_exact_original_without_session(
+    client: TestClient,
+    feedback_root: Path,
+    filename: str,
+    mime_type: str,
+    original_bytes: bytes,
+) -> None:
+    """Pre-preview PNG/SVG/HEIC/RAW reports preserve exact browser bytes."""
+    payload = _payload(description="Preview failed before session creation")
+    payload["context"]["active_session_ids"]["converter"] = None
+    payload["context"]["active_original_image_ref"] = {
+        "session_id": None,
+        "filename": filename,
+        "source": "converter",
+    }
+
+    response = client.post(
+        "/api/feedback/bug-report",
+        files={
+            "request_payload": (
+                None,
+                json.dumps(payload),
+                "application/json",
+            ),
+            "original_image": (
+                filename,
+                original_bytes,
+                mime_type,
+            ),
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["original_image_status"] == "attached"
+    ticket_dir = next(feedback_root.glob(f"*/{data['ticket_id']}"))
+    original_path = ticket_dir / f"original{Path(filename).suffix}"
+    assert original_path.read_bytes() == original_bytes
+
+    ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
+    original = ticket_json["attachments"]["original_image"]
+    assert original["status"] == "attached"
+    assert original["capture_source"] == "browser_upload"
+    assert original["direct_upload_status"] == "attached"
+    assert original["source_session_id"] is None
+    assert original["size_bytes"] == len(original_bytes)
+    assert original["sha256"] == hashlib.sha256(original_bytes).hexdigest()
+
+
+def test_submit_bug_report_multipart_uses_direct_upload_before_session(
+    client: TestClient,
+    feedback_root: Path,
+    tmp_path: Path,
+) -> None:
+    from api.dependencies import get_file_registry
+
+    session_id = "direct-upload-priority-session"
+    session_source = tmp_path / "session-source.png"
+    session_source.write_bytes(b"SESSION_SOURCE")
+    get_file_registry().register_path(
+        session_id=session_id,
+        path=str(session_source),
+        filename=session_source.name,
+    )
+    payload = _payload(description="Direct source wins")
+    payload["context"]["active_original_image_ref"] = {
+        "session_id": session_id,
+        "filename": "browser-source.svg",
+        "source": "converter",
+    }
+
+    response = client.post(
+        "/api/feedback/bug-report",
+        files={
+            "request_payload": (None, json.dumps(payload), "application/json"),
+            "original_image": (
+                r"..\..\browser-source.svg",
+                b"<svg>DIRECT_SOURCE</svg>",
+                "image/svg+xml",
+            ),
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["original_image_status"] == "attached"
+    ticket_dir = next(feedback_root.glob(f"*/{data['ticket_id']}"))
+    assert (ticket_dir / "original.svg").read_bytes() == b"<svg>DIRECT_SOURCE</svg>"
+    assert not (ticket_dir / "original.png").exists()
+    assert not (tmp_path / "browser-source.svg").exists()
+
+
+def test_submit_bug_report_direct_write_failure_falls_back_to_session(
+    client: TestClient,
+    feedback_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from api.dependencies import get_file_registry
+
+    session_id = "direct-write-failure-session"
+    session_source = tmp_path / "session-source.png"
+    session_source.write_bytes(b"SESSION_FALLBACK")
+    get_file_registry().register_path(
+        session_id=session_id,
+        path=str(session_source),
+        filename=session_source.name,
+    )
+    payload = _payload(description="Direct write fails, session survives")
+    payload["context"]["active_original_image_ref"] = {
+        "session_id": session_id,
+        "filename": "browser-source.svg",
+        "source": "converter",
+    }
+    real_path_open = Path.open
+
+    def fail_direct_original_open(
+        path: Path,
+        mode: str = "r",
+        *args: Any,
+        **kwargs: Any,
+    ):
+        if path.name == "original.svg" and mode == "xb":
+            raise OSError("simulated direct write failure")
+        return real_path_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fail_direct_original_open)
+
+    response = client.post(
+        "/api/feedback/bug-report",
+        files={
+            "request_payload": (None, json.dumps(payload), "application/json"),
+            "original_image": (
+                "browser-source.svg",
+                b"<svg>DIRECT_SOURCE</svg>",
+                "image/svg+xml",
+            ),
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["original_image_status"] == "session_fallback"
+    ticket_dir = next(feedback_root.glob(f"*/{data['ticket_id']}"))
+    assert not (ticket_dir / "original.svg").exists()
+    assert (ticket_dir / "original.png").read_bytes() == b"SESSION_FALLBACK"
+    original = _read_ticket_json(
+        feedback_root,
+        data["ticket_id"],
+    )["attachments"]["original_image"]
+    assert original["capture_source"] == "file_registry"
+    assert original["direct_upload_status"] == "failed"
+
+
+def test_submit_bug_report_oversized_omission_falls_back_to_session(
+    client: TestClient,
+    feedback_root: Path,
+    tmp_path: Path,
+) -> None:
+    from api.dependencies import get_file_registry
+
+    session_id = "oversized-fallback-session"
+    session_source = tmp_path / "session-source.png"
+    session_source.write_bytes(b"SESSION_FALLBACK")
+    get_file_registry().register_path(
+        session_id=session_id,
+        path=str(session_source),
+        filename=session_source.name,
+    )
+    payload = _payload(description="Browser source exceeds upload limit")
+    payload["context"]["active_original_image_ref"] = {
+        "session_id": session_id,
+        "filename": "oversized.png",
+        "source": "converter",
+    }
+
+    response = client.post(
+        "/api/feedback/bug-report",
+        files={
+            "request_payload": (None, json.dumps(payload), "application/json"),
+            "original_image_omission_reason": (None, "too_large"),
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["original_image_status"] == "session_fallback"
+    ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
+    original = ticket_json["attachments"]["original_image"]
+    assert original["status"] == "attached"
+    assert original["capture_source"] == "file_registry"
+    assert original["direct_upload_status"] == "too_large"
+
+
+def test_submit_bug_report_oversized_original_does_not_block_text_report(
+    client: TestClient,
+    feedback_root: Path,
+) -> None:
+    payload = _payload(description="Oversized source still reports")
+    payload["context"]["active_session_ids"]["converter"] = None
+    payload["context"]["active_original_image_ref"] = {
+        "session_id": None,
+        "filename": "oversized.png",
+        "source": "converter",
+    }
+
+    response = client.post(
+        "/api/feedback/bug-report",
+        files={
+            "request_payload": (None, json.dumps(payload), "application/json"),
+            "original_image_omission_reason": (None, "too_large"),
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["original_image_status"] == "too_large"
+    ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
+    assert ticket_json["description"] == "Oversized source still reports"
+    assert ticket_json["attachments"]["original_image"]["status"] == "too_large"
+    ticket_dir = next(feedback_root.glob(f"*/{data['ticket_id']}"))
+    assert list(ticket_dir.glob("original.*")) == []
+
+
+def test_stream_oversized_original_does_not_block_text_report(
+    client: TestClient,
+    feedback_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import api.routers.feedback as feedback_router
+    from api.dependencies import get_file_registry
+
+    monkeypatch.setattr(feedback_router, "MAX_DIRECT_ORIGINAL_IMAGE_BYTES", 8)
+    session_id = "stream-oversized-fallback-session"
+    session_source = tmp_path / "session-source.png"
+    session_source.write_bytes(b"SESSION_FALLBACK")
+    get_file_registry().register_path(
+        session_id=session_id,
+        path=str(session_source),
+        filename=session_source.name,
+    )
+    payload = _payload(description="Stream-capped source still reports")
+    payload["context"]["active_session_ids"]["converter"] = session_id
+    payload["context"]["active_original_image_ref"] = {
+        "session_id": session_id,
+        "filename": "oversized.png",
+        "source": "converter",
+    }
+
+    response = client.post(
+        "/api/feedback/bug-report",
+        files={
+            "request_payload": (None, json.dumps(payload), "application/json"),
+            "original_image": (
+                "oversized.png",
+                b"0123456789ABCDEF",
+                "image/png",
+            ),
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["original_image_status"] == "session_fallback"
+    ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
+    assert ticket_json["description"] == "Stream-capped source still reports"
+    original = ticket_json["attachments"]["original_image"]
+    assert original["status"] == "attached"
+    assert original["capture_source"] == "file_registry"
+    assert original["direct_upload_status"] == "too_large"
+    ticket_dir = next(feedback_root.glob(f"*/{data['ticket_id']}"))
+    assert (ticket_dir / "original.png").read_bytes() == b"SESSION_FALLBACK"
+
+
+def test_submit_bug_report_unsupported_original_does_not_block_text_report(
+    client: TestClient,
+    feedback_root: Path,
+) -> None:
+    payload = _payload(description="Unsupported source still reports")
+    payload["context"]["active_session_ids"]["converter"] = None
+    payload["context"]["active_original_image_ref"] = {
+        "session_id": None,
+        "filename": "source.txt",
+        "source": "converter",
+    }
+
+    response = client.post(
+        "/api/feedback/bug-report",
+        files={
+            "request_payload": (None, json.dumps(payload), "application/json"),
+            "original_image": ("source.txt", b"not-an-image", "text/plain"),
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["original_image_status"] == "failed"
+    ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
+    original = ticket_json["attachments"]["original_image"]
+    assert original["status"] == "failed"
+    assert original["direct_upload_status"] == "failed"
+    assert original["error_type"] == "UnsupportedOriginalImageType"
 
 
 def test_feedback_description_sanitizer_preserves_safe_text_and_api_context() -> None:
@@ -925,6 +1345,47 @@ def test_submit_bug_report_rejects_invalid_payloads(
         record for record in caplog.records
         if getattr(record, "event", None) == "feedback_bug_report_submitted"
     ] == []
+
+
+def test_legacy_json_validation_keeps_fastapi_body_location(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/api/feedback/bug-report",
+        json=_payload(description=""),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "description"]
+
+
+def test_invalid_multipart_closes_original_upload(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed_filenames: list[str | None] = []
+    real_close = UploadFile.close
+
+    async def track_close(upload: UploadFile) -> None:
+        closed_filenames.append(upload.filename)
+        await real_close(upload)
+
+    monkeypatch.setattr(UploadFile, "close", track_close)
+    response = client.post(
+        "/api/feedback/bug-report",
+        files={
+            "request_payload": (
+                None,
+                json.dumps(_payload(description="")),
+                "application/json",
+            ),
+            "original_image": ("source.png", b"SOURCE", "image/png"),
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "description"]
+    assert closed_filenames == ["source.png"]
 
 
 def test_submit_bug_report_rejects_oversized_screenshot(

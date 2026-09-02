@@ -30,6 +30,7 @@ vi.mock("../api/converter", () => ({
 }));
 
 import {
+  replaceColorsBatch,
   regionReplace,
   regionReplaceBatch,
   regionRequantize,
@@ -43,6 +44,7 @@ import {
 const mockRegionReplace = vi.mocked(regionReplace);
 const mockRegionReplaceBatch = vi.mocked(regionReplaceBatch);
 const mockRegionRequantize = vi.mocked(regionRequantize);
+const mockReplaceColorsBatch = vi.mocked(replaceColorsBatch);
 
 const GRADIENT_GROUP: GradientGroupItem = {
   group_index: 3,
@@ -94,6 +96,7 @@ function deferred<T>() {
 function seedSessionA(overrides: Partial<ConverterState> = {}) {
   useConverterStore.setState({
     sessionId: "session-a",
+    previewRequestRevision: 10,
     previewImageUrl: "/api/files/session-a.png",
     previewBaseImageUrl: "/api/files/session-a.png",
     previewGlbUrl: null,
@@ -131,6 +134,29 @@ function switchToSessionB() {
     selectedGradientRegions: SESSION_B_REGIONS,
     selectedColors: new Set(["778899"]),
     selectedColor: "778899",
+  });
+}
+
+function advanceSameSessionRevision() {
+  useConverterStore.setState({
+    previewRequestRevision: 11,
+    previewImageUrl: "/api/files/session-a-new-revision.png",
+    previewBaseImageUrl: "/api/files/session-a-new-revision.png",
+    previewGlbUrl: "/api/files/session-a-new-revision.glb",
+    replacePreviewLoading: false,
+    error: null,
+  });
+}
+
+function expectSameSessionRevisionUnchanged() {
+  expect(useConverterStore.getState()).toMatchObject({
+    sessionId: "session-a",
+    previewRequestRevision: 11,
+    previewImageUrl: "/api/files/session-a-new-revision.png",
+    previewBaseImageUrl: "/api/files/session-a-new-revision.png",
+    previewGlbUrl: "/api/files/session-a-new-revision.glb",
+    replacePreviewLoading: false,
+    error: null,
   });
 }
 
@@ -190,6 +216,51 @@ describe("spatial edit session guards", () => {
     expectSessionBUnchanged();
   });
 
+  it("ignores a gradient response from an older revision of the same session", async () => {
+    const response = deferred<Awaited<ReturnType<typeof regionReplace>>>();
+    mockRegionReplace.mockReturnValueOnce(response.promise);
+
+    const request = useConverterStore
+      .getState()
+      .applyGradientRegionPixelReplace(3, 1, "ddeeff");
+    advanceSameSessionRevision();
+    response.resolve(staleResponse());
+    await request;
+
+    expectSameSessionRevisionUnchanged();
+  });
+
+  it("ignores a batch colour response from an older preview revision", async () => {
+    const response = deferred<Awaited<ReturnType<typeof replaceColorsBatch>>>();
+    mockReplaceColorsBatch.mockReturnValueOnce(response.promise);
+    seedSessionA({
+      selectedColors: new Set(["aabbcc"]),
+      palette: [
+        {
+          quantized_hex: "aabbcc",
+          matched_hex: "aabbcc",
+          pixel_count: 30,
+          percentage: 100,
+        },
+      ],
+    });
+
+    const request = useConverterStore
+      .getState()
+      .applyBatchColorRemap("ddeeff");
+    advanceSameSessionRevision();
+    response.resolve({
+      status: "ok",
+      message: "stale",
+      preview_url: "/api/files/stale-session-a.png",
+      preview_3d_url: "/api/files/stale-session-a.glb",
+      replacement_count: 1,
+    });
+    await request;
+
+    expectSameSessionRevisionUnchanged();
+  });
+
   it("ignores a stale selected-region flatten response", async () => {
     const response = deferred<Awaited<ReturnType<typeof regionReplaceBatch>>>();
     mockRegionReplaceBatch.mockReturnValueOnce(response.promise);
@@ -244,5 +315,19 @@ describe("spatial edit session guards", () => {
     await request;
 
     expectSessionBUnchanged();
+  });
+
+  it("ignores a gradient-group flatten response from an older preview revision", async () => {
+    const response = deferred<Awaited<ReturnType<typeof regionReplace>>>();
+    mockRegionReplace.mockReturnValueOnce(response.promise);
+
+    const request = useConverterStore
+      .getState()
+      .applyGradientReplaceForGroup(3);
+    advanceSameSessionRevision();
+    response.resolve(staleResponse());
+    await request;
+
+    expectSameSessionRevisionUnchanged();
   });
 });

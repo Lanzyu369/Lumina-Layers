@@ -855,8 +855,8 @@ describe('fridge magnet mode', () => {
     expect(state.fridge_magnets[0]).toMatchObject({
       shape: 'round',
       preset_key: 'round-d12x3',
-      center_x_mm: 50,
-      center_y_mm: 20,
+      center_x_mm: 0,
+      center_y_mm: 0,
       diameter_mm: 12,
       thickness_mm: 3,
     });
@@ -888,7 +888,7 @@ describe('fridge magnet mode', () => {
     expect(useConverterStore.getState().fridge_magnets).toHaveLength(2);
     expect(
       useConverterStore.getState().fridge_magnets.map((item) => item.center_x_mm),
-    ).toEqual([30, 70]);
+    ).toEqual([-20, 20]);
 
     useConverterStore.setState({
       enable_fridge_magnet: false,
@@ -903,10 +903,10 @@ describe('fridge magnet mode', () => {
         item.center_y_mm,
       ]),
     ).toEqual([
-      [10, 16],
-      [90, 16],
-      [10, 64],
-      [90, 64],
+      [-40, -24],
+      [40, -24],
+      [-40, 24],
+      [40, 24],
     ]);
   });
 
@@ -1030,8 +1030,8 @@ describe('fridge magnet mode', () => {
 
     store.updateFridgeMagnetCenter(magnet.id, -500, 500);
     expect(useConverterStore.getState().fridge_magnets[0]).toMatchObject({
-      center_x_mm: 6,
-      center_y_mm: 34,
+      center_x_mm: -44,
+      center_y_mm: 14,
     });
   });
 
@@ -1052,9 +1052,38 @@ describe('fridge magnet mode', () => {
     });
 
     expect(useConverterStore.getState().fridge_magnets[0]).toMatchObject({
-      center_x_mm: 14,
-      center_y_mm: 14,
+      center_x_mm: 4,
+      center_y_mm: 4,
     });
+  });
+
+  it('keeps centred magnet millimetres stable across resize and clamps only when the new footprint is smaller', () => {
+    resetConverterState({
+      modelBounds: { minX: -50, maxX: 50, minY: -20, maxY: 20, maxZ: 5 },
+      preview_width_mm: 100,
+      preview_height_mm: 40,
+      target_width_mm: 100,
+      target_height_mm: 40,
+      aspectRatio: 2.5,
+      enable_fridge_magnet: true,
+      fridge_magnets: [{
+        id: 'fridge-magnet-1',
+        shape: 'round',
+        preset_key: 'round-d12x3',
+        diameter_mm: 12,
+        width_mm: null,
+        height_mm: null,
+        thickness_mm: 3,
+        center_x_mm: 20,
+        center_y_mm: 0,
+      }],
+    });
+
+    useConverterStore.getState().setTargetWidthMm(120);
+    expect(useConverterStore.getState().fridge_magnets[0].center_x_mm).toBe(20);
+
+    useConverterStore.getState().setTargetWidthMm(40);
+    expect(useConverterStore.getState().fridge_magnets[0].center_x_mm).toBe(14);
   });
 
   it('keeps auto layout as a pure reposition action when no magnets exist', () => {

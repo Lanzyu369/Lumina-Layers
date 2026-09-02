@@ -292,6 +292,9 @@ class TestVectorCoverThumbnailFromGeometry:
             40.0,
             pixels_per_mm=2.0,
             crop_to_content=False,
+            _min_quality_px=1,
+            _max_longest_px=512,
+            _cache_result=False,
         )
         cover_source = captured["cover_source"]
         assert isinstance(cover_source, bytes)
