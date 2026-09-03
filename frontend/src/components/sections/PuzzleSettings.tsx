@@ -10,6 +10,7 @@ import {
   workstationFieldLabelClass,
   workstationInputClass,
 } from "../ui/panelPrimitives";
+import { WIKI_DOCS } from "../../utils/wikiDocs";
 
 const NOOP_BOOL: (value: boolean) => void = () => {};
 const NOOP_NUMBER: (value: number) => void = () => {};
@@ -157,6 +158,8 @@ export default function PuzzleSettings() {
         checked={puzzleEnabled}
         onChange={setPuzzleEnabled}
         disabled={batchMode}
+        tooltip={t("puzzle_enable_hint")}
+        wikiPath={WIKI_DOCS.puzzle}
       />
 
       {batchMode ? (

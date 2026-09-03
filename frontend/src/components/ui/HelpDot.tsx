@@ -14,14 +14,17 @@
 import type { Placement } from "@floating-ui/react";
 import WikiTooltip from "./WikiTooltip";
 import { InfoIcon } from "./icons";
+import type { WikiDocPath } from "../../utils/wikiDocs";
 
 interface HelpDotProps {
-  /** Tooltip title (also used as default aria-label). */
+  /** Tooltip title. */
   title: string;
   /** Tooltip description body. */
   description: string;
   /** Optional wiki URL for the "Learn more" link. */
   wikiUrl?: string;
+  /** Locale-neutral path inside the public Lumina Wiki. */
+  wikiPath?: WikiDocPath;
   /** Preferred placement direction, default "top". */
   placement?: Placement;
   /** Optional aria-label override for the trigger. */
@@ -32,6 +35,7 @@ export default function HelpDot({
   title,
   description,
   wikiUrl,
+  wikiPath,
   placement = "top",
   ariaLabel,
 }: HelpDotProps) {
@@ -40,12 +44,15 @@ export default function HelpDot({
       title={title}
       description={description}
       wikiUrl={wikiUrl}
+      wikiPath={wikiPath}
       placement={placement}
+      openOnClick
     >
       <span
         role="button"
         tabIndex={0}
         aria-label={ariaLabel ?? title}
+        onClick={(event) => event.preventDefault()}
         className="flex h-4 w-4 cursor-help items-center justify-center rounded-full text-slate-400 transition-colors hover:text-slate-600 focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] dark:text-slate-500 dark:hover:text-slate-300"
       >
         <InfoIcon className="h-4 w-4" strokeWidth={1.75} />

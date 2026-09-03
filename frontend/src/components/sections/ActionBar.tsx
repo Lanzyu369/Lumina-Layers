@@ -27,6 +27,7 @@ import BedSizeSelector from "./BedSizeSelector"
 import SlicerSelector from "./SlicerSelector"
 import WikiTooltip from "../ui/WikiTooltip"
 import { StatusBanner } from "../ui/panelPrimitives"
+import { WIKI_DOCS } from "../../utils/wikiDocs"
 import { resolvePreviewHoverPixel } from "./actionBarHoverUtils"
 import { useI18n } from "../../i18n/context"
 import { useWorkspaceMode } from "../../hooks/useWorkspaceMode"
@@ -676,7 +677,7 @@ export default function ActionBar() {
             <WikiTooltip
               title={t("action_generate_model_title")}
               description={t("action_generate_model_desc")}
-              wikiUrl="https://github.com/pekingduck/lumina-layers/wiki/Image-Converter"
+              wikiPath={WIKI_DOCS.generateActions}
             >
               <Button
                 label={t("action_generate")}

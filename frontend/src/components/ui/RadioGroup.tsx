@@ -7,6 +7,7 @@ import {
   workstationFieldLabelClass,
 } from "./panelPrimitives";
 import HelpDot from "./HelpDot";
+import type { WikiDocPath } from "../../utils/wikiDocs";
 
 interface RadioGroupProps {
   label: string;
@@ -17,6 +18,8 @@ interface RadioGroupProps {
   disabledValues?: string[];
   /** Optional hint text; renders a HelpDot after the group label. */
   tooltip?: string;
+  /** Optional matching article in the public Lumina Wiki. */
+  wikiPath?: WikiDocPath;
 }
 
 export default function RadioGroup({
@@ -27,6 +30,7 @@ export default function RadioGroup({
   disabled = false,
   disabledValues = [],
   tooltip,
+  wikiPath,
 }: RadioGroupProps) {
   const groupId = useId();
 
@@ -35,7 +39,7 @@ export default function RadioGroup({
       <legend className={workstationFieldLabelClass}>
         <span className="flex items-center gap-1.5">
           <span>{label}</span>
-          {tooltip && <HelpDot title={label} description={tooltip} />}
+          {tooltip && <HelpDot title={label} description={tooltip} wikiPath={wikiPath} ariaLabel={tooltip} />}
         </span>
       </legend>
       <div className="grid gap-2">

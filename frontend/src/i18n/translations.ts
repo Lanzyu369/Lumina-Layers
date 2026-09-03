@@ -2415,6 +2415,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "启用拼图模式",
     en: "Enable Puzzle Mode",
   },
+  puzzle_enable_hint: {
+    zh: "把作品拆分成可以分别打印、最后再拼合的拼图片。",
+    en: "Splits the design into pieces that can be printed separately and assembled afterward.",
+  },
   puzzle_batch_disabled_hint: {
     zh: "批量模式下暂不支持拼图模式。",
     en: "Puzzle mode is unavailable while batch mode is active.",
@@ -5542,6 +5546,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "启用浮雕",
     en: "Enable Relief",
   },
+  relief_enable_hint: {
+    zh: "根据图片明暗或高度图，让平面作品产生高低起伏。",
+    en: "Uses image brightness or a heightmap to add raised and recessed detail to a flat design.",
+  },
   relief_vector_unsupported_mode: {
     zh: "原生 SVG 浮雕目前仅支持非五色扩展的单面模式。",
     en: "Native SVG relief currently supports only single-sided, non-5-Color Extended mode.",
@@ -5588,6 +5596,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "启用外轮廓",
     en: "Enable Outline",
   },
+  outline_enable_hint: {
+    zh: "沿作品外缘生成一圈可以调整宽度的边框。",
+    en: "Adds an adjustable border around the outside edge of the design.",
+  },
   outline_width: {
     zh: "外轮廓厚度",
     en: "Outline Width",
@@ -5616,6 +5628,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "启用掐丝珐琅",
     en: "Enable Cloisonné",
   },
+  cloisonne_enable_hint: {
+    zh: "沿色块边界生成凸起线条，形成类似掐丝珐琅的分隔效果。",
+    en: "Raises lines along color boundaries to create a cloisonné-style separated look.",
+  },
   cloisonne_wire_width: {
     zh: "金属丝宽度",
     en: "Wire Width",
@@ -5642,6 +5658,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "启用透明镀层",
     en: "Enable Transparent Coating",
   },
+  coating_enable_hint: {
+    zh: "在作品表面增加一层可用透明耗材打印的保护层。",
+    en: "Adds a surface layer intended to be printed with transparent filament.",
+  },
   coating_height: {
     zh: "透明镀层高度",
     en: "Transparent Coating Height",
@@ -5655,6 +5675,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   loop_enable: {
     zh: "添加挂件环",
     en: "Add Keychain Loop",
+  },
+  loop_enable_hint: {
+    zh: "在作品边缘增加一个可调整尺寸和位置的挂环。",
+    en: "Adds a loop whose size and position can be adjusted for a keychain or lanyard.",
   },
   loop_width: {
     zh: "环宽度",
@@ -6641,6 +6665,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "切换切片软件列表",
     en: "Toggle slicer list",
   },
+  slicer_output_hint: {
+    zh: "生成后可直接在已检测到的切片软件中打开，也可以下载 3MF；大画幅任务会下载 ZIP。",
+    en: "Open the generated model in a detected slicer or download the 3MF; large-format jobs download a ZIP.",
+  },
   slicer_preferred_mismatch: {
     zh: "当前导出格式为 {expected}，但操作栏启动目标是 {actual}",
     en: "Current export format targets {expected}, but the action bar is set to {actual}",
@@ -6985,7 +7013,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "查看 Wiki 详情 ↗",
     en: "View Wiki Details ↗",
   },
-
   // ==================== Vectorizer Panel ====================
   "vec.title": {
     zh: "图像转矢量",

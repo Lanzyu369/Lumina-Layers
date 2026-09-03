@@ -2,6 +2,7 @@ import { useConverterStore } from "../../stores/converter";
 import { useI18n } from "../../i18n/context";
 import Checkbox from "../ui/Checkbox";
 import Slider from "../ui/Slider";
+import { WIKI_DOCS } from "../../utils/wikiDocs";
 
 /**
  * Compute whether the "Enable Outline" checkbox should be disabled and, if
@@ -50,13 +51,17 @@ export default function OutlineSettings() {
         onChange={setEnableOutline}
         disabled={isOutlineDisabled}
         tooltip={
-          outlineDisabledReason ? t(outlineDisabledReason) : undefined
+          outlineDisabledReason
+            ? t(outlineDisabledReason)
+            : t("outline_enable_hint")
         }
+        wikiPath={WIKI_DOCS.outline}
       />
       {enable_outline && (
         <Slider
           label={t("outline_width")}
           tooltip={t("outline_width_hint")}
+          wikiPath={WIKI_DOCS.outline}
           value={outline_width}
           min={0.5}
           max={10.0}

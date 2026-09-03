@@ -42,6 +42,7 @@ import {
 } from "../../recipe/importRecipe";
 import { StatusBanner, workstationInputClass } from "../ui/panelPrimitives";
 import { isSvgImageFile, type ImageRotationDegrees } from "../../utils/imageRotation";
+import { WIKI_DOCS } from "../../utils/wikiDocs";
 import {
   buildLutCatalogIndex,
   getBucketDisplayColorMode,
@@ -1328,6 +1329,7 @@ export default function BasicSettings() {
           <Checkbox
             label={t("basic_crop_after_upload")}
             tooltip={t("basic_crop_after_upload_hint")}
+            wikiPath={WIKI_DOCS.imageInputAndCrop}
             checked={enableCrop}
             onChange={setEnableCrop}
           />
@@ -1336,6 +1338,8 @@ export default function BasicSettings() {
             <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
               <Dropdown
                 label={t("basic_image_rotation_label")}
+                tooltip={t("basic_image_rotation_hint")}
+                wikiPath={WIKI_DOCS.imageInputAndCrop}
                 value={String(selectedImageRotation)}
                 options={IMAGE_ROTATION_OPTIONS}
                 onChange={(value) => setSelectedImageRotation(Number(value) as ImageRotationDegrees)}
@@ -1480,6 +1484,7 @@ export default function BasicSettings() {
       <RadioGroup
         label={t("basic_source_version_label")}
         tooltip={t("basic_source_version_hint")}
+        wikiPath={WIKI_DOCS.sourceType}
         value={source_version}
         options={sourceVersionOptions}
         onChange={(value) => setSourceVersion(value as "legacy" | "native" | "material")}
@@ -1539,6 +1544,7 @@ export default function BasicSettings() {
           <Checkbox
             label={t("basic_material_dynamic_layer_count_label")}
             tooltip={t("basic_material_dynamic_layer_count_hint")}
+            wikiPath={WIKI_DOCS.materialArchiveSource}
             checked={materialDynamicLayerCountEnabled}
             onChange={setMaterialDynamicLayerCountEnabled}
           />
@@ -1548,6 +1554,7 @@ export default function BasicSettings() {
               <Slider
                 label={t("basic_material_min_layer_count_label")}
                 tooltip={t("basic_material_min_layer_count_hint")}
+                wikiPath={WIKI_DOCS.materialArchiveSource}
                 value={materialMinLayerCount}
                 min={MATERIAL_DYNAMIC_LAYER_COUNT_MIN}
                 max={MATERIAL_DYNAMIC_LAYER_COUNT_MAX}
@@ -1557,6 +1564,7 @@ export default function BasicSettings() {
               <Slider
                 label={t("basic_material_max_layer_count_label")}
                 tooltip={t("basic_material_max_layer_count_hint")}
+                wikiPath={WIKI_DOCS.materialArchiveSource}
                 value={materialMaxLayerCount}
                 min={MATERIAL_DYNAMIC_LAYER_COUNT_MIN}
                 max={MATERIAL_DYNAMIC_LAYER_COUNT_MAX}
@@ -1571,6 +1579,7 @@ export default function BasicSettings() {
             <Slider
               label={t("basic_material_layer_count_label")}
               tooltip={t("basic_material_layer_count_hint")}
+              wikiPath={WIKI_DOCS.materialArchiveSource}
               value={materialLayerCount}
               min={5}
               max={10}
@@ -1582,6 +1591,7 @@ export default function BasicSettings() {
           <Dropdown
             label={t("basic_material_layer_height_label")}
             tooltip={t("basic_material_layer_height_hint")}
+            wikiPath={WIKI_DOCS.materialArchiveSource}
             value={String(materialLayerHeightMm)}
             options={materialLayerHeightOptions}
             onChange={(v) => setMaterialLayerHeightMm(Number(v))}
@@ -1590,6 +1600,7 @@ export default function BasicSettings() {
           <Dropdown
             label={t("basic_material_backing_label")}
             tooltip={t("basic_material_backing_hint")}
+            wikiPath={WIKI_DOCS.materialArchiveSource}
             value={resolvedMaterialBackingDirName}
             options={materialBackingOptions}
             onChange={(v) => setMaterialBackingMaterialDirName(v || null)}
@@ -1667,6 +1678,7 @@ export default function BasicSettings() {
                   <Slider
                     label={t("basic_color_layers_label")}
                     tooltip={t("basic_color_layers_hint")}
+                    wikiPath={WIKI_DOCS.legacyLutSource}
                     value={color_layers ?? selectedLutInfo.max_color_layers ?? 5}
                     min={1}
                     max={10}
@@ -1676,6 +1688,7 @@ export default function BasicSettings() {
                   <Dropdown
                     label={t("basic_layer_height_label")}
                     tooltip={t("basic_layer_height_hint")}
+                    wikiPath={WIKI_DOCS.legacyLutSource}
                     value={String(layer_height_mm ?? selectedLutInfo.layer_height_mm ?? 0.08)}
                     options={supportedLayerHeightOptions}
                     onChange={(value) => setLayerHeightMm(Number(value))}
@@ -1704,6 +1717,7 @@ export default function BasicSettings() {
               <Dropdown
                 label={t("basic_brand_label")}
                 tooltip={t("basic_brand_hint")}
+                wikiPath={WIKI_DOCS.inferredLutSource}
                 value={selectedNativeBrand?.brand_key ?? ""}
                 options={nativeBrandOptions}
                 onChange={setNativeBrandKey}
@@ -1750,6 +1764,7 @@ export default function BasicSettings() {
               <Slider
                 label={t("basic_native_layer_count_label")}
                 tooltip={t("basic_native_layer_count_hint")}
+                wikiPath={WIKI_DOCS.inferredLutSource}
                 value={nativeLayerCount}
                 min={1}
                 max={15}
@@ -1775,12 +1790,14 @@ export default function BasicSettings() {
                     <Checkbox
                       label={t("basic_model_enable")}
                       tooltip={t("basic_model_enable_hint")}
+                      wikiPath={WIKI_DOCS.modelAssistedMatching}
                       checked={model_enable}
                       onChange={setModelEnable}
                     />
                     <Checkbox
                       label={t("basic_model_only")}
                       tooltip={t("basic_model_only_hint")}
+                      wikiPath={WIKI_DOCS.modelAssistedMatching}
                       checked={model_only}
                       onChange={setModelOnly}
                     />
@@ -1802,6 +1819,7 @@ export default function BasicSettings() {
       <Slider
         label={t("basic_width")}
         tooltip={t("basic_width_hint")}
+        wikiPath={WIKI_DOCS.outputDimensions}
         value={target_width_mm}
         min={10}
         max={dimMax}
@@ -1813,6 +1831,7 @@ export default function BasicSettings() {
       <Slider
         label={t("basic_height")}
         tooltip={t("basic_height_hint")}
+        wikiPath={WIKI_DOCS.outputDimensions}
         value={target_height_mm}
         min={10}
         max={dimMax}
@@ -1827,6 +1846,7 @@ export default function BasicSettings() {
         onChange={setLargeFormatEnabled}
         disabled={puzzleEnabled || enable_fridge_magnet}
         tooltip={t("basic_large_format_hint")}
+        wikiPath={WIKI_DOCS.largeFormat}
       />
 
       {puzzleEnabled && !largeFormatEnabled && (
@@ -1850,6 +1870,7 @@ export default function BasicSettings() {
           <Slider
             label={t("basic_tile_width")}
             tooltip={t("basic_tile_width_hint")}
+            wikiPath={WIKI_DOCS.largeFormat}
             value={tileWidthMm}
             min={50}
             max={500}
@@ -1860,6 +1881,7 @@ export default function BasicSettings() {
           <Slider
             label={t("basic_tile_height")}
             tooltip={t("basic_tile_height_hint")}
+            wikiPath={WIKI_DOCS.largeFormat}
             value={tileHeightMm}
             min={50}
             max={500}
@@ -1881,6 +1903,7 @@ export default function BasicSettings() {
       <Slider
         label={t("basic_thickness")}
         tooltip={t("basic_thickness_hint")}
+        wikiPath={WIKI_DOCS.backingThickness}
         value={spacer_thick}
         min={THICKNESS_SLIDER_MIN_MM}
         max={THICKNESS_SLIDER_MAX_MM}
@@ -1894,6 +1917,7 @@ export default function BasicSettings() {
         <Slider
           label={t("basic_backing_infill_density")}
           tooltip={t("basic_backing_infill_density_hint")}
+          wikiPath={WIKI_DOCS.backingThickness}
           value={backing_infill_density_percent}
           min={BACKING_INFILL_DENSITY_MIN_PERCENT}
           max={BACKING_INFILL_DENSITY_MAX_PERCENT}
@@ -1908,6 +1932,7 @@ export default function BasicSettings() {
         <RadioGroup
           label={t("basic_structure_mode")}
           tooltip={t("basic_structure_mode_hint")}
+          wikiPath={WIKI_DOCS.structureMode}
           value={structure_mode}
           options={structureModeOptions}
           onChange={(v) => setStructureMode(v as StructureMode)}
@@ -1919,6 +1944,7 @@ export default function BasicSettings() {
       <RadioGroup
         label={t("basic_modeling_mode")}
         tooltip={t("basic_modeling_mode_hint")}
+        wikiPath={WIKI_DOCS.modelingMode}
         value={modeling_mode}
         options={modelingModeOptions}
         onChange={(v) => setModelingMode(v as ModelingMode)}
@@ -1963,6 +1989,7 @@ function QuantizeColorsControl() {
       <Slider
         label={t("adv_quantize_colors")}
         tooltip={t("adv_quantize_colors_hint")}
+        wikiPath={WIKI_DOCS.quantizeColors}
         value={quantize_colors}
         min={8}
         max={upperBound}

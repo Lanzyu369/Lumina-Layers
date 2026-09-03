@@ -5,6 +5,7 @@ import {
   workstationChoiceRowDisabledClass,
 } from "./panelPrimitives";
 import HelpDot from "./HelpDot";
+import type { WikiDocPath } from "../../utils/wikiDocs";
 
 interface CheckboxProps {
   label: React.ReactNode;
@@ -17,6 +18,8 @@ interface CheckboxProps {
   /** Optional tooltip title override. Defaults to the string form of `label`
    *  when `tooltip` is set; pass this when `label` is a non-string ReactNode. */
   tooltipTitle?: string;
+  /** Optional matching article in the public Lumina Wiki. */
+  wikiPath?: WikiDocPath;
 }
 
 export default function Checkbox({
@@ -26,6 +29,7 @@ export default function Checkbox({
   disabled = false,
   tooltip,
   tooltipTitle,
+  wikiPath,
 }: CheckboxProps) {
   const labelClass = cx(
     "flex items-center gap-3 text-sm",
@@ -63,6 +67,8 @@ export default function Checkbox({
         <HelpDot
           title={tooltipTitle ?? (typeof label === "string" ? label : "")}
           description={tooltip}
+          wikiPath={wikiPath}
+          ariaLabel={tooltip}
         />
       )}
     </label>
