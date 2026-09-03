@@ -7,6 +7,7 @@ import {
   invalidatePreviewArtifacts,
   invalidateSingleItemDownload,
 } from "./generatedArtifactInvalidation";
+import { synchronizePrinterBedLabel } from "./printerBedLabelSync";
 import { invalidatePreviewRequest } from "./previewRequestCoordinator";
 
 // ========== State Interface ==========
@@ -519,15 +520,7 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
             state.printerModel === id ? state.deviceProfileId : "",
         }));
         invalidateGeneratedArtifacts();
-
-        // 延迟导入避免循环依赖
-        import("./converter").then(({ useConverterStore }) => {
-          const { bedSizes, setBedLabel } = useConverterStore.getState();
-          const printerBed = bedSizes.find((bed) => bed.printer_id === id);
-          if (printerBed) {
-            setBedLabel(printerBed.label);
-          }
-        });
+        synchronizePrinterBedLabel(id);
       },
 
       setSlicerSoftware: (id: string) => {

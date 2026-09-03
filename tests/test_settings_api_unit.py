@@ -657,6 +657,81 @@ class TestGetPrinters:
         assert response.content == b"fake-thumbnail"
         assert response.headers["content-type"].startswith("image/png")
 
+    def test_machine_registry_serves_selected_device_native_bed_model(
+        self,
+        tmp_path,
+        monkeypatch,
+    ) -> None:
+        installed_model = tmp_path / "installed-slicer" / "a1-mini.stl"
+        installed_model.parent.mkdir(parents=True)
+        installed_model.write_bytes(b"native-bed-model")
+        monkeypatch.setattr(
+            "api.routers.system.resolve_installed_bed_model",
+            lambda _profile: installed_model,
+        )
+
+        response = client.get(
+            "/api/system/machine-registry/bed-model",
+            params={
+                "device_profile_id": (
+                    "OrcaSlicer:bbl:bambu-lab-a1-mini:0.4"
+                )
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.content
+        assert response.headers["content-type"].startswith("model/stl")
+
+    def test_machine_registry_bed_model_is_optional_without_installed_slicer(
+        self,
+        monkeypatch,
+    ) -> None:
+        monkeypatch.setattr(
+            "api.routers.system.resolve_installed_bed_model",
+            lambda _profile: None,
+        )
+
+        response = client.get(
+            "/api/system/machine-registry/bed-model",
+            params={
+                "device_profile_id": (
+                    "OrcaSlicer:bbl:bambu-lab-a1-mini:0.4"
+                )
+            },
+        )
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Bed model not found"
+
+    def test_machine_registry_bed_model_rejects_untrusted_web_origin(
+        self,
+        monkeypatch,
+    ) -> None:
+        def fail_if_resolver_runs(_profile):
+            raise AssertionError("Untrusted requests must be rejected before file lookup")
+
+        monkeypatch.setattr(
+            "api.routers.system.resolve_installed_bed_model",
+            fail_if_resolver_runs,
+        )
+
+        response = client.get(
+            "/api/system/machine-registry/bed-model",
+            params={
+                "device_profile_id": (
+                    "OrcaSlicer:bbl:bambu-lab-a1-mini:0.4"
+                )
+            },
+            headers={
+                "Origin": "https://attacker.example",
+                "Sec-Fetch-Site": "cross-site",
+            },
+        )
+
+        assert response.status_code == 403
+        assert "local Lumina Studio app" in response.json()["detail"]
+
     def test_machine_registry_asset_serves_from_frozen_bundle_root(
         self,
         tmp_path,

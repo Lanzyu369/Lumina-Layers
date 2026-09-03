@@ -46,7 +46,10 @@ from api.schemas.system import (
 )
 from api.session_store import SessionStore
 from api.structured_logging import get_logger
-from core.machine_registry import resolve_machine_registry_root
+from core.machine_registry import (
+    resolve_installed_bed_model,
+    resolve_machine_registry_root,
+)
 
 router = APIRouter(prefix="/api/system", tags=["System"])
 log = get_logger(__name__)
@@ -777,6 +780,29 @@ def get_machine_registry_asset(asset_path: str) -> FileResponse:
     if not requested.exists() or not requested.is_file():
         raise HTTPException(status_code=404, detail="Machine registry asset not found")
     return FileResponse(path=requested, media_type=media_type)
+
+
+@router.get(
+    "/machine-registry/bed-model",
+    dependencies=[Depends(require_local_app_origin)],
+)
+def get_machine_registry_bed_model(device_profile_id: str) -> FileResponse:
+    """Serve an installed slicer's native bed model for one device profile.
+
+    返回指定设备配置对应的本机切片软件原生热床模型。
+    """
+
+    registry = _try_load_machine_registry()
+    if registry is None:
+        raise HTTPException(status_code=404, detail="Machine registry not found")
+    try:
+        profile = registry.get_device_profile(device_profile_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Device profile not found") from exc
+    model_path = resolve_installed_bed_model(profile)
+    if model_path is None:
+        raise HTTPException(status_code=404, detail="Bed model not found")
+    return FileResponse(path=model_path, media_type="model/stl")
 
 
 # ---------------------------------------------------------------------------

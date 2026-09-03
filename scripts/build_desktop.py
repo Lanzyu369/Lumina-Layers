@@ -45,6 +45,7 @@ NATIVE_VECTOR_MESH_MARKER = "native-vector-mesh.enabled"
 CORE_GEOMETRY_REQUIRED_MODULES = ("manifold3d",)
 GLB_V2_OPTIONAL_MODULES = ("rasterio.features",)
 WORKSHOP_DESKTOP_SECURITY_FILES = (
+    ELECTRON_DIR / "bed-model-bridge.cjs",
     ELECTRON_DIR / "workshop-security.cjs",
     ELECTRON_DIR / "preload.cjs",
 )

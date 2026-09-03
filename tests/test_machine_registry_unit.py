@@ -6,7 +6,11 @@ import sys
 
 import pytest
 
-from core.machine_registry import load_machine_registry, resolve_machine_registry_root
+from core.machine_registry import (
+    load_machine_registry,
+    resolve_installed_bed_model,
+    resolve_machine_registry_root,
+)
 
 
 def test_machine_registry_root_resolution_contract(
@@ -98,6 +102,7 @@ def test_load_machine_registry_indexes_device_profiles(tmp_path):
                                 "bed_depth": 320,
                                 "bed_height": 325,
                                 "thumbnail": "slicers/BambuStudio/02.07.01.57/assets/h2d.png",
+                                "bed_model": "bbl-3dp-H2D.stl",
                                 "supported_build_plate_ids": ["textured-pei"],
                                 "default_build_plate_id": "textured-pei",
                                 "nozzles": [
@@ -131,6 +136,7 @@ def test_load_machine_registry_indexes_device_profiles(tmp_path):
     assert profile.nozzle_size == "0.4"
     assert profile.application_metadata == "BambuStudio-02.07.01.57"
     assert profile.sidecar_policy == "bambu_studio"
+    assert profile.bed_model == "bbl-3dp-H2D.stl"
     assert profile.default_build_plate_id == "textured-pei"
     assert [plate.id for plate in profile.build_plates] == ["textured-pei"]
     assert profile.build_plates[0].image.endswith("build-plates/bed_pei.png")
@@ -140,6 +146,191 @@ def test_load_machine_registry_indexes_device_profiles(tmp_path):
     assert resolved.project_value == "Textured PEI Plate"
     assert resolved.plate_value == "Textured PEI Plate"
     assert resolved.sidecar_value == "textured_plate"
+
+
+def test_resolve_installed_bed_model_stays_inside_the_matching_slicer_bundle(
+    tmp_path: Path,
+) -> None:
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "generated_at": "2026-09-03T00:00:00+08:00",
+                "slicers": [
+                    {
+                        "slicer_id": "OrcaSlicer",
+                        "display_name": "OrcaSlicer",
+                        "source_version": "02.04.00.00",
+                        "application_metadata": "BambuStudio-02.04.00.00",
+                        "sidecar_policy": "orca_like",
+                        "build_plates": [],
+                        "machines": [
+                            {
+                                "machine_profile_id": "OrcaSlicer:bbl:a1-mini",
+                                "display_name": "Bambu Lab A1 mini",
+                                "brand": "Bambu Lab",
+                                "vendor_key": "BBL",
+                                "bed_width": 180,
+                                "bed_depth": 180,
+                                "bed_height": 180,
+                                "thumbnail": "",
+                                "bed_model": "bbl-3dp-A1M.stl",
+                                "supported_build_plate_ids": [],
+                                "default_build_plate_id": "",
+                                "nozzles": [
+                                    {
+                                        "device_profile_id": "OrcaSlicer:bbl:a1-mini:0.4",
+                                        "nozzle_size": "0.4",
+                                        "source_profile_name": "A1 mini 0.4 nozzle",
+                                        "template": "template.json",
+                                        "revision": "sha256:test",
+                                        "supported": True,
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    profile = load_machine_registry(registry_path).get_device_profile(
+        "OrcaSlicer:bbl:a1-mini:0.4"
+    )
+    orca_app = tmp_path / "OrcaSlicer.app"
+    orca_model = (
+        orca_app
+        / "Contents"
+        / "Resources"
+        / "profiles"
+        / "BBL"
+        / "bbl-3dp-A1M.stl"
+    )
+    orca_model.parent.mkdir(parents=True)
+    orca_model.write_bytes(b"orca-bed")
+    bambu_app = tmp_path / "BambuStudio.app"
+    bambu_model = (
+        bambu_app
+        / "Contents"
+        / "Resources"
+        / "profiles"
+        / "BBL"
+        / "bbl-3dp-A1M.stl"
+    )
+    bambu_model.parent.mkdir(parents=True)
+    bambu_model.write_bytes(b"bambu-bed")
+
+    resolved = resolve_installed_bed_model(
+        profile,
+        detected_slicers=[
+            {"id": "bambu_studio", "exe_path": str(bambu_app)},
+            {"id": "orca_slicer", "exe_path": str(orca_app)},
+        ],
+    )
+
+    assert resolved == orca_model.resolve()
+    assert resolved.read_bytes() == b"orca-bed"
+
+
+@pytest.mark.parametrize(
+    ("vendor_key", "bed_model"),
+    [
+        ("BBL", "../outside.stl"),
+        ("BBL", r"..\outside.stl"),
+        ("BBL", r"C:\outside.stl"),
+        ("../BBL", "bed.stl"),
+        (r"..\BBL", "bed.stl"),
+    ],
+)
+def test_resolve_installed_bed_model_rejects_registry_path_segments(
+    vendor_key: str,
+    bed_model: str,
+) -> None:
+    profile = type(
+        "Profile",
+        (),
+        {
+            "slicer_id": "OrcaSlicer",
+            "vendor_key": vendor_key,
+            "bed_model": bed_model,
+        },
+    )()
+
+    assert resolve_installed_bed_model(profile, detected_slicers=[]) is None
+
+
+def test_resolve_installed_bed_model_rejects_vendor_symlink_escape(
+    tmp_path: Path,
+) -> None:
+    app_path = tmp_path / "OrcaSlicer.app"
+    profile_root = app_path / "Contents" / "Resources" / "profiles"
+    profile_root.mkdir(parents=True)
+    outside_vendor = tmp_path / "outside" / "BBL"
+    outside_vendor.mkdir(parents=True)
+    (outside_vendor / "bed.stl").write_bytes(b"outside-bed")
+    try:
+        (profile_root / "BBL").symlink_to(outside_vendor, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"Directory symlinks are unavailable: {exc}")
+
+    profile = type(
+        "Profile",
+        (),
+        {
+            "slicer_id": "OrcaSlicer",
+            "vendor_key": "BBL",
+            "bed_model": "bed.stl",
+        },
+    )()
+
+    resolved = resolve_installed_bed_model(
+        profile,
+        detected_slicers=[
+            {"id": "orca_slicer", "exe_path": str(app_path)},
+        ],
+    )
+
+    assert resolved is None
+
+
+def test_resolve_installed_bed_model_rejects_profile_root_symlink_escape(
+    tmp_path: Path,
+) -> None:
+    app_path = tmp_path / "OrcaSlicer.app"
+    resources_root = app_path / "Contents" / "Resources"
+    resources_root.mkdir(parents=True)
+    outside_profiles = tmp_path / "outside" / "profiles"
+    outside_model = outside_profiles / "BBL" / "bed.stl"
+    outside_model.parent.mkdir(parents=True)
+    outside_model.write_bytes(b"outside-bed")
+    try:
+        (resources_root / "profiles").symlink_to(
+            outside_profiles,
+            target_is_directory=True,
+        )
+    except OSError as exc:
+        pytest.skip(f"Directory symlinks are unavailable: {exc}")
+
+    profile = type(
+        "Profile",
+        (),
+        {
+            "slicer_id": "OrcaSlicer",
+            "vendor_key": "BBL",
+            "bed_model": "bed.stl",
+        },
+    )()
+
+    resolved = resolve_installed_bed_model(
+        profile,
+        detected_slicers=[
+            {"id": "orca_slicer", "exe_path": str(app_path)},
+        ],
+    )
+
+    assert resolved is None
 
 
 def test_load_machine_registry_rejects_duplicate_build_plate_ids(tmp_path):
