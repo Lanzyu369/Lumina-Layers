@@ -560,10 +560,10 @@ class TestMergedWriterBambuCompatibility:
             for path in (src1, src2, Path(out_path)):
                 path.unlink(missing_ok=True)
 
-    def test_merged_output_does_not_declare_unadapted_tower_overrides(
+    def test_merged_output_replans_safe_native_tower_layout(
         self,
     ) -> None:
-        """A safe native tower layout must not gain synthetic overrides."""
+        """Enabled auto layout must replan even a collision-free template."""
 
         source = _make_source_3mf(
             width_mm=10.0,
@@ -606,8 +606,25 @@ class TestMergedWriterBambuCompatibility:
             difference_index = set(
                 settings["different_settings_to_system"][0].split(";")
             )
-            assert placement["adapted"] is False
-            assert difference_index == {"enable_prime_tower"}
+            assert placement["adapted"] is True
+            assert placement["requires_manual_adjustment"] is False
+            assert float(settings["prime_tower_width"]) == pytest.approx(
+                placement["tower"]["width_mm"]
+            )
+            assert float(settings["wipe_tower_x"][0]) == pytest.approx(
+                placement["tower"]["x_mm"]
+            )
+            assert float(settings["wipe_tower_y"][0]) == pytest.approx(
+                placement["tower"]["y_mm"]
+            )
+            assert difference_index >= {
+                "enable_prime_tower",
+                "prime_tower_width",
+                "wipe_tower_rotation_angle",
+                "wipe_tower_x",
+                "wipe_tower_y",
+            }
+            assert read_wipe_tower_placement_warnings(out_path) == []
         finally:
             for path in (source, Path(out_path)):
                 path.unlink(missing_ok=True)

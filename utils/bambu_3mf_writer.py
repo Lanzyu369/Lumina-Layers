@@ -2531,37 +2531,162 @@ class BambuStudio3MFWriter:
 
     @classmethod
     def _parse_config_polygon(cls, value: object) -> tuple[tuple[float, float], ...]:
-        """Parse a flat ``["XxY", ...]`` polygon. / 解析扁平坐标多边形。"""
+        """Parse flat or comma-packed slicer polygon coordinates.
+
+        解析扁平或逗号打包的切片器多边形坐标。
+        """
 
         if not isinstance(value, list):
             return ()
         return tuple(
             point
-            for point in (cls._parse_printable_area_point(item) for item in value)
-            if point is not None
+            for item in value
+            for point in cls._parse_config_polygon_item(item)
         )
+
+    @classmethod
+    def _parse_config_polygon_item(
+        cls,
+        value: object,
+    ) -> tuple[tuple[float, float], ...]:
+        """Parse every ``XxY`` coordinate stored in one config item.
+
+        解析单个配置项中存储的所有 ``XxY`` 坐标。
+        """
+
+        raw = str(value or "").strip()
+        if not raw:
+            return ()
+        number = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+        matches = re.finditer(
+            rf"({number})\s*[xX]\s*({number})",
+            raw,
+        )
+        points = tuple(
+            (float(match.group(1)), float(match.group(2)))
+            for match in matches
+        )
+        if points:
+            return points
+        point = cls._parse_printable_area_point(raw)
+        return (point,) if point is not None else ()
+
+    @staticmethod
+    def _config_polygon_area_twice(
+        points: tuple[tuple[float, float], ...],
+    ) -> float:
+        """Return signed double area for a parsed config polygon.
+
+        返回已解析配置多边形的有符号两倍面积。
+        """
+
+        return sum(
+            point[0] * points[(index + 1) % len(points)][1]
+            - points[(index + 1) % len(points)][0] * point[1]
+            for index, point in enumerate(points)
+        )
+
+    @classmethod
+    def _is_axis_aligned_config_rectangle(
+        cls,
+        points: tuple[tuple[float, float], ...],
+    ) -> bool:
+        """Return whether four config points form an axis-aligned rectangle.
+
+        返回四个配置坐标是否构成轴对齐矩形。
+        """
+
+        return (
+            len(points) == 4
+            and len(set(points)) == 4
+            and len({point[0] for point in points}) == 2
+            and len({point[1] for point in points}) == 2
+            and abs(cls._config_polygon_area_twice(points)) > 1e-9
+        )
+
+    @classmethod
+    def _is_repeated_degenerate_config_sentinel(
+        cls,
+        points: tuple[tuple[float, float], ...],
+    ) -> bool:
+        """Recognize QIDI separators without mistaking subdivided edges.
+
+        识别 QIDI 分隔占位组，同时避免将带细分点的直边误判为占位组。
+        """
+
+        return (
+            len(set(points)) < len(points)
+            and abs(cls._config_polygon_area_twice(points)) <= 1e-9
+        )
+
+    @classmethod
+    def _split_bed_exclusion_points(
+        cls,
+        points: tuple[tuple[float, float], ...],
+        *,
+        require_repeated_sentinels: bool = False,
+    ) -> tuple[tuple[tuple[float, float], ...], ...]:
+        """Split slicer exclusion streams into rectangular groups plus a tail.
+
+        将切片器禁用区坐标流分成四点矩形和最后一个多边形。
+        """
+
+        if len(points) < 3:
+            return ()
+        if len(points) <= 7:
+            return (points,)
+        remainder = len(points) % 4
+        if remainder == 0 and not require_repeated_sentinels:
+            return tuple(
+                tuple(points[index : index + 4])
+                for index in range(0, len(points), 4)
+            )
+        tail_size = 4 if remainder == 0 else 4 + remainder
+        prefix_size = len(points) - tail_size
+        prefix_groups = [
+            tuple(points[index : index + 4])
+            for index in range(0, prefix_size, 4)
+        ]
+        tail = tuple(points[prefix_size:])
+        degenerate_group_count = sum(
+            cls._is_repeated_degenerate_config_sentinel(group)
+            for group in prefix_groups
+        )
+        is_recognized_sentinel_stream = (
+            degenerate_group_count >= 2
+            and abs(cls._config_polygon_area_twice(tail)) > 1e-9
+            and all(
+                cls._is_repeated_degenerate_config_sentinel(group)
+                or cls._is_axis_aligned_config_rectangle(group)
+                for group in prefix_groups
+            )
+        )
+        if is_recognized_sentinel_stream:
+            return tuple((*prefix_groups, tail))
+        return (points,)
 
     @classmethod
     def _parse_bed_exclusion_polygons(
         cls,
         value: object,
     ) -> tuple[tuple[tuple[float, float], ...], ...]:
-        """Parse rectangular bed-exclusion groups, ignoring degenerate sentinels.
+        """Parse flat and comma-packed bed-exclusion polygon groups.
 
-        解析热床禁用矩形，并忽略 ``["0x0"]`` 一类退化占位值。
+        解析扁平和逗号打包的热床禁用区多边形分组。
         """
 
-        points = cls._parse_config_polygon(value)
-        if len(points) < 3:
+        if not isinstance(value, list):
             return ()
-        if len(points) <= 4:
-            return (points,)
-        if len(points) % 4 == 0:
+        if any("," in str(item or "") for item in value):
             return tuple(
-                tuple(points[index : index + 4])
-                for index in range(0, len(points), 4)
+                polygon
+                for item in value
+                for polygon in cls._split_bed_exclusion_points(
+                    cls._parse_config_polygon_item(item),
+                    require_repeated_sentinels=True,
+                )
             )
-        return (points,)
+        return cls._split_bed_exclusion_points(cls._parse_config_polygon(value))
 
     @classmethod
     def _parse_extruder_printable_polygons(
@@ -2577,21 +2702,16 @@ class BambuStudio3MFWriter:
             return ()
         polygons: list[tuple[tuple[float, float], ...]] = []
         for item in value:
-            tokens = [token.strip() for token in str(item or "").split(",")]
-            points = tuple(
-                point
-                for point in (cls._parse_printable_area_point(token) for token in tokens)
-                if point is not None
-            )
+            points = cls._parse_config_polygon_item(item)
             if len(points) >= 3:
                 polygons.append(points)
         return tuple(polygons)
 
     @staticmethod
     def _replace_first_config_number(value: object, number: float) -> object:
-        """Preserve a config value's scalar/list shape while replacing slot zero.
+        """Replace slot zero, creating a vector when the template omits the key.
 
-        保留配置值的标量或列表形态，仅替换第一个槽位。
+        替换第一个槽位；模板缺少该键时创建向量。
         """
 
         formatted = BambuStudio3MFWriter._format_number(number)
@@ -2602,6 +2722,8 @@ class BambuStudio3MFWriter:
             else:
                 result.append(formatted)
             return result
+        if value is None:
+            return [formatted]
         return formatted
 
     def _resolve_tower_purge_volume(self, template: dict[str, Any]) -> float:
@@ -2799,8 +2921,8 @@ class BambuStudio3MFWriter:
     def _get_wipe_tower_placement(self) -> WipeTowerPlacementResult | None:
         """Resolve and cache the joint model/tower placement.
 
-        联合求解并缓存模型与擦料塔摆放结果；安全模板保持原样，无解时仅标记
-        需要人工调整，绝不缩放模型或关闭擦料塔。
+        联合求解并缓存模型与擦料塔摆放结果；开启时始终按当前模型重新规划，
+        无解时仅标记需要人工调整，绝不缩放模型或关闭擦料塔。
         """
 
         if not self.enable_wipe_tower_auto_placement:
