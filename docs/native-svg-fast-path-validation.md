@@ -67,10 +67,17 @@ space before the complete affine transform is applied. One physical tolerance
 budget is shared across decoding, curve lowering, transforms, integer-grid
 quantization, stroke expansion, and Boolean operations.
 
-Clipper work and output limits are checked both per operation and against the
-remaining document budget before result allocation. The fixed LunaSVG patch is
-validated with `git apply --check`, reverse-checks an already patched source,
-and compares the complete dependency diff after the build.
+Clipper input and geometric point estimates are checked per operation. The
+fixed Clipper patch checks actual output-point allocations, output-record
+allocations, intersection-node allocations, and every processed intersection
+inside the engine before accepting each allocation or event. Document counters
+charge actual Boolean inputs, safety-index work, engine work, and returned
+output; they do not reserve a theoretical output-ring count. Already canonical
+Clipper operands are not scanned a second time by a shadow intersection
+implementation. The fixed
+dependency patches are validated with `git apply --check`, reverse-check an
+already patched source, and are compared byte-for-byte with the complete
+dependency diffs after the build.
 
 Same-document `<use>` expansion is preflighted recursively before LunaSVG
 allocates clone trees. The budget counts reparsed target attributes, nested
@@ -88,21 +95,21 @@ Reference host: Apple M5, arm64, 16 GiB RAM, macOS 26.5.2, CPython
 | Gate | Result |
 |---|---:|
 | Fresh fixed-patch native build | PASS |
-| Standalone native suite | 545 passed |
-| Lumina adapter/differential/VectorAnalysis/packaging suite | 163 passed |
-| Additional vector product regressions | 15 passed, 3 skipped |
+| macOS 12.0 arm64 wheel build/install/runtime verification | PASS |
+| Standalone native suite from clean installed wheel | 551 passed |
+| Lumina adapter/differential/VectorAnalysis/packaging suite | 194 passed |
+| Post-#590 boundary regressions | 265 passed |
+| Product smoke | backend 164 passed; frontend 167 passed; lint 0 errors |
 | Independent parser review | Ready: Yes; no blocking findings |
 | `git diff --check` | PASS |
 
-The three skipped Lumina tests require an external diagnostic asset that is not
-present in this worktree. They are not parser failures.
-
-The independent final review re-ran the previously blocking marker precision,
-`%`/`px` shared-boundary, document-output budget, non-square percentage
-ellipse, canonical touching-ring export, and cross-operand Boolean cases
-against a fresh extension built from the checked-in dependency patch. It also
-confirmed that the diff does not touch material matching, recipes, mesh
-construction, or 3MF implementation. Its final assessment is `Ready: Yes`.
+The prior review found that cross-operand Boolean output could exceed the
+preflight ring estimate before the post-check ran. The correction moves the
+hard point/record/intersection-node/processed-intersection caps inside the
+pinned Clipper engine and retains document-wide actual-work accounting without
+restoring a production shadow intersection pass. The independent final
+re-review inspected every allocation and intersection entry point, reran the
+focused parser contract suite, and assessed the branch as `Ready: Yes`.
 
 ## Anonymous 508-document corpus
 
@@ -113,18 +120,18 @@ a 0.02 mm physical tolerance, and includes stroke paint.
 | Metric | Result |
 |---|---:|
 | Documents | 508 |
-| Supported / unsupported / invalid | 474 / 34 / 0 |
+| Supported / unsupported / invalid | 477 / 31 / 0 |
 | Input paints | 1,804,382 |
-| Raw / visible output paints | 1,556,001 / 840,928 |
-| Raw / visible components | 1,709,605 / 877,173 |
-| Raw / visible holes | 1,325,305 / 209,395 |
-| Unprintable fragments | 4,272 |
-| Unprintable reasons | line-only 3,192; area-collapse 109; fill-rule-cancelled 971 |
-| Unsupported reasons | partial-alpha 31; complexity 3; internal errors 0 |
+| Raw / visible output paints | 1,682,327 / 905,997 |
+| Raw / visible components | 1,858,258 / 943,333 |
+| Raw / visible holes | 1,487,323 / 251,996 |
+| Unprintable fragments | 4,336 |
+| Unprintable reasons | line-only 3,248; area-collapse 111; fill-rule-cancelled 977 |
+| Unsupported reasons | partial-alpha 31; complexity 0; internal errors 0 |
 | Supported documents with unexplained raw-paint loss | 0 |
 | Maximum visible-partition area delta | 1.3893777 source-unit²; 4.1888571e-8 relative |
-| Median / p95 / maximum document time | 1.1975 s / 13.3579 s / 86.2339 s |
-| Total time / peak process RSS | 1,719.7048 s / 1,007,026,176 bytes (960.38 MiB) |
+| Median / p95 / maximum document time | 2.4732 s / 18.9126 s / 323.6172 s |
+| Total time / peak process RSS | 3,092.0899 s / 1,231,749,120 bytes (1,174.69 MiB) |
 
 `raw_to_visible_area_delta` is expected to be non-zero where later paints
 occlude earlier paints. The loss detector is
@@ -133,25 +140,21 @@ equal the exported silhouette area within the shared integer-grid error. The
 largest relative delta is 4.19e-8; a direct Shapely union check of that case
 matched the silhouette within 6.20e-10 mm² and showed that the reported source
 area delta is sub-grid overlap, not missing coverage. Explicit unprintable
-fragments remain separate from both values. All 10 documents previously
-reported as `native_geometry_error` are supported after canonical export, and
-no supported document loses more raw paints than its recorded unprintable
-fragment count can explain.
+fragments remain separate from both values. No supported document loses more
+raw paints than its recorded unprintable fragment count can explain.
 
-Compared with the preceding architecture-dependent build, deterministic
-collapsed-curve replay recovered 52 raw paints and 58 raw components. Of the
-591 former `area_collapse` records, 541 are now correctly identified after
-replay as `fill_rule_cancelled`, while the remaining net reduction of 50
-fragment records corresponds to recovered area-bearing paint. Supported,
-unsupported, and invalid document counts are unchanged; the worst visible
-partition error is also unchanged.
+The three documents formerly rejected as `unsupported_complexity` now complete
+with non-empty raw and visible Polygon/MultiPolygon output. Together they add
+126,326 raw paints, 65,069 visible paints, 148,653 raw components, 66,160
+visible components, 162,018 raw holes, 42,601 visible holes, and 64 explicitly
+classified non-area fragments. For the other 505 documents, status, paint,
+component, hole, area, and fragment metrics are exactly unchanged from the
+preceding report. The maximum visible-partition error is also unchanged.
 
-The final `<use>` preflight and shadow-child fix leaves every structural metric
-above unchanged, including all per-document paint, component, hole, fragment,
-and area values. On the same reference host, total audit time decreased from
-1,739.3509 s to 1,719.7048 s and peak RSS decreased from 1,156,841,472 bytes to
-1,007,026,176 bytes. These timing and RSS changes are observational corpus
-results; semantic equality is established by the exact per-document comparison.
+Completing those three extreme documents raises total time and peak RSS; the
+report records that cost rather than treating early rejection as performance.
+Median and p95 remain representative of ordinary corpus inputs, while the
+323.62-second maximum is the transparent tail result for an extreme SVG.
 
 Reproduce the anonymous audit with:
 
@@ -174,15 +177,15 @@ does not use an artifact cache.
 
 | Metric | Result |
 |---|---:|
-| Warm median / 1.0 s gate | 0.108637 s / PASS |
-| Warm p95 / 1.25 s gate | 0.109758 s / PASS |
-| Native recorder / kernel | 0.048722 s / 0.044578 s |
-| Native adapter conversion | 0.009428 s |
-| Peak RSS / swap growth | 201,719,808 bytes (192.38 MiB) / 0 bytes |
+| Warm median / 1.0 s gate | 0.160015 s / PASS |
+| Warm p95 / 1.25 s gate | 0.167829 s / PASS |
+| Native recorder / kernel | 0.073756 s / 0.063301 s |
+| Native adapter conversion | 0.014755 s |
+| Peak RSS / swap growth | 197,214,208 bytes (188.08 MiB) / 0 bytes |
 | Raw / visible shapes | 1,024 / 1,024 |
 
 The public 3,097-path source proxy is also supported by default; its native
-capability check took 0.514370 s. No repository SVG at or above 50 MiB was
+capability check took 0.510015 s. No repository SVG at or above 50 MiB was
 available, so the separate large-file benchmark is recorded as unavailable
 instead of substituting another fixture. The anonymous 508-document run above
 is the large real-world parser/RSS evidence for this revision.

@@ -30,11 +30,14 @@ at `patches/lunasvg-paint-recorder.patch`.
 - License: Boost Software License 1.0
 - Copyright: Angus Johnson and Clipper2 contributors
 
-Lumina applies the narrowly scoped, versioned SVG miter-limit compatibility
-patch stored at `patches/clipper2-svg-miter-fallback.patch`. It changes only
-the over-limit miter fallback from square joins to bevel joins so the native
-kernel matches the SVG/legacy contract. The patched source is verified against
-the pinned revision during every build.
+Lumina applies a narrowly scoped, versioned patch stored at
+`patches/clipper2-svg-miter-fallback.patch`. It changes the over-limit miter fallback
+from square joins to bevel joins so the native kernel matches the SVG contract.
+It also adds fixed execution caps around Clipper output-point and output-record
+creation, intersection-node allocation, and every processed intersection;
+these caps abort oversized operations without changing successful Boolean
+geometry. The complete patched source diff is verified against the pinned
+revision during every build.
 
 ## FreeType-derived stroker and raster files
 

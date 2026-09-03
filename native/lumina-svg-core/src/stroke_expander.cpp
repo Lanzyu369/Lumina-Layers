@@ -887,9 +887,11 @@ StrokeExpansion expandStrokeLocal(const lunasvg::PaintCommand& command,
             outputPointUpperBound);
         complexityBudget.requireTransientPointCapacity(
             outputPointUpperBound);
-        complexityBudget.requireClipperOutputDocumentCapacity(
-            outputPointUpperBound,
-            checkedSizeSum(outputPointUpperBound, size_t{2}) / 3);
+        // The point estimate bounds the transient allocation. It does not
+        // imply that every three possible points become a separate ring;
+        // charge the actual InflatePaths rings below.
+        complexityBudget.requireClipperOutputCapacity(
+            outputPointUpperBound, size_t{1});
         requireBoundedClipperOffset(
             {path}, complexityBudget, delta,
             command.stroke.miter_limit, subpath.closed);

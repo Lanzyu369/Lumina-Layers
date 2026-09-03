@@ -289,6 +289,55 @@ def test_visible_export_keeps_valid_paint_when_clip_ring_is_redundant() -> None:
     assert result.unprintable_fragments.count == 0
 
 
+def test_vectorizer_underpaint_remains_an_ordinary_ordered_svg_paint() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 10 10' data-lumina-origin='image-vectorizer'>"
+        "<path fill='#123456' "
+        "d='M0 0H10V10H0Z'/>"
+        "<path fill='#abcdef' "
+        "d='M0 0H4.9V10H0Z M5.1 0H10V10H5.1Z'/>"
+        "</svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.image_vectorizer_origin is True
+    assert result.raw.rgba.tolist() == [
+        [18, 52, 86, 255],
+        [171, 205, 239, 255],
+    ]
+    assert result.raw.draw_indices.tolist() == [0, 1]
+    assert result.raw.source_indices.tolist() == [1, 2]
+    assert result.visible.rgba.tolist() == result.raw.rgba.tolist()
+    assert result.visible.source_indices.tolist() == [1, 2]
+    assert geometry_area(result, result.visible, 0) == pytest.approx(
+        2.0, abs=1e-5
+    )
+    assert geometry_area(result, result.visible, 1) == pytest.approx(
+        98.0, abs=1e-5
+    )
+
+
+def test_vectorizer_origin_metadata_does_not_fill_an_authored_hole() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 10 10' data-lumina-origin='image-vectorizer'>"
+        "<path fill='#123456' "
+        "fill-rule='evenodd' d='M0 0H10V10H0Z M4 4H6V6H4Z'/>"
+        "</svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.image_vectorizer_origin is True
+    assert result.raw.geometry_count == 1
+    assert result.raw.component_count == 1
+    assert result.raw.hole_count == 1
+    assert result.visible.hole_count == 1
+    assert geometry_area(result, result.raw, 0) == pytest.approx(96.0, abs=1e-5)
+
+
 @pytest.mark.parametrize(
     ("axis", "expected_geometry_count", "expected_fragment_reasons"),
     [

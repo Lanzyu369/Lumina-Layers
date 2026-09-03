@@ -164,7 +164,7 @@ def test_runtime_package_installs_notices_for_frozen_distributions() -> None:
     assert cmake.count("COMPONENT lumina_svg_core") >= 3
 
 
-def test_clipper_work_limits_cover_each_operation_and_the_document() -> None:
+def test_clipper_work_limits_cover_each_operation_and_complete_document() -> None:
     budget = (PACKAGE_ROOT / "src" / "complexity_budget.h").read_text(
         encoding="utf-8"
     )
@@ -176,21 +176,33 @@ def test_clipper_work_limits_cover_each_operation_and_the_document() -> None:
     assert "consumeClipperIntersectionWork" in budget
     assert "consumeClipperIntersectionCandidates" in budget
     assert "consumeIntersectionWork" in safety
-    assert "m_clipperIntersectionCandidates" in budget
-    assert "m_clipperIntersectionComparisons" in budget
+    assert "MAX_BOOLEAN_INPUT_POINTS_PER_DOCUMENT" in budget
+    assert "MAX_CLIPPER_INTERSECTION_CANDIDATES_PER_DOCUMENT" in budget
+    assert "MAX_CLIPPER_INTERSECTION_COMPARISONS_PER_DOCUMENT" in budget
+    assert "MAX_CLIPPER_OUTPUT_POINTS_PER_DOCUMENT" in budget
+    assert "MAX_CLIPPER_OUTPUT_RINGS_PER_DOCUMENT" in budget
+    assert (
+        "MAX_CLIPPER_ENGINE_INTERSECTION_NODE_ALLOCATIONS_PER_DOCUMENT"
+        in budget
+    )
+    assert (
+        "MAX_CLIPPER_ENGINE_PROCESSED_INTERSECTION_EVENTS_PER_DOCUMENT"
+        in budget
+    )
     assert "m_booleanInputPoints" in budget
-    assert "m_clipperOutputPoints" in budget
-    assert "requireClipperOutputDocumentCapacity" in budget
+    assert "m_clipperIntersectionComparisons" in budget
+    assert "consumeClipperEngineWork" in budget
+    assert "requireClipperOutputCapacity" in budget
     assert "preflightClipperOutput" in safety
-    assert "requireClipperOutputDocumentCapacity(" in safety
+    assert "requireClipperOutputCapacity(" in safety
 
     stroke_expander = (
         PACKAGE_ROOT / "src" / "stroke_expander.cpp"
     ).read_text(encoding="utf-8")
-    assert "requireClipperOutputDocumentCapacity(" in stroke_expander
+    assert "requireClipperOutputCapacity(" in stroke_expander
 
 
-def test_normalized_pair_boolean_charges_exact_document_work_budget() -> None:
+def test_normalized_pair_boolean_relies_on_bounded_clipper_not_shadow_scan() -> None:
     geometry_kernel = (
         PACKAGE_ROOT / "src" / "geometry_kernel.cpp"
     ).read_text(encoding="utf-8")
@@ -200,12 +212,48 @@ def test_normalized_pair_boolean_charges_exact_document_work_budget() -> None:
         "                                const Paths64& second)",
         1,
     )[1].split("\n}\n\nclass PackedBoundsIndex", 1)[0]
-    assert (
-        "requireBoundedClipperIntersections(\n"
-        "        first, second, complexityBudget)"
-        in normalized_pair
-    )
+    assert "requireBoundedClipperIntersections" not in normalized_pair
+    assert "preflightClipperOutput(" in normalized_pair
     assert "CHEAP_CROSS_PRODUCT_LIMIT" not in normalized_pair
+
+
+def test_pinned_clipper_patch_caps_internal_output_allocations() -> None:
+    patch = (
+        PACKAGE_ROOT / "patches" / "clipper2-svg-miter-fallback.patch"
+    ).read_text(encoding="utf-8")
+
+    assert "ClipperExecutionLimitError" in patch
+    assert "MAX_OUTPUT_POINT_ALLOCATIONS" in patch
+    assert "MAX_OUTPUT_RECORD_ALLOCATIONS" in patch
+    assert "MAX_INTERSECTION_NODE_ALLOCATIONS" in patch
+    assert "MAX_PROCESSED_INTERSECTION_EVENTS" in patch
+    assert "NewOutPt" in patch
+    assert "RequireIntersectionNodeCapacity" in patch
+    assert "RequireProcessedIntersectionCapacity" in patch
+    assert "OutputPointAllocationCount" in patch
+    assert "OutputRecordAllocationCount" in patch
+    assert "IntersectionNodeAllocationCount" in patch
+    assert "ProcessedIntersectionEventCount" in patch
+
+
+def test_pinned_clipper_patch_counts_every_processed_intersection() -> None:
+    patch = (
+        PACKAGE_ROOT / "patches" / "clipper2-svg-miter-fallback.patch"
+    ).read_text(encoding="utf-8")
+
+    assert "MAX_INTERSECTION_NODE_ALLOCATIONS" in patch
+    assert "MAX_PROCESSED_INTERSECTION_EVENTS" in patch
+    assert "RequireIntersectionNodeCapacity();" in patch
+    assert "RequireProcessedIntersectionCapacity();" in patch
+    assert "IntersectionNodeAllocationCount" in patch
+    assert "ProcessedIntersectionEventCount" in patch
+
+    intersect_edges = patch.split(
+        "void ClipperBase::IntersectEdges(Active& e1, Active& e2, "
+        "const Point64& pt)",
+        1,
+    )[1].split("//MANAGE OPEN PATH INTERSECTIONS SEPARATELY", 1)[0]
+    assert "RequireProcessedIntersectionCapacity();" in intersect_edges
 
 
 def test_cmake_revision_cache_arguments_cannot_override_pins(

@@ -39,20 +39,25 @@ inline void preflightClipperOutput(
         inputRings = checkedSizeSum(inputRings, second->size());
     }
     // A segment-pair intersection can add at most one split point to each
-    // participating boundary. Collinear overlap endpoints already exist in
-    // the input. This bounds the complete Boolean output before Clipper owns
-    // any result allocation.
+    // participating input boundary. Use that geometric estimate to reject
+    // obviously oversized operations. The pinned Clipper engine separately
+    // caps every actual output allocation and intersection event, including
+    // duplicated vertices created while it splits and cleans output records.
     const size_t splitPoints = checkedSizeProduct(
         intersectionCandidates, size_t{2});
     const size_t outputPointUpperBound = checkedSizeSum(
         inputPoints, splitPoints);
-    const size_t outputRingUpperBound = std::max(
-        inputRings,
-        checkedSizeSum(outputPointUpperBound, size_t{2}) / 3);
     complexityBudget.requireTransientPointCapacity(
         outputPointUpperBound);
-    complexityBudget.requireClipperOutputDocumentCapacity(
-        outputPointUpperBound, outputRingUpperBound);
+    // Intersections provide a useful upper bound for point allocation, but
+    // dividing that bound by three is not an output-ring count. For example,
+    // thousands of crossing subpaths can all be covered by one enclosing
+    // subpath and normalize to a single ring. Rejecting that theoretical ring
+    // count loses valid SVG geometry. Validate the rings that must already be
+    // represented here; the actual Clipper output is charged immediately
+    // after every operation.
+    complexityBudget.requireClipperOutputCapacity(
+        outputPointUpperBound, inputRings);
 }
 
 namespace clipper_safety_detail {
@@ -837,11 +842,10 @@ inline size_t requireBoundedClipperIntersections(
             count, complexityBudget);
         return 0;
     }
-    // A direct all-pairs upper bound is cheap only for small inputs. Charging
-    // that pessimistic bound for every medium-sized paint can exhaust the
-    // document budget even when the segment boxes are disjoint. Larger
-    // inputs therefore use the bounded index and charge actual box-overlap
-    // candidates before Clipper receives them.
+    // A direct all-pairs upper bound is cheap only for small inputs and badly
+    // exaggerates medium-sized sparse paints. Larger inputs therefore use the
+    // bounded index and check actual box-overlap candidates before Clipper
+    // receives them.
     const size_t directCandidates =
         clipper_safety_detail::allPairCount(count);
     if(directCandidates

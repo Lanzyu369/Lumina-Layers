@@ -27,7 +27,7 @@ public:
     static constexpr size_t MAX_BOOLEAN_INPUT_POINTS_PER_OPERATION =
         16'000'000;
     static constexpr size_t MAX_BOOLEAN_INPUT_POINTS_PER_DOCUMENT =
-        256'000'000;
+        2'000'000'000;
     static constexpr size_t MAX_TRANSIENT_POINTS_PER_OPERATION = 16'000'000;
     static constexpr size_t MAX_RESULT_POINTS = 16'000'000;
     static constexpr size_t MAX_RETAINED_GEOMETRY_POINTS = 16'000'000;
@@ -37,15 +37,25 @@ public:
     static constexpr size_t MAX_CLIPPER_INTERSECTION_COMPARISONS =
         256'000'000;
     static constexpr size_t MAX_CLIPPER_INTERSECTION_CANDIDATES_PER_DOCUMENT =
-        100'000'000;
+        400'000'000;
     static constexpr size_t MAX_CLIPPER_INTERSECTION_COMPARISONS_PER_DOCUMENT =
-        512'000'000;
+        1'000'000'000;
+    static constexpr size_t MAX_CLIPPER_ENGINE_POINT_ALLOCATIONS_PER_DOCUMENT =
+        1'000'000'000;
+    static constexpr size_t MAX_CLIPPER_ENGINE_RECORD_ALLOCATIONS_PER_DOCUMENT =
+        64'000'000;
+    static constexpr size_t
+        MAX_CLIPPER_ENGINE_INTERSECTION_NODE_ALLOCATIONS_PER_DOCUMENT =
+            100'000'000;
+    static constexpr size_t
+        MAX_CLIPPER_ENGINE_PROCESSED_INTERSECTION_EVENTS_PER_DOCUMENT =
+            100'000'000;
     static constexpr size_t MAX_CLIPPER_OUTPUT_POINTS = 16'000'000;
     static constexpr size_t MAX_CLIPPER_OUTPUT_RINGS = 1'000'000;
     static constexpr size_t MAX_CLIPPER_OUTPUT_POINTS_PER_DOCUMENT =
-        256'000'000;
+        1'000'000'000;
     static constexpr size_t MAX_CLIPPER_OUTPUT_RINGS_PER_DOCUMENT =
-        16'000'000;
+        64'000'000;
     static constexpr size_t MAX_COMPOSITOR_BOUNDS_CANDIDATES = 100'000'000;
     static constexpr size_t MAX_STROKE_SIMPLIFICATION_COMPARISONS =
         50'000'000;
@@ -141,6 +151,31 @@ public:
             "clipper_intersection_comparisons_document");
     }
 
+    void consumeClipperEngineWork(size_t pointAllocations,
+                                  size_t recordAllocations,
+                                  size_t intersectionNodeAllocations,
+                                  size_t processedIntersectionEvents)
+    {
+        consume(
+            m_clipperEnginePointAllocations, pointAllocations,
+            MAX_CLIPPER_ENGINE_POINT_ALLOCATIONS_PER_DOCUMENT,
+            "clipper_engine_point_allocations_document");
+        consume(
+            m_clipperEngineRecordAllocations, recordAllocations,
+            MAX_CLIPPER_ENGINE_RECORD_ALLOCATIONS_PER_DOCUMENT,
+            "clipper_engine_record_allocations_document");
+        consume(
+            m_clipperEngineIntersectionNodeAllocations,
+            intersectionNodeAllocations,
+            MAX_CLIPPER_ENGINE_INTERSECTION_NODE_ALLOCATIONS_PER_DOCUMENT,
+            "clipper_engine_intersection_nodes_document");
+        consume(
+            m_clipperEngineProcessedIntersectionEvents,
+            processedIntersectionEvents,
+            MAX_CLIPPER_ENGINE_PROCESSED_INTERSECTION_EVENTS_PER_DOCUMENT,
+            "clipper_engine_processed_intersections_document");
+    }
+
     void requireClipperOutputPointCapacity(size_t count) const
     {
         ensure(
@@ -156,19 +191,11 @@ public:
             "clipper_output_rings");
     }
 
-    void requireClipperOutputDocumentCapacity(
+    void requireClipperOutputCapacity(
         size_t pointCount, size_t ringCount) const
     {
         requireClipperOutputPointCapacity(pointCount);
         requireClipperOutputRingCapacity(ringCount);
-        ensure(
-            m_clipperOutputPoints, pointCount,
-            MAX_CLIPPER_OUTPUT_POINTS_PER_DOCUMENT,
-            "clipper_output_points_document");
-        ensure(
-            m_clipperOutputRings, ringCount,
-            MAX_CLIPPER_OUTPUT_RINGS_PER_DOCUMENT,
-            "clipper_output_rings_document");
     }
 
     void consumeClipperOutputPoints(size_t count)
@@ -226,6 +253,10 @@ private:
     size_t m_resultPoints{0};
     size_t m_clipperIntersectionCandidates{0};
     size_t m_clipperIntersectionComparisons{0};
+    size_t m_clipperEnginePointAllocations{0};
+    size_t m_clipperEngineRecordAllocations{0};
+    size_t m_clipperEngineIntersectionNodeAllocations{0};
+    size_t m_clipperEngineProcessedIntersectionEvents{0};
     size_t m_clipperOutputPoints{0};
     size_t m_clipperOutputRings{0};
     size_t m_compositorBoundsCandidates{0};

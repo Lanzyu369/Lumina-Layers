@@ -188,6 +188,32 @@ void consumeClipperOutput(ComplexityBudget& complexityBudget,
     complexityBudget.consumeClipperOutputRings(paths.size());
 }
 
+void consumeClipperExecution(ComplexityBudget& complexityBudget,
+                             const Clipper64& clipper)
+{
+    complexityBudget.consumeClipperEngineWork(
+        clipper.OutputPointAllocationCount(),
+        clipper.OutputRecordAllocationCount(),
+        clipper.IntersectionNodeAllocationCount(),
+        clipper.ProcessedIntersectionEventCount());
+}
+
+Paths64 executeClipperBoolean(ClipType clipType, FillRule fillRule,
+                              const Paths64& subjects,
+                              const Paths64* clips,
+                              ComplexityBudget& complexityBudget)
+{
+    Paths64 result;
+    Clipper64 clipper;
+    clipper.AddSubject(subjects);
+    if(clips != nullptr)
+        clipper.AddClip(*clips);
+    if(!clipper.Execute(clipType, fillRule, result))
+        throw std::runtime_error("clipper_boolean_failed");
+    consumeClipperExecution(complexityBudget, clipper);
+    return result;
+}
+
 void preflightBoolean(ComplexityBudget& complexityBudget,
                       const Paths64& paths)
 {
@@ -214,8 +240,8 @@ void preflightNormalizedBoolean(ComplexityBudget& complexityBudget,
 {
     consumeBooleanInputs(complexityBudget, paths);
     // A single normalized operand has no boundary intersections left to
-    // discover. Charging another full segment-index pass here duplicated the
-    // work already completed by Clipper and rejected large valid documents.
+    // discover. Another full segment-index pass would duplicate work already
+    // completed by Clipper.
     preflightClipperOutput(paths, nullptr, 0, complexityBudget);
 }
 
@@ -224,13 +250,11 @@ void preflightNormalizedBoolean(ComplexityBudget& complexityBudget,
                                 const Paths64& second)
 {
     consumeBooleanInputs(complexityBudget, first, &second);
-    // Cross-product charging turns many small, sparse Boolean operations into
-    // a false document-limit failure. The bounded intersection helper charges
-    // the actual direct/index work and candidates before Clipper runs.
-    const size_t candidates = requireBoundedClipperIntersections(
-        first, second, complexityBudget);
+    // The pinned Clipper engine caps actual intersections and allocations.
+    // Avoid a second full segment-index pass over already canonical operands;
+    // document-wide engine counters charge the work reported by Clipper.
     preflightClipperOutput(
-        first, &second, candidates, complexityBudget);
+        first, &second, 0, complexityBudget);
 }
 
 class PackedBoundsIndex {
@@ -2037,8 +2061,9 @@ long double polylineFilledAreaUpperBound(
         Paths64 sourcePaths;
         sourcePaths.emplace_back(std::move(path));
         preflightBoolean(complexityBudget, sourcePaths);
-        const auto normalized = Clipper2Lib::Union(
-            sourcePaths, FillRule::NonZero);
+        const auto normalized = executeClipperBoolean(
+            ClipType::Union, FillRule::NonZero,
+            sourcePaths, nullptr, complexityBudget);
         consumeClipperOutput(complexityBudget, normalized);
         for(const auto& ring : normalized) {
             filledArea += translatedGridArea(ring);
@@ -2542,8 +2567,9 @@ PrecisionPaths normalizeFill(const lunasvg::PaintCommand& command,
     preflightBoolean(*domain.complexity_budget, paths);
     double boundaryErrorSource = boundaryErrorSince(domain, traceStart);
     const auto inputPrecision = commandPrecisionError(command, false);
-    auto normalized = Clipper2Lib::Union(
-        paths, clipperFillRule(command.fill_rule));
+    auto normalized = executeClipperBoolean(
+        ClipType::Union, clipperFillRule(command.fill_rule),
+        paths, nullptr, *domain.complexity_budget);
     consumeClipperOutput(*domain.complexity_budget, normalized);
     if(hadAreaPaths && normalized.empty()) {
         fragmentIssues.push_back({
@@ -2636,7 +2662,9 @@ PrecisionPaths normalizeStroke(const lunasvg::PaintCommand& command,
     double boundaryErrorSource = boundaryErrorSince(domain, traceStart);
     const auto inputPrecision = commandPrecisionError(
         geometryCommand, false);
-    auto normalized = Clipper2Lib::Union(paths, FillRule::NonZero);
+    auto normalized = executeClipperBoolean(
+        ClipType::Union, FillRule::NonZero,
+        paths, nullptr, complexityBudget);
     consumeClipperOutput(complexityBudget, normalized);
     if(normalized.empty() && fragmentIssues.empty()) {
         const bool hasPoint = std::any_of(
@@ -2665,7 +2693,7 @@ PrecisionPaths applyActiveClips(
 {
     for(const auto& clip : activeClips) {
         const bool hadArea = !geometry.paths.empty();
-        preflightBoolean(
+        preflightNormalizedBoolean(
             *domain.complexity_budget, geometry.paths, clip.paths);
         geometry.boundary_error_source = std::max(
             geometry.boundary_error_source,
@@ -2676,8 +2704,9 @@ PrecisionPaths applyActiveClips(
         geometry.input_precision_error_y_source = std::max(
             geometry.input_precision_error_y_source,
             clip.input_precision_error_y_source);
-        geometry.paths = Clipper2Lib::Intersect(
-            geometry.paths, clip.paths, FillRule::NonZero);
+        geometry.paths = executeClipperBoolean(
+            ClipType::Intersection, FillRule::NonZero,
+            geometry.paths, &clip.paths, *domain.complexity_budget);
         consumeClipperOutput(
             *domain.complexity_budget, geometry.paths);
         if(hadArea && geometry.paths.empty()) {
@@ -2955,6 +2984,7 @@ bool appendGeometry(GeometryCollection& collection,
     clipper.AddSubject(geometry.paths);
     if(!clipper.Execute(ClipType::Union, FillRule::NonZero, tree))
         throw std::runtime_error("clipper_union_failed");
+    consumeClipperExecution(complexityBudget, clipper);
     requireBoundedPolyTreeOutput(tree, complexityBudget);
     // A Paths64 difference can contain a redundant oriented ring at a
     // touching boundary. Rebuilding the canonical PolyTree may remove that
@@ -3174,9 +3204,10 @@ Paths64 mergeNormalizedCoverage(Paths64 left, Paths64 right,
             merged.emplace_back(std::move(group.front()));
             continue;
         }
-        preflightBoolean(complexityBudget, group);
-        auto normalized = Clipper2Lib::Union(
-            group, FillRule::NonZero);
+        preflightNormalizedBoolean(complexityBudget, group);
+        auto normalized = executeClipperBoolean(
+            ClipType::Union, FillRule::NonZero,
+            group, nullptr, complexityBudget);
         consumeClipperOutput(complexityBudget, normalized);
         const size_t required = checkedSizeSum(
             merged.size(), normalized.size());
@@ -3356,8 +3387,9 @@ CompositedPaths compositePaints(const std::vector<PaintGeometry>& paints,
                 if(!occluders.empty()) {
                     preflightNormalizedBoolean(
                         complexityBudget, subject, occluders);
-                    subject = Clipper2Lib::Difference(
-                        subject, occluders, FillRule::NonZero);
+                    subject = executeClipperBoolean(
+                        ClipType::Difference, FillRule::NonZero,
+                        subject, &occluders, complexityBudget);
                     consumeClipperOutput(complexityBudget, subject);
                 }
                 const size_t required = checkedSizeSum(
@@ -3891,6 +3923,13 @@ std::shared_ptr<NativeResult> analyzeWith(Loader&& loader,
         auto result = std::make_shared<NativeResult>();
         result->status = "unsupported";
         result->reason_code = "unsupported_input_precision";
+        result->input_paint_count = inputPaintCount;
+        result->recorder_seconds = completedRecorderSeconds;
+        return result;
+    } catch(const Clipper2Lib::ClipperExecutionLimitError&) {
+        auto result = std::make_shared<NativeResult>();
+        result->status = "unsupported";
+        result->reason_code = "unsupported_complexity";
         result->input_paint_count = inputPaintCount;
         result->recorder_seconds = completedRecorderSeconds;
         return result;

@@ -121,8 +121,87 @@ def test_many_distinct_overlapping_paints_are_composited_without_pair_gate() -> 
     assert elapsed < 10.0
 
 
+def test_boolean_ring_upper_bound_does_not_reject_a_small_valid_union() -> None:
+    """A theoretical split count is not the number of emitted rings."""
+    stripe_count = 660
+    subpaths = ["M0 0H1000V1000H0Z"]
+    for index in range(stripe_count):
+        y = (index + 1) * 1000 / (stripe_count + 1)
+        subpaths.append(f"M0 {y:.6f}H1000V{y + 0.25:.6f}H0Z")
+    for index in range(stripe_count):
+        x = (index + 1) * 1000 / (stripe_count + 1)
+        subpaths.append(f"M{x:.6f} 0H{x + 0.25:.6f}V1000H{x:.6f}Z")
+
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 1000 1000'>"
+        f"<path fill='#123456' d='{' '.join(subpaths)}'/>"
+        "</svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.reason_code == ""
+    assert result.raw.geometry_count == 1
+    assert result.raw.component_count == 1
+    assert result.raw.hole_count == 0
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="resource is POSIX-only")
-def test_compositor_processes_large_bounded_overlap_without_document_guard(
+def test_cross_operand_ring_amplification_is_bounded_inside_clipper() -> None:
+    """A small pair of canonical operands must not allocate an unbounded result."""
+    script = """
+import json
+import resource
+import sys
+from time import perf_counter
+import lumina_svg_core
+
+count = 1001
+stripe_width = 25.0 / count
+vertical = ' '.join(
+    f'M{x:.12g} 0H{x + stripe_width:.12g}V100H{x:.12g}Z'
+    for x in (index * 100.0 / count for index in range(count))
+)
+horizontal = ' '.join(
+    f'M0 {y:.12g}H100V{y + stripe_width:.12g}H0Z'
+    for y in (index * 100.0 / count for index in range(count))
+)
+svg = (
+    "<svg viewBox='0 0 100 100'><defs><clipPath id='c'>"
+    f"<path d='{vertical}'/></clipPath></defs>"
+    f"<path clip-path='url(#c)' fill='red' d='{horizontal}'/></svg>"
+)
+before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+started = perf_counter()
+result = lumina_svg_core.analyze_svg_svg(svg, 100.0, 0.02)
+after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+unit = 1 if sys.platform == 'darwin' else 1024
+print(json.dumps({
+    'status': result.status,
+    'reason': result.reason_code,
+    'elapsed': perf_counter() - started,
+    'rss_delta_bytes': max(0, after - before) * unit,
+}))
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=15.0,
+    )
+    evidence = json.loads(completed.stdout)
+
+    assert evidence["status"] == "unsupported"
+    assert evidence["reason"] == "unsupported_complexity"
+    assert evidence["elapsed"] < 5.0
+    rss_limit_mib = 384 if sys.platform == "darwin" else 512
+    assert evidence["rss_delta_bytes"] < rss_limit_mib * 1024 * 1024
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="resource is POSIX-only")
+def test_compositor_processes_large_bounded_overlap_within_document_budget(
 ) -> None:
     script = """
 import json
@@ -175,7 +254,7 @@ print(json.dumps({
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="resource is POSIX-only")
-def test_compositor_handles_dense_later_occluders_without_document_guard() -> None:
+def test_compositor_handles_dense_later_occluders_within_document_budget() -> None:
     script = """
 import json
 from time import perf_counter

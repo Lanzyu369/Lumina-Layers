@@ -1,3 +1,197 @@
+diff --git a/CPP/Clipper2Lib/include/clipper2/clipper.engine.h b/CPP/Clipper2Lib/include/clipper2/clipper.engine.h
+index f4e1e18..b17f17f 100644
+--- a/CPP/Clipper2Lib/include/clipper2/clipper.engine.h
++++ b/CPP/Clipper2Lib/include/clipper2/clipper.engine.h
+@@ -14,6 +14,7 @@
+ #include <queue>
+ #include <functional>
+ #include <memory>
++#include <stdexcept>
+ 
+ namespace Clipper2Lib {
+ 
+@@ -31,6 +32,12 @@ namespace Clipper2Lib {
+ 	enum class PathType { Subject, Clip };
+ 	enum class JoinWith { NoJoin, Left, Right };
+ 
++	class ClipperExecutionLimitError : public std::runtime_error {
++	public:
++		explicit ClipperExecutionLimitError(const char* limit) :
++			std::runtime_error(limit) {}
++	};
++
+ 	enum class VertexFlags : uint32_t {
+ 		Empty = 0, OpenStart = 1, OpenEnd = 2, LocalMax = 4, LocalMin = 8
+ 	};
+@@ -191,6 +198,10 @@ namespace Clipper2Lib {
+ 
+ 	class ClipperBase {
+ 	private:
++		static constexpr size_t MAX_OUTPUT_POINT_ALLOCATIONS = 16000000;
++		static constexpr size_t MAX_OUTPUT_RECORD_ALLOCATIONS = 1000000;
++		static constexpr size_t MAX_INTERSECTION_NODE_ALLOCATIONS = 20000000;
++		static constexpr size_t MAX_PROCESSED_INTERSECTION_EVENTS = 20000000;
+ 		ClipType cliptype_ = ClipType::NoClip;
+ 		FillRule fillrule_ = FillRule::EvenOdd;
+ 		FillRule fillpos = FillRule::Positive;
+@@ -206,6 +217,10 @@ namespace Clipper2Lib {
+ 		IntersectNodeList intersect_nodes_;
+         HorzSegmentList horz_seg_list_;
+ 		std::vector<HorzJoin> horz_join_list_;
++		size_t output_point_allocations_ = 0;
++		size_t output_record_allocations_ = 0;
++		size_t intersection_node_allocations_ = 0;
++		size_t processed_intersection_events_ = 0;
+ 		void Reset();
+ 		inline void InsertScanline(int64_t y);
+ 		inline bool PopScanline(int64_t &y);
+@@ -231,8 +246,12 @@ namespace Clipper2Lib {
+ 		void AddNewIntersectNode(Active &e1, Active &e2, const int64_t top_y);
+ 		bool BuildIntersectList(const int64_t top_y);
+ 		void ProcessIntersectList();
++		void RequireIntersectionNodeCapacity();
++		void RequireProcessedIntersectionCapacity();
+ 		void SwapPositionsInAEL(Active& edge1, Active& edge2);
+ 		OutRec* NewOutRec();
++		OutPt* NewOutPt(const Point64& pt, OutRec* outrec);
++		OutPt* DuplicateOp(OutPt* op, bool insert_after);
+ 		OutPt* AddOutPt(const Active &e, const Point64& pt);
+ 		OutPt* AddLocalMinPoly(Active &e1, Active &e2,
+ 			const Point64& pt, bool is_new = false);
+@@ -281,6 +300,10 @@ namespace Clipper2Lib {
+ 		bool PreserveCollinear() const { return preserve_collinear_;};
+ 		void ReverseSolution(bool val) { reverse_solution_ = val; };
+ 		bool ReverseSolution() const { return reverse_solution_; };
++		size_t OutputPointAllocationCount() const { return output_point_allocations_; };
++		size_t OutputRecordAllocationCount() const { return output_record_allocations_; };
++		size_t IntersectionNodeAllocationCount() const { return intersection_node_allocations_; }
++		size_t ProcessedIntersectionEventCount() const { return processed_intersection_events_; }
+ 		void Clear();
+ 		void AddReuseableData(const ReuseableDataContainer64& reuseable_data);
+ #ifdef USINGZ
+diff --git a/CPP/Clipper2Lib/src/clipper.engine.cpp b/CPP/Clipper2Lib/src/clipper.engine.cpp
+index ad99dc7..df2d36f 100644
+--- a/CPP/Clipper2Lib/src/clipper.engine.cpp
++++ b/CPP/Clipper2Lib/src/clipper.engine.cpp
+@@ -275,9 +275,17 @@ namespace Clipper2Lib {
+     return cnt;
+   }
+ 
+-  inline OutPt* DuplicateOp(OutPt* op, bool insert_after)
++  OutPt* ClipperBase::NewOutPt(const Point64& pt, OutRec* outrec)
+   {
+-    OutPt* result = new OutPt(op->pt, op->outrec);
++    if (output_point_allocations_ >= MAX_OUTPUT_POINT_ALLOCATIONS)
++      throw ClipperExecutionLimitError("clipper_output_points");
++    ++output_point_allocations_;
++    return new OutPt(pt, outrec);
++  }
++
++  OutPt* ClipperBase::DuplicateOp(OutPt* op, bool insert_after)
++  {
++    OutPt* result = NewOutPt(op->pt, op->outrec);
+     if (insert_after)
+     {
+       result->next = op->next;
+@@ -798,6 +806,10 @@ namespace Clipper2Lib {
+     actives_ = nullptr;
+     sel_ = nullptr;
+     succeeded_ = true;
++    output_point_allocations_ = 0;
++    output_record_allocations_ = 0;
++    intersection_node_allocations_ = 0;
++    processed_intersection_events_ = 0;
+   }
+ 
+ 
+@@ -1371,7 +1383,7 @@ namespace Clipper2Lib {
+       }
+     }
+ 
+-    OutPt* op = new OutPt(pt, outrec);
++    OutPt* op = NewOutPt(pt, outrec);
+     outrec->pts = op;
+     return op;
+   }
+@@ -1482,6 +1494,9 @@ namespace Clipper2Lib {
+ 
+   OutRec* ClipperBase::NewOutRec()
+   {
++    if (output_record_allocations_ >= MAX_OUTPUT_RECORD_ALLOCATIONS)
++      throw ClipperExecutionLimitError("clipper_output_rings");
++    ++output_record_allocations_;
+     OutRec* result = new OutRec();
+     result->idx = outrec_list_.size();
+     outrec_list_.emplace_back(result);
+@@ -1513,7 +1528,7 @@ namespace Clipper2Lib {
+     else if (pt == op_back->pt)
+       return op_back;
+ 
+-    new_op = new OutPt(pt, outrec);
++    new_op = NewOutPt(pt, outrec);
+     op_back->prev = new_op;
+     new_op->prev = op_front;
+     new_op->next = op_back;
+@@ -1595,7 +1610,7 @@ namespace Clipper2Lib {
+     }
+     else
+     {
+-      OutPt* newOp2 = new OutPt(ip, prevOp->outrec);
++      OutPt* newOp2 = NewOutPt(ip, prevOp->outrec);
+       newOp2->prev = prevOp;
+       newOp2->next = nextNextOp;
+       nextNextOp->prev = newOp2;
+@@ -1615,7 +1630,7 @@ namespace Clipper2Lib {
+ 
+       splitOp->outrec = newOr;
+       splitOp->next->outrec = newOr;
+-      OutPt* newOp = new OutPt(ip, newOr);
++      OutPt* newOp = NewOutPt(ip, newOr);
+       newOp->prev = splitOp->next;
+       newOp->next = splitOp;
+       newOr->pts = newOp;
+@@ -1711,7 +1726,7 @@ namespace Clipper2Lib {
+ 
+     e.outrec = outrec;
+ 
+-    OutPt* op = new OutPt(pt, outrec);
++    OutPt* op = NewOutPt(pt, outrec);
+     outrec->pts = op;
+     return op;
+   }
+@@ -1782,6 +1797,7 @@ namespace Clipper2Lib {
+ 
+   void ClipperBase::IntersectEdges(Active& e1, Active& e2, const Point64& pt)
+   {
++    RequireProcessedIntersectionCapacity();
+     //MANAGE OPEN PATH INTERSECTIONS SEPARATELY ...
+     if (has_open_paths_ && (IsOpen(e1) || IsOpen(e2)))
+     {
+@@ -2384,9 +2400,24 @@ namespace Clipper2Lib {
+         else ip.x = TopX(e2, ip.y);
+       }
+     }
++    RequireIntersectionNodeCapacity();
+     intersect_nodes_.emplace_back(&e1, &e2, ip);
+   }
+ 
++  void ClipperBase::RequireIntersectionNodeCapacity()
++  {
++    if (intersection_node_allocations_ >= MAX_INTERSECTION_NODE_ALLOCATIONS)
++      throw ClipperExecutionLimitError("clipper_intersection_nodes");
++    ++intersection_node_allocations_;
++  }
++
++  void ClipperBase::RequireProcessedIntersectionCapacity()
++  {
++    if (processed_intersection_events_ >= MAX_PROCESSED_INTERSECTION_EVENTS)
++      throw ClipperExecutionLimitError("clipper_processed_intersections");
++    ++processed_intersection_events_;
++  }
++
+   bool ClipperBase::BuildIntersectList(const int64_t top_y)
+   {
+     if (!actives_ || !actives_->next_in_ael) return false;
 diff --git a/CPP/Clipper2Lib/src/clipper.offset.cpp b/CPP/Clipper2Lib/src/clipper.offset.cpp
 index d9f31cf..0252a27 100644
 --- a/CPP/Clipper2Lib/src/clipper.offset.cpp

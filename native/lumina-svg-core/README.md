@@ -67,8 +67,15 @@ context. Generated `<use>` shadow children are not recopied as source DOM; the
 running counter remains a backstop for every actual clone. Documents already
 known to use unsupported SVG semantics skip clone expansion.
 
-The geometry kernel checks integer overflow, curve-generation work, and the
-measured candidates plus actual input/output size of Clipper operations.
+The geometry kernel checks integer overflow, curve-generation work, and each
+Clipper operation's input and geometric point estimate. The pinned Clipper
+patch checks actual output-point allocations, output-record allocations,
+intersection-node allocations, and every processed intersection inside the
+engine before each allocation or event is accepted. Document counters charge
+actual Boolean inputs, safety-index work, engine work, and returned output
+rather than a theoretical output-ring count.
+Raw paths retain a bounded self-intersection preflight; operands already
+canonicalized by Clipper are not scanned again by a shadow Boolean pass.
 Nested axis-aligned rectangle occluders are reduced by an exact containment
 proof; all other paints retain normal SVG paint-order compositing. A genuine
 resource failure returns empty native geometry with `unsupported_complexity`;
