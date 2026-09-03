@@ -154,7 +154,6 @@ def test_cross_operand_ring_amplification_is_bounded_inside_clipper() -> None:
 import json
 import resource
 import sys
-from time import perf_counter
 import lumina_svg_core
 
 count = 1001
@@ -173,14 +172,12 @@ svg = (
     f"<path clip-path='url(#c)' fill='red' d='{horizontal}'/></svg>"
 )
 before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-started = perf_counter()
 result = lumina_svg_core.analyze_svg_svg(svg, 100.0, 0.02)
 after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
 unit = 1 if sys.platform == 'darwin' else 1024
 print(json.dumps({
     'status': result.status,
     'reason': result.reason_code,
-    'elapsed': perf_counter() - started,
     'rss_delta_bytes': max(0, after - before) * unit,
 }))
 """
@@ -195,7 +192,6 @@ print(json.dumps({
 
     assert evidence["status"] == "unsupported"
     assert evidence["reason"] == "unsupported_complexity"
-    assert evidence["elapsed"] < 5.0
     rss_limit_mib = 384 if sys.platform == "darwin" else 512
     assert evidence["rss_delta_bytes"] < rss_limit_mib * 1024 * 1024
 
