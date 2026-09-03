@@ -1,4 +1,4 @@
-import { useMemo, useEffect, useState } from "react";
+import { useMemo, useEffect, useLayoutEffect, useState } from "react";
 import { useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
@@ -8,13 +8,11 @@ import { useConverterStore } from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
 import { getSlicerLogoSource } from "../utils/slicerBranding";
 import { disposeMeshResources } from "../utils/threeDisposal";
-import {
-  resolveBedPlatformColors,
-  type BedSurfaceColors,
-} from "./themeConfig";
+import { resolveBedPlatformColors } from "./themeConfig";
 import {
   LUMINA_BED_MARK_URL,
-  buildBedTextureSvg,
+  createBedTextureRequest,
+  stageBedTextureReplacement,
 } from "./bedPlatformTexture";
 import {
   computeBedPreviewCameraPose,
@@ -65,48 +63,6 @@ function imageElementToDataUrl(image: HTMLImageElement | null): string | null {
   } catch {
     return null;
   }
-}
-
-/**
- * Create a scalable SVG-backed texture for the print-bed surface.
- * 使用可缩放 SVG 生成热床表面纹理。
- */
-function createBedTexture(
-  widthMm: number,
-  heightMm: number,
-  colors: BedSurfaceColors,
-  gridVisible: boolean,
-  luminaMarkImage: HTMLImageElement | null,
-  slicerLogoImage: HTMLImageElement | null,
-): THREE.Texture {
-  const svg = buildBedTextureSvg({
-    widthMm,
-    heightMm,
-    colors,
-    gridVisible,
-    luminaMarkDataUrl: imageElementToDataUrl(luminaMarkImage),
-    slicerLogoDataUrl: imageElementToDataUrl(slicerLogoImage),
-    slicerLogoAspectRatio: slicerLogoImage
-      ? (slicerLogoImage.naturalWidth || 1) /
-        (slicerLogoImage.naturalHeight || 1)
-      : 1,
-  });
-  const image = new Image();
-  const texture = new THREE.Texture(image);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.magFilter = THREE.LinearFilter;
-  texture.minFilter = THREE.LinearMipmapLinearFilter;
-  texture.generateMipmaps = true;
-  texture.anisotropy = 4;
-  image.addEventListener(
-    "load",
-    () => {
-      texture.needsUpdate = true;
-    },
-    { once: true },
-  );
-  image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-  return texture;
 }
 
 function useNativeBedGeometry(
@@ -226,35 +182,48 @@ export default function BedPlatform({
     const geo = nativeBedGeometry
       ? nativeBedGeometry.clone()
       : createFallbackBedGeometry(bedDims.w, bedDims.h);
-    const texture = createBedTexture(
-      bedDims.w,
-      bedDims.h,
-      bedColors,
-      gridVisible,
-      luminaMarkImage,
-      slicerLogoImage,
-    );
     const mat = new THREE.MeshStandardMaterial({
-      map: texture,
       roughness: 0.68,
       metalness: 0.12,
       side: THREE.DoubleSide,
     });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.name = "scene-build-plate";
-    mesh.userData.gridVisible = gridVisible;
     mesh.userData.bedGeometrySource = nativeBedGeometry
       ? "slicer-native"
       : "dimensional-fallback";
     mesh.position.set(0, 0, -0.1);
     return mesh;
+  }, [bedDims, nativeBedGeometry]);
+
+  useLayoutEffect(() => {
+    const material = bedMesh.material as THREE.MeshStandardMaterial;
+    bedMesh.userData.gridVisible = gridVisible;
+    const request = createBedTextureRequest({
+      widthMm: bedDims.w,
+      heightMm: bedDims.h,
+      colors: bedColors,
+      gridVisible,
+      luminaMarkDataUrl: imageElementToDataUrl(luminaMarkImage),
+      slicerLogoDataUrl: imageElementToDataUrl(slicerLogoImage),
+      slicerLogoAspectRatio: slicerLogoImage
+        ? (slicerLogoImage.naturalWidth || 1) /
+          (slicerLogoImage.naturalHeight || 1)
+        : 1,
+    });
+    return stageBedTextureReplacement(
+      material,
+      request,
+      bedColors.bedInner,
+    );
   }, [
-    bedDims,
-    gridVisible,
     bedColors,
+    bedDims.h,
+    bedDims.w,
+    bedMesh,
+    gridVisible,
     luminaMarkImage,
     slicerLogoImage,
-    nativeBedGeometry,
   ]);
 
   useEffect(() => {

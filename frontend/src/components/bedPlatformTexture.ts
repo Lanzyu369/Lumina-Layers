@@ -1,3 +1,5 @@
+import * as THREE from "three";
+
 const BED_TEXTURE_PIXELS_PER_MM = 2;
 const BED_TEXTURE_RASTER_SCALE = 4;
 const BED_TEXTURE_MAX_RASTER_EDGE_PX = 4096;
@@ -76,6 +78,99 @@ export interface BedTextureSvgOptions {
   luminaMarkDataUrl: string | null;
   slicerLogoDataUrl: string | null;
   slicerLogoAspectRatio: number;
+}
+
+export interface BedTextureLoadRequest {
+  ready: Promise<THREE.Texture | null>;
+  cancel: () => void;
+}
+
+/** Load one SVG bed texture without exposing it before its image is ready. */
+export function createBedTextureRequest(
+  options: BedTextureSvgOptions,
+): BedTextureLoadRequest {
+  const image = new Image();
+  const texture = new THREE.Texture(image);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.magFilter = THREE.LinearFilter;
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.generateMipmaps = true;
+  texture.anisotropy = 4;
+
+  let settled = false;
+  let resolveReady!: (value: THREE.Texture | null) => void;
+  const ready = new Promise<THREE.Texture | null>((resolve) => {
+    resolveReady = resolve;
+  });
+  const cleanup = () => {
+    image.removeEventListener("load", handleLoad);
+    image.removeEventListener("error", handleError);
+  };
+  const finish = (value: THREE.Texture | null) => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    resolveReady(value);
+  };
+  const handleLoad = () => {
+    texture.needsUpdate = true;
+    finish(texture);
+  };
+  const handleError = () => {
+    texture.dispose();
+    finish(null);
+  };
+
+  image.addEventListener("load", handleLoad, { once: true });
+  image.addEventListener("error", handleError, { once: true });
+  const svg = buildBedTextureSvg(options);
+  image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+
+  return {
+    ready,
+    cancel: () => {
+      if (settled) return;
+      texture.dispose();
+      finish(null);
+    },
+  };
+}
+
+/** Keep the current material map until its complete replacement can be shown. */
+export function stageBedTextureReplacement(
+  material: THREE.MeshStandardMaterial,
+  request: BedTextureLoadRequest,
+  fallbackColor: string,
+): () => void {
+  let active = true;
+  let committed = false;
+  if (material.map === null) {
+    material.color.set(fallbackColor);
+  }
+
+  void request.ready.then((nextTexture) => {
+    if (nextTexture === null) return;
+    if (!active) {
+      nextTexture.dispose();
+      return;
+    }
+
+    committed = true;
+    const previousTexture = material.map;
+    material.map = nextTexture;
+    material.color.set(0xffffff);
+    material.needsUpdate = true;
+    if (previousTexture && previousTexture !== nextTexture) {
+      previousTexture.dispose();
+    }
+  });
+
+  return () => {
+    active = false;
+    if (!committed) {
+      request.cancel();
+    }
+  };
 }
 
 /**

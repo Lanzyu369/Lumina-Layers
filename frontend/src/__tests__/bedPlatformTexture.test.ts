@@ -42,6 +42,59 @@ describe("virtual build plate texture", () => {
     expect(bedPlatformTextureModule.LUMINA_BED_MARK_URL).toBe("./favicon.ico");
   });
 
+  it("keeps the current renderable bed texture until a theme replacement is ready", async () => {
+    const stageBedTextureReplacement = (
+      bedPlatformTextureModule as unknown as {
+        stageBedTextureReplacement?: (
+          material: THREE.MeshStandardMaterial,
+          request: {
+            ready: Promise<THREE.Texture | null>;
+            cancel: () => void;
+          },
+          fallbackColor: string,
+        ) => () => void;
+      }
+    ).stageBedTextureReplacement;
+
+    expect(stageBedTextureReplacement).toBeTypeOf("function");
+    if (!stageBedTextureReplacement) return;
+
+    const currentTexture = new THREE.Texture({ width: 1, height: 1 });
+    currentTexture.needsUpdate = true;
+    const nextTexture = new THREE.Texture({ width: 2, height: 2 });
+    nextTexture.needsUpdate = true;
+    const material = new THREE.MeshStandardMaterial({ map: currentTexture });
+    const cancel = vi.fn();
+    let resolveReady!: (texture: THREE.Texture | null) => void;
+    const ready = new Promise<THREE.Texture | null>((resolve) => {
+      resolveReady = resolve;
+    });
+    const currentDispose = vi.fn();
+    currentTexture.addEventListener("dispose", currentDispose);
+
+    const stop = stageBedTextureReplacement(
+      material,
+      { ready, cancel },
+      THEME_CONFIG.dark.bedInner,
+    );
+
+    expect(material.map).toBe(currentTexture);
+    expect(material.map?.version).toBeGreaterThan(0);
+    expect(currentDispose).not.toHaveBeenCalled();
+
+    resolveReady(nextTexture);
+    await ready;
+    await Promise.resolve();
+
+    expect(material.map).toBe(nextTexture);
+    expect(currentDispose).toHaveBeenCalledOnce();
+    stop();
+    expect(cancel).not.toHaveBeenCalled();
+
+    nextTexture.dispose();
+    material.dispose();
+  });
+
   it("renders an H2D SVG texture at four times the legacy raster density", () => {
     const computeBedTextureRasterSize = (
       bedPlatformTextureModule as unknown as {
