@@ -23,6 +23,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -2839,17 +2840,24 @@ bool commandNeedsNormalization(const lunasvg::PaintCommand& command)
         || command.kind == lunasvg::PaintCommandKind::Stroke;
 }
 
+constexpr size_t MAX_REPLAY_WORKERS = 16;
+
 size_t configuredReplayWorkerCount(size_t taskCount, size_t inputPointCount)
 {
     if(taskCount == 0)
         return 0;
+
+    const auto boundedWorkerCount = [taskCount](size_t requested) {
+        return std::min(
+            std::min(taskCount, requested), MAX_REPLAY_WORKERS);
+    };
 
     if(const char* value = std::getenv("LUMINA_SVG_REPLAY_THREADS")) {
         size_t requested = 0;
         const char* end = value + std::char_traits<char>::length(value);
         const auto parsed = std::from_chars(value, end, requested);
         if(parsed.ec == std::errc{} && parsed.ptr == end && requested > 0)
-            return std::min(taskCount, requested);
+            return boundedWorkerCount(requested);
     }
 
     constexpr size_t MIN_PARALLEL_TASKS = 8;
@@ -2861,7 +2869,7 @@ size_t configuredReplayWorkerCount(size_t taskCount, size_t inputPointCount)
         return 1;
     const size_t hardwareThreads = std::max(
         size_t{1}, static_cast<size_t>(std::thread::hardware_concurrency()));
-    return std::min(taskCount, hardwareThreads);
+    return boundedWorkerCount(hardwareThreads);
 }
 
 struct PreparedCommandNormalization {
@@ -2874,6 +2882,7 @@ struct PreparedCommandNormalization {
 
 struct PreparedNormalizationBatch {
     std::vector<PreparedCommandNormalization> commands;
+    std::unique_ptr<ParallelComplexityGate> parallel_gate;
     size_t worker_count{0};
 };
 
@@ -2882,25 +2891,36 @@ PreparedNormalizationBatch prepareCommandNormalizations(
     const PhysicalDomain& domain)
 {
     PreparedNormalizationBatch batch;
-    std::vector<size_t> taskIndices;
-    taskIndices.reserve(commands.size());
+    size_t taskCount = 0;
     size_t inputPointCount = 0;
-    for(size_t index = 0; index < commands.size(); ++index) {
-        if(!commandNeedsNormalization(commands[index]))
+    for(const auto& command : commands) {
+        if(!commandNeedsNormalization(command))
             continue;
-        taskIndices.push_back(index);
+        taskCount = checkedSizeSum(taskCount, 1);
         inputPointCount = checkedSizeSum(
-            inputPointCount, commands[index].path_points.size());
+            inputPointCount, command.path_points.size());
     }
     batch.worker_count = configuredReplayWorkerCount(
-        taskIndices.size(), inputPointCount);
+        taskCount, inputPointCount);
     if(batch.worker_count < 2)
         return batch;
 
+    std::vector<size_t> taskIndices;
+    taskIndices.reserve(taskCount);
+    for(size_t index = 0; index < commands.size(); ++index) {
+        if(commandNeedsNormalization(commands[index]))
+            taskIndices.push_back(index);
+    }
     batch.commands.resize(commands.size());
+    batch.parallel_gate = std::make_unique<ParallelComplexityGate>();
+    domain.complexity_budget->seedParallelGate(*batch.parallel_gate);
     std::atomic<size_t> nextTask{0};
+    std::atomic<bool> taskFailed{false};
     const auto runTasks = [&]() {
         while(true) {
+            if(taskFailed.load(std::memory_order_acquire)
+                    || batch.parallel_gate->exceeded())
+                return;
             const size_t taskOffset = nextTask.fetch_add(
                 1, std::memory_order_relaxed);
             if(taskOffset >= taskIndices.size())
@@ -2910,6 +2930,8 @@ PreparedNormalizationBatch prepareCommandNormalizations(
             auto& prepared = batch.commands[commandIndex];
             try {
                 PhysicalDomain taskDomain = domain;
+                prepared.complexity_budget.attachParallelGate(
+                    batch.parallel_gate.get());
                 taskDomain.complexity_budget = &prepared.complexity_budget;
                 taskDomain.topology_trace = domain.topology_trace == nullptr
                     ? nullptr : &prepared.topology_trace;
@@ -2919,25 +2941,47 @@ PreparedNormalizationBatch prepareCommandNormalizations(
                     : normalizeFill(command, taskDomain);
             } catch(...) {
                 prepared.failure = std::current_exception();
+                taskFailed.store(true, std::memory_order_release);
             }
+            prepared.complexity_budget.releaseParallelReservations();
             prepared.ready = true;
         }
     };
 
     std::vector<std::thread> workers;
     workers.reserve(batch.worker_count > 0 ? batch.worker_count - 1 : 0);
+    bool threadStartFailed = false;
     try {
-        for(size_t index = 1; index < batch.worker_count; ++index)
-            workers.emplace_back(runTasks);
+        for(size_t index = 1; index < batch.worker_count; ++index) {
+            try {
+                workers.emplace_back(runTasks);
+            } catch(const std::system_error&) {
+                threadStartFailed = true;
+                break;
+            }
+        }
     } catch(...) {
-        runTasks();
+        taskFailed.store(true, std::memory_order_release);
         for(auto& worker : workers)
             worker.join();
         throw;
     }
+    if(threadStartFailed && workers.empty()) {
+        batch.commands.clear();
+        batch.parallel_gate.reset();
+        batch.worker_count = 1;
+        return batch;
+    }
+    batch.worker_count = workers.size() + 1;
     runTasks();
     for(auto& worker : workers)
         worker.join();
+    if(taskFailed.load(std::memory_order_acquire)
+            || batch.parallel_gate->exceeded()) {
+        std::vector<PreparedCommandNormalization>().swap(batch.commands);
+        batch.parallel_gate.reset();
+        batch.worker_count = 1;
+    }
     return batch;
 }
 

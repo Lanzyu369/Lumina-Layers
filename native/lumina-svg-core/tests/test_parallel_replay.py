@@ -86,26 +86,128 @@ def _parallel_fixture_svg() -> str:
     )
 
 
+def _nested_parallel_fixture_svg() -> str:
+    paints = "".join(
+        (
+            f"<path d='M{2 + index * 4} 2h3v16h-3z' "
+            f"fill='rgb({20 + index * 20},40,{220 - index * 20})' "
+            "fill-opacity='.8'/>"
+        )
+        for index in range(8)
+    )
+    return (
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 20'>"
+        "<defs>"
+        "<clipPath id='ring' clip-rule='evenodd'>"
+        "<path d='M1 1H39V19H1Z M15 6H25V14H15Z'/>"
+        "</clipPath>"
+        "<clipPath id='inset' transform='translate(.5 .5)'>"
+        "<rect width='39' height='19'/>"
+        "</clipPath>"
+        "</defs>"
+        "<g opacity='.75' clip-path='url(#ring)' transform='translate(.25 0)'>"
+        "<g opacity='.5' clip-path='url(#inset)'>"
+        "<rect width='40' height='20' fill='#010203'/>"
+        + paints
+        + "<path d='M2 10L12 10' fill='#abcdef'/>"
+        "<path d='M2 17H38' fill='none' "
+        "stroke='#123456' stroke-opacity='.6' stroke-width='1.25'/>"
+        "</g></g></svg>"
+    )
+
+
+def _analyze(svg: str) -> Any:
+    return lumina_svg_core.analyze_svg_svg(
+        svg,
+        target_width_mm=220.0,
+        tolerance_mm=0.02,
+    )
+
+
 def test_parallel_replay_matches_forced_serial_output_byte_for_byte(
     monkeypatch,
 ) -> None:
     svg = _parallel_fixture_svg()
 
     monkeypatch.setenv("LUMINA_SVG_REPLAY_THREADS", "1")
-    serial = lumina_svg_core.analyze_svg_svg(
-        svg,
-        target_width_mm=220.0,
-        tolerance_mm=0.02,
-    )
+    serial = _analyze(svg)
 
     monkeypatch.setenv("LUMINA_SVG_REPLAY_THREADS", "4")
-    parallel = lumina_svg_core.analyze_svg_svg(
-        svg,
-        target_width_mm=220.0,
-        tolerance_mm=0.02,
-    )
+    parallel = _analyze(svg)
 
     assert serial.status == parallel.status == "supported"
     assert serial.replay_worker_count == 1
     assert parallel.replay_worker_count == 4
     assert _result_snapshot(parallel) == _result_snapshot(serial)
+
+
+def test_parallel_replay_preserves_nested_parser_semantics(monkeypatch) -> None:
+    svg = _nested_parallel_fixture_svg()
+
+    monkeypatch.setenv("LUMINA_SVG_REPLAY_THREADS", "1")
+    serial = _analyze(svg)
+
+    monkeypatch.setenv("LUMINA_SVG_REPLAY_THREADS", "4")
+    parallel = _analyze(svg)
+
+    assert serial.status == parallel.status == "supported"
+    assert serial.replay_worker_count == 1
+    assert parallel.replay_worker_count == 4
+    assert serial.raw.hole_count >= 1
+    assert serial.unprintable_fragments.reason_codes == ("line_only",)
+    assert _result_snapshot(parallel) == _result_snapshot(serial)
+
+
+def test_small_auto_workload_stays_serial(monkeypatch) -> None:
+    monkeypatch.delenv("LUMINA_SVG_REPLAY_THREADS", raising=False)
+
+    result = _analyze(
+        "<svg viewBox='0 0 10 10'>"
+        "<rect width='10' height='10' fill='#123456'/>"
+        "</svg>"
+    )
+
+    assert result.status == "supported"
+    assert result.replay_worker_count == 1
+
+
+def test_requested_worker_count_is_bounded_and_output_is_stable(
+    monkeypatch,
+) -> None:
+    svg = _parallel_fixture_svg()
+
+    monkeypatch.setenv("LUMINA_SVG_REPLAY_THREADS", "1")
+    serial = _analyze(svg)
+
+    monkeypatch.setenv("LUMINA_SVG_REPLAY_THREADS", "250000")
+    bounded = _analyze(svg)
+
+    assert bounded.status == "supported"
+    assert 1 <= bounded.replay_worker_count <= 16
+    assert _result_snapshot(bounded) == _result_snapshot(serial)
+
+
+def test_parallel_normalization_failure_replays_in_document_order(
+    monkeypatch,
+) -> None:
+    valid = "".join(
+        f"<rect x='{index * 10}' width='8' height='10'/>"
+        for index in range(7)
+    )
+    svg = (
+        "<svg viewBox='0 0 100 10'>"
+        + valid
+        + "<path d='M0 5H100' fill='none' stroke='red' stroke-width='1' "
+        "stroke-dasharray='0.00000001 0.00000001'/>"
+        "</svg>"
+    )
+
+    monkeypatch.setenv("LUMINA_SVG_REPLAY_THREADS", "1")
+    serial = _analyze(svg)
+
+    monkeypatch.setenv("LUMINA_SVG_REPLAY_THREADS", "4")
+    retried = _analyze(svg)
+
+    assert serial.status == retried.status == "unsupported"
+    assert serial.reason_code == retried.reason_code == "unsupported_complexity"
+    assert _result_snapshot(retried) == _result_snapshot(serial)

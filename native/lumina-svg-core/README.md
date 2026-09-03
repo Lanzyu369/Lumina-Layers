@@ -61,10 +61,15 @@ documents whose path workload is large enough to benefit. Results, topology
 metadata, resource accounting, and failures are committed in original paint
 order, so parallel and serial output is byte-for-byte identical. Set
 `LUMINA_SVG_REPLAY_THREADS` to a positive integer to force a worker count for
-benchmarking or host-level scheduling; otherwise the core selects between one
-worker and the available hardware threads from the recorded path workload.
-`NativeResult.replay_worker_count` reports the worker count used by the final
-geometry replay.
+benchmarking or host-level scheduling; requests and automatic selection are
+both capped at 16 workers. Otherwise the core selects between one worker and
+the available hardware threads from the recorded path workload. Parallel tasks
+share the document resource budget. If that aggregate budget is reached, a
+normalization fails, or worker creation is unavailable, the core discards
+staged work and replays serially in document order. This preserves the serial
+result or failure instead of rejecting an SVG only because parallel execution
+was attempted. `NativeResult.replay_worker_count` reports the worker count
+used by the final geometry replay.
 
 ## Fail-closed resource and precision policy
 
@@ -135,7 +140,7 @@ not stored in either report.
 
 The public-entry benchmark also includes a synthetic alpha-heavy case with 32
 source paints and 256 overlap cells. It completes the full Lumina
-host application's public analysis path in a 0.017911-second warm median on the
+host application's public analysis path in a 0.018102-second warm median on the
 recorded reference host; this measurement is observational and adds no
 alpha-specific rejection threshold.
 

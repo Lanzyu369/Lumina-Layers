@@ -91,12 +91,17 @@ original reverse-occlusion fast path.
 Independent fill, stroke, and clip-path normalization is scheduled across
 native workers when the recorded path workload is large enough to repay thread
 startup and result staging. Each worker owns its Clipper state, resource
-accounting, and topology trace. Geometry, failures, counters, and topology are
+accounting, and topology trace, while an atomic aggregate gate enforces the
+same document budget across all tasks. Geometry, counters, and topology are
 then committed in original command order before clipping and compositing, so
-serial and parallel execution have the same byte-level output contract. Small
-or simple documents stay on the original serial path and do not allocate the
-parallel staging buffer. `LUMINA_SVG_REPLAY_THREADS` can force a positive
-worker count for deterministic differential testing and host-level scheduling.
+serial and parallel execution have the same byte-level output contract. If a
+parallel task fails, the aggregate gate is reached, or a requested worker
+cannot be created, staged work is discarded and normalization is replayed in
+document order. That makes the serial result and failure reason authoritative.
+Small or simple documents stay on the original serial path and do not allocate
+the parallel staging buffer. `LUMINA_SVG_REPLAY_THREADS` can force a positive
+worker count for deterministic differential testing and host-level scheduling;
+forced and automatic selection are capped at 16 workers.
 
 Clipper input and geometric point estimates are checked per operation. The
 fixed Clipper patch checks actual output-point allocations, output-record
@@ -128,9 +133,9 @@ workers.
 |---|---:|
 | Fresh fixed-patch native build | PASS |
 | macOS 12.0 arm64 wheel build/install/runtime verification | PASS |
-| Standalone native suite from current Release extension | 587 passed; also 587 with 4 forced replay workers |
+| Standalone native suite from clean macOS 12 wheel | 591 passed; also 591 with 4 forced replay workers |
 | Former-alpha corpus through the Lumina adapter | 31 / 31 native supported |
-| Native differential/adapter/VectorAnalysis/packaging suite | 180 passed |
+| Native differential/adapter/VectorAnalysis/packaging suite | 181 passed |
 | Lumina workflow integration | 10 passed |
 | Product smoke | backend 168 passed; frontend 168 passed; lint 0 errors |
 | Structured logging fast gate | PASS |
@@ -168,8 +173,8 @@ tolerance, and includes stroke paint.
 | Unsupported reasons | none |
 | Supported documents with unexplained raw-paint loss | 0 |
 | Maximum visible-partition area delta | 22.174935 source-unit²; 1.1116364e-5 relative |
-| Median / p95 / maximum document time | 2.3918 s / 17.6307 s / 209.1675 s |
-| Total time / peak process RSS | 2,838.1458 s / 2,057,388,032 bytes (1,962.08 MiB) |
+| Median / p95 / maximum document time | 2.3551 s / 15.5736 s / 245.2340 s |
+| Total time / peak process RSS | 2,648.3066 s / 1,852,047,360 bytes (1,766.25 MiB) |
 
 `raw_to_visible_area_delta` is expected to be non-zero where later paints
 occlude earlier paints. `visible_partition_area_delta` compares the sum of all
@@ -186,18 +191,19 @@ geometry and a non-empty silhouette. Composite area-collapse diagnostics use
 `source_kind="composite"` with no fabricated paint ID, so a diagnostic-only
 cell cannot make an otherwise printable SVG fail at the adapter boundary.
 
-The longest corpus case contains 69,692 paint operations and took 209.17
+The longest corpus case contains 69,692 paint operations and took 245.23
 seconds at 220 mm. This is an explicitly recorded large-document Boolean-union
 tail, not a fallback or timeout. Median and p95 show the ordinary corpus
 distribution; the public-entry benchmark below is the release latency gate.
 
-On a separate normalization-heavy fixture with 96 disjoint paints and 720
-points per paint, seven warm runs reduced median replay time from 0.016551 s
-with one worker to 0.003416 s with automatic 10-worker selection (4.85x). The
-complete native call fell from 0.077197 s to 0.057979 s (24.9%). One, two,
-four, and automatic-worker runs retained the same 96 paints/components and
-byte-identical geometry/color snapshots. Documents dominated by ordered
-visibility compositing are not represented as gaining this full speedup.
+On a separate normalization-heavy fixture with 96 disjoint alternating-radius
+paints and 720 points per paint, nine interleaved warm runs reduced median
+replay time from 0.036597 s with one worker to 0.008315 s with automatic
+10-worker selection (4.40x). The complete native call fell from 0.220182 s to
+0.191597 s (13.0%). One, two, four, and automatic-worker runs retained the
+same 96 paints/components and byte-identical geometry/color snapshots.
+Documents dominated by ordered visibility compositing are not represented as
+gaining this full speedup.
 
 ### Transparent raster differential
 
@@ -244,21 +250,21 @@ does not use an artifact cache.
 
 | Metric | Result |
 |---|---:|
-| Warm median / 1.0 s gate | 0.121664 s / PASS |
-| Warm p95 / 1.25 s gate | 0.123908 s / PASS |
-| Native recorder / kernel | 0.048679 s / 0.043661 s |
-| Native adapter conversion | 0.023527 s |
-| Peak RSS / swap growth | 200,900,608 bytes (191.59 MiB) / 0 bytes |
+| Warm median / 1.0 s gate | 0.115364 s / PASS |
+| Warm p95 / 1.25 s gate | 0.117257 s / PASS |
+| Native recorder / kernel | 0.049516 s / 0.036479 s |
+| Native adapter conversion | 0.024090 s |
+| Peak RSS / swap growth | 204,488,704 bytes (195.02 MiB) / 0 bytes |
 | Raw / visible shapes | 1,024 / 1,024 |
 
 The same report measures a separate alpha-heavy public fixture with 32 source
 paints, two isolated opacity groups, 256 overlap cells, and 1,024 ordered
-contributions. Its complete `VectorAnalysis` median/p95 is 0.017911/0.018302 s,
-with 148,406,272 bytes peak RSS and zero swap growth. It exports 768 visible
+contributions. Its complete `VectorAnalysis` median/p95 is 0.018102/0.018435 s,
+with 148,832,256 bytes peak RSS and zero swap growth. It exports 768 visible
 Polygon components, including 256 multi-source composite regions.
 
 The public 3,097-path source proxy is also supported by default; its native
-capability check took 0.420356 s. No repository SVG at or above 50 MiB was
+capability check took 0.431359 s. No repository SVG at or above 50 MiB was
 available, so the separate large-file benchmark is recorded as unavailable
 instead of substituting another fixture. The anonymous 508-document run above
 is the large real-world parser/RSS evidence for this revision.

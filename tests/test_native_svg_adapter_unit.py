@@ -543,6 +543,22 @@ def test_adapter_preserves_unprintable_fragment_identity_and_counts(
     }
 
 
+def test_adapter_defaults_worker_telemetry_for_older_schema_four_wheel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = _native_result()
+    del result.replay_worker_count
+    monkeypatch.setattr(
+        "core.native_svg_adapter._load_native_module",
+        lambda: _native_module(result),
+    )
+
+    outcome = analyze_native_svg("fixture.svg", 20.0, 0.02)
+
+    assert isinstance(outcome, NativeSvgGeometry)
+    assert outcome.stage_timings["native_replay_worker_count"] == 1
+
+
 def test_adapter_keeps_composite_area_collapse_without_fabricated_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
