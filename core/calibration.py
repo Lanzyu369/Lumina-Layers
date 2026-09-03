@@ -137,8 +137,9 @@ def _generate_layer_previews(full_matrix, preview_colors, h, w, color_layers=5):
 def _generate_voxel_mesh(
     voxel_matrix: np.ndarray, material_index: int, grid_h: int, grid_w: int
 ) -> Optional[_get_trimesh().Trimesh]:
-    """
-    Generate mesh for a specific material from voxel data.
+    """Generate one closed calibration surface for a material label.
+
+    为校准标签体中的单个材料生成闭合表面。
 
     Args:
         voxel_matrix: 3D array of material indices (Z, H, W)
@@ -149,66 +150,29 @@ def _generate_voxel_mesh(
     Returns:
         Trimesh object or None if no voxels found
     """
-    scale_x = PrinterConfig.NOZZLE_WIDTH
-    scale_y = PrinterConfig.NOZZLE_WIDTH
-    scale_z = PrinterConfig.LAYER_HEIGHT
-    shrink = PrinterConfig.SHRINK_OFFSET
+    volume = np.asarray(voxel_matrix)
+    if volume.ndim != 3 or volume.shape[1:] != (int(grid_h), int(grid_w)):
+        raise ValueError("Calibration voxel matrix dimensions are inconsistent")
 
-    vertices, faces = [], []
-    total_z_layers = voxel_matrix.shape[0]
+    from core.layered_meshing import build_labeled_surface_mesh
 
-    for z in range(total_z_layers):
-        z_bottom, z_top = z * scale_z, (z + 1) * scale_z
-        layer_mask = voxel_matrix[z] == material_index
-        if not np.any(layer_mask):
-            continue
-
-        for y in range(grid_h):
-            world_y = y * scale_y
-            row = layer_mask[y]
-            padded_row = np.pad(row, (1, 1), mode="constant")
-            diff = np.diff(padded_row.astype(int))
-            starts, ends = np.where(diff == 1)[0], np.where(diff == -1)[0]
-
-            for start, end in zip(starts, ends):
-                x0, x1 = start * scale_x + shrink, end * scale_x - shrink
-                y0, y1 = world_y + shrink, world_y + scale_y - shrink
-
-                base_idx = len(vertices)
-                vertices.extend(
-                    [
-                        [x0, y0, z_bottom],
-                        [x1, y0, z_bottom],
-                        [x1, y1, z_bottom],
-                        [x0, y1, z_bottom],
-                        [x0, y0, z_top],
-                        [x1, y0, z_top],
-                        [x1, y1, z_top],
-                        [x0, y1, z_top],
-                    ]
-                )
-                cube_faces = [
-                    [0, 2, 1],
-                    [0, 3, 2],
-                    [4, 5, 6],
-                    [4, 6, 7],
-                    [0, 1, 5],
-                    [0, 5, 4],
-                    [1, 2, 6],
-                    [1, 6, 5],
-                    [2, 3, 7],
-                    [2, 7, 6],
-                    [3, 0, 4],
-                    [3, 4, 7],
-                ]
-                faces.extend([[v + base_idx for v in f] for f in cube_faces])
-
-    if not vertices:
+    mesh = build_labeled_surface_mesh(
+        # The shared image mesher maps row zero to high physical Y. Calibration
+        # boards historically place row zero at low physical Y, so reverse only
+        # this adapter input to preserve the established TL/TR marker layout.
+        volume[:, ::-1, :],
+        material_id=material_index,
+        height_px=int(grid_h),
+    )
+    if mesh is None:
         return None
-
-    mesh = _get_trimesh().Trimesh(vertices=vertices, faces=faces)
-    mesh.merge_vertices()
-    mesh.update_faces(mesh.unique_faces())
+    mesh.apply_scale(
+        (
+            float(PrinterConfig.NOZZLE_WIDTH),
+            float(PrinterConfig.NOZZLE_WIDTH),
+            float(PrinterConfig.LAYER_HEIGHT),
+        )
+    )
     return mesh
 
 

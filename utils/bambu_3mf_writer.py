@@ -21,11 +21,19 @@ import zipfile
 import json
 import copy
 import re
-from typing import Any, BinaryIO, Iterable, List, Dict, Optional
+from typing import TYPE_CHECKING, Any, BinaryIO, Iterable, List, Dict, Optional
 import numpy as np
 from PIL import Image
 
+if TYPE_CHECKING:
+    import trimesh
+
 from api.structured_logging import get_logger
+from core.mesh_export_parts import (
+    MeshExportPartRange,
+    get_mesh_export_part_ranges,
+    mesh_export_parts_are_conditional,
+)
 from core.backing_infill import (
     get_viewing_surface_solid_z_ranges,
     normalize_backing_infill_density_percent,
@@ -48,9 +56,7 @@ from utils.bambu_3mf_cover import (
 
 log = get_logger(__name__)
 
-# Lazy imports: avoid >60s startup cost when imported via API.
-# Only loaded when export functions are actually called.
-_trimesh = None
+# Lazy import: avoid loading the native 3MF extension until export is requested.
 _n3mf = None
 _PREVIEW_PLACEHOLDER_PNG_BYTES: Optional[bytes] = None
 _RAW_ZIP_COPY_CHUNK_SIZE = 1024 * 1024
@@ -65,15 +71,6 @@ _CREATOR_5_MODEL_TOWER_CLEARANCE_MM = 7.5
 _ANYCUBIC_TOWER_MIN_FOOTPRINT_WIDTH_MM = 50.0
 _ANYCUBIC_TOWER_MIN_DEPTH_MM = 57.5
 _ELEGOO_CC2_PREFERRED_TOP_EDGE_CLEARANCE_MM = 32.0
-
-
-def _get_trimesh():
-    global _trimesh
-    if _trimesh is None:
-        import trimesh as _tm
-
-        _trimesh = _tm
-    return _trimesh
 
 
 def _get_n3mf():
@@ -200,12 +197,191 @@ class _MeshExportEntry:
         material_name: Shared material/slot name used for global filament tables.
             (用于全局耗材表的共享材料或槽位名)
         color_rgb: RGB tuple for the shared material. (共享材料的 RGB 颜色)
+        part_range: Optional lazy view into one independently closed mesh leaf.
+            (可选的独立闭合网格叶子延迟切片范围)
+        contact_repair_ranges: Canonical shell ranges used only for bounded
+            writer-domain contact separation. (仅用于有界写出域接触分离的规范
+            壳体范围)
     """
 
     mesh: object
     object_name: str
     material_name: str
     color_rgb: tuple[int, int, int]
+    part_range: MeshExportPartRange | None = None
+    contact_repair_ranges: tuple[MeshExportPartRange, ...] = ()
+
+
+def _expand_mesh_export_entries(
+    *,
+    mesh: object,
+    object_name: str,
+    material_name: str,
+    color_rgb: tuple[int, int, int],
+) -> list[_MeshExportEntry]:
+    """Expose independently closed leaves without copying parent vertices.
+
+    将合并网格中的独立闭合分片展开为 3MF 叶子对象，同时复用父网格顶点。
+    """
+
+    part_ranges = get_mesh_export_part_ranges(mesh)
+    if not part_ranges:
+        return [
+            _MeshExportEntry(
+                mesh=mesh,
+                object_name=object_name,
+                material_name=material_name,
+                color_rgb=color_rgb,
+            )
+        ]
+
+    if mesh_export_parts_are_conditional(mesh):
+        return [
+            _MeshExportEntry(
+                mesh=mesh,
+                object_name=object_name,
+                material_name=material_name,
+                color_rgb=color_rgb,
+                contact_repair_ranges=part_ranges,
+            )
+        ]
+
+    source_faces = np.asarray(getattr(mesh, "faces", None))
+    expanded: list[_MeshExportEntry] = []
+    for index, part in enumerate(part_ranges, start=1):
+        source_part_faces = source_faces[part.face_start : part.face_stop]
+        if (
+            np.any(source_part_faces < part.vertex_start)
+            or np.any(source_part_faces >= part.vertex_stop)
+        ):
+            raise ValueError("3MF mesh part references vertices outside its range")
+        leaf_name = (
+            object_name
+            if len(part_ranges) == 1
+            else f"{object_name}__part_{index}"
+        )
+        expanded.append(
+            _MeshExportEntry(
+                mesh=mesh,
+                object_name=leaf_name,
+                material_name=material_name,
+                color_rgb=color_rgb,
+                part_range=part,
+            )
+        )
+    return expanded
+
+
+def _materialize_n3mf_mesh_view_arrays(
+    mesh: object,
+    *,
+    part_range: MeshExportPartRange | None = None,
+    contact_repair_ranges: tuple[MeshExportPartRange, ...] = (),
+) -> tuple[np.ndarray, np.ndarray]:
+    """Materialize and validate the exact arrays consumed by the 3MF writer.
+    只生成一次并校验 3MF 写入器实际消费的数组。
+    """
+
+    source_vertices = np.asarray(getattr(mesh, "vertices", None))
+    source_faces = np.asarray(getattr(mesh, "faces", None))
+    if (
+        source_vertices.ndim != 2
+        or source_vertices.shape[1:] != (3,)
+        or len(source_vertices) == 0
+        or source_faces.ndim != 2
+        or source_faces.shape[1:] != (3,)
+        or len(source_faces) == 0
+    ):
+        raise ValueError("3MF mesh arrays must be non-empty Nx3 arrays")
+    if not np.all(np.isfinite(source_vertices)):
+        raise ValueError("3MF mesh vertices must be finite")
+    if np.any(source_faces < 0) or np.any(source_faces >= len(source_vertices)):
+        raise ValueError("3MF mesh face index is out of range")
+    if len(source_vertices) > np.iinfo(np.uint32).max:
+        raise ValueError("3MF mesh exceeds uint32 vertex indices")
+
+    export_vertices = source_vertices
+    export_faces = source_faces
+    if part_range is not None and contact_repair_ranges:
+        raise ValueError("3MF mesh cannot combine part slicing and contact repair")
+    if part_range is not None:
+        if (
+            part_range.vertex_start < 0
+            or part_range.face_start < 0
+            or part_range.vertex_stop > len(source_vertices)
+            or part_range.face_stop > len(source_faces)
+            or part_range.vertex_stop <= part_range.vertex_start
+            or part_range.face_stop <= part_range.face_start
+        ):
+            raise ValueError("3MF mesh part range is out of bounds")
+        export_vertices = source_vertices[
+            part_range.vertex_start : part_range.vertex_stop
+        ]
+        source_part_faces = source_faces[
+            part_range.face_start : part_range.face_stop
+        ]
+        if (
+            np.any(source_part_faces < part_range.vertex_start)
+            or np.any(source_part_faces >= part_range.vertex_stop)
+        ):
+            raise ValueError("3MF mesh part references vertices outside its range")
+        export_faces = np.empty(source_part_faces.shape, dtype=np.int64)
+        np.subtract(
+            source_part_faces,
+            part_range.vertex_start,
+            out=export_faces,
+            casting="unsafe",
+        )
+    elif contact_repair_ranges:
+        from core.mesh_writer_domain import (
+            prepare_indexed_shells_for_float32_export,
+        )
+
+        export_vertices, export_faces = prepare_indexed_shells_for_float32_export(
+            mesh,
+            contact_repair_ranges,
+        )
+
+    vertices = np.ascontiguousarray(export_vertices, dtype=np.float32)
+    faces = np.ascontiguousarray(export_faces, dtype=np.uint32)
+    if not np.all(np.isfinite(vertices)):
+        raise ValueError(
+            "3MF mesh vertices must remain finite after float32 conversion"
+        )
+    vertices.setflags(write=False)
+    faces.setflags(write=False)
+    return vertices, faces
+
+
+def _queue_n3mf_mesh_object(
+    *,
+    builder: object,
+    entry: _MeshExportEntry,
+    material_group_id: int,
+    material_index: int,
+    retained_views: list[tuple[np.ndarray, np.ndarray]],
+) -> int:
+    """Queue one mesh through zero-copy arrays when the binding supports it."""
+
+    vertices, faces = _materialize_n3mf_mesh_view_arrays(
+        entry.mesh,
+        part_range=entry.part_range,
+        contact_repair_ranges=entry.contact_repair_ranges,
+    )
+    add_zero_copy = getattr(builder, "add_mesh_object_zero_copy", None)
+    if not callable(add_zero_copy):
+        raise RuntimeError(
+            "neroued-3mf must provide add_mesh_object_zero_copy"
+        )
+    object_id = add_zero_copy(
+        entry.object_name,
+        vertices,
+        faces,
+        material_group_id,
+        material_index,
+    )
+    retained_views.append((vertices, faces))
+    return int(object_id)
 
 
 @dataclass(frozen=True)
@@ -1909,7 +2085,7 @@ class BambuStudio3MFWriter:
         self.preserve_template_filament_slots = preserve_template_filament_slots
         self._wipe_tower_placement_cache: WipeTowerPlacementResult | None = None
 
-    def add_mesh(self, mesh: _get_trimesh().Trimesh, name: str, color_rgb: tuple):
+    def add_mesh(self, mesh: trimesh.Trimesh, name: str, color_rgb: tuple):
         """Add a mesh object to the scene.
         将网格对象添加到场景中。
 
@@ -1930,8 +2106,8 @@ class BambuStudio3MFWriter:
 
         metadata = getattr(mesh, "metadata", {}) or {}
         material_name = str(metadata.get("bambu_material_name") or name)
-        self.objects.append(
-            _MeshExportEntry(
+        self.objects.extend(
+            _expand_mesh_export_entries(
                 mesh=mesh,
                 object_name=name,
                 material_name=material_name,
@@ -2050,7 +2226,8 @@ class BambuStudio3MFWriter:
         orca_version = self._get_orca_slicer_version_tag()
         if orca_version:
             builder.add_metadata("OrcaSlicer", orca_version)
-        builder.add_metadata("BambuStudio:3mfVersion", "1")
+        if self.slicer != "QIDIStudio":
+            builder.add_metadata("BambuStudio:3mfVersion", "1")
         if self.slicer == "FlashStudio":
             for key, value in (
                 ("Copyright", ""),
@@ -2107,13 +2284,16 @@ class BambuStudio3MFWriter:
 
         object_ids: list[int] = []
         material_index_by_object: list[int] = []
+        retained_mesh_views: list[tuple[np.ndarray, np.ndarray]] = []
         for entry in self.objects:
-            n3mf_mesh = n3mf.Mesh.from_arrays(
-                np.ascontiguousarray(entry.mesh.vertices, dtype=np.float64),
-                np.ascontiguousarray(entry.mesh.faces, dtype=np.int64),
-            )
             material_index = material_indices[entry.material_name]
-            obj_id = builder.add_mesh_object(entry.object_name, n3mf_mesh, mat_group_id, material_index)
+            obj_id = _queue_n3mf_mesh_object(
+                builder=builder,
+                entry=entry,
+                material_group_id=mat_group_id,
+                material_index=material_index,
+                retained_views=retained_mesh_views,
+            )
             builder.add_build_item(obj_id)
             object_ids.append(obj_id)
             material_index_by_object.append(material_index)
@@ -2136,6 +2316,10 @@ class BambuStudio3MFWriter:
         # 任意提高精度带来的文件体积成本。
         opts.vertex_precision = 9
         opts.compact_xml = True
+        # Removing an individual face from an otherwise closed indexed shell
+        # creates an open mesh. Vector geometry handles exact float32 collapse
+        # locally, so the writer must preserve the final topology verbatim.
+        opts.triangle_write_mode = n3mf.TriangleWriteMode.Keep
         if self.watermark and hasattr(n3mf, "WatermarkConfig"):
             opts.watermark = n3mf.WatermarkConfig(payload=self.watermark.encode("utf-8"))
         elif self.watermark:
@@ -4039,7 +4223,7 @@ def read_wipe_tower_placement_warnings(
 
 
 def export_scene_with_bambu_metadata(
-    scene: _get_trimesh().Scene,
+    scene: trimesh.Scene,
     output_path: str,
     slot_names: List[str],
     preview_colors: Dict,
@@ -4067,7 +4251,7 @@ def export_scene_with_bambu_metadata(
     将 Trimesh 场景导出为 BambuStudio/OrcaSlicer 兼容的 3MF 文件（含元数据）。
 
     Args:
-        scene (_get_trimesh().Scene): Trimesh Scene containing all meshes. (包含所有网格的场景)
+        scene (trimesh.Scene): Trimesh Scene containing all meshes. (包含所有网格的场景)
         output_path (str): Output .3mf file path. (输出 .3mf 文件路径)
         slot_names (List[str]): Actually used material names. (实际使用的材料名称列表)
         preview_colors (Dict): Material ID to RGBA color mapping. (材料 ID 到 RGBA 颜色映射)

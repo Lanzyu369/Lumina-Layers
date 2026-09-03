@@ -39,8 +39,8 @@ from config import (
 )
 from core.errors import VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError
 from core.vector_mesh_memory import (
+    estimate_material_archive_runtime_bytes,
     estimate_vector_task_memory_reservation_bytes,
-    resolve_vector_mesh_memory_budget_bytes,
 )
 from utils.bambu_3mf_writer import read_wipe_tower_placement_warnings
 
@@ -306,13 +306,20 @@ async def generate_color_card(
             lut_path,
             params,
             host_memory_reservation_bytes=(
-                # The material solver's implicit runtimes have no complete
-                # parent-visible path list to estimate safely.
-                resolve_vector_mesh_memory_budget_bytes()
-                if session_material_source == "material_archive"
-                else estimate_vector_task_memory_reservation_bytes(
+                estimate_vector_task_memory_reservation_bytes(
                     svg_path,
-                    resident_paths=(lut_path,),
+                    resident_paths=(
+                        ()
+                        if session_material_source == "material_archive"
+                        else (lut_path,)
+                    ),
+                    implicit_resident_bytes=(
+                        estimate_material_archive_runtime_bytes(
+                            len(selected_materials)
+                        )
+                        if session_material_source == "material_archive"
+                        else 0
+                    ),
                 )
             ),
         )

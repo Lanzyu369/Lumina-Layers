@@ -174,8 +174,8 @@ def test_vector_task_reservation_includes_large_worker_inputs(tmp_path) -> None:
     assert reservation <= 8 * 1024**3
 
 
-def test_vector_task_reservation_fails_closed_for_material_archive(tmp_path) -> None:
-    """Implicit material runtimes cannot receive an optimistic file-only cap."""
+def test_vector_task_reservation_estimates_material_archive_runtime(tmp_path) -> None:
+    """Implicit material runtimes add cost without reserving the full cap."""
 
     source_path = tmp_path / "source.svg"
     source_path.write_text("<svg/>", encoding="utf-8")
@@ -189,7 +189,7 @@ def test_vector_task_reservation_fails_closed_for_material_archive(tmp_path) -> 
         lut_path="__material_archive__",
     )
 
-    assert reservation == 8 * 1024**3
+    assert 1024**3 < reservation < 2 * 1024**3
 
 
 def test_large_format_svg_raster_fallback_accepts_percentage_viewbox(
@@ -945,11 +945,11 @@ class TestGenerateParameterCompleteness:
             resident_paths=(lut_path,),
         )
 
-    def test_material_archive_color_card_keeps_full_host_reservation(
+    def test_material_archive_color_card_uses_bounded_host_reservation(
         self,
         tmp_path,
     ) -> None:
-        """Generated cards still load implicit material solver runtimes."""
+        """Generated cards count implicit material state without an 8 GiB cap."""
 
         _test_store.clear_all()
         output_path = tmp_path / "card.3mf"
@@ -1002,9 +1002,10 @@ class TestGenerateParameterCompleteness:
         assert response.status_code == 200, response.text
         submitted_params = _mock_pool.submit.call_args.args[3]
         assert submitted_params["enable_wipe_tower_auto_placement"] is False
-        assert _mock_pool.submit.call_args.kwargs[
+        reservation = _mock_pool.submit.call_args.kwargs[
             "host_memory_reservation_bytes"
-        ] == 8 * 1024**3
+        ]
+        assert 1024**3 < reservation < 2 * 1024**3
 
     def test_dynamic_color_card_rejects_before_svg_or_session_mutation(
         self,
@@ -7105,7 +7106,7 @@ class TestLargeFormatDimensionsAndRouting:
             *,
             host_memory_reservation_bytes,
         ):
-            assert host_memory_reservation_bytes == 8 * 1024**3
+            assert 768 * 1024**2 < host_memory_reservation_bytes < 2 * 1024**3
             with Image.open(tile_path) as tile_image:
                 source_shape = (tile_image.height, tile_image.width)
             cache_shape = np.load(tile_params["material_matrix_path"]).shape[:2]

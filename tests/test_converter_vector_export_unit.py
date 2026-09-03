@@ -422,6 +422,9 @@ class TestVectorBranchExport:
             patch(
                 "core.vector_engine._enforce_vector_mesh_runtime_headroom",
             ) as memory_guard,
+            patch(
+                "core.vector_engine._enforce_vector_scene_export_headroom",
+            ) as scene_export_guard,
         ):
             convert_image_to_3d(
                 image_path=str(svg_file),
@@ -443,10 +446,12 @@ class TestVectorBranchExport:
             call.kwargs.get("stage") == "vector_board_merge"
             for call in memory_guard.call_args_list
         )
-        assert any(
-            call.kwargs.get("stage") == "vector_3mf_export"
-            for call in memory_guard.call_args_list
+        export_guard_call = next(
+            call
+            for call in scene_export_guard.call_args_list
+            if call.kwargs.get("stage") == "vector_3mf_export"
         )
+        assert export_guard_call.kwargs["workspace_multiplier"] == 2.0
 
         _, build_kwargs = fake_processor.build_mesh.call_args
         assert build_kwargs["backing_color_id"] == 1
@@ -467,8 +472,8 @@ class TestVectorBranchExport:
 
     @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
     @patch("core.vector_engine.VectorProcessor")
-    def test_slot_names_keep_board_when_separate_backing_enabled(self, MockVP, mock_bambu_export, tmp_path):
-        """When separate_backing=True, Board should remain an exported slot."""
+    def test_separate_backing_reuses_selected_material_slot(self, MockVP, mock_bambu_export, tmp_path):
+        """Board stays editable without creating a synthetic filament."""
         from config import ModelingMode
 
         svg_file = tmp_path / "test3.svg"
@@ -484,7 +489,13 @@ class TestVectorBranchExport:
             m.metadata["name"] = name
             fake_scene.add_geometry(m, geom_name=name)
 
-        MockVP.return_value = _build_fake_processor(fake_scene)
+        fake_processor = _build_fake_processor(fake_scene)
+        fake_processor.analyze_svg.return_value.slot_names = ["White", "Cyan"]
+        fake_processor.analyze_svg.return_value.preview_colors = {
+            0: [255, 255, 255, 255],
+            1: [0, 255, 255, 255],
+        }
+        MockVP.return_value = fake_processor
 
         from core.converter import convert_image_to_3d
 
@@ -509,6 +520,11 @@ class TestVectorBranchExport:
 
         _, kwargs = mock_bambu_export.call_args
         assert kwargs["slot_names"] == ["White", "Cyan", "Board"]
+        assert kwargs["project_slot_names"] == ["White", "Cyan"]
+        assert (
+            kwargs["scene"].geometry["Board"].metadata["bambu_material_name"]
+            == "White"
+        )
 
     @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
     @patch("core.vector_engine.VectorProcessor")
@@ -563,7 +579,14 @@ class TestVectorBranchExport:
 
         _, export_kwargs = mock_bambu_export.call_args
         assert export_kwargs["slot_names"] == ["White", "Cyan", "Board"]
+        assert export_kwargs["project_slot_names"] == ["White", "Cyan"]
         assert export_kwargs["preview_colors"]["Board"] == [0, 255, 255, 255]
+        assert (
+            export_kwargs["scene"]
+            .geometry["Board"]
+            .metadata["bambu_material_name"]
+            == "Cyan"
+        )
 
     @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
     @patch("core.vector_engine.VectorProcessor")
@@ -780,58 +803,6 @@ class TestVectorBranchExport:
         assert "no valid geometry" in msg.lower()
         mock_bambu_export.assert_not_called()
 
-    @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
-    @patch("core.vector_engine.VectorProcessor")
-    def test_vector_topology_error_escapes_pipeline_for_api_mapping(
-        self,
-        MockVP,
-        mock_bambu_export,
-        tmp_path,
-    ):
-        """Typed topology failures must reach the worker/API boundary intact."""
-        from config import ModelingMode
-        from core.errors import VectorTopologyError
-        from core.converter import convert_image_to_3d
-
-        svg_file = tmp_path / "unrepairable.svg"
-        svg_file.write_text(
-            '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">'
-            '<rect x="0" y="0" width="10" height="10" fill="#ffffff"/>'
-            "</svg>"
-        )
-        dummy_lut = str(tmp_path / "unrepairable.npy")
-        np.save(dummy_lut, np.zeros(10))
-
-        topology_error = VectorTopologyError(
-            "Vector polygon topology could not be repaired for export",
-            (
-                {
-                    "attempt": "repair_0.001_mm",
-                    "rejected_reason": "float32_duplicate_vertex",
-                },
-            ),
-        )
-        fake_processor = _build_fake_processor(trimesh.Scene())
-        fake_processor.build_mesh.side_effect = topology_error
-        MockVP.return_value = fake_processor
-
-        with pytest.raises(VectorTopologyError) as exc:
-            convert_image_to_3d(
-                image_path=str(svg_file),
-                lut_path=dummy_lut,
-                target_width_mm=20.0,
-                spacer_thick=1.6,
-                structure_mode="Single-sided",
-                color_mode="4-Color",
-                add_loop=False,
-                loop_width=5,
-                loop_length=20,
-                loop_hole=3,
-                loop_pos="Top",
-                modeling_mode=ModelingMode.VECTOR,
-            )
-
-        assert exc.value is topology_error
         mock_bambu_export.assert_not_called()
 
     @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")

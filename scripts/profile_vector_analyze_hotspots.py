@@ -20,7 +20,6 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core.vector_engine import VectorProcessor  # noqa: E402
-from scripts.profile_vector_native_mesh_corpus import discover_svg_files  # noqa: E402
 
 
 PROFILE_NEEDLES = (
@@ -47,6 +46,22 @@ PROFILE_NEEDLES = (
     "buffer",
     "make_valid",
 )
+
+
+def discover_svg_files(path: Path) -> list[Path]:
+    """Return SVG files under ``path`` in deterministic path order."""
+
+    candidate = Path(path)
+    if candidate.is_file():
+        return [candidate] if candidate.suffix.lower() == ".svg" else []
+    if not candidate.exists():
+        return []
+    files = [
+        item
+        for item in candidate.rglob("*")
+        if item.is_file() and item.suffix.lower() == ".svg"
+    ]
+    return sorted(files, key=str)
 
 
 def _write_synthetic_compound_fixture(

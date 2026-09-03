@@ -80,7 +80,12 @@ def test_vector_mesh_memory_budget_error_maps_to_actionable_422() -> None:
     assert exc.detail["recoverable"] is True
     assert exc.detail["stage"] == "preflight"
     assert exc.detail["memory_budget_bytes"] == 8 * 1024**3
-    assert "simpl" in exc.detail["message"].lower()
+    assert "memory" in exc.detail["message"].lower()
+    assert exc.detail["recovery_actions"] == [
+        "free_system_memory",
+        "retry",
+        "reduce_output_size",
+    ]
 
 
 def test_vector_host_memory_admission_maps_to_retryable_503() -> None:
@@ -97,6 +102,19 @@ def test_vector_host_memory_admission_maps_to_retryable_503() -> None:
     assert exc.detail["retryable"] is True
     assert exc.detail["recovery_actions"] == ["retry_later"]
     assert exc.headers == {"Retry-After": "5"}
+
+
+def test_idle_host_memory_error_does_not_claim_another_task_is_running() -> None:
+    error = VectorHostMemoryAdmissionError(
+        requested_bytes=8,
+        reserved_bytes=0,
+        memory_budget_bytes=4,
+    )
+
+    exc = to_http_exception(error, "Vector generation")
+
+    assert "another Vector task" not in exc.detail["message"]
+    assert exc.detail["recovery_actions"] == ["free_system_memory", "retry"]
 
 
 def test_core_dependency_error_maps_to_502() -> None:

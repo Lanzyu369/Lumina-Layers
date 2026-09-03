@@ -313,6 +313,64 @@ def test_assemble_puzzle_3mf_restores_global_slot_palette_for_sparse_piece() -> 
     }
 
 
+def test_assemble_puzzle_3mf_rebuilds_flush_arrays_for_global_palette() -> None:
+    """Combined puzzle purge arrays must match the final global slot count."""
+
+    slot_names = [
+        "Slot 1 (White)",
+        "Slot 2 (Red)",
+        "Slot 3 (Yellow)",
+        "Slot 4 (Blue)",
+    ]
+    stale_eight_slot_settings = {
+        "filament_colour": ["#FFFFFF"] * 8,
+        "filament_type": ["PLA"] * 8,
+        "flush_volumes_vector": ["140"] * 8,
+        "flush_volumes_matrix": ["0"] * 64,
+    }
+    piece_path = _reserve_temp_path(".3mf")
+    output_path = _reserve_temp_path(".3mf")
+    try:
+        _write_sparse_piece_package(
+            piece_path,
+            materials=[(slot_names[0], "1"), (slot_names[3], "4")],
+            filament_colours=["#FFFFFF", "#0000FF"],
+            project_settings=stale_eight_slot_settings,
+        )
+
+        assemble_puzzle_3mf(
+            piece_sources=[
+                PuzzlePiece3MFSource(
+                    label="A1",
+                    threemf_path=str(piece_path),
+                    offset_x_mm=0.0,
+                    offset_y_mm=0.0,
+                ),
+            ],
+            output_path=str(output_path),
+            preview_colors={
+                0: [255, 255, 255, 255],
+                1: [255, 0, 0, 255],
+                2: [255, 255, 0, 255],
+                3: [0, 0, 255, 255],
+            },
+            slot_names=slot_names,
+            printer_id="bambu-p2s",
+            slicer="OrcaSlicer",
+        )
+
+        with zipfile.ZipFile(output_path, "r") as archive:
+            project_settings = json.loads(
+                archive.read("Metadata/project_settings.config").decode("utf-8")
+            )
+    finally:
+        _cleanup_temp_paths(piece_path, output_path)
+
+    assert len(project_settings["filament_colour"]) == len(slot_names)
+    assert len(project_settings["flush_volumes_vector"]) == len(slot_names)
+    assert len(project_settings["flush_volumes_matrix"]) == len(slot_names) ** 2
+
+
 def test_assemble_puzzle_3mf_rebuilds_filament_metadata_from_global_material_names() -> None:
     """Combined puzzle 3MF must not inherit stale PETG metadata for PLA material archives."""
 

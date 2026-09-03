@@ -2283,6 +2283,8 @@ def worker_generate_large_format_svg_native(
                 os.close(fd_heightmap)
                 tile_cleanup_paths.add(tile_heightmap_path)
                 heightmap_tile.save(tile_heightmap_path)
+            separate_backing = bool(params.get("separate_backing", False))
+            tile_processor._merge_backing_into_material = not separate_backing
             scene = tile_processor.build_mesh(
                 analysis=tile.analysis,
                 thickness_mm=float(params["spacer_thick"]),
@@ -2318,7 +2320,6 @@ def worker_generate_large_format_svg_native(
                 tile_backing_slot_index = requested_backing_color_id
             target_slot = slot_names[tile_backing_slot_index] if slot_names else None
 
-            separate_backing = bool(params.get("separate_backing", False))
             board_geom = scene.geometry.get("Board")
             if board_geom is not None and not separate_backing:
                 target_geom = scene.geometry.get(target_slot) if target_slot else None
@@ -2335,7 +2336,7 @@ def worker_generate_large_format_svg_native(
                         shape_count=2,
                     )
                     merged = _concatenate_meshes_fast(
-                        [target_geom, board_geom]
+                        [target_geom, board_geom],
                     )
                     merged.visual.face_colors = target_geom.visual.face_colors
                     merged.metadata["name"] = target_slot

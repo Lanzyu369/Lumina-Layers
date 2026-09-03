@@ -121,7 +121,11 @@ def to_http_exception(exc: Exception, context: str) -> HTTPException:
                 "reason": exc.reason,
                 "recoverable": exc.recoverable,
                 "retryable": True,
-                "recovery_actions": ["retry_later"],
+                "recovery_actions": (
+                    ["retry_later"]
+                    if exc.reserved_bytes > 0
+                    else ["free_system_memory", "retry"]
+                ),
             },
             headers={"Retry-After": "5"},
         )
@@ -137,9 +141,9 @@ def to_http_exception(exc: Exception, context: str) -> HTTPException:
                 "memory_budget_bytes": exc.memory_budget_bytes,
                 "recoverable": exc.recoverable,
                 "recovery_actions": [
-                    "simplify_svg_paths",
-                    "reduce_model_size",
-                    "split_artwork",
+                    "free_system_memory",
+                    "retry",
+                    "reduce_output_size",
                 ],
             },
         )

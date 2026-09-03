@@ -40,6 +40,12 @@ _CORE_NS = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
 _PROD_NS = "http://schemas.microsoft.com/3dmanufacturing/production/2015/06"
 _BAMBU_NS = "http://schemas.bambulab.com/package/2021"
 _NS = {"m": _CORE_NS, "p": _PROD_NS, "BambuStudio": _BAMBU_NS}
+_PALETTE_GROUP_ARRAY_KEYS = frozenset(
+    {
+        "flush_volumes_vector",
+        "flush_volumes_matrix",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -908,6 +914,9 @@ def _replace_material_project_settings(
         if key == "filament_colour":
             continue
         if key == "default_filament_profile":
+            settings[key] = copy.deepcopy(value)
+            continue
+        if key in _PALETTE_GROUP_ARRAY_KEYS:
             settings[key] = copy.deepcopy(value)
             continue
         if isinstance(value, list) and (

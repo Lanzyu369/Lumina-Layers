@@ -23,6 +23,7 @@ from types import SimpleNamespace
 from unittest import mock
 import numpy as np
 import pytest
+import shapely
 from PIL import Image
 from svgelements import Arc, Path as SvgPath
 from shapely.geometry import (
@@ -44,7 +45,6 @@ from core.vector_engine import (
     _union_run_group_geometries,
     _combine_evenodd_polygons,
     VectorProcessor,
-    MIN_SHAPE_AREA_MM2,
 )
 
 
@@ -198,7 +198,6 @@ class TestNativeVectorRelief:
             heightmap_path=None,
             heightmap_max_height=None,
             bbox=analysis.bbox,
-            extrude_cache={},
         )
 
         expected_optical_volume = sum(
@@ -351,7 +350,6 @@ class TestNativeVectorRelief:
             heightmap_path=None,
             heightmap_max_height=None,
             bbox=(0.0, 0.0, 10.0, 10.0),
-            extrude_cache={},
         )
         flat_result = VectorProcessor._run_length_extrude(
             matched_shapes=matched_shapes,
@@ -360,12 +358,19 @@ class TestNativeVectorRelief:
             num_channels=2,
             slot_names=["Material A", "Material B"],
             scale_factor=1.0,
-            extrude_cache={},
         )
 
         for slot_name in ("Material A", "Material B"):
-            flat_meshes = flat_result[slot_name]["meshes"]
-            relief_meshes = result[slot_name]["meshes"]
+            flat_meshes = [
+                component
+                for mesh in flat_result[slot_name]["meshes"]
+                for component in mesh.split(only_watertight=False)
+            ]
+            relief_meshes = [
+                component
+                for mesh in result[slot_name]["meshes"]
+                for component in mesh.split(only_watertight=False)
+            ]
             flat_front_intervals = sorted(
                 (float(mesh.bounds[0, 2]), float(mesh.bounds[1, 2]))
                 for mesh in flat_meshes
@@ -636,6 +641,29 @@ class TestFillRuleSubpathMerging:
         assert merged.area == pytest.approx(expected.area)
         assert merged.symmetric_difference(expected).area == pytest.approx(0.0)
 
+    def test_evenodd_helper_subtracts_disjoint_holes_in_one_geos_call(
+        self,
+        monkeypatch,
+    ):
+        """Verified independent holes should be subtracted as one GEOS batch."""
+        outer = box(0, 0, 100, 100)
+        holes = [box(x, 10, x + 4, 14) for x in range(10, 70, 10)]
+        expected = outer.difference(shapely_unary_union(holes))
+        real_difference = shapely.difference
+        calls = []
+
+        def recording_difference(left, right, **kwargs):
+            calls.append((left, right))
+            return real_difference(left, right, **kwargs)
+
+        monkeypatch.setattr(shapely, "difference", recording_difference)
+
+        merged = _combine_evenodd_polygons([outer, *holes])
+
+        assert len(calls) == 1
+        assert merged is not None
+        assert merged.symmetric_difference(expected).is_empty
+
     def test_evenodd_helper_uses_prepared_container_for_multiple_holes(self, monkeypatch):
         """Contained disjoint holes should reuse a prepared outer contour for contains checks."""
         outer = Polygon([(0, 0), (20, 0), (20, 20), (0, 20)])
@@ -679,6 +707,71 @@ class TestFillRuleSubpathMerging:
 
 class TestNormalizeContours:
     """Verify morphological close fills micro-gaps and preserves shape."""
+
+    def test_nearby_tiny_component_cannot_replace_a_valid_printable_component(self):
+        """A real clipped SVG fragment must retain its large component."""
+
+        source = shapely.from_wkt(
+            "MULTIPOLYGON (((1210.5180151367185 1521.0342871093744, "
+            "1201.4221069335936 1523.1806542968748, 1195.1013867187498 "
+            "1524.3925781249998, 1190.065390625 1525.09609375, "
+            "1187.0378735351565 1525.1098852539062, 1186.3080838012695 "
+            "1524.7391653442382, 1186.0280468750002 1524.04, "
+            "1189.6442187499997 1523.6747265625, 1192.8537292480466 "
+            "1522.6420733642576, 1195.018046875 1521.03, "
+            "1195.0104816576086 1521.019391304348, 1195.008046875 "
+            "1521.02, 1185.0704244973765 1522.0137622377624, "
+            "1185.018046875 1522.0299999999997, 1185.0069929289464 "
+            "1522.02, 1184.0221481441013 1522.02, 1184.018046875 "
+            "1522.03, 1183.9943088942307 1522.034747596154, "
+            "1183.371806640625 1522.702998046875, 1182.47875 "
+            "1523.028984375, 1179.0672802083334 1523.0201533333334, "
+            "1179.018046875 1523.03, 1179.0077455973023 "
+            "1523.020035444435, 1177.4327000656465 1523.2053349187474, "
+            "1174.81849609375 1524.04744140625, 1169.9849804687499 "
+            "1524.92626953125, 1169.3420271754742 1524.9338243532695, "
+            "1169.018046875 1525.03, 1171.028046875 1528.02, "
+            "1171.3132983398439 1528.0735522460936, 1171.8766500854492 "
+            "1527.8371847534181, 1172.098203125 1526.3845312500002, "
+            "1172.568046875 1525.97, 1181.3690844726561 "
+            "1527.025126953125, 1186.0186938476563 1526.7775866699221, "
+            "1191.4565942382812 1526.1443591308594, 1198.3346093750001 "
+            "1524.9211718749998, 1206.5880664062502 "
+            "1522.9423144531247, 1214.6949218749999 1520.556875, "
+            "1224.8210713545952 1517.087444715286, 1210.5180151367185 "
+            "1521.0342871093744)), ((1225.0180468749998 "
+            "1517.0299999999997, 1225.008046875 1517.02, "
+            "1224.8210713546036 1517.0874447152835, "
+            "1225.0180468749998 1517.0299999999997)))"
+        )
+
+        scalar = VectorProcessor._normalize_contours(source)
+        batch = vector_engine._normalize_contours_many([source])[0]
+
+        for result in (scalar, batch):
+            assert result.area > 100.0
+            assert source.difference(result).area < 0.01
+
+        # Closing two remote tall rectangles adds more area than the damaged
+        # SVG fragment loses.  A net-area guard therefore misses the loss;
+        # the source itself must remain covered by the closed result.
+        compensated_source = shapely_unary_union(
+            [
+                source,
+                box(0.0, 0.0, 1.0, 3000.0),
+                box(1.04, 0.0, 2.04, 3000.0),
+            ]
+        )
+        compensated_scalar = VectorProcessor._normalize_contours(
+            compensated_source
+        )
+        compensated_batch = vector_engine._normalize_contours_many(
+            [compensated_source]
+        )[0]
+
+        for result in (compensated_scalar, compensated_batch):
+            assert compensated_source.difference(result).area < 0.01
+            assert result.covers(box(1.001, 1000.0, 1.039, 2000.0))
 
     def test_fills_small_gap(self):
         """Two adjacent squares with a tiny gap should be merged."""
@@ -2417,13 +2510,49 @@ class TestSplitDisconnectedShapes:
         assert len(result) == 2
         assert all(r["color"] == (0, 255, 0) for r in result)
 
-    def test_tiny_fragments_filtered(self):
+    def test_components_are_not_filtered_without_physical_scale_context(self):
         big = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
         tiny = Polygon([(20, 20), (20.001, 20), (20.001, 20.001), (20, 20.001)])
         mp = MultiPolygon([big, tiny])
         data = [{"poly": mp, "color": (0, 0, 255)}]
         result = VectorProcessor._split_disconnected_shapes(data)
-        assert len(result) == 1
+        assert len(result) == 2
+
+    def test_scaled_svg_component_keeps_printable_physical_area(self, tmp_path):
+        svg_path = tmp_path / "small-svg-large-print.svg"
+        svg_path.write_text(
+            """
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1">
+              <path d="M0 0H0.1V0.05H0Z" fill="#000000"/>
+            </svg>
+            """,
+            encoding="utf-8",
+        )
+
+        processor = TestVectorNegativeSpacePreview()._processor()
+        analysis = processor.analyze_svg(
+            str(svg_path),
+            target_width_mm=200.0,
+        )
+
+        assert analysis.scale_factor == pytest.approx(200.0)
+        assert len(analysis.clipped_shapes) == 1
+        physical_area_mm2 = (
+            float(analysis.clipped_shapes[0]["geometry"].area)
+            * analysis.scale_factor**2
+        )
+        assert physical_area_mm2 == pytest.approx(200.0)
+
+        scene = processor.build_mesh(
+            analysis,
+            thickness_mm=0.16,
+            structure_mode="Single-sided",
+        )
+        black_mesh = scene.geometry["Black"]
+        expected_height_mm = analysis.num_layers * 0.08
+        assert abs(float(black_mesh.volume)) == pytest.approx(
+            200.0 * expected_height_mm
+        )
 
     def test_geometry_collection(self):
         p = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
@@ -2514,7 +2643,6 @@ class TestRunLengthExtrudeMerging:
             num_channels=4,
             slot_names=["White", "Cyan", "Magenta", "Yellow"],
             scale_factor=1.0,
-            extrude_cache={},
         )
         assert "White" in result
         assert len(result["White"]["meshes"]) > 0
@@ -2533,12 +2661,11 @@ class TestRunLengthExtrudeMerging:
             num_channels=4,
             slot_names=["White", "Cyan", "Magenta", "Yellow"],
             scale_factor=1.0,
-            extrude_cache={},
         )
         assert "White" in result
         assert "Cyan" in result
 
-    def test_same_run_group_uses_disjoint_subset_union_when_available(self):
+    def test_same_run_group_becomes_one_material_with_three_components(self):
         geoms = [
             Polygon([(0, 0), (5, 0), (5, 5), (0, 5)]),
             Polygon([(10, 0), (15, 0), (15, 5), (10, 5)]),
@@ -2549,73 +2676,68 @@ class TestRunLengthExtrudeMerging:
             for geom in geoms
         ]
 
-        def fake_disjoint_subset_union_all(items):
-            return shapely_unary_union(list(items))
-
-        def fake_extrude(geometry, **_kwargs):
-            mesh = SimpleNamespace(
-                metadata={
-                    "_lumina_planar_coverage_mm2": float(geometry.area)
-                }
-            )
-            return [mesh]
-
-        fast_union = mock.Mock(side_effect=fake_disjoint_subset_union_all)
-        with (
-            mock.patch.dict(
-                _union_run_group_geometries.__globals__,
-                {"disjoint_subset_union_all": fast_union},
-            ),
-            mock.patch.object(
-                VectorProcessor,
-                "_extrude_geometry",
-                side_effect=fake_extrude,
-            ),
-        ):
-            result = VectorProcessor._run_length_extrude(
-                matched,
-                num_layers=5,
-                layer_h=0.08,
-                num_channels=4,
-                slot_names=["White", "Cyan", "Magenta", "Yellow"],
-                scale_factor=1.0,
-                extrude_cache={},
-            )
+        result = VectorProcessor._run_length_extrude(
+            matched,
+            num_layers=5,
+            layer_h=0.08,
+            num_channels=4,
+            slot_names=["White", "Cyan", "Magenta", "Yellow"],
+            scale_factor=1.0,
+        )
 
         assert "White" in result
-        assert fast_union.call_count == 1
+        assert len(result["White"]["meshes"]) == 1
+        assert len(
+            result["White"]["meshes"][0].split(only_watertight=False)
+        ) == 3
 
-    def test_reuses_precision_snaps_for_geometry_across_run_groups(self):
+    def test_run_group_does_not_create_a_point_touching_hole(self):
+        left = Polygon(
+            [(0, 0), (2, 0), (1, 2), (2, 2), (2, 4), (0, 4)]
+        )
+        right = Polygon(
+            [(2, 0), (4, 0), (4, 4), (2, 4), (2, 2), (3, 2)]
+        )
+        matched = [
+            {"geometry": left, "recipe": [0], "color": (255, 255, 255)},
+            {"geometry": right, "recipe": [0], "color": (255, 255, 255)},
+        ]
+
+        result = VectorProcessor._run_length_extrude(
+            matched,
+            num_layers=1,
+            layer_h=0.08,
+            num_channels=4,
+            slot_names=["White", "Cyan", "Magenta", "Yellow"],
+            scale_factor=1.0,
+        )
+
+        mesh = result["White"]["meshes"][0]
+        assert mesh.is_watertight
+        assert abs(float(mesh.volume)) == pytest.approx(
+            (left.area + right.area) * 0.08
+        )
+        assert len(mesh.split(only_watertight=False)) == 1
+
+    def test_materializes_each_material_once_across_adjacent_run_groups(self):
         sq1 = Polygon([(0, 0), (5, 0), (5, 5), (0, 5)])
         sq2 = Polygon([(10, 0), (15, 0), (15, 5), (10, 5)])
         matched = [
             {"geometry": sq1, "recipe": [0, 1, 0], "color": (255, 255, 255)},
             {"geometry": sq2, "recipe": [0, 1, 0], "color": (0, 255, 255)},
         ]
-        snap_calls = []
+        slab_counts = []
+        build_layered_volume = vector_engine.build_vector_layered_volume
 
-        def spy_set_precision(geom, grid_size):
-            snap_calls.append((id(geom), grid_size))
-            return geom
+        def record_layered_volume(slabs, **kwargs):
+            slab_counts.append(len(slabs))
+            return build_layered_volume(slabs, **kwargs)
 
-        def fake_extrude(geometry, **_kwargs):
-            mesh = SimpleNamespace(
-                metadata={
-                    "_lumina_planar_coverage_mm2": float(geometry.area)
-                }
-            )
-            return [mesh]
-
-        with (
-            mock.patch.dict(
-                VectorProcessor._run_length_extrude.__globals__,
-                {"set_precision": spy_set_precision},
-            ),
-            mock.patch.object(
-                VectorProcessor,
-                "_extrude_geometry",
-                side_effect=fake_extrude,
-            ),
+        stepped_spy = mock.Mock(side_effect=record_layered_volume)
+        with mock.patch.object(
+            vector_engine,
+            "build_vector_layered_volume",
+            stepped_spy,
         ):
             result = VectorProcessor._run_length_extrude(
                 matched,
@@ -2624,13 +2746,14 @@ class TestRunLengthExtrudeMerging:
                 num_channels=4,
                 slot_names=["White", "Cyan", "Magenta", "Yellow"],
                 scale_factor=1.0,
-                extrude_cache={},
             )
 
         assert "White" in result
         assert "Cyan" in result
-        assert len(snap_calls) == 2
-        assert {call[0] for call in snap_calls} == {id(sq1), id(sq2)}
+        assert stepped_spy.call_count == 2
+        assert sorted(slab_counts) == [1, 2]
+        assert len(result["White"]["meshes"]) == 1
+        assert len(result["Cyan"]["meshes"]) == 1
 
     def test_run_group_union_falls_back_when_disjoint_subset_union_fails(self):
         geoms = [
@@ -3525,66 +3648,12 @@ class TestNativeBundlePaletteOverride:
 
 
 # ---------------------------------------------------------------------------
-# Fix 10: Degenerate geometry repair in _extrude_geometry & _normalize_contours
+# Degenerate geometry normalization
 # ---------------------------------------------------------------------------
 
 
 class TestDegenerateGeometryRepair:
-    """Non-polygon sub-geometries should be repaired, not silently dropped."""
-
-    def test_extrude_repairs_linestring_in_geometrycollection(self):
-        """LineString inside GeometryCollection is repaired via buffer."""
-        from shapely.geometry import box, GeometryCollection, LineString
-        from shapely.ops import unary_union
-
-        # Simulate what GEOS can produce with precision issues: a valid
-        # polygon + a degenerate sliver (LineString) in one collection.
-        big_poly = box(0, 0, 10, 10)
-        sliver = LineString([(5, 5), (5.0001, 5.0001)])  # ~0.14 um long
-        degenerate = GeometryCollection([big_poly, sliver])
-
-        meshes = VectorProcessor._extrude_geometry(
-            degenerate, height=0.08, z_offset=0.0, scale=1.0
-        )
-        # Both the polygon and the repaired sliver should produce mesh.
-        # Before the fix, only the polygon would extrude (sliver silently
-        # dropped). After the fix, both produce mesh.
-        assert len(meshes) == 2, "Polygon and repaired LineString must both extrude"
-        assert all(mesh.is_watertight for mesh in meshes)
-
-    def test_extrude_repairs_point_in_geometrycollection(self):
-        """Point inside GeometryCollection is repaired via buffer."""
-        from shapely.geometry import box, GeometryCollection, Point
-
-        big_poly = box(0, 0, 10, 10)
-        pt = Point(5.0, 5.0)
-        degenerate = GeometryCollection([big_poly, pt])
-
-        meshes = VectorProcessor._extrude_geometry(
-            degenerate, height=0.08, z_offset=0.0, scale=1.0
-        )
-        assert len(meshes) == 2, "Polygon and repaired Point must both extrude"
-        assert all(mesh.is_watertight for mesh in meshes)
-
-    def test_extrude_empty_geometrycollection_produces_nothing(self):
-        """Empty GeometryCollection should produce no meshes."""
-        from shapely.geometry import GeometryCollection
-
-        empty_gc = GeometryCollection([])
-        meshes = VectorProcessor._extrude_geometry(
-            empty_gc, height=0.08, z_offset=0.0, scale=1.0
-        )
-        assert len(meshes) == 0
-
-    def test_extrude_multipolygon_still_works(self):
-        """Normal MultiPolygon extrudes all parts (no regression)."""
-        from shapely.geometry import MultiPolygon, box
-
-        mp = MultiPolygon([box(0, 0, 5, 5), box(6, 0, 11, 5)])
-        meshes = VectorProcessor._extrude_geometry(
-            mp, height=0.08, z_offset=0.0, scale=1.0
-        )
-        assert len(meshes) == 2
+    """Contour normalization keeps polygonal content deterministic."""
 
     def test_normalize_extracts_only_polygons_from_geometrycollection(self):
         """_normalize_contours drops non-polygon elements from GC."""
@@ -3650,7 +3719,6 @@ class TestDegenerateGeometryRepair:
             num_channels=4,
             slot_names=["White", "Cyan", "Magenta", "Yellow"],
             scale_factor=1.0,
-            extrude_cache={},
         )
         assert "White" in result
         # Should have at least 1 mesh (the repaired polygon)

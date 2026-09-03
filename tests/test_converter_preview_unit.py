@@ -819,11 +819,11 @@ class TestPreviewMaterialSourceValidation:
             }
         ]
 
-    def test_vector_material_archive_keeps_full_host_reservation(
+    def test_vector_material_archive_uses_bounded_host_reservation(
         self,
         tmp_path,
     ) -> None:
-        """Implicit material solver state must not use the SVG-only estimate."""
+        """Implicit material state is counted without forcing the 8 GiB cap."""
 
         svg_path = tmp_path / "source.svg"
         svg_path.write_text(
@@ -856,9 +856,10 @@ class TestPreviewMaterialSourceValidation:
             )
 
         assert response.status_code == 200, response.text
-        assert _mock_pool.submit.call_args.kwargs[
+        reservation = _mock_pool.submit.call_args.kwargs[
             "host_memory_reservation_bytes"
-        ] == 8 * 1024**3
+        ]
+        assert 1024**3 < reservation < 2 * 1024**3
 
 
 # =========================================================================

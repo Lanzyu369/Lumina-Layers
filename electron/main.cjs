@@ -69,7 +69,6 @@ const MATERIALS_SEED_RESOURCE = path.join(
 const WORKSHOP_SEED_RESOURCE_DIR = isDev
   ? path.join(__dirname, "resources", "workshop-seed")
   : path.join(process.resourcesPath, "workshop-seed");
-const NATIVE_VECTOR_MESH_MARKER = "native-vector-mesh.enabled";
 const workshopSessionToken = createWorkshopSessionToken();
 let workshopSafeMode = false;
 
@@ -407,15 +406,6 @@ function backendRuntimeEnv() {
     ),
     LUMINA_WORKSHOP_DESKTOP_TOKEN: workshopSessionToken,
   };
-  const nativeMarkerPath = path.join(
-    process.resourcesPath,
-    "backend",
-    NATIVE_VECTOR_MESH_MARKER,
-  );
-  if (!isDev && fs.existsSync(nativeMarkerPath)) {
-    env.LUMINA_VECTOR_NATIVE_MESH = "1";
-    env.LUMINA_VECTOR_NATIVE_MESH_VALIDATE_SURFACE = "1";
-  }
   if (fs.existsSync(MATERIALS_SEED_RESOURCE)) {
     env.LUMINA_MATERIALS_SEED_PATH = MATERIALS_SEED_RESOURCE;
   }

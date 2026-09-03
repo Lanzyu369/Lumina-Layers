@@ -1261,6 +1261,8 @@ def test_export_dispatch_checks_scene_memory_before_any_kernel(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    import core.vector_engine as vector_engine
+
     scene = trimesh.Scene()
     scene.add_geometry(_box_mesh(), geom_name="Red")
     error = VectorMeshMemoryBudgetError(
@@ -1271,10 +1273,16 @@ def test_export_dispatch_checks_scene_memory_before_any_kernel(
         1,
         8,
     )
+    guard_calls: list[dict[str, object]] = []
+
+    def reject_scene_export(_scene, **kwargs):
+        guard_calls.append(kwargs)
+        raise error
+
     monkeypatch.setattr(
-        sys.modules["core.vector_engine"],
+        vector_engine,
         "_enforce_vector_scene_export_headroom",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
+        reject_scene_export,
     )
     monkeypatch.setattr(
         vector_glb_preview,
@@ -1304,6 +1312,7 @@ def test_export_dispatch_checks_scene_memory_before_any_kernel(
         )
 
     assert raised.value.stage == "vector_glb_export"
+    assert guard_calls[0]["workspace_multiplier"] == 2.0
 
 
 def test_v2_scene_reuse_export_uses_material_color_and_quantization(

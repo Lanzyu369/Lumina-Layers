@@ -2452,7 +2452,11 @@ def export_vector_glb_preview(
     _enforce_vector_scene_export_headroom(
         scene,
         stage="vector_glb_export",
-        workspace_multiplier=6.0,
+        # V2 reuses scene arrays and writes quantized chunks. The former 6x
+        # allowance described the copy-heavy V1 exporter and falsely rejects
+        # scenes already proven below the task budget. V1 keeps its own stricter
+        # admission check if runtime fallback is actually needed.
+        workspace_multiplier=2.0,
         minimum_workspace_bytes=16 * 1024 * 1024,
     )
     kernel = resolve_vector_glb_kernel_choice()

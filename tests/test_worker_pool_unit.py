@@ -598,12 +598,22 @@ class TestSubmit:
     def test_low_available_host_admits_only_one_small_vector_reservation(
         self,
         monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
     ) -> None:
-        """A 16 GiB desktop can run one bounded small task under pressure."""
+        """A low-free-memory 16 GiB desktop still runs one real small SVG."""
 
         gib = 1024**3
         available_bytes = 2_436_333_568
-        small_task_bytes = 5 * gib // 4
+        source_path = tmp_path / "ordinary.svg"
+        source_path.write_bytes(b"x" * (2 * 1024**2))
+        from core.vector_mesh_memory import (
+            estimate_vector_task_memory_reservation_bytes,
+        )
+
+        small_task_bytes = estimate_vector_task_memory_reservation_bytes(
+            source_path
+        )
+        assert small_task_bytes < 5 * gib // 4
         monkeypatch.setattr(
             worker_pool,
             "_available_host_memory_bytes",

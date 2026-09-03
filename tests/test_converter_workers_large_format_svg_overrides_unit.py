@@ -23,6 +23,7 @@ from api.workers.converter_workers import (
     LargeFormatCachedAnalysisError,
     worker_generate_large_format_svg_native,
 )
+from core.mesh_export_parts import get_mesh_export_part_ranges
 from core.vector_engine import (
     VectorAnalysis,
     VectorProcessor as _RealVectorProcessor,
@@ -206,6 +207,15 @@ def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
 
     result = None
     from core import vector_engine as vector_engine_module
+    from utils import bambu_3mf_writer as bambu_writer_module
+
+    captured_ranges = []
+    real_export = bambu_writer_module.export_scene_with_bambu_metadata
+
+    def _capture_export(**kwargs):
+        merged_mesh = kwargs["scene"].geometry["Red"]
+        captured_ranges.append(get_mesh_export_part_ranges(merged_mesh))
+        return real_export(**kwargs)
 
     with (
         patch(
@@ -223,6 +233,10 @@ def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
             "api.workers.converter_workers._rasterize_tile_for_cover",
             return_value=None,
         ),
+        patch(
+            "utils.bambu_3mf_writer.export_scene_with_bambu_metadata",
+            side_effect=_capture_export,
+        ),
     ):
         result = worker_generate_large_format_svg_native(
             "image.svg",
@@ -231,6 +245,8 @@ def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
         )
 
     bounded_concat.assert_called_once()
+    assert len(captured_ranges) == 1
+    assert captured_ranges[0] == ()
     assert any(
         call.kwargs.get("stage") == "large_format_vector_board_merge"
         for call in memory_guard.call_args_list
@@ -248,6 +264,9 @@ def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
             modifier_xml = tile_package.read(
                 "Metadata/layer_config_ranges.xml"
             )
+            model_settings_xml = tile_package.read(
+                "Metadata/model_settings.config"
+            )
             placement = json.loads(
                 tile_package.read(
                     "Metadata/lumina_wipe_tower_placement.json"
@@ -255,6 +274,8 @@ def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
             )
 
         root = ET.fromstring(modifier_xml)
+        model_settings = ET.fromstring(model_settings_xml)
+        assert len(model_settings.findall("./object/part")) == 1
         range_element = root.find("./object/range")
         assert range_element is not None
         assert float(range_element.attrib["min_z"]) == pytest.approx(
