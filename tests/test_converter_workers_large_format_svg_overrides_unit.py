@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import pickle
 import tempfile
@@ -198,6 +199,7 @@ def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
         slicer="BambuStudio",
         nozzle_size="0.4",
         enable_base_layer_height_modifier=True,
+        enable_wipe_tower_auto_placement=False,
         enable_relief=False,
         backing_color_id=1,
     )
@@ -246,6 +248,11 @@ def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
             modifier_xml = tile_package.read(
                 "Metadata/layer_config_ranges.xml"
             )
+            placement = json.loads(
+                tile_package.read(
+                    "Metadata/lumina_wipe_tower_placement.json"
+                )
+            )
 
         root = ET.fromstring(modifier_xml)
         range_element = root.find("./object/range")
@@ -259,6 +266,8 @@ def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
         layer_height = range_element.find("./option[@opt_key='layer_height']")
         assert layer_height is not None
         assert float(layer_height.text or "nan") == pytest.approx(0.2)
+        assert placement["enabled"] is False
+        assert placement["reason"] == "disabled_by_user"
     finally:
         if result is not None and os.path.exists(result["zip_path"]):
             os.unlink(result["zip_path"])

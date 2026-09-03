@@ -6,7 +6,7 @@ These tests pin down the observable contract of
 :func:`api.routers.feedback._sanitize_advanced_params`:
 
 - Preserve up to 64 keys under ``relief.color_height_map`` (path-level
-  exception raising the default 24-key cap).
+  exception raising the default 25-key cap).
 - Truncate ``relief.color_height_map`` beyond 64 keys with the shared
   ``__truncated_keys`` marker.
 - Keep arrays with up to 64 items untouched (``color_replacement.replacement_regions``
@@ -14,7 +14,7 @@ These tests pin down the observable contract of
   cap).
 - Preserve nesting up to depth 6 (the generic sanitizer would cut at
   depth 4).
-- Fall back to the default 24-key object cap on sibling groups that are
+- Fall back to the default 25-key object cap on sibling groups that are
   not ``relief.color_height_map``.
 
 Covers requirements 6.4, 6.5, 10.7.
@@ -157,10 +157,10 @@ def test_sanitizer_preserves_depth_6_nesting() -> None:
     assert leaf == "deep-leaf"
 
 
-def test_sanitizer_applies_default_24_key_cap_on_sibling_groups() -> None:
-    """Default 24-key cap still applies on a group other than relief.color_height_map.
+def test_sanitizer_applies_default_25_key_cap_on_sibling_groups() -> None:
+    """Default 25-key cap still applies on a group other than relief.color_height_map.
 
-    除 ``relief.color_height_map`` 以外的 sibling 分组仍然遵守 24 个 key 上限。
+    除 ``relief.color_height_map`` 以外的 sibling 分组仍然遵守 25 个 key 上限。
     """
     generation = {f"field_{i:02d}": i for i in range(30)}
     payload = {
@@ -177,14 +177,58 @@ def test_sanitizer_applies_default_24_key_cap_on_sibling_groups() -> None:
     assert "__truncated_keys" not in result["relief"]["color_height_map"]
     assert len(result["relief"]["color_height_map"]) == 64
 
-    # generation is capped at 24 keys + the truncation marker.
+    # generation is capped at 25 keys + the truncation marker.
     sanitized_generation = result["generation"]
-    assert sanitized_generation["__truncated_keys"] == 6
+    assert sanitized_generation["__truncated_keys"] == 5
     preserved_keys = [
         k for k in sanitized_generation.keys() if k != "__truncated_keys"
     ]
-    assert len(preserved_keys) == 24
-    assert preserved_keys == [f"field_{i:02d}" for i in range(24)]
+    assert len(preserved_keys) == 25
+    assert preserved_keys == [f"field_{i:02d}" for i in range(25)]
+
+
+def test_sanitizer_preserves_complete_generation_with_wipe_tower_warning() -> None:
+    """The current 25-key generation payload must keep its final warning list."""
+
+    generation = {
+        "structure_mode": "Single-sided",
+        "modeling_mode": "high-fidelity",
+        "color_layers": 5,
+        "layer_height_mm": 0.08,
+        "model_enable": False,
+        "model_only": False,
+        "model_threshold": None,
+        "model_margin": None,
+        "quantize_colors": 48,
+        "quantize_colors_unlocked": False,
+        "high_precision_3d_preview": False,
+        "enable_cleanup": True,
+        "svg_pixels_per_mm": 10,
+        "hue_enable": False,
+        "chroma_gate": 0,
+        "use_lut_constrained": False,
+        "auto_dynamic_range": False,
+        "separate_backing": False,
+        "material_dynamic_layer_count_enabled": False,
+        "material_min_layer_count": None,
+        "material_max_layer_count": None,
+        "material_backing_material_dir_name": None,
+        "material_delta_e00_tolerance": None,
+        "enable_wipe_tower_auto_placement": False,
+        "wipe_tower_warning_codes": [
+            "wipe_tower_manual_adjustment_required"
+        ],
+    }
+    assert len(generation) == 25
+
+    result = _sanitize_advanced_params({"generation": generation})
+
+    sanitized_generation = result["generation"]
+    assert sanitized_generation["enable_wipe_tower_auto_placement"] is False
+    assert sanitized_generation["wipe_tower_warning_codes"] == [
+        "wipe_tower_manual_adjustment_required"
+    ]
+    assert "__truncated_keys" not in sanitized_generation
 
 
 # ---------------------------------------------------------------------------

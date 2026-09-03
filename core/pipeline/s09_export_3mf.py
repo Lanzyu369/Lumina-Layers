@@ -84,6 +84,7 @@ def run(ctx: dict) -> dict:
         - bambu_color_height_mm (float): Bambu 彩色层高度，缺省为 0.0
         - bambu_face_orientation (str): Bambu 朝向，缺省为 "down"
         - enable_base_layer_height_modifier (bool): 是否启用底板粗层高覆盖，缺省为 True
+        - enable_wipe_tower_auto_placement (bool): 是否自动调整擦料塔布局，缺省为 True
         - device_profile_id (str | None): 机器适配 V2 生成的切片器维度设备配置 ID
         - export_transform_metadata (dict | None): Optional mutable export-transform result.
           可选的可变导出变换结果容器。
@@ -232,6 +233,9 @@ def run(ctx: dict) -> dict:
             enable_base_layer_height_modifier=(
                 bool(ctx.get("enable_base_layer_height_modifier", True))
                 and not bool(ctx.get("enable_relief", False))
+            ),
+            enable_wipe_tower_auto_placement=bool(
+                ctx.get("enable_wipe_tower_auto_placement", True)
             ),
             enable_relief=bool(ctx.get("enable_relief", False)),
             base_height_mm=float(ctx.get("bambu_base_height_mm", 0.0)),

@@ -11,7 +11,7 @@ object in the final package.
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import io
 import json
 import logging
@@ -23,7 +23,16 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import trimesh
 
-from utils.bambu_3mf_writer import BambuStudio3MFWriter, _FILAMENT_RESIZABLE_ARRAY_KEYS
+from core.wipe_tower_placement import (
+    Rect,
+    WipeTowerPlacementResult,
+    solve_wipe_tower_placement,
+)
+from utils.bambu_3mf_writer import (
+    BambuStudio3MFWriter,
+    _FILAMENT_RESIZABLE_ARRAY_KEYS,
+    _normalize_difference_index,
+)
 
 log = logging.getLogger(__name__)
 
@@ -117,6 +126,7 @@ def assemble_puzzle_3mf(
     overview_png_bytes: bytes | None = None,
     device_profile_id: str | None = None,
     build_plate_id: str | None = None,
+    enable_wipe_tower_auto_placement: bool = True,
 ) -> str:
     """Assemble multiple puzzle piece 3MF files into one grouped 3MF.
     将多个拼图单块 3MF 组装为一个按块分组的统一 3MF。
@@ -140,6 +150,9 @@ def assemble_puzzle_3mf(
             （组合总览 PNG，可复用于包内缩略图资源）
         device_profile_id: Optional generated machine registry profile ID.
             可选的生成式机器注册表设备配置 ID。
+        enable_wipe_tower_auto_placement: Whether to solve one wipe-tower
+            layout for the final combined geometry.（是否针对最终组合几何求解
+            一次擦料塔布局。）
 
     Returns:
         str: Output 3MF path.
@@ -173,6 +186,54 @@ def assemble_puzzle_3mf(
         }
         and not name.startswith("3D/Objects/")
     }
+    base_settings = _parse_project_settings_bytes(
+        base_files.get("Metadata/project_settings.config")
+    )
+    material_count = len(
+        [str(name) for name in (slot_names or []) if str(name)]
+    )
+    if material_count == 0:
+        source_colours = base_settings.get("filament_colour")
+        if isinstance(source_colours, list):
+            material_count = len(source_colours)
+    writer = BambuStudio3MFWriter(
+        output_path=output_path,
+        settings=base_settings,
+        color_mode="8-Color",
+        printer_id=printer_id,
+        slicer=slicer,
+        nozzle_size=nozzle_size,
+        device_profile_id=device_profile_id,
+        build_plate_id=build_plate_id,
+        enable_base_layer_height_modifier=False,
+        enable_wipe_tower_auto_placement=(
+            enable_wipe_tower_auto_placement
+        ),
+    )
+    placement = _resolve_combined_wipe_tower_placement(
+        piece_packages=piece_packages,
+        writer=writer,
+        material_count=max(1, material_count),
+    )
+    if placement is not None:
+        writer._wipe_tower_placement_cache = placement
+        translation_x, translation_y = placement.model_translation
+        if (translation_x, translation_y) != (0.0, 0.0):
+            piece_packages = [
+                replace(
+                    piece_package,
+                    source=replace(
+                        piece_package.source,
+                        offset_x_mm=(
+                            piece_package.source.offset_x_mm + translation_x
+                        ),
+                        offset_y_mm=(
+                            piece_package.source.offset_y_mm + translation_y
+                        ),
+                    ),
+                )
+                for piece_package in piece_packages
+            ]
 
     combined_root = _clone_empty_root_model(piece_packages[0].root_model)
     combined_resources = combined_root.find("m:resources", _NS)
@@ -253,17 +314,6 @@ def assemble_puzzle_3mf(
         "Base-layer-height modifier disabled for combined puzzle package",
         extra={"event": "puzzle_base_layer_height_modifier_disabled"},
     )
-    writer = BambuStudio3MFWriter(
-        output_path="combined-puzzle.3mf",
-        settings={},
-        color_mode="8-Color",
-        printer_id=printer_id,
-        slicer=slicer,
-        nozzle_size=nozzle_size,
-        device_profile_id=device_profile_id,
-        build_plate_id=build_plate_id,
-        enable_base_layer_height_modifier=False,
-    )
     _set_root_model_metadata(combined_root, "Application", writer._get_app_version_str())
     _set_root_model_metadata(combined_root, "BambuStudio:3mfVersion", "1")
     base_files["3D/3dmodel.model"] = _to_xml_bytes(combined_root)
@@ -288,7 +338,12 @@ def assemble_puzzle_3mf(
         nozzle_size=nozzle_size,
         device_profile_id=device_profile_id,
         build_plate_id=build_plate_id,
+        placement_writer=writer,
+        placement=placement,
     )
+    base_files[
+        "Metadata/lumina_wipe_tower_placement.json"
+    ] = writer._build_wipe_tower_placement_metadata_bytes()
     base_files["Metadata/slice_info.config"] = _build_combined_slice_info_bytes(
         printer_id=printer_id,
         slicer=slicer,
@@ -430,6 +485,183 @@ def _resolve_root_object_start(piece_packages: list[_LoadedPiecePackage]) -> int
     return max(existing_ids, default=10)
 
 
+def _parse_project_settings_bytes(
+    settings_bytes: bytes | None,
+) -> dict[str, object]:
+    """Parse source project settings for final-package layout decisions.
+
+    解析源项目设置，供最终组合包布局决策使用。
+    """
+
+    if settings_bytes is None:
+        return {}
+    try:
+        settings = json.loads(settings_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Failed to parse puzzle project settings: {exc}") from exc
+    if not isinstance(settings, dict):
+        raise ValueError("Puzzle project settings must be a JSON object.")
+    return settings
+
+
+def _resolve_combined_wipe_tower_placement(
+    *,
+    piece_packages: list[_LoadedPiecePackage],
+    writer: BambuStudio3MFWriter,
+    material_count: int,
+) -> WipeTowerPlacementResult | None:
+    """Solve tower placement against the geometry of the final piece group.
+
+    根据最终拼图块组合的实际几何求解擦料塔摆放。
+    """
+
+    if not writer.enable_wipe_tower_auto_placement:
+        return None
+
+    model_bounds, model_height = _resolve_combined_geometry_bounds(
+        piece_packages
+    )
+    template = writer._get_base_config_template()
+    request = writer._build_wipe_tower_placement_request(
+        template,
+        model_bounds=model_bounds,
+        model_height=model_height,
+        material_count=material_count,
+    )
+    if request is None:
+        return None
+    return solve_wipe_tower_placement(request)
+
+
+def _resolve_combined_geometry_bounds(
+    piece_packages: list[_LoadedPiecePackage],
+) -> tuple[Rect, float]:
+    """Measure the geometry that the combined root model will reference.
+
+    计算组合根模型最终引用的几何包围盒。
+    """
+
+    min_x = float("inf")
+    min_y = float("inf")
+    min_z = float("inf")
+    max_x = float("-inf")
+    max_y = float("-inf")
+    max_z = float("-inf")
+
+    for piece_package in piece_packages:
+        object_model = ET.fromstring(piece_package.object_model_bytes)
+        object_resources = object_model.find("m:resources", _NS)
+        if object_resources is None:
+            raise ValueError("Puzzle piece object model is missing resources.")
+        objects_by_id = {
+            object_node.get("id"): object_node
+            for object_node in object_resources.findall("m:object", _NS)
+            if object_node.get("id") is not None
+        }
+        for component in piece_package.root_object.findall(
+            "m:components/m:component",
+            _NS,
+        ):
+            object_node = objects_by_id.get(component.get("objectid"))
+            if object_node is None:
+                raise ValueError(
+                    "Puzzle piece root object references unknown component object ID."
+                )
+            transform = _parse_3mf_transform(component.get("transform"))
+            for vertex in object_node.findall(
+                "m:mesh/m:vertices/m:vertex",
+                _NS,
+            ):
+                try:
+                    vertex_x = float(vertex.get("x", "0"))
+                    vertex_y = float(vertex.get("y", "0"))
+                    vertex_z = float(vertex.get("z", "0"))
+                except ValueError as exc:
+                    raise ValueError(
+                        "Puzzle piece object model contains invalid vertex coordinates."
+                    ) from exc
+                transformed_x, transformed_y, transformed_z = (
+                    _apply_3mf_transform(
+                        transform,
+                        vertex_x,
+                        vertex_y,
+                        vertex_z,
+                    )
+                )
+                final_x = (
+                    transformed_x + piece_package.source.offset_x_mm
+                )
+                final_y = (
+                    transformed_y + piece_package.source.offset_y_mm
+                )
+                min_x = min(min_x, final_x)
+                min_y = min(min_y, final_y)
+                min_z = min(min_z, transformed_z)
+                max_x = max(max_x, final_x)
+                max_y = max(max_y, final_y)
+                max_z = max(max_z, transformed_z)
+
+    if not all(
+        np.isfinite(value)
+        for value in (min_x, min_y, min_z, max_x, max_y, max_z)
+    ):
+        raise ValueError("Puzzle 3MF assembly contains no measurable mesh vertices.")
+    return Rect(min_x, min_y, max_x, max_y), max(0.0, max_z - min_z)
+
+
+def _parse_3mf_transform(transform: str | None) -> tuple[float, ...]:
+    """Parse a 3MF 3x4 transform, defaulting an absent value to identity."""
+
+    if not transform:
+        return (
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+        )
+    parts = transform.split()
+    if len(parts) != 12:
+        raise ValueError("Puzzle piece component contains an invalid transform.")
+    try:
+        return tuple(float(part) for part in parts)
+    except ValueError as exc:
+        raise ValueError(
+            "Puzzle piece component contains a non-numeric transform."
+        ) from exc
+
+
+def _apply_3mf_transform(
+    transform: tuple[float, ...],
+    x: float,
+    y: float,
+    z: float,
+) -> tuple[float, float, float]:
+    """Apply one 3MF 4-by-3 affine transform to a vertex."""
+
+    return (
+        transform[0] * x
+        + transform[3] * y
+        + transform[6] * z
+        + transform[9],
+        transform[1] * x
+        + transform[4] * y
+        + transform[7] * z
+        + transform[10],
+        transform[2] * x
+        + transform[5] * y
+        + transform[8] * z
+        + transform[11],
+    )
+
+
 def _clone_empty_root_model(root_model: ET.Element) -> ET.Element:
     """Clone a root 3MF model and remove all resources/build entries.
     复制根 3MF 模型并清空资源与 build 条目。
@@ -541,6 +773,8 @@ def _build_combined_project_settings_bytes(
     nozzle_size: str,
     device_profile_id: str | None,
     build_plate_id: str | None,
+    placement_writer: BambuStudio3MFWriter,
+    placement: WipeTowerPlacementResult | None,
 ) -> bytes:
     """Build combined ``project_settings.config`` with a stable global palette.
 
@@ -548,18 +782,16 @@ def _build_combined_project_settings_bytes(
     """
 
     material_names = [str(name) for name in (slot_names or []) if str(name)]
-    if not material_names:
+    if not material_names and placement is None:
         if base_settings_bytes is None:
-            raise ValueError("Combined puzzle 3MF is missing project settings metadata.")
+            raise ValueError(
+                "Combined puzzle 3MF is missing project settings metadata."
+            )
         return base_settings_bytes
 
-    if base_settings_bytes is not None:
-        try:
-            settings = json.loads(base_settings_bytes.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError(f"Failed to parse puzzle project settings: {exc}") from exc
-    else:
-        writer = BambuStudio3MFWriter(
+    settings = _parse_project_settings_bytes(base_settings_bytes)
+    if not settings:
+        settings = BambuStudio3MFWriter(
             output_path="combined-puzzle.3mf",
             settings={},
             color_mode="8-Color",
@@ -569,36 +801,67 @@ def _build_combined_project_settings_bytes(
             device_profile_id=device_profile_id,
             build_plate_id=build_plate_id,
             enable_base_layer_height_modifier=False,
+        )._get_base_config_template()
+
+    if material_names:
+        num_colors = len(material_names)
+        _resize_project_settings_arrays(settings, num_colors)
+        material_settings = _build_project_material_settings(
+            material_names=material_names,
+            preview_colors=preview_colors,
+            printer_id=printer_id,
+            slicer=slicer,
+            nozzle_size=nozzle_size,
+            device_profile_id=device_profile_id,
+            build_plate_id=build_plate_id,
         )
-        settings = writer._get_base_config_template()
+        _replace_material_project_settings(settings, material_settings)
 
-    num_colors = len(material_names)
-    _resize_project_settings_arrays(settings, num_colors)
-    material_settings = _build_project_material_settings(
-        material_names=material_names,
-        preview_colors=preview_colors,
-        printer_id=printer_id,
-        slicer=slicer,
-        nozzle_size=nozzle_size,
-        device_profile_id=device_profile_id,
-        build_plate_id=build_plate_id,
-    )
-    _replace_material_project_settings(settings, material_settings)
-
-    settings["filament_colour"] = [
-        _rgb_to_hex(
-            _resolve_preview_rgb_for_material_name(
-                material_name=material_name,
-                material_index=index,
-                preview_colors=preview_colors,
-                existing_hex=settings.get("filament_colour", []),
+        settings["filament_colour"] = [
+            _rgb_to_hex(
+                _resolve_preview_rgb_for_material_name(
+                    material_name=material_name,
+                    material_index=index,
+                    preview_colors=preview_colors,
+                    existing_hex=settings.get("filament_colour", []),
+                )
             )
-        )
-        for index, material_name in enumerate(material_names)
-    ]
+            for index, material_name in enumerate(material_names)
+        ]
 
     settings.setdefault("single_extruder_multi_material", "1")
     settings.setdefault("enable_prime_tower", "1")
+    if placement is not None:
+        settings["wipe_tower_x"] = (
+            placement_writer._replace_first_config_number(
+                settings.get("wipe_tower_x"),
+                placement.tower_x,
+            )
+        )
+        settings["wipe_tower_y"] = (
+            placement_writer._replace_first_config_number(
+                settings.get("wipe_tower_y"),
+                placement.tower_y,
+            )
+        )
+        settings["prime_tower_width"] = placement_writer._format_number(
+            placement.tower_width
+        )
+        settings["wipe_tower_rotation_angle"] = (
+            placement_writer._format_number(placement.tower_rotation)
+        )
+        if placement.adapted:
+            settings["different_settings_to_system"] = (
+                _normalize_difference_index(
+                    settings.get("different_settings_to_system"),
+                    (
+                        "wipe_tower_x",
+                        "wipe_tower_y",
+                        "prime_tower_width",
+                        "wipe_tower_rotation_angle",
+                    ),
+                )
+            )
     return json.dumps(settings, indent=4, ensure_ascii=False).encode("utf-8")
 
 

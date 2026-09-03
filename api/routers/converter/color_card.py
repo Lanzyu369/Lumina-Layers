@@ -42,6 +42,7 @@ from core.vector_mesh_memory import (
     estimate_vector_task_memory_reservation_bytes,
     resolve_vector_mesh_memory_budget_bytes,
 )
+from utils.bambu_3mf_writer import read_wipe_tower_placement_warnings
 
 from .common import (
     BATCH_DOWNLOAD_TTL_SECONDS,
@@ -121,6 +122,13 @@ class ColorCardRequest(BaseModel):
     build_plate_id: str | None = Field(
         None,
         description="Slicer-native build plate ID.",
+    )
+    enable_wipe_tower_auto_placement: bool = Field(
+        True,
+        description=(
+            "Automatically place the wipe tower for the generated 3MF. "
+            "自动为生成的 3MF 摆放擦料塔。"
+        ),
     )
 
 
@@ -273,6 +281,9 @@ async def generate_color_card(
         "device_profile_id": body.device_profile_id,
         "build_plate_id": body.build_plate_id,
         "enable_base_layer_height_modifier": False,
+        "enable_wipe_tower_auto_placement": (
+            body.enable_wipe_tower_auto_placement
+        ),
         "material_source": session_material_source,
     }
     if session_material_source == "material_archive":
@@ -329,6 +340,8 @@ async def generate_color_card(
             status_code=500,
             detail=_COLOR_CARD_GENERATION_FAILED_DETAIL,
         )
+
+    placement_warnings = read_wipe_tower_placement_warnings(threemf_path)
 
     preview_3d_url: str | None = None
     download_id: str | None = None
@@ -403,4 +416,5 @@ async def generate_color_card(
         download_url=f"/api/files/{download_id}",
         preview_3d_url=preview_3d_url,
         threemf_disk_path=None,
+        warnings=placement_warnings,
     )

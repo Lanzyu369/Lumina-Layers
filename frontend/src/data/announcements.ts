@@ -16,6 +16,24 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-09-03",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [
+      {
+        category: { zh: "新功能", en: "New" },
+        items: [
+          {
+            zh: "设置里新增“擦料塔自动摆放”开关，默认开启；关闭后，生成的 3MF 会保留切片软件模板里的擦料塔参数，方便你手动安排位置和尺寸。",
+            en: "Settings now include an Automatic wipe-tower placement switch, enabled by default. Turn it off to keep the slicer template's tower position and size for manual layout.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-08-30",
     title: {
       zh: "Lumina Layers — 8 月更新速览",

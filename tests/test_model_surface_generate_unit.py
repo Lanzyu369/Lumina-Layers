@@ -555,6 +555,7 @@ def test_worker_generate_model_surface_overlay_exports_bambu_3mf(tmp_path):
                     "enable_relief": True,
                     "enable_cloisonne": True,
                     "enable_coating": True,
+                    "enable_wipe_tower_auto_placement": False,
                     "add_loop": False,
                     "loop_width": 4.0,
                     "loop_length": 8.0,
@@ -578,6 +579,7 @@ def test_worker_generate_model_surface_overlay_exports_bambu_3mf(tmp_path):
     assert captured["cover_source"] == str(image_path)
     assert captured["settings"] == {"layer_height": "0.04"}
     assert captured["enable_base_layer_height_modifier"] is False
+    assert captured["enable_wipe_tower_auto_placement"] is False
     assert captured["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.4"
     Path(result["threemf_path"]).unlink(missing_ok=True)
     assert not list(tmp_path.glob("*.glb"))

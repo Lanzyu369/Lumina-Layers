@@ -163,6 +163,7 @@ export type ConvertGenerateRequest = ConvertPreviewRequest & {
   device_profile_id?: string;
   build_plate_id?: string;
   enable_base_layer_height_modifier?: boolean;
+  enable_wipe_tower_auto_placement?: boolean;
   use_cached_matched_rgb?: boolean;
 };
 
@@ -1833,6 +1834,7 @@ export interface BatchConvertParams {
   device_profile_id?: string;
   build_plate_id?: string;
   enable_base_layer_height_modifier?: boolean;
+  enable_wipe_tower_auto_placement?: boolean;
 }
 
 // ========== Five-Color Query Models ==========
@@ -2175,6 +2177,7 @@ export interface UserSettings {
   custom_slicer_id: string;
   nozzle_size: string;
   enable_base_layer_height_modifier: boolean;
+  enable_wipe_tower_auto_placement: boolean;
 }
 
 export interface UserSettingsResponse {

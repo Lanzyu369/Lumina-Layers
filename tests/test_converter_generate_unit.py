@@ -340,6 +340,76 @@ def test_generate_response_forwards_embedded_wipe_tower_warning() -> None:
     ]
 
 
+def test_color_card_response_forwards_only_embedded_wipe_tower_warnings(
+    tmp_path: Path,
+) -> None:
+    """Color-card responses expose the warning embedded in the final 3MF."""
+
+    _test_store.clear_all()
+    _test_registry.clear_all()
+    warning_code = "wipe_tower_manual_adjustment_required"
+
+    for case_name, requires_manual_adjustment, expected_warnings in (
+        ("manual", True, [warning_code]),
+        ("safe", False, []),
+    ):
+        output_path = tmp_path / f"color-card-{case_name}.3mf"
+        with zipfile.ZipFile(output_path, "w") as package:
+            package.writestr(
+                "Metadata/lumina_wipe_tower_placement.json",
+                json.dumps(
+                    {
+                        "requires_manual_adjustment": requires_manual_adjustment,
+                        "warning_code": (
+                            warning_code if requires_manual_adjustment else None
+                        ),
+                    }
+                ),
+            )
+
+        lut_path = tmp_path / f"color-card-{case_name}.npy"
+        np.save(lut_path, np.zeros((1, 3), dtype=np.uint8))
+        svg_path = tmp_path / f"color-card-{case_name}.svg"
+        svg_path.write_text("<svg/>", encoding="utf-8")
+        sid = _test_store.create()
+        _test_store.put(sid, "lut_path", str(lut_path))
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                "target_w": 4,
+                "target_h": 4,
+                "target_width_mm": 40.0,
+                "color_palette": [{"hex": "#ff0000"}],
+                "color_mode": "4-Color (RYBW)",
+            },
+        )
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": str(output_path),
+                "glb_path": None,
+                "status_msg": "OK",
+            },
+        )
+
+        try:
+            with patch(
+                "core.color_card.generate_color_card_svg",
+                return_value=str(svg_path),
+            ):
+                response = client.post(
+                    "/api/convert/color-card",
+                    json={"session_id": sid},
+                )
+
+            assert response.status_code == 200, response.text
+            assert response.json()["warnings"] == expected_warnings
+            assert response.json()["warnings"].count(warning_code) <= 1
+        finally:
+            _test_store.close(sid)
+            _test_registry.clear_all()
+
+
 def _create_session_with_preview_and_files(store: SessionStore) -> str:
     """Create a session pre-populated with preview_cache and file paths."""
     sid: str = store.create()
@@ -923,10 +993,15 @@ class TestGenerateParameterCompleteness:
         ):
             response = client.post(
                 "/api/convert/color-card",
-                json={"session_id": sid},
+                json={
+                    "session_id": sid,
+                    "enable_wipe_tower_auto_placement": False,
+                },
             )
 
         assert response.status_code == 200, response.text
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_params["enable_wipe_tower_auto_placement"] is False
         assert _mock_pool.submit.call_args.kwargs[
             "host_memory_reservation_bytes"
         ] == 8 * 1024**3
@@ -1876,6 +1951,7 @@ class TestGenerateParameterCompleteness:
             "params": {
                 "lut_name": "test_lut",
                 "enable_base_layer_height_modifier": False,
+                "enable_wipe_tower_auto_placement": False,
             },
         }
 
@@ -1892,6 +1968,7 @@ class TestGenerateParameterCompleteness:
         assert response.status_code == 200
         submitted_params = _mock_pool.submit.call_args.args[3]
         assert submitted_params["enable_base_layer_height_modifier"] is False
+        assert submitted_params["enable_wipe_tower_auto_placement"] is False
 
     def test_generated_download_survives_source_session_close(self) -> None:
         fd_img, image_path = tempfile.mkstemp(suffix=".png")
@@ -2063,6 +2140,7 @@ class TestGenerateParameterCompleteness:
         assert response.status_code == 200
         submitted_params = _mock_pool.submit.call_args.args[3]
         assert submitted_params["enable_base_layer_height_modifier"] is True
+        assert submitted_params["enable_wipe_tower_auto_placement"] is True
 
 
 class TestNativeVectorPreviewGlbReuse:
@@ -10068,6 +10146,16 @@ class TestConverterEntryAcceptsBaseLayerModifierKwarg:
         params = inspect.signature(convert_image_to_3d).parameters
         assert "enable_base_layer_height_modifier" in params
         assert params["enable_base_layer_height_modifier"].default is True
+
+    def test_converter_signatures_accept_wipe_tower_auto_placement(self) -> None:
+        import inspect
+
+        from core.converter import convert_image_to_3d, generate_final_model
+
+        for entry_point in (convert_image_to_3d, generate_final_model):
+            params = inspect.signature(entry_point).parameters
+            assert "enable_wipe_tower_auto_placement" in params
+            assert params["enable_wipe_tower_auto_placement"].default is True
 
     def test_convert_image_to_3d_signature_accepts_material_backing_index(self) -> None:
         import inspect

@@ -732,6 +732,7 @@ describe("generateColorCard", () => {
         nozzle_size: "0.2",
         device_profile_id: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
         build_plate_id: "smooth-high-temp-plate",
+        enable_wipe_tower_auto_placement: false,
       },
       120,
       0.6,
@@ -750,6 +751,7 @@ describe("generateColorCard", () => {
         nozzle_size: "0.2",
         device_profile_id: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
         build_plate_id: "smooth-high-temp-plate",
+        enable_wipe_tower_auto_placement: false,
       },
       { timeout: 0 },
     );

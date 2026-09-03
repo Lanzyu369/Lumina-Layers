@@ -92,6 +92,13 @@ describe("settings store hydration and base-layer modifier wiring", () => {
       settingsStoreModule.useSettingsStore.getState()
         .enableBaseLayerHeightModifier,
     ).toBe(true);
+    expect(
+      settingsStoreModule.DEFAULT_SETTINGS.enableWipeTowerAutoPlacement,
+    ).toBe(true);
+    expect(
+      settingsStoreModule.useSettingsStore.getState()
+        .enableWipeTowerAutoPlacement,
+    ).toBe(true);
   });
 
   it("hydrates older snapshots with completion notifications disabled", async () => {
@@ -116,6 +123,10 @@ describe("settings store hydration and base-layer modifier wiring", () => {
         .preserveUploadFilenameFor3mf,
     ).toBe(false);
     expect(settingsStoreModule.useSettingsStore.getState().theme).toBe("dark");
+    expect(
+      settingsStoreModule.useSettingsStore.getState()
+        .enableWipeTowerAutoPlacement,
+    ).toBe(true);
   });
 
   it("setEnableBaseLayerHeightModifier updates state and invalidates generated artifacts", async () => {
@@ -334,6 +345,7 @@ describe("settings store hydration and base-layer modifier wiring", () => {
 
     settingsStoreModule.useSettingsStore.setState({
       enableBaseLayerHeightModifier: false,
+      enableWipeTowerAutoPlacement: false,
       customSlicerPath: "/Applications/Bambu Studio.app",
       customSlicerId: "bambu_studio",
       deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.2",
@@ -344,6 +356,7 @@ describe("settings store hydration and base-layer modifier wiring", () => {
     expect(systemApi.saveSettings).toHaveBeenCalledWith(
       expect.objectContaining({
         enable_base_layer_height_modifier: false,
+        enable_wipe_tower_auto_placement: false,
         custom_slicer_path: "/Applications/Bambu Studio.app",
         custom_slicer_id: "bambu_studio",
         device_profile_id: "BambuStudio:bbl:bambu-lab-h2d:0.2",
@@ -472,6 +485,7 @@ describe("settings store hydration and base-layer modifier wiring", () => {
 
     settingsStoreModule.useSettingsStore.setState({
       enableBaseLayerHeightModifier: false,
+      enableWipeTowerAutoPlacement: false,
       svgPixelsPerMm: 18.5,
       preserveUploadFilenameFor3mf: true,
     });
@@ -488,6 +502,7 @@ describe("settings store hydration and base-layer modifier wiring", () => {
       "sess-1",
       expect.objectContaining({
         enable_base_layer_height_modifier: false,
+        enable_wipe_tower_auto_placement: false,
         svg_pixels_per_mm: 18.5,
       }),
       true,

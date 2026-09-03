@@ -31,6 +31,7 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         watermark: str = "LuminaStudio",
         project_slot_names=None,
         enable_base_layer_height_modifier: bool = True,
+        enable_wipe_tower_auto_placement: bool = True,
         enable_relief: bool = False,
         base_height_mm: float = 0.0,
         color_height_mm: float = 0.0,
@@ -52,6 +53,9 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         captured["project_slot_names"] = list(project_slot_names) if project_slot_names is not None else None
         captured["watermark"] = watermark
         captured["enable_base_layer_height_modifier"] = enable_base_layer_height_modifier
+        captured["enable_wipe_tower_auto_placement"] = (
+            enable_wipe_tower_auto_placement
+        )
         captured["enable_relief"] = enable_relief
         captured["base_height_mm"] = base_height_mm
         captured["color_height_mm"] = color_height_mm
@@ -172,6 +176,7 @@ def test_s09_passes_base_layer_kwargs_when_ctx_has_them(tmp_path) -> None:
                 bambu_color_height_mm=2.4,
                 bambu_face_orientation="down",
                 enable_base_layer_height_modifier=True,
+                enable_wipe_tower_auto_placement=False,
                 backing_infill_density_percent=20,
             )
         )
@@ -179,6 +184,7 @@ def test_s09_passes_base_layer_kwargs_when_ctx_has_them(tmp_path) -> None:
     assert result["out_path"] == str(tmp_path / "ctx-values.3mf")
     kwargs = mock_export.call_args.kwargs
     assert kwargs["enable_base_layer_height_modifier"] is True
+    assert kwargs["enable_wipe_tower_auto_placement"] is False
     assert kwargs["base_height_mm"] == 0.8
     assert kwargs["color_height_mm"] == 2.4
     assert kwargs["face_orientation"] == "down"
@@ -222,6 +228,7 @@ def test_s09_falls_back_to_safe_defaults_when_ctx_missing_keys(tmp_path) -> None
     assert result["out_path"] == str(tmp_path / "defaults.3mf")
     kwargs = mock_export.call_args.kwargs
     assert kwargs["enable_base_layer_height_modifier"] is True
+    assert kwargs["enable_wipe_tower_auto_placement"] is True
     assert kwargs["base_height_mm"] == 0.0
     assert kwargs["color_height_mm"] == 0.0
     assert kwargs["face_orientation"] == "down"
