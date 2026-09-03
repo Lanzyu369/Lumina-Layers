@@ -211,3 +211,39 @@ def test_parallel_normalization_failure_replays_in_document_order(
     assert serial.status == retried.status == "unsupported"
     assert serial.reason_code == retried.reason_code == "unsupported_complexity"
     assert _result_snapshot(retried) == _result_snapshot(serial)
+
+
+def test_ordered_replay_failure_discards_staging_and_retries_serially(
+    monkeypatch,
+) -> None:
+    svg = _nested_parallel_fixture_svg()
+
+    monkeypatch.setenv("LUMINA_SVG_REPLAY_THREADS", "1")
+    serial = _analyze(svg)
+
+    monkeypatch.setenv("LUMINA_SVG_REPLAY_THREADS", "4")
+    parallel = _analyze(svg)
+    assert parallel.replay_worker_count == 4
+
+    monkeypatch.setenv("LUMINA_SVG_TEST_REPLAY_FAIL_AFTER", "2")
+    retried = _analyze(svg)
+
+    assert retried.status == serial.status == "supported"
+    assert retried.replay_worker_count == 1
+    assert retried.max_flattening_error_mm == serial.max_flattening_error_mm
+    assert retried.max_quantization_error_mm == serial.max_quantization_error_mm
+    assert _result_snapshot(retried) == _result_snapshot(serial)
+
+
+def test_ordered_replay_fault_seam_ignores_serial_workloads(monkeypatch) -> None:
+    monkeypatch.setenv("LUMINA_SVG_REPLAY_THREADS", "4")
+    monkeypatch.setenv("LUMINA_SVG_TEST_REPLAY_FAIL_AFTER", "1")
+
+    result = _analyze(
+        "<svg viewBox='0 0 10 10'>"
+        "<rect width='10' height='10' fill='#123456'/>"
+        "</svg>"
+    )
+
+    assert result.status == "supported"
+    assert result.replay_worker_count == 1

@@ -2880,6 +2880,19 @@ size_t configuredReplayWorkerCount(size_t taskCount, size_t inputPointCount)
     return boundedWorkerCount(hardwareThreads);
 }
 
+std::optional<size_t> configuredReplayTestFailureAfter()
+{
+    const char* value = std::getenv("LUMINA_SVG_TEST_REPLAY_FAIL_AFTER");
+    if(value == nullptr)
+        return std::nullopt;
+    size_t commandCount = 0;
+    const char* end = value + std::char_traits<char>::length(value);
+    const auto parsed = std::from_chars(value, end, commandCount);
+    if(parsed.ec != std::errc{} || parsed.ptr != end || commandCount == 0)
+        return std::nullopt;
+    return commandCount;
+}
+
 struct PreparedCommandNormalization {
     PrecisionPaths geometry;
     TopologyTrace topology_trace;
@@ -2905,7 +2918,8 @@ void discardPreparedNormalizations(PreparedNormalizationBatch& batch)
 
 PreparedNormalizationBatch prepareCommandNormalizations(
     const std::vector<lunasvg::PaintCommand>& commands,
-    const PhysicalDomain& domain)
+    const PhysicalDomain& domain,
+    bool allowParallel = true)
 {
     PreparedNormalizationBatch batch;
     size_t taskCount = 0;
@@ -2917,8 +2931,9 @@ PreparedNormalizationBatch prepareCommandNormalizations(
         inputPointCount = checkedSizeSum(
             inputPointCount, command.path_points.size());
     }
-    batch.worker_count = configuredReplayWorkerCount(
-        taskCount, inputPointCount);
+    batch.worker_count = allowParallel
+        ? configuredReplayWorkerCount(taskCount, inputPointCount)
+        : (taskCount == 0 ? 0 : 1);
     if(batch.worker_count < 2)
         return batch;
 
@@ -3010,6 +3025,47 @@ PreparedNormalizationBatch prepareCommandNormalizations(
     return batch;
 }
 
+class ParallelReplayBudgetScope {
+public:
+    ParallelReplayBudgetScope(
+        ComplexityBudget& complexityBudget,
+        PreparedNormalizationBatch& prepared)
+        : m_complexityBudget(complexityBudget),
+          m_active(!prepared.commands.empty())
+    {
+        if(!m_active)
+            return;
+        m_complexityBudget.attachParallelGate(
+            prepared.parallel_gate.get());
+        m_complexityBudget.attachClipperExecutionGate(
+            prepared.clipper_gate.get());
+    }
+
+    ParallelReplayBudgetScope(const ParallelReplayBudgetScope&) = delete;
+    ParallelReplayBudgetScope& operator=(
+        const ParallelReplayBudgetScope&) = delete;
+
+    ~ParallelReplayBudgetScope()
+    {
+        if(!m_active)
+            return;
+        m_complexityBudget.releaseParallelReservations();
+        m_complexityBudget.attachParallelGate(nullptr);
+        m_complexityBudget.attachClipperExecutionGate(nullptr);
+    }
+
+    bool active() const
+    {
+        return m_active;
+    }
+
+private:
+    ComplexityBudget& m_complexityBudget;
+    bool m_active{false};
+};
+
+class ParallelReplayRetry : public std::exception {};
+
 PrecisionPaths consumePreparedNormalization(
     PreparedCommandNormalization* prepared,
     const lunasvg::PaintCommand& command,
@@ -3036,9 +3092,11 @@ PrecisionPaths consumePreparedNormalization(
     return std::move(prepared->geometry);
 }
 
-PaintReplay replayPaintCommands(
+PaintReplay replayPreparedPaintCommands(
     const std::vector<lunasvg::PaintCommand>& commands,
-    const PhysicalDomain& domain)
+    const PhysicalDomain& domain,
+    PreparedNormalizationBatch& prepared,
+    const std::optional<size_t>& testFailureAfter)
 {
     if(domain.complexity_budget == nullptr)
         throw std::logic_error("missing_complexity_budget");
@@ -3047,9 +3105,16 @@ PaintReplay replayPaintCommands(
     std::vector<size_t> groupStack{0};
     replay.paints.reserve(commands.size());
     replay.program_nodes.reserve(commands.size() + 1);
-    auto prepared = prepareCommandNormalizations(commands, domain);
     replay.worker_count = static_cast<uint32_t>(prepared.worker_count);
     int32_t drawIndex = 0;
+    size_t consumedNormalizationCount = 0;
+    const auto injectOrderedReplayFailure = [&]() {
+        if(!testFailureAfter.has_value())
+            return;
+        ++consumedNormalizationCount;
+        if(consumedNormalizationCount == *testFailureAfter)
+            throw std::runtime_error("ordered_replay_test_failure");
+    };
     for(size_t commandIndex = 0;
             commandIndex < commands.size(); ++commandIndex) {
         const auto& command = commands[commandIndex];
@@ -3082,6 +3147,7 @@ PaintReplay replayPaintCommands(
                 prepared.commands.empty()
                     ? nullptr : &prepared.commands[commandIndex],
                 command, domain));
+            injectOrderedReplayFailure();
             continue;
         }
         if(command.kind == lunasvg::PaintCommandKind::ClipEnd) {
@@ -3102,6 +3168,7 @@ PaintReplay replayPaintCommands(
             prepared.commands.empty()
                 ? nullptr : &prepared.commands[commandIndex],
             command, domain);
+        injectOrderedReplayFailure();
         geometry = applyActiveClips(
             std::move(geometry), activeClips, domain);
         for(const auto& issue : geometry.fragment_issues) {
@@ -3146,6 +3213,48 @@ PaintReplay replayPaintCommands(
     else if(groupStack.size() != 1)
         replay.reason_code = "invalid_group_stack";
     return replay;
+}
+
+PaintReplay replayPaintCommandsOnce(
+    const std::vector<lunasvg::PaintCommand>& commands,
+    const PhysicalDomain& domain,
+    bool allowParallel)
+{
+    auto prepared = prepareCommandNormalizations(
+        commands, domain, allowParallel);
+    ParallelReplayBudgetScope parallelBudgetScope(
+        *domain.complexity_budget, prepared);
+    const auto testFailureAfter = parallelBudgetScope.active() && allowParallel
+        ? configuredReplayTestFailureAfter() : std::nullopt;
+    try {
+        return replayPreparedPaintCommands(
+            commands, domain, prepared, testFailureAfter);
+    } catch(...) {
+        if(parallelBudgetScope.active())
+            throw ParallelReplayRetry();
+        throw;
+    }
+}
+
+PaintReplay replayPaintCommands(
+    const std::vector<lunasvg::PaintCommand>& commands,
+    const PhysicalDomain& domain)
+{
+    if(domain.complexity_budget == nullptr)
+        throw std::logic_error("missing_complexity_budget");
+    const ComplexityBudget budgetBeforeReplay = *domain.complexity_budget;
+    const size_t topologySizeBeforeReplay = domain.topology_trace == nullptr
+        ? 0 : domain.topology_trace->boundaries.size();
+    try {
+        return replayPaintCommandsOnce(commands, domain, true);
+    } catch(const ParallelReplayRetry&) {
+        *domain.complexity_budget = budgetBeforeReplay;
+        if(domain.topology_trace != nullptr) {
+            domain.topology_trace->boundaries.resize(
+                topologySizeBeforeReplay);
+        }
+        return replayPaintCommandsOnce(commands, domain, false);
+    }
 }
 
 bool hasNonEmptyPaint(const std::vector<PaintGeometry>& paints)

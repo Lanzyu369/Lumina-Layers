@@ -276,6 +276,19 @@ def test_parallel_replay_reserves_peak_geometry_resources_before_allocation(
     assert kernel.count("catch(const std::bad_alloc&)") >= 3
 
 
+def test_parallel_replay_failure_restores_serial_budget_and_trace() -> None:
+    kernel = (PACKAGE_ROOT / "src" / "geometry_kernel.cpp").read_text(
+        encoding="utf-8"
+    )
+
+    assert "class ParallelReplayBudgetScope" in kernel
+    assert "const ComplexityBudget budgetBeforeReplay" in kernel
+    assert "const size_t topologySizeBeforeReplay" in kernel
+    assert "*domain.complexity_budget = budgetBeforeReplay;" in kernel
+    assert "boundaries.resize(\n                topologySizeBeforeReplay" in kernel
+    assert "replayPaintCommandsOnce(commands, domain, false)" in kernel
+
+
 def test_pinned_clipper_patch_counts_every_processed_intersection() -> None:
     patch = (
         PACKAGE_ROOT / "patches" / "clipper2-svg-miter-fallback.patch"
