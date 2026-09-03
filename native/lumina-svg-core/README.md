@@ -148,7 +148,7 @@ not stored in either report.
 
 The public-entry benchmark also includes a synthetic alpha-heavy case with 32
 source paints and 256 overlap cells. It completes the full Lumina
-host application's public analysis path in a 0.018644-second warm median on the
+host application's public analysis path in a 0.018317-second warm median on the
 recorded reference host. Memory and swap are recorded for diagnosis only and
 do not reject a valid run; the benchmark keeps only the public-entry time
 gates.

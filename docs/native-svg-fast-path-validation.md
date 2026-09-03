@@ -135,9 +135,9 @@ workers.
 |---|---:|
 | Fresh fixed-patch native build | PASS |
 | macOS 12.0 arm64 wheel build/install/runtime verification | PASS |
-| Standalone native suite from clean macOS 12 wheel | 592 passed; also 592 with 4 forced replay workers |
+| Standalone native suite from clean macOS 12 wheel | 595 passed; also 595 with 4 forced replay workers |
 | Former-alpha corpus through the Lumina adapter | 31 / 31 native supported |
-| Native differential/adapter/VectorAnalysis/packaging suite | 181 passed |
+| Native differential/adapter/VectorAnalysis/packaging suite | 182 passed |
 | Lumina workflow integration | 10 passed |
 | Product smoke | backend 168 passed; frontend 168 passed; lint 0 errors |
 | Structured logging fast gate | PASS |
@@ -252,11 +252,11 @@ does not use an artifact cache.
 
 | Metric | Result |
 |---|---:|
-| Warm median / 1.0 s gate | 0.123658 s / PASS |
-| Warm p95 / 1.25 s gate | 0.123877 s / PASS |
-| Native recorder / kernel | 0.048835 s / 0.045586 s |
-| Native adapter conversion | 0.023847 s |
-| Observed peak RSS / swap growth | 201,703,424 bytes (192.36 MiB) / 0 bytes |
+| Warm median / 1.0 s gate | 0.116923 s / PASS |
+| Warm p95 / 1.25 s gate | 0.118606 s / PASS |
+| Native recorder / kernel | 0.049111 s / 0.038086 s |
+| Native adapter conversion | 0.024259 s |
+| Observed peak RSS / swap growth | 203,882,496 bytes (194.44 MiB) / 0 bytes |
 | Raw / visible shapes | 1,024 / 1,024 |
 
 RSS and swap remain in the report for diagnosis only. They are not pass/fail
@@ -265,12 +265,12 @@ thresholds above are enforced.
 
 The same report measures a separate alpha-heavy public fixture with 32 source
 paints, two isolated opacity groups, 256 overlap cells, and 1,024 ordered
-contributions. Its complete `VectorAnalysis` median/p95 is 0.018644/0.018930 s,
-with 148,504,576 bytes observed peak RSS and zero swap growth. It exports 768 visible
-Polygon components, including 256 multi-source composite regions.
+contributions. Its complete `VectorAnalysis` median/p95 is 0.018317/0.018362 s,
+with 148,422,656 bytes observed peak RSS and zero swap growth. It exports 768
+visible Polygon components, including 256 multi-source composite regions.
 
 The public 3,097-path source proxy is also supported by default; its native
-capability check took 0.410833 s. No repository SVG at or above 50 MiB was
+capability check took 0.409056 s. No repository SVG at or above 50 MiB was
 available, so the separate large-file benchmark is recorded as unavailable
 instead of substituting another fixture. The anonymous 508-document run above
 is the large real-world parser evidence for this revision.
