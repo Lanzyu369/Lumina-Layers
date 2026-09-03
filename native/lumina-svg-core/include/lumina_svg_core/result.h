@@ -9,12 +9,13 @@
 
 namespace lumina_svg_core {
 
-inline constexpr uint32_t RESULT_SCHEMA_VERSION = 3;
+inline constexpr uint32_t RESULT_SCHEMA_VERSION = 4;
 
 enum class SourceKind : int32_t {
     Fill = 0,
     Stroke = 1,
     Silhouette = 2,
+    Composite = 3,
 };
 
 enum class UnprintableReason : int32_t {
@@ -36,9 +37,19 @@ struct GeometryCollection {
     std::vector<uint64_t> geometry_offsets{0};
     std::vector<int64_t> hole_parent;
     std::vector<uint8_t> rgba;
+    // Authoritative straight/unassociated sRGB values in [0, 1]. The byte
+    // RGBA array above is a deterministic compatibility view only.
+    std::vector<double> rgba_f64;
     std::vector<int32_t> draw_indices;
     std::vector<int32_t> source_indices;
     std::vector<int32_t> source_kinds;
+    // CSR provenance. Weights are premultiplied source contributions in
+    // bottom-to-top draw order and sum to the geometry alpha.
+    std::vector<uint64_t> contributor_offsets{0};
+    std::vector<int32_t> contributor_draw_indices;
+    std::vector<int32_t> contributor_source_indices;
+    std::vector<int32_t> contributor_source_kinds;
+    std::vector<double> contributor_weights;
 
     uint64_t geometryCount() const;
     uint64_t componentCount() const;
@@ -48,6 +59,7 @@ struct GeometryCollection {
 struct UnprintableFragmentCollection {
     std::vector<int32_t> reason_ids;
     std::vector<uint8_t> rgba;
+    std::vector<double> rgba_f64;
     std::vector<int32_t> draw_indices;
     std::vector<int32_t> source_indices;
     std::vector<int32_t> source_kinds;

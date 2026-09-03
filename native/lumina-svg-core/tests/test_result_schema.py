@@ -22,17 +22,23 @@ def test_result_buffers_are_typed_read_only_and_keep_owner_alive() -> None:
     )
 
     assert result.status == "supported"
-    assert result.schema_version == 3
+    assert result.schema_version == 4
     visible = result.visible
     coordinates = visible.coordinates
     ring_offsets = visible.ring_offsets
     polygon_offsets = visible.polygon_offsets
     geometry_offsets = visible.geometry_offsets
     rgba = visible.rgba
+    rgba_f64 = visible.rgba_f64
     draw_indices = visible.draw_indices
     source_indices = visible.source_indices
     source_kinds = visible.source_kinds
     hole_parent = visible.hole_parent
+    contributor_offsets = visible.contributor_offsets
+    contributor_draw_indices = visible.contributor_draw_indices
+    contributor_source_indices = visible.contributor_source_indices
+    contributor_source_kinds = visible.contributor_source_kinds
+    contributor_weights = visible.contributor_weights
 
     del visible
     del result
@@ -43,10 +49,16 @@ def test_result_buffers_are_typed_read_only_and_keep_owner_alive() -> None:
     assert polygon_offsets.dtype == np.dtype(np.uint64)
     assert geometry_offsets.dtype == np.dtype(np.uint64)
     assert rgba.dtype == np.dtype(np.uint8)
+    assert rgba_f64.dtype == np.dtype(np.float64)
     assert draw_indices.dtype == np.dtype(np.int32)
     assert source_indices.dtype == np.dtype(np.int32)
     assert source_kinds.dtype == np.dtype(np.int32)
     assert hole_parent.dtype == np.dtype(np.int64)
+    assert contributor_offsets.dtype == np.dtype(np.uint64)
+    assert contributor_draw_indices.dtype == np.dtype(np.int32)
+    assert contributor_source_indices.dtype == np.dtype(np.int32)
+    assert contributor_source_kinds.dtype == np.dtype(np.int32)
+    assert contributor_weights.dtype == np.dtype(np.float64)
 
     for array in (
         coordinates,
@@ -54,10 +66,16 @@ def test_result_buffers_are_typed_read_only_and_keep_owner_alive() -> None:
         polygon_offsets,
         geometry_offsets,
         rgba,
+        rgba_f64,
         draw_indices,
         source_indices,
         source_kinds,
         hole_parent,
+        contributor_offsets,
+        contributor_draw_indices,
+        contributor_source_indices,
+        contributor_source_kinds,
+        contributor_weights,
     ):
         assert not array.flags.writeable
 
@@ -71,6 +89,12 @@ def test_result_buffers_are_typed_read_only_and_keep_owner_alive() -> None:
     assert geometry_offsets[-1] == len(polygon_offsets) - 1
     for start, end in zip(ring_offsets[:-1], ring_offsets[1:], strict=True):
         assert np.array_equal(coordinates[start], coordinates[end - 1])
+    assert rgba_f64.shape == (2, 4)
+    assert contributor_offsets.tolist() == [0, 1, 2]
+    assert contributor_draw_indices.tolist() == [0, 1]
+    assert contributor_source_indices.tolist() == [2, 2]
+    assert contributor_source_kinds.tolist() == [0, 1]
+    assert contributor_weights.tolist() == pytest.approx([1.0, 1.0])
 
 
 def test_supported_result_exposes_non_overlapping_stage_timings() -> None:
@@ -103,11 +127,38 @@ def test_supported_result_preserves_paint_identity_census() -> None:
         assert collection.draw_indices.tolist() == [0, 1]
         assert collection.source_indices.tolist() == [2, 2]
         assert collection.source_kinds.tolist() == [0, 1]
+        np.testing.assert_allclose(
+            collection.rgba_f64,
+            np.asarray(
+                [
+                    [1.0, 0.0, 0.0, 1.0],
+                    [0.0, 0.0, 1.0, 1.0],
+                ]
+            ),
+            rtol=0,
+            atol=0,
+        )
+        assert collection.contributor_offsets.tolist() == [0, 1, 2]
+        assert collection.contributor_draw_indices.tolist() == [0, 1]
+        assert collection.contributor_source_indices.tolist() == [2, 2]
+        assert collection.contributor_source_kinds.tolist() == [0, 1]
+        assert collection.contributor_weights.tolist() == pytest.approx(
+            [1.0, 1.0]
+        )
 
     assert result.silhouette.geometry_count == 1
     assert result.silhouette.component_count == 1
     assert result.silhouette.rgba.tolist() == [[0, 0, 0, 255]]
+    np.testing.assert_allclose(
+        result.silhouette.rgba_f64,
+        np.asarray([[0.0, 0.0, 0.0, 1.0]]),
+        rtol=0,
+        atol=0,
+    )
     assert result.silhouette.source_kinds.tolist() == [2]
+    assert result.silhouette.contributor_offsets.tolist() == [0, 0]
+    assert result.silhouette.contributor_draw_indices.tolist() == []
+    assert result.silhouette.contributor_weights.tolist() == []
 
 
 def test_non_area_fragments_are_reported_outside_polygon_collections() -> None:
@@ -122,7 +173,7 @@ def test_non_area_fragments_are_reported_outside_polygon_collections() -> None:
     )
 
     assert result.status == "supported"
-    assert result.schema_version == 3
+    assert result.schema_version == 4
     assert result.input_paint_count == 3
     assert result.raw.geometry_count == 1
     assert result.visible.geometry_count == 1
@@ -136,6 +187,17 @@ def test_non_area_fragments_are_reported_outside_polygon_collections() -> None:
         [64, 80, 96, 255],
         [112, 128, 144, 255],
     ]
+    np.testing.assert_allclose(
+        fragments.rgba_f64,
+        np.asarray(
+            [
+                [64 / 255, 80 / 255, 96 / 255, 1.0],
+                [112 / 255, 128 / 255, 144 / 255, 1.0],
+            ]
+        ),
+        rtol=0,
+        atol=1e-15,
+    )
     assert fragments.draw_indices.tolist() == [1, 2]
     assert fragments.source_indices.tolist() == [2, 3]
     assert fragments.source_kinds.tolist() == [0, 0]

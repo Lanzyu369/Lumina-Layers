@@ -15,6 +15,7 @@ import statistics
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -57,6 +58,13 @@ SUPPORTED_SCALE_PROVENANCE = (
     / "lumina-svg-core"
     / "benchmarks"
     / "supported_scale_fixture_provenance.json"
+)
+ALPHA_COMPOSITING_FIXTURE = (
+    REPO_ROOT
+    / "native"
+    / "lumina-svg-core"
+    / "benchmarks"
+    / "alpha_compositing_fixture.svg"
 )
 SOURCE_PROXY = REPO_ROOT / "test_images" / "benchmark.svg"
 LARGE_REGRESSION_MINIMUM_BYTES = 50 * 1024 * 1024
@@ -253,6 +261,42 @@ def _update_json(hasher: Any, value: Any) -> None:
     )
 
 
+def _contributor_fingerprint_payload(contributor: Any) -> dict[str, Any]:
+    if isinstance(contributor, dict):
+        value = contributor.get
+    else:
+        value = lambda name, default=None: getattr(  # noqa: E731
+            contributor, name, default
+        )
+    paint_id = value("native_paint_id")
+    return {
+        "native_draw_order": int(value("native_draw_order", -1)),
+        "native_source_index": int(value("native_source_index", -1)),
+        "source_kind": str(value("source_kind", "")),
+        "weight": float(value("weight", 0.0)),
+        "native_paint_id": (
+            None if paint_id is None else [int(part) for part in paint_id]
+        ),
+    }
+
+
+def _paint_fingerprint_payload(item: dict[str, Any]) -> dict[str, Any]:
+    paint_id = item.get("native_paint_id")
+    return {
+        "color": [int(value) for value in item["color"]],
+        "rgba": [int(value) for value in item.get("rgba", ())],
+        "rgba_f64": [float(value) for value in item.get("rgba_f64", ())],
+        "source_kind": str(item.get("source_kind", "")),
+        "native_paint_id": (
+            None if paint_id is None else [int(part) for part in paint_id]
+        ),
+        "native_paint_contributors": [
+            _contributor_fingerprint_payload(contributor)
+            for contributor in item.get("native_paint_contributors", ())
+        ],
+    }
+
+
 def _analysis_fingerprint(analysis: Any) -> str:
     hasher = hashlib.sha256()
     _update_json(
@@ -266,25 +310,24 @@ def _analysis_fingerprint(analysis: Any) -> str:
         },
     )
     for item in analysis.shape_data:
-        _update_json(
-            hasher,
-            {
-                "color": list(item["color"]),
-                "source_kind": item.get("source_kind", ""),
-            },
-        )
+        _update_json(hasher, _paint_fingerprint_payload(item))
         _update_geometry(hasher, item["poly"])
     for item in analysis.clipped_shapes:
-        _update_json(
-            hasher,
+        paint_payload = _paint_fingerprint_payload(item)
+        paint_payload.update(
             {
-                "color": list(item["color"]),
                 "draw_order": int(item.get("draw_order", -1)),
-                "native_draw_order": int(item.get("native_draw_order", -1)),
+                "native_draw_order": int(
+                    item.get("native_draw_order", -1)
+                ),
                 "native_source_index": int(
                     item.get("native_source_index", -1)
                 ),
-            },
+            }
+        )
+        _update_json(
+            hasher,
+            paint_payload,
         )
         _update_geometry(hasher, item["geometry"])
     for item in analysis.matched_shapes:
@@ -330,6 +373,22 @@ def _output_summary(analysis: Any, fingerprint: str) -> dict[str, Any]:
         "raw_shape_count": len(analysis.shape_data),
         "visible_shape_count": len(analysis.clipped_shapes),
         "matched_shape_count": len(analysis.matched_shapes),
+        "partial_alpha_raw_shape_count": sum(
+            0.0 < float(item["rgba_f64"][3]) < 1.0
+            for item in analysis.shape_data
+        ),
+        "partial_alpha_visible_shape_count": sum(
+            0.0 < float(item["rgba_f64"][3]) < 1.0
+            for item in analysis.clipped_shapes
+        ),
+        "composite_visible_shape_count": sum(
+            item.get("source_kind") == "composite"
+            for item in analysis.clipped_shapes
+        ),
+        "visible_contributor_count": sum(
+            len(item.get("native_paint_contributors", ()))
+            for item in analysis.clipped_shapes
+        ),
         "silhouette_component_count": len(silhouette_components),
         "silhouette_hole_count": sum(
             len(component.interiors) for component in silhouette_components
@@ -348,6 +407,9 @@ def _output_summary(analysis: Any, fingerprint: str) -> dict[str, Any]:
             }
         ),
         "fingerprint": fingerprint,
+        "fingerprint_contract": (
+            "geometry-exact-rgba-paint-provenance-v2"
+        ),
     }
 
 
@@ -502,6 +564,109 @@ def _measure_complete_entry(
     )
 
 
+def _measure_complete_entry_isolated(
+    svg_path: Path,
+    lut_path: Path,
+    *,
+    target_width_mm: float,
+    tolerance_mm: float,
+    warm_runs: int,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Measure one complete public-entry case in a fresh interpreter.
+
+    在全新的解释器进程中测量一次完整公共入口案例。
+    """
+
+    with tempfile.TemporaryDirectory(
+        prefix="lumina-native-svg-benchmark-"
+    ) as temporary_dir:
+        result_path = Path(temporary_dir) / "measurement.json"
+        command = [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--_measurement-child",
+            "--svg",
+            str(Path(svg_path).resolve()),
+            "--lut",
+            str(Path(lut_path).resolve()),
+            "--target-width-mm",
+            str(target_width_mm),
+            "--tolerance-mm",
+            str(tolerance_mm),
+            "--warm-runs",
+            str(warm_runs),
+            "--output",
+            str(result_path),
+        ]
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=7200,
+            cwd=REPO_ROOT,
+        )
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout).strip()
+            raise RuntimeError(
+                "isolated_native_svg_benchmark_failed:"
+                + (detail or f"exit_{completed.returncode}")
+            )
+        try:
+            payload = json.loads(result_path.read_text(encoding="utf-8"))
+            measurement = payload["measurement"]
+            output = payload["output"]
+        except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                "isolated_native_svg_benchmark_invalid_result"
+            ) from exc
+        if not isinstance(measurement, dict) or not isinstance(output, dict):
+            raise RuntimeError("isolated_native_svg_benchmark_invalid_result")
+        return measurement, output
+
+
+def _measurement_child_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--_measurement-child", action="store_true")
+    parser.add_argument("--svg", type=Path, required=True)
+    parser.add_argument("--lut", type=Path, required=True)
+    parser.add_argument("--target-width-mm", type=float, required=True)
+    parser.add_argument("--tolerance-mm", type=float, required=True)
+    parser.add_argument("--warm-runs", type=int, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args(argv)
+
+    processor = VectorProcessor(str(args.lut.resolve()), "4-Color (RYBW)")
+    swap_before, swap_source = _system_swap_used_bytes()
+    measurement, output = _measure_complete_entry(
+        processor,
+        args.svg.resolve(),
+        target_width_mm=args.target_width_mm,
+        tolerance_mm=args.tolerance_mm,
+        warm_runs=args.warm_runs,
+    )
+    swap_after, swap_after_source = _system_swap_used_bytes()
+    if swap_source != swap_after_source:
+        swap_source = f"{swap_source}->{swap_after_source}"
+    measurement.update(
+        {
+            "process_isolation": "fresh_subprocess",
+            "process_pid": os.getpid(),
+            "peak_rss_bytes": _peak_rss_bytes(),
+            "swap_delta_bytes": max(0, swap_after - swap_before),
+            "swap_measurement": swap_source,
+        }
+    )
+    args.output.write_text(
+        json.dumps(
+            {"measurement": measurement, "output": output},
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    return 0
+
+
 def _record_real_r4c1(path: Path | None) -> dict[str, Any]:
     if path is None:
         return {
@@ -601,7 +766,7 @@ def _find_large_svg_files(
 def _large_regression_record(
     search_roots: list[tuple[str, Path]],
     explicit_path: Path | None,
-    processor: VectorProcessor,
+    lut_path: Path,
     *,
     target_width_mm: float,
     tolerance_mm: float,
@@ -637,19 +802,15 @@ def _large_regression_record(
     byte_size = large_path.stat().st_size
     if byte_size < LARGE_REGRESSION_MINIMUM_BYTES:
         raise ValueError(f"large_regression_is_too_small:{byte_size}")
-    swap_before, swap_source = _system_swap_used_bytes()
-    measurement, output = _measure_complete_entry(
-        processor,
+    measurement, output = _measure_complete_entry_isolated(
         large_path,
+        lut_path,
         target_width_mm=target_width_mm,
         tolerance_mm=tolerance_mm,
         warm_runs=warm_runs,
     )
-    swap_after, swap_after_source = _system_swap_used_bytes()
-    if swap_source != swap_after_source:
-        swap_source = f"{swap_source}->{swap_after_source}"
-    peak_rss_bytes = _peak_rss_bytes()
-    swap_delta_bytes = max(0, swap_after - swap_before)
+    peak_rss_bytes = int(measurement["peak_rss_bytes"])
+    swap_delta_bytes = int(measurement["swap_delta_bytes"])
     return {
         **base_record,
         "status": "measured",
@@ -660,7 +821,7 @@ def _large_regression_record(
         "output": output,
         "peak_rss_bytes": peak_rss_bytes,
         "swap_delta_bytes": swap_delta_bytes,
-        "swap_measurement": swap_source,
+        "swap_measurement": measurement["swap_measurement"],
         "rss_threshold_passed": peak_rss_bytes <= 2 * 1024**3,
         "swap_delta_threshold_passed": swap_delta_bytes <= 256 * 1024**2,
         "note": (
@@ -679,24 +840,19 @@ def _relative_repo_path(path: Path) -> str:
 def _benchmark_manifest(args: argparse.Namespace) -> dict[str, Any]:
     svg_path = args.svg.resolve()
     lut_path = args.lut.resolve()
-    processor = VectorProcessor(str(lut_path), "4-Color (RYBW)")
-    swap_before, swap_source = _system_swap_used_bytes()
-    measurement, output = _measure_complete_entry(
-        processor,
+    measurement, output = _measure_complete_entry_isolated(
         svg_path,
+        lut_path,
         target_width_mm=args.target_width_mm,
         tolerance_mm=args.tolerance_mm,
         warm_runs=args.warm_runs,
     )
-    swap_after, swap_after_source = _system_swap_used_bytes()
-    if swap_source != swap_after_source:
-        swap_source = f"{swap_source}->{swap_after_source}"
-    measurement.update(
-        {
-            "peak_rss_bytes": _peak_rss_bytes(),
-            "swap_delta_bytes": max(0, swap_after - swap_before),
-            "swap_measurement": swap_source,
-        }
+    alpha_measurement, alpha_output = _measure_complete_entry_isolated(
+        ALPHA_COMPOSITING_FIXTURE,
+        lut_path,
+        target_width_mm=args.target_width_mm,
+        tolerance_mm=args.tolerance_mm,
+        warm_runs=args.warm_runs,
     )
     if svg_path == SUPPORTED_SCALE_FIXTURE.resolve():
         provenance = json.loads(
@@ -707,7 +863,7 @@ def _benchmark_manifest(args: argparse.Namespace) -> dict[str, Any]:
         provenance = None
         fixture_classification = "explicit_supported_fixture"
     return {
-        "schema_version": 2,
+        "schema_version": 4,
         "entrypoint": "core.vector_engine.VectorProcessor.analyze_svg",
         "fixture": {
             "path": _relative_repo_path(svg_path),
@@ -731,6 +887,16 @@ def _benchmark_manifest(args: argparse.Namespace) -> dict[str, Any]:
         },
         "measurement": measurement,
         "output": output,
+        "alpha_compositing": {
+            "fixture": {
+                "path": _relative_repo_path(ALPHA_COMPOSITING_FIXTURE),
+                "classification": "alpha_compositing",
+                "byte_size": ALPHA_COMPOSITING_FIXTURE.stat().st_size,
+                **_fixture_structure(ALPHA_COMPOSITING_FIXTURE),
+            },
+            "measurement": alpha_measurement,
+            "output": alpha_output,
+        },
         "source_proxy": _record_source_proxy_capability(
             args.source_proxy.resolve()
         ),
@@ -738,7 +904,7 @@ def _benchmark_manifest(args: argparse.Namespace) -> dict[str, Any]:
         "large_regression": _large_regression_record(
             args.large_search_root,
             args.large_svg,
-            processor,
+            lut_path,
             target_width_mm=args.target_width_mm,
             tolerance_mm=args.tolerance_mm,
             warm_runs=args.warm_runs,
@@ -826,4 +992,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    if "--_measurement-child" in sys.argv[1:]:
+        raise SystemExit(_measurement_child_main(sys.argv[1:]))
     main()

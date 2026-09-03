@@ -1,5 +1,5 @@
 diff --git a/include/lunasvg.h b/include/lunasvg.h
-index 74f43bb..405c5fc 100644
+index 74f43bb..86b29a3 100644
 --- a/include/lunasvg.h
 +++ b/include/lunasvg.h
 @@ -23,6 +23,8 @@
@@ -11,14 +11,14 @@ index 74f43bb..405c5fc 100644
  #include <cstdint>
  #include <memory>
  #include <string>
-@@ -491,6 +493,95 @@ public:
+@@ -491,6 +493,96 @@ public:
    float f{0}; ///< The vertical translation offset.
  };
  
 +/**
 + * Version of the stable paint-command schema exposed by the Lumina fork.
 + */
-+inline constexpr uint32_t PAINT_COMMAND_SCHEMA_VERSION = 3;
++inline constexpr uint32_t PAINT_COMMAND_SCHEMA_VERSION = 4;
 +
 +enum class PaintCommandKind : uint8_t {
 +  Fill,
@@ -71,8 +71,9 @@ index 74f43bb..405c5fc 100644
 +  PaintFillRule fill_rule{PaintFillRule::NonZero};
 +  PaintStrokeStyle stroke;
 +  bool has_partial_alpha{false};
++  double paint_opacity{1};
 +  bool non_scaling_stroke{false};
-+  float group_opacity{1};
++  double group_opacity{1};
 +  int32_t source_index{-1};
 +  uint32_t relative_path_operation_count{0};
 +  uint32_t transform_operation_count{0};
@@ -107,7 +108,7 @@ index 74f43bb..405c5fc 100644
  class SVGNode;
  class SVGTextNode;
  class SVGElement;
-@@ -816,6 +907,43 @@ public:
+@@ -816,6 +908,43 @@ public:
     */
    Element documentElement() const;
  
@@ -151,7 +152,7 @@ index 74f43bb..405c5fc 100644
    Document(Document &&);
    Document &operator=(Document &&);
    ~Document();
-@@ -826,9 +954,27 @@ private:
+@@ -826,9 +955,27 @@ private:
    Document &operator=(const Document &) = delete;
    SVGRootElement *rootElement(bool layoutIfNeeded = false) const;
    bool parse(const char *data, size_t length);
@@ -888,7 +889,7 @@ index 0a4399f..b3c4e97 100644
  {
      if(layoutIfNeeded)
 diff --git a/source/svgelement.cpp b/source/svgelement.cpp
-index 7d62cc6..b314fc4 100644
+index 7d62cc6..6eb08ad 100644
 --- a/source/svgelement.cpp
 +++ b/source/svgelement.cpp
 @@ -3,13 +3,1422 @@
@@ -2523,16 +2524,21 @@ index 7d62cc6..b314fc4 100644
      if(deep) { cloneChildren(element.get()); }
      return element;
  }
-@@ -455,6 +1956,8 @@ void SVGElement::layoutElement(const SVGLayoutState& state)
+@@ -455,6 +1956,13 @@ void SVGElement::layoutElement(const SVGLayoutState& state)
      m_clipper = getClipper(state.clip_path());
      m_masker = getMasker(state.mask());
      m_opacity = state.opacity();
++    m_recordingOpacity = state.recording_opacity();
 +    m_fillHasPartialAlpha = state.fill_has_partial_alpha();
 +    m_strokeHasPartialAlpha = state.stroke_has_partial_alpha();
++    m_recordingFillPaintOpacity =
++        state.recording_fill_paint_opacity();
++    m_recordingStrokePaintOpacity =
++        state.recording_stroke_paint_opacity();
  
      m_font_size = state.font_size();
      m_display = state.display();
-@@ -596,28 +2099,56 @@ SVGGraphicsElement::SVGGraphicsElement(Document* document, ElementID id)
+@@ -596,28 +2104,56 @@ SVGGraphicsElement::SVGGraphicsElement(Document* document, ElementID id)
      addProperty(m_transform);
  }
  
@@ -2597,7 +2603,7 @@ index 7d62cc6..b314fc4 100644
      return strokeData;
  }
  
-@@ -646,7 +2177,8 @@ Transform SVGSVGElement::localTransform() const
+@@ -646,7 +2182,8 @@ Transform SVGSVGElement::localTransform() const
      };
  
      if(isRootElement())
@@ -2607,7 +2613,7 @@ index 7d62cc6..b314fc4 100644
      return SVGGraphicsElement::localTransform() * Transform::translated(viewportRect.x, viewportRect.y) * viewBoxToViewTransform(viewportRect.size());
  }
  
-@@ -665,9 +2197,22 @@ void SVGSVGElement::render(SVGRenderState& state) const
+@@ -665,9 +2202,22 @@ void SVGSVGElement::render(SVGRenderState& state) const
      SVGBlendInfo blendInfo(this);
      SVGRenderState newState(this, state, localTransform());
      newState.beginGroup(blendInfo);
@@ -2632,7 +2638,7 @@ index 7d62cc6..b314fc4 100644
      newState.endGroup(blendInfo);
  }
  
-@@ -691,9 +2236,9 @@ SVGElement* SVGRootElement::getElementById(std::string_view id) const
+@@ -691,9 +2241,9 @@ SVGElement* SVGRootElement::getElementById(std::string_view id) const
      return it->second;
  }
  
@@ -2644,7 +2650,7 @@ index 7d62cc6..b314fc4 100644
  }
  
  void SVGRootElement::layout(SVGLayoutState& state)
-@@ -782,13 +2327,16 @@ void SVGUseElement::render(SVGRenderState& state) const
+@@ -782,13 +2332,16 @@ void SVGUseElement::render(SVGRenderState& state) const
  
  void SVGUseElement::build()
  {
@@ -2662,7 +2668,7 @@ index 7d62cc6..b314fc4 100644
  }
  
  inline bool isDisallowedElement(const SVGElement* element)
-@@ -833,10 +2381,16 @@ std::unique_ptr<SVGElement> SVGUseElement::cloneTargetElement(SVGElement* target
+@@ -833,10 +2386,16 @@ std::unique_ptr<SVGElement> SVGUseElement::cloneTargetElement(SVGElement* target
      }
  
      auto newElement = SVGElement::create(document(), tagId);
@@ -2679,7 +2685,7 @@ index 7d62cc6..b314fc4 100644
                  newElement->setAttribute(attribute);
              }
          }
-@@ -1016,9 +2570,22 @@ void SVGMarkerElement::renderMarker(SVGRenderState& state, const Point& origin,
+@@ -1016,9 +2575,22 @@ void SVGMarkerElement::renderMarker(SVGRenderState& state, const Point& origin,
      SVGBlendInfo blendInfo(this);
      SVGRenderState newState(this, state, markerTransform(origin, angle, strokeWidth));
      newState.beginGroup(blendInfo);
@@ -2704,7 +2710,7 @@ index 7d62cc6..b314fc4 100644
      newState.endGroup(blendInfo);
  }
  
-@@ -1078,29 +2645,66 @@ inline const SVGGeometryElement* toSVGGeometryElement(const SVGNode* node)
+@@ -1078,29 +2650,66 @@ inline const SVGGeometryElement* toSVGGeometryElement(const SVGNode* node)
  
  void SVGClipPathElement::applyClipPath(SVGRenderState& state) const
  {
@@ -2789,7 +2795,7 @@ index 7d62cc6..b314fc4 100644
          return;
      }
  
-@@ -1222,4 +2826,251 @@ void SVGMaskElement::layoutElement(const SVGLayoutState& state)
+@@ -1222,4 +2831,251 @@ void SVGMaskElement::layoutElement(const SVGLayoutState& state)
      SVGElement::layoutElement(state);
  }
  
@@ -3042,7 +3048,7 @@ index 7d62cc6..b314fc4 100644
 +
  } // namespace lunasvg
 diff --git a/source/svgelement.h b/source/svgelement.h
-index ff5d008..012e1e6 100644
+index ff5d008..ded889d 100644
 --- a/source/svgelement.h
 +++ b/source/svgelement.h
 @@ -80,6 +80,14 @@ private:
@@ -3075,7 +3081,7 @@ index ff5d008..012e1e6 100644
      virtual void parseAttribute(PropertyID id, const std::string& value);
  
      SVGElement* previousElement() const;
-@@ -150,9 +166,31 @@ public:
+@@ -150,9 +166,40 @@ public:
      SVGNode* lastChild() const;
  
      ElementID id() const { return m_id; }
@@ -3099,6 +3105,15 @@ index ff5d008..012e1e6 100644
 +    double transformTranslationPrecisionError() const { return m_transformTranslationPrecisionError; }
 +    bool fillHasPartialAlpha() const { return m_fillHasPartialAlpha; }
 +    bool strokeHasPartialAlpha() const { return m_strokeHasPartialAlpha; }
++    double recordingOpacity() const { return m_recordingOpacity; }
++    double recordingFillPaintOpacity() const
++    {
++        return m_recordingFillPaintOpacity;
++    }
++    double recordingStrokePaintOpacity() const
++    {
++        return m_recordingStrokePaintOpacity;
++    }
      const AttributeList& attributes() const { return m_attributes; }
      const SVGPropertyList& properties() const { return m_properties; }
      const SVGNodeList& children() const { return m_children; }
@@ -3107,7 +3122,15 @@ index ff5d008..012e1e6 100644
  
      virtual Transform localTransform() const { return Transform::Identity; }
      virtual Rect fillBoundingBox() const;
-@@ -212,9 +250,28 @@ private:
+@@ -204,6 +251,7 @@ private:
+     const SVGClipPathElement* m_clipper = nullptr;
+     const SVGMaskElement* m_masker = nullptr;
+     float m_opacity = 1.f;
++    double m_recordingOpacity{1};
+ 
+     float m_font_size = 12.f;
+     Display m_display = Display::Inline;
+@@ -212,9 +260,30 @@ private:
      PointerEvents m_pointer_events = PointerEvents::Auto;
  
      ElementID m_id;
@@ -3125,6 +3148,8 @@ index ff5d008..012e1e6 100644
 +    double m_transformTranslationPrecisionError{0};
 +    bool m_fillHasPartialAlpha{false};
 +    bool m_strokeHasPartialAlpha{false};
++    double m_recordingFillPaintOpacity{1};
++    double m_recordingStrokePaintOpacity{0};
      AttributeList m_attributes;
 +    std::shared_ptr<DeferredCapabilityMap> m_deferredCapabilities;
      SVGPropertyList m_properties;
@@ -3136,7 +3161,7 @@ index ff5d008..012e1e6 100644
  };
  
  inline const SVGElement* toSVGElement(const SVGNode* node)
-@@ -281,15 +338,22 @@ private:
+@@ -281,15 +350,22 @@ private:
  class SVGPaintServer {
  public:
      SVGPaintServer() = default;
@@ -3161,7 +3186,7 @@ index ff5d008..012e1e6 100644
  
      bool applyPaint(SVGRenderState& state) const;
  
-@@ -297,6 +361,7 @@ private:
+@@ -297,6 +373,7 @@ private:
      const SVGPaintElement* m_element = nullptr;
      Color m_color = Color::Transparent;
      float m_opacity = 0.f;
@@ -3169,7 +3194,7 @@ index ff5d008..012e1e6 100644
  };
  
  class SVGGraphicsElement : public SVGElement {
-@@ -308,7 +373,8 @@ public:
+@@ -308,7 +385,8 @@ public:
      const SVGTransform& transform() const { return m_transform; }
      Transform localTransform() const override { return m_transform.value(); }
  
@@ -3179,7 +3204,7 @@ index ff5d008..012e1e6 100644
      StrokeData getStrokeData(const SVGLayoutState& state) const;
  
  private:
-@@ -347,7 +413,7 @@ public:
+@@ -347,7 +425,7 @@ public:
      SVGRootElement* layoutIfNeeded();
  
      SVGElement* getElementById(std::string_view id) const;
@@ -3188,7 +3213,7 @@ index ff5d008..012e1e6 100644
      void layout(SVGLayoutState& state) final;
  
      void forceLayout();
-@@ -370,6 +436,10 @@ public:
+@@ -370,6 +448,10 @@ public:
      Transform localTransform() const final;
      void render(SVGRenderState& state) const final;
      void build() final;
@@ -3199,7 +3224,7 @@ index ff5d008..012e1e6 100644
  
  private:
      std::unique_ptr<SVGElement> cloneTargetElement(SVGElement* targetElement);
-@@ -377,6 +447,7 @@ private:
+@@ -377,6 +459,7 @@ private:
      SVGLength m_y;
      SVGLength m_width;
      SVGLength m_height;
@@ -3279,22 +3304,133 @@ index e2c9708..d2dc5ee 100644
          }
      }
 diff --git a/source/svglayoutstate.cpp b/source/svglayoutstate.cpp
-index bf5b92d..4b24545 100644
+index bf5b92d..9f591c1 100644
 --- a/source/svglayoutstate.cpp
 +++ b/source/svglayoutstate.cpp
-@@ -2,6 +2,8 @@
+@@ -2,7 +2,13 @@
  #include "svgelement.h"
  #include "svgparserutils.h"
  
 +#include <algorithm>
++#include <cerrno>
++#include <cmath>
 +#include <cstdint>
++#include <cstdlib>
  #include <optional>
++#include <string>
  
  namespace lunasvg {
-@@ -110,6 +112,131 @@ static float parseNumberOrPercentage(std::string_view input, bool allowPercentag
+ 
+@@ -110,6 +116,238 @@ static float parseNumberOrPercentage(std::string_view input, bool allowPercentag
      return value;
  }
  
++static double parseRecordingNumberOrPercentage(
++    std::string_view input, bool allowPercentage, double defaultValue)
++{
++    stripLeadingAndTrailingSpaces(input);
++    bool percentage = false;
++    if(allowPercentage && !input.empty() && input.back() == '%') {
++        percentage = true;
++        input.remove_suffix(1);
++        stripLeadingAndTrailingSpaces(input);
++    }
++    if(input.empty())
++        return defaultValue;
++    std::string source(input);
++    char* parsedEnd = nullptr;
++    errno = 0;
++    const double parsed = std::strtod(source.c_str(), &parsedEnd);
++    if(parsedEnd != source.c_str() + source.size()
++            || !std::isfinite(parsed))
++        return defaultValue;
++    double value = percentage ? parsed / 100.0 : parsed;
++    return std::clamp(value, 0.0, 1.0);
++}
++
++static uint8_t recordingHexDigit(char value)
++{
++    if(value >= '0' && value <= '9')
++        return static_cast<uint8_t>(value - '0');
++    if(value >= 'a' && value <= 'f')
++        return static_cast<uint8_t>(10 + value - 'a');
++    return static_cast<uint8_t>(10 + value - 'A');
++}
++
++static bool recordingAsciiEqualsIgnoreCase(
++    std::string_view left, std::string_view right)
++{
++    if(left.size() != right.size())
++        return false;
++    for(size_t index = 0; index < left.size(); ++index) {
++        const auto lower = [](char value) {
++            return value >= 'A' && value <= 'Z'
++                ? static_cast<char>(value + ('a' - 'A')) : value;
++        };
++        if(lower(left[index]) != lower(right[index]))
++            return false;
++    }
++    return true;
++}
++
++static double recordingColorAlpha(
++    std::string_view input, const SVGLayoutState* state)
++{
++    stripLeadingAndTrailingSpaces(input);
++    if(recordingAsciiEqualsIgnoreCase(input, "currentColor"))
++        return state->recording_color_alpha();
++
++    plutovg_color_t parsedColor;
++    const int consumed = plutovg_color_parse(
++        &parsedColor, input.data(), static_cast<int>(input.size()));
++    if(consumed != static_cast<int>(input.size()))
++        return 1.0;
++
++    if(!input.empty() && input.front() == '#') {
++        const auto digits = input.substr(1);
++        if(digits.size() == 4)
++            return recordingHexDigit(digits[3]) / 15.0;
++        if(digits.size() == 8) {
++            const uint8_t alpha = static_cast<uint8_t>(
++                recordingHexDigit(digits[6]) * 16
++                + recordingHexDigit(digits[7]));
++            return alpha / 255.0;
++        }
++        return 1.0;
++    }
++
++    const auto open = input.find('(');
++    const auto close = input.rfind(')');
++    if(open != std::string_view::npos && close == input.size() - 1) {
++        const auto functionName = input.substr(0, open);
++        if(recordingAsciiEqualsIgnoreCase(functionName, "rgb")
++                || recordingAsciiEqualsIgnoreCase(functionName, "rgba")
++                || recordingAsciiEqualsIgnoreCase(functionName, "hsl")
++                || recordingAsciiEqualsIgnoreCase(functionName, "hsla")) {
++            const auto arguments = input.substr(
++                open + 1, close - open - 1);
++            const auto commaCount = static_cast<size_t>(std::count(
++                arguments.begin(), arguments.end(), ','));
++            if(commaCount == 3) {
++                const auto alphaStart = arguments.rfind(',');
++                return parseRecordingNumberOrPercentage(
++                    arguments.substr(alphaStart + 1), true,
++                    static_cast<double>(parsedColor.a));
++            }
++        }
++    }
++    return std::clamp(static_cast<double>(parsedColor.a), 0.0, 1.0);
++}
++
++static double recordingPaintAlpha(
++    std::string_view input, const SVGLayoutState* state)
++{
++    stripLeadingAndTrailingSpaces(input);
++    if(recordingAsciiEqualsIgnoreCase(input, "none"))
++        return 0.0;
++    return recordingColorAlpha(input, state);
++}
++
 +struct AlphaSemantics {
 +    bool zero{false};
 +    bool partial{false};
@@ -3388,7 +3524,7 @@ index bf5b92d..4b24545 100644
 +    std::string_view input, const SVGLayoutState* state)
 +{
 +    stripLeadingAndTrailingSpaces(input);
-+    if(input == "currentColor")
++    if(recordingAsciiEqualsIgnoreCase(input, "currentColor"))
 +        return {state->color_alpha_zero(), state->color_alpha_partial()};
 +    const auto open = input.find('(');
 +    const auto close = input.rfind(')');
@@ -3396,7 +3532,8 @@ index bf5b92d..4b24545 100644
 +    if(open != std::string_view::npos && close == input.size() - 1
 +            && comma != std::string_view::npos && comma > open) {
 +        const auto functionName = input.substr(0, open);
-+        if(functionName == "rgba" || functionName == "hsla")
++        if(recordingAsciiEqualsIgnoreCase(functionName, "rgba")
++                || recordingAsciiEqualsIgnoreCase(functionName, "hsla"))
 +            return numberAlphaSemantics(
 +                input.substr(comma + 1, close - comma - 1));
 +    }
@@ -3415,7 +3552,7 @@ index bf5b92d..4b24545 100644
 +    std::string_view input, const SVGLayoutState* state)
 +{
 +    stripLeadingAndTrailingSpaces(input);
-+    if(input == "none")
++    if(recordingAsciiEqualsIgnoreCase(input, "none"))
 +        return {true, false};
 +    return colorAlphaSemantics(input, state);
 +}
@@ -3423,10 +3560,15 @@ index bf5b92d..4b24545 100644
  static Length parseLength(std::string_view input, LengthNegativeMode mode, const Length& defaultValue)
  {
      Length value;
-@@ -413,13 +540,27 @@ SVGLayoutState::SVGLayoutState(const SVGLayoutState& parent, const SVGElement* e
+@@ -413,13 +651,32 @@ SVGLayoutState::SVGLayoutState(const SVGLayoutState& parent, const SVGElement* e
      , m_color(parent.color())
      , m_fill_opacity(parent.fill_opacity())
      , m_stroke_opacity(parent.stroke_opacity())
++    , m_recording_color_alpha(parent.recording_color_alpha())
++    , m_recording_fill_alpha(parent.recording_fill_alpha())
++    , m_recording_stroke_alpha(parent.recording_stroke_alpha())
++    , m_recording_fill_opacity(parent.recording_fill_opacity())
++    , m_recording_stroke_opacity(parent.recording_stroke_opacity())
 +    , m_fill_alpha_zero(parent.m_fill_alpha_zero)
 +    , m_fill_alpha_partial(parent.m_fill_alpha_partial)
 +    , m_stroke_alpha_zero(parent.m_stroke_alpha_zero)
@@ -3451,7 +3593,7 @@ index bf5b92d..4b24545 100644
      , m_stroke_linecap(parent.stroke_linecap())
      , m_stroke_linejoin(parent.stroke_linejoin())
      , m_fill_rule(parent.fill_rule())
-@@ -440,6 +581,18 @@ SVGLayoutState::SVGLayoutState(const SVGLayoutState& parent, const SVGElement* e
+@@ -440,6 +697,19 @@ SVGLayoutState::SVGLayoutState(const SVGLayoutState& parent, const SVGElement* e
      , m_marker_end(parent.marker_end())
      , m_font_family(parent.font_family())
  {
@@ -3464,16 +3606,18 @@ index bf5b92d..4b24545 100644
 +            const auto alpha = colorAlphaSemantics(input, this);
 +            m_color_alpha_zero = alpha.zero;
 +            m_color_alpha_partial = alpha.partial;
++            m_recording_color_alpha = recordingColorAlpha(input, this);
 +            m_color = parseColor(input, this, m_color);
 +        }
 +    }
      for(const auto& attribute : element->attributes()) {
          std::string_view input(attribute.value());
          stripLeadingAndTrailingSpaces(input);
-@@ -448,12 +601,21 @@ SVGLayoutState::SVGLayoutState(const SVGLayoutState& parent, const SVGElement* e
+@@ -448,30 +718,58 @@ SVGLayoutState::SVGLayoutState(const SVGLayoutState& parent, const SVGElement* e
          switch(attribute.id()) {
          case PropertyID::Fill:
              m_fill = parsePaint(input, this, Color::Black);
++            m_recording_fill_alpha = recordingPaintAlpha(input, this);
 +            {
 +                const auto alpha = paintAlphaSemantics(input, this);
 +                m_fill_alpha_zero = alpha.zero;
@@ -3482,6 +3626,7 @@ index bf5b92d..4b24545 100644
              break;
          case PropertyID::Stroke:
              m_stroke = parsePaint(input, this, Color::Transparent);
++            m_recording_stroke_alpha = recordingPaintAlpha(input, this);
 +            {
 +                const auto alpha = paintAlphaSemantics(input, this);
 +                m_stroke_alpha_zero = alpha.zero;
@@ -3493,10 +3638,16 @@ index bf5b92d..4b24545 100644
              break;
          case PropertyID::Stop_Color:
              m_stop_color = parseColor(input, this, Color::Black);
-@@ -463,15 +625,26 @@ SVGLayoutState::SVGLayoutState(const SVGLayoutState& parent, const SVGElement* e
+             break;
+         case PropertyID::Opacity:
+             m_opacity = parseNumberOrPercentage(input, true, 1.f);
++            m_recording_opacity = parseRecordingNumberOrPercentage(
++                input, true, 1.0);
              break;
          case PropertyID::Fill_Opacity:
              m_fill_opacity = parseNumberOrPercentage(input, true, 1.f);
++            m_recording_fill_opacity = parseRecordingNumberOrPercentage(
++                input, true, 1.0);
 +            {
 +                const auto alpha = numberAlphaSemantics(input);
 +                m_fill_opacity_zero = alpha.zero;
@@ -3505,6 +3656,8 @@ index bf5b92d..4b24545 100644
              break;
          case PropertyID::Stroke_Opacity:
              m_stroke_opacity = parseNumberOrPercentage(input, true, 1.f);
++            m_recording_stroke_opacity = parseRecordingNumberOrPercentage(
++                input, true, 1.0);
 +            {
 +                const auto alpha = numberAlphaSemantics(input);
 +                m_stroke_opacity_zero = alpha.zero;
@@ -3520,7 +3673,7 @@ index bf5b92d..4b24545 100644
              break;
          case PropertyID::Font_Size:
              m_font_size = parseFontSize(input, this);
-@@ -487,12 +660,15 @@ SVGLayoutState::SVGLayoutState(const SVGLayoutState& parent, const SVGElement* e
+@@ -487,12 +785,15 @@ SVGLayoutState::SVGLayoutState(const SVGLayoutState& parent, const SVGElement* e
              break;
          case PropertyID::Stroke_Width:
              m_stroke_width = parseLength(input, LengthNegativeMode::Forbid, Length(1.f, LengthUnits::None));
@@ -3537,13 +3690,33 @@ index bf5b92d..4b24545 100644
          case PropertyID::Stroke_Linecap:
              m_stroke_linecap = parseLineCap(input);
 diff --git a/source/svglayoutstate.h b/source/svglayoutstate.h
-index 4d08ad9..2eed4fb 100644
+index 4d08ad9..d8caeb5 100644
 --- a/source/svglayoutstate.h
 +++ b/source/svglayoutstate.h
-@@ -23,7 +23,23 @@ public:
+@@ -23,7 +23,43 @@ public:
      float stop_opacity() const { return m_stop_opacity; }
      float fill_opacity() const { return m_fill_opacity; }
      float stroke_opacity() const { return m_stroke_opacity; }
++    double recording_opacity() const { return m_recording_opacity; }
++    double recording_color_alpha() const { return m_recording_color_alpha; }
++    double recording_fill_alpha() const { return m_recording_fill_alpha; }
++    double recording_stroke_alpha() const { return m_recording_stroke_alpha; }
++    double recording_fill_opacity() const
++    {
++        return m_recording_fill_opacity;
++    }
++    double recording_stroke_opacity() const
++    {
++        return m_recording_stroke_opacity;
++    }
++    double recording_fill_paint_opacity() const
++    {
++        return m_recording_fill_alpha * m_recording_fill_opacity;
++    }
++    double recording_stroke_paint_opacity() const
++    {
++        return m_recording_stroke_alpha * m_recording_stroke_opacity;
++    }
 +    bool fill_has_partial_alpha() const
 +    {
 +        return !m_fill_alpha_zero && !m_fill_opacity_zero
@@ -3564,7 +3737,7 @@ index 4d08ad9..2eed4fb 100644
      float font_size() const { return m_font_size; }
  
      const Length& letter_spacing() const { return m_letter_spacing; }
-@@ -33,6 +49,18 @@ public:
+@@ -33,6 +69,18 @@ public:
      const Length& stroke_width() const { return m_stroke_width; }
      const Length& stroke_dashoffset() const { return m_stroke_dashoffset; }
      const LengthList& stroke_dasharray() const { return m_stroke_dasharray; }
@@ -3583,10 +3756,16 @@ index 4d08ad9..2eed4fb 100644
  
      LineCap stroke_linecap() const { return m_stroke_linecap; }
      LineJoin stroke_linejoin() const { return m_stroke_linejoin; }
-@@ -80,8 +108,19 @@ private:
+@@ -80,8 +128,25 @@ private:
      float m_opacity = 1.f;
      float m_fill_opacity = 1.f;
      float m_stroke_opacity = 1.f;
++    double m_recording_opacity{1};
++    double m_recording_color_alpha{1};
++    double m_recording_fill_alpha{1};
++    double m_recording_stroke_alpha{0};
++    double m_recording_fill_opacity{1};
++    double m_recording_stroke_opacity{1};
 +    bool m_fill_alpha_zero{false};
 +    bool m_fill_alpha_partial{false};
 +    bool m_stroke_alpha_zero{true};
@@ -3603,7 +3782,7 @@ index 4d08ad9..2eed4fb 100644
      float m_font_size = 12.f;
  
      Length m_letter_spacing{0.f, LengthUnits::None};
-@@ -91,6 +130,9 @@ private:
+@@ -91,6 +156,9 @@ private:
      Length m_stroke_width{1.f, LengthUnits::None};
      Length m_stroke_dashoffset{0.f, LengthUnits::None};
      LengthList m_stroke_dasharray;
@@ -3614,10 +3793,10 @@ index 4d08ad9..2eed4fb 100644
      LineCap m_stroke_linecap = LineCap::Butt;
      LineJoin m_stroke_linejoin = LineJoin::Miter;
 diff --git a/source/svgparser.cpp b/source/svgparser.cpp
-index 183937c..af021cb 100644
+index 183937c..2111c80 100644
 --- a/source/svgparser.cpp
 +++ b/source/svgparser.cpp
-@@ -3,9 +3,460 @@
+@@ -3,9 +3,464 @@
  #include "svgparserutils.h"
  
  #include <cassert>
@@ -3884,7 +4063,8 @@ index 183937c..af021cb 100644
 +        || name == "all"
 +        || name == "filter" || name == "backdrop-filter"
 +        || name == "paint-order" || name == "mask"
-+        || name == "mix-blend-mode" || name == "isolation";
++        || name == "mix-blend-mode" || name == "isolation"
++        || name == "color-interpolation";
 +}
 +
 +static bool isDeferredRenderCapabilityProperty(std::string_view name)
@@ -3980,6 +4160,9 @@ index 183937c..af021cb 100644
 +    if(name == "isolation")
 +        return normalizedValue == "auto"
 +            ? std::string{} : "unsupported_blend_mode";
++    if(name == "color-interpolation")
++        return normalizedValue == "sRGB"
++            ? std::string{} : "unsupported_color_interpolation";
 +    if(hasPrefix(name, "on"))
 +        return "unsupported_script";
 +    if(name == "clip-path" && !isValidLocalUrl(value))
@@ -4030,7 +4213,7 @@ index 183937c..af021cb 100644
 +        float alpha = 0.f;
 +        if(!parseNumberValue(value, true, alpha))
 +            return "unsupported_property_value";
-+        if((name == "opacity" || name == "stop-opacity")
++        if(name == "stop-opacity"
 +                && isPartialAlphaValue(value, true))
 +            return "unsupported_partial_alpha";
 +    }
@@ -4078,7 +4261,7 @@ index 183937c..af021cb 100644
  struct SimpleSelector;
  
  using Selector = std::vector<SimpleSelector>;
-@@ -25,6 +476,7 @@ struct AttributeSelector {
+@@ -25,6 +480,7 @@ struct AttributeSelector {
      MatchType matchType{MatchType::None};
      PropertyID id{PropertyID::Unknown};
      std::string value;
@@ -4086,7 +4269,7 @@ index 183937c..af021cb 100644
  };
  
  struct PseudoClassSelector {
-@@ -66,7 +518,9 @@ struct SimpleSelector {
+@@ -66,7 +522,9 @@ struct SimpleSelector {
  struct Declaration {
      int specificity;
      PropertyID id;
@@ -4096,7 +4279,7 @@ index 183937c..af021cb 100644
  };
  
  using DeclarationList = std::vector<Declaration>;
-@@ -76,25 +530,44 @@ struct Rule {
+@@ -76,25 +534,44 @@ struct Rule {
      DeclarationList declarations;
  };
  
@@ -4149,7 +4332,7 @@ index 183937c..af021cb 100644
      size_t m_position;
  };
  
-@@ -102,14 +575,99 @@ inline bool operator<(const RuleData& a, const RuleData& b) { return a.isLessTha
+@@ -102,14 +579,99 @@ inline bool operator<(const RuleData& a, const RuleData& b) { return a.isLessTha
  
  using RuleDataList = std::vector<RuleData>;
  
@@ -4251,7 +4434,7 @@ index 183937c..af021cb 100644
  }
  
  constexpr bool includes(std::string_view value, std::string_view subvalue)
-@@ -155,7 +713,7 @@ static bool matchAttributeSelector(const AttributeSelector& selector, const SVGE
+@@ -155,7 +717,7 @@ static bool matchAttributeSelector(const AttributeSelector& selector, const SVGE
  {
      const auto& value = element->getAttribute(selector.id);
      if(selector.matchType == AttributeSelector::MatchType::None)
@@ -4260,7 +4443,7 @@ index 183937c..af021cb 100644
      if(selector.matchType == AttributeSelector::MatchType::Equals)
          return equals(value, selector.value);
      if(selector.matchType == AttributeSelector::MatchType::Contains)
-@@ -171,18 +729,25 @@ static bool matchAttributeSelector(const AttributeSelector& selector, const SVGE
+@@ -171,18 +733,25 @@ static bool matchAttributeSelector(const AttributeSelector& selector, const SVGE
      return false;
  }
  
@@ -4290,7 +4473,7 @@ index 183937c..af021cb 100644
                      return false;
                  }
              }
-@@ -194,9 +759,11 @@ static bool matchPseudoClassSelector(const PseudoClassSelector& selector, const
+@@ -194,9 +763,11 @@ static bool matchPseudoClassSelector(const PseudoClassSelector& selector, const
      if(selector.type == PseudoClassSelector::Type::Not) {
          for(const auto& subSelector : selector.subSelectors) {
              for(const auto& simpleSelector : subSelector) {
@@ -4303,7 +4486,7 @@ index 183937c..af021cb 100644
              }
          }
  
-@@ -212,6 +779,8 @@ static bool matchPseudoClassSelector(const PseudoClassSelector& selector, const
+@@ -212,6 +783,8 @@ static bool matchPseudoClassSelector(const PseudoClassSelector& selector, const
      if(selector.type == PseudoClassSelector::Type::FirstOfType) {
          auto sibling = element->previousElement();
          while(sibling) {
@@ -4312,7 +4495,7 @@ index 183937c..af021cb 100644
              if(sibling->id() == element->id())
                  return false;
              sibling = sibling->previousElement();
-@@ -223,6 +792,8 @@ static bool matchPseudoClassSelector(const PseudoClassSelector& selector, const
+@@ -223,6 +796,8 @@ static bool matchPseudoClassSelector(const PseudoClassSelector& selector, const
      if(selector.type == PseudoClassSelector::Type::LastOfType) {
          auto sibling = element->nextElement();
          while(sibling) {
@@ -4321,7 +4504,7 @@ index 183937c..af021cb 100644
              if(sibling->id() == element->id())
                  return false;
              sibling = sibling->nextElement();
-@@ -231,21 +802,51 @@ static bool matchPseudoClassSelector(const PseudoClassSelector& selector, const
+@@ -231,21 +806,51 @@ static bool matchPseudoClassSelector(const PseudoClassSelector& selector, const
          return true;
      }
  
@@ -4375,7 +4558,7 @@ index 183937c..af021cb 100644
              return false;
          }
      }
-@@ -253,13 +854,14 @@ static bool matchSimpleSelector(const SimpleSelector& selector, const SVGElement
+@@ -253,13 +858,14 @@ static bool matchSimpleSelector(const SimpleSelector& selector, const SVGElement
      return true;
  }
  
@@ -4392,7 +4575,7 @@ index 183937c..af021cb 100644
          return false;
      }
  
-@@ -267,6 +869,8 @@ static bool matchSelector(const Selector& selector, const SVGElement* element)
+@@ -267,6 +873,8 @@ static bool matchSelector(const Selector& selector, const SVGElement* element)
      ++it;
  
      while(it != end) {
@@ -4401,7 +4584,7 @@ index 183937c..af021cb 100644
          switch(combinator) {
          case SimpleSelector::Combinator::Child:
          case SimpleSelector::Combinator::Descendant:
-@@ -282,7 +886,7 @@ static bool matchSelector(const Selector& selector, const SVGElement* element)
+@@ -282,7 +890,7 @@ static bool matchSelector(const Selector& selector, const SVGElement* element)
  
          if(element == nullptr)
              return false;
@@ -4410,7 +4593,7 @@ index 183937c..af021cb 100644
              combinator = it->combinator;
              ++it;
          } else if(combinator != SimpleSelector::Combinator::Descendant
-@@ -294,9 +898,9 @@ static bool matchSelector(const Selector& selector, const SVGElement* element)
+@@ -294,9 +902,9 @@ static bool matchSelector(const Selector& selector, const SVGElement* element)
      return true;
  }
  
@@ -4422,7 +4605,7 @@ index 183937c..af021cb 100644
  }
  
  constexpr bool IS_CSS_STARTNAMECHAR(int c) { return IS_ALPHA(c) || c == '_' || c == '-'; }
-@@ -331,6 +935,7 @@ static bool parseIdSelector(std::string_view& input, SimpleSelector& simpleSelec
+@@ -331,6 +939,7 @@ static bool parseIdSelector(std::string_view& input, SimpleSelector& simpleSelec
      AttributeSelector a;
      a.id = PropertyID::Id;
      a.matchType = AttributeSelector::MatchType::Equals;
@@ -4430,7 +4613,7 @@ index 183937c..af021cb 100644
      if(!readCSSIdentifier(input, a.value))
          return false;
      simpleSelector.attributeSelectors.push_back(std::move(a));
-@@ -391,9 +996,15 @@ static bool parseAttributeSelector(std::string_view& input, SimpleSelector& simp
+@@ -391,9 +1000,15 @@ static bool parseAttributeSelector(std::string_view& input, SimpleSelector& simp
      return true;
  }
  
@@ -4448,7 +4631,7 @@ index 183937c..af021cb 100644
  {
      std::string name;
      if(!readCSSIdentifier(input, name))
-@@ -403,6 +1014,8 @@ static bool parsePseudoClassSelector(std::string_view& input, SimpleSelector& si
+@@ -403,6 +1018,8 @@ static bool parsePseudoClassSelector(std::string_view& input, SimpleSelector& si
          selector.type = PseudoClassSelector::Type::Empty;
      else if(name.compare("root") == 0)
          selector.type = PseudoClassSelector::Type::Root;
@@ -4457,7 +4640,7 @@ index 183937c..af021cb 100644
      else if(name.compare("not") == 0)
          selector.type = PseudoClassSelector::Type::Not;
      else if(name.compare("first-child") == 0)
-@@ -418,11 +1031,18 @@ static bool parsePseudoClassSelector(std::string_view& input, SimpleSelector& si
+@@ -418,11 +1035,18 @@ static bool parsePseudoClassSelector(std::string_view& input, SimpleSelector& si
      else if(name.compare("only-of-type") == 0)
          selector.type = PseudoClassSelector::Type::OnlyOfType;
      if(selector.type == PseudoClassSelector::Type::Is || selector.type == PseudoClassSelector::Type::Not) {
@@ -4477,7 +4660,7 @@ index 183937c..af021cb 100644
              return false;
          skipOptionalSpaces(input);
          if(!skipDelimiter(input, ')')) {
-@@ -434,7 +1054,9 @@ static bool parsePseudoClassSelector(std::string_view& input, SimpleSelector& si
+@@ -434,7 +1058,9 @@ static bool parsePseudoClassSelector(std::string_view& input, SimpleSelector& si
      return true;
  }
  
@@ -4488,7 +4671,7 @@ index 183937c..af021cb 100644
  {
      auto consumed = parseTagSelector(input, simpleSelector);
      do {
-@@ -445,7 +1067,8 @@ static bool parseSimpleSelector(std::string_view& input, SimpleSelector& simpleS
+@@ -445,7 +1071,8 @@ static bool parseSimpleSelector(std::string_view& input, SimpleSelector& simpleS
          else if(skipDelimiter(input, '['))
              failed = !parseAttributeSelector(input, simpleSelector);
          else if(skipDelimiter(input, ':'))
@@ -4498,7 +4681,7 @@ index 183937c..af021cb 100644
          else
              break;
          consumed = true;
-@@ -470,31 +1093,39 @@ static bool parseCombinator(std::string_view& input, SimpleSelector::Combinator&
+@@ -470,31 +1097,39 @@ static bool parseCombinator(std::string_view& input, SimpleSelector::Combinator&
      return combinator != SimpleSelector::Combinator::None;
  }
  
@@ -4543,7 +4726,7 @@ index 183937c..af021cb 100644
  {
      if(!skipDelimiter(input, '{'))
          return false;
-@@ -503,6 +1134,8 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
+@@ -503,6 +1138,8 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
          std::string name;
          if(!readCSSIdentifier(input, name))
              return false;
@@ -4552,7 +4735,7 @@ index 183937c..af021cb 100644
          skipOptionalSpaces(input);
          if(!skipDelimiter(input, ':'))
              return false;
-@@ -513,37 +1146,137 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
+@@ -513,37 +1150,137 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
          value.remove_suffix(input.length());
          stripTrailingSpaces(value);
  
@@ -4696,7 +4879,7 @@ index 183937c..af021cb 100644
              int depth = 0;
              while(!input.empty()) {
                  auto ch = input.front();
-@@ -562,27 +1295,138 @@ static RuleDataList parseStyleSheet(std::string_view input)
+@@ -562,27 +1299,138 @@ static RuleDataList parseStyleSheet(std::string_view input)
          }
  
          Rule rule;
@@ -4849,7 +5032,7 @@ index 183937c..af021cb 100644
  static SelectorList parseQuerySelectors(std::string_view input)
  {
      SelectorList selectors;
-@@ -595,25 +1439,60 @@ static SelectorList parseQuerySelectors(std::string_view input)
+@@ -595,25 +1443,60 @@ static SelectorList parseQuerySelectors(std::string_view input)
      return selectors;
  }
  
@@ -4917,7 +5100,7 @@ index 183937c..af021cb 100644
  }
  
  inline void removeStyleComments(std::string& value)
-@@ -626,7 +1505,83 @@ inline void removeStyleComments(std::string& value)
+@@ -626,7 +1509,83 @@ inline void removeStyleComments(std::string& value)
      }
  }
  
@@ -5002,7 +5185,7 @@ index 183937c..af021cb 100644
  {
      output.clear();
      while(!input.empty()) {
-@@ -644,34 +1599,8 @@ inline bool decodeText(std::string_view input, std::string& output)
+@@ -644,34 +1603,8 @@ inline bool decodeText(std::string_view input, std::string& output)
              unsigned int cp;
              if(!parseInteger(input, cp, base))
                  return false;
@@ -5039,7 +5222,7 @@ index 183937c..af021cb 100644
          } else {
              if(skipString(input, "amp")) {
                  output.push_back('&');
-@@ -683,6 +1612,20 @@ inline bool decodeText(std::string_view input, std::string& output)
+@@ -683,6 +1616,20 @@ inline bool decodeText(std::string_view input, std::string& output)
                  output.push_back('\"');
              } else if(skipString(input, "apos")) {
                  output.push_back('\'');
@@ -5060,7 +5243,7 @@ index 183937c..af021cb 100644
              } else {
                  return false;
              }
-@@ -699,35 +1642,166 @@ inline bool decodeText(std::string_view input, std::string& output)
+@@ -699,35 +1646,166 @@ inline bool decodeText(std::string_view input, std::string& output)
  constexpr bool IS_STARTNAMECHAR(int c) { return IS_ALPHA(c) ||  c == '_' || c == ':'; }
  constexpr bool IS_NAMECHAR(int c) { return IS_STARTNAMECHAR(c) || IS_NUM(c) || c == '-' || c == '.'; }
  
@@ -5240,7 +5423,7 @@ index 183937c..af021cb 100644
          }
  
          if(currentElement->id() == ElementID::Style) {
-@@ -738,9 +1812,12 @@ bool Document::parse(const char* data, size_t length)
+@@ -738,9 +1816,12 @@ bool Document::parse(const char* data, size_t length)
              node->setData(buffer);
              currentElement->addChild(std::move(node));
          }
@@ -5253,7 +5436,7 @@ index 183937c..af021cb 100644
      if(length >= 3) {
          auto buffer = (const uint8_t*)(data);
  
-@@ -755,12 +1832,16 @@ bool Document::parse(const char* data, size_t length)
+@@ -755,12 +1836,16 @@ bool Document::parse(const char* data, size_t length)
      while(!input.empty()) {
          if(currentElement) {
              auto text = input.substr(0, input.find('<'));
@@ -5271,7 +5454,7 @@ index 183937c..af021cb 100644
          }
  
          if(!skipDelimiter(input, '<'))
-@@ -771,6 +1852,18 @@ bool Document::parse(const char* data, size_t length)
+@@ -771,6 +1856,18 @@ bool Document::parse(const char* data, size_t length)
              auto n = input.find("?>");
              if(n == std::string_view::npos)
                  return false;
@@ -5290,7 +5473,7 @@ index 183937c..af021cb 100644
              input.remove_prefix(n + 2);
              continue;
          }
-@@ -780,21 +1873,36 @@ bool Document::parse(const char* data, size_t length)
+@@ -780,21 +1877,36 @@ bool Document::parse(const char* data, size_t length)
                  auto n = input.find("-->");
                  if(n == std::string_view::npos)
                      return false;
@@ -5330,7 +5513,7 @@ index 183937c..af021cb 100644
                  while(!input.empty() && input.front() != '>') {
                      if(input.front() == '[') {
                          int depth = 1;
-@@ -818,13 +1926,15 @@ bool Document::parse(const char* data, size_t length)
+@@ -818,13 +1930,15 @@ bool Document::parse(const char* data, size_t length)
          }
  
          if(skipDelimiter(input, '/')) {
@@ -5349,7 +5532,7 @@ index 183937c..af021cb 100644
                      return false;
                  currentElement = currentElement->parentElement();
              } else {
-@@ -839,11 +1949,20 @@ bool Document::parse(const char* data, size_t length)
+@@ -839,11 +1953,20 @@ bool Document::parse(const char* data, size_t length)
  
          if(!readIdentifier(input, buffer))
              return false;
@@ -5371,7 +5554,7 @@ index 183937c..af021cb 100644
              if(id == ElementID::Unknown) {
                  ignoring = 1;
              } else {
-@@ -863,7 +1982,19 @@ bool Document::parse(const char* data, size_t length)
+@@ -863,7 +1986,19 @@ bool Document::parse(const char* data, size_t length)
          }
  
          skipOptionalSpaces(input);
@@ -5391,7 +5574,7 @@ index 183937c..af021cb 100644
              skipOptionalSpaces(input);
              if(!skipDelimiter(input, '='))
                  return false;
-@@ -875,17 +2006,49 @@ bool Document::parse(const char* data, size_t length)
+@@ -875,17 +2010,49 @@ bool Document::parse(const char* data, size_t length)
              auto n = input.find(quote);
              if(n == std::string_view::npos)
                  return false;
@@ -5447,7 +5630,7 @@ index 183937c..af021cb 100644
                      element->setAttribute(0x1, id, buffer);
                  }
              }
-@@ -895,12 +2058,15 @@ bool Document::parse(const char* data, size_t length)
+@@ -895,12 +2062,15 @@ bool Document::parse(const char* data, size_t length)
          }
  
          if(skipDelimiter(input, '>')) {
@@ -5463,7 +5646,7 @@ index 183937c..af021cb 100644
              if(!skipDelimiter(input, '>'))
                  return false;
              if(ignoring > 0)
-@@ -911,7 +2077,9 @@ bool Document::parse(const char* data, size_t length)
+@@ -911,7 +2081,9 @@ bool Document::parse(const char* data, size_t length)
          return false;
      }
  
@@ -5474,7 +5657,7 @@ index 183937c..af021cb 100644
          return false;
      applyStyleSheet(styleSheet);
      m_rootElement->build();
-@@ -920,14 +2088,45 @@ bool Document::parse(const char* data, size_t length)
+@@ -920,14 +2092,45 @@ bool Document::parse(const char* data, size_t length)
  
  void Document::applyStyleSheet(const std::string& content)
  {
@@ -5549,10 +5732,10 @@ index 74a23a8..ab74699 100644
      Width,
      Word_Spacing,
 diff --git a/source/svgrenderstate.cpp b/source/svgrenderstate.cpp
-index 550d389..d653bc3 100644
+index 550d389..1dd7b7a 100644
 --- a/source/svgrenderstate.cpp
 +++ b/source/svgrenderstate.cpp
-@@ -1,7 +1,872 @@
+@@ -1,11 +1,877 @@
  #include "svgrenderstate.h"
 +#include "svgparserutils.h"
 +
@@ -6425,23 +6608,25 @@ index 550d389..d653bc3 100644
  SVGBlendInfo::SVGBlendInfo(const SVGElement* element)
      : m_clipper(element->clipper())
      , m_masker(element->masker())
-@@ -27,6 +892,39 @@ bool SVGRenderState::hasCycleReference(const SVGElement* element) const
+     , m_opacity(element->opacity())
++    , m_recordingOpacity(element->recordingOpacity())
+ {
+ }
+ 
+@@ -27,6 +893,44 @@ bool SVGRenderState::hasCycleReference(const SVGElement* element) const
  
  void SVGRenderState::beginGroup(const SVGBlendInfo& blendInfo)
  {
 +    if(m_recorder) {
 +        if(m_recordingSuppressed)
 +            return;
-+        if(blendInfo.opacity() <= 0.f) {
++        const double recordingOpacity = blendInfo.recordingOpacity();
++        if(recordingOpacity <= 0.0) {
 +            m_recordingSuppressed = true;
 +            return;
 +        }
 +        if(blendInfo.masker()) {
 +            recordCapabilityIssue("unsupported_mask");
-+            m_recordingSuppressed = true;
-+        }
-+        if(blendInfo.opacity() < 1.f) {
-+            recordCapabilityIssue("unsupported_partial_alpha");
 +            m_recordingSuppressed = true;
 +        }
 +        if(blendInfo.clipper() && blendInfo.clipper()->requiresMasking()) {
@@ -6450,6 +6635,14 @@ index 550d389..d653bc3 100644
 +        }
 +        if(m_recordingSuppressed)
 +            return;
++        if(recordingOpacity < 1.0) {
++            m_recordedGroupStart = m_recorder->commands.size();
++            recordBoundary(
++                PaintCommandKind::GroupBegin, m_element,
++                recordingOpacity);
++            m_recordedGroupBoundary =
++                m_recorder->commands.size() > m_recordedGroupStart;
++        }
 +        if(blendInfo.clipper()) {
 +            const auto commandCount = m_recorder->commands.size();
 +            blendInfo.clipper()->applyClipPath(*this);
@@ -6465,20 +6658,37 @@ index 550d389..d653bc3 100644
      auto requiresCompositing = blendInfo.requiresCompositing(m_mode);
      if(requiresCompositing) {
          auto boundingBox = m_currentTransform.mapRect(m_element->paintBoundingBox());
-@@ -43,6 +941,12 @@ void SVGRenderState::beginGroup(const SVGBlendInfo& blendInfo)
+@@ -43,6 +947,29 @@ void SVGRenderState::beginGroup(const SVGBlendInfo& blendInfo)
  
  void SVGRenderState::endGroup(const SVGBlendInfo& blendInfo)
  {
 +    if(m_recorder) {
 +        if(m_recordedClipBoundary)
 +            recordBoundary(PaintCommandKind::ClipEnd);
++        if(m_recordedGroupBoundary) {
++            const auto begin = m_recorder->commands.begin()
++                + static_cast<std::ptrdiff_t>(m_recordedGroupStart + 1);
++            const bool hasPaint = std::any_of(
++                begin, m_recorder->commands.end(),
++                [](const PaintCommand& command) {
++                    return command.kind == PaintCommandKind::Fill
++                        || command.kind == PaintCommandKind::Stroke;
++                });
++            if(hasPaint) {
++                recordBoundary(
++                    PaintCommandKind::GroupEnd, m_element,
++                    blendInfo.recordingOpacity());
++            } else {
++                m_recorder->commands.resize(m_recordedGroupStart);
++            }
++        }
 +        return;
 +    }
 +
      if(m_canvas == m_parent->canvas()) {
          m_canvas->restore();
          return;
-@@ -58,4 +962,243 @@ void SVGRenderState::endGroup(const SVGBlendInfo& blendInfo)
+@@ -58,4 +985,247 @@ void SVGRenderState::endGroup(const SVGBlendInfo& blendInfo)
      m_parent->m_canvas->blendCanvas(*m_canvas, BlendMode::Src_Over, opacity);
  }
  
@@ -6512,7 +6722,8 @@ index 550d389..d653bc3 100644
 +}
 +
 +void SVGRenderState::recordBoundary(PaintCommandKind kind,
-+                                    const SVGElement* sourceElement)
++                                    const SVGElement* sourceElement,
++                                    double groupOpacity)
 +{
 +    if(!m_recorder || m_recordingSuppressed)
 +        return;
@@ -6526,6 +6737,7 @@ index 550d389..d653bc3 100644
 +    command.kind = kind;
 +    command.transform = m_recordingTransform;
 +    command.transform_coordinates_exact = true;
++    command.group_opacity = groupOpacity;
 +    command.source_index = source ? source->sourceIndex() : -1;
 +    command.source_kind = kind == PaintCommandKind::ClipEnd ? "clip_end" : "group";
 +    m_recorder->commands.emplace_back(std::move(command));
@@ -6551,12 +6763,14 @@ index 550d389..d653bc3 100644
 +        return;
 +    }
 +
-+    const bool hasPartialAlpha = kind == PaintCommandKind::Fill
-+        ? source->fillHasPartialAlpha()
++    const double paintOpacity = kind == PaintCommandKind::Fill
++        ? source->recordingFillPaintOpacity()
 +        : kind == PaintCommandKind::Stroke
-+            ? source->strokeHasPartialAlpha() : false;
++            ? source->recordingStrokePaintOpacity() : 1.0;
++    const bool hasPartialAlpha = paintOpacity > 0.0
++        && paintOpacity < 1.0;
 +    const auto& color = m_canvas->solidPaint();
-+    if(color.alpha() == 0 && !hasPartialAlpha)
++    if(paintOpacity <= 0.0)
 +        return;
 +    if(!recordDeferredCapabilities())
 +        return;
@@ -6566,8 +6780,8 @@ index 550d389..d653bc3 100644
 +    command.rgba = {{color.red(), color.green(), color.blue(), color.alpha()}};
 +    command.fill_rule = fillRule == FillRule::EvenOdd
 +        ? PaintFillRule::EvenOdd : PaintFillRule::NonZero;
-+    command.has_partial_alpha = hasPartialAlpha
-+        || (color.alpha() > 0 && color.alpha() < 255);
++    command.has_partial_alpha = hasPartialAlpha;
++    command.paint_opacity = paintOpacity;
 +    command.source_index = source->sourceIndex();
 +    command.relative_path_operation_count = source->relativePathOperationCount();
 +    command.transform_operation_count = m_transformOperationCount;
@@ -6723,7 +6937,7 @@ index 550d389..d653bc3 100644
 +
  } // namespace lunasvg
 diff --git a/source/svgrenderstate.h b/source/svgrenderstate.h
-index 1e0d434..5b7bb6b 100644
+index 1e0d434..460b46a 100644
 --- a/source/svgrenderstate.h
 +++ b/source/svgrenderstate.h
 @@ -3,8 +3,21 @@
@@ -6748,7 +6962,26 @@ index 1e0d434..5b7bb6b 100644
  enum class SVGRenderMode {
      Painting,
      Clipping
-@@ -31,12 +44,29 @@ private:
+@@ -15,28 +28,48 @@ public:
+     explicit SVGBlendInfo(const SVGElement* element);
+     SVGBlendInfo(const SVGClipPathElement* clipper, const SVGMaskElement* masker, float opacity)
+         : m_clipper(clipper), m_masker(masker), m_opacity(opacity)
++        , m_recordingOpacity(opacity)
+     {}
+ 
+     bool requiresCompositing(SVGRenderMode mode) const;
+     const SVGClipPathElement* clipper() const { return m_clipper; }
+     const SVGMaskElement* masker() const { return m_masker; }
+     float opacity() const { return m_opacity; }
++    double recordingOpacity() const { return m_recordingOpacity; }
+ 
+ private:
+     const SVGClipPathElement* m_clipper;
+     const SVGMaskElement* m_masker;
+     const float m_opacity;
++    const double m_recordingOpacity;
+ };
+ 
  class SVGRenderState {
  public:
      SVGRenderState(const SVGElement* element, const SVGRenderState& parent, const Transform& localTransform)
@@ -6781,7 +7014,7 @@ index 1e0d434..5b7bb6b 100644
      {}
  
      Canvas& operator*() const { return *m_canvas; }
-@@ -45,8 +75,14 @@ public:
+@@ -45,8 +78,14 @@ public:
      const SVGElement* element() const { return m_element; }
      const SVGRenderState* parent() const { return m_parent; }
      const Transform& currentTransform() const { return m_currentTransform; }
@@ -6796,7 +7029,7 @@ index 1e0d434..5b7bb6b 100644
  
      Rect fillBoundingBox() const { return m_element->fillBoundingBox(); }
      Rect paintBoundingBox() const { return m_element->paintBoundingBox(); }
-@@ -55,13 +91,101 @@ public:
+@@ -55,13 +94,104 @@ public:
  
      void beginGroup(const SVGBlendInfo& blendInfo);
      void endGroup(const SVGBlendInfo& blendInfo);
@@ -6804,7 +7037,8 @@ index 1e0d434..5b7bb6b 100644
 +                    const StrokeData* strokeData = nullptr,
 +                    const SVGElement* sourceElement = nullptr);
 +    void recordBoundary(PaintCommandKind kind,
-+                        const SVGElement* sourceElement = nullptr);
++                        const SVGElement* sourceElement = nullptr,
++                        double groupOpacity = 1.0);
 +    void recordCapabilityIssue(const std::string& reason,
 +                               const SVGElement* sourceElement = nullptr);
 +    bool recordDeferredCapabilities();
@@ -6895,6 +7129,8 @@ index 1e0d434..5b7bb6b 100644
 +    double m_transformTranslationPrecisionError{0};
 +    bool m_recordingSuppressed{false};
 +    bool m_recordedClipBoundary{false};
++    bool m_recordedGroupBoundary{false};
++    size_t m_recordedGroupStart{0};
  };
  
  } // namespace lunasvg

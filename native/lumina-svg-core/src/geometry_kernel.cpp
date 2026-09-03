@@ -115,16 +115,26 @@ struct GridBounds {
 
 };
 
+struct PaintContributor {
+    int32_t draw_index{-1};
+    int32_t source_index{-1};
+    SourceKind source_kind{SourceKind::Fill};
+    double weight{0};
+};
+
 struct PaintGeometry {
     Paths64 paths;
+    std::vector<Paths64> components;
     GridBounds bounds;
     double boundary_error_source{0};
     double input_precision_error_x_source{0};
     double input_precision_error_y_source{0};
     std::array<uint8_t, 4> rgba{{0, 0, 0, 0}};
+    std::array<double, 4> rgba_f64{{0, 0, 0, 0}};
     int32_t draw_index{-1};
     int32_t source_index{-1};
     SourceKind source_kind{SourceKind::Fill};
+    std::vector<PaintContributor> contributors;
 };
 
 struct FragmentIssue {
@@ -1374,7 +1384,13 @@ void requireFiniteRecording(
                 || command.transform_linear_precision_error < 0
                 || !std::isfinite(
                     command.transform_translation_precision_error)
-                || command.transform_translation_precision_error < 0)
+                || command.transform_translation_precision_error < 0
+                || !std::isfinite(command.paint_opacity)
+                || command.paint_opacity < 0
+                || command.paint_opacity > 1
+                || !std::isfinite(command.group_opacity)
+                || command.group_opacity < 0
+                || command.group_opacity > 1)
             throw InputPrecisionError("nonfinite_command_metadata");
         for(const auto& point : command.path_points) {
             if(!std::isfinite(point.x) || !std::isfinite(point.y))
@@ -2721,15 +2737,34 @@ PrecisionPaths applyActiveClips(
 }
 
 struct PaintReplay {
+    struct ProgramNode {
+        enum class Kind : uint8_t {
+            Paint,
+            Group,
+        };
+
+        Kind kind{Kind::Group};
+        size_t paint_index{0};
+        double opacity{1};
+        std::vector<size_t> children;
+    };
+
     std::vector<PaintGeometry> paints;
+    std::vector<ProgramNode> program_nodes{{}};
     UnprintableFragmentCollection unprintable_fragments;
     std::string reason_code;
 };
 
+uint8_t compatibilityColorByte(double value)
+{
+    const double clamped = std::clamp(value, 0.0, 1.0);
+    return static_cast<uint8_t>(std::lround(clamped * 255.0));
+}
+
 void appendUnprintableFragment(
     UnprintableFragmentCollection& fragments,
     UnprintableReason reason,
-    const std::array<uint8_t, 4>& rgba,
+    const std::array<double, 4>& rgbaF64,
     int32_t drawIndex,
     int32_t sourceIndex,
     SourceKind sourceKind,
@@ -2737,6 +2772,8 @@ void appendUnprintableFragment(
 {
     if(fragments.reason_ids.size() == fragments.reason_ids.max_size()
             || fragments.rgba.size() > fragments.rgba.max_size() - 4
+            || fragments.rgba_f64.size()
+                > fragments.rgba_f64.max_size() - 4
             || fragments.draw_indices.size()
                 == fragments.draw_indices.max_size()
             || fragments.source_indices.size()
@@ -2747,8 +2784,13 @@ void appendUnprintableFragment(
                 == fragments.subpath_indices.max_size())
         throw ComplexityLimitError();
     fragments.reason_ids.push_back(static_cast<int32_t>(reason));
-    fragments.rgba.insert(
-        fragments.rgba.end(), rgba.begin(), rgba.end());
+    for(const double component : rgbaF64) {
+        if(!std::isfinite(component) || component < 0.0 || component > 1.0)
+            throw std::runtime_error("invalid_fragment_rgba");
+        fragments.rgba.push_back(compatibilityColorByte(component));
+    }
+    fragments.rgba_f64.insert(
+        fragments.rgba_f64.end(), rgbaF64.begin(), rgbaF64.end());
     fragments.draw_indices.push_back(drawIndex);
     fragments.source_indices.push_back(sourceIndex);
     fragments.source_kinds.push_back(static_cast<int32_t>(sourceKind));
@@ -2761,8 +2803,14 @@ void appendUnprintableFragment(
     const lunasvg::PaintCommand& command,
     int32_t drawIndex)
 {
+    const std::array<double, 4> rgbaF64{{
+        command.rgba[0] / 255.0,
+        command.rgba[1] / 255.0,
+        command.rgba[2] / 255.0,
+        command.paint_opacity,
+    }};
     appendUnprintableFragment(
-        fragments, issue.reason, command.rgba, drawIndex,
+        fragments, issue.reason, rgbaF64, drawIndex,
         command.source_index,
         command.kind == lunasvg::PaintCommandKind::Stroke
             ? SourceKind::Stroke : SourceKind::Fill,
@@ -2775,7 +2823,7 @@ void appendUnprintableFragment(
     const PaintGeometry& paint)
 {
     appendUnprintableFragment(
-        fragments, reason, paint.rgba, paint.draw_index,
+        fragments, reason, paint.rgba_f64, paint.draw_index,
         paint.source_index, paint.source_kind, -1);
 }
 
@@ -2787,9 +2835,35 @@ PaintReplay replayPaintCommands(
         throw std::logic_error("missing_complexity_budget");
     PaintReplay replay;
     std::vector<PrecisionPaths> activeClips;
+    std::vector<size_t> groupStack{0};
     replay.paints.reserve(commands.size());
+    replay.program_nodes.reserve(commands.size() + 1);
     int32_t drawIndex = 0;
     for(const auto& command : commands) {
+        if(command.kind == lunasvg::PaintCommandKind::GroupBegin) {
+            if(groupStack.empty()) {
+                replay.reason_code = "invalid_group_stack";
+                return replay;
+            }
+            PaintReplay::ProgramNode group;
+            group.opacity = command.group_opacity;
+            const size_t groupIndex = replay.program_nodes.size();
+            replay.program_nodes.emplace_back(std::move(group));
+            replay.program_nodes[groupStack.back()].children.push_back(
+                groupIndex);
+            groupStack.push_back(groupIndex);
+            continue;
+        }
+        if(command.kind == lunasvg::PaintCommandKind::GroupEnd) {
+            if(groupStack.size() <= 1
+                    || replay.program_nodes[groupStack.back()].opacity
+                        != command.group_opacity) {
+                replay.reason_code = "invalid_group_stack";
+                return replay;
+            }
+            groupStack.pop_back();
+            continue;
+        }
         if(command.kind == lunasvg::PaintCommandKind::ClipBegin) {
             activeClips.push_back(normalizeFill(command, domain));
             continue;
@@ -2826,14 +2900,34 @@ PaintReplay replayPaintCommands(
             geometry.input_precision_error_y_source;
         paint.bounds = pathsBounds(paint.paths);
         paint.rgba = command.rgba;
+        paint.rgba_f64 = {{
+            command.rgba[0] / 255.0,
+            command.rgba[1] / 255.0,
+            command.rgba[2] / 255.0,
+            command.paint_opacity,
+        }};
         paint.draw_index = paintDrawIndex;
         paint.source_index = command.source_index;
         paint.source_kind = command.kind == lunasvg::PaintCommandKind::Stroke
             ? SourceKind::Stroke : SourceKind::Fill;
+        paint.contributors.push_back({
+            paint.draw_index,
+            paint.source_index,
+            paint.source_kind,
+            command.paint_opacity,
+        });
+        PaintReplay::ProgramNode paintNode;
+        paintNode.kind = PaintReplay::ProgramNode::Kind::Paint;
+        paintNode.paint_index = replay.paints.size();
+        replay.program_nodes.emplace_back(std::move(paintNode));
+        replay.program_nodes[groupStack.back()].children.push_back(
+            replay.program_nodes.size() - 1);
         replay.paints.emplace_back(std::move(paint));
     }
     if(!activeClips.empty())
         replay.reason_code = "invalid_clip_stack";
+    else if(groupStack.size() != 1)
+        replay.reason_code = "invalid_group_stack";
     return replay;
 }
 
@@ -2947,6 +3041,37 @@ void appendPolyTree(GeometryCollection& collection, const PolyTree64& tree,
     }
 }
 
+std::vector<Paths64> polyTreeComponents(const PolyTree64& tree)
+{
+    std::vector<Paths64> components;
+    std::vector<const PolyPath64*> pending;
+    pending.reserve(tree.Count());
+    for(size_t index = tree.Count(); index > 0; --index)
+        pending.push_back(tree.Child(index - 1));
+    while(!pending.empty()) {
+        const auto* outer = pending.back();
+        pending.pop_back();
+        if(outer->IsHole() || outer->Polygon().size() < 3)
+            continue;
+        Paths64 component;
+        component.reserve(checkedSizeSum(outer->Count(), size_t{1}));
+        component.push_back(outer->Polygon());
+        for(size_t holeIndex = 0; holeIndex < outer->Count(); ++holeIndex) {
+            const auto* hole = outer->Child(holeIndex);
+            if(hole->IsHole() && hole->Polygon().size() >= 3)
+                component.push_back(hole->Polygon());
+            for(size_t childIndex = hole->Count(); childIndex > 0;
+                    --childIndex) {
+                if(pending.size() == pending.max_size())
+                    throw ComplexityLimitError("alpha_compositor_components");
+                pending.push_back(hole->Child(childIndex - 1));
+            }
+        }
+        components.emplace_back(std::move(component));
+    }
+    return components;
+}
+
 size_t requireBoundedPolyTreeOutput(
     const PolyTree64& tree, ComplexityBudget& complexityBudget)
 {
@@ -2974,7 +3099,8 @@ size_t requireBoundedPolyTreeOutput(
 
 bool appendGeometry(GeometryCollection& collection,
                     const PaintGeometry& geometry,
-                    ComplexityBudget& complexityBudget)
+                    ComplexityBudget& complexityBudget,
+                    std::vector<Paths64>* canonicalComponents = nullptr)
 {
     if(geometry.paths.empty())
         return false;
@@ -2986,6 +3112,8 @@ bool appendGeometry(GeometryCollection& collection,
         throw std::runtime_error("clipper_union_failed");
     consumeClipperExecution(complexityBudget, clipper);
     requireBoundedPolyTreeOutput(tree, complexityBudget);
+    if(canonicalComponents != nullptr)
+        *canonicalComponents = polyTreeComponents(tree);
     // A Paths64 difference can contain a redundant oriented ring at a
     // touching boundary. Rebuilding the canonical PolyTree may remove that
     // ring without removing any filled area. Ring-count equality is therefore
@@ -2998,20 +3126,56 @@ bool appendGeometry(GeometryCollection& collection,
     if(collection.geometry_offsets.size()
             == collection.geometry_offsets.max_size()
             || collection.rgba.size() > collection.rgba.max_size() - 4
+            || collection.rgba_f64.size()
+                > collection.rgba_f64.max_size() - 4
             || collection.draw_indices.size()
                 == collection.draw_indices.max_size()
             || collection.source_indices.size()
                 == collection.source_indices.max_size()
             || collection.source_kinds.size()
-                == collection.source_kinds.max_size())
+                == collection.source_kinds.max_size()
+            || collection.contributor_offsets.size()
+                == collection.contributor_offsets.max_size()
+            || geometry.contributors.size()
+                > collection.contributor_draw_indices.max_size()
+                    - collection.contributor_draw_indices.size()
+            || geometry.contributors.size()
+                > collection.contributor_source_indices.max_size()
+                    - collection.contributor_source_indices.size()
+            || geometry.contributors.size()
+                > collection.contributor_source_kinds.max_size()
+                    - collection.contributor_source_kinds.size()
+            || geometry.contributors.size()
+                > collection.contributor_weights.max_size()
+                    - collection.contributor_weights.size())
         throw ComplexityLimitError();
     collection.geometry_offsets.push_back(collection.polygon_offsets.size() - 1);
-    collection.rgba.insert(collection.rgba.end(),
-                           geometry.rgba.begin(), geometry.rgba.end());
+    for(const double component : geometry.rgba_f64) {
+        if(!std::isfinite(component) || component < 0.0 || component > 1.0)
+            throw std::runtime_error("invalid_geometry_rgba");
+        collection.rgba_f64.push_back(component);
+        collection.rgba.push_back(compatibilityColorByte(component));
+    }
     collection.draw_indices.push_back(geometry.draw_index);
     collection.source_indices.push_back(geometry.source_index);
     collection.source_kinds.push_back(
         static_cast<int32_t>(geometry.source_kind));
+    for(const auto& contributor : geometry.contributors) {
+        if(!std::isfinite(contributor.weight)
+                || contributor.weight < 0.0
+                || contributor.weight > 1.0)
+            throw std::runtime_error("invalid_contributor_weight");
+        collection.contributor_draw_indices.push_back(
+            contributor.draw_index);
+        collection.contributor_source_indices.push_back(
+            contributor.source_index);
+        collection.contributor_source_kinds.push_back(
+            static_cast<int32_t>(contributor.source_kind));
+        collection.contributor_weights.push_back(contributor.weight);
+    }
+    const uint64_t contributorCount =
+        collection.contributor_draw_indices.size();
+    collection.contributor_offsets.push_back(contributorCount);
     return true;
 }
 
@@ -3035,15 +3199,66 @@ bool collectionLayoutIsValid(const GeometryCollection& collection)
     const uint64_t ringCount = collection.ring_offsets.size() - 1;
     const uint64_t polygonCount = collection.polygon_offsets.size() - 1;
     const uint64_t geometryCount = collection.geometryCount();
+    const uint64_t contributorCount =
+        collection.contributor_draw_indices.size();
     if(!offsetsAreValid(collection.ring_offsets, pointCount)
             || !offsetsAreValid(collection.polygon_offsets, ringCount)
             || !offsetsAreValid(collection.geometry_offsets, polygonCount)
+            || !offsetsAreValid(
+                collection.contributor_offsets, contributorCount)
             || collection.hole_parent.size() != ringCount
             || collection.rgba.size() != geometryCount * 4
+            || collection.rgba_f64.size() != geometryCount * 4
             || collection.draw_indices.size() != geometryCount
             || collection.source_indices.size() != geometryCount
-            || collection.source_kinds.size() != geometryCount)
+            || collection.source_kinds.size() != geometryCount
+            || collection.contributor_offsets.size() != geometryCount + 1
+            || collection.contributor_source_indices.size()
+                != contributorCount
+            || collection.contributor_source_kinds.size()
+                != contributorCount
+            || collection.contributor_weights.size() != contributorCount)
         return false;
+
+    for(size_t geometryIndex = 0; geometryIndex < geometryCount;
+            ++geometryIndex) {
+        const auto sourceKind = static_cast<SourceKind>(
+            collection.source_kinds[geometryIndex]);
+        if(sourceKind != SourceKind::Fill
+                && sourceKind != SourceKind::Stroke
+                && sourceKind != SourceKind::Silhouette
+                && sourceKind != SourceKind::Composite)
+            return false;
+        const size_t begin = static_cast<size_t>(
+            collection.contributor_offsets[geometryIndex]);
+        const size_t end = static_cast<size_t>(
+            collection.contributor_offsets[geometryIndex + 1]);
+        if(sourceKind == SourceKind::Silhouette) {
+            if(begin != end)
+                return false;
+        } else if(begin == end) {
+            return false;
+        }
+        double weightSum = 0.0;
+        for(size_t index = begin; index < end; ++index) {
+            const double weight = collection.contributor_weights[index];
+            if(!std::isfinite(weight) || weight < 0.0 || weight > 1.0)
+                return false;
+            weightSum += weight;
+        }
+        for(size_t component = 0; component < 4; ++component) {
+            const double value = collection.rgba_f64[
+                geometryIndex * 4 + component];
+            if(!std::isfinite(value) || value < 0.0 || value > 1.0)
+                return false;
+        }
+        const double alpha = collection.rgba_f64[geometryIndex * 4 + 3];
+        const double tolerance = 1e-12
+            * std::max<size_t>(size_t{1}, end - begin);
+        if(sourceKind != SourceKind::Silhouette
+                && std::abs(weightSum - alpha) > tolerance)
+            return false;
+    }
 
     for(size_t index = 1; index < collection.ring_offsets.size(); ++index) {
         const uint64_t begin = collection.ring_offsets[index - 1];
@@ -3080,6 +3295,7 @@ bool unprintableLayoutIsValid(
 {
     const uint64_t count = fragments.count();
     return fragments.rgba.size() == count * 4
+        && fragments.rgba_f64.size() == count * 4
         && fragments.draw_indices.size() == count
         && fragments.source_indices.size() == count
         && fragments.source_kinds.size() == count
@@ -3092,8 +3308,7 @@ bool resultCensusIsValid(const NativeResult& result)
         && collectionLayoutIsValid(result.visible)
         && collectionLayoutIsValid(result.silhouette)
         && unprintableLayoutIsValid(result.unprintable_fragments)
-        && result.raw.geometryCount() <= result.input_paint_count
-        && result.visible.geometryCount() <= result.raw.geometryCount();
+        && result.raw.geometryCount() <= result.input_paint_count;
     if(!layoutsValid)
         return false;
     if(result.raw.geometryCount() == 0
@@ -3218,8 +3433,546 @@ Paths64 mergeNormalizedCoverage(Paths64 left, Paths64 right,
     return merged;
 }
 
+struct SurfaceCell {
+    Paths64 paths;
+    GridBounds bounds;
+    std::shared_ptr<PackedGridBoundsIndex> path_bounds_index;
+    std::array<double, 3> premultiplied_rgb{{0, 0, 0}};
+    double alpha{0};
+    std::vector<PaintContributor> contributors;
+};
+
+using Surface = std::vector<SurfaceCell>;
+
+void updateSurfaceCellGeometry(SurfaceCell& cell, Paths64 paths)
+{
+    cell.paths = std::move(paths);
+    cell.bounds = pathsBounds(cell.paths);
+    if(cell.paths.size() > 16) {
+        cell.path_bounds_index = std::make_shared<PackedGridBoundsIndex>(
+            individualPathBounds(cell.paths));
+    } else {
+        cell.path_bounds_index.reset();
+    }
+}
+
+const Paths64& relevantComponentPaths(
+    const SurfaceCell& cell, const GridBounds& query,
+    ComplexityBudget& complexityBudget, Paths64& selected)
+{
+    if(cell.path_bounds_index == nullptr)
+        return cell.paths;
+    auto matches = cell.path_bounds_index->matches(
+        query, complexityBudget);
+    if(matches.size() == cell.paths.size())
+        return cell.paths;
+    std::sort(matches.begin(), matches.end());
+    selected.reserve(matches.size());
+    for(const size_t match : matches)
+        selected.push_back(cell.paths.at(match));
+    return selected;
+}
+
 std::vector<Paths64> partitionNormalizedPaths(
-    const Paths64& paths, ComplexityBudget& complexityBudget)
+    Paths64 paths, ComplexityBudget& complexityBudget);
+
+bool sameContributor(const PaintContributor& left,
+                     const PaintContributor& right)
+{
+    return left.draw_index == right.draw_index
+        && left.source_index == right.source_index
+        && left.source_kind == right.source_kind
+        && left.weight == right.weight;
+}
+
+bool sameSurfaceStyle(const SurfaceCell& left, const SurfaceCell& right)
+{
+    return left.premultiplied_rgb == right.premultiplied_rgb
+        && left.alpha == right.alpha
+        && left.contributors.size() == right.contributors.size()
+        && std::equal(
+            left.contributors.begin(), left.contributors.end(),
+            right.contributors.begin(), sameContributor);
+}
+
+size_t surfaceStyleHash(const SurfaceCell& cell)
+{
+    size_t hash = std::hash<double>{}(cell.alpha);
+    const auto include = [&](size_t value) {
+        hash ^= value + 0x9e3779b97f4a7c15ULL
+            + (hash << 6) + (hash >> 2);
+    };
+    for(const double component : cell.premultiplied_rgb)
+        include(std::hash<double>{}(component));
+    include(cell.contributors.size());
+    for(const auto& contributor : cell.contributors) {
+        include(std::hash<int32_t>{}(contributor.draw_index));
+        include(std::hash<int32_t>{}(contributor.source_index));
+        include(std::hash<int32_t>{}(
+            static_cast<int32_t>(contributor.source_kind)));
+        include(std::hash<double>{}(contributor.weight));
+    }
+    return hash;
+}
+
+void appendMovedPaths(Paths64& destination, Paths64& source)
+{
+    if(source.size() > destination.max_size() - destination.size())
+        throw ComplexityLimitError("alpha_compositor_paths");
+    destination.reserve(destination.size() + source.size());
+    for(auto& path : source)
+        destination.emplace_back(std::move(path));
+}
+
+Surface consolidateSurface(Surface cells)
+{
+    Surface consolidated;
+    consolidated.reserve(cells.size());
+    std::unordered_multimap<size_t, size_t> styleIndices;
+    styleIndices.reserve(cells.size());
+    for(auto& cell : cells) {
+        if(cell.paths.empty() || !(cell.alpha > 0.0))
+            continue;
+        const size_t hash = surfaceStyleHash(cell);
+        const auto range = styleIndices.equal_range(hash);
+        auto match = range.second;
+        for(auto candidate = range.first; candidate != range.second;
+                ++candidate) {
+            if(sameSurfaceStyle(
+                    consolidated[candidate->second], cell)) {
+                match = candidate;
+                break;
+            }
+        }
+        if(match == range.second) {
+            styleIndices.emplace(hash, consolidated.size());
+            consolidated.emplace_back(std::move(cell));
+            continue;
+        }
+        auto& destination = consolidated[match->second];
+        appendMovedPaths(destination.paths, cell.paths);
+        destination.bounds.include(cell.bounds);
+    }
+    return consolidated;
+}
+
+std::vector<Paths64> executeNormalizedBooleanComponents(
+    ClipType clipType, const Paths64& subjects, const Paths64& clips,
+    ComplexityBudget& complexityBudget)
+{
+    preflightNormalizedBoolean(complexityBudget, subjects, clips);
+    PolyTree64 tree;
+    Clipper64 clipper;
+    clipper.AddSubject(subjects);
+    clipper.AddClip(clips);
+    if(!clipper.Execute(clipType, FillRule::NonZero, tree))
+        throw std::runtime_error("clipper_boolean_failed");
+    consumeClipperExecution(complexityBudget, clipper);
+    requireBoundedPolyTreeOutput(tree, complexityBudget);
+    return polyTreeComponents(tree);
+}
+
+SurfaceCell blendedCell(const SurfaceCell& destination,
+                        const SurfaceCell& source, Paths64 paths)
+{
+    SurfaceCell result;
+    result.paths = std::move(paths);
+    result.bounds = pathsBounds(result.paths);
+    const double retainedDestination = 1.0 - source.alpha;
+    result.alpha = source.alpha
+        + destination.alpha * retainedDestination;
+    for(size_t component = 0; component < 3; ++component) {
+        result.premultiplied_rgb[component] =
+            source.premultiplied_rgb[component]
+            + destination.premultiplied_rgb[component]
+                * retainedDestination;
+    }
+    result.contributors.reserve(checkedSizeSum(
+        destination.contributors.size(), source.contributors.size()));
+    if(retainedDestination > 0.0) {
+        for(const auto& contributor : destination.contributors) {
+            const double weight = contributor.weight
+                * retainedDestination;
+            if(weight > 0.0) {
+                auto retained = contributor;
+                retained.weight = weight;
+                result.contributors.emplace_back(std::move(retained));
+            }
+        }
+    }
+    for(const auto& contributor : source.contributors) {
+        if(contributor.weight > 0.0)
+            result.contributors.push_back(contributor);
+    }
+    return result;
+}
+
+void appendComponentCells(
+    Surface& destination, const SurfaceCell& style,
+    std::vector<Paths64> components,
+    ComplexityBudget& complexityBudget);
+
+void appendSpatialCell(
+    Surface& destination, const SurfaceCell& style, Paths64 paths,
+    ComplexityBudget& complexityBudget, size_t depth)
+{
+    constexpr size_t MAX_CELL_POINTS = 512;
+    constexpr size_t MAX_TILE_DEPTH = 16;
+    const GridBounds bounds = pathsBounds(paths);
+    const int64_t width = bounds.valid
+        ? bounds.max_x - bounds.min_x : 0;
+    const int64_t height = bounds.valid
+        ? bounds.max_y - bounds.min_y : 0;
+    if(pathPointCount(paths) <= MAX_CELL_POINTS
+            || depth >= MAX_TILE_DEPTH
+            || (width <= 1 && height <= 1)) {
+        SurfaceCell component;
+        updateSurfaceCellGeometry(component, std::move(paths));
+        component.premultiplied_rgb = style.premultiplied_rgb;
+        component.alpha = style.alpha;
+        component.contributors = style.contributors;
+        destination.emplace_back(std::move(component));
+        return;
+    }
+
+    Clipper2Lib::Rect64 firstRect;
+    Clipper2Lib::Rect64 secondRect;
+    if(width >= height && width > 1) {
+        const int64_t middle = bounds.min_x + width / 2;
+        firstRect = Clipper2Lib::Rect64(
+            bounds.min_x, bounds.min_y, middle, bounds.max_y);
+        secondRect = Clipper2Lib::Rect64(
+            middle, bounds.min_y, bounds.max_x, bounds.max_y);
+    } else {
+        const int64_t middle = bounds.min_y + height / 2;
+        firstRect = Clipper2Lib::Rect64(
+            bounds.min_x, bounds.min_y, bounds.max_x, middle);
+        secondRect = Clipper2Lib::Rect64(
+            bounds.min_x, middle, bounds.max_x, bounds.max_y);
+    }
+    consumeBooleanInputs(complexityBudget, paths);
+    auto first = Clipper2Lib::RectClip(firstRect, paths);
+    consumeClipperOutput(complexityBudget, first);
+    consumeBooleanInputs(complexityBudget, paths);
+    auto second = Clipper2Lib::RectClip(secondRect, paths);
+    consumeClipperOutput(complexityBudget, second);
+    if(!first.empty()) {
+        appendSpatialCell(
+            destination, style, std::move(first),
+            complexityBudget, depth + 1);
+    }
+    if(!second.empty()) {
+        appendSpatialCell(
+            destination, style, std::move(second),
+            complexityBudget, depth + 1);
+    }
+}
+
+void appendComponentCells(
+    Surface& destination, const SurfaceCell& style,
+    std::vector<Paths64> components,
+    ComplexityBudget& complexityBudget)
+{
+    for(auto& componentPaths : components) {
+        appendSpatialCell(
+            destination, style, std::move(componentPaths),
+            complexityBudget, 0);
+    }
+}
+
+void compositeSurfaceOntoSurface(Surface& destination, Surface source,
+                                 ComplexityBudget& complexityBudget)
+{
+    if(source.empty())
+        return;
+    if(destination.empty()) {
+        destination = std::move(source);
+        return;
+    }
+
+    std::vector<GridBounds> sourceBounds;
+    sourceBounds.reserve(source.size());
+    for(const auto& cell : source)
+        sourceBounds.push_back(cell.bounds);
+    const PackedGridBoundsIndex sourceIndex(std::move(sourceBounds));
+
+    std::vector<Paths64> destinationCoverageBySource(source.size());
+    Surface next;
+    next.reserve(checkedSizeSum(destination.size(), source.size()));
+    for(auto& destinationCell : destination) {
+        const auto candidates = sourceIndex.matches(
+            destinationCell.bounds, complexityBudget);
+        Paths64 sourceCoverage;
+        bool hasIntersection = false;
+        for(const size_t sourceCellIndex : candidates) {
+            Paths64 selectedDestinationPaths;
+            Paths64 selectedSourcePaths;
+            const auto& destinationPaths = relevantComponentPaths(
+                destinationCell, source[sourceCellIndex].bounds,
+                complexityBudget, selectedDestinationPaths);
+            const auto& sourcePathsForIntersection = relevantComponentPaths(
+                source[sourceCellIndex], destinationCell.bounds,
+                complexityBudget, selectedSourcePaths);
+            auto intersectionComponents =
+                executeNormalizedBooleanComponents(
+                ClipType::Intersection,
+                destinationPaths,
+                sourcePathsForIntersection,
+                complexityBudget);
+            if(intersectionComponents.empty())
+                continue;
+            hasIntersection = true;
+
+            const auto& sourcePaths = source[sourceCellIndex].paths;
+            const size_t sourceCoverageSize = checkedSizeSum(
+                sourceCoverage.size(), sourcePaths.size());
+            sourceCoverage.reserve(sourceCoverageSize);
+            sourceCoverage.insert(
+                sourceCoverage.end(), sourcePaths.begin(), sourcePaths.end());
+
+            auto& destinationCoverage =
+                destinationCoverageBySource[sourceCellIndex];
+            const size_t destinationCoverageSize = checkedSizeSum(
+                destinationCoverage.size(), destinationCell.paths.size());
+            destinationCoverage.reserve(destinationCoverageSize);
+            destinationCoverage.insert(
+                destinationCoverage.end(),
+                destinationCell.paths.begin(), destinationCell.paths.end());
+            const auto blendedStyle = blendedCell(
+                destinationCell, source[sourceCellIndex], {});
+            appendComponentCells(
+                next, blendedStyle,
+                std::move(intersectionComponents), complexityBudget);
+        }
+
+        if(!hasIntersection) {
+            next.emplace_back(std::move(destinationCell));
+            continue;
+        }
+
+        auto destinationOnly = executeNormalizedBooleanComponents(
+            ClipType::Difference,
+            destinationCell.paths, sourceCoverage, complexityBudget);
+        appendComponentCells(
+            next, destinationCell,
+            std::move(destinationOnly), complexityBudget);
+    }
+
+    for(size_t sourceCellIndex = 0;
+            sourceCellIndex < source.size(); ++sourceCellIndex) {
+        auto& sourceCell = source[sourceCellIndex];
+        const auto& destinationCoverage =
+            destinationCoverageBySource[sourceCellIndex];
+        if(destinationCoverage.empty()) {
+            next.emplace_back(std::move(sourceCell));
+            continue;
+        }
+        auto sourceOnly = executeNormalizedBooleanComponents(
+            ClipType::Difference,
+            sourceCell.paths, destinationCoverage, complexityBudget);
+        if(sourceOnly.empty())
+            continue;
+        appendComponentCells(
+            next, sourceCell,
+            std::move(sourceOnly), complexityBudget);
+    }
+    destination = std::move(next);
+}
+
+Surface surfaceForPaint(PaintGeometry& paint,
+                        ComplexityBudget& complexityBudget)
+{
+    if(paint.paths.empty() || !(paint.rgba_f64[3] > 0.0))
+        return {};
+    Surface surface;
+    SurfaceCell style;
+    style.alpha = paint.rgba_f64[3];
+    for(size_t component = 0; component < 3; ++component) {
+        style.premultiplied_rgb[component] =
+            paint.rgba_f64[component] * style.alpha;
+    }
+    style.contributors = std::move(paint.contributors);
+    appendComponentCells(
+        surface, style, std::move(paint.components), complexityBudget);
+    return surface;
+}
+
+void applyGroupOpacity(Surface& surface, double opacity)
+{
+    if(opacity == 1.0)
+        return;
+    if(!(opacity > 0.0)) {
+        surface.clear();
+        return;
+    }
+    for(auto& cell : surface) {
+        cell.alpha *= opacity;
+        for(double& component : cell.premultiplied_rgb)
+            component *= opacity;
+        for(auto& contributor : cell.contributors)
+            contributor.weight *= opacity;
+    }
+}
+
+Surface renderProgramNode(
+    size_t nodeIndex,
+    const std::vector<PaintReplay::ProgramNode>& programNodes,
+    std::vector<PaintGeometry>& paints,
+    ComplexityBudget& complexityBudget);
+
+Surface renderProgramChildren(
+    const std::vector<size_t>& children, size_t begin, size_t end,
+    const std::vector<PaintReplay::ProgramNode>& programNodes,
+    std::vector<PaintGeometry>& paints,
+    ComplexityBudget& complexityBudget)
+{
+    if(begin == end)
+        return {};
+    if(end - begin == 1) {
+        return renderProgramNode(
+            children[begin], programNodes, paints, complexityBudget);
+    }
+    const size_t middle = begin + (end - begin) / 2;
+    auto destination = renderProgramChildren(
+        children, begin, middle,
+        programNodes, paints, complexityBudget);
+    auto source = renderProgramChildren(
+        children, middle, end,
+        programNodes, paints, complexityBudget);
+    compositeSurfaceOntoSurface(
+        destination, std::move(source), complexityBudget);
+    return destination;
+}
+
+Surface renderProgramNode(
+    size_t nodeIndex,
+    const std::vector<PaintReplay::ProgramNode>& programNodes,
+    std::vector<PaintGeometry>& paints,
+    ComplexityBudget& complexityBudget)
+{
+    if(nodeIndex >= programNodes.size())
+        throw std::runtime_error("invalid_paint_program");
+    const auto& node = programNodes[nodeIndex];
+    if(node.kind == PaintReplay::ProgramNode::Kind::Paint) {
+        if(node.paint_index >= paints.size())
+            throw std::runtime_error("invalid_paint_program");
+        return surfaceForPaint(
+            paints[node.paint_index], complexityBudget);
+    }
+
+    auto surface = renderProgramChildren(
+        node.children, 0, node.children.size(),
+        programNodes, paints, complexityBudget);
+    applyGroupOpacity(surface, node.opacity);
+    return surface;
+}
+
+struct AlphaComposite {
+    std::vector<PaintGeometry> visible;
+    Paths64 silhouette;
+};
+
+AlphaComposite compositeAlphaProgram(
+    std::vector<PaintGeometry>& paints,
+    const std::vector<PaintReplay::ProgramNode>& programNodes,
+    const PhysicalDomain& domain)
+{
+    if(domain.complexity_budget == nullptr || programNodes.empty())
+        throw std::logic_error("missing_alpha_compositor_state");
+    auto& complexityBudget = *domain.complexity_budget;
+    auto surface = renderProgramNode(
+        0, programNodes, paints, complexityBudget);
+
+    AlphaComposite composite;
+    std::vector<CoverageBatch> silhouetteBatches;
+    const auto mergeSilhouetteBatch = [&](CoverageBatch left,
+                                          CoverageBatch right) {
+        CoverageBatch merged;
+        if(!left.bounds.intersects(right.bounds)) {
+            appendMovedPaths(left.paths, right.paths);
+            merged.paths = std::move(left.paths);
+        } else {
+            merged.paths = mergeNormalizedCoverage(
+                std::move(left.paths), std::move(right.paths),
+                complexityBudget);
+        }
+        merged.bounds = left.bounds;
+        merged.bounds.include(right.bounds);
+        merged.paint_count = checkedSizeSum(
+            left.paint_count, right.paint_count);
+        return merged;
+    };
+    for(const auto& cell : surface) {
+        CoverageBatch batch;
+        batch.paths = cell.paths;
+        batch.bounds = cell.bounds;
+        batch.paint_count = 1;
+        while(!silhouetteBatches.empty()
+                && silhouetteBatches.back().weight()
+                    == batch.weight()) {
+            auto previous = std::move(silhouetteBatches.back());
+            silhouetteBatches.pop_back();
+            batch = mergeSilhouetteBatch(
+                std::move(previous), std::move(batch));
+        }
+        silhouetteBatches.emplace_back(std::move(batch));
+    }
+    for(auto& batch : silhouetteBatches) {
+        composite.silhouette = mergeNormalizedCoverage(
+            std::move(composite.silhouette),
+            std::move(batch.paths), complexityBudget);
+    }
+
+    surface = consolidateSurface(std::move(surface));
+    composite.visible.reserve(surface.size());
+    for(auto& cell : surface) {
+        if(!(cell.alpha > 0.0))
+            continue;
+        PaintGeometry geometry;
+        geometry.paths = std::move(cell.paths);
+        geometry.bounds = cell.bounds;
+        geometry.rgba_f64[3] = cell.alpha;
+        for(size_t component = 0; component < 3; ++component) {
+            geometry.rgba_f64[component] = std::clamp(
+                cell.premultiplied_rgb[component] / cell.alpha,
+                0.0, 1.0);
+        }
+        for(size_t component = 0; component < 4; ++component) {
+            geometry.rgba[component] = compatibilityColorByte(
+                geometry.rgba_f64[component]);
+        }
+        geometry.contributors = std::move(cell.contributors);
+        if(geometry.contributors.size() == 1) {
+            const auto& contributor = geometry.contributors.front();
+            geometry.draw_index = contributor.draw_index;
+            geometry.source_index = contributor.source_index;
+            geometry.source_kind = contributor.source_kind;
+        } else {
+            geometry.draw_index = -1;
+            geometry.source_index = -1;
+            geometry.source_kind = SourceKind::Composite;
+        }
+        composite.visible.emplace_back(std::move(geometry));
+    }
+    return composite;
+}
+
+bool requiresAlphaCompositing(
+    const std::vector<lunasvg::PaintCommand>& commands)
+{
+    return std::any_of(
+        commands.begin(), commands.end(),
+        [](const lunasvg::PaintCommand& command) {
+            if(command.kind == lunasvg::PaintCommandKind::GroupBegin)
+                return command.group_opacity != 1.0;
+            return (command.kind == lunasvg::PaintCommandKind::Fill
+                    || command.kind == lunasvg::PaintCommandKind::Stroke)
+                && command.paint_opacity != 1.0;
+        });
+}
+
+std::vector<Paths64> partitionNormalizedPaths(
+    Paths64 paths, ComplexityBudget& complexityBudget)
 {
     if(paths.empty())
         return {};
@@ -3273,7 +4026,7 @@ std::vector<Paths64> partitionNormalizedPaths(
             groupIndex = groups.size();
             groups.emplace_back();
         }
-        groups[groupIndex].push_back(paths[pathIndex]);
+        groups[groupIndex].push_back(std::move(paths[pathIndex]));
     }
     return groups;
 }
@@ -3744,6 +4497,9 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
         return result;
     }
     auto paints = std::move(replay.paints);
+    auto programNodes = std::move(replay.program_nodes);
+    const bool alphaCompositingRequired = requiresAlphaCompositing(
+        recording.commands);
     const double maximumRecordedBoundaryErrorSource =
         maximumRelevantBoundaryErrorSource(
             topologyTrace, sourceBounds, recording.viewport);
@@ -3764,41 +4520,59 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
         return result;
     }
 
-    std::vector<PaintGeometry> exportablePaints;
-    exportablePaints.reserve(paints.size());
     for(auto& paint : paints) {
         if(paint.paths.empty())
             continue;
-        if(appendGeometry(result->raw, paint, complexityBudget)) {
-            exportablePaints.emplace_back(std::move(paint));
-        } else {
+        auto* canonicalComponents = alphaCompositingRequired
+            ? &paint.components : nullptr;
+        if(!appendGeometry(
+                result->raw, paint, complexityBudget,
+                canonicalComponents)) {
             appendUnprintableFragment(
                 result->unprintable_fragments,
                 UnprintableReason::AreaCollapse, paint);
+            paint.paths.clear();
+            paint.components.clear();
+            paint.bounds = {};
         }
     }
-    paints = std::move(exportablePaints);
     const auto compositeStarted = std::chrono::steady_clock::now();
     result->normalization_raw_seconds = std::chrono::duration<double>(
         compositeStarted - rawNormalizationStarted).count();
-    if(paints.empty()) {
+    if(!hasNonEmptyPaint(paints)) {
         if(!resultCensusIsValid(*result))
             throw std::runtime_error("native_result_census_failed");
         result->status = "supported";
         result->reason_code.clear();
         return result;
     }
-    auto finalComposite = compositePaints(paints, domain);
+    std::vector<PaintGeometry> visiblePaints;
+    Paths64 silhouettePaths;
+    if(alphaCompositingRequired) {
+        auto alphaComposite = compositeAlphaProgram(
+            paints, programNodes, domain);
+        visiblePaints = std::move(alphaComposite.visible);
+        silhouettePaths = std::move(alphaComposite.silhouette);
+    } else {
+        auto opaqueComposite = compositePaints(paints, domain);
+        visiblePaints.reserve(paints.size());
+        for(size_t index = 0; index < paints.size(); ++index) {
+            if(opaqueComposite.visible[index].empty())
+                continue;
+            auto visible = paints[index];
+            visible.paths = std::move(opaqueComposite.visible[index]);
+            visible.bounds = pathsBounds(visible.paths);
+            visiblePaints.emplace_back(std::move(visible));
+        }
+        silhouettePaths = std::move(opaqueComposite.silhouette);
+    }
     const auto exportStarted = std::chrono::steady_clock::now();
     result->composite_seconds = std::chrono::duration<double>(
         exportStarted - compositeStarted).count();
     result->normalization_visible_seconds = 0.0;
 
     GeometryCollection visibleCollection;
-    for(size_t index = 0; index < paints.size(); ++index) {
-        auto visible = paints[index];
-        visible.paths = finalComposite.visible[index];
-        visible.bounds = pathsBounds(visible.paths);
+    for(auto& visible : visiblePaints) {
         if(!visible.paths.empty()
                 && !appendGeometry(
                     visibleCollection, visible, complexityBudget)) {
@@ -3810,9 +4584,10 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
     result->visible = std::move(visibleCollection);
 
     PaintGeometry silhouette;
-    silhouette.paths = finalComposite.silhouette;
+    silhouette.paths = std::move(silhouettePaths);
     silhouette.bounds = pathsBounds(silhouette.paths);
     silhouette.rgba = {{0, 0, 0, 255}};
+    silhouette.rgba_f64 = {{0.0, 0.0, 0.0, 1.0}};
     silhouette.draw_index = 0;
     silhouette.source_index = -1;
     silhouette.source_kind = SourceKind::Silhouette;
@@ -3890,19 +4665,6 @@ std::shared_ptr<NativeResult> analyzeWith(Loader&& loader,
                     }),
                 recording.commands.end());
             inputPaintCount = countPaintCommands(recording);
-        }
-        if(recording.status == "supported"
-                && std::any_of(
-                    recording.commands.begin(), recording.commands.end(),
-                    [](const lunasvg::PaintCommand& command) {
-                        return command.has_partial_alpha;
-                    })) {
-            auto result = std::make_shared<NativeResult>();
-            result->status = "unsupported";
-            result->reason_code = "unsupported_partial_alpha";
-            result->input_paint_count = inputPaintCount;
-            result->recorder_seconds = completedRecorderSeconds;
-            return result;
         }
         auto result = buildResult(
             std::move(recording), targetWidthMm, toleranceMm);

@@ -7,7 +7,13 @@ if(CMAKE_HOST_APPLE)
   )
 endif()
 
-project(lumina_svg_core VERSION 0.2.0 LANGUAGES C CXX)
+project(lumina_svg_core VERSION 0.3.0 LANGUAGES C CXX)
+
+option(
+  LUMINA_SVG_BUILD_RASTER_ORACLE
+  "Build the local LunaSVG raster-oracle executable"
+  OFF
+)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -55,6 +61,18 @@ install(
   LIBRARY DESTINATION . COMPONENT lumina_svg_core
   RUNTIME DESTINATION . COMPONENT lumina_svg_core
 )
+
+if(LUMINA_SVG_BUILD_RASTER_ORACLE)
+  add_executable(
+    lumina_svg_raster_oracle
+    tools/lunasvg_raster_oracle.cpp
+  )
+  target_link_libraries(
+    lumina_svg_raster_oracle
+    PRIVATE
+    lunasvg::lunasvg
+  )
+endif()
 install(
   FILES LICENSE THIRD_PARTY_NOTICES.md
   DESTINATION .

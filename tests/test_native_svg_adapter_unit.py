@@ -18,6 +18,7 @@ from core.errors import (
 from core.native_svg_adapter import (
     NativeSvgFallback,
     NativeSvgGeometry,
+    NativeSvgPaintContributor,
     analyze_native_svg,
     native_runtime_identity,
 )
@@ -32,9 +33,15 @@ class _FakeCollection:
     geometry_offsets: np.ndarray
     hole_parent: np.ndarray
     rgba: np.ndarray
+    rgba_f64: np.ndarray
     draw_indices: np.ndarray
     source_indices: np.ndarray
     source_kinds: np.ndarray
+    contributor_offsets: np.ndarray
+    contributor_draw_indices: np.ndarray
+    contributor_source_indices: np.ndarray
+    contributor_source_kinds: np.ndarray
+    contributor_weights: np.ndarray
 
     @property
     def geometry_count(self) -> int:
@@ -54,6 +61,7 @@ class _FakeUnprintableFragments:
     reason_codes: tuple[str, ...]
     reason_ids: np.ndarray
     rgba: np.ndarray
+    rgba_f64: np.ndarray
     draw_indices: np.ndarray
     source_indices: np.ndarray
     source_kinds: np.ndarray
@@ -68,15 +76,22 @@ def _unprintable_fragments(
     *,
     reason_codes: tuple[str, ...] = (),
     rgba: tuple[tuple[int, int, int, int], ...] = (),
+    rgba_f64: tuple[tuple[float, float, float, float], ...] | None = None,
     draw_indices: tuple[int, ...] = (),
     source_indices: tuple[int, ...] = (),
     source_kinds: tuple[int, ...] = (),
     subpath_indices: tuple[int, ...] = (),
 ) -> _FakeUnprintableFragments:
+    if rgba_f64 is None:
+        rgba_f64 = tuple(
+            tuple(component / 255.0 for component in color)
+            for color in rgba
+        )
     values = _FakeUnprintableFragments(
         reason_codes=reason_codes,
         reason_ids=np.arange(len(reason_codes), dtype=np.int32),
         rgba=np.asarray(rgba, dtype=np.uint8).reshape((-1, 4)),
+        rgba_f64=np.asarray(rgba_f64, dtype=np.float64).reshape((-1, 4)),
         draw_indices=np.asarray(draw_indices, dtype=np.int32),
         source_indices=np.asarray(source_indices, dtype=np.int32),
         source_kinds=np.asarray(source_kinds, dtype=np.int32),
@@ -88,7 +103,17 @@ def _unprintable_fragments(
     return values
 
 
-def _collection(*, source_kind: int = 0) -> _FakeCollection:
+def _collection(
+    *,
+    source_kind: int = 0,
+    rgba: tuple[int, int, int, int] = (255, 0, 0, 255),
+    rgba_f64: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 1.0),
+    draw_index: int = 7,
+    source_index: int = 3,
+    contributors: tuple[tuple[int, int, int, float], ...] | None = None,
+) -> _FakeCollection:
+    if contributors is None:
+        contributors = ((draw_index, source_index, source_kind, rgba_f64[3]),)
     collection = _FakeCollection(
         coordinates=np.asarray(
             [[0, 0], [100, 0], [100, 50], [0, 50], [0, 0]],
@@ -98,10 +123,26 @@ def _collection(*, source_kind: int = 0) -> _FakeCollection:
         polygon_offsets=np.asarray([0, 1], dtype=np.uint64),
         geometry_offsets=np.asarray([0, 1], dtype=np.uint64),
         hole_parent=np.asarray([-1], dtype=np.int64),
-        rgba=np.asarray([[255, 0, 0, 255]], dtype=np.uint8),
-        draw_indices=np.asarray([7], dtype=np.int32),
-        source_indices=np.asarray([3], dtype=np.int32),
+        rgba=np.asarray([rgba], dtype=np.uint8),
+        rgba_f64=np.asarray([rgba_f64], dtype=np.float64),
+        draw_indices=np.asarray([draw_index], dtype=np.int32),
+        source_indices=np.asarray([source_index], dtype=np.int32),
         source_kinds=np.asarray([source_kind], dtype=np.int32),
+        contributor_offsets=np.asarray(
+            [0, len(contributors)], dtype=np.uint64
+        ),
+        contributor_draw_indices=np.asarray(
+            [item[0] for item in contributors], dtype=np.int32
+        ),
+        contributor_source_indices=np.asarray(
+            [item[1] for item in contributors], dtype=np.int32
+        ),
+        contributor_source_kinds=np.asarray(
+            [item[2] for item in contributors], dtype=np.int32
+        ),
+        contributor_weights=np.asarray(
+            [item[3] for item in contributors], dtype=np.float64
+        ),
     )
     for value in vars(collection).values():
         value.setflags(write=False)
@@ -116,9 +157,57 @@ def _empty_collection() -> _FakeCollection:
         geometry_offsets=np.asarray([0], dtype=np.uint64),
         hole_parent=np.empty((0,), dtype=np.int64),
         rgba=np.empty((0, 4), dtype=np.uint8),
+        rgba_f64=np.empty((0, 4), dtype=np.float64),
         draw_indices=np.empty((0,), dtype=np.int32),
         source_indices=np.empty((0,), dtype=np.int32),
         source_kinds=np.empty((0,), dtype=np.int32),
+        contributor_offsets=np.asarray([0], dtype=np.uint64),
+        contributor_draw_indices=np.empty((0,), dtype=np.int32),
+        contributor_source_indices=np.empty((0,), dtype=np.int32),
+        contributor_source_kinds=np.empty((0,), dtype=np.int32),
+        contributor_weights=np.empty((0,), dtype=np.float64),
+    )
+    for value in vars(collection).values():
+        value.setflags(write=False)
+    return collection
+
+
+def _two_paint_collection() -> _FakeCollection:
+    collection = _FakeCollection(
+        coordinates=np.asarray(
+            [
+                [0, 0],
+                [100, 0],
+                [100, 50],
+                [0, 50],
+                [0, 0],
+                [0, 0],
+                [100, 0],
+                [100, 50],
+                [0, 50],
+                [0, 0],
+            ],
+            dtype=np.int64,
+        ),
+        ring_offsets=np.asarray([0, 5, 10], dtype=np.uint64),
+        polygon_offsets=np.asarray([0, 1, 2], dtype=np.uint64),
+        geometry_offsets=np.asarray([0, 1, 2], dtype=np.uint64),
+        hole_parent=np.asarray([-1, -1], dtype=np.int64),
+        rgba=np.asarray(
+            [[255, 0, 0, 128], [0, 0, 255, 128]], dtype=np.uint8
+        ),
+        rgba_f64=np.asarray(
+            [[1.0, 0.0, 0.0, 0.5], [0.0, 0.0, 1.0, 0.5]],
+            dtype=np.float64,
+        ),
+        draw_indices=np.asarray([0, 1], dtype=np.int32),
+        source_indices=np.asarray([4, 5], dtype=np.int32),
+        source_kinds=np.asarray([0, 0], dtype=np.int32),
+        contributor_offsets=np.asarray([0, 1, 2], dtype=np.uint64),
+        contributor_draw_indices=np.asarray([0, 1], dtype=np.int32),
+        contributor_source_indices=np.asarray([4, 5], dtype=np.int32),
+        contributor_source_kinds=np.asarray([0, 0], dtype=np.int32),
+        contributor_weights=np.asarray([0.5, 0.5], dtype=np.float64),
     )
     for value in vars(collection).values():
         value.setflags(write=False)
@@ -147,9 +236,17 @@ def _collection_with_tiny_component() -> _FakeCollection:
         geometry_offsets=np.asarray([0, 2], dtype=np.uint64),
         hole_parent=np.asarray([-1, -1], dtype=np.int64),
         rgba=np.asarray([[18, 52, 86, 255]], dtype=np.uint8),
+        rgba_f64=np.asarray(
+            [[18 / 255, 52 / 255, 86 / 255, 1.0]], dtype=np.float64
+        ),
         draw_indices=np.asarray([7], dtype=np.int32),
         source_indices=np.asarray([3], dtype=np.int32),
         source_kinds=np.asarray([0], dtype=np.int32),
+        contributor_offsets=np.asarray([0, 1], dtype=np.uint64),
+        contributor_draw_indices=np.asarray([7], dtype=np.int32),
+        contributor_source_indices=np.asarray([3], dtype=np.int32),
+        contributor_source_kinds=np.asarray([0], dtype=np.int32),
+        contributor_weights=np.asarray([1.0], dtype=np.float64),
     )
     for value in vars(collection).values():
         value.setflags(write=False)
@@ -167,7 +264,7 @@ def _native_result(
     return SimpleNamespace(
         status=status,
         reason_code=reason_code,
-        schema_version=3,
+        schema_version=4,
         input_paint_count=1,
         bbox=(10.0, 20.0, 100.0, 50.0),
         viewport_bounds=(5.0, 6.0, 80.0, 40.0),
@@ -201,8 +298,8 @@ def _native_module(
         return result
 
     return SimpleNamespace(
-        __version__="0.2.0",
-        RESULT_SCHEMA_VERSION=3,
+        __version__="0.3.0",
+        RESULT_SCHEMA_VERSION=4,
         analyze_svg=analyze_svg,
     )
 
@@ -233,10 +330,25 @@ def test_supported_result_preserves_lumina_coordinate_contract(
     )
     assert outcome.clipped_shapes[0]["color"] == (255, 0, 0)
     assert outcome.shape_data[0]["rgba"] == (255, 0, 0, 255)
+    assert outcome.shape_data[0]["rgba_f64"] == (1.0, 0.0, 0.0, 1.0)
     assert outcome.shape_data[0]["native_paint_index"] == 7
     assert outcome.shape_data[0]["native_source_index"] == 3
     assert outcome.shape_data[0]["native_paint_id"] == (3, 7)
+    assert outcome.shape_data[0]["native_paint_contributors"] == (
+        NativeSvgPaintContributor(
+            native_draw_order=7,
+            native_source_index=3,
+            source_kind="fill",
+            weight=1.0,
+        ),
+    )
     assert outcome.clipped_shapes[0]["rgba"] == (255, 0, 0, 255)
+    assert outcome.clipped_shapes[0]["rgba_f64"] == (
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+    )
     assert outcome.clipped_shapes[0]["native_paint_index"] == 7
     assert outcome.clipped_shapes[0]["native_source_index"] == 3
     assert outcome.clipped_shapes[0]["native_paint_id"] == (3, 7)
@@ -280,6 +392,114 @@ def test_adapter_preserves_every_native_component_without_area_filter(
     } == {0, 1}
 
 
+def test_adapter_preserves_composite_rgba_and_source_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = _native_result()
+    result.input_paint_count = 2
+    result.raw = _two_paint_collection()
+    result.visible = _collection(
+        source_kind=3,
+        rgba=(85, 0, 170, 191),
+        rgba_f64=(1 / 3, 0.0, 2 / 3, 0.75),
+        draw_index=-1,
+        source_index=-1,
+        contributors=(
+            (0, 4, 0, 0.25),
+            (1, 5, 0, 0.5),
+        ),
+    )
+    monkeypatch.setattr(
+        "core.native_svg_adapter._load_native_module",
+        lambda: _native_module(result),
+    )
+
+    outcome = analyze_native_svg("fixture.svg", 20.0, 0.02)
+
+    assert isinstance(outcome, NativeSvgGeometry)
+    item = outcome.clipped_shapes[0]
+    assert item["source_kind"] == "composite"
+    assert item["rgba"] == (85, 0, 170, 191)
+    assert item["rgba_f64"] == pytest.approx(
+        (1 / 3, 0.0, 2 / 3, 0.75), abs=1e-15
+    )
+    assert item["native_draw_order"] == -1
+    assert item["native_source_index"] == -1
+    assert item["native_paint_id"] is None
+    assert item["native_paint_contributors"] == (
+        NativeSvgPaintContributor(0, 4, "fill", 0.25),
+        NativeSvgPaintContributor(1, 5, "fill", 0.5),
+    )
+
+
+@pytest.mark.parametrize(
+    ("contributors", "rgba", "rgba_f64"),
+    [
+        (
+            ((0, 4, 0, 0.25), (2, 6, 0, 0.5)),
+            (85, 0, 170, 191),
+            (1 / 3, 0.0, 2 / 3, 0.75),
+        ),
+        (
+            ((0, 4, 0, 0.25), (1, 5, 0, 0.5)),
+            (0, 255, 0, 191),
+            (0.0, 1.0, 0.0, 0.75),
+        ),
+    ],
+)
+def test_adapter_rejects_visible_provenance_that_disagrees_with_raw_paints(
+    monkeypatch: pytest.MonkeyPatch,
+    contributors: tuple[tuple[int, int, int, float], ...],
+    rgba: tuple[int, int, int, int],
+    rgba_f64: tuple[float, float, float, float],
+) -> None:
+    result = _native_result()
+    result.input_paint_count = 2
+    result.raw = _two_paint_collection()
+    result.visible = _collection(
+        source_kind=3,
+        rgba=rgba,
+        rgba_f64=rgba_f64,
+        draw_index=-1,
+        source_index=-1,
+        contributors=contributors,
+    )
+    monkeypatch.setattr(
+        "core.native_svg_adapter._load_native_module",
+        lambda: _native_module(result),
+    )
+
+    with pytest.raises(CoreProcessingError) as error:
+        analyze_native_svg("fixture.svg", 20.0, 0.02)
+
+    assert error.value.reason_code == "invalid_provenance_schema"
+
+
+def test_adapter_keeps_valid_area_with_partial_alpha_line_fragment(
+    tmp_path,
+) -> None:
+    svg_path = tmp_path / "partial-alpha-fragment.svg"
+    svg_path.write_text(
+        "<svg viewBox='0 0 10 10'>"
+        "<rect width='10' height='10' fill='red'/>"
+        "<path d='M0 5H10' fill='rgb(1,2,3)' fill-opacity='.5'/>"
+        "</svg>",
+        encoding="utf-8",
+    )
+
+    outcome = analyze_native_svg(str(svg_path), 10.0, 0.02)
+
+    assert isinstance(outcome, NativeSvgGeometry)
+    assert len(outcome.clipped_shapes) == 1
+    assert len(outcome.unprintable_fragments) == 1
+    fragment = outcome.unprintable_fragments[0]
+    assert fragment.reason_code == "line_only"
+    assert fragment.rgba == (1, 2, 3, 128)
+    assert fragment.rgba_f64 == pytest.approx(
+        (1 / 255, 2 / 255, 3 / 255, 0.5), abs=1e-15
+    )
+
+
 def test_adapter_preserves_unprintable_fragment_identity_and_counts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -288,6 +508,7 @@ def test_adapter_preserves_unprintable_fragment_identity_and_counts(
     result.unprintable_fragments = _unprintable_fragments(
         reason_codes=("line_only",),
         rgba=((18, 52, 86, 255),),
+        rgba_f64=((18 / 255, 52 / 255, 86 / 255, 0.99999999),),
         draw_indices=(1,),
         source_indices=(9,),
         source_kinds=(0,),
@@ -305,6 +526,9 @@ def test_adapter_preserves_unprintable_fragment_identity_and_counts(
     fragment = outcome.unprintable_fragments[0]
     assert fragment.reason_code == "line_only"
     assert fragment.rgba == (18, 52, 86, 255)
+    assert fragment.rgba_f64 == pytest.approx(
+        (18 / 255, 52 / 255, 86 / 255, 0.99999999), abs=1e-15
+    )
     assert fragment.native_paint_id == (9, 1)
     assert fragment.source_kind == "fill"
     assert fragment.subpath_index == 2
@@ -315,6 +539,36 @@ def test_adapter_preserves_unprintable_fragment_identity_and_counts(
     assert outcome.stage_timings["native_unprintable_reasons"] == {
         "line_only": 1
     }
+
+
+def test_adapter_keeps_composite_area_collapse_without_fabricated_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = _native_result()
+    result.input_paint_count = 2
+    result.unprintable_fragments = _unprintable_fragments(
+        reason_codes=("area_collapse",),
+        rgba=((85, 0, 170, 191),),
+        rgba_f64=((1 / 3, 0.0, 2 / 3, 0.75),),
+        draw_indices=(-1,),
+        source_indices=(-1,),
+        source_kinds=(3,),
+        subpath_indices=(-1,),
+    )
+    monkeypatch.setattr(
+        "core.native_svg_adapter._load_native_module",
+        lambda: _native_module(result),
+    )
+
+    outcome = analyze_native_svg("fixture.svg", 20.0, 0.02)
+
+    assert isinstance(outcome, NativeSvgGeometry)
+    fragment = outcome.unprintable_fragments[0]
+    assert fragment.reason_code == "area_collapse"
+    assert fragment.source_kind == "composite"
+    assert fragment.native_draw_order == -1
+    assert fragment.native_source_index == -1
+    assert fragment.native_paint_id is None
 
 
 def test_unknown_native_source_kind_fails_closed(
@@ -335,9 +589,20 @@ def test_unknown_native_source_kind_fails_closed(
     ("field_name", "dtype", "reason_code"),
     [
         ("rgba", np.int16, "invalid_material_schema"),
+        ("rgba_f64", np.float32, "invalid_material_schema"),
         ("draw_indices", np.int64, "invalid_draw_schema"),
         ("source_indices", np.int64, "invalid_draw_schema"),
         ("source_kinds", np.int64, "invalid_source_schema"),
+        (
+            "contributor_offsets",
+            np.int64,
+            "invalid_provenance_schema",
+        ),
+        (
+            "contributor_weights",
+            np.float32,
+            "invalid_provenance_schema",
+        ),
     ],
 )
 def test_native_paint_metadata_with_wrong_dtype_fails_closed(
@@ -454,7 +719,7 @@ def test_runtime_identity_uses_exported_native_schema(
         "core.native_svg_adapter._load_native_module", lambda: module
     )
 
-    assert native_runtime_identity() == ("native", "0.2.0", 7)
+    assert native_runtime_identity() == ("native", "0.3.0", 7)
 
 
 def test_image_vectorizer_origin_preserves_normalized_viewport_anchor(
@@ -537,7 +802,7 @@ def test_unsupported_native_result_requests_whole_document_fallback(
 
     assert outcome == NativeSvgFallback(
         reason_code=reason_code,
-        native_version="0.2.0",
+        native_version="0.3.0",
     )
 
 
@@ -558,7 +823,7 @@ def test_native_geometry_capacity_requests_whole_document_fallback(
 
     assert outcome == NativeSvgFallback(
         reason_code="unsupported_geometry_capacity",
-        native_version="0.2.0",
+        native_version="0.3.0",
     )
 
 

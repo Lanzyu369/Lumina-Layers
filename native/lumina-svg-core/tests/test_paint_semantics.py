@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -66,6 +67,68 @@ def geometry_shape(result, collection, geometry_index: int):
         ),
     )
     return geometries[geometry_index]
+
+
+def geometry_contributors(collection, geometry_index: int):
+    start = collection.contributor_offsets[geometry_index]
+    end = collection.contributor_offsets[geometry_index + 1]
+    return [
+        (
+            int(collection.contributor_draw_indices[index]),
+            int(collection.contributor_source_indices[index]),
+            int(collection.contributor_source_kinds[index]),
+            float(collection.contributor_weights[index]),
+        )
+        for index in range(start, end)
+    ]
+
+
+def geometry_index_with_bounds(result, collection, expected_bounds):
+    matches = [
+        index
+        for index in range(collection.geometry_count)
+        if geometry_bounds(result, collection, index)
+        == pytest.approx(expected_bounds, abs=0.02)
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def test_transparent_canvas_source_over_reference_contract() -> None:
+    reference = json.loads(
+        (FIXTURES / "alpha_source_over_reference.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    result = lumina_svg_core.analyze_svg(
+        FIXTURES / "alpha_source_over.svg",
+        reference["render"]["target_width_mm"],
+        reference["render"]["tolerance_mm"],
+    )
+
+    assert result.status == "supported"
+    assert result.visible.geometry_count == len(reference["regions"])
+    for expected in reference["regions"]:
+        matches = [
+            index
+            for index, rgba in enumerate(result.visible.rgba_f64)
+            if np.allclose(rgba, expected["rgba_f64"], rtol=0.0, atol=1e-15)
+        ]
+        assert len(matches) == 1
+        index = matches[0]
+        assert result.visible.rgba[index].tolist() == expected["rgba_u8"]
+        assert geometry_area(result, result.visible, index) == pytest.approx(
+            expected["area_user_units_squared"], abs=1e-9
+        )
+
+    silhouette_area = geometry_area(result, result.silhouette, 0)
+    canvas = reference["canvas"]
+    canvas_area = (
+        canvas["width_user_units"] * canvas["height_user_units"]
+    )
+    assert canvas_area - silhouette_area == pytest.approx(
+        reference["transparent_area_user_units_squared"], abs=1e-9
+    )
 
 
 def _cubic_point(
@@ -264,35 +327,80 @@ def test_short_stroke_subpath_is_reported_without_losing_valid_stroke() -> None:
     assert result.unprintable_fragments.subpath_indices.tolist() == [1]
 
 
-def test_partial_paint_alpha_falls_back_before_native_compositing() -> None:
+def test_partial_paint_alpha_is_composited_over_a_transparent_root() -> None:
     result = lumina_svg_core.analyze_svg_svg(
-        "<svg viewBox='0 0 20 10'>"
-        "<rect width='10' height='10' fill='rgba(40,40,39,0.996)'/>"
-        "<rect x='10' width='10' height='10' fill='#00ff0080'/>"
+        "<svg viewBox='0 0 15 10'>"
+        "<rect width='10' height='10' fill='rgba(255,0,0,.5)'/>"
+        "<rect x='5' width='10' height='10' fill='rgba(0,0,255,.5)'/>"
         "</svg>",
-        target_width_mm=20.0,
+        target_width_mm=15.0,
         tolerance_mm=0.02,
     )
 
-    assert result.status == "unsupported"
-    assert result.reason_code == "unsupported_partial_alpha"
+    assert result.status == "supported"
+    assert result.reason_code == ""
     assert result.input_paint_count == 2
-    assert result.raw.geometry_count == 0
-    assert result.visible.geometry_count == 0
+    assert result.raw.geometry_count == 2
+    assert result.visible.geometry_count == 3
+
+    red_index = geometry_index_with_bounds(
+        result, result.visible, (0.0, 0.0, 5.0, 10.0)
+    )
+    overlap_index = geometry_index_with_bounds(
+        result, result.visible, (5.0, 0.0, 10.0, 10.0)
+    )
+    blue_index = geometry_index_with_bounds(
+        result, result.visible, (10.0, 0.0, 15.0, 10.0)
+    )
+    assert result.visible.rgba_f64[red_index] == pytest.approx(
+        (1.0, 0.0, 0.0, 0.5), abs=1e-15
+    )
+    assert result.visible.rgba_f64[overlap_index] == pytest.approx(
+        (1 / 3, 0.0, 2 / 3, 0.75), abs=1e-15
+    )
+    assert result.visible.rgba_f64[blue_index] == pytest.approx(
+        (0.0, 0.0, 1.0, 0.5), abs=1e-15
+    )
+    assert geometry_contributors(result.visible, red_index) == pytest.approx(
+        [(0, int(result.raw.source_indices[0]), 0, 0.5)]
+    )
+    assert geometry_contributors(
+        result.visible, overlap_index
+    ) == pytest.approx(
+        [
+            (0, int(result.raw.source_indices[0]), 0, 0.25),
+            (1, int(result.raw.source_indices[1]), 0, 0.5),
+        ]
+    )
+    assert geometry_contributors(result.visible, blue_index) == pytest.approx(
+        [(1, int(result.raw.source_indices[1]), 0, 0.5)]
+    )
+    assert result.visible.source_kinds[overlap_index] == 3
+    assert result.visible.draw_indices[overlap_index] == -1
+    assert result.visible.source_indices[overlap_index] == -1
+    assert result.silhouette.component_count == 1
+    assert geometry_area(result, result.silhouette, 0) == pytest.approx(
+        150.0, abs=0.1
+    )
 
 
 @pytest.mark.parametrize(
-    "paint",
+    ("paint", "expected_alpha"),
     [
-        "fill='red' fill-opacity='0.99999999'",
-        "fill='red' fill-opacity='1e-50'",
-        "fill='rgba(1,2,3,0.99999999)'",
-        "fill='rgba(1,2,3,1e-50)'",
-        "color='rgba(1,2,3,0.99999999)' fill='currentColor'",
+        ("fill='red' fill-opacity='0.99999999'", 0.99999999),
+        ("fill='red' fill-opacity='1e-50'", 1e-50),
+        ("fill='rgba(1,2,3,0.99999999)'", 0.99999999),
+        ("fill='rgba(1,2,3,1e-50)'", 1e-50),
+        ("fill='RGBA(1,2,3,0.99999999)'", 0.99999999),
+        ("fill='rGbA(1,2,3,1e-50)'", 1e-50),
+        (
+            "color='rgba(1,2,3,0.99999999)' fill='currentColor'",
+            0.99999999,
+        ),
     ],
 )
-def test_source_partial_alpha_near_endpoints_falls_back(
-    paint: str,
+def test_source_partial_alpha_near_endpoints_remains_exact(
+    paint: str, expected_alpha: float
 ) -> None:
     result = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 10 10'>"
@@ -302,9 +410,194 @@ def test_source_partial_alpha_near_endpoints_falls_back(
         tolerance_mm=0.02,
     )
 
-    assert result.status == "unsupported"
-    assert result.reason_code == "unsupported_partial_alpha"
-    assert result.raw.geometry_count == 0
+    assert result.status == "supported"
+    assert result.reason_code == ""
+    assert result.raw.geometry_count == 1
+    assert result.visible.geometry_count == 1
+    assert result.raw.rgba_f64[0, 3] == pytest.approx(
+        expected_alpha, rel=0, abs=1e-60
+    )
+    assert result.visible.rgba_f64[0, 3] == pytest.approx(
+        expected_alpha, rel=0, abs=1e-60
+    )
+    assert result.visible.contributor_weights.tolist() == pytest.approx(
+        [expected_alpha], rel=0, abs=1e-60
+    )
+
+
+def test_many_disjoint_translucent_paints_preserve_every_region() -> None:
+    paint_count = 14_200
+    columns = 120
+    rows = (paint_count + columns - 1) // columns
+    rectangles = "".join(
+        "<rect "
+        f"x='{2 * (index % columns)}' y='{2 * (index // columns)}' "
+        "width='1' height='1' fill='red' "
+        f"fill-opacity='{(index + 1) / (paint_count + 1):.12f}'/>"
+        for index in range(paint_count)
+    )
+    result = lumina_svg_core.analyze_svg_svg(
+        f"<svg viewBox='0 0 {2 * columns} {2 * rows}'>{rectangles}</svg>",
+        target_width_mm=240.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.reason_code == ""
+    assert result.raw.geometry_count == paint_count
+    assert result.visible.geometry_count == paint_count
+
+
+def test_complex_translucent_component_keeps_holes_after_spatial_partition() -> None:
+    holes = " ".join(
+        f"M{1 + column * 5} {1 + row * 5}h1v1h-1Z"
+        for row in range(20)
+        for column in range(20)
+    )
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 100 100'>"
+        f"<path d='M0 0H100V100H0Z {holes}' fill='red' "
+        "fill-rule='evenodd' fill-opacity='.5'/>"
+        "<rect x='50' width='50' height='100' fill='blue' "
+        "fill-opacity='.5'/></svg>",
+        target_width_mm=100.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 2
+    assert result.raw.hole_count == 400
+    assert result.visible.geometry_count == 3
+    assert geometry_area(result, result.silhouette, 0) == pytest.approx(
+        9_800.0, abs=0.1
+    )
+    visible_area = sum(
+        geometry_area(result, result.visible, index)
+        for index in range(result.visible.geometry_count)
+    )
+    assert visible_area == pytest.approx(9_800.0, abs=0.1)
+
+
+def test_group_opacity_is_applied_after_children_are_composited() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 15 10'><g opacity='.5'>"
+        "<rect width='10' height='10' fill='red'/>"
+        "<rect x='5' width='10' height='10' fill='blue'/>"
+        "</g></svg>",
+        target_width_mm=15.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 2
+    assert result.visible.geometry_count == 2
+    red_index = geometry_index_with_bounds(
+        result, result.visible, (0.0, 0.0, 5.0, 10.0)
+    )
+    blue_index = geometry_index_with_bounds(
+        result, result.visible, (5.0, 0.0, 15.0, 10.0)
+    )
+    assert result.visible.rgba_f64[red_index] == pytest.approx(
+        (1.0, 0.0, 0.0, 0.5), abs=1e-15
+    )
+    assert result.visible.rgba_f64[blue_index] == pytest.approx(
+        (0.0, 0.0, 1.0, 0.5), abs=1e-15
+    )
+    assert geometry_contributors(result.visible, red_index) == pytest.approx(
+        [(0, int(result.raw.source_indices[0]), 0, 0.5)]
+    )
+    assert geometry_contributors(result.visible, blue_index) == pytest.approx(
+        [(1, int(result.raw.source_indices[1]), 0, 0.5)]
+    )
+
+
+def test_isolated_group_is_composited_once_over_earlier_content() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 10 10'>"
+        "<rect width='10' height='10' fill='rgb(0,255,0)'/>"
+        "<g opacity='.5'>"
+        "<rect width='10' height='10' fill='red'/>"
+        "<rect x='5' width='5' height='10' fill='blue'/>"
+        "</g></svg>",
+        target_width_mm=10.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.visible.geometry_count == 2
+    left_index = geometry_index_with_bounds(
+        result, result.visible, (0.0, 0.0, 5.0, 10.0)
+    )
+    right_index = geometry_index_with_bounds(
+        result, result.visible, (5.0, 0.0, 10.0, 10.0)
+    )
+    assert result.visible.rgba_f64[left_index] == pytest.approx(
+        (0.5, 0.5, 0.0, 1.0), abs=1e-15
+    )
+    assert result.visible.rgba_f64[right_index] == pytest.approx(
+        (0.0, 0.5, 0.5, 1.0), abs=1e-15
+    )
+    contributor_weights = [
+        [contributor[3] for contributor in geometry_contributors(
+            result.visible, index
+        )]
+        for index in (left_index, right_index)
+    ]
+    assert contributor_weights[0] == pytest.approx([0.5, 0.5])
+    assert contributor_weights[1] == pytest.approx([0.5, 0.5])
+
+
+def test_leaf_opacity_isolates_fill_and_stroke_before_fading_object() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 10 10'>"
+        "<rect x='2' y='2' width='6' height='6' fill='red' stroke='blue' "
+        "stroke-width='2' opacity='.5'/></svg>",
+        target_width_mm=10.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.raw.geometry_count == 2
+    assert result.visible.geometry_count == 2
+    assert sorted(result.visible.rgba_f64[:, 3].tolist()) == pytest.approx(
+        [0.5, 0.5], abs=1e-15
+    )
+    assert {
+        tuple(color)
+        for color in result.visible.rgba_f64[:, :3]
+    } == {(1.0, 0.0, 0.0), (0.0, 0.0, 1.0)}
+    assert all(
+        len(geometry_contributors(result.visible, index)) == 1
+        for index in range(result.visible.geometry_count)
+    )
+
+
+def test_nested_group_opacity_and_clip_preserve_hole_hierarchy() -> None:
+    result = lumina_svg_core.analyze_svg_svg(
+        "<svg viewBox='0 0 20 20'><defs>"
+        "<clipPath id='ring' clip-rule='evenodd'>"
+        "<path d='M1 1H19V19H1Z M6 6H14V14H6Z'/>"
+        "</clipPath></defs>"
+        "<g opacity='.5' clip-path='url(#ring)'><g opacity='.5'>"
+        "<rect width='20' height='20' fill='rgb(10,20,30)'/>"
+        "</g></g></svg>",
+        target_width_mm=20.0,
+        tolerance_mm=0.02,
+    )
+
+    assert result.status == "supported"
+    assert result.visible.geometry_count == 1
+    assert result.visible.component_count == 1
+    assert result.visible.hole_count == 1
+    assert result.visible.rgba_f64[0] == pytest.approx(
+        (10 / 255, 20 / 255, 30 / 255, 0.25), abs=1e-15
+    )
+    assert result.visible.contributor_weights.tolist() == pytest.approx(
+        [0.25], abs=1e-15
+    )
+    assert geometry_area(result, result.visible, 0) == pytest.approx(
+        260.0, abs=0.1
+    )
 
 
 def test_dash_array_is_applied_in_local_arclength() -> None:

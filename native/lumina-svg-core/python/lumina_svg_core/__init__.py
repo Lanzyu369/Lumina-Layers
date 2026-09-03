@@ -17,7 +17,7 @@ from ._lumina_svg_core import (
     record_paint_commands_svg,
 )
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 
 __all__ = [

@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 import sys
 from time import perf_counter
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -59,7 +59,7 @@ def _percentile(values: list[float], percentile: float) -> float:
     return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction
 
 
-def _peak_rss_bytes() -> int:
+def _process_peak_rss_bytes() -> int:
     if resource is None:
         return 0
     value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
@@ -72,6 +72,7 @@ def audit_corpus(
     target_width_mm: float,
     tolerance_mm: float,
     allow_strokes: bool = True,
+    progress_callback: Callable[[str, str, float], None] | None = None,
 ) -> dict[str, Any]:
     """Analyze every SVG and return anonymous completeness/performance data.
 
@@ -83,6 +84,8 @@ def audit_corpus(
         target_width_mm: Common geometry scaling width. 统一几何缩放宽度。
         tolerance_mm: Common curve approximation error budget. 统一曲线近似预算。
         allow_strokes: Whether stroke paint is expanded to area. 是否将描边展开为面积。
+        progress_callback: Optional anonymous per-document progress hook.
+            可选的匿名逐文档进度回调。
 
     Returns:
         JSON-serializable anonymous report. 可序列化为 JSON 的匿名报告。
@@ -124,6 +127,28 @@ def audit_corpus(
         input_paint_count = int(result.input_paint_count)
         raw_output_paint_count = int(result.raw.geometry_count)
         visible_output_paint_count = int(result.visible.geometry_count)
+        raw_alpha = np.asarray(result.raw.rgba_f64, dtype=np.float64)[:, 3]
+        visible_alpha = np.asarray(
+            result.visible.rgba_f64, dtype=np.float64
+        )[:, 3]
+        partial_alpha_raw_paint_count = int(
+            np.count_nonzero((raw_alpha > 0.0) & (raw_alpha < 1.0))
+        )
+        partial_alpha_visible_paint_count = int(
+            np.count_nonzero(
+                (visible_alpha > 0.0) & (visible_alpha < 1.0)
+            )
+        )
+        composite_visible_paint_count = int(
+            np.count_nonzero(
+                np.asarray(result.visible.source_kinds, dtype=np.int32) == 3
+            )
+        )
+        visible_contributor_count = int(
+            np.asarray(
+                result.visible.contributor_weights, dtype=np.float64
+            ).size
+        )
         fragment_reason_counts = Counter(
             str(value)
             for value in result.unprintable_fragments.reason_codes
@@ -135,6 +160,16 @@ def audit_corpus(
                 "input_paint_count": input_paint_count,
                 "raw_output_paint_count": raw_output_paint_count,
                 "visible_output_paint_count": visible_output_paint_count,
+                "partial_alpha_raw_paint_count": (
+                    partial_alpha_raw_paint_count
+                ),
+                "partial_alpha_visible_paint_count": (
+                    partial_alpha_visible_paint_count
+                ),
+                "composite_visible_paint_count": (
+                    composite_visible_paint_count
+                ),
+                "visible_contributor_count": visible_contributor_count,
                 "raw_component_count": int(result.raw.component_count),
                 "visible_component_count": int(
                     result.visible.component_count
@@ -163,14 +198,25 @@ def audit_corpus(
             if visible_partition_scale > 0.0
             else 0.0
         )
+        anonymous_id = f"svg-{index:06d}"
         documents.append(
             {
-                "anonymous_id": f"svg-{index:06d}",
+                "anonymous_id": anonymous_id,
                 "status": status,
                 "reason_code": reason_code,
                 "input_paint_count": input_paint_count,
                 "raw_output_paint_count": raw_output_paint_count,
                 "visible_output_paint_count": visible_output_paint_count,
+                "partial_alpha_raw_paint_count": (
+                    partial_alpha_raw_paint_count
+                ),
+                "partial_alpha_visible_paint_count": (
+                    partial_alpha_visible_paint_count
+                ),
+                "composite_visible_paint_count": (
+                    composite_visible_paint_count
+                ),
+                "visible_contributor_count": visible_contributor_count,
                 "raw_component_count": int(result.raw.component_count),
                 "visible_component_count": int(
                     result.visible.component_count
@@ -199,6 +245,8 @@ def audit_corpus(
                 "export_seconds": float(result.export_seconds),
             }
         )
+        if progress_callback is not None:
+            progress_callback(anonymous_id, status, elapsed)
 
     total_seconds = perf_counter() - audit_started
     summary = {
@@ -212,6 +260,10 @@ def audit_corpus(
                 "input_paint_count",
                 "raw_output_paint_count",
                 "visible_output_paint_count",
+                "partial_alpha_raw_paint_count",
+                "partial_alpha_visible_paint_count",
+                "composite_visible_paint_count",
+                "visible_contributor_count",
                 "raw_component_count",
                 "visible_component_count",
                 "raw_hole_count",
@@ -237,7 +289,7 @@ def audit_corpus(
         ),
     }
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "settings": {
             "target_width_mm": target_width_mm,
             "tolerance_mm": tolerance_mm,
@@ -249,7 +301,10 @@ def audit_corpus(
             "median_seconds": _percentile(elapsed_values, 0.5),
             "p95_seconds": _percentile(elapsed_values, 0.95),
             "max_seconds": max(elapsed_values, default=0.0),
-            "peak_rss_bytes": _peak_rss_bytes(),
+            # This is the peak of the fresh audit process, including the
+            # parser runtime and all documents processed so far. It is not a
+            # per-document RSS sample.
+            "corpus_process_peak_rss_bytes": _process_peak_rss_bytes(),
         },
         "documents": documents,
     }
@@ -262,6 +317,11 @@ def main() -> int:
     parser.add_argument("--target-width-mm", type=float, default=100.0)
     parser.add_argument("--tolerance-mm", type=float, default=0.02)
     parser.add_argument(
+        "--progress",
+        action="store_true",
+        help="Write anonymous per-document progress to stderr.",
+    )
+    parser.add_argument(
         "--no-strokes",
         action="store_false",
         dest="allow_strokes",
@@ -269,11 +329,21 @@ def main() -> int:
     )
     parser.set_defaults(allow_strokes=True)
     args = parser.parse_args()
+    def report_progress(
+        anonymous_id: str, status: str, elapsed: float
+    ) -> None:
+        print(
+            f"{anonymous_id} {status} {elapsed:.3f}s",
+            file=sys.stderr,
+            flush=True,
+        )
+
     report = audit_corpus(
         args.corpus,
         target_width_mm=args.target_width_mm,
         tolerance_mm=args.tolerance_mm,
         allow_strokes=args.allow_strokes,
+        progress_callback=report_progress if args.progress else None,
     )
     args.output.write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n",

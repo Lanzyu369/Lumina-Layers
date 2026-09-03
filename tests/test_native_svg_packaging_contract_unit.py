@@ -35,7 +35,7 @@ def test_runtime_requirement_is_an_exact_workspace_package() -> None:
     pyproject = (
         ROOT / "native" / "lumina-svg-core" / "pyproject.toml"
     ).read_text(encoding="utf-8")
-    assert 'version = "0.2.0"' in pyproject
+    assert 'version = "0.3.0"' in pyproject
     assert 'requires-python = "==3.12.*"' in pyproject
 
 

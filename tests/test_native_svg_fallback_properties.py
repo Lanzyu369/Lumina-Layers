@@ -17,8 +17,6 @@ import core.vector_engine as vector_engine
 
 
 UNSUPPORTED_DOCUMENT_PARTS = [
-    "<rect x='1' y='1' width='4' height='4' opacity='0.5'/>",
-    "<g opacity='0.5'><rect x='1' y='1' width='4' height='4'/></g>",
     "<path d='M1 1H5' paint-order='stroke fill'/>",
     "<mask id='m'><rect width='5' height='5'/></mask>",
     "<pattern id='p' width='1' height='1'/><rect width='5' height='5' "
@@ -35,6 +33,8 @@ UNSUPPORTED_DOCUMENT_PARTS = [
 ]
 
 SUPPORTED_DOCUMENT_PARTS = [
+    "<rect x='1' y='1' width='4' height='4' opacity='0.5'/>",
+    "<g opacity='0.5'><rect x='1' y='1' width='4' height='4'/></g>",
     "<path d='M1 1H5' marker-start='url(#missing)'/>",
     "<rect width='5' height='5' made-up-paint='1'/>",
     "<style>rect { made-up-paint: 1; }</style>",
@@ -204,7 +204,7 @@ def test_non_scaling_stroke_follows_the_requested_stroke_policy(
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
 @given(alpha=st.floats(min_value=0.01, max_value=0.99, allow_nan=False))
-def test_every_partial_paint_alpha_requests_whole_document_fallback(
+def test_every_partial_paint_alpha_stays_native_and_exact(
     alpha: float,
     tmp_path: Path,
 ) -> None:
@@ -220,9 +220,17 @@ def test_every_partial_paint_alpha_requests_whole_document_fallback(
 
     outcome = native_svg_adapter.analyze_native_svg(str(path), 20.0, 0.02)
 
-    assert outcome == NativeSvgFallback(
-        reason_code="unsupported_partial_alpha",
-        native_version="0.2.0",
+    assert isinstance(outcome, NativeSvgGeometry)
+    partial = next(
+        item
+        for item in outcome.shape_data
+        if item["rgba"][:3] == (12, 34, 56)
+    )
+    assert partial["rgba_f64"][:3] == pytest.approx(
+        (12 / 255, 34 / 255, 56 / 255), abs=1e-15
+    )
+    assert partial["rgba_f64"][3] == pytest.approx(
+        float(f"{alpha:.9f}"), abs=1e-15
     )
 
 

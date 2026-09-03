@@ -21,9 +21,15 @@ ARRAY_FIELDS = (
     "geometry_offsets",
     "hole_parent",
     "rgba",
+    "rgba_f64",
     "draw_indices",
     "source_indices",
     "source_kinds",
+    "contributor_offsets",
+    "contributor_draw_indices",
+    "contributor_source_indices",
+    "contributor_source_kinds",
+    "contributor_weights",
 )
 
 

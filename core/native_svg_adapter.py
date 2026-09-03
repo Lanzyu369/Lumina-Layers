@@ -20,9 +20,10 @@ from core.errors import (
 from core.native_svg_limits import NATIVE_SVG_MAX_BYTES
 
 
-NATIVE_RESULT_SCHEMA_VERSION = 3
+NATIVE_RESULT_SCHEMA_VERSION = 4
 _SOURCE_KIND_FILL = 0
 _SOURCE_KIND_STROKE = 1
+_SOURCE_KIND_COMPOSITE = 3
 
 
 @dataclass(frozen=True)
@@ -37,18 +38,45 @@ class NativeSvgFallback:
 
 
 @dataclass(frozen=True)
+class NativeSvgPaintContributor:
+    """One exact SVG paint contribution to a visible composite region.
+
+    一个可见复合区域中来自 SVG paint op 的精确贡献。
+    """
+
+    native_draw_order: int
+    native_source_index: int
+    source_kind: str
+    weight: float
+
+    @property
+    def native_paint_id(self) -> tuple[int, int]:
+        """Return the stable source/draw identity for this paint operation.
+
+        返回该 paint 操作稳定的 source/draw 身份。
+        """
+
+        return (self.native_source_index, self.native_draw_order)
+
+
+@dataclass(frozen=True)
 class NativeSvgUnprintableFragment:
     """One non-area SVG fragment excluded from polygon collections.
 
     一段因不具备二维面积而未进入 Polygon 集合的 SVG 片段。
+
+    A composite-only diagnostic has no single paint owner and therefore uses
+    ``native_paint_id=None``. 复合区域诊断没有单一 paint 归属，因此其
+    ``native_paint_id`` 为 ``None``。
     """
 
     reason_code: str
     rgba: tuple[int, int, int, int]
+    rgba_f64: tuple[float, float, float, float]
     source_kind: str
     native_draw_order: int
     native_source_index: int
-    native_paint_id: tuple[int, int]
+    native_paint_id: tuple[int, int] | None
     subpath_index: int
 
 
@@ -252,9 +280,25 @@ def _collection_geometries(collection: Any, grid_to_source_unit: float):
     )
 
 
+@dataclass(frozen=True)
+class _CollectionPaintMetadata:
+    rgba: np.ndarray
+    rgba_f64: np.ndarray
+    draw_indices: np.ndarray
+    source_indices: np.ndarray
+    source_kinds: np.ndarray
+    contributor_offsets: np.ndarray
+    contributor_draw_indices: np.ndarray
+    contributor_source_indices: np.ndarray
+    contributor_source_kinds: np.ndarray
+    contributor_weights: np.ndarray
+
+
 def _collection_paint_metadata(
     collection: Any,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    *,
+    allow_composite: bool,
+) -> _CollectionPaintMetadata:
     """Validate and return the native per-paint metadata arrays.
 
     验证并返回原生结果中逐 paint 的元数据数组。
@@ -263,6 +307,12 @@ def _collection_paint_metadata(
     rgba = _native_array(
         collection.rgba,
         dtype=np.dtype(np.uint8),
+        ndim=2,
+        reason_code="invalid_material_schema",
+    )
+    rgba_f64 = _native_array(
+        collection.rgba_f64,
+        dtype=np.dtype(np.float64),
         ndim=2,
         reason_code="invalid_material_schema",
     )
@@ -284,10 +334,44 @@ def _collection_paint_metadata(
         ndim=1,
         reason_code="invalid_source_schema",
     )
-    geometry_shape = (collection.geometry_count,)
+    contributor_offsets = _native_array(
+        collection.contributor_offsets,
+        dtype=np.dtype(np.uint64),
+        ndim=1,
+        reason_code="invalid_provenance_schema",
+    )
+    contributor_draw_indices = _native_array(
+        collection.contributor_draw_indices,
+        dtype=np.dtype(np.int32),
+        ndim=1,
+        reason_code="invalid_provenance_schema",
+    )
+    contributor_source_indices = _native_array(
+        collection.contributor_source_indices,
+        dtype=np.dtype(np.int32),
+        ndim=1,
+        reason_code="invalid_provenance_schema",
+    )
+    contributor_source_kinds = _native_array(
+        collection.contributor_source_kinds,
+        dtype=np.dtype(np.int32),
+        ndim=1,
+        reason_code="invalid_provenance_schema",
+    )
+    contributor_weights = _native_array(
+        collection.contributor_weights,
+        dtype=np.dtype(np.float64),
+        ndim=1,
+        reason_code="invalid_provenance_schema",
+    )
+    geometry_count = int(collection.geometry_count)
+    geometry_shape = (geometry_count,)
     if (
         rgba.ndim != 2
-        or rgba.shape != (collection.geometry_count, 4)
+        or rgba.shape != (geometry_count, 4)
+        or rgba_f64.shape != (geometry_count, 4)
+        or not np.all(np.isfinite(rgba_f64))
+        or np.any((rgba_f64 < 0.0) | (rgba_f64 > 1.0))
     ):
         raise NativeSvgInternalError(
             "The native SVG result returned invalid material metadata.",
@@ -301,22 +385,103 @@ def _collection_paint_metadata(
             "The native SVG result returned invalid draw-order metadata.",
             reason_code="invalid_draw_schema",
         )
-    if (
-        source_kinds.shape != geometry_shape
-        or np.any(
-            (source_kinds != _SOURCE_KIND_FILL)
-            & (source_kinds != _SOURCE_KIND_STROKE)
-        )
-    ):
+    allowed_source_kind = (
+        (source_kinds == _SOURCE_KIND_FILL)
+        | (source_kinds == _SOURCE_KIND_STROKE)
+    )
+    if allow_composite:
+        allowed_source_kind |= source_kinds == _SOURCE_KIND_COMPOSITE
+    if source_kinds.shape != geometry_shape or np.any(~allowed_source_kind):
         raise NativeSvgInternalError(
             "The native SVG result returned invalid source metadata.",
             reason_code="invalid_source_schema",
         )
-    return rgba, draw_indices, source_indices, source_kinds
+    expected_rgba = np.floor(rgba_f64 * 255.0 + 0.5).astype(np.uint8)
+    if not np.array_equal(rgba, expected_rgba):
+        raise NativeSvgInternalError(
+            "The native SVG result returned inconsistent color metadata.",
+            reason_code="invalid_material_schema",
+        )
+
+    contributor_count = len(contributor_draw_indices)
+    if (
+        contributor_offsets.shape != (geometry_count + 1,)
+        or len(contributor_offsets) == 0
+        or int(contributor_offsets[0]) != 0
+        or int(contributor_offsets[-1]) != contributor_count
+        or np.any(contributor_offsets[1:] <= contributor_offsets[:-1])
+        or contributor_source_indices.shape != (contributor_count,)
+        or contributor_source_kinds.shape != (contributor_count,)
+        or contributor_weights.shape != (contributor_count,)
+        or np.any(contributor_draw_indices < 0)
+        or np.any(contributor_source_indices < 0)
+        or np.any(
+            (contributor_source_kinds != _SOURCE_KIND_FILL)
+            & (contributor_source_kinds != _SOURCE_KIND_STROKE)
+        )
+        or not np.all(np.isfinite(contributor_weights))
+        or np.any((contributor_weights <= 0.0) | (contributor_weights > 1.0))
+    ):
+        raise NativeSvgInternalError(
+            "The native SVG result returned invalid paint provenance.",
+            reason_code="invalid_provenance_schema",
+        )
+    for geometry_index in range(geometry_count):
+        start = int(contributor_offsets[geometry_index])
+        end = int(contributor_offsets[geometry_index + 1])
+        kind = int(source_kinds[geometry_index])
+        draw_index = int(draw_indices[geometry_index])
+        source_index = int(source_indices[geometry_index])
+        contributor_draws = contributor_draw_indices[start:end]
+        if len(contributor_draws) > 1 and np.any(
+            contributor_draws[1:] <= contributor_draws[:-1]
+        ):
+            raise NativeSvgInternalError(
+                "The native SVG result returned unordered paint provenance.",
+                reason_code="invalid_provenance_schema",
+            )
+        if kind == _SOURCE_KIND_COMPOSITE:
+            identity_is_valid = (
+                allow_composite
+                and draw_index == -1
+                and source_index == -1
+                and end - start >= 2
+            )
+        else:
+            identity_is_valid = (
+                end - start == 1
+                and draw_index == int(contributor_draw_indices[start])
+                and source_index == int(contributor_source_indices[start])
+                and kind == int(contributor_source_kinds[start])
+            )
+        weight_sum = float(np.sum(contributor_weights[start:end]))
+        weight_tolerance = 1e-12 * max(1, end - start)
+        if not identity_is_valid or not np.isclose(
+            weight_sum,
+            float(rgba_f64[geometry_index, 3]),
+            rtol=0.0,
+            atol=weight_tolerance,
+        ):
+            raise NativeSvgInternalError(
+                "The native SVG result returned inconsistent paint provenance.",
+                reason_code="invalid_provenance_schema",
+            )
+    return _CollectionPaintMetadata(
+        rgba=rgba,
+        rgba_f64=rgba_f64,
+        draw_indices=draw_indices,
+        source_indices=source_indices,
+        source_kinds=source_kinds,
+        contributor_offsets=contributor_offsets,
+        contributor_draw_indices=contributor_draw_indices,
+        contributor_source_indices=contributor_source_indices,
+        contributor_source_kinds=contributor_source_kinds,
+        contributor_weights=contributor_weights,
+    )
 
 
 def _paint_metadata_at(
-    metadata: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    metadata: _CollectionPaintMetadata,
     geometry_index: int,
 ) -> dict[str, Any]:
     """Return one stable exact-paint identity record.
@@ -324,24 +489,130 @@ def _paint_metadata_at(
     返回一条稳定、精确的 paint 身份记录。
     """
 
-    rgba_values, draw_indices, source_indices, source_kinds = metadata
-    rgba = tuple(int(value) for value in rgba_values[geometry_index])
-    native_paint_index = int(draw_indices[geometry_index])
-    native_source_index = int(source_indices[geometry_index])
-    source_kind_index = int(source_kinds[geometry_index])
-    return {
-        "color": rgba[:3],
-        "rgba": rgba,
-        "source_kind": (
+    rgba = tuple(int(value) for value in metadata.rgba[geometry_index])
+    rgba_f64 = tuple(
+        float(value) for value in metadata.rgba_f64[geometry_index]
+    )
+    native_paint_index = int(metadata.draw_indices[geometry_index])
+    native_source_index = int(metadata.source_indices[geometry_index])
+    source_kind_index = int(metadata.source_kinds[geometry_index])
+    contributor_start = int(metadata.contributor_offsets[geometry_index])
+    contributor_end = int(metadata.contributor_offsets[geometry_index + 1])
+    contributors = tuple(
+        NativeSvgPaintContributor(
+            native_draw_order=int(metadata.contributor_draw_indices[index]),
+            native_source_index=int(
+                metadata.contributor_source_indices[index]
+            ),
+            source_kind=(
+                "stroke_only"
+                if int(metadata.contributor_source_kinds[index])
+                == _SOURCE_KIND_STROKE
+                else "fill"
+            ),
+            weight=float(metadata.contributor_weights[index]),
+        )
+        for index in range(contributor_start, contributor_end)
+    )
+    source_kind = (
+        "composite"
+        if source_kind_index == _SOURCE_KIND_COMPOSITE
+        else (
             "stroke_only"
             if source_kind_index == _SOURCE_KIND_STROKE
             else "fill"
-        ),
+        )
+    )
+    return {
+        "color": rgba[:3],
+        "rgba": rgba,
+        "rgba_f64": rgba_f64,
+        "source_kind": source_kind,
         "native_draw_order": native_paint_index,
         "native_paint_index": native_paint_index,
         "native_source_index": native_source_index,
-        "native_paint_id": (native_source_index, native_paint_index),
+        "native_paint_id": (
+            None
+            if source_kind_index == _SOURCE_KIND_COMPOSITE
+            else (native_source_index, native_paint_index)
+        ),
+        "native_paint_contributors": contributors,
     }
+
+
+def _validate_visible_provenance(
+    raw: _CollectionPaintMetadata,
+    visible: _CollectionPaintMetadata,
+) -> None:
+    """Confirm visible contributions exactly reference raw SVG paints.
+
+    确认可见复合区域精确引用原始 SVG paint，并重建其预乘 RGB。
+    """
+
+    if len(visible.draw_indices) == 0:
+        return
+    if len(raw.draw_indices) == 0 or np.any(
+        raw.draw_indices[1:] <= raw.draw_indices[:-1]
+    ):
+        raise NativeSvgInternalError(
+            "The native SVG result returned inconsistent paint provenance.",
+            reason_code="invalid_provenance_schema",
+        )
+
+    positions = np.searchsorted(
+        raw.draw_indices, visible.contributor_draw_indices
+    )
+    if np.any(positions >= len(raw.draw_indices)):
+        raise NativeSvgInternalError(
+            "The native SVG result referenced a missing source paint.",
+            reason_code="invalid_provenance_schema",
+        )
+    if (
+        not np.array_equal(
+            raw.draw_indices[positions],
+            visible.contributor_draw_indices,
+        )
+        or not np.array_equal(
+            raw.source_indices[positions],
+            visible.contributor_source_indices,
+        )
+        or not np.array_equal(
+            raw.source_kinds[positions],
+            visible.contributor_source_kinds,
+        )
+    ):
+        raise NativeSvgInternalError(
+            "The native SVG result referenced a mismatched source paint.",
+            reason_code="invalid_provenance_schema",
+        )
+
+    weighted_rgb = (
+        raw.rgba_f64[positions, :3]
+        * visible.contributor_weights[:, np.newaxis]
+    )
+    geometry_starts = visible.contributor_offsets[:-1].astype(
+        np.intp, copy=False
+    )
+    reconstructed_rgb = np.add.reduceat(weighted_rgb, geometry_starts, axis=0)
+    expected_rgb = (
+        visible.rgba_f64[:, :3] * visible.rgba_f64[:, 3, np.newaxis]
+    )
+    contributor_counts = np.diff(visible.contributor_offsets).astype(
+        np.float64, copy=False
+    )
+    tolerance = 1e-12 * np.maximum(1.0, contributor_counts)
+    if not np.all(
+        np.isclose(
+            reconstructed_rgb,
+            expected_rgb,
+            rtol=0.0,
+            atol=tolerance[:, np.newaxis],
+        )
+    ):
+        raise NativeSvgInternalError(
+            "The native SVG result returned inconsistent composite color.",
+            reason_code="invalid_provenance_schema",
+        )
 
 
 def _unprintable_fragments(
@@ -368,6 +639,12 @@ def _unprintable_fragments(
     rgba = _native_array(
         collection.rgba,
         dtype=np.dtype(np.uint8),
+        ndim=2,
+        reason_code="invalid_fragment_schema",
+    )
+    rgba_f64 = _native_array(
+        collection.rgba_f64,
+        dtype=np.dtype(np.float64),
         ndim=2,
         reason_code="invalid_fragment_schema",
     )
@@ -399,6 +676,9 @@ def _unprintable_fragments(
         len(reason_codes) != count
         or reason_ids.shape != (count,)
         or rgba.shape != (count, 4)
+        or rgba_f64.shape != (count, 4)
+        or not np.all(np.isfinite(rgba_f64))
+        or np.any((rgba_f64 < 0.0) | (rgba_f64 > 1.0))
         or draw_indices.shape != (count,)
         or source_indices.shape != (count,)
         or source_kinds.shape != (count,)
@@ -406,6 +686,7 @@ def _unprintable_fragments(
         or np.any(
             (source_kinds != _SOURCE_KIND_FILL)
             & (source_kinds != _SOURCE_KIND_STROKE)
+            & (source_kinds != _SOURCE_KIND_COMPOSITE)
         )
     ):
         raise NativeSvgInternalError(
@@ -426,33 +707,52 @@ def _unprintable_fragments(
             "The native SVG result returned an unknown fragment reason.",
             reason_code="invalid_fragment_schema",
         )
+    expected_rgba = np.floor(rgba_f64 * 255.0 + 0.5).astype(np.uint8)
+    if not np.array_equal(rgba, expected_rgba):
+        raise NativeSvgInternalError(
+            "The native SVG result returned inconsistent fragment colors.",
+            reason_code="invalid_fragment_schema",
+        )
 
     fragments: list[NativeSvgUnprintableFragment] = []
     for index, reason_code in enumerate(reason_codes):
         exact_rgba = tuple(int(value) for value in rgba[index])
+        exact_rgba_f64 = tuple(float(value) for value in rgba_f64[index])
         draw_index = int(draw_indices[index])
         source_index = int(source_indices[index])
         source_kind_index = int(source_kinds[index])
+        is_composite = source_kind_index == _SOURCE_KIND_COMPOSITE
         fragments.append(
             NativeSvgUnprintableFragment(
                 reason_code=reason_code,
                 rgba=exact_rgba,
+                rgba_f64=exact_rgba_f64,
                 source_kind=(
-                    "stroke_only"
-                    if source_kind_index == _SOURCE_KIND_STROKE
-                    else "fill"
+                    "composite"
+                    if is_composite
+                    else (
+                        "stroke_only"
+                        if source_kind_index == _SOURCE_KIND_STROKE
+                        else "fill"
+                    )
                 ),
                 native_draw_order=draw_index,
                 native_source_index=source_index,
-                native_paint_id=(source_index, draw_index),
+                native_paint_id=(
+                    None
+                    if is_composite
+                    else (source_index, draw_index)
+                ),
                 subpath_index=int(subpath_indices[index]),
             )
         )
     return tuple(fragments)
 
 
-def _shape_data(collection: Any, geometries: np.ndarray) -> list[dict[str, Any]]:
-    metadata = _collection_paint_metadata(collection)
+def _shape_data(
+    metadata: _CollectionPaintMetadata,
+    geometries: np.ndarray,
+) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for geometry_index, geometry in enumerate(geometries):
         if geometry is None or geometry.is_empty:
@@ -469,9 +769,9 @@ def _shape_data(collection: Any, geometries: np.ndarray) -> list[dict[str, Any]]
 
 
 def _visible_shapes(
-    collection: Any, geometries: np.ndarray
+    metadata: _CollectionPaintMetadata,
+    geometries: np.ndarray,
 ) -> list[dict[str, Any]]:
-    metadata = _collection_paint_metadata(collection)
     items: list[dict[str, Any]] = []
     for geometry_index, geometry in enumerate(geometries):
         if geometry is None or geometry.is_empty:
@@ -655,8 +955,15 @@ def analyze_native_svg(
             "The native SVG result returned an invalid silhouette.",
             reason_code="invalid_silhouette_schema",
         )
-    shape_data = _shape_data(result.raw, raw_geometries)
-    clipped_shapes = _visible_shapes(result.visible, visible_geometries)
+    raw_metadata = _collection_paint_metadata(
+        result.raw, allow_composite=False
+    )
+    visible_metadata = _collection_paint_metadata(
+        result.visible, allow_composite=True
+    )
+    _validate_visible_provenance(raw_metadata, visible_metadata)
+    shape_data = _shape_data(raw_metadata, raw_geometries)
+    clipped_shapes = _visible_shapes(visible_metadata, visible_geometries)
     if not shape_data or not clipped_shapes:
         _invalid_result("empty_geometry")
     adapter_seconds = time.perf_counter() - adapter_started
@@ -748,6 +1055,7 @@ def analyze_native_svg(
 __all__ = [
     "NativeSvgFallback",
     "NativeSvgGeometry",
+    "NativeSvgPaintContributor",
     "NativeSvgUnprintableFragment",
     "analyze_native_svg",
     "native_runtime_identity",

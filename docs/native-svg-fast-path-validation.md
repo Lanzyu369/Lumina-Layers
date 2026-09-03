@@ -16,14 +16,17 @@ not record source paths, hashes, or file sizes.
 
 ## Parser contract
 
-`lumina-svg-core` 0.2.0 exposes result schema 3. A supported document returns:
+`lumina-svg-core` 0.3.0 exposes result schema 4. A supported document returns:
 
 - raw paint regions, source-order visible paint regions, and one silhouette;
 - Polygon/MultiPolygon geometry only, in Lumina's normalized SVG user-unit
   coordinate domain;
 - component boundaries and hole parents without flattening them into a union;
-- exact `uint8` RGBA, draw order, source index, paint identity, and fill/stroke
-  source kind;
+- authoritative `float64` straight-sRGB RGBA, compatibility `uint8` RGBA,
+  draw order, source index, paint identity, and fill/stroke source kind;
+- ordered premultiplied contribution weights for composited translucent
+  regions; multi-source regions are explicitly `composite` and never receive
+  a fabricated single paint identity;
 - immutable, owner-backed NumPy views with fixed dtypes and monotonic offsets.
 
 The parser never sends LineString, Point, empty geometry, or an area-collapsed
@@ -46,6 +49,12 @@ paint semantics cannot be combined safely with a partial native rendering,
 while an independently classified point/line/collapse can be omitted without
 changing any area-bearing paint.
 
+Solid fill/stroke alpha and isolated object/group opacity are supported. The
+root canvas is transparent, normal source-over is evaluated in sRGB, and group
+opacity is applied once after the group's children have been composited. No
+white background, filament recipe, or other physical-opacity policy is applied
+inside the parser.
+
 The Lumina adapter performs one ragged-array conversion to Shapely. Native
 results are marked already normalized, so they do not enter the legacy
 `_normalize_contours_many` close/open path, a second GEOS union, `make_valid`,
@@ -66,6 +75,14 @@ covered by focused regressions. Strokes expand in the required coordinate
 space before the complete affine transform is applied. One physical tolerance
 budget is shared across decoding, curve lowering, transforms, integer-grid
 quantization, stroke expansion, and Boolean operations.
+
+The alpha path uses a packed bounds index, balanced paint-program evaluation,
+and exact internal spatial partitions to avoid all-pairs Boolean work on large
+documents without imposing alpha-specific cell or operation count caps. Those
+partitions use the same authoritative Clipper integer domain
+and are consolidated before export; they are not print-grid snapping and do
+not flatten component/hole hierarchy. Opaque documents continue through the
+original reverse-occlusion fast path.
 
 Clipper input and geometric point estimates are checked per operation. The
 fixed Clipper patch checks actual output-point allocations, output-record
@@ -96,20 +113,23 @@ Reference host: Apple M5, arm64, 16 GiB RAM, macOS 26.5.2, CPython
 |---|---:|
 | Fresh fixed-patch native build | PASS |
 | macOS 12.0 arm64 wheel build/install/runtime verification | PASS |
-| Standalone native suite from clean installed wheel | 551 passed |
-| Lumina adapter/differential/VectorAnalysis/packaging suite | 194 passed |
-| Post-#590 boundary regressions | 265 passed |
-| Product smoke | backend 164 passed; frontend 167 passed; lint 0 errors |
-| Independent parser review | Ready: Yes; no blocking findings |
+| Standalone native suite from clean installed wheel | 586 passed |
+| Former-alpha corpus through the Lumina adapter | 31 / 31 native supported |
+| Native differential/adapter/VectorAnalysis/packaging suite | 180 passed |
+| Lumina workflow integration | 10 passed |
+| Product smoke | backend 168 passed; frontend 168 passed; lint 0 errors |
+| Structured logging fast gate | PASS |
+| Independent parser review | PASS; no Critical / Important / Minor findings |
 | `git diff --check` | PASS |
 
-The prior review found that cross-operand Boolean output could exceed the
+The pre-alpha review found that cross-operand Boolean output could exceed the
 preflight ring estimate before the post-check ran. The correction moves the
 hard point/record/intersection-node/processed-intersection caps inside the
 pinned Clipper engine and retains document-wide actual-work accounting without
-restoring a production shadow intersection pass. The independent final
-re-review inspected every allocation and intersection entry point, reran the
-focused parser contract suite, and assessed the branch as `Ready: Yes`.
+restoring a production shadow intersection pass. The independent alpha
+re-review then verified the fragment RGBA, case-insensitive color functions,
+raw/visible provenance reconstruction, complete raster-audit gate, and
+alpha-heavy public benchmark corrections; it reported no remaining finding.
 
 ## Anonymous 508-document corpus
 
@@ -120,41 +140,64 @@ a 0.02 mm physical tolerance, and includes stroke paint.
 | Metric | Result |
 |---|---:|
 | Documents | 508 |
-| Supported / unsupported / invalid | 477 / 31 / 0 |
+| Supported / unsupported / invalid | 508 / 0 / 0 |
 | Input paints | 1,804,382 |
-| Raw / visible output paints | 1,682,327 / 905,997 |
-| Raw / visible components | 1,858,258 / 943,333 |
-| Raw / visible holes | 1,487,323 / 251,996 |
-| Unprintable fragments | 4,336 |
-| Unprintable reasons | line-only 3,248; area-collapse 111; fill-rule-cancelled 977 |
-| Unsupported reasons | partial-alpha 31; complexity 0; internal errors 0 |
+| Raw / visible output paints | 1,799,360 / 1,219,564 |
+| Raw / visible components | 1,987,676 / 1,361,878 |
+| Raw / visible holes | 1,582,397 / 297,143 |
+| Partial-alpha raw / visible paints | 65,589 / 233,687 |
+| Composite visible paints / contributors | 254,688 / 1,788,795 |
+| Unprintable fragments | 15,364 |
+| Unprintable reasons | line-only 3,873; area-collapse 10,342; fill-rule-cancelled 1,149 |
+| Unsupported reasons | none |
 | Supported documents with unexplained raw-paint loss | 0 |
-| Maximum visible-partition area delta | 1.3893777 source-unit²; 4.1888571e-8 relative |
-| Median / p95 / maximum document time | 2.4732 s / 18.9126 s / 323.6172 s |
-| Total time / peak process RSS | 3,092.0899 s / 1,231,749,120 bytes (1,174.69 MiB) |
+| Maximum visible-partition area delta | 49.053788 source-unit²; 7.8470124e-6 relative |
+| Median / p95 / maximum document time | 1.0652 s / 9.8202 s / 179.2774 s |
+| Total time / peak process RSS | 1,625.1477 s / 1,051,590,656 bytes (1,002.88 MiB) |
 
 `raw_to_visible_area_delta` is expected to be non-zero where later paints
-occlude earlier paints. The loss detector is
-`visible_partition_area_delta`: the sum of source-order visible regions must
-equal the exported silhouette area within the shared integer-grid error. The
-largest relative delta is 4.19e-8; a direct Shapely union check of that case
-matched the silhouette within 6.20e-10 mm² and showed that the reported source
-area delta is sub-grid overlap, not missing coverage. Explicit unprintable
-fragments remain separate from both values. No supported document loses more
-raw paints than its recorded unprintable fragment count can explain.
+occlude earlier paints. `visible_partition_area_delta` compares the sum of all
+source-order visible cells with the exported silhouette and therefore exposes
+partition overlap or loss instead of confusing ordinary occlusion with lost
+geometry. Explicit unprintable fragments remain separate from both values. No
+supported document loses more raw paints than its recorded unprintable
+fragment count can explain.
 
-The three documents formerly rejected as `unsupported_complexity` now complete
-with non-empty raw and visible Polygon/MultiPolygon output. Together they add
-126,326 raw paints, 65,069 visible paints, 148,653 raw components, 66,160
-visible components, 162,018 raw holes, 42,601 visible holes, and 64 explicitly
-classified non-area fragments. For the other 505 documents, status, paint,
-component, hole, area, and fragment metrics are exactly unchanged from the
-preceding report. The maximum visible-partition error is also unchanged.
+All 31 documents that previously returned `unsupported_partial_alpha` now
+complete natively. They were also passed through the real Lumina adapter after
+the corpus run: all 31 retained non-empty raw and visible Polygon/MultiPolygon
+geometry and a non-empty silhouette. Composite area-collapse diagnostics use
+`source_kind="composite"` with no fabricated paint ID, so a diagnostic-only
+cell cannot make an otherwise printable SVG fail at the adapter boundary.
 
-Completing those three extreme documents raises total time and peak RSS; the
-report records that cost rather than treating early rejection as performance.
-Median and p95 remain representative of ordinary corpus inputs, while the
-323.62-second maximum is the transparent tail result for an extreme SVG.
+The longest corpus case contains 69,692 paint operations and took 179.28
+seconds. This is an explicitly recorded large-document Boolean-union tail, not
+a fallback or timeout. Median and p95 show the ordinary corpus distribution;
+the public-entry benchmark below is the release latency gate.
+
+### Transparent raster differential
+
+The checked-in `progress/native-svg-alpha-raster-audit.json` selects the same
+31 anonymous documents that formerly fell back for partial alpha. For each
+document, the original SVG and the native visible-region reconstruction are
+rendered on a transparent sRGB canvas with the same fixed LunaSVG renderer.
+Only the tolerance-derived boundary band is excluded from the strict interior
+comparison.
+
+| Metric | Result |
+|---|---:|
+| Selected / measured | 31 / 31 |
+| Matched / mismatch / unsupported | 31 / 0 / 0 |
+| Maximum interior channel error | 0 (8-bit RGBA) |
+| Interior coverage disagreement | 0 pixels |
+| Total audit time | 116.5336 s |
+
+The reconstruction serializes exact alpha as `rgba(...)`. Splitting that
+value into an opaque color plus `fill-opacity` would take a different 8-bit
+rounding path inside LunaSVG and create a false 2–3-level raster difference.
+The analytical source-over fixture independently checks exact `float64` RGBA
+and ordered contributor weights, so the raster audit is not used to redefine
+the parser's color contract.
 
 Reproduce the anonymous audit with:
 
@@ -177,15 +220,21 @@ does not use an artifact cache.
 
 | Metric | Result |
 |---|---:|
-| Warm median / 1.0 s gate | 0.160015 s / PASS |
-| Warm p95 / 1.25 s gate | 0.167829 s / PASS |
-| Native recorder / kernel | 0.073756 s / 0.063301 s |
-| Native adapter conversion | 0.014755 s |
-| Peak RSS / swap growth | 197,214,208 bytes (188.08 MiB) / 0 bytes |
+| Warm median / 1.0 s gate | 0.121664 s / PASS |
+| Warm p95 / 1.25 s gate | 0.123908 s / PASS |
+| Native recorder / kernel | 0.048679 s / 0.043661 s |
+| Native adapter conversion | 0.023527 s |
+| Peak RSS / swap growth | 200,900,608 bytes (191.59 MiB) / 0 bytes |
 | Raw / visible shapes | 1,024 / 1,024 |
 
+The same report measures a separate alpha-heavy public fixture with 32 source
+paints, two isolated opacity groups, 256 overlap cells, and 1,024 ordered
+contributions. Its complete `VectorAnalysis` median/p95 is 0.017911/0.018302 s,
+with 148,406,272 bytes peak RSS and zero swap growth. It exports 768 visible
+Polygon components, including 256 multi-source composite regions.
+
 The public 3,097-path source proxy is also supported by default; its native
-capability check took 0.510015 s. No repository SVG at or above 50 MiB was
+capability check took 0.420356 s. No repository SVG at or above 50 MiB was
 available, so the separate large-file benchmark is recorded as unavailable
 instead of substituting another fixture. The anonymous 508-document run above
 is the large real-world parser/RSS evidence for this revision.

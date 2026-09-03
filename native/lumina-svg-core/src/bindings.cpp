@@ -153,6 +153,20 @@ py::array rgba(const lumina_svg_core::GeometryCollectionView& view)
     return array;
 }
 
+py::array rgbaF64(const lumina_svg_core::GeometryCollectionView& view)
+{
+    const auto& values = view.collection->rgba_f64;
+    py::array array(
+        py::dtype::of<double>(),
+        {static_cast<py::ssize_t>(values.size() / 4), py::ssize_t(4)},
+        {static_cast<py::ssize_t>(sizeof(double) * 4),
+         static_cast<py::ssize_t>(sizeof(double))},
+        values.data(),
+        arrayOwner(view.owner));
+    array.attr("setflags")(false);
+    return array;
+}
+
 py::array unprintableRgba(
     const lumina_svg_core::UnprintableFragmentCollectionView& view)
 {
@@ -161,6 +175,21 @@ py::array unprintableRgba(
         py::dtype::of<uint8_t>(),
         {static_cast<py::ssize_t>(values.size() / 4), py::ssize_t(4)},
         {py::ssize_t(4), py::ssize_t(1)},
+        values.data(),
+        arrayOwner(view.owner));
+    array.attr("setflags")(false);
+    return array;
+}
+
+py::array unprintableRgbaF64(
+    const lumina_svg_core::UnprintableFragmentCollectionView& view)
+{
+    const auto& values = view.collection->rgba_f64;
+    py::array array(
+        py::dtype::of<double>(),
+        {static_cast<py::ssize_t>(values.size() / 4), py::ssize_t(4)},
+        {static_cast<py::ssize_t>(sizeof(double) * 4),
+         static_cast<py::ssize_t>(sizeof(double))},
         values.data(),
         arrayOwner(view.owner));
     array.attr("setflags")(false);
@@ -240,6 +269,7 @@ PYBIND11_MODULE(_lumina_svg_core, module)
         })
         .def_readonly("has_partial_alpha",
                       &lunasvg::PaintCommand::has_partial_alpha)
+        .def_readonly("paint_opacity", &lunasvg::PaintCommand::paint_opacity)
         .def_readonly("stroke", &lunasvg::PaintCommand::stroke)
         .def_readonly(
             "non_scaling_stroke",
@@ -326,6 +356,7 @@ PYBIND11_MODULE(_lumina_svg_core, module)
             return readOnlyVector(view.collection->hole_parent, view.owner);
         })
         .def_property_readonly("rgba", &rgba)
+        .def_property_readonly("rgba_f64", &rgbaF64)
         .def_property_readonly("draw_indices", [](const lumina_svg_core::GeometryCollectionView& view) {
             return readOnlyVector(view.collection->draw_indices, view.owner);
         })
@@ -334,6 +365,21 @@ PYBIND11_MODULE(_lumina_svg_core, module)
         })
         .def_property_readonly("source_kinds", [](const lumina_svg_core::GeometryCollectionView& view) {
             return readOnlyVector(view.collection->source_kinds, view.owner);
+        })
+        .def_property_readonly("contributor_offsets", [](const lumina_svg_core::GeometryCollectionView& view) {
+            return readOnlyVector(view.collection->contributor_offsets, view.owner);
+        })
+        .def_property_readonly("contributor_draw_indices", [](const lumina_svg_core::GeometryCollectionView& view) {
+            return readOnlyVector(view.collection->contributor_draw_indices, view.owner);
+        })
+        .def_property_readonly("contributor_source_indices", [](const lumina_svg_core::GeometryCollectionView& view) {
+            return readOnlyVector(view.collection->contributor_source_indices, view.owner);
+        })
+        .def_property_readonly("contributor_source_kinds", [](const lumina_svg_core::GeometryCollectionView& view) {
+            return readOnlyVector(view.collection->contributor_source_kinds, view.owner);
+        })
+        .def_property_readonly("contributor_weights", [](const lumina_svg_core::GeometryCollectionView& view) {
+            return readOnlyVector(view.collection->contributor_weights, view.owner);
         })
         .def_property_readonly("geometry_count", [](const lumina_svg_core::GeometryCollectionView& view) {
             return view.collection->geometryCount();
@@ -359,6 +405,7 @@ PYBIND11_MODULE(_lumina_svg_core, module)
                 return readOnlyVector(view.collection->reason_ids, view.owner);
             })
         .def_property_readonly("rgba", &unprintableRgba)
+        .def_property_readonly("rgba_f64", &unprintableRgbaF64)
         .def_property_readonly(
             "draw_indices",
             [](const lumina_svg_core::UnprintableFragmentCollectionView& view) {

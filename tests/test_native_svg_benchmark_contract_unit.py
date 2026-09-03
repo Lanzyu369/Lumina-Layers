@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import json
+import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import lumina_svg_core
+import shapely
 
 from scripts import benchmark_native_svg_analysis as benchmark
 
@@ -20,6 +24,19 @@ SUPPORTED_FIXTURE_PATH = (
     / "benchmarks"
     / "supported_scale_fixture.svg"
 )
+ALPHA_FIXTURE_PATH = (
+    REPO_ROOT
+    / "native"
+    / "lumina-svg-core"
+    / "benchmarks"
+    / "alpha_compositing_fixture.svg"
+)
+LUT_PATH = (
+    REPO_ROOT
+    / "lut-preset"
+    / "bambulab"
+    / "bambulab_pla_basic_rybw.npy"
+)
 def _load_manifest() -> dict:
     return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 
@@ -27,7 +44,7 @@ def _load_manifest() -> dict:
 def test_complete_vector_analysis_benchmark_contract() -> None:
     manifest = _load_manifest()
 
-    assert manifest["schema_version"] == 2
+    assert manifest["schema_version"] == 4
     assert manifest["entrypoint"] == (
         "core.vector_engine.VectorProcessor.analyze_svg"
     )
@@ -105,6 +122,8 @@ def test_complete_vector_analysis_benchmark_contract() -> None:
         measurement["warm_runs_seconds"]
     )
     assert measurement["peak_rss_bytes"] > 0
+    assert measurement["process_isolation"] == "fresh_subprocess"
+    assert measurement["process_pid"] > 0
     assert measurement["swap_delta_bytes"] >= 0
     assert measurement["median_threshold_seconds"] == 1.0
     assert measurement["p95_threshold_seconds"] == 1.25
@@ -126,7 +145,39 @@ def test_complete_vector_analysis_benchmark_contract() -> None:
     assert output["silhouette_component_count"] > 0
     assert output["coordinate_count"] > 0
     assert len(output["fingerprint"]) == 64
+    assert output["fingerprint_contract"] == (
+        "geometry-exact-rgba-paint-provenance-v2"
+    )
+    for key in (
+        "partial_alpha_raw_shape_count",
+        "partial_alpha_visible_shape_count",
+        "composite_visible_shape_count",
+        "visible_contributor_count",
+    ):
+        assert output[key] >= 0
     assert output["stable_across_runs"] is True
+
+    alpha = manifest["alpha_compositing"]
+    assert alpha["fixture"] == {
+        "path": (
+            "native/lumina-svg-core/benchmarks/"
+            "alpha_compositing_fixture.svg"
+        ),
+        "classification": "alpha_compositing",
+        "byte_size": ALPHA_FIXTURE_PATH.stat().st_size,
+        **benchmark._fixture_structure(ALPHA_FIXTURE_PATH),
+    }
+    assert alpha["measurement"]["process_isolation"] == "fresh_subprocess"
+    assert alpha["measurement"]["peak_rss_bytes"] > 0
+    assert alpha["measurement"]["median_seconds"] > 0
+    assert alpha["output"]["geometry_backend"] == "native"
+    assert alpha["output"]["partial_alpha_raw_shape_count"] > 0
+    assert alpha["output"]["partial_alpha_visible_shape_count"] > 0
+    assert alpha["output"]["composite_visible_shape_count"] > 0
+    assert alpha["output"]["visible_contributor_count"] > alpha["output"][
+        "visible_shape_count"
+    ]
+    assert alpha["output"]["stable_across_runs"] is True
 
 
 def test_real_inputs_record_current_capability_without_identity_gates() -> None:
@@ -193,6 +244,112 @@ def test_benchmark_threshold_failures_are_process_fatal() -> None:
         "measurement.median_threshold_passed",
         "large_regression.swap_delta_threshold_passed",
     ]
+
+
+def test_analysis_fingerprint_covers_exact_rgba_and_paint_provenance() -> None:
+    polygon = shapely.box(0.0, 0.0, 1.0, 1.0)
+    contributor = SimpleNamespace(
+        native_draw_order=0,
+        native_source_index=7,
+        source_kind="fill",
+        weight=0.5,
+        native_paint_id=(7, 0),
+    )
+    raw_item = {
+        "color": (255, 0, 0),
+        "rgba": (255, 0, 0, 128),
+        "rgba_f64": (1.0, 0.0, 0.0, 0.5),
+        "source_kind": "fill",
+        "native_paint_id": (7, 0),
+        "native_paint_contributors": (contributor,),
+        "poly": polygon,
+    }
+    visible_item = {
+        **raw_item,
+        "geometry": polygon,
+        "draw_order": 0,
+        "native_draw_order": 0,
+        "native_source_index": 7,
+    }
+    analysis = SimpleNamespace(
+        bbox=(0.0, 0.0, 1.0, 1.0),
+        scale_factor=1.0,
+        num_channels=4,
+        num_layers=1,
+        slot_names=["red"],
+        shape_data=[raw_item],
+        clipped_shapes=[visible_item],
+        matched_shapes=[],
+        silhouette=polygon,
+    )
+
+    baseline = benchmark._analysis_fingerprint(analysis)
+
+    rgba_changed = deepcopy(analysis)
+    rgba_changed.clipped_shapes[0]["rgba_f64"] = (
+        1.0,
+        0.0,
+        0.0,
+        0.5000000000000001,
+    )
+    assert benchmark._analysis_fingerprint(rgba_changed) != baseline
+
+    provenance_changed = deepcopy(analysis)
+    provenance_changed.clipped_shapes[0][
+        "native_paint_contributors"
+    ] = (
+        SimpleNamespace(
+            native_draw_order=0,
+            native_source_index=7,
+            source_kind="fill",
+            weight=0.25,
+            native_paint_id=(7, 0),
+        ),
+    )
+    assert benchmark._analysis_fingerprint(provenance_changed) != baseline
+
+    identity_changed = deepcopy(analysis)
+    identity_changed.clipped_shapes[0]["native_paint_id"] = None
+    assert benchmark._analysis_fingerprint(identity_changed) != baseline
+
+
+def test_public_entry_rss_measurement_runs_in_a_fresh_subprocess(
+    monkeypatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        commands.append(command)
+        output_path = Path(command[command.index("--output") + 1])
+        output_path.write_text(
+            json.dumps(
+                {
+                    "measurement": {
+                        "process_isolation": "fresh_subprocess",
+                        "process_pid": os.getpid() + 1,
+                        "peak_rss_bytes": 123,
+                    },
+                    "output": {"geometry_backend": "native"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(benchmark.subprocess, "run", fake_run)
+    measurement, output = benchmark._measure_complete_entry_isolated(
+        SUPPORTED_FIXTURE_PATH,
+        LUT_PATH,
+        target_width_mm=111.0,
+        tolerance_mm=0.02,
+        warm_runs=3,
+    )
+
+    assert measurement["process_isolation"] == "fresh_subprocess"
+    assert measurement["process_pid"] != os.getpid()
+    assert measurement["peak_rss_bytes"] > 0
+    assert output["geometry_backend"] == "native"
+    assert "--_measurement-child" in commands[0]
 
 
 def test_supported_scale_fixture_runs_directly_on_native_core() -> None:

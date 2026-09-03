@@ -10,7 +10,11 @@
 
 namespace lumina_svg_core {
 
-inline constexpr uint32_t RECORDER_SCHEMA_VERSION = 3;
+inline constexpr uint32_t RECORDER_SCHEMA_VERSION = 4;
+
+static_assert(
+    RECORDER_SCHEMA_VERSION == lunasvg::PAINT_COMMAND_SCHEMA_VERSION,
+    "LunaSVG paint-command schema must match the wrapper schema");
 
 struct RecorderResult {
     std::string status{"invalid"};

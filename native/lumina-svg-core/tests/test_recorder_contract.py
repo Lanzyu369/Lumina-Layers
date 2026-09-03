@@ -52,7 +52,9 @@ def test_recorder_preserves_resolved_fill_then_stroke_order() -> None:
 
     assert result.status == "supported"
     assert result.reason_code == ""
-    assert result.schema_version == 3
+    assert result.schema_version == 4
+    assert lumina_svg_core.RECORDER_SCHEMA_VERSION == 4
+    assert lumina_svg_core.RESULT_SCHEMA_VERSION == 4
     assert result.viewport == pytest.approx((0.0, 0.0, 20.0, 10.0))
     assert [command.kind for command in result.commands] == ["fill", "stroke"]
     assert tuple(result.commands[0].rgba) == (255, 0, 0, 255)
@@ -696,8 +698,11 @@ def test_unused_non_scaling_stroke_rule_does_not_trigger_policy_boundary() -> No
     ]
 
 
-@pytest.mark.parametrize("value", ["0.99999999", "1e-50"])
-def test_recorder_keeps_group_opacity_fail_closed(
+@pytest.mark.parametrize(
+    "value",
+    ["0.99999999", "1e-50", "50%"],
+)
+def test_recorder_preserves_exact_group_opacity_boundaries(
     value: str,
 ) -> None:
     result = lumina_svg_core.record_paint_commands_svg(
@@ -706,9 +711,94 @@ def test_recorder_keeps_group_opacity_fail_closed(
         "</svg>"
     )
 
-    assert result.status == "unsupported"
-    assert result.reason_code == "unsupported_partial_alpha"
-    assert result.commands == ()
+    expected = float(value.removesuffix("%")) / (100 if value.endswith("%") else 1)
+    assert result.status == "supported"
+    assert [command.kind for command in result.commands] == [
+        "group_begin",
+        "fill",
+        "group_end",
+    ]
+    assert result.commands[0].group_opacity == pytest.approx(
+        expected, rel=0, abs=1e-15
+    )
+    assert result.commands[2].group_opacity == pytest.approx(
+        expected, rel=0, abs=1e-15
+    )
+
+
+def test_recorder_groups_leaf_fill_and_stroke_as_one_object() -> None:
+    result = lumina_svg_core.record_paint_commands_svg(
+        "<svg viewBox='0 0 10 10'>"
+        "<rect x='1' y='1' width='8' height='8' fill='red' stroke='blue' "
+        "stroke-width='2' opacity='.5'/>"
+        "</svg>"
+    )
+
+    assert result.status == "supported"
+    assert [command.kind for command in result.commands] == [
+        "group_begin",
+        "fill",
+        "stroke",
+        "group_end",
+    ]
+    assert result.commands[0].group_opacity == pytest.approx(0.5)
+    assert result.commands[-1].group_opacity == pytest.approx(0.5)
+
+
+def test_recorder_preserves_nested_group_and_clip_order() -> None:
+    result = lumina_svg_core.record_paint_commands_svg(
+        "<svg viewBox='0 0 10 10'><defs>"
+        "<clipPath id='c'><rect width='8' height='8'/></clipPath>"
+        "</defs><g opacity='.5' clip-path='url(#c)'>"
+        "<g opacity='.25'><rect width='10' height='10' fill='red'/></g>"
+        "</g></svg>"
+    )
+
+    assert result.status == "supported"
+    assert [command.kind for command in result.commands] == [
+        "group_begin",
+        "clip_begin",
+        "group_begin",
+        "fill",
+        "group_end",
+        "clip_end",
+        "group_end",
+    ]
+    assert [
+        command.group_opacity
+        for command in result.commands
+        if command.kind in {"group_begin", "group_end"}
+    ] == pytest.approx([0.5, 0.25, 0.25, 0.5])
+
+
+def test_recorder_omits_identity_group_and_suppresses_zero_group() -> None:
+    result = lumina_svg_core.record_paint_commands_svg(
+        "<svg viewBox='0 0 20 10'>"
+        "<g opacity='1'><rect width='10' height='10' fill='red'/></g>"
+        "<g opacity='0'><rect x='10' width='10' height='10' fill='blue'/></g>"
+        "</svg>"
+    )
+
+    assert result.status == "supported"
+    assert [command.kind for command in result.commands] == ["fill"]
+    assert result.commands[0].rgba == (255, 0, 0, 255)
+
+
+def test_recorder_preserves_use_instance_opacity_group() -> None:
+    result = lumina_svg_core.record_paint_commands_svg(
+        "<svg viewBox='0 0 20 10'><defs>"
+        "<path id='tile' d='M0 0H10V10H0Z' fill='red'/>"
+        "</defs><use href='#tile' x='5' opacity='.3'/></svg>"
+    )
+
+    assert result.status == "supported"
+    assert [command.kind for command in result.commands] == [
+        "group_begin",
+        "fill",
+        "group_end",
+    ]
+    assert result.commands[0].group_opacity == pytest.approx(0.3)
+    assert result.commands[-1].group_opacity == pytest.approx(0.3)
 
 
 @pytest.mark.parametrize(
@@ -765,6 +855,8 @@ def test_recorder_preserves_partial_paint_alpha(
         "fill='red' fill-opacity='1e-50'",
         "fill='rgba(1,2,3,0.99999999)'",
         "fill='rgba(1,2,3,1e-50)'",
+        "fill='RGBA(1,2,3,0.99999999)'",
+        "fill='rGbA(1,2,3,1e-50)'",
         "color='rgba(1,2,3,0.99999999)' fill='currentColor'",
     ],
 )
@@ -780,6 +872,69 @@ def test_recorder_marks_source_partial_alpha_before_byte_quantization(
     assert result.status == "supported"
     assert len(result.commands) == 1
     assert result.commands[0].has_partial_alpha is True
+
+
+@pytest.mark.parametrize(
+    ("paint", "expected_opacity"),
+    [
+        ("fill='red' fill-opacity='0.99999999'", 0.99999999),
+        ("fill='red' fill-opacity='1e-50'", 1e-50),
+        ("fill='rgba(1,2,3,0.99999999)'", 0.99999999),
+        ("fill='rgba(1,2,3,1e-50)'", 1e-50),
+        ("fill='RGBA(1,2,3,0.99999999)'", 0.99999999),
+        ("fill='rGbA(1,2,3,1e-50)'", 1e-50),
+        (
+            "color='rgba(1,2,3,0.99999999)' fill='currentColor'",
+            0.99999999,
+        ),
+        ("fill='rgba(1,2,3,.5)' fill-opacity='50%'", 0.25),
+        ("fill='#12345680'", 128 / 255),
+        ("fill='#1238'", 136 / 255),
+        (
+            "fill='none' stroke='rgba(4,5,6,.25)' stroke-opacity='40%'",
+            0.1,
+        ),
+    ],
+)
+def test_recorder_preserves_effective_paint_opacity_before_byte_quantization(
+    paint: str,
+    expected_opacity: float,
+) -> None:
+    result = lumina_svg_core.record_paint_commands_svg(
+        "<svg viewBox='0 0 10 10'>"
+        f"<rect width='10' height='10' {paint}/></svg>"
+    )
+
+    assert result.status == "supported"
+    assert len(result.commands) == 1
+    assert result.commands[0].paint_opacity == pytest.approx(
+        expected_opacity, rel=0, abs=1e-15
+    )
+
+
+@pytest.mark.parametrize("value", ["linearRGB", "auto"])
+def test_non_srgb_color_interpolation_remains_fail_closed(value: str) -> None:
+    result = lumina_svg_core.record_paint_commands_svg(
+        "<svg viewBox='0 0 10 10'>"
+        f"<rect width='10' height='10' fill='rgba(255,0,0,.5)' "
+        f"color-interpolation='{value}'/></svg>"
+    )
+
+    assert result.status == "unsupported"
+    assert result.reason_code == "unsupported_color_interpolation"
+    assert result.commands == ()
+
+
+def test_explicit_srgb_color_interpolation_is_supported() -> None:
+    result = lumina_svg_core.record_paint_commands_svg(
+        "<svg viewBox='0 0 10 10'>"
+        "<rect width='10' height='10' fill='rgba(255,0,0,.5)' "
+        "color-interpolation='sRGB'/></svg>"
+    )
+
+    assert result.status == "supported"
+    assert len(result.commands) == 1
+    assert result.commands[0].paint_opacity == pytest.approx(0.5)
 
 
 @pytest.mark.parametrize(
@@ -1633,19 +1788,23 @@ def test_unsupported_css_on_unrendered_element_does_not_reject_document(
     ]
 
 
-def test_unsupported_css_on_use_target_rejects_when_clone_is_rendered() -> None:
+def test_css_opacity_on_use_target_records_isolated_group() -> None:
     result = lumina_svg_core.record_paint_commands_svg(
         "<svg viewBox='0 0 10 10'><defs>"
         "<rect id='target' width='10' height='10' style='opacity:.5'/>"
         "</defs><use href='#target'/></svg>"
     )
 
-    assert result.status == "unsupported"
-    assert result.reason_code == "unsupported_partial_alpha"
-    assert result.commands == ()
+    assert result.status == "supported"
+    assert [command.kind for command in result.commands] == [
+        "group_begin",
+        "fill",
+        "group_end",
+    ]
+    assert result.commands[0].group_opacity == pytest.approx(0.5)
 
 
-def test_unsupported_group_css_rejects_when_descendant_restores_visibility(
+def test_group_css_opacity_wraps_descendant_that_restores_visibility(
 ) -> None:
     result = lumina_svg_core.record_paint_commands_svg(
         "<svg viewBox='0 0 10 10'>"
@@ -1653,9 +1812,13 @@ def test_unsupported_group_css_rejects_when_descendant_restores_visibility(
         "<rect visibility='visible' width='10' height='10'/></g></svg>"
     )
 
-    assert result.status == "unsupported"
-    assert result.reason_code == "unsupported_partial_alpha"
-    assert result.commands == ()
+    assert result.status == "supported"
+    assert [command.kind for command in result.commands] == [
+        "group_begin",
+        "fill",
+        "group_end",
+    ]
+    assert result.commands[0].group_opacity == pytest.approx(0.5)
 
 
 @pytest.mark.parametrize(

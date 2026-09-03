@@ -1,3 +1,3 @@
 # Workspace integration boundary. Replace this path with
-# lumina-svg-core==0.2.0 after the standalone package is published.
+# lumina-svg-core==0.3.0 after the standalone package is published.
 ./native/lumina-svg-core
