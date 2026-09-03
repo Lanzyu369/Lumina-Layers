@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import xml.etree.ElementTree as ET
+import zipfile
 
 import numpy as np
 import pytest
 import trimesh
+from shapely import wkt
 from shapely.geometry import MultiPolygon, Polygon, box
 
 import core.vector_engine as vector_engine
@@ -122,6 +125,78 @@ def test_run_length_keeps_large_body_and_printable_island() -> None:
 
     _assert_closed(combined, volume=(40_000.0 + 25.0) * 0.2)
     assert len(combined.split(only_watertight=False)) == 2
+
+
+def test_lum_20260811_002_ring_contact_stays_closed_through_3mf(
+    tmp_path,
+) -> None:
+    """The original ring-contact regression stays on the canonical path."""
+
+    fixture_path = (
+        Path(__file__).parent
+        / "fixtures"
+        / "svg_regression"
+        / "lum_20260811_002_ring_contact.wkt"
+    )
+    polygon = wkt.loads(fixture_path.read_text(encoding="utf-8"))
+    scale = 0.2762232707950837
+    height = 0.08
+    result = VectorProcessor._run_length_extrude(
+        matched_shapes=[{"geometry": polygon, "recipe": [0]}],
+        num_layers=1,
+        layer_h=height,
+        num_channels=1,
+        slot_names=["White"],
+        scale_factor=scale,
+    )
+
+    mesh = result["White"]["meshes"][0]
+    source_area_mm2 = float(polygon.area) * scale**2
+    _assert_closed(mesh, volume=source_area_mm2 * height)
+    assert abs(float(mesh.volume)) / height == pytest.approx(
+        source_area_mm2,
+        abs=0.0001,
+    )
+
+    output_path = tmp_path / "lum-20260811-002-ring-contact.3mf"
+    writer = BambuStudio3MFWriter(
+        str(output_path),
+        settings={},
+        color_mode="BW",
+        printer_id="bambu-p2s",
+        slicer="BambuStudio",
+        enable_wipe_tower_auto_placement=False,
+    )
+    writer.add_mesh(mesh, "White", (255, 255, 255))
+    writer.export()
+
+    namespace = {
+        "m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
+    }
+    with zipfile.ZipFile(output_path) as package:
+        root = ET.fromstring(package.read("3D/Objects/object_1.model"))
+    vertices = np.asarray(
+        [
+            [float(vertex.attrib[axis]) for axis in ("x", "y", "z")]
+            for vertex in root.findall(
+                ".//m:mesh/m:vertices/m:vertex",
+                namespace,
+            )
+        ],
+        dtype=np.float64,
+    )
+    faces = np.asarray(
+        [
+            [int(face.attrib[index]) for index in ("v1", "v2", "v3")]
+            for face in root.findall(
+                ".//m:mesh/m:triangles/m:triangle",
+                namespace,
+            )
+        ],
+        dtype=np.int64,
+    )
+    exported = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+    _assert_closed(exported, volume=source_area_mm2 * height)
 
 
 def test_vector_slanted_runs_form_one_material_object() -> None:

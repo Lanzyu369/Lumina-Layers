@@ -21,6 +21,7 @@ import Accordion from "./ui/Accordion";
 import ZoomViewport from "./ui/ZoomViewport";
 import { cx, resolvePanelSurfaceClass, resolveSectionCardClass } from "./ui/panelPrimitives";
 import HelpDot from "./ui/HelpDot";
+import { WIKI_DOCS } from "../utils/wikiDocs";
 
 const ACCEPT_FORMATS = "image/png,image/jpeg,image/webp,image/bmp";
 const VECTORIZER_RESET_DELAY_MS = 0;
@@ -177,15 +178,20 @@ export default function VectorizerPanel() {
 
         {/* ===== Basic Parameters ===== */}
         <div className={cx(resolveSectionCardClass(workspace.mode), "flex flex-col gap-3")}>
-          <h3 className="text-sm font-medium text-slate-500 dark:text-slate-400">
-            {t("vec.basic_params")}
+          <h3 className="flex items-center gap-1.5 text-sm font-medium text-slate-500 dark:text-slate-400">
+            <span>{t("vec.basic_params")}</span>
+            <HelpDot
+              title={t("vec.title")}
+              description={t("vec.upload_hint")}
+              wikiPath={WIKI_DOCS.vectorizerOverview}
+            />
           </h3>
 
           {/* num_colors: Switch(Auto/Manual) + Slider */}
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
               {t("vec.num_colors")}
-              <HelpDot title={t("vec.num_colors")} description={t("vec.hint_num_colors")} />
+              <HelpDot title={t("vec.num_colors")} description={t("vec.hint_num_colors")} wikiPath={WIKI_DOCS.vectorizerColorAndDetail} />
             </span>
             <Switch
               checked={params.num_colors === 0}
@@ -208,6 +214,7 @@ export default function VectorizerPanel() {
           <Slider
             label={t("vec.smoothness")}
             tooltip={t("vec.hint_smoothness")}
+            wikiPath={WIKI_DOCS.vectorizerColorAndDetail}
             value={params.smoothness}
             min={0}
             max={1}
@@ -219,7 +226,7 @@ export default function VectorizerPanel() {
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
               {t("vec.detail_level")}
-              <HelpDot title={t("vec.detail_level")} description={t("vec.hint_detail_level")} />
+              <HelpDot title={t("vec.detail_level")} description={t("vec.hint_detail_level")} wikiPath={WIKI_DOCS.vectorizerColorAndDetail} />
             </span>
             <Switch
               checked={isDetailEnabled}
@@ -246,6 +253,7 @@ export default function VectorizerPanel() {
             <Checkbox
               label={t("vec.svg_enable_stroke")}
               tooltip={t("vec.hint_svg_enable_stroke")}
+              wikiPath={WIKI_DOCS.vectorizerOutputEnhancement}
               checked={params.svg_enable_stroke}
               onChange={(v) => setParam("svg_enable_stroke", v)}
             />
@@ -253,6 +261,7 @@ export default function VectorizerPanel() {
               <Slider
                 label={t("vec.svg_stroke_width")}
                 tooltip={t("vec.hint_svg_stroke_width")}
+                wikiPath={WIKI_DOCS.vectorizerOutputEnhancement}
                 value={params.svg_stroke_width}
                 min={0}
                 max={20}
@@ -264,6 +273,7 @@ export default function VectorizerPanel() {
             <Slider
               label={t("vec.thin_line_max_radius")}
               tooltip={t("vec.hint_thin_line_max_radius")}
+              wikiPath={WIKI_DOCS.vectorizerOutputEnhancement}
               value={params.thin_line_max_radius}
               min={0.5}
               max={10}
@@ -275,6 +285,7 @@ export default function VectorizerPanel() {
             <Checkbox
               label={t("vec.enable_coverage_fix")}
               tooltip={t("vec.hint_enable_coverage_fix")}
+              wikiPath={WIKI_DOCS.vectorizerOutputEnhancement}
               checked={params.enable_coverage_fix}
               onChange={(v) => setParam("enable_coverage_fix", v)}
             />
@@ -282,6 +293,7 @@ export default function VectorizerPanel() {
               <Slider
                 label={t("vec.min_coverage_ratio")}
                 tooltip={t("vec.hint_min_coverage_ratio")}
+                wikiPath={WIKI_DOCS.vectorizerOutputEnhancement}
                 value={params.min_coverage_ratio}
                 min={0}
                 max={1}
@@ -321,6 +333,7 @@ export default function VectorizerPanel() {
                 <Slider
                   label={t("vec.smoothing_spatial")}
                   tooltip={t("vec.hint_smoothing_spatial")}
+                  wikiPath={WIKI_DOCS.vectorizerPreprocessing}
                   value={params.smoothing_spatial}
                   min={0}
                   max={50}
@@ -330,6 +343,7 @@ export default function VectorizerPanel() {
                 <Slider
                   label={t("vec.smoothing_color")}
                   tooltip={t("vec.hint_smoothing_color")}
+                  wikiPath={WIKI_DOCS.vectorizerPreprocessing}
                   value={params.smoothing_color}
                   min={0}
                   max={80}
@@ -339,6 +353,7 @@ export default function VectorizerPanel() {
                 <Slider
                   label={t("vec.max_working_pixels")}
                   tooltip={t("vec.hint_max_working_pixels")}
+                  wikiPath={WIKI_DOCS.vectorizerPreprocessing}
                   value={params.max_working_pixels}
                   min={100000}
                   max={10000000}
@@ -354,6 +369,7 @@ export default function VectorizerPanel() {
                 <Slider
                   label={t("vec.slic_region_size")}
                   tooltip={t("vec.hint_slic_region_size")}
+                  wikiPath={WIKI_DOCS.vectorizerSegmentation}
                   value={params.slic_region_size}
                   min={5}
                   max={100}
@@ -363,6 +379,7 @@ export default function VectorizerPanel() {
                 <Slider
                   label={t("vec.edge_sensitivity")}
                   tooltip={t("vec.hint_edge_sensitivity")}
+                  wikiPath={WIKI_DOCS.vectorizerSegmentation}
                   value={params.edge_sensitivity}
                   min={0}
                   max={1}
@@ -372,6 +389,7 @@ export default function VectorizerPanel() {
                 <Slider
                   label={t("vec.refine_passes")}
                   tooltip={t("vec.hint_refine_passes")}
+                  wikiPath={WIKI_DOCS.vectorizerSegmentation}
                   value={params.refine_passes}
                   min={0}
                   max={20}
@@ -381,6 +399,7 @@ export default function VectorizerPanel() {
                 <Checkbox
                   label={t("vec.enable_antialias_detect")}
                   tooltip={t("vec.hint_enable_antialias_detect")}
+                  wikiPath={WIKI_DOCS.vectorizerSegmentation}
                   checked={params.enable_antialias_detect}
                   onChange={(v) => setParam("enable_antialias_detect", v)}
                 />
@@ -388,6 +407,7 @@ export default function VectorizerPanel() {
                   <Slider
                     label={t("vec.aa_tolerance")}
                     tooltip={t("vec.hint_aa_tolerance")}
+                    wikiPath={WIKI_DOCS.vectorizerSegmentation}
                     value={params.aa_tolerance}
                     min={1}
                     max={50}
@@ -404,6 +424,7 @@ export default function VectorizerPanel() {
                 <Slider
                   label={t("vec.curve_fit_error")}
                   tooltip={t("vec.hint_curve_fit_error")}
+                  wikiPath={WIKI_DOCS.vectorizerCurveAndFiltering}
                   value={params.curve_fit_error}
                   min={0.1}
                   max={5}
@@ -414,6 +435,7 @@ export default function VectorizerPanel() {
                 <Slider
                   label={t("vec.contour_simplify")}
                   tooltip={t("vec.hint_contour_simplify")}
+                  wikiPath={WIKI_DOCS.vectorizerCurveAndFiltering}
                   value={params.contour_simplify}
                   min={0}
                   max={2}
@@ -423,6 +445,7 @@ export default function VectorizerPanel() {
                 <Slider
                   label={t("vec.merge_segment_tolerance")}
                   tooltip={t("vec.hint_merge_segment_tolerance")}
+                  wikiPath={WIKI_DOCS.vectorizerCurveAndFiltering}
                   value={params.merge_segment_tolerance}
                   min={0}
                   max={0.5}
@@ -438,6 +461,7 @@ export default function VectorizerPanel() {
                 <Slider
                   label={t("vec.min_region_area")}
                   tooltip={t("vec.hint_min_region_area")}
+                  wikiPath={WIKI_DOCS.vectorizerCurveAndFiltering}
                   value={params.min_region_area}
                   min={0}
                   max={1000}
@@ -448,6 +472,7 @@ export default function VectorizerPanel() {
                 <Slider
                   label={t("vec.max_merge_color_dist")}
                   tooltip={t("vec.hint_max_merge_color_dist")}
+                  wikiPath={WIKI_DOCS.vectorizerCurveAndFiltering}
                   value={params.max_merge_color_dist}
                   min={0}
                   max={500}
@@ -457,6 +482,7 @@ export default function VectorizerPanel() {
                 <Slider
                   label={t("vec.min_contour_area")}
                   tooltip={t("vec.hint_min_contour_area")}
+                  wikiPath={WIKI_DOCS.vectorizerCurveAndFiltering}
                   value={params.min_contour_area}
                   min={0}
                   max={500}
@@ -467,6 +493,7 @@ export default function VectorizerPanel() {
                 <Slider
                   label={t("vec.min_hole_area")}
                   tooltip={t("vec.hint_min_hole_area")}
+                  wikiPath={WIKI_DOCS.vectorizerCurveAndFiltering}
                   value={params.min_hole_area}
                   min={0}
                   max={100}

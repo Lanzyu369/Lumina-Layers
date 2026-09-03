@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 import json
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import re
 import shutil
 import sys
@@ -380,6 +380,55 @@ def _copy_thumbnail_asset(
     return ""
 
 
+def _resolve_machine_model_settings_from_roots(
+    *,
+    source_root: Path,
+    vendor_key: str,
+    printer_model: str,
+    asset_roots: tuple[AssetRoot, ...],
+) -> dict[str, Any]:
+    roots = ((source_root, vendor_key), *asset_roots)
+    seen_roots: set[str] = set()
+    for root, candidate_vendor in roots:
+        if candidate_vendor.casefold() != vendor_key.casefold():
+            continue
+        root_key = root.resolve().as_posix().casefold()
+        if root_key in seen_roots:
+            continue
+        seen_roots.add(root_key)
+        try:
+            settings = resolve_machine_model_settings(
+                root=root,
+                vendor_key=candidate_vendor,
+                printer_model=printer_model,
+            )
+        except (FileNotFoundError, KeyError, OSError, ValueError):
+            continue
+        if settings:
+            return settings
+    return {}
+
+
+def _safe_bed_model_filename(value: object) -> str:
+    """Keep only a safe STL basename for runtime installed-slicer lookup."""
+
+    filename = str(value or "").strip()
+    path = Path(filename)
+    if (
+        not filename
+        or filename in {".", ".."}
+        or "/" in filename
+        or "\\" in filename
+        or "\0" in filename
+        or PureWindowsPath(filename).drive
+        or path.is_absolute()
+        or path.name != filename
+        or path.suffix.casefold() != ".stl"
+    ):
+        return ""
+    return filename
+
+
 def run_import(
     *,
     slicer_id: str,
@@ -415,6 +464,7 @@ def _collect_import_payload(
     *,
     output_root: Path,
     asset_roots: tuple[AssetRoot, ...] = (),
+    bed_model_metadata_roots: tuple[AssetRoot, ...] | None = None,
     build_plate_source_roots: dict[str, Path] | None = None,
 ) -> tuple[dict[str, Any], list[tuple[str, dict[str, Any]]], int]:
     slicer_id = source.slicer_id
@@ -422,6 +472,9 @@ def _collect_import_payload(
     source_version = source.source_version
     vendor_keys = source.vendor_keys
     machine_name = source.machine_name
+    native_bed_metadata_roots = (
+        asset_roots if bed_model_metadata_roots is None else bed_model_metadata_roots
+    )
     provider = get_provider(slicer_id)
     build_plates = copy_native_build_plate_assets(
         slicer_id=provider.slicer_id,
@@ -487,12 +540,21 @@ def _collect_import_payload(
                 output_root=output_root,
                 asset_roots=asset_roots,
             )
-            machine_model_settings = resolve_machine_model_settings(
-                root=source_root,
+            printer_model = str(
+                profile.settings.get("printer_model") or entry["display_name"]
+            )
+            machine_model_settings = _resolve_machine_model_settings_from_roots(
+                source_root=source_root,
                 vendor_key=profile.vendor_key,
-                printer_model=str(
-                    profile.settings.get("printer_model") or entry["display_name"]
-                ),
+                printer_model=printer_model,
+                asset_roots=native_bed_metadata_roots,
+            )
+            bed_model = _safe_bed_model_filename(
+                str(
+                    machine_model_settings.get("bed_model")
+                    or profile.settings.get("bed_model")
+                    or ""
+                )
             )
             build_plate_settings = {
                 **machine_model_settings,
@@ -521,6 +583,7 @@ def _collect_import_payload(
                     "bed_depth": entry["bed_depth"],
                     "bed_height": entry["bed_height"],
                     "thumbnail": thumbnail or entry["thumbnail"],
+                    "bed_model": bed_model,
                     "supported_build_plate_ids": supported_build_plate_ids,
                     "default_build_plate_id": default_build_plate_id,
                     "nozzles": [],
@@ -612,7 +675,14 @@ def run_import_sources(
     *,
     output_root: Path,
     asset_search_roots: tuple[AssetRoot, ...] = (),
+    bed_model_metadata_search_roots_by_slicer: dict[
+        str, tuple[AssetRoot, ...]
+    ] | None = None,
 ) -> ImportResult:
+    if not sources:
+        raise ValueError(
+            "No machine profile sources were discovered; refusing to overwrite registry"
+        )
     slicers: list[dict[str, Any]] = []
     templates: list[tuple[str, dict[str, Any]]] = []
     device_count = 0
@@ -626,10 +696,24 @@ def run_import_sources(
         source.slicer_id: source.source_root for source in sources
     }
     for source in sources:
+        if bed_model_metadata_search_roots_by_slicer is None:
+            bed_model_metadata_roots = all_asset_roots
+        else:
+            bed_model_metadata_roots = (
+                *(
+                    (source.source_root, vendor_key)
+                    for vendor_key in source.vendor_keys
+                ),
+                *bed_model_metadata_search_roots_by_slicer.get(
+                    source.slicer_id,
+                    (),
+                ),
+            )
         slicer_payload, source_templates, source_device_count = _collect_import_payload(
             source,
             output_root=output_root,
             asset_roots=all_asset_roots,
+            bed_model_metadata_roots=bed_model_metadata_roots,
             build_plate_source_roots=build_plate_source_roots,
         )
         if source_device_count == 0:

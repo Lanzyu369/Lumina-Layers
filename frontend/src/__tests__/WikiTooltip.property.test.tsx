@@ -38,6 +38,8 @@ vi.mock("@floating-ui/react", () => {
       capturedHoverArgs = opts ?? {};
       return {};
     },
+    useFocus: () => ({}),
+    useClick: () => ({}),
     useDismiss: () => ({}),
     useRole: () => ({}),
     useInteractions: (hooks: Array<Record<string, unknown>>) => ({
@@ -50,6 +52,7 @@ vi.mock("@floating-ui/react", () => {
     shift: () => null,
     autoUpdate: () => () => {},
     FloatingPortal: ({ children }: { children: ReactNode }) => children,
+    FloatingFocusManager: ({ children }: { children: ReactNode }) => children,
   };
 });
 

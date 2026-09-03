@@ -4,6 +4,8 @@ import gc
 import sys
 from types import SimpleNamespace
 import weakref
+import xml.etree.ElementTree as ET
+import zipfile
 
 import numpy as np
 import pytest
@@ -40,6 +42,7 @@ from core.model_surface.pipeline import (
     build_surface_overlay_scene,
 )
 from core.model_surface.types import ModelSurfaceError, PlaneFrame, SurfaceFootprint
+from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
 
 
 def _upward_horizontal_area_at_z(
@@ -50,6 +53,102 @@ def _upward_horizontal_area_at_z(
     on_plane = np.all(np.isclose(triangle_z, z_mm, atol=1e-6), axis=1)
     upward = np.asarray(mesh.face_normals)[:, 2] > 1.0 - 1e-6
     return float(np.asarray(mesh.area_faces)[on_plane & upward].sum())
+
+
+def _edge_incidence_counts(mesh: trimesh.Trimesh) -> np.ndarray:
+    edges = np.asarray(mesh.edges_sorted, dtype=np.int64)
+    _unique, counts = np.unique(edges, axis=0, return_counts=True)
+    return counts
+
+
+def _rotation_y(degrees: float) -> np.ndarray:
+    return trimesh.transformations.rotation_matrix(
+        np.deg2rad(float(degrees)),
+        [0.0, 1.0, 0.0],
+    )
+
+
+def _contact_pattern_overlay(
+    *,
+    surface_tilt_y_deg: float,
+) -> OverlaySceneResult:
+    full_matrix = np.array([[[0, -1], [-1, 0]]], dtype=np.int16)
+    pattern = _build_pattern_scene(
+        {
+            "full_matrix": full_matrix,
+            "slot_names": ["Artwork"],
+            "preview_colors": {0: [255, 0, 0, 255]},
+            "target_h": 2,
+            "pixel_scale": 1.0,
+            "color_layers": 1,
+            "layer_height_mm": 0.08,
+            "bambu_face_orientation": "down",
+        }
+    )
+    surface_rotation = _rotation_y(surface_tilt_y_deg)
+    base = trimesh.creation.box(extents=(2.0, 2.0, 3.0))
+    base.apply_transform(surface_rotation)
+
+    def rotated(vector: tuple[float, float, float]) -> tuple[float, float, float]:
+        homogeneous = np.asarray([*vector, 0.0], dtype=np.float64)
+        return tuple((surface_rotation @ homogeneous)[:3])
+
+    surface_origin = tuple(
+        (surface_rotation @ np.asarray([0.0, 0.0, 1.5, 1.0]))[:3]
+    )
+    footprint = SurfaceFootprint(
+        frame=PlaneFrame(
+            origin=surface_origin,
+            normal=rotated((0.0, 0.0, 1.0)),
+            u_axis=rotated((1.0, 0.0, 0.0)),
+            v_axis=rotated((0.0, 1.0, 0.0)),
+        ),
+        outer=((-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)),
+        holes=(),
+        bounds_min=(-1.0, -1.0),
+        bounds_max=(1.0, 1.0),
+        bounds_width_mm=2.0,
+        bounds_height_mm=2.0,
+        area_mm2=4.0,
+        hole_count=0,
+    )
+    return build_embedded_overlay_scene(
+        base_mesh=base,
+        pattern_scene=pattern,
+        footprint=footprint,
+        pocket_depth_mm=0.08,
+        base_slot_name="surface_base",
+        base_color=(245, 245, 245),
+        allow_uncut_base=True,
+        _take_pattern_ownership=True,
+    )
+
+
+def _object_mesh_from_3mf(
+    output_path,
+    *,
+    object_name: str,
+) -> tuple[ET.Element, trimesh.Trimesh]:
+    namespace = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+    with zipfile.ZipFile(output_path) as package:
+        root = ET.fromstring(package.read("3D/Objects/object_1.model"))
+    objects = root.findall("./m:resources/m:object", namespace)
+    exported = next(item for item in objects if item.attrib.get("name") == object_name)
+    vertices = np.asarray(
+        [
+            [float(vertex.attrib[axis]) for axis in ("x", "y", "z")]
+            for vertex in exported.findall("./m:mesh/m:vertices/m:vertex", namespace)
+        ],
+        dtype=np.float64,
+    )
+    faces = np.asarray(
+        [
+            [int(face.attrib[index]) for index in ("v1", "v2", "v3")]
+            for face in exported.findall("./m:mesh/m:triangles/m:triangle", namespace)
+        ],
+        dtype=np.int64,
+    )
+    return exported, trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
 
 
 def test_build_embedded_overlay_scene_keeps_bounds_and_adds_base_slot():
@@ -437,6 +536,84 @@ def test_owned_model_surface_pipeline_does_not_copy_complete_scenes():
         _copy_scene=False,
     )
     assert oriented.scene is assembled.scene
+
+
+@pytest.mark.parametrize(
+    ("surface_tilt_y_deg", "user_rotation_y_deg"),
+    [
+        pytest.param(0.0, 0.0, id="axis-aligned-control"),
+        pytest.param(0.0, 90.0, id="quarter-turn-control"),
+        pytest.param(0.0, 15.0, id="user-rotation"),
+        pytest.param(15.0, 0.0, id="tilted-surface-frame"),
+    ],
+)
+def test_contacting_surface_pattern_exports_after_rigid_rotation(
+    tmp_path,
+    surface_tilt_y_deg: float,
+    user_rotation_y_deg: float,
+) -> None:
+    """Contact shells remain printable through the complete surface workflow."""
+
+    assembled = _contact_pattern_overlay(
+        surface_tilt_y_deg=surface_tilt_y_deg,
+    )
+    transformed = apply_model_transform_to_overlay_scene(
+        assembled,
+        {
+            "rotation_deg": {
+                "x": 0.0,
+                "y": user_rotation_y_deg,
+                "z": 0.0,
+            }
+        },
+        _copy_scene=False,
+    )
+    oriented = orient_overlay_scene_for_print(
+        transformed,
+        "down",
+        _copy_scene=False,
+    )
+    output_path = tmp_path / (
+        f"surface-contact-{surface_tilt_y_deg:g}-{user_rotation_y_deg:g}.3mf"
+    )
+
+    export_scene_with_bambu_metadata(
+        scene=oriented.scene,
+        output_path=str(output_path),
+        slot_names=oriented.slot_names,
+        preview_colors=oriented.preview_colors,
+        settings={},
+        color_mode="BW",
+        printer_id="bambu-p2s",
+        slicer="BambuStudio",
+        enable_wipe_tower_auto_placement=False,
+    )
+
+    surface_object, _surface_mesh = _object_mesh_from_3mf(
+        output_path,
+        object_name="surface_base",
+    )
+    artwork_object, artwork_mesh = _object_mesh_from_3mf(
+        output_path,
+        object_name="Artwork",
+    )
+    assert surface_object.attrib["pid"] == artwork_object.attrib["pid"]
+    assert surface_object.attrib["pindex"] != artwork_object.attrib["pindex"]
+    assert len(artwork_mesh.vertices) == 16
+    assert len(artwork_mesh.faces) == 24
+    assert abs(float(artwork_mesh.volume)) == pytest.approx(0.16, abs=0.0001)
+    for vertex_start, face_start in ((0, 0), (8, 12)):
+        leaf = trimesh.Trimesh(
+            vertices=np.asarray(artwork_mesh.vertices)[
+                vertex_start : vertex_start + 8
+            ],
+            faces=np.asarray(artwork_mesh.faces)[face_start : face_start + 12]
+            - vertex_start,
+            process=False,
+        )
+        assert leaf.is_watertight
+        assert leaf.is_winding_consistent
+        assert np.all(_edge_incidence_counts(leaf) == 2)
 
 
 def test_model_surface_footprint_memory_error_is_fatal(monkeypatch):

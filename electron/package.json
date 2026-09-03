@@ -67,6 +67,7 @@
     "files": [
       "main.cjs",
       "preload.cjs",
+      "bed-model-bridge.cjs",
       "workshop-file-picker.cjs",
       "workshop-security.cjs",
       "splash.html",

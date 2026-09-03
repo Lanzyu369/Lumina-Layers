@@ -28,6 +28,18 @@ export function getMachineRegistryAssetUrl(path: string | null | undefined): str
   return `${normalizedBaseURL}/system/machine-registry/assets/${encodedPath}`;
 }
 
+/** Resolve the slicer-native build-plate STL for one selected device profile. */
+export function getMachineBedModelUrl(deviceProfileId: string): string {
+  const trimmed = deviceProfileId.trim();
+  if (!trimmed) return "";
+  const baseURL = apiClient.defaults.baseURL?.trim() || "/api";
+  const normalizedBaseURL = baseURL.replace(/\/+$/, "");
+  return (
+    `${normalizedBaseURL}/system/machine-registry/bed-model` +
+    `?device_profile_id=${encodeURIComponent(trimmed)}`
+  );
+}
+
 /** 调用后端清除系统缓存，返回清理统计信息 */
 export async function clearCache(): Promise<ClearCacheResponse> {
   const response = await apiClient.post<ClearCacheResponse>(

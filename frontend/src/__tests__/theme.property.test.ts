@@ -16,6 +16,7 @@ const STRING_FIELDS: (keyof ThemeColors)[] = [
   "bedFineGrid",
   "bedBoldGrid",
   "bedBorder",
+  "bedBrand",
 ];
 
 const NUMBER_FIELDS: (keyof ThemeColors)[] = [

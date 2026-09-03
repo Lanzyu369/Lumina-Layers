@@ -15,50 +15,94 @@ from core.mesh_export_parts import MeshExportPartRange
 _FACE_CHUNK_SIZE = 65_536
 _CONTACT_SHIFT_STEPS_MM = (0.0001, 0.0002, 0.0004)
 _DIRECTION_EPSILON = 1e-12
-_AXIS_NORMAL_TOLERANCE = 1e-6
+_FRAME_NORMAL_TOLERANCE = 1e-6
 
 
-def _axis_normal_bits(normals: np.ndarray) -> np.ndarray:
-    """Encode outward axis normals without weighting triangulation diagonals."""
+def _orthogonal_normal_bits(
+    normals: np.ndarray,
+    frame_axes: list[np.ndarray],
+) -> np.ndarray:
+    """Encode normals in their own orthogonal frame, independent of rotation."""
 
-    dominant_axes = np.argmax(np.abs(normals), axis=1)
-    dominant_values = normals[
-        np.arange(len(normals), dtype=np.int64),
-        dominant_axes,
-    ]
-    residual = normals.copy()
-    residual[np.arange(len(normals), dtype=np.int64), dominant_axes] = 0.0
-    if (
-        np.any(np.abs(np.abs(dominant_values) - 1.0) > _AXIS_NORMAL_TOLERANCE)
-        or np.any(np.abs(residual) > _AXIS_NORMAL_TOLERANCE)
-    ):
-        raise ValueError("Canonical contact faces are not axis aligned")
-    signs = dominant_values < 0.0
-    bit_indices = dominant_axes * 2 + signs.astype(np.int64)
-    return np.left_shift(np.uint8(1), bit_indices.astype(np.uint8))
+    normal_bits = np.zeros(len(normals), dtype=np.uint8)
+    unmatched = np.ones(len(normals), dtype=bool)
+    while np.any(unmatched):
+        unmatched_indices = np.flatnonzero(unmatched)
+        for axis_index, axis in enumerate(frame_axes):
+            projections = normals[unmatched_indices] @ axis
+            residuals = (
+                normals[unmatched_indices]
+                - projections[:, None] * axis[None, :]
+            )
+            matched = (
+                np.abs(np.abs(projections) - 1.0) <= _FRAME_NORMAL_TOLERANCE
+            ) & (
+                np.max(np.abs(residuals), axis=1)
+                <= _FRAME_NORMAL_TOLERANCE
+            )
+            if not np.any(matched):
+                continue
+            selected_indices = unmatched_indices[matched]
+            signs = projections[matched] < 0.0
+            bit_indices = axis_index * 2 + signs.astype(np.int64)
+            normal_bits[selected_indices] = np.left_shift(
+                np.uint8(1),
+                bit_indices.astype(np.uint8),
+            )
+            unmatched[selected_indices] = False
+            unmatched_indices = np.flatnonzero(unmatched)
+            if len(unmatched_indices) == 0:
+                break
+
+        if not np.any(unmatched):
+            break
+        candidate = normals[int(np.flatnonzero(unmatched)[0])]
+        if len(frame_axes) >= 3 or any(
+            abs(float(np.dot(candidate, axis))) > _FRAME_NORMAL_TOLERANCE
+            for axis in frame_axes
+        ):
+            raise ValueError(
+                "Canonical contact faces do not share an orthogonal frame"
+            )
+        frame_axes.append(candidate.copy())
+
+    return normal_bits
 
 
 def _duplicate_vertex_directions(
-    vertices: np.ndarray,
+    writer_vertices: np.ndarray,
+    source_vertices: np.ndarray,
     faces: np.ndarray,
     inverse: np.ndarray,
     counts: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
     duplicate_mask = counts[inverse] > 1
     duplicate_vertices = np.flatnonzero(duplicate_mask)
-    local_index = np.full(len(vertices), -1, dtype=np.int64)
+    local_index = np.full(len(writer_vertices), -1, dtype=np.int64)
     local_index[duplicate_vertices] = np.arange(
         len(duplicate_vertices),
         dtype=np.int64,
     )
     normal_masks = np.zeros(len(duplicate_vertices), dtype=np.uint8)
+    frame_axes: list[np.ndarray] = []
 
     for start in range(0, len(faces), _FACE_CHUNK_SIZE):
         face_chunk = faces[start : start + _FACE_CHUNK_SIZE]
         face_chunk = face_chunk[np.any(duplicate_mask[face_chunk], axis=1)]
         if len(face_chunk) == 0:
             continue
-        triangles = vertices[face_chunk].astype(np.float64, copy=False)
+        writer_triangles = writer_vertices[face_chunk].astype(
+            np.float64,
+            copy=False,
+        )
+        writer_normals = np.cross(
+            writer_triangles[:, 1] - writer_triangles[:, 0],
+            writer_triangles[:, 2] - writer_triangles[:, 0],
+        )
+        if np.any(np.linalg.norm(writer_normals, axis=1) <= 0.0):
+            raise ValueError("Canonical mesh contains a degenerate contact face")
+
+        triangles = source_vertices[face_chunk].astype(np.float64, copy=False)
         normals = np.cross(
             triangles[:, 1] - triangles[:, 0],
             triangles[:, 2] - triangles[:, 0],
@@ -67,7 +111,7 @@ def _duplicate_vertex_directions(
         if np.any(lengths <= 0.0):
             raise ValueError("Canonical mesh contains a degenerate contact face")
         normals /= lengths[:, None]
-        normal_bits = _axis_normal_bits(normals)
+        normal_bits = _orthogonal_normal_bits(normals, frame_axes)
         for corner in range(3):
             vertex_indices = face_chunk[:, corner]
             selected = duplicate_mask[vertex_indices]
@@ -78,14 +122,13 @@ def _duplicate_vertex_directions(
             )
 
     directions = np.zeros((len(duplicate_vertices), 3), dtype=np.float64)
-    for axis in range(3):
-        positive = (normal_masks & np.uint8(1 << (axis * 2))) != 0
-        negative = (normal_masks & np.uint8(1 << (axis * 2 + 1))) != 0
+    for axis_index, axis in enumerate(frame_axes):
+        positive = (normal_masks & np.uint8(1 << (axis_index * 2))) != 0
+        negative = (normal_masks & np.uint8(1 << (axis_index * 2 + 1))) != 0
         # A positive outward normal requires an inward negative displacement,
         # and vice versa. Opposing incident faces cancel on that axis.
-        directions[:, axis] = negative.astype(np.float64) - positive.astype(
-            np.float64
-        )
+        coefficients = negative.astype(np.float64) - positive.astype(np.float64)
+        directions += coefficients[:, None] * axis[None, :]
     lengths = np.linalg.norm(directions, axis=1)
     if np.any(lengths <= _DIRECTION_EPSILON):
         raise ValueError("Canonical mesh contact has no bounded inward direction")
@@ -173,6 +216,7 @@ def prepare_indexed_shells_for_float32_export(
     if bool(np.any(counts > 1)):
         duplicate_vertices, directions = _duplicate_vertex_directions(
             vertices,
+            source_vertices,
             faces,
             inverse,
             counts,

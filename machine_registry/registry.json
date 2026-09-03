@@ -61,7 +61,8 @@
             "textured-pei-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
         },
         {
           "machine_profile_id": "BambuStudio:bbl:bambu-lab-a1-mini",
@@ -111,7 +112,8 @@
             "textured-pei-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-A1M.stl"
         },
         {
           "machine_profile_id": "BambuStudio:bbl:bambu-lab-a2l",
@@ -162,7 +164,8 @@
             "textured-pei-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-H2C.stl"
         },
         {
           "machine_profile_id": "BambuStudio:bbl:bambu-lab-h2c",
@@ -212,7 +215,8 @@
             "textured-pei-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-H2C.stl"
         },
         {
           "machine_profile_id": "BambuStudio:bbl:bambu-lab-h2d",
@@ -263,7 +267,8 @@
             "textured-pei-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-H2D.stl"
         },
         {
           "machine_profile_id": "BambuStudio:bbl:bambu-lab-h2d-pro",
@@ -314,7 +319,8 @@
             "textured-pei-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-H2D.stl"
         },
         {
           "machine_profile_id": "BambuStudio:bbl:bambu-lab-h2s",
@@ -365,7 +371,8 @@
             "textured-pei-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-O1S.stl"
         },
         {
           "machine_profile_id": "BambuStudio:bbl:bambu-lab-p1p",
@@ -417,7 +424,8 @@
             "textured-pei-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
         },
         {
           "machine_profile_id": "BambuStudio:bbl:bambu-lab-p1s",
@@ -469,7 +477,8 @@
             "textured-pei-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
         },
         {
           "machine_profile_id": "BambuStudio:bbl:bambu-lab-p2s",
@@ -520,7 +529,8 @@
             "textured-pei-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
         },
         {
           "machine_profile_id": "BambuStudio:bbl:bambu-lab-x1",
@@ -572,7 +582,8 @@
             "textured-pei-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
         },
         {
           "machine_profile_id": "BambuStudio:bbl:bambu-lab-x1-carbon",
@@ -624,7 +635,8 @@
             "textured-pei-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
         },
         {
           "machine_profile_id": "BambuStudio:bbl:bambu-lab-x1e",
@@ -676,7 +688,8 @@
             "textured-pei-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
         },
         {
           "machine_profile_id": "BambuStudio:bbl:bambu-lab-x2d",
@@ -727,7 +740,8 @@
             "textured-pei-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
         }
       ],
       "build_plates": [
@@ -853,7 +867,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
         },
         {
           "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-a1-mini",
@@ -904,7 +919,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-A1M.stl"
         },
         {
           "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-h2d",
@@ -955,7 +971,8 @@
             "textured-pei-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-H2D.stl"
         },
         {
           "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-h2d-pro",
@@ -1006,7 +1023,8 @@
             "textured-pei-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-H2D.stl"
         },
         {
           "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-h2s",
@@ -1057,7 +1075,8 @@
             "textured-pei-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-O1S.stl"
         },
         {
           "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-p1p",
@@ -1110,7 +1129,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
         },
         {
           "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-p1s",
@@ -1163,7 +1183,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
         },
         {
           "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-p2s",
@@ -1214,7 +1235,8 @@
             "textured-pei-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
         },
         {
           "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-x1",
@@ -1267,7 +1289,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
         },
         {
           "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-x1-carbon",
@@ -1320,7 +1343,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
         },
         {
           "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-x1e",
@@ -1373,7 +1397,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
         },
         {
           "machine_profile_id": "OrcaSlicer:bbl:bambu-lab-x2d",
@@ -1425,7 +1450,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "bbl-3dp-X1.stl"
         }
       ],
       "build_plates": [
@@ -1563,7 +1589,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "elegoo_centuri_buildplate_model.stl"
         },
         {
           "machine_profile_id": "OrcaSlicer:elegoo:elegoo-centauri-carbon",
@@ -1616,7 +1643,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "elegoo_centuri_carbon_buildplate_model.stl"
         },
         {
           "machine_profile_id": "OrcaSlicer:elegoo:elegoo-centauri-carbon-2",
@@ -1669,7 +1697,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "elegoo_centuri_carbon_buildplate_model.stl"
         }
       ],
       "build_plates": [
@@ -1791,7 +1820,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Snapmaker U1_bed.stl"
         }
       ],
       "build_plates": [
@@ -1924,7 +1954,8 @@
           "supported_build_plate_ids": [
             "textured-pei-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Snapmaker U1_bed.stl"
         }
       ],
       "build_plates": [
@@ -2058,7 +2089,8 @@
             "smooth-cool-plate",
             "textured-pei-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "elegoo_centuri_buildplate_model.stl"
         },
         {
           "machine_profile_id": "ElegooSlicer:elegoo:elegoo-centauri-carbon",
@@ -2107,7 +2139,8 @@
             "smooth-cool-plate",
             "textured-pei-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "elegoo_centuri_carbon_buildplate_model.stl"
         },
         {
           "machine_profile_id": "ElegooSlicer:elegoo:elegoo-centauri-carbon-2",
@@ -2156,7 +2189,8 @@
             "smooth-cool-plate",
             "textured-pei-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "elegoo_centuri_carbon_buildplate_model.stl"
         }
       ],
       "build_plates": [
@@ -2270,7 +2304,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra 1_buildplate_model.stl"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-1-max",
@@ -2299,7 +2334,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra 1 Max_buildplate_model.stl"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-1-plus",
@@ -2328,7 +2364,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra 1 Plus_buildplate_model.stl"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-2",
@@ -2357,7 +2394,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra 2_buildplate_model.stl"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-2-max",
@@ -2386,7 +2424,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra 2 Max_buildplate_model.stl"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-2-neo",
@@ -2415,7 +2454,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra 2 Neo_buildplate_model.stl"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-2-plus",
@@ -2444,7 +2484,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra 2 Plus_buildplate_model.stl"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-2-pro",
@@ -2473,7 +2514,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra 2 Pro_buildplate_model.stl"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-3",
@@ -2526,7 +2568,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra 3_buildplate_model.stl"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-3-max",
@@ -2571,7 +2614,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra 3 Max_buildplate_model.stl"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-3-v2",
@@ -2624,7 +2668,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra 3 V2_buildplate_model.stl"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-4",
@@ -2677,7 +2722,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra 4_buildplate_model.stl"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-s1",
@@ -2729,7 +2775,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra S1_buildplate_model.stl"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-s1-max",
@@ -2782,7 +2829,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra S1 Max_buildplate_model.stl"
         },
         {
           "machine_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-x",
@@ -2835,7 +2883,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "Anycubic Kobra X_buildplate_model.stl"
         }
       ],
       "client_version": "1.4.1.2 20260604104233",
@@ -2958,7 +3007,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "flashforge_adventurer5m_series_buildplate_model.STL"
         },
         {
           "machine_profile_id": "FlashStudio:flashforge:flashforge-creator-5",
@@ -2995,7 +3045,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "flashforge_c5_buildplate_model.stl"
         },
         {
           "machine_profile_id": "FlashStudio:flashforge:flashforge-creator-5-pro",
@@ -3032,7 +3083,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "flashforge_c5_buildplate_model.stl"
         },
         {
           "machine_profile_id": "FlashStudio:flashforge:flashforge-guider-3-ultra",
@@ -3054,7 +3106,8 @@
             }
           ],
           "supported_build_plate_ids": [],
-          "default_build_plate_id": ""
+          "default_build_plate_id": "",
+          "bed_model": "flashforge_g3u_buildplate_model.stl"
         },
         {
           "machine_profile_id": "FlashStudio:flashforge:flashforge-guider4",
@@ -3091,7 +3144,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "flashforge_g4pro_buildplate_model.stl"
         },
         {
           "machine_profile_id": "FlashStudio:flashforge:flashforge-guider4-pro",
@@ -3128,7 +3182,8 @@
             "textured-cool-plate",
             "supertack-plate"
           ],
-          "default_build_plate_id": "textured-pei-plate"
+          "default_build_plate_id": "textured-pei-plate",
+          "bed_model": "flashforge_g4pro_buildplate_model.stl"
         }
       ],
       "client_version": "",
@@ -3242,7 +3297,8 @@
               "revision": "sha256:43e37eb7d191a980394932065bc62b45af69795fd5ecccdc4a76e6e6678dde37",
               "supported": true
             }
-          ]
+          ],
+          "bed_model": "Q2_bed.stl"
         },
         {
           "machine_profile_id": "QIDIStudio:qidi:q2c",
@@ -3270,7 +3326,8 @@
               "revision": "sha256:2e1ab2e85ae95087f8aaa7ab46e2ea02f68524e5b4fb5fc8c211e9ed7ded7eac",
               "supported": true
             }
-          ]
+          ],
+          "bed_model": "Q2C_bed.stl"
         },
         {
           "machine_profile_id": "QIDIStudio:qidi:x-max-4",
@@ -3298,7 +3355,8 @@
               "revision": "sha256:de1aa06641a5436a5e8ae3917445db267aadd40e524d3f31526ae0a46740ae46",
               "supported": true
             }
-          ]
+          ],
+          "bed_model": "X-Max 4_bed.stl"
         },
         {
           "machine_profile_id": "QIDIStudio:qidi:x-plus-5",
@@ -3318,7 +3376,8 @@
               "revision": "sha256:aeb2ad1d89353e543f05efc86ce81ef0d4938680540c1acab5a356b25b9b931b",
               "supported": true
             }
-          ]
+          ],
+          "bed_model": "X-Plus 5_bed.stl"
         }
       ],
       "client_version": "02.07.02.60"
