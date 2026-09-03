@@ -836,6 +836,8 @@ inline size_t requireBoundedClipperIntersections(
     const size_t count =
         clipper_safety_detail::segmentCount(paths, closed);
     complexityBudget.ensureClipperIndexSegmentCapacity(count);
+    auto indexReservation =
+        complexityBudget.reserveClipperIndexSegments(count);
     if(closed
             && clipper_safety_detail::isSingleConvexClosedPath(paths)) {
         clipper_safety_detail::requireBoundedDirectCandidates(
@@ -881,6 +883,8 @@ inline size_t requireBoundedClipperIntersections(
         return 0;
     const size_t count = checkedSizeSum(firstCount, secondCount);
     complexityBudget.ensureClipperIndexSegmentCapacity(count);
+    auto indexReservation =
+        complexityBudget.reserveClipperIndexSegments(count);
     if(clipper_safety_detail::isSingleConvexClosedPath(first)
             && clipper_safety_detail::isSingleConvexClosedPath(second)) {
         // Two convex polygon boundaries have only linear crossing complexity.
@@ -930,6 +934,8 @@ inline bool hasCollinearOverlapAcrossOperands(
         return false;
     const size_t count = checkedSizeSum(firstCount, secondCount);
     complexityBudget.ensureClipperIndexSegmentCapacity(count);
+    auto indexReservation =
+        complexityBudget.reserveClipperIndexSegments(count);
     std::vector<clipper_safety_detail::IndexedSegment> segments;
     segments.reserve(count);
     size_t nextPathId = 0;
@@ -953,6 +959,8 @@ inline size_t requireBoundedClipperOffset(
     const size_t count =
         clipper_safety_detail::segmentCount(paths, closed);
     complexityBudget.ensureClipperIndexSegmentCapacity(count);
+    auto indexReservation =
+        complexityBudget.reserveClipperIndexSegments(count);
     if(closed
             && clipper_safety_detail::isSingleConvexClosedPath(paths)) {
         clipper_safety_detail::requireBoundedDirectCandidates(
@@ -985,6 +993,8 @@ inline bool hasNonAdjacentSegmentsWithinDistance(
     const size_t count =
         clipper_safety_detail::segmentCount(paths, true);
     complexityBudget.ensureClipperIndexSegmentCapacity(count);
+    auto indexReservation =
+        complexityBudget.reserveClipperIndexSegments(count);
     if(count < 3)
         return false;
     std::vector<clipper_safety_detail::IndexedSegment> segments;

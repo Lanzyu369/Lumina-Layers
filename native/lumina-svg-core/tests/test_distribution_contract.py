@@ -236,6 +236,46 @@ def test_pinned_clipper_patch_caps_internal_output_allocations() -> None:
     assert "ProcessedIntersectionEventCount" in patch
 
 
+def test_parallel_replay_reserves_peak_geometry_resources_before_allocation(
+) -> None:
+    patch = (
+        PACKAGE_ROOT / "patches" / "clipper2-svg-miter-fallback.patch"
+    ).read_text(encoding="utf-8")
+    budget = (PACKAGE_ROOT / "src" / "complexity_budget.h").read_text(
+        encoding="utf-8"
+    )
+    safety = (PACKAGE_ROOT / "src" / "clipper_safety.h").read_text(
+        encoding="utf-8"
+    )
+    kernel = (PACKAGE_ROOT / "src" / "geometry_kernel.cpp").read_text(
+        encoding="utf-8"
+    )
+    stroke = (PACKAGE_ROOT / "src" / "stroke_expander.cpp").read_text(
+        encoding="utf-8"
+    )
+
+    assert "class ClipperExecutionGate" in patch
+    assert patch.index(
+        "RequireExecutionGateCapacity(ClipperExecutionCounter::OutputPoints"
+    ) < patch.index("++output_point_allocations_")
+    assert "ReleaseExecutionGateReservations();" in patch
+    assert "c.SetExecutionGate(execution_gate_);" in patch
+    assert "reserveBooleanInputPoints" in budget
+    assert "reserveTransientPoints" in budget
+    assert "reserveClipperIndexSegments" in budget
+    assert "reserveClipperIndexSegments(count)" in safety
+    assert "clipper.SetExecutionGate(" in kernel
+    assert "offset.SetExecutionGate(" in stroke
+    assert "reserveTransientPoints(outputPointUpperBound)" in stroke
+    assert "InflatePaths(" not in stroke
+    discard = kernel.split(
+        "void discardPreparedNormalizations(", 1
+    )[1].split("\n}\n", 1)[0]
+    assert "swap(batch.commands)" in discard
+    assert "batch.clipper_gate.reset()" in discard
+    assert kernel.count("catch(const std::bad_alloc&)") >= 3
+
+
 def test_pinned_clipper_patch_counts_every_processed_intersection() -> None:
     patch = (
         PACKAGE_ROOT / "patches" / "clipper2-svg-miter-fallback.patch"

@@ -218,8 +218,16 @@ Paths64 executeClipperBoolean(ClipType clipType, FillRule fillRule,
                               const Paths64* clips,
                               ComplexityBudget& complexityBudget)
 {
+    size_t inputPointCount = pathPointCount(subjects);
+    if(clips != nullptr) {
+        inputPointCount = checkedSizeSum(
+            inputPointCount, pathPointCount(*clips));
+    }
+    auto inputReservation =
+        complexityBudget.reserveBooleanInputPoints(inputPointCount);
     Paths64 result;
     Clipper64 clipper;
+    clipper.SetExecutionGate(complexityBudget.clipperExecutionGate());
     clipper.AddSubject(subjects);
     if(clips != nullptr)
         clipper.AddClip(*clips);
@@ -2883,8 +2891,17 @@ struct PreparedCommandNormalization {
 struct PreparedNormalizationBatch {
     std::vector<PreparedCommandNormalization> commands;
     std::unique_ptr<ParallelComplexityGate> parallel_gate;
+    std::unique_ptr<Clipper2Lib::ClipperExecutionGate> clipper_gate;
     size_t worker_count{0};
 };
+
+void discardPreparedNormalizations(PreparedNormalizationBatch& batch)
+{
+    std::vector<PreparedCommandNormalization>().swap(batch.commands);
+    batch.parallel_gate.reset();
+    batch.clipper_gate.reset();
+    batch.worker_count = 1;
+}
 
 PreparedNormalizationBatch prepareCommandNormalizations(
     const std::vector<lunasvg::PaintCommand>& commands,
@@ -2906,20 +2923,28 @@ PreparedNormalizationBatch prepareCommandNormalizations(
         return batch;
 
     std::vector<size_t> taskIndices;
-    taskIndices.reserve(taskCount);
-    for(size_t index = 0; index < commands.size(); ++index) {
-        if(commandNeedsNormalization(commands[index]))
-            taskIndices.push_back(index);
+    try {
+        taskIndices.reserve(taskCount);
+        for(size_t index = 0; index < commands.size(); ++index) {
+            if(commandNeedsNormalization(commands[index]))
+                taskIndices.push_back(index);
+        }
+        batch.commands.resize(commands.size());
+        batch.parallel_gate = std::make_unique<ParallelComplexityGate>();
+        batch.clipper_gate =
+            std::make_unique<Clipper2Lib::ClipperExecutionGate>();
+        domain.complexity_budget->seedParallelGate(*batch.parallel_gate);
+    } catch(const std::bad_alloc&) {
+        discardPreparedNormalizations(batch);
+        return batch;
     }
-    batch.commands.resize(commands.size());
-    batch.parallel_gate = std::make_unique<ParallelComplexityGate>();
-    domain.complexity_budget->seedParallelGate(*batch.parallel_gate);
     std::atomic<size_t> nextTask{0};
     std::atomic<bool> taskFailed{false};
     const auto runTasks = [&]() {
         while(true) {
             if(taskFailed.load(std::memory_order_acquire)
-                    || batch.parallel_gate->exceeded())
+                    || batch.parallel_gate->exceeded()
+                    || batch.clipper_gate->Exceeded())
                 return;
             const size_t taskOffset = nextTask.fetch_add(
                 1, std::memory_order_relaxed);
@@ -2932,6 +2957,8 @@ PreparedNormalizationBatch prepareCommandNormalizations(
                 PhysicalDomain taskDomain = domain;
                 prepared.complexity_budget.attachParallelGate(
                     batch.parallel_gate.get());
+                prepared.complexity_budget.attachClipperExecutionGate(
+                    batch.clipper_gate.get());
                 taskDomain.complexity_budget = &prepared.complexity_budget;
                 taskDomain.topology_trace = domain.topology_trace == nullptr
                     ? nullptr : &prepared.topology_trace;
@@ -2949,27 +2976,27 @@ PreparedNormalizationBatch prepareCommandNormalizations(
     };
 
     std::vector<std::thread> workers;
-    workers.reserve(batch.worker_count > 0 ? batch.worker_count - 1 : 0);
-    bool threadStartFailed = false;
     try {
-        for(size_t index = 1; index < batch.worker_count; ++index) {
-            try {
-                workers.emplace_back(runTasks);
-            } catch(const std::system_error&) {
-                threadStartFailed = true;
-                break;
-            }
+        workers.reserve(
+            batch.worker_count > 0 ? batch.worker_count - 1 : 0);
+    } catch(const std::bad_alloc&) {
+        discardPreparedNormalizations(batch);
+        return batch;
+    }
+    bool threadStartFailed = false;
+    for(size_t index = 1; index < batch.worker_count; ++index) {
+        try {
+            workers.emplace_back(runTasks);
+        } catch(const std::system_error&) {
+            threadStartFailed = true;
+            break;
+        } catch(const std::bad_alloc&) {
+            threadStartFailed = true;
+            break;
         }
-    } catch(...) {
-        taskFailed.store(true, std::memory_order_release);
-        for(auto& worker : workers)
-            worker.join();
-        throw;
     }
     if(threadStartFailed && workers.empty()) {
-        batch.commands.clear();
-        batch.parallel_gate.reset();
-        batch.worker_count = 1;
+        discardPreparedNormalizations(batch);
         return batch;
     }
     batch.worker_count = workers.size() + 1;
@@ -2977,11 +3004,9 @@ PreparedNormalizationBatch prepareCommandNormalizations(
     for(auto& worker : workers)
         worker.join();
     if(taskFailed.load(std::memory_order_acquire)
-            || batch.parallel_gate->exceeded()) {
-        std::vector<PreparedCommandNormalization>().swap(batch.commands);
-        batch.parallel_gate.reset();
-        batch.worker_count = 1;
-    }
+            || batch.parallel_gate->exceeded()
+            || batch.clipper_gate->Exceeded())
+        discardPreparedNormalizations(batch);
     return batch;
 }
 
@@ -3298,7 +3323,10 @@ bool appendGeometry(GeometryCollection& collection,
         return false;
     PolyTree64 tree;
     preflightNormalizedBoolean(complexityBudget, geometry.paths);
+    auto inputReservation = complexityBudget.reserveBooleanInputPoints(
+        pathPointCount(geometry.paths));
     Clipper64 clipper;
+    clipper.SetExecutionGate(complexityBudget.clipperExecutionGate());
     clipper.AddSubject(geometry.paths);
     if(!clipper.Execute(ClipType::Union, FillRule::NonZero, tree))
         throw std::runtime_error("clipper_union_failed");
@@ -3753,8 +3781,12 @@ std::vector<Paths64> executeNormalizedBooleanComponents(
     ComplexityBudget& complexityBudget)
 {
     preflightNormalizedBoolean(complexityBudget, subjects, clips);
+    auto inputReservation = complexityBudget.reserveBooleanInputPoints(
+        checkedSizeSum(
+            pathPointCount(subjects), pathPointCount(clips)));
     PolyTree64 tree;
     Clipper64 clipper;
+    clipper.SetExecutionGate(complexityBudget.clipperExecutionGate());
     clipper.AddSubject(subjects);
     clipper.AddClip(clips);
     if(!clipper.Execute(clipType, FillRule::NonZero, tree))

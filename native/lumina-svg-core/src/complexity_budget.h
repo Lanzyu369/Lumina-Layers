@@ -9,6 +9,10 @@
 #include <stdexcept>
 #include <string>
 
+namespace Clipper2Lib {
+class ClipperExecutionGate;
+}
+
 namespace lumina_svg_core {
 
 class ComplexityLimitError : public std::runtime_error {
@@ -38,6 +42,9 @@ enum class ComplexityCounter : size_t {
     ClipperOutputRings,
     CompositorBoundsCandidates,
     StrokeSimplificationComparisons,
+    BooleanInputPointsInFlight,
+    TransientPointsInFlight,
+    ClipperIndexSegmentsInFlight,
     Count,
 };
 
@@ -93,6 +100,64 @@ private:
     std::atomic<bool> m_exceeded{false};
 };
 
+class ParallelComplexityReservation {
+public:
+    ParallelComplexityReservation() = default;
+
+    ParallelComplexityReservation(ParallelComplexityGate* gate,
+                                  ComplexityCounter counter,
+                                  size_t count)
+        : m_gate(gate), m_counter(counter), m_count(count)
+    {}
+
+    ParallelComplexityReservation(
+        const ParallelComplexityReservation&) = delete;
+    ParallelComplexityReservation& operator=(
+        const ParallelComplexityReservation&) = delete;
+
+    ParallelComplexityReservation(
+        ParallelComplexityReservation&& other) noexcept
+        : m_gate(other.m_gate),
+          m_counter(other.m_counter),
+          m_count(other.m_count)
+    {
+        other.m_gate = nullptr;
+        other.m_count = 0;
+    }
+
+    ParallelComplexityReservation& operator=(
+        ParallelComplexityReservation&& other) noexcept
+    {
+        if(this == &other)
+            return *this;
+        release();
+        m_gate = other.m_gate;
+        m_counter = other.m_counter;
+        m_count = other.m_count;
+        other.m_gate = nullptr;
+        other.m_count = 0;
+        return *this;
+    }
+
+    ~ParallelComplexityReservation()
+    {
+        release();
+    }
+
+private:
+    void release()
+    {
+        if(m_gate != nullptr && m_count > 0)
+            m_gate->release(m_counter, m_count);
+        m_gate = nullptr;
+        m_count = 0;
+    }
+
+    ParallelComplexityGate* m_gate{nullptr};
+    ComplexityCounter m_counter{ComplexityCounter::GeneratedPoints};
+    size_t m_count{0};
+};
+
 class ComplexityBudget {
 public:
     static constexpr size_t MAX_GENERATED_POINTS = 64'000'000;
@@ -136,6 +201,16 @@ public:
     void attachParallelGate(ParallelComplexityGate* gate)
     {
         m_parallelGate = gate;
+    }
+
+    void attachClipperExecutionGate(Clipper2Lib::ClipperExecutionGate* gate)
+    {
+        m_clipperExecutionGate = gate;
+    }
+
+    Clipper2Lib::ClipperExecutionGate* clipperExecutionGate() const
+    {
+        return m_clipperExecutionGate;
     }
 
     void seedParallelGate(ParallelComplexityGate& gate) const
@@ -217,6 +292,15 @@ public:
             "boolean_input_points");
     }
 
+    ParallelComplexityReservation reserveBooleanInputPoints(size_t count)
+    {
+        requireBooleanInputPointCapacity(count);
+        return reserveParallelInFlight(
+            ComplexityCounter::BooleanInputPointsInFlight, count,
+            MAX_BOOLEAN_INPUT_POINTS_PER_OPERATION,
+            "parallel_boolean_input_points");
+    }
+
     void consumeBooleanInputPoints(size_t count)
     {
         requireBooleanInputPointCapacity(count);
@@ -234,6 +318,15 @@ public:
             "transient_points");
     }
 
+    ParallelComplexityReservation reserveTransientPoints(size_t count)
+    {
+        requireTransientPointCapacity(count);
+        return reserveParallelInFlight(
+            ComplexityCounter::TransientPointsInFlight, count,
+            MAX_TRANSIENT_POINTS_PER_OPERATION,
+            "parallel_transient_points");
+    }
+
     void consumeResultPoints(size_t count)
     {
         consume(
@@ -245,6 +338,15 @@ public:
     {
         if(count > MAX_CLIPPER_INDEX_SEGMENTS)
             throw ComplexityLimitError("clipper_index_segments");
+    }
+
+    ParallelComplexityReservation reserveClipperIndexSegments(size_t count)
+    {
+        ensureClipperIndexSegmentCapacity(count);
+        return reserveParallelInFlight(
+            ComplexityCounter::ClipperIndexSegmentsInFlight, count,
+            MAX_CLIPPER_INDEX_SEGMENTS,
+            "parallel_clipper_index_segments");
     }
 
     void requireClipperIntersectionCandidateCapacity(size_t count) const
@@ -464,6 +566,17 @@ private:
         current += count;
     }
 
+    ParallelComplexityReservation reserveParallelInFlight(
+        ComplexityCounter counter, size_t count, size_t limit,
+        const char* budget)
+    {
+        if(m_parallelGate == nullptr || count == 0)
+            return {};
+        const size_t reserved = m_parallelGate->reserve(
+            counter, count, count, limit, budget);
+        return {m_parallelGate, counter, reserved};
+    }
+
     static void mergeCounter(size_t& current, size_t additional,
                              size_t limit, const char* budget)
     {
@@ -486,6 +599,7 @@ private:
     size_t m_compositorBoundsCandidates{0};
     size_t m_strokeSimplificationComparisons{0};
     ParallelComplexityGate* m_parallelGate{nullptr};
+    Clipper2Lib::ClipperExecutionGate* m_clipperExecutionGate{nullptr};
     std::array<size_t,
                static_cast<size_t>(ComplexityCounter::Count)>
         m_parallelReservations{};

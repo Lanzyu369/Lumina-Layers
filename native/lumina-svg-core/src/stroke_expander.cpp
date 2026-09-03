@@ -892,13 +892,23 @@ StrokeExpansion expandStrokeLocal(const lunasvg::PaintCommand& command,
         // charge the actual InflatePaths rings below.
         complexityBudget.requireClipperOutputCapacity(
             outputPointUpperBound, size_t{1});
+        Clipper2Lib::Paths64 offsetPaths;
+        offsetPaths.emplace_back(std::move(path));
         requireBoundedClipperOffset(
-            {path}, complexityBudget, delta,
+            offsetPaths, complexityBudget, delta,
             command.stroke.miter_limit, subpath.closed);
-        auto expanded = Clipper2Lib::InflatePaths(
-            {path}, delta, joinType(command.stroke.line_join),
-            endType(command.stroke.line_cap, subpath.closed),
+        auto inputReservation = complexityBudget.reserveBooleanInputPoints(
+            offsetPaths.front().size());
+        auto transientReservation =
+            complexityBudget.reserveTransientPoints(outputPointUpperBound);
+        Clipper2Lib::ClipperOffset offset(
             command.stroke.miter_limit, arcTolerance);
+        offset.SetExecutionGate(complexityBudget.clipperExecutionGate());
+        offset.AddPaths(
+            offsetPaths, joinType(command.stroke.line_join),
+            endType(command.stroke.line_cap, subpath.closed));
+        Clipper2Lib::Paths64 expanded;
+        offset.Execute(delta, expanded);
         size_t expandedPointCount = 0;
         for(const auto& ring : expanded)
             expandedPointCount = checkedSizeSum(

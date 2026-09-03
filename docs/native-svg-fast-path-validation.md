@@ -91,13 +91,15 @@ original reverse-occlusion fast path.
 Independent fill, stroke, and clip-path normalization is scheduled across
 native workers when the recorded path workload is large enough to repay thread
 startup and result staging. Each worker owns its Clipper state, resource
-accounting, and topology trace, while an atomic aggregate gate enforces the
-same document budget across all tasks. Geometry, counters, and topology are
-then committed in original command order before clipping and compositing, so
-serial and parallel execution have the same byte-level output contract. If a
-parallel task fails, the aggregate gate is reached, or a requested worker
-cannot be created, staged work is discarded and normalization is replayed in
-document order. That makes the serial result and failure reason authoritative.
+accounting, and topology trace, while aggregate gates enforce the same document
+budget and the same pre-allocation peaks for Boolean inputs, safety indexes,
+offset transients, and actual Clipper engine allocations. Geometry, counters,
+and topology are then committed in original command order before clipping and
+compositing, so serial and parallel execution have the same byte-level output
+contract. If a parallel task or aggregate gate fails, or no background worker
+can be created, staged capacity is released and normalization is replayed in
+document order. A partially created worker pool continues at its actual size.
+That makes the serial result and failure reason authoritative.
 Small or simple documents stay on the original serial path and do not allocate
 the parallel staging buffer. `LUMINA_SVG_REPLAY_THREADS` can force a positive
 worker count for deterministic differential testing and host-level scheduling;
@@ -133,7 +135,7 @@ workers.
 |---|---:|
 | Fresh fixed-patch native build | PASS |
 | macOS 12.0 arm64 wheel build/install/runtime verification | PASS |
-| Standalone native suite from clean macOS 12 wheel | 591 passed; also 591 with 4 forced replay workers |
+| Standalone native suite from clean macOS 12 wheel | 592 passed; also 592 with 4 forced replay workers |
 | Former-alpha corpus through the Lumina adapter | 31 / 31 native supported |
 | Native differential/adapter/VectorAnalysis/packaging suite | 181 passed |
 | Lumina workflow integration | 10 passed |

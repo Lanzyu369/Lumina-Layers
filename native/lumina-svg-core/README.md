@@ -64,12 +64,15 @@ order, so parallel and serial output is byte-for-byte identical. Set
 benchmarking or host-level scheduling; requests and automatic selection are
 both capped at 16 workers. Otherwise the core selects between one worker and
 the available hardware threads from the recorded path workload. Parallel tasks
-share the document resource budget. If that aggregate budget is reached, a
-normalization fails, or worker creation is unavailable, the core discards
-staged work and replays serially in document order. This preserves the serial
-result or failure instead of rejecting an SVG only because parallel execution
-was attempted. `NativeResult.replay_worker_count` reports the worker count
-used by the final geometry replay.
+share the document resource budget and pre-allocation gates for Boolean input,
+safety-index, offset-transient, and actual Clipper engine resources. If an
+aggregate gate is reached, normalization fails, or no background worker can be
+created, the core releases staged capacity and replays serially in document
+order. If only some background workers can be created, it continues with that
+smaller pool. This preserves the serial result or failure instead of rejecting
+an SVG only because parallel execution was attempted.
+`NativeResult.replay_worker_count` reports the worker count used by the final
+geometry replay.
 
 ## Fail-closed resource and precision policy
 
@@ -93,9 +96,11 @@ The geometry kernel checks integer overflow, curve-generation work, and each
 Clipper operation's input and geometric point estimate. The pinned Clipper
 patch checks actual output-point allocations, output-record allocations,
 intersection-node allocations, and every processed intersection inside the
-engine before each allocation or event is accepted. Document counters charge
-actual Boolean inputs, safety-index work, engine work, and returned output
-rather than a theoretical output-ring count.
+engine before each allocation or event is accepted. Parallel executions share
+those checks before allocation instead of adding their peaks after the work is
+already resident. Document counters charge actual Boolean inputs, safety-index
+work, engine work, and returned output rather than a theoretical output-ring
+count.
 Raw paths retain a bounded self-intersection preflight; operands already
 canonicalized by Clipper are not scanned again by a shadow Boolean pass.
 Nested axis-aligned rectangle occluders are reduced by an exact containment
