@@ -176,7 +176,7 @@ tolerance, and includes stroke paint.
 | Supported documents with unexplained raw-paint loss | 0 |
 | Maximum visible-partition area delta | 22.174935 source-unit²; 1.1116364e-5 relative |
 | Median / p95 / maximum document time | 2.3551 s / 15.5736 s / 245.2340 s |
-| Total time / peak process RSS | 2,648.3066 s / 1,852,047,360 bytes (1,766.25 MiB) |
+| Total time / observed peak process RSS | 2,648.3066 s / 1,852,047,360 bytes (1,766.25 MiB) |
 
 `raw_to_visible_area_delta` is expected to be non-zero where later paints
 occlude earlier paints. `visible_partition_area_delta` compares the sum of all
@@ -252,24 +252,28 @@ does not use an artifact cache.
 
 | Metric | Result |
 |---|---:|
-| Warm median / 1.0 s gate | 0.115619 s / PASS |
-| Warm p95 / 1.25 s gate | 0.116606 s / PASS |
-| Native recorder / kernel | 0.049598 s / 0.036146 s |
-| Native adapter conversion | 0.023950 s |
-| Peak RSS / swap growth | 205,160,448 bytes (195.66 MiB) / 0 bytes |
+| Warm median / 1.0 s gate | 0.123658 s / PASS |
+| Warm p95 / 1.25 s gate | 0.123877 s / PASS |
+| Native recorder / kernel | 0.048835 s / 0.045586 s |
+| Native adapter conversion | 0.023847 s |
+| Observed peak RSS / swap growth | 201,703,424 bytes (192.36 MiB) / 0 bytes |
 | Raw / visible shapes | 1,024 / 1,024 |
+
+RSS and swap remain in the report for diagnosis only. They are not pass/fail
+gates for this personal-device workflow; only the complete public-entry time
+thresholds above are enforced.
 
 The same report measures a separate alpha-heavy public fixture with 32 source
 paints, two isolated opacity groups, 256 overlap cells, and 1,024 ordered
-contributions. Its complete `VectorAnalysis` median/p95 is 0.018311/0.019806 s,
-with 148,553,728 bytes peak RSS and zero swap growth. It exports 768 visible
+contributions. Its complete `VectorAnalysis` median/p95 is 0.018644/0.018930 s,
+with 148,504,576 bytes observed peak RSS and zero swap growth. It exports 768 visible
 Polygon components, including 256 multi-source composite regions.
 
 The public 3,097-path source proxy is also supported by default; its native
-capability check took 0.447322 s. No repository SVG at or above 50 MiB was
+capability check took 0.410833 s. No repository SVG at or above 50 MiB was
 available, so the separate large-file benchmark is recorded as unavailable
 instead of substituting another fixture. The anonymous 508-document run above
-is the large real-world parser/RSS evidence for this revision.
+is the large real-world parser evidence for this revision.
 
 The reproducible performance fixture is public and synthetic. It is not
 presented as a private production source. If a private or large regression

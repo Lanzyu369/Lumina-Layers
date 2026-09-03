@@ -71,6 +71,9 @@ created, the core releases staged capacity and replays serially in document
 order. If only some background workers can be created, it continues with that
 smaller pool. This preserves the serial result or failure instead of rejecting
 an SVG only because parallel execution was attempted.
+The ordered clip/composite phase uses the same aggregate gates. A
+parallel-only exception discards all staged state, restores the document
+budget and topology trace, and then performs one authoritative serial replay.
 `NativeResult.replay_worker_count` reports the worker count used by the final
 geometry replay.
 
@@ -145,9 +148,10 @@ not stored in either report.
 
 The public-entry benchmark also includes a synthetic alpha-heavy case with 32
 source paints and 256 overlap cells. It completes the full Lumina
-host application's public analysis path in a 0.018311-second warm median on the
-recorded reference host; this measurement is observational and adds no
-alpha-specific rejection threshold.
+host application's public analysis path in a 0.018644-second warm median on the
+recorded reference host. Memory and swap are recorded for diagnosis only and
+do not reject a valid run; the benchmark keeps only the public-entry time
+gates.
 
 ## Build
 

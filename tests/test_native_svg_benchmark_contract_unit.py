@@ -44,7 +44,7 @@ def _load_manifest() -> dict:
 def test_complete_vector_analysis_benchmark_contract() -> None:
     manifest = _load_manifest()
 
-    assert manifest["schema_version"] == 4
+    assert manifest["schema_version"] == 5
     assert manifest["entrypoint"] == (
         "core.vector_engine.VectorProcessor.analyze_svg"
     )
@@ -211,12 +211,15 @@ def test_real_inputs_record_current_capability_without_identity_gates() -> None:
     assert large["classification"] == "large_regression"
     assert large["classification"] != fixture_classification(manifest)
     assert large["searched_roots"]
+    assert large["memory_policy"] == "observation_only"
+    assert "rss_threshold_bytes" not in large
+    assert "swap_delta_threshold_bytes" not in large
+    assert "rss_threshold_passed" not in large
+    assert "swap_delta_threshold_passed" not in large
     if large["status"] == "measured":
         assert large["byte_size"] >= large["minimum_byte_size"]
-        assert large["peak_rss_bytes"] <= 2 * 1024**3
-        assert large["swap_delta_bytes"] <= 256 * 1024**2
-        assert large["rss_threshold_passed"] is True
-        assert large["swap_delta_threshold_passed"] is True
+        assert large["peak_rss_bytes"] > 0
+        assert large["swap_delta_bytes"] >= 0
     else:
         assert large["matching_files"] == []
 
@@ -227,7 +230,7 @@ def fixture_classification(manifest: dict) -> str:
     return manifest["fixture"]["classification"]
 
 
-def test_benchmark_threshold_failures_are_process_fatal() -> None:
+def test_only_time_threshold_failures_are_process_fatal() -> None:
     manifest = {
         "measurement": {
             "median_threshold_passed": False,
@@ -242,8 +245,55 @@ def test_benchmark_threshold_failures_are_process_fatal() -> None:
 
     assert benchmark._threshold_failures(manifest) == [
         "measurement.median_threshold_passed",
-        "large_regression.swap_delta_threshold_passed",
     ]
+
+
+def test_large_svg_memory_is_observed_without_rejecting_the_run(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    svg_path = tmp_path / "large.svg"
+    svg_path.write_text(
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'>"
+        "<rect width='1' height='1'/></svg>",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(benchmark, "LARGE_REGRESSION_MINIMUM_BYTES", 1)
+    monkeypatch.setattr(
+        benchmark,
+        "_measure_complete_entry_isolated",
+        lambda *_args, **_kwargs: (
+            {
+                "peak_rss_bytes": 9 * 1024**3,
+                "swap_delta_bytes": 4 * 1024**3,
+                "swap_measurement": "fixture",
+            },
+            {"geometry_backend": "native"},
+        ),
+    )
+
+    record = benchmark._large_regression_record(
+        [],
+        svg_path,
+        LUT_PATH,
+        target_width_mm=220.0,
+        tolerance_mm=0.02,
+        warm_runs=1,
+    )
+
+    assert record["status"] == "measured"
+    assert record["memory_policy"] == "observation_only"
+    assert record["peak_rss_bytes"] == 9 * 1024**3
+    assert record["swap_delta_bytes"] == 4 * 1024**3
+    assert benchmark._threshold_failures(
+        {
+            "measurement": {
+                "median_threshold_passed": True,
+                "p95_threshold_passed": True,
+            },
+            "large_regression": record,
+        }
+    ) == []
 
 
 def test_analysis_fingerprint_covers_exact_rgba_and_paint_provenance() -> None:

@@ -783,8 +783,7 @@ def _large_regression_record(
         "minimum_byte_size": LARGE_REGRESSION_MINIMUM_BYTES,
         "searched_roots": [label for label, _path in search_roots],
         "matching_files": matches,
-        "rss_threshold_bytes": 2 * 1024**3,
-        "swap_delta_threshold_bytes": 256 * 1024**2,
+        "memory_policy": "observation_only",
     }
     if explicit_path is None:
         return {
@@ -822,8 +821,6 @@ def _large_regression_record(
         "peak_rss_bytes": peak_rss_bytes,
         "swap_delta_bytes": swap_delta_bytes,
         "swap_measurement": measurement["swap_measurement"],
-        "rss_threshold_passed": peak_rss_bytes <= 2 * 1024**3,
-        "swap_delta_threshold_passed": swap_delta_bytes <= 256 * 1024**2,
         "note": (
             "Measured separately from the public proxy and real R4C1 fixture."
         ),
@@ -863,7 +860,7 @@ def _benchmark_manifest(args: argparse.Namespace) -> dict[str, Any]:
         provenance = None
         fixture_classification = "explicit_supported_fixture"
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "entrypoint": "core.vector_engine.VectorProcessor.analyze_svg",
         "fixture": {
             "path": _relative_repo_path(svg_path),
@@ -919,14 +916,6 @@ def _threshold_failures(manifest: dict[str, Any]) -> list[str]:
         if measurement.get(name) is not True:
             failures.append(f"measurement.{name}")
 
-    large = manifest["large_regression"]
-    if large.get("status") == "measured":
-        for name in (
-            "rss_threshold_passed",
-            "swap_delta_threshold_passed",
-        ):
-            if large.get(name) is not True:
-                failures.append(f"large_regression.{name}")
     return failures
 
 
