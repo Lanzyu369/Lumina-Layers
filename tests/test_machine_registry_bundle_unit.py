@@ -46,6 +46,13 @@ def _device_ids(data: dict[str, Any]) -> set[str]:
 def test_bundled_machine_registry_assets_and_templates_exist() -> None:
     root = _registry_root()
     data = _load_registry()
+    assert not [
+        path
+        for path in root.rglob("*")
+        if path.is_file() and path.suffix.casefold() == ".stl"
+    ], (
+        "Third-party bed models must never be bundled in the Lumina registry"
+    )
     device_ids: set[str] = set()
 
     for slicer in data["slicers"]:
@@ -75,6 +82,15 @@ def test_bundled_machine_registry_assets_and_templates_exist() -> None:
             thumbnail = str(machine.get("thumbnail") or "")
             assert thumbnail, f"{machine['display_name']} is missing a thumbnail"
             assert (root / thumbnail).exists(), thumbnail
+            bed_model = str(machine.get("bed_model") or "")
+            assert bed_model.casefold().endswith(".stl"), (
+                f"{machine['display_name']} is missing its slicer-native bed model"
+            )
+            assert Path(bed_model).name == bed_model
+            assert "/" not in bed_model and "\\" not in bed_model
+            assert not (root / bed_model).exists(), (
+                "Third-party bed models must be read from the user's installed slicer"
+            )
             for nozzle in machine["nozzles"]:
                 device_profile_id = str(nozzle["device_profile_id"])
                 assert device_profile_id not in device_ids

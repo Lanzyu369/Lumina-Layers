@@ -15,6 +15,9 @@ const RUNTIME_URL_PATTERN = new RegExp(
 const BACKEND_RUNTIME_PATH_PATTERN = new RegExp(
   `^/api/workshop/v1/modules/${MODULE_ID_SOURCE}/${SEMVER_SOURCE}/runtime$`,
 );
+const BACKEND_BED_MODEL_PATH =
+  "/api/system/machine-registry/bed-model";
+const DEVICE_PROFILE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 const NON_NETWORK_RESOURCE_TYPES = new Set([
   "font",
   "image",
@@ -88,6 +91,34 @@ function isTrustedInternalRuntimeRequest(details) {
   );
 }
 
+function isTrustedInternalBedModelRequest(details) {
+  if (
+    details.trustedInternal !== true ||
+    (details.method !== undefined && details.method !== "GET")
+  ) {
+    return false;
+  }
+  const parsed = parseUrl(details.url);
+  if (
+    parsed === null ||
+    parsed.protocol !== "http:" ||
+    parsed.hostname !== "127.0.0.1" ||
+    parsed.port !== "8000" ||
+    parsed.username !== "" ||
+    parsed.password !== "" ||
+    parsed.pathname !== BACKEND_BED_MODEL_PATH ||
+    parsed.hash !== ""
+  ) {
+    return false;
+  }
+  const parameters = [...parsed.searchParams.entries()];
+  return (
+    parameters.length === 1 &&
+    parameters[0][0] === "device_profile_id" &&
+    DEVICE_PROFILE_ID_PATTERN.test(parameters[0][1])
+  );
+}
+
 function createWorkshopSessionToken() {
   return crypto.randomBytes(32).toString("base64url");
 }
@@ -128,7 +159,10 @@ function resolveWorkshopRuntimeRequest(
 }
 
 function isAllowedWorkshopRequest(details) {
-  if (isTrustedInternalRuntimeRequest(details)) {
+  if (
+    isTrustedInternalRuntimeRequest(details) ||
+    isTrustedInternalBedModelRequest(details)
+  ) {
     return true;
   }
 

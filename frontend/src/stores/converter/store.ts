@@ -113,6 +113,7 @@ import {
   registerPreviewArtifactInvalidator,
   registerSingleItemDownloadInvalidator,
 } from "../generatedArtifactInvalidation";
+import { registerPrinterBedLabelSynchronizer } from "../printerBedLabelSync";
 import { uploadImagePreview } from "../../api/system";
 import { tRuntime } from "../../i18n/runtime";
 import { fetchMaterialColorSuggestions } from "../../api/materialCache";
@@ -9957,6 +9958,14 @@ registerGeneratedArtifactInvalidator(({ preservePreviews }) => {
           layerImagesSourceKey: null,
         }),
   });
+});
+
+registerPrinterBedLabelSynchronizer((printerId) => {
+  const { bedSizes, setBedLabel } = useConverterStore.getState();
+  const printerBed = bedSizes.find((bed) => bed.printer_id === printerId);
+  if (printerBed) {
+    setBedLabel(printerBed.label);
+  }
 });
 
 registerPreviewArtifactInvalidator(() => {

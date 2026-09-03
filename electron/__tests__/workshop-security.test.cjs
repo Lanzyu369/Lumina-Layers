@@ -244,6 +244,37 @@ describe("Workshop desktop runtime security", () => {
       }),
       false,
     );
+    assert.equal(
+      isAllowedWorkshopRequest({
+        initiator: null,
+        frameUrl: null,
+        method: "GET",
+        resourceType: "other",
+        trustedInternal: true,
+        url:
+          "http://127.0.0.1:8000/api/system/machine-registry/bed-model" +
+          "?device_profile_id=OrcaSlicer%3Abbl%3Abambu-lab-h2d%3A0.4",
+      }),
+      true,
+    );
+    for (const url of [
+      "http://127.0.0.1:8000/api/system/machine-registry/bed-model",
+      "http://127.0.0.1:8000/api/system/machine-registry/bed-model?device_profile_id=../bed.stl",
+      "http://127.0.0.1:8000/api/system/machine-registry/bed-model?device_profile_id=valid&other=1",
+      "http://127.0.0.1:8001/api/system/machine-registry/bed-model?device_profile_id=valid",
+    ]) {
+      assert.equal(
+        isAllowedWorkshopRequest({
+          initiator: null,
+          frameUrl: null,
+          method: "GET",
+          resourceType: "other",
+          trustedInternal: true,
+          url,
+        }),
+        false,
+      );
+    }
   });
 
   it("blocks module navigation and redirect escape paths", () => {

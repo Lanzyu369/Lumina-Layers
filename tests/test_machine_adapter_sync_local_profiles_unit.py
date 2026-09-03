@@ -7,6 +7,7 @@ from tools.machine_adapter.sync_local_profiles import (
     discover_local_asset_roots,
     discover_local_import_sources,
 )
+import tools.machine_adapter.sync_local_profiles as sync_local_profiles_module
 
 
 def test_discover_local_asset_roots_includes_image_only_vendor_dirs(tmp_path):
@@ -21,6 +22,61 @@ def test_discover_local_asset_roots_includes_image_only_vendor_dirs(tmp_path):
     )
 
     assert roots == ((appdata_root / "BambuStudio" / "system", "Elegoo"),)
+
+
+def test_default_profile_root_uses_macos_application_support(monkeypatch):
+    monkeypatch.delenv("APPDATA", raising=False)
+    monkeypatch.setattr(sync_local_profiles_module.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(sync_local_profiles_module.Path, "home", lambda: Path("/Users/tester"))
+
+    assert sync_local_profiles_module._default_appdata_root() == (
+        Path("/Users/tester") / "Library" / "Application Support"
+    )
+
+
+def test_discover_local_asset_roots_includes_bed_model_only_vendor_dirs(tmp_path):
+    appdata_root = tmp_path / "AppData" / "Roaming"
+    anycubic = appdata_root / "AnycubicSlicerNext" / "system" / "Anycubic"
+    anycubic.mkdir(parents=True)
+    (anycubic / "Anycubic Kobra 3_buildplate_model.stl").write_bytes(b"stl")
+
+    roots = discover_local_asset_roots(
+        appdata_root=appdata_root,
+        slicer_ids=("AnycubicSlicerNext",),
+    )
+
+    assert roots == (
+        (appdata_root / "AnycubicSlicerNext" / "system", "Anycubic"),
+    )
+
+
+def test_discovers_bed_models_inside_installed_macos_slicer_bundles(tmp_path):
+    discover_installed_slicer_asset_roots = getattr(
+        sync_local_profiles_module,
+        "discover_installed_slicer_asset_roots",
+        None,
+    )
+    assert callable(discover_installed_slicer_asset_roots)
+    if discover_installed_slicer_asset_roots is None:
+        return
+
+    profiles_root = (
+        tmp_path
+        / "Applications"
+        / "BambuStudio.app"
+        / "Contents"
+        / "Resources"
+        / "profiles"
+    )
+    vendor_root = profiles_root / "BBL"
+    vendor_root.mkdir(parents=True)
+    (vendor_root / "bbl-3dp-A1M.stl").write_bytes(b"stl")
+
+    roots = discover_installed_slicer_asset_roots(
+        applications_root=tmp_path / "Applications",
+    )
+
+    assert roots == ((profiles_root, "BBL"),)
 
 
 def test_discover_local_import_sources_keeps_anycubic_client_version_overrides(tmp_path):
