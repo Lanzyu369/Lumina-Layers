@@ -60,6 +60,7 @@ import {
   resolveSectionCardClass,
   workstationInputClass,
 } from "./ui/panelPrimitives";
+import { WIKI_DOCS } from "../utils/wikiDocs";
 
 const SETTINGS_OPTIONS_RETRY_ATTEMPTS = 6;
 const SETTINGS_OPTIONS_RETRY_DELAY_MS = 1000;
@@ -623,8 +624,13 @@ export default function SettingsPanel() {
               className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-5`}
             >
               <div>
-                <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-50">
-                  {t("settings.current_device_heading")}
+                <h3 className="flex items-center gap-1.5 text-lg font-semibold text-slate-900 dark:text-slate-50">
+                  <span>{t("settings.current_device_heading")}</span>
+                  <HelpDot
+                    title={t("settings.current_device_heading")}
+                    description={t("settings.current_device_description")}
+                    wikiPath={WIKI_DOCS.deviceAndSlicer}
+                  />
                 </h3>
                 <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
                   {t("settings.current_device_description")}
@@ -791,6 +797,7 @@ export default function SettingsPanel() {
                   <WikiTooltip
                     title={t("settings.base_layer_height_modifier")}
                     description={t("settings.base_layer_height_modifier_desc")}
+                    wikiPath={WIKI_DOCS.baseLayerModifier}
                     placement="left"
                   >
                     <Switch
@@ -949,8 +956,13 @@ export default function SettingsPanel() {
 
               <div className="flex items-start justify-between gap-4 border-t border-slate-200/60 pt-5 dark:border-slate-700/60">
                 <div className="min-w-0">
-                  <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
-                    {t("settings.witty_loading")}
+                  <h3 className="flex items-center gap-1.5 text-base font-semibold text-slate-900 dark:text-slate-50">
+                    <span>{t("settings.witty_loading")}</span>
+                    <HelpDot
+                      title={t("settings.witty_loading")}
+                      description={t("settings.witty_loading_desc")}
+                      wikiPath={WIKI_DOCS.wittyLoading}
+                    />
                   </h3>
                   <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
                     {t("settings.witty_loading_desc")}
@@ -986,6 +998,7 @@ export default function SettingsPanel() {
                   <WikiTooltip
                     title={t("settings.solver_cache_density_heading")}
                     description={t("settings.solver_cache_density_tip")}
+                    wikiPath={WIKI_DOCS.solverCacheDensity}
                     placement="left"
                   >
                     <Switch
@@ -1002,6 +1015,8 @@ export default function SettingsPanel() {
                   >
                     <Dropdown
                       label={t("settings.solver_cache_density_select_label")}
+                      tooltip={t("settings.solver_cache_density_tip")}
+                      wikiPath={WIKI_DOCS.solverCacheDensity}
                       value={String(solverCacheGridResolution)}
                       onChange={(value) =>
                         setSolverCacheGridResolution(
@@ -1065,6 +1080,7 @@ export default function SettingsPanel() {
                   <Slider
                     label={t("settings.svg_pixels_per_mm_label")}
                     tooltip={t("settings.svg_pixels_per_mm_tip")}
+                    wikiPath={WIKI_DOCS.svgRasterDensity}
                     value={svgPixelsPerMm}
                     min={SVG_PIXELS_PER_MM_MIN}
                     max={SVG_PIXELS_PER_MM_MAX}
@@ -1103,6 +1119,7 @@ export default function SettingsPanel() {
                   <WikiTooltip
                     title={t("settings.auto_replace_gradient_heading")}
                     description={t("settings.auto_replace_gradient_tip")}
+                    wikiPath={WIKI_DOCS.autoGradientReplacement}
                     placement="left"
                   >
                     <Switch
@@ -1148,8 +1165,13 @@ export default function SettingsPanel() {
             >
               <div className="flex flex-col gap-4">
                 <div>
-                  <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
-                    {t("settings.cache")}
+                  <h3 className="flex items-center gap-1.5 text-base font-semibold text-slate-900 dark:text-slate-50">
+                    <span>{t("settings.cache")}</span>
+                    <HelpDot
+                      title={t("settings.cache")}
+                      description={t("settings.cache_summary")}
+                      wikiPath={WIKI_DOCS.cacheMaintenance}
+                    />
                   </h3>
                   <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
                     {t("settings.cache_summary")}
