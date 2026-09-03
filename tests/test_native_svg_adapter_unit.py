@@ -280,6 +280,7 @@ def _native_result(
         composite_seconds=0.005,
         normalization_visible_seconds=0.006,
         export_seconds=0.007,
+        replay_worker_count=4,
         result_conversion_seconds=0.003,
         raw=collection,
         visible=collection,
@@ -536,6 +537,7 @@ def test_adapter_preserves_unprintable_fragment_identity_and_counts(
     assert outcome.stage_timings["native_output_paint_count"] == 1
     assert outcome.stage_timings["native_hole_count"] == 0
     assert outcome.stage_timings["native_unprintable_fragment_count"] == 1
+    assert outcome.stage_timings["native_replay_worker_count"] == 4
     assert outcome.stage_timings["native_unprintable_reasons"] == {
         "line_only": 1
     }

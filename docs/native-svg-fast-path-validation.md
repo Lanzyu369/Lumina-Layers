@@ -29,6 +29,10 @@ not record source paths, hashes, or file sizes.
   a fabricated single paint identity;
 - immutable, owner-backed NumPy views with fixed dtypes and monotonic offsets.
 
+The result also reports `replay_worker_count` as execution telemetry. It does
+not change the result schema or geometry contract; Lumina accepts older schema
+4 wheels that do not expose the additive field.
+
 The parser never sends LineString, Point, empty geometry, or an area-collapsed
 ring through the polygon collections. Those cases are reported separately as
 `empty_path`, `point_only`, `line_only`, `area_collapse`,
@@ -84,6 +88,16 @@ and are consolidated before export; they are not print-grid snapping and do
 not flatten component/hole hierarchy. Opaque documents continue through the
 original reverse-occlusion fast path.
 
+Independent fill, stroke, and clip-path normalization is scheduled across
+native workers when the recorded path workload is large enough to repay thread
+startup and result staging. Each worker owns its Clipper state, resource
+accounting, and topology trace. Geometry, failures, counters, and topology are
+then committed in original command order before clipping and compositing, so
+serial and parallel execution have the same byte-level output contract. Small
+or simple documents stay on the original serial path and do not allocate the
+parallel staging buffer. `LUMINA_SVG_REPLAY_THREADS` can force a positive
+worker count for deterministic differential testing and host-level scheduling.
+
 Clipper input and geometric point estimates are checked per operation. The
 fixed Clipper patch checks actual output-point allocations, output-record
 allocations, intersection-node allocations, and every processed intersection
@@ -107,13 +121,14 @@ whole-document fallback reason without first amplifying their clone trees.
 ## Local verification
 
 Reference host: Apple M5, arm64, 16 GiB RAM, macOS 26.5.2, CPython
-3.12.13, Release build, one caller thread.
+3.12.13, Release build, one caller thread with automatic native replay
+workers.
 
 | Gate | Result |
 |---|---:|
 | Fresh fixed-patch native build | PASS |
 | macOS 12.0 arm64 wheel build/install/runtime verification | PASS |
-| Standalone native suite from clean installed wheel | 586 passed |
+| Standalone native suite from current Release extension | 587 passed; also 587 with 4 forced replay workers |
 | Former-alpha corpus through the Lumina adapter | 31 / 31 native supported |
 | Native differential/adapter/VectorAnalysis/packaging suite | 180 passed |
 | Lumina workflow integration | 10 passed |
@@ -134,26 +149,27 @@ alpha-heavy public benchmark corrections; it reported no remaining finding.
 ## Anonymous 508-document corpus
 
 The checked-in report is `progress/native-svg-508-corpus-audit.json`. Every
-document is identified only as `svg-NNNNNN`. The run uses a 100 mm target width,
-a 0.02 mm physical tolerance, and includes stroke paint.
+document is identified only as `svg-NNNNNN`. The run uses a 220 mm target width
+to represent the common user-selected output size, a 0.02 mm physical
+tolerance, and includes stroke paint.
 
 | Metric | Result |
 |---|---:|
 | Documents | 508 |
 | Supported / unsupported / invalid | 508 / 0 / 0 |
 | Input paints | 1,804,382 |
-| Raw / visible output paints | 1,799,360 / 1,219,564 |
-| Raw / visible components | 1,987,676 / 1,361,878 |
-| Raw / visible holes | 1,582,397 / 297,143 |
-| Partial-alpha raw / visible paints | 65,589 / 233,687 |
-| Composite visible paints / contributors | 254,688 / 1,788,795 |
-| Unprintable fragments | 15,364 |
-| Unprintable reasons | line-only 3,873; area-collapse 10,342; fill-rule-cancelled 1,149 |
+| Raw / visible output paints | 1,799,360 / 1,225,406 |
+| Raw / visible components | 1,990,826 / 1,385,149 |
+| Raw / visible holes | 1,584,383 / 298,899 |
+| Partial-alpha raw / visible paints | 65,589 / 238,138 |
+| Composite visible paints / contributors | 259,604 / 1,800,972 |
+| Unprintable fragments | 16,966 |
+| Unprintable reasons | line-only 3,873; area-collapse 11,944; fill-rule-cancelled 1,149 |
 | Unsupported reasons | none |
 | Supported documents with unexplained raw-paint loss | 0 |
-| Maximum visible-partition area delta | 49.053788 source-unit²; 7.8470124e-6 relative |
-| Median / p95 / maximum document time | 1.0652 s / 9.8202 s / 179.2774 s |
-| Total time / peak process RSS | 1,625.1477 s / 1,051,590,656 bytes (1,002.88 MiB) |
+| Maximum visible-partition area delta | 22.174935 source-unit²; 1.1116364e-5 relative |
+| Median / p95 / maximum document time | 2.3918 s / 17.6307 s / 209.1675 s |
+| Total time / peak process RSS | 2,838.1458 s / 2,057,388,032 bytes (1,962.08 MiB) |
 
 `raw_to_visible_area_delta` is expected to be non-zero where later paints
 occlude earlier paints. `visible_partition_area_delta` compares the sum of all
@@ -170,10 +186,18 @@ geometry and a non-empty silhouette. Composite area-collapse diagnostics use
 `source_kind="composite"` with no fabricated paint ID, so a diagnostic-only
 cell cannot make an otherwise printable SVG fail at the adapter boundary.
 
-The longest corpus case contains 69,692 paint operations and took 179.28
-seconds. This is an explicitly recorded large-document Boolean-union tail, not
-a fallback or timeout. Median and p95 show the ordinary corpus distribution;
-the public-entry benchmark below is the release latency gate.
+The longest corpus case contains 69,692 paint operations and took 209.17
+seconds at 220 mm. This is an explicitly recorded large-document Boolean-union
+tail, not a fallback or timeout. Median and p95 show the ordinary corpus
+distribution; the public-entry benchmark below is the release latency gate.
+
+On a separate normalization-heavy fixture with 96 disjoint paints and 720
+points per paint, seven warm runs reduced median replay time from 0.016551 s
+with one worker to 0.003416 s with automatic 10-worker selection (4.85x). The
+complete native call fell from 0.077197 s to 0.057979 s (24.9%). One, two,
+four, and automatic-worker runs retained the same 96 paints/components and
+byte-identical geometry/color snapshots. Documents dominated by ordered
+visibility compositing are not represented as gaining this full speedup.
 
 ### Transparent raster differential
 
@@ -206,7 +230,7 @@ PYTHONPATH=/path/to/installed/package:. python \
   native/lumina-svg-core/tools/corpus_audit.py \
   --corpus /path/to/anonymous-corpus \
   --output progress/native-svg-508-corpus-audit.json \
-  --target-width-mm 100 \
+  --target-width-mm 220 \
   --tolerance-mm 0.02
 ```
 

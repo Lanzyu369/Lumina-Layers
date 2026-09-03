@@ -1011,6 +1011,9 @@ def analyze_native_svg(
             "native_replay_s": float(
                 getattr(result, "replay_seconds", 0.0)
             ),
+            "native_replay_worker_count": int(
+                getattr(result, "replay_worker_count", 1)
+            ),
             "native_topology_s": float(
                 getattr(result, "topology_seconds", 0.0)
             ),

@@ -232,6 +232,71 @@ public:
             "stroke_simplification_comparisons");
     }
 
+    void mergeFrom(const ComplexityBudget& other)
+    {
+        mergeCounter(
+            m_generatedPoints, other.m_generatedPoints,
+            MAX_GENERATED_POINTS, "generated_points");
+        mergeCounter(
+            m_generatedRings, other.m_generatedRings,
+            MAX_GENERATED_RINGS, "generated_rings");
+        mergeCounter(
+            m_booleanInputPoints, other.m_booleanInputPoints,
+            MAX_BOOLEAN_INPUT_POINTS_PER_DOCUMENT,
+            "boolean_input_points_document");
+        mergeCounter(
+            m_resultPoints, other.m_resultPoints,
+            MAX_RESULT_POINTS, "result_points");
+        mergeCounter(
+            m_clipperIntersectionCandidates,
+            other.m_clipperIntersectionCandidates,
+            MAX_CLIPPER_INTERSECTION_CANDIDATES_PER_DOCUMENT,
+            "clipper_intersection_candidates_document");
+        mergeCounter(
+            m_clipperIntersectionComparisons,
+            other.m_clipperIntersectionComparisons,
+            MAX_CLIPPER_INTERSECTION_COMPARISONS_PER_DOCUMENT,
+            "clipper_intersection_comparisons_document");
+        mergeCounter(
+            m_clipperEnginePointAllocations,
+            other.m_clipperEnginePointAllocations,
+            MAX_CLIPPER_ENGINE_POINT_ALLOCATIONS_PER_DOCUMENT,
+            "clipper_engine_point_allocations_document");
+        mergeCounter(
+            m_clipperEngineRecordAllocations,
+            other.m_clipperEngineRecordAllocations,
+            MAX_CLIPPER_ENGINE_RECORD_ALLOCATIONS_PER_DOCUMENT,
+            "clipper_engine_record_allocations_document");
+        mergeCounter(
+            m_clipperEngineIntersectionNodeAllocations,
+            other.m_clipperEngineIntersectionNodeAllocations,
+            MAX_CLIPPER_ENGINE_INTERSECTION_NODE_ALLOCATIONS_PER_DOCUMENT,
+            "clipper_engine_intersection_nodes_document");
+        mergeCounter(
+            m_clipperEngineProcessedIntersectionEvents,
+            other.m_clipperEngineProcessedIntersectionEvents,
+            MAX_CLIPPER_ENGINE_PROCESSED_INTERSECTION_EVENTS_PER_DOCUMENT,
+            "clipper_engine_processed_intersections_document");
+        mergeCounter(
+            m_clipperOutputPoints, other.m_clipperOutputPoints,
+            MAX_CLIPPER_OUTPUT_POINTS_PER_DOCUMENT,
+            "clipper_output_points_document");
+        mergeCounter(
+            m_clipperOutputRings, other.m_clipperOutputRings,
+            MAX_CLIPPER_OUTPUT_RINGS_PER_DOCUMENT,
+            "clipper_output_rings_document");
+        mergeCounter(
+            m_compositorBoundsCandidates,
+            other.m_compositorBoundsCandidates,
+            MAX_COMPOSITOR_BOUNDS_CANDIDATES,
+            "compositor_bounds_candidates");
+        mergeCounter(
+            m_strokeSimplificationComparisons,
+            other.m_strokeSimplificationComparisons,
+            MAX_STROKE_SIMPLIFICATION_COMPARISONS,
+            "stroke_simplification_comparisons");
+    }
+
 private:
     static void ensure(size_t current, size_t count, size_t limit,
                        const char* budget)
@@ -245,6 +310,13 @@ private:
     {
         ensure(current, count, limit, budget);
         current += count;
+    }
+
+    static void mergeCounter(size_t& current, size_t additional,
+                             size_t limit, const char* budget)
+    {
+        ensure(current, additional, limit, budget);
+        current += additional;
     }
 
     size_t m_generatedPoints{0};

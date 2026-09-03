@@ -56,6 +56,16 @@ color interpolation, return a stable
 wrapper around the owned C++ result; NumPy view creation and Lumina's one
 bulk int64-to-float64/Shapely conversion are measured by the Lumina adapter.
 
+Independent fill, stroke, and clip normalization runs concurrently for
+documents whose path workload is large enough to benefit. Results, topology
+metadata, resource accounting, and failures are committed in original paint
+order, so parallel and serial output is byte-for-byte identical. Set
+`LUMINA_SVG_REPLAY_THREADS` to a positive integer to force a worker count for
+benchmarking or host-level scheduling; otherwise the core selects between one
+worker and the available hardware threads from the recorded path workload.
+`NativeResult.replay_worker_count` reports the worker count used by the final
+geometry replay.
+
 ## Fail-closed resource and precision policy
 
 Version 0.3 keeps only hard resource boundaries needed to avoid unbounded

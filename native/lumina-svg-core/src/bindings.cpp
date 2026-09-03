@@ -457,6 +457,7 @@ PYBIND11_MODULE(_lumina_svg_core, module)
         .def_readonly("composite_seconds", &lumina_svg_core::NativeResult::composite_seconds)
         .def_readonly("normalization_visible_seconds", &lumina_svg_core::NativeResult::normalization_visible_seconds)
         .def_readonly("export_seconds", &lumina_svg_core::NativeResult::export_seconds)
+        .def_readonly("replay_worker_count", &lumina_svg_core::NativeResult::replay_worker_count)
         .def_readonly("result_conversion_seconds", &lumina_svg_core::NativeResult::result_conversion_seconds)
         .def_readonly("input_paint_count", &lumina_svg_core::NativeResult::input_paint_count)
         .def_property_readonly("raw", [](lumina_svg_core::NativeResult& value) {

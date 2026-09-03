@@ -88,6 +88,7 @@ struct NativeResult : public std::enable_shared_from_this<NativeResult> {
     double composite_seconds{0};
     double normalization_visible_seconds{0};
     double export_seconds{0};
+    uint32_t replay_worker_count{0};
     // Time to wrap this owned C++ result as a Python object. NumPy views and
     // downstream float/Shapely materialization are measured by their callers.
     double result_conversion_seconds{0};

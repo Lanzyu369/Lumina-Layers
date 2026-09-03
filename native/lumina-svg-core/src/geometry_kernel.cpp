@@ -9,10 +9,13 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <limits>
 #include <memory>
@@ -20,6 +23,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -2753,6 +2757,7 @@ struct PaintReplay {
     std::vector<ProgramNode> program_nodes{{}};
     UnprintableFragmentCollection unprintable_fragments;
     std::string reason_code;
+    uint32_t worker_count{0};
 };
 
 uint8_t compatibilityColorByte(double value)
@@ -2827,6 +2832,141 @@ void appendUnprintableFragment(
         paint.source_index, paint.source_kind, -1);
 }
 
+bool commandNeedsNormalization(const lunasvg::PaintCommand& command)
+{
+    return command.kind == lunasvg::PaintCommandKind::ClipBegin
+        || command.kind == lunasvg::PaintCommandKind::Fill
+        || command.kind == lunasvg::PaintCommandKind::Stroke;
+}
+
+size_t configuredReplayWorkerCount(size_t taskCount, size_t inputPointCount)
+{
+    if(taskCount == 0)
+        return 0;
+
+    if(const char* value = std::getenv("LUMINA_SVG_REPLAY_THREADS")) {
+        size_t requested = 0;
+        const char* end = value + std::char_traits<char>::length(value);
+        const auto parsed = std::from_chars(value, end, requested);
+        if(parsed.ec == std::errc{} && parsed.ptr == end && requested > 0)
+            return std::min(taskCount, requested);
+    }
+
+    constexpr size_t MIN_PARALLEL_TASKS = 8;
+    constexpr size_t MIN_PARALLEL_INPUT_POINTS = 1024;
+    constexpr size_t MIN_AVERAGE_INPUT_POINTS = 128;
+    if(taskCount < MIN_PARALLEL_TASKS
+            || inputPointCount < MIN_PARALLEL_INPUT_POINTS
+            || inputPointCount / taskCount < MIN_AVERAGE_INPUT_POINTS)
+        return 1;
+    const size_t hardwareThreads = std::max(
+        size_t{1}, static_cast<size_t>(std::thread::hardware_concurrency()));
+    return std::min(taskCount, hardwareThreads);
+}
+
+struct PreparedCommandNormalization {
+    PrecisionPaths geometry;
+    TopologyTrace topology_trace;
+    ComplexityBudget complexity_budget;
+    std::exception_ptr failure;
+    bool ready{false};
+};
+
+struct PreparedNormalizationBatch {
+    std::vector<PreparedCommandNormalization> commands;
+    size_t worker_count{0};
+};
+
+PreparedNormalizationBatch prepareCommandNormalizations(
+    const std::vector<lunasvg::PaintCommand>& commands,
+    const PhysicalDomain& domain)
+{
+    PreparedNormalizationBatch batch;
+    std::vector<size_t> taskIndices;
+    taskIndices.reserve(commands.size());
+    size_t inputPointCount = 0;
+    for(size_t index = 0; index < commands.size(); ++index) {
+        if(!commandNeedsNormalization(commands[index]))
+            continue;
+        taskIndices.push_back(index);
+        inputPointCount = checkedSizeSum(
+            inputPointCount, commands[index].path_points.size());
+    }
+    batch.worker_count = configuredReplayWorkerCount(
+        taskIndices.size(), inputPointCount);
+    if(batch.worker_count < 2)
+        return batch;
+
+    batch.commands.resize(commands.size());
+    std::atomic<size_t> nextTask{0};
+    const auto runTasks = [&]() {
+        while(true) {
+            const size_t taskOffset = nextTask.fetch_add(
+                1, std::memory_order_relaxed);
+            if(taskOffset >= taskIndices.size())
+                return;
+            const size_t commandIndex = taskIndices[taskOffset];
+            const auto& command = commands[commandIndex];
+            auto& prepared = batch.commands[commandIndex];
+            try {
+                PhysicalDomain taskDomain = domain;
+                taskDomain.complexity_budget = &prepared.complexity_budget;
+                taskDomain.topology_trace = domain.topology_trace == nullptr
+                    ? nullptr : &prepared.topology_trace;
+                prepared.geometry = command.kind
+                        == lunasvg::PaintCommandKind::Stroke
+                    ? normalizeStroke(command, taskDomain)
+                    : normalizeFill(command, taskDomain);
+            } catch(...) {
+                prepared.failure = std::current_exception();
+            }
+            prepared.ready = true;
+        }
+    };
+
+    std::vector<std::thread> workers;
+    workers.reserve(batch.worker_count > 0 ? batch.worker_count - 1 : 0);
+    try {
+        for(size_t index = 1; index < batch.worker_count; ++index)
+            workers.emplace_back(runTasks);
+    } catch(...) {
+        runTasks();
+        for(auto& worker : workers)
+            worker.join();
+        throw;
+    }
+    runTasks();
+    for(auto& worker : workers)
+        worker.join();
+    return batch;
+}
+
+PrecisionPaths consumePreparedNormalization(
+    PreparedCommandNormalization* prepared,
+    const lunasvg::PaintCommand& command,
+    const PhysicalDomain& domain)
+{
+    if(prepared == nullptr) {
+        return command.kind == lunasvg::PaintCommandKind::Stroke
+            ? normalizeStroke(command, domain)
+            : normalizeFill(command, domain);
+    }
+    if(!prepared->ready)
+        throw std::logic_error("missing_prepared_normalization");
+    if(prepared->failure != nullptr)
+        std::rethrow_exception(prepared->failure);
+    domain.complexity_budget->mergeFrom(prepared->complexity_budget);
+    if(domain.topology_trace != nullptr) {
+        auto& destination = domain.topology_trace->boundaries;
+        for(auto& boundary : prepared->topology_trace.boundaries)
+            destination.emplace_back(std::move(boundary));
+        std::vector<TopologyTrace::BoundaryError>().swap(
+            prepared->topology_trace.boundaries);
+    }
+    prepared->ready = false;
+    return std::move(prepared->geometry);
+}
+
 PaintReplay replayPaintCommands(
     const std::vector<lunasvg::PaintCommand>& commands,
     const PhysicalDomain& domain)
@@ -2838,8 +2978,12 @@ PaintReplay replayPaintCommands(
     std::vector<size_t> groupStack{0};
     replay.paints.reserve(commands.size());
     replay.program_nodes.reserve(commands.size() + 1);
+    auto prepared = prepareCommandNormalizations(commands, domain);
+    replay.worker_count = static_cast<uint32_t>(prepared.worker_count);
     int32_t drawIndex = 0;
-    for(const auto& command : commands) {
+    for(size_t commandIndex = 0;
+            commandIndex < commands.size(); ++commandIndex) {
+        const auto& command = commands[commandIndex];
         if(command.kind == lunasvg::PaintCommandKind::GroupBegin) {
             if(groupStack.empty()) {
                 replay.reason_code = "invalid_group_stack";
@@ -2865,7 +3009,10 @@ PaintReplay replayPaintCommands(
             continue;
         }
         if(command.kind == lunasvg::PaintCommandKind::ClipBegin) {
-            activeClips.push_back(normalizeFill(command, domain));
+            activeClips.push_back(consumePreparedNormalization(
+                prepared.commands.empty()
+                    ? nullptr : &prepared.commands[commandIndex],
+                command, domain));
             continue;
         }
         if(command.kind == lunasvg::PaintCommandKind::ClipEnd) {
@@ -2882,9 +3029,10 @@ PaintReplay replayPaintCommands(
 
         const int32_t paintDrawIndex = drawIndex++;
         PaintGeometry paint;
-        auto geometry = command.kind == lunasvg::PaintCommandKind::Stroke
-            ? normalizeStroke(command, domain)
-            : normalizeFill(command, domain);
+        auto geometry = consumePreparedNormalization(
+            prepared.commands.empty()
+                ? nullptr : &prepared.commands[commandIndex],
+            command, domain);
         geometry = applyActiveClips(
             std::move(geometry), activeClips, domain);
         for(const auto& issue : geometry.fragment_issues) {
@@ -4480,6 +4628,8 @@ std::shared_ptr<NativeResult> buildResult(RecorderResult recording,
     result->bounds_seconds = std::chrono::duration<double>(
         replayStarted - buildStarted).count();
     auto replay = replayPaintCommands(recording.commands, domain);
+    result->replay_worker_count = static_cast<uint32_t>(
+        replay.worker_count);
     const auto topologyStarted = std::chrono::steady_clock::now();
     result->replay_seconds = std::chrono::duration<double>(
         topologyStarted - replayStarted).count();
