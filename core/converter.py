@@ -350,6 +350,7 @@ def convert_image_to_3d(
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
     *,
     backing_infill_density_percent: int = 100,
+    enable_wipe_tower_auto_placement: bool = True,
     height_identity_rgb_path: Optional[str] = None,
     original_matched_rgb_path: Optional[str] = None,
     original_material_matrix_path: Optional[str] = None,
@@ -392,6 +393,9 @@ def convert_image_to_3d(
         backing_infill_density_percent: Deep-backing sparse-infill percentage;
             viewing-surface protection is added by the 3MF writer.
             (深层底板稀疏填充百分比；观赏面保护由 3MF 写入器添加)
+        enable_wipe_tower_auto_placement: Whether 3MF export may adapt the
+            model and wipe-tower layout for the selected build area.
+            (3MF 导出时是否允许按所选打印区域自动调整模型与擦料塔布局。)
         material_dynamic_layer_count_enabled: Enable exact dynamic effective
             layers for material archives. (为耗材档案启用精确动态有效层数)
         material_min_layer_count: Minimum dynamic effective layers. (动态最小
@@ -634,6 +638,7 @@ def generate_final_model(
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
     *,
     backing_infill_density_percent: int = 100,
+    enable_wipe_tower_auto_placement: bool = True,
     height_identity_rgb_path: Optional[str] = None,
     original_matched_rgb_path: Optional[str] = None,
     original_material_matrix_path: Optional[str] = None,
@@ -674,6 +679,9 @@ def generate_final_model(
         backing_infill_density_percent: Deep-backing sparse-infill percentage
             forwarded to the 3MF writer.（透传到 3MF 写入器的深层底板稀疏填充
             百分比）
+        enable_wipe_tower_auto_placement: Whether 3MF export may adapt the
+            model and wipe-tower layout for the selected build area.
+            (3MF 导出时是否允许按所选打印区域自动调整模型与擦料塔布局。)
         material_dynamic_layer_count_enabled: Enable exact dynamic effective
             layers. (启用精确动态有效层数)
         material_min_layer_count: Minimum dynamic effective layers. (动态最小
@@ -822,6 +830,7 @@ def generate_final_model(
         device_profile_id=device_profile_id,
         build_plate_id=build_plate_id,
         enable_base_layer_height_modifier=enable_base_layer_height_modifier,
+        enable_wipe_tower_auto_placement=enable_wipe_tower_auto_placement,
         center_on_bed=center_on_bed,
         relief_global_max_height=relief_global_max_height,
         progress=progress,

@@ -201,9 +201,10 @@ describe("buildAdvancedParams — groups populated when toggles enabled", () => 
         ],
       }),
       "converter",
-      { maxBytes: 8192 },
+      { maxBytes: 8192, enableWipeTowerAutoPlacement: false },
     ) as AdvancedParamsFull;
 
+    expect(result.generation.enable_wipe_tower_auto_placement).toBe(false);
     expect(result.generation.wipe_tower_warning_codes).toEqual([
       "wipe_tower_manual_adjustment_required",
     ]);

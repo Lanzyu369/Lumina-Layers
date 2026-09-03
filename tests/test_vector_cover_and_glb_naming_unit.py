@@ -283,6 +283,7 @@ class TestVectorCoverThumbnailFromGeometry:
                     "printer_id": "bambu-h2d",
                     "slicer": "BambuStudio",
                     "nozzle_size": "0.4",
+                    "enable_wipe_tower_auto_placement": False,
                 }
             )
 
@@ -298,6 +299,7 @@ class TestVectorCoverThumbnailFromGeometry:
         )
         cover_source = captured["cover_source"]
         assert isinstance(cover_source, bytes)
+        assert captured["enable_wipe_tower_auto_placement"] is False
         decoded = Image.open(BytesIO(cover_source)).convert("RGB")
         assert decoded.getpixel((0, 0)) == (240, 30, 50)
 

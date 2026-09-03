@@ -2648,7 +2648,7 @@ describe("native bundle converter flow", () => {
       piece_count: 6,
       grid_cols: 3,
       grid_rows: 2,
-      warnings: [],
+      warnings: ["wipe_tower_manual_adjustment_required"],
     });
 
     useConverterStore.setState({
@@ -2718,6 +2718,12 @@ describe("native bundle converter flow", () => {
     });
     expect(result).toBeNull();
     expect(useConverterStore.getState().downloadUrl).toBe("/api/files/puzzle-model");
+    expect(useConverterStore.getState().puzzleWarnings).toEqual([
+      "wipe_tower_manual_adjustment_required",
+    ]);
+    expect(useConverterStore.getState().generateWarnings).toEqual([
+      "wipe_tower_manual_adjustment_required",
+    ]);
     expect(mocks.showBrowserCompletionNotification).toHaveBeenCalledWith(
       "generation",
       "zh",

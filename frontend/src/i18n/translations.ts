@@ -3063,6 +3063,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "生成 3MF 时会计入固定首层，并选择能准确落在底板边界、且符合当前机型限制的较粗层高，缩短底板耗时并避免余数导致少层。仅对当前设置中选择的兼容切片软件生效，并使用各自的机器配置；浮雕、双面模型或没有安全可选值时会自动跳过。",
     en: "When generating a 3MF, this accounts for the fixed first layer and selects a compatible coarser height that lands exactly on the backing boundary and fits the selected printer. It applies only to the compatible slicer selected in Settings and uses that slicer's own machine profile; reliefs, double-sided prints, and cases where no safe value exists are skipped.",
   },
+  "settings.wipe_tower_auto_placement": {
+    zh: "擦料塔自动摆放",
+    en: "Automatic wipe-tower placement",
+  },
+  "settings.wipe_tower_auto_placement_desc": {
+    zh: "生成 3MF 时，Lumina 会根据所选打印机的可打印区域自动移动模型，并调整擦料塔的位置和尺寸来避免碰撞。关闭后会保留切片软件模板里的擦料塔参数，需要你在切片软件中自行检查和调整。",
+    en: "When generating a 3MF, Lumina uses the selected printer's build area to move the model and adjust the wipe tower's position and size to avoid collisions. Turn this off to keep the slicer template's tower settings and check the layout manually in your slicer.",
+  },
   "settings.custom_slicer_path": {
     zh: "手动切片软件路径",
     en: "Manual slicer app path",

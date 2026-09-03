@@ -52,6 +52,7 @@ export interface BuildAdvancedParamsOptions {
   maxBytes: number;
   svgPixelsPerMm?: number;
   materialDeltaE00Tolerance?: number;
+  enableWipeTowerAutoPlacement?: boolean;
 }
 
 /**
@@ -179,6 +180,8 @@ function buildGeneration(
         ? options.materialDeltaE00Tolerance
         : MATERIAL_DELTA_E00_TOLERANCE_DEFAULT
       : null,
+    enable_wipe_tower_auto_placement:
+      options.enableWipeTowerAutoPlacement !== false,
     ...(wipeTowerWarningCodes.length > 0
       ? { wipe_tower_warning_codes: wipeTowerWarningCodes }
       : {}),

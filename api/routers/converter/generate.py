@@ -2797,6 +2797,7 @@ async def convert_generate(
         "device_profile_id": request.device_profile_id,
         "build_plate_id": request.build_plate_id,
         "enable_base_layer_height_modifier": request.enable_base_layer_height_modifier,
+        "enable_wipe_tower_auto_placement": request.enable_wipe_tower_auto_placement,
         "material_source": session_material_source,
         "material_dynamic_layer_count_enabled": dynamic_material_settings[0],
         "material_min_layer_count": dynamic_material_settings[1],
@@ -3268,6 +3269,7 @@ def _resolve_large_format_shared_params(
         "device_profile_id": request.device_profile_id,
         "build_plate_id": request.build_plate_id,
         "enable_base_layer_height_modifier": request.enable_base_layer_height_modifier,
+        "enable_wipe_tower_auto_placement": request.enable_wipe_tower_auto_placement,
         "relief_global_max_height": relief_global_max_height,
         "material_dynamic_layer_count_enabled": dynamic_material_settings[0],
         "material_min_layer_count": dynamic_material_settings[1],
@@ -4722,6 +4724,10 @@ async def convert_batch(
         True,
         description="启用底板粗层高优化",
     ),
+    enable_wipe_tower_auto_placement: bool = Form(
+        True,
+        description="自动调整擦料塔位置和尺寸",
+    ),
     registry: FileRegistry = Depends(get_file_registry),
     pool: WorkerPoolManager = Depends(get_worker_pool),
 ) -> BatchResponse:
@@ -4985,6 +4991,7 @@ async def convert_batch(
                 material_max_layer_count,
                 material_delta_e00_tolerance,
                 separate_backing,
+                enable_wipe_tower_auto_placement,
                 **(
                     {
                         "host_memory_reservation_bytes": (
@@ -5220,6 +5227,9 @@ async def convert_batch(
             merged_3mf_path,
             plate_width_mm=plate_width_mm,
             plate_depth_mm=plate_depth_mm,
+            enable_wipe_tower_auto_placement=(
+                enable_wipe_tower_auto_placement
+            ),
         )
 
         for warning_code in read_wipe_tower_placement_warnings(merged_3mf_path):

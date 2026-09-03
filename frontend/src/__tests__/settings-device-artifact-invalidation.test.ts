@@ -28,6 +28,14 @@ describe("device setting changes invalidate generated 3MF artifacts", () => {
     expect(useConverterStore.getState().downloadUrl).toBeNull();
   });
 
+  it("clears generated artifacts when wipe-tower auto placement changes", () => {
+    useSettingsStore.getState().setEnableWipeTowerAutoPlacement(false);
+
+    expect(useConverterStore.getState().modelUrl).toBeNull();
+    expect(useConverterStore.getState().threemfDiskPath).toBeNull();
+    expect(useConverterStore.getState().downloadUrl).toBeNull();
+  });
+
   it("clears generated artifacts when nozzle size changes", async () => {
     useConverterStore.setState({
       previewGlbUrl: "/api/files/nozzle-preview.glb",

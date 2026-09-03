@@ -96,6 +96,7 @@ class UserSettings(BaseModel):
     custom_slicer_id: str = ""
     nozzle_size: str = "0.4"
     enable_base_layer_height_modifier: StrictBool = True
+    enable_wipe_tower_auto_placement: StrictBool = True
 
 
 class UserSettingsResponse(BaseModel):

@@ -65,6 +65,7 @@ class TestGetSettings:
         assert settings["build_plate_id"] == ""
         assert settings["build_plate_selections"] == {}
         assert settings["nozzle_size"] == "0.4"
+        assert settings["enable_wipe_tower_auto_placement"] is True
 
     def test_get_settings_rejects_untrusted_origin_by_default(self) -> None:
         """正式本地版默认拒绝外部网页读取持久设置。"""
@@ -260,6 +261,7 @@ class TestPostSettings:
             "enable_crop_modal": True,
             "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
             "nozzle_size": "0.2",
+            "enable_wipe_tower_auto_placement": False,
         }
         mock_file = MagicMock()
         with patch("api.routers.system.SETTINGS_FILE", mock_file):
@@ -272,6 +274,7 @@ class TestPostSettings:
         mock_file.write_text.assert_called_once()
         written = json.loads(mock_file.write_text.call_args.args[0])
         assert written["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.2"
+        assert written["enable_wipe_tower_auto_placement"] is False
 
     def test_post_settings_rejects_untrusted_origin_by_default(self) -> None:
         """正式本地版默认拒绝外部网页保存设置。"""

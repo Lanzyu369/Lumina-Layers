@@ -51,6 +51,7 @@ describe("collectBugReportContext", () => {
       lastColorMode: "8-Color Max",
       lastLutName: "My LUT",
       preserveUploadFilenameFor3mf: false,
+      enableWipeTowerAutoPlacement: false,
       enableSmoothVectorPreview: true,
     });
     useSingleStageStore.setState({
@@ -137,6 +138,7 @@ describe("collectBugReportContext", () => {
       material_layer_height_mm: null,
       material_backing_material_dir_name: null,
       preserve_upload_filename_for_3mf: false,
+      enable_wipe_tower_auto_placement: false,
       enable_smooth_vector_preview: true,
       vector_preview_renderer: null,
       recent_client_logs: [],
@@ -155,6 +157,14 @@ describe("collectBugReportContext", () => {
     const context = collectBugReportContext();
 
     expect(context.preserve_upload_filename_for_3mf).toBe(true);
+  });
+
+  it("captures the wipe-tower auto-placement preference for reproduction", () => {
+    useSettingsStore.setState({ enableWipeTowerAutoPlacement: false });
+
+    const context = collectBugReportContext();
+
+    expect(context.enable_wipe_tower_auto_placement).toBe(false);
   });
 
   it("captures the smooth SVG preference and selected lightweight renderer", () => {

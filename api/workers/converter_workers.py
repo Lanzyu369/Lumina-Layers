@@ -1264,6 +1264,7 @@ def worker_batch_convert_item(
     material_max_layer_count: int = 10,
     material_delta_e00_tolerance: float = 0.5,
     separate_backing: bool = False,
+    enable_wipe_tower_auto_placement: bool = True,
 ) -> dict:
     """Execute a single batch conversion item in a worker process.
     在工作进程中执行单个批量转换项。
@@ -1316,6 +1317,9 @@ def worker_batch_convert_item(
         enable_base_layer_height_modifier: Whether to keep the Bambu-family
             coarse base-layer setting from user settings. (是否沿用设置页
             的底板粗层高开关)
+        enable_wipe_tower_auto_placement: Whether 3MF export may adapt the
+            model and wipe-tower layout. (3MF 导出时是否允许自动调整模型与
+            擦料塔布局。)
         material_dynamic_layer_count_enabled: Enable exact dynamic effective
             layers. (启用精确动态有效层数)
         material_min_layer_count: Minimum dynamic effective layers. (动态最小
@@ -1387,6 +1391,7 @@ def worker_batch_convert_item(
         device_profile_id=device_profile_id,
         build_plate_id=build_plate_id,
         enable_base_layer_height_modifier=enable_base_layer_height_modifier,
+        enable_wipe_tower_auto_placement=enable_wipe_tower_auto_placement,
         material_source=material_source,
         selected_materials=selected_materials,
         material_layer_count=material_layer_count,
@@ -1775,6 +1780,9 @@ def worker_generate_model_surface_overlay(
             device_profile_id=normalized_params.get("device_profile_id") or None,
             build_plate_id=normalized_params.get("build_plate_id") or None,
             enable_base_layer_height_modifier=False,
+            enable_wipe_tower_auto_placement=bool(
+                converter_params.get("enable_wipe_tower_auto_placement", True)
+            ),
         )
         export_ready = True
     except (ValueError, TypeError, KeyError, OSError, RuntimeError) as exc:
@@ -2485,6 +2493,9 @@ def worker_generate_large_format_svg_native(
                 project_slot_names=slot_names,
                 enable_base_layer_height_modifier=bool(
                     worker_ctx.get("enable_base_layer_height_modifier", True)
+                ),
+                enable_wipe_tower_auto_placement=bool(
+                    worker_ctx.get("enable_wipe_tower_auto_placement", True)
                 ),
                 enable_relief=bool(worker_ctx.get("enable_relief", False)),
                 base_height_mm=float(

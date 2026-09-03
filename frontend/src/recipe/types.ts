@@ -180,6 +180,8 @@ export interface ConverterRecipeDevice {
   build_plate_id?: string;
   /** Preserve the slicer's base-layer height modifier choice. */
   enable_base_layer_height_modifier?: boolean;
+  /** Allow Lumina to adapt the model and wipe-tower layout during export. */
+  enable_wipe_tower_auto_placement?: boolean;
 }
 
 export interface ConverterRecipeFridgeMagnet {

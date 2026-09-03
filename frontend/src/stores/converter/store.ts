@@ -8723,6 +8723,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           build_plate_id: generateSettings.buildPlateId,
           enable_base_layer_height_modifier:
             generateSettings.enableBaseLayerHeightModifier,
+          enable_wipe_tower_auto_placement:
+            generateSettings.enableWipeTowerAutoPlacement,
           use_cached_matched_rgb: state.regionReplacementCount > 0,
           ...(state.modelSurfaceEnabled &&
           state.modelSurfaceModelFileId &&
@@ -8774,7 +8776,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             batchPreviewItems: [],
             downloadUrl,
             threemfDiskPath: null,
-            generateWarnings: [],
+            generateWarnings: puzzleResponse.warnings ?? [],
             puzzleWarnings: puzzleResponse.warnings ?? [],
             puzzleResolvedRows: puzzleResponse.grid_rows ?? null,
             puzzleResolvedCols: puzzleResponse.grid_cols ?? null,
@@ -9559,6 +9561,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           build_plate_id: settings.buildPlateId,
           enable_base_layer_height_modifier:
             settings.enableBaseLayerHeightModifier,
+          enable_wipe_tower_auto_placement:
+            settings.enableWipeTowerAutoPlacement,
           ...(state.enable_relief
             ? {
                 height_mode: "color",
