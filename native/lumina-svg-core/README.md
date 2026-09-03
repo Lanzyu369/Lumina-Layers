@@ -145,7 +145,7 @@ not stored in either report.
 
 The public-entry benchmark also includes a synthetic alpha-heavy case with 32
 source paints and 256 overlap cells. It completes the full Lumina
-host application's public analysis path in a 0.018102-second warm median on the
+host application's public analysis path in a 0.018311-second warm median on the
 recorded reference host; this measurement is observational and adds no
 alpha-specific rejection threshold.
 

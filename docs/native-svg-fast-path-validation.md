@@ -252,21 +252,21 @@ does not use an artifact cache.
 
 | Metric | Result |
 |---|---:|
-| Warm median / 1.0 s gate | 0.115364 s / PASS |
-| Warm p95 / 1.25 s gate | 0.117257 s / PASS |
-| Native recorder / kernel | 0.049516 s / 0.036479 s |
-| Native adapter conversion | 0.024090 s |
-| Peak RSS / swap growth | 204,488,704 bytes (195.02 MiB) / 0 bytes |
+| Warm median / 1.0 s gate | 0.115619 s / PASS |
+| Warm p95 / 1.25 s gate | 0.116606 s / PASS |
+| Native recorder / kernel | 0.049598 s / 0.036146 s |
+| Native adapter conversion | 0.023950 s |
+| Peak RSS / swap growth | 205,160,448 bytes (195.66 MiB) / 0 bytes |
 | Raw / visible shapes | 1,024 / 1,024 |
 
 The same report measures a separate alpha-heavy public fixture with 32 source
 paints, two isolated opacity groups, 256 overlap cells, and 1,024 ordered
-contributions. Its complete `VectorAnalysis` median/p95 is 0.018102/0.018435 s,
-with 148,832,256 bytes peak RSS and zero swap growth. It exports 768 visible
+contributions. Its complete `VectorAnalysis` median/p95 is 0.018311/0.019806 s,
+with 148,553,728 bytes peak RSS and zero swap growth. It exports 768 visible
 Polygon components, including 256 multi-source composite regions.
 
 The public 3,097-path source proxy is also supported by default; its native
-capability check took 0.431359 s. No repository SVG at or above 50 MiB was
+capability check took 0.447322 s. No repository SVG at or above 50 MiB was
 available, so the separate large-file benchmark is recorded as unavailable
 instead of substituting another fixture. The anonymous 508-document run above
 is the large real-world parser/RSS evidence for this revision.
