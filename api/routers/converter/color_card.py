@@ -42,6 +42,7 @@ from core.vector_mesh_memory import (
     estimate_vector_task_memory_reservation_bytes,
     resolve_vector_mesh_memory_budget_bytes,
 )
+from utils.bambu_3mf_writer import read_wipe_tower_placement_warnings
 
 from .common import (
     BATCH_DOWNLOAD_TTL_SECONDS,
@@ -340,6 +341,8 @@ async def generate_color_card(
             detail=_COLOR_CARD_GENERATION_FAILED_DETAIL,
         )
 
+    placement_warnings = read_wipe_tower_placement_warnings(threemf_path)
+
     preview_3d_url: str | None = None
     download_id: str | None = None
     registration_complete = False
@@ -413,4 +416,5 @@ async def generate_color_card(
         download_url=f"/api/files/{download_id}",
         preview_3d_url=preview_3d_url,
         threemf_disk_path=None,
+        warnings=placement_warnings,
     )

@@ -63,6 +63,7 @@ from core.material_dynamic_solver import (
     DynamicMaterialCandidateError,
     DynamicMaterialSolverError,
 )
+from utils.bambu_3mf_writer import read_wipe_tower_placement_warnings
 
 from .common import (
     BATCH_DOWNLOAD_TTL_SECONDS,
@@ -1495,6 +1496,11 @@ async def generate_puzzle(
                 generate_params.enable_wipe_tower_auto_placement
             ),
         )
+        for warning_code in read_wipe_tower_placement_warnings(
+            combined_3mf_path
+        ):
+            if warning_code not in warnings:
+                warnings.append(warning_code)
         download_id = registry.register_path(
             str(uuid.uuid4()),
             combined_3mf_path,

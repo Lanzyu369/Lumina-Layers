@@ -319,7 +319,11 @@ export default function PuzzleSettings() {
               </p>
               <div className="flex flex-col gap-1 text-xs text-amber-700 dark:text-amber-300">
                 {puzzleWarnings.map((warning, index) => (
-                  <p key={`${warning}-${index}`}>{warning}</p>
+                  <p key={`${warning}-${index}`}>
+                    {warning === "wipe_tower_manual_adjustment_required"
+                      ? t("wipe_tower_manual_adjustment_title")
+                      : warning}
+                  </p>
                 ))}
               </div>
             </div>

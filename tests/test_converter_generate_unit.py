@@ -340,6 +340,76 @@ def test_generate_response_forwards_embedded_wipe_tower_warning() -> None:
     ]
 
 
+def test_color_card_response_forwards_only_embedded_wipe_tower_warnings(
+    tmp_path: Path,
+) -> None:
+    """Color-card responses expose the warning embedded in the final 3MF."""
+
+    _test_store.clear_all()
+    _test_registry.clear_all()
+    warning_code = "wipe_tower_manual_adjustment_required"
+
+    for case_name, requires_manual_adjustment, expected_warnings in (
+        ("manual", True, [warning_code]),
+        ("safe", False, []),
+    ):
+        output_path = tmp_path / f"color-card-{case_name}.3mf"
+        with zipfile.ZipFile(output_path, "w") as package:
+            package.writestr(
+                "Metadata/lumina_wipe_tower_placement.json",
+                json.dumps(
+                    {
+                        "requires_manual_adjustment": requires_manual_adjustment,
+                        "warning_code": (
+                            warning_code if requires_manual_adjustment else None
+                        ),
+                    }
+                ),
+            )
+
+        lut_path = tmp_path / f"color-card-{case_name}.npy"
+        np.save(lut_path, np.zeros((1, 3), dtype=np.uint8))
+        svg_path = tmp_path / f"color-card-{case_name}.svg"
+        svg_path.write_text("<svg/>", encoding="utf-8")
+        sid = _test_store.create()
+        _test_store.put(sid, "lut_path", str(lut_path))
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                "target_w": 4,
+                "target_h": 4,
+                "target_width_mm": 40.0,
+                "color_palette": [{"hex": "#ff0000"}],
+                "color_mode": "4-Color (RYBW)",
+            },
+        )
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": str(output_path),
+                "glb_path": None,
+                "status_msg": "OK",
+            },
+        )
+
+        try:
+            with patch(
+                "core.color_card.generate_color_card_svg",
+                return_value=str(svg_path),
+            ):
+                response = client.post(
+                    "/api/convert/color-card",
+                    json={"session_id": sid},
+                )
+
+            assert response.status_code == 200, response.text
+            assert response.json()["warnings"] == expected_warnings
+            assert response.json()["warnings"].count(warning_code) <= 1
+        finally:
+            _test_store.close(sid)
+            _test_registry.clear_all()
+
+
 def _create_session_with_preview_and_files(store: SessionStore) -> str:
     """Create a session pre-populated with preview_cache and file paths."""
     sid: str = store.create()

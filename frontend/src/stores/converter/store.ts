@@ -8776,7 +8776,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             batchPreviewItems: [],
             downloadUrl,
             threemfDiskPath: null,
-            generateWarnings: [],
+            generateWarnings: puzzleResponse.warnings ?? [],
             puzzleWarnings: puzzleResponse.warnings ?? [],
             puzzleResolvedRows: puzzleResponse.grid_rows ?? null,
             puzzleResolvedCols: puzzleResponse.grid_cols ?? null,

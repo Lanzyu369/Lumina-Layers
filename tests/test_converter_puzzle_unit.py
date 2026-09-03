@@ -8,9 +8,11 @@ Validates:
 
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 import os
 import tempfile
+import zipfile
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -630,6 +632,100 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
     assert min(boundary_y_values) >= 0.5 - 1e-6
     assert max(boundary_x_values) <= expected_worker_w - 0.5 + 1e-6
     assert max(boundary_y_values) <= expected_worker_h - 0.5 + 1e-6
+
+
+def test_generate_puzzle_response_merges_only_embedded_wipe_tower_warnings(
+    tmp_path: Path,
+) -> None:
+    """Puzzle responses expose final-assembly warnings without duplicates."""
+
+    _test_store.clear_all()
+    _test_registry.clear_all()
+    warning_code = "wipe_tower_manual_adjustment_required"
+    original_resolve_layout = puzzle_router._resolve_layout
+
+    cases = (
+        ("manual", True, False, [warning_code]),
+        ("manual-existing", True, True, [warning_code]),
+        ("safe", False, False, []),
+    )
+    for case_name, requires_manual_adjustment, seed_existing, expected_warnings in cases:
+        session_id, _preview_cache = _make_session()
+        piece_counter = 0
+
+        async def _submit_stub(
+            _func: object,
+            _piece_image_path: str,
+            _lut_path: str,
+            _worker_params: dict[str, Any],
+        ) -> dict[str, Any]:
+            nonlocal piece_counter
+            piece_counter += 1
+            piece_path = tmp_path / f"piece-{case_name}-{piece_counter}.3mf"
+            piece_path.write_bytes(b"piece-3mf")
+            return {
+                "threemf_path": str(piece_path),
+                "glb_path": None,
+                "status_msg": "ok",
+                "x_mirrored": False,
+                "mirror_span_mm": 90.0,
+            }
+
+        def _assemble_stub(*, output_path: str, **_kwargs: Any) -> str:
+            with zipfile.ZipFile(output_path, "w") as package:
+                package.writestr(
+                    "Metadata/lumina_wipe_tower_placement.json",
+                    json.dumps(
+                        {
+                            "requires_manual_adjustment": (
+                                requires_manual_adjustment
+                            ),
+                            "warning_code": (
+                                warning_code
+                                if requires_manual_adjustment
+                                else None
+                            ),
+                        }
+                    ),
+                )
+            return output_path
+
+        def _resolve_layout_stub(
+            **kwargs: Any,
+        ) -> tuple[PuzzleLayout, tuple[Any, ...]]:
+            layout, cache_key = original_resolve_layout(**kwargs)
+            if seed_existing:
+                layout = replace(
+                    layout,
+                    warnings=(*layout.warnings, warning_code),
+                )
+            return layout, cache_key
+
+        body = _build_generate_body(session_id)
+        body["params"].update(
+            {"rows": 1, "cols": 1, "target_piece_count": 1}
+        )
+        _mock_pool.submit = AsyncMock(side_effect=_submit_stub)
+
+        try:
+            with patch(
+                "api.routers.converter.puzzle.assemble_puzzle_3mf",
+                side_effect=_assemble_stub,
+            ), patch(
+                "api.routers.converter.puzzle._resolve_layout",
+                side_effect=_resolve_layout_stub,
+            ):
+                response = client.post(
+                    "/api/convert/generate-puzzle",
+                    json=body,
+                )
+
+            assert response.status_code == 200, response.text
+            assert response.json()["warnings"] == expected_warnings
+            assert response.json()["warnings"].count(warning_code) <= 1
+        finally:
+            _test_store.close(session_id)
+            _test_registry.clear_all()
 
 
 def test_generate_puzzle_places_face_down_single_sided_pieces_with_actual_mirror_span() -> None:
