@@ -923,10 +923,15 @@ class TestGenerateParameterCompleteness:
         ):
             response = client.post(
                 "/api/convert/color-card",
-                json={"session_id": sid},
+                json={
+                    "session_id": sid,
+                    "enable_wipe_tower_auto_placement": False,
+                },
             )
 
         assert response.status_code == 200, response.text
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_params["enable_wipe_tower_auto_placement"] is False
         assert _mock_pool.submit.call_args.kwargs[
             "host_memory_reservation_bytes"
         ] == 8 * 1024**3

@@ -1213,18 +1213,21 @@ def _build_project_settings_bytes_for_merge(
         settings["wipe_tower_rotation_angle"] = placement_writer._format_number(
             placement.tower_rotation
         )
-        from utils.bambu_3mf_writer import _normalize_difference_index
+        if placement.adapted:
+            from utils.bambu_3mf_writer import _normalize_difference_index
 
-        settings["different_settings_to_system"] = _normalize_difference_index(
-            settings.get("different_settings_to_system"),
-            (
-                "wipe_tower_x",
-                "wipe_tower_y",
-                "prime_tower_width",
-                "wipe_tower_rotation_angle",
-                "enable_prime_tower",
-            ),
-        )
+            settings["different_settings_to_system"] = (
+                _normalize_difference_index(
+                    settings.get("different_settings_to_system"),
+                    (
+                        "wipe_tower_x",
+                        "wipe_tower_y",
+                        "prime_tower_width",
+                        "wipe_tower_rotation_angle",
+                        "enable_prime_tower",
+                    ),
+                )
+            )
 
     colours = settings.get("filament_colour")
     if not isinstance(colours, list) or not colours:

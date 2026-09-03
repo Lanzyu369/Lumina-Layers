@@ -65,12 +65,6 @@ _CREATOR_5_MODEL_TOWER_CLEARANCE_MM = 7.5
 _ANYCUBIC_TOWER_MIN_FOOTPRINT_WIDTH_MM = 50.0
 _ANYCUBIC_TOWER_MIN_DEPTH_MM = 57.5
 _ELEGOO_CC2_PREFERRED_TOP_EDGE_CLEARANCE_MM = 32.0
-_WIPE_TOWER_OVERRIDE_KEYS = (
-    "wipe_tower_x",
-    "wipe_tower_y",
-    "prime_tower_width",
-    "wipe_tower_rotation_angle",
-)
 
 
 def _get_trimesh():
@@ -334,20 +328,11 @@ def _is_flashstudio_registry_profile(profile: Any) -> bool:
 def _apply_snapmaker_u1_native_project_shape(
     settings: dict[str, Any],
     profile: Any,
-    *,
-    preserved_difference_keys: Iterable[str] = (),
 ) -> None:
     if not _is_snapmaker_u1_registry_profile(profile):
         return
     settings.pop("inherits_group", None)
-    required_keys = tuple(preserved_difference_keys)
-    if required_keys:
-        settings["different_settings_to_system"] = _normalize_difference_index(
-            None,
-            required_keys,
-        )
-    else:
-        settings.pop("different_settings_to_system", None)
+    settings.pop("different_settings_to_system", None)
 
 
 def _replace_nozzle_label(value: object, old_label: str, new_label: str) -> object:
@@ -3613,7 +3598,14 @@ class BambuStudio3MFWriter:
                 placement.tower_rotation
             )
             if placement.adapted:
-                applied_override_keys.extend(_WIPE_TOWER_OVERRIDE_KEYS)
+                applied_override_keys.extend(
+                    (
+                        "wipe_tower_x",
+                        "wipe_tower_y",
+                        "prime_tower_width",
+                        "wipe_tower_rotation_angle",
+                    )
+                )
 
         # Ensure BambuStudio/Orca's "modified-from-system-default" index
         # includes every key we actually overrode; otherwise the slicer
@@ -3632,11 +3624,6 @@ class BambuStudio3MFWriter:
         _apply_snapmaker_u1_native_project_shape(
             settings,
             self._registry_device_profile,
-            preserved_difference_keys=(
-                _WIPE_TOWER_OVERRIDE_KEYS
-                if placement is not None and placement.adapted
-                else ()
-            ),
         )
 
         return json.dumps(settings, indent=4, ensure_ascii=False).encode("utf-8")

@@ -31,15 +31,6 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
           },
         ],
       },
-      {
-        category: { zh: "稳定性", en: "Stability" },
-        items: [
-          {
-            zh: "Snapmaker U1 生成的 3MF 现在会正确保留自动计算的擦料塔位置和尺寸，不会在切片软件中又恢复成模板默认值。",
-            en: "Snapmaker U1 3MF files now retain the automatically calculated wipe-tower position and size instead of reverting to the template defaults in the slicer.",
-          },
-        ],
-      },
     ],
   },
   {

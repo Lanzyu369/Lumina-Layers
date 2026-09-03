@@ -498,6 +498,7 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
         device_profile_id: str | None = None,
         build_plate_id: str | None = None,
         overview_png_bytes: bytes | None = None,
+        enable_wipe_tower_auto_placement: bool = True,
     ) -> str:
         assembled_calls.append(
             {
@@ -507,6 +508,9 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
                 "slicer": slicer,
                 "nozzle_size": nozzle_size,
                 "build_plate_id": build_plate_id,
+                "enable_wipe_tower_auto_placement": (
+                    enable_wipe_tower_auto_placement
+                ),
                 "slot_names": slot_names,
                 "overview_bytes": overview_png_bytes,
             }
@@ -525,6 +529,7 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
             "enable_relief": True,
             "height_mode": "color",
             "color_height_map": {"#ff0000": 2.2, "#00ff00": 2.6},
+            "enable_wipe_tower_auto_placement": False,
         }
     )
 
@@ -551,6 +556,10 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
     assert all(params["fridge_magnets"] == [] for params in submitted_params)
     assert all(params["modeling_mode"] == ModelingMode.HIGH_FIDELITY for params in submitted_params)
     assert all(params["enable_relief"] is True for params in submitted_params)
+    assert all(
+        params["enable_wipe_tower_auto_placement"] is False
+        for params in submitted_params
+    )
     assert all(params["height_mode"] == "color" for params in submitted_params)
     assert all(
         params["color_height_map"] == {"#ff0000": 2.2, "#00ff00": 2.6}
@@ -562,6 +571,9 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
     assert assembled_calls[0]["slicer"] == "BambuStudio"
     assert assembled_calls[0]["nozzle_size"] == "0.2"
     assert assembled_calls[0]["build_plate_id"] == "smooth-pei-plate"
+    assert (
+        assembled_calls[0]["enable_wipe_tower_auto_placement"] is False
+    )
     assert assembled_calls[0]["slot_names"] == ["White"]
     assert isinstance(assembled_calls[0]["overview_bytes"], bytes)
     assert assembled_calls[0]["overview_bytes"].startswith(b"\x89PNG")
@@ -948,6 +960,7 @@ def test_generate_puzzle_resizes_heightmap_crop_to_worker_grid() -> None:
         device_profile_id: str | None = None,
         build_plate_id: str | None = None,
         overview_png_bytes: bytes | None = None,
+        enable_wipe_tower_auto_placement: bool = True,
     ) -> str:
         with open(output_path, "wb") as handle:
             handle.write(b"combined-3mf")
@@ -1036,6 +1049,7 @@ def test_generate_puzzle_emits_hybrid_boundary_log_for_each_piece() -> None:
         device_profile_id: str | None = None,
         build_plate_id: str | None = None,
         overview_png_bytes: bytes | None = None,
+        enable_wipe_tower_auto_placement: bool = True,
     ) -> str:
         with open(output_path, "wb") as handle:
             handle.write(b"combined-3mf")
@@ -1130,6 +1144,7 @@ def test_generate_puzzle_reuses_cached_layout_after_preview() -> None:
         device_profile_id: str | None = None,
         build_plate_id: str | None = None,
         overview_png_bytes: bytes | None = None,
+        enable_wipe_tower_auto_placement: bool = True,
     ) -> str:
         with open(output_path, "wb") as handle:
             handle.write(b"combined-3mf")
@@ -1287,6 +1302,7 @@ def test_generate_puzzle_filters_fully_transparent_pieces_during_layout() -> Non
         device_profile_id: str | None = None,
         build_plate_id: str | None = None,
         overview_png_bytes: bytes | None = None,
+        enable_wipe_tower_auto_placement: bool = True,
     ) -> str:
         with open(output_path, "wb") as handle:
             handle.write(b"combined-3mf")

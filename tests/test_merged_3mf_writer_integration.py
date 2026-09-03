@@ -90,6 +90,31 @@ def _make_source_3mf(
     return Path(path)
 
 
+def _replace_project_difference_index(
+    path: Path,
+    keys: list[str],
+) -> None:
+    """Replace only the source package's project override index."""
+
+    replacement_path = path.with_suffix(".rewrite.3mf")
+    with zipfile.ZipFile(path, "r") as source_package:
+        with zipfile.ZipFile(
+            replacement_path,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+        ) as replacement_package:
+            for member in source_package.infolist():
+                payload = source_package.read(member.filename)
+                if member.filename == "Metadata/project_settings.config":
+                    settings = json.loads(payload)
+                    settings["different_settings_to_system"] = [
+                        ";".join(keys)
+                    ]
+                    payload = json.dumps(settings).encode("utf-8")
+                replacement_package.writestr(member, payload)
+    os.replace(replacement_path, path)
+
+
 class TestMergedWriterBambuCompatibility:
     """Real writer integration: output 3MF must be Bambu/Orca compatible."""
 
@@ -473,7 +498,7 @@ class TestMergedWriterBambuCompatibility:
             MergedItem(
                 source_filename="right.png",
                 source_3mf_path=src2,
-                slots=(MaterialSlot(0, "Black", "#101010", "GFL00"),),
+                slots=(MaterialSlot(1, "White", "#FFFFFF", "GFA00"),),
                 tx_mm=120.0,
                 ty_mm=10.0,
             ),
@@ -504,8 +529,12 @@ class TestMergedWriterBambuCompatibility:
             model_bounds = placement["model_bounds_mm"]
             model_outer = placement["model_outer_bounds_mm"]
             tower_outer = placement["tower"]["outer_bounds_mm"]
+            difference_index = set(
+                settings["different_settings_to_system"][0].split(";")
+            )
             assert model_bounds[2] - model_bounds[0] == pytest.approx(160.0)
             assert model_bounds[3] - model_bounds[1] == pytest.approx(60.0)
+            assert placement["adapted"] is True
             assert placement["requires_manual_adjustment"] is False
             assert settings["enable_prime_tower"] == "1"
             assert float(settings["wipe_tower_x"][0]) == pytest.approx(
@@ -520,9 +549,67 @@ class TestMergedWriterBambuCompatibility:
                 or model_outer[3] <= tower_outer[1]
                 or tower_outer[3] <= model_outer[1]
             )
+            assert difference_index >= {
+                "prime_tower_width",
+                "wipe_tower_rotation_angle",
+                "wipe_tower_x",
+                "wipe_tower_y",
+            }
             assert read_wipe_tower_placement_warnings(out_path) == []
         finally:
             for path in (src1, src2, Path(out_path)):
+                path.unlink(missing_ok=True)
+
+    def test_merged_output_does_not_declare_unadapted_tower_overrides(
+        self,
+    ) -> None:
+        """A safe native tower layout must not gain synthetic overrides."""
+
+        source = _make_source_3mf(
+            width_mm=10.0,
+            depth_mm=8.0,
+            printer_id="bambu-h2d",
+        )
+        _replace_project_difference_index(source, ["enable_prime_tower"])
+        item = MergedItem(
+            source_filename="centered.png",
+            source_3mf_path=source,
+            slots=(MaterialSlot(0, "Black", "#101010", "GFL00"),),
+            tx_mm=170.0,
+            ty_mm=156.0,
+        )
+        fd, out_path = tempfile.mkstemp(
+            suffix=".3mf",
+            dir=TEMP_DIR,
+            prefix="integ_wipe_native_",
+        )
+        os.close(fd)
+
+        try:
+            MergedBambu3MFWriter().write(
+                [item],
+                Path(out_path),
+                plate_width_mm=350.0,
+                plate_depth_mm=320.0,
+            )
+
+            with zipfile.ZipFile(out_path) as package:
+                placement = json.loads(
+                    package.read(
+                        "Metadata/lumina_wipe_tower_placement.json"
+                    )
+                )
+                settings = json.loads(
+                    package.read("Metadata/project_settings.config")
+                )
+
+            difference_index = set(
+                settings["different_settings_to_system"][0].split(";")
+            )
+            assert placement["adapted"] is False
+            assert difference_index == {"enable_prime_tower"}
+        finally:
+            for path in (source, Path(out_path)):
                 path.unlink(missing_ok=True)
 
     def test_merged_output_can_disable_wipe_tower_auto_placement(self) -> None:

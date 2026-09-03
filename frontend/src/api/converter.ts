@@ -129,6 +129,7 @@ export interface ColorCardDeviceSelection {
   nozzle_size: string;
   device_profile_id?: string;
   build_plate_id?: string;
+  enable_wipe_tower_auto_placement?: boolean;
 }
 
 export async function generateColorCard(

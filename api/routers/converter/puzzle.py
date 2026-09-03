@@ -1199,6 +1199,9 @@ async def generate_puzzle(
             "nozzle_size": generate_params.nozzle_size,
             "device_profile_id": generate_params.device_profile_id,
             "build_plate_id": generate_params.build_plate_id,
+            "enable_wipe_tower_auto_placement": (
+                generate_params.enable_wipe_tower_auto_placement
+            ),
             "relief_global_max_height": relief_global_max_height,
             "material_dynamic_layer_count_enabled": dynamic_material_settings[0],
             "material_min_layer_count": dynamic_material_settings[1],
@@ -1488,6 +1491,9 @@ async def generate_puzzle(
             device_profile_id=generate_params.device_profile_id,
             build_plate_id=generate_params.build_plate_id,
             overview_png_bytes=overview_png_bytes,
+            enable_wipe_tower_auto_placement=(
+                generate_params.enable_wipe_tower_auto_placement
+            ),
         )
         download_id = registry.register_path(
             str(uuid.uuid4()),

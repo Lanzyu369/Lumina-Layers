@@ -122,6 +122,13 @@ class ColorCardRequest(BaseModel):
         None,
         description="Slicer-native build plate ID.",
     )
+    enable_wipe_tower_auto_placement: bool = Field(
+        True,
+        description=(
+            "Automatically place the wipe tower for the generated 3MF. "
+            "自动为生成的 3MF 摆放擦料塔。"
+        ),
+    )
 
 
 @router.post("/color-card", response_model=GenerateResponse)
@@ -273,6 +280,9 @@ async def generate_color_card(
         "device_profile_id": body.device_profile_id,
         "build_plate_id": body.build_plate_id,
         "enable_base_layer_height_modifier": False,
+        "enable_wipe_tower_auto_placement": (
+            body.enable_wipe_tower_auto_placement
+        ),
         "material_source": session_material_source,
     }
     if session_material_source == "material_archive":

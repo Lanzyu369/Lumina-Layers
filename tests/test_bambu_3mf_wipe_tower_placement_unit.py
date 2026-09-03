@@ -83,33 +83,6 @@ def test_safe_p1s_layout_preserves_native_tower_settings() -> None:
     assert writer._get_build_item_translation()[:2] == pytest.approx((128.0, 128.0))
 
 
-def test_snapmaker_u1_adapted_layout_keeps_tower_override_index() -> None:
-    writer = BambuStudio3MFWriter(
-        "snapmaker-u1-adapted.3mf",
-        printer_id="snapmaker-u1",
-        slicer="SnapmakerOrca",
-        device_profile_id="SnapmakerOrca:snapmaker:snapmaker-u1:0.4",
-    )
-    _add_material_boxes(writer, width=180.0, depth=230.0)
-
-    settings = _project_settings(writer)
-    placement = writer._get_wipe_tower_placement()
-
-    assert placement is not None
-    assert placement.adapted is True
-    assert placement.requires_manual_adjustment is False
-    assert float(settings["prime_tower_width"]) == pytest.approx(
-        placement.tower_width
-    )
-    difference_index = set(settings["different_settings_to_system"][0].split(";"))
-    assert difference_index >= {
-        "prime_tower_width",
-        "wipe_tower_rotation_angle",
-        "wipe_tower_x",
-        "wipe_tower_y",
-    }
-
-
 def test_disabled_auto_placement_preserves_u1_template_without_warning(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
