@@ -40,29 +40,31 @@ export default function Checkbox({
       : "cursor-pointer hover:border-slate-300 hover:bg-white/75 dark:hover:border-slate-600 dark:hover:bg-slate-900/75",
   );
 
-  const inner = (
-    <label className={labelClass}>
-      <input
-        type="checkbox"
-        checked={checked}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.checked)}
-        className="sr-only"
-      />
-      <span
-        aria-hidden="true"
-        className={cx(
-          "flex h-5 w-5 shrink-0 items-center justify-center rounded-xl border transition-all duration-200",
-          checked
-            ? "border-blue-500 bg-blue-500"
-            : "border-slate-300/80 bg-white dark:border-slate-600/80 dark:bg-slate-800"
-        )}
-      >
-        <span className={cx("h-2.5 w-2.5 rounded-sm", checked ? "bg-white" : "bg-transparent")} />
-      </span>
-      <span className="min-w-0 flex-1 whitespace-normal break-words font-medium text-slate-700 dark:text-slate-200">
-        {label}
-      </span>
+  return (
+    <div className={labelClass}>
+      <label className="flex min-w-0 flex-1 items-center gap-3">
+        <input
+          type="checkbox"
+          checked={checked}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.checked)}
+          className="sr-only"
+        />
+        <span
+          aria-hidden="true"
+          className={cx(
+            "flex h-5 w-5 shrink-0 items-center justify-center rounded-xl border transition-all duration-200",
+            checked
+              ? "border-blue-500 bg-blue-500"
+              : "border-slate-300/80 bg-white dark:border-slate-600/80 dark:bg-slate-800"
+          )}
+        >
+          <span className={cx("h-2.5 w-2.5 rounded-sm", checked ? "bg-white" : "bg-transparent")} />
+        </span>
+        <span className="min-w-0 flex-1 whitespace-normal break-words font-medium text-slate-700 dark:text-slate-200">
+          {label}
+        </span>
+      </label>
       {tooltip && (
         <HelpDot
           title={tooltipTitle ?? (typeof label === "string" ? label : "")}
@@ -71,8 +73,6 @@ export default function Checkbox({
           ariaLabel={tooltip}
         />
       )}
-    </label>
+    </div>
   );
-
-  return inner;
 }

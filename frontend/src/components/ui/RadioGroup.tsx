@@ -33,15 +33,18 @@ export default function RadioGroup({
   wikiPath,
 }: RadioGroupProps) {
   const groupId = useId();
+  const labelId = `${groupId}-label`;
 
   return (
-    <fieldset className="flex flex-col gap-1.5" disabled={disabled}>
-      <legend className={workstationFieldLabelClass}>
-        <span className="flex items-center gap-1.5">
-          <span>{label}</span>
-          {tooltip && <HelpDot title={label} description={tooltip} wikiPath={wikiPath} ariaLabel={tooltip} />}
-        </span>
-      </legend>
+    <fieldset
+      className="flex flex-col gap-1.5"
+      disabled={disabled}
+      aria-labelledby={labelId}
+    >
+      <div className="flex items-center gap-1.5">
+        <span id={labelId} className={workstationFieldLabelClass}>{label}</span>
+        {tooltip && <HelpDot title={label} description={tooltip} wikiPath={wikiPath} ariaLabel={tooltip} />}
+      </div>
       <div className="grid gap-2">
         {options.map((opt) => {
           const isDisabled = disabled || disabledValues.includes(opt.value);
