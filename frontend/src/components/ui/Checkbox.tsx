@@ -41,8 +41,8 @@ export default function Checkbox({
   );
 
   return (
-    <div className={labelClass}>
-      <label className="flex min-w-0 flex-1 items-center gap-3">
+    <div className="relative">
+      <label className={labelClass}>
         <input
           type="checkbox"
           checked={checked}
@@ -64,14 +64,17 @@ export default function Checkbox({
         <span className="min-w-0 flex-1 whitespace-normal break-words font-medium text-slate-700 dark:text-slate-200">
           {label}
         </span>
+        {tooltip && <span aria-hidden="true" className="h-4 w-4 shrink-0" />}
       </label>
       {tooltip && (
-        <HelpDot
-          title={tooltipTitle ?? (typeof label === "string" ? label : "")}
-          description={tooltip}
-          wikiPath={wikiPath}
-          ariaLabel={tooltip}
-        />
+        <div className="absolute right-3.5 top-1/2 z-10 h-4 w-4 -translate-y-1/2">
+          <HelpDot
+            title={tooltipTitle ?? (typeof label === "string" ? label : "")}
+            description={tooltip}
+            wikiPath={wikiPath}
+            ariaLabel={tooltip}
+          />
+        </div>
       )}
     </div>
   );

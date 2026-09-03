@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import Checkbox from "../components/ui/Checkbox";
 import RadioGroup from "../components/ui/RadioGroup";
@@ -9,6 +9,7 @@ import { useSettingsStore } from "../stores/settingsStore";
 describe("HelpDot accessibility names", () => {
   it("does not reuse the associated form control label and opens on tap", async () => {
     useSettingsStore.setState({ language: "zh" });
+    const onChange = vi.fn();
 
     render(
       <I18nProvider>
@@ -17,7 +18,7 @@ describe("HelpDot accessibility names", () => {
           tooltip="沿作品外缘生成一圈可以调整宽度的边框。"
           wikiPath="/docs/reference/model-features/outline/"
           checked={false}
-          onChange={() => undefined}
+          onChange={onChange}
         />
       </I18nProvider>,
     );
@@ -39,6 +40,7 @@ describe("HelpDot accessibility names", () => {
       "https://wiki.luminastudio.com.cn/zh/docs/reference/model-features/outline/",
     );
     expect(checkbox).not.toBeChecked();
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("keeps a radio group name separate from its help trigger", () => {
