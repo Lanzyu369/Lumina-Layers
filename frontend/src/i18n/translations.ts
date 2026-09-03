@@ -234,8 +234,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "{message} Request ID: {requestId}.",
   },
   bug_report_modal_privacy_note: {
-    zh: "本反馈仅发送到 Lumina Studio 开发者邮箱，用于定位和回复问题。",
-    en: "This report is sent only to the Lumina Studio developer mailbox for triage and follow-up.",
+    zh: "反馈会保存在本机。当前为单图转换时，最多 100 MiB 的原始输入图片会一并保存；低于邮件附件上限且本机邮件可用时也会作为附件发送。原图不会通过官方转发服务发送。",
+    en: "The report is saved on this device. For a single-image conversion, the original input up to 100 MiB is also saved and attached when it fits the email limit and local email is available. The original is never sent through the official relay.",
   },
   bug_report_modal_submit: {
     zh: "发送",
@@ -1078,8 +1078,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Local email delivery did not succeed. Do you agree to forward this report to the Lumina Studio official bug collection service?",
   },
   bug_report_relay_privacy: {
-    zh: "转发内容包含你的问题描述、可选邮箱、截图和自动收集的环境信息，仅用于定位和回复问题。",
-    en: "The forwarded report includes your description, optional email, screenshot, and automatically collected diagnostic context, only for triage and follow-up.",
+    zh: "转发内容包含你的问题描述、可选邮箱、截图和自动收集的环境信息，仅用于定位和回复问题；不会包含转换原图。",
+    en: "The forwarded report includes your description, optional email, screenshot, and automatically collected diagnostic context for triage and follow-up; it does not include the converter source image.",
   },
   bug_report_relay_send: {
     zh: "同意并转发",
@@ -1140,6 +1140,26 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   bug_report_success_email_unconfigured: {
     zh: "本机未配置邮件，报告已保存到本地。请选择官方转发或手动发送。",
     en: "Local email is not configured; the report was saved locally. Choose official forwarding or send it manually.",
+  },
+  bug_report_success_original_attached: {
+    zh: "转换原图已按原始字节随工单保存。",
+    en: "The converter source image was saved byte-for-byte with the ticket.",
+  },
+  bug_report_success_original_session_fallback: {
+    zh: "转换原图已从当前转换会话恢复并随工单保存。",
+    en: "The converter source image was recovered from the current session and saved with the ticket.",
+  },
+  bug_report_success_original_not_applicable: {
+    zh: "本次未附带转换原图；仅当前单图转换会自动附带。",
+    en: "No converter source image was attached; automatic capture applies only to the active single-image conversion.",
+  },
+  bug_report_success_original_too_large: {
+    zh: "原图超过 100 MiB，未随工单保存；问题描述和其他诊断信息已提交。",
+    en: "The source image exceeded 100 MiB and was not saved; the description and other diagnostics were submitted.",
+  },
+  bug_report_success_original_failed: {
+    zh: "原图保存失败；问题描述和其他诊断信息已提交。",
+    en: "The source image could not be saved; the description and other diagnostics were submitted.",
   },
   bug_report_success_dump_path_label: {
     zh: "本地路径",
@@ -2391,6 +2411,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "启用拼图模式",
     en: "Enable Puzzle Mode",
   },
+  puzzle_enable_hint: {
+    zh: "把作品拆分成可以分别打印、最后再拼合的拼图片。",
+    en: "Splits the design into pieces that can be printed separately and assembled afterward.",
+  },
   puzzle_batch_disabled_hint: {
     zh: "批量模式下暂不支持拼图模式。",
     en: "Puzzle mode is unavailable while batch mode is active.",
@@ -2965,6 +2989,22 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "默认值为 10.0 像素/毫米。",
     en: "The default is 10.0 px/mm.",
   },
+  "settings.smooth_vector_preview_heading": {
+    zh: "平滑 SVG 轻量预览",
+    en: "Smooth lightweight SVG preview",
+  },
+  "settings.smooth_vector_preview_description": {
+    zh: "优先用 SVG 原始轮廓生成平滑、轻量的浏览器 3D 模型；关闭后回退旧版像素分区预览。",
+    en: "Prefer smooth, lightweight browser 3D geometry from the original SVG outlines; turn it off to use the legacy pixel-segmented preview.",
+  },
+  "settings.smooth_vector_preview_hint": {
+    zh: "默认开启，仅影响原生矢量模式的浏览器 3D 显示，不改变 3MF、材料或打印质量。可在兼容性排查时临时关闭。",
+    en: "On by default. This affects only browser 3D display for native Vector mode; it does not change the 3MF, materials, or print quality. Turn it off temporarily for compatibility troubleshooting.",
+  },
+  "settings.smooth_vector_preview_help_aria": {
+    zh: "关于平滑 SVG 轻量预览",
+    en: "About smooth lightweight SVG preview",
+  },
   "settings.auto_replace_gradient_heading": {
     zh: "自动清理渐变条纹",
     en: "Clean gradient banding automatically",
@@ -3026,6 +3066,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   "settings.base_layer_height_modifier_desc": {
     zh: "生成 3MF 时会计入固定首层，并选择能准确落在底板边界、且符合当前机型限制的较粗层高，缩短底板耗时并避免余数导致少层。仅对当前设置中选择的兼容切片软件生效，并使用各自的机器配置；浮雕、双面模型或没有安全可选值时会自动跳过。",
     en: "When generating a 3MF, this accounts for the fixed first layer and selects a compatible coarser height that lands exactly on the backing boundary and fits the selected printer. It applies only to the compatible slicer selected in Settings and uses that slicer's own machine profile; reliefs, double-sided prints, and cases where no safe value exists are skipped.",
+  },
+  "settings.wipe_tower_auto_placement": {
+    zh: "擦料塔自动摆放",
+    en: "Automatic wipe-tower placement",
+  },
+  "settings.wipe_tower_auto_placement_desc": {
+    zh: "生成 3MF 时，Lumina 会根据所选打印机的可打印区域自动移动模型，并调整擦料塔的位置和尺寸来避免碰撞。关闭后会保留切片软件模板里的擦料塔参数，需要你在切片软件中自行检查和调整。",
+    en: "When generating a 3MF, Lumina uses the selected printer's build area to move the model and adjust the wipe tower's position and size to avoid collisions. Turn this off to keep the slicer template's tower settings and check the layout manually in your slicer.",
   },
   "settings.custom_slicer_path": {
     zh: "手动切片软件路径",
@@ -5502,6 +5550,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "启用浮雕",
     en: "Enable Relief",
   },
+  relief_enable_hint: {
+    zh: "根据图片明暗或高度图，让平面作品产生高低起伏。",
+    en: "Uses image brightness or a heightmap to add raised and recessed detail to a flat design.",
+  },
   relief_vector_unsupported_mode: {
     zh: "原生 SVG 浮雕目前仅支持非五色扩展的单面模式。",
     en: "Native SVG relief currently supports only single-sided, non-5-Color Extended mode.",
@@ -5548,6 +5600,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "启用外轮廓",
     en: "Enable Outline",
   },
+  outline_enable_hint: {
+    zh: "沿作品外缘生成一圈可以调整宽度的边框。",
+    en: "Adds an adjustable border around the outside edge of the design.",
+  },
   outline_width: {
     zh: "外轮廓厚度",
     en: "Outline Width",
@@ -5576,6 +5632,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "启用掐丝珐琅",
     en: "Enable Cloisonné",
   },
+  cloisonne_enable_hint: {
+    zh: "沿色块边界生成凸起线条，形成类似掐丝珐琅的分隔效果。",
+    en: "Raises lines along color boundaries to create a cloisonné-style separated look.",
+  },
   cloisonne_wire_width: {
     zh: "金属丝宽度",
     en: "Wire Width",
@@ -5602,6 +5662,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "启用透明镀层",
     en: "Enable Transparent Coating",
   },
+  coating_enable_hint: {
+    zh: "在作品表面增加一层可用透明耗材打印的保护层。",
+    en: "Adds a surface layer intended to be printed with transparent filament.",
+  },
   coating_height: {
     zh: "透明镀层高度",
     en: "Transparent Coating Height",
@@ -5615,6 +5679,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   loop_enable: {
     zh: "添加挂件环",
     en: "Add Keychain Loop",
+  },
+  loop_enable_hint: {
+    zh: "在作品边缘增加一个可调整尺寸和位置的挂环。",
+    en: "Adds a loop whose size and position can be adjusted for a keychain or lanyard.",
   },
   loop_width: {
     zh: "环宽度",
@@ -6601,6 +6669,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "切换切片软件列表",
     en: "Toggle slicer list",
   },
+  slicer_output_hint: {
+    zh: "生成后可直接在已检测到的切片软件中打开，也可以下载 3MF；大画幅任务会下载 ZIP。",
+    en: "Open the generated model in a detected slicer or download the 3MF; large-format jobs download a ZIP.",
+  },
   slicer_preferred_mismatch: {
     zh: "当前导出格式为 {expected}，但操作栏启动目标是 {actual}",
     en: "Current export format targets {expected}, but the action bar is set to {actual}",
@@ -6945,7 +7017,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "查看 Wiki 详情 ↗",
     en: "View Wiki Details ↗",
   },
-
   // ==================== Vectorizer Panel ====================
   "vec.title": {
     zh: "图像转矢量",

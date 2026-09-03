@@ -10,6 +10,8 @@ import {
   resolvePanelSurfaceClass,
   resolveSectionCardClass,
 } from "./ui/panelPrimitives";
+import HelpDot from "./ui/HelpDot";
+import { WIKI_DOCS } from "../utils/wikiDocs";
 
 const singleStageLayerHeightOptions = [0.04, 0.08, 0.1].map((value) => ({
   label: `${value.toFixed(2)} mm`,
@@ -51,8 +53,13 @@ export default function GradientCardGeneratePanel() {
         <div className="grid gap-6 lg:grid-cols-2 w-full">
           <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4 h-full`}>
             <div>
-              <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
-                {t("mat_gradient_generate_section_title")}
+              <h3 className="flex items-center gap-1.5 text-base font-semibold text-slate-900 dark:text-slate-50">
+                <span>{t("mat_gradient_generate_section_title")}</span>
+                <HelpDot
+                  title={t("mat_gradient_generate_section_title")}
+                  description={t("mat_gradient_generate_section_desc")}
+                  wikiPath={WIKI_DOCS.gradientCardGeneration}
+                />
               </h3>
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
                 {t("mat_gradient_generate_section_desc")}
@@ -62,6 +69,8 @@ export default function GradientCardGeneratePanel() {
             <div className="flex flex-col gap-4 flex-1">
               <Dropdown
                 label={t("cal_single_stage_layer_height_label")}
+                tooltip={t("mat_gradient_generate_section_desc")}
+                wikiPath={WIKI_DOCS.gradientCardGeneration}
                 value={singleStageLayerHeightMm.toString()}
                 options={singleStageLayerHeightOptions}
                 onChange={(value) =>

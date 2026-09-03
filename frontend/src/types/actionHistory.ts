@@ -129,6 +129,7 @@ export interface AdvancedParamsGeneration {
   material_max_layer_count: number | null;
   material_backing_material_dir_name: string | null;
   material_delta_e00_tolerance: number | null;
+  enable_wipe_tower_auto_placement?: boolean;
   wipe_tower_warning_codes?: string[];
 }
 

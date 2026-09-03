@@ -3,6 +3,7 @@ import { useI18n } from "../../i18n/context";
 import { ModelingMode } from "../../api/types";
 import Checkbox from "../ui/Checkbox";
 import Slider from "../ui/Slider";
+import { WIKI_DOCS } from "../../utils/wikiDocs";
 
 export default function CloisonneSettings() {
   const { t } = useI18n();
@@ -28,11 +29,13 @@ export default function CloisonneSettings() {
         checked={enable_cloisonne}
         onChange={setEnableCloisonne}
         disabled={isVector}
+        tooltip={t("cloisonne_enable_hint")}
+        wikiPath={WIKI_DOCS.cloisonne}
       />
       {enable_cloisonne && (
         <>
-          <Slider label={t("cloisonne_wire_width")} tooltip={t("cloisonne_wire_width_hint")} value={wire_width_mm} min={0.2} max={1.2} step={0.1} unit="mm" onChange={setWireWidthMm} />
-          <Slider label={t("cloisonne_wire_height")} tooltip={t("cloisonne_wire_height_hint")} value={wire_height_mm} min={0.04} max={1.0} step={0.04} unit="mm" onChange={setWireHeightMm} />
+          <Slider label={t("cloisonne_wire_width")} tooltip={t("cloisonne_wire_width_hint")} wikiPath={WIKI_DOCS.cloisonne} value={wire_width_mm} min={0.2} max={1.2} step={0.1} unit="mm" onChange={setWireWidthMm} />
+          <Slider label={t("cloisonne_wire_height")} tooltip={t("cloisonne_wire_height_hint")} wikiPath={WIKI_DOCS.cloisonne} value={wire_height_mm} min={0.04} max={1.0} step={0.04} unit="mm" onChange={setWireHeightMm} />
         </>
       )}
     </div>

@@ -340,6 +340,76 @@ def test_generate_response_forwards_embedded_wipe_tower_warning() -> None:
     ]
 
 
+def test_color_card_response_forwards_only_embedded_wipe_tower_warnings(
+    tmp_path: Path,
+) -> None:
+    """Color-card responses expose the warning embedded in the final 3MF."""
+
+    _test_store.clear_all()
+    _test_registry.clear_all()
+    warning_code = "wipe_tower_manual_adjustment_required"
+
+    for case_name, requires_manual_adjustment, expected_warnings in (
+        ("manual", True, [warning_code]),
+        ("safe", False, []),
+    ):
+        output_path = tmp_path / f"color-card-{case_name}.3mf"
+        with zipfile.ZipFile(output_path, "w") as package:
+            package.writestr(
+                "Metadata/lumina_wipe_tower_placement.json",
+                json.dumps(
+                    {
+                        "requires_manual_adjustment": requires_manual_adjustment,
+                        "warning_code": (
+                            warning_code if requires_manual_adjustment else None
+                        ),
+                    }
+                ),
+            )
+
+        lut_path = tmp_path / f"color-card-{case_name}.npy"
+        np.save(lut_path, np.zeros((1, 3), dtype=np.uint8))
+        svg_path = tmp_path / f"color-card-{case_name}.svg"
+        svg_path.write_text("<svg/>", encoding="utf-8")
+        sid = _test_store.create()
+        _test_store.put(sid, "lut_path", str(lut_path))
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                "target_w": 4,
+                "target_h": 4,
+                "target_width_mm": 40.0,
+                "color_palette": [{"hex": "#ff0000"}],
+                "color_mode": "4-Color (RYBW)",
+            },
+        )
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": str(output_path),
+                "glb_path": None,
+                "status_msg": "OK",
+            },
+        )
+
+        try:
+            with patch(
+                "core.color_card.generate_color_card_svg",
+                return_value=str(svg_path),
+            ):
+                response = client.post(
+                    "/api/convert/color-card",
+                    json={"session_id": sid},
+                )
+
+            assert response.status_code == 200, response.text
+            assert response.json()["warnings"] == expected_warnings
+            assert response.json()["warnings"].count(warning_code) <= 1
+        finally:
+            _test_store.close(sid)
+            _test_registry.clear_all()
+
+
 def _create_session_with_preview_and_files(store: SessionStore) -> str:
     """Create a session pre-populated with preview_cache and file paths."""
     sid: str = store.create()
@@ -923,10 +993,15 @@ class TestGenerateParameterCompleteness:
         ):
             response = client.post(
                 "/api/convert/color-card",
-                json={"session_id": sid},
+                json={
+                    "session_id": sid,
+                    "enable_wipe_tower_auto_placement": False,
+                },
             )
 
         assert response.status_code == 200, response.text
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_params["enable_wipe_tower_auto_placement"] is False
         reservation = _mock_pool.submit.call_args.kwargs[
             "host_memory_reservation_bytes"
         ]
@@ -1877,6 +1952,7 @@ class TestGenerateParameterCompleteness:
             "params": {
                 "lut_name": "test_lut",
                 "enable_base_layer_height_modifier": False,
+                "enable_wipe_tower_auto_placement": False,
             },
         }
 
@@ -1893,6 +1969,7 @@ class TestGenerateParameterCompleteness:
         assert response.status_code == 200
         submitted_params = _mock_pool.submit.call_args.args[3]
         assert submitted_params["enable_base_layer_height_modifier"] is False
+        assert submitted_params["enable_wipe_tower_auto_placement"] is False
 
     def test_generated_download_survives_source_session_close(self) -> None:
         fd_img, image_path = tempfile.mkstemp(suffix=".png")
@@ -2064,6 +2141,7 @@ class TestGenerateParameterCompleteness:
         assert response.status_code == 200
         submitted_params = _mock_pool.submit.call_args.args[3]
         assert submitted_params["enable_base_layer_height_modifier"] is True
+        assert submitted_params["enable_wipe_tower_auto_placement"] is True
 
 
 class TestNativeVectorPreviewGlbReuse:
@@ -3883,6 +3961,196 @@ class TestStandardCachedAnalysisRouting:
             assert response.status_code == 409, response.text
             assert response.json()["detail"] == self._INVALID_DETAIL
             _mock_pool.submit.assert_not_called()
+        finally:
+            _test_store.close(sid)
+
+    @pytest.mark.parametrize(
+        "modeling_mode",
+        [ModelingMode.VECTOR, ModelingMode.HIGH_FIDELITY],
+    )
+    def test_generate_dimension_change_replays_edits_on_fresh_analysis(
+        self,
+        tmp_path,
+        modeling_mode: ModelingMode,
+    ) -> None:
+        """A size change forwards edit deltas but never reuses the old grid."""
+
+        pristine_rgb = np.zeros((4, 4, 3), dtype=np.uint8)
+        edited_rgb = pristine_rgb.copy()
+        edited_rgb[:2, :2] = [220, 30, 40]
+        pristine_material = np.zeros((4, 4, 5), dtype=np.int16)
+        edited_material = pristine_material.copy()
+        edited_material[:2, :2] = 1
+        sid, payload = self._create_session(
+            tmp_path,
+            modeling_mode=modeling_mode,
+            matched_rgb=edited_rgb,
+            material_matrix=edited_material,
+            cache_overrides={
+                "original_matched_rgb": pristine_rgb,
+                "original_material_matrix": pristine_material,
+            },
+        )
+        payload["params"]["target_width_mm"] = 80.0
+        try:
+            response = client.post("/api/convert/generate", json=payload)
+
+            assert response.status_code == 200, response.text
+            submitted = _mock_pool.submit.call_args.args[3]
+            assert submitted["reuse_preview_analysis"] is False
+            assert submitted["edit_projection"] == {
+                "mode": "delta",
+                "source_shape": [4, 4],
+            }
+            assert submitted["original_matched_rgb_path"] is not None
+            assert submitted["original_material_matrix_path"] is not None
+            np.testing.assert_array_equal(
+                np.load(submitted["original_matched_rgb_path"]),
+                pristine_rgb,
+            )
+            np.testing.assert_array_equal(
+                np.load(submitted["original_material_matrix_path"]),
+                pristine_material,
+            )
+            assert submitted["preview_glb_path"] is None
+        finally:
+            _test_store.close(sid)
+
+    def test_generate_dimension_change_rejects_missing_pristine_edit_artifacts(
+        self,
+        tmp_path,
+    ) -> None:
+        """A stale cache cannot masquerade as an edit delta after resizing."""
+
+        sid, payload = self._create_session(
+            tmp_path,
+            modeling_mode=ModelingMode.VECTOR,
+        )
+        payload["params"]["target_width_mm"] = 80.0
+        try:
+            response = client.post("/api/convert/generate", json=payload)
+
+            assert response.status_code == 409, response.text
+            assert response.json()["detail"] == self._INVALID_DETAIL
+            _mock_pool.submit.assert_not_called()
+        finally:
+            _test_store.close(sid)
+
+    def test_generate_dimension_change_without_edits_needs_no_replay_artifacts(
+        self,
+        tmp_path,
+    ) -> None:
+        """A plain size change runs fresh analysis without old-grid artifacts."""
+
+        sid, payload = self._create_session(
+            tmp_path,
+            modeling_mode=ModelingMode.VECTOR,
+        )
+        payload["params"]["target_width_mm"] = 80.0
+        payload["params"]["use_cached_matched_rgb"] = False
+        try:
+            response = client.post("/api/convert/generate", json=payload)
+
+            assert response.status_code == 200, response.text
+            submitted = _mock_pool.submit.call_args.args[3]
+            assert submitted["reuse_preview_analysis"] is False
+            assert submitted["edit_projection"] is None
+            assert submitted["matched_rgb_path"] is None
+            assert submitted["material_matrix_path"] is None
+        finally:
+            _test_store.close(sid)
+
+    def test_generate_dimension_change_projects_recipe_only_edits(
+        self,
+        tmp_path,
+    ) -> None:
+        """A custom recipe footprint also activates fresh-size edit replay."""
+
+        pristine_rgb = np.zeros((4, 4, 3), dtype=np.uint8)
+        pristine_material = np.zeros((4, 4, 5), dtype=np.int16)
+        sid, payload = self._create_session(
+            tmp_path,
+            modeling_mode=ModelingMode.VECTOR,
+            cache_overrides={
+                "original_matched_rgb": pristine_rgb.copy(),
+                "original_material_matrix": pristine_material.copy(),
+            },
+        )
+        payload["params"].update(
+            {
+                "target_width_mm": 80.0,
+                "use_cached_matched_rgb": False,
+                "recipe_overrides": [
+                    {
+                        "region_id": "region-A",
+                        "recipe": [1, 1, 1, 1, 1],
+                        "layer_order": "Top2Bottom",
+                    }
+                ],
+            }
+        )
+        try:
+            with patch(
+                "api.routers.converter.generate._prepare_recipe_override_worker_inputs",
+                return_value=(None, str(tmp_path / "masks.pkl")),
+            ):
+                response = client.post("/api/convert/generate", json=payload)
+
+            assert response.status_code == 200, response.text
+            submitted = _mock_pool.submit.call_args.args[3]
+            assert submitted["edit_projection"] == {
+                "mode": "recipe_masks",
+                "source_shape": [4, 4],
+            }
+            assert submitted["reuse_preview_analysis"] is False
+            assert submitted["original_matched_rgb_path"] is None
+            assert submitted["original_material_matrix_path"] is None
+            assert submitted["recipe_override_masks_path"].endswith("masks.pkl")
+        finally:
+            _test_store.close(sid)
+
+    def test_model_surface_uses_artwork_width_for_edit_grid_identity(
+        self,
+        tmp_path,
+    ) -> None:
+        """The outer model size must not invalidate unchanged surface artwork."""
+
+        sid, payload = self._create_session(
+            tmp_path,
+            modeling_mode=ModelingMode.VECTOR,
+        )
+        model_path = tmp_path / "surface-model.stl"
+        model_path.write_bytes(b"solid surface\nendsolid surface\n")
+        _test_store.put(sid, "surface_overlay_enabled", True)
+        _test_store.put(sid, "surface_model_path", str(model_path))
+        _test_store.put(sid, "surface_target_width_mm", 40.0)
+        _test_store.put(
+            sid,
+            "surface_footprint",
+            {
+                "frame": {
+                    "origin": [0.0, 0.0, 0.0],
+                    "normal": [0.0, 0.0, 1.0],
+                    "u_axis": [1.0, 0.0, 0.0],
+                    "v_axis": [0.0, 1.0, 0.0],
+                },
+                "outer": [[0.0, 0.0], [40.0, 0.0], [40.0, 40.0]],
+                "holes": [],
+                "bounds_width_mm": 40.0,
+                "bounds_height_mm": 40.0,
+            },
+        )
+        payload["params"]["target_width_mm"] = 80.0
+        try:
+            response = client.post("/api/convert/generate", json=payload)
+
+            assert response.status_code == 200, response.text
+            submitted = _mock_pool.submit.call_args.args[3]
+            converter_params = submitted["converter_params"]
+            assert converter_params["target_width_mm"] == pytest.approx(40.0)
+            assert converter_params["edit_projection"] is None
+            assert converter_params["original_matched_rgb_path"] is None
+            assert converter_params["original_material_matrix_path"] is None
         finally:
             _test_store.close(sid)
 
@@ -9879,6 +10147,16 @@ class TestConverterEntryAcceptsBaseLayerModifierKwarg:
         params = inspect.signature(convert_image_to_3d).parameters
         assert "enable_base_layer_height_modifier" in params
         assert params["enable_base_layer_height_modifier"].default is True
+
+    def test_converter_signatures_accept_wipe_tower_auto_placement(self) -> None:
+        import inspect
+
+        from core.converter import convert_image_to_3d, generate_final_model
+
+        for entry_point in (convert_image_to_3d, generate_final_model):
+            params = inspect.signature(entry_point).parameters
+            assert "enable_wipe_tower_auto_placement" in params
+            assert params["enable_wipe_tower_auto_placement"].default is True
 
     def test_convert_image_to_3d_signature_accepts_material_backing_index(self) -> None:
         import inspect

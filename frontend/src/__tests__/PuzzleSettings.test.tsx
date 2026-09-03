@@ -49,4 +49,17 @@ describe("PuzzleSettings", () => {
     expect(screen.queryByText("puzzle_summary_requested_grid")).not.toBeInTheDocument();
     expect(screen.queryByText("puzzle_back_engrave_unavailable_hint")).not.toBeInTheDocument();
   });
+
+  it("localizes the final wipe-tower warning instead of showing its code", () => {
+    useConverterStore.setState({
+      puzzleWarnings: ["wipe_tower_manual_adjustment_required"],
+    });
+
+    render(<PuzzleSettings />);
+
+    expect(screen.getByText("打印前必须手动调整擦料塔")).toBeInTheDocument();
+    expect(
+      screen.queryByText("wipe_tower_manual_adjustment_required"),
+    ).not.toBeInTheDocument();
+  });
 });

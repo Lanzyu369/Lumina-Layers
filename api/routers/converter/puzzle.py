@@ -63,6 +63,7 @@ from core.material_dynamic_solver import (
     DynamicMaterialCandidateError,
     DynamicMaterialSolverError,
 )
+from utils.bambu_3mf_writer import read_wipe_tower_placement_warnings
 
 from .common import (
     BATCH_DOWNLOAD_TTL_SECONDS,
@@ -1199,6 +1200,9 @@ async def generate_puzzle(
             "nozzle_size": generate_params.nozzle_size,
             "device_profile_id": generate_params.device_profile_id,
             "build_plate_id": generate_params.build_plate_id,
+            "enable_wipe_tower_auto_placement": (
+                generate_params.enable_wipe_tower_auto_placement
+            ),
             "relief_global_max_height": relief_global_max_height,
             "material_dynamic_layer_count_enabled": dynamic_material_settings[0],
             "material_min_layer_count": dynamic_material_settings[1],
@@ -1488,7 +1492,15 @@ async def generate_puzzle(
             device_profile_id=generate_params.device_profile_id,
             build_plate_id=generate_params.build_plate_id,
             overview_png_bytes=overview_png_bytes,
+            enable_wipe_tower_auto_placement=(
+                generate_params.enable_wipe_tower_auto_placement
+            ),
         )
+        for warning_code in read_wipe_tower_placement_warnings(
+            combined_3mf_path
+        ):
+            if warning_code not in warnings:
+                warnings.append(warning_code)
         download_id = registry.register_path(
             str(uuid.uuid4()),
             combined_3mf_path,

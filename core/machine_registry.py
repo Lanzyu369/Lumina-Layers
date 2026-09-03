@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import re
 import sys
 from typing import Any
@@ -48,6 +49,7 @@ class DeviceProfile:
     bed_depth: int
     bed_height: int
     thumbnail: str
+    bed_model: str
     nozzle_size: str
     source_profile_name: str
     template: str
@@ -111,6 +113,171 @@ def resolve_machine_registry_root() -> Path:
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         return (Path(sys._MEIPASS) / "machine_registry").resolve()
     return (Path(__file__).resolve().parents[1] / "machine_registry").resolve()
+
+
+_REGISTRY_TO_DETECTED_SLICER_ID = {
+    "BambuStudio": "bambu_studio",
+    "OrcaSlicer": "orca_slicer",
+    "SnapmakerOrca": "snapmaker_orca",
+    "ElegooSlicer": "elegoo_slicer",
+    "AnycubicSlicerNext": "anycubic_slicer_next",
+    "FlashStudio": "flash_studio",
+    "QIDIStudio": "qidi_studio",
+}
+
+
+def _detected_slicer_value(slicer: object, field: str) -> str:
+    if isinstance(slicer, Mapping):
+        return str(slicer.get(field) or "")
+    return str(getattr(slicer, field, "") or "")
+
+
+def _installed_profile_root_candidates(executable_path: Path) -> tuple[Path, ...]:
+    if executable_path.suffix.casefold() == ".app":
+        return (
+            executable_path / "Contents" / "Resources" / "profiles",
+            executable_path / "Contents" / "resources" / "profiles",
+        )
+    install_root = (
+        executable_path if executable_path.is_dir() else executable_path.parent
+    )
+    return (
+        install_root / "resources" / "profiles",
+        install_root / "Resources" / "profiles",
+        install_root / "profiles",
+    )
+
+
+def _find_installed_profile_asset(
+    *,
+    install_root: Path,
+    profile_root: Path,
+    vendor_key: str,
+    filename: str,
+) -> Path | None:
+    if (
+        not vendor_key
+        or vendor_key in {".", ".."}
+        or "/" in vendor_key
+        or "\\" in vendor_key
+        or "\0" in vendor_key
+        or PureWindowsPath(vendor_key).drive
+        or not filename
+        or filename in {".", ".."}
+        or "/" in filename
+        or "\\" in filename
+        or "\0" in filename
+        or PureWindowsPath(filename).drive
+    ):
+        return None
+    raw_vendor = Path(vendor_key)
+    raw_filename = Path(filename)
+    if (
+        raw_vendor.is_absolute()
+        or raw_vendor.name != vendor_key
+        or raw_filename.is_absolute()
+        or raw_filename.name != filename
+        or raw_filename.suffix.casefold() != ".stl"
+    ):
+        return None
+    try:
+        resolved_install_root = install_root.resolve()
+        resolved_profile_root = profile_root.resolve()
+        if os.path.commonpath(
+            [str(resolved_install_root), str(resolved_profile_root)]
+        ) != str(resolved_install_root):
+            return None
+        vendor_root = (resolved_profile_root / raw_vendor).resolve()
+        if os.path.commonpath(
+            [str(resolved_profile_root), str(vendor_root)]
+        ) != str(resolved_profile_root):
+            return None
+    except (OSError, ValueError):
+        return None
+    if not vendor_root.is_dir():
+        return None
+    target_key = filename.casefold()
+    direct = vendor_root / filename
+    candidates = [direct] if direct.is_file() else []
+    if not candidates:
+        try:
+            candidates = sorted(
+                (
+                    candidate
+                    for candidate in vendor_root.rglob("*")
+                    if candidate.is_file()
+                    and candidate.name.casefold() == target_key
+                ),
+                key=lambda candidate: candidate.as_posix().casefold(),
+            )
+        except OSError:
+            return None
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+            if os.path.commonpath([str(vendor_root), str(resolved)]) != str(
+                vendor_root
+            ):
+                continue
+        except (OSError, ValueError):
+            continue
+        return resolved
+    return None
+
+
+def resolve_installed_bed_model(
+    profile: DeviceProfile,
+    *,
+    detected_slicers: Iterable[object] | None = None,
+) -> Path | None:
+    """Resolve a native bed STL from the user's matching slicer installation.
+
+    从用户本机对应切片软件中解析原生热床 STL。第三方模型不会复制进
+    Lumina 仓库或安装包；找不到时调用方应使用 Lumina 自有 fallback。
+
+    Args:
+        profile: Selected machine registry device profile.
+            当前选择的机器注册表设备配置。
+        detected_slicers: Optional injected slicer detections for tests.
+            测试可注入的切片软件检测结果。
+
+    Returns:
+        Resolved STL path inside the matching slicer profile root, or ``None``.
+        对应切片器 profile 根目录内的 STL 路径；不可用时返回 ``None``。
+    """
+
+    filename = str(profile.bed_model or "").strip()
+    vendor_key = str(profile.vendor_key or "").strip()
+    detected_id = _REGISTRY_TO_DETECTED_SLICER_ID.get(profile.slicer_id)
+    if not filename or not vendor_key or detected_id is None:
+        return None
+    if detected_slicers is None:
+        from core.slicer import detect_installed_slicers
+
+        detected_slicers = detect_installed_slicers()
+    for slicer in detected_slicers:
+        if _detected_slicer_value(slicer, "id") != detected_id:
+            continue
+        raw_executable_path = _detected_slicer_value(slicer, "exe_path").strip()
+        if not raw_executable_path:
+            continue
+        executable_path = Path(raw_executable_path).expanduser()
+        install_root = (
+            executable_path
+            if executable_path.is_dir()
+            or executable_path.suffix.casefold() == ".app"
+            else executable_path.parent
+        )
+        for profile_root in _installed_profile_root_candidates(executable_path):
+            resolved = _find_installed_profile_asset(
+                install_root=install_root,
+                profile_root=profile_root,
+                vendor_key=vendor_key,
+                filename=filename,
+            )
+            if resolved is not None:
+                return resolved
+    return None
 
 
 def _registry_printer_slug(value: str) -> str:
@@ -302,6 +469,7 @@ def load_machine_registry(path: str | Path) -> MachineRegistry:
                     bed_depth=int(machine["bed_depth"]),
                     bed_height=int(machine["bed_height"]),
                     thumbnail=str(machine.get("thumbnail", "")),
+                    bed_model=str(machine.get("bed_model", "")),
                     nozzle_size=str(nozzle["nozzle_size"]),
                     source_profile_name=str(nozzle["source_profile_name"]),
                     template=str(nozzle["template"]),

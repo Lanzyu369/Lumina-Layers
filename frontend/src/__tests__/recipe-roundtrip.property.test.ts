@@ -103,6 +103,7 @@ describe("recipe round-trip properties", () => {
       target_height_mm: fc.integer({ min: 10, max: 400 }),
       spacer_thick: fc.double({ min: 0.2, max: 10, noNaN: true }),
       backing_infill_density_percent: fc.integer({ min: 5, max: 100 }),
+      enable_wipe_tower_auto_placement: fc.boolean(),
       quantize_colors: fc.integer({ min: 2, max: 128 }),
       high_precision_3d_preview: fc.boolean(),
       enable_cleanup: fc.boolean(),
@@ -183,7 +184,15 @@ describe("recipe round-trip properties", () => {
             ? "Single-sided"
             : DEFAULT_STATE.structure_mode,
         } as ConverterState;
-        const recipe = exportConverterRecipe(state, DEFAULT_SETTINGS, fpForLut[overrides.lut_name]);
+        const recipe = exportConverterRecipe(
+          state,
+          {
+            ...DEFAULT_SETTINGS,
+            enableWipeTowerAutoPlacement:
+              overrides.enable_wipe_tower_auto_placement,
+          },
+          fpForLut[overrides.lut_name],
+        );
         expect(recipe.puzzle.engrave_back_labels).toBe(false);
 
         // Build a minimal LuminaRecipe wrapper for restoreConverterRecipe
@@ -282,6 +291,9 @@ describe("recipe round-trip properties", () => {
         expect(restored.base_spacer_thick).toBe(baseSpacerThick);
         expect(restored.spacer_thick).toBe(expectedSpacerThick);
         expect(restored.structure_mode).toBe(expectedStructureMode);
+        expect(recipe.device.enable_wipe_tower_auto_placement).toBe(
+          overrides.enable_wipe_tower_auto_placement,
+        );
         expect(restored.backing_infill_density_percent).toBe(
           restored.enable_relief || restored.puzzleEnabled
             ? 100

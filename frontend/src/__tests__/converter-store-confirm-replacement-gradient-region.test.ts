@@ -48,6 +48,14 @@ const mockRegionReplace = vi.mocked(regionReplace);
 const mockReplaceColor = vi.mocked(replaceColor);
 const mockMutateEditorSelection = vi.mocked(mutateEditorSelection);
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 function seedStore(overrides: Partial<ConverterState> = {}) {
   useConverterStore.setState({
     sessionId: "sess-confirm",
@@ -369,5 +377,64 @@ describe("confirmReplacement · gradient-region scope", () => {
       }),
     );
     expect(useConverterStore.getState().selectionDocument?.selected_pixel_count).toBe(0);
+  });
+
+  it("does not commit a selection replacement from an older preview revision", async () => {
+    const response = deferred<RegionReplaceResponse>();
+    mockRegionReplace.mockReturnValueOnce(response.promise);
+    seedStore({
+      previewRequestRevision: 40,
+      gradientSelection: null,
+      selectionDocument: {
+        selection_revision: 5,
+        content_revision: 9,
+        selected_pixel_count: 4,
+        selected_component_count: 1,
+        selected_color_hexes: ["#aabbcc"],
+        region_ids: ["selected-region"],
+        components: [
+          {
+            label: 1,
+            region_id: "selected-region",
+            color_hex: "#aabbcc",
+            pixel_count: 4,
+            bbox: [0, 0, 2, 2],
+            anchor: [0, 0],
+          },
+        ],
+        contours: [],
+        can_undo: false,
+        can_redo: false,
+      },
+      pendingReplacement: {
+        sourceHex: "aabbcc",
+        targetHex: "ff0000",
+        mode: "multi-select",
+      },
+    });
+
+    const request = useConverterStore.getState().confirmReplacement();
+    useConverterStore.setState({
+      previewRequestRevision: 41,
+      previewImageUrl: "/api/files/new-revision.png",
+      previewBaseImageUrl: "/api/files/new-revision.png",
+      previewGlbUrl: "/api/files/new-revision.glb",
+      replacePreviewLoading: false,
+    });
+    response.resolve({
+      preview_url: "/api/files/stale-selection.png",
+      preview_glb_url: "/api/files/stale-selection.glb",
+      color_contours: null,
+      message: "stale",
+    });
+    await request;
+
+    expect(useConverterStore.getState()).toMatchObject({
+      previewRequestRevision: 41,
+      previewImageUrl: "/api/files/new-revision.png",
+      previewBaseImageUrl: "/api/files/new-revision.png",
+      previewGlbUrl: "/api/files/new-revision.glb",
+      replacePreviewLoading: false,
+    });
   });
 });

@@ -261,6 +261,15 @@ export function applyImport(
         conv.device.enable_base_layer_height_modifier,
       );
     }
+    if (
+      typeof conv.device.enable_wipe_tower_auto_placement === "boolean" &&
+      conv.device.enable_wipe_tower_auto_placement !==
+        settingsState.enableWipeTowerAutoPlacement
+    ) {
+      settingsState.setEnableWipeTowerAutoPlacement(
+        conv.device.enable_wipe_tower_auto_placement,
+      );
+    }
   }
 
   // 3. The converter is always restored first. A validated workshop source

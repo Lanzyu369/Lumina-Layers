@@ -83,6 +83,56 @@ def test_safe_p1s_layout_preserves_native_tower_settings() -> None:
     assert writer._get_build_item_translation()[:2] == pytest.approx((128.0, 128.0))
 
 
+def test_disabled_auto_placement_preserves_u1_template_without_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_path = tmp_path / "snapmaker-u1-auto-placement-disabled.3mf"
+    writer = BambuStudio3MFWriter(
+        str(output_path),
+        printer_id="snapmaker-u1",
+        slicer="SnapmakerOrca",
+        device_profile_id="SnapmakerOrca:snapmaker:snapmaker-u1:0.4",
+        enable_wipe_tower_auto_placement=False,
+    )
+    _add_material_boxes(writer, width=180.0, depth=230.0)
+    template = writer._get_base_config_template()
+
+    def fail_if_solver_runs(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("wipe-tower solver must not run when disabled")
+
+    monkeypatch.setattr(
+        "utils.bambu_3mf_writer.solve_wipe_tower_placement",
+        fail_if_solver_runs,
+    )
+
+    writer.export()
+
+    with zipfile.ZipFile(output_path) as package:
+        settings = json.loads(package.read("Metadata/project_settings.config"))
+        placement = json.loads(
+            package.read("Metadata/lumina_wipe_tower_placement.json")
+        )
+
+    for key in (
+        "wipe_tower_x",
+        "wipe_tower_y",
+        "prime_tower_width",
+        "wipe_tower_rotation_angle",
+    ):
+        assert settings[key] == template[key]
+    assert placement == {
+        "schema_version": 1,
+        "enabled": False,
+        "available": False,
+        "adapted": False,
+        "requires_manual_adjustment": False,
+        "warning_code": None,
+        "reason": "disabled_by_user",
+    }
+    assert read_wipe_tower_placement_warnings(output_path) == []
+
+
 @pytest.mark.parametrize("slicer", ("BambuStudio", "OrcaSlicer"))
 def test_a1_mini_uses_vertical_strip_for_tall_model(
     slicer: str,

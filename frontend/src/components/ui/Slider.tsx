@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { cx } from "./panelPrimitives";
 import HelpDot from "./HelpDot";
+import type { WikiDocPath } from "../../utils/wikiDocs";
 
 interface SliderProps {
   label: string;
@@ -18,6 +19,7 @@ interface SliderProps {
   disabled?: boolean;
   unit?: string;
   tooltip?: string;
+  wikiPath?: WikiDocPath;
   displayDecimals?: number;
   minInputWidthCh?: number;
 }
@@ -34,6 +36,7 @@ export default function Slider(props: SliderProps) {
   disabled = false,
   unit,
   tooltip,
+  wikiPath,
   displayDecimals,
   minInputWidthCh,
   } = props;
@@ -127,7 +130,7 @@ export default function Slider(props: SliderProps) {
       {label && (
         <label className="flex items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-200">
           <span>{label}</span>
-          {tooltip && <HelpDot title={label} description={tooltip} />}
+          {tooltip && <HelpDot title={label} description={tooltip} wikiPath={wikiPath} ariaLabel={tooltip} />}
         </label>
       )}
       <div className="flex items-center gap-2 rounded-2xl border border-slate-200/80 bg-slate-100/70 px-2 py-1.5 shadow-[var(--shadow-control)] dark:border-slate-700/80 dark:bg-slate-900/48">

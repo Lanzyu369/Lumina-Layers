@@ -92,6 +92,7 @@ export type ConvertPreviewRequest = ConvertSourceSelection & {
   model_margin?: number | null;
   quantize_colors: number;
   high_precision_3d_preview?: boolean;
+  enable_smooth_vector_preview?: boolean;
   enable_cleanup: boolean;
   enable_outline?: boolean;
   outline_width?: number;
@@ -117,6 +118,14 @@ export type ConvertPreviewRequest = ConvertSourceSelection & {
   surface_placement_json?: string;
   surface_model_transform_json?: string;
 };
+
+export interface VectorPreviewRendererResponse {
+  session_id: string;
+  status: "pending";
+  job_token: string;
+  glb_url: null;
+  renderer: "vector_analytic" | "segmented";
+}
 
 export type ConvertGenerateRequest = ConvertPreviewRequest & {
   spacer_thick: number;
@@ -154,6 +163,7 @@ export type ConvertGenerateRequest = ConvertPreviewRequest & {
   device_profile_id?: string;
   build_plate_id?: string;
   enable_base_layer_height_modifier?: boolean;
+  enable_wipe_tower_auto_placement?: boolean;
   use_cached_matched_rgb?: boolean;
 };
 
@@ -1824,6 +1834,7 @@ export interface BatchConvertParams {
   device_profile_id?: string;
   build_plate_id?: string;
   enable_base_layer_height_modifier?: boolean;
+  enable_wipe_tower_auto_placement?: boolean;
 }
 
 // ========== Five-Color Query Models ==========
@@ -2166,6 +2177,7 @@ export interface UserSettings {
   custom_slicer_id: string;
   nozzle_size: string;
   enable_base_layer_height_modifier: boolean;
+  enable_wipe_tower_auto_placement: boolean;
 }
 
 export interface UserSettingsResponse {

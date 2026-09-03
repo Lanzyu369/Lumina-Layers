@@ -313,6 +313,8 @@ export function exportConverterRecipe(
         : {}),
       enable_base_layer_height_modifier:
         settings.enableBaseLayerHeightModifier,
+      enable_wipe_tower_auto_placement:
+        settings.enableWipeTowerAutoPlacement,
     },
   };
 }

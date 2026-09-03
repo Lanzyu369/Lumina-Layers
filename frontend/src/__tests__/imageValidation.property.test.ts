@@ -99,7 +99,7 @@ describe("Feature: alpha-channel-support, Property 2: 裁剪后文件类型为 P
           const blob = new Blob(["fake-image-data"], { type: blobType });
 
           // This mirrors the submitCrop logic:
-          // const croppedFile = new File([blob], state.imageFile.name, { type: "image/png" });
+          // submitCrop assigns a derived *.png name and MIME type.
           const croppedFile = new File([blob], "test-image.png", {
             type: "image/png",
           });

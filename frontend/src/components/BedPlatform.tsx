@@ -1,128 +1,126 @@
-import { useMemo, useEffect } from "react";
+import { useMemo, useEffect, useLayoutEffect, useState } from "react";
 import { useThree } from "@react-three/fiber";
 import * as THREE from "three";
+import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
+import { getMachineBedModelUrl } from "../api/system";
+import { electronAPI } from "../integrations/electron";
 import { useConverterStore } from "../stores/converter";
+import { useSettingsStore } from "../stores/settingsStore";
+import { getSlicerLogoSource } from "../utils/slicerBranding";
 import { disposeMeshResources } from "../utils/threeDisposal";
-import { computeFitDistance } from "./ModelViewer";
-import { useThemeConfig } from "../hooks/useThemeConfig";
-import type { ThemeColors } from "./themeConfig";
+import { resolveBedPlatformColors } from "./themeConfig";
+import {
+  LUMINA_BED_MARK_URL,
+  createBedTextureRequest,
+  stageBedTextureReplacement,
+} from "./bedPlatformTexture";
+import {
+  computeBedPreviewCameraPose,
+  createFallbackBedGeometry,
+  loadNativeBedGeometrySource,
+  prepareNativeBedGeometry,
+} from "./bedPlatformGeometry";
 
-/**
- * Create a textured print bed mesh matching the backend's PEI dark style.
- * Uses a canvas-generated texture with grid lines.
- */
-function createBedTexture(
-  widthMm: number,
-  heightMm: number,
-  colors: Pick<ThemeColors, "bedBase" | "bedInner" | "bedFineGrid" | "bedBoldGrid" | "bedBorder">,
-  gridVisible: boolean,
-): THREE.CanvasTexture {
-  const scale = 2; // pixels per mm for texture
-  const texW = widthMm * scale;
-  const texH = heightMm * scale;
+function useBedImage(source: string | null): HTMLImageElement | null {
+  const [markImage, setMarkImage] = useState<HTMLImageElement | null>(null);
 
-  const canvas = document.createElement("canvas");
-  canvas.width = texW;
-  canvas.height = texH;
-  const ctx = canvas.getContext("2d")!;
+  useEffect(() => {
+    setMarkImage(null);
+    if (!source) return;
+    let active = true;
+    const image = new Image();
+    const handleLoad = () => {
+      if (active) setMarkImage(image);
+    };
+    image.addEventListener("load", handleLoad, { once: true });
+    image.src = source;
+    return () => {
+      active = false;
+      image.removeEventListener("load", handleLoad);
+    };
+  }, [source]);
 
-  // Bed base
-  ctx.fillStyle = colors.bedBase;
-  ctx.fillRect(0, 0, texW, texH);
-
-  // Inner area
-  const margin = 4;
-  const radius = 16;
-  ctx.fillStyle = colors.bedInner;
-  ctx.beginPath();
-  ctx.roundRect(margin, margin, texW - margin * 2, texH - margin * 2, radius);
-  ctx.fill();
-
-  if (gridVisible) {
-    // Fine grid (10mm)
-    ctx.strokeStyle = colors.bedFineGrid;
-    ctx.lineWidth = 1;
-    const step10 = 10 * scale;
-    for (let x = 0; x < texW; x += step10) {
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, texH);
-      ctx.stroke();
-    }
-    for (let y = 0; y < texH; y += step10) {
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(texW, y);
-      ctx.stroke();
-    }
-
-    // Bold grid (50mm)
-    ctx.strokeStyle = colors.bedBoldGrid;
-    ctx.lineWidth = 2;
-    const step50 = 50 * scale;
-    for (let x = 0; x < texW; x += step50) {
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, texH);
-      ctx.stroke();
-    }
-    for (let y = 0; y < texH; y += step50) {
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(texW, y);
-      ctx.stroke();
-    }
-  }
-
-  // Border
-  ctx.strokeStyle = colors.bedBorder;
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.roundRect(margin, margin, texW - margin * 2, texH - margin * 2, radius);
-  ctx.stroke();
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  return texture;
+  return markImage;
 }
 
-/**
- * Create a rounded-rectangle ShapeGeometry matching the bed texture corners.
- * 创建与热床纹理圆角匹配的圆角矩形几何体。
- */
-function createRoundedBedGeometry(
-  widthMm: number,
-  heightMm: number,
-  radius: number = 8
-): THREE.ShapeGeometry {
-  const hw = widthMm / 2;
-  const hh = heightMm / 2;
-  const r = Math.min(radius, hw, hh);
+function imageElementToDataUrl(image: HTMLImageElement | null): string | null {
+  if (!image) return null;
+  if (image.currentSrc.startsWith("data:")) return image.currentSrc;
 
-  const shape = new THREE.Shape();
-  shape.moveTo(-hw + r, -hh);
-  shape.lineTo(hw - r, -hh);
-  shape.quadraticCurveTo(hw, -hh, hw, -hh + r);
-  shape.lineTo(hw, hh - r);
-  shape.quadraticCurveTo(hw, hh, hw - r, hh);
-  shape.lineTo(-hw + r, hh);
-  shape.quadraticCurveTo(-hw, hh, -hw, hh - r);
-  shape.lineTo(-hw, -hh + r);
-  shape.quadraticCurveTo(-hw, -hh, -hw + r, -hh);
+  const sourceWidth = image.naturalWidth || image.width;
+  const sourceHeight = image.naturalHeight || image.height;
+  if (sourceWidth <= 0 || sourceHeight <= 0) return null;
 
-  const geo = new THREE.ShapeGeometry(shape, 16);
+  const canvas = document.createElement("canvas");
+  canvas.width = sourceWidth;
+  canvas.height = sourceHeight;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
 
-  // Remap UV from shape coords to [0,1] range
-  const pos = geo.attributes.position;
-  const uvAttr = geo.attributes.uv;
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i);
-    const y = pos.getY(i);
-    uvAttr.setXY(i, (x + hw) / widthMm, 1 - (y + hh) / heightMm);
+  try {
+    context.drawImage(image, 0, 0, sourceWidth, sourceHeight);
+    return canvas.toDataURL("image/png");
+  } catch {
+    return null;
   }
-  uvAttr.needsUpdate = true;
+}
 
-  return geo;
+function useNativeBedGeometry(
+  deviceProfileId: string,
+  printableWidthMm: number,
+  printableHeightMm: number,
+): THREE.BufferGeometry | null {
+  const modelUrl = useMemo(
+    () => getMachineBedModelUrl(deviceProfileId),
+    [deviceProfileId],
+  );
+  const [loaded, setLoaded] = useState<{
+    url: string;
+    geometry: THREE.BufferGeometry;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!modelUrl) {
+      setLoaded(null);
+      return;
+    }
+    let active = true;
+    let ownedGeometry: THREE.BufferGeometry | null = null;
+    const loader = new STLLoader();
+    void loadNativeBedGeometrySource({
+      desktopModelReader: electronAPI?.getNativeBedModel,
+      deviceProfileId,
+      loader,
+      modelUrl,
+    })
+      .then((sourceGeometry) => {
+        if (!sourceGeometry) {
+          if (active) setLoaded(null);
+          return;
+        }
+        const prepared = prepareNativeBedGeometry(
+          sourceGeometry,
+          printableWidthMm,
+          printableHeightMm,
+        );
+        sourceGeometry.dispose();
+        if (!active) {
+          prepared.dispose();
+          return;
+        }
+        ownedGeometry = prepared;
+        setLoaded({ url: modelUrl, geometry: prepared });
+      })
+      .catch(() => {
+        if (active) setLoaded(null);
+      });
+    return () => {
+      active = false;
+      ownedGeometry?.dispose();
+    };
+  }, [deviceProfileId, modelUrl, printableWidthMm, printableHeightMm]);
+
+  return loaded?.url === modelUrl ? loaded.geometry : null;
 }
 
 interface BedPlatformProps {
@@ -139,27 +137,94 @@ export default function BedPlatform({
   const modelUrl = useConverterStore((s) => s.modelUrl);
   const previewGlbUrl = useConverterStore((s) => s.previewGlbUrl);
   const batchPreviewItems = useConverterStore((s) => s.batchPreviewItems);
+  const theme = useSettingsStore((s) => s.theme);
+  const buildPlateId = useSettingsStore((s) => s.buildPlateId);
+  const deviceProfileId = useSettingsStore((s) => s.deviceProfileId);
+  const slicerSoftware = useSettingsStore((s) => s.slicerSoftware);
   const camera = useThree((state) => state.camera);
   const controls = useThree((state) => state.controls);
-  const themeColors = useThemeConfig();
 
-  // Find current bed dimensions
+  const selectedBed = useMemo(
+    () => bedSizes.find((bed) => bed.label === bed_label),
+    [bedSizes, bed_label],
+  );
+
   const bedDims = useMemo(() => {
-    const found = bedSizes.find((b) => b.label === bed_label);
-    return found ? { w: found.width_mm, h: found.height_mm } : { w: 256, h: 256 };
-  }, [bed_label, bedSizes]);
+    return selectedBed
+      ? { w: selectedBed.width_mm, h: selectedBed.height_mm }
+      : { w: 256, h: 256 };
+  }, [selectedBed]);
+
+  const luminaMarkImage = useBedImage(LUMINA_BED_MARK_URL);
+  const slicerLogoSource = useMemo(
+    () => getSlicerLogoSource(slicerSoftware),
+    [slicerSoftware],
+  );
+  const slicerLogoImage = useBedImage(slicerLogoSource);
+  const nativeBedGeometry = useNativeBedGeometry(
+    deviceProfileId,
+    bedDims.w,
+    bedDims.h,
+  );
+
+  // Find current bed dimensions and its printer-specific visual palette.
+  const bedColors = useMemo(() => {
+    return resolveBedPlatformColors(
+      theme,
+      selectedBed?.printer_id,
+      bed_label,
+      buildPlateId,
+    );
+  }, [theme, selectedBed?.printer_id, bed_label, buildPlateId]);
 
   // Create bed geometry + material
   const bedMesh = useMemo(() => {
-    const geo = createRoundedBedGeometry(bedDims.w, bedDims.h, 8);
-    const texture = createBedTexture(bedDims.w, bedDims.h, themeColors, gridVisible);
-    const mat = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.8 });
+    const geo = nativeBedGeometry
+      ? nativeBedGeometry.clone()
+      : createFallbackBedGeometry(bedDims.w, bedDims.h);
+    const mat = new THREE.MeshStandardMaterial({
+      roughness: 0.68,
+      metalness: 0.12,
+      side: THREE.DoubleSide,
+    });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.name = "scene-build-plate";
-    mesh.userData.gridVisible = gridVisible;
+    mesh.userData.bedGeometrySource = nativeBedGeometry
+      ? "slicer-native"
+      : "dimensional-fallback";
     mesh.position.set(0, 0, -0.1);
     return mesh;
-  }, [bedDims, gridVisible, themeColors]);
+  }, [bedDims, nativeBedGeometry]);
+
+  useLayoutEffect(() => {
+    const material = bedMesh.material as THREE.MeshStandardMaterial;
+    bedMesh.userData.gridVisible = gridVisible;
+    const request = createBedTextureRequest({
+      widthMm: bedDims.w,
+      heightMm: bedDims.h,
+      colors: bedColors,
+      gridVisible,
+      luminaMarkDataUrl: imageElementToDataUrl(luminaMarkImage),
+      slicerLogoDataUrl: imageElementToDataUrl(slicerLogoImage),
+      slicerLogoAspectRatio: slicerLogoImage
+        ? (slicerLogoImage.naturalWidth || 1) /
+          (slicerLogoImage.naturalHeight || 1)
+        : 1,
+    });
+    return stageBedTextureReplacement(
+      material,
+      request,
+      bedColors.bedInner,
+    );
+  }, [
+    bedColors,
+    bedDims.h,
+    bedDims.w,
+    bedMesh,
+    gridVisible,
+    luminaMarkImage,
+    slicerLogoImage,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -173,12 +238,15 @@ export default function BedPlatform({
       return;
     }
 
-    const radius = Math.max(bedDims.w, bedDims.h) / 2;
     const perspCam = camera as THREE.PerspectiveCamera;
-    const dist = computeFitDistance(radius, perspCam.fov) * 1.45;
+    const pose = computeBedPreviewCameraPose(
+      bedDims.w,
+      bedDims.h,
+      perspCam.fov,
+    );
 
-    camera.position.set(0, -57, 474);
-    camera.lookAt(0, -20, 0);
+    camera.position.set(...pose.position);
+    camera.lookAt(...pose.target);
     camera.updateProjectionMatrix();
 
     if (controls) {
@@ -188,9 +256,9 @@ export default function BedPlatform({
         minDistance: number;
         update: () => void;
       };
-      oc.target.set(0, -20, 0);
-      oc.maxDistance = dist * 5;
-      oc.minDistance = dist * 0.1;
+      oc.target.set(...pose.target);
+      oc.maxDistance = pose.fitDistance * 5;
+      oc.minDistance = pose.fitDistance * 0.1;
       oc.update();
     }
   }, [bedDims, modelUrl, previewGlbUrl, batchPreviewItems.length, surfaceModelActive, camera, controls]);

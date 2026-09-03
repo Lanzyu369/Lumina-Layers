@@ -619,6 +619,10 @@ class ConvertGenerateRequest(LutSourceSelection):
         True,
         description="Bambu 切片器：底板层高修改器开关（底板用 nozzle×0.5 粗层高打印）",
     )
+    enable_wipe_tower_auto_placement: bool = Field(
+        True,
+        description="自动调整擦料塔位置和尺寸以避开模型",
+    )
     use_cached_matched_rgb: bool = Field(
         False,
         description="使用 Session 缓存的 matched_rgb 而非从原始图像重新处理",
@@ -1544,6 +1548,32 @@ class CleanupSessionFilesResponse(BaseModel):
 
     status: str = Field("success")
     cleaned: int = Field(0, description="删除的文件数")
+
+
+class VectorPreviewRendererRequest(BaseModel):
+    """Select the lightweight browser renderer for an active Vector session.
+
+    为当前 Vector session 选择浏览器轻量预览 renderer。
+    """
+
+    session_id: str = Field(..., min_length=1, description="Session ID")
+    enable_smooth_vector_preview: bool = Field(
+        True,
+        description="Use analytic SVG polygons for the browser GLB preview.",
+    )
+
+
+class VectorPreviewRendererResponse(BaseModel):
+    """Pending state returned after scheduling a renderer-only rebuild.
+
+    仅重建 renderer 后返回的 pending 状态。
+    """
+
+    session_id: str
+    status: Literal["pending"] = "pending"
+    job_token: str
+    glb_url: None = None
+    renderer: Literal["vector_analytic", "segmented"]
 
 
 class BedSizeItem(BaseModel):

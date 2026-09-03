@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useConverterStore } from '../converter';
+import { useWidgetStore } from '../widgetStore';
 import { ModelingMode } from '../../api/types';
 import { tRuntime } from '../../i18n/runtime';
+import {
+  collectBugReportContext,
+  collectBugReportOriginalImage,
+} from '../../utils/bugReportContext';
 
 /**
  * cropStore 单元测试
@@ -47,6 +52,7 @@ function resetStore(): void {
 describe('submitCrop', () => {
   beforeEach(() => {
     resetStore();
+    useWidgetStore.setState({ activeTab: 'converter' });
     vi.clearAllMocks();
   });
 
@@ -70,6 +76,40 @@ describe('submitCrop', () => {
     expect(state.isCropping).toBe(false);
     expect(state.error).toBeNull();
     expect(state.aspectRatio).toBe(2); // 200/100
+  });
+
+  it('RAW 裁剪后 Bug 报告仍附带用户选择的原始字节', async () => {
+    const rawBytes = new Uint8Array([0x49, 0x49, 0x2a, 0x00, 0x52, 0x41, 0x57]);
+    const rawFile = new File([rawBytes], 'camera.dng', {
+      type: 'application/octet-stream',
+    });
+    useConverterStore.setState({
+      imageFile: rawFile,
+      imagePreviewUrl: '/api/files/raw-preview',
+    });
+    mockCropImage.mockResolvedValue({
+      status: 'ok',
+      message: 'Cropped',
+      cropped_url: '/api/files/cropped-raw',
+      width: 200,
+      height: 100,
+    });
+    mockFetch.mockResolvedValue({
+      blob: () => Promise.resolve(new Blob(['png-bytes'], { type: 'image/png' })),
+    });
+
+    await useConverterStore.getState().submitCrop(0, 0, 200, 100);
+
+    const croppedFile = useConverterStore.getState().imageFile;
+    expect(croppedFile).not.toBe(rawFile);
+    expect(croppedFile?.name).toBe('camera_cropped.png');
+    expect(croppedFile?.type).toBe('image/png');
+    const reportFile = collectBugReportOriginalImage();
+    expect(reportFile).toBe(rawFile);
+    expect(new Uint8Array(await reportFile!.arrayBuffer())).toEqual(rawBytes);
+    expect(collectBugReportContext().active_original_image_ref?.filename).toBe(
+      'camera.dng',
+    );
   });
 
   it('失败后设置 error 状态', async () => {

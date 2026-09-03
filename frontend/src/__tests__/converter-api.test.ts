@@ -54,6 +54,7 @@ describe("convertPreview", () => {
     enable_outline: true,
     outline_width: 2.5,
     svg_pixels_per_mm: 25.5,
+    enable_smooth_vector_preview: false,
     hue_weight: 0,
     chroma_gate: 0,
     is_dark: false,
@@ -89,6 +90,7 @@ describe("convertPreview", () => {
     expect(fd.get("enable_outline")).toBe("true");
     expect(fd.get("outline_width")).toBe("2.5");
     expect(fd.get("svg_pixels_per_mm")).toBe("25.5");
+    expect(fd.get("enable_smooth_vector_preview")).toBe("false");
 
     // 不应设置 responseType: blob（后端返回 JSON）
     expect(config).toMatchObject({ timeout: 0 });
@@ -730,6 +732,7 @@ describe("generateColorCard", () => {
         nozzle_size: "0.2",
         device_profile_id: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
         build_plate_id: "smooth-high-temp-plate",
+        enable_wipe_tower_auto_placement: false,
       },
       120,
       0.6,
@@ -748,6 +751,7 @@ describe("generateColorCard", () => {
         nozzle_size: "0.2",
         device_profile_id: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
         build_plate_id: "smooth-high-temp-plate",
+        enable_wipe_tower_auto_placement: false,
       },
       { timeout: 0 },
     );

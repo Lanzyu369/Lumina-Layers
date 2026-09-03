@@ -10,6 +10,7 @@ import {
   workstationFieldLabelClass,
   workstationInputClass,
 } from "../ui/panelPrimitives";
+import { WIKI_DOCS } from "../../utils/wikiDocs";
 
 const NOOP_BOOL: (value: boolean) => void = () => {};
 const NOOP_NUMBER: (value: number) => void = () => {};
@@ -157,6 +158,8 @@ export default function PuzzleSettings() {
         checked={puzzleEnabled}
         onChange={setPuzzleEnabled}
         disabled={batchMode}
+        tooltip={t("puzzle_enable_hint")}
+        wikiPath={WIKI_DOCS.puzzle}
       />
 
       {batchMode ? (
@@ -319,7 +322,11 @@ export default function PuzzleSettings() {
               </p>
               <div className="flex flex-col gap-1 text-xs text-amber-700 dark:text-amber-300">
                 {puzzleWarnings.map((warning, index) => (
-                  <p key={`${warning}-${index}`}>{warning}</p>
+                  <p key={`${warning}-${index}`}>
+                    {warning === "wipe_tower_manual_adjustment_required"
+                      ? t("wipe_tower_manual_adjustment_title")
+                      : warning}
+                  </p>
                 ))}
               </div>
             </div>

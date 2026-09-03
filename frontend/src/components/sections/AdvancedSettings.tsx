@@ -5,6 +5,7 @@ import {
 import { useI18n } from "../../i18n/context";
 import Slider from "../ui/Slider";
 import Checkbox from "../ui/Checkbox";
+import { WIKI_DOCS } from "../../utils/wikiDocs";
 
 export default function AdvancedSettings() {
   const { t } = useI18n();
@@ -33,35 +34,41 @@ export default function AdvancedSettings() {
       <Checkbox
         label={t("adv_isolated_pixel_cleanup")}
         tooltip={t("adv_isolated_pixel_cleanup_hint")}
+        wikiPath={WIKI_DOCS.isolatedPixelCleanup}
         checked={enable_cleanup}
         onChange={setEnableCleanup}
       />
       <Checkbox
         label={t("adv_separate_backing")}
         tooltip={t("adv_separate_backing_hint")}
+        wikiPath={WIKI_DOCS.separateBacking}
         checked={separate_backing}
         onChange={setSeparateBacking}
       />
       <Checkbox
         label={t("adv_precise_color_matching")}
         tooltip={t("adv_precise_color_matching_hint")}
+        wikiPath={WIKI_DOCS.preciseColorMatching}
         checked={use_lut_constrained}
         onChange={setUseLutConstrained}
       />
       <Checkbox
         label={t("adv_auto_dynamic_range")}
         tooltip={t("adv_auto_dynamic_range_hint")}
+        wikiPath={WIKI_DOCS.autoDynamicRange}
         checked={auto_dynamic_range}
         onChange={setAutoDynamicRange}
       />
       <Checkbox
         label={t("adv_high_precision_3d_preview")}
         tooltip={t("adv_high_precision_3d_preview_hint")}
+        wikiPath={WIKI_DOCS.highPrecision3dPreview}
         checked={high_precision_3d_preview}
         onChange={setHighPrecision3dPreview}
       />
       <Checkbox
         label={t("adv_hue_protection")}
+        wikiPath={WIKI_DOCS.hueProtection}
         tooltip={
           dynamicMaterialLayerCountActive
             ? t("adv_hue_protection_dynamic_hint")
@@ -83,11 +90,12 @@ export default function AdvancedSettings() {
         </p>
       )}
       {hue_enable && !use_lut_constrained && !dynamicMaterialLayerCountActive && (
-        <Slider label={t("adv_chroma_gate")} tooltip={t("adv_chroma_gate_hint")} value={chroma_gate} min={0} max={50} step={1} onChange={setChromaGate} />
+        <Slider label={t("adv_chroma_gate")} tooltip={t("adv_chroma_gate_hint")} wikiPath={WIKI_DOCS.darkChromaGate} value={chroma_gate} min={0} max={50} step={1} onChange={setChromaGate} />
       )}
       <Checkbox
         label={t("adv_unlock_quantize")}
         tooltip={t("adv_unlock_quantize_hint")}
+        wikiPath={WIKI_DOCS.unlockQuantizeCeiling}
         checked={quantize_colors_unlocked}
         onChange={setQuantizeColorsUnlocked}
       />

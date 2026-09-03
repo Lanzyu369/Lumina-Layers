@@ -14,7 +14,10 @@ from typing import Any, Literal
 
 import numpy as np
 
-from api.preview_cache_artifacts import is_preview_cache_artifact_ref
+from api.preview_cache_artifacts import (
+    is_preview_cache_artifact_ref,
+    refresh_preview_cache_revision,
+)
 from api.selection_state import (
     RECIPE_OVERRIDE_APPLIED_MASKS_KEY,
     SELECTION_REGION_PREFIX,
@@ -268,6 +271,7 @@ def _restore_checkpoint(
     else:
         preview_cache = None
     if preview_cache is not None:
+        preview_cache = refresh_preview_cache_revision(preview_cache)
         session_data["preview_cache"] = preview_cache
         store.put(session_id, "preview_cache", preview_cache)
 

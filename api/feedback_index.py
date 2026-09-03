@@ -172,6 +172,11 @@ def _format_attachments_table(attachments: Any) -> str:
         detail_parts: list[str] = []
         if entry.get("sha256"):
             detail_parts.append(f"sha256={entry['sha256'][:12]}…")
+        if kind == "original_image":
+            if entry.get("capture_source"):
+                detail_parts.append(f"capture={entry['capture_source']}")
+            if entry.get("direct_upload_status"):
+                detail_parts.append(f"direct={entry['direct_upload_status']}")
         if kind == "lut":
             if entry.get("kind"):
                 detail_parts.append(f"kind={entry['kind']}")
@@ -325,13 +330,22 @@ def _format_advanced_params_section(context: dict[str, Any]) -> str:
         structure_mode = generation.get("structure_mode")
         modeling_mode = generation.get("modeling_mode")
         svg_pixels_per_mm = generation.get("svg_pixels_per_mm")
+        wipe_tower_auto_placement = generation.get(
+            "enable_wipe_tower_auto_placement",
+            _MISSING,
+        )
     else:
         structure_mode = None
         modeling_mode = None
         svg_pixels_per_mm = None
+        wipe_tower_auto_placement = _MISSING
     lines.append(f"- structure_mode: {_safe_str(structure_mode)}")
     lines.append(f"- modeling_mode: {_safe_str(modeling_mode)}")
     lines.append(f"- svg_pixels_per_mm: {_safe_str(svg_pixels_per_mm)}")
+    lines.append(
+        "- enable_wipe_tower_auto_placement: "
+        f"{_safe_str(wipe_tower_auto_placement)}"
+    )
     if isinstance(generation, dict):
         warning_codes = generation.get("wipe_tower_warning_codes")
         if isinstance(warning_codes, list) and warning_codes:
@@ -534,7 +548,7 @@ def generate_index_markdown(
 
     为 ``ticket_id`` 渲染人类可读的 index.md。
     Args:
-        ticket_id: Short ticket id (``LUM-YYYYMMDD-NNN``).
+        ticket_id: Short ticket id (``LUM-YYYYMM-xxxxxxxx`` for new tickets).
         ticket_dir: Ticket directory (used only for relative-path hints).
         payload: Loaded ticket.json payload (best-effort parsed).
     Returns:
@@ -562,6 +576,9 @@ def generate_index_markdown(
         "material_layer_height_mm",
         "material_backing_material_dir_name",
         "preserve_upload_filename_for_3mf",
+        "enable_wipe_tower_auto_placement",
+        "enable_smooth_vector_preview",
+        "vector_preview_renderer",
     ):
         snapshot_lines.append(f"- {key}: {_safe_str(context.get(key))}")
 
@@ -658,6 +675,33 @@ def generate_summary_text(ticket_id: str, payload: dict[str, Any]) -> str:
         upload_filename_line = "沿用上传文件名：关闭。"
     else:
         upload_filename_line = "沿用上传文件名：(未采集)。"
+    wipe_tower_auto_placement = context.get(
+        "enable_wipe_tower_auto_placement"
+    )
+    if wipe_tower_auto_placement is True:
+        wipe_tower_line = "擦料塔自动摆放：开启。"
+    elif wipe_tower_auto_placement is False:
+        wipe_tower_line = "擦料塔自动摆放：关闭。"
+    else:
+        wipe_tower_line = "擦料塔自动摆放：(未采集)。"
+
+    smooth_vector_preview = context.get("enable_smooth_vector_preview")
+    vector_preview_renderer = context.get("vector_preview_renderer")
+    if smooth_vector_preview is True:
+        vector_preference_label = "平滑"
+    elif smooth_vector_preview is False:
+        vector_preference_label = "兼容模式"
+    else:
+        vector_preference_label = "(未采集)"
+    renderer_labels = {
+        "vector_analytic": "平滑轮廓",
+        "segmented": "分段模型",
+        None: "(当前不适用)",
+    }
+    vector_renderer_line = (
+        f"矢量预览：{vector_preference_label}；当前轻量模型："
+        f"{renderer_labels.get(vector_preview_renderer, '(未知)')}。"
+    )
 
     action_history = context.get("action_history") or []
     recent = list(_iter_list(action_history))[-5:]
@@ -687,7 +731,12 @@ def generate_summary_text(ticket_id: str, payload: dict[str, Any]) -> str:
             continue
         status = entry.get("status", "unknown")
         filename = entry.get("filename") or "(无)"
-        attachment_lines.append(f"- {kind}: {status} → {filename}")
+        detail = ""
+        if kind == "original_image":
+            capture_source = entry.get("capture_source") or "(无)"
+            direct_status = entry.get("direct_upload_status") or "(未知)"
+            detail = f"（来源={capture_source}，直接上传={direct_status}）"
+        attachment_lines.append(f"- {kind}: {status} → {filename}{detail}")
 
     material_block = ""
     if source_version == "material":
@@ -719,6 +768,8 @@ def generate_summary_text(ticket_id: str, payload: dict[str, Any]) -> str:
         f"提交时工作流：{active_tab} Tab / {source_version} 模式 / "
         f"颜色模式 {color_mode} / LUT {lut_name}。{material_block}\n\n"
         f"{upload_filename_line}\n\n"
+        f"{wipe_tower_line}\n\n"
+        f"{vector_renderer_line}\n\n"
         f"{workshop_block}"
         f"{advanced_line}\n\n"
         f"最近操作：{' → '.join(action_lines) if action_lines else '(无记录)'}。\n\n"

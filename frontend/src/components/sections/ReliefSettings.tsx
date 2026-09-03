@@ -16,6 +16,7 @@ import Dropdown from "../ui/Dropdown";
 import ImageUpload from "../ui/ImageUpload";
 import { useI18n } from "../../i18n/context";
 import { workstationFieldLabelClass } from "../ui/panelPrimitives";
+import { WIKI_DOCS } from "../../utils/wikiDocs";
 
 export default function ReliefSettings() {
   const { t } = useI18n();
@@ -110,8 +111,9 @@ export default function ReliefSettings() {
           tooltip={
             isUnsupportedVectorRelief
               ? t("relief_vector_unsupported_mode")
-              : undefined
+              : t("relief_enable_hint")
           }
+          wikiPath={WIKI_DOCS.relief}
         />
 
         {enable_relief && (
@@ -119,6 +121,7 @@ export default function ReliefSettings() {
             <Slider
               label={t("relief_max_height")}
               tooltip={t("relief_max_height_hint")}
+              wikiPath={WIKI_DOCS.relief}
               value={heightmap_max_height}
               min={minimumReliefHeight}
               max={15.0}
@@ -129,6 +132,8 @@ export default function ReliefSettings() {
 
             <Dropdown
               label={t("relief_auto_height_mode")}
+              tooltip={t("relief_enable_hint")}
+              wikiPath={WIKI_DOCS.relief}
               value={autoHeightMode}
               options={AUTO_HEIGHT_OPTIONS}
               onChange={handleModeChange}

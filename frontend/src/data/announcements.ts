@@ -16,6 +16,50 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-09-03",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [
+      {
+        category: { zh: "新功能", en: "New" },
+        items: [
+          {
+            zh: "设置里新增“擦料塔自动摆放”开关，默认开启；关闭后，生成的 3MF 会保留切片软件模板里的擦料塔参数，方便你手动安排位置和尺寸。",
+            en: "Settings now include an Automatic wipe-tower placement switch, enabled by default. Turn it off to keep the slicer template's tower position and size for manual layout.",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    version: "2026-08-30",
+    title: {
+      zh: "Lumina Layers — 8 月更新速览",
+      en: "Lumina Layers — August updates",
+    },
+    sections: [
+      {
+        category: { zh: "预览 & 交互", en: "Preview & Interaction" },
+        items: [
+          {
+            zh: "SVG 矢量作品现在默认使用平滑 SVG 轻量预览；修改尺寸和常用创意效果时，画面会直接跟着更新。需要兼容旧显示方式时，可在设置里关闭这个选项。",
+            en: "SVG artwork now uses a smooth lightweight SVG preview by default, with size and common creative changes reflected directly in the viewer. You can switch back to the previous display style in Settings when needed.",
+          },
+          {
+            zh: "点击生成后，画面会继续使用轻量预览，不会先加载体积很大的打印模型；下载的 3MF 仍按当前设置精确生成。",
+            en: "After you select Generate, the viewer keeps using the lightweight model instead of loading the much larger print model, while the downloaded 3MF is still generated precisely from your current settings.",
+          },
+          {
+            zh: "模型覆面现在会显示改色后的实际画面，不再退回原始颜色；SVG 轮廓也会保持平滑。",
+            en: "The model-surface preview now shows the genuinely recoloured artwork instead of reverting to its original colours, while SVG edges stay smooth.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-08-23",
     title: {
       zh: "Lumina Layers — 8 月更新速览",

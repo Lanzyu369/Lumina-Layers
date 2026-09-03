@@ -123,6 +123,7 @@ def test_pyinstaller_spec_bundles_only_registry_runtime_contract(monkeypatch) ->
 
     assert packaged == _expected_machine_registry_manifest()
     assert not any("/assets/" in path for path in packaged)
+    assert not any("/bed_models/" in path for path in packaged)
     assert "machine_registry/BUILD_PLATE_SOURCES.md" not in packaged
 
 
@@ -213,6 +214,26 @@ def test_electron_build_packages_workshop_security_boundary() -> None:
     )
 
     assert "workshop-security.cjs" in package_json["build"]["files"]
+
+
+def test_electron_build_packages_native_bed_model_bridge() -> None:
+    package_json = json.loads(
+        (ROOT / "electron" / "package.json").read_text(encoding="utf-8")
+    )
+    main = (ROOT / "electron" / "main.cjs").read_text(encoding="utf-8")
+    preload = (ROOT / "electron" / "preload.cjs").read_text(encoding="utf-8")
+    build_script = (ROOT / "scripts" / "build_desktop.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "bed-model-bridge.cjs" in package_json["build"]["files"]
+    assert "bed-model-bridge.cjs" in build_script
+    assert 'ipcMain.handle("get-native-bed-model"' in main
+    assert "isAllowedBedModelIpcSender" in main
+    assert "fetchNativeBedModel" in main
+    assert "pathToFileURL" in main
+    assert "getNativeBedModel" in preload
+    assert "get-native-bed-model" in preload
 
 
 def test_desktop_build_preflights_workshop_security_files() -> None:

@@ -1745,6 +1745,7 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
             ),
             "auto_dynamic_range": bool(ctx.get("auto_dynamic_range", False)),
             "backing_color_id": backing_color_id,
+            "spacer_thick": ctx.get("spacer_thick", 1.6),
             "is_dark": is_dark,
             "bed_label": BedManager.DEFAULT_BED,
             "lut_metadata": lut_metadata,
@@ -1769,6 +1770,7 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
                 _VECTOR_PARSE_CLIP_CACHE,
                 _serialize_vector_parse_clip_cache,
                 _vector_parse_clip_cache_key,
+                _vector_parse_clip_cache_provenance,
             )
 
             cache_key = _vector_parse_clip_cache_key(
@@ -1793,6 +1795,9 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
             cache["vector_parse_clip_cache_blob"] = _serialize_vector_parse_clip_cache(
                 cache_key,
                 cache_entry,
+            )
+            cache["vector_parse_clip_cache_provenance"] = (
+                _vector_parse_clip_cache_provenance(cache_key)
             )
         except COORDINATOR_HANDLED_ERRORS as exc:
             log.debug(
@@ -1900,9 +1905,22 @@ def _run_vector_branch(ctx: dict) -> dict:
     requested_color_layers = ctx.get("color_layers")
     lut_metadata = ctx.get("lut_metadata")
     matched_rgb_path = ctx.get("matched_rgb_path")
+    original_matched_rgb_path = ctx.get("original_matched_rgb_path")
     height_identity_rgb_path = ctx.get("height_identity_rgb_path")
     mask_solid_path = ctx.get("mask_solid_path")
     material_matrix_path = ctx.get("material_matrix_path")
+    original_material_matrix_path = ctx.get("original_material_matrix_path")
+    edit_projection = ctx.get("edit_projection")
+    edit_projection_source_shape = None
+    edit_projection_mode = None
+    if isinstance(edit_projection, dict):
+        edit_projection_mode = str(edit_projection.get("mode") or "")
+        source_shape = edit_projection.get("source_shape")
+        if isinstance(source_shape, (list, tuple)) and len(source_shape) == 2:
+            edit_projection_source_shape = (
+                int(source_shape[0]),
+                int(source_shape[1]),
+            )
     vector_preview_pixels_per_mm = 10.0
     try:
         backing_color_id = int(ctx.get("backing_color_id", 0) or 0)
@@ -1997,6 +2015,9 @@ def _run_vector_branch(ctx: dict) -> dict:
         # "2D \u9884\u89c8\u53d8\u4e86\u3001\u6700\u7ec8\u6a21\u578b\u6ca1\u53d8" \u7684\u73b0\u8c61\u3002
         cached_analysis_required = preview_analysis_reuse_is_required(
             ctx.get("reuse_preview_analysis")
+        ) or (
+            edit_projection_mode == "delta"
+            and edit_projection_source_shape is not None
         )
         if cached_analysis_required and not (
             matched_rgb_path and mask_solid_path and material_matrix_path
@@ -2004,13 +2025,19 @@ def _run_vector_branch(ctx: dict) -> dict:
             raise CachedPreviewAnalysisError(
                 "Required vector preview analysis artifacts are incomplete"
             )
-        if matched_rgb_path and mask_solid_path:
+        if (
+            matched_rgb_path
+            and mask_solid_path
+            and edit_projection_mode != "recipe_masks"
+        ):
             matched_rgb_override_t0 = time.perf_counter()
             cached_matched_rgb = None
             raw_mask_solid = None
             cached_mask_solid = None
             cached_material_matrix = None
             cached_height_identity_rgb = None
+            cached_original_matched_rgb = None
+            cached_original_material_matrix = None
             try:
                 cached_matched_rgb = np.load(
                     matched_rgb_path,
@@ -2041,6 +2068,25 @@ def _run_vector_branch(ctx: dict) -> dict:
                         allow_pickle=False,
                         mmap_mode="r",
                     )
+                if original_matched_rgb_path:
+                    cached_original_matched_rgb = np.load(
+                        original_matched_rgb_path,
+                        allow_pickle=False,
+                        mmap_mode="r",
+                    )
+                if original_material_matrix_path:
+                    cached_original_material_matrix = np.load(
+                        original_material_matrix_path,
+                        allow_pickle=False,
+                        mmap_mode="r",
+                    )
+                if edit_projection_source_shape is not None and (
+                    cached_original_matched_rgb is None
+                    or cached_original_material_matrix is None
+                ):
+                    raise CachedPreviewAnalysisError(
+                        "Required vector pristine edit artifacts are incomplete"
+                    )
 
                 # Diagnostic 2/4: material_matrix loaded from disk (post pad).
                 if cached_material_matrix is not None:
@@ -2062,11 +2108,14 @@ def _run_vector_branch(ctx: dict) -> dict:
                 rewritten = apply_matched_rgb_overrides_to_analysis(
                     analysis,
                     matched_rgb=cached_matched_rgb,
+                    original_matched_rgb=cached_original_matched_rgb,
                     height_identity_rgb=cached_height_identity_rgb,
                     material_matrix=cached_material_matrix,
+                    original_material_matrix=cached_original_material_matrix,
                     mask_solid=cached_mask_solid,
                     img_processor=vec_processor.img_processor,
                     pixels_per_mm=vector_preview_pixels_per_mm,
+                    source_grid_shape=edit_projection_source_shape,
                     strict=cached_analysis_required,
                     prefer_cached_material_state=bool(
                         ctx.get("material_dynamic_layer_count_enabled", False)
@@ -2159,6 +2208,8 @@ def _run_vector_branch(ctx: dict) -> dict:
                     cached_mask_solid,
                     cached_material_matrix,
                     cached_height_identity_rgb,
+                    cached_original_matched_rgb,
+                    cached_original_material_matrix,
                 )
 
         # 1a. Apply per-region recipe overrides (custom recipe dialog +
@@ -2216,6 +2267,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                         base_channel_idx=base_channel_idx,
                         img_processor=vec_processor.img_processor,
                         pixels_per_mm=vector_preview_pixels_per_mm,
+                        source_grid_shape=edit_projection_source_shape,
                     )
 
                     # Diagnostic 4/4: shape recipe[0] distribution after
@@ -2729,6 +2781,9 @@ def _run_vector_branch(ctx: dict) -> dict:
             enable_base_layer_height_modifier=(
                 bool(ctx.get("enable_base_layer_height_modifier", True))
                 and not bool(ctx.get("enable_relief", False))
+            ),
+            enable_wipe_tower_auto_placement=bool(
+                ctx.get("enable_wipe_tower_auto_placement", True)
             ),
             enable_relief=bool(ctx.get("enable_relief", False)),
             base_height_mm=float(ctx.get("bambu_base_height_mm", 0.0)),

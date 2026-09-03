@@ -250,6 +250,7 @@ CONVERTER_STRUCTURED_EVENTS = {
     "converter_auto_detect_colors_failed",
     "converter_auto_detect_temp_cleanup_failed",
     "converter_cleanup_session_files_done",
+    "converter_vector_preview_renderer_done",
     # Auxiliary material-archive usage tracking. The success path has no
     # dedicated event (per-archive bookkeeping piggybacks on the existing
     # ``converter_generate_*`` events); only the failure path is logged so
@@ -321,8 +322,6 @@ FEEDBACK_STRUCTURED_EVENTS = {
     "feedback_screenshot_too_large",
     "feedback_screenshot_invalid",
     "feedback_dump_failed",
-    "feedback_ticket_sequence_exhausted",
-    "feedback_ticket_scan_failed",
     "feedback_ticket_assembly_interrupted",
     "feedback_startup_cleanup_failed",
     "feedback_config_invalid_env",

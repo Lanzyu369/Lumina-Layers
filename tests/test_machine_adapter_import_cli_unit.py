@@ -9,6 +9,7 @@ from tools.machine_adapter.import_profiles import (
     ImportSource,
     _asset_slug,
     _copy_thumbnail_file,
+    _safe_bed_model_filename,
     run_import,
     run_import_sources,
 )
@@ -65,6 +66,151 @@ def test_run_import_writes_registry_and_templates(tmp_path):
     assert templates
     template = json.loads(templates[0].read_text(encoding="utf-8"))
     assert template["layer_height"] == "0.08"
+
+
+def test_run_import_keeps_only_native_slicer_bed_model_filename(tmp_path):
+    source_root = tmp_path / "Resources" / "profiles"
+    machine_dir = source_root / "BBL" / "machine"
+    _write_machine_profile(
+        machine_dir,
+        "fdm_common.json",
+        {
+            "type": "machine",
+            "name": "fdm_common",
+            "instantiation": "false",
+            "printable_height": "180",
+            "printable_area": ["0x0", "180x0", "180x180", "0x180"],
+        },
+    )
+    _write_machine_profile(
+        machine_dir,
+        "Bambu Lab A1 mini.json",
+        {
+            "type": "machine_model",
+            "name": "Bambu Lab A1 mini",
+            "bed_model": "bbl-3dp-A1M.stl",
+        },
+    )
+    _write_machine_profile(
+        machine_dir,
+        "Bambu Lab A1 mini 0.4 nozzle.json",
+        {
+            "type": "machine",
+            "name": "Bambu Lab A1 mini 0.4 nozzle",
+            "inherits": "fdm_common",
+            "instantiation": "true",
+            "printer_model": "Bambu Lab A1 mini",
+            "printer_variant": "0.4",
+            "nozzle_diameter": ["0.4"],
+        },
+    )
+    native_model = source_root / "BBL" / "bbl-3dp-A1M.stl"
+    native_model.parent.mkdir(parents=True, exist_ok=True)
+    native_model.write_bytes(b"native-slicer-bed-model")
+
+    output_root = tmp_path / "machine_registry"
+    run_import(
+        slicer_id="BambuStudio",
+        source_root=source_root,
+        source_version="02.07.00.07",
+        vendor_keys=("BBL",),
+        output_root=output_root,
+    )
+
+    registry = json.loads((output_root / "registry.json").read_text(encoding="utf-8"))
+    machine = registry["slicers"][0]["machines"][0]
+    assert machine["bed_model"] == "bbl-3dp-A1M.stl"
+    assert not list(output_root.rglob("*.stl"))
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["../bed.stl", r"..\bed.stl", r"C:\bed.stl", "folder/bed.stl", "bed.obj"],
+)
+def test_safe_bed_model_filename_rejects_paths_and_non_stl(value: str) -> None:
+    assert _safe_bed_model_filename(value) == ""
+
+
+def test_run_import_sources_keeps_bed_models_scoped_to_their_slicer(tmp_path):
+    sources: list[ImportSource] = []
+    bed_model_roots: dict[str, tuple[tuple[Path, str], ...]] = {}
+    for slicer_id, bed_model_name in (
+        ("BambuStudio", "bambu-native-bed.stl"),
+        ("OrcaSlicer", "orca-native-bed.stl"),
+    ):
+        source_root = tmp_path / "sources" / slicer_id
+        machine_dir = source_root / "BBL" / "machine"
+        _write_machine_profile(
+            machine_dir,
+            "fdm_common.json",
+            {
+                "type": "machine",
+                "name": "fdm_common",
+                "instantiation": "false",
+                "printable_height": "180",
+                "printable_area": ["0x0", "180x0", "180x180", "0x180"],
+            },
+        )
+        _write_machine_profile(
+            machine_dir,
+            "Bambu Lab A1 mini 0.4 nozzle.json",
+            {
+                "type": "machine",
+                "name": "Bambu Lab A1 mini 0.4 nozzle",
+                "inherits": "fdm_common",
+                "instantiation": "true",
+                "printer_model": "Bambu Lab A1 mini",
+                "printer_variant": "0.4",
+                "nozzle_diameter": ["0.4"],
+            },
+        )
+        asset_root = tmp_path / "applications" / slicer_id / "profiles"
+        _write_machine_profile(
+            asset_root / "BBL" / "machine",
+            "Bambu Lab A1 mini.json",
+            {
+                "type": "machine_model",
+                "name": "Bambu Lab A1 mini",
+                "bed_model": bed_model_name,
+            },
+        )
+        bed_model_roots[slicer_id] = ((asset_root, "BBL"),)
+        sources.append(
+            ImportSource(
+                slicer_id=slicer_id,
+                source_root=source_root,
+                source_version="test-version",
+                vendor_keys=("BBL",),
+            )
+        )
+
+    output_root = tmp_path / "machine_registry"
+    run_import_sources(
+        sources,
+        output_root=output_root,
+        bed_model_metadata_search_roots_by_slicer=bed_model_roots,
+    )
+
+    registry = json.loads((output_root / "registry.json").read_text(encoding="utf-8"))
+    for slicer in registry["slicers"]:
+        bed_model = slicer["machines"][0]["bed_model"]
+        assert bed_model == {
+            "BambuStudio": "bambu-native-bed.stl",
+            "OrcaSlicer": "orca-native-bed.stl",
+        }[slicer["slicer_id"]]
+    assert not list(output_root.rglob("*.stl"))
+
+
+def test_run_import_sources_refuses_to_overwrite_registry_without_sources(tmp_path):
+    output_root = tmp_path / "machine_registry"
+    output_root.mkdir()
+    registry_path = output_root / "registry.json"
+    registry_path.write_text('{"sentinel": true}', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="No machine profile sources"):
+        run_import_sources([], output_root=output_root)
+
+    assert registry_path.read_text(encoding="utf-8") == '{"sentinel": true}'
 
 
 def test_run_import_generates_neutral_build_plates_and_resolves_machine_default(

@@ -1059,6 +1059,8 @@ def _build_merged_placement_writer(
     items: Sequence[MergedItem],
     assemblies: Sequence[_SourceAssembly],
     output_path: Path,
+    *,
+    enable_wipe_tower_auto_placement: bool = True,
 ):
     """Create a metadata writer configured for the merged source machine."""
 
@@ -1080,6 +1082,7 @@ def _build_merged_placement_writer(
         ),
         nozzle_size=nozzle_size,
         enable_base_layer_height_modifier=False,
+        enable_wipe_tower_auto_placement=enable_wipe_tower_auto_placement,
     )
 
 
@@ -1087,6 +1090,8 @@ def _resolve_merged_wipe_tower_placement(
     items: Sequence[MergedItem],
     assemblies: Sequence[_SourceAssembly],
     output_path: Path,
+    *,
+    enable_wipe_tower_auto_placement: bool = True,
 ):
     """Solve one tower layout around the complete merged model group."""
 
@@ -1096,7 +1101,12 @@ def _resolve_merged_wipe_tower_placement(
         items,
         assemblies,
         output_path,
+        enable_wipe_tower_auto_placement=(
+            enable_wipe_tower_auto_placement
+        ),
     )
+    if not enable_wipe_tower_auto_placement:
+        return placement_writer, None, (0.0, 0.0)
     model_bounds = Rect(
         min(item.tx_mm for item in items),
         min(item.ty_mm for item in items),
@@ -1203,18 +1213,21 @@ def _build_project_settings_bytes_for_merge(
         settings["wipe_tower_rotation_angle"] = placement_writer._format_number(
             placement.tower_rotation
         )
-        from utils.bambu_3mf_writer import _normalize_difference_index
+        if placement.adapted:
+            from utils.bambu_3mf_writer import _normalize_difference_index
 
-        settings["different_settings_to_system"] = _normalize_difference_index(
-            settings.get("different_settings_to_system"),
-            (
-                "wipe_tower_x",
-                "wipe_tower_y",
-                "prime_tower_width",
-                "wipe_tower_rotation_angle",
-                "enable_prime_tower",
-            ),
-        )
+            settings["different_settings_to_system"] = (
+                _normalize_difference_index(
+                    settings.get("different_settings_to_system"),
+                    (
+                        "wipe_tower_x",
+                        "wipe_tower_y",
+                        "prime_tower_width",
+                        "wipe_tower_rotation_angle",
+                        "enable_prime_tower",
+                    ),
+                )
+            )
 
     colours = settings.get("filament_colour")
     if not isinstance(colours, list) or not colours:
@@ -1548,6 +1561,7 @@ class MergedBambu3MFWriter:
         *,
         plate_width_mm: float,
         plate_depth_mm: float,
+        enable_wipe_tower_auto_placement: bool = True,
     ) -> None:
         """Write merged 3MF to ``output_path``.
 
@@ -1556,6 +1570,9 @@ class MergedBambu3MFWriter:
             output_path: Destination path for the merged 3MF file.
             plate_width_mm: Plate X dimension (mm); stored in metadata.
             plate_depth_mm: Plate Y dimension (mm); stored in metadata.
+            enable_wipe_tower_auto_placement: Whether to solve and apply one
+                wipe-tower layout for the full merged group. (是否为整个合并模型组
+                求解并应用擦料塔自动布局。)
 
         Raises:
             MergedWriteError: items is empty, source_3mf_path parse fails,
@@ -1579,7 +1596,14 @@ class MergedBambu3MFWriter:
             assemblies.append(_parse_source_assembly(idx, item))
 
         try:
-            self._write_opc(items, assemblies, output_path, plate_width_mm, plate_depth_mm)
+            self._write_opc(
+                items,
+                assemblies,
+                output_path,
+                plate_width_mm,
+                plate_depth_mm,
+                enable_wipe_tower_auto_placement,
+            )
         except MergedWriteError:
             raise
         except (OSError, ET.ParseError) as exc:
@@ -1594,6 +1618,7 @@ class MergedBambu3MFWriter:
         output_path: Path,
         plate_width_mm: float,
         plate_depth_mm: float,
+        enable_wipe_tower_auto_placement: bool,
     ) -> None:
         """Build and write the OPC (ZIP) archive using neroued_3mf.
 
@@ -1614,6 +1639,9 @@ class MergedBambu3MFWriter:
                 items,
                 assemblies,
                 output_path,
+                enable_wipe_tower_auto_placement=(
+                    enable_wipe_tower_auto_placement
+                ),
             )
         )
         if group_translation != (0.0, 0.0):

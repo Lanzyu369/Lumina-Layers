@@ -68,6 +68,7 @@ import {
   cleanupSessionFiles as apiCleanupSessionFiles,
   uploadLut as apiUploadLut,
   getGlbStatus as apiGetGlbStatus,
+  rebuildVectorPreviewRenderer as apiRebuildVectorPreviewRenderer,
   uploadModelSurface as apiUploadModelSurface,
   selectModelSurface as apiSelectModelSurface,
 } from "../../api/converter";
@@ -89,6 +90,8 @@ import {
   toAbsoluteReliefHeightMap,
 } from "../../utils/colorUtils";
 import { normalizeResourceUrl } from "../../utils/resourceUrl";
+import { computeScaleFactor } from "../../utils/scaleUtils";
+import { createPreviewSpace } from "../../utils/previewSpace";
 import {
   createFridgeMagnetFromPreset,
   getDefaultFridgeMagnetPresetKey,
@@ -110,6 +113,7 @@ import {
   registerPreviewArtifactInvalidator,
   registerSingleItemDownloadInvalidator,
 } from "../generatedArtifactInvalidation";
+import { registerPrinterBedLabelSynchronizer } from "../printerBedLabelSync";
 import { uploadImagePreview } from "../../api/system";
 import { tRuntime } from "../../i18n/runtime";
 import { fetchMaterialColorSuggestions } from "../../api/materialCache";
@@ -133,6 +137,13 @@ import {
   rotateImageFile,
   type ImageRotationDegrees,
 } from "../../utils/imageRotation";
+import { resolveVectorPreviewRenderer } from "../../utils/vectorPreviewRenderer";
+import {
+  canCommitPreviewResponse,
+  capturePreviewCommitGuard,
+  type PreviewCommitGuard,
+  type PreviewCommitOwner,
+} from "./previewCommitGuard";
 
 type LuminaWindow = Window & {
   __luminaGenerateStart?: number;
@@ -263,6 +274,26 @@ export const RAW_EXTENSIONS_CONVERTER = new Set([
 function isRawFileConverter(file: File): boolean {
   const ext = file.name.toLowerCase().slice(file.name.lastIndexOf("."));
   return RAW_EXTENSIONS_CONVERTER.has(ext);
+}
+
+const bugReportOriginalImageFiles = new WeakMap<File, File>();
+
+function rememberDerivedImageSource(derivedFile: File, currentFile: File): void {
+  bugReportOriginalImageFiles.set(
+    derivedFile,
+    bugReportOriginalImageFiles.get(currentFile) ?? currentFile,
+  );
+}
+
+/** Resolve the user-selected source behind a cropped or rotated converter file.
+ *
+ * 获取裁剪或旋转后的 Converter 文件所对应的用户原始输入文件。
+ */
+export function resolveBugReportOriginalImageFile(
+  currentFile: File | null,
+): File | null {
+  if (!currentFile) return null;
+  return bugReportOriginalImageFiles.get(currentFile) ?? currentFile;
 }
 
 function visibleConverterError(error: unknown, fallback: string): string {
@@ -852,14 +883,39 @@ function hasAdjustmentState(
   );
 }
 
+type FridgeMagnetLayoutState = Pick<
+  ConverterState,
+  | "modelBounds"
+  | "target_width_mm"
+  | "target_height_mm"
+  | "preview_width_mm"
+  | "preview_height_mm"
+>;
+
 function getFallbackModelBounds(
-  state: Pick<
-    ConverterState,
-    "modelBounds" | "target_width_mm" | "target_height_mm"
-  >,
+  state: FridgeMagnetLayoutState,
 ): NonNullable<ConverterState["modelBounds"]> {
   if (state.modelBounds) {
-    return state.modelBounds;
+    const { scaleX, scaleY } = computeScaleFactor(
+      state.target_width_mm,
+      state.target_height_mm,
+      state.preview_width_mm,
+      state.preview_height_mm,
+    );
+    const displayBounds = createPreviewSpace(
+      state.modelBounds,
+      scaleX,
+      scaleY,
+    ).displayBounds;
+    const width = displayBounds.maxX - displayBounds.minX;
+    const height = displayBounds.maxY - displayBounds.minY;
+    return {
+      minX: -width / 2,
+      maxX: width / 2,
+      minY: -height / 2,
+      maxY: height / 2,
+      maxZ: displayBounds.maxZ,
+    };
   }
 
   return {
@@ -872,23 +928,13 @@ function getFallbackModelBounds(
 }
 
 function getModelCenter(
-  state: Pick<
-    ConverterState,
-    "modelBounds" | "target_width_mm" | "target_height_mm"
-  >,
+  _state: FridgeMagnetLayoutState,
 ): { x: number; y: number } {
-  const bounds = getFallbackModelBounds(state);
-  return {
-    x: (bounds.minX + bounds.maxX) / 2,
-    y: (bounds.minY + bounds.maxY) / 2,
-  };
+  return { x: 0, y: 0 };
 }
 
 function getDefaultFridgeMagnetCount(
-  state: Pick<
-    ConverterState,
-    "modelBounds" | "target_width_mm" | "target_height_mm"
-  >,
+  state: FridgeMagnetLayoutState,
 ): number {
   const bounds = getFallbackModelBounds(state);
   const width = Math.max(bounds.maxX - bounds.minX, 0);
@@ -957,20 +1003,19 @@ function buildFridgeMagnetLayoutRatios(count: number): Array<[number, number]> {
 }
 
 function buildSuggestedFridgeMagnetCenters(
-  state: Pick<
-    ConverterState,
-    "modelBounds" | "target_width_mm" | "target_height_mm"
-  >,
+  state: FridgeMagnetLayoutState,
   count: number,
 ): Array<{ x: number; y: number }> {
   const bounds = getFallbackModelBounds(state);
+  const boundsCenterX = (bounds.minX + bounds.maxX) / 2;
+  const boundsCenterY = (bounds.minY + bounds.maxY) / 2;
   const interpolate = (min: number, max: number, ratio: number) =>
     min + (max - min) * ratio;
 
   return buildFridgeMagnetLayoutRatios(Math.max(1, count)).map(
     ([xRatio, yRatio]) => ({
-      x: interpolate(bounds.minX, bounds.maxX, xRatio),
-      y: interpolate(bounds.minY, bounds.maxY, yRatio),
+      x: interpolate(bounds.minX, bounds.maxX, xRatio) - boundsCenterX,
+      y: interpolate(bounds.minY, bounds.maxY, yRatio) - boundsCenterY,
     }),
   );
 }
@@ -998,12 +1043,22 @@ function clampFridgeMagnetLayoutCenter(
   const { width, height } = getFridgeMagnetLayoutSize(magnet);
   const halfWidth = width / 2;
   const halfHeight = height / 2;
+  const boundsCenterX = (bounds.minX + bounds.maxX) / 2;
+  const boundsCenterY = (bounds.minY + bounds.maxY) / 2;
   const clampAxis = (value: number, min: number, max: number) =>
     min > max ? (min + max) / 2 : clampValue(value, min, max);
 
   return {
-    x: clampAxis(center.x, bounds.minX + halfWidth, bounds.maxX - halfWidth),
-    y: clampAxis(center.y, bounds.minY + halfHeight, bounds.maxY - halfHeight),
+    x: clampAxis(
+      center.x,
+      bounds.minX - boundsCenterX + halfWidth,
+      bounds.maxX - boundsCenterX - halfWidth,
+    ),
+    y: clampAxis(
+      center.y,
+      bounds.minY - boundsCenterY + halfHeight,
+      bounds.maxY - boundsCenterY - halfHeight,
+    ),
   };
 }
 
@@ -1026,10 +1081,7 @@ function sanitizeOptionalFiniteNumber(
 }
 
 function layoutFridgeMagnetsByCenters(
-  state: Pick<
-    ConverterState,
-    "modelBounds" | "target_width_mm" | "target_height_mm"
-  >,
+  state: FridgeMagnetLayoutState,
   magnets: FridgeMagnetItem[],
   initialCenters?: Array<{ x: number; y: number }>,
 ): FridgeMagnetItem[] {
@@ -1136,6 +1188,8 @@ function canonicalizeFridgeMagnets(
     | "modelBounds"
     | "target_width_mm"
     | "target_height_mm"
+    | "preview_width_mm"
+    | "preview_height_mm"
     | "base_spacer_thick"
     | "enable_fridge_magnet"
     | "fridge_magnets"
@@ -1191,10 +1245,7 @@ function createNextFridgeMagnetId(fridgeMagnets: FridgeMagnetItem[]): string {
 }
 
 function buildDefaultFridgeMagnetLayout(
-  state: Pick<
-    ConverterState,
-    "modelBounds" | "target_width_mm" | "target_height_mm"
-  >,
+  state: FridgeMagnetLayoutState,
 ): FridgeMagnetItem[] {
   const magnets = buildSuggestedFridgeMagnetCenters(
     state,
@@ -1221,7 +1272,12 @@ function buildDefaultFridgeMagnetLayout(
 function autoLayoutFridgeMagnets(
   state: Pick<
     ConverterState,
-    "modelBounds" | "target_width_mm" | "target_height_mm" | "fridge_magnets"
+    | "modelBounds"
+    | "target_width_mm"
+    | "target_height_mm"
+    | "preview_width_mm"
+    | "preview_height_mm"
+    | "fridge_magnets"
   >,
 ): FridgeMagnetItem[] {
   const currentMagnets = state.fridge_magnets.map(normalizeFridgeMagnetItem);
@@ -1242,6 +1298,8 @@ function buildFridgeMagnetState(
     | "modelBounds"
     | "target_width_mm"
     | "target_height_mm"
+    | "preview_width_mm"
+    | "preview_height_mm"
     | "base_spacer_thick"
     | "enable_fridge_magnet"
     | "fridge_magnets"
@@ -1329,13 +1387,22 @@ function getPreviewBaseUrl(
 
 let replacementPreviewEpoch = 0;
 
-function bumpReplacementPreviewEpoch(): number {
+function captureReplacementPreviewCommit(
+  owner: PreviewCommitOwner,
+): PreviewCommitGuard {
   replacementPreviewEpoch += 1;
-  return replacementPreviewEpoch;
+  return capturePreviewCommitGuard(owner, replacementPreviewEpoch);
 }
 
-function isCurrentReplacementPreviewEpoch(epoch: number): boolean {
-  return epoch === replacementPreviewEpoch;
+function isCurrentReplacementPreviewCommit(
+  current: PreviewCommitOwner,
+  guard: PreviewCommitGuard,
+): boolean {
+  return canCommitPreviewResponse(current, guard, replacementPreviewEpoch);
+}
+
+function invalidateReplacementPreviewCommits(): void {
+  replacementPreviewEpoch += 1;
 }
 
 let selectionMutationQueue: Promise<void> = Promise.resolve();
@@ -2501,6 +2568,11 @@ export interface ConverterActions {
    */
   _pollAsyncGlb: () => void;
 
+  /** Rebuild only the lightweight GLB renderer for the current SVG session. */
+  rebuildVectorPreviewRenderer: (
+    enableSmoothVectorPreview: boolean,
+  ) => Promise<void>;
+
   // 模型边界
   setModelBounds: (bounds: ConverterState["modelBounds"]) => void;
 
@@ -3511,6 +3583,8 @@ const GLB_POLL_MAX_MS = 5 * 60_000;
 // 单调递增的 token：新轮询/切换 session 都会自增，旧循环下一轮检测到 token
 // 变了就退出，避免多路 polling 互相覆盖 previewGlbUrl。
 let _glbPollSequence = 0;
+let _vectorRendererRequestSequence = 0;
+let _vectorRendererRequestQueue: Promise<void> = Promise.resolve();
 let _generateRequestSequence = 0;
 let _batchRequestSequence = 0;
 let _activeFilenameEligibleGenerateSequence: number | null = null;
@@ -3528,6 +3602,8 @@ function _cancelPreviewWork(): void {
   _gradientGroupsAbortController?.abort();
   _gradientGroupsAbortController = null;
   _glbPollSequence += 1;
+  _vectorRendererRequestSequence += 1;
+  invalidateReplacementPreviewCommits();
   _endPreviewTimer();
 }
 
@@ -3734,6 +3810,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           state.imagePreviewUrl,
           degrees,
         );
+        rememberDerivedImageSource(rotatedFile, state.imageFile);
         _get().setImageFile(rotatedFile);
       } catch (err) {
         set({
@@ -4602,20 +4679,25 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set((state) => {
         const max = state.largeFormatEnabled ? 9999 : 400;
         const clamped = clampValue(width, 10, max);
-        if (state.aspectRatio) {
-          return {
-            target_width_mm: clamped,
-            target_height_mm: clampValue(
-              Math.round(clamped / state.aspectRatio),
-              10,
-              max,
-            ),
-            threemfDiskPath: null,
-            downloadUrl: null,
-          };
-        }
+        const dimensions = state.aspectRatio
+          ? {
+              target_width_mm: clamped,
+              target_height_mm: clampValue(
+                Math.round(clamped / state.aspectRatio),
+                10,
+                max,
+              ),
+            }
+          : { target_width_mm: clamped };
+        const fridgeMagnets = state.fridge_magnets.length > 0
+          ? canonicalizeFridgeMagnets(
+              { ...state, ...dimensions },
+              state.fridge_magnets,
+            )
+          : state.fridge_magnets;
         return {
-          target_width_mm: clamped,
+          ...dimensions,
+          fridge_magnets: fridgeMagnets,
           threemfDiskPath: null,
           downloadUrl: null,
         };
@@ -4625,17 +4707,28 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set((state) => {
         const max = state.largeFormatEnabled ? 9999 : 400;
         const clamped = clampValue(height, 10, max);
-        if (state.aspectRatio) {
-          return {
-            target_height_mm: clamped,
-            target_width_mm: clampValue(
-              Math.round(clamped * state.aspectRatio),
-              10,
-              max,
-            ),
-          };
-        }
-        return { target_height_mm: clamped };
+        const dimensions = state.aspectRatio
+          ? {
+              target_height_mm: clamped,
+              target_width_mm: clampValue(
+                Math.round(clamped * state.aspectRatio),
+                10,
+                max,
+              ),
+            }
+          : { target_height_mm: clamped };
+        return {
+          ...dimensions,
+          fridge_magnets:
+            state.fridge_magnets.length > 0
+              ? canonicalizeFridgeMagnets(
+                  { ...state, ...dimensions },
+                  state.fridge_magnets,
+                )
+              : state.fridge_magnets,
+          threemfDiskPath: null,
+          downloadUrl: null,
+        };
       }),
 
     setSpacerThick: (thick: number) =>
@@ -5589,7 +5682,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         colors,
         newHex,
       );
-      const epoch = bumpReplacementPreviewEpoch();
+      const previewCommit = captureReplacementPreviewCommit(state);
       set({
         colorRemapMap: newMap,
         remapHistory: newHistory,
@@ -5619,7 +5712,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             };
           }),
         );
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         const updates: Partial<ConverterState> = {
           replacePreviewLoading: false,
           previewImageUrl: normalizeResourceUrl(response.preview_url),
@@ -5634,7 +5727,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         set(updates);
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         // Roll the whole batch back — same semantics as the old loop.
         // 整批回滚，和旧循环语义一致。
         set({
@@ -5968,7 +6061,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         return;
       }
       const adjustmentSnapshot = createAdjustmentSnapshot(state);
-      const epoch = bumpReplacementPreviewEpoch();
+      const previewCommit = captureReplacementPreviewCommit(state);
       set({
         replacePreviewLoading: true,
         error: null,
@@ -5977,7 +6070,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       });
       try {
         const response = await apiRegionReplace(sid, `#${newHex}`);
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         if (_get().sessionId !== sid) {
           return;
         }
@@ -6018,7 +6111,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }));
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         if (_get().sessionId !== sid) {
           return;
         }
@@ -6043,7 +6136,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         return;
       }
       const hexNoHash = targetHex.replace(/^#/, "").toLowerCase();
-      const epoch = bumpReplacementPreviewEpoch();
+      const previewCommit = captureReplacementPreviewCommit(state);
       set({
         replacePreviewLoading: true,
         error: null,
@@ -6058,7 +6151,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           gradientGroupIndex: groupIndex,
           gradientRegionIndex: regionIndex,
         });
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         if (_get().sessionId !== sid) return;
         const updates: Partial<ConverterState> = {
           previewImageUrl: normalizeResourceUrl(response.preview_url),
@@ -6098,7 +6191,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }));
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         if (_get().sessionId !== sid) return;
         set({
           adjustmentHistory: state.adjustmentHistory,
@@ -6232,7 +6325,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }
       if (!targetHex) return;
 
-      const epoch = bumpReplacementPreviewEpoch();
+      const previewCommit = captureReplacementPreviewCommit(state);
       set({
         replacePreviewLoading: true,
         error: null,
@@ -6251,7 +6344,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             replacementColor: `#${targetHex}`,
           })),
         );
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         if (_get().sessionId !== sid) return;
         const updates: Partial<ConverterState> = {
           previewImageUrl: normalizeResourceUrl(response.preview_url),
@@ -6287,7 +6380,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }));
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         if (_get().sessionId !== sid) return;
         set({
           adjustmentHistory: state.adjustmentHistory,
@@ -6329,7 +6422,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         Math.min(256, Math.round(localQuantizeColors)),
       );
 
-      const epoch = bumpReplacementPreviewEpoch();
+      const previewCommit = captureReplacementPreviewCommit(state);
       set({
         replacePreviewLoading: true,
         error: null,
@@ -6348,7 +6441,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           })),
           clamped,
         );
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         if (_get().sessionId !== sid) return;
         const updates: Partial<ConverterState> = {
           previewImageUrl: normalizeResourceUrl(response.preview_url),
@@ -6402,7 +6495,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }));
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         if (_get().sessionId !== sid) return;
         set({
           adjustmentHistory: state.adjustmentHistory,
@@ -6422,7 +6515,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       const hexNoHash = targetHex.replace(/^#/, "").toLowerCase();
       if (!hexNoHash) return;
 
-      const epoch = bumpReplacementPreviewEpoch();
+      const previewCommit = captureReplacementPreviewCommit(state);
       set({
         replacePreviewLoading: true,
         error: null,
@@ -6441,7 +6534,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             replacementColor: `#${hexNoHash}`,
           })),
         );
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         if (_get().sessionId !== sid) return;
         const updates: Partial<ConverterState> = {
           previewImageUrl: normalizeResourceUrl(response.preview_url),
@@ -6473,7 +6566,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }));
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         if (_get().sessionId !== sid) return;
         set({
           adjustmentHistory: state.adjustmentHistory,
@@ -6519,7 +6612,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         hex: material.hex,
       }));
 
-      const epoch = bumpReplacementPreviewEpoch();
+      const previewCommit = captureReplacementPreviewCommit(state);
       set({
         replacePreviewLoading: true,
         error: null,
@@ -6541,7 +6634,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             ? { virtual_materials: clonedVirtuals }
             : {}),
         });
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         // After a custom recipe, the preview content changed, so any previous
         // selection mask is invalid. Clear the selection entirely rather than
         // trying to sync a stale mask. The user can re-select after the recipe
@@ -6550,6 +6643,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         if (currentSelection && currentSelection.selected_component_count > 0) {
           await _get().applySelectionMutation({ operation: "clear" });
         }
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         set((current) => ({
           replacePreviewLoading: false,
           previewImageUrl:
@@ -6592,7 +6686,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }));
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         set({
           adjustmentHistory: state.adjustmentHistory,
           adjustmentRedoHistory: state.adjustmentRedoHistory,
@@ -6664,7 +6758,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           const currentSelectionState = _get();
           const selectionRevision = currentSelectionState.selectionDocument?.selection_revision;
           if (selectionRevision !== undefined && currentSelectionState.sessionId) {
-            const epoch = bumpReplacementPreviewEpoch();
+            const previewCommit =
+              captureReplacementPreviewCommit(currentSelectionState);
             set({ replacePreviewLoading: true, error: null });
             try {
               const response = await apiRegionReplace(
@@ -6673,7 +6768,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
                 undefined,
                 selectionRevision,
               );
-              if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+              if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) {
+                return;
+              }
               const current = _get();
               set({
                 previewImageUrl: normalizeResourceUrl(response.preview_url),
@@ -6711,7 +6808,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
               }
               _get()._pollAsyncGlb();
             } catch (err) {
-              if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+              if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) {
+                return;
+              }
               set({
                 replacePreviewLoading: false,
                 error: visibleConverterError(err, "Selection color replacement failed"),
@@ -6742,7 +6841,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
               replacementColor: `#${pending.targetHex}`,
             }));
           if (batchItems.length === 0) break;
-          const epoch = bumpReplacementPreviewEpoch();
+          const previewCommit = captureReplacementPreviewCommit(curState);
           set({
             replacePreviewLoading: true,
             adjustmentHistory: [
@@ -6755,7 +6854,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           });
           try {
             const response = await apiRegionReplaceBatch(sid, batchItems);
-            if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+            if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) {
+              return;
+            }
             if (_get().sessionId !== sid) return;
             const updates: Partial<ConverterState> = {
               previewImageUrl: normalizeResourceUrl(response.preview_url),
@@ -6782,7 +6883,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             }));
             _get()._pollAsyncGlb();
           } catch (err) {
-            if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+            if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) {
+              return;
+            }
             if (_get().sessionId !== sid) return;
             set({
               adjustmentHistory: curState.adjustmentHistory,
@@ -6857,13 +6960,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }
       if (state.historyBusy || !state.historyCanUndo) return;
       const sid = state.sessionId;
-      const epoch = bumpReplacementPreviewEpoch();
+      const previewCommit = captureReplacementPreviewCommit(state);
       set({ historyBusy: true, replacePreviewLoading: true, error: null });
       try {
         const response = await apiReplacementHistory(sid, "undo");
         if (
-          !isCurrentReplacementPreviewEpoch(epoch) ||
-          _get().sessionId !== sid
+          !isCurrentReplacementPreviewCommit(_get(), previewCommit)
         ) return;
         set({
           ...buildHistoryRestoreState(response),
@@ -6881,8 +6983,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }
       } catch (err) {
         if (
-          !isCurrentReplacementPreviewEpoch(epoch) ||
-          _get().sessionId !== sid
+          !isCurrentReplacementPreviewCommit(_get(), previewCommit)
         ) return;
         set({
           historyBusy: false,
@@ -6908,13 +7009,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }
       if (state.historyBusy || !state.historyCanRedo) return;
       const sid = state.sessionId;
-      const epoch = bumpReplacementPreviewEpoch();
+      const previewCommit = captureReplacementPreviewCommit(state);
       set({ historyBusy: true, replacePreviewLoading: true, error: null });
       try {
         const response = await apiReplacementHistory(sid, "redo");
         if (
-          !isCurrentReplacementPreviewEpoch(epoch) ||
-          _get().sessionId !== sid
+          !isCurrentReplacementPreviewCommit(_get(), previewCommit)
         ) return;
         set({
           ...buildHistoryRestoreState(response),
@@ -6932,8 +7032,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }
       } catch (err) {
         if (
-          !isCurrentReplacementPreviewEpoch(epoch) ||
-          _get().sessionId !== sid
+          !isCurrentReplacementPreviewCommit(_get(), previewCommit)
         ) return;
         set({
           historyBusy: false,
@@ -6961,7 +7060,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
     clearAllRemaps: () => {
       const state = _get();
-      const epoch = bumpReplacementPreviewEpoch();
+      const previewCommit = captureReplacementPreviewCommit(state);
       const adjustmentSnapshot = createAdjustmentSnapshot(state);
       const nextAdjustmentHistory = hasAdjustmentState(state)
         ? [...state.adjustmentHistory, adjustmentSnapshot]
@@ -7003,7 +7102,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       if (state.sessionId) {
         apiResetReplacements(state.sessionId)
           .then((res) => {
-            if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+            if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) {
+              return;
+            }
             const url =
               normalizeResourceUrl(res?.preview_url) ??
               _get().originalPreviewUrl ??
@@ -7023,7 +7124,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             _get()._pollAsyncGlb();
           })
           .catch(() => {
-            if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+            if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) {
+              return;
+            }
             const fallback = _get().originalPreviewUrl;
             set({
               previewImageUrl: fallback,
@@ -7143,6 +7246,79 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           }),
         () => _get().sessionId,
       );
+    },
+
+    rebuildVectorPreviewRenderer: async (
+      enableSmoothVectorPreview: boolean,
+    ) => {
+      const requested = _get();
+      if (
+        !requested.sessionId ||
+        resolveVectorPreviewRenderer(
+          requested,
+          enableSmoothVectorPreview,
+        ) === null
+      ) {
+        return;
+      }
+
+      const sessionId = requested.sessionId;
+      const previewRevision = requested.previewRequestRevision;
+      const sequence = ++_vectorRendererRequestSequence;
+      const runRequest = async (): Promise<void> => {
+        const beforeRequest = _get();
+        if (
+          sequence !== _vectorRendererRequestSequence ||
+          beforeRequest.sessionId !== sessionId ||
+          beforeRequest.previewRequestRevision !== previewRevision ||
+          useSettingsStore.getState().enableSmoothVectorPreview !==
+            enableSmoothVectorPreview
+        ) {
+          return;
+        }
+        try {
+          const response = await apiRebuildVectorPreviewRenderer(
+            sessionId,
+            enableSmoothVectorPreview,
+          );
+          const latest = _get();
+          if (
+            sequence !== _vectorRendererRequestSequence ||
+            latest.sessionId !== sessionId ||
+            latest.previewRequestRevision !== previewRevision ||
+            response.session_id !== sessionId ||
+            useSettingsStore.getState().enableSmoothVectorPreview !==
+              enableSmoothVectorPreview
+          ) {
+            return;
+          }
+          latest._pollAsyncGlb();
+        } catch (error) {
+          const latest = _get();
+          if (
+            sequence !== _vectorRendererRequestSequence ||
+            latest.sessionId !== sessionId ||
+            latest.previewRequestRevision !== previewRevision
+          ) {
+            return;
+          }
+          postClientLog("converter: vector renderer rebuild failed", {
+            scope: "converter",
+            phase: "vector-renderer-rebuild",
+            details: {
+              session_id: sessionId,
+              error: summarizeErrorForLog(error),
+            },
+          });
+        }
+      };
+
+      const queuedRequest = _vectorRendererRequestQueue.then(
+        runRequest,
+        runRequest,
+      );
+      _vectorRendererRequestQueue = queuedRequest.catch(() => undefined);
+      await queuedRequest;
     },
 
     // --- 模型边界 ---
@@ -7724,6 +7900,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       const state = _get();
       const sid = state.sessionId;
       if (!sid) return;
+      const previewCommit = captureReplacementPreviewCommit(state);
       const groups = state.gradientGroups;
       if (!groups || groups.length === 0) return;
       const group = groups.find((g) => g.group_index === groupIndex);
@@ -7748,7 +7925,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set({ replacePreviewLoading: true, error: null });
       try {
         const response = await apiRegionReplace(sid, `#${rep}`, scope);
-        if (_get().sessionId !== sid) {
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) {
           return;
         }
         const updates: Partial<ConverterState> = {
@@ -7779,7 +7956,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }));
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (_get().sessionId !== sid) {
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) {
           return;
         }
         set({
@@ -7993,6 +8170,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           modeling_mode: state.modeling_mode,
           quantize_colors: state.quantize_colors,
           high_precision_3d_preview: state.high_precision_3d_preview,
+          enable_smooth_vector_preview:
+            useSettingsStore.getState().enableSmoothVectorPreview,
           enable_cleanup: state.enable_cleanup,
           enable_outline: state.enable_outline,
           outline_width: state.outline_width,
@@ -8545,6 +8724,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           build_plate_id: generateSettings.buildPlateId,
           enable_base_layer_height_modifier:
             generateSettings.enableBaseLayerHeightModifier,
+          enable_wipe_tower_auto_placement:
+            generateSettings.enableWipeTowerAutoPlacement,
           use_cached_matched_rgb: state.regionReplacementCount > 0,
           ...(state.modelSurfaceEnabled &&
           state.modelSurfaceModelFileId &&
@@ -8596,7 +8777,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             batchPreviewItems: [],
             downloadUrl,
             threemfDiskPath: null,
-            generateWarnings: [],
+            generateWarnings: puzzleResponse.warnings ?? [],
             puzzleWarnings: puzzleResponse.warnings ?? [],
             puzzleResolvedRows: puzzleResponse.grid_rows ?? null,
             puzzleResolvedCols: puzzleResponse.grid_cols ?? null,
@@ -8798,9 +8979,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
         // Fetch cropped image as Blob to create a new File
         const blob = await downloadResourceBlob(croppedFullUrl);
-        const croppedFile = new File([blob], state.imageFile.name, {
+        const sourceBaseName = state.imageFile.name.replace(/\.[^.]+$/, "") || "image";
+        const croppedFile = new File([blob], `${sourceBaseName}_cropped.png`, {
           type: "image/png",
         });
+        rememberDerivedImageSource(croppedFile, state.imageFile);
 
         const currentState = _get();
         if (currentState.imageFile !== state.imageFile) {
@@ -9379,6 +9562,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           build_plate_id: settings.buildPlateId,
           enable_base_layer_height_modifier:
             settings.enableBaseLayerHeightModifier,
+          enable_wipe_tower_auto_placement:
+            settings.enableWipeTowerAutoPlacement,
           ...(state.enable_relief
             ? {
                 height_mode: "color",
@@ -9445,7 +9630,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       const state = _get();
       const sid = state.sessionId;
       if (!state.sessionId) return;
-      const epoch = bumpReplacementPreviewEpoch();
+      const previewCommit = captureReplacementPreviewCommit(state);
       set({ replacePreviewLoading: true, error: null });
       try {
         const response = await apiReplaceColor(
@@ -9453,7 +9638,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           `#${origHex}`,
           `#${newHex}`,
         );
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         if (_get().sessionId !== sid) return;
         const updates: Partial<ConverterState> = {
           replacePreviewLoading: false,
@@ -9469,7 +9654,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         set(updates);
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         if (_get().sessionId !== sid) return;
         // 回滚 colorRemapMap 到操作前状态
         const currentHistory = _get().remapHistory;
@@ -9496,7 +9681,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       const entries = Object.entries(state.colorRemapMap);
       if (!state.sessionId) return;
 
-      const epoch = bumpReplacementPreviewEpoch();
+      const previewCommit = captureReplacementPreviewCommit(state);
       set({ replacePreviewLoading: true, error: null });
       try {
         // Resolve each remap entry to its palette-backed selected_color
@@ -9516,7 +9701,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           };
         });
         const response = await apiReplaceColorsBatch(state.sessionId, pairs);
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         const updates: Partial<ConverterState> = {
           replacePreviewLoading: false,
           previewImageUrl: normalizeResourceUrl(response.preview_url),
@@ -9531,7 +9716,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         set(updates);
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewEpoch(epoch)) return;
+        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         set({
           replacePreviewLoading: false,
           error: visibleConverterError(err, "颜色替换预览失败"),
@@ -9773,6 +9958,14 @@ registerGeneratedArtifactInvalidator(({ preservePreviews }) => {
           layerImagesSourceKey: null,
         }),
   });
+});
+
+registerPrinterBedLabelSynchronizer((printerId) => {
+  const { bedSizes, setBedLabel } = useConverterStore.getState();
+  const printerBed = bedSizes.find((bed) => bed.printer_id === printerId);
+  if (printerBed) {
+    setBedLabel(printerBed.label);
+  }
 });
 
 registerPreviewArtifactInvalidator(() => {

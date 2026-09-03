@@ -13,6 +13,8 @@ import {
   isBatchedMaterialPhysicalMeshName,
   isLayeredMaterialColorMeshName,
   prepareInteractiveModelSceneClone,
+  resolvePreviewMeshHeightKey,
+  resolvePreviewMeshReliefHeightMm,
   resolveLayeredMaterialPreviewTransform,
   resolvePreviewColorLayerHeightMm,
   shouldApplyQuickPreviewGeometry,
@@ -178,6 +180,48 @@ describe("extractHexFromMeshName", () => {
   it("extracts the original hex from chunked V2 color mesh names", () => {
     expect(extractHexFromMeshName("color_ff0000_chunk001")).toBe("ff0000");
     expect(extractHexFromMeshName("color_00ff00_1")).toBe("00ff00");
+  });
+});
+
+describe("resolvePreviewMeshHeightKey", () => {
+  it("prefers the stable analytic height key over the display colour", () => {
+    expect(
+      resolvePreviewMeshHeightKey("color_f46429", { height_key: "BEE6F8" }),
+    ).toBe("bee6f8");
+    expect(
+      resolvePreviewMeshHeightKey("color_00ff00", { height_key: "BEE6F8" }),
+    ).toBe("bee6f8");
+  });
+
+  it("falls back to the legacy mesh-name colour for old or invalid GLBs", () => {
+    expect(resolvePreviewMeshHeightKey("color_AABBCC", {})).toBe("aabbcc");
+    expect(
+      resolvePreviewMeshHeightKey("color_AABBCC", { height_key: "#112233" }),
+    ).toBe("aabbcc");
+    expect(
+      resolvePreviewMeshHeightKey("color_AABBCC", { height_key: "invalid" }),
+    ).toBe("aabbcc");
+  });
+
+  it("keeps the relief Z target unchanged when only display colour changes", () => {
+    const options = {
+      userData: { height_key: "bee6f8" },
+      colorHeightMap: { bee6f8: 0.48, f46429: 2.4 },
+      fallbackHeightMm: 0.4,
+    };
+
+    expect(
+      resolvePreviewMeshReliefHeightMm({
+        ...options,
+        meshName: "color_bee6f8",
+      }),
+    ).toBeCloseTo(0.48, 5);
+    expect(
+      resolvePreviewMeshReliefHeightMm({
+        ...options,
+        meshName: "color_f46429",
+      }),
+    ).toBeCloseTo(0.48, 5);
   });
 });
 

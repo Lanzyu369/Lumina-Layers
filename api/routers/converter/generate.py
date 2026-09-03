@@ -732,6 +732,122 @@ def _resolve_validated_large_format_cached_analysis_paths(
     )
 
 
+def _resolve_validated_edit_projection_paths(
+    *,
+    cache: dict,
+    cache_ref: dict | None,
+    sid: str,
+    store: SessionStore,
+    matched_rgb_path: str,
+    material_matrix_path: str,
+    invalid_detail: str,
+) -> tuple[str, str, tuple[int, int]]:
+    """Resolve pristine baselines needed to replay edits after resizing.
+
+    尺寸变化时，当前缓存值本身不足以区分“用户编辑”和“旧尺寸分析”。
+    因此必须同时拥有同一 session 的 pristine RGB / 材料矩阵，缺失或网格
+    不一致时 fail closed，绝不把整张旧模型状态串到新尺寸。
+    """
+
+    try:
+        original_matched_rgb_path = _cache_field_path_or_tempfile(
+            cache=cache,
+            cache_ref=cache_ref,
+            field_name="original_matched_rgb",
+            sid=sid,
+            store=store,
+        )
+        original_material_matrix_path = _cache_field_path_or_tempfile(
+            cache=cache,
+            cache_ref=cache_ref,
+            field_name="original_material_matrix",
+            sid=sid,
+            store=store,
+        )
+        if not original_matched_rgb_path or not original_material_matrix_path:
+            raise ValueError("pristine preview edit artifacts are incomplete")
+
+        matched_shape, matched_dtype = _load_large_format_cache_array_spec(
+            matched_rgb_path
+        )
+        material_shape, material_dtype = _load_large_format_cache_array_spec(
+            material_matrix_path
+        )
+        original_rgb_shape, original_rgb_dtype = (
+            _load_large_format_cache_array_spec(original_matched_rgb_path)
+        )
+        original_material_shape, original_material_dtype = (
+            _load_large_format_cache_array_spec(original_material_matrix_path)
+        )
+        if (
+            len(matched_shape) != 3
+            or matched_shape[2] != 3
+            or matched_dtype != np.dtype(np.uint8)
+            or original_rgb_shape != matched_shape
+            or original_rgb_dtype != np.dtype(np.uint8)
+        ):
+            raise ValueError("pristine RGB does not match the edited RGB grid")
+        source_shape = (int(matched_shape[0]), int(matched_shape[1]))
+        if (
+            len(material_shape) != 3
+            or material_shape[:2] != source_shape
+            or material_shape[2] <= 0
+            or not np.issubdtype(material_dtype, np.integer)
+            or len(original_material_shape) != 3
+            or original_material_shape[:2] != source_shape
+            or original_material_shape[2] <= 0
+            or not np.issubdtype(original_material_dtype, np.integer)
+        ):
+            raise ValueError(
+                "pristine material matrix does not match the edited grid"
+            )
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+        KeyError,
+        EOFError,
+        zipfile.BadZipFile,
+    ) as exc:
+        raise HTTPException(status_code=409, detail=invalid_detail) from exc
+
+    return (
+        original_matched_rgb_path,
+        original_material_matrix_path,
+        source_shape,
+    )
+
+
+def _build_edit_projection_metadata(
+    *,
+    cache: dict,
+    source_shape: tuple[int, int] | None,
+    mode: str,
+    invalid_detail: str,
+) -> dict[str, object]:
+    """Build validated, worker-safe normalized edit-grid metadata."""
+
+    try:
+        if source_shape is None:
+            source_shape = (
+                int(cache["target_h"]),
+                int(cache["target_w"]),
+            )
+        source_h, source_w = (int(source_shape[0]), int(source_shape[1]))
+    except (KeyError, TypeError, ValueError, IndexError, OverflowError) as exc:
+        raise HTTPException(status_code=409, detail=invalid_detail) from exc
+    if (
+        source_h <= 0
+        or source_w <= 0
+        or mode not in {"delta", "recipe_masks"}
+    ):
+        raise HTTPException(status_code=409, detail=invalid_detail)
+    return {
+        "mode": mode,
+        "source_shape": [source_h, source_w],
+    }
+
+
 def _require_loadable_material_archive_cache_path(
     path: str | None,
     field_name: str,
@@ -889,6 +1005,7 @@ def _preview_analysis_params_match(
     target_width_mm: float | None,
     preview_color_layers: object = _MISSING,
     preview_layer_height_mm: object = _MISSING,
+    compare_target_width: bool = True,
 ) -> tuple[bool, str]:
     """Compare request semantics with the analysis stored by preview.
 
@@ -911,7 +1028,6 @@ def _preview_analysis_params_match(
     )
 
     checks = (
-        ("target_width_mm", target_width_mm, "float"),
         ("color_mode", request.color_mode, "enum"),
         ("modeling_mode", core_modeling_mode, "enum"),
         ("color_layers", color_layers_expected, color_layers_kind),
@@ -929,6 +1045,13 @@ def _preview_analysis_params_match(
         ("svg_pixels_per_mm", request.svg_pixels_per_mm, "float"),
         ("material_source", str(session_material_source or "lut"), "raw"),
     )
+    if compare_target_width and not _preview_analysis_param_matches(
+        cache,
+        "target_width_mm",
+        target_width_mm,
+        kind="float",
+    ):
+        return False, "param_mismatch:target_width_mm"
     for key, expected, kind in checks:
         if kind == "raw":
             if cache.get(key, _MISSING) != expected:
@@ -993,6 +1116,7 @@ def _require_standard_cached_analysis_semantics(
         target_width_mm=request.target_width_mm,
         preview_color_layers=preview_color_layers,
         preview_layer_height_mm=preview_layer_height_mm,
+        compare_target_width=False,
     )
     if not matches:
         raise HTTPException(
@@ -2259,12 +2383,53 @@ async def convert_generate(
     # 2a. Serialize cached matched_rgb to temp file if requested
     # 当存在区域替换时，将缓存的 matched_rgb 序列化为临时文件供 Worker 使用
     matched_rgb_path: str | None = None
+    original_matched_rgb_path: str | None = None
     height_identity_rgb_path: str | None = None
     mask_solid_path: str | None = None
     material_matrix_path: str | None = None
+    original_material_matrix_path: str | None = None
     quantized_image_path: str | None = None
+    generation_analysis_target_width_mm = request.target_width_mm
+    if _should_use_model_surface_overlay(session_data):
+        surface_target_width_mm = session_data.get("surface_target_width_mm")
+        if surface_target_width_mm is not None:
+            try:
+                generation_analysis_target_width_mm = float(
+                    surface_target_width_mm
+                )
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail=MODEL_SURFACE_CONFIG_UNAVAILABLE_DETAIL,
+                ) from exc
+            if (
+                not math.isfinite(generation_analysis_target_width_mm)
+                or generation_analysis_target_width_mm <= 0
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=MODEL_SURFACE_CONFIG_UNAVAILABLE_DETAIL,
+                )
+    preview_target_width_matches = _preview_analysis_param_matches(
+        cache,
+        "target_width_mm",
+        generation_analysis_target_width_mm,
+        kind="float",
+    )
+    cached_edit_projection_required = bool(
+        not preview_target_width_matches and request.use_cached_matched_rgb
+    )
+    recipe_mask_projection_required = bool(
+        not preview_target_width_matches
+        and recipe_overrides
+        and not request.use_cached_matched_rgb
+    )
+    edit_projection_required = (
+        cached_edit_projection_required or recipe_mask_projection_required
+    )
     requires_dynamic_quantized_analysis = bool(
         dynamic_material_settings[0]
+        and not edit_projection_required
         and core_modeling_mode
         in {
             CoreModelingMode.HIGH_FIDELITY,
@@ -2331,6 +2496,37 @@ async def convert_generate(
                 _MISSING,
             ),
         )
+        if cached_edit_projection_required:
+            (
+                original_matched_rgb_path,
+                original_material_matrix_path,
+                edit_projection_source_shape,
+            ) = _resolve_validated_edit_projection_paths(
+                cache=cache,
+                cache_ref=cache_ref,
+                sid=body.session_id,
+                store=store,
+                matched_rgb_path=matched_rgb_path,
+                material_matrix_path=material_matrix_path,
+                invalid_detail=STANDARD_CACHED_ANALYSIS_INVALID_DETAIL,
+            )
+            edit_projection = _build_edit_projection_metadata(
+                cache=cache,
+                source_shape=edit_projection_source_shape,
+                mode="delta",
+                invalid_detail=STANDARD_CACHED_ANALYSIS_INVALID_DETAIL,
+            )
+        else:
+            edit_projection = None
+    elif recipe_mask_projection_required:
+        edit_projection = _build_edit_projection_metadata(
+            cache=cache,
+            source_shape=None,
+            mode="recipe_masks",
+            invalid_detail=STANDARD_CACHED_ANALYSIS_INVALID_DETAIL,
+        )
+    else:
+        edit_projection = None
     if reuse_preview_analysis or request.use_cached_matched_rgb:
         effective_color_layers, effective_layer_height_mm = (
             _resolve_effective_cached_layer_settings(
@@ -2581,15 +2777,18 @@ async def convert_generate(
         "auto_dynamic_range": request.auto_dynamic_range,
         "high_precision_3d_preview": request.high_precision_3d_preview,
         "matched_rgb_path": matched_rgb_path,
+        "original_matched_rgb_path": original_matched_rgb_path,
         "height_identity_rgb_path": height_identity_rgb_path,
         "mask_solid_path": mask_solid_path,
         "material_matrix_path": material_matrix_path,
+        "original_material_matrix_path": original_material_matrix_path,
         "quantized_image_path": quantized_image_path,
         "reuse_preview_analysis": (
             REQUIRED_PREVIEW_ANALYSIS_REUSE
-            if request.use_cached_matched_rgb
+            if request.use_cached_matched_rgb and not edit_projection_required
             else reuse_preview_analysis
         ),
+        "edit_projection": edit_projection,
         "preview_glb_path": preview_glb_path,
         "vector_parse_clip_cache_path": vector_parse_clip_cache_path,
         "printer_id": request.printer_id,
@@ -2598,6 +2797,7 @@ async def convert_generate(
         "device_profile_id": request.device_profile_id,
         "build_plate_id": request.build_plate_id,
         "enable_base_layer_height_modifier": request.enable_base_layer_height_modifier,
+        "enable_wipe_tower_auto_placement": request.enable_wipe_tower_auto_placement,
         "material_source": session_material_source,
         "material_dynamic_layer_count_enabled": dynamic_material_settings[0],
         "material_min_layer_count": dynamic_material_settings[1],
@@ -3069,6 +3269,7 @@ def _resolve_large_format_shared_params(
         "device_profile_id": request.device_profile_id,
         "build_plate_id": request.build_plate_id,
         "enable_base_layer_height_modifier": request.enable_base_layer_height_modifier,
+        "enable_wipe_tower_auto_placement": request.enable_wipe_tower_auto_placement,
         "relief_global_max_height": relief_global_max_height,
         "material_dynamic_layer_count_enabled": dynamic_material_settings[0],
         "material_min_layer_count": dynamic_material_settings[1],
@@ -4523,6 +4724,10 @@ async def convert_batch(
         True,
         description="启用底板粗层高优化",
     ),
+    enable_wipe_tower_auto_placement: bool = Form(
+        True,
+        description="自动调整擦料塔位置和尺寸",
+    ),
     registry: FileRegistry = Depends(get_file_registry),
     pool: WorkerPoolManager = Depends(get_worker_pool),
 ) -> BatchResponse:
@@ -4786,6 +4991,7 @@ async def convert_batch(
                 material_max_layer_count,
                 material_delta_e00_tolerance,
                 separate_backing,
+                enable_wipe_tower_auto_placement,
                 **(
                     {
                         "host_memory_reservation_bytes": (
@@ -5021,6 +5227,9 @@ async def convert_batch(
             merged_3mf_path,
             plate_width_mm=plate_width_mm,
             plate_depth_mm=plate_depth_mm,
+            enable_wipe_tower_auto_placement=(
+                enable_wipe_tower_auto_placement
+            ),
         )
 
         for warning_code in read_wipe_tower_placement_warnings(merged_3mf_path):

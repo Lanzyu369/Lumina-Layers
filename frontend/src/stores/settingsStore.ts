@@ -7,6 +7,7 @@ import {
   invalidatePreviewArtifacts,
   invalidateSingleItemDownload,
 } from "./generatedArtifactInvalidation";
+import { synchronizePrinterBedLabel } from "./printerBedLabelSync";
 import { invalidatePreviewRequest } from "./previewRequestCoordinator";
 
 // ========== State Interface ==========
@@ -128,6 +129,11 @@ export interface SettingsState {
   enableFancyLoading: boolean;
   enableWittyLoading: boolean;
   enableCompletionNotifications: boolean;
+  /**
+   * Prefer analytic native-SVG browser geometry. This affects only the
+   * lightweight 3D preview; exact 3MF generation never consumes it.
+   */
+  enableSmoothVectorPreview: boolean;
   preserveUploadFilenameFor3mf: boolean;
   paletteMode: "swatch" | "card";
   printerModel: string;
@@ -139,6 +145,7 @@ export interface SettingsState {
   customSlicerId: string;
   nozzleSize: NozzleSize;
   enableBaseLayerHeightModifier: boolean;
+  enableWipeTowerAutoPlacement: boolean;
   /**
    * When ``false`` (default) the exhaustive-cache dialog hides its
    * density selector and builds always use the low-tier default on the
@@ -189,6 +196,7 @@ export interface SettingsActions {
   setEnableFancyLoading: (enabled: boolean) => void;
   setEnableWittyLoading: (enabled: boolean) => void;
   setEnableCompletionNotifications: (enabled: boolean) => void;
+  setEnableSmoothVectorPreview: (enabled: boolean) => void;
   setPreserveUploadFilenameFor3mf: (enabled: boolean) => void;
   setPaletteMode: (mode: "swatch" | "card") => void;
   setPrinterModel: (id: string) => void;
@@ -199,6 +207,7 @@ export interface SettingsActions {
   setCustomSlicerId: (id: string) => void;
   setNozzleSize: (size: NozzleSize) => void;
   setEnableBaseLayerHeightModifier: (enabled: boolean) => void;
+  setEnableWipeTowerAutoPlacement: (enabled: boolean) => void;
   setEnableSolverCacheGridSelection: (enabled: boolean) => void;
   setSolverCacheGridResolution: (value: SolverCacheGridResolution) => void;
   setSvgPixelsPerMm: (value: number) => void;
@@ -224,6 +233,7 @@ export const DEFAULT_SETTINGS: SettingsState = {
   enableFancyLoading: true,
   enableWittyLoading: true,
   enableCompletionNotifications: false,
+  enableSmoothVectorPreview: true,
   preserveUploadFilenameFor3mf: false,
   paletteMode: "swatch",
   printerModel: "bambu-h2d",
@@ -235,6 +245,7 @@ export const DEFAULT_SETTINGS: SettingsState = {
   customSlicerId: "",
   nozzleSize: "0.4",
   enableBaseLayerHeightModifier: true,
+  enableWipeTowerAutoPlacement: true,
   // Opt-in feature: the density dropdown is hidden by default so the
   // exhaustive-cache dialog stays focused for first-time users. When the
   // toggle is off, builds silently use the low (64) default on the backend.
@@ -428,6 +439,16 @@ export function deriveBackendDeviceSettingsPatch(
       settings.enable_base_layer_height_modifier;
   }
 
+  if (
+    typeof settings.enable_wipe_tower_auto_placement === "boolean" &&
+    current.enableWipeTowerAutoPlacement ===
+      DEFAULT_SETTINGS.enableWipeTowerAutoPlacement &&
+    !hasOwnSetting(persistedSnapshot, "enableWipeTowerAutoPlacement")
+  ) {
+    patch.enableWipeTowerAutoPlacement =
+      settings.enable_wipe_tower_auto_placement;
+  }
+
   return patch;
 }
 
@@ -492,6 +513,9 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
       setEnableCompletionNotifications: (enabled: boolean) =>
         set({ enableCompletionNotifications: enabled }),
 
+      setEnableSmoothVectorPreview: (enabled: boolean) =>
+        set({ enableSmoothVectorPreview: enabled }),
+
       setPreserveUploadFilenameFor3mf: (enabled: boolean) => {
         if (get().preserveUploadFilenameFor3mf === enabled) {
           return;
@@ -509,15 +533,7 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
             state.printerModel === id ? state.deviceProfileId : "",
         }));
         invalidateGeneratedArtifacts();
-
-        // 延迟导入避免循环依赖
-        import("./converter").then(({ useConverterStore }) => {
-          const { bedSizes, setBedLabel } = useConverterStore.getState();
-          const printerBed = bedSizes.find((bed) => bed.printer_id === id);
-          if (printerBed) {
-            setBedLabel(printerBed.label);
-          }
-        });
+        synchronizePrinterBedLabel(id);
       },
 
       setSlicerSoftware: (id: string) => {
@@ -572,6 +588,14 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
 
       setEnableBaseLayerHeightModifier: (enabled: boolean) => {
         set({ enableBaseLayerHeightModifier: enabled });
+        invalidateGeneratedArtifacts();
+      },
+
+      setEnableWipeTowerAutoPlacement: (enabled: boolean) => {
+        if (get().enableWipeTowerAutoPlacement === enabled) {
+          return;
+        }
+        set({ enableWipeTowerAutoPlacement: enabled });
         invalidateGeneratedArtifacts();
       },
 
@@ -651,6 +675,11 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
             patch.enableBaseLayerHeightModifier,
           );
         }
+        if (typeof patch.enableWipeTowerAutoPlacement === "boolean") {
+          actions.setEnableWipeTowerAutoPlacement(
+            patch.enableWipeTowerAutoPlacement,
+          );
+        }
         if (typeof patch.deviceProfileId === "string") {
           actions.setDeviceProfileId(patch.deviceProfileId);
         }
@@ -682,6 +711,8 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
             nozzle_size: state.nozzleSize,
             enable_base_layer_height_modifier:
               state.enableBaseLayerHeightModifier,
+            enable_wipe_tower_auto_placement:
+              state.enableWipeTowerAutoPlacement,
           });
         } catch {
           // best-effort sync — settings are already persisted in localStorage
@@ -707,6 +738,10 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
             persistedSettings.materialDeltaE00Tolerance ??
               currentState.materialDeltaE00Tolerance,
           ),
+          enableWipeTowerAutoPlacement:
+            typeof persistedSettings.enableWipeTowerAutoPlacement === "boolean"
+              ? persistedSettings.enableWipeTowerAutoPlacement
+              : currentState.enableWipeTowerAutoPlacement,
         };
       },
     },

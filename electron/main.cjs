@@ -14,6 +14,11 @@ const http = require("http");
 const nodeNet = require("net");
 const fs = require("fs");
 const path = require("path");
+const { pathToFileURL } = require("url");
+const {
+  fetchNativeBedModel,
+  isAllowedBedModelIpcSender,
+} = require("./bed-model-bridge.cjs");
 const {
   createWorkshopSessionToken,
   isAllowedWorkshopDownload,
@@ -436,6 +441,7 @@ if (!gotLock) {
 let win = null;
 let splashWin = null;
 let isQuitting = false;
+let trustedMainFrameUrl = null;
 
 function fixedWorkshopResponse(status, message) {
   return new Response(message, {
@@ -512,6 +518,7 @@ function installWorkshopSessionSecurity() {
       const allowed = isAllowedWorkshopRequest({
         frameUrl: details.frame?.url ?? null,
         initiator: details.referrer || null,
+        method: details.method,
         parentFrameUrl: details.frame?.parent?.url ?? null,
         resourceType: details.resourceType,
         trustedInternal,
@@ -715,6 +722,7 @@ function createWindow() {
   });
 
   if (isDev) {
+    trustedMainFrameUrl = new URL(FRONTEND_URL).href;
     win.loadURL(FRONTEND_URL);
   } else {
     const indexPath = path.join(
@@ -723,6 +731,7 @@ function createWindow() {
       "dist",
       "index.html",
     );
+    trustedMainFrameUrl = pathToFileURL(indexPath).href;
     win.loadFile(indexPath);
   }
 
@@ -773,6 +782,29 @@ ipcMain.on("set-language", (_event, lang) => {
 
 ipcMain.handle("get-app-version", () => {
   return app.getVersion();
+});
+
+ipcMain.handle("get-native-bed-model", async (event, deviceProfileId) => {
+  const senderFrame = event.senderFrame ?? null;
+  if (
+    !isAllowedBedModelIpcSender({
+      isMainFrame:
+        senderFrame !== null && senderFrame === event.sender.mainFrame,
+      senderFrameUrl: senderFrame?.url ?? null,
+      trustedMainFrameUrl,
+    })
+  ) {
+    throw new Error("Native bed model access denied for this frame.");
+  }
+  try {
+    return await fetchNativeBedModel({
+      deviceProfileId,
+      fetchImpl: electronNet.fetch,
+    });
+  } catch (_) {
+    logErr("Native bed model unavailable; using Lumina fallback.");
+    return null;
+  }
 });
 
 ipcMain.handle("get-workshop-runtime-mode", () => ({
