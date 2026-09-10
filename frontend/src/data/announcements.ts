@@ -31,6 +31,15 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
           },
         ],
       },
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [
+          {
+            zh: "修复“擦料塔自动摆放”开启后仍沿用模板位置和尺寸的问题；现在普通尺寸作品也会按当前打印机自动调整模型与擦料塔布局。",
+            en: "Fixed Automatic wipe-tower placement sometimes keeping the template position and size. Regular-sized projects now get a layout planned for the selected printer too.",
+          },
+        ],
+      },
     ],
   },
   {

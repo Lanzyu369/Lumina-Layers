@@ -8,6 +8,12 @@ import zipfile
 import pytest
 import trimesh
 
+from config import list_printer_profiles
+from core.wipe_tower_placement import (
+    Rect,
+    WipeTowerPlacementRequest,
+    _layout_is_safe,
+)
 from utils.bambu_3mf_writer import (
     BambuStudio3MFWriter,
     read_wipe_tower_placement_warnings,
@@ -32,6 +38,46 @@ def _add_material_boxes(
 
 def _project_settings(writer: BambuStudio3MFWriter) -> dict[str, object]:
     return json.loads(writer._build_project_settings_bytes().decode("utf-8"))
+
+
+def _placement_request(
+    writer: BambuStudio3MFWriter,
+) -> WipeTowerPlacementRequest:
+    template = writer._get_base_config_template()
+    bounds_min, bounds_max = writer._get_mesh_bounds()
+    request = writer._build_wipe_tower_placement_request(
+        template,
+        model_bounds=Rect(
+            float(bounds_min[0]),
+            float(bounds_min[1]),
+            float(bounds_max[0]),
+            float(bounds_max[1]),
+        ),
+        model_height=float(bounds_max[2] - bounds_min[2]),
+        material_count=len(writer._build_material_palette()[0]),
+    )
+    assert request is not None
+    return request
+
+
+def _auto_placement_profile_slicer_cases() -> tuple[
+    tuple[str, str, str | None], ...
+]:
+    cases: list[tuple[str, str, str | None]] = []
+    for profile in list_printer_profiles():
+        slicers = list(profile.slicer_templates)
+        if profile.brand == "Bambu Lab":
+            slicers.insert(0, "BambuStudio")
+        if not slicers:
+            slicers.append("BambuStudio")
+        for slicer in dict.fromkeys(slicers):
+            device_profile_id = (
+                "SnapmakerOrca:snapmaker:snapmaker-u1:0.4"
+                if profile.id == "snapmaker-u1" and slicer == "SnapmakerOrca"
+                else None
+            )
+            cases.append((profile.id, slicer, device_profile_id))
+    return tuple(cases)
 
 
 @pytest.mark.parametrize(
@@ -63,24 +109,204 @@ def test_tower_planning_uses_native_slicer_prime_volume(
     ) == pytest.approx(expected_volume)
 
 
-def test_safe_p1s_layout_preserves_native_tower_settings() -> None:
+@pytest.mark.parametrize(
+    ("printer_id", "slicer", "device_profile_id"),
+    _auto_placement_profile_slicer_cases(),
+    ids=lambda value: str(value) if value is not None else "default-profile",
+)
+def test_enabled_auto_placement_replans_typical_model_across_all_profiles(
+    printer_id: str,
+    slicer: str,
+    device_profile_id: str | None,
+) -> None:
     writer = BambuStudio3MFWriter(
-        "safe-p1s.3mf",
-        printer_id="bambu-p1s",
-        slicer="BambuStudio",
+        "auto-placement.3mf",
+        printer_id=printer_id,
+        slicer=slicer,
+        device_profile_id=device_profile_id,
     )
-    _add_material_boxes(writer, width=100.0, depth=100.0)
+    _add_material_boxes(writer, width=60.0, depth=60.0, height=1.2)
 
+    request = _placement_request(writer)
     settings = _project_settings(writer)
     placement = writer._get_wipe_tower_placement()
 
     assert placement is not None
-    assert placement.adapted is False
-    assert settings["wipe_tower_x"] == ["18.5216"]
-    assert settings["wipe_tower_y"] == ["214.154"]
-    assert settings["prime_tower_width"] == "220"
-    assert settings["wipe_tower_rotation_angle"] == "0"
-    assert writer._get_build_item_translation()[:2] == pytest.approx((128.0, 128.0))
+    assert placement.adapted is True
+    assert placement.requires_manual_adjustment is False
+    assert placement.reason.startswith("adapted_")
+    assert placement.tower_depth > 0.0
+    assert _layout_is_safe(placement, request)
+    assert placement.model_bounds.width == pytest.approx(request.model_bounds.width)
+    assert placement.model_bounds.height == pytest.approx(request.model_bounds.height)
+    assert writer._get_build_item_translation()[:2] == pytest.approx(
+        placement.model_translation
+    )
+    assert isinstance(settings["wipe_tower_x"], list)
+    assert isinstance(settings["wipe_tower_y"], list)
+    assert float(settings["wipe_tower_x"][0]) == pytest.approx(placement.tower_x)
+    assert float(settings["wipe_tower_y"][0]) == pytest.approx(placement.tower_y)
+    assert float(settings["prime_tower_width"]) == pytest.approx(
+        placement.tower_width
+    )
+    assert float(settings["wipe_tower_rotation_angle"]) == pytest.approx(
+        placement.tower_rotation
+    )
+
+    assert (placement.tower_x, placement.tower_y) != pytest.approx(
+        (request.tower_x, request.tower_y)
+    )
+
+    template_shape = (request.tower_width, request.tower_rotation)
+    if (placement.tower_width, placement.tower_rotation) == pytest.approx(
+        template_shape
+    ):
+        # A few FlashStudio templates already use the solver's preferred
+        # 30 mm tower shape; auto layout must still replace their coordinates.
+        assert template_shape == pytest.approx((30.0, 0.0))
+
+
+def test_qidi_comma_grouped_bed_exclusions_are_parsed_as_polygons() -> None:
+    q2_polygons = BambuStudio3MFWriter._parse_bed_exclusion_polygons(
+        ["0x0,11x0,11x16,0x16"]
+    )
+    x_max_polygons = BambuStudio3MFWriter._parse_bed_exclusion_polygons(
+        [
+            "0x0,16x0,16x13,0x13,0x0,0x0,0x0,0x0,"
+            "0x13,6x13,6x23,0x23,0x13,0x13,0x13,0x13,"
+            "0x387,53x387,53x390,0x390,0x387,0x387,0x397,0x390,"
+            "338x390,338x384,390x384,390x390,0x390"
+        ]
+    )
+
+    assert q2_polygons == (
+        ((0.0, 0.0), (11.0, 0.0), (11.0, 16.0), (0.0, 16.0)),
+    )
+    assert len(x_max_polygons) == 7
+    assert x_max_polygons[0] == (
+        (0.0, 0.0),
+        (16.0, 0.0),
+        (16.0, 13.0),
+        (0.0, 13.0),
+    )
+    assert x_max_polygons[-1] == (
+        (338.0, 390.0),
+        (338.0, 384.0),
+        (390.0, 384.0),
+        (390.0, 390.0),
+        (0.0, 390.0),
+    )
+
+
+def test_irregular_nine_point_bed_exclusion_remains_one_polygon() -> None:
+    points = (
+        (0.0, 4.0),
+        (1.0, 1.0),
+        (4.0, 0.0),
+        (7.0, 1.0),
+        (8.0, 4.0),
+        (7.0, 7.0),
+        (4.0, 8.0),
+        (1.0, 7.0),
+        (0.0, 4.0),
+    )
+
+    polygons = BambuStudio3MFWriter._parse_bed_exclusion_polygons(
+        [",".join(f"{x:g}x{y:g}" for x, y in points)]
+    )
+
+    assert polygons == (points,)
+
+
+def test_subdivided_rectangle_edges_are_not_treated_as_qidi_sentinels() -> None:
+    points = (
+        (0.0, 0.0),
+        (1.0, 0.0),
+        (2.0, 0.0),
+        (3.0, 0.0),
+        (4.0, 0.0),
+        (4.0, 1.0),
+        (4.0, 2.0),
+        (4.0, 3.0),
+        (4.0, 4.0),
+        (3.0, 4.0),
+        (2.0, 4.0),
+        (0.0, 4.0),
+        (0.0, 0.0),
+    )
+
+    polygons = BambuStudio3MFWriter._parse_bed_exclusion_polygons(
+        [",".join(f"{x:g}x{y:g}" for x, y in points)]
+    )
+
+    assert polygons == (points,)
+
+
+@pytest.mark.parametrize(
+    ("printer_id", "model_size"),
+    (
+        ("qidi-q2", (200.0, 180.0)),
+        ("qidi-x-max-4", (300.0, 280.0)),
+    ),
+)
+def test_qidi_auto_layout_respects_real_template_bed_exclusions(
+    printer_id: str,
+    model_size: tuple[float, float],
+) -> None:
+    writer = BambuStudio3MFWriter(
+        "qidi-exclusion-layout.3mf",
+        printer_id=printer_id,
+        slicer="QIDIStudio",
+    )
+    _add_material_boxes(writer, width=model_size[0], depth=model_size[1])
+
+    request = _placement_request(writer)
+    placement = writer._get_wipe_tower_placement()
+
+    assert request.bed_exclusions
+    assert placement is not None
+    assert placement.requires_manual_adjustment is False
+    assert _layout_is_safe(placement, request)
+
+
+def test_p1s_auto_layout_uses_compact_right_side_tower() -> None:
+    writer = BambuStudio3MFWriter(
+        "p1s-auto-layout.3mf",
+        printer_id="bambu-p1s",
+        slicer="BambuStudio",
+    )
+    _add_material_boxes(writer, width=60.0, depth=60.0)
+
+    placement = writer._get_wipe_tower_placement()
+
+    assert placement is not None
+    assert placement.reason == "adapted_right"
+    assert placement.model_translation == pytest.approx((128.0, 128.0))
+    assert placement.tower_x == pytest.approx(219.0)
+    assert placement.tower_y == pytest.approx(81.625)
+    assert placement.tower_width == pytest.approx(30.0)
+    assert placement.tower_rotation == pytest.approx(0.0)
+
+
+def test_u1_auto_placement_changes_tower_size_and_position_for_typical_model() -> None:
+    writer = BambuStudio3MFWriter(
+        "u1-typical-auto-placement.3mf",
+        printer_id="snapmaker-u1",
+        slicer="SnapmakerOrca",
+        device_profile_id="SnapmakerOrca:snapmaker:snapmaker-u1:0.4",
+    )
+    _add_material_boxes(writer, width=60.0, depth=60.0, height=1.2)
+
+    template = writer._get_base_config_template()
+    placement = writer._get_wipe_tower_placement()
+
+    assert placement is not None
+    assert placement.adapted is True
+    assert placement.requires_manual_adjustment is False
+    assert placement.tower_width != pytest.approx(float(template["prime_tower_width"]))
+    assert (placement.tower_x, placement.tower_y) != pytest.approx(
+        (float(template["wipe_tower_x"][0]), float(template["wipe_tower_y"][0]))
+    )
 
 
 def test_disabled_auto_placement_preserves_u1_template_without_warning(
@@ -315,7 +541,7 @@ def test_c5_family_uses_30_mm_vertical_strip_for_tall_model(printer_id: str) -> 
         printer_id=printer_id,
         slicer="FlashStudio",
     )
-    # The native 35 mm tower is valid for small models and must be preserved.
+    # The native 35 mm tower is the template input for small models.
     # Flash Studio expands a nominal narrow tower to a roughly 58.5 x 61 mm
     # interface footprint. A 200 mm horizontal setting is therefore clamped
     # back into this tall model; the native-safe fallback is the 30 mm width
