@@ -1241,9 +1241,15 @@ def _collect_single_lut(
             "metadata": {},
         }
     try:
-        rel = found.relative_to(REPO_ROOT).as_posix()
+        logical_path = found.relative_to(_safe_lut_preset_root()).as_posix()
     except ValueError:
-        rel = str(found)
+        logical_path = LUTManager.logical_lut_path(found)
+    if logical_path is None:
+        return _failed_lut(
+            lut_name, "preset", "InvalidAttachmentManifest",
+            "LUT reference is outside configured roots.",
+        )
+    rel = f"lut-preset/{logical_path}"
     return {
         "status": "preset_reference_only",
         "kind": "preset",
@@ -1370,12 +1376,17 @@ def _preset_lut_manifest_is_valid(attachment: dict[str, Any]) -> bool:
         return _mark_invalid_attachment_manifest(attachment)
     if not _safe_preset_relative_path(attachment.get("preset_relative_path")):
         return _mark_invalid_attachment_manifest(attachment)
-    preset_path = (REPO_ROOT / str(attachment["preset_relative_path"])).resolve()
+    relative_parts = PurePath(str(attachment["preset_relative_path"])).parts[1:]
     try:
-        preset_path.relative_to((REPO_ROOT / "lut-preset").resolve())
-    except ValueError:
+        if relative_parts and relative_parts[0] == "Cloud":
+            root = LUTManager.cloud_lut_dir().resolve()
+            relative_parts = relative_parts[1:]
+        else:
+            root = _safe_lut_preset_root()
+        preset_path = _lut_file_within_root(root.joinpath(*relative_parts), root)
+    except (OSError, ValueError):
         return _mark_invalid_attachment_manifest(attachment)
-    if not preset_path.is_file():
+    if preset_path is None:
         return _mark_invalid_attachment_manifest(attachment)
     return _attachment_metadata_is_valid(
         attachment,
