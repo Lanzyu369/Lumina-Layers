@@ -613,7 +613,7 @@ class TestLutUploadValidation:
         assert not any((tmp_path / "Custom").glob("rgb*"))
         assert _records_for_event(caplog, "lut_upload_done") == []
 
-    def test_upload_lut_rejects_absolute_filename_without_persisting(
+    def test_upload_lut_rejects_posix_absolute_filename_without_persisting(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
@@ -628,7 +628,7 @@ class TestLutUploadValidation:
         try:
             response = _post_lut_upload_with_raw_filename(
                 client,
-                filename=str(absolute_probe),
+                filename=f"/{absolute_probe.name}",
                 payload=_keyed_json_bytes(),
                 content_type="application/json",
             )

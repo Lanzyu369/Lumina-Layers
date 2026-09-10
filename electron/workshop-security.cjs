@@ -24,6 +24,14 @@ const NON_NETWORK_RESOURCE_TYPES = new Set([
   "media",
   "worker",
 ]);
+let managedDesktopHostEnabled = false;
+
+/** Enable the fixed managed frontend from the main process before navigation.
+ * 主进程在导航前启用固定托管前端；不接受 renderer 提供的地址。
+ */
+function enableManagedDesktopHost() {
+  managedDesktopHostEnabled = true;
+}
 
 function parseUrl(value) {
   if (typeof value !== "string" || value.length === 0) {
@@ -51,10 +59,12 @@ function isTrustedHostUrl(value) {
   if (parsed.protocol === "file:") {
     return parsed.username === "" && parsed.password === "";
   }
+  if (parsed.username !== "" || parsed.password !== "") return false;
   return (
     parsed.protocol === "http:" &&
     parsed.hostname === "127.0.0.1" &&
-    parsed.port === "4174"
+    (parsed.port === "4174" ||
+      (managedDesktopHostEnabled && parsed.port === "8000" && parsed.pathname === "/"))
   );
 }
 
@@ -297,6 +307,7 @@ function isWorkshopFrameProcessIsolated(mainProcessId, moduleProcessId) {
 }
 
 module.exports = {
+  enableManagedDesktopHost,
   createWorkshopSessionToken,
   isAllowedWorkshopDownload,
   isAllowedWorkshopIpcSender,

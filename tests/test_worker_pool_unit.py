@@ -109,6 +109,19 @@ def _return_mapping_with_reserved_key() -> dict[str, object]:
 class TestWorkerPoolLifecycle:
     """Test start/shutdown/is_alive behavior."""
 
+    def test_windows_worker_stdio_falls_back_when_noconsole_stream_is_missing(
+        self,
+    ) -> None:
+        """PyInstaller windowed workers must tolerate ``sys.stdout = None``."""
+
+        stream = worker_pool._normalize_windows_output_stream(None)
+        try:
+            assert stream is not None
+            assert stream.writable()
+            assert stream.encoding.lower().replace("-", "") == "utf8"
+        finally:
+            stream.close()
+
     def test_not_alive_before_start(self) -> None:
         pool = WorkerPoolManager(max_workers=2)
         try:

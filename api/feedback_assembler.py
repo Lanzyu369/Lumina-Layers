@@ -597,13 +597,18 @@ def _find_lut_file(lut_name: str) -> Path | None:
 
     display_match = LUTManager.get_lut_path(lut_name)
     if display_match:
-        found = _lut_file_within_preset(Path(display_match), lut_preset_dir)
+        found = _lut_file_within_root(Path(display_match), lut_preset_dir)
+        if found is None:
+            found = _lut_file_within_root(
+                Path(display_match),
+                LUTManager.custom_lut_dir().resolve(),
+            )
         if found is not None:
             return found
 
     for ext in _LUT_EXTENSIONS:
         exact = lut_preset_dir / f"{lut_name}{ext}"
-        found = _lut_file_within_preset(exact, lut_preset_dir)
+        found = _lut_file_within_root(exact, lut_preset_dir)
         if found is not None:
             return found
     # Case-insensitive fallback: search children.
@@ -612,7 +617,7 @@ def _find_lut_file(lut_name: str) -> Path | None:
         for path in lut_preset_dir.rglob("*"):
             if path.stem.lower() != lowered:
                 continue
-            found = _lut_file_within_preset(path, lut_preset_dir)
+            found = _lut_file_within_root(path, lut_preset_dir)
             if found is not None:
                 return found
     except OSError:
@@ -637,14 +642,14 @@ def _safe_lut_preset_root() -> Path:
     return (REPO_ROOT / "lut-preset").resolve()
 
 
-def _lut_file_within_preset(path: Path, preset_root: Path) -> Path | None:
+def _lut_file_within_root(path: Path, root: Path) -> Path | None:
     try:
         resolved = path.resolve()
         if not resolved.is_file():
             return None
         if resolved.suffix.lower() not in _LUT_EXTENSIONS:
             return None
-        resolved.relative_to(preset_root)
+        resolved.relative_to(root)
     except (OSError, ValueError):
         return None
     return resolved

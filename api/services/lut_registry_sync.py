@@ -205,8 +205,18 @@ def _safe_lut_path_under_root(local_path: Any, *, cloud: bool) -> Path | None:
     parts = _normalized_lut_local_parts(local_path, strip_cloud_prefix=cloud)
     if not parts:
         return None
-    root = Path(LUTManager.LUT_PRESET_DIR).resolve()
-    target_root = (root / "Cloud").resolve() if cloud else root
+    if cloud:
+        target_root = LUTManager.cloud_lut_dir().resolve()
+    elif parts[0].lower() == "custom":
+        target_root = LUTManager.custom_lut_dir().resolve()
+        parts = parts[1:]
+    elif parts[0].lower() == "cloud":
+        target_root = LUTManager.cloud_lut_dir().resolve()
+        parts = parts[1:]
+    else:
+        target_root = Path(LUTManager.LUT_PRESET_DIR).resolve()
+    if not parts:
+        return None
     try:
         target = (target_root / Path(*parts)).resolve()
         target.relative_to(target_root)
@@ -230,13 +240,16 @@ def _safe_index_installed_path(record: dict[str, Any]) -> Path | None:
     raw_path = record.get("installed_path")
     if not isinstance(raw_path, str) or not raw_path.strip():
         return None
-    root = Path(LUTManager.LUT_PRESET_DIR).resolve()
     try:
         candidate = Path(raw_path)
-        if not candidate.is_absolute():
-            candidate = root / candidate
-        path = candidate.resolve()
-        path.relative_to(root)
+        if candidate.is_absolute():
+            path = candidate.resolve()
+            if LUTManager.logical_lut_path(path) is None:
+                return None
+        else:
+            path = _safe_lut_path_under_root(raw_path, cloud=False)
+            if path is None:
+                return None
     except (OSError, ValueError):
         return None
     return _existing_lut_path(path)
@@ -250,10 +263,7 @@ def _read_installed_index_safe() -> dict[str, Any]:
 
 
 def _relative_lut_preset_path(path: Path) -> str | None:
-    try:
-        return path.resolve().relative_to(Path(LUTManager.LUT_PRESET_DIR).resolve()).as_posix()
-    except (OSError, ValueError):
-        return None
+    return LUTManager.logical_lut_path(path)
 
 
 def _catalog_item_local_presence(
@@ -872,7 +882,7 @@ def _safe_cloud_target(local_path: Any) -> Path:
     if not parts:
         raise LutRegistryPackageError("local_path is unsafe")
 
-    cloud_root = (Path(LUTManager.LUT_PRESET_DIR) / "Cloud").resolve()
+    cloud_root = LUTManager.cloud_lut_dir().resolve()
     target = (cloud_root / Path(*parts)).resolve()
     if target != cloud_root and cloud_root not in target.parents:
         raise LutRegistryPackageError("local_path must stay within Cloud")
@@ -880,7 +890,7 @@ def _safe_cloud_target(local_path: Any) -> Path:
 
 
 def _index_path() -> Path:
-    return Path(LUTManager.LUT_PRESET_DIR) / "_sync" / "luts" / "index.json"
+    return LUTManager.cloud_lut_sync_dir() / "index.json"
 
 
 class _LutRegistryInstallFileLock:
@@ -1215,7 +1225,6 @@ def install_lut_package(
 
 
 def _local_lut_status_entries() -> list[dict[str, Any]]:
-    root = Path(LUTManager.LUT_PRESET_DIR).resolve()
     entries: list[dict[str, Any]] = []
     try:
         lut_files = LUTManager.get_all_lut_files()
@@ -1225,8 +1234,10 @@ def _local_lut_status_entries() -> list[dict[str, Any]]:
     for display_name, raw_path in sorted(lut_files.items(), key=lambda item: item[0].casefold()):
         try:
             path = Path(raw_path).resolve()
-            relative_path = path.relative_to(root).as_posix()
+            relative_path = LUTManager.logical_lut_path(path)
         except (OSError, ValueError):
+            continue
+        if relative_path is None:
             continue
         if "_sync" in PurePosixPath(relative_path).parts:
             continue

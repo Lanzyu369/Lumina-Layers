@@ -1211,6 +1211,45 @@ def test_collect_lut_accepts_custom_display_name(
     assert (ticket_dir / "lut.json").read_bytes() == b"SAFE_CUSTOM_LUT"
 
 
+def test_collect_lut_accepts_launcher_shared_custom_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_feedback_lut_repo(monkeypatch, tmp_path)
+    shared_custom_root = tmp_path / "launcher-data" / "luts" / "custom"
+    shared_custom_root.mkdir(parents=True)
+    shared_lut = shared_custom_root / "safe.json"
+    shared_lut.write_bytes(b"SHARED_CUSTOM_LUT")
+    monkeypatch.setenv("LUMINA_CUSTOM_LUT_DIR", str(shared_custom_root))
+    LUTManager.invalidate_preset_cache()
+    ticket_dir = tmp_path / "LUM-20260903-001"
+    ticket_dir.mkdir()
+    payload = {
+        "ticket_id": "LUM-20260903-001",
+        "context": {
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": None,
+            "source_version": "legacy",
+            "lut_name": "Custom - safe",
+        },
+    }
+
+    try:
+        result = collect_sync_attachments(
+            ticket_dir,
+            payload,
+            _MockFileRegistry({}),
+            now_beijing(),
+        )
+    finally:
+        LUTManager.invalidate_preset_cache()
+
+    assert result.lut["status"] == "attached"
+    assert result.lut["kind"] == "custom"
+    assert result.lut["filename"] == "lut.json"
+    assert (ticket_dir / "lut.json").read_bytes() == b"SHARED_CUSTOM_LUT"
+
+
 def test_collect_lut_marks_custom_copy_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -359,6 +359,106 @@ export function deriveBackendDeviceSettingsPatch(
 ): Partial<SettingsState> {
   const patch: Partial<SettingsState> = {};
 
+  const setScalarIfFresh = <Key extends keyof SettingsState>(
+    key: Key,
+    value: SettingsState[Key] | undefined,
+  ): void => {
+    if (
+      value !== undefined &&
+      current[key] === DEFAULT_SETTINGS[key] &&
+      !hasOwnSetting(persistedSnapshot, key)
+    ) {
+      (patch as Record<keyof SettingsState, unknown>)[key] = value;
+    }
+  };
+
+  setScalarIfFresh(
+    "language",
+    settings.language === "zh" || settings.language === "en"
+      ? settings.language
+      : undefined,
+  );
+  setScalarIfFresh(
+    "theme",
+    settings.theme === "light" || settings.theme === "dark"
+      ? settings.theme
+      : undefined,
+  );
+  setScalarIfFresh(
+    "lastLutName",
+    typeof settings.last_lut === "string" ? settings.last_lut : undefined,
+  );
+  setScalarIfFresh(
+    "lastModelingMode",
+    typeof settings.last_modeling_mode === "string"
+      ? settings.last_modeling_mode
+      : undefined,
+  );
+  setScalarIfFresh(
+    "lastColorMode",
+    typeof settings.last_color_mode === "string"
+      ? settings.last_color_mode
+      : undefined,
+  );
+  setScalarIfFresh(
+    "lastSlicerId",
+    typeof settings.last_slicer === "string" ? settings.last_slicer : undefined,
+  );
+  setScalarIfFresh(
+    "lastBedLabel",
+    typeof settings.last_bed_label === "string"
+      ? settings.last_bed_label
+      : undefined,
+  );
+  setScalarIfFresh(
+    "paletteMode",
+    settings.palette_mode === "swatch" || settings.palette_mode === "card"
+      ? settings.palette_mode
+      : undefined,
+  );
+  setScalarIfFresh(
+    "cropEnabled",
+    typeof settings.enable_crop_modal === "boolean"
+      ? settings.enable_crop_modal
+      : undefined,
+  );
+  setScalarIfFresh(
+    "enableBlur",
+    typeof settings.enable_blur === "boolean"
+      ? settings.enable_blur
+      : undefined,
+  );
+  setScalarIfFresh(
+    "enableFancyLoading",
+    typeof settings.enable_fancy_loading === "boolean"
+      ? settings.enable_fancy_loading
+      : undefined,
+  );
+  setScalarIfFresh(
+    "enableWittyLoading",
+    typeof settings.enable_witty_loading === "boolean"
+      ? settings.enable_witty_loading
+      : undefined,
+  );
+  setScalarIfFresh(
+    "enableCompletionNotifications",
+    typeof settings.enable_completion_notifications === "boolean"
+      ? settings.enable_completion_notifications
+      : undefined,
+  );
+  setScalarIfFresh(
+    "enableSmoothVectorPreview",
+    typeof settings.enable_smooth_vector_preview === "boolean"
+      ? settings.enable_smooth_vector_preview
+      : undefined,
+  );
+  setScalarIfFresh(
+    "preserveUploadFilenameFor3mf",
+    typeof settings.preserve_upload_filename_for_3mf === "boolean"
+      ? settings.preserve_upload_filename_for_3mf
+      : undefined,
+  );
+
   if (
     typeof settings.printer_model === "string" &&
     settings.printer_model.trim() &&
@@ -439,15 +539,46 @@ export function deriveBackendDeviceSettingsPatch(
       settings.enable_base_layer_height_modifier;
   }
 
-  if (
-    typeof settings.enable_wipe_tower_auto_placement === "boolean" &&
-    current.enableWipeTowerAutoPlacement ===
-      DEFAULT_SETTINGS.enableWipeTowerAutoPlacement &&
-    !hasOwnSetting(persistedSnapshot, "enableWipeTowerAutoPlacement")
-  ) {
-    patch.enableWipeTowerAutoPlacement =
-      settings.enable_wipe_tower_auto_placement;
-  }
+  setScalarIfFresh(
+    "enableWipeTowerAutoPlacement",
+    typeof settings.enable_wipe_tower_auto_placement === "boolean"
+      ? settings.enable_wipe_tower_auto_placement
+      : undefined,
+  );
+  setScalarIfFresh(
+    "enableSolverCacheGridSelection",
+    typeof settings.enable_solver_cache_grid_selection === "boolean"
+      ? settings.enable_solver_cache_grid_selection
+      : undefined,
+  );
+  setScalarIfFresh(
+    "solverCacheGridResolution",
+    SOLVER_CACHE_GRID_RESOLUTIONS.includes(
+      settings.solver_cache_grid_resolution as SolverCacheGridResolution,
+    )
+      ? (settings.solver_cache_grid_resolution as SolverCacheGridResolution)
+      : undefined,
+  );
+  setScalarIfFresh(
+    "svgPixelsPerMm",
+    typeof settings.svg_pixels_per_mm === "number"
+      ? normalizeSvgPixelsPerMm(settings.svg_pixels_per_mm)
+      : undefined,
+  );
+  setScalarIfFresh(
+    "materialDeltaE00Tolerance",
+    typeof settings.material_delta_e00_tolerance === "number"
+      ? normalizeMaterialDeltaE00Tolerance(
+          settings.material_delta_e00_tolerance,
+        )
+      : undefined,
+  );
+  setScalarIfFresh(
+    "autoReplaceGradientBanding",
+    typeof settings.auto_replace_gradient_banding === "boolean"
+      ? settings.auto_replace_gradient_banding
+      : undefined,
+  );
 
   return patch;
 }
@@ -655,39 +786,45 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
           INITIAL_PERSISTED_SETTINGS_SNAPSHOT,
         );
         const actions = get();
+        const directPatch = { ...patch };
         if (patch.printerModel) {
           actions.setPrinterModel(patch.printerModel);
+          delete directPatch.printerModel;
         }
         if (patch.slicerSoftware) {
           actions.setSlicerSoftware(patch.slicerSoftware);
+          delete directPatch.slicerSoftware;
         }
         if (typeof patch.customSlicerPath === "string") {
           actions.setCustomSlicerPath(patch.customSlicerPath);
+          delete directPatch.customSlicerPath;
         }
         if (typeof patch.customSlicerId === "string") {
           actions.setCustomSlicerId(patch.customSlicerId);
+          delete directPatch.customSlicerId;
         }
         if (patch.nozzleSize) {
           actions.setNozzleSize(patch.nozzleSize);
+          delete directPatch.nozzleSize;
         }
         if (typeof patch.enableBaseLayerHeightModifier === "boolean") {
           actions.setEnableBaseLayerHeightModifier(
             patch.enableBaseLayerHeightModifier,
           );
+          delete directPatch.enableBaseLayerHeightModifier;
         }
         if (typeof patch.enableWipeTowerAutoPlacement === "boolean") {
           actions.setEnableWipeTowerAutoPlacement(
             patch.enableWipeTowerAutoPlacement,
           );
+          delete directPatch.enableWipeTowerAutoPlacement;
         }
         if (typeof patch.deviceProfileId === "string") {
           actions.setDeviceProfileId(patch.deviceProfileId);
+          delete directPatch.deviceProfileId;
         }
-        if (patch.buildPlateSelections) {
-          set({ buildPlateSelections: patch.buildPlateSelections });
-        }
-        if (typeof patch.buildPlateId === "string") {
-          set({ buildPlateId: patch.buildPlateId });
+        if (Object.keys(directPatch).length > 0) {
+          set(directPatch);
         }
       },
 
@@ -695,12 +832,23 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
         const state = get();
         try {
           await saveSettings({
+            language: state.language,
+            theme: state.theme,
             last_lut: state.lastLutName,
             last_modeling_mode: state.lastModelingMode,
             last_color_mode: state.lastColorMode,
             last_slicer: state.lastSlicerId,
+            last_bed_label: state.lastBedLabel,
             palette_mode: state.paletteMode,
             enable_crop_modal: state.cropEnabled,
+            enable_blur: state.enableBlur,
+            enable_fancy_loading: state.enableFancyLoading,
+            enable_witty_loading: state.enableWittyLoading,
+            enable_completion_notifications:
+              state.enableCompletionNotifications,
+            enable_smooth_vector_preview: state.enableSmoothVectorPreview,
+            preserve_upload_filename_for_3mf:
+              state.preserveUploadFilenameFor3mf,
             printer_model: state.printerModel,
             slicer_software: state.slicerSoftware,
             device_profile_id: state.deviceProfileId,
@@ -713,6 +861,14 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
               state.enableBaseLayerHeightModifier,
             enable_wipe_tower_auto_placement:
               state.enableWipeTowerAutoPlacement,
+            enable_solver_cache_grid_selection:
+              state.enableSolverCacheGridSelection,
+            solver_cache_grid_resolution: state.solverCacheGridResolution,
+            svg_pixels_per_mm: state.svgPixelsPerMm,
+            material_delta_e00_tolerance:
+              state.materialDeltaE00Tolerance,
+            auto_replace_gradient_banding:
+              state.autoReplaceGradientBanding,
           });
         } catch {
           // best-effort sync — settings are already persisted in localStorage
