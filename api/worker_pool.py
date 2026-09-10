@@ -14,7 +14,6 @@ from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 from typing import Any, Callable, Literal, TypeVar
 import asyncio
-import io
 import os
 import sys
 import threading
@@ -216,14 +215,44 @@ def _resolve_max_tasks_per_child() -> int | None:
     return value
 
 
+def _normalize_windows_output_stream(stream: Any) -> Any:
+    """Return a writable UTF-8 stream for a Windows worker process.
+
+    PyInstaller windowed executables intentionally expose ``None`` for the
+    standard streams.  Workers still need a harmless target because logging
+    libraries may inspect or write to those streams during initialization.
+    """
+
+    if stream is None:
+        return open(  # noqa: SIM115 - process-lifetime fallback stream.
+            os.devnull,
+            "w",
+            encoding="utf-8",
+            errors="replace",
+        )
+    reconfigure = getattr(stream, "reconfigure", None)
+    if callable(reconfigure):
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            pass
+    return stream
+
+
+def _worker_smoke_task() -> int:
+    """Return the worker PID for the frozen-runtime CI smoke test."""
+
+    return os.getpid()
+
+
 def _worker_init() -> None:
     """Worker process initializer: force UTF-8 stdout/stderr on Windows,
     then redirect stdout to the same log file as the main process.
     工作进程初始化器：在 Windows 上强制 UTF-8 编码，并将 stdout 重定向到主进程日志文件。
     """
     if sys.platform == "win32":
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+        sys.stdout = _normalize_windows_output_stream(sys.stdout)
+        sys.stderr = _normalize_windows_output_stream(sys.stderr)
 
     log_path = os.environ.get("LUMINA_LOG_PATH")
     if log_path:

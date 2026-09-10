@@ -119,8 +119,17 @@ def _is_lut_sync_index_path(path: str) -> bool:
     try:
         resolved = Path(path).resolve()
         preset_root = Path(LUTManager.LUT_PRESET_DIR).resolve()
-        relative = resolved.relative_to(preset_root)
+        sync_root = LUTManager.cloud_lut_sync_dir().resolve()
     except (OSError, ValueError):
+        return False
+    try:
+        resolved.relative_to(sync_root)
+        return True
+    except ValueError:
+        pass
+    try:
+        relative = resolved.relative_to(preset_root)
+    except ValueError:
         return False
     return bool(relative.parts and relative.parts[0] == "_sync")
 
@@ -590,7 +599,7 @@ async def upload_lut(file: UploadFile = File(..., description="LUT 文件 (.npy/
     try:
         _validate_uploaded_lut_file(tmp_path, ext)
 
-        custom_dir = os.path.join(LUTManager.LUT_PRESET_DIR, "Custom")
+        custom_dir = str(LUTManager.custom_lut_dir())
         os.makedirs(custom_dir, exist_ok=True)
 
         # Auto-convert .npy to Keyed JSON
@@ -745,7 +754,7 @@ def merge_luts_endpoint(request: MergeRequest) -> MergeResponse:
         mode_str: str = "+".join(all_modes)
         output_ext: str = ".json" if all_json else ".npz"
         output_name: str = f"Merged_{mode_str}_{timestamp}{output_ext}"
-        custom_dir: str = os.path.join(LUTManager.LUT_PRESET_DIR, "Custom")
+        custom_dir: str = str(LUTManager.custom_lut_dir())
         os.makedirs(custom_dir, exist_ok=True)
         output_path: str = os.path.join(custom_dir, output_name)
 

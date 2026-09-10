@@ -14,6 +14,8 @@ const http = require("http");
 const nodeNet = require("net");
 const fs = require("fs");
 const path = require("path");
+const { managedRuntime, assertPortsAvailable } = require("./managed-runtime.cjs");
+const { createManagedStartup } = require("./managed-startup.cjs");
 const { pathToFileURL } = require("url");
 const {
   fetchNativeBedModel,
@@ -21,6 +23,7 @@ const {
 } = require("./bed-model-bridge.cjs");
 const {
   createWorkshopSessionToken,
+  enableManagedDesktopHost,
   isAllowedWorkshopDownload,
   isAllowedWorkshopIpcSender,
   isAllowedWorkshopPermission,
@@ -44,7 +47,9 @@ const BACKEND_PORT = 8000;
 const FRONTEND_PORT = 4174;
 const BACKEND_HEALTH_URL = `http://127.0.0.1:${BACKEND_PORT}/api/health`;
 const FRONTEND_URL = `http://127.0.0.1:${FRONTEND_PORT}`;
-const HEALTH_TIMEOUT_MS = 30000;
+// Cold native dependency loading can exceed 30 seconds on a clean Windows guest.
+// Health and process ownership remain mandatory throughout this bounded wait.
+const HEALTH_TIMEOUT_MS = 180000;
 const PORT_TIMEOUT_MS = 30000;
 const POLL_INTERVAL_MS = 500;
 const WORKSHOP_SCHEME = "lumina-workshop";
@@ -71,6 +76,15 @@ const WORKSHOP_SEED_RESOURCE_DIR = isDev
   : path.join(process.resourcesPath, "workshop-seed");
 const workshopSessionToken = createWorkshopSessionToken();
 let workshopSafeMode = false;
+const managed = managedRuntime(process.env);
+if (managed) {
+  fs.mkdirSync(managed.userData, { recursive: true });
+  fs.mkdirSync(managed.chromiumCache, { recursive: true });
+  fs.mkdirSync(managed.backendCwd, { recursive: true });
+  app.setPath("userData", managed.userData);
+  app.commandLine.appendSwitch("disk-cache-dir", managed.chromiumCache);
+  enableManagedDesktopHost();
+}
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -126,7 +140,7 @@ let currentLang = "zh";
 let logStream = null;
 
 function initLog() {
-  const logDir = app.getPath("logs");
+  const logDir = managed?.backendEnv.LUMINA_LOG_DIR || app.getPath("logs");
   try {
     fs.mkdirSync(logDir, { recursive: true });
   } catch (_) {}
@@ -197,8 +211,10 @@ function spawnChild(name, cmd, args, cwd, envExtra = {}) {
       });
 
       children.push(proc);
-      logOk(`${name} started (pid=${proc.pid})`);
-      resolve(proc);
+      proc.once("spawn", () => {
+        logOk(`${name} started (pid=${proc.pid})`);
+        resolve(proc);
+      });
     } catch (err) {
       logErr(`${name} failed to start: ${err.message}`);
       reject(err);
@@ -306,30 +322,50 @@ function killListening(ports) {
 //  Health / port probes
 // ═══════════════════════════════════════════════════════════
 
-function waitForHealth(url, timeoutMs) {
+function waitForHealth(url, timeoutMs, ownedChild = null) {
   return new Promise((resolve, reject) => {
-    const start = Date.now();
+    let settled = false;
+    let request = null;
+    let retry = null;
+    const timeout = setTimeout(() => finish(new Error("startup_backend_timeout")), timeoutMs);
+    function finish(error) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      clearTimeout(retry);
+      ownedChild?.off("exit", exited);
+      ownedChild?.off("error", exited);
+      request?.destroy();
+      if (error) reject(error); else resolve();
+    }
+    function exited() { finish(new Error("startup_backend_exited")); }
+    function schedule() {
+      if (settled || retry !== null) return;
+      retry = setTimeout(() => { retry = null; probe(); }, POLL_INTERVAL_MS);
+    }
     function probe() {
-      if (Date.now() - start > timeoutMs) {
-        reject(new Error(`Health check timeout after ${timeoutMs}ms`));
-        return;
-      }
-      const req = http.get(url, (res) => {
+      if (settled) return;
+      const probeRequest = http.get(url, (res) => {
+        res.resume();
+        if (settled || request !== probeRequest) return;
         if (res.statusCode >= 200 && res.statusCode < 400) {
-          res.resume();
-          resolve();
-        } else {
-          res.resume();
-          setTimeout(probe, POLL_INTERVAL_MS);
-        }
+          finish();
+        } else retryProbe();
       });
-      req.on("error", () => {
-        setTimeout(probe, POLL_INTERVAL_MS);
-      });
-      req.setTimeout(3000, () => {
-        req.destroy();
-        setTimeout(probe, POLL_INTERVAL_MS);
-      });
+      request = probeRequest;
+      function retryProbe() {
+        if (settled || request !== probeRequest) return;
+        request = null;
+        probeRequest.destroy();
+        schedule();
+      }
+      probeRequest.on("error", retryProbe);
+      probeRequest.setTimeout(3000, retryProbe);
+    }
+    ownedChild?.once("exit", exited);
+    ownedChild?.once("error", exited);
+    if (ownedChild && (ownedChild.exitCode !== null || ownedChild.signalCode !== null || ownedChild.killed)) {
+      exited(); return;
     }
     probe();
   });
@@ -405,7 +441,12 @@ function backendRuntimeEnv() {
       "workshop",
     ),
     LUMINA_WORKSHOP_DESKTOP_TOKEN: workshopSessionToken,
+    ...(managed?.backendEnv || {}),
   };
+  if (managed && !isDev) {
+    env.LUMINA_SERVE_FRONTEND_DIST = "1";
+    env.LUMINA_FRONTEND_DIST_DIR = path.join(process.resourcesPath, "app", "dist");
+  }
   if (fs.existsSync(MATERIALS_SEED_RESOURCE)) {
     env.LUMINA_MATERIALS_SEED_PATH = MATERIALS_SEED_RESOURCE;
   }
@@ -422,8 +463,16 @@ function backendRuntimeEnv() {
 //  Single instance lock
 // ═══════════════════════════════════════════════════════════
 
+let managedStartup = null;
+let startupInitializationError = null;
+try {
+  managedStartup = createManagedStartup(process.env, error => logErr(`Startup status write failed: ${error.code || error.name}`));
+} catch (error) {
+  startupInitializationError = error;
+}
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
+  managedStartup?.fail("app_already_running");
   app.quit();
 } else {
   app.on("second-instance", () => {
@@ -441,7 +490,34 @@ if (!gotLock) {
 let win = null;
 let splashWin = null;
 let isQuitting = false;
+let quitConfirmationPending = false;
 let trustedMainFrameUrl = null;
+
+async function confirmQuit() {
+  if (isQuitting || quitConfirmationPending) return;
+  quitConfirmationPending = true;
+  const dlg = QUIT_DIALOG[currentLang] || QUIT_DIALOG.zh;
+  try {
+    const { response } = await dialog.showMessageBox(win, {
+      type: "question",
+      title: dlg.title,
+      message: dlg.message,
+      detail: dlg.detail,
+      buttons: [dlg.cancel, dlg.quit],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    });
+    if (response === 1) {
+      isQuitting = true;
+      app.quit();
+    }
+  } catch (error) {
+    logErr(`Quit confirmation failed: ${error.message}`);
+  } finally {
+    quitConfirmationPending = false;
+  }
+}
 
 function fixedWorkshopResponse(status, message) {
   return new Response(message, {
@@ -598,6 +674,11 @@ function createWindow() {
   };
 
   win = new BrowserWindow(windowOptions);
+  managedStartup?.watchWindow(win);
+  win.once("ready-to-show", () => {
+    closeSplash();
+    win.show();
+  });
 
   Menu.setApplicationMenu(null);
 
@@ -701,29 +782,16 @@ function createWindow() {
   win.on("close", (e) => {
     if (isQuitting) return;
     e.preventDefault();
-    const dlg = QUIT_DIALOG[currentLang] || QUIT_DIALOG.zh;
-    dialog
-      .showMessageBox(win, {
-        type: "question",
-        title: dlg.title,
-        message: dlg.message,
-        detail: dlg.detail,
-        buttons: [dlg.cancel, dlg.quit],
-        defaultId: 0,
-        cancelId: 0,
-        noLink: true,
-      })
-      .then(({ response }) => {
-        if (response === 1) {
-          isQuitting = true;
-          win.destroy();
-        }
-      });
+    void confirmQuit();
   });
 
+  let initialLoad;
   if (isDev) {
     trustedMainFrameUrl = new URL(FRONTEND_URL).href;
-    win.loadURL(FRONTEND_URL);
+    initialLoad = win.loadURL(FRONTEND_URL);
+  } else if (managed) {
+    trustedMainFrameUrl = managed.frontendUrl;
+    initialLoad = win.loadURL(managed.frontendUrl);
   } else {
     const indexPath = path.join(
       process.resourcesPath,
@@ -732,12 +800,11 @@ function createWindow() {
       "index.html",
     );
     trustedMainFrameUrl = pathToFileURL(indexPath).href;
-    win.loadFile(indexPath);
+    initialLoad = win.loadFile(indexPath);
   }
-
-  win.once("ready-to-show", () => {
-    closeSplash();
-    win.show();
+  void initialLoad.catch(error => {
+    logErr(`Main window load failed: ${error.code || error.name}`);
+    managedStartup?.fail("startup_frontend_failed");
   });
 
   if (isDev) {
@@ -841,7 +908,14 @@ ipcMain.handle("pick-workshop-image", async (event) => {
 //  App lifecycle
 // ═══════════════════════════════════════════════════════════
 
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
+  if (!isQuitting && win && !win.isDestroyed()) {
+    event.preventDefault();
+    void confirmQuit();
+  }
+});
+
+app.on("will-quit", () => {
   killAllChildren();
 });
 
@@ -853,7 +927,9 @@ app.on("window-all-closed", () => {
 });
 
 app.whenReady().then(async () => {
+  if (!gotLock) return;
   initLog();
+  if (startupInitializationError) throw startupInitializationError;
   logSys("Lumina Studio Electron starting...");
   logSys(`Mode: ${isDev ? "development" : "production"}`);
   installWorkshopSessionSecurity();
@@ -884,8 +960,22 @@ app.whenReady().then(async () => {
 
   createSplash();
 
-  logSys("Cleaning up residual processes...");
-  killListening([BACKEND_PORT, FRONTEND_PORT]);
+  if (managed) {
+    try {
+      await assertPortsAvailable([BACKEND_PORT]);
+    } catch (error) {
+      managedStartup?.fail("startup_port_in_use");
+      closeSplash();
+      dialog.showErrorBox("Lumina Studio", currentLang === "zh"
+        ? "本地端口 8000 已被占用。请关闭正在运行的 Lumina 或内测服务器后再试；启动器不会终止其它进程。"
+        : "Local port 8000 is in use. Close the running Lumina app or test server and retry. Other processes will not be terminated.");
+      app.quit();
+      return;
+    }
+  } else {
+    logSys("Cleaning up residual processes...");
+    killListening([BACKEND_PORT, FRONTEND_PORT]);
+  }
 
   // ── Start backend ──
   let backendProc;
@@ -902,6 +992,7 @@ app.whenReady().then(async () => {
         backendRuntimeEnv(),
       );
     } catch (err) {
+      managedStartup?.fail("startup_backend_spawn_failed");
       dialog.showErrorBox(
         "Backend Start Failed",
         `Failed to start backend: ${err.message}`,
@@ -922,8 +1013,9 @@ app.whenReady().then(async () => {
     );
     logSys(`Starting backend: ${backendExe}`);
     try {
-      backendProc = await spawnChild("Backend", backendExe, [], ROOT_DIR, backendRuntimeEnv());
+      backendProc = await spawnChild("Backend", backendExe, [], managed?.backendCwd || ROOT_DIR, backendRuntimeEnv());
     } catch (err) {
+      managedStartup?.fail("startup_backend_spawn_failed");
       dialog.showErrorBox(
         "Backend Start Failed",
         `Failed to start backend: ${err.message}`,
@@ -933,17 +1025,25 @@ app.whenReady().then(async () => {
     }
   }
 
+  managedStartup?.watchBackend(backendProc);
+
   // ── Wait for backend health ──
   logSys("Waiting for backend health...");
   try {
-    await waitForHealth(BACKEND_HEALTH_URL, HEALTH_TIMEOUT_MS);
+    await waitForHealth(BACKEND_HEALTH_URL, HEALTH_TIMEOUT_MS, backendProc);
+    managedStartup?.backendHealthy();
     logOk("Backend is healthy");
   } catch (err) {
+    const failureCode = ["startup_backend_timeout", "startup_backend_exited"].includes(err.message)
+      ? err.message : "startup_failed";
+    managedStartup?.fail(failureCode);
     logErr(`Backend health check failed: ${err.message}`);
-    dialog.showErrorBox(
-      "Backend Unavailable",
-      `Backend did not respond within ${HEALTH_TIMEOUT_MS / 1000}s. Please check logs.`,
-    );
+    if (!managedStartup) {
+      dialog.showErrorBox("Backend Unavailable",
+        failureCode === "startup_backend_timeout"
+          ? `Backend did not respond within ${HEALTH_TIMEOUT_MS / 1000}s. Please check logs.`
+          : `Backend startup failed: ${failureCode}. Please check logs.`);
+    }
     app.quit();
     return;
   }
@@ -978,4 +1078,12 @@ app.whenReady().then(async () => {
 
   // ── Create main window ──
   createWindow();
+}).catch(error => {
+  managedStartup?.fail("startup_failed");
+  logErr(`Desktop startup failed: ${error.code || error.message}`);
+  closeSplash();
+  dialog.showErrorBox("Lumina Studio", currentLang === "zh"
+    ? "软件未能完成启动。请打开此版本日志查看详情，再联系支持。"
+    : "Startup could not finish. Open this version's logs for details and contact support.");
+  app.quit();
 });

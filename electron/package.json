@@ -28,6 +28,10 @@
     },
     "extraResources": [
       {
+        "from": "launcher-startup.json",
+        "to": "launcher-startup.json"
+      },
+      {
         "from": "resources/backend",
         "to": "backend"
       },
@@ -66,6 +70,8 @@
     },
     "files": [
       "main.cjs",
+      "managed-runtime.cjs",
+      "managed-startup.cjs",
       "preload.cjs",
       "bed-model-bridge.cjs",
       "workshop-file-picker.cjs",

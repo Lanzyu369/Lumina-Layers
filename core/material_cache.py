@@ -36,7 +36,7 @@ Public API:
     - ``save_material_solver_cache``   — persist to disk
     - ``load_material_solver_cache``   — load from disk
     - ``cache_file_path``              — canonical on-disk path for parameters
-    - ``default_cache_directory``      — where caches live (``MATERIALS_DIR/_solver_cache``)
+    - ``default_cache_directory``      — cache root (launcher override or materials fallback)
     - ``fingerprint_palette``          — stable hash of material parameters
     - ``list_cached_entries``          — enumerate cached combinations
 """
@@ -527,11 +527,31 @@ def default_cache_directory(cache_root: str | Path | None = None) -> Path:
     """Return the default cache directory.
     返回默认缓存目录。
 
-    When ``cache_root`` is ``None`` the cache lives under
-    ``<MATERIALS_DIR>/_solver_cache/``. Callers (e.g. tests) can override by
-    passing an explicit path.
+    An explicit ``cache_root`` takes priority. Otherwise launcher runtimes can
+    isolate derived data with the absolute ``LUMINA_RUNTIME_CACHE_DIR`` path;
+    source deployments keep the legacy ``<MATERIALS_DIR>/_solver_cache/``
+    location.
+
+    显式传入的 ``cache_root`` 优先。否则，启动器运行包可通过绝对路径环境变量
+    ``LUMINA_RUNTIME_CACHE_DIR`` 隔离派生缓存；源码部署继续使用旧的
+    ``<MATERIALS_DIR>/_solver_cache/`` 位置。
+
+    Raises:
+        ValueError: If the launcher override is not absolute.
+            启动器覆盖路径不是绝对路径时抛出。
     """
-    root = Path(cache_root) if cache_root is not None else Path(MATERIALS_DIR)
+    if cache_root is not None:
+        root = Path(cache_root)
+    else:
+        launcher_root = os.environ.get("LUMINA_RUNTIME_CACHE_DIR", "").strip()
+        if launcher_root:
+            root = Path(launcher_root).expanduser()
+            if not root.is_absolute():
+                raise ValueError(
+                    "LUMINA_RUNTIME_CACHE_DIR must be an absolute directory path"
+                )
+        else:
+            root = Path(MATERIALS_DIR)
     return root / CACHE_SUBDIR
 
 
