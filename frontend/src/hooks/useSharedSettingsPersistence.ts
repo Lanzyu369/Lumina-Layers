@@ -6,11 +6,11 @@ const SETTINGS_SYNC_DEBOUNCE_MS = 150;
 
 /**
  * Hydrate settings from the launcher-owned backend file and keep later
- * changes synchronized. The backend copy survives the changing loopback
- * ports used by launcher-managed runtimes.
+ * changes synchronized. The backend copy survives origin or port differences
+ * between launch environments.
  *
- * 从启动器托管的后端文件恢复设置，并持续同步后续更改。即使启动器为不同
- * 运行版本分配了不同本机端口，后端副本仍能跨版本保留。
+ * 从启动器托管的后端文件恢复设置，并持续同步后续更改。即使启动环境使用
+ * 不同来源地址或本机端口，后端副本仍能跨版本保留。
  */
 export function useSharedSettingsPersistence(): void {
   useEffect(() => {
@@ -19,7 +19,7 @@ export function useSharedSettingsPersistence(): void {
     let timer: number | null = null;
 
     const subscribeAfterHydration = (): void => {
-      if (cancelled) return;
+      if (cancelled || unsubscribe) return;
       unsubscribe = useSettingsStore.subscribe(() => {
         if (timer !== null) {
           window.clearTimeout(timer);
@@ -37,8 +37,9 @@ export function useSharedSettingsPersistence(): void {
           useSettingsStore
             .getState()
             .hydrateDeviceSettingsFromBackend(response.settings);
-          // The browser origin changes with the launcher's random loopback
-          // port. Copy any origin-local preferences that won precedence
+          subscribeAfterHydration();
+          // Launch environments can use different browser origins.
+          // Copy any origin-local preferences that won precedence
           // during hydration into the launcher-owned settings file now,
           // rather than waiting for the user to edit another setting.
           await useSettingsStore.getState().syncToBackend();

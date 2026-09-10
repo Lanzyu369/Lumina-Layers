@@ -585,26 +585,26 @@ def _collect_final_artifact_from_download_url(
 
 
 def _find_lut_file(lut_name: str) -> Path | None:
-    """Locate a preset/custom LUT by stem under ``lut-preset/``.
+    """Locate LUTs in preset or configured shared writable roots.
 
     先精确匹配，再大小写不敏感；按 .npy/.json/.npz/.msgpack 的优先顺序取。
     """
     if not _is_lut_name_path_safe(lut_name):
         return None
     lut_preset_dir = _safe_lut_preset_root()
-    if not lut_preset_dir.is_dir():
-        return None
-
     display_match = LUTManager.get_lut_path(lut_name)
     if display_match:
-        found = _lut_file_within_root(Path(display_match), lut_preset_dir)
-        if found is None:
-            found = _lut_file_within_root(
-                Path(display_match),
-                LUTManager.custom_lut_dir().resolve(),
-            )
-        if found is not None:
-            return found
+        for root in (
+            lut_preset_dir,
+            LUTManager.custom_lut_dir().resolve(),
+            LUTManager.cloud_lut_dir().resolve(),
+        ):
+            found = _lut_file_within_root(Path(display_match), root)
+            if found is not None:
+                return found
+
+    if not lut_preset_dir.is_dir():
+        return None
 
     for ext in _LUT_EXTENSIONS:
         exact = lut_preset_dir / f"{lut_name}{ext}"

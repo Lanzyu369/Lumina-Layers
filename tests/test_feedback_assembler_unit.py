@@ -1250,6 +1250,43 @@ def test_collect_lut_accepts_launcher_shared_custom_directory(
     assert (ticket_dir / "lut.json").read_bytes() == b"SHARED_CUSTOM_LUT"
 
 
+@pytest.mark.parametrize("preset_exists", [True, False])
+@pytest.mark.parametrize("escape", [False, True])
+def test_shared_cloud_lut_lookup_preserves_attachment_containment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    preset_exists: bool, escape: bool,
+) -> None:
+    from api import feedback_assembler as assembler
+
+    _use_feedback_lut_repo(monkeypatch, tmp_path)
+    if not preset_exists:
+        monkeypatch.setattr(assembler, "REPO_ROOT", tmp_path / "missing-repo")
+        monkeypatch.setattr(LUTManager, "LUT_PRESET_DIR", str(tmp_path / "missing-repo/lut-preset"))
+    cloud = tmp_path / "shared-cloud"
+    cloud.mkdir()
+    source = cloud / "sample.json"
+    if escape:
+        outside = tmp_path / "outside.json"
+        outside.write_bytes(b"PRIVATE")
+        source.symlink_to(outside)
+    else:
+        source.write_bytes(b"SHARED_CLOUD")
+    monkeypatch.setenv("LUMINA_CLOUD_LUT_DIR", str(cloud))
+    LUTManager.invalidate_preset_cache()
+    try:
+        assert LUTManager.get_lut_path("Cloud - sample") is not None
+        found = assembler._find_lut_file("Cloud - sample")
+        assert found == (None if escape else source.resolve())
+        ticket = tmp_path / "ticket"
+        ticket.mkdir()
+        attachment = assembler._collect_lut(ticket, {"lut_name": "Cloud - sample"})
+        assert attachment["status"] == ("unavailable" if escape else "preset_reference_only")
+        assert attachment["filename"] is None
+        assert not list(ticket.iterdir())
+    finally:
+        LUTManager.invalidate_preset_cache()
+
+
 def test_collect_lut_marks_custom_copy_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

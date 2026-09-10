@@ -61,6 +61,28 @@ const SHARED_SETTINGS: UserSettings = {
 };
 
 describe("useSharedSettingsPersistence", () => {
+  it("persists edits made while the initial shared save is pending", async () => {
+    const systemApi = await import("../../api/system");
+    vi.mocked(systemApi.getSettings).mockResolvedValue({ status: "success", settings: SHARED_SETTINGS });
+    let finishSave!: () => void;
+    vi.mocked(systemApi.saveSettings).mockImplementationOnce(() => new Promise(resolve => {
+      finishSave = () => resolve({ status: "success", message: "Settings saved" });
+    }));
+    const { useSharedSettingsPersistence } = await import("../useSharedSettingsPersistence");
+    const { useSettingsStore } = await import("../../stores/settingsStore");
+    const { unmount } = renderHook(() => useSharedSettingsPersistence());
+    try {
+      await waitFor(() => expect(systemApi.saveSettings).toHaveBeenCalledTimes(1));
+      act(() => useSettingsStore.getState().setTheme("light"));
+      await waitFor(() => expect(systemApi.saveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ theme: "light" }),
+      ));
+    } finally {
+      finishSave();
+      unmount();
+    }
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.resetModules();
