@@ -27,6 +27,22 @@ function makeEntry(version: string): AnnouncementEntry {
 }
 
 describe("useAnnouncement", () => {
+  it("keeps compensation and batch-coating news in one daily entry", () => {
+    const entries = ANNOUNCEMENTS.filter((entry) => entry.version === "2026-09-13");
+    expect(entries).toHaveLength(1);
+    const items = entries[0].sections.flatMap((section) => section.items);
+    expect(items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        zh: expect.stringContaining("SVG 小洞补偿"),
+        en: expect.stringContaining("SVG hole compensation"),
+      }),
+      expect.objectContaining({
+        zh: expect.stringContaining("透明镀层"),
+        en: expect.stringContaining("transparent coating"),
+      }),
+    ]));
+  });
+
   it("announces smooth SVG previews and the compatibility setting", () => {
     const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-08-30");
     const items = entry?.sections.flatMap((section) => section.items) ?? [];
@@ -392,6 +408,14 @@ describe("selectAnnouncementHistory", () => {
 
     expect(selectAnnouncementHistory(entries, 0)).toEqual([]);
     expect(selectAnnouncementHistory(entries, -1)).toEqual([]);
+  });
+
+  it("新增公告后保留最近的默认窗口，不永久绑定旧月份", () => {
+    const history = selectAnnouncementHistory(ANNOUNCEMENTS);
+    expect(history).toHaveLength(Math.min(ANNOUNCEMENT_HISTORY_LIMIT, ANNOUNCEMENTS.length));
+    expect(history[0]).toBe(ANNOUNCEMENTS[0]);
+    expect(history.at(-1)).toBe(ANNOUNCEMENTS[history.length - 1]);
+    expect(history).not.toContain(ANNOUNCEMENTS[ANNOUNCEMENT_HISTORY_LIMIT]);
   });
 
   it("keeps the configured number of most recent daily announcements", () => {

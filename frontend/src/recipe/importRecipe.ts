@@ -31,6 +31,11 @@ import {
 } from "../constants/fridgeMagnets";
 import { restoreImportedDynamicMaterialMetadata } from "./dynamicMaterialMetadata";
 import type { WorkshopRecipeSource } from "../workshop/types";
+import {
+  svgHoleCompensationOptions,
+  validSvgHoleCompensationOptions,
+} from "../constants/svgHoleCompensation";
+import { tRuntime } from "../i18n/runtime";
 
 // ========== Hex normalization ==========
 
@@ -417,6 +422,10 @@ export function restoreConverterRecipe(
   }
 
   const conv = recipe.recipe.converter;
+  const svgCompensation = svgHoleCompensationOptions(conv.base);
+  if (!validSvgHoleCompensationOptions(svgCompensation)) {
+    throw new Error(tRuntime("svg_hole_compensation_invalid"));
+  }
   const warnings: string[] = [...recipe.warnings];
   const rawWorkshopSource = recipe.recipe.workshop;
   const workshopSource =
@@ -646,6 +655,7 @@ export function restoreConverterRecipe(
       conv.base.quantize_colors_unlocked ?? conv.base.quantize_colors > 256,
     high_precision_3d_preview: Boolean(conv.base.high_precision_3d_preview),
     enable_cleanup: conv.base.enable_cleanup,
+    ...svgCompensation,
     hue_enable: dynamicMaterialEnabled ? false : conv.base.hue_enable,
     use_lut_constrained: Boolean(conv.base.use_lut_constrained),
     auto_dynamic_range: Boolean(conv.base.auto_dynamic_range),

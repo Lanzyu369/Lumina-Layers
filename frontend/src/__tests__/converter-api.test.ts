@@ -60,6 +60,21 @@ describe("convertPreview", () => {
     is_dark: false,
   };
 
+  it("serializes SVG compensation without dropping disabled zero thresholds", async () => {
+    mockPost.mockResolvedValueOnce({ data: { status: "ok", session_id: "svg" } });
+    await convertPreview(new File(["<svg/>"], "holes.svg", { type: "image/svg+xml" }), {
+      ...previewParams,
+      modeling_mode: ModelingMode.VECTOR,
+      svg_hole_compensation_enabled: true,
+      svg_hole_max_area_mm2: 0.75,
+      svg_hole_max_width_mm: 0,
+    });
+    const fd = mockPost.mock.calls[0][1] as FormData;
+    expect(fd.get("svg_hole_compensation_enabled")).toBe("true");
+    expect(fd.get("svg_hole_max_area_mm2")).toBe("0.75");
+    expect(fd.get("svg_hole_max_width_mm")).toBe("0");
+  });
+
   it("builds correct FormData and calls POST /convert/preview", async () => {
     const fakeResponse = {
       session_id: "sess-123",
@@ -273,6 +288,21 @@ describe("convertBatch", () => {
     auto_dynamic_range: false,
     enable_relief: false,
   };
+
+  it("serializes source SVG compensation for a batch", async () => {
+    mockPost.mockResolvedValueOnce({ data: { status: "ok", results: [] } });
+    await convertBatch([new File(["<svg/>"], "holes.svg", { type: "image/svg+xml" })], {
+      ...baseBatchParams,
+      modeling_mode: ModelingMode.VECTOR,
+      svg_hole_compensation_enabled: true,
+      svg_hole_max_area_mm2: 0,
+      svg_hole_max_width_mm: 0.12,
+    });
+    const fd = mockPost.mock.calls[0][1] as FormData;
+    expect(fd.get("svg_hole_compensation_enabled")).toBe("true");
+    expect(fd.get("svg_hole_max_area_mm2")).toBe("0");
+    expect(fd.get("svg_hole_max_width_mm")).toBe("0.12");
+  });
 
   it("serializes material archive batch fields into FormData", async () => {
     mockPost.mockResolvedValueOnce({

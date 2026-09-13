@@ -7,6 +7,7 @@ from shapely.geometry import Polygon, box
 from shapely.ops import unary_union
 
 import core.vector_engine as vector_engine
+from core.native_svg_adapter import NativeSvgFallback
 from core.vector_engine import VectorProcessor
 
 
@@ -20,6 +21,19 @@ def _hole_areas(geom):
     if geom.geom_type == "Polygon":
         return sorted(Polygon(ring).area for ring in geom.interiors)
     return sorted(Polygon(ring).area for poly in geom.geoms for ring in poly.interiors)
+
+
+def _force_legacy_parser(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep legacy-internal unit tests isolated from an installed native wheel."""
+
+    monkeypatch.setattr(
+        vector_engine.native_svg_adapter,
+        "analyze_native_svg",
+        lambda *_args, **_kwargs: NativeSvgFallback(
+            reason_code="test_legacy_parser",
+            native_version="test",
+        ),
+    )
 
 
 def test_backing_close_alignment():
@@ -73,7 +87,8 @@ def test_slit_filter_closes_narrow_slits():
     assert len(filtered.geoms) == 2
 
 
-def test_color_layer_hole_filter_removes_small_holes(tmp_path):
+def test_color_layer_hole_filter_removes_small_holes(tmp_path, monkeypatch):
+    _force_legacy_parser(monkeypatch)
     outer = box(0, 0, 10, 10).exterior.coords
     small_hole = box(1, 1, 1 + math.sqrt(0.3), 1 + math.sqrt(0.3)).exterior.coords
     large_hole = box(5, 5, 6, 6).exterior.coords
@@ -116,6 +131,7 @@ def test_vector_parse_clip_cache_capacity_is_interaction_sized():
 
 
 def test_vector_parse_clip_cache_refreshes_hit_before_eviction(tmp_path, monkeypatch):
+    _force_legacy_parser(monkeypatch)
     monkeypatch.setattr(vector_engine, "_VECTOR_PARSE_CLIP_CACHE_MAX", 2)
     vector_engine._VECTOR_PARSE_CLIP_CACHE.clear()
 
@@ -176,6 +192,7 @@ def test_vector_parse_clip_artifact_skips_parse_and_clip(tmp_path):
         "image_vectorizer_bounds": None,
         "scale_factor": 1.0,
         "bbox": (0, 0, 1, 1),
+        "parse_warnings": ["cached legacy parse warning"],
     }
     artifact_path.write_bytes(
         vector_engine._serialize_vector_parse_clip_cache(cache_key, cache_entry)
@@ -186,6 +203,7 @@ def test_vector_parse_clip_artifact_skips_parse_and_clip(tmp_path):
     processor.sampling_precision = 0.02
     processor.expand_stroke_to_fill = False
     processor.auto_dynamic_range = False
+    processor.parse_warnings = ["stale warning from another SVG"]
     processor._parse_clip_cache_path = str(artifact_path)
     solve_calls = []
     processor.img_processor = SimpleNamespace(
@@ -208,6 +226,90 @@ def test_vector_parse_clip_artifact_skips_parse_and_clip(tmp_path):
     assert analysis.stage_timings["material_solve_s"] >= 0.0
     assert solve_calls == [((0, 128, 255),)]
     assert len(analysis.matched_shapes) == 1
+    assert processor.parse_warnings == ["cached legacy parse warning"]
+
+
+def test_v3_artifact_without_paint_identity_is_ignored(
+    tmp_path,
+    monkeypatch,
+):
+    _force_legacy_parser(monkeypatch)
+    svg_path = tmp_path / "self-cross.svg"
+    svg_path.write_text("<svg/>", encoding="utf-8")
+    artifact_path = tmp_path / "old-v3-parse-clip-cache.pkl"
+    cache_key = vector_engine._vector_parse_clip_cache_key(
+        str(svg_path),
+        target_width_mm=10.0,
+        sampling_precision=0.02,
+        expand_stroke_to_fill=False,
+        gradient_color_bands=None,
+    )
+    stale_geom = box(0, 0, 2, 2)
+    stale_entry = {
+        "shape_data": [{"poly": stale_geom, "color": (255, 0, 0)}],
+        "clipped_shapes": [
+            {"geometry": stale_geom, "color": (255, 0, 0)}
+        ],
+        "silhouette": stale_geom,
+        "image_vectorizer_bounds": None,
+        "scale_factor": 1.0,
+        "bbox": (0, 0, 2, 2),
+        "parse_warnings": ["stale-v3-result-without-paint-identity"],
+    }
+    artifact_path.write_bytes(
+        pickle.dumps(
+            {
+                "schema": "lumina_vector_parse_clip_cache_v3",
+                "cache_key": cache_key,
+                "entry": stale_entry,
+            },
+            protocol=pickle.HIGHEST_PROTOCOL,
+        )
+    )
+
+    fresh_geom = box(0, 0, 1, 1)
+    parse_calls = []
+    processor = object.__new__(VectorProcessor)
+    processor.color_mode = "4-Color (RYBW)"
+    processor.sampling_precision = 0.02
+    processor.expand_stroke_to_fill = False
+    processor.auto_dynamic_range = False
+    processor.parse_warnings = []
+    processor._parse_clip_cache_path = str(artifact_path)
+    processor.img_processor = SimpleNamespace(
+        lut_rgb=[(0, 0, 0)],
+        lut_path="direct.npy",
+        solve_for_fills=lambda _fills: None,
+    )
+
+    def fresh_parse(path, _target_width_mm):
+        parse_calls.append(path)
+        return [
+            {"poly": fresh_geom, "color": (0, 128, 255)}
+        ], 1.0, (0, 0, 1, 1)
+
+    processor._parse_svg = fresh_parse
+    processor._clip_occlusion = lambda *_args, **_kwargs: (
+        [{"geometry": fresh_geom, "color": (0, 128, 255)}],
+        fresh_geom,
+    )
+    processor._match_colors = lambda clipped, *_args, **_kwargs: [
+        {
+            "geometry": item["geometry"],
+            "recipe": [0],
+            "color": item["color"],
+        }
+        for item in clipped
+    ]
+    vector_engine._VECTOR_PARSE_CLIP_CACHE.clear()
+
+    analysis = VectorProcessor.analyze_svg(
+        processor, str(svg_path), target_width_mm=10.0
+    )
+
+    assert parse_calls == [str(svg_path)]
+    assert analysis.bbox == (0, 0, 1, 1)
+    assert processor.parse_warnings == []
 
 
 def test_vector_parse_clip_artifact_carries_stable_provenance(tmp_path):
@@ -247,6 +349,7 @@ def test_vector_parse_clip_cache_entry_is_not_mutated_by_later_filters(
     tmp_path,
     monkeypatch,
 ):
+    _force_legacy_parser(monkeypatch)
     svg_path = tmp_path / "cache_source.svg"
     svg_path.write_text("<svg/>", encoding="utf-8")
     original_geom = box(0, 0, 10, 10)

@@ -4,3 +4,6 @@
 # Windows batch files should keep CRLF for native execution and editing.
 *.bat text eol=crlf
 *.cmd text eol=crlf
+
+# Unified diffs require a single context marker on otherwise blank lines.
+native/lumina-svg-core/patches/*.patch -whitespace

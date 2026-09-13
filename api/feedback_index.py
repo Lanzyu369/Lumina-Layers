@@ -347,6 +347,13 @@ def _format_advanced_params_section(context: dict[str, Any]) -> str:
         f"{_safe_str(wipe_tower_auto_placement)}"
     )
     if isinstance(generation, dict):
+        for field in (
+            "svg_hole_compensation_enabled",
+            "svg_hole_max_area_mm2",
+            "svg_hole_max_width_mm",
+        ):
+            if field in generation:
+                lines.append(f"- {field}: {_safe_str(generation[field])}")
         warning_codes = generation.get("wipe_tower_warning_codes")
         if isinstance(warning_codes, list) and warning_codes:
             lines.append(

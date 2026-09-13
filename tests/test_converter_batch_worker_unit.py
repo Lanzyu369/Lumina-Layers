@@ -62,9 +62,14 @@ def test_batch_worker_forwards_coating(enabled, mode, source):
             modeling_mode_value=mode, color_layers=5, layer_height_mm=0.08,
             quantize_colors=48, enable_cleanup=True, artifact_prefix="test-",
             material_source=source, enable_coating=enabled, coating_height_mm=0.12,
+            svg_hole_compensation_enabled=mode == "vector",
+            svg_hole_max_area_mm2=0.75, svg_hole_max_width_mm=0.21,
         )
     assert convert.call_args.kwargs["enable_coating"] is enabled
     assert convert.call_args.kwargs["coating_height_mm"] == 0.12
+    assert convert.call_args.kwargs["svg_hole_compensation_enabled"] is (mode == "vector")
+    assert convert.call_args.kwargs["svg_hole_max_area_mm2"] == 0.75
+    assert convert.call_args.kwargs["svg_hole_max_width_mm"] == 0.21
 
 
 @pytest.mark.parametrize("mode", ["vector", "high-fidelity"])

@@ -131,6 +131,45 @@ class CoreProcessingError(CoreError):
         super().__init__(detail=detail, error_type="core_processing_error")
 
 
+class NativeSvgInvalidError(CoreValidationError):
+    """Report deterministic invalid input from the native SVG boundary.
+
+    报告原生 SVG 边界识别出的确定性无效输入。
+    """
+
+    def __init__(self, detail: str, *, reason_code: str):
+        self.reason_code = str(reason_code)
+        super().__init__(detail)
+
+
+class NativeSvgResourceLimitError(CoreValidationError):
+    """Reject SVG work that exceeds the deterministic native resource cap.
+
+    拒绝超过原生 SVG 确定性资源上限的输入，且禁止转交无同等限额的旧链路。
+    """
+
+    code = "native_svg_resource_limit"
+    recoverable = False
+
+    def __init__(self, *, reason_code: str = "unsupported_complexity") -> None:
+        self.reason_code = str(reason_code)
+        super().__init__(
+            "This SVG exceeds the safe native processing complexity limit. "
+            "Simplify the document or split it into smaller SVG files."
+        )
+
+
+class NativeSvgInternalError(CoreProcessingError):
+    """Report a native SVG ABI or processing failure without legacy retry.
+
+    报告原生 SVG ABI 或处理故障；此类错误不得静默走旧链路重试。
+    """
+
+    def __init__(self, detail: str, *, reason_code: str):
+        self.reason_code = str(reason_code)
+        super().__init__(detail)
+
+
 class CachedPreviewAnalysisError(CoreError):
     """Raised when explicitly required preview analysis cannot be consumed.
 

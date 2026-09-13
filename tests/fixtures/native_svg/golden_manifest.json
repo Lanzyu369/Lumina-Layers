@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "target_width_mm": 100.0,
+  "tolerance_mm": 0.02,
+  "cases": [
+    {
+      "file": "fill_rules_transforms.svg",
+      "expected_backend": "native",
+      "max_area_difference_mm2": 0.25,
+      "max_symmetric_difference_mm2": 0.3
+    },
+    {
+      "file": "overlap_islands.svg",
+      "expected_backend": "native",
+      "max_area_difference_mm2": 0.1,
+      "max_symmetric_difference_mm2": 0.8
+    },
+    {
+      "file": "clip_inherited_fill.svg",
+      "expected_backend": "native",
+      "max_area_difference_mm2": 0.2,
+      "max_symmetric_difference_mm2": 0.8
+    },
+    {
+      "file": "irregular_silhouette.svg",
+      "expected_backend": "native",
+      "max_area_difference_mm2": 0.1,
+      "max_symmetric_difference_mm2": 0.2
+    }
+  ]
+}

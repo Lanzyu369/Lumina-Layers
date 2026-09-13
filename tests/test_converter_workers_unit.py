@@ -155,7 +155,7 @@ class TestParameterAnnotations:
     def test_preview_has_expected_param_count(self) -> None:
         """worker_generate_preview should expose the full preview parameter set."""
         sig = inspect.signature(worker_generate_preview)
-        assert len(sig.parameters) == 33
+        assert len(sig.parameters) == 36
 
     def test_model_has_expected_param_count(self) -> None:
         """worker_generate_model should have 3 parameters."""
@@ -185,8 +185,17 @@ class TestParameterAnnotations:
             "material_min_layer_count", "material_max_layer_count",
             "material_delta_e00_tolerance", "auto_dynamic_range",
             "high_precision_3d_preview", "replacement_regions",
+            "svg_hole_compensation_enabled", "svg_hole_max_area_mm2",
+            "svg_hole_max_width_mm",
         }
         assert set(sig.parameters.keys()) == expected
+
+    def test_preview_compensation_parameters_are_optional_scalars(self) -> None:
+        """Existing preview calls remain valid with compensation disabled."""
+        parameters = inspect.signature(worker_generate_preview).parameters
+        assert parameters["svg_hole_compensation_enabled"].default is False
+        assert parameters["svg_hole_max_area_mm2"].default == 0.5
+        assert parameters["svg_hole_max_width_mm"].default == 0.1
 
     def test_model_param_names(self) -> None:
         """Verify expected parameter names for worker_generate_model."""

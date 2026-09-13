@@ -5364,6 +5364,38 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "仅支持 JPG/PNG/SVG/WebP/HEIC 格式",
     en: "Only JPG/PNG/SVG/WebP/HEIC formats are supported",
   },
+  svg_hole_compensation: {
+    zh: "SVG 小洞补偿",
+    en: "SVG hole compensation",
+  },
+  svg_hole_compensation_hint: {
+    zh: "按成品尺寸填补画面内部的小孔和细缝，并沿用邻近颜色；预览和生成使用同一张补偿后的画面。不会扩大外轮廓，也不会改写原文件。有意保留的小孔也可能被填上，默认关闭。",
+    en: "Fill enclosed small holes and thin gaps at the finished size using a nearby colour. Preview and generation use the same compensated artwork. The outer outline and original file stay unchanged. Intentional small details may also be filled; off by default.",
+  },
+  svg_hole_compensation_unavailable: {
+    zh: "仅适用于 SVG 的矢量模式；批量使用时需全部为 SVG。",
+    en: "Available for SVG artwork in Vector mode only; every file in a batch must be SVG.",
+  },
+  svg_hole_max_area: {
+    zh: "补孔面积上限 (mm²)",
+    en: "Maximum hole area (mm²)",
+  },
+  svg_hole_max_area_hint: {
+    zh: "小于等于此面积的内部孔洞会被填满。数值越大，填补的孔越多；设为 0 关闭按面积补孔。面积或细缝条件满足任一项即可填补。",
+    en: "Fill enclosed holes up to this area. Larger values fill more holes; 0 disables the area criterion. A hole is filled if either the area or thin-gap criterion is met.",
+  },
+  svg_hole_max_width: {
+    zh: "细缝宽度上限 (mm)",
+    en: "Maximum thin-gap width (mm)",
+  },
+  svg_hole_max_width_hint: {
+    zh: "补上面积较大但整体狭长的封闭细缝。这里按孔洞面积和周长估算宽度，不是孔洞的最宽处；设为 0 关闭细缝筛选。",
+    en: "Fill long, enclosed thin gaps even when their area is larger. Width is estimated from the hole's area and perimeter, not its widest point; 0 disables the thin-gap criterion.",
+  },
+  svg_hole_compensation_invalid: {
+    zh: "SVG 小洞补偿参数无效：面积和宽度必须是大于等于 0 的有限数值。",
+    en: "Invalid SVG hole compensation settings: area and width must be finite, non-negative numbers.",
+  },
   converter_raw_preview_failed: {
     zh: "RAW 图片预览失败：{error}。请先转换为 PNG/JPG 后再试。",
     en: "RAW image preview failed: {error}. Please convert it to PNG or JPG and try again.",

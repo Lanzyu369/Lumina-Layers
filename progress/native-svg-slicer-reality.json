@@ -1,0 +1,421 @@
+{
+  "artifacts": {
+    "analysis": {
+      "bbox": [
+        0.0,
+        0.0,
+        100.0,
+        60.0
+      ],
+      "matched_shape_count": 3,
+      "raw_shape_count": 3,
+      "scale_factor": 0.4,
+      "visible_shape_count": 3
+    },
+    "fixture": {
+      "path": "tests/fixtures/native_svg/clip_inherited_fill.svg",
+      "sha256": "1256936a15d17f9039a120271478b9df6a9c95c72f43bf140814ec97a3a40a01"
+    },
+    "geometry_backend": "native",
+    "glb": {
+      "byte_size": 5964,
+      "geometry_count": 5,
+      "path": "native-svg-reality.glb",
+      "sha256": "58d840947240c572a51a04971aa784db789bbde0e1e0e1a391e3053172aed1c5"
+    },
+    "native_version": "0.1.1",
+    "projects": {
+      "BambuStudio": {
+        "build_item_count": 1,
+        "byte_size": 32810,
+        "expected_tool_ids": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "material_count": 5,
+        "object_count": 6,
+        "part_names": [
+          "Blue",
+          "Board",
+          "Red",
+          "White",
+          "Yellow"
+        ],
+        "path": "native-svg-BambuStudio.3mf",
+        "sha256": "038be1de8448b74343004d0724d9996d65b1007cc6fc7f4e740e0a6e6c2483e4",
+        "triangle_count": 252
+      },
+      "OrcaSlicer": {
+        "build_item_count": 1,
+        "byte_size": 31846,
+        "expected_tool_ids": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "material_count": 5,
+        "object_count": 6,
+        "part_names": [
+          "Blue",
+          "Board",
+          "Red",
+          "White",
+          "Yellow"
+        ],
+        "path": "native-svg-OrcaSlicer.3mf",
+        "sha256": "d06f5e52401600469f3e50393c7a5ede974b08740c3a3bf1d77f781c344de27d",
+        "triangle_count": 252
+      }
+    },
+    "schema_version": 1,
+    "status": "generated"
+  },
+  "host": {
+    "machine": "arm64",
+    "platform": "macOS-26.5.2-arm64-arm-64bit",
+    "python": "3.12.13"
+  },
+  "schema_version": 1,
+  "slicers": {
+    "BambuStudio": {
+      "command": [
+        "<BambuStudio-executable>",
+        "--debug",
+        "1",
+        "--allow-newer-file",
+        "--slice",
+        "0",
+        "--outputdir",
+        "<isolated-run-directory>",
+        "native-svg-BambuStudio.3mf"
+      ],
+      "duration_seconds": 0.413717,
+      "executable": "BambuStudio",
+      "exit_code": 0,
+      "input": {
+        "build_item_count": 1,
+        "byte_size": 32810,
+        "expected_tool_ids": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "material_count": 5,
+        "object_count": 6,
+        "part_names": [
+          "Blue",
+          "Board",
+          "Red",
+          "White",
+          "Yellow"
+        ],
+        "path": "native-svg-BambuStudio.3mf",
+        "sha256": "038be1de8448b74343004d0724d9996d65b1007cc6fc7f4e740e0a6e6c2483e4",
+        "triangle_count": 252
+      },
+      "reason": "",
+      "runs": [
+        {
+          "command": [
+            "<BambuStudio-executable>",
+            "--debug",
+            "1",
+            "--allow-newer-file",
+            "--slice",
+            "0",
+            "--outputdir",
+            "<isolated-run-directory>",
+            "native-svg-BambuStudio.3mf"
+          ],
+          "duration_seconds": 0.267226,
+          "exit_code": 0,
+          "missing_expected_tool_ids": [],
+          "output_directory": "run-1",
+          "reason": "",
+          "status": "passed",
+          "stderr_tail": "",
+          "stdout_tail": "[2026-08-31 16:06:07.674961] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
+          "toolpath": {
+            "extrusion_move_count": 4292,
+            "fingerprint": "7f9f6915bf40d692cdeebdf8fa32c3159431a747e0e555e3ac0a6c1aa6843ec1",
+            "motion_command_count": 6290,
+            "normalized_byte_size": 159695,
+            "positive_extrusion_by_tool": {
+              "0": 724,
+              "1": 992,
+              "1000": 192,
+              "2": 76,
+              "3": 258,
+              "4": 2050
+            },
+            "positive_extrusion_tool_ids": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              1000
+            ],
+            "tool_change_count": 13
+          },
+          "toolpath_files": [
+            "plate_1.gcode"
+          ]
+        },
+        {
+          "command": [
+            "<BambuStudio-executable>",
+            "--debug",
+            "1",
+            "--allow-newer-file",
+            "--slice",
+            "0",
+            "--outputdir",
+            "<isolated-run-directory>",
+            "native-svg-BambuStudio.3mf"
+          ],
+          "duration_seconds": 0.146491,
+          "exit_code": 0,
+          "missing_expected_tool_ids": [],
+          "output_directory": "run-2",
+          "reason": "",
+          "status": "passed",
+          "stderr_tail": "",
+          "stdout_tail": "[2026-08-31 16:06:07.916607] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
+          "toolpath": {
+            "extrusion_move_count": 4292,
+            "fingerprint": "7f9f6915bf40d692cdeebdf8fa32c3159431a747e0e555e3ac0a6c1aa6843ec1",
+            "motion_command_count": 6290,
+            "normalized_byte_size": 159695,
+            "positive_extrusion_by_tool": {
+              "0": 724,
+              "1": 992,
+              "1000": 192,
+              "2": 76,
+              "3": 258,
+              "4": 2050
+            },
+            "positive_extrusion_tool_ids": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              1000
+            ],
+            "tool_change_count": 13
+          },
+          "toolpath_files": [
+            "plate_1.gcode"
+          ]
+        }
+      ],
+      "stable_across_runs": true,
+      "status": "passed",
+      "stderr_tail": "",
+      "stdout_tail": "[2026-08-31 16:06:07.674961] [0x00000001f8531d80] [trace]   Initializing StaticPrintConfigs\n",
+      "toolpath": {
+        "extrusion_move_count": 4292,
+        "fingerprint": "7f9f6915bf40d692cdeebdf8fa32c3159431a747e0e555e3ac0a6c1aa6843ec1",
+        "motion_command_count": 6290,
+        "normalized_byte_size": 159695,
+        "positive_extrusion_by_tool": {
+          "0": 724,
+          "1": 992,
+          "1000": 192,
+          "2": 76,
+          "3": 258,
+          "4": 2050
+        },
+        "positive_extrusion_tool_ids": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          1000
+        ],
+        "tool_change_count": 13
+      },
+      "toolpath_files": [
+        "plate_1.gcode"
+      ],
+      "version": "BambuStudio-02.07.01.62"
+    },
+    "OrcaSlicer": {
+      "command": [
+        "<OrcaSlicer-executable>",
+        "--debug",
+        "1",
+        "--allow-newer-file",
+        "--slice",
+        "0",
+        "--outputdir",
+        "<isolated-run-directory>",
+        "native-svg-OrcaSlicer.3mf"
+      ],
+      "duration_seconds": 0.397635,
+      "executable": "OrcaSlicer",
+      "exit_code": 0,
+      "input": {
+        "build_item_count": 1,
+        "byte_size": 31846,
+        "expected_tool_ids": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "material_count": 5,
+        "object_count": 6,
+        "part_names": [
+          "Blue",
+          "Board",
+          "Red",
+          "White",
+          "Yellow"
+        ],
+        "path": "native-svg-OrcaSlicer.3mf",
+        "sha256": "d06f5e52401600469f3e50393c7a5ede974b08740c3a3bf1d77f781c344de27d",
+        "triangle_count": 252
+      },
+      "reason": "",
+      "runs": [
+        {
+          "command": [
+            "<OrcaSlicer-executable>",
+            "--debug",
+            "1",
+            "--allow-newer-file",
+            "--slice",
+            "0",
+            "--outputdir",
+            "<isolated-run-directory>",
+            "native-svg-OrcaSlicer.3mf"
+          ],
+          "duration_seconds": 0.248647,
+          "exit_code": 0,
+          "missing_expected_tool_ids": [],
+          "output_directory": "run-1",
+          "reason": "",
+          "status": "passed",
+          "stderr_tail": "",
+          "stdout_tail": "",
+          "toolpath": {
+            "extrusion_move_count": 4557,
+            "fingerprint": "efff1f6fc42577c4a6aba62b0f8a22d924e574012bc02e7efc7c1311c63bcf99",
+            "motion_command_count": 6697,
+            "normalized_byte_size": 168801,
+            "positive_extrusion_by_tool": {
+              "0": 761,
+              "1": 1059,
+              "1000": 185,
+              "2": 76,
+              "3": 276,
+              "4": 2200
+            },
+            "positive_extrusion_tool_ids": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              1000
+            ],
+            "tool_change_count": 13
+          },
+          "toolpath_files": [
+            "plate_1.gcode"
+          ]
+        },
+        {
+          "command": [
+            "<OrcaSlicer-executable>",
+            "--debug",
+            "1",
+            "--allow-newer-file",
+            "--slice",
+            "0",
+            "--outputdir",
+            "<isolated-run-directory>",
+            "native-svg-OrcaSlicer.3mf"
+          ],
+          "duration_seconds": 0.148988,
+          "exit_code": 0,
+          "missing_expected_tool_ids": [],
+          "output_directory": "run-2",
+          "reason": "",
+          "status": "passed",
+          "stderr_tail": "",
+          "stdout_tail": "",
+          "toolpath": {
+            "extrusion_move_count": 4557,
+            "fingerprint": "efff1f6fc42577c4a6aba62b0f8a22d924e574012bc02e7efc7c1311c63bcf99",
+            "motion_command_count": 6697,
+            "normalized_byte_size": 168801,
+            "positive_extrusion_by_tool": {
+              "0": 761,
+              "1": 1059,
+              "1000": 185,
+              "2": 76,
+              "3": 276,
+              "4": 2200
+            },
+            "positive_extrusion_tool_ids": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              1000
+            ],
+            "tool_change_count": 13
+          },
+          "toolpath_files": [
+            "plate_1.gcode"
+          ]
+        }
+      ],
+      "stable_across_runs": true,
+      "status": "passed",
+      "stderr_tail": "",
+      "stdout_tail": "",
+      "toolpath": {
+        "extrusion_move_count": 4557,
+        "fingerprint": "efff1f6fc42577c4a6aba62b0f8a22d924e574012bc02e7efc7c1311c63bcf99",
+        "motion_command_count": 6697,
+        "normalized_byte_size": 168801,
+        "positive_extrusion_by_tool": {
+          "0": 761,
+          "1": 1059,
+          "1000": 185,
+          "2": 76,
+          "3": 276,
+          "4": 2200
+        },
+        "positive_extrusion_tool_ids": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          1000
+        ],
+        "tool_change_count": 13
+      },
+      "toolpath_files": [
+        "plate_1.gcode"
+      ],
+      "version": "OrcaSlicer-2.4.0"
+    }
+  },
+  "status": "passed"
+}

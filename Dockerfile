@@ -1,4 +1,4 @@
-FROM python:3.13-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
@@ -37,7 +37,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && npm install -g pnpm@10.33.2 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt requirements-glb-v2.txt /app/
+COPY requirements.txt requirements-glb-v2.txt requirements-native-svg.txt /app/
+COPY native/lumina-svg-core /app/native/lumina-svg-core
 RUN pip install --no-cache-dir -r requirements.txt -r requirements-glb-v2.txt
 
 COPY frontend/package.json frontend/pnpm-lock.yaml /app/frontend/
