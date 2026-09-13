@@ -51,6 +51,92 @@ from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize("mode", ["vector", "high-fidelity"])
+@pytest.mark.parametrize("source", ["lut", "material_archive"])
+def test_batch_worker_forwards_coating(enabled, mode, source):
+    with patch("core.converter.convert_image_to_3d", return_value=(None, None, None, "test", None)) as convert:
+        worker_batch_convert_item(
+            image_path="test.svg", lut_path="test.npy", target_width_mm=60,
+            spacer_thick=1.2, structure_mode="Single-sided", color_mode="4-Color (RYBW)",
+            modeling_mode_value=mode, color_layers=5, layer_height_mm=0.08,
+            quantize_colors=48, enable_cleanup=True, artifact_prefix="test-",
+            material_source=source, enable_coating=enabled, coating_height_mm=0.12,
+        )
+    assert convert.call_args.kwargs["enable_coating"] is enabled
+    assert convert.call_args.kwargs["coating_height_mm"] == 0.12
+
+
+@pytest.mark.parametrize("mode", ["vector", "high-fidelity"])
+@pytest.mark.parametrize("enabled", [True, False])
+def test_two_svg_batch_exports_keep_coating(tmp_path, monkeypatch, mode, enabled):
+    """Verify real conversion and merging preserve each item's coating mesh."""
+    import xml.etree.ElementTree as ET
+    import zipfile
+
+    import config
+    from core.pipeline import s09_export_3mf, s11_glb_preview
+    from utils.merged_bambu_3mf_writer import (
+        MaterialSlot, MergedBambu3MFWriter, MergedItem,
+    )
+
+    for name in ("MODELS_DIR", "OUTPUT_DIR", "TEMP_DIR"):
+        monkeypatch.setattr(config, name, str(tmp_path))
+    monkeypatch.setattr(s09_export_3mf, "MODELS_DIR", str(tmp_path))
+    monkeypatch.setattr(s11_glb_preview, "OUTPUT_DIR", str(tmp_path))
+    lut_path = tmp_path / "colors.npy"
+    np.save(lut_path, np.tile(np.array([[255, 255, 255]], dtype=np.uint8), (1024, 1)))
+    items = []
+    for index in range(2):
+        svg_path = tmp_path / f"shape-{index}.svg"
+        svg_path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">'
+            '<path fill="white" fill-rule="evenodd" '
+            'd="M0 0H10V10H0Z M3 3V7H7V3Z"/></svg>', encoding="utf-8",
+        )
+        result = worker_batch_convert_item(
+            str(svg_path), str(lut_path), 10, 1.2, "Single-sided",
+            "4-Color (RYBW)", mode, 5, 0.08, 4, False, "coating-test-",
+            enable_coating=enabled, coating_height_mm=0.12,
+        )
+        assert result["threemf_path"], result["status_msg"]
+        sidecar = json.loads(Path(result["metadata_sidecar_path"]).read_text(encoding="utf-8"))
+        slots = tuple(MaterialSlot(**slot) for slot in sidecar["slots"])
+        assert any(slot.slot_name == "Coating" for slot in slots) is enabled
+        items.append(MergedItem(
+            source_filename=svg_path.name, source_3mf_path=Path(result["threemf_path"]),
+            slots=slots, tx_mm=index * 15, ty_mm=0,
+        ))
+    merged = tmp_path / "merged.3mf"
+    MergedBambu3MFWriter().write(items, merged, plate_width_mm=256, plate_depth_mm=256)
+    with zipfile.ZipFile(merged) as archive:
+        model_objects = {}
+        for name in archive.namelist():
+            if name.endswith(".model"):
+                root = ET.fromstring(archive.read(name))
+                for mesh_object in root.findall(".//{*}object"):
+                    if mesh_object.find("{*}mesh") is not None:
+                        model_objects[mesh_object.get("id")] = mesh_object
+        settings = ET.fromstring(archive.read("Metadata/model_settings.config"))
+        objects = settings.findall("object")
+        assert len(objects) == 2
+        for obj in objects:
+            coating_parts = [part for part in obj.findall("part") if any(
+                meta.get("key") == "name" and meta.get("value") == "Coating"
+                for meta in part.findall("metadata")
+            )]
+            assert len(coating_parts) == int(enabled)
+            for part in coating_parts:
+                assert any(meta.get("key") == "extruder" and int(meta.get("value")) > 0
+                           for meta in part.findall("metadata"))
+                mesh_object = model_objects[part.get("id")]
+                z_values = [float(vertex.get("z")) for vertex in
+                            mesh_object.findall(".//{*}vertex")]
+                # Coating uses the existing single-image layer quantization.
+                expected_height = max(1, round(0.12 / config.PrinterConfig.LAYER_HEIGHT)) * config.PrinterConfig.LAYER_HEIGHT
+                assert max(z_values) - min(z_values) == pytest.approx(expected_height)
+
+
 def _make_test_image(tmp_dir: str) -> Path:
     """Write a tiny PNG that the worker can use to compute xy_bbox_mm.
 
@@ -236,6 +322,8 @@ def batch_worker_artifacts(tmp_path):
             assert forwarded["enable_base_layer_height_modifier"] is False
             assert forwarded["enable_wipe_tower_auto_placement"] is False
             assert forwarded["backing_infill_density_percent"] == 25
+            assert forwarded["enable_coating"] is False
+            assert forwarded["coating_height_mm"] == 0.08
 
         yield artifact_prefix, image_path, result
     finally:

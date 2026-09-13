@@ -610,7 +610,18 @@ class TestBatchTimeout:
 
 
 class TestBatchWorkerPoolSubmit:
-    """Verify pool.submit is called with worker_batch_convert_item and correct args."""
+    """Verify batch requests submit their settings to the worker pool."""
+
+    @pytest.mark.parametrize("height", ["0.03", "0.13", "nan", "inf"])
+    def test_batch_rejects_invalid_coating_height(self, height):
+        _mock_pool.submit = AsyncMock()
+        response = client.post(
+            "/api/convert/batch",
+            files=[("images", _make_test_image_buf())],
+            data={"lut_name": "test_lut", "enable_coating": "true", "coating_height_mm": height},
+        )
+        assert response.status_code == 422
+        _mock_pool.submit.assert_not_called()
 
     def test_batch_submits_to_pool(self) -> None:
         _mock_pool.submit = AsyncMock(
@@ -661,6 +672,8 @@ class TestBatchWorkerPoolSubmit:
                     "enable_base_layer_height_modifier": "false",
                     "enable_wipe_tower_auto_placement": "false",
                     "high_precision_3d_preview": "true",
+                    "enable_coating": "true",
+                    "coating_height_mm": "0.12",
                 },
             )
 
@@ -719,6 +732,7 @@ class TestBatchWorkerPoolSubmit:
             call_args.kwargs["host_memory_reservation_bytes"]
             == 8 * 1024**3
         )
+        assert call_args[0][-2:] == (True, 0.12)
 
     def test_batch_submits_material_archive_source_to_worker(self) -> None:
         """Batch endpoint forwards material-archive source params to worker."""
