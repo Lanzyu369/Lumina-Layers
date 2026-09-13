@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
   useConverterStore,
@@ -71,19 +72,36 @@ function PhysicalThresholdInput({ label, hint, value, onChange }: {
   value: number;
   onChange: (value: number) => void;
 }) {
+  // Keep intermediate text such as "0." local until the user commits it.
+  const [draft, setDraft] = useState<string | null>(null);
+
+  const commitValue = (text: string) => {
+    const next = Number(text);
+    if (text.trim() !== "" && Number.isFinite(next) && next >= 0) {
+      onChange(next);
+    }
+    setDraft(null);
+  };
+
   return (
     <label className="flex flex-col gap-1.5 text-sm text-slate-700 dark:text-slate-200">
       <span className="flex items-center gap-1.5">
         {label}<HelpDot title={label} description={hint} />
       </span>
       <input
-        type="number"
-        min={0}
-        step={0.01}
-        value={value}
+        type="text"
+        inputMode="decimal"
+        value={draft ?? String(value)}
         aria-label={label}
         className={workstationInputClass}
-        onChange={(event) => onChange(event.currentTarget.valueAsNumber)}
+        onChange={(event) => setDraft(event.currentTarget.value)}
+        onBlur={(event) => commitValue(event.currentTarget.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            event.currentTarget.blur();
+          }
+        }}
       />
     </label>
   );

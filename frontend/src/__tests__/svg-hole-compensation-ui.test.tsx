@@ -1,4 +1,5 @@
 import { act, fireEvent, render, renderHook, screen, cleanup } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.unmock("../i18n/context");
 import SvgHoleCompensationSettings from "../components/sections/SvgHoleCompensationSettings";
@@ -29,22 +30,88 @@ afterEach(() => {
 });
 
 describe("SVG source compensation controls", () => {
+  const thresholds = [
+    { name: "area", label: /mm²/, key: "svg_hole_max_area_mm2", initial: 0.5 },
+    { name: "width", label: /mm\)/, key: "svg_hole_max_width_mm", initial: 0.1 },
+  ] as const;
+
+  it.each(thresholds)("preserves sequential decimal entry for $name until blur", async ({ label, key, initial }) => {
+    const user = userEvent.setup();
+    useConverterStore.setState({ svg_hole_compensation_enabled: true });
+    render(<I18nProvider><SvgHoleCompensationSettings /></I18nProvider>);
+    const input = screen.getByLabelText(label, { selector: "input" });
+
+    await user.clear(input);
+    await user.keyboard("0");
+    await user.keyboard(".");
+    expect(input).toHaveDisplayValue("0.");
+    expect(useConverterStore.getState()[key]).toBe(initial);
+
+    await user.keyboard("7");
+    await user.keyboard("5");
+    expect(input).toHaveDisplayValue("0.75");
+    expect(useConverterStore.getState()[key]).toBe(initial);
+    await user.tab();
+    expect(useConverterStore.getState()[key]).toBe(0.75);
+    expect(input).toHaveDisplayValue("0.75");
+  });
+
+  it.each(thresholds)("allows clearing and replacing $name with zero on Enter", async ({ label, key, initial }) => {
+    const user = userEvent.setup();
+    useConverterStore.setState({ svg_hole_compensation_enabled: true });
+    render(<I18nProvider><SvgHoleCompensationSettings /></I18nProvider>);
+    const input = screen.getByLabelText(label, { selector: "input" });
+
+    await user.clear(input);
+    expect(input).toHaveDisplayValue("");
+    expect(useConverterStore.getState()[key]).toBe(initial);
+    await user.keyboard("0");
+    await user.keyboard("{Enter}");
+    expect(useConverterStore.getState()[key]).toBe(0);
+    expect(input).toHaveDisplayValue("0");
+    expect(input).not.toHaveFocus();
+  });
+
+  it.each(thresholds)("restores the committed $name after an empty or invalid edit", async ({ label, key, initial }) => {
+    const user = userEvent.setup();
+    useConverterStore.setState({ svg_hole_compensation_enabled: true });
+    render(<I18nProvider><SvgHoleCompensationSettings /></I18nProvider>);
+    const input = screen.getByLabelText(label, { selector: "input" });
+
+    for (const text of ["", "invalid", "-1"]) {
+      await user.clear(input);
+      if (text) await user.keyboard(text);
+      await user.tab();
+      expect(useConverterStore.getState()[key]).toBe(initial);
+      expect(input).toHaveDisplayValue(String(initial));
+    }
+  });
+
+  it("reflects externally restored thresholds while not editing", () => {
+    useConverterStore.setState({ svg_hole_compensation_enabled: true });
+    render(<I18nProvider><SvgHoleCompensationSettings /></I18nProvider>);
+    act(() => useConverterStore.setState({ svg_hole_max_area_mm2: 0.7, svg_hole_max_width_mm: 0.25 }));
+    expect(screen.getByLabelText(/mm²/, { selector: "input" })).toHaveDisplayValue("0.7");
+    expect(screen.getByLabelText(/mm\)/, { selector: "input" })).toHaveDisplayValue("0.25");
+  });
+
   it("offers an optional switch and physical thresholds for SVG vector artwork", () => {
     render(<I18nProvider><SvgHoleCompensationSettings /></I18nProvider>);
     const toggle = screen.getByRole("switch", { name: /SVG/ });
     expect(toggle).not.toBeChecked();
-    expect(screen.queryByRole("spinbutton")).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     fireEvent.click(toggle);
     expect(toggle).toBeChecked();
-    const area = screen.getByRole("spinbutton", { name: /mm²/ });
-    const width = screen.getByRole("spinbutton", { name: /mm\)/ });
-    expect(area).toHaveValue(0.5);
-    expect(width).toHaveValue(0.1);
+    const area = screen.getByRole("textbox", { name: /mm²/ });
+    const width = screen.getByRole("textbox", { name: /mm\)/ });
+    expect(area).toHaveValue("0.5");
+    expect(width).toHaveValue("0.1");
     fireEvent.change(area, { target: { value: "0" } });
+    fireEvent.blur(area);
     expect(useConverterStore.getState().svg_hole_max_area_mm2).toBe(0);
     fireEvent.click(toggle);
     expect(toggle).not.toBeChecked();
-    expect(screen.queryByRole("spinbutton")).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(useConverterStore.getState().svg_hole_compensation_enabled).toBe(false);
   });
 

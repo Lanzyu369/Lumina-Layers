@@ -201,14 +201,18 @@ describe("SettingsPanel information architecture", () => {
     fireEvent.click(toggle);
     expect(toggle).toBeChecked();
     expect(useConverterStore.getState().svg_hole_compensation_enabled).toBe(true);
-    expect(within(conversionSettings).getByRole("spinbutton", { name: /mm²/ })).toHaveValue(0.5);
-    expect(within(conversionSettings).getByRole("spinbutton", { name: /mm\)/ })).toHaveValue(0.1);
-    fireEvent.change(within(conversionSettings).getByRole("spinbutton", { name: /mm²/ }), {
+    const areaInput = within(conversionSettings).getByRole("textbox", { name: /mm²/ });
+    const widthInput = within(conversionSettings).getByRole("textbox", { name: /mm\)/ });
+    expect(areaInput).toHaveValue("0.5");
+    expect(widthInput).toHaveValue("0.1");
+    fireEvent.change(areaInput, {
       target: { value: "0.25" },
     });
-    fireEvent.change(within(conversionSettings).getByRole("spinbutton", { name: /mm\)/ }), {
+    fireEvent.blur(areaInput);
+    fireEvent.change(widthInput, {
       target: { value: "0.05" },
     });
+    fireEvent.blur(widthInput);
 
     const report = collectBugReportContext();
     expect(report.active_tab).toBe("settings");
