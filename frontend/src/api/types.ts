@@ -1787,6 +1787,8 @@ export interface BatchPreviewItem {
 }
 
 export interface BatchConvertParams {
+  enable_coating?: boolean;
+  coating_height_mm?: number;
   source_kind?: "legacy_single" | "legacy_multi" | "native_bundle";
   lut_name?: string;
   lut_names?: string[];

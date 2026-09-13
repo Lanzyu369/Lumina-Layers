@@ -41,6 +41,8 @@ function resetStore(overrides: Record<string, unknown> = {}): void {
     layer_height_mm: 0.08,
     quantize_colors: 48,
     enable_cleanup: true,
+    enable_coating: false,
+    coating_height_mm: 0.08,
     enable_relief: false,
     color_height_map: {},
     heightmap_max_height: 3.0,
@@ -60,6 +62,21 @@ describe("submitBatch modelUrl 与 batchResult 状态管理", () => {
   beforeEach(() => {
     resetStore();
     vi.clearAllMocks();
+  });
+
+  it.each([true, false])("forwards coating settings for multiple SVGs: %s", async (enabled) => {
+    const files = ["one.svg", "two.svg"].map((name) =>
+      new File(['<svg xmlns="http://www.w3.org/2000/svg"/>'], name, { type: "image/svg+xml" }),
+    );
+    resetStore({ batchFiles: files, modeling_mode: ModelingMode.VECTOR,
+      enable_coating: enabled, coating_height_mm: 0.12 });
+    mockedConvertBatch.mockResolvedValueOnce({ status: "ok", message: "done",
+      download_url: null, threemf_disk_path: null, preview_3d_url: null,
+      results: [], warnings: [] });
+    await useConverterStore.getState().submitBatch();
+    expect(mockedConvertBatch).toHaveBeenCalledWith(files, expect.objectContaining({
+      enable_coating: enabled, coating_height_mm: 0.12,
+    }));
   });
 
   // 用例 A: preview_3d_url 非空但 preview_items 为空时，不使用旧合并 GLB 兜底

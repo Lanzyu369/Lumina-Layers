@@ -116,6 +116,7 @@ describe("recipe round-trip properties", () => {
       outline_width: fc.double({ min: 0.1, max: 2.0, noNaN: true }),
       enable_cloisonne: fc.boolean(),
       enable_coating: fc.boolean(),
+      coating_height_mm: fc.constantFrom(0.04, 0.08, 0.12),
       largeFormatEnabled: fc.boolean(),
       tileWidthMm: fc.integer({ min: 50, max: 500 }),
       tileHeightMm: fc.integer({ min: 50, max: 500 }),
@@ -273,6 +274,7 @@ describe("recipe round-trip properties", () => {
         expect(restored.enable_outline).toBe(overrides.enable_outline);
         expect(restored.enable_cloisonne).toBe(overrides.enable_cloisonne);
         expect(restored.enable_coating).toBe(overrides.enable_coating);
+        expect(restored.coating_height_mm).toBe(overrides.coating_height_mm);
         expect(restored.largeFormatEnabled).toBe(expectedLargeFormatEnabled);
         expect(restored.tileWidthMm).toBe(overrides.tileWidthMm);
         expect(restored.tileHeightMm).toBe(overrides.tileHeightMm);

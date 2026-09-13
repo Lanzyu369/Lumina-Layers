@@ -16,6 +16,20 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-09-13",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [{
+      category: { zh: "稳定性", en: "Stability" },
+      items: [{
+        zh: "批量生成多个 SVG 或图片时，透明镀层现在会按所选厚度添加到每个模型中。",
+        en: "When generating multiple SVGs or images together, transparent coating is now added to each model at the selected thickness.",
+      }],
+    }],
+  },
+  {
     version: "2026-09-03",
     title: {
       zh: "Lumina Layers — 9 月更新速览",
