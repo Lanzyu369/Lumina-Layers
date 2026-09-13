@@ -24,6 +24,7 @@ import os
 import sys
 import tempfile
 from typing import Iterable
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -115,7 +116,7 @@ def _build_fake_processor(
     vp.expand_stroke_to_fill = False
     vp.gradient_color_bands = None
 
-    fake_analysis = MagicMock()
+    fake_analysis = SimpleNamespace()
     fake_analysis.preview_colors = {
         0: [255, 255, 255, 255],
         1: [255, 0, 0, 255],
@@ -141,6 +142,10 @@ def _build_fake_processor(
     fake_analysis.bbox = (0.0, 0.0, 100.0, 100.0)
     fake_analysis.color_conf = None
     fake_analysis.num_layers = 4
+    fake_analysis.scale_factor = 1.0
+    fake_analysis.clipped_shapes = fake_analysis.matched_shapes
+    fake_analysis.silhouette = unary_union([s["geometry"] for s in fake_analysis.matched_shapes])
+    fake_analysis.image_vectorizer_bounds = None
     vp.analyze_svg.return_value = fake_analysis
     vp.build_mesh.return_value = scene
     vp.render_preview = MagicMock(return_value=np.zeros((100, 100, 4), dtype=np.uint8))
@@ -180,7 +185,7 @@ def _build_material_archive_outline_bridge_fixture() -> tuple[MagicMock, trimesh
     body_mesh.visual.face_colors = [255, 0, 0, 255]
     scene.add_geometry(body_mesh, geom_name="Red")
 
-    analysis = MagicMock()
+    analysis = SimpleNamespace()
     analysis.preview_colors = {
         0: [255, 255, 255, 255],
         1: [255, 0, 0, 255],
@@ -216,10 +221,10 @@ def _build_material_archive_outline_bridge_fixture() -> tuple[MagicMock, trimesh
 def _assert_material_archive_outline_mirrored(outline_mesh: trimesh.Trimesh) -> None:
     """Assert Outline uses the body's translation-free axis flips."""
     assert outline_mesh is not None
-    assert float(outline_mesh.bounds[0, 0]) == pytest.approx(-75.0)
-    assert float(outline_mesh.bounds[1, 0]) == pytest.approx(-5.0)
-    assert float(outline_mesh.bounds[0, 1]) == pytest.approx(-65.0)
-    assert float(outline_mesh.bounds[1, 1]) == pytest.approx(-10.0)
+    assert float(outline_mesh.bounds[0, 0]) == pytest.approx(-75.15)
+    assert float(outline_mesh.bounds[1, 0]) == pytest.approx(-4.85)
+    assert float(outline_mesh.bounds[0, 1]) == pytest.approx(-65.15)
+    assert float(outline_mesh.bounds[1, 1]) == pytest.approx(-9.85)
 
 
 def _outline_xy_footprint(mesh: trimesh.Trimesh) -> object:
@@ -411,7 +416,7 @@ def test_vector_outline_height_matches_structure_mode(
     from config import PrinterConfig
     from core.pipeline.vector_branch import _generate_vector_outline_mesh
 
-    analysis = MagicMock()
+    analysis = SimpleNamespace()
     analysis.matched_shapes = _matched_shapes_for_fixture()
     analysis.scale_factor = 1.0
     analysis.num_layers = 4
@@ -482,7 +487,7 @@ def test_vector_outline_uses_one_canonical_build_and_runtime_guards() -> None:
     assert "vector_outline_canonical_geometry" in stages
 
 
-def test_double_sided_vector_outline_spans_both_coating_faces() -> None:
+def test_double_sided_vector_outline_stays_between_coating_faces() -> None:
     """Material vector outlines must use export mode and effective layer height."""
     from core.pipeline.vector_branch import _generate_vector_outline_mesh
 
@@ -514,9 +519,9 @@ def test_double_sided_vector_outline_spans_both_coating_faces() -> None:
     assert outline_mesh is not None
     backing_height = max(1, int(round(1.6 / layer_height))) * layer_height
     model_height = backing_height + 2 * analysis.num_layers * layer_height
-    assert float(outline_mesh.bounds[0, 2]) == pytest.approx(-coating_height)
+    assert float(outline_mesh.bounds[0, 2]) == pytest.approx(0.0)
     assert float(outline_mesh.bounds[1, 2]) == pytest.approx(
-        model_height + coating_height
+        model_height
     )
 
 
@@ -534,7 +539,7 @@ def test_vector_outline_miter_spikes_stay_within_requested_width() -> None:
     from core.pipeline.vector_branch import _generate_vector_outline_mesh
 
     source = Polygon([(0.0, 0.0), (100.0, 50.0), (0.0, 100.0)])
-    analysis = MagicMock()
+    analysis = SimpleNamespace()
     analysis.matched_shapes = [
         {
             "geometry": source,
@@ -562,7 +567,9 @@ def test_vector_outline_miter_spikes_stay_within_requested_width() -> None:
     )
 
     assert outline_mesh is not None
-    min_x, min_y, max_x, max_y = source.bounds
+    from core.vector_structure import resolve_structure_plan
+
+    min_x, min_y, max_x, max_y = resolve_structure_plan(analysis).body.bounds
     mesh_min_x, mesh_min_y = outline_mesh.bounds[0, :2]
     mesh_max_x, mesh_max_y = outline_mesh.bounds[1, :2]
     eps = 1e-6
@@ -587,7 +594,7 @@ def test_vector_outline_matches_single_sided_export_transform() -> None:
     from core.pipeline.vector_branch import _generate_vector_outline_mesh
 
     shape = box(10.0, 15.0, 70.0, 60.0)
-    analysis = MagicMock()
+    analysis = SimpleNamespace()
     analysis.matched_shapes = [
         {
             "geometry": shape,
@@ -619,10 +626,10 @@ def test_vector_outline_matches_single_sided_export_transform() -> None:
     assert outline_mesh is not None
     # Body and Outline only flip signs in vertex space.  The 3MF build item
     # applies the common bed-placement translation after serialization.
-    assert float(outline_mesh.bounds[0, 0]) == pytest.approx(-75.0)
-    assert float(outline_mesh.bounds[1, 0]) == pytest.approx(-5.0)
-    assert float(outline_mesh.bounds[0, 1]) == pytest.approx(-65.0)
-    assert float(outline_mesh.bounds[1, 1]) == pytest.approx(-10.0)
+    assert float(outline_mesh.bounds[0, 0]) == pytest.approx(-75.15)
+    assert float(outline_mesh.bounds[1, 0]) == pytest.approx(-4.85)
+    assert float(outline_mesh.bounds[0, 1]) == pytest.approx(-65.15)
+    assert float(outline_mesh.bounds[1, 1]) == pytest.approx(-9.85)
 
 
 def test_vector_outline_material_archive_uses_processor_export_color_mode() -> None:
@@ -636,7 +643,7 @@ def test_vector_outline_material_archive_uses_processor_export_color_mode() -> N
     from core.pipeline.vector_branch import _generate_vector_outline_mesh
 
     shape = box(10.0, 15.0, 70.0, 60.0)
-    analysis = MagicMock()
+    analysis = SimpleNamespace()
     analysis.matched_shapes = [
         {
             "geometry": shape,
@@ -666,10 +673,10 @@ def test_vector_outline_material_archive_uses_processor_export_color_mode() -> N
     )
 
     assert outline_mesh is not None
-    assert float(outline_mesh.bounds[0, 0]) == pytest.approx(-75.0)
-    assert float(outline_mesh.bounds[1, 0]) == pytest.approx(-5.0)
-    assert float(outline_mesh.bounds[0, 1]) == pytest.approx(-65.0)
-    assert float(outline_mesh.bounds[1, 1]) == pytest.approx(-10.0)
+    assert float(outline_mesh.bounds[0, 0]) == pytest.approx(-75.15)
+    assert float(outline_mesh.bounds[1, 0]) == pytest.approx(-4.85)
+    assert float(outline_mesh.bounds[0, 1]) == pytest.approx(-65.15)
+    assert float(outline_mesh.bounds[1, 1]) == pytest.approx(-9.85)
 
 
 def test_vector_coating_covers_outline_expanded_footprint() -> None:
@@ -694,7 +701,7 @@ def test_vector_coating_covers_outline_expanded_footprint() -> None:
             "draw_order": 0,
         }
     ]
-    analysis = MagicMock()
+    analysis = SimpleNamespace()
     analysis.matched_shapes = matched_shapes
     analysis.clipped_shapes = matched_shapes
     analysis.silhouette = shape
@@ -747,7 +754,7 @@ def test_vector_coating_covers_outline_expanded_footprint() -> None:
     assert float(coating.bounds[0, 1]) <= float(outline_mesh.bounds[0, 1]) + eps
     assert float(coating.bounds[1, 0]) >= float(outline_mesh.bounds[1, 0]) - eps
     assert float(coating.bounds[1, 1]) >= float(outline_mesh.bounds[1, 1]) - eps
-    assert float(outline_mesh.bounds[0, 2]) <= float(coating.bounds[0, 2]) + eps
+    assert float(outline_mesh.bounds[0, 2]) == pytest.approx(float(coating.bounds[1, 2]))
     assert float(outline_mesh.bounds[1, 2]) >= float(coating.bounds[1, 2]) - eps
 
 
@@ -1189,7 +1196,7 @@ def _build_8color_fake_processor(
     )
     vp.color_mode = "8-Color Max"
 
-    fake_analysis = MagicMock()
+    fake_analysis = SimpleNamespace()
     fake_analysis.preview_colors = dict(_8COLOR_MAX_PREVIEW_COLORS)
     fake_analysis.slot_names = list(_8COLOR_MAX_SLOT_NAMES)
     fake_analysis.stage_timings = {}

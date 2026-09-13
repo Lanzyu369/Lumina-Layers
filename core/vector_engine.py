@@ -109,6 +109,14 @@ from core.vector_layer_geometry import (
     build_vector_layered_volume,
     resolve_vector_writer_grid_mm,
 )
+from core.vector_structure import (
+    VectorStructurePlan,
+    _finish_normalized_contour,
+    _is_dense_normalization_geometry,
+    _normalize_contours as _structure_normalize_contours,
+    resolve_structure_plan,
+    _filter_backing_holes as _structure_filter_backing_holes,
+)
 
 _log = get_logger(__name__)
 
@@ -1486,89 +1494,6 @@ def _normalize_contours_cached(cache, geom, close_delta_mm=0.03):
     return result
 
 
-def _finish_normalized_contour(geom, inflated, deflated):
-    """Apply scalar _normalize_contours post-buffer fallback semantics."""
-
-    if inflated is None or inflated.is_empty:
-        return geom
-    if deflated is None or deflated.is_empty:
-        return geom
-    if deflated.is_valid and deflated.geom_type in ("Polygon", "MultiPolygon"):
-        result = deflated
-    else:
-        result = make_valid(deflated)
-        if result is not None and result.geom_type == "GeometryCollection":
-            polys = [
-                part
-                for part in result.geoms
-                if part.geom_type in ("Polygon", "MultiPolygon")
-            ]
-            if polys:
-                result = MultiPolygon(polys) if len(polys) > 1 else polys[0]
-            else:
-                result = deflated
-
-    # A morphological close is extensive by definition: it may bridge a
-    # narrow gap, but it must not remove valid source area. GEOS can violate
-    # that invariant for a valid MultiPolygon whose components nearly touch,
-    # returning only one component after the inward buffer. Compare source
-    # coverage, not net area: area added elsewhere must never compensate for
-    # a deleted printable component.
-    if (
-        geom.is_valid
-        and geom.geom_type in ("Polygon", "MultiPolygon")
-        and result is not None
-        and not result.is_empty
-        and result.geom_type in ("Polygon", "MultiPolygon")
-    ):
-        # DE-9IM cell ``IE`` asks whether any source interior lies in the
-        # result exterior.  Unlike ``covers()``, this deliberately ignores
-        # harmless boundary-only round-off, and unlike ``difference()`` it
-        # does not allocate another full overlay geometry on this hot path.
-        relate_pattern = getattr(geom, "relate_pattern", None)
-        if callable(relate_pattern) and not relate_pattern(
-            result,
-            "**F******",
-        ):
-            source_parts = (
-                tuple(geom.geoms)
-                if isinstance(geom, MultiPolygon)
-                else (geom,)
-            )
-            uncovered_parts = [
-                part
-                for part in source_parts
-                if not part.relate_pattern(result, "**F******")
-            ]
-            if uncovered_parts:
-                restored = unary_union([result, *uncovered_parts])
-                if (
-                    restored is not None
-                    and not restored.is_empty
-                    and restored.is_valid
-                    and restored.geom_type in ("Polygon", "MultiPolygon")
-                    # GEOS may report a spurious interior/exterior DE-9IM
-                    # contact immediately after union even when the exact
-                    # source difference is empty.  This overlay runs only on
-                    # the rare local-recovery branch, never on the normal hot
-                    # path.
-                    and geom.difference(restored).is_empty
-                ):
-                    return restored
-            return geom
-    return result
-
-
-def _is_dense_normalization_geometry(geom, close_delta_mm):
-    """Return whether one geometry qualifies for the proven dense path."""
-
-    return (
-        float(close_delta_mm) == 0.03
-        and isinstance(geom, MultiPolygon)
-        and len(geom.geoms) >= geos_buffer_fast.MIN_DENSE_COMPONENTS
-    )
-
-
 def _stock_buffer_many(geometries, distance):
     """Run the existing Shapely vector-buffer operation for one subset."""
 
@@ -2408,6 +2333,7 @@ class VectorAnalysis:
     preview_colors: dict
     stage_timings: dict = field(default_factory=dict)
     image_vectorizer_bounds: object | None = None
+    structure_plan: VectorStructurePlan | None = None
     matched_rgb_override_metrics: dict = field(default_factory=dict)
     material_dynamic_layer_info: dict | None = None
     material_solver_info: dict | None = None
@@ -4140,50 +4066,7 @@ class VectorProcessor:
         Mirrors ``ChromaPrint3D::NormalizeContours`` (Clipper2 inflate/deflate).
         Uses Shapely ``buffer`` as an equivalent operation.
         """
-        if geom is None or geom.is_empty:
-            return geom
-        try:
-            positive_settings = geos_buffer_fast.BufferSettings(
-                distance=close_delta_mm
-            )
-            inflated = None
-            inflated_already_validated = False
-            if _is_dense_normalization_geometry(geom, close_delta_mm):
-                inflated = geos_buffer_fast.try_dense_positive_buffer(
-                    geom,
-                    positive_settings,
-                )
-                inflated_already_validated = inflated is not None
-            if inflated is None:
-                inflated = geom.buffer(
-                    close_delta_mm,
-                    quad_segs=1,
-                    join_style="mitre",
-                    mitre_limit=2.0,
-                )
-
-            negative_settings = geos_buffer_fast.BufferSettings(
-                distance=-close_delta_mm
-            )
-            deflated = None
-            if _is_dense_normalization_geometry(inflated, close_delta_mm):
-                deflated = geos_buffer_fast.try_disconnected_inward_buffer(
-                    inflated,
-                    negative_settings,
-                    _input_already_validated=inflated_already_validated,
-                )
-            if deflated is None:
-                deflated = inflated.buffer(
-                    -close_delta_mm,
-                    quad_segs=1,
-                    join_style="mitre",
-                    mitre_limit=2.0,
-                )
-            return _finish_normalized_contour(geom, inflated, deflated)
-        except VECTOR_FATAL_ERRORS:
-            raise
-        except Exception:
-            return geom
+        return _structure_normalize_contours(geom, close_delta_mm)
 
     @staticmethod
     def _filter_backing_holes(geom, min_hole_area_mm2=1.0):
@@ -4191,62 +4074,7 @@ class VectorProcessor:
 
         Mirrors ``ChromaPrint3D``'s ``base_min_hole_area_mm2`` filtering.
         """
-        if geom is None or geom.is_empty:
-            return geom
-        if geom.geom_type == "Polygon":
-            kept = [h for h in geom.interiors if Polygon(h).area >= min_hole_area_mm2]
-            return Polygon(geom.exterior, kept)
-        if geom.geom_type == "MultiPolygon":
-            polys = []
-            for p in geom.geoms:
-                kept = [h for h in p.interiors if Polygon(h).area >= min_hole_area_mm2]
-                polys.append(Polygon(p.exterior, kept))
-            return MultiPolygon(polys)
-        return geom
-
-    @staticmethod
-    def _expand_coating_silhouette_for_outline(
-        coating_sil,
-        *,
-        enable_outline: bool,
-        outline_width_mm: object,
-        scale_factor: float,
-    ):
-        """Expand coating coverage to include an enabled vector outline.
-
-        扩展透明镀层覆盖范围，使其覆盖已启用的矢量外轮廓。
-        """
-        if not enable_outline:
-            return coating_sil
-        if coating_sil is None or getattr(coating_sil, "is_empty", True):
-            return coating_sil
-        try:
-            requested_outline_width = float(outline_width_mm)
-        except (TypeError, ValueError):
-            return coating_sil
-        if (
-            not np.isfinite(requested_outline_width)
-            or requested_outline_width <= 0
-            or not np.isfinite(scale_factor)
-            or scale_factor <= 0
-        ):
-            return coating_sil
-
-        outline_width_units = requested_outline_width / scale_factor
-        try:
-            expanded = coating_sil.buffer(
-                outline_width_units,
-                join_style="mitre",
-                mitre_limit=2.0,
-            )
-        except VECTOR_HANDLED_ERRORS:
-            try:
-                expanded = coating_sil.buffer(outline_width_units)
-            except VECTOR_HANDLED_ERRORS:
-                return coating_sil
-        if expanded is None or getattr(expanded, "is_empty", True):
-            return coating_sil
-        return expanded
+        return _structure_filter_backing_holes(geom, min_hole_area_mm2)
 
     @staticmethod
     def _filter_slits(geom, min_slit_width_mm=0.1):
@@ -5737,6 +5565,15 @@ class VectorProcessor:
 
         # === Stage 6: Backing layer from silhouette ===
         t0 = time.perf_counter()
+        structure = resolve_structure_plan(
+            analysis, float(outline_width_mm) if enable_outline else 0.0,
+        )
+        # Extrusion and cavity helpers still consume SVG units.
+        silhouette = affinity.scale(
+            structure.body, xfact=1.0 / scale_factor,
+            yfact=1.0 / scale_factor, origin=(0, 0),
+        )
+
         if is_5color:
             backing_z_start = 0
         else:
@@ -5750,14 +5587,7 @@ class VectorProcessor:
             and not silhouette.is_empty
         ):
             _log.debug("Generating backing: %s layers (%smm)", backing_layer_count, thickness_mm)
-            backing_sil = self._normalize_contours(silhouette, close_delta_mm=0.4)
-            if backing_sil is None or backing_sil.is_empty:
-                backing_sil = silhouette
-            backing_sil = self._filter_backing_holes(backing_sil, min_hole_area_mm2=0.3)
-            try:
-                backing_sil = backing_sil.buffer(0.15, join_style="mitre", mitre_limit=2.0)
-            except VECTOR_HANDLED_ERRORS:
-                pass
+            backing_sil = silhouette
             backing_height = backing_layer_count * layer_h
             gap_offset = BASE_COLOR_GAP_MM if not is_5color else 0.0
             outer_side = "low" if is_5color else "high"
@@ -5831,21 +5661,9 @@ class VectorProcessor:
 
         t0 = time.perf_counter()
         if enable_coating and silhouette is not None and not silhouette.is_empty:
-            coating_sil = backing_sil
-            if coating_sil is None or coating_sil.is_empty:
-                coating_sil = self._normalize_contours(silhouette, close_delta_mm=0.4)
-                if coating_sil is None or coating_sil.is_empty:
-                    coating_sil = silhouette
-                coating_sil = self._filter_backing_holes(coating_sil, min_hole_area_mm2=0.3)
-                try:
-                    coating_sil = coating_sil.buffer(0.15, join_style="mitre", mitre_limit=2.0)
-                except VECTOR_HANDLED_ERRORS:
-                    pass
-            coating_sil = self._expand_coating_silhouette_for_outline(
-                coating_sil,
-                enable_outline=enable_outline,
-                outline_width_mm=outline_width_mm,
-                scale_factor=scale_factor,
+            coating_sil = affinity.scale(
+                structure.envelope, xfact=1.0 / scale_factor,
+                yfact=1.0 / scale_factor, origin=(0, 0),
             )
             try:
                 requested_coating_height = float(coating_height_mm)
@@ -6628,34 +6446,16 @@ class VectorProcessor:
                 return None
             return slice(y0, y1), slice(x0, x1), local
 
-        backing_geom = _physical_backing_geometry(analysis)
-
+        structure = resolve_structure_plan(analysis)
+        backing_geom = affinity.scale(
+            structure.body, xfact=1.0 / sf,
+            yfact=1.0 / sf, origin=(0, 0),
+        )
         backing_mask = np.zeros((h_px, w_px), dtype=bool)
-        if backing_geom is not None and not getattr(backing_geom, "is_empty", True):
-            try:
-                normalized_backing = VectorProcessor._normalize_contours(
-                    backing_geom,
-                    close_delta_mm=0.4,
-                )
-                if normalized_backing is not None and not normalized_backing.is_empty:
-                    backing_geom = normalized_backing
-                filtered_backing = VectorProcessor._filter_backing_holes(
-                    backing_geom,
-                    min_hole_area_mm2=0.3,
-                )
-                if filtered_backing is not None and not filtered_backing.is_empty:
-                    backing_geom = filtered_backing
-                backing_geom = backing_geom.buffer(
-                    0.15,
-                    join_style="mitre",
-                    mitre_limit=2.0,
-                )
-            except VECTOR_HANDLED_ERRORS:
-                pass
-            for poly in _iter_polygons(backing_geom):
-                region_mask = _polygon_mask(poly, h_px, w_px, coord_scale)
-                if _local_mask_any(region_mask):
-                    _apply_local_mask_or(backing_mask, region_mask)
+        for poly in _iter_polygons(backing_geom):
+            region_mask = _polygon_mask(poly, h_px, w_px, coord_scale)
+            if _local_mask_any(region_mask):
+                _apply_local_mask_or(backing_mask, region_mask)
 
         for shape in analysis.matched_shapes:
             geom = shape.get("geometry")

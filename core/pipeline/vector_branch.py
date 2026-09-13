@@ -33,10 +33,6 @@ from typing import Any
 import cv2  # noqa: F401  -- imported for side-effect parity with coordinator
 import numpy as np
 import trimesh
-from shapely import difference as shapely_difference
-from shapely.geometry import box
-from shapely.ops import unary_union
-from shapely.validation import make_valid
 
 from api.structured_logging import get_logger
 from config import BedManager, PrinterConfig, normalize_nozzle_size
@@ -51,10 +47,10 @@ from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
 from core.pipeline.s08_auxiliary_meshes import (
     _coerce_preview_rgba,
 )
+from core.vector_structure import resolve_structure_plan
 from core.preview_analysis_cache import preview_analysis_reuse_is_required
 from core.vector_layer_geometry import (
     build_vector_layered_volume,
-    resolve_vector_writer_grid_mm,
 )
 
 # ---------------------------------------------------------------------------
@@ -628,77 +624,6 @@ def _resolve_vector_outline_base_aux_style(
     return rgba, material_name
 
 
-def _vector_outline_union_geometry(matched_shapes):
-    """Return the shapely union of every non-empty ``matched_shapes`` polygon.
-    返回所有非空 matched_shapes 几何的 shapely union。
-
-    Performs the standard validity dance (``make_valid`` then ``buffer(0)``
-    fallback) so downstream ``buffer().difference()`` cannot raise on
-    self-intersecting input. Returns ``None`` when no usable geometry is
-    available — caller treats that as decision-matrix row D6 (no shapes
-    available) and emits the unsupported-subset warning.
-
-    Args:
-        matched_shapes: Iterable of shape dicts produced by
-            ``VectorProcessor.analyze_svg`` (each has a ``geometry`` key).
-
-    Returns:
-        Shapely geometry on success, ``None`` when union is empty.
-    """
-    geoms = []
-    for shape in matched_shapes or []:
-        if not isinstance(shape, dict):
-            continue
-        geom = shape.get("geometry")
-        if geom is None:
-            continue
-        try:
-            if getattr(geom, "is_empty", False):
-                continue
-        except (AttributeError, TypeError):
-            continue
-        geoms.append(geom)
-
-    if not geoms:
-        return None
-
-    try:
-        union = unary_union(geoms)
-    except COORDINATOR_HANDLED_ERRORS:
-        # GEOS occasionally fails on pathological SVG outputs; try a pairwise
-        # fallback so a single bad shape cannot kill the whole outline.
-        # GEOS 偶发地在异常 SVG 上抛错，逐个并集兜底，避免因为单个坏 shape
-        # 导致整组 outline 失败。
-        union = None
-        for poly in geoms:
-            if union is None:
-                union = poly
-                continue
-            try:
-                union = union.union(poly)
-            except COORDINATOR_HANDLED_ERRORS:
-                continue
-
-    if union is None:
-        return None
-    if getattr(union, "is_empty", True):
-        return None
-
-    if not getattr(union, "is_valid", True):
-        try:
-            repaired = make_valid(union)
-            if repaired is not None and not getattr(repaired, "is_empty", True):
-                union = repaired
-        except COORDINATOR_HANDLED_ERRORS:
-            try:
-                union = union.buffer(0)
-            except COORDINATOR_HANDLED_ERRORS:
-                return None
-    if getattr(union, "is_empty", True):
-        return None
-    return union
-
-
 def _resolve_vector_outline_z_span(
     ctx: dict,
     analysis,
@@ -713,8 +638,8 @@ def _resolve_vector_outline_z_span(
     ``ctx["total_layers"]``. Instead, mirror ``VectorProcessor.build_mesh``:
     non-5-color double-sided models have colour layers below and above the
     backing; 5-Color Extended keeps the optical stack above the backing. If
-    coating is enabled, it extends below zero and the outline must include
-    that negative Z span as raster S08 does.
+    coating is enabled, it exclusively owns the interval below zero;
+    the outline starts at the coating upper surface, as raster S08 does.
 
     矢量分支不经过 S08，没有 ``total_layers`` 可用；这里按
     ``VectorProcessor.build_mesh`` 的 Z 轴布局计算外轮廓高度。
@@ -755,55 +680,9 @@ def _resolve_vector_outline_z_span(
     z_min = 0.0
     z_max = backing_height_mm + color_passes * color_height_mm
 
-    if bool(ctx.get("enable_coating", False)):
-        try:
-            coating_height_mm = float(ctx.get("coating_height_mm", layer_h))
-        except (TypeError, ValueError):
-            coating_height_mm = layer_h
-        if np.isfinite(coating_height_mm) and coating_height_mm > 0:
-            coating_layers = max(1, int(round(coating_height_mm / layer_h)))
-            z_min = -coating_layers * layer_h
-            if is_double and not is_5color:
-                z_max += coating_layers * layer_h
-
     if not np.isfinite(z_max) or z_max <= z_min:
         z_max = z_min + backing_height_mm
     return float(z_min), float(z_max)
-
-
-def _clip_vector_outline_buffer_to_expected_bounds(expanded, union, width_units: float):
-    """Clip miter spikes back to the requested outline envelope.
-    将 miter 外扩产生的尖刺裁回请求的 outline 外包络范围。
-
-    ``buffer(..., join_style="mitre")`` keeps rectangular artwork corners
-    crisp, but acute SVG fragments can extend almost ``mitre_limit * width``
-    past the real silhouette. The user-facing outline width should still be
-    the requested width, so cap the expanded geometry to
-    ``union.bounds + width_units`` before subtracting the original union.
-    """
-    try:
-        min_x, min_y, max_x, max_y = (float(v) for v in union.bounds)
-    except COORDINATOR_HANDLED_ERRORS:
-        return expanded
-
-    bounds = np.asarray([min_x, min_y, max_x, max_y, float(width_units)], dtype=float)
-    if not np.all(np.isfinite(bounds)) or width_units <= 0:
-        return expanded
-
-    try:
-        allowed = box(
-            min_x - width_units,
-            min_y - width_units,
-            max_x + width_units,
-            max_y + width_units,
-        )
-        clipped = expanded.intersection(allowed)
-    except COORDINATOR_HANDLED_ERRORS:
-        return expanded
-
-    if clipped is None or getattr(clipped, "is_empty", True):
-        return expanded
-    return clipped
 
 
 def _resolve_vector_outline_export_size_mm(
@@ -891,209 +770,55 @@ def _generate_vector_outline_mesh(
     ctx: dict,
     export_color_mode: object | None = None,
 ) -> "trimesh.Trimesh | None":
-    """Build a ring-shaped Outline mesh from ``analysis.matched_shapes``.
-    从 ``analysis.matched_shapes`` 生成环形 Outline mesh。
+    """Extrude the shared structural ring above the coating surface.
 
-    Algorithm (Fix Implementation #3 in design.md / 数据·几何来源):
-        1. Take ``unary_union(s.geometry for s in matched_shapes)``;
-           run ``make_valid`` / ``buffer(0)`` if invalid.
-        2. ring = ``union.buffer(outline_width_units).difference(union)``
-           where ``outline_width_units = outline_width_mm / scale_factor``
-           (vector geometry lives in pre-scale SVG units; ``build_mesh``
-           multiplies by ``scale_factor`` during extrusion).
-        3. Canonicalize the complete ring once on the physical writer grid.
-        4. Emit caps and walls from the same indexed boundary representation.
-        5. Decorate with ``metadata['name'] = 'Outline'`` +
-           ``bambu_material_name`` and apply face colour.
-
-    The geometry source is **always** ``analysis.matched_shapes``, never
-    the raster ``mask_solid`` heuristic and never a fridge-magnet /
-    coating-modified backing mesh (per AGENTS Converter Regression
-    Checklist "outline 几何来源必须显式声明").
+    从共用结构计划生成描边；描边不进入透明镀层的高度区间。
 
     Args:
-        analysis: ``VectorAnalysis`` returned by ``VectorProcessor.analyze_svg``.
-            Must expose ``matched_shapes`` and ``scale_factor``.
-        outline_width_mm: Outline ring width in millimetres (already
-            validated to ``[0.5, 10.0]`` by ``ConvertGenerateRequest``).
-        base_aux_color: RGBA fill colour for the outline mesh.
-        base_aux_material_name: Bambu material slot name; written into
-            ``mesh.metadata['bambu_material_name']`` so the 3MF writer
-            picks the right material id.
-        ctx: Pipeline context (consumed for ``spacer_thick``).
+        analysis: Source SVG analysis. 源 SVG 解析结果。
+        outline_width_mm: Outline width in mm. 毫米描边宽度。
+        base_aux_color: Outline RGBA. 描边颜色。
+        base_aux_material_name: Material identity. 描边材料标识。
+        ctx: Generation parameters. 生成参数。
+        export_color_mode: Export orientation mode. 导出朝向模式。
 
     Returns:
-        ``trimesh.Trimesh`` on success; ``None`` when decision-matrix row
-        D5 / D6 is hit (no matched_shapes, empty union, or empty ring).
-        Caller is responsible for forcing ``ctx['enable_outline'] = False``
-        on a ``None`` return.
+        Outline mesh or None for an empty ring. 描边网格，空描边返回 None。
     """
     from core.vector_engine import (
         _enforce_vector_mesh_runtime_headroom,
         _geometry_cache_storage_bytes,
     )
 
-    matched_shapes = list(getattr(analysis, "matched_shapes", []) or [])
-    if not matched_shapes:
-        log.warning(
-            "Vector outline rejected: matched_shapes is empty",
-            extra={
-                "event": "vector_outline_rejected_unsupported",
-                "error_type": "unsupported_subset",
-                "unsupported_reason": "D6_no_matched_shapes",
-                "shape_count": 0,
-            },
-        )
-        return None
-
-    source_geometries = tuple(
-        item.get("geometry")
-        for item in matched_shapes
-        if isinstance(item, dict)
-        and item.get("geometry") is not None
-        and not getattr(item.get("geometry"), "is_empty", True)
-    )
-    source_geometry_bytes = sum(
-        _geometry_cache_storage_bytes(geometry)
-        for geometry in source_geometries
-    )
+    source = getattr(analysis, "silhouette", None)
+    source_bytes = _geometry_cache_storage_bytes(source) if source is not None else 0
     _enforce_vector_mesh_runtime_headroom(
         stage="vector_outline_union",
-        estimated_additional_bytes=max(
-            16 * 1024 * 1024,
-            source_geometry_bytes * 8,
-        ),
-        shape_count=len(source_geometries),
-        coordinate_count=source_geometry_bytes // 64,
+        estimated_additional_bytes=max(16 * 1024 * 1024, source_bytes * 8),
+        shape_count=1,
+        coordinate_count=source_bytes // 64,
     )
-
-    union = _vector_outline_union_geometry(matched_shapes)
-    if union is None:
+    structure = resolve_structure_plan(analysis, float(outline_width_mm))
+    ring = structure.outline
+    if ring.is_empty:
         log.warning(
-            "Vector outline rejected: matched_shapes union is empty / invalid",
-            extra={
-                "event": "vector_outline_rejected_unsupported",
-                "error_type": "unsupported_subset",
-                "unsupported_reason": "D6_union_empty",
-                "shape_count": len(matched_shapes),
-            },
-        )
-        return None
-
-    try:
-        scale_factor = float(getattr(analysis, "scale_factor", 1.0) or 1.0)
-    except (TypeError, ValueError):
-        scale_factor = 1.0
-    if scale_factor <= 0:
-        scale_factor = 1.0
-
-    # ``analysis.matched_shapes[*].geometry`` lives in pre-scale SVG units;
-    # canonical preparation multiplies by ``scale_factor``. Convert the
-    # outline_width_mm request back into the same pre-scale unit space so
-    # the resulting ring is exactly ``outline_width_mm`` wide once scaled
-    # to millimetres during canonical preparation.
-    # matched_shapes 的几何处于"预缩放 SVG 单位空间"，build_mesh 在挤出时
-    # 乘 scale_factor 得到 mm。这里把 outline_width_mm 反算到预缩放单位，
-    # 再走同样的 apply_scale，保证最终 ring 宽度恰好是请求的 mm 数。
-    width_units = float(outline_width_mm) / scale_factor
-
-    union_geometry_bytes = _geometry_cache_storage_bytes(union)
-    _enforce_vector_mesh_runtime_headroom(
-        stage="vector_outline_ring",
-        estimated_additional_bytes=max(
-            16 * 1024 * 1024,
-            union_geometry_bytes * 8,
-        ),
-        shape_count=len(source_geometries),
-        coordinate_count=union_geometry_bytes // 64,
-    )
-
-    try:
-        expanded = union.buffer(width_units, join_style="mitre", mitre_limit=2.0)
-    except COORDINATOR_HANDLED_ERRORS:
-        try:
-            expanded = union.buffer(width_units)
-        except COORDINATOR_HANDLED_ERRORS as exc:
-            log.warning(
-                "Vector outline rejected: ring buffer failed",
-                extra={
-                    "event": "vector_outline_rejected_unsupported",
-                    "error_type": "unsupported_subset",
-                    "unsupported_reason": "D6_buffer_failed",
-                    "error_message": str(exc),
-                    "shape_count": len(matched_shapes),
-                },
-            )
-            return None
-
-    if not getattr(expanded, "is_valid", True):
-        try:
-            expanded = make_valid(expanded)
-        except COORDINATOR_HANDLED_ERRORS:
-            try:
-                expanded = expanded.buffer(0)
-            except COORDINATOR_HANDLED_ERRORS:
-                expanded = None
-
-    if expanded is None or getattr(expanded, "is_empty", True):
-        log.warning(
-            "Vector outline rejected: expanded buffer is empty",
-            extra={
-                "event": "vector_outline_rejected_unsupported",
-                "error_type": "unsupported_subset",
-                "unsupported_reason": "D6_expanded_empty",
-                "shape_count": len(matched_shapes),
-            },
-        )
-        return None
-
-    expanded = _clip_vector_outline_buffer_to_expected_bounds(
-        expanded,
-        union,
-        width_units,
-    )
-
-    # Construct the ring directly in the same physical grid used by the 3MF
-    # mesh builder. GEOS otherwise retains zero-area floating-point slivers
-    # from buffer/difference overlays; treating those numerical artefacts as
-    # source polygons can reject an otherwise complete printable outline.
-    outline_writer_grid_mm = resolve_vector_writer_grid_mm(
-        max(
-            abs(float(coordinate)) * scale_factor
-            for geometry in (expanded, union)
-            for coordinate in geometry.bounds
-        )
-    )
-    try:
-        ring = shapely_difference(
-            expanded,
-            union,
-            grid_size=outline_writer_grid_mm / scale_factor,
-        )
-    except COORDINATOR_HANDLED_ERRORS as exc:
-        log.warning(
-            "Vector outline rejected: difference failed",
-            extra={
-                "event": "vector_outline_rejected_unsupported",
-                "error_type": "unsupported_subset",
-                "unsupported_reason": "D6_difference_failed",
-                "error_message": str(exc),
-                "shape_count": len(matched_shapes),
-            },
-        )
-        return None
-
-    if ring is None or getattr(ring, "is_empty", True):
-        log.warning(
-            "Vector outline rejected: ring geometry is empty",
+            "Vector outline rejected: structural ring is empty",
             extra={
                 "event": "vector_outline_rejected_unsupported",
                 "error_type": "unsupported_subset",
                 "unsupported_reason": "D6_ring_empty",
-                "shape_count": len(matched_shapes),
+                "outline_width_mm": float(outline_width_mm),
             },
         )
         return None
+    scale_factor = float(getattr(analysis, "scale_factor", 1.0))
+    ring_bytes = _geometry_cache_storage_bytes(ring)
+    _enforce_vector_mesh_runtime_headroom(
+        stage="vector_outline_ring",
+        estimated_additional_bytes=max(16 * 1024 * 1024, ring_bytes * 8),
+        shape_count=1,
+        coordinate_count=ring_bytes // 64,
+    )
 
     layer_h = _resolve_vector_layer_height_mm(ctx)
     z_min_mm, z_max_mm = _resolve_vector_outline_z_span(
@@ -1124,7 +849,7 @@ def _generate_vector_outline_mesh(
                 "z_offset": z_min_mm,
             }
         ],
-        scale_mm_per_svg_unit=scale_factor,
+        scale_mm_per_svg_unit=1.0,
     )
     if outline_mesh is None:
         return None
@@ -1132,8 +857,7 @@ def _generate_vector_outline_mesh(
     # The new builder already emits millimetres and independent component
     # ranges. Release the source geometry before applying only the historical
     # final orientation transform.
-    del ring, expanded, union, source_geometries
-    matched_shapes.clear()
+    del ring
     _apply_vector_outline_export_transform(
         outline_mesh,
         analysis=analysis,
@@ -2554,9 +2278,7 @@ def _run_vector_branch(ctx: dict) -> dict:
         )
 
         # 1.6 Inject vector Outline mesh.
-        # 在 export 之前注入 Outline 节点，几何来源 analysis.matched_shapes union；
-        # D5/D6 命中（matched_shapes 空 / ring 空）时 helper 已发 WARNING，
-        # 调用方把 ctx['enable_outline'] 强制规整为 false 防止下游误用。
+        # Use the shared structure plan, never the post-match color partition.
         if bool(ctx.get("enable_outline", False)):
             try:
                 outline_width_mm = float(ctx.get("outline_width", 2.0) or 2.0)

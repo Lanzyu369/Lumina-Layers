@@ -36,6 +36,9 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
         items: [{
           zh: "批量生成多个 SVG 或图片时，透明镀层现在会按所选厚度添加到每个模型中。",
           en: "When generating multiple SVGs or images together, transparent coating is now added to each model at the selected thickness.",
+        }, {
+          zh: "修复透明镀层与描边同时开启时出现白色碎点的问题，镀层完整覆盖描边范围。",
+          en: "Fixed white specks when coating and outline are enabled together; coating covers the full outline footprint.",
         }],
       },
     ],

@@ -664,14 +664,8 @@ def run(ctx: dict) -> dict:
         try:
             outline_thickness_mm = total_layers * PrinterConfig.LAYER_HEIGHT
             outline_z_offset = 0.0
-            if enable_coating:
-                coating_layers = max(1, int(round(coating_height_mm / PrinterConfig.LAYER_HEIGHT)))
-                coating_mm = coating_layers * PrinterConfig.LAYER_HEIGHT
-                outline_thickness_mm += coating_mm
-                outline_z_offset = -coating_mm
-                if is_double_sided:
-                    outline_thickness_mm += coating_mm
-                _log.debug(f"Outline extended to cover coating: total_thickness={outline_thickness_mm}mm")
+            # Coating owns the negative-Z interval; the outline starts at its
+            # upper surface, so different materials never occupy that volume.
 
             _log.debug(
                 f"Generating outline: width={outline_width}mm, "

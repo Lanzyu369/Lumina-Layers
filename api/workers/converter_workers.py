@@ -1977,9 +1977,12 @@ def worker_generate_large_format_svg_native(
     )
     from core.pipeline.vector_branch import (
         _build_vector_processor,
+        _generate_vector_outline_mesh,
+        _resolve_vector_outline_base_aux_style,
         _resolve_vector_layer_height_mm,
         _update_bambu_base_layer_ctx_for_vector,
     )
+    from core.vector_structure import resolve_structure_plan
     from core.vector_engine import (
         _concatenate_meshes_fast,
         _enforce_vector_mesh_runtime_headroom,
@@ -2228,6 +2231,13 @@ def worker_generate_large_format_svg_native(
         layer_height_mm=layer_height_mm,
     )
 
+    vector_processor.enable_outline = bool(params.get("enable_outline", False))
+    vector_processor.outline_width_mm = float(params.get("outline_width", 2.0))
+    vector_processor.enable_coating = bool(params.get("enable_coating", False))
+    vector_processor.coating_height_mm = float(params.get("coating_height_mm", 0.08))
+    analysis.structure_plan = resolve_structure_plan(
+        analysis, vector_processor.outline_width_mm if vector_processor.enable_outline else 0.0,
+    )
     tile_analyses = slice_vector_analysis_into_tiles(
         analysis=analysis,
         total_width_mm=total_width_mm,
@@ -2328,6 +2338,18 @@ def worker_generate_large_format_svg_native(
 
             preview_colors = dict(tile.analysis.preview_colors)
             slot_names = list(tile.analysis.slot_names)
+            if vector_processor.enable_outline:
+                outline_color, outline_material = _resolve_vector_outline_base_aux_style(
+                    worker_ctx, preview_colors, slot_names,
+                )
+                outline = _generate_vector_outline_mesh(
+                    tile.analysis, vector_processor.outline_width_mm,
+                    outline_color, outline_material, worker_ctx,
+                    export_color_mode=vector_processor.color_mode,
+                )
+                if outline is not None:
+                    scene.add_geometry(outline, geom_name="Outline", node_name="Outline")
+                    preview_colors["Outline"] = outline_color
             for material_id, rgba in list(preview_colors.items()):
                 if isinstance(material_id, int) and material_id < len(slot_names):
                     preview_colors[slot_names[material_id]] = rgba
