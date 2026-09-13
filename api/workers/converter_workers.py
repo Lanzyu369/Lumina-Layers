@@ -1265,6 +1265,8 @@ def worker_batch_convert_item(
     material_delta_e00_tolerance: float = 0.5,
     separate_backing: bool = False,
     enable_wipe_tower_auto_placement: bool = True,
+    enable_coating: bool = False,
+    coating_height_mm: float = 0.08,
 ) -> dict:
     """Execute a single batch conversion item in a worker process.
     在工作进程中执行单个批量转换项。
@@ -1283,6 +1285,10 @@ def worker_batch_convert_item(
     单件预览 GLB 时使用，免得跨进程解析 per-image 产物。
 
     Args:
+        enable_coating: Enable transparent coating for this batch item.
+            (为此批量项启用透明镀层)
+        coating_height_mm: Transparent coating thickness in millimeters.
+            (透明镀层厚度，毫米)
         image_path: Path to the input image file. (输入图像文件路径)
         lut_path: Path to the LUT calibration file. (LUT 校准文件路径)
         target_width_mm: Target physical width in mm. (目标物理宽度，毫米)
@@ -1406,6 +1412,8 @@ def worker_batch_convert_item(
         material_min_layer_count=material_min_layer_count,
         material_max_layer_count=material_max_layer_count,
         material_delta_e00_tolerance=material_delta_e00_tolerance,
+        enable_coating=enable_coating,
+        coating_height_mm=coating_height_mm,
     )
 
     # Conversion failure surfaces as no 3MF; keep the legacy contract
