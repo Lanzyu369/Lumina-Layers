@@ -4,7 +4,7 @@ import {
   isSvgHoleCompensationAvailable,
 } from "../../stores/converter/store";
 import { useI18n } from "../../i18n/context";
-import Checkbox from "../ui/Checkbox";
+import Switch from "../ui/Switch";
 import HelpDot from "../ui/HelpDot";
 import { workstationInputClass } from "../ui/panelPrimitives";
 
@@ -22,14 +22,24 @@ export default function SvgHoleCompensationSettings() {
   })));
 
   return (
-    <section className="flex flex-col gap-3 border-t panel-divider pt-4">
-      <Checkbox
-        label={t("svg_hole_compensation")}
-        tooltip={t("svg_hole_compensation_hint")}
-        checked={state.available && state.enabled}
-        disabled={!state.available}
-        onChange={state.setEnabled}
-      />
+    <section className="flex flex-col gap-4 border-t panel-divider pt-5">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+            {t("svg_hole_compensation")}
+          </h3>
+          <HelpDot
+            title={t("svg_hole_compensation")}
+            description={t("svg_hole_compensation_hint")}
+          />
+        </div>
+        <Switch
+          ariaLabel={t("svg_hole_compensation")}
+          checked={state.available && state.enabled}
+          disabled={!state.available}
+          onChange={state.setEnabled}
+        />
+      </div>
       {!state.available && (
         <p role="status" className="text-xs text-[var(--surface-text-muted)]">
           {t("svg_hole_compensation_unavailable")}

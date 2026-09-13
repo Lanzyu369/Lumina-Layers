@@ -30,7 +30,6 @@ import ImportConfirmDialog from "../ui/ImportConfirmDialog";
 import MaterialPickerDialog from "../ui/MaterialPickerDialog";
 import MaterialSolverCacheDialog from "../MaterialSolverCacheDialog";
 import LegacyLutSelector from "./LegacyLutSelector";
-import SvgHoleCompensationSettings from "./SvgHoleCompensationSettings";
 import { tRuntime } from "../../i18n/runtime";
 import { useI18n } from "../../i18n/context";
 import { useWorkspaceMode } from "../../hooks/useWorkspaceMode";
@@ -1954,7 +1953,6 @@ export default function BasicSettings() {
       />
 
       <QuantizeColorsControl />
-      <SvgHoleCompensationSettings />
 
       <ImportConfirmDialog
         open={importDialogOpen}

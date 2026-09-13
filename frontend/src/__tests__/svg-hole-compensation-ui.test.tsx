@@ -31,22 +31,27 @@ afterEach(() => {
 describe("SVG source compensation controls", () => {
   it("offers an optional switch and physical thresholds for SVG vector artwork", () => {
     render(<I18nProvider><SvgHoleCompensationSettings /></I18nProvider>);
-    const checkbox = screen.getByRole("checkbox", { name: /SVG/ });
-    expect(checkbox).not.toBeChecked();
-    fireEvent.click(checkbox);
-    expect(checkbox).toBeChecked();
+    const toggle = screen.getByRole("switch", { name: /SVG/ });
+    expect(toggle).not.toBeChecked();
+    expect(screen.queryByRole("spinbutton")).not.toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(toggle).toBeChecked();
     const area = screen.getByRole("spinbutton", { name: /mm²/ });
     const width = screen.getByRole("spinbutton", { name: /mm\)/ });
     expect(area).toHaveValue(0.5);
     expect(width).toHaveValue(0.1);
     fireEvent.change(area, { target: { value: "0" } });
     expect(useConverterStore.getState().svg_hole_max_area_mm2).toBe(0);
+    fireEvent.click(toggle);
+    expect(toggle).not.toBeChecked();
+    expect(screen.queryByRole("spinbutton")).not.toBeInTheDocument();
+    expect(useConverterStore.getState().svg_hole_compensation_enabled).toBe(false);
   });
 
   it("clearly disables the feature outside SVG vector mode", () => {
     useConverterStore.setState({ imageFile: null, modeling_mode: ModelingMode.HIGH_FIDELITY });
     render(<I18nProvider><SvgHoleCompensationSettings /></I18nProvider>);
-    expect(screen.getByRole("checkbox", { name: /SVG/ })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: /SVG/ })).toBeDisabled();
     expect(screen.getByRole("status")).toHaveTextContent(/SVG.*矢量/);
   });
 
@@ -54,14 +59,14 @@ describe("SVG source compensation controls", () => {
     useConverterStore.setState({ svg_hole_compensation_enabled: true });
     render(<I18nProvider><SvgHoleCompensationSettings /></I18nProvider>);
     act(() => useConverterStore.getState().setImageFile(new File(["png"], "art.png", { type: "image/png" })));
-    expect(screen.getByRole("checkbox", { name: /SVG/ })).not.toBeChecked();
-    expect(screen.getByRole("checkbox", { name: /SVG/ })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: /SVG/ })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: /SVG/ })).toBeDisabled();
   });
 
   it("provides equivalent English controls and explains that intentional details may be filled", () => {
     useSettingsStore.setState({ language: "en" });
     render(<I18nProvider><SvgHoleCompensationSettings /></I18nProvider>);
-    expect(screen.getByRole("checkbox", { name: /SVG hole compensation/ })).toBeEnabled();
+    expect(screen.getByRole("switch", { name: /SVG hole compensation/ })).toBeEnabled();
     expect(translations.svg_hole_compensation_hint.zh).toContain("有意保留");
     expect(translations.svg_hole_compensation_hint.en).toMatch(/intentional/i);
   });

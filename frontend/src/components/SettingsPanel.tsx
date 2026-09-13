@@ -49,6 +49,7 @@ import WikiTooltip from "./ui/WikiTooltip";
 import SlicerLogo from "./slicer/SlicerLogo";
 import MachineSelectionDialog from "./settings/MachineSelectionDialog";
 import BuildPlateSelector from "./settings/BuildPlateSelector";
+import SvgHoleCompensationSettings from "./sections/SvgHoleCompensationSettings";
 import SettingsCategoryNav, {
   type SettingsCategory,
   type SettingsCategoryId,
@@ -1102,6 +1103,8 @@ export default function SettingsPanel() {
                   {t("settings.svg_pixels_per_mm_default_hint")}
                 </StatusBanner>
               </div>
+
+              <SvgHoleCompensationSettings />
 
               <div
                 data-testid="settings-auto-replace-gradient-section"
