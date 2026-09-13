@@ -85,6 +85,10 @@ pybind11_add_module(
   src/hole_compensation.cpp
 )
 target_link_libraries(_lumina_svg_compensation PRIVATE Clipper2)
+target_compile_options(
+  _lumina_svg_compensation
+  PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>
+)
 set_target_properties(
   _lumina_svg_compensation
   PROPERTIES
