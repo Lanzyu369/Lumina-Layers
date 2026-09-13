@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 
 vi.mock("../../api/system", () => ({
   clearCache: vi.fn(),
@@ -15,11 +15,17 @@ vi.mock("../../utils/retryAsync", () => ({
 }));
 
 import type { PrinterInfo, SlicerOption } from "../../api/types";
+import { ModelingMode } from "../../api/types";
 import * as systemApi from "../../api/system";
 import { I18nProvider } from "../../i18n/context";
 import { translations } from "../../i18n/translations";
 import { DEFAULT_SETTINGS, useSettingsStore } from "../../stores/settingsStore";
+import { DEFAULT_STATE, useConverterStore } from "../../stores/converter";
 import { useSlicerStore } from "../../stores/slicerStore";
+import { useWidgetStore } from "../../stores/widgetStore";
+import { useActionHistoryStore } from "../../stores/actionHistoryStore";
+import { useActionHistoryBootstrap } from "../../hooks/useActionHistoryBootstrap";
+import { collectBugReportContext } from "../../utils/bugReportContext";
 import SettingsPanel from "../SettingsPanel";
 
 const SLICERS: SlicerOption[] = [
@@ -82,6 +88,10 @@ function renderPanel() {
 describe("SettingsPanel information architecture", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
+    useConverterStore.setState({ ...DEFAULT_STATE });
+    useWidgetStore.setState({ activeTab: "settings" });
+    useActionHistoryStore.getState()._resetForTests();
     useSettingsStore.setState({
       ...DEFAULT_SETTINGS,
       printerModel: "bambu-h2d",
@@ -171,6 +181,65 @@ describe("SettingsPanel information architecture", () => {
       screen.getByRole("heading", { name: "缓存管理", level: 3 }),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "清除缓存" })).toBeInTheDocument();
+  });
+
+  it("offers SVG hole compensation in Conversion and precision settings", async () => {
+    useConverterStore.setState({
+      imageFile: new File(["<svg/>"], "art.svg", { type: "image/svg+xml" }),
+      modeling_mode: ModelingMode.VECTOR,
+    });
+    renderHook(() => useActionHistoryBootstrap());
+    renderPanel();
+    await screen.findByRole("heading", { name: "当前设备", level: 3 });
+    const navigation = screen.getByRole("navigation", { name: "设置分类" });
+    fireEvent.click(within(navigation).getByRole("button", { name: /转换与精度/ }));
+
+    const conversionSettings = screen.getByRole("region", { name: /转换与精度/ });
+    const toggle = within(conversionSettings).getByRole("switch", { name: "SVG 小洞补偿" });
+    expect(toggle).not.toBeChecked();
+    expect(toggle).toBeEnabled();
+    fireEvent.click(toggle);
+    expect(toggle).toBeChecked();
+    expect(useConverterStore.getState().svg_hole_compensation_enabled).toBe(true);
+    const areaInput = within(conversionSettings).getByRole("textbox", { name: /mm²/ });
+    const widthInput = within(conversionSettings).getByRole("textbox", { name: /mm\)/ });
+    expect(areaInput).toHaveValue("0.5");
+    expect(widthInput).toHaveValue("0.1");
+    fireEvent.change(areaInput, {
+      target: { value: "0.25" },
+    });
+    fireEvent.blur(areaInput);
+    fireEvent.change(widthInput, {
+      target: { value: "0.05" },
+    });
+    fireEvent.blur(widthInput);
+
+    const report = collectBugReportContext();
+    expect(report.active_tab).toBe("settings");
+    expect(report.advanced_params).toBeNull();
+    for (const [key, from, to] of [
+      ["svg_hole_compensation_enabled", false, true],
+      ["svg_hole_max_area_mm2", 0.5, 0.25],
+      ["svg_hole_max_width_mm", 0.1, 0.05],
+    ] as const) {
+      const entry = report.action_history?.find((event) => event.changed_fields?.[key]);
+      expect(entry?.changed_fields?.[key]).toEqual({ from, to });
+      expect(entry?.snapshot.active_tab).toBe("settings");
+    }
+
+    fireEvent.click(within(navigation).getByRole("button", { name: /常规/ }));
+    expect(screen.queryByRole("switch", { name: "SVG 小洞补偿" })).not.toBeInTheDocument();
+    fireEvent.click(within(navigation).getByRole("button", { name: /转换与精度/ }));
+    expect(screen.getByRole("switch", { name: "SVG 小洞补偿" })).toBeChecked();
+
+    act(() => useWidgetStore.setState({ activeTab: "converter" }));
+    expect(collectBugReportContext().advanced_params).toMatchObject({
+      generation: {
+        svg_hole_compensation_enabled: true,
+        svg_hole_max_area_mm2: 0.25,
+        svg_hole_max_width_mm: 0.05,
+      },
+    });
   });
 
   it("uses one concise label for each toggle setting", async () => {

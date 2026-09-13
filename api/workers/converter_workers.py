@@ -526,6 +526,9 @@ def worker_generate_preview(
     material_min_layer_count: int = 5,
     material_max_layer_count: int = 10,
     material_delta_e00_tolerance: float = 0.5,
+    svg_hole_compensation_enabled: bool = False,
+    svg_hole_max_area_mm2: float = 0.5,
+    svg_hole_max_width_mm: float = 0.1,
 ) -> dict:
     """Execute preview generation in a worker process.
     在工作进程中执行预览生成。
@@ -630,6 +633,9 @@ def worker_generate_preview(
             enable_outline=enable_outline,
             outline_width=outline_width,
             svg_pixels_per_mm=svg_pixels_per_mm,
+            svg_hole_compensation_enabled=svg_hole_compensation_enabled,
+            svg_hole_max_area_mm2=svg_hole_max_area_mm2,
+            svg_hole_max_width_mm=svg_hole_max_width_mm,
             is_dark=is_dark,
             hue_weight=hue_weight,
             chroma_gate=chroma_gate,
@@ -1265,6 +1271,9 @@ def worker_batch_convert_item(
     material_delta_e00_tolerance: float = 0.5,
     separate_backing: bool = False,
     enable_wipe_tower_auto_placement: bool = True,
+    svg_hole_compensation_enabled: bool = False,
+    svg_hole_max_area_mm2: float = 0.5,
+    svg_hole_max_width_mm: float = 0.1,
     enable_coating: bool = False,
     coating_height_mm: float = 0.08,
 ) -> dict:
@@ -1385,6 +1394,9 @@ def worker_batch_convert_item(
         quantize_colors=quantize_colors,
         enable_cleanup=enable_cleanup,
         svg_pixels_per_mm=svg_pixels_per_mm,
+        svg_hole_compensation_enabled=svg_hole_compensation_enabled,
+        svg_hole_max_area_mm2=svg_hole_max_area_mm2,
+        svg_hole_max_width_mm=svg_hole_max_width_mm,
         hue_weight=hue_weight,
         chroma_gate=chroma_gate,
         enable_relief=enable_relief,

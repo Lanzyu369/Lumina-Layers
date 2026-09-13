@@ -15,6 +15,7 @@ from core.errors import (
     CoreDependencyError,
     CoreProcessingError,
     CoreValidationError,
+    NativeSvgResourceLimitError,
     VectorHostMemoryAdmissionError,
     VectorMeshMemoryBudgetError,
 )
@@ -60,6 +61,15 @@ def test_core_validation_error_maps_to_422() -> None:
     exc = to_http_exception(CoreValidationError("invalid"), "converter")
     assert exc.status_code == 422
     assert exc.detail == "invalid"
+
+
+def test_native_svg_resource_limit_maps_to_actionable_422() -> None:
+    exc = to_http_exception(NativeSvgResourceLimitError(), "Vector preview")
+
+    assert exc.status_code == 422
+    assert exc.detail["code"] == "native_svg_resource_limit"
+    assert exc.detail["reason"] == "unsupported_complexity"
+    assert exc.detail["recovery_actions"] == ["simplify_svg", "split_svg"]
 
 
 def test_vector_mesh_memory_budget_error_maps_to_actionable_422() -> None:

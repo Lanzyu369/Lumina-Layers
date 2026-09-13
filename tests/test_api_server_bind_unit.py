@@ -6,12 +6,69 @@ API 服务监听配置测试。
 from __future__ import annotations
 
 import io
+import runpy
 from pathlib import Path
 
 import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_cli_keeps_managed_server_entry_point(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import api_server
+    import uvicorn
+
+    calls: list[dict[str, str]] = []
+
+    def unexpected_server(*args, **kwargs):
+        raise AssertionError("CLI bypassed the managed server entry point")
+
+    monkeypatch.setattr(uvicorn, "run", unexpected_server)
+    monkeypatch.setenv("LUMINA_API_HOST", "127.0.0.1")
+    monkeypatch.setenv("LUMINA_API_PORT", "18000")
+    monkeypatch.setattr(
+        api_server, "_run_server", lambda env: calls.append(dict(env)),
+        raising=False,
+    )
+    assert api_server.main([]) == 0
+    assert calls[0]["LUMINA_API_HOST"] == "127.0.0.1"
+    assert calls[0]["LUMINA_API_PORT"] == "18000"
+
+
+def test_cli_keeps_worker_smoke_entry_point(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import api_server
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        api_server, "_run_frozen_worker_smoke", lambda: calls.append("worker"),
+        raising=False,
+    )
+    assert api_server.main(["--worker-smoke"]) == 0
+    assert calls == ["worker"]
+
+
+def test_frozen_helpers_are_diverted_before_cli_parsing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import argparse
+    import multiprocessing
+
+    def diverted() -> None:
+        raise SystemExit(0)
+
+    def unexpected_parse(*args, **kwargs):
+        raise AssertionError("Frozen worker arguments must not reach the SVG CLI")
+
+    monkeypatch.setattr(multiprocessing, "freeze_support", diverted)
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", unexpected_parse)
+    with pytest.raises(SystemExit) as completed:
+        runpy.run_path(str(ROOT / "api_server.py"), run_name="__main__")
+    assert completed.value.code == 0
 
 
 def test_frozen_backend_prepares_multiprocessing_before_heavy_imports(

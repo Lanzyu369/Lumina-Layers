@@ -84,7 +84,8 @@ except ImportError:  # Shapely < 2.1; keep the old union path available.
 from api.structured_logging import get_logger
 from config import PrinterConfig, ColorSystem, VectorConfig
 from core import geos_buffer_fast
-from core.errors import VectorMeshMemoryBudgetError
+from core import native_svg_adapter
+from core.errors import CoreDependencyError, VectorMeshMemoryBudgetError
 from core.layered_coordinate_domain import (
     LAYERED_COORDINATE_DOMAIN_KEY,
     LayeredCoordinateDomain,
@@ -98,6 +99,7 @@ from core.vector_diagnostics import (
 )
 from core.vector_mesh_memory import (
     enforce_vector_mesh_memory_budget,
+    estimate_indexed_prism_memory,
     estimate_vector_mesh_build_memory,
     get_process_rss_bytes,
     resolve_vector_mesh_memory_budget_bytes,
@@ -2157,7 +2159,7 @@ def _try_parse_strict_top_level_path_svg(processor, svg_path, target_width_mm):
 _LuminaImageProcessor = None
 _VECTOR_PARSE_CLIP_CACHE = {}
 _VECTOR_PARSE_CLIP_CACHE_MAX = 8
-_VECTOR_PARSE_CLIP_ARTIFACT_SCHEMA = "lumina_vector_parse_clip_cache_v1"
+_VECTOR_PARSE_CLIP_ARTIFACT_SCHEMA = "lumina_vector_parse_clip_cache_v4"
 
 
 def _vector_parse_clip_cache_key(
@@ -2183,6 +2185,7 @@ def _vector_parse_clip_cache_key(
         bool(expand_stroke_to_fill),
         gradient_key,
         svg_mtime,
+        *native_svg_adapter.native_runtime_identity(),
     )
 
 
@@ -2229,6 +2232,10 @@ def _copy_vector_parse_clip_cache_entry(cache_entry):
         "image_vectorizer_bounds": cache_entry.get("image_vectorizer_bounds"),
         "scale_factor": cache_entry.get("scale_factor"),
         "bbox": cache_entry.get("bbox"),
+        "parse_warnings": list(cache_entry.get("parse_warnings") or []),
+        "geometry_stage_timings": dict(
+            cache_entry.get("geometry_stage_timings") or {}
+        ),
     }
 
 
@@ -3886,6 +3893,9 @@ class VectorProcessor:
         self.enable_outline = False
         self.outline_width_mm = 0.0
         self.expand_stroke_to_fill = False
+        self.svg_hole_compensation_enabled = False
+        self.svg_hole_max_area_mm2 = 0.5
+        self.svg_hole_max_width_mm = 0.1
         self.layer_height_mm = float(PrinterConfig.LAYER_HEIGHT)
 
     @classmethod
@@ -4691,73 +4701,202 @@ class VectorProcessor:
             image_vectorizer_bounds = cached_entry.get("image_vectorizer_bounds")
             scale_factor = cached_entry["scale_factor"]
             bbox = cached_entry["bbox"]
+            self.parse_warnings = list(
+                working_entry.get("parse_warnings") or []
+            )
+            stage_timings.update(
+                working_entry.get("geometry_stage_timings") or {}
+            )
             stage_timings["parse_s"] = 0.0
             stage_timings["occlusion_s"] = 0.0
             stage_timings["contour_normalize_s"] = 0.0
+            stage_timings["native_svg_s"] = 0.0
+            stage_timings["native_result_conversion_s"] = 0.0
+            stage_timings["native_recorder_s"] = 0.0
+            stage_timings["native_kernel_s"] = 0.0
+            stage_timings["native_bounds_s"] = 0.0
+            stage_timings["native_replay_s"] = 0.0
+            stage_timings["native_topology_s"] = 0.0
+            stage_timings["native_normalize_raw_s"] = 0.0
+            stage_timings["native_composite_s"] = 0.0
+            stage_timings["native_normalize_visible_s"] = 0.0
+            stage_timings["native_export_s"] = 0.0
+            stage_timings["native_binding_conversion_s"] = 0.0
+            stage_timings["native_adapter_s"] = 0.0
+            stage_timings["native_cache_hit"] = (
+                stage_timings.get("geometry_backend") == "native"
+            )
+            stage_timings.setdefault("geometry_backend", "legacy")
+            stage_timings.setdefault("native_fallback_reason", "")
             _log.debug("Parse/clip cache hit: %s", os.path.basename(svg_path))
             _log.debug("Parsed %s shapes. Scale: %.4f", len(shape_data), scale_factor)
             _log.debug("After occlusion clip: %s non-overlapping shapes", len(clipped_shapes))
         else:
-            t0 = time.perf_counter()
-            had_parse_policy = hasattr(self, "_parse_expand_stroke_to_fill")
-            previous_parse_policy = getattr(self, "_parse_expand_stroke_to_fill", None)
-            self._parse_expand_stroke_to_fill = expand_stroke_to_fill
-            try:
-                shape_data, scale_factor, bbox = self._parse_svg(svg_path, target_width_mm)
-                image_vectorizer_bounds = getattr(self, "_last_image_vectorizer_bounds", None)
-            finally:
-                if had_parse_policy:
-                    self._parse_expand_stroke_to_fill = previous_parse_policy
-                else:
-                    delattr(self, "_parse_expand_stroke_to_fill")
-            if not shape_data:
-                raise ValueError("No valid filled shapes found in SVG.")
-            stage_timings["parse_s"] = time.perf_counter() - t0
-            _log.debug("Parsed %s shapes. Scale: %.4f", len(shape_data), scale_factor)
+            native_attempt_started = time.perf_counter()
+            native_outcome = native_svg_adapter.analyze_native_svg(
+                svg_path,
+                target_width_mm,
+                self.sampling_precision,
+                expand_stroke_to_fill=expand_stroke_to_fill,
+            )
+            native_attempt_seconds = time.perf_counter() - native_attempt_started
+            if isinstance(native_outcome, native_svg_adapter.NativeSvgGeometry):
+                shape_data = native_outcome.shape_data
+                clipped_shapes = native_outcome.clipped_shapes
+                silhouette = native_outcome.silhouette
+                image_vectorizer_bounds = native_outcome.image_vectorizer_bounds
+                scale_factor = native_outcome.scale_factor
+                bbox = native_outcome.bbox
+                self.parse_warnings = []
+                stage_timings.update(native_outcome.stage_timings)
+                stage_timings["native_svg_s"] = native_attempt_seconds
+                stage_timings["parse_s"] = stage_timings.get(
+                    "native_recorder_s", 0.0
+                )
+                stage_timings["occlusion_s"] = stage_timings.get(
+                    "native_kernel_s", 0.0
+                )
+                stage_timings["contour_normalize_s"] = 0.0
+                stage_timings["native_cache_hit"] = False
+                _log.debug(
+                    "Native SVG geometry selected",
+                    extra={
+                        "event": "vector_native_svg_done",
+                        "path": os.path.basename(svg_path),
+                        "native_version": native_outcome.native_version,
+                        "native_schema_version": (
+                            native_outcome.native_schema_version
+                        ),
+                        "shape_count": len(clipped_shapes),
+                        "duration_s": round(native_attempt_seconds, 6),
+                    },
+                )
+            else:
+                stage_timings.update(
+                    {
+                        "geometry_backend": "legacy",
+                        "native_svg_s": native_attempt_seconds,
+                        "native_result_conversion_s": 0.0,
+                        "native_fallback_reason": native_outcome.reason_code,
+                        "native_version": native_outcome.native_version,
+                        "native_cache_hit": False,
+                    }
+                )
+                _log.debug(
+                    "Native SVG requested whole-document fallback",
+                    extra={
+                        "event": "vector_native_svg_fallback",
+                        "path": os.path.basename(svg_path),
+                        "reason_code": native_outcome.reason_code,
+                        "native_version": native_outcome.native_version,
+                        "duration_s": round(native_attempt_seconds, 6),
+                    },
+                )
 
-            t0 = time.perf_counter()
-            _pre_area = sum(it["poly"].area for it in shape_data if it["poly"] is not None)
-            clipped_shapes, silhouette = self._clip_occlusion(shape_data, return_silhouette=True)
-            _clip_area = sum(it["geometry"].area for it in clipped_shapes if it["geometry"] is not None)
-            _log.debug(
-                "_clip_occlusion: %s -> %s shapes, area %.1f -> %.1f (%.1f%%)",
-                len(shape_data),
-                len(clipped_shapes),
-                _pre_area,
-                _clip_area,
-                (_clip_area / _pre_area * 100) if _pre_area > 0 else 0.0,
-            )
+                t0 = time.perf_counter()
+                had_parse_policy = hasattr(self, "_parse_expand_stroke_to_fill")
+                previous_parse_policy = getattr(
+                    self, "_parse_expand_stroke_to_fill", None
+                )
+                self._parse_expand_stroke_to_fill = expand_stroke_to_fill
+                try:
+                    shape_data, scale_factor, bbox = self._parse_svg(
+                        svg_path, target_width_mm
+                    )
+                    image_vectorizer_bounds = getattr(
+                        self, "_last_image_vectorizer_bounds", None
+                    )
+                finally:
+                    if had_parse_policy:
+                        self._parse_expand_stroke_to_fill = previous_parse_policy
+                    else:
+                        delattr(self, "_parse_expand_stroke_to_fill")
+                if not shape_data:
+                    raise ValueError("No valid filled shapes found in SVG.")
+                stage_timings["parse_s"] = time.perf_counter() - t0
+                _log.debug(
+                    "Parsed %s shapes. Scale: %.4f",
+                    len(shape_data),
+                    scale_factor,
+                )
 
-            normalize_started = time.perf_counter()
-            post_clip = VectorProcessor._postprocess_clipped_shapes(clipped_shapes)
-            stage_timings["contour_normalize_s"] = (
-                time.perf_counter() - normalize_started
-            )
-            _norm_area = sum(it["geometry"].area for it in post_clip if it["geometry"] is not None)
-            _log.debug(
-                "post-clip normalize: %s -> %s shapes, area %.1f -> %.1f",
-                len(clipped_shapes),
-                len(post_clip),
-                _clip_area,
-                _norm_area,
-            )
-            clipped_shapes = post_clip
+                t0 = time.perf_counter()
+                _pre_area = sum(
+                    item["poly"].area
+                    for item in shape_data
+                    if item["poly"] is not None
+                )
+                clipped_shapes, silhouette = self._clip_occlusion(
+                    shape_data, return_silhouette=True
+                )
+                _clip_area = sum(
+                    item["geometry"].area
+                    for item in clipped_shapes
+                    if item["geometry"] is not None
+                )
+                _log.debug(
+                    "_clip_occlusion: %s -> %s shapes, area %.1f -> %.1f "
+                    "(%.1f%%)",
+                    len(shape_data),
+                    len(clipped_shapes),
+                    _pre_area,
+                    _clip_area,
+                    (_clip_area / _pre_area * 100) if _pre_area > 0 else 0.0,
+                )
 
-            split_input = [{"poly": it["geometry"], "color": it["color"]} for it in clipped_shapes]
-            split_output = VectorProcessor._split_disconnected_shapes(split_input)
-            clipped_shapes = [
-                {"geometry": it["poly"], "color": it["color"], "draw_order": idx} for idx, it in enumerate(split_output)
-            ]
-            _split_area = sum(it["geometry"].area for it in clipped_shapes if it["geometry"] is not None)
-            _log.debug(
-                "split disconnected: %s -> %s shapes, area %.1f -> %.1f",
-                len(post_clip),
-                len(clipped_shapes),
-                _norm_area,
-                _split_area,
-            )
-            stage_timings["occlusion_s"] = time.perf_counter() - t0
-            _log.debug("After occlusion clip: %s non-overlapping shapes", len(clipped_shapes))
+                normalize_started = time.perf_counter()
+                post_clip = VectorProcessor._postprocess_clipped_shapes(
+                    clipped_shapes
+                )
+                stage_timings["contour_normalize_s"] = (
+                    time.perf_counter() - normalize_started
+                )
+                _norm_area = sum(
+                    item["geometry"].area
+                    for item in post_clip
+                    if item["geometry"] is not None
+                )
+                _log.debug(
+                    "post-clip normalize: %s -> %s shapes, area %.1f -> %.1f",
+                    len(clipped_shapes),
+                    len(post_clip),
+                    _clip_area,
+                    _norm_area,
+                )
+                clipped_shapes = post_clip
+
+                split_input = [
+                    {"poly": item["geometry"], "color": item["color"]}
+                    for item in clipped_shapes
+                ]
+                split_output = VectorProcessor._split_disconnected_shapes(
+                    split_input
+                )
+                clipped_shapes = [
+                    {
+                        "geometry": item["poly"],
+                        "color": item["color"],
+                        "draw_order": index,
+                    }
+                    for index, item in enumerate(split_output)
+                ]
+                _split_area = sum(
+                    item["geometry"].area
+                    for item in clipped_shapes
+                    if item["geometry"] is not None
+                )
+                _log.debug(
+                    "split disconnected: %s -> %s shapes, area %.1f -> %.1f",
+                    len(post_clip),
+                    len(clipped_shapes),
+                    _norm_area,
+                    _split_area,
+                )
+                stage_timings["occlusion_s"] = time.perf_counter() - t0
+                _log.debug(
+                    "After occlusion clip: %s non-overlapping shapes",
+                    len(clipped_shapes),
+                )
 
             if cache_key is not None:
                 cache_entry = {
@@ -4767,10 +4906,35 @@ class VectorProcessor:
                     "image_vectorizer_bounds": image_vectorizer_bounds,
                     "scale_factor": scale_factor,
                     "bbox": bbox,
+                    "parse_warnings": list(
+                        getattr(self, "parse_warnings", None) or []
+                    ),
+                    "geometry_stage_timings": dict(stage_timings),
                 }
                 _VECTOR_PARSE_CLIP_CACHE[cache_key] = _copy_vector_parse_clip_cache_entry(cache_entry)
                 while len(_VECTOR_PARSE_CLIP_CACHE) > _VECTOR_PARSE_CLIP_CACHE_MAX:
                     _VECTOR_PARSE_CLIP_CACHE.pop(next(iter(_VECTOR_PARSE_CLIP_CACHE)))
+
+        # Keep pure parse caches independent of compensation settings. Apply the
+        # optional edit once, before both material mapping and 2D preview output.
+        if bool(getattr(self, "svg_hole_compensation_enabled", False)):
+            from core.svg_hole_compensation import compensate_svg_regions
+
+            try:
+                compensated = compensate_svg_regions(
+                    clipped_shapes,
+                    silhouette=silhouette,
+                    scale_factor=scale_factor,
+                    max_hole_area_mm2=self.svg_hole_max_area_mm2,
+                    max_hole_width_mm=self.svg_hole_max_width_mm,
+                )
+            except ImportError as exc:
+                raise CoreDependencyError(str(exc)) from exc
+            clipped_shapes = compensated.regions
+            silhouette = compensated.silhouette
+            stage_timings["svg_hole_compensation_s"] = compensated.elapsed_seconds
+            stage_timings["svg_holes_filled"] = compensated.filled_holes
+            stage_timings["svg_hole_added_area_mm2"] = compensated.added_area_mm2
 
         # === Stage 3: Resolve color system config ===
         # --- Diagnostic: geometry fingerprint for 5-vs-7 layer comparison ---
@@ -5023,15 +5187,21 @@ class VectorProcessor:
                 num_channels,
                 num_layers=num_layers,
             )
-        min_hole_area_mm2 = float(getattr(VectorConfig, "MIN_COLOR_HOLE_AREA_MM2", 1.0))
-        for idx, item in enumerate(clipped_shapes):
-            filtered_geometry = VectorProcessor._filter_backing_holes(
-                item["geometry"],
-                min_hole_area_mm2=min_hole_area_mm2,
+        if (
+            stage_timings.get("geometry_backend") != "native"
+            and not getattr(self, "svg_hole_compensation_enabled", False)
+        ):
+            min_hole_area_mm2 = float(
+                getattr(VectorConfig, "MIN_COLOR_HOLE_AREA_MM2", 1.0)
             )
-            item["geometry"] = filtered_geometry
-            if idx < len(matched_shapes):
-                matched_shapes[idx]["geometry"] = filtered_geometry
+            for idx, item in enumerate(clipped_shapes):
+                filtered_geometry = VectorProcessor._filter_backing_holes(
+                    item["geometry"],
+                    min_hole_area_mm2=min_hole_area_mm2,
+                )
+                item["geometry"] = filtered_geometry
+                if idx < len(matched_shapes):
+                    matched_shapes[idx]["geometry"] = filtered_geometry
         stage_timings["color_match_s"] = max(
             0.0,
             time.perf_counter()
@@ -6679,6 +6849,35 @@ class VectorProcessor:
                         group_idx
                     )
             representative_by_color[rgb] = chosen
+
+        # Native integer-grid reconstruction can introduce area noise several
+        # orders of magnitude below the physical error budget. Do not let that
+        # noise choose a later SVG fill as a near-colour group's canonical
+        # query; for numerically tied dominant areas, preserve source order.
+        for group_members in representative_members:
+            max_area = max(
+                float(stats_by_color[member]["area"])
+                for member in group_members
+            )
+            dominant_members = [
+                member
+                for member in group_members
+                if math.isclose(
+                    float(stats_by_color[member]["area"]),
+                    max_area,
+                    rel_tol=1e-9,
+                    abs_tol=1e-12,
+                )
+            ]
+            canonical = min(
+                dominant_members,
+                key=lambda member: (
+                    int(stats_by_color[member]["first_index"]),
+                    member,
+                ),
+            )
+            for member in group_members:
+                representative_by_color[member] = canonical
 
         if all(
             representative_by_color.get(rgb, rgb) == rgb

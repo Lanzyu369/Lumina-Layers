@@ -7,6 +7,7 @@ import {
   MATERIAL_DYNAMIC_LAYER_COUNT_MIN,
   inferDefaultMaterialBackingDirName,
   isValidImageType,
+  hasOnlySvgInputs,
   resolveConverterSourceSelection,
 } from "../../stores/converter";
 import {
@@ -41,7 +42,7 @@ import {
   type RecipeFileSource,
 } from "../../recipe/importRecipe";
 import { StatusBanner, workstationInputClass } from "../ui/panelPrimitives";
-import { isSvgImageFile, type ImageRotationDegrees } from "../../utils/imageRotation";
+import { type ImageRotationDegrees } from "../../utils/imageRotation";
 import { WIKI_DOCS } from "../../utils/wikiDocs";
 import {
   buildLutCatalogIndex,
@@ -581,7 +582,7 @@ export default function BasicSettings() {
   const clearModelSurface = useConverterStore((s) => s.clearModelSurface);
   const rotateImageForExport = useConverterStore((s) => s.rotateImageForExport);
   const [selectedImageRotation, setSelectedImageRotation] = useState<ImageRotationDegrees>(90);
-  const isVectorModelingAvailable = isSvgImageFile(imageFile);
+  const isVectorModelingAvailable = useConverterStore(hasOnlySvgInputs);
   const disabledModelingModes = isVectorModelingAvailable ? [] : [ModelingMode.VECTOR];
 
   const handleFileReplace = useCallback(

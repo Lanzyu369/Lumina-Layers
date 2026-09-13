@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from importlib import metadata
+from importlib.machinery import EXTENSION_SUFFIXES
 from pathlib import Path
 import runpy
 import sys
@@ -57,6 +58,9 @@ def test_pyinstaller_collects_neroued_extension_and_runtime(monkeypatch) -> None
 
     hooks_module = ModuleType("PyInstaller.utils.hooks")
     hooks_module.collect_all = fake_collect_all
+    hooks_module.get_module_file_attribute = lambda _module_name: str(
+        Path("/tmp") / f"_lumina_svg_core{EXTENSION_SUFFIXES[0]}"
+    )
     utils_module = ModuleType("PyInstaller.utils")
     pyinstaller_module = ModuleType("PyInstaller")
     monkeypatch.setitem(sys.modules, "PyInstaller", pyinstaller_module)

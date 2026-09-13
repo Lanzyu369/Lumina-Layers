@@ -43,6 +43,9 @@ function resetStore(overrides: Record<string, unknown> = {}): void {
     enable_cleanup: true,
     enable_coating: false,
     coating_height_mm: 0.08,
+    svg_hole_compensation_enabled: false,
+    svg_hole_max_area_mm2: 0.5,
+    svg_hole_max_width_mm: 0.1,
     enable_relief: false,
     color_height_map: {},
     heightmap_max_height: 3.0,
@@ -64,18 +67,22 @@ describe("submitBatch modelUrl 与 batchResult 状态管理", () => {
     vi.clearAllMocks();
   });
 
-  it.each([true, false])("forwards coating settings for multiple SVGs: %s", async (enabled) => {
+  it.each([true, false])("forwards coating and compensation settings for multiple SVGs: %s", async (enabled) => {
     const files = ["one.svg", "two.svg"].map((name) =>
       new File(['<svg xmlns="http://www.w3.org/2000/svg"/>'], name, { type: "image/svg+xml" }),
     );
     resetStore({ batchFiles: files, modeling_mode: ModelingMode.VECTOR,
-      enable_coating: enabled, coating_height_mm: 0.12 });
+      enable_coating: enabled, coating_height_mm: 0.12,
+      svg_hole_compensation_enabled: true, svg_hole_max_area_mm2: 0.75,
+      svg_hole_max_width_mm: 0.21 });
     mockedConvertBatch.mockResolvedValueOnce({ status: "ok", message: "done",
       download_url: null, threemf_disk_path: null, preview_3d_url: null,
       results: [], warnings: [] });
     await useConverterStore.getState().submitBatch();
     expect(mockedConvertBatch).toHaveBeenCalledWith(files, expect.objectContaining({
       enable_coating: enabled, coating_height_mm: 0.12,
+      svg_hole_compensation_enabled: true, svg_hole_max_area_mm2: 0.75,
+      svg_hole_max_width_mm: 0.21,
     }));
   });
 

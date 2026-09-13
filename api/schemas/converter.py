@@ -277,7 +277,21 @@ class FridgeMagnetItem(BaseModel):
         return self
 
 
-class ConvertPreviewRequest(LutSourceSelection):
+class SvgHoleCompensationOptions(BaseModel):
+    """Optional source-SVG 2D hole filling in physical units.
+    可选的 SVG 二维补洞参数，按成品物理尺寸计算。
+    """
+
+    svg_hole_compensation_enabled: bool = Field(False, description="SVG 小洞补偿")
+    svg_hole_max_area_mm2: float = Field(
+        0.5, ge=0.0, allow_inf_nan=False, description="补孔面积上限 (mm²)，0 关闭面积筛选",
+    )
+    svg_hole_max_width_mm: float = Field(
+        0.1, ge=0.0, allow_inf_nan=False, description="细缝宽度上限 (mm)，0 关闭细缝筛选",
+    )
+
+
+class ConvertPreviewRequest(LutSourceSelection, SvgHoleCompensationOptions):
     """Request model for generating a 2D color preview.
     生成 2D 颜色预览的请求模型。
 
@@ -420,7 +434,7 @@ class RecipeOverrideItem(BaseModel):
     )
 
 
-class ConvertGenerateRequest(LutSourceSelection):
+class ConvertGenerateRequest(LutSourceSelection, SvgHoleCompensationOptions):
     """Request model for generating a final 3MF model.
     生成最终 3MF 模型的请求模型。
 

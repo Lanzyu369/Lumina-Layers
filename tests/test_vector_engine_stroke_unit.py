@@ -7,7 +7,6 @@ These tests cover the P0/P1 behavior lock from
 from __future__ import annotations
 
 import json
-import logging
 from pathlib import Path
 
 import pytest
@@ -58,25 +57,23 @@ def test_stroke_only_default_raises_no_valid_shapes(processor: VectorProcessor) 
         processor.analyze_svg(_fixture_svg("stroke_only.svg"), target_width_mm=TARGET_WIDTH_MM)
 
 
-def test_stroke_only_legacy_mode_preserves_stroke_geometry(
-    processor: VectorProcessor, caplog: pytest.LogCaptureFixture
+def test_stroke_only_expansion_uses_native_geometry(
+    processor: VectorProcessor,
 ) -> None:
     processor.expand_stroke_to_fill = True
-    vector_logger = logging.getLogger("lumina.core.vector_engine")
-    vector_logger.addHandler(caplog.handler)
-    caplog.set_level(logging.DEBUG, logger="lumina.core.vector_engine")
-
-    try:
-        analysis = processor.analyze_svg(_fixture_svg("stroke_only.svg"), target_width_mm=TARGET_WIDTH_MM)
-    finally:
-        vector_logger.removeHandler(caplog.handler)
+    analysis = processor.analyze_svg(
+        _fixture_svg("stroke_only.svg"),
+        target_width_mm=TARGET_WIDTH_MM,
+    )
 
     assert analysis.shape_data
-    messages = [record.getMessage() for record in caplog.records if "Stroke policy:" in record.getMessage()]
-    assert messages
-    message = messages[-1]
-    assert "expand=True" in message
-    assert "legacy_stroke_only_shapes=1" in message
+    assert analysis.stage_timings["geometry_backend"] == "native"
+    assert {
+        item["source_kind"] for item in analysis.shape_data
+    } == {"stroke_only"}
+    assert {
+        tuple(item["rgba"]) for item in analysis.shape_data
+    } == {(0, 0, 0, 255)}
 
 
 def test_fill_eq_stroke_default_matches_b2_no_stroke_bounds(processor: VectorProcessor) -> None:
@@ -139,22 +136,19 @@ def test_ring_with_hole_default_keeps_single_shape_and_hole(processor: VectorPro
     assert any(len(poly.interiors) >= 1 for poly in polygons)
 
 
-def test_real_svg_default_logs_zero_legacy_stroke_geometry(processor: VectorProcessor, caplog: pytest.LogCaptureFixture) -> None:
-    vector_logger = logging.getLogger("lumina.core.vector_engine")
-    vector_logger.addHandler(caplog.handler)
-    caplog.set_level(logging.DEBUG, logger="lumina.core.vector_engine")
+def test_real_svg_default_uses_native_fill_only_geometry(
+    processor: VectorProcessor,
+) -> None:
+    analysis = processor.analyze_svg(
+        str(REPO_ROOT / "test_images" / "1.svg"),
+        target_width_mm=TARGET_WIDTH_MM,
+    )
 
-    try:
-        processor.analyze_svg(str(REPO_ROOT / "test_images" / "1.svg"), target_width_mm=TARGET_WIDTH_MM)
-    finally:
-        vector_logger.removeHandler(caplog.handler)
-
-    messages = [record.getMessage() for record in caplog.records if "Stroke policy:" in record.getMessage()]
-    assert messages, "Expected stroke policy log line"
-    message = messages[-1]
-    assert "expand=False" in message
-    assert "legacy_stroke_only_shapes=0" in message
-    assert "fill_eq_stroke_double_buffer=0" in message
+    assert analysis.stage_timings["geometry_backend"] == "native"
+    assert all(
+        item.get("source_kind") != "stroke_only"
+        for item in analysis.shape_data
+    )
 
 
 def test_local_svg_without_stroke_keeps_shape_count(processor: VectorProcessor) -> None:

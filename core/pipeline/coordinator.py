@@ -19,6 +19,7 @@ import cv2
 
 from api.structured_logging import get_logger
 from core.errors import CachedPreviewAnalysisError
+from core.svg_hole_compensation import validate_svg_compensation_scope
 from core.pipeline import (
     s01_input_validation,
     s02_image_processing,
@@ -152,6 +153,11 @@ def run_raster_pipeline(ctx: dict) -> dict:
     _report_progress(ctx, 0.0, "输入验证中... | Validating inputs...")
     t0 = time.perf_counter()
     try:
+        validate_svg_compensation_scope(
+            enabled=ctx.get("svg_hole_compensation_enabled", False),
+            image_path=ctx.get("image_path", ""),
+            modeling_mode=ctx.get("modeling_mode"),
+        )
         ctx = s01_input_validation.run(ctx)
     except COORDINATOR_HANDLED_ERRORS as exc:
         ctx["error"] = f"[S01] {exc}"
@@ -253,6 +259,11 @@ def run_preview_pipeline(ctx: dict) -> dict:
     _report_progress(ctx, 0.0, "预览验证中... | Validating preview inputs...")
     t0 = time.perf_counter()
     try:
+        validate_svg_compensation_scope(
+            enabled=ctx.get("svg_hole_compensation_enabled", False),
+            image_path=ctx.get("image_path", ""),
+            modeling_mode=ctx.get("modeling_mode"),
+        )
         ctx = p01_preview_validation.run(ctx)
     except COORDINATOR_HANDLED_ERRORS as exc:
         ctx["error"] = f"[P01] {exc}"

@@ -30,7 +30,8 @@ def test_shapely_runtime_contract_supports_constrained_cap_triangulation() -> No
         for line in (_REPO_ROOT / "requirements.txt")
         .read_text(encoding="utf-8")
         .splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
+        if line.strip()
+        and not line.lstrip().startswith(("#", "-r ", "--requirement "))
     ]
     shapely_requirement = next(
         requirement

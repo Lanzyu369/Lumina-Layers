@@ -98,9 +98,21 @@ describe("useAutoPreview", () => {
     });
   }
 
+  function establishCompensatedSvgPreviewBaseline() {
+    establishMaterialPreviewBaseline();
+    useConverterStore.setState({
+      imageFile: new File(["<svg/>"], "holes.svg", { type: "image/svg+xml" }),
+      modeling_mode: ModelingMode.VECTOR,
+      svg_hole_compensation_enabled: true,
+      svg_hole_max_area_mm2: 0.5,
+      svg_hole_max_width_mm: 0.1,
+    });
+  }
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    mockSubmitPreview.mockResolvedValue(undefined);
     vi.mocked(fetchMaterialSolverCacheStatus).mockImplementation(
       async (key) => materialCacheStatus(key, true),
     );
@@ -456,6 +468,134 @@ describe("useAutoPreview", () => {
     expect(state.previewGlbUrl).toBe("/api/files/preview-old.glb");
     expect(state.previewAutoRefreshPending).toBe(false);
     expect(mockSubmitPreview).not.toHaveBeenCalled();
+  });
+
+  it.each(["legacy", "material"] as const)("refreshes compensated SVG dimensions once without a %s source cache preflight", async (sourceVersion) => {
+    establishMaterialPreviewBaseline();
+    useConverterStore.setState({
+      imageFile: new File(["<svg/>"], "holes.svg", { type: "image/svg+xml" }),
+      source_version: sourceVersion,
+      lut_name: "my-lut", lut_names: ["my-lut"],
+      modeling_mode: ModelingMode.VECTOR,
+      svg_hole_compensation_enabled: true,
+      aspectRatio: 2, target_width_mm: 60, target_height_mm: 30,
+    });
+    renderHook(() => useAutoPreview());
+
+    act(() => { useConverterStore.getState().setTargetWidthMm(220); });
+    expect(useConverterStore.getState()).toMatchObject({
+      target_width_mm: 220, target_height_mm: 110,
+      sessionId: null, previewImageUrl: null, previewGlbUrl: null,
+      hasManualPreview: true, previewAutoRefreshPending: true,
+    });
+    expect(mockSubmitPreview).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    expect(fetchMaterialSolverCacheStatus).not.toHaveBeenCalled();
+    expect(mockSubmitPreview).toHaveBeenCalledOnce();
+  });
+
+  it("restarts the compensated-size debounce for the latest linked dimensions", async () => {
+    establishMaterialPreviewBaseline();
+    useConverterStore.setState({
+      imageFile: new File(["<svg/>"], "holes.svg", { type: "image/svg+xml" }),
+      modeling_mode: ModelingMode.VECTOR,
+      svg_hole_compensation_enabled: true,
+      aspectRatio: 2, target_width_mm: 60, target_height_mm: 30,
+    });
+    renderHook(() => useAutoPreview());
+    act(() => { useConverterStore.getState().setTargetWidthMm(120); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(150); });
+    act(() => { useConverterStore.getState().setTargetHeightMm(110); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(299); });
+    expect(mockSubmitPreview).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(mockSubmitPreview).toHaveBeenCalledOnce();
+    expect(useConverterStore.getState()).toMatchObject({ target_width_mm: 220, target_height_mm: 110 });
+  });
+
+  it("keeps ordinary SVG dimension changes projection-only when compensation is disabled", async () => {
+    establishMaterialPreviewBaseline();
+    useConverterStore.setState({
+      imageFile: new File(["<svg/>"], "holes.svg", { type: "image/svg+xml" }),
+      modeling_mode: ModelingMode.VECTOR,
+      svg_hole_compensation_enabled: false,
+      aspectRatio: 2, target_width_mm: 60, target_height_mm: 30,
+    });
+    renderHook(() => useAutoPreview());
+    act(() => { useConverterStore.getState().setTargetHeightMm(110); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    expect(useConverterStore.getState()).toMatchObject({
+      target_width_mm: 220, target_height_mm: 110,
+      sessionId: "material-session-old", previewImageUrl: "/api/files/preview-old.png",
+      previewGlbUrl: "/api/files/preview-old.glb", previewAutoRefreshPending: false,
+    });
+    expect(mockSubmitPreview).not.toHaveBeenCalled();
+  });
+
+  it("refreshes consecutive SVG area and width changes without querying the material solver cache", async () => {
+    const completeCacheQueries: Array<() => void> = [];
+    vi.mocked(fetchMaterialSolverCacheStatus).mockImplementation((key) =>
+      new Promise((resolve) => {
+        completeCacheQueries.push(() => resolve(materialCacheStatus(key, true)));
+      }),
+    );
+    mockSubmitPreview.mockImplementation(async () => {
+      const state = useConverterStore.getState();
+      useConverterStore.setState({
+        hasManualPreview: true, isLoading: false, previewAutoRefreshPending: false,
+        previewSubmissionSequence: state.previewSubmissionSequence + 1,
+        sessionId: "refreshed-compensation", previewImageUrl: "/api/files/refreshed.png",
+      });
+    });
+    establishCompensatedSvgPreviewBaseline();
+    renderHook(() => useAutoPreview());
+    act(() => { useConverterStore.getState().setSvgHoleMaxAreaMm2(0.8); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    act(() => { useConverterStore.getState().setSvgHoleMaxWidthMm(0.2); });
+    await act(async () => {
+      completeCacheQueries.forEach((complete) => complete());
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    expect(mockSubmitPreview).toHaveBeenCalledTimes(2);
+    expect(fetchMaterialSolverCacheStatus).not.toHaveBeenCalled();
+    expect(useConverterStore.getState()).toMatchObject({
+      sessionId: "refreshed-compensation", previewAutoRefreshPending: false,
+      svg_hole_max_area_mm2: 0.8, svg_hole_max_width_mm: 0.2,
+    });
+  });
+
+  it("debounces consecutive SVG compensation thresholds from the latest change", async () => {
+    establishCompensatedSvgPreviewBaseline();
+    useConverterStore.setState({ source_version: "legacy", lut_name: "my-lut", lut_names: ["my-lut"] });
+    renderHook(() => useAutoPreview());
+    act(() => { useConverterStore.getState().setSvgHoleMaxAreaMm2(0.8); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(150); });
+    act(() => { useConverterStore.getState().setSvgHoleMaxWidthMm(0.2); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(299); });
+    expect(mockSubmitPreview).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(mockSubmitPreview).toHaveBeenCalledOnce();
+    expect(useConverterStore.getState()).toMatchObject({ svg_hole_max_area_mm2: 0.8, svg_hole_max_width_mm: 0.2 });
+  });
+
+  it("still requires the first manual preview after editing SVG compensation options", async () => {
+    establishCompensatedSvgPreviewBaseline();
+    useConverterStore.setState({
+      hasManualPreview: false, sessionId: null, previewImageUrl: null, previewGlbUrl: null,
+      svg_hole_compensation_enabled: false,
+    });
+    renderHook(() => useAutoPreview());
+    act(() => {
+      useConverterStore.getState().setSvgHoleMaxAreaMm2(0.8);
+      useConverterStore.getState().setSvgHoleCompensationEnabled(true);
+      useConverterStore.getState().setSvgHoleMaxWidthMm(0.2);
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(mockSubmitPreview).not.toHaveBeenCalled();
+    expect(fetchMaterialSolverCacheStatus).not.toHaveBeenCalled();
+    expect(useConverterStore.getState()).toMatchObject({ hasManualPreview: false, previewAutoRefreshPending: false });
+    await act(async () => { await useConverterStore.getState().submitPreview(); });
+    expect(mockSubmitPreview).toHaveBeenCalledOnce();
   });
 
   it("keeps the dedicated large-format refresh when total dimensions change", () => {

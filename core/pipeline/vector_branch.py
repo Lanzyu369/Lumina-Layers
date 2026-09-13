@@ -28,6 +28,7 @@ import math
 import os
 import time
 from copy import deepcopy
+from typing import Any
 
 import cv2  # noqa: F401  -- imported for side-effect parity with coordinator
 import numpy as np
@@ -1251,6 +1252,7 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
         except (TypeError, ValueError):
             processor.gradient_color_bands = 16
         processor.layer_height_mm = layer_height_mm
+        _configure_svg_hole_compensation(processor, ctx)
         return processor
 
     actual_lut_path = ctx.get("actual_lut_path")
@@ -1266,7 +1268,56 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
         **processor_kwargs,
     )
     processor.layer_height_mm = layer_height_mm
+    _configure_svg_hole_compensation(processor, ctx)
     return processor
+
+
+def _build_vector_parse_cache_artifacts(
+    image_path: str, target_width_mm: float, processor: Any, analysis: Any,
+) -> dict[str, Any] | None:
+    """Serialize source geometry and its provenance, never compensated geometry.
+    仅序列化原始解析几何及其来源，不把补偿后的几何存入解析缓存。
+    """
+    from core.vector_engine import (
+        _VECTOR_PARSE_CLIP_CACHE,
+        _serialize_vector_parse_clip_cache,
+        _vector_parse_clip_cache_key,
+        _vector_parse_clip_cache_provenance,
+    )
+
+    key = _vector_parse_clip_cache_key(
+        image_path,
+        target_width_mm=target_width_mm,
+        sampling_precision=processor.sampling_precision,
+        expand_stroke_to_fill=bool(getattr(processor, "expand_stroke_to_fill", False)),
+        gradient_color_bands=getattr(processor, "gradient_color_bands", None),
+    )
+    entry = _VECTOR_PARSE_CLIP_CACHE.get(key)
+    if entry is None:
+        if getattr(processor, "svg_hole_compensation_enabled", False):
+            return None
+        entry = {
+            "shape_data": analysis.shape_data,
+            "clipped_shapes": analysis.clipped_shapes,
+            "silhouette": analysis.silhouette,
+            "image_vectorizer_bounds": analysis.image_vectorizer_bounds,
+            "scale_factor": analysis.scale_factor,
+            "bbox": analysis.bbox,
+            "parse_warnings": list(getattr(processor, "parse_warnings", None) or []),
+            "geometry_stage_timings": dict(analysis.stage_timings or {}),
+        }
+    return {
+        "vector_parse_clip_cache_blob": _serialize_vector_parse_clip_cache(key, entry),
+        "vector_parse_clip_cache_provenance": _vector_parse_clip_cache_provenance(key),
+    }
+
+
+def _configure_svg_hole_compensation(processor: Any, ctx: dict) -> None:
+    processor.svg_hole_compensation_enabled = bool(
+        ctx.get("svg_hole_compensation_enabled", False)
+    )
+    processor.svg_hole_max_area_mm2 = float(ctx.get("svg_hole_max_area_mm2", 0.5))
+    processor.svg_hole_max_width_mm = float(ctx.get("svg_hole_max_width_mm", 0.1))
 
 
 def _record_material_parallelism(
@@ -1343,7 +1394,7 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
     quantize_colors = ctx.get("quantize_colors", 64)
     backing_color_id = ctx.get("backing_color_id", 0)
     lut_metadata = ctx.get("lut_metadata")
-    preview_timing: dict[str, float] = {}
+    preview_timing: dict[str, float | str | bool] = {}
     vector_preview_total_t0 = time.perf_counter()
     # Native dynamic-material matching needs the structured replacement records
     # so VectorProcessor can resolve all source fills behind one matched palette
@@ -1365,10 +1416,9 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
             color_replacements=vector_replacements,
         )
         preview_timing.update(
-            {
-                str(key): float(value)
-                for key, value in getattr(analysis, "stage_timings", {}).items()
-            }
+            _structured_timing_payload(
+                getattr(analysis, "stage_timings", {})
+            )
         )
         _record_material_parallelism(preview_timing, vec_processor)
         preview_timing["analyze_svg_s"] = time.perf_counter() - t0
@@ -1462,6 +1512,9 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
             "quantize_colors": quantize_colors,
             "enable_cleanup": bool(ctx.get("enable_cleanup", True)),
             "svg_pixels_per_mm": ctx.get("svg_pixels_per_mm"),
+            "svg_hole_compensation_enabled": bool(ctx.get("svg_hole_compensation_enabled", False)),
+            "svg_hole_max_area_mm2": ctx.get("svg_hole_max_area_mm2", 0.5),
+            "svg_hole_max_width_mm": ctx.get("svg_hole_max_width_mm", 0.1),
             "hue_weight": ctx.get("hue_weight", 0.0),
             "chroma_gate": ctx.get("chroma_gate", 15.0),
             "use_lut_constrained": bool(
@@ -1490,39 +1543,11 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
                     material_solver_info
                 )
         try:
-            from core.vector_engine import (
-                _VECTOR_PARSE_CLIP_CACHE,
-                _serialize_vector_parse_clip_cache,
-                _vector_parse_clip_cache_key,
-                _vector_parse_clip_cache_provenance,
+            source_cache = _build_vector_parse_cache_artifacts(
+                image_path, target_width_mm, vec_processor, analysis,
             )
-
-            cache_key = _vector_parse_clip_cache_key(
-                image_path,
-                target_width_mm=target_width_mm,
-                sampling_precision=vec_processor.sampling_precision,
-                expand_stroke_to_fill=bool(
-                    getattr(vec_processor, "expand_stroke_to_fill", False)
-                ),
-                gradient_color_bands=getattr(vec_processor, "gradient_color_bands", None),
-            )
-            cache_entry = _VECTOR_PARSE_CLIP_CACHE.get(cache_key)
-            if cache_entry is None:
-                cache_entry = {
-                    "shape_data": analysis.shape_data,
-                    "clipped_shapes": analysis.clipped_shapes,
-                    "silhouette": analysis.silhouette,
-                    "image_vectorizer_bounds": analysis.image_vectorizer_bounds,
-                    "scale_factor": analysis.scale_factor,
-                    "bbox": analysis.bbox,
-                }
-            cache["vector_parse_clip_cache_blob"] = _serialize_vector_parse_clip_cache(
-                cache_key,
-                cache_entry,
-            )
-            cache["vector_parse_clip_cache_provenance"] = (
-                _vector_parse_clip_cache_provenance(cache_key)
-            )
+            if source_cache is not None:
+                cache.update(source_cache)
         except COORDINATOR_HANDLED_ERRORS as exc:
             log.debug(
                 "Vector parse/clip cache artifact build skipped",

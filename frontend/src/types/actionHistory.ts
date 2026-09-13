@@ -119,6 +119,9 @@ export interface AdvancedParamsGeneration {
   high_precision_3d_preview: boolean;
   enable_cleanup: boolean;
   svg_pixels_per_mm: number;
+  svg_hole_compensation_enabled: boolean;
+  svg_hole_max_area_mm2: number;
+  svg_hole_max_width_mm: number;
   hue_enable: boolean;
   chroma_gate: number;
   use_lut_constrained: boolean;

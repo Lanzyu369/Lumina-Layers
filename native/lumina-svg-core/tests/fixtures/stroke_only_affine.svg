@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 60">
+  <path d="M10 40L40 40" fill="none" stroke="#8e24aa"
+        stroke-width="10" stroke-linecap="butt"
+        transform="matrix(2 0 0 1 0 0)"/>
+</svg>

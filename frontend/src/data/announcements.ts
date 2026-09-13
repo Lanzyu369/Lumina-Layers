@@ -21,16 +21,27 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
       zh: "Lumina Layers — 9 月更新速览",
       en: "Lumina Layers — September updates",
     },
-    sections: [{
-      category: { zh: "稳定性", en: "Stability" },
-      items: [{
-        zh: "批量生成多个 SVG 或图片时，透明镀层现在会按所选厚度添加到每个模型中。",
-        en: "When generating multiple SVGs or images together, transparent coating is now added to each model at the selected thickness.",
-      }, {
-        zh: "修复透明镀层与描边同时开启时出现白色碎点的问题，镀层完整覆盖描边范围。",
-        en: "Fixed white specks when coating and outline are enabled together; coating covers the full outline footprint.",
-      }],
-    }],
+    sections: [
+      {
+        category: { zh: "矢量化", en: "Vectorisation" },
+        items: [
+          {
+            zh: "新增 SVG 小洞补偿，默认关闭。可按成品尺寸填补画面中的小孔和封闭细缝并沿用邻近颜色，预览和生成保持一致；原文件不变，补偿设置可随项目保存。",
+            en: "Added SVG hole compensation, off by default. Fill small holes and enclosed thin gaps at the finished size using nearby colours, with matching preview and generation. Your original file stays unchanged, and the settings are saved with the project.",
+          },
+        ],
+      },
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [{
+          zh: "批量生成多个 SVG 或图片时，透明镀层现在会按所选厚度添加到每个模型中。",
+          en: "When generating multiple SVGs or images together, transparent coating is now added to each model at the selected thickness.",
+        }, {
+          zh: "修复透明镀层与描边同时开启时出现白色碎点的问题，镀层完整覆盖描边范围。",
+          en: "Fixed white specks when coating and outline are enabled together; coating covers the full outline footprint.",
+        }],
+      },
+    ],
   },
   {
     version: "2026-09-03",
@@ -54,6 +65,24 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
           {
             zh: "修复“擦料塔自动摆放”开启后仍沿用模板位置和尺寸的问题；现在普通尺寸作品也会按当前打印机自动调整模型与擦料塔布局。",
             en: "Fixed Automatic wipe-tower placement sometimes keeping the template position and size. Regular-sized projects now get a layout planned for the selected printer too.",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    version: "2026-08-31",
+    title: {
+      zh: "Lumina Layers — 8 月更新速览",
+      en: "Lumina Layers — August updates",
+    },
+    sections: [
+      {
+        category: { zh: "矢量化", en: "Vectorisation" },
+        items: [
+          {
+            zh: "8 月 31 日：常见的纯色 SVG 现在能更快完成颜色区域分析；遇到复杂描边、透明或特效时会自动沿用兼容处理，成品结构和材料顺序保持不变。",
+            en: "August 31: Common flat-colour SVG files now complete colour-region analysis faster. Artwork with complex strokes, transparency, or effects automatically uses the compatibility path, preserving the finished structure and material order.",
           },
         ],
       },

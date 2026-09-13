@@ -40,7 +40,9 @@ WORKSHOP_SEED_LOCK = (
     ROOT / "assets" / "workshop-seed" / "seed-lock.json"
 )
 PYINSTALLER_DIST = ROOT / "dist"
-CORE_GEOMETRY_REQUIRED_MODULES = ("manifold3d",)
+CORE_GEOMETRY_REQUIRED_MODULES = (
+    "manifold3d", "lumina_svg_core", "lumina_svg_core._lumina_svg_compensation",
+)
 GLB_V2_OPTIONAL_MODULES = ("rasterio.features",)
 WORKSHOP_DESKTOP_SECURITY_FILES = (
     ELECTRON_DIR / "bed-model-bridge.cjs",
