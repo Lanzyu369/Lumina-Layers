@@ -105,7 +105,7 @@ def test_estimated_depth_reserves_native_discrete_paths_and_block_walls() -> Non
     assert depth == pytest.approx(126.5)
 
 
-def test_keeps_original_tower_and_centered_model_when_layout_is_safe() -> None:
+def test_auto_layout_replans_tower_even_when_template_layout_is_safe() -> None:
     request = _request(
         bed_size=(256.0, 256.0),
         model_size=(100.0, 100.0),
@@ -116,11 +116,26 @@ def test_keeps_original_tower_and_centered_model_when_layout_is_safe() -> None:
 
     result = solve_wipe_tower_placement(request)
 
-    assert result.adapted is False
-    assert result.tower_x == pytest.approx(request.tower_x)
-    assert result.tower_y == pytest.approx(request.tower_y)
-    assert result.tower_width == pytest.approx(request.tower_width)
-    assert result.tower_rotation == pytest.approx(request.tower_rotation)
+    assert result.adapted is True
+    assert result.reason in {
+        "adapted_top",
+        "adapted_bottom",
+        "adapted_right",
+        "adapted_left",
+    }
+    assert (
+        result.tower_x,
+        result.tower_y,
+        result.tower_width,
+        result.tower_rotation,
+    ) != pytest.approx(
+        (
+            request.tower_x,
+            request.tower_y,
+            request.tower_width,
+            request.tower_rotation,
+        )
+    )
     assert result.model_translation == pytest.approx((78.0, 78.0))
     _assert_safe(result)
 
@@ -280,6 +295,28 @@ def test_bed_exclusion_forces_relayout() -> None:
 
     assert result.adapted is True
     assert result.tower_outer_bounds.bottom < 140.0
+    _assert_safe(result)
+
+
+def test_zero_area_bed_exclusions_do_not_block_automatic_layout() -> None:
+    request = _request(
+        bed_size=(426.0, 420.0),
+        model_size=(60.0, 60.0),
+        tower_x=20.0,
+        tower_y=250.0,
+        tower_width=200.0,
+        minimum_tower_footprint_width=50.0,
+        minimum_tower_depth=57.5,
+        exclusions=(
+            ((0.0, 420.0), (426.0, 420.0), (426.0, 420.0), (0.0, 420.0)),
+            ((0.0, 0.0), (0.0, 0.0), (426.0, 0.0), (426.0, 0.0)),
+        ),
+    )
+
+    result = solve_wipe_tower_placement(request)
+
+    assert result.adapted is True
+    assert result.requires_manual_adjustment is False
     _assert_safe(result)
 
 

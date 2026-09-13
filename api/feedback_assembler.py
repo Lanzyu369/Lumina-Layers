@@ -585,25 +585,30 @@ def _collect_final_artifact_from_download_url(
 
 
 def _find_lut_file(lut_name: str) -> Path | None:
-    """Locate a preset/custom LUT by stem under ``lut-preset/``.
+    """Locate LUTs in preset or configured shared writable roots.
 
     先精确匹配，再大小写不敏感；按 .npy/.json/.npz/.msgpack 的优先顺序取。
     """
     if not _is_lut_name_path_safe(lut_name):
         return None
     lut_preset_dir = _safe_lut_preset_root()
+    display_match = LUTManager.get_lut_path(lut_name)
+    if display_match:
+        for root in (
+            lut_preset_dir,
+            LUTManager.custom_lut_dir().resolve(),
+            LUTManager.cloud_lut_dir().resolve(),
+        ):
+            found = _lut_file_within_root(Path(display_match), root)
+            if found is not None:
+                return found
+
     if not lut_preset_dir.is_dir():
         return None
 
-    display_match = LUTManager.get_lut_path(lut_name)
-    if display_match:
-        found = _lut_file_within_preset(Path(display_match), lut_preset_dir)
-        if found is not None:
-            return found
-
     for ext in _LUT_EXTENSIONS:
         exact = lut_preset_dir / f"{lut_name}{ext}"
-        found = _lut_file_within_preset(exact, lut_preset_dir)
+        found = _lut_file_within_root(exact, lut_preset_dir)
         if found is not None:
             return found
     # Case-insensitive fallback: search children.
@@ -612,7 +617,7 @@ def _find_lut_file(lut_name: str) -> Path | None:
         for path in lut_preset_dir.rglob("*"):
             if path.stem.lower() != lowered:
                 continue
-            found = _lut_file_within_preset(path, lut_preset_dir)
+            found = _lut_file_within_root(path, lut_preset_dir)
             if found is not None:
                 return found
     except OSError:
@@ -637,14 +642,14 @@ def _safe_lut_preset_root() -> Path:
     return (REPO_ROOT / "lut-preset").resolve()
 
 
-def _lut_file_within_preset(path: Path, preset_root: Path) -> Path | None:
+def _lut_file_within_root(path: Path, root: Path) -> Path | None:
     try:
         resolved = path.resolve()
         if not resolved.is_file():
             return None
         if resolved.suffix.lower() not in _LUT_EXTENSIONS:
             return None
-        resolved.relative_to(preset_root)
+        resolved.relative_to(root)
     except (OSError, ValueError):
         return None
     return resolved
@@ -1236,9 +1241,15 @@ def _collect_single_lut(
             "metadata": {},
         }
     try:
-        rel = found.relative_to(REPO_ROOT).as_posix()
+        logical_path = found.relative_to(_safe_lut_preset_root()).as_posix()
     except ValueError:
-        rel = str(found)
+        logical_path = LUTManager.logical_lut_path(found)
+    if logical_path is None:
+        return _failed_lut(
+            lut_name, "preset", "InvalidAttachmentManifest",
+            "LUT reference is outside configured roots.",
+        )
+    rel = f"lut-preset/{logical_path}"
     return {
         "status": "preset_reference_only",
         "kind": "preset",
@@ -1365,12 +1376,17 @@ def _preset_lut_manifest_is_valid(attachment: dict[str, Any]) -> bool:
         return _mark_invalid_attachment_manifest(attachment)
     if not _safe_preset_relative_path(attachment.get("preset_relative_path")):
         return _mark_invalid_attachment_manifest(attachment)
-    preset_path = (REPO_ROOT / str(attachment["preset_relative_path"])).resolve()
+    relative_parts = PurePath(str(attachment["preset_relative_path"])).parts[1:]
     try:
-        preset_path.relative_to((REPO_ROOT / "lut-preset").resolve())
-    except ValueError:
+        if relative_parts and relative_parts[0] == "Cloud":
+            root = LUTManager.cloud_lut_dir().resolve()
+            relative_parts = relative_parts[1:]
+        else:
+            root = _safe_lut_preset_root()
+        preset_path = _lut_file_within_root(root.joinpath(*relative_parts), root)
+    except (OSError, ValueError):
         return _mark_invalid_attachment_manifest(attachment)
-    if not preset_path.is_file():
+    if preset_path is None:
         return _mark_invalid_attachment_manifest(attachment)
     return _attachment_metadata_is_valid(
         attachment,

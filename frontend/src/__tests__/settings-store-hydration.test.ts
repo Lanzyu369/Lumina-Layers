@@ -364,6 +364,83 @@ describe("settings store hydration and base-layer modifier wiring", () => {
     );
   });
 
+  it("syncToBackend includes cross-version user-interface preferences", async () => {
+    const { settingsStoreModule, systemApi } = await loadStores();
+
+    settingsStoreModule.useSettingsStore.setState({
+      language: "en",
+      theme: "dark",
+      enableBlur: false,
+      enableCompletionNotifications: true,
+      solverCacheGridResolution: 512,
+      svgPixelsPerMm: 22.5,
+      materialDeltaE00Tolerance: 1.2,
+    });
+
+    await settingsStoreModule.useSettingsStore.getState().syncToBackend();
+
+    expect(systemApi.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        language: "en",
+        theme: "dark",
+        enable_blur: false,
+        enable_completion_notifications: true,
+        solver_cache_grid_resolution: 512,
+        svg_pixels_per_mm: 22.5,
+        material_delta_e00_tolerance: 1.2,
+      }),
+    );
+  });
+
+  it("hydrates all shared backend settings for a fresh launcher origin", async () => {
+    const { settingsStoreModule } = await loadStores();
+
+    settingsStoreModule.useSettingsStore
+      .getState()
+      .hydrateDeviceSettingsFromBackend({
+        language: "en",
+        theme: "dark",
+        last_lut: "Custom - shared",
+        last_bed_label: "180×180 mm",
+        enable_blur: false,
+        enable_completion_notifications: true,
+        preserve_upload_filename_for_3mf: true,
+        enable_solver_cache_grid_selection: true,
+        solver_cache_grid_resolution: 1024,
+        svg_pixels_per_mm: 18.4,
+        material_delta_e00_tolerance: 1.1,
+        auto_replace_gradient_banding: true,
+      });
+
+    expect(settingsStoreModule.useSettingsStore.getState()).toMatchObject({
+      language: "en",
+      theme: "dark",
+      lastLutName: "Custom - shared",
+      lastBedLabel: "180×180 mm",
+      enableBlur: false,
+      enableCompletionNotifications: true,
+      preserveUploadFilenameFor3mf: true,
+      enableSolverCacheGridSelection: true,
+      solverCacheGridResolution: 1024,
+      svgPixelsPerMm: 18.4,
+      materialDeltaE00Tolerance: 1.1,
+      autoReplaceGradientBanding: true,
+    });
+  });
+
+  it("keeps an origin-local preference when hydrating shared settings", async () => {
+    const { settingsStoreModule } = await loadStores();
+
+    const patch = settingsStoreModule.deriveBackendDeviceSettingsPatch(
+      settingsStoreModule.DEFAULT_SETTINGS,
+      { theme: "dark", language: "en" },
+      { theme: "light" },
+    );
+
+    expect(patch.theme).toBeUndefined();
+    expect(patch.language).toBe("en");
+  });
+
   it("hydrates backend device_profile_id when there is no persisted choice", async () => {
     const { settingsStoreModule } = await loadStores();
 

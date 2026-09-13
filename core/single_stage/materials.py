@@ -1929,7 +1929,7 @@ def _verify_material_bundle_package(
         _resolve_stage_a_params_path(
             material_archive_file_path.parent,
             archive_payload,
-        ).relative_to(material_archive_file_path.parent)
+        ).relative_to(material_archive_file_path.parent.resolve())
     )
     stage_a_role_path = required_role_paths["stage_a_parameters"]
     if stage_a_role_path.as_posix() != expected_stage_a_path.as_posix():
@@ -3002,6 +3002,9 @@ def _copy_material_bundle_package_files(
     destination_dir: Path,
     package: dict[str, Any],
 ) -> None:
+    # Compare aliases in one canonical namespace without relaxing containment.
+    manifest_root = manifest_root.resolve()
+    staged_material_dir = staged_material_dir.resolve()
     destination_dir.mkdir(parents=True, exist_ok=False)
     raw_files = package.get("files")
     if not isinstance(raw_files, list):
@@ -3012,6 +3015,8 @@ def _copy_material_bundle_package_files(
         source_path = manifest_root / _safe_manifest_relative_path(raw_record.get("path"))
         try:
             material_relative_path = source_path.relative_to(staged_material_dir)
+            # Preserve the manifest path check and reject symlink escapes too.
+            source_path.resolve().relative_to(staged_material_dir)
         except ValueError as exc:
             raise ValueError(
                 f"Material bundle file is outside material directory: {raw_record.get('path')}"

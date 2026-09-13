@@ -2168,12 +2168,21 @@ export interface PrinterListResponse {
 // ========== Settings Models ==========
 
 export interface UserSettings {
+  language: "zh" | "en";
+  theme: "light" | "dark";
   last_lut: string;
   last_modeling_mode: string;
   last_color_mode: string;
   last_slicer: string;
+  last_bed_label: string;
   palette_mode: string;
   enable_crop_modal: boolean;
+  enable_blur: boolean;
+  enable_fancy_loading: boolean;
+  enable_witty_loading: boolean;
+  enable_completion_notifications: boolean;
+  enable_smooth_vector_preview: boolean;
+  preserve_upload_filename_for_3mf: boolean;
   printer_model: string;
   slicer_software: string;
   device_profile_id: string;
@@ -2184,6 +2193,11 @@ export interface UserSettings {
   nozzle_size: string;
   enable_base_layer_height_modifier: boolean;
   enable_wipe_tower_auto_placement: boolean;
+  enable_solver_cache_grid_selection: boolean;
+  solver_cache_grid_resolution: 64 | 128 | 256 | 512 | 1024 | 2048;
+  svg_pixels_per_mm: number;
+  material_delta_e00_tolerance: number;
+  auto_replace_gradient_banding: boolean;
 }
 
 export interface UserSettingsResponse {

@@ -12,7 +12,7 @@ import { useColorcheckerArtifactLease } from "./hooks/useColorcheckerArtifactLea
 import { useActionHistoryBootstrap } from "./hooks/useActionHistoryBootstrap";
 import { useReproMode } from "./hooks/useReproMode";
 import { useWorkspaceMode } from "./hooks/useWorkspaceMode";
-import { getSettings } from "./api/system";
+import { useSharedSettingsPersistence } from "./hooks/useSharedSettingsPersistence";
 import Scene3D from "./components/Scene3D";
 import ExtractorCanvas from "./components/ExtractorCanvas";
 import LoadingSpinner from "./components/LoadingSpinner";
@@ -45,7 +45,6 @@ import WorkshopPanel from "./workshop/WorkshopPanel";
 import { useSingleStageStore } from "./stores/singleStageStore";
 import { useExtractorStore } from "./stores/extractorStore";
 import { collectConverterKeepFileIds, useConverterStore } from "./stores/converter";
-import { useSettingsStore } from "./stores/settingsStore";
 import { useShallow } from "zustand/react/shallow";
 import { useElectronLanguageSync } from "./integrations/electron";
 import { HEADER_STATUS_PILL_SHAPE_CLASS } from "./components/ui/headerControls";
@@ -225,10 +224,6 @@ function AppContent() {
     useShallow((s) => collectConverterKeepFileIds(s)),
   );
   const singleStageSessionId = useSingleStageStore((s) => s.sessionId);
-  const hydrateDeviceSettingsFromBackend = useSettingsStore(
-    (s) => s.hydrateDeviceSettingsFromBackend,
-  );
-
   useSessionLease(converterSessionId, "converter", converterKeepFileIds);
   useSessionLease(singleStageSessionId, "single_stage");
   useActionHistoryBootstrap();
@@ -236,6 +231,7 @@ function AppContent() {
   useVectorPreviewRenderer();
   usePuzzleLayoutPreview();
   useElectronLanguageSync();
+  useSharedSettingsPersistence();
   const workspace = useWorkspaceMode();
   const reproMode = useReproMode();
 
@@ -342,24 +338,6 @@ function AppContent() {
       window.clearInterval(intervalId);
     };
   }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    getSettings({ suppressClientLog: true })
-      .then((response) => {
-        if (!cancelled && response?.settings) {
-          hydrateDeviceSettingsFromBackend(response.settings);
-        }
-      })
-      .catch(() => {
-        /* best effort */
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [hydrateDeviceSettingsFromBackend]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setAnnouncementReady(true), 600);

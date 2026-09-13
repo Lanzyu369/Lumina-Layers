@@ -352,6 +352,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         extra={"event": "worker_pool_started", "max_workers": worker_pool.max_workers},
     )
 
+    if os.environ.get("LUMINA_RUNTIME_PROBE", "").strip() == "1":
+        try:
+            yield
+        finally:
+            worker_pool.shutdown(wait=True)
+            log.info(
+                "Worker pool shutdown complete",
+                extra={"event": "worker_pool_shutdown"},
+            )
+        return
+
     # Feedback startup cleanup: best-effort; never blocks app boot.
     # 反馈启动清理：尽力而为，绝不阻塞应用启动。
     try:

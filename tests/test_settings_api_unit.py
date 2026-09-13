@@ -276,6 +276,30 @@ class TestPostSettings:
         assert written["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.2"
         assert written["enable_wipe_tower_auto_placement"] is False
 
+    def test_post_settings_preserves_fields_owned_by_newer_runtime_versions(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """旧运行版本保存设置时不删除未来版本新增字段。"""
+        settings_path = tmp_path / "settings" / "common.json"
+        settings_path.parent.mkdir()
+        settings_path.write_text(
+            json.dumps({"future_runtime_setting": {"schema": 2}}),
+            encoding="utf-8",
+        )
+        payload = {
+            "theme": "dark",
+            "last_lut": "Shared",
+        }
+
+        with patch("api.routers.system.SETTINGS_FILE", settings_path):
+            response = client.post("/api/system/settings", json=payload)
+
+        assert response.status_code == 200
+        stored = json.loads(settings_path.read_text(encoding="utf-8"))
+        assert stored["theme"] == "dark"
+        assert stored["future_runtime_setting"] == {"schema": 2}
+
     def test_post_settings_rejects_untrusted_origin_by_default(self) -> None:
         """正式本地版默认拒绝外部网页保存设置。"""
         payload = {

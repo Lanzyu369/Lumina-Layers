@@ -1,6 +1,7 @@
 """Lumina Studio API system schemas."""
 
 from dataclasses import dataclass
+from typing import Literal
 
 from pydantic import BaseModel, Field, StrictBool
 
@@ -81,12 +82,21 @@ class ClearCacheResult:
 class UserSettings(BaseModel):
     """User settings persisted in user_settings.json."""
 
+    language: Literal["zh", "en"] = "zh"
+    theme: Literal["light", "dark"] = "light"
     last_lut: str = ""
     last_modeling_mode: str = "high-fidelity"
     last_color_mode: str = "4-Color (RYBW)"
     last_slicer: str = ""
+    last_bed_label: str = "256×256 mm"
     palette_mode: str = "swatch"
     enable_crop_modal: StrictBool = True
+    enable_blur: StrictBool = True
+    enable_fancy_loading: StrictBool = True
+    enable_witty_loading: StrictBool = True
+    enable_completion_notifications: StrictBool = False
+    enable_smooth_vector_preview: StrictBool = True
+    preserve_upload_filename_for_3mf: StrictBool = False
     printer_model: str = "bambu-h2d"
     slicer_software: str = "BambuStudio"
     device_profile_id: str = "BambuStudio:bbl:bambu-lab-h2d:0.4"
@@ -97,6 +107,11 @@ class UserSettings(BaseModel):
     nozzle_size: str = "0.4"
     enable_base_layer_height_modifier: StrictBool = True
     enable_wipe_tower_auto_placement: StrictBool = True
+    enable_solver_cache_grid_selection: StrictBool = False
+    solver_cache_grid_resolution: Literal[64, 128, 256, 512, 1024, 2048] = 64
+    svg_pixels_per_mm: float = Field(default=10.0, ge=2.0, le=50.0)
+    material_delta_e00_tolerance: float = Field(default=0.5, ge=0.0, le=5.0)
+    auto_replace_gradient_banding: StrictBool = False
 
 
 class UserSettingsResponse(BaseModel):

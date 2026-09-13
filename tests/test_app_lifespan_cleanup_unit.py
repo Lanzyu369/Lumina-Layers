@@ -167,3 +167,28 @@ def test_lifespan_starts_material_sync_auto_refresh_tasks() -> None:
 
     assert response.status_code == 200
     assert calls == 1
+
+
+def test_runtime_probe_lifespan_skips_all_shared_data_side_effects(
+    monkeypatch,
+) -> None:
+    """Install probes should start the API without mutating user libraries."""
+
+    monkeypatch.setenv("LUMINA_RUNTIME_PROBE", "1")
+    app = create_app()
+
+    with patch("api.feedback_assembler.run_startup_cleanup") as cleanup, patch(
+        "api.material_seed.install_material_seed_if_needed"
+    ) as material_seed, patch(
+        "api.app.install_workshop_seed_if_needed"
+    ) as workshop_seed, patch(
+        "api.app.start_material_sync_auto_refresh_tasks"
+    ) as material_sync:
+        with TestClient(app) as client:
+            response = client.get("/api/health")
+
+    assert response.status_code == 200
+    cleanup.assert_not_called()
+    material_seed.assert_not_called()
+    workshop_seed.assert_not_called()
+    material_sync.assert_not_called()
