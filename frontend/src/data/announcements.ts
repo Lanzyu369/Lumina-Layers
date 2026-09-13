@@ -16,6 +16,20 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-09-13",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [{
+      category: { zh: "稳定性", en: "Stability" },
+      items: [{
+        zh: "修复透明镀层与描边同时开启时出现白色碎点的问题，镀层完整覆盖描边范围。",
+        en: "Fixed white specks when coating and outline are enabled together; coating covers the full outline footprint.",
+      }],
+    }],
+  },
+  {
     version: "2026-09-03",
     title: {
       zh: "Lumina Layers — 9 月更新速览",

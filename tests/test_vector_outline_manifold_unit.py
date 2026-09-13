@@ -68,16 +68,16 @@ def _outline_context() -> dict[str, object]:
 
 
 def _patch_ring(monkeypatch: pytest.MonkeyPatch, ring) -> None:
+    from core.vector_structure import VectorStructurePlan
+    from shapely import set_precision
+
     source = box(-20.0, -20.0, -10.0, -10.0)
     monkeypatch.setattr(
         vector_branch,
-        "_vector_outline_union_geometry",
-        lambda _matched_shapes: source,
-    )
-    monkeypatch.setattr(
-        vector_branch,
-        "_clip_vector_outline_buffer_to_expected_bounds",
-        lambda _expanded, _union, _width_units: ring,
+        "resolve_structure_plan",
+        lambda _analysis, _width: VectorStructurePlan(
+            source, source.union(ring), set_precision(ring, 0.0001), 1.0,
+        ),
     )
 
 

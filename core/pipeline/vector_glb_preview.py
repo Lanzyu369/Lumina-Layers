@@ -41,6 +41,7 @@ from core.pipeline.s11_glb_preview import (
     _build_color_extruded_mesh_v2,
     _build_preview_canvas_bounds_mesh,
 )
+from core.vector_structure import resolve_structure_plan, _prepare_footprint
 
 
 log = get_logger(__name__)
@@ -1383,77 +1384,12 @@ def _screen_geometry_to_preview_world_y(
         return None
 
 
-def _analysis_silhouette(analysis: object, scale_factor: float) -> BaseGeometry | None:
-    silhouette = _analysis_silhouette_raw(analysis)
-    if silhouette is None:
-        return None
-    return _scaled_geometry_mm(silhouette, scale_factor)
-
-
-def _analysis_silhouette_raw(analysis: object) -> BaseGeometry | None:
-    silhouette = _valid_geometry(getattr(analysis, "silhouette", None))
-    if silhouette is not None:
-        return silhouette
-
-    geometries: list[BaseGeometry] = []
-    for shape in getattr(analysis, "matched_shapes", []) or []:
-        geom = _valid_geometry(shape.get("geometry") if isinstance(shape, dict) else None)
-        if geom is not None:
-            geometries.append(geom)
-    if not geometries:
-        return None
-    try:
-        return _valid_geometry(unary_union(geometries))
-    except (ValueError, TypeError, AttributeError):
-        return None
-
-
-def _filter_backing_holes(geometry: BaseGeometry, min_hole_area: float) -> BaseGeometry:
-    if isinstance(geometry, Polygon):
-        holes = [
-            hole
-            for hole in geometry.interiors
-            if Polygon(hole).area >= min_hole_area
-        ]
-        return Polygon(geometry.exterior, holes)
-    if isinstance(geometry, MultiPolygon):
-        return MultiPolygon(
-            [
-                _filter_backing_holes(polygon, min_hole_area)
-                for polygon in geometry.geoms
-                if not polygon.is_empty
-            ]
-        )
-    return geometry
-
-
 def _prepare_backing_footprint(
     geometry: BaseGeometry,
     scale_factor: float,
 ) -> BaseGeometry | None:
     prepared = _valid_geometry(geometry)
-    if prepared is None:
-        return None
-    try:
-        closed = prepared.buffer(0.4, join_style="mitre", mitre_limit=2.0)
-        if not closed.is_empty:
-            closed = closed.buffer(-0.4, join_style="mitre", mitre_limit=2.0)
-            if not closed.is_empty:
-                prepared = _valid_geometry(closed) or prepared
-    except (ValueError, TypeError, AttributeError):
-        pass
-    try:
-        filtered = _filter_backing_holes(prepared, min_hole_area=0.3)
-        prepared = _valid_geometry(filtered) or prepared
-    except (ValueError, TypeError, AttributeError):
-        pass
-    try:
-        expanded = prepared.buffer(0.15, join_style="mitre", mitre_limit=2.0)
-        if not expanded.is_empty:
-            prepared = _valid_geometry(expanded) or prepared
-    except (ValueError, TypeError, AttributeError):
-        pass
-    return _scaled_geometry_mm(prepared, scale_factor)
+    return _prepare_footprint(prepared, scale_factor) if prepared is not None else None
 
 
 def _visible_backing_footprint(
@@ -2018,16 +1954,10 @@ def build_vector_preview_parts_from_analysis(
             )
         )
 
-    raw_silhouette = _analysis_silhouette_raw(analysis)
-    silhouette = (
-        _scaled_geometry_mm(raw_silhouette, scale_factor)
-        if raw_silhouette is not None
-        else None
+    structure = resolve_structure_plan(
+        analysis, float(outline_width_mm) if include_outline else 0.0,
     )
-    backing_footprint = _visible_backing_footprint(
-        raw_silhouette,
-        scale_factor,
-    )
+    backing_footprint = structure.body if not structure.body.is_empty else None
     if include_backing and backing_footprint is not None:
         backing_height = max(float(thickness_mm or 0.0), layer_h)
         is_double = "双面" in str(structure_mode or "") or "Double" in str(structure_mode or "")
@@ -2060,13 +1990,8 @@ def build_vector_preview_parts_from_analysis(
             )
         )
 
-    if include_outline and silhouette is not None:
-        try:
-            outline = _valid_geometry(
-                silhouette.buffer(float(outline_width_mm)).difference(silhouette)
-            )
-        except (ValueError, TypeError, AttributeError):
-            outline = None
+    if include_outline:
+        outline = structure.outline if not structure.outline.is_empty else None
         if outline is not None:
             max_z = max(
                 (extrusion.z_max for part in parts for extrusion in part.extrusions),

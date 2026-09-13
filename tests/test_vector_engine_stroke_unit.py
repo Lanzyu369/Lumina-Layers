@@ -64,7 +64,7 @@ def test_stroke_only_legacy_mode_preserves_stroke_geometry(
     processor.expand_stroke_to_fill = True
     vector_logger = logging.getLogger("lumina.core.vector_engine")
     vector_logger.addHandler(caplog.handler)
-    caplog.set_level(logging.INFO, logger="lumina.core.vector_engine")
+    caplog.set_level(logging.DEBUG, logger="lumina.core.vector_engine")
 
     try:
         analysis = processor.analyze_svg(_fixture_svg("stroke_only.svg"), target_width_mm=TARGET_WIDTH_MM)
@@ -142,7 +142,7 @@ def test_ring_with_hole_default_keeps_single_shape_and_hole(processor: VectorPro
 def test_real_svg_default_logs_zero_legacy_stroke_geometry(processor: VectorProcessor, caplog: pytest.LogCaptureFixture) -> None:
     vector_logger = logging.getLogger("lumina.core.vector_engine")
     vector_logger.addHandler(caplog.handler)
-    caplog.set_level(logging.INFO, logger="lumina.core.vector_engine")
+    caplog.set_level(logging.DEBUG, logger="lumina.core.vector_engine")
 
     try:
         processor.analyze_svg(str(REPO_ROOT / "test_images" / "1.svg"), target_width_mm=TARGET_WIDTH_MM)

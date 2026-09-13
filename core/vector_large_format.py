@@ -6,11 +6,12 @@ import math
 import xml.etree.ElementTree as ET
 
 from shapely import affinity
-from shapely.geometry import box
+from shapely.geometry import GeometryCollection, box
 from shapely.validation import make_valid
 
 from core.naming import _sanitize, _strip_temp_prefix
 from core.vector_engine import VectorAnalysis, VectorProcessor
+from core.vector_structure import VectorStructurePlan
 
 SVG_LARGE_FORMAT_PREVIEW_FALLBACK_WARNING = (
     "Native vector large-format is unavailable for this SVG; large-format generation will fall back to raster tiling."
@@ -337,7 +338,29 @@ class VectorAnalysisTiler:
         clipped_shapes = slicer.slice_records(self.analysis.clipped_shapes, geometry_key="geometry")
         shape_data = slicer.slice_records(self.analysis.shape_data, geometry_key="poly")
         silhouette = slicer.slice_geometry(self.analysis.silhouette)
-        if not matched_shapes and not clipped_shapes and not shape_data and (silhouette is None or silhouette.is_empty):
+        structure_plan = None
+        global_plan = getattr(self.analysis, "structure_plan", None)
+        if isinstance(global_plan, VectorStructurePlan) and not global_plan.envelope.is_empty:
+            x0, y0, x1, y1 = global_plan.envelope.bounds
+            structural_slicer = TileGeometrySlicer(
+                box(
+                    min(x0, 0.0) if spec.x0_mm == 0 else spec.x0_mm,
+                    min(y0, 0.0) if spec.y0_mm == 0 else spec.y0_mm,
+                    max(x1, spec.x1_mm) if spec.x1_mm == self.total_width_mm else spec.x1_mm,
+                    max(y1, spec.y1_mm) if spec.y1_mm == self.total_height_mm else spec.y1_mm,
+                ), xoff=-spec.x0_mm, yoff=-spec.y0_mm,
+            )
+            structure_plan = VectorStructurePlan(
+                *(structural_slicer.slice_geometry(geometry) or GeometryCollection()
+                  for geometry in (global_plan.body, global_plan.envelope, global_plan.outline)),
+                outline_width_mm=global_plan.outline_width_mm,
+            )
+
+        if (
+            not matched_shapes and not clipped_shapes and not shape_data
+            and (silhouette is None or silhouette.is_empty)
+            and (structure_plan is None or structure_plan.envelope.is_empty)
+        ):
             return None
 
         tile_analysis = VectorAnalysis(
@@ -364,6 +387,7 @@ class VectorAnalysisTiler:
                 if isinstance(self.analysis.material_solver_info, dict)
                 else None
             ),
+            structure_plan=structure_plan,
         )
         return SlicedVectorTile(spec=spec, analysis=tile_analysis)
 
