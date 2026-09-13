@@ -1369,6 +1369,55 @@ class TestGenerateParameterCompleteness:
             preview_cache["height_identity_rgb"],
         )
 
+    @pytest.mark.parametrize("preview_changes, enabled", [
+        ({"svg_hole_compensation_enabled": False}, True),
+        ({"svg_hole_max_area_mm2": 0.1}, True),
+        ({"svg_hole_max_width_mm": 0.05}, True),
+        ({"target_width_mm": 100.0}, True),
+        ({"svg_hole_compensation_enabled": True}, False),
+        ({}, True),
+    ])
+    def test_material_archive_compensation_requires_matching_preview(
+        self, tmp_path, preview_changes, enabled,
+    ) -> None:
+        source = tmp_path / "source.svg"
+        source.write_text('<svg xmlns="http://www.w3.org/2000/svg"/>', encoding="utf-8")
+        sid = _create_session_with_preview_and_files(_test_store)
+        request = ConvertGenerateRequest(
+            lut_name="__material_archive__", modeling_mode="vector",
+            target_width_mm=220.0, use_cached_matched_rgb=False,
+            svg_hole_compensation_enabled=enabled,
+            svg_hole_max_area_mm2=0.75, svg_hole_max_width_mm=0.12,
+        )
+        cache = {
+            **request.model_dump(), "material_source": "material_archive",
+            "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+            "mask_solid": np.ones((4, 4), dtype=bool),
+            "material_matrix": np.ones((4, 4, 5), dtype=np.int32),
+            **preview_changes,
+        }
+        _test_store.put(sid, "preview_cache", cache)
+        _test_store.put(sid, "image_path", str(source))
+        _test_store.put(sid, "material_source", "material_archive")
+        _mock_pool.submit = AsyncMock(return_value={
+            "threemf_path": "/tmp/out.3mf", "glb_path": None, "status_msg": "OK",
+        })
+        try:
+            with patch("os.path.exists", return_value=True):
+                response = client.post("/api/convert/generate", json={
+                    "session_id": sid, "params": request.model_dump(mode="json"),
+                })
+            if preview_changes:
+                assert response.status_code == 409, response.text
+                _mock_pool.submit.assert_not_called()
+            else:
+                assert response.status_code == 200, response.text
+                params = _mock_pool.submit.call_args.args[3]
+                assert params["svg_hole_compensation_enabled"] is True
+                assert params["material_matrix_path"] is not None
+        finally:
+            _test_store.close(sid)
+
     def test_generate_artifact_cache_forwards_field_paths_without_hydrating(
         self,
         tmp_path,
@@ -4109,9 +4158,71 @@ class TestStandardCachedAnalysisRouting:
         finally:
             _test_store.close(sid)
 
+    @pytest.mark.parametrize("large_format", [False, True])
+    @pytest.mark.parametrize("preview_changes", [
+        {"svg_hole_compensation_enabled": False},
+        {"svg_hole_max_area_mm2": 0.1},
+        {"target_width_mm": 60.0},
+        {},
+    ])
+    def test_recipe_region_masks_require_matching_compensated_geometry(
+        self, tmp_path, large_format, preview_changes,
+    ) -> None:
+        sid, payload = self._create_session(tmp_path, modeling_mode=ModelingMode.VECTOR)
+        settings = {
+            "svg_hole_compensation_enabled": True,
+            "svg_hole_max_area_mm2": 0.5, "svg_hole_max_width_mm": 0.1,
+        }
+        cache = _test_store.get(sid)["preview_cache"]
+        cache.update({**settings, **preview_changes})
+        mask = np.zeros((4, 4), dtype=bool)
+        mask[1:3, 1:3] = True
+        _test_store.put(sid, "selected_region_masks", {"region-A": mask})
+        payload["params"].update({
+            **settings, "use_cached_matched_rgb": False,
+            "recipe_overrides": [{
+                "region_id": "region-A", "recipe": [1] * 5,
+                "layer_order": "Top2Bottom",
+            }],
+        })
+        if large_format:
+            payload = {
+                "session_id": sid,
+                "params": {
+                    "target_height_mm": 40.0,
+                    "tile_width_mm": 20.0, "tile_height_mm": 20.0,
+                    "params": payload["params"],
+                },
+            }
+        route = "/api/convert/generate-large-format" if large_format else "/api/convert/generate"
+        try:
+            with patch(
+                "api.routers.converter.generate._generate_large_format_svg_native",
+                return_value=_large_format_success_response("native"),
+            ) as native_tiles:
+                response = client.post(route, json=payload)
+                if preview_changes:
+                    assert response.status_code == 409, response.text
+                    _mock_pool.submit.assert_not_called()
+                    native_tiles.assert_not_called()
+                else:
+                    assert response.status_code == 200, response.text
+                    params = native_tiles.call_args.kwargs if large_format else _mock_pool.submit.call_args.args[3]
+                    assert params["material_matrix_path"] is not None
+                    with open(params["recipe_override_masks_path"], "rb") as stream:
+                        saved = pickle.load(stream)
+                    np.testing.assert_array_equal(saved["region-A"], mask)
+        finally:
+            _test_store.close(sid)
+
+    @pytest.mark.parametrize("compensation_enabled, artwork_width", [
+        (False, 40.0), (True, 40.0), (True, 60.0),
+    ])
     def test_model_surface_uses_artwork_width_for_edit_grid_identity(
         self,
         tmp_path,
+        compensation_enabled,
+        artwork_width,
     ) -> None:
         """The outer model size must not invalidate unchanged surface artwork."""
 
@@ -4119,11 +4230,18 @@ class TestStandardCachedAnalysisRouting:
             tmp_path,
             modeling_mode=ModelingMode.VECTOR,
         )
+        settings = {
+            "svg_hole_compensation_enabled": compensation_enabled,
+            "svg_hole_max_area_mm2": 0.5,
+            "svg_hole_max_width_mm": 0.1,
+        }
+        payload["params"].update(settings)
+        _test_store.get(sid)["preview_cache"].update(settings)
         model_path = tmp_path / "surface-model.stl"
         model_path.write_bytes(b"solid surface\nendsolid surface\n")
         _test_store.put(sid, "surface_overlay_enabled", True)
         _test_store.put(sid, "surface_model_path", str(model_path))
-        _test_store.put(sid, "surface_target_width_mm", 40.0)
+        _test_store.put(sid, "surface_target_width_mm", artwork_width)
         _test_store.put(
             sid,
             "surface_footprint",
@@ -4144,6 +4262,10 @@ class TestStandardCachedAnalysisRouting:
         try:
             response = client.post("/api/convert/generate", json=payload)
 
+            if compensation_enabled and artwork_width != 40.0:
+                assert response.status_code == 409, response.text
+                _mock_pool.submit.assert_not_called()
+                return
             assert response.status_code == 200, response.text
             submitted = _mock_pool.submit.call_args.args[3]
             converter_params = submitted["converter_params"]

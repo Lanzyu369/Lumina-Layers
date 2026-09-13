@@ -17,6 +17,7 @@ import type { ConverterState } from "../stores/converter/store";
 import type { SettingsState } from "../stores/settingsStore";
 import type { ColorReplacementItem } from "../api/types";
 import type { WorkshopRecipeSource } from "../workshop/types";
+import { svgHoleCompensationOptions } from "../constants/svgHoleCompensation";
 import {
   cloneDynamicMaterialRecipe,
   cloneMaterialLayerBenefitCurve,
@@ -164,6 +165,7 @@ export function exportConverterRecipe(
       high_precision_3d_preview: state.high_precision_3d_preview,
       enable_cleanup: state.enable_cleanup,
       svg_pixels_per_mm: settings.svgPixelsPerMm,
+      ...svgHoleCompensationOptions(state),
       hue_enable: state.hue_enable,
       use_lut_constrained: state.use_lut_constrained,
       auto_dynamic_range: state.auto_dynamic_range,

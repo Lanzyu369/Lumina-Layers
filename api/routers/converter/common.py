@@ -122,6 +122,20 @@ MATERIAL_SOLVER_CACHE_UNAVAILABLE_DETAIL = (
     "Material solver data is unavailable. Re-run preview and try again."
 )
 log = get_logger(__name__)
+
+
+def _validate_svg_hole_compensation(*, enabled, image_path, modeling_mode) -> None:
+    """Map unsupported SVG compensation scope to an actionable request error."""
+    from core.svg_hole_compensation import validate_svg_compensation_scope
+
+    try:
+        validate_svg_compensation_scope(
+            enabled=enabled, image_path=image_path, modeling_mode=modeling_mode,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 _VALID_MATERIAL_SOURCES = {"lut", "material_archive"}
 _RELIEF_HEIGHT_EPSILON_MM = 1e-9
 _DYNAMIC_MATERIAL_SETTING_FIELDS = (

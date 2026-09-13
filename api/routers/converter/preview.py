@@ -13,6 +13,7 @@ import time
 import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Annotated
 
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -99,6 +100,7 @@ from .common import (
     _validate_dynamic_material_settings,
     _validate_unique_dynamic_material_selection,
     _validate_material_source,
+    _validate_svg_hole_compensation,
     recompute_gradient_groups_into_session,
 )
 from .model_surface import resolve_surface_preview_config
@@ -919,6 +921,9 @@ async def convert_preview(
     model_margin: float | None = Form(None, description="模型回退边距"),
     quantize_colors: int = Form(48, description="K-Means 色彩细节（仅高保真模式生效）"),
     enable_cleanup: bool = Form(True, description="孤立像素清理"),
+    svg_hole_compensation_enabled: Annotated[bool, Form(description="SVG 小洞补偿")] = False,
+    svg_hole_max_area_mm2: Annotated[float, Form(ge=0.0, allow_inf_nan=False, description="补孔面积上限 (mm²)")] = 0.5,
+    svg_hole_max_width_mm: Annotated[float, Form(ge=0.0, allow_inf_nan=False, description="细缝宽度上限 (mm)")] = 0.1,
     enable_outline: bool = Form(False, description="启用描边"),
     outline_width: float = Form(2.0, ge=0.5, le=10.0, description="描边宽度 (mm)"),
     svg_pixels_per_mm: float = Form(
@@ -1148,6 +1153,11 @@ async def convert_preview(
             target_width_mm = float(surface_config["target_width_mm"])
         _t_upload = time.perf_counter() - _t
         is_svg_upload = str(temp_path).lower().endswith(".svg")
+        _validate_svg_hole_compensation(
+            enabled=svg_hole_compensation_enabled,
+            image_path=temp_path,
+            modeling_mode=modeling_mode,
+        )
         use_large_format_svg_guard = (
             large_format_enabled
             and modeling_mode == "vector"
@@ -1247,6 +1257,9 @@ async def convert_preview(
             material_min_layer_count,
             material_max_layer_count,
             material_delta_e00_tolerance,
+            svg_hole_compensation_enabled,
+            svg_hole_max_area_mm2,
+            svg_hole_max_width_mm,
             **(
                 {
                     "host_memory_reservation_bytes": (

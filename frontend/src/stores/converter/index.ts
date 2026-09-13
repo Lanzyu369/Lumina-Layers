@@ -15,6 +15,7 @@ export {
   inferDefaultMaterialBackingDirName,
   isDynamicMaterialActive,
   resolveBugReportOriginalImageFile,
+  hasOnlySvgInputs,
   resolveConverterSourceSelection,
 } from "./store";
 

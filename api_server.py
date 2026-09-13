@@ -117,6 +117,52 @@ def _native_svg_self_test_payload(svg_path: str) -> dict[str, Any]:
     }
 
 
+def _svg_hole_compensation_self_test_payload() -> dict[str, Any]:
+    """Exercise packaged SVG compensation without a server or user material.
+    无需启动服务或读取用户素材，验证安装包内的 SVG 补偿功能。
+    """
+    from math import isclose
+
+    from shapely.geometry import Polygon
+
+    from core.svg_hole_compensation import compensate_svg_regions
+
+    left = Polygon([
+        (0, 0), (5, 0), (5, 4.8), (4.8, 4.8),
+        (4.8, 5.2), (5, 5.2), (5, 10), (0, 10),
+    ])
+    right = Polygon([
+        (5, 0), (10, 0), (10, 10), (5, 10),
+        (5, 5.2), (5.2, 5.2), (5.2, 4.8), (5, 4.8),
+    ])
+    silhouette = Polygon(
+        [(0, 0), (10, 0), (10, 10), (0, 10)],
+        [[(4.8, 4.8), (4.8, 5.2), (5.2, 5.2), (5.2, 4.8)]],
+    )
+    regions = [
+        {"geometry": left, "color": (255, 0, 0)},
+        {"geometry": right, "color": (0, 0, 255)},
+    ]
+    result = compensate_svg_regions(
+        regions, silhouette=silhouette, scale_factor=1.0,
+        max_hole_area_mm2=0.5, max_hole_width_mm=0.0,
+    )
+    if (
+        result.filled_holes != 1
+        or len(result.regions) != 3
+        or not result.silhouette.is_valid
+        or not isclose(result.added_area_mm2, 0.16, abs_tol=1e-9)
+        or not isclose(result.silhouette.area, 100.0, abs_tol=1e-9)
+        or not all(a is b for a, b in zip(regions, result.regions))
+    ):
+        raise NativeSvgSelfTestError("compensation_contract_failed")
+    return {
+        "status": "ok", "input_regions": len(regions),
+        "output_regions": len(result.regions), "filled_holes": result.filled_holes,
+        "added_area_mm2": result.added_area_mm2,
+    }
+
+
 def _print_json(payload: dict[str, Any]) -> None:
     print(
         json.dumps(
@@ -148,11 +194,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="SVG_PATH",
         help="Analyze one SVG through the required native Lumina adapter.",
     )
+    parser.add_argument(
+        "--svg-hole-compensation-self-test", action="store_true",
+        help="Exercise packaged SVG hole compensation without starting a server.",
+    )
     args = parser.parse_args(argv)
-    if args.native_svg_self_test:
+    if args.native_svg_self_test or args.svg_hole_compensation_self_test:
         try:
-            payload = _native_svg_self_test_payload(
-                args.native_svg_self_test
+            payload = (
+                _svg_hole_compensation_self_test_payload()
+                if args.svg_hole_compensation_self_test
+                else _native_svg_self_test_payload(args.native_svg_self_test)
             )
         except NativeSvgSelfTestError as exc:
             _print_json(

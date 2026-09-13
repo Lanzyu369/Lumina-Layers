@@ -12,6 +12,10 @@ def verify_wheel(path: Path) -> None:
     with zipfile.ZipFile(path) as archive:
         names = set(archive.namelist())
     assert any(name.endswith((".pyd", ".so")) for name in names)
+    assert any(
+        Path(name).name.startswith("_lumina_svg_compensation")
+        and name.endswith((".pyd", ".so")) for name in names
+    )
     assert any(name.endswith("LICENSE") for name in names)
     assert "lumina_svg_core/THIRD_PARTY_NOTICES.md" in names
     for license_name in (
@@ -21,12 +25,28 @@ def verify_wheel(path: Path) -> None:
         "PlutoVG.txt",
         "stb.txt",
         "pybind11.txt",
+        "ChromaPrint3D.txt",
     ):
         assert (
             f"lumina_svg_core/THIRD_PARTY_LICENSES/{license_name}" in names
         )
     assert not any(name.endswith((".a", ".lib")) for name in names)
     assert not any("/include/" in name or "/cmake/" in name for name in names)
+
+
+def verify_installed_compensation() -> None:
+    """Exercise the required 2D compensation binary with an enclosed hole.
+    用封闭小孔验证随包分发的二维补偿扩展。
+    """
+    import numpy as np
+    from lumina_svg_core._lumina_svg_compensation import find_holes_mm
+
+    shell = np.array([[0., 0.], [10., 0.], [10., 10.], [0., 10.]])
+    hole = np.array([[4.8, 4.8], [4.8, 5.2], [5.2, 5.2], [5.2, 4.8]])
+    patches, coverage = find_holes_mm([shell, hole], 0.5, 0.0)
+    assert len(patches) == len(coverage) == 1
+    assert patches[0][0].dtype == np.float64
+    assert not coverage[0][1]
 
 
 def verify_installed_extension() -> None:
@@ -63,6 +83,7 @@ def verify_installed_extension() -> None:
             unicode_result.reason_code
         )
         assert unicode_result.raw.geometry_count == 1
+    verify_installed_compensation()
 
 
 def main() -> None:

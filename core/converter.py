@@ -363,11 +363,20 @@ def convert_image_to_3d(
     material_min_layer_count: int = 5,
     material_max_layer_count: int = 10,
     material_delta_e00_tolerance: float = 0.5,
+    svg_hole_compensation_enabled: bool = False,
+    svg_hole_max_area_mm2: float = 0.5,
+    svg_hole_max_width_mm: float = 0.1,
 ):
     """Main conversion function: Convert image to 3D model.
     主要转换函数：将图像转换为 3D 模型。
 
     Args:
+        svg_hole_compensation_enabled: Fill enclosed source-SVG voids before
+            matching, in vector mode. (矢量模式下在配色前补 SVG 二维孔洞)
+        svg_hole_max_area_mm2: Maximum filled hole area; zero disables this
+            criterion. (补孔面积上限，平方毫米；零关闭此筛选)
+        svg_hole_max_width_mm: Maximum 2*area/perimeter for enclosed gaps;
+            zero disables this criterion. (封闭细缝宽度指标上限，毫米；零关闭)
         enable_fridge_magnet: Whether to enable opt-in fridge-magnet cavity
             handling in downstream raster/vector geometry stages.
             (是否在下游光栅/矢量几何阶段启用可选的冰箱贴磁铁槽处理)
@@ -494,11 +503,20 @@ def generate_preview_cached(
     material_min_layer_count: int = 5,
     material_max_layer_count: int = 10,
     material_delta_e00_tolerance: float = 0.5,
+    svg_hole_compensation_enabled: bool = False,
+    svg_hole_max_area_mm2: float = 0.5,
+    svg_hole_max_width_mm: float = 0.1,
 ):
     """Generate preview and cache data. Thin wrapper, delegates to coordinator.
     生成预览图和缓存数据。薄包装函数，委托给 coordinator。
 
     Args:
+        svg_hole_compensation_enabled: Fill enclosed source-SVG voids before
+            matching, in vector mode. (矢量模式下在配色前补 SVG 二维孔洞)
+        svg_hole_max_area_mm2: Maximum filled hole area; zero disables this
+            criterion. (补孔面积上限，平方毫米；零关闭此筛选)
+        svg_hole_max_width_mm: Maximum 2*area/perimeter for enclosed gaps;
+            zero disables this criterion. (封闭细缝宽度指标上限，毫米；零关闭)
         material_backing_material_index: Selected backing material index.
             (用户选择的基板耗材索引)
         material_dynamic_layer_count_enabled: Enable exact dynamic effective
@@ -651,6 +669,9 @@ def generate_final_model(
     material_min_layer_count: int = 5,
     material_max_layer_count: int = 10,
     material_delta_e00_tolerance: float = 0.5,
+    svg_hole_compensation_enabled: bool = False,
+    svg_hole_max_area_mm2: float = 0.5,
+    svg_hole_max_width_mm: float = 0.1,
 ):
     """Wrapper function for generating final model.
     包装函数，用于生成最终模型。
@@ -659,6 +680,12 @@ def generate_final_model(
     - smooth_sigma=10 (gentle bilateral filter, preserve edges)
 
     Args:
+        svg_hole_compensation_enabled: Fill enclosed source-SVG voids before
+            matching, in vector mode. (矢量模式下在配色前补 SVG 二维孔洞)
+        svg_hole_max_area_mm2: Maximum filled hole area; zero disables this
+            criterion. (补孔面积上限，平方毫米；零关闭此筛选)
+        svg_hole_max_width_mm: Maximum 2*area/perimeter for enclosed gaps;
+            zero disables this criterion. (封闭细缝宽度指标上限，毫米；零关闭)
         enable_fridge_magnet: Whether to enable opt-in fridge-magnet cavity
             handling for supported generation flows. (是否为受支持的生成流程
             启用可选的冰箱贴磁铁槽处理)
@@ -781,6 +808,9 @@ def generate_final_model(
         model_margin,
         quantize_colors,
         svg_pixels_per_mm=svg_pixels_per_mm,
+        svg_hole_compensation_enabled=svg_hole_compensation_enabled,
+        svg_hole_max_area_mm2=svg_hole_max_area_mm2,
+        svg_hole_max_width_mm=svg_hole_max_width_mm,
         backing_infill_density_percent=backing_infill_density_percent,
         blur_kernel=0,
         smooth_sigma=10,

@@ -114,6 +114,10 @@ jobs:
           tests/test_native_svg_workflow_integration.py
           tests/test_native_svg_packaging_contract_unit.py
           tests/test_vector_native_svg_selection_unit.py
+          tests/test_svg_hole_compensation_unit.py
+          tests/test_svg_compensation_analysis_unit.py
+          tests/test_svg_compensation_transport_unit.py
+          tests/test_svg_compensation_packaging_unit.py
           -q
       - name: Generate representative GLB and 3MF artifacts
         run: >-
@@ -207,6 +211,7 @@ jobs:
             'lumina_svg_core/LICENSE',
             'lumina_svg_core/THIRD_PARTY_NOTICES.md',
             'lumina_svg_core/THIRD_PARTY_LICENSES/Clipper2.txt',
+            'lumina_svg_core/THIRD_PARTY_LICENSES/ChromaPrint3D.txt',
             'lumina_svg_core/THIRD_PARTY_LICENSES/FreeType-Project.txt',
             'lumina_svg_core/THIRD_PARTY_LICENSES/LunaSVG.txt',
             'lumina_svg_core/THIRD_PARTY_LICENSES/PlutoVG.txt',
@@ -234,6 +239,13 @@ jobs:
           $payload = $jsonLine | ConvertFrom-Json
           if ($payload.status -ne "ok" -or $payload.geometry_backend -ne "native") {
             throw "Frozen probe did not execute the native backend"
+          }
+      - name: Probe frozen SVG hole compensation
+        shell: pwsh
+        run: |
+          & .\dist\lumina-backend.exe --svg-hole-compensation-self-test
+          if ($LASTEXITCODE -ne 0) {
+            throw "Frozen SVG hole compensation did not run successfully"
           }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

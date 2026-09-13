@@ -78,6 +78,24 @@ install(
   DESTINATION .
   COMPONENT lumina_svg_core
 )
+
+pybind11_add_module(
+  _lumina_svg_compensation
+  MODULE
+  src/hole_compensation.cpp
+)
+target_link_libraries(_lumina_svg_compensation PRIVATE Clipper2)
+set_target_properties(
+  _lumina_svg_compensation
+  PROPERTIES
+  CXX_VISIBILITY_PRESET hidden
+  VISIBILITY_INLINES_HIDDEN ON
+)
+install(
+  TARGETS _lumina_svg_compensation
+  LIBRARY DESTINATION . COMPONENT lumina_svg_core
+  RUNTIME DESTINATION . COMPONENT lumina_svg_core
+)
 install(
   DIRECTORY THIRD_PARTY_LICENSES
   DESTINATION .

@@ -99,6 +99,12 @@ import {
   resolveFridgeMagnetSpacerThick,
 } from "../../constants/fridgeMagnets";
 import { useSettingsStore } from "../settingsStore";
+import {
+  SVG_HOLE_COMPENSATION_DEFAULTS,
+  svgHoleCompensationOptions,
+  validSvgHoleCompensationOptions,
+  type SvgHoleCompensationOptions,
+} from "../../constants/svgHoleCompensation";
 import { lutErrorToVisibleMessage } from "../lutErrorMessages";
 import {
   postClientLog,
@@ -2129,6 +2135,9 @@ export interface ConverterState {
   quantize_colors_unlocked: boolean;
   high_precision_3d_preview: boolean;
   enable_cleanup: boolean;
+  svg_hole_compensation_enabled: boolean;
+  svg_hole_max_area_mm2: number;
+  svg_hole_max_width_mm: number;
   hue_enable: boolean;
   use_lut_constrained: boolean;
   auto_dynamic_range: boolean;
@@ -2420,6 +2429,9 @@ export interface ConverterActions {
   setQuantizeColorsUnlocked: (unlocked: boolean) => void;
   setHighPrecision3dPreview: (enabled: boolean) => void;
   setEnableCleanup: (enabled: boolean) => void;
+  setSvgHoleCompensationEnabled: (enabled: boolean) => void;
+  setSvgHoleMaxAreaMm2: (area: number) => void;
+  setSvgHoleMaxWidthMm: (width: number) => void;
   setHueEnable: (enabled: boolean) => void;
   setUseLutConstrained: (enabled: boolean) => void;
   setAutoDynamicRange: (enabled: boolean) => void;
@@ -3033,6 +3045,82 @@ function buildMissingAutoReliefHeightMap(
   );
 }
 
+const SVG_HOLE_COMPENSATION_STORAGE_KEY = "lumina_svgHoleCompensation";
+
+function loadSvgHoleCompensationSettings(): SvgHoleCompensationOptions {
+  try {
+    const raw = localStorage.getItem(SVG_HOLE_COMPENSATION_STORAGE_KEY);
+    const value = raw ? JSON.parse(raw) : {};
+    const options = svgHoleCompensationOptions(value);
+    if (validSvgHoleCompensationOptions(options)) return options;
+  } catch {
+    // Storage is optional; a damaged preference must not prevent startup.
+  }
+  return { ...SVG_HOLE_COMPENSATION_DEFAULTS };
+}
+
+/** Whether every current input is SVG. 当前输入是否全部为 SVG。 */
+export function hasOnlySvgInputs(state: ConverterState): boolean {
+  const files = state.batchMode ? state.batchFiles : [state.imageFile];
+  return files.length > 0 && files.every(isSvgImageFile);
+}
+
+/** Whether the current source can use 2D compensation. 当前素材是否支持二维补洞。 */
+export function isSvgHoleCompensationAvailable(state: ConverterState): boolean {
+  return state.modeling_mode === ModelingModeEnum.VECTOR && hasOnlySvgInputs(state);
+}
+
+function persistSvgHoleCompensationSettings(options: SvgHoleCompensationOptions): void {
+  try {
+    localStorage.setItem(SVG_HOLE_COMPENSATION_STORAGE_KEY, JSON.stringify(options));
+  } catch {
+    // Saving settings is best-effort, including private browsing.
+  }
+}
+
+function buildSvgHoleCompensationChangeState(
+  current: ConverterState,
+  updates: Partial<SvgHoleCompensationOptions>,
+  resetPreview = true,
+): Partial<ConverterState> {
+  const options = { ...svgHoleCompensationOptions(current), ...updates };
+  if (!isSvgHoleCompensationAvailable(current)) {
+    options.svg_hole_compensation_enabled = false;
+  }
+  persistSvgHoleCompensationSettings(options);
+  _cancelPreviewWork();
+  _generateRequestSequence += 1;
+  _batchRequestSequence += 1;
+  _activeFilenameEligibleGenerateSequence = null;
+  _endGenerateTimer();
+  return {
+    ...(resetPreview ? buildPreviewSessionResetState(current, true) : {}),
+    ...options,
+    // Compensation changes SVG geometry, not the material solver cache key.
+    // Keep an established preview baseline without a new cache preflight.
+    hasManualPreview: current.hasManualPreview,
+    isGenerating: false,
+    batchLoading: false,
+    batchResult: null,
+  };
+}
+
+function buildSvgHoleCompensationResizeState(
+  current: ConverterState,
+  dimensions: Partial<Pick<ConverterState, "target_width_mm" | "target_height_mm">>,
+): Partial<ConverterState> {
+  const width = dimensions.target_width_mm ?? current.target_width_mm;
+  const height = dimensions.target_height_mm ?? current.target_height_mm;
+  if (
+    !current.svg_hole_compensation_enabled ||
+    !isSvgHoleCompensationAvailable(current) ||
+    (width === current.target_width_mm && height === current.target_height_mm)
+  ) {
+    return {};
+  }
+  return buildSvgHoleCompensationChangeState(current, {});
+}
+
 function loadEnableCrop(): boolean {
   try {
     const stored = localStorage.getItem("lumina_enableCrop");
@@ -3271,6 +3359,8 @@ export const DEFAULT_STATE: ConverterState = {
   quantize_colors_unlocked: false,
   high_precision_3d_preview: false,
   enable_cleanup: true,
+  ...loadSvgHoleCompensationSettings(),
+  svg_hole_compensation_enabled: false,
   hue_enable: false,
   use_lut_constrained: false,
   auto_dynamic_range: false,
@@ -3791,6 +3881,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         imageFile: file,
         imagePreviewUrl: previewUrl,
         workshopSource: null,
+        ...(isSvg ? loadSvgHoleCompensationSettings() : { svg_hole_compensation_enabled: false }),
         ...modelSurfaceArtworkReset,
         modeling_mode: modelingMode,
         ...buildPreviewSessionResetState(currentState),
@@ -3857,6 +3948,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         ...modelSurfaceArtworkReset,
         ...buildPreviewSessionResetState(currentState),
         modeling_mode: ModelingModeEnum.VECTOR,
+        ...loadSvgHoleCompensationSettings(),
         isLoading: false,
         error: null,
         cropModalOpen: false,
@@ -4696,6 +4788,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             )
           : state.fridge_magnets;
         return {
+          ...buildSvgHoleCompensationResizeState(state, dimensions),
           ...dimensions,
           fridge_magnets: fridgeMagnets,
           threemfDiskPath: null,
@@ -4718,6 +4811,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             }
           : { target_height_mm: clamped };
         return {
+          ...buildSvgHoleCompensationResizeState(state, dimensions),
           ...dimensions,
           fridge_magnets:
             state.fridge_magnets.length > 0
@@ -4789,10 +4883,18 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       })),
     setModelingMode: (mode: ModelingMode) => {
       const state = _get();
-      if (mode === ModelingModeEnum.VECTOR && !isSvgImageFile(state.imageFile)) {
+      if (mode === ModelingModeEnum.VECTOR && !hasOnlySvgInputs(state)) {
         return;
       }
+      const restoredBatchSvgSettings = state.batchMode &&
+        mode === ModelingModeEnum.VECTOR && state.modeling_mode !== mode
+        ? buildSvgHoleCompensationChangeState(
+            { ...state, modeling_mode: mode },
+            loadSvgHoleCompensationSettings(),
+          )
+        : {};
       set({
+        ...restoredBatchSvgSettings,
         modeling_mode: mode,
         enable_relief:
           mode === ModelingModeEnum.VECTOR &&
@@ -4876,6 +4978,21 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         threemfDiskPath: null,
         downloadUrl: null,
       }),
+    setSvgHoleCompensationEnabled: (enabled: boolean) => {
+      const current = _get();
+      if (enabled === current.svg_hole_compensation_enabled) return;
+      set(buildSvgHoleCompensationChangeState(current, { svg_hole_compensation_enabled: enabled }));
+    },
+    setSvgHoleMaxAreaMm2: (area: number) => {
+      const current = _get();
+      if (!Number.isFinite(area) || area < 0 || area === current.svg_hole_max_area_mm2) return;
+      set(buildSvgHoleCompensationChangeState(current, { svg_hole_max_area_mm2: area }));
+    },
+    setSvgHoleMaxWidthMm: (width: number) => {
+      const current = _get();
+      if (!Number.isFinite(width) || width < 0 || width === current.svg_hole_max_width_mm) return;
+      set(buildSvgHoleCompensationChangeState(current, { svg_hole_max_width_mm: width }));
+    },
     setHueEnable: (enabled: boolean) =>
       set((state) => ({
         hue_enable:
@@ -8176,6 +8293,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           enable_outline: state.enable_outline,
           outline_width: state.outline_width,
           svg_pixels_per_mm: useSettingsStore.getState().svgPixelsPerMm,
+          ...svgHoleCompensationOptions(state),
           ...resolveColorMatchingWeights(state),
           use_lut_constrained: state.use_lut_constrained,
           auto_dynamic_range: state.auto_dynamic_range,
@@ -8668,6 +8786,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           high_precision_3d_preview: state.high_precision_3d_preview,
           enable_cleanup: state.enable_cleanup,
           svg_pixels_per_mm: generateSettings.svgPixelsPerMm,
+          ...svgHoleCompensationOptions(state),
           ...resolveColorMatchingWeights(state),
           use_lut_constrained: state.use_lut_constrained,
           auto_dynamic_range: state.auto_dynamic_range,
@@ -9382,6 +9501,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           layerImagesOpen: false,
           batchResult: null,
           modeling_mode: autoModelingMode,
+          ...(isSvg ? loadSvgHoleCompensationSettings() : { svg_hole_compensation_enabled: false }),
         });
         return;
       }
@@ -9391,6 +9511,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       const allFiles = state.imageFile
         ? [state.imageFile, ...validFiles]
         : [...validFiles];
+      const savedSvgSettings = loadSvgHoleCompensationSettings();
 
       // Revoke previous preview URL
       const prev = state.imagePreviewUrl;
@@ -9419,6 +9540,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         puzzleEnabled: false,
         ...DEFAULT_PUZZLE_PREVIEW_STATE,
         modeling_mode: compatibleModelingMode,
+        ...savedSvgSettings,
+        // Keep the selected modeling mode. Restore the remembered switch only
+        // when the all-SVG batch actually enters vector mode.
+        svg_hole_compensation_enabled: savedSvgSettings.svg_hole_compensation_enabled &&
+          compatibleModelingMode === ModelingModeEnum.VECTOR && allFiles.every(isSvgFile),
         batchMode: true,
         hasManualPreview: false,
         previewAutoRefreshPending: false,
@@ -9550,6 +9676,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           high_precision_3d_preview: state.high_precision_3d_preview,
           enable_cleanup: state.enable_cleanup,
           svg_pixels_per_mm: settings.svgPixelsPerMm,
+          ...svgHoleCompensationOptions(state),
           ...resolveColorMatchingWeights(state),
           use_lut_constrained: state.use_lut_constrained,
           auto_dynamic_range: state.auto_dynamic_range,
@@ -9910,6 +10037,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set({
         workshopSource: restoredWorkshopSource,
       });
+      persistSvgHoleCompensationSettings(svgHoleCompensationOptions(_get()));
 
       // Restore the optional heightmap after all project state is in place.
       if (heightmapFile) {
@@ -9967,6 +10095,21 @@ registerPrinterBedLabelSynchronizer((printerId) => {
     setBedLabel(printerBed.label);
   }
 });
+
+// All source-entry paths share this boundary, including batch and project imports.
+// 所有素材入口（含批量与项目导入）共用此可用性边界。
+useConverterStore.subscribe(
+  (state) => state.svg_hole_compensation_enabled && !isSvgHoleCompensationAvailable(state),
+  (unavailable) => {
+    if (!unavailable) return;
+    const current = useConverterStore.getState();
+    // Upload actions may already own the next revision. Do not cancel their
+    // thumbnail response by incrementing that revision a second time.
+    useConverterStore.setState(buildSvgHoleCompensationChangeState(current, {
+      svg_hole_compensation_enabled: false,
+    }, Boolean(current.sessionId || current.isLoading || current.hasManualPreview)));
+  },
+);
 
 registerPreviewArtifactInvalidator(() => {
   if (!isDynamicMaterialActive(useConverterStore.getState())) {

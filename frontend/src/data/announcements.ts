@@ -16,6 +16,24 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-09-13",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [
+      {
+        category: { zh: "矢量化", en: "Vectorisation" },
+        items: [
+          {
+            zh: "新增 SVG 小洞补偿，默认关闭。可按成品尺寸填补画面中的小孔和封闭细缝并沿用邻近颜色，预览和生成保持一致；原文件不变，补偿设置可随项目保存。",
+            en: "Added SVG hole compensation, off by default. Fill small holes and enclosed thin gaps at the finished size using nearby colours, with matching preview and generation. Your original file stays unchanged, and the settings are saved with the project.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-09-03",
     title: {
       zh: "Lumina Layers — 9 月更新速览",

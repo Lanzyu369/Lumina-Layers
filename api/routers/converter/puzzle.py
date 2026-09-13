@@ -81,6 +81,7 @@ from .common import (
     _validate_material_archive_relief_minimum_height,
 )
 from .generate import (
+    _preview_analysis_params_match,
     _resolve_recipe_overrides,
     _serialize_recipe_override_for_worker,
 )
@@ -1040,6 +1041,21 @@ async def generate_puzzle(
     ):
         cache_fields.update({"quantized_image", "material_matrix"})
     cache = _require_puzzle_cache(session_data, fields=cache_fields)
+    if generate_params.svg_hole_compensation_enabled or cache.get("svg_hole_compensation_enabled", False):
+        matches, _ = _preview_analysis_params_match(
+            cache=cache,
+            request=generate_params,
+            core_modeling_mode=CoreModelingMode(generate_params.modeling_mode.value),
+            session_material_source=str(session_material_source or "lut"),
+            target_width_mm=generate_params.target_width_mm,
+            preview_color_layers=session_data.get("color_layers"),
+            preview_layer_height_mm=session_data.get("layer_height_mm"),
+        )
+        if not matches:
+            raise HTTPException(
+                status_code=409,
+                detail="SVG hole compensation settings changed. Re-run preview before generating the puzzle.",
+            )
     dynamic_puzzle_analysis: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None = None
     dynamic_recipe_overrides: list[dict[str, object]] | None = None
     if (
@@ -1174,6 +1190,10 @@ async def generate_puzzle(
             "modeling_mode": core_modeling_mode,
             "quantize_colors": generate_params.quantize_colors,
             "svg_pixels_per_mm": generate_params.svg_pixels_per_mm,
+            # Piece PNGs already contain the confirmed SVG compensation.
+            "svg_hole_compensation_enabled": False,
+            "svg_hole_max_area_mm2": generate_params.svg_hole_max_area_mm2,
+            "svg_hole_max_width_mm": generate_params.svg_hole_max_width_mm,
             "replacement_regions": None,
             "separate_backing": generate_params.separate_backing,
             "enable_relief": generate_params.enable_relief,

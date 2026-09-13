@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
 import asyncio
 from concurrent.futures.process import BrokenProcessPool
 from contextlib import suppress
@@ -135,6 +137,7 @@ from .common import (
     _validate_dynamic_material_settings,
     _validate_unique_dynamic_material_selection,
     _validate_material_source,
+    _validate_svg_hole_compensation,
     _validate_material_archive_relief_minimum_height,
 )
 
@@ -1045,7 +1048,13 @@ def _preview_analysis_params_match(
         ("svg_pixels_per_mm", request.svg_pixels_per_mm, "float"),
         ("material_source", str(session_material_source or "lut"), "raw"),
     )
-    if compare_target_width and not _preview_analysis_param_matches(
+    # Hole selection is physical-size dependent: unlike ordinary pixel edits,
+    # compensated regions cannot be reprojected to a new size without reanalysis.
+    compensation_active = bool(
+        request.svg_hole_compensation_enabled
+        or cache.get("svg_hole_compensation_enabled", False)
+    )
+    if (compare_target_width or compensation_active) and not _preview_analysis_param_matches(
         cache,
         "target_width_mm",
         target_width_mm,
@@ -1064,6 +1073,15 @@ def _preview_analysis_params_match(
             kind=kind,
         ):
             return False, f"param_mismatch:{key}"
+    enabled = bool(request.svg_hole_compensation_enabled)
+    if bool(cache.get("svg_hole_compensation_enabled", False)) != enabled:
+        return False, "param_mismatch:svg_hole_compensation_enabled"
+    if enabled:
+        for key in ("svg_hole_max_area_mm2", "svg_hole_max_width_mm"):
+            if not _preview_analysis_param_matches(
+                cache, key, getattr(request, key), kind="float",
+            ):
+                return False, f"param_mismatch:{key}"
     return True, "params_match"
 
 
@@ -1102,6 +1120,7 @@ def _require_standard_cached_analysis_semantics(
     session_material_source: str,
     preview_color_layers: object = _MISSING,
     preview_layer_height_mm: object = _MISSING,
+    analysis_target_width_mm: float | None = None,
 ) -> None:
     """Reject explicit standard cache reuse with mismatched semantics.
 
@@ -1113,7 +1132,10 @@ def _require_standard_cached_analysis_semantics(
         request=request,
         core_modeling_mode=core_modeling_mode,
         session_material_source=session_material_source,
-        target_width_mm=request.target_width_mm,
+        target_width_mm=(
+            request.target_width_mm
+            if analysis_target_width_mm is None else analysis_target_width_mm
+        ),
         preview_color_layers=preview_color_layers,
         preview_layer_height_mm=preview_layer_height_mm,
         compare_target_width=False,
@@ -2245,6 +2267,11 @@ async def convert_generate(
     session_material_source = session_data.get("material_source", "lut")
     if not image_path or not os.path.exists(image_path):
         raise HTTPException(status_code=409, detail=SOURCE_IMAGE_UNAVAILABLE_DETAIL)
+    _validate_svg_hole_compensation(
+        enabled=request.svg_hole_compensation_enabled,
+        image_path=image_path,
+        modeling_mode=request.modeling_mode,
+    )
     if session_material_source != "material_archive":
         if not lut_path or not os.path.exists(lut_path):
             raise HTTPException(status_code=409, detail=LUT_DATA_UNAVAILABLE_DETAIL)
@@ -2490,6 +2517,7 @@ async def convert_generate(
             request=request,
             core_modeling_mode=core_modeling_mode,
             session_material_source=str(session_material_source or "lut"),
+            analysis_target_width_mm=generation_analysis_target_width_mm,
             preview_color_layers=session_data.get("color_layers", _MISSING),
             preview_layer_height_mm=session_data.get(
                 "layer_height_mm",
@@ -2569,6 +2597,21 @@ async def convert_generate(
         or request.use_cached_matched_rgb
         or session_material_source == "material_archive"
     )
+    if (should_forward_cached_analysis or recipe_overrides) and (
+        request.svg_hole_compensation_enabled
+        or cache.get("svg_hole_compensation_enabled", False)
+    ):
+        # Material archives and recipe region masks consume preview geometry
+        # even without explicit cache reuse. They must describe the same SVG.
+        _require_standard_cached_analysis_semantics(
+            cache=cache,
+            request=request,
+            core_modeling_mode=core_modeling_mode,
+            session_material_source=str(session_material_source or "lut"),
+            analysis_target_width_mm=generation_analysis_target_width_mm,
+            preview_color_layers=session_data.get("color_layers", _MISSING),
+            preview_layer_height_mm=session_data.get("layer_height_mm", _MISSING),
+        )
     require_cached_material_analysis = session_material_source == "material_archive"
     log.debug(
         "Cached matched RGB input state resolved: use_cached_matched_rgb=%s, has_replacement_regions=%s",
@@ -2737,6 +2780,9 @@ async def convert_generate(
         "modeling_mode": core_modeling_mode,
         "quantize_colors": request.quantize_colors,
         "svg_pixels_per_mm": request.svg_pixels_per_mm,
+        "svg_hole_compensation_enabled": request.svg_hole_compensation_enabled,
+        "svg_hole_max_area_mm2": request.svg_hole_max_area_mm2,
+        "svg_hole_max_width_mm": request.svg_hole_max_width_mm,
         # Dynamic cache reuse already contains every confirmed RGB, recipe,
         # and solver-metadata edit. Replaying its mappings in S03 would solve
         # the same edits twice and require a target map outside S02's final-
@@ -3224,6 +3270,9 @@ def _resolve_large_format_shared_params(
         "modeling_mode": CoreModelingMode(request.modeling_mode.value),
         "quantize_colors": request.quantize_colors,
         "svg_pixels_per_mm": request.svg_pixels_per_mm,
+        "svg_hole_compensation_enabled": request.svg_hole_compensation_enabled,
+        "svg_hole_max_area_mm2": request.svg_hole_max_area_mm2,
+        "svg_hole_max_width_mm": request.svg_hole_max_width_mm,
         "replacement_regions": replacement_regions,
         "recipe_overrides": (
             [
@@ -4113,6 +4162,11 @@ async def convert_generate_large_format(
         str(image_path).lower().endswith(".svg")
         and request.modeling_mode.value == "vector"
     )
+    _validate_svg_hole_compensation(
+        enabled=request.svg_hole_compensation_enabled,
+        image_path=image_path,
+        modeling_mode=request.modeling_mode,
+    )
     dynamic_material_settings = _resolve_session_dynamic_material_settings(
         session_data=session_data,
         request=request,
@@ -4184,7 +4238,13 @@ async def convert_generate_large_format(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if request.use_cached_matched_rgb is True:
+    if request.use_cached_matched_rgb is True or (
+        recipe_overrides
+        and (
+            request.svg_hole_compensation_enabled
+            or cache.get("svg_hole_compensation_enabled", False)
+        )
+    ):
         _require_large_format_cached_analysis_semantics(
             cache=cache,
             request=request,
@@ -4193,6 +4253,7 @@ async def convert_generate_large_format(
             preview_color_layers=session_data.get("color_layers"),
             preview_layer_height_mm=session_data.get("layer_height_mm"),
         )
+    if request.use_cached_matched_rgb is True:
         effective_color_layers, effective_layer_height_mm = (
             _resolve_effective_cached_layer_settings(
                 cache=cache,
@@ -4355,6 +4416,16 @@ async def convert_generate_large_format(
             fallback_reason = SVG_LARGE_FORMAT_FALLBACK_UNSUPPORTED_FEATURE
 
         if result is None:
+            if request.svg_hole_compensation_enabled:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "SVG hole compensation requires vector tiling; raster fallback "
+                        "would lose the filled holes. Disable compensation to use that "
+                        "fallback. / SVG 补洞需要矢量分块；位图回退无法保留补洞结果。"
+                        "如需回退，请关闭补洞。"
+                    ),
+                )
             fallback_png_path: str | None = None
             try:
                 (
@@ -4702,6 +4773,9 @@ async def convert_batch(
             "直接矢量模式不使用此参数"
         ),
     ),
+    svg_hole_compensation_enabled: Annotated[bool, Form(description="SVG 小洞补偿")] = False,
+    svg_hole_max_area_mm2: Annotated[float, Form(ge=0.0, allow_inf_nan=False, description="补孔面积上限 (mm²)")] = 0.5,
+    svg_hole_max_width_mm: Annotated[float, Form(ge=0.0, allow_inf_nan=False, description="细缝宽度上限 (mm)")] = 0.1,
     hue_weight: float = Form(0.0, description="色相保护权重"),
     chroma_gate: float = Form(15.0, description="暗色彩度门槛"),
     model_enable: bool = Form(False, description="启用模型辅助匹配"),
@@ -4823,6 +4897,12 @@ async def convert_batch(
 
     try:
         # Validate modeling_mode string (main thread)
+        for upload in images:
+            _validate_svg_hole_compensation(
+                enabled=svg_hole_compensation_enabled,
+                image_path=upload.filename or "",
+                modeling_mode=modeling_mode,
+            )
         try:
             resolved_modeling_mode = CoreModelingMode(modeling_mode)
         except ValueError:
@@ -4992,6 +5072,9 @@ async def convert_batch(
                 material_delta_e00_tolerance,
                 separate_backing,
                 enable_wipe_tower_auto_placement,
+                svg_hole_compensation_enabled,
+                svg_hole_max_area_mm2,
+                svg_hole_max_width_mm,
                 **(
                     {
                         "host_memory_reservation_bytes": (

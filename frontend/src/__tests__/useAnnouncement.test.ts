@@ -394,12 +394,12 @@ describe("selectAnnouncementHistory", () => {
     expect(selectAnnouncementHistory(entries, -1)).toEqual([]);
   });
 
-  it("默认历史条数足够覆盖这次 5 月更新回顾", () => {
-    expect(ANNOUNCEMENT_HISTORY_LIMIT).toBeGreaterThanOrEqual(20);
-    expect(selectAnnouncementHistory(ANNOUNCEMENTS).length).toBeGreaterThanOrEqual(20);
-    expect(selectAnnouncementHistory(ANNOUNCEMENTS).map((e) => e.version)).toContain(
-      "2026-05-05",
-    );
+  it("新增公告后保留最近的默认窗口，不永久绑定旧月份", () => {
+    const history = selectAnnouncementHistory(ANNOUNCEMENTS);
+    expect(history).toHaveLength(Math.min(ANNOUNCEMENT_HISTORY_LIMIT, ANNOUNCEMENTS.length));
+    expect(history[0]).toBe(ANNOUNCEMENTS[0]);
+    expect(history.at(-1)).toBe(ANNOUNCEMENTS[history.length - 1]);
+    expect(history).not.toContain(ANNOUNCEMENTS[ANNOUNCEMENT_HISTORY_LIMIT]);
   });
 
   it("非法日期文本也按普通版本文本排序，不会丢掉其它历史", () => {

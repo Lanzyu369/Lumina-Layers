@@ -18,6 +18,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
+import pytest
 from PIL import Image
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -463,7 +464,25 @@ def test_generate_puzzle_inherits_dynamic_settings_and_maps_typed_error() -> Non
     assert captured["material_delta_e00_tolerance"] == 0.4
 
 
-def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> None:
+def test_puzzle_requires_fresh_preview_after_compensation_changes(tmp_path) -> None:
+    session_id, cache = _make_session()
+    path = tmp_path / "picture.svg"
+    path.write_text("<svg/>", encoding="utf-8")
+    _test_store.put(session_id, "image_path", str(path))
+    cache["svg_hole_compensation_enabled"] = False
+    body = _build_generate_body(session_id)
+    body["params"]["params"].update(
+        modeling_mode="vector", svg_hole_compensation_enabled=True,
+    )
+    _mock_pool.submit = AsyncMock()
+    response = client.post("/api/convert/generate-puzzle", json=body)
+    assert response.status_code == 409
+    assert "compensation" in response.json()["detail"]
+    _mock_pool.submit.assert_not_called()
+
+
+@pytest.mark.parametrize("compensation_enabled", [False, True])
+def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb(compensation_enabled) -> None:
     """Puzzle generation should align per-piece helper assets to the worker raster grid."""
 
     session_id, preview_cache = _make_session()
@@ -534,6 +553,16 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
             "enable_wipe_tower_auto_placement": False,
         }
     )
+    if compensation_enabled:
+        from api.schemas.converter import ConvertGenerateRequest
+
+        generate_body["params"]["params"]["svg_hole_compensation_enabled"] = True
+        preview_cache.update(ConvertGenerateRequest(**generate_body["params"]["params"]).model_dump())
+        preview_cache["material_source"] = "lut"
+        path = Path(_test_store.get(session_id)["image_path"]).with_suffix(".svg")
+        path.write_text("<svg/>", encoding="utf-8")
+        _test_store.put(session_id, "image_path", str(path))
+        _test_store.register_temp_file(session_id, str(path))
 
     with patch(
         "api.routers.converter.puzzle.assemble_puzzle_3mf",
@@ -557,6 +586,8 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
     assert all(params["enable_fridge_magnet"] is False for params in submitted_params)
     assert all(params["fridge_magnets"] == [] for params in submitted_params)
     assert all(params["modeling_mode"] == ModelingMode.HIGH_FIDELITY for params in submitted_params)
+    # These piece PNGs already contain compensation from the confirmed preview.
+    assert all(params.get("svg_hole_compensation_enabled", False) is False for params in submitted_params)
     assert all(params["enable_relief"] is True for params in submitted_params)
     assert all(
         params["enable_wipe_tower_auto_placement"] is False

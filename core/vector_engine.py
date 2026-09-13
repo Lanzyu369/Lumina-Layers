@@ -85,7 +85,7 @@ from api.structured_logging import get_logger
 from config import PrinterConfig, ColorSystem, VectorConfig
 from core import geos_buffer_fast
 from core import native_svg_adapter
-from core.errors import VectorMeshMemoryBudgetError
+from core.errors import CoreDependencyError, VectorMeshMemoryBudgetError
 from core.layered_coordinate_domain import (
     LAYERED_COORDINATE_DOMAIN_KEY,
     LayeredCoordinateDomain,
@@ -3967,6 +3967,9 @@ class VectorProcessor:
         self.enable_outline = False
         self.outline_width_mm = 0.0
         self.expand_stroke_to_fill = False
+        self.svg_hole_compensation_enabled = False
+        self.svg_hole_max_area_mm2 = 0.5
+        self.svg_hole_max_width_mm = 0.1
         self.layer_height_mm = float(PrinterConfig.LAYER_HEIGHT)
 
     @classmethod
@@ -5084,6 +5087,27 @@ class VectorProcessor:
                 while len(_VECTOR_PARSE_CLIP_CACHE) > _VECTOR_PARSE_CLIP_CACHE_MAX:
                     _VECTOR_PARSE_CLIP_CACHE.pop(next(iter(_VECTOR_PARSE_CLIP_CACHE)))
 
+        # Keep pure parse caches independent of compensation settings. Apply the
+        # optional edit once, before both material mapping and 2D preview output.
+        if bool(getattr(self, "svg_hole_compensation_enabled", False)):
+            from core.svg_hole_compensation import compensate_svg_regions
+
+            try:
+                compensated = compensate_svg_regions(
+                    clipped_shapes,
+                    silhouette=silhouette,
+                    scale_factor=scale_factor,
+                    max_hole_area_mm2=self.svg_hole_max_area_mm2,
+                    max_hole_width_mm=self.svg_hole_max_width_mm,
+                )
+            except ImportError as exc:
+                raise CoreDependencyError(str(exc)) from exc
+            clipped_shapes = compensated.regions
+            silhouette = compensated.silhouette
+            stage_timings["svg_hole_compensation_s"] = compensated.elapsed_seconds
+            stage_timings["svg_holes_filled"] = compensated.filled_holes
+            stage_timings["svg_hole_added_area_mm2"] = compensated.added_area_mm2
+
         # === Stage 3: Resolve color system config ===
         # --- Diagnostic: geometry fingerprint for 5-vs-7 layer comparison ---
         _unique_colors_in_shapes = set()
@@ -5335,7 +5359,10 @@ class VectorProcessor:
                 num_channels,
                 num_layers=num_layers,
             )
-        if stage_timings.get("geometry_backend") != "native":
+        if (
+            stage_timings.get("geometry_backend") != "native"
+            and not getattr(self, "svg_hole_compensation_enabled", False)
+        ):
             min_hole_area_mm2 = float(
                 getattr(VectorConfig, "MIN_COLOR_HOLE_AREA_MM2", 1.0)
             )
