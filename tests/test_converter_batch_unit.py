@@ -610,9 +610,22 @@ class TestBatchTimeout:
 
 
 class TestBatchWorkerPoolSubmit:
-    """Verify pool.submit is called with worker_batch_convert_item and correct args."""
+    """Verify batch requests submit their settings to the worker pool."""
 
-    def test_batch_submits_to_pool(self) -> None:
+    @pytest.mark.parametrize("height", ["0.03", "0.13", "nan", "inf"])
+    def test_batch_rejects_invalid_coating_height(self, height):
+        _mock_pool.submit = AsyncMock()
+        response = client.post(
+            "/api/convert/batch",
+            files=[("images", _make_test_image_buf())],
+            data={"lut_name": "test_lut", "enable_coating": "true", "coating_height_mm": height},
+        )
+        assert response.status_code == 422
+        _mock_pool.submit.assert_not_called()
+
+    @pytest.mark.parametrize("coating_enabled", [True, False])
+    @pytest.mark.parametrize("compensation_enabled", [True, False])
+    def test_batch_submits_to_pool(self, coating_enabled, compensation_enabled) -> None:
         _mock_pool.submit = AsyncMock(
             return_value=_make_worker_result("test.png", 30.0, 20.0),
         )
@@ -661,6 +674,11 @@ class TestBatchWorkerPoolSubmit:
                     "enable_base_layer_height_modifier": "false",
                     "enable_wipe_tower_auto_placement": "false",
                     "high_precision_3d_preview": "true",
+                    "enable_coating": str(coating_enabled).lower(),
+                    "coating_height_mm": "0.12",
+                    "svg_hole_compensation_enabled": str(compensation_enabled).lower(),
+                    "svg_hole_max_area_mm2": "0.75",
+                    "svg_hole_max_width_mm": "0.21",
                 },
             )
 
@@ -719,6 +737,14 @@ class TestBatchWorkerPoolSubmit:
             call_args.kwargs["host_memory_reservation_bytes"]
             == 8 * 1024**3
         )
+        expected_options = {
+            "enable_coating": coating_enabled,
+            "coating_height_mm": 0.12,
+            "svg_hole_compensation_enabled": compensation_enabled,
+            "svg_hole_max_area_mm2": 0.75,
+            "svg_hole_max_width_mm": 0.21,
+        }
+        assert {key: worker_args.get(key) for key in expected_options} == expected_options
 
     def test_batch_submits_material_archive_source_to_worker(self) -> None:
         """Batch endpoint forwards material-archive source params to worker."""

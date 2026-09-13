@@ -1793,6 +1793,8 @@ export interface BatchConvertParams {
   svg_hole_compensation_enabled?: boolean;
   svg_hole_max_area_mm2?: number;
   svg_hole_max_width_mm?: number;
+  enable_coating?: boolean;
+  coating_height_mm?: number;
   source_kind?: "legacy_single" | "legacy_multi" | "native_bundle";
   lut_name?: string;
   lut_names?: string[];

@@ -4804,6 +4804,8 @@ async def convert_batch(
     ),
     registry: FileRegistry = Depends(get_file_registry),
     pool: WorkerPoolManager = Depends(get_worker_pool),
+    enable_coating: bool = Form(False, description="启用透明镀层"),
+    coating_height_mm: float = Form(0.08, ge=0.04, le=0.12, description="透明镀层厚度 (mm)"),
 ) -> BatchResponse:
     """Batch-convert multiple images via process pool.
     通过进程池批量转换多张图像。
@@ -4813,6 +4815,9 @@ async def convert_batch(
     to the worker pool, one at a time.
     文件上传和 FileRegistry 操作在主线程完成。
     每个批量项的 CPU 密集型转换逐个提交到工作进程池。
+
+    Coating settings apply to every item, using single-image thickness limits.
+    镀层设置应用于每个批量项，厚度范围与单图生成一致。
 
     Args:
         separate_backing: Emit the backing as a separate mesh object when true.
@@ -5075,6 +5080,8 @@ async def convert_batch(
                 svg_hole_compensation_enabled,
                 svg_hole_max_area_mm2,
                 svg_hole_max_width_mm,
+                enable_coating,
+                coating_height_mm,
                 **(
                     {
                         "host_memory_reservation_bytes": (

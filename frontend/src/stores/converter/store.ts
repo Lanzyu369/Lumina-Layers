@@ -9682,6 +9682,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           auto_dynamic_range: state.auto_dynamic_range,
           separate_backing: state.separate_backing,
           enable_relief: state.enable_relief,
+          enable_coating: state.enable_coating,
+          coating_height_mm: state.coating_height_mm,
           printer_id: settings.printerModel,
           slicer: settings.slicerSoftware,
           nozzle_size: settings.nozzleSize,
