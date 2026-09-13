@@ -205,7 +205,7 @@ def _system_swap_used_bytes() -> tuple[int, str]:
         import psutil
 
         return int(psutil.swap_memory().used), "system_psutil"
-    except (ImportError, OSError):
+    except (ImportError, OSError, RuntimeError):
         return 0, "unavailable"
 
 

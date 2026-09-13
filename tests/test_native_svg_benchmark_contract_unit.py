@@ -41,6 +41,27 @@ def _load_manifest() -> dict:
     return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 
 
+def test_windows_swap_counter_failure_is_reported_as_unavailable(monkeypatch):
+    import psutil
+
+    def unavailable_counter():
+        raise RuntimeError("PdhAddEnglishCounterW failed")
+
+    monkeypatch.setattr(benchmark, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(psutil, "swap_memory", unavailable_counter)
+
+    assert benchmark._system_swap_used_bytes() == (0, "unavailable")
+
+
+def test_windows_swap_counter_preserves_available_measurement(monkeypatch):
+    import psutil
+
+    monkeypatch.setattr(benchmark, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(psutil, "swap_memory", lambda: SimpleNamespace(used=12345))
+
+    assert benchmark._system_swap_used_bytes() == (12345, "system_psutil")
+
+
 def test_complete_vector_analysis_benchmark_contract() -> None:
     manifest = _load_manifest()
 
