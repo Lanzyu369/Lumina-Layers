@@ -341,18 +341,6 @@ def _resolve_flat_backing_mask(ctx: dict, mask_solid: np.ndarray) -> np.ndarray:
     if explicit_backing_mask is not None:
         return explicit_backing_mask
 
-    modeling_mode = ctx.get("modeling_mode")
-    modeling_mode_value = getattr(modeling_mode, "value", modeling_mode)
-    if (
-        modeling_mode_value == "pixel"
-        and ctx.get("material_source", "lut") == "lut"
-        and np.any(mask_solid)
-        and not bool(ctx.get("enable_relief", False))
-        and not bool(ctx.get("enable_cloisonne", False))
-        and not (bool(ctx.get("enable_fridge_magnet", False)) and ctx.get("fridge_magnets"))
-    ):
-        return np.ones_like(mask_solid, dtype=bool)
-
     return mask_solid
 
 

@@ -1578,8 +1578,9 @@ class TestS06VoxelBuilding:
             backing_end - backing_start + 1
         )
 
-    def test_pixel_mode_backing_uses_full_canvas_without_coloring_transparent_pixels(self):
-        """Pixel mode should preserve the requested canvas size with backing only."""
+    @pytest.mark.parametrize("structure_mode", ["Single-sided", "Double-sided"])
+    def test_pixel_mode_backing_preserves_transparent_pixels(self, structure_mode):
+        """Transparent margins and holes must stay empty through every layer."""
         from core.pipeline.s06_voxel_building import run
 
         h, w = 6, 6
@@ -1587,6 +1588,8 @@ class TestS06VoxelBuilding:
         material_matrix[2:4, 1:5, :] = 2
         mask_solid = np.zeros((h, w), dtype=bool)
         mask_solid[2:4, 1:5] = True
+        mask_solid[2, 2] = False
+        material_matrix[~mask_solid] = -1
         ctx = {
             **self._make_valid_ctx(),
             "material_matrix": material_matrix,
@@ -1595,12 +1598,15 @@ class TestS06VoxelBuilding:
             "backing_color_id": 3,
             "spacer_thick": 0.16,
             "modeling_mode": ModelingMode.PIXEL,
+            "structure_mode": structure_mode,
         }
 
         result = run(ctx)
         backing_start, backing_end = result["backing_metadata"]["backing_z_range"]
 
-        assert np.all(result["full_matrix"][backing_start: backing_end + 1] == 3)
+        backing = result["full_matrix"][backing_start: backing_end + 1]
+        assert np.all(backing[:, mask_solid] == 3)
+        assert np.all(result["full_matrix"][:, ~mask_solid] == -1)
         assert np.all(result["full_matrix"][:backing_start, 0, 0] == -1)
         assert np.all(result["full_matrix"][:backing_start, 2, 1] == 2)
 
@@ -2601,8 +2607,8 @@ class TestP04CacheBuilding:
         assert cache["modeling_mode"] == ModelingMode.PIXEL
         assert cache["glb_max_meshes"] == 256
 
-    def test_pixel_mode_adds_full_canvas_backing_mask_for_glb_preview(self):
-        """Pixel GLB preview backing should match the requested canvas size."""
+    def test_pixel_mode_keeps_transparent_background_in_glb_preview(self):
+        """Pixel GLB backing must follow the same silhouette as its colors."""
         from core.pipeline.p04_cache_building import run
 
         ctx = self._make_valid_ctx()
@@ -2612,8 +2618,8 @@ class TestP04CacheBuilding:
 
         cache = run(ctx)["cache"]
 
-        assert np.all(cache["backing_mask"])
-        assert np.count_nonzero(cache["backing_mask"] & ~cache["mask_solid"]) > 0
+        backing_mask = cache.get("backing_mask", cache["mask_solid"])
+        np.testing.assert_array_equal(backing_mask, ctx["mask_solid"])
 
     def test_high_fidelity_does_not_add_backing_mask_by_default(self):
         """High-fidelity GLB preview keeps backing tied to the visible silhouette."""
@@ -2627,6 +2633,50 @@ class TestP04CacheBuilding:
         cache = run(ctx)["cache"]
 
         assert "backing_mask" not in cache
+
+    @pytest.mark.parametrize("mode", [ModelingMode.PIXEL, ModelingMode.HIGH_FIDELITY])
+    @pytest.mark.parametrize("opaque", [False, True])
+    def test_exported_glb_backing_matches_alpha_after_cache_round_trip(
+        self, tmp_path, mode, opaque
+    ):
+        """Persisted preview caches must retain the exact backing footprint."""
+        from shapely.geometry import Polygon, box
+        from shapely.ops import unary_union
+
+        from api.preview_cache_artifacts import (
+            externalize_preview_cache_to_artifacts,
+            hydrate_preview_cache_for_worker,
+        )
+        from core.pipeline.p04_cache_building import run
+        from core.pipeline.s11_glb_preview import generate_segmented_glb
+
+        ctx = self._make_valid_ctx()
+        ctx["modeling_mode"] = mode
+        mask = ctx["mask_solid"]
+        if not opaque:
+            mask[:] = False
+            mask[1:4, 1:4] = True
+            mask[2, 2] = False
+        ctx["material_matrix"][~mask] = -1
+        cache = run(ctx)["cache"]
+        ref, _ = externalize_preview_cache_to_artifacts(cache, root_dir=tmp_path)
+        loaded_cache = hydrate_preview_cache_for_worker(ref)
+        output_path = str(tmp_path / "preview.glb")
+
+        assert generate_segmented_glb(loaded_cache, output_path) == output_path
+
+        scene = trimesh.load(output_path, force="scene")
+        backing = scene.geometry[scene.graph["backing_plate"][1]]
+        top_faces = backing.triangles[backing.face_normals[:, 2] > 0.5]
+        actual = unary_union([Polygon(face[:, :2]) for face in top_faces])
+        scale = ctx["target_width_mm"] / ctx["target_w"]
+        expected = unary_union([
+            box(x * scale, (4 - y - 1) * scale, (x + 1) * scale, (4 - y) * scale)
+            for y, x in zip(*np.where(mask))
+        ])
+        assert actual.symmetric_difference(expected).area < 1e-6
+        assert backing.volume == pytest.approx(expected.area * PrinterConfig.LAYER_HEIGHT)
+        np.testing.assert_array_equal(loaded_cache["mask_solid"], mask)
 
     def test_high_fidelity_does_not_raise_glb_mesh_budget_by_default(self):
         """High-fidelity mode keeps the default GLB cap unless opted in."""

@@ -16,6 +16,22 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-09-14",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [{
+          zh: "使用像素画模式转换透明图片时，合并预览和导出的 3MF 现在都会保留透明区域，不再自动补上一整块矩形底板。",
+          en: "Pixel Art mode now preserves transparent areas in both the combined preview and exported 3MF, instead of adding a full rectangular backing.",
+        }],
+      },
+    ],
+  },
+  {
     version: "2026-09-13",
     title: {
       zh: "Lumina Layers — 9 月更新速览",
