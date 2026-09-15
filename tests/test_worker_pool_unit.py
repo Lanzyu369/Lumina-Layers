@@ -1300,6 +1300,38 @@ class TestRunInWorkerWithContext:
             == 5
         )
 
+    def test_wrapper_installs_and_restores_worker_lease_path(self) -> None:
+        from api.worker_pool import _run_in_worker_with_context
+        from core.task_parallelism_runtime import (
+            current_demand_snapshot_path,
+            current_worker_lease_path,
+        )
+
+        observed: list[tuple[Path | None, Path | None]] = []
+
+        def capture_paths() -> None:
+            observed.append(
+                (current_demand_snapshot_path(), current_worker_lease_path())
+            )
+
+        assert current_worker_lease_path() is None
+        _run_in_worker_with_context(
+            capture_paths,
+            None,
+            None,
+            "/tmp/lumina-demand-test.json",
+            None,
+            worker_lease_path="/tmp/lumina-workers-test.json",
+        )
+
+        assert observed == [
+            (
+                Path("/tmp/lumina-demand-test.json"),
+                Path("/tmp/lumina-workers-test.json"),
+            )
+        ]
+        assert current_worker_lease_path() is None
+
     def test_wrapper_installs_and_restores_demand_path(self) -> None:
         from api.worker_pool import _run_in_worker_with_context
         from core.task_parallelism_runtime import current_demand_snapshot_path

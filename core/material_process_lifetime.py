@@ -131,7 +131,7 @@ class MaterialProcessLifetime:
         self._directory, self._monitor = None, None
 
 
-def attach_material_worker(job_name: str | None, parent_pid: int) -> None:
+def attach_material_worker(job_name: str, parent_pid: int) -> None:
     """Register this worker with the independent parent monitor.
 
     向独立监控进程登记当前子进程，并确认父进程仍然存活。

@@ -224,10 +224,13 @@ def test_material_budget_adapts_to_device_and_concurrent_tasks(
     monkeypatch.setattr(materializer, "get_process_rss_bytes", lambda: 100 * 1024**2)
     monkeypatch.setattr(materializer, "resolve_vector_mesh_memory_budget_bytes", lambda: 16 * 1024**3)
     items = [(str(i), {"slabs": [i]}) for i in range(12)]
-    workers, _reason, _bytes = materializer._worker_budget(
+    workers, _reason, _bytes, plan = materializer._worker_budget(
         items, vector_engine.build_vector_layered_volume, None,
     )
     assert workers == min(12, max(1, cpus // outer_demand))
+    # The plan travels back so the lease admission can use the same effective
+    # CPU capacity the static plan did, instead of re-discovering it.
+    assert plan.effective_cpu_capacity == cpus
 
 
 def test_unavailable_process_monitor_falls_back_to_serial(monkeypatch: pytest.MonkeyPatch) -> None:

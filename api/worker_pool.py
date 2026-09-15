@@ -273,11 +273,15 @@ def _run_in_worker_with_context(
     demand_snapshot_path: str | None,
     host_memory_budget_bytes: int | None,
     *args: Any,
+    worker_lease_path: str | None = None,
 ) -> T:
     """Replay parent-side contextvars inside the worker process before invoking fn.
 
     在 worker 子进程中重放父进程的 request_id 与 session_id 后再执行 fn，
     保证 worker 内部 logger 输出的事件能溯源到发起的 HTTP 请求。
+
+    ``worker_lease_path`` 由调用方以关键字传入：内部阶段据此登记自己实际启动的
+    worker 数，使错峰到达的任务看到真实占用而不是重新静态均分。
     """
     from api.structured_logging import set_request_id, set_session_id
 
@@ -285,16 +289,20 @@ def _run_in_worker_with_context(
         set_request_id(request_id)
     if session_id is not None:
         set_session_id(session_id)
-    if demand_snapshot_path is None and host_memory_budget_bytes is None:
+    if (
+        demand_snapshot_path is None
+        and host_memory_budget_bytes is None
+        and worker_lease_path is None
+    ):
         return fn(*args)
     if demand_snapshot_path is None:
         with task_host_memory_budget_scope(host_memory_budget_bytes):
             return fn(*args)
     if host_memory_budget_bytes is None:
-        with task_parallelism_runtime_scope(demand_snapshot_path):
+        with task_parallelism_runtime_scope(demand_snapshot_path, worker_lease_path):
             return fn(*args)
     with (
-        task_parallelism_runtime_scope(demand_snapshot_path),
+        task_parallelism_runtime_scope(demand_snapshot_path, worker_lease_path),
         task_host_memory_budget_scope(host_memory_budget_bytes),
     ):
         return fn(*args)
@@ -307,6 +315,7 @@ def _run_in_worker_with_context_timed(
     demand_snapshot_path: str | None,
     host_memory_budget_bytes: int | None,
     *args: Any,
+    worker_lease_path: str | None = None,
 ) -> tuple[T, int, int]:
     """Run one contextualized task and return worker-local timing bounds."""
     worker_started_ns = time.perf_counter_ns()
@@ -317,6 +326,7 @@ def _run_in_worker_with_context_timed(
         demand_snapshot_path,
         host_memory_budget_bytes,
         *args,
+        worker_lease_path=worker_lease_path,
     )
     worker_finished_ns = time.perf_counter_ns()
     return result, worker_started_ns, worker_finished_ns
@@ -761,6 +771,11 @@ class WorkerPoolManager:
             if demand_publisher is not None
             else None
         )
+        worker_lease_path = (
+            str(demand_publisher.worker_lease_path)
+            if demand_publisher is not None
+            else None
+        )
         reservation_token: str | None = None
         task_host_memory_budget: int | None = None
         if host_memory_reservation_bytes is not None:
@@ -786,6 +801,7 @@ class WorkerPoolManager:
                 demand_snapshot_path,
                 task_host_memory_budget,
                 *args,
+                worker_lease_path=worker_lease_path,
             )
             executor_future.add_done_callback(
                 lambda completed, token=active_task_token: (
