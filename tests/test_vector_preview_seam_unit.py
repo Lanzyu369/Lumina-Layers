@@ -54,19 +54,28 @@ from shapely.prepared import prep
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 
-# Load core.vector_engine directly to skip the heavy core.__init__ chain
-# (matches the bootstrap used by the other vector unit tests in this suite).
-# 直接按文件加载 vector_engine，避免 core 包的重依赖 import 链。
-_spec = importlib.util.spec_from_file_location(
-    "core.vector_engine", os.path.join(_ROOT, "core", "vector_engine.py")
-)
-_ve = importlib.util.module_from_spec(_spec)
-if "core" not in sys.modules:
-    _pkg = types.ModuleType("core")
-    _pkg.__path__ = [os.path.join(_ROOT, "core")]
-    sys.modules["core"] = _pkg
-sys.modules["core.vector_engine"] = _ve
-_spec.loader.exec_module(_ve)
+# Load core.vector_engine by file only when this process has not imported the
+# canonical module yet. Replacing an already-imported module leaves the ``core``
+# package attribute pointing at the original object, so during combined runs
+# later ``from core.vector_engine import ...`` callers and monkeypatches would
+# silently address two different module objects.
+# 仅在尚未导入标准模块时按文件加载；替换已导入的模块会让 ``core`` 包属性仍指向
+# 原对象，组合执行时后续 import 与 monkeypatch 会落到两个不同模块对象上。
+if "core.vector_engine" in sys.modules:
+    _ve = sys.modules["core.vector_engine"]
+else:
+    _spec = importlib.util.spec_from_file_location(
+        "core.vector_engine", os.path.join(_ROOT, "core", "vector_engine.py")
+    )
+    _ve = importlib.util.module_from_spec(_spec)
+    if "core" not in sys.modules:
+        _pkg = types.ModuleType("core")
+        _pkg.__path__ = [os.path.join(_ROOT, "core")]
+        sys.modules["core"] = _pkg
+    sys.modules["core.vector_engine"] = _ve
+    setattr(sys.modules["core"], "vector_engine", _ve)
+    assert _spec.loader is not None
+    _spec.loader.exec_module(_ve)
 
 VectorProcessor = _ve.VectorProcessor
 VectorAnalysis = _ve.VectorAnalysis
