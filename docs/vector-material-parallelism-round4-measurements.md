@@ -221,6 +221,10 @@ worker（`demand` 由 1 变 2 发生在 t≈9.5 s，A 在 t≈11.7 s 释放，B 
 | 本分支 `a5d8f12c` | **44 failed, 6753 passed, 53 skipped, 3 deselected**（共 6853） | 13:38 |
 | 纯净基线快照 `2e5d94bb` | 52 failed, 6664 passed, 53 skipped, 3 deselected（共 6772） | 12:09 |
 
+套件是在 `a5d8f12c` 上跑的；其后只增加了两个纯文档提交（`c39457c1`、
+`2e6d9c77`），被测代码与 PR head `2e6d9c77` 相同。定向 12 个模块
+**307 passed, 1 skipped**（该 skip 为既有的条件跳过）。
+
 按**用例 ID 集合**比较（不是按数量）：
 
 - 本分支的 44 个失败**全部**也是基线的失败（集合是基线的真子集），
