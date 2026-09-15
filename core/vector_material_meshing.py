@@ -37,6 +37,7 @@ from core.vector_layer_geometry import (
     build_vector_layered_volume,
 )
 from core.vector_mesh_memory import (
+    get_owned_memory_report,
     get_process_rss_bytes,
     resolve_vector_mesh_memory_budget_bytes,
 )
@@ -314,6 +315,22 @@ def materialize_material_meshes(
                 timings["materialize_parallelism_workers"] = 1
                 timings["materialize_parallelism_limit"] = "process_ownership_unavailable"
             return _materialize_serial(items, scale_factor, geometry_policy, serial_builder)
+        if timings is not None:
+            # Sampled around the parallel section: the parent's own RSS is not
+            # the task's footprint while material children are alive.
+            # 在并行段前后采样：材质子进程存活期间，父进程自身 RSS 并非任务
+            # 真实占用。
+            start_report = get_owned_memory_report()
+            timings["materialize_owned_group_rss_start_bytes"] = start_report[
+                "owned_group_rss_bytes"
+            ]
+            timings["materialize_container_limit_bytes"] = start_report[
+                "container_limit_bytes"
+            ]
+            timings["materialize_container_current_bytes"] = start_report[
+                "container_current_bytes"
+            ]
+            timings["materialize_container_source"] = start_report["container_source"]
         try:
             return _materialize_in_processes(
                 items, scale_factor, geometry_policy, workers, worker_bytes,
@@ -444,11 +461,15 @@ def _materialize_in_processes(
     ) as directory:
         lifetime.track_data_directory(directory)
         inputs, outputs = [], []
+        input_started = time.perf_counter()
+        input_bytes = 0
         for index, (_name, data) in enumerate(items):
             source = Path(directory) / f"{index}.json"
             _write_material_input(source, data["slabs"])
             inputs.append(str(source))
             outputs.append(str(Path(directory) / f"{index}.npz"))
+            input_bytes += source.stat().st_size
+        input_write_s = time.perf_counter() - input_started
         demand_snapshot = current_demand_snapshot_path()
         slots: list[trimesh.Trimesh | None] = [None] * len(items)
         try:
@@ -465,6 +486,11 @@ def _materialize_in_processes(
                 process_cpu = {}
                 peak_outstanding = 0
                 waves = 0
+                wait_s = 0.0
+                result_read_s = 0.0
+                result_bytes = 0
+                first_result_s: float | None = None
+                dispatch_started = time.perf_counter()
                 try:
                     pending: dict[Future, int] = {}
                     next_index = 0
@@ -502,9 +528,11 @@ def _materialize_in_processes(
                                 f"{len(items) - next_index} materials unscheduled"
                             )
                         peak_outstanding = max(peak_outstanding, len(pending))
+                        wait_started = time.perf_counter()
                         completed, _pending = wait(
                             tuple(pending), return_when=FIRST_COMPLETED
                         )
+                        wait_s += time.perf_counter() - wait_started
                         if not completed:
                             continue
                         waves += 1
@@ -517,8 +545,16 @@ def _materialize_in_processes(
                             process_cpu[process_id] = max(
                                 process_cpu.get(process_id, 0.0), cpu_seconds
                             )
+                            read_started = time.perf_counter()
                             slots[index] = _read_material_result(output_path)
+                            result_read_s += time.perf_counter() - read_started
+                            try:
+                                result_bytes += Path(output_path).stat().st_size
+                            except OSError:
+                                pass
                             _release_material_input(data)
+                            if first_result_s is None:
+                                first_result_s = time.perf_counter() - dispatch_started
                 except BaseException:  # Process boundary: stop siblings before shutdown waits.
                     _stop_processes(pool)
                     raise
@@ -527,6 +563,20 @@ def _materialize_in_processes(
                     timings["materialize_child_cpu_s"] = sum(process_cpu.values())
                     timings["materialize_dispatch_waves"] = waves
                     timings["materialize_dispatch_peak_outstanding"] = peak_outstanding
+                    # Stage split inside the material phase: input
+                    # serialization, dispatch+compute (the first result also
+                    # carries process startup) and result recovery. The sum is
+                    # below the outer materialize_s because the frames overlap
+                    # only where noted.
+                    # 材质阶段内部分段：输入序列化、派发+计算（首个结果同时包含
+                    # 进程启动）、结果回收。三者之和小于外层 materialize_s，
+                    # 因为仅在注明处存在重叠。
+                    timings["materialize_input_write_s"] = input_write_s
+                    timings["materialize_input_bytes"] = input_bytes
+                    timings["materialize_worker_wait_s"] = wait_s
+                    timings["materialize_result_read_s"] = result_read_s
+                    timings["materialize_result_bytes"] = result_bytes
+                    timings["materialize_first_result_s"] = first_result_s
         except BrokenProcessPool as exc:
             raise RuntimeError("Vector material worker exited unexpectedly") from exc
     for index, (name, data) in enumerate(items):

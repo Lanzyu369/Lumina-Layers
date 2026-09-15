@@ -44,12 +44,20 @@ _HOST_MEMORY_SMALL_TASK_MAX_BYTES = 2 * 1024**3
 
 
 def _available_host_memory_bytes() -> int | None:
-    """Return current host-available memory when psutil is usable."""
+    """Return memory this pool may still admission against.
+
+    返回本进程池仍可用于准入的内存。
+
+    Container-aware: a memory-limited container must not admit tasks from the
+    host's available figure, which is what ``psutil`` reports inside cgroup v2.
+    已计入容器上限：受限容器不能按宿主机可用内存（cgroup v2 下 psutil 的
+    返回值）来准入任务。
+    """
 
     try:
-        import psutil
+        from core.system_capacity import get_effective_memory_capacity
 
-        return max(0, int(psutil.virtual_memory().available))
+        return get_effective_memory_capacity().available_bytes
     except (ImportError, AttributeError, OSError, RuntimeError, ValueError):
         return None
 

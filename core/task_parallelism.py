@@ -9,7 +9,10 @@ import threading
 from typing import Iterator, Literal
 
 from api.structured_logging import get_logger
-from core.system_capacity import get_effective_cpu_capacity
+from core.system_capacity import (
+    get_effective_cpu_capacity,
+    get_effective_memory_capacity,
+)
 from core.task_parallelism_runtime import (
     current_demand_snapshot_path,
     read_outer_demand,
@@ -115,12 +118,19 @@ def task_parallelism_worker_scope() -> Iterator[None]:
 
 
 def _available_memory_bytes() -> int | None:
-    """Return currently available system memory when psutil is usable."""
+    """Return memory this process may still use, container limit included.
+
+    返回本进程仍可使用的内存，已计入容器上限。
+
+    The host-available figure alone would let a memory-limited container size
+    its worker pool from host RAM; the probe therefore reports the smaller of
+    host availability and the remaining cgroup v2 budget.
+    只用宿主可用内存会让受限容器按宿主机内存决定 worker 数；因此这里返回宿主
+    可用量与 cgroup v2 剩余额度的较小值。
+    """
 
     try:
-        import psutil
-
-        return max(0, int(psutil.virtual_memory().available))
+        return get_effective_memory_capacity().available_bytes
     except (ImportError, AttributeError, OSError, RuntimeError, ValueError):
         return None
 

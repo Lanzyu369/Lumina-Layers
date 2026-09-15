@@ -78,10 +78,13 @@ grant = store.reserve(
     effective_cpu_capacity=int(capacity),
     stage="vector_materialize",
 )
-Path(ready).write_text(
+ready_path = Path(ready)
+temporary = ready_path.with_suffix(".tmp")
+temporary.write_text(
     "%d %d %d %s" % (grant.workers, grant.sibling_tasks, grant.sibling_workers, grant.limiting_reason),
     encoding="utf-8",
 )
+temporary.replace(ready_path)
 deadline = time.monotonic() + 60
 while not Path(release).exists() and time.monotonic() < deadline:
     time.sleep(0.02)
@@ -116,12 +119,15 @@ class _LeaseHolder:
 
     def grant(self, timeout: float = 60.0) -> tuple[int, int, int, str]:
         deadline = time.monotonic() + timeout
-        while not self._ready.exists() and time.monotonic() < deadline:
+        while time.monotonic() < deadline:
+            if self._ready.exists():
+                fields = self._ready.read_text(encoding="utf-8").split()
+                if len(fields) == 4:
+                    return int(fields[0]), int(fields[1]), int(fields[2]), fields[3]
             if self.process.poll() is not None:
                 raise AssertionError("lease holder exited before reserving")
             time.sleep(0.02)
-        workers, tasks, siblings, reason = self._ready.read_text(encoding="utf-8").split()
-        return int(workers), int(tasks), int(siblings), reason
+        raise AssertionError("lease holder did not report its grant in time")
 
     def stop(self, *, release: bool = True) -> None:
         if not release:
@@ -749,3 +755,31 @@ def test_live_demand_snapshot_reaches_the_compute_stage(
     finally:
         lifetime.close()
         publisher.cleanup()
+
+
+def test_material_stage_reports_its_internal_split(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Input serialization, dispatch/compute and result recovery are separable."""
+
+    slots = _slots(3)
+    pool = _ScriptedPool(
+        [_BLOCKED] * 3, _expected(slots), release_schedule=[2, 0, 1]
+    )
+    _result, timings, _stops, _pool = _run(monkeypatch, tmp_path, slots, pool)
+
+    assert timings["materialize_input_write_s"] >= 0.0
+    assert timings["materialize_input_bytes"] > 0
+    assert timings["materialize_result_bytes"] > 0
+    assert timings["materialize_result_read_s"] >= 0.0
+    assert timings["materialize_worker_wait_s"] >= 0.0
+    assert timings["materialize_first_result_s"] is not None
+    # The split must not claim to be the whole stage.
+    assert (
+        timings["materialize_input_write_s"] + timings["materialize_worker_wait_s"]
+        >= timings["materialize_result_read_s"]
+    )
+    # The whole owned group and the container charge are recorded, not just
+    # this process's own RSS.
+    assert timings["materialize_owned_group_rss_start_bytes"] is not None
+    assert "materialize_container_source" in timings

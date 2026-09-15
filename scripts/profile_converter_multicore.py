@@ -74,6 +74,7 @@ _NUMERIC_RUN_METRICS = (
     "peak_rss_increase_mb",
     "peak_thread_count",
     "peak_child_process_count",
+    "peak_container_current_mb",
 )
 _THREAD_ENVIRONMENT_KEYS = (
     "OMP_NUM_THREADS",
@@ -1106,8 +1107,32 @@ class _ResourceSampler:
         self.peak_rss_bytes = 0
         self.peak_thread_count = 0
         self.peak_child_process_count = 0
+        # Container charge, sampled from this process's own cgroup. Inside a
+        # memory-limited container the parent+children RSS sum is the useful
+        # figure; ``memory.current`` also covers pages the allocator has not
+        # returned yet.
+        # 容器计费：从本进程所属 cgroup 采样。受限容器里父进程与子进程的 RSS
+        # 之和是有意义的数字；``memory.current`` 还包含分配器尚未归还的页。
+        self.container_limit_bytes: int | None = None
+        self.container_source = "unavailable"
+        self.peak_container_current_bytes = 0
+
+    def _sample_container(self) -> None:
+        try:
+            from core.system_capacity import get_effective_memory_capacity
+
+            capacity = get_effective_memory_capacity()
+        except (ImportError, AttributeError, OSError, RuntimeError, ValueError):
+            return
+        self.container_limit_bytes = capacity.limit_bytes
+        self.container_source = capacity.source
+        if capacity.container_used_bytes is not None:
+            self.peak_container_current_bytes = max(
+                self.peak_container_current_bytes, int(capacity.container_used_bytes)
+            )
 
     def _sample(self) -> int | None:
+        self._sample_container()
         try:
             children = self._process.children(recursive=True)
             processes = [self._process, *children]
@@ -1356,6 +1381,14 @@ def execute_case(
             "average_cpu_percent": (total_cpu_s / elapsed * 100.0) if elapsed else 0.0,
             "rss_at_start_mb": resources.initial_rss_bytes / (1024 * 1024),
             "peak_rss_mb": resources.peak_rss_bytes / (1024 * 1024),
+            "container_limit_mb": (
+                None
+                if resources.container_limit_bytes is None
+                else resources.container_limit_bytes / (1024 * 1024)
+            ),
+            "peak_container_current_mb": resources.peak_container_current_bytes
+            / (1024 * 1024),
+            "container_source": resources.container_source,
             "peak_rss_increase_mb": max(
                 0,
                 resources.peak_rss_bytes - resources.initial_rss_bytes,

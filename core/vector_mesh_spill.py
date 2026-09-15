@@ -7,9 +7,9 @@ import tempfile
 from typing import BinaryIO
 
 import numpy as np
-import psutil
 import trimesh
 
+from core.system_capacity import get_effective_memory_capacity
 from core.vector_mesh_memory import (
     get_process_rss_bytes,
     resolve_vector_mesh_memory_budget_bytes,
@@ -22,10 +22,11 @@ _FACE_CHUNK_ROWS = 65_536
 def _retained_memory_limit() -> int:
     rss = get_process_rss_bytes()
     remaining = resolve_vector_mesh_memory_budget_bytes() - int(rss or 0)
-    try:
-        remaining = min(remaining, int(psutil.virtual_memory().available))
-    except (OSError, psutil.Error):
-        remaining = 0
+    # Container-aware: inside a memory-limited container the raw host figure is
+    # not what this process may still allocate.
+    # 计入容器上限：受限容器内，宿主机的可用内存不是本进程还能分配的量。
+    available = get_effective_memory_capacity().available_bytes
+    remaining = min(remaining, int(available)) if available is not None else 0
     # Leave room for the next extrusion and the final contiguous copy.
     return max(1, remaining // 3)
 

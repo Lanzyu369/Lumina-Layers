@@ -426,3 +426,245 @@ def test_process_affinity_falls_back_to_psutil_on_non_posix_platforms() -> None:
     )
 
     assert result == frozenset({3, 7})
+
+
+# ---------------------------------------------------------------------------
+# Container memory limit (F3)
+# ---------------------------------------------------------------------------
+
+
+def test_cgroup_reader_resolves_memory_limit_and_usage(tmp_path: Path) -> None:
+    """The memory reader reuses the CPU path discovery, not a second parser."""
+
+    system_capacity = _capacity_module()
+    relative_path = Path("docker/abc123")
+    cgroup_path, mountinfo_path, mount_point = _write_cgroup_v2_probe(
+        tmp_path,
+        process_cgroup=f"0::/{relative_path.as_posix()}\n",
+    )
+    cgroup_dir = mount_point / relative_path
+    cgroup_dir.mkdir(parents=True)
+    (cgroup_dir / "memory.max").write_text("2147483648\n", encoding="utf-8")
+    (cgroup_dir / "memory.current").write_text("1073741824\n", encoding="utf-8")
+
+    values = system_capacity._read_cgroup_v2_files(
+        ("memory.max", "memory.current"),
+        proc_self_cgroup_path=cgroup_path,
+        proc_self_mountinfo_path=mountinfo_path,
+    )
+    assert values == {
+        "memory.max": "2147483648",
+        "memory.current": "1073741824",
+    }
+
+
+def test_memory_limit_parsing_treats_max_as_unlimited() -> None:
+    system_capacity = _capacity_module()
+    assert system_capacity._parse_cgroup_v2_memory_value("max") is None
+    assert system_capacity._parse_cgroup_v2_memory_value("") is None
+    assert system_capacity._parse_cgroup_v2_memory_value("nonsense") is None
+    assert system_capacity._parse_cgroup_v2_memory_value("0") == 0
+    assert system_capacity._parse_cgroup_v2_memory_value("1024\n") == 1024
+
+
+def test_effective_memory_is_capped_by_the_container_not_host_ram() -> None:
+    """A 2 GiB container must not be told it has the host's 24 GiB."""
+
+    system_capacity = _capacity_module()
+    host_available = 24 * 1024**3
+    capacity = system_capacity.discover_effective_memory_capacity(
+        host_available_bytes=host_available,
+        cgroup_values={
+            "memory.max": str(2 * 1024**3),
+            "memory.current": str(512 * 1024**2),
+        },
+    )
+    assert capacity.source == "cgroup_v2"
+    assert capacity.limit_bytes == 2 * 1024**3
+    assert capacity.container_used_bytes == 512 * 1024**2
+    assert capacity.available_bytes == 1536 * 1024**2
+    assert capacity.host_available_bytes == host_available
+
+
+def test_over_limit_container_reports_zero_available() -> None:
+    system_capacity = _capacity_module()
+    capacity = system_capacity.discover_effective_memory_capacity(
+        host_available_bytes=24 * 1024**3,
+        cgroup_values={
+            "memory.max": str(1024**3),
+            "memory.current": str(2 * 1024**3),
+        },
+    )
+    assert capacity.available_bytes == 0
+    assert capacity.limit_bytes == 1024**3
+
+
+def test_unlimited_container_keeps_the_host_figure() -> None:
+    system_capacity = _capacity_module()
+    capacity = system_capacity.discover_effective_memory_capacity(
+        host_available_bytes=6 * 1024**3,
+        cgroup_values={"memory.max": "max", "memory.current": "0"},
+    )
+    assert capacity.source == "unrestricted"
+    assert capacity.limit_bytes is None
+    assert capacity.available_bytes == 6 * 1024**3
+
+
+def test_memory_probe_without_any_source_is_explicitly_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    system_capacity = _capacity_module()
+    monkeypatch.setattr(
+        system_capacity, "_host_available_memory_bytes", lambda: None
+    )
+    capacity = system_capacity.discover_effective_memory_capacity(
+        cgroup_values={}
+    )
+    assert capacity.available_bytes is None
+    assert capacity.source == "unavailable"
+
+
+def test_task_memory_probe_uses_the_container_remaining(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The inner-worker memory ceiling must follow the container, not host RAM."""
+
+    from core import task_parallelism
+
+    host_only = 24 * 1024**3
+    container_remaining = 1536 * 1024**2
+    observed: dict = {}
+
+    class _Capacity:
+        available_bytes = container_remaining
+
+    monkeypatch.setattr(
+        task_parallelism, "get_effective_memory_capacity", lambda: _Capacity()
+    )
+    observed["probe"] = task_parallelism._available_memory_bytes()
+    assert observed["probe"] == container_remaining
+    assert host_only != observed["probe"]
+
+    plan = task_parallelism.resolve_task_parallelism_plan(
+        "vector",
+        work_items=8,
+        hard_max_workers=None,
+        estimated_worker_bytes=512 * 1024**2,
+        available_memory_bytes=task_parallelism._available_memory_bytes(),
+        effective_cpu_capacity=16,
+        outer_demand=1,
+    )
+    # 1.5 GiB minus the one-GiB headroom leaves room for exactly one 512 MiB
+    # worker - not the sixteen the host figure would have allowed.
+    assert plan.available_memory_bytes == container_remaining
+    assert plan.memory_ceiling == 1
+    assert plan.workers == 1
+    assert plan.limiting_reason == "memory"
+
+
+def test_mesh_budget_is_capped_by_the_container_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core import vector_mesh_memory
+
+    monkeypatch.delenv("LUMINA_VECTOR_MESH_MEMORY_BUDGET_MB", raising=False)
+    monkeypatch.setattr(
+        vector_mesh_memory, "get_effective_memory_limit_bytes", lambda: None
+    )
+    monkeypatch.setattr(
+        vector_mesh_memory, "current_task_host_memory_budget_bytes", lambda: None
+    )
+    assert (
+        vector_mesh_memory.resolve_vector_mesh_memory_budget_bytes()
+        == vector_mesh_memory.DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
+    )
+
+    monkeypatch.setattr(
+        vector_mesh_memory, "get_effective_memory_limit_bytes", lambda: 2 * 1024**3
+    )
+    assert (
+        vector_mesh_memory.resolve_vector_mesh_memory_budget_bytes()
+        == 2 * 1024**3
+    )
+
+    # An explicit environment override stays an upper bound, never a raise.
+    monkeypatch.setenv("LUMINA_VECTOR_MESH_MEMORY_BUDGET_MB", "512")
+    assert (
+        vector_mesh_memory.resolve_vector_mesh_memory_budget_bytes()
+        == 512 * 1024**2
+    )
+
+
+def test_parent_reservation_still_bounds_the_mesh_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The existing parent-task reservation must not be widened or ignored."""
+
+    from core import vector_mesh_memory
+
+    monkeypatch.delenv("LUMINA_VECTOR_MESH_MEMORY_BUDGET_MB", raising=False)
+    monkeypatch.setattr(
+        vector_mesh_memory, "get_effective_memory_limit_bytes", lambda: 2 * 1024**3
+    )
+    monkeypatch.setattr(
+        vector_mesh_memory, "current_task_host_memory_budget_bytes", lambda: 256 * 1024**2
+    )
+    assert (
+        vector_mesh_memory.resolve_vector_mesh_memory_budget_bytes()
+        == 256 * 1024**2
+    )
+
+
+def test_spill_limit_follows_the_container_remaining(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core import vector_mesh_spill
+
+    container_remaining = 900 * 1024**2
+    monkeypatch.setattr(
+        vector_mesh_spill, "get_process_rss_bytes", lambda: 0
+    )
+    monkeypatch.setattr(
+        vector_mesh_spill,
+        "resolve_vector_mesh_memory_budget_bytes",
+        lambda: 8 * 1024**3,
+    )
+    monkeypatch.setattr(
+        vector_mesh_spill,
+        "get_effective_memory_capacity",
+        lambda: system_capacity_capacity(container_remaining),
+    )
+    # 900 MiB / 3 is far below the 8 GiB budget the host would have allowed.
+    assert vector_mesh_spill._retained_memory_limit() == container_remaining // 3
+
+
+def system_capacity_capacity(available_bytes: int | None):
+    from core.system_capacity import EffectiveMemoryCapacity
+
+    return EffectiveMemoryCapacity(
+        available_bytes=available_bytes,
+        limit_bytes=None,
+        container_used_bytes=None,
+        host_available_bytes=available_bytes,
+        source="unrestricted" if available_bytes is not None else "unavailable",
+    )
+
+
+def test_owned_memory_report_names_the_container_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core import vector_mesh_memory
+
+    monkeypatch.setattr(
+        vector_mesh_memory,
+        "get_process_rss_bytes",
+        lambda: 100 * 1024**2,
+    )
+    monkeypatch.setattr(
+        vector_mesh_memory, "get_owned_process_group_rss_bytes", lambda: 700 * 1024**2
+    )
+    report = vector_mesh_memory.get_owned_memory_report()
+    assert report["self_rss_bytes"] == 100 * 1024**2
+    assert report["owned_group_rss_bytes"] == 700 * 1024**2
+    assert report["container_source"] in {"cgroup_v2", "unrestricted"}
+    assert "container_limit_bytes" in report
