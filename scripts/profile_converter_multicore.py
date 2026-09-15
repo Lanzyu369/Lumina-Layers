@@ -1280,6 +1280,9 @@ def execute_case(
 
     执行并分析一次质量参数锁定的转换阶段。
 
+    CPU totals include the material workers' explicitly reported CPU time.
+    CPU 总量包含材质子进程明确回传的累计 CPU 时间。
+
     Args:
         case: Deterministic profile case. 确定性的性能分析案例。
         phase: Preview or generation phase. 预览或生成阶段。
@@ -1341,12 +1344,16 @@ def execute_case(
         snapshot = semantic_snapshot(result) if capture_semantics else None
         hifi_timings = dict(result.get("_hifi_timings") or {})
         vector_timings = _extract_vector_timings(result)
+        child_cpu_s = float(vector_timings.get("materialize_child_cpu_s", 0.0))
+        total_cpu_s = cpu_s + child_cpu_s
         metrics = {
             "total_s": elapsed,
             "queue_wait_s": 0.0,
             "worker_execution_s": elapsed,
-            "cpu_s": cpu_s,
-            "average_cpu_percent": (cpu_s / elapsed * 100.0) if elapsed else 0.0,
+            "cpu_s": total_cpu_s,
+            "parent_cpu_s": cpu_s,
+            "child_cpu_s": child_cpu_s,
+            "average_cpu_percent": (total_cpu_s / elapsed * 100.0) if elapsed else 0.0,
             "rss_at_start_mb": resources.initial_rss_bytes / (1024 * 1024),
             "peak_rss_mb": resources.peak_rss_bytes / (1024 * 1024),
             "peak_rss_increase_mb": max(

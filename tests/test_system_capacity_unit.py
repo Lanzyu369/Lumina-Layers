@@ -8,6 +8,12 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _use_temporary_drive_for_posix_mount_fixtures(monkeypatch, tmp_path: Path):
+    # A rooted POSIX fixture path resolves on the current drive on Windows.
+    monkeypatch.chdir(tmp_path)
+
+
 def _capacity_module():
     from core import system_capacity
 
@@ -266,10 +272,11 @@ def _write_cgroup_v2_probe(
 
     mount_point = tmp_path / "sys" / "fs" / "cgroup"
     mount_point.mkdir(parents=True)
+    mount_path = "/" + mount_point.relative_to(mount_point.anchor).as_posix()
     mountinfo_path = proc_self_path / "mountinfo"
     mountinfo_path.write_text(
         (
-            f"36 29 0:32 {mount_root} {mount_point} "
+            f"36 29 0:32 {mount_root} {mount_path} "
             "rw,nosuid,nodev,noexec,relatime - cgroup2 cgroup rw\n"
         ),
         encoding="utf-8",

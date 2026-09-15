@@ -265,7 +265,16 @@ class OuterDemandPublisher:
                     separators=(",", ":"),
                     sort_keys=True,
                 )
-            os.replace(temporary_path, self._snapshot_path)
+            for attempt in range(6):
+                try:
+                    os.replace(temporary_path, self._snapshot_path)
+                    break
+                except PermissionError:
+                    # Windows readers can briefly deny atomic replacement.
+                    # Keep the last complete snapshot until the reader closes.
+                    if attempt == 5:
+                        raise
+                    time.sleep(0.005 * (attempt + 1))
         finally:
             temporary_path.unlink(missing_ok=True)
 

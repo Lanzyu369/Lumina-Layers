@@ -15,6 +15,27 @@ def _runtime_module():
     return task_parallelism_runtime
 
 
+def test_snapshot_publish_retries_transient_reader_sharing(monkeypatch, tmp_path: Path) -> None:
+    runtime = _runtime_module()
+    publisher = runtime.OuterDemandPublisher(max_workers=4, parent_dir=tmp_path)
+    real_replace = runtime.os.replace
+    attempts = []
+
+    def replace(source, target):
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise PermissionError("snapshot reader still holds file")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(runtime.os, "replace", replace)
+    try:
+        publisher.increment()
+        assert len(attempts) == 3
+        assert runtime.read_outer_demand(publisher.snapshot_path, fallback_outer_workers=4).outer_demand == 1
+    finally:
+        publisher.cleanup()
+
+
 def test_publisher_round_trip_tracks_outstanding_tasks(
     tmp_path: Path,
 ) -> None:

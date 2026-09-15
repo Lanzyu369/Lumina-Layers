@@ -24,6 +24,8 @@ from shapely.geometry.base import BaseGeometry
 from shapely.geometry.polygon import orient
 from shapely.validation import make_valid
 
+from core.vector_mesh_spill import AdaptiveMeshAccumulator
+
 
 @dataclass(frozen=True)
 class VectorLayerGeometryPolicy:
@@ -1320,36 +1322,6 @@ def _prepared_interval_group(
     )
 
 
-def _concatenate_layered_components(
-    meshes: Sequence[trimesh.Trimesh],
-) -> trimesh.Trimesh:
-    """Concatenate independently indexed closed shells without welding."""
-
-    if not meshes:
-        raise ValueError("Vector layered-volume has no component meshes")
-    vertex_count = sum(len(mesh.vertices) for mesh in meshes)
-    face_count = sum(len(mesh.faces) for mesh in meshes)
-    vertices = np.empty((vertex_count, 3), dtype=np.float64)
-    faces = np.empty((face_count, 3), dtype=np.int64)
-    vertex_cursor = 0
-    face_cursor = 0
-    for mesh in meshes:
-        next_vertex = vertex_cursor + len(mesh.vertices)
-        next_face = face_cursor + len(mesh.faces)
-        vertices[vertex_cursor:next_vertex] = np.asarray(
-            mesh.vertices,
-            dtype=np.float64,
-        )
-        np.add(
-            np.asarray(mesh.faces, dtype=np.int64),
-            vertex_cursor,
-            out=faces[face_cursor:next_face],
-        )
-        vertex_cursor = next_vertex
-        face_cursor = next_face
-    return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
-
-
 def build_vector_layered_volume(
     slabs: Sequence[dict],
     *,
@@ -1381,27 +1353,26 @@ def build_vector_layered_volume(
     if not snapped_slabs:
         return None
     coalesced_slabs = _coalesced_layer_slabs(snapped_slabs)
-    slab_meshes: list[trimesh.Trimesh] = []
-    for slab in coalesced_slabs:
-        prepared = _prepared_interval_group(
-            _polygon_parts(slab.geometry),
-            grid_mm=float(grid_mm),
-        )
-        slab_meshes.append(
-            _extrude_indexed_run_group(
+    with AdaptiveMeshAccumulator() as accumulator:
+        for slab in coalesced_slabs:
+            prepared = _prepared_interval_group(
+                _polygon_parts(slab.geometry),
+                grid_mm=float(grid_mm),
+            )
+            accumulator.add(_extrude_indexed_run_group(
                 prepared,
                 height_mm=float(slab.z_end_mm) - float(slab.z_start_mm),
                 z_offset_mm=float(slab.z_start_mm),
-            )
-        )
-    if not slab_meshes:
-        return None
-    snapped_slabs.clear()
-    coalesced_slabs.clear()
-    mesh = _concatenate_layered_components(slab_meshes)
+            ))
+        if not accumulator.component_count:
+            return None
+        snapped_slabs.clear()
+        coalesced_slabs.clear()
+        mesh = accumulator.finish()
+        component_count = accumulator.component_count
     mesh.metadata["vector_layer_geometry"] = {
         "grid_mm": float(grid_mm),
-        "component_count": int(len(slab_meshes)),
+        "component_count": int(component_count),
         "mesh_vertex_count": int(len(mesh.vertices)),
         "mesh_face_count": int(len(mesh.faces)),
     }

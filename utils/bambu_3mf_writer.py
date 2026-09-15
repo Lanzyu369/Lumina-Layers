@@ -272,6 +272,21 @@ def _expand_mesh_export_entries(
     return expanded
 
 
+def _mesh_rows_are_finite(values: np.ndarray) -> bool:
+    for start in range(0, len(values), 65_536):
+        if not np.all(np.isfinite(values[start:start + 65_536])):
+            return False
+    return True
+
+
+def _mesh_indices_are_within(values: np.ndarray, minimum: int, maximum: int) -> bool:
+    for start in range(0, len(values), 65_536):
+        chunk = values[start:start + 65_536]
+        if np.any(chunk < minimum) or np.any(chunk >= maximum):
+            return False
+    return True
+
+
 def _materialize_n3mf_mesh_view_arrays(
     mesh: object,
     *,
@@ -281,6 +296,8 @@ def _materialize_n3mf_mesh_view_arrays(
     """Materialize and validate the exact arrays consumed by the 3MF writer.
     只生成一次并校验 3MF 写入器实际消费的数组。
     """
+
+    from core.vector_mesh_spill import copy_mesh_array
 
     source_vertices = np.asarray(getattr(mesh, "vertices", None))
     source_faces = np.asarray(getattr(mesh, "faces", None))
@@ -293,15 +310,16 @@ def _materialize_n3mf_mesh_view_arrays(
         or len(source_faces) == 0
     ):
         raise ValueError("3MF mesh arrays must be non-empty Nx3 arrays")
-    if not np.all(np.isfinite(source_vertices)):
+    if not _mesh_rows_are_finite(source_vertices):
         raise ValueError("3MF mesh vertices must be finite")
-    if np.any(source_faces < 0) or np.any(source_faces >= len(source_vertices)):
+    if not _mesh_indices_are_within(source_faces, 0, len(source_vertices)):
         raise ValueError("3MF mesh face index is out of range")
     if len(source_vertices) > np.iinfo(np.uint32).max:
         raise ValueError("3MF mesh exceeds uint32 vertex indices")
 
     export_vertices = source_vertices
     export_faces = source_faces
+    face_offset = 0
     if part_range is not None and contact_repair_ranges:
         raise ValueError("3MF mesh cannot combine part slicing and contact repair")
     if part_range is not None:
@@ -320,18 +338,12 @@ def _materialize_n3mf_mesh_view_arrays(
         source_part_faces = source_faces[
             part_range.face_start : part_range.face_stop
         ]
-        if (
-            np.any(source_part_faces < part_range.vertex_start)
-            or np.any(source_part_faces >= part_range.vertex_stop)
+        if not _mesh_indices_are_within(
+            source_part_faces, part_range.vertex_start, part_range.vertex_stop,
         ):
             raise ValueError("3MF mesh part references vertices outside its range")
-        export_faces = np.empty(source_part_faces.shape, dtype=np.int64)
-        np.subtract(
-            source_part_faces,
-            part_range.vertex_start,
-            out=export_faces,
-            casting="unsafe",
-        )
+        export_faces = source_part_faces
+        face_offset = part_range.vertex_start
     elif contact_repair_ranges:
         from core.mesh_writer_domain import (
             prepare_indexed_shells_for_float32_export,
@@ -342,9 +354,9 @@ def _materialize_n3mf_mesh_view_arrays(
             contact_repair_ranges,
         )
 
-    vertices = np.ascontiguousarray(export_vertices, dtype=np.float32)
-    faces = np.ascontiguousarray(export_faces, dtype=np.uint32)
-    if not np.all(np.isfinite(vertices)):
+    vertices = copy_mesh_array(export_vertices, np.dtype(np.float32))
+    faces = copy_mesh_array(export_faces, np.dtype(np.uint32), offset=face_offset)
+    if not _mesh_rows_are_finite(vertices):
         raise ValueError(
             "3MF mesh vertices must remain finite after float32 conversion"
         )
