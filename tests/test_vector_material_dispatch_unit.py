@@ -242,6 +242,53 @@ def test_unreadable_lease_table_refuses_to_add_load(tmp_path: Path) -> None:
     assert (grant.workers, grant.state, grant.token) == (1, "invalid", None)
 
 
+@pytest.mark.parametrize("capacity", [1, 2, 4])
+@pytest.mark.parametrize("already_running", [0, 1])
+def test_small_device_admission_keeps_the_sum_inside_capacity(
+    tmp_path: Path, capacity: int, already_running: int,
+) -> None:
+    """Low-capacity devices: an arriving task only takes what is still free.
+
+    The matrix is small enough to run everywhere, and it states the same
+    invariant the 16-CPU cases state: admitted workers never exceed the
+    effective CPU capacity, and zero is a legal grant.
+    """
+
+    lease_path = tmp_path / "workers.json"
+    holders: list[_LeaseHolder] = []
+    try:
+        for index in range(already_running):
+            running = _LeaseHolder(
+                tmp_path, lease_path,
+                requested=capacity, capacity=capacity, tag=f"run{index}",
+            )
+            holders.append(running)
+            granted, _tasks, _siblings, _reason = running.grant()
+            assert granted == capacity
+
+        arriving = _LeaseHolder(
+            tmp_path, lease_path, requested=capacity, capacity=capacity, tag="new",
+        )
+        holders.append(arriving)
+        granted, tasks, siblings, reason = arriving.grant()
+        held = capacity * already_running
+        assert granted == max(0, capacity - held)
+        assert siblings == held
+        assert tasks == already_running
+        assert reason == (
+            "granted" if already_running == 0
+            else "worker_lease_contention" if granted else "lease_capacity_exhausted"
+        )
+
+        # The published table is the evidence: the sum stays inside the device.
+        snapshot = WorkerLeaseStore(lease_path).snapshot()
+        assert snapshot["workers"] == held + granted
+        assert snapshot["workers"] <= capacity
+    finally:
+        for holder in holders:
+            holder.stop()
+
+
 # ---------------------------------------------------------------------------
 # F2: completion-order discovery, original-order output
 # ---------------------------------------------------------------------------
