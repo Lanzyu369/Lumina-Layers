@@ -241,6 +241,13 @@ worker（`demand` 由 1 变 2 发生在 t≈9.5 s，A 在 t≈11.7 s 释放，B 
 
 → 结论表述为：**本分支没有引入新的套件失败**；而不是“套件全绿”。
 
+托管 CI 本轮**没有真正运行**：`layered-mesh-geometry.yml` 与
+`native-svg-core.yml` 的所有作业在 2–6 s 内失败，原因是账户级计费
+（“The job was not started because recent account payments have failed…”）。
+其他在开的 PR 同样如此，与本分支无关。工作流定义本身在 PR → `dev-refactor`
+路径上不触达任何发布/部署步骤（读定义确认），但这是**定义层面**的检查，不是
+观测到的绿色运行；上表全部数据来自本机实测。
+
 ## 未测与未改善
 
 - 流程 1 未改善（设计如此），未测项见设备矩阵；
