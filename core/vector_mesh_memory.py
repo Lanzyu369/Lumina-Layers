@@ -27,6 +27,18 @@ _VECTOR_TASK_BYTES_PER_EXCESS_RESIDENT_BYTE = 32
 _VECTOR_TASK_MATERIAL_ARCHIVE_BASE_BYTES = 256 * 1024**2
 _VECTOR_TASK_MATERIAL_ARCHIVE_BYTES_PER_MATERIAL = 32 * 1024**2
 
+# Material-stage cost model. These are the numbers the stage's own budget
+# arithmetic uses, kept in the module that owns memory policy so a task
+# reservation and the stage it funds cannot drift apart.
+# 材质阶段成本模型：与材质阶段自身的预算算法共用同一组常数，放在拥有内存策略的
+# 模块里，使任务预留与它所资助的阶段不会各自漂移。
+MATERIAL_WORKER_PROCESS_BASE_BYTES = 256 * 1024**2
+MATERIAL_MONITOR_BASE_BYTES = 128 * 1024**2
+MATERIAL_WORKER_WORKING_BYTES_PER_COORDINATE = 1024
+MATERIAL_OUTPUT_RETAINED_BYTES_PER_COORDINATE = 384
+MIN_PARALLEL_MATERIAL_COORDINATES = 131_072
+MATERIAL_COORDINATES_PER_WORKER = 65_536
+
 
 @dataclass(frozen=True)
 class VectorMeshMemoryBudgetReport:
@@ -427,6 +439,102 @@ def estimate_vector_task_memory_reservation_bytes(
         + max(0, int(implicit_resident_bytes))
     )
     return min(configured_budget, max(1, int(estimated_bytes)))
+
+
+def estimate_vector_material_parallel_memory_target_bytes(
+    source_path: str | os.PathLike[str],
+    *,
+    material_count: int,
+    supporting_paths: tuple[str | os.PathLike[str], ...] = (),
+    memory_budget_bytes: int | None = None,
+) -> int | None:
+    """Estimate the budget the material stage needs to build in parallel.
+
+    估算材质阶段并行构建所需的预算。
+
+    The stage decides for itself how many builders it may start, from its live
+    budget and the real coordinate counts. A reservation sized only for the
+    serial pipeline therefore leaves a resource-rich device building every
+    material in the parent process. This returns the budget at which that same
+    arithmetic affords the builders that work can actually keep busy: the
+    serial reservation, plus each builder's process base, plus the coordinate
+    working set the reservation's own source expansion already implies (one
+    source byte expands to
+    ``_VECTOR_TASK_RESERVATION_BYTES_PER_ARTIFACT_BYTE`` runtime bytes and one
+    coordinate is charged ``MATERIAL_OUTPUT_RETAINED_BYTES_PER_COORDINATE`` of
+    retained output). That model's 0.167 coordinates per source byte sits above
+    the 0.156 the product's own dense document measured, so it asks for a
+    little more than that document needed.
+
+    阶段自己决定能起几个构建进程（用实时预算与真实坐标数）。只为串行管线计的预留
+    会让内存充足的设备把每个材质都在父进程内构建。本函数返回同一套算法能给出
+    “这份工作真正能喂饱的构建进程数”所需预算：串行预留、每个构建进程的进程基数，
+    以及源扩展本身已隐含的坐标工作集。该模型每源字节 0.167 个坐标，高于产品自有
+    密集文档实测的 0.156，即请求略多于该文档实际所需。
+
+    The result is a request, not a raise: it is capped by the configured or
+    container budget, and the parent admission gate grants only the part that is
+    free, leaving the required reservation untouched when nothing is spare.
+    结果是请求而非抬高：受配置/容器预算封顶；父进程准入只授予空闲部分，无空闲时
+    不影响必需预留。
+
+    Returns:
+        The target bytes, or ``None`` when no grounded figure exists: fewer than
+        two materials to build, a source this estimate cannot price, or work
+        below the coordinates at which the stage starts workers at all.
+        目标字节数；无法给出有根据数值时返回 ``None``（少于两个材质、无法定价的源，
+        或工作量低于阶段开始使用 worker 的坐标下限）。
+    """
+
+    if int(material_count) < 2:
+        return None
+    configured = max(
+        1,
+        int(
+            resolve_vector_mesh_memory_budget_bytes()
+            if memory_budget_bytes is None
+            else memory_budget_bytes
+        ),
+    )
+    source = Path(source_path)
+    if source.suffix.lower() != ".svg":
+        return None
+    try:
+        if not source.is_file():
+            return None
+        source_bytes = max(0, int(source.stat().st_size))
+        required = estimate_vector_task_memory_reservation_bytes(
+            source_path,
+            supporting_paths=supporting_paths,
+            memory_budget_bytes=configured,
+        )
+    except (OSError, TypeError, ValueError, OverflowError):
+        return None
+    coordinate_estimate = (
+        source_bytes
+        * _VECTOR_TASK_RESERVATION_BYTES_PER_ARTIFACT_BYTE
+        // MATERIAL_OUTPUT_RETAINED_BYTES_PER_COORDINATE
+    )
+    if coordinate_estimate < MIN_PARALLEL_MATERIAL_COORDINATES:
+        # Work this small is built in the process that already exists, whatever
+        # budget it holds, so asking for builders would take capacity from tasks
+        # that can use it. 这个量级的工作无论预算多少都在已有进程内完成，为它索
+        # 取构建进程会占掉真正能用上的任务的容量。
+        return None
+    usable_workers = min(
+        int(material_count),
+        max(
+            1,
+            (coordinate_estimate + MATERIAL_COORDINATES_PER_WORKER - 1)
+            // MATERIAL_COORDINATES_PER_WORKER,
+        ),
+    )
+    target = (
+        required
+        + usable_workers * MATERIAL_WORKER_PROCESS_BASE_BYTES
+        + coordinate_estimate * MATERIAL_WORKER_WORKING_BYTES_PER_COORDINATE
+    )
+    return min(configured, max(required, int(target)))
 
 
 def _resident_artifact_size_hint(path: Path) -> int:

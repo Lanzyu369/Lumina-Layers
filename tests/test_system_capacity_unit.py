@@ -668,3 +668,260 @@ def test_owned_memory_report_names_the_container_source(
     assert report["owned_group_rss_bytes"] == 700 * 1024**2
     assert report["container_source"] in {"cgroup_v2", "unrestricted"}
     assert "container_limit_bytes" in report
+
+
+# ---------------------------------------------------------------------------
+# R2: a finite limit on a visible parent cgroup bounds this process too
+# ---------------------------------------------------------------------------
+
+
+def _write_cgroup_memory_level(
+    mount_point: Path, relative: str, *, limit: str | None, current: str | None
+) -> None:
+    """Write one level's memory control files inside the probe hierarchy."""
+
+    directory = mount_point if relative in {"", "/"} else mount_point / relative
+    directory.mkdir(parents=True, exist_ok=True)
+    if limit is not None:
+        (directory / "memory.max").write_text(f"{limit}\n", encoding="utf-8")
+    if current is not None:
+        (directory / "memory.current").write_text(f"{current}\n", encoding="utf-8")
+
+
+def _discover_from_probe(
+    system_capacity,
+    *,
+    cgroup_path: Path,
+    mountinfo_path: Path,
+    host_available: int,
+):
+    return system_capacity.discover_effective_memory_capacity(
+        host_available_bytes=host_available,
+        proc_self_cgroup_path=cgroup_path,
+        proc_self_mountinfo_path=mountinfo_path,
+    )
+
+
+def test_parent_limit_bounds_a_child_whose_own_limit_is_max(
+    tmp_path: Path,
+) -> None:
+    """A child writing ``max`` does not lift the parent's hard limit."""
+
+    system_capacity = _capacity_module()
+    cgroup_path, mountinfo_path, mount_point = _write_cgroup_v2_probe(
+        tmp_path,
+        process_cgroup="0::/workload.scope\n",
+    )
+    # Parent (the mount root) is capped at 2 GiB and already holds 1.5 GiB.
+    _write_cgroup_memory_level(
+        mount_point, "", limit=str(2 * 1024**3), current=str(1536 * 1024**2)
+    )
+    # The scope this process lives in says "no limit of my own".
+    _write_cgroup_memory_level(
+        mount_point, "workload.scope", limit="max", current=str(128 * 1024**2)
+    )
+
+    capacity = _discover_from_probe(
+        system_capacity,
+        cgroup_path=cgroup_path,
+        mountinfo_path=mountinfo_path,
+        host_available=32 * 1024**3,
+    )
+
+    assert capacity.source == "cgroup_v2"
+    assert capacity.limit_bytes == 2 * 1024**3
+    # 2 GiB - 1.5 GiB is what the parent can still hand out; the child's 128 MiB
+    # charge must not be subtracted from the parent's limit a second time.
+    assert capacity.available_bytes == 512 * 1024**2
+    assert capacity.available_bytes <= 512 * 1024**2
+
+
+def test_parent_limit_wins_when_the_child_limit_is_larger(
+    tmp_path: Path,
+) -> None:
+    """The smallest visible finite limit is the hard cap."""
+
+    system_capacity = _capacity_module()
+    cgroup_path, mountinfo_path, mount_point = _write_cgroup_v2_probe(
+        tmp_path,
+        process_cgroup="0::/workload.scope\n",
+    )
+    _write_cgroup_memory_level(
+        mount_point, "", limit=str(2 * 1024**3), current="0"
+    )
+    _write_cgroup_memory_level(
+        mount_point, "workload.scope", limit=str(8 * 1024**3), current="0"
+    )
+
+    capacity = _discover_from_probe(
+        system_capacity,
+        cgroup_path=cgroup_path,
+        mountinfo_path=mountinfo_path,
+        host_available=32 * 1024**3,
+    )
+
+    assert capacity.source == "cgroup_v2"
+    assert capacity.limit_bytes == 2 * 1024**3
+    assert capacity.available_bytes == 2 * 1024**3
+
+
+def test_child_limit_wins_when_it_is_the_stricter_one(
+    tmp_path: Path,
+) -> None:
+    system_capacity = _capacity_module()
+    cgroup_path, mountinfo_path, mount_point = _write_cgroup_v2_probe(
+        tmp_path,
+        process_cgroup="0::/workload.scope\n",
+    )
+    _write_cgroup_memory_level(
+        mount_point, "", limit=str(8 * 1024**3), current=str(1024**3)
+    )
+    _write_cgroup_memory_level(
+        mount_point,
+        "workload.scope",
+        limit=str(1 * 1024**3),
+        current=str(256 * 1024**2),
+    )
+
+    capacity = _discover_from_probe(
+        system_capacity,
+        cgroup_path=cgroup_path,
+        mountinfo_path=mountinfo_path,
+        host_available=32 * 1024**3,
+    )
+
+    assert capacity.limit_bytes == 1 * 1024**3
+    assert capacity.available_bytes == 768 * 1024**2
+
+
+def test_all_visible_levels_unlimited_keeps_the_host_figure(
+    tmp_path: Path,
+) -> None:
+    """Confirmed unlimited: every visible level was read and says ``max``."""
+
+    system_capacity = _capacity_module()
+    cgroup_path, mountinfo_path, mount_point = _write_cgroup_v2_probe(
+        tmp_path,
+        process_cgroup="0::/workload.scope\n",
+    )
+    _write_cgroup_memory_level(
+        mount_point, "", limit="max", current=str(1024**3)
+    )
+    _write_cgroup_memory_level(
+        mount_point, "workload.scope", limit="max", current=str(64 * 1024**2)
+    )
+
+    capacity = _discover_from_probe(
+        system_capacity,
+        cgroup_path=cgroup_path,
+        mountinfo_path=mountinfo_path,
+        host_available=32 * 1024**3,
+    )
+
+    assert capacity.source == "unrestricted"
+    assert capacity.limit_bytes is None
+    assert capacity.available_bytes == 32 * 1024**3
+
+
+def test_unreadable_parent_limit_is_not_reported_as_confirmed_unlimited(
+    tmp_path: Path,
+) -> None:
+    """A level we could not read is unknown, not proof of no limit."""
+
+    system_capacity = _capacity_module()
+    cgroup_path, mountinfo_path, mount_point = _write_cgroup_v2_probe(
+        tmp_path,
+        process_cgroup="0::/workload.scope\n",
+    )
+    # The parent directory exists but its memory.max cannot be read; the child
+    # explicitly says "no limit of my own".
+    (mount_point / "workload.scope").mkdir(parents=True, exist_ok=True)
+    (mount_point / "memory.current").write_text(str(1024**3), encoding="utf-8")
+    _write_cgroup_memory_level(
+        mount_point, "workload.scope", limit="max", current=str(64 * 1024**2)
+    )
+
+    capacity = _discover_from_probe(
+        system_capacity,
+        cgroup_path=cgroup_path,
+        mountinfo_path=mountinfo_path,
+        host_available=32 * 1024**3,
+    )
+
+    assert capacity.source == "unknown"
+    # The host figure stays as the explicit fallback rather than a claim.
+    assert capacity.available_bytes == 32 * 1024**3
+
+
+def test_missing_memory_files_report_an_explicit_state(tmp_path: Path) -> None:
+    """No readable memory level at all is reported, not assumed unlimited."""
+
+    system_capacity = _capacity_module()
+    cgroup_path, mountinfo_path, _mount_point = _write_cgroup_v2_probe(
+        tmp_path,
+        process_cgroup="0::/workload.scope\n",
+    )
+
+    capacity = _discover_from_probe(
+        system_capacity,
+        cgroup_path=cgroup_path,
+        mountinfo_path=mountinfo_path,
+        host_available=32 * 1024**3,
+    )
+
+    assert capacity.source == "unknown"
+    assert capacity.limit_bytes is None
+    assert capacity.available_bytes == 32 * 1024**3
+
+
+def test_cached_limit_sees_the_parent_cap(tmp_path: Path) -> None:
+    """``get_effective_memory_limit_bytes`` is the min of visible limits."""
+
+    system_capacity = _capacity_module()
+    cgroup_path, mountinfo_path, mount_point = _write_cgroup_v2_probe(
+        tmp_path,
+        process_cgroup="0::/workload.scope\n",
+    )
+    _write_cgroup_memory_level(
+        mount_point, "", limit=str(2 * 1024**3), current=str(1536 * 1024**2)
+    )
+    _write_cgroup_memory_level(
+        mount_point, "workload.scope", limit="max", current=str(128 * 1024**2)
+    )
+
+    limit = system_capacity._read_cgroup_v2_memory_limit_bytes(
+        proc_self_cgroup_path=cgroup_path,
+        proc_self_mountinfo_path=mountinfo_path,
+    )
+    assert limit == 2 * 1024**3
+
+
+def test_container_limit_does_not_escape_the_visible_mount(tmp_path: Path) -> None:
+    """Ancestors above the mount root are not invented."""
+
+    system_capacity = _capacity_module()
+    cgroup_path, mountinfo_path, mount_point = _write_cgroup_v2_probe(
+        tmp_path,
+        process_cgroup="0::/docker/abc/workload.scope\n",
+        mount_root="/docker/abc",
+    )
+    _write_cgroup_memory_level(
+        mount_point, "", limit="max", current=str(1024**3)
+    )
+    _write_cgroup_memory_level(
+        mount_point, "workload.scope", limit="max", current="0"
+    )
+    # A file outside the visible mount must not be consulted, even though it
+    # sits above the namespaced path on disk.
+    (mount_point.parent / "memory.max").write_text(str(512**3), encoding="utf-8")
+
+    capacity = _discover_from_probe(
+        system_capacity,
+        cgroup_path=cgroup_path,
+        mountinfo_path=mountinfo_path,
+        host_available=32 * 1024**3,
+    )
+
+    assert capacity.source == "unrestricted"
+    assert capacity.limit_bytes is None
+    assert capacity.available_bytes == 32 * 1024**3

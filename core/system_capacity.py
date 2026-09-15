@@ -365,6 +365,44 @@ def _parse_cgroup2_mounts(
     return tuple(mounts) or None
 
 
+def _cgroup_v2_file_candidates_with_mounts(
+    current_path: tuple[str, ...],
+    mounts: tuple[tuple[tuple[str, ...], Path], ...],
+    filename: str,
+) -> tuple[tuple[Path, Path], ...]:
+    """Rank candidate paths for one control file, with their mount point.
+
+    为某个控制文件排序候选路径，并带上产生该路径的挂载点。
+
+    The mount point is returned so a caller walking up the hierarchy stays
+    inside the mount that answered for this process, instead of mixing two
+    cgroup2 mounts. 返回挂载点是为了让向父级遍历的调用方始终停留在为本进程
+    作答的那个挂载内，而不是把两个 cgroup2 挂载混在一起。
+    """
+
+    ranked: list[tuple[bool, int, Path, Path]] = []
+    for mount_root, mount_point in mounts:
+        root_matches = current_path[: len(mount_root)] == mount_root
+        relative_path = (
+            current_path[len(mount_root) :]
+            if root_matches
+            else current_path
+        )
+        candidate = mount_point.joinpath(*relative_path, filename)
+        try:
+            resolved_mount = mount_point.resolve(strict=False)
+            resolved_candidate = candidate.resolve(strict=False)
+            resolved_candidate.relative_to(resolved_mount)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        ranked.append((root_matches, len(mount_root), resolved_candidate, resolved_mount))
+    ranked.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
+    unique: dict[Path, Path] = {}
+    for _root_matches, _root_length, resolved_candidate, resolved_mount in ranked:
+        unique.setdefault(resolved_candidate, resolved_mount)
+    return tuple(unique.items())
+
+
 def _cgroup_v2_file_candidates(
     current_path: tuple[str, ...],
     mounts: tuple[tuple[tuple[str, ...], Path], ...],
@@ -380,24 +418,12 @@ def _cgroup_v2_file_candidates(
     只有文件名不同。
     """
 
-    ranked: list[tuple[bool, int, Path]] = []
-    for mount_root, mount_point in mounts:
-        root_matches = current_path[: len(mount_root)] == mount_root
-        relative_path = (
-            current_path[len(mount_root) :]
-            if root_matches
-            else current_path
+    return tuple(
+        candidate
+        for candidate, _mount_point in _cgroup_v2_file_candidates_with_mounts(
+            current_path, mounts, filename
         )
-        candidate = mount_point.joinpath(*relative_path, filename)
-        try:
-            resolved_mount = mount_point.resolve(strict=False)
-            resolved_candidate = candidate.resolve(strict=False)
-            resolved_candidate.relative_to(resolved_mount)
-        except (OSError, RuntimeError, ValueError):
-            continue
-        ranked.append((root_matches, len(mount_root), resolved_candidate))
-    ranked.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
-    return tuple(dict.fromkeys(entry[2] for entry in ranked))
+    )
 
 
 def _cgroup_cpu_max_candidates(
@@ -576,7 +602,170 @@ def get_effective_cpu_capacity() -> EffectiveCpuCapacity:
     return _discover_live_capacity()
 
 
-MemoryLimitSource = Literal["cgroup_v2", "unrestricted", "unavailable"]
+MemoryLimitSource = Literal["cgroup_v2", "unrestricted", "unknown", "unavailable"]
+
+
+@dataclass(frozen=True)
+class CgroupMemoryLevel:
+    """One visible cgroup v2 memory level, from this process upwards.
+
+    从本进程向上的一个可见 cgroup v2 内存层级。
+
+    Args:
+        path: Cgroup path of this level inside the visible mount.
+            该层级在可见挂载内的 cgroup 路径。
+        limit_bytes: ``memory.max`` as a number, or ``None`` for both ``max``
+            and "not readable" - ``limit_known`` tells the two apart.
+            ``memory.max`` 的数值；``max`` 与“读不到”都为 ``None``，由
+            ``limit_known`` 区分。
+        used_bytes: ``memory.current`` of this level, which already includes
+            its descendants. 该层级的 ``memory.current``，其中已包含其后代。
+        limit_known: ``True`` when this level's ``memory.max`` was read, so
+            ``limit_bytes is None`` really means "this level sets no cap".
+            该层级的 ``memory.max`` 确实被读到时为 ``True``，此时
+            ``limit_bytes is None`` 才真的表示“本层无上限”。
+    """
+
+    path: tuple[str, ...]
+    limit_bytes: int | None
+    used_bytes: int | None
+    limit_known: bool
+
+
+def _read_ranked_memory_file(
+    level_path: tuple[str, ...],
+    mounts: tuple[tuple[tuple[str, ...], Path], ...],
+    filename: str,
+    active_mount: Path | None,
+) -> tuple[str, Path] | None:
+    """Read one memory control file inside the hierarchy that answered.
+
+    在已经作答的那个层级体系内读取一个内存控制文件。
+
+    ``active_mount`` pins the walk to the cgroup2 mount that supplied the
+    process's own file, so an ancestor is never taken from a different mount.
+    父级只从为进程自身提供文件的同一挂载读取，避免跨挂载混用。
+    """
+
+    for candidate, mount_point in _cgroup_v2_file_candidates_with_mounts(
+        level_path, mounts, filename
+    ):
+        if active_mount is not None and mount_point != active_mount:
+            continue
+        try:
+            raw_value = candidate.read_text(encoding="utf-8").strip()
+        except (OSError, RuntimeError, UnicodeError):
+            continue
+        if raw_value:
+            return raw_value, mount_point
+    return None
+
+
+def _read_cgroup_v2_memory_levels(
+    *,
+    proc_self_cgroup_path: Path = _PROC_SELF_CGROUP_PATH,
+    proc_self_mountinfo_path: Path = _PROC_SELF_MOUNTINFO_PATH,
+) -> tuple[CgroupMemoryLevel, ...] | None:
+    """Collect every memory level this process can legitimately observe.
+
+    收集本进程有权观察到的全部内存层级。
+
+    The process's own cgroup is not the whole story: a child that writes
+    ``max`` does not lift a finite limit set on a parent. The walk therefore
+    starts at the process's cgroup and moves up to the mount root, staying
+    inside the one cgroup2 mount that answered, and never inventing an ancestor
+    it cannot see. 进程自身 cgroup 不是全部：子级写 ``max`` 并不会解除父级设置的
+    有限上限。因此遍历从进程 cgroup 开始向上到挂载根，始终停留在作答的那个
+    cgroup2 挂载内，也不会臆造看不到的祖先。
+
+    Returns:
+        Levels ordered leaf first, an empty tuple when the mount table was read
+        and holds no cgroup2 mount, or ``None`` when this process's cgroup
+        membership or mount table could not be read at all. 返回按叶子在前的
+        层级序列；读到挂载表但没有 cgroup2 挂载时返回空元组；完全读不到
+        cgroup 归属或挂载表时返回 ``None``。
+    """
+
+    try:
+        raw_cgroup = proc_self_cgroup_path.read_text(encoding="utf-8")
+        raw_mountinfo = proc_self_mountinfo_path.read_text(encoding="utf-8")
+    except (OSError, RuntimeError, UnicodeError):
+        return None
+    current_path = _parse_process_cgroup_v2_path(raw_cgroup)
+    mounts = _parse_cgroup2_mounts(raw_mountinfo)
+    if current_path is None:
+        return None
+    if mounts is None:
+        # ``_parse_cgroup2_mounts`` reports both a malformed table and a table
+        # with no cgroup2 entry as ``None``. A table that was read and simply
+        # has no cgroup2 mount is a confirmed non-cgroup environment.
+        # 该函数把“表格式错误”和“表里没有 cgroup2”都报为 None。表读到了、只是
+        # 没有 cgroup2 挂载，属于已确认的非 cgroup 环境。
+        if any(" - cgroup2 " in line for line in raw_mountinfo.splitlines()):
+            return None
+        return ()
+
+    # The shallowest level this process may read is the root of a visible
+    # mount. A path outside every mount root is measured from the mount point
+    # itself, which is the namespace case.
+    shallowest = min(
+        len(mount_root) if current_path[: len(mount_root)] == mount_root else 0
+        for mount_root, _mount_point in mounts
+    )
+
+    levels: list[CgroupMemoryLevel] = []
+    active_mount: Path | None = None
+    for depth in range(len(current_path) - shallowest + 1):
+        level_path = current_path[: len(current_path) - depth]
+        limit: int | None = None
+        limit_known = False
+        limit_file = _read_ranked_memory_file(
+            level_path, mounts, "memory.max", active_mount
+        )
+        if limit_file is not None:
+            raw_limit, mount_point = limit_file
+            active_mount = active_mount or mount_point
+            limit_known = _parse_cgroup_v2_memory_value(raw_limit) is not None or (
+                raw_limit.strip() == "max"
+            )
+            limit = _parse_cgroup_v2_memory_value(raw_limit)
+        used: int | None = None
+        used_file = _read_ranked_memory_file(
+            level_path, mounts, "memory.current", active_mount
+        )
+        if used_file is not None:
+            raw_used, mount_point = used_file
+            active_mount = active_mount or mount_point
+            used = _parse_cgroup_v2_memory_value(raw_used)
+        levels.append(
+            CgroupMemoryLevel(
+                path=level_path,
+                limit_bytes=limit,
+                used_bytes=used,
+                limit_known=limit_known,
+            )
+        )
+    return tuple(levels)
+
+
+def _read_cgroup_v2_memory_limit_bytes(
+    *,
+    proc_self_cgroup_path: Path = _PROC_SELF_CGROUP_PATH,
+    proc_self_mountinfo_path: Path = _PROC_SELF_MOUNTINFO_PATH,
+) -> int | None:
+    """Return the smallest finite memory limit this process is under.
+
+    返回本进程所受到的最小有限内存上限。
+    """
+
+    levels = _read_cgroup_v2_memory_levels(
+        proc_self_cgroup_path=proc_self_cgroup_path,
+        proc_self_mountinfo_path=proc_self_mountinfo_path,
+    )
+    if not levels:
+        return None
+    finite = [level.limit_bytes for level in levels if level.limit_bytes is not None]
+    return min(finite) if finite else None
 
 
 @dataclass(frozen=True)
@@ -679,6 +868,8 @@ def discover_effective_memory_capacity(
     *,
     host_available_bytes: int | None = None,
     cgroup_values: dict[str, str] | None = None,
+    proc_self_cgroup_path: Path = _PROC_SELF_CGROUP_PATH,
+    proc_self_mountinfo_path: Path = _PROC_SELF_MOUNTINFO_PATH,
 ) -> EffectiveMemoryCapacity:
     """Reconcile host-available memory with the cgroup v2 limit.
 
@@ -687,42 +878,132 @@ def discover_effective_memory_capacity(
     Args:
         host_available_bytes: Deterministic host figure for tests. 测试用确定值。
         cgroup_values: Deterministic control-file contents, keyed by file name.
-            测试用确定值的控制文件内容，以文件名为键。
+            When supplied the caller has pinned one level, so only that level is
+            considered. 测试用确定值的控制文件内容，以文件名为键；提供时表示
+            调用方已指定单一层级，因此只看该层级。
+        proc_self_cgroup_path: Overridable ``/proc/self/cgroup`` for tests.
+            测试可替换的 ``/proc/self/cgroup``。
+        proc_self_mountinfo_path: Overridable ``/proc/self/mountinfo``.
+            测试可替换的 ``/proc/self/mountinfo``。
 
     Returns:
-        The effective capacity; a finite cgroup limit always caps the host
-        figure, and a container that is already over its limit reports zero
-        available rather than a negative number. 返回有效容量：有限 cgroup
-        上限始终压制宿主数字；容器已超限时返回 0 而不是负数。
+        The effective capacity; a finite cgroup limit at any visible level caps
+        the host figure, and a container that is already over its limit reports
+        zero available rather than a negative number. A level whose limit could
+        not be read is reported as ``unknown`` instead of being presented as
+        confirmed unlimited. 返回有效容量：任一可见层级的有限 cgroup 上限都压制
+        宿主数字；容器已超限时返回 0 而不是负数；读不到上限的层级记为
+        ``unknown``，不会呈现为已确认无限制。
     """
 
-    if cgroup_values is None:
-        cgroup_values = _read_cgroup_v2_files(("memory.max", "memory.current"))
-    limit = _parse_cgroup_v2_memory_value(cgroup_values.get("memory.max"))
-    used = _parse_cgroup_v2_memory_value(cgroup_values.get("memory.current"))
     host = (
         _host_available_memory_bytes()
         if host_available_bytes is None
         else max(0, int(host_available_bytes))
     )
-    if limit is None:
+    if cgroup_values is not None:
+        limit = _parse_cgroup_v2_memory_value(cgroup_values.get("memory.max"))
+        used = _parse_cgroup_v2_memory_value(cgroup_values.get("memory.current"))
+        if limit is None:
+            return EffectiveMemoryCapacity(
+                available_bytes=host,
+                limit_bytes=None,
+                container_used_bytes=used,
+                host_available_bytes=host,
+                source="unrestricted" if host is not None else "unavailable",
+            )
+        return _bounded_by_limits(
+            [(limit, used)], host, container_used_bytes=used
+        )
+
+    levels = _read_cgroup_v2_memory_levels(
+        proc_self_cgroup_path=proc_self_cgroup_path,
+        proc_self_mountinfo_path=proc_self_mountinfo_path,
+    )
+    if levels is None:
+        # This process's cgroup membership or mount table could not be read.
+        # On a platform without cgroup v2 that is a confirmed "no container
+        # limit"; on Linux it means the environment could not be inspected, and
+        # an uninspected environment must not be presented as confirmation.
+        # 完全读不到本进程的 cgroup 归属或挂载表。在没有 cgroup v2 的平台上这
+        # 是已确认的“无容器上限”；在 Linux 上则表示环境未能被检查，而未被检查
+        # 的环境不能呈现为已确认。
+        unchecked_platform = sys.platform.startswith("linux")
         return EffectiveMemoryCapacity(
             available_bytes=host,
             limit_bytes=None,
-            container_used_bytes=used,
+            container_used_bytes=None,
+            host_available_bytes=host,
+            source=(
+                "unavailable"
+                if host is None
+                else ("unknown" if unchecked_platform else "unrestricted")
+            ),
+        )
+    used = levels[0].used_bytes if levels else None
+    finite = [
+        (level.limit_bytes, level.used_bytes)
+        for level in levels
+        if level.limit_bytes is not None
+    ]
+    if finite:
+        return _bounded_by_limits(finite, host, container_used_bytes=used)
+    # No finite limit was found. That is only a confirmed-unlimited reading if
+    # every visible level's memory.max was actually read; an unreadable level
+    # could be hiding one. 没有找到有限上限；只有每个可见层级的 memory.max 都
+    # 确实读到了，才算已确认无限制，读不到的层级可能藏着上限。
+    confirmed = bool(levels) and all(level.limit_known for level in levels)
+    return EffectiveMemoryCapacity(
+        available_bytes=host,
+        limit_bytes=None,
+        container_used_bytes=used,
+        host_available_bytes=host,
+        source=(
+            ("unrestricted" if host is not None else "unavailable")
+            if confirmed
+            else "unknown"
+        ),
+    )
+
+
+def _bounded_by_limits(
+    finite_levels: list[tuple[int | None, int | None]],
+    host: int | None,
+    *,
+    container_used_bytes: int | None = None,
+) -> EffectiveMemoryCapacity:
+    """Combine finite per-level limits with the host figure.
+
+    把各层级的有限上限与宿主数字合成一个结果。
+
+    Each level contributes ``memory.max - memory.current`` measured at that
+    same level, because a parent's ``memory.current`` already includes its
+    descendants and its sibling branches; subtracting a leaf's charge from a
+    parent's limit would count the same bytes twice. 每个层级贡献各自
+    ``memory.max - memory.current``：父级 ``memory.current`` 已包含其后代与兄弟
+    分支，用父级上限减叶子用量会把同一批字节算两遍。
+    """
+
+    limits = [limit for limit, _used in finite_levels if limit is not None]
+    if not limits:
+        return EffectiveMemoryCapacity(
+            available_bytes=host,
+            limit_bytes=None,
+            container_used_bytes=container_used_bytes,
             host_available_bytes=host,
             source="unrestricted" if host is not None else "unavailable",
         )
-    container_remaining = max(0, limit - (used or 0))
-    available = (
-        container_remaining
-        if host is None
-        else min(host, container_remaining)
+    limit = min(limits)
+    remaining = min(
+        max(0, level_limit - (level_used or 0))
+        for level_limit, level_used in finite_levels
+        if level_limit is not None
     )
+    available = remaining if host is None else min(host, remaining)
     return EffectiveMemoryCapacity(
         available_bytes=available,
         limit_bytes=limit,
-        container_used_bytes=used,
+        container_used_bytes=container_used_bytes,
         host_available_bytes=host,
         source="cgroup_v2",
     )
@@ -744,9 +1025,8 @@ def get_effective_memory_capacity() -> EffectiveMemoryCapacity:
 def get_effective_memory_limit_bytes() -> int | None:
     """Return the container memory cap, cached because it is stable.
 
-    返回容器内存上限；该值稳定，因此在进程内缓存。
+    返回容器内存上限；该值稳定，因此在进程内缓存。可见父级的有限上限也算容器
+    上限：只读叶子会漏掉父级约束。
     """
 
-    return _parse_cgroup_v2_memory_value(
-        _read_cgroup_v2_files(("memory.max",)).get("memory.max")
-    )
+    return _read_cgroup_v2_memory_limit_bytes()

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, NamedTuple
 
 import asyncio
 from concurrent.futures.process import BrokenProcessPool
@@ -74,6 +74,7 @@ from core.naming import generate_preserved_upload_3mf_filename
 from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
 from core.vector_mesh_memory import (
     estimate_material_archive_runtime_bytes,
+    estimate_vector_material_parallel_memory_target_bytes,
     estimate_vector_task_memory_reservation_bytes,
 )
 from core.wipe_tower_placement import WIPE_TOWER_MANUAL_WARNING_CODE
@@ -194,13 +195,27 @@ BATCH_GENERATION_FAILED_DETAIL: str = (
 MODEL_GENERATION_FAILED_DETAIL: str = (
     "3MF generation failed. Re-run preview and try generating the model again."
 )
-def _vector_task_memory_reservation_bytes(
+
+
+class _VectorTaskMemoryInputs(NamedTuple):
+    """Files and counts the vector task memory estimates are derived from.
+
+    矢量任务内存估算所依据的文件与计数。
+    """
+
+    supporting_paths: tuple[str, ...]
+    resident_paths: tuple[str, ...]
+    implicit_resident_bytes: int
+    material_count: int
+
+
+def _vector_task_memory_inputs(
     source_path: str,
     params: dict | None = None,
     *,
     lut_path: str | None = None,
-) -> int:
-    """Resolve a task cap from every file the worker may retain."""
+) -> _VectorTaskMemoryInputs:
+    """Collect every file the worker may retain, without pricing it."""
 
     material_archive = (
         str((params or {}).get("material_source") or "") == "material_archive"
@@ -243,8 +258,7 @@ def _vector_task_memory_reservation_bytes(
         identity = os.path.abspath(lut_path)
         if identity != source_identity and identity not in supporting_by_identity:
             resident_by_identity[identity] = lut_path
-    return estimate_vector_task_memory_reservation_bytes(
-        source_path,
+    return _VectorTaskMemoryInputs(
         supporting_paths=tuple(supporting_by_identity.values()),
         resident_paths=tuple(resident_by_identity.values()),
         implicit_resident_bytes=(
@@ -252,6 +266,44 @@ def _vector_task_memory_reservation_bytes(
             if material_archive
             else 0
         ),
+        material_count=selected_material_count,
+    )
+
+
+def _vector_task_memory_reservation_bytes(
+    source_path: str,
+    params: dict | None = None,
+    *,
+    lut_path: str | None = None,
+) -> int:
+    """Resolve a task cap from every file the worker may retain."""
+
+    inputs = _vector_task_memory_inputs(source_path, params, lut_path=lut_path)
+    return estimate_vector_task_memory_reservation_bytes(
+        source_path,
+        supporting_paths=inputs.supporting_paths,
+        resident_paths=inputs.resident_paths,
+        implicit_resident_bytes=inputs.implicit_resident_bytes,
+    )
+
+
+def _vector_task_parallel_memory_target_bytes(
+    source_path: str,
+    params: dict | None = None,
+    *,
+    lut_path: str | None = None,
+) -> int | None:
+    """Resolve the budget the material stage needs to build in parallel.
+
+    解析材质阶段并行构建所需预算；它只是交给父进程准入的请求，实际授予量由准入
+    机制在空闲内存内决定。
+    """
+
+    inputs = _vector_task_memory_inputs(source_path, params, lut_path=lut_path)
+    return estimate_vector_material_parallel_memory_target_bytes(
+        source_path,
+        material_count=inputs.material_count,
+        supporting_paths=inputs.supporting_paths,
     )
 
 
@@ -2901,7 +2953,21 @@ async def convert_generate(
                             worker_params,
                             lut_path=lut_path,
                         )
-                    )
+                    ),
+                    # The material stage can only use the machine in parallel
+                    # if its reservation covers the builders it would start.
+                    # This asks the existing admission gate for that coverage;
+                    # the gate grants only what is free and never fails a task
+                    # for lacking it. 材质阶段只有在预留覆盖其构建进程时才能并行
+                    # 使用机器。这里向既有准入机制索取该覆盖量：闸门只授予空闲
+                    # 部分，且不会因拿不到而让任务失败。
+                    "host_memory_parallel_target_bytes": (
+                        _vector_task_parallel_memory_target_bytes(
+                            image_path,
+                            worker_params,
+                            lut_path=lut_path,
+                        )
+                    ),
                 }
                 if core_modeling_mode == CoreModelingMode.VECTOR
                 else {}

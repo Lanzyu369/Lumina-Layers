@@ -607,22 +607,36 @@ class WorkerLeaseStore:
                 self._write_locked(leases)
             return allowed
 
-    def release(self, token: str | None) -> None:
+    def release(self, token: str | None) -> bool:
         """Drop one lease, leaving sibling leases untouched.
 
         释放一个租约，不影响兄弟租约。
+
+        Returns:
+            ``True`` once the lease is no longer in a trustworthy table (an
+            already-absent lease counts, so a retry is idempotent), ``False``
+            when the lock timed out or the table is untrustworthy. The caller
+            can then retry instead of assuming the capacity went back - a
+            reservation left behind here keeps occupying the machine for as
+            long as the holder process lives. 账本可信且该租约已不在其中时返回
+            ``True``（本来就已不存在也算，便于重试保持幂等）；锁超时或账本不
+            可信时返回 ``False``，使调用方可以重试，而不是假定额度已经归还——
+            遗留的额度会一直占用到持有进程退出。
         """
 
         if token is None:
-            return
+            return True
         with _exclusive_file_lock(self._lock_path) as acquired:
             if not acquired:
-                return
+                return False
             leases, invalid = self._read_locked()
-            if invalid or str(token) not in leases:
-                return
+            if invalid:
+                return False
+            if str(token) not in leases:
+                return True
             leases.pop(str(token))
             self._write_locked(leases)
+            return True
 
     def snapshot(self) -> dict:
         """Return leased task and worker totals for diagnostics.

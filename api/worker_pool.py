@@ -101,8 +101,22 @@ class _HostMemoryReservationGate:
         requested_bytes: int,
         *,
         owner: object,
+        parallel_target_bytes: int | None = None,
     ) -> tuple[str, int]:
-        """Reserve one full task cap or raise before it enters the pool."""
+        """Reserve one full task cap or raise before it enters the pool.
+
+        ``parallel_target_bytes`` lets the task hand over the budget its own
+        stage needs to use more of the machine in parallel. The extension is
+        granted atomically, inside the same capacity this gate already
+        respects: only the part that is still free, never above the request,
+        and never below ``requested_bytes``. A task that cannot get it keeps
+        its required reservation and runs with lower parallelism instead of
+        being refused, so scarce memory degrades throughput, not success.
+        ``parallel_target_bytes`` 让任务交出其阶段并行所需的预算；扩展在与本闸门
+        既有一致的容量内原子授予：只给仍然空闲的部分，不超过请求值，也不低于
+        ``requested_bytes``。拿不到扩展的任务仍保留必需预留、以较低并行度运行而
+        不是被拒绝——内存紧张降低的是吞吐，不是成功率。
+        """
 
         requested = max(1, int(requested_bytes))
         with self._lock:
@@ -153,6 +167,23 @@ class _HostMemoryReservationGate:
                     capacity,
                     "host_capacity_busy",
                 )
+            if parallel_target_bytes is not None:
+                target = max(task_budget, int(parallel_target_bytes))
+                spare = max(0, capacity - reserved - task_budget)
+                extension = max(0, min(target - task_budget, spare))
+                if extension:
+                    _log.debug(
+                        "Host memory parallel extension granted",
+                        extra={
+                            "event": "worker_pool_memory_extension",
+                            "requested_bytes": requested,
+                            "parallel_target_bytes": target,
+                            "granted_bytes": task_budget + extension,
+                            "extension_bytes": extension,
+                            "spare_bytes": spare,
+                        },
+                    )
+                task_budget += extension
             token = uuid.uuid4().hex
             self._reservations[token] = (task_budget, owner)
             return token, task_budget
@@ -654,6 +685,7 @@ class WorkerPoolManager:
         *args: Any,
         timeout: float | None = None,
         host_memory_reservation_bytes: int | None = None,
+        host_memory_parallel_target_bytes: int | None = None,
     ) -> T:
         """Submit a CPU task to the pool and await result.
         提交 CPU 任务到进程池并等待结果。
@@ -669,6 +701,11 @@ class WorkerPoolManager:
             host_memory_reservation_bytes (int | None): Optional memory cap
                 reserved atomically in the parent before this task enters the
                 process pool. (可选；任务入池前由父进程原子预留的内存上限)
+            host_memory_parallel_target_bytes (int | None): Budget this task's
+                own stage needs to use more workers; granted only up to the
+                memory still free, and never below the reservation above.
+                (可选；本任务阶段并行所需预算，只在空闲内存内授予，
+                且不低于上面的预留)
 
         Returns:
             T: Function return value. (函数返回值)
@@ -689,6 +726,7 @@ class WorkerPoolManager:
             timeout=timeout,
             include_timing=False,
             host_memory_reservation_bytes=host_memory_reservation_bytes,
+            host_memory_parallel_target_bytes=host_memory_parallel_target_bytes,
         )
         return result
 
@@ -698,6 +736,7 @@ class WorkerPoolManager:
         *args: Any,
         timeout: float | None = None,
         host_memory_reservation_bytes: int | None = None,
+        host_memory_parallel_target_bytes: int | None = None,
     ) -> tuple[T, dict[str, float]]:
         """Submit a CPU task and return separate pool timing metadata.
 
@@ -710,6 +749,9 @@ class WorkerPoolManager:
             timeout: Optional per-call timeout. 可选的单次调用超时。
             host_memory_reservation_bytes: Optional parent-side atomic memory
                 reservation. 可选的父进程原子内存预留。
+            host_memory_parallel_target_bytes: Optional budget this task's own
+                stage needs to run more of its work in parallel; bounded by the
+                memory still free. 可选；本任务阶段并行所需预算，受空闲内存约束。
 
         Returns:
             tuple: ``(worker_result, timing_seconds)``. worker 原始结果与秒级计时。
@@ -720,6 +762,7 @@ class WorkerPoolManager:
             timeout=timeout,
             include_timing=True,
             host_memory_reservation_bytes=host_memory_reservation_bytes,
+            host_memory_parallel_target_bytes=host_memory_parallel_target_bytes,
         )
         if timing is None:  # Defensive invariant; timed submissions set it.
             raise RuntimeError("Timed worker submission returned no timing")
@@ -755,6 +798,7 @@ class WorkerPoolManager:
         timeout: float | None,
         include_timing: bool,
         host_memory_reservation_bytes: int | None,
+        host_memory_parallel_target_bytes: int | None = None,
     ) -> tuple[T, dict[str, float] | None]:
         """Run one task while preserving the public ``submit`` return contract."""
         pool = self._pool
@@ -791,6 +835,7 @@ class WorkerPoolManager:
                 self._host_memory_gate.acquire(
                     host_memory_reservation_bytes,
                     owner=pool,
+                    parallel_target_bytes=host_memory_parallel_target_bytes,
                 )
             )
         active_task_token = self._register_active_task(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from concurrent.futures.process import BrokenProcessPool
+from contextlib import contextmanager
 import json
 import multiprocessing
 import os
@@ -11,12 +12,13 @@ import sys
 from pathlib import Path
 import tempfile
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 import numpy as np
 import shapely
 import trimesh
 
+from api.structured_logging import get_logger
 from core.material_process_lifetime import (
     MaterialProcessLifetime,
     attach_material_worker,
@@ -37,18 +39,37 @@ from core.vector_layer_geometry import (
     build_vector_layered_volume,
 )
 from core.vector_mesh_memory import (
+    MATERIAL_COORDINATES_PER_WORKER,
+    MATERIAL_MONITOR_BASE_BYTES,
+    MATERIAL_OUTPUT_RETAINED_BYTES_PER_COORDINATE,
+    MATERIAL_WORKER_PROCESS_BASE_BYTES,
+    MATERIAL_WORKER_WORKING_BYTES_PER_COORDINATE,
+    MIN_PARALLEL_MATERIAL_COORDINATES,
     get_owned_memory_report,
     get_process_rss_bytes,
     resolve_vector_mesh_memory_budget_bytes,
 )
 
-_MIN_PARALLEL_COORDINATES = 131_072
-_COORDINATES_PER_WORKER = 65_536
-_PROCESS_BASE_BYTES = 256 * 1024**2
-_MONITOR_BASE_BYTES = 128 * 1024**2
-_WORKING_BYTES_PER_COORDINATE = 1024
-_RETAINED_BYTES_PER_COORDINATE = 384
+# The stage's cost model lives with the memory policy, which is also where the
+# task reservation that funds this stage is computed.
+# 本阶段的成本模型放在内存策略模块中，任务预留也在那里计算。
+_MIN_PARALLEL_COORDINATES = MIN_PARALLEL_MATERIAL_COORDINATES
+_COORDINATES_PER_WORKER = MATERIAL_COORDINATES_PER_WORKER
+_PROCESS_BASE_BYTES = MATERIAL_WORKER_PROCESS_BASE_BYTES
+_MONITOR_BASE_BYTES = MATERIAL_MONITOR_BASE_BYTES
+_WORKING_BYTES_PER_COORDINATE = MATERIAL_WORKER_WORKING_BYTES_PER_COORDINATE
+_RETAINED_BYTES_PER_COORDINATE = MATERIAL_OUTPUT_RETAINED_BYTES_PER_COORDINATE
 MaterialBuilder = Callable[..., trimesh.Trimesh | None]
+
+# A lease whose release cannot reach a trustworthy table would stay reserved
+# for as long as the holder process lives, so the release is retried a bounded
+# number of times before it is reported as retained.
+# 释放时若无法取得可信账本，额度会一直占用到持有进程退出，因此在记为
+# retained 之前做有界次数重试。
+_LEASE_RELEASE_ATTEMPTS = 3
+_LEASE_RELEASE_RETRY_SECONDS = 0.05
+
+_log = get_logger(__name__)
 
 # Set in each material worker by its process initializer: the demand snapshot
 # published by the owning pool. A spawned child starts with empty thread-local
@@ -194,7 +215,19 @@ def _worker_budget(
     items: list[tuple[str, dict]],
     serial_builder: MaterialBuilder,
     policy: VectorLayerGeometryPolicy | None,
+    diagnostics: dict | None = None,
 ) -> tuple[int, str, int, Any]:
+    """Decide how many material workers this task may start.
+
+    决定本任务可以启动多少个材质 worker。
+
+    ``diagnostics`` receives the scalar inputs of that decision, so a serial
+    outcome names the interface that bound it instead of leaving it to be
+    inferred from a wall-clock column.
+    ``diagnostics`` 接收该决定的标量输入，使“为什么串行”由字段直接说明，
+    而不是靠耗时列反推。
+    """
+
     counts = _coordinate_counts(items)
     if (
         counts is None or serial_builder is not build_vector_layered_volume
@@ -202,6 +235,7 @@ def _worker_budget(
         or multiprocessing.current_process().daemon
         or len({id(data["slabs"]) for _name, data in items}) != len(items)
     ):
+        _record_worker_budget_diagnostics(diagnostics, None)
         return 1, "serial_input", 0, None
     total_coordinates = sum(counts)
     worker_bytes = _PROCESS_BASE_BYTES + max(counts, default=0) * _WORKING_BYTES_PER_COORDINATE
@@ -213,16 +247,60 @@ def _worker_budget(
         estimated_worker_bytes=worker_bytes,
     )
     rss = get_process_rss_bytes()
+    budget = resolve_vector_mesh_memory_budget_bytes()
     remaining = (
-        resolve_vector_mesh_memory_budget_bytes() - rss
+        budget - rss
         - total_coordinates * _RETAINED_BYTES_PER_COORDINATE
         - _MONITOR_BASE_BYTES
         if rss is not None else 0
     )
     affordable = max(1, remaining // worker_bytes)
+    _record_worker_budget_diagnostics(
+        diagnostics,
+        {
+            "materialize_memory_budget_bytes": int(budget),
+            "materialize_memory_parent_rss_bytes": None if rss is None else int(rss),
+            "materialize_memory_remaining_bytes": int(remaining),
+            "materialize_memory_retained_bytes": int(
+                total_coordinates * _RETAINED_BYTES_PER_COORDINATE
+            ),
+            "materialize_memory_worker_bytes": int(worker_bytes),
+            "materialize_memory_affordable_workers": int(affordable),
+            "materialize_memory_planned_workers": int(plan.workers),
+            "materialize_total_coordinates": int(total_coordinates),
+            "materialize_max_material_coordinates": int(max(counts, default=0)),
+        },
+    )
     if affordable < plan.workers:
         return affordable, "vector_memory_budget", worker_bytes, plan
     return plan.workers, plan.limiting_reason, worker_bytes, plan
+
+
+def _record_worker_budget_diagnostics(
+    diagnostics: dict | None, values: dict | None
+) -> None:
+    """Publish the worker-budget decision's inputs, including "not computed".
+
+    发布 worker 预算决定的输入；未计算时也如实标注。
+    """
+
+    if diagnostics is None:
+        return
+    if values is None:
+        # The decision short-circuited before any memory arithmetic; say so
+        # rather than leaving stale numbers from another stage.
+        # 决定在任何内存运算之前就短路了，如实标注，而不是留下其他阶段的旧数字。
+        diagnostics["materialize_memory_budget_bytes"] = None
+        diagnostics["materialize_memory_parent_rss_bytes"] = None
+        diagnostics["materialize_memory_remaining_bytes"] = None
+        diagnostics["materialize_memory_retained_bytes"] = None
+        diagnostics["materialize_memory_worker_bytes"] = None
+        diagnostics["materialize_memory_affordable_workers"] = None
+        diagnostics["materialize_memory_planned_workers"] = None
+        diagnostics["materialize_total_coordinates"] = None
+        diagnostics["materialize_max_material_coordinates"] = None
+        return
+    diagnostics.update(values)
 
 
 def _accept_result(result: dict, name: str, data: dict, mesh: trimesh.Trimesh | None) -> None:
@@ -255,8 +333,12 @@ def materialize_material_meshes(
         Ordered material-to-mesh mapping. 按输入顺序排列的材质网格映射。
     """
     items = [(name, data) for name, data in slabs_by_slot.items() if data.get("slabs")]
-    workers, reason, worker_bytes, plan = _worker_budget(items, serial_builder, geometry_policy)
+    budget_diagnostics: dict = {}
+    workers, reason, worker_bytes, plan = _worker_budget(
+        items, serial_builder, geometry_policy, budget_diagnostics
+    )
     if timings is not None:
+        timings.update(budget_diagnostics)
         timings.update({
             "materialize_parallelism_workers": workers,
             "materialize_parallelism_limit": reason,
@@ -300,50 +382,54 @@ def materialize_material_meshes(
         # instead of starting new worker processes.
         # 包含“租约授予 0”的情况：CPU 已被全部租出，本份文档改为在已经取得
         # 位置的本进程内构建，而不是新增 worker 进程。
-        if lease_store is not None and grant is not None:
-            lease_store.release(grant.token)
+        _release_worker_lease(lease_store, grant, timings)
         return _materialize_serial(items, scale_factor, geometry_policy, serial_builder)
 
-    # Reserve all retained output above; only `workers` builders run at once.
-    # Workers never mutate source slabs. Commit and release inputs in order.
-    lifetime = MaterialProcessLifetime()
-    try:
+    # The lease is taken before anything else can fail, so its release has to
+    # cover every way out of this function: a monitor that cannot start, a
+    # failing diagnostic, a worker error and normal completion. It is released
+    # only after this task's own compute processes have stopped, so a later
+    # task never takes capacity that is still in use.
+    # 租约在任何其他可能失败的动作之前取得，因此释放必须覆盖本函数的每个出口：
+    # 看护启动失败、诊断失败、worker 异常与正常完成。释放发生在本任务自己的计算
+    # 进程停止之后，使后到任务不会取到仍在使用中的容量。
+    with _worker_lease_scope(lease_store, grant, timings):
+        # Reserve all retained output above; only `workers` builders run at once.
+        # Workers never mutate source slabs. Commit and release inputs in order.
+        lifetime = MaterialProcessLifetime()
         try:
-            lifetime.open()
-        except OSError:
+            try:
+                lifetime.open()
+            except OSError:
+                if timings is not None:
+                    timings["materialize_parallelism_workers"] = 1
+                    timings["materialize_parallelism_limit"] = "process_ownership_unavailable"
+                return _materialize_serial(items, scale_factor, geometry_policy, serial_builder)
             if timings is not None:
-                timings["materialize_parallelism_workers"] = 1
-                timings["materialize_parallelism_limit"] = "process_ownership_unavailable"
-            return _materialize_serial(items, scale_factor, geometry_policy, serial_builder)
-        if timings is not None:
-            # Sampled around the parallel section: the parent's own RSS is not
-            # the task's footprint while material children are alive.
-            # 在并行段前后采样：材质子进程存活期间，父进程自身 RSS 并非任务
-            # 真实占用。
-            start_report = get_owned_memory_report()
-            timings["materialize_owned_group_rss_start_bytes"] = start_report[
-                "owned_group_rss_bytes"
-            ]
-            timings["materialize_container_limit_bytes"] = start_report[
-                "container_limit_bytes"
-            ]
-            timings["materialize_container_current_bytes"] = start_report[
-                "container_current_bytes"
-            ]
-            timings["materialize_container_source"] = start_report["container_source"]
-        try:
+                # Sampled around the parallel section: the parent's own RSS is not
+                # the task's footprint while material children are alive.
+                # 在并行段前后采样：材质子进程存活期间，父进程自身 RSS 并非任务
+                # 真实占用。
+                start_report = get_owned_memory_report()
+                timings["materialize_owned_group_rss_start_bytes"] = start_report[
+                    "owned_group_rss_bytes"
+                ]
+                timings["materialize_container_limit_bytes"] = start_report[
+                    "container_limit_bytes"
+                ]
+                timings["materialize_container_current_bytes"] = start_report[
+                    "container_current_bytes"
+                ]
+                timings["materialize_container_source"] = start_report["container_source"]
             return _materialize_in_processes(
                 items, scale_factor, geometry_policy, workers, worker_bytes,
                 lifetime, timings, lease_store, grant,
             )
         finally:
-            if lease_store is not None and grant is not None:
-                lease_store.release(grant.token)
-    finally:
-        lifetime.close()
-        if timings is not None:
-            timings["materialize_monitor_cpu_s"] = lifetime.cpu_seconds
-            timings["materialize_child_cpu_s"] += lifetime.cpu_seconds
+            lifetime.close()
+            if timings is not None:
+                timings["materialize_monitor_cpu_s"] = lifetime.cpu_seconds
+                timings["materialize_child_cpu_s"] += lifetime.cpu_seconds
 
 
 def _reserve_worker_lease(
@@ -375,6 +461,92 @@ def _reserve_worker_lease(
         stage="vector_materialize",
     )
     return store, grant
+
+
+@contextmanager
+def _worker_lease_scope(
+    lease_store: WorkerLeaseStore | None, grant: Any, timings: dict | None
+) -> Iterator[Any]:
+    """Give this task's worker lease back on every exit from the leased section.
+
+    在租约段的每个出口归还本任务的 worker 额度。
+
+    The section starts at the reservation, so a monitor that cannot start, a
+    failing diagnostic, a worker error and normal completion all return the
+    capacity. Callers must place the scope so that it exits after this task's
+    own compute processes have stopped.
+    覆盖范围从预留开始：看护启动失败、诊断失败、worker 异常与正常完成都会归还
+    额度。调用方必须让它在本任务自己的计算进程停止之后退出。
+    """
+
+    try:
+        yield grant
+    finally:
+        _release_worker_lease(lease_store, grant, timings)
+
+
+def _release_worker_lease(
+    lease_store: WorkerLeaseStore | None, grant: Any, timings: dict | None
+) -> None:
+    """Return one worker lease, bounded and visible if the table stays busy.
+
+    归还一个 worker 租约；账本持续不可写时有界重试并如实记录。
+
+    A release that cannot reach a trustworthy table keeps this task's workers
+    reserved for as long as the holder process lives, so it is retried a
+    bounded number of times and then recorded as ``retained`` rather than
+    swallowed. Nothing here raises: a cleanup failure must not replace the
+    material error that is already propagating. 无法取得可信账本时本任务的额度
+    会一直被占到这个持有进程退出，因此有界重试，仍失败则记为 ``retained`` 而
+    不是静默吞掉。本函数不抛异常：清理失败不能替换已经在传播的材质错误。
+    """
+
+    if lease_store is None or grant is None:
+        return
+    token = getattr(grant, "token", None)
+    if token is None:
+        return
+    attempts = 0
+    last_error: BaseException | None = None
+    for attempt in range(_LEASE_RELEASE_ATTEMPTS):
+        attempts = attempt + 1
+        try:
+            released = bool(lease_store.release(token))
+        except BaseException as exc:  # noqa: BLE001 - cleanup must not mask the caller's error
+            released = False
+            last_error = exc
+        if released:
+            if timings is not None:
+                timings["materialize_lease_release"] = "released"
+                timings["materialize_lease_release_attempts"] = attempts
+            return
+        if attempt + 1 < _LEASE_RELEASE_ATTEMPTS:
+            time.sleep(_LEASE_RELEASE_RETRY_SECONDS)
+
+    if timings is not None:
+        timings["materialize_lease_release"] = "retained"
+        timings["materialize_lease_release_attempts"] = attempts
+    if last_error is not None:
+        _log.warning(
+            "Releasing the vector material worker lease raised; the reservation "
+            "stays until this process exits",
+            extra={
+                "event": "vector_material_lease_release_error",
+                "stage": "vector_materialize",
+                "attempts": attempts,
+                "error": type(last_error).__name__,
+            },
+        )
+    else:
+        _log.warning(
+            "Vector material worker lease could not be released; the reservation "
+            "stays until this process exits",
+            extra={
+                "event": "vector_material_lease_release_failed",
+                "stage": "vector_materialize",
+                "attempts": attempts,
+            },
+        )
 
 
 def _lease_timings(planned_workers: int, grant: Any, plan: Any) -> dict:

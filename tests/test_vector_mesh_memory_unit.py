@@ -11,9 +11,11 @@ from PIL import Image
 from core.errors import VectorMeshMemoryBudgetError
 from core.vector_mesh_memory import (
     DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES,
+    MATERIAL_WORKER_PROCESS_BASE_BYTES,
     enforce_vector_mesh_memory_budget,
     estimate_indexed_prism_memory,
     estimate_material_archive_runtime_bytes,
+    estimate_vector_material_parallel_memory_target_bytes,
     estimate_vector_task_memory_reservation_bytes,
     estimate_vector_mesh_build_memory,
     resolve_vector_mesh_memory_budget_bytes,
@@ -315,3 +317,104 @@ class _CoordinateCountGeometry:
 
     def __init__(self, coordinate_count: int) -> None:
         self.coordinate_count = int(coordinate_count)
+
+
+# ---------------------------------------------------------------------------
+# R3: the material stage's parallel working set as a task reservation
+#
+# The stage decides how many builders it may start from its own live budget, so
+# a reservation sized only for the serial pipeline leaves every resource-rich
+# device serial. These tests pin the estimator that turns the source's known
+# scale and the selected material count into the budget the stage needs.
+# ---------------------------------------------------------------------------
+
+
+def _write_dense_svg(path, target_bytes: int):
+    """Write a well-formed SVG whose path data is close to ``target_bytes``."""
+
+    prefix = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+        '<path d="M 0 0'
+    )
+    suffix = ' Z"/></svg>'
+    points = max(1, (target_bytes - len(prefix) - len(suffix)) // 8)
+    body = "".join(f" L {index % 997} {index % 991}" for index in range(points))
+    path.write_text(prefix + body + suffix, encoding="utf-8")
+    return path
+
+
+def test_material_parallel_target_covers_the_builders_a_source_can_use(
+    tmp_path,
+) -> None:
+    """A dense multi-material source asks for its builders' working set."""
+
+    source = _write_dense_svg(tmp_path / "dense.svg", 3_803_242)
+    required = estimate_vector_task_memory_reservation_bytes(source)
+    target = estimate_vector_material_parallel_memory_target_bytes(
+        source, material_count=12
+    )
+
+    assert target is not None
+    assert target > required
+    # Builders the work can keep busy at the stage's own work density, each at
+    # the process base the stage charges, plus the coordinate working set the
+    # reservation's expansion implies. Fewer than one per material is enough
+    # for this source, and the request never exceeds the configured ceiling.
+    assert target - required >= 9 * MATERIAL_WORKER_PROCESS_BASE_BYTES
+    assert target - required < 12 * MATERIAL_WORKER_PROCESS_BASE_BYTES + 1024**3
+
+
+def test_material_parallel_target_is_absent_when_nothing_can_be_gained(
+    tmp_path,
+) -> None:
+    """One material, an unknown source, or a missing file asks for nothing."""
+
+    source = _write_dense_svg(tmp_path / "dense.svg", 4096)
+
+    assert (
+        estimate_vector_material_parallel_memory_target_bytes(
+            source, material_count=1
+        )
+        is None
+    )
+    assert (
+        estimate_vector_material_parallel_memory_target_bytes(
+            source, material_count=0
+        )
+        is None
+    )
+    assert (
+        estimate_vector_material_parallel_memory_target_bytes(
+            tmp_path / "missing.svg", material_count=12
+        )
+        is None
+    )
+    raster = tmp_path / "cut.png"
+    Image.new("L", (8, 8)).save(raster)
+    assert (
+        estimate_vector_material_parallel_memory_target_bytes(
+            raster, material_count=12
+        )
+        is None
+    )
+    # Below the coordinates at which the stage starts workers at all, the same
+    # source asks for nothing: the reservation stays with tasks that can use it.
+    assert (
+        estimate_vector_material_parallel_memory_target_bytes(
+            source, material_count=12
+        )
+        is None
+    )
+
+
+def test_material_parallel_target_respects_the_configured_ceiling(tmp_path) -> None:
+    """The request never exceeds the configured or container cap."""
+
+    ceiling = 3 * 1024**3
+    source = _write_dense_svg(tmp_path / "dense.svg", 3_803_242)
+
+    target = estimate_vector_material_parallel_memory_target_bytes(
+        source, material_count=12, memory_budget_bytes=ceiling
+    )
+
+    assert target == ceiling

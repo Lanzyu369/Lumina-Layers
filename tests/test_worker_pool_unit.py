@@ -1445,3 +1445,144 @@ class TestMaxTasksPerChild:
         assert kwargs["max_workers"] == 3
         assert kwargs["max_tasks_per_child"] == 20
         assert "initializer" in kwargs
+
+
+# ---------------------------------------------------------------------------
+# R3: a task may hand its evidence-based parallel memory requirement to the
+# parent admission gate. The gate grants a bounded, atomic extension inside the
+# capacity it already respects; a task that cannot get it keeps its required
+# reservation and runs with lower parallelism instead of being refused.
+# ---------------------------------------------------------------------------
+
+
+def _read_task_host_memory_budget() -> int | None:
+    """Report the worker-local memory cap the parent handed to this process."""
+
+    from core.task_parallelism_runtime import current_task_host_memory_budget_bytes
+
+    return current_task_host_memory_budget_bytes()
+
+
+def _read_task_host_memory_budget_after(seconds: float) -> int | None:
+    """Report that cap after the reservation has been held for a while."""
+
+    import time
+
+    time.sleep(seconds)
+    return _read_task_host_memory_budget()
+
+
+class TestHostMemoryParallelTarget:
+    """Bounded extension of one reservation inside the existing gate."""
+
+    @pytest.mark.asyncio
+    async def test_parallel_target_reaches_the_worker_as_its_local_budget(
+        self,
+    ) -> None:
+        gib = 1024**3
+        pool = WorkerPoolManager(max_workers=1, host_memory_budget_bytes=8 * gib)
+        pool.start()
+        try:
+            budget = await pool.submit(
+                _read_task_host_memory_budget,
+                host_memory_reservation_bytes=2 * gib,
+                host_memory_parallel_target_bytes=5 * gib,
+            )
+            assert budget == 5 * gib
+            assert pool.host_memory_reserved_bytes == 0
+        finally:
+            pool.shutdown(wait=True)
+
+    @pytest.mark.asyncio
+    async def test_extension_is_bounded_by_free_capacity(self) -> None:
+        """Eight GiB with four already reserved leaves a two GiB extension."""
+
+        gib = 1024**3
+        pool = WorkerPoolManager(max_workers=2, host_memory_budget_bytes=8 * gib)
+        pool.start()
+        active = asyncio.create_task(
+            pool.submit(_slow_task, 0.3, host_memory_reservation_bytes=4 * gib)
+        )
+        try:
+            await asyncio.sleep(0.05)
+            granted = await pool.submit(
+                _read_task_host_memory_budget_after,
+                0.01,
+                host_memory_reservation_bytes=2 * gib,
+                host_memory_parallel_target_bytes=6 * gib,
+            )
+            assert granted == 4 * gib
+            assert await active == "done"
+            assert pool.host_memory_reserved_bytes == 0
+        finally:
+            pool.shutdown(wait=True)
+
+    @pytest.mark.asyncio
+    async def test_no_spare_capacity_still_admits_the_required_reservation(
+        self,
+    ) -> None:
+        """Scarce memory lowers parallelism; it must not refuse a valid task."""
+
+        gib = 1024**3
+        pool = WorkerPoolManager(max_workers=2, host_memory_budget_bytes=4 * gib)
+        pool.start()
+        active = asyncio.create_task(
+            pool.submit(_slow_task, 0.3, host_memory_reservation_bytes=2 * gib)
+        )
+        try:
+            await asyncio.sleep(0.05)
+            granted = await pool.submit(
+                _read_task_host_memory_budget_after,
+                0.01,
+                host_memory_reservation_bytes=2 * gib,
+                host_memory_parallel_target_bytes=4 * gib,
+            )
+            assert granted == 2 * gib
+            assert await active == "done"
+        finally:
+            pool.shutdown(wait=True)
+
+    @pytest.mark.asyncio
+    async def test_granted_extension_is_counted_against_later_tasks(self) -> None:
+        """The extension is reserved, not a hint another task may also claim."""
+
+        gib = 1024**3
+        pool = WorkerPoolManager(max_workers=2, host_memory_budget_bytes=4 * gib)
+        pool.start()
+        active = asyncio.create_task(
+            pool.submit(
+                _slow_task,
+                0.3,
+                host_memory_reservation_bytes=2 * gib,
+                host_memory_parallel_target_bytes=4 * gib,
+            )
+        )
+        try:
+            await asyncio.sleep(0.05)
+            assert pool.host_memory_reserved_bytes == 4 * gib
+            with pytest.raises(VectorHostMemoryAdmissionError):
+                await pool.submit(
+                    _slow_task, 0.01, host_memory_reservation_bytes=2 * gib
+                )
+            assert await active == "done"
+            assert pool.host_memory_reserved_bytes == 0
+        finally:
+            pool.shutdown(wait=True)
+
+    @pytest.mark.asyncio
+    async def test_absent_target_keeps_the_previous_budget(self) -> None:
+        """Without a target the reservation is the budget, as before."""
+
+        gib = 1024**3
+        pool = WorkerPoolManager(max_workers=1, host_memory_budget_bytes=8 * gib)
+        pool.start()
+        try:
+            assert (
+                await pool.submit(
+                    _read_task_host_memory_budget,
+                    host_memory_reservation_bytes=2 * gib,
+                )
+                == 2 * gib
+            )
+        finally:
+            pool.shutdown(wait=True)
