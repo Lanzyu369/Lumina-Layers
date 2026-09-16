@@ -121,6 +121,45 @@
 `workers = 1 / process_count = 0 / limit = vector_memory_budget` 变成
 `workers = 3 / process_count > 0`。
 
+## 追加修正：并行预算申请改为复用现有并发策略
+
+**问题。** 估算端自己按坐标阶梯算"能喂饱几个构建进程"，这既忽略了显式固定并发
+（`LUMINA_VECTOR_PARALLELISM`）与设备有效 CPU，也在串行配置下照旧申请追加量；
+更关键的是它的上限取自 `resolve_vector_mesh_memory_budget_bytes()`，而该函数把
+**任务当前预留**也算进去——于是"用尚未追加的旧预算反推只能串行"在任务作用域内就会
+成立，等于把默认提速关掉。
+
+**做法（只改这一处，不新增调度器/状态机/框架）。** 估算端不再自算阶梯，改为调用
+阶段实际运行的那套策略：
+
+```python
+resolve_task_parallelism_plan(
+    "vector", work_items=材质数, hard_max_workers=None,
+    work_units=坐标估算, min_parallel_work_units=…, work_units_per_worker=…,
+    outer_demand=1,   # 本任务自己的上限，不预测兄弟任务负载
+)
+```
+
+- 策略给出串行（工作量小、显式串行、只有一个可用 CPU、只有一个材质）→ 返回
+  `None`，**串行不申请追加量**；
+- 显式固定并发与低核设备按策略给出的上限申请（固定 3 → 3 个构建进程；2 核 → 2 个），
+  而不是按材质数或坐标阶梯另算一遍；
+- 上限改用新的 `_configured_vector_mesh_memory_budget_bytes()`：只含配置与容器
+  上限，结构上不含任务当前预留；`resolve_vector_mesh_memory_budget_bytes()` 保持
+  原语义（在此基础上再叠加任务预留），阶段侧行为不变；
+- `outer_demand=1` 只影响"申请多少"，不影响"实际能起多少"：内存由准入闸门按真正
+  空闲量授予，CPU 由租约在运行时约束，最终共享机器的任务只用掉预算的一部分。
+
+**定向测试（先红后绿，4 条）**，都在 `tests/test_vector_mesh_memory_unit.py`：
+串行配置不申请（旧实现会返回请求）；固定 3 → 恰好 3 个构建进程（旧实现按 12 申请）；
+2 核设备 → 恰好 2 个（旧实现按 12 申请）；在旧预算作用域内调用结果与不设作用域相同
+（旧实现会塌成旧预算 1,102,827,008）。
+
+**复测（同一入口、同一输入、三臂交替）**：大样例仍是 **9 个真实材质进程**、预算
+4179 MB（该文档上策略上限与原先的工作阶梯同值），同一时间窗内基线
+12.83 / 13.32 s → 默认 8.86 / 9.19 s；小样例预算仍等于必需预留（1409 MB）、材质
+进程 0、限制原因 `insufficient_work_units`。相关套件 578 passed。
+
 ## 有限验收（真实默认生成入口，基线与修改交替）
 
 方法：同一份输入、同一台机器，走 `api.workers.converter_workers.worker_generate_model`

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from core.errors import VectorMeshMemoryBudgetError
 from core.system_capacity import get_effective_memory_limit_bytes
+from core.task_parallelism import resolve_task_parallelism_plan
 from core.task_parallelism_runtime import current_task_host_memory_budget_bytes
 
 
@@ -308,8 +309,19 @@ def estimate_vector_mesh_build_memory(
     )
 
 
-def resolve_vector_mesh_memory_budget_bytes() -> int:
-    """Resolve the worker RSS cap, including any parent host reservation."""
+def _configured_vector_mesh_memory_budget_bytes() -> int:
+    """Return the configured cap, bounded by the container limit.
+
+    返回配置上限，并被容器上限压制。
+
+    The task's own current reservation is deliberately not part of this figure:
+    the admission side asks for a budget in order to raise that reservation, and
+    a request measured against the budget that has not been raised yet would
+    always conclude "no more builders". The worker-local resolver below adds the
+    reservation back. 本函数有意不含任务当前预留：准入侧正是为了抬高该预留才申请
+    额度，用尚未抬高的旧预算去衡量请求，只会得到“只能串行”的结论。下面的
+    worker 本地解析再叠加该预留。
+    """
 
     raw_value = os.environ.get(_VECTOR_MESH_MEMORY_BUDGET_ENV)
     if raw_value is None or not raw_value.strip():
@@ -332,6 +344,13 @@ def resolve_vector_mesh_memory_budget_bytes() -> int:
     container_limit = get_effective_memory_limit_bytes()
     if container_limit is not None:
         configured_budget = min(configured_budget, max(1, int(container_limit)))
+    return configured_budget
+
+
+def resolve_vector_mesh_memory_budget_bytes() -> int:
+    """Resolve the worker RSS cap, including any parent host reservation."""
+
+    configured_budget = _configured_vector_mesh_memory_budget_bytes()
     host_reservation = current_task_host_memory_budget_bytes()
     if host_reservation is None:
         return configured_budget
@@ -456,21 +475,32 @@ def estimate_vector_material_parallel_memory_target_bytes(
     budget and the real coordinate counts. A reservation sized only for the
     serial pipeline therefore leaves a resource-rich device building every
     material in the parent process. This returns the budget at which that same
-    arithmetic affords the builders that work can actually keep busy: the
-    serial reservation, plus each builder's process base, plus the coordinate
-    working set the reservation's own source expansion already implies (one
-    source byte expands to
-    ``_VECTOR_TASK_RESERVATION_BYTES_PER_ARTIFACT_BYTE`` runtime bytes and one
-    coordinate is charged ``MATERIAL_OUTPUT_RETAINED_BYTES_PER_COORDINATE`` of
-    retained output). That model's 0.167 coordinates per source byte sits above
-    the 0.156 the product's own dense document measured, so it asks for a
-    little more than that document needed.
+    arithmetic affords the builders the stage is allowed to start: the serial
+    reservation, plus each builder's process base, plus the coordinate working
+    set the reservation's own source expansion already implies (one source byte
+    expands to ``_VECTOR_TASK_RESERVATION_BYTES_PER_ARTIFACT_BYTE`` runtime
+    bytes and one coordinate is charged
+    ``MATERIAL_OUTPUT_RETAINED_BYTES_PER_COORDINATE`` of retained output). That
+    model's 0.167 coordinates per source byte sits above the 0.156 the product's
+    own dense document measured, so it asks for a little more than that document
+    needed.
 
     阶段自己决定能起几个构建进程（用实时预算与真实坐标数）。只为串行管线计的预留
     会让内存充足的设备把每个材质都在父进程内构建。本函数返回同一套算法能给出
-    “这份工作真正能喂饱的构建进程数”所需预算：串行预留、每个构建进程的进程基数，
-    以及源扩展本身已隐含的坐标工作集。该模型每源字节 0.167 个坐标，高于产品自有
-    密集文档实测的 0.156，即请求略多于该文档实际所需。
+    “阶段被允许启动的构建进程数”所需预算：串行预留、每个构建进程的进程基数，以及
+    源扩展本身已隐含的坐标工作集。该模型每源字节 0.167 个坐标，高于产品自有密集
+    文档实测的 0.156，即请求略多于该文档实际所需。
+
+    The builder count comes from the same concurrency policy the stage runs under
+    (``resolve_task_parallelism_plan``), so an explicit fixed worker count and a
+    low-core device are respected rather than re-derived here; the policy's
+    memory ceiling is left out of that call on purpose, because the budget it
+    would measure against is the one this request exists to raise. A policy that
+    resolves to serial returns ``None``: serial work asks for no extra builders.
+    构建进程数来自阶段实际运行的那套并发策略（``resolve_task_parallelism_plan``），
+    因此显式固定并发与低核设备按策略给出的上限申请，而不是在这里另算一遍；调用时
+    有意不带内存上限项，因为它要衡量的正是本次申请要抬高的那份预算。策略给出串行
+    时返回 ``None``——串行工作不申请额外的构建进程。
 
     The result is a request, not a raise: it is capped by the configured or
     container budget, and the parent admission gate grants only the part that is
@@ -486,12 +516,10 @@ def estimate_vector_material_parallel_memory_target_bytes(
         或工作量低于阶段开始使用 worker 的坐标下限）。
     """
 
-    if int(material_count) < 2:
-        return None
-    configured = max(
+    ceiling = max(
         1,
         int(
-            resolve_vector_mesh_memory_budget_bytes()
+            _configured_vector_mesh_memory_budget_bytes()
             if memory_budget_bytes is None
             else memory_budget_bytes
         ),
@@ -506,7 +534,7 @@ def estimate_vector_material_parallel_memory_target_bytes(
         required = estimate_vector_task_memory_reservation_bytes(
             source_path,
             supporting_paths=supporting_paths,
-            memory_budget_bytes=configured,
+            memory_budget_bytes=ceiling,
         )
     except (OSError, TypeError, ValueError, OverflowError):
         return None
@@ -515,26 +543,38 @@ def estimate_vector_material_parallel_memory_target_bytes(
         * _VECTOR_TASK_RESERVATION_BYTES_PER_ARTIFACT_BYTE
         // MATERIAL_OUTPUT_RETAINED_BYTES_PER_COORDINATE
     )
-    if coordinate_estimate < MIN_PARALLEL_MATERIAL_COORDINATES:
-        # Work this small is built in the process that already exists, whatever
-        # budget it holds, so asking for builders would take capacity from tasks
-        # that can use it. 这个量级的工作无论预算多少都在已有进程内完成，为它索
-        # 取构建进程会占掉真正能用上的任务的容量。
-        return None
-    usable_workers = min(
-        int(material_count),
-        max(
-            1,
-            (coordinate_estimate + MATERIAL_COORDINATES_PER_WORKER - 1)
-            // MATERIAL_COORDINATES_PER_WORKER,
-        ),
+    # ``outer_demand=1`` asks for this task's own ceiling: an explicit fixed
+    # worker count, the device's effective CPU and the work-unit ladder all
+    # come from the policy, while sibling demand is not predicted here. The
+    # admission gate bounds the grant by memory that is actually free and the
+    # lease bounds the running workers, so a task that ends up sharing the
+    # machine simply uses less of its budget.
+    # ``outer_demand=1`` 申请的是本任务自己的上限：显式固定并发、设备有效 CPU 与
+    # 工作量阶梯都取自策略，而这里不预测兄弟任务负载。准入闸门按真正空闲的内存
+    # 决定授予量，租约约束实际运行的 worker，因此最终共享机器的任务只用掉预算的
+    # 一部分。
+    plan = resolve_task_parallelism_plan(
+        "vector",
+        work_items=int(material_count),
+        hard_max_workers=None,
+        work_units=coordinate_estimate,
+        min_parallel_work_units=MIN_PARALLEL_MATERIAL_COORDINATES,
+        work_units_per_worker=MATERIAL_COORDINATES_PER_WORKER,
+        outer_demand=1,
     )
+    if plan.workers <= 1:
+        # Serial under the same policy the stage will run: small work, an
+        # explicit serial setting, a device with one usable CPU, or a single
+        # material. None of those asks for builders the stage will not start.
+        # 与阶段同一套策略下的串行：工作量小、显式串行、只有一个可用 CPU 或只有
+        # 一个材质。这些都不申请阶段不会启动的构建进程。
+        return None
     target = (
         required
-        + usable_workers * MATERIAL_WORKER_PROCESS_BASE_BYTES
+        + plan.workers * MATERIAL_WORKER_PROCESS_BASE_BYTES
         + coordinate_estimate * MATERIAL_WORKER_WORKING_BYTES_PER_COORDINATE
     )
-    return min(configured, max(required, int(target)))
+    return min(ceiling, max(required, int(target)))
 
 
 def _resident_artifact_size_hint(path: Path) -> int:

@@ -343,11 +343,44 @@ def _write_dense_svg(path, target_bytes: int):
     return path
 
 
+def _fake_effective_cpu(monkeypatch: pytest.MonkeyPatch, count: int) -> None:
+    """Pin the CPU capacity the concurrency policy reads, so tests are portable."""
+
+    import core.task_parallelism as task_parallelism
+    from core.system_capacity import EffectiveCpuCapacity
+
+    capacity = EffectiveCpuCapacity(
+        host_cpu_count=count,
+        affinity_cpu_count=None,
+        cgroup_quota_cpu_count=None,
+        apple_performance_cpu_count=None,
+        effective_cpu_count=count,
+        limiting_source="host_fallback",
+    )
+    monkeypatch.setattr(
+        task_parallelism,
+        "get_effective_cpu_capacity",
+        lambda: capacity,
+        raising=False,
+    )
+
+
+def _covered_builders(target: int, required: int, source) -> float:
+    """Builders the request pays for, over and above the serial reservation."""
+
+    coordinate_estimate = source.stat().st_size * 64 // 384
+    return (
+        target - required - coordinate_estimate * 1024
+    ) / MATERIAL_WORKER_PROCESS_BASE_BYTES
+
+
 def test_material_parallel_target_covers_the_builders_a_source_can_use(
-    tmp_path,
+    monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     """A dense multi-material source asks for its builders' working set."""
 
+    _fake_effective_cpu(monkeypatch, 16)
+    monkeypatch.delenv("LUMINA_VECTOR_PARALLELISM", raising=False)
     source = _write_dense_svg(tmp_path / "dense.svg", 3_803_242)
     required = estimate_vector_task_memory_reservation_bytes(source)
     target = estimate_vector_material_parallel_memory_target_bytes(
@@ -356,19 +389,96 @@ def test_material_parallel_target_covers_the_builders_a_source_can_use(
 
     assert target is not None
     assert target > required
-    # Builders the work can keep busy at the stage's own work density, each at
-    # the process base the stage charges, plus the coordinate working set the
-    # reservation's expansion implies. Fewer than one per material is enough
-    # for this source, and the request never exceeds the configured ceiling.
-    assert target - required >= 9 * MATERIAL_WORKER_PROCESS_BASE_BYTES
-    assert target - required < 12 * MATERIAL_WORKER_PROCESS_BASE_BYTES + 1024**3
+    # Twelve materials of dense work on a 16-CPU device: the policy's ceiling is
+    # the material count, so the request covers one builder each.
+    assert _covered_builders(target, required, source) == 12
+
+
+def test_material_parallel_target_is_absent_when_the_policy_is_serial(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Serial work asks for no builders, however dense the source is."""
+
+    _fake_effective_cpu(monkeypatch, 16)
+    monkeypatch.setenv("LUMINA_VECTOR_PARALLELISM", "1")
+    source = _write_dense_svg(tmp_path / "dense.svg", 3_803_242)
+
+    assert (
+        estimate_vector_material_parallel_memory_target_bytes(
+            source, material_count=12
+        )
+        is None
+    )
+
+
+def test_material_parallel_target_follows_a_fixed_worker_count(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """An explicit fixed count bounds the request, not the material count."""
+
+    _fake_effective_cpu(monkeypatch, 16)
+    monkeypatch.setenv("LUMINA_VECTOR_PARALLELISM", "3")
+    source = _write_dense_svg(tmp_path / "dense.svg", 3_803_242)
+    required = estimate_vector_task_memory_reservation_bytes(source)
+
+    target = estimate_vector_material_parallel_memory_target_bytes(
+        source, material_count=12
+    )
+
+    assert target is not None
+    assert _covered_builders(target, required, source) == 3
+
+
+def test_material_parallel_target_follows_a_low_core_device(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """A device with two usable CPUs is asked for two builders, not twelve."""
+
+    _fake_effective_cpu(monkeypatch, 2)
+    monkeypatch.delenv("LUMINA_VECTOR_PARALLELISM", raising=False)
+    source = _write_dense_svg(tmp_path / "dense.svg", 3_803_242)
+    required = estimate_vector_task_memory_reservation_bytes(source)
+
+    target = estimate_vector_material_parallel_memory_target_bytes(
+        source, material_count=12
+    )
+
+    assert target is not None
+    assert _covered_builders(target, required, source) == 2
+
+
+def test_material_parallel_target_is_not_measured_against_the_current_budget(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """The request cannot be derived from the budget it exists to raise."""
+
+    _fake_effective_cpu(monkeypatch, 16)
+    monkeypatch.delenv("LUMINA_VECTOR_PARALLELISM", raising=False)
+    source = _write_dense_svg(tmp_path / "dense.svg", 3_803_242)
+    required = estimate_vector_task_memory_reservation_bytes(source)
+    unraised = estimate_vector_material_parallel_memory_target_bytes(
+        source, material_count=12
+    )
+
+    # A worker task starts from this reservation, which affords a single
+    # builder; asking again from inside it must still request the builders the
+    # policy allows instead of concluding "serial".
+    with task_host_memory_budget_scope(required):
+        inside_task = estimate_vector_material_parallel_memory_target_bytes(
+            source, material_count=12
+        )
+
+    assert inside_task == unraised
+    assert inside_task is not None and inside_task > required
 
 
 def test_material_parallel_target_is_absent_when_nothing_can_be_gained(
-    tmp_path,
+    monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     """One material, an unknown source, or a missing file asks for nothing."""
 
+    _fake_effective_cpu(monkeypatch, 16)
+    monkeypatch.delenv("LUMINA_VECTOR_PARALLELISM", raising=False)
     source = _write_dense_svg(tmp_path / "dense.svg", 4096)
 
     assert (
@@ -407,9 +517,13 @@ def test_material_parallel_target_is_absent_when_nothing_can_be_gained(
     )
 
 
-def test_material_parallel_target_respects_the_configured_ceiling(tmp_path) -> None:
+def test_material_parallel_target_respects_the_configured_ceiling(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
     """The request never exceeds the configured or container cap."""
 
+    _fake_effective_cpu(monkeypatch, 16)
+    monkeypatch.delenv("LUMINA_VECTOR_PARALLELISM", raising=False)
     ceiling = 3 * 1024**3
     source = _write_dense_svg(tmp_path / "dense.svg", 3_803_242)
 
