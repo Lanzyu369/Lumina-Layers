@@ -433,3 +433,134 @@ def test_shared_endpoint_of_near_collinear_edges_is_not_split():
         assert emitted == expected_vertices, name
         assert sum(_ring_area_mm2(ring) for ring in rings) == pytest.approx(
             expected_area, rel=1e-12), name
+
+
+# A document authored with these integers reaches the native export exactly:
+# the kernel renders the 100 mm viewBox at the 100 mm target width, so one grid
+# cell is 1e-10 mm and the integers below land straight on the rule's grid.
+# The scale only moves the products across the double lattice.
+ENTRY_SCALE = 1000000
+
+
+def _entry_document(ring_sets, scale: int = ENTRY_SCALE):
+    """Author integer rings as SVG path data on the kernel's own grid."""
+    scaled = [[(int(x) * scale, int(y) * scale) for x, y in ring]
+              for ring in ring_sets]
+    flat = [point for ring in scaled for point in ring]
+    width = max(x for x, _ in flat) - min(x for x, _ in flat)
+    height = max(y for _, y in flat) - min(y for _, y in flat)
+    span = int(DOCUMENT_MM * UNITS_PER_MM)
+    shift = (int((span - width) // 2) - min(x for x, _ in flat),
+             int((span - height) // 2) - min(y for _, y in flat))
+    to_mm = 1.0 / UNITS_PER_MM
+
+    def point_mm(point):
+        return ((point[0] + shift[0]) * to_mm, (point[1] + shift[1]) * to_mm)
+
+    paths = []
+    for ring in scaled:
+        data = "M" + "L".join(f"{x:.10f} {y:.10f}"
+                              for x, y in (point_mm(point) for point in ring)) + "Z"
+        paths.append(f"<path fill='#000000' d='{data}'/>")
+    svg = (f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 "
+           f"{DOCUMENT_MM} {DOCUMENT_MM}' width='{DOCUMENT_MM}' "
+           f"height='{DOCUMENT_MM}'>" + "".join(paths) + "</svg>")
+    return svg, shift
+
+
+def _kernel_entry(svg):
+    module_name = "lumina_svg_core"
+    assert importlib.util.find_spec(module_name) is not None, (
+        "The SVG geometry kernel must be built"
+    )
+    return importlib.import_module(module_name).analyze_svg_svg(
+        svg, DOCUMENT_MM, 0.02, True)
+
+
+def _authored_rings(collection, shift, scale: int = ENTRY_SCALE):
+    """Emitted rings back as the authored integers, closing point removed.
+
+    One grid cell is 1e-10 mm here, so the raw grid coordinates that
+    `_collection_rings` reads with a unit of 1.0 are the authored units before
+    the centring shift and the scale.
+    """
+    rings = []
+    for ring in _collection_rings(collection, 1.0):
+        rings.append([(int(round(x)) - shift[0], int(round(y)) - shift[1])
+                      for x, y in ring])
+    assert all(x % scale == 0 and y % scale == 0
+               for ring in rings for x, y in ring), "not on the authored lattice"
+    return [[(x // scale, y // scale) for x, y in ring] for ring in rings]
+
+
+def _assert_legal_rings(rings, name: str) -> None:
+    for ring in rings:
+        assert _ring_fault(ring) is None, (name, _ring_fault(ring), ring)
+
+
+def _self_touching_pair():
+    """A ring visiting its own start vertex, and a triangle sharing that vertex.
+
+    The ring traces two lobes that meet at (0, 0), which is not a legal
+    boundary expression; the triangle touches the same point. Whether the
+    export notices depends on which ring the rule looks at first: the vertex
+    belongs to both, and a record that only remembers the first visitor cannot
+    tell a ring meeting itself from a contact between two rings.
+    """
+    return [[(0, 0), (20, 0), (20, 20), (0, 0), (0, -20), (20, -20)],
+            [(0, 0), (-20, 10), (-20, -10)]]
+
+
+@pytest.mark.parametrize("self_touching_first", [True, False])
+def test_self_touching_ring_is_rebuilt_in_either_draw_order(
+        self_touching_first):
+    rings = _self_touching_pair()
+    if not self_touching_first:
+        rings = rings[::-1]
+    svg, shift = _entry_document(rings)
+    result = _kernel_entry(svg)
+    assert result.status == "supported", result.reason_code
+
+    expected = {(0, 0), (20, 0), (20, 20), (0, -20), (20, -20),
+                (-20, 10), (-20, -10)}
+    # The two lobes and the triangle are three separate triangles that share
+    # only their vertices; the region is 400 + 200 in authored units.
+    for name in ("raw", "visible", "silhouette"):
+        emitted = _authored_rings(getattr(result, name), shift)
+        _assert_legal_rings(emitted, name)
+        assert len(emitted) == 3, (name, emitted)
+        assert all(len(ring) == 3 for ring in emitted), (name, emitted)
+        assert {(x, y) for ring in emitted for x, y in ring} == expected, name
+        assert sum(_ring_area_mm2(ring) for ring in emitted) == pytest.approx(
+            600.0, rel=1e-12), name
+
+
+def test_vertex_resting_on_another_rings_edge_is_split():
+    # (5, 0) is a vertex of the triangle and sits inside the square's bottom
+    # edge. Each drawn path keeps its own boundary, but the composite coverage
+    # holds both rings in one tree, and there the contact has to be noded
+    # before the faces are built.
+    rings = [[(0, 0), (20, 0), (20, 20), (0, 20)],
+             [(5, 0), (12, -9), (19, -9)]]
+    svg, shift = _entry_document(rings)
+    result = _kernel_entry(svg)
+    assert result.status == "supported", result.reason_code
+
+    for name in ("raw", "visible"):
+        collection = getattr(result, name)
+        emitted = _authored_rings(collection, shift)
+        _assert_legal_rings(emitted, name)
+        # One area geometry per drawn path, each with its own simple boundary.
+        assert len(collection.geometry_offsets) - 1 == 2, name
+        # 400 for the square plus 7 x 9 / 2 for the triangle.
+        assert sum(_ring_area_mm2(ring) for ring in emitted) == pytest.approx(
+            431.5, rel=1e-12), name
+
+    emitted = _authored_rings(result.silhouette, shift)
+    _assert_legal_rings(emitted, "silhouette")
+    assert len(result.silhouette.geometry_offsets) - 1 == 1
+    assert len(emitted) == 2, emitted
+    # Both rings of the composite carry the node this contact needs.
+    assert all((5, 0) in ring for ring in emitted), emitted
+    assert sum(_ring_area_mm2(ring) for ring in emitted) == pytest.approx(
+        431.5, rel=1e-12)

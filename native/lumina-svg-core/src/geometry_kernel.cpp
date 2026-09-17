@@ -3410,12 +3410,17 @@ void appendCoveragePolyTree(GeometryCollection& collection,
                             ComplexityBudget& complexityBudget)
 {
     const auto paths = lumina::canonical::PolyTreePaths<int64_t>(tree);
-    lumina::canonical::BoundaryNoder<int64_t> noder(paths);
-    const auto noded = noder.Run();
+    // Node the linework to the grid before anything judges it. Splitting a
+    // segment at a quantized node moves where the pieces meet, so the pieces
+    // can meet again somewhere else; `NodeToGrid` is the shared rule's settle
+    // step for that, and the face build below requires its result.
+    bool already_canonical = false;
+    const auto noded =
+        lumina::canonical::NodeToGrid<int64_t>(paths, &already_canonical);
     // A union whose rings are simple, non-degenerate, and meet only at shared
     // vertices - at most one per ring pair - is already a legal expression of
     // its region, so it is emitted as it stands, coordinates untouched.
-    if(noder.Canonical()) {
+    if(already_canonical) {
         appendPolyTree(collection, tree, complexityBudget);
         return;
     }

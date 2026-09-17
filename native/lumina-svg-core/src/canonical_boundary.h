@@ -528,7 +528,8 @@ class BoundaryNoder {
   std::vector<PathOf<Coord>> Emit() {
     std::vector<PathOf<Coord>> paths;
     paths.reserve(ranges_.size());
-    ring_of_.assign(nodes_.size(), kNoRing);
+    last_ring_.assign(nodes_.size(), kNoRing);
+    shared_uses_.clear();
     for (std::size_t ring = 0; ring < ranges_.size(); ++ring) {
       const auto [begin, end] = ranges_[ring];
       PathOf<Coord> path;
@@ -557,27 +558,32 @@ class BoundaryNoder {
   }
 
   // Judge one emitted ring: a vertex it visits twice is a self-touch, and a
-  // vertex another ring also uses puts the two rings in contact there.
+  // vertex another ring also uses puts the two rings in contact there. Both
+  // questions are read from records kept per node, and neither depends on which
+  // ring happened to arrive first.
   void AuditRing(const PathOf<Coord>& path, const std::vector<std::size_t>& ids,
                  std::size_t ring) {
     if (HasZeroArea<Coord>(path)) degenerate_ = true;
     for (const auto node : ids) {
-      auto& owner = ring_of_[node];
-      if (owner == kNoRing) {
-        owner = ring;
-        continue;
-      }
+      auto& previous = last_ring_[node];
       // Neighbouring repeats are already gone, so the ring meets itself here:
-      // two lobes joined at this point, which no consumer accepts.
-      if (owner == ring) {
+      // two lobes joined at this point, which no consumer accepts. Whether
+      // another ring had used the node before says nothing about this.
+      if (previous == ring) {
         self_revisit_ = true;
         continue;
       }
+      // Every ring that uses the node is recorded, so two rings meeting twice
+      // are found whichever order they are audited in.
       auto& users = shared_uses_[node];
-      if (users.empty()) users.push_back(owner);
+      if (previous != kNoRing
+          && std::find(users.begin(), users.end(), previous) == users.end()) {
+        users.push_back(previous);
+      }
       if (std::find(users.begin(), users.end(), ring) == users.end()) {
         users.push_back(ring);
       }
+      previous = ring;
     }
   }
 
@@ -609,9 +615,11 @@ class BoundaryNoder {
   // Per node: the first two rings that own it as a vertex.
   std::vector<std::size_t> vertex_owner_;
   std::vector<std::size_t> vertex_second_;
-  // Per node: the first emitted ring that used it, and the other rings using
-  // it. Both are only filled while auditing, which happens once per Run().
-  std::vector<std::size_t> ring_of_;
+  // Per node: the last emitted ring that visited it, cleared with the audit.
+  // A repeat of the ring being audited is its own self-touch; the record,
+  // together with `shared_uses_`, also tells which rings the node puts in
+  // contact.
+  std::vector<std::size_t> last_ring_;
   std::unordered_map<std::size_t, std::vector<std::size_t>> shared_uses_;
   bool already_noded_ = true;
   bool self_revisit_ = false;
