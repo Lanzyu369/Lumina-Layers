@@ -640,13 +640,17 @@ inline int PointLocation(const PointOf<Coord>& point,
         && point.y >= std::min(a.y, b.y) && point.y <= std::max(a.y, b.y)) {
       return 0;
     }
-    if ((a.y > point.y) != (b.y > point.y)
-        && static_cast<long double>(point.x)
-            < static_cast<long double>(a.x)
-                + static_cast<long double>(point.y - a.y)
-                    * static_cast<long double>(b.x - a.x)
-                    / static_cast<long double>(b.y - a.y)) {
-      inside = !inside;
+    if ((a.y > point.y) != (b.y > point.y)) {
+      // Compare the ray intersection by orientation, rather than dividing
+      // large integer products into long double.  The sign of
+      // cross(b-a, point-a) equals the sign of dy exactly when the point is
+      // left of the edge intersection.  This keeps the int64 grid exact while
+      // preserving the existing floating-domain rule through IntersectionMath.
+      const auto cross = IntersectionMath<Coord>::Cross(
+          b - a, point - a);
+      const int cross_sign = IntersectionMath<Coord>::Sign(cross);
+      const int edge_y_sign = b.y > a.y ? 1 : -1;
+      if (cross_sign == edge_y_sign) inside = !inside;
     }
   }
   return inside ? 1 : -1;
@@ -815,12 +819,13 @@ inline long double SquaredLength(const PointOf<Coord>& value) {
 
 template <typename Coord>
 inline bool AngleBefore(const PointOf<Coord>& a, const PointOf<Coord>& b) {
+  using Math = IntersectionMath<Coord>;
   const bool first_half = a.y > 0 || (a.y == 0 && a.x >= 0);
   const bool second_half = b.y > 0 || (b.y == 0 && b.x >= 0);
   if (first_half != second_half) return first_half;
-  const auto cross = Cross<Coord>(a, b);
-  if (cross != 0) return cross > 0;
-  return SquaredLength<Coord>(a) < SquaredLength<Coord>(b);
+  const int cross_sign = Math::Sign(Math::Cross(a, b));
+  if (cross_sign != 0) return cross_sign > 0;
+  return Math::Compare(Math::Dot(a, a), Math::Dot(b, b)) < 0;
 }
 
 template <typename Coord>
