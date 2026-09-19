@@ -51,6 +51,43 @@ def test_render_surface_artwork_edge_to_edge_preserves_source_aspect_ratio(tmp_p
     assert rendered.getpixel((75, 40)) == (0, 192, 0, 255)
 
 
+def test_render_surface_artwork_uses_surface_space_counter_clockwise_rotation(tmp_path):
+    source = tmp_path / "asymmetric-rotation.png"
+    image = Image.new("RGBA", (80, 40), (0, 0, 0, 0))
+    for x in range(60, 80):
+        for y in range(0, 10):
+            image.putpixel((x, y), (255, 0, 0, 255))
+    for x in range(0, 20):
+        for y in range(30, 40):
+            image.putpixel((x, y), (0, 0, 255, 255))
+    image.save(source)
+
+    result = render_surface_artwork(
+        source_path=source,
+        footprint=_square_footprint(),
+        placement=SurfacePlacement(
+            mode=EdgeMode.EDGE_TO_EDGE,
+            rotation_deg=90.0,
+        ),
+        pixels_per_mm=4,
+        output_dir=tmp_path,
+    )
+
+    rendered = Image.open(result.output_path).convert("RGBA")
+    red_top_left = sum(
+        1
+        for pixel in rendered.crop((0, 0, 40, 40)).getdata()
+        if pixel[0] > 200 and pixel[1] < 40 and pixel[3] > 0
+    )
+    blue_bottom_right = sum(
+        1
+        for pixel in rendered.crop((40, 40, 80, 80)).getdata()
+        if pixel[2] > 200 and pixel[0] < 40 and pixel[3] > 0
+    )
+    assert red_top_left > 0
+    assert blue_bottom_right > 0
+
+
 def test_render_surface_artwork_inset_contains_portrait_bitmap_with_four_side_clearance(
     tmp_path,
 ):

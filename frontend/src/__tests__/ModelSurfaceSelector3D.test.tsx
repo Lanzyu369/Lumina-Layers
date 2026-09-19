@@ -86,6 +86,7 @@ import ModelSurfaceSelector3D, {
   computeArtworkCoverDrawSize,
   computeSurfaceArtworkCanvasSize,
   computeSurfacePreviewOffsetMm,
+  drawSurfaceArtworkCanvas,
   configureSurfaceArtworkTextureForPreview,
   createSurfaceArtworkGeometry,
   createSurfaceArtworkInteractionGeometry,
@@ -4141,8 +4142,115 @@ describe("ModelSurfaceSelector3D", () => {
       offsetY: 12,
       drawCenterX: 120,
       drawCenterY: 62,
-      rotationRadians: Math.PI / 2,
+      rotationRadians: -Math.PI / 2,
     });
+  });
+
+  it("maps asymmetric artwork landmarks with the surface-space rotation convention", () => {
+    const sourceSize = { width: 80, height: 40 };
+    const targetSize = { width: 160, height: 160 };
+    const sourcePoint = [70, 10] as [number, number];
+    const expectedQuadrants = new Map<number, [number, number]>([
+      [0, [140, 40]],
+      [90, [40, 20]],
+      [180, [20, 120]],
+      [270, [120, 140]],
+    ]);
+
+    for (const [rotationDeg, expected] of expectedQuadrants) {
+      const transform = computeArtworkCanvasTransform({
+        widthPx: targetSize.width,
+        heightPx: targetSize.height,
+        pixelsPerMm: 1,
+        placement: {
+          mode: "edge_to_edge",
+          offset_x_mm: 0,
+          offset_y_mm: 0,
+          scale: 1,
+          rotation_deg: rotationDeg,
+          inset_mm: 0,
+        },
+      });
+      const localX = (sourcePoint[0] - sourceSize.width / 2) * (targetSize.width / sourceSize.width);
+      const localY = (sourcePoint[1] - sourceSize.height / 2) * (targetSize.height / sourceSize.height);
+      const cos = Math.cos(transform.rotationRadians);
+      const sin = Math.sin(transform.rotationRadians);
+      const mapped: [number, number] = [
+        transform.drawCenterX + cos * localX - sin * localY,
+        transform.drawCenterY + sin * localX + cos * localY,
+      ];
+      expect(mapped[0]).toBeCloseTo(expected[0], 6);
+      expect(mapped[1]).toBeCloseTo(expected[1], 6);
+    }
+
+    const transform33 = computeArtworkCanvasTransform({
+      widthPx: targetSize.width,
+      heightPx: targetSize.height,
+      pixelsPerMm: 1,
+      placement: {
+        mode: "edge_to_edge",
+        offset_x_mm: 0,
+        offset_y_mm: 0,
+        scale: 1,
+        rotation_deg: 33,
+        inset_mm: 0,
+      },
+    });
+    expect(transform33.rotationRadians).toBeCloseTo(-THREE.MathUtils.degToRad(33), 8);
+  });
+
+  it("maps a backend surface-uv asset directly without reapplying placement or masks", () => {
+    const clearRect = vi.fn();
+    const drawImage = vi.fn();
+    const rotate = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
+      ((contextId: string) =>
+        contextId === "2d"
+          ? ({ clearRect, drawImage, rotate } as unknown as CanvasRenderingContext2D)
+          : null) as typeof HTMLCanvasElement.prototype.getContext,
+    );
+    const surface = {
+      boundsMin: [-10, -5] as [number, number],
+      boundsMax: [10, 5] as [number, number],
+      widthMm: 20,
+      heightMm: 10,
+      outer: [],
+      holes: [[[-2, -1], [2, -1], [2, 1], [-2, 1], [-2, -1]]],
+    } as never;
+    const canvas = document.createElement("canvas");
+    const image = { naturalWidth: 640, naturalHeight: 320, width: 640, height: 320 } as HTMLImageElement;
+    const asset = {
+      kind: "surface-uv" as const,
+      url: "/api/files/processed-surface.png",
+      sourceAspectRatio: 2,
+      identity: {
+        sourceImageUrl: "blob:source",
+        modelFileId: "model-1",
+        selectionId: "selection-1",
+        sessionId: "session-1",
+        previewRequestRevision: 4,
+        placement: {
+          mode: "inset" as const,
+          offset_x_mm: 3,
+          offset_y_mm: -2,
+          scale: 1.2,
+          rotation_deg: 33,
+          inset_mm: 1,
+        },
+      },
+    };
+
+    drawSurfaceArtworkCanvas(
+      { asset, image },
+      surface,
+      asset.identity.placement,
+      { viewportLongestSidePx: 200 },
+      canvas,
+    );
+
+    expect(clearRect).toHaveBeenCalledWith(0, 0, canvas.width, canvas.height);
+    expect(drawImage).toHaveBeenCalledWith(image, 0, 0, canvas.width, canvas.height);
+    expect(rotate).not.toHaveBeenCalled();
   });
 
   it("gives OBJ meshes owned material clones without disposing the shared source", () => {

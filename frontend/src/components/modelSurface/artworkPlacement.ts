@@ -276,7 +276,10 @@ export function computeArtworkCanvasTransform({
     offsetY,
     drawCenterX: pivotX + offsetX,
     drawCenterY: pivotY + offsetY,
-    rotationRadians: THREE.MathUtils.degToRad(placement.rotation_deg),
+    // Placement angles are defined in surface space: +U is right, +V is up,
+    // and positive rotation is counter-clockwise. Canvas uses a Y-down axis,
+    // so the sign is inverted only at this rasterization boundary.
+    rotationRadians: -THREE.MathUtils.degToRad(placement.rotation_deg),
   };
 }
 
