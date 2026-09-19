@@ -168,6 +168,8 @@ export type ConvertGenerateRequest = ConvertPreviewRequest & {
   enable_base_layer_height_modifier?: boolean;
   enable_wipe_tower_auto_placement?: boolean;
   use_cached_matched_rgb?: boolean;
+  /** Exact committed visible-content revision used for generation. */
+  editor_content_revision?: number;
 };
 
 export interface PuzzleLayoutPreviewRequest {
@@ -212,6 +214,7 @@ export interface PuzzleGenerateResponse {
   grid_cols: number;
   grid_rows: number;
   warnings: string[];
+  editor_content_revision?: number | null;
 }
 
 /**
@@ -269,6 +272,8 @@ export interface RecipeOverrideApplyResponse
   override_count: number;
   can_undo?: boolean;
   can_redo?: boolean;
+  /** Authoritative selection and content revision after the edit. */
+  selection?: SelectionDocumentResponse | null;
 }
 
 export interface RegionRecipeRequest {
@@ -439,6 +444,7 @@ export interface LargeFormatGenerateResponse {
   grid_cols: number;
   grid_rows: number;
   warnings: string[];
+  editor_content_revision?: number | null;
 }
 
 /** 生成接口响应，包含下载 URL 和可选的 3D 预览 URL */
@@ -450,6 +456,8 @@ export interface GenerateResponse {
   threemf_disk_path?: string;
   warnings?: string[];
   performance_timing?: PerformanceTiming | null;
+  /** Content revision consumed by the generator, when available. */
+  editor_content_revision?: number | null;
 }
 
 export interface ModelSurfaceMeshSummary {
@@ -2003,6 +2011,8 @@ export interface ColorReplaceResponse extends DynamicMaterialResultResponse {
   replacement_count: number;
   can_undo?: boolean;
   can_redo?: boolean;
+  /** Authoritative selection and content revision after the edit. */
+  selection?: SelectionDocumentResponse | null;
 }
 
 /** 同颜色全选点图时后端返回的当前匹配色拾取结果 */
@@ -2105,6 +2115,8 @@ export interface ResetReplacementsResponse extends DynamicMaterialResultResponse
   preview_glb_url?: string | null;
   can_undo?: boolean;
   can_redo?: boolean;
+  /** Authoritative selection and content revision after the reset. */
+  selection?: SelectionDocumentResponse | null;
 }
 
 export interface ReplacementHistoryResponse {

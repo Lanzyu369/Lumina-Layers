@@ -641,6 +641,11 @@ class ConvertGenerateRequest(LutSourceSelection, SvgHoleCompensationOptions):
         False,
         description="使用 Session 缓存的 matched_rgb 而非从原始图像重新处理",
     )
+    editor_content_revision: int | None = Field(
+        None,
+        ge=0,
+        description="前端提交的已确认可见内容版本",
+    )
 
     @field_validator("color_mode", mode="before")
     @classmethod

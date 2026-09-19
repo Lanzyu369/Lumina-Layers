@@ -308,6 +308,29 @@ def test_generate_response_exposes_worker_pool_timing() -> None:
     assert performance["endpoint_post_worker_ms"] >= 0.0
 
 
+def test_generate_rejects_stale_editor_content_revision_before_worker() -> None:
+    """Generation must not combine a stale editor snapshot with current cache."""
+
+    sid = _create_session_with_preview_and_files(_test_store)
+    _test_store.put(sid, "visible_region_cache_generation", 7)
+    _mock_pool.submit = AsyncMock()
+    payload = {
+        "session_id": sid,
+        "params": {
+            "lut_name": "test_lut",
+            "modeling_mode": "high-fidelity",
+            "editor_content_revision": 6,
+        },
+    }
+
+    with patch("os.path.exists", return_value=True):
+        response = client.post("/api/convert/generate", json=payload)
+
+    assert response.status_code == 409, response.text
+    assert "Visible content changed" in response.json()["detail"]
+    _mock_pool.submit.assert_not_called()
+
+
 def test_generate_response_forwards_embedded_wipe_tower_warning() -> None:
     sid = _create_session_with_preview_and_files(_test_store)
     _mock_pool.submit = AsyncMock(

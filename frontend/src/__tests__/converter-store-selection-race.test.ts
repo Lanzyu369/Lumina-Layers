@@ -14,16 +14,31 @@ vi.mock("../api/converter", async () => {
     ...actual,
     getEditorSelection: vi.fn(),
     mutateEditorSelection: vi.fn(),
+    replaceColorsBatch: vi.fn(),
+    regionReplace: vi.fn(),
   };
 });
 
 import {
   getEditorSelection,
   mutateEditorSelection,
+  replaceColorsBatch,
+  regionReplace,
 } from "../api/converter";
 
 const mockedGet = vi.mocked(getEditorSelection);
 const mockedMutate = vi.mocked(mutateEditorSelection);
+const mockedReplaceColorsBatch = vi.mocked(replaceColorsBatch);
+const mockedRegionReplace = vi.mocked(regionReplace);
+let sessionCounter = 0;
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 function document(rev: number, contentRev = 1): SelectionDocumentResponse {
   return {
@@ -51,8 +66,9 @@ function document(rev: number, contentRev = 1): SelectionDocumentResponse {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  sessionCounter += 1;
   useConverterStore.setState({
-    sessionId: "session-a",
+    sessionId: `session-a-${sessionCounter}`,
     selectionDocument: null,
     selectionTool: "point",
     selectionMode: "multi-select",
@@ -64,6 +80,7 @@ beforeEach(() => {
     previewBaseImageUrl: null,
     error: null,
     replacePreviewLoading: false,
+    pendingReplacement: null,
   });
 });
 
@@ -166,5 +183,235 @@ describe("selection optimistic reconciliation", () => {
     const state = useConverterStore.getState();
     expect(state.selectionDocument?.selection_revision).toBe(2);
     expect(state.selectionDocument?.selected_component_count).toBe(0);
+  });
+
+  it("adopts the authoritative selection content revision after a global replacement", async () => {
+    const sessionId = "global-replace-content-sync";
+    useConverterStore.setState({
+      sessionId,
+      selectionDocument: document(1, 1),
+      colorRemapMap: { aabbcc: "ffffff" },
+      palette: [
+        {
+          quantized_hex: "aabbcc",
+          matched_hex: "aabbcc",
+          pixel_count: 10,
+          percentage: 1,
+        },
+      ],
+    });
+    mockedReplaceColorsBatch.mockResolvedValueOnce({
+      status: "ok",
+      message: "ok",
+      preview_url: "/api/files/replaced.png",
+      replacement_count: 1,
+      selection: document(2, 7),
+    } as never);
+
+    await useConverterStore.getState().submitReplacePreview();
+
+    expect(useConverterStore.getState().selectionDocument).toMatchObject({
+      selection_revision: 2,
+      content_revision: 7,
+    });
+  });
+
+  it("queries the committed revision when a replacement response is lost", async () => {
+    const sessionId = "lost-replacement-response";
+    useConverterStore.setState({
+      sessionId,
+      selectionDocument: document(1, 1),
+      colorRemapMap: { aabbcc: "ffffff" },
+      palette: [
+        {
+          quantized_hex: "aabbcc",
+          matched_hex: "aabbcc",
+          pixel_count: 10,
+          percentage: 1,
+        },
+      ],
+    });
+    mockedReplaceColorsBatch.mockRejectedValueOnce(new Error("response lost"));
+    mockedGet.mockResolvedValueOnce(document(1, 7));
+
+    await useConverterStore.getState().submitReplacePreview();
+
+    const state = useConverterStore.getState();
+    expect(mockedGet).toHaveBeenCalledWith(sessionId);
+    expect(state.selectionDocument).toMatchObject({
+      selection_revision: 1,
+      content_revision: 7,
+    });
+    expect(state.colorRemapMap).toEqual({ aabbcc: "ffffff" });
+    expect(state.replacePreviewLoading).toBe(false);
+    expect(state.error).toContain("已确认本次编辑已提交");
+  });
+
+  it("waits for an unconfirmed selection before a selection-scoped replace", async () => {
+    const sessionId = "selection-before-replace";
+    const selectionCommit = deferred<SelectionDocumentResponse>();
+    useConverterStore.setState({
+      sessionId,
+      selectionDocument: document(1, 1),
+      pendingReplacement: {
+        sourceHex: "aabbcc",
+        targetHex: "ff0000",
+        mode: "multi-select",
+      },
+    });
+    mockedMutate.mockReturnValueOnce(selectionCommit.promise);
+    mockedRegionReplace.mockResolvedValueOnce({
+      preview_url: "/api/files/selection-replaced.png",
+      message: "ok",
+      selection: document(3, 2),
+    } as never);
+
+    const selectionRequest = useConverterStore.getState().applySelectionMutation({
+      operation: "point-toggle",
+      x: 5,
+      y: 5,
+      optimisticDocument: document(2, 1),
+    });
+    const replacementRequest = useConverterStore.getState().confirmReplacement();
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockedRegionReplace).not.toHaveBeenCalled();
+
+    selectionCommit.resolve(document(2, 1));
+    await selectionRequest;
+    await replacementRequest;
+
+    expect(mockedRegionReplace).toHaveBeenCalledWith(
+      sessionId,
+      "#ff0000",
+      undefined,
+      2,
+    );
+  });
+
+  it("makes a selection mutation wait for an in-flight content commit", async () => {
+    const sessionId = "content-before-selection";
+    const replacementCommit = deferred<unknown>();
+    useConverterStore.setState({
+      sessionId,
+      selectionDocument: document(1, 1),
+      selectedColors: new Set(["aabbcc"]),
+      selectedColor: "aabbcc",
+      palette: [
+        {
+          quantized_hex: "aabbcc",
+          matched_hex: "aabbcc",
+          pixel_count: 10,
+          percentage: 1,
+        },
+      ],
+    });
+    mockedReplaceColorsBatch.mockReturnValueOnce(replacementCommit.promise as never);
+    mockedMutate.mockResolvedValueOnce(document(2, 2));
+
+    const replacementRequest = useConverterStore
+      .getState()
+      .applyBatchColorRemap("ff0000");
+    const selectionRequest = useConverterStore.getState().applySelectionMutation({
+      operation: "point-toggle",
+      x: 5,
+      y: 5,
+      optimisticDocument: document(2, 1),
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockedMutate).not.toHaveBeenCalled();
+
+    replacementCommit.resolve({
+      status: "ok",
+      message: "ok",
+      preview_url: "/api/files/replaced.png",
+      replacement_count: 1,
+      selection: document(1, 2),
+    });
+    await replacementRequest;
+    await selectionRequest;
+
+    expect(mockedMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session_id: sessionId,
+        base_selection_revision: 1,
+        content_revision: 2,
+      }),
+    );
+  });
+
+  it("does not restore a confirmed selection whose content revision is stale", async () => {
+    const sessionId = "stale-content-rollback";
+    useConverterStore.setState({ sessionId });
+
+    mockedMutate.mockResolvedValueOnce(document(1, 4));
+    await useConverterStore.getState().applySelectionMutation({
+      operation: "point-toggle",
+      x: 5,
+      y: 5,
+      optimisticDocument: document(1, 1),
+    });
+
+    const hydration = deferred<SelectionDocumentResponse>();
+    mockedMutate.mockRejectedValueOnce(new Error("selection request failed"));
+    mockedGet.mockReturnValueOnce(hydration.promise);
+    await useConverterStore.getState().applySelectionMutation({
+      operation: "point-toggle",
+      x: 6,
+      y: 6,
+      optimisticDocument: document(1, 1),
+    });
+
+    expect(useConverterStore.getState().selectionDocument).toBeNull();
+
+    hydration.resolve(document(1, 4));
+    await hydration.promise;
+    await Promise.resolve();
+  });
+
+  it("keeps selection mutation queues isolated per session", async () => {
+    const first = deferred<SelectionDocumentResponse>();
+    mockedMutate.mockImplementation((request) => {
+      if (request.session_id === "parallel-session-a") {
+        return first.promise;
+      }
+      return Promise.resolve(document(1, 2));
+    });
+
+    useConverterStore.setState({
+      sessionId: "parallel-session-a",
+      selectionDocument: null,
+    });
+    const firstRequest = useConverterStore.getState().applySelectionMutation({
+      operation: "point-toggle",
+      x: 1,
+      y: 1,
+      optimisticDocument: document(1, 1),
+    });
+
+    useConverterStore.setState({
+      sessionId: "parallel-session-b",
+      selectionDocument: null,
+    });
+    const secondRequest = useConverterStore.getState().applySelectionMutation({
+      operation: "point-toggle",
+      x: 2,
+      y: 2,
+      optimisticDocument: document(1, 2),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(
+      mockedMutate.mock.calls.some(
+        ([request]) => request.session_id === "parallel-session-b",
+      ),
+    ).toBe(true);
+
+    first.resolve(document(1, 1));
+    await Promise.all([firstRequest, secondRequest]);
   });
 });

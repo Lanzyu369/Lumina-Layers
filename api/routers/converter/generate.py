@@ -52,9 +52,10 @@ from api.schemas.responses import (
     LargeFormatGenerateResponse,
     WarningEntry,
 )
-from api.selection_state import unpack_applied_region_mask
+from api.selection_state import resolve_recipe_override_masks
 from api.session_store import SessionStore
 from api.structured_logging import get_logger
+from api.visible_region_cache import get_visible_region_generation
 from api.worker_pool import WorkerPoolManager
 from api.workers.converter_workers import (
     LargeFormatCachedAnalysisError,
@@ -1484,17 +1485,15 @@ def _resolve_applied_override_mask_snapshot(
     """
     if not isinstance(region_id, str):
         return None
-    applied_masks = session_data.get(RECIPE_OVERRIDE_APPLIED_MASKS_KEY)
-    if not isinstance(applied_masks, dict):
-        return None
-    candidate = applied_masks.get(region_id)
-    if candidate is None:
-        return None
-    # Unpacking also validates dtype/length/shape and rejects all-air masks,
-    # covering both packed entries and legacy raw boolean arrays.
-    # 解包同时校验 dtype/长度/形状并拒绝全空掩码，同时覆盖打包条目与旧版
-    # 裸布尔数组。
-    mask = unpack_applied_region_mask(candidate, shape)
+    try:
+        resolved = resolve_recipe_override_masks(
+            session_data,
+            [{"region_id": region_id}],
+            shape,
+        )
+    except ValueError:
+        resolved = {}
+    mask = resolved.get(region_id)
     if mask is None:
         log.warning(
             "Applied recipe-override snapshot is invalid; rejecting generation",
@@ -2093,31 +2092,61 @@ def _prepare_recipe_override_worker_inputs(
         RECIPE_OVERRIDE_APPLIED_MASKS_KEY in session_data
     )
 
+    legacy_recovered_masks: dict[str, np.ndarray] = {}
+
+    def recover_legacy_mask(region_id: str) -> np.ndarray | None:
+        mask = _recover_select_all_color_region_mask(
+            cache=cache,
+            cache_ref=cache_ref,
+            region_id=region_id,
+        )
+        if mask is not None:
+            legacy_recovered_masks[region_id] = np.asarray(mask, dtype=bool)
+        return mask
+
+    try:
+        resolved_override_masks = resolve_recipe_override_masks(
+            session_data,
+            recipe_overrides,
+            tuple(material_matrix_override.shape[:2]),
+            legacy_fallback=(
+                None if has_snapshot_capability else recover_legacy_mask
+            ),
+        )
+    except ValueError as exc:
+        if has_snapshot_capability:
+            log.warning(
+                "Applied recipe-override snapshots are invalid; rejecting generation",
+                extra={
+                    "event": "recipe_override_snapshot_invalid",
+                    "session_id": sid,
+                    "error_type": "invalid_applied_mask_snapshot",
+                    "error_message": str(exc),
+                    "recovery_action": "reapply_color_replacement",
+                    "region_ids": [
+                        str(item.get("region_id")) for item in recipe_overrides
+                    ],
+                },
+            )
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{exc}. "
+                    "Re-apply the color replacement, then generate again."
+                ),
+            ) from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if legacy_recovered_masks:
+        region_masks.update(legacy_recovered_masks)
+        store.put(sid, "selected_region_masks", region_masks)
+
     for item in recipe_overrides:
         region_id = item["region_id"]
         item_recipe = item["recipe"]
         item_layer_order = item["layer_order"]
         if has_snapshot_capability:
-            # A committed override must resolve to the exact footprint
-            # captured when it was applied; anything else is an integrity
-            # failure, not a fallback opportunity.
-            # 已提交覆盖必须解析到 apply 时的精确足迹；其余情况都是完整性
-            # 失败，而不是回退机会。
-            region_mask = _resolve_applied_override_mask_snapshot(
-                session_data=session_data,
-                sid=sid,
-                region_id=region_id,
-                shape=material_matrix_override.shape[:2],
-            )
-            if region_mask is None:
-                raise HTTPException(
-                    status_code=422,
-                    detail=(
-                        f"Committed recipe override mask is missing or invalid "
-                        f"for this session: {region_id}. Re-apply the color "
-                        f"replacement, then generate again."
-                    ),
-                )
+            region_mask = resolved_override_masks[str(region_id)]
             log.debug(
                 "Recipe override mask resolved from applied-time snapshot",
                 extra={
@@ -2126,30 +2155,8 @@ def _prepare_recipe_override_worker_inputs(
                     "region_id": str(region_id),
                 },
             )
-            resolved_override_masks[str(region_id)] = region_mask
         else:
-            region_mask = region_masks.get(region_id)
-            if region_mask is not None:
-                resolved_override_masks[str(region_id)] = np.asarray(
-                    region_mask, dtype=bool
-                )
-            if region_mask is None:
-                region_mask = _recover_select_all_color_region_mask(
-                    cache=cache,
-                    cache_ref=cache_ref,
-                    region_id=region_id,
-                )
-                if region_mask is not None:
-                    region_masks[region_id] = region_mask
-                    store.put(sid, "selected_region_masks", region_masks)
-                    resolved_override_masks[str(region_id)] = np.asarray(
-                        region_mask, dtype=bool
-                    )
-            if region_mask is None:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"Region mask not found for recipe override: {region_id}",
-                )
+            region_mask = resolved_override_masks[str(region_id)]
         recipe = convert_recipe_between_orders(
             list(item_recipe),
             item_layer_order,
@@ -2252,6 +2259,18 @@ async def convert_generate(
     cache, cache_ref = _require_preview_cache_for_generate(session_data)
 
     request = body.params
+    committed_content_revision = get_visible_region_generation(session_data)
+    if (
+        request.editor_content_revision is not None
+        and int(request.editor_content_revision) != committed_content_revision
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Visible content changed before generation started; "
+                "refresh the editor state and try again."
+            ),
+        )
     validate_export_device_selection(
         printer_id=request.printer_id,
         slicer=request.slicer,
@@ -3106,6 +3125,7 @@ async def convert_generate(
         threemf_disk_path=None,
         warnings=placement_warnings,
         performance_timing=performance_timing,
+        editor_content_revision=committed_content_revision,
     )
 
 
@@ -4134,6 +4154,18 @@ async def convert_generate_large_format(
 
     lf = body.params
     request = lf.params
+    committed_content_revision = get_visible_region_generation(session_data)
+    if (
+        request.editor_content_revision is not None
+        and int(request.editor_content_revision) != committed_content_revision
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Visible content changed before large-format generation started; "
+                "refresh the editor state and try again."
+            ),
+        )
     validate_export_device_selection(
         printer_id=request.printer_id,
         slicer=request.slicer,
@@ -4550,6 +4582,7 @@ async def convert_generate_large_format(
             color_mode=request.color_mode,
         )
 
+    result["editor_content_revision"] = committed_content_revision
     return LargeFormatGenerateResponse(**result)
 
 

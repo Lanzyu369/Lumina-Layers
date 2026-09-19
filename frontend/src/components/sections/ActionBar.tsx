@@ -114,6 +114,7 @@ export default function ActionBar() {
   const materialLayerHeightMm = useConverterStore((s) => s.materialLayerHeightMm)
   const isLoading = useConverterStore((s) => s.isLoading)
   const isGenerating = useConverterStore((s) => s.isGenerating)
+  const replacePreviewLoading = useConverterStore((s) => s.replacePreviewLoading)
   const error = useConverterStore((s) => s.error)
   const previewImageUrl = useConverterStore((s) => s.previewImageUrl)
   const previewBaseImageUrl = useConverterStore((s) => s.previewBaseImageUrl)
@@ -683,7 +684,7 @@ export default function ActionBar() {
                 label={t("action_generate")}
                 variant="primary"
                 onClick={() => void submitGenerate()}
-                disabled={!canGenerate || isLoading || isGenerating}
+                disabled={!canGenerate || isLoading || isGenerating || replacePreviewLoading}
                 loading={isGenerating}
                 className="w-full"
               />

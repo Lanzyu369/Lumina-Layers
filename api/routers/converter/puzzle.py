@@ -42,6 +42,7 @@ from api.schemas.responses import PuzzleGenerateResponse, PuzzleLayoutPreviewRes
 from api.selection_state import unpack_applied_region_mask
 from api.session_store import SessionStore
 from api.structured_logging import get_logger
+from api.visible_region_cache import get_visible_region_generation
 from api.worker_pool import WorkerPoolManager
 from api.workers.converter_workers import worker_generate_model
 from config import ModelingMode as CoreModelingMode
@@ -1001,6 +1002,18 @@ async def generate_puzzle(
     preview_cache_ref = session_data.get("preview_cache")
     request = body.params
     generate_params = request.params
+    committed_content_revision = get_visible_region_generation(session_data)
+    if (
+        generate_params.editor_content_revision is not None
+        and int(generate_params.editor_content_revision) != committed_content_revision
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Visible content changed before puzzle generation started; "
+                "refresh the editor state and try again."
+            ),
+        )
     validate_export_device_selection(
         printer_id=generate_params.printer_id,
         slicer=generate_params.slicer,
@@ -1565,4 +1578,5 @@ async def generate_puzzle(
         grid_cols=layout.cols,
         grid_rows=layout.rows,
         warnings=warnings,
+        editor_content_revision=committed_content_revision,
     )

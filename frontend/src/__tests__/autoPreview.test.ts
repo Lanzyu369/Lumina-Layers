@@ -801,4 +801,41 @@ describe("useAutoPreview", () => {
       "/api/files/current.glb",
     );
   });
+
+  it("does not restart a legacy preview when a recipe changes only derived layers", () => {
+    renderHook(() => useAutoPreview());
+
+    act(() => {
+      useConverterStore.setState({
+        imageFile: fakeFile("legacy-recipe.png"),
+        source_version: "legacy",
+        lut_name: "my-lut",
+        color_layers: 4,
+        layer_height_mm: 0.08,
+        hasManualPreview: true,
+        sessionId: "legacy-recipe-session",
+        previewImageUrl: "/api/files/legacy-preview.png",
+        previewGlbUrl: "/api/files/legacy-preview.glb",
+      });
+    });
+
+    act(() => {
+      useConverterStore
+        .getState()
+        .upsertRecipeOverrides(
+          ["region-1"],
+          [1, 1, 1, 1, 1, 1],
+          "Top2Bottom",
+        );
+    });
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+
+    expect(mockSubmitPreview).not.toHaveBeenCalled();
+    expect(useConverterStore.getState().sessionId).toBe(
+      "legacy-recipe-session",
+    );
+    expect(useConverterStore.getState().color_layers).toBe(4);
+  });
 });

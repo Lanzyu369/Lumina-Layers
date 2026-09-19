@@ -381,6 +381,40 @@ class TestReplaceColorCanary:
         assert record.replacement_count == 1
         assert record.diff_pixel_count == 8
 
+    def test_replace_color_keeps_committed_content_when_glb_scheduler_fails(
+        self,
+        _isolate_dependency_overrides,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A post-commit derived-render failure must not roll back the edit."""
+
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_preview_session(store)
+
+        with patch(
+            "api.routers.converter.replace.schedule_glb_build",
+            side_effect=RuntimeError("executor unavailable"),
+        ), patch.object(replace_router.log, "warning") as warning_log:
+            response = client.post(
+                "/api/convert/replace-color",
+                json={
+                    "session_id": session_id,
+                    "selected_color": "#ffffff",
+                    "replacement_color": "#0000ff",
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        cache = store.get(session_id)["preview_cache"]
+        np.testing.assert_array_equal(
+            np.asarray(cache["matched_rgb"])[0, 0],
+            [0, 0, 255],
+        )
+        warning_log.assert_called_once()
+        warning_fields = warning_log.call_args.kwargs["extra"]
+        assert warning_fields["event"] == "converter_glb_schedule_failed"
+        assert warning_fields["content_commit"] == "committed"
+
     def test_replace_color_keeps_artifact_preview_cache_externalized(
         self,
         _isolate_dependency_overrides,
@@ -1531,7 +1565,7 @@ class TestPredictRecipeCanary:
 class TestApplyRecipeOverrideCanary:
     """Successful apply-recipe-override requests emit the structured done canary."""
 
-    def test_recipe_override_shape_mismatch_warning_has_actionable_fields(
+    def test_recipe_override_shape_mismatch_is_rejected_with_actionable_warning(
         self,
         _isolate_dependency_overrides,
         caplog: pytest.LogCaptureFixture,
@@ -1564,7 +1598,7 @@ class TestApplyRecipeOverrideCanary:
         finally:
             target_logger.removeHandler(caplog.handler)
 
-        assert response.status_code == 200, response.text
+        assert response.status_code == 422, response.text
         record = _single_record(caplog, "recipe_override_shape_mismatch")
         _assert_actionable_warning(record)
 

@@ -124,8 +124,10 @@ from api.selection_state import (
     pack_applied_region_mask,
     persist_selection_mask,
     resolve_selection_mask,
+    resolve_recipe_override_masks,
     selection_lock,
     selection_summary,
+    sync_selection_content_generation,
 )
 from api.structured_logging import get_logger
 
@@ -469,7 +471,12 @@ def _schedule_or_run_overridden_glb_build(
     """Schedule the normal GLB build, or run an overridden builder inline."""
     if generate_segmented_glb is _DEFAULT_GENERATE_SEGMENTED_GLB:
         persisted_cache = persist_preview_cache(session_id, store, cache)
-        schedule_glb_build(session_id, store, registry, persisted_cache)
+        _schedule_glb_build_best_effort(
+            session_id,
+            store,
+            registry,
+            persisted_cache,
+        )
         return None
 
     target_path = os.path.join(
@@ -496,6 +503,38 @@ def _schedule_or_run_overridden_glb_build(
     persist_preview_cache(session_id, store, cache)
     glb_id = registry.register_path(session_id, glb_path, filename)
     return f"/api/files/{glb_id}"
+
+
+def _schedule_glb_build_best_effort(
+    session_id: str,
+    store: SessionStore,
+    registry: FileRegistry,
+    persisted_cache: dict,
+) -> str | None:
+    """Keep a committed 2D edit successful when GLB scheduling fails.
+
+    The preview cache and replacement history are committed before this
+    boundary. A GLB is a derived artifact, so an unexpected scheduler error
+    must be logged and surfaced through GLB polling without restoring the
+    previous RGB/material state or asking the frontend to roll it back.
+    已提交的二维内容先于此边界完成；GLB 属于派生工件，因此调度异常只能
+    记录并交给 GLB 状态查询，不能恢复旧的 RGB/材料矩阵或让前端回滚。
+    """
+    try:
+        return schedule_glb_build(session_id, store, registry, persisted_cache)
+    except Exception as exc:  # Explicit derived-artifact boundary guard.
+        log.warning(
+            "GLB build scheduling failed after content commit",
+            extra={
+                "event": "converter_glb_schedule_failed",
+                "session_id": session_id,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "artifact_kind": "derived_glb",
+                "content_commit": "committed",
+            },
+        )
+        return None
 
 
 def _select_all_color_mask_for_region_id(
@@ -950,6 +989,18 @@ def _sync_material_archive_matrix_for_diff(
         )
         min_layer_count = int(session_data.get("material_min_layer_count") or 5)
         tolerance = float(session_data.get("material_delta_e00_tolerance", 0.5))
+        try:
+            resolved_recipe_masks = resolve_recipe_override_masks(
+                session_data,
+                session_data.get("recipe_overrides"),
+                tuple(np.asarray(updated_rgb).shape[:2]),
+            )
+        except ValueError as exc:
+            raise DynamicMaterialCandidateError(
+                "Committed recipe override masks are missing or invalid",
+                layer_count=max_layer_count,
+                phase="manual_mask",
+            ) from exc
         result = rebuild_dynamic_material_after_replacement(
             updated_rgb=np.asarray(updated_rgb, dtype=np.uint8),
             diff_mask=np.asarray(diff_mask, dtype=bool),
@@ -963,7 +1014,7 @@ def _sync_material_archive_matrix_for_diff(
             min_layer_count=min_layer_count,
             max_layer_count=max_layer_count,
             delta_e00_tolerance=tolerance,
-            region_masks=session_data.get("selected_region_masks"),
+            region_masks=resolved_recipe_masks,
             recipe_overrides=session_data.get("recipe_overrides"),
             existing_solver_info=cache.get("material_solver_info"),
             solver=_solve_dynamic_material_targets,
@@ -1122,6 +1173,7 @@ def replace_color(
         HTTPException(409): No preview cache available. (无预览缓存)
         HTTPException(500): Internal processing error. (内部处理错误)
     """
+    selection_response: SelectionDocumentResponse | None = None
     try:
         session_data = _require_session(store, request.session_id)
         history_checkpoint = snapshot_replacement_state(
@@ -1196,6 +1248,12 @@ def replace_color(
                 metadata_fields=_REPLACEMENT_CACHE_METADATA_FIELDS,
             )
             _invalidate_and_prewarm_visible_region_cache(request.session_id, store, session_data, cache)
+            selection_response = _selection_after_content_commit(
+                request.session_id,
+                store,
+                session_data,
+                cache,
+            )
             history_flags = _push_history_checkpoint(
                 request.session_id,
                 store,
@@ -1207,7 +1265,12 @@ def replace_color(
         # immediately after the PNG is ready. Frontend polls
         # /api/convert/glb-status/{session_id} to pick up the new GLB URL.
         # 异步重建分段 GLB：响应在 PNG 就绪后立即返回，前端轮询 glb-status。
-        schedule_glb_build(request.session_id, store, registry, persisted_cache)
+        _schedule_glb_build_best_effort(
+            request.session_id,
+            store,
+            registry,
+            persisted_cache,
+        )
         glb_url: str | None = None
 
         # Append new replacement record
@@ -1252,6 +1315,7 @@ def replace_color(
         replacement_count=len(current_regions),
         **dynamic_material_result_from_cache(cache).model_dump(),
         **history_flags,
+        selection=selection_response,
     )
 
 
@@ -1330,6 +1394,7 @@ def reset_replacements(
         HTTPException(409): No preview cache available. (无预览缓存)
         HTTPException(500): Internal processing error. (内部处理错误)
     """
+    selection_response: SelectionDocumentResponse | None = None
     try:
         session_data = _require_session(store, request.session_id)
         history_checkpoint = snapshot_replacement_state(
@@ -1354,13 +1419,6 @@ def reset_replacements(
             recipe_overrides_cleared = len(
                 session_data.get("recipe_overrides") or []
             )
-            # Clear replacement state
-            store.put(request.session_id, "replacement_regions", [])
-            store.put(request.session_id, "replacement_history", [])
-            store.put(request.session_id, "recipe_overrides", [])
-            store.put(request.session_id, "recipe_override_count", 0)
-            session_data[RECIPE_OVERRIDE_APPLIED_MASKS_KEY] = {}
-            store.put(request.session_id, RECIPE_OVERRIDE_APPLIED_MASKS_KEY, {})
             history_truncated = 0
             previous_rgb = np.asarray(cache.get("matched_rgb")).copy()
 
@@ -1435,8 +1493,14 @@ def reset_replacements(
                 ),
                 metadata_fields=_REPLACEMENT_CACHE_METADATA_FIELDS,
             )
+            # Clear session edit state only after the cache transaction has
+            # committed. A failed commit must leave the prior work recoverable.
+            # 只有缓存事务提交成功后才清理会话编辑状态；提交失败时必须保留
+            # 用户上一份可恢复作品。
             store.put(request.session_id, "replacement_regions", [])
             session_data["replacement_regions"] = []
+            store.put(request.session_id, "replacement_history", [])
+            session_data["replacement_history"] = []
             store.put(request.session_id, "global_replacement_base_matched_rgb", None)
             session_data["global_replacement_base_matched_rgb"] = None
             store.put(
@@ -1452,6 +1516,12 @@ def reset_replacements(
             session_data[RECIPE_OVERRIDE_APPLIED_MASKS_KEY] = {}
             store.put(request.session_id, RECIPE_OVERRIDE_APPLIED_MASKS_KEY, {})
             _invalidate_and_prewarm_visible_region_cache(request.session_id, store, session_data, cache)
+            selection_response = _selection_after_content_commit(
+                request.session_id,
+                store,
+                session_data,
+                cache,
+            )
             history_flags = _push_history_checkpoint(
                 request.session_id,
                 store,
@@ -1466,7 +1536,12 @@ def reset_replacements(
         # Async GLB rebuild from restored matched_rgb. Same rationale as
         # /replace-color: keep HTTP response snappy, let the frontend poll.
         # 异步 GLB 重建，理由同 /replace-color。
-        schedule_glb_build(request.session_id, store, registry, persisted_cache)
+        _schedule_glb_build_best_effort(
+            request.session_id,
+            store,
+            registry,
+            persisted_cache,
+        )
         glb_url: str | None = None
     except HTTPException:
         raise
@@ -1496,6 +1571,7 @@ def reset_replacements(
         preview_glb_url=glb_url,
         **dynamic_material_result_from_cache(cache).model_dump(),
         **history_flags,
+        selection=selection_response,
     )
 
 
@@ -1583,8 +1659,19 @@ def replacement_history(
                     session_data,
                     cache,
                 )
+                restored_selection = _selection_after_content_commit(
+                    request.session_id,
+                    store,
+                    session_data,
+                    cache,
+                )
 
-            schedule_glb_build(request.session_id, store, registry, persisted_cache)
+            _schedule_glb_build_best_effort(
+                request.session_id,
+                store,
+                registry,
+                persisted_cache,
+            )
             preview_url = f"/api/files/{preview_id}"
             response = _replacement_history_response(
                 action=request.action,
@@ -1592,6 +1679,7 @@ def replacement_history(
                 session_data=session_data,
                 preview_url=preview_url,
             )
+            response.selection = restored_selection
     except HTTPException:
         raise
     except PreviewCacheRevisionConflict as e:
@@ -2177,6 +2265,43 @@ def _selection_document_response(
     )
 
 
+def _selection_after_content_commit(
+    session_id: str,
+    store: SessionStore,
+    session_data: dict,
+    preview_cache: dict,
+) -> SelectionDocumentResponse:
+    """Return selection state after a content commit and refresh its binding.
+    返回内容提交后的选区状态，并刷新选区与内容版本的绑定。
+
+    A colour edit invalidates the visible-component cache, but it does not
+    necessarily invalidate the pixel geometry of the shared selection. Rebuild
+    the component cache from the committed cache before returning so the client
+    receives the server's actual content revision instead of guessing ``+1``.
+    颜色编辑会使可见组件缓存失效，但不一定使共享选区的像素几何失效。
+    这里从已提交缓存重建组件缓存，再返回服务端真实内容版本，避免客户端猜测
+    ``+1``。
+    """
+    component_cache, _cache_hit = _ensure_visible_region_component_cache(
+        session_id,
+        store,
+        session_data,
+        preview_cache,
+    )
+    content_generation = int(component_cache["generation"])
+    sync_selection_content_generation(
+        session_id,
+        store,
+        session_data,
+        content_generation,
+    )
+    return _selection_document_response(
+        session_data,
+        component_cache,
+        _get_visible_region_source_rgb(preview_cache),
+    )
+
+
 @router.get(
     "/selection/{session_id}",
     response_model=SelectionDocumentResponse,
@@ -2367,6 +2492,7 @@ def region_replace(
         },
     )
     cache = cache_context.__enter__()
+    selection_response: SelectionDocumentResponse | None = None
 
     try:
         matched_rgb: np.ndarray | None = cache.get("matched_rgb")
@@ -2543,9 +2669,9 @@ def region_replace(
                     store,
                     session_data,
                     region_mask,
-                    content_generation=get_visible_region_generation(session_data),
-                    revision=get_selection_revision(session_data),
-                )
+                content_generation=get_visible_region_generation(session_data),
+                revision=get_selection_revision(session_data),
+            )
         _bump_region_replacement_count(request.session_id, store, session_data, 1)
         history_flags = _push_history_checkpoint(
             request.session_id,
@@ -2553,19 +2679,12 @@ def region_replace(
             session_data,
             history_checkpoint,
         )
-        selection_response: SelectionDocumentResponse | None = None
-        if mask_source == "selection":
-            selection_component_cache, _selection_cache_hit = _ensure_visible_region_component_cache(
-                request.session_id,
-                store,
-                session_data,
-                cache,
-            )
-            selection_response = _selection_document_response(
-                session_data,
-                selection_component_cache,
-                _get_visible_region_source_rgb(cache),
-            )
+        selection_response = _selection_after_content_commit(
+            request.session_id,
+            store,
+            session_data,
+            cache,
+        )
 
         # Async GLB rebuild: /region-replace previously spent ~77% of its
         # wall time here; now the HTTP response returns in ~10s (sync +
@@ -2696,6 +2815,7 @@ def region_requantize(
         },
     )
     cache = cache_context.__enter__()
+    selection_response: SelectionDocumentResponse | None = None
 
     try:
         matched_rgb: np.ndarray | None = cache.get("matched_rgb")
@@ -2987,6 +3107,12 @@ def region_requantize(
             },
         )
         _invalidate_and_prewarm_visible_region_cache(request.session_id, store, session_data, cache)
+        selection_response = _selection_after_content_commit(
+            request.session_id,
+            store,
+            session_data,
+            cache,
+        )
         _bump_region_replacement_count(request.session_id, store, session_data, len(request.targets))
         history_flags = _push_history_checkpoint(
             request.session_id,
@@ -2994,7 +3120,12 @@ def region_requantize(
             session_data,
             history_checkpoint,
         )
-        schedule_glb_build(request.session_id, store, registry, persisted_cache)
+        _schedule_glb_build_best_effort(
+            request.session_id,
+            store,
+            registry,
+            persisted_cache,
+        )
 
         log.info(
             "region-requantize done",
@@ -3050,6 +3181,7 @@ def region_requantize(
         gradient_groups=refreshed_groups,
         **dynamic_material_result_from_cache(cache).model_dump(),
         **history_flags,
+        selection=selection_response,
     )
 
 
@@ -3200,6 +3332,7 @@ def replace_colors_batch(
         HTTPException(409): No preview cache. (无预览缓存)
     """
     session_data = _require_session(store, request.session_id)
+    selection_response: SelectionDocumentResponse | None = None
     history_checkpoint = snapshot_replacement_state(
         session_data,
         label="replace_colors_batch",
@@ -3344,6 +3477,12 @@ def replace_colors_batch(
             metadata_fields=_REPLACEMENT_CACHE_METADATA_FIELDS,
         )
         _invalidate_and_prewarm_visible_region_cache(request.session_id, store, session_data, cache)
+        selection_response = _selection_after_content_commit(
+            request.session_id,
+            store,
+            session_data,
+            cache,
+        )
         history_flags = _push_history_checkpoint(
             request.session_id,
             store,
@@ -3354,7 +3493,12 @@ def replace_colors_batch(
         # Async GLB rebuild for the entire batch. Matches the single-pair
         # behaviour and keeps batch-swap responses as snappy as PNG render.
         # 批量颜色替换的 GLB 重建也改为异步，响应只等 PNG。
-        schedule_glb_build(request.session_id, store, registry, persisted_cache)
+        _schedule_glb_build_best_effort(
+            request.session_id,
+            store,
+            registry,
+            persisted_cache,
+        )
         glb_url: str | None = None
 
         current_regions = [
@@ -3404,6 +3548,7 @@ def replace_colors_batch(
         replacement_count=len(request.replacements),
         **dynamic_material_result_from_cache(cache).model_dump(),
         **history_flags,
+        selection=selection_response,
     )
 
 
@@ -3495,6 +3640,12 @@ def region_replace_batch(
             metadata_fields=_REPLACEMENT_CACHE_METADATA_FIELDS,
         )
         _invalidate_and_prewarm_visible_region_cache(request.session_id, store, session_data, cache)
+        selection_response = _selection_after_content_commit(
+            request.session_id,
+            store,
+            session_data,
+            cache,
+        )
         _bump_region_replacement_count(request.session_id, store, session_data, len(request.items))
         history_flags = _push_history_checkpoint(
             request.session_id,
@@ -3507,7 +3658,12 @@ def region_replace_batch(
         # schedule_glb_build for job-token semantics when a newer replace
         # arrives before the background thread finishes.
         # 批量区域替换的 GLB 重建改为异步；重入竞争由 job_token 守护。
-        schedule_glb_build(request.session_id, store, registry, persisted_cache)
+        _schedule_glb_build_best_effort(
+            request.session_id,
+            store,
+            registry,
+            persisted_cache,
+        )
         glb_url: str | None = None
 
         contours_data: dict | None = cache.get("color_contours")
@@ -3561,6 +3717,7 @@ def region_replace_batch(
         message=f"Batch replaced {len(request.items)} regions successfully",
         **dynamic_material_result_from_cache(cache).model_dump(),
         **history_flags,
+        selection=selection_response,
     )
 
 
@@ -4298,6 +4455,7 @@ def apply_recipe_override(
         },
     )
     cache = cache_context.__enter__()
+    selection_response: SelectionDocumentResponse | None = None
 
     matched_rgb: np.ndarray | None = cache.get("matched_rgb")
     material_matrix: np.ndarray | None = cache.get("material_matrix")
@@ -4323,6 +4481,7 @@ def apply_recipe_override(
         applied_override_masks[str(_snapshot_region_id)] = pack_applied_region_mask(
             _snapshot_mask
         )
+    existing_overrides = list(session_data.get("recipe_overrides") or [])
 
     # Resolve source metadata: real LUT for LUT-backed sessions, stub
     # metadata + ``(None, None)`` arrays for material-archive sessions
@@ -4697,22 +4856,30 @@ def apply_recipe_override(
             if effective_mask.shape != updated_rgb.shape[:2]:
                 log.warning(
                     "Region mask shape %s does not match matched_rgb shape %s; "
-                    "skipping this region mask to avoid index errors.",
+                    "rejecting the recipe override.",
                     effective_mask.shape, updated_rgb.shape[:2],
                     extra={
                         "event": "recipe_override_shape_mismatch",
                         "error_type": "RecipeOverrideMaskShapeMismatch",
                         "error_message": (
                             "A recipe override region mask shape did not match "
-                            "the preview image; skipping that mask."
+                            "the preview image; the override was not committed."
                         ),
-                        "fallback_action": "skip_region_mask",
+                        "fallback_action": "reject_request",
+                        "recovery_action": "reselect_region_and_apply_again",
                         "region_id": str(_region_id),
                         "mask_shape": list(effective_mask.shape),
                         "matched_rgb_shape": list(updated_rgb.shape[:2]),
                     },
                 )
-                continue
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Recipe override region mask shape does not match the "
+                        f"current preview for region {_region_id}; reselect the "
+                        "region and apply the recipe again."
+                    ),
+                )
             combined_override_mask |= effective_mask
             updated_rgb[effective_mask] = predicted_rgb
             material_matrix[effective_mask] = recipe_full
@@ -4762,23 +4929,30 @@ def apply_recipe_override(
                         status_code=409,
                         detail=(
                             "Dynamic printable mask is inconsistent. "
-                            "Re-run preview."
+                        "Re-run preview."
                         ),
                     )
                 manual_mask = np.zeros(solid_mask.shape, dtype=bool)
-                region_masks = session_data.get("selected_region_masks") or {}
-                if isinstance(region_masks, dict):
-                    for override in session_data.get("recipe_overrides") or []:
-                        if not isinstance(override, dict):
-                            continue
-                        region_mask = region_masks.get(
-                            str(override.get("region_id") or "")
-                        )
-                        if (
-                            isinstance(region_mask, np.ndarray)
-                            and region_mask.shape == solid_mask.shape
-                        ):
-                            manual_mask |= np.asarray(region_mask, dtype=bool)
+                resolver_session_data = dict(session_data)
+                resolver_session_data[RECIPE_OVERRIDE_APPLIED_MASKS_KEY] = (
+                    applied_override_masks
+                )
+                try:
+                    resolved_existing_masks = resolve_recipe_override_masks(
+                        resolver_session_data,
+                        existing_overrides,
+                        tuple(solid_mask.shape),
+                    )
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            "Committed recipe override mask is missing or invalid. "
+                            "Re-apply the color replacement, then try again."
+                        ),
+                    ) from exc
+                for region_mask in resolved_existing_masks.values():
+                    manual_mask |= region_mask
                 manual_mask |= combined_override_mask & solid_mask
                 automatic_mask = solid_mask & ~manual_mask
                 dynamic_info["benefit_curve"] = (
@@ -4806,7 +4980,6 @@ def apply_recipe_override(
             "source": prediction_source,
         }
 
-        existing_overrides = list(session_data.get("recipe_overrides") or [])
         # Persist the per-region virtual materials alongside the recipe so the
         # generate endpoint can rebuild the extended palette for the 3MF
         # pipeline even in a fresh worker process. Use plain dicts (not
@@ -4893,6 +5066,12 @@ def apply_recipe_override(
         session_data[RECIPE_OVERRIDE_APPLIED_MASKS_KEY] = applied_override_masks
         store.put(request.session_id, RECIPE_OVERRIDE_APPLIED_MASKS_KEY, applied_override_masks)
         _invalidate_and_prewarm_visible_region_cache(request.session_id, store, session_data, cache)
+        selection_response = _selection_after_content_commit(
+            request.session_id,
+            store,
+            session_data,
+            cache,
+        )
         history_flags = _push_history_checkpoint(
             request.session_id,
             store,
@@ -4903,7 +5082,12 @@ def apply_recipe_override(
         # Async GLB rebuild for the newly applied recipe override. Keeps
         # the override response fast; GLB arrives via /glb-status polling.
         # 配方覆盖也走异步 GLB 重建，保持响应延迟与其他 replace 端点一致。
-        schedule_glb_build(request.session_id, store, registry, persisted_cache)
+        _schedule_glb_build_best_effort(
+            request.session_id,
+            store,
+            registry,
+            persisted_cache,
+        )
         glb_url: str | None = None
     except HTTPException:
         raise
@@ -4958,6 +5142,7 @@ def apply_recipe_override(
         override_count=len(existing_overrides),
         **dynamic_material_result_from_cache(cache).model_dump(),
         **history_flags,
+        selection=selection_response,
     )
 
 

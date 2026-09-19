@@ -353,6 +353,28 @@ function selectionStateFromDocument(
   };
 }
 
+function selectionUpdatesFromResponse(
+  current: ConverterState,
+  sessionId: string,
+  document: SelectionDocumentResponse | null | undefined,
+): Partial<ConverterState> {
+  if (!document || current.sessionId !== sessionId) return {};
+  if (!rememberConfirmedSelectionDocument(sessionId, document)) return {};
+  const currentDocument = current.selectionDocument;
+  if (
+    currentDocument &&
+    (currentDocument.selection_revision > document.selection_revision ||
+      (currentDocument.selection_revision === document.selection_revision &&
+        currentDocument.content_revision > document.content_revision))
+  ) {
+    return {};
+  }
+  return selectionStateFromDocument(
+    document,
+    getPreviewBaseUrl(current) ?? "",
+  );
+}
+
 export const CONVERTER_ERROR_KEYS = {
   heightmapUploadRequired: "relief_heightmap_generate_requires_upload",
 } as const;
@@ -524,6 +546,18 @@ function resolveMaterialPrintLayerCount(
     state.materialDynamicLayerCountEnabled === true
     ? (state.materialMaxLayerCount ?? state.materialLayerCount)
     : state.materialLayerCount;
+}
+
+function resolveRecipeAwareLayerCount(
+  state: ConverterState,
+  baseLayerCount: number | undefined,
+): number | undefined {
+  const overrideLayerCount = state.recipe_overrides.reduce(
+    (maximum, override) => Math.max(maximum, override.recipe.length),
+    0,
+  );
+  const resolved = Math.max(baseLayerCount ?? 0, overrideLayerCount);
+  return resolved > 0 ? resolved : undefined;
 }
 
 function resolveColorMatchingWeights(
@@ -1393,34 +1427,236 @@ function getPreviewBaseUrl(
 
 let replacementPreviewEpoch = 0;
 
+type ContentCommitHandle = {
+  sessionId: string;
+  replacementEpoch: number;
+  resolve: (success: boolean) => void;
+  settled: boolean;
+};
+
+const contentCommitQueues = new Map<string, Promise<boolean>>();
+const contentCommitHandles = new Map<number, ContentCommitHandle>();
+
+function beginContentCommit(
+  sessionId: string,
+  replacementEpoch: number,
+): void {
+  let resolve!: (success: boolean) => void;
+  const completion = new Promise<boolean>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  const previous = contentCommitQueues.get(sessionId) ?? Promise.resolve(true);
+  const queued = previous.then(() => completion);
+  contentCommitQueues.set(sessionId, queued);
+  contentCommitHandles.set(replacementEpoch, {
+    sessionId,
+    replacementEpoch,
+    resolve,
+    settled: false,
+  });
+  void queued.then(() => {
+    if (contentCommitQueues.get(sessionId) === queued) {
+      contentCommitQueues.delete(sessionId);
+    }
+  });
+}
+
+function finishContentCommit(replacementEpoch: number, success: boolean): void {
+  const handle = contentCommitHandles.get(replacementEpoch);
+  if (!handle || handle.settled) return;
+  handle.settled = true;
+  contentCommitHandles.delete(replacementEpoch);
+  handle.resolve(success);
+}
+
+function waitForContentCommits(sessionId: string): Promise<boolean> | null {
+  const hasActiveCommit = Array.from(contentCommitHandles.values()).some(
+    (handle) => handle.sessionId === sessionId && !handle.settled,
+  );
+  return hasActiveCommit ? contentCommitQueues.get(sessionId) ?? null : null;
+}
+
 function captureReplacementPreviewCommit(
   owner: PreviewCommitOwner,
 ): PreviewCommitGuard {
   replacementPreviewEpoch += 1;
+  if (owner.sessionId) {
+    beginContentCommit(owner.sessionId, replacementPreviewEpoch);
+  }
   return capturePreviewCommitGuard(owner, replacementPreviewEpoch);
 }
 
 function isCurrentReplacementPreviewCommit(
   current: PreviewCommitOwner,
   guard: PreviewCommitGuard,
+  success = true,
 ): boolean {
+  finishContentCommit(guard.replacementEpoch, success);
   return canCommitPreviewResponse(current, guard, replacementPreviewEpoch);
+}
+
+type ReplacementErrorSettlement = {
+  active: boolean;
+  committed: boolean;
+};
+
+/**
+ * Resolve an ambiguous content-edit failure against the server's revision.
+ *
+ * A lost response is not proof that the backend rolled back. Querying the
+ * authoritative selection document before resolving the content barrier lets
+ * the next selection operation use the committed content revision, while a
+ * genuinely uncommitted request still follows the caller's normal rollback.
+ *
+ * 对内容编辑的非确定性失败按服务端版本收敛：响应丢失并不等于后端回滚。
+ * 在释放内容屏障前查询权威选区文档，可让下一次选区操作使用已提交的内容
+ * 版本；只有确认版本没有推进时，调用方才执行原有回滚。
+ */
+async function settleReplacementPreviewError(
+  current: PreviewCommitOwner,
+  guard: PreviewCommitGuard,
+  getState: () => ConverterState,
+  setState: (partial: Partial<ConverterState>) => void,
+  error: unknown,
+  fallback: string,
+): Promise<ReplacementErrorSettlement> {
+  if (!canCommitPreviewResponse(current, guard, replacementPreviewEpoch)) {
+    finishContentCommit(guard.replacementEpoch, false);
+    return { active: false, committed: false };
+  }
+
+  const sessionId = guard.sessionId;
+  if (!sessionId) {
+    finishContentCommit(guard.replacementEpoch, false);
+    return { active: true, committed: false };
+  }
+
+  const stateBeforeQuery = getState();
+  const confirmed = confirmedSelectionRevisions.get(sessionId);
+  const baselineContentRevision = Math.max(
+    confirmed?.contentRevision ?? 0,
+    stateBeforeQuery.selectionDocument?.content_revision ?? 0,
+  );
+  // Surface the request failure immediately while the status query runs. A
+  // slow or unavailable reconciliation endpoint must not leave the UI in a
+  // perpetual loading state; a later confirmed revision upgrades this error
+  // to the explicit "committed" message below.
+  // 状态查询期间先立即显示原始错误，避免查询慢或不可用时界面一直加载；
+  // 若随后确认版本已推进，下面会把错误升级为“已提交”提示。
+  setState({
+    replacePreviewLoading: false,
+    historyBusy: false,
+    error: visibleConverterError(error, fallback),
+  });
+
+  try {
+    const document = await apiGetEditorSelection(sessionId);
+    const latest = getState();
+    if (!canCommitPreviewResponse(latest, guard, replacementPreviewEpoch)) {
+      finishContentCommit(guard.replacementEpoch, false);
+      return { active: false, committed: false };
+    }
+
+    const currentDocument = latest.selectionDocument;
+    const currentVersion = currentDocument
+      ? {
+          selectionRevision: currentDocument.selection_revision,
+          contentRevision: currentDocument.content_revision,
+        }
+      : confirmed ?? null;
+    const isNewerContent = document.content_revision > baselineContentRevision;
+    if (
+      isNewerContent &&
+      !isSelectionDocumentOlder(document, currentVersion) &&
+      rememberConfirmedSelectionDocument(sessionId, document)
+    ) {
+      setState({
+        ...selectionStateFromDocument(
+          document,
+          getPreviewBaseUrl(latest) ?? "",
+        ),
+        replacePreviewLoading: false,
+        historyBusy: false,
+        error: `${visibleConverterError(error, fallback)}；服务端已确认本次编辑已提交（内容版本 ${document.content_revision}），已同步选区版本。请刷新预览后继续。`,
+      });
+      // Queued selection mutations may continue because the content commit is
+      // known to have reached the server.
+      finishContentCommit(guard.replacementEpoch, true);
+      return { active: true, committed: true };
+    }
+  } catch {
+    // An unavailable status query keeps the result ambiguous. Do not retain
+    // optimistic state in that case; the caller will perform its normal
+    // rollback and surface the original request error.
+  }
+
+  finishContentCommit(guard.replacementEpoch, false);
+  return { active: true, committed: false };
 }
 
 function invalidateReplacementPreviewCommits(): void {
   replacementPreviewEpoch += 1;
+  for (const replacementEpoch of contentCommitHandles.keys()) {
+    finishContentCommit(replacementEpoch, false);
+  }
 }
 
-let selectionMutationQueue: Promise<void> = Promise.resolve();
+const selectionMutationQueues = new Map<string, Promise<boolean>>();
 const confirmedSelectionRevisions = new Map<
   string,
   { selectionRevision: number; contentRevision: number }
 >();
 
-function queueSelectionMutation(work: () => Promise<void>): Promise<void> {
-  const next = selectionMutationQueue.then(work, work);
-  selectionMutationQueue = next.catch(() => undefined);
-  return next;
+function queueSelectionMutation(
+  sessionId: string,
+  work: () => Promise<boolean>,
+): Promise<boolean> {
+  const previous = selectionMutationQueues.get(sessionId) ?? Promise.resolve(true);
+  const next = previous.then(work, work);
+  const settled = next.catch(() => false);
+  selectionMutationQueues.set(sessionId, settled);
+  void settled.then(() => {
+    if (selectionMutationQueues.get(sessionId) === settled) {
+      selectionMutationQueues.delete(sessionId);
+    }
+  });
+  return settled;
+}
+
+function waitForSelectionMutation(sessionId: string): Promise<boolean> | null {
+  return selectionMutationQueues.get(sessionId) ?? null;
+}
+
+function selectionDocumentVersion(
+  document: Pick<SelectionDocumentResponse, "selection_revision" | "content_revision">,
+): [number, number] {
+  return [document.selection_revision, document.content_revision];
+}
+
+function isSelectionDocumentOlder(
+  candidate: Pick<SelectionDocumentResponse, "selection_revision" | "content_revision">,
+  known: { selectionRevision: number; contentRevision: number } | null,
+): boolean {
+  if (!known) return false;
+  const [selectionRevision, contentRevision] = selectionDocumentVersion(candidate);
+  return (
+    selectionRevision < known.selectionRevision ||
+    (selectionRevision === known.selectionRevision &&
+      contentRevision < known.contentRevision)
+  );
+}
+
+function rememberConfirmedSelectionDocument(
+  sessionId: string,
+  document: SelectionDocumentResponse,
+): boolean {
+  const known = confirmedSelectionRevisions.get(sessionId) ?? null;
+  if (isSelectionDocumentOlder(document, known)) return false;
+  confirmedSelectionRevisions.set(sessionId, {
+    selectionRevision: document.selection_revision,
+    contentRevision: document.content_revision,
+  });
+  return true;
 }
 
 const freeColorMutationQueues = new Map<string, Promise<void>>();
@@ -2556,8 +2792,8 @@ export interface ConverterActions {
   redoColorRemap: () => Promise<void>;
   canUndoAdjustments: () => boolean;
   canRedoAdjustments: () => boolean;
-  clearAllRemaps: () => void;
-  clearSelection: () => void;
+  clearAllRemaps: () => Promise<void>;
+  clearSelection: () => Promise<void>;
 
   // 浮雕高度
   updateColorHeight: (hex: string, heightMm: number) => void;
@@ -5520,13 +5756,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     setSelectedColor: (hex: string | null) => set({ selectedColor: hex }),
     setPalette: (entries: PaletteEntry[]) => set({ palette: entries }),
 
-    clearSelection: () => {
+    clearSelection: async () => {
       const state = _get();
       if (state.sessionId && state.selectionDocument) {
         // Use the unified selection mutation to clear the server-authoritative
         // selection. This also works after custom recipe / gradient operations
         // that may have cleared legacy state but kept the selectionDocument.
-        void _get().applySelectionMutation({ operation: "clear" });
+        await _get().applySelectionMutation({ operation: "clear" });
         return;
       }
       markRegionSelectionCleared([
@@ -5589,17 +5825,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         // 返回旧文档，应用它会倒回 confirmed revision，下次点击将 409。
         const confirmed = confirmedSelectionRevisions.get(state.sessionId);
         const currentDocument = _get().selectionDocument;
-        const latestKnownRevision = Math.max(
-          confirmed?.selectionRevision ?? -1,
-          currentDocument?.selection_revision ?? -1,
-        );
-        if (document.selection_revision < latestKnownRevision) {
+        if (
+          isSelectionDocumentOlder(document, confirmed ?? null) ||
+          (currentDocument &&
+            isSelectionDocumentOlder(document, {
+              selectionRevision: currentDocument.selection_revision,
+              contentRevision: currentDocument.content_revision,
+            }))
+        ) {
           return;
         }
-        confirmedSelectionRevisions.set(state.sessionId, {
-          selectionRevision: document.selection_revision,
-          contentRevision: document.content_revision,
-        });
+        rememberConfirmedSelectionDocument(state.sessionId, document);
         // Always replace the local selectionDocument with the authoritative
         // server state. This is critical after custom recipe / content changes
         // so the frontend's components, contours, and counts stay in sync.
@@ -5635,9 +5871,16 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       } else {
         set({ error: null });
       }
-      await queueSelectionMutation(async () => {
+      await queueSelectionMutation(requestedSessionId, async (): Promise<boolean> => {
+        const pendingContentCommit = waitForContentCommits(requestedSessionId);
+        if (pendingContentCommit) {
+          const contentCommitSucceeded = await pendingContentCommit;
+          if (_get().sessionId !== requestedSessionId || !contentCommitSucceeded) {
+            return false;
+          }
+        }
         const state = _get();
-        if (state.sessionId !== requestedSessionId) return;
+        if (state.sessionId !== requestedSessionId) return false;
         const previousDocument = state.selectionDocument;
         const confirmed = confirmedSelectionRevisions.get(requestedSessionId);
         const baseRevision =
@@ -5661,18 +5904,23 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
               : {}),
           });
           const current = _get();
-          if (current.sessionId !== requestedSessionId) return;
-          confirmedSelectionRevisions.set(requestedSessionId, {
-            selectionRevision: document.selection_revision,
-            contentRevision: document.content_revision,
-          });
+          if (current.sessionId !== requestedSessionId) return false;
+          if (!rememberConfirmedSelectionDocument(requestedSessionId, document)) {
+            // A late response may be older in either selection or content
+            // version. Do not repaint it over the current document or let a
+            // dependent content edit consume an unknown base.
+            // 晚到响应可能在选区或内容版本上更旧；不能覆盖当前文档，也不能
+            // 让依赖内容编辑使用不确定的 base。
+            void _get().hydrateSelectionDocument();
+            return false;
+          }
           const hasLaterOptimisticDocument = Boolean(
             input.optimisticDocument &&
             current.selectionDocument &&
             current.selectionDocument.selection_revision > document.selection_revision,
           );
           if (hasLaterOptimisticDocument) {
-            return;
+            return true;
           }
           // Always apply the server's authoritative selection state unless a
           // newer local optimistic click is already visible. Older confirmations
@@ -5684,18 +5932,24 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
               getPreviewBaseUrl(current) ?? "",
             ),
           });
+          return true;
         } catch (err) {
-          if (_get().sessionId !== requestedSessionId) return;
+          if (_get().sessionId !== requestedSessionId) return false;
           // Roll back to the *confirmed* state, never to an optimistic one:
           // previousDocument captured above is usually the optimistic document
           // of this very click, so restoring it would leave a phantom selection
           // diverged from the server (next toggle flips the wrong way).
           // 只回滚到"已确认"状态，绝不回滚到乐观态：上面捕获的 previousDocument
           // 通常就是本次点击的乐观文档，恢复它会造成与服务端发散的幻影选区。
-          const confirmedRev =
-            confirmedSelectionRevisions.get(requestedSessionId)?.selectionRevision ?? -1;
+          const confirmedSelection = confirmedSelectionRevisions.get(
+            requestedSessionId,
+          );
           const rollbackDocument =
-            previousDocument && previousDocument.selection_revision <= confirmedRev
+            previousDocument &&
+            confirmedSelection &&
+            previousDocument.selection_revision <=
+              confirmedSelection.selectionRevision &&
+            previousDocument.content_revision === confirmedSelection.contentRevision
               ? previousDocument
               : null;
           const error = visibleConverterError(err, "Selection update failed");
@@ -5715,6 +5969,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             set({ selectionDocument: null, error });
             void _get().hydrateSelectionDocument();
           }
+          return false;
         }
       });
     },
@@ -5784,9 +6039,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
     // --- 批量颜色替换 ---
     applyBatchColorRemap: async (newHex: string) => {
+      const initialState = _get();
+      const sessionId = initialState.sessionId;
+      if (!sessionId) return;
+      const pendingSelection = waitForSelectionMutation(sessionId);
+      if (pendingSelection && !(await pendingSelection)) return;
       const state = _get();
+      if (state.sessionId !== sessionId) return;
       const colors = Array.from(state.selectedColors);
-      if (colors.length === 0 || !state.sessionId) return;
+      if (colors.length === 0) return;
 
       // Snapshot + optimistic remap map update (kept exactly as before so
       // the undo/redo stack is unchanged).
@@ -5818,7 +6079,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       // 解决"多色一起替换很慢"的问题。
       try {
         const response = await apiReplaceColorsBatch(
-          state.sessionId,
+          sessionId,
           Object.entries(newMap).map(([origHex, targetHex]) => {
             const paletteEntry = state.palette.find(
               (p) => p.matched_hex === origHex,
@@ -5841,10 +6102,25 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         if (response.preview_3d_url) {
           updates.previewGlbUrl = normalizeResourceUrl(response.preview_3d_url);
         }
-        set(updates);
+        set({
+          ...updates,
+          ...selectionUpdatesFromResponse(
+            _get(),
+            sessionId,
+            response.selection,
+          ),
+        });
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
+        const settlement = await settleReplacementPreviewError(
+          _get(),
+          previewCommit,
+          _get,
+          (partial) => set(partial),
+          err,
+          "批量颜色替换失败",
+        );
+        if (!settlement.active || settlement.committed) return;
         // Roll the whole batch back — same semantics as the old loop.
         // 整批回滚，和旧循环语义一致。
         set({
@@ -6106,10 +6382,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         ];
         return {
           recipe_overrides: next,
-          color_layers: Math.max(
-            state.color_layers ?? 0,
-            normalizedRecipe.length,
-          ),
         };
       });
     },
@@ -6167,12 +6439,16 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
     // --- 连通区域替换 ---
     applyRegionReplace: async (newHex: string) => {
-      const state = _get();
-      const sid = state.sessionId;
+      const initialState = _get();
+      const sid = initialState.sessionId;
       if (!sid) {
         set({ error: "请先预览图片" });
         return;
       }
+      const pendingSelection = waitForSelectionMutation(sid);
+      if (pendingSelection && !(await pendingSelection)) return;
+      const state = _get();
+      if (state.sessionId !== sid) return;
       if (!state.regionData) {
         set({ error: "Please select a connected region first" });
         return;
@@ -6202,6 +6478,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
           ...dynamicMaterialResultState(response),
           ...historyFlagsFromResponse(response),
+          ...selectionUpdatesFromResponse(_get(), sid, response.selection),
         };
 
         // 更新 3D 预览 GLB URL（仅当后端返回非空 URL 时）
@@ -6228,7 +6505,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }));
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
+        const settlement = await settleReplacementPreviewError(
+          _get(),
+          previewCommit,
+          _get,
+          (partial) => set(partial),
+          err,
+          "区域颜色替换失败",
+        );
+        if (!settlement.active || settlement.committed) return;
         if (_get().sessionId !== sid) {
           return;
         }
@@ -6246,12 +6531,16 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       regionIndex: number,
       targetHex: string,
     ) => {
-      const state = _get();
-      const sid = state.sessionId;
+      const initialState = _get();
+      const sid = initialState.sessionId;
       if (!sid) {
         set({ error: "请先预览图片" });
         return;
       }
+      const pendingSelection = waitForSelectionMutation(sid);
+      if (pendingSelection && !(await pendingSelection)) return;
+      const state = _get();
+      if (state.sessionId !== sid) return;
       const hexNoHash = targetHex.replace(/^#/, "").toLowerCase();
       const previewCommit = captureReplacementPreviewCommit(state);
       set({
@@ -6293,6 +6582,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
           ...dynamicMaterialResultState(response),
           ...historyFlagsFromResponse(response),
+          ...selectionUpdatesFromResponse(_get(), sid, response.selection),
         };
         if (response.preview_glb_url) {
           updates.previewGlbUrl = normalizeResourceUrl(
@@ -6308,7 +6598,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }));
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
+        const settlement = await settleReplacementPreviewError(
+          _get(),
+          previewCommit,
+          _get,
+          (partial) => set(partial),
+          err,
+          "区域颜色替换失败",
+        );
+        if (!settlement.active || settlement.committed) return;
         if (_get().sessionId !== sid) return;
         set({
           adjustmentHistory: state.adjustmentHistory,
@@ -6400,9 +6698,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     },
 
     flattenSelectedGradientRegions: async () => {
-      const state = _get();
-      const sid = state.sessionId;
+      const initialState = _get();
+      const sid = initialState.sessionId;
       if (!sid) return;
+      const pendingSelection = waitForSelectionMutation(sid);
+      if (pendingSelection && !(await pendingSelection)) return;
+      const state = _get();
+      if (state.sessionId !== sid) return;
       const regions = state.selectedGradientRegions;
       if (regions.length < 2) return;
       const groups = state.gradientGroups;
@@ -6481,6 +6783,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
           ...dynamicMaterialResultState(response),
           ...historyFlagsFromResponse(response),
+          ...selectionUpdatesFromResponse(_get(), sid, response.selection),
         };
         if (response.preview_glb_url) {
           updates.previewGlbUrl = normalizeResourceUrl(
@@ -6497,7 +6800,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }));
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
+        const settlement = await settleReplacementPreviewError(
+          _get(),
+          previewCommit,
+          _get,
+          (partial) => set(partial),
+          err,
+          "合并去海带纹失败",
+        );
+        if (!settlement.active || settlement.committed) return;
         if (_get().sessionId !== sid) return;
         set({
           adjustmentHistory: state.adjustmentHistory,
@@ -6515,9 +6826,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         regionIndex: number;
       }>,
     ) => {
-      const state = _get();
-      const sid = state.sessionId;
+      const initialState = _get();
+      const sid = initialState.sessionId;
       if (!sid) return;
+      const pendingSelection = waitForSelectionMutation(sid);
+      if (pendingSelection && !(await pendingSelection)) return;
+      const state = _get();
+      if (state.sessionId !== sid) return;
       // Explicit targets from a per-region button: honour them and leave
       // the batch checkbox list intact so the user's in-progress merge
       // selection survives. Falls back to the checkbox list otherwise.
@@ -6576,6 +6891,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
           ...dynamicMaterialResultState(response),
           ...historyFlagsFromResponse(response),
+          ...selectionUpdatesFromResponse(_get(), sid, response.selection),
         };
         if (!usingExplicitTargets) {
           updates.gradientSelection = null;
@@ -6612,7 +6928,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }));
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
+        const settlement = await settleReplacementPreviewError(
+          _get(),
+          previewCommit,
+          _get,
+          (partial) => set(partial),
+          err,
+          "区域二次量化失败",
+        );
+        if (!settlement.active || settlement.committed) return;
         if (_get().sessionId !== sid) return;
         set({
           adjustmentHistory: state.adjustmentHistory,
@@ -6624,9 +6948,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     },
 
     applyMultiRegionPixelReplace: async (targetHex: string) => {
-      const state = _get();
-      const sid = state.sessionId;
+      const initialState = _get();
+      const sid = initialState.sessionId;
       if (!sid) return;
+      const pendingSelection = waitForSelectionMutation(sid);
+      if (pendingSelection && !(await pendingSelection)) return;
+      const state = _get();
+      if (state.sessionId !== sid) return;
       const regions = state.selectedGradientRegions;
       if (regions.length === 0) return;
       const hexNoHash = targetHex.replace(/^#/, "").toLowerCase();
@@ -6683,7 +7011,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }));
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
+        const settlement = await settleReplacementPreviewError(
+          _get(),
+          previewCommit,
+          _get,
+          (partial) => set(partial),
+          err,
+          "合并换色失败",
+        );
+        if (!settlement.active || settlement.committed) return;
         if (_get().sessionId !== sid) return;
         set({
           adjustmentHistory: state.adjustmentHistory,
@@ -6700,11 +7036,16 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       layerOrder: string = "Top2Bottom",
       virtualMaterials?: VirtualMaterial[],
     ) => {
-      const state = _get();
-      if (!state.sessionId) {
+      const initialState = _get();
+      if (!initialState.sessionId) {
         set({ error: "请先预览图片" });
         return;
       }
+      const sessionId = initialState.sessionId;
+      const pendingSelection = waitForSelectionMutation(sessionId);
+      if (pendingSelection && !(await pendingSelection)) return;
+      const state = _get();
+      if (state.sessionId !== sessionId) return;
       const targetRegionIds = regionIds.filter(Boolean);
       if (targetRegionIds.length === 0) {
         set({ error: "请先选择区域" });
@@ -6741,7 +7082,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       });
       try {
         const response = await apiApplyRecipeOverride({
-          session_id: state.sessionId,
+          session_id: sessionId,
           region_ids: targetRegionIds,
           recipe,
           layer_order: layerOrder,
@@ -6773,8 +7114,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
           ...dynamicMaterialResultState(response),
           ...historyFlagsFromResponse(response),
-          color_layers: Math.max(current.color_layers ?? 0, resolvedLayers),
-          layer_height_mm: resolvedHeight,
           recipe_overrides: [
             ...current.recipe_overrides.filter(
               (item) => !targetRegionIds.includes(item.region_id),
@@ -6800,10 +7139,23 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             source: response.source,
             override: true,
           },
+          ...selectionUpdatesFromResponse(
+            current,
+            sessionId,
+            response.selection,
+          ),
         }));
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
+        const settlement = await settleReplacementPreviewError(
+          _get(),
+          previewCommit,
+          _get,
+          (partial) => set(partial),
+          err,
+          "自定义配方应用失败",
+        );
+        if (!settlement.active || settlement.committed) return;
         set({
           adjustmentHistory: state.adjustmentHistory,
           adjustmentRedoHistory: state.adjustmentRedoHistory,
@@ -6872,7 +7224,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           }
           break;
         case "multi-select": {
+          const initialSelectionState = _get();
+          const pendingSelection = initialSelectionState.sessionId
+            ? waitForSelectionMutation(initialSelectionState.sessionId)
+            : null;
+          if (pendingSelection && !(await pendingSelection)) return;
           const currentSelectionState = _get();
+          if (currentSelectionState.sessionId !== initialSelectionState.sessionId) {
+            return;
+          }
           const selectionRevision = currentSelectionState.selectionDocument?.selection_revision;
           if (selectionRevision !== undefined && currentSelectionState.sessionId) {
             const previewCommit =
@@ -6898,36 +7258,30 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
                 downloadUrl: null,
                 ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
                 ...historyFlagsFromResponse(response),
+                ...selectionUpdatesFromResponse(
+                  current,
+                  currentSelectionState.sessionId,
+                  response.selection,
+                ),
               });
-              if (response.selection) {
-                confirmedSelectionRevisions.set(currentSelectionState.sessionId, {
-                  selectionRevision: response.selection.selection_revision,
-                  contentRevision: response.selection.content_revision,
-                });
-                set({
-                  ...selectionStateFromDocument(
-                    response.selection,
-                    getPreviewBaseUrl(current) ?? "",
-                  ),
-                });
-              } else if (current.selectionDocument) {
-                const fallbackContentRevision = current.selectionDocument.content_revision + 1;
-                confirmedSelectionRevisions.set(currentSelectionState.sessionId, {
-                  selectionRevision,
-                  contentRevision: fallbackContentRevision,
-                });
-                set({
-                  selectionDocument: {
-                    ...current.selectionDocument,
-                    content_revision: fallbackContentRevision,
-                  },
-                });
+              if (!response.selection) {
+                // Never guess ``content_revision + 1`` on the client. The
+                // endpoint must return the authoritative document; an older
+                // server can still be synchronized explicitly before the next
+                // selection operation.
+                void _get().hydrateSelectionDocument();
               }
               _get()._pollAsyncGlb();
             } catch (err) {
-              if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) {
-                return;
-              }
+              const settlement = await settleReplacementPreviewError(
+                _get(),
+                previewCommit,
+                _get,
+                (partial) => set(partial),
+                err,
+                "Selection color replacement failed",
+              );
+              if (!settlement.active || settlement.committed) return;
               set({
                 replacePreviewLoading: false,
                 error: visibleConverterError(err, "Selection color replacement failed"),
@@ -6984,6 +7338,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
               selectedColor: null,
               ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
               ...dynamicMaterialResultState(response),
+              ...selectionUpdatesFromResponse(_get(), sid, response.selection),
             };
             if (response.preview_glb_url) {
               updates.previewGlbUrl = normalizeResourceUrl(
@@ -7000,9 +7355,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             }));
             _get()._pollAsyncGlb();
           } catch (err) {
-            if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) {
-              return;
-            }
+            const settlement = await settleReplacementPreviewError(
+              _get(),
+              previewCommit,
+              _get,
+              (partial) => set(partial),
+              err,
+              "Multi-region color replacement failed",
+            );
+            if (!settlement.active || settlement.committed) return;
             if (_get().sessionId !== sid) return;
             set({
               adjustmentHistory: curState.adjustmentHistory,
@@ -7077,7 +7438,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }
       if (state.historyBusy || !state.historyCanUndo) return;
       const sid = state.sessionId;
-      const previewCommit = captureReplacementPreviewCommit(state);
+      const pendingSelection = waitForSelectionMutation(sid);
+      if (pendingSelection && !(await pendingSelection)) return;
+      const latestState = _get();
+      if (
+        latestState.sessionId !== sid ||
+        latestState.historyBusy ||
+        !latestState.historyCanUndo
+      ) {
+        return;
+      }
+      const previewCommit = captureReplacementPreviewCommit(latestState);
       set({ historyBusy: true, replacePreviewLoading: true, error: null });
       try {
         const response = await apiReplacementHistory(sid, "undo");
@@ -7088,20 +7459,21 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           ...buildHistoryRestoreState(response),
           historyBusy: false,
           replacePreviewLoading: false,
+          ...selectionUpdatesFromResponse(_get(), sid, response.selection),
         });
-        if (response.selection) {
-          confirmedSelectionRevisions.set(sid, {
-            selectionRevision: response.selection.selection_revision,
-            contentRevision: response.selection.content_revision,
-          });
-        }
         if (response.entry_kind !== "selection") {
           _get()._pollAsyncGlb();
         }
       } catch (err) {
-        if (
-          !isCurrentReplacementPreviewCommit(_get(), previewCommit)
-        ) return;
+        const settlement = await settleReplacementPreviewError(
+          _get(),
+          previewCommit,
+          _get,
+          (partial) => set(partial),
+          err,
+          "撤销颜色调整失败",
+        );
+        if (!settlement.active || settlement.committed) return;
         set({
           historyBusy: false,
           replacePreviewLoading: false,
@@ -7126,7 +7498,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }
       if (state.historyBusy || !state.historyCanRedo) return;
       const sid = state.sessionId;
-      const previewCommit = captureReplacementPreviewCommit(state);
+      const pendingSelection = waitForSelectionMutation(sid);
+      if (pendingSelection && !(await pendingSelection)) return;
+      const latestState = _get();
+      if (
+        latestState.sessionId !== sid ||
+        latestState.historyBusy ||
+        !latestState.historyCanRedo
+      ) {
+        return;
+      }
+      const previewCommit = captureReplacementPreviewCommit(latestState);
       set({ historyBusy: true, replacePreviewLoading: true, error: null });
       try {
         const response = await apiReplacementHistory(sid, "redo");
@@ -7137,20 +7519,21 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           ...buildHistoryRestoreState(response),
           historyBusy: false,
           replacePreviewLoading: false,
+          ...selectionUpdatesFromResponse(_get(), sid, response.selection),
         });
-        if (response.selection) {
-          confirmedSelectionRevisions.set(sid, {
-            selectionRevision: response.selection.selection_revision,
-            contentRevision: response.selection.content_revision,
-          });
-        }
         if (response.entry_kind !== "selection") {
           _get()._pollAsyncGlb();
         }
       } catch (err) {
-        if (
-          !isCurrentReplacementPreviewCommit(_get(), previewCommit)
-        ) return;
+        const settlement = await settleReplacementPreviewError(
+          _get(),
+          previewCommit,
+          _get,
+          (partial) => set(partial),
+          err,
+          "重做颜色调整失败",
+        );
+        if (!settlement.active || settlement.committed) return;
         set({
           historyBusy: false,
           replacePreviewLoading: false,
@@ -7175,8 +7558,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       return state.historyCanRedo && !state.historyBusy;
     },
 
-    clearAllRemaps: () => {
-      const state = _get();
+    clearAllRemaps: async () => {
+      let state = _get();
+      const sessionId = state.sessionId;
+      if (sessionId) {
+        const pendingSelection = waitForSelectionMutation(sessionId);
+        if (pendingSelection && !(await pendingSelection)) return;
+        state = _get();
+        if (state.sessionId !== sessionId) return;
+      }
       const previewCommit = captureReplacementPreviewCommit(state);
       const adjustmentSnapshot = createAdjustmentSnapshot(state);
       const nextAdjustmentHistory = hasAdjustmentState(state)
@@ -7194,6 +7584,25 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         : hadRemaps
           ? [...state.remapHistory, { ...state.colorRemapMap }]
           : state.remapHistory;
+      const clearRollbackState: Partial<ConverterState> = {
+        colorRemapMap: { ...state.colorRemapMap },
+        remapHistory: cloneRemapHistory(state.remapHistory),
+        remapRedoHistory: cloneRemapHistory(state.remapRedoHistory),
+        adjustmentHistory: [...state.adjustmentHistory],
+        adjustmentRedoHistory: [...state.adjustmentRedoHistory],
+        replacement_regions: cloneReplacementRegions(state.replacement_regions),
+        recipe_overrides: cloneRecipeOverrides(state.recipe_overrides),
+        previewImageUrl: state.previewImageUrl,
+        previewBaseImageUrl: state.previewBaseImageUrl,
+        previewGlbUrl: state.previewGlbUrl,
+        threemfDiskPath: state.threemfDiskPath,
+        downloadUrl: state.downloadUrl,
+        layerImages: [...state.layerImages],
+        layerImagesSourceKey: state.layerImagesSourceKey,
+        gradientSelection: state.gradientSelection,
+        pendingReplacement: state.pendingReplacement,
+        regionReplacementCount: state.regionReplacementCount,
+      };
       set({
         colorRemapMap: {},
         remapHistory: nextRemapHistory,
@@ -7216,8 +7625,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       });
       // 调用后端清空 replacement_regions 并从原始 matched_rgb 重新生成预览和 GLB
       // 不能依赖 originalPreviewUrl，因为 region-replace 会修改后端缓存的 matched_rgb
-      if (state.sessionId) {
-        apiResetReplacements(state.sessionId)
+      if (sessionId) {
+        apiResetReplacements(sessionId)
           .then((res) => {
             if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) {
               return;
@@ -7236,20 +7645,33 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
                 : null,
               ...dynamicMaterialResultState(res),
               ...historyFlagsFromResponse(res),
+              ...selectionUpdatesFromResponse(
+                _get(),
+                sessionId,
+                res?.selection,
+              ),
             };
             set(updates);
             _get()._pollAsyncGlb();
           })
-          .catch(() => {
-            if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) {
-              return;
-            }
+          .catch(async (err) => {
+            const settlement = await settleReplacementPreviewError(
+              _get(),
+              previewCommit,
+              _get,
+              (partial) => set(partial),
+              err,
+              "清空颜色调整失败",
+            );
+            if (!settlement.active || settlement.committed) return;
             const fallback = _get().originalPreviewUrl;
             set({
-              previewImageUrl: fallback,
-              previewBaseImageUrl: fallback,
+              ...clearRollbackState,
+              previewImageUrl: clearRollbackState.previewImageUrl ?? fallback,
+              previewBaseImageUrl:
+                clearRollbackState.previewBaseImageUrl ?? fallback,
               replacePreviewLoading: false,
-              previewGlbUrl: null,
+              error: visibleConverterError(err, "清空颜色调整失败"),
             });
           });
       } else {
@@ -8014,10 +8436,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       groupIndex: number,
       regionIndex?: number,
     ) => {
-      const state = _get();
-      const sid = state.sessionId;
+      const initialState = _get();
+      const sid = initialState.sessionId;
       if (!sid) return;
-      const previewCommit = captureReplacementPreviewCommit(state);
+      const pendingSelection = waitForSelectionMutation(sid);
+      if (pendingSelection && !(await pendingSelection)) return;
+      const state = _get();
+      if (state.sessionId !== sid) return;
       const groups = state.gradientGroups;
       if (!groups || groups.length === 0) return;
       const group = groups.find((g) => g.group_index === groupIndex);
@@ -8025,6 +8450,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
       const rep = group.representative_hex.replace(/^#/, "").toLowerCase();
       if (!rep) return;
+      const previewCommit = captureReplacementPreviewCommit(state);
 
       // Use the spatially-scoped /region-replace endpoint so that only
       // pixels inside the gradient group (or single region) are repainted
@@ -8058,6 +8484,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
           ...dynamicMaterialResultState(response),
           ...historyFlagsFromResponse(response),
+          ...selectionUpdatesFromResponse(_get(), sid, response.selection),
         };
         if (response.preview_glb_url) {
           updates.previewGlbUrl = normalizeResourceUrl(
@@ -8073,9 +8500,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }));
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) {
-          return;
-        }
+        const settlement = await settleReplacementPreviewError(
+          _get(),
+          previewCommit,
+          _get,
+          (partial) => set(partial),
+          err,
+          "去海带纹替换失败",
+        );
+        if (!settlement.active || settlement.committed) return;
         set({
           replacePreviewLoading: false,
           error: visibleConverterError(err, "去海带纹替换失败"),
@@ -8603,6 +9036,24 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         return null;
       }
       const sessionId = state.sessionId;
+      const pendingSelection = waitForSelectionMutation(sessionId);
+      if (pendingSelection) {
+        const selectionCommitSucceeded = await pendingSelection;
+        if (_get().sessionId !== sessionId) return null;
+        if (!selectionCommitSucceeded) return null;
+      }
+      const pendingContentCommit = waitForContentCommits(sessionId);
+      if (pendingContentCommit) {
+        const contentCommitSucceeded = await pendingContentCommit;
+        if (_get().sessionId !== sessionId) return null;
+        if (!contentCommitSucceeded) {
+          // A failed edit already left its previous committed state visible.
+          // Do not send a generate request that could combine that state with
+          // a partially failed mutation.
+          return null;
+        }
+      }
+      state = _get();
       const sourceSelection = resolveConverterSourceSelection(state);
       if (!sourceSelection.isReady) {
         set({
@@ -8650,6 +9101,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         generateSettings.deviceProfileId,
         generateSettings.buildPlateId,
       );
+      const generateReplacementEpoch = replacementPreviewEpoch;
       set({
         isGenerating: true,
         error: null,
@@ -8673,6 +9125,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             sessionId,
             () => useConverterStore.getState().sessionId,
           ) &&
+          replacementPreviewEpoch === generateReplacementEpoch &&
           isGeneratedArtifactIdentityCurrent(
             generateIdentity,
             latestSettings.deviceProfileId,
@@ -8765,14 +9218,18 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
                   reliefMinimumTotalHeight,
                 )
               : undefined;
+        const baseColorLayerCount =
+          state.source_version === "material"
+            ? resolveMaterialPrintLayerCount(state)
+            : sourceParams.source_kind === "native_bundle"
+              ? (sourceParams.color_layers ?? undefined)
+              : (state.color_layers ?? undefined);
         const baseParams = {
           ...sourceParams,
-          color_layers:
-            state.source_version === "material"
-              ? resolveMaterialPrintLayerCount(state)
-              : sourceParams.source_kind === "native_bundle"
-                ? (sourceParams.color_layers ?? undefined)
-                : (state.color_layers ?? undefined),
+          color_layers: resolveRecipeAwareLayerCount(
+            state,
+            baseColorLayerCount,
+          ),
           layer_height_mm:
             state.source_version === "material"
               ? state.materialLayerHeightMm
@@ -8846,6 +9303,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           enable_wipe_tower_auto_placement:
             generateSettings.enableWipeTowerAutoPlacement,
           use_cached_matched_rgb: state.regionReplacementCount > 0,
+          editor_content_revision:
+            state.selectionDocument?.content_revision ?? undefined,
           ...(state.modelSurfaceEnabled &&
           state.modelSurfaceModelFileId &&
           state.modelSurfaceSelection &&
@@ -9756,9 +10215,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
     // --- 颜色替换：单次即时替换 ---
     submitSingleReplace: async (origHex: string, newHex: string) => {
+      const initialState = _get();
+      const sid = initialState.sessionId;
+      if (!sid) return;
+      const pendingSelection = waitForSelectionMutation(sid);
+      if (pendingSelection && !(await pendingSelection)) return;
       const state = _get();
-      const sid = state.sessionId;
-      if (!state.sessionId) return;
+      if (state.sessionId !== sid) return;
       const previewCommit = captureReplacementPreviewCommit(state);
       set({ replacePreviewLoading: true, error: null });
       try {
@@ -9780,10 +10243,25 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         if (response.preview_3d_url) {
           updates.previewGlbUrl = normalizeResourceUrl(response.preview_3d_url);
         }
-        set(updates);
+        set({
+          ...updates,
+          ...selectionUpdatesFromResponse(
+            _get(),
+            state.sessionId,
+            response.selection,
+          ),
+        });
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
+        const settlement = await settleReplacementPreviewError(
+          _get(),
+          previewCommit,
+          _get,
+          (partial) => set(partial),
+          err,
+          "颜色替换失败",
+        );
+        if (!settlement.active || settlement.committed) return;
         if (_get().sessionId !== sid) return;
         // 回滚 colorRemapMap 到操作前状态
         const currentHistory = _get().remapHistory;
@@ -9806,9 +10284,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
     // --- 颜色替换预览 ---
     submitReplacePreview: async () => {
+      const initialState = _get();
+      const sid = initialState.sessionId;
+      if (!sid) return;
+      const pendingSelection = waitForSelectionMutation(sid);
+      if (pendingSelection && !(await pendingSelection)) return;
       const state = _get();
+      if (state.sessionId !== sid) return;
       const entries = Object.entries(state.colorRemapMap);
-      if (!state.sessionId) return;
 
       const previewCommit = captureReplacementPreviewCommit(state);
       set({ replacePreviewLoading: true, error: null });
@@ -9829,7 +10312,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             replacementColor: `#${newHex}`,
           };
         });
-        const response = await apiReplaceColorsBatch(state.sessionId, pairs);
+        const response = await apiReplaceColorsBatch(sid, pairs);
         if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
         const updates: Partial<ConverterState> = {
           replacePreviewLoading: false,
@@ -9842,10 +10325,25 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         if (response.preview_3d_url) {
           updates.previewGlbUrl = normalizeResourceUrl(response.preview_3d_url);
         }
-        set(updates);
+        set({
+          ...updates,
+          ...selectionUpdatesFromResponse(
+            _get(),
+            sid,
+            response.selection,
+          ),
+        });
         _get()._pollAsyncGlb();
       } catch (err) {
-        if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) return;
+        const settlement = await settleReplacementPreviewError(
+          _get(),
+          previewCommit,
+          _get,
+          (partial) => set(partial),
+          err,
+          "颜色替换预览失败",
+        );
+        if (!settlement.active || settlement.committed) return;
         set({
           replacePreviewLoading: false,
           error: visibleConverterError(err, "颜色替换预览失败"),

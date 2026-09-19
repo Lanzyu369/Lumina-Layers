@@ -339,6 +339,8 @@ def schedule_glb_build(
     candidate_cache = cache
     claimed_metadata = dict(metadata_updates or {})
     job_token: str | None = None
+    publication_revision_path: tuple[str, ...] | None = None
+    expected_publication_revision: object = None
     for _attempt in range(_GLB_SCHEDULE_CAS_ATTEMPTS):
         revision_path, expected_revision = _cache_publication_guard(
             candidate_cache
@@ -366,6 +368,9 @@ def schedule_glb_build(
         )
         if claimed:
             job_token = candidate_token
+            publication_revision_path, expected_publication_revision = (
+                _cache_publication_guard(pending_cache)
+            )
             break
         session_data = store.get(session_id)
         latest_cache = session_data.get("preview_cache") if session_data else None
@@ -380,22 +385,72 @@ def schedule_glb_build(
         )
 
     scheduled_perf_counter = time.perf_counter()
-    _GLB_EXECUTOR.submit(
-        _run_glb_build_job,
-        session_id,
-        job_token,
-        store,
-        registry,
-        scheduled_perf_counter,
-    )
-    log.debug(
-        "GLB build scheduled",
-        extra={
-            "event": "converter_glb_scheduled",
-            "session_id": session_id,
-            "job_token": job_token,
-        },
-    )
+    submit_succeeded = True
+    try:
+        _GLB_EXECUTOR.submit(
+            _run_glb_build_job,
+            session_id,
+            job_token,
+            store,
+            registry,
+            scheduled_perf_counter,
+        )
+    except Exception as exc:
+        submit_succeeded = False
+        # The 2D content transaction is already committed at this point. A
+        # scheduler/executor failure is therefore a derived-preview failure,
+        # not a reason to make the edit look uncommitted or ask the frontend
+        # to roll its mapping back. Publish an error through the same token /
+        # revision CAS so a newer edit cannot be overwritten.
+        # 这里 2D 内容事务已经提交；调度器/线程池失败只影响派生预览，不能
+        # 伪装成编辑未提交，也不能让前端回滚映射。沿用 token/revision CAS
+        # 发布错误，避免覆盖更新的编辑。
+        log.warning(
+            "GLB build could not be scheduled",
+            extra={
+                "event": "converter_glb_schedule_failed",
+                "session_id": session_id,
+                "job_token": job_token,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        latest_session = store.get(session_id)
+        latest_cache = (
+            latest_session.get("preview_cache")
+            if latest_session is not None
+            else None
+        )
+        if (
+            isinstance(latest_cache, dict)
+            and _cache_value(latest_cache, "glb_job_token") == job_token
+            and _cache_publication_guard(latest_cache)
+            == (publication_revision_path, expected_publication_revision)
+        ):
+            failed_cache = _with_cache_metadata(
+                latest_cache,
+                {
+                    "glb_url": None,
+                    "glb_error": _glb_status_error_text(exc),
+                    "glb_completed_at": time.time(),
+                },
+            )
+            store.compare_and_set(
+                session_id,
+                "preview_cache",
+                failed_cache,
+                revision_path=publication_revision_path,
+                expected_revision=expected_publication_revision,
+            )
+    if submit_succeeded:
+        log.debug(
+            "GLB build scheduled",
+            extra={
+                "event": "converter_glb_scheduled",
+                "session_id": session_id,
+                "job_token": job_token,
+            },
+        )
     return job_token
 
 

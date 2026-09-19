@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import threading
 import weakref
-from typing import Any
+from typing import Any, Callable
 
 import cv2
 import numpy as np
@@ -55,6 +55,119 @@ def get_selection_revision(session_data: dict[str, Any]) -> int:
         return max(0, int(session_data.get(SELECTION_REVISION_KEY) or 0))
     except (TypeError, ValueError):
         return 0
+
+
+def sync_selection_content_generation(
+    session_id: str,
+    store: SessionStore,
+    session_data: dict[str, Any],
+    content_generation: int,
+) -> None:
+    """Bind the current selection to a newly committed visible-content generation.
+    将当前选区绑定到刚提交的可见内容版本。
+
+    Geometry-preserving edits such as global colour replacement keep the
+    selection pixels valid, but the next selection request must use the new
+    visible-content revision. This helper updates only that binding; it does
+    not create a new selection revision or alter the mask.
+    几何不变的编辑（例如全局换色）仍可复用选区像素，但下一次选区请求必须
+    携带新的可见内容版本。该辅助函数只更新绑定，不创建新的选区版本，也不
+    修改选区掩码。
+    """
+    normalized = int(content_generation)
+    session_data[SELECTION_CONTENT_GENERATION_KEY] = normalized
+    store.put(session_id, SELECTION_CONTENT_GENERATION_KEY, normalized)
+
+
+def resolve_recipe_override_masks(
+    session_data: dict[str, Any],
+    recipe_overrides: list[dict[str, Any]] | None,
+    shape: tuple[int, int],
+    *,
+    legacy_fallback: Callable[[str], np.ndarray | None] | None = None,
+) -> dict[str, np.ndarray]:
+    """Resolve every recipe override to its committed spatial mask.
+    将每个区域配方覆盖解析为其已提交的空间掩码。
+
+    Sessions with ``recipe_override_applied_masks`` use the apply-time
+    snapshots exclusively. Older sessions may use their live region map and an
+    explicit legacy fallback (for example select-all colour recovery). Missing,
+    empty, or shape-mismatched masks are rejected instead of silently widening
+    an override to the whole image.
+    含有 ``recipe_override_applied_masks`` 的会话只能使用 apply 时快照；旧会话
+    才能使用实时区域映射和显式兼容回退（例如全选颜色恢复）。缺失、空掩码或
+    形状不一致时直接拒绝，不能静默扩大成全图覆盖。
+
+    Args:
+        session_data: Session state containing live and/or committed masks.
+            包含实时及/或已提交掩码的会话状态。
+        recipe_overrides: Stored recipe override entries.
+            已保存的区域配方覆盖条目。
+        shape: Expected image mask shape ``(height, width)``.
+            期望的图像掩码形状 ``(高, 宽)``。
+        legacy_fallback: Optional resolver for pre-snapshot sessions.
+            旧会话可选的兼容解析器。
+
+    Returns:
+        dict[str, np.ndarray]: Independent boolean masks keyed by region id.
+            按区域 ID 返回相互独立的布尔掩码。
+
+    Raises:
+        ValueError: If a declared override cannot be resolved safely.
+            无法安全解析声明的覆盖时抛出。
+    """
+    expected_shape = (int(shape[0]), int(shape[1]))
+    if expected_shape[0] <= 0 or expected_shape[1] <= 0:
+        raise ValueError("Recipe override mask shape is invalid")
+    overrides = recipe_overrides or []
+    if not overrides:
+        return {}
+
+    live_masks = session_data.get("selected_region_masks")
+    if not isinstance(live_masks, dict):
+        live_masks = {}
+    snapshots = session_data.get(RECIPE_OVERRIDE_APPLIED_MASKS_KEY)
+    has_snapshot_capability = RECIPE_OVERRIDE_APPLIED_MASKS_KEY in session_data
+    if not isinstance(snapshots, dict):
+        snapshots = {}
+
+    resolved: dict[str, np.ndarray] = {}
+    for item in overrides:
+        if not isinstance(item, dict):
+            raise ValueError("Recipe override entry is invalid")
+        region_id = str(item.get("region_id") or "")
+        if not region_id:
+            raise ValueError("Recipe override region id is missing")
+
+        mask: np.ndarray | None
+        if has_snapshot_capability:
+            mask = unpack_applied_region_mask(
+                snapshots.get(region_id),
+                expected_shape,
+            )
+        else:
+            candidate = live_masks.get(region_id)
+            mask = (
+                np.asarray(candidate, dtype=bool).copy()
+                if isinstance(candidate, np.ndarray)
+                else None
+            )
+            if mask is None and legacy_fallback is not None:
+                mask = legacy_fallback(region_id)
+                if mask is not None:
+                    mask = np.asarray(mask, dtype=bool).copy()
+
+        if (
+            mask is None
+            or mask.shape != expected_shape
+            or mask.ndim != 2
+            or not np.any(mask)
+        ):
+            raise ValueError(
+                f"Recipe override mask is missing or invalid for region {region_id}"
+            )
+        resolved[region_id] = np.ascontiguousarray(mask, dtype=bool)
+    return resolved
 
 
 def get_selection_mask(

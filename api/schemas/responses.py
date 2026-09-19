@@ -10,6 +10,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 
 from api.schemas.dynamic_material import DynamicMaterialResultResponse
+from api.schemas.converter import SelectionDocumentResponse
 from api.schemas.lut import (
     LutCoverageStatsResponse,
     LutHullPoint,
@@ -830,6 +831,7 @@ class RecipeOverrideApplyResponse(DynamicMaterialResultResponse):
     override_count: int = 0
     can_undo: bool = False
     can_redo: bool = False
+    selection: SelectionDocumentResponse | None = None
 
 
 class RegionRecipeEntry(BaseModel):
@@ -907,6 +909,7 @@ class ColorReplaceResponse(DynamicMaterialResultResponse):
     replacement_count: int
     can_undo: bool = False
     can_redo: bool = False
+    selection: SelectionDocumentResponse | None = None
 
 
 class MergePreviewResponse(BaseModel):
@@ -931,6 +934,7 @@ class GenerateResponse(_NoPublic3mfDiskPathMixin):
     threemf_disk_path: Optional[str] = None
     warnings: list[str] = Field(default_factory=list)
     performance_timing: Optional[PerformanceTimingResponse] = None
+    editor_content_revision: int | None = None
 
 
 class RecipePredictionResponse(BaseModel):
@@ -971,6 +975,7 @@ class PuzzleGenerateResponse(_NoPublic3mfDiskPathMixin):
     grid_cols: int
     grid_rows: int
     warnings: list[str] = Field(default_factory=list)
+    editor_content_revision: int | None = None
 
 
 class LargeFormatGenerateResponse(BaseModel):
@@ -983,6 +988,7 @@ class LargeFormatGenerateResponse(BaseModel):
     grid_cols: int
     grid_rows: int
     warnings: list[str] = Field(default_factory=list)
+    editor_content_revision: int | None = None
 
 
 class BatchItemResult(BaseModel):
@@ -1220,3 +1226,4 @@ class ResetReplacementsResponse(DynamicMaterialResultResponse):
     preview_glb_url: str | None = None
     can_undo: bool = False
     can_redo: bool = False
+    selection: SelectionDocumentResponse | None = None

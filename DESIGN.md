@@ -8,6 +8,66 @@
 - **Content commits squash selection gestures:** point/brush/clear gestures are undoable until a replacement, free-colour, recipe, or gradient operation consumes them; that content action becomes one history item and undoing it preserves the execution-time selection.
 - **Selection display is derived once:** touching regions are unioned before contour tracing, then shown as non-scaling marching ants; internal shared edges are not rendered.
 
+## Color Adjustment Commit Boundary (2026-09-20)
+
+本节补充颜色调整链路的状态设计；不改变本文后续 UI 视觉规范。目标是让一次成功编辑只产生一个可追踪的已提交作品版本，让失败只影响当前操作，让预览和生成消费同一份已提交状态。
+
+### 1. 一个提交边界，复用现有状态
+
+所有会改变 `matched_rgb`、`material_matrix`、配方覆盖或持久选区的入口继续使用现有 SessionStore、预览缓存事务、replacement history、SelectionDocument 和 GLB token/CAS。统一顺序为：
+
+```text
+读取并校验当前 session/cache
+  → 等待同 session 的相反方向编辑提交
+  → 在缓存事务中修改 RGB/材料矩阵/目标图
+  → cache.commit 成功
+  → 失效并预热 visible-region cache，取得服务端真实 content generation
+  → 返回并合并权威 SelectionDocument
+  → 写入历史/配方持久字段
+  → 最后调度 GLB 派生任务
+```
+
+前端的 Promise barrier 只负责排序正在进行的请求，不保存第二份作品、历史或 mask。后端版本校验仍存在；barrier 失败会停止后续依赖操作，不会盲目重试。
+
+### 2. 四种版本分开处理
+
+| 版本 | 所有者 | 语义 | 处理方式 |
+| --- | --- | --- | --- |
+| 内容版本 | visible-region cache generation | 已提交的可见 RGB/几何内容 | 服务端生成；编辑响应返回；生成请求校验 |
+| 选区版本 | `SelectionDocument.selection_revision` | 共享选区 mask 的操作序列 | `selection/mutate` 串行提交；不因全局换色擅自递增 |
+| 选区内容绑定 | `SelectionDocument.content_revision` | 选区可用于哪一份可见内容 | 内容提交后由服务端刷新，客户端不猜 `+1` |
+| GLB 任务标识 | 现有 job token / publication revision | 派生 3D 工件是否仍属于当前内容 | 保留 token/CAS；旧任务只能被拒绝，不能覆盖新作品 |
+
+缓存内部 revision 仍由预览缓存事务管理，不能与选区 revision 或 GLB token 混用。响应丢失时，
+客户端先立即显示可恢复错误，再通过现有 `GET /convert/selection/{session_id}` 查询权威状态：
+内容版本已推进则保留编辑、同步 `SelectionDocument`，并以成功结果释放同 session 内容屏障；
+版本未推进或查询失败才回滚。这个查询不会重放 toggle、undo、redo，也不会接受旧 session
+或旧 epoch 的响应。
+
+### 3. 选区与内容编辑排序
+
+选区提交等待同 session 的未完成内容提交；依赖选区的内容编辑和生成等待未完成选区提交。等待只发生在确实存在未完成 Promise 时，正常无竞态路径保持同步调用形态。成功响应统一经过 `selectionUpdatesFromResponse`，过期响应不会回写较新的 `(selection_revision, content_revision)`；失败响应统一经过内容提交结果查询，明确区分“未提交”和“已提交但响应丢失”。
+
+这覆盖点选、同色选择、画笔、清空、全局/批量替色、区域替色、配方、渐变操作、撤销/重做、生成等入口。它不删除真实过期请求的 409，也不通过“失败后再点一次”完成同步。
+
+### 4. 基础输入与编辑派生层数分离
+
+`useAutoPreview` 的基础输入 key 只代表 source、几何、基础层数等需要重建预览的输入。手工配方的层数属于 `recipe_overrides` 的编辑派生状态，不写回基础 `color_layers`/`layer_height_mm`，也不触发破坏性 session 重建。生成时按基础层数与已应用配方的最大层数解析实际 worker 输入；真实 source 或几何变化仍按原有自动预览规则处理。
+
+### 5. 已应用配方使用持久空间目标
+
+应用配方时将实际 region mask 位压缩存进 `recipe_override_applied_masks`，并随 replacement history 一起快照。动态重建、生成和历史恢复都通过同一 `resolve_recipe_override_masks` 解析：现代 session 不再读取后续变化的临时 `editor_selection`；快照缺失或形状不符直接返回可恢复错误，不静默忽略、不扩大为全图。只有没有快照键的旧 session 使用显式 legacy fallback。
+
+### 6. 生成与派生失败语义
+
+生成先等待已提交编辑，发送明确的 `editor_content_revision`，服务端在进入 worker 前比较当前可见内容版本；响应绑定实际版本，前端以生成序号、session、编辑 epoch 和设备身份丢弃旧结果。生成不无理由等待 GLB。
+
+二维内容和材料矩阵一旦 `cache.commit` 成功，就不因后续 GLB 失败回滚。GLB 只更新派生状态；重试 GLB 不重放换色或配方。缓存事务失败则保留上一份已提交作品与会话字段。
+
+### 7. 为什么不新增旁路
+
+没有引入第二套编辑 store、第二套 mask、数据库事件溯源或全局锁。新增的前端 barrier 是请求排序器，新增的后端 helper 是现有 SelectionDocument/缓存/历史机制的单一解析和提交边界；所有持久数据仍挂在当前 session，锁仍按 session 作用域限制。
+
 ## 1. Visual Theme & Atmosphere
 
 Apple's web language is a precision editorial system that alternates between gallery-like calm and retail-density information blocks. The visual tone stays restrained: broad neutral canvases, quiet chrome, and product imagery given almost all of the expressive weight. The interface is engineered to disappear so hardware, materials, and finish options become the narrative foreground.
