@@ -20,6 +20,7 @@ import { useThemeConfig } from "../hooks/useThemeConfig";
 import { computeFitDistance } from "./ModelViewer";
 import {
   getModelSurfaceArtworkAssetKey,
+  resolveModelSurfaceArtworkSourceDimensions,
   type ModelSurfaceArtworkAsset,
 } from "./modelSurface/artworkAsset";
 import {
@@ -1405,13 +1406,22 @@ function useSurfaceArtworkTexture(
     }
 
     const image = loadedArtwork.image;
-    const sourceAspectRatio = loadedArtwork.asset.sourceAspectRatio;
-    const sourceWidth = sourceAspectRatio ?? (image.naturalWidth || image.width);
-    const sourceHeight = sourceAspectRatio ? 1 : image.naturalHeight || image.height;
+    const sourceDimensions = resolveModelSurfaceArtworkSourceDimensions(
+      loadedArtwork.asset,
+      image,
+    );
+    if (!sourceDimensions) {
+      textureRef.current?.dispose();
+      textureRef.current = null;
+      canvasRef.current = null;
+      setTexture(null);
+      invalidate();
+      return;
+    }
     const insetMm = placement.mode === "inset" ? Math.max(0, placement.inset_mm) : 0;
     const artworkSizeMm = computeArtworkPlacementDrawSizeMm({
-      sourceWidth,
-      sourceHeight,
+      sourceWidth: sourceDimensions.width,
+      sourceHeight: sourceDimensions.height,
       availableWidthMm: Math.max(0.001, surface.widthMm - insetMm * 2),
       availableHeightMm: Math.max(0.001, surface.heightMm - insetMm * 2),
       scale: placement.scale,

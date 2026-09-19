@@ -24,6 +24,11 @@ export interface SurfaceUvArtworkAsset {
 
 export type ModelSurfaceArtworkAsset = SourceImageArtworkAsset | SurfaceUvArtworkAsset;
 
+export interface ModelSurfaceArtworkSourceDimensions {
+  width: number;
+  height: number;
+}
+
 export interface ResolveModelSurfaceArtworkAssetInput {
   sourceImageUrl: string | null | undefined;
   processedPreviewUrl: string | null | undefined;
@@ -42,6 +47,28 @@ function nonEmptyString(value: string | null | undefined): string | null {
 
 function validAspectRatio(value: number | null | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/**
+ * Resolve dimensions for artwork placement from the source asset only.
+ * 仅从源图资产解析贴图摆放尺寸，禁止把已烘焙的表面画布当作源图。
+ */
+export function resolveModelSurfaceArtworkSourceDimensions(
+  asset: ModelSurfaceArtworkAsset,
+  image: Pick<HTMLImageElement, "naturalWidth" | "naturalHeight" | "width" | "height">,
+): ModelSurfaceArtworkSourceDimensions | null {
+  const sourceAspectRatio = validAspectRatio(asset.sourceAspectRatio);
+  if (sourceAspectRatio) {
+    return { width: sourceAspectRatio, height: 1 };
+  }
+
+  if (asset.kind === "surface-uv") {
+    return null;
+  }
+
+  const width = image.naturalWidth || image.width;
+  const height = image.naturalHeight || image.height;
+  return width > 0 && height > 0 ? { width, height } : null;
 }
 
 export function resolveModelSurfaceArtworkAsset(

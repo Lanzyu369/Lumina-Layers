@@ -3814,7 +3814,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
       if (isRawFileConverter(file)) {
         const shouldOpenCrop = currentState.enableCrop;
-        const nextPreviewRevision = currentState.previewRequestRevision + 1;
         set({
           imageFile: file,
           imagePreviewUrl: null,
@@ -3829,10 +3828,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         });
         uploadImagePreview(file)
           .then(({ preview_url, width, height }) => {
-            if (
-              _get().imageFile !== file ||
-              _get().previewRequestRevision !== nextPreviewRevision
-            ) {
+            if (_get().imageFile !== file || _get().imagePreviewUrl !== null) {
               return;
             }
             set({
@@ -3842,10 +3838,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             });
           })
           .catch((err) => {
-            if (
-              _get().imageFile !== file ||
-              _get().previewRequestRevision !== nextPreviewRevision
-            ) {
+            if (_get().imageFile !== file || _get().imagePreviewUrl !== null) {
               return;
             }
             set({ error: rawPreviewFailureMessage(err) });
@@ -3854,14 +3847,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }
 
       const previewUrl = URL.createObjectURL(file);
-      const nextPreviewRevision = currentState.previewRequestRevision + 1;
 
       // Calculate aspect ratio from image dimensions
       const img = new Image();
       img.onload = () => {
         if (
           _get().imageFile !== file ||
-          _get().previewRequestRevision !== nextPreviewRevision
+          _get().imagePreviewUrl !== previewUrl
         ) {
           return;
         }
@@ -3880,6 +3872,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set({
         imageFile: file,
         imagePreviewUrl: previewUrl,
+        aspectRatio: null,
         workshopSource: null,
         ...(isSvg ? loadSvgHoleCompensationSettings() : { svg_hole_compensation_enabled: false }),
         ...modelSurfaceArtworkReset,
@@ -3927,12 +3920,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         : {};
 
       const previewUrl = URL.createObjectURL(file);
-      const nextPreviewRevision = currentState.previewRequestRevision + 1;
       const img = new Image();
       img.onload = () => {
         if (
           _get().imageFile !== file ||
-          _get().previewRequestRevision !== nextPreviewRevision
+          _get().imagePreviewUrl !== previewUrl
         ) {
           return;
         }
@@ -9201,10 +9193,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           });
           uploadImagePreview(lastFile)
             .then(({ preview_url, width, height }) => {
-              if (
-                _get().imageFile !== lastFile ||
-                _get().previewRequestRevision !== nextPreviewRevision
-              ) {
+              if (_get().imageFile !== lastFile || _get().imagePreviewUrl !== null) {
                 return;
               }
               set({
@@ -9214,10 +9203,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
               });
             })
             .catch((err) => {
-              if (
-                _get().imageFile !== lastFile ||
-                _get().previewRequestRevision !== nextPreviewRevision
-              ) {
+              if (_get().imageFile !== lastFile || _get().imagePreviewUrl !== null) {
                 return;
               }
               set({ error: rawPreviewFailureMessage(err) });
@@ -9228,7 +9214,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           img.onload = () => {
             if (
               _get().imageFile !== lastFile ||
-              _get().previewRequestRevision !== nextPreviewRevision
+              _get().imagePreviewUrl !== previewUrl
             ) {
               return;
             }
@@ -9240,6 +9226,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             batchFiles: [],
             imageFile: lastFile,
             imagePreviewUrl: previewUrl,
+            aspectRatio: null,
             workshopSource: null,
             batchMode: false,
             hasManualPreview: false,
@@ -9434,10 +9421,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           });
           uploadImagePreview(singleFile)
             .then(({ preview_url, width, height }) => {
-              if (
-                _get().imageFile !== singleFile ||
-                _get().previewRequestRevision !== nextPreviewRevision
-              ) {
+              if (_get().imageFile !== singleFile || _get().imagePreviewUrl !== null) {
                 return;
               }
               set({
@@ -9447,10 +9431,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
               });
             })
             .catch((err) => {
-              if (
-                _get().imageFile !== singleFile ||
-                _get().previewRequestRevision !== nextPreviewRevision
-              ) {
+              if (_get().imageFile !== singleFile || _get().imagePreviewUrl !== null) {
                 return;
               }
               set({ error: rawPreviewFailureMessage(err) });
@@ -9464,7 +9445,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         img.onload = () => {
           if (
             _get().imageFile !== singleFile ||
-            _get().previewRequestRevision !== nextPreviewRevision
+            _get().imagePreviewUrl !== previewUrl
           ) {
             return;
           }
@@ -9475,6 +9456,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         set({
           imageFile: singleFile,
           imagePreviewUrl: previewUrl,
+          aspectRatio: null,
           workshopSource: null,
           previewImageUrl: null,
           previewBaseImageUrl: null,

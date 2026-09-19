@@ -64,6 +64,29 @@ function previewResponse() {
   };
 }
 
+function modelSurfaceFootprint() {
+  return {
+    bounds_width_mm: 20,
+    bounds_height_mm: 10,
+    frame: {
+      origin: [0, 0, 1],
+      normal: [0, 0, 1],
+      u_axis: [1, 0, 0],
+      v_axis: [0, 1, 0],
+    },
+    outer: [[-10, -5], [10, -5], [10, 5], [-10, 5], [-10, -5]],
+    holes: [],
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe("model surface overlay store flow", () => {
   beforeEach(() => {
     resetStore();
@@ -120,6 +143,258 @@ describe("model surface overlay store flow", () => {
     expect(state.modelSurfaceCandidates).toEqual([
       expect.objectContaining({ id: "surface-4", face_index: 4 }),
     ]);
+  });
+
+  it("keeps the source aspect ratio when a model is imported before Image.onload", async () => {
+    const originalImage = globalThis.Image;
+    const pendingImages: Array<{
+      naturalWidth: number;
+      naturalHeight: number;
+      onload: (() => void) | null;
+      onerror: (() => void) | null;
+      src: string;
+    }> = [];
+    class DeferredImage {
+      naturalWidth = 80;
+      naturalHeight = 40;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      private _src = "";
+
+      get src(): string {
+        return this._src;
+      }
+
+      set src(value: string) {
+        this._src = value;
+        pendingImages.push(this);
+      }
+    }
+    Object.defineProperty(window, "Image", {
+      configurable: true,
+      writable: true,
+      value: DeferredImage,
+    });
+    vi.stubGlobal("Image", DeferredImage);
+    mocks.uploadModelSurface.mockResolvedValueOnce({
+      status: "ok",
+      model_file_id: "model-file-mixed-import",
+      summary: null,
+      surface_candidates: [],
+      warnings: [],
+    });
+
+    try {
+      const sourceFile = new File(["source"], "source.png", { type: "image/png" });
+      const modelFile = new File(["solid"], "plate.stl", {
+        type: "application/octet-stream",
+      });
+
+      useConverterStore.setState({ imageFile: null, imagePreviewUrl: null });
+      useConverterStore.getState().handleFilesSelect([sourceFile]);
+      const upload = useConverterStore.getState().uploadModelSurfaceFile(modelFile);
+
+      expect(useConverterStore.getState().aspectRatio).toBeNull();
+      expect(pendingImages).toHaveLength(1);
+
+      pendingImages[0].onload?.();
+      await upload;
+
+      expect(useConverterStore.getState().imageFile).toBe(sourceFile);
+      expect(useConverterStore.getState().aspectRatio).toBe(2);
+    } finally {
+      Object.defineProperty(window, "Image", {
+        configurable: true,
+        writable: true,
+        value: originalImage,
+      });
+      vi.stubGlobal("Image", originalImage);
+    }
+  });
+
+  it("clears the old aspect ratio before a replacement image finishes loading", () => {
+    const originalImage = globalThis.Image;
+    const pendingImages: Array<{
+      naturalWidth: number;
+      naturalHeight: number;
+      onload: (() => void) | null;
+      onerror: (() => void) | null;
+      src: string;
+    }> = [];
+    class DeferredImage {
+      naturalWidth = pendingImages.length === 0 ? 80 : 40;
+      naturalHeight = pendingImages.length === 0 ? 40 : 80;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      private _src = "";
+
+      get src(): string {
+        return this._src;
+      }
+
+      set src(value: string) {
+        this._src = value;
+        pendingImages.push(this);
+      }
+    }
+    Object.defineProperty(window, "Image", {
+      configurable: true,
+      writable: true,
+      value: DeferredImage,
+    });
+    vi.stubGlobal("Image", DeferredImage);
+
+    try {
+      const firstFile = new File(["first"], "first.png", { type: "image/png" });
+      const secondFile = new File(["second"], "second.png", { type: "image/png" });
+
+      useConverterStore.getState().setImageFile(firstFile);
+      pendingImages[0].onload?.();
+      expect(useConverterStore.getState().aspectRatio).toBe(2);
+
+      useConverterStore.getState().setImageFile(secondFile);
+      expect(useConverterStore.getState().aspectRatio).toBeNull();
+
+      pendingImages[0].onload?.();
+      expect(useConverterStore.getState().aspectRatio).toBeNull();
+
+      pendingImages[1].onload?.();
+      expect(useConverterStore.getState().imageFile).toBe(secondFile);
+      expect(useConverterStore.getState().aspectRatio).toBe(0.5);
+    } finally {
+      Object.defineProperty(window, "Image", {
+        configurable: true,
+        writable: true,
+        value: originalImage,
+      });
+      vi.stubGlobal("Image", originalImage);
+    }
+  });
+
+  it.each([
+    {
+      label: "artwork placement",
+      mutate: async () => {
+        useConverterStore.getState().updateModelSurfacePlacement({
+          offset_y_mm: 2,
+          scale: 1.25,
+        });
+      },
+    },
+    {
+      label: "source image",
+      mutate: async () => {
+        useConverterStore.getState().setImageFile(
+          new File(["replacement"], "replacement.png", { type: "image/png" }),
+        );
+      },
+    },
+    {
+      label: "model file",
+      mutate: async () => {
+        mocks.uploadModelSurface.mockResolvedValueOnce({
+          status: "ok",
+          model_file_id: "model-file-next",
+          summary: null,
+          surface_candidates: [],
+          warnings: [],
+        });
+        await useConverterStore.getState().uploadModelSurfaceFile(
+          new File(["solid"], "replacement.stl", { type: "application/octet-stream" }),
+        );
+      },
+    },
+    {
+      label: "selected face",
+      mutate: async () => {
+        mocks.selectModelSurface.mockResolvedValueOnce({
+          status: "ok",
+          selection_id: "selection-next",
+          selection: { face_indices: [2], face_count: 1 },
+          footprint: modelSurfaceFootprint(),
+          warnings: [],
+        });
+        await useConverterStore.getState().selectModelSurfaceFace(2, "surface-next");
+      },
+    },
+  ])("rejects a late preview after changing $label", async ({ mutate }) => {
+    const imageFile = new File(["image"], "art.png", { type: "image/png" });
+    useConverterStore.setState({
+      imageFile,
+      imagePreviewUrl: "blob:image",
+      aspectRatio: 2,
+      source_version: "legacy",
+      lut_name: "default",
+      lut_names: ["default"],
+      enableCrop: false,
+      cropModalOpen: false,
+      batchFiles: [],
+      batchMode: false,
+      modelSurfaceEnabled: true,
+      modelSurfaceModelFileId: "model-file-1",
+      modelSurfaceFile: new File(["solid"], "plate.stl"),
+      modelSurfaceSelectionId: "selection-1",
+      modelSurfaceSelection: { face_indices: [0], face_count: 1 },
+      modelSurfaceFootprint: modelSurfaceFootprint(),
+      sessionId: null,
+      previewImageUrl: null,
+      previewGlbUrl: null,
+      isLoading: false,
+    } as never);
+
+    const pending = deferred<ReturnType<typeof previewResponse>>();
+    mocks.convertPreview.mockReturnValueOnce(pending.promise);
+    const request = useConverterStore.getState().submitPreview();
+    expect(mocks.convertPreview).toHaveBeenCalledOnce();
+
+    await mutate();
+    pending.resolve({
+      ...previewResponse(),
+      session_id: "stale-session",
+      preview_url: "/api/files/stale-preview",
+    });
+    await request;
+
+    expect(useConverterStore.getState().sessionId).toBeNull();
+    expect(useConverterStore.getState().previewImageUrl).toBeNull();
+    expect(useConverterStore.getState().previewGlbUrl).toBeNull();
+  });
+
+  it("commits the newer preview and rejects the older response when responses return out of order", async () => {
+    const imageFile = new File(["image"], "art.png", { type: "image/png" });
+    useConverterStore.setState({
+      imageFile,
+      imagePreviewUrl: "blob:image",
+      aspectRatio: 2,
+      source_version: "legacy",
+      lut_name: "default",
+      lut_names: ["default"],
+      enableCrop: false,
+      cropModalOpen: false,
+      batchFiles: [],
+      batchMode: false,
+      sessionId: null,
+      previewImageUrl: null,
+      previewGlbUrl: null,
+      isLoading: false,
+    } as never);
+    const first = deferred<ReturnType<typeof previewResponse>>();
+    const second = deferred<ReturnType<typeof previewResponse>>();
+    mocks.convertPreview
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+
+    const firstRequest = useConverterStore.getState().submitPreview();
+    const secondRequest = useConverterStore.getState().submitPreview();
+    expect(mocks.convertPreview).toHaveBeenCalledTimes(2);
+
+    second.resolve({ ...previewResponse(), session_id: "session-b", preview_url: "/api/files/b" });
+    await secondRequest;
+    first.resolve({ ...previewResponse(), session_id: "session-a", preview_url: "/api/files/a" });
+    await firstRequest;
+
+    expect(useConverterStore.getState().sessionId).toBe("session-b");
+    expect(useConverterStore.getState().previewImageUrl).toBe("/api/files/b");
   });
 
   it("ignores surface selection while the model upload is still pending", async () => {
