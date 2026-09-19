@@ -345,3 +345,48 @@ def test_lease_table_with_unknown_fields_is_treated_as_untrustworthy(
         requested_workers=4, effective_cpu_capacity=8, stage="test"
     )
     assert (grant.workers, grant.state) == (1, "invalid")
+
+
+@pytest.mark.parametrize(
+    "fake_pid", [999_999, 1_000_000, 1_000_001, 1_500_000, 4_194_303]
+)
+def test_worker_lease_lifecycle_accepts_high_platform_pids_without_poisoning_siblings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pid: int,
+) -> None:
+    """A valid OS PID must survive every real lease-table operation."""
+
+    runtime = _runtime_module()
+    monkeypatch.setattr(runtime, "_process_create_time", lambda _pid: 1234.0)
+    monkeypatch.setattr(runtime, "_lease_owner_alive", lambda _pid, _created: True)
+    publisher = runtime.OuterDemandPublisher(max_workers=8, parent_dir=tmp_path)
+    store = runtime.WorkerLeaseStore(publisher.worker_lease_path)
+    try:
+        sibling = store.reserve(
+            requested_workers=1,
+            effective_cpu_capacity=8,
+            stage="sibling",
+            owner_pid=42,
+        )
+        grant = store.reserve(
+            requested_workers=2,
+            effective_cpu_capacity=8,
+            stage="material",
+            owner_pid=fake_pid,
+        )
+        leases, invalid = runtime.read_worker_leases(publisher.worker_lease_path)
+        assert invalid is False
+        assert grant.token in leases
+        assert sibling.token in leases
+        assert store.allowed_workers(grant.token) == 2
+        assert store.release(grant.token) is True
+        remaining, invalid_after_release = runtime.read_worker_leases(
+            publisher.worker_lease_path
+        )
+        assert invalid_after_release is False
+        assert grant.token not in remaining
+        assert sibling.token in remaining
+        assert store.release(sibling.token) is True
+    finally:
+        publisher.cleanup()

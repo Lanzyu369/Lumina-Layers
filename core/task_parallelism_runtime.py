@@ -18,6 +18,11 @@ DEMAND_SNAPSHOT_VERSION = 1
 WORKER_LEASE_VERSION = 1
 MAX_REASONABLE_OUTSTANDING_TASKS = 1_000_000
 MAX_REASONABLE_LEASED_WORKERS = 1_000_000
+# Process identifiers are an OS scalar, not a task-count scalar. Linux's
+# configurable pid_max is commonly 4,194,304 and Windows exposes PIDs as a
+# DWORD; keep a bounded unsigned-32-bit envelope without coupling it to the
+# number of tasks the scheduler may publish.
+MAX_REASONABLE_PROCESS_ID = (1 << 32) - 1
 
 WORKER_LEASE_FILENAME = "workers.json"
 WORKER_LEASE_LOCK_FILENAME = "workers.lock"
@@ -311,7 +316,7 @@ def read_worker_leases(
                 return {}, True
             leases[token] = {
                 "pid": _snapshot_int(
-                    entry, "pid", minimum=1, maximum=MAX_REASONABLE_OUTSTANDING_TASKS
+                    entry, "pid", minimum=1, maximum=MAX_REASONABLE_PROCESS_ID
                 ),
                 "created": float(created),
                 "touched": float(touched),
