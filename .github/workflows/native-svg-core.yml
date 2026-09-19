@@ -66,6 +66,9 @@ jobs:
           python -m pip install --force-reinstall wheelhouse/*.whl pytest "shapely>=2,<3"
           python native/lumina-svg-core/tools/verify_wheel.py --installed
           (cd native/lumina-svg-core && LUMINA_SVG_REPLAY_THREADS=4 python -m pytest tests -q)
+          cmake -S native/lumina-svg-core -B native-svg-canonical-regression -G Ninja -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build native-svg-canonical-regression --target lumina_svg_canonical_predicates_regression
+          ctest --test-dir native-svg-canonical-regression --output-on-failure -R lumina_svg_canonical_predicates_regression
           python - <<'PY'
           from pathlib import Path
           import lumina_svg_core

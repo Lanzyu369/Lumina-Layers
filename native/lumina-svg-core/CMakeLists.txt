@@ -9,6 +9,8 @@ endif()
 
 project(lumina_svg_core VERSION 0.3.0 LANGUAGES C CXX)
 
+include(CTest)
+
 option(
   LUMINA_SVG_BUILD_RASTER_ORACLE
   "Build the local LunaSVG raster-oracle executable"
@@ -105,3 +107,24 @@ install(
   DESTINATION .
   COMPONENT lumina_svg_core
 )
+
+if(BUILD_TESTING)
+  add_executable(
+    lumina_svg_canonical_predicates_regression
+    tests/canonical_predicates_regression.cpp
+  )
+  target_include_directories(
+    lumina_svg_canonical_predicates_regression
+    PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_link_libraries(
+    lumina_svg_canonical_predicates_regression
+    PRIVATE
+    Clipper2
+  )
+  add_test(
+    NAME lumina_svg_canonical_predicates_regression
+    COMMAND lumina_svg_canonical_predicates_regression
+  )
+endif()
