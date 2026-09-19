@@ -25,6 +25,7 @@ import time
 
 import numpy as np
 import pytest
+from shapely.errors import GEOSException
 from shapely.geometry import box
 
 from core import vector_engine
@@ -550,6 +551,113 @@ def test_sibling_processes_are_stopped_when_a_material_fails(
     assert pool.shutdown_calls, "the pool was never shut down"
 
 
+@pytest.mark.parametrize("failure", ["worker", "result", "cancelled"])
+def test_late_failure_restores_already_released_inputs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failure: str,
+) -> None:
+    """A successful material must remain retryable after a sibling fails."""
+    from shapely import get_precision, get_srid, set_precision, set_srid
+
+    slots = _slots(3)
+    first = slots["material-0"]["slabs"]
+    first[0]["geometry"] = set_srid(set_precision(first[0]["geometry"], 0.125), 4326)
+    first[0]["kind"] = "body"
+    first[0]["height"] = np.float64(first[0]["height"])
+    original = [dict(slab) for slab in first]
+
+    class LateFailurePool(_ScriptedPool):
+        def _complete(self, index, future, args):
+            if index != 1:
+                return super()._complete(index, future, args)
+            assert not first, "successful inputs should be released before the next result"
+            if failure == "worker":
+                future.set_exception(ValueError("late worker failure"))
+            elif failure == "cancelled":
+                future.cancel()
+                future.set_running_or_notify_cancel()
+            else:
+                Path(args[1]).write_bytes(b"invalid npz")
+                future.set_result((args[1], 4242, 1.5))
+
+    pool = LateFailurePool([_BLOCKED] * 3, _expected(slots), release_schedule=[0, 1])
+    expected_error = CancelledError if failure == "cancelled" else ValueError
+    with pytest.raises(expected_error):
+        _run(monkeypatch, tmp_path, slots, pool)
+
+    assert slots["material-0"]["slabs"] is first
+    assert len(first) == len(original)
+    for restored, before in zip(first, original, strict=True):
+        assert restored.keys() == before.keys()
+        assert restored["kind"] == before["kind"]
+        assert type(restored["height"]) is type(before["height"])
+        assert restored["height"] == before["height"]
+        assert restored["geometry"].wkb == before["geometry"].wkb
+        assert get_precision(restored["geometry"]) == get_precision(before["geometry"])
+        assert get_srid(restored["geometry"]) == get_srid(before["geometry"])
+    assert all(data["slabs"] for data in slots.values())
+    assert not list(tmp_path.glob("lumina-vector-material-*"))
+
+    retry = _ScriptedPool([_BLOCKED] * 3, _expected(slots), release_schedule=[2, 0, 1])
+    result, *_ = _run(monkeypatch, tmp_path, slots, retry)
+    assert list(result) == list(slots)
+    assert all(not data["slabs"] for data in slots.values())
+
+
+def test_rollback_checkpoint_does_not_retain_completed_geometry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    import weakref
+
+    slots = _slots(3)
+    geometry = weakref.ref(slots["material-0"]["slabs"][0]["geometry"])
+    pool = _ScriptedPool([_BLOCKED] * 3, _expected(slots), release_schedule=[0, 1, 2])
+    checked = []
+
+    def check_release():
+        if pool.results_seen == [0]:
+            assert not slots["material-0"]["slabs"]
+            assert geometry() is None
+            checked.append(True)
+
+    _run(monkeypatch, tmp_path, slots, pool, on_wait=check_release)
+    assert checked == [True]
+
+
+@pytest.mark.parametrize("restore_failure", [MemoryError, GEOSException, KeyboardInterrupt])
+def test_restore_failure_preserves_worker_error_and_restores_other_materials(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, restore_failure: type[BaseException],
+) -> None:
+    from core import vector_material_meshing as materializer
+
+    slots = _slots(3)
+    original_error = ValueError("original worker failure")
+
+    class LateFailurePool(_ScriptedPool):
+        def _complete(self, index, future, args):
+            if index == 2:
+                future.set_exception(original_error)
+            else:
+                super()._complete(index, future, args)
+
+    read_input = materializer._read_material_input
+
+    def fail_first_restore(path):
+        if path.name == "0.json":
+            raise restore_failure("restore unavailable")
+        return read_input(path)
+
+    monkeypatch.setattr(materializer, "_read_material_input", fail_first_restore)
+    pool = LateFailurePool([_BLOCKED] * 3, _expected(slots), release_schedule=[0, 1, 2])
+    with pytest.raises(ValueError, match="original worker failure") as caught:
+        _run(monkeypatch, tmp_path, slots, pool)
+    assert caught.value is original_error
+    assert any("material-0" in note and "restore unavailable" in note
+               for note in caught.value.__notes__)
+    assert slots["material-1"]["slabs"]
+    assert slots["material-2"]["slabs"]
+    assert not list(tmp_path.glob("lumina-vector-material-*"))
+
+
 def test_out_of_order_completion_still_returns_original_material_order(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -821,7 +929,9 @@ def test_material_stage_reports_its_internal_split(
     pool = _ScriptedPool(
         [_BLOCKED] * 3, _expected(slots), release_schedule=[2, 0, 1]
     )
+    started = time.perf_counter()
     _result, timings, _stops, _pool = _run(monkeypatch, tmp_path, slots, pool)
+    elapsed = time.perf_counter() - started
 
     assert timings["materialize_input_write_s"] >= 0.0
     assert timings["materialize_input_bytes"] > 0
@@ -829,11 +939,12 @@ def test_material_stage_reports_its_internal_split(
     assert timings["materialize_result_read_s"] >= 0.0
     assert timings["materialize_worker_wait_s"] >= 0.0
     assert timings["materialize_first_result_s"] is not None
-    # The split must not claim to be the whole stage.
+    # Disjoint phase durations fit within the stage; their relative speeds vary.
     assert (
         timings["materialize_input_write_s"] + timings["materialize_worker_wait_s"]
-        >= timings["materialize_result_read_s"]
+        + timings["materialize_result_read_s"] <= elapsed
     )
+    assert 0 <= timings["materialize_first_result_s"] <= elapsed
     # The whole owned group and the container charge are recorded, not just
     # this process's own RSS.
     assert timings["materialize_owned_group_rss_start_bytes"] is not None

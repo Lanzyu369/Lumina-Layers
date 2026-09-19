@@ -112,7 +112,10 @@ def _read_material_input(path: Path) -> list[dict]:
         geometry = shapely.from_wkb(encoded) if encoded is not None else None
         precision = record.pop("precision")
         if geometry is not None and precision > 0:
-            geometry = shapely.set_precision(geometry, precision, mode="pointwise")
+            srid = shapely.get_srid(geometry)
+            geometry = shapely.set_srid(
+                shapely.set_precision(geometry, precision, mode="pointwise"), srid
+            )
         record["geometry"] = geometry
     return records
 
@@ -395,7 +398,7 @@ def materialize_material_meshes(
     # 进程停止之后，使后到任务不会取到仍在使用中的容量。
     with _worker_lease_scope(lease_store, grant, timings):
         # Reserve all retained output above; only `workers` builders run at once.
-        # Workers never mutate source slabs. Commit and release inputs in order.
+        # Release inputs on completion; restore them if the transaction fails.
         lifetime = MaterialProcessLifetime()
         try:
             try:
@@ -590,6 +593,45 @@ def _materialize_serial(
     return result
 
 
+@contextmanager
+def _material_input_rollback(
+    items: list[tuple[str, dict]], inputs: list[str],
+) -> Iterator[Callable[[int], None]]:
+    """Restore released inputs on failure using the existing transport files.
+
+    失败时从已有传输文件恢复已释放的输入；成功路径不保留几何对象副本。
+    """
+    released: dict[int, list[dict]] = {}
+
+    def release(index: int) -> None:
+        data = items[index][1]
+        slabs = data["slabs"]
+        if not isinstance(slabs, list):
+            return
+        # Keep arbitrary attributes and scalar types, but not the large geometry.
+        released[index] = [
+            {key: None if key == "geometry" else value for key, value in slab.items()}
+            for slab in slabs
+        ]
+        _release_material_input(data)
+
+    try:
+        yield release
+    except BaseException as error:  # Transaction boundary, including cancellation.
+        for index, metadata in released.items():
+            try:
+                restored = _read_material_input(Path(inputs[index]))
+                for slab, saved in zip(metadata, restored, strict=True):
+                    if "geometry" in slab:
+                        slab["geometry"] = saved["geometry"]
+                items[index][1]["slabs"][:] = metadata
+            except BaseException as restore_error:  # Cleanup must preserve the original failure.
+                error.add_note(
+                    f"Could not restore material {items[index][0]!r}: {restore_error}"
+                )
+        raise
+
+
 def _materialize_in_processes(
     items: list[tuple[str, dict]],
     scale_factor: float,
@@ -645,7 +687,7 @@ def _materialize_in_processes(
         demand_snapshot = current_demand_snapshot_path()
         slots: list[trimesh.Trimesh | None] = [None] * len(items)
         try:
-            with ProcessPoolExecutor(
+            with _material_input_rollback(items, inputs) as release_input, ProcessPoolExecutor(
                 max_workers=workers,
                 mp_context=multiprocessing.get_context("spawn"),
                 initializer=_initialize_material_process,
@@ -724,7 +766,7 @@ def _materialize_in_processes(
                                 result_bytes += Path(output_path).stat().st_size
                             except OSError:
                                 pass
-                            _release_material_input(data)
+                            release_input(index)
                             if first_result_s is None:
                                 first_result_s = time.perf_counter() - dispatch_started
                 except BaseException:  # Process boundary: stop siblings before shutdown waits.
@@ -749,10 +791,10 @@ def _materialize_in_processes(
                     timings["materialize_result_read_s"] = result_read_s
                     timings["materialize_result_bytes"] = result_bytes
                     timings["materialize_first_result_s"] = first_result_s
+                for index, (name, data) in enumerate(items):
+                    _record_material_result(result, name, data, slots[index])
         except BrokenProcessPool as exc:
             raise RuntimeError("Vector material worker exited unexpectedly") from exc
-    for index, (name, data) in enumerate(items):
-        _record_material_result(result, name, data, slots[index])
     return result
 
 
