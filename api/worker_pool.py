@@ -11,6 +11,7 @@ from concurrent.futures import CancelledError as FutureCancelledError
 from concurrent.futures import Future as ConcurrentFuture
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Literal, TypeVar
 import asyncio
@@ -41,6 +42,19 @@ _HOST_MEMORY_MIN_HEADROOM_BYTES = 2 * 1024**3
 _HOST_MEMORY_HEADROOM_DENOMINATOR = 10
 _HOST_MEMORY_SMALL_TASK_HEADROOM_BYTES = 1024**3
 _HOST_MEMORY_SMALL_TASK_MAX_BYTES = 2 * 1024**3
+
+
+@dataclass(frozen=True)
+class _MemoryReservation:
+    granted_bytes: int
+    required_bytes: int
+    owner: object
+
+
+@dataclass
+class _MemoryWaiter:
+    loop: asyncio.AbstractEventLoop
+    event: asyncio.Event
 
 
 def _available_host_memory_bytes() -> int | None:
@@ -84,8 +98,10 @@ class _HostMemoryReservationGate:
     ) -> None:
         self._memory_budget_bytes = max(1, int(memory_budget_bytes))
         self._sample_live_memory = bool(sample_live_memory)
-        self._lock = threading.Lock()
-        self._reservations: dict[str, tuple[int, object]] = {}
+        self._condition = threading.Condition()
+        self._reservations: dict[str, _MemoryReservation] = {}
+        self._waiters: list[_MemoryWaiter] = []
+        self._closed = False
 
     @property
     def memory_budget_bytes(self) -> int:
@@ -93,8 +109,69 @@ class _HostMemoryReservationGate:
 
     @property
     def reserved_bytes(self) -> int:
-        with self._lock:
-            return sum(amount for amount, _owner in self._reservations.values())
+        with self._condition:
+            return sum(item.granted_bytes for item in self._reservations.values())
+
+    def _capacity_locked(self, requested: int, reserved: int) -> int:
+        capacity = self._memory_budget_bytes
+        if self._sample_live_memory:
+            available = _available_host_memory_bytes()
+            if available is None:
+                raise VectorHostMemoryAdmissionError(
+                    requested, reserved, capacity, "memory_probe_unavailable"
+                )
+            capacity = min(capacity, _usable_host_memory_bytes(available))
+            if reserved == 0 and requested <= _HOST_MEMORY_SMALL_TASK_MAX_BYTES:
+                capacity = max(
+                    capacity,
+                    min(
+                        self._memory_budget_bytes,
+                        max(0, available - _HOST_MEMORY_SMALL_TASK_HEADROOM_BYTES),
+                    ),
+                )
+        return capacity
+
+    def _reserve_locked(
+        self,
+        requested: int,
+        *,
+        owner: object,
+        capacity: int,
+        reserved: int,
+        parallel_target_bytes: int | None,
+    ) -> tuple[str, int]:
+        task_budget = requested
+        if parallel_target_bytes is not None:
+            target = max(task_budget, int(parallel_target_bytes))
+            spare = max(0, capacity - reserved - task_budget)
+            extension = max(0, min(target - task_budget, spare))
+            if extension:
+                _log.debug(
+                    "Host memory parallel extension granted",
+                    extra={
+                        "event": "worker_pool_memory_extension",
+                        "requested_bytes": requested,
+                        "parallel_target_bytes": target,
+                        "granted_bytes": task_budget + extension,
+                        "extension_bytes": extension,
+                        "spare_bytes": spare,
+                    },
+                )
+            task_budget += extension
+        token = uuid.uuid4().hex
+        self._reservations[token] = _MemoryReservation(
+            granted_bytes=task_budget,
+            required_bytes=requested,
+            owner=owner,
+        )
+        return token, task_budget
+
+    def _signal_waiters_locked(self) -> None:
+        for waiter in tuple(self._waiters):
+            try:
+                waiter.loop.call_soon_threadsafe(waiter.event.set)
+            except RuntimeError:
+                pass
 
     def acquire(
         self,
@@ -119,38 +196,11 @@ class _HostMemoryReservationGate:
         """
 
         requested = max(1, int(requested_bytes))
-        with self._lock:
+        with self._condition:
             reserved = sum(
-                amount for amount, _owner in self._reservations.values()
+                item.granted_bytes for item in self._reservations.values()
             )
-            capacity = self._memory_budget_bytes
-            if self._sample_live_memory:
-                available = _available_host_memory_bytes()
-                if available is None:
-                    raise VectorHostMemoryAdmissionError(
-                        requested,
-                        reserved,
-                        capacity,
-                        "memory_probe_unavailable",
-                    )
-                capacity = min(
-                    capacity,
-                    _usable_host_memory_bytes(available),
-                )
-                if reserved == 0 and requested <= _HOST_MEMORY_SMALL_TASK_MAX_BYTES:
-                    # A low-memory desktop may have less than the normal 2 GiB
-                    # headroom available even when no Lumina work is running.
-                    # Admit exactly one fully budgeted small task while still
-                    # leaving 1 GiB for the OS/UI. Any concurrent task uses the
-                    # stricter normal capacity because ``reserved`` is nonzero.
-                    single_small_task_capacity = min(
-                        self._memory_budget_bytes,
-                        max(
-                            0,
-                            available - _HOST_MEMORY_SMALL_TASK_HEADROOM_BYTES,
-                        ),
-                    )
-                    capacity = max(capacity, single_small_task_capacity)
+            capacity = self._capacity_locked(requested, reserved)
             # A reservation is also the worker-local safety budget.  Never
             # silently shrink it to whatever happens to be free: Vector work
             # performs bounded-but-nonzero parsing before the 3D mesh guard,
@@ -167,42 +217,128 @@ class _HostMemoryReservationGate:
                     capacity,
                     "host_capacity_busy",
                 )
-            if parallel_target_bytes is not None:
-                target = max(task_budget, int(parallel_target_bytes))
-                spare = max(0, capacity - reserved - task_budget)
-                extension = max(0, min(target - task_budget, spare))
-                if extension:
-                    _log.debug(
-                        "Host memory parallel extension granted",
-                        extra={
-                            "event": "worker_pool_memory_extension",
-                            "requested_bytes": requested,
-                            "parallel_target_bytes": target,
-                            "granted_bytes": task_budget + extension,
-                            "extension_bytes": extension,
-                            "spare_bytes": spare,
-                        },
-                    )
-                task_budget += extension
-            token = uuid.uuid4().hex
-            self._reservations[token] = (task_budget, owner)
-            return token, task_budget
+            return self._reserve_locked(
+                requested,
+                owner=owner,
+                capacity=capacity,
+                reserved=reserved,
+                parallel_target_bytes=parallel_target_bytes,
+            )
+
+    async def acquire_async(
+        self,
+        requested_bytes: int,
+        *,
+        owner: object,
+        parallel_target_bytes: int | None = None,
+        timeout: float | None = None,
+    ) -> tuple[str, int]:
+        """Wait for optional-extension contention without occupying the pool.
+
+        在父进程内等待可选扩展争用；未取得真实预留前不进入 executor。
+        """
+
+        requested = max(1, int(requested_bytes))
+        waiter = _MemoryWaiter(asyncio.get_running_loop(), asyncio.Event())
+        deadline = (
+            asyncio.get_running_loop().time() + timeout
+            if timeout is not None
+            else None
+        )
+        with self._condition:
+            self._waiters.append(waiter)
+        try:
+            while True:
+                with self._condition:
+                    waiter.event.clear()
+                    if self._closed:
+                        raise RuntimeError("worker pool memory gate is closed")
+                    if self._waiters[0] is not waiter:
+                        capacity = None
+                    else:
+                        reserved = sum(
+                            item.granted_bytes
+                            for item in self._reservations.values()
+                        )
+                        required_reserved = sum(
+                            item.required_bytes
+                            for item in self._reservations.values()
+                        )
+                        capacity = self._capacity_locked(requested, reserved)
+                        if (
+                            requested > self._memory_budget_bytes
+                            or required_reserved + requested > capacity
+                        ):
+                            raise VectorHostMemoryAdmissionError(
+                                requested,
+                                reserved,
+                                capacity,
+                                "host_capacity_busy",
+                            )
+                        target = (
+                            max(requested, int(parallel_target_bytes))
+                            if parallel_target_bytes is not None
+                            else requested
+                        )
+                        target_can_fit_after_optional_release = (
+                            target <= capacity - required_reserved
+                        )
+                        current_can_fit = reserved + requested <= capacity
+                        full_target_can_fit = reserved + target <= capacity
+                        if current_can_fit and (
+                            parallel_target_bytes is None
+                            or full_target_can_fit
+                            or not target_can_fit_after_optional_release
+                        ):
+                            self._waiters.pop(0)
+                            return self._reserve_locked(
+                                requested,
+                                owner=owner,
+                                capacity=capacity,
+                                reserved=reserved,
+                                parallel_target_bytes=parallel_target_bytes,
+                            )
+                if deadline is None:
+                    await waiter.event.wait()
+                else:
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        raise asyncio.TimeoutError
+                    await asyncio.wait_for(waiter.event.wait(), remaining)
+        finally:
+            with self._condition:
+                if waiter in self._waiters:
+                    self._waiters.remove(waiter)
+                self._signal_waiters_locked()
+
+    def close_waiters(self) -> None:
+        """Cancel pending admission waits while preserving live reservations."""
+
+        with self._condition:
+            self._closed = True
+            self._signal_waiters_locked()
+
+    def reopen_waiters(self) -> None:
+        with self._condition:
+            self._closed = False
 
     def release(self, token: str) -> None:
         """Idempotently release a reservation after its executor future ends."""
 
-        with self._lock:
+        with self._condition:
             self._reservations.pop(str(token), None)
+            self._signal_waiters_locked()
 
     def release_owner(self, owner: object) -> None:
         """Release all reservations for an executor proven to be stopped."""
 
-        with self._lock:
-            for token, (_amount, reservation_owner) in list(
+        with self._condition:
+            for token, reservation in list(
                 self._reservations.items()
             ):
-                if reservation_owner is owner:
+                if reservation.owner is owner:
                     self._reservations.pop(token, None)
+            self._signal_waiters_locked()
 
 
 def _default_max_tasks_per_child() -> int:
@@ -631,6 +767,7 @@ class WorkerPoolManager:
         with self._pool_lock:
             if self._pool is not None:
                 return
+            self._host_memory_gate.reopen_waiters()
             if self._demand_publisher is None:
                 self._demand_publisher = self._create_demand_publisher()
             self._pool = ProcessPoolExecutor(
@@ -830,14 +967,25 @@ class WorkerPoolManager:
         )
         reservation_token: str | None = None
         task_host_memory_budget: int | None = None
+        memory_admission_started = loop.time()
         if host_memory_reservation_bytes is not None:
             reservation_token, task_host_memory_budget = (
-                self._host_memory_gate.acquire(
+                await self._host_memory_gate.acquire_async(
                     host_memory_reservation_bytes,
                     owner=pool,
                     parallel_target_bytes=host_memory_parallel_target_bytes,
+                    timeout=effective_timeout,
                 )
             )
+        memory_admission_wait_s = max(
+            0.0, loop.time() - memory_admission_started
+        )
+        if effective_timeout is not None:
+            effective_timeout -= memory_admission_wait_s
+            if effective_timeout <= 0:
+                if reservation_token is not None:
+                    self._host_memory_gate.release(reservation_token)
+                raise asyncio.TimeoutError
         active_task_token = self._register_active_task(
             owner=pool,
             publisher=demand_publisher,
@@ -880,6 +1028,7 @@ class WorkerPoolManager:
             if submitted_ns is None:
                 raise RuntimeError("Timed worker submission has no start time")
             timing = {
+                "memory_admission_wait_s": memory_admission_wait_s,
                 "queue_wait_s": max(
                     0.0,
                     (worker_started_ns - submitted_ns) / 1_000_000_000,
@@ -931,6 +1080,7 @@ class WorkerPoolManager:
                          (是否等待待处理任务完成)
         """
         with self._pool_lock:
+            self._host_memory_gate.close_waiters()
             if self._pool is not None:
                 _shutdown_executor(
                     self._pool,
