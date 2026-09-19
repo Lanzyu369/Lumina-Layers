@@ -8,6 +8,7 @@ max_workers defaults, and RuntimeError when pool not started.
 
 import asyncio
 from concurrent.futures import Future
+from contextlib import suppress
 import json
 import logging
 import os
@@ -47,6 +48,11 @@ def _add(a: int, b: int) -> int:
 def _raise_value_error(msg: str) -> None:
     """Raise ValueError in worker process."""
     raise ValueError(msg)
+
+
+def _raise_timeout_error() -> None:
+    """Raise a worker-owned timeout that must not restart the pool."""
+    raise TimeoutError("worker timeout")
 
 
 def _slow_task(seconds: float) -> str:
@@ -514,7 +520,7 @@ class TestSubmit:
     async def test_host_memory_reservation_blocks_concurrent_overcommit(
         self,
     ) -> None:
-        """Four individually valid tasks cannot promise more than the host."""
+        """Manager waits for capacity instead of rejecting a valid request."""
 
         pool = WorkerPoolManager(
             max_workers=4,
@@ -534,15 +540,18 @@ class TestSubmit:
         try:
             await asyncio.sleep(0.04)
             assert pool.host_memory_reserved_bytes == 24
-            with pytest.raises(VectorHostMemoryAdmissionError) as raised:
-                await pool.submit(
+            waiting = asyncio.create_task(
+                pool.submit(
                     _slow_task,
                     0.01,
+                    timeout=1.0,
                     host_memory_reservation_bytes=8,
                 )
-            assert raised.value.reserved_bytes == 24
-            assert raised.value.memory_budget_bytes == 24
+            )
+            await asyncio.sleep(0)
+            assert not waiting.done()
             assert await asyncio.gather(*active) == ["done", "done", "done"]
+            assert await waiting == "done"
             assert pool.host_memory_reserved_bytes == 0
         finally:
             pool.shutdown(wait=True)
@@ -691,12 +700,19 @@ class TestSubmit:
             with pytest.raises(asyncio.CancelledError):
                 await task
             assert pool.host_memory_reserved_bytes == 8
-            with pytest.raises(VectorHostMemoryAdmissionError):
-                await pool.submit(
+            waiting = asyncio.create_task(
+                pool.submit(
                     _slow_task,
                     0.01,
+                    timeout=1.0,
                     host_memory_reservation_bytes=8,
                 )
+            )
+            await asyncio.sleep(0)
+            assert not waiting.done()
+            waiting.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await waiting
             for _ in range(100):
                 if pool.host_memory_reserved_bytes == 0:
                     break
@@ -1155,6 +1171,66 @@ class TestSubmit:
             assert pool.outstanding_tasks == 0
         finally:
             pool._pool = None
+            pool.shutdown(wait=True)
+
+    @pytest.mark.asyncio
+    async def test_submit_stage_failure_retains_uncertain_reservation(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        class _RejectingExecutor:
+            def submit(self, *_args, **_kwargs):
+                raise RuntimeError("submit failed before acceptance was known")
+
+        pool = WorkerPoolManager(max_workers=1, host_memory_budget_bytes=8)
+        failed_pool = _RejectingExecutor()
+        pool._pool = failed_pool
+        monkeypatch.setattr(
+            pool,
+            "_restart_after_failed_pool",
+            lambda _pool, *, reason, timeout=None: None,
+        )
+        try:
+            with pytest.raises(RuntimeError, match="submit failed"):
+                await pool.submit(
+                    _add,
+                    1,
+                    2,
+                    host_memory_reservation_bytes=8,
+                )
+            assert pool.host_memory_reserved_bytes == 8
+            assert pool.outstanding_tasks == 1
+            pool._complete_executor_generation(failed_pool)
+            assert pool.host_memory_reserved_bytes == 0
+            assert pool.outstanding_tasks == 0
+        finally:
+            pool._pool = None
+            pool.shutdown(wait=False)
+
+    @pytest.mark.asyncio
+    async def test_worker_owned_timeout_does_not_restart_pool(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        pool = WorkerPoolManager(max_workers=1, host_memory_budget_bytes=8)
+        pool.start()
+        restart_reasons: list[str] = []
+        monkeypatch.setattr(
+            pool,
+            "_restart_after_failed_pool",
+            lambda _pool, *, reason, timeout=None: restart_reasons.append(reason),
+        )
+        try:
+            with pytest.raises(TimeoutError, match="worker timeout"):
+                await pool.submit(
+                    _raise_timeout_error,
+                    timeout=2.0,
+                    host_memory_reservation_bytes=8,
+                )
+            assert restart_reasons == []
+            assert pool.host_memory_reserved_bytes == 0
+            assert pool.outstanding_tasks == 0
+        finally:
             pool.shutdown(wait=True)
 
 
@@ -1656,6 +1732,184 @@ class TestHostMemoryParallelTarget:
             for task in (active, first, second):
                 if not task.done():
                     task.cancel()
+            pool.shutdown(wait=True)
+
+    @pytest.mark.asyncio
+    async def test_target_never_changes_basic_admission_decision(self) -> None:
+        """The optional target cannot turn a safe required request into BUSY."""
+
+        gib = 1024**3
+        for target in (None, 3 * gib, 4 * gib):
+            pool = WorkerPoolManager(
+                max_workers=2,
+                host_memory_budget_bytes=4 * gib,
+            )
+            pool.start()
+            active = asyncio.create_task(
+                pool.submit(
+                    _slow_task,
+                    0.25,
+                    host_memory_reservation_bytes=gib,
+                    host_memory_parallel_target_bytes=3 * gib,
+                )
+            )
+            waiting = None
+            try:
+                for _ in range(100):
+                    if pool.host_memory_reserved_bytes == 3 * gib:
+                        break
+                    await asyncio.sleep(0.005)
+                assert pool.host_memory_reserved_bytes == 3 * gib
+                waiting = asyncio.create_task(
+                    pool.submit(
+                        _read_task_host_memory_budget,
+                        timeout=1.0,
+                        host_memory_reservation_bytes=gib,
+                        host_memory_parallel_target_bytes=target,
+                    )
+                )
+                assert await waiting == gib
+                assert not active.done()
+                assert await active == "done"
+            finally:
+                if waiting is not None and not waiting.done():
+                    waiting.cancel()
+                if not active.done():
+                    active.cancel()
+                pool.shutdown(wait=True)
+
+    @pytest.mark.asyncio
+    async def test_admission_queue_is_bounded_only_when_wait_is_needed(self) -> None:
+        gib = 1024**3
+        pool = WorkerPoolManager(
+            max_workers=2,
+            host_memory_budget_bytes=4 * gib,
+            max_admission_waiters=1,
+        )
+        pool.start()
+        holder = asyncio.create_task(
+            pool.submit(
+                _slow_task,
+                0.2,
+                host_memory_reservation_bytes=gib,
+                host_memory_parallel_target_bytes=4 * gib,
+            )
+        )
+        first = asyncio.create_task(
+            pool.submit(
+                _read_task_host_memory_budget,
+                timeout=1.0,
+                host_memory_reservation_bytes=gib,
+            )
+        )
+        try:
+            for _ in range(100):
+                if pool.host_memory_reserved_bytes == 4 * gib:
+                    break
+                await asyncio.sleep(0.005)
+            assert pool.admission_waiters == 1
+            with pytest.raises(VectorHostMemoryAdmissionError) as raised:
+                await pool.submit(
+                    _read_task_host_memory_budget,
+                    timeout=1.0,
+                    host_memory_reservation_bytes=gib,
+                )
+            assert raised.value.reason == "queue_full"
+            assert await holder == "done"
+            assert await first == gib
+        finally:
+            if not holder.done():
+                holder.cancel()
+            if not first.done():
+                first.cancel()
+            pool.shutdown(wait=True)
+
+    @pytest.mark.asyncio
+    async def test_waiter_does_not_revive_after_shutdown_and_start(self) -> None:
+        gib = 1024**3
+        pool = WorkerPoolManager(max_workers=2, host_memory_budget_bytes=4 * gib)
+        pool.start()
+        holder = asyncio.create_task(
+            pool.submit(
+                _slow_task,
+                0.15,
+                host_memory_reservation_bytes=gib,
+                host_memory_parallel_target_bytes=4 * gib,
+            )
+        )
+        waiting = asyncio.create_task(
+            pool.submit(
+                _read_task_host_memory_budget,
+                timeout=2.0,
+                host_memory_reservation_bytes=gib,
+            )
+        )
+        try:
+            for _ in range(100):
+                if pool.admission_waiters == 1:
+                    break
+                await asyncio.sleep(0.005)
+            assert pool.admission_waiters == 1
+            pool.shutdown(wait=True)
+            pool.start()
+            with pytest.raises(RuntimeError, match="epoch|started"):
+                await waiting
+            assert await pool.submit(
+                _read_task_host_memory_budget,
+                host_memory_reservation_bytes=4 * gib,
+            ) == 4 * gib
+        finally:
+            if not holder.done():
+                holder.cancel()
+            if not waiting.done():
+                waiting.cancel()
+            pool.shutdown(wait=True)
+
+    @pytest.mark.asyncio
+    async def test_waiter_uses_new_generation_after_automatic_restart(self) -> None:
+        """A ticket awakened by restart never submits to the retired pool."""
+
+        gib = 1024**3
+        pool = WorkerPoolManager(max_workers=1, host_memory_budget_bytes=4 * gib)
+        pool.start()
+        holder = asyncio.create_task(
+            pool.submit(
+                _slow_task,
+                5.0,
+                host_memory_reservation_bytes=gib,
+                host_memory_parallel_target_bytes=4 * gib,
+            )
+        )
+        waiting = asyncio.create_task(
+            pool.submit(
+                _read_task_host_memory_budget,
+                timeout=5.0,
+                host_memory_reservation_bytes=gib,
+            )
+        )
+        old_executor = None
+        try:
+            for _ in range(200):
+                if pool.host_memory_reserved_bytes == 4 * gib:
+                    break
+                await asyncio.sleep(0.005)
+            assert pool.host_memory_reserved_bytes == 4 * gib
+            old_executor = pool._pool
+            await asyncio.to_thread(
+                pool._restart_after_failed_pool,
+                old_executor,
+                reason="test_generation_swap",
+            )
+            with suppress(Exception):
+                await holder
+            assert pool._pool is not old_executor
+            assert await waiting == gib
+            assert pool.host_memory_reserved_bytes == 0
+        finally:
+            if not holder.done():
+                holder.cancel()
+            if not waiting.done():
+                waiting.cancel()
             pool.shutdown(wait=True)
 
     @pytest.mark.asyncio

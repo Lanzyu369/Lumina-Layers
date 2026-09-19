@@ -57,6 +57,18 @@ class _MemoryWaiter:
     event: asyncio.Event
 
 
+@dataclass
+class _ExecutorGeneration:
+    """One concrete executor generation and its submission resources."""
+
+    generation_id: int
+    epoch: int
+    executor: Any
+    demand_publisher: OuterDemandPublisher | None
+    worker_lease_path: str | None
+    accepting: bool = True
+
+
 def _available_host_memory_bytes() -> int | None:
     """Return memory this pool may still admission against.
 
@@ -95,12 +107,14 @@ class _HostMemoryReservationGate:
         *,
         memory_budget_bytes: int,
         sample_live_memory: bool,
+        max_waiters: int = 1,
     ) -> None:
         self._memory_budget_bytes = max(1, int(memory_budget_bytes))
         self._sample_live_memory = bool(sample_live_memory)
         self._condition = threading.Condition()
         self._reservations: dict[str, _MemoryReservation] = {}
         self._waiters: list[_MemoryWaiter] = []
+        self._max_waiters = max(0, int(max_waiters))
         self._closed = False
 
     @property
@@ -111,6 +125,13 @@ class _HostMemoryReservationGate:
     def reserved_bytes(self) -> int:
         with self._condition:
             return sum(item.granted_bytes for item in self._reservations.values())
+
+    @property
+    def pending_waiters(self) -> int:
+        """Return the number of admission tickets currently waiting."""
+
+        with self._condition:
+            return len(self._waiters)
 
     def _capacity_locked(self, requested: int, reserved: int) -> int:
         capacity = self._memory_budget_bytes
@@ -166,6 +187,22 @@ class _HostMemoryReservationGate:
         )
         return token, task_budget
 
+    def _decision_locked(
+        self,
+        requested: int,
+        reserved: int,
+    ) -> tuple[str, int]:
+        """Return the single GRANT/BUSY/REJECT decision for one snapshot."""
+
+        capacity = self._capacity_locked(requested, reserved)
+        if requested > self._memory_budget_bytes:
+            return "reject", capacity
+        if reserved + requested <= capacity:
+            return "grant", capacity
+        if reserved > 0:
+            return "busy", capacity
+        return "reject", capacity
+
     def _signal_waiters_locked(self) -> None:
         for waiter in tuple(self._waiters):
             try:
@@ -200,22 +237,15 @@ class _HostMemoryReservationGate:
             reserved = sum(
                 item.granted_bytes for item in self._reservations.values()
             )
-            capacity = self._capacity_locked(requested, reserved)
-            # A reservation is also the worker-local safety budget.  Never
-            # silently shrink it to whatever happens to be free: Vector work
-            # performs bounded-but-nonzero parsing before the 3D mesh guard,
-            # so an arbitrarily small "successful" reservation would not be a
-            # meaningful admission guarantee.
-            task_budget = requested
-            if (
-                task_budget > self._memory_budget_bytes
-                or reserved + task_budget > capacity
-            ):
+            decision, capacity = self._decision_locked(requested, reserved)
+            if decision != "grant":
                 raise VectorHostMemoryAdmissionError(
                     requested,
                     reserved,
                     capacity,
-                    "host_capacity_busy",
+                    "request_exceeds_budget"
+                    if requested > self._memory_budget_bytes
+                    else "host_capacity_busy",
                 )
             return self._reserve_locked(
                 requested,
@@ -246,6 +276,36 @@ class _HostMemoryReservationGate:
             else None
         )
         with self._condition:
+            if self._closed:
+                raise RuntimeError("worker pool memory gate is closed")
+            reserved = sum(
+                item.granted_bytes for item in self._reservations.values()
+            )
+            decision, capacity = self._decision_locked(requested, reserved)
+            if decision == "reject":
+                raise VectorHostMemoryAdmissionError(
+                    requested,
+                    reserved,
+                    capacity,
+                    "request_exceeds_budget"
+                    if requested > self._memory_budget_bytes
+                    else "host_capacity_busy",
+                )
+            if decision == "grant" and not self._waiters:
+                return self._reserve_locked(
+                    requested,
+                    owner=owner,
+                    capacity=capacity,
+                    reserved=reserved,
+                    parallel_target_bytes=parallel_target_bytes,
+                )
+            if len(self._waiters) >= self._max_waiters:
+                raise VectorHostMemoryAdmissionError(
+                    requested,
+                    reserved,
+                    capacity,
+                    "queue_full",
+                )
             self._waiters.append(waiter)
         try:
             while True:
@@ -260,36 +320,19 @@ class _HostMemoryReservationGate:
                             item.granted_bytes
                             for item in self._reservations.values()
                         )
-                        required_reserved = sum(
-                            item.required_bytes
-                            for item in self._reservations.values()
+                        decision, capacity = self._decision_locked(
+                            requested, reserved
                         )
-                        capacity = self._capacity_locked(requested, reserved)
-                        if (
-                            requested > self._memory_budget_bytes
-                            or required_reserved + requested > capacity
-                        ):
+                        if decision == "reject":
                             raise VectorHostMemoryAdmissionError(
                                 requested,
                                 reserved,
                                 capacity,
-                                "host_capacity_busy",
+                                "request_exceeds_budget"
+                                if requested > self._memory_budget_bytes
+                                else "host_capacity_busy",
                             )
-                        target = (
-                            max(requested, int(parallel_target_bytes))
-                            if parallel_target_bytes is not None
-                            else requested
-                        )
-                        target_can_fit_after_optional_release = (
-                            target <= capacity - required_reserved
-                        )
-                        current_can_fit = reserved + requested <= capacity
-                        full_target_can_fit = reserved + target <= capacity
-                        if current_can_fit and (
-                            parallel_target_bytes is None
-                            or full_target_can_fit
-                            or not target_can_fit_after_optional_release
-                        ):
+                        if decision == "grant":
                             self._waiters.pop(0)
                             return self._reserve_locked(
                                 requested,
@@ -321,6 +364,12 @@ class _HostMemoryReservationGate:
     def reopen_waiters(self) -> None:
         with self._condition:
             self._closed = False
+
+    def notify_waiters(self) -> None:
+        """Wake tickets so they re-read lifecycle and capacity state."""
+
+        with self._condition:
+            self._signal_waiters_locked()
 
     def release(self, token: str) -> None:
         """Idempotently release a reservation after its executor future ends."""
@@ -616,6 +665,7 @@ class WorkerPoolManager:
         max_workers: int | None = None,
         default_task_timeout: float | None = None,
         host_memory_budget_bytes: int | None = None,
+        max_admission_waiters: int | None = None,
     ) -> None:
         """Initialize WorkerPoolManager.
         初始化 WorkerPoolManager。
@@ -631,6 +681,9 @@ class WorkerPoolManager:
                 the ceiling from host-available memory with reserved headroom.
                 (可选的固定准入上限，主要用于确定性测试；生产环境会从主机
                 可用内存扣除余量后计算)
+            max_admission_waiters (int | None): Maximum FIFO admission tickets
+                allowed to wait. Defaults to ``max_workers``.
+                (允许等待的 FIFO 准入 ticket 上限；默认等于 max_workers)
 
         The per-child recycle threshold is read once from
         ``LUMINA_WORKER_MAX_TASKS_PER_CHILD`` (default 20) so each pool instance
@@ -645,6 +698,19 @@ class WorkerPoolManager:
         )
         self._pool: ProcessPoolExecutor | None = None
         self._pool_lock = threading.RLock()
+        self._service_epoch = 0
+        self._service_open = False
+        self._restart_start_pending = False
+        self._restart_in_progress = False
+        self._generation_counter = 0
+        self._generation: _ExecutorGeneration | None = None
+        self._lifecycle_waiters: list[_MemoryWaiter] = []
+        self._publisher_cleanup_pending = False
+        self._max_admission_waiters = (
+            self._max_workers
+            if max_admission_waiters is None
+            else max(0, int(max_admission_waiters))
+        )
         self._demand_publisher: OuterDemandPublisher | None = (
             self._create_demand_publisher()
         )
@@ -668,12 +734,81 @@ class WorkerPoolManager:
         self._host_memory_gate = _HostMemoryReservationGate(
             memory_budget_bytes=max(1, resolved_host_budget),
             sample_live_memory=host_memory_budget_bytes is None,
+            max_waiters=self._max_admission_waiters,
         )
         self._active_task_lock = threading.Lock()
         self._active_tasks: dict[
             str,
             tuple[object, OuterDemandPublisher | None, str | None],
         ] = {}
+
+    def _signal_lifecycle_locked(self) -> None:
+        """Wake lifecycle waiters and make admission tickets re-check state."""
+
+        for waiter in tuple(self._lifecycle_waiters):
+            try:
+                waiter.loop.call_soon_threadsafe(waiter.event.set)
+            except RuntimeError:
+                pass
+        self._host_memory_gate.notify_waiters()
+
+    def _current_generation_locked(self) -> _ExecutorGeneration | None:
+        """Return the current generation, tolerating test-injected executors."""
+
+        generation = self._generation
+        if generation is not None and generation.executor is self._pool:
+            return generation
+        if self._pool is None:
+            return None
+        # A few focused tests inject a small executor sentinel directly into
+        # ``_pool``. Treat that as one generation without weakening production
+        # lifecycle ownership.
+        self._generation_counter += 1
+        generation = _ExecutorGeneration(
+            generation_id=self._generation_counter,
+            epoch=self._service_epoch,
+            executor=self._pool,
+            demand_publisher=self._demand_publisher,
+            worker_lease_path=(
+                str(self._demand_publisher.worker_lease_path)
+                if self._demand_publisher is not None
+                else None
+            ),
+        )
+        self._generation = generation
+        self._service_open = True
+        return generation
+
+    async def _wait_for_generation(
+        self,
+        deadline: float | None,
+        request_epoch: int,
+    ) -> None:
+        """Wait for an accepting executor generation without polling."""
+
+        loop = asyncio.get_running_loop()
+        waiter = _MemoryWaiter(loop, asyncio.Event())
+        with self._pool_lock:
+            generation = self._current_generation_locked()
+            if self._service_epoch != request_epoch:
+                raise RuntimeError("WorkerPool request epoch is closed")
+            if generation is not None and generation.accepting:
+                return
+            if not self._service_open:
+                raise RuntimeError("WorkerPool not started")
+            self._lifecycle_waiters.append(waiter)
+        try:
+            if deadline is None:
+                await waiter.event.wait()
+            else:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError
+                await asyncio.wait_for(waiter.event.wait(), remaining)
+        finally:
+            with self._pool_lock:
+                if waiter in self._lifecycle_waiters:
+                    self._lifecycle_waiters.remove(waiter)
 
     def _create_demand_publisher(self) -> OuterDemandPublisher | None:
         """Create isolated demand state without making it a startup dependency."""
@@ -745,6 +880,7 @@ class WorkerPoolManager:
         if reservation_token is not None:
             self._host_memory_gate.release(reservation_token)
         self._update_demand(publisher, "decrement")
+        self._maybe_cleanup_publisher()
 
     def _complete_executor_generation(self, owner: object) -> None:
         """Complete every task owned by an executor confirmed to be stopped."""
@@ -756,6 +892,10 @@ class WorkerPoolManager:
                     self._active_tasks.items()
                 )
                 if task_owner is owner
+                or (
+                    isinstance(task_owner, _ExecutorGeneration)
+                    and task_owner.executor is owner
+                )
             ]
         for token in tokens:
             self._complete_active_task(token)
@@ -765,16 +905,41 @@ class WorkerPoolManager:
         初始化进程池。
         """
         with self._pool_lock:
-            if self._pool is not None:
+            if self._restart_in_progress:
                 return
+            if self._restart_start_pending and not self._service_open:
+                self._restart_start_pending = False
+                return
+            generation = self._current_generation_locked()
+            if generation is not None and generation.accepting:
+                return
+            preserve_epoch = self._restart_start_pending
+            self._restart_start_pending = False
+            if not preserve_epoch:
+                self._service_epoch += 1
+            self._service_open = True
             self._host_memory_gate.reopen_waiters()
             if self._demand_publisher is None:
                 self._demand_publisher = self._create_demand_publisher()
-            self._pool = ProcessPoolExecutor(
+            executor = ProcessPoolExecutor(
                 max_workers=self._max_workers,
                 initializer=_worker_init,
                 max_tasks_per_child=self._max_tasks_per_child,
             )
+            self._generation_counter += 1
+            self._pool = executor
+            self._generation = _ExecutorGeneration(
+                generation_id=self._generation_counter,
+                epoch=self._service_epoch,
+                executor=executor,
+                demand_publisher=self._demand_publisher,
+                worker_lease_path=(
+                    str(self._demand_publisher.worker_lease_path)
+                    if self._demand_publisher is not None
+                    else None
+                ),
+            )
+            self._signal_lifecycle_locked()
 
     def _restart_after_failed_pool(
         self,
@@ -791,30 +956,76 @@ class WorkerPoolManager:
             else f"Worker pool restarted after {reason}"
         )
         with self._pool_lock:
-            if self._pool is not failed_pool:
+            generation = self._current_generation_locked()
+            if generation is None or generation.executor is not failed_pool:
                 return
-            terminated, surviving_workers = _terminate_executor_workers(
-                failed_pool
-            )
-            _shutdown_executor(failed_pool, wait=False, cancel_futures=True)
-            if surviving_workers == 0:
-                self._complete_executor_generation(failed_pool)
-                self._host_memory_gate.release_owner(failed_pool)
+            if not self._service_open:
+                return
+            generation.accepting = False
+            restart_epoch = self._service_epoch
+            self._restart_in_progress = True
             self._pool = None
-            _log.warning(
-                "Worker pool restarted after failed task",
-                extra={
-                    "event": "worker_pool_restarted",
-                    "reason": reason,
-                    "timeout_s": timeout,
-                    "terminated_workers": terminated,
-                    "surviving_workers": surviving_workers,
-                    "max_workers": self._max_workers,
-                    "error_type": reason,
-                    "error_message": error_message,
-                },
+            self._signal_lifecycle_locked()
+
+        terminated, surviving_workers = _terminate_executor_workers(
+            failed_pool
+        )
+        _shutdown_executor(failed_pool, wait=False, cancel_futures=True)
+        if surviving_workers == 0:
+            self._complete_executor_generation(generation)
+            self._host_memory_gate.release_owner(generation)
+            # Focused tests and older callers may have registered the raw
+            # executor as the owner; the idempotent second pass is harmless.
+            self._complete_executor_generation(failed_pool)
+            self._host_memory_gate.release_owner(failed_pool)
+
+        restarted = False
+        with self._pool_lock:
+            current_epoch_open = (
+                self._service_open and self._service_epoch == restart_epoch
             )
-            self.start()
+            if current_epoch_open and self._pool is None:
+                self._generation = None
+                self._restart_start_pending = True
+                restarted = True
+            else:
+                if self._pool is None:
+                    self._generation = None
+                self._restart_start_pending = False
+            self._restart_in_progress = False
+            self._signal_lifecycle_locked()
+        if restarted:
+            try:
+                self.start()
+            except Exception as exc:
+                with self._pool_lock:
+                    if self._service_epoch == restart_epoch:
+                        self._service_open = False
+                        self._restart_start_pending = False
+                        self._signal_lifecycle_locked()
+                _log.error(
+                    "Worker pool restart failed",
+                    extra={
+                        "event": "worker_pool_restart_failed",
+                        "reason": reason,
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                    },
+                )
+            else:
+                _log.warning(
+                    "Worker pool restarted after failed task",
+                    extra={
+                        "event": "worker_pool_restarted",
+                        "reason": reason,
+                        "timeout_s": timeout,
+                        "terminated_workers": terminated,
+                        "surviving_workers": surviving_workers,
+                        "max_workers": self._max_workers,
+                        "error_type": reason,
+                        "error_message": error_message,
+                    },
+                )
 
     async def submit(
         self,
@@ -927,6 +1138,30 @@ class WorkerPoolManager:
             return
         self._complete_active_task(task_token)
 
+    async def _await_generation_for_submit(
+        self,
+        deadline: float | None,
+        request_epoch: int,
+    ) -> _ExecutorGeneration:
+        """Return a current accepting generation without binding before await."""
+
+        while True:
+            with self._pool_lock:
+                generation = self._current_generation_locked()
+                if self._service_epoch != request_epoch:
+                    raise RuntimeError("WorkerPool request epoch is closed")
+                if (
+                    self._service_open
+                    and generation is not None
+                    and generation.accepting
+                ):
+                    return generation
+                if not self._service_open:
+                    raise RuntimeError("WorkerPool not started")
+            await self._wait_for_generation(deadline, request_epoch)
+            if deadline is not None and deadline - asyncio.get_running_loop().time() <= 0:
+                raise asyncio.TimeoutError
+
     async def _submit_internal(
         self,
         fn: Callable[..., T],
@@ -938,9 +1173,6 @@ class WorkerPoolManager:
         host_memory_parallel_target_bytes: int | None = None,
     ) -> tuple[T, dict[str, float] | None]:
         """Run one task while preserving the public ``submit`` return contract."""
-        pool = self._pool
-        if pool is None:
-            raise RuntimeError("WorkerPool not started")
         from api.structured_logging import get_request_id, get_session_id
 
         loop = asyncio.get_running_loop()
@@ -949,73 +1181,132 @@ class WorkerPoolManager:
         effective_timeout = _normalize_timeout(
             timeout if timeout is not None else self._default_task_timeout
         )
+        deadline = (
+            loop.time() + effective_timeout
+            if effective_timeout is not None
+            else None
+        )
+        with self._pool_lock:
+            initial_generation = self._current_generation_locked()
+            if not self._service_open or initial_generation is None:
+                raise RuntimeError("WorkerPool not started")
+            request_epoch = self._service_epoch
         worker_entry = (
             _run_in_worker_with_context_timed
             if include_timing
             else _run_in_worker_with_context
         )
-        demand_publisher = self._demand_publisher
-        demand_snapshot_path = (
-            str(demand_publisher.snapshot_path)
-            if demand_publisher is not None
-            else None
-        )
-        worker_lease_path = (
-            str(demand_publisher.worker_lease_path)
-            if demand_publisher is not None
-            else None
-        )
         reservation_token: str | None = None
         task_host_memory_budget: int | None = None
+        active_task_token: str | None = None
+        executor_future: ConcurrentFuture[Any] | None = None
+        submitted_generation: _ExecutorGeneration | None = None
+        submission_uncertain = False
         memory_admission_started = loop.time()
-        if host_memory_reservation_bytes is not None:
-            reservation_token, task_host_memory_budget = (
-                await self._host_memory_gate.acquire_async(
-                    host_memory_reservation_bytes,
-                    owner=pool,
-                    parallel_target_bytes=host_memory_parallel_target_bytes,
-                    timeout=effective_timeout,
-                )
-            )
         memory_admission_wait_s = max(
             0.0, loop.time() - memory_admission_started
         )
-        if effective_timeout is not None:
-            effective_timeout -= memory_admission_wait_s
-            if effective_timeout <= 0:
-                if reservation_token is not None:
-                    self._host_memory_gate.release(reservation_token)
-                raise asyncio.TimeoutError
-        active_task_token = self._register_active_task(
-            owner=pool,
-            publisher=demand_publisher,
-            reservation_token=reservation_token,
-        )
-        submitted_ns = time.perf_counter_ns() if include_timing else None
-        executor_future = None
         try:
-            executor_future = pool.submit(
-                worker_entry,
-                fn,
-                request_id,
-                session_id,
-                demand_snapshot_path,
-                task_host_memory_budget,
-                *args,
-                worker_lease_path=worker_lease_path,
-            )
-            executor_future.add_done_callback(
-                lambda completed, token=active_task_token: (
-                    self._complete_future_task(
-                        completed,
-                        token,
-                    )
+            while True:
+                candidate = await self._await_generation_for_submit(
+                    deadline, request_epoch
                 )
+                if host_memory_reservation_bytes is not None:
+                    remaining = (
+                        None
+                        if deadline is None
+                        else max(0.0, deadline - loop.time())
+                    )
+                    if remaining is not None and remaining <= 0:
+                        raise asyncio.TimeoutError
+                    reservation_token, task_host_memory_budget = (
+                        await self._host_memory_gate.acquire_async(
+                            host_memory_reservation_bytes,
+                            owner=candidate,
+                            parallel_target_bytes=host_memory_parallel_target_bytes,
+                            timeout=remaining,
+                        )
+                    )
+                with self._pool_lock:
+                    current = self._current_generation_locked()
+                    if (
+                        not self._service_open
+                        or self._service_epoch != request_epoch
+                    ):
+                        if reservation_token is not None:
+                            self._host_memory_gate.release(reservation_token)
+                            reservation_token = None
+                        raise RuntimeError("WorkerPool not started")
+                    if (
+                        current is None
+                        or current is not candidate
+                        or not current.accepting
+                    ):
+                        if reservation_token is not None:
+                            self._host_memory_gate.release(reservation_token)
+                            reservation_token = None
+                            task_host_memory_budget = None
+                        continue
+                    if deadline is not None:
+                        remaining = deadline - loop.time()
+                        if remaining <= 0:
+                            if reservation_token is not None:
+                                self._host_memory_gate.release(reservation_token)
+                                reservation_token = None
+                            raise asyncio.TimeoutError
+                    submitted_generation = current
+                    demand_publisher = current.demand_publisher
+                    demand_snapshot_path = (
+                        str(demand_publisher.snapshot_path)
+                        if demand_publisher is not None
+                        else None
+                    )
+                    worker_lease_path = current.worker_lease_path
+                    active_task_token = self._register_active_task(
+                        owner=current,
+                        publisher=demand_publisher,
+                        reservation_token=reservation_token,
+                    )
+                    submitted_ns = (
+                        time.perf_counter_ns() if include_timing else None
+                    )
+                    try:
+                        executor_future = current.executor.submit(
+                            worker_entry,
+                            fn,
+                            request_id,
+                            session_id,
+                            demand_snapshot_path,
+                            task_host_memory_budget,
+                            *args,
+                            worker_lease_path=worker_lease_path,
+                        )
+                    except BaseException:
+                        submission_uncertain = True
+                        raise
+                    executor_future.add_done_callback(
+                        lambda completed, token=active_task_token: (
+                            self._complete_future_task(
+                                completed,
+                                token,
+                            )
+                        )
+                    )
+                    break
+            memory_admission_wait_s = max(
+                0.0, loop.time() - memory_admission_started
             )
+            remaining_timeout = (
+                None
+                if deadline is None
+                else max(0.0, deadline - loop.time())
+            )
+            if remaining_timeout is not None and remaining_timeout <= 0:
+                raise asyncio.TimeoutError
             future = asyncio.wrap_future(executor_future, loop=loop)
             raw_result = await asyncio.wait_for(
                 asyncio.shield(future),
-                timeout=effective_timeout,
+                timeout=remaining_timeout,
             )
             if not include_timing:
                 return raw_result, None
@@ -1056,20 +1347,89 @@ class WorkerPoolManager:
             )
             return result, timing
         except asyncio.TimeoutError:
+            worker_raised_timeout = False
+            if executor_future is not None and executor_future.done():
+                try:
+                    worker_raised_timeout = isinstance(
+                        executor_future.exception(), TimeoutError
+                    )
+                except FutureCancelledError:
+                    worker_raised_timeout = False
+            if worker_raised_timeout:
+                raise
             if executor_future is not None:
                 executor_future.cancel()
-            self._restart_after_failed_pool(
-                pool,
-                reason="task_timeout",
-                timeout=effective_timeout,
-            )
+            if submitted_generation is not None:
+                self._restart_after_failed_pool(
+                    submitted_generation.executor,
+                    reason="task_timeout",
+                    timeout=(
+                        None
+                        if deadline is None
+                        else max(0.0, deadline - loop.time())
+                    ),
+                )
             raise
         except BrokenProcessPool:
-            self._restart_after_failed_pool(pool, reason="broken_process_pool")
+            if submitted_generation is not None:
+                self._restart_after_failed_pool(
+                    submitted_generation.executor,
+                    reason="broken_process_pool",
+                )
+            raise
+        except BaseException:
+            if (
+                submission_uncertain
+                and submitted_generation is not None
+                and executor_future is None
+            ):
+                self._restart_after_failed_pool(
+                    submitted_generation.executor,
+                    reason="submit_failed",
+                )
             raise
         finally:
-            if executor_future is None:
+            if (
+                reservation_token is not None
+                and executor_future is None
+                and not submission_uncertain
+            ):
+                self._host_memory_gate.release(reservation_token)
+            if (
+                active_task_token is not None
+                and executor_future is None
+                and not submission_uncertain
+            ):
                 self._complete_active_task(active_task_token)
+
+    def _maybe_cleanup_publisher(self) -> None:
+        """Remove telemetry files only after the last submitted task ends."""
+
+        with self._active_task_lock:
+            if self._active_tasks:
+                return
+        with self._pool_lock:
+            if self._service_open or not self._publisher_cleanup_pending:
+                return
+            publisher = self._demand_publisher
+            if publisher is None:
+                self._publisher_cleanup_pending = False
+                return
+            try:
+                publisher.cleanup()
+            except (OSError, RuntimeError, ValueError) as exc:
+                _log.warning(
+                    "Failed to clean up worker-pool demand state",
+                    extra={
+                        "event": "worker_pool_demand_cleanup_failed",
+                        "path": str(publisher.snapshot_path),
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                    },
+                )
+            else:
+                self._demand_publisher = None
+                self._publisher_cleanup_pending = False
 
     def shutdown(self, wait: bool = True) -> None:
         """Shutdown the pool gracefully.
@@ -1080,30 +1440,29 @@ class WorkerPoolManager:
                          (是否等待待处理任务完成)
         """
         with self._pool_lock:
+            self._service_open = False
+            self._service_epoch += 1
+            self._restart_start_pending = False
             self._host_memory_gate.close_waiters()
-            if self._pool is not None:
-                _shutdown_executor(
-                    self._pool,
-                    wait=wait,
-                    cancel_futures=not wait,
-                )
-                self._pool = None
-            publisher = self._demand_publisher
-            if publisher is not None:
-                try:
-                    publisher.cleanup()
-                except (OSError, RuntimeError, ValueError) as exc:
-                    _log.warning(
-                        "Failed to clean up worker-pool demand state",
-                        extra={
-                            "event": "worker_pool_demand_cleanup_failed",
-                            "path": str(publisher.snapshot_path),
-                            "error_type": type(exc).__name__,
-                            "error_message": str(exc),
-                        },
-                    )
-                else:
-                    self._demand_publisher = None
+            generation = self._current_generation_locked()
+            if generation is not None:
+                generation.accepting = False
+            executor = self._pool
+            self._pool = None
+            self._generation = None
+            self._publisher_cleanup_pending = self._demand_publisher is not None
+            self._signal_lifecycle_locked()
+
+        if executor is not None:
+            _shutdown_executor(
+                executor,
+                wait=wait,
+                cancel_futures=not wait,
+            )
+        if wait and generation is not None:
+            self._complete_executor_generation(generation)
+            self._host_memory_gate.release_owner(generation)
+        self._maybe_cleanup_publisher()
 
     @property
     def is_alive(self) -> bool:
@@ -1170,6 +1529,18 @@ class WorkerPoolManager:
         """
 
         return self._host_memory_gate.memory_budget_bytes
+
+    @property
+    def admission_waiters(self) -> int:
+        """Return the number of pending parent-side admission tickets."""
+
+        return self._host_memory_gate.pending_waiters
+
+    @property
+    def max_admission_waiters(self) -> int:
+        """Return the configured FIFO admission queue bound."""
+
+        return self._max_admission_waiters
 
     @property
     def max_tasks_per_child(self) -> int | None:
