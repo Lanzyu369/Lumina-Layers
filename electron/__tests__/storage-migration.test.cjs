@@ -18,9 +18,59 @@ test("legacy storage snapshots detect localStorage and IndexedDB data", () => {
 test("import script preserves ordinary localStorage and IndexedDB records", () => {
   const script = migration.buildImportScript();
   assert.match(script, /localStorage\.setItem/);
+  assert.match(script, /localStorage\.getItem/);
   assert.match(script, /indexedDB\.open/);
+  assert.match(script, /getKey/);
+  assert.match(script, /applicationDatabaseVersion = 2/);
+  assert.doesNotMatch(script, /Math\.max\([^\n]+\) \+ 1/);
   assert.match(script, /__luminaMigrationReceive/);
   assert.doesNotMatch(script, /module:project/);
+});
+
+test("merges legacy sources without choosing conflicting values by order", () => {
+  const merged = migration.mergeSnapshots([
+    {
+      schemaVersion: 1,
+      localStorage: { theme: "dark", keepA: "a" },
+      indexedDB: [{
+        name: "lumina-workshop",
+        version: 2,
+        stores: [{
+          name: "projects",
+          keyPath: "key",
+          autoIncrement: false,
+          indexes: [],
+          records: [{ key: "module:old", value: { source: "file" } }],
+        }],
+      }],
+    },
+    {
+      schemaVersion: 1,
+      localStorage: { theme: "light", keepB: "b" },
+      indexedDB: [{
+        name: "lumina-workshop",
+        version: 2,
+        stores: [{
+          name: "projects",
+          keyPath: "key",
+          autoIncrement: false,
+          indexes: [],
+          records: [{ key: "module:old", value: { source: "http" } }],
+        }],
+      }],
+    },
+  ]);
+  assert.equal(merged.conflictCount, 2);
+  assert.deepEqual(merged.snapshot.localStorage, { keepA: "a", keepB: "b" });
+  const projectStore = merged.snapshot.indexedDB
+    .find(database => database.name === "lumina-workshop")
+    .stores.find(store => store.name === "projects");
+  assert.deepEqual(projectStore.records, []);
+  assert.deepEqual(
+    merged.snapshot.indexedDB.find(database => database.name === "lumina-workshop")
+      .stores.map(store => store.name).sort(),
+    ["metadata", "projects", "snapshots"],
+  );
 });
 
 test("snapshot transfer preserves structured-clone project values", () => {
@@ -95,7 +145,7 @@ test("migration reads legacy sources, imports into the target, and becomes idemp
   }), "migrated");
   assert.equal(JSON.parse(fs.readFileSync(markerPath, "utf8")).status, "migrated");
   assert.equal(windows.at(-1).url, "http://127.0.0.1:8001/api/health");
-  assert.equal(windows.at(-1).sent.length, 2);
+  assert.equal(windows.at(-1).sent.length, 1);
   assert.equal(await migration.migrateLegacyStorage({
     BrowserWindow: FakeWindow,
     indexPath,
