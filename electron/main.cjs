@@ -1038,7 +1038,9 @@ app.whenReady().then(async () => {
       const migrationStatus = await migrateLegacyStorage({
         BrowserWindow,
         indexPath: path.join(process.resourcesPath, "app", "dist", "index.html"),
-        targetUrl: `${backendEndpoint.origin}/`,
+        // Load the health document on the new origin, not the full UI, so
+        // migration does not start a second renderer application instance.
+        targetUrl: `${backendEndpoint.origin}/api/health`,
         markerPath: path.join(app.getPath("userData"), "legacy-storage-migration.json"),
         logger: message => logErr(message),
       });

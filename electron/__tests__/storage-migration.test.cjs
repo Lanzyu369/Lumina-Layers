@@ -62,15 +62,15 @@ test("migration reads legacy sources, imports into the target, and becomes idemp
   assert.equal(await migration.migrateLegacyStorage({
     BrowserWindow: FakeWindow,
     indexPath,
-    targetUrl: "http://127.0.0.1:8001/",
+    targetUrl: "http://127.0.0.1:8001/api/health",
     markerPath,
   }), "migrated");
   assert.equal(JSON.parse(fs.readFileSync(markerPath, "utf8")).status, "migrated");
-  assert.equal(windows.at(-1).url, "http://127.0.0.1:8001/");
+  assert.equal(windows.at(-1).url, "http://127.0.0.1:8001/api/health");
   assert.equal(await migration.migrateLegacyStorage({
     BrowserWindow: FakeWindow,
     indexPath,
-    targetUrl: "http://127.0.0.1:8001/",
+    targetUrl: "http://127.0.0.1:8001/api/health",
     markerPath,
   }), "already-migrated");
 });
