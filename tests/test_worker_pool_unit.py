@@ -14,6 +14,7 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -1985,7 +1986,9 @@ class TestHostMemoryParallelTarget:
                 if started_path.exists() and pool.host_memory_reserved_bytes == 4 * gib:
                     break
                 await asyncio.sleep(0.01)
-            assert started_path.exists()
+            assert started_path.exists(), (
+                active.exception() if active.done() else "active still pending"
+            )
             assert pool.host_memory_reserved_bytes == 4 * gib
 
             old_waiters = [
@@ -2019,7 +2022,10 @@ class TestHostMemoryParallelTarget:
                     host_memory_reservation_bytes=gib,
                 )
             )
-            await asyncio.sleep(0)
+            for _ in range(100):
+                if current_waiter.done() or pool.admission_waiters == 1:
+                    break
+                await asyncio.sleep(0.01)
             assert not current_waiter.done()
             assert pool.admission_waiters == 1
 
@@ -2037,6 +2043,122 @@ class TestHostMemoryParallelTarget:
                 current_waiter.cancel()
             if not active.done():
                 active.cancel()
+            pool.shutdown(wait=True)
+
+    @pytest.mark.asyncio
+    async def test_stale_epoch_is_rejected_before_gate_enrollment(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """A request paused before gate entry cannot enroll after restart."""
+
+        gib = 1024**3
+        started_path = tmp_path / "enrollment-started"
+        release_path = tmp_path / "enrollment-release"
+        pool = WorkerPoolManager(
+            max_workers=1,
+            host_memory_budget_bytes=4 * gib,
+            max_admission_waiters=1,
+        )
+        pool.start()
+        active = asyncio.create_task(
+            pool.submit(
+                _file_barrier_task,
+                str(started_path),
+                str(release_path),
+                host_memory_reservation_bytes=gib,
+                host_memory_parallel_target_bytes=4 * gib,
+            )
+        )
+        entered_gate = threading.Event()
+        release_gate = threading.Event()
+        old_request = None
+        current_waiter = None
+        try:
+            for _ in range(3000):
+                if started_path.exists() and pool.host_memory_reserved_bytes == 4 * gib:
+                    break
+                await asyncio.sleep(0.01)
+            assert started_path.exists(), (
+                active.exception() if active.done() else "active still pending"
+            )
+
+            original_acquire = pool._host_memory_gate.acquire_async
+
+            async def pause_before_gate_entry(*args, **kwargs):
+                entered_gate.set()
+                await asyncio.to_thread(release_gate.wait)
+                return await original_acquire(*args, **kwargs)
+
+            monkeypatch.setattr(
+                pool._host_memory_gate,
+                "acquire_async",
+                pause_before_gate_entry,
+            )
+            old_request = asyncio.create_task(
+                pool.submit(
+                    _read_task_host_memory_budget,
+                    timeout=5.0,
+                    host_memory_reservation_bytes=gib,
+                )
+            )
+            assert await asyncio.to_thread(entered_gate.wait, 5.0)
+
+            await asyncio.to_thread(pool.shutdown, wait=False)
+            pool.start()
+            assert pool._host_memory_gate._service_epoch == pool._service_epoch
+            release_gate.set()
+            with pytest.raises(RuntimeError, match="epoch|started|closed"):
+                await asyncio.wait_for(asyncio.shield(old_request), timeout=1.0)
+            assert pool.admission_waiters == 0
+            assert pool.host_memory_reserved_bytes == 4 * gib
+
+            current_waiter = asyncio.create_task(
+                pool.submit(
+                    _read_task_host_memory_budget,
+                    timeout=5.0,
+                    host_memory_reservation_bytes=gib,
+                )
+            )
+            for _ in range(100):
+                if current_waiter.done() or pool.admission_waiters == 1:
+                    break
+                await asyncio.sleep(0.01)
+            assert not current_waiter.done()
+            assert pool.admission_waiters == 1
+
+            release_path.write_text("release", encoding="utf-8")
+            assert await active == "released"
+            assert await current_waiter == gib
+            assert pool.host_memory_reserved_bytes == 0
+            assert pool.admission_waiters == 0
+        finally:
+            release_gate.set()
+            release_path.write_text("release", encoding="utf-8")
+            if old_request is not None and not old_request.done():
+                old_request.cancel()
+            if current_waiter is not None and not current_waiter.done():
+                current_waiter.cancel()
+            if not active.done():
+                active.cancel()
+            pool.shutdown(wait=True)
+
+    @pytest.mark.asyncio
+    async def test_stale_epoch_cannot_take_fast_grant(self) -> None:
+        pool = WorkerPoolManager(max_workers=1, host_memory_budget_bytes=8)
+        pool.start()
+        old_epoch = pool._service_epoch
+        pool.shutdown(wait=False)
+        pool.start()
+        try:
+            with pytest.raises(RuntimeError, match="epoch|closed"):
+                await pool._host_memory_gate.acquire_async(
+                    1,
+                    owner=object(),
+                    service_epoch=old_epoch,
+                )
+        finally:
             pool.shutdown(wait=True)
 
     @pytest.mark.asyncio
@@ -2069,6 +2191,7 @@ class TestHostMemoryParallelTarget:
                 await asyncio.sleep(0.005)
             assert pool.host_memory_reserved_bytes == 4 * gib
             old_executor = pool._pool
+            service_epoch = pool._service_epoch
             await asyncio.to_thread(
                 pool._restart_after_failed_pool,
                 old_executor,
@@ -2077,6 +2200,7 @@ class TestHostMemoryParallelTarget:
             with suppress(Exception):
                 await holder
             assert pool._pool is not old_executor
+            assert pool._service_epoch == service_epoch
             assert await waiting == gib
             assert pool.host_memory_reserved_bytes == 0
         finally:

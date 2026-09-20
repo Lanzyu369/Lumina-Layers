@@ -119,6 +119,7 @@ class _HostMemoryReservationGate:
         self._waiters: list[_MemoryWaiter] = []
         self._max_waiters = max(0, int(max_waiters))
         self._closed = False
+        self._service_epoch: int | None = None
 
     @property
     def memory_budget_bytes(self) -> int:
@@ -265,7 +266,7 @@ class _HostMemoryReservationGate:
         owner: object,
         parallel_target_bytes: int | None = None,
         timeout: float | None = None,
-        service_epoch: int | None = None,
+        service_epoch: int,
     ) -> tuple[str, int]:
         """Wait for temporary capacity contention without occupying the pool.
 
@@ -284,8 +285,8 @@ class _HostMemoryReservationGate:
             else None
         )
         with self._condition:
-            if self._closed:
-                raise RuntimeError("worker pool memory gate is closed")
+            if self._closed or self._service_epoch != service_epoch:
+                raise RuntimeError("worker pool service epoch is closed")
             reserved = sum(
                 item.granted_bytes for item in self._reservations.values()
             )
@@ -324,8 +325,15 @@ class _HostMemoryReservationGate:
                             waiter.terminal_reason
                             or "worker pool memory wait is closed"
                         )
-                    if self._closed:
-                        raise RuntimeError("worker pool memory gate is closed")
+                    if (
+                        self._closed
+                        or self._service_epoch != waiter.service_epoch
+                    ):
+                        waiter.terminal = True
+                        waiter.terminal_reason = (
+                            "worker pool service epoch is closed"
+                        )
+                        raise RuntimeError(waiter.terminal_reason)
                     if self._waiters[0] is not waiter:
                         capacity = None
                     else:
@@ -372,6 +380,7 @@ class _HostMemoryReservationGate:
 
         with self._condition:
             self._closed = True
+            self._service_epoch = None
             waiters = tuple(self._waiters)
             self._waiters.clear()
             for waiter in waiters:
@@ -382,9 +391,10 @@ class _HostMemoryReservationGate:
                 except RuntimeError:
                     pass
 
-    def reopen_waiters(self) -> None:
+    def reopen_waiters(self, service_epoch: int) -> None:
         with self._condition:
             self._closed = False
+            self._service_epoch = int(service_epoch)
 
     def notify_waiters(self) -> None:
         """Wake tickets so they re-read lifecycle and capacity state."""
@@ -919,7 +929,7 @@ class WorkerPoolManager:
             if not preserve_epoch:
                 self._service_epoch += 1
             self._service_open = True
-            self._host_memory_gate.reopen_waiters()
+            self._host_memory_gate.reopen_waiters(self._service_epoch)
             if self._demand_publisher is None:
                 self._demand_publisher = self._create_demand_publisher()
             executor = ProcessPoolExecutor(
