@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import contextmanager
 from copy import deepcopy
 import os
 import sys
 import time
-from typing import NoReturn
+from typing import Any, NoReturn
 
 import cv2
 import numpy as np
@@ -877,7 +878,7 @@ _UNSET_EDITOR_COMMIT_RESULT_VALUE = object()
 def _editor_commit_result(
     session_data: dict,
     *,
-    cache: dict | None = None,
+    cache: Mapping[str, Any] | None = None,
     preview_url: str | None = None,
     preview_glb_url: str | None | object = _UNSET_EDITOR_COMMIT_RESULT_VALUE,
 ) -> dict:
@@ -930,19 +931,14 @@ def _editor_commit_result(
     if preview_glb_url is not _UNSET_EDITOR_COMMIT_RESULT_VALUE:
         result["preview_glb_url"] = preview_glb_url
 
-    if isinstance(cache, dict):
-        if cache.get("color_layers") is not None:
-            result["color_layers"] = int(cache["color_layers"])
-        elif session_data.get("color_layers") is not None:
-            result["color_layers"] = int(session_data["color_layers"])
-        if cache.get("layer_height_mm") is not None:
-            result["layer_height_mm"] = float(cache["layer_height_mm"])
-        elif session_data.get("layer_height_mm") is not None:
-            result["layer_height_mm"] = float(session_data["layer_height_mm"])
+    if isinstance(cache, Mapping):
         result.update(
             dynamic_material_result_from_cache(cache).model_dump(exclude_none=True)
         )
-    elif session_data.get("color_layers") is not None:
+    # The cache may expose the material matrix's actual/derived depth after a
+    # recipe edit. Base input fields must remain the session values so a lost
+    # recipe response cannot turn a derived depth into a new auto-preview input.
+    if session_data.get("color_layers") is not None:
         result["color_layers"] = int(session_data["color_layers"])
     if session_data.get("layer_height_mm") is not None:
         result["layer_height_mm"] = float(session_data["layer_height_mm"])

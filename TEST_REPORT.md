@@ -280,3 +280,42 @@ git diff --check
 结果：通过。
 
 全量前后端测试仍按前一节记录的环境限制处理：前端有一个与本轮无关的 batch 参数快照失败；后端全量收集受 `rasterio`、`lumina_svg_core` 可选依赖阻断。没有用户现场 request ID/堆栈/真实素材，因此本轮不把未知的生产生成错误宣称为已全部归因。
+
+## 8. PR607 F1 业务投影局部收口（2026-09-20）
+
+本次只处理两个新增反例：业务列表不能静默截断；真实 `_PreviewCacheTransaction` 映射视图必须进入动态结果投影。F2、CI 账单、无关 batch/可选依赖问题均未改动。
+
+### 修改位置与证据
+
+- `api/editor_commit.py`：删除业务列表的 128 项切片，保留字段白名单、最近 64 条 receipt 保留和不复制数组/mask/历史的约束。
+- `api/routers/converter/replace.py`：`_editor_commit_result` 接受 `Mapping`，复用 `dynamic_material_result_from_cache`；层数/层高只从 session 基础输入读取，不把缓存派生深度写回基础输入。
+- `frontend/src/stores/converter/store.ts`：真实 response model 序列化出的 `null` 可选字段不再清空现有业务状态；显式空列表仍表示清空；reset 的显式空 GLB 仍会清除旧派生工件。
+- 新增真实 GET 回执参数化测试覆盖 127/128/129 项，及真实事务 mapping + 动态 recipe/收益曲线序列化测试；前端接入带 `null` 可选字段、129 项列表和动态结果的生产形状 fixture。
+
+先运行旧实现的反例结果：129 条 recipe/free-color/replacement 列表均只返回 128 条、计数仍为 129；真实事务视图不返回动态字段；前端将 `color_layers` 和旧 GLB 清为 `null`。修复后：
+
+```text
+python3 -m pytest tests/test_converter_replace_integration_unit.py::test_editor_commit_result_lists_round_trip_through_get_endpoint tests/test_converter_replace_integration_unit.py::test_editor_commit_result_reads_dynamic_fields_from_real_transaction_view -q
+```
+
+结果：`4 passed, 1 warning`。
+
+```text
+python3 -m pytest tests/test_editor_commit_unit.py tests/test_converter_replace_integration_unit.py tests/test_converter_recipe_override_unit.py tests/test_preview_cache_artifacts_unit.py tests/test_converter_replace_layer_sync_unit.py -q
+```
+
+结果：`126 passed, 1 warning`。
+
+```text
+python3 scripts/run_vitest.py run src/__tests__/converter-store-commit-reconciliation.test.ts src/__tests__/converter-store-selection-race.test.ts src/__tests__/converter-store-layer-images-invalidate.test.ts
+```
+
+结果：`3 files passed, 26 tests passed`。
+
+```text
+cd frontend && pnpm build
+cd frontend && pnpm lint
+git diff --check
+```
+
+结果：build 通过；lint `0 errors, 68 warnings`；diff check 通过。warnings 仍为仓库既有提示。

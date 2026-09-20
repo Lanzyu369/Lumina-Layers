@@ -865,10 +865,16 @@ function editorCommitResultStateFromResponse(
     updates.layerImages = [];
     updates.layerImagesSourceKey = null;
   }
-  if (Object.prototype.hasOwnProperty.call(result, "preview_glb_url")) {
-    updates.previewGlbUrl = result.preview_glb_url
-      ? normalizeResourceUrl(result.preview_glb_url)
-      : null;
+  if (result.preview_glb_url) {
+    updates.previewGlbUrl = normalizeResourceUrl(result.preview_glb_url);
+  } else if (
+    operation === "reset_replacements" &&
+    result.preview_glb_url === null
+  ) {
+    // Reset explicitly publishes a null GLB because the old derived artifact
+    // no longer describes the restored content. Other receipts also serialize
+    // omitted optional fields as null; those must not clear a live GLB.
+    updates.previewGlbUrl = null;
   }
   if (result.replacement_regions !== undefined && result.replacement_regions !== null) {
     updates.replacement_regions = normalizeReplacementRegionsFromHistory(
@@ -890,14 +896,14 @@ function editorCommitResultStateFromResponse(
   if (result.free_color_set !== undefined && result.free_color_set !== null) {
     updates.free_color_set = new Set(result.free_color_set);
   }
-  if (result.color_layers !== undefined) {
+  if (result.color_layers !== undefined && result.color_layers !== null) {
     updates.color_layers = result.color_layers;
   }
-  if (result.layer_height_mm !== undefined) {
+  if (result.layer_height_mm !== undefined && result.layer_height_mm !== null) {
     updates.layer_height_mm = result.layer_height_mm;
   }
-  if (result.gradient_groups !== undefined) {
-    updates.gradientGroups = result.gradient_groups ?? null;
+  if (Array.isArray(result.gradient_groups)) {
+    updates.gradientGroups = result.gradient_groups;
   }
   if (result.can_undo !== undefined && result.can_undo !== null) {
     updates.historyCanUndo = result.can_undo;
@@ -905,19 +911,31 @@ function editorCommitResultStateFromResponse(
   if (result.can_redo !== undefined && result.can_redo !== null) {
     updates.historyCanRedo = result.can_redo;
   }
-  if (result.material_dynamic_recipes !== undefined) {
-    updates.materialDynamicRecipes = result.material_dynamic_recipes ?? [];
+  const dynamicRecipes = result.material_dynamic_recipes;
+  const benefitCurve = result.material_layer_benefit_curve;
+  const hasDynamicRecipes = dynamicRecipes !== undefined && dynamicRecipes !== null;
+  const hasBenefitCurve = benefitCurve !== undefined && benefitCurve !== null;
+  if (hasDynamicRecipes) {
+    updates.materialDynamicRecipes = dynamicRecipes;
   }
-  if (result.material_layer_benefit_curve !== undefined) {
-    updates.materialLayerBenefitCurve = result.material_layer_benefit_curve ?? [];
+  if (hasBenefitCurve) {
+    updates.materialLayerBenefitCurve = benefitCurve;
   }
-  if (result.material_layer_benefit_scope !== undefined) {
+  if (
+    result.material_layer_benefit_scope !== undefined &&
+    result.material_layer_benefit_scope !== null &&
+    result.material_layer_benefit_pixel_count !== undefined &&
+    result.material_layer_benefit_pixel_count !== null
+  ) {
     updates.materialLayerBenefitScope =
-      result.material_layer_benefit_scope ?? "all_printable_pixels";
-  }
-  if (result.material_layer_benefit_pixel_count !== undefined) {
+      result.material_layer_benefit_scope;
     updates.materialLayerBenefitPixelCount =
-      result.material_layer_benefit_pixel_count ?? 0;
+      result.material_layer_benefit_pixel_count;
+  } else if (hasDynamicRecipes || hasBenefitCurve) {
+    // Match the normal edit response's legacy fallback only when a dynamic
+    // result was actually supplied; null-only optional fields mean no update.
+    updates.materialLayerBenefitScope = "all_printable_pixels";
+    updates.materialLayerBenefitPixelCount = 0;
   }
   if (operation === "reset_replacements" && hasPreviewUrl) {
     updates.originalPreviewUrl = normalizeResourceUrl(result.preview_url);

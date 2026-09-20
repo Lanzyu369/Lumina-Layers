@@ -275,4 +275,101 @@ describe("editor commit receipt business-state reconciliation", () => {
     expect(useConverterStore.getState().recipe_overrides).toEqual([]);
     expect(useConverterStore.getState().free_color_set).toEqual(new Set());
   });
+
+  it("keeps complete serialized receipt lists and preserves omitted business fields", async () => {
+    seedEditorState({
+      color_layers: 5,
+      layer_height_mm: 0.08,
+      materialDynamicRecipes: [],
+      materialLayerBenefitCurve: [],
+      materialLayerBenefitScope: "all_printable_pixels",
+      materialLayerBenefitPixelCount: 4,
+    });
+    const recipeOverrides = Array.from({ length: 129 }, (_, index) => ({
+      region_id: `region-${index}`,
+      recipe: [index % 3],
+      layer_order: "Top2Bottom" as const,
+    }));
+    const freeColors = Array.from(
+      { length: 129 },
+      (_, index) => `${index.toString(16).padStart(6, "0")}`,
+    );
+    const dynamicRecipe = {
+      target_srgb: [1, 2, 3] as [number, number, number],
+      matched_srgb: [1, 2, 3] as [number, number, number],
+      actual_layer_count: 5,
+      padding_layer_count: 0,
+      actual_recipe_top_to_bottom: [0, 0, 0, 0, 0],
+      print_recipe_top_to_bottom: [0, 0, 0, 0, 0],
+      selected_delta_e00: 0,
+      best_range_delta_e00: 0,
+      fixed_max_delta_e00: 0,
+      delta_e00_sacrifice: 0,
+      layer_cap_options: [
+        {
+          max_effective_layer_count: 5,
+          actual_layer_count: 5,
+          matched_srgb: [1, 2, 3] as [number, number, number],
+          actual_recipe_top_to_bottom: [0, 0, 0, 0, 0],
+          print_recipe_top_to_bottom: [0, 0, 0, 0, 0],
+          delta_e00: 0,
+        },
+      ],
+    };
+    mockedApplyRecipeOverride.mockRejectedValueOnce(new Error("response lost"));
+    mockedGetEditorCommitStatus.mockResolvedValueOnce({
+      status: "committed",
+      operation_id: "serialized-recipe-operation",
+      operation: "apply_recipe_override",
+      editor_content_revision: 4,
+      visible_content_revision: 4,
+      selection_revision: 1,
+      // This mirrors the actual response-model serialization: optional fields
+      // that were not published are present as null, while empty lists remain
+      // meaningful business values.
+      result: {
+        preview_url: "/api/files/serialized-recipe.png",
+        preview_glb_url: null,
+        replacement_regions: null,
+        recipe_overrides: recipeOverrides,
+        recipe_override_count: 129,
+        region_replacement_count: null,
+        color_layers: null,
+        layer_height_mm: null,
+        gradient_groups: null,
+        free_color_set: freeColors,
+        can_undo: true,
+        can_redo: false,
+        material_dynamic_recipes: [dynamicRecipe],
+        material_layer_benefit_curve: [
+          {
+            max_effective_layer_count: 5,
+            weighted_mean_delta_e00: 0,
+            marginal_delta_e00_reduction: 0,
+          },
+        ],
+        material_layer_benefit_scope: "automatic_pixels",
+        material_layer_benefit_pixel_count: 4,
+      },
+    } as never);
+    mockedGetEditorSelection.mockResolvedValueOnce(document(1, 4));
+
+    await useConverterStore
+      .getState()
+      .applyCustomRecipeOverride(["region-a"], [3, 3, 3]);
+
+    const state = useConverterStore.getState();
+    expect(state.contentCommitStatus).toBe("committed");
+    expect(state.recipe_overrides).toHaveLength(129);
+    expect(state.recipe_overrides.at(-1)?.region_id).toBe("region-128");
+    expect(state.free_color_set.size).toBe(129);
+    expect(state.free_color_set.has("000080")).toBe(true);
+    expect(state.materialDynamicRecipes).toEqual([dynamicRecipe]);
+    expect(state.materialLayerBenefitCurve).toHaveLength(1);
+    expect(state.materialLayerBenefitScope).toBe("automatic_pixels");
+    expect(state.materialLayerBenefitPixelCount).toBe(4);
+    expect(state.color_layers).toBe(5);
+    expect(state.layer_height_mm).toBe(0.08);
+    expect(state.previewGlbUrl).toBe("/api/files/preview-before.glb");
+  });
 });

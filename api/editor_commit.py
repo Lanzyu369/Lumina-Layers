@@ -26,7 +26,6 @@ EDITOR_COMMIT_RECEIPTS_KEY = "editor_commit_receipts"
 EDITOR_COMMIT_RECEIPT_LIMIT = 64
 
 EditorCommitStatus = Literal["pending", "committed", "failed", "unknown"]
-EDITOR_COMMIT_RESULT_MAX_ITEMS = 128
 _EDITOR_COMMIT_RESULT_LIST_FIELDS = {
     "replacement_regions",
     "recipe_overrides",
@@ -216,11 +215,12 @@ def _bounded_editor_commit_result(result: dict[str, Any]) -> dict[str, Any]:
 
     The result contains business fields needed to converge a lost response;
     it deliberately never carries image arrays, masks, cache manifests, or
-    history checkpoints. Lists are capped defensively because receipts are
-    short-lived confirmations rather than a second editor state store.
+    history checkpoints. The field allowlist keeps receipts as short-lived
+    confirmations rather than a second editor state store; valid business
+    lists are not truncated because counts and editor state must remain exact.
     回执只保存响应丢失后完成对账所需的业务字段，绝不携带图像数组、mask、
-    缓存 manifest 或历史 checkpoint；列表也做防御性上限，避免回执变成
-    第二套编辑状态存储。
+    缓存 manifest 或历史 checkpoint；合法业务列表不能被静默截断，避免计数
+    与实际编辑状态分离。
     """
     bounded: dict[str, Any] = {}
     for key, value in result.items():
@@ -230,7 +230,7 @@ def _bounded_editor_commit_result(result: dict[str, Any]) -> dict[str, Any]:
             bounded[str(key)] = None
             continue
         if key in _EDITOR_COMMIT_RESULT_LIST_FIELDS and isinstance(value, list):
-            bounded[str(key)] = deepcopy(value[:EDITOR_COMMIT_RESULT_MAX_ITEMS])
+            bounded[str(key)] = deepcopy(value)
             continue
         if isinstance(value, (str, int, float, bool)):
             bounded[str(key)] = value

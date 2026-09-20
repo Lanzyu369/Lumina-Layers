@@ -84,3 +84,14 @@
 - 仍未确认：用户现场“最后生成报错”的具体类型。没有现场 request ID、服务端堆栈或真实素材，不能把它编造成 F1/F2 的单一根因。
 
 本轮新鲜结果：后端受影响集合 `122 passed, 1 warning`；前端 F1/排序/图层失效集合 `3 files, 25 tests passed`；构建通过；lint `0 errors, 68 warnings`；`git diff --check` 通过。全量限制和剩余风险继续以 `TEST_REPORT.md` 为准。
+
+## 8. F1 业务投影局部收口
+
+按后续复核限定，本轮只修复两个数据完整性问题：
+
+1. 删除 `_bounded_editor_commit_result` 对 `replacement_regions`、`recipe_overrides`、`free_color_set` 等业务列表的 128 项静默切片。真实 publish → GET → `EditorCommitStatusResponse` 参数化覆盖 127、128、129 项，129 项最后一项和计数均保留。
+2. `_editor_commit_result` 改为接受现有事务的 `Mapping`，动态 recipe/收益曲线进入真实序列化回执；`color_layers`/`layer_height_mm` 只取 session 基础输入，避免缓存派生深度污染基础预览参数。
+
+前端对账现在把 response model 的 `null` optional 字段视为“未提供”，把真正的空列表视为“明确清空”；普通编辑不会因序列化的 `preview_glb_url: null` 清掉旧 GLB，reset 仍按明确语义清除。新生产形状 fixture 验证 129 项列表、动态结果、基础层参数和旧 GLB 均正确。
+
+本轮新鲜结果：后端 `126 passed, 1 warning`；前端受影响集合 `3 files, 26 tests passed`；`pnpm build` 通过；lint `0 errors, 68 warnings`；`git diff --check` 通过。没有修改 F2、CI workflow、依赖或未跟踪 `pnpm-lock.yaml`。
