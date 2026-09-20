@@ -1078,6 +1078,8 @@ class HealthResponse(BaseModel):
     """健康检查响应（含 Worker Pool 状态）。"""
 
     status: str
+    service: str = "lumina-studio"
+    desktop_instance_id: Optional[str] = None
     version: str
     uptime_seconds: float
     worker_pool: WorkerPoolStatus

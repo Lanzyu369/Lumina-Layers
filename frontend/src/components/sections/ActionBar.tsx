@@ -59,6 +59,7 @@ function shouldUseApiErrorLanguage(error: unknown): boolean {
 
 function resolveRecipeExportError(error: unknown, t: (key: string) => string): string {
   if (error instanceof Error) {
+    if (error.message === 'file_save_failed' || error.message === 'file_save_too_large') return t(error.message)
     if (error.message === EXPORT_NO_IMAGE_MESSAGE) {
       return t("recipe_export_error_no_image")
     }
@@ -183,6 +184,7 @@ export default function ActionBar() {
 
   const [isExporting, setIsExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
+  const [exportNotice, setExportNotice] = useState<string | null>(null)
 
   const canSubmit = !!imageFile && sourceSelection.isReady
   const canGenerate = canSubmit && !!sessionId
@@ -724,7 +726,7 @@ export default function ActionBar() {
                     setIsExporting(true)
                     setExportError(null)
                     exportShareCard()
-                      .then(() => setExportError(null))
+                      .then((outcome) => setExportNotice(outcome === 'canceled' ? null : t(outcome === 'saved' ? 'file_save_saved' : 'file_save_download_started')))
                       .catch((err: unknown) => {
                         setExportError(resolveRecipeExportError(err, t))
                       })
@@ -742,7 +744,7 @@ export default function ActionBar() {
                     setIsExporting(true)
                     setExportError(null)
                     exportSidecar()
-                      .then(() => setExportError(null))
+                      .then((outcome) => setExportNotice(outcome === 'canceled' ? null : t(outcome === 'saved' ? 'file_save_saved' : 'file_save_download_started')))
                       .catch((err: unknown) => {
                         setExportError(resolveRecipeExportError(err, t))
                       })
@@ -764,6 +766,7 @@ export default function ActionBar() {
                 {t("recipe_export_error").replace("{error}", exportError)}
               </div>
             )}
+            {!isExporting && !exportError && exportNotice && <p role="status" className="text-xs">{exportNotice}</p>}
           </div>
         </>
       )}

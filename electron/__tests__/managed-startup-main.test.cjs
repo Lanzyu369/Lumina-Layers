@@ -12,6 +12,82 @@ const nativeRequire = createRequire(mainPath);
 const KEY = "c".repeat(32);
 const ID = "4c6637cf-9b83-4e8c-81b2-9dbf9053da80";
 
+for (const platform of ["win32", "darwin"]) {
+  test(`packaged ${platform} starts with the public cloud material library`, async t => {
+    const state = await fixture(t, "healthy", platform);
+    const env = state.children[0].spawnOptions.env;
+    assert.equal(env.LUMINA_MATERIAL_REGISTRY_URL, "https://materials.luminastudio.com.cn/api/material-registry/v1");
+    assert.equal(env.LUMINA_MATERIAL_REGISTRY_FALLBACK_URL, "https://dan5.shmx.top/api/material-registry/v1");
+    assert.equal(env.LUMINA_MATERIAL_REGISTRY_CHANNELS, "official,community");
+    assert.equal(env.LUMINA_MATERIAL_SYNC_STARTUP_REFRESH, "0");
+    assert.equal(env.LUMINA_MATERIAL_SYNC_REFRESH_INTERVAL_S, "0");
+    assert.equal(env.LUMINA_MATERIAL_REGISTRY_TOKEN, undefined);
+    assert.equal(env.LUMINA_LUT_REGISTRY_TOKEN, undefined);
+    assert.equal(env.LUMINA_FEEDBACK_RELAY_URL, "https://launcher.luminastudio.com.cn/v1/feedback/reports");
+    assert.equal(env.LUMINA_FEEDBACK_RELAY_TOKEN, undefined);
+  });
+}
+
+test("packaged cloud defaults preserve explicit endpoint and channel overrides", async t => {
+  const custom = {
+    LUMINA_MATERIAL_REGISTRY_URL: "https://custom.example/registry",
+    LUMINA_MATERIAL_REGISTRY_CHANNELS: "private",
+    LUMINA_LUT_REGISTRY_URL: "https://luts.example/registry",
+  };
+  const state = await fixture(t, "healthy", "win32", custom);
+  for (const [key, value] of Object.entries(custom)) assert.equal(state.children[0].spawnOptions.env[key], value);
+  assert.equal(state.children[0].spawnOptions.env.LUMINA_MATERIAL_REGISTRY_FALLBACK_URL, undefined);
+});
+
+for (const value of ["", "https://backup.example/registry"]) {
+  test(`cloud fallback preserves explicit override ${JSON.stringify(value)}`, async t => {
+    const state = await fixture(t, "healthy", "darwin", { LUMINA_MATERIAL_REGISTRY_FALLBACK_URL: value });
+    assert.equal(state.children[0].spawnOptions.env.LUMINA_MATERIAL_REGISTRY_FALLBACK_URL, value);
+  });
+}
+
+test("an explicit empty cloud endpoint remains disabled", async t => {
+  const state = await fixture(t, "healthy", "win32", { LUMINA_MATERIAL_REGISTRY_URL: "" });
+  assert.equal(state.children[0].spawnOptions.env.LUMINA_MATERIAL_REGISTRY_URL, "");
+  assert.equal(state.children[0].spawnOptions.env.LUMINA_MATERIAL_REGISTRY_FALLBACK_URL, undefined);
+});
+
+for (const value of ["", "https://custom.example/feedback"]) {
+  test(`feedback default preserves explicit endpoint ${JSON.stringify(value)}`, async t => {
+    const state = await fixture(t, "healthy", "win32", { LUMINA_FEEDBACK_RELAY_URL: value });
+    assert.equal(state.children[0].spawnOptions.env.LUMINA_FEEDBACK_RELAY_URL, value);
+  });
+}
+
+test("official cloud defaults preserve explicit sync and channel preferences", async t => {
+  const custom = {
+    LUMINA_MATERIAL_REGISTRY_CHANNELS: "official",
+    LUMINA_MATERIAL_SYNC_STARTUP_REFRESH: "1",
+    LUMINA_MATERIAL_SYNC_REFRESH_INTERVAL_S: "3600",
+  };
+  const state = await fixture(t, "healthy", "darwin", custom);
+  for (const [key, value] of Object.entries(custom)) assert.equal(state.children[0].spawnOptions.env[key], value);
+});
+
+test("source development mode does not enable a remote material service", () => {
+  const source = fs.readFileSync(mainPath, "utf8");
+  const start = source.indexOf("function backendRuntimeEnv()");
+  const end = source.indexOf("\n// ═", start);
+  assert.ok(start >= 0 && end > start);
+  const env = vm.runInNewContext(`(${source.slice(start, end)})()`, {
+    path, app: { getPath: () => "/development/data" },
+    workshopSessionToken: "test-session", managed: null, isDev: true,
+    process: { env: {} }, fs: { existsSync: () => false },
+    MATERIALS_SEED_RESOURCE: "/missing/materials.zip", WORKSHOP_SEED_RESOURCE_DIR: "/missing/workshop",
+    backendEndpoint: { port: 8001, instanceId: "test-instance" },
+  });
+  assert.equal(env.LUMINA_MATERIAL_REGISTRY_URL, undefined);
+  assert.equal(env.LUMINA_MATERIAL_REGISTRY_FALLBACK_URL, undefined);
+  assert.equal(env.LUMINA_MATERIAL_REGISTRY_CHANNELS, undefined);
+  assert.equal(env.LUMINA_MATERIAL_SYNC_STARTUP_REFRESH, undefined);
+  assert.equal(env.LUMINA_FEEDBACK_RELAY_URL, undefined);
+});
+
 async function until(check) {
   const deadline = Date.now() + 2000;
   while (!check()) {
@@ -20,7 +96,7 @@ async function until(check) {
   }
 }
 
-async function fixture(t, mode = "healthy", platform = "win32") {
+async function fixture(t, mode = "healthy", platform = "win32", environment = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "lumina-main-startup-"));
   const windows = [], children = [], commands = [], streams = [], requests = [], timers = [], dialogs = [];
   const signals = [], errorBoxes = [];
@@ -49,7 +125,7 @@ async function fixture(t, mode = "healthy", platform = "win32") {
       this.webContents.setWindowOpenHandler = () => {};
       windows.push(this);
     }
-    loadURL() { return Promise.resolve(); }
+    loadURL(url) { this.loadedUrl = url; return Promise.resolve(); }
     loadFile() { return Promise.resolve(); }
     show() { this.visible = true; this.emit("show"); }
     isVisible() { return this.visible; }
@@ -75,10 +151,18 @@ async function fixture(t, mode = "healthy", platform = "win32") {
     session: { defaultSession: session }, net: {}, webFrameMain: {},
   };
   const modules = {
+    "./backend-endpoint.cjs": {
+      ...(fs.existsSync(path.join(__dirname, "../backend-endpoint.cjs")) ? nativeRequire("./backend-endpoint.cjs") : {}),
+      selectBackendEndpoint: async () => {
+        if (mode === "port-busy") throw new Error("port_in_use");
+        return { port: 8001, origin: "http://127.0.0.1:8001", healthUrl: "http://127.0.0.1:8001/api/health", instanceId: "fixture-instance" };
+      },
+    },
     electron,
     child_process: {
-      spawn() {
+      spawn(command, args, options) {
         const child = new EventEmitter();
+        child.spawnOptions = options;
         Object.assign(child, { stdout: new EventEmitter(), stderr: new EventEmitter(), pid: 24680, exitCode: null, signalCode: null, killed: false });
         children.push(child);
         queueMicrotask(() => {
@@ -117,18 +201,61 @@ async function fixture(t, mode = "healthy", platform = "win32") {
     clearTimeout, URL, Response, Headers,
     process: { platform, resourcesPath: path.join(root, "resources"), pid: process.pid,
       kill(pid, signal) { signals.push({ pid, signal }); },
-      env: { LUMINA_MANAGED_USER_DATA: root, LUMINA_MANAGED_RUNTIME_KEY: KEY, LUMINA_MANAGED_LAUNCH_ID: ID } },
+      env: { LUMINA_MANAGED_USER_DATA: root, LUMINA_MANAGED_RUNTIME_KEY: KEY, LUMINA_MANAGED_LAUNCH_ID: ID, ...environment } },
   }, { filename: mainPath });
   await until(() => healthCallback || app.quitted);
   return {
     root, windows, children, commands, requests, app, read, dialogs, signals, errorBoxes,
-    healthy() { healthCallback({ statusCode: 200, resume() {} }); },
+    healthy() { respondHealthy(healthCallback); },
     expireHealth() { timers.find(timer => timer.delay >= 30000).callback(); },
     passOldDeadline() { for (const timer of timers.filter(timer => timer.delay >= 30000 && timer.delay <= 45000)) timer.callback(); },
     healthBudget: () => timers.find(timer => timer.delay >= 30000).delay,
     mainWindow: () => windows.find(window => window.options.title === "Lumina Studio 2"),
   };
 }
+
+function respondHealthy(callback, instanceId = "fixture-instance") {
+  const response = new EventEmitter();
+  Object.assign(response, { statusCode: 200, headers: { "content-type": "application/json" }, resume() {} });
+  callback(response);
+  response.emit("data", Buffer.from(JSON.stringify({ status: "ok", service: "lumina-studio", desktop_instance_id: instanceId })));
+  response.emit("end");
+}
+
+test("main passes selected endpoint and private identity to backend and frontend", async t => {
+  const f = await fixture(t);
+  assert.equal(f.children[0].spawnOptions.env.LUMINA_API_PORT, "8001");
+  assert.equal(f.children[0].spawnOptions.env.LUMINA_DESKTOP_INSTANCE_ID, "fixture-instance");
+  assert.equal(f.children[0].spawnOptions.env.LUMINA_SERVE_FRONTEND_DIST, "1");
+  assert.ok(f.children[0].spawnOptions.env.LUMINA_CLEAR_CACHE_ALLOWED_LOCAL_PORTS?.split(",").includes("8001"));
+  f.healthy(); await until(() => f.mainWindow());
+  assert.equal(f.mainWindow().loadedUrl, "http://127.0.0.1:8001/");
+});
+
+test("main rejects another launch identity even with HTTP 200", async t => {
+  const f = await fixture(t);
+  respondHealthy(f.requests[0].respond, "old-instance");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.mainWindow(), undefined);
+});
+
+test("selected port enables local material mutations while preserving configured local ports", async t => {
+  const f = await fixture(t, "healthy", "win32", {
+    LUMINA_MATERIAL_LIBRARY_ALLOWED_LOCAL_PORTS: "9100,9101",
+    LUMINA_CLEAR_CACHE_ALLOWED_LOCAL_PORTS: "9200",
+  });
+  const env = f.children[0].spawnOptions.env;
+  assert.equal(env.LUMINA_MATERIAL_LIBRARY_ALLOWED_LOCAL_PORTS, "9100,9101,8001");
+  assert.equal(env.LUMINA_CLEAR_CACHE_ALLOWED_LOCAL_PORTS, "9200,8001");
+});
+
+test("unmanaged package serves the same selected origin without killing port owners", async t => {
+  const f = await fixture(t, "healthy", "win32", { LUMINA_MANAGED_USER_DATA: "" });
+  assert.equal(f.commands.some(command => command.includes("netstat") || command.includes("lsof")), false);
+  assert.equal(f.children[0].spawnOptions.env.LUMINA_SERVE_FRONTEND_DIST, "1");
+  f.healthy(); await until(() => f.mainWindow());
+  assert.equal(f.mainWindow().loadedUrl, "http://127.0.0.1:8001/");
+});
 
 test("actual Electron main confirms the owned backend and loaded visible main window", async t => {
   const f = await fixture(t);
@@ -139,7 +266,10 @@ test("actual Electron main confirms the owned backend and loaded visible main wi
   assert.equal(f.read().state, "starting", "showing before load is not success");
   win.webContents.emit("did-finish-load");
   assert.equal(f.read().state, "ready");
-  assert.ok(fs.existsSync(path.join(f.root, "logs", KEY, "lumina-electron.log")), "managed main log shares the version log tree");
+  const mainLogPath = path.join(f.root, "logs", KEY, "lumina-electron.log");
+  // Readiness events do not await createWriteStream's asynchronous open/write.
+  await until(() => fs.existsSync(mainLogPath) && fs.statSync(mainLogPath).size > 0);
+  assert.ok(fs.existsSync(mainLogPath), "managed main log shares the version log tree");
   assert.equal(f.commands.some(command => command.includes("netstat")), false, "managed startup never kills port owners");
 });
 
@@ -183,7 +313,7 @@ test("health retries close rejected responses and stale timeouts cannot destroy 
   const second = f.requests[1];
   first.timeout();
   assert.notEqual(second.destroyed, true, "the old request callback cannot destroy the new request");
-  second.respond({ statusCode: 200, resume() {} });
+  respondHealthy(second.respond);
   await until(() => f.mainWindow());
   assert.equal(second.destroyed, true, "the successful probe also releases its socket");
 });

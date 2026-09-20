@@ -253,7 +253,10 @@ def test_electron_build_packages_native_bed_model_bridge() -> None:
     assert 'ipcMain.handle("get-native-bed-model"' in main
     assert "isAllowedBedModelIpcSender" in main
     assert "fetchNativeBedModel" in main
-    assert "pathToFileURL" in main
+    # Packaged desktop now serves the bundled UI through the owned local
+    # backend endpoint, rather than loading a file:// URL directly.
+    assert "backendEndpoint.origin" in main
+    assert "loadURL(trustedMainFrameUrl)" in main
     assert "getNativeBedModel" in preload
     assert "get-native-bed-model" in preload
 

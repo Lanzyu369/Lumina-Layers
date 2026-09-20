@@ -4,6 +4,12 @@ const path = require('node:path');
 const net = require('node:net');
 const { managedRuntime, assertPortsAvailable } = require('../managed-runtime.cjs');
 
+test('managed frontend and backend follow the selected launch port', () => {
+  const runtime = managedRuntime({ LUMINA_MANAGED_USER_DATA: path.resolve('shared-fixture'), LUMINA_MANAGED_RUNTIME_KEY: 'a'.repeat(32) }, 8007);
+  assert.equal(runtime.frontendUrl, 'http://127.0.0.1:8007/');
+  assert.equal(runtime.backendEnv.LUMINA_API_PORT, '8007');
+});
+
 test('managed versions share user files but not derived caches', () => {
   const root = path.resolve('shared-fixture');
   const first = managedRuntime({ LUMINA_MANAGED_USER_DATA: root, LUMINA_MANAGED_RUNTIME_KEY: 'a'.repeat(32) });

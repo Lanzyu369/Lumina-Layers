@@ -4,6 +4,10 @@
  * Contains all zh/en translation key-value pairs
  */
 export const translations: Record<string, Record<"zh" | "en", string>> = {
+  file_save_saved: { zh: "文件已保存", en: "File saved" },
+  file_save_download_started: { zh: "已开始下载", en: "Download started" },
+  file_save_failed: { zh: "保存失败，请检查文件名、目标目录权限和可用空间后重试。", en: "Save failed. Check the filename, folder permissions and available space, then retry." },
+  file_save_too_large: { zh: "文件超过 128 MiB 保存上限，请减小图像后重试。", en: "The file exceeds the 128 MiB save limit. Reduce the image size and retry." },
   // ==================== Application Title and Header ====================
   app_subtitle: {
     zh: "多材料3D打印色彩系统 | v1.6.3",

@@ -39,6 +39,7 @@ export default function UnifiedUploader({
   const [isDragging, setIsDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const addMoreInputRef = useRef<HTMLInputElement>(null);
+  const acceptedFormats = onShareCardDetected ? `${accept},.json` : accept;
 
   /**
    * Check files for share cards before passing to normal handler.
@@ -54,8 +55,8 @@ export default function UnifiedUploader({
           onShareCardDetected(file);
           return;
         }
-        // PNG: check for embedded recipe metadata
-        if (name.endsWith(".png")) {
+        // Validate renamed JSON projects or embedded PNG recipes.
+        if (name.endsWith(".png") || name.endsWith(".json")) {
           try {
             const isCard = await isShareCardFile(file);
             if (isCard) {
@@ -221,7 +222,7 @@ export default function UnifiedUploader({
           <input
             ref={addMoreInputRef}
             type="file"
-            accept={accept}
+            accept={acceptedFormats}
             multiple
             onChange={handleAddMoreChange}
             className="hidden"
@@ -255,7 +256,7 @@ export default function UnifiedUploader({
           <input
             ref={inputRef}
             type="file"
-            accept={accept}
+            accept={acceptedFormats}
             onChange={handleReplaceChange}
             className="hidden"
             aria-hidden="true"
@@ -288,7 +289,7 @@ export default function UnifiedUploader({
           <input
             ref={addMoreInputRef}
             type="file"
-            accept={accept}
+            accept={acceptedFormats}
             multiple
             onChange={handleAddMoreChange}
             className="hidden"
@@ -318,7 +319,7 @@ export default function UnifiedUploader({
       <input
         ref={inputRef}
         type="file"
-        accept={accept}
+        accept={acceptedFormats}
         multiple
         onChange={handleChange}
         className="hidden"

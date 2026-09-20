@@ -4,6 +4,7 @@
  */
 
 import { useConverterStore } from "../stores/converter";
+import { saveGeneratedFile, type SaveOutcome } from "../utils/saveGeneratedFile";
 import {
   resolveBuildPlateSelection,
   type NozzleSize,
@@ -87,6 +88,17 @@ export async function isShareCardFile(file: File): Promise<boolean> {
 
   // .lumina.json sidecar
   if (name.endsWith(".lumina.json")) return true;
+
+  // A native save dialog may replace the compound extension with .json.
+  if (name.endsWith(".json")) {
+    if (file.size > 128 * 1024 * 1024) return false;
+    try {
+      await parseRecipeFile(file);
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   // PNG with Lumina metadata
   if (name.endsWith(".png")) {
@@ -291,7 +303,7 @@ export function applyImport(
  * Export the current converter state as a share card PNG (download trigger).
  * 将当前 converter 状态导出为分享卡 PNG（触发下载）。
  */
-export async function exportShareCard(): Promise<void> {
+export async function exportShareCard(): Promise<SaveOutcome> {
   const converterState = useConverterStore.getState();
   assertRecipeExportSupported(converterState.modelSurfaceEnabled);
 
@@ -354,14 +366,14 @@ export async function exportShareCard(): Promise<void> {
 
   // 7. Trigger download
   const filename = converterState.imageFile.name.replace(/\.[^.]+$/, "") + "-share.png";
-  triggerDownload(shareCardBlob, filename);
+  return saveGeneratedFile(shareCardBlob, filename, 'share-card');
 }
 
 /**
  * Export the current converter state as a .lumina.json sidecar file.
  * 将当前 converter 状态导出为 .lumina.json sidecar 文件。
  */
-export async function exportSidecar(): Promise<void> {
+export async function exportSidecar(): Promise<SaveOutcome> {
   const converterState = useConverterStore.getState();
   assertRecipeExportSupported(converterState.modelSurfaceEnabled);
 
@@ -407,7 +419,7 @@ export async function exportSidecar(): Promise<void> {
   const json = JSON.stringify(fullRecipe, null, 2);
   const blob = new Blob([json], { type: "application/json" });
   const filename = converterState.imageFile.name.replace(/\.[^.]+$/, "") + ".lumina.json";
-  triggerDownload(blob, filename);
+  return saveGeneratedFile(blob, filename, 'project');
 }
 
 // ========== Helpers ==========
@@ -416,15 +428,4 @@ function assertRecipeExportSupported(modelSurfaceEnabled: boolean): void {
   if (modelSurfaceEnabled) {
     throw new Error(MODEL_SURFACE_RECIPE_EXPORT_UNAVAILABLE_ERROR);
   }
-}
-
-function triggerDownload(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
 }

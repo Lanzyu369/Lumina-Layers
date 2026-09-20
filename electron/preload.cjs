@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("electronAPI", {
+  saveGeneratedFile: (payload) => ipcRenderer.invoke("save-generated-file", payload),
   setLanguage: (lang) => ipcRenderer.send("set-language", lang),
   getAppVersion: () => ipcRenderer.invoke("get-app-version"),
   getNativeBedModel: (deviceProfileId) =>

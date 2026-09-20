@@ -1855,6 +1855,42 @@ def test_refresh_material_sync_from_registry_imports_only_catalog_revision(
     assert (materials_root / "BrandA" / "pla-other" / "material.json").exists() is False
 
 
+@pytest.mark.parametrize("catalog_key", ["materials", "packages"])
+def test_public_registry_refresh_fails_over_catalog_and_package(tmp_path, monkeypatch, catalog_key):
+    primary = "https://primary.test/v1"
+    backup = "https://backup.test/v1"
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_URL", primary)
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_FALLBACK_URL", backup)
+    monkeypatch.delenv("LUMINA_MATERIAL_REGISTRY_TOKEN", raising=False)
+    package_path = tmp_path / "bundle.zip"
+    info = _write_v2_multi_material_package(package_path)
+    package_bytes = package_path.read_bytes()
+    calls = []
+    def handle(request):
+        calls.append((request.url.host, request.url.path))
+        if request.url.host == "primary.test":
+            return httpx.Response(503)
+        if request.url.path.endswith("/catalog"):
+            assert "if-none-match" not in request.headers
+            return httpx.Response(200, headers={"etag": '"backup-only"'}, json={catalog_key: [{
+                "material_id": info["selected_material_id"],
+                "revision_id": info["selected_revision_id"],
+                "content_hash": info["selected_content_hash"], "channel": "official",
+                "visibility": "official", "package_url": backup + "/packages/bundle.zip",
+                "package_sha256": info["package_sha256"],
+            }]})
+        return httpx.Response(200, content=package_bytes)
+    root = tmp_path / "materials"
+    result = refresh_material_sync_from_registry(
+        materials_dir=str(root), channels=["official"], transport=httpx.MockTransport(handle))
+    assert result["installed_count"] == 1
+    assert result["failed_count"] == 0
+    assert (root / "BrandA" / "pla-selected" / "material.json").is_file()
+    assert not (root / "BrandA" / "pla-other").exists()
+    assert calls == [("primary.test", "/v1/materials/catalog"), ("backup.test", "/v1/materials/catalog"),
+                     ("primary.test", "/v1/packages/bundle.zip"), ("backup.test", "/v1/packages/bundle.zip")]
+
+
 def test_refresh_material_sync_from_registry_adopts_exact_local_material(
     tmp_path: Path,
 ) -> None:
