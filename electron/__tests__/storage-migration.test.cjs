@@ -123,6 +123,7 @@ test("migration defers completion when the legacy HTTP origin is occupied", asyn
   const indexPath = path.join(root, "index.html");
   const markerPath = path.join(root, "legacy-storage-migration.json");
   fs.writeFileSync(indexPath, "<!doctype html>");
+  fs.writeFileSync(markerPath, JSON.stringify({ schemaVersion: 1, status: "no-data" }));
   class FakeWindow {
     constructor() {
       this.destroyed = false;
@@ -142,5 +143,5 @@ test("migration defers completion when the legacy HTTP origin is occupied", asyn
     targetUrl: "http://127.0.0.1:8001/api/health",
     markerPath,
   }), "deferred");
-  assert.equal(fs.existsSync(markerPath), false);
+  assert.equal(JSON.parse(fs.readFileSync(markerPath, "utf8")).schemaVersion, 1);
 });
