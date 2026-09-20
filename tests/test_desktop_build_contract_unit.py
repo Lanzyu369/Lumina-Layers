@@ -238,6 +238,17 @@ def test_electron_build_packages_workshop_security_boundary() -> None:
     assert "workshop-security.cjs" in package_json["build"]["files"]
 
 
+def test_electron_build_packages_storage_migration_bridge() -> None:
+    package_json = json.loads(
+        (ROOT / "electron" / "package.json").read_text(encoding="utf-8")
+    )
+    build_script = (ROOT / "scripts" / "build_desktop.py").read_text(encoding="utf-8")
+
+    assert "storage-migration.cjs" in package_json["build"]["files"]
+    assert "storage-migration-preload.cjs" in package_json["build"]["files"]
+    assert "storage-migration-preload.cjs" in build_script
+
+
 def test_electron_build_packages_native_bed_model_bridge() -> None:
     package_json = json.loads(
         (ROOT / "electron" / "package.json").read_text(encoding="utf-8")

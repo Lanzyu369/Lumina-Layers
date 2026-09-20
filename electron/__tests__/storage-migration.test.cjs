@@ -3,6 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 
@@ -15,9 +16,18 @@ test("legacy storage snapshots detect localStorage and IndexedDB data", () => {
 });
 
 test("import script preserves ordinary localStorage and IndexedDB records", () => {
-  const script = migration.buildImportScript({
+  const script = migration.buildImportScript();
+  assert.match(script, /localStorage\.setItem/);
+  assert.match(script, /indexedDB\.open/);
+  assert.match(script, /__luminaMigrationReceive/);
+  assert.doesNotMatch(script, /module:project/);
+});
+
+test("snapshot transfer preserves structured-clone project values", () => {
+  const blob = new Blob(["lumina"], { type: "text/plain" });
+  const snapshot = {
     schemaVersion: 1,
-    localStorage: { "lumina-settings": JSON.stringify({ language: "zh" }) },
+    localStorage: {},
     indexedDB: [{
       name: "lumina-workshop",
       version: 2,
@@ -25,15 +35,31 @@ test("import script preserves ordinary localStorage and IndexedDB records", () =
         name: "projects",
         keyPath: "key",
         autoIncrement: false,
-        indexes: [{ name: "updatedAt", keyPath: "updatedAt", unique: false, multiEntry: false }],
-        records: [{ key: "module:project", value: { key: "module:project", updatedAt: "2026-09-21" } }],
+        indexes: [],
+        records: [{
+          key: "module:project",
+          value: {
+            bytes: new Uint8Array([1, 2, 3]),
+            buffer: new ArrayBuffer(2),
+            blob,
+            date: new Date("2026-09-21T00:00:00.000Z"),
+            map: new Map([["kind", "project"]]),
+            set: new Set(["lumina"]),
+            big: 42n,
+          },
+        }],
       }],
     }],
-  });
-  assert.match(script, /localStorage\.setItem/);
-  assert.match(script, /indexedDB\.open/);
-  assert.match(script, /module:project/);
-  assert.throws(() => migration.buildImportScript({ localStorage: { huge: "x".repeat(257 * 1024 * 1024) }, indexedDB: [] }), /too_large/);
+  };
+  const transferred = migration.cloneSnapshotForTransfer(snapshot);
+  const value = transferred.indexedDB[0].stores[0].records[0].value;
+  assert.deepEqual([...value.bytes], [1, 2, 3]);
+  assert.ok(value.buffer instanceof ArrayBuffer);
+  assert.equal(value.blob.type, "text/plain");
+  assert.equal(value.date.toISOString(), "2026-09-21T00:00:00.000Z");
+  assert.deepEqual([...value.map.entries()], [["kind", "project"]]);
+  assert.deepEqual([...value.set.values()], ["lumina"]);
+  assert.equal(value.big, 42n);
 });
 
 test("migration reads legacy sources, imports into the target, and becomes idempotent", async () => {
@@ -46,11 +72,13 @@ test("migration reads legacy sources, imports into the target, and becomes idemp
     constructor() {
       this.url = null;
       this.destroyed = false;
+      this.sent = [];
       this.webContents = {
         executeJavaScript: async code => {
-          if (code.includes("localStorage.setItem")) return true;
+          if (code.includes("__luminaMigrationReceive")) return true;
           return { schemaVersion: 1, localStorage: { migrated: "yes" }, indexedDB: [] };
         },
+        send: (_channel, payload) => { this.sent.push(payload); },
       };
       windows.push(this);
     }
@@ -67,10 +95,52 @@ test("migration reads legacy sources, imports into the target, and becomes idemp
   }), "migrated");
   assert.equal(JSON.parse(fs.readFileSync(markerPath, "utf8")).status, "migrated");
   assert.equal(windows.at(-1).url, "http://127.0.0.1:8001/api/health");
+  assert.equal(windows.at(-1).sent.length, 2);
   assert.equal(await migration.migrateLegacyStorage({
     BrowserWindow: FakeWindow,
     indexPath,
     targetUrl: "http://127.0.0.1:8001/api/health",
     markerPath,
   }), "already-migrated");
+});
+
+test("migration defers completion when the legacy HTTP origin is occupied", async t => {
+  const blocker = net.createServer();
+  await new Promise((resolve, reject) => {
+    blocker.once("error", reject);
+    blocker.listen({ port: migration.LEGACY_HTTP_PORT, host: "127.0.0.1", exclusive: true }, resolve);
+  }).catch(error => {
+    if (error.code === "EADDRINUSE") {
+      t.skip("legacy migration port is already occupied by the test environment");
+      return;
+    }
+    throw error;
+  });
+  if (!blocker.listening) return;
+  t.after(() => blocker.close());
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "lumina-storage-migration-deferred-"));
+  const indexPath = path.join(root, "index.html");
+  const markerPath = path.join(root, "legacy-storage-migration.json");
+  fs.writeFileSync(indexPath, "<!doctype html>");
+  class FakeWindow {
+    constructor() {
+      this.destroyed = false;
+      this.webContents = {
+        executeJavaScript: async () => ({ schemaVersion: 1, localStorage: {}, indexedDB: [] }),
+        send: () => {},
+      };
+    }
+    loadURL() { return Promise.resolve(); }
+    isDestroyed() { return this.destroyed; }
+    destroy() { this.destroyed = true; }
+  }
+
+  assert.equal(await migration.migrateLegacyStorage({
+    BrowserWindow: FakeWindow,
+    indexPath,
+    targetUrl: "http://127.0.0.1:8001/api/health",
+    markerPath,
+  }), "deferred");
+  assert.equal(fs.existsSync(markerPath), false);
 });

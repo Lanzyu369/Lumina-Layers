@@ -5,9 +5,11 @@ const http = require("node:http");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 
-const MIGRATION_VERSION = 1;
+const MIGRATION_VERSION = 2;
 const LEGACY_HTTP_PORT = 8000;
 const MAX_SNAPSHOT_BYTES = 256 * 1024 * 1024;
+const MIGRATION_CHANNEL = "lumina-migration-payload";
+const MIGRATION_PRELOAD_PATH = path.join(__dirname, "storage-migration-preload.cjs");
 
 const EXPORT_SCRIPT = `
 (async () => {
@@ -76,14 +78,66 @@ function hasSnapshotData(snapshot) {
   );
 }
 
-function buildImportScript(snapshot) {
-  const serialized = JSON.stringify(snapshot);
-  if (typeof serialized !== "string" || Buffer.byteLength(serialized, "utf8") > MAX_SNAPSHOT_BYTES) {
-    throw new Error("legacy_storage_snapshot_too_large");
+function isBlobValue(value) {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    typeof value.size === "number" &&
+    typeof value.type === "string" &&
+    typeof value.arrayBuffer === "function",
+  );
+}
+
+function estimateSnapshotBytes(value, seen = new WeakSet()) {
+  if (value == null) return 1;
+  switch (typeof value) {
+    case "string": return Buffer.byteLength(value, "utf8");
+    case "number":
+    case "boolean": return 8;
+    case "bigint": return 16;
+    case "undefined": return 1;
+    case "symbol":
+    case "function": throw new Error("legacy_storage_unsupported_value");
+    default: break;
   }
+  if (seen.has(value)) return 0;
+  seen.add(value);
+  if (value instanceof ArrayBuffer) return value.byteLength;
+  if (typeof SharedArrayBuffer !== "undefined" && value instanceof SharedArrayBuffer) return value.byteLength;
+  if (ArrayBuffer.isView(value)) return value.byteLength;
+  if (isBlobValue(value)) return value.size;
+  if (value instanceof Date) return 16;
+  if (value instanceof RegExp) return Buffer.byteLength(value.source, "utf8") + Buffer.byteLength(value.flags, "utf8");
+  if (value instanceof Map) {
+    let bytes = 16;
+    for (const [key, item] of value) bytes += estimateSnapshotBytes(key, seen) + estimateSnapshotBytes(item, seen);
+    return bytes;
+  }
+  if (value instanceof Set) {
+    let bytes = 16;
+    for (const item of value) bytes += estimateSnapshotBytes(item, seen);
+    return bytes;
+  }
+  if (Array.isArray(value)) return value.reduce((total, item) => total + estimateSnapshotBytes(item, seen), 16);
+  let bytes = 16;
+  for (const [key, item] of Object.entries(value)) {
+    bytes += Buffer.byteLength(key, "utf8") + estimateSnapshotBytes(item, seen);
+  }
+  return bytes;
+}
+
+function cloneSnapshotForTransfer(snapshot) {
+  if (typeof structuredClone !== "function") throw new Error("legacy_storage_structured_clone_unavailable");
+  const cloned = structuredClone(snapshot);
+  if (estimateSnapshotBytes(cloned) > MAX_SNAPSHOT_BYTES) throw new Error("legacy_storage_snapshot_too_large");
+  return cloned;
+}
+
+function buildImportScript() {
   return `
 (async () => {
-  const snapshot = ${serialized};
+  const snapshot = await globalThis.__luminaMigrationReceive();
+  if (!snapshot || typeof snapshot !== "object") return false;
   for (const [key, value] of Object.entries(snapshot.localStorage || {})) {
     try { localStorage.setItem(key, value == null ? "" : String(value)); } catch (_) {}
   }
@@ -184,7 +238,12 @@ async function readSnapshot(BrowserWindow, url, load) {
     show: false,
     width: 1,
     height: 1,
-    webPreferences: { contextIsolation: false, nodeIntegration: false },
+    webPreferences: {
+      contextIsolation: false,
+      nodeIntegration: false,
+      sandbox: false,
+      preload: MIGRATION_PRELOAD_PATH,
+    },
   });
   try {
     await load(window, url);
@@ -211,12 +270,14 @@ async function migrateLegacyStorage({ BrowserWindow, indexPath, targetUrl, marke
   if (!fs.existsSync(indexPath)) return "no-index";
   const snapshots = [];
   const sources = [{ url: pathToFileURL(indexPath).href, load: (window, url) => window.loadURL(url) }];
+  let allSourcesReadable = true;
   let legacyServer = null;
   try {
     legacyServer = await startLegacyHttpHost(LEGACY_HTTP_PORT);
     sources.push({ url: `http://127.0.0.1:${LEGACY_HTTP_PORT}/`, load: (window, url) => window.loadURL(url) });
   } catch (error) {
-    if (error?.code !== "EADDRINUSE") logger(`legacy HTTP storage source unavailable: ${error.code || error.name}`);
+    allSourcesReadable = false;
+    logger(`legacy HTTP storage source unavailable: ${error.code || error.name}`);
   }
   try {
     for (const source of sources) {
@@ -224,6 +285,7 @@ async function migrateLegacyStorage({ BrowserWindow, indexPath, targetUrl, marke
         const snapshot = await readSnapshot(BrowserWindow, source.url, source.load);
         if (hasSnapshotData(snapshot)) snapshots.push(snapshot);
       } catch (error) {
+        allSourcesReadable = false;
         logger(`legacy storage read failed: ${error.code || error.name}`);
       }
     }
@@ -231,6 +293,7 @@ async function migrateLegacyStorage({ BrowserWindow, indexPath, targetUrl, marke
     if (legacyServer) await new Promise(resolve => legacyServer.close(resolve));
   }
   if (snapshots.length === 0) {
+    if (!allSourcesReadable) return "deferred";
     writeMarker(markerPath, "no-data");
     return "no-data";
   }
@@ -238,15 +301,24 @@ async function migrateLegacyStorage({ BrowserWindow, indexPath, targetUrl, marke
     show: false,
     width: 1,
     height: 1,
-    webPreferences: { contextIsolation: false, nodeIntegration: false },
+    webPreferences: {
+      contextIsolation: false,
+      nodeIntegration: false,
+      sandbox: false,
+      preload: MIGRATION_PRELOAD_PATH,
+    },
   });
   try {
     await target.loadURL(targetUrl);
     for (const snapshot of snapshots) {
-      await target.webContents.executeJavaScript(buildImportScript(snapshot), true);
+      target.webContents.send(MIGRATION_CHANNEL, cloneSnapshotForTransfer(snapshot));
+      await target.webContents.executeJavaScript(buildImportScript(), true);
     }
-    writeMarker(markerPath, "migrated");
-    return "migrated";
+    if (allSourcesReadable) {
+      writeMarker(markerPath, "migrated");
+      return "migrated";
+    }
+    return "partial";
   } catch (error) {
     logger(`legacy storage import failed: ${error.code || error.name}`);
     return "failed";
@@ -256,8 +328,10 @@ async function migrateLegacyStorage({ BrowserWindow, indexPath, targetUrl, marke
 }
 
 module.exports = {
+  MIGRATION_CHANNEL,
   LEGACY_HTTP_PORT,
   buildImportScript,
+  cloneSnapshotForTransfer,
   hasSnapshotData,
   migrateLegacyStorage,
 };
