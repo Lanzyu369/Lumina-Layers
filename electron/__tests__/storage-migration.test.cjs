@@ -75,7 +75,7 @@ test("migration reads legacy sources, imports into the target, and becomes idemp
       this.sent = [];
       this.webContents = {
         executeJavaScript: async code => {
-          if (code.includes("__luminaMigrationReceive")) return true;
+          if (code.includes("__luminaMigrationReceive")) return { ok: true };
           return { schemaVersion: 1, localStorage: { migrated: "yes" }, indexedDB: [] };
         },
         send: (_channel, payload) => { this.sent.push(payload); },
@@ -144,4 +144,101 @@ test("migration defers completion when the legacy HTTP origin is occupied", asyn
     markerPath,
   }), "deferred");
   assert.equal(JSON.parse(fs.readFileSync(markerPath, "utf8")).schemaVersion, 1);
+});
+
+test("the current legacy origin does not require a second listener", async t => {
+  const blocker = net.createServer();
+  await new Promise((resolve, reject) => {
+    blocker.once("error", reject);
+    blocker.listen({ port: migration.LEGACY_HTTP_PORT, host: "127.0.0.1", exclusive: true }, resolve);
+  }).catch(error => {
+    if (error.code === "EADDRINUSE") {
+      t.skip("legacy migration port is already occupied by the test environment");
+      return;
+    }
+    throw error;
+  });
+  if (!blocker.listening) return;
+  t.after(() => blocker.close());
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "lumina-storage-migration-current-origin-"));
+  const indexPath = path.join(root, "index.html");
+  const markerPath = path.join(root, "legacy-storage-migration.json");
+  fs.writeFileSync(indexPath, "<!doctype html>");
+  class FakeWindow {
+    constructor() {
+      this.destroyed = false;
+      this.webContents = {
+        executeJavaScript: async () => ({ schemaVersion: 1, localStorage: {}, indexedDB: [] }),
+        send: () => {},
+      };
+    }
+    loadURL() { return Promise.resolve(); }
+    isDestroyed() { return this.destroyed; }
+    destroy() { this.destroyed = true; }
+  }
+
+  assert.equal(await migration.migrateLegacyStorage({
+    BrowserWindow: FakeWindow,
+    indexPath,
+    targetUrl: "http://127.0.0.1:8000/api/health",
+    markerPath,
+  }), "no-data");
+  assert.equal(JSON.parse(fs.readFileSync(markerPath, "utf8")).status, "no-data");
+});
+
+test("source read failure does not create a completion marker", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "lumina-storage-migration-read-failure-"));
+  const indexPath = path.join(root, "index.html");
+  const markerPath = path.join(root, "legacy-storage-migration.json");
+  fs.writeFileSync(indexPath, "<!doctype html>");
+  class FakeWindow {
+    constructor() {
+      this.destroyed = false;
+      this.webContents = {
+        executeJavaScript: async () => ({ schemaVersion: 1, ok: false, error: "legacy_indexeddb_read_failed" }),
+        send: () => {},
+      };
+    }
+    loadURL() { return Promise.resolve(); }
+    isDestroyed() { return this.destroyed; }
+    destroy() { this.destroyed = true; }
+  }
+
+  assert.equal(await migration.migrateLegacyStorage({
+    BrowserWindow: FakeWindow,
+    indexPath,
+    targetUrl: "http://127.0.0.1:8000/api/health",
+    markerPath,
+  }), "deferred");
+  assert.equal(fs.existsSync(markerPath), false);
+});
+
+test("import failure does not create a completion marker", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "lumina-storage-migration-write-failure-"));
+  const indexPath = path.join(root, "index.html");
+  const markerPath = path.join(root, "legacy-storage-migration.json");
+  fs.writeFileSync(indexPath, "<!doctype html>");
+  class FakeWindow {
+    constructor() {
+      this.destroyed = false;
+      this.webContents = {
+        executeJavaScript: async code => code.includes("__luminaMigrationReceive")
+          ? { ok: false, error: "legacy_indexeddb_write_failed" }
+          : { schemaVersion: 1, localStorage: { migrated: "yes" }, indexedDB: [] },
+        send: () => {},
+      };
+    }
+    loadURL() { return Promise.resolve(); }
+    isDestroyed() { return this.destroyed; }
+    destroy() { this.destroyed = true; }
+  }
+
+  assert.equal(await migration.migrateLegacyStorage({
+    BrowserWindow: FakeWindow,
+    indexPath,
+    targetUrl: "http://127.0.0.1:8000/api/health",
+    markerPath,
+  }), "failed");
+  assert.equal(fs.existsSync(markerPath), false);
 });

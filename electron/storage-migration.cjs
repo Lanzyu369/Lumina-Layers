@@ -13,20 +13,30 @@ const MIGRATION_PRELOAD_PATH = path.join(__dirname, "storage-migration-preload.c
 
 const EXPORT_SCRIPT = `
 (async () => {
-  const result = { schemaVersion: 1, localStorage: {}, indexedDB: [] };
+  const result = { schemaVersion: 1, ok: true, localStorage: {}, indexedDB: [] };
   try {
     for (let index = 0; index < localStorage.length; index += 1) {
       const key = localStorage.key(index);
       if (key !== null) result.localStorage[key] = localStorage.getItem(key);
     }
-  } catch (_) {}
-  if (!globalThis.indexedDB || typeof indexedDB.databases !== "function") return result;
+  } catch (_) {
+    return { schemaVersion: 1, ok: false, error: "legacy_local_storage_read_failed" };
+  }
+  if (!globalThis.indexedDB) return result;
+  if (typeof indexedDB.databases !== "function") {
+    return { schemaVersion: 1, ok: false, error: "legacy_indexeddb_enumeration_unavailable" };
+  }
   let databases = [];
-  try { databases = await indexedDB.databases(); } catch (_) { return result; }
+  try {
+    databases = await indexedDB.databases();
+  } catch (_) {
+    return { schemaVersion: 1, ok: false, error: "legacy_indexeddb_enumeration_failed" };
+  }
   for (const info of databases) {
     if (!info || typeof info.name !== "string" || !info.name) continue;
+    let database = null;
     try {
-      const database = await new Promise((resolve, reject) => {
+      database = await new Promise((resolve, reject) => {
         const request = indexedDB.open(info.name);
         request.onerror = () => reject(request.error || new Error("IndexedDB open failed"));
         request.onsuccess = () => resolve(request.result);
@@ -62,9 +72,12 @@ const EXPORT_SCRIPT = `
         });
         stores.push(schema);
       }
-      database.close();
       result.indexedDB.push({ name: info.name, version: database.version, stores });
-    } catch (_) {}
+    } catch (_) {
+      return { schemaVersion: 1, ok: false, error: "legacy_indexeddb_read_failed" };
+    } finally {
+      try { database?.close(); } catch (_) {}
+    }
   }
   return result;
 })()
@@ -137,9 +150,13 @@ function buildImportScript() {
   return `
 (async () => {
   const snapshot = await globalThis.__luminaMigrationReceive();
-  if (!snapshot || typeof snapshot !== "object") return false;
+  if (!snapshot || typeof snapshot !== "object") return { ok: false, error: "legacy_snapshot_missing" };
   for (const [key, value] of Object.entries(snapshot.localStorage || {})) {
-    try { localStorage.setItem(key, value == null ? "" : String(value)); } catch (_) {}
+    try {
+      localStorage.setItem(key, value == null ? "" : String(value));
+    } catch (_) {
+      return { ok: false, error: "legacy_local_storage_write_failed" };
+    }
   }
   for (const database of snapshot.indexedDB || []) {
     if (!database || typeof database.name !== "string" || !database.name) continue;
@@ -202,9 +219,11 @@ function buildImportScript() {
         transaction.onabort = () => reject(transaction.error || new Error("IndexedDB import transaction aborted"));
       });
       writable.close();
-    } catch (_) {}
+    } catch (_) {
+      return { ok: false, error: "legacy_indexeddb_write_failed" };
+    }
   }
-  return true;
+  return { ok: true };
 })()
 `;
 }
@@ -247,7 +266,9 @@ async function readSnapshot(BrowserWindow, url, load) {
   });
   try {
     await load(window, url);
-    return await window.webContents.executeJavaScript(EXPORT_SCRIPT, true);
+    const snapshot = await window.webContents.executeJavaScript(EXPORT_SCRIPT, true);
+    if (!snapshot || snapshot.ok === false) throw new Error(snapshot?.error || "legacy_storage_read_failed");
+    return snapshot;
   } finally {
     destroyWindow(window);
   }
@@ -271,13 +292,22 @@ async function migrateLegacyStorage({ BrowserWindow, indexPath, targetUrl, marke
   const snapshots = [];
   const sources = [{ url: pathToFileURL(indexPath).href, load: (window, url) => window.loadURL(url) }];
   let allSourcesReadable = true;
-  let legacyServer = null;
+  let targetOrigin;
   try {
-    legacyServer = await startLegacyHttpHost(LEGACY_HTTP_PORT);
-    sources.push({ url: `http://127.0.0.1:${LEGACY_HTTP_PORT}/`, load: (window, url) => window.loadURL(url) });
-  } catch (error) {
-    allSourcesReadable = false;
-    logger(`legacy HTTP storage source unavailable: ${error.code || error.name}`);
+    targetOrigin = new URL(targetUrl).origin;
+  } catch (_) {
+    return "failed";
+  }
+  let legacyServer = null;
+  const legacyHttpOrigin = `http://127.0.0.1:${LEGACY_HTTP_PORT}`;
+  if (targetOrigin !== legacyHttpOrigin) {
+    try {
+      legacyServer = await startLegacyHttpHost(LEGACY_HTTP_PORT);
+      sources.push({ url: `${legacyHttpOrigin}/`, load: (window, url) => window.loadURL(url) });
+    } catch (error) {
+      allSourcesReadable = false;
+      logger(`legacy HTTP storage source unavailable: ${error.code || error.name}`);
+    }
   }
   try {
     for (const source of sources) {
@@ -312,7 +342,8 @@ async function migrateLegacyStorage({ BrowserWindow, indexPath, targetUrl, marke
     await target.loadURL(targetUrl);
     for (const snapshot of snapshots) {
       target.webContents.send(MIGRATION_CHANNEL, cloneSnapshotForTransfer(snapshot));
-      await target.webContents.executeJavaScript(buildImportScript(), true);
+      const result = await target.webContents.executeJavaScript(buildImportScript(), true);
+      if (!result || result.ok !== true) throw new Error(result?.error || "legacy_storage_import_failed");
     }
     if (allSourcesReadable) {
       writeMarker(markerPath, "migrated");
