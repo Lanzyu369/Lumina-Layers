@@ -20,6 +20,7 @@ import BedPlatform from "./BedPlatform";
 import KeychainRing3D from "./KeychainRing3D";
 import FridgeMagnet3D from "./FridgeMagnet3D";
 import ModelSurfaceSelector3D from "./ModelSurfaceSelector3D";
+import { resolveModelSurfaceArtworkAsset } from "./modelSurface/artworkAsset";
 import { useConverterStore } from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
 import { computeScaleFactor } from "../utils/scaleUtils";
@@ -880,13 +881,16 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const modelSurfaceFile = useConverterStore((s) => s.modelSurfaceFile);
   const modelSurfacePreviewUrl = useConverterStore((s) => s.modelSurfacePreviewUrl);
   const modelSurfaceSelectionId = useConverterStore((s) => s.modelSurfaceSelectionId);
+  const modelSurfaceModelFileId = useConverterStore((s) => s.modelSurfaceModelFileId);
   const modelSurfaceFootprint = useConverterStore((s) => s.modelSurfaceFootprint);
   const modelSurfaceCandidates = useConverterStore((s) => s.modelSurfaceCandidates);
   const modelSurfacePlacement = useConverterStore((s) => s.modelSurfacePlacement);
   const modelSurfaceLoading = useConverterStore((s) => s.modelSurfaceLoading);
   const modelSurfaceSelecting = useConverterStore((s) => s.modelSurfaceSelecting);
   const imagePreviewUrl = useConverterStore((s) => s.imagePreviewUrl);
+  const aspectRatio = useConverterStore((s) => s.aspectRatio);
   const previewBaseImageUrl = useConverterStore((s) => s.previewBaseImageUrl);
+  const previewRequestRevision = useConverterStore((s) => s.previewRequestRevision);
   const selectModelSurfaceFace = useConverterStore((s) => s.selectModelSurfaceFace);
   const updateModelSurfacePlacement = useConverterStore((s) => s.updateModelSurfacePlacement);
   const updateModelSurfaceModelRotation = useConverterStore((s) => s.updateModelSurfaceModelRotation);
@@ -962,6 +966,31 @@ function Scene3D({ modelUrl }: Scene3DProps) {
     Boolean(modelSurfacePreviewUrl) &&
     Boolean(modelSurfaceFile) &&
     batchPreviewItems.length === 0;
+  const modelSurfaceArtworkAsset = useMemo(
+    () =>
+      resolveModelSurfaceArtworkAsset({
+        sourceImageUrl: imagePreviewUrl,
+        processedPreviewUrl: previewBaseImageUrl,
+        sourceAspectRatio: aspectRatio,
+        modelSurfaceEnabled,
+        modelFileId: modelSurfaceModelFileId,
+        selectionId: modelSurfaceSelectionId,
+        sessionId,
+        previewRequestRevision,
+        placement: modelSurfacePlacement,
+      }),
+    [
+      aspectRatio,
+      imagePreviewUrl,
+      modelSurfaceEnabled,
+      modelSurfaceModelFileId,
+      modelSurfacePlacement,
+      modelSurfaceSelectionId,
+      previewBaseImageUrl,
+      previewRequestRevision,
+      sessionId,
+    ],
+  );
   const modelSurfaceBusy =
     showModelSurfaceSelector && (modelSurfaceLoading || modelSurfaceSelecting);
   const modelBounds = useConverterStore((s) => s.modelBounds);
@@ -1397,7 +1426,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
         {showModelSurfaceSelector && modelSurfacePreviewUrl && modelSurfaceFile ? (
           <ModelSurfaceSelector3D
             file={modelSurfaceFile}
-            artworkUrl={previewBaseImageUrl ?? imagePreviewUrl}
+            artworkAsset={modelSurfaceArtworkAsset}
             footprint={modelSurfaceFootprint}
             surfaceCandidates={modelSurfaceCandidates}
             placement={modelSurfacePlacement}

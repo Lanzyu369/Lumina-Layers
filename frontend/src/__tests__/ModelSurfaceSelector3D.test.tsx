@@ -8,7 +8,9 @@ import {
   computeArtworkCanvasTransform,
   computeArtworkPlacementDrawSize,
   computeArtworkPlacementDrawSizeMm,
+  computeSurfaceArtworkCanvasSize,
 } from "../components/modelSurface/artworkPlacement";
+import { resolveModelSurfaceArtworkAsset } from "../components/modelSurface/artworkAsset";
 import {
   CanvasOverlayHtml,
   getCanvasOverlayFrame,
@@ -84,8 +86,8 @@ import ModelSurfaceSelector3D, {
   getSurfaceFocusRadius,
   computeArtworkPlacementDragUpdate,
   computeArtworkCoverDrawSize,
-  computeSurfaceArtworkCanvasSize,
   computeSurfacePreviewOffsetMm,
+  drawSurfaceArtworkCanvas,
   configureSurfaceArtworkTextureForPreview,
   createSurfaceArtworkGeometry,
   createSurfaceArtworkInteractionGeometry,
@@ -4141,8 +4143,216 @@ describe("ModelSurfaceSelector3D", () => {
       offsetY: 12,
       drawCenterX: 120,
       drawCenterY: 62,
-      rotationRadians: Math.PI / 2,
+      rotationRadians: -Math.PI / 2,
     });
+  });
+
+  it.each([0, 90, 180, 270, 33])(
+    "uses production drawing and geometry for asymmetric source/surface landmarks at %s degrees",
+    (rotationDeg) => {
+      const clearRect = vi.fn();
+      const drawImage = vi.fn();
+      const translate = vi.fn();
+      const rotate = vi.fn();
+      const moveTo = vi.fn();
+      const lineTo = vi.fn();
+      const fill = vi.fn();
+      vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
+        ((contextId: string) =>
+          contextId === "2d"
+            ? ({
+                clearRect,
+                save: vi.fn(),
+                translate,
+                rotate,
+                drawImage,
+                restore: vi.fn(),
+                beginPath: vi.fn(),
+                moveTo,
+                lineTo,
+                closePath: vi.fn(),
+                fill,
+                globalCompositeOperation: "source-over",
+              } as unknown as CanvasRenderingContext2D)
+            : null) as typeof HTMLCanvasElement.prototype.getContext,
+      );
+      const canvas = document.createElement("canvas");
+      const image = {
+        naturalWidth: 80,
+        naturalHeight: 40,
+        width: 80,
+        height: 40,
+      } as HTMLImageElement;
+      const surface = {
+        boundsMin: [-20, -40] as [number, number],
+        boundsMax: [20, 40] as [number, number],
+        widthMm: 40,
+        heightMm: 80,
+        outer: [
+          [-17, -35],
+          [16, -35],
+          [19, 34],
+          [-11, 40],
+          [-17, -35],
+        ] as [number, number][],
+        holes: [[
+          [-3, -2],
+          [4, -2],
+          [4, 5],
+          [-3, 5],
+          [-3, -2],
+        ]] as [number, number][][],
+      } as unknown as Parameters<typeof drawSurfaceArtworkCanvas>[1];
+      const asset = {
+        kind: "source-image" as const,
+        url: "blob:asymmetric-source",
+        sourceAspectRatio: 2,
+      };
+      const placements: ModelSurfacePlacement[] = [
+        {
+          mode: "edge_to_edge",
+          offset_x_mm: 2,
+          offset_y_mm: -1,
+          scale: 1.15,
+          rotation_deg: rotationDeg,
+          inset_mm: 0,
+        },
+        {
+          mode: "inset",
+          offset_x_mm: -3,
+          offset_y_mm: 1.5,
+          scale: 0.8,
+          rotation_deg: rotationDeg,
+          inset_mm: 4,
+        },
+      ];
+      const canvasSize = computeSurfaceArtworkCanvasSize(40, 80, {
+        viewportLongestSidePx: 160,
+      });
+
+      for (const placement of placements) {
+        clearRect.mockClear();
+        drawImage.mockClear();
+        translate.mockClear();
+        rotate.mockClear();
+        moveTo.mockClear();
+        lineTo.mockClear();
+        fill.mockClear();
+
+        drawSurfaceArtworkCanvas(
+          { asset, image },
+          surface,
+          placement,
+          { viewportLongestSidePx: 160 },
+          canvas,
+        );
+
+        const drawCall = drawImage.mock.calls.at(-1);
+        const targetWidth = Number(drawCall?.[3]);
+        const targetHeight = Number(drawCall?.[4]);
+        const insetPx = placement.mode === "inset"
+          ? Math.round(placement.inset_mm * canvasSize.pixelsPerMm)
+          : 0;
+        const availableWidth = canvasSize.widthPx - insetPx * 2;
+        const availableHeight = canvasSize.heightPx - insetPx * 2;
+        const radians = THREE.MathUtils.degToRad(rotationDeg);
+        const cosine = Math.abs(Math.cos(radians));
+        const sine = Math.abs(Math.sin(radians));
+        const expectedFit = placement.mode === "inset"
+          ? Math.min(
+              availableWidth / (80 * cosine + 40 * sine),
+              availableHeight / (80 * sine + 40 * cosine),
+            )
+          : Math.max(
+              (availableWidth * cosine + availableHeight * sine) / 80,
+              (availableWidth * sine + availableHeight * cosine) / 40,
+            );
+        const expectedWidth = 80 * expectedFit * placement.scale;
+        const expectedHeight = 40 * expectedFit * placement.scale;
+
+        expect(clearRect).toHaveBeenCalledWith(0, 0, canvasSize.widthPx, canvasSize.heightPx);
+        expect(Math.abs(targetWidth / targetHeight - 2)).toBeLessThan(0.04);
+        expect(targetWidth).toBeCloseTo(
+          placement.mode === "inset" ? Math.floor(expectedWidth) : Math.ceil(expectedWidth),
+          8,
+        );
+        expect(targetHeight).toBeCloseTo(
+          placement.mode === "inset" ? Math.floor(expectedHeight) : Math.ceil(expectedHeight),
+          8,
+        );
+        expect(translate).toHaveBeenCalledWith(
+          canvasSize.widthPx / 2 + placement.offset_x_mm * canvasSize.pixelsPerMm,
+          canvasSize.heightPx / 2 - placement.offset_y_mm * canvasSize.pixelsPerMm,
+        );
+        expect(rotate).toHaveBeenCalledWith(-THREE.MathUtils.degToRad(rotationDeg));
+
+        // These are production mask coordinates, checked independently from
+        // the artwork transform so off-centre corners and the hole stay tied
+        // to the selected surface rather than to the image aspect ratio.
+        const mapSurfacePoint = ([x, y]: [number, number]): [number, number] => [
+          (x - surface.boundsMin[0]) * canvasSize.pixelsPerMm,
+          (surface.boundsMax[1] - y) * canvasSize.pixelsPerMm,
+        ];
+        expect(moveTo.mock.calls[0]).toEqual(mapSurfacePoint(surface.outer[0]));
+        expect(moveTo.mock.calls[1]).toEqual(mapSurfacePoint(surface.holes[0][0]));
+        expect(fill).toHaveBeenCalledTimes(2);
+        expect(lineTo.mock.calls.length).toBe(8);
+      }
+    },
+  );
+
+  it("maps a backend surface-uv asset directly without reapplying placement or masks", () => {
+    const clearRect = vi.fn();
+    const drawImage = vi.fn();
+    const rotate = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
+      ((contextId: string) =>
+        contextId === "2d"
+          ? ({ clearRect, drawImage, rotate } as unknown as CanvasRenderingContext2D)
+          : null) as typeof HTMLCanvasElement.prototype.getContext,
+    );
+    const surface = {
+      boundsMin: [-10, -5] as [number, number],
+      boundsMax: [10, 5] as [number, number],
+      widthMm: 20,
+      heightMm: 10,
+      outer: [],
+      holes: [[[-2, -1], [2, -1], [2, 1], [-2, 1], [-2, -1]]],
+    } as never;
+    const canvas = document.createElement("canvas");
+    const image = { naturalWidth: 640, naturalHeight: 320, width: 640, height: 320 } as HTMLImageElement;
+    const asset = {
+      kind: "surface-uv" as const,
+      url: "/api/files/processed-surface.png",
+      sourceAspectRatio: 2,
+      identity: {
+        sourceImageUrl: "blob:source",
+        modelFileId: "model-1",
+        selectionId: "selection-1",
+        sessionId: "session-1",
+        previewRequestRevision: 4,
+        placement: {
+          mode: "inset" as const,
+          offset_x_mm: 3,
+          offset_y_mm: -2,
+          scale: 1.2,
+          rotation_deg: 33,
+          inset_mm: 1,
+        },
+      },
+    };
+
+    drawSurfaceArtworkCanvas(
+      { asset, image },
+      surface,
+      asset.identity.placement,
+      { viewportLongestSidePx: 200 },
+      canvas,
+    );
+
+    expect(clearRect).toHaveBeenCalledWith(0, 0, canvas.width, canvas.height);
+    expect(drawImage).toHaveBeenCalledWith(image, 0, 0, canvas.width, canvas.height);
+    expect(rotate).not.toHaveBeenCalled();
   });
 
   it("gives OBJ meshes owned material clones without disposing the shared source", () => {
@@ -5231,6 +5441,166 @@ describe("ModelSurfaceSelector3D", () => {
       expect(rotatedWidth).toBeLessThanOrEqual(161);
       expect(rotatedHeight).toBeLessThanOrEqual(161);
       expect(Math.max(rotatedWidth, rotatedHeight)).toBeCloseTo(160, 0);
+    } finally {
+      Object.defineProperty(window, "Image", {
+        configurable: true,
+        writable: true,
+        value: originalImage,
+      });
+    }
+  });
+
+  it("does not let a late surface preview image load replace a newer source-image role", async () => {
+    vi.spyOn(THREE.Box3.prototype, "setFromObject").mockImplementation(function (this: THREE.Box3) {
+      this.min.set(-10, -5, 0);
+      this.max.set(10, 5, 2);
+      return this;
+    });
+    const drawImage = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
+      ((contextId: string) =>
+        contextId === "2d"
+          ? ({
+              clearRect: vi.fn(),
+              save: vi.fn(),
+              translate: vi.fn(),
+              rotate: vi.fn(),
+              drawImage,
+              restore: vi.fn(),
+              beginPath: vi.fn(),
+              moveTo: vi.fn(),
+              lineTo: vi.fn(),
+              closePath: vi.fn(),
+              fill: vi.fn(),
+              globalCompositeOperation: "source-over",
+            } as unknown as CanvasRenderingContext2D)
+          : null) as typeof HTMLCanvasElement.prototype.getContext,
+    );
+    const originalImage = window.Image;
+    const images: Array<{
+      naturalWidth: number;
+      naturalHeight: number;
+      width: number;
+      height: number;
+      onload: (() => void) | null;
+      onerror: (() => void) | null;
+      src: string;
+    }> = [];
+    class DeferredImage {
+      naturalWidth = 800;
+      naturalHeight = 400;
+      width = 800;
+      height = 400;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      private _src = "";
+
+      get src(): string {
+        return this._src;
+      }
+
+      set src(value: string) {
+        this._src = value;
+        images.push(this);
+      }
+    }
+    Object.defineProperty(window, "Image", {
+      configurable: true,
+      writable: true,
+      value: DeferredImage,
+    });
+    const file = new File(["solid"], "plate.stl");
+    vi.spyOn(file, "arrayBuffer").mockResolvedValue(new ArrayBuffer(16));
+    const footprint = {
+      frame: {
+        origin: [0, 0, 1] as [number, number, number],
+        normal: [0, 0, 1] as [number, number, number],
+        u_axis: [1, 0, 0] as [number, number, number],
+        v_axis: [0, 1, 0] as [number, number, number],
+      },
+      bounds_min: [-10, -5] as [number, number],
+      bounds_max: [10, 5] as [number, number],
+      bounds_width_mm: 20,
+      bounds_height_mm: 10,
+      outer: [[-10, -5], [10, -5], [10, 5], [-10, 5], [-10, -5]] as [number, number][],
+      holes: [],
+    };
+    const surfaceAsset = resolveModelSurfaceArtworkAsset({
+      sourceImageUrl: "blob:source",
+      processedPreviewUrl: "/api/files/surface-a.png",
+      sourceAspectRatio: 2,
+      modelSurfaceEnabled: true,
+      modelFileId: "model-1",
+      selectionId: "selection-1",
+      sessionId: "session-a",
+      previewRequestRevision: 1,
+      placement: {
+        mode: "edge_to_edge",
+        offset_x_mm: 0,
+        offset_y_mm: 0,
+        scale: 1,
+        rotation_deg: 0,
+        inset_mm: 0,
+      },
+    });
+    const sourceAsset = resolveModelSurfaceArtworkAsset({
+      sourceImageUrl: "blob:source-b",
+      processedPreviewUrl: null,
+      sourceAspectRatio: 2,
+      modelSurfaceEnabled: true,
+      modelFileId: "model-1",
+      selectionId: "selection-1",
+      sessionId: null,
+      previewRequestRevision: 2,
+      placement: {
+        mode: "edge_to_edge",
+        offset_x_mm: 0,
+        offset_y_mm: 0,
+        scale: 1,
+        rotation_deg: 0,
+        inset_mm: 0,
+      },
+    });
+
+    try {
+      const { rerender } = render(
+        <ModelSurfaceSelector3D
+          file={file}
+          artworkAsset={surfaceAsset}
+          selectionReady
+          selecting={false}
+          footprint={footprint}
+          onSelectFace={vi.fn()}
+          onUpdatePlacement={vi.fn()}
+        />,
+      );
+      await waitFor(() => expect(images).toHaveLength(1));
+
+      rerender(
+        <ModelSurfaceSelector3D
+          file={file}
+          artworkAsset={sourceAsset}
+          selectionReady
+          selecting={false}
+          footprint={footprint}
+          onSelectFace={vi.fn()}
+          onUpdatePlacement={vi.fn()}
+        />,
+      );
+      await waitFor(() => expect(images).toHaveLength(2));
+
+      images[1].onload?.();
+      await waitFor(() => expect(findArtworkTextureMaterial()).not.toBeNull());
+      const drawCountAfterSourceLoad = drawImage.mock.calls.length;
+      expect(drawImage.mock.calls.at(-1)?.[0]).toBe(images[1]);
+
+      images[0].onload?.();
+      images[0].onerror?.();
+      await Promise.resolve();
+
+      expect(drawImage.mock.calls.length).toBe(drawCountAfterSourceLoad);
+      expect(drawImage.mock.calls.at(-1)?.[0]).toBe(images[1]);
+      expect(findArtworkTextureMaterial()).not.toBeNull();
     } finally {
       Object.defineProperty(window, "Image", {
         configurable: true,

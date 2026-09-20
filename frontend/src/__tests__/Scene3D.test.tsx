@@ -914,7 +914,7 @@ beforeEach(() => {
       expect(screen.getByTestId("mock-model-surface-selector")).toBeInTheDocument();
       expect(capturedModelSurfaceSelectorProps).toMatchObject({
         file: modelFile,
-        artworkUrl: "blob:art",
+        artworkAsset: { kind: "source-image", url: "blob:art" },
         selectionReady: true,
       });
       expect(capturedModelSurfaceSelectorProps?.placement).toEqual(
@@ -945,13 +945,24 @@ beforeEach(() => {
         imagePreviewUrl: "blob:original-svg",
         previewBaseImageUrl: "/api/files/processed-colours.png",
         previewImageUrl: "/api/files/temporary-selection-highlight.png",
+        modelSurfaceModelFileId: "model-file-1",
+        sessionId: "session-1",
+        previewRequestRevision: 7,
       } as never);
 
       render(<Scene3D />);
 
-      expect(capturedModelSurfaceSelectorProps?.artworkUrl).toBe(
-        "/api/files/processed-colours.png",
-      );
+      expect(capturedModelSurfaceSelectorProps?.artworkAsset).toMatchObject({
+        kind: "surface-uv",
+        url: "/api/files/processed-colours.png",
+        identity: {
+          sourceImageUrl: "blob:original-svg",
+          modelFileId: "model-file-1",
+          selectionId: "selection-1",
+          sessionId: "session-1",
+          previewRequestRevision: 7,
+        },
+      });
     });
 
     it("reuses the scene bed platform while model surface rotate controls are active", () => {
@@ -1003,7 +1014,7 @@ beforeEach(() => {
       expect(screen.getByTestId("mock-model-surface-selector")).toBeInTheDocument();
       expect(capturedModelSurfaceSelectorProps).toMatchObject({
         file: modelFile,
-        artworkUrl: "blob:art",
+        artworkAsset: { kind: "source-image", url: "blob:art" },
         selectionReady: true,
       });
       expect(capturedInteractiveViewerProps).toBeNull();
@@ -1026,7 +1037,7 @@ beforeEach(() => {
       expect(screen.getByTestId("mock-model-surface-selector")).toBeInTheDocument();
       expect(capturedModelSurfaceSelectorProps).toMatchObject({
         file: modelFile,
-        artworkUrl: "blob:art",
+        artworkAsset: { kind: "source-image", url: "blob:art" },
         selectionReady: true,
       });
       expect(capturedInteractiveViewerProps).toBeNull();
