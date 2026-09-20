@@ -55,6 +55,9 @@ class _MemoryReservation:
 class _MemoryWaiter:
     loop: asyncio.AbstractEventLoop
     event: asyncio.Event
+    service_epoch: int | None = None
+    terminal: bool = False
+    terminal_reason: str | None = None
 
 
 @dataclass
@@ -262,14 +265,19 @@ class _HostMemoryReservationGate:
         owner: object,
         parallel_target_bytes: int | None = None,
         timeout: float | None = None,
+        service_epoch: int | None = None,
     ) -> tuple[str, int]:
-        """Wait for optional-extension contention without occupying the pool.
+        """Wait for temporary capacity contention without occupying the pool.
 
-        在父进程内等待可选扩展争用；未取得真实预留前不进入 executor。
+        在父进程内等待暂时容量争用；未取得真实预留前不进入 executor。
         """
 
         requested = max(1, int(requested_bytes))
-        waiter = _MemoryWaiter(asyncio.get_running_loop(), asyncio.Event())
+        waiter = _MemoryWaiter(
+            asyncio.get_running_loop(),
+            asyncio.Event(),
+            service_epoch=service_epoch,
+        )
         deadline = (
             asyncio.get_running_loop().time() + timeout
             if timeout is not None
@@ -311,6 +319,11 @@ class _HostMemoryReservationGate:
             while True:
                 with self._condition:
                     waiter.event.clear()
+                    if waiter.terminal:
+                        raise RuntimeError(
+                            waiter.terminal_reason
+                            or "worker pool memory wait is closed"
+                        )
                     if self._closed:
                         raise RuntimeError("worker pool memory gate is closed")
                     if self._waiters[0] is not waiter:
@@ -359,7 +372,15 @@ class _HostMemoryReservationGate:
 
         with self._condition:
             self._closed = True
-            self._signal_waiters_locked()
+            waiters = tuple(self._waiters)
+            self._waiters.clear()
+            for waiter in waiters:
+                waiter.terminal = True
+                waiter.terminal_reason = "worker pool service epoch is closed"
+                try:
+                    waiter.loop.call_soon_threadsafe(waiter.event.set)
+                except RuntimeError:
+                    pass
 
     def reopen_waiters(self) -> None:
         with self._condition:
@@ -753,31 +774,12 @@ class WorkerPoolManager:
         self._host_memory_gate.notify_waiters()
 
     def _current_generation_locked(self) -> _ExecutorGeneration | None:
-        """Return the current generation, tolerating test-injected executors."""
+        """Return the formally published current generation, if any."""
 
         generation = self._generation
         if generation is not None and generation.executor is self._pool:
             return generation
-        if self._pool is None:
-            return None
-        # A few focused tests inject a small executor sentinel directly into
-        # ``_pool``. Treat that as one generation without weakening production
-        # lifecycle ownership.
-        self._generation_counter += 1
-        generation = _ExecutorGeneration(
-            generation_id=self._generation_counter,
-            epoch=self._service_epoch,
-            executor=self._pool,
-            demand_publisher=self._demand_publisher,
-            worker_lease_path=(
-                str(self._demand_publisher.worker_lease_path)
-                if self._demand_publisher is not None
-                else None
-            ),
-        )
-        self._generation = generation
-        self._service_open = True
-        return generation
+        return None
 
     async def _wait_for_generation(
         self,
@@ -882,7 +884,10 @@ class WorkerPoolManager:
         self._update_demand(publisher, "decrement")
         self._maybe_cleanup_publisher()
 
-    def _complete_executor_generation(self, owner: object) -> None:
+    def _complete_executor_generation(
+        self,
+        owner: _ExecutorGeneration,
+    ) -> None:
         """Complete every task owned by an executor confirmed to be stopped."""
 
         with self._active_task_lock:
@@ -892,10 +897,6 @@ class WorkerPoolManager:
                     self._active_tasks.items()
                 )
                 if task_owner is owner
-                or (
-                    isinstance(task_owner, _ExecutorGeneration)
-                    and task_owner.executor is owner
-                )
             ]
         for token in tokens:
             self._complete_active_task(token)
@@ -974,10 +975,6 @@ class WorkerPoolManager:
         if surviving_workers == 0:
             self._complete_executor_generation(generation)
             self._host_memory_gate.release_owner(generation)
-            # Focused tests and older callers may have registered the raw
-            # executor as the owner; the idempotent second pass is harmless.
-            self._complete_executor_generation(failed_pool)
-            self._host_memory_gate.release_owner(failed_pool)
 
         restarted = False
         with self._pool_lock:
@@ -1225,6 +1222,7 @@ class WorkerPoolManager:
                             owner=candidate,
                             parallel_target_bytes=host_memory_parallel_target_bytes,
                             timeout=remaining,
+                            service_epoch=request_epoch,
                         )
                     )
                 with self._pool_lock:
