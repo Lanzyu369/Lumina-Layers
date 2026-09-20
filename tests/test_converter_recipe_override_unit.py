@@ -209,6 +209,89 @@ def test_apply_recipe_override_endpoint_updates_preview_cache(
     assert registry.resolve(file_id) is not None
 
 
+def test_apply_recipe_override_does_not_restore_old_session_after_cache_publish(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, store, _registry = _client_with_state()
+    lut_path = tmp_path / "ref.msgpack"
+    lut_path.write_bytes(b"package")
+    session_id = store.create()
+    matched_rgb = np.zeros((4, 4, 3), dtype=np.uint8)
+    material_matrix = np.zeros((4, 4, 5), dtype=np.int32)
+    mask = np.zeros((4, 4), dtype=bool)
+    mask[1:3, 1:3] = True
+    store.put(session_id, "lut_path", str(lut_path))
+    store.put(
+        session_id,
+        "preview_cache",
+        {
+            "matched_rgb": matched_rgb.copy(),
+            "quantized_image": matched_rgb.copy(),
+            "material_matrix": material_matrix.copy(),
+            "mask_solid": np.ones((4, 4), dtype=bool),
+            "color_layers": 5,
+            "layer_height_mm": 0.08,
+        },
+    )
+    store.put(session_id, "selected_region_mask", mask)
+    store.put(session_id, "selected_region_id", "region-1")
+    store.put(session_id, "selected_region_masks", {"region-1": mask})
+
+    monkeypatch.setattr(
+        "api.routers.converter.replace.LUTManager.load_lut_with_metadata",
+        lambda _path: (
+            np.zeros((0, 3), dtype=np.uint8),
+            None,
+            LUTMetadata(max_color_layers=5, layer_height_mm=0.08, base_channel_idx=0),
+        ),
+    )
+    monkeypatch.setattr(
+        "api.routers.converter.replace.predict_recipe_color",
+        lambda metadata, recipe, layer_height_mm, color_layers, layer_order: {
+            "rgb": [200, 100, 50],
+            "lab": [55.0, 2.0, 3.0],
+            "source": "stage_model",
+            "runtime_mode_key": "0.08x5",
+        },
+    )
+    monkeypatch.setattr(
+        "api.routers.converter.replace.schedule_glb_build",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def _raise_after_cache_publish(*_args, **_kwargs):
+        raise RuntimeError("history publish failed after cache commit")
+
+    monkeypatch.setattr(
+        "api.routers.converter.replace._push_history_checkpoint",
+        _raise_after_cache_publish,
+    )
+
+    response = client.post(
+        "/api/convert/apply-recipe-override",
+        json={
+            "session_id": session_id,
+            "region_ids": ["region-1"],
+            "recipe": [1, 1, 1, 1, 1],
+            "layer_order": "Top2Bottom",
+            "color_layers": 5,
+            "layer_height_mm": 0.08,
+        },
+    )
+
+    assert response.status_code == 422
+    session_data = store.get(session_id)
+    assert session_data is not None
+    assert np.all(
+        session_data["preview_cache"]["matched_rgb"][mask]
+        == np.array([200, 100, 50], dtype=np.uint8)
+    )
+    assert session_data["recipe_overrides"][0]["region_id"] == "region-1"
+    receipt = session_data["editor_commit_receipts"]
+    assert next(iter(receipt.values()))["status"] == "pending"
+
+
 def test_apply_recipe_override_redacts_unexpected_file_errors(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -2962,6 +3045,7 @@ def test_apply_recipe_override_material_archive_missing_selected_materials_retur
         "/api/convert/apply-recipe-override",
         json={
             "session_id": session_id,
+            "operation_id": "recipe-precommit-failure",
             "region_ids": ["region-1"],
             "recipe": [0, 0, 0, 0, 0],
             "layer_order": "Top2Bottom",
@@ -2971,3 +3055,9 @@ def test_apply_recipe_override_material_archive_missing_selected_materials_retur
     )
     assert response.status_code == 409, response.text
     assert "selected_materials" in response.json()["detail"]
+    session_data = store.get(session_id)
+    assert session_data is not None
+    assert (
+        session_data["editor_commit_receipts"]["recipe-precommit-failure"]["status"]
+        == "failed"
+    )

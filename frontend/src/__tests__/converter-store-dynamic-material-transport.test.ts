@@ -411,7 +411,10 @@ describe("dynamic material response lifecycle", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(mocks.resetReplacements).toHaveBeenCalledWith("dynamic-session");
+    expect(mocks.resetReplacements).toHaveBeenCalledWith(
+      "dynamic-session",
+      expect.any(String),
+    );
     expect(useConverterStore.getState()).toMatchObject({
       recipe_overrides: [],
       materialDynamicRecipes: DYNAMIC_RECIPES,

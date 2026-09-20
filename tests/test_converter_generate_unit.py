@@ -331,6 +331,76 @@ def test_generate_rejects_stale_editor_content_revision_before_worker() -> None:
     _mock_pool.submit.assert_not_called()
 
 
+def test_generate_rejects_stale_selection_revision_before_worker() -> None:
+    """Generation must bind both content and shared-selection revisions."""
+
+    sid = _create_session_with_preview_and_files(_test_store)
+    _test_store.put(sid, "editor_selection_revision", 3)
+    _mock_pool.submit = AsyncMock()
+    payload = {
+        "session_id": sid,
+        "params": {
+            "lut_name": "test_lut",
+            "modeling_mode": "high-fidelity",
+            "selection_revision": 2,
+        },
+    }
+
+    with patch("os.path.exists", return_value=True):
+        response = client.post("/api/convert/generate", json=payload)
+
+    assert response.status_code == 409, response.text
+    assert "selection changed" in response.json()["detail"].lower()
+    _mock_pool.submit.assert_not_called()
+
+
+def test_generate_worker_receives_immutable_editor_snapshot_when_store_changes_after_assembly() -> None:
+    """A store edit after input assembly cannot mutate the enqueued worker args."""
+
+    sid = _create_session_with_preview_and_files(_test_store)
+    old_regions = [
+        {
+            "selected_color": "#ff0000",
+            "replacement_color": "#00ff00",
+        }
+    ]
+    _test_store.put(sid, "replacement_regions", old_regions)
+    _test_store.put(sid, "editor_content_revision", 1)
+    worker_params_seen: dict[str, object] = {}
+
+    async def submit_after_store_edit(*args: object, **kwargs: object) -> tuple[dict[str, object], dict[str, float]]:
+        worker_params_seen.update(args[3])
+        # Simulate a real edit arriving after generation assembled its
+        # request but before the worker consumes it.
+        _test_store.put(sid, "replacement_regions", [{"selected_color": "#0000ff"}])
+        _test_store.put(sid, "editor_content_revision", 2)
+        return (
+            {
+                "threemf_path": "/tmp/stale-generation.3mf",
+                "glb_path": None,
+                "status_msg": "OK",
+            },
+            {},
+        )
+
+    _mock_pool.submit_timed = AsyncMock(side_effect=submit_after_store_edit)
+    payload = {
+        "session_id": sid,
+        "params": {
+            "lut_name": "test_lut",
+            "modeling_mode": "high-fidelity",
+            "editor_content_revision": 1,
+        },
+    }
+
+    with patch("os.path.exists", return_value=True):
+        response = client.post("/api/convert/generate", json=payload)
+
+    assert response.status_code == 409, response.text
+    assert worker_params_seen["replacement_regions"] == old_regions
+    assert "Editor content changed" in response.json()["detail"]
+
+
 def test_generate_response_forwards_embedded_wipe_tower_warning() -> None:
     sid = _create_session_with_preview_and_files(_test_store)
     _mock_pool.submit = AsyncMock(

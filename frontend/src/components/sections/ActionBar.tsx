@@ -115,6 +115,8 @@ export default function ActionBar() {
   const isLoading = useConverterStore((s) => s.isLoading)
   const isGenerating = useConverterStore((s) => s.isGenerating)
   const replacePreviewLoading = useConverterStore((s) => s.replacePreviewLoading)
+  const contentCommitStatus = useConverterStore((s) => s.contentCommitStatus)
+  const reconcileUnknownContentCommit = useConverterStore((s) => s.reconcileUnknownContentCommit)
   const error = useConverterStore((s) => s.error)
   const previewImageUrl = useConverterStore((s) => s.previewImageUrl)
   const previewBaseImageUrl = useConverterStore((s) => s.previewBaseImageUrl)
@@ -660,6 +662,20 @@ export default function ActionBar() {
         </>
       ) : (
         <>
+          {contentCommitStatus === "unknown" && (
+            <StatusBanner tone="warning" title={t("action_sync_editor_commit") }>
+              <div className="flex flex-col gap-2">
+                <span>{t("action_sync_editor_commit_hint")}</span>
+                <Button
+                  label={t("action_sync_editor_commit")}
+                  variant="secondary"
+                  onClick={() => void reconcileUnknownContentCommit()}
+                  disabled={replacePreviewLoading || isGenerating}
+                  className="w-full"
+                />
+              </div>
+            </StatusBanner>
+          )}
           {!canSubmit && (
             <p className="text-xs text-yellow-600 dark:text-yellow-400">
               {singleSubmitHintKey ? t(singleSubmitHintKey) : null}

@@ -27,6 +27,11 @@ vi.mock("../api/converter", () => ({
     job_token: null,
     error: null,
   }),
+  getEditorCommitStatus: vi.fn().mockResolvedValue({
+    status: "failed",
+    operation_id: "stale-operation",
+    editor_content_revision: 0,
+  }),
 }));
 
 import {

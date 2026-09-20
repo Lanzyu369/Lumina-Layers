@@ -25,6 +25,7 @@ from PIL import Image
 from pydantic import BaseModel, StrictBool, ValidationError
 
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
+from api.editor_commit import get_editor_content_revision
 from api.export_device_validation import validate_export_device_selection
 from api.file_bridge import ensure_png_tempfile
 from api.file_registry import FileRegistry
@@ -34,6 +35,7 @@ from api.preview_cache_artifacts import (
     hydrate_preview_cache,
     is_preview_cache_artifact_ref,
 )
+from api.replacement_history import replacement_history_lock
 from api.schemas.converter import (
     ColorMode,
     ConvertGenerateRequest,
@@ -52,10 +54,13 @@ from api.schemas.responses import (
     LargeFormatGenerateResponse,
     WarningEntry,
 )
-from api.selection_state import resolve_recipe_override_masks
+from api.selection_state import (
+    get_selection_revision,
+    resolve_recipe_override_masks,
+    selection_lock,
+)
 from api.session_store import SessionStore
 from api.structured_logging import get_logger
-from api.visible_region_cache import get_visible_region_generation
 from api.worker_pool import WorkerPoolManager
 from api.workers.converter_workers import (
     LargeFormatCachedAnalysisError,
@@ -117,6 +122,118 @@ from core.material_dynamic_solver import (
 from core.single_stage import record_material_usage
 from utils.bambu_3mf_writer import read_wipe_tower_placement_warnings
 from utils.lut_manager import LUTManager
+
+
+def _assert_editor_snapshot_current(
+    store: SessionStore,
+    session_id: str,
+    expected_revision: int,
+    *,
+    expected_selection_revision: int | None = None,
+    allow_missing_session: bool = False,
+) -> None:
+    """Reject a generation snapshot that changed while it was assembled.
+
+    在生成输入快照组装期间若编辑版本发生变化，拒绝提交该混合快照。
+    """
+    with replacement_history_lock(session_id):
+        with selection_lock(session_id):
+            latest_session = store.get(session_id)
+            if latest_session is None:
+                if allow_missing_session:
+                    return
+                raise HTTPException(status_code=404, detail="Session not found")
+            actual_revision = get_editor_content_revision(latest_session)
+            if actual_revision != expected_revision:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Editor content changed while the generation snapshot was "
+                        "being assembled; refresh the editor state and try again."
+                    ),
+                )
+            if (
+                expected_selection_revision is not None
+                and get_selection_revision(latest_session)
+                != expected_selection_revision
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Editor selection changed while the generation snapshot was "
+                        "being assembled; refresh the selection and try again."
+                    ),
+                )
+
+
+def _snapshot_generation_session(session_data: dict) -> dict:
+    """Deep-copy the session inputs used by a generation request.
+
+    复制生成请求使用的会话输入，确保 worker 只读取本次生成绑定的快照。
+
+    Preview-cache artifact references remain cheap path metadata; legacy
+    in-memory preview arrays are copied here so a later edit cannot mutate the
+    arrays while a standard, large-format, or puzzle request is assembling its
+    worker inputs.
+    """
+    try:
+        return deepcopy(session_data)
+    except (OSError, TypeError, ValueError, RuntimeError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Generation inputs could not be snapshotted safely; "
+                "refresh preview and try again."
+            ),
+        ) from exc
+
+
+def _capture_generation_snapshot(
+    store: SessionStore,
+    session_id: str,
+    *,
+    requested_revision: int | None = None,
+    requested_selection_revision: int | None = None,
+    revision_mismatch_detail: str,
+) -> tuple[dict, int, int]:
+    """Capture a complete generation snapshot under the editor locks.
+
+    在编辑锁内同时校验作品版本并复制生成输入，避免校验后到复制前
+    发生编辑，导致 worker 看到半新半旧的会话状态。
+    """
+    # Content routes use replacement_history_lock; selection mutations use
+    # selection_lock. Acquire them in this one order for the short snapshot
+    # boundary, then release both before any expensive worker work begins.
+    with replacement_history_lock(session_id):
+        with selection_lock(session_id):
+            live_session_data = _require_session(store, session_id)
+            committed_revision = get_editor_content_revision(live_session_data)
+            selection_revision = get_selection_revision(live_session_data)
+            if (
+                requested_revision is not None
+                and int(requested_revision) != committed_revision
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=revision_mismatch_detail,
+                )
+            if (
+                requested_selection_revision is not None
+                and int(requested_selection_revision) != selection_revision
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Editor selection changed before generation started; "
+                        "refresh the selection and try again."
+                    ),
+                )
+            return (
+                _snapshot_generation_session(live_session_data),
+                committed_revision,
+                selection_revision,
+            )
+
 
 from .common import (
     BATCH_DOWNLOAD_TTL_SECONDS,
@@ -2254,23 +2371,24 @@ async def convert_generate(
     """
     api_t0 = time.perf_counter()
 
-    # 1. Session validation (main thread)
-    session_data = _require_session(store, body.session_id)
-    cache, cache_ref = _require_preview_cache_for_generate(session_data)
-
+    # 1. Session validation and immutable input snapshot (main thread).
     request = body.params
-    committed_content_revision = get_visible_region_generation(session_data)
-    if (
-        request.editor_content_revision is not None
-        and int(request.editor_content_revision) != committed_content_revision
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Visible content changed before generation started; "
-                "refresh the editor state and try again."
-            ),
-        )
+    (
+        session_data,
+        committed_content_revision,
+        committed_selection_revision,
+    ) = _capture_generation_snapshot(
+        store,
+        body.session_id,
+        requested_revision=request.editor_content_revision,
+        requested_selection_revision=request.selection_revision,
+        revision_mismatch_detail=(
+            "Visible content changed before generation started "
+            "(editor content revision mismatch); "
+            "refresh the editor state and try again."
+        ),
+    )
+    cache, cache_ref = _require_preview_cache_for_generate(session_data)
     validate_export_device_selection(
         printer_id=request.printer_id,
         slicer=request.slicer,
@@ -2904,6 +3022,22 @@ async def convert_generate(
             params,
         )
 
+    # Detach worker scalars and nested edit metadata from the live SessionStore
+    # object. Cache arrays are already represented by immutable artifact/temp
+    # paths at this point; this copy prevents later free-colour, recipe, or
+    # material-list mutations from changing an enqueued generation request.
+    worker_params = deepcopy(worker_params)
+
+    # Re-read the authoritative editor revision after all scalar fields and
+    # immutable worker paths have been assembled. If an edit landed during
+    # assembly, reject the mixed snapshot before enqueueing the worker.
+    _assert_editor_snapshot_current(
+        store,
+        body.session_id,
+        committed_content_revision,
+        expected_selection_revision=committed_selection_revision,
+    )
+
     # 3. CPU computation offloaded to process pool (only paths and scalars)
     worker_t0 = time.perf_counter()
     try:
@@ -2980,6 +3114,20 @@ async def convert_generate(
             source_path=image_path,
             surface_overlay=uses_surface_overlay,
         )
+
+    try:
+        _assert_editor_snapshot_current(
+            store,
+            body.session_id,
+            committed_content_revision,
+            expected_selection_revision=committed_selection_revision,
+            allow_missing_session=True,
+        )
+    except HTTPException:
+        _remove_temp_path(threemf_path)
+        if glb_path and not glb_reuses_preview_path:
+            _remove_temp_path(glb_path)
+        raise
 
     placement_warnings = read_wipe_tower_placement_warnings(threemf_path)
 
@@ -3126,6 +3274,7 @@ async def convert_generate(
         warnings=placement_warnings,
         performance_timing=performance_timing,
         editor_content_revision=committed_content_revision,
+        selection_revision=committed_selection_revision,
     )
 
 
@@ -4148,24 +4297,24 @@ async def convert_generate_large_format(
     """Split image into tiles, generate a 3MF per tile, and package into ZIP.
     将图片切割为网格切片，每片生成 3MF，打包为 ZIP。
     """
-    # 1. Session validation
-    session_data = _require_session(store, body.session_id)
-    cache, cache_ref = _require_preview_cache_for_generate(session_data)
-
     lf = body.params
     request = lf.params
-    committed_content_revision = get_visible_region_generation(session_data)
-    if (
-        request.editor_content_revision is not None
-        and int(request.editor_content_revision) != committed_content_revision
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Visible content changed before large-format generation started; "
-                "refresh the editor state and try again."
-            ),
-        )
+    # 1. Session validation and immutable input snapshot
+    (
+        session_data,
+        committed_content_revision,
+        committed_selection_revision,
+    ) = _capture_generation_snapshot(
+        store,
+        body.session_id,
+        requested_revision=request.editor_content_revision,
+        requested_selection_revision=request.selection_revision,
+        revision_mismatch_detail=(
+            "Visible content changed before large-format generation started; "
+            "refresh the editor state and try again."
+        ),
+    )
+    cache, cache_ref = _require_preview_cache_for_generate(session_data)
     validate_export_device_selection(
         printer_id=request.printer_id,
         slicer=request.slicer,
@@ -4321,6 +4470,17 @@ async def convert_generate_large_format(
     )
     tile_w_mm = lf.tile_width_mm
     tile_h_mm = lf.tile_height_mm
+
+    # The helpers below may spend substantial time materialising tile inputs.
+    # The session object is already detached, so this check only decides
+    # whether that immutable snapshot is still current before any worker is
+    # submitted.
+    _assert_editor_snapshot_current(
+        store,
+        body.session_id,
+        committed_content_revision,
+        expected_selection_revision=committed_selection_revision,
+    )
 
     warnings: list[str] = []
     fallback_reason: str | None = None
@@ -4582,7 +4742,15 @@ async def convert_generate_large_format(
             color_mode=request.color_mode,
         )
 
+    _assert_editor_snapshot_current(
+        store,
+        body.session_id,
+        committed_content_revision,
+        expected_selection_revision=committed_selection_revision,
+        allow_missing_session=True,
+    )
     result["editor_content_revision"] = committed_content_revision
+    result["selection_revision"] = committed_selection_revision
     return LargeFormatGenerateResponse(**result)
 
 

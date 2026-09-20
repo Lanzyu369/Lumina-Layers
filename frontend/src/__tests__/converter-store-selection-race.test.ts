@@ -16,6 +16,8 @@ vi.mock("../api/converter", async () => {
     mutateEditorSelection: vi.fn(),
     replaceColorsBatch: vi.fn(),
     regionReplace: vi.fn(),
+    mutateFreeColors: vi.fn(),
+    getEditorCommitStatus: vi.fn(),
   };
 });
 
@@ -24,20 +26,26 @@ import {
   mutateEditorSelection,
   replaceColorsBatch,
   regionReplace,
+  mutateFreeColors,
+  getEditorCommitStatus,
 } from "../api/converter";
 
 const mockedGet = vi.mocked(getEditorSelection);
 const mockedMutate = vi.mocked(mutateEditorSelection);
 const mockedReplaceColorsBatch = vi.mocked(replaceColorsBatch);
 const mockedRegionReplace = vi.mocked(regionReplace);
+const mockedMutateFreeColors = vi.mocked(mutateFreeColors);
+const mockedGetEditorCommitStatus = vi.mocked(getEditorCommitStatus);
 let sessionCounter = 0;
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((resolvePromise) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
+    reject = rejectPromise;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function document(rev: number, contentRev = 1): SelectionDocumentResponse {
@@ -81,6 +89,8 @@ beforeEach(() => {
     error: null,
     replacePreviewLoading: false,
     pendingReplacement: null,
+    contentCommitStatus: "idle",
+    contentCommitOperationId: null,
   });
 });
 
@@ -216,7 +226,7 @@ describe("selection optimistic reconciliation", () => {
     });
   });
 
-  it("queries the committed revision when a replacement response is lost", async () => {
+  it("queries the operation receipt when a replacement response is lost", async () => {
     const sessionId = "lost-replacement-response";
     useConverterStore.setState({
       sessionId,
@@ -232,11 +242,21 @@ describe("selection optimistic reconciliation", () => {
       ],
     });
     mockedReplaceColorsBatch.mockRejectedValueOnce(new Error("response lost"));
+    mockedGetEditorCommitStatus.mockResolvedValueOnce({
+      status: "committed",
+      operation_id: "replace-op-1",
+      editor_content_revision: 7,
+      selection_revision: 1,
+    });
     mockedGet.mockResolvedValueOnce(document(1, 7));
 
     await useConverterStore.getState().submitReplacePreview();
 
     const state = useConverterStore.getState();
+    expect(mockedGetEditorCommitStatus).toHaveBeenCalledWith(
+      sessionId,
+      expect.any(String),
+    );
     expect(mockedGet).toHaveBeenCalledWith(sessionId);
     expect(state.selectionDocument).toMatchObject({
       selection_revision: 1,
@@ -245,6 +265,391 @@ describe("selection optimistic reconciliation", () => {
     expect(state.colorRemapMap).toEqual({ aabbcc: "ffffff" });
     expect(state.replacePreviewLoading).toBe(false);
     expect(state.error).toContain("已确认本次编辑已提交");
+  });
+
+  it("keeps the confirmed selection revision when receipt hydration is unavailable", async () => {
+    const sessionId = "lost-selection-hydration";
+    useConverterStore.setState({
+      sessionId,
+      selectionDocument: document(3, 1),
+      colorRemapMap: { aabbcc: "ffffff" },
+      palette: [
+        {
+          quantized_hex: "aabbcc",
+          matched_hex: "aabbcc",
+          pixel_count: 10,
+          percentage: 1,
+        },
+      ],
+    });
+    mockedReplaceColorsBatch.mockRejectedValueOnce(new Error("response lost"));
+    mockedGetEditorCommitStatus.mockResolvedValueOnce({
+      status: "committed",
+      operation_id: "replace-op-hydration-lost",
+      editor_content_revision: 7,
+      selection_revision: 3,
+    });
+    mockedGet.mockRejectedValueOnce(new Error("selection read unavailable"));
+
+    await useConverterStore.getState().submitReplacePreview();
+
+    expect(useConverterStore.getState().selectionDocument?.editor_content_revision)
+      .toBe(7);
+
+    mockedMutate.mockResolvedValueOnce(document(4, 7));
+    await useConverterStore.getState().applySelectionMutation({
+      operation: "point-toggle",
+      x: 5,
+      y: 5,
+      optimisticDocument: document(4, 7),
+    });
+
+    expect(mockedMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session_id: sessionId,
+        base_selection_revision: 3,
+        content_revision: 7,
+      }),
+    );
+  });
+
+  it("serializes same-class content edits before capturing a new preview epoch", async () => {
+    const sessionId = "serial-content-edits";
+    const firstCommit = deferred<unknown>();
+    useConverterStore.setState({
+      sessionId,
+      selectionDocument: document(1, 1),
+      selectedColors: new Set(["aabbcc"]),
+      selectedColor: "aabbcc",
+      palette: [
+        {
+          quantized_hex: "aabbcc",
+          matched_hex: "aabbcc",
+          pixel_count: 10,
+          percentage: 1,
+        },
+      ],
+    });
+    mockedReplaceColorsBatch
+      .mockReturnValueOnce(firstCommit.promise as never)
+      .mockResolvedValueOnce({
+        status: "ok",
+        message: "ok",
+        preview_url: "/api/files/replaced-2.png",
+        replacement_count: 1,
+        selection: document(1, 3),
+      } as never);
+
+    const firstRequest = useConverterStore
+      .getState()
+      .applyBatchColorRemap("ff0000");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockedReplaceColorsBatch).toHaveBeenCalledTimes(1);
+
+    const secondRequest = useConverterStore
+      .getState()
+      .applyBatchColorRemap("00ff00");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockedReplaceColorsBatch).toHaveBeenCalledTimes(1);
+
+    firstCommit.resolve({
+      status: "ok",
+      message: "ok",
+      preview_url: "/api/files/replaced-1.png",
+      replacement_count: 1,
+      selection: document(1, 2),
+    });
+    await Promise.all([firstRequest, secondRequest]);
+
+    expect(mockedReplaceColorsBatch).toHaveBeenCalledTimes(2);
+    expect(
+      mockedReplaceColorsBatch.mock.calls[0]?.[2],
+    ).not.toBe(mockedReplaceColorsBatch.mock.calls[1]?.[2]);
+  });
+
+  it("allows a new content edit after a confirmed pre-commit failure", async () => {
+    const sessionId = "failed-edit-can-retry";
+    useConverterStore.setState({
+      sessionId,
+      selectionDocument: document(1, 1),
+      colorRemapMap: { aabbcc: "ffffff" },
+      palette: [
+        {
+          quantized_hex: "aabbcc",
+          matched_hex: "aabbcc",
+          pixel_count: 10,
+          percentage: 1,
+        },
+      ],
+    });
+    mockedReplaceColorsBatch
+      .mockRejectedValueOnce(new Error("pre-commit failure"))
+      .mockResolvedValueOnce({
+        status: "ok",
+        message: "ok",
+        preview_url: "/api/files/retry-success.png",
+        replacement_count: 1,
+      } as never);
+    mockedGetEditorCommitStatus.mockResolvedValueOnce({
+      status: "failed",
+      operation_id: "failed-operation",
+      editor_content_revision: 1,
+      selection_revision: 1,
+    });
+
+    await useConverterStore.getState().submitReplacePreview();
+    expect(useConverterStore.getState().contentCommitStatus).toBe("failed");
+
+    await useConverterStore.getState().submitReplacePreview();
+
+    expect(mockedReplaceColorsBatch).toHaveBeenCalledTimes(2);
+    expect(useConverterStore.getState().previewImageUrl).toBe(
+      "/api/files/retry-success.png",
+    );
+  });
+
+  it("queries a stale same-session response before releasing the content barrier", async () => {
+    const sessionId = "stale-response-receipt-barrier";
+    const replacementResponse = deferred<unknown>();
+    const receiptResponse = deferred<Awaited<ReturnType<typeof getEditorCommitStatus>>>();
+    useConverterStore.setState({
+      sessionId,
+      selectionDocument: document(1, 1),
+      colorRemapMap: { aabbcc: "ffffff" },
+      palette: [
+        {
+          quantized_hex: "aabbcc",
+          matched_hex: "aabbcc",
+          pixel_count: 10,
+          percentage: 1,
+        },
+      ],
+    });
+    mockedReplaceColorsBatch.mockReturnValueOnce(
+      replacementResponse.promise as never,
+    );
+    mockedGetEditorCommitStatus.mockReturnValueOnce(
+      receiptResponse.promise as never,
+    );
+
+    const replacementRequest = useConverterStore.getState().submitReplacePreview();
+    await vi.waitFor(() => {
+      expect(mockedReplaceColorsBatch).toHaveBeenCalledTimes(1);
+    });
+    // Make the response stale without switching sessions. The operation must
+    // still be reconciled before a dependent selection mutation is sent.
+    useConverterStore.setState((state) => ({
+      previewRequestRevision: state.previewRequestRevision + 1,
+    }));
+    replacementResponse.resolve({
+      status: "ok",
+      message: "ok",
+      preview_url: "/api/files/stale.png",
+      replacement_count: 1,
+      selection: document(1, 7),
+    });
+
+    const selectionRequest = useConverterStore.getState().applySelectionMutation({
+      operation: "point-toggle",
+      x: 5,
+      y: 5,
+      optimisticDocument: document(2, 1),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockedGetEditorCommitStatus).toHaveBeenCalledWith(
+      sessionId,
+      expect.any(String),
+    );
+    expect(mockedMutate).not.toHaveBeenCalled();
+
+    receiptResponse.resolve({
+      status: "committed",
+      operation_id: "stale-op",
+      editor_content_revision: 7,
+      visible_content_revision: 7,
+      selection_revision: 1,
+    });
+    mockedMutate.mockResolvedValueOnce(document(2, 7));
+    await Promise.all([replacementRequest, selectionRequest]);
+
+    expect(mockedMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session_id: sessionId,
+        content_revision: 7,
+      }),
+    );
+  });
+
+  it("queries a stale same-session error before releasing the content barrier", async () => {
+    const sessionId = "stale-error-receipt-barrier";
+    const replacementResponse = deferred<unknown>();
+    const receiptResponse = deferred<Awaited<ReturnType<typeof getEditorCommitStatus>>>();
+    useConverterStore.setState({
+      sessionId,
+      selectionDocument: document(1, 1),
+      colorRemapMap: { aabbcc: "ffffff" },
+      palette: [
+        {
+          quantized_hex: "aabbcc",
+          matched_hex: "aabbcc",
+          pixel_count: 10,
+          percentage: 1,
+        },
+      ],
+    });
+    mockedReplaceColorsBatch.mockReturnValueOnce(
+      replacementResponse.promise as never,
+    );
+    mockedGetEditorCommitStatus.mockReturnValueOnce(
+      receiptResponse.promise as never,
+    );
+
+    const replacementRequest = useConverterStore.getState().submitReplacePreview();
+    await vi.waitFor(() => {
+      expect(mockedReplaceColorsBatch).toHaveBeenCalledTimes(1);
+    });
+    useConverterStore.setState((state) => ({
+      previewRequestRevision: state.previewRequestRevision + 1,
+    }));
+    replacementResponse.reject(new Error("late response error"));
+
+    const selectionRequest = useConverterStore.getState().applySelectionMutation({
+      operation: "point-toggle",
+      x: 5,
+      y: 5,
+      optimisticDocument: document(2, 1),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockedGetEditorCommitStatus).toHaveBeenCalledWith(
+      sessionId,
+      expect.any(String),
+    );
+    expect(mockedMutate).not.toHaveBeenCalled();
+
+    receiptResponse.resolve({
+      status: "committed",
+      operation_id: "stale-error-op",
+      editor_content_revision: 7,
+      visible_content_revision: 7,
+      selection_revision: 1,
+    });
+    mockedMutate.mockResolvedValueOnce(document(2, 7));
+    await Promise.all([replacementRequest, selectionRequest]);
+
+    expect(mockedMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session_id: sessionId,
+        content_revision: 7,
+      }),
+    );
+  });
+
+  it("advances the generation revision after a free-colour commit", async () => {
+    const sessionId = "free-color-content-sync";
+    useConverterStore.setState({
+      sessionId,
+      selectionDocument: document(1, 1),
+    });
+    mockedMutateFreeColors.mockResolvedValueOnce({
+      status: "ok",
+      free_color_set: ["ff0000"],
+      can_undo: true,
+      can_redo: false,
+      editor_content_revision: 4,
+    });
+
+    useConverterStore.getState().toggleFreeColor("#ff0000");
+    await vi.waitFor(() => {
+      expect(mockedMutateFreeColors).toHaveBeenCalled();
+    });
+
+    expect(useConverterStore.getState().selectionDocument).toMatchObject({
+      editor_content_revision: 4,
+    });
+    expect(useConverterStore.getState().contentCommitStatus).toBe("committed");
+
+    mockedMutate.mockResolvedValueOnce(document(2, 1));
+    await useConverterStore.getState().applySelectionMutation({
+      operation: "point-toggle",
+      x: 5,
+      y: 5,
+      optimisticDocument: document(2, 1),
+    });
+    expect(mockedMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        base_selection_revision: 1,
+        content_revision: 1,
+      }),
+    );
+  });
+
+  it("keeps the draft and blocks dependent edits when the operation receipt is unknown", async () => {
+    const sessionId = "unknown-replacement-response";
+    useConverterStore.setState({
+      sessionId,
+      selectionDocument: document(1, 1),
+      colorRemapMap: { aabbcc: "ffffff" },
+      palette: [
+        {
+          quantized_hex: "aabbcc",
+          matched_hex: "aabbcc",
+          pixel_count: 10,
+          percentage: 1,
+        },
+      ],
+    });
+    mockedReplaceColorsBatch.mockRejectedValueOnce(new Error("response lost"));
+    mockedGetEditorCommitStatus.mockResolvedValueOnce({
+      status: "pending",
+      operation_id: "replace-op-unknown",
+      editor_content_revision: 1,
+      selection_revision: 1,
+    });
+
+    await useConverterStore.getState().submitReplacePreview();
+
+    expect(useConverterStore.getState().colorRemapMap).toEqual({
+      aabbcc: "ffffff",
+    });
+    expect(useConverterStore.getState().contentCommitStatus).toBe("unknown");
+
+    mockedMutate.mockResolvedValueOnce(document(2, 7));
+    const selectionRequest = useConverterStore.getState().applySelectionMutation({
+      operation: "point-toggle",
+      x: 5,
+      y: 5,
+      optimisticDocument: document(2, 1),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockedMutate).not.toHaveBeenCalled();
+
+    // The explicit sync action must reconcile the same operation even if an
+    // unrelated preview epoch made its original response stale.
+    useConverterStore.setState((state) => ({
+      previewRequestRevision: state.previewRequestRevision + 1,
+    }));
+    mockedGetEditorCommitStatus.mockResolvedValueOnce({
+      status: "committed",
+      operation_id: "replace-op-unknown",
+      editor_content_revision: 7,
+      selection_revision: 1,
+    });
+    mockedGet.mockResolvedValueOnce(document(1, 7));
+    await useConverterStore.getState().reconcileUnknownContentCommit();
+    await selectionRequest;
+
+    expect(mockedMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session_id: sessionId,
+        content_revision: 7,
+      }),
+    );
+    expect(useConverterStore.getState().contentCommitStatus).toBe("committed");
   });
 
   it("waits for an unconfirmed selection before a selection-scoped replace", async () => {
@@ -287,6 +692,7 @@ describe("selection optimistic reconciliation", () => {
       "#ff0000",
       undefined,
       2,
+      expect.any(String),
     );
   });
 

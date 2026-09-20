@@ -31,15 +31,17 @@ vi.mock("../api/converter", () => ({
   colorHighlight: vi.fn(),
   detectRegion: vi.fn(),
   regionReplace: vi.fn(),
+  getEditorCommitStatus: vi.fn(),
   resetReplacements: vi.fn(),
   autoDetectColors: vi.fn(),
   fetchGradientGroups: vi.fn(),
   fetchMaterialColorSuggestions: vi.fn(),
 }));
 
-import { regionReplace } from "../api/converter";
+import { getEditorCommitStatus, regionReplace } from "../api/converter";
 
 const mockRegionReplace = vi.mocked(regionReplace);
+const mockGetEditorCommitStatus = vi.mocked(getEditorCommitStatus);
 
 function seedStore(overrides: Partial<ConverterState> = {}) {
   useConverterStore.setState({
@@ -65,6 +67,12 @@ function seedStore(overrides: Partial<ConverterState> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockGetEditorCommitStatus.mockResolvedValue({
+    status: "failed",
+    operation_id: "test-operation",
+    editor_content_revision: 0,
+    visible_content_revision: 0,
+  });
 });
 
 describe("applyGradientRegionPixelReplace", () => {
@@ -90,6 +98,8 @@ describe("applyGradientRegionPixelReplace", () => {
       "sess-gradient-region",
       "#ff0000",
       { gradientGroupIndex: 3, gradientRegionIndex: 1 },
+      undefined,
+      expect.any(String),
     );
 
     const state = useConverterStore.getState();
@@ -174,6 +184,8 @@ describe("applyGradientRegionPixelReplace", () => {
       "sess-gradient-region",
       "#aabbcc",
       { gradientGroupIndex: 3, gradientRegionIndex: 1 },
+      undefined,
+      expect.any(String),
     );
   });
 

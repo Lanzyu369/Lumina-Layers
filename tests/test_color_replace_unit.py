@@ -99,6 +99,26 @@ class TestNoPreviewCacheReturns409:
         assert response.status_code == 409
         assert "preview" in response.json()["detail"].lower()
 
+    def test_replace_color_known_precommit_failure_is_confirmed_failed(self) -> None:
+        sid = _test_store.create()
+        operation_id = "replace-no-cache"
+        response = client.post(
+            "/api/convert/replace-color",
+            json={
+                "session_id": sid,
+                "selected_color": "#ff0000",
+                "replacement_color": "#0000ff",
+                "operation_id": operation_id,
+            },
+        )
+        assert response.status_code == 409
+
+        status_response = client.get(
+            f"/api/convert/editor-commit/{sid}/{operation_id}"
+        )
+        assert status_response.status_code == 200
+        assert status_response.json()["status"] == "failed"
+
 
 # =========================================================================
 # 3. Successful replacement updates session and returns correct response

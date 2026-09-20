@@ -30,16 +30,21 @@ replace-colors-batch -> 服务端提交内容并推进 generation=C'
 下一次 selection/mutate(content=C) -> 服务端按真实 C' 拒绝 409
 ```
 
-这不是“用户点击太快”才能触发的假设；同一 session 的顺序调用就能稳定复现。修复证据包括：`frontend/src/stores/converter/store.ts:356` 的权威响应合并、`api/routers/converter/replace.py:2268` 的服务端提交后版本绑定，以及真实替色 endpoint 的 50 次连续编辑测试。
+这不是“用户点击太快”才能触发的假设；同一 session 的顺序调用就能稳定复现。修复证据包括：`frontend/src/stores/converter/store.ts:357` 的权威响应合并、`api/routers/converter/replace.py:2649` 的服务端提交后选区版本绑定、`api/routers/converter/replace.py:3872` 的批量替色入口，以及真实替色 endpoint 的 50 次连续编辑测试。
 
 现在所有相关替换响应都返回服务端生成的选区文档。客户端只接受不早于已确认版本的 `(selection_revision, content_revision)`，不再自行计算 revision。真实过期请求仍由后端 409 拒绝。
 
-提交响应丢失也不再直接把本地乐观编辑当成未发生：内容提交失败分支先查询现有
-`GET /convert/selection/{session_id}`。若服务端内容版本已经推进，则保留该次编辑，
-同步权威选区文档并让同 session 的后续选区请求继续；只有查询确认版本未推进（或查询
-本身失败）才回滚本次未确认的本地状态。旧 session 的失败响应先经过 session/epoch
-校验，不会触碰新页面状态。该时序由 `converter-store-selection-race.test.ts` 的
-“response lost” 与 session-switch 用例覆盖。
+提交响应丢失也不再直接把本地乐观编辑当成未发生：前端先查询带 operation id 的
+`GET /convert/editor-commit/{session_id}/{operation_id}`。回执明确区分三种状态：
+`committed` 表示缓存/会话/历史已收敛，`failed` 表示服务端确认尚未提交，
+`pending`/`unknown` 或查询失败表示结果未知。前两种状态可以释放同 session 的内容
+屏障；未知状态保留草稿和错误上下文，暂停依赖选区、编辑和生成，不能根据版本差值猜
+“成功”或“回滚”。`committed` 时再尽力读取
+`GET /convert/selection/{session_id}` 以补齐选区文档；选区读取失败不改变已确认的
+内容结果，而是继续使用本地已确认的 selection revision。旧 session 的响应先经过
+session/epoch 校验，不会触碰新页面状态。该时序由
+`converter-store-selection-race.test.ts` 的 response-lost、same-session stale、
+unknown-receipt 和 hydration-failure 用例覆盖。
 
 ### B. 配方编辑被当作基础输入变化，触发破坏性自动预览
 
@@ -51,22 +56,43 @@ replace-colors-batch -> 服务端提交内容并推进 generation=C'
 
 应用手工配方时，后端已经有 `recipe_override_applied_masks`，但动态材料重建此前继续读取可变的 `selected_region_masks`。后续 clear/改选会清理 `__editor_selection__:<revision>` 条目，导致早先的区域 A 在动态换色 B 或生成时可能没有保护 mask。这个问题可能静默覆盖材料矩阵，不应被描述成必然抛出某一种异常。
 
-现在 `api/selection_state.py:82-170` 统一解析规则：具备快照能力的 session 只使用应用时的位压缩 mask；缺失、空、形状不符时确定性报错，不能扩大为全图；只有真正没有快照键的旧 session 才允许显式 legacy fallback。`api/routers/converter/replace.py:993-1018` 和 `api/routers/converter/generate.py:1946-2150`、动态重建入口共同使用该规则。A 配方 → 改选 B → B 动态换色的非重叠矩阵测试已通过。
+现在 `api/selection_state.py:82-170` 统一解析规则：具备快照能力的 session 只使用应用时的位压缩 mask；缺失、空、形状不符时确定性报错，不能扩大为全图；只有真正没有快照键的旧 session 才允许显式 legacy fallback。`api/routers/converter/replace.py:1125-1136`、`api/routers/converter/replace.py:5652-5664` 和 `api/routers/converter/generate.py:1606-1621`、`api/routers/converter/generate.py:2225-2235`、动态重建入口共同使用该规则。A 配方 → 改选 B → B 动态换色的非重叠矩阵测试已通过。
 
 ### D. 生成请求没有明确等待编辑提交，也没有服务端版本门槛
 
-此前 `submitGenerate` 可以与正在进行的换色/配方请求并行，生成输入会拼接半旧半新的 store 状态；后端也没有用编辑内容版本阻止这种请求。现在前端在 `frontend/src/stores/converter/store.ts:9032-9055` 等待选区和内容提交，捕获生成 epoch 并丢弃旧生成响应；请求携带 `editor_content_revision`（`9306-9307`）。标准、拼图和大画幅生成分别在 `api/routers/converter/generate.py:2262-2273`、`api/routers/converter/puzzle.py:1005-1015`、`api/routers/converter/generate.py:4157-4168` 校验服务端当前可见内容版本，并在响应回传实际版本。
+此前 `submitGenerate` 可以与正在进行的换色/配方请求并行，生成输入会拼接半旧半新的 store 状态；后端也没有用编辑内容版本阻止这种请求。现在前端等待选区和内容屏障，捕获生成 epoch 并丢弃旧生成响应；请求携带服务端确认的 `editor_content_revision` 与 `selection_revision`。标准、拼图和大画幅生成都在共享的短锁内捕获完整 session 深拷贝，并在组装 worker 输入前后校验两种版本；响应回传实际输入版本。worker 只消费这份不可变快照，派生 GLB 不属于生成前置等待条件。
 
 因此真正过期的生成仍是 409，而不是被“吞掉”；正常顺序编辑不需要失败后重新点击来同步。
 
 ### E. 缓存回滚与会话/派生工件提交边界不一致
 
-`reset_replacements` 原先在缓存提交前清理 session 的 replacement、配方和快照字段；如果缓存事务失败，上一份缓存可能还在，但会话已丢失编辑状态。现在清理动作位于 `cache.commit` 成功之后（`api/routers/converter/replace.py:1404-1519`），并增加了失败保持旧会话字段的测试。
+`reset_replacements` 原先在缓存提交前清理 session 的 replacement、配方和快照字段；如果缓存事务失败，上一份缓存可能还在，但会话已丢失编辑状态。现在清理动作位于 `cache.commit` 成功之后（`api/routers/converter/replace.py:1605-1770`），并增加了失败保持旧会话字段的测试。
 
-GLB 是派生工件，不是 RGB/材料矩阵的提交条件。替换/配方成功提交后，GLB 调度异常由 `api/routers/converter/replace.py:508-540` 和 `api/routers/converter/async_glb.py` 的显式边界处理：记录带 `content_commit=committed` 的结构化 warning，并通过现有 token/CAS 发布派生错误状态；不会把已提交作品回滚成旧作品。GLB token/CAS 仍保留，旧任务不能覆盖新内容。
+GLB 是派生工件，不是 RGB/材料矩阵的提交条件。替换/配方成功提交后，GLB 调度异常由 `api/routers/converter/replace.py:596-620` 和 `api/routers/converter/async_glb.py` 的显式边界处理：记录带 `content_commit=committed` 的结构化 warning，并通过现有 token/CAS 发布派生错误状态；不会把已提交作品回滚成旧作品。GLB token/CAS 仍保留，旧任务不能覆盖新内容。
 
 前端清空替换在请求失败时也保存并恢复颜色映射、历史、配方、区域计数和预览派生字段；
 若状态查询确认清空已经提交，则不恢复这些字段，只同步服务端版本并保留错误上下文。
+
+## 第二轮复审收口
+
+第二轮复审重点验证了“失败后到底是什么状态”，而不是把所有非 200 都当作回滚：
+
+- 后端新增有界的 editor commit receipt（每个 session 最近 64 条），operation id、
+  `editor_content_revision`、可见缓存 generation、选区 revision 和提交状态一起记录；
+  这只是现有 session/缓存/历史提交点的确认记录，不是第二套作品状态或历史。
+- 同 session 的同类内容编辑在前端先占位再等待；已知提交前失败会释放后续编辑，未知
+  回执保持屏障挂起。旧响应的成功和错误分支都查询同一个 operation receipt；同一个
+  `operation_id` 的重复请求在后端提交前被 409 拒绝，不能重复写入替换、历史或版本。
+  旧响应不会直接 repaint 当前作品，也不会盲目重放 toggle、undo、redo；同步按钮只能
+  查询同一个 operation receipt。
+- 标准、拼图、大画幅生成均在 worker 前复制完整 session 输入，并以内容/选区两个独立
+  revision 做双重 CAS 式校验；worker 结束后再次校验，旧导出结果不会注册成当前作品。
+- 配方 cache 已发布后若历史/派生会聚阶段抛错，不再恢复旧 session 或让 cache 事务回滚；
+  保留已发布状态并维持 pending/unknown，让页面走明确同步路径，而不是制造新 cache 配旧
+  配方的“半回滚”。
+- 证据等级：本地真实 endpoint/SessionStore/缓存/历史状态参与的 converter、generate、
+  puzzle 回归为 A 级；受控 Promise 的前端竞态为 A 级行为证据；没有现场 request id、
+  生产堆栈或真实用户素材，因此“多位用户最后生成错误”的具体类别仍为 C 级待确认。
 
 ## “回退”现象的单独调查
 

@@ -170,6 +170,8 @@ export type ConvertGenerateRequest = ConvertPreviewRequest & {
   use_cached_matched_rgb?: boolean;
   /** Exact committed visible-content revision used for generation. */
   editor_content_revision?: number;
+  /** Exact shared-selection revision captured for generation. */
+  selection_revision?: number;
 };
 
 export interface PuzzleLayoutPreviewRequest {
@@ -215,6 +217,7 @@ export interface PuzzleGenerateResponse {
   grid_rows: number;
   warnings: string[];
   editor_content_revision?: number | null;
+  selection_revision?: number | null;
 }
 
 /**
@@ -262,6 +265,7 @@ export interface RecipePredictResponse {
 
 export interface RecipeOverrideApplyRequest extends RecipePredictRequest {
   region_ids?: string[];
+  operation_id?: string;
 }
 
 export interface RecipeOverrideApplyResponse
@@ -361,6 +365,8 @@ export interface DynamicMaterialResultResponse {
   material_layer_benefit_curve?: MaterialLayerBenefitPoint[] | null;
   material_layer_benefit_scope?: MaterialLayerBenefitScope | null;
   material_layer_benefit_pixel_count?: number | null;
+  operation_id?: string | null;
+  editor_content_revision?: number | null;
 }
 
 /** 自动高度分配模式 */
@@ -445,6 +451,7 @@ export interface LargeFormatGenerateResponse {
   grid_rows: number;
   warnings: string[];
   editor_content_revision?: number | null;
+  selection_revision?: number | null;
 }
 
 /** 生成接口响应，包含下载 URL 和可选的 3D 预览 URL */
@@ -458,6 +465,8 @@ export interface GenerateResponse {
   performance_timing?: PerformanceTiming | null;
   /** Content revision consumed by the generator, when available. */
   editor_content_revision?: number | null;
+  /** Shared-selection revision consumed by the generator, when available. */
+  selection_revision?: number | null;
 }
 
 export interface ModelSurfaceMeshSummary {
@@ -2052,6 +2061,16 @@ export interface SelectionDocumentResponse {
   can_undo: boolean;
   can_redo: boolean;
   brush_hit_component_count?: number | null;
+  editor_content_revision?: number | null;
+}
+
+export interface EditorCommitStatusResponse {
+  status: "pending" | "committed" | "failed" | "unknown";
+  operation_id: string;
+  operation?: string | null;
+  editor_content_revision: number;
+  visible_content_revision?: number;
+  selection_revision?: number | null;
 }
 
 export interface SelectionMutationRequest {
@@ -2106,6 +2125,8 @@ export interface FreeColorMutationResponse {
   free_color_set: string[];
   can_undo: boolean;
   can_redo: boolean;
+  operation_id?: string | null;
+  editor_content_revision?: number | null;
 }
 
 export interface ResetReplacementsResponse extends DynamicMaterialResultResponse {
@@ -2138,6 +2159,8 @@ export interface ReplacementHistoryResponse {
   layer_height_mm?: number | null;
   gradient_groups?: GradientGroupItem[] | null;
   free_color_set?: string[];
+  operation_id?: string | null;
+  editor_content_revision?: number | null;
 }
 
 // ========== Printer Models ==========

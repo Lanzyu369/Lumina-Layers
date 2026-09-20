@@ -297,7 +297,7 @@ describe("flattenSelectedGradientRegions", () => {
         gradientRegionIndex: 2,
         replacementColor: "#d2aeb4",
       },
-    ]);
+    ], expect.any(String));
     const state = useConverterStore.getState();
     expect(state.selectedGradientRegions).toEqual([]);
     expect(state.gradientSelection).toBeNull();
@@ -387,7 +387,7 @@ describe("confirmReplacement routes multi-region to the batch path", () => {
         gradientRegionIndex: 2,
         replacementColor: "#ff0000",
       },
-    ]);
+    ], expect.any(String));
     // Post-state matches the single-region path: selection cleared, count
     // bumped by N, downstream generate() gets use_cached_matched_rgb.
     // 后置状态与单 region 路径一致：selection 清空，regionReplacementCount += N。

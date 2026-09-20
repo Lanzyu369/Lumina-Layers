@@ -935,6 +935,7 @@ class GenerateResponse(_NoPublic3mfDiskPathMixin):
     warnings: list[str] = Field(default_factory=list)
     performance_timing: Optional[PerformanceTimingResponse] = None
     editor_content_revision: int | None = None
+    selection_revision: int | None = None
 
 
 class RecipePredictionResponse(BaseModel):
@@ -976,6 +977,7 @@ class PuzzleGenerateResponse(_NoPublic3mfDiskPathMixin):
     grid_rows: int
     warnings: list[str] = Field(default_factory=list)
     editor_content_revision: int | None = None
+    selection_revision: int | None = None
 
 
 class LargeFormatGenerateResponse(BaseModel):
@@ -989,6 +991,7 @@ class LargeFormatGenerateResponse(BaseModel):
     grid_rows: int
     warnings: list[str] = Field(default_factory=list)
     editor_content_revision: int | None = None
+    selection_revision: int | None = None
 
 
 class BatchItemResult(BaseModel):

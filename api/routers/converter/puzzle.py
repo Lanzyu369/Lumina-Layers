@@ -17,6 +17,7 @@ import pickle
 import tempfile
 import uuid
 from dataclasses import dataclass
+from copy import deepcopy
 from typing import Any
 
 import numpy as np
@@ -42,7 +43,6 @@ from api.schemas.responses import PuzzleGenerateResponse, PuzzleLayoutPreviewRes
 from api.selection_state import unpack_applied_region_mask
 from api.session_store import SessionStore
 from api.structured_logging import get_logger
-from api.visible_region_cache import get_visible_region_generation
 from api.worker_pool import WorkerPoolManager
 from api.workers.converter_workers import worker_generate_model
 from config import ModelingMode as CoreModelingMode
@@ -82,6 +82,8 @@ from .common import (
     _validate_material_archive_relief_minimum_height,
 )
 from .generate import (
+    _assert_editor_snapshot_current,
+    _capture_generation_snapshot,
     _preview_analysis_params_match,
     _resolve_recipe_overrides,
     _serialize_recipe_override_for_worker,
@@ -998,22 +1000,24 @@ async def generate_puzzle(
             (包含下载地址与网格摘要的响应)
     """
 
-    session_data = _require_session(store, body.session_id)
-    preview_cache_ref = session_data.get("preview_cache")
     request = body.params
     generate_params = request.params
-    committed_content_revision = get_visible_region_generation(session_data)
-    if (
-        generate_params.editor_content_revision is not None
-        and int(generate_params.editor_content_revision) != committed_content_revision
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Visible content changed before puzzle generation started; "
-                "refresh the editor state and try again."
-            ),
-        )
+    (
+        session_data,
+        committed_content_revision,
+        committed_selection_revision,
+    ) = _capture_generation_snapshot(
+        store,
+        body.session_id,
+        requested_revision=generate_params.editor_content_revision,
+        requested_selection_revision=generate_params.selection_revision,
+        revision_mismatch_detail=(
+            "Visible content changed before puzzle generation started "
+            "(editor content revision mismatch); "
+            "refresh the editor state and try again."
+        ),
+    )
+    preview_cache_ref = session_data.get("preview_cache")
     validate_export_device_selection(
         printer_id=generate_params.printer_id,
         slicer=generate_params.slicer,
@@ -1146,6 +1150,15 @@ async def generate_puzzle(
         list(session_data.get("selected_materials") or [])
         if session_material_source == "material_archive"
         else []
+    )
+    # All piece inputs below come from the detached session/cache snapshot.
+    # Reject a generation that became stale while layout and asset inputs were
+    # being assembled, before the first worker is submitted.
+    _assert_editor_snapshot_current(
+        store,
+        body.session_id,
+        committed_content_revision,
+        expected_selection_revision=committed_selection_revision,
     )
     futures: list[asyncio.Future] = []
     piece_records: list[PuzzlePiece] = []
@@ -1410,7 +1423,17 @@ async def generate_puzzle(
             piece_heightmap_path = _save_png_array(sid, store, piece_heightmap, piece_prefix)
             worker_params["heightmap_path"] = piece_heightmap_path
 
-        futures.append(pool.submit(_submit_puzzle_worker, piece_image_path, lut_path, worker_params))
+        # All worker arguments are paths, scalars, and per-piece dicts. Copy
+        # the dict before enqueueing so a later session edit cannot mutate an
+        # already-bound puzzle piece request.
+        futures.append(
+            pool.submit(
+                _submit_puzzle_worker,
+                piece_image_path,
+                lut_path,
+                deepcopy(worker_params),
+            )
+        )
         piece_records.append(piece)
 
     if skipped_transparent_labels:
@@ -1480,6 +1503,14 @@ async def generate_puzzle(
             detail="Puzzle generation produced no non-transparent pieces.",
         )
 
+    _assert_editor_snapshot_current(
+        store,
+        body.session_id,
+        committed_content_revision,
+        expected_selection_revision=committed_selection_revision,
+        allow_missing_session=True,
+    )
+
     piece_sources = [
         PuzzlePiece3MFSource(
             label=piece.label,
@@ -1528,6 +1559,13 @@ async def generate_puzzle(
             enable_wipe_tower_auto_placement=(
                 generate_params.enable_wipe_tower_auto_placement
             ),
+        )
+        _assert_editor_snapshot_current(
+            store,
+            body.session_id,
+            committed_content_revision,
+            expected_selection_revision=committed_selection_revision,
+            allow_missing_session=True,
         )
         for warning_code in read_wipe_tower_placement_warnings(
             combined_3mf_path
@@ -1579,4 +1617,5 @@ async def generate_puzzle(
         grid_rows=layout.rows,
         warnings=warnings,
         editor_content_revision=committed_content_revision,
+        selection_revision=committed_selection_revision,
     )

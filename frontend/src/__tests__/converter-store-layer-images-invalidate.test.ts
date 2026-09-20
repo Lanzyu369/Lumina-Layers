@@ -18,6 +18,12 @@ vi.mock("../api/converter", () => ({
   replaceColor: vi.fn(),
   replaceColorsBatch: vi.fn(),
   applyRecipeOverride: vi.fn(),
+  getEditorCommitStatus: vi.fn().mockResolvedValue({
+    status: "failed",
+    operation_id: "test-operation",
+    editor_content_revision: 0,
+    visible_content_revision: 0,
+  }),
 }));
 
 import {

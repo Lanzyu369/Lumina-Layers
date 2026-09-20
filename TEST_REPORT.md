@@ -106,7 +106,7 @@ git diff --check
 python3 scripts/run_vitest.py run
 ```
 
-结果：`272 files passed, 3009 tests passed, 1 skipped, 1 failed`。唯一失败是本次不相关的 `batchStore.test.ts` 参数快照断言：实现多传了 `coating_height_mm`、`enable_coating`、`svg_hole_*`；相关 native 生成测试和本次选择/替换测试均通过。未修改该既有 batch 参数契约，因此保留为交付前风险，而不是把它伪装成全量绿。
+结果：`272 files passed, 3016 tests passed, 1 skipped, 1 failed`。唯一失败是本次不相关的 `batchStore.test.ts` 参数快照断言：实现多传了 `coating_height_mm`、`enable_coating`、`svg_hole_*`；相关 native 生成测试和本次选择/替换测试均通过。未修改该既有 batch 参数契约，因此保留为交付前风险，而不是把它伪装成全量绿。
 
 后端全量收集到 `6747/6750` 个测试后被两个可选依赖导入错误阻断，原因是环境缺少：
 
@@ -126,3 +126,102 @@ python3 scripts/run_vitest.py run
 7. 对编辑、清空、撤销、重做各做一次并立即生成；若只出现 GLB 失败，二维作品和材料矩阵仍应保留，重试 GLB 不应重放颜色编辑。
 
 现场日志仍需包含 request/session 安全标识、请求/当前 content revision、selection revision、提交阶段、HTTP 状态和页面状态，才能继续确认用户环境中的具体生成错误类别。
+
+## 6. 第二轮复审与收口结果
+
+第二轮复审针对“响应丢失后是否知道服务端究竟做没做”以及“生成是否拿到完整快照”补了真实
+SessionStore/预览缓存/历史参与的回归。提交回执只记录最近 64 个 operation id，作为现有
+提交边界的确认元数据，不是第二套作品状态。
+
+### 本轮确定性回归
+
+后端命令：
+
+```text
+python3 -m pytest tests/test_color_replace_unit.py tests/test_converter_replace_integration_unit.py tests/test_replace_colors_batch_unit.py tests/test_editor_commit_unit.py tests/test_converter_generate_unit.py tests/test_converter_puzzle_unit.py tests/test_converter_generate_integration_unit.py tests/test_converter_recipe_override_unit.py -q -W error::pytest.PytestUnraisableExceptionWarning
+```
+
+结果：`382 passed, 1 warning`。
+
+前端命令：
+
+```text
+python3 scripts/run_vitest.py run src/__tests__/converter-store-selection-race.test.ts
+```
+
+结果：`16 passed`。覆盖同色/批量换色后的权威内容版本、成功与错误旧响应的回执查询、选区 hydration
+失败时保留 selection revision、同类内容编辑串行、已知提交前失败可继续以及 unknown
+receipt 暂停依赖操作并由显式同步恢复。
+
+最终受影响文件命令：
+
+```text
+python3 scripts/run_vitest.py run src/__tests__/converter-store-selection-race.test.ts src/__tests__/converter-store-relief-generate.test.ts src/__tests__/autoPreview.test.ts src/__tests__/converter-store-layer-images-invalidate.test.ts src/__tests__/color2DOverlayAutoPreview.test.ts src/stores/__tests__/converter-native-source.test.ts src/__tests__/converter-store-confirm-replacement-gradient-region.test.ts src/__tests__/converter-store-dynamic-material-transport.test.ts src/__tests__/converter-store-gradient-region-pixel-replace.test.ts src/__tests__/converter-store-replacement-height-identity.test.ts src/__tests__/freeColor.test.ts src/__tests__/gradient-groups-panel.test.tsx src/__tests__/gradient-multi-region-merge.test.ts src/__tests__/colorReplaceArchFix.property.test.ts
+```
+
+最终受影响文件集合命令覆盖颜色调整、选区竞态、自动预览、生成、配方、自由色、渐变和
+旧请求属性测试，结果为 `14 files passed, 274 tests passed`。这些测试使用受控 Promise/
+事件闩锁，不依赖随机 sleep。
+
+后端生成新增覆盖标准、拼图、大画幅共用的编辑/选区双版本校验，以及 worker 开始后修改
+SessionStore 时仍只消费不可变快照。后端真实 endpoint 回归另执行了 50 次连续内容编辑，
+revision 单调递增且非选中区域材料矩阵保持一致。
+
+复审补丁回归：`tests/test_editor_commit_unit.py` 验证已完成 operation id 的重复提交在
+实际编辑前被拒绝；`tests/test_converter_recipe_override_unit.py` 注入 cache 已发布后
+历史失败，确认新 cache/配方保持、旧 session 不回滚且回执不伪报 failed。两项均通过。
+
+### 当前验证命令状态
+
+```text
+cd frontend && pnpm build
+```
+
+通过；TypeScript 与 Vite 构建无错误，保留仓库原有 dynamic import/大 chunk warning。
+
+```text
+cd frontend && pnpm lint
+```
+
+通过，0 errors、68 warnings；warning 是仓库既有风格/React Fast Refresh/raw color 问题。
+
+```text
+python3 -m compileall -q api core tests
+git diff --check
+```
+
+通过（最终代码变更后已复跑）。
+
+```text
+python3 -m pytest tests/test_logging_exception_governance_unit.py tests/test_structured_logging_unit.py tests/test_logger_unit.py -v
+python3 scripts/log_quality_check.py --mode fast
+```
+
+通过：日志治理单测 `21 passed`，fast quality gate `PASS`；没有新增非结构化日志、超预算
+INFO 或缺少可操作字段的 WARNING/ERROR。
+
+```text
+python3 scripts/run_vitest.py run
+```
+
+未全绿：当前已知唯一失败仍是与本次状态边界无关的
+`src/stores/__tests__/batchStore.test.ts` 参数快照断言；实现新增
+`coating_height_mm`、`enable_coating` 和 `svg_hole_*` 参数，而本次未修改该既有契约。
+全量结果为 `272 files passed, 3016 tests passed, 1 skipped, 1 failed`；受影响的颜色调整/
+生成测试均通过，不能把这项不相关 fixture 失败改写成全量通过。
+
+```text
+python3 -m pytest tests/ -v
+```
+
+收集阶段受环境可选依赖阻断：直接执行该命令得到 `3 deselected, 2 errors`，缺少
+`rasterio`（`tests/test_glb_v2_kernel_unit.py`）和 `lumina_svg_core`
+（`tests/test_native_svg_benchmark_contract_unit.py`）。这不是本次修改触碰的模块；可运行的
+converter/generate/puzzle 集合已单独通过。未执行无上限大内存压测。
+
+### 仍需现场确认的风险
+
+没有用户现场 request id、服务端堆栈、页面录屏或真实素材，因此不能宣称“多位用户最后生成
+错误”已经全部归因或解决。当前本地已确认：真实过期生成会明确拒绝；GLB 派生失败不会撤销
+已提交二维内容；未知提交回执会暂停后续依赖操作。若现场仍有生成失败，应按操作回执、编辑
+版本、选区版本、矩阵一致性和 GLB 派生阶段分别采集证据。

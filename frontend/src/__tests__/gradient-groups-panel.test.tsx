@@ -15,6 +15,14 @@ const regionReplaceMock = vi.hoisted(() => vi.fn());
 const regionReplaceBatchMock = vi.hoisted(() => vi.fn());
 const regionRequantizeMock = vi.hoisted(() => vi.fn());
 const fetchGradientGroupsMock = vi.hoisted(() => vi.fn());
+const editorCommitStatusMock = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({
+    status: "failed",
+    operation_id: "test-operation",
+    editor_content_revision: 0,
+    visible_content_revision: 0,
+  }),
+);
 
 vi.mock("../api/converter", async () => {
   const actual = await vi.importActual<typeof import("../api/converter")>(
@@ -24,10 +32,17 @@ vi.mock("../api/converter", async () => {
     ...actual,
     colorHighlight: colorHighlightMock,
     replaceColor: replaceColorMock,
+    replaceColorsBatch: vi.fn().mockResolvedValue({
+      status: "ok",
+      message: "ok",
+      preview_url: "/api/files/flattened.png",
+      replacement_count: 1,
+    }),
     regionReplace: regionReplaceMock,
     regionReplaceBatch: regionReplaceBatchMock,
     regionRequantize: regionRequantizeMock,
     fetchGradientGroups: fetchGradientGroupsMock,
+    getEditorCommitStatus: editorCommitStatusMock,
   };
 });
 
@@ -461,6 +476,8 @@ describe("GradientGroupsPanel", () => {
       "sess-test",
       "#d2aeb4",
       { gradientGroupIndex: 1 },
+      undefined,
+      expect.any(String),
     );
     const state = useConverterStore.getState();
     expect(state.colorRemapMap).toEqual({});
@@ -535,6 +552,8 @@ describe("GradientGroupsPanel", () => {
       "sess-test",
       "#aaaaaa",
       { gradientGroupIndex: 1, gradientRegionIndex: 1 },
+      undefined,
+      expect.any(String),
     );
     const state = useConverterStore.getState();
     expect(state.colorRemapMap).toEqual({});

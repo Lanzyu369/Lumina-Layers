@@ -35,6 +35,12 @@ vi.mock("../api/converter", () => ({
   colorHighlight: vi.fn(),
   detectRegion: vi.fn(),
   regionReplace: vi.fn(),
+  getEditorCommitStatus: vi.fn().mockResolvedValue({
+    status: "failed",
+    operation_id: "test-operation",
+    editor_content_revision: 0,
+    visible_content_revision: 0,
+  }),
   mutateEditorSelection: vi.fn(),
   resetReplacements: vi.fn(),
   autoDetectColors: vi.fn(),
@@ -108,6 +114,8 @@ describe("confirmReplacement · gradient-region scope", () => {
       "sess-confirm",
       "#ff0000",
       { gradientGroupIndex: 2, gradientRegionIndex: 3 },
+      undefined,
+      expect.any(String),
     );
 
     const state = useConverterStore.getState();
@@ -195,6 +203,8 @@ describe("confirmReplacement · gradient-region scope", () => {
       "sess-confirm",
       "#ff0000",
       { gradientGroupIndex: 2, gradientRegionIndex: 3 },
+      undefined,
+      expect.any(String),
     );
   });
 
@@ -368,6 +378,7 @@ describe("confirmReplacement · gradient-region scope", () => {
       "#ff0000",
       undefined,
       7,
+      expect.any(String),
     );
     expect(mockMutateEditorSelection).toHaveBeenCalledWith(
       expect.objectContaining({

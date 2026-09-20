@@ -646,6 +646,11 @@ class ConvertGenerateRequest(LutSourceSelection, SvgHoleCompensationOptions):
         ge=0,
         description="前端提交的已确认可见内容版本",
     )
+    selection_revision: int | None = Field(
+        None,
+        ge=0,
+        description="前端提交的已确认共享选区版本",
+    )
 
     @field_validator("color_mode", mode="before")
     @classmethod
@@ -901,6 +906,7 @@ class ColorReplaceRequest(BaseModel):
     session_id: str = Field(..., description="Session ID")
     selected_color: str = Field(..., description="选中的原图颜色 (hex)")
     replacement_color: str = Field(..., description="替换目标色 (hex)")
+    operation_id: str | None = Field(None, max_length=128, description="编辑操作 ID")
 
 
 class ColorReplacePair(BaseModel):
@@ -941,6 +947,7 @@ class ColorReplaceBatchRequest(BaseModel):
         default_factory=list,
         description="批量替换对列表（可为空，空列表表示重放为无全局颜色替换）",
     )
+    operation_id: str | None = Field(None, max_length=128, description="编辑操作 ID")
 
 
 class FreeColorMutationRequest(BaseModel):
@@ -949,6 +956,7 @@ class FreeColorMutationRequest(BaseModel):
     session_id: str = Field(..., description="Session ID")
     action: Literal["toggle", "clear", "replace"]
     color_hexes: list[str] = Field(default_factory=list)
+    operation_id: str | None = Field(None, max_length=128, description="编辑操作 ID")
 
 
 class FreeColorMutationResponse(BaseModel):
@@ -956,6 +964,19 @@ class FreeColorMutationResponse(BaseModel):
     free_color_set: list[str] = Field(default_factory=list)
     can_undo: bool = False
     can_redo: bool = False
+    operation_id: str | None = None
+    editor_content_revision: int | None = Field(None, ge=0)
+
+
+class EditorCommitStatusResponse(BaseModel):
+    """Confirmation for one editor operation after a lost response."""
+
+    status: Literal["pending", "committed", "failed", "unknown"]
+    operation_id: str
+    operation: str | None = None
+    editor_content_revision: int = Field(0, ge=0)
+    visible_content_revision: int = Field(0, ge=0)
+    selection_revision: int | None = Field(None, ge=0)
 
 
 class ResetReplacementsRequest(BaseModel):
@@ -973,6 +994,7 @@ class ResetReplacementsRequest(BaseModel):
     """
 
     session_id: str = Field(..., description="Session ID")
+    operation_id: str | None = Field(None, max_length=128, description="编辑操作 ID")
 
 
 class RecipePredictRequest(BaseModel):
@@ -1001,6 +1023,7 @@ class RecipeOverrideApplyRequest(RecipePredictRequest):
     """
 
     region_ids: List[str] = Field(default_factory=list, description="要应用的区域 ID 列表")
+    operation_id: str | None = Field(None, max_length=128, description="编辑操作 ID")
 
 
 class RegionRecipeRequest(BaseModel):
@@ -1214,6 +1237,7 @@ class SelectionDocumentResponse(BaseModel):
     can_undo: bool = False
     can_redo: bool = False
     brush_hit_component_count: int | None = None
+    editor_content_revision: int | None = Field(None, ge=0)
 
 
 class RegionDetectRequest(BaseModel):
@@ -1337,6 +1361,7 @@ class RegionReplaceRequest(BaseModel):
         ge=0,
         description="统一编辑选区版本；提供时优先使用共享 selection mask",
     )
+    operation_id: str | None = Field(None, max_length=128, description="编辑操作 ID")
 
 
 class RegionReplaceBatchItem(BaseModel):
@@ -1397,6 +1422,7 @@ class RegionReplaceBatchRequest(BaseModel):
     items: list[RegionReplaceBatchItem] = Field(
         ..., min_length=1, description="批量区域替换条目列表"
     )
+    operation_id: str | None = Field(None, max_length=128, description="编辑操作 ID")
 
 
 class RegionRequantizeTarget(BaseModel):
@@ -1461,6 +1487,7 @@ class RegionRequantizeRequest(BaseModel):
             "越小越接近 flatten。"
         ),
     )
+    operation_id: str | None = Field(None, max_length=128, description="编辑操作 ID")
 
 
 class ReplacementHistoryRequest(BaseModel):
@@ -1470,6 +1497,7 @@ class ReplacementHistoryRequest(BaseModel):
 
     session_id: str = Field(..., description="Session ID")
     action: Literal["undo", "redo"] = Field(..., description="历史操作：undo 或 redo")
+    operation_id: str | None = Field(None, max_length=128, description="编辑操作 ID")
 
 
 class ReplacementHistoryResponse(BaseModel):
@@ -1499,6 +1527,8 @@ class ReplacementHistoryResponse(BaseModel):
     layer_height_mm: float | None = Field(None, description="当前层高")
     gradient_groups: Optional[List["GradientGroupItem"]] = Field(None, description="当前渐变分组")
     free_color_set: list[str] = Field(default_factory=list, description="恢复后的自由色集合")
+    operation_id: str | None = None
+    editor_content_revision: int | None = Field(None, ge=0)
 
 
 class RegionReplaceResponse(DynamicMaterialResultResponse):
