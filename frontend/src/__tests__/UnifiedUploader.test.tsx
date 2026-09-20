@@ -1,6 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import UnifiedUploader from "../components/ui/UnifiedUploader";
+import { buildFullRecipe, buildRecipeAssets, exportConverterRecipe } from "../recipe/exportRecipe";
+import { DEFAULT_STATE } from "../stores/converter";
+import { DEFAULT_SETTINGS } from "../stores/settingsStore";
 
 // Mock i18n — return key as-is
 vi.mock("../i18n/context", () => ({
@@ -17,6 +20,19 @@ const defaultProps = {
 };
 
 describe("UnifiedUploader", () => {
+  it('routes a renamed valid JSON project through import and permits JSON selection', async () => {
+    const assets = await buildRecipeAssets(new File(['image'], 'source.png'));
+    const recipe = await buildFullRecipe(exportConverterRecipe(DEFAULT_STATE, DEFAULT_SETTINGS, ''), { width: 1, height: 1, mime_type: 'image/png' }, assets);
+    const file = new File([JSON.stringify(recipe)], 'renamed.json');
+    const onShareCardDetected = vi.fn();
+    const onFilesSelect = vi.fn();
+    render(<UnifiedUploader {...defaultProps} onShareCardDetected={onShareCardDetected} onFilesSelect={onFilesSelect} />);
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(input.accept).toContain('.json');
+    fireEvent.change(input, { target: { files: [file] } });
+    await waitFor(() => expect(onShareCardDetected).toHaveBeenCalledWith(file));
+    expect(onFilesSelect).not.toHaveBeenCalled();
+  });
   it("renders upload hint text in empty state", () => {
     render(<UnifiedUploader {...defaultProps} />);
     expect(screen.getByText("upload_unified_hint")).toBeInTheDocument();

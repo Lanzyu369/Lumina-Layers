@@ -1,3 +1,4 @@
+import { saveGeneratedFile } from "../utils/saveGeneratedFile";
 import {
   Suspense,
   useRef,
@@ -776,6 +777,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const glRef = useRef<THREE.WebGLRenderer | null>(null);
   const activeOrbitPanPointerRef = useRef<ActiveOrbitPanPointer | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [screenshotNotice, setScreenshotNotice] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<SceneDiagnosticsSnapshot | null>(null);
   const [diagnosticsVisible, setDiagnosticsVisible] = useState(false);
   const [performanceVisible, setPerformanceVisible] = useState(false);
@@ -1100,20 +1102,20 @@ function Scene3D({ modelUrl }: Scene3DProps) {
     }
   }, []);
 
-  const takeScreenshot = useCallback(() => {
+  const takeScreenshot = useCallback(async () => {
     const gl = glRef.current;
     if (!gl) return;
+    setScreenshotNotice(null);
     // Render one frame with preserveDrawingBuffer behavior
     try {
       const dataUrl = gl.domElement.toDataURL("image/png");
-      const link = document.createElement("a");
-      link.download = `lumina-3d-screenshot-${Date.now()}.png`;
-      link.href = dataUrl;
-      link.click();
+      const bytes = Uint8Array.from(atob(dataUrl.split(',')[1]), char => char.charCodeAt(0));
+      const outcome = await saveGeneratedFile(new Blob([bytes], { type: 'image/png' }), `lumina-3d-screenshot-${Date.now()}.png`, 'screenshot');
+      setScreenshotNotice(outcome === 'canceled' ? null : t(outcome === 'saved' ? 'file_save_saved' : 'file_save_download_started'));
     } catch (err) {
-      console.warn("Screenshot failed:", err);
+      setScreenshotNotice(t(err instanceof Error && err.message === 'file_save_too_large' ? 'file_save_too_large' : 'file_save_failed'));
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     postClientLog("viewer: source updated", {
@@ -1144,6 +1146,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
       onPointerUp={finishViewportPointer}
       onPointerCancel={finishViewportPointer}
     >
+      {screenshotNotice && <div role="status" className="absolute bottom-4 left-4 z-30 rounded bg-[var(--surface-panel-strong)] p-2 text-sm">{screenshotNotice}</div>}
       {/* Floating action buttons — top-right with right-dock avoidance.
        * 浮动按钮组：右上角悬浮，依赖 WidgetWorkspace 注入的
        * `--lumina-right-dock-width` CSS 变量自动避开右侧坞内的 widget。

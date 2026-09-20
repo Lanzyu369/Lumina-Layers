@@ -222,6 +222,27 @@ import Scene3D, {
 } from "../components/Scene3D";
 
 describe("Scene3D", () => {
+  it('saves screenshot PNG bytes and distinguishes cancellation and failures', async () => {
+    const save = vi.fn().mockResolvedValue({ status: 'saved' });
+    Object.assign(window, { electronAPI: { saveGeneratedFile: save } });
+    try {
+      render(<Scene3D />);
+      const mockGl = getMockThreeState().gl;
+      mockGl.domElement.toDataURL = vi.fn(() => 'data:image/png;base64,iVBORw0KGgo=');
+      (capturedCanvasProps.onCreated as (state: { gl: typeof mockGl }) => void)({ gl: mockGl });
+      const click = () => fireEvent.click(screen.getByLabelText('viewer_screenshot'));
+      await act(async () => { click(); });
+      expect(save.mock.calls[0][0].purpose).toBe('screenshot');
+      expect(Array.from(save.mock.calls[0][0].bytes)).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+      expect(screen.getByText('file_save_saved')).toBeInTheDocument();
+      save.mockResolvedValue({ status: 'canceled' });
+      await act(async () => { click(); });
+      expect(screen.queryByText('file_save_saved')).not.toBeInTheDocument();
+      save.mockRejectedValue(new Error('native error'));
+      await act(async () => { click(); });
+      expect(screen.getByText('file_save_failed')).toBeInTheDocument();
+    } finally { Object.assign(window, { electronAPI: undefined }); }
+  });
 beforeEach(() => {
     capturedCanvasProps = {};
     capturedOrbitControlsProps = {};

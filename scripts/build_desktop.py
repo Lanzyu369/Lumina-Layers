@@ -5,7 +5,7 @@ Usage:
     python scripts/build_desktop.py
 
 Steps:
-    1. Build frontend (VITE_API_BASE_URL=http://127.0.0.1:8000/api)
+    1. Build frontend (VITE_API_BASE_URL=/api, same-origin desktop backend)
     2. Check geometry dependencies
     3. Build backend (PyInstaller -> lumina-backend.exe)
     4. Copy artifacts to electron/resources/
@@ -45,6 +45,10 @@ CORE_GEOMETRY_REQUIRED_MODULES = (
 )
 GLB_V2_OPTIONAL_MODULES = ("rasterio.features",)
 WORKSHOP_DESKTOP_SECURITY_FILES = (
+    ELECTRON_DIR / "backend-endpoint.cjs",
+    ELECTRON_DIR / "generated-file-save.cjs",
+    ELECTRON_DIR / "storage-migration.cjs",
+    ELECTRON_DIR / "storage-migration-preload.cjs",
     ELECTRON_DIR / "bed-model-bridge.cjs",
     ELECTRON_DIR / "workshop-security.cjs",
     ELECTRON_DIR / "preload.cjs",
@@ -263,7 +267,7 @@ def main():
     run(
         "pnpm run build",
         cwd=str(FRONTEND_DIR),
-        env_extra={"VITE_API_BASE_URL": "http://127.0.0.1:8000/api"},
+        env_extra={"VITE_API_BASE_URL": "/api"},
     )
 
     # ── Step 2: Check backend dependencies ──

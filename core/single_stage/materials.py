@@ -22,6 +22,12 @@ from scipy.optimize import least_squares
 
 from api.structured_logging import get_logger
 from config import MATERIALS_DIR, TEMP_DIR
+from core.registry_transport import (
+    fallback_base,
+    fetch_catalog,
+    map_package_url,
+    read_with_fallback,
+)
 from .kit import SINGLE_STAGE_SPEC, SingleStageSpec
 
 DEFAULT_MATERIAL_PACKAGE_MAX_ARCHIVE_BYTES = 100 * 1024 * 1024
@@ -3154,14 +3160,11 @@ def _request_material_registry_refresh_catalog(
     headers: dict[str, str],
     etag: str | None,
 ) -> Any:
-    request_headers = dict(headers)
-    if etag is not None:
-        request_headers["If-None-Match"] = etag
-    response = client.get(
-        _material_registry_catalog_url(registry_url),
+    response = fetch_catalog(
+        client=client, primary=registry_url, family="MATERIAL", suffix="/materials/catalog",
+        channels=channels, etag=etag,
         params=[("channel", channel) for channel in channels],
-        headers=request_headers,
-        follow_redirects=False,
+        headers=headers,
     )
     _reject_material_registry_catalog_redirect(response)
     if int(response.status_code) != 304:
@@ -3195,6 +3198,29 @@ def _download_material_registry_package_to_tempfile(
     headers: dict[str, str],
     expected_package_sha256: str,
     identity_label: str,
+    max_archive_bytes: int | None = None,
+    registry_url: str | None = None,
+    channels: Sequence[str] | None = None,
+) -> Path:
+    primary = str(registry_url or os.environ.get("LUMINA_MATERIAL_REGISTRY_URL", "")).rstrip("/")
+    fallback = fallback_base(primary, "MATERIAL")
+    try:
+        backup_package = map_package_url(package_url, primary, fallback) if fallback else None
+    except ValueError:
+        backup_package = None
+    return read_with_fallback(
+        client=client, primary=primary, fallback=fallback if backup_package else None,
+        headers=headers, channels=_normalize_material_registry_channels(channels),
+        action=lambda base: _download_material_registry_package_once(
+            client=client, package_url=package_url if base == primary else backup_package,
+            headers=headers, expected_package_sha256=expected_package_sha256,
+            identity_label=identity_label, max_archive_bytes=max_archive_bytes),
+    )
+
+
+def _download_material_registry_package_once(
+    *, client: Any, package_url: str, headers: dict[str, str],
+    expected_package_sha256: str, identity_label: str,
     max_archive_bytes: int | None = None,
 ) -> Path:
     if max_archive_bytes is None:
@@ -3575,11 +3601,11 @@ def list_material_registry_catalog(
 
     with httpx.Client(**client_kwargs) as client:
         try:
-            catalog_response = client.get(
-                _material_registry_catalog_url(normalized_registry_url),
+            catalog_response = fetch_catalog(
+                client=client, primary=normalized_registry_url, family="MATERIAL",
+                suffix="/materials/catalog", channels=normalized_channels,
                 params=catalog_params,
                 headers=headers,
-                follow_redirects=False,
             )
             _reject_material_registry_catalog_redirect(catalog_response)
             catalog_response.raise_for_status()
@@ -3730,6 +3756,7 @@ def install_material_registry_package(
                     headers=headers,
                     expected_package_sha256=expected_package_sha256,
                     identity_label=f"{material_id}/{revision_id}",
+                    registry_url=normalized_registry_url,
                 )
             except httpx.HTTPError as exc:
                 raise RuntimeError("Material registry package request failed") from exc
@@ -6069,6 +6096,8 @@ def refresh_material_sync_from_registry(
                         headers=headers,
                         expected_package_sha256=expected_package_sha256,
                         identity_label=f"{material_id}/{revision_id}",
+                        registry_url=normalized_registry_url,
+                        channels=normalized_channels,
                     )
                     try:
                         import_result = import_saved_stage_a_material_archives(

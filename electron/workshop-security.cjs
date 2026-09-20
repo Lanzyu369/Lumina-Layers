@@ -25,11 +25,14 @@ const NON_NETWORK_RESOURCE_TYPES = new Set([
   "worker",
 ]);
 let managedDesktopHostEnabled = false;
+let desktopBackendPort = "8000";
 
-/** Enable the fixed managed frontend from the main process before navigation.
- * 主进程在导航前启用固定托管前端；不接受 renderer 提供的地址。
+/** Enable the selected desktop frontend from the main process before navigation.
+ * 主进程在导航前启用所选端口的桌面前端；不接受 renderer 提供的地址。
  */
-function enableManagedDesktopHost() {
+function enableManagedDesktopHost(port = 8000) {
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new TypeError("Invalid desktop backend port.");
+  desktopBackendPort = String(port);
   managedDesktopHostEnabled = true;
 }
 
@@ -64,7 +67,7 @@ function isTrustedHostUrl(value) {
     parsed.protocol === "http:" &&
     parsed.hostname === "127.0.0.1" &&
     (parsed.port === "4174" ||
-      (managedDesktopHostEnabled && parsed.port === "8000" && parsed.pathname === "/"))
+      (managedDesktopHostEnabled && parsed.port === desktopBackendPort && parsed.pathname === "/"))
   );
 }
 
@@ -92,7 +95,7 @@ function isTrustedInternalRuntimeRequest(details) {
     parsed !== null &&
     parsed.protocol === "http:" &&
     parsed.hostname === "127.0.0.1" &&
-    parsed.port === "8000" &&
+    parsed.port === desktopBackendPort &&
     parsed.username === "" &&
     parsed.password === "" &&
     parsed.search === "" &&
@@ -113,7 +116,7 @@ function isTrustedInternalBedModelRequest(details) {
     parsed === null ||
     parsed.protocol !== "http:" ||
     parsed.hostname !== "127.0.0.1" ||
-    parsed.port !== "8000" ||
+    parsed.port !== desktopBackendPort ||
     parsed.username !== "" ||
     parsed.password !== "" ||
     parsed.pathname !== BACKEND_BED_MODEL_PATH ||

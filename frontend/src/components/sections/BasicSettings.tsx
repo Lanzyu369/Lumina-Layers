@@ -508,7 +508,7 @@ export default function BasicSettings() {
       setImportLoading(true);
       const preview = await prepareImport(file);
       setImportPreview(preview);
-      setImportSource(file.name.toLowerCase().endsWith(".lumina.json") ? "json" : "png");
+      setImportSource(file.name.toLowerCase().endsWith(".json") ? "json" : "png");
       setImportDialogOpen(true);
     } catch (err) {
       const visibleError = resolveRecipeImportError(err, t);

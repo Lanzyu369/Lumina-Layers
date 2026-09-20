@@ -26,6 +26,12 @@ import msgpack
 import numpy as np
 
 from core.native_reference import build_model_package_runtime_payload
+from core.registry_transport import (
+    fallback_base,
+    fetch_catalog,
+    map_package_url,
+    read_with_fallback,
+)
 from utils.lut_manager import LUTManager
 
 MANIFEST_NAME = "lumina_lut_bundle.json"
@@ -84,12 +90,12 @@ def _env_csv(name: str) -> tuple[str, ...]:
 
 
 def get_registry_config() -> LutRegistryConfig:
-    """Resolve registry sync configuration from environment variables."""
+    """Resolve registry sync configuration from environment variables.
+    从环境变量解析同步配置，显式空地址禁用同步。
+    """
 
-    base_url = (
-        os.environ.get("LUMINA_LUT_REGISTRY_URL")
-        or os.environ.get("LUMINA_MATERIAL_REGISTRY_URL")
-        or ""
+    base_url = os.environ.get(
+        "LUMINA_LUT_REGISTRY_URL", os.environ.get("LUMINA_MATERIAL_REGISTRY_URL", "")
     ).strip()
     channels = (
         _env_csv("LUMINA_LUT_REGISTRY_CHANNELS")
@@ -375,7 +381,9 @@ def fetch_remote_catalog(
     offset: int = 0,
     client: httpx.Client | None = None,
 ) -> dict[str, Any]:
-    """Fetch a bounded LUT catalog payload from the configured registry."""
+    """Fetch a bounded LUT catalog payload from the configured registry.
+    从配置的主库读取有界 LUT 目录，临时故障时可尝试公开备用库。
+    """
 
     config = get_registry_config()
     base_url = _require_base_url(config)
@@ -388,13 +396,16 @@ def fetch_remote_catalog(
     owns_client = client is None
     active_client = client or _make_http_client()
     try:
-        response = active_client.get(
-            f"{base_url}/luts/catalog",
+        response = fetch_catalog(
+            client=active_client, primary=base_url, family="LUT", suffix="/luts/catalog",
+            channels=selected_channels,
             params=params,
             headers=_headers(config),
         )
     except httpx.HTTPError as exc:
         raise LutRegistryRemoteError(f"Failed to fetch LUT catalog: {exc}") from exc
+    except ValueError as exc:
+        raise LutRegistryRemoteError("LUT catalog response is invalid") from exc
     finally:
         if owns_client:
             active_client.close()
@@ -1004,11 +1015,33 @@ def _download_limited_package(
     package_url: str,
     headers: dict[str, str],
     expected_bytes: int,
+    channels: list[str] | tuple[str, ...] | None = None,
+) -> bytes:
+    config = get_registry_config()
+    primary = config.base_url or ""
+    fallback = fallback_base(primary, "LUT")
+    try:
+        backup_package = map_package_url(package_url, primary, fallback) if fallback else None
+    except ValueError:
+        backup_package = None
+    return read_with_fallback(
+        client=client, primary=primary, fallback=fallback if backup_package else None,
+        headers=headers, channels=channels or config.channels,
+        action=lambda base: _download_limited_package_once(
+            client=client, package_url=package_url if base == primary else backup_package,
+            headers=headers, expected_bytes=expected_bytes),
+    )
+
+
+def _download_limited_package_once(
+    *, client: httpx.Client, package_url: str, headers: dict[str, str], expected_bytes: int,
 ) -> bytes:
     chunks: list[bytes] = []
     total = 0
     try:
-        with client.stream("GET", package_url, headers=headers) as response:
+        with client.stream(
+            "GET", package_url, headers=headers, follow_redirects=False
+        ) as response:
             if 300 <= response.status_code < 400:
                 raise LutRegistryRemoteError("LUT package download was redirected")
             try:
@@ -1105,6 +1138,7 @@ def _install_verified_catalog_entry(
     entry: dict[str, Any],
     *,
     client: httpx.Client | None = None,
+    channels: list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """Download, validate, and install a cloud LUT package under Cloud/."""
 
@@ -1129,6 +1163,7 @@ def _install_verified_catalog_entry(
             package_url=package_url,
             headers=_headers(config),
             expected_bytes=package_bytes,
+            channels=channels or config.channels,
         )
     finally:
         if owns_client:
@@ -1202,7 +1237,9 @@ def install_lut_package(
     channels: list[str] | tuple[str, ...] | None = None,
     client: httpx.Client | None = None,
 ) -> dict[str, Any]:
-    """Resolve a registry catalog entry server-side and install its package."""
+    """Resolve a registry catalog entry server-side and install its package.
+    在服务端校验目录条目后安装，下载回退保留所选频道的权限边界。
+    """
 
     if not isinstance(lut_id, str) or not lut_id.strip():
         raise LutRegistryPackageError("lut_id is required")
@@ -1218,7 +1255,7 @@ def install_lut_package(
             channels=channels,
             client=active_client,
         )
-        return _install_verified_catalog_entry(entry, client=active_client)
+        return _install_verified_catalog_entry(entry, client=active_client, channels=channels)
     finally:
         if owns_client:
             active_client.close()

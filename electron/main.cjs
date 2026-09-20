@@ -14,9 +14,11 @@ const http = require("http");
 const nodeNet = require("net");
 const fs = require("fs");
 const path = require("path");
+const { saveGeneratedFile } = require("./generated-file-save.cjs");
+const { migrateLegacyStorage } = require("./storage-migration.cjs");
 const { managedRuntime, assertPortsAvailable } = require("./managed-runtime.cjs");
+const { selectBackendEndpoint, validateHealthResponse } = require("./backend-endpoint.cjs");
 const { createManagedStartup } = require("./managed-startup.cjs");
-const { pathToFileURL } = require("url");
 const {
   fetchNativeBedModel,
   isAllowedBedModelIpcSender,
@@ -43,9 +45,8 @@ const {
 //  Constants
 // ═══════════════════════════════════════════════════════════
 
-const BACKEND_PORT = 8000;
+let backendEndpoint;
 const FRONTEND_PORT = 4174;
-const BACKEND_HEALTH_URL = `http://127.0.0.1:${BACKEND_PORT}/api/health`;
 const FRONTEND_URL = `http://127.0.0.1:${FRONTEND_PORT}`;
 // Cold native dependency loading can exceed 30 seconds on a clean Windows guest.
 // Health and process ownership remain mandatory throughout this bounded wait.
@@ -83,7 +84,6 @@ if (managed) {
   fs.mkdirSync(managed.backendCwd, { recursive: true });
   app.setPath("userData", managed.userData);
   app.commandLine.appendSwitch("disk-cache-dir", managed.chromiumCache);
-  enableManagedDesktopHost();
 }
 
 protocol.registerSchemesAsPrivileged([
@@ -250,75 +250,6 @@ function killAllChildren() {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  Port cleanup (port of start_dev.py _kill_listening)
-// ═══════════════════════════════════════════════════════════
-
-function killListening(ports) {
-  if (IS_WIN) {
-    try {
-      const out = execSync("netstat -ano", {
-        windowsHide: true,
-        encoding: "utf-8",
-      });
-      const portPattern = ports.join("|");
-      const re = new RegExp(
-        `\\s+TCP\\s+[\\d.]+:(${portPattern})\\s+\\S+\\s+LISTENING\\s+(\\d+)`,
-      );
-      const killed = new Set();
-      for (const line of out.split("\n")) {
-        const m = line.match(re);
-        if (m) {
-          const pid = parseInt(m[2], 10);
-          const port = m[1];
-          if (killed.has(pid)) continue;
-          try {
-            execSync(`taskkill /T /F /PID ${pid}`, {
-              windowsHide: true,
-              stdio: "ignore",
-            });
-            logSys(`Killed PID ${pid} (port ${port})`);
-            killed.add(pid);
-          } catch (_) {
-            logErr(`Failed to kill PID ${pid} (port ${port})`);
-          }
-        }
-      }
-    } catch (err) {
-      logErr(`Port cleanup error: ${err.message}`);
-    }
-    return;
-  }
-
-  // macOS / Linux: 用 lsof 拿到 LISTEN 状态的 PID 再 kill。
-  // lsof 在没有匹配进程时退出码为 1,这是正常情况而不是错误,要吞掉。
-  for (const port of ports) {
-    try {
-      const out = execSync(
-        `lsof -nP -iTCP:${port} -sTCP:LISTEN -t`,
-        { encoding: "utf-8" },
-      ).trim();
-      if (!out) continue;
-      const pids = out.split(/\s+/).map((s) => parseInt(s, 10)).filter(Boolean);
-      for (const pid of pids) {
-        try {
-          process.kill(pid, "SIGTERM");
-          logSys(`Killed PID ${pid} (port ${port})`);
-        } catch (err) {
-          // ESRCH = 进程已经不在,忽略;其它错误记一条。
-          if (err.code !== "ESRCH") {
-            logErr(`Failed to kill PID ${pid} (port ${port}): ${err.message}`);
-          }
-        }
-      }
-    } catch (err) {
-      // lsof 没匹配进程时 status=1, stdout/stderr 都为空,直接跳过。
-      if (err.status === 1 && !err.stderr) continue;
-      logErr(`Port ${port} cleanup error: ${err.message}`);
-    }
-  }
-}
-
-// ═══════════════════════════════════════════════════════════
 //  Health / port probes
 // ═══════════════════════════════════════════════════════════
 
@@ -346,11 +277,11 @@ function waitForHealth(url, timeoutMs, ownedChild = null) {
     function probe() {
       if (settled) return;
       const probeRequest = http.get(url, (res) => {
-        res.resume();
         if (settled || request !== probeRequest) return;
-        if (res.statusCode >= 200 && res.statusCode < 400) {
-          finish();
-        } else retryProbe();
+        validateHealthResponse(res, backendEndpoint.instanceId, valid => {
+          if (settled || request !== probeRequest) return;
+          if (valid) finish(); else retryProbe();
+        });
       });
       request = probeRequest;
       function retryProbe() {
@@ -442,8 +373,29 @@ function backendRuntimeEnv() {
     ),
     LUMINA_WORKSHOP_DESKTOP_TOKEN: workshopSessionToken,
     ...(managed?.backendEnv || {}),
+    LUMINA_API_HOST: "127.0.0.1",
+    LUMINA_API_PORT: String(backendEndpoint.port),
+    LUMINA_DESKTOP_INSTANCE_ID: backendEndpoint.instanceId,
+    LUMINA_CLEAR_CACHE_ALLOWED_LOCAL_PORTS: [process.env.LUMINA_CLEAR_CACHE_ALLOWED_LOCAL_PORTS, backendEndpoint.port].filter(Boolean).join(","),
+    LUMINA_MATERIAL_LIBRARY_ALLOWED_LOCAL_PORTS: [process.env.LUMINA_MATERIAL_LIBRARY_ALLOWED_LOCAL_PORTS, backendEndpoint.port].filter(Boolean).join(","),
   };
-  if (managed && !isDev) {
+  // Public read-only catalog defaults belong to packaged desktop launches only.
+  // Explicit environment values (including an empty opt-out) remain authoritative.
+  if (!isDev && process.env.LUMINA_MATERIAL_REGISTRY_URL === undefined) {
+    env.LUMINA_MATERIAL_REGISTRY_URL = "https://materials.luminastudio.com.cn/api/material-registry/v1";
+    if (process.env.LUMINA_MATERIAL_REGISTRY_FALLBACK_URL === undefined) {
+      env.LUMINA_MATERIAL_REGISTRY_FALLBACK_URL = "https://dan5.shmx.top/api/material-registry/v1";
+    }
+    if (process.env.LUMINA_MATERIAL_REGISTRY_CHANNELS === undefined) {
+      env.LUMINA_MATERIAL_REGISTRY_CHANNELS = "official,community";
+    }
+    // The existing refresh job installs the entire catalog, not just its index.
+    // Desktop users browse first and explicitly download the materials they need.
+    for (const key of ["LUMINA_MATERIAL_SYNC_STARTUP_REFRESH", "LUMINA_MATERIAL_SYNC_REFRESH_INTERVAL_S"]) {
+      if (process.env[key] === undefined) env[key] = "0";
+    }
+  }
+  if (!isDev) {
     env.LUMINA_SERVE_FRONTEND_DIST = "1";
     env.LUMINA_FRONTEND_DIST_DIR = path.join(process.resourcesPath, "app", "dist");
   }
@@ -543,7 +495,7 @@ async function handleWorkshopProtocol(request) {
   if (request.method !== "GET") {
     return fixedWorkshopResponse(405, "Method not allowed.");
   }
-  const runtime = resolveWorkshopRuntimeRequest(request.url);
+  const runtime = resolveWorkshopRuntimeRequest(request.url, backendEndpoint.origin);
   if (runtime === null) {
     return fixedWorkshopResponse(404, "Workshop runtime not found.");
   }
@@ -789,18 +741,9 @@ function createWindow() {
   if (isDev) {
     trustedMainFrameUrl = new URL(FRONTEND_URL).href;
     initialLoad = win.loadURL(FRONTEND_URL);
-  } else if (managed) {
-    trustedMainFrameUrl = managed.frontendUrl;
-    initialLoad = win.loadURL(managed.frontendUrl);
   } else {
-    const indexPath = path.join(
-      process.resourcesPath,
-      "app",
-      "dist",
-      "index.html",
-    );
-    trustedMainFrameUrl = pathToFileURL(indexPath).href;
-    initialLoad = win.loadFile(indexPath);
+    trustedMainFrameUrl = managed?.frontendUrl || `${backendEndpoint.origin}/`;
+    initialLoad = win.loadURL(trustedMainFrameUrl);
   }
   void initialLoad.catch(error => {
     logErr(`Main window load failed: ${error.code || error.name}`);
@@ -851,6 +794,14 @@ ipcMain.handle("get-app-version", () => {
   return app.getVersion();
 });
 
+ipcMain.handle("save-generated-file", (event, payload) => saveGeneratedFile({
+  event,
+  window: win,
+  trustedUrl: trustedMainFrameUrl,
+  payload,
+  showSaveDialog: (owner, options) => dialog.showSaveDialog(owner, options),
+}));
+
 ipcMain.handle("get-native-bed-model", async (event, deviceProfileId) => {
   const senderFrame = event.senderFrame ?? null;
   if (
@@ -867,6 +818,7 @@ ipcMain.handle("get-native-bed-model", async (event, deviceProfileId) => {
     return await fetchNativeBedModel({
       deviceProfileId,
       fetchImpl: electronNet.fetch,
+      backendOrigin: backendEndpoint.origin,
     });
   } catch (_) {
     logErr("Native bed model unavailable; using Lumina fallback.");
@@ -915,7 +867,7 @@ app.on("before-quit", (event) => {
   }
 });
 
-app.on("will-quit", () => {
+  app.on("will-quit", () => {
   killAllChildren();
 });
 
@@ -932,8 +884,6 @@ app.whenReady().then(async () => {
   if (startupInitializationError) throw startupInitializationError;
   logSys("Lumina Studio Electron starting...");
   logSys(`Mode: ${isDev ? "development" : "production"}`);
-  installWorkshopSessionSecurity();
-
   // 让 about 面板 / app.getName() / 部分 macOS 系统提示显示正确的名字。
   // 注意:dev 模式下 macOS 顶部菜单栏左上角的加粗应用名由 Electron.app 的
   // Info.plist::CFBundleName 决定,无法在运行期改写;打包后(productName 写进
@@ -960,21 +910,25 @@ app.whenReady().then(async () => {
 
   createSplash();
 
-  if (managed) {
-    try {
-      await assertPortsAvailable([BACKEND_PORT]);
-    } catch (error) {
-      managedStartup?.fail("startup_port_in_use");
-      closeSplash();
-      dialog.showErrorBox("Lumina Studio", currentLang === "zh"
-        ? "本地端口 8000 已被占用。请关闭正在运行的 Lumina 或内测服务器后再试；启动器不会终止其它进程。"
-        : "Local port 8000 is in use. Close the running Lumina app or test server and retry. Other processes will not be terminated.");
-      app.quit();
-      return;
+  try {
+    backendEndpoint = await selectBackendEndpoint({
+      portFile: path.join(app.getPath("userData"), "backend-port.json"),
+    });
+    if (managed) {
+      const selected = managedRuntime(process.env, backendEndpoint.port);
+      managed.frontendUrl = selected.frontendUrl;
+      managed.backendEnv.LUMINA_API_PORT = selected.backendEnv.LUMINA_API_PORT;
     }
-  } else {
-    logSys("Cleaning up residual processes...");
-    killListening([BACKEND_PORT, FRONTEND_PORT]);
+    enableManagedDesktopHost(backendEndpoint.port);
+    if (isDev) await assertPortsAvailable([FRONTEND_PORT]);
+  } catch (error) {
+    managedStartup?.fail("startup_port_in_use");
+    closeSplash();
+    dialog.showErrorBox("Lumina Studio", currentLang === "zh"
+      ? "没有可用的本地启动端口。请关闭多余的本地服务后重试；启动器不会终止其它进程。"
+      : "No local startup port is available. Close unused local services and retry. Other processes will not be terminated.");
+    app.quit();
+    return;
   }
 
   // ── Start backend ──
@@ -1030,7 +984,7 @@ app.whenReady().then(async () => {
   // ── Wait for backend health ──
   logSys("Waiting for backend health...");
   try {
-    await waitForHealth(BACKEND_HEALTH_URL, HEALTH_TIMEOUT_MS, backendProc);
+    await waitForHealth(backendEndpoint.healthUrl, HEALTH_TIMEOUT_MS, backendProc);
     managedStartup?.backendHealthy();
     logOk("Backend is healthy");
   } catch (err) {
@@ -1062,7 +1016,7 @@ app.whenReady().then(async () => {
     const frontendDir = path.join(ROOT_DIR, "frontend");
     logSys(`Starting Vite: ${node} ${viteJs}`);
     try {
-      await spawnChild("Frontend", node, [viteJs], frontendDir);
+      await spawnChild("Frontend", node, [viteJs], frontendDir, { VITE_API_PROXY_TARGET: backendEndpoint.origin });
     } catch (err) {
       logErr(`Vite start failed: ${err.message}`);
     }
@@ -1075,6 +1029,28 @@ app.whenReady().then(async () => {
       logErr(`Vite port check failed: ${err.message}`);
     }
   }
+
+  // Upgrade old standalone file:// and fixed :8000 profiles before the
+  // first new-origin window is created. The migration is best effort and
+  // never deletes or rewrites the legacy profile when it cannot complete.
+  if (!isDev && process.resourcesPath) {
+    try {
+      const migrationStatus = await migrateLegacyStorage({
+        BrowserWindow,
+        indexPath: path.join(process.resourcesPath, "app", "dist", "index.html"),
+        // Load the health document on the new origin, not the full UI, so
+        // migration does not start a second renderer application instance.
+        targetUrl: `${backendEndpoint.origin}/api/health`,
+        markerPath: path.join(app.getPath("userData"), "legacy-storage-migration.json"),
+        logger: message => logErr(message),
+      });
+      logSys(`Legacy renderer storage migration: ${migrationStatus}`);
+    } catch (error) {
+      logErr(`Legacy renderer storage migration failed: ${error.code || error.name}`);
+    }
+  }
+
+  installWorkshopSessionSecurity();
 
   // ── Create main window ──
   createWindow();

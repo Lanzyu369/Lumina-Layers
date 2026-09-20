@@ -14,14 +14,14 @@ function isAllowedBedModelIpcSender(details) {
   );
 }
 
-function resolveNativeBedModelBackendUrl(deviceProfileId) {
+function resolveNativeBedModelBackendUrl(deviceProfileId, backendOrigin = BACKEND_ORIGIN) {
   if (
     typeof deviceProfileId !== "string" ||
     !DEVICE_PROFILE_ID_PATTERN.test(deviceProfileId)
   ) {
     throw new TypeError("Invalid device profile id.");
   }
-  const url = new URL(BED_MODEL_PATH, BACKEND_ORIGIN);
+  const url = new URL(BED_MODEL_PATH, backendOrigin);
   url.searchParams.set("device_profile_id", deviceProfileId);
   return url.href;
 }
@@ -36,6 +36,7 @@ async function fetchNativeBedModel({
   deviceProfileId,
   fetchImpl,
   maxBytes = MAX_NATIVE_BED_MODEL_BYTES,
+  backendOrigin = BACKEND_ORIGIN,
 }) {
   if (typeof fetchImpl !== "function") {
     throw new TypeError("A fetch implementation is required.");
@@ -44,7 +45,7 @@ async function fetchNativeBedModel({
     throw new TypeError("Invalid native bed model byte limit.");
   }
 
-  const requestedUrl = resolveNativeBedModelBackendUrl(deviceProfileId);
+  const requestedUrl = resolveNativeBedModelBackendUrl(deviceProfileId, backendOrigin);
   const response = await fetchImpl(requestedUrl, { redirect: "error" });
   if (response.status === 404) {
     return null;

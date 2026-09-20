@@ -16,7 +16,7 @@ import {
   RECIPE_IMPORT_WARNING_REGION_RECIPES_NOT_RESTORED,
   restoreConverterRecipe,
 } from "../recipe/importRecipe";
-import { annotateSpatialEditCompatibility } from "../recipe/importFlow";
+import { annotateSpatialEditCompatibility, isShareCardFile } from "../recipe/importFlow";
 import { embedRecipeInPng, extractRecipeFromPng, hasLuminaRecipe } from "../recipe/pngMetadata";
 import { migrateRecipe } from "../recipe/migration";
 import { DEFAULT_STATE } from "../stores/converter";
@@ -86,6 +86,29 @@ async function buildTestRecipe(
 // ========== Integration Tests ==========
 
 describe("recipe integration", () => {
+  it('recognizes an exported project renamed to ordinary JSON and restores it', async () => {
+    const { recipe } = await buildTestRecipe({ lut_name: 'TestLUT', target_width_mm: 123 });
+    const file = new File([JSON.stringify(recipe)], 'renamed.json', { type: 'application/json' });
+    expect(await isShareCardFile(file)).toBe(true);
+    const parsed = await parseRecipeFile(file);
+    expect(parsed.recipe).toEqual(recipe);
+    expect(restoreConverterRecipe(parsed.recipe, LOCAL_LUTS, LOCAL_FP).state.target_width_mm).toBe(123);
+    recipe.recipe.converter!.base.target_width_mm = 124;
+    expect(await isShareCardFile(new File([JSON.stringify(recipe)], 'tampered.json'))).toBe(false);
+  });
+  it('does not misidentify ordinary, LUT, broken or oversized JSON as a project', async () => {
+    for (const text of ['{}', '{"colors":[[255,0,0]],"metadata":{"color_mode":"BW"}}', '{bad json']) {
+      expect(await isShareCardFile(new File([text], 'ordinary.json'))).toBe(false);
+    }
+    const { recipe } = await buildTestRecipe();
+    const file = new File([JSON.stringify(recipe)], 'large.json');
+    Object.defineProperty(file, 'size', { value: 128 * 1024 * 1024 + 1 });
+    file.text = () => { throw new Error('must reject before reading'); };
+    expect(await isShareCardFile(file)).toBe(false);
+    const namedSidecar = new File(['broken'], 'broken.lumina.json');
+    expect(await isShareCardFile(namedSidecar)).toBe(true);
+    await expect(parseRecipeFile(namedSidecar)).rejects.toThrow('failed to parse JSON');
+  });
   describe("full export → import round-trip", () => {
     it("basic state: export → clear → import → state equivalent", async () => {
       const { recipe } = await buildTestRecipe({

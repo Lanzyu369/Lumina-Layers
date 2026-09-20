@@ -196,12 +196,12 @@ export function validateWorkshopRecipeEnvelope(
 }
 
 /**
- * Detect whether a file is a Lumina share card PNG or a .lumina.json sidecar.
- * 检测文件是 Lumina 分享卡 PNG 还是 .lumina.json sidecar。
+ * Detect a candidate PNG or JSON recipe container; parsing validates its content.
+ * 检测候选 PNG 或 JSON 项目容器；内容是否有效由解析步骤校验。
  */
 export function detectRecipeFileType(file: File): RecipeFileSource | null {
   const name = file.name.toLowerCase();
-  if (name.endsWith(".lumina.json")) return "json";
+  if (name.endsWith(".json")) return "json";
   if (name.endsWith(".png") && file.type === "image/png") return "png";
   // Also accept PNG files without explicit type (some OS don't set MIME)
   if (name.endsWith(".png")) return "png";
