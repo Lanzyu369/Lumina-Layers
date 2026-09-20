@@ -5,17 +5,20 @@ export interface PreviewCommitOwner {
 
 export interface PreviewCommitGuard extends PreviewCommitOwner {
   replacementEpoch: number;
+  operationId: string;
 }
 
 /** Capture every ownership coordinate needed before an async preview write. */
 export function capturePreviewCommitGuard(
   owner: PreviewCommitOwner,
   replacementEpoch: number,
+  operationId: string,
 ): PreviewCommitGuard {
   return {
     sessionId: owner.sessionId,
     previewRequestRevision: owner.previewRequestRevision,
     replacementEpoch,
+    operationId,
   };
 }
 

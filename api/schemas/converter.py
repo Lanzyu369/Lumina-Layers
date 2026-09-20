@@ -641,6 +641,16 @@ class ConvertGenerateRequest(LutSourceSelection, SvgHoleCompensationOptions):
         False,
         description="使用 Session 缓存的 matched_rgb 而非从原始图像重新处理",
     )
+    editor_content_revision: int | None = Field(
+        None,
+        ge=0,
+        description="前端提交的已确认可见内容版本",
+    )
+    selection_revision: int | None = Field(
+        None,
+        ge=0,
+        description="前端提交的已确认共享选区版本",
+    )
 
     @field_validator("color_mode", mode="before")
     @classmethod
@@ -896,6 +906,7 @@ class ColorReplaceRequest(BaseModel):
     session_id: str = Field(..., description="Session ID")
     selected_color: str = Field(..., description="选中的原图颜色 (hex)")
     replacement_color: str = Field(..., description="替换目标色 (hex)")
+    operation_id: str | None = Field(None, max_length=128, description="编辑操作 ID")
 
 
 class ColorReplacePair(BaseModel):
@@ -936,6 +947,7 @@ class ColorReplaceBatchRequest(BaseModel):
         default_factory=list,
         description="批量替换对列表（可为空，空列表表示重放为无全局颜色替换）",
     )
+    operation_id: str | None = Field(None, max_length=128, description="编辑操作 ID")
 
 
 class FreeColorMutationRequest(BaseModel):
@@ -944,6 +956,7 @@ class FreeColorMutationRequest(BaseModel):
     session_id: str = Field(..., description="Session ID")
     action: Literal["toggle", "clear", "replace"]
     color_hexes: list[str] = Field(default_factory=list)
+    operation_id: str | None = Field(None, max_length=128, description="编辑操作 ID")
 
 
 class FreeColorMutationResponse(BaseModel):
@@ -951,6 +964,48 @@ class FreeColorMutationResponse(BaseModel):
     free_color_set: list[str] = Field(default_factory=list)
     can_undo: bool = False
     can_redo: bool = False
+    operation_id: str | None = None
+    editor_content_revision: int | None = Field(None, ge=0)
+
+
+class EditorCommitResult(BaseModel):
+    """Bounded business-state projection for a committed editor operation.
+
+    编辑操作提交回执中的有限业务状态投影。
+
+    This is intentionally smaller than a preview cache or history checkpoint;
+    it lets a client converge after a lost HTTP response without transporting
+    image arrays, masks, or a second copy of the editor state.
+    """
+
+    preview_url: str | None = None
+    preview_glb_url: str | None = None
+    replacement_regions: list[ColorReplacementItem] | None = None
+    recipe_overrides: list[RecipeOverrideItem] | None = None
+    recipe_override_count: int | None = Field(None, ge=0)
+    region_replacement_count: int | None = Field(None, ge=0)
+    color_layers: int | None = Field(None, ge=1)
+    layer_height_mm: float | None = Field(None, gt=0.0)
+    gradient_groups: list[GradientGroupItem] | None = None
+    free_color_set: list[str] | None = None
+    can_undo: bool | None = None
+    can_redo: bool | None = None
+    material_dynamic_recipes: list[dict] | None = None
+    material_layer_benefit_curve: list[dict] | None = None
+    material_layer_benefit_scope: str | None = None
+    material_layer_benefit_pixel_count: int | None = Field(None, ge=0)
+
+
+class EditorCommitStatusResponse(BaseModel):
+    """Confirmation for one editor operation after a lost response."""
+
+    status: Literal["pending", "committed", "failed", "unknown"]
+    operation_id: str
+    operation: str | None = None
+    editor_content_revision: int = Field(0, ge=0)
+    visible_content_revision: int = Field(0, ge=0)
+    selection_revision: int | None = Field(None, ge=0)
+    result: EditorCommitResult | None = None
 
 
 class ResetReplacementsRequest(BaseModel):
@@ -968,6 +1023,7 @@ class ResetReplacementsRequest(BaseModel):
     """
 
     session_id: str = Field(..., description="Session ID")
+    operation_id: str | None = Field(None, max_length=128, description="编辑操作 ID")
 
 
 class RecipePredictRequest(BaseModel):
@@ -996,6 +1052,7 @@ class RecipeOverrideApplyRequest(RecipePredictRequest):
     """
 
     region_ids: List[str] = Field(default_factory=list, description="要应用的区域 ID 列表")
+    operation_id: str | None = Field(None, max_length=128, description="编辑操作 ID")
 
 
 class RegionRecipeRequest(BaseModel):
@@ -1209,6 +1266,7 @@ class SelectionDocumentResponse(BaseModel):
     can_undo: bool = False
     can_redo: bool = False
     brush_hit_component_count: int | None = None
+    editor_content_revision: int | None = Field(None, ge=0)
 
 
 class RegionDetectRequest(BaseModel):
@@ -1332,6 +1390,7 @@ class RegionReplaceRequest(BaseModel):
         ge=0,
         description="统一编辑选区版本；提供时优先使用共享 selection mask",
     )
+    operation_id: str | None = Field(None, max_length=128, description="编辑操作 ID")
 
 
 class RegionReplaceBatchItem(BaseModel):
@@ -1392,6 +1451,7 @@ class RegionReplaceBatchRequest(BaseModel):
     items: list[RegionReplaceBatchItem] = Field(
         ..., min_length=1, description="批量区域替换条目列表"
     )
+    operation_id: str | None = Field(None, max_length=128, description="编辑操作 ID")
 
 
 class RegionRequantizeTarget(BaseModel):
@@ -1456,6 +1516,7 @@ class RegionRequantizeRequest(BaseModel):
             "越小越接近 flatten。"
         ),
     )
+    operation_id: str | None = Field(None, max_length=128, description="编辑操作 ID")
 
 
 class ReplacementHistoryRequest(BaseModel):
@@ -1465,6 +1526,7 @@ class ReplacementHistoryRequest(BaseModel):
 
     session_id: str = Field(..., description="Session ID")
     action: Literal["undo", "redo"] = Field(..., description="历史操作：undo 或 redo")
+    operation_id: str | None = Field(None, max_length=128, description="编辑操作 ID")
 
 
 class ReplacementHistoryResponse(BaseModel):
@@ -1494,6 +1556,8 @@ class ReplacementHistoryResponse(BaseModel):
     layer_height_mm: float | None = Field(None, description="当前层高")
     gradient_groups: Optional[List["GradientGroupItem"]] = Field(None, description="当前渐变分组")
     free_color_set: list[str] = Field(default_factory=list, description="恢复后的自由色集合")
+    operation_id: str | None = None
+    editor_content_revision: int | None = Field(None, ge=0)
 
 
 class RegionReplaceResponse(DynamicMaterialResultResponse):
@@ -1707,3 +1771,4 @@ class GradientGroupsResponse(BaseModel):
 # 在 GradientGroupItem 定义完成后强制 rebuild 以解析 forward 引用，
 # 避免 Pydantic v2 首次校验时才报错、掩盖真实 import 顺序问题。
 RegionReplaceResponse.model_rebuild()
+EditorCommitResult.model_rebuild()

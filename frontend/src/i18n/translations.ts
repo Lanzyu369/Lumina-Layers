@@ -5842,6 +5842,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "生成",
     en: "Generate",
   },
+  action_sync_editor_commit: {
+    zh: "同步编辑提交状态",
+    en: "Sync edit commit status",
+  },
+  action_sync_editor_commit_hint: {
+    zh: "上一次编辑的提交结果暂时未知。同步前请不要重复提交或生成。",
+    en: "The previous edit has an unknown commit result. Sync it before editing or generating again.",
+  },
   action_color_card: {
     zh: "生成色卡",
     en: "Color Card",

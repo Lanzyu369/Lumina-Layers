@@ -18,6 +18,12 @@ vi.mock("../api/converter", () => ({
   replaceColor: vi.fn(),
   replaceColorsBatch: vi.fn(),
   applyRecipeOverride: vi.fn(),
+  getEditorCommitStatus: vi.fn().mockResolvedValue({
+    status: "failed",
+    operation_id: "test-operation",
+    editor_content_revision: 0,
+    visible_content_revision: 0,
+  }),
 }));
 
 import {
@@ -119,7 +125,11 @@ describe("layer image cache invalidation after color replacement", () => {
   });
 
   it("leaves layer cache untouched when replacement fails", async () => {
-    seedStore();
+    seedStore({
+      source_version: "legacy",
+      color_layers: 4,
+      layer_height_mm: 0.08,
+    });
     mockReplaceColor.mockRejectedValue(new Error("boom"));
 
     await useConverterStore.getState().submitSingleReplace("00ae42", "ffffff");
@@ -171,6 +181,9 @@ describe("layer image cache invalidation after custom recipe apply", () => {
     expect(state.previewBaseImageUrl).toBe("/api/files/preview-apply");
     expect(state.layerImages).toEqual([]);
     expect(state.layerImagesSourceKey).toBeNull();
+    // The recipe's layer count is derived edit state; it must not overwrite
+    // the base preview input and trigger a destructive auto-preview restart.
+    expect(state.color_layers).toBe(4);
     // The panel's open state is preserved so the grid re-populates as soon
     // as the user hovers or the auto-fetch effect fires.
     // 保留面板可见性，用户下一次 hover / 自动 fetch 生效时会立刻刷新。

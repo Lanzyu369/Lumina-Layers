@@ -66,6 +66,7 @@ class _PreviewCacheTransaction(MutableMapping[str, Any]):
         self._start_ref = _copy_ref(start_ref) if start_ref is not None else None
         self._start_cache = start_cache
         self._requested_fields = set(requested_fields)
+        self._published = False
         tracked_fields = set(self._requested_fields)
         if self._start_ref is not None:
             tracked_fields.update(self._start_ref.get("fields", {}))
@@ -89,6 +90,21 @@ class _PreviewCacheTransaction(MutableMapping[str, Any]):
     def __len__(self) -> int:
         return len(self._cache)
 
+    @property
+    def published(self) -> bool:
+        """Whether this transaction has successfully published its cache.
+
+        返回本事务是否已经成功发布缓存。
+
+        The common router transaction uses this bit to distinguish a
+        pre-commit exception, which may restore the private working copy,
+        from a post-commit exception, which must leave the published cache
+        untouched.
+        共用路由事务用此标记区分提交前异常（可以恢复工作副本）与提交后
+        异常（不得再恢复已发布缓存）。
+        """
+        return self._published
+
     def commit(
         self,
         dirty_fields: set[str],
@@ -109,6 +125,7 @@ class _PreviewCacheTransaction(MutableMapping[str, Any]):
             self._cache[PREVIEW_CACHE_REVISION_KEY] = uuid.uuid4().hex
             self._store.put(self._session_id, "preview_cache", self._cache)
             self._start_cache = self._cache
+            self._published = True
             return self._cache
 
         dirty_arrays: dict[str, np.ndarray] = {}
@@ -157,6 +174,7 @@ class _PreviewCacheTransaction(MutableMapping[str, Any]):
             if dirty_metadata:
                 updated_ref = merge_preview_cache_metadata(updated_ref, dirty_metadata)
         self._store.put(self._session_id, "preview_cache", updated_ref)
+        self._published = True
         self._start_ref = _copy_ref(updated_ref)
         tracked_fields = set(self._requested_fields)
         tracked_fields.update(updated_ref.get("fields", {}))

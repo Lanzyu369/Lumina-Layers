@@ -139,6 +139,8 @@ class DynamicMaterialResultResponse(_DynamicMaterialResponseModel):
     material_layer_benefit_curve: list[MaterialLayerBenefitPointResponse] | None = None
     material_layer_benefit_scope: DynamicBenefitScope | None = None
     material_layer_benefit_pixel_count: Annotated[int, Field(ge=0)] | None = None
+    operation_id: str | None = None
+    editor_content_revision: int | None = Field(None, ge=0)
 
     @model_validator(mode="after")
     def _validate_benefit_caps(self) -> "DynamicMaterialResultResponse":

@@ -15,6 +15,11 @@ vi.mock("../api/converter", () => ({
   convertBatch: vi.fn(),
   replaceColor: vi.fn(),
   replaceColorsBatch: vi.fn(),
+  getEditorCommitStatus: vi.fn().mockResolvedValue({
+    status: "failed",
+    operation_id: "stale-operation",
+    editor_content_revision: 0,
+  }),
 }));
 
 import { replaceColorsBatch } from "../api/converter";

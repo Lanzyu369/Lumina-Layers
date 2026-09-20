@@ -168,6 +168,10 @@ export type ConvertGenerateRequest = ConvertPreviewRequest & {
   enable_base_layer_height_modifier?: boolean;
   enable_wipe_tower_auto_placement?: boolean;
   use_cached_matched_rgb?: boolean;
+  /** Exact committed visible-content revision used for generation. */
+  editor_content_revision?: number;
+  /** Exact shared-selection revision captured for generation. */
+  selection_revision?: number;
 };
 
 export interface PuzzleLayoutPreviewRequest {
@@ -212,6 +216,8 @@ export interface PuzzleGenerateResponse {
   grid_cols: number;
   grid_rows: number;
   warnings: string[];
+  editor_content_revision?: number | null;
+  selection_revision?: number | null;
 }
 
 /**
@@ -234,6 +240,11 @@ export interface RecipeOverrideItem {
   region_id: string;
   recipe: number[];
   layer_order: string;
+  color_layers?: number | null;
+  actual_recipe_top_to_bottom?: number[] | null;
+  print_recipe_top_to_bottom?: number[] | null;
+  actual_layer_count?: number | null;
+  padding_layer_count?: number | null;
   /** 可选虚拟耗材列表；recipe 中 >= LUT.N 的索引指向它。 */
   virtual_materials?: VirtualMaterial[];
 }
@@ -259,6 +270,7 @@ export interface RecipePredictResponse {
 
 export interface RecipeOverrideApplyRequest extends RecipePredictRequest {
   region_ids?: string[];
+  operation_id?: string;
 }
 
 export interface RecipeOverrideApplyResponse
@@ -269,6 +281,8 @@ export interface RecipeOverrideApplyResponse
   override_count: number;
   can_undo?: boolean;
   can_redo?: boolean;
+  /** Authoritative selection and content revision after the edit. */
+  selection?: SelectionDocumentResponse | null;
 }
 
 export interface RegionRecipeRequest {
@@ -356,6 +370,8 @@ export interface DynamicMaterialResultResponse {
   material_layer_benefit_curve?: MaterialLayerBenefitPoint[] | null;
   material_layer_benefit_scope?: MaterialLayerBenefitScope | null;
   material_layer_benefit_pixel_count?: number | null;
+  operation_id?: string | null;
+  editor_content_revision?: number | null;
 }
 
 /** 自动高度分配模式 */
@@ -439,6 +455,8 @@ export interface LargeFormatGenerateResponse {
   grid_cols: number;
   grid_rows: number;
   warnings: string[];
+  editor_content_revision?: number | null;
+  selection_revision?: number | null;
 }
 
 /** 生成接口响应，包含下载 URL 和可选的 3D 预览 URL */
@@ -450,6 +468,10 @@ export interface GenerateResponse {
   threemf_disk_path?: string;
   warnings?: string[];
   performance_timing?: PerformanceTiming | null;
+  /** Content revision consumed by the generator, when available. */
+  editor_content_revision?: number | null;
+  /** Shared-selection revision consumed by the generator, when available. */
+  selection_revision?: number | null;
 }
 
 export interface ModelSurfaceMeshSummary {
@@ -2003,6 +2025,8 @@ export interface ColorReplaceResponse extends DynamicMaterialResultResponse {
   replacement_count: number;
   can_undo?: boolean;
   can_redo?: boolean;
+  /** Authoritative selection and content revision after the edit. */
+  selection?: SelectionDocumentResponse | null;
 }
 
 /** 同颜色全选点图时后端返回的当前匹配色拾取结果 */
@@ -2042,6 +2066,36 @@ export interface SelectionDocumentResponse {
   can_undo: boolean;
   can_redo: boolean;
   brush_hit_component_count?: number | null;
+  editor_content_revision?: number | null;
+}
+
+export interface EditorCommitResult {
+  preview_url?: string | null;
+  preview_glb_url?: string | null;
+  replacement_regions?: ColorReplacementItem[] | null;
+  recipe_overrides?: RecipeOverrideItem[] | null;
+  recipe_override_count?: number | null;
+  region_replacement_count?: number | null;
+  color_layers?: number | null;
+  layer_height_mm?: number | null;
+  gradient_groups?: GradientGroupItem[] | null;
+  free_color_set?: string[] | null;
+  can_undo?: boolean | null;
+  can_redo?: boolean | null;
+  material_dynamic_recipes?: DynamicMaterialRecipe[] | null;
+  material_layer_benefit_curve?: MaterialLayerBenefitPoint[] | null;
+  material_layer_benefit_scope?: MaterialLayerBenefitScope | null;
+  material_layer_benefit_pixel_count?: number | null;
+}
+
+export interface EditorCommitStatusResponse {
+  status: "pending" | "committed" | "failed" | "unknown";
+  operation_id: string;
+  operation?: string | null;
+  editor_content_revision: number;
+  visible_content_revision?: number;
+  selection_revision?: number | null;
+  result?: EditorCommitResult | null;
 }
 
 export interface SelectionMutationRequest {
@@ -2096,6 +2150,8 @@ export interface FreeColorMutationResponse {
   free_color_set: string[];
   can_undo: boolean;
   can_redo: boolean;
+  operation_id?: string | null;
+  editor_content_revision?: number | null;
 }
 
 export interface ResetReplacementsResponse extends DynamicMaterialResultResponse {
@@ -2105,6 +2161,8 @@ export interface ResetReplacementsResponse extends DynamicMaterialResultResponse
   preview_glb_url?: string | null;
   can_undo?: boolean;
   can_redo?: boolean;
+  /** Authoritative selection and content revision after the reset. */
+  selection?: SelectionDocumentResponse | null;
 }
 
 export interface ReplacementHistoryResponse {
@@ -2126,6 +2184,8 @@ export interface ReplacementHistoryResponse {
   layer_height_mm?: number | null;
   gradient_groups?: GradientGroupItem[] | null;
   free_color_set?: string[];
+  operation_id?: string | null;
+  editor_content_revision?: number | null;
 }
 
 // ========== Printer Models ==========

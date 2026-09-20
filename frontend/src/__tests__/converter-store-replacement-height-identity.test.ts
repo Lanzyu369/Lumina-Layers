@@ -22,6 +22,11 @@ vi.mock("../api/converter", () => ({
   cropImage: vi.fn(),
   convertBatch: vi.fn(),
   replaceColor: vi.fn(),
+  getEditorCommitStatus: vi.fn().mockResolvedValue({
+    status: "failed",
+    operation_id: "stale-operation",
+    editor_content_revision: 0,
+  }),
 }));
 
 import { replacementHistory } from "../api/converter";
@@ -100,6 +105,7 @@ describe("replacement undo/redo preserves relief height identity", () => {
     expect(mockReplacementHistory).toHaveBeenCalledWith(
       "height-identity-session",
       "undo",
+      expect.any(String),
     );
     expect(useConverterStore.getState().color_height_map).toEqual(heightMap);
   });
@@ -116,6 +122,7 @@ describe("replacement undo/redo preserves relief height identity", () => {
     expect(mockReplacementHistory).toHaveBeenCalledWith(
       "height-identity-session",
       "redo",
+      expect.any(String),
     );
     expect(useConverterStore.getState().color_height_map).toEqual(heightMap);
   });
@@ -190,7 +197,11 @@ describe("replacement undo/redo preserves relief height identity", () => {
 
       await request;
 
-      expect(mockReplacementHistory).toHaveBeenCalledWith("session-a", action);
+      expect(mockReplacementHistory).toHaveBeenCalledWith(
+        "session-a",
+        action,
+        expect.any(String),
+      );
       expect(useConverterStore.getState()).toMatchObject({
         sessionId: "session-b",
         previewImageUrl: "/api/files/session-b",

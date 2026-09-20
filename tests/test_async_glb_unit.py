@@ -1181,6 +1181,37 @@ class TestGlbStatusLifecycle:
             "#ff0000": [[[0.0, 0.0], [1.0, 1.0]]]
         }
 
+    def test_executor_failure_marks_only_derived_glb_as_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A scheduler failure preserves the committed 2D cache state."""
+
+        sid = _seed_session(tmp_path)
+        current_cache = refresh_preview_cache_revision(
+            _test_store.get(sid)["preview_cache"]
+        )
+        _test_store.put(sid, "preview_cache", current_cache)
+        original_rgb = current_cache["matched_rgb"].copy()
+
+        class FailingExecutor:
+            def submit(self, *args: object) -> None:
+                raise RuntimeError("executor unavailable")
+
+        monkeypatch.setattr(async_glb_module, "_GLB_EXECUTOR", FailingExecutor())
+        job_token = async_glb_module.schedule_glb_build(
+            sid,
+            _test_store,
+            _test_registry,
+            current_cache,
+        )
+
+        cache = _test_store.get(sid)["preview_cache"]
+        status = async_glb_module.get_glb_status(cache)
+        assert status["status"] == "error"
+        assert status["job_token"] == job_token
+        assert status["error"] == _GLB_STATUS_SAFE_ERROR
+        np.testing.assert_array_equal(cache["matched_rgb"], original_rgb)
+
     @pytest.mark.parametrize("artifact_backed", [False, True])
     def test_stale_scheduler_claims_latest_cache_without_restoring_old_content(
         self,

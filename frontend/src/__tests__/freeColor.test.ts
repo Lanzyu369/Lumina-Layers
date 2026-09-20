@@ -96,12 +96,14 @@ describe("Feature: free-color-mode — Unit Tests", () => {
         "session-a",
         "toggle",
         ["ff0000"],
+        expect.any(String),
       );
       expect(mockMutateFreeColors).toHaveBeenNthCalledWith(
         2,
         "session-a",
         "toggle",
         ["ff0000"],
+        expect.any(String),
       );
     });
 

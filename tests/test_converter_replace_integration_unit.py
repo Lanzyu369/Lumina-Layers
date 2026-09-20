@@ -11,11 +11,13 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from PIL import Image
 
 from api.app import app
 from api.dependencies import get_file_registry, get_session_store
+from api.editor_commit import begin_editor_commit, publish_editor_commit
 from api.file_registry import FileRegistry
 from api.preview_cache_artifacts import (
     PreviewCacheRevisionConflict,
@@ -25,6 +27,7 @@ from api.preview_cache_artifacts import (
 )
 from api.routers.converter import replace as replace_router
 from api.session_store import SessionStore
+from api.schemas.converter import EditorCommitStatusResponse
 
 client: TestClient = TestClient(app)
 
@@ -126,6 +129,169 @@ def _seed_artifact_preview_session(store: SessionStore, tmp_path) -> str:
     store.put(session_id, "replacement_history", [])
     store.put(session_id, "material_source", "lut")
     return session_id
+
+
+def _dynamic_layer_info_fixture() -> dict:
+    """Return a small valid dynamic-material cache payload for receipt tests."""
+    option = {
+        "max_effective_layer_count": 5,
+        "actual_layer_count": 5,
+        "matched_srgb": [1, 2, 3],
+        "actual_recipe_top_to_bottom": [0, 0, 0, 0, 0],
+        "print_recipe_top_to_bottom": [0, 0, 0, 0, 0],
+        "delta_e00": 0.0,
+    }
+    recipe = {
+        "target_srgb": [1, 2, 3],
+        "matched_srgb": [1, 2, 3],
+        "actual_layer_count": 5,
+        "padding_layer_count": 0,
+        "actual_recipe_top_to_bottom": [0, 0, 0, 0, 0],
+        "print_recipe_top_to_bottom": [0, 0, 0, 0, 0],
+        "selected_delta_e00": 0.0,
+        "best_range_delta_e00": 0.0,
+        "fixed_max_delta_e00": 0.0,
+        "delta_e00_sacrifice": 0.0,
+        "layer_cap_options": [option],
+    }
+    return {
+        "enabled": True,
+        "colors": [recipe],
+        "benefit_curve": [
+            {
+                "max_effective_layer_count": 5,
+                "weighted_mean_delta_e00": 0.0,
+                "marginal_delta_e00_reduction": 0.0,
+            }
+        ],
+        "benefit_curve_scope": "automatic_pixels",
+        "benefit_curve_pixel_count": 4,
+    }
+
+
+@pytest.mark.parametrize("item_count", [127, 128, 129])
+def test_editor_commit_result_lists_round_trip_through_get_endpoint(
+    _isolate_dependency_overrides,
+    item_count: int,
+) -> None:
+    """Published business lists keep all entries through the response model."""
+
+    store: SessionStore = _isolate_dependency_overrides["store"]
+    session_id = store.create()
+    session_data = store.get(session_id)
+    assert session_data is not None
+    operation_id = begin_editor_commit(
+        session_id,
+        store,
+        session_data,
+        operation_id=f"receipt-list-{item_count}",
+        operation="apply_recipe_override",
+    )
+    result = {
+        "replacement_regions": [
+            {
+                "quantized_hex": "#000000",
+                "matched_hex": "#000000",
+                "replacement_hex": f"#{index:06x}",
+            }
+            for index in range(item_count)
+        ],
+        "recipe_overrides": [
+            {
+                "region_id": f"region-{index}",
+                "recipe": [0],
+                "layer_order": "Top2Bottom",
+            }
+            for index in range(item_count)
+        ],
+        "recipe_override_count": item_count,
+        "free_color_set": [f"{index:06x}" for index in range(item_count)],
+    }
+    publish_editor_commit(
+        session_id,
+        store,
+        session_data,
+        operation_id=operation_id,
+        editor_content_revision=1,
+        result=result,
+    )
+
+    response = client.get(
+        f"/api/convert/editor-commit/{session_id}/{operation_id}"
+    )
+
+    assert response.status_code == 200, response.text
+    parsed = EditorCommitStatusResponse.model_validate(response.json())
+    assert parsed.result is not None
+    assert parsed.result.recipe_override_count == item_count
+    assert len(parsed.result.recipe_overrides or []) == item_count
+    assert (parsed.result.recipe_overrides or [])[-1].region_id == (
+        f"region-{item_count - 1}"
+    )
+    assert len(parsed.result.free_color_set or []) == item_count
+    assert (parsed.result.free_color_set or [])[-1] == f"{item_count - 1:06x}"
+    assert len(parsed.result.replacement_regions or []) == item_count
+    assert (parsed.result.replacement_regions or [])[-1].replacement_hex == (
+        f"#{item_count - 1:06x}"
+    )
+
+
+def test_editor_commit_result_reads_dynamic_fields_from_real_transaction_view(
+    _isolate_dependency_overrides,
+) -> None:
+    """Receipt projection accepts the real MutableMapping transaction view."""
+
+    store: SessionStore = _isolate_dependency_overrides["store"]
+    session_id = _seed_preview_session(store)
+    session_data = store.get(session_id)
+    assert session_data is not None
+    cache = session_data["preview_cache"]
+    cache["material_dynamic_layer_info"] = _dynamic_layer_info_fixture()
+    cache["color_layers"] = 10
+    cache["layer_height_mm"] = 0.16
+    store.put(session_id, "preview_cache", cache)
+    store.put(session_id, "color_layers", 5)
+    store.put(session_id, "layer_height_mm", 0.08)
+
+    operation_id = begin_editor_commit(
+        session_id,
+        store,
+        session_data,
+        operation_id="receipt-dynamic-transaction",
+        operation="apply_recipe_override",
+    )
+    with replace_router._preview_cache_transaction(
+        session_id,
+        store,
+        session_data,
+        fields={"matched_rgb"},
+    ) as cache_view:
+        result = replace_router._editor_commit_result(
+            session_data,
+            cache=cache_view,
+            preview_url="/api/files/receipt-dynamic.png",
+        )
+
+    publish_editor_commit(
+        session_id,
+        store,
+        session_data,
+        operation_id=operation_id,
+        editor_content_revision=1,
+        result=result,
+    )
+    response = client.get(
+        f"/api/convert/editor-commit/{session_id}/{operation_id}"
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()["result"]
+    assert body["material_dynamic_recipes"]
+    assert body["material_layer_benefit_curve"]
+    assert body["material_layer_benefit_scope"] == "automatic_pixels"
+    assert body["material_layer_benefit_pixel_count"] == 4
+    assert body["color_layers"] == 5
+    assert body["layer_height_mm"] == 0.08
 
 
 def _delete_externalized_preview_cache_field(
@@ -365,6 +531,17 @@ class TestReplaceColorCanary:
         assert body["status"] == "ok"
         assert body["preview_url"]
         assert body["replacement_count"] >= 1
+        receipt_response = client.get(
+            f"/api/convert/editor-commit/{session_id}/{body['operation_id']}"
+        )
+        assert receipt_response.status_code == 200, receipt_response.text
+        receipt_body = receipt_response.json()
+        assert receipt_body["status"] == "committed"
+        assert receipt_body["result"]["replacement_regions"][0] == {
+            "quantized_hex": "#ffffff",
+            "matched_hex": "#ffffff",
+            "replacement_hex": "#0000ff",
+        }
 
         canary_records = [
             record
@@ -380,6 +557,111 @@ class TestReplaceColorCanary:
         assert record.replacement_color == "#0000ff"
         assert record.replacement_count == 1
         assert record.diff_pixel_count == 8
+
+    def test_replace_color_keeps_committed_content_when_glb_scheduler_fails(
+        self,
+        _isolate_dependency_overrides,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A post-commit derived-render failure must not roll back the edit."""
+
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_preview_session(store)
+
+        with patch(
+            "api.routers.converter.replace.schedule_glb_build",
+            side_effect=RuntimeError("executor unavailable"),
+        ), patch.object(replace_router.log, "warning") as warning_log:
+            response = client.post(
+                "/api/convert/replace-color",
+                json={
+                    "session_id": session_id,
+                    "selected_color": "#ffffff",
+                    "replacement_color": "#0000ff",
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        cache = store.get(session_id)["preview_cache"]
+        np.testing.assert_array_equal(
+            np.asarray(cache["matched_rgb"])[0, 0],
+            [0, 0, 255],
+        )
+        warning_log.assert_called_once()
+        warning_fields = warning_log.call_args.kwargs["extra"]
+        assert warning_fields["event"] == "converter_glb_schedule_failed"
+        assert warning_fields["content_commit"] == "committed"
+
+    def test_replace_color_post_commit_exception_keeps_in_memory_cache_published(
+        self,
+        _isolate_dependency_overrides,
+        tmp_path,
+    ) -> None:
+        """The shared transaction must not restore arrays after cache.commit()."""
+
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_preview_session(store)
+        lut_path = tmp_path / "post_commit_replace_lut.npz"
+        np.savez(
+            lut_path,
+            rgb=np.asarray([[255, 255, 255], [0, 0, 255]], dtype=np.uint8),
+            stacks=np.asarray([[0, 0], [1, 1]], dtype=np.int16),
+        )
+        store.put(session_id, "lut_path", str(lut_path))
+        store.put(session_id, "color_mode", "4-Color (RYBW)")
+        store.put(session_id, "color_layers", 2)
+        store.put(session_id, "layer_height_mm", 0.08)
+        cache = store.get(session_id)["preview_cache"]
+        cache["material_matrix"] = np.zeros((4, 4, 2), dtype=np.int16)
+        cache["color_layers"] = 2
+        cache["layer_height_mm"] = 0.08
+        store.put(session_id, "preview_cache", cache)
+        old_matrix = cache["material_matrix"].copy()
+
+        real_publish = replace_router.publish_editor_commit
+
+        def raise_after_publish(*args, **kwargs):
+            real_publish(*args, **kwargs)
+            raise HTTPException(
+                status_code=422,
+                detail="history convergence failed after publication",
+            )
+
+        with patch.object(
+            replace_router,
+            "publish_editor_commit",
+            side_effect=raise_after_publish,
+        ):
+            response = client.post(
+                "/api/convert/replace-color",
+                json={
+                    "session_id": session_id,
+                    "selected_color": "#ffffff",
+                    "replacement_color": "#0000ff",
+                },
+            )
+
+        assert response.status_code == 422, response.text
+        session_data = store.get(session_id)
+        assert session_data is not None
+        published_cache = session_data["preview_cache"]
+        np.testing.assert_array_equal(
+            np.asarray(published_cache["matched_rgb"])[0, 0],
+            [0, 0, 255],
+        )
+        assert not np.array_equal(
+            np.asarray(published_cache["material_matrix"]),
+            old_matrix,
+        )
+        assert session_data["replacement_regions"] == [
+            {
+                "selected_color": "#ffffff",
+                "replacement_color": "#0000ff",
+            }
+        ]
+        assert session_data["editor_content_revision"] > 1
+        receipt = next(iter(session_data["editor_commit_receipts"].values()))
+        assert receipt["status"] == "committed"
 
     def test_replace_color_keeps_artifact_preview_cache_externalized(
         self,
@@ -418,6 +700,53 @@ class TestReplaceColorCanary:
         assert int(
             np.all(hydrated["original_matched_rgb"] == [255, 255, 255], axis=-1).sum()
         ) == 8
+
+    def test_replace_color_post_commit_exception_keeps_artifact_cache_published(
+        self,
+        _isolate_dependency_overrides,
+        tmp_path,
+    ) -> None:
+        """The artifact transaction observes the same published boundary."""
+
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_artifact_preview_session(store, tmp_path)
+        real_publish = replace_router.publish_editor_commit
+
+        def raise_after_publish(*args, **kwargs):
+            real_publish(*args, **kwargs)
+            raise HTTPException(
+                status_code=422,
+                detail="history convergence failed after publication",
+            )
+
+        with patch.object(
+            replace_router,
+            "publish_editor_commit",
+            side_effect=raise_after_publish,
+        ):
+            response = client.post(
+                "/api/convert/replace-color",
+                json={
+                    "session_id": session_id,
+                    "selected_color": "#ffffff",
+                    "replacement_color": "#0000ff",
+                },
+            )
+
+        assert response.status_code == 422, response.text
+        session_data = store.get(session_id)
+        assert session_data is not None
+        cache_ref = session_data["preview_cache"]
+        assert is_preview_cache_artifact_ref(cache_ref)
+        hydrated = hydrate_preview_cache(cache_ref, fields={"matched_rgb"})
+        np.testing.assert_array_equal(hydrated["matched_rgb"][0, 0], [0, 0, 255])
+        assert session_data["replacement_regions"] == [
+            {
+                "selected_color": "#ffffff",
+                "replacement_color": "#0000ff",
+            }
+        ]
+        assert session_data["editor_content_revision"] > 1
 
 
 class TestResetReplacementsCanary:
@@ -1531,7 +1860,7 @@ class TestPredictRecipeCanary:
 class TestApplyRecipeOverrideCanary:
     """Successful apply-recipe-override requests emit the structured done canary."""
 
-    def test_recipe_override_shape_mismatch_warning_has_actionable_fields(
+    def test_recipe_override_shape_mismatch_is_rejected_with_actionable_warning(
         self,
         _isolate_dependency_overrides,
         caplog: pytest.LogCaptureFixture,
@@ -1564,7 +1893,7 @@ class TestApplyRecipeOverrideCanary:
         finally:
             target_logger.removeHandler(caplog.handler)
 
-        assert response.status_code == 200, response.text
+        assert response.status_code == 422, response.text
         record = _single_record(caplog, "recipe_override_shape_mismatch")
         _assert_actionable_warning(record)
 

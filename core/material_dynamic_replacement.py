@@ -143,10 +143,27 @@ def rebuild_dynamic_material_after_replacement(
     masks = region_masks if isinstance(region_masks, dict) else {}
     for override in recipe_overrides or []:
         if not isinstance(override, dict):
-            continue
-        region_mask = masks.get(str(override.get("region_id") or ""))
-        if isinstance(region_mask, np.ndarray) and region_mask.shape == solid.shape:
-            manual_mask |= np.asarray(region_mask, dtype=bool)
+            raise DynamicMaterialCandidateError(
+                "dynamic recipe override entry is invalid",
+                layer_count=max_layer_count,
+                phase="manual_mask",
+            )
+        region_id = str(override.get("region_id") or "")
+        region_mask = masks.get(region_id)
+        if not isinstance(region_mask, np.ndarray) or region_mask.shape != solid.shape:
+            raise DynamicMaterialCandidateError(
+                "dynamic recipe override mask is missing or inconsistent",
+                layer_count=max_layer_count,
+                phase="manual_mask",
+            )
+        normalized_region_mask = np.asarray(region_mask, dtype=bool)
+        if not np.any(normalized_region_mask):
+            raise DynamicMaterialCandidateError(
+                "dynamic recipe override mask is empty",
+                layer_count=max_layer_count,
+                phase="manual_mask",
+            )
+        manual_mask |= normalized_region_mask
     automatic_mask = solid & ~manual_mask
 
     rebuilt_matrix = matrix.copy()
