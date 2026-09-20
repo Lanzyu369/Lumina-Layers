@@ -1920,17 +1920,30 @@ async function reconcileContentCommitStatus(
     return { active: false, committed: false };
   }
 
+  const ownsCurrentPage = (): boolean => {
+    const latest = getState();
+    const handle = contentCommitHandles.get(guard.replacementEpoch);
+    return (
+      latest.sessionId === sessionId &&
+      handle?.sessionId === sessionId &&
+      handle.operationId === guard.operationId &&
+      !handle.settled &&
+      (allowStaleReceipt ||
+        canCommitPreviewResponse(latest, guard, replacementPreviewEpoch))
+    );
+  };
+
+  if (allowStaleReceipt && !ownsCurrentPage()) {
+    finishContentCommit(guard.replacementEpoch, false);
+    return { active: false, committed: false };
+  }
+
   try {
     const receipt = await apiGetEditorCommitStatus(
       sessionId,
       guard.operationId,
     );
-    const latest = getState();
-    if (
-      latest.sessionId !== sessionId ||
-      (!allowStaleReceipt &&
-        !canCommitPreviewResponse(latest, guard, replacementPreviewEpoch))
-    ) {
+    if (!ownsCurrentPage()) {
       finishContentCommit(guard.replacementEpoch, false);
       return { active: false, committed: false };
     }
@@ -1986,11 +1999,13 @@ async function reconcileContentCommitStatus(
         const document = await apiGetEditorSelection(sessionId);
         const currentAfterRead = getState();
         if (
-          canCommitPreviewResponse(
-            currentAfterRead,
-            guard,
-            replacementPreviewEpoch,
-          ) &&
+          currentAfterRead.sessionId === sessionId &&
+          (allowStaleReceipt ||
+            canCommitPreviewResponse(
+              currentAfterRead,
+              guard,
+              replacementPreviewEpoch,
+            )) &&
           !isSelectionDocumentOlder(
             document,
             currentAfterRead.selectionDocument
@@ -2010,6 +2025,10 @@ async function reconcileContentCommitStatus(
         // The operation receipt is authoritative even if selection hydration
         // is temporarily unavailable. The next selection request will use the
         // confirmed visible revision recorded above.
+      }
+      if (!ownsCurrentPage()) {
+        finishContentCommit(guard.replacementEpoch, false);
+        return { active: false, committed: false };
       }
       setState({
         contentCommitStatus: "committed",
@@ -2040,6 +2059,11 @@ async function reconcileContentCommitStatus(
     // Query failure is not evidence of rollback. Keep the content barrier
     // unresolved so dependent selection/edit/generate operations cannot use a
     // guessed version or replay the mutation blindly.
+  }
+
+  if (!ownsCurrentPage()) {
+    finishContentCommit(guard.replacementEpoch, false);
+    return { active: false, committed: false };
   }
 
   setState({

@@ -105,6 +105,28 @@ function seedEditorState(overrides: Record<string, unknown> = {}) {
   return `commit-reconciliation-${sessionCounter}`;
 }
 
+function expectPageStateUnchanged(
+  before: ReturnType<typeof useConverterStore.getState>,
+): void {
+  const after = useConverterStore.getState();
+  expect(after.sessionId).toBe(before.sessionId);
+  expect(after.contentCommitStatus).toBe(before.contentCommitStatus);
+  expect(after.contentCommitOperationId).toBe(before.contentCommitOperationId);
+  expect(after.replacePreviewLoading).toBe(before.replacePreviewLoading);
+  expect(after.historyBusy).toBe(before.historyBusy);
+  expect(after.error).toBe(before.error);
+  expect(after.previewImageUrl).toBe(before.previewImageUrl);
+  expect(after.previewBaseImageUrl).toBe(before.previewBaseImageUrl);
+  expect(after.previewGlbUrl).toBe(before.previewGlbUrl);
+  expect(after.colorRemapMap).toEqual(before.colorRemapMap);
+  expect(after.replacement_regions).toEqual(before.replacement_regions);
+  expect(after.recipe_overrides).toEqual(before.recipe_overrides);
+  expect(after.free_color_set).toEqual(before.free_color_set);
+  expect(after.selectionDocument).toEqual(before.selectionDocument);
+  expect(after.adjustmentHistory).toEqual(before.adjustmentHistory);
+  expect(after.adjustmentRedoHistory).toEqual(before.adjustmentRedoHistory);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -371,5 +393,150 @@ describe("editor commit receipt business-state reconciliation", () => {
     expect(state.color_layers).toBe(5);
     expect(state.layer_height_mm).toBe(0.08);
     expect(state.previewGlbUrl).toBe("/api/files/preview-before.glb");
+  });
+
+  it.each([
+    { selectionOutcome: "resolve", bStatus: "pending" },
+    { selectionOutcome: "resolve", bStatus: "unknown" },
+    { selectionOutcome: "reject", bStatus: "pending" },
+    { selectionOutcome: "reject", bStatus: "unknown" },
+  ])(
+    "does not let old selection reconciliation mutate session B",
+    async ({ selectionOutcome, bStatus }) => {
+      const sessionA = seedEditorState({ recipe_overrides: [] });
+      mockedApplyRecipeOverride.mockRejectedValueOnce(new Error("response lost"));
+      mockedGetEditorCommitStatus.mockResolvedValueOnce({
+        status: "committed",
+        operation_id: "session-a-recipe-operation",
+        operation: "apply_recipe_override",
+        editor_content_revision: 4,
+        visible_content_revision: 4,
+        selection_revision: 1,
+        result: {
+          preview_url: "/api/files/session-a.png",
+          recipe_overrides: [
+            {
+              region_id: "region-a",
+              recipe: [3, 3, 3],
+              layer_order: "Top2Bottom",
+            },
+          ],
+          recipe_override_count: 1,
+          region_replacement_count: 2,
+          can_undo: true,
+          can_redo: false,
+        },
+      } as never);
+
+      let resolveSelection!: (value: SelectionDocumentResponse) => void;
+      let rejectSelection!: (reason?: unknown) => void;
+      const selectionRequest = new Promise<SelectionDocumentResponse>(
+        (resolve, reject) => {
+          resolveSelection = resolve;
+          rejectSelection = reject;
+        },
+      );
+      mockedGetEditorSelection.mockReturnValueOnce(selectionRequest);
+
+      const oldAction = useConverterStore
+        .getState()
+        .applyCustomRecipeOverride(["region-a"], [3, 3, 3]);
+      await vi.waitFor(() => {
+        expect(mockedGetEditorSelection).toHaveBeenCalledWith(sessionA);
+      });
+
+      seedEditorState({
+        contentCommitStatus: bStatus,
+        contentCommitOperationId: "session-b-operation",
+        replacePreviewLoading: true,
+        historyBusy: true,
+        error: "session B is still reconciling",
+        previewImageUrl: "/api/files/session-b.png",
+        previewBaseImageUrl: "/api/files/session-b.png",
+        previewGlbUrl: "/api/files/session-b.glb",
+        colorRemapMap: { aabbcc: "112233" },
+        replacement_regions: [
+          {
+            quantized_hex: "#aabbcc",
+            matched_hex: "#aabbcc",
+            replacement_hex: "#112233",
+          },
+        ],
+        recipe_overrides: [
+          {
+            region_id: "region-b",
+            recipe: [4, 4, 4],
+            layer_order: "Top2Bottom",
+          },
+        ],
+        free_color_set: new Set(["445566"]),
+        selectionDocument: document(7, 7),
+      });
+      const beforeB = useConverterStore.getState();
+
+      if (selectionOutcome === "resolve") {
+        resolveSelection(document(2, 4));
+      } else {
+        rejectSelection(new Error("old selection read failed"));
+      }
+      await oldAction;
+
+      expectPageStateUnchanged(beforeB);
+    },
+  );
+
+  it("does not let a rejected old receipt query mark session B unknown", async () => {
+    const sessionA = seedEditorState({ recipe_overrides: [] });
+    mockedApplyRecipeOverride.mockRejectedValueOnce(new Error("response lost"));
+
+    let rejectReceipt!: (reason?: unknown) => void;
+    const receiptRequest = new Promise<never>((_, reject) => {
+      rejectReceipt = reject;
+    });
+    mockedGetEditorCommitStatus.mockReturnValueOnce(receiptRequest);
+
+    const oldAction = useConverterStore
+      .getState()
+      .applyCustomRecipeOverride(["region-a"], [3, 3, 3]);
+    await vi.waitFor(() => {
+      expect(mockedGetEditorCommitStatus).toHaveBeenCalledWith(
+        sessionA,
+        expect.any(String),
+      );
+    });
+
+    seedEditorState({
+      contentCommitStatus: "pending",
+      contentCommitOperationId: "session-b-operation",
+      replacePreviewLoading: true,
+      historyBusy: true,
+      error: "session B is still reconciling",
+      previewImageUrl: "/api/files/session-b.png",
+      previewBaseImageUrl: "/api/files/session-b.png",
+      previewGlbUrl: "/api/files/session-b.glb",
+      colorRemapMap: { aabbcc: "112233" },
+      replacement_regions: [
+        {
+          quantized_hex: "#aabbcc",
+          matched_hex: "#aabbcc",
+          replacement_hex: "#112233",
+        },
+      ],
+      recipe_overrides: [
+        {
+          region_id: "region-b",
+          recipe: [4, 4, 4],
+          layer_order: "Top2Bottom",
+        },
+      ],
+      free_color_set: new Set(["445566"]),
+      selectionDocument: document(7, 7),
+    });
+    const beforeB = useConverterStore.getState();
+
+    rejectReceipt(new Error("old receipt query failed"));
+    await oldAction;
+
+    expectPageStateUnchanged(beforeB);
   });
 });
