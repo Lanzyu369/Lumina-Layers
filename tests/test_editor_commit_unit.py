@@ -64,10 +64,18 @@ def test_editor_commit_receipt_distinguishes_pending_failed_and_committed() -> N
         operation_id=committed_id,
         editor_content_revision=revision,
         selection_revision=3,
+        result={
+            "preview_url": "/api/files/committed.png",
+            "replacement_regions": [{"replacement_hex": "#0000ff"}],
+            "recipe_overrides": [{"region_id": "region-a", "recipe": [1]}],
+            "free_color_set": [],
+        },
     )
     assert committed["status"] == "committed"
     assert committed["editor_content_revision"] == revision
     assert committed["selection_revision"] == 3
+    assert committed["result"]["preview_url"] == "/api/files/committed.png"
+    assert committed["result"]["recipe_overrides"][0]["region_id"] == "region-a"
 
     with pytest.raises(EditorCommitReplayError):
         begin_editor_commit(

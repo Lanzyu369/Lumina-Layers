@@ -240,6 +240,11 @@ export interface RecipeOverrideItem {
   region_id: string;
   recipe: number[];
   layer_order: string;
+  color_layers?: number | null;
+  actual_recipe_top_to_bottom?: number[] | null;
+  print_recipe_top_to_bottom?: number[] | null;
+  actual_layer_count?: number | null;
+  padding_layer_count?: number | null;
   /** 可选虚拟耗材列表；recipe 中 >= LUT.N 的索引指向它。 */
   virtual_materials?: VirtualMaterial[];
 }
@@ -2064,6 +2069,25 @@ export interface SelectionDocumentResponse {
   editor_content_revision?: number | null;
 }
 
+export interface EditorCommitResult {
+  preview_url?: string | null;
+  preview_glb_url?: string | null;
+  replacement_regions?: ColorReplacementItem[] | null;
+  recipe_overrides?: RecipeOverrideItem[] | null;
+  recipe_override_count?: number | null;
+  region_replacement_count?: number | null;
+  color_layers?: number | null;
+  layer_height_mm?: number | null;
+  gradient_groups?: GradientGroupItem[] | null;
+  free_color_set?: string[] | null;
+  can_undo?: boolean | null;
+  can_redo?: boolean | null;
+  material_dynamic_recipes?: DynamicMaterialRecipe[] | null;
+  material_layer_benefit_curve?: MaterialLayerBenefitPoint[] | null;
+  material_layer_benefit_scope?: MaterialLayerBenefitScope | null;
+  material_layer_benefit_pixel_count?: number | null;
+}
+
 export interface EditorCommitStatusResponse {
   status: "pending" | "committed" | "failed" | "unknown";
   operation_id: string;
@@ -2071,6 +2095,7 @@ export interface EditorCommitStatusResponse {
   editor_content_revision: number;
   visible_content_revision?: number;
   selection_revision?: number | null;
+  result?: EditorCommitResult | null;
 }
 
 export interface SelectionMutationRequest {

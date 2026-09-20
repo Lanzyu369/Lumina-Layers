@@ -423,11 +423,18 @@ def _preview_cache_transaction(
         try:
             yield cache_view
         except BaseException:
-            for field_name, value in rollback_snapshot.items():
-                if value is missing_value:
-                    cache_view.pop(field_name, None)
-                else:
-                    cache_view[field_name] = value
+            # Once the cache transaction has published, its working view is
+            # the committed in-memory cache (or the source of the committed
+            # artifact fields). Restoring the pre-commit snapshot here would
+            # create a mixed state: new session/history metadata with old
+            # RGB/material arrays. Only pre-publication failures may roll the
+            # private working copy back.
+            if not getattr(cache_view, "published", False):
+                for field_name, value in rollback_snapshot.items():
+                    if value is missing_value:
+                        cache_view.pop(field_name, None)
+                    else:
+                        cache_view[field_name] = value
             if not inner.__exit__(*sys.exc_info()):
                 raise
         else:
@@ -862,6 +869,86 @@ def _current_recipe_overrides(session_data: dict) -> list[dict]:
     if not isinstance(overrides, list):
         return []
     return [dict(item) for item in overrides if isinstance(item, dict)]
+
+
+_UNSET_EDITOR_COMMIT_RESULT_VALUE = object()
+
+
+def _editor_commit_result(
+    session_data: dict,
+    *,
+    cache: dict | None = None,
+    preview_url: str | None = None,
+    preview_glb_url: str | None | object = _UNSET_EDITOR_COMMIT_RESULT_VALUE,
+) -> dict:
+    """Build the bounded business projection stored in an editor receipt.
+
+    构建写入编辑回执的有限业务状态投影。
+
+    The projection is assembled from the already-published session/cache
+    state. It contains the same small fields the editor responses expose, but
+    never copies image arrays, selection masks, or history checkpoints.
+    投影直接读取已发布的 session/cache 状态，只保存编辑响应所需的小字段，
+    不复制图像数组、选区 mask 或历史 checkpoint。
+    """
+    replacement_regions: list[dict] = []
+    for item in _current_replacement_regions(session_data):
+        matched_hex = (
+            item.get("matched_hex")
+            or item.get("selected_color")
+            or item.get("quantized_hex")
+        )
+        replacement_hex = item.get("replacement_hex") or item.get(
+            "replacement_color"
+        )
+        if not isinstance(matched_hex, str) or not isinstance(replacement_hex, str):
+            continue
+        quantized_hex = item.get("quantized_hex") or matched_hex
+        replacement_regions.append(
+            {
+                "quantized_hex": str(quantized_hex),
+                "matched_hex": matched_hex,
+                "replacement_hex": replacement_hex,
+            }
+        )
+    result: dict = {
+        "replacement_regions": replacement_regions,
+        "recipe_overrides": _current_recipe_overrides(session_data),
+        "recipe_override_count": int(session_data.get("recipe_override_count") or 0),
+        "region_replacement_count": int(
+            session_data.get("region_replacement_count") or 0
+        ),
+        "free_color_set": sorted(
+            str(value).replace("#", "").lower()
+            for value in (session_data.get("free_color_set") or set())
+        ),
+        "can_undo": replacement_can_undo(session_data),
+        "can_redo": replacement_can_redo(session_data),
+    }
+    if preview_url is not None:
+        result["preview_url"] = preview_url
+    if preview_glb_url is not _UNSET_EDITOR_COMMIT_RESULT_VALUE:
+        result["preview_glb_url"] = preview_glb_url
+
+    if isinstance(cache, dict):
+        if cache.get("color_layers") is not None:
+            result["color_layers"] = int(cache["color_layers"])
+        elif session_data.get("color_layers") is not None:
+            result["color_layers"] = int(session_data["color_layers"])
+        if cache.get("layer_height_mm") is not None:
+            result["layer_height_mm"] = float(cache["layer_height_mm"])
+        elif session_data.get("layer_height_mm") is not None:
+            result["layer_height_mm"] = float(session_data["layer_height_mm"])
+        result.update(
+            dynamic_material_result_from_cache(cache).model_dump(exclude_none=True)
+        )
+    elif session_data.get("color_layers") is not None:
+        result["color_layers"] = int(session_data["color_layers"])
+    if session_data.get("layer_height_mm") is not None:
+        result["layer_height_mm"] = float(session_data["layer_height_mm"])
+    if "gradient_groups" in session_data:
+        result["gradient_groups"] = session_data.get("gradient_groups")
+    return result
 
 
 def _bump_region_replacement_count(
@@ -1438,6 +1525,11 @@ def replace_color(
                 operation_id=operation_id,
                 editor_content_revision=editor_content_revision,
                 selection_revision=get_selection_revision(session_data),
+                result=_editor_commit_result(
+                    session_data,
+                    cache=cache,
+                    preview_url=f"/api/files/{preview_id}",
+                ),
             )
 
         # Schedule async segmented-GLB rebuild so this response returns
@@ -1579,6 +1671,7 @@ def mutate_free_colors(
                 operation_id=operation_id,
                 editor_content_revision=editor_content_revision,
                 selection_revision=get_selection_revision(session_data),
+                result=_editor_commit_result(session_data),
             )
             return FreeColorMutationResponse(
                 free_color_set=sorted(next_colors),
@@ -1790,6 +1883,14 @@ def reset_replacements(
                 session_data,
                 history_checkpoint,
             )
+            # Register the committed preview before publishing the receipt so
+            # a lost reset response can restore the same preview identity.
+            preview_bytes = _image_to_png_bytes(source_rgb)
+            preview_id = registry.register_bytes(
+                request.session_id,
+                preview_bytes,
+                "preview_reset.png",
+            )
             publish_editor_commit(
                 request.session_id,
                 store,
@@ -1797,12 +1898,15 @@ def reset_replacements(
                 operation_id=operation_id,
                 editor_content_revision=editor_content_revision,
                 selection_revision=get_selection_revision(session_data),
+                result=_editor_commit_result(
+                    session_data,
+                    cache=cache,
+                    preview_url=f"/api/files/{preview_id}",
+                    preview_glb_url=None,
+                ),
             )
 
         # Regenerate preview from original matched_rgb (no replacements applied)
-        preview_bytes = _image_to_png_bytes(source_rgb)
-        preview_id = registry.register_bytes(request.session_id, preview_bytes, "preview_reset.png")
-
         # Async GLB rebuild from restored matched_rgb. Same rationale as
         # /replace-color: keep HTTP response snappy, let the frontend poll.
         # 异步 GLB 重建，理由同 /replace-color。
@@ -1961,6 +2065,11 @@ def replacement_history(
                     operation_id=operation_id,
                     editor_content_revision=get_editor_content_revision(session_data),
                     selection_revision=response.selection.selection_revision,
+                    result=_editor_commit_result(
+                        session_data,
+                        cache=cache,
+                        preview_url=response.preview_url,
+                    ),
                 )
                 response.operation_id = operation_id
                 response.editor_content_revision = get_editor_content_revision(
@@ -2000,12 +2109,6 @@ def replacement_history(
                     session_data,
                     cache,
                 )
-                restored_selection = _selection_after_content_commit(
-                    request.session_id,
-                    store,
-                    session_data,
-                    cache,
-                )
                 editor_content_revision = advance_editor_content_revision(
                     request.session_id,
                     store,
@@ -2024,6 +2127,11 @@ def replacement_history(
                     operation_id=operation_id,
                     editor_content_revision=editor_content_revision,
                     selection_revision=get_selection_revision(session_data),
+                    result=_editor_commit_result(
+                        session_data,
+                        cache=cache,
+                        preview_url=f"/api/files/{preview_id}",
+                    ),
                 )
 
             _schedule_glb_build_best_effort(
@@ -2785,6 +2893,7 @@ def get_editor_commit_status(
                 if receipt.get("selection_revision") is not None
                 else None
             ),
+            result=receipt.get("result"),
         )
 
 
@@ -3166,6 +3275,11 @@ def region_replace(
             operation_id=operation_id,
             editor_content_revision=editor_content_revision,
             selection_revision=get_selection_revision(session_data),
+            result=_editor_commit_result(
+                session_data,
+                cache=cache,
+                preview_url=f"/api/files/{preview_id}",
+            ),
         )
         # Async GLB rebuild: /region-replace previously spent ~77% of its
         # wall time here; now the HTTP response returns in ~10s (sync +
@@ -3624,12 +3738,6 @@ def region_requantize(
         )
         cache_published = True
         _invalidate_and_prewarm_visible_region_cache(request.session_id, store, session_data, cache)
-        selection_response = _selection_after_content_commit(
-            request.session_id,
-            store,
-            session_data,
-            cache,
-        )
         _bump_region_replacement_count(request.session_id, store, session_data, len(request.targets))
         history_flags = _push_history_checkpoint(
             request.session_id,
@@ -3655,6 +3763,11 @@ def region_requantize(
             operation_id=operation_id,
             editor_content_revision=editor_content_revision,
             selection_revision=get_selection_revision(session_data),
+            result=_editor_commit_result(
+                session_data,
+                cache=cache,
+                preview_url=f"/api/files/{preview_id}",
+            ),
         )
         _schedule_glb_build_best_effort(
             request.session_id,
@@ -4049,12 +4162,6 @@ def replace_colors_batch(
         )
         cache_published = True
         _invalidate_and_prewarm_visible_region_cache(request.session_id, store, session_data, cache)
-        selection_response = _selection_after_content_commit(
-            request.session_id,
-            store,
-            session_data,
-            cache,
-        )
         history_flags = _push_history_checkpoint(
             request.session_id,
             store,
@@ -4095,6 +4202,11 @@ def replace_colors_batch(
             operation_id=operation_id,
             editor_content_revision=editor_content_revision,
             selection_revision=get_selection_revision(session_data),
+            result=_editor_commit_result(
+                session_data,
+                cache=cache,
+                preview_url=f"/api/files/{preview_id}",
+            ),
         )
 
         # Async GLB rebuild starts only after cache, session fields, history,
@@ -4268,12 +4380,6 @@ def region_replace_batch(
         )
         cache_published = True
         _invalidate_and_prewarm_visible_region_cache(request.session_id, store, session_data, cache)
-        selection_response = _selection_after_content_commit(
-            request.session_id,
-            store,
-            session_data,
-            cache,
-        )
         _bump_region_replacement_count(request.session_id, store, session_data, len(request.items))
         history_flags = _push_history_checkpoint(
             request.session_id,
@@ -4299,6 +4405,11 @@ def region_replace_batch(
             operation_id=operation_id,
             editor_content_revision=editor_content_revision,
             selection_revision=get_selection_revision(session_data),
+            result=_editor_commit_result(
+                session_data,
+                cache=cache,
+                preview_url=f"/api/files/{preview_id}",
+            ),
         )
 
         # Async GLB rebuild for the whole batch of region edits. See
@@ -5121,15 +5232,6 @@ def apply_recipe_override(
     selection_response: SelectionDocumentResponse | None = None
     editor_content_revision: int | None = None
     cache_published = False
-    cache_context_closed = False
-
-    def close_cache_context_as_published() -> None:
-        """Close the cache transaction without rolling back a published cache."""
-        nonlocal cache_context_closed
-        if cache_context_closed:
-            return
-        cache_context.__exit__(None, None, None)
-        cache_context_closed = True
 
     def abort_before_recipe_commit(exc: BaseException) -> NoReturn:
         """Close the manually-entered transaction for pre-commit failures.
@@ -5793,12 +5895,6 @@ def apply_recipe_override(
         session_data[RECIPE_OVERRIDE_APPLIED_MASKS_KEY] = applied_override_masks
         store.put(request.session_id, RECIPE_OVERRIDE_APPLIED_MASKS_KEY, applied_override_masks)
         _invalidate_and_prewarm_visible_region_cache(request.session_id, store, session_data, cache)
-        selection_response = _selection_after_content_commit(
-            request.session_id,
-            store,
-            session_data,
-            cache,
-        )
         history_flags = _push_history_checkpoint(
             request.session_id,
             store,
@@ -5823,6 +5919,11 @@ def apply_recipe_override(
             operation_id=operation_id,
             editor_content_revision=editor_content_revision,
             selection_revision=get_selection_revision(session_data),
+            result=_editor_commit_result(
+                session_data,
+                cache=cache,
+                preview_url=f"/api/files/{preview_id}",
+            ),
         )
 
         # Async GLB rebuild for the newly applied recipe override. Keeps
@@ -5844,8 +5945,6 @@ def apply_recipe_override(
             cache_published=cache_published,
             error_type=type(exc).__name__,
         )
-        if cache_published:
-            close_cache_context_as_published()
         raise
     except PreviewCacheRevisionConflict as exc:
         _mark_editor_commit_failed_if_unpublished(
@@ -5856,9 +5955,7 @@ def apply_recipe_override(
             cache_published=cache_published,
             error_type=type(exc).__name__,
         )
-        if cache_published:
-            close_cache_context_as_published()
-        else:
+        if not cache_published:
             restore_session_state()
         _raise_replace_cache_conflict(
             exc,
@@ -5874,9 +5971,7 @@ def apply_recipe_override(
             cache_published=cache_published,
             error_type=type(exc).__name__,
         )
-        if cache_published:
-            close_cache_context_as_published()
-        else:
+        if not cache_published:
             restore_session_state()
         log.error(
             "Recipe override apply failed",
@@ -5893,8 +5988,7 @@ def apply_recipe_override(
             detail=RECIPE_OVERRIDE_APPLY_FAILED_DETAIL,
         ) from exc
     finally:
-        if not cache_context_closed:
-            cache_context.__exit__(*sys.exc_info())
+        cache_context.__exit__(*sys.exc_info())
 
     log.info(
         "apply-recipe-override completed",

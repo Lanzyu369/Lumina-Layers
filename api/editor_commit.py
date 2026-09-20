@@ -26,6 +26,27 @@ EDITOR_COMMIT_RECEIPTS_KEY = "editor_commit_receipts"
 EDITOR_COMMIT_RECEIPT_LIMIT = 64
 
 EditorCommitStatus = Literal["pending", "committed", "failed", "unknown"]
+EDITOR_COMMIT_RESULT_MAX_ITEMS = 128
+_EDITOR_COMMIT_RESULT_LIST_FIELDS = {
+    "replacement_regions",
+    "recipe_overrides",
+    "free_color_set",
+    "material_dynamic_recipes",
+    "material_layer_benefit_curve",
+    "gradient_groups",
+}
+_EDITOR_COMMIT_RESULT_FIELDS = _EDITOR_COMMIT_RESULT_LIST_FIELDS | {
+    "preview_url",
+    "preview_glb_url",
+    "recipe_override_count",
+    "region_replacement_count",
+    "color_layers",
+    "layer_height_mm",
+    "can_undo",
+    "can_redo",
+    "material_layer_benefit_scope",
+    "material_layer_benefit_pixel_count",
+}
 
 
 class EditorCommitReplayError(HTTPException):
@@ -153,6 +174,7 @@ def publish_editor_commit(
     operation_id: str,
     editor_content_revision: int | None = None,
     selection_revision: int | None = None,
+    result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Mark an operation committed at the convergence point.
 
@@ -180,9 +202,42 @@ def publish_editor_commit(
                 "updated_at": now,
             }
         )
+        if result is not None:
+            receipt["result"] = _bounded_editor_commit_result(result)
         receipts[operation_id] = receipt
         _persist_receipts(session_id, store, session_data, receipts)
         return deepcopy(receipt)
+
+
+def _bounded_editor_commit_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Keep the receipt result to a small JSON-like state projection.
+
+    将回执结果限制为小型、类似 JSON 的状态投影。
+
+    The result contains business fields needed to converge a lost response;
+    it deliberately never carries image arrays, masks, cache manifests, or
+    history checkpoints. Lists are capped defensively because receipts are
+    short-lived confirmations rather than a second editor state store.
+    回执只保存响应丢失后完成对账所需的业务字段，绝不携带图像数组、mask、
+    缓存 manifest 或历史 checkpoint；列表也做防御性上限，避免回执变成
+    第二套编辑状态存储。
+    """
+    bounded: dict[str, Any] = {}
+    for key, value in result.items():
+        if key not in _EDITOR_COMMIT_RESULT_FIELDS:
+            continue
+        if value is None:
+            bounded[str(key)] = None
+            continue
+        if key in _EDITOR_COMMIT_RESULT_LIST_FIELDS and isinstance(value, list):
+            bounded[str(key)] = deepcopy(value[:EDITOR_COMMIT_RESULT_MAX_ITEMS])
+            continue
+        if isinstance(value, (str, int, float, bool)):
+            bounded[str(key)] = value
+            continue
+        if isinstance(value, dict):
+            bounded[str(key)] = deepcopy(value)
+    return bounded
 
 
 def fail_editor_commit(

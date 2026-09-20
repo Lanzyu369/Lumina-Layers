@@ -225,3 +225,58 @@ converter/generate/puzzle 集合已单独通过。未执行无上限大内存压
 错误”已经全部归因或解决。当前本地已确认：真实过期生成会明确拒绝；GLB 派生失败不会撤销
 已提交二维内容；未知提交回执会暂停后续依赖操作。若现场仍有生成失败，应按操作回执、编辑
 版本、选区版本、矩阵一致性和 GLB 派生阶段分别采集证据。
+
+## 7. PR607 F1/F2 第二轮收口（2026-09-20）
+
+本轮严格限定为《PR607_限定两项修复Prompt.md》中的 F1（编辑提交回执对账）和 F2（预览缓存提交边界）。没有新增旁路编辑状态、第二套历史/mask、数据库或全局锁。
+
+### F1：回执现在恢复业务状态，而不只恢复版本号
+
+先用受控 Promise 让编辑 HTTP 响应丢失，再单独返回查询回执，旧实现的失败现象为：
+
+- clear 进入 `unknown` 后，服务端确认 `failed` 时前端仍停留在乐观清空状态；
+- 配方 HTTP 响应丢失但回执为 `committed` 时，前端只更新版本/选区，配方和预览仍是旧状态；
+- undo 响应丢失并被确认提交后，立即生成仍带着旧的 `replacement_regions`、`recipe_overrides` 和 `free_color_set`；
+- 延迟确认的配方失败会留下本次乐观追加的 adjustment history。
+
+新实现让服务端在已有 operation receipt 中返回有界的业务投影；前端先应用该投影，再完成版本、选区和 barrier 收敛。已确认失败时使用原有操作的 rollback snapshot 恢复前一份已提交状态；未知结果继续暂停，不重放 toggle/undo/redo。新受控测试覆盖上述四条路径。
+
+### F2：缓存发布后不再回滚已发布数组
+
+在真实 `/replace-color` endpoint、真实 SessionStore 和内存预览缓存中，注入“`cache.commit()` 后、receipt publish 调用返回后抛出 HTTP 422”的故障：旧实现会把 RGB/材料矩阵恢复为旧快照，但 session/history/内容版本已经前进，形成混合状态。新实现保留已发布的蓝色 RGB、更新后的材料矩阵、replacement record、内容版本和 committed receipt。
+
+同一故障也覆盖 artifact-backed cache：外部化后的 artifact 仍保留已发布 RGB，未恢复旧文件。共用 `_preview_cache_transaction` 依据事务 `published` 标记只在提交前恢复工作副本；recipe 专用的 `close_cache_context_as_published` 绕过和重复的 selection 构造已删除。既有 GLB 调度失败测试继续确认派生工件失败不会撤销二维编辑。
+
+### 本轮新鲜验证
+
+```text
+python3 -m pytest tests/test_editor_commit_unit.py tests/test_converter_replace_integration_unit.py tests/test_converter_recipe_override_unit.py tests/test_preview_cache_artifacts_unit.py tests/test_converter_replace_layer_sync_unit.py -q
+```
+
+结果：`122 passed, 1 warning`。warning 是既有 Starlette/httpx deprecation；F1 receipt、F2 内存/ artifact 提交边界和受影响替色/配方回归均通过。
+
+```text
+python3 scripts/run_vitest.py run src/__tests__/converter-store-commit-reconciliation.test.ts src/__tests__/converter-store-selection-race.test.ts src/__tests__/converter-store-layer-images-invalidate.test.ts
+```
+
+结果：`3 files passed, 25 tests passed`。
+
+```text
+cd frontend && pnpm build
+```
+
+结果：通过（TypeScript + Vite build）。保留既有 dynamic-import 和大 chunk warning。
+
+```text
+cd frontend && pnpm lint
+```
+
+结果：通过，`0 errors, 68 warnings`；warning 为仓库既有 Fast Refresh、raw color、React hooks 和硬编码文本规则提示。
+
+```text
+git diff --check
+```
+
+结果：通过。
+
+全量前后端测试仍按前一节记录的环境限制处理：前端有一个与本轮无关的 batch 参数快照失败；后端全量收集受 `rasterio`、`lumina_svg_core` 可选依赖阻断。没有用户现场 request ID/堆栈/真实素材，因此本轮不把未知的生产生成错误宣称为已全部归因。

@@ -53,3 +53,34 @@
 - C 级：用户现场“多位用户最后生成报错”的具体类别。当前没有现场 request ID、堆栈或真实素材，不能确认它属于 session 失效、参数校验、矩阵不一致、求解失败还是仅 GLB 预览失败。
 
 全量后端收集仍受环境缺少 `rasterio`、`lumina_svg_core` 阻断；全量前端只剩不相关的 `batchStore.test.ts` 既有参数快照失败。本轮相关 converter/generate/puzzle 测试、前端受影响集合、构建、lint、compileall 和 diff check 已分别执行，详见 `TEST_REPORT.md`。
+
+## 7. PR607 限定项 F1/F2 复核结论
+
+本轮只收口两项复审意见，没有扩大为新的状态管理或项目级重构。
+
+### F1：编辑回执必须能对账到业务状态
+
+回执仍复用现有 `editor_commit_receipts`，只增加有界的业务结果投影，不保存 RGB 数组、mask、缓存 manifest 或历史 checkpoint。投影由已发布的 session/cache 状态生成，包含恢复丢失响应所需的预览 URL、替换区域、配方、计数、自由色、层参数、动态结果和 undo/redo 标志。
+
+前端 `reconcileContentCommitStatus` 的顺序现在是：
+
+1. 已知内容操作若没有业务结果则保持 `unknown`，保留 operation barrier，暂停依赖编辑/生成；
+2. 有 `committed` 结果时先合并业务字段，再同步服务端内容/选区版本和 SelectionDocument；
+3. `failed` 时恢复该 operation 已保存的原状态 snapshot，再释放 barrier；
+4. 结果未知时不猜版本、不盲目重试 undo/redo，也不丢弃可能已经执行的旧请求。
+
+确定性前端回归实际验证了：clear 失败恢复前一状态、配方响应丢失后的 committed 结果恢复、延迟配方失败不遗留 adjustment history，以及 undo 对账后立即生成不再携带旧替换/配方/自由色字段。
+
+### F2：事务的发布边界必须由共用缓存事务统一判定
+
+`_PreviewCacheTransaction` 在内存和 artifact-backed 两条 commit 路径成功后设置 `published`。共用 `_preview_cache_transaction` 只有在该标志为 false 时恢复 rollback snapshot；发布后即使历史/回执/派生边界抛错，也不把已发布 RGB/材料矩阵恢复成旧值。recipe 端的专用 close bypass 已移除，避免不同入口拥有不同事务语义。
+
+真实 replace-color endpoint 回归在 `cache.commit()` 后注入 HTTP 422，检查了 RGB、材料矩阵、replacement record、SessionStore 内容版本和 receipt，而不是只看 HTTP 状态或 PNG。相同注入也检查了 artifact-backed cache 的外部文件内容。两条路径都保留已发布作品；提交前异常仍走原有 rollback。
+
+### 当前证据与限制
+
+- A 级：真实 SessionStore、preview cache、artifact fields、replacement history 和 HTTP endpoint 的 F1/F2 回归；前端受控 Promise 回执对账回归。
+- B 级：TypeScript/Vite build、lint 和差异完整性检查。
+- 仍未确认：用户现场“最后生成报错”的具体类型。没有现场 request ID、服务端堆栈或真实素材，不能把它编造成 F1/F2 的单一根因。
+
+本轮新鲜结果：后端受影响集合 `122 passed, 1 warning`；前端 F1/排序/图层失效集合 `3 files, 25 tests passed`；构建通过；lint `0 errors, 68 warnings`；`git diff --check` 通过。全量限制和剩余风险继续以 `TEST_REPORT.md` 为准。

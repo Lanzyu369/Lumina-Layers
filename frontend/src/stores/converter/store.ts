@@ -24,6 +24,7 @@ import type {
   LutColorsCard,
   PerformanceTiming,
   ReplacementHistoryResponse,
+  EditorCommitResult,
   SelectionDocumentResponse,
   DynamicMaterialRecipe,
   DynamicMaterialResultResponse,
@@ -745,6 +746,21 @@ function cloneRecipeOverrides(items: RecipeOverrideItem[]): RecipeOverrideItem[]
     region_id: item.region_id,
     recipe: [...item.recipe],
     layer_order: item.layer_order,
+    ...(item.color_layers !== undefined
+      ? { color_layers: item.color_layers }
+      : {}),
+    ...(item.actual_recipe_top_to_bottom
+      ? { actual_recipe_top_to_bottom: [...item.actual_recipe_top_to_bottom] }
+      : {}),
+    ...(item.print_recipe_top_to_bottom
+      ? { print_recipe_top_to_bottom: [...item.print_recipe_top_to_bottom] }
+      : {}),
+    ...(item.actual_layer_count !== undefined
+      ? { actual_layer_count: item.actual_layer_count }
+      : {}),
+    ...(item.padding_layer_count !== undefined
+      ? { padding_layer_count: item.padding_layer_count }
+      : {}),
     ...(item.virtual_materials
       ? {
           virtual_materials: item.virtual_materials.map((material) => ({
@@ -825,6 +841,88 @@ function editorCommitStateFromResponse(
     contentCommitOperationId: null,
     ...(selectionDocument ? { selectionDocument } : {}),
   };
+}
+
+function editorCommitResultStateFromResponse(
+  current: ConverterState,
+  sessionId: string,
+  operation: string | null | undefined,
+  result: EditorCommitResult | null | undefined,
+): Partial<ConverterState> {
+  if (!result || current.sessionId !== sessionId) return {};
+
+  const updates: Partial<ConverterState> = {};
+  const hasPreviewUrl = Object.prototype.hasOwnProperty.call(
+    result,
+    "preview_url",
+  );
+  if (hasPreviewUrl && result.preview_url) {
+    const previewUrl = normalizeResourceUrl(result.preview_url);
+    updates.previewImageUrl = previewUrl;
+    updates.previewBaseImageUrl = previewUrl;
+    updates.threemfDiskPath = null;
+    updates.downloadUrl = null;
+    updates.layerImages = [];
+    updates.layerImagesSourceKey = null;
+  }
+  if (Object.prototype.hasOwnProperty.call(result, "preview_glb_url")) {
+    updates.previewGlbUrl = result.preview_glb_url
+      ? normalizeResourceUrl(result.preview_glb_url)
+      : null;
+  }
+  if (result.replacement_regions !== undefined && result.replacement_regions !== null) {
+    updates.replacement_regions = normalizeReplacementRegionsFromHistory(
+      result.replacement_regions,
+    );
+    updates.colorRemapMap = colorRemapFromReplacementRegions(
+      result.replacement_regions,
+    );
+  }
+  if (result.recipe_overrides !== undefined && result.recipe_overrides !== null) {
+    updates.recipe_overrides = cloneRecipeOverrides(result.recipe_overrides);
+  }
+  if (
+    result.region_replacement_count !== undefined &&
+    result.region_replacement_count !== null
+  ) {
+    updates.regionReplacementCount = result.region_replacement_count;
+  }
+  if (result.free_color_set !== undefined && result.free_color_set !== null) {
+    updates.free_color_set = new Set(result.free_color_set);
+  }
+  if (result.color_layers !== undefined) {
+    updates.color_layers = result.color_layers;
+  }
+  if (result.layer_height_mm !== undefined) {
+    updates.layer_height_mm = result.layer_height_mm;
+  }
+  if (result.gradient_groups !== undefined) {
+    updates.gradientGroups = result.gradient_groups ?? null;
+  }
+  if (result.can_undo !== undefined && result.can_undo !== null) {
+    updates.historyCanUndo = result.can_undo;
+  }
+  if (result.can_redo !== undefined && result.can_redo !== null) {
+    updates.historyCanRedo = result.can_redo;
+  }
+  if (result.material_dynamic_recipes !== undefined) {
+    updates.materialDynamicRecipes = result.material_dynamic_recipes ?? [];
+  }
+  if (result.material_layer_benefit_curve !== undefined) {
+    updates.materialLayerBenefitCurve = result.material_layer_benefit_curve ?? [];
+  }
+  if (result.material_layer_benefit_scope !== undefined) {
+    updates.materialLayerBenefitScope =
+      result.material_layer_benefit_scope ?? "all_printable_pixels";
+  }
+  if (result.material_layer_benefit_pixel_count !== undefined) {
+    updates.materialLayerBenefitPixelCount =
+      result.material_layer_benefit_pixel_count ?? 0;
+  }
+  if (operation === "reset_replacements" && hasPreviewUrl) {
+    updates.originalPreviewUrl = normalizeResourceUrl(result.preview_url);
+  }
+  return updates;
 }
 
 function buildHistoryRestoreState(
@@ -1471,6 +1569,7 @@ type ContentCommitHandle = {
   operationId: string;
   resolve: (success: boolean) => void;
   settled: boolean;
+  rollbackState?: Partial<ConverterState>;
 };
 
 type ContentCommitReservation = {
@@ -1565,6 +1664,15 @@ function finishContentCommit(replacementEpoch: number, success: boolean): void {
   handle.settled = true;
   contentCommitHandles.delete(replacementEpoch);
   handle.resolve(success);
+}
+
+function attachContentCommitRollback(
+  guard: PreviewCommitGuard,
+  rollbackState: Partial<ConverterState>,
+): void {
+  const handle = contentCommitHandles.get(guard.replacementEpoch);
+  if (!handle || handle.operationId !== guard.operationId) return;
+  handle.rollbackState = rollbackState;
 }
 
 function waitForContentCommits(sessionId: string): Promise<boolean> | null {
@@ -1820,11 +1928,42 @@ async function reconcileContentCommitStatus(
         });
         return { active: true, committed: false, unknown: true };
       }
+      const operation = receipt.operation;
+      const requiresBusinessResult =
+        operation === "reset_replacements" ||
+        operation === "apply_recipe_override" ||
+        operation === "replacement_history_undo" ||
+        operation === "replacement_history_redo" ||
+        operation === "replace_color" ||
+        operation === "replace_colors_batch" ||
+        operation === "region_replace" ||
+        operation === "region_replace_batch" ||
+        operation === "region_requantize" ||
+        operation === "free_colors";
+      if (requiresBusinessResult && !receipt.result) {
+        setState({
+          contentCommitStatus: "unknown",
+          contentCommitOperationId: guard.operationId,
+          replacePreviewLoading: false,
+          historyBusy: false,
+          error: `${message}；服务端已确认版本，但未返回可对账的编辑结果，已暂停后续编辑/生成。`,
+        });
+        return { active: true, committed: false, unknown: true };
+      }
       rememberConfirmedContentRevision(sessionId, visibleRevision);
       rememberConfirmedEditorContentRevision(
         sessionId,
         receipt.editor_content_revision,
       );
+      const businessState = editorCommitResultStateFromResponse(
+        getState(),
+        sessionId,
+        operation,
+        receipt.result,
+      );
+      if (Object.keys(businessState).length > 0) {
+        setState(businessState);
+      }
       try {
         const document = await apiGetEditorSelection(sessionId);
         const currentAfterRead = getState();
@@ -1866,9 +2005,15 @@ async function reconcileContentCommitStatus(
     }
 
     if (receipt.status === "failed") {
+      const handle = contentCommitHandles.get(guard.replacementEpoch);
+      if (handle?.rollbackState) {
+        setState(handle.rollbackState);
+      }
       setState({
         contentCommitStatus: "failed",
         contentCommitOperationId: null,
+        replacePreviewLoading: false,
+        historyBusy: false,
       });
       finishContentCommit(guard.replacementEpoch, false);
       return { active: true, committed: false };
@@ -6485,6 +6630,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         state,
         contentReservation,
       );
+      attachContentCommitRollback(previewCommit, {
+        adjustmentHistory: [...state.adjustmentHistory],
+        adjustmentRedoHistory: [...state.adjustmentRedoHistory],
+      });
       set({
         colorRemapMap: newMap,
         remapHistory: newHistory,
@@ -6895,6 +7044,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         state,
         contentReservation,
       );
+      attachContentCommitRollback(previewCommit, {
+        adjustmentHistory: [...state.adjustmentHistory],
+        adjustmentRedoHistory: [...state.adjustmentRedoHistory],
+      });
       set({
         replacePreviewLoading: true,
         error: null,
@@ -7003,6 +7156,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         state,
         contentReservation,
       );
+      attachContentCommitRollback(previewCommit, {
+        adjustmentHistory: [...state.adjustmentHistory],
+        adjustmentRedoHistory: [...state.adjustmentRedoHistory],
+      });
       set({
         replacePreviewLoading: true,
         error: null,
@@ -7621,6 +7778,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         state,
         contentReservation,
       );
+      attachContentCommitRollback(previewCommit, {
+        adjustmentHistory: [...state.adjustmentHistory],
+        adjustmentRedoHistory: [...state.adjustmentRedoHistory],
+      });
       set({
         replacePreviewLoading: true,
         error: null,
@@ -8243,6 +8404,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         pendingReplacement: state.pendingReplacement,
         regionReplacementCount: state.regionReplacementCount,
       };
+      if (sessionId) {
+        attachContentCommitRollback(previewCommit, clearRollbackState);
+      }
       set({
         colorRemapMap: {},
         remapHistory: nextRemapHistory,

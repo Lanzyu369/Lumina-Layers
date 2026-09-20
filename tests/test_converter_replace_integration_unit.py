@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from PIL import Image
 
@@ -365,6 +366,17 @@ class TestReplaceColorCanary:
         assert body["status"] == "ok"
         assert body["preview_url"]
         assert body["replacement_count"] >= 1
+        receipt_response = client.get(
+            f"/api/convert/editor-commit/{session_id}/{body['operation_id']}"
+        )
+        assert receipt_response.status_code == 200, receipt_response.text
+        receipt_body = receipt_response.json()
+        assert receipt_body["status"] == "committed"
+        assert receipt_body["result"]["replacement_regions"][0] == {
+            "quantized_hex": "#ffffff",
+            "matched_hex": "#ffffff",
+            "replacement_hex": "#0000ff",
+        }
 
         canary_records = [
             record
@@ -415,6 +427,77 @@ class TestReplaceColorCanary:
         assert warning_fields["event"] == "converter_glb_schedule_failed"
         assert warning_fields["content_commit"] == "committed"
 
+    def test_replace_color_post_commit_exception_keeps_in_memory_cache_published(
+        self,
+        _isolate_dependency_overrides,
+        tmp_path,
+    ) -> None:
+        """The shared transaction must not restore arrays after cache.commit()."""
+
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_preview_session(store)
+        lut_path = tmp_path / "post_commit_replace_lut.npz"
+        np.savez(
+            lut_path,
+            rgb=np.asarray([[255, 255, 255], [0, 0, 255]], dtype=np.uint8),
+            stacks=np.asarray([[0, 0], [1, 1]], dtype=np.int16),
+        )
+        store.put(session_id, "lut_path", str(lut_path))
+        store.put(session_id, "color_mode", "4-Color (RYBW)")
+        store.put(session_id, "color_layers", 2)
+        store.put(session_id, "layer_height_mm", 0.08)
+        cache = store.get(session_id)["preview_cache"]
+        cache["material_matrix"] = np.zeros((4, 4, 2), dtype=np.int16)
+        cache["color_layers"] = 2
+        cache["layer_height_mm"] = 0.08
+        store.put(session_id, "preview_cache", cache)
+        old_matrix = cache["material_matrix"].copy()
+
+        real_publish = replace_router.publish_editor_commit
+
+        def raise_after_publish(*args, **kwargs):
+            real_publish(*args, **kwargs)
+            raise HTTPException(
+                status_code=422,
+                detail="history convergence failed after publication",
+            )
+
+        with patch.object(
+            replace_router,
+            "publish_editor_commit",
+            side_effect=raise_after_publish,
+        ):
+            response = client.post(
+                "/api/convert/replace-color",
+                json={
+                    "session_id": session_id,
+                    "selected_color": "#ffffff",
+                    "replacement_color": "#0000ff",
+                },
+            )
+
+        assert response.status_code == 422, response.text
+        session_data = store.get(session_id)
+        assert session_data is not None
+        published_cache = session_data["preview_cache"]
+        np.testing.assert_array_equal(
+            np.asarray(published_cache["matched_rgb"])[0, 0],
+            [0, 0, 255],
+        )
+        assert not np.array_equal(
+            np.asarray(published_cache["material_matrix"]),
+            old_matrix,
+        )
+        assert session_data["replacement_regions"] == [
+            {
+                "selected_color": "#ffffff",
+                "replacement_color": "#0000ff",
+            }
+        ]
+        assert session_data["editor_content_revision"] > 1
+        receipt = next(iter(session_data["editor_commit_receipts"].values()))
+        assert receipt["status"] == "committed"
+
     def test_replace_color_keeps_artifact_preview_cache_externalized(
         self,
         _isolate_dependency_overrides,
@@ -452,6 +535,53 @@ class TestReplaceColorCanary:
         assert int(
             np.all(hydrated["original_matched_rgb"] == [255, 255, 255], axis=-1).sum()
         ) == 8
+
+    def test_replace_color_post_commit_exception_keeps_artifact_cache_published(
+        self,
+        _isolate_dependency_overrides,
+        tmp_path,
+    ) -> None:
+        """The artifact transaction observes the same published boundary."""
+
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_artifact_preview_session(store, tmp_path)
+        real_publish = replace_router.publish_editor_commit
+
+        def raise_after_publish(*args, **kwargs):
+            real_publish(*args, **kwargs)
+            raise HTTPException(
+                status_code=422,
+                detail="history convergence failed after publication",
+            )
+
+        with patch.object(
+            replace_router,
+            "publish_editor_commit",
+            side_effect=raise_after_publish,
+        ):
+            response = client.post(
+                "/api/convert/replace-color",
+                json={
+                    "session_id": session_id,
+                    "selected_color": "#ffffff",
+                    "replacement_color": "#0000ff",
+                },
+            )
+
+        assert response.status_code == 422, response.text
+        session_data = store.get(session_id)
+        assert session_data is not None
+        cache_ref = session_data["preview_cache"]
+        assert is_preview_cache_artifact_ref(cache_ref)
+        hydrated = hydrate_preview_cache(cache_ref, fields={"matched_rgb"})
+        np.testing.assert_array_equal(hydrated["matched_rgb"][0, 0], [0, 0, 255])
+        assert session_data["replacement_regions"] == [
+            {
+                "selected_color": "#ffffff",
+                "replacement_color": "#0000ff",
+            }
+        ]
+        assert session_data["editor_content_revision"] > 1
 
 
 class TestResetReplacementsCanary:
