@@ -44,7 +44,11 @@ def fallback_base(primary: str, family: str) -> str | None:
         if primary.rstrip("/") == material_primary:
             value = os.environ.get("LUMINA_MATERIAL_REGISTRY_FALLBACK_URL")
     fallback = (value or "").strip().rstrip("/")
-    if not _valid_base(primary) or not _valid_base(fallback):
+    # A public fallback must not downgrade an HTTPS primary to remote HTTP.
+    # Local HTTP endpoints remain usable as development primaries, but a
+    # remote backup is always required to use TLS.
+    if (not _valid_base(primary) or not _valid_base(fallback)
+            or urlsplit(fallback).scheme != "https"):
         return None
     if _origin(primary) == _origin(fallback):
         return None

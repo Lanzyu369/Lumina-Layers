@@ -394,11 +394,6 @@ function backendRuntimeEnv() {
       if (process.env[key] === undefined) env[key] = "0";
     }
   }
-  // Only a public intake URL ships to users; no mail or relay secret is bundled.
-  // The existing feedback UI requests consent before forwarding diagnostic data.
-  if (!isDev && process.env.LUMINA_FEEDBACK_RELAY_URL === undefined) {
-    env.LUMINA_FEEDBACK_RELAY_URL = "https://launcher.luminastudio.com.cn/v1/feedback/reports";
-  }
   if (!isDev) {
     env.LUMINA_SERVE_FRONTEND_DIST = "1";
     env.LUMINA_FRONTEND_DIST_DIR = path.join(process.resourcesPath, "app", "dist");
@@ -917,7 +912,9 @@ app.whenReady().then(async () => {
   createSplash();
 
   try {
-    backendEndpoint = await selectBackendEndpoint();
+    backendEndpoint = await selectBackendEndpoint({
+      portFile: path.join(app.getPath("userData"), "backend-port.json"),
+    });
     if (managed) {
       const selected = managedRuntime(process.env, backendEndpoint.port);
       managed.frontendUrl = selected.frontendUrl;

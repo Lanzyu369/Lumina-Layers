@@ -23,7 +23,6 @@ for (const platform of ["win32", "darwin"]) {
     assert.equal(env.LUMINA_MATERIAL_SYNC_REFRESH_INTERVAL_S, "0");
     assert.equal(env.LUMINA_MATERIAL_REGISTRY_TOKEN, undefined);
     assert.equal(env.LUMINA_LUT_REGISTRY_TOKEN, undefined);
-    assert.equal(env.LUMINA_FEEDBACK_RELAY_URL, "https://launcher.luminastudio.com.cn/v1/feedback/reports");
     assert.equal(env.LUMINA_FEEDBACK_RELAY_TOKEN, undefined);
   });
 }

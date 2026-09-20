@@ -3,6 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const http = require("node:http");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const helperPath = path.join(__dirname, "../backend-endpoint.cjs");
 function helper() {
@@ -36,6 +37,26 @@ test("selection prefers a free port, generates fresh identities, and fails at bo
   const second = await helper().selectBackendEndpoint({ preferredPort: first.port });
   assert.equal(first.port, second.port);
   assert.notEqual(first.instanceId, second.instanceId);
+});
+
+test("persisted port keeps the packaged frontend origin stable across launches", async t => {
+  const portFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "lumina-port-state-")), "backend-port.json");
+  const first = await helper().selectBackendEndpoint({ portFile, preferredPort: 8100 });
+  assert.equal(JSON.parse(fs.readFileSync(portFile, "utf8")).port, first.port);
+  const second = await helper().selectBackendEndpoint({ portFile, preferredPort: 8100 });
+  assert.equal(second.port, first.port);
+  assert.notEqual(second.instanceId, first.instanceId);
+});
+
+test("a persisted port collision fails instead of silently changing the storage origin", async t => {
+  const portFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "lumina-port-state-")), "backend-port.json");
+  const first = await helper().selectBackendEndpoint({ portFile, preferredPort: 8101 });
+  const owner = await server(t, (_req, res) => res.end("foreign"), first.port);
+  await assert.rejects(
+    helper().selectBackendEndpoint({ portFile, preferredPort: 8101 }),
+    new RegExp(`stable_backend_port:${first.port}`),
+  );
+  assert.equal(owner.listening, true);
 });
 
 async function probe(url, id) {

@@ -109,6 +109,11 @@ def test_custom_lut_primary_does_not_inherit_material_fallback(monkeypatch):
     assert fallback_base("https://custom.test/registry", "LUT") is None
 
 
+def test_remote_http_fallback_is_rejected(monkeypatch):
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_FALLBACK_URL", "http://backup.test/registry")
+    assert fallback_base(PRIMARY, "MATERIAL") is None
+
+
 def test_explicit_empty_lut_primary_disables_registry(monkeypatch):
     monkeypatch.setenv("LUMINA_LUT_REGISTRY_URL", "")
     assert not lut.get_registry_config().configured
