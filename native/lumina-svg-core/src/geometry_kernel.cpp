@@ -1,5 +1,6 @@
 #include "lumina_svg_core/geometry_kernel.h"
 
+#include "canonical_boundary.h"
 #include "complexity_budget.h"
 #include "clipper_safety.h"
 #include "lumina_svg_core/paint_command.h"
@@ -3367,6 +3368,69 @@ void appendPolyTree(GeometryCollection& collection, const PolyTree64& tree,
     }
 }
 
+// A Clipper union is correct as a filled region, but its outline can touch or
+// cross itself, or a hole can touch its shell: two lobes meeting at one
+// vertex, a vertex sitting on a non-adjacent edge, a collinear run shared by
+// two rings, a genuine crossing, a hole that connects to the shell in two
+// places and pinches the region apart. OGC consumers reject every one of
+// those, so exported boundaries go through the shared canonical rule: the same
+// linework and the same filled region, emitted as the filled faces, which meet
+// only along their boundaries, with the shell/hole hierarchy rebuilt from
+// containment and nesting parity. A union that is already canonical is emitted
+// directly, unchanged.
+void appendCanonicalNode(GeometryCollection& collection,
+                         const lumina::canonical::CanonicalNode<int64_t>& node,
+                         ComplexityBudget& complexityBudget)
+{
+    for(const auto& child : node.children) {
+        if(child->is_hole || child->path.size() < 3)
+            continue;
+        const auto outerRingIndex = static_cast<int64_t>(
+            collection.ring_offsets.size() - 1);
+        appendRing(collection, child->path, -1, complexityBudget);
+        for(const auto& hole : child->children) {
+            if(hole->is_hole && hole->path.size() >= 3) {
+                appendRing(
+                    collection, hole->path, outerRingIndex, complexityBudget);
+            }
+        }
+        if(collection.polygon_offsets.size()
+                == collection.polygon_offsets.max_size())
+            throw ComplexityLimitError();
+        collection.polygon_offsets.push_back(collection.ring_offsets.size() - 1);
+        for(const auto& hole : child->children) {
+            if(hole->is_hole)
+                appendCanonicalNode(collection, *hole, complexityBudget);
+        }
+    }
+}
+
+void appendCoveragePolyTree(GeometryCollection& collection,
+                            const PolyTree64& tree,
+                            ComplexityBudget& complexityBudget)
+{
+    const auto paths = lumina::canonical::PolyTreePaths<int64_t>(tree);
+    // Node the linework to the grid before anything judges it. Splitting a
+    // segment at a quantized node moves where the pieces meet, so the pieces
+    // can meet again somewhere else; `NodeToGrid` is the shared rule's settle
+    // step for that, and the face build below requires its result.
+    bool already_canonical = false;
+    const auto noded =
+        lumina::canonical::NodeToGrid<int64_t>(paths, &already_canonical);
+    // A union whose rings are simple, non-degenerate, and meet only at shared
+    // vertices - at most one per ring pair - is already a legal expression of
+    // its region, so it is emitted as it stands, coordinates untouched.
+    if(already_canonical) {
+        appendPolyTree(collection, tree, complexityBudget);
+        return;
+    }
+    // Otherwise the same filled region is exported as the faces that meet only
+    // along their boundaries, which is what an OGC consumer can model.
+    lumina::canonical::CanonicalNode<int64_t> coverage;
+    lumina::canonical::BuildFacesFromNoded<int64_t>(noded, coverage);
+    appendCanonicalNode(collection, coverage, complexityBudget);
+}
+
 std::vector<Paths64> polyTreeComponents(const PolyTree64& tree)
 {
     std::vector<Paths64> components;
@@ -3448,7 +3512,7 @@ bool appendGeometry(GeometryCollection& collection,
     // ring without removing any filled area. Ring-count equality is therefore
     // not a validity invariant; only an empty canonical tree is a collapse.
     const size_t polygonCountBefore = collection.polygon_offsets.size();
-    appendPolyTree(collection, tree, complexityBudget);
+    appendCoveragePolyTree(collection, tree, complexityBudget);
     if(collection.polygon_offsets.size() == polygonCountBefore)
         return false;
 

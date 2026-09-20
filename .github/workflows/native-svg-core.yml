@@ -64,8 +64,53 @@ jobs:
         shell: bash
         run: |
           python -m pip install --force-reinstall wheelhouse/*.whl pytest "shapely>=2,<3"
+          python -m pip install \
+            "scikit-build-core==1.0.3" \
+            "pybind11==3.1.0" \
+            "numpy==2.5.2" \
+            "cmake==4.3.4" \
+            "ninja==1.13.2"
           python native/lumina-svg-core/tools/verify_wheel.py --installed
           (cd native/lumina-svg-core && LUMINA_SVG_REPLAY_THREADS=4 python -m pytest tests -q)
+          PYTHON_EXECUTABLE="$(python -c 'import sys; print(sys.executable)')"
+          PYBIND11_DIR="$(python -m pybind11 --cmakedir)"
+          python - <<'PY'
+          import shutil
+          import subprocess
+          for name in ("cmake", "ninja"):
+              path = shutil.which(name)
+              if not path:
+                  raise SystemExit(f"missing host build executable: {name}")
+              print(f"{name}={path}")
+              subprocess.run([name, "--version"], check=True)
+          print("python=" + __import__("sys").executable)
+          print("pybind11_cmake=" + subprocess.check_output(
+              [__import__("sys").executable, "-m", "pybind11", "--cmakedir"],
+              text=True,
+          ).strip())
+          PY
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            cmake -S native/lumina-svg-core -B native-svg-canonical-regression \
+              -G "Visual Studio 17 2022" -A x64 -DBUILD_TESTING=ON \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DPython_EXECUTABLE="$PYTHON_EXECUTABLE" \
+              -Dpybind11_DIR="$PYBIND11_DIR"
+            cmake --build native-svg-canonical-regression --config Release \
+              --target lumina_svg_canonical_predicates_regression
+            ctest --test-dir native-svg-canonical-regression -C Release \
+              --output-on-failure --no-tests=error \
+              -R lumina_svg_canonical_predicates_regression
+          else
+            cmake -S native/lumina-svg-core -B native-svg-canonical-regression \
+              -G Ninja -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release \
+              -DPython_EXECUTABLE="$PYTHON_EXECUTABLE" \
+              -Dpybind11_DIR="$PYBIND11_DIR"
+            cmake --build native-svg-canonical-regression \
+              --target lumina_svg_canonical_predicates_regression
+            ctest --test-dir native-svg-canonical-regression \
+              --output-on-failure --no-tests=error \
+              -R lumina_svg_canonical_predicates_regression
+          fi
           python - <<'PY'
           from pathlib import Path
           import lumina_svg_core
