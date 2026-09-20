@@ -10,6 +10,8 @@ import os
 from pathlib import Path
 
 from core.errors import VectorMeshMemoryBudgetError
+from core.system_capacity import get_effective_memory_limit_bytes
+from core.task_parallelism import resolve_task_parallelism_plan
 from core.task_parallelism_runtime import current_task_host_memory_budget_bytes
 
 
@@ -25,6 +27,18 @@ _VECTOR_TASK_INCLUDED_RESIDENT_BYTES = 16 * 1024**2
 _VECTOR_TASK_BYTES_PER_EXCESS_RESIDENT_BYTE = 32
 _VECTOR_TASK_MATERIAL_ARCHIVE_BASE_BYTES = 256 * 1024**2
 _VECTOR_TASK_MATERIAL_ARCHIVE_BYTES_PER_MATERIAL = 32 * 1024**2
+
+# Material-stage cost model. These are the numbers the stage's own budget
+# arithmetic uses, kept in the module that owns memory policy so a task
+# reservation and the stage it funds cannot drift apart.
+# 材质阶段成本模型：与材质阶段自身的预算算法共用同一组常数，放在拥有内存策略的
+# 模块里，使任务预留与它所资助的阶段不会各自漂移。
+MATERIAL_WORKER_PROCESS_BASE_BYTES = 256 * 1024**2
+MATERIAL_MONITOR_BASE_BYTES = 128 * 1024**2
+MATERIAL_WORKER_WORKING_BYTES_PER_COORDINATE = 1024
+MATERIAL_OUTPUT_RETAINED_BYTES_PER_COORDINATE = 384
+MIN_PARALLEL_MATERIAL_COORDINATES = 131_072
+MATERIAL_COORDINATES_PER_WORKER = 65_536
 
 
 @dataclass(frozen=True)
@@ -295,8 +309,19 @@ def estimate_vector_mesh_build_memory(
     )
 
 
-def resolve_vector_mesh_memory_budget_bytes() -> int:
-    """Resolve the worker RSS cap, including any parent host reservation."""
+def _configured_vector_mesh_memory_budget_bytes() -> int:
+    """Return the configured cap, bounded by the container limit.
+
+    返回配置上限，并被容器上限压制。
+
+    The task's own current reservation is deliberately not part of this figure:
+    the admission side asks for a budget in order to raise that reservation, and
+    a request measured against the budget that has not been raised yet would
+    always conclude "no more builders". The worker-local resolver below adds the
+    reservation back. 本函数有意不含任务当前预留：准入侧正是为了抬高该预留才申请
+    额度，用尚未抬高的旧预算去衡量请求，只会得到“只能串行”的结论。下面的
+    worker 本地解析再叠加该预留。
+    """
 
     raw_value = os.environ.get(_VECTOR_MESH_MEMORY_BUDGET_ENV)
     if raw_value is None or not raw_value.strip():
@@ -311,6 +336,21 @@ def resolve_vector_mesh_memory_budget_bytes() -> int:
             if value_mb > 0
             else DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
         )
+    # A budget above the container limit is not a budget: the allocator stops
+    # at the cgroup limit, so the guards must use the smaller figure. An
+    # explicit environment override remains an upper bound, never a raise.
+    # 高于容器上限的预算不是预算：分配器在 cgroup 上限处就会停止，因此保护
+    # 逻辑必须使用较小值。显式环境变量仍然只是上限，不会抬高容器上限。
+    container_limit = get_effective_memory_limit_bytes()
+    if container_limit is not None:
+        configured_budget = min(configured_budget, max(1, int(container_limit)))
+    return configured_budget
+
+
+def resolve_vector_mesh_memory_budget_bytes() -> int:
+    """Resolve the worker RSS cap, including any parent host reservation."""
+
+    configured_budget = _configured_vector_mesh_memory_budget_bytes()
     host_reservation = current_task_host_memory_budget_bytes()
     if host_reservation is None:
         return configured_budget
@@ -420,6 +460,123 @@ def estimate_vector_task_memory_reservation_bytes(
     return min(configured_budget, max(1, int(estimated_bytes)))
 
 
+def estimate_vector_material_parallel_memory_target_bytes(
+    source_path: str | os.PathLike[str],
+    *,
+    material_count: int,
+    supporting_paths: tuple[str | os.PathLike[str], ...] = (),
+    memory_budget_bytes: int | None = None,
+) -> int | None:
+    """Estimate the budget the material stage needs to build in parallel.
+
+    估算材质阶段并行构建所需的预算。
+
+    The stage decides for itself how many builders it may start, from its live
+    budget and the real coordinate counts. A reservation sized only for the
+    serial pipeline therefore leaves a resource-rich device building every
+    material in the parent process. This returns the budget at which that same
+    arithmetic affords the builders the stage is allowed to start: the serial
+    reservation, plus each builder's process base, plus the coordinate working
+    set the reservation's own source expansion already implies (one source byte
+    expands to ``_VECTOR_TASK_RESERVATION_BYTES_PER_ARTIFACT_BYTE`` runtime
+    bytes and one coordinate is charged
+    ``MATERIAL_OUTPUT_RETAINED_BYTES_PER_COORDINATE`` of retained output). That
+    model's 0.167 coordinates per source byte sits above the 0.156 the product's
+    own dense document measured, so it asks for a little more than that document
+    needed.
+
+    阶段自己决定能起几个构建进程（用实时预算与真实坐标数）。只为串行管线计的预留
+    会让内存充足的设备把每个材质都在父进程内构建。本函数返回同一套算法能给出
+    “阶段被允许启动的构建进程数”所需预算：串行预留、每个构建进程的进程基数，以及
+    源扩展本身已隐含的坐标工作集。该模型每源字节 0.167 个坐标，高于产品自有密集
+    文档实测的 0.156，即请求略多于该文档实际所需。
+
+    The builder count comes from the same concurrency policy the stage runs under
+    (``resolve_task_parallelism_plan``), so an explicit fixed worker count and a
+    low-core device are respected rather than re-derived here; the policy's
+    memory ceiling is left out of that call on purpose, because the budget it
+    would measure against is the one this request exists to raise. A policy that
+    resolves to serial returns ``None``: serial work asks for no extra builders.
+    构建进程数来自阶段实际运行的那套并发策略（``resolve_task_parallelism_plan``），
+    因此显式固定并发与低核设备按策略给出的上限申请，而不是在这里另算一遍；调用时
+    有意不带内存上限项，因为它要衡量的正是本次申请要抬高的那份预算。策略给出串行
+    时返回 ``None``——串行工作不申请额外的构建进程。
+
+    The result is a request, not a raise: it is capped by the configured or
+    container budget, and the parent admission gate grants only the part that is
+    free, leaving the required reservation untouched when nothing is spare.
+    结果是请求而非抬高：受配置/容器预算封顶；父进程准入只授予空闲部分，无空闲时
+    不影响必需预留。
+
+    Returns:
+        The target bytes, or ``None`` when no grounded figure exists: fewer than
+        two materials to build, a source this estimate cannot price, or work
+        below the coordinates at which the stage starts workers at all.
+        目标字节数；无法给出有根据数值时返回 ``None``（少于两个材质、无法定价的源，
+        或工作量低于阶段开始使用 worker 的坐标下限）。
+    """
+
+    ceiling = max(
+        1,
+        int(
+            _configured_vector_mesh_memory_budget_bytes()
+            if memory_budget_bytes is None
+            else memory_budget_bytes
+        ),
+    )
+    source = Path(source_path)
+    if source.suffix.lower() != ".svg":
+        return None
+    try:
+        if not source.is_file():
+            return None
+        source_bytes = max(0, int(source.stat().st_size))
+        required = estimate_vector_task_memory_reservation_bytes(
+            source_path,
+            supporting_paths=supporting_paths,
+            memory_budget_bytes=ceiling,
+        )
+    except (OSError, TypeError, ValueError, OverflowError):
+        return None
+    coordinate_estimate = (
+        source_bytes
+        * _VECTOR_TASK_RESERVATION_BYTES_PER_ARTIFACT_BYTE
+        // MATERIAL_OUTPUT_RETAINED_BYTES_PER_COORDINATE
+    )
+    # ``outer_demand=1`` asks for this task's own ceiling: an explicit fixed
+    # worker count, the device's effective CPU and the work-unit ladder all
+    # come from the policy, while sibling demand is not predicted here. The
+    # admission gate bounds the grant by memory that is actually free and the
+    # lease bounds the running workers, so a task that ends up sharing the
+    # machine simply uses less of its budget.
+    # ``outer_demand=1`` 申请的是本任务自己的上限：显式固定并发、设备有效 CPU 与
+    # 工作量阶梯都取自策略，而这里不预测兄弟任务负载。准入闸门按真正空闲的内存
+    # 决定授予量，租约约束实际运行的 worker，因此最终共享机器的任务只用掉预算的
+    # 一部分。
+    plan = resolve_task_parallelism_plan(
+        "vector",
+        work_items=int(material_count),
+        hard_max_workers=None,
+        work_units=coordinate_estimate,
+        min_parallel_work_units=MIN_PARALLEL_MATERIAL_COORDINATES,
+        work_units_per_worker=MATERIAL_COORDINATES_PER_WORKER,
+        outer_demand=1,
+    )
+    if plan.workers <= 1:
+        # Serial under the same policy the stage will run: small work, an
+        # explicit serial setting, a device with one usable CPU, or a single
+        # material. None of those asks for builders the stage will not start.
+        # 与阶段同一套策略下的串行：工作量小、显式串行、只有一个可用 CPU 或只有
+        # 一个材质。这些都不申请阶段不会启动的构建进程。
+        return None
+    target = (
+        required
+        + plan.workers * MATERIAL_WORKER_PROCESS_BASE_BYTES
+        + coordinate_estimate * MATERIAL_WORKER_WORKING_BYTES_PER_COORDINATE
+    )
+    return min(ceiling, max(required, int(target)))
+
+
 def _resident_artifact_size_hint(path: Path) -> int:
     """Return retained bytes for a worker input without materializing it."""
 
@@ -469,6 +626,72 @@ def get_process_rss_bytes() -> int | None:
         return int(psutil.Process(os.getpid()).memory_info().rss)
     except (OSError, RuntimeError):
         return None
+
+
+def get_owned_process_group_rss_bytes() -> int | None:
+    """Return RSS of this process plus every process it currently owns.
+
+    返回本进程及其当前拥有的全部子进程的 RSS 之和。
+
+    Material workers are children of the task process, so the parent's own RSS
+    alone understates what the task uses while results are recovered.
+    材质 worker 是任务进程的子进程；只统计父进程 RSS 会低估任务在回收结果期间
+    的真实占用。
+    """
+
+    try:
+        import psutil  # type: ignore[import-not-found]
+    except ImportError:
+        return None
+    try:
+        process = psutil.Process(os.getpid())
+        total = int(process.memory_info().rss)
+        for child in process.children(recursive=True):
+            try:
+                total += int(child.memory_info().rss)
+            except (OSError, RuntimeError, psutil.Error):
+                continue
+        return total
+    except (OSError, RuntimeError, psutil.Error):
+        return None
+
+
+def get_owned_memory_report() -> dict[str, int | str | None]:
+    """Describe the whole owned process group and the container charge.
+
+    描述整个自有进程组以及容器计费口径。
+
+    Returns:
+        Scalar diagnostics: this process RSS, its children's RSS sum, and the
+        cgroup v2 limit/current of this process's own cgroup. The container
+        figures use the same path discovery as the CPU quota.
+        标量诊断：本进程 RSS、子进程 RSS 之和，以及本进程所属 cgroup 的 v2
+        上限与当前用量。容器数值与 CPU 配额使用同一套路径发现逻辑。
+    """
+
+    from core.system_capacity import get_effective_memory_capacity
+
+    report: dict[str, int | str | None] = {
+        "self_rss_bytes": get_process_rss_bytes(),
+        "owned_group_rss_bytes": get_owned_process_group_rss_bytes(),
+    }
+    try:
+        capacity = get_effective_memory_capacity()
+    except (ImportError, AttributeError, OSError, RuntimeError, ValueError):
+        report.update({
+            "container_limit_bytes": None,
+            "container_current_bytes": None,
+            "container_source": "unavailable",
+            "effective_available_bytes": None,
+        })
+        return report
+    report.update({
+        "container_limit_bytes": capacity.limit_bytes,
+        "container_current_bytes": capacity.container_used_bytes,
+        "container_source": capacity.source,
+        "effective_available_bytes": capacity.available_bytes,
+    })
+    return report
 
 
 def enforce_vector_mesh_memory_budget(

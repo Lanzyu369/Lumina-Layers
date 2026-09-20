@@ -15,6 +15,27 @@ def _runtime_module():
     return task_parallelism_runtime
 
 
+def test_snapshot_publish_retries_transient_reader_sharing(monkeypatch, tmp_path: Path) -> None:
+    runtime = _runtime_module()
+    publisher = runtime.OuterDemandPublisher(max_workers=4, parent_dir=tmp_path)
+    real_replace = runtime.os.replace
+    attempts = []
+
+    def replace(source, target):
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise PermissionError("snapshot reader still holds file")
+        return real_replace(source, target)
+
+    monkeypatch.setattr(runtime.os, "replace", replace)
+    try:
+        publisher.increment()
+        assert len(attempts) == 3
+        assert runtime.read_outer_demand(publisher.snapshot_path, fallback_outer_workers=4).outer_demand == 1
+    finally:
+        publisher.cleanup()
+
+
 def test_publisher_round_trip_tracks_outstanding_tasks(
     tmp_path: Path,
 ) -> None:
@@ -241,3 +262,131 @@ def test_runtime_scope_restores_the_previous_path(tmp_path: Path) -> None:
             assert runtime.current_demand_snapshot_path() == second
         assert runtime.current_demand_snapshot_path() == first
     assert runtime.current_demand_snapshot_path() is None
+
+
+def test_publisher_owns_a_worker_lease_table_beside_the_snapshot(
+    tmp_path: Path,
+) -> None:
+    """Inner stages need one shared place to publish their real worker count."""
+
+    runtime = _runtime_module()
+    publisher = runtime.OuterDemandPublisher(max_workers=4, parent_dir=tmp_path)
+    lease_path = publisher.worker_lease_path
+    try:
+        assert lease_path.parent == publisher.snapshot_path.parent
+        assert lease_path.name == runtime.WORKER_LEASE_FILENAME
+        # The table starts empty: no inner stage has reserved anything yet.
+        assert runtime.read_worker_leases(lease_path) == ({}, False)
+        store = runtime.WorkerLeaseStore(lease_path)
+        grant = store.reserve(
+            requested_workers=2, effective_cpu_capacity=8, stage="test"
+        )
+        leases, invalid = runtime.read_worker_leases(lease_path)
+        assert invalid is False
+        assert leases[grant.token]["workers"] == 2
+        store.release(grant.token)
+        assert runtime.read_worker_leases(lease_path)[0] == {}
+    finally:
+        publisher.cleanup()
+
+    assert not lease_path.exists()
+    assert not publisher.snapshot_path.parent.exists()
+
+
+def test_runtime_scope_installs_and_restores_the_worker_lease_path(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime_module()
+    snapshot = tmp_path / "demand.json"
+    lease = tmp_path / "workers.json"
+
+    assert runtime.current_worker_lease_path() is None
+    with runtime.task_parallelism_runtime_scope(snapshot, lease):
+        assert runtime.current_demand_snapshot_path() == snapshot
+        assert runtime.current_worker_lease_path() == lease
+        # Nested scopes without a lease table must not inherit the outer one.
+        with runtime.task_parallelism_runtime_scope(tmp_path / "inner.json"):
+            assert runtime.current_worker_lease_path() is None
+        assert runtime.current_worker_lease_path() == lease
+    assert runtime.current_demand_snapshot_path() is None
+    assert runtime.current_worker_lease_path() is None
+
+
+def test_lease_table_with_unknown_fields_is_treated_as_untrustworthy(
+    tmp_path: Path,
+) -> None:
+    """A table written by another version must not be read as 'empty'."""
+
+    runtime = _runtime_module()
+    lease_path = tmp_path / "workers.json"
+    lease_path.write_text(
+        json.dumps(
+            {
+                "version": runtime.WORKER_LEASE_VERSION,
+                "generation": 1,
+                "leases": {
+                    "row": {
+                        "pid": 1,
+                        "created": 0.0,
+                        "touched": 0.0,
+                        "workers": 4,
+                        "stage": "test",
+                        "effective_cpu": 8,
+                        "future_field": "unknown",
+                    }
+                },
+                "updated_monotonic_ns": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert runtime.read_worker_leases(lease_path) == ({}, True)
+    grant = runtime.WorkerLeaseStore(lease_path).reserve(
+        requested_workers=4, effective_cpu_capacity=8, stage="test"
+    )
+    assert (grant.workers, grant.state) == (1, "invalid")
+
+
+@pytest.mark.parametrize(
+    "fake_pid", [999_999, 1_000_000, 1_000_001, 1_500_000, 4_194_303]
+)
+def test_worker_lease_lifecycle_accepts_high_platform_pids_without_poisoning_siblings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_pid: int,
+) -> None:
+    """A valid OS PID must survive every real lease-table operation."""
+
+    runtime = _runtime_module()
+    monkeypatch.setattr(runtime, "_process_create_time", lambda _pid: 1234.0)
+    monkeypatch.setattr(runtime, "_lease_owner_alive", lambda _pid, _created: True)
+    publisher = runtime.OuterDemandPublisher(max_workers=8, parent_dir=tmp_path)
+    store = runtime.WorkerLeaseStore(publisher.worker_lease_path)
+    try:
+        sibling = store.reserve(
+            requested_workers=1,
+            effective_cpu_capacity=8,
+            stage="sibling",
+            owner_pid=42,
+        )
+        grant = store.reserve(
+            requested_workers=2,
+            effective_cpu_capacity=8,
+            stage="material",
+            owner_pid=fake_pid,
+        )
+        leases, invalid = runtime.read_worker_leases(publisher.worker_lease_path)
+        assert invalid is False
+        assert grant.token in leases
+        assert sibling.token in leases
+        assert store.allowed_workers(grant.token) == 2
+        assert store.release(grant.token) is True
+        remaining, invalid_after_release = runtime.read_worker_leases(
+            publisher.worker_lease_path
+        )
+        assert invalid_after_release is False
+        assert grant.token not in remaining
+        assert sibling.token in remaining
+        assert store.release(sibling.token) is True
+    finally:
+        publisher.cleanup()

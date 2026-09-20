@@ -109,6 +109,8 @@ from core.vector_layer_geometry import (
     build_vector_layered_volume,
     resolve_vector_writer_grid_mm,
 )
+from core.vector_material_meshing import materialize_material_meshes
+from core.vector_mesh_spill import transform_layered_mesh
 from core.vector_structure import (
     VectorStructurePlan,
     _finish_normalized_contour,
@@ -5741,6 +5743,7 @@ class VectorProcessor:
                 meshes_by_slot,
                 scale_factor=scale_factor,
                 geometry_policy=geometry_policy,
+                timings=stage_timings,
             )
             stage_timings["materialize_s"] = (
                 time.perf_counter() - materialize_t0
@@ -5774,7 +5777,12 @@ class VectorProcessor:
                 stage="scene_assembly",
                 estimated_additional_bytes=max(
                     16 * 1024 * 1024,
-                    slot_mesh_bytes * 2,
+                    (len(mesh_list[0].faces) * 4 + 16 * 1024 * 1024)
+                    if len(mesh_list) == 1
+                    and "vector_layer_geometry" in getattr(mesh_list[0], "metadata", {})
+                    and mesh_list[0].vertices.flags.writeable
+                    and mesh_list[0].faces.flags.writeable
+                    else slot_mesh_bytes * 2,
                 ),
                 shape_count=len(mesh_list),
             )
@@ -5791,7 +5799,7 @@ class VectorProcessor:
             # internal walls and creates edges used by more than two faces.
             self._fix_coordinates(combined, svg_height_mm)
             if mirror_transform is not None:
-                combined.apply_transform(mirror_transform)
+                transform_layered_mesh(combined, mirror_transform)
 
             color_val = preview_colors.get(mat_id, preview_colors.get(name, [255, 255, 255, 255]))
             combined.visual.face_colors = color_val
@@ -7381,28 +7389,14 @@ class VectorProcessor:
         *,
         scale_factor,
         geometry_policy: VectorLayerGeometryPolicy | None = None,
+        timings: dict | None = None,
     ):
-        """Build one continuous canonical volume per material."""
-
-        meshes_by_slot: dict[str, dict[str, object]] = {}
-        for slot_name, data in slabs_by_slot.items():
-            slabs = data.get("slabs", [])
-            if not slabs:
-                continue
-            mesh = build_vector_layered_volume(
-                slabs,
-                scale_mm_per_svg_unit=float(scale_factor),
-                policy=geometry_policy,
-            )
-            if hasattr(slabs, "clear"):
-                slabs.clear()
-            if mesh is None:
-                continue
-            meshes_by_slot[slot_name] = {
-                "meshes": [mesh],
-                "mat_id": int(data["mat_id"]),
-            }
-        return meshes_by_slot
+        """Build independent material volumes with bounded parallelism."""
+        return materialize_material_meshes(
+            slabs_by_slot, scale_factor=scale_factor,
+            geometry_policy=geometry_policy,
+            serial_builder=build_vector_layered_volume, timings=timings,
+        )
 
     # ── Stage 7: Double-sided helper ─────────────────────────────────────
 
@@ -9431,7 +9425,7 @@ class VectorProcessor:
         del svg_height_mm
         transform = np.eye(4)
         transform[1, 1] = -1
-        mesh.apply_transform(transform)
+        transform_layered_mesh(mesh, transform)
 
 
 def parse_svg_geometry(

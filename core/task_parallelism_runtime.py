@@ -15,7 +15,20 @@ from typing import Iterator
 import uuid
 
 DEMAND_SNAPSHOT_VERSION = 1
+WORKER_LEASE_VERSION = 1
 MAX_REASONABLE_OUTSTANDING_TASKS = 1_000_000
+MAX_REASONABLE_LEASED_WORKERS = 1_000_000
+# Process identifiers are an OS scalar, not a task-count scalar. Linux's
+# configurable pid_max is commonly 4,194,304 and Windows exposes PIDs as a
+# DWORD; keep a bounded unsigned-32-bit envelope without coupling it to the
+# number of tasks the scheduler may publish.
+MAX_REASONABLE_PROCESS_ID = (1 << 32) - 1
+
+WORKER_LEASE_FILENAME = "workers.json"
+WORKER_LEASE_LOCK_FILENAME = "workers.lock"
+_LEASE_STALE_SECONDS = 24 * 60 * 60
+_LEASE_REFRESH_SECONDS = 60.0
+_LEASE_LOCK_TIMEOUT_SECONDS = 2.0
 
 _SNAPSHOT_FIELDS = {
     "version",
@@ -23,6 +36,20 @@ _SNAPSHOT_FIELDS = {
     "outstanding",
     "outer_max_workers",
     "updated_monotonic_ns",
+}
+_WORKER_LEASE_FIELDS = {
+    "version",
+    "generation",
+    "leases",
+    "updated_monotonic_ns",
+}
+_WORKER_LEASE_ENTRY_FIELDS = {
+    "pid",
+    "created",
+    "touched",
+    "workers",
+    "stage",
+    "effective_cpu",
 }
 _RUNTIME_STATE = threading.local()
 
@@ -154,6 +181,487 @@ def read_outer_demand(
     )
 
 
+def _write_json_atomically(
+    directory: Path,
+    target: Path,
+    payload: dict,
+    *,
+    attempts: int = 6,
+) -> None:
+    """Replace one JSON file atomically, retrying reader-held replacements.
+
+    原子替换一个 JSON 文件；读取方短暂占用目标时按次退避重试。
+    """
+
+    temporary_path = directory / f".{target.name}-{uuid.uuid4().hex}.tmp"
+    try:
+        with temporary_path.open("w", encoding="utf-8") as handle:
+            json.dump(
+                payload,
+                handle,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        for attempt in range(attempts):
+            try:
+                os.replace(temporary_path, target)
+                return
+            except PermissionError:
+                # Windows readers can briefly deny atomic replacement.
+                # Keep the last complete file until the reader closes.
+                if attempt == attempts - 1:
+                    raise
+                time.sleep(0.005 * (attempt + 1))
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def _worker_lease_payload(leases: dict[str, dict], generation: int) -> dict:
+    return {
+        "version": int(WORKER_LEASE_VERSION),
+        "generation": int(generation),
+        "leases": leases,
+        "updated_monotonic_ns": int(time.monotonic_ns()),
+    }
+
+
+def _process_create_time(pid: int) -> float:
+    """Return one process create time, or ``0.0`` when it cannot be read.
+
+    读取某个进程的创建时间；读取不到时返回 ``0.0``（表示无法核对 PID 复用）。
+    """
+
+    try:
+        import psutil
+
+        return float(psutil.Process(pid).create_time())
+    except (ImportError, OSError, ValueError, psutil.Error):
+        return 0.0
+
+
+def _lease_owner_alive(pid: int, created: float) -> bool:
+    """Return whether a lease owner process is still the one that reserved it.
+
+    判断租约持有进程是否仍是当初预留的那一个（避免 PID 复用误判）。
+    ``created`` 是持有进程的创建时间，不是预留时刻；无法核对时保留租约。
+    """
+
+    try:
+        import psutil
+    except ImportError:  # Without psutil the lease is kept: fail closed.
+        return True
+    try:
+        if not psutil.pid_exists(pid):
+            return False
+        if created <= 0:
+            return True
+        return abs(float(psutil.Process(pid).create_time()) - created) < 1.0
+    except (OSError, ValueError, psutil.Error):
+        return True
+
+
+def read_worker_leases(
+    path: str | os.PathLike[str] | None,
+) -> tuple[dict[str, dict], bool]:
+    """Read the shared inner-worker lease table.
+
+    读取共享的内部 worker 租约表。
+
+    Args:
+        path: Lease table published by the owning process pool.
+            拥有该进程池发布的租约表路径。
+
+    Returns:
+        ``(leases, invalid)``. ``invalid`` reports a file that exists but
+        cannot be trusted, so callers can refuse to add load instead of
+        assuming the machine is idle. 无法信任的既有文件返回 ``invalid``，
+        调用方据此拒绝加负载，而不是当作无人占用。
+    """
+
+    if path is None:
+        return {}, False
+    try:
+        table_path = Path(os.fspath(path))
+        if not table_path.exists():
+            return {}, False
+        with table_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if not isinstance(payload, dict) or set(payload) != _WORKER_LEASE_FIELDS:
+            return {}, True
+        version = _snapshot_int(
+            payload,
+            "version",
+            minimum=WORKER_LEASE_VERSION,
+            maximum=WORKER_LEASE_VERSION,
+        )
+        if version != WORKER_LEASE_VERSION:
+            return {}, True
+        _snapshot_int(payload, "generation", minimum=0)
+        _snapshot_int(payload, "updated_monotonic_ns", minimum=0)
+        raw_leases = payload.get("leases")
+        if not isinstance(raw_leases, dict):
+            return {}, True
+        leases: dict[str, dict] = {}
+        for token, entry in raw_leases.items():
+            if not isinstance(token, str) or not isinstance(entry, dict):
+                return {}, True
+            if set(entry) != _WORKER_LEASE_ENTRY_FIELDS:
+                return {}, True
+            created = entry["created"]
+            if isinstance(created, bool) or not isinstance(created, (int, float)):
+                return {}, True
+            touched = entry["touched"]
+            if isinstance(touched, bool) or not isinstance(touched, (int, float)):
+                return {}, True
+            leases[token] = {
+                "pid": _snapshot_int(
+                    entry, "pid", minimum=1, maximum=MAX_REASONABLE_PROCESS_ID
+                ),
+                "created": float(created),
+                "touched": float(touched),
+                "workers": _snapshot_int(
+                    entry,
+                    "workers",
+                    minimum=0,
+                    maximum=MAX_REASONABLE_LEASED_WORKERS,
+                ),
+                "stage": str(entry["stage"]),
+                "effective_cpu": _snapshot_int(
+                    entry,
+                    "effective_cpu",
+                    minimum=1,
+                    maximum=MAX_REASONABLE_LEASED_WORKERS,
+                ),
+            }
+        return leases, False
+    except (
+        json.JSONDecodeError,
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
+        return {}, True
+
+
+def worker_lease_lock_path(lease_path: str | os.PathLike[str]) -> Path:
+    """Return the sibling lock file guarding one lease table.
+
+    返回守护某个租约表的同级锁文件路径。锁必须独立于被原子替换的文件：
+    替换会换掉 inode，锁在被替换的文件上无效。
+    """
+
+    return Path(os.fspath(lease_path)).with_name(WORKER_LEASE_LOCK_FILENAME)
+
+
+@contextmanager
+def _exclusive_file_lock(
+    lock_path: Path,
+    *,
+    timeout_seconds: float = _LEASE_LOCK_TIMEOUT_SECONDS,
+) -> Iterator[bool]:
+    """Hold one cross-process exclusive lock, or report that it is busy.
+
+    持有一把跨进程排他锁；超时则如实报告未取得锁，而不是假装已持有。
+    """
+
+    deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+    handle = None
+    acquired = False
+    try:
+        handle = open(lock_path, "a+b")
+        if handle.seek(0, os.SEEK_END) == 0:
+            handle.write(b"\0")
+            handle.flush()
+        while True:
+            try:
+                handle.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.005)
+        yield acquired
+    finally:
+        if acquired and handle is not None:
+            try:
+                handle.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        if handle is not None:
+            handle.close()
+
+
+@dataclass(frozen=True)
+class WorkerLeaseGrant:
+    """Describe the workers one inner stage may start right now.
+
+    描述某个内部阶段此刻最多可以启动多少个 worker。
+
+    Args:
+        token: Lease identity, or ``None`` when nothing was reserved.
+            租约标识；未预留成功时为 ``None``。
+        workers: Workers this stage may keep in flight.
+            本阶段允许同时在飞的 worker 数。
+        state: ``granted`` / ``unavailable`` / ``invalid`` / ``lock_timeout``.
+            准入结果状态。
+        sibling_tasks: Other tasks holding a lease at admission time.
+            准入时刻已持有租约的其他任务数。
+        sibling_workers: Workers those tasks already reserved.
+            这些任务已预留的 worker 数。
+        effective_cpu_capacity: Process CPU capacity used as the ceiling.
+            用作上限的有效 CPU 容量。
+        limiting_reason: Why the granted count is what it is.
+            授予该数量的原因。
+    """
+
+    token: str | None
+    workers: int
+    state: str
+    sibling_tasks: int
+    sibling_workers: int
+    effective_cpu_capacity: int
+    limiting_reason: str
+
+
+class WorkerLeaseStore:
+    """Reserve inner-stage workers across sibling tasks through one file.
+
+    通过一个文件在兄弟任务之间预留内部阶段的 worker。
+
+    已有任务编排只会发布“同时有多少个任务”，无法表达“这些任务已经占用了多少
+    个 worker”。本存储把该信息做成同一目录下的原子替换文件，使后来进入的任务
+    能看到真实占用，而不是重新做一次静态均分。它不做调度：不排队、不抢占、不
+    终止正在运行的计算，只回答“此刻还能启动几个”。
+
+    Args:
+        path: Lease table path shared by the owning pool.
+            拥有该池共享的租约表路径。
+        stale_seconds: Age after which an unverifiable lease is dropped.
+            无法核实持有者的租约在此秒数后被丢弃。
+    """
+
+    def __init__(
+        self,
+        path: str | os.PathLike[str],
+        *,
+        stale_seconds: float = _LEASE_STALE_SECONDS,
+    ) -> None:
+        self._path = Path(os.fspath(path))
+        self._lock_path = worker_lease_lock_path(self._path)
+        self._stale_seconds = max(0.0, float(stale_seconds))
+        self._generation = 0
+
+    @property
+    def path(self) -> Path:
+        """Return the shared lease table path.
+
+        返回共享租约表路径。
+        """
+
+        return self._path
+
+    def _read_locked(self) -> tuple[dict[str, dict], bool]:
+        leases, invalid = read_worker_leases(self._path)
+        now = time.time()
+        live = {}
+        for token, entry in leases.items():
+            if now - entry["touched"] > self._stale_seconds:
+                continue
+            if not _lease_owner_alive(entry["pid"], entry["created"]):
+                continue
+            live[token] = entry
+        return live, invalid
+
+    def _write_locked(self, leases: dict[str, dict]) -> None:
+        self._generation += 1
+        _write_json_atomically(
+            self._path.parent,
+            self._path,
+            _worker_lease_payload(leases, self._generation),
+        )
+
+    def reserve(
+        self,
+        *,
+        requested_workers: int,
+        effective_cpu_capacity: int,
+        stage: str,
+        owner_pid: int | None = None,
+    ) -> WorkerLeaseGrant:
+        """Reserve as many of ``requested_workers`` as the machine still has.
+
+        在机器仍然空余的容量内预留 ``requested_workers`` 个 worker。
+
+        Returns:
+            A grant whose ``workers`` never exceeds the live free capacity.
+            A grant of zero is a real answer: the caller must do the work in
+            its own process instead of starting workers. 授予值不会超过当前
+            实测空闲容量；授予 0 也是有效答案——调用方改为在本进程内串行完成，
+            而不是新增进程。
+        """
+
+        requested = max(1, int(requested_workers))
+        capacity = max(1, int(effective_cpu_capacity))
+        pid = int(owner_pid if owner_pid is not None else os.getpid())
+        with _exclusive_file_lock(self._lock_path) as acquired:
+            if not acquired:
+                return WorkerLeaseGrant(
+                    None, requested, "lock_timeout", 0, 0, capacity,
+                    "lease_lock_timeout",
+                )
+            leases, invalid = self._read_locked()
+            if invalid:
+                return WorkerLeaseGrant(
+                    None, 1, "invalid", 0, 0, capacity, "lease_state_invalid",
+                )
+            sibling_tasks = len(leases)
+            sibling_workers = sum(entry["workers"] for entry in leases.values())
+            free = max(0, capacity - sibling_workers)
+            workers = min(requested, free)
+            if workers == 0:
+                # Every CPU is already spoken for by worker leases. Do not add
+                # a worker process; the caller stays in-process, so the sum of
+                # leased workers still fits the machine.
+                reason = "lease_capacity_exhausted"
+            elif workers < requested:
+                reason = "worker_lease_contention"
+            else:
+                reason = "granted"
+            token = uuid.uuid4().hex
+            now = time.time()
+            leases[token] = {
+                "pid": pid,
+                "created": _process_create_time(pid),
+                "touched": now,
+                "workers": workers,
+                "stage": str(stage),
+                "effective_cpu": capacity,
+            }
+            self._write_locked(leases)
+        return WorkerLeaseGrant(
+            token, workers, "granted", sibling_tasks, sibling_workers, capacity,
+            reason,
+        )
+
+    def allowed_workers(self, token: str) -> int | None:
+        """Return how many workers this lease may keep in flight now.
+
+        返回该租约此刻允许在飞的 worker 数。
+
+        Re-read at a material-completion boundary so a task that started with a
+        large grant gives capacity back to later arrivals without ever killing
+        running work or increasing its own concurrency.
+        在材质完成边界重读，使先到的大额租约把容量让给后到的任务；既不会终止
+        正在运行的计算，也不会提高自身并发。
+
+        The result never drops below one worker for a lease that is already
+        running: a dispatched task must be able to finish the materials it has
+        not submitted yet, so each running task keeps a one-worker progress
+        floor. That floor is the reason this accounting bounds the sum of
+        *admitted* workers rather than claiming an exact instantaneous total -
+        a task admitted at zero never starts workers at all.
+        已在运行的租约不会降到 1 个 worker 以下：已派发的任务必须能跑完尚未
+        提交的材质，因此每个运行中的任务保留 1 个 worker 的推进下限。正因为有
+        这个下限，本账本保证的是“准入时总和不超过容量”，而不是宣称任何时刻的
+        精确总数；被准入为 0 的任务根本不会启动 worker 进程。
+
+        ``None`` 表示状态不可知，调用方应沿用当前额度。
+        """
+
+        with _exclusive_file_lock(self._lock_path) as acquired:
+            if not acquired:
+                return None
+            leases, invalid = self._read_locked()
+            if invalid:
+                return 1
+            entry = leases.get(str(token))
+            if entry is None:
+                return None
+            others = sum(
+                item["workers"] for name, item in leases.items() if name != str(token)
+            )
+            allowed = max(1, min(entry["workers"], entry["effective_cpu"] - others))
+            now = time.time()
+            if allowed < entry["workers"] or now - entry["touched"] >= _LEASE_REFRESH_SECONDS:
+                # Persist the shrink so siblings immediately see the released
+                # capacity, and keep a long-running holder from looking stale.
+                leases[str(token)] = {
+                    **entry,
+                    "workers": allowed,
+                    "touched": now,
+                }
+                self._write_locked(leases)
+            return allowed
+
+    def release(self, token: str | None) -> bool:
+        """Drop one lease, leaving sibling leases untouched.
+
+        释放一个租约，不影响兄弟租约。
+
+        Returns:
+            ``True`` once the lease is no longer in a trustworthy table (an
+            already-absent lease counts, so a retry is idempotent), ``False``
+            when the lock timed out or the table is untrustworthy. The caller
+            can then retry instead of assuming the capacity went back - a
+            reservation left behind here keeps occupying the machine for as
+            long as the holder process lives. 账本可信且该租约已不在其中时返回
+            ``True``（本来就已不存在也算，便于重试保持幂等）；锁超时或账本不
+            可信时返回 ``False``，使调用方可以重试，而不是假定额度已经归还——
+            遗留的额度会一直占用到持有进程退出。
+        """
+
+        if token is None:
+            return True
+        with _exclusive_file_lock(self._lock_path) as acquired:
+            if not acquired:
+                return False
+            leases, invalid = self._read_locked()
+            if invalid:
+                return False
+            if str(token) not in leases:
+                return True
+            leases.pop(str(token))
+            self._write_locked(leases)
+            return True
+
+    def snapshot(self) -> dict:
+        """Return leased task and worker totals for diagnostics.
+
+        返回租约任务数与 worker 总数，用于诊断。
+        """
+
+        with _exclusive_file_lock(self._lock_path) as acquired:
+            if not acquired:
+                return {"tasks": 0, "workers": 0, "state": "lock_timeout"}
+            leases, invalid = self._read_locked()
+            if invalid:
+                return {"tasks": 0, "workers": 0, "state": "invalid"}
+            return {
+                "tasks": len(leases),
+                "workers": sum(entry["workers"] for entry in leases.values()),
+                "state": "ok",
+            }
+
+
 class OuterDemandPublisher:
     """Publish bounded outstanding-task state through atomic replacement.
 
@@ -176,6 +684,7 @@ class OuterDemandPublisher:
         self._lock = threading.Lock()
         self._outstanding = 0
         self._generation = 0
+        self._worker_lease_generation = 0
         self._closed = False
         self._directory = Path(
             tempfile.mkdtemp(
@@ -184,8 +693,10 @@ class OuterDemandPublisher:
             )
         )
         self._snapshot_path = self._directory / "demand.json"
+        self._worker_lease_path = self._directory / WORKER_LEASE_FILENAME
         with self._lock:
             self._publish_locked()
+            self._publish_worker_leases_locked({})
 
     @property
     def snapshot_path(self) -> Path:
@@ -195,6 +706,17 @@ class OuterDemandPublisher:
         """
 
         return self._snapshot_path
+
+    @property
+    def worker_lease_path(self) -> Path:
+        """Return the shared inner-worker lease table owned by this pool.
+
+        返回此进程池共享的内部 worker 租约表路径。内部阶段在本文件里登记自己
+        实际启动的 worker 数，使后来进入的任务能看到已有负载，而不是只看到
+        任务数量。
+        """
+
+        return self._worker_lease_path
 
     @property
     def outstanding(self) -> int:
@@ -242,7 +764,14 @@ class OuterDemandPublisher:
             if self._closed:
                 return
             self._snapshot_path.unlink(missing_ok=True)
-            self._directory.rmdir()
+            self._worker_lease_path.unlink(missing_ok=True)
+            worker_lease_lock_path(self._worker_lease_path).unlink(missing_ok=True)
+            try:
+                self._directory.rmdir()
+            except OSError:
+                # A lease holder outside this process may still be writing.
+                # Leaving the directory behind is safer than failing cleanup.
+                pass
             self._closed = True
 
     def _publish_locked(self) -> None:
@@ -253,21 +782,14 @@ class OuterDemandPublisher:
             "outer_max_workers": int(self._max_workers),
             "updated_monotonic_ns": int(time.monotonic_ns()),
         }
-        temporary_path = self._directory / (
-            f".demand-{self._generation}-{uuid.uuid4().hex}.tmp"
+        _write_json_atomically(self._directory, self._snapshot_path, payload)
+
+    def _publish_worker_leases_locked(self, leases: dict[str, dict]) -> None:
+        _write_json_atomically(
+            self._directory,
+            self._worker_lease_path,
+            _worker_lease_payload(leases, self._worker_lease_generation),
         )
-        try:
-            with temporary_path.open("w", encoding="utf-8") as handle:
-                json.dump(
-                    payload,
-                    handle,
-                    ensure_ascii=True,
-                    separators=(",", ":"),
-                    sort_keys=True,
-                )
-            os.replace(temporary_path, self._snapshot_path)
-        finally:
-            temporary_path.unlink(missing_ok=True)
 
 
 def current_demand_snapshot_path() -> Path | None:
@@ -277,6 +799,21 @@ def current_demand_snapshot_path() -> Path | None:
     """
 
     return getattr(_RUNTIME_STATE, "demand_snapshot_path", None)
+
+
+def current_worker_lease_path() -> Path | None:
+    """Return the pool-owned inner-worker lease table when installed.
+
+    返回当前任务所属进程池的 worker 租约表路径；未安装时为 ``None``。
+
+    ``None`` means this process is not running under a pool that publishes
+    worker leases (for example a single CLI conversion). Inner stages then keep
+    the static plan and report that no lease was available, instead of claiming
+    an instantaneous bound they cannot prove. 未安装表示当前进程不在发布
+    租约的池里（例如单次 CLI 转换），内部阶段沿用静态计划并如实报告没有租约。
+    """
+
+    return getattr(_RUNTIME_STATE, "worker_lease_path", None)
 
 
 def current_task_host_memory_budget_bytes() -> int | None:
@@ -321,6 +858,7 @@ def task_host_memory_budget_scope(
 @contextmanager
 def task_parallelism_runtime_scope(
     snapshot_path: str | os.PathLike[str],
+    worker_lease_path: str | os.PathLike[str] | None = None,
 ) -> Iterator[None]:
     """Install one demand path for a worker task and restore prior state.
 
@@ -329,21 +867,35 @@ def task_parallelism_runtime_scope(
     Args:
         snapshot_path: Parent-published atomic snapshot path.
             父进程发布的原子快照路径。
+        worker_lease_path: Optional parent-published worker lease table.
+            可选的父进程 worker 租约表路径；未提供时内部阶段不做租约准入。
 
     Yields:
         ``None`` while the path is installed for the current thread.
         当前线程安装路径期间返回 ``None``。
     """
 
-    previous = getattr(_RUNTIME_STATE, "demand_snapshot_path", None)
+    previous_path = getattr(_RUNTIME_STATE, "demand_snapshot_path", None)
+    previous_lease = getattr(_RUNTIME_STATE, "worker_lease_path", None)
     _RUNTIME_STATE.demand_snapshot_path = Path(os.fspath(snapshot_path))
+    if worker_lease_path is None:
+        # A scope states the whole context: a nested scope without a lease
+        # table means "no lease accounting here", not "inherit the outer one",
+        # which would attach this task's reservations to another pool.
+        _RUNTIME_STATE.worker_lease_path = None
+    else:
+        _RUNTIME_STATE.worker_lease_path = Path(os.fspath(worker_lease_path))
     try:
         yield
     finally:
-        if previous is None:
+        if previous_lease is None:
+            _RUNTIME_STATE.worker_lease_path = None
+        else:
+            _RUNTIME_STATE.worker_lease_path = previous_lease
+        if previous_path is None:
             try:
                 del _RUNTIME_STATE.demand_snapshot_path
             except AttributeError:
                 pass
         else:
-            _RUNTIME_STATE.demand_snapshot_path = previous
+            _RUNTIME_STATE.demand_snapshot_path = previous_path

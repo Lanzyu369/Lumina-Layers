@@ -26,6 +26,24 @@ from scripts.profile_converter_multicore import (
 )
 
 
+def test_profile_counts_reported_material_child_cpu(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "input.svg"
+    source.write_text("<svg/>", encoding="utf-8")
+    case = ProfileCase("cpu", "vector", source, 120.0, 8)
+    monkeypatch.setattr(
+        profile_module, "run_raster_pipeline",
+        lambda ctx: {"vector_timing": {"materialize_child_cpu_s": 4.0}},
+    )
+    metrics = execute_case(case, "generate", enable_cprofile=False, capture_semantics=False)
+    assert metrics["child_cpu_s"] == 4.0
+    assert metrics["cpu_s"] == pytest.approx(metrics["parent_cpu_s"] + 4.0)
+    assert metrics["average_cpu_percent"] == pytest.approx(
+        metrics["cpu_s"] / metrics["total_s"] * 100.0,
+    )
+
+
 @pytest.mark.parametrize("size", [8, 12, 15])
 def test_material_palette_has_requested_unique_archives(size: int) -> None:
     palette = MATERIAL_PALETTES[size]
