@@ -47,6 +47,7 @@ GLB_V2_OPTIONAL_MODULES = ("rasterio.features",)
 WORKSHOP_DESKTOP_SECURITY_FILES = (
     ELECTRON_DIR / "backend-endpoint.cjs",
     ELECTRON_DIR / "generated-file-save.cjs",
+    ELECTRON_DIR / "storage-migration.cjs",
     ELECTRON_DIR / "bed-model-bridge.cjs",
     ELECTRON_DIR / "workshop-security.cjs",
     ELECTRON_DIR / "preload.cjs",

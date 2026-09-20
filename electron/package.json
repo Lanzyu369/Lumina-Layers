@@ -73,6 +73,7 @@
       "managed-runtime.cjs",
       "backend-endpoint.cjs",
       "managed-startup.cjs",
+      "storage-migration.cjs",
       "preload.cjs",
       "bed-model-bridge.cjs",
       "generated-file-save.cjs",

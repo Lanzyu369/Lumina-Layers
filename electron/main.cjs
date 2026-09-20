@@ -15,6 +15,7 @@ const nodeNet = require("net");
 const fs = require("fs");
 const path = require("path");
 const { saveGeneratedFile } = require("./generated-file-save.cjs");
+const { migrateLegacyStorage } = require("./storage-migration.cjs");
 const { managedRuntime, assertPortsAvailable } = require("./managed-runtime.cjs");
 const { selectBackendEndpoint, validateHealthResponse } = require("./backend-endpoint.cjs");
 const { createManagedStartup } = require("./managed-startup.cjs");
@@ -866,7 +867,7 @@ app.on("before-quit", (event) => {
   }
 });
 
-app.on("will-quit", () => {
+  app.on("will-quit", () => {
   killAllChildren();
 });
 
@@ -883,8 +884,6 @@ app.whenReady().then(async () => {
   if (startupInitializationError) throw startupInitializationError;
   logSys("Lumina Studio Electron starting...");
   logSys(`Mode: ${isDev ? "development" : "production"}`);
-  installWorkshopSessionSecurity();
-
   // 让 about 面板 / app.getName() / 部分 macOS 系统提示显示正确的名字。
   // 注意:dev 模式下 macOS 顶部菜单栏左上角的加粗应用名由 Electron.app 的
   // Info.plist::CFBundleName 决定,无法在运行期改写;打包后(productName 写进
@@ -1030,6 +1029,26 @@ app.whenReady().then(async () => {
       logErr(`Vite port check failed: ${err.message}`);
     }
   }
+
+  // Upgrade old standalone file:// and fixed :8000 profiles before the
+  // first new-origin window is created. The migration is best effort and
+  // never deletes or rewrites the legacy profile when it cannot complete.
+  if (!isDev && process.resourcesPath) {
+    try {
+      const migrationStatus = await migrateLegacyStorage({
+        BrowserWindow,
+        indexPath: path.join(process.resourcesPath, "app", "dist", "index.html"),
+        targetUrl: `${backendEndpoint.origin}/`,
+        markerPath: path.join(app.getPath("userData"), "legacy-storage-migration.json"),
+        logger: message => logErr(message),
+      });
+      logSys(`Legacy renderer storage migration: ${migrationStatus}`);
+    } catch (error) {
+      logErr(`Legacy renderer storage migration failed: ${error.code || error.name}`);
+    }
+  }
+
+  installWorkshopSessionSecurity();
 
   // ── Create main window ──
   createWindow();
