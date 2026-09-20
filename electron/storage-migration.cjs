@@ -44,6 +44,7 @@ const EXPORT_SCRIPT = `
         bytes: await value.arrayBuffer(),
       };
     }
+    if (value instanceof RegExp) return value;
     if (value instanceof Date || value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return value;
     if (typeof SharedArrayBuffer !== "undefined" && value instanceof SharedArrayBuffer) return value;
     if (seen.has(value)) return seen.get(value);
@@ -300,6 +301,7 @@ function buildImportScript() {
     if (value.__luminaMigrationType === "Blob" && value.bytes instanceof ArrayBuffer) {
       return new Blob([value.bytes], { type: typeof value.type === "string" ? value.type : "" });
     }
+    if (value instanceof RegExp) return value;
     if (Array.isArray(value)) return value.map(reviveTransferValue);
     if (value instanceof Map) return new Map([...value.entries()].map(([key, item]) => [reviveTransferValue(key), reviveTransferValue(item)]));
     if (value instanceof Set) return new Set([...value.values()].map(reviveTransferValue));

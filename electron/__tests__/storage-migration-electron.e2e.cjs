@@ -105,6 +105,7 @@ async function seedLegacySource(indexPath, includeSecond, includeUnsupported) {
             buffer: new Uint8Array([4, 5]).buffer,
             blob: new Blob(["legacy"], { type: "text/plain" }),
             date: new Date("2026-09-21T00:00:03.000Z"),
+            regex: new RegExp("lumina-(legacy|new)", "gi"),
             map: new Map([["origin", "legacy"]]),
             set: new Set(["source"]),
             big: 42n,
@@ -171,6 +172,9 @@ async function inspectAndEditTarget(targetUrl) {
         throw new Error("Blob was not preserved: " + Object.prototype.toString.call(project.blob) + ":" + typeof project.blob?.text);
       }
       if (!(project.date instanceof Date) || project.date.toISOString() !== "2026-09-21T00:00:03.000Z") throw new Error("Date was not preserved");
+      if (!(project.regex instanceof RegExp) || project.regex.source !== "lumina-(legacy|new)" || project.regex.flags !== "gi") {
+        throw new Error("RegExp was not preserved: " + Object.prototype.toString.call(project.regex));
+      }
       if (!(project.map instanceof Map) || project.map.get("origin") !== "legacy") throw new Error("Map was not preserved");
       if (!(project.set instanceof Set) || !project.set.has("source")) throw new Error("Set was not preserved");
       if (project.big !== 42n) throw new Error("BigInt was not preserved");
