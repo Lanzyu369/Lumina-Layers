@@ -3,6 +3,7 @@ import {
   isValidElement,
   useState,
   type ReactElement,
+  type MouseEvent,
   type ReactNode,
 } from "react";
 import type { Placement } from "@floating-ui/react";
@@ -64,6 +65,23 @@ export default function WikiTooltip({
   const { t, lang } = useI18n();
   const [isOpen, setIsOpen] = useState(false);
   const resolvedWikiUrl = wikiUrl ?? (wikiPath ? buildWikiDocUrl(wikiPath, lang) : undefined);
+  const handleWikiClick = (event: MouseEvent<HTMLAnchorElement>) => {
+    const openWiki = (
+      window as Window & {
+        electronAPI?: {
+          openWiki?: (url: string) => Promise<unknown>;
+        };
+      }
+    ).electronAPI?.openWiki;
+    if (!openWiki || !resolvedWikiUrl) {
+      return;
+    }
+    event.preventDefault();
+    void openWiki(resolvedWikiUrl).catch(() => {
+      // The main process intentionally rejects untrusted URLs. Do not fall
+      // back to an unrestricted renderer navigation when that happens.
+    });
+  };
 
   // 1. useFloating — positioning engine + middleware
   const { refs, floatingStyles, context } = useFloating({
@@ -156,6 +174,7 @@ export default function WikiTooltip({
             href={resolvedWikiUrl}
             target="_blank"
             rel="noopener noreferrer"
+            onClick={handleWikiClick}
             className="text-xs text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 mt-2 inline-flex items-center gap-1"
           >
             {t("wiki_tooltip_link")}

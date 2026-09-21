@@ -160,6 +160,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  delete (window as Window & { electronAPI?: unknown }).electronAPI;
 });
 
 // ---------------------------------------------------------------------------
@@ -340,5 +341,54 @@ describe("WikiTooltip unit tests", () => {
     expect(link!.getAttribute("href")).toBe(
       "https://wiki.luminastudio.com.cn/zh/docs/reference/color-matching/hue-protection/",
     );
+  });
+
+  it("opens Wiki through the desktop bridge once without changing the URL", async () => {
+    const openWiki = vi.fn().mockResolvedValue({ opened: true });
+    Object.defineProperty(window, "electronAPI", {
+      configurable: true,
+      value: { openWiki },
+    });
+
+    const { container } = await renderAndOpen({
+      title: "Desktop Wiki",
+      description: "Open the matching documentation.",
+      wikiPath: "/docs/reference/color-matching/hue-protection/",
+    });
+    const link = container.querySelector('[data-testid="tooltip-bubble"] a');
+    expect(link).not.toBeNull();
+
+    const click = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+    });
+    const dispatchResult = link!.dispatchEvent(click);
+
+    expect(dispatchResult).toBe(false);
+    expect(openWiki).toHaveBeenCalledTimes(1);
+    expect(openWiki).toHaveBeenCalledWith(
+      "https://wiki.luminastudio.com.cn/zh/docs/reference/color-matching/hue-protection/",
+    );
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  });
+
+  it("keeps the normal new-tab link behavior on the web", async () => {
+    const { container } = await renderAndOpen({
+      title: "Web Wiki",
+      description: "Open the matching documentation.",
+      wikiUrl:
+        "https://wiki.luminastudio.com.cn/en/docs/reference/color-matching/hue-protection/#source",
+    });
+    const link = container.querySelector('[data-testid="tooltip-bubble"] a');
+    expect(link).not.toBeNull();
+
+    const click = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+    });
+    expect(link!.dispatchEvent(click)).toBe(true);
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
   });
 });

@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("get-native-bed-model", deviceProfileId),
   getWorkshopRuntimeMode: () =>
     ipcRenderer.invoke("get-workshop-runtime-mode"),
+  openWiki: (url) => ipcRenderer.invoke("open-wiki", url),
   pickWorkshopImage: () =>
     ipcRenderer.invoke("pick-workshop-image"),
 });

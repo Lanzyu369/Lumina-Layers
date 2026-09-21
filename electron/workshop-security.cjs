@@ -18,6 +18,8 @@ const BACKEND_RUNTIME_PATH_PATTERN = new RegExp(
 const BACKEND_BED_MODEL_PATH =
   "/api/system/machine-registry/bed-model";
 const DEVICE_PROFILE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
+const WIKI_HOST = "wiki.luminastudio.com.cn";
+const WIKI_DOC_PATH_PATTERN = /^\/(?:zh|en)\/docs(?:\/|$)/;
 const NON_NETWORK_RESOURCE_TYPES = new Set([
   "font",
   "image",
@@ -266,6 +268,44 @@ function isAllowedWorkshopIpcSender(frameUrl) {
   return isTrustedHostUrl(frameUrl);
 }
 
+/**
+ * Accept only the public documentation surface of the official Wiki.
+ *
+ * The renderer may provide the locale, path, and hash, but the main process
+ * still validates the complete URL before it reaches the system browser.
+ */
+function isAllowedWikiUrl(value) {
+  const parsed = parseUrl(value);
+  return (
+    parsed !== null &&
+    parsed.protocol === "https:" &&
+    parsed.hostname === WIKI_HOST &&
+    parsed.port === "" &&
+    parsed.username === "" &&
+    parsed.password === "" &&
+    WIKI_DOC_PATH_PATTERN.test(parsed.pathname)
+  );
+}
+
+/**
+ * Require the current trusted main window and its top-level frame for Wiki IPC.
+ *
+ * Workshop iframes deliberately do not satisfy this contract, and a missing
+ * frame URL is never treated as an authority signal.
+ */
+function isAllowedWikiIpcSender(details) {
+  return (
+    details !== null &&
+    typeof details === "object" &&
+    details.isMainFrame === true &&
+    Number.isInteger(details.senderWebContentsId) &&
+    details.senderWebContentsId === details.trustedWebContentsId &&
+    typeof details.senderFrameUrl === "string" &&
+    details.senderFrameUrl === details.trustedMainFrameUrl &&
+    isTrustedHostUrl(details.senderFrameUrl)
+  );
+}
+
 function isAllowedWorkshopPopup(details) {
   if (
     !isTrustedHostUrl(details.openerUrl) ||
@@ -317,6 +357,8 @@ module.exports = {
   isAllowedWorkshopPermission,
   isAllowedWorkshopPopup,
   isAllowedWorkshopRequest,
+  isAllowedWikiIpcSender,
+  isAllowedWikiUrl,
   isWorkshopFrameProcessIsolated,
   resolveWorkshopRuntimeRequest,
   shouldBlockWorkshopNavigation,
