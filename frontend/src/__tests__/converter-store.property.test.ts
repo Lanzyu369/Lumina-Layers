@@ -1,4 +1,4 @@
-import { describe, it, beforeEach } from "vitest";
+import { describe, it, beforeEach, expect } from "vitest";
 import * as fc from "fast-check";
 import {
   useConverterStore,

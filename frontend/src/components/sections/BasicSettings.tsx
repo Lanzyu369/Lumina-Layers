@@ -79,6 +79,8 @@ const THICKNESS_SLIDER_MAX_MM = 10;
 const BACKING_INFILL_DENSITY_MIN_PERCENT = 5;
 const BACKING_INFILL_DENSITY_MAX_PERCENT = 100;
 const BACKING_INFILL_DENSITY_STEP_PERCENT = 5;
+const STANDARD_DIMENSION_SLIDER_MAX_MM = 400;
+const LARGE_FORMAT_TILE_SLIDER_MAX_MM = 500;
 const GENERIC_HTTP_STATUS_ERROR_RE =
   /(?:Request failed with status code|HTTP(?:\s+error)?|status(?:\s+code)?)\s*\d{3}\b/i;
 const STARTUP_LUT_RETRY_DELAY_MS = 5_000;
@@ -1200,7 +1202,11 @@ export default function BasicSettings() {
     });
   };
 
-  const dimMax = largeFormatEnabled ? Number.MAX_SAFE_INTEGER : 400;
+  // Keep the range control useful for everyday dimensions while allowing the
+  // precise text field to retain any finite large-format value.
+  // 日常拖动保持可用尺度，精确输入框保留任意有限的大画幅尺寸。
+  const dimMax = STANDARD_DIMENSION_SLIDER_MAX_MM;
+  const dimInputMax = largeFormatEnabled ? Number.POSITIVE_INFINITY : undefined;
 
   const tileGrid = useMemo(() => {
     if (!largeFormatEnabled) return null;
@@ -1823,6 +1829,7 @@ export default function BasicSettings() {
         value={target_width_mm}
         min={10}
         max={dimMax}
+        inputMax={dimInputMax}
         step={dimensionSliderStep(target_width_mm)}
         unit="mm"
         onChange={setTargetWidthMm}
@@ -1835,6 +1842,7 @@ export default function BasicSettings() {
         value={target_height_mm}
         min={10}
         max={dimMax}
+        inputMax={dimInputMax}
         step={dimensionSliderStep(target_height_mm)}
         unit="mm"
         onChange={setTargetHeightMm}
@@ -1873,7 +1881,8 @@ export default function BasicSettings() {
             wikiPath={WIKI_DOCS.largeFormat}
             value={tileWidthMm}
             min={50}
-            max={Number.MAX_SAFE_INTEGER}
+            max={LARGE_FORMAT_TILE_SLIDER_MAX_MM}
+            inputMax={Number.POSITIVE_INFINITY}
             step={10}
             unit="mm"
             onChange={setTileWidthMm}
@@ -1884,7 +1893,8 @@ export default function BasicSettings() {
             wikiPath={WIKI_DOCS.largeFormat}
             value={tileHeightMm}
             min={50}
-            max={Number.MAX_SAFE_INTEGER}
+            max={LARGE_FORMAT_TILE_SLIDER_MAX_MM}
+            inputMax={Number.POSITIVE_INFINITY}
             step={10}
             unit="mm"
             onChange={setTileHeightMm}
