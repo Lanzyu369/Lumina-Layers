@@ -33,35 +33,42 @@ _SVG_RASTER_CACHE_MAX = 4
 _RESVG_DPI = 96
 
 
+def _parse_svg_length_to_px(raw: str | None) -> float | None:
+    """Parse one absolute SVG length using the renderer's CSS pixel units.
+
+    按 resvg 使用的 CSS 像素和 DPI 解析一个绝对 SVG 长度。
+    百分比和未知单位不属于绝对长度，返回 ``None``。
+    """
+
+    match = re.match(
+        r"^\s*((?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)"
+        r"(?:[eE][+-]?[0-9]+)?)\s*"
+        r"(px|in|cm|mm|q|pt|pc)?\s*$",
+        str(raw or ""),
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    value = float(match.group(1))
+    unit = (match.group(2) or "px").lower()
+    px_per_unit = {
+        "px": 1.0,
+        "in": float(_RESVG_DPI),
+        "cm": float(_RESVG_DPI) / 2.54,
+        "mm": float(_RESVG_DPI) / 25.4,
+        "q": float(_RESVG_DPI) / 101.6,
+        "pt": float(_RESVG_DPI) / 72.0,
+        "pc": 16.0,
+    }[unit]
+    value *= px_per_unit
+    return value if math.isfinite(value) and value > 0 else None
+
+
 def _svg_canvas_height_width_ratio(svg_path: str) -> float | None:
     """Read a finite SVG canvas height/width ratio without rasterization."""
 
     try:
         root = ET.parse(svg_path).getroot()
-        def numeric_length(raw: str | None) -> float | None:
-            match = re.match(
-                r"^\s*((?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)"
-                r"(?:[eE][+-]?[0-9]+)?)\s*"
-                r"(px|in|cm|mm|q|pt|pc)?\s*$",
-                str(raw or ""),
-                flags=re.IGNORECASE,
-            )
-            if match is None:
-                return None
-            value = float(match.group(1))
-            unit = (match.group(2) or "px").lower()
-            px_per_unit = {
-                "px": 1.0,
-                "in": 96.0,
-                "cm": 96.0 / 2.54,
-                "mm": 96.0 / 25.4,
-                "q": 96.0 / 101.6,
-                "pt": 96.0 / 72.0,
-                "pc": 16.0,
-            }[unit]
-            value *= px_per_unit
-            return value if math.isfinite(value) and value > 0 else None
-
         def is_full_percentage(raw: str | None) -> bool:
             value = str(raw or "").strip()
             if not value.endswith("%"):
@@ -87,8 +94,8 @@ def _svg_canvas_height_width_ratio(svg_path: str) -> float | None:
 
         raw_width = root.attrib.get("width")
         raw_height = root.attrib.get("height")
-        width = numeric_length(raw_width)
-        height = numeric_length(raw_height)
+        width = _parse_svg_length_to_px(raw_width)
+        height = _parse_svg_length_to_px(raw_height)
         if width is not None and height is not None:
             ratio = height / width
             return ratio if math.isfinite(ratio) and ratio > 0 else None

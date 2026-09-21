@@ -91,7 +91,10 @@ from config import (
     get_printer_profile,
     normalize_svg_pixels_per_mm,
 )
-from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
+from core.pipeline.processing_ops.svg_rasterizer import (
+    _parse_svg_length_to_px,
+    rasterize_svg,
+)
 from core.recipe_order import convert_recipe_between_orders
 from core.vector_large_format import (
     SVG_LARGE_FORMAT_FALLBACK_NATIVE_FAILURE,
@@ -3646,15 +3649,8 @@ def _rasterize_svg_fallback_tile(
     tree = ET.parse(svg_path)
     source_root = tree.getroot()
 
-    def _numeric_length(raw: str | None) -> float | None:
-        match = re.match(r"^\s*([0-9]+(?:\.[0-9]*)?|\.[0-9]+)", str(raw or ""))
-        if match is None:
-            return None
-        value = float(match.group(1))
-        return value if math.isfinite(value) and value > 0 else None
-
-    viewport_width = _numeric_length(source_root.attrib.get("width"))
-    viewport_height = _numeric_length(source_root.attrib.get("height"))
+    viewport_width = _parse_svg_length_to_px(source_root.attrib.get("width"))
+    viewport_height = _parse_svg_length_to_px(source_root.attrib.get("height"))
     raw_view_box = source_root.attrib.get("viewBox") or source_root.attrib.get("viewbox")
     if not raw_view_box:
         if viewport_width is None or viewport_height is None:

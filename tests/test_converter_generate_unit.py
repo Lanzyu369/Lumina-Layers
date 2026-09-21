@@ -566,6 +566,56 @@ height="{viewport_height}" viewBox="0 0 100 100"{preserve_attribute}>
             Path(tile_path).unlink(missing_ok=True)
 
 
+def test_svg_fallback_physical_units_match_full_resvg_viewport_crop(tmp_path) -> None:
+    """Physical SVG lengths use the same CSS-pixel viewport as the full render."""
+
+    svg_path = tmp_path / "physical-unit-fallback.svg"
+    svg_path.write_text(
+        """<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="100mm">
+  <defs><filter id="blur"><feGaussianBlur stdDeviation="0.1"/></filter></defs>
+  <g filter="url(#blur)">
+    <rect width="100%" height="100%" fill="red"/>
+    <rect x="50mm" width="50mm" height="100mm" fill="blue"/>
+  </g>
+</svg>""",
+        encoding="utf-8",
+    )
+    full = rasterize_svg(
+        str(svg_path),
+        100.0,
+        pixels_per_mm=4.0,
+        crop_to_content=False,
+        _min_quality_px=1,
+        _cache_result=False,
+    )
+    tile_paths: list[str] = []
+    try:
+        for x0_mm, x1_mm in ((0.0, 50.0), (50.0, 100.0)):
+            tile_path = _rasterize_svg_fallback_tile(
+                svg_path=str(svg_path),
+                total_width_mm=100.0,
+                total_height_mm=100.0,
+                x0_mm=x0_mm,
+                y0_mm=0.0,
+                x1_mm=x1_mm,
+                y1_mm=100.0,
+                pixels_per_mm=4.0,
+            )
+            tile_paths.append(tile_path)
+            with Image.open(tile_path) as tile_image:
+                actual = np.asarray(tile_image.convert("RGBA"))
+            px_x0 = int(round(x0_mm / 100.0 * full.shape[1]))
+            px_x1 = int(round(x1_mm / 100.0 * full.shape[1]))
+            expected = full[:, px_x0:px_x1]
+            # Physical-unit conversion can round one CSS pixel differently
+            # between the full and windowed resvg calls; geometry and color
+            # must still match within that one-channel rounding unit.
+            assert np.max(np.abs(actual.astype(np.int16) - expected.astype(np.int16))) <= 1
+    finally:
+        for tile_path in tile_paths:
+            Path(tile_path).unlink(missing_ok=True)
+
+
 @pytest.mark.asyncio
 async def test_svg_fallback_heightmap_uses_independent_global_y_coordinates(tmp_path) -> None:
     """Fallback tiles must receive the corresponding upper/lower heightmap rows."""
