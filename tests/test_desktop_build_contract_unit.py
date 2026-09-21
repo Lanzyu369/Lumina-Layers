@@ -149,6 +149,15 @@ def test_pyinstaller_spec_explicitly_bundles_native_svg_extension(
     ) in namespace["backend_binaries"]
 
 
+def test_pyinstaller_spec_bundles_colorchecker_reference_data(monkeypatch) -> None:
+    datas = _load_spec_backend_datas(monkeypatch)
+
+    assert any(
+        Path(destination).as_posix() == "core/colorchecker/data"
+        for _source, destination in datas
+    )
+
+
 def test_pyinstaller_spec_bundles_registry_project_profile_dependencies() -> None:
     spec = (ROOT / "lumina_studio.spec").read_text(encoding="utf-8")
 
@@ -192,6 +201,7 @@ def test_production_pyinstaller_spec_packages_printer_templates() -> None:
 
     assert "('printer_profiles', 'printer_profiles')" in spec
     assert "('bambu_config_template.json', '.')" in spec
+    assert "('lut-preset', 'lut-preset')" in spec
 
 
 def test_frozen_meipass_loads_packaged_orca_p2s_profile(

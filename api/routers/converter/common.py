@@ -37,14 +37,9 @@ from core.model_surface.validation import (
 from core.pipeline._input_validation_common import (
     VECTOR_NATIVE_REQUIRES_SVG_DETAIL,
 )
-from core.vector_diagnostics import (
-    SVG_INTERSECTING_COMPOUND_COMPLEXITY_DIAGNOSTIC,
-)
 from .source_validation import (
     SOURCE_SVG_NO_RENDERABLE_GEOMETRY_DETAIL,
     SOURCE_SVG_NO_RENDERABLE_GEOMETRY_ERROR,
-    SOURCE_SVG_TOO_COMPLEX_DETAIL,
-    SOURCE_SVG_TOO_COMPLEX_ERROR,
 )
 
 EPHEMERAL_PREVIEW_TTL_SECONDS = 600
@@ -177,20 +172,6 @@ _SVG_NO_GEOMETRY_STATUS_LINES = frozenset(
 _VECTOR_NATIVE_REQUIRES_SVG_STATUS_LINES = frozenset(
     {"⚠️ Vector Native mode requires SVG files!"}
 )
-_SVG_COMPLEXITY_STATUS_LINES = frozenset(
-    {
-        (
-            "[VECTOR_PREVIEW] "
-            f"{SVG_INTERSECTING_COMPOUND_COMPLEXITY_DIAGNOSTIC}"
-        ),
-        (
-            "Vector processing failed: "
-            f"{SVG_INTERSECTING_COMPOUND_COMPLEXITY_DIAGNOSTIC}"
-        ),
-    }
-)
-
-
 def _public_pipeline_validation_detail(
     status_msg: object,
     *,
@@ -220,18 +201,6 @@ def _public_pipeline_validation_detail(
         return {
             "error": VECTOR_NATIVE_REQUIRES_SVG_ERROR,
             "message": VECTOR_NATIVE_REQUIRES_SVG_DETAIL,
-        }
-
-    if (
-        source_is_user_upload
-        and not surface_overlay
-        and normalized_mode == "vector"
-        and normalized_source.endswith(".svg")
-        and first_line in _SVG_COMPLEXITY_STATUS_LINES
-    ):
-        return {
-            "error": SOURCE_SVG_TOO_COMPLEX_ERROR,
-            "message": SOURCE_SVG_TOO_COMPLEX_DETAIL,
         }
 
     if (

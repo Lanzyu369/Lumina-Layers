@@ -63,59 +63,40 @@ order, so parallel and serial output is byte-for-byte identical. Set
 `LUMINA_SVG_REPLAY_THREADS` to a positive integer to force a worker count for
 benchmarking or host-level scheduling; requests and automatic selection are
 both capped at 16 workers. Otherwise the core selects between one worker and
-the available hardware threads from the recorded path workload. Parallel tasks
-share the document resource budget and pre-allocation gates for Boolean input,
-safety-index, offset-transient, and actual Clipper engine resources. If an
-aggregate gate is reached, normalization fails, or no background worker can be
-created, the core releases staged capacity and replays serially in document
-order. If only some background workers can be created, it continues with that
-smaller pool. This preserves the serial result or failure instead of rejecting
-an SVG only because parallel execution was attempted.
-The ordered clip/composite phase uses the same aggregate gates. A
-parallel-only exception discards all staged state, restores the document
-budget and topology trace, and then performs one authoritative serial replay.
+the available hardware threads from the recorded path workload. Parallel tasks keep shared accounting only for integer overflow and preserve
+the same topology trace. If no background worker can be created, the core
+replays serially in document order; this is an execution fallback rather than
+an input-size admission decision. The ordered clip/composite phase uses the
+same accounting. A parallel-only exception discards staged state and performs
+one authoritative serial replay.
 `NativeResult.replay_worker_count` reports the worker count used by the final
 geometry replay.
 
-## Fail-closed resource and precision policy
+## Desktop resource policy
 
-Version 0.3 keeps only hard resource boundaries needed to avoid unbounded
-allocation or recursion: one input is limited to 256 MiB, 250,000 XML elements,
-250,000 XML attributes, 64 MiB of attribute text, and 128 levels of XML
-nesting; the recorder is limited to 250,000 paint commands, 16 million path
-verbs, 16 million path points, and 1 million dash values. Streaming parser
-counters stop oversized path, point-list, transform, CSS, and XML work before
-large intermediate allocations. They count actual parsing work rather than
-guessing whether ordinary SVG structure might be expensive. Encoding and
-namespace checks are limited to XML correctness, not document identity.
-Before the first same-document `<use>` expansion, the recorder totals the
-attribute bytes and recursive expansion work of all statically resolvable
-references. Repeated targets are cached together with their ancestor-cycle
-context. Generated `<use>` shadow children are not recopied as source DOM; the
-running counter remains a backstop for every actual clone. Documents already
-known to use unsupported SVG semantics skip clone expansion.
+The desktop engine no longer rejects valid local SVG input because of a
+configured byte, element, path, command, CSS, clone-work, or elapsed-time
+quota. Parsing and geometry counters remain only to detect integer-size
+overflow and invalid numeric state before a C++ container or coordinate cast
+would wrap. Actual allocation failures, file errors, malformed XML, invalid
+coordinates, unsupported SVG semantics, and real recursion cycles still fail
+as whole-document errors.
 
-The geometry kernel checks integer overflow, curve-generation work, and each
-Clipper operation's input and geometric point estimate. The pinned Clipper
-patch checks actual output-point allocations, output-record allocations,
-intersection-node allocations, and every processed intersection inside the
-engine before each allocation or event is accepted. Parallel executions share
-those checks before allocation instead of adding their peaks after the work is
-already resident. Document counters charge actual Boolean inputs, safety-index
-work, engine work, and returned output rather than a theoretical output-ring
-count.
-Raw paths retain a bounded self-intersection preflight; operands already
-canonicalized by Clipper are not scanned again by a shadow Boolean pass.
+The geometry kernel records actual Boolean inputs, Clipper work, and returned
+output for diagnostics and overflow checks; these counters are not admission
+budgets and do not lower CPU parallelism. Raw paths retain the exact
+self-intersection and canonical-boundary algorithms, including the #603
+integer geometry rules. Operands already canonicalized by Clipper are not
+scanned again by a shadow Boolean pass.
 Nested axis-aligned rectangle occluders are reduced by an exact containment
-proof; all other paints retain normal SVG paint-order compositing. A genuine
-resource failure returns empty native geometry with `unsupported_complexity`;
-none is a partial-rendering mode and Lumina does not retry it through the
-legacy parser.
+proof; all other paints retain normal SVG paint-order compositing. There is no
+partial-rendering mode and Lumina does not retry failures through the legacy
+parser.
 
 Inputs whose resolved float coordinates, transforms, stroke parameters, or
 operation history cannot satisfy the caller's physical tolerance return
 `unsupported_input_precision`. Non-finite resolved values, transform/path
-cancellation beyond the budget, and precision-sensitive dashed strokes are
+cancellation beyond representable numeric precision, and precision-sensitive dashed strokes are
 handled the same way. Duplicate nonempty XML `id` values return
 `unsupported_duplicate_id`, because reference selection would otherwise be
 ambiguous. All three reasons preserve the same whole-document fallback

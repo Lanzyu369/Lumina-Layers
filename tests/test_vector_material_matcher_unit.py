@@ -107,9 +107,6 @@ def _parallelism_plan(
         work_item_ceiling=40,
         work_unit_ceiling=4,
         stage_ceiling=4,
-        memory_ceiling=max(1, workers),
-        available_memory_bytes=8 * 1024**3,
-        estimated_worker_bytes=256 * 1024**2,
         limiting_reason=limiting_reason,
         demand_snapshot_fallback=False,
     )
@@ -333,7 +330,6 @@ class TestMaterialVectorMatcherSolveForFills:
             work_units: int,
             min_parallel_work_units: int,
             work_units_per_worker: int,
-            estimated_worker_bytes: int,
         ) -> AdaptiveParallelismPlan:
             policy_calls.append(
                 {
@@ -344,7 +340,6 @@ class TestMaterialVectorMatcherSolveForFills:
                     "work_units": work_units,
                     "min_parallel_work_units": min_parallel_work_units,
                     "work_units_per_worker": work_units_per_worker,
-                    "estimated_worker_bytes": estimated_worker_bytes,
                 },
             )
             return _parallelism_plan(
@@ -371,7 +366,6 @@ class TestMaterialVectorMatcherSolveForFills:
                 "work_units": 4,
                 "min_parallel_work_units": 32,
                 "work_units_per_worker": 16,
-                "estimated_worker_bytes": 256 * 1024**2,
             }
         ]
         assert runtime.observed_parallelism == [3]
@@ -466,11 +460,6 @@ class TestMaterialVectorMatcherSolveForFills:
                 effective_cpu_count=8,
                 limiting_source="host_fallback",
             ),
-        )
-        monkeypatch.setattr(
-            task_parallelism,
-            "_available_memory_bytes",
-            lambda: 16 * 1024**3,
         )
         monkeypatch.setenv("LUMINA_VECTOR_PARALLELISM", "invalid")
         monkeypatch.setenv("LUMINA_MAX_WORKERS", "2")

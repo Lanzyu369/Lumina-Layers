@@ -1,5 +1,5 @@
 diff --git a/include/lunasvg.h b/include/lunasvg.h
-index 74f43bb..86b29a3 100644
+index 74f43bb..7f54465 100644
 --- a/include/lunasvg.h
 +++ b/include/lunasvg.h
 @@ -23,6 +23,8 @@
@@ -108,7 +108,7 @@ index 74f43bb..86b29a3 100644
  class SVGNode;
  class SVGTextNode;
  class SVGElement;
-@@ -816,6 +908,43 @@ public:
+@@ -816,6 +908,40 @@ public:
     */
    Element documentElement() const;
  
@@ -146,13 +146,10 @@ index 74f43bb..86b29a3 100644
 +  /** @internal Accounts retained per-element CSS capability state. */
 +  bool consumeDeferredCapabilityStorage(size_t objects, size_t bytes);
 +
-+  /** @internal Reports a hard resource bound reached while parsing. */
-+  bool resourceLimitExceeded() const { return m_resourceLimitExceeded; }
-+
    Document(Document &&);
    Document &operator=(Document &&);
    ~Document();
-@@ -826,9 +955,27 @@ private:
+@@ -826,9 +952,26 @@ private:
    Document &operator=(const Document &) = delete;
    SVGRootElement *rootElement(bool layoutIfNeeded = false) const;
    bool parse(const char *data, size_t length);
@@ -172,7 +169,6 @@ index 74f43bb..86b29a3 100644
 +  size_t m_xmlAttributeBytes{0};
 +  size_t m_deferredCapabilityObjects{0};
 +  size_t m_deferredCapabilityBytes{0};
-+  bool m_resourceLimitExceeded{false};
    friend class SVGURIReference;
    friend class SVGNode;
 +  friend class SVGElement;
@@ -726,7 +722,7 @@ index 7e6bc12..e41bab8 100644
      const int m_y;
  };
 diff --git a/source/lunasvg.cpp b/source/lunasvg.cpp
-index 0a4399f..b3c4e97 100644
+index 0a4399f..7902aec 100644
 --- a/source/lunasvg.cpp
 +++ b/source/lunasvg.cpp
 @@ -5,6 +5,9 @@
@@ -739,7 +735,7 @@ index 0a4399f..b3c4e97 100644
  
  int lunasvg_version()
  {
-@@ -520,6 +523,148 @@ Element Document::documentElement() const
+@@ -520,6 +523,126 @@ Element Document::documentElement() const
      return m_rootElement.get();
  }
  
@@ -778,8 +774,7 @@ index 0a4399f..b3c4e97 100644
 +
 +int32_t Document::allocateSourceIndex()
 +{
-+    constexpr int32_t MAX_SOURCE_ELEMENTS = 250'000;
-+    if(m_nextSourceIndex >= MAX_SOURCE_ELEMENTS)
++    if(m_nextSourceIndex == std::numeric_limits<int32_t>::max())
 +        throw std::length_error("svg_element_capacity");
 +    if(m_nextSourceIndex == std::numeric_limits<int32_t>::max()) {
 +        addCapabilityIssue("numeric_range_error");
@@ -798,13 +793,9 @@ index 0a4399f..b3c4e97 100644
 +
 +bool Document::beginUseExpansion()
 +{
-+    constexpr size_t MAX_USE_EXPANSION_DEPTH = 128;
-+    constexpr size_t MAX_USE_EXPANSION_WORK = 250'000;
-+    if(m_useExpansionDepth >= MAX_USE_EXPANSION_DEPTH
-+            || m_useExpansionWork >= MAX_USE_EXPANSION_WORK) {
-+        addCapabilityIssue("unsupported_complexity");
++    if(m_useExpansionDepth == std::numeric_limits<size_t>::max()
++            || m_useExpansionWork == std::numeric_limits<size_t>::max())
 +        return false;
-+    }
 +    ++m_useExpansionDepth;
 +    ++m_useExpansionWork;
 +    return true;
@@ -818,24 +809,18 @@ index 0a4399f..b3c4e97 100644
 +
 +bool Document::consumeUseCloneWork(size_t count)
 +{
-+    constexpr size_t MAX_USE_CLONE_WORK = 50'000'000;
-+    if(count > MAX_USE_CLONE_WORK - m_useCloneWork) {
-+        addCapabilityIssue("unsupported_complexity");
++    if(count > std::numeric_limits<size_t>::max() - m_useCloneWork)
 +        return false;
-+    }
 +    m_useCloneWork += count;
 +    return true;
 +}
 +
 +bool Document::consumePathParseWork(size_t verbs, size_t points)
 +{
-+    constexpr size_t MAX_PARSED_PATH_VERBS = 16'000'000;
-+    constexpr size_t MAX_PARSED_PATH_POINTS = 16'000'000;
-+    if(verbs > MAX_PARSED_PATH_VERBS - m_parsedPathVerbCount
-+            || points > MAX_PARSED_PATH_POINTS - m_parsedPathPointCount) {
-+        addCapabilityIssue("unsupported_complexity");
++    if(verbs > std::numeric_limits<size_t>::max() - m_parsedPathVerbCount
++            || points > std::numeric_limits<size_t>::max()
++                - m_parsedPathPointCount)
 +        return false;
-+    }
 +    m_parsedPathVerbCount += verbs;
 +    m_parsedPathPointCount += points;
 +    return true;
@@ -843,26 +828,20 @@ index 0a4399f..b3c4e97 100644
 +
 +bool Document::consumeTransformParseWork(size_t bytes)
 +{
-+    constexpr size_t MAX_TRANSFORM_PARSE_WORK = 50'000'000;
-+    if(bytes > MAX_TRANSFORM_PARSE_WORK - m_transformParseWork) {
-+        addCapabilityIssue("unsupported_complexity");
++    if(bytes > std::numeric_limits<size_t>::max() - m_transformParseWork)
 +        return false;
-+    }
 +    m_transformParseWork += bytes;
 +    return true;
 +}
 +
 +bool Document::consumeXmlAttribute(size_t nameBytes, size_t valueBytes)
 +{
-+    constexpr size_t MAX_XML_ATTRIBUTES = 2'000'000;
-+    constexpr size_t MAX_XML_ATTRIBUTE_BYTES = 256 * 1024 * 1024;
-+    if(m_xmlAttributeCount >= MAX_XML_ATTRIBUTES
-+            || nameBytes > MAX_XML_ATTRIBUTE_BYTES - m_xmlAttributeBytes
-+            || valueBytes > MAX_XML_ATTRIBUTE_BYTES
-+                - m_xmlAttributeBytes - nameBytes) {
-+        addCapabilityIssue("unsupported_complexity");
++    if(m_xmlAttributeCount == std::numeric_limits<size_t>::max()
++            || nameBytes > std::numeric_limits<size_t>::max()
++                - m_xmlAttributeBytes
++            || valueBytes > std::numeric_limits<size_t>::max()
++                - m_xmlAttributeBytes - nameBytes)
 +        return false;
-+    }
 +    ++m_xmlAttributeCount;
 +    m_xmlAttributeBytes += nameBytes + valueBytes;
 +    return true;
@@ -870,16 +849,11 @@ index 0a4399f..b3c4e97 100644
 +
 +bool Document::consumeDeferredCapabilityStorage(size_t objects, size_t bytes)
 +{
-+    constexpr size_t MAX_DEFERRED_CAPABILITY_OBJECTS = 100'000;
-+    constexpr size_t MAX_DEFERRED_CAPABILITY_BYTES = 32 * 1024 * 1024;
-+    if(objects > MAX_DEFERRED_CAPABILITY_OBJECTS
++    if(objects > std::numeric_limits<size_t>::max()
 +            - m_deferredCapabilityObjects
-+            || bytes > MAX_DEFERRED_CAPABILITY_BYTES
-+                - m_deferredCapabilityBytes) {
-+        m_resourceLimitExceeded = true;
-+        addCapabilityIssue("unsupported_complexity");
++            || bytes > std::numeric_limits<size_t>::max()
++                - m_deferredCapabilityBytes)
 +        return false;
-+    }
 +    m_deferredCapabilityObjects += objects;
 +    m_deferredCapabilityBytes += bytes;
 +    return true;
@@ -889,10 +863,10 @@ index 0a4399f..b3c4e97 100644
  {
      if(layoutIfNeeded)
 diff --git a/source/svgelement.cpp b/source/svgelement.cpp
-index 7d62cc6..6eb08ad 100644
+index 7d62cc6..90a5554 100644
 --- a/source/svgelement.cpp
 +++ b/source/svgelement.cpp
-@@ -3,13 +3,1422 @@
+@@ -3,13 +3,1419 @@
  #include "svggeometryelement.h"
  #include "svgtextelement.h"
  #include "svgproperty.h"
@@ -1600,8 +1574,6 @@ index 7d62cc6..6eb08ad 100644
 +
 +PathParseWork computePathParseWork(std::string_view value)
 +{
-+    constexpr size_t MAX_PARSED_PATH_VERBS = 2'000'000;
-+    constexpr size_t MAX_PARSED_PATH_POINTS = 6'000'000;
 +    PathParseWork work;
 +    const char* cursor = value.data();
 +    const char* end = cursor + value.size();
@@ -1613,8 +1585,8 @@ index 7d62cc6..6eb08ad 100644
 +    float startY = 0.f;
 +    bool firstCommand = true;
 +    const auto add = [&](size_t verbs, size_t points) {
-+        if(verbs > MAX_PARSED_PATH_VERBS - work.verbs
-+                || points > MAX_PARSED_PATH_POINTS - work.points) {
++        if(verbs > std::numeric_limits<size_t>::max() - work.verbs
++                || points > std::numeric_limits<size_t>::max() - work.points) {
 +            work.exceeded = true;
 +            return false;
 +        }
@@ -1727,7 +1699,6 @@ index 7d62cc6..6eb08ad 100644
 +
 +PointListParseWork computePointListParseWork(std::string_view input)
 +{
-+    constexpr size_t MAX_PARSED_PATH_VERBS = 2'000'000;
 +    PointListParseWork work;
 +    stripLeadingSpaces(input);
 +    while(!input.empty()) {
@@ -1738,7 +1709,7 @@ index 7d62cc6..6eb08ad 100644
 +            work.valid = false;
 +            return work;
 +        }
-+        if(work.points >= MAX_PARSED_PATH_VERBS) {
++        if(work.points == std::numeric_limits<size_t>::max()) {
 +            work.exceeded = true;
 +            return work;
 +        }
@@ -2315,7 +2286,7 @@ index 7d62cc6..6eb08ad 100644
  ElementID elementid(std::string_view name)
  {
      static const struct {
-@@ -126,6 +1535,7 @@ std::unique_ptr<SVGElement> SVGElement::create(Document* document, ElementID id)
+@@ -126,6 +1532,7 @@ std::unique_ptr<SVGElement> SVGElement::create(Document* document, ElementID id)
  SVGElement::SVGElement(Document* document, ElementID id)
      : SVGNode(document)
      , m_id(id)
@@ -2323,7 +2294,7 @@ index 7d62cc6..6eb08ad 100644
  {
  }
  
-@@ -215,59 +1625,132 @@ bool SVGElement::setAttribute(const Attribute& attribute)
+@@ -215,59 +1622,132 @@ bool SVGElement::setAttribute(const Attribute& attribute)
      return setAttribute(attribute.specificity(), attribute.id(), attribute.value());
  }
  
@@ -2491,7 +2462,7 @@ index 7d62cc6..6eb08ad 100644
      m_children.push_back(std::move(child));
      return &*m_children.back();
  }
-@@ -428,14 +1911,32 @@ Size SVGElement::currentViewportSize() const
+@@ -428,14 +1908,32 @@ Size SVGElement::currentViewportSize() const
  void SVGElement::cloneChildren(SVGElement* parentElement) const
  {
      for(const auto& child : m_children) {
@@ -2524,7 +2495,7 @@ index 7d62cc6..6eb08ad 100644
      if(deep) { cloneChildren(element.get()); }
      return element;
  }
-@@ -455,6 +1956,13 @@ void SVGElement::layoutElement(const SVGLayoutState& state)
+@@ -455,6 +1953,13 @@ void SVGElement::layoutElement(const SVGLayoutState& state)
      m_clipper = getClipper(state.clip_path());
      m_masker = getMasker(state.mask());
      m_opacity = state.opacity();
@@ -2538,7 +2509,7 @@ index 7d62cc6..6eb08ad 100644
  
      m_font_size = state.font_size();
      m_display = state.display();
-@@ -596,28 +2104,56 @@ SVGGraphicsElement::SVGGraphicsElement(Document* document, ElementID id)
+@@ -596,28 +2101,56 @@ SVGGraphicsElement::SVGGraphicsElement(Document* document, ElementID id)
      addProperty(m_transform);
  }
  
@@ -2603,7 +2574,7 @@ index 7d62cc6..6eb08ad 100644
      return strokeData;
  }
  
-@@ -646,7 +2182,8 @@ Transform SVGSVGElement::localTransform() const
+@@ -646,7 +2179,8 @@ Transform SVGSVGElement::localTransform() const
      };
  
      if(isRootElement())
@@ -2613,7 +2584,7 @@ index 7d62cc6..6eb08ad 100644
      return SVGGraphicsElement::localTransform() * Transform::translated(viewportRect.x, viewportRect.y) * viewBoxToViewTransform(viewportRect.size());
  }
  
-@@ -665,9 +2202,22 @@ void SVGSVGElement::render(SVGRenderState& state) const
+@@ -665,9 +2199,22 @@ void SVGSVGElement::render(SVGRenderState& state) const
      SVGBlendInfo blendInfo(this);
      SVGRenderState newState(this, state, localTransform());
      newState.beginGroup(blendInfo);
@@ -2638,7 +2609,7 @@ index 7d62cc6..6eb08ad 100644
      newState.endGroup(blendInfo);
  }
  
-@@ -691,9 +2241,9 @@ SVGElement* SVGRootElement::getElementById(std::string_view id) const
+@@ -691,9 +2238,9 @@ SVGElement* SVGRootElement::getElementById(std::string_view id) const
      return it->second;
  }
  
@@ -2650,7 +2621,7 @@ index 7d62cc6..6eb08ad 100644
  }
  
  void SVGRootElement::layout(SVGLayoutState& state)
-@@ -782,13 +2332,16 @@ void SVGUseElement::render(SVGRenderState& state) const
+@@ -782,13 +2329,16 @@ void SVGUseElement::render(SVGRenderState& state) const
  
  void SVGUseElement::build()
  {
@@ -2668,7 +2639,7 @@ index 7d62cc6..6eb08ad 100644
  }
  
  inline bool isDisallowedElement(const SVGElement* element)
-@@ -833,10 +2386,16 @@ std::unique_ptr<SVGElement> SVGUseElement::cloneTargetElement(SVGElement* target
+@@ -833,10 +2383,16 @@ std::unique_ptr<SVGElement> SVGUseElement::cloneTargetElement(SVGElement* target
      }
  
      auto newElement = SVGElement::create(document(), tagId);
@@ -2685,7 +2656,7 @@ index 7d62cc6..6eb08ad 100644
                  newElement->setAttribute(attribute);
              }
          }
-@@ -1016,9 +2575,22 @@ void SVGMarkerElement::renderMarker(SVGRenderState& state, const Point& origin,
+@@ -1016,9 +2572,22 @@ void SVGMarkerElement::renderMarker(SVGRenderState& state, const Point& origin,
      SVGBlendInfo blendInfo(this);
      SVGRenderState newState(this, state, markerTransform(origin, angle, strokeWidth));
      newState.beginGroup(blendInfo);
@@ -2710,7 +2681,7 @@ index 7d62cc6..6eb08ad 100644
      newState.endGroup(blendInfo);
  }
  
-@@ -1078,29 +2650,66 @@ inline const SVGGeometryElement* toSVGGeometryElement(const SVGNode* node)
+@@ -1078,29 +2647,66 @@ inline const SVGGeometryElement* toSVGGeometryElement(const SVGNode* node)
  
  void SVGClipPathElement::applyClipPath(SVGRenderState& state) const
  {
@@ -2795,15 +2766,12 @@ index 7d62cc6..6eb08ad 100644
          return;
      }
  
-@@ -1222,4 +2831,251 @@ void SVGMaskElement::layoutElement(const SVGLayoutState& state)
+@@ -1222,4 +2828,247 @@ void SVGMaskElement::layoutElement(const SVGLayoutState& state)
      SVGElement::layoutElement(state);
  }
  
 +namespace {
 +
-+constexpr size_t MAX_USE_CLONE_WORK = 50'000'000;
-+constexpr size_t MAX_USE_EXPANSION_DEPTH = 128;
-+constexpr size_t MAX_USE_EXPANSION_WORK = 250'000;
 +
 +struct UseCloneEstimate {
 +    size_t cloneWork{0};
@@ -2827,7 +2795,7 @@ index 7d62cc6..6eb08ad 100644
 +
 +bool addCloneWork(size_t amount, UseCloneEstimate& estimate)
 +{
-+    if(amount > MAX_USE_CLONE_WORK - estimate.cloneWork)
++    if(amount > std::numeric_limits<size_t>::max() - estimate.cloneWork)
 +        return false;
 +    estimate.cloneWork += amount;
 +    return true;
@@ -2835,7 +2803,7 @@ index 7d62cc6..6eb08ad 100644
 +
 +bool addExpansionWork(size_t amount, UseCloneEstimate& estimate)
 +{
-+    if(amount > MAX_USE_EXPANSION_WORK - estimate.expansionWork)
++    if(amount > std::numeric_limits<size_t>::max() - estimate.expansionWork)
 +        return false;
 +    estimate.expansionWork += amount;
 +    return true;
@@ -2936,8 +2904,7 @@ index 7d62cc6..6eb08ad 100644
 +                     size_t activeDepth,
 +                     UseCloneEstimate& estimate)
 +    {
-+        if(activeDepth >= MAX_USE_EXPANSION_DEPTH
-+                || !addExpansionWork(1, estimate)) {
++        if(!addExpansionWork(1, estimate)) {
 +            return false;
 +        }
 +
@@ -3793,7 +3760,7 @@ index 4d08ad9..d8caeb5 100644
      LineCap m_stroke_linecap = LineCap::Butt;
      LineJoin m_stroke_linejoin = LineJoin::Miter;
 diff --git a/source/svgparser.cpp b/source/svgparser.cpp
-index 183937c..2111c80 100644
+index 183937c..94f0f49 100644
 --- a/source/svgparser.cpp
 +++ b/source/svgparser.cpp
 @@ -3,9 +3,464 @@
@@ -4332,38 +4299,33 @@ index 183937c..2111c80 100644
      size_t m_position;
  };
  
-@@ -102,14 +579,99 @@ inline bool operator<(const RuleData& a, const RuleData& b) { return a.isLessTha
+@@ -102,14 +579,94 @@ inline bool operator<(const RuleData& a, const RuleData& b) { return a.isLessTha
  
  using RuleDataList = std::vector<RuleData>;
  
-+constexpr size_t MAX_CSS_RULES = 250'000;
-+constexpr size_t MAX_CSS_SELECTOR_NODES = 1'000'000;
-+constexpr size_t MAX_CSS_DECLARATIONS = 250'000;
-+constexpr size_t MAX_CSS_MATCH_WORK = 50'000'000;
-+
 +class CssParseBudget {
 +public:
 +    bool consumeRule()
 +    {
-+        return consume(m_ruleCount, MAX_CSS_RULES);
++        return consume(m_ruleCount);
 +    }
 +
 +    bool consumeSelectorNode()
 +    {
-+        return consume(m_selectorNodeCount, MAX_CSS_SELECTOR_NODES);
++        return consume(m_selectorNodeCount);
 +    }
 +
 +    bool consumeDeclaration()
 +    {
-+        return consume(m_declarationCount, MAX_CSS_DECLARATIONS);
++        return consume(m_declarationCount);
 +    }
 +
 +    bool exceeded() const { return m_exceeded; }
 +
 +private:
-+    bool consume(size_t& value, size_t maximum)
++    bool consume(size_t& value)
 +    {
-+        if(value >= maximum) {
++        if(value == std::numeric_limits<size_t>::max()) {
 +            m_exceeded = true;
 +            return false;
 +        }
@@ -4381,7 +4343,7 @@ index 183937c..2111c80 100644
 +public:
 +    bool consume(size_t count = 1)
 +    {
-+        if(count > MAX_CSS_MATCH_WORK - m_work) {
++        if(count > std::numeric_limits<size_t>::max() - m_work) {
 +            m_exceeded = true;
 +            return false;
 +        }
@@ -4434,7 +4396,7 @@ index 183937c..2111c80 100644
  }
  
  constexpr bool includes(std::string_view value, std::string_view subvalue)
-@@ -155,7 +717,7 @@ static bool matchAttributeSelector(const AttributeSelector& selector, const SVGE
+@@ -155,7 +712,7 @@ static bool matchAttributeSelector(const AttributeSelector& selector, const SVGE
  {
      const auto& value = element->getAttribute(selector.id);
      if(selector.matchType == AttributeSelector::MatchType::None)
@@ -4443,7 +4405,7 @@ index 183937c..2111c80 100644
      if(selector.matchType == AttributeSelector::MatchType::Equals)
          return equals(value, selector.value);
      if(selector.matchType == AttributeSelector::MatchType::Contains)
-@@ -171,18 +733,25 @@ static bool matchAttributeSelector(const AttributeSelector& selector, const SVGE
+@@ -171,18 +728,25 @@ static bool matchAttributeSelector(const AttributeSelector& selector, const SVGE
      return false;
  }
  
@@ -4473,7 +4435,7 @@ index 183937c..2111c80 100644
                      return false;
                  }
              }
-@@ -194,9 +763,11 @@ static bool matchPseudoClassSelector(const PseudoClassSelector& selector, const
+@@ -194,9 +758,11 @@ static bool matchPseudoClassSelector(const PseudoClassSelector& selector, const
      if(selector.type == PseudoClassSelector::Type::Not) {
          for(const auto& subSelector : selector.subSelectors) {
              for(const auto& simpleSelector : subSelector) {
@@ -4486,7 +4448,7 @@ index 183937c..2111c80 100644
              }
          }
  
-@@ -212,6 +783,8 @@ static bool matchPseudoClassSelector(const PseudoClassSelector& selector, const
+@@ -212,6 +778,8 @@ static bool matchPseudoClassSelector(const PseudoClassSelector& selector, const
      if(selector.type == PseudoClassSelector::Type::FirstOfType) {
          auto sibling = element->previousElement();
          while(sibling) {
@@ -4495,7 +4457,7 @@ index 183937c..2111c80 100644
              if(sibling->id() == element->id())
                  return false;
              sibling = sibling->previousElement();
-@@ -223,6 +796,8 @@ static bool matchPseudoClassSelector(const PseudoClassSelector& selector, const
+@@ -223,6 +791,8 @@ static bool matchPseudoClassSelector(const PseudoClassSelector& selector, const
      if(selector.type == PseudoClassSelector::Type::LastOfType) {
          auto sibling = element->nextElement();
          while(sibling) {
@@ -4504,7 +4466,7 @@ index 183937c..2111c80 100644
              if(sibling->id() == element->id())
                  return false;
              sibling = sibling->nextElement();
-@@ -231,21 +806,51 @@ static bool matchPseudoClassSelector(const PseudoClassSelector& selector, const
+@@ -231,21 +801,51 @@ static bool matchPseudoClassSelector(const PseudoClassSelector& selector, const
          return true;
      }
  
@@ -4558,7 +4520,7 @@ index 183937c..2111c80 100644
              return false;
          }
      }
-@@ -253,13 +858,14 @@ static bool matchSimpleSelector(const SimpleSelector& selector, const SVGElement
+@@ -253,13 +853,14 @@ static bool matchSimpleSelector(const SimpleSelector& selector, const SVGElement
      return true;
  }
  
@@ -4575,7 +4537,7 @@ index 183937c..2111c80 100644
          return false;
      }
  
-@@ -267,6 +873,8 @@ static bool matchSelector(const Selector& selector, const SVGElement* element)
+@@ -267,6 +868,8 @@ static bool matchSelector(const Selector& selector, const SVGElement* element)
      ++it;
  
      while(it != end) {
@@ -4584,7 +4546,7 @@ index 183937c..2111c80 100644
          switch(combinator) {
          case SimpleSelector::Combinator::Child:
          case SimpleSelector::Combinator::Descendant:
-@@ -282,7 +890,7 @@ static bool matchSelector(const Selector& selector, const SVGElement* element)
+@@ -282,7 +885,7 @@ static bool matchSelector(const Selector& selector, const SVGElement* element)
  
          if(element == nullptr)
              return false;
@@ -4593,7 +4555,7 @@ index 183937c..2111c80 100644
              combinator = it->combinator;
              ++it;
          } else if(combinator != SimpleSelector::Combinator::Descendant
-@@ -294,9 +902,9 @@ static bool matchSelector(const Selector& selector, const SVGElement* element)
+@@ -294,9 +897,9 @@ static bool matchSelector(const Selector& selector, const SVGElement* element)
      return true;
  }
  
@@ -4605,7 +4567,7 @@ index 183937c..2111c80 100644
  }
  
  constexpr bool IS_CSS_STARTNAMECHAR(int c) { return IS_ALPHA(c) || c == '_' || c == '-'; }
-@@ -331,6 +939,7 @@ static bool parseIdSelector(std::string_view& input, SimpleSelector& simpleSelec
+@@ -331,6 +934,7 @@ static bool parseIdSelector(std::string_view& input, SimpleSelector& simpleSelec
      AttributeSelector a;
      a.id = PropertyID::Id;
      a.matchType = AttributeSelector::MatchType::Equals;
@@ -4613,7 +4575,7 @@ index 183937c..2111c80 100644
      if(!readCSSIdentifier(input, a.value))
          return false;
      simpleSelector.attributeSelectors.push_back(std::move(a));
-@@ -391,9 +1000,15 @@ static bool parseAttributeSelector(std::string_view& input, SimpleSelector& simp
+@@ -391,9 +995,15 @@ static bool parseAttributeSelector(std::string_view& input, SimpleSelector& simp
      return true;
  }
  
@@ -4621,17 +4583,17 @@ index 183937c..2111c80 100644
 +static bool parseSelectors(std::string_view& input, SelectorList& selectors,
 +                           CssParseBudget* budget = nullptr,
 +                           bool countRules = true);
-+
-+static thread_local size_t selectorParseDepth = 0;
  
 -static bool parsePseudoClassSelector(std::string_view& input, SimpleSelector& simpleSelector)
++static thread_local size_t selectorParseDepth = 0;
++
 +static bool parsePseudoClassSelector(std::string_view& input,
 +                                     SimpleSelector& simpleSelector,
 +                                     CssParseBudget* budget)
  {
      std::string name;
      if(!readCSSIdentifier(input, name))
-@@ -403,6 +1018,8 @@ static bool parsePseudoClassSelector(std::string_view& input, SimpleSelector& si
+@@ -403,6 +1013,8 @@ static bool parsePseudoClassSelector(std::string_view& input, SimpleSelector& si
          selector.type = PseudoClassSelector::Type::Empty;
      else if(name.compare("root") == 0)
          selector.type = PseudoClassSelector::Type::Root;
@@ -4640,14 +4602,7 @@ index 183937c..2111c80 100644
      else if(name.compare("not") == 0)
          selector.type = PseudoClassSelector::Type::Not;
      else if(name.compare("first-child") == 0)
-@@ -418,11 +1035,18 @@ static bool parsePseudoClassSelector(std::string_view& input, SimpleSelector& si
-     else if(name.compare("only-of-type") == 0)
-         selector.type = PseudoClassSelector::Type::OnlyOfType;
-     if(selector.type == PseudoClassSelector::Type::Is || selector.type == PseudoClassSelector::Type::Not) {
-+        constexpr size_t MAX_SELECTOR_PARSE_DEPTH = 32;
-+        if(selectorParseDepth >= MAX_SELECTOR_PARSE_DEPTH)
-+            return false;
-         skipOptionalSpaces(input);
+@@ -422,7 +1034,11 @@ static bool parsePseudoClassSelector(std::string_view& input, SimpleSelector& si
          if(!skipDelimiter(input, '('))
              return false;
          skipOptionalSpaces(input);
@@ -4660,7 +4615,7 @@ index 183937c..2111c80 100644
              return false;
          skipOptionalSpaces(input);
          if(!skipDelimiter(input, ')')) {
-@@ -434,7 +1058,9 @@ static bool parsePseudoClassSelector(std::string_view& input, SimpleSelector& si
+@@ -434,7 +1050,9 @@ static bool parsePseudoClassSelector(std::string_view& input, SimpleSelector& si
      return true;
  }
  
@@ -4671,7 +4626,7 @@ index 183937c..2111c80 100644
  {
      auto consumed = parseTagSelector(input, simpleSelector);
      do {
-@@ -445,7 +1071,8 @@ static bool parseSimpleSelector(std::string_view& input, SimpleSelector& simpleS
+@@ -445,7 +1063,8 @@ static bool parseSimpleSelector(std::string_view& input, SimpleSelector& simpleS
          else if(skipDelimiter(input, '['))
              failed = !parseAttributeSelector(input, simpleSelector);
          else if(skipDelimiter(input, ':'))
@@ -4681,7 +4636,7 @@ index 183937c..2111c80 100644
          else
              break;
          consumed = true;
-@@ -470,31 +1097,39 @@ static bool parseCombinator(std::string_view& input, SimpleSelector::Combinator&
+@@ -470,31 +1089,39 @@ static bool parseCombinator(std::string_view& input, SimpleSelector::Combinator&
      return combinator != SimpleSelector::Combinator::None;
  }
  
@@ -4726,7 +4681,7 @@ index 183937c..2111c80 100644
  {
      if(!skipDelimiter(input, '{'))
          return false;
-@@ -503,6 +1138,8 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
+@@ -503,6 +1130,8 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
          std::string name;
          if(!readCSSIdentifier(input, name))
              return false;
@@ -4735,7 +4690,7 @@ index 183937c..2111c80 100644
          skipOptionalSpaces(input);
          if(!skipDelimiter(input, ':'))
              return false;
-@@ -513,37 +1150,137 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
+@@ -513,37 +1142,134 @@ static bool parseDeclarations(std::string_view& input, DeclarationList& declarat
          value.remove_suffix(input.length());
          stripTrailingSpaces(value);
  
@@ -4779,14 +4734,12 @@ index 183937c..2111c80 100644
          return false;
 -    return parseDeclarations(input, rule.declarations);
 +    return parseDeclarations(input, rule.declarations, document, budget);
-+}
-+
+ }
+ 
+-static RuleDataList parseStyleSheet(std::string_view input)
 +static bool hasUnsupportedSelector(
 +    const SelectorList& selectors, size_t depth = 0)
 +{
-+    constexpr size_t MAX_SELECTOR_NESTING = 32;
-+    if(depth > MAX_SELECTOR_NESTING)
-+        return true;
 +    for(const auto& selector : selectors) {
 +        for(const auto& simpleSelector : selector) {
 +            if(simpleSelector.id == ElementID::Unknown)
@@ -4835,9 +4788,8 @@ index 183937c..2111c80 100644
 +            specificity = candidate;
 +    }
 +    return specificity;
- }
- 
--static RuleDataList parseStyleSheet(std::string_view input)
++}
++
 +static CssSpecificity selectorSpecificity(const Selector& selector)
 +{
 +    CssSpecificity specificity;
@@ -4879,7 +4831,7 @@ index 183937c..2111c80 100644
              int depth = 0;
              while(!input.empty()) {
                  auto ch = input.front();
-@@ -562,27 +1299,138 @@ static RuleDataList parseStyleSheet(std::string_view input)
+@@ -562,27 +1288,134 @@ static RuleDataList parseStyleSheet(std::string_view input)
          }
  
          Rule rule;
@@ -5019,10 +4971,6 @@ index 183937c..2111c80 100644
 +                        declaration.specificity, declaration.id,
 +                        declaration.value);
 +                }
-+                if(document->resourceLimitExceeded()) {
-+                    complexityExceeded = true;
-+                    return;
-+                }
 +            }
 +        }
 +    });
@@ -5032,7 +4980,7 @@ index 183937c..2111c80 100644
  static SelectorList parseQuerySelectors(std::string_view input)
  {
      SelectorList selectors;
-@@ -595,25 +1443,60 @@ static SelectorList parseQuerySelectors(std::string_view input)
+@@ -595,25 +1428,60 @@ static SelectorList parseQuerySelectors(std::string_view input)
      return selectors;
  }
  
@@ -5100,7 +5048,7 @@ index 183937c..2111c80 100644
  }
  
  inline void removeStyleComments(std::string& value)
-@@ -626,7 +1509,83 @@ inline void removeStyleComments(std::string& value)
+@@ -626,7 +1494,83 @@ inline void removeStyleComments(std::string& value)
      }
  }
  
@@ -5185,7 +5133,7 @@ index 183937c..2111c80 100644
  {
      output.clear();
      while(!input.empty()) {
-@@ -644,34 +1603,8 @@ inline bool decodeText(std::string_view input, std::string& output)
+@@ -644,34 +1588,8 @@ inline bool decodeText(std::string_view input, std::string& output)
              unsigned int cp;
              if(!parseInteger(input, cp, base))
                  return false;
@@ -5222,7 +5170,7 @@ index 183937c..2111c80 100644
          } else {
              if(skipString(input, "amp")) {
                  output.push_back('&');
-@@ -683,6 +1616,20 @@ inline bool decodeText(std::string_view input, std::string& output)
+@@ -683,6 +1601,20 @@ inline bool decodeText(std::string_view input, std::string& output)
                  output.push_back('\"');
              } else if(skipString(input, "apos")) {
                  output.push_back('\'');
@@ -5243,7 +5191,7 @@ index 183937c..2111c80 100644
              } else {
                  return false;
              }
-@@ -699,35 +1646,166 @@ inline bool decodeText(std::string_view input, std::string& output)
+@@ -699,35 +1631,166 @@ inline bool decodeText(std::string_view input, std::string& output)
  constexpr bool IS_STARTNAMECHAR(int c) { return IS_ALPHA(c) ||  c == '_' || c == ':'; }
  constexpr bool IS_NAMECHAR(int c) { return IS_STARTNAMECHAR(c) || IS_NUM(c) || c == '-' || c == '.'; }
  
@@ -5423,7 +5371,7 @@ index 183937c..2111c80 100644
          }
  
          if(currentElement->id() == ElementID::Style) {
-@@ -738,9 +1816,12 @@ bool Document::parse(const char* data, size_t length)
+@@ -738,9 +1801,12 @@ bool Document::parse(const char* data, size_t length)
              node->setData(buffer);
              currentElement->addChild(std::move(node));
          }
@@ -5436,7 +5384,7 @@ index 183937c..2111c80 100644
      if(length >= 3) {
          auto buffer = (const uint8_t*)(data);
  
-@@ -755,12 +1836,16 @@ bool Document::parse(const char* data, size_t length)
+@@ -755,12 +1821,16 @@ bool Document::parse(const char* data, size_t length)
      while(!input.empty()) {
          if(currentElement) {
              auto text = input.substr(0, input.find('<'));
@@ -5454,7 +5402,7 @@ index 183937c..2111c80 100644
          }
  
          if(!skipDelimiter(input, '<'))
-@@ -771,6 +1856,18 @@ bool Document::parse(const char* data, size_t length)
+@@ -771,6 +1841,18 @@ bool Document::parse(const char* data, size_t length)
              auto n = input.find("?>");
              if(n == std::string_view::npos)
                  return false;
@@ -5473,7 +5421,7 @@ index 183937c..2111c80 100644
              input.remove_prefix(n + 2);
              continue;
          }
-@@ -780,21 +1877,36 @@ bool Document::parse(const char* data, size_t length)
+@@ -780,21 +1862,36 @@ bool Document::parse(const char* data, size_t length)
                  auto n = input.find("-->");
                  if(n == std::string_view::npos)
                      return false;
@@ -5513,7 +5461,7 @@ index 183937c..2111c80 100644
                  while(!input.empty() && input.front() != '>') {
                      if(input.front() == '[') {
                          int depth = 1;
-@@ -818,13 +1930,15 @@ bool Document::parse(const char* data, size_t length)
+@@ -818,13 +1915,15 @@ bool Document::parse(const char* data, size_t length)
          }
  
          if(skipDelimiter(input, '/')) {
@@ -5532,7 +5480,7 @@ index 183937c..2111c80 100644
                      return false;
                  currentElement = currentElement->parentElement();
              } else {
-@@ -839,11 +1953,20 @@ bool Document::parse(const char* data, size_t length)
+@@ -839,11 +1938,20 @@ bool Document::parse(const char* data, size_t length)
  
          if(!readIdentifier(input, buffer))
              return false;
@@ -5554,19 +5502,16 @@ index 183937c..2111c80 100644
              if(id == ElementID::Unknown) {
                  ignoring = 1;
              } else {
-@@ -863,7 +1986,19 @@ bool Document::parse(const char* data, size_t length)
+@@ -863,7 +1971,16 @@ bool Document::parse(const char* data, size_t length)
          }
  
          skipOptionalSpaces(input);
 +        std::unordered_set<std::string> attributeNames;
-+        constexpr size_t MAX_XML_ATTRIBUTES_PER_ELEMENT = 32'768;
 +        bool hasHref = false;
          while(readIdentifier(input, buffer)) {
 +            const std::string attributeName(buffer);
 +            if(localElementName(attributeName).empty())
 +                return false;
-+            if(attributeNames.size() >= MAX_XML_ATTRIBUTES_PER_ELEMENT)
-+                throw std::length_error("svg_attribute_capacity");
 +            if(!attributeNames.insert(attributeName).second)
 +                return false;
 +            if(hasNonAscii(attributeName))
@@ -5574,7 +5519,7 @@ index 183937c..2111c80 100644
              skipOptionalSpaces(input);
              if(!skipDelimiter(input, '='))
                  return false;
-@@ -875,17 +2010,49 @@ bool Document::parse(const char* data, size_t length)
+@@ -875,17 +1992,49 @@ bool Document::parse(const char* data, size_t length)
              auto n = input.find(quote);
              if(n == std::string_view::npos)
                  return false;
@@ -5630,7 +5575,7 @@ index 183937c..2111c80 100644
                      element->setAttribute(0x1, id, buffer);
                  }
              }
-@@ -895,12 +2062,15 @@ bool Document::parse(const char* data, size_t length)
+@@ -895,12 +2044,15 @@ bool Document::parse(const char* data, size_t length)
          }
  
          if(skipDelimiter(input, '>')) {
@@ -5646,7 +5591,7 @@ index 183937c..2111c80 100644
              if(!skipDelimiter(input, '>'))
                  return false;
              if(ignoring > 0)
-@@ -911,7 +2081,9 @@ bool Document::parse(const char* data, size_t length)
+@@ -911,7 +2063,9 @@ bool Document::parse(const char* data, size_t length)
          return false;
      }
  
@@ -5657,7 +5602,7 @@ index 183937c..2111c80 100644
          return false;
      applyStyleSheet(styleSheet);
      m_rootElement->build();
-@@ -920,14 +2092,45 @@ bool Document::parse(const char* data, size_t length)
+@@ -920,14 +2074,41 @@ bool Document::parse(const char* data, size_t length)
  
  void Document::applyStyleSheet(const std::string& content)
  {
@@ -5700,10 +5645,6 @@ index 183937c..2111c80 100644
 +                                declaration.specificity, declaration.id,
 +                                declaration.value);
 +                        }
-+                        if(resourceLimitExceeded()) {
-+                            complexityExceeded = true;
-+                            return;
-+                        }
                      }
                  }
              }
@@ -5732,10 +5673,10 @@ index 74a23a8..ab74699 100644
      Width,
      Word_Spacing,
 diff --git a/source/svgrenderstate.cpp b/source/svgrenderstate.cpp
-index 550d389..1dd7b7a 100644
+index 550d389..2efe6c2 100644
 --- a/source/svgrenderstate.cpp
 +++ b/source/svgrenderstate.cpp
-@@ -1,11 +1,877 @@
+@@ -1,11 +1,868 @@
  #include "svgrenderstate.h"
 +#include "svgparserutils.h"
 +
@@ -5748,10 +5689,6 @@ index 550d389..1dd7b7a 100644
  
 +namespace {
 +
-+constexpr size_t MAX_RECORDED_COMMANDS = 250'000;
-+constexpr size_t MAX_RECORDED_PATH_VERBS = 16'000'000;
-+constexpr size_t MAX_RECORDED_PATH_POINTS = 16'000'000;
-+constexpr size_t MAX_RECORDED_DASH_VALUES = 1'000'000;
 +
 +PaintTransform rawMultiply(const PaintTransform& left,
 +                           const PaintTransform& right)
@@ -6512,11 +6449,6 @@ index 550d389..1dd7b7a 100644
 +    return true;
 +}
 +
-+bool exceeds(size_t current, size_t additional, size_t limit)
-+{
-+    return additional > limit || current > limit - additional;
-+}
-+
 +} // namespace
 +
 +bool sourcePathMatchesRecordedFloat(
@@ -6613,7 +6545,7 @@ index 550d389..1dd7b7a 100644
  {
  }
  
-@@ -27,6 +893,44 @@ bool SVGRenderState::hasCycleReference(const SVGElement* element) const
+@@ -27,6 +884,44 @@ bool SVGRenderState::hasCycleReference(const SVGElement* element) const
  
  void SVGRenderState::beginGroup(const SVGBlendInfo& blendInfo)
  {
@@ -6658,7 +6590,7 @@ index 550d389..1dd7b7a 100644
      auto requiresCompositing = blendInfo.requiresCompositing(m_mode);
      if(requiresCompositing) {
          auto boundingBox = m_currentTransform.mapRect(m_element->paintBoundingBox());
-@@ -43,6 +947,29 @@ void SVGRenderState::beginGroup(const SVGBlendInfo& blendInfo)
+@@ -43,6 +938,29 @@ void SVGRenderState::beginGroup(const SVGBlendInfo& blendInfo)
  
  void SVGRenderState::endGroup(const SVGBlendInfo& blendInfo)
  {
@@ -6688,7 +6620,7 @@ index 550d389..1dd7b7a 100644
      if(m_canvas == m_parent->canvas()) {
          m_canvas->restore();
          return;
-@@ -58,4 +985,247 @@ void SVGRenderState::endGroup(const SVGBlendInfo& blendInfo)
+@@ -58,4 +976,228 @@ void SVGRenderState::endGroup(const SVGBlendInfo& blendInfo)
      m_parent->m_canvas->blendCanvas(*m_canvas, BlendMode::Src_Over, opacity);
  }
  
@@ -6728,8 +6660,7 @@ index 550d389..1dd7b7a 100644
 +    if(!m_recorder || m_recordingSuppressed)
 +        return;
 +    auto source = sourceElement ? sourceElement : m_element;
-+    if(m_recorder->complexity_exceeded
-+            || m_recorder->commands.size() >= MAX_RECORDED_COMMANDS) {
++    if(m_recorder->complexity_exceeded) {
 +        rejectRecorderComplexity(m_recorder, source);
 +        return;
 +    }
@@ -6753,8 +6684,7 @@ index 550d389..1dd7b7a 100644
 +    auto source = sourceElement ? sourceElement : m_element;
 +    if(!source)
 +        return;
-+    if(m_recorder->complexity_exceeded
-+            || m_recorder->commands.size() >= MAX_RECORDED_COMMANDS) {
++    if(m_recorder->complexity_exceeded) {
 +        rejectRecorderComplexity(m_recorder, source);
 +        return;
 +    }
@@ -6851,27 +6781,12 @@ index 550d389..1dd7b7a 100644
 +        command.stroke.line_cap = static_cast<PaintLineCap>(strokeData->lineCap());
 +        command.stroke.line_join = static_cast<PaintLineJoin>(strokeData->lineJoin());
 +        const auto& dashArray = strokeData->recordingDashArray();
-+        if(exceeds(
-+                m_recorder->recorded_dash_value_count,
-+                dashArray.size(), MAX_RECORDED_DASH_VALUES)) {
-+            rejectRecorderComplexity(m_recorder, source);
-+            return;
-+        }
 +        command.stroke.dash_array.assign(
 +            dashArray.begin(), dashArray.end());
 +        m_recorder->recorded_dash_value_count += dashArray.size();
 +    }
 +
 +    if(recordedExactSourcePath) {
-+        if(exceeds(
-+                m_recorder->recorded_path_verb_count,
-+                command.path_verbs.size(), MAX_RECORDED_PATH_VERBS)
-+                || exceeds(
-+                    m_recorder->recorded_path_point_count,
-+                    command.path_points.size(), MAX_RECORDED_PATH_POINTS)) {
-+            rejectRecorderComplexity(m_recorder, source);
-+            return;
-+        }
 +        m_recorder->recorded_path_verb_count += command.path_verbs.size();
 +        m_recorder->recorded_path_point_count += command.path_points.size();
 +        for(const auto verb : command.path_verbs) {
@@ -6890,15 +6805,13 @@ index 550d389..1dd7b7a 100644
 +        auto pathCommand = iterator.currentSegment(points);
 +        const size_t additionalPoints = pathCommand == PathCommand::CubicTo
 +            ? 3 : pathCommand == PathCommand::Close ? 0 : 1;
-+        if(exceeds(
-+                m_recorder->recorded_path_verb_count, 1,
-+                MAX_RECORDED_PATH_VERBS)) {
++        if(m_recorder->recorded_path_verb_count
++                == std::numeric_limits<size_t>::max()) {
 +            rejectRecorderComplexity(m_recorder, source);
 +            return;
 +        }
-+        if(exceeds(
-+                m_recorder->recorded_path_point_count,
-+                additionalPoints, MAX_RECORDED_PATH_POINTS)) {
++        if(additionalPoints > std::numeric_limits<size_t>::max()
++                - m_recorder->recorded_path_point_count) {
 +            rejectRecorderComplexity(m_recorder, source);
 +            return;
 +        }

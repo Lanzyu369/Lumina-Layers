@@ -1280,10 +1280,6 @@ def _parallelism_metadata(
             _stage_value("cpu_fair_share"),
             minimum=1,
         ),
-        "memory_ceiling": _optional_int(
-            _stage_value("memory_ceiling"),
-            minimum=1,
-        ),
         "limiting_reason": _optional_reason(
             _stage_value("limit"),
         ),

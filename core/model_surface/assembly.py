@@ -36,7 +36,6 @@ MODEL_SURFACE_LOGICAL_XY_BOUNDS_KEY = "model_surface_logical_xy_bounds_mm"
 # The manifold backend does not expose a reliable allocation estimate. Keep a
 # conservative fail-closed margin around base/cutter arrays until production
 # RSS evidence supports lowering it.
-_MODEL_SURFACE_BOOLEAN_WORKSPACE_MULTIPLIER = 32.0
 
 
 @dataclass(frozen=True)
@@ -339,19 +338,6 @@ def _cut_surface_polygon_pocket(
         raise ModelSurfaceError("model_surface_boolean_failed") from exc
     if not cutter_mesh.is_volume:
         raise ModelSurfaceError("model_surface_boolean_failed")
-    from core.vector_engine import _enforce_vector_scene_export_headroom
-
-    boolean_inputs = trimesh.Scene(
-        {
-            "base": base_mesh,
-            "cutter": cutter_mesh,
-        }
-    )
-    _enforce_vector_scene_export_headroom(
-        boolean_inputs,
-        stage="model_surface_boolean",
-        workspace_multiplier=_MODEL_SURFACE_BOOLEAN_WORKSPACE_MULTIPLIER,
-    )
     prepared_base_mesh = prepare_model_surface_mesh_for_boolean(
         base_mesh,
         _take_ownership=True,

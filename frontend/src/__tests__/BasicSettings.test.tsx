@@ -350,6 +350,30 @@ describe("BasicSettings", () => {
     ).toHaveValue("80");
   });
 
+  it("keeps large-format manual dimensions above the everyday slider range", () => {
+    useConverterStore.setState({
+      largeFormatEnabled: true,
+      target_width_mm: 120,
+      target_height_mm: 160,
+      tileWidthMm: 200,
+      tileHeightMm: 200,
+    } as never);
+
+    render(<BasicSettings />);
+
+    expect(screen.getByRole("slider", { name: "宽度" })).toHaveAttribute("max", "400");
+    expect(screen.getByRole("slider", { name: "高度" })).toHaveAttribute("max", "400");
+    expect(screen.getByRole("slider", { name: "切片宽度" })).toHaveAttribute("max", "500");
+    expect(screen.getByRole("slider", { name: "切片高度" })).toHaveAttribute("max", "500");
+
+    const widthInput = screen.getByRole("textbox", { name: "宽度 value" });
+    fireEvent.change(widthInput, { target: { value: "30000" } });
+    fireEvent.blur(widthInput);
+
+    expect(useConverterStore.getState().target_width_mm).toBe(30000);
+    expect(widthInput).toHaveValue("30000");
+  });
+
   it("backs off failed startup LUT loads instead of retrying immediately", async () => {
     vi.useFakeTimers();
     vi.mocked(converterApi.fetchLutList)
@@ -791,6 +815,21 @@ describe("BasicSettings", () => {
     expect(
       screen.getByText("原生矢量切片生成失败，已自动改用栅格切片。"),
     ).toBeInTheDocument();
+  });
+
+  it("localizes embedded wipe-tower warnings returned by large-format generation", () => {
+    useConverterStore.setState({
+      largeFormatWarnings: ["wipe_tower_manual_adjustment_required"],
+    });
+
+    render(<BasicSettings />);
+
+    expect(
+      screen.getByText(/文件已继续生成，但当前模型和擦料塔无法在所选热床上同时安全摆放/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("wipe_tower_manual_adjustment_required"),
+    ).not.toBeInTheDocument();
   });
 
   it("renders the source version selector and legacy LUT database panel in old mode", () => {

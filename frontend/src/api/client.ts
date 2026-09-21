@@ -205,12 +205,6 @@ const STRUCTURED_DETAIL_TRANSLATION_KEYS: ReadonlyMap<string, string> = new Map(
   ["source_image_unreadable", "api_error_source_image_unreadable"],
   ["source_image_too_large", "api_error_source_image_too_large"],
   ["source_svg_invalid", "api_error_source_svg_invalid"],
-  ["source_svg_too_complex", "api_error_source_svg_too_complex"],
-  [
-    "vector_mesh_memory_budget_exceeded",
-    "api_error_vector_mesh_memory_budget_exceeded",
-  ],
-  ["vector_host_memory_busy", "api_error_vector_host_memory_busy"],
   [
     "source_svg_no_renderable_geometry",
     "api_error_source_svg_no_renderable_geometry",
@@ -234,7 +228,7 @@ const STRUCTURED_DETAIL_TRANSLATION_KEYS: ReadonlyMap<string, string> = new Map(
 ]);
 
 const SERVER_SAFE_STRUCTURED_DETAIL_STATUSES: ReadonlyMap<string, number> =
-  new Map([["vector_host_memory_busy", 503]]);
+  new Map();
 
 function extractReadableDetail(data: unknown): string | null {
   if (typeof data === "string" && data.trim()) {

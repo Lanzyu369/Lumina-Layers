@@ -12,7 +12,6 @@ from fastapi.responses import FileResponse, StreamingResponse
 from PIL import Image, ImageOps
 from PIL import UnidentifiedImageError
 from api.structured_logging import get_logger
-from core.native_svg_limits import NATIVE_SVG_MAX_BYTES
 
 log = get_logger(__name__)
 
@@ -84,14 +83,6 @@ _UNSUPPORTED_IMAGE_UPLOAD_DETAIL = (
 _UPLOAD_IMAGE_UNREADABLE_DETAIL = (
     "无法解码图像文件: 请重新上传有效的 PNG、JPEG、HEIC 或 RAW 图片后再试。"
 )
-_SVG_UPLOAD_TOO_LARGE_DETAIL = {
-    "code": "native_svg_upload_too_large",
-    "message": (
-        "SVG upload exceeds the 256 MiB safety limit. "
-        "Simplify the document or split it into smaller SVG files."
-    ),
-    "max_bytes": NATIVE_SVG_MAX_BYTES,
-}
 _HEIC_UNREADABLE_DETAIL = (
     "HEIC/HEIF 文件解码失败: 请重新上传有效的 HEIC/HEIF 图片，"
     "或先转换为 PNG/JPEG 后再试。"
@@ -255,16 +246,7 @@ async def ensure_png_tempfile(file: UploadFile) -> str:
     if ext not in SUPPORTED_UPLOAD_IMAGE_EXTENSIONS:
         raise HTTPException(status_code=422, detail=_UNSUPPORTED_IMAGE_UPLOAD_DETAIL)
 
-    try:
-        raw_path = await upload_to_tempfile(
-            file,
-            max_bytes=(NATIVE_SVG_MAX_BYTES if ext == ".svg" else None),
-        )
-    except UploadTooLargeError as exc:
-        raise HTTPException(
-            status_code=413,
-            detail=_SVG_UPLOAD_TOO_LARGE_DETAIL,
-        ) from exc
+    raw_path = await upload_to_tempfile(file)
 
     if ext not in HEIC_EXTENSIONS and ext not in RAW_EXTENSIONS:
         return raw_path

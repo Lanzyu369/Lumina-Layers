@@ -85,7 +85,7 @@ from api.structured_logging import get_logger
 from config import PrinterConfig, ColorSystem, VectorConfig
 from core import geos_buffer_fast
 from core import native_svg_adapter
-from core.errors import CoreDependencyError, VectorMeshMemoryBudgetError
+from core.errors import CoreDependencyError
 from core.layered_coordinate_domain import (
     LAYERED_COORDINATE_DOMAIN_KEY,
     LayeredCoordinateDomain,
@@ -94,16 +94,7 @@ from core.task_parallelism import (
     resolve_task_parallelism_plan,
     task_parallelism_worker_scope,
 )
-from core.vector_diagnostics import (
-    SVG_INTERSECTING_COMPOUND_COMPLEXITY_DIAGNOSTIC,
-)
-from core.vector_mesh_memory import (
-    enforce_vector_mesh_memory_budget,
-    estimate_indexed_prism_memory,
-    estimate_vector_mesh_build_memory,
-    get_process_rss_bytes,
-    resolve_vector_mesh_memory_budget_bytes,
-)
+from core.vector_mesh_memory import get_process_rss_bytes
 from core.vector_layer_geometry import (
     VectorLayerGeometryPolicy,
     build_vector_layered_volume,
@@ -141,110 +132,6 @@ _ARC_SAMPLE_POSITIONS_10.setflags(write=False)
 _ARC_SAMPLE_POSITIONS_10_TUPLE = tuple(float(value) for value in _ARC_SAMPLE_POSITIONS_10)
 _VECTOR_LARGE_DISTANCE_WARN_LIMIT = 8
 _VECTOR_SPATIAL_GROUP_CHUNK_BYTES = 64 * 1024 * 1024
-
-
-def _geometry_cache_storage_bytes(geometry) -> int:
-    """Conservatively estimate one retained GEOS geometry in bytes."""
-
-    try:
-        coordinate_count = (
-            int(get_num_coordinates(geometry))
-            if get_num_coordinates is not None
-            else sum(
-                len(part.exterior.coords)
-                + sum(len(ring.coords) for ring in part.interiors)
-                for part in (
-                    geometry.geoms
-                    if getattr(geometry, "geom_type", "") == "MultiPolygon"
-                    else (geometry,)
-                )
-            )
-        )
-    except (AttributeError, TypeError, ValueError, OverflowError):
-        coordinate_count = 0
-    # XY doubles are only 16 bytes/coordinate, but GEOS node/ring ownership and
-    # Python wrappers add material overhead. Four times raw XY is conservative
-    # enough for cache admission without serializing WKB (which itself allocates).
-    return max(256, coordinate_count * 64)
-
-
-def _enforce_vector_mesh_runtime_headroom(
-    *,
-    stage: str,
-    estimated_additional_bytes: int,
-    shape_count: int = 0,
-    coordinate_count: int = 0,
-):
-    """Reject the next allocation when live worker RSS lacks headroom."""
-
-    current_rss_bytes = int(get_process_rss_bytes() or 0)
-    memory_budget_bytes = resolve_vector_mesh_memory_budget_bytes()
-    try:
-        return enforce_vector_mesh_memory_budget(
-            stage=stage,
-            estimated_additional_bytes=max(0, int(estimated_additional_bytes)),
-            memory_budget_bytes=memory_budget_bytes,
-            current_rss_bytes=current_rss_bytes,
-            shape_count=shape_count,
-            coordinate_count=coordinate_count,
-        )
-    except VectorMeshMemoryBudgetError as exc:
-        _log.warning(
-            "Vector mesh runtime memory guard rejected unsafe allocation",
-            extra={
-                "event": "vector_mesh_memory_runtime_rejected",
-                "error_type": type(exc).__name__,
-                "error_message": str(exc),
-                "stage": exc.stage,
-                "estimated_peak_bytes": exc.estimated_peak_bytes,
-                "memory_budget_bytes": exc.memory_budget_bytes,
-                "current_rss_bytes": exc.current_rss_bytes,
-                "shape_count": exc.shape_count,
-                "coordinate_count": exc.coordinate_count,
-            },
-        )
-        raise
-
-
-def _mesh_array_storage_bytes(mesh) -> int:
-    """Return the NumPy vertex/face bytes directly retained by one mesh."""
-
-    try:
-        return int(np.asarray(mesh.vertices).nbytes) + int(
-            np.asarray(mesh.faces).nbytes
-        )
-    except (AttributeError, TypeError, ValueError):
-        return 0
-
-
-def _enforce_vector_scene_export_headroom(
-    scene,
-    *,
-    stage: str,
-    workspace_multiplier: float,
-    minimum_workspace_bytes: int = 32 * 1024 * 1024,
-):
-    """Admit a scene export using its actual resident mesh-array size.
-
-    按当前 scene 的实际网格数组大小检查导出阶段内存余量。
-    """
-
-    geometries = tuple(getattr(scene, "geometry", {}).values())
-    scene_mesh_bytes = sum(
-        _mesh_array_storage_bytes(geometry) for geometry in geometries
-    )
-    coordinate_count = sum(
-        len(getattr(geometry, "vertices", ())) for geometry in geometries
-    )
-    return _enforce_vector_mesh_runtime_headroom(
-        stage=stage,
-        estimated_additional_bytes=max(
-            int(minimum_workspace_bytes),
-            int(math.ceil(scene_mesh_bytes * max(0.0, workspace_multiplier))),
-        ),
-        shape_count=len(geometries),
-        coordinate_count=coordinate_count,
-    )
 
 
 def _estimate_relief_backing_run_count(
@@ -927,12 +814,11 @@ VECTOR_HANDLED_ERRORS = (
     ArithmeticError,
     ShapelyError,
 )
-VECTOR_FATAL_ERRORS = (MemoryError, VectorMeshMemoryBudgetError)
+VECTOR_FATAL_ERRORS = (MemoryError,)
 
 _OCCLUSION_PARALLEL_MIN_SHAPES = 64
 _OCCLUSION_QUERY_CHUNKS_PER_WORKER = 8
 _OCCLUSION_WORK_UNITS_PER_WORKER = 512
-_OCCLUSION_ESTIMATED_WORKER_BYTES = 256 * 1024**2
 
 
 def _clip_occlusion_result_item(item, index, geom, occluders):
@@ -973,7 +859,7 @@ def _clip_occlusion_result_item(item, index, geom, occluders):
 
 
 def _occlusion_parallel_worker_count(shape_count: int) -> int:
-    """Resolve the shared CPU/memory budget for one occlusion pass."""
+    """Resolve the shared CPU worker count for one occlusion pass."""
 
     parallelism_plan = resolve_task_parallelism_plan(
         "vector",
@@ -983,7 +869,6 @@ def _occlusion_parallel_worker_count(shape_count: int) -> int:
         work_units=shape_count,
         min_parallel_work_units=_OCCLUSION_PARALLEL_MIN_SHAPES,
         work_units_per_worker=_OCCLUSION_WORK_UNITS_PER_WORKER,
-        estimated_worker_bytes=_OCCLUSION_ESTIMATED_WORKER_BYTES,
     )
     return max(1, int(parallelism_plan.workers))
 
@@ -5400,89 +5285,35 @@ class VectorProcessor:
                 2 if is_double_sided and not is_5color else 1
             )
 
-        memory_estimate = estimate_vector_mesh_build_memory(
-            matched_shapes,
-            num_layers=num_layers,
-            double_sided=is_double_sided,
-            spatial_group_chunk_bytes=_VECTOR_SPATIAL_GROUP_CHUNK_BYTES,
-            auxiliary_geometries=auxiliary_geometries,
-            auxiliary_run_count=auxiliary_run_count,
-        )
-        memory_budget_bytes = resolve_vector_mesh_memory_budget_bytes()
         rss_preflight = get_process_rss_bytes()
         current_rss_bytes = int(rss_preflight or 0)
+        shape_count = sum(
+            1
+            for item in (matched_shapes or ())
+            if isinstance(item, dict)
+            and item.get("geometry") is not None
+            and not getattr(item.get("geometry"), "is_empty", True)
+        )
+        coordinate_count = 0
+        if get_num_coordinates is not None:
+            for item in matched_shapes or ():
+                geometry = item.get("geometry") if isinstance(item, dict) else None
+                if geometry is None:
+                    continue
+                try:
+                    coordinate_count += int(get_num_coordinates(geometry))
+                except (TypeError, ValueError, OverflowError):
+                    continue
         self.last_vector_mesh_memory_profile = {
             "stage": "preflight",
-            "shape_count": memory_estimate.shape_count,
-            "coordinate_count": memory_estimate.coordinate_count,
-            "auxiliary_coordinate_count": (
-                memory_estimate.auxiliary_coordinate_count
-            ),
-            "run_count": memory_estimate.run_count,
-            "run_coordinate_references": (
-                memory_estimate.run_coordinate_references
-            ),
-            "estimated_final_mesh_bytes": (
-                memory_estimate.estimated_final_mesh_bytes
-            ),
-            "largest_prepared_group_coordinate_count": (
-                memory_estimate.largest_prepared_group_coordinate_count
-            ),
-            "estimated_preparation_bytes": (
-                memory_estimate.estimated_preparation_bytes
-            ),
+            "shape_count": int(shape_count),
+            "coordinate_count": int(coordinate_count),
             "current_rss_bytes": current_rss_bytes,
-            "memory_budget_bytes": memory_budget_bytes,
         }
-        try:
-            memory_report = enforce_vector_mesh_memory_budget(
-                stage="preflight",
-                estimated_additional_bytes=(
-                    memory_estimate.estimated_preparation_bytes
-                ),
-                memory_budget_bytes=memory_budget_bytes,
-                current_rss_bytes=current_rss_bytes,
-                shape_count=memory_estimate.shape_count,
-                coordinate_count=memory_estimate.coordinate_count,
-            )
-        except VectorMeshMemoryBudgetError as exc:
-            self.last_vector_mesh_memory_profile["is_allowed"] = False
-            _log.warning(
-                "Vector mesh memory admission rejected unsafe work",
-                extra={
-                    "event": "vector_mesh_memory_budget_rejected",
-                    "error_type": type(exc).__name__,
-                    "error_message": str(exc),
-                    "stage": exc.stage,
-                    "estimated_peak_bytes": exc.estimated_peak_bytes,
-                    "memory_budget_bytes": exc.memory_budget_bytes,
-                    "current_rss_bytes": exc.current_rss_bytes,
-                    "shape_count": exc.shape_count,
-                    "coordinate_count": exc.coordinate_count,
-                },
-            )
-            raise
-        self.last_vector_mesh_memory_profile.update(
-            {
-                "estimated_peak_bytes": memory_report.estimated_peak_bytes,
-                "is_allowed": True,
-            }
-        )
         stage_timings.update(
             {
-                "vector_mesh_shape_count": memory_estimate.shape_count,
-                "vector_mesh_coordinate_count": memory_estimate.coordinate_count,
-                "vector_mesh_auxiliary_coordinate_count": (
-                    memory_estimate.auxiliary_coordinate_count
-                ),
-                "vector_mesh_run_count": memory_estimate.run_count,
-                "vector_mesh_run_coordinate_references": (
-                    memory_estimate.run_coordinate_references
-                ),
-                "vector_mesh_estimated_peak_bytes": (
-                    memory_report.estimated_peak_bytes
-                ),
-                "vector_mesh_memory_budget_bytes": memory_budget_bytes,
+                "vector_mesh_shape_count": int(shape_count),
+                "vector_mesh_coordinate_count": int(coordinate_count),
                 "vector_mesh_rss_preflight_bytes": current_rss_bytes,
             }
         )
@@ -5763,29 +5594,6 @@ class VectorProcessor:
                 continue
 
             _log.debug("Merging %s parts for %s...", len(mesh_list), name)
-            slot_mesh_bytes = 0
-            for mesh in mesh_list:
-                if isinstance(mesh, tuple) and len(mesh) == 2:
-                    try:
-                        slot_mesh_bytes += int(np.asarray(mesh[0]).nbytes)
-                        slot_mesh_bytes += int(np.asarray(mesh[1]).nbytes)
-                    except (TypeError, ValueError):
-                        continue
-                else:
-                    slot_mesh_bytes += _mesh_array_storage_bytes(mesh)
-            _enforce_vector_mesh_runtime_headroom(
-                stage="scene_assembly",
-                estimated_additional_bytes=max(
-                    16 * 1024 * 1024,
-                    (len(mesh_list[0].faces) * 4 + 16 * 1024 * 1024)
-                    if len(mesh_list) == 1
-                    and "vector_layer_geometry" in getattr(mesh_list[0], "metadata", {})
-                    and mesh_list[0].vertices.flags.writeable
-                    and mesh_list[0].faces.flags.writeable
-                    else slot_mesh_bytes * 2,
-                ),
-                shape_count=len(mesh_list),
-            )
             if len(mesh_list) == 1:
                 combined = mesh_list[0]
             else:
@@ -5824,21 +5632,6 @@ class VectorProcessor:
             "vector_mesh_rss_after_extrude_top_bytes",
             "vector_mesh_rss_after_assemble_bytes",
         )
-        rss_sampled_max_bytes = max(
-            (int(stage_timings.get(key, 0)) for key in rss_stage_keys),
-            default=0,
-        )
-        self.last_vector_mesh_memory_profile["rss_sampled_max_bytes"] = (
-            rss_sampled_max_bytes
-        )
-        _log.debug(
-            "Vector mesh memory profile",
-            extra={
-                "event": "vector_mesh_memory_profile",
-                **self.last_vector_mesh_memory_profile,
-            },
-        )
-
         _log.debug(
             "Stage timings (s): parse=%.3f, clip=%.3f, match=%.3f, "
             "extrude_bottom=%.3f, backing=%.3f, extrude_top=%.3f, assemble=%.3f, total=%.3f",
@@ -7156,16 +6949,6 @@ class VectorProcessor:
         用统一规范空间组生成一个辅助网格叶子。
         """
 
-        geometry_bytes = _geometry_cache_storage_bytes(geometry)
-        _enforce_vector_mesh_runtime_headroom(
-            stage=f"{stage}_geometry",
-            estimated_additional_bytes=max(
-                16 * 1024 * 1024,
-                geometry_bytes * 4,
-            ),
-            shape_count=1,
-            coordinate_count=geometry_bytes // 64,
-        )
         mesh = build_vector_layered_volume(
             [
                 {
@@ -7314,20 +7097,6 @@ class VectorProcessor:
             source_geoms = tuple(
                 geom for geom in geoms if geom is not None and not geom.is_empty
             )
-            group_geometry_bytes = sum(
-                _geometry_cache_storage_bytes(geometry)
-                for geometry in source_geoms
-            )
-            _enforce_vector_mesh_runtime_headroom(
-                stage="run_group_geometry",
-                estimated_additional_bytes=max(
-                    16 * 1024 * 1024,
-                    group_geometry_bytes * 4,
-                ),
-                shape_count=len(source_geoms),
-                coordinate_count=group_geometry_bytes // 64,
-            )
-
             run_geometry = _union_run_group_geometries(source_geoms)
             if run_geometry is None or run_geometry.is_empty:
                 continue
@@ -7626,11 +7395,6 @@ class VectorProcessor:
                 and not _geometries_have_pairwise_intersections(polygon_items)
             ):
                 return _polygonal_union_for_disjoint_items(polygon_items)
-            if len(polygon_items) > int(VectorConfig.MAX_POLYGONS):
-                raise ValueError(
-                    SVG_INTERSECTING_COMPOUND_COMPLEXITY_DIAGNOSTIC
-                )
-
             try:
                 boundaries = [
                     item["poly"].boundary

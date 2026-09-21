@@ -116,45 +116,8 @@ def test_tiny_work_units_stay_serial_even_with_multiple_items(
     )
 
 
-def test_available_memory_caps_worker_count(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    gib = 1024**3
-    _set_cpu_count(monkeypatch, 16)
-    monkeypatch.setenv("LUMINA_RASTER_PARALLELISM", "8")
-    monkeypatch.setenv("LUMINA_MAX_WORKERS", "1")
-
-    resolved = resolve_task_parallelism(
-        "raster",
-        work_items=12,
-        estimated_worker_bytes=512 * 1024**2,
-        available_memory_bytes=2 * gib,
-        hard_max_workers=8,
-    )
-
-    assert resolved == 2
 
 
-def test_unknown_available_memory_fails_closed_to_serial(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _set_cpu_count(monkeypatch, 16)
-    monkeypatch.setenv("LUMINA_RASTER_PARALLELISM", "8")
-    monkeypatch.setenv("LUMINA_MAX_WORKERS", "1")
-    monkeypatch.setattr(
-        task_parallelism,
-        "_available_memory_bytes",
-        lambda: None,
-    )
-
-    resolved = resolve_task_parallelism(
-        "raster",
-        work_items=12,
-        estimated_worker_bytes=512 * 1024**2,
-        hard_max_workers=8,
-    )
-
-    assert resolved == 1
 
 
 def test_nested_parallel_worker_scope_forces_serial_and_restores_policy(
@@ -230,29 +193,6 @@ def test_non_positive_whitespace_and_auto_spellings_use_auto_policy(
     assert bool(observed_warnings) is warns
 
 
-def test_plan_divides_cpu_and_memory_by_live_outer_demand(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("LUMINA_RASTER_PARALLELISM", "8")
-
-    plan = task_parallelism.resolve_task_parallelism_plan(
-        "raster",
-        work_items=12,
-        hard_max_workers=8,
-        estimated_worker_bytes=512 * 1024**2,
-        available_memory_bytes=5 * 1024**3,
-        effective_cpu_capacity=8,
-        outer_demand=2,
-    )
-
-    assert plan.workers == 4
-    assert plan.requested_ceiling == 8
-    assert plan.effective_cpu_capacity == 8
-    assert plan.cpu_fair_share_ceiling == 4
-    assert plan.memory_ceiling == 4
-    assert plan.outer_demand == 2
-    assert plan.limiting_reason == "cpu_fair_share"
-    assert plan.demand_snapshot_fallback is False
 
 
 def test_work_unit_threshold_preserves_existing_parallel_tier(
@@ -378,29 +318,6 @@ def test_nested_plan_has_stable_serial_reason(
     assert plan.limiting_reason == "nested_worker"
 
 
-def test_unknown_memory_plan_is_serial_with_memory_reason(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("LUMINA_RASTER_PARALLELISM", "4")
-    monkeypatch.setattr(
-        task_parallelism,
-        "_available_memory_bytes",
-        lambda: None,
-    )
-
-    plan = task_parallelism.resolve_task_parallelism_plan(
-        "raster",
-        work_items=20,
-        hard_max_workers=4,
-        estimated_worker_bytes=256 * 1024**2,
-        effective_cpu_capacity=8,
-        outer_demand=1,
-    )
-
-    assert plan.workers == 1
-    assert plan.memory_ceiling == 1
-    assert plan.available_memory_bytes is None
-    assert plan.limiting_reason == "memory"
 
 
 @pytest.mark.parametrize(
@@ -448,8 +365,6 @@ def test_unbounded_stage_scales_to_thirty_two_workers(
         min_parallel_work_units=32,
         work_units_per_worker=16,
         hard_max_workers=None,
-        estimated_worker_bytes=256 * 1024**2,
-        available_memory_bytes=64 * 1024**3,
         effective_cpu_capacity=32,
         outer_demand=1,
     )
@@ -467,7 +382,6 @@ def test_omitted_stage_ceiling_preserves_legacy_eight_worker_default(
     plan = task_parallelism.resolve_task_parallelism_plan(
         "vector",
         work_items=32,
-        available_memory_bytes=64 * 1024**3,
         effective_cpu_capacity=32,
         outer_demand=1,
     )
@@ -516,17 +430,9 @@ def test_plan_keeps_windows_hybrid_topology_without_clamping_to_p_cores(
         ({"outer_demand": 2}, 16, "cpu_fair_share"),
         ({"work_items": 12}, 12, "work_items"),
         ({"work_units": 128}, 8, "work_units"),
-        (
-            {
-                "estimated_worker_bytes": 1024**3,
-                "available_memory_bytes": 8 * 1024**3,
-            },
-            7,
-            "memory",
-        ),
     ],
 )
-def test_unbounded_stage_uses_each_dynamic_resource_ceiling(
+def test_unbounded_stage_uses_cpu_and_work_ceilings(
     monkeypatch: pytest.MonkeyPatch,
     overrides: dict[str, int],
     expected_workers: int,
@@ -551,13 +457,3 @@ def test_unbounded_stage_uses_each_dynamic_resource_ceiling(
 
     assert plan.workers == expected_workers
     assert plan.limiting_reason == expected_reason
-
-
-def test_memory_headroom_is_dynamic_without_dropping_below_one_gib() -> None:
-    gib = 1024**3
-
-    assert task_parallelism.task_memory_headroom_bytes(2 * gib) == gib
-    assert (
-        task_parallelism.task_memory_headroom_bytes(64 * gib)
-        == (64 * gib) // 10
-    )

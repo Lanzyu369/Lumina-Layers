@@ -8,14 +8,12 @@ import numpy as np
 import pytest
 
 from core.material_candidate_cache import (
-    DEFAULT_CANDIDATE_BUILD_MEMORY_BUDGET_BYTES,
     LEGACY_PERSISTED_CANDIDATE_BUDGET,
     MAX_PERSISTED_CANDIDATE_BUDGET,
     MaterialCandidateCacheConfig,
     QUALITY_8M_CANDIDATE_BUDGET,
     RECOMMENDED_PERSISTED_CANDIDATE_BUDGET,
     build_material_candidate_runtime,
-    estimate_candidate_cache_memory,
 )
 from core.material_candidate_sampling import generate_candidate_recipes
 from core.material_color_solver import (
@@ -77,8 +75,6 @@ def test_default_candidate_config_keeps_8gib_build_guard() -> None:
     assert config.candidate_budget == RECOMMENDED_PERSISTED_CANDIDATE_BUDGET
     assert config.candidate_pool_multiplier == 2
     assert config.batch_recipe_count == 524_288
-    assert config.build_memory_budget_bytes == 8 * 1024 * 1024 * 1024
-    assert DEFAULT_CANDIDATE_BUILD_MEMORY_BUDGET_BYTES == 8 * 1024 * 1024 * 1024
     assert getattr(candidate_cache, "MAX_PERSISTED_CANDIDATE_BUDGET", 0) == (
         MAX_PERSISTED_CANDIDATE_BUDGET
     )
@@ -125,55 +121,12 @@ def test_persisted_candidate_multiplier_scales_down_with_large_budgets() -> None
     )
 
 
-def test_default_candidate_memory_estimate_fits_8gib_build_guard() -> None:
-    config = MaterialCandidateCacheConfig.default_persisted()
-
-    report = estimate_candidate_cache_memory(
-        candidate_budget=config.candidate_budget,
-        layer_count=10,
-        material_count=82,
-    )
-
-    assert report.candidate_budget == 33_554_432
-    assert report.estimated_peak_bytes < config.build_memory_budget_bytes
 
 
-def test_candidate_memory_estimate_uses_compact_recipe_rows() -> None:
-    report = estimate_candidate_cache_memory(
-        candidate_budget=1024,
-        layer_count=10,
-        material_count=82,
-    )
-
-    expected_recipe_bytes = 1024 * 10 * np.dtype(np.uint8).itemsize
-    assert report.final_runtime_bytes >= expected_recipe_bytes
-    assert report.final_runtime_bytes < 1024 * (10 * 2 + 3 + 12 + 1)
 
 
-def test_max_candidate_memory_estimate_fits_8gib_build_guard() -> None:
-    report = estimate_candidate_cache_memory(
-        candidate_budget=67_108_864,
-        layer_count=10,
-        material_count=82,
-    )
-
-    assert report.estimated_peak_bytes < 8 * 1024 * 1024 * 1024
 
 
-def test_candidate_runtime_build_rejects_over_budget_configuration() -> None:
-    config = MaterialCandidateCacheConfig(
-        candidate_budget=1024,
-        build_memory_budget_bytes=1,
-    )
-
-    with pytest.raises(ValueError, match="candidate runtime build exceeds memory budget"):
-        build_material_candidate_runtime(
-            materials=SMALL_PALETTE,
-            layer_count=5,
-            layer_height_mm=0.08,
-            substrate="white",
-            config=config,
-        )
 
 
 def test_sobol_candidate_generation_is_deterministic_and_bounded() -> None:
@@ -818,9 +771,6 @@ def test_candidate_runtime_save_load_roundtrip(tmp_path: Path) -> None:
         "red",
     ]
     assert loaded.metadata["candidate_pool_multiplier"] == 8
-    assert loaded.metadata["build_memory_budget_bytes"] == (
-        DEFAULT_CANDIDATE_BUILD_MEMORY_BUDGET_BYTES
-    )
     assert loaded.metadata["batch_recipe_count"] == 524_288
 
 

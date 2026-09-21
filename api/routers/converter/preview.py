@@ -76,11 +76,6 @@ from core.material_dynamic_solver import (
     DynamicMaterialCandidateError,
     DynamicMaterialSolverError,
 )
-from core.errors import VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError
-from core.vector_mesh_memory import (
-    estimate_material_archive_runtime_bytes,
-    estimate_vector_task_memory_reservation_bytes,
-)
 from core.vector_large_format import inspect_svg_large_format_support, normalize_large_format_source_basename
 from utils.lut_manager import LUTManager
 
@@ -1260,37 +1255,10 @@ async def convert_preview(
             svg_hole_compensation_enabled,
             svg_hole_max_area_mm2,
             svg_hole_max_width_mm,
-            **(
-                {
-                    "host_memory_reservation_bytes": (
-                        estimate_vector_task_memory_reservation_bytes(
-                            temp_path,
-                            resident_paths=(
-                                ()
-                                if material_source == "material_archive"
-                                else (lut_path,)
-                            ),
-                            implicit_resident_bytes=(
-                                estimate_material_archive_runtime_bytes(
-                                    len(_selected_mats or [])
-                                )
-                                if material_source == "material_archive"
-                                else 0
-                            ),
-                        )
-                    )
-                }
-                if modeling_mode == "vector"
-                else {}
-            ),
         )
         _t_worker = time.perf_counter() - _worker_t0
         worker_completed = True
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="Preview generation timed out")
     except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
-        _handle_core_error(e, "preview generation")
-    except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as e:
         _handle_core_error(e, "preview generation")
     except BrokenProcessPool as e:
         raise HTTPException(

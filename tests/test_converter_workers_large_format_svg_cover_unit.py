@@ -208,77 +208,43 @@ def test_worker_forwards_rasterized_cover_source_to_export(tmp_path) -> None:
             os.unlink(result["zip_path"])
 
 
+def test_worker_collects_embedded_wipe_tower_warnings_without_false_positive() -> None:
+    """Native large-format tiles expose embedded placement warnings once."""
+
+    warning_code = "wipe_tower_manual_adjustment_required"
+    captured: list[str] = []
+
+    def _fake_export(*, output_path: str, **_kwargs) -> None:
+        with open(output_path, "wb") as handle:
+            handle.write(b"3mf")
+
+    def _read_warning(path: str) -> list[str]:
+        captured.append(path)
+        return [warning_code] if len(captured) == 1 else []
+
+    with (
+        patch("core.pipeline.s03_color_replacement._normalize_color_replacements_input", return_value={}),
+        patch("core.vector_engine.VectorProcessor", _FakeVectorProcessor),
+        patch("core.vector_large_format.slice_vector_analysis_into_tiles", return_value=[_make_tile("R1C1"), _make_tile("R1C2")]),
+        patch("api.workers.converter_workers._rasterize_tile_for_cover", return_value=None),
+        patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata", side_effect=_fake_export),
+        patch("utils.bambu_3mf_writer.read_wipe_tower_placement_warnings", side_effect=_read_warning),
+    ):
+        result = worker_generate_large_format_svg_native("image.svg", "lut.npy", _params_2x1())
+
+    try:
+        assert result["warnings"] == [warning_code]
+        assert len(captured) == 2
+    finally:
+        if os.path.exists(result["zip_path"]):
+            os.unlink(result["zip_path"])
+
+
 # ---------------------------------------------------------------------------
 # Timeout path: tile is exported with placeholder cover, WARNING emitted
 # ---------------------------------------------------------------------------
 
 
-def test_worker_exports_tile_with_placeholder_on_rasterize_timeout(tmp_path, caplog) -> None:
-    """Cover-rasterize timeout no longer drops the printable tile.
-
-    New behavior: the tile is still written to the ZIP, but its
-    ``cover_source`` is forwarded as ``None`` (silent placeholder), and
-    ``tile_failed_cover`` is bumped as a quality indicator.
-    """
-
-    from PIL import Image
-
-    tiles = [_make_tile("R1C1"), _make_tile("R1C2")]
-    captured: list[dict] = []
-
-    def _rasterize(tile, *_args, **_kwargs):
-        if tile.label == "R1C1":
-            raise TimeoutError("synthetic timeout")
-        return Image.new("RGBA", (256, 256), (0, 255, 0, 255))
-
-    with (
-        _capture_worker_warnings(caplog),
-        patch("core.pipeline.s03_color_replacement._normalize_color_replacements_input", return_value={}),
-        patch("core.vector_engine.VectorProcessor", _FakeVectorProcessor),
-        patch("core.vector_large_format.slice_vector_analysis_into_tiles", return_value=tiles),
-        patch("api.workers.converter_workers._rasterize_tile_for_cover", side_effect=_rasterize),
-        patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata", side_effect=_fake_export(captured)),
-    ):
-        result = worker_generate_large_format_svg_native("image.svg", "lut.npy", _params_2x1())
-
-    try:
-        # New invariant: tile is still exported (placeholder cover); the
-        # failed-cover counter is now a *subset* of tile_count.
-        assert result["tile_count"] == 2
-        assert result["tile_skipped_empty"] == 0
-        assert result["tile_failed_cover"] == 1
-        assert (
-            result["tile_count"] + result["tile_skipped_empty"]
-            == result["grid_cols"] * result["grid_rows"]
-        )
-
-        with zipfile.ZipFile(result["zip_path"]) as archive:
-            names = sorted(archive.namelist())
-        assert names == ["tile_cover_R1C1.3mf", "tile_cover_R1C2.3mf"]
-
-        # Two writer calls — failed tile got cover_source=None, success
-        # tile got the PIL Image.
-        assert len(captured) == 2
-        cover_sources = [entry["cover_source"] for entry in captured]
-        assert cover_sources.count(None) == 1
-        non_none_sources = [src for src in cover_sources if src is not None]
-        assert len(non_none_sources) == 1
-
-        # Exactly one WARNING for the timed-out tile, with required fields.
-        warnings = [
-            rec for rec in caplog.records
-            if getattr(rec, "event", None) == "bambu_3mf_cover_thumbnail_failed"
-        ]
-        assert len(warnings) == 1
-        warn = warnings[0]
-        assert warn.levelno == logging.WARNING
-        assert warn.error_type == "tile_rasterize_timeout"
-        assert warn.fallback_action == "placeholder_written"
-        assert isinstance(warn.path, str) and warn.path
-        assert isinstance(warn.error_message, str) and warn.error_message
-    finally:
-        if os.path.exists(result["zip_path"]):
-            os.unlink(result["zip_path"])
 
 
 # ---------------------------------------------------------------------------
@@ -578,81 +544,6 @@ def test_worker_counter_invariant_across_mixed_states(tmp_path, caplog) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_run_rasterize_canvas_in_subprocess_terminates_hung_child() -> None:
-    """A subprocess that sleeps past the timeout must be terminated.
-
-    The original implementation used ``ThreadPoolExecutor`` whose
-    ``__exit__`` blocked on the stuck rasterize thread. The fix runs
-    ``rasterize_svg`` inside a ``multiprocessing.Process(spawn)`` and
-    tears it down with ``terminate()`` → grace join → ``kill()`` on
-    timeout, so a hung resvg can never hold up the worker.
-
-    We use a tiny 0.5s timeout so the test runs fast; the helper sleeps
-    for 120s, well past it. After the call returns we explicitly assert
-    the spawned process is no longer alive.
-    """
-
-    import api.workers.converter_workers as cw_module
-    from tests.support import rasterize_subprocess_helpers as helpers
-
-    alive_after_run = {"value": None}
-    original = cw_module._run_rasterize_canvas_in_subprocess
-
-    def _spy_runner(*args, **kwargs):
-        # Trampoline through the real implementation but capture the
-        # ``Process`` object so we can verify it is dead.
-        # 通过 multiprocessing.active_children 间接观察：跑完后该 helper
-        # 名下不应再有活动进程。
-        try:
-            return original(*args, **kwargs)
-        finally:
-            import multiprocessing
-            alive_after_run["value"] = [
-                p
-                for p in multiprocessing.active_children()
-                if p.is_alive()
-            ]
-
-    start = time.perf_counter()
-    with pytest.raises(TimeoutError):
-        cw_module._run_rasterize_canvas_in_subprocess(
-            svg_path="ignored.svg",
-            target_width_mm=100.0,
-            pixels_per_mm=1.0,
-            timeout_s=0.5,
-            _entry=helpers.hang_forever_entry,
-        )
-    elapsed = time.perf_counter() - start
-
-    # 0.5s timeout + 2s SIGTERM grace + small slack. If terminate/kill
-    # were no-ops, the test would block for ~120s.
-    assert elapsed < 8.0, (
-        f"hung subprocess took {elapsed:.1f}s to be reaped (expected <8s)"
-    )
-
-    # Any active children left behind should not be the hang_forever_entry
-    # process — the runner must have torn it down before returning.
-    # Use a brief settle window (worker handles can linger for a tick after
-    # ``join`` returns on macOS).
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline:
-        import multiprocessing
-        leftover = [
-            p
-            for p in multiprocessing.active_children()
-            if p.is_alive()
-        ]
-        if not leftover:
-            break
-        time.sleep(0.05)
-
-    import multiprocessing
-    leftover = [p for p in multiprocessing.active_children() if p.is_alive()]
-    assert leftover == [], f"hung subprocess(es) leaked: {leftover!r}"
-
-    # Suppress the unused spy warning; spy was used only to demonstrate
-    # the trampoline pattern in earlier iterations.
-    _ = _spy_runner
 
 
 def test_run_rasterize_canvas_in_subprocess_propagates_crash_as_runtime_error() -> None:
@@ -672,7 +563,6 @@ def test_run_rasterize_canvas_in_subprocess_propagates_crash_as_runtime_error() 
             svg_path="ignored.svg",
             target_width_mm=100.0,
             pixels_per_mm=1.0,
-            timeout_s=10.0,
             _entry=helpers.crash_immediately_entry,
         )
 
@@ -687,7 +577,6 @@ def test_run_rasterize_canvas_in_subprocess_returns_canvas_on_success() -> None:
         svg_path="ignored.svg",
         target_width_mm=100.0,
         pixels_per_mm=1.0,
-        timeout_s=10.0,
         _entry=helpers.write_solid_canvas_entry,
     )
     assert arr is not None
@@ -702,70 +591,6 @@ def test_run_rasterize_canvas_in_subprocess_returns_canvas_on_success() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_worker_hard_timeout_does_not_block_on_stuck_rasterize_subprocess(
-    tmp_path,
-) -> None:
-    """A stuck rasterize subprocess does not block the worker.
-
-    The worker now calls ``_rasterize_tile_for_cover`` directly; the
-    timeout & kill machinery lives inside
-    ``_run_rasterize_canvas_in_subprocess``. We monkey-patch the inner
-    canvas runner so it raises ``TimeoutError`` immediately (matching
-    the real terminate/kill outcome without spending wall-clock on a
-    real hang). The tile must still be exported with a placeholder
-    cover, ``tile_failed_cover`` bumped, and a single WARNING emitted.
-
-    Real-world hard-kill behaviour is verified separately by
-    ``test_run_rasterize_canvas_in_subprocess_terminates_hung_child``;
-    this test focuses on the worker's branching after timeout, not on
-    the kill mechanism itself.
-    """
-
-    tiles = [_make_tile("R1C1")]
-    captured: list[dict] = []
-
-    def _raise_timeout(*_args, **_kwargs):
-        raise TimeoutError("synthetic subprocess timeout")
-
-    start = time.perf_counter()
-    with (
-        patch("core.pipeline.s03_color_replacement._normalize_color_replacements_input", return_value={}),
-        patch("core.vector_engine.VectorProcessor", _FakeVectorProcessor),
-        patch("core.vector_large_format.slice_vector_analysis_into_tiles", return_value=tiles),
-        patch(
-            "api.workers.converter_workers._run_rasterize_canvas_in_subprocess",
-            side_effect=_raise_timeout,
-        ),
-        patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata", side_effect=_fake_export(captured)),
-    ):
-        result = worker_generate_large_format_svg_native("image.svg", "lut.npy", {
-            "tile_name_prefix": "tile_cover",
-            "total_width_mm": 60.0,
-            "total_height_mm": 60.0,
-            "tile_width_mm": 60.0,
-            "tile_height_mm": 60.0,
-            "spacer_thick": 1.2,
-            "structure_mode": "Single-sided",
-            "color_mode": "4-Color",
-            "replacement_regions": [],
-            "separate_backing": False,
-        })
-    elapsed = time.perf_counter() - start
-
-    try:
-        # The worker branch is pure dispatch; well under 1s.
-        assert elapsed < 5.0, (
-            f"worker took {elapsed:.1f}s to dispatch a TimeoutError "
-            f"(expected <5s)"
-        )
-        # Tile is still in the ZIP with placeholder cover.
-        assert result["tile_count"] == 1
-        assert result["tile_failed_cover"] == 1
-        assert len(captured) == 1
-        assert captured[0]["cover_source"] is None
-    finally:
-        if os.path.exists(result["zip_path"]):
-            os.unlink(result["zip_path"])
 
 
 # ---------------------------------------------------------------------------
@@ -833,13 +658,11 @@ def test_rasterize_tile_for_cover_uses_canvas_relative_coordinates() -> None:
 
     assert img_left is not None and img_right is not None
 
-    # Both tiles must request the full canvas via the same helper, with
-    # a positive timeout passed through.
+    # Both tiles must request the full canvas via the same helper.
     assert len(captured_calls) == 2
     for kw in captured_calls:
         assert kw["svg_path"] == "image.svg"
         assert kw["target_width_mm"] == 120.0
-        assert kw["timeout_s"] > 0
 
     arr_left = np.asarray(img_left.convert("RGB"), dtype=np.int32)
     arr_right = np.asarray(img_right.convert("RGB"), dtype=np.int32)
@@ -958,19 +781,16 @@ def test_get_or_rasterize_full_canvas_caches_across_calls(tmp_path) -> None:
             svg_path=str(svg_path),
             target_width_mm=120.0,
             pixels_per_mm=4.0,
-            timeout_s=10.0,
         )
         second = cw_module._get_or_rasterize_full_canvas(
             svg_path=str(svg_path),
             target_width_mm=120.0,
             pixels_per_mm=4.0,
-            timeout_s=10.0,
         )
         third = cw_module._get_or_rasterize_full_canvas(
             svg_path=str(svg_path),
             target_width_mm=120.0,
             pixels_per_mm=4.0,
-            timeout_s=10.0,
         )
 
     assert first is not None

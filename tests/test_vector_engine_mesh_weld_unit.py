@@ -23,7 +23,6 @@ from core.vector_engine import (
     VectorProcessor,
     _concatenate_meshes_fast,
 )
-from core.errors import VectorMeshMemoryBudgetError
 from utils.bambu_3mf_writer import BambuStudio3MFWriter
 
 
@@ -289,17 +288,6 @@ def test_run_length_keeps_point_touching_shells_independent() -> None:
     assert len(combined.split(only_watertight=False)) == 2
 
 
-def test_run_length_does_not_retry_memory_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        vector_engine,
-        "build_vector_layered_volume",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(MemoryError("budget")),
-    )
-
-    with pytest.raises(MemoryError, match="budget"):
-        _run_one_material([box(0.0, 0.0, 1.0, 1.0)])
 
 
 def test_materialization_keeps_body_when_subgrid_residue_collapses() -> None:
@@ -561,34 +549,3 @@ def test_auxiliary_islands_are_aggregated_per_material() -> None:
 
     _assert_closed(mesh, volume=8.0)
     assert len(mesh.split(only_watertight=False)) == 100
-
-
-def test_build_mesh_rejects_over_budget_before_meshing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("LUMINA_VECTOR_MESH_MEMORY_BUDGET_MB", "1")
-    processor = VectorProcessor.__new__(VectorProcessor)
-    processor.color_mode = "4-Color (RYBW)"
-    geometry = box(0.0, 0.0, 2.0, 2.0)
-    analysis = VectorAnalysis(
-        shape_data=[],
-        clipped_shapes=[],
-        matched_shapes=[{"geometry": geometry, "recipe": [0]}],
-        silhouette=geometry,
-        scale_factor=1.0,
-        bbox=(0.0, 0.0, 2.0, 2.0),
-        color_conf={},
-        slot_names=["White"],
-        num_channels=1,
-        num_layers=1,
-        preview_colors={0: [255, 255, 255, 255]},
-    )
-
-    with pytest.raises(VectorMeshMemoryBudgetError) as raised:
-        processor.build_mesh(
-            analysis=analysis,
-            thickness_mm=0.0,
-            structure_mode="Single-sided",
-        )
-
-    assert raised.value.stage == "preflight"

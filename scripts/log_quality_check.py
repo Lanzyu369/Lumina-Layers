@@ -421,14 +421,7 @@ def run_fast_mode(temp_log_path: Path, workflow: list[str]) -> dict[str, Any]:
         ) -> dict[str, Any]:
             """Mirror pool metadata kwargs without forwarding them to workers."""
 
-            unexpected = set(submission_options) - {
-                "timeout",
-                "host_memory_reservation_bytes",
-                # Pool-only admission argument: the material stage's parallel
-                # requirement, granted by the gate and never forwarded to a
-                # worker. 池侧准入参数：材质阶段并行需求，由闸门授予，不转发给 worker。
-                "host_memory_parallel_target_bytes",
-            }
+            unexpected = set(submission_options)
             if unexpected:
                 names = ", ".join(sorted(unexpected))
                 raise QualityCheckError(

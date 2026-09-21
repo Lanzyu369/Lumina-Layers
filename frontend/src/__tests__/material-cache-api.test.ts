@@ -66,7 +66,7 @@ describe("material solver runtime API client", () => {
     expect(fd.get("layer_height_mm")).toBe("0.04");
     expect(fd.get("substrate")).toBe("white");
     expect(fd.get("candidate_budget")).toBe("8388608");
-    expect(config).toMatchObject({ timeout: 3_600_000 });
+    expect(config).toMatchObject({ timeout: 0 });
   });
 
   it("posts details requests with candidate_budget and max_points", async () => {
@@ -87,6 +87,6 @@ describe("material solver runtime API client", () => {
     const fd = formData as FormData;
     expect(fd.get("candidate_budget")).toBe("4194304");
     expect(fd.get("max_points")).toBe("512");
-    expect(config).toMatchObject({ timeout: 3_600_000 });
+    expect(config).toMatchObject({ timeout: 0 });
   });
 });

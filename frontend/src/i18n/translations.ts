@@ -149,18 +149,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "无法解析 SVG 文件。请在设计软件中重新导出有效的 SVG 后再上传。",
     en: "The SVG could not be parsed. Re-export a valid SVG from your design application and upload it again.",
   },
-  api_error_source_svg_too_complex: {
-    zh: "SVG 包含过多相交的复合子路径，无法安全处理。请简化或展平图稿后重新上传。",
-    en: "The SVG contains too many intersecting compound subpaths to process safely. Simplify or flatten the artwork, then upload it again.",
-  },
-  api_error_vector_mesh_memory_budget_exceeded: {
-    zh: "当前可用于本次生成的内存不足，系统已在大额分配前安全停止。请关闭占用内存的程序后重试；如果仍然不足，再降低输出尺寸。",
-    en: "There is not enough memory available for this generation. It stopped safely before the large allocation. Close memory-intensive applications and retry; reduce the output size only if the limit is reached again.",
-  },
-  api_error_vector_host_memory_busy: {
-    zh: "当前可用内存不足以启动这次矢量任务。请等待其他任务完成或关闭占用内存的程序后重试；无需修改这份 SVG。",
-    en: "There is not enough free memory to start this Vector task. Wait for other jobs or close memory-intensive applications, then retry; you do not need to change this SVG.",
-  },
   api_error_source_svg_no_renderable_geometry: {
     zh: "SVG 中没有矢量模式可用的可见填充几何。请显示图稿，将描边和文字转换为填充路径，或切换到“高保真”模式。",
     en: "The SVG has no visible filled geometry supported by Vector mode. Make the artwork visible, convert strokes and text to filled paths, or switch to High-Fidelity mode.",
@@ -4980,10 +4968,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "穷举 {combinations} 种组合并落盘，大约需要 {seconds} 秒。",
     en: "Enumerating {combinations} combinations and writing to disk — about {seconds} seconds.",
   },
-  basic_material_cache_budget_warning: {
-    zh: "当前组合约 {combinations} 种配方，grid={grid} 的缓存构建可能超过穷举或内存预算。请减少耗材/层数；若是高密度档位，也可降低 grid。",
-    en: "This combination has about {combinations} recipes; building grid={grid} may exceed the enumeration or memory budget. Reduce materials/layers; for high-density builds, lower grid.",
-  },
   basic_material_cache_rebuild_button: {
     zh: "重新构建",
     en: "Rebuild",
@@ -5441,10 +5425,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   large_format_warning_native_failure: {
     zh: "原生矢量切片生成失败，已自动改用栅格切片。",
     en: "Native vector tiling failed, so raster tiling was used automatically.",
-  },
-  large_format_warning_density_reduced: {
-    zh: "为避免超过像素预算，栅格切片清晰度已自动降低。",
-    en: "Raster tiling density was reduced automatically to stay within the pixel budget.",
   },
   wipe_tower_manual_adjustment_title: {
     zh: "打印前必须手动调整擦料塔",
@@ -6648,10 +6628,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   "batch.itemError.conversionFailed": {
     zh: "这个文件无法转换。请重新上传该文件，或查看服务端日志了解详情。",
     en: "This file could not be converted. Re-upload it or check the server log for details.",
-  },
-  "batch.itemError.timeout": {
-    zh: "这个文件转换超时。请减少模型复杂度后重试，或单独转换该文件。",
-    en: "This file took too long to convert. Reduce the model complexity and try again, or convert this file on its own.",
   },
   // Merged batch 3MF download + plate-overflow warning (batch-mode-merged-3mf).
   // 批量合并 3MF 下载与超出热床范围的警告文案。

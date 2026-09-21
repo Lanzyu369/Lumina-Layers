@@ -524,118 +524,12 @@ def test_memory_probe_without_any_source_is_explicitly_unavailable(
     assert capacity.source == "unavailable"
 
 
-def test_task_memory_probe_uses_the_container_remaining(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The inner-worker memory ceiling must follow the container, not host RAM."""
-
-    from core import task_parallelism
-
-    host_only = 24 * 1024**3
-    container_remaining = 1536 * 1024**2
-    observed: dict = {}
-
-    class _Capacity:
-        available_bytes = container_remaining
-
-    monkeypatch.setattr(
-        task_parallelism, "get_effective_memory_capacity", lambda: _Capacity()
-    )
-    observed["probe"] = task_parallelism._available_memory_bytes()
-    assert observed["probe"] == container_remaining
-    assert host_only != observed["probe"]
-
-    plan = task_parallelism.resolve_task_parallelism_plan(
-        "vector",
-        work_items=8,
-        hard_max_workers=None,
-        estimated_worker_bytes=512 * 1024**2,
-        available_memory_bytes=task_parallelism._available_memory_bytes(),
-        effective_cpu_capacity=16,
-        outer_demand=1,
-    )
-    # 1.5 GiB minus the one-GiB headroom leaves room for exactly one 512 MiB
-    # worker - not the sixteen the host figure would have allowed.
-    assert plan.available_memory_bytes == container_remaining
-    assert plan.memory_ceiling == 1
-    assert plan.workers == 1
-    assert plan.limiting_reason == "memory"
 
 
-def test_mesh_budget_is_capped_by_the_container_limit(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from core import vector_mesh_memory
-
-    monkeypatch.delenv("LUMINA_VECTOR_MESH_MEMORY_BUDGET_MB", raising=False)
-    monkeypatch.setattr(
-        vector_mesh_memory, "get_effective_memory_limit_bytes", lambda: None
-    )
-    monkeypatch.setattr(
-        vector_mesh_memory, "current_task_host_memory_budget_bytes", lambda: None
-    )
-    assert (
-        vector_mesh_memory.resolve_vector_mesh_memory_budget_bytes()
-        == vector_mesh_memory.DEFAULT_VECTOR_MESH_MEMORY_BUDGET_BYTES
-    )
-
-    monkeypatch.setattr(
-        vector_mesh_memory, "get_effective_memory_limit_bytes", lambda: 2 * 1024**3
-    )
-    assert (
-        vector_mesh_memory.resolve_vector_mesh_memory_budget_bytes()
-        == 2 * 1024**3
-    )
-
-    # An explicit environment override stays an upper bound, never a raise.
-    monkeypatch.setenv("LUMINA_VECTOR_MESH_MEMORY_BUDGET_MB", "512")
-    assert (
-        vector_mesh_memory.resolve_vector_mesh_memory_budget_bytes()
-        == 512 * 1024**2
-    )
 
 
-def test_parent_reservation_still_bounds_the_mesh_budget(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The existing parent-task reservation must not be widened or ignored."""
-
-    from core import vector_mesh_memory
-
-    monkeypatch.delenv("LUMINA_VECTOR_MESH_MEMORY_BUDGET_MB", raising=False)
-    monkeypatch.setattr(
-        vector_mesh_memory, "get_effective_memory_limit_bytes", lambda: 2 * 1024**3
-    )
-    monkeypatch.setattr(
-        vector_mesh_memory, "current_task_host_memory_budget_bytes", lambda: 256 * 1024**2
-    )
-    assert (
-        vector_mesh_memory.resolve_vector_mesh_memory_budget_bytes()
-        == 256 * 1024**2
-    )
 
 
-def test_spill_limit_follows_the_container_remaining(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from core import vector_mesh_spill
-
-    container_remaining = 900 * 1024**2
-    monkeypatch.setattr(
-        vector_mesh_spill, "get_process_rss_bytes", lambda: 0
-    )
-    monkeypatch.setattr(
-        vector_mesh_spill,
-        "resolve_vector_mesh_memory_budget_bytes",
-        lambda: 8 * 1024**3,
-    )
-    monkeypatch.setattr(
-        vector_mesh_spill,
-        "get_effective_memory_capacity",
-        lambda: system_capacity_capacity(container_remaining),
-    )
-    # 900 MiB / 3 is far below the 8 GiB budget the host would have allowed.
-    assert vector_mesh_spill._retained_memory_limit() == container_remaining // 3
 
 
 def system_capacity_capacity(available_bytes: int | None):

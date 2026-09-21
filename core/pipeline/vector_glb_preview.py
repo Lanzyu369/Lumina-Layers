@@ -31,7 +31,6 @@ from trimesh.visual.material import PBRMaterial
 
 from api.structured_logging import get_logger
 from config import PrinterConfig
-from core.errors import VectorMeshMemoryBudgetError
 from core.vector_engine import (
     _load_vector_parse_clip_cache_artifact_by_provenance,
     _rasterize_geometry_roi_mask,
@@ -2047,7 +2046,7 @@ def _mesh_from_extrusion_v2(
 
     try:
         rasterize, from_origin = _get_vector_v2_rasterizer_modules()
-    except (MemoryError, VectorMeshMemoryBudgetError):
+    except MemoryError:
         raise
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"V2 vector GLB rasterizer unavailable: {exc}") from exc
@@ -2372,18 +2371,6 @@ def export_vector_glb_preview(
 ) -> str:
     """Dispatch SVG GLB preview export with whole-export V1 fallback."""
 
-    from core.vector_engine import _enforce_vector_scene_export_headroom
-
-    _enforce_vector_scene_export_headroom(
-        scene,
-        stage="vector_glb_export",
-        # V2 reuses scene arrays and writes quantized chunks. The former 6x
-        # allowance described the copy-heavy V1 exporter and falsely rejects
-        # scenes already proven below the task budget. V1 keeps its own stricter
-        # admission check if runtime fallback is actually needed.
-        workspace_multiplier=2.0,
-        minimum_workspace_bytes=16 * 1024 * 1024,
-    )
     kernel = resolve_vector_glb_kernel_choice()
     fallback_parts = build_vector_preview_parts_from_scene(
         scene=scene,
@@ -2408,7 +2395,7 @@ def export_vector_glb_preview(
             fallback_parts,
             output_path=output_path,
         )
-    except (MemoryError, VectorMeshMemoryBudgetError):
+    except MemoryError:
         raise
     except Exception as exc:
         log.warning(
@@ -2426,14 +2413,6 @@ def export_vector_glb_preview(
         del failure_traceback
 
     # Leave the exception handler before retrying so Python releases its
-    # traceback and any completed V2 chunks/GLB buffers. A second live-RSS
-    # admission check prevents the compatibility V1 path from overlapping
-    # unsafe allocator residue from a late V2 failure.
+    # traceback and any completed V2 chunks/GLB buffers.
     gc.collect()
-    _enforce_vector_scene_export_headroom(
-        scene,
-        stage="vector_glb_v1_fallback",
-        workspace_multiplier=5.0,
-        minimum_workspace_bytes=16 * 1024 * 1024,
-    )
     return export_vector_glb_preview_v1(fallback_parts, output_path=output_path)

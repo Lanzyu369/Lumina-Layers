@@ -285,47 +285,6 @@ describe("apiClient", () => {
       expected:
         "SVG 中没有矢量模式可用的可见填充几何。请显示图稿，将描边和文字转换为填充路径，或切换到“高保真”模式。",
     },
-    {
-      code: "source_svg_too_complex",
-      status: 422,
-      language: "en" as const,
-      expected:
-        "The SVG contains too many intersecting compound subpaths to process safely. Simplify or flatten the artwork, then upload it again.",
-    },
-    {
-      code: "source_svg_too_complex",
-      status: 422,
-      language: "zh" as const,
-      expected: "SVG 包含过多相交的复合子路径，无法安全处理。请简化或展平图稿后重新上传。",
-    },
-    {
-      code: "vector_mesh_memory_budget_exceeded",
-      status: 422,
-      language: "en" as const,
-      expected:
-        "There is not enough memory available for this generation. It stopped safely before the large allocation. Close memory-intensive applications and retry; reduce the output size only if the limit is reached again.",
-    },
-    {
-      code: "vector_mesh_memory_budget_exceeded",
-      status: 422,
-      language: "zh" as const,
-      expected:
-        "当前可用于本次生成的内存不足，系统已在大额分配前安全停止。请关闭占用内存的程序后重试；如果仍然不足，再降低输出尺寸。",
-    },
-    {
-      code: "vector_host_memory_busy",
-      status: 503,
-      language: "en" as const,
-      expected:
-        "There is not enough free memory to start this Vector task. Wait for other jobs or close memory-intensive applications, then retry; you do not need to change this SVG.",
-    },
-    {
-      code: "vector_host_memory_busy",
-      status: 503,
-      language: "zh" as const,
-      expected:
-        "当前可用内存不足以启动这次矢量任务。请等待其他任务完成或关闭占用内存的程序后重试；无需修改这份 SVG。",
-    },
   ])(
     "translates converter source error $code in $language",
     async ({ code, status, language, expected }) => {

@@ -126,9 +126,6 @@ def test_material_parallelism_plan_is_recorded_as_bounded_scalars() -> None:
         work_item_ceiling=40,
         work_unit_ceiling=4,
         stage_ceiling=4,
-        memory_ceiling=3,
-        available_memory_bytes=8 * 1024**3,
-        estimated_worker_bytes=256 * 1024**2,
         limiting_reason="cpu_fair_share",
         demand_snapshot_fallback=False,
         cpu_topology="heterogeneous",
@@ -156,7 +153,6 @@ def test_material_parallelism_plan_is_recorded_as_bounded_scalars() -> None:
         "material_parallelism_performance_cpu": 4.0,
         "material_parallelism_outer_demand": 2.0,
         "material_parallelism_cpu_fair_share": 2.0,
-        "material_parallelism_memory_ceiling": 3.0,
         "material_parallelism_demand_fallback": False,
     }
 

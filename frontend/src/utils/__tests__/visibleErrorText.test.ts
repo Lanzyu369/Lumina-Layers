@@ -20,7 +20,6 @@ describe("isUnsafeVisibleErrorText", () => {
     "LUT not found",
     "Unsupported format",
     "Selected material is missing",
-    "Estimated preview cache arrays exceed memory budget.",
     "value must be <= 500",
     "/conversion mode is not supported",
     "/materialize is unavailable",

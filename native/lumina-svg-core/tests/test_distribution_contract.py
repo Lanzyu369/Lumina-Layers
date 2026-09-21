@@ -164,150 +164,48 @@ def test_runtime_package_installs_notices_for_frozen_distributions() -> None:
     assert cmake.count("COMPONENT lumina_svg_core") >= 3
 
 
-def test_clipper_work_limits_cover_each_operation_and_complete_document() -> None:
-    budget = (PACKAGE_ROOT / "src" / "complexity_budget.h").read_text(
-        encoding="utf-8"
-    )
-    safety = (PACKAGE_ROOT / "src" / "clipper_safety.h").read_text(
-        encoding="utf-8"
-    )
-
-    assert "requireClipperIntersectionWorkCapacity" in budget
-    assert "consumeClipperIntersectionWork" in budget
-    assert "consumeClipperIntersectionCandidates" in budget
-    assert "consumeIntersectionWork" in safety
-    assert "MAX_BOOLEAN_INPUT_POINTS_PER_DOCUMENT" in budget
-    assert "MAX_CLIPPER_INTERSECTION_CANDIDATES_PER_DOCUMENT" in budget
-    assert "MAX_CLIPPER_INTERSECTION_COMPARISONS_PER_DOCUMENT" in budget
-    assert "MAX_CLIPPER_OUTPUT_POINTS_PER_DOCUMENT" in budget
-    assert "MAX_CLIPPER_OUTPUT_RINGS_PER_DOCUMENT" in budget
-    assert (
-        "MAX_CLIPPER_ENGINE_INTERSECTION_NODE_ALLOCATIONS_PER_DOCUMENT"
-        in budget
-    )
-    assert (
-        "MAX_CLIPPER_ENGINE_PROCESSED_INTERSECTION_EVENTS_PER_DOCUMENT"
-        in budget
-    )
-    assert "m_booleanInputPoints" in budget
-    assert "m_clipperIntersectionComparisons" in budget
-    assert "consumeClipperEngineWork" in budget
-    assert "requireClipperOutputCapacity" in budget
-    assert "preflightClipperOutput" in safety
-    assert "requireClipperOutputCapacity(" in safety
-
-    stroke_expander = (
-        PACKAGE_ROOT / "src" / "stroke_expander.cpp"
-    ).read_text(encoding="utf-8")
-    assert "requireClipperOutputCapacity(" in stroke_expander
 
 
-def test_normalized_pair_boolean_relies_on_bounded_clipper_not_shadow_scan() -> None:
-    geometry_kernel = (
-        PACKAGE_ROOT / "src" / "geometry_kernel.cpp"
-    ).read_text(encoding="utf-8")
-    normalized_pair = geometry_kernel.split(
-        "void preflightNormalizedBoolean(ComplexityBudget& complexityBudget,\n"
-        "                                const Paths64& first,\n"
-        "                                const Paths64& second)",
-        1,
-    )[1].split("\n}\n\nclass PackedBoundsIndex", 1)[0]
-    assert "requireBoundedClipperIntersections" not in normalized_pair
-    assert "preflightClipperOutput(" in normalized_pair
-    assert "CHEAP_CROSS_PRODUCT_LIMIT" not in normalized_pair
 
 
-def test_pinned_clipper_patch_caps_internal_output_allocations() -> None:
-    patch = (
-        PACKAGE_ROOT / "patches" / "clipper2-svg-miter-fallback.patch"
-    ).read_text(encoding="utf-8")
-
-    assert "ClipperExecutionLimitError" in patch
-    assert "MAX_OUTPUT_POINT_ALLOCATIONS" in patch
-    assert "MAX_OUTPUT_RECORD_ALLOCATIONS" in patch
-    assert "MAX_INTERSECTION_NODE_ALLOCATIONS" in patch
-    assert "MAX_PROCESSED_INTERSECTION_EVENTS" in patch
-    assert "NewOutPt" in patch
-    assert "RequireIntersectionNodeCapacity" in patch
-    assert "RequireProcessedIntersectionCapacity" in patch
-    assert "OutputPointAllocationCount" in patch
-    assert "OutputRecordAllocationCount" in patch
-    assert "IntersectionNodeAllocationCount" in patch
-    assert "ProcessedIntersectionEventCount" in patch
 
 
-def test_parallel_replay_reserves_peak_geometry_resources_before_allocation(
-) -> None:
-    patch = (
-        PACKAGE_ROOT / "patches" / "clipper2-svg-miter-fallback.patch"
-    ).read_text(encoding="utf-8")
-    budget = (PACKAGE_ROOT / "src" / "complexity_budget.h").read_text(
-        encoding="utf-8"
-    )
-    safety = (PACKAGE_ROOT / "src" / "clipper_safety.h").read_text(
-        encoding="utf-8"
-    )
-    kernel = (PACKAGE_ROOT / "src" / "geometry_kernel.cpp").read_text(
-        encoding="utf-8"
-    )
-    stroke = (PACKAGE_ROOT / "src" / "stroke_expander.cpp").read_text(
-        encoding="utf-8"
-    )
-
-    assert "class ClipperExecutionGate" in patch
-    assert patch.index(
-        "RequireExecutionGateCapacity(ClipperExecutionCounter::OutputPoints"
-    ) < patch.index("++output_point_allocations_")
-    assert "ReleaseExecutionGateReservations();" in patch
-    assert "c.SetExecutionGate(execution_gate_);" in patch
-    assert "reserveBooleanInputPoints" in budget
-    assert "reserveTransientPoints" in budget
-    assert "reserveClipperIndexSegments" in budget
-    assert "reserveClipperIndexSegments(count)" in safety
-    assert "clipper.SetExecutionGate(" in kernel
-    assert "offset.SetExecutionGate(" in stroke
-    assert "reserveTransientPoints(outputPointUpperBound)" in stroke
-    assert "InflatePaths(" not in stroke
-    discard = kernel.split(
-        "void discardPreparedNormalizations(", 1
-    )[1].split("\n}\n", 1)[0]
-    assert "swap(batch.commands)" in discard
-    assert "batch.clipper_gate.reset()" in discard
-    assert kernel.count("catch(const std::bad_alloc&)") >= 3
 
 
-def test_parallel_replay_failure_restores_serial_budget_and_trace() -> None:
-    kernel = (PACKAGE_ROOT / "src" / "geometry_kernel.cpp").read_text(
-        encoding="utf-8"
-    )
 
-    assert "class ParallelReplayBudgetScope" in kernel
+
+
+
+def test_clipper_patch_keeps_miter_fix_without_resource_gate() -> None:
+    patch = (PACKAGE_ROOT / "patches" / "clipper2-svg-miter-fallback.patch").read_text(encoding="utf-8")
+    assert "DoBevel(path, j, k)" in patch
+    for retired in (
+        "ClipperExecutionGate",
+        "MAX_OUTPUT_POINT_ALLOCATIONS",
+        "MAX_OUTPUT_RECORD_ALLOCATIONS",
+        "MAX_INTERSECTION_NODE_ALLOCATIONS",
+        "MAX_PROCESSED_INTERSECTION_EVENTS",
+    ):
+        assert retired not in patch
+
+
+def test_normalized_boolean_has_no_predictive_clipper_preflight() -> None:
+    geometry_kernel = (PACKAGE_ROOT / "src" / "geometry_kernel.cpp").read_text(encoding="utf-8")
+    safety = (PACKAGE_ROOT / "src" / "clipper_safety.h").read_text(encoding="utf-8")
+    assert "preflightClipperOutput" not in geometry_kernel
+    assert "requireBoundedClipperIntersections" not in geometry_kernel
+    assert "ClipperExecutionGate" not in geometry_kernel
+    assert "requireBounded" not in safety
+    assert "checkedSizeSum" in safety
+
+
+def test_parallel_replay_restores_geometry_trace_without_resource_budget_state() -> None:
+    kernel = (PACKAGE_ROOT / "src" / "geometry_kernel.cpp").read_text(encoding="utf-8")
     assert "const ComplexityBudget budgetBeforeReplay" in kernel
     assert "const size_t topologySizeBeforeReplay" in kernel
     assert "*domain.complexity_budget = budgetBeforeReplay;" in kernel
-    assert "boundaries.resize(\n                topologySizeBeforeReplay" in kernel
     assert "replayPaintCommandsOnce(commands, domain, false)" in kernel
-
-
-def test_pinned_clipper_patch_counts_every_processed_intersection() -> None:
-    patch = (
-        PACKAGE_ROOT / "patches" / "clipper2-svg-miter-fallback.patch"
-    ).read_text(encoding="utf-8")
-
-    assert "MAX_INTERSECTION_NODE_ALLOCATIONS" in patch
-    assert "MAX_PROCESSED_INTERSECTION_EVENTS" in patch
-    assert "RequireIntersectionNodeCapacity();" in patch
-    assert "RequireProcessedIntersectionCapacity();" in patch
-    assert "IntersectionNodeAllocationCount" in patch
-    assert "ProcessedIntersectionEventCount" in patch
-
-    intersect_edges = patch.split(
-        "void ClipperBase::IntersectEdges(Active& e1, Active& e2, "
-        "const Point64& pt)",
-        1,
-    )[1].split("//MANAGE OPEN PATH INTERSECTIONS SEPARATELY", 1)[0]
-    assert "RequireProcessedIntersectionCapacity();" in intersect_edges
-
+    assert "ParallelReplayBudgetScope" not in kernel
 
 def test_cmake_revision_cache_arguments_cannot_override_pins(
     tmp_path: Path,

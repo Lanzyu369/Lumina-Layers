@@ -34,7 +34,6 @@ from api.dependencies import get_file_registry, get_session_store, get_worker_po
 from api.file_registry import FileRegistry
 from api.session_store import SessionStore
 from api.worker_pool import WorkerPoolManager
-from core.errors import VectorMeshMemoryBudgetError
 from utils.merged_bambu_3mf_writer import MergedWriteError
 
 _test_store: SessionStore = SessionStore(ttl=1800)
@@ -450,38 +449,6 @@ class TestBatchAllFailed:
         assert body["preview_3d_url"] is None
         assert body["preview_items"] == []
 
-    def test_batch_memory_admission_returns_actionable_422(self) -> None:
-        _mock_pool.submit = AsyncMock(
-            side_effect=VectorMeshMemoryBudgetError(
-                "preflight",
-                9 * 1024**3,
-                8 * 1024**3,
-                1 * 1024**3,
-                4_200,
-                420_000,
-            ),
-        )
-
-        with (
-            patch(
-                "api.routers.converter.generate.LUTManager.get_lut_path",
-                return_value="/tmp/fake.npy",
-            ),
-            patch(
-                "api.routers.converter.generate.ensure_png_tempfile",
-                new=AsyncMock(return_value="/tmp/uploaded.png"),
-            ),
-        ):
-            response = client.post(
-                "/api/convert/batch",
-                files=[("images", _make_test_image_buf("complex.png"))],
-                data={"lut_name": "test_lut"},
-            )
-
-        assert response.status_code == 422, response.text
-        assert response.json()["detail"]["code"] == (
-            "vector_mesh_memory_budget_exceeded"
-        )
 
     def test_batch_broken_worker_pool_stops_before_next_item(self) -> None:
         _mock_pool.submit = AsyncMock(
@@ -576,32 +543,6 @@ class TestBatchAllFailed:
 class TestBatchTimeout:
     """Verify asyncio.TimeoutError from pool.submit is handled per-item."""
 
-    def test_batch_timeout_per_item(self) -> None:
-        _mock_pool.submit = AsyncMock(
-            side_effect=asyncio.TimeoutError(),
-        )
-
-        with (
-            patch(
-                "api.routers.converter.generate.LUTManager.get_lut_path",
-                return_value="/tmp/fake.npy",
-            ),
-            patch(
-                "api.routers.converter.generate.ensure_png_tempfile",
-                new=AsyncMock(return_value="/tmp/uploaded.png"),
-            ),
-        ):
-            response = client.post(
-                "/api/convert/batch",
-                files=[("images", _make_test_image_buf("slow.png"))],
-                data={"lut_name": "test_lut"},
-            )
-
-        assert response.status_code == 200
-        body = response.json()
-        assert body["status"] == "failed"
-        assert body["results"][0]["status"] == "failed"
-        assert "timed out" in body["results"][0]["error"].lower()
 
 
 # =========================================================================
@@ -732,10 +673,6 @@ class TestBatchWorkerPoolSubmit:
                 "enable_wipe_tower_auto_placement"
             ]
             is False
-        )
-        assert (
-            call_args.kwargs["host_memory_reservation_bytes"]
-            == 8 * 1024**3
         )
         expected_options = {
             "enable_coating": coating_enabled,

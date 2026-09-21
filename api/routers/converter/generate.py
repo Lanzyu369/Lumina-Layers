@@ -12,11 +12,13 @@ import json
 import math
 import os
 import pickle
+import re
 import shutil
 import tempfile
 import time
 import uuid
 import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
@@ -41,7 +43,6 @@ from api.schemas.converter import (
     ConvertGenerateRequest,
     LargeFormatConvertGenerateRequest,
     LargeFormatGenerateRequest,
-    MAX_LARGE_FORMAT_DIMENSION_MM,
     ModelingMode,
     StructureMode,
 )
@@ -70,19 +71,10 @@ from api.workers.converter_workers import (
     worker_generate_model_surface_overlay,
 )
 from core.batch_layout import LayoutResult, XYBBox, layout_shelf_by_row
-from core.errors import (
-    CachedPreviewAnalysisError,
-    VectorHostMemoryAdmissionError,
-    VectorMeshMemoryBudgetError,
-)
+from core.errors import CachedPreviewAnalysisError
 from core.model_surface.types import ModelSurfaceError
 from core.naming import generate_preserved_upload_3mf_filename
 from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
-from core.vector_mesh_memory import (
-    estimate_material_archive_runtime_bytes,
-    estimate_vector_material_parallel_memory_target_bytes,
-    estimate_vector_task_memory_reservation_bytes,
-)
 from core.wipe_tower_placement import WIPE_TOWER_MANUAL_WARNING_CODE
 from utils.merged_bambu_3mf_writer import (
     MergedBambu3MFWriter,
@@ -99,17 +91,16 @@ from config import (
     get_printer_profile,
     normalize_svg_pixels_per_mm,
 )
-from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
+from core.pipeline.processing_ops.svg_rasterizer import (
+    _parse_svg_length_to_px,
+    rasterize_svg,
+)
 from core.recipe_order import convert_recipe_between_orders
 from core.vector_large_format import (
-    MAX_LARGE_FORMAT_TILE_COUNT,
-    SVG_RASTER_FALLBACK_MAX_TOTAL_PIXELS,
-    SVG_LARGE_FORMAT_DENSITY_REDUCED_WARNING,
     SVG_LARGE_FORMAT_FALLBACK_NATIVE_FAILURE,
     SVG_LARGE_FORMAT_FALLBACK_UNSUPPORTED_FEATURE,
     SVG_LARGE_FORMAT_GENERATE_FALLBACK_WARNING,
     SVG_LARGE_FORMAT_NATIVE_FAILURE_FALLBACK_WARNING,
-    choose_svg_raster_fallback_density,
     format_large_format_tile_label,
     inspect_svg_large_format_support,
     normalize_large_format_source_basename,
@@ -313,116 +304,6 @@ BATCH_GENERATION_FAILED_DETAIL: str = (
 MODEL_GENERATION_FAILED_DETAIL: str = (
     "3MF generation failed. Re-run preview and try generating the model again."
 )
-
-
-class _VectorTaskMemoryInputs(NamedTuple):
-    """Files and counts the vector task memory estimates are derived from.
-
-    矢量任务内存估算所依据的文件与计数。
-    """
-
-    supporting_paths: tuple[str, ...]
-    resident_paths: tuple[str, ...]
-    implicit_resident_bytes: int
-    material_count: int
-
-
-def _vector_task_memory_inputs(
-    source_path: str,
-    params: dict | None = None,
-    *,
-    lut_path: str | None = None,
-) -> _VectorTaskMemoryInputs:
-    """Collect every file the worker may retain, without pricing it."""
-
-    material_archive = (
-        str((params or {}).get("material_source") or "") == "material_archive"
-        or lut_path == "__material_archive__"
-    )
-    raw_selected_materials = (params or {}).get("selected_materials") or ()
-    selected_material_count = (
-        len(raw_selected_materials)
-        if isinstance(raw_selected_materials, (list, tuple))
-        else 0
-    )
-
-    source_identity = os.path.abspath(os.fspath(source_path))
-    supporting_by_identity: dict[str, str] = {}
-    resident_by_identity: dict[str, str] = {}
-    pending_mappings = [params or {}]
-    while pending_mappings:
-        mapping = pending_mappings.pop()
-        for key, value in mapping.items():
-            if isinstance(value, dict):
-                pending_mappings.append(value)
-            if (
-                not str(key).endswith("_path")
-                or not isinstance(value, (str, os.PathLike))
-                or not value
-            ):
-                continue
-            path_value = os.fspath(value)
-            if path_value.startswith("__"):
-                continue
-            identity = os.path.abspath(path_value)
-            if identity == source_identity:
-                continue
-            if str(key) == "vector_parse_clip_cache_path":
-                supporting_by_identity[identity] = path_value
-                resident_by_identity.pop(identity, None)
-            elif identity not in supporting_by_identity:
-                resident_by_identity[identity] = path_value
-    if isinstance(lut_path, str) and lut_path and not lut_path.startswith("__"):
-        identity = os.path.abspath(lut_path)
-        if identity != source_identity and identity not in supporting_by_identity:
-            resident_by_identity[identity] = lut_path
-    return _VectorTaskMemoryInputs(
-        supporting_paths=tuple(supporting_by_identity.values()),
-        resident_paths=tuple(resident_by_identity.values()),
-        implicit_resident_bytes=(
-            estimate_material_archive_runtime_bytes(selected_material_count)
-            if material_archive
-            else 0
-        ),
-        material_count=selected_material_count,
-    )
-
-
-def _vector_task_memory_reservation_bytes(
-    source_path: str,
-    params: dict | None = None,
-    *,
-    lut_path: str | None = None,
-) -> int:
-    """Resolve a task cap from every file the worker may retain."""
-
-    inputs = _vector_task_memory_inputs(source_path, params, lut_path=lut_path)
-    return estimate_vector_task_memory_reservation_bytes(
-        source_path,
-        supporting_paths=inputs.supporting_paths,
-        resident_paths=inputs.resident_paths,
-        implicit_resident_bytes=inputs.implicit_resident_bytes,
-    )
-
-
-def _vector_task_parallel_memory_target_bytes(
-    source_path: str,
-    params: dict | None = None,
-    *,
-    lut_path: str | None = None,
-) -> int | None:
-    """Resolve the budget the material stage needs to build in parallel.
-
-    解析材质阶段并行构建所需预算；它只是交给父进程准入的请求，实际授予量由准入
-    机制在空闲内存内决定。
-    """
-
-    inputs = _vector_task_memory_inputs(source_path, params, lut_path=lut_path)
-    return estimate_vector_material_parallel_memory_target_bytes(
-        source_path,
-        material_count=inputs.material_count,
-        supporting_paths=inputs.supporting_paths,
-    )
 
 
 MODEL_SURFACE_SOURCE_UNAVAILABLE_DETAIL: str = (
@@ -3098,36 +2979,7 @@ async def convert_generate(
             image_path,
             lut_path,
             worker_params,
-            **(
-                {
-                    "host_memory_reservation_bytes": (
-                        _vector_task_memory_reservation_bytes(
-                            image_path,
-                            worker_params,
-                            lut_path=lut_path,
-                        )
-                    ),
-                    # The material stage can only use the machine in parallel
-                    # if its reservation covers the builders it would start.
-                    # This asks the existing admission gate for that coverage;
-                    # the gate grants only what is free and never fails a task
-                    # for lacking it. 材质阶段只有在预留覆盖其构建进程时才能并行
-                    # 使用机器。这里向既有准入机制索取该覆盖量：闸门只授予空闲
-                    # 部分，且不会因拿不到而让任务失败。
-                    "host_memory_parallel_target_bytes": (
-                        _vector_task_parallel_memory_target_bytes(
-                            image_path,
-                            worker_params,
-                            lut_path=lut_path,
-                        )
-                    ),
-                }
-                if core_modeling_mode == CoreModelingMode.VECTOR
-                else {}
-            ),
         )
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="3MF generation timed out")
     except ModelSurfaceError as exc:
         detail = public_model_surface_error_detail(exc)
         if detail is None:
@@ -3143,8 +2995,6 @@ async def convert_generate(
             status_code=409,
             detail=STANDARD_CACHED_ANALYSIS_INVALID_DETAIL,
         ) from exc
-    except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as exc:
-        _handle_core_error(exc, "3MF generation")
     except BrokenProcessPool as exc:
         raise HTTPException(
             status_code=503,
@@ -3402,14 +3252,10 @@ def _resolve_large_format_dimensions(
         if (
             not math.isfinite(value)
             or value <= 0
-            or value > MAX_LARGE_FORMAT_DIMENSION_MM
         ):
             raise HTTPException(
                 status_code=422,
-                detail=(
-                    f"Large-format {name} must be finite and no greater "
-                    f"than {MAX_LARGE_FORMAT_DIMENSION_MM:g} mm."
-                ),
+                detail=f"Large-format {name} must be finite and positive.",
             )
 
     return resolved_width, resolved_height
@@ -3697,18 +3543,9 @@ async def _generate_large_format_svg_native(
                     "tile_width_mm": tile_width_mm,
                     "tile_height_mm": tile_height_mm,
                 },
-                host_memory_reservation_bytes=(
-                    _vector_task_memory_reservation_bytes(
-                        image_path,
-                        shared_params,
-                        lut_path=lut_path,
-                    )
-                ),
             )
         finally:
             _remove_temp_path(native_heightmap_path)
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="Large-format SVG generation timed out")
     except LargeFormatCachedAnalysisError as e:
         _log_large_format_failure(
             session_id=sid,
@@ -3721,8 +3558,6 @@ async def _generate_large_format_svg_native(
             detail=LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL,
         ) from e
     except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
-        _handle_core_error(e, "large-format SVG generation")
-    except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as e:
         _handle_core_error(e, "large-format SVG generation")
     except BrokenProcessPool as e:
         _log_large_format_failure(
@@ -3793,9 +3628,111 @@ def _discard_pending_awaitables(awaitables: list, start_index: int) -> None:
             close()
 
 
+def _rasterize_svg_fallback_tile(
+    *,
+    svg_path: str,
+    total_width_mm: float,
+    total_height_mm: float,
+    x0_mm: float,
+    y0_mm: float,
+    x1_mm: float,
+    y1_mm: float,
+    pixels_per_mm: float,
+) -> str:
+    """Rasterize one SVG fallback tile without allocating a full canvas.
+
+    将 SVG fallback 直接按全局毫米坐标裁成一个 tile，避免先创建整幅
+    大画幅位图；原 SVG 作为嵌套 viewport 保留完整 viewBox 和百分比布局，
+    外层 viewport 只负责裁切输出窗口。
+    """
+
+    tree = ET.parse(svg_path)
+    source_root = tree.getroot()
+
+    viewport_width = _parse_svg_length_to_px(source_root.attrib.get("width"))
+    viewport_height = _parse_svg_length_to_px(source_root.attrib.get("height"))
+    raw_view_box = source_root.attrib.get("viewBox") or source_root.attrib.get("viewbox")
+    if not raw_view_box:
+        if viewport_width is None or viewport_height is None:
+            raise ValueError("SVG fallback requires a viewBox or finite canvas dimensions")
+        raw_view_box = f"0 0 {viewport_width:g} {viewport_height:g}"
+    try:
+        view_box = [float(value) for value in raw_view_box.replace(",", " ").split()]
+    except (TypeError, ValueError):
+        view_box = []
+    if len(view_box) != 4 or view_box[2] <= 0 or view_box[3] <= 0:
+        raise ValueError("SVG fallback viewBox must contain positive dimensions")
+    view_x, view_y, view_w, view_h = view_box
+    viewport_width = viewport_width or view_w
+    viewport_height = viewport_height or view_h
+    scale_x = viewport_width / float(total_width_mm)
+    scale_y = viewport_height / float(total_height_mm)
+    tile_view_box = (
+        x0_mm * scale_x,
+        y0_mm * scale_y,
+        max((x1_mm - x0_mm) * scale_x, 1e-9),
+        max((y1_mm - y0_mm) * scale_y, 1e-9),
+    )
+
+    # Keep the original document as a nested viewport. Changing the original
+    # root's viewBox would make percentage geometry resolve against the tile
+    # and would change the actual SVG layout (for example, a 50% blue panel
+    # would become 100% of the right tile). The outer viewport clips the full
+    # document to the requested global window instead.
+    nested_root = ET.Element(source_root.tag, dict(source_root.attrib))
+    nested_root.attrib["x"] = "0"
+    nested_root.attrib["y"] = "0"
+    nested_root.attrib["width"] = f"{viewport_width:.12g}"
+    nested_root.attrib["height"] = f"{viewport_height:.12g}"
+    nested_root.attrib["viewBox"] = " ".join(
+        f"{value:.12g}" for value in (view_x, view_y, view_w, view_h)
+    )
+    nested_root.attrib.pop("viewbox", None)
+    for child in list(source_root):
+        nested_root.append(child)
+
+    ET.register_namespace("", "http://www.w3.org/2000/svg")
+    outer_root = ET.Element(
+        source_root.tag,
+        {
+            "width": f"{max(x1_mm - x0_mm, 1e-9):.12g}mm",
+            "height": f"{max(y1_mm - y0_mm, 1e-9):.12g}mm",
+            "viewBox": " ".join(f"{value:.12g}" for value in tile_view_box),
+            "overflow": "hidden",
+        },
+    )
+    outer_root.append(nested_root)
+    tree._setroot(outer_root)
+
+    svg_fd, tile_svg_path = tempfile.mkstemp(suffix=".svg", dir=TEMP_DIR)
+    os.close(svg_fd)
+    png_path: str | None = None
+    try:
+        tree.write(tile_svg_path, encoding="utf-8", xml_declaration=True)
+        rgba = rasterize_svg(
+            tile_svg_path,
+            max(x1_mm - x0_mm, 1e-9),
+            pixels_per_mm=float(pixels_per_mm),
+            crop_to_content=False,
+            _min_quality_px=1,
+            _cache_result=False,
+        )
+        png_fd, png_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
+        os.close(png_fd)
+        Image.fromarray(rgba).save(png_path)
+        return png_path
+    except BaseException:
+        if png_path is not None:
+            _remove_temp_path(png_path)
+        raise
+    finally:
+        _remove_temp_path(tile_svg_path)
+
+
 async def _generate_large_format_raster(
     *,
-    image_path: str,
+    image_path: str | None,
+    svg_fallback_path: str | None = None,
     lut_path: str,
     source_basename: str,
     recipe_overrides: list[dict[str, object]] | None,
@@ -3824,11 +3761,17 @@ async def _generate_large_format_raster(
     warnings: list[str] | None = None,
     log_tile_failures: bool = True,
 ) -> dict:
-    with Image.open(image_path) as img:
-        px_w, px_h = img.size
-        full_img = img.copy()
+    full_img: Image.Image | None = None
+    px_w = px_h = 0
+    if image_path is not None:
+        with Image.open(image_path) as img:
+            px_w, px_h = img.size
+            full_img = img.copy()
+    elif svg_fallback_path is None:
+        raise ValueError("Large-format raster generation requires an image or SVG source")
 
     successful_paths: list[tuple[str, str]] = []
+    tile_warnings: list[str] = []
     route_local_cleanup_paths: set[str] = set()
     cleanup_paths: set[str] = set()
     errors: list[str] = []
@@ -4007,8 +3950,8 @@ async def _generate_large_format_raster(
                 detail=LARGE_FORMAT_RECIPE_OVERRIDE_LOAD_FAILED_DETAIL,
             ) from exc
 
-    px_per_mm_x = px_w / total_width_mm
-    px_per_mm_y = px_h / total_height_mm
+    px_per_mm_x = px_w / total_width_mm if px_w else 0.0
+    px_per_mm_y = px_h / total_height_mm if px_h else 0.0
     cols = max(1, math.ceil(total_width_mm / tile_width_mm))
     rows = max(1, math.ceil(total_height_mm / tile_height_mm))
     source_x_boundaries: list[int] | None = None
@@ -4051,7 +3994,13 @@ async def _generate_large_format_raster(
         final_material_matrix_authority_mask_path=None,
     )
     shared_params["reuse_preview_analysis"] = False
-    if str(image_path).lower().endswith(".png") and shared_params["modeling_mode"] == CoreModelingMode.VECTOR:
+    if (
+        (
+            svg_fallback_path is not None
+            or (image_path is not None and str(image_path).lower().endswith(".png"))
+        )
+        and shared_params["modeling_mode"] == CoreModelingMode.VECTOR
+    ):
         shared_params["modeling_mode"] = CoreModelingMode.HIGH_FIDELITY
     hm_gray = (
         session_data.get("heightmap_grayscale")
@@ -4070,28 +4019,69 @@ async def _generate_large_format_raster(
                 y1_mm = min(y0_mm + tile_height_mm, total_height_mm)
                 cur_tile_w = x1_mm - x0_mm
 
-                if source_x_boundaries is not None:
-                    px_x0 = source_x_boundaries[c]
-                    px_x1 = source_x_boundaries[c + 1]
+                source_px_x0 = source_px_x1 = source_px_y0 = source_px_y1 = 0
+                if svg_fallback_path is not None:
+                    tile_path = _rasterize_svg_fallback_tile(
+                        svg_path=svg_fallback_path,
+                        total_width_mm=total_width_mm,
+                        total_height_mm=total_height_mm,
+                        x0_mm=x0_mm,
+                        y0_mm=y0_mm,
+                        x1_mm=x1_mm,
+                        y1_mm=y1_mm,
+                        pixels_per_mm=float(
+                            getattr(request, "svg_pixels_per_mm", SVG_PIXELS_PER_MM_DEFAULT)
+                        ),
+                    )
+                    route_local_cleanup_paths.add(tile_path)
+                elif source_x_boundaries is not None:
+                    source_px_x0 = source_x_boundaries[c]
+                    source_px_x1 = source_x_boundaries[c + 1]
                 else:
-                    px_x0 = int(round(x0_mm * px_per_mm_x))
-                    px_x1 = min(int(round(x1_mm * px_per_mm_x)), px_w)
+                    source_px_x0 = int(round(x0_mm * px_per_mm_x))
+                    source_px_x1 = min(int(round(x1_mm * px_per_mm_x)), px_w)
                 if source_y_boundaries is not None:
-                    px_y0 = source_y_boundaries[r]
-                    px_y1 = source_y_boundaries[r + 1]
+                    source_px_y0 = source_y_boundaries[r]
+                    source_px_y1 = source_y_boundaries[r + 1]
                 else:
-                    px_y0 = int(round(y0_mm * px_per_mm_y))
-                    px_y1 = min(int(round(y1_mm * px_per_mm_y)), px_h)
+                    source_px_y0 = int(round(y0_mm * px_per_mm_y))
+                    source_px_y1 = min(int(round(y1_mm * px_per_mm_y)), px_h)
 
-                tile_img = full_img.crop((px_x0, px_y0, px_x1, px_y1))
-                fd, tile_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
-                os.close(fd)
-                tile_img.save(tile_path)
-                route_local_cleanup_paths.add(tile_path)
+                heightmap_px_x0 = heightmap_px_x1 = heightmap_px_y0 = heightmap_px_y1 = 0
+                if hm_gray is not None:
+                    hm_height, hm_width = hm_gray.shape[:2]
+                    heightmap_px_x0 = max(
+                        0, min(hm_width, int(round(x0_mm * hm_width / total_width_mm)))
+                    )
+                    heightmap_px_x1 = max(
+                        heightmap_px_x0,
+                        min(hm_width, int(round(x1_mm * hm_width / total_width_mm))),
+                    )
+                    heightmap_px_y0 = max(
+                        0, min(hm_height, int(round(y0_mm * hm_height / total_height_mm)))
+                    )
+                    heightmap_px_y1 = max(
+                        heightmap_px_y0,
+                        min(hm_height, int(round(y1_mm * hm_height / total_height_mm))),
+                    )
+
+                if svg_fallback_path is None:
+                    if full_img is None:
+                        raise RuntimeError("Large-format raster source image is unavailable")
+                    tile_img = full_img.crop(
+                        (source_px_x0, source_px_y0, source_px_x1, source_px_y1)
+                    )
+                    fd, tile_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
+                    os.close(fd)
+                    tile_img.save(tile_path)
+                    route_local_cleanup_paths.add(tile_path)
 
                 tile_params = dict(shared_params, target_width_mm=cur_tile_w)
                 if hm_gray is not None:
-                    hm_tile = hm_gray[px_y0:px_y1, px_x0:px_x1]
+                    hm_tile = hm_gray[
+                        heightmap_px_y0:heightmap_px_y1,
+                        heightmap_px_x0:heightmap_px_x1,
+                    ]
                     fd2, hm_tile_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
                     os.close(fd2)
                     Image.fromarray(hm_tile).save(hm_tile_path)
@@ -4215,20 +4205,6 @@ async def _generate_large_format_raster(
                         tile_path,
                         lut_path,
                         tile_params,
-                        **(
-                            {
-                                "host_memory_reservation_bytes": (
-                                    _vector_task_memory_reservation_bytes(
-                                        tile_path,
-                                        tile_params,
-                                        lut_path=lut_path,
-                                    )
-                                )
-                            }
-                            if tile_params.get("modeling_mode")
-                            == CoreModelingMode.VECTOR.value
-                            else {}
-                        ),
                     )
                 )
 
@@ -4243,22 +4219,20 @@ async def _generate_large_format_raster(
                 if tp and os.path.exists(tp):
                     successful_paths.append((label, tp))
                     cleanup_paths.add(tp)
+                    for warning_code in read_wipe_tower_placement_warnings(tp):
+                        if warning_code not in tile_warnings:
+                            tile_warnings.append(warning_code)
                 else:
                     errors.append(f"{label}: generation failed — {result.get('status_msg', 'unknown')}")
-            except asyncio.TimeoutError:
-                errors.append(f"{label}: generation timed out")
+            except MemoryError:
+                _discard_pending_awaitables(futures, future_index + 1)
+                raise
             except BrokenProcessPool as e:
                 _discard_pending_awaitables(futures, future_index + 1)
                 raise HTTPException(
                     status_code=503,
                     detail=LARGE_FORMAT_GENERATION_FAILED_DETAIL,
                 ) from e
-            except MemoryError:
-                _discard_pending_awaitables(futures, future_index + 1)
-                raise
-            except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as e:
-                _discard_pending_awaitables(futures, future_index + 1)
-                _handle_core_error(e, "large-format tile generation")
             except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
                 _discard_pending_awaitables(futures, future_index + 1)
                 _handle_core_error(e, "large-format tile generation")
@@ -4312,45 +4286,13 @@ async def _generate_large_format_raster(
             "tile_count": len(successful_paths),
             "grid_cols": cols,
             "grid_rows": rows,
-            "warnings": list(warnings or []),
+            "warnings": list(dict.fromkeys([*(warnings or []), *tile_warnings])),
         }
     finally:
         _remove_temp_paths(route_local_cleanup_paths)
         _remove_temp_paths(cleanup_paths)
         if zip_path is not None and not zip_ready:
             _remove_temp_path(zip_path)
-
-
-def _rasterize_svg_for_large_format_fallback(
-    *,
-    svg_path: str,
-    total_width_mm: float,
-    total_height_mm: float,
-    sid: str,
-    store: SessionStore,
-) -> tuple[str, list[str]]:
-    density, density_warnings = choose_svg_raster_fallback_density(
-        total_width_mm=total_width_mm,
-        total_height_mm=total_height_mm,
-    )
-    raster_rgba = rasterize_svg(
-        svg_path,
-        total_width_mm,
-        pixels_per_mm=density,
-        _min_quality_px=1,
-        _max_total_pixels=SVG_RASTER_FALLBACK_MAX_TOTAL_PIXELS,
-        _cache_result=False,
-    )
-    fd, png_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
-    os.close(fd)
-    save_completed = False
-    try:
-        Image.fromarray(raster_rgba).save(png_path)
-        save_completed = True
-    finally:
-        if not save_completed:
-            _remove_temp_path(png_path)
-    return png_path, density_warnings
 
 
 @router.post("/generate-large-format")
@@ -4481,7 +4423,6 @@ async def convert_generate_large_format(
             total_height_mm=total_h_mm,
             tile_width_mm=float(lf.tile_width_mm),
             tile_height_mm=float(lf.tile_height_mm),
-            max_tiles=MAX_LARGE_FORMAT_TILE_COUNT,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -4608,8 +4549,6 @@ async def convert_generate_large_format(
                         or 0
                     ),
                 )
-            except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as exc:
-                _handle_core_error(exc, "large-format SVG generation")
             except MemoryError:
                 # Starting a second, rasterized build after allocator failure
                 # only increases pressure and can kill the worker host.
@@ -4684,24 +4623,13 @@ async def convert_generate_large_format(
                         "如需回退，请关闭补洞。"
                     ),
                 )
-            fallback_png_path: str | None = None
             try:
-                (
-                    fallback_png_path,
-                    density_warnings,
-                ) = _rasterize_svg_for_large_format_fallback(
-                    svg_path=image_path,
-                    total_width_mm=total_w_mm,
-                    total_height_mm=total_h_mm,
-                    sid=sid,
-                    store=store,
-                )
                 fallback_warnings = warnings + [
                     SVG_LARGE_FORMAT_GENERATE_FALLBACK_WARNING
                 ]
-                fallback_warnings += density_warnings
                 result = await _generate_large_format_raster(
-                    image_path=fallback_png_path,
+                    image_path=None,
+                    svg_fallback_path=image_path,
                     lut_path=lut_path,
                     source_basename=source_basename,
                     recipe_overrides=recipe_overrides,
@@ -4727,11 +4655,6 @@ async def convert_generate_large_format(
                     warnings=fallback_warnings,
                     log_tile_failures=native_fallback_error is None,
                 )
-            except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as fallback_exc:
-                _handle_core_error(
-                    fallback_exc,
-                    "large-format raster fallback generation",
-                )
             except MemoryError:
                 raise
             except BrokenProcessPool as fallback_exc:
@@ -4754,9 +4677,6 @@ async def convert_generate_large_format(
                     error_message=fallback_error_message[:2048],
                 )
                 raise native_fallback_error from fallback_exc
-            finally:
-                if fallback_png_path is not None:
-                    _remove_temp_path(fallback_png_path)
     else:
         result = await _generate_large_format_raster(
             image_path=image_path,
@@ -5349,18 +5269,6 @@ async def convert_batch(
                 svg_hole_max_width_mm,
                 enable_coating,
                 coating_height_mm,
-                **(
-                    {
-                        "host_memory_reservation_bytes": (
-                            _vector_task_memory_reservation_bytes(
-                                temp_path,
-                                lut_path=lut_path,
-                            )
-                        )
-                    }
-                    if modeling_mode == CoreModelingMode.VECTOR.value
-                    else {}
-                ),
             )
 
             # 3. Result processing (main thread)
@@ -5396,25 +5304,6 @@ async def convert_batch(
                         error=BATCH_ITEM_FAILED_DETAIL,
                     )
                 )
-        except asyncio.TimeoutError:
-            results.append(
-                BatchItemResult(
-                    filename=filename,
-                    status="failed",
-                    error="Batch item conversion timed out",
-                )
-            )
-        except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as e:
-            for prior_result in successful_entries:
-                _remove_temp_paths(
-                    [
-                        prior_result.get("threemf_path"),
-                        prior_result.get("preview_glb_path"),
-                        prior_result.get("metadata_sidecar_path"),
-                    ]
-                )
-            _remove_temp_path(temp_native_bundle_path)
-            _handle_core_error(e, "batch generation")
         except MemoryError:
             for prior_result in successful_entries:
                 _remove_temp_paths(

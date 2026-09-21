@@ -79,7 +79,6 @@ function buildRuntimeEntry(
     candidate_budget: 33_554_432,
     candidate_count: 33_554_432,
     candidate_pool_multiplier: 2,
-    build_memory_budget_bytes: 8 * 1024 * 1024 * 1024,
     batch_recipe_count: 524_288,
     lab_grid_resolution: 64,
     seed: 0,
@@ -328,124 +327,6 @@ describe("MaterialSolverCacheStatusCard", () => {
     expect(screen.getByText("缓存已就绪")).toBeInTheDocument();
   });
 
-  it("disables cache build for issue 230 sized high-grid combinations", async () => {
-    vi.mocked(fetchMaterialSolverCacheStatus).mockResolvedValue({
-      status: "ok",
-      message: "No cache found",
-      cached: false,
-      palette_hash: "0123456789abcdef",
-      layer_count: 8,
-      layer_height_mm: 0.08,
-      substrate: "white",
-      entry: null,
-    });
-    useSettingsStore.setState({
-      enableSolverCacheGridSelection: true,
-      solverCacheGridResolution: 2048,
-    });
-
-    render(
-      <MaterialSolverCacheStatusCard
-        materialDirectoryNames={Array.from(
-          { length: 12 },
-          (_, idx) => `mat-${idx}`,
-        )}
-        layerCount={8}
-        layerHeightMm={0.08}
-      />,
-    );
-
-    const buildButton = await screen.findByRole("button", {
-      name: "立即构建缓存",
-    });
-    expect(buildButton).toBeDisabled();
-    expect(
-      screen.getByText(/超过穷举或内存预算/),
-    ).toBeInTheDocument();
-
-    await act(async () => {
-      fireEvent.click(buildButton);
-    });
-    expect(buildMaterialSolverCache).not.toHaveBeenCalled();
-  });
-
-  it("lets large palettes build the bounded hybrid runtime even when exhaustive cache is unsafe", async () => {
-    vi.mocked(fetchMaterialSolverCacheStatus).mockResolvedValue({
-      status: "ok",
-      message: "No cache found",
-      cached: false,
-      palette_hash: "0123456789abcdef",
-      layer_count: 8,
-      layer_height_mm: 0.08,
-      substrate: "white",
-      entry: null,
-    });
-    vi.mocked(fetchMaterialSolverRuntimeStatus).mockResolvedValue({
-      status: "ok",
-      message: "No runtime found",
-      cached: false,
-      palette_hash: "0123456789abcdef",
-      layer_count: 8,
-      layer_height_mm: 0.08,
-      substrate: "white",
-      candidate_budget: 33_554_432,
-      entry: null,
-    });
-    vi.mocked(buildMaterialSolverRuntime).mockResolvedValue({
-      status: "ok",
-      message: "Built runtime",
-      entry: buildRuntimeEntry({ layer_count: 8, layer_height_mm: 0.08 }),
-    });
-
-    render(
-      <MaterialSolverCacheStatusCard
-        materialDirectoryNames={Array.from(
-          { length: 22 },
-          (_, idx) => `mat-${idx}`,
-        )}
-        layerCount={8}
-        layerHeightMm={0.08}
-      />,
-    );
-
-    const exhaustiveBuildButton = await screen.findByRole("button", {
-      name: "立即构建缓存",
-    });
-    expect(exhaustiveBuildButton).toBeDisabled();
-
-    const runtimeSection = await screen.findByTestId(
-      "material-solver-runtime-section",
-    );
-    const runtimeBuildButton = within(runtimeSection).getByRole("button");
-    expect(runtimeBuildButton).not.toBeDisabled();
-
-    await act(async () => {
-      fireEvent.click(runtimeBuildButton);
-    });
-
-    await waitFor(() => {
-      expect(buildMaterialSolverRuntime).toHaveBeenCalledTimes(1);
-    });
-    expect(buildMaterialSolverRuntime).toHaveBeenCalledWith(
-      {
-        materialDirectoryNames: Array.from(
-          { length: 22 },
-          (_, idx) => `mat-${idx}`,
-        ),
-        layerCount: 8,
-        layerHeightMm: 0.08,
-        substrate: "white",
-      },
-      { candidateBudget: 33_554_432 },
-    );
-    expect(buildMaterialSolverCache).not.toHaveBeenCalled();
-    await waitFor(() => {
-      expect(
-        screen.getByTestId("material-solver-runtime-status-pill"),
-      ).toHaveAttribute("data-tone", "ok");
-    });
-  });
-
   it("forwards selected runtime candidate budget to status build and delete calls", async () => {
     vi.mocked(fetchMaterialSolverCacheStatus).mockResolvedValue({
       status: "ok",
@@ -595,43 +476,6 @@ describe("MaterialSolverCacheStatusCard", () => {
       screen.getByTestId("material-solver-runtime-charts-region"),
     ).toBeInTheDocument();
     expect(fetchMaterialSolverCacheDetails).not.toHaveBeenCalled();
-  });
-
-  it("disables cache build for low-grid extreme combination counts", async () => {
-    vi.mocked(fetchMaterialSolverCacheStatus).mockResolvedValue({
-      status: "ok",
-      message: "No cache found",
-      cached: false,
-      palette_hash: "0123456789abcdef",
-      layer_count: 8,
-      layer_height_mm: 0.08,
-      substrate: "white",
-      entry: null,
-    });
-
-    render(
-      <MaterialSolverCacheStatusCard
-        materialDirectoryNames={Array.from(
-          { length: 22 },
-          (_, idx) => `mat-${idx}`,
-        )}
-        layerCount={8}
-        layerHeightMm={0.08}
-      />,
-    );
-
-    const buildButton = await screen.findByRole("button", {
-      name: "立即构建缓存",
-    });
-    expect(buildButton).toBeDisabled();
-    expect(
-      screen.getByText(/超过穷举或内存预算/),
-    ).toBeInTheDocument();
-
-    await act(async () => {
-      fireEvent.click(buildButton);
-    });
-    expect(buildMaterialSolverCache).not.toHaveBeenCalled();
   });
 
   it("deletes a cached entry after confirmation", async () => {

@@ -38,7 +38,6 @@ from api.structured_logging import get_logger
 from config import BedManager, PrinterConfig, normalize_nozzle_size
 from core.errors import (
     CachedPreviewAnalysisError,
-    VectorMeshMemoryBudgetError,
 )
 from core.geometry_utils import create_keychain_loop
 from core.pipeline import p06_bed_rendering, s09_export_3mf
@@ -785,19 +784,6 @@ def _generate_vector_outline_mesh(
     Returns:
         Outline mesh or None for an empty ring. 描边网格，空描边返回 None。
     """
-    from core.vector_engine import (
-        _enforce_vector_mesh_runtime_headroom,
-        _geometry_cache_storage_bytes,
-    )
-
-    source = getattr(analysis, "silhouette", None)
-    source_bytes = _geometry_cache_storage_bytes(source) if source is not None else 0
-    _enforce_vector_mesh_runtime_headroom(
-        stage="vector_outline_union",
-        estimated_additional_bytes=max(16 * 1024 * 1024, source_bytes * 8),
-        shape_count=1,
-        coordinate_count=source_bytes // 64,
-    )
     structure = resolve_structure_plan(analysis, float(outline_width_mm))
     ring = structure.outline
     if ring.is_empty:
@@ -812,14 +798,6 @@ def _generate_vector_outline_mesh(
         )
         return None
     scale_factor = float(getattr(analysis, "scale_factor", 1.0))
-    ring_bytes = _geometry_cache_storage_bytes(ring)
-    _enforce_vector_mesh_runtime_headroom(
-        stage="vector_outline_ring",
-        estimated_additional_bytes=max(16 * 1024 * 1024, ring_bytes * 8),
-        shape_count=1,
-        coordinate_count=ring_bytes // 64,
-    )
-
     layer_h = _resolve_vector_layer_height_mm(ctx)
     z_min_mm, z_max_mm = _resolve_vector_outline_z_span(
         ctx,
@@ -831,16 +809,6 @@ def _generate_vector_outline_mesh(
     outline_layers = max(1, int(round(thickness_mm / layer_h)))
     outline_height_mm = float(outline_layers) * layer_h
 
-    ring_geometry_bytes = _geometry_cache_storage_bytes(ring)
-    _enforce_vector_mesh_runtime_headroom(
-        stage="vector_outline_canonical_geometry",
-        estimated_additional_bytes=max(
-            16 * 1024 * 1024,
-            ring_geometry_bytes * 16,
-        ),
-        shape_count=1,
-        coordinate_count=ring_geometry_bytes // 64,
-    )
     outline_mesh = build_vector_layered_volume(
         [
             {
@@ -1363,9 +1331,6 @@ def _record_material_parallelism(
             "material_parallelism_cpu_fair_share": float(
                 max(1, int(plan.cpu_fair_share_ceiling)),
             ),
-            "material_parallelism_memory_ceiling": float(
-                max(1, int(plan.memory_ceiling)),
-            ),
             "material_parallelism_demand_fallback": bool(
                 plan.demand_snapshot_fallback,
             ),
@@ -1604,7 +1569,7 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
         ctx["vector_timing"] = dict(preview_timing)
         _log_vector_preview_timings(preview_timing, ctx, analysis, raster_cache)
         return ctx
-    except (MemoryError, VectorMeshMemoryBudgetError):
+    except MemoryError:
         raise
     except Exception as exc:
         ctx["error"] = f"[VECTOR_PREVIEW] {exc}"
@@ -1718,8 +1683,6 @@ def _run_vector_branch(ctx: dict) -> dict:
         from core.vector_engine import (
             VectorProcessor,
             _concatenate_meshes_fast,
-            _enforce_vector_mesh_runtime_headroom,
-            _mesh_array_storage_bytes,
             apply_matched_rgb_overrides_to_analysis,
             apply_recipe_overrides_to_analysis,
         )
@@ -2208,17 +2171,6 @@ def _run_vector_branch(ctx: dict) -> dict:
         if board_geom is not None and not separate_backing:
             target_geom = scene.geometry.get(target_slot) if target_slot else None
             if target_geom is not None:
-                source_mesh_bytes = _mesh_array_storage_bytes(
-                    target_geom
-                ) + _mesh_array_storage_bytes(board_geom)
-                _enforce_vector_mesh_runtime_headroom(
-                    stage="vector_board_merge",
-                    estimated_additional_bytes=max(
-                        16 * 1024 * 1024,
-                        source_mesh_bytes * 2,
-                    ),
-                    shape_count=2,
-                )
                 merged = _concatenate_meshes_fast(
                     [target_geom, board_geom],
                 )
@@ -2436,14 +2388,6 @@ def _run_vector_branch(ctx: dict) -> dict:
         # 软件里的封面应展示原图外观，而不是匹配后的耗材分层预览。仍然不把
         # raw .svg 传给 CoverThumbnailBuilder，因为 Pillow 不能解码 SVG。
         if not ctx.get("svg_raster_preview_bytes"):
-            from core.vector_engine import _enforce_vector_scene_export_headroom
-
-            _enforce_vector_scene_export_headroom(
-                scene,
-                stage="vector_cover_export",
-                workspace_multiplier=0.0,
-                minimum_workspace_bytes=8 * 1024 * 1024,
-            )
             cover_render_t0 = time.perf_counter()
             try:
                 cover_rgba = rasterize_svg(
@@ -2500,19 +2444,6 @@ def _run_vector_branch(ctx: dict) -> dict:
             ctx.get("svg_raster_preview_bytes")
             or ctx.get("cover_source_path")
             or ctx.get("image_path")
-        )
-        from core.vector_engine import _enforce_vector_scene_export_headroom
-
-        _enforce_vector_scene_export_headroom(
-            scene,
-            stage="vector_3mf_export",
-            # neroued-3mf 0.4 consumes one retained float32/uint32 view per
-            # object. The previous 5x allowance described the removed full
-            # topology audit plus the old owning writer's repeated arrays and
-            # now rejects models that the zero-copy writer can safely stream.
-            # Keep a conservative 2x live-RSS allowance for converted arrays,
-            # native/ZIP buffers, allocator slack, and the compatibility path.
-            workspace_multiplier=2.0,
         )
         export_scene_with_bambu_metadata(
             scene=scene,

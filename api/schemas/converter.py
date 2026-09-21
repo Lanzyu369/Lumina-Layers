@@ -38,7 +38,6 @@ MAX_RELIEF_TOTAL_HEIGHT_MM = MAX_BACKING_THICKNESS_MM + MAX_RELIEF_EXTRA_HEIGHT_
 # existing 10 mm control limit. API 交接流程允许的最小宽度；普通转换器界面
 # 仍保留现有的 10 mm 控件下限。
 MIN_TARGET_WIDTH_MM = 0.5
-MAX_LARGE_FORMAT_DIMENSION_MM = 9999.0
 SVG_PIXELS_PER_MM_DESCRIPTION = (
     "高保真 SVG 采样密度（px/mm）；仅高保真模式处理 SVG 时生效，"
     "直接矢量模式不使用此参数"
@@ -721,21 +720,18 @@ class LargeFormatGenerateRequest(BaseModel):
     target_height_mm: float | None = Field(
         None,
         gt=0,
-        le=MAX_LARGE_FORMAT_DIMENSION_MM,
         allow_inf_nan=False,
         description="总输出高度 (mm)",
     )
     tile_width_mm: float = Field(
         250.0,
         gt=0,
-        le=MAX_LARGE_FORMAT_DIMENSION_MM,
         allow_inf_nan=False,
         description="切片宽度 (mm)",
     )
     tile_height_mm: float = Field(
         250.0,
         gt=0,
-        le=MAX_LARGE_FORMAT_DIMENSION_MM,
         allow_inf_nan=False,
         description="切片高度 (mm)",
     )
@@ -750,7 +746,6 @@ class LargeFormatConvertGenerateRequest(ConvertGenerateRequest):
     target_width_mm: float | None = Field(
         None,
         ge=MIN_TARGET_WIDTH_MM,
-        le=MAX_LARGE_FORMAT_DIMENSION_MM,
         allow_inf_nan=False,
         description="目标宽度 (mm)",
     )

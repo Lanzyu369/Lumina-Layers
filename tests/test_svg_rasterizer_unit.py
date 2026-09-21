@@ -8,6 +8,36 @@ from unittest.mock import patch
 import pytest
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    (
+        ("10", 10.0),
+        ("10px", 10.0),
+        ("1in", 96.0),
+        ("1cm", 96.0 / 2.54),
+        ("1mm", 96.0 / 25.4),
+        ("1q", 96.0 / 101.6),
+        ("1pt", 96.0 / 72.0),
+        ("1pc", 16.0),
+        ("1e2mm", 100.0 * 96.0 / 25.4),
+    ),
+)
+def test_svg_absolute_length_parser_matches_resvg_css_pixels(
+    raw: str,
+    expected: float,
+) -> None:
+    from core.pipeline.processing_ops.svg_rasterizer import _parse_svg_length_to_px
+
+    assert _parse_svg_length_to_px(raw) == pytest.approx(expected)
+
+
+def test_svg_absolute_length_parser_rejects_percentages_and_unknown_units() -> None:
+    from core.pipeline.processing_ops.svg_rasterizer import _parse_svg_length_to_px
+
+    assert _parse_svg_length_to_px("100%") is None
+    assert _parse_svg_length_to_px("10em") is None
+
+
 def test_rasterize_svg_full_canvas_accepts_physical_units(tmp_path: Path) -> None:
     """SVG cover rasterization must handle mm-sized source artwork."""
     pytest.importorskip("resvg_py")

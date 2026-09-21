@@ -11,6 +11,9 @@ interface SliderProps {
   /** 可选的 data-testid，转发给底层 range 输入。 */
   "data-testid"?: string;
   max: number;
+  /** Optional upper bound for precise text entry; defaults to the range max. */
+  /** 可选的精确文本输入上限；未提供时沿用滑轨上限。 */
+  inputMax?: number;
   step: number;
   onChange: (value: number) => void;
   /** Optional normalizer for committed text input before display and onChange. */
@@ -30,6 +33,7 @@ export default function Slider(props: SliderProps) {
   value,
   min,
   max,
+  inputMax,
   step,
   onChange,
   normalizeTextValue,
@@ -41,6 +45,7 @@ export default function Slider(props: SliderProps) {
   minInputWidthCh,
   } = props;
   const testId = props["data-testid"];
+  const preciseInputMax = inputMax ?? max;
   // 输入框的本地文本状态，编辑时不立即同步外部 value
   const [inputText, setInputText] = useState(() => formatValue(value, step, displayDecimals));
   const [isFocused, setIsFocused] = useState(false);
@@ -76,23 +81,23 @@ export default function Slider(props: SliderProps) {
   const commitValue = useCallback(
     (text: string) => {
       const num = parseFloat(text);
-      if (isNaN(num)) {
+      if (!Number.isFinite(num)) {
         // 无效输入，恢复为当前值
         setInputText(formatValue(value, step, displayDecimals));
         return;
       }
-      // Text input is the precise-entry path: clamp to [min, max] and round
+      // Text input is the precise-entry path: clamp to [min, inputMax] and round
       // to the display precision. Same treatment as range drag — see
       // `clampAndRound` above.
-      // 文本框同样只做 [min, max] 夹紧与显示精度圆整，路径与滑条拖动一致。
-      const clamped = Math.min(max, Math.max(min, num));
+      // 文本框同样只做 [min, inputMax] 夹紧与显示精度圆整，路径与滑条拖动一致。
+      const clamped = Math.min(preciseInputMax, Math.max(min, num));
       const decimals = getDisplayDecimals(step, displayDecimals);
       const final = parseFloat(clamped.toFixed(decimals));
       const normalized = normalizeTextValue?.(final) ?? final;
       onChange(normalized);
       setInputText(formatValue(normalized, step, displayDecimals));
     },
-    [value, step, min, max, onChange, normalizeTextValue, displayDecimals],
+    [value, step, min, preciseInputMax, onChange, normalizeTextValue, displayDecimals],
   );
 
   const handleBlur = () => {
@@ -125,6 +130,11 @@ export default function Slider(props: SliderProps) {
   );
   const inputWidth = `${inputChars + 1}ch`;
 
+  // When a manually entered value is above the everyday drag range, keep the
+  // thumb at the range edge while preserving the exact value in the text box.
+  // 手动输入值超过日常拖动范围时，滑块停在边缘，文本框仍保留精确值。
+  const rangeValue = Math.min(max, Math.max(min, value));
+
   return (
     <div className="flex flex-col gap-1.5">
       {label && (
@@ -139,7 +149,7 @@ export default function Slider(props: SliderProps) {
           min={min}
           max={max}
           step={step}
-          value={value}
+          value={rangeValue}
           disabled={disabled}
           aria-label={label}
           data-testid={testId}

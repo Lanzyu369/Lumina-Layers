@@ -31,34 +31,14 @@ from core.task_parallelism_runtime import (
     WorkerLeaseStore,
     current_demand_snapshot_path,
     current_worker_lease_path,
-    task_host_memory_budget_scope,
     task_parallelism_runtime_scope,
 )
 from core.vector_layer_geometry import (
     VectorLayerGeometryPolicy,
     build_vector_layered_volume,
 )
-from core.vector_mesh_memory import (
-    MATERIAL_COORDINATES_PER_WORKER,
-    MATERIAL_MONITOR_BASE_BYTES,
-    MATERIAL_OUTPUT_RETAINED_BYTES_PER_COORDINATE,
-    MATERIAL_WORKER_PROCESS_BASE_BYTES,
-    MATERIAL_WORKER_WORKING_BYTES_PER_COORDINATE,
-    MIN_PARALLEL_MATERIAL_COORDINATES,
-    get_owned_memory_report,
-    get_process_rss_bytes,
-    resolve_vector_mesh_memory_budget_bytes,
-)
+from core.vector_mesh_memory import get_owned_memory_report
 
-# The stage's cost model lives with the memory policy, which is also where the
-# task reservation that funds this stage is computed.
-# 本阶段的成本模型放在内存策略模块中，任务预留也在那里计算。
-_MIN_PARALLEL_COORDINATES = MIN_PARALLEL_MATERIAL_COORDINATES
-_COORDINATES_PER_WORKER = MATERIAL_COORDINATES_PER_WORKER
-_PROCESS_BASE_BYTES = MATERIAL_WORKER_PROCESS_BASE_BYTES
-_MONITOR_BASE_BYTES = MATERIAL_MONITOR_BASE_BYTES
-_WORKING_BYTES_PER_COORDINATE = MATERIAL_WORKER_WORKING_BYTES_PER_COORDINATE
-_RETAINED_BYTES_PER_COORDINATE = MATERIAL_OUTPUT_RETAINED_BYTES_PER_COORDINATE
 MaterialBuilder = Callable[..., trimesh.Trimesh | None]
 
 # A lease whose release cannot reach a trustworthy table would stay reserved
@@ -141,17 +121,12 @@ def _build_material_file(
     output_path: str,
     scale_factor: float,
     grid_mm: float | None,
-    memory_budget_bytes: int,
 ) -> tuple[str, int, float]:
     if _CHILD_DEMAND_SNAPSHOT_PATH is None:
-        with (
-            task_parallelism_worker_scope(),
-            task_host_memory_budget_scope(memory_budget_bytes),
-        ):
+        with task_parallelism_worker_scope():
             return _build_material_mesh(input_path, output_path, scale_factor, grid_mm)
     with (
         task_parallelism_worker_scope(),
-        task_host_memory_budget_scope(memory_budget_bytes),
         task_parallelism_runtime_scope(_CHILD_DEMAND_SNAPSHOT_PATH),
     ):
         return _build_material_mesh(input_path, output_path, scale_factor, grid_mm)
@@ -219,17 +194,8 @@ def _worker_budget(
     serial_builder: MaterialBuilder,
     policy: VectorLayerGeometryPolicy | None,
     diagnostics: dict | None = None,
-) -> tuple[int, str, int, Any]:
-    """Decide how many material workers this task may start.
-
-    决定本任务可以启动多少个材质 worker。
-
-    ``diagnostics`` receives the scalar inputs of that decision, so a serial
-    outcome names the interface that bound it instead of leaving it to be
-    inferred from a wall-clock column.
-    ``diagnostics`` 接收该决定的标量输入，使“为什么串行”由字段直接说明，
-    而不是靠耗时列反推。
-    """
+) -> tuple[int, str, Any]:
+    """Choose material worker count from actual work and CPU policy only."""
 
     counts = _coordinate_counts(items)
     if (
@@ -238,72 +204,37 @@ def _worker_budget(
         or multiprocessing.current_process().daemon
         or len({id(data["slabs"]) for _name, data in items}) != len(items)
     ):
-        _record_worker_budget_diagnostics(diagnostics, None)
-        return 1, "serial_input", 0, None
+        _record_worker_diagnostics(diagnostics, None)
+        return 1, "serial_input", None
     total_coordinates = sum(counts)
-    worker_bytes = _PROCESS_BASE_BYTES + max(counts, default=0) * _WORKING_BYTES_PER_COORDINATE
     plan = resolve_task_parallelism_plan(
-        "vector", work_items=len(items), hard_max_workers=None,
+        "vector",
+        work_items=len(items),
+        hard_max_workers=None,
         work_units=total_coordinates,
-        min_parallel_work_units=_MIN_PARALLEL_COORDINATES,
-        work_units_per_worker=_COORDINATES_PER_WORKER,
-        estimated_worker_bytes=worker_bytes,
+        outer_demand=1,
     )
-    rss = get_process_rss_bytes()
-    budget = resolve_vector_mesh_memory_budget_bytes()
-    remaining = (
-        budget - rss
-        - total_coordinates * _RETAINED_BYTES_PER_COORDINATE
-        - _MONITOR_BASE_BYTES
-        if rss is not None else 0
-    )
-    affordable = max(1, remaining // worker_bytes)
-    _record_worker_budget_diagnostics(
+    _record_worker_diagnostics(
         diagnostics,
         {
-            "materialize_memory_budget_bytes": int(budget),
-            "materialize_memory_parent_rss_bytes": None if rss is None else int(rss),
-            "materialize_memory_remaining_bytes": int(remaining),
-            "materialize_memory_retained_bytes": int(
-                total_coordinates * _RETAINED_BYTES_PER_COORDINATE
-            ),
-            "materialize_memory_worker_bytes": int(worker_bytes),
-            "materialize_memory_affordable_workers": int(affordable),
-            "materialize_memory_planned_workers": int(plan.workers),
             "materialize_total_coordinates": int(total_coordinates),
             "materialize_max_material_coordinates": int(max(counts, default=0)),
+            "materialize_parallelism_planned_workers": int(plan.workers),
         },
     )
-    if affordable < plan.workers:
-        return affordable, "vector_memory_budget", worker_bytes, plan
-    return plan.workers, plan.limiting_reason, worker_bytes, plan
+    return plan.workers, plan.limiting_reason, plan
 
 
-def _record_worker_budget_diagnostics(
+def _record_worker_diagnostics(
     diagnostics: dict | None, values: dict | None
 ) -> None:
-    """Publish the worker-budget decision's inputs, including "not computed".
-
-    发布 worker 预算决定的输入；未计算时也如实标注。
-    """
-
     if diagnostics is None:
         return
-    if values is None:
-        # The decision short-circuited before any memory arithmetic; say so
-        # rather than leaving stale numbers from another stage.
-        # 决定在任何内存运算之前就短路了，如实标注，而不是留下其他阶段的旧数字。
-        diagnostics["materialize_memory_budget_bytes"] = None
-        diagnostics["materialize_memory_parent_rss_bytes"] = None
-        diagnostics["materialize_memory_remaining_bytes"] = None
-        diagnostics["materialize_memory_retained_bytes"] = None
-        diagnostics["materialize_memory_worker_bytes"] = None
-        diagnostics["materialize_memory_affordable_workers"] = None
-        diagnostics["materialize_memory_planned_workers"] = None
-        diagnostics["materialize_total_coordinates"] = None
-        diagnostics["materialize_max_material_coordinates"] = None
-        return
-    diagnostics.update(values)
+    diagnostics.update(values or {
+        "materialize_total_coordinates": None,
+        "materialize_max_material_coordinates": None,
+        "materialize_parallelism_planned_workers": None,
+    })
 
 
 def _accept_result(result: dict, name: str, data: dict, mesh: trimesh.Trimesh | None) -> None:
@@ -319,9 +250,9 @@ def materialize_material_meshes(
     serial_builder: MaterialBuilder,
     timings: dict | None = None,
 ) -> dict:
-    """Build ordered material volumes under the shared CPU and memory budget.
+    """Build ordered material volumes under the shared CPU policy.
 
-    在共享 CPU 和内存预算内按原顺序生成材质体积。小任务保持串行；独立进程
+    按 CPU 并行策略和实际工作项顺序生成材质体积。小任务保持串行；独立进程
     只传标量与文件路径，保持几何算法、材质顺序及错误传播不变。
 
     Args:
@@ -337,7 +268,7 @@ def materialize_material_meshes(
     """
     items = [(name, data) for name, data in slabs_by_slot.items() if data.get("slabs")]
     budget_diagnostics: dict = {}
-    workers, reason, worker_bytes, plan = _worker_budget(
+    workers, reason, plan = _worker_budget(
         items, serial_builder, geometry_policy, budget_diagnostics
     )
     if timings is not None:
@@ -425,7 +356,7 @@ def materialize_material_meshes(
                 ]
                 timings["materialize_container_source"] = start_report["container_source"]
             return _materialize_in_processes(
-                items, scale_factor, geometry_policy, workers, worker_bytes,
+                items, scale_factor, geometry_policy, workers,
                 lifetime, timings, lease_store, grant,
             )
         finally:
@@ -637,7 +568,6 @@ def _materialize_in_processes(
     scale_factor: float,
     geometry_policy: VectorLayerGeometryPolicy | None,
     workers: int,
-    worker_bytes: int,
     lifetime: MaterialProcessLifetime,
     timings: dict | None,
     lease_store: WorkerLeaseStore | None = None,
@@ -726,7 +656,6 @@ def _materialize_in_processes(
                                         if geometry_policy is not None
                                         else None
                                     ),
-                                    worker_bytes,
                                 )
                             ] = next_index
                             next_index += 1

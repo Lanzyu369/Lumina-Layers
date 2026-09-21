@@ -122,7 +122,6 @@ def _build_worker_pool(config: WorkerPoolConfig) -> WorkerPoolManager:
     """
     return WorkerPoolManager(
         max_workers=config.MAX_WORKERS,
-        default_task_timeout=config.TASK_TIMEOUT,
     )
 
 

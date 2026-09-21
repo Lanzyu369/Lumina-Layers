@@ -28,27 +28,6 @@ _HIGH_FIDELITY_PIXELS_PER_MM = 10.0
 # 视觉可识别，又不让下游的 letterbox 缩放变贵。
 _TILE_COVER_MAX_LONGEST_PX = 512
 _TILE_COVER_MIN_LONGEST_PX = 256
-# Hard timeout for one tile's SVG rasterization. The rasterize call runs
-# in a spawned ``multiprocessing.Process`` subprocess; on timeout the
-# parent terminates and (if needed) kills the subprocess so a stuck
-# resvg call cannot hold up the worker. ``_rasterize_tile_for_cover``
-# raises ``TimeoutError``, the worker catches it, treats the tile cover
-# as ``None`` (the downstream writer falls back to the silent
-# placeholder), and continues exporting the tile's 3MF.
-# ``tile_failed_cover`` is bumped as a quality indicator on the
-# *written* tile, not a "skipped" bucket.
-# 单 tile 的 SVG 栅格化硬超时：栅格化在 spawn 出来的 multiprocessing 子
-# 进程里跑，超时后父进程 ``terminate()`` + 必要时 ``kill()``，确保卡死的
-# resvg 不会拖住 worker；``_rasterize_tile_for_cover`` 抛 ``TimeoutError``，
-# worker 把封面置为 ``None``（下游写出占位封面），tile 仍然正常写入 ZIP。
-# ``tile_failed_cover`` 只作为已写出 tile 的质量指标，不再是"已丢弃"的桶。
-_TILE_COVER_RASTERIZE_TIMEOUT_S = 10.0
-# Grace window for ``terminate()`` (SIGTERM on POSIX, TerminateProcess on
-# Windows) before falling back to ``kill()`` (SIGKILL / TerminateProcess
-# with exit code -9). Short by design: resvg neither catches signals nor
-# does graceful shutdown work, so 2s is plenty.
-# ``terminate`` 后给子进程的宽限时间；resvg 不处理信号，2 秒足够。
-_TILE_COVER_TERMINATE_GRACE_S = 2.0
 # Process-local cache for the full SVG canvas array. One ``rasterize_svg``
 # call typically costs hundreds of milliseconds; with this cache, a 4×4
 # grid pays for one subprocess spawn instead of 16. The key is
@@ -126,28 +105,25 @@ def _run_rasterize_canvas_in_subprocess(
     svg_path: str,
     target_width_mm: float,
     pixels_per_mm: float,
-    timeout_s: float,
     *,
     _entry=_rasterize_canvas_subprocess_entry,
 ):
-    """Run the rasterize entry in a spawned, hard-killable subprocess.
+    """Run the rasterize entry in a spawned subprocess until it exits.
 
-    在 spawn 子进程里跑整图栅格化，并对超时做硬终止。
+    在 spawn 子进程里跑整图栅格化，等待它正常完成或报告真实进程错误。
 
     Algorithm:
         1. Spawn a fresh interpreter via ``multiprocessing.get_context("spawn")``
            so neither resvg state nor the parent's address space leak.
-        2. ``proc.join(timeout_s)`` waits for normal completion.
-        3. If still alive: ``terminate()`` (SIGTERM / TerminateProcess) →
-           short grace join → ``kill()`` (SIGKILL) → final join. Always
-           raise ``TimeoutError``.
-        4. Non-zero ``exitcode`` after a normal join is treated as a
+        2. ``proc.join()`` waits for normal completion without an application
+           compute deadline.
+        3. Non-zero ``exitcode`` after a normal join is treated as a
            rasterize crash; raise ``RuntimeError`` so the worker logs it
            and falls back to the silent placeholder.
 
     Args:
-        svg_path / target_width_mm / pixels_per_mm / timeout_s: forwarded
-            to the subprocess.
+        svg_path / target_width_mm / pixels_per_mm: forwarded to the
+            subprocess.
         _entry: testability hook. Defaults to
             ``_rasterize_canvas_subprocess_entry`` and **must** be a
             top-level pickle-able function with the same 4-arg signature
@@ -161,8 +137,6 @@ def _run_rasterize_canvas_in_subprocess(
         ``numpy.ndarray``: the RGBA canvas saved by the subprocess.
 
     Raises:
-        TimeoutError: subprocess did not finish within ``timeout_s``; was
-            terminated and (if needed) killed.
         RuntimeError: subprocess exited non-zero (rasterize crashed) or
             the parent could not spawn (daemonic restriction); caller
             falls back to placeholder cover.
@@ -206,29 +180,7 @@ def _run_rasterize_canvas_in_subprocess(
                 f"{type(exc).__name__}: {exc}"
             ) from exc
 
-        proc.join(timeout=timeout_s)
-
-        if proc.is_alive():
-            # SIGTERM (POSIX) / TerminateProcess (Windows). resvg does not
-            # install signal handlers, so this normally takes effect
-            # immediately, but we give a short grace window before
-            # escalating to SIGKILL.
-            # 先 SIGTERM 给短宽限，再 SIGKILL 兜底，确保卡死子进程被回收。
-            try:
-                proc.terminate()
-            except Exception:  # noqa: BLE001 — best-effort cleanup
-                pass
-            proc.join(timeout=_TILE_COVER_TERMINATE_GRACE_S)
-            if proc.is_alive():
-                try:
-                    proc.kill()
-                except Exception:  # noqa: BLE001 — best-effort cleanup
-                    pass
-                proc.join(timeout=_TILE_COVER_TERMINATE_GRACE_S)
-            raise TimeoutError(
-                f"rasterize_svg subprocess exceeded {timeout_s:.1f}s "
-                "and was terminated"
-            )
+        proc.join()
 
         if proc.exitcode != 0:
             raise RuntimeError(
@@ -256,8 +208,6 @@ def _get_or_rasterize_full_canvas(
     svg_path: str,
     target_width_mm: float,
     pixels_per_mm: float,
-    *,
-    timeout_s: float,
 ):
     """Return the full SVG canvas, using a parent-process cache where possible.
 
@@ -267,8 +217,8 @@ def _get_or_rasterize_full_canvas(
     mtime)`` so a one-time rasterization is reused across every tile in
     one worker invocation. mtime guards against rare in-place SVG edits.
 
-    Raises propagated ``TimeoutError`` / ``RuntimeError`` from the
-    subprocess runner; degenerate canvases (``None`` / ``size == 0``)
+    Raises propagated ``RuntimeError`` from the subprocess runner;
+    degenerate canvases (``None`` / ``size == 0``)
     return ``None`` so the caller treats them as the silent-placeholder
     path.
     """
@@ -295,7 +245,6 @@ def _get_or_rasterize_full_canvas(
         svg_path=svg_path,
         target_width_mm=target_width_mm,
         pixels_per_mm=pixels_per_mm,
-        timeout_s=timeout_s,
     )
 
     if arr is None or getattr(arr, "size", 0) == 0:
@@ -326,7 +275,7 @@ def _rasterize_tile_for_cover(
 
     将一个大画幅 tile 的区域栅格化为封面缩略图位图（PIL Image）。
 
-    Strategy: rasterize the full SVG canvas once via a hard-killable
+    Strategy: rasterize the full SVG canvas once via a spawned
     subprocess (``_run_rasterize_canvas_in_subprocess``) with
     ``crop_to_content=False`` so ``(0, 0)`` strictly maps to the SVG
     viewBox origin. The result lives in ``_TILE_COVER_CANVAS_CACHE``;
@@ -335,7 +284,7 @@ def _rasterize_tile_for_cover(
     ``(x_mm, y_mm)`` region from the canvas, convert to RGBA PIL Image,
     and clamp the longest edge into ``[256, 512] px``.
 
-    策略：用可硬终止的子进程把整张 SVG（``crop_to_content=False``，保留
+    策略：用独立子进程把整张 SVG（``crop_to_content=False``，保留
     画布坐标稳定性）栅格化一次，结果缓存到 ``_TILE_COVER_CANVAS_CACHE``；
     同一 worker 调用里其他 tile 直接命中缓存，不再 spawn。然后按 tile 的
     mm 范围在像素空间按比例裁切，转成 RGBA 后把长边夹到 ``[256, 512] px``。
@@ -352,10 +301,7 @@ def _rasterize_tile_for_cover(
         处理，不发 WARNING（与 ``cover_source=None`` 同义）。
 
     Raises:
-        TimeoutError: 子进程栅格化超过 ``_TILE_COVER_RASTERIZE_TIMEOUT_S``
-            秒，已被 ``terminate``/``kill`` 回收。调用方应记录 WARNING
-            并以 ``cover_source=None`` 走占位封面路径。
-        RuntimeError: 子进程崩溃或无法 spawn。调用方处理同 ``TimeoutError``。
+        RuntimeError: 子进程崩溃或无法 spawn。
     """
 
     from PIL import Image
@@ -383,7 +329,6 @@ def _rasterize_tile_for_cover(
         svg_path=svg_path,
         target_width_mm=float(total_width_mm),
         pixels_per_mm=pixels_per_mm,
-        timeout_s=_TILE_COVER_RASTERIZE_TIMEOUT_S,
     )
     if arr is None:
         return None
@@ -580,7 +525,6 @@ def worker_generate_preview(
     from config import ModelingMode
     from api.structured_logging import get_logger
     from core.converter import generate_preview_cached
-    from core.errors import VectorMeshMemoryBudgetError
 
     log = get_logger(__name__)
 
@@ -656,10 +600,6 @@ def worker_generate_preview(
             material_delta_e00_tolerance=material_delta_e00_tolerance,
             replacement_regions=replacement_regions,
         )
-    except VectorMeshMemoryBudgetError:
-        # The core admission guard already emitted the single structured
-        # rejection record. Preserve the typed error for the API's 422 mapper.
-        raise
     except (
         ValueError,
         TypeError,
@@ -1552,7 +1492,7 @@ def worker_generate_model(
 
     from api.structured_logging import get_logger
     from core.converter import generate_final_model
-    from core.errors import CachedPreviewAnalysisError, VectorMeshMemoryBudgetError
+    from core.errors import CachedPreviewAnalysisError
 
     log = get_logger(__name__)
     normalized_params = _normalize_puzzle_piece_target_width(image_path, params)
@@ -1617,10 +1557,6 @@ def worker_generate_model(
             export_transform_metadata=export_transform_metadata,
             **normalized_params,
         )
-    except VectorMeshMemoryBudgetError:
-        # Expected, recoverable admission rejection: do not duplicate it as a
-        # worker ERROR with another traceback.
-        raise
     except (
         CachedPreviewAnalysisError,
         ValueError,
@@ -1707,7 +1643,6 @@ def worker_generate_model_surface_overlay(
     )
     from core.model_surface.pipeline import build_surface_overlay_scene
     from core.model_surface.serialization import surface_footprint_from_payload
-    from core.vector_engine import _enforce_vector_scene_export_headroom
     from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
 
     log = get_logger(__name__)
@@ -1779,11 +1714,6 @@ def worker_generate_model_surface_overlay(
                 converter_params.get("target_width_mm", 60.0)
             ),
             log=log,
-        )
-        _enforce_vector_scene_export_headroom(
-            overlay.scene,
-            stage="model_surface_3mf_export",
-            workspace_multiplier=5.0,
         )
         export_scene_with_bambu_metadata(
             scene=overlay.scene,
@@ -1872,7 +1802,7 @@ def _resolve_model_surface_cover_source(
         cover_buffer = BytesIO()
         cover_image.save(cover_buffer, format="PNG", optimize=False)
         return cover_buffer.getvalue()
-    except (OSError, ValueError, RuntimeError, TimeoutError, ImportError) as exc:
+    except (OSError, ValueError, RuntimeError, ImportError) as exc:
         log.warning(
             "Model-surface SVG cover render failed; using placeholder",
             extra={
@@ -1949,14 +1879,14 @@ def worker_generate_large_format_svg_native(
 
     Returned counters:
         ``tile_count``: tiles written into the ZIP. Includes tiles whose
-            cover thumbnail rasterization timed out or raised — those still
-            export a 3MF with the silent placeholder cover.
+            cover thumbnail rasterization raised — those still export a 3MF
+            with the silent placeholder cover.
         ``tile_skipped_empty``: tiles dropped because their geometry was
             empty (slicer-stage drop or post-build empty scene). Silent —
             no WARNING.
         ``tile_failed_cover``: quality indicator on ``tile_count`` — number
             of written tiles whose cover defaulted to the placeholder due
-            to rasterize timeout / exception. **Subset of ``tile_count``,
+            to a rasterize exception. **Subset of ``tile_count``,
             not a separate bucket.** Each increment is paired with one
             ``bambu_3mf_cover_thumbnail_failed`` WARNING.
 
@@ -1985,19 +1915,18 @@ def worker_generate_large_format_svg_native(
     from core.vector_structure import resolve_structure_plan
     from core.vector_engine import (
         _concatenate_meshes_fast,
-        _enforce_vector_mesh_runtime_headroom,
-        _enforce_vector_scene_export_headroom,
-        _mesh_array_storage_bytes,
         apply_matched_rgb_overrides_to_analysis,
         apply_recipe_overrides_to_analysis,
     )
     from core.vector_large_format import (
-        MAX_LARGE_FORMAT_TILE_COUNT,
         format_large_format_tile_label,
         resolve_large_format_grid_shape,
         slice_vector_analysis_into_tiles,
     )
-    from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
+    from utils.bambu_3mf_writer import (
+        export_scene_with_bambu_metadata,
+        read_wipe_tower_placement_warnings,
+    )
 
     log = get_logger(__name__)
 
@@ -2017,7 +1946,6 @@ def worker_generate_large_format_svg_native(
         total_height_mm=total_height_mm,
         tile_width_mm=tile_width_mm,
         tile_height_mm=tile_height_mm,
-        max_tiles=MAX_LARGE_FORMAT_TILE_COUNT,
     )
     expected_total_tiles = grid_cols * grid_rows
 
@@ -2269,6 +2197,7 @@ def worker_generate_large_format_svg_native(
     layer_height_setting = f"{layer_height_mm:g}"
 
     successful_paths: list[tuple[str, str]] = []
+    tile_warnings: list[str] = []
     tile_cleanup_paths: set[str] = set()
     zip_path: str | None = None
     zip_ready = False
@@ -2366,17 +2295,6 @@ def worker_generate_large_format_svg_native(
             if board_geom is not None and not separate_backing:
                 target_geom = scene.geometry.get(target_slot) if target_slot else None
                 if target_geom is not None:
-                    source_mesh_bytes = _mesh_array_storage_bytes(
-                        target_geom
-                    ) + _mesh_array_storage_bytes(board_geom)
-                    _enforce_vector_mesh_runtime_headroom(
-                        stage="large_format_vector_board_merge",
-                        estimated_additional_bytes=max(
-                            16 * 1024 * 1024,
-                            source_mesh_bytes * 2,
-                        ),
-                        shape_count=2,
-                    )
                     merged = _concatenate_meshes_fast(
                         [target_geom, board_geom],
                     )
@@ -2437,26 +2355,22 @@ def worker_generate_large_format_svg_native(
             # ``_run_rasterize_canvas_in_subprocess``) with a 10s timeout
             # and a parent-process canvas cache, so:
             #
-            # - A stuck resvg process is ``terminate``/``kill``-ed;
-            #   subsequent tiles never inherit a live thread/process from
-            #   the failed one.
             # - First tile pays the spawn + rasterize cost; remaining
             #   tiles in the same worker invocation hit
             #   ``_TILE_COVER_CANVAS_CACHE`` and skip the subprocess
             #   entirely.
             #
-            # On TimeoutError / RuntimeError (subprocess crashed or could
-            # not be spawned) we bump ``tile_failed_cover``, log a single
+            # On RuntimeError (subprocess crashed or could not be spawned)
+            # we bump ``tile_failed_cover``, log a single
             # structured WARNING, and fall through with
             # ``tile_cover = None`` so the writer emits the silent
             # placeholder cover and the printable tile still reaches the
             # ZIP. ``tile_failed_cover`` is a quality indicator on the
             # written tile, not a "skipped" bucket.
             #
-            # 用 spawn 子进程跑栅格化（10 秒硬超时 + 父进程整图缓存），
-            # 卡死能被 ``terminate``/``kill`` 真正回收，后续 tile 命中
-            # 缓存不再 spawn；超时/崩溃时 tile 仍然进 ZIP，封面回落到
-            # 静默占位，``tile_failed_cover`` 只是质量指标。
+            # 用 spawn 子进程跑栅格化并复用父进程整图缓存；后续 tile
+            # 命中缓存不再 spawn；真实崩溃时 tile 仍然进 ZIP，封面回落
+            # 到静默占位，``tile_failed_cover`` 只是质量指标。
             tile_cover = None
             try:
                 tile_cover = _rasterize_tile_for_cover(
@@ -2464,23 +2378,6 @@ def worker_generate_large_format_svg_native(
                     image_path,
                     total_width_mm,
                     total_height_mm,
-                )
-            except TimeoutError:
-                tile_cover = None
-                tile_failed_cover += 1
-                log.warning(
-                    "Bambu 3MF cover thumbnail tile rasterization "
-                    "timed out; exporting tile with placeholder cover",
-                    extra={
-                        "event": "bambu_3mf_cover_thumbnail_failed",
-                        "path": str(tile_3mf_path),
-                        "error_type": "tile_rasterize_timeout",
-                        "error_message": (
-                            f"rasterize_svg subprocess exceeded "
-                            f"{_TILE_COVER_RASTERIZE_TIMEOUT_S:.0f}s"
-                        ),
-                        "fallback_action": "placeholder_written",
-                    },
                 )
             except MemoryError:
                 raise
@@ -2499,11 +2396,6 @@ def worker_generate_large_format_svg_native(
                     },
                 )
 
-            _enforce_vector_scene_export_headroom(
-                scene,
-                stage="large_format_vector_3mf_export",
-                workspace_multiplier=5.0,
-            )
             export_scene_with_bambu_metadata(
                 scene=scene,
                 output_path=tile_3mf_path,
@@ -2559,6 +2451,9 @@ def worker_generate_large_format_svg_native(
                     False if material_source == "material_archive" else None
                 ),
             )
+            for warning_code in read_wipe_tower_placement_warnings(tile_3mf_path):
+                if warning_code not in tile_warnings:
+                    tile_warnings.append(warning_code)
             successful_paths.append(
                 (
                     format_large_format_tile_label(source_basename=tile_name_prefix, tile_label=tile.label),
@@ -2613,7 +2508,7 @@ def worker_generate_large_format_svg_native(
             "tile_failed_cover": tile_failed_cover,
             "grid_cols": grid_cols,
             "grid_rows": grid_rows,
-            "warnings": [],
+            "warnings": tile_warnings,
         }
     finally:
         for path_3mf in tile_cleanup_paths:

@@ -89,8 +89,6 @@ def _force_process_plan(monkeypatch: pytest.MonkeyPatch, workers: int = 2):
             workers=workers, limiting_reason="test", outer_demand=1,
         ),
     )
-    monkeypatch.setattr(materializer, "get_process_rss_bytes", lambda: 100 * 1024**2)
-    monkeypatch.setattr(materializer, "resolve_vector_mesh_memory_budget_bytes", lambda: 8 * 1024**3)
     return materializer
 
 
@@ -142,18 +140,6 @@ def test_worker_error_propagates_without_partial_commit(
     assert not list(tmp_path.glob("lumina-vector-material-*"))
 
 
-def test_task_memory_cap_prevents_process_creation(monkeypatch: pytest.MonkeyPatch) -> None:
-    materializer = _force_process_plan(monkeypatch, workers=8)
-    monkeypatch.setattr(materializer, "resolve_vector_mesh_memory_budget_bytes", lambda: 110 * 1024**2)
-    monkeypatch.setattr(materializer, "ProcessPoolExecutor", lambda **kwargs: pytest.fail("budget exceeded"))
-    timings = {}
-    result = materializer.materialize_material_meshes(
-        _slots(), scale_factor=1.0, geometry_policy=None,
-        serial_builder=vector_engine.build_vector_layered_volume, timings=timings,
-    )
-    assert len(result) == 3
-    assert timings["materialize_parallelism_workers"] == 1
-    assert timings["materialize_parallelism_limit"] == "vector_memory_budget"
 
 
 def test_geometry_transport_preserves_precision_and_coordinates(tmp_path: Path) -> None:
@@ -175,6 +161,17 @@ def test_small_work_and_nested_worker_never_spawn(monkeypatch: pytest.MonkeyPatc
     from core import vector_material_meshing as materializer
     from core.task_parallelism import task_parallelism_worker_scope
 
+    monkeypatch.setattr(
+        materializer,
+        "resolve_task_parallelism_plan",
+        lambda *args, **kwargs: SimpleNamespace(
+            workers=1,
+            limiting_reason="insufficient_work_units",
+            outer_demand=1,
+            effective_cpu_capacity=1,
+            demand_snapshot_fallback=False,
+        ),
+    )
     monkeypatch.setattr(materializer, "ProcessPoolExecutor", lambda **kw: pytest.fail("unexpected pool"))
     for nested in (False, True):
         timings = {}
@@ -207,30 +204,6 @@ def test_generator_input_is_not_consumed_by_planning() -> None:
     assert len(result) == 3
 
 
-@pytest.mark.parametrize("cpus", [1, 2, 4, 10, 16, 20, 32])
-@pytest.mark.parametrize("outer_demand", [1, 4])
-def test_material_budget_adapts_to_device_and_concurrent_tasks(
-    monkeypatch: pytest.MonkeyPatch, cpus: int, outer_demand: int,
-) -> None:
-    from functools import partial
-    from core import vector_material_meshing as materializer
-
-    monkeypatch.setenv("LUMINA_VECTOR_PARALLELISM", "auto")
-    monkeypatch.setattr(materializer, "_coordinate_counts", lambda items: [100_000] * len(items))
-    monkeypatch.setattr(materializer, "resolve_task_parallelism_plan", partial(
-        materializer.resolve_task_parallelism_plan, effective_cpu_capacity=cpus,
-        outer_demand=outer_demand, available_memory_bytes=64 * 1024**3,
-    ))
-    monkeypatch.setattr(materializer, "get_process_rss_bytes", lambda: 100 * 1024**2)
-    monkeypatch.setattr(materializer, "resolve_vector_mesh_memory_budget_bytes", lambda: 16 * 1024**3)
-    items = [(str(i), {"slabs": [i]}) for i in range(12)]
-    workers, _reason, _bytes, plan = materializer._worker_budget(
-        items, vector_engine.build_vector_layered_volume, None,
-    )
-    assert workers == min(12, max(1, cpus // outer_demand))
-    # The plan travels back so the lease admission can use the same effective
-    # CPU capacity the static plan did, instead of re-discovering it.
-    assert plan.effective_cpu_capacity == cpus
 
 
 def test_unavailable_process_monitor_falls_back_to_serial(monkeypatch: pytest.MonkeyPatch) -> None:
