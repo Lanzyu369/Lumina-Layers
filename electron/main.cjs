@@ -7,6 +7,7 @@ const {
   net: electronNet,
   protocol,
   session,
+  shell,
   webFrameMain,
 } = require("electron");
 const { spawn, execSync } = require("child_process");
@@ -31,6 +32,8 @@ const {
   isAllowedWorkshopPermission,
   isAllowedWorkshopPopup,
   isAllowedWorkshopRequest,
+  isAllowedWikiIpcSender,
+  isAllowedWikiUrl,
   isWorkshopFrameProcessIsolated,
   resolveWorkshopRuntimeRequest,
   shouldBlockWorkshopNavigation,
@@ -792,6 +795,26 @@ ipcMain.on("set-language", (_event, lang) => {
 
 ipcMain.handle("get-app-version", () => {
   return app.getVersion();
+});
+
+ipcMain.handle("open-wiki", async (event, url) => {
+  const senderFrame = event.senderFrame ?? null;
+  if (
+    event.sender !== win?.webContents ||
+    !isAllowedWikiIpcSender({
+      isMainFrame:
+        senderFrame !== null && senderFrame === event.sender.mainFrame,
+      senderWebContentsId: event.sender.id,
+      trustedWebContentsId: win?.webContents?.id ?? null,
+      senderFrameUrl: senderFrame?.url ?? null,
+      trustedMainFrameUrl,
+    }) ||
+    !isAllowedWikiUrl(url)
+  ) {
+    throw new Error("Wiki external link denied.");
+  }
+  await shell.openExternal(url);
+  return { opened: true };
 });
 
 ipcMain.handle("save-generated-file", (event, payload) => saveGeneratedFile({

@@ -8,6 +8,8 @@ const {
   isAllowedWorkshopPermission,
   isAllowedWorkshopPopup,
   isAllowedWorkshopRequest,
+  isAllowedWikiIpcSender,
+  isAllowedWikiUrl,
   isWorkshopFrameProcessIsolated,
   resolveWorkshopRuntimeRequest,
   shouldBlockWorkshopNavigation,
@@ -18,6 +20,10 @@ const {
 const HOST_URL = "http://127.0.0.1:4174/";
 const MODULE_URL =
   "lumina-workshop://fixture.hello/1.0.0/ui/index.html";
+const WIKI_ZH_URL =
+  "https://wiki.luminastudio.com.cn/zh/docs/reference/converter-basic/source-type/#anchor";
+const WIKI_EN_URL =
+  "https://wiki.luminastudio.com.cn/en/docs/reference/converter-basic/source-type/";
 
 describe("Workshop desktop runtime security", () => {
   it("creates a unique non-empty per-launch token", () => {
@@ -314,6 +320,13 @@ describe("Workshop desktop runtime security", () => {
       false,
     );
     assert.equal(
+      isAllowedWorkshopPopup({
+        openerUrl: null,
+        targetUrl: WIKI_ZH_URL,
+      }),
+      false,
+    );
+    assert.equal(
       isAllowedWorkshopPermission({
         frameUrl: MODULE_URL,
         requestingOrigin: "null",
@@ -344,6 +357,44 @@ describe("Workshop desktop runtime security", () => {
       isAllowedWorkshopIpcSender("https://example.com/"),
       false,
     );
+  });
+
+  it("allows only official HTTPS Wiki documentation URLs", () => {
+    assert.equal(isAllowedWikiUrl(WIKI_ZH_URL), true);
+    assert.equal(isAllowedWikiUrl(WIKI_EN_URL), true);
+    for (const invalid of [
+      "http://wiki.luminastudio.com.cn/zh/docs/reference/converter-basic/source-type/",
+      "https://evil.example/zh/docs/reference/converter-basic/source-type/",
+      "https://wiki.luminastudio.com.cn/zh/",
+      "https://wiki.luminastudio.com.cn/zh/docs/../admin/",
+      "https://user:pass@wiki.luminastudio.com.cn/zh/docs/reference/",
+      "https://wiki.luminastudio.com.cn:8443/zh/docs/reference/",
+      "",
+      null,
+    ]) {
+      assert.equal(isAllowedWikiUrl(invalid), false, String(invalid));
+    }
+  });
+
+  it("requires the real main window and main frame for Wiki IPC", () => {
+    const trusted = {
+      isMainFrame: true,
+      senderWebContentsId: 17,
+      trustedWebContentsId: 17,
+      senderFrameUrl: HOST_URL,
+      trustedMainFrameUrl: HOST_URL,
+    };
+    assert.equal(isAllowedWikiIpcSender(trusted), true);
+    for (const invalid of [
+      { ...trusted, isMainFrame: false },
+      { ...trusted, senderWebContentsId: 18 },
+      { ...trusted, trustedMainFrameUrl: "http://127.0.0.1:8000/" },
+      { ...trusted, senderFrameUrl: MODULE_URL },
+      { ...trusted, senderFrameUrl: null },
+      { ...trusted, senderWebContentsId: null },
+    ]) {
+      assert.equal(isAllowedWikiIpcSender(invalid), false);
+    }
   });
 
   it("requires a distinct renderer process for the module frame", () => {
