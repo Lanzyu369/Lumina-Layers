@@ -3639,12 +3639,13 @@ def _rasterize_svg_fallback_tile(
     """Rasterize one SVG fallback tile without allocating a full canvas.
 
     将 SVG fallback 直接按全局毫米坐标裁成一个 tile，避免先创建整幅
-    大画幅位图；tile 的 viewBox 保留原 SVG 的全局原点和接缝映射。
+    大画幅位图；原 SVG 作为嵌套 viewport 保留完整 viewBox 和百分比布局，
+    外层 viewport 只负责裁切输出窗口。
     """
 
     tree = ET.parse(svg_path)
-    root = tree.getroot()
-    raw_view_box = root.attrib.get("viewBox") or root.attrib.get("viewbox")
+    source_root = tree.getroot()
+    raw_view_box = source_root.attrib.get("viewBox") or source_root.attrib.get("viewbox")
     if not raw_view_box:
         def _numeric_length(raw: str | None) -> float | None:
             match = re.match(r"^\s*([0-9]+(?:\.[0-9]*)?|\.[0-9]+)", str(raw or ""))
@@ -3653,8 +3654,8 @@ def _rasterize_svg_fallback_tile(
             value = float(match.group(1))
             return value if math.isfinite(value) and value > 0 else None
 
-        width = _numeric_length(root.attrib.get("width"))
-        height = _numeric_length(root.attrib.get("height"))
+        width = _numeric_length(source_root.attrib.get("width"))
+        height = _numeric_length(source_root.attrib.get("height"))
         if width is None or height is None:
             raise ValueError("SVG fallback requires a viewBox or finite canvas dimensions")
         raw_view_box = f"0 0 {width:g} {height:g}"
@@ -3673,9 +3674,36 @@ def _rasterize_svg_fallback_tile(
         max((x1_mm - x0_mm) * scale_x, 1e-9),
         max((y1_mm - y0_mm) * scale_y, 1e-9),
     )
-    root.attrib["viewBox"] = " ".join(f"{value:.12g}" for value in tile_view_box)
-    root.attrib["width"] = f"{max(x1_mm - x0_mm, 1e-9):.12g}mm"
-    root.attrib["height"] = f"{max(y1_mm - y0_mm, 1e-9):.12g}mm"
+
+    # Keep the original document as a nested viewport. Changing the original
+    # root's viewBox would make percentage geometry resolve against the tile
+    # and would change the actual SVG layout (for example, a 50% blue panel
+    # would become 100% of the right tile). The outer viewport clips the full
+    # document to the requested global window instead.
+    nested_root = ET.Element(source_root.tag, dict(source_root.attrib))
+    nested_root.attrib["x"] = f"{view_x:.12g}"
+    nested_root.attrib["y"] = f"{view_y:.12g}"
+    nested_root.attrib["width"] = f"{view_w:.12g}"
+    nested_root.attrib["height"] = f"{view_h:.12g}"
+    nested_root.attrib["viewBox"] = " ".join(
+        f"{value:.12g}" for value in (view_x, view_y, view_w, view_h)
+    )
+    nested_root.attrib.pop("viewbox", None)
+    for child in list(source_root):
+        nested_root.append(child)
+
+    ET.register_namespace("", "http://www.w3.org/2000/svg")
+    outer_root = ET.Element(
+        source_root.tag,
+        {
+            "width": f"{max(x1_mm - x0_mm, 1e-9):.12g}mm",
+            "height": f"{max(y1_mm - y0_mm, 1e-9):.12g}mm",
+            "viewBox": " ".join(f"{value:.12g}" for value in tile_view_box),
+            "overflow": "hidden",
+        },
+    )
+    outer_root.append(nested_root)
+    tree._setroot(outer_root)
 
     svg_fd, tile_svg_path = tempfile.mkstemp(suffix=".svg", dir=TEMP_DIR)
     os.close(svg_fd)
@@ -3992,6 +4020,7 @@ async def _generate_large_format_raster(
                 y1_mm = min(y0_mm + tile_height_mm, total_height_mm)
                 cur_tile_w = x1_mm - x0_mm
 
+                source_px_x0 = source_px_x1 = source_px_y0 = source_px_y1 = 0
                 if svg_fallback_path is not None:
                     tile_path = _rasterize_svg_fallback_tile(
                         svg_path=svg_fallback_path,
@@ -4006,31 +4035,43 @@ async def _generate_large_format_raster(
                         ),
                     )
                     route_local_cleanup_paths.add(tile_path)
-                    if hm_gray is not None:
-                        px_h, px_w = hm_gray.shape[:2]
-                        px_x0 = int(round(x0_mm * px_w / total_width_mm))
-                        px_x1 = min(int(round(x1_mm * px_w / total_width_mm)), px_w)
-                        px_y0 = int(round(y0_mm * px_h / total_height_mm))
-                        px_y1 = min(int(round(y1_mm * px_h / total_height_mm)), px_h)
-                    else:
-                        px_x0 = px_x1 = px_y0 = px_y1 = 0
                 elif source_x_boundaries is not None:
-                    px_x0 = source_x_boundaries[c]
-                    px_x1 = source_x_boundaries[c + 1]
+                    source_px_x0 = source_x_boundaries[c]
+                    source_px_x1 = source_x_boundaries[c + 1]
                 else:
-                    px_x0 = int(round(x0_mm * px_per_mm_x))
-                    px_x1 = min(int(round(x1_mm * px_per_mm_x)), px_w)
+                    source_px_x0 = int(round(x0_mm * px_per_mm_x))
+                    source_px_x1 = min(int(round(x1_mm * px_per_mm_x)), px_w)
                 if source_y_boundaries is not None:
-                    px_y0 = source_y_boundaries[r]
-                    px_y1 = source_y_boundaries[r + 1]
+                    source_px_y0 = source_y_boundaries[r]
+                    source_px_y1 = source_y_boundaries[r + 1]
                 else:
-                    px_y0 = int(round(y0_mm * px_per_mm_y))
-                    px_y1 = min(int(round(y1_mm * px_per_mm_y)), px_h)
+                    source_px_y0 = int(round(y0_mm * px_per_mm_y))
+                    source_px_y1 = min(int(round(y1_mm * px_per_mm_y)), px_h)
+
+                heightmap_px_x0 = heightmap_px_x1 = heightmap_px_y0 = heightmap_px_y1 = 0
+                if hm_gray is not None:
+                    hm_height, hm_width = hm_gray.shape[:2]
+                    heightmap_px_x0 = max(
+                        0, min(hm_width, int(round(x0_mm * hm_width / total_width_mm)))
+                    )
+                    heightmap_px_x1 = max(
+                        heightmap_px_x0,
+                        min(hm_width, int(round(x1_mm * hm_width / total_width_mm))),
+                    )
+                    heightmap_px_y0 = max(
+                        0, min(hm_height, int(round(y0_mm * hm_height / total_height_mm)))
+                    )
+                    heightmap_px_y1 = max(
+                        heightmap_px_y0,
+                        min(hm_height, int(round(y1_mm * hm_height / total_height_mm))),
+                    )
 
                 if svg_fallback_path is None:
                     if full_img is None:
                         raise RuntimeError("Large-format raster source image is unavailable")
-                    tile_img = full_img.crop((px_x0, px_y0, px_x1, px_y1))
+                    tile_img = full_img.crop(
+                        (source_px_x0, source_px_y0, source_px_x1, source_px_y1)
+                    )
                     fd, tile_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
                     os.close(fd)
                     tile_img.save(tile_path)
@@ -4038,7 +4079,10 @@ async def _generate_large_format_raster(
 
                 tile_params = dict(shared_params, target_width_mm=cur_tile_w)
                 if hm_gray is not None:
-                    hm_tile = hm_gray[px_y0:px_y1, px_x0:px_x1]
+                    hm_tile = hm_gray[
+                        heightmap_px_y0:heightmap_px_y1,
+                        heightmap_px_x0:heightmap_px_x1,
+                    ]
                     fd2, hm_tile_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
                     os.close(fd2)
                     Image.fromarray(hm_tile).save(hm_tile_path)

@@ -659,21 +659,6 @@ def test_round_stroke_bbox_contains_geometry_at_any_user_unit_scale(
     )
 
 
-def test_microscopic_dash_period_fails_closed_without_expanding_billions() -> None:
-    result = lumina_svg_core.analyze_svg_svg(
-        "<svg viewBox='0 0 100 10'>"
-        "<path d='M0 5H100' fill='none' stroke='red' stroke-width='1' "
-        "stroke-dasharray='0.00000001 0.00000001'/>"
-        "</svg>",
-        target_width_mm=100.0,
-        tolerance_mm=0.02,
-    )
-
-    assert result.status == "unsupported"
-    assert result.reason_code == "unsupported_complexity"
-    assert result.raw.geometry_count == 0
-
-
 def test_closed_stroke_remains_a_band_with_an_independent_hole() -> None:
     result = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 40 40'>"

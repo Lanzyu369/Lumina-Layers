@@ -21,6 +21,7 @@ NEROUED_3MF_HIDDENIMPORTS = ("neroued_3mf", "neroued_3mf._neroued_3mf")
 LUMINA_SVG_CORE_PACKAGE = "lumina_svg_core"
 LUMINA_SVG_CORE_EXTENSION = "lumina_svg_core._lumina_svg_core"
 LUMINA_SVG_COMPENSATION_EXTENSION = "lumina_svg_core._lumina_svg_compensation"
+COLORCHECKER_DATA_DIR = ROOT / "core" / "colorchecker" / "data"
 LUMINA_SVG_CORE_HIDDENIMPORTS = (
     "lumina_svg_core",
     LUMINA_SVG_CORE_EXTENSION,
@@ -130,6 +131,10 @@ backend_datas = [
     *collect_machine_registry_runtime_datas(ROOT / 'machine_registry'),
     ('printer_profiles', 'printer_profiles'),
     ('bambu_config_template.json', '.'),
+    ('lut-preset', 'lut-preset'),
+    # The frozen backend imports the built-in ColorChecker reference registry
+    # during app startup; keep its descriptor/reference data beside the module.
+    (str(COLORCHECKER_DATA_DIR), 'core/colorchecker/data'),
     *neroued_3mf_datas,
     *lumina_svg_core_datas,
     *glb_v2_datas,

@@ -458,6 +458,136 @@ def test_svg_fallback_rasterizes_one_global_tile_without_full_canvas(tmp_path) -
         Path(tile_path).unlink(missing_ok=True)
 
 
+def test_svg_fallback_preserves_percentage_viewport_across_tiles(tmp_path) -> None:
+    """The real resvg path crops a full SVG viewport, not a re-laid-out root."""
+
+    svg_path = tmp_path / "percentage-layout.svg"
+    svg_path.write_text(
+        """<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+  <defs><filter id="blur"><feGaussianBlur stdDeviation="0.1"/></filter></defs>
+  <g filter="url(#blur)">
+    <rect width="100%" height="100%" fill="red"/>
+    <rect x="50%" width="50%" height="100%" fill="blue"/>
+  </g>
+</svg>""",
+        encoding="utf-8",
+    )
+
+    tile_paths: list[str] = []
+    try:
+        for x0_mm, x1_mm in ((0.0, 50.0), (50.0, 100.0)):
+            tile_path = _rasterize_svg_fallback_tile(
+                svg_path=str(svg_path),
+                total_width_mm=100.0,
+                total_height_mm=100.0,
+                x0_mm=x0_mm,
+                y0_mm=0.0,
+                x1_mm=x1_mm,
+                y1_mm=100.0,
+                pixels_per_mm=4.0,
+            )
+            tile_paths.append(tile_path)
+
+        with Image.open(tile_paths[0]) as left_image, Image.open(tile_paths[1]) as right_image:
+            left_rgb = np.asarray(left_image.convert("RGB"), dtype=np.float32).mean(axis=(0, 1))
+            right_rgb = np.asarray(right_image.convert("RGB"), dtype=np.float32).mean(axis=(0, 1))
+
+        assert left_rgb[0] > 240 and left_rgb[2] < 10
+        assert right_rgb[2] > 240 and right_rgb[0] < 10
+    finally:
+        for tile_path in tile_paths:
+            Path(tile_path).unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_svg_fallback_heightmap_uses_independent_global_y_coordinates(tmp_path) -> None:
+    """Fallback tiles must receive the corresponding upper/lower heightmap rows."""
+
+    class _Completed:
+        def __init__(self, value: dict[str, object]) -> None:
+            self.value = value
+
+        def __await__(self):
+            async def _resolve():
+                return self.value
+
+            return _resolve().__await__()
+
+    svg_path = tmp_path / "heightmap-source.svg"
+    svg_path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" '
+        'viewBox="0 0 100 100"><rect width="100%" height="100%" fill="red"/></svg>',
+        encoding="utf-8",
+    )
+    lut_path = tmp_path / "lut.npy"
+    lut_path.write_bytes(b"lut")
+    heightmap = np.zeros((100, 100), dtype=np.uint8)
+    heightmap[:50, :] = 64
+    heightmap[50:, :] = 192
+
+    sampled: list[tuple[tuple[int, int], float]] = []
+    tile_paths: list[Path] = []
+
+    def _submit(_worker, _image_path, _lut_path, tile_params):
+        with Image.open(tile_params["heightmap_path"]) as tile_heightmap:
+            sampled.append(
+                (
+                    tile_heightmap.size,
+                    float(np.asarray(tile_heightmap).mean()),
+                )
+            )
+        output_path = tmp_path / f"tile-{len(tile_paths)}.3mf"
+        output_path.write_bytes(b"3mf")
+        tile_paths.append(output_path)
+        return _Completed(
+            {
+                "threemf_path": str(output_path),
+                "glb_path": None,
+                "status_msg": "ok",
+            }
+        )
+
+    pool = MagicMock(spec=WorkerPoolManager)
+    pool.submit = MagicMock(side_effect=_submit)
+    store = SessionStore(ttl=1800)
+    registry = FileRegistry()
+    request = LargeFormatConvertGenerateRequest(
+        lut_name="test_lut",
+        modeling_mode=ModelingMode.HIGH_FIDELITY,
+        enable_relief=True,
+        height_mode="heightmap",
+    )
+
+    try:
+        result = await _generate_large_format_raster(
+            image_path=None,
+            svg_fallback_path=str(svg_path),
+            lut_path=str(lut_path),
+            source_basename="heightmap-source",
+            recipe_overrides=None,
+            recipe_override_masks_path=None,
+            material_matrix_path=None,
+            total_width_mm=100.0,
+            total_height_mm=100.0,
+            tile_width_mm=100.0,
+            tile_height_mm=50.0,
+            request=request,
+            session_data={"heightmap_grayscale": heightmap},
+            sid="heightmap-fallback-session",
+            store=store,
+            registry=registry,
+            pool=pool,
+        )
+
+        assert result["tile_count"] == 2
+        assert sampled == [((100, 50), 64.0), ((100, 50), 192.0)]
+    finally:
+        registry.clear_all()
+        store.clear_all()
+        for output_path in tile_paths:
+            output_path.unlink(missing_ok=True)
+
+
 def test_color_card_response_forwards_only_embedded_wipe_tower_warnings(
     tmp_path: Path,
 ) -> None:
