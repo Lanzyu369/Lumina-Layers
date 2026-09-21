@@ -374,6 +374,43 @@ class TestSubmit:
     """Test async submit behavior."""
 
     @pytest.mark.asyncio
+    async def test_synchronous_submit_failure_restarts_pool_and_cleans_demand(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A submit-time executor failure keeps its error and does not leak demand."""
+
+        real_executor = worker_pool.ProcessPoolExecutor
+        factory_calls = 0
+
+        class _FailingExecutor:
+            _processes: dict = {}
+
+            def submit(self, *_args, **_kwargs):
+                raise OSError("synchronous submit failure")
+
+            def shutdown(self, **_kwargs):
+                return None
+
+        def _factory(**kwargs):
+            nonlocal factory_calls
+            factory_calls += 1
+            if factory_calls == 1:
+                return _FailingExecutor()
+            return real_executor(**kwargs)
+
+        monkeypatch.setattr(worker_pool, "ProcessPoolExecutor", _factory)
+        pool = WorkerPoolManager(max_workers=1)
+        pool.start()
+        try:
+            with pytest.raises(OSError, match="synchronous submit failure"):
+                await pool.submit(_add, 1, 2)
+            assert pool.outstanding_tasks == 0
+            assert await pool.submit(_add, 2, 3) == 5
+        finally:
+            pool.shutdown(wait=True)
+
+    @pytest.mark.asyncio
     async def test_submit_returns_result(self) -> None:
         pool = WorkerPoolManager(max_workers=2)
         pool.start()

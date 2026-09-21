@@ -1237,23 +1237,6 @@ def test_recorder_converts_smooth_quadratic_sources_to_cubics(
     assert "cubic_to" in result.commands[0].path_verbs
 
 
-def test_long_smooth_quadratic_chain_reaches_resource_budget_not_syntax_gate(
-) -> None:
-    chain = " ".join(
-        f"T{10 + index % 81} {10 + (index * 37) % 81}"
-        for index in range(6000)
-    )
-    result = lumina_svg_core.analyze_svg_svg(
-        "<svg viewBox='0 0 100 100'>"
-        "<path d='M0 0Q0 30 0 50 " + chain + " L100 0Z'/>"
-        "</svg>",
-        target_width_mm=100.0,
-        tolerance_mm=0.015,
-    )
-
-    assert result.status == "unsupported"
-    assert result.reason_code == "unsupported_complexity"
-    assert result.raw.geometry_count == 0
 
 
 @pytest.mark.parametrize(

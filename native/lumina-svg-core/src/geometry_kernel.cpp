@@ -181,10 +181,7 @@ std::vector<GridBounds> individualPathBounds(const Paths64& paths)
 
 size_t pathPointCount(const Paths64& paths)
 {
-    size_t count = 0;
-    for(const auto& path : paths)
-        count = checkedSizeSum(count, path.size());
-    return count;
+    return clipperPathPointCount(paths);
 }
 
 void consumeBooleanInputs(ComplexityBudget& complexityBudget,
@@ -204,16 +201,6 @@ void consumeClipperOutput(ComplexityBudget& complexityBudget,
     complexityBudget.consumeClipperOutputRings(paths.size());
 }
 
-void consumeClipperExecution(ComplexityBudget& complexityBudget,
-                             const Clipper64& clipper)
-{
-    complexityBudget.consumeClipperEngineWork(
-        clipper.OutputPointAllocationCount(),
-        clipper.OutputRecordAllocationCount(),
-        clipper.IntersectionNodeAllocationCount(),
-        clipper.ProcessedIntersectionEventCount());
-}
-
 Paths64 executeClipperBoolean(ClipType clipType, FillRule fillRule,
                               const Paths64& subjects,
                               const Paths64* clips,
@@ -224,17 +211,13 @@ Paths64 executeClipperBoolean(ClipType clipType, FillRule fillRule,
         inputPointCount = checkedSizeSum(
             inputPointCount, pathPointCount(*clips));
     }
-    auto inputReservation =
-        complexityBudget.reserveBooleanInputPoints(inputPointCount);
     Paths64 result;
     Clipper64 clipper;
-    clipper.SetExecutionGate(complexityBudget.clipperExecutionGate());
     clipper.AddSubject(subjects);
     if(clips != nullptr)
         clipper.AddClip(*clips);
     if(!clipper.Execute(clipType, fillRule, result))
         throw std::runtime_error("clipper_boolean_failed");
-    consumeClipperExecution(complexityBudget, clipper);
     return result;
 }
 
@@ -242,10 +225,6 @@ void preflightBoolean(ComplexityBudget& complexityBudget,
                       const Paths64& paths)
 {
     consumeBooleanInputs(complexityBudget, paths);
-    const size_t candidates = requireBoundedClipperIntersections(
-        paths, complexityBudget);
-    preflightClipperOutput(
-        paths, nullptr, candidates, complexityBudget);
 }
 
 void preflightBoolean(ComplexityBudget& complexityBudget,
@@ -253,20 +232,12 @@ void preflightBoolean(ComplexityBudget& complexityBudget,
                       const Paths64& second)
 {
     consumeBooleanInputs(complexityBudget, first, &second);
-    const size_t candidates = requireBoundedClipperIntersections(
-        first, second, complexityBudget);
-    preflightClipperOutput(
-        first, &second, candidates, complexityBudget);
 }
 
 void preflightNormalizedBoolean(ComplexityBudget& complexityBudget,
                                 const Paths64& paths)
 {
     consumeBooleanInputs(complexityBudget, paths);
-    // A single normalized operand has no boundary intersections left to
-    // discover. Another full segment-index pass would duplicate work already
-    // completed by Clipper.
-    preflightClipperOutput(paths, nullptr, 0, complexityBudget);
 }
 
 void preflightNormalizedBoolean(ComplexityBudget& complexityBudget,
@@ -274,11 +245,6 @@ void preflightNormalizedBoolean(ComplexityBudget& complexityBudget,
                                 const Paths64& second)
 {
     consumeBooleanInputs(complexityBudget, first, &second);
-    // The pinned Clipper engine caps actual intersections and allocations.
-    // Avoid a second full segment-index pass over already canonical operands;
-    // document-wide engine counters charge the work reported by Clipper.
-    preflightClipperOutput(
-        first, &second, 0, complexityBudget);
 }
 
 class PackedBoundsIndex {
@@ -2131,7 +2097,6 @@ double sourceAreaUpperBound(
                 ? size_t{1} << AREA_ENVELOPE_SUBDIVISIONS
                 : size_t{1});
     }
-    complexityBudget.requireTransientPointCapacity(maximumBoundaryPoints);
     std::vector<PointD> boundary;
     boundary.reserve(maximumBoundaryPoints);
     boundary.push_back(transformPoint(transform, segments.front().start));
@@ -2904,16 +2869,12 @@ struct PreparedCommandNormalization {
 
 struct PreparedNormalizationBatch {
     std::vector<PreparedCommandNormalization> commands;
-    std::unique_ptr<ParallelComplexityGate> parallel_gate;
-    std::unique_ptr<Clipper2Lib::ClipperExecutionGate> clipper_gate;
     size_t worker_count{0};
 };
 
 void discardPreparedNormalizations(PreparedNormalizationBatch& batch)
 {
     std::vector<PreparedCommandNormalization>().swap(batch.commands);
-    batch.parallel_gate.reset();
-    batch.clipper_gate.reset();
     batch.worker_count = 1;
 }
 
@@ -2946,10 +2907,6 @@ PreparedNormalizationBatch prepareCommandNormalizations(
                 taskIndices.push_back(index);
         }
         batch.commands.resize(commands.size());
-        batch.parallel_gate = std::make_unique<ParallelComplexityGate>();
-        batch.clipper_gate =
-            std::make_unique<Clipper2Lib::ClipperExecutionGate>();
-        domain.complexity_budget->seedParallelGate(*batch.parallel_gate);
     } catch(const std::bad_alloc&) {
         discardPreparedNormalizations(batch);
         return batch;
@@ -2958,9 +2915,7 @@ PreparedNormalizationBatch prepareCommandNormalizations(
     std::atomic<bool> taskFailed{false};
     const auto runTasks = [&]() {
         while(true) {
-            if(taskFailed.load(std::memory_order_acquire)
-                    || batch.parallel_gate->exceeded()
-                    || batch.clipper_gate->Exceeded())
+            if(taskFailed.load(std::memory_order_acquire))
                 return;
             const size_t taskOffset = nextTask.fetch_add(
                 1, std::memory_order_relaxed);
@@ -2971,10 +2926,6 @@ PreparedNormalizationBatch prepareCommandNormalizations(
             auto& prepared = batch.commands[commandIndex];
             try {
                 PhysicalDomain taskDomain = domain;
-                prepared.complexity_budget.attachParallelGate(
-                    batch.parallel_gate.get());
-                prepared.complexity_budget.attachClipperExecutionGate(
-                    batch.clipper_gate.get());
                 taskDomain.complexity_budget = &prepared.complexity_budget;
                 taskDomain.topology_trace = domain.topology_trace == nullptr
                     ? nullptr : &prepared.topology_trace;
@@ -2986,7 +2937,6 @@ PreparedNormalizationBatch prepareCommandNormalizations(
                 prepared.failure = std::current_exception();
                 taskFailed.store(true, std::memory_order_release);
             }
-            prepared.complexity_budget.releaseParallelReservations();
             prepared.ready = true;
         }
     };
@@ -3019,51 +2969,10 @@ PreparedNormalizationBatch prepareCommandNormalizations(
     runTasks();
     for(auto& worker : workers)
         worker.join();
-    if(taskFailed.load(std::memory_order_acquire)
-            || batch.parallel_gate->exceeded()
-            || batch.clipper_gate->Exceeded())
+    if(taskFailed.load(std::memory_order_acquire))
         discardPreparedNormalizations(batch);
     return batch;
 }
-
-class ParallelReplayBudgetScope {
-public:
-    ParallelReplayBudgetScope(
-        ComplexityBudget& complexityBudget,
-        PreparedNormalizationBatch& prepared)
-        : m_complexityBudget(complexityBudget),
-          m_active(!prepared.commands.empty())
-    {
-        if(!m_active)
-            return;
-        m_complexityBudget.attachParallelGate(
-            prepared.parallel_gate.get());
-        m_complexityBudget.attachClipperExecutionGate(
-            prepared.clipper_gate.get());
-    }
-
-    ParallelReplayBudgetScope(const ParallelReplayBudgetScope&) = delete;
-    ParallelReplayBudgetScope& operator=(
-        const ParallelReplayBudgetScope&) = delete;
-
-    ~ParallelReplayBudgetScope()
-    {
-        if(!m_active)
-            return;
-        m_complexityBudget.releaseParallelReservations();
-        m_complexityBudget.attachParallelGate(nullptr);
-        m_complexityBudget.attachClipperExecutionGate(nullptr);
-    }
-
-    bool active() const
-    {
-        return m_active;
-    }
-
-private:
-    ComplexityBudget& m_complexityBudget;
-    bool m_active{false};
-};
 
 class ParallelReplayRetry : public std::exception {};
 
@@ -3223,15 +3132,14 @@ PaintReplay replayPaintCommandsOnce(
 {
     auto prepared = prepareCommandNormalizations(
         commands, domain, allowParallel);
-    ParallelReplayBudgetScope parallelBudgetScope(
-        *domain.complexity_budget, prepared);
-    const auto testFailureAfter = parallelBudgetScope.active() && allowParallel
+    const bool parallelActive = !prepared.commands.empty() && allowParallel;
+    const auto testFailureAfter = parallelActive
         ? configuredReplayTestFailureAfter() : std::nullopt;
     try {
         return replayPreparedPaintCommands(
             commands, domain, prepared, testFailureAfter);
     } catch(...) {
-        if(parallelBudgetScope.active())
+        if(parallelActive)
             throw ParallelReplayRetry();
         throw;
     }
@@ -3462,7 +3370,7 @@ std::vector<Paths64> polyTreeComponents(const PolyTree64& tree)
     return components;
 }
 
-size_t requireBoundedPolyTreeOutput(
+size_t recordPolyTreeOutput(
     const PolyTree64& tree, ComplexityBudget& complexityBudget)
 {
     size_t pointCount = 0;
@@ -3496,15 +3404,11 @@ bool appendGeometry(GeometryCollection& collection,
         return false;
     PolyTree64 tree;
     preflightNormalizedBoolean(complexityBudget, geometry.paths);
-    auto inputReservation = complexityBudget.reserveBooleanInputPoints(
-        pathPointCount(geometry.paths));
     Clipper64 clipper;
-    clipper.SetExecutionGate(complexityBudget.clipperExecutionGate());
     clipper.AddSubject(geometry.paths);
     if(!clipper.Execute(ClipType::Union, FillRule::NonZero, tree))
         throw std::runtime_error("clipper_union_failed");
-    consumeClipperExecution(complexityBudget, clipper);
-    requireBoundedPolyTreeOutput(tree, complexityBudget);
+    recordPolyTreeOutput(tree, complexityBudget);
     if(canonicalComponents != nullptr)
         *canonicalComponents = polyTreeComponents(tree);
     // A Paths64 difference can contain a redundant oriented ring at a
@@ -3954,18 +3858,13 @@ std::vector<Paths64> executeNormalizedBooleanComponents(
     ComplexityBudget& complexityBudget)
 {
     preflightNormalizedBoolean(complexityBudget, subjects, clips);
-    auto inputReservation = complexityBudget.reserveBooleanInputPoints(
-        checkedSizeSum(
-            pathPointCount(subjects), pathPointCount(clips)));
     PolyTree64 tree;
     Clipper64 clipper;
-    clipper.SetExecutionGate(complexityBudget.clipperExecutionGate());
     clipper.AddSubject(subjects);
     clipper.AddClip(clips);
     if(!clipper.Execute(clipType, FillRule::NonZero, tree))
         throw std::runtime_error("clipper_boolean_failed");
-    consumeClipperExecution(complexityBudget, clipper);
-    requireBoundedPolyTreeOutput(tree, complexityBudget);
+    recordPolyTreeOutput(tree, complexityBudget);
     return polyTreeComponents(tree);
 }
 
@@ -5079,13 +4978,6 @@ std::shared_ptr<NativeResult> analyzeWith(Loader&& loader,
         auto result = std::make_shared<NativeResult>();
         result->status = "unsupported";
         result->reason_code = "unsupported_input_precision";
-        result->input_paint_count = inputPaintCount;
-        result->recorder_seconds = completedRecorderSeconds;
-        return result;
-    } catch(const Clipper2Lib::ClipperExecutionLimitError&) {
-        auto result = std::make_shared<NativeResult>();
-        result->status = "unsupported";
-        result->reason_code = "unsupported_complexity";
         result->input_paint_count = inputPaintCount;
         result->recorder_seconds = completedRecorderSeconds;
         return result;

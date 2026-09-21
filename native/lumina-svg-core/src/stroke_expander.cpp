@@ -1,7 +1,7 @@
 #include "lumina_svg_core/stroke_expander.h"
 
-#include "clipper_safety.h"
 #include "complexity_budget.h"
+#include "clipper_safety.h"
 
 #include <clipper2/clipper.h>
 
@@ -239,7 +239,7 @@ double commandPathLengthUpperBound(const lunasvg::PaintCommand& command)
     return length;
 }
 
-void requireBoundedDashExpansion(
+void validateDashExpansion(
     const lunasvg::PaintCommand& command,
     const std::vector<double>& dashArray)
 {
@@ -764,7 +764,7 @@ StrokeExpansion expandStrokeLocal(const lunasvg::PaintCommand& command,
         return {};
 
     const auto dashArray = normalizedDashArray(command.stroke.dash_array);
-    requireBoundedDashExpansion(command, dashArray);
+    validateDashExpansion(command, dashArray);
     const size_t cubicCount = static_cast<size_t>(std::count(
         command.path_verbs.begin(), command.path_verbs.end(),
         lunasvg::PaintPathVerb::CubicTo));
@@ -878,25 +878,15 @@ StrokeExpansion expandStrokeLocal(const lunasvg::PaintCommand& command,
             path.size(), worstCaseVerticesPerPoint);
         complexityBudget.ensureGeneratedPointCapacity(
             outputPointUpperBound);
-        complexityBudget.requireTransientPointCapacity(
-            outputPointUpperBound);
         // The point estimate bounds the transient allocation. It does not
         // imply that every three possible points become a separate ring;
         // charge the actual InflatePaths rings below.
-        complexityBudget.requireClipperOutputCapacity(
-            outputPointUpperBound, size_t{1});
         Clipper2Lib::Paths64 offsetPaths;
         offsetPaths.emplace_back(std::move(path));
-        requireBoundedClipperOffset(
-            offsetPaths, complexityBudget, delta,
-            command.stroke.miter_limit, subpath.closed);
-        auto inputReservation = complexityBudget.reserveBooleanInputPoints(
-            offsetPaths.front().size());
-        auto transientReservation =
-            complexityBudget.reserveTransientPoints(outputPointUpperBound);
         Clipper2Lib::ClipperOffset offset(
             command.stroke.miter_limit, arcTolerance);
-        offset.SetExecutionGate(complexityBudget.clipperExecutionGate());
+        validateClipperOffsetRange(
+            delta, command.stroke.miter_limit);
         offset.AddPaths(
             offsetPaths, joinType(command.stroke.line_join),
             endType(command.stroke.line_cap, subpath.closed));

@@ -656,51 +656,63 @@ class WorkerPoolManager:
         submitted_generation: _ExecutorGeneration | None = None
         submission_uncertain = False
         submitted_ns = time.perf_counter_ns() if include_timing else None
-        while True:
-            generation = await self._await_generation_for_submit(
-                request_epoch,
-            )
-            with self._pool_lock:
-                current = self._current_generation_locked()
-                if (
-                    not self._service_open
-                    or self._service_epoch != request_epoch
-                ):
-                    raise RuntimeError("WorkerPool request epoch is closed")
-                if current is None or current is not generation or not current.accepting:
-                    continue
-                submitted_generation = current
-                publisher = current.demand_publisher
-                snapshot_path = (
-                    str(publisher.snapshot_path) if publisher is not None else None
-                )
-                worker_lease_path = current.worker_lease_path
-                active_task_token = self._register_active_task(
-                    owner=current,
-                    publisher=publisher,
-                )
-                try:
-                    executor_future = current.executor.submit(
-                        worker_entry,
-                        fn,
-                        request_id,
-                        session_id,
-                        snapshot_path,
-                        *args,
-                        worker_lease_path=worker_lease_path,
-                    )
-                except BaseException:
-                    submission_uncertain = True
-                    raise
-                executor_future.add_done_callback(
-                    lambda completed, token=active_task_token: (
-                        self._complete_future_task(completed, token)
-                    )
-                )
-                break
-
-        future = asyncio.wrap_future(executor_future, loop=loop)
         try:
+            while True:
+                generation = await self._await_generation_for_submit(
+                    request_epoch,
+                )
+                with self._pool_lock:
+                    current = self._current_generation_locked()
+                    if (
+                        not self._service_open
+                        or self._service_epoch != request_epoch
+                    ):
+                        raise RuntimeError("WorkerPool request epoch is closed")
+                    if (
+                        current is None
+                        or current is not generation
+                        or not current.accepting
+                    ):
+                        continue
+                    submitted_generation = current
+                    publisher = current.demand_publisher
+                    snapshot_path = (
+                        str(publisher.snapshot_path)
+                        if publisher is not None
+                        else None
+                    )
+                    worker_lease_path = current.worker_lease_path
+                    active_task_token = self._register_active_task(
+                        owner=current,
+                        publisher=publisher,
+                    )
+                    try:
+                        executor_future = current.executor.submit(
+                            worker_entry,
+                            fn,
+                            request_id,
+                            session_id,
+                            snapshot_path,
+                            *args,
+                            worker_lease_path=worker_lease_path,
+                        )
+                    except BaseException:
+                        submission_uncertain = True
+                        raise
+                    try:
+                        executor_future.add_done_callback(
+                            lambda completed, token=active_task_token: (
+                                self._complete_future_task(completed, token)
+                            )
+                        )
+                    except BaseException:
+                        submission_uncertain = True
+                        raise
+                    break
+
+            if executor_future is None:
+                raise RuntimeError("WorkerPool submission produced no future")
+            future = asyncio.wrap_future(executor_future, loop=loop)
             raw_result = await asyncio.shield(future)
             if not include_timing:
                 return raw_result, None
@@ -743,23 +755,18 @@ class WorkerPoolManager:
                 )
             raise
         except BaseException:
-            if (
-                submission_uncertain
-                and submitted_generation is not None
-                and executor_future is None
-            ):
+            if submission_uncertain and submitted_generation is not None:
                 self._restart_after_failed_pool(
                     submitted_generation.executor,
                     reason="submit_failed",
                 )
+            elif active_task_token is not None and executor_future is None:
+                self._complete_active_task(active_task_token)
             raise
         finally:
-            if (
-                active_task_token is not None
-                and executor_future is None
-                and not submission_uncertain
-            ):
-                self._complete_active_task(active_task_token)
+            if active_task_token is not None and executor_future is None:
+                if not submission_uncertain:
+                    self._complete_active_task(active_task_token)
 
     def _maybe_cleanup_publisher(self) -> None:
         """Remove telemetry files only after the last submitted task ends."""
