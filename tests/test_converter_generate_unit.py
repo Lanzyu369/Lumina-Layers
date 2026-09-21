@@ -64,6 +64,7 @@ from core.converter import (
     _resolve_material_archive_backing_color_id,
     convert_image_to_3d,
 )
+from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
 
 _test_store: SessionStore = SessionStore(ttl=1800)
 _test_registry: FileRegistry = FileRegistry()
@@ -494,6 +495,72 @@ def test_svg_fallback_preserves_percentage_viewport_across_tiles(tmp_path) -> No
 
         assert left_rgb[0] > 240 and left_rgb[2] < 10
         assert right_rgb[2] > 240 and right_rgb[0] < 10
+    finally:
+        for tile_path in tile_paths:
+            Path(tile_path).unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize(
+    ("viewport_width", "viewport_height", "preserve_aspect_ratio"),
+    ((100, 100, None), (200, 100, None), (200, 100, "none")),
+)
+def test_svg_fallback_tiles_match_full_resvg_viewport_crop(
+    tmp_path,
+    viewport_width: int,
+    viewport_height: int,
+    preserve_aspect_ratio: str | None,
+) -> None:
+    """Windowed fallback pixels match cropping the same full resvg canvas."""
+
+    preserve_attribute = (
+        f' preserveAspectRatio="{preserve_aspect_ratio}"'
+        if preserve_aspect_ratio is not None
+        else ""
+    )
+    svg_path = tmp_path / "viewport-reference.svg"
+    svg_path.write_text(
+        f'''<svg xmlns="http://www.w3.org/2000/svg" width="{viewport_width}"
+height="{viewport_height}" viewBox="0 0 100 100"{preserve_attribute}>
+  <defs><clipPath id="canvas"><rect width="100" height="100"/></clipPath></defs>
+  <g clip-path="url(#canvas)">
+    <rect width="100%" height="100%" fill="red"/>
+    <rect x="50%" width="50%" height="100%" fill="blue"/>
+  </g>
+</svg>''',
+        encoding="utf-8",
+    )
+    density = 4.0
+    full = rasterize_svg(
+        str(svg_path),
+        float(viewport_width),
+        pixels_per_mm=density,
+        crop_to_content=False,
+        _min_quality_px=1,
+        _cache_result=False,
+    )
+
+    tile_paths: list[str] = []
+    try:
+        tile_width_mm = viewport_width / 2.0
+        for x0_mm, x1_mm in ((0.0, tile_width_mm), (tile_width_mm, viewport_width)):
+            tile_path = _rasterize_svg_fallback_tile(
+                svg_path=str(svg_path),
+                total_width_mm=float(viewport_width),
+                total_height_mm=float(viewport_height),
+                x0_mm=x0_mm,
+                y0_mm=0.0,
+                x1_mm=x1_mm,
+                y1_mm=float(viewport_height),
+                pixels_per_mm=density,
+            )
+            tile_paths.append(tile_path)
+
+            with Image.open(tile_path) as tile_image:
+                actual = np.asarray(tile_image.convert("RGBA"))
+            px_x0 = int(round(x0_mm / viewport_width * full.shape[1]))
+            px_x1 = int(round(x1_mm / viewport_width * full.shape[1]))
+            expected = full[:, px_x0:px_x1]
+            np.testing.assert_array_equal(actual, expected)
     finally:
         for tile_path in tile_paths:
             Path(tile_path).unlink(missing_ok=True)

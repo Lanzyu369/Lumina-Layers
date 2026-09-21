@@ -3645,20 +3645,21 @@ def _rasterize_svg_fallback_tile(
 
     tree = ET.parse(svg_path)
     source_root = tree.getroot()
+
+    def _numeric_length(raw: str | None) -> float | None:
+        match = re.match(r"^\s*([0-9]+(?:\.[0-9]*)?|\.[0-9]+)", str(raw or ""))
+        if match is None:
+            return None
+        value = float(match.group(1))
+        return value if math.isfinite(value) and value > 0 else None
+
+    viewport_width = _numeric_length(source_root.attrib.get("width"))
+    viewport_height = _numeric_length(source_root.attrib.get("height"))
     raw_view_box = source_root.attrib.get("viewBox") or source_root.attrib.get("viewbox")
     if not raw_view_box:
-        def _numeric_length(raw: str | None) -> float | None:
-            match = re.match(r"^\s*([0-9]+(?:\.[0-9]*)?|\.[0-9]+)", str(raw or ""))
-            if match is None:
-                return None
-            value = float(match.group(1))
-            return value if math.isfinite(value) and value > 0 else None
-
-        width = _numeric_length(source_root.attrib.get("width"))
-        height = _numeric_length(source_root.attrib.get("height"))
-        if width is None or height is None:
+        if viewport_width is None or viewport_height is None:
             raise ValueError("SVG fallback requires a viewBox or finite canvas dimensions")
-        raw_view_box = f"0 0 {width:g} {height:g}"
+        raw_view_box = f"0 0 {viewport_width:g} {viewport_height:g}"
     try:
         view_box = [float(value) for value in raw_view_box.replace(",", " ").split()]
     except (TypeError, ValueError):
@@ -3666,11 +3667,13 @@ def _rasterize_svg_fallback_tile(
     if len(view_box) != 4 or view_box[2] <= 0 or view_box[3] <= 0:
         raise ValueError("SVG fallback viewBox must contain positive dimensions")
     view_x, view_y, view_w, view_h = view_box
-    scale_x = view_w / float(total_width_mm)
-    scale_y = view_h / float(total_height_mm)
+    viewport_width = viewport_width or view_w
+    viewport_height = viewport_height or view_h
+    scale_x = viewport_width / float(total_width_mm)
+    scale_y = viewport_height / float(total_height_mm)
     tile_view_box = (
-        view_x + x0_mm * scale_x,
-        view_y + y0_mm * scale_y,
+        x0_mm * scale_x,
+        y0_mm * scale_y,
         max((x1_mm - x0_mm) * scale_x, 1e-9),
         max((y1_mm - y0_mm) * scale_y, 1e-9),
     )
@@ -3681,10 +3684,10 @@ def _rasterize_svg_fallback_tile(
     # would become 100% of the right tile). The outer viewport clips the full
     # document to the requested global window instead.
     nested_root = ET.Element(source_root.tag, dict(source_root.attrib))
-    nested_root.attrib["x"] = f"{view_x:.12g}"
-    nested_root.attrib["y"] = f"{view_y:.12g}"
-    nested_root.attrib["width"] = f"{view_w:.12g}"
-    nested_root.attrib["height"] = f"{view_h:.12g}"
+    nested_root.attrib["x"] = "0"
+    nested_root.attrib["y"] = "0"
+    nested_root.attrib["width"] = f"{viewport_width:.12g}"
+    nested_root.attrib["height"] = f"{viewport_height:.12g}"
     nested_root.attrib["viewBox"] = " ".join(
         f"{value:.12g}" for value in (view_x, view_y, view_w, view_h)
     )
