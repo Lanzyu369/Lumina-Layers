@@ -1919,12 +1919,14 @@ def worker_generate_large_format_svg_native(
         apply_recipe_overrides_to_analysis,
     )
     from core.vector_large_format import (
-        MAX_LARGE_FORMAT_TILE_COUNT,
         format_large_format_tile_label,
         resolve_large_format_grid_shape,
         slice_vector_analysis_into_tiles,
     )
-    from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
+    from utils.bambu_3mf_writer import (
+        export_scene_with_bambu_metadata,
+        read_wipe_tower_placement_warnings,
+    )
 
     log = get_logger(__name__)
 
@@ -1944,7 +1946,6 @@ def worker_generate_large_format_svg_native(
         total_height_mm=total_height_mm,
         tile_width_mm=tile_width_mm,
         tile_height_mm=tile_height_mm,
-        max_tiles=MAX_LARGE_FORMAT_TILE_COUNT,
     )
     expected_total_tiles = grid_cols * grid_rows
 
@@ -2196,6 +2197,7 @@ def worker_generate_large_format_svg_native(
     layer_height_setting = f"{layer_height_mm:g}"
 
     successful_paths: list[tuple[str, str]] = []
+    tile_warnings: list[str] = []
     tile_cleanup_paths: set[str] = set()
     zip_path: str | None = None
     zip_ready = False
@@ -2449,6 +2451,9 @@ def worker_generate_large_format_svg_native(
                     False if material_source == "material_archive" else None
                 ),
             )
+            for warning_code in read_wipe_tower_placement_warnings(tile_3mf_path):
+                if warning_code not in tile_warnings:
+                    tile_warnings.append(warning_code)
             successful_paths.append(
                 (
                     format_large_format_tile_label(source_basename=tile_name_prefix, tile_label=tile.label),
@@ -2503,7 +2508,7 @@ def worker_generate_large_format_svg_native(
             "tile_failed_cover": tile_failed_cover,
             "grid_cols": grid_cols,
             "grid_rows": grid_rows,
-            "warnings": [],
+            "warnings": tile_warnings,
         }
     finally:
         for path_3mf in tile_cleanup_paths:

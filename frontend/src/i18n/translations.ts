@@ -5426,10 +5426,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "原生矢量切片生成失败，已自动改用栅格切片。",
     en: "Native vector tiling failed, so raster tiling was used automatically.",
   },
-  large_format_warning_density_reduced: {
-    zh: "为避免超过像素预算，栅格切片清晰度已自动降低。",
-    en: "Raster tiling density was reduced automatically to stay within the pixel budget.",
-  },
   wipe_tower_manual_adjustment_title: {
     zh: "打印前必须手动调整擦料塔",
     en: "Manual wipe tower adjustment required",

@@ -35,6 +35,9 @@ function resetStore(): void {
     imageFile: null,
     imagePreviewUrl: null,
     aspectRatio: null,
+    largeFormatEnabled: false,
+    tileWidthMm: 250,
+    tileHeightMm: 250,
     lut_name: "",
     target_width_mm: 60,
     target_height_mm: 60,
@@ -235,6 +238,22 @@ describe("ConverterStore Property-Based Tests", () => {
         ),
         { numRuns: 100 }
       );
+    });
+
+    it("large-format dimensions are not capped at the former 9999 mm policy", () => {
+      resetStore();
+      useConverterStore.setState({ largeFormatEnabled: true, aspectRatio: null });
+
+      useConverterStore.getState().setTargetWidthMm(30000);
+      useConverterStore.getState().setTargetHeightMm(30000);
+      useConverterStore.getState().setTileWidthMm(10000);
+      useConverterStore.getState().setTileHeightMm(10000);
+
+      const state = useConverterStore.getState();
+      expect(state.target_width_mm).toBe(30000);
+      expect(state.target_height_mm).toBe(30000);
+      expect(state.tileWidthMm).toBe(10000);
+      expect(state.tileHeightMm).toBe(10000);
     });
   });
 

@@ -140,8 +140,6 @@ const LARGE_FORMAT_GENERATE_FALLBACK_WARNING =
   "Raster fallback was used for this large-format SVG request.";
 const LARGE_FORMAT_NATIVE_FAILURE_WARNING =
   "Native vector generation failed; raster fallback was used for this large-format SVG request.";
-const LARGE_FORMAT_DENSITY_REDUCED_WARNING =
-  "Raster fallback density was reduced to keep SVG large-format generation within the pixel budget.";
 
 function localizeLargeFormatWarning(
   warning: string,
@@ -162,9 +160,6 @@ function localizeLargeFormatWarning(
   }
   if (warning === LARGE_FORMAT_NATIVE_FAILURE_WARNING) {
     return t("large_format_warning_native_failure");
-  }
-  if (warning === LARGE_FORMAT_DENSITY_REDUCED_WARNING) {
-    return t("large_format_warning_density_reduced");
   }
   return warning;
 }
@@ -1201,7 +1196,7 @@ export default function BasicSettings() {
     });
   };
 
-  const dimMax = largeFormatEnabled ? 9999 : 400;
+  const dimMax = largeFormatEnabled ? Number.MAX_SAFE_INTEGER : 400;
 
   const tileGrid = useMemo(() => {
     if (!largeFormatEnabled) return null;
@@ -1874,7 +1869,7 @@ export default function BasicSettings() {
             wikiPath={WIKI_DOCS.largeFormat}
             value={tileWidthMm}
             min={50}
-            max={500}
+            max={Number.MAX_SAFE_INTEGER}
             step={10}
             unit="mm"
             onChange={setTileWidthMm}
@@ -1885,7 +1880,7 @@ export default function BasicSettings() {
             wikiPath={WIKI_DOCS.largeFormat}
             value={tileHeightMm}
             min={50}
-            max={500}
+            max={Number.MAX_SAFE_INTEGER}
             step={10}
             unit="mm"
             onChange={setTileHeightMm}

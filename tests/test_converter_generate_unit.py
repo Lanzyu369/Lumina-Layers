@@ -38,7 +38,7 @@ from api.preview_cache_artifacts import externalize_preview_cache
 from api.routers.converter.color_card import _COLOR_CARD_GENERATION_FAILED_DETAIL
 from api.routers.converter.generate import _generate_large_format_raster
 from api.routers.converter.generate import _generate_large_format_svg_native
-from api.routers.converter.generate import _rasterize_svg_for_large_format_fallback
+from api.routers.converter.generate import _rasterize_svg_fallback_tile
 from api.routers.converter.generate import LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL
 from api.routers.converter.generate import LARGE_FORMAT_GENERATION_FAILED_DETAIL
 from api.routers.converter.generate import MODEL_GENERATION_FAILED_DETAIL
@@ -98,42 +98,6 @@ client: TestClient = TestClient(app)
 
 
 
-
-
-def test_large_format_svg_raster_fallback_accepts_percentage_viewbox(
-    tmp_path,
-) -> None:
-    """The real bounded fallback handles a 100% SVG canvas with clipPath."""
-
-    pytest.importorskip("resvg_py")
-    svg_path = tmp_path / "percentage-fallback.svg"
-    svg_path.write_text(
-        """<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%"
-viewBox="0 0 400 200">
-  <defs><clipPath id="clip"><rect width="400" height="200"/></clipPath></defs>
-  <rect width="400" height="200" clip-path="url(#clip)" fill="#336699"/>
-</svg>
-""",
-        encoding="utf-8",
-    )
-    with patch(
-        "api.routers.converter.generate.TEMP_DIR",
-        str(tmp_path),
-    ):
-        png_path, _warnings = _rasterize_svg_for_large_format_fallback(
-            svg_path=str(svg_path),
-            total_width_mm=4.0,
-            total_height_mm=2.0,
-            sid="test-session",
-            store=_test_store,
-        )
-
-    try:
-        with Image.open(png_path) as rendered:
-            assert rendered.width == 2 * rendered.height
-            assert rendered.width * rendered.height <= 12_000_000
-    finally:
-        os.unlink(png_path)
 
 
 async def _timed_submit_via_generate_mock(
@@ -339,6 +303,159 @@ def test_generate_response_forwards_embedded_wipe_tower_warning() -> None:
     assert response.json()["warnings"] == [
         "wipe_tower_manual_adjustment_required"
     ]
+
+
+@pytest.mark.asyncio
+async def test_large_format_raster_forwards_embedded_tile_warning(tmp_path) -> None:
+    image_path = tmp_path / "source.png"
+    lut_path = tmp_path / "source.npy"
+    tile_path = tmp_path / "tile.3mf"
+    Image.fromarray(np.zeros((10, 10, 3), dtype=np.uint8)).save(image_path)
+    lut_path.write_bytes(b"lut")
+    tile_path.write_bytes(b"3mf")
+    store = SessionStore(ttl=1800)
+    registry = FileRegistry()
+    pool = MagicMock(spec=WorkerPoolManager)
+    pool.submit = AsyncMock(
+        return_value={"threemf_path": str(tile_path), "glb_path": None, "status_msg": "ok"}
+    )
+    request = LargeFormatConvertGenerateRequest(
+        lut_name="test_lut",
+        modeling_mode=ModelingMode.HIGH_FIDELITY,
+    )
+    warning_code = "wipe_tower_manual_adjustment_required"
+    try:
+        with patch(
+            "api.routers.converter.generate.read_wipe_tower_placement_warnings",
+            return_value=[warning_code],
+        ):
+            result = await _generate_large_format_raster(
+                image_path=str(image_path),
+                lut_path=str(lut_path),
+                source_basename="source",
+                recipe_overrides=None,
+                recipe_override_masks_path=None,
+                material_matrix_path=None,
+                total_width_mm=10.0,
+                total_height_mm=10.0,
+                tile_width_mm=10.0,
+                tile_height_mm=10.0,
+                request=request,
+                session_data={},
+                sid="warning-session",
+                store=store,
+                registry=registry,
+                pool=pool,
+            )
+        assert result["warnings"] == [warning_code]
+    finally:
+        store.clear_all()
+        registry.clear_all()
+
+
+@pytest.mark.asyncio
+async def test_large_format_raster_memory_error_cancels_pending_tiles(tmp_path) -> None:
+    """A tile OOM keeps the original error and cancels unconsumed work."""
+
+    class _Awaitable:
+        def __init__(self, value=None, error: BaseException | None = None):
+            self.value = value
+            self.error = error
+            self.cancelled = False
+
+        def cancel(self):
+            self.cancelled = True
+            return True
+
+        def __await__(self):
+            async def _resolve():
+                if self.error is not None:
+                    raise self.error
+                return self.value
+
+            return _resolve().__await__()
+
+    image_path = tmp_path / "source.png"
+    lut_path = tmp_path / "source.npy"
+    first_tile = tmp_path / "first.3mf"
+    Image.fromarray(np.zeros((10, 30, 3), dtype=np.uint8)).save(image_path)
+    lut_path.write_bytes(b"lut")
+    first_tile.write_bytes(b"3mf")
+    first = _Awaitable({"threemf_path": str(first_tile), "glb_path": None, "status_msg": "ok"})
+    failing = _Awaitable(error=MemoryError("injected large-format OOM"))
+    pending = _Awaitable({"threemf_path": None, "glb_path": None, "status_msg": "pending"})
+    pool = MagicMock(spec=WorkerPoolManager)
+    pool.submit = MagicMock(side_effect=[first, failing, pending])
+    store = SessionStore(ttl=1800)
+    registry = FileRegistry()
+    request = LargeFormatConvertGenerateRequest(
+        lut_name="test_lut",
+        modeling_mode=ModelingMode.HIGH_FIDELITY,
+    )
+    try:
+        with pytest.raises(MemoryError, match="injected large-format OOM"):
+            await _generate_large_format_raster(
+                image_path=str(image_path),
+                lut_path=str(lut_path),
+                source_basename="source",
+                recipe_overrides=None,
+                recipe_override_masks_path=None,
+                material_matrix_path=None,
+                total_width_mm=30.0,
+                total_height_mm=10.0,
+                tile_width_mm=10.0,
+                tile_height_mm=10.0,
+                request=request,
+                session_data={},
+                sid="oom-session",
+                store=store,
+                registry=registry,
+                pool=pool,
+            )
+        assert pending.cancelled is True
+        assert pool.submit.call_count == 3
+        assert not first_tile.exists()
+    finally:
+        store.clear_all()
+        registry.clear_all()
+
+
+def test_svg_fallback_rasterizes_one_global_tile_without_full_canvas(tmp_path) -> None:
+    svg_path = tmp_path / "source.svg"
+    svg_path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50" '
+        'width="100" height="50"><rect width="100" height="50" fill="red"/></svg>',
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_rasterize(path, target_width_mm, **kwargs):
+        captured.update(path=path, target_width_mm=target_width_mm, kwargs=kwargs)
+        return np.zeros((20, 40, 4), dtype=np.uint8)
+
+    with patch(
+        "api.routers.converter.generate.rasterize_svg",
+        side_effect=_fake_rasterize,
+    ):
+        tile_path = _rasterize_svg_fallback_tile(
+            svg_path=str(svg_path),
+            total_width_mm=100.0,
+            total_height_mm=50.0,
+            x0_mm=50.0,
+            y0_mm=0.0,
+            x1_mm=100.0,
+            y1_mm=50.0,
+            pixels_per_mm=10.0,
+        )
+
+    try:
+        assert captured["target_width_mm"] == 50.0
+        assert captured["kwargs"]["crop_to_content"] is False
+        assert captured["kwargs"]["_cache_result"] is False
+        with Image.open(tile_path) as rendered:
+            assert rendered.size == (40, 20)
+    finally:
+        Path(tile_path).unlink(missing_ok=True)
 
 
 def test_color_card_response_forwards_only_embedded_wipe_tower_warnings(
@@ -5366,9 +5483,6 @@ class TestLargeFormatDimensionsAndRouting:
         }
 
         with (
-            patch(
-                "api.routers.converter.generate._rasterize_svg_for_large_format_fallback"
-            ) as rasterize_svg,
             patch.object(_test_store, "register_temp_file") as register_temp,
             patch.object(_test_store, "put") as store_put,
         ):
@@ -5378,7 +5492,6 @@ class TestLargeFormatDimensionsAndRouting:
             )
 
         assert response.status_code == 409
-        rasterize_svg.assert_not_called()
         register_temp.assert_not_called()
         store_put.assert_not_called()
 
@@ -5526,77 +5639,6 @@ class TestLargeFormatDimensionsAndRouting:
         assert response.status_code == 422
         assert "width" in response.json()["detail"].lower()
         assert "height" in response.json()["detail"].lower()
-
-    def test_large_format_rejects_unbounded_tile_grid_before_worker(self) -> None:
-        sid, _svg_path, _lut_path = _create_svg_session(
-            _test_store,
-            native_tiling_supported=True,
-        )
-        payload = {
-            "session_id": sid,
-            "params": {
-                "target_height_mm": 80.0,
-                "tile_width_mm": 0.001,
-                "tile_height_mm": 0.001,
-                "params": {
-                    "lut_name": "test_lut",
-                    "modeling_mode": "vector",
-                    "target_width_mm": 120.0,
-                },
-            },
-        }
-
-        with patch(
-            "api.routers.converter.generate._generate_large_format_svg_native"
-        ) as native_helper:
-            response = client.post(
-                "/api/convert/generate-large-format",
-                json=payload,
-            )
-
-        assert response.status_code == 422
-        assert "tile" in str(response.json()["detail"]).lower()
-        native_helper.assert_not_called()
-
-    def test_large_format_rejects_derived_dimension_above_limit(self) -> None:
-        sid, _svg_path, _lut_path = _create_svg_session(
-            _test_store,
-            native_tiling_supported=True,
-        )
-        payload = {
-            "session_id": sid,
-            "params": {
-                "target_height_mm": 9999.0,
-                "tile_width_mm": 250.0,
-                "tile_height_mm": 250.0,
-                "params": {
-                    "lut_name": "test_lut",
-                    "modeling_mode": "vector",
-                },
-            },
-        }
-        native_response = {
-            "status": "ok",
-            "message": "native",
-            "download_url": "/api/files/native",
-            "tile_count": 1,
-            "grid_cols": 1,
-            "grid_rows": 1,
-            "warnings": [],
-        }
-
-        with patch(
-            "api.routers.converter.generate._generate_large_format_svg_native",
-            return_value=native_response,
-        ) as native_helper:
-            response = client.post(
-                "/api/convert/generate-large-format",
-                json=payload,
-            )
-
-        assert response.status_code == 422
-        assert "9999" in str(response.json()["detail"])
-        native_helper.assert_not_called()
 
     def test_large_format_rejects_dimensions_inconsistent_with_preview_ratio(self) -> None:
         sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
@@ -6337,10 +6379,6 @@ class TestLargeFormatDimensionsAndRouting:
                     side_effect=native_error,
                 ) as native_helper,
                 patch(
-                    "api.routers.converter.generate._rasterize_svg_for_large_format_fallback",
-                    return_value=("/tmp/native-failure-fallback.png", []),
-                ),
-                patch(
                     "api.routers.converter.generate._generate_large_format_raster",
                     side_effect=_fallback_response,
                 ) as raster_helper,
@@ -6392,9 +6430,6 @@ class TestLargeFormatDimensionsAndRouting:
                     side_effect=BrokenProcessPool("native worker was killed"),
                 ) as native_helper,
                 patch(
-                    "api.routers.converter.generate._rasterize_svg_for_large_format_fallback",
-                ) as rasterize_helper,
-                patch(
                     "api.routers.converter.generate._generate_large_format_raster",
                 ) as raster_helper,
             ):
@@ -6409,7 +6444,6 @@ class TestLargeFormatDimensionsAndRouting:
 
             assert response.status_code == 503
             native_helper.assert_called_once()
-            rasterize_helper.assert_not_called()
             raster_helper.assert_not_called()
         finally:
             _test_store.close(sid)
@@ -6417,25 +6451,12 @@ class TestLargeFormatDimensionsAndRouting:
                 if os.path.exists(path):
                     os.unlink(path)
 
-    @pytest.mark.parametrize("fallback_stage", ["rasterize", "generate"])
-    def test_large_format_svg_double_failure_returns_bounded_native_error(
-        self,
-        fallback_stage: str,
-    ) -> None:
+    def test_large_format_svg_fallback_failure_returns_bounded_error(self) -> None:
         sid, svg_path, lut_path = _create_svg_session(
             _test_store,
             native_tiling_supported=True,
         )
-        rasterize_error = (
-            OSError("fallback rasterize failed")
-            if fallback_stage == "rasterize"
-            else None
-        )
-        expected_error_message = (
-            "fallback rasterize failed"
-            if fallback_stage == "rasterize"
-            else "fallback archive write failed"
-        )
+        expected_error_message = "fallback archive write failed"
 
         try:
             with (
@@ -6443,11 +6464,6 @@ class TestLargeFormatDimensionsAndRouting:
                     "api.routers.converter.generate._generate_large_format_svg_native",
                     side_effect=AssertionError("native tile invariant failed"),
                 ) as native_helper,
-                patch(
-                    "api.routers.converter.generate._rasterize_svg_for_large_format_fallback",
-                    return_value=("/tmp/native-failure-fallback.png", []),
-                    side_effect=rasterize_error,
-                ) as rasterize_helper,
                 patch(
                     "api.routers.converter.generate._generate_large_format_raster",
                     side_effect=OSError("fallback archive write failed"),
@@ -6468,11 +6484,7 @@ class TestLargeFormatDimensionsAndRouting:
             assert response.status_code == 500
             assert response.json()["detail"] == LARGE_FORMAT_GENERATION_FAILED_DETAIL
             native_helper.assert_called_once()
-            rasterize_helper.assert_called_once()
-            if fallback_stage == "rasterize":
-                raster_helper.assert_not_called()
-            else:
-                raster_helper.assert_called_once()
+            raster_helper.assert_called_once()
             failure_log.assert_called_once_with(
                 session_id=sid,
                 failure_kind="raster_fallback_failed",
@@ -8131,11 +8143,11 @@ class TestLargeFormatDimensionsAndRouting:
             "grid_rows": 2,
             "warnings": ["Raster fallback was used for this large-format SVG request."],
         }
-        captured = {"fallback_path": None}
+        captured = {"image_path": "unset", "svg_fallback_path": "unset"}
 
         def _fake_raster_helper(**kwargs):
-            captured["fallback_path"] = kwargs["image_path"]
-            assert os.path.exists(kwargs["image_path"])
+            captured["image_path"] = kwargs["image_path"]
+            captured["svg_fallback_path"] = kwargs["svg_fallback_path"]
             return raster_response
 
         with patch(
@@ -8145,8 +8157,8 @@ class TestLargeFormatDimensionsAndRouting:
             response = client.post("/api/convert/generate-large-format", json=payload)
 
         assert response.status_code == 200
-        assert captured["fallback_path"] is not None
-        assert not os.path.exists(captured["fallback_path"])
+        assert captured["image_path"] is None
+        assert captured["svg_fallback_path"] == _svg_path
 
     def test_large_format_raster_helper_deletes_tile_3mf_and_glb_after_packaging(self) -> None:
         fd_img, image_path = tempfile.mkstemp(suffix=".png")

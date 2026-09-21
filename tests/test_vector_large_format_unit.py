@@ -11,15 +11,15 @@ from core.vector_engine import VectorAnalysis
 from core.vector_large_format import (
     SVG_LARGE_FORMAT_PREVIEW_FALLBACK_WARNING,
     SvgLargeFormatSupportInspector,
-    SvgRasterFallbackDensityPlanner,
     VectorAnalysisTiler,
     build_tile_specs,
-    choose_svg_raster_fallback_density,
     format_large_format_tile_label,
     inspect_svg_large_format_support,
     normalize_large_format_source_basename,
     slice_vector_analysis_into_tiles,
+    resolve_large_format_grid_shape,
 )
+from api.schemas.converter import LargeFormatConvertGenerateRequest, LargeFormatGenerateRequest
 
 
 def _make_analysis(*, matched_shapes: list[dict], clipped_shapes: list[dict] | None = None) -> VectorAnalysis:
@@ -64,6 +64,26 @@ def test_build_tile_specs_resolves_partial_last_row_and_column() -> None:
     assert specs[-1].col == 3
     assert specs[-1].width_mm == 20.0
     assert specs[-1].height_mm == 20.0
+
+
+def test_large_format_dimensions_and_tile_count_are_not_policy_capped() -> None:
+    assert resolve_large_format_grid_shape(
+        total_width_mm=30_000.0,
+        total_height_mm=30_000.0,
+        tile_width_mm=10_000.0,
+        tile_height_mm=10_000.0,
+    ) == (3, 3)
+    request = LargeFormatGenerateRequest(
+        target_height_mm=30_000.0,
+        tile_width_mm=10_000.0,
+        tile_height_mm=10_000.0,
+        params=LargeFormatConvertGenerateRequest(
+            lut_name="test_lut",
+            target_width_mm=30_000.0,
+        ),
+    )
+    assert request.target_height_mm == 30_000.0
+    assert request.params.target_width_mm == 30_000.0
 
 
 def test_slice_vector_analysis_splits_shape_across_tile_seam() -> None:
@@ -394,55 +414,6 @@ def test_slice_vector_analysis_preserves_shape_data_metadata() -> None:
     assert len(tiles[0].analysis.shape_data) == 1
     assert tiles[0].analysis.shape_data[0]["draw_order"] == 3
     assert tiles[1].analysis.shape_data[0]["draw_order"] == 3
-
-
-def test_choose_svg_raster_fallback_density_stays_within_pixel_budget() -> None:
-    density, warnings = choose_svg_raster_fallback_density(
-        total_width_mm=4000.0,
-        total_height_mm=4000.0,
-        desired_pixels_per_mm=10.0,
-        min_pixels_per_mm=2.0,
-        max_total_pixels=12_000_000,
-    )
-
-    assert density > 0.0
-    assert density * density * 4000.0 * 4000.0 <= 12_000_000 * 1.001
-    assert warnings
-
-
-def test_raster_fallback_density_never_floors_above_pixel_budget() -> None:
-    """Extreme direct callers must still obey the declared pixel ceiling."""
-
-    width_mm = 1_000_000_000.0
-    height_mm = 1_000_000_000.0
-    density, warnings = choose_svg_raster_fallback_density(
-        total_width_mm=width_mm,
-        total_height_mm=height_mm,
-        desired_pixels_per_mm=10.0,
-        min_pixels_per_mm=2.0,
-        max_total_pixels=12_000_000,
-    )
-
-    assert density * density * width_mm * height_mm <= 12_000_000 * 1.001
-    assert warnings
-
-
-def test_svg_raster_fallback_density_planner_matches_wrapper() -> None:
-    planner = SvgRasterFallbackDensityPlanner(
-        total_width_mm=4000.0,
-        total_height_mm=4000.0,
-        desired_pixels_per_mm=10.0,
-        min_pixels_per_mm=2.0,
-        max_total_pixels=12_000_000,
-    )
-
-    assert planner.choose_density() == choose_svg_raster_fallback_density(
-        total_width_mm=4000.0,
-        total_height_mm=4000.0,
-        desired_pixels_per_mm=10.0,
-        min_pixels_per_mm=2.0,
-        max_total_pixels=12_000_000,
-    )
 
 
 def test_vector_analysis_tiler_build_tile_specs_matches_wrapper() -> None:

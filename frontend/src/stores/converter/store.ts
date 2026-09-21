@@ -5584,16 +5584,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
     setTargetWidthMm: (width: number) =>
       set((state) => {
-        const max = state.largeFormatEnabled ? 9999 : 400;
-        const clamped = clampValue(width, 10, max);
+        const clamped = state.largeFormatEnabled
+          ? Math.max(10, Number.isFinite(width) ? width : 10)
+          : clampValue(width, 10, 400);
         const dimensions = state.aspectRatio
           ? {
               target_width_mm: clamped,
-              target_height_mm: clampValue(
-                Math.round(clamped / state.aspectRatio),
-                10,
-                max,
-              ),
+              target_height_mm: state.largeFormatEnabled
+                ? Math.max(10, Math.round(clamped / state.aspectRatio))
+                : clampValue(Math.round(clamped / state.aspectRatio), 10, 400),
             }
           : { target_width_mm: clamped };
         const fridgeMagnets = state.fridge_magnets.length > 0
@@ -5613,16 +5612,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
     setTargetHeightMm: (height: number) =>
       set((state) => {
-        const max = state.largeFormatEnabled ? 9999 : 400;
-        const clamped = clampValue(height, 10, max);
+        const clamped = state.largeFormatEnabled
+          ? Math.max(10, Number.isFinite(height) ? height : 10)
+          : clampValue(height, 10, 400);
         const dimensions = state.aspectRatio
           ? {
               target_height_mm: clamped,
-              target_width_mm: clampValue(
-                Math.round(clamped * state.aspectRatio),
-                10,
-                max,
-              ),
+              target_width_mm: state.largeFormatEnabled
+                ? Math.max(10, Math.round(clamped * state.aspectRatio))
+                : clampValue(Math.round(clamped * state.aspectRatio), 10, 400),
             }
           : { target_height_mm: clamped };
         return {
@@ -6152,13 +6150,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       })),
     setTileWidthMm: (width: number) =>
       set({
-        tileWidthMm: clampValue(width, 50, 500),
+        tileWidthMm: Math.max(50, Number.isFinite(width) ? width : 50),
         threemfDiskPath: null,
         downloadUrl: null,
       }),
     setTileHeightMm: (height: number) =>
       set({
-        tileHeightMm: clampValue(height, 50, 500),
+        tileHeightMm: Math.max(50, Number.isFinite(height) ? height : 50),
         threemfDiskPath: null,
         downloadUrl: null,
       }),

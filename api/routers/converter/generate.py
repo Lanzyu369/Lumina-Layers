@@ -12,11 +12,13 @@ import json
 import math
 import os
 import pickle
+import re
 import shutil
 import tempfile
 import time
 import uuid
 import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
@@ -41,7 +43,6 @@ from api.schemas.converter import (
     ConvertGenerateRequest,
     LargeFormatConvertGenerateRequest,
     LargeFormatGenerateRequest,
-    MAX_LARGE_FORMAT_DIMENSION_MM,
     ModelingMode,
     StructureMode,
 )
@@ -93,14 +94,10 @@ from config import (
 from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
 from core.recipe_order import convert_recipe_between_orders
 from core.vector_large_format import (
-    MAX_LARGE_FORMAT_TILE_COUNT,
-    SVG_RASTER_FALLBACK_MAX_TOTAL_PIXELS,
-    SVG_LARGE_FORMAT_DENSITY_REDUCED_WARNING,
     SVG_LARGE_FORMAT_FALLBACK_NATIVE_FAILURE,
     SVG_LARGE_FORMAT_FALLBACK_UNSUPPORTED_FEATURE,
     SVG_LARGE_FORMAT_GENERATE_FALLBACK_WARNING,
     SVG_LARGE_FORMAT_NATIVE_FAILURE_FALLBACK_WARNING,
-    choose_svg_raster_fallback_density,
     format_large_format_tile_label,
     inspect_svg_large_format_support,
     normalize_large_format_source_basename,
@@ -3252,14 +3249,10 @@ def _resolve_large_format_dimensions(
         if (
             not math.isfinite(value)
             or value <= 0
-            or value > MAX_LARGE_FORMAT_DIMENSION_MM
         ):
             raise HTTPException(
                 status_code=422,
-                detail=(
-                    f"Large-format {name} must be finite and no greater "
-                    f"than {MAX_LARGE_FORMAT_DIMENSION_MM:g} mm."
-                ),
+                detail=f"Large-format {name} must be finite and positive.",
             )
 
     return resolved_width, resolved_height
@@ -3632,9 +3625,87 @@ def _discard_pending_awaitables(awaitables: list, start_index: int) -> None:
             close()
 
 
+def _rasterize_svg_fallback_tile(
+    *,
+    svg_path: str,
+    total_width_mm: float,
+    total_height_mm: float,
+    x0_mm: float,
+    y0_mm: float,
+    x1_mm: float,
+    y1_mm: float,
+    pixels_per_mm: float,
+) -> str:
+    """Rasterize one SVG fallback tile without allocating a full canvas.
+
+    将 SVG fallback 直接按全局毫米坐标裁成一个 tile，避免先创建整幅
+    大画幅位图；tile 的 viewBox 保留原 SVG 的全局原点和接缝映射。
+    """
+
+    tree = ET.parse(svg_path)
+    root = tree.getroot()
+    raw_view_box = root.attrib.get("viewBox") or root.attrib.get("viewbox")
+    if not raw_view_box:
+        def _numeric_length(raw: str | None) -> float | None:
+            match = re.match(r"^\s*([0-9]+(?:\.[0-9]*)?|\.[0-9]+)", str(raw or ""))
+            if match is None:
+                return None
+            value = float(match.group(1))
+            return value if math.isfinite(value) and value > 0 else None
+
+        width = _numeric_length(root.attrib.get("width"))
+        height = _numeric_length(root.attrib.get("height"))
+        if width is None or height is None:
+            raise ValueError("SVG fallback requires a viewBox or finite canvas dimensions")
+        raw_view_box = f"0 0 {width:g} {height:g}"
+    try:
+        view_box = [float(value) for value in raw_view_box.replace(",", " ").split()]
+    except (TypeError, ValueError):
+        view_box = []
+    if len(view_box) != 4 or view_box[2] <= 0 or view_box[3] <= 0:
+        raise ValueError("SVG fallback viewBox must contain positive dimensions")
+    view_x, view_y, view_w, view_h = view_box
+    scale_x = view_w / float(total_width_mm)
+    scale_y = view_h / float(total_height_mm)
+    tile_view_box = (
+        view_x + x0_mm * scale_x,
+        view_y + y0_mm * scale_y,
+        max((x1_mm - x0_mm) * scale_x, 1e-9),
+        max((y1_mm - y0_mm) * scale_y, 1e-9),
+    )
+    root.attrib["viewBox"] = " ".join(f"{value:.12g}" for value in tile_view_box)
+    root.attrib["width"] = f"{max(x1_mm - x0_mm, 1e-9):.12g}mm"
+    root.attrib["height"] = f"{max(y1_mm - y0_mm, 1e-9):.12g}mm"
+
+    svg_fd, tile_svg_path = tempfile.mkstemp(suffix=".svg", dir=TEMP_DIR)
+    os.close(svg_fd)
+    png_path: str | None = None
+    try:
+        tree.write(tile_svg_path, encoding="utf-8", xml_declaration=True)
+        rgba = rasterize_svg(
+            tile_svg_path,
+            max(x1_mm - x0_mm, 1e-9),
+            pixels_per_mm=float(pixels_per_mm),
+            crop_to_content=False,
+            _min_quality_px=1,
+            _cache_result=False,
+        )
+        png_fd, png_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
+        os.close(png_fd)
+        Image.fromarray(rgba).save(png_path)
+        return png_path
+    except BaseException:
+        if png_path is not None:
+            _remove_temp_path(png_path)
+        raise
+    finally:
+        _remove_temp_path(tile_svg_path)
+
+
 async def _generate_large_format_raster(
     *,
-    image_path: str,
+    image_path: str | None,
+    svg_fallback_path: str | None = None,
     lut_path: str,
     source_basename: str,
     recipe_overrides: list[dict[str, object]] | None,
@@ -3663,11 +3734,17 @@ async def _generate_large_format_raster(
     warnings: list[str] | None = None,
     log_tile_failures: bool = True,
 ) -> dict:
-    with Image.open(image_path) as img:
-        px_w, px_h = img.size
-        full_img = img.copy()
+    full_img: Image.Image | None = None
+    px_w = px_h = 0
+    if image_path is not None:
+        with Image.open(image_path) as img:
+            px_w, px_h = img.size
+            full_img = img.copy()
+    elif svg_fallback_path is None:
+        raise ValueError("Large-format raster generation requires an image or SVG source")
 
     successful_paths: list[tuple[str, str]] = []
+    tile_warnings: list[str] = []
     route_local_cleanup_paths: set[str] = set()
     cleanup_paths: set[str] = set()
     errors: list[str] = []
@@ -3846,8 +3923,8 @@ async def _generate_large_format_raster(
                 detail=LARGE_FORMAT_RECIPE_OVERRIDE_LOAD_FAILED_DETAIL,
             ) from exc
 
-    px_per_mm_x = px_w / total_width_mm
-    px_per_mm_y = px_h / total_height_mm
+    px_per_mm_x = px_w / total_width_mm if px_w else 0.0
+    px_per_mm_y = px_h / total_height_mm if px_h else 0.0
     cols = max(1, math.ceil(total_width_mm / tile_width_mm))
     rows = max(1, math.ceil(total_height_mm / tile_height_mm))
     source_x_boundaries: list[int] | None = None
@@ -3890,7 +3967,13 @@ async def _generate_large_format_raster(
         final_material_matrix_authority_mask_path=None,
     )
     shared_params["reuse_preview_analysis"] = False
-    if str(image_path).lower().endswith(".png") and shared_params["modeling_mode"] == CoreModelingMode.VECTOR:
+    if (
+        (
+            svg_fallback_path is not None
+            or (image_path is not None and str(image_path).lower().endswith(".png"))
+        )
+        and shared_params["modeling_mode"] == CoreModelingMode.VECTOR
+    ):
         shared_params["modeling_mode"] = CoreModelingMode.HIGH_FIDELITY
     hm_gray = (
         session_data.get("heightmap_grayscale")
@@ -3909,7 +3992,29 @@ async def _generate_large_format_raster(
                 y1_mm = min(y0_mm + tile_height_mm, total_height_mm)
                 cur_tile_w = x1_mm - x0_mm
 
-                if source_x_boundaries is not None:
+                if svg_fallback_path is not None:
+                    tile_path = _rasterize_svg_fallback_tile(
+                        svg_path=svg_fallback_path,
+                        total_width_mm=total_width_mm,
+                        total_height_mm=total_height_mm,
+                        x0_mm=x0_mm,
+                        y0_mm=y0_mm,
+                        x1_mm=x1_mm,
+                        y1_mm=y1_mm,
+                        pixels_per_mm=float(
+                            getattr(request, "svg_pixels_per_mm", SVG_PIXELS_PER_MM_DEFAULT)
+                        ),
+                    )
+                    route_local_cleanup_paths.add(tile_path)
+                    if hm_gray is not None:
+                        px_h, px_w = hm_gray.shape[:2]
+                        px_x0 = int(round(x0_mm * px_w / total_width_mm))
+                        px_x1 = min(int(round(x1_mm * px_w / total_width_mm)), px_w)
+                        px_y0 = int(round(y0_mm * px_h / total_height_mm))
+                        px_y1 = min(int(round(y1_mm * px_h / total_height_mm)), px_h)
+                    else:
+                        px_x0 = px_x1 = px_y0 = px_y1 = 0
+                elif source_x_boundaries is not None:
                     px_x0 = source_x_boundaries[c]
                     px_x1 = source_x_boundaries[c + 1]
                 else:
@@ -3922,11 +4027,14 @@ async def _generate_large_format_raster(
                     px_y0 = int(round(y0_mm * px_per_mm_y))
                     px_y1 = min(int(round(y1_mm * px_per_mm_y)), px_h)
 
-                tile_img = full_img.crop((px_x0, px_y0, px_x1, px_y1))
-                fd, tile_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
-                os.close(fd)
-                tile_img.save(tile_path)
-                route_local_cleanup_paths.add(tile_path)
+                if svg_fallback_path is None:
+                    if full_img is None:
+                        raise RuntimeError("Large-format raster source image is unavailable")
+                    tile_img = full_img.crop((px_x0, px_y0, px_x1, px_y1))
+                    fd, tile_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
+                    os.close(fd)
+                    tile_img.save(tile_path)
+                    route_local_cleanup_paths.add(tile_path)
 
                 tile_params = dict(shared_params, target_width_mm=cur_tile_w)
                 if hm_gray is not None:
@@ -4068,19 +4176,20 @@ async def _generate_large_format_raster(
                 if tp and os.path.exists(tp):
                     successful_paths.append((label, tp))
                     cleanup_paths.add(tp)
+                    for warning_code in read_wipe_tower_placement_warnings(tp):
+                        if warning_code not in tile_warnings:
+                            tile_warnings.append(warning_code)
                 else:
                     errors.append(f"{label}: generation failed — {result.get('status_msg', 'unknown')}")
             except MemoryError:
-                errors.append(f"{label}: generation failed")
+                _discard_pending_awaitables(futures, future_index + 1)
+                raise
             except BrokenProcessPool as e:
                 _discard_pending_awaitables(futures, future_index + 1)
                 raise HTTPException(
                     status_code=503,
                     detail=LARGE_FORMAT_GENERATION_FAILED_DETAIL,
                 ) from e
-            except MemoryError:
-                _discard_pending_awaitables(futures, future_index + 1)
-                raise
             except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
                 _discard_pending_awaitables(futures, future_index + 1)
                 _handle_core_error(e, "large-format tile generation")
@@ -4134,45 +4243,13 @@ async def _generate_large_format_raster(
             "tile_count": len(successful_paths),
             "grid_cols": cols,
             "grid_rows": rows,
-            "warnings": list(warnings or []),
+            "warnings": list(dict.fromkeys([*(warnings or []), *tile_warnings])),
         }
     finally:
         _remove_temp_paths(route_local_cleanup_paths)
         _remove_temp_paths(cleanup_paths)
         if zip_path is not None and not zip_ready:
             _remove_temp_path(zip_path)
-
-
-def _rasterize_svg_for_large_format_fallback(
-    *,
-    svg_path: str,
-    total_width_mm: float,
-    total_height_mm: float,
-    sid: str,
-    store: SessionStore,
-) -> tuple[str, list[str]]:
-    density, density_warnings = choose_svg_raster_fallback_density(
-        total_width_mm=total_width_mm,
-        total_height_mm=total_height_mm,
-    )
-    raster_rgba = rasterize_svg(
-        svg_path,
-        total_width_mm,
-        pixels_per_mm=density,
-        _min_quality_px=1,
-        _max_total_pixels=SVG_RASTER_FALLBACK_MAX_TOTAL_PIXELS,
-        _cache_result=False,
-    )
-    fd, png_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
-    os.close(fd)
-    save_completed = False
-    try:
-        Image.fromarray(raster_rgba).save(png_path)
-        save_completed = True
-    finally:
-        if not save_completed:
-            _remove_temp_path(png_path)
-    return png_path, density_warnings
 
 
 @router.post("/generate-large-format")
@@ -4303,7 +4380,6 @@ async def convert_generate_large_format(
             total_height_mm=total_h_mm,
             tile_width_mm=float(lf.tile_width_mm),
             tile_height_mm=float(lf.tile_height_mm),
-            max_tiles=MAX_LARGE_FORMAT_TILE_COUNT,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -4504,24 +4580,13 @@ async def convert_generate_large_format(
                         "如需回退，请关闭补洞。"
                     ),
                 )
-            fallback_png_path: str | None = None
             try:
-                (
-                    fallback_png_path,
-                    density_warnings,
-                ) = _rasterize_svg_for_large_format_fallback(
-                    svg_path=image_path,
-                    total_width_mm=total_w_mm,
-                    total_height_mm=total_h_mm,
-                    sid=sid,
-                    store=store,
-                )
                 fallback_warnings = warnings + [
                     SVG_LARGE_FORMAT_GENERATE_FALLBACK_WARNING
                 ]
-                fallback_warnings += density_warnings
                 result = await _generate_large_format_raster(
-                    image_path=fallback_png_path,
+                    image_path=None,
+                    svg_fallback_path=image_path,
                     lut_path=lut_path,
                     source_basename=source_basename,
                     recipe_overrides=recipe_overrides,
@@ -4569,9 +4634,6 @@ async def convert_generate_large_format(
                     error_message=fallback_error_message[:2048],
                 )
                 raise native_fallback_error from fallback_exc
-            finally:
-                if fallback_png_path is not None:
-                    _remove_temp_path(fallback_png_path)
     else:
         result = await _generate_large_format_raster(
             image_path=image_path,

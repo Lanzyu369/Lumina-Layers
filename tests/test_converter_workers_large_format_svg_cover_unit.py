@@ -208,6 +208,38 @@ def test_worker_forwards_rasterized_cover_source_to_export(tmp_path) -> None:
             os.unlink(result["zip_path"])
 
 
+def test_worker_collects_embedded_wipe_tower_warnings_without_false_positive() -> None:
+    """Native large-format tiles expose embedded placement warnings once."""
+
+    warning_code = "wipe_tower_manual_adjustment_required"
+    captured: list[str] = []
+
+    def _fake_export(*, output_path: str, **_kwargs) -> None:
+        with open(output_path, "wb") as handle:
+            handle.write(b"3mf")
+
+    def _read_warning(path: str) -> list[str]:
+        captured.append(path)
+        return [warning_code] if len(captured) == 1 else []
+
+    with (
+        patch("core.pipeline.s03_color_replacement._normalize_color_replacements_input", return_value={}),
+        patch("core.vector_engine.VectorProcessor", _FakeVectorProcessor),
+        patch("core.vector_large_format.slice_vector_analysis_into_tiles", return_value=[_make_tile("R1C1"), _make_tile("R1C2")]),
+        patch("api.workers.converter_workers._rasterize_tile_for_cover", return_value=None),
+        patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata", side_effect=_fake_export),
+        patch("utils.bambu_3mf_writer.read_wipe_tower_placement_warnings", side_effect=_read_warning),
+    ):
+        result = worker_generate_large_format_svg_native("image.svg", "lut.npy", _params_2x1())
+
+    try:
+        assert result["warnings"] == [warning_code]
+        assert len(captured) == 2
+    finally:
+        if os.path.exists(result["zip_path"]):
+            os.unlink(result["zip_path"])
+
+
 # ---------------------------------------------------------------------------
 # Timeout path: tile is exported with placeholder cover, WARNING emitted
 # ---------------------------------------------------------------------------

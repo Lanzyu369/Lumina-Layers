@@ -21,14 +21,8 @@ SVG_LARGE_FORMAT_NATIVE_FAILURE_FALLBACK_WARNING = (
     "Native vector generation failed; raster fallback was used for this "
     "large-format SVG request."
 )
-SVG_LARGE_FORMAT_DENSITY_REDUCED_WARNING = (
-    "Raster fallback density was reduced to keep SVG large-format generation within the pixel budget."
-)
-
 SVG_LARGE_FORMAT_FALLBACK_UNSUPPORTED_FEATURE = "unsupported_svg_feature"
 SVG_LARGE_FORMAT_FALLBACK_NATIVE_FAILURE = "native_vector_failure"
-MAX_LARGE_FORMAT_TILE_COUNT = 10_000
-SVG_RASTER_FALLBACK_MAX_TOTAL_PIXELS = 12_000_000
 
 _UNSUPPORTED_LARGE_FORMAT_TAGS = {
     "text",
@@ -54,11 +48,10 @@ def resolve_large_format_grid_shape(
     total_height_mm: float,
     tile_width_mm: float,
     tile_height_mm: float,
-    max_tiles: int | None = None,
 ) -> tuple[int, int]:
-    """Validate physical dimensions and return bounded grid columns/rows.
+    """Validate physical dimensions and return grid columns/rows.
 
-    校验物理尺寸并返回受限的网格列数与行数。
+    校验物理尺寸并返回网格列数与行数；分块数量由实际请求决定。
     """
 
     dimensions = (
@@ -72,13 +65,6 @@ def resolve_large_format_grid_shape(
             raise ValueError(f"{name} must be finite and positive")
     cols = max(1, math.ceil(total_width_mm / tile_width_mm))
     rows = max(1, math.ceil(total_height_mm / tile_height_mm))
-    tile_count = cols * rows
-    if max_tiles is not None and tile_count > max(1, int(max_tiles)):
-        raise ValueError(
-            f"Large-format grid would create {tile_count} tiles; "
-            f"the safe limit is {int(max_tiles)}. Increase tile size or "
-            "reduce the model dimensions."
-        )
     return cols, rows
 
 
@@ -153,34 +139,6 @@ class SvgLargeFormatSupportInspector:
             "warnings": warnings,
             "unsupported_features": unsupported_features,
         }
-
-
-@dataclass(frozen=True)
-class SvgRasterFallbackDensityPlanner:
-    """Choose a raster density that stays within the large-format pixel budget."""
-
-    total_width_mm: float
-    total_height_mm: float
-    desired_pixels_per_mm: float = 10.0
-    min_pixels_per_mm: float = 2.0
-    max_total_pixels: int = SVG_RASTER_FALLBACK_MAX_TOTAL_PIXELS
-
-    def choose_density(self) -> tuple[float, list[str]]:
-        """Choose a bounded raster fallback density for SVG large-format generation."""
-
-        warnings: list[str] = []
-        area_mm2 = max(self.total_width_mm * self.total_height_mm, 1.0)
-        max_ppm = math.sqrt(self.max_total_pixels / area_mm2)
-        chosen = min(self.desired_pixels_per_mm, max_ppm)
-        if max_ppm >= self.min_pixels_per_mm:
-            chosen = max(self.min_pixels_per_mm, chosen)
-        else:
-            # The pixel ceiling is a hard memory contract. A density floor
-            # here used to exceed it for extremely large direct callers.
-            chosen = max_ppm
-        if chosen < self.desired_pixels_per_mm:
-            warnings.append(SVG_LARGE_FORMAT_DENSITY_REDUCED_WARNING)
-        return chosen, warnings
 
 
 @dataclass(frozen=True)
@@ -412,26 +370,6 @@ def inspect_svg_large_format_support(svg_path: str) -> dict:
     """Detect whether native large-format vector tiling is safe for this SVG."""
 
     return SvgLargeFormatSupportInspector(svg_path).inspect()
-
-def choose_svg_raster_fallback_density(
-    *,
-    total_width_mm: float,
-    total_height_mm: float,
-    desired_pixels_per_mm: float = 10.0,
-    min_pixels_per_mm: float = 2.0,
-    max_total_pixels: int = SVG_RASTER_FALLBACK_MAX_TOTAL_PIXELS,
-) -> tuple[float, list[str]]:
-    """Choose a bounded raster fallback density for SVG large-format generation."""
-
-    planner = SvgRasterFallbackDensityPlanner(
-        total_width_mm=total_width_mm,
-        total_height_mm=total_height_mm,
-        desired_pixels_per_mm=desired_pixels_per_mm,
-        min_pixels_per_mm=min_pixels_per_mm,
-        max_total_pixels=max_total_pixels,
-    )
-    return planner.choose_density()
-
 
 def normalize_large_format_source_basename(source_basename: str | None) -> str:
     """Normalize a source basename for safe cross-platform tile filenames."""
