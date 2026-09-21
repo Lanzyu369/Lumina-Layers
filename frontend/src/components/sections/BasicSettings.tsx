@@ -140,6 +140,7 @@ const LARGE_FORMAT_GENERATE_FALLBACK_WARNING =
   "Raster fallback was used for this large-format SVG request.";
 const LARGE_FORMAT_NATIVE_FAILURE_WARNING =
   "Native vector generation failed; raster fallback was used for this large-format SVG request.";
+const WIPE_TOWER_MANUAL_WARNING_CODE = "wipe_tower_manual_adjustment_required";
 
 function localizeLargeFormatWarning(
   warning: string,
@@ -160,6 +161,9 @@ function localizeLargeFormatWarning(
   }
   if (warning === LARGE_FORMAT_NATIVE_FAILURE_WARNING) {
     return t("large_format_warning_native_failure");
+  }
+  if (warning === WIPE_TOWER_MANUAL_WARNING_CODE) {
+    return t("wipe_tower_manual_adjustment_warning");
   }
   return warning;
 }

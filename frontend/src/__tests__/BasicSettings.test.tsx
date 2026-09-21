@@ -793,6 +793,18 @@ describe("BasicSettings", () => {
     ).toBeInTheDocument();
   });
 
+  it("localizes embedded wipe-tower warnings returned by large-format generation", () => {
+    useConverterStore.setState({
+      largeFormatWarnings: ["wipe_tower_manual_adjustment_required"],
+    });
+
+    render(<BasicSettings />);
+
+    expect(
+      screen.getByText(/打印前必须手动调整擦料塔/),
+    ).toBeInTheDocument();
+  });
+
   it("renders the source version selector and legacy LUT database panel in old mode", () => {
     render(<BasicSettings />);
 
