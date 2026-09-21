@@ -1476,7 +1476,7 @@ async def generate_puzzle(
             if glb_path and os.path.exists(glb_path):
                 store.register_temp_file(sid, glb_path)
         except asyncio.TimeoutError:
-            errors.append(f"{piece.label}: generation timed out")
+            errors.append(f"{piece.label}: generation failed")
         except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as exc:
             _handle_core_error(exc, "puzzle piece generation")
         except ROUTER_HANDLED_ERRORS as exc:

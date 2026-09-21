@@ -41,7 +41,6 @@ from core.model_surface.types import (
 # union. Independent RSS probes reached 26.811x the retained scene arrays, so
 # keep a conservative, stage-specific margin instead of reusing the writer's
 # much smaller workspace factor.
-_MODEL_SURFACE_VECTOR_FOOTPRINT_WORKSPACE_MULTIPLIER = 32.0
 
 
 def build_surface_overlay_scene(
@@ -295,16 +294,6 @@ def _build_vector_pattern_scene(
         )
 
     _certify_surface_pattern_scene(pattern_scene, coordinate_domain)
-    if _take_scene_ownership:
-        from core.vector_engine import _enforce_vector_scene_export_headroom
-
-        _enforce_vector_scene_export_headroom(
-            pattern_scene,
-            stage="model_surface_vector_footprint",
-            workspace_multiplier=(
-                _MODEL_SURFACE_VECTOR_FOOTPRINT_WORKSPACE_MULTIPLIER
-            ),
-        )
     printable_footprint = _build_scene_printable_footprint(pattern_scene)
     return PreparedSurfacePattern(
         scene=pattern_scene,

@@ -15,9 +15,7 @@ import shapely
 from core.errors import (
     NativeSvgInternalError,
     NativeSvgInvalidError,
-    NativeSvgResourceLimitError,
 )
-from core.native_svg_limits import NATIVE_SVG_MAX_BYTES
 
 
 NATIVE_RESULT_SCHEMA_VERSION = 4
@@ -847,17 +845,8 @@ def analyze_native_svg(
     Raises:
         ValueError: The SVG is invalid or has no printable fill geometry.
         NativeSvgInvalidError: Physical input exceeds the numeric contract.
-        NativeSvgResourceLimitError: Input exceeds a deterministic resource
-            budget and must not be retried through the legacy parser.
         NativeSvgInternalError: ABI/schema/native processing failed.
     """
-
-    try:
-        if os.path.getsize(svg_path) > NATIVE_SVG_MAX_BYTES:
-            raise NativeSvgResourceLimitError()
-    except OSError:
-        # Preserve the native boundary's existing invalid-path behavior.
-        pass
 
     try:
         module = _load_native_module()
@@ -880,11 +869,6 @@ def analyze_native_svg(
         reason_code = str(
             result.reason_code or "unsupported_svg_semantics"
         )
-        if reason_code in {
-            "unsupported_complexity",
-            "unsupported_input_complexity",
-        }:
-            raise NativeSvgResourceLimitError(reason_code=reason_code)
         return NativeSvgFallback(
             reason_code=reason_code,
             native_version=native_version,

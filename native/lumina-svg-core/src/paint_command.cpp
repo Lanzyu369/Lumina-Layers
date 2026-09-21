@@ -21,13 +21,6 @@
 namespace lumina_svg_core {
 namespace {
 
-constexpr size_t MAX_SVG_BYTES = 256 * 1024 * 1024;
-constexpr size_t MAX_XML_ELEMENTS = 250'000;
-constexpr size_t MAX_XML_DEPTH = 128;
-constexpr size_t MAX_XML_ATTRIBUTES = 2'000'000;
-constexpr size_t MAX_XML_ATTRIBUTES_PER_ELEMENT = 32'768;
-constexpr size_t MAX_XML_ATTRIBUTE_BYTES = MAX_SVG_BYTES;
-
 RecorderResult finishRecording(std::unique_ptr<lunasvg::Document> document);
 
 bool startsWith(std::string_view value, std::string_view prefix)
@@ -654,117 +647,12 @@ NamespaceValidation validateNamespaceBindings(std::string_view svg)
         : NamespaceValidation::Supported;
 }
 
-bool exceedsXmlComplexity(std::string_view svg)
-{
-    if(svg.size() > MAX_SVG_BYTES)
-        return true;
-
-    size_t elementCount = 0;
-    size_t attributeCount = 0;
-    size_t attributeBytes = 0;
-    size_t depth = 0;
-    size_t offset = 0;
-    while((offset = svg.find('<', offset)) != std::string_view::npos) {
-        if(startsWith(svg.substr(offset), "<!--")) {
-            const auto end = svg.find("-->", offset + 4);
-            if(end == std::string_view::npos)
-                return false;
-            offset = end + 3;
-            continue;
-        }
-        if(startsWith(svg.substr(offset), "<![CDATA[")) {
-            const auto end = svg.find("]]>", offset + 9);
-            if(end == std::string_view::npos)
-                return false;
-            offset = end + 3;
-            continue;
-        }
-        if(startsWith(svg.substr(offset), "<?")) {
-            const auto end = svg.find("?>", offset + 2);
-            if(end == std::string_view::npos)
-                return false;
-            offset = end + 2;
-            continue;
-        }
-        if(startsWith(svg.substr(offset), "<!")) {
-            const auto end = svg.find('>', offset + 2);
-            if(end == std::string_view::npos)
-                return false;
-            offset = end + 1;
-            continue;
-        }
-
-        size_t cursor = offset + 1;
-        const bool closing = cursor < svg.size() && svg[cursor] == '/';
-        if(closing)
-            ++cursor;
-        while(cursor < svg.size() && isXmlSpace(svg[cursor]))
-            ++cursor;
-        while(cursor < svg.size()
-                && !isXmlSpace(svg[cursor])
-                && svg[cursor] != '/' && svg[cursor] != '>')
-            ++cursor;
-        const size_t attributesStart = cursor;
-        char quote = 0;
-        size_t tagEnd = std::string_view::npos;
-        size_t elementAttributeCount = 0;
-        for(; cursor < svg.size(); ++cursor) {
-            const char value = svg[cursor];
-            if(quote != 0) {
-                if(value == quote)
-                    quote = 0;
-                continue;
-            }
-            if(value == '\'' || value == '"') {
-                quote = value;
-                continue;
-            }
-            if(value == '='
-                    && ++elementAttributeCount
-                        > MAX_XML_ATTRIBUTES_PER_ELEMENT)
-                return true;
-            if(value == '>') {
-                tagEnd = cursor;
-                break;
-            }
-        }
-        if(tagEnd == std::string_view::npos)
-            return false;
-
-        if(closing) {
-            if(depth > 0)
-                --depth;
-        } else {
-            if(elementAttributeCount > MAX_XML_ATTRIBUTES - attributeCount)
-                return true;
-            attributeCount += elementAttributeCount;
-            const size_t elementAttributeBytes = tagEnd - attributesStart;
-            if(elementAttributeBytes
-                    > MAX_XML_ATTRIBUTE_BYTES - attributeBytes)
-                return true;
-            attributeBytes += elementAttributeBytes;
-            if(++elementCount > MAX_XML_ELEMENTS)
-                return true;
-            size_t last = tagEnd;
-            while(last > offset && isXmlSpace(svg[last - 1]))
-                --last;
-            const bool selfClosing = last > offset && svg[last - 1] == '/';
-            if(!selfClosing && ++depth > MAX_XML_DEPTH)
-                return true;
-        }
-        offset = tagEnd + 1;
-    }
-    return false;
-}
-
 RecorderResult recordUtf8Svg(std::string_view svg)
 {
     if(hasUnsupportedXmlEncoding(svg))
         return unsupportedXmlEncoding();
     if(hasDoctypeDeclaration(svg))
         return unsupportedDoctype();
-    if(exceedsXmlComplexity(svg))
-        return unsupportedComplexity();
     const auto namespaceValidation = validateNamespaceBindings(svg);
     if(namespaceValidation == NamespaceValidation::Invalid)
         return {};
@@ -853,9 +741,6 @@ RecorderResult recordPaintCommandsPath(const std::filesystem::path& filename)
     std::error_code fileSizeError;
     const auto fileSize = std::filesystem::file_size(
         filename, fileSizeError);
-    if(!fileSizeError && fileSize > MAX_SVG_BYTES)
-        return unsupportedComplexity();
-
     std::ifstream stream(filename, std::ios::binary);
     if(!stream)
         return {};
@@ -869,8 +754,6 @@ RecorderResult recordPaintCommandsPath(const std::filesystem::path& filename)
         if(count <= 0)
             break;
         const auto byteCount = static_cast<size_t>(count);
-        if(byteCount > MAX_SVG_BYTES - svg.size())
-            return unsupportedComplexity();
         svg.append(buffer.data(), byteCount);
     }
     if(stream.bad())

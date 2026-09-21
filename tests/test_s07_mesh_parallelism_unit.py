@@ -55,7 +55,6 @@ def _parallelism_plan(
     effective_cpu_capacity: int | None = None,
     outer_demand: int = 1,
     cpu_fair_share_ceiling: int | None = None,
-    memory_ceiling: int | None = None,
     limiting_reason: str = "requested",
     demand_snapshot_fallback: bool = False,
     cpu_topology: str = "unknown",
@@ -70,7 +69,6 @@ def _parallelism_plan(
         1,
         effective_cpu // max(1, outer_demand),
     )
-    memory = memory_ceiling or max(1, workers)
     return AdaptiveParallelismPlan(
         workers=workers,
         requested_ceiling=requested,
@@ -80,9 +78,6 @@ def _parallelism_plan(
         work_item_ceiling=4,
         work_unit_ceiling=4,
         stage_ceiling=4,
-        memory_ceiling=memory,
-        available_memory_bytes=8 * 1024**3,
-        estimated_worker_bytes=64 * 1024**2,
         limiting_reason=limiting_reason,
         demand_snapshot_fallback=demand_snapshot_fallback,
         cpu_topology=cpu_topology,
@@ -122,7 +117,6 @@ def test_s07_uses_bounded_policy_and_restores_material_order(
         hard_max_workers: int | None,
         work_units: int,
         min_parallel_work_units: int,
-        estimated_worker_bytes: int,
     ) -> AdaptiveParallelismPlan:
         policy_calls.append(
             {
@@ -132,7 +126,6 @@ def test_s07_uses_bounded_policy_and_restores_material_order(
                 "hard_max_workers": hard_max_workers,
                 "work_units": work_units,
                 "min_parallel_work_units": min_parallel_work_units,
-                "estimated_worker_bytes": estimated_worker_bytes,
             },
         )
         return _parallelism_plan(
@@ -141,7 +134,6 @@ def test_s07_uses_bounded_policy_and_restores_material_order(
             effective_cpu_capacity=4,
             outer_demand=2,
             cpu_fair_share_ceiling=2,
-            memory_ceiling=3,
             limiting_reason="cpu_fair_share",
             cpu_topology="heterogeneous",
             cpu_scheduling_policy="apple_performance_budget",
@@ -171,7 +163,6 @@ def test_s07_uses_bounded_policy_and_restores_material_order(
             "hard_max_workers": None,
             "work_units": 4,
             "min_parallel_work_units": 100_000,
-            "estimated_worker_bytes": 64 * 1024**2,
         }
     ]
     assert pool_workers == [2]
@@ -198,7 +189,6 @@ def test_s07_uses_bounded_policy_and_restores_material_order(
     assert result["_hifi_timings"]["mesh_parallelism_performance_cpu"] == 4
     assert result["_hifi_timings"]["mesh_parallelism_outer_demand"] == 2
     assert result["_hifi_timings"]["mesh_parallelism_cpu_fair_share"] == 2
-    assert result["_hifi_timings"]["mesh_parallelism_memory_ceiling"] == 3
     assert result["_hifi_timings"]["mesh_parallelism_demand_fallback"] is False
 
 

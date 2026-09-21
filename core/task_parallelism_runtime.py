@@ -816,45 +816,6 @@ def current_worker_lease_path() -> Path | None:
     return getattr(_RUNTIME_STATE, "worker_lease_path", None)
 
 
-def current_task_host_memory_budget_bytes() -> int | None:
-    """Return the host reservation assigned to the current worker task.
-
-    返回父进程为当前 worker 任务预留的主机内存上限；普通 CLI 调用返回
-    ``None``，继续使用进程级默认预算。
-    """
-
-    value = getattr(_RUNTIME_STATE, "host_memory_budget_bytes", None)
-    return int(value) if value is not None else None
-
-
-@contextmanager
-def task_host_memory_budget_scope(
-    memory_budget_bytes: int,
-) -> Iterator[None]:
-    """Install a parent-admitted host memory cap for one worker task.
-
-    为单个 worker 任务安装父进程已准入的主机内存上限。
-
-    Args:
-        memory_budget_bytes: Positive bytes reserved for this task.
-            为当前任务预留的正整数字节数。
-    """
-
-    budget = max(1, int(memory_budget_bytes))
-    previous = getattr(_RUNTIME_STATE, "host_memory_budget_bytes", None)
-    _RUNTIME_STATE.host_memory_budget_bytes = budget
-    try:
-        yield
-    finally:
-        if previous is None:
-            try:
-                del _RUNTIME_STATE.host_memory_budget_bytes
-            except AttributeError:
-                pass
-        else:
-            _RUNTIME_STATE.host_memory_budget_bytes = previous
-
-
 @contextmanager
 def task_parallelism_runtime_scope(
     snapshot_path: str | os.PathLike[str],

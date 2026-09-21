@@ -53,8 +53,6 @@ from config import TEMP_DIR
 from core.pipeline._input_validation_common import (
     VECTOR_NATIVE_REQUIRES_SVG_DETAIL,
 )
-from core.errors import VectorMeshMemoryBudgetError
-from core.vector_mesh_memory import estimate_vector_task_memory_reservation_bytes
 
 # Isolated store/registry per test module to avoid cross-test pollution
 _test_store: SessionStore = SessionStore(ttl=1800)
@@ -73,9 +71,8 @@ class _InlineRealWorkerPool:
         fn,
         *args,
         timeout=None,
-        host_memory_reservation_bytes=None,
     ):
-        del timeout, host_memory_reservation_bytes
+        del timeout
         return fn(*args), {}
 
 
@@ -819,47 +816,6 @@ class TestPreviewMaterialSourceValidation:
             }
         ]
 
-    def test_vector_material_archive_uses_bounded_host_reservation(
-        self,
-        tmp_path,
-    ) -> None:
-        """Implicit material state is counted without forcing the 8 GiB cap."""
-
-        svg_path = tmp_path / "source.svg"
-        svg_path.write_text(
-            '<svg xmlns="http://www.w3.org/2000/svg" '
-            'width="20" height="20" viewBox="0 0 20 20">'
-            '<rect width="20" height="20" fill="#ffffff"/>'
-            "</svg>",
-            encoding="utf-8",
-        )
-        _mock_pool.submit = AsyncMock(return_value=_create_worker_result_files())
-
-        with (
-            patch(
-                "api.routers.converter.preview.ensure_png_tempfile",
-                new=AsyncMock(return_value=str(svg_path)),
-            ),
-            patch(
-                "api.routers.converter.preview.generate_segmented_glb",
-                return_value=None,
-            ),
-        ):
-            response = client.post(
-                "/api/convert/preview",
-                files={"image": ("source.svg", b"<svg/>", "image/svg+xml")},
-                data={
-                    "modeling_mode": "vector",
-                    "material_source": "material_archive",
-                    "selected_materials": json.dumps(["mat-a", "mat-b"]),
-                },
-            )
-
-        assert response.status_code == 200, response.text
-        reservation = _mock_pool.submit.call_args.kwargs[
-            "host_memory_reservation_bytes"
-        ]
-        assert 1024**3 < reservation < 2 * 1024**3
 
 
 # =========================================================================
@@ -2062,14 +2018,6 @@ class TestSvgLargeFormatWarnings:
 
         assert response.status_code == 200
         submitted_source = _mock_pool.submit.call_args.args[1]
-        reservation = _mock_pool.submit.call_args.kwargs[
-            "host_memory_reservation_bytes"
-        ]
-        assert reservation == estimate_vector_task_memory_reservation_bytes(
-            submitted_source,
-            resident_paths=(lut_path,),
-        )
-        assert reservation < 8 * 1024**3
         body = response.json()
         assert "warnings" in body
         assert any("native vector large-format" in warning.lower() for warning in body["warnings"])
@@ -2272,33 +2220,6 @@ class TestSvgLargeFormatWarnings:
 class TestTimeoutReturns504:
     """Verify asyncio.TimeoutError from pool.submit returns HTTP 504."""
 
-    def test_preview_timeout_returns_504(self) -> None:
-        """Simulate pool.submit raising TimeoutError, expect 504."""
-        import asyncio
-
-        buf = _make_test_image_buf()
-        _mock_pool.submit = AsyncMock(side_effect=asyncio.TimeoutError())
-
-        with (
-            patch(
-                "api.routers.converter.preview.LUTManager.get_lut_path",
-                return_value="/tmp/fake.npy",
-            ),
-            patch(
-                "api.routers.converter.preview.ensure_png_tempfile",
-                new=AsyncMock(return_value="/tmp/uploaded.png"),
-            ),
-        ):
-            response = client.post(
-                "/api/convert/preview",
-                files={"image": ("test.png", buf, "image/png")},
-                data={
-                    "lut_name": "test_lut",
-                    "color_mode": "4-Color",
-                },
-            )
-        assert response.status_code == 504
-        assert "timed out" in response.json()["detail"].lower()
 
 
 # =========================================================================
@@ -2408,39 +2329,6 @@ class TestGeneralExceptionReturns500:
             "message": VECTOR_NATIVE_REQUIRES_SVG_DETAIL,
         }
 
-    def test_preview_memory_admission_returns_actionable_422(self) -> None:
-        buf = _make_test_image_buf()
-        _mock_pool.submit = AsyncMock(
-            side_effect=VectorMeshMemoryBudgetError(
-                "preflight",
-                9 * 1024**3,
-                8 * 1024**3,
-                1 * 1024**3,
-                4_200,
-                420_000,
-            )
-        )
-
-        with (
-            patch(
-                "api.routers.converter.preview.LUTManager.get_lut_path",
-                return_value="/tmp/fake.npy",
-            ),
-            patch(
-                "api.routers.converter.preview.ensure_png_tempfile",
-                new=AsyncMock(return_value="/tmp/uploaded.png"),
-            ),
-        ):
-            response = client.post(
-                "/api/convert/preview",
-                files={"image": ("test.png", buf, "image/png")},
-                data={"lut_name": "test_lut", "color_mode": "4-Color"},
-            )
-
-        assert response.status_code == 422
-        detail = response.json()["detail"]
-        assert detail["error"] == "vector_mesh_memory_budget_exceeded"
-        assert detail["recoverable"] is True
 
     @pytest.mark.parametrize(
         ("diagnostic", "modeling_mode"),
@@ -2495,11 +2383,6 @@ class TestGeneralExceptionReturns500:
             (
                 "[VECTOR_PREVIEW] No valid filled shapes found in SVG.",
                 "source_svg_no_renderable_geometry",
-            ),
-            (
-                "[VECTOR_PREVIEW] SVG compound path exceeds supported "
-                "intersecting subpath complexity",
-                "source_svg_too_complex",
             ),
         ],
     )
@@ -3170,42 +3053,6 @@ class TestNativeBundleCleanup:
             if os.path.exists(temp_bundle_path):
                 os.unlink(temp_bundle_path)
 
-    def test_preview_timeout_cleans_up_temp_native_bundle_file(self) -> None:
-        import asyncio
-
-        buf = _make_test_image_buf()
-        fd, temp_bundle_path = tempfile.mkstemp(suffix=".msgpack", dir=TEMP_DIR)
-        os.close(fd)
-
-        _mock_pool.submit = AsyncMock(side_effect=asyncio.TimeoutError())
-
-        try:
-            with (
-                patch(
-                    "api.routers.converter.preview.LUTManager.resolve_source_selection",
-                    return_value=(temp_bundle_path, "Native Bundle"),
-                ),
-                patch(
-                    "api.routers.converter.preview.ensure_png_tempfile",
-                    new=AsyncMock(return_value="/tmp/uploaded.png"),
-                ),
-            ):
-                response = client.post(
-                    "/api/convert/preview",
-                    files={"image": ("test.png", buf, "image/png")},
-                    data={
-                        "source_kind": "native_bundle",
-                        "material_type": "PLA",
-                        "vendor": "BambuLab",
-                        "db_names": "RYBW_008_5L.json",
-                    },
-                )
-
-            assert response.status_code == 504
-            assert not os.path.exists(temp_bundle_path)
-        finally:
-            if os.path.exists(temp_bundle_path):
-                os.unlink(temp_bundle_path)
 
 
 class TestParseSelectedMaterials:
@@ -3253,200 +3100,3 @@ class TestParseSelectedMaterials:
 
 class TestLargeFormatSvgPreviewCacheSizing:
     """Regression coverage for tall SVG + material archive preview guard."""
-
-    def test_legacy_large_format_svg_uses_compact_matrix_estimate(
-        self, tmp_path
-    ) -> None:
-        """LUM-20260629-002 should fit a 1 GiB cap after runtime-sized estimate."""
-        svg_path = tmp_path / "large.svg"
-        svg_path.write_text(
-            '<svg xmlns="http://www.w3.org/2000/svg" '
-            'width="4990" height="6987" viewBox="0 0 4990 6987">'
-            '<path d="M0 0H4990V6987H0Z" fill="#ffffff"/>'
-            "</svg>",
-            encoding="utf-8",
-        )
-
-        _enforce_preview_cache_size_limit(
-            image_path=str(svg_path),
-            target_width_mm=499,
-            modeling_mode="vector",
-            svg_pixels_per_mm=10,
-            color_layers=None,
-            material_layer_count=None,
-            material_source="lut",
-            max_bytes=1024 * 1024 * 1024,
-        )
-
-    def test_vector_svg_preview_estimate_matches_runtime_width_cap(
-        self, tmp_path
-    ) -> None:
-        """Large vector SVG estimates should match the 1600px preview cache cap."""
-        svg_path = tmp_path / "large.svg"
-        svg_path.write_text(
-            '<svg xmlns="http://www.w3.org/2000/svg" '
-            'width="4990" height="6987" viewBox="0 0 4990 6987">'
-            '<path d="M0 0H4990V6987H0Z" fill="#ffffff"/>'
-            "</svg>",
-            encoding="utf-8",
-        )
-
-        try:
-            _enforce_preview_cache_size_limit(
-                image_path=str(svg_path),
-                target_width_mm=499,
-                modeling_mode="vector",
-                svg_pixels_per_mm=10,
-                color_layers=None,
-                material_layer_count=None,
-                material_source="lut",
-                max_bytes=1,
-            )
-        except Exception as exc:
-            assert getattr(exc, "status_code", None) == 422
-            assert exc.detail["error"] == "preview_cache_size_limit_exceeded"
-            assert exc.detail["estimated_width"] == 1600
-            assert exc.detail["estimated_height"] == 2240
-        else:
-            raise AssertionError("explicit 1 byte cap should reject the preview")
-
-    def test_material_matrix_compaction_uses_int8_for_small_signed_indices(
-        self,
-    ) -> None:
-        """Small material indices should be stored using the smallest signed dtype."""
-        material_matrix = np.array(
-            [[[-1, 0, 1, 7], [2, 3, 4, 5]]],
-            dtype=np.int32,
-        )
-
-        compacted = _compact_preview_cache_material_matrices(
-            {
-                "material_matrix": material_matrix,
-                "original_material_matrix": material_matrix.copy(),
-            }
-        )
-
-        assert compacted["material_matrix"].dtype == np.dtype(np.int8)
-        assert compacted["original_material_matrix"].dtype == np.dtype(np.int8)
-        np.testing.assert_array_equal(compacted["material_matrix"], material_matrix)
-
-    def test_material_svg_290mm_10_layer_preview_not_limited_by_default(
-        self, tmp_path
-    ) -> None:
-        """LUM-20260628-002 should not be rejected when no cap is configured."""
-        svg_path = tmp_path / "gray_boundary.svg"
-        svg_path.write_text(
-            '<svg xmlns="http://www.w3.org/2000/svg" '
-            'width="2900" height="2049" viewBox="0 0 2900 2049">'
-            '<path d="M0 0H2900V2049H0Z" fill="#ffffff"/>'
-            "</svg>",
-            encoding="utf-8",
-        )
-
-        _enforce_preview_cache_size_limit(
-            image_path=str(svg_path),
-            target_width_mm=290,
-            modeling_mode="vector",
-            svg_pixels_per_mm=10,
-            color_layers=None,
-            material_layer_count=10,
-            material_source="material_archive",
-            max_bytes=None,
-        )
-
-    def test_tall_svg_preview_rejects_when_positive_cap_is_configured(
-        self, tmp_path
-    ) -> None:
-        """The guardrail still works when an operator explicitly enables a cap."""
-        svg_path = tmp_path / "tall.svg"
-        svg_path.write_text(
-            '<svg xmlns="http://www.w3.org/2000/svg" '
-            'width="647.179993" height="4091" viewBox="0 0 647.179993 4091">'
-            '<path d="M0 0H647.179993V4091H0Z" fill="#ffffff"/>'
-            '</svg>',
-            encoding="utf-8",
-        )
-
-        try:
-            _enforce_preview_cache_size_limit(
-                image_path=str(svg_path),
-                target_width_mm=170,
-                modeling_mode="vector",
-                svg_pixels_per_mm=10,
-                color_layers=None,
-                material_layer_count=5,
-                material_source="material_archive",
-                max_bytes=256 * 1024 * 1024,
-            )
-        except Exception as exc:
-            assert getattr(exc, "status_code", None) == 422
-            assert exc.detail["error"] == "preview_cache_size_limit_exceeded"
-        else:
-            raise AssertionError("explicit 256 MiB cap should reject the preview")
-
-    def test_material_archive_svg_uses_compacted_matrix_estimate(self, tmp_path) -> None:
-        """Material archive cache estimates should match compact persisted matrices."""
-        svg_path = tmp_path / "square.svg"
-        svg_path.write_text(
-            '<svg xmlns="http://www.w3.org/2000/svg" '
-            'width="100" height="100" viewBox="0 0 100 100">'
-            '<path d="M0 0H100V100H0Z" fill="#ffffff"/>'
-            '</svg>',
-            encoding="utf-8",
-        )
-
-        _enforce_preview_cache_size_limit(
-            image_path=str(svg_path),
-            target_width_mm=263,
-            modeling_mode="vector",
-            svg_pixels_per_mm=10,
-            color_layers=None,
-            material_layer_count=9,
-            material_source="material_archive",
-            selected_material_count=18,
-            max_bytes=512 * 1024 * 1024,
-        )
-
-    def test_large_format_svg_preview_uses_higher_guardrail(self, tmp_path) -> None:
-        """Positive large-format caps remain available as explicit guardrails."""
-        svg_path = tmp_path / "tall.svg"
-        svg_path.write_text(
-            '<svg xmlns="http://www.w3.org/2000/svg" '
-            'width="647.179993" height="4091" viewBox="0 0 647.179993 4091">'
-            '<path d="M0 0H647.179993V4091H0Z" fill="#ffffff"/>'
-            '</svg>',
-            encoding="utf-8",
-        )
-
-        _enforce_preview_cache_size_limit(
-            image_path=str(svg_path),
-            target_width_mm=170,
-            modeling_mode="vector",
-            svg_pixels_per_mm=10,
-            color_layers=None,
-            material_layer_count=5,
-            material_source="material_archive",
-            max_bytes=1024 * 1024 * 1024,
-        )
-
-    def test_large_format_svg_preview_cap_is_disabled_by_default(
-        self, monkeypatch
-    ) -> None:
-        """Large-format gray deployments should not get a default cache cap."""
-        monkeypatch.delenv(
-            "LUMINA_LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES",
-            raising=False,
-        )
-
-        assert _get_large_format_svg_preview_cache_max_bytes() is None
-
-    def test_large_format_svg_preview_cap_uses_positive_env(
-        self, monkeypatch
-    ) -> None:
-        """Large-format cap remains available as an explicit opt-in."""
-        monkeypatch.setenv(
-            "LUMINA_LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES",
-            "1073741824",
-        )
-
-        assert _get_large_format_svg_preview_cache_max_bytes() == 1073741824

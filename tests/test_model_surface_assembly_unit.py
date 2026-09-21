@@ -12,7 +12,6 @@ import pytest
 import shapely.geometry as sg
 import trimesh
 
-from core.errors import VectorMeshMemoryBudgetError
 from core.layered_coordinate_domain import (
     LAYERED_COORDINATE_DOMAIN_CERTIFIED_KEY,
     read_layered_coordinate_domain,
@@ -616,189 +615,12 @@ def test_contacting_surface_pattern_exports_after_rigid_rotation(
         assert np.all(_edge_incidence_counts(leaf) == 2)
 
 
-def test_model_surface_footprint_memory_error_is_fatal(monkeypatch):
-    scene = trimesh.Scene(
-        {"Artwork": trimesh.creation.box(extents=(2.0, 2.0, 0.08))}
-    )
-    monkeypatch.setattr(
-        "core.model_surface.pipeline.shapely.union_all",
-        lambda _items: (_ for _ in ()).throw(MemoryError("footprint allocation")),
-    )
-
-    with pytest.raises(MemoryError, match="footprint allocation"):
-        _build_scene_printable_footprint(scene)
 
 
-def test_owned_vector_footprint_guard_uses_bounded_workspace_before_projection(
-    monkeypatch,
-):
-    artwork = trimesh.creation.box(extents=(2.0, 2.0, 0.08))
-    artwork.apply_translation((2.0, -2.0, 0.04))
-    ctx = {
-        "is_svg_vector": True,
-        "scene": trimesh.Scene({"Black": artwork}),
-        "vector_analysis": SimpleNamespace(
-            slot_names=("Black",),
-            num_channels=1,
-            bbox=(0.0, 0.0, 10.0, 10.0),
-            scale_factor=1.0,
-            num_layers=1,
-        ),
-        "layer_height_mm": 0.08,
-        "bambu_face_orientation": "up",
-    }
-    rejected = VectorMeshMemoryBudgetError(
-        "model_surface_vector_footprint",
-        9 * 1024**3,
-        8 * 1024**3,
-        1 * 1024**3,
-        1,
-        len(artwork.vertices),
-    )
-    calls = []
-
-    def reject(_scene, **kwargs):
-        calls.append(kwargs)
-        raise rejected
-
-    monkeypatch.setattr(
-        sys.modules["core.vector_engine"],
-        "_enforce_vector_scene_export_headroom",
-        reject,
-    )
-    monkeypatch.setattr(
-        "core.model_surface.pipeline._build_scene_printable_footprint",
-        lambda _scene: (_ for _ in ()).throw(
-            AssertionError("projection started before memory admission")
-        ),
-    )
-
-    with pytest.raises(VectorMeshMemoryBudgetError) as raised:
-        _build_pattern_scene(ctx, _take_vector_scene_ownership=True)
-
-    assert raised.value is rejected
-    assert calls == [
-        {
-            "stage": "model_surface_vector_footprint",
-            "workspace_multiplier": 32.0,
-        }
-    ]
 
 
-def test_model_surface_boolean_guard_runs_before_split_copy_or_difference(
-    monkeypatch,
-):
-    base = trimesh.creation.box(extents=(20.0, 10.0, 3.0))
-    cutter = trimesh.creation.box(extents=(1.0, 1.0, 0.09))
-    footprint = SurfaceFootprint(
-        frame=PlaneFrame(
-            origin=(0.0, 0.0, 1.5),
-            normal=(0.0, 0.0, 1.0),
-            u_axis=(1.0, 0.0, 0.0),
-            v_axis=(0.0, 1.0, 0.0),
-        ),
-        outer=((-10.0, -5.0), (10.0, -5.0), (10.0, 5.0), (-10.0, 5.0)),
-        holes=(),
-        bounds_min=(-10.0, -5.0),
-        bounds_max=(10.0, 5.0),
-        bounds_width_mm=20.0,
-        bounds_height_mm=10.0,
-        area_mm2=200.0,
-        hole_count=0,
-    )
-    rejected = VectorMeshMemoryBudgetError(
-        "model_surface_boolean",
-        9 * 1024**3,
-        8 * 1024**3,
-        1 * 1024**3,
-        2,
-        len(base.vertices) + len(cutter.vertices),
-    )
-    monkeypatch.setattr(
-        "core.model_surface.assembly._build_polygon_prism_mesh",
-        lambda _polygon, *, height_mm: cutter,
-    )
-    guard_calls = []
-
-    def reject(_scene, **kwargs):
-        guard_calls.append(kwargs)
-        raise rejected
-
-    monkeypatch.setattr(
-        sys.modules["core.vector_engine"],
-        "_enforce_vector_scene_export_headroom",
-        reject,
-    )
-    monkeypatch.setattr(
-        trimesh.Trimesh,
-        "split",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("split started before memory admission")
-        ),
-    )
-    monkeypatch.setattr(
-        trimesh.Trimesh,
-        "copy",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("copy started before memory admission")
-        ),
-    )
-    monkeypatch.setattr(
-        "core.model_surface.assembly.trimesh.boolean.difference",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("boolean started before memory admission")
-        ),
-    )
-
-    with pytest.raises(VectorMeshMemoryBudgetError) as raised:
-        cut_surface_pocket(base, footprint, pocket_depth_mm=0.08)
-
-    assert raised.value is rejected
-    assert guard_calls == [
-        {
-            "stage": "model_surface_boolean",
-            "workspace_multiplier": 32.0,
-        }
-    ]
 
 
-def test_model_surface_boolean_memory_error_is_fatal(monkeypatch):
-    base = trimesh.creation.box(extents=(20.0, 10.0, 3.0))
-    footprint = SurfaceFootprint(
-        frame=PlaneFrame(
-            origin=(0.0, 0.0, 1.5),
-            normal=(0.0, 0.0, 1.0),
-            u_axis=(1.0, 0.0, 0.0),
-            v_axis=(0.0, 1.0, 0.0),
-        ),
-        outer=((-10.0, -5.0), (10.0, -5.0), (10.0, 5.0), (-10.0, 5.0)),
-        holes=(),
-        bounds_min=(-10.0, -5.0),
-        bounds_max=(10.0, 5.0),
-        bounds_width_mm=20.0,
-        bounds_height_mm=10.0,
-        area_mm2=200.0,
-        hole_count=0,
-    )
-    monkeypatch.setattr(
-        "core.model_surface.assembly._build_polygon_prism_mesh",
-        lambda _polygon, *, height_mm: trimesh.creation.box(
-            extents=(1.0, 1.0, height_mm)
-        ),
-    )
-    monkeypatch.setattr(
-        "core.model_surface.assembly.prepare_model_surface_mesh_for_boolean",
-        lambda mesh, **_kwargs: mesh,
-    )
-    monkeypatch.setattr(
-        "core.model_surface.assembly.trimesh.boolean.difference",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            MemoryError("boolean allocation")
-        ),
-    )
-
-    with pytest.raises(MemoryError, match="boolean allocation"):
-        cut_surface_pocket(base, footprint, pocket_depth_mm=0.08)
 
 
 def test_native_vector_pattern_footprint_excludes_transparent_and_air_shapes():

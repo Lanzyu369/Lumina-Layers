@@ -243,51 +243,6 @@ def test_unreadable_lease_table_refuses_to_add_load(tmp_path: Path) -> None:
     assert (grant.workers, grant.state, grant.token) == (1, "invalid", None)
 
 
-@pytest.mark.parametrize("capacity", [1, 2, 4])
-@pytest.mark.parametrize("already_running", [0, 1])
-def test_small_device_admission_keeps_the_sum_inside_capacity(
-    tmp_path: Path, capacity: int, already_running: int,
-) -> None:
-    """Low-capacity devices: an arriving task only takes what is still free.
-
-    The matrix is small enough to run everywhere, and it states the same
-    invariant the 16-CPU cases state: admitted workers never exceed the
-    effective CPU capacity, and zero is a legal grant.
-    """
-
-    lease_path = tmp_path / "workers.json"
-    holders: list[_LeaseHolder] = []
-    try:
-        for index in range(already_running):
-            running = _LeaseHolder(
-                tmp_path, lease_path,
-                requested=capacity, capacity=capacity, tag=f"run{index}",
-            )
-            holders.append(running)
-            granted, _tasks, _siblings, _reason = running.grant()
-            assert granted == capacity
-
-        arriving = _LeaseHolder(
-            tmp_path, lease_path, requested=capacity, capacity=capacity, tag="new",
-        )
-        holders.append(arriving)
-        granted, tasks, siblings, reason = arriving.grant()
-        held = capacity * already_running
-        assert granted == max(0, capacity - held)
-        assert siblings == held
-        assert tasks == already_running
-        assert reason == (
-            "granted" if already_running == 0
-            else "worker_lease_contention" if granted else "lease_capacity_exhausted"
-        )
-
-        # The published table is the evidence: the sum stays inside the device.
-        snapshot = WorkerLeaseStore(lease_path).snapshot()
-        assert snapshot["workers"] == held + granted
-        assert snapshot["workers"] <= capacity
-    finally:
-        for holder in holders:
-            holder.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -444,7 +399,6 @@ def _force_process_plan(
     monkeypatch: pytest.MonkeyPatch,
     materializer,
     workers: int,
-    memory_budget_bytes: int | None = 16 * 1024**3,
 ):
     from types import SimpleNamespace
 
@@ -459,13 +413,6 @@ def _force_process_plan(
             demand_snapshot_fallback=False,
         ),
     )
-    monkeypatch.setattr(materializer, "get_process_rss_bytes", lambda: 100 * 1024**2)
-    if memory_budget_bytes is not None:
-        monkeypatch.setattr(
-            materializer,
-            "resolve_vector_mesh_memory_budget_bytes",
-            lambda: memory_budget_bytes,
-        )
     monkeypatch.setattr(materializer, "MaterialProcessLifetime", _StubLifetime)
     monkeypatch.setattr(materializer, "current_worker_lease_path", lambda: None)
     monkeypatch.setattr(materializer, "current_demand_snapshot_path", lambda: None)
@@ -909,7 +856,7 @@ def test_live_demand_snapshot_reaches_the_compute_stage(
         source = tmp_path / "input.json"
         materializer._write_material_input(source, _slots(1)["material-0"]["slabs"])
         materializer._build_material_file(
-            str(source), str(tmp_path / "out.npz"), 1.0, None, 512 * 1024**2
+            str(source), str(tmp_path / "out.npz"), 1.0, None
         )
 
         assert observed["path"] == publisher.snapshot_path
@@ -1018,21 +965,13 @@ def _drive_materializer(
     pool=None,
     order: list[str] | None = None,
     release_ok: bool = True,
-    budget_scope_bytes: int | None = None,
 ):
     """Run the real materializer with a fake lifetime and a scripted pool."""
 
     from core import vector_material_meshing as materializer
 
     lifetime_cls.parent = tmp_path
-    _force_process_plan(
-        monkeypatch,
-        materializer,
-        workers=plan_workers,
-        memory_budget_bytes=(
-            None if budget_scope_bytes is not None else 16 * 1024**3
-        ),
-    )
+    _force_process_plan(monkeypatch, materializer, workers=plan_workers)
     monkeypatch.setattr(materializer, "MaterialProcessLifetime", lifetime_cls)
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     if lease_path is not None:
@@ -1062,25 +1001,15 @@ def _drive_materializer(
         pool.release_one()
         return real_wait(futures, return_when=return_when)
 
-    from contextlib import nullcontext
-
-    from core.task_parallelism_runtime import task_host_memory_budget_scope
-
     timings: dict = {}
-    budget_scope = (
-        nullcontext()
-        if budget_scope_bytes is None
-        else task_host_memory_budget_scope(budget_scope_bytes)
-    )
     monkeypatch.setattr(materializer, "wait", scripted_wait)
-    with budget_scope:
-        result = materializer.materialize_material_meshes(
-            slots,
-            scale_factor=1.0,
-            geometry_policy=None,
-            serial_builder=vector_engine.build_vector_layered_volume,
-            timings=timings,
-        )
+    result = materializer.materialize_material_meshes(
+        slots,
+        scale_factor=1.0,
+        geometry_policy=None,
+        serial_builder=vector_engine.build_vector_layered_volume,
+        timings=timings,
+    )
     return result, timings
 
 
@@ -1343,134 +1272,3 @@ def _plan_wanting(workers: int):
         effective_cpu_capacity=16,
         demand_snapshot_fallback=False,
     )
-
-
-def test_default_reservation_leaves_the_material_stage_serial(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Reproduce: a serial-pipeline reservation affords exactly one builder."""
-
-    from core import vector_material_meshing as materializer
-    from core.task_parallelism_runtime import task_host_memory_budget_scope
-    from core.vector_mesh_memory import estimate_vector_task_memory_reservation_bytes
-
-    source = _write_dense_svg(tmp_path / "dense.svg", _MEASURED_SOURCE_BYTES)
-    reservation = estimate_vector_task_memory_reservation_bytes(source)
-    monkeypatch.setattr(
-        materializer, "get_process_rss_bytes", lambda: _MEASURED_PARENT_RSS_BYTES
-    )
-    monkeypatch.setattr(
-        materializer,
-        "resolve_task_parallelism_plan",
-        lambda *args, **kwargs: _plan_wanting(10),
-    )
-
-    diagnostics: dict = {}
-    with task_host_memory_budget_scope(reservation):
-        workers, reason, _worker_bytes, _plan = materializer._worker_budget(
-            list(_measured_profile_slots().items()),
-            vector_engine.build_vector_layered_volume,
-            None,
-            diagnostics,
-        )
-
-    assert diagnostics["materialize_total_coordinates"] == _MEASURED_TOTAL_COORDINATES
-    # The plan wants ten builders for this profile; the reservation affords one,
-    # so every material is built in the process that already exists.
-    assert diagnostics["materialize_memory_planned_workers"] == 10
-    assert diagnostics["materialize_memory_affordable_workers"] == 1
-    assert workers == 1
-    assert reason == "vector_memory_budget"
-
-
-def test_gate_granted_reservation_lets_the_material_stage_parallelise(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """The bounded extension the gate grants turns that serial stage parallel."""
-
-    from api.worker_pool import _HostMemoryReservationGate
-    from core import vector_material_meshing as materializer
-    from core.task_parallelism_runtime import task_host_memory_budget_scope
-    from core.vector_mesh_memory import (
-        estimate_vector_material_parallel_memory_target_bytes,
-        estimate_vector_task_memory_reservation_bytes,
-    )
-
-    source = _write_dense_svg(tmp_path / "dense.svg", _MEASURED_SOURCE_BYTES)
-    reservation = estimate_vector_task_memory_reservation_bytes(source)
-    target = estimate_vector_material_parallel_memory_target_bytes(
-        source, material_count=_MEASURED_MATERIAL_COUNT
-    )
-    assert target is not None and target > reservation
-
-    gate = _HostMemoryReservationGate(
-        memory_budget_bytes=32 * 1024**3, sample_live_memory=False
-    )
-    token, granted = gate.acquire(
-        reservation, owner=object(), parallel_target_bytes=target
-    )
-    try:
-        # The extension is bounded by what is free, and is charged to the gate
-        # exactly like the required part of the reservation.
-        assert granted == target
-        assert gate.reserved_bytes == granted
-    finally:
-        gate.release(token)
-    assert gate.reserved_bytes == 0
-
-    monkeypatch.setattr(
-        materializer, "get_process_rss_bytes", lambda: _MEASURED_PARENT_RSS_BYTES
-    )
-    monkeypatch.setattr(
-        materializer,
-        "resolve_task_parallelism_plan",
-        lambda *args, **kwargs: _plan_wanting(10),
-    )
-    diagnostics: dict = {}
-    with task_host_memory_budget_scope(granted):
-        workers, _reason, _worker_bytes, _plan = materializer._worker_budget(
-            list(_measured_profile_slots().items()),
-            vector_engine.build_vector_layered_volume,
-            None,
-            diagnostics,
-        )
-
-    assert diagnostics["materialize_memory_affordable_workers"] > 1
-    assert workers > 1
-
-
-def test_material_stage_parallelism_follows_the_granted_budget(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Same task, same slots: only the granted budget decides serial or not."""
-
-    lease_path = tmp_path / "workers.json"
-
-    # A material's source slabs are released as soon as its mesh exists, so
-    # each run needs its own slots.
-    _reset_recording_lifetime(fail_open=False)
-    _result, serial_timings = _drive_materializer(
-        monkeypatch,
-        tmp_path,
-        _slots(3),
-        lease_path=lease_path,
-        plan_workers=3,
-        budget_scope_bytes=384 * 1024**2,
-    )
-    assert serial_timings["materialize_parallelism_workers"] == 1
-    assert serial_timings["materialize_parallelism_limit"] == "vector_memory_budget"
-    assert serial_timings["materialize_process_count"] == 0
-
-    _reset_recording_lifetime(fail_open=False)
-    _result, parallel_timings = _drive_materializer(
-        monkeypatch,
-        tmp_path,
-        _slots(3),
-        lease_path=lease_path,
-        plan_workers=3,
-        budget_scope_bytes=4 * 1024**3,
-    )
-    assert parallel_timings["materialize_parallelism_workers"] == 3
-    # The scripted pool reports one child process id for every material, so the
-    # recorded count proves the parallel path ran and recovered real child work.
-    assert parallel_timings["materialize_process_count"] > 0

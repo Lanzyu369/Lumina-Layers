@@ -4471,14 +4471,9 @@ CompositedPaths compositePaints(const std::vector<PaintGeometry>& paints,
     size_t retainedRingCount = 0;
     const auto retainGeometry = [&](const Paths64& paths) {
         const size_t points = pathPointCount(paths);
-        if(points > ComplexityBudget::MAX_RETAINED_GEOMETRY_POINTS
-                - retainedPointCount
-                || paths.size()
-                    > ComplexityBudget::MAX_RETAINED_GEOMETRY_RINGS
-                        - retainedRingCount)
-            throw ComplexityLimitError("retained_geometry");
-        retainedPointCount += points;
-        retainedRingCount += paths.size();
+        retainedPointCount = checkedSizeSum(retainedPointCount, points);
+        retainedRingCount = checkedSizeSum(
+            retainedRingCount, paths.size());
     };
 
     // Keep later paint coverage in binary-sized spatial batches. Overlapping

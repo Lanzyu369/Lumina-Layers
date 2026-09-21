@@ -55,21 +55,6 @@ const propsC: BatchResponse = {
   warnings: [{ code: "unknown-future-code", message: "x" }],
 };
 
-const propsD: BatchResponse = {
-  status: "ok",
-  message: "batch done with per-file timeout",
-  download_url: "/api/files/merged-timeout.3mf",
-  preview_3d_url: null,
-  results: [
-    {
-      filename: "photo-timeout.png",
-      status: "failed",
-      error: "Batch item conversion timed out",
-    },
-  ],
-  warnings: [],
-};
-
 const propsE: BatchResponse = {
   ...propsA,
   warnings: [
@@ -177,21 +162,6 @@ describe("BatchResultSummary", () => {
           name: translations["batch.download.mergedThreemf"].zh,
         }),
       ).toBeInTheDocument();
-    });
-  });
-
-  describe("failed item messages", () => {
-    it("localizes backend batch item timeout details instead of rendering raw English", async () => {
-      currentLang = "zh";
-      const BatchResultSummary = await importComponent();
-      render(<BatchResultSummary result={propsD} />);
-
-      const timeoutMessage = translations["batch.itemError.timeout"];
-      expect(timeoutMessage).toBeDefined();
-      expect(screen.getByRole("listitem")).toHaveTextContent(timeoutMessage.zh);
-      expect(
-        screen.queryByText("Batch item conversion timed out"),
-      ).not.toBeInTheDocument();
     });
   });
 

@@ -10,7 +10,6 @@ printer before committing to a full model print.
 
 from __future__ import annotations
 
-import asyncio
 from contextlib import suppress
 import os
 import time
@@ -37,11 +36,6 @@ from config import (
     TEMP_DIR,
     ModelingMode as CoreModelingMode,
 )
-from core.errors import VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError
-from core.vector_mesh_memory import (
-    estimate_material_archive_runtime_bytes,
-    estimate_vector_task_memory_reservation_bytes,
-)
 from utils.bambu_3mf_writer import read_wipe_tower_placement_warnings
 
 from .common import (
@@ -51,7 +45,6 @@ from .common import (
     PREVIEW_CACHE_UNAVAILABLE_DETAIL,
     PREVIEW_COLOR_PALETTE_UNAVAILABLE_DETAIL,
     ROUTER_HANDLED_ERRORS,
-    _handle_core_error,
     _resolve_material_backing_index,
     _resolve_session_dynamic_material_settings,
     _require_session,
@@ -305,31 +298,7 @@ async def generate_color_card(
             svg_path,
             lut_path,
             params,
-            host_memory_reservation_bytes=(
-                estimate_vector_task_memory_reservation_bytes(
-                    svg_path,
-                    resident_paths=(
-                        ()
-                        if session_material_source == "material_archive"
-                        else (lut_path,)
-                    ),
-                    implicit_resident_bytes=(
-                        estimate_material_archive_runtime_bytes(
-                            len(selected_materials)
-                        )
-                        if session_material_source == "material_archive"
-                        else 0
-                    ),
-                )
-            ),
         )
-    except asyncio.TimeoutError:
-        raise HTTPException(
-            status_code=504,
-            detail="Color card 3MF generation timed out.",
-        )
-    except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as exc:
-        _handle_core_error(exc, "color-card generation")
     except ROUTER_HANDLED_ERRORS:
         raise HTTPException(
             status_code=500,

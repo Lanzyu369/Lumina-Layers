@@ -56,18 +56,20 @@ public:
     }
 
     size_t reserve(ComplexityCounter counter, size_t minimum,
-                   size_t preferred, size_t limit, const char* budget)
+                   size_t preferred, const char* budget)
     {
         if(m_exceeded.load(std::memory_order_acquire))
             throw ComplexityLimitError(budget);
         auto& value = m_counters[index(counter)];
         size_t current = value.load(std::memory_order_relaxed);
         while(true) {
-            if(minimum > limit || current > limit - minimum) {
+            if(current > std::numeric_limits<size_t>::max() - minimum) {
                 m_exceeded.store(true, std::memory_order_release);
-                throw ComplexityLimitError(budget);
+                throw ComplexityLimitError("counter_overflow");
             }
-            const size_t reserved = std::min(preferred, limit - current);
+            const size_t reserved = std::max(minimum, preferred);
+            if(reserved > std::numeric_limits<size_t>::max() - current)
+                throw ComplexityLimitError("counter_overflow");
             if(value.compare_exchange_weak(
                     current, current + reserved,
                     std::memory_order_relaxed,
@@ -160,44 +162,6 @@ private:
 
 class ComplexityBudget {
 public:
-    static constexpr size_t MAX_GENERATED_POINTS = 64'000'000;
-    static constexpr size_t MAX_GENERATED_RINGS = 1'000'000;
-    static constexpr size_t MAX_BOOLEAN_INPUT_POINTS_PER_OPERATION =
-        16'000'000;
-    static constexpr size_t MAX_BOOLEAN_INPUT_POINTS_PER_DOCUMENT =
-        2'000'000'000;
-    static constexpr size_t MAX_TRANSIENT_POINTS_PER_OPERATION = 16'000'000;
-    static constexpr size_t MAX_RESULT_POINTS = 16'000'000;
-    static constexpr size_t MAX_RETAINED_GEOMETRY_POINTS = 16'000'000;
-    static constexpr size_t MAX_RETAINED_GEOMETRY_RINGS = 1'000'000;
-    static constexpr size_t MAX_CLIPPER_INDEX_SEGMENTS = 4'000'000;
-    static constexpr size_t MAX_CLIPPER_INTERSECTION_CANDIDATES = 100'000'000;
-    static constexpr size_t MAX_CLIPPER_INTERSECTION_COMPARISONS =
-        256'000'000;
-    static constexpr size_t MAX_CLIPPER_INTERSECTION_CANDIDATES_PER_DOCUMENT =
-        400'000'000;
-    static constexpr size_t MAX_CLIPPER_INTERSECTION_COMPARISONS_PER_DOCUMENT =
-        1'000'000'000;
-    static constexpr size_t MAX_CLIPPER_ENGINE_POINT_ALLOCATIONS_PER_DOCUMENT =
-        1'000'000'000;
-    static constexpr size_t MAX_CLIPPER_ENGINE_RECORD_ALLOCATIONS_PER_DOCUMENT =
-        64'000'000;
-    static constexpr size_t
-        MAX_CLIPPER_ENGINE_INTERSECTION_NODE_ALLOCATIONS_PER_DOCUMENT =
-            100'000'000;
-    static constexpr size_t
-        MAX_CLIPPER_ENGINE_PROCESSED_INTERSECTION_EVENTS_PER_DOCUMENT =
-            100'000'000;
-    static constexpr size_t MAX_CLIPPER_OUTPUT_POINTS = 16'000'000;
-    static constexpr size_t MAX_CLIPPER_OUTPUT_RINGS = 1'000'000;
-    static constexpr size_t MAX_CLIPPER_OUTPUT_POINTS_PER_DOCUMENT =
-        1'000'000'000;
-    static constexpr size_t MAX_CLIPPER_OUTPUT_RINGS_PER_DOCUMENT =
-        64'000'000;
-    static constexpr size_t MAX_COMPOSITOR_BOUNDS_CANDIDATES = 100'000'000;
-    static constexpr size_t MAX_STROKE_SIMPLIFICATION_COMPARISONS =
-        50'000'000;
-
     void attachParallelGate(ParallelComplexityGate* gate)
     {
         m_parallelGate = gate;
@@ -266,30 +230,24 @@ public:
 
     void consumeGeneratedPoints(size_t count = 1)
     {
-        consume(
-            m_generatedPoints, count, MAX_GENERATED_POINTS,
-            "generated_points", ComplexityCounter::GeneratedPoints);
+        consume(m_generatedPoints, count, "generated_points",
+                ComplexityCounter::GeneratedPoints);
     }
 
     void ensureGeneratedPointCapacity(size_t count) const
     {
-        ensure(
-            m_generatedPoints, count, MAX_GENERATED_POINTS,
-            "generated_points");
+        ensure(m_generatedPoints, count, "generated_points");
     }
 
     void consumeGeneratedRings(size_t count = 1)
     {
-        consume(
-            m_generatedRings, count, MAX_GENERATED_RINGS,
-            "generated_rings", ComplexityCounter::GeneratedRings);
+        consume(m_generatedRings, count, "generated_rings",
+                ComplexityCounter::GeneratedRings);
     }
 
     void requireBooleanInputPointCapacity(size_t count) const
     {
-        ensure(
-            0, count, MAX_BOOLEAN_INPUT_POINTS_PER_OPERATION,
-            "boolean_input_points");
+        ensure(0, count, "boolean_input_points");
     }
 
     ParallelComplexityReservation reserveBooleanInputPoints(size_t count)
@@ -297,25 +255,20 @@ public:
         requireBooleanInputPointCapacity(count);
         return reserveParallelInFlight(
             ComplexityCounter::BooleanInputPointsInFlight, count,
-            MAX_BOOLEAN_INPUT_POINTS_PER_OPERATION,
             "parallel_boolean_input_points");
     }
 
     void consumeBooleanInputPoints(size_t count)
     {
         requireBooleanInputPointCapacity(count);
-        consume(
-            m_booleanInputPoints, count,
-            MAX_BOOLEAN_INPUT_POINTS_PER_DOCUMENT,
-            "boolean_input_points_document",
-            ComplexityCounter::BooleanInputPoints);
+        consume(m_booleanInputPoints, count,
+                "boolean_input_points_document",
+                ComplexityCounter::BooleanInputPoints);
     }
 
     void requireTransientPointCapacity(size_t count) const
     {
-        ensure(
-            0, count, MAX_TRANSIENT_POINTS_PER_OPERATION,
-            "transient_points");
+        ensure(0, count, "transient_points");
     }
 
     ParallelComplexityReservation reserveTransientPoints(size_t count)
@@ -323,21 +276,18 @@ public:
         requireTransientPointCapacity(count);
         return reserveParallelInFlight(
             ComplexityCounter::TransientPointsInFlight, count,
-            MAX_TRANSIENT_POINTS_PER_OPERATION,
             "parallel_transient_points");
     }
 
     void consumeResultPoints(size_t count)
     {
-        consume(
-            m_resultPoints, count, MAX_RESULT_POINTS,
-            "result_points", ComplexityCounter::ResultPoints);
+        consume(m_resultPoints, count, "result_points",
+                ComplexityCounter::ResultPoints);
     }
 
     void ensureClipperIndexSegmentCapacity(size_t count) const
     {
-        if(count > MAX_CLIPPER_INDEX_SEGMENTS)
-            throw ComplexityLimitError("clipper_index_segments");
+        ensure(0, count, "clipper_index_segments");
     }
 
     ParallelComplexityReservation reserveClipperIndexSegments(size_t count)
@@ -345,44 +295,33 @@ public:
         ensureClipperIndexSegmentCapacity(count);
         return reserveParallelInFlight(
             ComplexityCounter::ClipperIndexSegmentsInFlight, count,
-            MAX_CLIPPER_INDEX_SEGMENTS,
             "parallel_clipper_index_segments");
     }
 
     void requireClipperIntersectionCandidateCapacity(size_t count) const
     {
-        ensure(
-            0, count,
-            MAX_CLIPPER_INTERSECTION_CANDIDATES,
-            "clipper_intersection_candidates");
+        ensure(0, count, "clipper_intersection_candidates");
     }
 
     void requireClipperIntersectionWorkCapacity(size_t count) const
     {
-        ensure(
-            0, count,
-            MAX_CLIPPER_INTERSECTION_COMPARISONS,
-            "clipper_intersection_comparisons");
+        ensure(0, count, "clipper_intersection_comparisons");
     }
 
     void consumeClipperIntersectionCandidates(size_t count)
     {
         requireClipperIntersectionCandidateCapacity(count);
-        consume(
-            m_clipperIntersectionCandidates, count,
-            MAX_CLIPPER_INTERSECTION_CANDIDATES_PER_DOCUMENT,
-            "clipper_intersection_candidates_document",
-            ComplexityCounter::ClipperIntersectionCandidates);
+        consume(m_clipperIntersectionCandidates, count,
+                "clipper_intersection_candidates_document",
+                ComplexityCounter::ClipperIntersectionCandidates);
     }
 
     void consumeClipperIntersectionWork(size_t count)
     {
         requireClipperIntersectionWorkCapacity(count);
-        consume(
-            m_clipperIntersectionComparisons, count,
-            MAX_CLIPPER_INTERSECTION_COMPARISONS_PER_DOCUMENT,
-            "clipper_intersection_comparisons_document",
-            ComplexityCounter::ClipperIntersectionComparisons);
+        consume(m_clipperIntersectionComparisons, count,
+                "clipper_intersection_comparisons_document",
+                ComplexityCounter::ClipperIntersectionComparisons);
     }
 
     void consumeClipperEngineWork(size_t pointAllocations,
@@ -390,43 +329,30 @@ public:
                                   size_t intersectionNodeAllocations,
                                   size_t processedIntersectionEvents)
     {
-        consume(
-            m_clipperEnginePointAllocations, pointAllocations,
-            MAX_CLIPPER_ENGINE_POINT_ALLOCATIONS_PER_DOCUMENT,
-            "clipper_engine_point_allocations_document",
-            ComplexityCounter::ClipperEnginePointAllocations);
-        consume(
-            m_clipperEngineRecordAllocations, recordAllocations,
-            MAX_CLIPPER_ENGINE_RECORD_ALLOCATIONS_PER_DOCUMENT,
-            "clipper_engine_record_allocations_document",
-            ComplexityCounter::ClipperEngineRecordAllocations);
-        consume(
-            m_clipperEngineIntersectionNodeAllocations,
-            intersectionNodeAllocations,
-            MAX_CLIPPER_ENGINE_INTERSECTION_NODE_ALLOCATIONS_PER_DOCUMENT,
-            "clipper_engine_intersection_nodes_document",
-            ComplexityCounter::ClipperEngineIntersectionNodeAllocations);
-        consume(
-            m_clipperEngineProcessedIntersectionEvents,
-            processedIntersectionEvents,
-            MAX_CLIPPER_ENGINE_PROCESSED_INTERSECTION_EVENTS_PER_DOCUMENT,
-            "clipper_engine_processed_intersections_document",
-            ComplexityCounter::ClipperEngineProcessedIntersectionEvents);
+        consume(m_clipperEnginePointAllocations, pointAllocations,
+                "clipper_engine_point_allocations_document",
+                ComplexityCounter::ClipperEnginePointAllocations);
+        consume(m_clipperEngineRecordAllocations, recordAllocations,
+                "clipper_engine_record_allocations_document",
+                ComplexityCounter::ClipperEngineRecordAllocations);
+        consume(m_clipperEngineIntersectionNodeAllocations,
+                intersectionNodeAllocations,
+                "clipper_engine_intersection_nodes_document",
+                ComplexityCounter::ClipperEngineIntersectionNodeAllocations);
+        consume(m_clipperEngineProcessedIntersectionEvents,
+                processedIntersectionEvents,
+                "clipper_engine_processed_intersections_document",
+                ComplexityCounter::ClipperEngineProcessedIntersectionEvents);
     }
 
     void requireClipperOutputPointCapacity(size_t count) const
     {
-        ensure(
-            0, count,
-            MAX_CLIPPER_OUTPUT_POINTS,
-            "clipper_output_points");
+        ensure(0, count, "clipper_output_points");
     }
 
     void requireClipperOutputRingCapacity(size_t count) const
     {
-        ensure(
-            0, count, MAX_CLIPPER_OUTPUT_RINGS,
-            "clipper_output_rings");
+        ensure(0, count, "clipper_output_rings");
     }
 
     void requireClipperOutputCapacity(
@@ -439,127 +365,95 @@ public:
     void consumeClipperOutputPoints(size_t count)
     {
         requireClipperOutputPointCapacity(count);
-        consume(
-            m_clipperOutputPoints, count,
-            MAX_CLIPPER_OUTPUT_POINTS_PER_DOCUMENT,
-            "clipper_output_points_document",
-            ComplexityCounter::ClipperOutputPoints);
+        consume(m_clipperOutputPoints, count,
+                "clipper_output_points_document",
+                ComplexityCounter::ClipperOutputPoints);
     }
 
     void consumeClipperOutputRings(size_t count)
     {
         requireClipperOutputRingCapacity(count);
-        consume(
-            m_clipperOutputRings, count,
-            MAX_CLIPPER_OUTPUT_RINGS_PER_DOCUMENT,
-            "clipper_output_rings_document",
-            ComplexityCounter::ClipperOutputRings);
+        consume(m_clipperOutputRings, count,
+                "clipper_output_rings_document",
+                ComplexityCounter::ClipperOutputRings);
     }
 
     void consumeCompositorBoundsCandidates(size_t count = 1)
     {
-        consume(
-            m_compositorBoundsCandidates, count,
-            MAX_COMPOSITOR_BOUNDS_CANDIDATES,
-            "compositor_bounds_candidates",
-            ComplexityCounter::CompositorBoundsCandidates);
+        consume(m_compositorBoundsCandidates, count,
+                "compositor_bounds_candidates",
+                ComplexityCounter::CompositorBoundsCandidates);
     }
 
     void consumeStrokeSimplificationComparisons(size_t count = 1)
     {
-        consume(
-            m_strokeSimplificationComparisons, count,
-            MAX_STROKE_SIMPLIFICATION_COMPARISONS,
-            "stroke_simplification_comparisons",
-            ComplexityCounter::StrokeSimplificationComparisons);
+        consume(m_strokeSimplificationComparisons, count,
+                "stroke_simplification_comparisons",
+                ComplexityCounter::StrokeSimplificationComparisons);
     }
 
     void mergeFrom(const ComplexityBudget& other)
     {
-        mergeCounter(
-            m_generatedPoints, other.m_generatedPoints,
-            MAX_GENERATED_POINTS, "generated_points");
-        mergeCounter(
-            m_generatedRings, other.m_generatedRings,
-            MAX_GENERATED_RINGS, "generated_rings");
-        mergeCounter(
-            m_booleanInputPoints, other.m_booleanInputPoints,
-            MAX_BOOLEAN_INPUT_POINTS_PER_DOCUMENT,
-            "boolean_input_points_document");
-        mergeCounter(
-            m_resultPoints, other.m_resultPoints,
-            MAX_RESULT_POINTS, "result_points");
-        mergeCounter(
-            m_clipperIntersectionCandidates,
-            other.m_clipperIntersectionCandidates,
-            MAX_CLIPPER_INTERSECTION_CANDIDATES_PER_DOCUMENT,
-            "clipper_intersection_candidates_document");
-        mergeCounter(
-            m_clipperIntersectionComparisons,
-            other.m_clipperIntersectionComparisons,
-            MAX_CLIPPER_INTERSECTION_COMPARISONS_PER_DOCUMENT,
-            "clipper_intersection_comparisons_document");
-        mergeCounter(
-            m_clipperEnginePointAllocations,
-            other.m_clipperEnginePointAllocations,
-            MAX_CLIPPER_ENGINE_POINT_ALLOCATIONS_PER_DOCUMENT,
-            "clipper_engine_point_allocations_document");
-        mergeCounter(
-            m_clipperEngineRecordAllocations,
-            other.m_clipperEngineRecordAllocations,
-            MAX_CLIPPER_ENGINE_RECORD_ALLOCATIONS_PER_DOCUMENT,
-            "clipper_engine_record_allocations_document");
-        mergeCounter(
-            m_clipperEngineIntersectionNodeAllocations,
-            other.m_clipperEngineIntersectionNodeAllocations,
-            MAX_CLIPPER_ENGINE_INTERSECTION_NODE_ALLOCATIONS_PER_DOCUMENT,
-            "clipper_engine_intersection_nodes_document");
-        mergeCounter(
-            m_clipperEngineProcessedIntersectionEvents,
-            other.m_clipperEngineProcessedIntersectionEvents,
-            MAX_CLIPPER_ENGINE_PROCESSED_INTERSECTION_EVENTS_PER_DOCUMENT,
-            "clipper_engine_processed_intersections_document");
-        mergeCounter(
-            m_clipperOutputPoints, other.m_clipperOutputPoints,
-            MAX_CLIPPER_OUTPUT_POINTS_PER_DOCUMENT,
-            "clipper_output_points_document");
-        mergeCounter(
-            m_clipperOutputRings, other.m_clipperOutputRings,
-            MAX_CLIPPER_OUTPUT_RINGS_PER_DOCUMENT,
-            "clipper_output_rings_document");
-        mergeCounter(
-            m_compositorBoundsCandidates,
-            other.m_compositorBoundsCandidates,
-            MAX_COMPOSITOR_BOUNDS_CANDIDATES,
-            "compositor_bounds_candidates");
-        mergeCounter(
-            m_strokeSimplificationComparisons,
-            other.m_strokeSimplificationComparisons,
-            MAX_STROKE_SIMPLIFICATION_COMPARISONS,
-            "stroke_simplification_comparisons");
+        mergeCounter(m_generatedPoints, other.m_generatedPoints,
+                     "generated_points");
+        mergeCounter(m_generatedRings, other.m_generatedRings,
+                     "generated_rings");
+        mergeCounter(m_booleanInputPoints, other.m_booleanInputPoints,
+                     "boolean_input_points_document");
+        mergeCounter(m_resultPoints, other.m_resultPoints,
+                     "result_points");
+        mergeCounter(m_clipperIntersectionCandidates,
+                     other.m_clipperIntersectionCandidates,
+                     "clipper_intersection_candidates_document");
+        mergeCounter(m_clipperIntersectionComparisons,
+                     other.m_clipperIntersectionComparisons,
+                     "clipper_intersection_comparisons_document");
+        mergeCounter(m_clipperEnginePointAllocations,
+                     other.m_clipperEnginePointAllocations,
+                     "clipper_engine_point_allocations_document");
+        mergeCounter(m_clipperEngineRecordAllocations,
+                     other.m_clipperEngineRecordAllocations,
+                     "clipper_engine_record_allocations_document");
+        mergeCounter(m_clipperEngineIntersectionNodeAllocations,
+                     other.m_clipperEngineIntersectionNodeAllocations,
+                     "clipper_engine_intersection_nodes_document");
+        mergeCounter(m_clipperEngineProcessedIntersectionEvents,
+                     other.m_clipperEngineProcessedIntersectionEvents,
+                     "clipper_engine_processed_intersections_document");
+        mergeCounter(m_clipperOutputPoints, other.m_clipperOutputPoints,
+                     "clipper_output_points_document");
+        mergeCounter(m_clipperOutputRings, other.m_clipperOutputRings,
+                     "clipper_output_rings_document");
+        mergeCounter(m_compositorBoundsCandidates,
+                     other.m_compositorBoundsCandidates,
+                     "compositor_bounds_candidates");
+        mergeCounter(m_strokeSimplificationComparisons,
+                     other.m_strokeSimplificationComparisons,
+                     "stroke_simplification_comparisons");
     }
 
 private:
-    static void ensure(size_t current, size_t count, size_t limit,
-                       const char* budget)
+    static void ensure(size_t current, size_t count, const char* budget)
     {
-        if(count > limit || current > limit - count)
-            throw ComplexityLimitError(budget);
+        if(count > std::numeric_limits<size_t>::max() - current)
+            throw ComplexityLimitError("counter_overflow");
+        (void)budget;
     }
 
-    void consume(size_t& current, size_t count, size_t limit,
-                 const char* budget, ComplexityCounter counter)
+    void consume(size_t& current, size_t count, const char* budget,
+                 ComplexityCounter counter)
     {
-        ensure(current, count, limit, budget);
+        ensure(current, count, budget);
         if(m_parallelGate != nullptr && count > 0) {
             constexpr size_t RESERVATION_CHUNK = 4'096;
             const size_t index = static_cast<size_t>(counter);
             if(m_parallelReservations[index] < count) {
                 const size_t minimum = count - m_parallelReservations[index];
-                const size_t preferred = std::max(
-                    minimum, RESERVATION_CHUNK);
-                m_parallelReservations[index] += m_parallelGate->reserve(
-                    counter, minimum, preferred, limit, budget);
+                const size_t preferred = std::max(minimum, RESERVATION_CHUNK);
+                const size_t extra = m_parallelGate->reserve(
+                    counter, minimum, preferred, budget);
+                ensure(m_parallelReservations[index], extra, budget);
+                m_parallelReservations[index] += extra;
             }
             m_parallelReservations[index] -= count;
         }
@@ -567,20 +461,19 @@ private:
     }
 
     ParallelComplexityReservation reserveParallelInFlight(
-        ComplexityCounter counter, size_t count, size_t limit,
-        const char* budget)
+        ComplexityCounter counter, size_t count, const char* budget)
     {
         if(m_parallelGate == nullptr || count == 0)
             return {};
         const size_t reserved = m_parallelGate->reserve(
-            counter, count, count, limit, budget);
+            counter, count, count, budget);
         return {m_parallelGate, counter, reserved};
     }
 
     static void mergeCounter(size_t& current, size_t additional,
-                             size_t limit, const char* budget)
+                             const char* budget)
     {
-        ensure(current, additional, limit, budget);
+        ensure(current, additional, budget);
         current += additional;
     }
 

@@ -13,7 +13,6 @@ import shapely
 from core.errors import (
     CoreProcessingError,
     CoreValidationError,
-    NativeSvgResourceLimitError,
 )
 from core.native_svg_adapter import (
     NativeSvgFallback,
@@ -22,7 +21,6 @@ from core.native_svg_adapter import (
     analyze_native_svg,
     native_runtime_identity,
 )
-from core.native_svg_limits import NATIVE_SVG_MAX_BYTES
 
 
 @dataclass
@@ -845,42 +843,8 @@ def test_native_geometry_capacity_requests_whole_document_fallback(
     )
 
 
-def test_native_structural_complexity_is_not_retried_by_legacy(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "core.native_svg_adapter._load_native_module",
-        lambda: _native_module(
-            _native_result(
-                status="unsupported",
-                reason_code="unsupported_input_complexity",
-            )
-        ),
-    )
-
-    with pytest.raises(NativeSvgResourceLimitError) as error:
-        analyze_native_svg("fixture.svg", 20.0, 0.02)
-
-    assert error.value.reason_code == "unsupported_input_complexity"
 
 
-def test_legacy_native_complexity_code_remains_fatal(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "core.native_svg_adapter._load_native_module",
-        lambda: _native_module(
-            _native_result(
-                status="unsupported",
-                reason_code="unsupported_complexity",
-            )
-        ),
-    )
-
-    with pytest.raises(NativeSvgResourceLimitError) as error:
-        analyze_native_svg("fixture.svg", 20.0, 0.02)
-
-    assert error.value.reason_code == "unsupported_complexity"
 
 
 def test_adapter_trusts_native_fill_only_stroke_policy_result(
@@ -969,35 +933,6 @@ def test_adapter_does_not_rescan_supported_svg_source(
     assert isinstance(outcome, NativeSvgGeometry)
 
 
-def test_oversized_sparse_file_reaches_native_limit_without_mmap_scan(
-    tmp_path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    svg_path = tmp_path / "oversized.svg"
-    with svg_path.open("wb") as handle:
-        handle.seek(NATIVE_SVG_MAX_BYTES)
-        handle.write(b"\0")
-    calls: list[tuple[object, ...]] = []
-    monkeypatch.setattr(
-        "core.native_svg_adapter._load_native_module",
-        lambda: _native_module(
-            _native_result(
-                status="unsupported",
-                reason_code="unsupported_complexity",
-            ),
-            calls,
-        ),
-    )
-
-    def fail_mmap(*_args, **_kwargs):
-        raise AssertionError("oversized input must not be memory-mapped")
-
-    monkeypatch.setattr(stdlib_mmap, "mmap", fail_mmap)
-
-    with pytest.raises(NativeSvgResourceLimitError):
-        analyze_native_svg(str(svg_path), 20.0, 0.02)
-
-    assert calls == []
 
 
 def test_invalid_svg_maps_to_existing_value_error_behavior(

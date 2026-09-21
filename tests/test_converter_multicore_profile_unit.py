@@ -1060,7 +1060,6 @@ def test_execute_case_can_disable_cprofile(
                 "mesh_parallelism_effective_cpu": 4,
                 "mesh_parallelism_outer_demand": 2,
                 "mesh_parallelism_cpu_fair_share": 2,
-                "mesh_parallelism_memory_ceiling": 3,
                 "mesh_parallelism_demand_fallback": False,
             },
         },
@@ -1089,7 +1088,6 @@ def test_execute_case_can_disable_cprofile(
         "performance_cpu": None,
         "outer_demand": 2,
         "cpu_fair_share": 2,
-        "memory_ceiling": 3,
         "limiting_reason": "cpu_fair_share",
         "demand_snapshot_fallback": False,
     }
@@ -1114,7 +1112,6 @@ def test_parallelism_metadata_uses_current_vector_material_plan(
             "material_parallelism_performance_cpu": 2,
             "material_parallelism_outer_demand": 2,
             "material_parallelism_cpu_fair_share": 2,
-            "material_parallelism_memory_ceiling": 3,
             "material_parallelism_demand_fallback": False,
         },
     )
@@ -1128,7 +1125,6 @@ def test_parallelism_metadata_uses_current_vector_material_plan(
         "performance_cpu": 2,
         "outer_demand": 2,
         "cpu_fair_share": 2,
-        "memory_ceiling": 3,
         "limiting_reason": "cpu_fair_share",
         "demand_snapshot_fallback": False,
     }
@@ -1154,7 +1150,6 @@ def test_parallelism_metadata_keeps_legacy_reports_readable(
         "performance_cpu": None,
         "outer_demand": None,
         "cpu_fair_share": None,
-        "memory_ceiling": None,
         "limiting_reason": None,
         "demand_snapshot_fallback": None,
     }

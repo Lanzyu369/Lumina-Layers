@@ -70,19 +70,10 @@ from api.workers.converter_workers import (
     worker_generate_model_surface_overlay,
 )
 from core.batch_layout import LayoutResult, XYBBox, layout_shelf_by_row
-from core.errors import (
-    CachedPreviewAnalysisError,
-    VectorHostMemoryAdmissionError,
-    VectorMeshMemoryBudgetError,
-)
+from core.errors import CachedPreviewAnalysisError
 from core.model_surface.types import ModelSurfaceError
 from core.naming import generate_preserved_upload_3mf_filename
 from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
-from core.vector_mesh_memory import (
-    estimate_material_archive_runtime_bytes,
-    estimate_vector_material_parallel_memory_target_bytes,
-    estimate_vector_task_memory_reservation_bytes,
-)
 from core.wipe_tower_placement import WIPE_TOWER_MANUAL_WARNING_CODE
 from utils.merged_bambu_3mf_writer import (
     MergedBambu3MFWriter,
@@ -313,116 +304,6 @@ BATCH_GENERATION_FAILED_DETAIL: str = (
 MODEL_GENERATION_FAILED_DETAIL: str = (
     "3MF generation failed. Re-run preview and try generating the model again."
 )
-
-
-class _VectorTaskMemoryInputs(NamedTuple):
-    """Files and counts the vector task memory estimates are derived from.
-
-    矢量任务内存估算所依据的文件与计数。
-    """
-
-    supporting_paths: tuple[str, ...]
-    resident_paths: tuple[str, ...]
-    implicit_resident_bytes: int
-    material_count: int
-
-
-def _vector_task_memory_inputs(
-    source_path: str,
-    params: dict | None = None,
-    *,
-    lut_path: str | None = None,
-) -> _VectorTaskMemoryInputs:
-    """Collect every file the worker may retain, without pricing it."""
-
-    material_archive = (
-        str((params or {}).get("material_source") or "") == "material_archive"
-        or lut_path == "__material_archive__"
-    )
-    raw_selected_materials = (params or {}).get("selected_materials") or ()
-    selected_material_count = (
-        len(raw_selected_materials)
-        if isinstance(raw_selected_materials, (list, tuple))
-        else 0
-    )
-
-    source_identity = os.path.abspath(os.fspath(source_path))
-    supporting_by_identity: dict[str, str] = {}
-    resident_by_identity: dict[str, str] = {}
-    pending_mappings = [params or {}]
-    while pending_mappings:
-        mapping = pending_mappings.pop()
-        for key, value in mapping.items():
-            if isinstance(value, dict):
-                pending_mappings.append(value)
-            if (
-                not str(key).endswith("_path")
-                or not isinstance(value, (str, os.PathLike))
-                or not value
-            ):
-                continue
-            path_value = os.fspath(value)
-            if path_value.startswith("__"):
-                continue
-            identity = os.path.abspath(path_value)
-            if identity == source_identity:
-                continue
-            if str(key) == "vector_parse_clip_cache_path":
-                supporting_by_identity[identity] = path_value
-                resident_by_identity.pop(identity, None)
-            elif identity not in supporting_by_identity:
-                resident_by_identity[identity] = path_value
-    if isinstance(lut_path, str) and lut_path and not lut_path.startswith("__"):
-        identity = os.path.abspath(lut_path)
-        if identity != source_identity and identity not in supporting_by_identity:
-            resident_by_identity[identity] = lut_path
-    return _VectorTaskMemoryInputs(
-        supporting_paths=tuple(supporting_by_identity.values()),
-        resident_paths=tuple(resident_by_identity.values()),
-        implicit_resident_bytes=(
-            estimate_material_archive_runtime_bytes(selected_material_count)
-            if material_archive
-            else 0
-        ),
-        material_count=selected_material_count,
-    )
-
-
-def _vector_task_memory_reservation_bytes(
-    source_path: str,
-    params: dict | None = None,
-    *,
-    lut_path: str | None = None,
-) -> int:
-    """Resolve a task cap from every file the worker may retain."""
-
-    inputs = _vector_task_memory_inputs(source_path, params, lut_path=lut_path)
-    return estimate_vector_task_memory_reservation_bytes(
-        source_path,
-        supporting_paths=inputs.supporting_paths,
-        resident_paths=inputs.resident_paths,
-        implicit_resident_bytes=inputs.implicit_resident_bytes,
-    )
-
-
-def _vector_task_parallel_memory_target_bytes(
-    source_path: str,
-    params: dict | None = None,
-    *,
-    lut_path: str | None = None,
-) -> int | None:
-    """Resolve the budget the material stage needs to build in parallel.
-
-    解析材质阶段并行构建所需预算；它只是交给父进程准入的请求，实际授予量由准入
-    机制在空闲内存内决定。
-    """
-
-    inputs = _vector_task_memory_inputs(source_path, params, lut_path=lut_path)
-    return estimate_vector_material_parallel_memory_target_bytes(
-        source_path,
-        material_count=inputs.material_count,
-        supporting_paths=inputs.supporting_paths,
-    )
 
 
 MODEL_SURFACE_SOURCE_UNAVAILABLE_DETAIL: str = (
@@ -3098,36 +2979,7 @@ async def convert_generate(
             image_path,
             lut_path,
             worker_params,
-            **(
-                {
-                    "host_memory_reservation_bytes": (
-                        _vector_task_memory_reservation_bytes(
-                            image_path,
-                            worker_params,
-                            lut_path=lut_path,
-                        )
-                    ),
-                    # The material stage can only use the machine in parallel
-                    # if its reservation covers the builders it would start.
-                    # This asks the existing admission gate for that coverage;
-                    # the gate grants only what is free and never fails a task
-                    # for lacking it. 材质阶段只有在预留覆盖其构建进程时才能并行
-                    # 使用机器。这里向既有准入机制索取该覆盖量：闸门只授予空闲
-                    # 部分，且不会因拿不到而让任务失败。
-                    "host_memory_parallel_target_bytes": (
-                        _vector_task_parallel_memory_target_bytes(
-                            image_path,
-                            worker_params,
-                            lut_path=lut_path,
-                        )
-                    ),
-                }
-                if core_modeling_mode == CoreModelingMode.VECTOR
-                else {}
-            ),
         )
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="3MF generation timed out")
     except ModelSurfaceError as exc:
         detail = public_model_surface_error_detail(exc)
         if detail is None:
@@ -3143,8 +2995,6 @@ async def convert_generate(
             status_code=409,
             detail=STANDARD_CACHED_ANALYSIS_INVALID_DETAIL,
         ) from exc
-    except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as exc:
-        _handle_core_error(exc, "3MF generation")
     except BrokenProcessPool as exc:
         raise HTTPException(
             status_code=503,
@@ -3697,18 +3547,9 @@ async def _generate_large_format_svg_native(
                     "tile_width_mm": tile_width_mm,
                     "tile_height_mm": tile_height_mm,
                 },
-                host_memory_reservation_bytes=(
-                    _vector_task_memory_reservation_bytes(
-                        image_path,
-                        shared_params,
-                        lut_path=lut_path,
-                    )
-                ),
             )
         finally:
             _remove_temp_path(native_heightmap_path)
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="Large-format SVG generation timed out")
     except LargeFormatCachedAnalysisError as e:
         _log_large_format_failure(
             session_id=sid,
@@ -3721,8 +3562,6 @@ async def _generate_large_format_svg_native(
             detail=LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL,
         ) from e
     except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
-        _handle_core_error(e, "large-format SVG generation")
-    except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as e:
         _handle_core_error(e, "large-format SVG generation")
     except BrokenProcessPool as e:
         _log_large_format_failure(
@@ -4215,20 +4054,6 @@ async def _generate_large_format_raster(
                         tile_path,
                         lut_path,
                         tile_params,
-                        **(
-                            {
-                                "host_memory_reservation_bytes": (
-                                    _vector_task_memory_reservation_bytes(
-                                        tile_path,
-                                        tile_params,
-                                        lut_path=lut_path,
-                                    )
-                                )
-                            }
-                            if tile_params.get("modeling_mode")
-                            == CoreModelingMode.VECTOR.value
-                            else {}
-                        ),
                     )
                 )
 
@@ -4245,8 +4070,8 @@ async def _generate_large_format_raster(
                     cleanup_paths.add(tp)
                 else:
                     errors.append(f"{label}: generation failed — {result.get('status_msg', 'unknown')}")
-            except asyncio.TimeoutError:
-                errors.append(f"{label}: generation timed out")
+            except MemoryError:
+                errors.append(f"{label}: generation failed")
             except BrokenProcessPool as e:
                 _discard_pending_awaitables(futures, future_index + 1)
                 raise HTTPException(
@@ -4256,9 +4081,6 @@ async def _generate_large_format_raster(
             except MemoryError:
                 _discard_pending_awaitables(futures, future_index + 1)
                 raise
-            except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as e:
-                _discard_pending_awaitables(futures, future_index + 1)
-                _handle_core_error(e, "large-format tile generation")
             except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
                 _discard_pending_awaitables(futures, future_index + 1)
                 _handle_core_error(e, "large-format tile generation")
@@ -4608,8 +4430,6 @@ async def convert_generate_large_format(
                         or 0
                     ),
                 )
-            except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as exc:
-                _handle_core_error(exc, "large-format SVG generation")
             except MemoryError:
                 # Starting a second, rasterized build after allocator failure
                 # only increases pressure and can kill the worker host.
@@ -4726,11 +4546,6 @@ async def convert_generate_large_format(
                     dynamic_material_settings=dynamic_material_settings,
                     warnings=fallback_warnings,
                     log_tile_failures=native_fallback_error is None,
-                )
-            except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as fallback_exc:
-                _handle_core_error(
-                    fallback_exc,
-                    "large-format raster fallback generation",
                 )
             except MemoryError:
                 raise
@@ -5349,18 +5164,6 @@ async def convert_batch(
                 svg_hole_max_width_mm,
                 enable_coating,
                 coating_height_mm,
-                **(
-                    {
-                        "host_memory_reservation_bytes": (
-                            _vector_task_memory_reservation_bytes(
-                                temp_path,
-                                lut_path=lut_path,
-                            )
-                        )
-                    }
-                    if modeling_mode == CoreModelingMode.VECTOR.value
-                    else {}
-                ),
             )
 
             # 3. Result processing (main thread)
@@ -5396,25 +5199,6 @@ async def convert_batch(
                         error=BATCH_ITEM_FAILED_DETAIL,
                     )
                 )
-        except asyncio.TimeoutError:
-            results.append(
-                BatchItemResult(
-                    filename=filename,
-                    status="failed",
-                    error="Batch item conversion timed out",
-                )
-            )
-        except (VectorHostMemoryAdmissionError, VectorMeshMemoryBudgetError) as e:
-            for prior_result in successful_entries:
-                _remove_temp_paths(
-                    [
-                        prior_result.get("threemf_path"),
-                        prior_result.get("preview_glb_path"),
-                        prior_result.get("metadata_sidecar_path"),
-                    ]
-                )
-            _remove_temp_path(temp_native_bundle_path)
-            _handle_core_error(e, "batch generation")
         except MemoryError:
             for prior_result in successful_entries:
                 _remove_temp_paths(

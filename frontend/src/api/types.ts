@@ -1322,7 +1322,6 @@ export interface MaterialSolverRuntimeEntry {
   candidate_budget: number;
   candidate_count: number;
   candidate_pool_multiplier: number;
-  build_memory_budget_bytes: number;
   batch_recipe_count: number;
   lab_grid_resolution: number;
   seed: number;

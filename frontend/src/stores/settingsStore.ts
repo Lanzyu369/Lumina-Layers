@@ -40,65 +40,6 @@ export type SolverCacheGridResolution =
 export const SOLVER_CACHE_GRID_RESOLUTIONS: readonly SolverCacheGridResolution[] =
   [64, 128, 256, 512, 1024, 2048] as const;
 
-const SOLVER_CACHE_EXACT_MODE_MAX_MATERIALS = 10;
-const SOLVER_CACHE_EXACT_MODE_MAX_LAYERS = 5;
-const SOLVER_CACHE_EXACT_MODE_MAX_COMBINATIONS = 100_000;
-const SOLVER_CACHE_ESTIMATED_VALID_CELL_RATIO = 0.12;
-const SOLVER_CACHE_ESTIMATED_BYTES_PER_VALID_CELL = 768;
-const SOLVER_CACHE_ESTIMATED_BUILD_BASE_BYTES = 512 * 1024 * 1024;
-export const SOLVER_CACHE_BUILD_MEMORY_LIMIT_BYTES = 8 * 1024 * 1024 * 1024;
-export const SOLVER_CACHE_BUILD_MAX_COMBINATIONS = 12_000_000_000;
-
-export interface SolverCacheBuildBudgetEstimate {
-  totalCombinations: number;
-  totalBucketCount: number;
-  estimatedValidCellCount: number;
-  estimatedPeakBytes: number;
-  memoryLimitBytes: number;
-  maxTotalCombinations: number;
-  isAllowed: boolean;
-}
-
-export function estimateSolverCacheBuildBudget(
-  materialCount: number,
-  layerCount: number,
-  gridResolution: SolverCacheGridResolution,
-): SolverCacheBuildBudgetEstimate {
-  const safeMaterialCount = Math.max(0, Math.trunc(materialCount));
-  const safeLayerCount = Math.max(0, Math.trunc(layerCount));
-  const safeGridResolution = Math.max(1, Math.trunc(gridResolution));
-  const totalCombinations =
-    safeMaterialCount > 0 && safeLayerCount > 0
-      ? Math.pow(safeMaterialCount, safeLayerCount)
-      : 0;
-  const totalBucketCount = Math.pow(safeGridResolution, 3);
-  const exactEligible =
-    safeMaterialCount <= SOLVER_CACHE_EXACT_MODE_MAX_MATERIALS &&
-    safeLayerCount <= SOLVER_CACHE_EXACT_MODE_MAX_LAYERS &&
-    totalCombinations <= SOLVER_CACHE_EXACT_MODE_MAX_COMBINATIONS;
-  const estimatedValidCellCount = exactEligible
-    ? totalCombinations
-    : Math.min(
-        totalCombinations,
-        totalBucketCount,
-        Math.ceil(totalCombinations * SOLVER_CACHE_ESTIMATED_VALID_CELL_RATIO),
-      );
-  const estimatedPeakBytes =
-    SOLVER_CACHE_ESTIMATED_BUILD_BASE_BYTES +
-    estimatedValidCellCount * SOLVER_CACHE_ESTIMATED_BYTES_PER_VALID_CELL;
-  return {
-    totalCombinations,
-    totalBucketCount,
-    estimatedValidCellCount,
-    estimatedPeakBytes,
-    memoryLimitBytes: SOLVER_CACHE_BUILD_MEMORY_LIMIT_BYTES,
-    maxTotalCombinations: SOLVER_CACHE_BUILD_MAX_COMBINATIONS,
-    isAllowed:
-      estimatedPeakBytes <= SOLVER_CACHE_BUILD_MEMORY_LIMIT_BYTES &&
-      totalCombinations <= SOLVER_CACHE_BUILD_MAX_COMBINATIONS,
-  };
-}
-
 export const SVG_PIXELS_PER_MM_DEFAULT = 10.0;
 export const SVG_PIXELS_PER_MM_MIN = 2.0;
 export const SVG_PIXELS_PER_MM_MAX = 50.0;

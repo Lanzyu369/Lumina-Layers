@@ -103,57 +103,6 @@ class TestWorkerPoolMaxWorkersProperty:
 # ---------------------------------------------------------------------------
 
 
-class TestWorkerPoolConfigEnvOverrideProperty:
-    """For any n (1–32) and f (1.0–3600.0), env vars override config.
-
-    **Validates: Requirements 5.2, 5.3**
-    """
-
-    @given(
-        n=st.integers(min_value=1, max_value=32),
-        f=st.floats(min_value=1.0, max_value=3600.0, allow_nan=False, allow_infinity=False),
-    )
-    @settings(max_examples=100)
-    def test_env_vars_override_config(self, n: int, f: float) -> None:
-        """Property 4: 配置环境变量覆盖.
-        Property 4: 环境变量覆盖配置。
-
-        When LUMINA_MAX_WORKERS=n and LUMINA_TASK_TIMEOUT=f are set,
-        WorkerPoolConfig.from_env() returns MAX_WORKERS == n and
-        TASK_TIMEOUT == f.
-
-        **Validates: Requirements 5.2, 5.3**
-        """
-        env_patch = {
-            "LUMINA_MAX_WORKERS": str(n),
-            "LUMINA_TASK_TIMEOUT": str(f),
-        }
-        with patch.dict(os.environ, env_patch, clear=False):
-            cfg = WorkerPoolConfig.from_env()
-        assert cfg.MAX_WORKERS == n
-        assert cfg.TASK_TIMEOUT == pytest.approx(f)
-
-    @given(
-        f=st.floats(
-            min_value=1.0,
-            max_value=3600.0,
-            allow_nan=False,
-            allow_infinity=False,
-        )
-    )
-    @settings(max_examples=25)
-    def test_configured_timeout_is_wired_to_pool_default(self, f: float) -> None:
-        """WorkerPoolConfig.TASK_TIMEOUT must become the pool's default timeout."""
-        cfg = WorkerPoolConfig()
-        cfg.MAX_WORKERS = 2
-        cfg.TASK_TIMEOUT = f
-
-        pool = WorkerPoolManager(
-            max_workers=cfg.MAX_WORKERS,
-            default_task_timeout=cfg.TASK_TIMEOUT,
-        )
-
-        assert pool.default_task_timeout == pytest.approx(f)
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +141,7 @@ class TestWorkerExceptionPropagationProperty:
         pool.start()
         try:
             with pytest.raises(exc_type, match=re.escape(msg)):
-                asyncio.run(pool.submit(worker_fn, msg, timeout=30.0))
+                asyncio.run(pool.submit(worker_fn, msg))
         finally:
             pool.shutdown(wait=True)
 
@@ -201,33 +150,3 @@ class TestWorkerExceptionPropagationProperty:
 # Property 3: 任务超时取消
 # Feature: thread-separation-upgrade, Property 3: 任务超时取消
 # ---------------------------------------------------------------------------
-
-
-class TestTaskTimeoutCancellationProperty:
-    """For any timeout t, tasks exceeding t raise asyncio.TimeoutError.
-
-    **Validates: Requirements 2.3**
-    """
-
-    @given(
-        timeout=st.floats(min_value=0.1, max_value=1.0, allow_nan=False, allow_infinity=False),
-    )
-    @settings(max_examples=20, deadline=30000)
-    def test_task_timeout_raises_timeout_error(self, timeout: float) -> None:
-        """Property 3: 任务超时取消.
-        Property 3: 任务超时取消。
-
-        For any timeout value t (0.1 to 1.0 seconds) and a task that
-        sleeps for t + 2 seconds, pool.submit(fn, timeout=t) should
-        raise asyncio.TimeoutError within a reasonable time.
-
-        **Validates: Requirements 2.3**
-        """
-        sleep_duration = timeout + 2.0
-        pool = WorkerPoolManager(max_workers=1)
-        pool.start()
-        try:
-            with pytest.raises(asyncio.TimeoutError):
-                asyncio.run(pool.submit(_worker_sleep, sleep_duration, timeout=timeout))
-        finally:
-            pool.shutdown(wait=False)

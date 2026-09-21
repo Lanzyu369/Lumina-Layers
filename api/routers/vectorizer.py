@@ -8,7 +8,6 @@ the neroued_vectorizer library.
 
 from __future__ import annotations
 
-import asyncio
 import os
 import uuid
 from typing import Any
@@ -184,8 +183,6 @@ async def vectorize_image(
 
         try:
             result = await pool.submit(worker_vectorize, image_path, params_clean)
-        except asyncio.TimeoutError:
-            raise HTTPException(status_code=504, detail="Vectorization timed out")
         except _VECTORIZER_BOUNDARY_ERRORS as e:
             _log_vectorize_failure("worker", e)
             raise HTTPException(

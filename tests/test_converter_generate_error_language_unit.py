@@ -264,40 +264,6 @@ def test_generate_known_svg_no_geometry_returns_actionable_422(
     assert "private parser text" not in response.text
 
 
-def test_generate_known_svg_complexity_limit_returns_actionable_422(
-    tmp_path: Path,
-) -> None:
-    pool = MagicMock(spec=WorkerPoolManager)
-    pool.submit_timed = AsyncMock(
-        return_value=(
-            {
-                "threemf_path": None,
-                "glb_path": None,
-                "status_msg": (
-                    "Vector processing failed: SVG compound path exceeds "
-                    "supported intersecting subpath complexity"
-                ),
-            },
-            {},
-        )
-    )
-
-    response = _post_generate_with_pool(
-        tmp_path,
-        pool,
-        source_suffix=".svg",
-        modeling_mode="vector",
-        request_modeling_mode="vector",
-    )
-
-    assert response.status_code == 422
-    assert response.json()["detail"] == {
-        "error": "source_svg_too_complex",
-        "message": (
-            "The SVG contains too many intersecting compound subpaths to "
-            "process safely. Simplify or flatten the artwork, then upload it again."
-        ),
-    }
 
 
 @pytest.mark.parametrize(

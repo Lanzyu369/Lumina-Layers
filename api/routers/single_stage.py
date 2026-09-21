@@ -73,7 +73,6 @@ from core.material_cache import (
     ALLOWED_GRID_RESOLUTIONS,
     ALLOWED_LAYER_HEIGHTS_MM as _CACHE_ALLOWED_LAYER_HEIGHTS,  # noqa: N811
     DEFAULT_GRID_RESOLUTION,
-    MaterialSolverCacheBudgetError,
     build_material_solver_cache,
     cache_file_path,
     delete_cached_entry,
@@ -82,14 +81,12 @@ from core.material_cache import (
     load_material_solver_cache,
     load_material_solver_cache_with_fallback,
     save_material_solver_cache,
-    validate_material_solver_cache_build_budget,
 )
 from core.material_cache_visualization import (
     build_material_cache_details,
     build_material_runtime_details,
 )
 from core.material_candidate_cache import (
-    DEFAULT_CANDIDATE_BUILD_MEMORY_BUDGET_BYTES,
     DEFAULT_PERSISTED_CANDIDATE_BUDGET,
     MAX_PERSISTED_CANDIDATE_BUDGET,
     MaterialCandidateCacheConfig,
@@ -101,7 +98,6 @@ from core.material_candidate_cache import (
     save_material_candidate_runtime,
 )
 from core.material_color_solver import (
-    DEFAULT_SUGGEST_MAX_COMBINATIONS,
     DEFAULT_SUGGEST_MIN_SPACING,
     DEFAULT_SUGGEST_TOP_K,
     MAX_LAYER_COUNT as _SOLVER_MAX_LAYER_COUNT,  # noqa: N811
@@ -2324,12 +2320,6 @@ def _runtime_entry_from_metadata(
             metadata.get("candidate_count", metadata.get("valid_cell_count", 0))
         ),
         candidate_pool_multiplier=int(metadata.get("candidate_pool_multiplier", 8)),
-        build_memory_budget_bytes=int(
-            metadata.get(
-                "build_memory_budget_bytes",
-                DEFAULT_CANDIDATE_BUILD_MEMORY_BUDGET_BYTES,
-            )
-        ),
         batch_recipe_count=int(metadata.get("batch_recipe_count", 0)),
         lab_grid_resolution=int(
             metadata.get("lab_grid_resolution", metadata.get("grid_resolution", 64))
@@ -2522,32 +2512,6 @@ async def material_solver_cache_build(
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
     _validate_grid_resolution(grid_resolution)
     materials = _load_palette_or_raise(dir_names)
-    try:
-        validate_material_solver_cache_build_budget(
-            material_count=len(materials),
-            layer_count=layer_count,
-            grid_resolution=grid_resolution,
-        )
-    except MaterialSolverCacheBudgetError as exc:
-        report = exc.report
-        log.warning(
-            "Material solver cache build rejected by safety budget",
-            extra={
-                "event": "material_solver_cache_build_rejected",
-                "material_count": report.material_count,
-                "layer_count": report.layer_count,
-                "grid_resolution": report.grid_resolution,
-                "total_combinations": report.total_combinations,
-                "max_total_combinations": report.max_total_combinations,
-                "estimated_valid_cell_count": report.estimated_valid_cell_count,
-                "estimated_peak_bytes": report.estimated_peak_bytes,
-                "memory_limit_bytes": report.memory_limit_bytes,
-                "error_type": type(exc).__name__,
-                "error_message": str(exc),
-            },
-        )
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
     def _run_build():
         return build_material_solver_cache(
             materials,
@@ -2559,7 +2523,7 @@ async def material_solver_cache_build(
 
     try:
         cache = await anyio.to_thread.run_sync(_run_build)
-    except (MaterialSolverCacheBudgetError, ValueError, TypeError, OSError) as exc:
+    except (ValueError, TypeError, OSError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except RuntimeError as exc:
         log.error(
@@ -3098,9 +3062,7 @@ def _parse_target_hex(raw: str) -> tuple[str, tuple[int, int, int]]:
     return cleaned, (r, g, b)
 
 
-def _validate_suggest_parameters(
-    top_k: int, min_spacing: float, max_combinations: int
-) -> None:
+def _validate_suggest_parameters(top_k: int, min_spacing: float) -> None:
     if top_k <= 0 or top_k > 100:
         raise HTTPException(
             status_code=422,
@@ -3111,15 +3073,6 @@ def _validate_suggest_parameters(
             status_code=422,
             detail=f"min_spacing must be in [0, 50], got {min_spacing}",
         )
-    if max_combinations <= 0 or max_combinations > 50_000_000:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "max_combinations must be in (0, 50_000_000], "
-                f"got {max_combinations}"
-            ),
-        )
-
 
 def _suggestions_to_response_items(
     suggestions: list[ColorSuggestion],
@@ -3320,7 +3273,6 @@ async def material_solver_cache_suggest_colors(
     target_hex: str = Form(...),
     top_k: int = Form(DEFAULT_SUGGEST_TOP_K),
     min_spacing: float = Form(DEFAULT_SUGGEST_MIN_SPACING),
-    max_combinations: int = Form(DEFAULT_SUGGEST_MAX_COMBINATIONS),
     grid_resolution: int = Form(DEFAULT_GRID_RESOLUTION),
 ) -> MaterialColorSuggestionsResponse:
     """Return up to ``top_k`` achievable colors near ``target_hex``.
@@ -3333,7 +3285,7 @@ async def material_solver_cache_suggest_colors(
     candidate runtime exists, query that bounded runtime instead of falling
     back to exhaustive MITM. Fallback: no reusable solver data available → runs
     :func:`core.material_color_solver.suggest_colors_for_target` in a worker
-    thread, bounded by ``max_combinations`` to keep interactive UX responsive.
+    thread until it completes, is cancelled, or fails.
 
     The frontend reports ``source`` in the response so it can explain whether
     the suggestion came from exact cache, hybrid runtime, or live MITM fallback.
@@ -3342,7 +3294,7 @@ async def material_solver_cache_suggest_colors(
     dir_names = _parse_material_directory_names(material_directory_names)
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
     _validate_grid_resolution(grid_resolution)
-    _validate_suggest_parameters(top_k, min_spacing, max_combinations)
+    _validate_suggest_parameters(top_k, min_spacing)
     target_hex_clean, target_rgb_tuple = _parse_target_hex(target_hex)
     materials = _load_palette_or_raise(dir_names)
     palette_hash = fingerprint_palette(materials)
@@ -3401,20 +3353,10 @@ async def material_solver_cache_suggest_colors(
                     substrate=substrate,
                     top_k=top_k,
                     min_spacing=min_spacing,
-                    max_combinations=max_combinations,
                 )
 
             try:
                 suggestions = await anyio.to_thread.run_sync(_run_suggest)
-            except OverflowError as exc:
-                raise HTTPException(
-                    status_code=422,
-                    detail=(
-                        f"{exc}. Please build the material solver cache or "
-                        "hybrid runtime first to enable interactive suggestions "
-                        "for this palette."
-                    ),
-                )
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail=str(exc))
             source = "mitm"

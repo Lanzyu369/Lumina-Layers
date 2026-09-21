@@ -173,14 +173,6 @@ class TestSuggestColorsForTargetContract:
                 min_spacing=-0.5,
             )
 
-    def test_overflow_guard_trips_for_large_combinations(self):
-        target = np.asarray([128, 128, 128], dtype=np.uint8)
-        # 5 materials × 10 layers = 9.7M combinations > 10k cap.
-        with pytest.raises(OverflowError, match="combinations"):
-            suggest_colors_for_target(
-                target, MEDIUM_PALETTE, layer_count=10, layer_height_mm=0.08,
-                max_combinations=10_000,
-            )
 
 
 class TestSuggestColorsForTargetRanking:

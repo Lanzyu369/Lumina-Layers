@@ -702,7 +702,6 @@ class MaterialSolverRuntimeEntryResponse(BaseModel):
     candidate_budget: int
     candidate_count: int
     candidate_pool_multiplier: int
-    build_memory_budget_bytes: int
     batch_recipe_count: int
     lab_grid_resolution: int
     seed: int

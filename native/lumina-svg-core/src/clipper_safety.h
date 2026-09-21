@@ -62,7 +62,6 @@ inline void preflightClipperOutput(
 
 namespace clipper_safety_detail {
 
-inline constexpr size_t MAX_CANDIDATES_PER_OPERATION = 20'000'000;
 inline constexpr size_t DIRECT_CANDIDATE_THRESHOLD = 4'096;
 
 struct SegmentBounds {
@@ -357,16 +356,10 @@ private:
     static void consumeIntersectionWork(
         size_t& queryWork, size_t& comparisonWork, bool comparison)
     {
-        constexpr size_t limit =
-            ComplexityBudget::MAX_CLIPPER_INTERSECTION_COMPARISONS;
-        if(comparisonWork >= limit
-                || queryWork >= limit - comparisonWork)
-            throw ComplexityLimitError(
-                "clipper_intersection_comparisons");
         if(comparison)
-            ++comparisonWork;
+            comparisonWork = checkedSizeSum(comparisonWork, size_t{1});
         else
-            ++queryWork;
+            queryWork = checkedSizeSum(queryWork, size_t{1});
     }
 
     struct Node {
@@ -449,11 +442,8 @@ private:
                     || !candidate.bounds.intersects(query)
                     || !segmentsIntersect(segment, candidate))
                     continue;
-                if(++m_candidateCount
-                        > clipper_safety_detail::MAX_CANDIDATES_PER_OPERATION)
-                    throw ComplexityLimitError(
-                        "clipper_candidates_per_operation:"
-                        + std::to_string(m_candidateCount));
+                m_candidateCount = checkedSizeSum(
+                    m_candidateCount, size_t{1});
             }
             return;
         }
@@ -484,9 +474,7 @@ private:
                 if(adjacentEdges(segment, candidate)
                         || !candidate.bounds.intersects(query))
                     continue;
-                if(++candidateCount > MAX_CANDIDATES_PER_OPERATION)
-                    throw ComplexityLimitError(
-                        "clipper_proximity_candidates");
+                candidateCount = checkedSizeSum(candidateCount, size_t{1});
                 if(segmentsWithinDistance(
                         segment, candidate, distanceSquared))
                     return true;
@@ -526,9 +514,7 @@ private:
                         || !segmentsWithinDistance(
                             segment, candidate, distanceSquared))
                     continue;
-                if(++candidateCount > MAX_CANDIDATES_PER_OPERATION)
-                    throw ComplexityLimitError(
-                        "clipper_offset_proximity_candidates");
+                candidateCount = checkedSizeSum(candidateCount, size_t{1});
             }
             return;
         }
@@ -564,9 +550,7 @@ private:
                 if(segment.operand_id == candidate.operand_id
                         || !candidate.bounds.intersects(query))
                     continue;
-                if(++candidateCount > MAX_CANDIDATES_PER_OPERATION)
-                    throw ComplexityLimitError(
-                        "clipper_collinear_candidates");
+                candidateCount = checkedSizeSum(candidateCount, size_t{1});
                 if(!segmentsHavePositiveLengthCollinearOverlap(
                         segment, candidate))
                     continue;
@@ -751,8 +735,6 @@ inline size_t allPairCount(size_t count)
 inline size_t requireBoundedDirectCandidates(
     size_t candidateCount, ComplexityBudget& complexityBudget)
 {
-    if(candidateCount > MAX_CANDIDATES_PER_OPERATION)
-        throw ComplexityLimitError("clipper_candidates_per_operation");
     complexityBudget.consumeClipperIntersectionCandidates(candidateCount);
     return candidateCount;
 }
@@ -768,18 +750,11 @@ inline size_t requireBoundedDirectIntersections(
                              const IndexedSegment& second) {
         if(adjacentEdges(first, second))
             return;
-        if(comparisonCount
-                >= ComplexityBudget::
-                    MAX_CLIPPER_INTERSECTION_COMPARISONS)
-            throw ComplexityLimitError(
-                "clipper_intersection_comparisons");
-        ++comparisonCount;
+        comparisonCount = checkedSizeSum(comparisonCount, size_t{1});
         if(!first.bounds.intersects(second.bounds)
                 || !segmentsIntersect(first, second))
             return;
-        if(++candidateCount > MAX_CANDIDATES_PER_OPERATION)
-            throw ComplexityLimitError(
-                "clipper_candidates_per_operation");
+        candidateCount = checkedSizeSum(candidateCount, size_t{1});
     };
     if(crossOperandsOnly) {
         std::vector<std::pair<size_t, size_t>> operandRanges;

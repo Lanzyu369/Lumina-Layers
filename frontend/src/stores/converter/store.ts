@@ -4493,11 +4493,6 @@ function buildPuzzlePreviewParams(
 // 由于 replace 端点改为异步生成 GLB，前端需要在每次 replace 后轮询
 // /glb-status，拿到新 URL 后再刷新 3D 预览（previewGlbUrl）。
 const GLB_POLL_INTERVAL_MS = 500;
-// Segmented-GLB builds for large material-archive images can run 35–60 s;
-// allow 5 minutes of wall time before giving up so we don't leave the
-// user staring at a stale 3D preview during very heavy edits.
-// 超大图的 GLB 构建可达分钟级；给 5 分钟上限避免永久轮询。
-const GLB_POLL_MAX_MS = 5 * 60_000;
 // Monotonic token used by every poll loop; starting a new poll or
 // changing sessionId bumps this so any older loop exits on its next tick.
 // 单调递增的 token：新轮询/切换 session 都会自增，旧循环下一轮检测到 token
@@ -4545,15 +4540,13 @@ function _startGlbStatusPolling(
 ): void {
   _glbPollSequence += 1;
   const mySeq = _glbPollSequence;
-  const started = Date.now();
-
   const tick = async (): Promise<void> => {
-    // Lost-focus guard: if a newer poll started, the user switched
-    // sessions, or we've been polling longer than the max, exit silently.
-    // 三重退出条件：被新轮询覆盖 / session 切换 / 达到超时上限。
+    // Lost-focus guard: if a newer poll started or the user switched sessions,
+    // exit silently. A local build remains pending until it completes, fails,
+    // or the user starts a newer request.
+    // 仅在新轮询或 session 切换时退出；本地计算持续到完成、失败或被新请求替代。
     if (_glbPollSequence !== mySeq) return;
     if (getCurrentSessionId() !== sessionId) return;
-    if (Date.now() - started > GLB_POLL_MAX_MS) return;
 
     try {
       const status = await apiGetGlbStatus(sessionId);

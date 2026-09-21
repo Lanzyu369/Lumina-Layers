@@ -5,10 +5,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from core.errors import VectorMeshMemoryBudgetError
-
-
-MODEL_SURFACE_FATAL_ERRORS = (MemoryError, VectorMeshMemoryBudgetError)
+MODEL_SURFACE_FATAL_ERRORS = (MemoryError,)
 
 
 class ModelSurfaceError(ValueError):

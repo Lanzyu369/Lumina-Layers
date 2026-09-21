@@ -8,7 +8,6 @@ import pytest
 from shapely.geometry import box
 
 from core import native_svg_adapter
-from core.errors import NativeSvgResourceLimitError
 from core.native_svg_adapter import NativeSvgFallback, NativeSvgGeometry
 from core.vector_engine import VectorProcessor
 import core.vector_engine as vector_engine
@@ -168,30 +167,6 @@ def test_unsupported_document_runs_one_complete_legacy_path(
     )
 
 
-def test_complexity_rejection_never_invokes_legacy_parser(
-    tmp_path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    svg_path = tmp_path / "resource-attack.svg"
-    svg_path.write_text("<svg/>", encoding="utf-8")
-    processor = _processor()
-
-    def reject_complexity(*_args, **_kwargs):
-        raise NativeSvgResourceLimitError()
-
-    monkeypatch.setattr(
-        native_svg_adapter,
-        "analyze_native_svg",
-        reject_complexity,
-    )
-    processor._parse_svg = lambda *_args: pytest.fail("legacy parser ran")
-    processor._clip_occlusion = lambda *_args, **_kwargs: pytest.fail(
-        "legacy GEOS clip ran"
-    )
-    vector_engine._VECTOR_PARSE_CLIP_CACHE.clear()
-
-    with pytest.raises(NativeSvgResourceLimitError):
-        processor.analyze_svg(str(svg_path), 20.0)
 
 
 def test_large_legal_selector_is_processed_without_legacy_retry(
