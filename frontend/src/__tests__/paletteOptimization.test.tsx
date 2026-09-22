@@ -186,6 +186,49 @@ describe('LutColorGrid 推荐排序', () => {
     expect(screen.queryByText(/推荐替换色/)).not.toBeInTheDocument();
   });
 
+  it.each(['none', 'text-content', 'replace-node'] as const)(
+    'clears a selected color after external status mutation: %s', async (mutation) => {
+    const LutColorGrid = await importLutColorGrid();
+    const PalettePanel = await importPalettePanel();
+    useConverterStore.setState({
+      palette: PALETTE,
+      selectedColor: 'ee0000',
+      selectedColors: new Set(['ee0000']),
+      selectionMode: 'select-all',
+      selectionDocument: null,
+      selectedRegions: [],
+      regionData: null,
+      lutColors: LUT_COLORS,
+      colorRemapMap: {},
+    });
+    render(<><PalettePanel /><LutColorGrid /></>);
+    const status = screen.getByText(/共 13 色/);
+    const walker = document.createTreeWalker(status, NodeFilter.SHOW_TEXT);
+    const nodes: Node[] = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    const selectedLabel = nodes.find((node) => node.textContent?.includes('已选中'));
+    expect(selectedLabel).toBeTruthy();
+    if (mutation === 'replace-node') {
+      const wrapper = document.createElement('font');
+      wrapper.textContent = selectedLabel!.textContent;
+      selectedLabel!.parentNode!.replaceChild(wrapper, selectedLabel!);
+    } else if (mutation === 'text-content') {
+      selectedLabel!.textContent += ' (external text)';
+    }
+
+    fireEvent.click(screen.getByRole('button', { name: '全不选' }));
+
+    expect(useConverterStore.getState().selectedColor).toBeNull();
+    expect(screen.queryByText(/已选中/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '全不选' })).toBeEnabled();
+    expect(status).toHaveTextContent('共 13 色');
+    fireEvent.click(screen.getByRole('button', { name: /颜色 00ee00/ }));
+    expect(useConverterStore.getState().selectedColor).toBe('00ee00');
+    expect(status).toHaveTextContent('#00ee00');
+    fireEvent.click(screen.getByRole('button', { name: '全不选' }));
+    expect(status).not.toHaveTextContent('已选中');
+  });
+
   it('lutColors 为空时不显示推荐区域', async () => {
     const LutColorGrid = await importLutColorGrid();
 

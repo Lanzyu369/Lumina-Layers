@@ -16,6 +16,20 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-09-22",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [{
+      category: { zh: "稳定性", en: "Stability" },
+      items: [{
+        zh: "颜色状态文字被浏览器工具改写后，点击“全不选”不再因此白屏，可以继续选色。",
+        en: "Clearing the color selection no longer blanks the page after browser tools replace the selection status text. You can keep editing colors.",
+      }],
+    }],
+  },
+  {
     version: "2026-09-14",
     title: {
       zh: "Lumina Layers — 9 月更新速览",

@@ -476,14 +476,15 @@ function LutColorGridInner() {
               .replace("{visible}", String(visibleCount))}
             {favorites.size > 0 && ` · ★${favorites.size}`}
             {selectedColor && (
-              <>
+              // Keep deletion ownership on an element if external tools replace its text.
+              <span>
                 {` · ${t("lut_grid_selected")} `}
                 <span
                   className="inline-block h-2.5 w-2.5 rounded-md border border-slate-400/80 align-middle dark:border-slate-500/80"
                   style={{ backgroundColor: `#${selectedColor}` }}
                 />
                 <span className="font-mono text-[clamp(0.55rem,0.75vw,0.625rem)]"> #{selectedColor}</span>
-              </>
+              </span>
             )}
           </p>
 
