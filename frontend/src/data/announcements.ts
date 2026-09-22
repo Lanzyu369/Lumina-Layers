@@ -16,6 +16,20 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-09-22",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [{
+      category: { zh: "稳定性", en: "Stability" },
+      items: [{
+        zh: "修复 16 位高度图上传后出现杂纹、浮雕高度错乱的问题，原图的明暗和高低顺序保持一致。",
+        en: "Fixed noise and incorrect relief heights when uploading 16-bit heightmaps, preserving the image's brightness and height order.",
+      }],
+    }],
+  },
+  {
     version: "2026-09-14",
     title: {
       zh: "Lumina Layers — 9 月更新速览",

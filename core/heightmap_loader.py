@@ -37,23 +37,24 @@ class HeightmapLoader:
         Returns:
             np.ndarray: (H, W) uint8 灰度图
         """
-        # 已是灰度图，直接返回
+        # 已是灰度图，保留灰度数据
         if image.ndim == 2:
-            return image.astype(np.uint8)
-
-        channels = image.shape[2]
-
-        if channels == 4:
+            gray = image
+        elif image.shape[2] == 4:
             # RGBA → BGR → 灰度
             bgr = cv2.cvtColor(image, cv2.COLOR_RGBA2BGR)
             gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        elif channels == 3:
+        elif image.shape[2] == 3:
             # cv2.imread 默认加载为 BGR 格式，直接转灰度
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         else:
             # 其他通道数，取第一个通道
             gray = image[:, :, 0]
 
+        # Preserve absolute brightness: casting uint16 directly wraps every 256.
+        # Use the full encoding range, never the individual image's min/max.
+        if gray.dtype == np.uint16:
+            gray = np.rint(gray.astype(np.float32) / 257.0)
         return gray.astype(np.uint8)
 
     @staticmethod
