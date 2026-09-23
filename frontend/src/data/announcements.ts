@@ -26,6 +26,9 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
       items: [{
         zh: "修复 16 位高度图上传后出现杂纹、浮雕高度错乱的问题，原图的明暗和高低顺序保持一致。",
         en: "Fixed noise and incorrect relief heights when uploading 16-bit heightmaps, preserving the image's brightness and height order.",
+      }, {
+        zh: "颜色状态文字被浏览器工具改写后，点击“全不选”不再因此白屏，可以继续选色。",
+        en: "Clearing the color selection no longer blanks the page after browser tools replace the selection status text. You can keep editing colors.",
       }],
     }],
   },
