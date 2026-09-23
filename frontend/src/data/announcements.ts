@@ -16,6 +16,22 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-09-23",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [{
+          zh: "修复了部分 Windows 电脑打开软件后一直白屏的问题，无需更改系统设置或删除原有资料。",
+          en: "Fixed a startup white screen on some Windows PCs, without changing system settings or deleting existing data.",
+        }],
+      },
+    ],
+  },
+  {
     version: "2026-09-14",
     title: {
       zh: "Lumina Layers — 9 月更新速览",
