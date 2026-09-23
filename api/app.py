@@ -18,6 +18,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
+from hashlib import sha256
 from math import isfinite
 from pathlib import Path
 from typing import Any
@@ -26,9 +27,11 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.datastructures import Headers
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import FileResponse, JSONResponse, Response
-from starlette.staticfiles import StaticFiles
+from starlette.staticfiles import NotModifiedResponse, StaticFiles
+from starlette.types import Scope
 
 from api.env_loader import load_env_local
 from api.runtime_limits import configure_blas_thread_limits
@@ -264,9 +267,49 @@ def _material_registry_service_enabled() -> bool:
     )
 
 
+_FRONTEND_MEDIA_TYPES = {
+    ".js": "text/javascript",
+    ".mjs": "text/javascript",
+    ".css": "text/css",
+    ".html": "text/html",
+}
+
+
+class _FrontendStaticFiles(StaticFiles):
+    def file_response(
+        self,
+        full_path: str | os.PathLike[str],
+        stat_result: os.stat_result,
+        scope: Scope,
+        status_code: int = 200,
+    ) -> Response:
+        """Keep browser entry types independent of host MIME associations.
+
+        固定浏览器入口资源类型，避免系统文件关联阻止脚本与样式加载。
+        """
+        media_type = _FRONTEND_MEDIA_TYPES.get(Path(full_path).suffix.lower())
+        if media_type is None:
+            return super().file_response(full_path, stat_result, scope, status_code)
+        response = FileResponse(
+            full_path,
+            status_code=status_code,
+            stat_result=stat_result,
+            media_type=media_type,
+        )
+        # File timestamps alone cannot distinguish a cached, incorrect MIME type.
+        representation = f"{response.headers['etag']}:{media_type}"
+        response.headers["etag"] = f'"{sha256(representation.encode()).hexdigest()}"'
+        request_headers = Headers(scope=scope)
+        if request_headers.get("if-none-match") and self.is_not_modified(
+            response.headers, request_headers
+        ):
+            return NotModifiedResponse(response.headers)
+        return response
+
+
 def _configure_frontend_dist(app: FastAPI) -> None:
-    """Serve the built React SPA from FastAPI when local Docker enables it.
-    本地 Docker 开启时，由 FastAPI 服务已构建的 React SPA。
+    """Serve the built React SPA for packaged desktop and Docker deployments.
+    为桌面打包版及 Docker 部署提供已构建的 React SPA。
     """
     if not _env_enabled("LUMINA_SERVE_FRONTEND_DIST"):
         return
@@ -287,11 +330,14 @@ def _configure_frontend_dist(app: FastAPI) -> None:
         return
 
     if assets_dir.is_dir():
-        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="frontend-assets")
+        app.mount(
+            "/assets", _FrontendStaticFiles(directory=str(assets_dir)),
+            name="frontend-assets",
+        )
 
     @app.get("/", include_in_schema=False)
     async def frontend_index() -> FileResponse:
-        return FileResponse(index_path)
+        return FileResponse(index_path, media_type="text/html")
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def frontend_spa_fallback(request: Request, full_path: str) -> FileResponse:
@@ -302,8 +348,11 @@ def _configure_frontend_dist(app: FastAPI) -> None:
             requested_path.is_file()
             and (requested_path == dist_dir or dist_dir in requested_path.parents)
         ):
-            return FileResponse(requested_path)
-        return FileResponse(index_path)
+            return FileResponse(
+                requested_path,
+                media_type=_FRONTEND_MEDIA_TYPES.get(requested_path.suffix.lower()),
+            )
+        return FileResponse(index_path, media_type="text/html")
 
 
 def _run_cleanup_pass(
