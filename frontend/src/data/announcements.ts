@@ -16,7 +16,7 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
-    version: "2026-09-22",
+    version: "2026-09-24",
     title: {
       zh: "Lumina Layers — 9 月更新速览",
       en: "Lumina Layers — September updates",
@@ -24,10 +24,29 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
     sections: [{
       category: { zh: "稳定性", en: "Stability" },
       items: [{
+        zh: "修复 16 位高度图上传后出现杂纹、浮雕高度错乱的问题，原图的明暗和高低顺序保持一致。",
+        en: "Fixed noise and incorrect relief heights when uploading 16-bit heightmaps, preserving the image's brightness and height order.",
+      }, {
         zh: "颜色状态文字被浏览器工具改写后，点击“全不选”不再因此白屏，可以继续选色。",
         en: "Clearing the color selection no longer blanks the page after browser tools replace the selection status text. You can keep editing colors.",
       }],
     }],
+  },
+  {
+    version: "2026-09-23",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [{
+          zh: "修复了部分 Windows 电脑打开软件后一直白屏的问题，无需更改系统设置或删除原有资料。",
+          en: "Fixed a startup white screen on some Windows PCs, without changing system settings or deleting existing data.",
+        }],
+      },
+    ],
   },
   {
     version: "2026-09-14",
