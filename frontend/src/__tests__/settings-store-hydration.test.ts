@@ -428,6 +428,38 @@ describe("settings store hydration and base-layer modifier wiring", () => {
     });
   });
 
+  it("persists the desktop default save folder through backend sync", async () => {
+    const { settingsStoreModule, systemApi } = await loadStores();
+    const store = settingsStoreModule.useSettingsStore;
+
+    expect(store.getState().generatedFileDirectory).toBe("");
+    store.getState().setGeneratedFileDirectory("  D:\\Prints\\Lumina  ");
+    expect(store.getState().generatedFileDirectory).toBe("D:\\Prints\\Lumina");
+
+    await store.getState().syncToBackend();
+    expect(systemApi.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ generated_file_directory: "D:\\Prints\\Lumina" }),
+    );
+  });
+
+  it("hydrates the default save folder only for a fresh origin", async () => {
+    const { settingsStoreModule } = await loadStores();
+
+    const fresh = settingsStoreModule.deriveBackendDeviceSettingsPatch(
+      settingsStoreModule.DEFAULT_SETTINGS,
+      { generated_file_directory: "D:\\Prints" },
+      {},
+    );
+    expect(fresh.generatedFileDirectory).toBe("D:\\Prints");
+
+    const local = settingsStoreModule.deriveBackendDeviceSettingsPatch(
+      settingsStoreModule.DEFAULT_SETTINGS,
+      { generated_file_directory: "D:\\Prints" },
+      { generatedFileDirectory: "" },
+    );
+    expect(local.generatedFileDirectory).toBeUndefined();
+  });
+
   it("keeps an origin-local preference when hydrating shared settings", async () => {
     const { settingsStoreModule } = await loadStores();
 

@@ -89,6 +89,26 @@ export function getButtonLabel(
   return threemfDiskPath ? t("slicer_download_3mf") : t("slicer_generate_download");
 }
 
+/**
+ * Label for the dropdown download entry: generate first when no artifact exists.
+ * 下拉菜单下载项文案：没有可用产物时先生成再下载。
+ *
+ * @param hasArtifact - Whether a current downloadable artifact exists. (是否已有可下载产物)
+ * @param t - Translation function. (翻译函数)
+ * @param largeFormat - Whether large-format ZIP output is active. (是否为大画幅 ZIP 输出)
+ * @returns The menu entry label. (菜单项文案)
+ */
+function getMenuDownloadLabel(
+  hasArtifact: boolean,
+  t: (key: string) => string,
+  largeFormat?: boolean,
+): string {
+  if (largeFormat) {
+    return hasArtifact ? t("slicer_download_zip") : t("slicer_generate_download_zip");
+  }
+  return hasArtifact ? t("slicer_download_3mf") : t("slicer_generate_download_3mf");
+}
+
 export function getSlicerLinkHint(
   preferredSlicerId: string | null,
   preferredSlicerName: string,
@@ -376,10 +396,8 @@ export default function SlicerSelector({
   };
 
   const handleDownloadFromMenu = async () => {
-    if (downloadUrl) {
-      await triggerDownload(downloadUrl);
-    }
     setIsDropdownOpen(false);
+    await handleDownloadOrGenerate();
   };
 
   const isDisabled = !canSubmit || isDetecting || isLaunching || isAutoGenerating || isDownloading;
@@ -483,14 +501,14 @@ export default function SlicerSelector({
               <button
                 type="button"
                 onClick={() => void handleDownloadFromMenu()}
-                disabled={!downloadUrl || isDownloading}
+                disabled={isDisabled}
                 className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 dark:text-slate-200 transition-colors hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <svg className="h-4 w-4 text-slate-500 dark:text-slate-400" viewBox="0 0 20 20" fill="currentColor">
                   <path d="M10.75 2.75a.75.75 0 00-1.5 0v8.614L6.295 8.235a.75.75 0 10-1.09 1.03l4.25 4.5a.75.75 0 001.09 0l4.25-4.5a.75.75 0 00-1.09-1.03l-2.955 3.129V2.75z" />
                   <path d="M3.5 12.75a.75.75 0 00-1.5 0v2.5A2.75 2.75 0 004.75 18h10.5A2.75 2.75 0 0018 15.25v-2.5a.75.75 0 00-1.5 0v2.5c0 .69-.56 1.25-1.25 1.25H4.75c-.69 0-1.25-.56-1.25-1.25v-2.5z" />
                 </svg>
-                {largeFormat ? t("slicer_download_zip") : t("slicer_download_3mf")}
+                {getMenuDownloadLabel(Boolean(downloadUrl), t, largeFormat)}
               </button>
             </div>,
             document.body,

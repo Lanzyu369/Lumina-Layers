@@ -120,6 +120,12 @@ export interface SettingsState {
    * 内代表色（像素最多的那一个），一键去掉海带纹；默认关闭。
    */
   autoReplaceGradientBanding: boolean;
+  /**
+   * Desktop only: folder the save dialog for generated files opens in.
+   * Empty means the operating-system default location.
+   * 仅桌面版：生成文件保存对话框默认打开的文件夹；空字符串表示系统默认位置。
+   */
+  generatedFileDirectory: string;
 }
 
 // ========== Actions Interface ==========
@@ -155,6 +161,7 @@ export interface SettingsActions {
   resetSvgPixelsPerMm: () => void;
   setMaterialDeltaE00Tolerance: (value: number) => void;
   setAutoReplaceGradientBanding: (enabled: boolean) => void;
+  setGeneratedFileDirectory: (directory: string) => void;
   hydrateDeviceSettingsFromBackend: (settings: Partial<UserSettings>) => void;
   syncToBackend: () => Promise<void>;
 }
@@ -195,6 +202,7 @@ export const DEFAULT_SETTINGS: SettingsState = {
   svgPixelsPerMm: SVG_PIXELS_PER_MM_DEFAULT,
   materialDeltaE00Tolerance: MATERIAL_DELTA_E00_TOLERANCE_DEFAULT,
   autoReplaceGradientBanding: false,
+  generatedFileDirectory: "",
 };
 
 type PersistedSettingsSnapshot = Partial<SettingsState>;
@@ -520,6 +528,12 @@ export function deriveBackendDeviceSettingsPatch(
       ? settings.auto_replace_gradient_banding
       : undefined,
   );
+  setScalarIfFresh(
+    "generatedFileDirectory",
+    typeof settings.generated_file_directory === "string"
+      ? settings.generated_file_directory.trim()
+      : undefined,
+  );
 
   return patch;
 }
@@ -719,6 +733,9 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
       setAutoReplaceGradientBanding: (enabled: boolean) =>
         set({ autoReplaceGradientBanding: enabled }),
 
+      setGeneratedFileDirectory: (directory: string) =>
+        set({ generatedFileDirectory: directory.trim() }),
+
       hydrateDeviceSettingsFromBackend: (settings: Partial<UserSettings>) => {
         const current = get();
         const patch = deriveBackendDeviceSettingsPatch(
@@ -810,6 +827,7 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
               state.materialDeltaE00Tolerance,
             auto_replace_gradient_banding:
               state.autoReplaceGradientBanding,
+            generated_file_directory: state.generatedFileDirectory,
           });
         } catch {
           // best-effort sync — settings are already persisted in localStorage

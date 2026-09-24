@@ -2259,6 +2259,8 @@ export interface UserSettings {
   svg_pixels_per_mm: number;
   material_delta_e00_tolerance: number;
   auto_replace_gradient_banding: boolean;
+  /** Desktop save-dialog default folder; empty = OS default. 桌面版保存对话框默认文件夹。 */
+  generated_file_directory?: string;
 }
 
 export interface UserSettingsResponse {

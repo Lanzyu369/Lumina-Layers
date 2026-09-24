@@ -16,6 +16,12 @@ const nodeNet = require("net");
 const fs = require("fs");
 const path = require("path");
 const { saveGeneratedFile } = require("./generated-file-save.cjs");
+const {
+  createGeneratedFileDirectoryState,
+  pickGeneratedFileDirectory,
+  resolveDefaultSavePath,
+  setGeneratedFileDirectory,
+} = require("./generated-file-directory.cjs");
 const { migrateLegacyStorage } = require("./storage-migration.cjs");
 const { managedRuntime, assertPortsAvailable } = require("./managed-runtime.cjs");
 const { selectBackendEndpoint, validateHealthResponse } = require("./backend-endpoint.cjs");
@@ -443,6 +449,7 @@ if (!gotLock) {
 // ═══════════════════════════════════════════════════════════
 
 let win = null;
+const generatedFileDirectory = createGeneratedFileDirectoryState();
 let splashWin = null;
 let isQuitting = false;
 let quitConfirmationPending = false;
@@ -661,7 +668,7 @@ function createWindow() {
     }
     const filename = item.getFilename();
     const savePath = dialog.showSaveDialogSync(win, {
-      defaultPath: filename,
+      defaultPath: resolveDefaultSavePath(generatedFileDirectory.get(), filename),
       filters: [{ name: "All Files", extensions: ["*"] }],
     });
     if (savePath) {
@@ -823,7 +830,26 @@ ipcMain.handle("save-generated-file", (event, payload) => saveGeneratedFile({
   trustedUrl: trustedMainFrameUrl,
   payload,
   showSaveDialog: (owner, options) => dialog.showSaveDialog(owner, options),
+  defaultDirectory: generatedFileDirectory.get(),
 }));
+
+ipcMain.handle("set-generated-file-directory", (event, directory) =>
+  setGeneratedFileDirectory({
+    event,
+    window: win,
+    trustedUrl: trustedMainFrameUrl,
+    state: generatedFileDirectory,
+    directory,
+  }));
+
+ipcMain.handle("pick-generated-file-directory", (event) =>
+  pickGeneratedFileDirectory({
+    event,
+    window: win,
+    trustedUrl: trustedMainFrameUrl,
+    state: generatedFileDirectory,
+    showOpenDialog: (owner, options) => dialog.showOpenDialog(owner, options),
+  }));
 
 ipcMain.handle("get-native-bed-model", async (event, deviceProfileId) => {
   const senderFrame = event.senderFrame ?? null;

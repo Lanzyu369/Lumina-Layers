@@ -146,3 +146,38 @@ def test_settings_rejects_invalid_enable_crop_modal(bad_value) -> None:
     assert resp.status_code == 422, (
         f"Expected 422 for enable_crop_modal={bad_value!r}, got {resp.status_code}: {resp.text}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Desktop default save folder for generated files
+# ---------------------------------------------------------------------------
+
+
+def test_settings_round_trip_generated_file_directory() -> None:
+    """The desktop save-dialog default folder persists and defaults to empty."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_file = Path(tmp_dir) / "user_settings.json"
+        with patch("api.routers.system.SETTINGS_FILE", tmp_file):
+            assert (
+                client.get("/api/system/settings").json()["settings"][
+                    "generated_file_directory"
+                ]
+                == ""
+            )
+            folder = "D:\Prints\Lumina 输出"
+            post_resp = client.post(
+                "/api/system/settings",
+                json={"generated_file_directory": folder},
+            )
+            assert post_resp.status_code == 200, post_resp.text
+            returned = client.get("/api/system/settings").json()["settings"]
+            assert returned["generated_file_directory"] == folder
+
+
+def test_settings_rejects_overlong_generated_file_directory() -> None:
+    """An unbounded folder path is rejected instead of being persisted."""
+    resp = client.post(
+        "/api/system/settings",
+        json={"generated_file_directory": "D:\\" + "a" * 1100},
+    )
+    assert resp.status_code == 422, resp.text
