@@ -2,6 +2,7 @@ import os
 import threading
 import time
 import uuid
+from collections.abc import Mapping
 from typing import Any, Dict, Optional
 
 
@@ -81,6 +82,54 @@ class SessionStore:
                 self._temp_files[session_id] = []
             self._renew_lease_locked(session_id)
             self._store[session_id][key] = value
+
+    def compare_and_set(
+        self,
+        session_id: str,
+        key: str,
+        value: Any,
+        *,
+        revision_path: tuple[str, ...],
+        expected_revision: Any,
+    ) -> bool:
+        """Atomically replace a value when its revision field still matches.
+        仅当当前值的 revision 字段仍匹配时，原子替换该 session 字段。
+
+        Args:
+            session_id: Owning session id. (所属 session id。)
+            key: Top-level session field to replace. (待替换的顶层字段。)
+            value: Complete replacement value. (完整的新值。)
+            revision_path: Mapping-key path used to find the revision token.
+                (用于定位版本 token 的映射键路径。)
+            expected_revision: Revision that must still be current.
+                (提交时必须仍然有效的版本值。)
+
+        Returns:
+            ``True`` only when the active session was updated. A missing,
+            closing, retired, or superseded session returns ``False``.
+            仅在活动 session 成功写入时返回 ``True``；不存在、关闭中、
+            已退役或版本已被替换时返回 ``False``。
+        """
+
+        with self._lock:
+            self._prune_retired_locked()
+            if (
+                session_id in self._retired_sessions
+                or session_id in self._closing_sessions
+                or session_id not in self._store
+            ):
+                return False
+            current = self._store[session_id].get(key)
+            revision: Any = current
+            for field in revision_path:
+                if not isinstance(revision, Mapping) or field not in revision:
+                    return False
+                revision = revision[field]
+            if not revision_path or revision != expected_revision:
+                return False
+            self._renew_lease_locked(session_id)
+            self._store[session_id][key] = value
+            return True
 
     def register_temp_file(self, session_id: str, path: str) -> None:
         """注册临时文件路径，session 清理时一并删除。"""

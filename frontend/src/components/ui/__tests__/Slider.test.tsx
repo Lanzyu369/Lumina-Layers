@@ -18,6 +18,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
+import { useState } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import Slider from "../Slider";
 
@@ -136,6 +137,44 @@ describe("Slider value preservation", () => {
     fireEvent.change(text, { target: { value: "-5" } });
     fireEvent.blur(text);
     expect(onChange.mock.calls.at(-1)?.[0]).toBeGreaterThanOrEqual(0.2);
+  });
+
+  it("keeps the everyday range bounded while allowing larger precise values", () => {
+    const onChange = vi.fn();
+    function ControlledSlider() {
+      const [value, setValue] = useState(30000);
+      return (
+        <Slider
+          label="Large format width"
+          value={value}
+          min={10}
+          max={400}
+          inputMax={Number.POSITIVE_INFINITY}
+          step={1}
+          onChange={(next) => {
+            onChange(next);
+            setValue(next);
+          }}
+          unit="mm"
+        />
+      );
+    }
+
+    render(
+      <ControlledSlider />,
+    );
+
+    const range = screen.getByRole("slider", { name: "Large format width" }) as HTMLInputElement;
+    const text = screen.getByRole("textbox", { name: "Large format width value" }) as HTMLInputElement;
+    expect(range).toHaveAttribute("max", "400");
+    expect(range).toHaveValue("400");
+    expect(text).toHaveValue("30000");
+
+    fireEvent.focus(text);
+    fireEvent.change(text, { target: { value: "10000" } });
+    fireEvent.blur(text);
+    expect(onChange).toHaveBeenLastCalledWith(10000);
+    expect(text).toHaveValue("10000");
   });
 
   it("passes through already-aligned values unchanged", () => {

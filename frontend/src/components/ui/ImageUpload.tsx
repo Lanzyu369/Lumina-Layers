@@ -74,6 +74,7 @@ export default function ImageUpload({
 
   return (
     <div
+      data-local-file-drop-zone="true"
       role="button"
       aria-disabled={disabled}
       tabIndex={disabled ? -1 : 0}

@@ -29,6 +29,7 @@ import {
   SVG_PIXELS_PER_MM_DEFAULT,
 } from "../stores/settingsStore";
 import { colorRemapToReplacementRegions } from "./colorUtils";
+import { svgHoleCompensationOptions } from "../constants/svgHoleCompensation";
 
 /**
  * Hard limits enforced on the advanced_params payload before size
@@ -52,6 +53,7 @@ export interface BuildAdvancedParamsOptions {
   maxBytes: number;
   svgPixelsPerMm?: number;
   materialDeltaE00Tolerance?: number;
+  enableWipeTowerAutoPlacement?: boolean;
 }
 
 /**
@@ -154,6 +156,7 @@ function buildGeneration(
     quantize_colors_unlocked: state.quantize_colors_unlocked,
     high_precision_3d_preview: state.high_precision_3d_preview,
     enable_cleanup: state.enable_cleanup,
+    ...svgHoleCompensationOptions(state),
     svg_pixels_per_mm:
       typeof options.svgPixelsPerMm === "number"
         ? options.svgPixelsPerMm
@@ -179,6 +182,8 @@ function buildGeneration(
         ? options.materialDeltaE00Tolerance
         : MATERIAL_DELTA_E00_TOLERANCE_DEFAULT
       : null,
+    enable_wipe_tower_auto_placement:
+      options.enableWipeTowerAutoPlacement !== false,
     ...(wipeTowerWarningCodes.length > 0
       ? { wipe_tower_warning_codes: wipeTowerWarningCodes }
       : {}),

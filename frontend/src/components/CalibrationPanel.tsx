@@ -18,6 +18,7 @@ import {
   resolvePanelSurfaceClass,
   resolveSectionCardClass,
 } from "./ui/panelPrimitives";
+import { WIKI_DOCS } from "../utils/wikiDocs";
 
 const colorModeOptions = Object.values(CalibrationColorMode).map((v) => ({
   label: v,
@@ -79,6 +80,8 @@ export default function CalibrationPanel() {
 
             <Dropdown
               label={t("cal_color_mode_label")}
+              tooltip={t("cal_color_mode_hint")}
+              wikiPath={WIKI_DOCS.calibrationBoard}
               value={color_mode}
               options={colorModeOptions}
               onChange={(v) => setColorMode(v as CalibrationColorMode)}
@@ -106,6 +109,7 @@ export default function CalibrationPanel() {
             <Slider
               label={t("cal_block_size_label")}
               tooltip={t("cal_block_size_hint")}
+              wikiPath={WIKI_DOCS.calibrationBoard}
               value={block_size}
               min={3}
               max={10}
@@ -119,6 +123,7 @@ export default function CalibrationPanel() {
             <Slider
               label={t("cal_gap_label")}
               tooltip={t("cal_gap_hint")}
+              wikiPath={WIKI_DOCS.calibrationBoard}
               value={gap}
               min={0.4}
               max={2.0}
@@ -136,6 +141,7 @@ export default function CalibrationPanel() {
                 <HelpDot
                   title={t("cal_backing_thickness_label")}
                   description={t("cal_backing_thickness_hint")}
+                  wikiPath={WIKI_DOCS.calibrationBoard}
                 />
               </div>
               <Slider

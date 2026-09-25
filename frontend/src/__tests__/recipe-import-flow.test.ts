@@ -278,6 +278,25 @@ describe("recipe/importFlow", () => {
     ).toBe(false);
   });
 
+  it("restores the wipe-tower auto-placement project setting", () => {
+    const recipe = makeRecipe();
+    recipe.recipe.converter!.device.enable_wipe_tower_auto_placement = false;
+    useSettingsStore.setState({ enableWipeTowerAutoPlacement: true });
+    const restoreResult: RestoreResult = {
+      state: {},
+      assetFile: new File(["test"], "source.png", { type: "image/png" }),
+      heightmapFile: null,
+      warnings: [],
+      recipe,
+    };
+
+    applyImport(restoreResult);
+
+    expect(
+      useSettingsStore.getState().enableWipeTowerAutoPlacement,
+    ).toBe(false);
+  });
+
   it("restores the dynamic material Delta-E00 tolerance", () => {
     const recipe = makeRecipe();
     recipe.recipe.converter!.source = {

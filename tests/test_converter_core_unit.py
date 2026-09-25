@@ -24,16 +24,23 @@ def test_height_identity_path_preserves_legacy_positional_bindings() -> None:
             )
         ]
         matched_index = positional_names.index("matched_rgb_path")
-        assert positional_names[matched_index : matched_index + 4] == [
+        assert positional_names[matched_index : matched_index + 5] == [
             "matched_rgb_path",
             "mask_solid_path",
+            "quantized_image_path",
             "material_matrix_path",
             "reuse_preview_analysis",
         ]
-        assert (
-            signature.parameters["height_identity_rgb_path"].kind
-            is inspect.Parameter.KEYWORD_ONLY
-        )
+        for keyword_only_name in (
+            "height_identity_rgb_path",
+            "original_matched_rgb_path",
+            "original_material_matrix_path",
+            "edit_projection",
+        ):
+            assert (
+                signature.parameters[keyword_only_name].kind
+                is inspect.Parameter.KEYWORD_ONLY
+            )
 
         sentinels = [object() for _ in positional_names]
         bound = signature.bind(*sentinels)

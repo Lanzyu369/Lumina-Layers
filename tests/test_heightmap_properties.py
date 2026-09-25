@@ -53,7 +53,7 @@ def test_grayscale_mapping_formula(grayscale_val, max_relief_height, base_thickn
     height_mm = float(result[0, 0])
 
     # 验证公式正确性
-    expected = max_relief_height - (grayscale_val / 255.0) * (max_relief_height - base_thickness)
+    expected = base_thickness + (grayscale_val / 255.0) * (max_relief_height - base_thickness)
     assert np.isclose(height_mm, expected, atol=1e-4), (
         f"公式不匹配: got {height_mm}, expected {expected}"
     )
@@ -66,13 +66,13 @@ def test_grayscale_mapping_formula(grayscale_val, max_relief_height, base_thickn
         f"输出 {height_mm} 超过 max_relief_height {max_relief_height}"
     )
 
-    # 验证边界条件：g=0 → max_relief_height
+    # 验证边界条件：g=0 → base_thickness
     if grayscale_val == 0:
-        assert np.isclose(height_mm, max_relief_height, atol=1e-4)
-
-    # 验证边界条件：g=255 → base_thickness
-    if grayscale_val == 255:
         assert np.isclose(height_mm, base_thickness, atol=1e-4)
+
+    # 验证边界条件：g=255 → max_relief_height
+    if grayscale_val == 255:
+        assert np.isclose(height_mm, max_relief_height, atol=1e-4)
 
 
 # ============================================================================

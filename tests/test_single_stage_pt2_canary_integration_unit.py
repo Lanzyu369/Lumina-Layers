@@ -133,7 +133,6 @@ def _solver_cache_suggest_form_data() -> dict[str, str]:
             "target_hex": "#ff0000",
             "top_k": "3",
             "min_spacing": "1.0",
-            "max_combinations": "100000",
         }
     )
     return data
@@ -175,7 +174,6 @@ def _solver_runtime_metadata(
         "candidate_budget": candidate_budget,
         "candidate_count": 32,
         "candidate_pool_multiplier": 2,
-        "build_memory_budget_bytes": 8 * 1024 * 1024 * 1024,
         "batch_recipe_count": 524288,
         "seed": 0,
         "inverse_refinement": {
@@ -872,98 +870,7 @@ class TestMaterialSolverCacheBuildCanary:
         assert private_path not in response.text
         assert "permission denied" not in response.text
 
-    def test_material_solver_cache_build_rejects_unsafe_budget_before_build(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        client, _, _ = _client_with_state()
-        build_called = False
-        material_names = [f"mat_{idx}" for idx in range(12)]
-        monkeypatch.setattr(
-            "api.routers.single_stage.load_multiple_materials",
-            lambda directory_names: [
-                SimpleNamespace(directory_name=name) for name in directory_names
-            ],
-        )
 
-        def _build_should_not_run(*args, **kwargs):
-            nonlocal build_called
-            build_called = True
-            return SimpleNamespace(metadata=_solver_cache_metadata())
-
-        monkeypatch.setattr(
-            "api.routers.single_stage.build_material_solver_cache",
-            _build_should_not_run,
-        )
-
-        response = client.post(
-            "/api/extractor/material-solver-cache/build",
-            data={
-                "material_directory_names": json.dumps(material_names),
-                "layer_count": "8",
-                "layer_height_mm": "0.04",
-                "substrate": "white",
-                "grid_resolution": "2048",
-            },
-        )
-
-        assert response.status_code == 422
-        detail = response.json()["detail"]
-        assert "12 materials" in detail
-        assert "8 layers" in detail
-        assert "grid_resolution=2048" in detail
-        assert "lower grid_resolution" in detail
-        assert build_called is False
-
-    def test_material_solver_cache_build_rejects_low_grid_extreme_combinations(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-    ) -> None:
-        client, _, _ = _client_with_state()
-        build_called = False
-        material_names = [f"mat_{idx}" for idx in range(22)]
-        monkeypatch.setattr(
-            "api.routers.single_stage.load_multiple_materials",
-            lambda directory_names: [
-                SimpleNamespace(directory_name=name) for name in directory_names
-            ],
-        )
-
-        def _build_should_not_run(*args, **kwargs):
-            nonlocal build_called
-            build_called = True
-            return SimpleNamespace(metadata=_solver_cache_metadata())
-
-        monkeypatch.setattr(
-            "api.routers.single_stage.build_material_solver_cache",
-            _build_should_not_run,
-        )
-        fake_cache_path = tmp_path / "solver-cache.npz"
-        fake_cache_path.write_bytes(b"stub")
-        monkeypatch.setattr(
-            "api.routers.single_stage.save_material_solver_cache",
-            lambda cache: fake_cache_path,
-        )
-
-        response = client.post(
-            "/api/extractor/material-solver-cache/build",
-            data={
-                "material_directory_names": json.dumps(material_names),
-                "layer_count": "8",
-                "layer_height_mm": "0.04",
-                "substrate": "white",
-                "grid_resolution": "64",
-            },
-        )
-
-        assert response.status_code == 422
-        detail = response.json()["detail"]
-        assert "22 materials" in detail
-        assert "8 layers" in detail
-        assert "grid_resolution=64" in detail
-        assert "combination limit" in detail
-        assert build_called is False
 
     def test_material_solver_cache_build_logs_sessionless_canary(
         self,
@@ -1187,7 +1094,6 @@ class TestMaterialSolverRuntimeCanary:
         assert body["entry"]["cache_file_size_bytes"] == 64
         assert len(seen_configs) == 1
         assert seen_configs[0].candidate_budget == 32
-        assert seen_configs[0].build_memory_budget_bytes == 8 * 1024 * 1024 * 1024
         assert seen_configs[0].max_refine_top_suffixes == 32_768
         assert seen_configs[0].max_refine_bottom_prefixes == 65_536
 

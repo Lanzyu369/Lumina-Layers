@@ -41,21 +41,27 @@ from shapely.geometry import (
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 
-# Same isolated-load trick used by other vector_engine unit tests so we
-# don't pull in core/__init__'s heavy import chain.
-# 复用其它 vector_engine 单元测试的隔离加载技巧，避免引入 core/__init__
-# 的重型导入链。
-_spec = importlib.util.spec_from_file_location(
-    "core.vector_engine",
-    os.path.join(_ROOT, "core", "vector_engine.py"),
-)
-_ve = importlib.util.module_from_spec(_spec)
-if "core" not in sys.modules:
-    _pkg = types.ModuleType("core")
-    _pkg.__path__ = [os.path.join(_ROOT, "core")]
-    sys.modules["core"] = _pkg
-sys.modules["core.vector_engine"] = _ve
-_spec.loader.exec_module(_ve)
+# Load core.vector_engine by file only when this process has not imported the
+# canonical module yet, so the isolated load never replaces an object that other
+# test modules already bound and patch.
+# 仅在尚未导入标准模块时按文件加载，避免用副本替换其它测试模块已绑定并打补丁的
+# 模块对象。
+if "core.vector_engine" in sys.modules:
+    _ve = sys.modules["core.vector_engine"]
+else:
+    _spec = importlib.util.spec_from_file_location(
+        "core.vector_engine",
+        os.path.join(_ROOT, "core", "vector_engine.py"),
+    )
+    _ve = importlib.util.module_from_spec(_spec)
+    if "core" not in sys.modules:
+        _pkg = types.ModuleType("core")
+        _pkg.__path__ = [os.path.join(_ROOT, "core")]
+        sys.modules["core"] = _pkg
+    sys.modules["core.vector_engine"] = _ve
+    setattr(sys.modules["core"], "vector_engine", _ve)
+    assert _spec.loader is not None
+    _spec.loader.exec_module(_ve)
 
 VectorAnalysis = _ve.VectorAnalysis
 apply_matched_rgb_overrides_to_analysis = getattr(
@@ -692,6 +698,66 @@ def test_roi_projection_records_bounded_pixel_work_metrics() -> None:
     assert metrics["pixel_work_reduction_ratio"] == pytest.approx(
         metrics["full_canvas_pixel_work"] / metrics["roi_pixel_work"]
     )
+
+
+def test_dimension_change_projects_only_edited_vector_components() -> None:
+    """Old edit pixels map to fresh smooth paths without replacing untouched shapes."""
+
+    edited_geometry = box(1.0, 1.0, 4.0, 4.0)
+    untouched_geometry = box(7.0, 2.0, 10.0, 6.0)
+    analysis = VectorAnalysis(
+        shape_data=[],
+        clipped_shapes=[],
+        matched_shapes=[
+            {
+                "geometry": edited_geometry,
+                "color": (0, 255, 0),
+                "matched_rgb": (0, 255, 0),
+                "height_identity_rgb": (0, 255, 0),
+                "recipe": [2, 2, 2, 2, 2],
+            },
+            {
+                "geometry": untouched_geometry,
+                "color": (0, 0, 255),
+                "matched_rgb": (0, 0, 255),
+                "height_identity_rgb": (0, 0, 255),
+                "recipe": [3, 3, 3, 3, 3],
+            },
+        ],
+        silhouette=edited_geometry.union(untouched_geometry),
+        scale_factor=2.0,
+        bbox=(0.0, 0.0, 12.0, 8.0),
+        color_conf={"slots": ["W", "R", "G", "B"], "preview": {}},
+        slot_names=["W", "R", "G", "B"],
+        num_channels=4,
+        num_layers=5,
+        preview_colors={},
+    )
+    pristine_rgb = np.full((80, 120, 3), [255, 255, 255], dtype=np.uint8)
+    edited_rgb = pristine_rgb.copy()
+    edited_rgb[10:41, 10:41] = [255, 0, 0]
+    pristine_material = np.zeros((80, 120, 5), dtype=np.int16)
+    edited_material = pristine_material.copy()
+    edited_material[10:41, 10:41] = 1
+
+    changed = apply_matched_rgb_overrides_to_analysis(
+        analysis,
+        matched_rgb=edited_rgb,
+        original_matched_rgb=pristine_rgb,
+        height_identity_rgb=pristine_rgb,
+        material_matrix=edited_material,
+        original_material_matrix=pristine_material,
+        mask_solid=np.ones((80, 120), dtype=bool),
+        img_processor=_build_fake_img_processor(),
+        source_grid_shape=(80, 120),
+        strict=True,
+    )
+
+    assert changed == 1
+    assert tuple(analysis.matched_shapes[0]["matched_rgb"]) == (255, 0, 0)
+    assert analysis.matched_shapes[0]["recipe"] == [1, 1, 1, 1, 1]
+    assert tuple(analysis.matched_shapes[1]["matched_rgb"]) == (0, 0, 255)
+    assert analysis.matched_shapes[1]["recipe"] == [3, 3, 3, 3, 3]
 
 
 def test_roi_projection_caches_repeated_rgb_lut_queries() -> None:
@@ -2246,7 +2312,6 @@ class TestRunVectorBranchWiring:
             "vector_branch_init",
             "vector_matched_rgb_overrides_applied",
             "vector_3mf_exported",
-            "vector_glb_exported",
             "vector_2d_preview_skipped",
             "vector_timings",
             "vector_branch_done",

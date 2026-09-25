@@ -63,7 +63,6 @@ _log = get_logger(__name__)
 MATERIAL_ARCHIVE_LUT_SENTINEL = "__material_archive__"
 _MIN_PARALLEL_VECTOR_FILL_COUNT = 32
 _VECTOR_MATERIAL_WORK_UNITS_PER_WORKER = 16
-_ESTIMATED_VECTOR_WORKER_BYTES = 256 * 1024**2
 
 
 def _rgb_to_lab_static(rgb_array: np.ndarray) -> np.ndarray:
@@ -201,6 +200,7 @@ class MaterialVectorMatcher:
         self._matched_rgbs = np.zeros((0, 3), dtype=np.uint8)
         self._recipes = np.zeros((0, self.layer_count), dtype=np.int32)
         self._kdtree = None
+        self._exact_fill_indices: dict[tuple[int, int, int], int] = {}
         self._coverage_by_fill: dict[tuple[int, int, int], int] = {}
         self._dynamic_layer_info: dict | None = None
         self._material_solver_info: dict | None = None
@@ -363,6 +363,26 @@ class MaterialVectorMatcher:
         metadata = self._dynamic_metadata_by_fill.get(key)
         return deepcopy(metadata) if metadata is not None else None
 
+    def exact_lut_index_for_rgb(self, rgb) -> int | None:
+        """Return the stable table row for an exact source fill.
+
+        返回 SVG 原始填充色对应的稳定表行。该精确索引避免两个不同
+        RGB 在 8 位 Lab 量化后重合时互相借用配方；未知颜色仍由调用方
+        使用普通近邻匹配。
+
+        Args:
+            rgb: Source RGB triple. SVG 原始 RGB 三元组。
+
+        Returns:
+            Exact row index, or ``None`` when this fill was not pre-solved.
+            精确表行；未预求解该颜色时返回 ``None``。
+        """
+
+        key = self._normalize_rgb_key(rgb)
+        if key is None:
+            return None
+        return self._exact_fill_indices.get(key)
+
     # ------------------------------------------------------------------
     # Solve API
     # ------------------------------------------------------------------
@@ -410,7 +430,6 @@ class MaterialVectorMatcher:
                 work_units_per_worker=(
                     _VECTOR_MATERIAL_WORK_UNITS_PER_WORKER
                 ),
-                estimated_worker_bytes=_ESTIMATED_VECTOR_WORKER_BYTES,
             )
             effective_parallelism = parallelism_plan.workers
             self.effective_parallelism_workers = max(
@@ -445,7 +464,6 @@ class MaterialVectorMatcher:
                     "cpu_fair_share_ceiling": int(
                         parallelism_plan.cpu_fair_share_ceiling,
                     ),
-                    "memory_ceiling": int(parallelism_plan.memory_ceiling),
                     "demand_snapshot_fallback": bool(
                         parallelism_plan.demand_snapshot_fallback,
                     ),
@@ -761,9 +779,11 @@ class MaterialVectorMatcher:
             self._matched_rgbs = np.zeros((0, 3), dtype=np.uint8)
             self._recipes = np.zeros((0, self.layer_count), dtype=np.int32)
             self._kdtree = None
+            self._exact_fill_indices = {}
             return
 
         keys = sorted(self._cached.keys())
+        self._exact_fill_indices = {key: index for index, key in enumerate(keys)}
         self._fill_rgbs = np.array(keys, dtype=np.uint8)
         # Lab of the source fills — KDTree queries from
         # ``_match_colors`` use Lab of the SVG fill colour.

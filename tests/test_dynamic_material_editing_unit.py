@@ -285,6 +285,169 @@ def test_automatic_dynamic_sync_uses_exact_solver_and_saves_metadata() -> None:
     assert cache["material_solver_info"] == solver_info
 
 
+def test_dynamic_sync_preserves_applied_recipe_mask_after_live_selection_changes() -> None:
+    """A committed recipe region remains manual after the editor selects B."""
+
+    from api.routers.converter import replace
+    from api.selection_state import RECIPE_OVERRIDE_APPLIED_MASKS_KEY, pack_applied_region_mask
+
+    region_a_mask = np.asarray([[True, False]], dtype=bool)
+    region_b_mask = np.asarray([[False, True]], dtype=bool)
+    dynamic_info = {
+        "enabled": True,
+        "colors": [
+            {
+                "target_srgb": [10, 20, 30],
+                "matched_srgb": [11, 22, 33],
+                "print_recipe_top_to_bottom": [0, 0, 0, 0, 0, 0, 0],
+            },
+            {
+                "target_srgb": [9, 9, 9],
+                "matched_srgb": [44, 55, 66],
+                "print_recipe_top_to_bottom": [1, 1, 1, 1, 1, 1, 1],
+            },
+        ],
+        "benefit_curve": [],
+    }
+    session_data = {
+        "material_source": "material_archive",
+        "selected_materials": ["mat-a", "mat-b"],
+        "material_backing_material_index": 1,
+        "material_layer_height_mm": 0.08,
+        "material_dynamic_layer_count_enabled": True,
+        "material_min_layer_count": 5,
+        "material_max_layer_count": 7,
+        "material_delta_e00_tolerance": 0.4,
+        # The live editor selection now points at B. It must not replace A's
+        # persisted mask captured when A's recipe was applied.
+        "selected_region_masks": {"region-b": region_b_mask},
+        "recipe_overrides": [{"region_id": "region-a"}],
+        RECIPE_OVERRIDE_APPLIED_MASKS_KEY: {
+            "region-a": pack_applied_region_mask(region_a_mask),
+        },
+    }
+    cache = {
+        "material_matrix": np.asarray(
+            [[[7, 7, 7, 7, 7, 7, 7], [6, 6, 6, 6, 6, 6, 6]]],
+            dtype=np.int16,
+        ),
+        "mask_solid": np.asarray([[True, True]], dtype=bool),
+        "quantized_image": np.asarray(
+            [[[10, 20, 30], [1, 2, 3]]],
+            dtype=np.uint8,
+        ),
+    }
+    updated_rgb = np.asarray([[[200, 201, 202], [9, 9, 9]]], dtype=np.uint8)
+    diff_mask = np.asarray([[False, True]], dtype=bool)
+    fixed_cache = MagicMock()
+
+    with (
+        patch.object(replace, "load_multiple_materials", return_value=[object(), object()]),
+        patch.object(
+            replace,
+            "_solve_dynamic_material_targets",
+            return_value=(
+                np.asarray([[11, 22, 33], [44, 55, 66]], dtype=np.uint8),
+                np.zeros((2, 7), dtype=np.int32),
+                np.asarray([0.1, 0.2]),
+                dynamic_info,
+                {"dynamic_engine": "test"},
+            ),
+        ),
+        patch.object(
+            replace,
+            "load_material_solver_cache_with_fallback",
+            return_value=(fixed_cache, 64),
+        ),
+    ):
+        replace._sync_material_archive_matrix_for_diff(
+            session_data,
+            cache,
+            diff_mask,
+            updated_rgb,
+        )
+
+    # A was committed with a hand-authored recipe and is outside the current
+    # edit B. Both its RGB and matrix must therefore remain untouched.
+    np.testing.assert_array_equal(updated_rgb[0, 0], [200, 201, 202])
+    np.testing.assert_array_equal(
+        cache["material_matrix"][0, 0], [7, 7, 7, 7, 7, 7, 7]
+    )
+    np.testing.assert_array_equal(updated_rgb[0, 1], [44, 55, 66])
+    np.testing.assert_array_equal(
+        cache["material_matrix"][0, 1], [1, 1, 1, 1, 1, 1, 1]
+    )
+
+
+def test_reset_does_not_clear_session_edit_state_before_cache_commit() -> None:
+    """A failed reset keeps the previously committed session state intact."""
+
+    from api.preview_cache_artifacts import _PreviewCacheTransaction
+    from api.routers.converter import replace
+    from api.schemas.converter import ResetReplacementsRequest
+    from api.selection_state import RECIPE_OVERRIDE_APPLIED_MASKS_KEY
+
+    store = SessionStore(ttl=1800)
+    registry = FileRegistry()
+    session_id = store.create()
+    original_rgb = np.asarray([[[10, 20, 30]]], dtype=np.uint8)
+    edited_rgb = np.asarray([[[40, 50, 60]]], dtype=np.uint8)
+    original_matrix = np.zeros((1, 1, 7), dtype=np.int16)
+    store.put(
+        session_id,
+        "preview_cache",
+        {
+            "matched_rgb": edited_rgb.copy(),
+            "original_matched_rgb": original_rgb.copy(),
+            "material_matrix": np.ones((1, 1, 7), dtype=np.int16),
+            "original_material_matrix": original_matrix.copy(),
+            "quantized_image": edited_rgb.copy(),
+            "original_quantized_image": original_rgb.copy(),
+            "mask_solid": np.ones((1, 1), dtype=bool),
+        },
+    )
+    previous_regions = [{"selected_color": "#101010", "replacement_color": "#202020"}]
+    previous_history = [{"label": "replace"}]
+    previous_overrides = [{"region_id": "region-a", "recipe": [0, 1]}]
+    previous_masks = {"region-a": {"shape": [1, 1], "packed": np.asarray([128], dtype=np.uint8)}}
+    store.put(session_id, "replacement_regions", previous_regions)
+    store.put(session_id, "replacement_history", previous_history)
+    store.put(session_id, "recipe_overrides", previous_overrides)
+    store.put(session_id, "recipe_override_count", 1)
+    store.put(session_id, RECIPE_OVERRIDE_APPLIED_MASKS_KEY, previous_masks)
+
+    try:
+        with patch.object(
+            _PreviewCacheTransaction,
+            "commit",
+            side_effect=OSError("injected cache commit failure"),
+        ), patch.object(replace, "schedule_glb_build", return_value=None):
+            with pytest.raises(HTTPException) as exc_info:
+                replace.reset_replacements(
+                    ResetReplacementsRequest(session_id=session_id),
+                    store,
+                    registry,
+                )
+
+        assert exc_info.value.status_code == 500
+        session_data = store.get(session_id)
+        assert session_data["replacement_regions"] == previous_regions
+        assert session_data["replacement_history"] == previous_history
+        assert session_data["recipe_overrides"] == previous_overrides
+        assert session_data["recipe_override_count"] == 1
+        assert set(session_data[RECIPE_OVERRIDE_APPLIED_MASKS_KEY]) == {"region-a"}
+        np.testing.assert_array_equal(
+            session_data[RECIPE_OVERRIDE_APPLIED_MASKS_KEY]["region-a"]["packed"],
+            previous_masks["region-a"]["packed"],
+        )
+        np.testing.assert_array_equal(
+            session_data["preview_cache"]["matched_rgb"], edited_rgb
+        )
+    finally:
+        registry.clear_all()
+        store.clear_all()
+
+
 def test_manual_actual_top_to_bottom_recipe_pads_with_explicit_backing() -> None:
     from api.routers.converter import replace
 

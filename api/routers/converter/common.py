@@ -20,6 +20,7 @@ from api.preview_cache_artifacts import (
     hydrate_preview_cache,
     is_preview_cache_artifact_ref,
 )
+from api.selection_state import RECIPE_OVERRIDE_APPLIED_MASKS_KEY
 from api.session_store import SessionStore
 from api.structured_logging import bind_session_id, get_logger
 from config import PrinterConfig
@@ -36,18 +37,18 @@ from core.model_surface.validation import (
 from core.pipeline._input_validation_common import (
     VECTOR_NATIVE_REQUIRES_SVG_DETAIL,
 )
-from core.vector_diagnostics import (
-    SVG_INTERSECTING_COMPOUND_COMPLEXITY_DIAGNOSTIC,
-)
 from .source_validation import (
     SOURCE_SVG_NO_RENDERABLE_GEOMETRY_DETAIL,
     SOURCE_SVG_NO_RENDERABLE_GEOMETRY_ERROR,
-    SOURCE_SVG_TOO_COMPLEX_DETAIL,
-    SOURCE_SVG_TOO_COMPLEX_ERROR,
 )
 
 EPHEMERAL_PREVIEW_TTL_SECONDS = 600
 BATCH_DOWNLOAD_TTL_SECONDS = 3600
+# Canonical definition lives in api.selection_state (importable by
+# replacement_history without router-layer cycles); imported above and
+# re-exported so converter routers keep a single import site.
+# 规范定义在 api.selection_state（replacement_history 可无环导入）；顶部
+# 导入后由此再导出，转换器路由仍从单一入口导入。
 VECTOR_NATIVE_REQUIRES_SVG_ERROR = "vector_native_requires_svg"
 MODEL_SURFACE_PUBLIC_ERROR_MESSAGES: dict[str, str] = {
     MODEL_SURFACE_EMPTY_GEOMETRY: (
@@ -116,6 +117,20 @@ MATERIAL_SOLVER_CACHE_UNAVAILABLE_DETAIL = (
     "Material solver data is unavailable. Re-run preview and try again."
 )
 log = get_logger(__name__)
+
+
+def _validate_svg_hole_compensation(*, enabled, image_path, modeling_mode) -> None:
+    """Map unsupported SVG compensation scope to an actionable request error."""
+    from core.svg_hole_compensation import validate_svg_compensation_scope
+
+    try:
+        validate_svg_compensation_scope(
+            enabled=enabled, image_path=image_path, modeling_mode=modeling_mode,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 _VALID_MATERIAL_SOURCES = {"lut", "material_archive"}
 _RELIEF_HEIGHT_EPSILON_MM = 1e-9
 _DYNAMIC_MATERIAL_SETTING_FIELDS = (
@@ -157,20 +172,6 @@ _SVG_NO_GEOMETRY_STATUS_LINES = frozenset(
 _VECTOR_NATIVE_REQUIRES_SVG_STATUS_LINES = frozenset(
     {"⚠️ Vector Native mode requires SVG files!"}
 )
-_SVG_COMPLEXITY_STATUS_LINES = frozenset(
-    {
-        (
-            "[VECTOR_PREVIEW] "
-            f"{SVG_INTERSECTING_COMPOUND_COMPLEXITY_DIAGNOSTIC}"
-        ),
-        (
-            "Vector processing failed: "
-            f"{SVG_INTERSECTING_COMPOUND_COMPLEXITY_DIAGNOSTIC}"
-        ),
-    }
-)
-
-
 def _public_pipeline_validation_detail(
     status_msg: object,
     *,
@@ -200,18 +201,6 @@ def _public_pipeline_validation_detail(
         return {
             "error": VECTOR_NATIVE_REQUIRES_SVG_ERROR,
             "message": VECTOR_NATIVE_REQUIRES_SVG_DETAIL,
-        }
-
-    if (
-        source_is_user_upload
-        and not surface_overlay
-        and normalized_mode == "vector"
-        and normalized_source.endswith(".svg")
-        and first_line in _SVG_COMPLEXITY_STATUS_LINES
-    ):
-        return {
-            "error": SOURCE_SVG_TOO_COMPLEX_ERROR,
-            "message": SOURCE_SVG_TOO_COMPLEX_DETAIL,
         }
 
     if (
@@ -651,6 +640,11 @@ def _validate_material_archive_relief_minimum_height(
 
 
 def _handle_core_error(e: Exception, context: str) -> NoReturn:
+    # Recoverable admission errors are already logged once at the rejecting
+    # core guard.  Re-logging them with a traceback here would turn an expected
+    # 422 into duplicate ERROR telemetry.
+    if bool(getattr(e, "recoverable", False)):
+        raise to_http_exception(e, context)
     log.exception(
         "Converter operation failed",
         extra={

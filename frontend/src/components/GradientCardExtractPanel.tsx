@@ -33,6 +33,7 @@ import {
   resolveSectionCardClass,
 } from "./ui/panelPrimitives";
 import HelpDot from "./ui/HelpDot";
+import { WIKI_DOCS } from "../utils/wikiDocs";
 
 const textInputClass =
   "min-h-10 w-full rounded-2xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900 dark:text-slate-100";
@@ -107,7 +108,7 @@ const AnchorCornerSelect = ({
         options={options}
         labelAccessory={
           tooltip ? (
-            <HelpDot title={label} description={tooltip} />
+            <HelpDot title={label} description={tooltip} wikiPath={WIKI_DOCS.gradientCardExtraction} />
           ) : undefined
         }
       />
@@ -368,6 +369,8 @@ const CornerNudgeControl = ({
       )}
       <Slider
         label={t("ext_nudge_step_label")}
+        tooltip={t("ext_nudge_step_hint")}
+        wikiPath={WIKI_DOCS.gradientCardExtraction}
         value={nudgeStep}
         min={1}
         max={10}
@@ -936,8 +939,13 @@ export default function GradientCardExtractPanel() {
         <div className="grid gap-6 lg:grid-cols-2 w-full">
 <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4 h-full`}>
           <div>
-            <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
-              {t("mat_gradient_upload_title")}
+            <h3 className="flex items-center gap-1.5 text-base font-semibold text-slate-900 dark:text-slate-50">
+              <span>{t("mat_gradient_upload_title")}</span>
+              <HelpDot
+                title={t("mat_gradient_upload_title")}
+                description={t("mat_gradient_upload_desc")}
+                wikiPath={WIKI_DOCS.gradientCardExtraction}
+              />
             </h3>
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
               {t("mat_gradient_upload_desc")}
@@ -1007,7 +1015,7 @@ export default function GradientCardExtractPanel() {
 </div>
 
         <section data-testid="gradient-colorchecker-toggle-section" className={resolveSectionCardClass(workspace.mode)}>
-          <Checkbox label={t("ext_colorchecker_label")} tooltip={t("ext_colorchecker_hint")} checked={colorchecker_enabled} onChange={setColorcheckerEnabled} disabled={isExtracting} />
+          <Checkbox label={t("ext_colorchecker_label")} tooltip={t("ext_colorchecker_hint")} wikiPath={WIKI_DOCS.colorcheckerCalibration} checked={colorchecker_enabled} onChange={setColorcheckerEnabled} disabled={isExtracting} />
         </section>
 
         <AnimatePresence initial={false}>

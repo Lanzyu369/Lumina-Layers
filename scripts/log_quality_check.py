@@ -413,24 +413,34 @@ def run_fast_mode(temp_log_path: Path, workflow: list[str]) -> dict[str, Any]:
         mock_pool = MagicMock(spec=WorkerPoolManager)
         mock_pool.max_workers = 1
         mock_pool.is_alive = True
-        mock_pool.submit = AsyncMock(
-            side_effect=lambda worker_fn, *args: _build_mock_worker_result(
+
+        def build_mock_submission_result(
+            worker_fn: Callable[..., Any],
+            *args: Any,
+            **submission_options: Any,
+        ) -> dict[str, Any]:
+            """Mirror pool metadata kwargs without forwarding them to workers."""
+
+            unexpected = set(submission_options)
+            if unexpected:
+                names = ", ".join(sorted(unexpected))
+                raise QualityCheckError(
+                    f"Unexpected fast-mode worker submission options: {names}"
+                )
+            return _build_mock_worker_result(
                 worker_fn,
                 created_paths,
                 np,
                 Image,
                 *args,
             )
+
+        mock_pool.submit = AsyncMock(
+            side_effect=build_mock_submission_result
         )
         mock_pool.submit_timed = AsyncMock(
-            side_effect=lambda worker_fn, *args: (
-                _build_mock_worker_result(
-                    worker_fn,
-                    created_paths,
-                    np,
-                    Image,
-                    *args,
-                ),
+            side_effect=lambda worker_fn, *args, **kwargs: (
+                build_mock_submission_result(worker_fn, *args, **kwargs),
                 {
                     "queue_wait_s": 0.0,
                     "worker_execution_s": 0.001,

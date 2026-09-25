@@ -135,6 +135,7 @@ describe("recipe/exportRecipe", () => {
         buildPlateId: "textured-pei-plate",
         svgPixelsPerMm: 18.5,
         enableBaseLayerHeightModifier: false,
+        enableWipeTowerAutoPlacement: false,
       });
 
       const recipe = exportConverterRecipe(makeState(), settings, "fp");
@@ -144,6 +145,7 @@ describe("recipe/exportRecipe", () => {
       expect(recipe.device.device_profile_id).toBe("OrcaSlicer:bbl:bambu-lab-p1s:0.2");
       expect(recipe.device.build_plate_id).toBe("textured-pei-plate");
       expect(recipe.device.enable_base_layer_height_modifier).toBe(false);
+      expect(recipe.device.enable_wipe_tower_auto_placement).toBe(false);
       expect(recipe.base.svg_pixels_per_mm).toBe(18.5);
     });
 

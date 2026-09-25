@@ -90,12 +90,21 @@ class LutCatalogIndexer:
         preset_dir: Root preset directory. (预设根目录)
         alias_resolver: Alias resolver. (别名解析器)
         parser: LUT parser. (LUT 解析器)
+        additional_roots: Named external writable roots. 命名的外部可写目录。
     """
 
     CATALOG_SIGNATURE_TTL_SECONDS = 5.0
 
-    def __init__(self, *, preset_dir: Path, alias_resolver: AliasResolver, parser: LutParser) -> None:
-        self._preset_dir = Path(preset_dir)
+    def __init__(
+        self,
+        *,
+        preset_dir: Path,
+        alias_resolver: AliasResolver,
+        parser: LutParser,
+        additional_roots: tuple[tuple[str, Path], ...] = (),
+    ) -> None:
+        self._preset_dir = Path(preset_dir).resolve()
+        self._scan_roots = self._normalize_scan_roots(additional_roots)
         self._alias_resolver = alias_resolver
         self._parser = parser
         self._candidate_cache: dict[str, tuple[Path, ...]] | None = None
@@ -253,13 +262,22 @@ class LutCatalogIndexer:
         if self._candidate_cache is not None and not refresh:
             return self._candidate_cache
         discovered: dict[str, list[Path]] = {}
-        for ext in _ALLOWED_EXTENSIONS:
-            for file_path in glob.glob(str(self._preset_dir / "**" / f"*{ext}"), recursive=True):
-                resolved = Path(file_path).resolve()
-                if not resolved.is_file():
-                    continue
-                name = self._display_name_for_path(resolved)
-                discovered.setdefault(name, []).append(resolved)
+        seen_paths: set[Path] = set()
+        for _label, root in self._scan_roots:
+            for ext in _ALLOWED_EXTENSIONS:
+                for file_path in glob.glob(
+                    str(root / "**" / f"*{ext}"),
+                    recursive=True,
+                ):
+                    resolved = Path(file_path).resolve()
+                    if not resolved.is_file() or resolved in seen_paths:
+                        continue
+                    virtual_parts = self._virtual_relative_parts(resolved)
+                    if not virtual_parts or virtual_parts[0] == "_sync":
+                        continue
+                    seen_paths.add(resolved)
+                    name = self._display_name_for_path(resolved)
+                    discovered.setdefault(name, []).append(resolved)
 
         candidates = {
             name: tuple(
@@ -297,17 +315,14 @@ class LutCatalogIndexer:
         return (stat.st_mtime_ns, stat.st_size)
 
     def _display_name_for_path(self, path: Path) -> str:
-        rel_parts = path.relative_to(self._preset_dir).parts
+        rel_parts = self._virtual_relative_parts(path)
         stem = path.stem
         if len(rel_parts) >= 2:
             return " - ".join([*rel_parts[:-1], stem])
         return stem
 
     def _infer_from_folder(self, path: Path) -> tuple[str, str]:
-        try:
-            rel_parts = path.relative_to(self._preset_dir).parts
-        except ValueError:
-            return "", ""
+        rel_parts = self._virtual_relative_parts(path)
         if len(rel_parts) < 2 or rel_parts[0] == "Custom":
             return "", ""
         vendor = str(rel_parts[0])
@@ -333,10 +348,7 @@ class LutCatalogIndexer:
         material = self._infer_material_from_stem(path.stem)
         underscore_parts = [part.strip() for part in Path(path).stem.split("_") if part.strip()]
         if len(underscore_parts) >= 2 and material:
-            try:
-                rel_parts = path.relative_to(self._preset_dir).parts
-            except ValueError:
-                rel_parts = ()
+            rel_parts = self._virtual_relative_parts(path)
             if (
                 len(rel_parts) >= 2
                 and rel_parts[0] != "Custom"
@@ -361,6 +373,39 @@ class LutCatalogIndexer:
                 if any(self._matches_material_candidate(token, candidate) for token in tokens):
                     return canonical
         return ""
+
+    def _normalize_scan_roots(
+        self,
+        additional_roots: tuple[tuple[str, Path], ...],
+    ) -> tuple[tuple[str, Path], ...]:
+        roots: list[tuple[str, Path]] = [("Preset", self._preset_dir)]
+        seen = {self._preset_dir}
+        for raw_label, raw_root in additional_roots:
+            label = str(raw_label).strip()
+            root = Path(raw_root).resolve()
+            if not label or root in seen:
+                continue
+            try:
+                root.relative_to(self._preset_dir)
+            except ValueError:
+                pass
+            else:
+                continue
+            roots.append((label, root))
+            seen.add(root)
+        return tuple(roots)
+
+    def _virtual_relative_parts(self, path: Path) -> tuple[str, ...]:
+        resolved = path.resolve()
+        for label, root in self._scan_roots:
+            try:
+                relative = resolved.relative_to(root)
+            except ValueError:
+                continue
+            if label == "Preset":
+                return relative.parts
+            return (label, *relative.parts)
+        return ()
 
     @staticmethod
     def _matches_material_candidate(token: str, candidate: str) -> bool:

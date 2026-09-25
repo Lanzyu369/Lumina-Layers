@@ -5,7 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from fastapi import HTTPException
-from core.errors import CoreDependencyError, CoreError, CoreProcessingError, CoreValidationError
+from core.errors import (
+    CoreDependencyError,
+    CoreError,
+    CoreProcessingError,
+    CoreValidationError,
+)
 from core.material_dynamic_solver import (
     DynamicMaterialCandidateError,
     DynamicMaterialSolverError,

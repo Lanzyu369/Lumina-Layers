@@ -15,7 +15,7 @@ structured-logging event names.
 Public callables (re-exported by ``coordinator`` for backward compatibility):
 \u516c\u5171\u8c03\u7528\u70b9\uff08``coordinator`` \u91cd\u5bfc\u51fa\u4ee5\u4fdd\u8bc1\u5411\u540e\u517c\u5bb9\uff09\uff1a
 
-- ``_run_vector_branch(ctx) -> dict``: SVG \u2192 3MF/GLB/2D \u9884\u89c8 \u5b8c\u6574\u8f6c\u6362\u5206\u652f\u3002
+- ``_run_vector_branch(ctx) -> dict``: SVG \u2192 3MF/2D + reusable lightweight GLB reference.
 - ``_run_vector_preview_branch(ctx) -> dict``: SVG \u9884\u89c8\u7f13\u5b58\u6784\u5efa\u3002
 - ``_update_bambu_base_layer_ctx_for_vector(...)``: Bambu \u5e95\u677f\u53ec\u552e\u5c01\u88c5\u3002
 - ``_log_vector_timings(...)``: \u8ba1\u65f6\u660e\u7ec6\u8f93\u51fa\u3002
@@ -28,26 +28,29 @@ import math
 import os
 import time
 from copy import deepcopy
-from types import SimpleNamespace
+from typing import Any
 
 import cv2  # noqa: F401  -- imported for side-effect parity with coordinator
 import numpy as np
 import trimesh
-from shapely.geometry import box
-from shapely.ops import unary_union
-from shapely.validation import make_valid
 
 from api.structured_logging import get_logger
 from config import BedManager, PrinterConfig, normalize_nozzle_size
-from core.errors import CachedPreviewAnalysisError
+from core.errors import (
+    CachedPreviewAnalysisError,
+)
 from core.geometry_utils import create_keychain_loop
-from core.pipeline import p06_bed_rendering, s09_export_3mf, vector_glb_preview
+from core.pipeline import p06_bed_rendering, s09_export_3mf
 from core.pipeline.pipeline_utils import extract_color_palette
 from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
 from core.pipeline.s08_auxiliary_meshes import (
     _coerce_preview_rgba,
 )
+from core.vector_structure import resolve_structure_plan
 from core.preview_analysis_cache import preview_analysis_reuse_is_required
+from core.vector_layer_geometry import (
+    build_vector_layered_volume,
+)
 
 # ---------------------------------------------------------------------------
 # Cycle-safe re-import of small helpers that originate in coordinator.
@@ -87,7 +90,6 @@ except ImportError as exc:
 # log audits attach handlers to ``lumina.core.pipeline.coordinator``).
 # 日志命名空间故意继续沿用 coordinator，保证抽离后日志可观察性零变更。
 log = get_logger("core.pipeline.coordinator")
-
 
 # ---------------------------------------------------------------------------
 # Layer-0 (appearance face) diagnostics
@@ -190,57 +192,6 @@ def _shape_recipe0_histogram(matched_shapes: list) -> dict:
         "recipe0_by_shape_count": by_shape,
         "recipe0_by_area": by_area_rounded,
     }
-
-
-def _make_vector_glb_preview_scene(
-    scene,
-    *,
-    structure_mode: object,
-    color_mode: object,
-    enable_relief: bool = False,
-):
-    """Return a display-oriented copy of a vector scene for GLB previews.
-
-    Flat single-sided 4-color vector exports place the backing above the color
-    layers for print assembly. The app preview is a display surface, so it
-    mirrors only that flat GLB source scene and keeps relief scenes unchanged.
-
-    单面 4 色矢量导出的打印 scene 会把底板放在颜色层上方；应用内 3D 预览是
-    展示面，因此只镜像 GLB 的输入 scene，不改变 3MF 导出的原始几何。
-    """
-
-    if enable_relief:
-        return scene
-
-    structure_value = str(structure_mode or "")
-    color_mode_value = str(color_mode or "")
-    is_single_sided = "单面" in structure_value or "Single" in structure_value
-    if not is_single_sided or "5-Color Extended" in color_mode_value:
-        return scene
-
-    try:
-        bounds = scene.bounds
-        z_min = float(bounds[0][2])
-        z_max = float(bounds[1][2])
-    except (AttributeError, IndexError, TypeError, ValueError):
-        return scene
-    if not np.isfinite(z_min) or not np.isfinite(z_max) or z_max <= z_min:
-        return scene
-
-    import trimesh as _trimesh
-
-    preview_scene = _trimesh.Scene()
-    mirror_z = np.eye(4)
-    mirror_z[2, 2] = -1.0
-    mirror_z[2, 3] = z_min + z_max
-    for geom_name, source_geom in scene.geometry.items():
-        try:
-            geom = source_geom.copy()
-            geom.apply_transform(mirror_z)
-        except COORDINATOR_HANDLED_ERRORS:
-            geom = source_geom
-        preview_scene.add_geometry(geom, geom_name=geom_name)
-    return preview_scene
 
 
 def _per_layer_channel_histogram(material_matrix: object, mask_solid: object | None) -> dict:
@@ -752,77 +703,6 @@ def _resolve_vector_outline_base_aux_style(
     return rgba, material_name
 
 
-def _vector_outline_union_geometry(matched_shapes):
-    """Return the shapely union of every non-empty ``matched_shapes`` polygon.
-    返回所有非空 matched_shapes 几何的 shapely union。
-
-    Performs the standard validity dance (``make_valid`` then ``buffer(0)``
-    fallback) so downstream ``buffer().difference()`` cannot raise on
-    self-intersecting input. Returns ``None`` when no usable geometry is
-    available — caller treats that as decision-matrix row D6 (no shapes
-    available) and emits the unsupported-subset warning.
-
-    Args:
-        matched_shapes: Iterable of shape dicts produced by
-            ``VectorProcessor.analyze_svg`` (each has a ``geometry`` key).
-
-    Returns:
-        Shapely geometry on success, ``None`` when union is empty.
-    """
-    geoms = []
-    for shape in matched_shapes or []:
-        if not isinstance(shape, dict):
-            continue
-        geom = shape.get("geometry")
-        if geom is None:
-            continue
-        try:
-            if getattr(geom, "is_empty", False):
-                continue
-        except (AttributeError, TypeError):
-            continue
-        geoms.append(geom)
-
-    if not geoms:
-        return None
-
-    try:
-        union = unary_union(geoms)
-    except COORDINATOR_HANDLED_ERRORS:
-        # GEOS occasionally fails on pathological SVG outputs; try a pairwise
-        # fallback so a single bad shape cannot kill the whole outline.
-        # GEOS 偶发地在异常 SVG 上抛错，逐个并集兜底，避免因为单个坏 shape
-        # 导致整组 outline 失败。
-        union = None
-        for poly in geoms:
-            if union is None:
-                union = poly
-                continue
-            try:
-                union = union.union(poly)
-            except COORDINATOR_HANDLED_ERRORS:
-                continue
-
-    if union is None:
-        return None
-    if getattr(union, "is_empty", True):
-        return None
-
-    if not getattr(union, "is_valid", True):
-        try:
-            repaired = make_valid(union)
-            if repaired is not None and not getattr(repaired, "is_empty", True):
-                union = repaired
-        except COORDINATOR_HANDLED_ERRORS:
-            try:
-                union = union.buffer(0)
-            except COORDINATOR_HANDLED_ERRORS:
-                return None
-    if getattr(union, "is_empty", True):
-        return None
-    return union
-
-
 def _resolve_vector_outline_z_span(
     ctx: dict,
     analysis,
@@ -837,8 +717,8 @@ def _resolve_vector_outline_z_span(
     ``ctx["total_layers"]``. Instead, mirror ``VectorProcessor.build_mesh``:
     non-5-color double-sided models have colour layers below and above the
     backing; 5-Color Extended keeps the optical stack above the backing. If
-    coating is enabled, it extends below zero and the outline must include
-    that negative Z span as raster S08 does.
+    coating is enabled, it exclusively owns the interval below zero;
+    the outline starts at the coating upper surface, as raster S08 does.
 
     矢量分支不经过 S08，没有 ``total_layers`` 可用；这里按
     ``VectorProcessor.build_mesh`` 的 Z 轴布局计算外轮廓高度。
@@ -879,55 +759,9 @@ def _resolve_vector_outline_z_span(
     z_min = 0.0
     z_max = backing_height_mm + color_passes * color_height_mm
 
-    if bool(ctx.get("enable_coating", False)):
-        try:
-            coating_height_mm = float(ctx.get("coating_height_mm", layer_h))
-        except (TypeError, ValueError):
-            coating_height_mm = layer_h
-        if np.isfinite(coating_height_mm) and coating_height_mm > 0:
-            coating_layers = max(1, int(round(coating_height_mm / layer_h)))
-            z_min = -coating_layers * layer_h
-            if is_double and not is_5color:
-                z_max += coating_layers * layer_h
-
     if not np.isfinite(z_max) or z_max <= z_min:
         z_max = z_min + backing_height_mm
     return float(z_min), float(z_max)
-
-
-def _clip_vector_outline_buffer_to_expected_bounds(expanded, union, width_units: float):
-    """Clip miter spikes back to the requested outline envelope.
-    将 miter 外扩产生的尖刺裁回请求的 outline 外包络范围。
-
-    ``buffer(..., join_style="mitre")`` keeps rectangular artwork corners
-    crisp, but acute SVG fragments can extend almost ``mitre_limit * width``
-    past the real silhouette. The user-facing outline width should still be
-    the requested width, so cap the expanded geometry to
-    ``union.bounds + width_units`` before subtracting the original union.
-    """
-    try:
-        min_x, min_y, max_x, max_y = (float(v) for v in union.bounds)
-    except COORDINATOR_HANDLED_ERRORS:
-        return expanded
-
-    bounds = np.asarray([min_x, min_y, max_x, max_y, float(width_units)], dtype=float)
-    if not np.all(np.isfinite(bounds)) or width_units <= 0:
-        return expanded
-
-    try:
-        allowed = box(
-            min_x - width_units,
-            min_y - width_units,
-            max_x + width_units,
-            max_y + width_units,
-        )
-        clipped = expanded.intersection(allowed)
-    except COORDINATOR_HANDLED_ERRORS:
-        return expanded
-
-    if clipped is None or getattr(clipped, "is_empty", True):
-        return expanded
-    return clipped
 
 
 def _resolve_vector_outline_export_size_mm(
@@ -937,14 +771,14 @@ def _resolve_vector_outline_export_size_mm(
     """Return the vector export width/height in millimetres, if available.
     返回 vector 导出宽高（毫米），不可可靠解析时返回 ``None``。
 
-    ``VectorProcessor.build_mesh`` derives its final coordinate transforms
-    from ``analysis.bbox[2:4] * analysis.scale_factor``. The outline helper
-    must use the same source so auxiliary outline geometry lands in the same
-    XY coordinate system as the colour and backing meshes.
+    ``VectorProcessor.build_mesh`` requires the same finite canvas dimensions
+    before it can construct body geometry.  The outline helper keeps this
+    guard so auxiliary geometry never applies an export transform to an
+    incomplete analysis object.
 
-    ``VectorProcessor.build_mesh`` 使用 ``analysis.bbox[2:4] *
-    analysis.scale_factor`` 计算最终坐标变换；Outline 必须使用同一来源，
-    才能与主体色块和底板落在同一个 XY 坐标系。
+    ``VectorProcessor.build_mesh`` 同样要求 ``analysis.bbox[2:4] *
+    analysis.scale_factor`` 是有限画布尺寸；Outline 保留这一门禁，避免对
+    不完整分析对象应用导出变换。
     """
     bbox_raw = getattr(analysis, "bbox", None)
     if not isinstance(bbox_raw, (list, tuple, np.ndarray)) or len(bbox_raw) < 4:
@@ -982,14 +816,10 @@ def _apply_vector_outline_export_transform(
     Y-down 坐标翻到打印坐标，再对非 5 色单面导出做 X 镜像。Outline 是在
     ``build_mesh`` 外部生成的，因此这里显式复用同一组变换。
     """
-    size_mm = _resolve_vector_outline_export_size_mm(analysis, scale_factor)
-    if size_mm is None:
+    if _resolve_vector_outline_export_size_mm(analysis, scale_factor) is None:
         return
-    width_mm, height_mm = size_mm
-
     y_flip = np.eye(4)
     y_flip[1, 1] = -1.0
-    y_flip[1, 3] = float(height_mm)
     outline_mesh.apply_transform(y_flip)
 
     structure_mode_text = str(ctx.get("structure_mode", "") or "")
@@ -1008,7 +838,6 @@ def _apply_vector_outline_export_transform(
     if is_single_sided and not is_5color:
         mirror_x = np.eye(4)
         mirror_x[0, 0] = -1.0
-        mirror_x[0, 3] = float(width_mm)
         outline_mesh.apply_transform(mirror_x)
 
 
@@ -1020,160 +849,35 @@ def _generate_vector_outline_mesh(
     ctx: dict,
     export_color_mode: object | None = None,
 ) -> "trimesh.Trimesh | None":
-    """Build a ring-shaped Outline mesh from ``analysis.matched_shapes``.
-    从 ``analysis.matched_shapes`` 生成环形 Outline mesh。
+    """Extrude the shared structural ring above the coating surface.
 
-    Algorithm (Fix Implementation #3 in design.md / 数据·几何来源):
-        1. Take ``unary_union(s.geometry for s in matched_shapes)``;
-           run ``make_valid`` / ``buffer(0)`` if invalid.
-        2. ring = ``union.buffer(outline_width_units).difference(union)``
-           where ``outline_width_units = outline_width_mm / scale_factor``
-           (vector geometry lives in pre-scale SVG units; ``build_mesh``
-           multiplies by ``scale_factor`` during extrusion).
-        3. Extrude ring with ``trimesh.creation.extrude_polygon`` to the
-           same backing thickness used by the rest of the vector scene.
-        4. ``apply_scale`` by ``scale_factor`` so the mesh lands in the
-           same mm coordinate system as ``Board`` / colour slots.
-        5. Decorate with ``metadata['name'] = 'Outline'`` +
-           ``bambu_material_name`` and apply face colour.
-
-    The geometry source is **always** ``analysis.matched_shapes``, never
-    the raster ``mask_solid`` heuristic and never a fridge-magnet /
-    coating-modified backing mesh (per AGENTS Converter Regression
-    Checklist "outline 几何来源必须显式声明").
+    从共用结构计划生成描边；描边不进入透明镀层的高度区间。
 
     Args:
-        analysis: ``VectorAnalysis`` returned by ``VectorProcessor.analyze_svg``.
-            Must expose ``matched_shapes`` and ``scale_factor``.
-        outline_width_mm: Outline ring width in millimetres (already
-            validated to ``[0.5, 10.0]`` by ``ConvertGenerateRequest``).
-        base_aux_color: RGBA fill colour for the outline mesh.
-        base_aux_material_name: Bambu material slot name; written into
-            ``mesh.metadata['bambu_material_name']`` so the 3MF writer
-            picks the right material id.
-        ctx: Pipeline context (consumed for ``spacer_thick``).
+        analysis: Source SVG analysis. 源 SVG 解析结果。
+        outline_width_mm: Outline width in mm. 毫米描边宽度。
+        base_aux_color: Outline RGBA. 描边颜色。
+        base_aux_material_name: Material identity. 描边材料标识。
+        ctx: Generation parameters. 生成参数。
+        export_color_mode: Export orientation mode. 导出朝向模式。
 
     Returns:
-        ``trimesh.Trimesh`` on success; ``None`` when decision-matrix row
-        D5 / D6 is hit (no matched_shapes, empty union, or empty ring).
-        Caller is responsible for forcing ``ctx['enable_outline'] = False``
-        on a ``None`` return.
+        Outline mesh or None for an empty ring. 描边网格，空描边返回 None。
     """
-    matched_shapes = list(getattr(analysis, "matched_shapes", []) or [])
-    if not matched_shapes:
+    structure = resolve_structure_plan(analysis, float(outline_width_mm))
+    ring = structure.outline
+    if ring.is_empty:
         log.warning(
-            "Vector outline rejected: matched_shapes is empty",
-            extra={
-                "event": "vector_outline_rejected_unsupported",
-                "error_type": "unsupported_subset",
-                "unsupported_reason": "D6_no_matched_shapes",
-                "shape_count": 0,
-            },
-        )
-        return None
-
-    union = _vector_outline_union_geometry(matched_shapes)
-    if union is None:
-        log.warning(
-            "Vector outline rejected: matched_shapes union is empty / invalid",
-            extra={
-                "event": "vector_outline_rejected_unsupported",
-                "error_type": "unsupported_subset",
-                "unsupported_reason": "D6_union_empty",
-                "shape_count": len(matched_shapes),
-            },
-        )
-        return None
-
-    try:
-        scale_factor = float(getattr(analysis, "scale_factor", 1.0) or 1.0)
-    except (TypeError, ValueError):
-        scale_factor = 1.0
-    if scale_factor <= 0:
-        scale_factor = 1.0
-
-    # ``analysis.matched_shapes[*].geometry`` lives in pre-scale SVG units;
-    # build_mesh multiplies by ``scale_factor`` during extrude. Convert the
-    # outline_width_mm request back into the same pre-scale unit space so
-    # the resulting ring is exactly ``outline_width_mm`` wide once scaled
-    # back up to mm by ``apply_scale`` below.
-    # matched_shapes 的几何处于"预缩放 SVG 单位空间"，build_mesh 在挤出时
-    # 乘 scale_factor 得到 mm。这里把 outline_width_mm 反算到预缩放单位，
-    # 再走同样的 apply_scale，保证最终 ring 宽度恰好是请求的 mm 数。
-    width_units = float(outline_width_mm) / scale_factor
-
-    try:
-        expanded = union.buffer(width_units, join_style="mitre", mitre_limit=2.0)
-    except COORDINATOR_HANDLED_ERRORS:
-        try:
-            expanded = union.buffer(width_units)
-        except COORDINATOR_HANDLED_ERRORS as exc:
-            log.warning(
-                "Vector outline rejected: ring buffer failed",
-                extra={
-                    "event": "vector_outline_rejected_unsupported",
-                    "error_type": "unsupported_subset",
-                    "unsupported_reason": "D6_buffer_failed",
-                    "error_message": str(exc),
-                    "shape_count": len(matched_shapes),
-                },
-            )
-            return None
-
-    if not getattr(expanded, "is_valid", True):
-        try:
-            expanded = make_valid(expanded)
-        except COORDINATOR_HANDLED_ERRORS:
-            try:
-                expanded = expanded.buffer(0)
-            except COORDINATOR_HANDLED_ERRORS:
-                expanded = None
-
-    if expanded is None or getattr(expanded, "is_empty", True):
-        log.warning(
-            "Vector outline rejected: expanded buffer is empty",
-            extra={
-                "event": "vector_outline_rejected_unsupported",
-                "error_type": "unsupported_subset",
-                "unsupported_reason": "D6_expanded_empty",
-                "shape_count": len(matched_shapes),
-            },
-        )
-        return None
-
-    expanded = _clip_vector_outline_buffer_to_expected_bounds(
-        expanded,
-        union,
-        width_units,
-    )
-
-    try:
-        ring = expanded.difference(union)
-    except COORDINATOR_HANDLED_ERRORS as exc:
-        log.warning(
-            "Vector outline rejected: difference failed",
-            extra={
-                "event": "vector_outline_rejected_unsupported",
-                "error_type": "unsupported_subset",
-                "unsupported_reason": "D6_difference_failed",
-                "error_message": str(exc),
-                "shape_count": len(matched_shapes),
-            },
-        )
-        return None
-
-    if ring is None or getattr(ring, "is_empty", True):
-        log.warning(
-            "Vector outline rejected: ring geometry is empty",
+            "Vector outline rejected: structural ring is empty",
             extra={
                 "event": "vector_outline_rejected_unsupported",
                 "error_type": "unsupported_subset",
                 "unsupported_reason": "D6_ring_empty",
-                "shape_count": len(matched_shapes),
+                "outline_width_mm": float(outline_width_mm),
             },
         )
         return None
-
+    scale_factor = float(getattr(analysis, "scale_factor", 1.0))
     layer_h = _resolve_vector_layer_height_mm(ctx)
     z_min_mm, z_max_mm = _resolve_vector_outline_z_span(
         ctx,
@@ -1183,63 +887,25 @@ def _generate_vector_outline_mesh(
     )
     thickness_mm = max(layer_h, z_max_mm - z_min_mm)
     outline_layers = max(1, int(round(thickness_mm / layer_h)))
-    extrude_height_units = float(outline_layers)  # height in pre-scale units
+    outline_height_mm = float(outline_layers) * layer_h
 
-    # Iterate over the ring's polygonal parts (a ring around a multi-shape
-    # union is a MultiPolygon when the originals are disjoint) and extrude
-    # each piece independently. trimesh.creation.extrude_polygon accepts a
-    # single Polygon, so we explode and concatenate the pieces.
-    # ring 通常是 MultiPolygon，逐个 Polygon 挤出再拼回。
-    polys = []
-    if hasattr(ring, "geoms"):
-        polys = [g for g in ring.geoms if hasattr(g, "exterior") and not g.is_empty]
-    elif hasattr(ring, "exterior"):
-        polys = [ring]
-
-    if not polys:
-        log.warning(
-            "Vector outline rejected: ring has no polygonal parts",
-            extra={
-                "event": "vector_outline_rejected_unsupported",
-                "error_type": "unsupported_subset",
-                "unsupported_reason": "D6_ring_non_polygon",
-                "shape_count": len(matched_shapes),
-            },
-        )
+    outline_mesh = build_vector_layered_volume(
+        [
+            {
+                "geometry": ring,
+                "height": outline_height_mm,
+                "z_offset": z_min_mm,
+            }
+        ],
+        scale_mm_per_svg_unit=1.0,
+    )
+    if outline_mesh is None:
         return None
 
-    meshes: list = []
-    for poly in polys:
-        try:
-            piece = trimesh.creation.extrude_polygon(poly, height=extrude_height_units)
-        except COORDINATOR_HANDLED_ERRORS as exc:
-            log.warning(
-                "Vector outline polygon extrude skipped",
-                extra={
-                    "event": "vector_outline_polygon_extrude_failed",
-                    "error_type": type(exc).__name__,
-                    "error_message": str(exc),
-                },
-            )
-            continue
-        if piece is None or len(piece.vertices) == 0:
-            continue
-        # Pre-scale → mm: scale XY by scale_factor, Z by layer_height_mm so
-        # the outline sits in the same coordinate system as colour slots.
-        # 预缩放空间 → mm：XY 乘 scale_factor，Z 乘 layer_h，与色层同坐标系。
-        piece.apply_scale([scale_factor, scale_factor, layer_h])
-        if z_min_mm != 0.0:
-            piece.apply_translation([0.0, 0.0, z_min_mm])
-        meshes.append(piece)
-
-    if not meshes:
-        return None
-
-    if len(meshes) == 1:
-        outline_mesh = meshes[0]
-    else:
-        outline_mesh = trimesh.util.concatenate(meshes)
-
+    # The new builder already emits millimetres and independent component
+    # ranges. Release the source geometry before applying only the historical
+    # final orientation transform.
+    del ring
     _apply_vector_outline_export_transform(
         outline_mesh,
         analysis=analysis,
@@ -1634,6 +1300,7 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
         except (TypeError, ValueError):
             processor.gradient_color_bands = 16
         processor.layer_height_mm = layer_height_mm
+        _configure_svg_hole_compensation(processor, ctx)
         return processor
 
     actual_lut_path = ctx.get("actual_lut_path")
@@ -1649,7 +1316,56 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
         **processor_kwargs,
     )
     processor.layer_height_mm = layer_height_mm
+    _configure_svg_hole_compensation(processor, ctx)
     return processor
+
+
+def _build_vector_parse_cache_artifacts(
+    image_path: str, target_width_mm: float, processor: Any, analysis: Any,
+) -> dict[str, Any] | None:
+    """Serialize source geometry and its provenance, never compensated geometry.
+    仅序列化原始解析几何及其来源，不把补偿后的几何存入解析缓存。
+    """
+    from core.vector_engine import (
+        _VECTOR_PARSE_CLIP_CACHE,
+        _serialize_vector_parse_clip_cache,
+        _vector_parse_clip_cache_key,
+        _vector_parse_clip_cache_provenance,
+    )
+
+    key = _vector_parse_clip_cache_key(
+        image_path,
+        target_width_mm=target_width_mm,
+        sampling_precision=processor.sampling_precision,
+        expand_stroke_to_fill=bool(getattr(processor, "expand_stroke_to_fill", False)),
+        gradient_color_bands=getattr(processor, "gradient_color_bands", None),
+    )
+    entry = _VECTOR_PARSE_CLIP_CACHE.get(key)
+    if entry is None:
+        if getattr(processor, "svg_hole_compensation_enabled", False):
+            return None
+        entry = {
+            "shape_data": analysis.shape_data,
+            "clipped_shapes": analysis.clipped_shapes,
+            "silhouette": analysis.silhouette,
+            "image_vectorizer_bounds": analysis.image_vectorizer_bounds,
+            "scale_factor": analysis.scale_factor,
+            "bbox": analysis.bbox,
+            "parse_warnings": list(getattr(processor, "parse_warnings", None) or []),
+            "geometry_stage_timings": dict(analysis.stage_timings or {}),
+        }
+    return {
+        "vector_parse_clip_cache_blob": _serialize_vector_parse_clip_cache(key, entry),
+        "vector_parse_clip_cache_provenance": _vector_parse_clip_cache_provenance(key),
+    }
+
+
+def _configure_svg_hole_compensation(processor: Any, ctx: dict) -> None:
+    processor.svg_hole_compensation_enabled = bool(
+        ctx.get("svg_hole_compensation_enabled", False)
+    )
+    processor.svg_hole_max_area_mm2 = float(ctx.get("svg_hole_max_area_mm2", 0.5))
+    processor.svg_hole_max_width_mm = float(ctx.get("svg_hole_max_width_mm", 0.1))
 
 
 def _record_material_parallelism(
@@ -1695,9 +1411,6 @@ def _record_material_parallelism(
             "material_parallelism_cpu_fair_share": float(
                 max(1, int(plan.cpu_fair_share_ceiling)),
             ),
-            "material_parallelism_memory_ceiling": float(
-                max(1, int(plan.memory_ceiling)),
-            ),
             "material_parallelism_demand_fallback": bool(
                 plan.demand_snapshot_fallback,
             ),
@@ -1709,67 +1422,6 @@ def _record_material_parallelism(
             max(1, int(plan.performance_cpu_capacity)),
         )
     timings.update(plan_fields)
-
-
-_NATIVE_MESH_TIMING_FIELDS = {
-    "native_group_count": "native_mesh_group_count",
-    "native_meshes": "native_mesh_output_count",
-    "fallback_groups": "native_mesh_fallback_count",
-    "pack_seconds": "native_mesh_pack_s",
-    "native_seconds": "native_mesh_compute_s",
-    "mesh_convert_seconds": "native_mesh_convert_s",
-    "surface_validation_seconds": "native_mesh_python_surface_validation_s",
-    "fallback_seconds": "native_mesh_fallback_s",
-    "native_parallel_workers": "native_mesh_parallel_workers",
-    "native_parallel_batch_count": "native_mesh_parallel_batch_count",
-    "native_parallel_source_geometry_count":
-        "native_mesh_parallel_source_geometry_count",
-    "native_parallel_limit_reason": "native_mesh_parallel_limit",
-    "native_parallel_effective_cpu":
-        "native_mesh_parallel_effective_cpu",
-    "native_parallel_cpu_topology":
-        "native_mesh_parallel_cpu_topology",
-    "native_parallel_cpu_scheduling_policy":
-        "native_mesh_parallel_cpu_scheduling_policy",
-    "native_parallel_performance_cpu":
-        "native_mesh_parallel_performance_cpu",
-    "native_parallel_outer_demand":
-        "native_mesh_parallel_outer_demand",
-    "native_parallel_cpu_fair_share":
-        "native_mesh_parallel_cpu_fair_share",
-    "native_parallel_memory_ceiling":
-        "native_mesh_parallel_memory_ceiling",
-    "native_parallel_demand_fallback":
-        "native_mesh_parallel_demand_fallback",
-    "native_parallel_inflight_limit":
-        "native_mesh_parallel_inflight_limit",
-    "native_parallel_max_estimated_batch_bytes":
-        "native_mesh_parallel_max_estimated_batch_bytes",
-    "native_parallel_oversized_serial_batches":
-        "native_mesh_parallel_oversized_serial_batches",
-    "native_parallel_wall_seconds": "native_mesh_parallel_wall_s",
-    "fallback_reason_native_merged_empty_native_mesh":
-        "native_mesh_fallback_native_merged_empty_count",
-}
-
-
-def _native_mesh_timing_fields(
-    stats,
-) -> dict[str, float | int | str | bool]:
-    """Return the bounded scalar native-mesh timing view."""
-
-    if not isinstance(stats, dict):
-        return {}
-    result: dict[str, float | int | str | bool] = {}
-    for source_name, output_name in _NATIVE_MESH_TIMING_FIELDS.items():
-        value = stats.get(source_name)
-        if isinstance(value, bool):
-            result[output_name] = value
-        elif isinstance(value, (int, float)):
-            result[output_name] = value
-        elif isinstance(value, str):
-            result[output_name] = value[:64]
-    return result
 
 
 def _run_vector_preview_branch(ctx: dict) -> dict:
@@ -1787,7 +1439,7 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
     quantize_colors = ctx.get("quantize_colors", 64)
     backing_color_id = ctx.get("backing_color_id", 0)
     lut_metadata = ctx.get("lut_metadata")
-    preview_timing: dict[str, float] = {}
+    preview_timing: dict[str, float | str | bool] = {}
     vector_preview_total_t0 = time.perf_counter()
     # Native dynamic-material matching needs the structured replacement records
     # so VectorProcessor can resolve all source fills behind one matched palette
@@ -1809,10 +1461,9 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
             color_replacements=vector_replacements,
         )
         preview_timing.update(
-            {
-                str(key): float(value)
-                for key, value in getattr(analysis, "stage_timings", {}).items()
-            }
+            _structured_timing_payload(
+                getattr(analysis, "stage_timings", {})
+            )
         )
         _record_material_parallelism(preview_timing, vec_processor)
         preview_timing["analyze_svg_s"] = time.perf_counter() - t0
@@ -1906,6 +1557,9 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
             "quantize_colors": quantize_colors,
             "enable_cleanup": bool(ctx.get("enable_cleanup", True)),
             "svg_pixels_per_mm": ctx.get("svg_pixels_per_mm"),
+            "svg_hole_compensation_enabled": bool(ctx.get("svg_hole_compensation_enabled", False)),
+            "svg_hole_max_area_mm2": ctx.get("svg_hole_max_area_mm2", 0.5),
+            "svg_hole_max_width_mm": ctx.get("svg_hole_max_width_mm", 0.1),
             "hue_weight": ctx.get("hue_weight", 0.0),
             "chroma_gate": ctx.get("chroma_gate", 15.0),
             "use_lut_constrained": bool(
@@ -1913,6 +1567,7 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
             ),
             "auto_dynamic_range": bool(ctx.get("auto_dynamic_range", False)),
             "backing_color_id": backing_color_id,
+            "spacer_thick": ctx.get("spacer_thick", 1.6),
             "is_dark": is_dark,
             "bed_label": BedManager.DEFAULT_BED,
             "lut_metadata": lut_metadata,
@@ -1933,35 +1588,11 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
                     material_solver_info
                 )
         try:
-            from core.vector_engine import (
-                _VECTOR_PARSE_CLIP_CACHE,
-                _serialize_vector_parse_clip_cache,
-                _vector_parse_clip_cache_key,
+            source_cache = _build_vector_parse_cache_artifacts(
+                image_path, target_width_mm, vec_processor, analysis,
             )
-
-            cache_key = _vector_parse_clip_cache_key(
-                image_path,
-                target_width_mm=target_width_mm,
-                sampling_precision=vec_processor.sampling_precision,
-                expand_stroke_to_fill=bool(
-                    getattr(vec_processor, "expand_stroke_to_fill", False)
-                ),
-                gradient_color_bands=getattr(vec_processor, "gradient_color_bands", None),
-            )
-            cache_entry = _VECTOR_PARSE_CLIP_CACHE.get(cache_key)
-            if cache_entry is None:
-                cache_entry = {
-                    "shape_data": analysis.shape_data,
-                    "clipped_shapes": analysis.clipped_shapes,
-                    "silhouette": analysis.silhouette,
-                    "image_vectorizer_bounds": analysis.image_vectorizer_bounds,
-                    "scale_factor": analysis.scale_factor,
-                    "bbox": analysis.bbox,
-                }
-            cache["vector_parse_clip_cache_blob"] = _serialize_vector_parse_clip_cache(
-                cache_key,
-                cache_entry,
-            )
+            if source_cache is not None:
+                cache.update(source_cache)
         except COORDINATOR_HANDLED_ERRORS as exc:
             log.debug(
                 "Vector parse/clip cache artifact build skipped",
@@ -2004,60 +1635,12 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
                 "original_material_solver_info"
             ]
 
-        # Inject outline geometry into the preview cache. The SVG/vector shape
-        # union stays the declared geometry source; S11 copies this mesh into
-        # the preview GLB instead of deriving outline from backing/fridge masks.
-        # preview 分支负责生成来自矢量 shape union 的 outline mesh；S11 复用
-        # 这个 mesh 导出 GLB，避免从 backing / 冰箱贴 mask 重新推断轮廓。
-        if bool(ctx.get("enable_outline", False)):
-            try:
-                outline_width_mm = float(ctx.get("outline_width", 2.0) or 2.0)
-            except (TypeError, ValueError):
-                outline_width_mm = 2.0
-            outline_color, outline_material_name = (
-                _resolve_vector_outline_base_aux_style(
-                    ctx,
-                    dict(analysis.preview_colors),
-                    list(analysis.slot_names),
-                )
-            )
-            log.info(
-                "Vector outline preview generation started",
-                extra={
-                    "event": "vector_outline_init",
-                    "stage": "preview",
-                    "outline_width_mm": float(outline_width_mm),
-                    "shape_count": len(getattr(analysis, "matched_shapes", []) or []),
-                    "material_name": str(outline_material_name or ""),
-                    "color_mode": str(color_mode),
-                },
-            )
-            outline_mesh = _generate_vector_outline_mesh(
-                analysis=analysis,
-                outline_width_mm=outline_width_mm,
-                base_aux_color=outline_color,
-                base_aux_material_name=outline_material_name,
-                ctx=ctx,
-                export_color_mode=getattr(vec_processor, "color_mode", color_mode),
-            )
-            if outline_mesh is not None:
-                cache["outline_geometry"] = outline_mesh
-                cache["outline_added"] = True
-                ctx["outline_geometry"] = outline_mesh
-                ctx["outline_added"] = True
-                log.info(
-                    "Vector outline preview generation completed",
-                    extra={
-                        "event": "vector_outline_done",
-                        "stage": "preview",
-                        "outline_width_mm": float(outline_width_mm),
-                        "vertex_count": int(len(outline_mesh.vertices)),
-                        "face_count": int(len(outline_mesh.faces)),
-                        "material_name": str(outline_material_name or ""),
-                    },
-                )
-            else:
-                ctx["enable_outline"] = False
+        # Quick-preview GLBs contain only static colour/backing geometry.
+        # The UI owns the live Outline overlay so spacer, structure mode, and
+        # layer-height changes remain immediate. Physical export Outline meshes
+        # stay in the generate branch's 3MF writer-local coordinate domain.
+        # 快速预览仅携带静态色块和底板；实时描边由 UI 单一负责。用于最终导出的
+        # Outline 继续留在 generate 分支的 3MF writer-local 坐标域中。
 
         t0 = time.perf_counter()
         ctx = p06_bed_rendering.run(ctx)
@@ -2066,6 +1649,8 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
         ctx["vector_timing"] = dict(preview_timing)
         _log_vector_preview_timings(preview_timing, ctx, analysis, raster_cache)
         return ctx
+    except MemoryError:
+        raise
     except Exception as exc:
         ctx["error"] = f"[VECTOR_PREVIEW] {exc}"
         log.exception("Vector preview branch failed: %s", exc)
@@ -2083,7 +1668,7 @@ def _run_vector_branch(ctx: dict) -> dict:
 
     \u5f53 S01 \u68c0\u6d4b\u5230 ``is_svg_vector=True`` \u65f6\u7531 ``run_raster_pipeline``
     \u8c03\u7528\u3002\u4f7f\u7528 ``core.vector_engine.VectorProcessor`` \u5b8c\u6210 SVG \u2192 3D
-    \u8f6c\u6362\uff0c\u5305\u62ec 3MF \u5bfc\u51fa\u3001GLB \u9884\u89c8\u548c 2D \u9884\u89c8\u751f\u6210\u3002
+    \u8f6c\u6362\uff0c\u5305\u62ec 3MF \u5bfc\u51fa\u3001\u8f7b\u91cf GLB \u5f15\u7528\u590d\u7528\u548c 2D \u9884\u89c8\u751f\u6210\u3002
 
     Args:
         ctx: \u7ecf\u8fc7 S01 \u9a8c\u8bc1\u540e\u7684 PipelineContext \u5b57\u5178
@@ -2094,9 +1679,8 @@ def _run_vector_branch(ctx: dict) -> dict:
     from config import (  # noqa: F401  -- ColorSystem kept for parity
         ColorSystem,
         MODELS_DIR,
-        OUTPUT_DIR,
     )
-    from core.naming import generate_model_filename, generate_preview_filename
+    from core.naming import generate_model_filename
     from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
     from utils import Stats
 
@@ -2115,9 +1699,22 @@ def _run_vector_branch(ctx: dict) -> dict:
     requested_color_layers = ctx.get("color_layers")
     lut_metadata = ctx.get("lut_metadata")
     matched_rgb_path = ctx.get("matched_rgb_path")
+    original_matched_rgb_path = ctx.get("original_matched_rgb_path")
     height_identity_rgb_path = ctx.get("height_identity_rgb_path")
     mask_solid_path = ctx.get("mask_solid_path")
     material_matrix_path = ctx.get("material_matrix_path")
+    original_material_matrix_path = ctx.get("original_material_matrix_path")
+    edit_projection = ctx.get("edit_projection")
+    edit_projection_source_shape = None
+    edit_projection_mode = None
+    if isinstance(edit_projection, dict):
+        edit_projection_mode = str(edit_projection.get("mode") or "")
+        source_shape = edit_projection.get("source_shape")
+        if isinstance(source_shape, (list, tuple)) and len(source_shape) == 2:
+            edit_projection_source_shape = (
+                int(source_shape[0]),
+                int(source_shape[1]),
+            )
     vector_preview_pixels_per_mm = 10.0
     try:
         backing_color_id = int(ctx.get("backing_color_id", 0) or 0)
@@ -2165,6 +1762,7 @@ def _run_vector_branch(ctx: dict) -> dict:
     try:
         from core.vector_engine import (
             VectorProcessor,
+            _concatenate_meshes_fast,
             apply_matched_rgb_overrides_to_analysis,
             apply_recipe_overrides_to_analysis,
         )
@@ -2209,6 +1807,9 @@ def _run_vector_branch(ctx: dict) -> dict:
         # "2D \u9884\u89c8\u53d8\u4e86\u3001\u6700\u7ec8\u6a21\u578b\u6ca1\u53d8" \u7684\u73b0\u8c61\u3002
         cached_analysis_required = preview_analysis_reuse_is_required(
             ctx.get("reuse_preview_analysis")
+        ) or (
+            edit_projection_mode == "delta"
+            and edit_projection_source_shape is not None
         )
         if cached_analysis_required and not (
             matched_rgb_path and mask_solid_path and material_matrix_path
@@ -2216,13 +1817,19 @@ def _run_vector_branch(ctx: dict) -> dict:
             raise CachedPreviewAnalysisError(
                 "Required vector preview analysis artifacts are incomplete"
             )
-        if matched_rgb_path and mask_solid_path:
+        if (
+            matched_rgb_path
+            and mask_solid_path
+            and edit_projection_mode != "recipe_masks"
+        ):
             matched_rgb_override_t0 = time.perf_counter()
             cached_matched_rgb = None
             raw_mask_solid = None
             cached_mask_solid = None
             cached_material_matrix = None
             cached_height_identity_rgb = None
+            cached_original_matched_rgb = None
+            cached_original_material_matrix = None
             try:
                 cached_matched_rgb = np.load(
                     matched_rgb_path,
@@ -2253,6 +1860,25 @@ def _run_vector_branch(ctx: dict) -> dict:
                         allow_pickle=False,
                         mmap_mode="r",
                     )
+                if original_matched_rgb_path:
+                    cached_original_matched_rgb = np.load(
+                        original_matched_rgb_path,
+                        allow_pickle=False,
+                        mmap_mode="r",
+                    )
+                if original_material_matrix_path:
+                    cached_original_material_matrix = np.load(
+                        original_material_matrix_path,
+                        allow_pickle=False,
+                        mmap_mode="r",
+                    )
+                if edit_projection_source_shape is not None and (
+                    cached_original_matched_rgb is None
+                    or cached_original_material_matrix is None
+                ):
+                    raise CachedPreviewAnalysisError(
+                        "Required vector pristine edit artifacts are incomplete"
+                    )
 
                 # Diagnostic 2/4: material_matrix loaded from disk (post pad).
                 if cached_material_matrix is not None:
@@ -2274,11 +1900,14 @@ def _run_vector_branch(ctx: dict) -> dict:
                 rewritten = apply_matched_rgb_overrides_to_analysis(
                     analysis,
                     matched_rgb=cached_matched_rgb,
+                    original_matched_rgb=cached_original_matched_rgb,
                     height_identity_rgb=cached_height_identity_rgb,
                     material_matrix=cached_material_matrix,
+                    original_material_matrix=cached_original_material_matrix,
                     mask_solid=cached_mask_solid,
                     img_processor=vec_processor.img_processor,
                     pixels_per_mm=vector_preview_pixels_per_mm,
+                    source_grid_shape=edit_projection_source_shape,
                     strict=cached_analysis_required,
                     prefer_cached_material_state=bool(
                         ctx.get("material_dynamic_layer_count_enabled", False)
@@ -2371,6 +2000,8 @@ def _run_vector_branch(ctx: dict) -> dict:
                     cached_mask_solid,
                     cached_material_matrix,
                     cached_height_identity_rgb,
+                    cached_original_matched_rgb,
+                    cached_original_material_matrix,
                 )
 
         # 1a. Apply per-region recipe overrides (custom recipe dialog +
@@ -2428,6 +2059,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                         base_channel_idx=base_channel_idx,
                         img_processor=vec_processor.img_processor,
                         pixels_per_mm=vector_preview_pixels_per_mm,
+                        source_grid_shape=edit_projection_source_shape,
                     )
 
                     # Diagnostic 4/4: shape recipe[0] distribution after
@@ -2466,6 +2098,14 @@ def _run_vector_branch(ctx: dict) -> dict:
             "thickness_mm": spacer_thick,
             "structure_mode": structure_mode,
         }
+        # S08 consumers (notably model-surface embedding) intentionally take
+        # only the optical material meshes and discard ``Board``.  Keep the
+        # backing distinct until those consumers have extracted their display
+        # stack; final 3MF generation still folds it into the selected material.
+        vec_processor._merge_backing_into_material = (
+            not bool(separate_backing)
+            and ctx.get("stop_after_step") != "S08"
+        )
         try:
             build_mesh_signature = inspect.signature(vec_processor.build_mesh)
         except (TypeError, ValueError):
@@ -2540,11 +2180,6 @@ def _run_vector_branch(ctx: dict) -> dict:
         vector_timing["mesh_total_s"] = time.perf_counter() - mesh_t0
         if isinstance(getattr(vec_processor, "last_stage_timings", None), dict):
             vector_timing.update(vec_processor.last_stage_timings)
-        vector_timing.update(
-            _native_mesh_timing_fields(
-                getattr(vec_processor, "last_native_vector_mesh_stats", None)
-            )
-        )
         vector_timing["build_mesh_s"] = build_mesh_s
 
         _update_bambu_base_layer_ctx_for_vector(
@@ -2616,9 +2251,9 @@ def _run_vector_branch(ctx: dict) -> dict:
         if board_geom is not None and not separate_backing:
             target_geom = scene.geometry.get(target_slot) if target_slot else None
             if target_geom is not None:
-                import trimesh as _trimesh
-
-                merged = _trimesh.util.concatenate([target_geom, board_geom])
+                merged = _concatenate_meshes_fast(
+                    [target_geom, board_geom],
+                )
                 target_color = vec_preview_colors.get(target_slot)
                 if target_color is None:
                     existing_colors = np.asarray(
@@ -2630,6 +2265,9 @@ def _run_vector_branch(ctx: dict) -> dict:
                 merged.metadata["name"] = target_slot
                 scene.geometry[target_slot] = merged
                 del scene.geometry["Board"]
+                # The scene now owns only the bounded concatenation result;
+                # release both original mesh arrays before outline/export.
+                del target_geom, board_geom, merged
                 log.debug(
                     "Vector board merged into backing material slot",
                     extra={
@@ -2652,13 +2290,14 @@ def _run_vector_branch(ctx: dict) -> dict:
             vec_preview_colors["Board"] = vec_preview_colors.get(
                 separate_backing_color_id, [255, 255, 255, 255]
             )
-            if "Board" not in vec_slot_list:
-                vec_slot_list = list(vec_slot_list) + ["Board"]
+            if target_slot:
+                board_geom.metadata["bambu_material_name"] = target_slot
             log.debug(
                 "Vector board kept as separate backing",
                 extra={
                     "event": "vector_board_separate",
                     "backing_slot_index": separate_backing_color_id,
+                    "material_name": str(target_slot or ""),
                     "separate_backing": True,
                 },
             )
@@ -2671,9 +2310,7 @@ def _run_vector_branch(ctx: dict) -> dict:
         )
 
         # 1.6 Inject vector Outline mesh.
-        # 在 export 之前注入 Outline 节点，几何来源 analysis.matched_shapes union；
-        # D5/D6 命中（matched_shapes 空 / ring 空）时 helper 已发 WARNING，
-        # 调用方把 ctx['enable_outline'] 强制规整为 false 防止下游误用。
+        # Use the shared structure plan, never the post-match color partition.
         if bool(ctx.get("enable_outline", False)):
             try:
                 outline_width_mm = float(ctx.get("outline_width", 2.0) or 2.0)
@@ -2752,20 +2389,10 @@ def _run_vector_branch(ctx: dict) -> dict:
         skip_heavy_preview = (
             os.getenv("LUMINA_VECTOR_SKIP_2D_PREVIEW", "0") == "1"
         )
-        analysis_for_glb = analysis
         if skip_heavy_preview or not need_2d_preview:
-            # GLB only needs the canvas anchor once mesh/outline work is done.
-            # Retaining the complete parse/match graph until GLB export makes
-            # its temporary meshes overlap with thousands of source shapes.
-            # 不需要 2D 预览时只保留 GLB 画布锚点，提前释放完整分析图。
-            analysis_for_glb = SimpleNamespace(
-                image_vectorizer_bounds=getattr(
-                    analysis,
-                    "image_vectorizer_bounds",
-                    None,
-                ),
-                scale_factor=getattr(analysis, "scale_factor", 1.0),
-            )
+            # Generate no longer builds a print-scene GLB. Release the parse
+            # graph as soon as neither caller nor the 2D preview needs it.
+            # generate 不再构建打印 scene GLB；不需要 2D 预览时立即释放分析图。
             analysis = None
         vec_processor = None
 
@@ -2831,9 +2458,6 @@ def _run_vector_branch(ctx: dict) -> dict:
             "initial_layer_line_width": _lw,
         }
 
-        if bool(ctx.get("center_on_bed", True)):
-            s09_export_3mf._center_scene_on_printer_bed(scene, ctx.get("printer_id", "bambu-h2d"))
-
         # ------------------------------------------------------------------
         # Vector cover thumbnail: rasterize the source SVG itself and
         # PNG-encode it in-memory. File managers and slicers should show
@@ -2851,6 +2475,9 @@ def _run_vector_branch(ctx: dict) -> dict:
                     target_width_mm,
                     pixels_per_mm=2.0,
                     crop_to_content=False,
+                    _min_quality_px=1,
+                    _max_longest_px=512,
+                    _cache_result=False,
                 )
                 from io import BytesIO as _CoverBytesIO
                 from PIL import Image as _CoverImage
@@ -2870,6 +2497,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                         "rgba_shape": [int(s) for s in cover_rgba.shape],
                     },
                 )
+                del cover_buffer, cover_pil, cover_rgba
             except (*COORDINATOR_HANDLED_ERRORS, ImportError) as cover_exc:
                 log.warning(
                     "Vector cover thumbnail render failed; will fall back to "
@@ -2912,6 +2540,9 @@ def _run_vector_branch(ctx: dict) -> dict:
                 bool(ctx.get("enable_base_layer_height_modifier", True))
                 and not bool(ctx.get("enable_relief", False))
             ),
+            enable_wipe_tower_auto_placement=bool(
+                ctx.get("enable_wipe_tower_auto_placement", True)
+            ),
             enable_relief=bool(ctx.get("enable_relief", False)),
             base_height_mm=float(ctx.get("bambu_base_height_mm", 0.0)),
             color_height_mm=float(ctx.get("bambu_color_height_mm", 0.0)),
@@ -2940,43 +2571,33 @@ def _run_vector_branch(ctx: dict) -> dict:
             },
         )
 
-        # 3. GLB preview
-        _report_progress(ctx, 0.82, "\u751f\u6210 3D \u9884\u89c8\u4e2d... | Generating 3D preview...")
+        # Keep placement translations out of serialized mesh vertices.  The
+        # 3MF writer already centres the unmodified local mesh with the
+        # standard build-item transform.  Centre the retained scene only after
+        # the package is complete so the GLB preview keeps its historical bed
+        # coordinates without changing float32 topology in the 3MF.
+        if bool(ctx.get("center_on_bed", True)):
+            s09_export_3mf._center_scene_on_printer_bed(
+                scene,
+                ctx.get("printer_id", "bambu-h2d"),
+            )
+
+        # 3. Reuse an already validated lightweight GLB when available.
+        # Generate must never turn the exact print scene into a browser asset.
+        _report_progress(ctx, 0.82, "\u5b8c\u6210\u751f\u6210\u4e2d... | Finalizing generation...")
         glb_path = None
         glb_t0 = time.perf_counter()
-        try:
-            glb_path = os.path.join(OUTPUT_DIR, generate_preview_filename(base_name))
-            glb_source_scene = _make_vector_glb_preview_scene(
-                scene,
-                structure_mode=structure_mode,
-                color_mode=vec_color_mode,
-                enable_relief=bool(ctx.get("enable_relief", False)),
-            )
-            vector_glb_preview.export_vector_glb_preview(
-                scene=glb_source_scene,
-                output_path=glb_path,
-                structure_mode=structure_mode,
-                color_mode=vec_color_mode,
-                preview_colors=vec_preview_colors,
-                slot_list=list(vec_slot_list),
-                analysis=analysis_for_glb,
-                ctx=ctx,
-            )
+        reusable_glb_path = ctx.get("preview_glb_path")
+        if (
+            isinstance(reusable_glb_path, str)
+            and os.path.isfile(reusable_glb_path)
+        ):
+            glb_path = reusable_glb_path
             log.debug(
-                "Vector preview GLB exported",
+                "Vector preview GLB reused",
                 extra={
-                    "event": "vector_glb_exported",
+                    "event": "vector_glb_reused",
                     "path": str(glb_path),
-                },
-            )
-        except COORDINATOR_HANDLED_ERRORS as e:
-            glb_path = None
-            log.warning(
-                "Vector preview GLB export skipped",
-                extra={
-                    "event": "vector_glb_exported_skipped",
-                    "error_type": type(e).__name__,
-                    "error_message": str(e),
                 },
             )
         vector_timing["export_glb_s"] = time.perf_counter() - glb_t0

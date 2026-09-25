@@ -11,12 +11,31 @@ import xml.etree.ElementTree as ET
 
 import trimesh
 
-from core.puzzle_3mf import PuzzlePiece3MFSource, assemble_puzzle_3mf
+from core.puzzle_3mf import (
+    PuzzlePiece3MFSource,
+    _apply_3mf_transform,
+    _parse_3mf_transform,
+    assemble_puzzle_3mf,
+)
 from utils.bambu_3mf_writer import BambuStudio3MFWriter
 
 _CORE_NS = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
 _PROD_NS = "http://schemas.microsoft.com/3dmanufacturing/production/2015/06"
 _NS = {"m": _CORE_NS, "p": _PROD_NS}
+
+
+def test_3mf_transform_uses_spec_column_layout() -> None:
+    """3MF affine values must map to the documented 4-by-3 layout."""
+
+    transform = _parse_3mf_transform(
+        "0 1 0 -1 0 0 0 0 1 10 20 3"
+    )
+
+    assert _apply_3mf_transform(transform, 2.0, 5.0, 7.0) == (
+        5.0,
+        22.0,
+        10.0,
+    )
 
 
 def test_assemble_puzzle_3mf_preserves_per_piece_local_models_and_offsets() -> None:
@@ -39,6 +58,7 @@ def test_assemble_puzzle_3mf_preserves_per_piece_local_models_and_offsets() -> N
             slot_names=None,
             printer_id="bambu-h2d",
             slicer="BambuStudio",
+            enable_wipe_tower_auto_placement=False,
         )
 
         with zipfile.ZipFile(output_path, "r") as archive:
@@ -108,6 +128,135 @@ def test_assemble_puzzle_3mf_preserves_per_piece_local_models_and_offsets() -> N
     assert "/3D/Objects/object_2.model" not in relationships
 
 
+def test_assemble_puzzle_3mf_recomputes_tower_for_final_group() -> None:
+    """Final tower metadata and transforms must describe the assembled group."""
+
+    piece_a1 = _reserve_temp_path(".3mf")
+    piece_a2 = _reserve_temp_path(".3mf")
+    output_path = _reserve_temp_path(".3mf")
+    try:
+        _write_piece_package(piece_a1, width=50.0, height=60.0)
+        _write_piece_package(piece_a2, width=50.0, height=60.0)
+
+        assemble_puzzle_3mf(
+            piece_sources=[
+                PuzzlePiece3MFSource(
+                    label="A1",
+                    threemf_path=str(piece_a1),
+                    offset_x_mm=10.0,
+                    offset_y_mm=10.0,
+                ),
+                PuzzlePiece3MFSource(
+                    label="A2",
+                    threemf_path=str(piece_a2),
+                    offset_x_mm=120.0,
+                    offset_y_mm=10.0,
+                ),
+            ],
+            output_path=str(output_path),
+            preview_colors={
+                0: [255, 255, 255, 255],
+                1: [0, 0, 0, 255],
+            },
+            slot_names=["Slot 1 (White)", "Slot 2 (Black)"],
+            printer_id="bambu-a1-mini",
+            slicer="BambuStudio",
+            enable_wipe_tower_auto_placement=True,
+        )
+
+        with zipfile.ZipFile(output_path, "r") as archive:
+            placement = json.loads(
+                archive.read("Metadata/lumina_wipe_tower_placement.json")
+            )
+            settings = json.loads(
+                archive.read("Metadata/project_settings.config")
+            )
+            root_model = ET.fromstring(archive.read("3D/3dmodel.model"))
+            model_settings = ET.fromstring(
+                archive.read("Metadata/model_settings.config")
+            )
+    finally:
+        _cleanup_temp_paths(piece_a1, piece_a2, output_path)
+
+    assert placement["enabled"] is True
+    assert placement["adapted"] is True
+    assert placement["requires_manual_adjustment"] is False
+    assert placement["model_bounds_mm"] == [10.0, 60.0, 170.0, 120.0]
+    assert float(settings["wipe_tower_x"][0]) == placement["tower"]["x_mm"]
+    assert float(settings["wipe_tower_y"][0]) == placement["tower"]["y_mm"]
+    assert float(settings["prime_tower_width"]) == placement["tower"]["width_mm"]
+    difference_index = set(
+        settings["different_settings_to_system"][0].split(";")
+    )
+    assert difference_index >= {
+        "prime_tower_width",
+        "wipe_tower_rotation_angle",
+        "wipe_tower_x",
+        "wipe_tower_y",
+    }
+    assert [
+        item.get("transform")
+        for item in root_model.findall("m:build/m:item", _NS)
+    ] == [
+        "1 0 0 0 1 0 0 0 1 10 60 0",
+        "1 0 0 0 1 0 0 0 1 120 60 0",
+    ]
+    assert [
+        item.get("transform")
+        for item in model_settings.findall("assemble/assemble_item")
+    ] == [
+        "1 0 0 0 1 0 0 0 1 10 60 0",
+        "1 0 0 0 1 0 0 0 1 120 60 0",
+    ]
+
+
+def test_assemble_puzzle_3mf_can_disable_final_tower_placement() -> None:
+    """Disabled auto placement must keep final piece offsets and emit no warning."""
+
+    piece_path = _reserve_temp_path(".3mf")
+    output_path = _reserve_temp_path(".3mf")
+    try:
+        _write_piece_package(piece_path, width=50.0, height=60.0)
+
+        assemble_puzzle_3mf(
+            piece_sources=[
+                PuzzlePiece3MFSource(
+                    label="A1",
+                    threemf_path=str(piece_path),
+                    offset_x_mm=10.0,
+                    offset_y_mm=10.0,
+                ),
+            ],
+            output_path=str(output_path),
+            preview_colors={0: [255, 255, 255, 255]},
+            slot_names=["Slot 1 (White)"],
+            printer_id="bambu-a1-mini",
+            slicer="BambuStudio",
+            enable_wipe_tower_auto_placement=False,
+        )
+
+        with zipfile.ZipFile(output_path, "r") as archive:
+            placement = json.loads(
+                archive.read("Metadata/lumina_wipe_tower_placement.json")
+            )
+            root_model = ET.fromstring(archive.read("3D/3dmodel.model"))
+    finally:
+        _cleanup_temp_paths(piece_path, output_path)
+
+    assert placement == {
+        "schema_version": 1,
+        "enabled": False,
+        "available": False,
+        "adapted": False,
+        "requires_manual_adjustment": False,
+        "warning_code": None,
+        "reason": "disabled_by_user",
+    }
+    build_item = root_model.find("m:build/m:item", _NS)
+    assert build_item is not None
+    assert build_item.get("transform") == "1 0 0 0 1 0 0 0 1 10 10 0"
+
+
 def test_assemble_puzzle_3mf_restores_global_slot_palette_for_sparse_piece() -> None:
     """Combined puzzle 3MF should map sparse local slots back to the global palette."""
 
@@ -162,6 +311,64 @@ def test_assemble_puzzle_3mf_restores_global_slot_palette_for_sparse_piece() -> 
         "Slot 1 (White)": "0",
         "Slot 3 (Green)": "2",
     }
+
+
+def test_assemble_puzzle_3mf_rebuilds_flush_arrays_for_global_palette() -> None:
+    """Combined puzzle purge arrays must match the final global slot count."""
+
+    slot_names = [
+        "Slot 1 (White)",
+        "Slot 2 (Red)",
+        "Slot 3 (Yellow)",
+        "Slot 4 (Blue)",
+    ]
+    stale_eight_slot_settings = {
+        "filament_colour": ["#FFFFFF"] * 8,
+        "filament_type": ["PLA"] * 8,
+        "flush_volumes_vector": ["140"] * 8,
+        "flush_volumes_matrix": ["0"] * 64,
+    }
+    piece_path = _reserve_temp_path(".3mf")
+    output_path = _reserve_temp_path(".3mf")
+    try:
+        _write_sparse_piece_package(
+            piece_path,
+            materials=[(slot_names[0], "1"), (slot_names[3], "4")],
+            filament_colours=["#FFFFFF", "#0000FF"],
+            project_settings=stale_eight_slot_settings,
+        )
+
+        assemble_puzzle_3mf(
+            piece_sources=[
+                PuzzlePiece3MFSource(
+                    label="A1",
+                    threemf_path=str(piece_path),
+                    offset_x_mm=0.0,
+                    offset_y_mm=0.0,
+                ),
+            ],
+            output_path=str(output_path),
+            preview_colors={
+                0: [255, 255, 255, 255],
+                1: [255, 0, 0, 255],
+                2: [255, 255, 0, 255],
+                3: [0, 0, 255, 255],
+            },
+            slot_names=slot_names,
+            printer_id="bambu-p2s",
+            slicer="OrcaSlicer",
+        )
+
+        with zipfile.ZipFile(output_path, "r") as archive:
+            project_settings = json.loads(
+                archive.read("Metadata/project_settings.config").decode("utf-8")
+            )
+    finally:
+        _cleanup_temp_paths(piece_path, output_path)
+
+    assert len(project_settings["filament_colour"]) == len(slot_names)
+    assert len(project_settings["flush_volumes_vector"]) == len(slot_names)
+    assert len(project_settings["flush_volumes_matrix"]) == len(slot_names) ** 2
 
 
 def test_assemble_puzzle_3mf_rebuilds_filament_metadata_from_global_material_names() -> None:

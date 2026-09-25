@@ -13,7 +13,6 @@ SOURCE_IMAGE_UNREADABLE_ERROR = "source_image_unreadable"
 SOURCE_IMAGE_TOO_LARGE_ERROR = "source_image_too_large"
 SOURCE_SVG_INVALID_ERROR = "source_svg_invalid"
 SOURCE_SVG_NO_RENDERABLE_GEOMETRY_ERROR = "source_svg_no_renderable_geometry"
-SOURCE_SVG_TOO_COMPLEX_ERROR = "source_svg_too_complex"
 
 SOURCE_IMAGE_UNREADABLE_DETAIL = (
     "The image could not be read. Check that the file is not damaged, then "
@@ -31,10 +30,6 @@ SOURCE_SVG_NO_RENDERABLE_GEOMETRY_DETAIL = (
     "The SVG has no visible filled geometry supported by Vector mode. Make "
     "the artwork visible, convert strokes and text to filled paths, or switch "
     "to High-Fidelity mode."
-)
-SOURCE_SVG_TOO_COMPLEX_DETAIL = (
-    "The SVG contains too many intersecting compound subpaths to process "
-    "safely. Simplify or flatten the artwork, then upload it again."
 )
 
 

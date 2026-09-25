@@ -27,6 +27,48 @@ function makeEntry(version: string): AnnouncementEntry {
 }
 
 describe("useAnnouncement", () => {
+  it("keeps compensation and batch-coating news in one daily entry", () => {
+    const entries = ANNOUNCEMENTS.filter((entry) => entry.version === "2026-09-13");
+    expect(entries).toHaveLength(1);
+    const items = entries[0].sections.flatMap((section) => section.items);
+    expect(items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        zh: expect.stringContaining("SVG 小洞补偿"),
+        en: expect.stringContaining("SVG hole compensation"),
+      }),
+      expect.objectContaining({
+        zh: expect.stringContaining("透明镀层"),
+        en: expect.stringContaining("transparent coating"),
+      }),
+    ]));
+  });
+
+  it("announces smooth SVG previews and the compatibility setting", () => {
+    const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-08-30");
+    const items = entry?.sections.flatMap((section) => section.items) ?? [];
+
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("平滑 SVG 轻量预览") &&
+          item.zh.includes("尺寸") &&
+          item.zh.includes("设置") &&
+          item.en.includes("smooth lightweight SVG preview") &&
+          item.en.includes("size") &&
+          item.en.includes("Settings"),
+      ),
+    ).toBe(true);
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("模型覆面") &&
+          item.zh.includes("改色") &&
+          item.en.includes("model-surface") &&
+          item.en.includes("recoloured"),
+      ),
+    ).toBe(true);
+  });
+
   it("announces the optional uploaded filename setting", () => {
     const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-08-13");
     const items = entry?.sections.flatMap((section) => section.items) ?? [];
@@ -92,8 +134,8 @@ describe("useAnnouncement", () => {
   });
 
   it("announces backing thickness and infill controls in the latest update", () => {
-    expect(ANNOUNCEMENTS[0]?.version).toBe("2026-08-14");
-    const items = ANNOUNCEMENTS[0]?.sections.flatMap((section) => section.items) ?? [];
+    const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-08-14");
+    const items = entry?.sections.flatMap((section) => section.items) ?? [];
 
     expect(
       items.some(
@@ -150,6 +192,24 @@ describe("useAnnouncement", () => {
           item.en.includes("preinstalled") &&
           item.en.includes("uninstalled") &&
           item.en.includes("Lumina"),
+      ),
+    ).toBe(true);
+  });
+
+  it("announces QIDI Studio and its machine-specific nozzle support", () => {
+    const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-08-23");
+    const items = entry?.sections.flatMap((section) => section.items) ?? [];
+
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("QIDI Studio") &&
+          item.zh.includes("Q2C") &&
+          item.zh.includes("X-Max 4") &&
+          item.zh.includes("X-Plus 5") &&
+          item.zh.includes("0.4") &&
+          item.en.includes("QIDI Studio") &&
+          item.en.includes("Lumina process settings"),
       ),
     ).toBe(true);
   });
@@ -350,12 +410,20 @@ describe("selectAnnouncementHistory", () => {
     expect(selectAnnouncementHistory(entries, -1)).toEqual([]);
   });
 
-  it("默认历史条数足够覆盖这次 5 月更新回顾", () => {
+  it("新增公告后保留最近的默认窗口，不永久绑定旧月份", () => {
+    const history = selectAnnouncementHistory(ANNOUNCEMENTS);
+    expect(history).toHaveLength(Math.min(ANNOUNCEMENT_HISTORY_LIMIT, ANNOUNCEMENTS.length));
+    expect(history[0]).toBe(ANNOUNCEMENTS[0]);
+    expect(history.at(-1)).toBe(ANNOUNCEMENTS[history.length - 1]);
+    expect(history).not.toContain(ANNOUNCEMENTS[ANNOUNCEMENT_HISTORY_LIMIT]);
+  });
+
+  it("keeps the configured number of most recent daily announcements", () => {
     expect(ANNOUNCEMENT_HISTORY_LIMIT).toBeGreaterThanOrEqual(20);
     expect(selectAnnouncementHistory(ANNOUNCEMENTS).length).toBeGreaterThanOrEqual(20);
-    expect(selectAnnouncementHistory(ANNOUNCEMENTS).map((e) => e.version)).toContain(
-      "2026-05-05",
-    );
+    expect(selectAnnouncementHistory(ANNOUNCEMENTS)).toEqual(
+      [...ANNOUNCEMENTS].sort((a, b) => b.version.localeCompare(a.version))
+        .slice(0, ANNOUNCEMENT_HISTORY_LIMIT));
   });
 
   it("非法日期文本也按普通版本文本排序，不会丢掉其它历史", () => {

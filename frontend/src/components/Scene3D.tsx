@@ -1,3 +1,4 @@
+import { saveGeneratedFile } from "../utils/saveGeneratedFile";
 import {
   Suspense,
   useRef,
@@ -20,9 +21,11 @@ import BedPlatform from "./BedPlatform";
 import KeychainRing3D from "./KeychainRing3D";
 import FridgeMagnet3D from "./FridgeMagnet3D";
 import ModelSurfaceSelector3D from "./ModelSurfaceSelector3D";
+import { resolveModelSurfaceArtworkAsset } from "./modelSurface/artworkAsset";
 import { useConverterStore } from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
 import { computeScaleFactor } from "../utils/scaleUtils";
+import { createPreviewSpace } from "../utils/previewSpace";
 import { resolveCameraClippingPlanes } from "../utils/cameraDepthPrecision";
 import { useI18n } from "../i18n/context";
 import { useThemeConfig } from "../hooks/useThemeConfig";
@@ -82,19 +85,18 @@ export interface PreviewCameraOrbitConfig {
   maxDistance: number;
 }
 
-function finitePositiveScale(value: number): number {
-  return Number.isFinite(value) && value > 0 ? value : 1;
-}
-
 export function computeScaledPreviewBounds(
   modelBounds: PreviewModelBounds,
   scaleX: number,
   scaleY: number,
 ): ScaledPreviewBounds {
-  const safeScaleX = finitePositiveScale(scaleX);
-  const safeScaleY = finitePositiveScale(scaleY);
-  const width = Math.max(0, modelBounds.maxX - modelBounds.minX) * safeScaleX;
-  const height = Math.max(0, modelBounds.maxY - modelBounds.minY) * safeScaleY;
+  const displayBounds = createPreviewSpace(
+    modelBounds,
+    scaleX,
+    scaleY,
+  ).displayBounds;
+  const width = Math.max(0, displayBounds.maxX - displayBounds.minX);
+  const height = Math.max(0, displayBounds.maxY - displayBounds.minY);
   const depth = Math.max(0, modelBounds.maxZ);
   return {
     width,
@@ -742,6 +744,7 @@ function BatchPreviewModels({
         <group key={`${item.url}-${index}`} position={item.position}>
           <InteractiveModelViewer
             url={item.url}
+            sourceRole="batch"
             colorRemapMap={colorRemapMap}
             colorHeightMap={colorHeightMap}
             baseHeight={baseHeight}
@@ -774,6 +777,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const glRef = useRef<THREE.WebGLRenderer | null>(null);
   const activeOrbitPanPointerRef = useRef<ActiveOrbitPanPointer | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [screenshotNotice, setScreenshotNotice] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<SceneDiagnosticsSnapshot | null>(null);
   const [diagnosticsVisible, setDiagnosticsVisible] = useState(false);
   const [performanceVisible, setPerformanceVisible] = useState(false);
@@ -887,19 +891,24 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const wittyMsg = useWittyMessage(2000, isLoading && enableWittyLoading);
 
   const storeModelUrl = useConverterStore((s) => s.modelUrl);
-  const effectiveModelUrl = modelUrl ?? storeModelUrl;
   const batchPreviewItems = useConverterStore((s) => s.batchPreviewItems);
   const previewGlbUrl = useConverterStore((s) => s.previewGlbUrl);
+  const effectiveModelUrl =
+    modelUrl ?? (previewGlbUrl ? null : storeModelUrl);
   const modelSurfaceEnabled = useConverterStore((s) => s.modelSurfaceEnabled);
   const modelSurfaceFile = useConverterStore((s) => s.modelSurfaceFile);
   const modelSurfacePreviewUrl = useConverterStore((s) => s.modelSurfacePreviewUrl);
   const modelSurfaceSelectionId = useConverterStore((s) => s.modelSurfaceSelectionId);
+  const modelSurfaceModelFileId = useConverterStore((s) => s.modelSurfaceModelFileId);
   const modelSurfaceFootprint = useConverterStore((s) => s.modelSurfaceFootprint);
   const modelSurfaceCandidates = useConverterStore((s) => s.modelSurfaceCandidates);
   const modelSurfacePlacement = useConverterStore((s) => s.modelSurfacePlacement);
   const modelSurfaceLoading = useConverterStore((s) => s.modelSurfaceLoading);
   const modelSurfaceSelecting = useConverterStore((s) => s.modelSurfaceSelecting);
   const imagePreviewUrl = useConverterStore((s) => s.imagePreviewUrl);
+  const aspectRatio = useConverterStore((s) => s.aspectRatio);
+  const previewBaseImageUrl = useConverterStore((s) => s.previewBaseImageUrl);
+  const previewRequestRevision = useConverterStore((s) => s.previewRequestRevision);
   const selectModelSurfaceFace = useConverterStore((s) => s.selectModelSurfaceFace);
   const updateModelSurfacePlacement = useConverterStore((s) => s.updateModelSurfacePlacement);
   const updateModelSurfaceModelRotation = useConverterStore((s) => s.updateModelSurfaceModelRotation);
@@ -910,6 +919,11 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const colorHeightMap = useConverterStore((s) => s.color_height_map);
   const baseHeight = useConverterStore((s) => s.spacer_thick);
   const enableRelief = useConverterStore((s) => s.enable_relief);
+  const autoHeightMode = useConverterStore((s) => s.autoHeightMode);
+  const heightmapThumbnailUrl = useConverterStore((s) => s.heightmapThumbnailUrl);
+  const heightmapUploadSessionId = useConverterStore((s) => s.heightmapUploadSessionId);
+  const heightmapMaxHeight = useConverterStore((s) => s.heightmap_max_height);
+  const sessionId = useConverterStore((s) => s.sessionId);
   const spacerThick = useConverterStore((s) => s.spacer_thick);
   const structureMode = useConverterStore((s) => s.structure_mode);
   const enableOutline = useConverterStore((s) => s.enable_outline);
@@ -917,6 +931,8 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const enableCloisonne = useConverterStore((s) => s.enable_cloisonne);
   const wireWidthMm = useConverterStore((s) => s.wire_width_mm);
   const wireHeightMm = useConverterStore((s) => s.wire_height_mm);
+  const enableCoating = useConverterStore((s) => s.enable_coating);
+  const coatingHeightMm = useConverterStore((s) => s.coating_height_mm);
   const colorLayers = useConverterStore((s) => s.color_layers);
   const layerHeightMm = useConverterStore((s) => s.layer_height_mm);
   const puzzleEnabled = useConverterStore((s) => s.puzzleEnabled);
@@ -940,6 +956,14 @@ function Scene3D({ modelUrl }: Scene3DProps) {
       ? colorLayers * layerHeightMm
       : undefined,
   );
+  const heightmapReliefUrl =
+    enableRelief
+    && autoHeightMode === "use-heightmap"
+    && Boolean(sessionId)
+    && heightmapUploadSessionId === sessionId
+      ? heightmapThumbnailUrl
+      : null;
+  const heightmapArtworkUrl = previewBaseImageUrl ?? imagePreviewUrl;
 
   // Keychain ring params
   const addLoop = useConverterStore((s) => s.add_loop);
@@ -960,10 +984,40 @@ function Scene3D({ modelUrl }: Scene3DProps) {
     Boolean(modelSurfacePreviewUrl) &&
     Boolean(modelSurfaceFile) &&
     batchPreviewItems.length === 0;
+  const modelSurfaceArtworkAsset = useMemo(
+    () =>
+      resolveModelSurfaceArtworkAsset({
+        sourceImageUrl: imagePreviewUrl,
+        processedPreviewUrl: previewBaseImageUrl,
+        sourceAspectRatio: aspectRatio,
+        modelSurfaceEnabled,
+        modelFileId: modelSurfaceModelFileId,
+        selectionId: modelSurfaceSelectionId,
+        sessionId,
+        previewRequestRevision,
+        placement: modelSurfacePlacement,
+      }),
+    [
+      aspectRatio,
+      imagePreviewUrl,
+      modelSurfaceEnabled,
+      modelSurfaceModelFileId,
+      modelSurfacePlacement,
+      modelSurfaceSelectionId,
+      previewBaseImageUrl,
+      previewRequestRevision,
+      sessionId,
+    ],
+  );
   const modelSurfaceBusy =
     showModelSurfaceSelector && (modelSurfaceLoading || modelSurfaceSelecting);
   const modelBounds = useConverterStore((s) => s.modelBounds);
   const colorContours = useConverterStore((s) => s.colorContours);
+  const modelPreviewSpace = useMemo(
+    () => (modelBounds ? createPreviewSpace(modelBounds, scaleX, scaleY) : null),
+    [modelBounds, scaleX, scaleY],
+  );
+  const displayModelBounds = modelPreviewSpace?.displayBounds ?? null;
   const diagnosticsSamplingEnabled = diagnosticsVisible || getThreePerfDebugConfig().enabled;
   const hasPerformanceTiming = Boolean(previewPerformanceTiming || generatePerformanceTiming);
 
@@ -1063,20 +1117,20 @@ function Scene3D({ modelUrl }: Scene3DProps) {
     }
   }, []);
 
-  const takeScreenshot = useCallback(() => {
+  const takeScreenshot = useCallback(async () => {
     const gl = glRef.current;
     if (!gl) return;
+    setScreenshotNotice(null);
     // Render one frame with preserveDrawingBuffer behavior
     try {
       const dataUrl = gl.domElement.toDataURL("image/png");
-      const link = document.createElement("a");
-      link.download = `lumina-3d-screenshot-${Date.now()}.png`;
-      link.href = dataUrl;
-      link.click();
+      const bytes = Uint8Array.from(atob(dataUrl.split(',')[1]), char => char.charCodeAt(0));
+      const outcome = await saveGeneratedFile(new Blob([bytes], { type: 'image/png' }), `lumina-3d-screenshot-${Date.now()}.png`, 'screenshot');
+      setScreenshotNotice(outcome === 'canceled' ? null : t(outcome === 'saved' ? 'file_save_saved' : 'file_save_download_started'));
     } catch (err) {
-      console.warn("Screenshot failed:", err);
+      setScreenshotNotice(t(err instanceof Error && err.message === 'file_save_too_large' ? 'file_save_too_large' : 'file_save_failed'));
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     postClientLog("viewer: source updated", {
@@ -1107,6 +1161,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
       onPointerUp={finishViewportPointer}
       onPointerCancel={finishViewportPointer}
     >
+      {screenshotNotice && <div role="status" className="absolute bottom-4 left-4 z-30 rounded bg-[var(--surface-panel-strong)] p-2 text-sm">{screenshotNotice}</div>}
       {/* Floating action buttons — top-right with right-dock avoidance.
        * 浮动按钮组：右上角悬浮，依赖 WidgetWorkspace 注入的
        * `--lumina-right-dock-width` CSS 变量自动避开右侧坞内的 widget。
@@ -1389,7 +1444,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
         {showModelSurfaceSelector && modelSurfacePreviewUrl && modelSurfaceFile ? (
           <ModelSurfaceSelector3D
             file={modelSurfaceFile}
-            artworkUrl={imagePreviewUrl}
+            artworkAsset={modelSurfaceArtworkAsset}
             footprint={modelSurfaceFootprint}
             surfaceCandidates={modelSurfaceCandidates}
             placement={modelSurfacePlacement}
@@ -1428,6 +1483,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
           <Suspense fallback={null}>
             <InteractiveModelViewer
               url={effectiveModelUrl}
+              sourceRole="generated"
               colorRemapMap={colorRemapMap}
               colorHeightMap={colorHeightMap}
               baseHeight={baseHeight}
@@ -1453,6 +1509,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
           <Suspense fallback={null}>
             <InteractiveModelViewer
               url={previewGlbUrl}
+              sourceRole="quick-preview"
               colorRemapMap={colorRemapMap}
               colorHeightMap={colorHeightMap}
               baseHeight={baseHeight}
@@ -1472,10 +1529,16 @@ function Scene3D({ modelUrl }: Scene3DProps) {
               puzzleOverlayUrl={puzzleOverlayUrl}
               colorLayerHeightMm={colorLayerHeightMm}
               onPreviewCanvasBoundsChange={handlePreviewCanvasBoundsChange}
+              heightmapReliefUrl={heightmapReliefUrl}
+              heightmapArtworkUrl={heightmapArtworkUrl}
+              heightmapReliefMaxHeightMm={heightmapMaxHeight}
+              enableCoating={enableCoating}
+              coatingHeightMm={coatingHeightMm}
+              printingLayerHeightMm={layerHeightMm ?? 0.08}
             />
           </Suspense>
         ) : null}
-        {batchPreviewItems.length === 0 && addLoop && modelBounds && (
+        {batchPreviewItems.length === 0 && addLoop && displayModelBounds && (
           <KeychainRing3D
             enabled={addLoop}
             width={loopWidth}
@@ -1485,24 +1548,23 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             offsetX={loopOffsetX}
             offsetY={loopOffsetY}
             positionPreset={loopPositionPreset}
-            modelBounds={modelBounds}
+            modelBounds={displayModelBounds}
             contours={colorContours}
             contourCanvasBounds={
               previewCanvasBoundsState?.sourceUrl === (effectiveModelUrl || previewGlbUrl)
                 ? previewCanvasBoundsState.bounds
                 : null
             }
+            contourToDisplayPoint={modelPreviewSpace?.toDisplayPoint}
             cameraPanModifierActive={isSpacePanActive}
           />
-        )}
-        {batchPreviewItems.length === 0 && enableFridgeMagnet && modelBounds && fridgeMagnets.length > 0 && (
+          )}
+        {batchPreviewItems.length === 0 && enableFridgeMagnet && displayModelBounds && fridgeMagnets.length > 0 && (
           <FridgeMagnet3D
             enabled={enableFridgeMagnet}
             magnets={fridgeMagnets}
             selectedMagnetId={selectedFridgeMagnetId}
-            modelBounds={modelBounds}
-            scaleX={scaleX}
-            scaleY={scaleY}
+            modelBounds={displayModelBounds}
             onSelectMagnet={selectFridgeMagnet}
             onUpdateMagnetCenter={updateFridgeMagnetCenter}
             cameraPanModifierActive={isSpacePanActive}

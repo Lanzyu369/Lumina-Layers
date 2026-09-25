@@ -92,6 +92,13 @@ describe("settings store hydration and base-layer modifier wiring", () => {
       settingsStoreModule.useSettingsStore.getState()
         .enableBaseLayerHeightModifier,
     ).toBe(true);
+    expect(
+      settingsStoreModule.DEFAULT_SETTINGS.enableWipeTowerAutoPlacement,
+    ).toBe(true);
+    expect(
+      settingsStoreModule.useSettingsStore.getState()
+        .enableWipeTowerAutoPlacement,
+    ).toBe(true);
   });
 
   it("hydrates older snapshots with completion notifications disabled", async () => {
@@ -116,6 +123,10 @@ describe("settings store hydration and base-layer modifier wiring", () => {
         .preserveUploadFilenameFor3mf,
     ).toBe(false);
     expect(settingsStoreModule.useSettingsStore.getState().theme).toBe("dark");
+    expect(
+      settingsStoreModule.useSettingsStore.getState()
+        .enableWipeTowerAutoPlacement,
+    ).toBe(true);
   });
 
   it("setEnableBaseLayerHeightModifier updates state and invalidates generated artifacts", async () => {
@@ -334,6 +345,7 @@ describe("settings store hydration and base-layer modifier wiring", () => {
 
     settingsStoreModule.useSettingsStore.setState({
       enableBaseLayerHeightModifier: false,
+      enableWipeTowerAutoPlacement: false,
       customSlicerPath: "/Applications/Bambu Studio.app",
       customSlicerId: "bambu_studio",
       deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.2",
@@ -344,11 +356,89 @@ describe("settings store hydration and base-layer modifier wiring", () => {
     expect(systemApi.saveSettings).toHaveBeenCalledWith(
       expect.objectContaining({
         enable_base_layer_height_modifier: false,
+        enable_wipe_tower_auto_placement: false,
         custom_slicer_path: "/Applications/Bambu Studio.app",
         custom_slicer_id: "bambu_studio",
         device_profile_id: "BambuStudio:bbl:bambu-lab-h2d:0.2",
       }),
     );
+  });
+
+  it("syncToBackend includes cross-version user-interface preferences", async () => {
+    const { settingsStoreModule, systemApi } = await loadStores();
+
+    settingsStoreModule.useSettingsStore.setState({
+      language: "en",
+      theme: "dark",
+      enableBlur: false,
+      enableCompletionNotifications: true,
+      solverCacheGridResolution: 512,
+      svgPixelsPerMm: 22.5,
+      materialDeltaE00Tolerance: 1.2,
+    });
+
+    await settingsStoreModule.useSettingsStore.getState().syncToBackend();
+
+    expect(systemApi.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        language: "en",
+        theme: "dark",
+        enable_blur: false,
+        enable_completion_notifications: true,
+        solver_cache_grid_resolution: 512,
+        svg_pixels_per_mm: 22.5,
+        material_delta_e00_tolerance: 1.2,
+      }),
+    );
+  });
+
+  it("hydrates all shared backend settings for a fresh launcher origin", async () => {
+    const { settingsStoreModule } = await loadStores();
+
+    settingsStoreModule.useSettingsStore
+      .getState()
+      .hydrateDeviceSettingsFromBackend({
+        language: "en",
+        theme: "dark",
+        last_lut: "Custom - shared",
+        last_bed_label: "180×180 mm",
+        enable_blur: false,
+        enable_completion_notifications: true,
+        preserve_upload_filename_for_3mf: true,
+        enable_solver_cache_grid_selection: true,
+        solver_cache_grid_resolution: 1024,
+        svg_pixels_per_mm: 18.4,
+        material_delta_e00_tolerance: 1.1,
+        auto_replace_gradient_banding: true,
+      });
+
+    expect(settingsStoreModule.useSettingsStore.getState()).toMatchObject({
+      language: "en",
+      theme: "dark",
+      lastLutName: "Custom - shared",
+      lastBedLabel: "180×180 mm",
+      enableBlur: false,
+      enableCompletionNotifications: true,
+      preserveUploadFilenameFor3mf: true,
+      enableSolverCacheGridSelection: true,
+      solverCacheGridResolution: 1024,
+      svgPixelsPerMm: 18.4,
+      materialDeltaE00Tolerance: 1.1,
+      autoReplaceGradientBanding: true,
+    });
+  });
+
+  it("keeps an origin-local preference when hydrating shared settings", async () => {
+    const { settingsStoreModule } = await loadStores();
+
+    const patch = settingsStoreModule.deriveBackendDeviceSettingsPatch(
+      settingsStoreModule.DEFAULT_SETTINGS,
+      { theme: "dark", language: "en" },
+      { theme: "light" },
+    );
+
+    expect(patch.theme).toBeUndefined();
+    expect(patch.language).toBe("en");
   });
 
   it("hydrates backend device_profile_id when there is no persisted choice", async () => {
@@ -472,6 +562,7 @@ describe("settings store hydration and base-layer modifier wiring", () => {
 
     settingsStoreModule.useSettingsStore.setState({
       enableBaseLayerHeightModifier: false,
+      enableWipeTowerAutoPlacement: false,
       svgPixelsPerMm: 18.5,
       preserveUploadFilenameFor3mf: true,
     });
@@ -488,6 +579,7 @@ describe("settings store hydration and base-layer modifier wiring", () => {
       "sess-1",
       expect.objectContaining({
         enable_base_layer_height_modifier: false,
+        enable_wipe_tower_auto_placement: false,
         svg_pixels_per_mm: 18.5,
       }),
       true,

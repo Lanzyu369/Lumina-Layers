@@ -21,11 +21,19 @@ import zipfile
 import json
 import copy
 import re
-from typing import Any, BinaryIO, Iterable, List, Dict, Optional
+from typing import TYPE_CHECKING, Any, BinaryIO, Iterable, List, Dict, Optional
 import numpy as np
 from PIL import Image
 
+if TYPE_CHECKING:
+    import trimesh
+
 from api.structured_logging import get_logger
+from core.mesh_export_parts import (
+    MeshExportPartRange,
+    get_mesh_export_part_ranges,
+    mesh_export_parts_are_conditional,
+)
 from core.backing_infill import (
     get_viewing_surface_solid_z_ranges,
     normalize_backing_infill_density_percent,
@@ -48,9 +56,7 @@ from utils.bambu_3mf_cover import (
 
 log = get_logger(__name__)
 
-# Lazy imports: avoid >60s startup cost when imported via API.
-# Only loaded when export functions are actually called.
-_trimesh = None
+# Lazy import: avoid loading the native 3MF extension until export is requested.
 _n3mf = None
 _PREVIEW_PLACEHOLDER_PNG_BYTES: Optional[bytes] = None
 _RAW_ZIP_COPY_CHUNK_SIZE = 1024 * 1024
@@ -65,15 +71,6 @@ _CREATOR_5_MODEL_TOWER_CLEARANCE_MM = 7.5
 _ANYCUBIC_TOWER_MIN_FOOTPRINT_WIDTH_MM = 50.0
 _ANYCUBIC_TOWER_MIN_DEPTH_MM = 57.5
 _ELEGOO_CC2_PREFERRED_TOP_EDGE_CLEARANCE_MM = 32.0
-
-
-def _get_trimesh():
-    global _trimesh
-    if _trimesh is None:
-        import trimesh as _tm
-
-        _trimesh = _tm
-    return _trimesh
 
 
 def _get_n3mf():
@@ -200,12 +197,203 @@ class _MeshExportEntry:
         material_name: Shared material/slot name used for global filament tables.
             (用于全局耗材表的共享材料或槽位名)
         color_rgb: RGB tuple for the shared material. (共享材料的 RGB 颜色)
+        part_range: Optional lazy view into one independently closed mesh leaf.
+            (可选的独立闭合网格叶子延迟切片范围)
+        contact_repair_ranges: Canonical shell ranges used only for bounded
+            writer-domain contact separation. (仅用于有界写出域接触分离的规范
+            壳体范围)
     """
 
     mesh: object
     object_name: str
     material_name: str
     color_rgb: tuple[int, int, int]
+    part_range: MeshExportPartRange | None = None
+    contact_repair_ranges: tuple[MeshExportPartRange, ...] = ()
+
+
+def _expand_mesh_export_entries(
+    *,
+    mesh: object,
+    object_name: str,
+    material_name: str,
+    color_rgb: tuple[int, int, int],
+) -> list[_MeshExportEntry]:
+    """Expose independently closed leaves without copying parent vertices.
+
+    将合并网格中的独立闭合分片展开为 3MF 叶子对象，同时复用父网格顶点。
+    """
+
+    part_ranges = get_mesh_export_part_ranges(mesh)
+    if not part_ranges:
+        return [
+            _MeshExportEntry(
+                mesh=mesh,
+                object_name=object_name,
+                material_name=material_name,
+                color_rgb=color_rgb,
+            )
+        ]
+
+    if mesh_export_parts_are_conditional(mesh):
+        return [
+            _MeshExportEntry(
+                mesh=mesh,
+                object_name=object_name,
+                material_name=material_name,
+                color_rgb=color_rgb,
+                contact_repair_ranges=part_ranges,
+            )
+        ]
+
+    source_faces = np.asarray(getattr(mesh, "faces", None))
+    expanded: list[_MeshExportEntry] = []
+    for index, part in enumerate(part_ranges, start=1):
+        source_part_faces = source_faces[part.face_start : part.face_stop]
+        if (
+            np.any(source_part_faces < part.vertex_start)
+            or np.any(source_part_faces >= part.vertex_stop)
+        ):
+            raise ValueError("3MF mesh part references vertices outside its range")
+        leaf_name = (
+            object_name
+            if len(part_ranges) == 1
+            else f"{object_name}__part_{index}"
+        )
+        expanded.append(
+            _MeshExportEntry(
+                mesh=mesh,
+                object_name=leaf_name,
+                material_name=material_name,
+                color_rgb=color_rgb,
+                part_range=part,
+            )
+        )
+    return expanded
+
+
+def _mesh_rows_are_finite(values: np.ndarray) -> bool:
+    for start in range(0, len(values), 65_536):
+        if not np.all(np.isfinite(values[start:start + 65_536])):
+            return False
+    return True
+
+
+def _mesh_indices_are_within(values: np.ndarray, minimum: int, maximum: int) -> bool:
+    for start in range(0, len(values), 65_536):
+        chunk = values[start:start + 65_536]
+        if np.any(chunk < minimum) or np.any(chunk >= maximum):
+            return False
+    return True
+
+
+def _materialize_n3mf_mesh_view_arrays(
+    mesh: object,
+    *,
+    part_range: MeshExportPartRange | None = None,
+    contact_repair_ranges: tuple[MeshExportPartRange, ...] = (),
+) -> tuple[np.ndarray, np.ndarray]:
+    """Materialize and validate the exact arrays consumed by the 3MF writer.
+    只生成一次并校验 3MF 写入器实际消费的数组。
+    """
+
+    from core.vector_mesh_spill import copy_mesh_array
+
+    source_vertices = np.asarray(getattr(mesh, "vertices", None))
+    source_faces = np.asarray(getattr(mesh, "faces", None))
+    if (
+        source_vertices.ndim != 2
+        or source_vertices.shape[1:] != (3,)
+        or len(source_vertices) == 0
+        or source_faces.ndim != 2
+        or source_faces.shape[1:] != (3,)
+        or len(source_faces) == 0
+    ):
+        raise ValueError("3MF mesh arrays must be non-empty Nx3 arrays")
+    if not _mesh_rows_are_finite(source_vertices):
+        raise ValueError("3MF mesh vertices must be finite")
+    if not _mesh_indices_are_within(source_faces, 0, len(source_vertices)):
+        raise ValueError("3MF mesh face index is out of range")
+    if len(source_vertices) > np.iinfo(np.uint32).max:
+        raise ValueError("3MF mesh exceeds uint32 vertex indices")
+
+    export_vertices = source_vertices
+    export_faces = source_faces
+    face_offset = 0
+    if part_range is not None and contact_repair_ranges:
+        raise ValueError("3MF mesh cannot combine part slicing and contact repair")
+    if part_range is not None:
+        if (
+            part_range.vertex_start < 0
+            or part_range.face_start < 0
+            or part_range.vertex_stop > len(source_vertices)
+            or part_range.face_stop > len(source_faces)
+            or part_range.vertex_stop <= part_range.vertex_start
+            or part_range.face_stop <= part_range.face_start
+        ):
+            raise ValueError("3MF mesh part range is out of bounds")
+        export_vertices = source_vertices[
+            part_range.vertex_start : part_range.vertex_stop
+        ]
+        source_part_faces = source_faces[
+            part_range.face_start : part_range.face_stop
+        ]
+        if not _mesh_indices_are_within(
+            source_part_faces, part_range.vertex_start, part_range.vertex_stop,
+        ):
+            raise ValueError("3MF mesh part references vertices outside its range")
+        export_faces = source_part_faces
+        face_offset = part_range.vertex_start
+    elif contact_repair_ranges:
+        from core.mesh_writer_domain import (
+            prepare_indexed_shells_for_float32_export,
+        )
+
+        export_vertices, export_faces = prepare_indexed_shells_for_float32_export(
+            mesh,
+            contact_repair_ranges,
+        )
+
+    vertices = copy_mesh_array(export_vertices, np.dtype(np.float32))
+    faces = copy_mesh_array(export_faces, np.dtype(np.uint32), offset=face_offset)
+    if not _mesh_rows_are_finite(vertices):
+        raise ValueError(
+            "3MF mesh vertices must remain finite after float32 conversion"
+        )
+    vertices.setflags(write=False)
+    faces.setflags(write=False)
+    return vertices, faces
+
+
+def _queue_n3mf_mesh_object(
+    *,
+    builder: object,
+    entry: _MeshExportEntry,
+    material_group_id: int,
+    material_index: int,
+    retained_views: list[tuple[np.ndarray, np.ndarray]],
+) -> int:
+    """Queue one mesh through zero-copy arrays when the binding supports it."""
+
+    vertices, faces = _materialize_n3mf_mesh_view_arrays(
+        entry.mesh,
+        part_range=entry.part_range,
+        contact_repair_ranges=entry.contact_repair_ranges,
+    )
+    add_zero_copy = getattr(builder, "add_mesh_object_zero_copy", None)
+    if not callable(add_zero_copy):
+        raise RuntimeError(
+            "neroued-3mf must provide add_mesh_object_zero_copy"
+        )
+    object_id = add_zero_copy(
+        entry.object_name,
+        vertices,
+        faces,
+        material_group_id,
+        material_index,
+    )
+    retained_views.append((vertices, faces))
+    return int(object_id)
 
 
 @dataclass(frozen=True)
@@ -1042,6 +1230,25 @@ def _apply_flashstudio_project_metadata(settings: dict, material_count: int) -> 
     settings["printer_agent"] = str(settings.get("printer_agent") or "")
 
 
+def _apply_qidi_studio_project_metadata(settings: dict, material_count: int) -> None:
+    """Apply QIDI material routing fields without replacing Lumina process data.
+
+    补齐 QIDI Studio 项目所需的耗材路由字段；层高、线宽、温度、速度等
+    工艺参数仍由 Lumina 覆盖层提供。
+    """
+
+    if material_count <= 0:
+        return
+    raw_defaults = settings.get("default_filament_profile")
+    if isinstance(raw_defaults, list) and raw_defaults:
+        default_filament = str(raw_defaults[0] or "")
+    else:
+        default_filament = str(raw_defaults or "")
+    if not default_filament:
+        default_filament = "Generic PLA"
+    settings["filament_settings_id"] = [default_filament] * material_count
+
+
 def _iter_difference_index_keys(value: Any) -> list[str]:
     if isinstance(value, list):
         raw_items = value
@@ -1733,6 +1940,7 @@ class BambuStudio3MFWriter:
         watermark: str = "LuminaStudio",
         *,
         enable_base_layer_height_modifier: bool = True,
+        enable_wipe_tower_auto_placement: bool = True,
         enable_relief: bool = False,
         base_height_mm: float = 0.0,
         color_height_mm: float = 0.0,
@@ -1757,6 +1965,9 @@ class BambuStudio3MFWriter:
             watermark (str): Watermark text embedded in the 3MF ZIP structure. (嵌入 3MF ZIP 结构的水印文本)
             enable_base_layer_height_modifier (bool): Whether to emit layer_config_ranges.xml.
                 （是否输出 layer_config_ranges.xml）
+            enable_wipe_tower_auto_placement (bool): Whether to adapt the model and
+                wipe-tower layout to the selected build area.（是否按所选打印区域自动
+                调整模型与擦料塔的摆放和擦料塔尺寸。）
             enable_relief (bool): Whether variable-height relief geometry is enabled. Relief
                 exports never emit ``layer_config_ranges.xml`` because no single global
                 backing range is safe.（是否启用可变高度浮雕；浮雕不存在全局安全的
@@ -1841,6 +2052,9 @@ class BambuStudio3MFWriter:
         self.enable_base_layer_height_modifier = bool(
             enable_base_layer_height_modifier
         ) and not self.enable_relief
+        self.enable_wipe_tower_auto_placement = bool(
+            enable_wipe_tower_auto_placement
+        )
         self.base_height_mm = float(base_height_mm)
         self.color_height_mm = float(color_height_mm)
         normalized_face_orientation = str(face_orientation).strip().lower()
@@ -1883,7 +2097,7 @@ class BambuStudio3MFWriter:
         self.preserve_template_filament_slots = preserve_template_filament_slots
         self._wipe_tower_placement_cache: WipeTowerPlacementResult | None = None
 
-    def add_mesh(self, mesh: _get_trimesh().Trimesh, name: str, color_rgb: tuple):
+    def add_mesh(self, mesh: trimesh.Trimesh, name: str, color_rgb: tuple):
         """Add a mesh object to the scene.
         将网格对象添加到场景中。
 
@@ -1904,8 +2118,8 @@ class BambuStudio3MFWriter:
 
         metadata = getattr(mesh, "metadata", {}) or {}
         material_name = str(metadata.get("bambu_material_name") or name)
-        self.objects.append(
-            _MeshExportEntry(
+        self.objects.extend(
+            _expand_mesh_export_entries(
                 mesh=mesh,
                 object_name=name,
                 material_name=material_name,
@@ -2010,12 +2224,22 @@ class BambuStudio3MFWriter:
         builder.enable_production()
         builder.set_production_merge_objects(True)
 
-        builder.add_namespace("BambuStudio", "http://schemas.bambulab.com/package/2021")
+        if self.slicer == "QIDIStudio":
+            builder.add_namespace(
+                "QIDIStudio",
+                "http://schemas.qiditech.com/package/2021",
+            )
+        else:
+            builder.add_namespace(
+                "BambuStudio",
+                "http://schemas.bambulab.com/package/2021",
+            )
         builder.add_metadata("Application", self._get_app_version_str())
         orca_version = self._get_orca_slicer_version_tag()
         if orca_version:
             builder.add_metadata("OrcaSlicer", orca_version)
-        builder.add_metadata("BambuStudio:3mfVersion", "1")
+        if self.slicer != "QIDIStudio":
+            builder.add_metadata("BambuStudio:3mfVersion", "1")
         if self.slicer == "FlashStudio":
             for key, value in (
                 ("Copyright", ""),
@@ -2038,7 +2262,30 @@ class BambuStudio3MFWriter:
                 ("Title", ""),
             ):
                 builder.add_metadata(key, value)
-        builder.add_external_model_metadata("BambuStudio:3mfVersion", "1")
+        elif self.slicer == "QIDIStudio":
+            for key in (
+                "Copyright",
+                "CreationDate",
+                "Description",
+                "Designer",
+                "DesignerCover",
+                "DesignerUserId",
+                "License",
+                "ModificationDate",
+                "Origin",
+                "ProfileCover",
+                "ProfileDescription",
+                "ProfileTitle",
+                "Title",
+            ):
+                builder.add_metadata(key, "")
+            builder.add_metadata("QIDIStudio:3mfVersion", "1")
+        external_version_key = (
+            "QIDIStudio:3mfVersion"
+            if self.slicer == "QIDIStudio"
+            else "BambuStudio:3mfVersion"
+        )
+        builder.add_external_model_metadata(external_version_key, "1")
 
         material_palette, material_indices = self._build_material_palette()
         materials = [
@@ -2049,13 +2296,16 @@ class BambuStudio3MFWriter:
 
         object_ids: list[int] = []
         material_index_by_object: list[int] = []
+        retained_mesh_views: list[tuple[np.ndarray, np.ndarray]] = []
         for entry in self.objects:
-            n3mf_mesh = n3mf.Mesh.from_arrays(
-                np.ascontiguousarray(entry.mesh.vertices, dtype=np.float64),
-                np.ascontiguousarray(entry.mesh.faces, dtype=np.int64),
-            )
             material_index = material_indices[entry.material_name]
-            obj_id = builder.add_mesh_object(entry.object_name, n3mf_mesh, mat_group_id, material_index)
+            obj_id = _queue_n3mf_mesh_object(
+                builder=builder,
+                entry=entry,
+                material_group_id=mat_group_id,
+                material_index=material_index,
+                retained_views=retained_mesh_views,
+            )
             builder.add_build_item(obj_id)
             object_ids.append(obj_id)
             material_index_by_object.append(material_index)
@@ -2066,8 +2316,22 @@ class BambuStudio3MFWriter:
         doc = builder.build()
 
         opts = n3mf.WriteOptions()
-        opts.vertex_precision = 6
+        # ``neroued_3mf`` interprets this as significant-digit precision. At
+        # bed-scale X/Y coordinates, six digits round independent vertices to
+        # the same XML coordinate after the float32 storage boundary. Nine
+        # significant digits are sufficient to round-trip every IEEE-754
+        # float32 value while avoiding the file-size cost of an arbitrary
+        # higher precision.
+        # ``neroued_3mf`` 将此值按有效数字而非固定小数位处理。在打印床尺度的
+        # X/Y 坐标下，六位会把 float32 边界之后本应独立的顶点写成同一 XML
+        # 坐标。九位有效数字足以无歧义地往返任意 IEEE-754 float32，同时避免
+        # 任意提高精度带来的文件体积成本。
+        opts.vertex_precision = 9
         opts.compact_xml = True
+        # Removing an individual face from an otherwise closed indexed shell
+        # creates an open mesh. Vector geometry handles exact float32 collapse
+        # locally, so the writer must preserve the final topology verbatim.
+        opts.triangle_write_mode = n3mf.TriangleWriteMode.Keep
         if self.watermark and hasattr(n3mf, "WatermarkConfig"):
             opts.watermark = n3mf.WatermarkConfig(payload=self.watermark.encode("utf-8"))
         elif self.watermark:
@@ -2134,6 +2398,7 @@ class BambuStudio3MFWriter:
             "OrcaSlicer": "BambuStudio-2.3.2-rc2",
             "AnycubicSlicerNext": "BambuStudio-1.3.9.4",
             "FlashStudio": "BambuStudio-2.3.2",
+            "QIDIStudio": "QIDIStudio-02.07.02.60",
         }
         if self.slicer == "BambuStudio":
             return f"BambuStudio-{self._get_bambu_client_version()}"
@@ -2170,6 +2435,8 @@ class BambuStudio3MFWriter:
 
     def _get_orca_slicer_version_tag(self) -> str | None:
         """Return the OrcaSlicer metadata tag used to avoid Bambu-project imports."""
+        if self.slicer == "QIDIStudio":
+            return "2.1.0.14"
         if self.slicer != "OrcaSlicer":
             return None
         raw_version = self._get_registry_source_version()
@@ -2221,7 +2488,7 @@ class BambuStudio3MFWriter:
 
     def _should_emit_bambu_aux_parts(self) -> bool:
         """Return whether the export should include Bambu-only aux metadata parts."""
-        return self.slicer == "BambuStudio"
+        return self.slicer in {"BambuStudio", "QIDIStudio"}
 
     @staticmethod
     def _format_number(value: float) -> str:
@@ -2276,37 +2543,162 @@ class BambuStudio3MFWriter:
 
     @classmethod
     def _parse_config_polygon(cls, value: object) -> tuple[tuple[float, float], ...]:
-        """Parse a flat ``["XxY", ...]`` polygon. / 解析扁平坐标多边形。"""
+        """Parse flat or comma-packed slicer polygon coordinates.
+
+        解析扁平或逗号打包的切片器多边形坐标。
+        """
 
         if not isinstance(value, list):
             return ()
         return tuple(
             point
-            for point in (cls._parse_printable_area_point(item) for item in value)
-            if point is not None
+            for item in value
+            for point in cls._parse_config_polygon_item(item)
         )
+
+    @classmethod
+    def _parse_config_polygon_item(
+        cls,
+        value: object,
+    ) -> tuple[tuple[float, float], ...]:
+        """Parse every ``XxY`` coordinate stored in one config item.
+
+        解析单个配置项中存储的所有 ``XxY`` 坐标。
+        """
+
+        raw = str(value or "").strip()
+        if not raw:
+            return ()
+        number = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+        matches = re.finditer(
+            rf"({number})\s*[xX]\s*({number})",
+            raw,
+        )
+        points = tuple(
+            (float(match.group(1)), float(match.group(2)))
+            for match in matches
+        )
+        if points:
+            return points
+        point = cls._parse_printable_area_point(raw)
+        return (point,) if point is not None else ()
+
+    @staticmethod
+    def _config_polygon_area_twice(
+        points: tuple[tuple[float, float], ...],
+    ) -> float:
+        """Return signed double area for a parsed config polygon.
+
+        返回已解析配置多边形的有符号两倍面积。
+        """
+
+        return sum(
+            point[0] * points[(index + 1) % len(points)][1]
+            - points[(index + 1) % len(points)][0] * point[1]
+            for index, point in enumerate(points)
+        )
+
+    @classmethod
+    def _is_axis_aligned_config_rectangle(
+        cls,
+        points: tuple[tuple[float, float], ...],
+    ) -> bool:
+        """Return whether four config points form an axis-aligned rectangle.
+
+        返回四个配置坐标是否构成轴对齐矩形。
+        """
+
+        return (
+            len(points) == 4
+            and len(set(points)) == 4
+            and len({point[0] for point in points}) == 2
+            and len({point[1] for point in points}) == 2
+            and abs(cls._config_polygon_area_twice(points)) > 1e-9
+        )
+
+    @classmethod
+    def _is_repeated_degenerate_config_sentinel(
+        cls,
+        points: tuple[tuple[float, float], ...],
+    ) -> bool:
+        """Recognize QIDI separators without mistaking subdivided edges.
+
+        识别 QIDI 分隔占位组，同时避免将带细分点的直边误判为占位组。
+        """
+
+        return (
+            len(set(points)) < len(points)
+            and abs(cls._config_polygon_area_twice(points)) <= 1e-9
+        )
+
+    @classmethod
+    def _split_bed_exclusion_points(
+        cls,
+        points: tuple[tuple[float, float], ...],
+        *,
+        require_repeated_sentinels: bool = False,
+    ) -> tuple[tuple[tuple[float, float], ...], ...]:
+        """Split slicer exclusion streams into rectangular groups plus a tail.
+
+        将切片器禁用区坐标流分成四点矩形和最后一个多边形。
+        """
+
+        if len(points) < 3:
+            return ()
+        if len(points) <= 7:
+            return (points,)
+        remainder = len(points) % 4
+        if remainder == 0 and not require_repeated_sentinels:
+            return tuple(
+                tuple(points[index : index + 4])
+                for index in range(0, len(points), 4)
+            )
+        tail_size = 4 if remainder == 0 else 4 + remainder
+        prefix_size = len(points) - tail_size
+        prefix_groups = [
+            tuple(points[index : index + 4])
+            for index in range(0, prefix_size, 4)
+        ]
+        tail = tuple(points[prefix_size:])
+        degenerate_group_count = sum(
+            cls._is_repeated_degenerate_config_sentinel(group)
+            for group in prefix_groups
+        )
+        is_recognized_sentinel_stream = (
+            degenerate_group_count >= 2
+            and abs(cls._config_polygon_area_twice(tail)) > 1e-9
+            and all(
+                cls._is_repeated_degenerate_config_sentinel(group)
+                or cls._is_axis_aligned_config_rectangle(group)
+                for group in prefix_groups
+            )
+        )
+        if is_recognized_sentinel_stream:
+            return tuple((*prefix_groups, tail))
+        return (points,)
 
     @classmethod
     def _parse_bed_exclusion_polygons(
         cls,
         value: object,
     ) -> tuple[tuple[tuple[float, float], ...], ...]:
-        """Parse rectangular bed-exclusion groups, ignoring degenerate sentinels.
+        """Parse flat and comma-packed bed-exclusion polygon groups.
 
-        解析热床禁用矩形，并忽略 ``["0x0"]`` 一类退化占位值。
+        解析扁平和逗号打包的热床禁用区多边形分组。
         """
 
-        points = cls._parse_config_polygon(value)
-        if len(points) < 3:
+        if not isinstance(value, list):
             return ()
-        if len(points) <= 4:
-            return (points,)
-        if len(points) % 4 == 0:
+        if any("," in str(item or "") for item in value):
             return tuple(
-                tuple(points[index : index + 4])
-                for index in range(0, len(points), 4)
+                polygon
+                for item in value
+                for polygon in cls._split_bed_exclusion_points(
+                    cls._parse_config_polygon_item(item),
+                    require_repeated_sentinels=True,
+                )
             )
-        return (points,)
+        return cls._split_bed_exclusion_points(cls._parse_config_polygon(value))
 
     @classmethod
     def _parse_extruder_printable_polygons(
@@ -2322,21 +2714,16 @@ class BambuStudio3MFWriter:
             return ()
         polygons: list[tuple[tuple[float, float], ...]] = []
         for item in value:
-            tokens = [token.strip() for token in str(item or "").split(",")]
-            points = tuple(
-                point
-                for point in (cls._parse_printable_area_point(token) for token in tokens)
-                if point is not None
-            )
+            points = cls._parse_config_polygon_item(item)
             if len(points) >= 3:
                 polygons.append(points)
         return tuple(polygons)
 
     @staticmethod
     def _replace_first_config_number(value: object, number: float) -> object:
-        """Preserve a config value's scalar/list shape while replacing slot zero.
+        """Replace slot zero, creating a vector when the template omits the key.
 
-        保留配置值的标量或列表形态，仅替换第一个槽位。
+        替换第一个槽位；模板缺少该键时创建向量。
         """
 
         formatted = BambuStudio3MFWriter._format_number(number)
@@ -2347,6 +2734,8 @@ class BambuStudio3MFWriter:
             else:
                 result.append(formatted)
             return result
+        if value is None:
+            return [formatted]
         return formatted
 
     def _resolve_tower_purge_volume(self, template: dict[str, Any]) -> float:
@@ -2544,10 +2933,12 @@ class BambuStudio3MFWriter:
     def _get_wipe_tower_placement(self) -> WipeTowerPlacementResult | None:
         """Resolve and cache the joint model/tower placement.
 
-        联合求解并缓存模型与擦料塔摆放结果；安全模板保持原样，无解时仅标记
-        需要人工调整，绝不缩放模型或关闭擦料塔。
+        联合求解并缓存模型与擦料塔摆放结果；开启时始终按当前模型重新规划，
+        无解时仅标记需要人工调整，绝不缩放模型或关闭擦料塔。
         """
 
+        if not self.enable_wipe_tower_auto_placement:
+            return None
         if self._wipe_tower_placement_cache is not None:
             return self._wipe_tower_placement_cache
         if not self.objects:
@@ -2659,6 +3050,8 @@ class BambuStudio3MFWriter:
         """
         if self._is_anycubic_slicer():
             return "160"
+        if self.slicer == "QIDIStudio":
+            return "1603"
         return "1"
 
     # ------------------------------------------------------------------
@@ -2700,7 +3093,9 @@ class BambuStudio3MFWriter:
                     (
                         "Metadata/cut_information.xml",
                         "text/xml",
-                        self._build_cut_information_bytes(assembly_id),
+                        self._build_cut_information_bytes(
+                            1 if self.slicer == "QIDIStudio" else assembly_id
+                        ),
                     ),
                 ]
             )
@@ -2770,6 +3165,14 @@ class BambuStudio3MFWriter:
                     ),
                 ]
             )
+        elif self.slicer == "QIDIStudio":
+            parts.append(
+                (
+                    "Metadata/plate_1.json",
+                    "application/json",
+                    self._build_qidi_studio_plate_json_bytes(),
+                )
+            )
         # Auxiliaries/.thumbnails/* — package-level cover thumbnails referenced
         # from _rels/.rels (post-processed in _inject_cover_relationships_postprocess).
         cover_part_payloads = (
@@ -2798,6 +3201,10 @@ class BambuStudio3MFWriter:
         将切片器设置元数据挂到根模型的关系表上。
         """
         if not hasattr(builder, "add_custom_relationship"):
+            return
+        if self.slicer == "QIDIStudio":
+            # Native QIDI packages keep these parts discoverable by path and do
+            # not add Bambu settings relationships to 3dmodel.model.rels.
             return
 
         n3mf = _get_n3mf()
@@ -3063,8 +3470,7 @@ class BambuStudio3MFWriter:
             dst_zip.NameToInfo[dst_info.filename] = dst_info
             dst_zip.start_dir = dst_zip.fp.tell()
 
-    @staticmethod
-    def _rewrite_rels_xml(rels_bytes: bytes, rels_namespace: str) -> bytes:
+    def _rewrite_rels_xml(self, rels_bytes: bytes, rels_namespace: str) -> bytes:
         """Append three cover relationships to ``_rels/.rels`` XML payload.
 
         在 ``_rels/.rels`` XML 中追加三条 cover 关系（保留既有 ``rel-1``）。
@@ -3105,11 +3511,10 @@ class BambuStudio3MFWriter:
                 f"{{{rels_namespace}}}Relationship",
                 attrib={
                     "Id": candidate,
-                    "Type": str(spec.relationship_type or ""),
+                    "Type": self._get_cover_relationship_type(spec.logical_name),
                     "Target": "/" + spec.zip_path,
                 },
             )
-
         buf = io.BytesIO()
         # Mirror n3mf-emitted rels: include XML declaration with UTF-8
         # encoding; ElementTree handles the namespace via register_namespace.
@@ -3117,6 +3522,17 @@ class BambuStudio3MFWriter:
             buf, encoding="utf-8", xml_declaration=True
         )
         return buf.getvalue()
+
+    def _get_cover_relationship_type(self, logical_name: str) -> str:
+        """Return the package cover relationship URI for the target slicer."""
+
+        if logical_name == "package":
+            return (
+                "http://schemas.openxmlformats.org/package/2006/"
+                "relationships/metadata/thumbnail"
+            )
+        vendor = "qiditech" if self.slicer == "QIDIStudio" else "bambulab"
+        return f"http://schemas.{vendor}.com/package/2021/cover-thumbnail-{logical_name}"
 
     def _rewrite_main_model_xml(self, model_bytes: bytes) -> bytes:
         """Write build-item placement metadata expected by Bambu-family slicers."""
@@ -3126,11 +3542,22 @@ class BambuStudio3MFWriter:
         ET.register_namespace("", core_namespace)
         ET.register_namespace("p", production_namespace)
         ET.register_namespace("BambuStudio", "http://schemas.bambulab.com/package/2021")
+        if self.slicer == "QIDIStudio":
+            ET.register_namespace(
+                "QIDIStudio",
+                "http://schemas.qiditech.com/package/2021",
+            )
 
         try:
             root = ET.fromstring(model_bytes)
         except ET.ParseError as exc:
             raise RuntimeError(f"failed to parse 3D/3dmodel.model: {exc}") from exc
+
+        if self.slicer == "QIDIStudio":
+            root.set(
+                "xmlns:QIDIStudio",
+                "http://schemas.qiditech.com/package/2021",
+            )
 
         build = root.find(f"{{{core_namespace}}}build")
         if build is not None:
@@ -3166,7 +3593,7 @@ class BambuStudio3MFWriter:
         config = ET.Element("config")
 
         obj_elem = ET.SubElement(config, "object", attrib={"id": str(assembly_id)})
-        if self.slicer == "FlashStudio":
+        if self.slicer in {"FlashStudio", "QIDIStudio"}:
             ET.SubElement(
                 obj_elem,
                 "metadata",
@@ -3249,6 +3676,25 @@ class BambuStudio3MFWriter:
                     ),
                 },
             )
+        elif self.slicer == "QIDIStudio":
+            material_palette, _ = self._build_material_palette()
+            slot_count = len(material_palette)
+            ET.SubElement(
+                plate,
+                "metadata",
+                attrib={
+                    "key": "filament_maps",
+                    "value": " ".join(["1"] * slot_count),
+                },
+            )
+            ET.SubElement(
+                plate,
+                "metadata",
+                attrib={
+                    "key": "filament_volume_maps",
+                    "value": " ".join(["0"] * slot_count),
+                },
+            )
         ET.SubElement(plate, "metadata", attrib={"key": "thumbnail_file", "value": "Metadata/plate_1.png"})
         ET.SubElement(
             plate, "metadata", attrib={"key": "thumbnail_no_light_file", "value": "Metadata/plate_no_light_1.png"}
@@ -3276,7 +3722,17 @@ class BambuStudio3MFWriter:
         """
 
         placement = self._get_wipe_tower_placement()
-        if placement is None:
+        if not self.enable_wipe_tower_auto_placement:
+            payload: dict[str, Any] = {
+                "schema_version": 1,
+                "enabled": False,
+                "available": False,
+                "adapted": False,
+                "requires_manual_adjustment": False,
+                "warning_code": None,
+                "reason": "disabled_by_user",
+            }
+        elif placement is None:
             log.warning(
                 "Printable area unavailable for wipe-tower validation",
                 extra={
@@ -3291,8 +3747,9 @@ class BambuStudio3MFWriter:
                     "slicer": self.slicer,
                 },
             )
-            payload: dict[str, Any] = {
+            payload = {
                 "schema_version": 1,
+                "enabled": True,
                 "available": False,
                 "adapted": False,
                 "requires_manual_adjustment": True,
@@ -3302,6 +3759,7 @@ class BambuStudio3MFWriter:
         else:
             payload = {
                 "schema_version": 1,
+                "enabled": True,
                 "available": True,
                 "adapted": placement.adapted,
                 "requires_manual_adjustment": placement.requires_manual_adjustment,
@@ -3394,6 +3852,8 @@ class BambuStudio3MFWriter:
             )
         if self.slicer == "FlashStudio":
             _apply_flashstudio_project_metadata(settings, num_colors)
+        elif self.slicer == "QIDIStudio":
+            _apply_qidi_studio_project_metadata(settings, num_colors)
         if not preserve_template_filament_slots:
             filament_colour = settings.get("filament_colour")
             if isinstance(filament_colour, list):
@@ -3504,6 +3964,20 @@ class BambuStudio3MFWriter:
                     "value": self._get_anycubic_client_version(),
                 },
             )
+        elif self.slicer == "QIDIStudio":
+            ET.SubElement(
+                header,
+                "header_item",
+                attrib={"key": "X-QDT-Client-Type", "value": "slicer"},
+            )
+            ET.SubElement(
+                header,
+                "header_item",
+                attrib={
+                    "key": "X-QDT-Client-Version",
+                    "value": registry_client_version or "02.07.02.60",
+                },
+            )
         else:
             ET.SubElement(header, "header_item", attrib={"key": "X-BBL-Client-Type", "value": "slicer"})
             if self.slicer == "BambuStudio":
@@ -3571,12 +4045,14 @@ class BambuStudio3MFWriter:
         tree.write(buf, encoding="utf-8", xml_declaration=False)
         return buf.getvalue()
 
-    @staticmethod
-    def _build_filament_sequence_bytes() -> bytes:
+    def _build_filament_sequence_bytes(self) -> bytes:
         """Build filament_sequence.json as bytes.
         构建 filament_sequence.json（字节形式）。
         """
-        data = {"plate_1": {"sequence": []}}
+        plate = {"sequence": []}
+        if self.slicer == "QIDIStudio":
+            plate.update({"nozzle_sequence": [], "optimal_assignment": []})
+        data = {"plate_1": plate}
         return json.dumps(data, ensure_ascii=False).encode("utf-8")
 
     @staticmethod
@@ -3741,6 +4217,25 @@ class BambuStudio3MFWriter:
         }
         return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
 
+    def _build_qidi_studio_plate_json_bytes(self) -> bytes:
+        """Build QIDI Studio's native plate summary from Lumina export data.
+
+        使用 Lumina 当前模型、调色板与工艺参数构建 QIDI Studio 盘面摘要，
+        不复制参考项目的用户、耗材或切片统计。
+        """
+
+        payload = json.loads(
+            self._build_flashstudio_plate_json_bytes().decode("utf-8")
+        )
+        material_palette, _ = self._build_material_palette()
+        payload["filament_colors"] = [
+            f"#{red:02X}{green:02X}{blue:02X}"
+            for _, (red, green, blue) in material_palette
+        ]
+        payload["filament_ids"] = list(range(len(material_palette)))
+        payload["first_extruder"] = 0
+        return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+
     # ------------------------------------------------------------------
     # Config template & filament arrays (unchanged logic)
     # ------------------------------------------------------------------
@@ -3862,7 +4357,7 @@ def read_wipe_tower_placement_warnings(
 
 
 def export_scene_with_bambu_metadata(
-    scene: _get_trimesh().Scene,
+    scene: trimesh.Scene,
     output_path: str,
     slot_names: List[str],
     preview_colors: Dict,
@@ -3875,6 +4370,7 @@ def export_scene_with_bambu_metadata(
     project_slot_names: Optional[List[str]] = None,
     *,
     enable_base_layer_height_modifier: bool = True,
+    enable_wipe_tower_auto_placement: bool = True,
     enable_relief: bool = False,
     base_height_mm: float = 0.0,
     color_height_mm: float = 0.0,
@@ -3889,7 +4385,7 @@ def export_scene_with_bambu_metadata(
     将 Trimesh 场景导出为 BambuStudio/OrcaSlicer 兼容的 3MF 文件（含元数据）。
 
     Args:
-        scene (_get_trimesh().Scene): Trimesh Scene containing all meshes. (包含所有网格的场景)
+        scene (trimesh.Scene): Trimesh Scene containing all meshes. (包含所有网格的场景)
         output_path (str): Output .3mf file path. (输出 .3mf 文件路径)
         slot_names (List[str]): Actually used material names. (实际使用的材料名称列表)
         preview_colors (Dict): Material ID to RGBA color mapping. (材料 ID 到 RGBA 颜色映射)
@@ -3904,6 +4400,9 @@ def export_scene_with_bambu_metadata(
             in exported project metadata when available. (可选，导出项目元数据时应保留的完整来源调色板/材料名称)
         enable_base_layer_height_modifier (bool): Whether to emit layer_config_ranges.xml.
             （是否输出 layer_config_ranges.xml）
+        enable_wipe_tower_auto_placement (bool): Whether to adapt the model and
+            wipe-tower layout to the selected build area.（是否按所选打印区域自动
+            调整模型与擦料塔的摆放和擦料塔尺寸。）
         enable_relief (bool): Whether variable-height relief geometry is enabled. Relief
             exports never emit ``layer_config_ranges.xml``.（是否启用可变高度浮雕；
             浮雕导出始终不输出 ``layer_config_ranges.xml``。）
@@ -3981,6 +4480,9 @@ def export_scene_with_bambu_metadata(
         "enable_relief": bool(enable_relief),
         "enable_base_layer_height_modifier": bool(
             enable_base_layer_height_modifier
+        ),
+        "enable_wipe_tower_auto_placement": bool(
+            enable_wipe_tower_auto_placement
         ),
         "base_height_mm": float(base_height_mm),
         "color_height_mm": float(color_height_mm),

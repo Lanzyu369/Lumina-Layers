@@ -65,6 +65,7 @@ class TestGetSettings:
         assert settings["build_plate_id"] == ""
         assert settings["build_plate_selections"] == {}
         assert settings["nozzle_size"] == "0.4"
+        assert settings["enable_wipe_tower_auto_placement"] is True
 
     def test_get_settings_rejects_untrusted_origin_by_default(self) -> None:
         """正式本地版默认拒绝外部网页读取持久设置。"""
@@ -260,6 +261,7 @@ class TestPostSettings:
             "enable_crop_modal": True,
             "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
             "nozzle_size": "0.2",
+            "enable_wipe_tower_auto_placement": False,
         }
         mock_file = MagicMock()
         with patch("api.routers.system.SETTINGS_FILE", mock_file):
@@ -272,6 +274,31 @@ class TestPostSettings:
         mock_file.write_text.assert_called_once()
         written = json.loads(mock_file.write_text.call_args.args[0])
         assert written["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.2"
+        assert written["enable_wipe_tower_auto_placement"] is False
+
+    def test_post_settings_preserves_fields_owned_by_newer_runtime_versions(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """旧运行版本保存设置时不删除未来版本新增字段。"""
+        settings_path = tmp_path / "settings" / "common.json"
+        settings_path.parent.mkdir()
+        settings_path.write_text(
+            json.dumps({"future_runtime_setting": {"schema": 2}}),
+            encoding="utf-8",
+        )
+        payload = {
+            "theme": "dark",
+            "last_lut": "Shared",
+        }
+
+        with patch("api.routers.system.SETTINGS_FILE", settings_path):
+            response = client.post("/api/system/settings", json=payload)
+
+        assert response.status_code == 200
+        stored = json.loads(settings_path.read_text(encoding="utf-8"))
+        assert stored["theme"] == "dark"
+        assert stored["future_runtime_setting"] == {"schema": 2}
 
     def test_post_settings_rejects_untrusted_origin_by_default(self) -> None:
         """正式本地版默认拒绝外部网页保存设置。"""
@@ -449,6 +476,37 @@ class TestGetPrinters:
             "display_name": "Flash Studio Desktop",
         } in response.json()["slicers"]
 
+    def test_get_printers_and_slicers_expose_qidi_studio_profiles(self) -> None:
+        printers_response = client.get("/api/system/printers")
+        slicers_response = client.get("/api/system/slicers")
+
+        assert printers_response.status_code == 200
+        assert slicers_response.status_code == 200
+        assert {
+            "id": "QIDIStudio",
+            "display_name": "QIDI Studio",
+        } in slicers_response.json()["slicers"]
+        expected_nozzles = {
+            "qidi-q2": ["0.2", "0.4"],
+            "qidi-q2c": ["0.2", "0.4"],
+            "qidi-x-max-4": ["0.2", "0.4"],
+            "qidi-x-plus-5": ["0.4"],
+        }
+        printers = {
+            printer["id"]: printer
+            for printer in printers_response.json()["printers"]
+            if printer["id"] in expected_nozzles
+        }
+        assert set(printers) == set(expected_nozzles)
+        for printer_id, nozzles in expected_nozzles.items():
+            printer = printers[printer_id]
+            assert printer["supported_slicers"] == ["QIDIStudio"]
+            assert [
+                profile["nozzle_size"]
+                for profile in printer["device_profiles"]
+                if profile["slicer_id"] == "QIDIStudio"
+            ] == nozzles
+
     def test_get_printers_attaches_registry_device_profiles(self, tmp_path, monkeypatch) -> None:
         registry_root = tmp_path / "machine_registry"
         registry_root.mkdir()
@@ -625,6 +683,81 @@ class TestGetPrinters:
         assert response.status_code == 200
         assert response.content == b"fake-thumbnail"
         assert response.headers["content-type"].startswith("image/png")
+
+    def test_machine_registry_serves_selected_device_native_bed_model(
+        self,
+        tmp_path,
+        monkeypatch,
+    ) -> None:
+        installed_model = tmp_path / "installed-slicer" / "a1-mini.stl"
+        installed_model.parent.mkdir(parents=True)
+        installed_model.write_bytes(b"native-bed-model")
+        monkeypatch.setattr(
+            "api.routers.system.resolve_installed_bed_model",
+            lambda _profile: installed_model,
+        )
+
+        response = client.get(
+            "/api/system/machine-registry/bed-model",
+            params={
+                "device_profile_id": (
+                    "OrcaSlicer:bbl:bambu-lab-a1-mini:0.4"
+                )
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.content
+        assert response.headers["content-type"].startswith("model/stl")
+
+    def test_machine_registry_bed_model_is_optional_without_installed_slicer(
+        self,
+        monkeypatch,
+    ) -> None:
+        monkeypatch.setattr(
+            "api.routers.system.resolve_installed_bed_model",
+            lambda _profile: None,
+        )
+
+        response = client.get(
+            "/api/system/machine-registry/bed-model",
+            params={
+                "device_profile_id": (
+                    "OrcaSlicer:bbl:bambu-lab-a1-mini:0.4"
+                )
+            },
+        )
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == "Bed model not found"
+
+    def test_machine_registry_bed_model_rejects_untrusted_web_origin(
+        self,
+        monkeypatch,
+    ) -> None:
+        def fail_if_resolver_runs(_profile):
+            raise AssertionError("Untrusted requests must be rejected before file lookup")
+
+        monkeypatch.setattr(
+            "api.routers.system.resolve_installed_bed_model",
+            fail_if_resolver_runs,
+        )
+
+        response = client.get(
+            "/api/system/machine-registry/bed-model",
+            params={
+                "device_profile_id": (
+                    "OrcaSlicer:bbl:bambu-lab-a1-mini:0.4"
+                )
+            },
+            headers={
+                "Origin": "https://attacker.example",
+                "Sec-Fetch-Site": "cross-site",
+            },
+        )
+
+        assert response.status_code == 403
+        assert "local Lumina Studio app" in response.json()["detail"]
 
     def test_machine_registry_asset_serves_from_frozen_bundle_root(
         self,

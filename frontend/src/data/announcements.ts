@@ -16,6 +16,172 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-09-24",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [{
+      category: { zh: "稳定性", en: "Stability" },
+      items: [{
+        zh: "修复 16 位高度图上传后出现杂纹、浮雕高度错乱的问题，原图的明暗和高低顺序保持一致。",
+        en: "Fixed noise and incorrect relief heights when uploading 16-bit heightmaps, preserving the image's brightness and height order.",
+      }, {
+        zh: "颜色状态文字被浏览器工具改写后，点击“全不选”不再因此白屏，可以继续选色。",
+        en: "Clearing the color selection no longer blanks the page after browser tools replace the selection status text. You can keep editing colors.",
+      }],
+    }],
+  },
+  {
+    version: "2026-09-23",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [{
+          zh: "修复了部分 Windows 电脑打开软件后一直白屏的问题，无需更改系统设置或删除原有资料。",
+          en: "Fixed a startup white screen on some Windows PCs, without changing system settings or deleting existing data.",
+        }],
+      },
+    ],
+  },
+  {
+    version: "2026-09-14",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [{
+          zh: "使用像素画模式转换透明图片时，合并预览和导出的 3MF 现在都会保留透明区域，不再自动补上一整块矩形底板。",
+          en: "Pixel Art mode now preserves transparent areas in both the combined preview and exported 3MF, instead of adding a full rectangular backing.",
+        }],
+      },
+    ],
+  },
+  {
+    version: "2026-09-13",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [
+      {
+        category: { zh: "矢量化", en: "Vectorisation" },
+        items: [
+          {
+            zh: "新增 SVG 小洞补偿，默认关闭。可按成品尺寸填补画面中的小孔和封闭细缝并沿用邻近颜色，预览和生成保持一致；原文件不变，补偿设置可随项目保存。",
+            en: "Added SVG hole compensation, off by default. Fill small holes and enclosed thin gaps at the finished size using nearby colours, with matching preview and generation. Your original file stays unchanged, and the settings are saved with the project.",
+          },
+        ],
+      },
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [{
+          zh: "批量生成多个 SVG 或图片时，透明镀层现在会按所选厚度添加到每个模型中。",
+          en: "When generating multiple SVGs or images together, transparent coating is now added to each model at the selected thickness.",
+        }, {
+          zh: "修复透明镀层与描边同时开启时出现白色碎点的问题，镀层完整覆盖描边范围。",
+          en: "Fixed white specks when coating and outline are enabled together; coating covers the full outline footprint.",
+        }],
+      },
+    ],
+  },
+  {
+    version: "2026-09-03",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [
+      {
+        category: { zh: "新功能", en: "New" },
+        items: [
+          {
+            zh: "设置里新增“擦料塔自动摆放”开关，默认开启；关闭后，生成的 3MF 会保留切片软件模板里的擦料塔参数，方便你手动安排位置和尺寸。",
+            en: "Settings now include an Automatic wipe-tower placement switch, enabled by default. Turn it off to keep the slicer template's tower position and size for manual layout.",
+          },
+        ],
+      },
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [
+          {
+            zh: "修复“擦料塔自动摆放”开启后仍沿用模板位置和尺寸的问题；现在普通尺寸作品也会按当前打印机自动调整模型与擦料塔布局。",
+            en: "Fixed Automatic wipe-tower placement sometimes keeping the template position and size. Regular-sized projects now get a layout planned for the selected printer too.",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    version: "2026-08-31",
+    title: {
+      zh: "Lumina Layers — 8 月更新速览",
+      en: "Lumina Layers — August updates",
+    },
+    sections: [
+      {
+        category: { zh: "矢量化", en: "Vectorisation" },
+        items: [
+          {
+            zh: "8 月 31 日：常见的纯色 SVG 现在能更快完成颜色区域分析；遇到复杂描边、透明或特效时会自动沿用兼容处理，成品结构和材料顺序保持不变。",
+            en: "August 31: Common flat-colour SVG files now complete colour-region analysis faster. Artwork with complex strokes, transparency, or effects automatically uses the compatibility path, preserving the finished structure and material order.",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    version: "2026-08-30",
+    title: {
+      zh: "Lumina Layers — 8 月更新速览",
+      en: "Lumina Layers — August updates",
+    },
+    sections: [
+      {
+        category: { zh: "预览 & 交互", en: "Preview & Interaction" },
+        items: [
+          {
+            zh: "SVG 矢量作品现在默认使用平滑 SVG 轻量预览；修改尺寸和常用创意效果时，画面会直接跟着更新。需要兼容旧显示方式时，可在设置里关闭这个选项。",
+            en: "SVG artwork now uses a smooth lightweight SVG preview by default, with size and common creative changes reflected directly in the viewer. You can switch back to the previous display style in Settings when needed.",
+          },
+          {
+            zh: "点击生成后，画面会继续使用轻量预览，不会先加载体积很大的打印模型；下载的 3MF 仍按当前设置精确生成。",
+            en: "After you select Generate, the viewer keeps using the lightweight model instead of loading the much larger print model, while the downloaded 3MF is still generated precisely from your current settings.",
+          },
+          {
+            zh: "模型覆面现在会显示改色后的实际画面，不再退回原始颜色；SVG 轮廓也会保持平滑。",
+            en: "The model-surface preview now shows the genuinely recoloured artwork instead of reverting to its original colours, while SVG edges stay smooth.",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    version: "2026-08-23",
+    title: {
+      zh: "Lumina Layers — 8 月更新速览",
+      en: "Lumina Layers — August updates",
+    },
+    sections: [
+      {
+        category: { zh: "新功能", en: "New" },
+        items: [
+          {
+            zh: "8 月 23 日：新增 QIDI Studio 支持，可直接为 Q2、Q2C、X-Max 4 和 X-Plus 5 生成适配的多色 3MF。喷嘴选项按软件内的机型清单提供且最大为 0.4 毫米；导出文件保留 Lumina 工艺参数。",
+            en: "August 23: Added QIDI Studio support for multicolour 3MF exports targeting the Q2, Q2C, X-Max 4, and X-Plus 5. Nozzle choices follow QIDI Studio's machine list and are capped at 0.4 mm, while Lumina process settings remain intact.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-08-14",
     title: {
       zh: "Lumina Layers — 8 月更新",

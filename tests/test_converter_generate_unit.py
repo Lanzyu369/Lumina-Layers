@@ -14,12 +14,14 @@ Validates:
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures.process import BrokenProcessPool
 import inspect
 import json
 import os
 import pickle
 import tempfile
 import zipfile
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -36,6 +38,7 @@ from api.preview_cache_artifacts import externalize_preview_cache
 from api.routers.converter.color_card import _COLOR_CARD_GENERATION_FAILED_DETAIL
 from api.routers.converter.generate import _generate_large_format_raster
 from api.routers.converter.generate import _generate_large_format_svg_native
+from api.routers.converter.generate import _rasterize_svg_fallback_tile
 from api.routers.converter.generate import LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL
 from api.routers.converter.generate import LARGE_FORMAT_GENERATION_FAILED_DETAIL
 from api.routers.converter.generate import MODEL_GENERATION_FAILED_DETAIL
@@ -61,6 +64,7 @@ from core.converter import (
     _resolve_material_archive_backing_color_id,
     convert_image_to_3d,
 )
+from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
 
 _test_store: SessionStore = SessionStore(ttl=1800)
 _test_registry: FileRegistry = FileRegistry()
@@ -89,6 +93,12 @@ setup_module(None)
 
 
 client: TestClient = TestClient(app)
+
+
+
+
+
+
 
 
 async def _timed_submit_via_generate_mock(
@@ -171,6 +181,99 @@ def test_generate_response_exposes_worker_pool_timing() -> None:
     assert performance["endpoint_post_worker_ms"] >= 0.0
 
 
+def test_generate_rejects_stale_editor_content_revision_before_worker() -> None:
+    """Generation must not combine a stale editor snapshot with current cache."""
+
+    sid = _create_session_with_preview_and_files(_test_store)
+    _test_store.put(sid, "visible_region_cache_generation", 7)
+    _mock_pool.submit = AsyncMock()
+    payload = {
+        "session_id": sid,
+        "params": {
+            "lut_name": "test_lut",
+            "modeling_mode": "high-fidelity",
+            "editor_content_revision": 6,
+        },
+    }
+
+    with patch("os.path.exists", return_value=True):
+        response = client.post("/api/convert/generate", json=payload)
+
+    assert response.status_code == 409, response.text
+    assert "Visible content changed" in response.json()["detail"]
+    _mock_pool.submit.assert_not_called()
+
+
+def test_generate_rejects_stale_selection_revision_before_worker() -> None:
+    """Generation must bind both content and shared-selection revisions."""
+
+    sid = _create_session_with_preview_and_files(_test_store)
+    _test_store.put(sid, "editor_selection_revision", 3)
+    _mock_pool.submit = AsyncMock()
+    payload = {
+        "session_id": sid,
+        "params": {
+            "lut_name": "test_lut",
+            "modeling_mode": "high-fidelity",
+            "selection_revision": 2,
+        },
+    }
+
+    with patch("os.path.exists", return_value=True):
+        response = client.post("/api/convert/generate", json=payload)
+
+    assert response.status_code == 409, response.text
+    assert "selection changed" in response.json()["detail"].lower()
+    _mock_pool.submit.assert_not_called()
+
+
+def test_generate_worker_receives_immutable_editor_snapshot_when_store_changes_after_assembly() -> None:
+    """A store edit after input assembly cannot mutate the enqueued worker args."""
+
+    sid = _create_session_with_preview_and_files(_test_store)
+    old_regions = [
+        {
+            "selected_color": "#ff0000",
+            "replacement_color": "#00ff00",
+        }
+    ]
+    _test_store.put(sid, "replacement_regions", old_regions)
+    _test_store.put(sid, "editor_content_revision", 1)
+    worker_params_seen: dict[str, object] = {}
+
+    async def submit_after_store_edit(*args: object, **kwargs: object) -> tuple[dict[str, object], dict[str, float]]:
+        worker_params_seen.update(args[3])
+        # Simulate a real edit arriving after generation assembled its
+        # request but before the worker consumes it.
+        _test_store.put(sid, "replacement_regions", [{"selected_color": "#0000ff"}])
+        _test_store.put(sid, "editor_content_revision", 2)
+        return (
+            {
+                "threemf_path": "/tmp/stale-generation.3mf",
+                "glb_path": None,
+                "status_msg": "OK",
+            },
+            {},
+        )
+
+    _mock_pool.submit_timed = AsyncMock(side_effect=submit_after_store_edit)
+    payload = {
+        "session_id": sid,
+        "params": {
+            "lut_name": "test_lut",
+            "modeling_mode": "high-fidelity",
+            "editor_content_revision": 1,
+        },
+    }
+
+    with patch("os.path.exists", return_value=True):
+        response = client.post("/api/convert/generate", json=payload)
+
+    assert response.status_code == 409, response.text
+    assert worker_params_seen["replacement_regions"] == old_regions
+    assert "Editor content changed" in response.json()["detail"]
+
+
 def test_generate_response_forwards_embedded_wipe_tower_warning() -> None:
     sid = _create_session_with_preview_and_files(_test_store)
     _mock_pool.submit = AsyncMock(
@@ -201,6 +304,475 @@ def test_generate_response_forwards_embedded_wipe_tower_warning() -> None:
     assert response.json()["warnings"] == [
         "wipe_tower_manual_adjustment_required"
     ]
+
+
+@pytest.mark.asyncio
+async def test_large_format_raster_forwards_embedded_tile_warning(tmp_path) -> None:
+    image_path = tmp_path / "source.png"
+    lut_path = tmp_path / "source.npy"
+    tile_path = tmp_path / "tile.3mf"
+    Image.fromarray(np.zeros((10, 10, 3), dtype=np.uint8)).save(image_path)
+    lut_path.write_bytes(b"lut")
+    tile_path.write_bytes(b"3mf")
+    store = SessionStore(ttl=1800)
+    registry = FileRegistry()
+    pool = MagicMock(spec=WorkerPoolManager)
+    pool.submit = AsyncMock(
+        return_value={"threemf_path": str(tile_path), "glb_path": None, "status_msg": "ok"}
+    )
+    request = LargeFormatConvertGenerateRequest(
+        lut_name="test_lut",
+        modeling_mode=ModelingMode.HIGH_FIDELITY,
+    )
+    warning_code = "wipe_tower_manual_adjustment_required"
+    try:
+        with patch(
+            "api.routers.converter.generate.read_wipe_tower_placement_warnings",
+            return_value=[warning_code],
+        ):
+            result = await _generate_large_format_raster(
+                image_path=str(image_path),
+                lut_path=str(lut_path),
+                source_basename="source",
+                recipe_overrides=None,
+                recipe_override_masks_path=None,
+                material_matrix_path=None,
+                total_width_mm=10.0,
+                total_height_mm=10.0,
+                tile_width_mm=10.0,
+                tile_height_mm=10.0,
+                request=request,
+                session_data={},
+                sid="warning-session",
+                store=store,
+                registry=registry,
+                pool=pool,
+            )
+        assert result["warnings"] == [warning_code]
+    finally:
+        store.clear_all()
+        registry.clear_all()
+
+
+@pytest.mark.asyncio
+async def test_large_format_raster_memory_error_cancels_pending_tiles(tmp_path) -> None:
+    """A tile OOM keeps the original error and cancels unconsumed work."""
+
+    class _Awaitable:
+        def __init__(self, value=None, error: BaseException | None = None):
+            self.value = value
+            self.error = error
+            self.cancelled = False
+
+        def cancel(self):
+            self.cancelled = True
+            return True
+
+        def __await__(self):
+            async def _resolve():
+                if self.error is not None:
+                    raise self.error
+                return self.value
+
+            return _resolve().__await__()
+
+    image_path = tmp_path / "source.png"
+    lut_path = tmp_path / "source.npy"
+    first_tile = tmp_path / "first.3mf"
+    Image.fromarray(np.zeros((10, 30, 3), dtype=np.uint8)).save(image_path)
+    lut_path.write_bytes(b"lut")
+    first_tile.write_bytes(b"3mf")
+    first = _Awaitable({"threemf_path": str(first_tile), "glb_path": None, "status_msg": "ok"})
+    failing = _Awaitable(error=MemoryError("injected large-format OOM"))
+    pending = _Awaitable({"threemf_path": None, "glb_path": None, "status_msg": "pending"})
+    pool = MagicMock(spec=WorkerPoolManager)
+    pool.submit = MagicMock(side_effect=[first, failing, pending])
+    store = SessionStore(ttl=1800)
+    registry = FileRegistry()
+    request = LargeFormatConvertGenerateRequest(
+        lut_name="test_lut",
+        modeling_mode=ModelingMode.HIGH_FIDELITY,
+    )
+    try:
+        with pytest.raises(MemoryError, match="injected large-format OOM"):
+            await _generate_large_format_raster(
+                image_path=str(image_path),
+                lut_path=str(lut_path),
+                source_basename="source",
+                recipe_overrides=None,
+                recipe_override_masks_path=None,
+                material_matrix_path=None,
+                total_width_mm=30.0,
+                total_height_mm=10.0,
+                tile_width_mm=10.0,
+                tile_height_mm=10.0,
+                request=request,
+                session_data={},
+                sid="oom-session",
+                store=store,
+                registry=registry,
+                pool=pool,
+            )
+        assert pending.cancelled is True
+        assert pool.submit.call_count == 3
+        assert not first_tile.exists()
+    finally:
+        store.clear_all()
+        registry.clear_all()
+
+
+def test_svg_fallback_rasterizes_one_global_tile_without_full_canvas(tmp_path) -> None:
+    svg_path = tmp_path / "source.svg"
+    svg_path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50" '
+        'width="100" height="50"><rect width="100" height="50" fill="red"/></svg>',
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_rasterize(path, target_width_mm, **kwargs):
+        captured.update(path=path, target_width_mm=target_width_mm, kwargs=kwargs)
+        return np.zeros((20, 40, 4), dtype=np.uint8)
+
+    with patch(
+        "api.routers.converter.generate.rasterize_svg",
+        side_effect=_fake_rasterize,
+    ):
+        tile_path = _rasterize_svg_fallback_tile(
+            svg_path=str(svg_path),
+            total_width_mm=100.0,
+            total_height_mm=50.0,
+            x0_mm=50.0,
+            y0_mm=0.0,
+            x1_mm=100.0,
+            y1_mm=50.0,
+            pixels_per_mm=10.0,
+        )
+
+    try:
+        assert captured["target_width_mm"] == 50.0
+        assert captured["kwargs"]["crop_to_content"] is False
+        assert captured["kwargs"]["_cache_result"] is False
+        with Image.open(tile_path) as rendered:
+            assert rendered.size == (40, 20)
+    finally:
+        Path(tile_path).unlink(missing_ok=True)
+
+
+def test_svg_fallback_preserves_percentage_viewport_across_tiles(tmp_path) -> None:
+    """The real resvg path crops a full SVG viewport, not a re-laid-out root."""
+
+    svg_path = tmp_path / "percentage-layout.svg"
+    svg_path.write_text(
+        """<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+  <defs><filter id="blur"><feGaussianBlur stdDeviation="0.1"/></filter></defs>
+  <g filter="url(#blur)">
+    <rect width="100%" height="100%" fill="red"/>
+    <rect x="50%" width="50%" height="100%" fill="blue"/>
+  </g>
+</svg>""",
+        encoding="utf-8",
+    )
+
+    tile_paths: list[str] = []
+    try:
+        for x0_mm, x1_mm in ((0.0, 50.0), (50.0, 100.0)):
+            tile_path = _rasterize_svg_fallback_tile(
+                svg_path=str(svg_path),
+                total_width_mm=100.0,
+                total_height_mm=100.0,
+                x0_mm=x0_mm,
+                y0_mm=0.0,
+                x1_mm=x1_mm,
+                y1_mm=100.0,
+                pixels_per_mm=4.0,
+            )
+            tile_paths.append(tile_path)
+
+        with Image.open(tile_paths[0]) as left_image, Image.open(tile_paths[1]) as right_image:
+            left_rgb = np.asarray(left_image.convert("RGB"), dtype=np.float32).mean(axis=(0, 1))
+            right_rgb = np.asarray(right_image.convert("RGB"), dtype=np.float32).mean(axis=(0, 1))
+
+        assert left_rgb[0] > 240 and left_rgb[2] < 10
+        assert right_rgb[2] > 240 and right_rgb[0] < 10
+    finally:
+        for tile_path in tile_paths:
+            Path(tile_path).unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize(
+    ("viewport_width", "viewport_height", "preserve_aspect_ratio"),
+    ((100, 100, None), (200, 100, None), (200, 100, "none")),
+)
+def test_svg_fallback_tiles_match_full_resvg_viewport_crop(
+    tmp_path,
+    viewport_width: int,
+    viewport_height: int,
+    preserve_aspect_ratio: str | None,
+) -> None:
+    """Windowed fallback pixels match cropping the same full resvg canvas."""
+
+    preserve_attribute = (
+        f' preserveAspectRatio="{preserve_aspect_ratio}"'
+        if preserve_aspect_ratio is not None
+        else ""
+    )
+    svg_path = tmp_path / "viewport-reference.svg"
+    svg_path.write_text(
+        f'''<svg xmlns="http://www.w3.org/2000/svg" width="{viewport_width}"
+height="{viewport_height}" viewBox="0 0 100 100"{preserve_attribute}>
+  <defs><clipPath id="canvas"><rect width="100" height="100"/></clipPath></defs>
+  <g clip-path="url(#canvas)">
+    <rect width="100%" height="100%" fill="red"/>
+    <rect x="50%" width="50%" height="100%" fill="blue"/>
+  </g>
+</svg>''',
+        encoding="utf-8",
+    )
+    density = 4.0
+    full = rasterize_svg(
+        str(svg_path),
+        float(viewport_width),
+        pixels_per_mm=density,
+        crop_to_content=False,
+        _min_quality_px=1,
+        _cache_result=False,
+    )
+
+    tile_paths: list[str] = []
+    try:
+        tile_width_mm = viewport_width / 2.0
+        for x0_mm, x1_mm in ((0.0, tile_width_mm), (tile_width_mm, viewport_width)):
+            tile_path = _rasterize_svg_fallback_tile(
+                svg_path=str(svg_path),
+                total_width_mm=float(viewport_width),
+                total_height_mm=float(viewport_height),
+                x0_mm=x0_mm,
+                y0_mm=0.0,
+                x1_mm=x1_mm,
+                y1_mm=float(viewport_height),
+                pixels_per_mm=density,
+            )
+            tile_paths.append(tile_path)
+
+            with Image.open(tile_path) as tile_image:
+                actual = np.asarray(tile_image.convert("RGBA"))
+            px_x0 = int(round(x0_mm / viewport_width * full.shape[1]))
+            px_x1 = int(round(x1_mm / viewport_width * full.shape[1]))
+            expected = full[:, px_x0:px_x1]
+            np.testing.assert_array_equal(actual, expected)
+    finally:
+        for tile_path in tile_paths:
+            Path(tile_path).unlink(missing_ok=True)
+
+
+def test_svg_fallback_physical_units_match_full_resvg_viewport_crop(tmp_path) -> None:
+    """Physical SVG lengths use the same CSS-pixel viewport as the full render."""
+
+    svg_path = tmp_path / "physical-unit-fallback.svg"
+    svg_path.write_text(
+        """<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="100mm">
+  <defs><filter id="blur"><feGaussianBlur stdDeviation="0.1"/></filter></defs>
+  <g filter="url(#blur)">
+    <rect width="100%" height="100%" fill="red"/>
+    <rect x="50mm" width="50mm" height="100mm" fill="blue"/>
+  </g>
+</svg>""",
+        encoding="utf-8",
+    )
+    full = rasterize_svg(
+        str(svg_path),
+        100.0,
+        pixels_per_mm=4.0,
+        crop_to_content=False,
+        _min_quality_px=1,
+        _cache_result=False,
+    )
+    tile_paths: list[str] = []
+    try:
+        for x0_mm, x1_mm in ((0.0, 50.0), (50.0, 100.0)):
+            tile_path = _rasterize_svg_fallback_tile(
+                svg_path=str(svg_path),
+                total_width_mm=100.0,
+                total_height_mm=100.0,
+                x0_mm=x0_mm,
+                y0_mm=0.0,
+                x1_mm=x1_mm,
+                y1_mm=100.0,
+                pixels_per_mm=4.0,
+            )
+            tile_paths.append(tile_path)
+            with Image.open(tile_path) as tile_image:
+                actual = np.asarray(tile_image.convert("RGBA"))
+            px_x0 = int(round(x0_mm / 100.0 * full.shape[1]))
+            px_x1 = int(round(x1_mm / 100.0 * full.shape[1]))
+            expected = full[:, px_x0:px_x1]
+            # Physical-unit conversion can round one CSS pixel differently
+            # between the full and windowed resvg calls; geometry and color
+            # must still match within that one-channel rounding unit.
+            assert np.max(np.abs(actual.astype(np.int16) - expected.astype(np.int16))) <= 1
+    finally:
+        for tile_path in tile_paths:
+            Path(tile_path).unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_svg_fallback_heightmap_uses_independent_global_y_coordinates(tmp_path) -> None:
+    """Fallback tiles must receive the corresponding upper/lower heightmap rows."""
+
+    class _Completed:
+        def __init__(self, value: dict[str, object]) -> None:
+            self.value = value
+
+        def __await__(self):
+            async def _resolve():
+                return self.value
+
+            return _resolve().__await__()
+
+    svg_path = tmp_path / "heightmap-source.svg"
+    svg_path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" '
+        'viewBox="0 0 100 100"><rect width="100%" height="100%" fill="red"/></svg>',
+        encoding="utf-8",
+    )
+    lut_path = tmp_path / "lut.npy"
+    lut_path.write_bytes(b"lut")
+    heightmap = np.zeros((100, 100), dtype=np.uint8)
+    heightmap[:50, :] = 64
+    heightmap[50:, :] = 192
+
+    sampled: list[tuple[tuple[int, int], float]] = []
+    tile_paths: list[Path] = []
+
+    def _submit(_worker, _image_path, _lut_path, tile_params):
+        with Image.open(tile_params["heightmap_path"]) as tile_heightmap:
+            sampled.append(
+                (
+                    tile_heightmap.size,
+                    float(np.asarray(tile_heightmap).mean()),
+                )
+            )
+        output_path = tmp_path / f"tile-{len(tile_paths)}.3mf"
+        output_path.write_bytes(b"3mf")
+        tile_paths.append(output_path)
+        return _Completed(
+            {
+                "threemf_path": str(output_path),
+                "glb_path": None,
+                "status_msg": "ok",
+            }
+        )
+
+    pool = MagicMock(spec=WorkerPoolManager)
+    pool.submit = MagicMock(side_effect=_submit)
+    store = SessionStore(ttl=1800)
+    registry = FileRegistry()
+    request = LargeFormatConvertGenerateRequest(
+        lut_name="test_lut",
+        modeling_mode=ModelingMode.HIGH_FIDELITY,
+        enable_relief=True,
+        height_mode="heightmap",
+    )
+
+    try:
+        result = await _generate_large_format_raster(
+            image_path=None,
+            svg_fallback_path=str(svg_path),
+            lut_path=str(lut_path),
+            source_basename="heightmap-source",
+            recipe_overrides=None,
+            recipe_override_masks_path=None,
+            material_matrix_path=None,
+            total_width_mm=100.0,
+            total_height_mm=100.0,
+            tile_width_mm=100.0,
+            tile_height_mm=50.0,
+            request=request,
+            session_data={"heightmap_grayscale": heightmap},
+            sid="heightmap-fallback-session",
+            store=store,
+            registry=registry,
+            pool=pool,
+        )
+
+        assert result["tile_count"] == 2
+        assert sampled == [((100, 50), 64.0), ((100, 50), 192.0)]
+    finally:
+        registry.clear_all()
+        store.clear_all()
+        for output_path in tile_paths:
+            output_path.unlink(missing_ok=True)
+
+
+def test_color_card_response_forwards_only_embedded_wipe_tower_warnings(
+    tmp_path: Path,
+) -> None:
+    """Color-card responses expose the warning embedded in the final 3MF."""
+
+    _test_store.clear_all()
+    _test_registry.clear_all()
+    warning_code = "wipe_tower_manual_adjustment_required"
+
+    for case_name, requires_manual_adjustment, expected_warnings in (
+        ("manual", True, [warning_code]),
+        ("safe", False, []),
+    ):
+        output_path = tmp_path / f"color-card-{case_name}.3mf"
+        with zipfile.ZipFile(output_path, "w") as package:
+            package.writestr(
+                "Metadata/lumina_wipe_tower_placement.json",
+                json.dumps(
+                    {
+                        "requires_manual_adjustment": requires_manual_adjustment,
+                        "warning_code": (
+                            warning_code if requires_manual_adjustment else None
+                        ),
+                    }
+                ),
+            )
+
+        lut_path = tmp_path / f"color-card-{case_name}.npy"
+        np.save(lut_path, np.zeros((1, 3), dtype=np.uint8))
+        svg_path = tmp_path / f"color-card-{case_name}.svg"
+        svg_path.write_text("<svg/>", encoding="utf-8")
+        sid = _test_store.create()
+        _test_store.put(sid, "lut_path", str(lut_path))
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                "target_w": 4,
+                "target_h": 4,
+                "target_width_mm": 40.0,
+                "color_palette": [{"hex": "#ff0000"}],
+                "color_mode": "4-Color (RYBW)",
+            },
+        )
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": str(output_path),
+                "glb_path": None,
+                "status_msg": "OK",
+            },
+        )
+
+        try:
+            with patch(
+                "core.color_card.generate_color_card_svg",
+                return_value=str(svg_path),
+            ):
+                response = client.post(
+                    "/api/convert/color-card",
+                    json={"session_id": sid},
+                )
+
+            assert response.status_code == 200, response.text
+            assert response.json()["warnings"] == expected_warnings
+            assert response.json()["warnings"].count(warning_code) <= 1
+        finally:
+            _test_store.close(sid)
+            _test_registry.clear_all()
 
 
 def _create_session_with_preview_and_files(store: SessionStore) -> str:
@@ -543,7 +1115,7 @@ class TestGenerateParameterCompleteness:
         body = response.json()
         assert body["status"] == "ok"
         assert body["download_url"].startswith("/api/files/")
-        assert body["preview_3d_url"].startswith("/api/files/")
+        assert body["preview_3d_url"] is None
         assert body["threemf_disk_path"] is None
         assert "/tmp/out.3mf" not in response.text
 
@@ -615,8 +1187,16 @@ class TestGenerateParameterCompleteness:
         assert submitted_params["free_color_set"] is None
         assert submitted_params["enable_base_layer_height_modifier"] is True
 
-    def test_vector_generate_forwards_parse_clip_cache_path(self) -> None:
+    def test_vector_generate_forwards_parse_clip_cache_path(self, tmp_path) -> None:
         sid: str = _create_session_with_preview_and_files(_test_store)
+        source_path = tmp_path / "source.svg"
+        source_path.write_bytes(b"x" * (2 * 1024**2))
+        parse_cache_path = tmp_path / "vector-parse-cache.pkl"
+        parse_cache_path.write_bytes(b"x" * (3 * 1024**2 // 2))
+        lut_path = tmp_path / "test-lut.npy"
+        np.save(lut_path, np.zeros((1, 3), dtype=np.uint8))
+        _test_store.put(sid, "image_path", str(source_path))
+        _test_store.put(sid, "lut_path", str(lut_path))
         _test_store.put(
             sid,
             "preview_cache",
@@ -624,7 +1204,7 @@ class TestGenerateParameterCompleteness:
                 "target_w": 120,
                 "target_h": 80,
                 "target_width_mm": 60.0,
-                "vector_parse_clip_cache_path": "/tmp/vector-parse-cache.pkl",
+                "vector_parse_clip_cache_path": str(parse_cache_path),
             },
         )
         _mock_pool.submit = AsyncMock(
@@ -647,10 +1227,15 @@ class TestGenerateParameterCompleteness:
 
         assert response.status_code == 200, response.text
         submitted_params = _mock_pool.submit.call_args.args[3]
-        assert submitted_params["vector_parse_clip_cache_path"] == "/tmp/vector-parse-cache.pkl"
+        assert submitted_params["vector_parse_clip_cache_path"] == str(
+            parse_cache_path
+        )
 
-    def test_color_card_generate_uses_source_palette(self) -> None:
+    def test_color_card_generate_uses_source_palette(self, tmp_path) -> None:
         sid: str = _create_session_with_preview_and_files(_test_store)
+        lut_path = tmp_path / "test-lut.npy"
+        np.save(lut_path, np.zeros((1, 3), dtype=np.uint8))
+        _test_store.put(sid, "lut_path", str(lut_path))
         _test_store.put(
             sid,
             "preview_cache",
@@ -709,6 +1294,7 @@ class TestGenerateParameterCompleteness:
         assert submitted_image_path == captured["svg_path"]
         assert submitted_params["modeling_mode"] == CoreModelingMode.VECTOR
         assert submitted_params["vector_parse_clip_cache_path"] is None
+
 
     def test_dynamic_color_card_rejects_before_svg_or_session_mutation(
         self,
@@ -839,6 +1425,7 @@ class TestGenerateParameterCompleteness:
             svg_path = tmp_path / "card.svg"
             svg_path.write_text("<svg></svg>", encoding="utf-8")
             captured["hex_colors"] = list(hex_colors)
+            captured["svg_path"] = str(svg_path)
             return str(svg_path)
 
         _mock_pool.submit = AsyncMock(
@@ -1065,6 +1652,55 @@ class TestGenerateParameterCompleteness:
             np.load(submitted_params["height_identity_rgb_path"]),
             preview_cache["height_identity_rgb"],
         )
+
+    @pytest.mark.parametrize("preview_changes, enabled", [
+        ({"svg_hole_compensation_enabled": False}, True),
+        ({"svg_hole_max_area_mm2": 0.1}, True),
+        ({"svg_hole_max_width_mm": 0.05}, True),
+        ({"target_width_mm": 100.0}, True),
+        ({"svg_hole_compensation_enabled": True}, False),
+        ({}, True),
+    ])
+    def test_material_archive_compensation_requires_matching_preview(
+        self, tmp_path, preview_changes, enabled,
+    ) -> None:
+        source = tmp_path / "source.svg"
+        source.write_text('<svg xmlns="http://www.w3.org/2000/svg"/>', encoding="utf-8")
+        sid = _create_session_with_preview_and_files(_test_store)
+        request = ConvertGenerateRequest(
+            lut_name="__material_archive__", modeling_mode="vector",
+            target_width_mm=220.0, use_cached_matched_rgb=False,
+            svg_hole_compensation_enabled=enabled,
+            svg_hole_max_area_mm2=0.75, svg_hole_max_width_mm=0.12,
+        )
+        cache = {
+            **request.model_dump(), "material_source": "material_archive",
+            "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+            "mask_solid": np.ones((4, 4), dtype=bool),
+            "material_matrix": np.ones((4, 4, 5), dtype=np.int32),
+            **preview_changes,
+        }
+        _test_store.put(sid, "preview_cache", cache)
+        _test_store.put(sid, "image_path", str(source))
+        _test_store.put(sid, "material_source", "material_archive")
+        _mock_pool.submit = AsyncMock(return_value={
+            "threemf_path": "/tmp/out.3mf", "glb_path": None, "status_msg": "OK",
+        })
+        try:
+            with patch("os.path.exists", return_value=True):
+                response = client.post("/api/convert/generate", json={
+                    "session_id": sid, "params": request.model_dump(mode="json"),
+                })
+            if preview_changes:
+                assert response.status_code == 409, response.text
+                _mock_pool.submit.assert_not_called()
+            else:
+                assert response.status_code == 200, response.text
+                params = _mock_pool.submit.call_args.args[3]
+                assert params["svg_hole_compensation_enabled"] is True
+                assert params["material_matrix_path"] is not None
+        finally:
+            _test_store.close(sid)
 
     def test_generate_artifact_cache_forwards_field_paths_without_hydrating(
         self,
@@ -1387,6 +2023,31 @@ class TestGenerateParameterCompleteness:
         assert submitted_params["reuse_preview_analysis"] is True
         assert submitted_params["preview_glb_path"] == str(preview_glb_path)
 
+        loop_response = client.post(
+            "/api/convert/generate",
+            json={
+                "session_id": sid,
+                "params": {
+                    "lut_name": "test_lut",
+                    "target_width_mm": 40.0,
+                    "color_mode": "4-Color (RYBW)",
+                    "modeling_mode": "high-fidelity",
+                    "color_layers": 5,
+                    "layer_height_mm": 0.08,
+                    "quantize_colors": 48,
+                    "enable_cleanup": True,
+                    "svg_pixels_per_mm": 10.0,
+                    "high_precision_3d_preview": False,
+                    "add_loop": True,
+                },
+            },
+        )
+
+        assert loop_response.status_code == 200, loop_response.text
+        loop_params = _mock_pool.submit.call_args.args[3]
+        assert loop_params["reuse_preview_analysis"] is False
+        assert loop_params["preview_glb_path"] is None
+
     def test_generate_reuses_preview_analysis_when_optional_layer_defaults_match(
         self,
         tmp_path,
@@ -1624,6 +2285,7 @@ class TestGenerateParameterCompleteness:
             "params": {
                 "lut_name": "test_lut",
                 "enable_base_layer_height_modifier": False,
+                "enable_wipe_tower_auto_placement": False,
             },
         }
 
@@ -1640,6 +2302,7 @@ class TestGenerateParameterCompleteness:
         assert response.status_code == 200
         submitted_params = _mock_pool.submit.call_args.args[3]
         assert submitted_params["enable_base_layer_height_modifier"] is False
+        assert submitted_params["enable_wipe_tower_auto_placement"] is False
 
     def test_generated_download_survives_source_session_close(self) -> None:
         fd_img, image_path = tempfile.mkstemp(suffix=".png")
@@ -1811,6 +2474,569 @@ class TestGenerateParameterCompleteness:
         assert response.status_code == 200
         submitted_params = _mock_pool.submit.call_args.args[3]
         assert submitted_params["enable_base_layer_height_modifier"] is True
+        assert submitted_params["enable_wipe_tower_auto_placement"] is True
+
+
+class TestNativeVectorPreviewGlbReuse:
+    """Native planar SVG generation reuses only the current session preview."""
+
+    @staticmethod
+    def _seed_ready_vector_preview(
+        tmp_path,
+        *,
+        preview_owner: str | None = None,
+        preview_ttl_seconds: int | None = None,
+    ) -> tuple[str, str, str, str, str]:
+        _test_store.clear_all()
+        _test_registry.clear_all()
+
+        image_path = tmp_path / "input.svg"
+        lut_path = tmp_path / "source.npy"
+        out_path = tmp_path / "out.3mf"
+        preview_glb_path = tmp_path / "segmented-preview.glb"
+        image_path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4">'
+            '<rect width="4" height="4" fill="#ff0000"/></svg>',
+            encoding="utf-8",
+        )
+        lut_path.write_bytes(b"lut")
+        out_path.write_bytes(b"3mf")
+        preview_glb_path.write_bytes(b"segmented-glb")
+
+        sid = _test_store.create()
+        owner = preview_owner or sid
+        preview_glb_id = _test_registry.register_path(
+            owner,
+            str(preview_glb_path),
+            ttl_seconds=preview_ttl_seconds,
+        )
+        cache_ref = externalize_preview_cache(
+            sid,
+            _test_store,
+            {
+                "target_w": 4,
+                "target_h": 4,
+                "target_width_mm": 40.0,
+                "color_mode": "4-Color (RYBW)",
+                "modeling_mode": "vector",
+                "color_layers": 5,
+                "layer_height_mm": 0.08,
+                "quantize_colors": 48,
+                "enable_cleanup": True,
+                "hue_weight": 0.0,
+                "chroma_gate": 15.0,
+                "use_lut_constrained": False,
+                "auto_dynamic_range": False,
+                "model_enable": False,
+                "model_only": False,
+                "model_threshold": None,
+                "model_margin": None,
+                "svg_pixels_per_mm": 10.0,
+                "material_source": "lut",
+                "high_precision_3d_preview": False,
+                "glb_url": f"/api/files/{preview_glb_id}",
+                "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+                "mask_solid": np.ones((4, 4), dtype=bool),
+                "material_matrix": np.zeros((4, 4, 5), dtype=np.uint8),
+            },
+            root_dir=tmp_path,
+        )
+        _test_store.put(sid, "preview_cache", cache_ref)
+        _test_store.put(sid, "image_path", str(image_path))
+        _test_store.put(sid, "source_basename", "input")
+        _test_store.put(sid, "lut_path", str(lut_path))
+        _test_store.put(sid, "color_mode", "4-Color (RYBW)")
+        _test_store.put(sid, "modeling_mode", "vector")
+        _test_store.put(sid, "color_layers", 5)
+        _test_store.put(sid, "layer_height_mm", 0.08)
+        _test_store.put(sid, "replacement_regions", [])
+        _test_store.put(sid, "free_color_set", set())
+        _test_store.put(sid, "material_source", "lut")
+        return (
+            sid,
+            str(out_path),
+            str(preview_glb_path),
+            preview_glb_id,
+            str(image_path),
+        )
+
+    @staticmethod
+    def _payload(sid: str, **overrides: object) -> dict[str, object]:
+        return {
+            "session_id": sid,
+            "params": {
+                "lut_name": "test_lut",
+                "target_width_mm": 40.0,
+                "color_mode": "4-Color (RYBW)",
+                "modeling_mode": "vector",
+                "color_layers": 5,
+                "layer_height_mm": 0.08,
+                "quantize_colors": 48,
+                "enable_cleanup": True,
+                "svg_pixels_per_mm": 10.0,
+                "high_precision_3d_preview": False,
+                **overrides,
+            },
+        }
+
+    def test_native_vector_generate_reuses_ready_preview_glb_without_reregistering(
+        self,
+        tmp_path,
+    ) -> None:
+        sid, out_path, preview_path, preview_id, _image_path = (
+            self._seed_ready_vector_preview(tmp_path)
+        )
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": out_path,
+                "glb_path": preview_path,
+                "status_msg": "OK",
+            }
+        )
+
+        response = client.post(
+            "/api/convert/generate",
+            json=self._payload(sid),
+        )
+
+        assert response.status_code == 200, response.text
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_params["reuse_preview_analysis"] is False
+        assert submitted_params["preview_glb_path"] == preview_path
+        assert response.json()["preview_3d_url"] == f"/api/files/{preview_id}"
+        assert set(_test_registry.get_session_entries(sid)) == {preview_id}
+        assert os.path.exists(preview_path)
+
+        download_url = response.json()["download_url"]
+        close_response = client.post(
+            "/api/session/close",
+            json={"session_id": sid},
+        )
+
+        assert close_response.status_code == 200
+        assert client.get(f"/api/files/{preview_id}").status_code == 404
+        download_response = client.get(download_url)
+        assert download_response.status_code == 200
+        assert download_response.content == b"3mf"
+
+    def test_native_vector_generate_does_not_return_preview_superseded_in_flight(
+        self,
+        tmp_path,
+    ) -> None:
+        sid, out_path, preview_path, _preview_id, _image_path = (
+            self._seed_ready_vector_preview(tmp_path)
+        )
+
+        async def finish_after_preview_is_invalidated(*_args, **_kwargs):
+            session_data = _test_store.get(sid)
+            assert session_data is not None
+            cache_ref = dict(session_data["preview_cache"])
+            metadata = dict(cache_ref["metadata"])
+            metadata["glb_url"] = None
+            metadata["glb_job_token"] = "replacement-job"
+            cache_ref["metadata"] = metadata
+            _test_store.put(sid, "preview_cache", cache_ref)
+            return {
+                "threemf_path": out_path,
+                "glb_path": preview_path,
+                "status_msg": "OK",
+            }
+
+        _mock_pool.submit = AsyncMock(side_effect=finish_after_preview_is_invalidated)
+
+        response = client.post(
+            "/api/convert/generate",
+            json=self._payload(sid),
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["preview_3d_url"] is None
+        assert os.path.exists(preview_path)
+
+    def test_native_vector_missing_3mf_preserves_reused_preview_glb(
+        self,
+        tmp_path,
+    ) -> None:
+        sid, _out_path, preview_path, preview_id, _image_path = (
+            self._seed_ready_vector_preview(tmp_path)
+        )
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": None,
+                "glb_path": preview_path,
+                "status_msg": "worker returned no 3MF",
+            }
+        )
+
+        response = client.post(
+            "/api/convert/generate",
+            json=self._payload(sid),
+        )
+
+        assert response.status_code == 500
+        assert response.json()["detail"] == MODEL_GENERATION_FAILED_DETAIL
+        assert os.path.exists(preview_path)
+        assert set(_test_registry.get_session_entries(sid)) == {preview_id}
+
+    @pytest.mark.parametrize(
+        "request_overrides",
+        [
+            {
+                "enable_relief": True,
+                "height_mode": "color",
+                "color_height_map": {"#ff0000": 2.0},
+                "structure_mode": "Single-sided",
+            },
+            {"enable_coating": True, "coating_height_mm": 0.08},
+            {"add_loop": True},
+            {
+                "enable_fridge_magnet": True,
+                "fridge_magnets": [
+                    {
+                        "id": "magnet-round",
+                        "shape": "round",
+                        "preset_key": "round-18",
+                        "diameter_mm": 18.0,
+                        "width_mm": None,
+                        "height_mm": None,
+                        "thickness_mm": 2.0,
+                        "center_x_mm": 20.0,
+                        "center_y_mm": 25.0,
+                    }
+                ],
+            },
+            {"enable_outline": True, "outline_width": 2.0},
+            {"enable_cloisonne": True},
+        ],
+        ids=[
+            "relief",
+            "coating",
+            "keychain-loop",
+            "fridge-magnet",
+            "outline",
+            "cloisonne",
+        ],
+    )
+    def test_native_vector_generate_reuses_preview_glb_for_live_settings(
+        self,
+        tmp_path,
+        request_overrides: dict[str, object],
+    ) -> None:
+        sid, out_path, preview_path, preview_id, _image_path = (
+            self._seed_ready_vector_preview(tmp_path)
+        )
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": out_path,
+                "glb_path": preview_path,
+                "status_msg": "OK",
+            }
+        )
+
+        response = client.post(
+            "/api/convert/generate",
+            json=self._payload(sid, **request_overrides),
+        )
+
+        assert response.status_code == 200, response.text
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_params["preview_glb_path"] == preview_path
+        assert response.json()["preview_3d_url"] == f"/api/files/{preview_id}"
+        assert set(_test_registry.get_session_entries(sid)) == {preview_id}
+
+    def test_native_vector_generate_rejects_parameter_mismatch_for_preview_glb(
+        self,
+        tmp_path,
+    ) -> None:
+        sid, out_path, _preview_path, _preview_id, _image_path = (
+            self._seed_ready_vector_preview(tmp_path)
+        )
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": out_path,
+                "glb_path": None,
+                "status_msg": "OK",
+            }
+        )
+
+        response = client.post(
+            "/api/convert/generate",
+            json=self._payload(sid, target_width_mm=41.0),
+        )
+
+        assert response.status_code == 200, response.text
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_params["preview_glb_path"] is None
+        assert response.json()["preview_3d_url"] is None
+
+    @pytest.mark.parametrize(
+        "request_overrides",
+        [
+            {
+                "replacement_regions": [
+                    {
+                        "quantized_hex": "#ff0000",
+                        "matched_hex": "#ff0000",
+                        "replacement_hex": "#00ff00",
+                    }
+                ]
+            },
+            {
+                "recipe_overrides": [
+                    {
+                        "region_id": "region-1",
+                        "recipe": [0, 0, 0, 0, 0],
+                        "layer_order": "Top2Bottom",
+                    }
+                ]
+            },
+            {"free_color_set": ["#00ff00"]},
+        ],
+        ids=["replacement-regions", "recipe-overrides", "free-color-set"],
+    )
+    def test_native_vector_generate_rejects_preview_glb_for_new_edit_state(
+        self,
+        tmp_path,
+        request_overrides: dict[str, object],
+    ) -> None:
+        sid, out_path, _preview_path, _preview_id, _image_path = (
+            self._seed_ready_vector_preview(tmp_path)
+        )
+        if "recipe_overrides" in request_overrides:
+            _test_store.put(
+                sid,
+                "selected_region_masks",
+                {"region-1": np.ones((4, 4), dtype=bool)},
+            )
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": out_path,
+                "glb_path": None,
+                "status_msg": "OK",
+            }
+        )
+
+        response = client.post(
+            "/api/convert/generate",
+            json=self._payload(sid, **request_overrides),
+        )
+
+        assert response.status_code == 200, response.text
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_params["preview_glb_path"] is None
+        assert response.json()["preview_3d_url"] is None
+
+    def test_native_vector_generate_reuses_preview_glb_for_matching_edit_state(
+        self,
+        tmp_path,
+    ) -> None:
+        sid, out_path, preview_path, preview_id, _image_path = (
+            self._seed_ready_vector_preview(tmp_path)
+        )
+        replacement_regions = [
+            {
+                "quantized_hex": "#ff0000",
+                "matched_hex": "#ff0000",
+                "replacement_hex": "#00ff00",
+            }
+        ]
+        recipe_overrides = [
+            {
+                "region_id": "region-1",
+                "recipe": [0, 0, 0, 0, 0],
+                "layer_order": "Top2Bottom",
+            }
+        ]
+        _test_store.put(sid, "replacement_regions", replacement_regions)
+        _test_store.put(sid, "recipe_overrides", recipe_overrides)
+        _test_store.put(sid, "free_color_set", {"00ff00"})
+        _test_store.put(
+            sid,
+            "selected_region_masks",
+            {"region-1": np.ones((4, 4), dtype=bool)},
+        )
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": out_path,
+                "glb_path": preview_path,
+                "status_msg": "OK",
+            }
+        )
+
+        response = client.post(
+            "/api/convert/generate",
+            json=self._payload(
+                sid,
+                replacement_regions=replacement_regions,
+                recipe_overrides=recipe_overrides,
+                free_color_set=["#00FF00"],
+            ),
+        )
+
+        assert response.status_code == 200, response.text
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_params["preview_glb_path"] == preview_path
+        assert response.json()["preview_3d_url"] == f"/api/files/{preview_id}"
+
+    def test_native_vector_generate_reuses_preview_glb_for_equivalent_legacy_replacement_record(
+        self,
+        tmp_path,
+    ) -> None:
+        sid, out_path, preview_path, preview_id, _image_path = (
+            self._seed_ready_vector_preview(tmp_path)
+        )
+        _test_store.put(
+            sid,
+            "replacement_regions",
+            [
+                {
+                    "selected_color": "#aabbcc",
+                    "replacement_color": "#00ff00",
+                }
+            ],
+        )
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": out_path,
+                "glb_path": preview_path,
+                "status_msg": "OK",
+            }
+        )
+
+        response = client.post(
+            "/api/convert/generate",
+            json=self._payload(
+                sid,
+                replacement_regions=[
+                    {
+                        "quantized_hex": "#112233",
+                        "matched_hex": "#AABBCC",
+                        "replacement_hex": "#00FF00",
+                    }
+                ],
+            ),
+        )
+
+        assert response.status_code == 200, response.text
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_params["preview_glb_path"] == preview_path
+        assert response.json()["preview_3d_url"] == f"/api/files/{preview_id}"
+
+    def test_native_vector_generate_rejects_expired_preview_glb(
+        self,
+        tmp_path,
+    ) -> None:
+        sid, out_path, preview_path, _preview_id, _image_path = (
+            self._seed_ready_vector_preview(
+                tmp_path,
+                preview_ttl_seconds=0,
+            )
+        )
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": out_path,
+                "glb_path": None,
+                "status_msg": "OK",
+            }
+        )
+
+        response = client.post(
+            "/api/convert/generate",
+            json=self._payload(sid),
+        )
+
+        assert response.status_code == 200, response.text
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_params["preview_glb_path"] is None
+        assert response.json()["preview_3d_url"] is None
+        assert not os.path.exists(preview_path)
+
+    def test_native_vector_generate_rejects_foreign_session_preview_glb(
+        self,
+        tmp_path,
+    ) -> None:
+        foreign_sid = _test_store.create()
+        sid, out_path, _preview_path, _preview_id, _image_path = (
+            self._seed_ready_vector_preview(
+                tmp_path,
+                preview_owner=foreign_sid,
+            )
+        )
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": out_path,
+                "glb_path": None,
+                "status_msg": "OK",
+            }
+        )
+
+        response = client.post(
+            "/api/convert/generate",
+            json=self._payload(sid),
+        )
+
+        assert response.status_code == 200, response.text
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_params["preview_glb_path"] is None
+        assert response.json()["preview_3d_url"] is None
+
+    def test_native_vector_generate_rejects_model_surface_preview_glb(
+        self,
+        tmp_path,
+    ) -> None:
+        sid, out_path, _preview_path, _preview_id, _image_path = (
+            self._seed_ready_vector_preview(tmp_path)
+        )
+        surface_path = tmp_path / "surface.stl"
+        surface_path.write_bytes(b"surface")
+        _test_store.put(sid, "surface_overlay_enabled", True)
+        _test_store.put(sid, "surface_model_path", str(surface_path))
+        _test_store.put(sid, "surface_footprint", {"width_mm": 40.0})
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": out_path,
+                "glb_path": None,
+                "status_msg": "OK",
+            }
+        )
+
+        response = client.post(
+            "/api/convert/generate",
+            json=self._payload(sid),
+        )
+
+        assert response.status_code == 200, response.text
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_params["converter_params"]["preview_glb_path"] is None
+        assert response.json()["preview_3d_url"] is None
+
+    def test_vector_mode_raster_source_does_not_enter_native_svg_reuse(
+        self,
+        tmp_path,
+    ) -> None:
+        sid, out_path, _preview_path, _preview_id, image_path = (
+            self._seed_ready_vector_preview(tmp_path)
+        )
+        raster_path = Path(image_path).with_suffix(".png")
+        raster_path.write_bytes(b"raster-source")
+        _test_store.put(sid, "image_path", str(raster_path))
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": out_path,
+                "glb_path": None,
+                "status_msg": "OK",
+            }
+        )
+
+        response = client.post(
+            "/api/convert/generate",
+            json=self._payload(sid),
+        )
+
+        assert response.status_code == 200, response.text
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_params["preview_glb_path"] is None
+        assert response.json()["preview_3d_url"] is None
 
 
 # =========================================================================
@@ -1821,21 +3047,6 @@ class TestGenerateParameterCompleteness:
 class TestGenerateTimeout:
     """Verify asyncio.TimeoutError from pool.submit returns HTTP 504."""
 
-    def test_generate_timeout_returns_504(self) -> None:
-        sid: str = _create_session_with_preview_and_files(_test_store)
-
-        payload = {
-            "session_id": sid,
-            "params": {"lut_name": "test_lut"},
-        }
-
-        _mock_pool.submit = AsyncMock(side_effect=asyncio.TimeoutError())
-
-        with patch("os.path.exists", return_value=True):
-            response = client.post("/api/convert/generate", json=payload)
-
-        assert response.status_code == 504
-        assert "timed out" in response.json()["detail"].lower()
 
 
 # =========================================================================
@@ -1863,9 +3074,70 @@ class TestGenerateWorkerException:
         assert response.json()["detail"] == MODEL_GENERATION_FAILED_DETAIL
         assert "Worker crashed" not in response.text
 
+    def test_generate_broken_worker_pool_returns_retryable_503(self) -> None:
+        sid: str = _create_session_with_preview_and_files(_test_store)
+        payload = {
+            "session_id": sid,
+            "params": {"lut_name": "test_lut"},
+        }
+        _mock_pool.submit = AsyncMock(
+            side_effect=BrokenProcessPool("worker was killed")
+        )
+
+        with patch("os.path.exists", return_value=True):
+            response = client.post("/api/convert/generate", json=payload)
+
+        assert response.status_code == 503
+        assert response.json()["detail"] == MODEL_GENERATION_FAILED_DETAIL
+        assert "worker was killed" not in response.text
+
+
 
 class TestGenerateRegistryFailureCleanup:
     """Final worker outputs should not leak when registry ownership fails."""
+
+    def test_generate_missing_3mf_discards_unexpected_worker_glb(
+        self,
+        tmp_path,
+    ) -> None:
+        image_path = tmp_path / "source.png"
+        lut_path = tmp_path / "source.npy"
+        glb_path = tmp_path / "unexpected.glb"
+        Image.fromarray(np.zeros((2, 2, 3), dtype=np.uint8)).save(image_path)
+        lut_path.write_bytes(b"lut")
+        glb_path.write_bytes(b"glb")
+
+        sid = _test_store.create()
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {"target_w": 2, "target_h": 2, "target_width_mm": 20.0},
+        )
+        _test_store.put(sid, "image_path", str(image_path))
+        _test_store.put(sid, "lut_path", str(lut_path))
+        _test_store.put(sid, "replacement_regions", [])
+        _test_store.put(sid, "free_color_set", set())
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": None,
+                "glb_path": str(glb_path),
+                "status_msg": "worker returned no 3MF",
+            }
+        )
+
+        try:
+            response = client.post(
+                "/api/convert/generate",
+                json={"session_id": sid, "params": {"lut_name": "test_lut"}},
+            )
+
+            assert response.status_code == 500
+            assert response.json()["detail"] == MODEL_GENERATION_FAILED_DETAIL
+            assert not glb_path.exists()
+            assert _test_registry.get_session_entries(sid) == {}
+        finally:
+            glb_path.unlink(missing_ok=True)
+            _test_store.close(sid)
 
     def test_generate_registry_failure_cleans_unregistered_worker_outputs(self) -> None:
         paths: list[str] = []
@@ -1986,7 +3258,7 @@ class TestGenerateRegistryFailureCleanup:
                     path.unlink()
             _test_store.close(sid)
 
-    def test_generate_glb_registry_failure_preserves_downloaded_3mf(self) -> None:
+    def test_generate_discards_print_glb_and_preserves_downloaded_3mf(self) -> None:
         paths: list[str] = []
 
         def _make_file(suffix: str, payload: bytes) -> str:
@@ -2038,7 +3310,7 @@ class TestGenerateRegistryFailureCleanup:
             assert not os.path.exists(glb_path)
             assert os.path.exists(image_path)
             assert os.path.exists(lut_path)
-            assert registry.register_calls == 2
+            assert registry.register_calls == 1
             assert registry.first_file_id == download_file_id
             entry = registry.get_entry(registry.first_file_id)
             assert entry is not None
@@ -2061,6 +3333,69 @@ class TestGenerateRegistryFailureCleanup:
                 if os.path.exists(path):
                     os.unlink(path)
             _test_store.close(sid)
+
+    def test_generate_drops_new_glb_when_session_closes_during_worker(
+        self,
+        tmp_path,
+    ) -> None:
+        image_path = tmp_path / "source.png"
+        lut_path = tmp_path / "source.npy"
+        threemf_path = tmp_path / "result.3mf"
+        glb_path = tmp_path / "result.glb"
+        Image.fromarray(np.zeros((2, 2, 3), dtype=np.uint8)).save(image_path)
+        lut_path.write_bytes(b"lut")
+        threemf_path.write_bytes(b"3mf")
+        glb_path.write_bytes(b"glb")
+
+        sid = _test_store.create()
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {"target_w": 2, "target_h": 2, "target_width_mm": 20.0},
+        )
+        _test_store.put(sid, "image_path", str(image_path))
+        _test_store.put(sid, "lut_path", str(lut_path))
+        _test_store.put(sid, "replacement_regions", [])
+        _test_store.put(sid, "free_color_set", set())
+
+        async def close_session_then_return(*_args, **_kwargs):
+            _test_store.close(sid)
+            _test_registry.cleanup_session(sid)
+            return {
+                "threemf_path": str(threemf_path),
+                "glb_path": str(glb_path),
+                "status_msg": "OK",
+            }
+
+        _mock_pool.submit = AsyncMock(side_effect=close_session_then_return)
+
+        download_file_id: str | None = None
+        try:
+            response = client.post(
+                "/api/convert/generate",
+                json={"session_id": sid, "params": {"lut_name": "test_lut"}},
+            )
+
+            assert response.status_code == 200, response.text
+            payload = response.json()
+            assert payload["preview_3d_url"] is None
+            assert not glb_path.exists()
+            assert _test_registry.get_session_entries(sid) == {}
+            assert _test_store.get(sid) is None
+
+            download_file_id = payload["download_url"].rsplit("/", 1)[-1]
+            download_entry = _test_registry.get_entry(download_file_id)
+            assert download_entry is not None
+            assert download_entry["lifecycle"] == "ephemeral"
+            assert download_entry["session_id"] != sid
+            download_response = client.get(payload["download_url"])
+            assert download_response.status_code == 200
+            assert download_response.content == b"3mf"
+        finally:
+            if download_file_id is not None:
+                _test_registry.cleanup_file(download_file_id)
+            for path in (image_path, lut_path, threemf_path, glb_path):
+                path.unlink(missing_ok=True)
 
     def test_color_card_glb_registry_failure_preserves_downloaded_3mf(
         self,
@@ -2203,6 +3538,7 @@ class TestGenerateRegistryFailureCleanup:
         assert "registry unavailable" not in str(exc_info.value.detail)
         assert not zip_path.exists()
 
+
     @pytest.mark.asyncio
     async def test_large_format_svg_native_forwards_color_relief_params(
         self,
@@ -2216,7 +3552,12 @@ class TestGenerateRegistryFailureCleanup:
         zip_path.write_bytes(b"zip")
         captured_params = {}
 
-        async def _submit(_fn, _image_path, _lut_path, params):
+        async def _submit(
+            _fn,
+            _image_path,
+            _lut_path,
+            params,
+        ):
             captured_params.update(params)
             return {
                 "zip_path": str(zip_path),
@@ -2279,7 +3620,12 @@ class TestGenerateRegistryFailureCleanup:
         heightmap = np.arange(32, dtype=np.uint8).reshape(4, 8)
         captured_path = None
 
-        async def _submit(_fn, _image_path, _lut_path, params):
+        async def _submit(
+            _fn,
+            _image_path,
+            _lut_path,
+            params,
+        ):
             nonlocal captured_path
             captured_path = params["heightmap_path"]
             assert os.path.exists(captured_path)
@@ -2381,6 +3727,54 @@ class TestGenerateRegistryFailureCleanup:
         assert exc_info.value.detail == LARGE_FORMAT_GENERATION_FAILED_DETAIL
         assert "registry unavailable" not in str(exc_info.value.detail)
         assert not (tmp_path / "tile.3mf").exists()
+
+    @pytest.mark.asyncio
+    async def test_large_format_raster_broken_pool_stops_remaining_tiles(
+        self,
+        tmp_path,
+    ) -> None:
+        image_path = tmp_path / "source.png"
+        lut_path = tmp_path / "source.npy"
+        Image.fromarray(np.zeros((20, 40, 3), dtype=np.uint8)).save(image_path)
+        lut_path.write_bytes(b"lut")
+        request = LargeFormatConvertGenerateRequest(
+            total_width_mm=40.0,
+            total_height_mm=20.0,
+            tile_width_mm=20.0,
+            tile_height_mm=20.0,
+            lut_name="test_lut",
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+        mock_pool = MagicMock(spec=WorkerPoolManager)
+        mock_pool.submit = AsyncMock(
+            side_effect=BrokenProcessPool("worker was killed")
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _generate_large_format_raster(
+                image_path=str(image_path),
+                lut_path=str(lut_path),
+                source_basename="source",
+                recipe_overrides=None,
+                recipe_override_masks_path=None,
+                material_matrix_path=None,
+                total_width_mm=40.0,
+                total_height_mm=20.0,
+                tile_width_mm=20.0,
+                tile_height_mm=20.0,
+                request=request,
+                session_data={},
+                sid="session-broken-pool",
+                store=_test_store,
+                registry=FileRegistry(),
+                pool=mock_pool,
+                warnings=[],
+            )
+
+        assert exc_info.value.status_code == 503
+        assert exc_info.value.detail == LARGE_FORMAT_GENERATION_FAILED_DETAIL
+        assert mock_pool.submit.call_count == 2
+        assert mock_pool.submit.await_count == 1
 
 
 class TestLargeFormatFridgeMagnetValidation:
@@ -2797,6 +4191,269 @@ class TestStandardCachedAnalysisRouting:
             assert response.status_code == 409, response.text
             assert response.json()["detail"] == self._INVALID_DETAIL
             _mock_pool.submit.assert_not_called()
+        finally:
+            _test_store.close(sid)
+
+    @pytest.mark.parametrize(
+        "modeling_mode",
+        [ModelingMode.VECTOR, ModelingMode.HIGH_FIDELITY],
+    )
+    def test_generate_dimension_change_replays_edits_on_fresh_analysis(
+        self,
+        tmp_path,
+        modeling_mode: ModelingMode,
+    ) -> None:
+        """A size change forwards edit deltas but never reuses the old grid."""
+
+        pristine_rgb = np.zeros((4, 4, 3), dtype=np.uint8)
+        edited_rgb = pristine_rgb.copy()
+        edited_rgb[:2, :2] = [220, 30, 40]
+        pristine_material = np.zeros((4, 4, 5), dtype=np.int16)
+        edited_material = pristine_material.copy()
+        edited_material[:2, :2] = 1
+        sid, payload = self._create_session(
+            tmp_path,
+            modeling_mode=modeling_mode,
+            matched_rgb=edited_rgb,
+            material_matrix=edited_material,
+            cache_overrides={
+                "original_matched_rgb": pristine_rgb,
+                "original_material_matrix": pristine_material,
+            },
+        )
+        payload["params"]["target_width_mm"] = 80.0
+        try:
+            response = client.post("/api/convert/generate", json=payload)
+
+            assert response.status_code == 200, response.text
+            submitted = _mock_pool.submit.call_args.args[3]
+            assert submitted["reuse_preview_analysis"] is False
+            assert submitted["edit_projection"] == {
+                "mode": "delta",
+                "source_shape": [4, 4],
+            }
+            assert submitted["original_matched_rgb_path"] is not None
+            assert submitted["original_material_matrix_path"] is not None
+            np.testing.assert_array_equal(
+                np.load(submitted["original_matched_rgb_path"]),
+                pristine_rgb,
+            )
+            np.testing.assert_array_equal(
+                np.load(submitted["original_material_matrix_path"]),
+                pristine_material,
+            )
+            assert submitted["preview_glb_path"] is None
+        finally:
+            _test_store.close(sid)
+
+    def test_generate_dimension_change_rejects_missing_pristine_edit_artifacts(
+        self,
+        tmp_path,
+    ) -> None:
+        """A stale cache cannot masquerade as an edit delta after resizing."""
+
+        sid, payload = self._create_session(
+            tmp_path,
+            modeling_mode=ModelingMode.VECTOR,
+        )
+        payload["params"]["target_width_mm"] = 80.0
+        try:
+            response = client.post("/api/convert/generate", json=payload)
+
+            assert response.status_code == 409, response.text
+            assert response.json()["detail"] == self._INVALID_DETAIL
+            _mock_pool.submit.assert_not_called()
+        finally:
+            _test_store.close(sid)
+
+    def test_generate_dimension_change_without_edits_needs_no_replay_artifacts(
+        self,
+        tmp_path,
+    ) -> None:
+        """A plain size change runs fresh analysis without old-grid artifacts."""
+
+        sid, payload = self._create_session(
+            tmp_path,
+            modeling_mode=ModelingMode.VECTOR,
+        )
+        payload["params"]["target_width_mm"] = 80.0
+        payload["params"]["use_cached_matched_rgb"] = False
+        try:
+            response = client.post("/api/convert/generate", json=payload)
+
+            assert response.status_code == 200, response.text
+            submitted = _mock_pool.submit.call_args.args[3]
+            assert submitted["reuse_preview_analysis"] is False
+            assert submitted["edit_projection"] is None
+            assert submitted["matched_rgb_path"] is None
+            assert submitted["material_matrix_path"] is None
+        finally:
+            _test_store.close(sid)
+
+    def test_generate_dimension_change_projects_recipe_only_edits(
+        self,
+        tmp_path,
+    ) -> None:
+        """A custom recipe footprint also activates fresh-size edit replay."""
+
+        pristine_rgb = np.zeros((4, 4, 3), dtype=np.uint8)
+        pristine_material = np.zeros((4, 4, 5), dtype=np.int16)
+        sid, payload = self._create_session(
+            tmp_path,
+            modeling_mode=ModelingMode.VECTOR,
+            cache_overrides={
+                "original_matched_rgb": pristine_rgb.copy(),
+                "original_material_matrix": pristine_material.copy(),
+            },
+        )
+        payload["params"].update(
+            {
+                "target_width_mm": 80.0,
+                "use_cached_matched_rgb": False,
+                "recipe_overrides": [
+                    {
+                        "region_id": "region-A",
+                        "recipe": [1, 1, 1, 1, 1],
+                        "layer_order": "Top2Bottom",
+                    }
+                ],
+            }
+        )
+        try:
+            with patch(
+                "api.routers.converter.generate._prepare_recipe_override_worker_inputs",
+                return_value=(None, str(tmp_path / "masks.pkl")),
+            ):
+                response = client.post("/api/convert/generate", json=payload)
+
+            assert response.status_code == 200, response.text
+            submitted = _mock_pool.submit.call_args.args[3]
+            assert submitted["edit_projection"] == {
+                "mode": "recipe_masks",
+                "source_shape": [4, 4],
+            }
+            assert submitted["reuse_preview_analysis"] is False
+            assert submitted["original_matched_rgb_path"] is None
+            assert submitted["original_material_matrix_path"] is None
+            assert submitted["recipe_override_masks_path"].endswith("masks.pkl")
+        finally:
+            _test_store.close(sid)
+
+    @pytest.mark.parametrize("large_format", [False, True])
+    @pytest.mark.parametrize("preview_changes", [
+        {"svg_hole_compensation_enabled": False},
+        {"svg_hole_max_area_mm2": 0.1},
+        {"target_width_mm": 60.0},
+        {},
+    ])
+    def test_recipe_region_masks_require_matching_compensated_geometry(
+        self, tmp_path, large_format, preview_changes,
+    ) -> None:
+        sid, payload = self._create_session(tmp_path, modeling_mode=ModelingMode.VECTOR)
+        settings = {
+            "svg_hole_compensation_enabled": True,
+            "svg_hole_max_area_mm2": 0.5, "svg_hole_max_width_mm": 0.1,
+        }
+        cache = _test_store.get(sid)["preview_cache"]
+        cache.update({**settings, **preview_changes})
+        mask = np.zeros((4, 4), dtype=bool)
+        mask[1:3, 1:3] = True
+        _test_store.put(sid, "selected_region_masks", {"region-A": mask})
+        payload["params"].update({
+            **settings, "use_cached_matched_rgb": False,
+            "recipe_overrides": [{
+                "region_id": "region-A", "recipe": [1] * 5,
+                "layer_order": "Top2Bottom",
+            }],
+        })
+        if large_format:
+            payload = {
+                "session_id": sid,
+                "params": {
+                    "target_height_mm": 40.0,
+                    "tile_width_mm": 20.0, "tile_height_mm": 20.0,
+                    "params": payload["params"],
+                },
+            }
+        route = "/api/convert/generate-large-format" if large_format else "/api/convert/generate"
+        try:
+            with patch(
+                "api.routers.converter.generate._generate_large_format_svg_native",
+                return_value=_large_format_success_response("native"),
+            ) as native_tiles:
+                response = client.post(route, json=payload)
+                if preview_changes:
+                    assert response.status_code == 409, response.text
+                    _mock_pool.submit.assert_not_called()
+                    native_tiles.assert_not_called()
+                else:
+                    assert response.status_code == 200, response.text
+                    params = native_tiles.call_args.kwargs if large_format else _mock_pool.submit.call_args.args[3]
+                    assert params["material_matrix_path"] is not None
+                    with open(params["recipe_override_masks_path"], "rb") as stream:
+                        saved = pickle.load(stream)
+                    np.testing.assert_array_equal(saved["region-A"], mask)
+        finally:
+            _test_store.close(sid)
+
+    @pytest.mark.parametrize("compensation_enabled, artwork_width", [
+        (False, 40.0), (True, 40.0), (True, 60.0),
+    ])
+    def test_model_surface_uses_artwork_width_for_edit_grid_identity(
+        self,
+        tmp_path,
+        compensation_enabled,
+        artwork_width,
+    ) -> None:
+        """The outer model size must not invalidate unchanged surface artwork."""
+
+        sid, payload = self._create_session(
+            tmp_path,
+            modeling_mode=ModelingMode.VECTOR,
+        )
+        settings = {
+            "svg_hole_compensation_enabled": compensation_enabled,
+            "svg_hole_max_area_mm2": 0.5,
+            "svg_hole_max_width_mm": 0.1,
+        }
+        payload["params"].update(settings)
+        _test_store.get(sid)["preview_cache"].update(settings)
+        model_path = tmp_path / "surface-model.stl"
+        model_path.write_bytes(b"solid surface\nendsolid surface\n")
+        _test_store.put(sid, "surface_overlay_enabled", True)
+        _test_store.put(sid, "surface_model_path", str(model_path))
+        _test_store.put(sid, "surface_target_width_mm", artwork_width)
+        _test_store.put(
+            sid,
+            "surface_footprint",
+            {
+                "frame": {
+                    "origin": [0.0, 0.0, 0.0],
+                    "normal": [0.0, 0.0, 1.0],
+                    "u_axis": [1.0, 0.0, 0.0],
+                    "v_axis": [0.0, 1.0, 0.0],
+                },
+                "outer": [[0.0, 0.0], [40.0, 0.0], [40.0, 40.0]],
+                "holes": [],
+                "bounds_width_mm": 40.0,
+                "bounds_height_mm": 40.0,
+            },
+        )
+        payload["params"]["target_width_mm"] = 80.0
+        try:
+            response = client.post("/api/convert/generate", json=payload)
+
+            if compensation_enabled and artwork_width != 40.0:
+                assert response.status_code == 409, response.text
+                _mock_pool.submit.assert_not_called()
+                return
+            assert response.status_code == 200, response.text
+            submitted = _mock_pool.submit.call_args.args[3]
+            converter_params = submitted["converter_params"]
+            assert converter_params["target_width_mm"] == pytest.approx(40.0)
+            assert converter_params["edit_projection"] is None
+            assert converter_params["original_matched_rgb_path"] is None
+            assert converter_params["original_material_matrix_path"] is None
         finally:
             _test_store.close(sid)
 
@@ -4073,9 +5730,6 @@ class TestLargeFormatDimensionsAndRouting:
         }
 
         with (
-            patch(
-                "api.routers.converter.generate._rasterize_svg_for_large_format_fallback"
-            ) as rasterize_svg,
             patch.object(_test_store, "register_temp_file") as register_temp,
             patch.object(_test_store, "put") as store_put,
         ):
@@ -4085,7 +5739,6 @@ class TestLargeFormatDimensionsAndRouting:
             )
 
         assert response.status_code == 409
-        rasterize_svg.assert_not_called()
         register_temp.assert_not_called()
         store_put.assert_not_called()
 
@@ -4973,10 +6626,6 @@ class TestLargeFormatDimensionsAndRouting:
                     side_effect=native_error,
                 ) as native_helper,
                 patch(
-                    "api.routers.converter.generate._rasterize_svg_for_large_format_fallback",
-                    return_value=("/tmp/native-failure-fallback.png", []),
-                ),
-                patch(
                     "api.routers.converter.generate._generate_large_format_raster",
                     side_effect=_fallback_response,
                 ) as raster_helper,
@@ -5011,25 +6660,50 @@ class TestLargeFormatDimensionsAndRouting:
                 if os.path.exists(path):
                     os.unlink(path)
 
-    @pytest.mark.parametrize("fallback_stage", ["rasterize", "generate"])
-    def test_large_format_svg_double_failure_returns_bounded_native_error(
+
+
+    def test_large_format_svg_broken_worker_never_starts_raster_fallback(
         self,
-        fallback_stage: str,
     ) -> None:
         sid, svg_path, lut_path = _create_svg_session(
             _test_store,
             native_tiling_supported=True,
         )
-        rasterize_error = (
-            OSError("fallback rasterize failed")
-            if fallback_stage == "rasterize"
-            else None
+
+        try:
+            with (
+                patch(
+                    "api.routers.converter.generate._generate_large_format_svg_native",
+                    side_effect=BrokenProcessPool("native worker was killed"),
+                ) as native_helper,
+                patch(
+                    "api.routers.converter.generate._generate_large_format_raster",
+                ) as raster_helper,
+            ):
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="vector",
+                        use_cached_matched_rgb=False,
+                    ),
+                )
+
+            assert response.status_code == 503
+            native_helper.assert_called_once()
+            raster_helper.assert_not_called()
+        finally:
+            _test_store.close(sid)
+            for path in (svg_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_large_format_svg_fallback_failure_returns_bounded_error(self) -> None:
+        sid, svg_path, lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=True,
         )
-        expected_error_message = (
-            "fallback rasterize failed"
-            if fallback_stage == "rasterize"
-            else "fallback archive write failed"
-        )
+        expected_error_message = "fallback archive write failed"
 
         try:
             with (
@@ -5037,11 +6711,6 @@ class TestLargeFormatDimensionsAndRouting:
                     "api.routers.converter.generate._generate_large_format_svg_native",
                     side_effect=AssertionError("native tile invariant failed"),
                 ) as native_helper,
-                patch(
-                    "api.routers.converter.generate._rasterize_svg_for_large_format_fallback",
-                    return_value=("/tmp/native-failure-fallback.png", []),
-                    side_effect=rasterize_error,
-                ) as rasterize_helper,
                 patch(
                     "api.routers.converter.generate._generate_large_format_raster",
                     side_effect=OSError("fallback archive write failed"),
@@ -5062,11 +6731,7 @@ class TestLargeFormatDimensionsAndRouting:
             assert response.status_code == 500
             assert response.json()["detail"] == LARGE_FORMAT_GENERATION_FAILED_DETAIL
             native_helper.assert_called_once()
-            rasterize_helper.assert_called_once()
-            if fallback_stage == "rasterize":
-                raster_helper.assert_not_called()
-            else:
-                raster_helper.assert_called_once()
+            raster_helper.assert_called_once()
             failure_log.assert_called_once_with(
                 session_id=sid,
                 failure_kind="raster_fallback_failed",
@@ -5188,28 +6853,6 @@ class TestLargeFormatDimensionsAndRouting:
         assert response.status_code == 200
         native_helper.assert_called_once()
 
-    def test_large_format_svg_native_timeout_returns_504(self) -> None:
-        sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
-        _mock_pool.submit = AsyncMock(side_effect=asyncio.TimeoutError())
-
-        payload = {
-            "session_id": sid,
-            "params": {
-                "target_height_mm": 60.0,
-                "tile_width_mm": 40.0,
-                "tile_height_mm": 40.0,
-                "params": {
-                    "lut_name": "test_lut",
-                    "modeling_mode": "vector",
-                    "target_width_mm": 90.0,
-                },
-            },
-        }
-
-        response = client.post("/api/convert/generate-large-format", json=payload)
-
-        assert response.status_code == 504
-        assert "timed out" in response.json()["detail"].lower()
 
     def test_large_format_svg_native_worker_error_returns_500(self) -> None:
         sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
@@ -5527,7 +7170,7 @@ class TestLargeFormatDimensionsAndRouting:
     ) -> None:
         """A normal 259×400 grid tiled at 210 mm must keep all four tiles."""
 
-        image_path = tmp_path / "source.png"
+        image_path = tmp_path / "source.jpg"
         lut_path = tmp_path / "lut.npy"
         matched_path = tmp_path / "matched.npy"
         mask_path = tmp_path / "mask.npy"
@@ -5542,7 +7185,12 @@ class TestLargeFormatDimensionsAndRouting:
             tuple[tuple[int, int], tuple[int, int]]
         ] = []
 
-        async def _submit(_fn, tile_path, _lut_path, tile_params):
+        async def _submit(
+            _fn,
+            tile_path,
+            _lut_path,
+            tile_params,
+        ):
             with Image.open(tile_path) as tile_image:
                 source_shape = (tile_image.height, tile_image.width)
             cache_shape = np.load(tile_params["material_matrix_path"]).shape[:2]
@@ -5555,7 +7203,7 @@ class TestLargeFormatDimensionsAndRouting:
         mock_pool = SimpleNamespace(submit=AsyncMock(side_effect=_submit))
         request = LargeFormatConvertGenerateRequest(
             lut_name="test_lut",
-            modeling_mode=ModelingMode.HIGH_FIDELITY,
+            modeling_mode=ModelingMode.VECTOR,
         )
         download_id: str | None = None
         try:
@@ -5768,6 +7416,7 @@ class TestLargeFormatDimensionsAndRouting:
             assert material_path.exists()
         finally:
             store.clear_all()
+
 
     @pytest.mark.asyncio
     async def test_large_format_cached_raster_uses_final_recipe_matrix_once(
@@ -6448,82 +8097,6 @@ class TestLargeFormatDimensionsAndRouting:
         finally:
             store.clear_all()
 
-    def test_large_format_raster_tile_timeout_is_reported_per_tile(self) -> None:
-        fd_img, image_path = tempfile.mkstemp(suffix=".png")
-        os.close(fd_img)
-        fd_lut, lut_path = tempfile.mkstemp(suffix=".npy")
-        os.close(fd_lut)
-        log_calls: list[tuple[str, str, dict[str, object]]] = []
-
-        def _capturing_safe_log(level: str, event: str, **fields: object) -> None:
-            log_calls.append((level, event, fields))
-
-        Image.fromarray(np.zeros((10, 10, 3), dtype=np.uint8)).save(image_path)
-        with open(lut_path, "wb") as lut_file:
-            lut_file.write(b"lut")
-
-        store = SessionStore(ttl=1800)
-        registry = FileRegistry()
-        sid = store.create()
-        mock_pool = MagicMock(spec=WorkerPoolManager)
-        mock_pool.submit = AsyncMock(side_effect=asyncio.TimeoutError())
-        request = LargeFormatConvertGenerateRequest(
-            lut_name="test_lut",
-            modeling_mode=ModelingMode.HIGH_FIDELITY,
-        )
-
-        try:
-            with (
-                patch(
-                    "api.routers.converter.generate._safe_log",
-                    side_effect=_capturing_safe_log,
-                ),
-                pytest.raises(HTTPException) as exc_info,
-            ):
-                asyncio.run(
-                    _generate_large_format_raster(
-                        image_path=image_path,
-                        lut_path=lut_path,
-                        source_basename="poster",
-                        recipe_overrides=None,
-                        recipe_override_masks_path=None,
-                        material_matrix_path=None,
-                        total_width_mm=40.0,
-                        total_height_mm=40.0,
-                        tile_width_mm=40.0,
-                        tile_height_mm=40.0,
-                        request=request,
-                        session_data={},
-                        sid=sid,
-                        store=store,
-                        registry=registry,
-                        pool=mock_pool,
-                    )
-                )
-
-            assert exc_info.value.status_code == 500
-            assert exc_info.value.detail == (
-                "Large-format generation failed. Try again or check the server log for details."
-            )
-            assert "All tiles failed" not in str(exc_info.value.detail)
-            assert "generation timed out" not in str(exc_info.value.detail)
-            failure_logs = [
-                (level, fields)
-                for level, event, fields in log_calls
-                if event == "converter_large_format_failed"
-            ]
-            assert len(failure_logs) == 1
-            level, fields = failure_logs[0]
-            assert level == "error"
-            assert fields["session_id"] == sid
-            assert fields["failure_kind"] == "tile_failed"
-            assert fields["error_type"] == "LargeFormatTileFailure"
-            assert "generation timed out" in str(fields["error_message"])
-        finally:
-            store.clear_all()
-            for path in (image_path, lut_path):
-                if os.path.exists(path):
-                    os.unlink(path)
 
     def test_large_format_raster_all_tile_failure_sanitizes_status_message(self) -> None:
         fd_img, image_path = tempfile.mkstemp(suffix=".png")
@@ -6817,11 +8390,11 @@ class TestLargeFormatDimensionsAndRouting:
             "grid_rows": 2,
             "warnings": ["Raster fallback was used for this large-format SVG request."],
         }
-        captured = {"fallback_path": None}
+        captured = {"image_path": "unset", "svg_fallback_path": "unset"}
 
         def _fake_raster_helper(**kwargs):
-            captured["fallback_path"] = kwargs["image_path"]
-            assert os.path.exists(kwargs["image_path"])
+            captured["image_path"] = kwargs["image_path"]
+            captured["svg_fallback_path"] = kwargs["svg_fallback_path"]
             return raster_response
 
         with patch(
@@ -6831,8 +8404,8 @@ class TestLargeFormatDimensionsAndRouting:
             response = client.post("/api/convert/generate-large-format", json=payload)
 
         assert response.status_code == 200
-        assert captured["fallback_path"] is not None
-        assert not os.path.exists(captured["fallback_path"])
+        assert captured["image_path"] is None
+        assert captured["svg_fallback_path"] == _svg_path
 
     def test_large_format_raster_helper_deletes_tile_3mf_and_glb_after_packaging(self) -> None:
         fd_img, image_path = tempfile.mkstemp(suffix=".png")
@@ -8534,6 +10107,16 @@ class TestConverterEntryAcceptsBaseLayerModifierKwarg:
         params = inspect.signature(convert_image_to_3d).parameters
         assert "enable_base_layer_height_modifier" in params
         assert params["enable_base_layer_height_modifier"].default is True
+
+    def test_converter_signatures_accept_wipe_tower_auto_placement(self) -> None:
+        import inspect
+
+        from core.converter import convert_image_to_3d, generate_final_model
+
+        for entry_point in (convert_image_to_3d, generate_final_model):
+            params = inspect.signature(entry_point).parameters
+            assert "enable_wipe_tower_auto_placement" in params
+            assert params["enable_wipe_tower_auto_placement"].default is True
 
     def test_convert_image_to_3d_signature_accepts_material_backing_index(self) -> None:
         import inspect

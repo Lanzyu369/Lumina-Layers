@@ -13,7 +13,9 @@ import {
   getSlicerSoftwareDisplayName,
 } from "../../utils/settingsOptionIds";
 import type { SlicerInfo } from "../../api/types";
+import { WIKI_DOCS } from "../../utils/wikiDocs";
 import SlicerLogo from "../slicer/SlicerLogo";
+import WikiTooltip from "../ui/WikiTooltip";
 
 /** Brand color style for a slicer button. 切片软件品牌配色样式。 */
 export interface SlicerBrandStyle {
@@ -39,6 +41,7 @@ export const SLICER_BRAND_COLORS: Record<string, SlicerBrandStyle> = {
   elegoo_slicer: { bg: "bg-sky-500",    hover: "hover:bg-sky-600",    text: "text-white" },
   anycubic_slicer_next: { bg: "bg-red-600", hover: "hover:bg-red-700", text: "text-white" },
   flash_studio: { bg: "bg-indigo-600", hover: "hover:bg-indigo-700", text: "text-white" },
+  qidi_studio: { bg: "bg-violet-600", hover: "hover:bg-violet-700", text: "text-white" },
   prusa_slicer:  { bg: "bg-orange-500", hover: "hover:bg-orange-600", text: "text-white" },
   cura:          { bg: "bg-blue-400",   hover: "hover:bg-blue-500",   text: "text-white" },
 };
@@ -398,27 +401,35 @@ export default function SlicerSelector({
           {/* Split Button */}
           <div className="flex">
             {/* Main button with brand color */}
-            <button
-              type="button"
-              onClick={() => void handleMainClick()}
-              disabled={isDisabled}
-              className={`flex min-h-10 flex-1 items-center justify-center gap-2 rounded-l-md px-4 py-1.5 text-sm font-medium transition-colors ${brandStyle.bg} ${brandStyle.hover} ${brandStyle.text} disabled:opacity-40 disabled:cursor-not-allowed`}
+            <WikiTooltip
+              title={mainButtonLabel}
+              description={t("slicer_output_hint")}
+              wikiPath={WIKI_DOCS.slicerOutput}
+              placement="top"
+              asChild
             >
-              {showActiveSlicerLogo && (
-                <SlicerLogo
-                  slicerId={activeSlicerId}
-                  variant="onBrand"
-                  loading={actionBusy}
-                />
-              )}
-              {!showActiveSlicerLogo && actionBusy && (
-                <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-              )}
-              {mainButtonLabel}
-            </button>
+              <button
+                type="button"
+                onClick={() => void handleMainClick()}
+                disabled={isDisabled}
+                className={`flex min-h-10 flex-1 items-center justify-center gap-2 rounded-l-md px-4 py-1.5 text-sm font-medium transition-colors ${brandStyle.bg} ${brandStyle.hover} ${brandStyle.text} disabled:opacity-40 disabled:cursor-not-allowed`}
+              >
+                {showActiveSlicerLogo && (
+                  <SlicerLogo
+                    slicerId={activeSlicerId}
+                    variant="onBrand"
+                    loading={actionBusy}
+                  />
+                )}
+                {!showActiveSlicerLogo && actionBusy && (
+                  <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                )}
+                {mainButtonLabel}
+              </button>
+            </WikiTooltip>
 
             {/* Dropdown arrow button */}
             <button
@@ -492,20 +503,28 @@ export default function SlicerSelector({
           ) : (
             <>
               <p className="text-xs text-slate-400">{t("slicer_not_detected")}</p>
-              <button
-                type="button"
-                onClick={() => void handleMainClick()}
-                disabled={isDisabled}
-                className={`flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors ${brandStyle.bg} ${brandStyle.hover} ${brandStyle.text} disabled:opacity-40 disabled:cursor-not-allowed`}
+              <WikiTooltip
+                title={mainButtonLabel}
+                description={t("slicer_output_hint")}
+                wikiPath={WIKI_DOCS.slicerOutput}
+                placement="top"
+                asChild
               >
-                {(isAutoGenerating || isDownloading) && (
-                  <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                )}
-                {getButtonLabel(false, launchArtifactSource, null, t, largeFormat)}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => void handleMainClick()}
+                  disabled={isDisabled}
+                  className={`flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors ${brandStyle.bg} ${brandStyle.hover} ${brandStyle.text} disabled:opacity-40 disabled:cursor-not-allowed`}
+                >
+                  {(isAutoGenerating || isDownloading) && (
+                    <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                  )}
+                  {getButtonLabel(false, launchArtifactSource, null, t, largeFormat)}
+                </button>
+              </WikiTooltip>
             </>
           )}
         </div>

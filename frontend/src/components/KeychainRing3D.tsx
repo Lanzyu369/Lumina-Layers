@@ -11,6 +11,7 @@ import { useThree } from "@react-three/fiber";
 import type { ThreeEvent } from "@react-three/fiber";
 import * as THREE from "three";
 import { useConverterStore } from "../stores/converter";
+import type { PreviewSpacePoint } from "../utils/previewSpace";
 
 /** Shared raycaster for window-level pointer tracking during drag. */
 const _raycaster = new THREE.Raycaster();
@@ -74,6 +75,12 @@ export interface ContourCanvasBounds {
   maxY: number;
 }
 
+/**
+ * Map an asset-space contour point into current display millimetres.
+ * 将资产空间轮廓点映射为当前显示毫米坐标。
+ */
+export type ContourToDisplayPoint = (point: PreviewSpacePoint) => PreviewSpacePoint;
+
 export interface KeychainRing3DProps {
   enabled: boolean;
   cameraPanModifierActive?: boolean;
@@ -93,6 +100,8 @@ export interface KeychainRing3DProps {
   } | null;
   contours?: Record<string, number[][][]>;
   contourCanvasBounds?: ContourCanvasBounds | null;
+  /** Live preview resize transform for contour points. / 轮廓点的实时预览缩放变换。 */
+  contourToDisplayPoint?: ContourToDisplayPoint;
 }
 
 /**
@@ -155,6 +164,7 @@ function contourTopWithinBand(
   contourCanvasBounds: ContourCanvasBounds | null | undefined,
   centerX: number,
   contactWidth: number,
+  contourToDisplayPoint?: ContourToDisplayPoint,
 ): number | null {
   if (!contours || !contourCanvasBounds || contactWidth <= 0) {
     return null;
@@ -175,10 +185,14 @@ function contourTopWithinBand(
   // S11 emits contour points in full-canvas world-space millimetres with
   // origin (0, 0). The GLB canvas anchor is the same rectangle after the
   // viewer centers the scene, so only its world-space origin is required.
-  const mapPoint = (point: number[]) => ({
-    x: contourCanvasBounds.minX + point[0],
-    y: contourCanvasBounds.minY + point[1],
-  });
+  // A live preview resize then scales that asset-space point for display.
+  const mapPoint = (point: number[]) => {
+    const assetPoint = {
+      x: contourCanvasBounds.minX + point[0],
+      y: contourCanvasBounds.minY + point[1],
+    };
+    return contourToDisplayPoint ? contourToDisplayPoint(assetPoint) : assetPoint;
+  };
   const bandMinX = centerX - contactWidth / 2;
   const bandMaxX = centerX + contactWidth / 2;
   let topY = Number.NEGATIVE_INFINITY;
@@ -239,6 +253,9 @@ function contourTopWithinBand(
  * @param modelBounds - Model bounding box in mm. (模型包围盒，毫米)
  * @param offsetX - X offset in mm. (X 偏移量，毫米)
  * @param offsetY - Y offset in mm. (Y 偏移量，毫米)
+ * @param contourToDisplayPoint - Optional live resize transform applied to
+ *   contour points; modelBounds must already be in display space.
+ *   (可选的实时缩放变换，作用于轮廓点；modelBounds 需已为显示空间)
  * @returns Computed {x, y} position in mm. (计算后的 {x, y} 位置，毫米)
  */
 export function computeLoopPosition(
@@ -249,6 +266,7 @@ export function computeLoopPosition(
   contours?: Record<string, number[][][]>,
   contactWidth = 0,
   contourCanvasBounds?: ContourCanvasBounds | null,
+  contourToDisplayPoint?: ContourToDisplayPoint,
 ): { x: number; y: number } {
   return computeLoopPlacement(
     preset,
@@ -258,6 +276,7 @@ export function computeLoopPosition(
     contours,
     contactWidth,
     contourCanvasBounds,
+    contourToDisplayPoint,
   ).position;
 }
 
@@ -269,11 +288,18 @@ function computeLoopPlacement(
   contours: Record<string, number[][][]> | undefined,
   contactWidth: number,
   contourCanvasBounds: ContourCanvasBounds | null | undefined,
+  contourToDisplayPoint?: ContourToDisplayPoint,
 ): { position: { x: number; y: number }; usesLocalContour: boolean } {
   const baseX = (modelBounds.minX + modelBounds.maxX) / 2;
   const x = baseX + offsetX;
   const localTop = preset === "top-center"
-    ? contourTopWithinBand(contours, contourCanvasBounds, x, contactWidth)
+    ? contourTopWithinBand(
+      contours,
+      contourCanvasBounds,
+      x,
+      contactWidth,
+      contourToDisplayPoint,
+    )
     : null;
   if (localTop !== null) {
     return {
@@ -311,6 +337,7 @@ function KeychainRing3D({
   modelBounds,
   contours,
   contourCanvasBounds,
+  contourToDisplayPoint,
 }: KeychainRing3DProps) {
   const { controls, camera, gl } = useThree();
 
@@ -354,6 +381,7 @@ function KeychainRing3D({
       Math.abs(angle) <= 1e-9 ? contours : undefined,
       width,
       contourCanvasBounds,
+      contourToDisplayPoint,
     );
   }, [
     positionPreset,
@@ -364,6 +392,7 @@ function KeychainRing3D({
     contours,
     width,
     contourCanvasBounds,
+    contourToDisplayPoint,
   ]);
   const position = placement?.position ?? null;
   const constrainToLocalContour = placement?.usesLocalContour ?? false;

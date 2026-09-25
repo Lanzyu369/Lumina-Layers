@@ -1,0 +1,59 @@
+set(
+  APPROVED_LUNASVG_REVISION
+  "59690a23981489acc3f73b8db229ef57bb69c544"
+)
+
+if(NOT DEFINED SOURCE_DIR OR NOT DEFINED PATCH_FILE)
+  message(FATAL_ERROR "Recorder patch verification requires SOURCE_DIR and PATCH_FILE")
+endif()
+
+execute_process(
+  COMMAND git rev-parse HEAD
+  WORKING_DIRECTORY "${SOURCE_DIR}"
+  RESULT_VARIABLE revision_result
+  OUTPUT_VARIABLE actual_revision
+  ERROR_VARIABLE revision_error
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+if(NOT revision_result EQUAL 0)
+  message(FATAL_ERROR "Cannot verify LunaSVG revision: ${revision_error}")
+endif()
+if(NOT actual_revision STREQUAL APPROVED_LUNASVG_REVISION)
+  message(FATAL_ERROR
+    "LunaSVG recorder patch is pinned to ${APPROVED_LUNASVG_REVISION}, got ${actual_revision}"
+  )
+endif()
+
+execute_process(
+  COMMAND git apply --check "${PATCH_FILE}"
+  WORKING_DIRECTORY "${SOURCE_DIR}"
+  RESULT_VARIABLE patch_check_result
+  ERROR_VARIABLE patch_check_error
+)
+if(patch_check_result EQUAL 0)
+  execute_process(
+    COMMAND git apply "${PATCH_FILE}"
+    WORKING_DIRECTORY "${SOURCE_DIR}"
+    RESULT_VARIABLE patch_result
+    ERROR_VARIABLE patch_error
+  )
+  if(NOT patch_result EQUAL 0)
+    message(FATAL_ERROR "Failed to apply LunaSVG recorder patch: ${patch_error}")
+  endif()
+  message(STATUS "Applied LunaSVG recorder patch at ${actual_revision}")
+  return()
+endif()
+
+execute_process(
+  COMMAND git apply --reverse --check "${PATCH_FILE}"
+  WORKING_DIRECTORY "${SOURCE_DIR}"
+  RESULT_VARIABLE reverse_check_result
+)
+if(reverse_check_result EQUAL 0)
+  message(STATUS "LunaSVG recorder patch already applied at ${actual_revision}")
+  return()
+endif()
+
+message(FATAL_ERROR
+  "LunaSVG recorder patch does not apply cleanly at ${actual_revision}: ${patch_check_error}"
+)

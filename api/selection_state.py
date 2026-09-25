@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import threading
 import weakref
-from typing import Any
+from typing import Any, Callable
 
 import cv2
 import numpy as np
@@ -26,6 +26,15 @@ SELECTION_MASK_KEY = "editor_selection_mask"
 SELECTION_REVISION_KEY = "editor_selection_revision"
 SELECTION_CONTENT_GENERATION_KEY = "editor_selection_content_generation"
 SELECTION_REGION_PREFIX = "__editor_selection__:"
+
+# Session key snapshotting the per-region masks captured when recipe overrides
+# were applied. It lives beside the selection keys because these snapshots are
+# what /generate falls back to once the synthetic __editor_selection__:<rev>
+# entries above have been pruned by later selection gestures.
+# 会话键：apply 配方覆盖时对所用区域掩码做快照。放在选区键旁边是因为：
+# 上面的 __editor_selection__:<rev> 合成条目会随后续选区手势被清理，
+# 生成端在实时选区缺失时回退到这份快照。
+RECIPE_OVERRIDE_APPLIED_MASKS_KEY = "recipe_override_applied_masks"
 
 _LOCKS_GUARD = threading.Lock()
 _LOCKS: weakref.WeakValueDictionary[str, threading.RLock] = weakref.WeakValueDictionary()
@@ -46,6 +55,119 @@ def get_selection_revision(session_data: dict[str, Any]) -> int:
         return max(0, int(session_data.get(SELECTION_REVISION_KEY) or 0))
     except (TypeError, ValueError):
         return 0
+
+
+def sync_selection_content_generation(
+    session_id: str,
+    store: SessionStore,
+    session_data: dict[str, Any],
+    content_generation: int,
+) -> None:
+    """Bind the current selection to a newly committed visible-content generation.
+    将当前选区绑定到刚提交的可见内容版本。
+
+    Geometry-preserving edits such as global colour replacement keep the
+    selection pixels valid, but the next selection request must use the new
+    visible-content revision. This helper updates only that binding; it does
+    not create a new selection revision or alter the mask.
+    几何不变的编辑（例如全局换色）仍可复用选区像素，但下一次选区请求必须
+    携带新的可见内容版本。该辅助函数只更新绑定，不创建新的选区版本，也不
+    修改选区掩码。
+    """
+    normalized = int(content_generation)
+    session_data[SELECTION_CONTENT_GENERATION_KEY] = normalized
+    store.put(session_id, SELECTION_CONTENT_GENERATION_KEY, normalized)
+
+
+def resolve_recipe_override_masks(
+    session_data: dict[str, Any],
+    recipe_overrides: list[dict[str, Any]] | None,
+    shape: tuple[int, int],
+    *,
+    legacy_fallback: Callable[[str], np.ndarray | None] | None = None,
+) -> dict[str, np.ndarray]:
+    """Resolve every recipe override to its committed spatial mask.
+    将每个区域配方覆盖解析为其已提交的空间掩码。
+
+    Sessions with ``recipe_override_applied_masks`` use the apply-time
+    snapshots exclusively. Older sessions may use their live region map and an
+    explicit legacy fallback (for example select-all colour recovery). Missing,
+    empty, or shape-mismatched masks are rejected instead of silently widening
+    an override to the whole image.
+    含有 ``recipe_override_applied_masks`` 的会话只能使用 apply 时快照；旧会话
+    才能使用实时区域映射和显式兼容回退（例如全选颜色恢复）。缺失、空掩码或
+    形状不一致时直接拒绝，不能静默扩大成全图覆盖。
+
+    Args:
+        session_data: Session state containing live and/or committed masks.
+            包含实时及/或已提交掩码的会话状态。
+        recipe_overrides: Stored recipe override entries.
+            已保存的区域配方覆盖条目。
+        shape: Expected image mask shape ``(height, width)``.
+            期望的图像掩码形状 ``(高, 宽)``。
+        legacy_fallback: Optional resolver for pre-snapshot sessions.
+            旧会话可选的兼容解析器。
+
+    Returns:
+        dict[str, np.ndarray]: Independent boolean masks keyed by region id.
+            按区域 ID 返回相互独立的布尔掩码。
+
+    Raises:
+        ValueError: If a declared override cannot be resolved safely.
+            无法安全解析声明的覆盖时抛出。
+    """
+    expected_shape = (int(shape[0]), int(shape[1]))
+    if expected_shape[0] <= 0 or expected_shape[1] <= 0:
+        raise ValueError("Recipe override mask shape is invalid")
+    overrides = recipe_overrides or []
+    if not overrides:
+        return {}
+
+    live_masks = session_data.get("selected_region_masks")
+    if not isinstance(live_masks, dict):
+        live_masks = {}
+    snapshots = session_data.get(RECIPE_OVERRIDE_APPLIED_MASKS_KEY)
+    has_snapshot_capability = RECIPE_OVERRIDE_APPLIED_MASKS_KEY in session_data
+    if not isinstance(snapshots, dict):
+        snapshots = {}
+
+    resolved: dict[str, np.ndarray] = {}
+    for item in overrides:
+        if not isinstance(item, dict):
+            raise ValueError("Recipe override entry is invalid")
+        region_id = str(item.get("region_id") or "")
+        if not region_id:
+            raise ValueError("Recipe override region id is missing")
+
+        mask: np.ndarray | None
+        if has_snapshot_capability:
+            mask = unpack_applied_region_mask(
+                snapshots.get(region_id),
+                expected_shape,
+            )
+        else:
+            candidate = live_masks.get(region_id)
+            mask = (
+                np.asarray(candidate, dtype=bool).copy()
+                if isinstance(candidate, np.ndarray)
+                else None
+            )
+            if mask is None and legacy_fallback is not None:
+                mask = legacy_fallback(region_id)
+                if mask is not None:
+                    mask = np.asarray(mask, dtype=bool).copy()
+
+        if (
+            mask is None
+            or mask.shape != expected_shape
+            or mask.ndim != 2
+            or not np.any(mask)
+        ):
+            raise ValueError(
+                f"Recipe override mask is missing or invalid for region {region_id}"
+            )
+        resolved[region_id] = np.ascontiguousarray(mask, dtype=bool)
+    return resolved
 
 
 def get_selection_mask(
@@ -99,6 +221,94 @@ def persist_selection_mask(
 
 def selection_region_id(revision: int) -> str:
     return f"{SELECTION_REGION_PREFIX}{int(revision)}"
+
+
+def pack_applied_region_mask(mask: np.ndarray) -> dict[str, object]:
+    """Pack one boolean region mask for compact session/history storage.
+
+    Applied-override masks live in session state and are deep-copied into
+    every replacement-history checkpoint; storing raw ``H×W`` booleans makes
+    that footprint grow with pixels × overrides × history depth. Bit-packing
+    keeps the same information in ``ceil(H×W / 8)`` bytes while remaining
+    JSONB-safe through the session value codec.
+
+    已应用覆盖的掩码存放在会话状态里，并会被每份替换历史 checkpoint 深拷
+    贝；直接存 H×W 布尔数组会让内存随 像素数×覆盖数×历史深度 放大。位压
+    缩用 ceil(H×W/8) 字节保存同样信息，且经会话值编解码器保持 JSONB 安全。
+
+    Args:
+        mask (np.ndarray): Boolean ``(height, width)`` region mask.
+            (布尔 (高, 宽) 区域掩码)
+
+    Returns:
+        dict[str, object]: ``{"shape": [height, width], "packed": uint8}``.
+        ({"shape": [高, 宽], "packed": uint8 数组})
+    """
+    normalized = np.asarray(mask, dtype=bool)
+    flat_bits = np.packbits(normalized.reshape(-1))
+    return {
+        "shape": [int(normalized.shape[0]), int(normalized.shape[1])],
+        "packed": np.ascontiguousarray(flat_bits, dtype=np.uint8),
+    }
+
+
+def unpack_applied_region_mask(
+    value: object,
+    shape: tuple[int, int] | None = None,
+) -> np.ndarray | None:
+    """Restore a boolean mask from a snapshot entry (packed or legacy raw).
+
+    Sessions created before bit-packing shipped still hold plain boolean
+    arrays under the same key; accepting both formats lets a rolling deploy
+    keep older sessions generatable without a migration step. Invalid entries
+    (wrong shape, wrong dtype/length, or all-air masks) return ``None`` so
+    callers can fall back deterministically.
+
+    位压缩上线前创建的会话在同一键下仍是裸布尔数组；同时接受两种格式可让
+    滚动发布期间旧会话无需迁移即可继续生成。非法条目（形状不符、dtype/
+    长度错误或全空掩码）返回 None，让调用方可以确定性回退。
+
+    Args:
+        value (object): Snapshot entry — packed dict or legacy bool ndarray.
+            (快照条目：打包 dict 或旧版布尔数组)
+        shape (tuple[int, int] | None): Optional expected ``(height, width)``.
+            (可选的期望 (高, 宽))
+
+    Returns:
+        np.ndarray | None: Boolean mask copy matching ``shape``, else ``None``.
+        (与 shape 匹配的布尔掩码副本；否则为 None)
+    """
+    if isinstance(value, np.ndarray):
+        mask = np.asarray(value, dtype=bool).copy()
+    elif isinstance(value, dict):
+        packed = value.get("packed")
+        stored_shape = value.get("shape")
+        if (
+            not isinstance(packed, np.ndarray)
+            or not isinstance(stored_shape, (list, tuple))
+            or len(stored_shape) != 2
+        ):
+            return None
+        try:
+            height = int(stored_shape[0])
+            width = int(stored_shape[1])
+        except (TypeError, ValueError):
+            return None
+        if height <= 0 or width <= 0:
+            return None
+        expected_bytes = (height * width + 7) // 8
+        packed_arr = np.asarray(packed)
+        if packed_arr.dtype != np.uint8 or packed_arr.size != expected_bytes:
+            return None
+        bits = np.unpackbits(np.ascontiguousarray(packed_arr, dtype=np.uint8))
+        mask = bits[: height * width].reshape(height, width).astype(bool)
+    else:
+        return None
+    if shape is not None and mask.shape != tuple(int(dim) for dim in shape):
+        return None
+    if not np.any(mask):
+        return None
+    return mask
 
 
 def resolve_selection_mask(

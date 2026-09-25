@@ -1,4 +1,4 @@
-FROM python:3.13-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
@@ -11,8 +11,6 @@ ENV PYTHONUNBUFFERED=1 \
     LUMINA_LOG_DIR=/app/logs \
     LUMINA_FEEDBACK_DUMP_DIR=/app/feedback \
     LUMINA_GEOS_BUFFER_FAST_MANIFEST=/app/.scratch/geos_buffer_fast_proof/build_manifest.json \
-    LUMINA_VECTOR_NATIVE_MESH=1 \
-    LUMINA_VECTOR_NATIVE_MESH_VALIDATE_SURFACE=1 \
     OMP_NUM_THREADS=1 \
     OPENBLAS_NUM_THREADS=1 \
     MKL_NUM_THREADS=1 \
@@ -39,7 +37,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && npm install -g pnpm@10.33.2 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt requirements-glb-v2.txt /app/
+COPY requirements.txt requirements-glb-v2.txt requirements-native-svg.txt /app/
+COPY native/lumina-svg-core /app/native/lumina-svg-core
 RUN pip install --no-cache-dir -r requirements.txt -r requirements-glb-v2.txt
 
 COPY frontend/package.json frontend/pnpm-lock.yaml /app/frontend/
@@ -47,7 +46,6 @@ RUN cd frontend && pnpm install --frozen-lockfile
 
 COPY . /app/
 RUN python scripts/build_geos_buffer_fast_proof.py --rebuild
-RUN python scripts/build_native_extensions.py
 RUN cd frontend && pnpm build
 
 ARG MATERIALS_SEED_URL=""

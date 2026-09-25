@@ -32,6 +32,9 @@ def _sample_payload(**overrides):
             "material_layer_height_mm": 0.16,
             "material_backing_material_dir_name": "BrandA",
             "preserve_upload_filename_for_3mf": True,
+            "enable_wipe_tower_auto_placement": False,
+            "enable_smooth_vector_preview": True,
+            "vector_preview_renderer": "vector_analytic",
             "workshop": {
                 "module_id": "lumina.bead-pattern",
                 "module_version": "1.0.0",
@@ -134,9 +137,14 @@ def test_basic_payload_renders_all_sections(tmp_path: Path) -> None:
     assert "## Session IDs for backend log grep" in md
     assert "sess-aaa" in md
     assert "preserve_upload_filename_for_3mf: True" in md
+    assert "enable_wipe_tower_auto_placement: False" in md
+    assert "enable_smooth_vector_preview: True" in md
+    assert "vector_preview_renderer: vector_analytic" in md
 
     summary = generate_summary_text("LUM-20260511-001", payload)
     assert "沿用上传文件名：开启" in summary
+    assert "擦料塔自动摆放：关闭" in summary
+    assert "矢量预览：平滑；当前轻量模型：平滑轮廓" in summary
 
 
 def test_dynamic_material_snapshot_and_repro_hint_are_rendered(tmp_path: Path) -> None:
@@ -287,6 +295,44 @@ def test_attachment_failure_detail_is_visible_in_index(tmp_path: Path) -> None:
 
     assert "screenshot.png" in md
     assert "error=OSError: Screenshot could not be saved." in md
+
+
+@pytest.mark.parametrize(
+    ("status", "capture_source", "direct_status"),
+    [
+        ("attached", "browser_upload", "attached"),
+        ("attached", "file_registry", "too_large"),
+        ("too_large", None, "too_large"),
+        ("unavailable_after_cleanup", None, "not_provided"),
+    ],
+)
+def test_original_image_capture_state_is_visible_in_index_and_summary(
+    tmp_path: Path,
+    status: str,
+    capture_source: str | None,
+    direct_status: str,
+) -> None:
+    """Operators can distinguish direct, fallback, oversized, and missing sources."""
+    payload = _sample_payload()
+    payload["attachments"]["original_image"].update(
+        {
+            "status": status,
+            "capture_source": capture_source,
+            "direct_upload_status": direct_status,
+        }
+    )
+
+    markdown = generate_index_markdown("LUM-202608-deadbeef", tmp_path, payload)
+    summary = generate_summary_text("LUM-202608-deadbeef", payload)
+
+    expected_capture = capture_source or "(无)"
+    if capture_source:
+        assert f"capture={capture_source}" in markdown
+    assert f"direct={direct_status}" in markdown
+    assert f"来源={expected_capture}" in summary
+    assert f"直接上传={direct_status}" in summary
+    assert status in markdown
+    assert status in summary
 
 
 # ---------------------------------------------------------------------------

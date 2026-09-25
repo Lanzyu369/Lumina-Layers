@@ -155,6 +155,42 @@ def _entry(package_data: bytes, **overrides: Any) -> dict[str, Any]:
     return data
 
 
+@pytest.mark.parametrize("private_channels", [False, True])
+def test_install_failover_keeps_verified_identity_and_private_channel_boundary(monkeypatch, private_channels):
+    primary = "https://primary.test/api/material-registry/v1"
+    backup = "https://backup.test/api/material-registry/v1"
+    monkeypatch.setenv("LUMINA_LUT_REGISTRY_URL", primary)
+    monkeypatch.setenv("LUMINA_LUT_REGISTRY_FALLBACK_URL", backup)
+    monkeypatch.setenv("LUMINA_LUT_REGISTRY_CHANNELS", "official")
+    monkeypatch.delenv("LUMINA_LUT_REGISTRY_TOKEN", raising=False)
+    monkeypatch.delenv("LUMINA_MATERIAL_REGISTRY_TOKEN", raising=False)
+    package = _bundle_bytes()
+    entry = _entry(package, package_url=backup + "/luts/packages/test.zip")
+    calls = []
+    def handle(request):
+        calls.append((request.url.host, request.url.path))
+        if request.url.path.endswith("/catalog"):
+            if private_channels:
+                return httpx.Response(200, json={"items": [{**entry, "package_url": primary + "/luts/packages/test.zip"}]})
+            if request.url.host == "primary.test":
+                return httpx.Response(503)
+            return httpx.Response(200, json={"items": [entry]})
+        if request.url.host == "primary.test":
+            return httpx.Response(503)
+        return httpx.Response(200, content=package)
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        if private_channels:
+            with pytest.raises(sync.LutRegistryRemoteError):
+                sync.install_lut_package(lut_id=entry["lut_id"], revision_id=entry["revision_id"],
+                                         channels=["team"], client=client)
+            assert all(host == "primary.test" for host, _ in calls)
+        else:
+            record = sync.install_lut_package(lut_id=entry["lut_id"], revision_id=entry["revision_id"], client=client)
+            assert record["revision_id"] == entry["revision_id"]
+            assert (Path(LUTManager.LUT_PRESET_DIR) / record["installed_path"]).read_bytes() == _DEFAULT_LUT_BYTES
+            assert [host for host, _ in calls] == ["primary.test", "backup.test", "primary.test", "backup.test"]
+
+
 def _catalog_install_client(
     entry: dict[str, Any],
     package: bytes,

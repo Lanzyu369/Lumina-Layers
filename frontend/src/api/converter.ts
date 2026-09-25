@@ -33,11 +33,13 @@ import type {
   ReplacementHistoryResponse,
   SelectionDocumentResponse,
   SelectionMutationRequest,
+  EditorCommitStatusResponse,
   AutoDetectColorsResponse,
   ModelSurfaceHitTriangle,
   ModelSurfaceModelTransform,
   ModelSurfaceSelectResponse,
   ModelSurfaceUploadResponse,
+  VectorPreviewRendererResponse,
 } from "./types";
 
 /** 上传图片 + 参数，获取 2D 预览（返回 JSON，含 session_id 和 preview_url） */
@@ -128,6 +130,7 @@ export interface ColorCardDeviceSelection {
   nozzle_size: string;
   device_profile_id?: string;
   build_plate_id?: string;
+  enable_wipe_tower_auto_placement?: boolean;
 }
 
 export async function generateColorCard(
@@ -327,6 +330,7 @@ export async function replaceColor(
   sessionId: string,
   selectedColor: string,
   replacementColor: string,
+  operationId?: string,
 ): Promise<ColorReplaceResponse> {
   const response = await apiClient.post<ColorReplaceResponse>(
     "/convert/replace-color",
@@ -334,6 +338,7 @@ export async function replaceColor(
       session_id: sessionId,
       selected_color: selectedColor,
       replacement_color: replacementColor,
+      ...(operationId ? { operation_id: operationId } : {}),
     },
     { timeout: 3_600_000 },
   );
@@ -361,6 +366,7 @@ export interface ColorReplacePair {
 export async function replaceColorsBatch(
   sessionId: string,
   pairs: ColorReplacePair[],
+  operationId?: string,
 ): Promise<ColorReplaceResponse> {
   const response = await apiClient.post<ColorReplaceResponse>(
     "/convert/replace-colors-batch",
@@ -370,6 +376,7 @@ export async function replaceColorsBatch(
         selected_color: p.selectedColor,
         replacement_color: p.replacementColor,
       })),
+      ...(operationId ? { operation_id: operationId } : {}),
     },
     { timeout: 3_600_000 },
   );
@@ -533,6 +540,7 @@ export async function regionReplace(
   replacementColor: string,
   scope?: GradientRegionReplaceScope,
   selectionRevision?: number,
+  operationId?: string,
 ): Promise<RegionReplaceResponse> {
   const body: Record<string, unknown> = {
     session_id: sessionId,
@@ -547,6 +555,7 @@ export async function regionReplace(
       body.gradient_region_index = scope.gradientRegionIndex;
     }
   }
+  if (operationId) body.operation_id = operationId;
   const response = await apiClient.post<RegionReplaceResponse>(
     "/convert/region-replace",
     body,
@@ -586,6 +595,7 @@ export interface RegionReplaceBatchItemPayload {
 export async function regionReplaceBatch(
   sessionId: string,
   items: RegionReplaceBatchItemPayload[],
+  operationId?: string,
 ): Promise<RegionReplaceResponse> {
   const response = await apiClient.post<RegionReplaceResponse>(
     "/convert/region-replace-batch",
@@ -605,6 +615,7 @@ export async function regionReplaceBatch(
         }
         return body;
       }),
+      ...(operationId ? { operation_id: operationId } : {}),
     },
     { timeout: 3_600_000 },
   );
@@ -635,6 +646,7 @@ export async function regionRequantize(
   sessionId: string,
   targets: RegionRequantizeTargetPayload[],
   localQuantizeColors: number,
+  operationId?: string,
 ): Promise<RegionReplaceResponse> {
   const response = await apiClient.post<RegionReplaceResponse>(
     "/convert/region-requantize",
@@ -645,6 +657,7 @@ export async function regionRequantize(
         gradient_region_index: t.gradientRegionIndex,
       })),
       local_quantize_colors: localQuantizeColors,
+      ...(operationId ? { operation_id: operationId } : {}),
     },
     { timeout: 3_600_000 },
   );
@@ -687,6 +700,22 @@ export async function getGlbStatus(
 ): Promise<GlbStatusResponse> {
   const response = await apiClient.get<GlbStatusResponse>(
     `/convert/glb-status/${encodeURIComponent(sessionId)}`,
+    { timeout: 30_000 },
+  );
+  return response.data;
+}
+
+/** Rebuild only the browser GLB renderer for an active native Vector session. */
+export async function rebuildVectorPreviewRenderer(
+  sessionId: string,
+  enableSmoothVectorPreview: boolean,
+): Promise<VectorPreviewRendererResponse> {
+  const response = await apiClient.post<VectorPreviewRendererResponse>(
+    "/convert/vector-preview-renderer",
+    {
+      session_id: sessionId,
+      enable_smooth_vector_preview: enableSmoothVectorPreview,
+    },
     { timeout: 30_000 },
   );
   return response.data;
@@ -762,6 +791,7 @@ export async function mutateFreeColors(
   sessionId: string,
   action: "toggle" | "clear" | "replace",
   colorHexes: string[] = [],
+  operationId?: string,
 ): Promise<FreeColorMutationResponse> {
   const response = await apiClient.post<FreeColorMutationResponse>(
     "/convert/free-colors",
@@ -769,6 +799,7 @@ export async function mutateFreeColors(
       session_id: sessionId,
       action,
       color_hexes: colorHexes,
+      ...(operationId ? { operation_id: operationId } : {}),
     },
   );
   return response.data;
@@ -777,10 +808,14 @@ export async function mutateFreeColors(
 /** 重置所有颜色替换，恢复原始预览 */
 export async function resetReplacements(
   sessionId: string,
+  operationId?: string,
 ): Promise<ResetReplacementsResponse> {
   const response = await apiClient.post<ResetReplacementsResponse>(
     "/convert/reset-replacements",
-    { session_id: sessionId },
+    {
+      session_id: sessionId,
+      ...(operationId ? { operation_id: operationId } : {}),
+    },
     { timeout: 3_600_000 },
   );
   return response.data;
@@ -790,11 +825,28 @@ export async function resetReplacements(
 export async function replacementHistory(
   sessionId: string,
   action: "undo" | "redo",
+  operationId?: string,
 ): Promise<ReplacementHistoryResponse> {
   const response = await apiClient.post<ReplacementHistoryResponse>(
     "/convert/replacement-history",
-    { session_id: sessionId, action },
+    {
+      session_id: sessionId,
+      action,
+      ...(operationId ? { operation_id: operationId } : {}),
+    },
     { timeout: 3_600_000 },
+  );
+  return response.data;
+}
+
+/** Read the server-side confirmation for one editor operation. */
+export async function getEditorCommitStatus(
+  sessionId: string,
+  operationId: string,
+): Promise<EditorCommitStatusResponse> {
+  const response = await apiClient.get<EditorCommitStatusResponse>(
+    `/convert/editor-commit/${encodeURIComponent(sessionId)}/${encodeURIComponent(operationId)}`,
+    { timeout: 15_000 },
   );
   return response.data;
 }

@@ -44,9 +44,13 @@ from api.file_registry import FileRegistry
 from api.preview_cache_artifacts import (
     externalize_preview_cache,
     is_preview_cache_artifact_ref,
+    merge_preview_cache_metadata,
+    preview_cache_transaction,
+    refresh_preview_cache_revision,
 )
 from api.routers.converter import async_glb as async_glb_module
 from api.session_store import SessionStore
+from config import ModelingMode
 
 _test_store: SessionStore = SessionStore(ttl=1800)
 _test_registry: FileRegistry = FileRegistry()
@@ -189,6 +193,314 @@ def _wait_for_status(
     raise AssertionError(
         f"glb-status predicate never matched within {timeout_s}s; last={last}"
     )
+
+
+def _native_vector_cache(sid: str, tmp_path: Path) -> dict:
+    session_data = _test_store.get(sid)
+    assert session_data is not None
+    cache = dict(session_data["preview_cache"])
+    geometry_path = tmp_path / "vector-geometry.pkl"
+    geometry_path.write_bytes(b"server-owned-vector-geometry")
+    _test_store.register_temp_file(sid, str(geometry_path))
+    cache.update(
+        {
+            "modeling_mode": "vector",
+            "enable_smooth_vector_preview": True,
+            "vector_parse_clip_cache_path": str(geometry_path),
+            "vector_parse_clip_cache_provenance": "d" * 64,
+            "height_identity_rgb": cache["matched_rgb"].copy(),
+            "preview_colors": {0: [255, 255, 255, 255]},
+            "backing_color_id": 0,
+            "spacer_thick": 1.6,
+        }
+    )
+    _test_store.put(sid, "preview_cache", cache)
+    return cache
+
+
+class TestRendererDispatch:
+    @pytest.mark.parametrize("modeling_mode", ["vector", ModelingMode.VECTOR])
+    def test_native_vector_prefers_analytic_renderer(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        modeling_mode: str | ModelingMode,
+    ) -> None:
+        sid = _seed_session(tmp_path)
+        cache = _native_vector_cache(sid, tmp_path)
+        cache["modeling_mode"] = modeling_mode
+        calls: list[str] = []
+
+        monkeypatch.setattr(
+            async_glb_module,
+            "load_vector_quick_preview_source",
+            lambda *_args, **_kwargs: object(),
+        )
+        monkeypatch.setattr(
+            async_glb_module,
+            "build_vector_quick_preview_parts",
+            lambda **_kwargs: [object()],
+        )
+
+        def export(_parts: list[object], *, output_path: str) -> str:
+            calls.append("analytic")
+            Path(output_path).write_bytes(b"analytic")
+            return output_path
+
+        monkeypatch.setattr(
+            async_glb_module,
+            "export_vector_quick_preview_glb",
+            export,
+        )
+        monkeypatch.setattr(
+            async_glb_module,
+            "generate_segmented_glb",
+            lambda *_args, **_kwargs: pytest.fail("segmented renderer should not run"),
+        )
+
+        output_path = tmp_path / "analytic.glb"
+        result, renderer = async_glb_module._build_preview_glb(
+            session_id=sid,
+            store=_test_store,
+            cache=cache,
+            output_path=str(output_path),
+        )
+
+        assert result == str(output_path)
+        assert renderer == "vector_analytic"
+        assert calls == ["analytic"]
+
+    @pytest.mark.parametrize(
+        ("cache_update", "register_geometry"),
+        [
+            ({"enable_smooth_vector_preview": False}, True),
+            ({"modeling_mode": "high-fidelity"}, True),
+            ({}, False),
+        ],
+    )
+    def test_renderer_falls_back_to_segmented_when_ineligible_or_stale(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        cache_update: dict,
+        register_geometry: bool,
+    ) -> None:
+        sid = _seed_session(tmp_path)
+        cache = _native_vector_cache(sid, tmp_path)
+        cache.update(cache_update)
+        if not register_geometry:
+            foreign_path = tmp_path / "foreign-vector-geometry.pkl"
+            foreign_path.write_bytes(b"not-session-owned")
+            cache["vector_parse_clip_cache_path"] = str(foreign_path)
+        _test_store.put(sid, "preview_cache", cache)
+        calls: list[str] = []
+
+        monkeypatch.setattr(
+            async_glb_module,
+            "load_vector_quick_preview_source",
+            lambda *_args, **_kwargs: pytest.fail(
+                "unowned or ineligible Vector source must not be loaded"
+            ),
+        )
+
+        def segmented(_cache: dict, *, output_path: str) -> str:
+            calls.append("segmented")
+            Path(output_path).write_bytes(b"segmented")
+            return output_path
+
+        monkeypatch.setattr(async_glb_module, "generate_segmented_glb", segmented)
+
+        output_path = tmp_path / "segmented.glb"
+        result, renderer = async_glb_module._build_preview_glb(
+            session_id=sid,
+            store=_test_store,
+            cache=cache,
+            output_path=str(output_path),
+        )
+
+        assert result == str(output_path)
+        assert renderer == "segmented"
+        assert calls == ["segmented"]
+
+    def test_valid_owned_source_with_invalid_payload_falls_back(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        sid = _seed_session(tmp_path)
+        cache = _native_vector_cache(sid, tmp_path)
+        monkeypatch.setattr(
+            async_glb_module,
+            "load_vector_quick_preview_source",
+            lambda *_args, **_kwargs: None,
+        )
+
+        def segmented(_cache: dict, *, output_path: str) -> str:
+            Path(output_path).write_bytes(b"segmented")
+            return output_path
+
+        monkeypatch.setattr(async_glb_module, "generate_segmented_glb", segmented)
+
+        result, renderer = async_glb_module._build_preview_glb(
+            session_id=sid,
+            store=_test_store,
+            cache=cache,
+            output_path=str(tmp_path / "fallback.glb"),
+        )
+
+        assert result is not None
+        assert renderer == "segmented"
+
+    def test_analytic_geometry_error_falls_back_without_stuck_pending_status(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        sid = _seed_session(tmp_path)
+        cache = _native_vector_cache(sid, tmp_path)
+        monkeypatch.setattr(
+            async_glb_module,
+            "load_vector_quick_preview_source",
+            lambda *_args, **_kwargs: object(),
+        )
+        monkeypatch.setattr(
+            async_glb_module,
+            "build_vector_quick_preview_parts",
+            lambda **_kwargs: [object()],
+        )
+        monkeypatch.setattr(
+            async_glb_module,
+            "export_vector_quick_preview_glb",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                ValueError("preview geometry rejected")
+            ),
+        )
+
+        def segmented(_cache: dict, *, output_path: str) -> str:
+            Path(output_path).write_bytes(b"segmented")
+            return output_path
+
+        monkeypatch.setattr(async_glb_module, "generate_segmented_glb", segmented)
+
+        result, renderer = async_glb_module._build_preview_glb(
+            session_id=sid,
+            store=_test_store,
+            cache=cache,
+            output_path=str(tmp_path / "fallback.glb"),
+        )
+
+        assert result is not None
+        assert renderer == "segmented"
+
+    def test_segmented_filenames_are_immutable_per_job(self) -> None:
+        first = async_glb_module.generate_segmented_glb_filename("same-session")
+        second = async_glb_module.generate_segmented_glb_filename("same-session")
+
+        assert first != second
+
+
+class TestRendererRebuildEndpoint:
+    @pytest.mark.parametrize("modeling_mode", ["vector", ModelingMode.VECTOR])
+    def test_updates_renderer_only_and_schedules_same_session(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        modeling_mode: str | ModelingMode,
+    ) -> None:
+        sid = _seed_session(tmp_path)
+        before = _native_vector_cache(sid, tmp_path)
+        before["modeling_mode"] = modeling_mode
+        _test_store.put(sid, "preview_cache", before)
+        original_matched = before["matched_rgb"]
+        scheduled: list[tuple[str, dict, dict[str, object]]] = []
+
+        def schedule(
+            session_id: str,
+            _store: SessionStore,
+            _registry: FileRegistry,
+            cache: dict,
+            *,
+            metadata_updates: dict[str, object] | None = None,
+        ) -> str:
+            updates = dict(metadata_updates or {})
+            scheduled.append((session_id, cache, updates))
+            _store.put(
+                session_id,
+                "preview_cache",
+                async_glb_module._with_cache_metadata(cache, updates),
+            )
+            return "renderer-job-token"
+
+        monkeypatch.setattr(
+            "api.routers.converter.preview.schedule_glb_build",
+            schedule,
+        )
+
+        response = client.post(
+            "/api/convert/vector-preview-renderer",
+            json={
+                "session_id": sid,
+                "enable_smooth_vector_preview": False,
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json() == {
+            "session_id": sid,
+            "status": "pending",
+            "job_token": "renderer-job-token",
+            "glb_url": None,
+            "renderer": "segmented",
+        }
+        assert scheduled and scheduled[0][0] == sid
+        assert scheduled[0][2] == {
+            "enable_smooth_vector_preview": False,
+            "vector_preview_renderer": "segmented",
+        }
+        after = _test_store.get(sid)["preview_cache"]
+        assert after["enable_smooth_vector_preview"] is False
+        assert after["vector_preview_renderer"] == "segmented"
+        assert after["matched_rgb"] is original_matched
+        for key in before:
+            if key not in {
+                "enable_smooth_vector_preview",
+                "vector_preview_renderer",
+            }:
+                assert after[key] is before[key]
+
+    def test_rejects_missing_closed_and_non_vector_sessions(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        missing = client.post(
+            "/api/convert/vector-preview-renderer",
+            json={
+                "session_id": "missing-session",
+                "enable_smooth_vector_preview": True,
+            },
+        )
+        assert missing.status_code == 404
+
+        closed_sid = _seed_session(tmp_path)
+        _test_store.close(closed_sid)
+        closed = client.post(
+            "/api/convert/vector-preview-renderer",
+            json={
+                "session_id": closed_sid,
+                "enable_smooth_vector_preview": True,
+            },
+        )
+        assert closed.status_code == 404
+
+        raster_sid = _seed_session(tmp_path)
+        raster = client.post(
+            "/api/convert/vector-preview-renderer",
+            json={
+                "session_id": raster_sid,
+                "enable_smooth_vector_preview": True,
+            },
+        )
+        assert raster.status_code == 409
 
 
 class TestReplaceReturnsImmediately:
@@ -378,6 +690,293 @@ class TestGlbStatusLifecycle:
         assert status["glb_url"] is None
         assert status["error"] == _GLB_STATUS_SAFE_ERROR
         assert "forced registry failure" not in status["error"]
+        assert not glb_path.exists()
+
+    def test_session_closed_during_registration_cleans_registered_glb(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A close racing with registration must not leave an orphaned GLB."""
+        sid = _seed_session(tmp_path)
+        job_token = "job-token"
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                **_test_store.get(sid)["preview_cache"],
+                "glb_job_token": job_token,
+                "glb_url": None,
+                "glb_error": None,
+            },
+        )
+        glb_path = tmp_path / "closed-during-registration.glb"
+
+        def builder(_cache: dict, *, output_path: str) -> str:
+            del output_path
+            glb_path.write_bytes(b"registered-then-closed")
+            return str(glb_path)
+
+        class ClosingRegistry(FileRegistry):
+            registered_file_id: str | None = None
+
+            def register_path(self, *args: object, **kwargs: object) -> str:
+                file_id = super().register_path(*args, **kwargs)
+                self.registered_file_id = file_id
+                _test_store.close(sid)
+                return file_id
+
+        registry = ClosingRegistry()
+        monkeypatch.setattr(async_glb_module, "generate_segmented_glb", builder)
+
+        async_glb_module._run_glb_build_job(
+            sid,
+            job_token,
+            _test_store,
+            registry,
+        )
+
+        assert _test_store.get(sid) is None
+        assert registry.registered_file_id is not None
+        assert registry.get_entry(registry.registered_file_id) is None
+        assert not glb_path.exists()
+
+    def test_job_superseded_during_registration_cleans_registered_glb(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A newer token racing with registration must keep the newer job pending."""
+        sid = _seed_session(tmp_path)
+        old_token = "old-token"
+        new_token = "new-token"
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                **_test_store.get(sid)["preview_cache"],
+                "glb_job_token": old_token,
+                "glb_url": None,
+                "glb_error": None,
+            },
+        )
+        glb_path = tmp_path / "superseded-during-registration.glb"
+
+        def builder(_cache: dict, *, output_path: str) -> str:
+            del output_path
+            glb_path.write_bytes(b"registered-then-superseded")
+            return str(glb_path)
+
+        class SupersedingRegistry(FileRegistry):
+            registered_file_id: str | None = None
+
+            def register_path(self, *args: object, **kwargs: object) -> str:
+                file_id = super().register_path(*args, **kwargs)
+                self.registered_file_id = file_id
+                _test_store.put(
+                    sid,
+                    "preview_cache",
+                    {
+                        "glb_job_token": new_token,
+                        "glb_url": None,
+                        "glb_error": None,
+                    },
+                )
+                return file_id
+
+        registry = SupersedingRegistry()
+        monkeypatch.setattr(async_glb_module, "generate_segmented_glb", builder)
+
+        async_glb_module._run_glb_build_job(
+            sid,
+            old_token,
+            _test_store,
+            registry,
+        )
+
+        status = async_glb_module.get_glb_status(
+            _test_store.get(sid)["preview_cache"]
+        )
+        assert status["status"] == "pending"
+        assert status["job_token"] == new_token
+        assert registry.registered_file_id is not None
+        assert registry.get_entry(registry.registered_file_id) is None
+        assert not glb_path.exists()
+
+    def test_job_superseded_during_final_publish_cannot_overwrite_newer_job(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Publishing the completed cache must compare-and-set the job token."""
+        sid = _seed_session(tmp_path)
+        old_token = "old-token"
+        new_token = "new-token"
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                **_test_store.get(sid)["preview_cache"],
+                "glb_job_token": old_token,
+                "glb_url": None,
+                "glb_error": None,
+            },
+        )
+        glb_path = tmp_path / "superseded-during-publish.glb"
+        glb_path.write_bytes(b"stale-glb")
+        monkeypatch.setattr(
+            async_glb_module,
+            "_build_preview_glb",
+            lambda **_kwargs: (str(glb_path), "segmented"),
+        )
+        original_with_metadata = async_glb_module._with_cache_metadata
+
+        def supersede_before_publish(cache: dict, metadata: dict) -> dict:
+            if "glb_completed_at" in metadata:
+                _test_store.put(
+                    sid,
+                    "preview_cache",
+                    {
+                        "glb_job_token": new_token,
+                        "glb_url": None,
+                        "glb_error": None,
+                    },
+                )
+            return original_with_metadata(cache, metadata)
+
+        monkeypatch.setattr(
+            async_glb_module,
+            "_with_cache_metadata",
+            supersede_before_publish,
+        )
+
+        async_glb_module._run_glb_build_job(
+            sid,
+            old_token,
+            _test_store,
+            _test_registry,
+        )
+
+        final_cache = _test_store.get(sid)["preview_cache"]
+        assert final_cache["glb_job_token"] == new_token
+        assert final_cache["glb_url"] is None
+        assert _test_registry.get_session_entries(sid) == {}
+        assert not glb_path.exists()
+
+    @pytest.mark.parametrize("artifact_backed", [False, True])
+    def test_cache_mutation_before_new_job_token_blocks_stale_publication(
+        self,
+        artifact_backed: bool,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A committed edit must invalidate the old worker before rescheduling."""
+        sid = _seed_session(tmp_path)
+        old_token = "old-token"
+        cache = _test_store.get(sid)["preview_cache"]
+        if artifact_backed:
+            cache = _convert_seeded_session_to_artifact(sid, tmp_path)
+        scheduled_cache = async_glb_module._with_cache_metadata(
+            cache,
+            {
+                "glb_job_token": old_token,
+                "glb_url": None,
+                "glb_error": None,
+            },
+        )
+        _test_store.put(sid, "preview_cache", scheduled_cache)
+        glb_path = tmp_path / f"stale-{'artifact' if artifact_backed else 'plain'}.glb"
+        glb_path.write_bytes(b"stale-glb")
+        monkeypatch.setattr(
+            async_glb_module,
+            "_build_preview_glb",
+            lambda **_kwargs: (str(glb_path), "segmented"),
+        )
+        original_with_metadata = async_glb_module._with_cache_metadata
+        replacement_rgb = np.full((3, 3, 3), 37, dtype=np.uint8)
+
+        def commit_edit_before_publish(cache_value: dict, metadata: dict) -> dict:
+            completed = original_with_metadata(cache_value, metadata)
+            if "glb_completed_at" in metadata:
+                session_data = _test_store.get(sid)
+                assert session_data is not None
+                with preview_cache_transaction(
+                    sid,
+                    _test_store,
+                    session_data,
+                    fields={"matched_rgb"},
+                ) as transaction:
+                    transaction["matched_rgb"] = replacement_rgb
+                    transaction.commit({"matched_rgb"})
+            return completed
+
+        monkeypatch.setattr(
+            async_glb_module,
+            "_with_cache_metadata",
+            commit_edit_before_publish,
+        )
+
+        async_glb_module._run_glb_build_job(
+            sid,
+            old_token,
+            _test_store,
+            _test_registry,
+        )
+
+        latest_cache = _test_store.get(sid)["preview_cache"]
+        if artifact_backed:
+            stored_rgb = np.load(latest_cache["fields"]["matched_rgb"]["path"])
+        else:
+            stored_rgb = latest_cache["matched_rgb"]
+        np.testing.assert_array_equal(stored_rgb, replacement_rgb)
+        assert latest_cache.get("metadata", latest_cache)["glb_url"] is None
+        assert _test_registry.get_session_entries(sid) == {}
+        assert not glb_path.exists()
+
+    def test_final_publish_exception_cleans_registered_glb(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A transient store failure must not orphan a registered GLB."""
+
+        class FailFirstCompareAndSetStore(SessionStore):
+            compare_and_set_calls = 0
+
+            def compare_and_set(self, *args: object, **kwargs: object) -> bool:
+                self.compare_and_set_calls += 1
+                if self.compare_and_set_calls == 1:
+                    raise RuntimeError("forced publication failure")
+                return super().compare_and_set(*args, **kwargs)
+
+        store = FailFirstCompareAndSetStore(ttl=1800)
+        sid = store.create()
+        job_token = "job-token"
+        store.put(
+            sid,
+            "preview_cache",
+            {
+                "glb_job_token": job_token,
+                "glb_url": None,
+                "glb_error": None,
+                "matched_rgb": np.full((2, 2, 3), 255, dtype=np.uint8),
+            },
+        )
+        glb_path = tmp_path / "registered-before-publish-error.glb"
+        glb_path.write_bytes(b"unpublished-glb")
+        registry = FileRegistry()
+        monkeypatch.setattr(
+            async_glb_module,
+            "_build_preview_glb",
+            lambda **_kwargs: (str(glb_path), "segmented"),
+        )
+
+        async_glb_module._run_glb_build_job(
+            sid,
+            job_token,
+            store,
+            registry,
+        )
+
+        assert store.compare_and_set_calls == 2
+        status = async_glb_module.get_glb_status(
+            store.get(sid)["preview_cache"]
+        )
+        assert status["status"] == "error"
+        assert status["glb_url"] is None
+        assert registry.get_session_entries(sid) == {}
         assert not glb_path.exists()
 
     def test_missing_glb_output_uses_safe_status_error(
@@ -582,6 +1181,94 @@ class TestGlbStatusLifecycle:
             "#ff0000": [[[0.0, 0.0], [1.0, 1.0]]]
         }
 
+    def test_executor_failure_marks_only_derived_glb_as_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A scheduler failure preserves the committed 2D cache state."""
+
+        sid = _seed_session(tmp_path)
+        current_cache = refresh_preview_cache_revision(
+            _test_store.get(sid)["preview_cache"]
+        )
+        _test_store.put(sid, "preview_cache", current_cache)
+        original_rgb = current_cache["matched_rgb"].copy()
+
+        class FailingExecutor:
+            def submit(self, *args: object) -> None:
+                raise RuntimeError("executor unavailable")
+
+        monkeypatch.setattr(async_glb_module, "_GLB_EXECUTOR", FailingExecutor())
+        job_token = async_glb_module.schedule_glb_build(
+            sid,
+            _test_store,
+            _test_registry,
+            current_cache,
+        )
+
+        cache = _test_store.get(sid)["preview_cache"]
+        status = async_glb_module.get_glb_status(cache)
+        assert status["status"] == "error"
+        assert status["job_token"] == job_token
+        assert status["error"] == _GLB_STATUS_SAFE_ERROR
+        np.testing.assert_array_equal(cache["matched_rgb"], original_rgb)
+
+    @pytest.mark.parametrize("artifact_backed", [False, True])
+    def test_stale_scheduler_claims_latest_cache_without_restoring_old_content(
+        self,
+        artifact_backed: bool,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Late scheduling from edit A must not overwrite newer edit B."""
+        sid = _seed_session(tmp_path)
+        base_cache = _test_store.get(sid)["preview_cache"]
+        if artifact_backed:
+            old_cache = externalize_preview_cache(
+                sid,
+                _test_store,
+                {**base_cache, "content_marker": "old"},
+                root_dir=tmp_path,
+            )
+            current_cache = merge_preview_cache_metadata(
+                old_cache,
+                {"content_marker": "new"},
+            )
+        else:
+            old_cache = refresh_preview_cache_revision(
+                {**base_cache, "content_marker": "old"}
+            )
+            current_cache = refresh_preview_cache_revision(
+                {**base_cache, "content_marker": "new"}
+            )
+        _test_store.put(sid, "preview_cache", current_cache)
+        submitted: list[tuple[object, ...]] = []
+
+        class FakeExecutor:
+            def submit(self, *args: object) -> None:
+                submitted.append(args)
+
+        monkeypatch.setattr(async_glb_module, "_GLB_EXECUTOR", FakeExecutor())
+
+        job_token = async_glb_module.schedule_glb_build(
+            sid,
+            _test_store,
+            _test_registry,
+            old_cache,
+            metadata_updates={"requested_renderer": "vector_analytic"},
+        )
+
+        scheduled_cache = _test_store.get(sid)["preview_cache"]
+        scheduled_state = (
+            scheduled_cache["metadata"]
+            if artifact_backed
+            else scheduled_cache
+        )
+        assert scheduled_state["content_marker"] == "new"
+        assert scheduled_state["requested_renderer"] == "vector_analytic"
+        assert scheduled_state["glb_job_token"] == job_token
+        assert len(submitted) == 1
+        assert submitted[0][2] == job_token
+
     def test_artifact_cache_hydration_failure_returns_safe_status_error(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -619,6 +1306,37 @@ class TestGlbStatusLifecycle:
         assert "FileNotFoundError" not in status["error"]
         assert stale_path not in status["error"]
         assert calls == []
+
+    def test_session_close_removes_active_glb_and_vector_geometry(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Both lightweight display artifacts remain session-bound."""
+
+        sid = _seed_session(tmp_path)
+        cache = _native_vector_cache(sid, tmp_path)
+        geometry_path = Path(cache["vector_parse_clip_cache_path"])
+        glb_file_id = _test_registry.register_bytes(
+            sid,
+            b"active-vector-preview",
+            "active-vector-preview.glb",
+        )
+        glb_entry = _test_registry.get_entry(glb_file_id)
+        assert glb_entry is not None
+        glb_path = Path(glb_entry["path"])
+        cache["glb_url"] = f"/api/files/{glb_file_id}"
+        _test_store.put(sid, "preview_cache", cache)
+
+        response = client.post(
+            "/api/session/close",
+            json={"session_id": sid},
+        )
+
+        assert response.status_code == 200, response.text
+        assert _test_store.get(sid) is None
+        assert _test_registry.resolve(glb_file_id) is None
+        assert not glb_path.exists()
+        assert not geometry_path.exists()
 
 
 class TestJobTokenGuard:

@@ -10,7 +10,10 @@ vi.mock("../i18n/context", () => ({
 }));
 
 // Mock child components that live inside Canvas (R3F components)
-vi.mock("../components/ModelViewer", () => ({ default: () => null }));
+vi.mock("../components/ModelViewer", () => ({
+  default: () => null,
+  computeFitDistance: () => 100,
+}));
 let capturedInteractiveViewerProps: Record<string, unknown> | null = null;
 vi.mock("../components/InteractiveModelViewer", () => ({
   default: (props: Record<string, unknown>) => {
@@ -34,7 +37,7 @@ let capturedKeychainRingProps: Record<string, unknown> | null = null;
 vi.mock("../components/KeychainRing3D", () => ({
   default: (props: Record<string, unknown>) => {
     capturedKeychainRingProps = props;
-    return null;
+    return <div data-testid="mock-keychain-ring" />;
   },
 }));
 let capturedModelSurfaceSelectorProps: Record<string, unknown> | null = null;
@@ -219,12 +222,33 @@ import Scene3D, {
 } from "../components/Scene3D";
 
 describe("Scene3D", () => {
+  it('saves screenshot PNG bytes and distinguishes cancellation and failures', async () => {
+    const save = vi.fn().mockResolvedValue({ status: 'saved' });
+    Object.assign(window, { electronAPI: { saveGeneratedFile: save } });
+    try {
+      render(<Scene3D />);
+      const mockGl = getMockThreeState().gl;
+      mockGl.domElement.toDataURL = vi.fn(() => 'data:image/png;base64,iVBORw0KGgo=');
+      (capturedCanvasProps.onCreated as (state: { gl: typeof mockGl }) => void)({ gl: mockGl });
+      const click = () => fireEvent.click(screen.getByLabelText('viewer_screenshot'));
+      await act(async () => { click(); });
+      expect(save.mock.calls[0][0].purpose).toBe('screenshot');
+      expect(Array.from(save.mock.calls[0][0].bytes)).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+      expect(screen.getByText('file_save_saved')).toBeInTheDocument();
+      save.mockResolvedValue({ status: 'canceled' });
+      await act(async () => { click(); });
+      expect(screen.queryByText('file_save_saved')).not.toBeInTheDocument();
+      save.mockRejectedValue(new Error('native error'));
+      await act(async () => { click(); });
+      expect(screen.getByText('file_save_failed')).toBeInTheDocument();
+    } finally { Object.assign(window, { electronAPI: undefined }); }
+  });
 beforeEach(() => {
     capturedCanvasProps = {};
     capturedOrbitControlsProps = {};
     capturedInteractiveViewerProps = null;
-    capturedKeychainRingProps = null;
     capturedBedPlatformProps = null;
+    capturedKeychainRingProps = null;
     capturedModelSurfaceSelectorProps = null;
     capturedFridgeMagnet3DProps = null;
     document.body.classList.remove("lumina-canvas-orbiting");
@@ -238,11 +262,22 @@ beforeEach(() => {
     // Reset store to defaults
       useConverterStore.setState({
         isLoading: false,
+        modelUrl: null,
         previewGlbUrl: null,
+        batchPreviewItems: [],
         previewPerformanceTiming: null,
         generatePerformanceTiming: null,
         previewImageUrl: null,
         previewBaseImageUrl: null,
+        imagePreviewUrl: null,
+        sessionId: null,
+        enable_relief: false,
+        autoHeightMode: "darker-higher",
+        heightmapThumbnailUrl: null,
+        heightmapUploadSessionId: null,
+        enable_coating: false,
+        coating_height_mm: 0.08,
+        layer_height_mm: 0.08,
         puzzleEnabled: false,
         puzzleOverlayUrl: null,
         selectedColor: null,
@@ -759,6 +794,190 @@ beforeEach(() => {
     });
   });
 
+  describe("keychain contour live resize wiring", () => {
+    it("passes a display transform that follows a 60 to 90 mm preview resize", () => {
+      useConverterStore.setState({
+        previewGlbUrl: "/api/files/quick-preview.glb",
+        add_loop: true,
+        target_width_mm: 90,
+        target_height_mm: 90,
+        preview_width_mm: 60,
+        preview_height_mm: 60,
+        modelBounds: {
+          minX: -30,
+          maxX: 30,
+          minY: -30,
+          maxY: 30,
+          maxZ: 2,
+        },
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedKeychainRingProps?.modelBounds).toEqual({
+        minX: -45,
+        maxX: 45,
+        minY: -45,
+        maxY: 45,
+        maxZ: 2,
+      });
+      const toDisplayPoint = capturedKeychainRingProps?.contourToDisplayPoint as
+        | ((point: { x: number; y: number }) => { x: number; y: number })
+        | undefined;
+      expect(toDisplayPoint).toBeTypeOf("function");
+      expect(toDisplayPoint?.({ x: 0, y: 10 })).toEqual({ x: 0, y: 15 });
+    });
+  });
+
+  describe("lightweight creative preview wiring", () => {
+    it("passes a session-owned spatial heightmap and processed artwork to the quick preview", () => {
+      useConverterStore.setState({
+        sessionId: "session-a",
+        previewGlbUrl: "/api/files/mock-preview.glb",
+        previewBaseImageUrl: "/api/files/processed-colours.png",
+        enable_relief: true,
+        autoHeightMode: "use-heightmap",
+        heightmapThumbnailUrl: "/api/files/heightmap-thumb.png",
+        heightmapUploadSessionId: "session-a",
+        heightmap_max_height: 3.2,
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedInteractiveViewerProps).toMatchObject({
+        heightmapReliefUrl: "/api/files/heightmap-thumb.png",
+        heightmapArtworkUrl: "/api/files/processed-colours.png",
+        heightmapReliefMaxHeightMm: 3.2,
+      });
+    });
+
+    it("does not reuse a heightmap uploaded by another session", () => {
+      useConverterStore.setState({
+        sessionId: "session-b",
+        previewGlbUrl: "/api/files/mock-preview.glb",
+        previewBaseImageUrl: "/api/files/processed-colours.png",
+        enable_relief: true,
+        autoHeightMode: "use-heightmap",
+        heightmapThumbnailUrl: "/api/files/stale-heightmap-thumb.png",
+        heightmapUploadSessionId: "session-a",
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedInteractiveViewerProps?.heightmapReliefUrl).toBeNull();
+    });
+
+    it("passes the live coating controls to the quick preview", () => {
+      useConverterStore.setState({
+        previewGlbUrl: "/api/files/mock-preview.glb",
+        enable_coating: true,
+        coating_height_mm: 0.12,
+        layer_height_mm: 0.04,
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedInteractiveViewerProps).toMatchObject({
+        enableCoating: true,
+        coatingHeightMm: 0.12,
+        printingLayerHeightMm: 0.04,
+      });
+    });
+  });
+
+  describe("model source role wiring", () => {
+    it("marks segmented GLB URLs as quick previews", () => {
+      useConverterStore.setState({
+        previewGlbUrl: "/api/files/quick-preview.glb",
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedInteractiveViewerProps?.sourceRole).toBe("quick-preview");
+    });
+
+    it("marks final generated GLBs separately even when a preview URL remains", () => {
+      useConverterStore.setState({
+        previewGlbUrl: "/api/files/old-quick-preview.glb",
+      });
+
+      render(<Scene3D modelUrl="/api/files/generated.glb" />);
+
+      expect(capturedInteractiveViewerProps?.sourceRole).toBe("generated");
+    });
+
+    it("keeps the keychain proxy on a quick preview", () => {
+      useConverterStore.setState({
+        previewGlbUrl: "/api/files/quick-preview.glb",
+        add_loop: true,
+        target_width_mm: 80,
+        target_height_mm: 120,
+        preview_width_mm: 40,
+        preview_height_mm: 60,
+        modelBounds: {
+          minX: -20,
+          maxX: 20,
+          minY: -30,
+          maxY: 30,
+          maxZ: 2,
+        },
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedKeychainRingProps).not.toBeNull();
+      expect(capturedKeychainRingProps?.modelBounds).toEqual({
+        minX: -40,
+        maxX: 40,
+        minY: -60,
+        maxY: 60,
+        maxZ: 2,
+      });
+    });
+
+    it("keeps the lightweight preview and keychain proxy ahead of a stale store model", () => {
+      useConverterStore.setState({
+        modelUrl: "/api/files/generated-with-keychain.glb",
+        previewGlbUrl: "/api/files/old-quick-preview.glb",
+        add_loop: true,
+        modelBounds: {
+          minX: -20,
+          maxX: 20,
+          minY: -30,
+          maxY: 30,
+          maxZ: 2,
+        },
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedInteractiveViewerProps).toMatchObject({
+        url: "/api/files/old-quick-preview.glb",
+        sourceRole: "quick-preview",
+      });
+      expect(capturedKeychainRingProps).not.toBeNull();
+    });
+
+    it("preserves embedded auxiliaries in batch models", () => {
+      useConverterStore.setState({
+        batchPreviewItems: [
+          {
+            url: "/api/files/batch-item.glb",
+            filename: "item.svg",
+            tx_mm: 0,
+            ty_mm: 0,
+            width_mm: 30,
+            depth_mm: 20,
+          },
+        ],
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedInteractiveViewerProps?.sourceRole).toBe("batch");
+    });
+  });
+
   describe("model surface overlay staging", () => {
     it("shows a blocking loading animation while the uploaded model is analyzed", () => {
       const modelFile = new File(["solid"], "plate.stl");
@@ -800,7 +1019,7 @@ beforeEach(() => {
       expect(screen.getByTestId("mock-model-surface-selector")).toBeInTheDocument();
       expect(capturedModelSurfaceSelectorProps).toMatchObject({
         file: modelFile,
-        artworkUrl: "blob:art",
+        artworkAsset: { kind: "source-image", url: "blob:art" },
         selectionReady: true,
       });
       expect(capturedModelSurfaceSelectorProps?.placement).toEqual(
@@ -819,6 +1038,36 @@ beforeEach(() => {
       expect(capturedModelSurfaceSelectorProps?.bedGridVisible).toBe(true);
       expect(capturedModelSurfaceSelectorProps?.onBedGridVisibleChange).toEqual(expect.any(Function));
       expect(capturedInteractiveViewerProps).toBeNull();
+    });
+
+    it("uses the clean processed preview for model-surface artwork", () => {
+      const modelFile = new File(["solid"], "plate.stl");
+      useConverterStore.setState({
+        modelSurfaceEnabled: true,
+        modelSurfaceFile: modelFile,
+        modelSurfacePreviewUrl: "blob:model",
+        modelSurfaceSelectionId: "selection-1",
+        imagePreviewUrl: "blob:original-svg",
+        previewBaseImageUrl: "/api/files/processed-colours.png",
+        previewImageUrl: "/api/files/temporary-selection-highlight.png",
+        modelSurfaceModelFileId: "model-file-1",
+        sessionId: "session-1",
+        previewRequestRevision: 7,
+      } as never);
+
+      render(<Scene3D />);
+
+      expect(capturedModelSurfaceSelectorProps?.artworkAsset).toMatchObject({
+        kind: "surface-uv",
+        url: "/api/files/processed-colours.png",
+        identity: {
+          sourceImageUrl: "blob:original-svg",
+          modelFileId: "model-file-1",
+          selectionId: "selection-1",
+          sessionId: "session-1",
+          previewRequestRevision: 7,
+        },
+      });
     });
 
     it("reuses the scene bed platform while model surface rotate controls are active", () => {
@@ -870,13 +1119,13 @@ beforeEach(() => {
       expect(screen.getByTestId("mock-model-surface-selector")).toBeInTheDocument();
       expect(capturedModelSurfaceSelectorProps).toMatchObject({
         file: modelFile,
-        artworkUrl: "blob:art",
+        artworkAsset: { kind: "source-image", url: "blob:art" },
         selectionReady: true,
       });
       expect(capturedInteractiveViewerProps).toBeNull();
     });
 
-    it("keeps the model surface editor visible after final generation returns a GLB", () => {
+    it("keeps the realtime model-surface editor ahead of a generated GLB", () => {
       const modelFile = new File(["solid"], "plate.stl");
       useConverterStore.setState({
         modelSurfaceEnabled: true,
@@ -893,7 +1142,7 @@ beforeEach(() => {
       expect(screen.getByTestId("mock-model-surface-selector")).toBeInTheDocument();
       expect(capturedModelSurfaceSelectorProps).toMatchObject({
         file: modelFile,
-        artworkUrl: "blob:art",
+        artworkAsset: { kind: "source-image", url: "blob:art" },
         selectionReady: true,
       });
       expect(capturedInteractiveViewerProps).toBeNull();
@@ -1014,10 +1263,16 @@ beforeEach(() => {
         enabled: true,
         magnets: fridgeMagnets,
         selectedMagnetId: "magnet-1",
-        modelBounds,
-        scaleX: 2,
-        scaleY: 2,
+        modelBounds: {
+          minX: -20,
+          maxX: 20,
+          minY: -20,
+          maxY: 20,
+          maxZ: 5,
+        },
       });
+      expect(capturedFridgeMagnet3DProps).not.toHaveProperty("scaleX");
+      expect(capturedFridgeMagnet3DProps).not.toHaveProperty("scaleY");
       expect(capturedFridgeMagnet3DProps?.onSelectMagnet).toBe(
         useConverterStore.getState().selectFridgeMagnet,
       );

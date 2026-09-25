@@ -7,7 +7,7 @@
  * Requirements covered: 1.1, 1.2, 3.5, 6.2, 6.3
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, cleanup, act } from "@testing-library/react";
+import { render, cleanup, act, fireEvent, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 
 // ---------------------------------------------------------------------------
@@ -34,6 +34,19 @@ vi.mock("@floating-ui/react", () => {
       capturedHoverOpts = opts ?? {};
       return {};
     },
+    useFocus: () => ({
+      referenceProps: {
+        onFocus: () => capturedOnOpenChange?.(true),
+      },
+    }),
+    useClick: (_ctx: unknown, opts: { enabled?: boolean }) =>
+      opts.enabled
+        ? {
+            referenceProps: {
+              onClick: () => capturedOnOpenChange?.(true),
+            },
+          }
+        : {},
     useDismiss: () => ({}),
     useRole: () => ({}),
     useInteractions: (hooks: Array<Record<string, unknown>>) => ({
@@ -46,6 +59,23 @@ vi.mock("@floating-ui/react", () => {
     shift: () => null,
     autoUpdate: () => () => {},
     FloatingPortal: ({ children }: { children: ReactNode }) => children,
+    FloatingFocusManager: ({
+      children,
+      modal,
+      initialFocus,
+    }: {
+      children: ReactNode;
+      modal?: boolean;
+      initialFocus?: number;
+    }) => (
+      <div
+        data-testid="focus-manager"
+        data-modal={String(modal)}
+        data-initial-focus={String(initialFocus)}
+      >
+        {children}
+      </div>
+    ),
   };
 });
 
@@ -96,6 +126,8 @@ async function renderAndOpen(
     title: string;
     description: string;
     wikiUrl?: string;
+    wikiPath?: `/docs/${string}/`;
+    openOnClick?: boolean;
     delay?: number;
   },
   open = true
@@ -128,6 +160,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  delete (window as Window & { electronAPI?: unknown }).electronAPI;
 });
 
 // ---------------------------------------------------------------------------
@@ -245,14 +278,27 @@ describe("WikiTooltip unit tests", () => {
    * exists and can receive focus.
    */
   it("wiki link is keyboard-focusable when wikiUrl is provided", async () => {
-    const { container } = await renderAndOpen({
-      title: "Keyboard Test",
-      description: "Focus the link",
-      wikiUrl: "https://example.com/wiki",
-    });
+    const { container } = await renderAndOpen(
+      {
+        title: "Keyboard Test",
+        description: "Focus the link",
+        wikiUrl: "https://example.com/wiki",
+      },
+      false,
+    );
+
+    fireEvent.focus(screen.getByRole("button", { name: "Trigger" }));
 
     const bubble = container.querySelector('[data-testid="tooltip-bubble"]');
     expect(bubble).not.toBeNull();
+    expect(screen.getByTestId("focus-manager")).toHaveAttribute(
+      "data-modal",
+      "false",
+    );
+    expect(screen.getByTestId("focus-manager")).toHaveAttribute(
+      "data-initial-focus",
+      "-1",
+    );
 
     const link = bubble!.querySelector("a");
     expect(link).not.toBeNull();
@@ -262,5 +308,87 @@ describe("WikiTooltip unit tests", () => {
     // <a> with href is natively focusable — verify it can receive focus
     link!.focus();
     expect(document.activeElement).toBe(link);
+  });
+
+  it("opens on click when the trigger explicitly opts in", async () => {
+    const { container } = await renderAndOpen(
+      {
+        title: "Touch Help",
+        description: "Tap to read the explanation.",
+        wikiUrl: "https://example.com/wiki",
+        openOnClick: true,
+      },
+      false,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Trigger" }));
+
+    expect(container.querySelector('[data-testid="tooltip-bubble"] a')).toHaveAttribute(
+      "href",
+      "https://example.com/wiki",
+    );
+  });
+
+  it("builds a locale-aware public Wiki link from wikiPath", async () => {
+    const { container } = await renderAndOpen({
+      title: "Hue protection",
+      description: "Keeps dark colors from drifting in hue.",
+      wikiPath: "/docs/reference/color-matching/hue-protection/",
+    });
+
+    const link = container.querySelector('[data-testid="tooltip-bubble"] a');
+    expect(link).not.toBeNull();
+    expect(link!.getAttribute("href")).toBe(
+      "https://wiki.luminastudio.com.cn/zh/docs/reference/color-matching/hue-protection/",
+    );
+  });
+
+  it("opens Wiki through the desktop bridge once without changing the URL", async () => {
+    const openWiki = vi.fn().mockResolvedValue({ opened: true });
+    Object.defineProperty(window, "electronAPI", {
+      configurable: true,
+      value: { openWiki },
+    });
+
+    const { container } = await renderAndOpen({
+      title: "Desktop Wiki",
+      description: "Open the matching documentation.",
+      wikiPath: "/docs/reference/color-matching/hue-protection/",
+    });
+    const link = container.querySelector('[data-testid="tooltip-bubble"] a');
+    expect(link).not.toBeNull();
+
+    const click = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+    });
+    const dispatchResult = link!.dispatchEvent(click);
+
+    expect(dispatchResult).toBe(false);
+    expect(openWiki).toHaveBeenCalledTimes(1);
+    expect(openWiki).toHaveBeenCalledWith(
+      "https://wiki.luminastudio.com.cn/zh/docs/reference/color-matching/hue-protection/",
+    );
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  });
+
+  it("keeps the normal new-tab link behavior on the web", async () => {
+    const { container } = await renderAndOpen({
+      title: "Web Wiki",
+      description: "Open the matching documentation.",
+      wikiUrl:
+        "https://wiki.luminastudio.com.cn/en/docs/reference/color-matching/hue-protection/#source",
+    });
+    const link = container.querySelector('[data-testid="tooltip-bubble"] a');
+    expect(link).not.toBeNull();
+
+    const click = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+    });
+    expect(link!.dispatchEvent(click)).toBe(true);
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
   });
 });

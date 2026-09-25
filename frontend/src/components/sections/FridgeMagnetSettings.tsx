@@ -17,6 +17,7 @@ import {
   getFridgeMagnetPreset,
   getFridgeMagnetPresetsByShape,
 } from "../../constants/fridgeMagnets";
+import { WIKI_DOCS } from "../../utils/wikiDocs";
 
 const NOOP = (): void => {};
 const NOOP_BOOL: (value: boolean) => void = () => {};
@@ -195,6 +196,8 @@ export default function FridgeMagnetSettings() {
         label={t("fridge_magnet_enable")}
         checked={enableFridgeMagnet}
         onChange={setEnableFridgeMagnet}
+        tooltip={t("fridge_magnet_mode_hint")}
+        wikiPath={WIKI_DOCS.fridgeMagnet}
       />
 
       {enableFridgeMagnet ? (

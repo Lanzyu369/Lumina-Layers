@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from importlib.machinery import EXTENSION_SUFFIXES
 from pathlib import Path
 import runpy
 import shutil
@@ -13,6 +14,9 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+FAKE_NATIVE_EXTENSION_PATH = Path("/tmp") / (
+    f"_lumina_svg_core{EXTENSION_SUFFIXES[0]}"
+)
 
 
 def test_electron_build_packages_material_seed_resource_directory() -> None:
@@ -45,9 +49,12 @@ def test_electron_build_packages_workshop_seed_resource_directory() -> None:
     assert ("resources/workshop-seed", "workshop-seed") in resource_pairs
 
 
-def _load_spec_backend_datas(monkeypatch) -> list[tuple[str, str]]:
+def _load_spec_namespace(monkeypatch) -> dict[str, object]:
     hooks_module = ModuleType("PyInstaller.utils.hooks")
     hooks_module.collect_all = lambda _package_name: ([], [], [])
+    hooks_module.get_module_file_attribute = (
+        lambda _module_name: str(FAKE_NATIVE_EXTENSION_PATH)
+    )
     utils_module = ModuleType("PyInstaller.utils")
     pyinstaller_module = ModuleType("PyInstaller")
     monkeypatch.setitem(sys.modules, "PyInstaller", pyinstaller_module)
@@ -64,7 +71,7 @@ def _load_spec_backend_datas(monkeypatch) -> list[tuple[str, str]]:
             datas=kwargs.get("datas", []),
         )
 
-    namespace = runpy.run_path(
+    return runpy.run_path(
         str(ROOT / "lumina_studio.spec"),
         init_globals={
             "Analysis": fake_analysis,
@@ -72,6 +79,10 @@ def _load_spec_backend_datas(monkeypatch) -> list[tuple[str, str]]:
             "EXE": lambda *_args, **_kwargs: object(),
         },
     )
+
+
+def _load_spec_backend_datas(monkeypatch) -> list[tuple[str, str]]:
+    namespace = _load_spec_namespace(monkeypatch)
     return namespace["backend_datas"]
 
 
@@ -123,7 +134,28 @@ def test_pyinstaller_spec_bundles_only_registry_runtime_contract(monkeypatch) ->
 
     assert packaged == _expected_machine_registry_manifest()
     assert not any("/assets/" in path for path in packaged)
+    assert not any("/bed_models/" in path for path in packaged)
     assert "machine_registry/BUILD_PLATE_SOURCES.md" not in packaged
+
+
+def test_pyinstaller_spec_explicitly_bundles_native_svg_extension(
+    monkeypatch,
+) -> None:
+    namespace = _load_spec_namespace(monkeypatch)
+
+    assert (
+        str(FAKE_NATIVE_EXTENSION_PATH.resolve()),
+        "lumina_svg_core",
+    ) in namespace["backend_binaries"]
+
+
+def test_pyinstaller_spec_bundles_colorchecker_reference_data(monkeypatch) -> None:
+    datas = _load_spec_backend_datas(monkeypatch)
+
+    assert any(
+        Path(destination).as_posix() == "core/colorchecker/data"
+        for _source, destination in datas
+    )
 
 
 def test_pyinstaller_spec_bundles_registry_project_profile_dependencies() -> None:
@@ -169,6 +201,7 @@ def test_production_pyinstaller_spec_packages_printer_templates() -> None:
 
     assert "('printer_profiles', 'printer_profiles')" in spec
     assert "('bambu_config_template.json', '.')" in spec
+    assert "('lut-preset', 'lut-preset')" in spec
 
 
 def test_frozen_meipass_loads_packaged_orca_p2s_profile(
@@ -213,6 +246,40 @@ def test_electron_build_packages_workshop_security_boundary() -> None:
     )
 
     assert "workshop-security.cjs" in package_json["build"]["files"]
+
+
+def test_electron_build_packages_storage_migration_bridge() -> None:
+    package_json = json.loads(
+        (ROOT / "electron" / "package.json").read_text(encoding="utf-8")
+    )
+    build_script = (ROOT / "scripts" / "build_desktop.py").read_text(encoding="utf-8")
+
+    assert "storage-migration.cjs" in package_json["build"]["files"]
+    assert "storage-migration-preload.cjs" in package_json["build"]["files"]
+    assert "storage-migration-preload.cjs" in build_script
+
+
+def test_electron_build_packages_native_bed_model_bridge() -> None:
+    package_json = json.loads(
+        (ROOT / "electron" / "package.json").read_text(encoding="utf-8")
+    )
+    main = (ROOT / "electron" / "main.cjs").read_text(encoding="utf-8")
+    preload = (ROOT / "electron" / "preload.cjs").read_text(encoding="utf-8")
+    build_script = (ROOT / "scripts" / "build_desktop.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "bed-model-bridge.cjs" in package_json["build"]["files"]
+    assert "bed-model-bridge.cjs" in build_script
+    assert 'ipcMain.handle("get-native-bed-model"' in main
+    assert "isAllowedBedModelIpcSender" in main
+    assert "fetchNativeBedModel" in main
+    # Packaged desktop now serves the bundled UI through the owned local
+    # backend endpoint, rather than loading a file:// URL directly.
+    assert "backendEndpoint.origin" in main
+    assert "loadURL(trustedMainFrameUrl)" in main
+    assert "getNativeBedModel" in preload
+    assert "get-native-bed-model" in preload
 
 
 def test_desktop_build_preflights_workshop_security_files() -> None:

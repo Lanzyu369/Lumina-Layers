@@ -285,26 +285,22 @@ describe("apiClient", () => {
       expected:
         "SVG 中没有矢量模式可用的可见填充几何。请显示图稿，将描边和文字转换为填充路径，或切换到“高保真”模式。",
     },
-    {
-      code: "source_svg_too_complex",
-      status: 422,
-      language: "en" as const,
-      expected:
-        "The SVG contains too many intersecting compound subpaths to process safely. Simplify or flatten the artwork, then upload it again.",
-    },
-    {
-      code: "source_svg_too_complex",
-      status: 422,
-      language: "zh" as const,
-      expected: "SVG 包含过多相交的复合子路径，无法安全处理。请简化或展平图稿后重新上传。",
-    },
   ])(
     "translates converter source error $code in $language",
     async ({ code, status, language, expected }) => {
       useSettingsStore.setState({ language });
       const detail = {
         error: code,
-        message: "Safe server fallback for older clients.",
+        message:
+          status === 503
+            ? "Customer project alpha must remain private."
+            : "Safe server fallback for older clients.",
+        ...(status === 503
+          ? {
+              requested_bytes: 8589934592,
+              reason: "host_capacity_busy",
+            }
+          : {}),
       };
       const error = new Error(`Request failed with status code ${status}`);
       Object.assign(error, {
@@ -318,7 +314,20 @@ describe("apiClient", () => {
         .catch((err) => err);
 
       expect(rejected).toMatchObject({ message: expected });
-      expect(rejected.response?.data?.detail).toEqual(detail);
+      if (status === 503) {
+        expect(rejected.response?.data?.detail).toEqual({
+          error: code,
+          message: expected,
+        });
+        expect(JSON.stringify(rejected.response?.data)).not.toContain(
+          "Customer project alpha",
+        );
+        expect(JSON.stringify(rejected.response?.data)).not.toContain(
+          "requested_bytes",
+        );
+      } else {
+        expect(rejected.response?.data?.detail).toEqual(detail);
+      }
     },
   );
 

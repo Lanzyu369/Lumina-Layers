@@ -873,11 +873,6 @@ DEFAULT_SUGGEST_MIN_SPACING: float = 1.5
 """Minimum Lab ΔE between returned candidates to avoid near-duplicates.
 保证返回候选之间的最小 Lab ΔE 距离，避免视觉上的重复。"""
 
-DEFAULT_SUGGEST_MAX_COMBINATIONS: int = 2_000_000
-"""MITM fallback hard cap on ``M**N``. Above this, callers are expected to
-build the persisted :class:`core.material_cache.MaterialSolverCache` first.
-MITM 回退路径对 ``M**N`` 的硬性上限；超过需先构建持久化缓存。"""
-
 _SUGGEST_OVERSAMPLE_FACTOR: int = 8
 """Heap size = ``top_k * oversample``; keeps a generous buffer for the
 post-pass greedy-spacing dedup. (过采样倍数，便于去重后仍有足够候选)"""
@@ -912,15 +907,15 @@ def _greedy_lab_spacing_dedup(
     return np.asarray(kept_idx, dtype=np.int64)
 
 
-# Shared MITM chunk-memory budget. Keeping it modest (32 MiB) bounds peak RSS
-# on machines running the backend alongside the heavy pipeline stages.
-# 32 MiB 的 MITM 分块内存预算，在后端并跑其他重流程时不会抬高 RSS。
+# Shared MITM chunk target. This controls one temporary array, not task
+# admission or the total recipe space.
+# MITM 分块目标只控制单个临时数组，不是任务准入或配方总量额度。
 _CHUNK_TARGET_BYTES: int = 32 * 1024 * 1024
 
 
 def _mitm_chunk_size_for(k_bot: int, chunk_budget_bytes: int | None = None) -> int:
-    """Pick a top-chunk size that keeps ``chunk * K_bot * 24B`` under budget.
-    选择 top 分块大小，使 ``chunk * K_bot * 24 字节`` 不超过内存预算。
+    """Pick a top-chunk size from the local temporary-array target.
+    按单个临时数组目标选择 top 分块大小。
 
     The 24 bytes/row figure reflects the three float64 linear-RGB channels we
     instantiate per (top, bottom) pair during MITM evaluation. Callers pass an
@@ -940,7 +935,6 @@ def suggest_colors_for_target(
     *,
     top_k: int = DEFAULT_SUGGEST_TOP_K,
     min_spacing: float = DEFAULT_SUGGEST_MIN_SPACING,
-    max_combinations: int = DEFAULT_SUGGEST_MAX_COMBINATIONS,
 ) -> list[ColorSuggestion]:
     """Suggest up to ``top_k`` achievable colors near ``target_srgb``.
     为 ``target_srgb`` 返回至多 ``top_k`` 个可达的近似色建议。
@@ -959,9 +953,6 @@ def suggest_colors_for_target(
         substrate: ``"white"`` or ``"black"``. (基底类型)
         top_k: Maximum number of candidates to return. (返回候选数上限)
         min_spacing: Minimum Lab ΔE between candidates. (候选间最小 Lab ΔE)
-        max_combinations: Hard cap on ``M**N`` before falling back to an error.
-            Callers are expected to build a persisted solver cache for larger
-            palettes. (``M**N`` 硬上限；超过需先构建持久化缓存)
 
     Returns:
         List of up to ``top_k`` :class:`ColorSuggestion` ordered by ΔE
@@ -972,8 +963,6 @@ def suggest_colors_for_target(
     Raises:
         ValueError: ``layer_count``, ``layer_height_mm``, ``substrate`` or
             ``target_srgb`` out of range; or empty ``materials``.
-        OverflowError: ``M ** layer_count`` exceeds ``max_combinations``;
-            caller should build a persisted solver cache instead.
     """
     target_srgb = np.asarray(target_srgb, dtype=np.uint8)
     if target_srgb.shape != (3,):
@@ -994,13 +983,6 @@ def suggest_colors_for_target(
         raise ValueError(f"top_k must be positive, got {top_k}")
     if min_spacing < 0.0:
         raise ValueError(f"min_spacing must be non-negative, got {min_spacing}")
-
-    total_combinations = len(materials) ** int(layer_count)
-    if total_combinations > int(max_combinations):
-        raise OverflowError(
-            f"Total combinations {total_combinations} exceeds cap "
-            f"{max_combinations}; build a persisted material-solver cache first"
-        )
 
     substrate_linear = (
         np.zeros(3, dtype=np.float64)

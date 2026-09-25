@@ -23,6 +23,7 @@ from api.schemas.responses import (
     public_material_response_item,
 )
 from api.structured_logging import get_logger
+from core.registry_transport import map_package_url
 from core.single_stage import (
     get_material_sync_status,
     import_saved_stage_a_material_archives,
@@ -118,8 +119,18 @@ def _select_catalog_install_entry(
             continue
         if str(raw_entry.get("revision_id") or "").strip() != payload.revision_id:
             continue
-        if str(raw_entry.get("package_url") or "").strip() != requested_package_url:
-            continue
+        catalog_package_url = str(raw_entry.get("package_url") or "").strip()
+        if catalog_package_url != requested_package_url:
+            primary = os.environ.get("LUMINA_MATERIAL_REGISTRY_URL", "").strip().rstrip("/")
+            if not primary:
+                continue
+            try:
+                if map_package_url(catalog_package_url, primary, primary) != map_package_url(
+                    requested_package_url, primary, primary
+                ):
+                    continue
+            except ValueError:
+                continue
         if (
             _canonical_package_sha256(raw_entry.get("package_sha256"))
             != requested_package_sha256
@@ -468,6 +479,9 @@ async def material_sync_refresh(
             "installed_count": result["installed_count"],
             "skipped_count": result["skipped_count"],
             "failed_count": result["failed_count"],
+            "catalog_not_modified": bool(
+                result.get("catalog_not_modified", False)
+            ),
         },
     )
     return MaterialSyncRefreshResponse(

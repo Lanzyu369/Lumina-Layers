@@ -23,6 +23,11 @@ from shapely.affinity import translate
 
 from config import PrinterConfig
 from core.geometry_utils import create_keychain_loop
+from core.layered_meshing import build_labeled_surface_mesh
+from core.mesh_export_parts import (
+    copy_mesh_export_part_ranges,
+    set_concatenated_mesh_export_part_ranges,
+)
 from core.pipeline.preview_color_utils import (
     build_material_preview_warning_extra,
     resolve_material_preview,
@@ -139,9 +144,8 @@ def _generate_outline_mesh(
     # Ring = dilated minus original (in padded space)
     ring_mask = dilated_mask & ~(padded_original > 0)
 
-    # Use padded dimensions for mesh generation
+    # Use padded dimensions for mesh generation.
     h, w = ring_mask.shape
-    h_original = mask_solid.shape[0]
 
     if not np.any(ring_mask):
         _log.debug(f"Ring mask is empty, skipping")
@@ -150,82 +154,28 @@ def _generate_outline_mesh(
     ring_pixel_count = np.sum(ring_mask)
     _log.debug(f"Ring mask: {ring_pixel_count} pixels")
 
-    # Use greedy rectangle merging to generate optimized mesh
-    processed = np.zeros_like(ring_mask, dtype=bool)
-    vertices = []
-    faces = []
-
-    z_bottom = 0.0
-    z_top = float(outline_layers) * PrinterConfig.LAYER_HEIGHT
-
-    for y in range(h):
-        row_valid = ring_mask[y] & ~processed[y]
-        if not np.any(row_valid):
-            continue
-
-        padded_row = np.concatenate([[False], row_valid, [False]])
-        diff = np.diff(padded_row.astype(np.int8))
-        starts = np.where(diff == 1)[0]
-        ends = np.where(diff == -1)[0]
-
-        for x_start, x_end in zip(starts, ends):
-            if processed[y, x_start]:
-                continue
-
-            y_end = y + 1
-            while y_end < h:
-                seg_mask = ring_mask[y_end, x_start:x_end]
-                seg_proc = processed[y_end, x_start:x_end]
-                if not (np.all(seg_mask) and not np.any(seg_proc)):
-                    break
-                y_end += 1
-
-            processed[y:y_end, x_start:x_end] = True
-
-            # Convert to world coordinates (flip Y, apply scale)
-            # Subtract pad offset so coordinates align with the original model
-            world_x0 = float(x_start - pad) * pixel_scale
-            world_x1 = float(x_end - pad) * pixel_scale
-            world_y0 = float(h_original - (y_end - pad)) * pixel_scale
-            world_y1 = float(h_original - (y - pad)) * pixel_scale
-            z_bot = 0.0
-            z_tp = float(outline_layers) * PrinterConfig.LAYER_HEIGHT
-
-            base_idx = len(vertices)
-            vertices.extend(
-                [
-                    [world_x0, world_y0, z_bot],
-                    [world_x1, world_y0, z_bot],
-                    [world_x1, world_y1, z_bot],
-                    [world_x0, world_y1, z_bot],
-                    [world_x0, world_y0, z_tp],
-                    [world_x1, world_y0, z_tp],
-                    [world_x1, world_y1, z_tp],
-                    [world_x0, world_y1, z_tp],
-                ]
-            )
-            cube_faces = [
-                [0, 2, 1],
-                [0, 3, 2],
-                [4, 5, 6],
-                [4, 6, 7],
-                [0, 1, 5],
-                [0, 5, 4],
-                [1, 2, 6],
-                [1, 6, 5],
-                [2, 3, 7],
-                [2, 7, 6],
-                [3, 0, 4],
-                [3, 4, 7],
-            ]
-            faces.extend([[v + base_idx for v in f] for f in cube_faces])
-
-    if not vertices:
+    layer_volume = np.broadcast_to(
+        ring_mask,
+        (outline_layers, h, w),
+    )
+    mesh = build_labeled_surface_mesh(
+        layer_volume,
+        material_id=True,
+        height_px=h,
+    )
+    if mesh is None:
         return None
 
-    mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
-    mesh.merge_vertices()
-    mesh.update_faces(mesh.unique_faces())
+    # The canonical builder emits padded pixel-lattice coordinates with a
+    # Y-up origin. Scale once into physical millimetres, then remove the same
+    # padding offset on both axes to retain the historical model alignment.
+    transform = np.eye(4)
+    transform[0, 0] = float(pixel_scale)
+    transform[1, 1] = float(pixel_scale)
+    transform[2, 2] = float(PrinterConfig.LAYER_HEIGHT)
+    transform[0, 3] = -float(pad) * float(pixel_scale)
+    transform[1, 3] = -float(pad) * float(pixel_scale)
+    mesh.apply_transform(transform)
 
     _log.debug(f"Generated outline mesh: {len(mesh.vertices):,} verts, {len(mesh.faces):,} faces")
     return mesh
@@ -679,6 +629,10 @@ def run(ctx: dict) -> dict:
                 coating_mesh.apply_transform(coat_transform)
                 if is_double_sided:
                     top_coating_mesh = coating_mesh.copy()
+                    copy_mesh_export_part_ranges(
+                        coating_mesh,
+                        top_coating_mesh,
+                    )
                     top_coating_mesh.apply_translation(
                         [
                             0.0,
@@ -686,8 +640,11 @@ def run(ctx: dict) -> dict:
                             (total_layers + coating_layers) * PrinterConfig.LAYER_HEIGHT,
                         ]
                     )
-                    coating_mesh = trimesh.util.concatenate(
-                        [coating_mesh, top_coating_mesh]
+                    coating_sources = [coating_mesh, top_coating_mesh]
+                    coating_mesh = trimesh.util.concatenate(coating_sources)
+                    set_concatenated_mesh_export_part_ranges(
+                        coating_mesh,
+                        coating_sources,
                     )
                 coating_mesh.visual.face_colors = [200, 200, 200, 80]  # Semi-transparent grey
                 coating_name = "Coating"
@@ -707,14 +664,8 @@ def run(ctx: dict) -> dict:
         try:
             outline_thickness_mm = total_layers * PrinterConfig.LAYER_HEIGHT
             outline_z_offset = 0.0
-            if enable_coating:
-                coating_layers = max(1, int(round(coating_height_mm / PrinterConfig.LAYER_HEIGHT)))
-                coating_mm = coating_layers * PrinterConfig.LAYER_HEIGHT
-                outline_thickness_mm += coating_mm
-                outline_z_offset = -coating_mm
-                if is_double_sided:
-                    outline_thickness_mm += coating_mm
-                _log.debug(f"Outline extended to cover coating: total_thickness={outline_thickness_mm}mm")
+            # Coating owns the negative-Z interval; the outline starts at its
+            # upper surface, so different materials never occupy that volume.
 
             _log.debug(
                 f"Generating outline: width={outline_width}mm, "

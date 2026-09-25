@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import pickle
 import tempfile
@@ -22,6 +23,7 @@ from api.workers.converter_workers import (
     LargeFormatCachedAnalysisError,
     worker_generate_large_format_svg_native,
 )
+from core.mesh_export_parts import get_mesh_export_part_ranges
 from core.vector_engine import (
     VectorAnalysis,
     VectorProcessor as _RealVectorProcessor,
@@ -198,18 +200,42 @@ def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
         slicer="BambuStudio",
         nozzle_size="0.4",
         enable_base_layer_height_modifier=True,
+        enable_wipe_tower_auto_placement=False,
         enable_relief=False,
+        backing_color_id=1,
     )
 
     result = None
+    from core import vector_engine as vector_engine_module
+    from utils import bambu_3mf_writer as bambu_writer_module
+
+    captured_ranges = []
+    real_export = bambu_writer_module.export_scene_with_bambu_metadata
+
+    def _capture_export(**kwargs):
+        merged_mesh = kwargs["scene"].geometry["Red"]
+        captured_ranges.append(get_mesh_export_part_ranges(merged_mesh))
+        return real_export(**kwargs)
+
     with (
         patch(
             "core.pipeline.vector_branch._build_vector_processor",
             return_value=_FlatVectorProcessor(),
         ),
         patch(
+            "core.vector_engine._concatenate_meshes_fast",
+            wraps=vector_engine_module._concatenate_meshes_fast,
+        ) as bounded_concat,
+        patch(
+            "core.vector_engine._enforce_vector_mesh_runtime_headroom",
+        ) as memory_guard,
+        patch(
             "api.workers.converter_workers._rasterize_tile_for_cover",
             return_value=None,
+        ),
+        patch(
+            "utils.bambu_3mf_writer.export_scene_with_bambu_metadata",
+            side_effect=_capture_export,
         ),
     ):
         result = worker_generate_large_format_svg_native(
@@ -217,6 +243,18 @@ def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
             "lut.npy",
             params,
         )
+
+    bounded_concat.assert_called_once()
+    assert len(captured_ranges) == 1
+    assert captured_ranges[0] == ()
+    assert any(
+        call.kwargs.get("stage") == "large_format_vector_board_merge"
+        for call in memory_guard.call_args_list
+    )
+    assert any(
+        call.kwargs.get("stage") == "large_format_vector_3mf_export"
+        for call in memory_guard.call_args_list
+    )
 
     try:
         with zipfile.ZipFile(result["zip_path"]) as package:
@@ -226,8 +264,18 @@ def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
             modifier_xml = tile_package.read(
                 "Metadata/layer_config_ranges.xml"
             )
+            model_settings_xml = tile_package.read(
+                "Metadata/model_settings.config"
+            )
+            placement = json.loads(
+                tile_package.read(
+                    "Metadata/lumina_wipe_tower_placement.json"
+                )
+            )
 
         root = ET.fromstring(modifier_xml)
+        model_settings = ET.fromstring(model_settings_xml)
+        assert len(model_settings.findall("./object/part")) == 1
         range_element = root.find("./object/range")
         assert range_element is not None
         assert float(range_element.attrib["min_z"]) == pytest.approx(
@@ -239,6 +287,8 @@ def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
         layer_height = range_element.find("./option[@opt_key='layer_height']")
         assert layer_height is not None
         assert float(layer_height.text or "nan") == pytest.approx(0.2)
+        assert placement["enabled"] is False
+        assert placement["reason"] == "disabled_by_user"
     finally:
         if result is not None and os.path.exists(result["zip_path"]):
             os.unlink(result["zip_path"])

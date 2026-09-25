@@ -59,6 +59,18 @@ describe("Feature: global-settings, Property 1: Settings persist round-trip", ()
     );
   });
 
+  it("defaults the smooth Vector renderer on and persists an explicit opt-out", () => {
+    expect(DEFAULT_SETTINGS.enableSmoothVectorPreview).toBe(true);
+
+    useSettingsStore.getState().setEnableSmoothVectorPreview(false);
+
+    expect(useSettingsStore.getState().enableSmoothVectorPreview).toBe(false);
+    const raw = localStorage.getItem("lumina-settings");
+    expect(raw).toBeTruthy();
+    const persisted: { state: SettingsState } = JSON.parse(raw ?? "{}");
+    expect(persisted.state.enableSmoothVectorPreview).toBe(false);
+  });
+
   it("remembers build plates per slicer machine and survives nozzle changes", () => {
     const machineId = "BambuStudio:bbl:bambu-lab-h2d";
     useSettingsStore

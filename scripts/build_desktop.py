@@ -5,12 +5,11 @@ Usage:
     python scripts/build_desktop.py
 
 Steps:
-    1. Build frontend (VITE_API_BASE_URL=http://127.0.0.1:8000/api)
-    2. Build backend native extensions
-    3. Check GLB v2 preview dependencies
-    4. Build backend (PyInstaller -> lumina-backend.exe)
-    5. Copy artifacts to electron/resources/
-    6. Build Electron installer (electron-builder -> NSIS Setup.exe)
+    1. Build frontend (VITE_API_BASE_URL=/api, same-origin desktop backend)
+    2. Check geometry dependencies
+    3. Build backend (PyInstaller -> lumina-backend.exe)
+    4. Copy artifacts to electron/resources/
+    5. Build Electron installer (electron-builder -> NSIS Setup.exe)
 """
 
 import argparse
@@ -41,10 +40,16 @@ WORKSHOP_SEED_LOCK = (
     ROOT / "assets" / "workshop-seed" / "seed-lock.json"
 )
 PYINSTALLER_DIST = ROOT / "dist"
-NATIVE_VECTOR_MESH_MARKER = "native-vector-mesh.enabled"
-CORE_GEOMETRY_REQUIRED_MODULES = ("manifold3d",)
+CORE_GEOMETRY_REQUIRED_MODULES = (
+    "manifold3d", "lumina_svg_core", "lumina_svg_core._lumina_svg_compensation",
+)
 GLB_V2_OPTIONAL_MODULES = ("rasterio.features",)
 WORKSHOP_DESKTOP_SECURITY_FILES = (
+    ELECTRON_DIR / "backend-endpoint.cjs",
+    ELECTRON_DIR / "generated-file-save.cjs",
+    ELECTRON_DIR / "storage-migration.cjs",
+    ELECTRON_DIR / "storage-migration-preload.cjs",
+    ELECTRON_DIR / "bed-model-bridge.cjs",
     ELECTRON_DIR / "workshop-security.cjs",
     ELECTRON_DIR / "preload.cjs",
 )
@@ -56,37 +61,6 @@ def run(cmd, cwd=None, env_extra=None):
         env.update(env_extra)
     print(f"  > {cmd}")
     subprocess.check_call(cmd, shell=True, cwd=cwd, env=env)
-
-
-def native_extension_outputs():
-    return [
-        path for path in ROOT.glob("clipper2_batch*")
-        if path.is_file() and path.suffix in {".so", ".pyd", ".dll", ".dylib"}
-    ]
-
-
-def remove_native_extension_outputs():
-    for path in native_extension_outputs():
-        path.unlink()
-
-
-def build_native_extensions_optional() -> bool:
-    """Build optional native acceleration without blocking desktop packaging."""
-
-    remove_native_extension_outputs()
-    try:
-        run(f"{sys.executable} scripts/build_native_extensions.py", cwd=str(ROOT))
-    except subprocess.CalledProcessError as exc:
-        print(
-            "WARNING: Optional native vector mesh build failed; "
-            f"continuing with Python fallback. Exit code: {exc.returncode}",
-        )
-        return False
-
-    if not native_extension_outputs():
-        print("WARNING: Native vector mesh build produced no extension; using Python fallback.")
-        return False
-    return True
 
 
 def check_core_geometry_dependencies_available() -> None:
@@ -289,18 +263,15 @@ def main():
         return 1
 
     # ── Step 1: Build frontend ──
-    print("\n[1/6] Building frontend...")
+    print("\n[1/5] Building frontend...")
     run(
         "pnpm run build",
         cwd=str(FRONTEND_DIR),
-        env_extra={"VITE_API_BASE_URL": "http://127.0.0.1:8000/api"},
+        env_extra={"VITE_API_BASE_URL": "/api"},
     )
 
-    # ── Step 2: Build backend ──
-    print("\n[2/6] Building optional backend native extensions...")
-    native_vector_mesh_enabled = build_native_extensions_optional()
-
-    print("\n[3/6] Checking desktop geometry dependencies...")
+    # ── Step 2: Check backend dependencies ──
+    print("\n[2/5] Checking desktop geometry dependencies...")
     try:
         check_core_geometry_dependencies_available()
     except RuntimeError as exc:
@@ -308,11 +279,11 @@ def main():
         return 1
     check_glb_v2_dependencies_available()
 
-    print("\n[4/6] Building backend (PyInstaller)...")
+    print("\n[3/5] Building backend (PyInstaller)...")
     run("pyinstaller lumina_studio.spec", cwd=str(ROOT))
 
-    # ── Step 3: Copy artifacts ──
-    print("\n[5/6] Copying artifacts to electron/resources/...")
+    # ── Step 4: Copy artifacts ──
+    print("\n[4/5] Copying artifacts to electron/resources/...")
 
     backend_exe = PYINSTALLER_DIST / "lumina-backend.exe"
     if not backend_exe.exists():
@@ -320,14 +291,6 @@ def main():
         sys.exit(1)
     shutil.copy2(backend_exe, BACKEND_RES_DIR / "lumina-backend.exe")
     print(f"  Copied: {backend_exe} -> {BACKEND_RES_DIR / 'lumina-backend.exe'}")
-    native_marker = BACKEND_RES_DIR / NATIVE_VECTOR_MESH_MARKER
-    if native_vector_mesh_enabled:
-        native_marker.write_text("1\n", encoding="utf-8")
-        print(f"  Enabled native vector mesh marker: {native_marker}")
-    elif native_marker.exists():
-        native_marker.unlink()
-        print(f"  Removed stale native vector mesh marker: {native_marker}")
-
     frontend_dist = FRONTEND_DIR / "dist"
     if not frontend_dist.exists():
         print(f"ERROR: Frontend dist not found at {frontend_dist}")
@@ -349,8 +312,8 @@ def main():
         target_seed_path.unlink()
         print(f"  Removed stale seed: {target_seed_path}")
 
-    # ── Step 4: Build Electron installer ──
-    print("\n[6/6] Building Electron installer (electron-builder)...")
+    # ── Step 5: Build Electron installer ──
+    print("\n[5/5] Building Electron installer (electron-builder)...")
     check_workshop_desktop_security_files()
     if not (ELECTRON_DIR / "node_modules").exists():
         print("  Installing Electron dependencies...")

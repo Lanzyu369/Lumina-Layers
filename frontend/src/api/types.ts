@@ -92,10 +92,14 @@ export type ConvertPreviewRequest = ConvertSourceSelection & {
   model_margin?: number | null;
   quantize_colors: number;
   high_precision_3d_preview?: boolean;
+  enable_smooth_vector_preview?: boolean;
   enable_cleanup: boolean;
   enable_outline?: boolean;
   outline_width?: number;
   svg_pixels_per_mm?: number;
+  svg_hole_compensation_enabled?: boolean;
+  svg_hole_max_area_mm2?: number;
+  svg_hole_max_width_mm?: number;
   hue_weight?: number;
   chroma_gate?: number;
   is_dark?: boolean;
@@ -117,6 +121,14 @@ export type ConvertPreviewRequest = ConvertSourceSelection & {
   surface_placement_json?: string;
   surface_model_transform_json?: string;
 };
+
+export interface VectorPreviewRendererResponse {
+  session_id: string;
+  status: "pending";
+  job_token: string;
+  glb_url: null;
+  renderer: "vector_analytic" | "segmented";
+}
 
 export type ConvertGenerateRequest = ConvertPreviewRequest & {
   spacer_thick: number;
@@ -154,7 +166,12 @@ export type ConvertGenerateRequest = ConvertPreviewRequest & {
   device_profile_id?: string;
   build_plate_id?: string;
   enable_base_layer_height_modifier?: boolean;
+  enable_wipe_tower_auto_placement?: boolean;
   use_cached_matched_rgb?: boolean;
+  /** Exact committed visible-content revision used for generation. */
+  editor_content_revision?: number;
+  /** Exact shared-selection revision captured for generation. */
+  selection_revision?: number;
 };
 
 export interface PuzzleLayoutPreviewRequest {
@@ -199,6 +216,8 @@ export interface PuzzleGenerateResponse {
   grid_cols: number;
   grid_rows: number;
   warnings: string[];
+  editor_content_revision?: number | null;
+  selection_revision?: number | null;
 }
 
 /**
@@ -221,6 +240,11 @@ export interface RecipeOverrideItem {
   region_id: string;
   recipe: number[];
   layer_order: string;
+  color_layers?: number | null;
+  actual_recipe_top_to_bottom?: number[] | null;
+  print_recipe_top_to_bottom?: number[] | null;
+  actual_layer_count?: number | null;
+  padding_layer_count?: number | null;
   /** 可选虚拟耗材列表；recipe 中 >= LUT.N 的索引指向它。 */
   virtual_materials?: VirtualMaterial[];
 }
@@ -246,6 +270,7 @@ export interface RecipePredictResponse {
 
 export interface RecipeOverrideApplyRequest extends RecipePredictRequest {
   region_ids?: string[];
+  operation_id?: string;
 }
 
 export interface RecipeOverrideApplyResponse
@@ -256,6 +281,8 @@ export interface RecipeOverrideApplyResponse
   override_count: number;
   can_undo?: boolean;
   can_redo?: boolean;
+  /** Authoritative selection and content revision after the edit. */
+  selection?: SelectionDocumentResponse | null;
 }
 
 export interface RegionRecipeRequest {
@@ -343,6 +370,8 @@ export interface DynamicMaterialResultResponse {
   material_layer_benefit_curve?: MaterialLayerBenefitPoint[] | null;
   material_layer_benefit_scope?: MaterialLayerBenefitScope | null;
   material_layer_benefit_pixel_count?: number | null;
+  operation_id?: string | null;
+  editor_content_revision?: number | null;
 }
 
 /** 自动高度分配模式 */
@@ -426,6 +455,8 @@ export interface LargeFormatGenerateResponse {
   grid_cols: number;
   grid_rows: number;
   warnings: string[];
+  editor_content_revision?: number | null;
+  selection_revision?: number | null;
 }
 
 /** 生成接口响应，包含下载 URL 和可选的 3D 预览 URL */
@@ -437,6 +468,10 @@ export interface GenerateResponse {
   threemf_disk_path?: string;
   warnings?: string[];
   performance_timing?: PerformanceTiming | null;
+  /** Content revision consumed by the generator, when available. */
+  editor_content_revision?: number | null;
+  /** Shared-selection revision consumed by the generator, when available. */
+  selection_revision?: number | null;
 }
 
 export interface ModelSurfaceMeshSummary {
@@ -1287,7 +1322,6 @@ export interface MaterialSolverRuntimeEntry {
   candidate_budget: number;
   candidate_count: number;
   candidate_pool_multiplier: number;
-  build_memory_budget_bytes: number;
   batch_recipe_count: number;
   lab_grid_resolution: number;
   seed: number;
@@ -1777,6 +1811,11 @@ export interface BatchPreviewItem {
 }
 
 export interface BatchConvertParams {
+  svg_hole_compensation_enabled?: boolean;
+  svg_hole_max_area_mm2?: number;
+  svg_hole_max_width_mm?: number;
+  enable_coating?: boolean;
+  coating_height_mm?: number;
   source_kind?: "legacy_single" | "legacy_multi" | "native_bundle";
   lut_name?: string;
   lut_names?: string[];
@@ -1824,6 +1863,7 @@ export interface BatchConvertParams {
   device_profile_id?: string;
   build_plate_id?: string;
   enable_base_layer_height_modifier?: boolean;
+  enable_wipe_tower_auto_placement?: boolean;
 }
 
 // ========== Five-Color Query Models ==========
@@ -1984,6 +2024,8 @@ export interface ColorReplaceResponse extends DynamicMaterialResultResponse {
   replacement_count: number;
   can_undo?: boolean;
   can_redo?: boolean;
+  /** Authoritative selection and content revision after the edit. */
+  selection?: SelectionDocumentResponse | null;
 }
 
 /** 同颜色全选点图时后端返回的当前匹配色拾取结果 */
@@ -2023,6 +2065,36 @@ export interface SelectionDocumentResponse {
   can_undo: boolean;
   can_redo: boolean;
   brush_hit_component_count?: number | null;
+  editor_content_revision?: number | null;
+}
+
+export interface EditorCommitResult {
+  preview_url?: string | null;
+  preview_glb_url?: string | null;
+  replacement_regions?: ColorReplacementItem[] | null;
+  recipe_overrides?: RecipeOverrideItem[] | null;
+  recipe_override_count?: number | null;
+  region_replacement_count?: number | null;
+  color_layers?: number | null;
+  layer_height_mm?: number | null;
+  gradient_groups?: GradientGroupItem[] | null;
+  free_color_set?: string[] | null;
+  can_undo?: boolean | null;
+  can_redo?: boolean | null;
+  material_dynamic_recipes?: DynamicMaterialRecipe[] | null;
+  material_layer_benefit_curve?: MaterialLayerBenefitPoint[] | null;
+  material_layer_benefit_scope?: MaterialLayerBenefitScope | null;
+  material_layer_benefit_pixel_count?: number | null;
+}
+
+export interface EditorCommitStatusResponse {
+  status: "pending" | "committed" | "failed" | "unknown";
+  operation_id: string;
+  operation?: string | null;
+  editor_content_revision: number;
+  visible_content_revision?: number;
+  selection_revision?: number | null;
+  result?: EditorCommitResult | null;
 }
 
 export interface SelectionMutationRequest {
@@ -2077,6 +2149,8 @@ export interface FreeColorMutationResponse {
   free_color_set: string[];
   can_undo: boolean;
   can_redo: boolean;
+  operation_id?: string | null;
+  editor_content_revision?: number | null;
 }
 
 export interface ResetReplacementsResponse extends DynamicMaterialResultResponse {
@@ -2086,6 +2160,8 @@ export interface ResetReplacementsResponse extends DynamicMaterialResultResponse
   preview_glb_url?: string | null;
   can_undo?: boolean;
   can_redo?: boolean;
+  /** Authoritative selection and content revision after the reset. */
+  selection?: SelectionDocumentResponse | null;
 }
 
 export interface ReplacementHistoryResponse {
@@ -2107,6 +2183,8 @@ export interface ReplacementHistoryResponse {
   layer_height_mm?: number | null;
   gradient_groups?: GradientGroupItem[] | null;
   free_color_set?: string[];
+  operation_id?: string | null;
+  editor_content_revision?: number | null;
 }
 
 // ========== Printer Models ==========
@@ -2151,12 +2229,21 @@ export interface PrinterListResponse {
 // ========== Settings Models ==========
 
 export interface UserSettings {
+  language: "zh" | "en";
+  theme: "light" | "dark";
   last_lut: string;
   last_modeling_mode: string;
   last_color_mode: string;
   last_slicer: string;
+  last_bed_label: string;
   palette_mode: string;
   enable_crop_modal: boolean;
+  enable_blur: boolean;
+  enable_fancy_loading: boolean;
+  enable_witty_loading: boolean;
+  enable_completion_notifications: boolean;
+  enable_smooth_vector_preview: boolean;
+  preserve_upload_filename_for_3mf: boolean;
   printer_model: string;
   slicer_software: string;
   device_profile_id: string;
@@ -2166,6 +2253,12 @@ export interface UserSettings {
   custom_slicer_id: string;
   nozzle_size: string;
   enable_base_layer_height_modifier: boolean;
+  enable_wipe_tower_auto_placement: boolean;
+  enable_solver_cache_grid_selection: boolean;
+  solver_cache_grid_resolution: 64 | 128 | 256 | 512 | 1024 | 2048;
+  svg_pixels_per_mm: number;
+  material_delta_e00_tolerance: number;
+  auto_replace_gradient_banding: boolean;
 }
 
 export interface UserSettingsResponse {

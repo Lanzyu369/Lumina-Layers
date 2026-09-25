@@ -28,27 +28,6 @@ _HIGH_FIDELITY_PIXELS_PER_MM = 10.0
 # 视觉可识别，又不让下游的 letterbox 缩放变贵。
 _TILE_COVER_MAX_LONGEST_PX = 512
 _TILE_COVER_MIN_LONGEST_PX = 256
-# Hard timeout for one tile's SVG rasterization. The rasterize call runs
-# in a spawned ``multiprocessing.Process`` subprocess; on timeout the
-# parent terminates and (if needed) kills the subprocess so a stuck
-# resvg call cannot hold up the worker. ``_rasterize_tile_for_cover``
-# raises ``TimeoutError``, the worker catches it, treats the tile cover
-# as ``None`` (the downstream writer falls back to the silent
-# placeholder), and continues exporting the tile's 3MF.
-# ``tile_failed_cover`` is bumped as a quality indicator on the
-# *written* tile, not a "skipped" bucket.
-# 单 tile 的 SVG 栅格化硬超时：栅格化在 spawn 出来的 multiprocessing 子
-# 进程里跑，超时后父进程 ``terminate()`` + 必要时 ``kill()``，确保卡死的
-# resvg 不会拖住 worker；``_rasterize_tile_for_cover`` 抛 ``TimeoutError``，
-# worker 把封面置为 ``None``（下游写出占位封面），tile 仍然正常写入 ZIP。
-# ``tile_failed_cover`` 只作为已写出 tile 的质量指标，不再是"已丢弃"的桶。
-_TILE_COVER_RASTERIZE_TIMEOUT_S = 10.0
-# Grace window for ``terminate()`` (SIGTERM on POSIX, TerminateProcess on
-# Windows) before falling back to ``kill()`` (SIGKILL / TerminateProcess
-# with exit code -9). Short by design: resvg neither catches signals nor
-# does graceful shutdown work, so 2s is plenty.
-# ``terminate`` 后给子进程的宽限时间；resvg 不处理信号，2 秒足够。
-_TILE_COVER_TERMINATE_GRACE_S = 2.0
 # Process-local cache for the full SVG canvas array. One ``rasterize_svg``
 # call typically costs hundreds of milliseconds; with this cache, a 4×4
 # grid pays for one subprocess spawn instead of 16. The key is
@@ -115,6 +94,9 @@ def _rasterize_canvas_subprocess_entry(
         target_width_mm=float(target_width_mm),
         pixels_per_mm=float(pixels_per_mm),
         crop_to_content=False,
+        _min_quality_px=1,
+        _max_longest_px=_TILE_COVER_MAX_LONGEST_PX,
+        _cache_result=False,
     )
     _np.save(output_npy_path, arr)
 
@@ -123,28 +105,25 @@ def _run_rasterize_canvas_in_subprocess(
     svg_path: str,
     target_width_mm: float,
     pixels_per_mm: float,
-    timeout_s: float,
     *,
     _entry=_rasterize_canvas_subprocess_entry,
 ):
-    """Run the rasterize entry in a spawned, hard-killable subprocess.
+    """Run the rasterize entry in a spawned subprocess until it exits.
 
-    在 spawn 子进程里跑整图栅格化，并对超时做硬终止。
+    在 spawn 子进程里跑整图栅格化，等待它正常完成或报告真实进程错误。
 
     Algorithm:
         1. Spawn a fresh interpreter via ``multiprocessing.get_context("spawn")``
            so neither resvg state nor the parent's address space leak.
-        2. ``proc.join(timeout_s)`` waits for normal completion.
-        3. If still alive: ``terminate()`` (SIGTERM / TerminateProcess) →
-           short grace join → ``kill()`` (SIGKILL) → final join. Always
-           raise ``TimeoutError``.
-        4. Non-zero ``exitcode`` after a normal join is treated as a
+        2. ``proc.join()`` waits for normal completion without an application
+           compute deadline.
+        3. Non-zero ``exitcode`` after a normal join is treated as a
            rasterize crash; raise ``RuntimeError`` so the worker logs it
            and falls back to the silent placeholder.
 
     Args:
-        svg_path / target_width_mm / pixels_per_mm / timeout_s: forwarded
-            to the subprocess.
+        svg_path / target_width_mm / pixels_per_mm: forwarded to the
+            subprocess.
         _entry: testability hook. Defaults to
             ``_rasterize_canvas_subprocess_entry`` and **must** be a
             top-level pickle-able function with the same 4-arg signature
@@ -158,8 +137,6 @@ def _run_rasterize_canvas_in_subprocess(
         ``numpy.ndarray``: the RGBA canvas saved by the subprocess.
 
     Raises:
-        TimeoutError: subprocess did not finish within ``timeout_s``; was
-            terminated and (if needed) killed.
         RuntimeError: subprocess exited non-zero (rasterize crashed) or
             the parent could not spawn (daemonic restriction); caller
             falls back to placeholder cover.
@@ -203,29 +180,7 @@ def _run_rasterize_canvas_in_subprocess(
                 f"{type(exc).__name__}: {exc}"
             ) from exc
 
-        proc.join(timeout=timeout_s)
-
-        if proc.is_alive():
-            # SIGTERM (POSIX) / TerminateProcess (Windows). resvg does not
-            # install signal handlers, so this normally takes effect
-            # immediately, but we give a short grace window before
-            # escalating to SIGKILL.
-            # 先 SIGTERM 给短宽限，再 SIGKILL 兜底，确保卡死子进程被回收。
-            try:
-                proc.terminate()
-            except Exception:  # noqa: BLE001 — best-effort cleanup
-                pass
-            proc.join(timeout=_TILE_COVER_TERMINATE_GRACE_S)
-            if proc.is_alive():
-                try:
-                    proc.kill()
-                except Exception:  # noqa: BLE001 — best-effort cleanup
-                    pass
-                proc.join(timeout=_TILE_COVER_TERMINATE_GRACE_S)
-            raise TimeoutError(
-                f"rasterize_svg subprocess exceeded {timeout_s:.1f}s "
-                "and was terminated"
-            )
+        proc.join()
 
         if proc.exitcode != 0:
             raise RuntimeError(
@@ -253,8 +208,6 @@ def _get_or_rasterize_full_canvas(
     svg_path: str,
     target_width_mm: float,
     pixels_per_mm: float,
-    *,
-    timeout_s: float,
 ):
     """Return the full SVG canvas, using a parent-process cache where possible.
 
@@ -264,8 +217,8 @@ def _get_or_rasterize_full_canvas(
     mtime)`` so a one-time rasterization is reused across every tile in
     one worker invocation. mtime guards against rare in-place SVG edits.
 
-    Raises propagated ``TimeoutError`` / ``RuntimeError`` from the
-    subprocess runner; degenerate canvases (``None`` / ``size == 0``)
+    Raises propagated ``RuntimeError`` from the subprocess runner;
+    degenerate canvases (``None`` / ``size == 0``)
     return ``None`` so the caller treats them as the silent-placeholder
     path.
     """
@@ -284,7 +237,7 @@ def _get_or_rasterize_full_canvas(
         )
         cached = _TILE_COVER_CANVAS_CACHE.get(cache_key)
         if cached is not None:
-            return cached.copy()
+            return cached
     except (OSError, ValueError, TypeError):
         cache_key = None
 
@@ -292,14 +245,20 @@ def _get_or_rasterize_full_canvas(
         svg_path=svg_path,
         target_width_mm=target_width_mm,
         pixels_per_mm=pixels_per_mm,
-        timeout_s=timeout_s,
     )
 
     if arr is None or getattr(arr, "size", 0) == 0:
         return arr
 
+    # Every tile only reads and slices this canvas. Sharing one immutable
+    # array avoids a full-canvas copy on every cache hit and another copy on
+    # cache insertion.
+    try:
+        arr.setflags(write=False)
+    except (AttributeError, ValueError):
+        pass
     if cache_key is not None:
-        _TILE_COVER_CANVAS_CACHE[cache_key] = arr.copy()
+        _TILE_COVER_CANVAS_CACHE[cache_key] = arr
         while len(_TILE_COVER_CANVAS_CACHE) > _TILE_COVER_CANVAS_CACHE_MAX:
             _TILE_COVER_CANVAS_CACHE.pop(next(iter(_TILE_COVER_CANVAS_CACHE)))
 
@@ -316,7 +275,7 @@ def _rasterize_tile_for_cover(
 
     将一个大画幅 tile 的区域栅格化为封面缩略图位图（PIL Image）。
 
-    Strategy: rasterize the full SVG canvas once via a hard-killable
+    Strategy: rasterize the full SVG canvas once via a spawned
     subprocess (``_run_rasterize_canvas_in_subprocess``) with
     ``crop_to_content=False`` so ``(0, 0)`` strictly maps to the SVG
     viewBox origin. The result lives in ``_TILE_COVER_CANVAS_CACHE``;
@@ -325,7 +284,7 @@ def _rasterize_tile_for_cover(
     ``(x_mm, y_mm)`` region from the canvas, convert to RGBA PIL Image,
     and clamp the longest edge into ``[256, 512] px``.
 
-    策略：用可硬终止的子进程把整张 SVG（``crop_to_content=False``，保留
+    策略：用独立子进程把整张 SVG（``crop_to_content=False``，保留
     画布坐标稳定性）栅格化一次，结果缓存到 ``_TILE_COVER_CANVAS_CACHE``；
     同一 worker 调用里其他 tile 直接命中缓存，不再 spawn。然后按 tile 的
     mm 范围在像素空间按比例裁切，转成 RGBA 后把长边夹到 ``[256, 512] px``。
@@ -342,10 +301,7 @@ def _rasterize_tile_for_cover(
         处理，不发 WARNING（与 ``cover_source=None`` 同义）。
 
     Raises:
-        TimeoutError: 子进程栅格化超过 ``_TILE_COVER_RASTERIZE_TIMEOUT_S``
-            秒，已被 ``terminate``/``kill`` 回收。调用方应记录 WARNING
-            并以 ``cover_source=None`` 走占位封面路径。
-        RuntimeError: 子进程崩溃或无法 spawn。调用方处理同 ``TimeoutError``。
+        RuntimeError: 子进程崩溃或无法 spawn。
     """
 
     from PIL import Image
@@ -358,17 +314,21 @@ def _rasterize_tile_for_cover(
         return None
 
     longest_mm = max(total_width_mm, total_height_mm)
-    # Pixels-per-mm chosen so the rendered whole-SVG longest edge lands near
-    # the cover thumbnail upper bound; min(0.5) is a defensive floor for
-    # truly tiny inputs (degenerate tests / unusual SVGs).
-    # 选择像素密度让整图最长边落在封面上限附近；0.5 是极端小输入下的兜底。
-    pixels_per_mm = max(0.5, _TILE_COVER_MAX_LONGEST_PX / longest_mm)
+    # Keep the whole SVG thumbnail-sized. A density floor would make canvas
+    # memory grow with physical millimetres (a 9999 mm square previously
+    # allocated roughly 5000x5000 RGBA pixels).
+    pixels_per_mm = _TILE_COVER_MAX_LONGEST_PX / longest_mm
+    shortest_mm = min(total_width_mm, total_height_mm)
+    if shortest_mm * pixels_per_mm < 1.0:
+        # resvg cannot represent a sub-pixel short edge without rounding it
+        # up and exploding the long edge. The cover is optional, so use the
+        # existing placeholder instead of risking an unbounded allocation.
+        return None
 
     arr = _get_or_rasterize_full_canvas(
         svg_path=svg_path,
         target_width_mm=float(total_width_mm),
         pixels_per_mm=pixels_per_mm,
-        timeout_s=_TILE_COVER_RASTERIZE_TIMEOUT_S,
     )
     if arr is None:
         return None
@@ -511,6 +471,9 @@ def worker_generate_preview(
     material_min_layer_count: int = 5,
     material_max_layer_count: int = 10,
     material_delta_e00_tolerance: float = 0.5,
+    svg_hole_compensation_enabled: bool = False,
+    svg_hole_max_area_mm2: float = 0.5,
+    svg_hole_max_width_mm: float = 0.1,
 ) -> dict:
     """Execute preview generation in a worker process.
     在工作进程中执行预览生成。
@@ -560,8 +523,8 @@ def worker_generate_preview(
     from PIL import Image
 
     from config import ModelingMode
-    from core.converter import generate_preview_cached
     from api.structured_logging import get_logger
+    from core.converter import generate_preview_cached
 
     log = get_logger(__name__)
 
@@ -614,6 +577,9 @@ def worker_generate_preview(
             enable_outline=enable_outline,
             outline_width=outline_width,
             svg_pixels_per_mm=svg_pixels_per_mm,
+            svg_hole_compensation_enabled=svg_hole_compensation_enabled,
+            svg_hole_max_area_mm2=svg_hole_max_area_mm2,
+            svg_hole_max_width_mm=svg_hole_max_width_mm,
             is_dark=is_dark,
             hue_weight=hue_weight,
             chroma_gate=chroma_gate,
@@ -634,7 +600,13 @@ def worker_generate_preview(
             material_delta_e00_tolerance=material_delta_e00_tolerance,
             replacement_regions=replacement_regions,
         )
-    except (ValueError, TypeError, KeyError, OSError, RuntimeError) as e:
+    except (
+        ValueError,
+        TypeError,
+        KeyError,
+        OSError,
+        RuntimeError,
+    ) as e:
         log.exception(
             "Worker preview failed",
             extra={
@@ -923,6 +895,9 @@ def _batch_compute_svg_xy_bbox_mm(
             target_width_mm=float(target_width_mm),
             pixels_per_mm=float(svg_pixels_per_mm),
             crop_to_content=False,
+            _min_quality_px=1,
+            _max_longest_px=2048,
+            _cache_result=False,
         )
         arr = np.asarray(canvas)
         if arr.ndim < 2:
@@ -1235,6 +1210,12 @@ def worker_batch_convert_item(
     material_max_layer_count: int = 10,
     material_delta_e00_tolerance: float = 0.5,
     separate_backing: bool = False,
+    enable_wipe_tower_auto_placement: bool = True,
+    svg_hole_compensation_enabled: bool = False,
+    svg_hole_max_area_mm2: float = 0.5,
+    svg_hole_max_width_mm: float = 0.1,
+    enable_coating: bool = False,
+    coating_height_mm: float = 0.08,
 ) -> dict:
     """Execute a single batch conversion item in a worker process.
     在工作进程中执行单个批量转换项。
@@ -1253,6 +1234,10 @@ def worker_batch_convert_item(
     单件预览 GLB 时使用，免得跨进程解析 per-image 产物。
 
     Args:
+        enable_coating: Enable transparent coating for this batch item.
+            (为此批量项启用透明镀层)
+        coating_height_mm: Transparent coating thickness in millimeters.
+            (透明镀层厚度，毫米)
         image_path: Path to the input image file. (输入图像文件路径)
         lut_path: Path to the LUT calibration file. (LUT 校准文件路径)
         target_width_mm: Target physical width in mm. (目标物理宽度，毫米)
@@ -1287,6 +1272,9 @@ def worker_batch_convert_item(
         enable_base_layer_height_modifier: Whether to keep the Bambu-family
             coarse base-layer setting from user settings. (是否沿用设置页
             的底板粗层高开关)
+        enable_wipe_tower_auto_placement: Whether 3MF export may adapt the
+            model and wipe-tower layout. (3MF 导出时是否允许自动调整模型与
+            擦料塔布局。)
         material_dynamic_layer_count_enabled: Enable exact dynamic effective
             layers. (启用精确动态有效层数)
         material_min_layer_count: Minimum dynamic effective layers. (动态最小
@@ -1346,6 +1334,9 @@ def worker_batch_convert_item(
         quantize_colors=quantize_colors,
         enable_cleanup=enable_cleanup,
         svg_pixels_per_mm=svg_pixels_per_mm,
+        svg_hole_compensation_enabled=svg_hole_compensation_enabled,
+        svg_hole_max_area_mm2=svg_hole_max_area_mm2,
+        svg_hole_max_width_mm=svg_hole_max_width_mm,
         hue_weight=hue_weight,
         chroma_gate=chroma_gate,
         enable_relief=enable_relief,
@@ -1358,6 +1349,7 @@ def worker_batch_convert_item(
         device_profile_id=device_profile_id,
         build_plate_id=build_plate_id,
         enable_base_layer_height_modifier=enable_base_layer_height_modifier,
+        enable_wipe_tower_auto_placement=enable_wipe_tower_auto_placement,
         material_source=material_source,
         selected_materials=selected_materials,
         material_layer_count=material_layer_count,
@@ -1372,6 +1364,8 @@ def worker_batch_convert_item(
         material_min_layer_count=material_min_layer_count,
         material_max_layer_count=material_max_layer_count,
         material_delta_e00_tolerance=material_delta_e00_tolerance,
+        enable_coating=enable_coating,
+        coating_height_mm=coating_height_mm,
     )
 
     # Conversion failure surfaces as no 3MF; keep the legacy contract
@@ -1489,6 +1483,8 @@ def worker_generate_model(
             - threemf_path (str | None): Path to the generated .3mf file.
             - glb_path (str | None): Path to the generated .glb preview file.
             - status_msg (str): Status message from the converter.
+            - x_mirrored (bool, optional): Effective S09 X-mirror decision.
+            - mirror_span_mm (float, optional): Exact S09 X-mirror span.
     """
     # Lazy imports — executed inside the worker process
     import os
@@ -1553,10 +1549,12 @@ def worker_generate_model(
                 "outline_width": _outline_width_value,
             },
         )
+    export_transform_metadata: dict[str, object] = {}
     try:
         result_tuple = generate_final_model(
             image_path=image_path,
             lut_path=lut_path,
+            export_transform_metadata=export_transform_metadata,
             **normalized_params,
         )
     except (
@@ -1594,11 +1592,21 @@ def worker_generate_model(
         },
     )
 
-    return {
+    result = {
         "threemf_path": threemf_path,
         "glb_path": glb_path,
         "status_msg": status_msg,
     }
+    x_mirrored = export_transform_metadata.get("x_mirrored")
+    mirror_span_mm = export_transform_metadata.get("mirror_span_mm")
+    if isinstance(x_mirrored, bool) and isinstance(mirror_span_mm, (int, float)):
+        result.update(
+            {
+                "x_mirrored": x_mirrored,
+                "mirror_span_mm": float(mirror_span_mm),
+            }
+        )
+    return result
 
 
 def worker_generate_model_surface_overlay(
@@ -1722,6 +1730,9 @@ def worker_generate_model_surface_overlay(
             device_profile_id=normalized_params.get("device_profile_id") or None,
             build_plate_id=normalized_params.get("build_plate_id") or None,
             enable_base_layer_height_modifier=False,
+            enable_wipe_tower_auto_placement=bool(
+                converter_params.get("enable_wipe_tower_auto_placement", True)
+            ),
         )
         export_ready = True
     except (ValueError, TypeError, KeyError, OSError, RuntimeError) as exc:
@@ -1780,6 +1791,9 @@ def _resolve_model_surface_cover_source(
             float(target_width_mm),
             pixels_per_mm=2.0,
             crop_to_content=False,
+            _min_quality_px=1,
+            _max_longest_px=512,
+            _cache_result=False,
         )
         cover_image = Image.fromarray(
             np.asarray(cover_rgba, dtype=np.uint8),
@@ -1788,7 +1802,7 @@ def _resolve_model_surface_cover_source(
         cover_buffer = BytesIO()
         cover_image.save(cover_buffer, format="PNG", optimize=False)
         return cover_buffer.getvalue()
-    except (OSError, ValueError, RuntimeError, TimeoutError, ImportError) as exc:
+    except (OSError, ValueError, RuntimeError, ImportError) as exc:
         log.warning(
             "Model-surface SVG cover render failed; using placeholder",
             extra={
@@ -1865,14 +1879,14 @@ def worker_generate_large_format_svg_native(
 
     Returned counters:
         ``tile_count``: tiles written into the ZIP. Includes tiles whose
-            cover thumbnail rasterization timed out or raised — those still
-            export a 3MF with the silent placeholder cover.
+            cover thumbnail rasterization raised — those still export a 3MF
+            with the silent placeholder cover.
         ``tile_skipped_empty``: tiles dropped because their geometry was
             empty (slicer-stage drop or post-build empty scene). Silent —
             no WARNING.
         ``tile_failed_cover``: quality indicator on ``tile_count`` — number
             of written tiles whose cover defaulted to the placeholder due
-            to rasterize timeout / exception. **Subset of ``tile_count``,
+            to a rasterize exception. **Subset of ``tile_count``,
             not a separate bucket.** Each increment is paired with one
             ``bambu_3mf_cover_thumbnail_failed`` WARNING.
 
@@ -1884,7 +1898,6 @@ def worker_generate_large_format_svg_native(
     import zipfile
 
     import numpy as np
-    import trimesh
     from PIL import Image
 
     from api.structured_logging import get_logger
@@ -1894,18 +1907,26 @@ def worker_generate_large_format_svg_native(
     )
     from core.pipeline.vector_branch import (
         _build_vector_processor,
+        _generate_vector_outline_mesh,
+        _resolve_vector_outline_base_aux_style,
         _resolve_vector_layer_height_mm,
         _update_bambu_base_layer_ctx_for_vector,
     )
+    from core.vector_structure import resolve_structure_plan
     from core.vector_engine import (
+        _concatenate_meshes_fast,
         apply_matched_rgb_overrides_to_analysis,
         apply_recipe_overrides_to_analysis,
     )
     from core.vector_large_format import (
         format_large_format_tile_label,
+        resolve_large_format_grid_shape,
         slice_vector_analysis_into_tiles,
     )
-    from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
+    from utils.bambu_3mf_writer import (
+        export_scene_with_bambu_metadata,
+        read_wipe_tower_placement_warnings,
+    )
 
     log = get_logger(__name__)
 
@@ -1920,8 +1941,12 @@ def worker_generate_large_format_svg_native(
     # final geometry-weighted solve.
     vector_replacements = replacement_regions
 
-    grid_cols = max(1, math.ceil(total_width_mm / tile_width_mm))
-    grid_rows = max(1, math.ceil(total_height_mm / tile_height_mm))
+    grid_cols, grid_rows = resolve_large_format_grid_shape(
+        total_width_mm=total_width_mm,
+        total_height_mm=total_height_mm,
+        tile_width_mm=tile_width_mm,
+        tile_height_mm=tile_height_mm,
+    )
     expected_total_tiles = grid_cols * grid_rows
 
     material_source = str(params.get("material_source") or "lut")
@@ -2134,18 +2159,27 @@ def worker_generate_large_format_svg_native(
         layer_height_mm=layer_height_mm,
     )
 
+    vector_processor.enable_outline = bool(params.get("enable_outline", False))
+    vector_processor.outline_width_mm = float(params.get("outline_width", 2.0))
+    vector_processor.enable_coating = bool(params.get("enable_coating", False))
+    vector_processor.coating_height_mm = float(params.get("coating_height_mm", 0.08))
+    analysis.structure_plan = resolve_structure_plan(
+        analysis, vector_processor.outline_width_mm if vector_processor.enable_outline else 0.0,
+    )
     tile_analyses = slice_vector_analysis_into_tiles(
         analysis=analysis,
         total_width_mm=total_width_mm,
         total_height_mm=total_height_mm,
         tile_width_mm=tile_width_mm,
         tile_height_mm=tile_height_mm,
+        materialize=False,
     )
 
     # Tiles dropped at slicing time (entirely empty geometry within the
     # tile bounds) count as "skipped empty", not "failed cover".
     # 切片阶段已经被丢弃的空 tile 计入 tile_skipped_empty，与封面失败区分。
-    tile_skipped_empty = max(0, expected_total_tiles - len(tile_analyses))
+    tile_skipped_empty = 0
+    sliced_tile_count = 0
     tile_failed_cover = 0
 
     # Resolve the backing material slot once; tiles share the palette.
@@ -2163,6 +2197,7 @@ def worker_generate_large_format_svg_native(
     layer_height_setting = f"{layer_height_mm:g}"
 
     successful_paths: list[tuple[str, str]] = []
+    tile_warnings: list[str] = []
     tile_cleanup_paths: set[str] = set()
     zip_path: str | None = None
     zip_ready = False
@@ -2179,8 +2214,16 @@ def worker_generate_large_format_svg_native(
             full_heightmap = heightmap_image.convert("L").copy()
     try:
         for tile in tile_analyses:
+            sliced_tile_count += 1
             tile_processor = vector_processor
             tile_heightmap_path = None
+            heightmap_tile = None
+            scene = None
+            board_geom = None
+            target_geom = None
+            merged = None
+            geom = None
+            tile_cover = None
             if full_heightmap is not None:
                 hm_width, hm_height = full_heightmap.size
                 px_x0 = int(round(tile.spec.x0_mm / total_width_mm * hm_width))
@@ -2199,6 +2242,8 @@ def worker_generate_large_format_svg_native(
                 os.close(fd_heightmap)
                 tile_cleanup_paths.add(tile_heightmap_path)
                 heightmap_tile.save(tile_heightmap_path)
+            separate_backing = bool(params.get("separate_backing", False))
+            tile_processor._merge_backing_into_material = not separate_backing
             scene = tile_processor.build_mesh(
                 analysis=tile.analysis,
                 thickness_mm=float(params["spacer_thick"]),
@@ -2215,10 +2260,25 @@ def worker_generate_large_format_svg_native(
                 # empty tile — the tile is silently dropped.
                 # 下游构建后几何为空：与切片阶段的空 tile 同义，静默跳过。
                 tile_skipped_empty += 1
+                scene = None
+                heightmap_tile = None
+                tile = None
                 continue
 
             preview_colors = dict(tile.analysis.preview_colors)
             slot_names = list(tile.analysis.slot_names)
+            if vector_processor.enable_outline:
+                outline_color, outline_material = _resolve_vector_outline_base_aux_style(
+                    worker_ctx, preview_colors, slot_names,
+                )
+                outline = _generate_vector_outline_mesh(
+                    tile.analysis, vector_processor.outline_width_mm,
+                    outline_color, outline_material, worker_ctx,
+                    export_color_mode=vector_processor.color_mode,
+                )
+                if outline is not None:
+                    scene.add_geometry(outline, geom_name="Outline", node_name="Outline")
+                    preview_colors["Outline"] = outline_color
             for material_id, rgba in list(preview_colors.items()):
                 if isinstance(material_id, int) and material_id < len(slot_names):
                     preview_colors[slot_names[material_id]] = rgba
@@ -2231,17 +2291,21 @@ def worker_generate_large_format_svg_native(
                 tile_backing_slot_index = requested_backing_color_id
             target_slot = slot_names[tile_backing_slot_index] if slot_names else None
 
-            separate_backing = bool(params.get("separate_backing", False))
             board_geom = scene.geometry.get("Board")
             if board_geom is not None and not separate_backing:
                 target_geom = scene.geometry.get(target_slot) if target_slot else None
                 if target_geom is not None:
-                    merged = trimesh.util.concatenate([target_geom, board_geom])
+                    merged = _concatenate_meshes_fast(
+                        [target_geom, board_geom],
+                    )
                     merged.visual.face_colors = target_geom.visual.face_colors
                     merged.metadata["name"] = target_slot
                     merged.metadata["bambu_material_name"] = target_slot
                     scene.geometry[target_slot] = merged
                     del scene.geometry["Board"]
+                    # The scene owns the merged mesh now. Release both source
+                    # arrays before the native writer allocates its own copy.
+                    del target_geom, board_geom, merged
                 elif target_slot:
                     backing_color = preview_colors.get(
                         target_slot,
@@ -2272,6 +2336,13 @@ def worker_generate_large_format_svg_native(
                 slot_export_names.append(geom_name)
             if not slot_export_names:
                 tile_skipped_empty += 1
+                scene = None
+                board_geom = None
+                target_geom = None
+                merged = None
+                geom = None
+                heightmap_tile = None
+                tile = None
                 continue
 
             fd, tile_3mf_path = tempfile.mkstemp(suffix=".3mf", dir=TEMP_DIR)
@@ -2284,26 +2355,22 @@ def worker_generate_large_format_svg_native(
             # ``_run_rasterize_canvas_in_subprocess``) with a 10s timeout
             # and a parent-process canvas cache, so:
             #
-            # - A stuck resvg process is ``terminate``/``kill``-ed;
-            #   subsequent tiles never inherit a live thread/process from
-            #   the failed one.
             # - First tile pays the spawn + rasterize cost; remaining
             #   tiles in the same worker invocation hit
             #   ``_TILE_COVER_CANVAS_CACHE`` and skip the subprocess
             #   entirely.
             #
-            # On TimeoutError / RuntimeError (subprocess crashed or could
-            # not be spawned) we bump ``tile_failed_cover``, log a single
+            # On RuntimeError (subprocess crashed or could not be spawned)
+            # we bump ``tile_failed_cover``, log a single
             # structured WARNING, and fall through with
             # ``tile_cover = None`` so the writer emits the silent
             # placeholder cover and the printable tile still reaches the
             # ZIP. ``tile_failed_cover`` is a quality indicator on the
             # written tile, not a "skipped" bucket.
             #
-            # 用 spawn 子进程跑栅格化（10 秒硬超时 + 父进程整图缓存），
-            # 卡死能被 ``terminate``/``kill`` 真正回收，后续 tile 命中
-            # 缓存不再 spawn；超时/崩溃时 tile 仍然进 ZIP，封面回落到
-            # 静默占位，``tile_failed_cover`` 只是质量指标。
+            # 用 spawn 子进程跑栅格化并复用父进程整图缓存；后续 tile
+            # 命中缓存不再 spawn；真实崩溃时 tile 仍然进 ZIP，封面回落
+            # 到静默占位，``tile_failed_cover`` 只是质量指标。
             tile_cover = None
             try:
                 tile_cover = _rasterize_tile_for_cover(
@@ -2312,23 +2379,8 @@ def worker_generate_large_format_svg_native(
                     total_width_mm,
                     total_height_mm,
                 )
-            except TimeoutError:
-                tile_cover = None
-                tile_failed_cover += 1
-                log.warning(
-                    "Bambu 3MF cover thumbnail tile rasterization "
-                    "timed out; exporting tile with placeholder cover",
-                    extra={
-                        "event": "bambu_3mf_cover_thumbnail_failed",
-                        "path": str(tile_3mf_path),
-                        "error_type": "tile_rasterize_timeout",
-                        "error_message": (
-                            f"rasterize_svg subprocess exceeded "
-                            f"{_TILE_COVER_RASTERIZE_TIMEOUT_S:.0f}s"
-                        ),
-                        "fallback_action": "placeholder_written",
-                    },
-                )
+            except MemoryError:
+                raise
             except Exception as exc:  # noqa: BLE001 — bound rasterize errors per R5.4
                 tile_cover = None
                 tile_failed_cover += 1
@@ -2376,6 +2428,9 @@ def worker_generate_large_format_svg_native(
                 enable_base_layer_height_modifier=bool(
                     worker_ctx.get("enable_base_layer_height_modifier", True)
                 ),
+                enable_wipe_tower_auto_placement=bool(
+                    worker_ctx.get("enable_wipe_tower_auto_placement", True)
+                ),
                 enable_relief=bool(worker_ctx.get("enable_relief", False)),
                 base_height_mm=float(
                     worker_ctx.get("bambu_base_height_mm", 0.0)
@@ -2396,13 +2451,31 @@ def worker_generate_large_format_svg_native(
                     False if material_source == "material_archive" else None
                 ),
             )
+            for warning_code in read_wipe_tower_placement_warnings(tile_3mf_path):
+                if warning_code not in tile_warnings:
+                    tile_warnings.append(warning_code)
             successful_paths.append(
                 (
                     format_large_format_tile_label(source_basename=tile_name_prefix, tile_label=tile.label),
                     tile_3mf_path,
                 )
             )
+            # Do not retain a completed tile while the next build allocates
+            # its full scene. The written 3MF path is the only cross-iteration
+            # state needed from this point onward.
+            tile_cover = None
+            scene = None
+            board_geom = None
+            target_geom = None
+            merged = None
+            geom = None
+            heightmap_tile = None
+            tile = None
 
+        tile_skipped_empty += max(
+            0,
+            expected_total_tiles - sliced_tile_count,
+        )
         if not successful_paths:
             raise ValueError("All SVG large-format tiles were empty after slicing.")
 
@@ -2435,7 +2508,7 @@ def worker_generate_large_format_svg_native(
             "tile_failed_cover": tile_failed_cover,
             "grid_cols": grid_cols,
             "grid_rows": grid_rows,
-            "warnings": [],
+            "warnings": tile_warnings,
         }
     finally:
         for path_3mf in tile_cleanup_paths:

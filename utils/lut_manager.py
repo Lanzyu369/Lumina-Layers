@@ -205,6 +205,105 @@ class LUTManager:
         _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         LUT_PRESET_DIR = os.path.join(_BASE_DIR, "lut-preset")
 
+    @classmethod
+    def _resolve_mutable_lut_dir(
+        cls,
+        env_name: str,
+        fallback_name: str,
+    ) -> Path:
+        """Resolve one mutable LUT directory outside immutable runtimes."""
+
+        override = os.environ.get(env_name, "").strip()
+        if not override:
+            return Path(cls.LUT_PRESET_DIR) / fallback_name
+        resolved = Path(override).expanduser()
+        if not resolved.is_absolute():
+            raise ValueError(f"{env_name} must be an absolute directory path")
+        return resolved
+
+    @classmethod
+    def custom_lut_dir(cls) -> Path:
+        """Return the writable custom-LUT directory.
+
+        返回可写的用户自定义 LUT 目录。
+
+        Returns:
+            Configured directory or legacy fallback. 配置目录或旧版默认目录。
+
+        Raises:
+            ValueError: If the override is relative. 覆盖路径为相对路径时抛出。
+        """
+
+        return cls._resolve_mutable_lut_dir("LUMINA_CUSTOM_LUT_DIR", "Custom")
+
+    @classmethod
+    def cloud_lut_dir(cls) -> Path:
+        """Return the writable cloud-LUT directory.
+
+        返回可写的云端 LUT 目录。
+
+        Returns:
+            Configured directory or legacy fallback. 配置目录或旧版默认目录。
+
+        Raises:
+            ValueError: If the override is relative. 覆盖路径为相对路径时抛出。
+        """
+
+        return cls._resolve_mutable_lut_dir("LUMINA_CLOUD_LUT_DIR", "Cloud")
+
+    @classmethod
+    def cloud_lut_sync_dir(cls) -> Path:
+        """Return the writable cloud-LUT synchronization metadata directory.
+
+        返回可写的云端 LUT 同步元数据目录。
+
+        Returns:
+            Synchronization metadata directory. 同步元数据目录。
+
+        Raises:
+            ValueError: If the cloud override is relative. 云端覆盖路径为相对路径时抛出。
+        """
+
+        if os.environ.get("LUMINA_CLOUD_LUT_DIR", "").strip():
+            return cls.cloud_lut_dir().parent / "_sync" / "luts"
+        return Path(cls.LUT_PRESET_DIR) / "_sync" / "luts"
+
+    @classmethod
+    def logical_lut_path(cls, file_path: str | Path) -> str | None:
+        """Map a physical LUT path to its stable catalog-relative identity.
+
+        将 LUT 实际路径映射为稳定的目录逻辑标识。
+
+        Args:
+            file_path: Physical LUT path. LUT 实际路径。
+
+        Returns:
+            Logical identity, or None outside known roots. 逻辑标识，未知根目录返回 None。
+
+        Raises:
+            ValueError: If a configured root is relative. 配置根目录为相对路径时抛出。
+        """
+
+        try:
+            resolved = Path(file_path).resolve()
+        except OSError:
+            return None
+        roots = (
+            ("Custom", cls.custom_lut_dir()),
+            ("Cloud", cls.cloud_lut_dir()),
+            ("", Path(cls.LUT_PRESET_DIR)),
+        )
+        for prefix, root in roots:
+            try:
+                relative = resolved.relative_to(root.resolve())
+            except (OSError, ValueError):
+                continue
+            if not relative.parts:
+                return prefix or None
+            logical = relative.as_posix()
+            return f"{prefix}/{logical}" if prefix else logical
+        return None
+
     _native_source_index_cache: tuple[_NativeBrandIndexItem, ...] | None = None
     _native_source_index_cache_at: float | None = None
     _native_source_index_lock = threading.Lock()
@@ -259,6 +358,19 @@ class LUTManager:
         roots: list[tuple[str, str]] = []
         if os.path.exists(cls.LUT_PRESET_DIR):
             roots.append(("Preset", cls.LUT_PRESET_DIR))
+        preset_root = Path(cls.LUT_PRESET_DIR).resolve()
+        for label, mutable_root in (
+            ("Custom", cls.custom_lut_dir()),
+            ("Cloud", cls.cloud_lut_dir()),
+        ):
+            try:
+                resolved = mutable_root.resolve()
+                resolved.relative_to(preset_root)
+                is_inside_preset = True
+            except (OSError, ValueError):
+                is_inside_preset = False
+            if not is_inside_preset and mutable_root.exists():
+                roots.append((label, str(mutable_root)))
         return roots
 
     @staticmethod
@@ -270,6 +382,8 @@ class LUTManager:
             if len(parts) > 1:
                 return " - ".join([*parts[:-1], stem])
             return stem
+        if root_label in {"Custom", "Cloud"}:
+            return " - ".join([root_label, *parts[:-1], stem])
         if root_label == "ReferenceDB":
             if len(parts) >= 3:
                 return f"ReferenceDB - {parts[0]} - {parts[1]} - {stem}"
@@ -1498,7 +1612,7 @@ class LUTManager:
         
         try:
             # Ensure preset folder exists
-            custom_dir = os.path.join(cls.LUT_PRESET_DIR, "Custom")
+            custom_dir = str(cls.custom_lut_dir())
             os.makedirs(custom_dir, exist_ok=True)
             
             # Get original filename and extension
@@ -1597,8 +1711,10 @@ class LUTManager:
         if not file_path:
             return False, "[ERROR] File not found", cls.get_lut_choices()
         
-        # Only allow deleting files in Custom folder
-        if "Custom" not in file_path:
+        # Only allow deleting files inside the configured Custom root.
+        try:
+            Path(file_path).resolve().relative_to(cls.custom_lut_dir().resolve())
+        except (OSError, ValueError):
             return False, "[ERROR] Can only delete custom LUTs", cls.get_lut_choices()
         
         try:

@@ -46,6 +46,13 @@ def _device_ids(data: dict[str, Any]) -> set[str]:
 def test_bundled_machine_registry_assets_and_templates_exist() -> None:
     root = _registry_root()
     data = _load_registry()
+    assert not [
+        path
+        for path in root.rglob("*")
+        if path.is_file() and path.suffix.casefold() == ".stl"
+    ], (
+        "Third-party bed models must never be bundled in the Lumina registry"
+    )
     device_ids: set[str] = set()
 
     for slicer in data["slicers"]:
@@ -75,6 +82,15 @@ def test_bundled_machine_registry_assets_and_templates_exist() -> None:
             thumbnail = str(machine.get("thumbnail") or "")
             assert thumbnail, f"{machine['display_name']} is missing a thumbnail"
             assert (root / thumbnail).exists(), thumbnail
+            bed_model = str(machine.get("bed_model") or "")
+            assert bed_model.casefold().endswith(".stl"), (
+                f"{machine['display_name']} is missing its slicer-native bed model"
+            )
+            assert Path(bed_model).name == bed_model
+            assert "/" not in bed_model and "\\" not in bed_model
+            assert not (root / bed_model).exists(), (
+                "Third-party bed models must be read from the user's installed slicer"
+            )
             for nozzle in machine["nozzles"]:
                 device_profile_id = str(nozzle["device_profile_id"])
                 assert device_profile_id not in device_ids
@@ -207,6 +223,21 @@ def test_bundled_machine_registry_keeps_upgraded_ac_and_elegoo_versions() -> Non
         "Flashforge Guider4 Pro": ["0.25", "0.4"],
     }
 
+    qidi_studio = slicers["QIDIStudio"][0]
+    assert qidi_studio["source_version"] == "02.07.02.60"
+    assert qidi_studio["application_metadata"] == "QIDIStudio-02.07.02.60"
+    assert qidi_studio["client_version"] == "02.07.02.60"
+    assert qidi_studio["sidecar_policy"] == "qidi_studio"
+    assert {
+        machine["display_name"]: [nozzle["nozzle_size"] for nozzle in machine["nozzles"]]
+        for machine in qidi_studio["machines"]
+    } == {
+        "Q2": ["0.2", "0.4"],
+        "Q2C": ["0.2", "0.4"],
+        "X-Max 4": ["0.2", "0.4"],
+        "X-Plus 5": ["0.4"],
+    }
+
 
 def test_bundled_machine_registry_contains_acceptance_profiles() -> None:
     ids = _device_ids(_load_registry())
@@ -226,4 +257,10 @@ def test_bundled_machine_registry_contains_acceptance_profiles() -> None:
         "FlashStudio:flashforge:flashforge-guider-3-ultra:0.4",
         "FlashStudio:flashforge:flashforge-guider4:0.4",
         "FlashStudio:flashforge:flashforge-guider4-pro:0.25",
+        "QIDIStudio:qidi:q2:0.2",
+        "QIDIStudio:qidi:q2:0.4",
+        "QIDIStudio:qidi:q2c:0.4",
+        "QIDIStudio:qidi:x-max-4:0.2",
+        "QIDIStudio:qidi:x-max-4:0.4",
+        "QIDIStudio:qidi:x-plus-5:0.4",
     } <= ids

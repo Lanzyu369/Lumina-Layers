@@ -12,10 +12,12 @@ networkx
 lxml
 resvg-py>=0.2.6
 colormath
-# Native Vector Engine dependencies
+# Vector geometry dependencies
 svgelements>=1.9.0
-shapely>=2.0.0
+shapely>=2.1.0
 mapbox-earcut
+# Required native SVG parse/clip runtime (workspace package until published).
+-r requirements-native-svg.txt
 # Exact indexed triangulation for slicer-safe vector solids.
 manifold3d>=3.4.0
 # FastAPI backend dependencies
@@ -30,7 +32,7 @@ psutil>=5.9.8
 # Vectorizer (C++ image-to-SVG)
 neroued-vectorizer>=0.1.1
 # 3MF writer (C++ streaming 3MF with Production Extension)
-neroued-3mf>=0.3.0
+neroued-3mf>=0.4.0,<0.5.0
 # Test support for async pytest cases
 pytest>=8.0,<9.0
 pytest-asyncio>=0.23.0

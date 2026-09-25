@@ -5,6 +5,7 @@ import { useConverterStore } from "../../stores/converter";
 import { buildLayerImagesSourceKey } from "../../stores/converter/store";
 import * as recipeImportFlow from "../../recipe/importFlow";
 import ActionBar from "../sections/ActionBar";
+import { translations } from "../../i18n/translations";
 
 let capturedCanvasPreviewSurfaceProps: Record<string, unknown> | null = null;
 let capturedSlicerSelectorProps: Record<string, unknown> | null = null;
@@ -77,8 +78,8 @@ describe("ActionBar — auto batch mode", () => {
       downloadUrl: null,
       generateWarnings: [],
     });
-    vi.mocked(recipeImportFlow.exportShareCard).mockResolvedValue(undefined);
-    vi.mocked(recipeImportFlow.exportSidecar).mockResolvedValue(undefined);
+    vi.mocked(recipeImportFlow.exportShareCard).mockResolvedValue('canceled');
+    vi.mocked(recipeImportFlow.exportSidecar).mockResolvedValue('canceled');
   });
 
   afterEach(() => {
@@ -88,6 +89,23 @@ describe("ActionBar — auto batch mode", () => {
   });
 
   // --- SingleMode (batchFiles empty → batchMode false) ---
+
+  it.each(['recipe_export_btn', 'recipe_export_sidecar_btn'])("shows actual save outcomes for %s", async (buttonKey) => {
+    useConverterStore.setState({ imageFile: makeFile('art.png'), sessionId: 'save-test', previewImageUrl: '/preview.png' });
+    const save = vi.mocked(buttonKey === 'recipe_export_btn' ? recipeImportFlow.exportShareCard : recipeImportFlow.exportSidecar);
+    render(<ActionBar />);
+    const click = () => fireEvent.click(screen.getByText(translations[buttonKey].zh));
+    click();
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(translations.file_save_saved.zh)).not.toBeInTheDocument();
+    save.mockResolvedValue('saved');
+    await act(async () => { click(); });
+    expect(screen.getByText(translations.file_save_saved.zh)).toBeInTheDocument();
+    save.mockRejectedValue(new Error('file_save_failed'));
+    await act(async () => { click(); });
+    expect(screen.getByText(new RegExp(translations.file_save_failed.zh))).toBeInTheDocument();
+    expect(screen.queryByText(translations.file_save_saved.zh)).not.toBeInTheDocument();
+  });
 
   it("shows preview and generate buttons in SingleMode (no batchFiles)", () => {
     useConverterStore.setState({ batchMode: false, batchFiles: [] });

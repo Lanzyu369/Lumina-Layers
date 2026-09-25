@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNod
 import { createPortal } from "react-dom";
 import { cx, workstationFieldLabelClass, workstationInputClass } from "./panelPrimitives";
 import HelpDot from "./HelpDot";
+import type { WikiDocPath } from "../../utils/wikiDocs";
 
 interface DropdownOption {
   label: string;
@@ -25,6 +26,8 @@ interface DropdownProps {
   labelAccessory?: ReactNode;
   /** Optional hint text; renders a HelpDot after the label (ignored if labelAccessory is set). */
   tooltip?: string;
+  /** Optional matching article in the public Lumina Wiki. */
+  wikiPath?: WikiDocPath;
 }
 
 export default function Dropdown({
@@ -37,6 +40,7 @@ export default function Dropdown({
   placeholder,
   labelAccessory,
   tooltip,
+  wikiPath,
 }: DropdownProps) {
   const [open, setOpen] = useState(false);
   const [menuPos, setMenuPos] = useState<{ top: number; left: number; width: number } | null>(null);
@@ -146,7 +150,7 @@ export default function Dropdown({
       {labelAccessory || tooltip ? (
         <div className="flex items-center gap-2">
           <label className={workstationFieldLabelClass}>{label}</label>
-          {labelAccessory ?? <HelpDot title={label} description={tooltip ?? ""} />}
+          {labelAccessory ?? <HelpDot title={label} description={tooltip ?? ""} wikiPath={wikiPath} ariaLabel={tooltip} />}
         </div>
       ) : (
         <label className={workstationFieldLabelClass}>{label}</label>

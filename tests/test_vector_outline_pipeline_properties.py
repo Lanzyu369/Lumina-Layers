@@ -3,15 +3,15 @@
 Archived context: ``progress/svg-vector-outline-counterexamples.md`` and
 ``progress/svg-vector-outline-fix-verification.md``.
 
-Property 1 (Bug Condition): vector / SVG 模式下 enable_outline=true 必须真实
-生成 ``Outline`` 几何，且 preview 与 generate 在 "outline 是否存在" 这一二元
-属性上必须等价。
+Property 1: vector / SVG 模式下 enable_outline=true 时，最终 generate 必须
+生成可导出的 ``Outline`` 几何；quick preview 则不得缓存或内嵌这份导出几何，
+由前端实时 Outline overlay 单一负责预览。
 
 Bug condition methodology:
-    * 当前 main 上 ``core/pipeline/vector_branch.py`` 全文不含 outline 路径，
-      generate 阶段 ``scene.geometry`` 永远不会出现 ``Outline`` 节点；preview
-      阶段也不会注入 outline 字段。
-    * 本测试**期望失败** —— 失败即 "bug 已被反例捕获"。
+    * generate/export 的 Outline 使用 3MF writer-local 坐标，不能直接混入
+      正坐标的 segmented quick-preview GLB。
+    * quick preview 已有参数驱动的前端 OutlineFrame3D；再嵌入实体会形成重复
+      ownership，并让旧导出坐标参与场景居中。
 
 工单引用：LUM-20260527-001 ("svg 加不了描边")。
 
@@ -24,6 +24,7 @@ import os
 import sys
 import tempfile
 from typing import Iterable
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -111,8 +112,11 @@ def _build_fake_processor(
     vp.img_processor.lut_rgb = np.zeros((256, 3))
     vp.img_processor._load_svg.return_value = np.zeros((100, 100, 4), dtype=np.uint8)
     vp.color_mode = color_mode
+    vp.sampling_precision = 1.0
+    vp.expand_stroke_to_fill = False
+    vp.gradient_color_bands = None
 
-    fake_analysis = MagicMock()
+    fake_analysis = SimpleNamespace()
     fake_analysis.preview_colors = {
         0: [255, 255, 255, 255],
         1: [255, 0, 0, 255],
@@ -124,8 +128,24 @@ def _build_fake_processor(
     fake_analysis.matched_shapes = (
         list(matched_shapes) if matched_shapes is not None else []
     )
+    fake_analysis.clipped_shapes = list(fake_analysis.matched_shapes)
+    fake_analysis.shape_data = list(fake_analysis.matched_shapes)
+    fake_analysis.silhouette = (
+        unary_union(
+            [shape["geometry"] for shape in fake_analysis.matched_shapes]
+        )
+        if fake_analysis.matched_shapes
+        else Polygon()
+    )
+    fake_analysis.image_vectorizer_bounds = None
+    fake_analysis.scale_factor = 1.0
+    fake_analysis.bbox = (0.0, 0.0, 100.0, 100.0)
     fake_analysis.color_conf = None
     fake_analysis.num_layers = 4
+    fake_analysis.scale_factor = 1.0
+    fake_analysis.clipped_shapes = fake_analysis.matched_shapes
+    fake_analysis.silhouette = unary_union([s["geometry"] for s in fake_analysis.matched_shapes])
+    fake_analysis.image_vectorizer_bounds = None
     vp.analyze_svg.return_value = fake_analysis
     vp.build_mesh.return_value = scene
     vp.render_preview = MagicMock(return_value=np.zeros((100, 100, 4), dtype=np.uint8))
@@ -165,7 +185,7 @@ def _build_material_archive_outline_bridge_fixture() -> tuple[MagicMock, trimesh
     body_mesh.visual.face_colors = [255, 0, 0, 255]
     scene.add_geometry(body_mesh, geom_name="Red")
 
-    analysis = MagicMock()
+    analysis = SimpleNamespace()
     analysis.preview_colors = {
         0: [255, 255, 255, 255],
         1: [255, 0, 0, 255],
@@ -182,11 +202,16 @@ def _build_material_archive_outline_bridge_fixture() -> tuple[MagicMock, trimesh
     analysis.num_layers = 6
     analysis.scale_factor = 1.0
     analysis.bbox = (0.0, 0.0, 100.0, 80.0)
+    analysis.shape_data = matched_shapes
+    analysis.image_vectorizer_bounds = None
 
     processor = MagicMock()
     processor.color_mode = "Material Archive"
     processor.parse_warnings = []
     processor.last_stage_timings = {}
+    processor.sampling_precision = 1.0
+    processor.expand_stroke_to_fill = False
+    processor.gradient_color_bands = None
     processor.img_processor = MagicMock()
     processor.analyze_svg.return_value = analysis
     processor.build_mesh.return_value = scene
@@ -194,12 +219,12 @@ def _build_material_archive_outline_bridge_fixture() -> tuple[MagicMock, trimesh
 
 
 def _assert_material_archive_outline_mirrored(outline_mesh: trimesh.Trimesh) -> None:
-    """Assert the asymmetric fixture's Outline used the body X mirror."""
+    """Assert Outline uses the body's translation-free axis flips."""
     assert outline_mesh is not None
-    assert float(outline_mesh.bounds[0, 0]) == pytest.approx(25.0)
-    assert float(outline_mesh.bounds[1, 0]) == pytest.approx(95.0)
-    assert float(outline_mesh.bounds[0, 1]) == pytest.approx(15.0)
-    assert float(outline_mesh.bounds[1, 1]) == pytest.approx(70.0)
+    assert float(outline_mesh.bounds[0, 0]) == pytest.approx(-75.15)
+    assert float(outline_mesh.bounds[1, 0]) == pytest.approx(-4.85)
+    assert float(outline_mesh.bounds[0, 1]) == pytest.approx(-65.15)
+    assert float(outline_mesh.bounds[1, 1]) == pytest.approx(-9.85)
 
 
 def _outline_xy_footprint(mesh: trimesh.Trimesh) -> object:
@@ -391,7 +416,7 @@ def test_vector_outline_height_matches_structure_mode(
     from config import PrinterConfig
     from core.pipeline.vector_branch import _generate_vector_outline_mesh
 
-    analysis = MagicMock()
+    analysis = SimpleNamespace()
     analysis.matched_shapes = _matched_shapes_for_fixture()
     analysis.scale_factor = 1.0
     analysis.num_layers = 4
@@ -419,7 +444,50 @@ def test_vector_outline_height_matches_structure_mode(
     assert float(outline_mesh.bounds[1, 2]) == pytest.approx(expected_height)
 
 
-def test_double_sided_vector_outline_spans_both_coating_faces() -> None:
+def test_vector_outline_uses_one_canonical_build_and_runtime_guards() -> None:
+    """Outline preparation stays on the unified physical-grid path."""
+
+    from core.pipeline import vector_branch
+    from core.pipeline.vector_branch import _generate_vector_outline_mesh
+
+    analysis = MagicMock()
+    analysis.matched_shapes = _matched_shapes_for_fixture()
+    analysis.scale_factor = 1.0
+    analysis.num_layers = 4
+    analysis.bbox = (0.0, 0.0, 100.0, 80.0)
+    ctx = {
+        "spacer_thick": 1.6,
+        "structure_mode": "Single-sided",
+        "color_mode": "8-Color Max",
+        "enable_coating": False,
+    }
+
+    with (
+        patch(
+            "core.vector_engine._enforce_vector_mesh_runtime_headroom",
+        ) as guard_mock,
+        patch(
+            "core.pipeline.vector_branch.build_vector_layered_volume",
+            wraps=vector_branch.build_vector_layered_volume,
+        ) as build_mock,
+    ):
+        outline_mesh = _generate_vector_outline_mesh(
+            analysis=analysis,
+            outline_width_mm=2.0,
+            base_aux_color=[255, 255, 255, 255],
+            base_aux_material_name="White",
+            ctx=ctx,
+        )
+
+    assert outline_mesh is not None
+    build_mock.assert_called_once()
+    stages = {call.kwargs["stage"] for call in guard_mock.call_args_list}
+    assert "vector_outline_union" in stages
+    assert "vector_outline_ring" in stages
+    assert "vector_outline_canonical_geometry" in stages
+
+
+def test_double_sided_vector_outline_stays_between_coating_faces() -> None:
     """Material vector outlines must use export mode and effective layer height."""
     from core.pipeline.vector_branch import _generate_vector_outline_mesh
 
@@ -451,9 +519,9 @@ def test_double_sided_vector_outline_spans_both_coating_faces() -> None:
     assert outline_mesh is not None
     backing_height = max(1, int(round(1.6 / layer_height))) * layer_height
     model_height = backing_height + 2 * analysis.num_layers * layer_height
-    assert float(outline_mesh.bounds[0, 2]) == pytest.approx(-coating_height)
+    assert float(outline_mesh.bounds[0, 2]) == pytest.approx(0.0)
     assert float(outline_mesh.bounds[1, 2]) == pytest.approx(
-        model_height + coating_height
+        model_height
     )
 
 
@@ -471,7 +539,7 @@ def test_vector_outline_miter_spikes_stay_within_requested_width() -> None:
     from core.pipeline.vector_branch import _generate_vector_outline_mesh
 
     source = Polygon([(0.0, 0.0), (100.0, 50.0), (0.0, 100.0)])
-    analysis = MagicMock()
+    analysis = SimpleNamespace()
     analysis.matched_shapes = [
         {
             "geometry": source,
@@ -499,7 +567,9 @@ def test_vector_outline_miter_spikes_stay_within_requested_width() -> None:
     )
 
     assert outline_mesh is not None
-    min_x, min_y, max_x, max_y = source.bounds
+    from core.vector_structure import resolve_structure_plan
+
+    min_x, min_y, max_x, max_y = resolve_structure_plan(analysis).body.bounds
     mesh_min_x, mesh_min_y = outline_mesh.bounds[0, :2]
     mesh_max_x, mesh_max_y = outline_mesh.bounds[1, :2]
     eps = 1e-6
@@ -524,7 +594,7 @@ def test_vector_outline_matches_single_sided_export_transform() -> None:
     from core.pipeline.vector_branch import _generate_vector_outline_mesh
 
     shape = box(10.0, 15.0, 70.0, 60.0)
-    analysis = MagicMock()
+    analysis = SimpleNamespace()
     analysis.matched_shapes = [
         {
             "geometry": shape,
@@ -554,14 +624,12 @@ def test_vector_outline_matches_single_sided_export_transform() -> None:
     )
 
     assert outline_mesh is not None
-    # Body transform order in VectorProcessor.build_mesh:
-    #   1. Y flip: y -> svg_height - y
-    #   2. Single-sided X mirror: x -> svg_width - x
-    # The ring expands that transformed body bbox by outline_width.
-    assert float(outline_mesh.bounds[0, 0]) == pytest.approx(25.0)
-    assert float(outline_mesh.bounds[1, 0]) == pytest.approx(95.0)
-    assert float(outline_mesh.bounds[0, 1]) == pytest.approx(15.0)
-    assert float(outline_mesh.bounds[1, 1]) == pytest.approx(70.0)
+    # Body and Outline only flip signs in vertex space.  The 3MF build item
+    # applies the common bed-placement translation after serialization.
+    assert float(outline_mesh.bounds[0, 0]) == pytest.approx(-75.15)
+    assert float(outline_mesh.bounds[1, 0]) == pytest.approx(-4.85)
+    assert float(outline_mesh.bounds[0, 1]) == pytest.approx(-65.15)
+    assert float(outline_mesh.bounds[1, 1]) == pytest.approx(-9.85)
 
 
 def test_vector_outline_material_archive_uses_processor_export_color_mode() -> None:
@@ -575,7 +643,7 @@ def test_vector_outline_material_archive_uses_processor_export_color_mode() -> N
     from core.pipeline.vector_branch import _generate_vector_outline_mesh
 
     shape = box(10.0, 15.0, 70.0, 60.0)
-    analysis = MagicMock()
+    analysis = SimpleNamespace()
     analysis.matched_shapes = [
         {
             "geometry": shape,
@@ -605,10 +673,10 @@ def test_vector_outline_material_archive_uses_processor_export_color_mode() -> N
     )
 
     assert outline_mesh is not None
-    assert float(outline_mesh.bounds[0, 0]) == pytest.approx(25.0)
-    assert float(outline_mesh.bounds[1, 0]) == pytest.approx(95.0)
-    assert float(outline_mesh.bounds[0, 1]) == pytest.approx(15.0)
-    assert float(outline_mesh.bounds[1, 1]) == pytest.approx(70.0)
+    assert float(outline_mesh.bounds[0, 0]) == pytest.approx(-75.15)
+    assert float(outline_mesh.bounds[1, 0]) == pytest.approx(-4.85)
+    assert float(outline_mesh.bounds[0, 1]) == pytest.approx(-65.15)
+    assert float(outline_mesh.bounds[1, 1]) == pytest.approx(-9.85)
 
 
 def test_vector_coating_covers_outline_expanded_footprint() -> None:
@@ -633,7 +701,7 @@ def test_vector_coating_covers_outline_expanded_footprint() -> None:
             "draw_order": 0,
         }
     ]
-    analysis = MagicMock()
+    analysis = SimpleNamespace()
     analysis.matched_shapes = matched_shapes
     analysis.clipped_shapes = matched_shapes
     analysis.silhouette = shape
@@ -686,14 +754,14 @@ def test_vector_coating_covers_outline_expanded_footprint() -> None:
     assert float(coating.bounds[0, 1]) <= float(outline_mesh.bounds[0, 1]) + eps
     assert float(coating.bounds[1, 0]) >= float(outline_mesh.bounds[1, 0]) - eps
     assert float(coating.bounds[1, 1]) >= float(outline_mesh.bounds[1, 1]) - eps
-    assert float(outline_mesh.bounds[0, 2]) <= float(coating.bounds[0, 2]) + eps
+    assert float(outline_mesh.bounds[0, 2]) == pytest.approx(float(coating.bounds[1, 2]))
     assert float(outline_mesh.bounds[1, 2]) >= float(coating.bounds[1, 2]) - eps
 
 
-def test_vector_preview_material_archive_passes_processor_export_color_mode(
+def test_vector_preview_material_archive_skips_export_outline_generation(
     tmp_path,
 ) -> None:
-    """Preview bridge must pass processor color mode to Outline generation."""
+    """Quick preview must not call export-domain Outline generation."""
     from config import ModelingMode
     from core.pipeline import vector_branch
 
@@ -740,12 +808,26 @@ def test_vector_preview_material_archive_passes_processor_export_color_mode(
     ), patch(
         "core.vector_engine.VectorProcessor.build_preview_cache",
         return_value=raster_cache,
-    ), patch.object(vector_branch, "p06_bed_rendering") as mock_p06:
+    ), patch.object(
+        vector_branch,
+        "_generate_vector_outline_mesh",
+        side_effect=AssertionError(
+            "quick preview must not build export-domain Outline geometry"
+        ),
+    ) as mock_outline, patch.object(
+        vector_branch,
+        "p06_bed_rendering",
+    ) as mock_p06:
         mock_p06.run.side_effect = lambda c: c
         result_ctx = vector_branch._run_vector_preview_branch(ctx)
 
-    outline_mesh = result_ctx["cache"]["outline_geometry"]
-    _assert_material_archive_outline_mirrored(outline_mesh)
+    assert "error" not in result_ctx
+    mock_outline.assert_not_called()
+    cache = result_ctx["cache"]
+    assert "outline_geometry" not in result_ctx
+    assert "outline_added" not in result_ctx
+    assert "outline_geometry" not in cache
+    assert "outline_added" not in cache
 
 
 def test_vector_generate_material_archive_passes_processor_export_color_mode(
@@ -893,7 +975,7 @@ def test_vector_generate_includes_outline_geometry_anchor() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Task 1.4 — preview ↔ generate outline parity
+# Quick-preview ↔ generate Outline ownership contract
 # ---------------------------------------------------------------------------
 
 
@@ -907,25 +989,20 @@ def _generate_outline_present(
     """Run the vector generate branch and return whether the exported scene
     contains an ``Outline`` geometry.
     """
-    try:
-        scene = _run_generate_with_mocks(
-            svg_path=svg_path,
-            lut_path=lut_path,
-            outline_width=float(outline_width),
-            color_mode=color_mode,
-            base_channel_idx=int(base_channel_idx),
-        )
-    except Exception:
-        return False
+    scene = _run_generate_with_mocks(
+        svg_path=svg_path,
+        lut_path=lut_path,
+        outline_width=float(outline_width),
+        color_mode=color_mode,
+        base_channel_idx=int(base_channel_idx),
+    )
     return "Outline" in scene.geometry
 
 
 def _preview_outline_present(
     svg_path: str, color_mode: str, outline_width: float
 ) -> bool:
-    """Drive ``_run_vector_preview_branch`` directly and return whether the
-    preview ctx / cache exposes any outline-related field.
-    """
+    """Return whether quick-preview ctx/cache leaks export Outline state."""
     from config import ModelingMode
     from core.pipeline import vector_branch
 
@@ -969,10 +1046,9 @@ def _preview_outline_present(
 
         with patch.object(vector_branch, "p06_bed_rendering") as mock_p06:
             mock_p06.run.side_effect = lambda c: c
-            try:
-                result_ctx = vector_branch._run_vector_preview_branch(ctx)
-            except Exception:
-                return False
+            result_ctx = vector_branch._run_vector_preview_branch(ctx)
+
+    assert "error" not in result_ctx, result_ctx.get("error")
 
     cache = result_ctx.get("cache") or {}
     candidates = (
@@ -987,13 +1063,10 @@ def _preview_outline_present(
 
 @settings(max_examples=200, deadline=None)
 @given(outline_width=_OUTLINE_WIDTH, color_mode=_COLOR_MODE)
-def test_vector_preview_generate_outline_parity(
+def test_vector_preview_generate_outline_ownership(
     outline_width: float, color_mode: str
 ) -> None:
-    """preview ↔ generate 必须在 outline 二元属性上一致 (且都为 True)。
-
-    当前 main: ``generate.has_outline == False == preview.has_outline``；
-    Property 1 要求两端都为 True。本断言**预期失败**。
+    """Generate owns physical Outline; quick preview owns no export mesh.
 
     Validates: Requirements 1.3, 2.3
     """
@@ -1013,21 +1086,20 @@ def test_vector_preview_generate_outline_parity(
             svg_path, color_mode, float(outline_width)
         )
 
-        assert gen_present == prev_present, (
-            f"preview ({prev_present}) and generate ({gen_present}) outline "
-            f"presence must match (outline_width={outline_width}, "
+        assert gen_present is True, (
+            "generate must retain the physical export Outline; "
+            f"got generate={gen_present} (outline_width={outline_width}, "
             f"color_mode={color_mode})"
         )
-        assert gen_present is True, (
-            "Property 1 requires both preview and generate to expose "
-            f"outline; got generate={gen_present}, preview={prev_present}"
+        assert prev_present is False, (
+            "quick preview must not cache export-domain Outline geometry; "
+            f"got preview={prev_present} (outline_width={outline_width}, "
+            f"color_mode={color_mode})"
         )
 
 
-def test_vector_preview_generate_outline_parity_anchor() -> None:
-    """LUM-20260527-001 锚点：``8-Color Max`` + ``outline_width=2.0`` 必须
-    在 preview / generate 上都出现 outline。
-    """
+def test_vector_preview_generate_outline_ownership_anchor() -> None:
+    """Anchor: generated export keeps Outline; quick preview does not embed it."""
     with tempfile.TemporaryDirectory() as tmp:
         svg_path = os.path.join(tmp, "anchor-parity.svg")
         with open(_FIXTURE_SVG, "r", encoding="utf-8") as src, open(
@@ -1042,8 +1114,8 @@ def test_vector_preview_generate_outline_parity_anchor() -> None:
         )
         prev_present = _preview_outline_present(svg_path, "8-Color Max", 2.0)
 
-        assert gen_present == prev_present
         assert gen_present is True
+        assert prev_present is False
 
 
 # ---------------------------------------------------------------------------
@@ -1124,7 +1196,7 @@ def _build_8color_fake_processor(
     )
     vp.color_mode = "8-Color Max"
 
-    fake_analysis = MagicMock()
+    fake_analysis = SimpleNamespace()
     fake_analysis.preview_colors = dict(_8COLOR_MAX_PREVIEW_COLORS)
     fake_analysis.slot_names = list(_8COLOR_MAX_SLOT_NAMES)
     fake_analysis.stage_timings = {}
@@ -1450,21 +1522,16 @@ def test_vector_outline_real_3mf_filament_arrays_match_base_palette() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Preview cache handoff guard (P1).
-# P1 预览缓存交接回归守卫。
+# Quick-preview cache ownership guard.
 # ---------------------------------------------------------------------------
 #
-# Vector preview must expose the same SVG-derived outline mesh that downstream
-# preview GLB export consumes. Keep this branch-level assertion separate from
-# the segmented-GLB unit test so failures tell us whether the issue is upstream
-# cache handoff or downstream GLB export.
-#
-# 矢量预览分支必须把来自 SVG shape union 的 outline mesh 交给下游；分色 GLB
-# 导出是否消费该 mesh 由 segmented GLB 单测覆盖。
+# Vector quick preview intentionally excludes the SVG-derived export mesh.
+# The UI owns the live Outline overlay; the generate branch remains responsible
+# for the physical Outline exported to GLB/3MF.
 
 
-def test_preview_cache_exposes_outline_geometry_for_glb_export() -> None:
-    """Vector preview branch sets outline geometry for downstream GLB export."""
+def test_preview_cache_excludes_export_outline_geometry() -> None:
+    """Vector quick-preview cache never exposes export-domain Outline state."""
     import tempfile
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -1474,15 +1541,9 @@ def test_preview_cache_exposes_outline_geometry_for_glb_export() -> None:
         ) as dst:
             dst.write(src.read())
 
-        # Reuse the existing preview-side helper that scans ctx + cache for
-        # any of {outline_added, outline_geometry, outline_mesh}.
-        # 复用既有 helper：它扫描 ctx + cache 中 outline 相关字段是否 truthy。
         prev_present = _preview_outline_present(svg_path, "8-Color Max", 2.0)
 
-        # GLB export consumes the cached outline in tests/test_segmented_glb_unit.py.
-        # This assertion keeps the upstream vector preview branch from dropping it.
-        # GLB 导出消费逻辑在 segmented GLB 单测中覆盖；这里防止上游分支丢失。
-        assert prev_present is True, (
-            "preview branch must expose outline geometry in ctx/cache when "
-            "enable_outline=True so segmented GLB export can render it"
+        assert prev_present is False, (
+            "quick preview must not expose outline_geometry/outline_added; "
+            "the live UI overlay owns preview Outline rendering"
         )

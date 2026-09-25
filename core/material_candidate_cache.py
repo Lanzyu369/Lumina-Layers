@@ -48,7 +48,6 @@ from core.material_inverse_refinement import (
 )
 
 
-DEFAULT_CANDIDATE_BUILD_MEMORY_BUDGET_BYTES = 8 * 1024 * 1024 * 1024
 PREVIEW_SAFE_CANDIDATE_BUDGET = 1_048_576
 LEGACY_PERSISTED_CANDIDATE_BUDGET = 4_194_304
 QUALITY_8M_CANDIDATE_BUDGET = 8_388_608
@@ -74,19 +73,17 @@ def _candidate_pool_multiplier_for_budget(candidate_budget: int) -> int:
 @dataclass(frozen=True)
 class MaterialCandidateCacheConfig:
     """Configuration for bounded material candidate runtime builds.
-    有预算的耗材候选运行时构建配置。
+    耗材候选运行时构建配置。
 
     Attributes:
         candidate_budget: Final candidate row budget. (最终候选行数预算)
         candidate_pool_multiplier: Optional evaluated-candidate multiplier.
             ``None`` derives a budget-aware value. (可选评估候选倍数；
             ``None`` 时按预算自动推导)
-        build_memory_budget_bytes: Build-time memory budget. (构建期内存预算)
         batch_recipe_count: Forward-model batch size. (正向预测批大小)
         build_worker_count: Parallel chunk worker count. (并行分块 worker 数)
         lab_grid_resolution: Diagnostic Lab resolution label. (诊断用 Lab 分辨率)
         seed: Deterministic sampling seed. (确定性采样种子)
-        max_build_seconds: Optional build-time cap. (可选构建时间上限)
         enable_inverse_refinement: Reserved inverse-refinement flag.
             (预留的反向精修开关)
         max_refine_materials: Reserved material cap for inverse refinement.
@@ -99,12 +96,10 @@ class MaterialCandidateCacheConfig:
 
     candidate_budget: int
     candidate_pool_multiplier: int | None = None
-    build_memory_budget_bytes: int = DEFAULT_CANDIDATE_BUILD_MEMORY_BUDGET_BYTES
     batch_recipe_count: int = 524_288
     build_worker_count: int | None = None
     lab_grid_resolution: int = 64
     seed: int = 0
-    max_build_seconds: float | None = None
     enable_inverse_refinement: bool = True
     max_refine_materials: int = 12
     max_refine_top_suffixes: int = 4096
@@ -192,26 +187,6 @@ class MaterialCandidateCacheConfig:
 
 
 @dataclass(frozen=True)
-class CandidateCacheMemoryEstimate:
-    """Approximate memory budget report for a candidate-runtime build.
-    候选运行时构建的近似内存预算报告。
-
-    Attributes:
-        candidate_budget: Candidate row budget. (候选行数预算)
-        layer_count: Recipe layer count. (配方层数)
-        material_count: Material count. (耗材数量)
-        final_runtime_bytes: Estimated resident runtime arrays. (常驻数组估算)
-        estimated_peak_bytes: Estimated build-time peak. (构建峰值估算)
-    """
-
-    candidate_budget: int
-    layer_count: int
-    material_count: int
-    final_runtime_bytes: int
-    estimated_peak_bytes: int
-
-
-@dataclass(frozen=True)
 class CandidatePredictionBatch:
     recipes: np.ndarray
     achieved_srgb: np.ndarray
@@ -237,67 +212,6 @@ def _resolve_candidate_build_worker_count(worker_count: int | None = None) -> in
     if worker_count is None:
         return DEFAULT_CANDIDATE_BUILD_WORKERS
     return max(1, int(worker_count))
-
-
-def estimate_candidate_cache_memory(
-    *,
-    candidate_budget: int,
-    layer_count: int,
-    material_count: int,
-    batch_recipe_count: int = MaterialCandidateCacheConfig.batch_recipe_count,
-    worker_count: int | None = None,
-) -> CandidateCacheMemoryEstimate:
-    """Estimate peak memory for bounded candidate-runtime construction.
-    估算有预算候选运行时的构建峰值内存。
-
-    Args:
-        candidate_budget: Candidate row budget. (候选行数预算)
-        layer_count: Recipe layer count. (配方层数)
-        material_count: Material count. (耗材数量)
-        batch_recipe_count: Streaming chunk size. (流式分块大小)
-        worker_count: Optional worker count override. (可选 worker 数覆盖)
-
-    Returns:
-        CandidateCacheMemoryEstimate: Final and peak memory estimate.
-            (常驻与峰值内存估算)
-    """
-    recipe_item_bytes = _recipe_dtype_for_material_count(material_count).itemsize
-    resolved_workers = _resolve_candidate_build_worker_count(worker_count)
-    chunk_count = max(1, min(int(batch_recipe_count), int(candidate_budget)))
-    recipe_bytes = int(candidate_budget) * int(layer_count) * recipe_item_bytes
-    srgb_bytes = int(candidate_budget) * 3
-    lab_bytes = int(candidate_budget) * 3 * 4
-    pinned_bytes = int(candidate_budget)
-    final_runtime_bytes = recipe_bytes + srgb_bytes + lab_bytes + pinned_bytes
-    cell_key_bytes = int(candidate_budget) * np.dtype(np.int32).itemsize
-    chunk_recipe_bytes = chunk_count * int(layer_count) * recipe_item_bytes
-    chunk_sobol_bytes = chunk_count * int(layer_count) * 8
-    chunk_recipe_work_bytes = chunk_count * int(layer_count) * (
-        8 + recipe_item_bytes
-    )
-    chunk_forward_bytes = chunk_count * (3 * 8 + 3 * 8 + 3 * 4 + 3)
-    chunk_index_bytes = chunk_count * int(layer_count) * 8
-    per_worker_bytes = (
-        chunk_recipe_bytes
-        + chunk_sobol_bytes
-        + chunk_recipe_work_bytes
-        + chunk_forward_bytes
-        + chunk_index_bytes
-    )
-    safety_bytes = 512 * 1024 * 1024
-    estimated_peak_bytes = (
-        final_runtime_bytes
-        + cell_key_bytes
-        + resolved_workers * per_worker_bytes
-        + safety_bytes
-    )
-    return CandidateCacheMemoryEstimate(
-        candidate_budget=int(candidate_budget),
-        layer_count=int(layer_count),
-        material_count=int(material_count),
-        final_runtime_bytes=int(final_runtime_bytes),
-        estimated_peak_bytes=int(estimated_peak_bytes),
-    )
 
 
 def _height_to_str(layer_height_mm: float) -> str:
@@ -659,18 +573,6 @@ def _streaming_candidate_selection(
     budget = min(requested_budget, total_count)
     worker_count = _resolve_candidate_build_worker_count(config.build_worker_count)
     chunk_size = max(1, int(config.batch_recipe_count))
-    build_started = time.monotonic()
-
-    def _raise_if_timed_out() -> None:
-        if config.max_build_seconds is None:
-            return
-        elapsed = time.monotonic() - build_started
-        if elapsed > float(config.max_build_seconds):
-            raise TimeoutError(
-                "candidate runtime build exceeded time budget: "
-                f"{elapsed:.3f}s > {float(config.max_build_seconds):.3f}s"
-            )
-
     if total_count <= budget:
         exact_count = int(total_count)
         exact_recipes = np.empty((exact_count, int(layer_count)), dtype=recipe_dtype)
@@ -693,7 +595,6 @@ def _streaming_candidate_selection(
                 executor: ThreadPoolExecutor,
             ) -> None:
                 nonlocal next_chunk_index
-                _raise_if_timed_out()
                 if next_chunk_index >= len(counts):
                     return
                 chunk_index = next_chunk_index
@@ -731,7 +632,6 @@ def _streaming_candidate_selection(
                         batch.recipes == batch.recipes[:, :1],
                         axis=1,
                     )
-                    _raise_if_timed_out()
                     _submit_next(executor)
 
         return CandidateSelection(
@@ -822,7 +722,6 @@ def _streaming_candidate_selection(
         recipe_dtype=recipe_dtype,
     )
     if anchors.shape[0] > 0:
-        _raise_if_timed_out()
         _consume_batch(
             _predict_recipe_batch(
                 recipes=anchors,
@@ -849,7 +748,6 @@ def _streaming_candidate_selection(
             executor: ThreadPoolExecutor,
         ) -> None:
             nonlocal next_chunk_index
-            _raise_if_timed_out()
             if next_chunk_index >= len(counts):
                 return
             chunk_index = next_chunk_index
@@ -874,7 +772,6 @@ def _streaming_candidate_selection(
             while pending:
                 future = pending.popleft()
                 _consume_batch(future.result(), pinned=False)
-                _raise_if_timed_out()
                 _submit_next(executor)
 
     return CandidateSelection(
@@ -1187,19 +1084,6 @@ def build_material_candidate_runtime(
     if not materials:
         raise ValueError("materials must not be empty")
     cfg = config or MaterialCandidateCacheConfig.preview_safe()
-    memory = estimate_candidate_cache_memory(
-        candidate_budget=int(cfg.candidate_budget),
-        layer_count=int(layer_count),
-        material_count=len(materials),
-        batch_recipe_count=int(cfg.batch_recipe_count),
-        worker_count=cfg.build_worker_count,
-    )
-    if memory.estimated_peak_bytes > int(cfg.build_memory_budget_bytes):
-        raise ValueError(
-            "candidate runtime build exceeds memory budget: "
-            f"estimated {memory.estimated_peak_bytes:,} bytes > "
-            f"{int(cfg.build_memory_budget_bytes):,} bytes"
-        )
     order = canonical_palette_order(materials)
     canonical_materials = [materials[index] for index in order]
     recipe_dtype = _recipe_dtype_for_material_count(len(canonical_materials))
@@ -1221,7 +1105,6 @@ def build_material_candidate_runtime(
         "lab_grid_resolution": int(cfg.lab_grid_resolution),
         "candidate_budget": int(cfg.candidate_budget),
         "candidate_pool_multiplier": int(cfg.candidate_pool_multiplier),
-        "build_memory_budget_bytes": int(cfg.build_memory_budget_bytes),
         "batch_recipe_count": int(cfg.batch_recipe_count),
         "build_worker_count": int(selection.worker_count),
         "build_mode": "streaming_parallel",

@@ -7,6 +7,7 @@ import {
   invalidatePreviewArtifacts,
   invalidateSingleItemDownload,
 } from "./generatedArtifactInvalidation";
+import { synchronizePrinterBedLabel } from "./printerBedLabelSync";
 import { invalidatePreviewRequest } from "./previewRequestCoordinator";
 
 // ========== State Interface ==========
@@ -39,65 +40,6 @@ export type SolverCacheGridResolution =
 export const SOLVER_CACHE_GRID_RESOLUTIONS: readonly SolverCacheGridResolution[] =
   [64, 128, 256, 512, 1024, 2048] as const;
 
-const SOLVER_CACHE_EXACT_MODE_MAX_MATERIALS = 10;
-const SOLVER_CACHE_EXACT_MODE_MAX_LAYERS = 5;
-const SOLVER_CACHE_EXACT_MODE_MAX_COMBINATIONS = 100_000;
-const SOLVER_CACHE_ESTIMATED_VALID_CELL_RATIO = 0.12;
-const SOLVER_CACHE_ESTIMATED_BYTES_PER_VALID_CELL = 768;
-const SOLVER_CACHE_ESTIMATED_BUILD_BASE_BYTES = 512 * 1024 * 1024;
-export const SOLVER_CACHE_BUILD_MEMORY_LIMIT_BYTES = 8 * 1024 * 1024 * 1024;
-export const SOLVER_CACHE_BUILD_MAX_COMBINATIONS = 12_000_000_000;
-
-export interface SolverCacheBuildBudgetEstimate {
-  totalCombinations: number;
-  totalBucketCount: number;
-  estimatedValidCellCount: number;
-  estimatedPeakBytes: number;
-  memoryLimitBytes: number;
-  maxTotalCombinations: number;
-  isAllowed: boolean;
-}
-
-export function estimateSolverCacheBuildBudget(
-  materialCount: number,
-  layerCount: number,
-  gridResolution: SolverCacheGridResolution,
-): SolverCacheBuildBudgetEstimate {
-  const safeMaterialCount = Math.max(0, Math.trunc(materialCount));
-  const safeLayerCount = Math.max(0, Math.trunc(layerCount));
-  const safeGridResolution = Math.max(1, Math.trunc(gridResolution));
-  const totalCombinations =
-    safeMaterialCount > 0 && safeLayerCount > 0
-      ? Math.pow(safeMaterialCount, safeLayerCount)
-      : 0;
-  const totalBucketCount = Math.pow(safeGridResolution, 3);
-  const exactEligible =
-    safeMaterialCount <= SOLVER_CACHE_EXACT_MODE_MAX_MATERIALS &&
-    safeLayerCount <= SOLVER_CACHE_EXACT_MODE_MAX_LAYERS &&
-    totalCombinations <= SOLVER_CACHE_EXACT_MODE_MAX_COMBINATIONS;
-  const estimatedValidCellCount = exactEligible
-    ? totalCombinations
-    : Math.min(
-        totalCombinations,
-        totalBucketCount,
-        Math.ceil(totalCombinations * SOLVER_CACHE_ESTIMATED_VALID_CELL_RATIO),
-      );
-  const estimatedPeakBytes =
-    SOLVER_CACHE_ESTIMATED_BUILD_BASE_BYTES +
-    estimatedValidCellCount * SOLVER_CACHE_ESTIMATED_BYTES_PER_VALID_CELL;
-  return {
-    totalCombinations,
-    totalBucketCount,
-    estimatedValidCellCount,
-    estimatedPeakBytes,
-    memoryLimitBytes: SOLVER_CACHE_BUILD_MEMORY_LIMIT_BYTES,
-    maxTotalCombinations: SOLVER_CACHE_BUILD_MAX_COMBINATIONS,
-    isAllowed:
-      estimatedPeakBytes <= SOLVER_CACHE_BUILD_MEMORY_LIMIT_BYTES &&
-      totalCombinations <= SOLVER_CACHE_BUILD_MAX_COMBINATIONS,
-  };
-}
-
 export const SVG_PIXELS_PER_MM_DEFAULT = 10.0;
 export const SVG_PIXELS_PER_MM_MIN = 2.0;
 export const SVG_PIXELS_PER_MM_MAX = 50.0;
@@ -128,6 +70,11 @@ export interface SettingsState {
   enableFancyLoading: boolean;
   enableWittyLoading: boolean;
   enableCompletionNotifications: boolean;
+  /**
+   * Prefer analytic native-SVG browser geometry. This affects only the
+   * lightweight 3D preview; exact 3MF generation never consumes it.
+   */
+  enableSmoothVectorPreview: boolean;
   preserveUploadFilenameFor3mf: boolean;
   paletteMode: "swatch" | "card";
   printerModel: string;
@@ -139,6 +86,7 @@ export interface SettingsState {
   customSlicerId: string;
   nozzleSize: NozzleSize;
   enableBaseLayerHeightModifier: boolean;
+  enableWipeTowerAutoPlacement: boolean;
   /**
    * When ``false`` (default) the exhaustive-cache dialog hides its
    * density selector and builds always use the low-tier default on the
@@ -189,6 +137,7 @@ export interface SettingsActions {
   setEnableFancyLoading: (enabled: boolean) => void;
   setEnableWittyLoading: (enabled: boolean) => void;
   setEnableCompletionNotifications: (enabled: boolean) => void;
+  setEnableSmoothVectorPreview: (enabled: boolean) => void;
   setPreserveUploadFilenameFor3mf: (enabled: boolean) => void;
   setPaletteMode: (mode: "swatch" | "card") => void;
   setPrinterModel: (id: string) => void;
@@ -199,6 +148,7 @@ export interface SettingsActions {
   setCustomSlicerId: (id: string) => void;
   setNozzleSize: (size: NozzleSize) => void;
   setEnableBaseLayerHeightModifier: (enabled: boolean) => void;
+  setEnableWipeTowerAutoPlacement: (enabled: boolean) => void;
   setEnableSolverCacheGridSelection: (enabled: boolean) => void;
   setSolverCacheGridResolution: (value: SolverCacheGridResolution) => void;
   setSvgPixelsPerMm: (value: number) => void;
@@ -224,6 +174,7 @@ export const DEFAULT_SETTINGS: SettingsState = {
   enableFancyLoading: true,
   enableWittyLoading: true,
   enableCompletionNotifications: false,
+  enableSmoothVectorPreview: true,
   preserveUploadFilenameFor3mf: false,
   paletteMode: "swatch",
   printerModel: "bambu-h2d",
@@ -235,6 +186,7 @@ export const DEFAULT_SETTINGS: SettingsState = {
   customSlicerId: "",
   nozzleSize: "0.4",
   enableBaseLayerHeightModifier: true,
+  enableWipeTowerAutoPlacement: true,
   // Opt-in feature: the density dropdown is hidden by default so the
   // exhaustive-cache dialog stays focused for first-time users. When the
   // toggle is off, builds silently use the low (64) default on the backend.
@@ -348,6 +300,106 @@ export function deriveBackendDeviceSettingsPatch(
 ): Partial<SettingsState> {
   const patch: Partial<SettingsState> = {};
 
+  const setScalarIfFresh = <Key extends keyof SettingsState>(
+    key: Key,
+    value: SettingsState[Key] | undefined,
+  ): void => {
+    if (
+      value !== undefined &&
+      current[key] === DEFAULT_SETTINGS[key] &&
+      !hasOwnSetting(persistedSnapshot, key)
+    ) {
+      (patch as Record<keyof SettingsState, unknown>)[key] = value;
+    }
+  };
+
+  setScalarIfFresh(
+    "language",
+    settings.language === "zh" || settings.language === "en"
+      ? settings.language
+      : undefined,
+  );
+  setScalarIfFresh(
+    "theme",
+    settings.theme === "light" || settings.theme === "dark"
+      ? settings.theme
+      : undefined,
+  );
+  setScalarIfFresh(
+    "lastLutName",
+    typeof settings.last_lut === "string" ? settings.last_lut : undefined,
+  );
+  setScalarIfFresh(
+    "lastModelingMode",
+    typeof settings.last_modeling_mode === "string"
+      ? settings.last_modeling_mode
+      : undefined,
+  );
+  setScalarIfFresh(
+    "lastColorMode",
+    typeof settings.last_color_mode === "string"
+      ? settings.last_color_mode
+      : undefined,
+  );
+  setScalarIfFresh(
+    "lastSlicerId",
+    typeof settings.last_slicer === "string" ? settings.last_slicer : undefined,
+  );
+  setScalarIfFresh(
+    "lastBedLabel",
+    typeof settings.last_bed_label === "string"
+      ? settings.last_bed_label
+      : undefined,
+  );
+  setScalarIfFresh(
+    "paletteMode",
+    settings.palette_mode === "swatch" || settings.palette_mode === "card"
+      ? settings.palette_mode
+      : undefined,
+  );
+  setScalarIfFresh(
+    "cropEnabled",
+    typeof settings.enable_crop_modal === "boolean"
+      ? settings.enable_crop_modal
+      : undefined,
+  );
+  setScalarIfFresh(
+    "enableBlur",
+    typeof settings.enable_blur === "boolean"
+      ? settings.enable_blur
+      : undefined,
+  );
+  setScalarIfFresh(
+    "enableFancyLoading",
+    typeof settings.enable_fancy_loading === "boolean"
+      ? settings.enable_fancy_loading
+      : undefined,
+  );
+  setScalarIfFresh(
+    "enableWittyLoading",
+    typeof settings.enable_witty_loading === "boolean"
+      ? settings.enable_witty_loading
+      : undefined,
+  );
+  setScalarIfFresh(
+    "enableCompletionNotifications",
+    typeof settings.enable_completion_notifications === "boolean"
+      ? settings.enable_completion_notifications
+      : undefined,
+  );
+  setScalarIfFresh(
+    "enableSmoothVectorPreview",
+    typeof settings.enable_smooth_vector_preview === "boolean"
+      ? settings.enable_smooth_vector_preview
+      : undefined,
+  );
+  setScalarIfFresh(
+    "preserveUploadFilenameFor3mf",
+    typeof settings.preserve_upload_filename_for_3mf === "boolean"
+      ? settings.preserve_upload_filename_for_3mf
+      : undefined,
+  );
+
   if (
     typeof settings.printer_model === "string" &&
     settings.printer_model.trim() &&
@@ -428,6 +480,47 @@ export function deriveBackendDeviceSettingsPatch(
       settings.enable_base_layer_height_modifier;
   }
 
+  setScalarIfFresh(
+    "enableWipeTowerAutoPlacement",
+    typeof settings.enable_wipe_tower_auto_placement === "boolean"
+      ? settings.enable_wipe_tower_auto_placement
+      : undefined,
+  );
+  setScalarIfFresh(
+    "enableSolverCacheGridSelection",
+    typeof settings.enable_solver_cache_grid_selection === "boolean"
+      ? settings.enable_solver_cache_grid_selection
+      : undefined,
+  );
+  setScalarIfFresh(
+    "solverCacheGridResolution",
+    SOLVER_CACHE_GRID_RESOLUTIONS.includes(
+      settings.solver_cache_grid_resolution as SolverCacheGridResolution,
+    )
+      ? (settings.solver_cache_grid_resolution as SolverCacheGridResolution)
+      : undefined,
+  );
+  setScalarIfFresh(
+    "svgPixelsPerMm",
+    typeof settings.svg_pixels_per_mm === "number"
+      ? normalizeSvgPixelsPerMm(settings.svg_pixels_per_mm)
+      : undefined,
+  );
+  setScalarIfFresh(
+    "materialDeltaE00Tolerance",
+    typeof settings.material_delta_e00_tolerance === "number"
+      ? normalizeMaterialDeltaE00Tolerance(
+          settings.material_delta_e00_tolerance,
+        )
+      : undefined,
+  );
+  setScalarIfFresh(
+    "autoReplaceGradientBanding",
+    typeof settings.auto_replace_gradient_banding === "boolean"
+      ? settings.auto_replace_gradient_banding
+      : undefined,
+  );
+
   return patch;
 }
 
@@ -492,6 +585,9 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
       setEnableCompletionNotifications: (enabled: boolean) =>
         set({ enableCompletionNotifications: enabled }),
 
+      setEnableSmoothVectorPreview: (enabled: boolean) =>
+        set({ enableSmoothVectorPreview: enabled }),
+
       setPreserveUploadFilenameFor3mf: (enabled: boolean) => {
         if (get().preserveUploadFilenameFor3mf === enabled) {
           return;
@@ -509,15 +605,7 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
             state.printerModel === id ? state.deviceProfileId : "",
         }));
         invalidateGeneratedArtifacts();
-
-        // 延迟导入避免循环依赖
-        import("./converter").then(({ useConverterStore }) => {
-          const { bedSizes, setBedLabel } = useConverterStore.getState();
-          const printerBed = bedSizes.find((bed) => bed.printer_id === id);
-          if (printerBed) {
-            setBedLabel(printerBed.label);
-          }
-        });
+        synchronizePrinterBedLabel(id);
       },
 
       setSlicerSoftware: (id: string) => {
@@ -572,6 +660,14 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
 
       setEnableBaseLayerHeightModifier: (enabled: boolean) => {
         set({ enableBaseLayerHeightModifier: enabled });
+        invalidateGeneratedArtifacts();
+      },
+
+      setEnableWipeTowerAutoPlacement: (enabled: boolean) => {
+        if (get().enableWipeTowerAutoPlacement === enabled) {
+          return;
+        }
+        set({ enableWipeTowerAutoPlacement: enabled });
         invalidateGeneratedArtifacts();
       },
 
@@ -631,34 +727,45 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
           INITIAL_PERSISTED_SETTINGS_SNAPSHOT,
         );
         const actions = get();
+        const directPatch = { ...patch };
         if (patch.printerModel) {
           actions.setPrinterModel(patch.printerModel);
+          delete directPatch.printerModel;
         }
         if (patch.slicerSoftware) {
           actions.setSlicerSoftware(patch.slicerSoftware);
+          delete directPatch.slicerSoftware;
         }
         if (typeof patch.customSlicerPath === "string") {
           actions.setCustomSlicerPath(patch.customSlicerPath);
+          delete directPatch.customSlicerPath;
         }
         if (typeof patch.customSlicerId === "string") {
           actions.setCustomSlicerId(patch.customSlicerId);
+          delete directPatch.customSlicerId;
         }
         if (patch.nozzleSize) {
           actions.setNozzleSize(patch.nozzleSize);
+          delete directPatch.nozzleSize;
         }
         if (typeof patch.enableBaseLayerHeightModifier === "boolean") {
           actions.setEnableBaseLayerHeightModifier(
             patch.enableBaseLayerHeightModifier,
           );
+          delete directPatch.enableBaseLayerHeightModifier;
+        }
+        if (typeof patch.enableWipeTowerAutoPlacement === "boolean") {
+          actions.setEnableWipeTowerAutoPlacement(
+            patch.enableWipeTowerAutoPlacement,
+          );
+          delete directPatch.enableWipeTowerAutoPlacement;
         }
         if (typeof patch.deviceProfileId === "string") {
           actions.setDeviceProfileId(patch.deviceProfileId);
+          delete directPatch.deviceProfileId;
         }
-        if (patch.buildPlateSelections) {
-          set({ buildPlateSelections: patch.buildPlateSelections });
-        }
-        if (typeof patch.buildPlateId === "string") {
-          set({ buildPlateId: patch.buildPlateId });
+        if (Object.keys(directPatch).length > 0) {
+          set(directPatch);
         }
       },
 
@@ -666,12 +773,23 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
         const state = get();
         try {
           await saveSettings({
+            language: state.language,
+            theme: state.theme,
             last_lut: state.lastLutName,
             last_modeling_mode: state.lastModelingMode,
             last_color_mode: state.lastColorMode,
             last_slicer: state.lastSlicerId,
+            last_bed_label: state.lastBedLabel,
             palette_mode: state.paletteMode,
             enable_crop_modal: state.cropEnabled,
+            enable_blur: state.enableBlur,
+            enable_fancy_loading: state.enableFancyLoading,
+            enable_witty_loading: state.enableWittyLoading,
+            enable_completion_notifications:
+              state.enableCompletionNotifications,
+            enable_smooth_vector_preview: state.enableSmoothVectorPreview,
+            preserve_upload_filename_for_3mf:
+              state.preserveUploadFilenameFor3mf,
             printer_model: state.printerModel,
             slicer_software: state.slicerSoftware,
             device_profile_id: state.deviceProfileId,
@@ -682,6 +800,16 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
             nozzle_size: state.nozzleSize,
             enable_base_layer_height_modifier:
               state.enableBaseLayerHeightModifier,
+            enable_wipe_tower_auto_placement:
+              state.enableWipeTowerAutoPlacement,
+            enable_solver_cache_grid_selection:
+              state.enableSolverCacheGridSelection,
+            solver_cache_grid_resolution: state.solverCacheGridResolution,
+            svg_pixels_per_mm: state.svgPixelsPerMm,
+            material_delta_e00_tolerance:
+              state.materialDeltaE00Tolerance,
+            auto_replace_gradient_banding:
+              state.autoReplaceGradientBanding,
           });
         } catch {
           // best-effort sync — settings are already persisted in localStorage
@@ -707,6 +835,10 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
             persistedSettings.materialDeltaE00Tolerance ??
               currentState.materialDeltaE00Tolerance,
           ),
+          enableWipeTowerAutoPlacement:
+            typeof persistedSettings.enableWipeTowerAutoPlacement === "boolean"
+              ? persistedSettings.enableWipeTowerAutoPlacement
+              : currentState.enableWipeTowerAutoPlacement,
         };
       },
     },

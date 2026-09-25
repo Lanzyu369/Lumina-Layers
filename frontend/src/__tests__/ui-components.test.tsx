@@ -240,9 +240,41 @@ describe("Selection controls", () => {
     expect(screen.getByText("Single").closest("label")).toHaveClass("rounded-[10px]");
   });
 
-  it("renders checkbox with the unified rounded selectable row", () => {
-    render(<Checkbox label="Enable Relief" checked onChange={() => {}} />);
-    expect(screen.getByLabelText("Enable Relief")).toBeChecked();
-    expect(screen.getByText("Enable Relief").closest("label")).toHaveClass("rounded-[10px]");
+  it("toggles the checkbox from the unified rounded selectable row", () => {
+    const onChange = vi.fn();
+
+    render(<Checkbox label="Enable Relief" checked={false} onChange={onChange} />);
+
+    const selectableRow = screen
+      .getByText("Enable Relief")
+      .closest('[class~="rounded-[10px]"]');
+    expect(selectableRow).not.toBeNull();
+
+    fireEvent.click(selectableRow!);
+
+    expect(onChange).toHaveBeenCalledOnce();
+    expect(onChange).toHaveBeenCalledWith(true);
+  });
+
+  it("does not toggle a disabled checkbox from the selectable row", () => {
+    const onChange = vi.fn();
+
+    render(
+      <Checkbox
+        label="Enable Relief"
+        checked={false}
+        disabled
+        onChange={onChange}
+      />,
+    );
+
+    const selectableRow = screen
+      .getByText("Enable Relief")
+      .closest('[class~="rounded-[10px]"]');
+    expect(selectableRow).not.toBeNull();
+
+    fireEvent.click(selectableRow!);
+
+    expect(onChange).not.toHaveBeenCalled();
   });
 });

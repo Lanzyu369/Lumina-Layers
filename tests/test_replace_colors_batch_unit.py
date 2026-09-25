@@ -98,6 +98,189 @@ def red_green_canvas() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
 
 class TestReplaceColorsBatch:
+    def test_global_replace_returns_authoritative_selection_revision_for_next_gesture(
+        self,
+        red_green_canvas: tuple[np.ndarray, np.ndarray, np.ndarray],
+    ) -> None:
+        """A global replace rebases the selection before the next mutation.
+        全局换色后，服务端必须先重绑选区内容版本，下一次选区手势才能继续。
+
+        This drives the real selection endpoint, preview-cache transaction, visible
+        component cache, and batch replacement endpoint together. A client-side
+        ``content_revision + 1`` guess is deliberately not used.
+        该用例串联真实选区端点、预览缓存事务、可见组件缓存和批量替色端点，
+        明确不依赖客户端猜测 ``content_revision + 1``。
+        """
+        matched, mask_solid, quantized = red_green_canvas
+        client, sid, store = _make_client(
+            matched,
+            mask_solid=mask_solid,
+            quantized_image=quantized,
+        )
+
+        selected = client.post(
+            "/api/convert/selection/mutate",
+            json={
+                "session_id": sid,
+                "operation": "same-color-toggle",
+                "base_selection_revision": 0,
+                "content_revision": 0,
+                "color_hex": "ff0000",
+            },
+        )
+        assert selected.status_code == 200, selected.text
+        before_replace = selected.json()
+        assert before_replace["selected_pixel_count"] == 8
+
+        first_replace = client.post(
+            "/api/convert/replace-colors-batch",
+            json={
+                "session_id": sid,
+                "replacements": [
+                    {"selected_color": "#ff0000", "replacement_color": "#0000ff"},
+                ],
+            },
+        )
+        assert first_replace.status_code == 200, first_replace.text
+        first_body = first_replace.json()
+        first_selection = first_body["selection"]
+        assert first_selection["selection_revision"] == before_replace["selection_revision"]
+        assert first_selection["content_revision"] != before_replace["content_revision"]
+        assert first_selection["selected_color_hexes"] == ["#0000ff"]
+
+        selected_again = client.post(
+            "/api/convert/selection/mutate",
+            json={
+                "session_id": sid,
+                "operation": "same-color-toggle",
+                "base_selection_revision": first_selection["selection_revision"],
+                "content_revision": first_selection["content_revision"],
+                "color_hex": "0000ff",
+            },
+        )
+        assert selected_again.status_code == 200, selected_again.text
+        second_selection = selected_again.json()
+        assert second_selection["selection_revision"] > first_selection["selection_revision"]
+        assert second_selection["selected_pixel_count"] == 0
+
+        second_replace = client.post(
+            "/api/convert/replace-colors-batch",
+            json={
+                "session_id": sid,
+                "replacements": [
+                    {"selected_color": "#ff0000", "replacement_color": "#0000ff"},
+                    {"selected_color": "#00ff00", "replacement_color": "#ffff00"},
+                ],
+            },
+        )
+        assert second_replace.status_code == 200, second_replace.text
+        assert second_replace.json()["selection"]["content_revision"] != (
+            second_selection["content_revision"]
+        )
+        np.testing.assert_array_equal(
+            store.get(sid)["preview_cache"]["matched_rgb"][:2, :],
+            np.full((2, 4, 3), [0, 0, 255], dtype=np.uint8),
+        )
+        np.testing.assert_array_equal(
+            store.get(sid)["preview_cache"]["matched_rgb"][2:, :],
+            np.full((2, 4, 3), [255, 255, 0], dtype=np.uint8),
+        )
+
+    def test_fifty_sequential_edits_keep_selection_and_content_versions_aligned(
+        self,
+        red_green_canvas: tuple[np.ndarray, np.ndarray, np.ndarray],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Fifty ordered edits must not self-create a stale-content 409.
+        连续 50 次有序编辑不能因为客户端自身版本不同步而产生 409。
+        """
+        monkeypatch.setattr(
+            replace_router,
+            "schedule_visible_region_cache_prewarm",
+            lambda *_args, **_kwargs: None,
+        )
+        matched, mask_solid, quantized = red_green_canvas
+        client, sid, store = _make_client(
+            matched,
+            mask_solid=mask_solid,
+            quantized_image=quantized,
+        )
+
+        selected = client.post(
+            "/api/convert/selection/mutate",
+            json={
+                "session_id": sid,
+                "operation": "same-color-toggle",
+                "base_selection_revision": 0,
+                "content_revision": 0,
+                "color_hex": "ff0000",
+            },
+        )
+        assert selected.status_code == 200, selected.text
+        document = selected.json()
+        content_revisions: list[int] = []
+
+        palette = ["0000ff", "ffff00", "ff00ff", "00ffff"]
+        for index in range(50):
+            target = palette[index % len(palette)]
+            replacement = client.post(
+                "/api/convert/replace-colors-batch",
+                json={
+                    "session_id": sid,
+                    "replacements": [
+                        {"selected_color": "#ff0000", "replacement_color": f"#{target}"},
+                        {"selected_color": "#00ff00", "replacement_color": "#101010"},
+                    ],
+                },
+            )
+            assert replacement.status_code == 200, (
+                f"edit {index + 1} failed: {replacement.text}"
+            )
+            response_document = replacement.json()["selection"]
+            content_revisions.append(response_document["content_revision"])
+            assert response_document["selection_revision"] == document["selection_revision"]
+            assert response_document["selected_color_hexes"] == [f"#{target}"]
+
+            cleared = client.post(
+                "/api/convert/selection/mutate",
+                json={
+                    "session_id": sid,
+                    "operation": "same-color-toggle",
+                    "base_selection_revision": response_document["selection_revision"],
+                    "content_revision": response_document["content_revision"],
+                    "color_hex": target,
+                },
+            )
+            assert cleared.status_code == 200, (
+                f"clear {index + 1} failed: {cleared.text}"
+            )
+            document = cleared.json()
+            assert document["selected_pixel_count"] == 0
+
+            if index < 49:
+                selected_next = client.post(
+                    "/api/convert/selection/mutate",
+                    json={
+                        "session_id": sid,
+                        "operation": "same-color-toggle",
+                        "base_selection_revision": document["selection_revision"],
+                        "content_revision": document["content_revision"],
+                        "color_hex": target,
+                    },
+                )
+                assert selected_next.status_code == 200, (
+                    f"select {index + 1} failed: {selected_next.text}"
+                )
+                document = selected_next.json()
+                assert document["selected_pixel_count"] == 8
+
+        assert content_revisions == sorted(set(content_revisions))
+        assert len(content_revisions) == 50
+        np.testing.assert_array_equal(
+            store.get(sid)["preview_cache"]["matched_rgb"][:2, :],
+            np.full((2, 4, 3), [255, 255, 0], dtype=np.uint8),
+        )
+
     def test_batch_applies_all_pairs_in_one_call(
         self, red_green_canvas: tuple[np.ndarray, np.ndarray, np.ndarray]
     ) -> None:

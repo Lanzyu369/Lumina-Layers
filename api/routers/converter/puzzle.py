@@ -17,6 +17,7 @@ import pickle
 import tempfile
 import uuid
 from dataclasses import dataclass
+from copy import deepcopy
 from typing import Any
 
 import numpy as np
@@ -39,6 +40,7 @@ from api.schemas.converter import (
     PuzzleLayoutPreviewRequest,
 )
 from api.schemas.responses import PuzzleGenerateResponse, PuzzleLayoutPreviewResponse
+from api.selection_state import unpack_applied_region_mask
 from api.session_store import SessionStore
 from api.structured_logging import get_logger
 from api.worker_pool import WorkerPoolManager
@@ -62,12 +64,14 @@ from core.material_dynamic_solver import (
     DynamicMaterialCandidateError,
     DynamicMaterialSolverError,
 )
+from utils.bambu_3mf_writer import read_wipe_tower_placement_warnings
 
 from .common import (
     BATCH_DOWNLOAD_TTL_SECONDS,
     LUT_DATA_UNAVAILABLE_DETAIL,
     PREVIEW_CACHE_INVALID_DETAIL,
     PREVIEW_CACHE_UNAVAILABLE_DETAIL,
+    RECIPE_OVERRIDE_APPLIED_MASKS_KEY,
     ROUTER_HANDLED_ERRORS,
     SOURCE_IMAGE_UNAVAILABLE_DETAIL,
     _handle_core_error,
@@ -78,6 +82,9 @@ from .common import (
     _validate_material_archive_relief_minimum_height,
 )
 from .generate import (
+    _assert_editor_snapshot_current,
+    _capture_generation_snapshot,
+    _preview_analysis_params_match,
     _resolve_recipe_overrides,
     _serialize_recipe_override_for_worker,
 )
@@ -993,10 +1000,24 @@ async def generate_puzzle(
             (包含下载地址与网格摘要的响应)
     """
 
-    session_data = _require_session(store, body.session_id)
-    preview_cache_ref = session_data.get("preview_cache")
     request = body.params
     generate_params = request.params
+    (
+        session_data,
+        committed_content_revision,
+        committed_selection_revision,
+    ) = _capture_generation_snapshot(
+        store,
+        body.session_id,
+        requested_revision=generate_params.editor_content_revision,
+        requested_selection_revision=generate_params.selection_revision,
+        revision_mismatch_detail=(
+            "Visible content changed before puzzle generation started "
+            "(editor content revision mismatch); "
+            "refresh the editor state and try again."
+        ),
+    )
+    preview_cache_ref = session_data.get("preview_cache")
     validate_export_device_selection(
         printer_id=generate_params.printer_id,
         slicer=generate_params.slicer,
@@ -1037,6 +1058,21 @@ async def generate_puzzle(
     ):
         cache_fields.update({"quantized_image", "material_matrix"})
     cache = _require_puzzle_cache(session_data, fields=cache_fields)
+    if generate_params.svg_hole_compensation_enabled or cache.get("svg_hole_compensation_enabled", False):
+        matches, _ = _preview_analysis_params_match(
+            cache=cache,
+            request=generate_params,
+            core_modeling_mode=CoreModelingMode(generate_params.modeling_mode.value),
+            session_material_source=str(session_material_source or "lut"),
+            target_width_mm=generate_params.target_width_mm,
+            preview_color_layers=session_data.get("color_layers"),
+            preview_layer_height_mm=session_data.get("layer_height_mm"),
+        )
+        if not matches:
+            raise HTTPException(
+                status_code=409,
+                detail="SVG hole compensation settings changed. Re-run preview before generating the puzzle.",
+            )
     dynamic_puzzle_analysis: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None = None
     dynamic_recipe_overrides: list[dict[str, object]] | None = None
     if (
@@ -1115,6 +1151,15 @@ async def generate_puzzle(
         if session_material_source == "material_archive"
         else []
     )
+    # All piece inputs below come from the detached session/cache snapshot.
+    # Reject a generation that became stale while layout and asset inputs were
+    # being assembled, before the first worker is submitted.
+    _assert_editor_snapshot_current(
+        store,
+        body.session_id,
+        committed_content_revision,
+        expected_selection_revision=committed_selection_revision,
+    )
     futures: list[asyncio.Future] = []
     piece_records: list[PuzzlePiece] = []
     skipped_transparent_labels: list[str] = []
@@ -1171,6 +1216,10 @@ async def generate_puzzle(
             "modeling_mode": core_modeling_mode,
             "quantize_colors": generate_params.quantize_colors,
             "svg_pixels_per_mm": generate_params.svg_pixels_per_mm,
+            # Piece PNGs already contain the confirmed SVG compensation.
+            "svg_hole_compensation_enabled": False,
+            "svg_hole_max_area_mm2": generate_params.svg_hole_max_area_mm2,
+            "svg_hole_max_width_mm": generate_params.svg_hole_max_width_mm,
             "replacement_regions": None,
             "separate_backing": generate_params.separate_backing,
             "enable_relief": generate_params.enable_relief,
@@ -1197,6 +1246,9 @@ async def generate_puzzle(
             "nozzle_size": generate_params.nozzle_size,
             "device_profile_id": generate_params.device_profile_id,
             "build_plate_id": generate_params.build_plate_id,
+            "enable_wipe_tower_auto_placement": (
+                generate_params.enable_wipe_tower_auto_placement
+            ),
             "relief_global_max_height": relief_global_max_height,
             "material_dynamic_layer_count_enabled": dynamic_material_settings[0],
             "material_min_layer_count": dynamic_material_settings[1],
@@ -1226,8 +1278,64 @@ async def generate_puzzle(
             )
             if dynamic_recipe_overrides:
                 try:
+                    # Committed overrides resolve ONLY to their applied-time
+                    # snapshot when the session carries snapshot capability;
+                    # a missing/invalid entry is an integrity failure and
+                    # must not silently re-resolve from mutable live state.
+                    # Live masks serve only legacy sessions without the
+                    # snapshot key. _prepare_piece_recipe_override_masks keeps
+                    # validating shape/source-grid compatibility per entry.
+                    # 会话具备快照能力时，已提交覆盖只解析为 apply 时的快照；
+                    # 缺失或校验失败属于完整性失败，绝不能从可变的实时选区
+                    # 静默重解析。实时掩码仅服务没有快照键的旧会话。每个条目
+                    # 的形状/栅格兼容性仍由
+                    # _prepare_piece_recipe_override_masks 校验。
+                    live_region_masks = session_data.get("selected_region_masks")
+                    live_region_dict = (
+                        dict(live_region_masks)
+                        if isinstance(live_region_masks, dict)
+                        else {}
+                    )
+                    applied_mask_snapshot = session_data.get(
+                        RECIPE_OVERRIDE_APPLIED_MASKS_KEY
+                    )
+                    applied_snapshot_dict = (
+                        applied_mask_snapshot
+                        if isinstance(applied_mask_snapshot, dict)
+                        else {}
+                    )
+                    has_snapshot_capability = (
+                        RECIPE_OVERRIDE_APPLIED_MASKS_KEY in session_data
+                    )
+                    merged_region_masks: dict[str, np.ndarray] = {}
+                    for override_item in dynamic_recipe_overrides:
+                        override_region_id = str(
+                            override_item.get("region_id") or ""
+                        ).strip()
+                        if not override_region_id:
+                            raise ValueError(
+                                "dynamic puzzle recipe override is missing region_id"
+                            )
+                        if override_region_id in merged_region_masks:
+                            continue
+                        if has_snapshot_capability:
+                            snapshot_entry = unpack_applied_region_mask(
+                                applied_snapshot_dict.get(override_region_id)
+                            )
+                            if snapshot_entry is None:
+                                raise ValueError(
+                                    f"dynamic puzzle committed recipe override "
+                                    f"mask is missing or invalid: {override_region_id}"
+                                )
+                            merged_region_masks[override_region_id] = snapshot_entry
+                        elif isinstance(
+                            live_region_dict.get(override_region_id), np.ndarray
+                        ):
+                            merged_region_masks[override_region_id] = live_region_dict[
+                                override_region_id
+                            ]
                     piece_override_masks = _prepare_piece_recipe_override_masks(
-                        region_masks=session_data.get("selected_region_masks"),
+                        region_masks=merged_region_masks,
                         recipe_overrides=dynamic_recipe_overrides,
                         piece=piece,
                         source_shape=dynamic_puzzle_analysis[1].shape,
@@ -1315,7 +1423,17 @@ async def generate_puzzle(
             piece_heightmap_path = _save_png_array(sid, store, piece_heightmap, piece_prefix)
             worker_params["heightmap_path"] = piece_heightmap_path
 
-        futures.append(pool.submit(_submit_puzzle_worker, piece_image_path, lut_path, worker_params))
+        # All worker arguments are paths, scalars, and per-piece dicts. Copy
+        # the dict before enqueueing so a later session edit cannot mutate an
+        # already-bound puzzle piece request.
+        futures.append(
+            pool.submit(
+                _submit_puzzle_worker,
+                piece_image_path,
+                lut_path,
+                deepcopy(worker_params),
+            )
+        )
         piece_records.append(piece)
 
     if skipped_transparent_labels:
@@ -1323,7 +1441,7 @@ async def generate_puzzle(
             f"Skipped {len(skipped_transparent_labels)} fully transparent puzzle pieces."
         )
 
-    successful_entries: list[tuple[PuzzlePiece, str]] = []
+    successful_entries: list[tuple[PuzzlePiece, str, bool, float]] = []
     errors: list[str] = []
     for piece, future in zip(piece_records, futures):
         try:
@@ -1332,14 +1450,33 @@ async def generate_puzzle(
             glb_path = result.get("glb_path")
             if threemf_path and os.path.exists(threemf_path):
                 store.register_temp_file(sid, threemf_path)
-                successful_entries.append((piece, threemf_path))
+                x_mirrored = result.get("x_mirrored")
+                mirror_span_mm = result.get("mirror_span_mm")
+                if (
+                    not isinstance(x_mirrored, bool)
+                    or not isinstance(mirror_span_mm, (int, float))
+                    or not np.isfinite(float(mirror_span_mm))
+                    or float(mirror_span_mm) <= 0.0
+                ):
+                    errors.append(
+                        f"{piece.label}: export transform metadata unavailable"
+                    )
+                else:
+                    successful_entries.append(
+                        (
+                            piece,
+                            threemf_path,
+                            x_mirrored,
+                            float(mirror_span_mm),
+                        )
+                    )
             else:
                 status_msg = result.get("status_msg", "unknown")
                 errors.append(f"{piece.label}: {status_msg}")
             if glb_path and os.path.exists(glb_path):
                 store.register_temp_file(sid, glb_path)
         except asyncio.TimeoutError:
-            errors.append(f"{piece.label}: generation timed out")
+            errors.append(f"{piece.label}: generation failed")
         except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as exc:
             _handle_core_error(exc, "puzzle piece generation")
         except ROUTER_HANDLED_ERRORS as exc:
@@ -1366,14 +1503,26 @@ async def generate_puzzle(
             detail="Puzzle generation produced no non-transparent pieces.",
         )
 
+    _assert_editor_snapshot_current(
+        store,
+        body.session_id,
+        committed_content_revision,
+        expected_selection_revision=committed_selection_revision,
+        allow_missing_session=True,
+    )
+
     piece_sources = [
         PuzzlePiece3MFSource(
             label=piece.label,
             threemf_path=threemf_path,
-            offset_x_mm=piece.bbox_mm[0],
+            offset_x_mm=(
+                layout.total_width_mm - piece.bbox_mm[0] - mirror_span_mm
+                if x_mirrored
+                else piece.bbox_mm[0]
+            ),
             offset_y_mm=layout.total_height_mm - piece.bbox_mm[3],
         )
-        for piece, threemf_path in successful_entries
+        for piece, threemf_path, x_mirrored, mirror_span_mm in successful_entries
     ]
 
     fd, combined_3mf_path = tempfile.mkstemp(prefix="puzzle_", suffix=".3mf", dir=TEMP_DIR)
@@ -1407,7 +1556,22 @@ async def generate_puzzle(
             device_profile_id=generate_params.device_profile_id,
             build_plate_id=generate_params.build_plate_id,
             overview_png_bytes=overview_png_bytes,
+            enable_wipe_tower_auto_placement=(
+                generate_params.enable_wipe_tower_auto_placement
+            ),
         )
+        _assert_editor_snapshot_current(
+            store,
+            body.session_id,
+            committed_content_revision,
+            expected_selection_revision=committed_selection_revision,
+            allow_missing_session=True,
+        )
+        for warning_code in read_wipe_tower_placement_warnings(
+            combined_3mf_path
+        ):
+            if warning_code not in warnings:
+                warnings.append(warning_code)
         download_id = registry.register_path(
             str(uuid.uuid4()),
             combined_3mf_path,
@@ -1452,4 +1616,6 @@ async def generate_puzzle(
         grid_cols=layout.cols,
         grid_rows=layout.rows,
         warnings=warnings,
+        editor_content_revision=committed_content_revision,
+        selection_revision=committed_selection_revision,
     )

@@ -11,7 +11,11 @@ from api.errors import (
     ValidationDomainError,
     to_http_exception,
 )
-from core.errors import CoreDependencyError, CoreProcessingError, CoreValidationError
+from core.errors import (
+    CoreDependencyError,
+    CoreProcessingError,
+    CoreValidationError,
+)
 
 
 def test_validation_domain_error_maps_to_422() -> None:
@@ -54,6 +58,14 @@ def test_core_validation_error_maps_to_422() -> None:
     exc = to_http_exception(CoreValidationError("invalid"), "converter")
     assert exc.status_code == 422
     assert exc.detail == "invalid"
+
+
+
+
+
+
+
+
 
 
 def test_core_dependency_error_maps_to_502() -> None:

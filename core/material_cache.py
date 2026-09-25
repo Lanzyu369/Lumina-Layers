@@ -36,7 +36,7 @@ Public API:
     - ``save_material_solver_cache``   — persist to disk
     - ``load_material_solver_cache``   — load from disk
     - ``cache_file_path``              — canonical on-disk path for parameters
-    - ``default_cache_directory``      — where caches live (``MATERIALS_DIR/_solver_cache``)
+    - ``default_cache_directory``      — cache root (launcher override or materials fallback)
     - ``fingerprint_palette``          — stable hash of material parameters
     - ``list_cached_entries``          — enumerate cached combinations
 """
@@ -167,291 +167,7 @@ _FINGERPRINT_DECIMALS: int = 6
 _HASH_PREFIX_LEN: int = 16
 
 _CHUNK_TARGET_BYTES: int = 64 * 1024 * 1024
-"""Per-chunk memory budget for the build pass (final linear RGB block).
-64 MiB chunks keep peak memory comfortable on 8 GB-class machines."""
-
-_SOLVER_CACHE_BUILD_MEMORY_LIMIT_ENV = "LUMINA_SOLVER_CACHE_BUILD_MEMORY_LIMIT_MB"
-_DEFAULT_SOLVER_CACHE_BUILD_MEMORY_LIMIT_BYTES = 8 * 1024 * 1024 * 1024
-"""Default peak-memory budget for one bucketed solver-cache build.
-
-默认单次分桶求解缓存构建峰值内存预算。
-"""
-
-_SOLVER_CACHE_BUILD_MAX_COMBINATIONS_ENV = (
-    "LUMINA_SOLVER_CACHE_BUILD_MAX_COMBINATIONS"
-)
-_DEFAULT_SOLVER_CACHE_BUILD_MAX_COMBINATIONS = 12_000_000_000
-"""Default exhaustive-combination budget for one solver-cache build.
-
-The build still scans every theoretical recipe even when a low Lab grid makes
-the retained sparse cache look small. Keep the default above the historical
-10-material × 10-layer scale, but below 22-material × 8-layer incidents.
-
-默认单次求解缓存构建的穷举组合数上限。即使低 Lab 网格让最终稀疏缓存看起来
-很小，构建仍然会扫描所有理论配方；默认值允许历史上的 10 耗材 × 10 层量级，
-但拦截 22 耗材 × 8 层这类事故。
-"""
-
-_ESTIMATED_VALID_CELL_RATIO = 0.12
-"""Conservative reachable-bucket estimate for high-resolution bucketed builds.
-
-Issue #230 observed ~8% unique buckets for a 12-material × 8-layer × 2048
-build. Using 12% gives the guard room for palette variance without needing
-to enumerate combinations first.
-
-Issue #230 中 12 耗材 × 8 层 × 2048 构建的独立桶约占组合数 8%。这里用
-12% 作为保守估算，避免真正枚举后才发现内存不可承受。
-"""
-
-_ESTIMATED_BYTES_PER_VALID_CELL = 768
-"""Approximate Python-object + numpy-array peak bytes per retained bucket.
-
-估算每个保留桶在构建高峰期对应的 Python 对象和 numpy 数组开销。
-"""
-
-_ESTIMATED_BUILD_BASE_BYTES = 512 * 1024 * 1024
-"""Fixed per-build overhead for MITM tables, chunks, and final arrays.
-
-MITM 表、分块临时数组和最终数组的固定构建开销估算。
-"""
-
-
-@dataclass(frozen=True)
-class MaterialSolverCacheBuildBudget:
-    """Estimated safety budget for a material solver-cache build.
-    耗材求解缓存构建的安全预算估算。
-
-    Attributes:
-        material_count: Number of selected materials. (耗材数量)
-        layer_count: Number of recipe layers. (配方层数)
-        grid_resolution: Lab grid resolution per axis. (Lab 网格分辨率)
-        total_combinations: Theoretical M**N recipe count. (理论配方总数)
-        total_bucket_count: Theoretical grid bucket count. (理论桶总数)
-        estimated_valid_cell_count: Estimated retained buckets. (估计保留桶数)
-        estimated_peak_bytes: Estimated peak build RSS. (估计峰值内存)
-        memory_limit_bytes: Configured safety limit. (配置的安全上限)
-        max_total_combinations: Configured recipe-scan limit. (配置的穷举上限)
-        is_allowed: Whether the estimate fits the limit. (是否允许构建)
-    """
-
-    material_count: int
-    layer_count: int
-    grid_resolution: int
-    total_combinations: int
-    total_bucket_count: int
-    estimated_valid_cell_count: int
-    estimated_peak_bytes: int
-    memory_limit_bytes: int
-    max_total_combinations: int
-    is_allowed: bool
-
-
-class MaterialSolverCacheBudgetError(ValueError):
-    """Raised when a solver-cache build would exceed a safety budget.
-    当求解缓存构建预计超过安全预算时抛出。
-    """
-
-    def __init__(self, report: MaterialSolverCacheBuildBudget) -> None:
-        self.report = report
-        super().__init__(_format_solver_cache_budget_error(report))
-
-
-def _format_bytes_gib(value: int) -> str:
-    """Format bytes as GiB for user-facing budget messages."""
-
-    return f"{value / (1024 ** 3):.1f}GiB"
-
-
-def _format_solver_cache_budget_error(
-    report: MaterialSolverCacheBuildBudget,
-) -> str:
-    """Build an actionable validation message for unsafe cache builds."""
-
-    prefix = (
-        "Unsafe material solver cache build: "
-        f"{report.material_count} materials x {report.layer_count} layers at "
-        f"grid_resolution={report.grid_resolution} "
-    )
-    exceeds_combination_limit = (
-        report.total_combinations > report.max_total_combinations
-    )
-    exceeds_memory_limit = report.estimated_peak_bytes > report.memory_limit_bytes
-    if exceeds_combination_limit and not exceeds_memory_limit:
-        return (
-            prefix
-            + f"requires scanning {report.total_combinations:,} combinations, "
-            f"above the configured {report.max_total_combinations:,} "
-            "combination limit. Please reduce the material/layer count."
-        )
-    if exceeds_combination_limit and exceeds_memory_limit:
-        return (
-            prefix
-            + f"requires scanning {report.total_combinations:,} combinations, "
-            f"above the configured {report.max_total_combinations:,} "
-            f"combination limit, and estimates "
-            f"{report.estimated_valid_cell_count:,} retained buckets and "
-            f"{_format_bytes_gib(report.estimated_peak_bytes)} peak memory, "
-            f"above the configured {_format_bytes_gib(report.memory_limit_bytes)} "
-            "memory limit. Please lower grid_resolution or reduce the "
-            "material/layer count."
-        )
-    return (
-        prefix
-        + "estimates "
-        f"{report.estimated_valid_cell_count:,} retained buckets and "
-        f"{_format_bytes_gib(report.estimated_peak_bytes)} peak memory, above "
-        f"the configured {_format_bytes_gib(report.memory_limit_bytes)} limit. "
-        "Please lower grid_resolution or reduce the material/layer count."
-    )
-
-
-def _resolve_solver_cache_build_memory_limit(
-    memory_limit_bytes: int | None = None,
-) -> int:
-    """Resolve the build-memory limit from an explicit value or environment.
-    从显式入参或环境变量解析构建内存上限。
-    """
-
-    if memory_limit_bytes is not None:
-        return max(1, int(memory_limit_bytes))
-
-    raw_limit_mb = os.environ.get(_SOLVER_CACHE_BUILD_MEMORY_LIMIT_ENV)
-    if raw_limit_mb is None or raw_limit_mb.strip() == "":
-        return _DEFAULT_SOLVER_CACHE_BUILD_MEMORY_LIMIT_BYTES
-    try:
-        value_mb = int(raw_limit_mb)
-    except ValueError:
-        _log.warning(
-            "Invalid material solver cache memory budget; using default",
-            extra={
-                "event": "material_solver_cache_budget_invalid",
-                "raw_value": raw_limit_mb,
-                "fallback_bytes": _DEFAULT_SOLVER_CACHE_BUILD_MEMORY_LIMIT_BYTES,
-            },
-        )
-        return _DEFAULT_SOLVER_CACHE_BUILD_MEMORY_LIMIT_BYTES
-    if value_mb <= 0:
-        return _DEFAULT_SOLVER_CACHE_BUILD_MEMORY_LIMIT_BYTES
-    return value_mb * 1024 * 1024
-
-
-def _resolve_solver_cache_build_max_combinations(
-    max_total_combinations: int | None = None,
-) -> int:
-    """Resolve the recipe-scan limit from an explicit value or environment.
-    从显式入参或环境变量解析穷举组合数上限。
-    """
-
-    if max_total_combinations is not None:
-        return max(1, int(max_total_combinations))
-
-    raw_limit = os.environ.get(_SOLVER_CACHE_BUILD_MAX_COMBINATIONS_ENV)
-    if raw_limit is None or raw_limit.strip() == "":
-        return _DEFAULT_SOLVER_CACHE_BUILD_MAX_COMBINATIONS
-    try:
-        value = int(raw_limit)
-    except ValueError:
-        _log.warning(
-            "Invalid material solver cache combination budget; using default",
-            extra={
-                "event": "material_solver_cache_budget_invalid",
-                "raw_value": raw_limit,
-                "fallback_combinations": (
-                    _DEFAULT_SOLVER_CACHE_BUILD_MAX_COMBINATIONS
-                ),
-            },
-        )
-        return _DEFAULT_SOLVER_CACHE_BUILD_MAX_COMBINATIONS
-    if value <= 0:
-        return _DEFAULT_SOLVER_CACHE_BUILD_MAX_COMBINATIONS
-    return value
-
-
-def estimate_material_solver_cache_build_budget(
-    *,
-    material_count: int,
-    layer_count: int,
-    grid_resolution: int,
-    memory_limit_bytes: int | None = None,
-    max_total_combinations: int | None = None,
-) -> MaterialSolverCacheBuildBudget:
-    """Estimate whether a bucketed solver-cache build fits safety budgets.
-    估算分桶求解缓存构建是否落在安全预算内。
-
-    The estimate intentionally runs before enumeration. It therefore uses a
-    conservative retained-bucket approximation and an independent recipe-scan
-    limit instead of doing the costly work first.
-
-    估算必须在枚举前完成，因此使用保守的保留桶近似值，而不是精确
-    ``valid_count``，并叠加独立的配方扫描上限。这样可以在执行昂贵工作前
-    拦截 issue #230 这类 OOM 以及低 grid 的超大穷举请求。
-    """
-
-    safe_material_count = max(0, int(material_count))
-    safe_layer_count = max(0, int(layer_count))
-    safe_grid_resolution = max(1, int(grid_resolution))
-    limit = _resolve_solver_cache_build_memory_limit(memory_limit_bytes)
-    combination_limit = _resolve_solver_cache_build_max_combinations(
-        max_total_combinations,
-    )
-
-    total_combinations = (
-        safe_material_count ** safe_layer_count
-        if safe_material_count > 0 and safe_layer_count > 0
-        else 0
-    )
-    total_bucket_count = safe_grid_resolution ** 3
-    if _is_exact_mode_eligible(safe_material_count, safe_layer_count):
-        estimated_valid = total_combinations
-    else:
-        estimated_valid = min(
-            total_combinations,
-            total_bucket_count,
-            int(np.ceil(total_combinations * _ESTIMATED_VALID_CELL_RATIO)),
-        )
-    estimated_peak = (
-        _ESTIMATED_BUILD_BASE_BYTES
-        + int(estimated_valid) * _ESTIMATED_BYTES_PER_VALID_CELL
-    )
-    return MaterialSolverCacheBuildBudget(
-        material_count=safe_material_count,
-        layer_count=safe_layer_count,
-        grid_resolution=safe_grid_resolution,
-        total_combinations=int(total_combinations),
-        total_bucket_count=int(total_bucket_count),
-        estimated_valid_cell_count=int(estimated_valid),
-        estimated_peak_bytes=int(estimated_peak),
-        memory_limit_bytes=int(limit),
-        max_total_combinations=int(combination_limit),
-        is_allowed=(
-            estimated_peak <= limit
-            and total_combinations <= combination_limit
-        ),
-    )
-
-
-def validate_material_solver_cache_build_budget(
-    *,
-    material_count: int,
-    layer_count: int,
-    grid_resolution: int,
-    memory_limit_bytes: int | None = None,
-    max_total_combinations: int | None = None,
-) -> MaterialSolverCacheBuildBudget:
-    """Raise if a solver-cache build exceeds configured safety budgets.
-    如果求解缓存构建超过配置的安全预算则抛错。
-    """
-
-    report = estimate_material_solver_cache_build_budget(
-        material_count=material_count,
-        layer_count=layer_count,
-        grid_resolution=grid_resolution,
-        memory_limit_bytes=memory_limit_bytes,
-        max_total_combinations=max_total_combinations,
-    )
-    if not report.is_allowed:
-        raise MaterialSolverCacheBudgetError(report)
-    return report
+"""Local temporary-array target for one build chunk."""
 
 
 def _is_exact_mode_eligible(num_materials: int, layer_count: int) -> bool:
@@ -527,11 +243,31 @@ def default_cache_directory(cache_root: str | Path | None = None) -> Path:
     """Return the default cache directory.
     返回默认缓存目录。
 
-    When ``cache_root`` is ``None`` the cache lives under
-    ``<MATERIALS_DIR>/_solver_cache/``. Callers (e.g. tests) can override by
-    passing an explicit path.
+    An explicit ``cache_root`` takes priority. Otherwise launcher runtimes can
+    isolate derived data with the absolute ``LUMINA_RUNTIME_CACHE_DIR`` path;
+    source deployments keep the legacy ``<MATERIALS_DIR>/_solver_cache/``
+    location.
+
+    显式传入的 ``cache_root`` 优先。否则，启动器运行包可通过绝对路径环境变量
+    ``LUMINA_RUNTIME_CACHE_DIR`` 隔离派生缓存；源码部署继续使用旧的
+    ``<MATERIALS_DIR>/_solver_cache/`` 位置。
+
+    Raises:
+        ValueError: If the launcher override is not absolute.
+            启动器覆盖路径不是绝对路径时抛出。
     """
-    root = Path(cache_root) if cache_root is not None else Path(MATERIALS_DIR)
+    if cache_root is not None:
+        root = Path(cache_root)
+    else:
+        launcher_root = os.environ.get("LUMINA_RUNTIME_CACHE_DIR", "").strip()
+        if launcher_root:
+            root = Path(launcher_root).expanduser()
+            if not root.is_absolute():
+                raise ValueError(
+                    "LUMINA_RUNTIME_CACHE_DIR must be an absolute directory path"
+                )
+        else:
+            root = Path(MATERIALS_DIR)
     return root / CACHE_SUBDIR
 
 
@@ -729,8 +465,8 @@ _NEIGHBOR_COHERENCE_PROXIMITY_THRESHOLD: float = 20.0
 # 修正时每个目标色考察的候选数。
 _NEIGHBOR_COHERENCE_TOP_K: int = 8
 
-_NEIGHBOR_COHERENCE_DISTANCE_MEMORY_BYTES: int = 64 * 1024 * 1024
-"""Total temporary distance-matrix budget across coherence worker threads."""
+_NEIGHBOR_COHERENCE_DEFAULT_BLOCK_ROWS: int = 256
+"""Local target-row block size for exact distance calculations."""
 
 
 def _iter_neighbor_pairs_with_distances(
@@ -842,7 +578,6 @@ def _top_k_candidate_rows_blockwise(
     top_k: int,
     block_size: int | None = None,
     parallelism: int = 1,
-    memory_budget_bytes: int = _NEIGHBOR_COHERENCE_DISTANCE_MEMORY_BYTES,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute exact legacy top-K rows without retaining a full ``C × K`` matrix.
 
@@ -855,8 +590,8 @@ def _top_k_candidate_rows_blockwise(
         top_k: Maximum candidates retained per target. (每个目标保留数)
         block_size: Optional explicit target rows per block. (显式分块行数)
         parallelism: Maximum independent blocks processed together. (并行块数)
-        memory_budget_bytes: Total temporary distance-matrix budget.
-            (临时距离矩阵总预算)
+        block_size: Target rows processed by one local distance block. (单个
+            距离计算块的目标行数)
 
     Returns:
         ``(indices, distances)`` arrays with shape ``(C, min(top_k, K))``.
@@ -875,57 +610,18 @@ def _top_k_candidate_rows_blockwise(
         )
 
     requested_workers = max(1, int(parallelism))
-    total_memory_budget = max(1, int(memory_budget_bytes))
-    bytes_per_target = max(
-        1,
-        candidate_count * np.dtype(np.float64).itemsize,
-    )
-    single_row_worker_cap = max(
-        1,
-        total_memory_budget // bytes_per_target,
-    )
-    provisional_workers = min(
-        requested_workers,
+    resolved_block_size = min(
         target_count,
-        single_row_worker_cap,
+        max(1, int(block_size or _NEIGHBOR_COHERENCE_DEFAULT_BLOCK_ROWS)),
     )
-    if block_size is None:
-        per_worker_budget = max(
-            bytes_per_target,
-            total_memory_budget // provisional_workers,
-        )
-        rows_per_worker = max(
-            1,
-            (target_count + provisional_workers - 1) // provisional_workers,
-        )
-        resolved_block_size = max(
-            1,
-            min(
-                target_count,
-                rows_per_worker,
-                per_worker_budget // bytes_per_target,
-            ),
-        )
-    else:
-        resolved_block_size = min(
-            max(1, int(block_size)),
-            max(1, total_memory_budget // bytes_per_target),
-        )
 
     slices = [
         (start, min(start + resolved_block_size, target_count))
         for start in range(0, target_count, resolved_block_size)
     ]
-    largest_block_rows = min(resolved_block_size, target_count)
-    bytes_per_block = max(1, largest_block_rows * bytes_per_target)
-    memory_worker_cap = max(
-        1,
-        total_memory_budget // bytes_per_block,
-    )
     worker_count = min(
         requested_workers,
         len(slices),
-        memory_worker_cap,
     )
     if worker_count > 1:
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
@@ -2322,11 +2018,6 @@ def build_material_solver_cache(
             progress_callback=progress_callback,
             start_time=start_time,
         )
-    validate_material_solver_cache_build_budget(
-        material_count=len(materials),
-        layer_count=layer_count,
-        grid_resolution=grid_resolution,
-    )
 
     affines = _compute_material_affines(canonical_materials, layer_height_mm)
     substrate_linear = (
@@ -2367,8 +2058,8 @@ def build_material_solver_cache(
         tuple[float, np.ndarray, np.ndarray, np.ndarray, np.ndarray],
     ] = {}
 
-    # Chunk tops so each (chunk × K_bot × 24B) fits the memory budget.
-    # 顶/底分桶分块，单块 (sub × K_bot × 24B) 受 _CHUNK_TARGET_BYTES 限制。
+    # Chunk tops so each temporary matrix stays at the existing local block size.
+    # 顶/底分桶分块，单块 (sub × K_bot × 24B) 受既有局部块大小限制。
     per_row_bytes = K_bot * 24
     chunk_size = max(1, min(K_top, _CHUNK_TARGET_BYTES // max(per_row_bytes, 1)))
     num_chunks = (K_top + chunk_size - 1) // chunk_size

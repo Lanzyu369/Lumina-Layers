@@ -9,6 +9,7 @@ import {
   resetKeychainRingGeometryDisposeForTests,
 } from "../components/KeychainRing3D";
 import { useConverterStore } from "../stores/converter";
+import { createPreviewSpace } from "../utils/previewSpace";
 
 const mockControls = { enabled: true };
 const mockCanvas = document.createElement("canvas");
@@ -517,6 +518,37 @@ describe("computeLoopPosition", () => {
     );
 
     expect(pos).toEqual({ x: 0, y: 10 });
+  });
+
+  it("scales the local contour with a live 60 to 90 mm preview resize", () => {
+    const contours = {
+      spike: [
+        [[0, 0], [4, 0], [4, 60], [0, 60]],
+      ],
+      body: [
+        [[18, 0], [42, 0], [42, 40], [18, 40]],
+      ],
+    };
+    const contourBounds = {
+      minX: -21,
+      maxX: 21,
+      minY: -30,
+      maxY: 30,
+    };
+    const previewSpace = createPreviewSpace({ ...contourBounds, maxZ: 2 }, 1.5, 1.5);
+
+    const pos = computeLoopPosition(
+      "top-center",
+      previewSpace.displayBounds,
+      0,
+      -25,
+      contours,
+      8,
+      contourBounds,
+      previewSpace.toDisplayPoint,
+    );
+
+    expect(pos).toEqual({ x: 0, y: 15 });
   });
 
   it.each([-6.5, -10.5])(

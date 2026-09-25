@@ -1,20 +1,25 @@
 from __future__ import annotations
 
+import gc
+from unittest.mock import patch
+import weakref
+
+import pytest
 from shapely.geometry import Polygon, box
 
 from core.vector_engine import VectorAnalysis
 from core.vector_large_format import (
     SVG_LARGE_FORMAT_PREVIEW_FALLBACK_WARNING,
     SvgLargeFormatSupportInspector,
-    SvgRasterFallbackDensityPlanner,
     VectorAnalysisTiler,
     build_tile_specs,
-    choose_svg_raster_fallback_density,
     format_large_format_tile_label,
     inspect_svg_large_format_support,
     normalize_large_format_source_basename,
     slice_vector_analysis_into_tiles,
+    resolve_large_format_grid_shape,
 )
+from api.schemas.converter import LargeFormatConvertGenerateRequest, LargeFormatGenerateRequest
 
 
 def _make_analysis(*, matched_shapes: list[dict], clipped_shapes: list[dict] | None = None) -> VectorAnalysis:
@@ -59,6 +64,26 @@ def test_build_tile_specs_resolves_partial_last_row_and_column() -> None:
     assert specs[-1].col == 3
     assert specs[-1].width_mm == 20.0
     assert specs[-1].height_mm == 20.0
+
+
+def test_large_format_dimensions_and_tile_count_are_not_policy_capped() -> None:
+    assert resolve_large_format_grid_shape(
+        total_width_mm=30_000.0,
+        total_height_mm=30_000.0,
+        tile_width_mm=10_000.0,
+        tile_height_mm=10_000.0,
+    ) == (3, 3)
+    request = LargeFormatGenerateRequest(
+        target_height_mm=30_000.0,
+        tile_width_mm=10_000.0,
+        tile_height_mm=10_000.0,
+        params=LargeFormatConvertGenerateRequest(
+            lut_name="test_lut",
+            target_width_mm=30_000.0,
+        ),
+    )
+    assert request.target_height_mm == 30_000.0
+    assert request.params.target_width_mm == 30_000.0
 
 
 def test_slice_vector_analysis_splits_shape_across_tile_seam() -> None:
@@ -107,6 +132,110 @@ def test_slice_vector_analysis_omits_empty_tiles() -> None:
     )
 
     assert [tile.label for tile in tiles] == ["R1C1"]
+
+
+def test_slice_vector_analysis_can_stream_tiles_without_materializing_all() -> None:
+    shape = {
+        "geometry": box(0.0, 0.0, 120.0, 80.0),
+        "recipe": [1, 1, 1, 1, 1],
+        "draw_order": 0,
+        "matched_rgb": (255, 0, 0),
+        "color": (255, 0, 0),
+    }
+    analysis = _make_analysis(matched_shapes=[shape])
+    built_specs: list[str] = []
+    original = VectorAnalysisTiler._build_tile_analysis
+
+    def _tracked_build(self, spec):
+        built_specs.append(spec.label)
+        return original(self, spec)
+
+    with patch.object(VectorAnalysisTiler, "_build_tile_analysis", new=_tracked_build):
+        tiles = slice_vector_analysis_into_tiles(
+            analysis=analysis,
+            total_width_mm=120.0,
+            total_height_mm=80.0,
+            tile_width_mm=40.0,
+            tile_height_mm=40.0,
+            materialize=False,
+        )
+        assert built_specs == []
+        first = next(iter(tiles))
+
+    assert first.label == "R1C1"
+    assert built_specs == ["R1C1"]
+
+
+def test_streaming_tiler_does_not_build_the_complete_spec_list() -> None:
+    """The first tile must be available without allocating every grid spec."""
+
+    analysis = _make_analysis(
+        matched_shapes=[
+            {
+                "geometry": box(0.0, 0.0, 2.0, 2.0),
+                "recipe": [1, 1, 1, 1, 1],
+            }
+        ]
+    )
+    tiler = VectorAnalysisTiler(
+        analysis=analysis,
+        total_width_mm=500.0,
+        total_height_mm=500.0,
+        tile_width_mm=1.0,
+        tile_height_mm=1.0,
+    )
+
+    with patch.object(
+        VectorAnalysisTiler,
+        "build_tile_specs",
+        side_effect=AssertionError("complete tile spec list was materialized"),
+    ):
+        first = next(tiler.iter_tiles())
+
+    assert first.label == "R1C1"
+
+
+def test_streaming_tiler_releases_previous_tile_before_building_next() -> None:
+    analysis = _make_analysis(
+        matched_shapes=[
+            {
+                "geometry": box(0.0, 0.0, 120.0, 80.0),
+                "recipe": [1, 1, 1, 1, 1],
+            }
+        ]
+    )
+    tile_refs: list[weakref.ReferenceType] = []
+
+    def _tracked_build(_self, spec):
+        if tile_refs:
+            gc.collect()
+            assert tile_refs[-1]() is None
+        tile = type("TrackedTile", (), {"label": spec.label})()
+        tile_refs.append(weakref.ref(tile))
+        return tile
+
+    with patch.object(
+        VectorAnalysisTiler,
+        "_build_tile_analysis",
+        new=_tracked_build,
+    ):
+        tiles = iter(
+            slice_vector_analysis_into_tiles(
+                analysis=analysis,
+                total_width_mm=120.0,
+                total_height_mm=80.0,
+                tile_width_mm=60.0,
+                tile_height_mm=80.0,
+                materialize=False,
+            )
+        )
+        first = next(tiles)
+        assert first.label == "R1C1"
+        del first
+        gc.collect()
+        second = next(tiles)
+
+    assert second.label == "R1C2"
 
 
 def test_slice_vector_analysis_preserves_hole_geometry() -> None:
@@ -160,6 +289,34 @@ def test_slice_vector_analysis_retains_thin_stroke_geometry() -> None:
 
     assert [tile.label for tile in tiles] == ["R1C1", "R1C2"]
     assert all(tile.analysis.matched_shapes[0]["geometry"].area > 0.0 for tile in tiles)
+
+
+def test_tile_geometry_slicer_propagates_memory_error_without_repair_retry() -> None:
+    """Allocator failure must not start a second GEOS intersection."""
+
+    class _MemoryFailingGeometry:
+        is_empty = False
+
+        def intersection(self, _tile_box):
+            raise MemoryError("injected tile intersection allocation failure")
+
+    from core.vector_large_format import TileGeometrySlicer
+
+    geometry_slicer = TileGeometrySlicer(
+        box(0.0, 0.0, 60.0, 80.0),
+        xoff=0.0,
+        yoff=0.0,
+    )
+    with (
+        patch(
+            "core.vector_large_format.make_valid",
+            side_effect=AssertionError("MemoryError triggered repair retry"),
+        ) as make_valid_mock,
+        pytest.raises(MemoryError, match="tile intersection allocation failure"),
+    ):
+        geometry_slicer.slice_geometry(_MemoryFailingGeometry())
+
+    make_valid_mock.assert_not_called()
 
 
 def test_build_tile_specs_rejects_non_positive_dimensions() -> None:
@@ -257,38 +414,6 @@ def test_slice_vector_analysis_preserves_shape_data_metadata() -> None:
     assert len(tiles[0].analysis.shape_data) == 1
     assert tiles[0].analysis.shape_data[0]["draw_order"] == 3
     assert tiles[1].analysis.shape_data[0]["draw_order"] == 3
-
-
-def test_choose_svg_raster_fallback_density_stays_within_pixel_budget() -> None:
-    density, warnings = choose_svg_raster_fallback_density(
-        total_width_mm=4000.0,
-        total_height_mm=4000.0,
-        desired_pixels_per_mm=10.0,
-        min_pixels_per_mm=2.0,
-        max_total_pixels=12_000_000,
-    )
-
-    assert density > 0.0
-    assert density * density * 4000.0 * 4000.0 <= 12_000_000 * 1.001
-    assert warnings
-
-
-def test_svg_raster_fallback_density_planner_matches_wrapper() -> None:
-    planner = SvgRasterFallbackDensityPlanner(
-        total_width_mm=4000.0,
-        total_height_mm=4000.0,
-        desired_pixels_per_mm=10.0,
-        min_pixels_per_mm=2.0,
-        max_total_pixels=12_000_000,
-    )
-
-    assert planner.choose_density() == choose_svg_raster_fallback_density(
-        total_width_mm=4000.0,
-        total_height_mm=4000.0,
-        desired_pixels_per_mm=10.0,
-        min_pixels_per_mm=2.0,
-        max_total_pixels=12_000_000,
-    )
 
 
 def test_vector_analysis_tiler_build_tile_specs_matches_wrapper() -> None:

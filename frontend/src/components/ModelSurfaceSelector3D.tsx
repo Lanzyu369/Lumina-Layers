@@ -19,6 +19,11 @@ import { disposeMaterial, disposeObjectTree } from "../utils/threeDisposal";
 import { useThemeConfig } from "../hooks/useThemeConfig";
 import { computeFitDistance } from "./ModelViewer";
 import {
+  getModelSurfaceArtworkAssetKey,
+  resolveModelSurfaceArtworkSourceDimensions,
+  type ModelSurfaceArtworkAsset,
+} from "./modelSurface/artworkAsset";
+import {
   computeArtworkCanvasTransform,
   computeArtworkPlacementDrawSize,
   computeArtworkPlacementDrawSizeMm,
@@ -108,6 +113,8 @@ export {
 
 interface ModelSurfaceSelector3DProps {
   file: File;
+  artworkAsset?: ModelSurfaceArtworkAsset | null;
+  /** @deprecated Use an explicit source-image artworkAsset. This fallback is source-only. */
   artworkUrl?: string | null;
   footprint?: SurfaceFootprintPayload | null;
   surfaceCandidates?: ModelSurfaceCandidate[];
@@ -1240,8 +1247,13 @@ function drawRing(
   });
 }
 
-function drawSurfaceArtworkCanvas(
-  image: HTMLImageElement,
+export interface LoadedSurfaceArtwork {
+  asset: ModelSurfaceArtworkAsset;
+  image: HTMLImageElement;
+}
+
+export function drawSurfaceArtworkCanvas(
+  artwork: LoadedSurfaceArtwork,
   surface: ResolvedSurfaceFootprint,
   placement: ModelSurfacePlacement,
   budget: SurfaceArtworkPreviewBudget,
@@ -1259,6 +1271,16 @@ function drawSurfaceArtworkCanvas(
   if (!ctx) {
     return canvas;
   }
+
+  ctx.clearRect(0, 0, widthPx, heightPx);
+  if (artwork.asset.kind === "surface-uv") {
+    // The backend asset already contains the placement, surface bounds, and
+    // hole mask. It maps directly to the selected surface UV rectangle.
+    ctx.drawImage(artwork.image, 0, 0, widthPx, heightPx);
+    return canvas;
+  }
+
+  const image = artwork.image;
 
   const insetPx = placement.mode === "inset"
     ? Math.max(0, Math.round(placement.inset_mm * pixelsPerMm))
@@ -1281,7 +1303,6 @@ function drawSurfaceArtworkCanvas(
     placement,
   });
 
-  ctx.clearRect(0, 0, widthPx, heightPx);
   ctx.save();
   ctx.translate(transform.drawCenterX, transform.drawCenterY);
   ctx.rotate(transform.rotationRadians);
@@ -1306,12 +1327,20 @@ function drawSurfaceArtworkCanvas(
   return canvas;
 }
 
-function useSurfaceArtworkImage(artworkUrl: string | null | undefined): HTMLImageElement | null {
-  const [image, setImage] = useState<HTMLImageElement | null>(null);
+function useSurfaceArtworkImage(
+  artworkAsset: ModelSurfaceArtworkAsset | null | undefined,
+): LoadedSurfaceArtwork | null {
+  const [loadedArtwork, setLoadedArtwork] = useState<LoadedSurfaceArtwork | null>(null);
+  const artworkKey = getModelSurfaceArtworkAssetKey(artworkAsset);
+  const artworkAssetRef = useRef<ModelSurfaceArtworkAsset | null | undefined>(artworkAsset);
+  if (getModelSurfaceArtworkAssetKey(artworkAssetRef.current) !== artworkKey) {
+    artworkAssetRef.current = artworkAsset;
+  }
 
   useEffect(() => {
-    if (!artworkUrl) {
-      setImage(null);
+    const currentArtworkAsset = artworkAssetRef.current;
+    if (!currentArtworkAsset) {
+      setLoadedArtwork(null);
       return undefined;
     }
 
@@ -1319,22 +1348,27 @@ function useSurfaceArtworkImage(artworkUrl: string | null | undefined): HTMLImag
     const nextImage = new Image();
     nextImage.onload = () => {
       if (!canceled) {
-        setImage(nextImage);
+        setLoadedArtwork({ asset: currentArtworkAsset, image: nextImage });
       }
     };
     nextImage.onerror = () => {
       if (!canceled) {
-        setImage(null);
+        setLoadedArtwork(null);
       }
     };
-    nextImage.src = artworkUrl;
+    nextImage.src = currentArtworkAsset.url;
 
     return () => {
       canceled = true;
     };
-  }, [artworkUrl]);
+  }, [artworkKey]);
 
-  return image;
+  if (!artworkAsset || !loadedArtwork) {
+    return null;
+  }
+  return getModelSurfaceArtworkAssetKey(loadedArtwork.asset) === artworkKey
+    ? loadedArtwork
+    : null;
 }
 
 export function configureSurfaceArtworkTextureForPreview(texture: THREE.Texture): void {
@@ -1348,19 +1382,21 @@ export function configureSurfaceArtworkTextureForPreview(texture: THREE.Texture)
 }
 
 function useSurfaceArtworkTexture(
-  artworkUrl: string | null | undefined,
+  artworkAsset: ModelSurfaceArtworkAsset | null | undefined,
   surface: ResolvedSurfaceFootprint | null,
   placement: ModelSurfacePlacement,
   budget: SurfaceArtworkPreviewBudget,
   invalidate: () => void,
 ): THREE.Texture | null {
-  const image = useSurfaceArtworkImage(artworkUrl);
+  const loadedArtwork = useSurfaceArtworkImage(artworkAsset);
+  const image = loadedArtwork?.image ?? null;
+  const artworkKey = getModelSurfaceArtworkAssetKey(artworkAsset);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const textureRef = useRef<THREE.CanvasTexture | null>(null);
   const [texture, setTexture] = useState<THREE.Texture | null>(null);
 
   useEffect(() => {
-    if (!image || !surface) {
+    if (!loadedArtwork || !surface) {
       textureRef.current?.dispose();
       textureRef.current = null;
       canvasRef.current = null;
@@ -1369,12 +1405,23 @@ function useSurfaceArtworkTexture(
       return;
     }
 
-    const sourceWidth = image.naturalWidth || image.width;
-    const sourceHeight = image.naturalHeight || image.height;
+    const image = loadedArtwork.image;
+    const sourceDimensions = resolveModelSurfaceArtworkSourceDimensions(
+      loadedArtwork.asset,
+      image,
+    );
+    if (!sourceDimensions) {
+      textureRef.current?.dispose();
+      textureRef.current = null;
+      canvasRef.current = null;
+      setTexture(null);
+      invalidate();
+      return;
+    }
     const insetMm = placement.mode === "inset" ? Math.max(0, placement.inset_mm) : 0;
     const artworkSizeMm = computeArtworkPlacementDrawSizeMm({
-      sourceWidth,
-      sourceHeight,
+      sourceWidth: sourceDimensions.width,
+      sourceHeight: sourceDimensions.height,
       availableWidthMm: Math.max(0.001, surface.widthMm - insetMm * 2),
       availableHeightMm: Math.max(0.001, surface.heightMm - insetMm * 2),
       scale: placement.scale,
@@ -1382,7 +1429,7 @@ function useSurfaceArtworkTexture(
       rotationDeg: placement.rotation_deg,
     });
     const canvas = drawSurfaceArtworkCanvas(
-      image,
+      loadedArtwork,
       surface,
       placement,
       budget,
@@ -1400,7 +1447,7 @@ function useSurfaceArtworkTexture(
     nextTexture.userData.artworkSizeMm = artworkSizeMm;
     nextTexture.needsUpdate = true;
     invalidate();
-  }, [budget, image, invalidate, placement, surface]);
+  }, [artworkKey, budget, image, invalidate, loadedArtwork, placement, surface]);
 
   useEffect(() => {
     return () => {
@@ -2519,7 +2566,7 @@ function SurfaceArtworkPlane({
   modelOffset,
   modelEuler,
   modelPivot,
-  artworkUrl,
+  artworkAsset,
   placement,
   activeTool,
   onUpdatePlacement,
@@ -2528,7 +2575,7 @@ function SurfaceArtworkPlane({
   modelOffset: THREE.Vector3;
   modelEuler: THREE.Euler;
   modelPivot: THREE.Vector3;
-  artworkUrl?: string | null;
+  artworkAsset?: ModelSurfaceArtworkAsset | null;
   placement: ModelSurfacePlacement;
   activeTool: SurfaceTool;
   onUpdatePlacement?: (updates: Partial<ModelSurfacePlacement>) => void;
@@ -2543,7 +2590,13 @@ function SurfaceArtworkPlane({
     () => computeSurfaceArtworkPreviewBudget(renderer),
     [renderer],
   );
-  const texture = useSurfaceArtworkTexture(artworkUrl, surface, placement, textureBudget, invalidate);
+  const texture = useSurfaceArtworkTexture(
+    artworkAsset,
+    surface,
+    placement,
+    textureBudget,
+    invalidate,
+  );
   const dragRef = useRef<DragState | null>(null);
   const artworkRotationRingDragRef = useRef<{
     pointerId: number | null;
@@ -2976,6 +3029,7 @@ function SurfaceArtworkPlane({
 
 export default function ModelSurfaceSelector3D({
   file,
+  artworkAsset = null,
   artworkUrl = null,
   footprint = null,
   surfaceCandidates = [],
@@ -2989,6 +3043,14 @@ export default function ModelSurfaceSelector3D({
   onFitArtwork,
   onBedGridVisibleChange,
 }: ModelSurfaceSelector3DProps) {
+  const resolvedArtworkAsset = artworkAsset ?? (
+    artworkUrl
+      ? {
+          kind: "source-image" as const,
+          url: artworkUrl,
+        }
+      : null
+  );
   const { t } = useI18n();
   const [model, setModel] = useState<LoadedSurfaceModel | null>(null);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
@@ -3128,7 +3190,9 @@ export default function ModelSurfaceSelector3D({
     [modelBounds.center],
   );
   const canFocusSurface = Boolean(resolvedSurface);
-  const canTransform = Boolean(resolvedSurface && artworkUrl && onUpdatePlacement && !forceReselect);
+  const canTransform = Boolean(
+    resolvedSurface && resolvedArtworkAsset && onUpdatePlacement && !forceReselect,
+  );
   const showSurfaceCandidates = activeTool === "select" && (!resolvedSurface || forceReselect);
   const showGroupedSurfaceCandidates = showSurfaceCandidates && surfaceSelectionMode === "grouped";
   const showTriangleFacetHover =
@@ -4344,7 +4408,7 @@ export default function ModelSurfaceSelector3D({
             modelOffset={modelOffset}
             modelEuler={modelEuler}
             modelPivot={modelPivot}
-            artworkUrl={artworkUrl}
+            artworkAsset={resolvedArtworkAsset}
             placement={placement}
             activeTool={activeTool}
             onUpdatePlacement={onUpdatePlacement}

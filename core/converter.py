@@ -350,19 +350,33 @@ def convert_image_to_3d(
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
     *,
     backing_infill_density_percent: int = 100,
+    enable_wipe_tower_auto_placement: bool = True,
     height_identity_rgb_path: Optional[str] = None,
+    original_matched_rgb_path: Optional[str] = None,
+    original_material_matrix_path: Optional[str] = None,
+    edit_projection: Optional[Dict[str, object]] = None,
     final_material_matrix_is_authoritative: bool = False,
     final_material_matrix_authority_mask_path: Optional[str] = None,
     cover_source_path: Optional[str] = None,
+    export_transform_metadata: Optional[Dict[str, object]] = None,
     material_dynamic_layer_count_enabled: bool = False,
     material_min_layer_count: int = 5,
     material_max_layer_count: int = 10,
     material_delta_e00_tolerance: float = 0.5,
+    svg_hole_compensation_enabled: bool = False,
+    svg_hole_max_area_mm2: float = 0.5,
+    svg_hole_max_width_mm: float = 0.1,
 ):
     """Main conversion function: Convert image to 3D model.
     主要转换函数：将图像转换为 3D 模型。
 
     Args:
+        svg_hole_compensation_enabled: Fill enclosed source-SVG voids before
+            matching, in vector mode. (矢量模式下在配色前补 SVG 二维孔洞)
+        svg_hole_max_area_mm2: Maximum filled hole area; zero disables this
+            criterion. (补孔面积上限，平方毫米；零关闭此筛选)
+        svg_hole_max_width_mm: Maximum 2*area/perimeter for enclosed gaps;
+            zero disables this criterion. (封闭细缝宽度指标上限，毫米；零关闭)
         enable_fridge_magnet: Whether to enable opt-in fridge-magnet cavity
             handling in downstream raster/vector geometry stages.
             (是否在下游光栅/矢量几何阶段启用可选的冰箱贴磁铁槽处理)
@@ -372,6 +386,9 @@ def convert_image_to_3d(
             Defaults to ``image_path`` so普通模式与大画幅光栅模式下，每张
             3MF 都使用对应输入图作为封面图源。
             (可选的封面缩略图源路径；缺省镜像 ``image_path``)
+        export_transform_metadata: Optional mutable result populated with the
+            effective export transform. (可选的可变结果容器，用于返回实际导出
+            变换。)
         material_backing_material_index: Optional selected-material index used
             as the backing color when ``material_source`` is
             ``"material_archive"``. Native and legacy LUT flows ignore it.
@@ -385,6 +402,9 @@ def convert_image_to_3d(
         backing_infill_density_percent: Deep-backing sparse-infill percentage;
             viewing-surface protection is added by the 3MF writer.
             (深层底板稀疏填充百分比；观赏面保护由 3MF 写入器添加)
+        enable_wipe_tower_auto_placement: Whether 3MF export may adapt the
+            model and wipe-tower layout for the selected build area.
+            (3MF 导出时是否允许按所选打印区域自动调整模型与擦料塔布局。)
         material_dynamic_layer_count_enabled: Enable exact dynamic effective
             layers for material archives. (为耗材档案启用精确动态有效层数)
         material_min_layer_count: Minimum dynamic effective layers. (动态最小
@@ -404,6 +424,12 @@ def convert_image_to_3d(
             positional callers retain their original argument binding.
             (可选的 ``.npy`` 路径，保存颜色替换前、用于浮雕高度查找的稳定逐像素
             RGB 身份；该参数仅允许关键字传入，以保持旧位置参数调用语义不变)
+        original_matched_rgb_path: Pristine RGB used to isolate preview-time
+            display edits. (用于隔离预览期显示替色的原始 RGB)
+        original_material_matrix_path: Pristine material matrix used to
+            isolate recipe edits. (用于隔离配方编辑的原始材料矩阵)
+        edit_projection: Source-grid metadata for normalized edit replay on a
+            fresh-size analysis. (把编辑归一化重放到当前尺寸新分析的源网格元数据)
         final_material_matrix_is_authoritative: Preserve a precomputed final
             material matrix after color mappings update display RGB.
             (颜色映射更新显示 RGB 后，仍保留预计算的最终材料矩阵)
@@ -477,11 +503,20 @@ def generate_preview_cached(
     material_min_layer_count: int = 5,
     material_max_layer_count: int = 10,
     material_delta_e00_tolerance: float = 0.5,
+    svg_hole_compensation_enabled: bool = False,
+    svg_hole_max_area_mm2: float = 0.5,
+    svg_hole_max_width_mm: float = 0.1,
 ):
     """Generate preview and cache data. Thin wrapper, delegates to coordinator.
     生成预览图和缓存数据。薄包装函数，委托给 coordinator。
 
     Args:
+        svg_hole_compensation_enabled: Fill enclosed source-SVG voids before
+            matching, in vector mode. (矢量模式下在配色前补 SVG 二维孔洞)
+        svg_hole_max_area_mm2: Maximum filled hole area; zero disables this
+            criterion. (补孔面积上限，平方毫米；零关闭此筛选)
+        svg_hole_max_width_mm: Maximum 2*area/perimeter for enclosed gaps;
+            zero disables this criterion. (封闭细缝宽度指标上限，毫米；零关闭)
         material_backing_material_index: Selected backing material index.
             (用户选择的基板耗材索引)
         material_dynamic_layer_count_enabled: Enable exact dynamic effective
@@ -621,14 +656,22 @@ def generate_final_model(
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
     *,
     backing_infill_density_percent: int = 100,
+    enable_wipe_tower_auto_placement: bool = True,
     height_identity_rgb_path: Optional[str] = None,
+    original_matched_rgb_path: Optional[str] = None,
+    original_material_matrix_path: Optional[str] = None,
+    edit_projection: Optional[Dict[str, object]] = None,
     final_material_matrix_is_authoritative: bool = False,
     final_material_matrix_authority_mask_path: Optional[str] = None,
     cover_source_path: Optional[str] = None,
+    export_transform_metadata: Optional[Dict[str, object]] = None,
     material_dynamic_layer_count_enabled: bool = False,
     material_min_layer_count: int = 5,
     material_max_layer_count: int = 10,
     material_delta_e00_tolerance: float = 0.5,
+    svg_hole_compensation_enabled: bool = False,
+    svg_hole_max_area_mm2: float = 0.5,
+    svg_hole_max_width_mm: float = 0.1,
 ):
     """Wrapper function for generating final model.
     包装函数，用于生成最终模型。
@@ -637,6 +680,12 @@ def generate_final_model(
     - smooth_sigma=10 (gentle bilateral filter, preserve edges)
 
     Args:
+        svg_hole_compensation_enabled: Fill enclosed source-SVG voids before
+            matching, in vector mode. (矢量模式下在配色前补 SVG 二维孔洞)
+        svg_hole_max_area_mm2: Maximum filled hole area; zero disables this
+            criterion. (补孔面积上限，平方毫米；零关闭此筛选)
+        svg_hole_max_width_mm: Maximum 2*area/perimeter for enclosed gaps;
+            zero disables this criterion. (封闭细缝宽度指标上限，毫米；零关闭)
         enable_fridge_magnet: Whether to enable opt-in fridge-magnet cavity
             handling for supported generation flows. (是否为受支持的生成流程
             启用可选的冰箱贴磁铁槽处理)
@@ -646,6 +695,8 @@ def generate_final_model(
             Forwarded to ``convert_image_to_3d`` which mirrors it onto the
             staged pipeline ctx; defaults to ``image_path``.
             (可选的封面缩略图源路径，最终透传到 staged pipeline ctx)
+        export_transform_metadata: Optional mutable result populated by the
+            export stage. (由导出阶段写入实际变换信息的可选可变结果容器。)
         device_profile_id: Optional generated machine registry device profile
             selection forwarded to ``convert_image_to_3d`` and 3MF export.
             (可选的机器注册表设备配置 ID，透传到主转换与 3MF 导出)
@@ -655,6 +706,9 @@ def generate_final_model(
         backing_infill_density_percent: Deep-backing sparse-infill percentage
             forwarded to the 3MF writer.（透传到 3MF 写入器的深层底板稀疏填充
             百分比）
+        enable_wipe_tower_auto_placement: Whether 3MF export may adapt the
+            model and wipe-tower layout for the selected build area.
+            (3MF 导出时是否允许按所选打印区域自动调整模型与擦料塔布局。)
         material_dynamic_layer_count_enabled: Enable exact dynamic effective
             layers. (启用精确动态有效层数)
         material_min_layer_count: Minimum dynamic effective layers. (动态最小
@@ -668,6 +722,12 @@ def generate_final_model(
             keyword-only to preserve all legacy positional argument bindings.
             (可选的 ``.npy`` 路径，保存浮雕高度查找使用的稳定逐像素源 RGB 身份；
             该参数仅允许关键字传入，以保持全部旧位置参数调用语义不变)
+        original_matched_rgb_path: Pristine RGB used to isolate preview-time
+            display edits. (用于隔离预览期显示替色的原始 RGB)
+        original_material_matrix_path: Pristine material matrix used to
+            isolate recipe edits. (用于隔离配方编辑的原始材料矩阵)
+        edit_projection: Source-grid metadata for normalized edit replay on a
+            fresh-size analysis. (把编辑归一化重放到当前尺寸新分析的源网格元数据)
         final_material_matrix_is_authoritative: Preserve a precomputed final
             material matrix after color mappings update display RGB.
             (颜色映射更新显示 RGB 后，仍保留预计算的最终材料矩阵)
@@ -748,6 +808,9 @@ def generate_final_model(
         model_margin,
         quantize_colors,
         svg_pixels_per_mm=svg_pixels_per_mm,
+        svg_hole_compensation_enabled=svg_hole_compensation_enabled,
+        svg_hole_max_area_mm2=svg_hole_max_area_mm2,
+        svg_hole_max_width_mm=svg_hole_max_width_mm,
         backing_infill_density_percent=backing_infill_density_percent,
         blur_kernel=0,
         smooth_sigma=10,
@@ -776,6 +839,9 @@ def generate_final_model(
         chroma_gate=chroma_gate,
         matched_rgb_path=matched_rgb_path,
         height_identity_rgb_path=height_identity_rgb_path,
+        original_matched_rgb_path=original_matched_rgb_path,
+        original_material_matrix_path=original_material_matrix_path,
+        edit_projection=edit_projection,
         mask_solid_path=mask_solid_path,
         quantized_image_path=quantized_image_path,
         material_matrix_path=material_matrix_path,
@@ -794,6 +860,7 @@ def generate_final_model(
         device_profile_id=device_profile_id,
         build_plate_id=build_plate_id,
         enable_base_layer_height_modifier=enable_base_layer_height_modifier,
+        enable_wipe_tower_auto_placement=enable_wipe_tower_auto_placement,
         center_on_bed=center_on_bed,
         relief_global_max_height=relief_global_max_height,
         progress=progress,
@@ -819,6 +886,7 @@ def generate_final_model(
         material_max_layer_count=material_max_layer_count,
         material_delta_e00_tolerance=material_delta_e00_tolerance,
         cover_source_path=cover_source_path,
+        export_transform_metadata=export_transform_metadata,
     )
 
 

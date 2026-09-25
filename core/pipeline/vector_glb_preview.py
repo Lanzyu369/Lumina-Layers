@@ -12,15 +12,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from functools import lru_cache
+import gc
 import json
 import os
 import time
+import traceback
 from typing import Literal
 
 import numpy as np
 import trimesh
 from shapely.affinity import scale as shapely_scale
-from shapely.geometry import MultiPolygon, Polygon
+from shapely.affinity import translate as shapely_translate
+from shapely.geometry import MultiPolygon, Polygon, shape as shapely_shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 from shapely.validation import make_valid
@@ -28,11 +31,16 @@ from trimesh.visual.material import PBRMaterial
 
 from api.structured_logging import get_logger
 from config import PrinterConfig
+from core.vector_engine import (
+    _load_vector_parse_clip_cache_artifact_by_provenance,
+    _rasterize_geometry_roi_mask,
+)
 from core.pipeline.s11_glb_preview import (
     PREVIEW_CANVAS_BOUNDS_NODE_NAME,
     _build_color_extruded_mesh_v2,
     _build_preview_canvas_bounds_mesh,
 )
+from core.vector_structure import resolve_structure_plan, _prepare_footprint
 
 
 log = get_logger(__name__)
@@ -45,8 +53,169 @@ _GLTF_UINT16_MAX_INDEX = 65535
 _GLTF_QUANTIZATION_EXTENSION = "KHR_mesh_quantization"
 _V2_UINT16_CHUNK_VERTEX_LIMIT = _GLTF_UINT16_MAX_INDEX + 1
 _V2_VECTOR_COMPONENT_COMPOSE_CHUNK_SIZE = 64
+_VECTOR_QUICK_PREVIEW_MAX_BYTES = 64 * 1024 * 1024
+_VECTOR_QUICK_PREVIEW_MAX_SHAPES = 10_000
+_VECTOR_QUICK_PREVIEW_MAX_COORDINATES = 4_000_000
+_VECTOR_QUICK_PREVIEW_MAX_SIMPLIFY_MM = 0.05
+_ANALYTIC_MIN_AREA_MM2 = 1e-12
+_ANALYTIC_TOPOLOGY_FALLBACK_PIXELS_PER_MM = 10.0
+_ANALYTIC_EXTRUSION_FALLBACK_ERRORS = (
+    AttributeError,
+    ImportError,
+    IndexError,
+    OverflowError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
 
 VectorPreviewRole = Literal["color", "backing", "outline", "auxiliary"]
+
+
+@dataclass(frozen=True)
+class VectorQuickPreviewSourceV1:
+    """Validated session-owned geometry for rebuilding a lightweight preview.
+
+    用于重建轻量预览、已经过 provenance 与资源上限校验的会话几何。
+    """
+
+    provenance: str
+    shape_data: tuple[dict, ...]
+    clipped_shapes: tuple[dict, ...]
+    silhouette: BaseGeometry
+    image_vectorizer_bounds: BaseGeometry | None
+    scale_factor: float
+    bbox: tuple[float, float, float, float]
+
+
+def _quick_preview_geometry_coordinate_count(geometry: BaseGeometry) -> int | None:
+    if isinstance(geometry, Polygon):
+        return len(geometry.exterior.coords) + sum(
+            len(ring.coords) for ring in geometry.interiors
+        )
+    if isinstance(geometry, MultiPolygon):
+        total = 0
+        for polygon in geometry.geoms:
+            count = _quick_preview_geometry_coordinate_count(polygon)
+            if count is None:
+                return None
+            total += count
+        return total
+    return None
+
+
+def _validate_quick_preview_geometry(
+    geometry: object,
+) -> tuple[BaseGeometry, int] | None:
+    if not isinstance(geometry, (Polygon, MultiPolygon)):
+        return None
+    if geometry.is_empty or not geometry.is_valid:
+        return None
+    try:
+        bounds = np.asarray(geometry.bounds, dtype=np.float64)
+    except (TypeError, ValueError):
+        return None
+    if bounds.shape != (4,) or not np.isfinite(bounds).all():
+        return None
+    coordinate_count = _quick_preview_geometry_coordinate_count(geometry)
+    if coordinate_count is None or coordinate_count <= 0:
+        return None
+    return geometry, coordinate_count
+
+
+def load_vector_quick_preview_source(
+    path: str,
+    *,
+    expected_provenance: str,
+    max_bytes: int = _VECTOR_QUICK_PREVIEW_MAX_BYTES,
+    max_shapes: int = _VECTOR_QUICK_PREVIEW_MAX_SHAPES,
+    max_coordinates: int = _VECTOR_QUICK_PREVIEW_MAX_COORDINATES,
+) -> VectorQuickPreviewSourceV1 | None:
+    """Load one bounded Vector preview source with an external identity check.
+
+    ``expected_provenance`` must come from the owning session metadata; the
+    artifact's self-declared identity is never accepted on its own.
+
+    从会话持有的 provenance 校验并加载有资源上限的 Vector 预览源；不会仅凭
+    工件自报身份接受复用。
+    """
+
+    if not path or max_bytes <= 0 or max_shapes <= 0 or max_coordinates <= 0:
+        return None
+    try:
+        if os.path.getsize(path) > int(max_bytes):
+            return None
+    except OSError:
+        return None
+    entry = _load_vector_parse_clip_cache_artifact_by_provenance(
+        path,
+        expected_provenance,
+    )
+    if entry is None:
+        return None
+
+    shape_data = entry.get("shape_data")
+    clipped_shapes = entry.get("clipped_shapes")
+    if not isinstance(shape_data, list) or not isinstance(clipped_shapes, list):
+        return None
+    if len(shape_data) + len(clipped_shapes) > int(max_shapes):
+        return None
+
+    coordinate_count = 0
+    for items, geometry_key in (
+        (shape_data, "poly"),
+        (clipped_shapes, "geometry"),
+    ):
+        for item in items:
+            if not isinstance(item, dict):
+                return None
+            validated = _validate_quick_preview_geometry(item.get(geometry_key))
+            if validated is None:
+                return None
+            coordinate_count += validated[1]
+            if coordinate_count > int(max_coordinates):
+                return None
+
+    silhouette_result = _validate_quick_preview_geometry(entry.get("silhouette"))
+    if silhouette_result is None:
+        return None
+    silhouette, silhouette_coordinates = silhouette_result
+    coordinate_count += silhouette_coordinates
+
+    image_bounds = entry.get("image_vectorizer_bounds")
+    if image_bounds is not None:
+        bounds_result = _validate_quick_preview_geometry(image_bounds)
+        if bounds_result is None:
+            return None
+        image_bounds, bounds_coordinates = bounds_result
+        coordinate_count += bounds_coordinates
+    if coordinate_count > int(max_coordinates):
+        return None
+
+    try:
+        scale_factor = float(entry.get("scale_factor"))
+        bbox = tuple(float(value) for value in entry.get("bbox"))
+    except (TypeError, ValueError):
+        return None
+    if (
+        not np.isfinite(scale_factor)
+        or scale_factor <= 0
+        or len(bbox) != 4
+        or not np.isfinite(np.asarray(bbox, dtype=np.float64)).all()
+        or bbox[2] <= 0
+        or bbox[3] <= 0
+    ):
+        return None
+
+    return VectorQuickPreviewSourceV1(
+        provenance=expected_provenance,
+        shape_data=tuple(dict(item) for item in shape_data),
+        clipped_shapes=tuple(dict(item) for item in clipped_shapes),
+        silhouette=silhouette,
+        image_vectorizer_bounds=image_bounds,
+        scale_factor=scale_factor,
+        bbox=(bbox[0], bbox[1], bbox[2], bbox[3]),
+    )
 
 
 @dataclass(frozen=True)
@@ -81,6 +250,7 @@ class VectorPreviewPart:
     role: VectorPreviewRole
     rgba: tuple[int, int, int, int]
     is_recolorable: bool
+    height_key: str | None = None
     extrusions: tuple[VectorPreviewExtrusion, ...] = field(default_factory=tuple)
     fallback_mesh: trimesh.Trimesh | None = None
 
@@ -1016,6 +1186,8 @@ def build_vector_preview_parts_from_scene(
 
 def _build_preview_canvas_anchor_part(
     analysis: object | None,
+    *,
+    screen_to_world_canvas_height_mm: float | None = None,
 ) -> VectorPreviewPart | None:
     """Build coordinate-only canvas geometry for frontend overlay placement.
     构建仅用于前端叠线定位的画布坐标几何。
@@ -1039,7 +1211,18 @@ def _build_preview_canvas_anchor_part(
     mesh = _build_preview_canvas_bounds_mesh(width, height, scale_factor)
     if mesh is None:
         return None
-    mesh.apply_translation((min_x * scale_factor, min_y * scale_factor, 0.0))
+    anchor_y_mm = min_y * scale_factor
+    if screen_to_world_canvas_height_mm is not None:
+        if (
+            not np.isfinite(screen_to_world_canvas_height_mm)
+            or screen_to_world_canvas_height_mm <= 0
+        ):
+            return None
+        anchor_y_mm = (
+            float(screen_to_world_canvas_height_mm)
+            - max_y * scale_factor
+        )
+    mesh.apply_translation((min_x * scale_factor, anchor_y_mm, 0.0))
     return VectorPreviewPart(
         source_name=PREVIEW_CANVAS_BOUNDS_NODE_NAME,
         export_name=PREVIEW_CANVAS_BOUNDS_NODE_NAME,
@@ -1173,48 +1356,31 @@ def _scaled_geometry_mm(geometry: BaseGeometry, scale_factor: float) -> BaseGeom
         return None
 
 
-def _analysis_silhouette(analysis: object, scale_factor: float) -> BaseGeometry | None:
-    silhouette = _analysis_silhouette_raw(analysis)
-    if silhouette is None:
-        return None
-    return _scaled_geometry_mm(silhouette, scale_factor)
+def _screen_geometry_to_preview_world_y(
+    geometry: BaseGeometry | None,
+    canvas_height_mm: float,
+) -> BaseGeometry | None:
+    """Map SVG screen-down Y coordinates to preview world-up coordinates."""
 
-
-def _analysis_silhouette_raw(analysis: object) -> BaseGeometry | None:
-    silhouette = _valid_geometry(getattr(analysis, "silhouette", None))
-    if silhouette is not None:
-        return silhouette
-
-    geometries: list[BaseGeometry] = []
-    for shape in getattr(analysis, "matched_shapes", []) or []:
-        geom = _valid_geometry(shape.get("geometry") if isinstance(shape, dict) else None)
-        if geom is not None:
-            geometries.append(geom)
-    if not geometries:
+    prepared = _valid_geometry(geometry)
+    if (
+        prepared is None
+        or not np.isfinite(canvas_height_mm)
+        or canvas_height_mm <= 0
+    ):
         return None
     try:
-        return _valid_geometry(unary_union(geometries))
+        flipped = shapely_scale(
+            prepared,
+            xfact=1.0,
+            yfact=-1.0,
+            origin=(0.0, 0.0),
+        )
+        return _valid_geometry(
+            shapely_translate(flipped, yoff=float(canvas_height_mm))
+        )
     except (ValueError, TypeError, AttributeError):
         return None
-
-
-def _filter_backing_holes(geometry: BaseGeometry, min_hole_area: float) -> BaseGeometry:
-    if isinstance(geometry, Polygon):
-        holes = [
-            hole
-            for hole in geometry.interiors
-            if Polygon(hole).area >= min_hole_area
-        ]
-        return Polygon(geometry.exterior, holes)
-    if isinstance(geometry, MultiPolygon):
-        return MultiPolygon(
-            [
-                _filter_backing_holes(polygon, min_hole_area)
-                for polygon in geometry.geoms
-                if not polygon.is_empty
-            ]
-        )
-    return geometry
 
 
 def _prepare_backing_footprint(
@@ -1222,28 +1388,7 @@ def _prepare_backing_footprint(
     scale_factor: float,
 ) -> BaseGeometry | None:
     prepared = _valid_geometry(geometry)
-    if prepared is None:
-        return None
-    try:
-        closed = prepared.buffer(0.4, join_style="mitre", mitre_limit=2.0)
-        if not closed.is_empty:
-            closed = closed.buffer(-0.4, join_style="mitre", mitre_limit=2.0)
-            if not closed.is_empty:
-                prepared = _valid_geometry(closed) or prepared
-    except (ValueError, TypeError, AttributeError):
-        pass
-    try:
-        filtered = _filter_backing_holes(prepared, min_hole_area=0.3)
-        prepared = _valid_geometry(filtered) or prepared
-    except (ValueError, TypeError, AttributeError):
-        pass
-    try:
-        expanded = prepared.buffer(0.15, join_style="mitre", mitre_limit=2.0)
-        if not expanded.is_empty:
-            prepared = _valid_geometry(expanded) or prepared
-    except (ValueError, TypeError, AttributeError):
-        pass
-    return _scaled_geometry_mm(prepared, scale_factor)
+    return _prepare_footprint(prepared, scale_factor) if prepared is not None else None
 
 
 def _visible_backing_footprint(
@@ -1253,6 +1398,458 @@ def _visible_backing_footprint(
     if silhouette is not None:
         return _prepare_backing_footprint(silhouette, scale_factor)
     return None
+
+
+def _preview_rgb_codes(pixels: np.ndarray) -> np.ndarray:
+    values = np.asarray(pixels, dtype=np.uint64)
+    return values[..., 0] << 16 | values[..., 1] << 8 | values[..., 2]
+
+
+def _preview_rgb_from_code(code: int) -> tuple[int, int, int]:
+    return ((code >> 16) & 0xFF, (code >> 8) & 0xFF, code & 0xFF)
+
+
+def _interior_preview_mask(mask: np.ndarray) -> np.ndarray:
+    """Remove the one-pixel raster edge where adjacent SVG shapes may vote."""
+
+    values = np.asarray(mask, dtype=bool)
+    if values.ndim != 2 or values.shape[0] < 3 or values.shape[1] < 3:
+        return np.zeros_like(values, dtype=bool)
+    padded = np.pad(values, 1, mode="constant", constant_values=False)
+    return (
+        padded[1:-1, 1:-1]
+        & padded[:-2, 1:-1]
+        & padded[2:, 1:-1]
+        & padded[1:-1, :-2]
+        & padded[1:-1, 2:]
+    )
+
+
+def _dominant_preview_code(codes: np.ndarray) -> np.uint64 | None:
+    values, counts = np.unique(codes, return_counts=True)
+    if len(values) == 0:
+        return None
+    return values[int(np.argmax(counts))]
+
+
+@lru_cache(maxsize=1)
+def _get_preview_mask_polygonizer():
+    from rasterio.features import shapes
+
+    return shapes
+
+
+@lru_cache(maxsize=1)
+def _get_preview_distance_transform():
+    from scipy.ndimage import distance_transform_edt
+
+    return distance_transform_edt
+
+
+def _propagate_preview_codes(
+    codes: np.ndarray,
+    *,
+    seed_mask: np.ndarray,
+    target_mask: np.ndarray,
+) -> np.ndarray | None:
+    """Assign every target pixel the nearest trusted interior classification."""
+
+    if not np.any(seed_mask):
+        return None
+    try:
+        distance_transform = _get_preview_distance_transform()
+        nearest_indices = distance_transform(
+            ~np.asarray(seed_mask, dtype=bool),
+            return_distances=False,
+            return_indices=True,
+        )
+        propagated = np.asarray(codes)[tuple(nearest_indices)]
+    except (ImportError, RuntimeError, TypeError, ValueError, MemoryError):
+        return None
+    if propagated.shape != target_mask.shape:
+        return None
+    return propagated
+
+
+def _polygonize_preview_classification(
+    mask: np.ndarray,
+    *,
+    component: Polygon,
+    x_offset: int,
+    y_offset: int,
+    coord_scale: float,
+) -> tuple[Polygon, ...] | None:
+    """Clip pixel-class boundaries to the original smooth SVG footprint."""
+
+    if not np.any(mask):
+        return ()
+    try:
+        rio_shapes = _get_preview_mask_polygonizer()
+        pixel_geometries = [
+            shapely_shape(mapping)
+            for mapping, value in rio_shapes(
+                np.asarray(mask, dtype=np.uint8),
+                mask=np.asarray(mask, dtype=bool),
+                connectivity=4,
+            )
+            if int(value) == 1
+        ]
+    except (ImportError, RuntimeError, TypeError, ValueError, AttributeError):
+        return None
+    if not pixel_geometries:
+        return None
+
+    try:
+        pixel_geometry = _valid_geometry(unary_union(pixel_geometries))
+        if pixel_geometry is None:
+            return None
+        source_geometry = shapely_translate(
+            shapely_scale(
+                pixel_geometry,
+                xfact=1.0 / coord_scale,
+                yfact=1.0 / coord_scale,
+                origin=(0.0, 0.0),
+            ),
+            xoff=float(x_offset) / coord_scale,
+            yoff=float(y_offset) / coord_scale,
+        )
+        clipped = _valid_geometry(source_geometry.intersection(component))
+    except (ValueError, TypeError, AttributeError):
+        return None
+    return _polygon_components(clipped)
+
+
+def _polygon_components(geometry: BaseGeometry | None) -> tuple[Polygon, ...]:
+    if isinstance(geometry, Polygon):
+        return (geometry,)
+    components: list[Polygon] = []
+    for child in getattr(geometry, "geoms", ()):  # MultiPolygon / repaired collection
+        components.extend(_polygon_components(child))
+    return tuple(components)
+
+
+def _is_subpixel_geometry(geometry: BaseGeometry, coord_scale: float) -> bool:
+    """Return whether a footprint covers at most one preview raster pixel."""
+
+    try:
+        pixel_area = abs(float(geometry.area)) * float(coord_scale) ** 2
+    except (TypeError, ValueError, AttributeError, OverflowError):
+        return False
+    return bool(np.isfinite(pixel_area) and pixel_area <= 1.0)
+
+
+def _simplify_quick_preview_polygons(
+    polygons: tuple[Polygon, ...],
+    tolerance_mm: float,
+) -> tuple[Polygon, ...]:
+    """Simplify preview-only footprints without exceeding a display bound."""
+
+    if not np.isfinite(tolerance_mm) or tolerance_mm <= 0:
+        return polygons
+    simplified_polygons: list[Polygon] = []
+    for polygon in polygons:
+        try:
+            simplified = _valid_geometry(
+                polygon.simplify(tolerance_mm, preserve_topology=True)
+            )
+        except (ValueError, TypeError, AttributeError):
+            simplified = None
+        components = _polygon_components(simplified)
+        simplified_polygons.extend(components or (polygon,))
+    return tuple(simplified_polygons)
+
+
+def build_vector_quick_preview_parts(
+    *,
+    source: VectorQuickPreviewSourceV1,
+    matched_rgb: np.ndarray,
+    height_identity_rgb: np.ndarray | None,
+    mask_solid: np.ndarray,
+    backing_rgba: tuple[int, int, int, int],
+    backing_thickness_mm: float,
+    max_color_groups: int = 128,
+) -> list[VectorPreviewPart] | None:
+    """Classify smooth Vector footprints by current colour and height identity.
+
+    Original SVG boundaries stay analytic. When a spatial edit introduces
+    multiple classifications inside one SVG shape, only the new internal
+    boundary comes from the preview grid and is clipped to the smooth source
+    footprint.
+
+    SVG 原始外轮廓始终保持解析几何；空间编辑在单个形状内部产生多种
+    分类时，仅新增的内部边界来自预览网格，并裁剪在平滑的源轮廓内。
+    """
+
+    display = np.asarray(matched_rgb)
+    identity = (
+        np.asarray(height_identity_rgb)
+        if height_identity_rgb is not None
+        else None
+    )
+    solid = np.asarray(mask_solid)
+    if (
+        identity is None
+        or display.ndim != 3
+        or display.shape[2] != 3
+        or display.dtype != np.uint8
+        or identity.shape != display.shape
+        or identity.dtype != np.uint8
+        or solid.shape != display.shape[:2]
+        or not np.issubdtype(solid.dtype, np.bool_)
+        or max_color_groups <= 0
+    ):
+        return None
+
+    real_width = float(source.bbox[2])
+    real_height = float(source.bbox[3])
+    if real_width <= 0 or real_height <= 0:
+        return None
+    height, width = display.shape[:2]
+    coord_scale = float(width) / real_width
+    pixels_per_mm = coord_scale / float(source.scale_factor)
+    canvas_height_mm = real_height * float(source.scale_factor)
+    if not np.isfinite(pixels_per_mm) or pixels_per_mm <= 0:
+        return None
+    simplify_tolerance_mm = min(
+        _VECTOR_QUICK_PREVIEW_MAX_SIMPLIFY_MM,
+        0.5 / pixels_per_mm,
+    )
+    expected_height = max(1, int(round(real_height * coord_scale)))
+    if abs(expected_height - height) > 1:
+        return None
+
+    grouped: dict[
+        tuple[tuple[int, int, int], tuple[int, int, int]],
+        list[Polygon],
+    ] = {}
+    solid_bool = solid.astype(bool, copy=False)
+    for item in source.clipped_shapes:
+        geometry = item.get("geometry") if isinstance(item, dict) else None
+        if not isinstance(geometry, (Polygon, MultiPolygon)):
+            return None
+        for component in _polygon_components(geometry):
+            rasterized = _rasterize_geometry_roi_mask(
+                component,
+                canvas_shape=(height, width),
+                coord_scale=coord_scale,
+            )
+            if rasterized is None:
+                if _is_subpixel_geometry(component, coord_scale):
+                    continue
+                return None
+            y_slice, x_slice, component_mask = rasterized
+            effective_mask = component_mask & solid_bool[y_slice, x_slice]
+            if not np.any(effective_mask):
+                if _is_subpixel_geometry(component, coord_scale):
+                    continue
+                return None
+            display_codes = _preview_rgb_codes(display[y_slice, x_slice])
+            height_codes = _preview_rgb_codes(identity[y_slice, x_slice])
+            component_interior_mask = _interior_preview_mask(component_mask)
+            interior_mask = effective_mask & component_interior_mask
+            identity_sample_mask = (
+                interior_mask if np.any(interior_mask) else effective_mask
+            )
+            dominant_height_code = _dominant_preview_code(
+                height_codes[identity_sample_mask]
+            )
+            if dominant_height_code is None:
+                return None
+            owned_effective_mask = effective_mask & (
+                height_codes == dominant_height_code
+            )
+            owned_interior_mask = interior_mask & (
+                height_codes == dominant_height_code
+            )
+            display_sample_mask = (
+                owned_interior_mask
+                if np.any(owned_interior_mask)
+                else owned_effective_mask
+            )
+            if not np.any(display_sample_mask):
+                return None
+            has_interior_solid_hole = bool(
+                np.any(
+                    component_interior_mask
+                    & ~solid_bool[y_slice, x_slice]
+                )
+            )
+            if np.any(owned_interior_mask):
+                unique_display_codes = np.unique(display_codes[display_sample_mask])
+            else:
+                dominant_display_code = _dominant_preview_code(
+                    display_codes[display_sample_mask]
+                )
+                if dominant_display_code is None:
+                    return None
+                unique_display_codes = np.asarray(
+                    [dominant_display_code],
+                    dtype=np.uint64,
+                )
+            preserve_entire_component = (
+                len(unique_display_codes) == 1
+                and not has_interior_solid_hole
+            )
+            classification_target_mask = (
+                effective_mask
+                if has_interior_solid_hole
+                else component_mask
+            )
+            propagated_display_codes = None
+            if not preserve_entire_component:
+                propagated_display_codes = _propagate_preview_codes(
+                    display_codes,
+                    seed_mask=display_sample_mask,
+                    target_mask=classification_target_mask,
+                )
+                if propagated_display_codes is None:
+                    return None
+            component_grouped = False
+            classified_source_components: list[Polygon] = []
+            for raw_display_code in unique_display_codes:
+                display_code = int(raw_display_code)
+                if preserve_entire_component:
+                    source_components = (component,)
+                else:
+                    source_components = _polygonize_preview_classification(
+                        classification_target_mask
+                        & (propagated_display_codes == raw_display_code),
+                        component=component,
+                        x_offset=int(x_slice.start or 0),
+                        y_offset=int(y_slice.start or 0),
+                        coord_scale=coord_scale,
+                    )
+                    if source_components is None:
+                        return None
+                    if not source_components:
+                        continue
+                    classified_source_components.extend(source_components)
+                scaled_components: list[Polygon] = []
+                for source_component in source_components:
+                    scaled = _screen_geometry_to_preview_world_y(
+                        _scaled_geometry_mm(
+                            source_component,
+                            source.scale_factor,
+                        ),
+                        canvas_height_mm,
+                    )
+                    scaled_components.extend(
+                        _simplify_quick_preview_polygons(
+                            _polygon_components(scaled),
+                            simplify_tolerance_mm,
+                        )
+                    )
+                if not scaled_components:
+                    continue
+                display_rgb = _preview_rgb_from_code(display_code)
+                height_rgb = _preview_rgb_from_code(int(dominant_height_code))
+                grouped.setdefault((display_rgb, height_rgb), []).extend(
+                    scaled_components
+                )
+                component_grouped = True
+                if len(grouped) > int(max_color_groups):
+                    return None
+            if not component_grouped:
+                return None
+            if not has_interior_solid_hole and not preserve_entire_component:
+                try:
+                    classified_coverage = _valid_geometry(
+                        unary_union(classified_source_components)
+                    )
+                    missing_area = (
+                        float(component.difference(classified_coverage).area)
+                        if classified_coverage is not None
+                        else float(component.area)
+                    )
+                except (ValueError, TypeError, AttributeError):
+                    return None
+                coverage_tolerance = max(1e-12, float(component.area) * 1e-9)
+                if missing_area > coverage_tolerance:
+                    return None
+
+    if not grouped or len(grouped) > int(max_color_groups):
+        return None
+
+    try:
+        color_shell_height = float(PrinterConfig.LAYER_HEIGHT)
+    except (TypeError, ValueError):
+        color_shell_height = 0.08
+    if not np.isfinite(color_shell_height) or color_shell_height <= 0:
+        color_shell_height = 0.08
+
+    seen_names: set[str] = set()
+    parts: list[VectorPreviewPart] = []
+    for (display_rgb, height_rgb), footprints in grouped.items():
+        rgba = (*display_rgb, 255)
+        export_name = make_vector_glb_export_name(
+            source_name=f"{display_rgb[0]:02x}{display_rgb[1]:02x}{display_rgb[2]:02x}",
+            role="color",
+            rgba=rgba,
+            seen_names=seen_names,
+        )
+        parts.append(
+            VectorPreviewPart(
+                source_name=export_name,
+                export_name=export_name,
+                role="color",
+                rgba=rgba,
+                is_recolorable=True,
+                height_key=(
+                    f"{height_rgb[0]:02x}{height_rgb[1]:02x}{height_rgb[2]:02x}"
+                ),
+                extrusions=tuple(
+                    VectorPreviewExtrusion(
+                        footprint=footprint,
+                        z_min=0.0,
+                        z_max=color_shell_height,
+                    )
+                    for footprint in footprints
+                ),
+            )
+        )
+
+    backing = _visible_backing_footprint(
+        source.silhouette,
+        source.scale_factor,
+    )
+    backing = _screen_geometry_to_preview_world_y(backing, canvas_height_mm)
+    if backing is not None:
+        try:
+            backing_height = max(
+                float(backing_thickness_mm),
+                color_shell_height,
+            )
+        except (TypeError, ValueError):
+            backing_height = color_shell_height
+        parts.append(
+            VectorPreviewPart(
+                source_name="Board",
+                export_name=make_vector_glb_export_name(
+                    source_name="Board",
+                    role="backing",
+                    rgba=backing_rgba,
+                    seen_names=seen_names,
+                ),
+                role="backing",
+                rgba=backing_rgba,
+                is_recolorable=False,
+                extrusions=(
+                    VectorPreviewExtrusion(
+                        footprint=backing,
+                        z_min=0.0,
+                        z_max=backing_height,
+                    ),
+                ),
+            )
+        )
+
+    canvas_anchor = _build_preview_canvas_anchor_part(
+        source,
+        screen_to_world_canvas_height_mm=canvas_height_mm,
+    )
+    if canvas_anchor is not None:
+        parts.append(canvas_anchor)
+    return parts
 
 
 def _recipe_channel_runs(recipe: list[int]) -> list[tuple[int, int, int]]:
@@ -1356,16 +1953,10 @@ def build_vector_preview_parts_from_analysis(
             )
         )
 
-    raw_silhouette = _analysis_silhouette_raw(analysis)
-    silhouette = (
-        _scaled_geometry_mm(raw_silhouette, scale_factor)
-        if raw_silhouette is not None
-        else None
+    structure = resolve_structure_plan(
+        analysis, float(outline_width_mm) if include_outline else 0.0,
     )
-    backing_footprint = _visible_backing_footprint(
-        raw_silhouette,
-        scale_factor,
-    )
+    backing_footprint = structure.body if not structure.body.is_empty else None
     if include_backing and backing_footprint is not None:
         backing_height = max(float(thickness_mm or 0.0), layer_h)
         is_double = "双面" in str(structure_mode or "") or "Double" in str(structure_mode or "")
@@ -1398,13 +1989,8 @@ def build_vector_preview_parts_from_analysis(
             )
         )
 
-    if include_outline and silhouette is not None:
-        try:
-            outline = _valid_geometry(
-                silhouette.buffer(float(outline_width_mm)).difference(silhouette)
-            )
-        except (ValueError, TypeError, AttributeError):
-            outline = None
+    if include_outline:
+        outline = structure.outline if not structure.outline.is_empty else None
         if outline is not None:
             max_z = max(
                 (extrusion.z_max for part in parts for extrusion in part.extrusions),
@@ -1460,6 +2046,8 @@ def _mesh_from_extrusion_v2(
 
     try:
         rasterize, from_origin = _get_vector_v2_rasterizer_modules()
+    except MemoryError:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"V2 vector GLB rasterizer unavailable: {exc}") from exc
 
@@ -1499,6 +2087,91 @@ def _mesh_from_extrusion_v2(
     transform_mm[2, 3] = extrusion.z_min
     mesh.apply_transform(transform_mm)
     return mesh
+
+
+def _mesh_from_analytic_extrusion(
+    extrusion: VectorPreviewExtrusion,
+) -> trimesh.Trimesh:
+    """Extrude parsed Polygon footprints directly without a pixel grid."""
+
+    footprints = (
+        tuple(extrusion.footprints or (extrusion.footprint,))
+        if extrusion.footprints_validated
+        else _valid_footprints_for_v2(
+            extrusion.footprints or (extrusion.footprint,)
+        )
+    )
+    polygons: list[Polygon] = []
+    for footprint in footprints:
+        for polygon in _polygon_components(footprint):
+            try:
+                area = float(polygon.area)
+            except (TypeError, ValueError, AttributeError, OverflowError):
+                continue
+            if (
+                not polygon.is_empty
+                and np.isfinite(area)
+                and area > _ANALYTIC_MIN_AREA_MM2
+            ):
+                polygons.append(polygon)
+    if not polygons:
+        raise RuntimeError("Analytic Vector GLB extrusion has no Polygon footprints")
+    z_height = float(extrusion.z_max) - float(extrusion.z_min)
+    if not np.isfinite(z_height) or z_height <= 0:
+        raise RuntimeError("Analytic Vector GLB extrusion has non-positive height")
+
+    meshes: list[trimesh.Trimesh] = []
+    for polygon in polygons:
+        try:
+            piece = trimesh.creation.extrude_polygon(
+                polygon,
+                height=1.0,
+                engine="earcut",
+            )
+            vertices = np.asarray(piece.vertices)
+            faces = np.asarray(piece.faces)
+            if (
+                vertices.ndim != 2
+                or vertices.shape[1:] != (3,)
+                or faces.ndim != 2
+                or faces.shape[1:] != (3,)
+                or len(vertices) == 0
+                or len(faces) == 0
+                or not np.isfinite(vertices).all()
+                or not bool(piece.is_watertight)
+            ):
+                raise ValueError("Analytic Vector GLB extrusion is not usable")
+        except _ANALYTIC_EXTRUSION_FALLBACK_ERRORS:
+            meshes.append(
+                _mesh_from_extrusion_v2(
+                    VectorPreviewExtrusion(
+                        footprint=polygon,
+                        z_min=extrusion.z_min,
+                        z_max=extrusion.z_max,
+                    ),
+                    rgba=(255, 255, 255, 255),
+                    pixels_per_mm=_ANALYTIC_TOPOLOGY_FALLBACK_PIXELS_PER_MM,
+                )
+            )
+            continue
+        vertices = np.asarray(piece.vertices, dtype=np.float64).copy()
+        vertices[:, 2] = (
+            vertices[:, 2] * z_height + float(extrusion.z_min)
+        )
+        meshes.append(
+            trimesh.Trimesh(
+                vertices=vertices,
+                faces=np.asarray(piece.faces, dtype=np.int64).copy(),
+                process=False,
+            )
+        )
+    if not meshes:
+        raise RuntimeError("Analytic Vector GLB extrusion returned no mesh")
+    return (
+        meshes[0]
+        if len(meshes) == 1
+        else trimesh.util.concatenate(meshes)
+    )
 
 
 def _valid_footprints_for_v2(
@@ -1613,6 +2286,78 @@ def export_vector_glb_preview_v2(
     return result
 
 
+def export_vector_quick_preview_glb(
+    parts: list[VectorPreviewPart],
+    *,
+    output_path: str,
+) -> str:
+    """Export a display-only GLB from analytic Vector footprints."""
+
+    t0 = time.perf_counter()
+    glb_scene = trimesh.Scene()
+    for part in parts:
+        if part.extrusions:
+            meshes = [
+                _mesh_from_analytic_extrusion(extrusion)
+                for extrusion in _batch_part_extrusions_for_v2(part)
+            ]
+        elif part.fallback_mesh is not None:
+            meshes = [_mesh_geometry_only_copy(part.fallback_mesh)]
+        else:
+            raise RuntimeError(
+                f"Analytic Vector GLB part has no geometry: {part.source_name}"
+            )
+        if not meshes:
+            raise RuntimeError(
+                f"Analytic Vector GLB part is empty: {part.source_name}"
+            )
+        if part.role == "color":
+            chunks = _pack_meshes_for_uint16_indices(meshes)
+        else:
+            combined = (
+                meshes[0]
+                if len(meshes) == 1
+                else trimesh.util.concatenate(meshes)
+            )
+            chunks = _scene_reuse_chunks_for_uint16_indices(combined)
+        for index, chunk in enumerate(chunks):
+            export_name = (
+                part.export_name
+                if len(chunks) == 1
+                else f"{part.export_name}_chunk{index + 1:03d}"
+            )
+            exported_mesh = _mesh_with_material_rgba(
+                chunk,
+                part.rgba,
+                material_name=f"{part.export_name}_material",
+            )
+            if part.height_key is not None:
+                exported_mesh.metadata["height_key"] = part.height_key
+            glb_scene.add_geometry(
+                exported_mesh,
+                geom_name=export_name,
+            )
+
+    if not glb_scene.geometry:
+        raise RuntimeError("Analytic Vector GLB export has no geometry")
+    result = _write_glb_scene(
+        glb_scene,
+        output_path,
+        optimize_v2_buffers=True,
+    )
+    log.info(
+        "Analytic Vector GLB exported",
+        extra={
+            "event": "vector_glb_analytic_exported",
+            "path": str(output_path),
+            "part_count": len(parts),
+            "geometry_count": len(glb_scene.geometry),
+            "duration_ms": round((time.perf_counter() - t0) * 1000, 3),
+        },
+    )
+    return result
+
+
 def export_vector_glb_preview(
     *,
     scene: trimesh.Scene,
@@ -1650,6 +2395,8 @@ def export_vector_glb_preview(
             fallback_parts,
             output_path=output_path,
         )
+    except MemoryError:
+        raise
     except Exception as exc:
         log.warning(
             "Vector GLB V2 failed; falling back to V1",
@@ -1660,4 +2407,12 @@ def export_vector_glb_preview(
                 "fallback_kernel": "trimesh_v1",
             },
         )
-        return export_vector_glb_preview_v1(fallback_parts, output_path=output_path)
+        failure_traceback = exc.__traceback__
+        if failure_traceback is not None:
+            traceback.clear_frames(failure_traceback)
+        del failure_traceback
+
+    # Leave the exception handler before retrying so Python releases its
+    # traceback and any completed V2 chunks/GLB buffers.
+    gc.collect()
+    return export_vector_glb_preview_v1(fallback_parts, output_path=output_path)

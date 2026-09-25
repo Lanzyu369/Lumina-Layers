@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import BasicSettings from "../components/sections/BasicSettings";
 import BedSizeSelector from "../components/sections/BedSizeSelector";
+import ReliefSettings from "../components/sections/ReliefSettings";
 import { useConverterStore } from "../stores/converter";
 import { DEFAULT_SETTINGS, useSettingsStore } from "../stores/settingsStore";
 import * as converterApi from "../api/converter";
@@ -349,6 +350,30 @@ describe("BasicSettings", () => {
     ).toHaveValue("80");
   });
 
+  it("keeps large-format manual dimensions above the everyday slider range", () => {
+    useConverterStore.setState({
+      largeFormatEnabled: true,
+      target_width_mm: 120,
+      target_height_mm: 160,
+      tileWidthMm: 200,
+      tileHeightMm: 200,
+    } as never);
+
+    render(<BasicSettings />);
+
+    expect(screen.getByRole("slider", { name: "宽度" })).toHaveAttribute("max", "400");
+    expect(screen.getByRole("slider", { name: "高度" })).toHaveAttribute("max", "400");
+    expect(screen.getByRole("slider", { name: "切片宽度" })).toHaveAttribute("max", "500");
+    expect(screen.getByRole("slider", { name: "切片高度" })).toHaveAttribute("max", "500");
+
+    const widthInput = screen.getByRole("textbox", { name: "宽度 value" });
+    fireEvent.change(widthInput, { target: { value: "30000" } });
+    fireEvent.blur(widthInput);
+
+    expect(useConverterStore.getState().target_width_mm).toBe(30000);
+    expect(widthInput).toHaveValue("30000");
+  });
+
   it("backs off failed startup LUT loads instead of retrying immediately", async () => {
     vi.useFakeTimers();
     vi.mocked(converterApi.fetchLutList)
@@ -569,6 +594,76 @@ describe("BasicSettings", () => {
     expect(useConverterStore.getState().modelSurfaceFile).toBeNull();
   });
 
+  it("keeps a dropped relief heightmap out of the main image uploader", async () => {
+    const heightmap = new File(["heightmap"], "heightmap.png", {
+      type: "image/png",
+    });
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:heightmap");
+    useConverterStore.setState({
+      enable_relief: true,
+      autoHeightMode: "use-heightmap",
+      heightmapFile: null,
+      heightmapThumbnailUrl: null,
+    });
+
+    render(
+      <>
+        <BasicSettings />
+        <ReliefSettings />
+      </>,
+    );
+
+    fireEvent.drop(
+      screen.getByRole("button", { name: "拖拽图片或点击上传" }),
+      {
+        dataTransfer: {
+          files: [heightmap],
+          types: ["Files"],
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(useConverterStore.getState().heightmapFile).toBe(heightmap);
+    });
+    expect(useConverterStore.getState().imageFile).toBeNull();
+  });
+
+  it("still routes model files dropped on a local image uploader to model surface upload", async () => {
+    const model = new File(["solid"], "relief-source.stl", {
+      type: "application/octet-stream",
+    });
+    useConverterStore.setState({
+      enable_relief: true,
+      autoHeightMode: "use-heightmap",
+      heightmapFile: null,
+    });
+
+    render(
+      <>
+        <BasicSettings />
+        <ReliefSettings />
+      </>,
+    );
+
+    fireEvent.drop(
+      screen.getByRole("button", { name: "拖拽图片或点击上传" }),
+      {
+        dataTransfer: {
+          files: [model],
+          types: ["Files"],
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(converterApi.uploadModelSurface).toHaveBeenCalledWith(model);
+    });
+    expect(useConverterStore.getState().modelSurfaceFile).toBe(model);
+    expect(useConverterStore.getState().heightmapFile).toBeNull();
+    expect(useConverterStore.getState().imageFile).toBeNull();
+  });
+
   it("routes model and image files dropped together from a folder into the full surface workflow", async () => {
     const modelFile = new File(["solid"], "pegboard.obj", {
       type: "application/octet-stream",
@@ -720,6 +815,21 @@ describe("BasicSettings", () => {
     expect(
       screen.getByText("原生矢量切片生成失败，已自动改用栅格切片。"),
     ).toBeInTheDocument();
+  });
+
+  it("localizes embedded wipe-tower warnings returned by large-format generation", () => {
+    useConverterStore.setState({
+      largeFormatWarnings: ["wipe_tower_manual_adjustment_required"],
+    });
+
+    render(<BasicSettings />);
+
+    expect(
+      screen.getByText(/文件已继续生成，但当前模型和擦料塔无法在所选热床上同时安全摆放/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("wipe_tower_manual_adjustment_required"),
+    ).not.toBeInTheDocument();
   });
 
   it("renders the source version selector and legacy LUT database panel in old mode", () => {

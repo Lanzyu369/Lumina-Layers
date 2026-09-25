@@ -8,14 +8,17 @@ Validates:
 
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 import os
 import tempfile
+import zipfile
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
+import pytest
 from PIL import Image
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -378,6 +381,37 @@ def test_generate_puzzle_worker_missing_output_uses_public_error_detail(tmp_path
     assert raw_status in logged_error
 
 
+def test_generate_puzzle_rejects_piece_missing_export_transform_metadata(
+    tmp_path: Path,
+) -> None:
+    """A successful piece file without S09 transform metadata is unsafe to assemble."""
+
+    session_id, _preview_cache = _make_session()
+    piece_path = tmp_path / "piece-without-transform-metadata.3mf"
+    piece_path.write_bytes(b"piece-3mf")
+    _mock_pool.submit = AsyncMock(
+        return_value={
+            "threemf_path": str(piece_path),
+            "glb_path": None,
+            "status_msg": "ok",
+        }
+    )
+
+    try:
+        with patch.object(puzzle_router.log, "error") as log_error:
+            response = client.post(
+                "/api/convert/generate-puzzle",
+                json=_build_generate_body(session_id),
+            )
+    finally:
+        _test_store.close(session_id)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == puzzle_router._PUZZLE_PIECE_GENERATION_FAILED_DETAIL
+    logged_error = log_error.call_args.kwargs["extra"]["error_message"]
+    assert "export transform metadata unavailable" in logged_error
+
+
 def test_generate_puzzle_inherits_dynamic_settings_and_maps_typed_error() -> None:
     from core.material_dynamic_solver import DynamicMaterialCandidateError
 
@@ -430,7 +464,25 @@ def test_generate_puzzle_inherits_dynamic_settings_and_maps_typed_error() -> Non
     assert captured["material_delta_e00_tolerance"] == 0.4
 
 
-def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> None:
+def test_puzzle_requires_fresh_preview_after_compensation_changes(tmp_path) -> None:
+    session_id, cache = _make_session()
+    path = tmp_path / "picture.svg"
+    path.write_text("<svg/>", encoding="utf-8")
+    _test_store.put(session_id, "image_path", str(path))
+    cache["svg_hole_compensation_enabled"] = False
+    body = _build_generate_body(session_id)
+    body["params"]["params"].update(
+        modeling_mode="vector", svg_hole_compensation_enabled=True,
+    )
+    _mock_pool.submit = AsyncMock()
+    response = client.post("/api/convert/generate-puzzle", json=body)
+    assert response.status_code == 409
+    assert "compensation" in response.json()["detail"]
+    _mock_pool.submit.assert_not_called()
+
+
+@pytest.mark.parametrize("compensation_enabled", [False, True])
+def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb(compensation_enabled) -> None:
     """Puzzle generation should align per-piece helper assets to the worker raster grid."""
 
     session_id, preview_cache = _make_session()
@@ -447,7 +499,13 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
         os.close(fd_piece)
         with open(piece_path, "wb") as handle:
             handle.write(b"piece-3mf")
-        return {"threemf_path": piece_path, "glb_path": None, "status_msg": "ok"}
+        return {
+            "threemf_path": piece_path,
+            "glb_path": None,
+            "status_msg": "ok",
+            "x_mirrored": False,
+            "mirror_span_mm": round(float(worker_params["target_width_mm"]) * 10.0) / 10.0,
+        }
 
     def _assemble_stub(
         *,
@@ -461,14 +519,19 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
         device_profile_id: str | None = None,
         build_plate_id: str | None = None,
         overview_png_bytes: bytes | None = None,
+        enable_wipe_tower_auto_placement: bool = True,
     ) -> str:
         assembled_calls.append(
             {
                 "piece_count": len(piece_sources),
+                "offsets_x_mm": [source.offset_x_mm for source in piece_sources],
                 "printer_id": printer_id,
                 "slicer": slicer,
                 "nozzle_size": nozzle_size,
                 "build_plate_id": build_plate_id,
+                "enable_wipe_tower_auto_placement": (
+                    enable_wipe_tower_auto_placement
+                ),
                 "slot_names": slot_names,
                 "overview_bytes": overview_png_bytes,
             }
@@ -483,11 +546,23 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
     generate_body["params"]["params"].update(
         {
             "modeling_mode": "vector",
+            "structure_mode": "Single-sided",
             "enable_relief": True,
             "height_mode": "color",
             "color_height_map": {"#ff0000": 2.2, "#00ff00": 2.6},
+            "enable_wipe_tower_auto_placement": False,
         }
     )
+    if compensation_enabled:
+        from api.schemas.converter import ConvertGenerateRequest
+
+        generate_body["params"]["params"]["svg_hole_compensation_enabled"] = True
+        preview_cache.update(ConvertGenerateRequest(**generate_body["params"]["params"]).model_dump())
+        preview_cache["material_source"] = "lut"
+        path = Path(_test_store.get(session_id)["image_path"]).with_suffix(".svg")
+        path.write_text("<svg/>", encoding="utf-8")
+        _test_store.put(session_id, "image_path", str(path))
+        _test_store.register_temp_file(session_id, str(path))
 
     with patch(
         "api.routers.converter.puzzle.assemble_puzzle_3mf",
@@ -511,7 +586,13 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
     assert all(params["enable_fridge_magnet"] is False for params in submitted_params)
     assert all(params["fridge_magnets"] == [] for params in submitted_params)
     assert all(params["modeling_mode"] == ModelingMode.HIGH_FIDELITY for params in submitted_params)
+    # These piece PNGs already contain compensation from the confirmed preview.
+    assert all(params.get("svg_hole_compensation_enabled", False) is False for params in submitted_params)
     assert all(params["enable_relief"] is True for params in submitted_params)
+    assert all(
+        params["enable_wipe_tower_auto_placement"] is False
+        for params in submitted_params
+    )
     assert all(params["height_mode"] == "color" for params in submitted_params)
     assert all(
         params["color_height_map"] == {"#ff0000": 2.2, "#00ff00": 2.6}
@@ -523,6 +604,9 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
     assert assembled_calls[0]["slicer"] == "BambuStudio"
     assert assembled_calls[0]["nozzle_size"] == "0.2"
     assert assembled_calls[0]["build_plate_id"] == "smooth-pei-plate"
+    assert (
+        assembled_calls[0]["enable_wipe_tower_auto_placement"] is False
+    )
     assert assembled_calls[0]["slot_names"] == ["White"]
     assert isinstance(assembled_calls[0]["overview_bytes"], bytes)
     assert assembled_calls[0]["overview_bytes"].startswith(b"\x89PNG")
@@ -544,6 +628,11 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
         )
     )
     first_piece = layout.pieces[0]
+    assert np.allclose(
+        assembled_calls[0]["offsets_x_mm"],
+        [piece.bbox_mm[0] for piece in layout.pieces],
+        atol=1e-9,
+    )
     first_boundary_path = Path(submitted_params[0]["piece_boundary_geometry_path"])
     with first_boundary_path.open("r", encoding="utf-8") as handle:
         boundary = json.load(handle)
@@ -576,6 +665,176 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
     assert max(boundary_y_values) <= expected_worker_h - 0.5 + 1e-6
 
 
+def test_generate_puzzle_response_merges_only_embedded_wipe_tower_warnings(
+    tmp_path: Path,
+) -> None:
+    """Puzzle responses expose final-assembly warnings without duplicates."""
+
+    _test_store.clear_all()
+    _test_registry.clear_all()
+    warning_code = "wipe_tower_manual_adjustment_required"
+    original_resolve_layout = puzzle_router._resolve_layout
+
+    cases = (
+        ("manual", True, False, [warning_code]),
+        ("manual-existing", True, True, [warning_code]),
+        ("safe", False, False, []),
+    )
+    for case_name, requires_manual_adjustment, seed_existing, expected_warnings in cases:
+        session_id, _preview_cache = _make_session()
+        piece_counter = 0
+
+        async def _submit_stub(
+            _func: object,
+            _piece_image_path: str,
+            _lut_path: str,
+            _worker_params: dict[str, Any],
+        ) -> dict[str, Any]:
+            nonlocal piece_counter
+            piece_counter += 1
+            piece_path = tmp_path / f"piece-{case_name}-{piece_counter}.3mf"
+            piece_path.write_bytes(b"piece-3mf")
+            return {
+                "threemf_path": str(piece_path),
+                "glb_path": None,
+                "status_msg": "ok",
+                "x_mirrored": False,
+                "mirror_span_mm": 90.0,
+            }
+
+        def _assemble_stub(*, output_path: str, **_kwargs: Any) -> str:
+            with zipfile.ZipFile(output_path, "w") as package:
+                package.writestr(
+                    "Metadata/lumina_wipe_tower_placement.json",
+                    json.dumps(
+                        {
+                            "requires_manual_adjustment": (
+                                requires_manual_adjustment
+                            ),
+                            "warning_code": (
+                                warning_code
+                                if requires_manual_adjustment
+                                else None
+                            ),
+                        }
+                    ),
+                )
+            return output_path
+
+        def _resolve_layout_stub(
+            **kwargs: Any,
+        ) -> tuple[PuzzleLayout, tuple[Any, ...]]:
+            layout, cache_key = original_resolve_layout(**kwargs)
+            if seed_existing:
+                layout = replace(
+                    layout,
+                    warnings=(*layout.warnings, warning_code),
+                )
+            return layout, cache_key
+
+        body = _build_generate_body(session_id)
+        body["params"].update(
+            {"rows": 1, "cols": 1, "target_piece_count": 1}
+        )
+        _mock_pool.submit = AsyncMock(side_effect=_submit_stub)
+
+        try:
+            with patch(
+                "api.routers.converter.puzzle.assemble_puzzle_3mf",
+                side_effect=_assemble_stub,
+            ), patch(
+                "api.routers.converter.puzzle._resolve_layout",
+                side_effect=_resolve_layout_stub,
+            ):
+                response = client.post(
+                    "/api/convert/generate-puzzle",
+                    json=body,
+                )
+
+            assert response.status_code == 200, response.text
+            assert response.json()["warnings"] == expected_warnings
+            assert response.json()["warnings"].count(warning_code) <= 1
+        finally:
+            _test_store.close(session_id)
+            _test_registry.clear_all()
+
+
+def test_generate_puzzle_places_face_down_single_sided_pieces_with_actual_mirror_span() -> None:
+    """Assembly placement should use the exact X-mirror span reported by S09."""
+
+    session_id, _preview_cache = _make_session()
+    assembled_sources: list[Any] = []
+
+    async def _submit_stub(
+        _func: object,
+        _piece_image_path: str,
+        _lut_path: str,
+        worker_params: dict[str, Any],
+    ) -> dict[str, Any]:
+        fd_piece, piece_path = tempfile.mkstemp(suffix=".3mf")
+        os.close(fd_piece)
+        Path(piece_path).write_bytes(b"piece-3mf")
+        mirror_span_mm = round(float(worker_params["target_width_mm"]) * 10.0) / 10.0
+        return {
+            "threemf_path": piece_path,
+            "glb_path": None,
+            "status_msg": "ok",
+            "x_mirrored": True,
+            "mirror_span_mm": mirror_span_mm,
+        }
+
+    def _assemble_stub(
+        *,
+        piece_sources: list[Any],
+        output_path: str,
+        **_kwargs: object,
+    ) -> str:
+        assembled_sources.extend(piece_sources)
+        Path(output_path).write_bytes(b"combined-3mf")
+        return output_path
+
+    body = _build_generate_body(session_id)
+    body["params"]["params"]["structure_mode"] = "Single-sided"
+    _mock_pool.submit = AsyncMock(side_effect=_submit_stub)
+
+    try:
+        with patch(
+            "api.routers.converter.puzzle.assemble_puzzle_3mf",
+            side_effect=_assemble_stub,
+        ):
+            response = client.post("/api/convert/generate-puzzle", json=body)
+    finally:
+        _test_store.close(session_id)
+
+    assert response.status_code == 200, response.text
+    layout = build_puzzle_layout(
+        PuzzleLayoutConfig(
+            width_px=120,
+            height_px=80,
+            total_width_mm=90.0,
+            total_height_mm=60.0,
+            style="regular",
+            sizing_mode="grid",
+            rows=2,
+            cols=3,
+            seed=7,
+            connector_style="classic",
+            irregularity_strength=0.35,
+            min_neck_width_mm=1.2,
+        )
+    )
+    expected_offsets = [
+        layout.total_width_mm
+        - piece.bbox_mm[0]
+        - round((piece.bbox_mm[2] - piece.bbox_mm[0]) * 10.0) / 10.0
+        for piece in layout.pieces
+    ]
+    actual_offsets = [source.offset_x_mm for source in assembled_sources]
+
+    assert len(actual_offsets) == len(expected_offsets)
+    assert np.allclose(actual_offsets, expected_offsets, atol=1e-9)
+
+
 def test_generate_puzzle_download_survives_source_session_close(tmp_path: Path) -> None:
     """Final puzzle 3MF downloads should outlive the source session.
     拼图最终 3MF 下载应在源 session 关闭后仍可访问。
@@ -597,7 +856,13 @@ def test_generate_puzzle_download_survives_source_session_close(tmp_path: Path) 
         piece_index += 1
         piece_path = tmp_path / f"piece-{piece_index}.3mf"
         piece_path.write_bytes(b"piece-3mf")
-        return {"threemf_path": str(piece_path), "glb_path": None, "status_msg": "ok"}
+        return {
+            "threemf_path": str(piece_path),
+            "glb_path": None,
+            "status_msg": "ok",
+            "x_mirrored": False,
+            "mirror_span_mm": 1.0,
+        }
 
     def _assemble_stub(*, output_path: str, **_kwargs: object) -> str:
         Path(output_path).write_bytes(b"combined-3mf")
@@ -664,7 +929,13 @@ def test_generate_puzzle_deletes_combined_output_when_assembly_fails(tmp_path: P
         piece_index += 1
         piece_path = tmp_path / f"piece-{piece_index}.3mf"
         piece_path.write_bytes(b"piece-3mf")
-        return {"threemf_path": str(piece_path), "glb_path": None, "status_msg": "ok"}
+        return {
+            "threemf_path": str(piece_path),
+            "glb_path": None,
+            "status_msg": "ok",
+            "x_mirrored": False,
+            "mirror_span_mm": 1.0,
+        }
 
     def _assemble_failure_stub(*, output_path: str, **_kwargs: object) -> str:
         combined_paths.append(output_path)
@@ -796,7 +1067,13 @@ def test_generate_puzzle_resizes_heightmap_crop_to_worker_grid() -> None:
         os.close(fd_piece)
         with open(piece_path, "wb") as handle:
             handle.write(b"piece-3mf")
-        return {"threemf_path": piece_path, "glb_path": None, "status_msg": "ok"}
+        return {
+            "threemf_path": piece_path,
+            "glb_path": None,
+            "status_msg": "ok",
+            "x_mirrored": False,
+            "mirror_span_mm": 1.0,
+        }
 
     def _assemble_stub(
         *,
@@ -810,6 +1087,7 @@ def test_generate_puzzle_resizes_heightmap_crop_to_worker_grid() -> None:
         device_profile_id: str | None = None,
         build_plate_id: str | None = None,
         overview_png_bytes: bytes | None = None,
+        enable_wipe_tower_auto_placement: bool = True,
     ) -> str:
         with open(output_path, "wb") as handle:
             handle.write(b"combined-3mf")
@@ -878,7 +1156,13 @@ def test_generate_puzzle_emits_hybrid_boundary_log_for_each_piece() -> None:
         os.close(fd_piece)
         with open(piece_path, "wb") as handle:
             handle.write(b"piece-3mf")
-        return {"threemf_path": piece_path, "glb_path": None, "status_msg": "ok"}
+        return {
+            "threemf_path": piece_path,
+            "glb_path": None,
+            "status_msg": "ok",
+            "x_mirrored": False,
+            "mirror_span_mm": 1.0,
+        }
 
     def _assemble_stub(
         *,
@@ -892,6 +1176,7 @@ def test_generate_puzzle_emits_hybrid_boundary_log_for_each_piece() -> None:
         device_profile_id: str | None = None,
         build_plate_id: str | None = None,
         overview_png_bytes: bytes | None = None,
+        enable_wipe_tower_auto_placement: bool = True,
     ) -> str:
         with open(output_path, "wb") as handle:
             handle.write(b"combined-3mf")
@@ -966,7 +1251,13 @@ def test_generate_puzzle_reuses_cached_layout_after_preview() -> None:
         os.close(fd_piece)
         with open(piece_path, "wb") as handle:
             handle.write(b"piece-3mf")
-        return {"threemf_path": piece_path, "glb_path": None, "status_msg": "ok"}
+        return {
+            "threemf_path": piece_path,
+            "glb_path": None,
+            "status_msg": "ok",
+            "x_mirrored": False,
+            "mirror_span_mm": 1.0,
+        }
 
     def _assemble_stub(
         *,
@@ -980,6 +1271,7 @@ def test_generate_puzzle_reuses_cached_layout_after_preview() -> None:
         device_profile_id: str | None = None,
         build_plate_id: str | None = None,
         overview_png_bytes: bytes | None = None,
+        enable_wipe_tower_auto_placement: bool = True,
     ) -> str:
         with open(output_path, "wb") as handle:
             handle.write(b"combined-3mf")
@@ -1117,7 +1409,13 @@ def test_generate_puzzle_filters_fully_transparent_pieces_during_layout() -> Non
         os.close(fd_piece)
         with open(piece_path, "wb") as handle:
             handle.write(b"piece-3mf")
-        return {"threemf_path": piece_path, "glb_path": None, "status_msg": "ok"}
+        return {
+            "threemf_path": piece_path,
+            "glb_path": None,
+            "status_msg": "ok",
+            "x_mirrored": False,
+            "mirror_span_mm": 1.0,
+        }
 
     def _assemble_stub(
         *,
@@ -1131,6 +1429,7 @@ def test_generate_puzzle_filters_fully_transparent_pieces_during_layout() -> Non
         device_profile_id: str | None = None,
         build_plate_id: str | None = None,
         overview_png_bytes: bytes | None = None,
+        enable_wipe_tower_auto_placement: bool = True,
     ) -> str:
         with open(output_path, "wb") as handle:
             handle.write(b"combined-3mf")
@@ -1206,7 +1505,7 @@ def test_worker_generate_model_handles_tiny_piece_with_large_quantize_request() 
     params = {
         "target_width_mm": 10.0,
         "spacer_thick": 1.2,
-        "structure_mode": "Double-sided",
+        "structure_mode": "Single-sided",
         "color_mode": "4-Color (RYBW)",
         "add_loop": False,
         "loop_width": 4.0,
@@ -1253,6 +1552,8 @@ def test_worker_generate_model_handles_tiny_piece_with_large_quantize_request() 
         assert result["threemf_path"].endswith(".3mf")
         assert isinstance(result["status_msg"], str)
         assert result["status_msg"]
+        assert result["x_mirrored"] is True
+        assert result["mirror_span_mm"] == 10.0
     finally:
         for path in (image_path, lut_path):
             if path.exists():
@@ -1407,4 +1708,9 @@ def test_worker_generate_model_preserves_svg_puzzle_piece_dimensions_for_matched
 
         assert isinstance(result["threemf_path"], str)
         assert result["threemf_path"].endswith(".3mf")
+        assert result["x_mirrored"] is False
+        assert np.isclose(
+            result["mirror_span_mm"],
+            round(float(params["target_width_mm"]) * 10.0) / 10.0,
+        )
         assert not any("matched_rgb_path shape" in str(call.args[0]) for call in warning_mock.call_args_list)

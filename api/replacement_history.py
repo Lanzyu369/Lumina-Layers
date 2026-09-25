@@ -14,8 +14,15 @@ from typing import Any, Literal
 
 import numpy as np
 
-from api.preview_cache_artifacts import is_preview_cache_artifact_ref
-from api.selection_state import SELECTION_REGION_PREFIX, selection_region_id
+from api.preview_cache_artifacts import (
+    is_preview_cache_artifact_ref,
+    refresh_preview_cache_revision,
+)
+from api.selection_state import (
+    RECIPE_OVERRIDE_APPLIED_MASKS_KEY,
+    SELECTION_REGION_PREFIX,
+    selection_region_id,
+)
 from api.session_store import SessionStore
 
 REPLACEMENT_UNDO_STACK_KEY = "replacement_undo_stack"
@@ -38,6 +45,12 @@ _SESSION_FIELD_KEYS: tuple[str, ...] = (
     "editor_selection_revision",
     "editor_selection_content_generation",
     "free_color_set",
+    # Applied-override mask snapshots ride with recipe_overrides so undo/redo
+    # keeps /generate able to re-apply historical overrides whose editor
+    # selection ids no longer exist in the live selection state.
+    # 已应用覆盖的掩码快照随 recipe_overrides 一起进出历史，保证撤销/重做后
+    # /generate 仍能重新套用那些选区 id 已不存在的覆盖。
+    "recipe_override_applied_masks",
 )
 
 _HISTORY_LOCK = threading.Lock()
@@ -85,6 +98,16 @@ def clear_replacement_history(session_id: str, store: SessionStore) -> None:
     store.put(session_id, "editor_selection_mask", None)
     store.put(session_id, "editor_selection_revision", 0)
     store.put(session_id, "editor_selection_content_generation", 0)
+    # A fresh preview invalidates every replacement artefact. Accumulated
+    # recipe overrides and their applied-mask snapshots must go too, or
+    # /generate would silently re-apply stale footprints onto new content
+    # (same-size images are common with standard LUT sizes).
+    # 新预览使所有替换产物失效。累积的配方覆盖与掩码快照也必须一并清空，
+    # 否则 /generate 会把过期足迹静默套到新内容上（标准 LUT 尺寸下同尺寸
+    # 图片非常常见）。
+    store.put(session_id, "recipe_overrides", [])
+    store.put(session_id, "recipe_override_count", 0)
+    store.put(session_id, RECIPE_OVERRIDE_APPLIED_MASKS_KEY, {})
 
 
 def snapshot_replacement_state(
@@ -100,15 +123,22 @@ def snapshot_replacement_state(
     """
     preview_cache = session_data.get("preview_cache")
     fields = _SESSION_FIELD_KEYS if session_fields is None else session_fields
+    cloned_fields = {
+        key: _clone_value(session_data.get(key))
+        for key in fields
+        if key in session_data
+    }
     checkpoint: dict[str, Any] = {
         "label": str(label),
         "kind": kind,
         "created_at": time.time(),
-        "session_fields": {
-            key: _clone_value(session_data.get(key))
-            for key in fields
-            if key in session_data
-        },
+        "session_fields": cloned_fields,
+        # Session-field arrays (e.g. packed applied-override masks) must count
+        # toward the history byte budget, otherwise the configured limit never
+        # sees them and stack trimming under-accounts memory.
+        # 会话字段里的数组（如位压缩的覆盖掩码快照）必须计入历史字节预算，
+        # 否则配置的上限看不到这部分数据，栈裁剪会低估内存。
+        "session_fields_nbytes": _estimate_value_array_nbytes(cloned_fields),
         "artifact_paths": [],
         "artifact_nbytes": 0,
     }
@@ -241,6 +271,7 @@ def _restore_checkpoint(
     else:
         preview_cache = None
     if preview_cache is not None:
+        preview_cache = refresh_preview_cache_revision(preview_cache)
         session_data["preview_cache"] = preview_cache
         store.put(session_id, "preview_cache", preview_cache)
 
@@ -259,6 +290,7 @@ def _restore_checkpoint(
         "editor_selection_revision": 0,
         "editor_selection_content_generation": 0,
         "free_color_set": set(),
+        "recipe_override_applied_masks": {},
     }
     restore_keys = (
         (
@@ -364,7 +396,24 @@ def _stack_artifact_nbytes(stack: list[dict[str, Any]]) -> int:
             total += int(checkpoint.get("artifact_nbytes") or 0)
         except (TypeError, ValueError):
             continue
+        try:
+            total += int(checkpoint.get("session_fields_nbytes") or 0)
+        except (TypeError, ValueError):
+            continue
     return total
+
+
+def _estimate_value_array_nbytes(value: Any) -> int:
+    """Sum ``ndarray`` bytes inside an arbitrary cloned session value.
+    统计任意克隆会话值内 ndarray 的字节总量。
+    """
+    if isinstance(value, np.ndarray):
+        return int(value.nbytes)
+    if isinstance(value, dict):
+        return sum(_estimate_value_array_nbytes(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return sum(_estimate_value_array_nbytes(item) for item in value)
+    return 0
 
 
 def _copy_preview_cache_ref(ref: dict[str, Any]) -> dict[str, Any]:

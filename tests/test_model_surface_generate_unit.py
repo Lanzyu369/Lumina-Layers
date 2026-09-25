@@ -255,13 +255,15 @@ def test_generate_routes_model_surface_session_to_overlay_worker(
         },
     )
 
-    async def fake_submit(_fn, *_args):
+    async def fake_submit(_fn, *_args, **_kwargs):
         out_path = tmp_path / "surface.3mf"
+        glb_path = tmp_path / "surface.glb"
         out_path.write_bytes(b"3mf")
+        glb_path.write_bytes(b"generated surface glb")
         return (
             {
                 "threemf_path": str(out_path),
-                "glb_path": None,
+                "glb_path": str(glb_path),
                 "status_msg": "Surface OK",
             },
             {
@@ -320,6 +322,7 @@ def test_generate_routes_model_surface_session_to_overlay_worker(
     )
     assert "surface_model_path" not in submitted_params["converter_params"]
     assert response.json()["preview_3d_url"] is None
+    assert not (tmp_path / "surface.glb").exists()
 
     download_url = response.json()["download_url"]
     download_file_id = download_url.rsplit("/", 1)[-1]
@@ -543,6 +546,7 @@ def test_worker_generate_model_surface_overlay_exports_bambu_3mf(tmp_path):
                     "enable_relief": True,
                     "enable_cloisonne": True,
                     "enable_coating": True,
+                    "enable_wipe_tower_auto_placement": False,
                     "add_loop": False,
                     "loop_width": 4.0,
                     "loop_length": 8.0,
@@ -566,8 +570,92 @@ def test_worker_generate_model_surface_overlay_exports_bambu_3mf(tmp_path):
     assert captured["cover_source"] == str(image_path)
     assert captured["settings"] == {"layer_height": "0.04"}
     assert captured["enable_base_layer_height_modifier"] is False
+    assert captured["enable_wipe_tower_auto_placement"] is False
     assert captured["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.4"
     Path(result["threemf_path"]).unlink(missing_ok=True)
+    assert not list(tmp_path.glob("*.glb"))
+
+
+def test_worker_does_not_export_print_scene_as_surface_preview_glb(tmp_path):
+    image_path = tmp_path / "surface-art.png"
+    lut_path = tmp_path / "lut.npy"
+    model_path = tmp_path / "plate.stl"
+    Image.new("RGB", (2, 2), (255, 0, 0)).save(image_path)
+    lut_path.write_bytes(b"lut")
+    model_path.write_bytes(b"solid plate\nendsolid plate\n")
+
+    scene = trimesh.Scene(
+        {"surface_base": trimesh.creation.box(extents=(2.0, 2.0, 1.0))}
+    )
+    overlay = OverlaySceneResult(
+        scene=scene,
+        slot_names=["surface_base"],
+        preview_colors={"surface_base": (245, 245, 245)},
+    )
+
+    def fake_export_scene_with_bambu_metadata(**kwargs):
+        Path(kwargs["output_path"]).write_bytes(b"3mf")
+        return kwargs["output_path"]
+
+    from api.workers.converter_workers import worker_generate_model_surface_overlay
+
+    with (
+        patch("config.TEMP_DIR", str(tmp_path)),
+        patch(
+            "core.model_surface.pipeline.build_surface_overlay_scene",
+            return_value=overlay,
+        ),
+        patch(
+            "utils.bambu_3mf_writer.export_scene_with_bambu_metadata",
+            side_effect=fake_export_scene_with_bambu_metadata,
+        ),
+        patch.object(
+            trimesh.Scene,
+            "export",
+            side_effect=AssertionError("print scene must not become browser GLB"),
+        ) as export_glb,
+    ):
+        result = worker_generate_model_surface_overlay(
+            str(image_path),
+            str(lut_path),
+            {
+                "surface_model_path": str(model_path),
+                "surface_footprint": {
+                    "frame": {
+                        "origin": [0.0, 0.0, 1.0],
+                        "normal": [0.0, 0.0, 1.0],
+                        "u_axis": [1.0, 0.0, 0.0],
+                        "v_axis": [0.0, 1.0, 0.0],
+                    },
+                    "outer": [
+                        [-1.0, -1.0],
+                        [1.0, -1.0],
+                        [1.0, 1.0],
+                        [-1.0, 1.0],
+                        [-1.0, -1.0],
+                    ],
+                    "holes": [],
+                    "bounds_width_mm": 2.0,
+                    "bounds_height_mm": 2.0,
+                },
+                "surface_pocket_depth_mm": 0.08,
+                "converter_params": {
+                    "target_width_mm": 2.0,
+                    "backing_infill_density_percent": 100,
+                },
+            },
+        )
+
+    output_path = Path(result["threemf_path"])
+    try:
+        assert output_path.read_bytes() == b"3mf"
+        assert result["glb_path"] is None
+        export_glb.assert_not_called()
+        assert not list(tmp_path.glob("*.glb"))
+    finally:
+        output_path.unlink(missing_ok=True)
+
+
 
 
 def test_worker_generate_model_surface_overlay_rejects_sparse_backing(tmp_path):
@@ -659,6 +747,7 @@ def test_worker_generates_native_vector_surface_3mf_without_board_or_margin_stre
     )
 
     output_path = Path(result["threemf_path"])
+    assert result["glb_path"] is None
     try:
         assert output_path.exists()
         core_ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
@@ -794,6 +883,7 @@ def test_worker_preserves_surface_under_transparent_png(tmp_path):
     )
 
     output_path = Path(result["threemf_path"])
+    assert result["glb_path"] is None
     try:
         core_ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
         with zipfile.ZipFile(output_path, "r") as archive:

@@ -21,6 +21,7 @@ import pytest
 from shapely.geometry import box
 
 from core.task_parallelism import AdaptiveParallelismPlan
+from core.vector_engine import VectorProcessor
 from core.vector_matchers import (
     MATERIAL_ARCHIVE_LUT_SENTINEL,
     MaterialVectorMatcher,
@@ -106,9 +107,6 @@ def _parallelism_plan(
         work_item_ceiling=40,
         work_unit_ceiling=4,
         stage_ceiling=4,
-        memory_ceiling=max(1, workers),
-        available_memory_bytes=8 * 1024**3,
-        estimated_worker_bytes=256 * 1024**2,
         limiting_reason=limiting_reason,
         demand_snapshot_fallback=False,
     )
@@ -274,6 +272,44 @@ class TestMaterialVectorMatcherSolveForFills:
             _dist, idx = m.kdtree.query(lab)
             assert int(idx[0]) == expected_idx
 
+    def test_exact_source_colors_keep_their_own_recipes_when_lab_rows_collide(self):
+        """Exact material fills must not inherit a colliding colour's recipe."""
+
+        first_rgb = (73, 92, 134)
+        second_rgb = (73, 92, 135)
+        matcher = _build_matcher(layer_count=5, materials_count=4)
+        matcher.solve_for_fills([first_rgb, second_rgb])
+
+        first_lab = matcher._rgb_to_lab(np.array([first_rgb], dtype=np.uint8))
+        second_lab = matcher._rgb_to_lab(np.array([second_rgb], dtype=np.uint8))
+        np.testing.assert_array_equal(first_lab, second_lab)
+
+        processor = VectorProcessor.from_img_processor(
+            matcher,
+            color_mode="Material Archive",
+        )
+        matched = processor._match_colors(
+            [
+                {"geometry": box(0, 0, 1, 1), "color": first_rgb},
+                {"geometry": box(2, 0, 3, 1), "color": second_rgb},
+            ],
+            replacement_manager=None,
+            num_channels=4,
+            num_layers=5,
+        )
+
+        row_by_rgb = {
+            tuple(int(value) for value in rgb): index
+            for index, rgb in enumerate(matcher.lut_rgb)
+        }
+        for item in matched:
+            expected_index = row_by_rgb[item["color"]]
+            assert item["lut_idx"] == expected_index
+            np.testing.assert_array_equal(
+                item["recipe"],
+                matcher.ref_stacks[expected_index],
+            )
+
     def test_resolves_and_forwards_vector_parallelism(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -294,7 +330,6 @@ class TestMaterialVectorMatcherSolveForFills:
             work_units: int,
             min_parallel_work_units: int,
             work_units_per_worker: int,
-            estimated_worker_bytes: int,
         ) -> AdaptiveParallelismPlan:
             policy_calls.append(
                 {
@@ -305,7 +340,6 @@ class TestMaterialVectorMatcherSolveForFills:
                     "work_units": work_units,
                     "min_parallel_work_units": min_parallel_work_units,
                     "work_units_per_worker": work_units_per_worker,
-                    "estimated_worker_bytes": estimated_worker_bytes,
                 },
             )
             return _parallelism_plan(
@@ -332,7 +366,6 @@ class TestMaterialVectorMatcherSolveForFills:
                 "work_units": 4,
                 "min_parallel_work_units": 32,
                 "work_units_per_worker": 16,
-                "estimated_worker_bytes": 256 * 1024**2,
             }
         ]
         assert runtime.observed_parallelism == [3]
@@ -427,11 +460,6 @@ class TestMaterialVectorMatcherSolveForFills:
                 effective_cpu_count=8,
                 limiting_source="host_fallback",
             ),
-        )
-        monkeypatch.setattr(
-            task_parallelism,
-            "_available_memory_bytes",
-            lambda: 16 * 1024**3,
         )
         monkeypatch.setenv("LUMINA_VECTOR_PARALLELISM", "invalid")
         monkeypatch.setenv("LUMINA_MAX_WORKERS", "2")

@@ -26,6 +26,12 @@ import msgpack
 import numpy as np
 
 from core.native_reference import build_model_package_runtime_payload
+from core.registry_transport import (
+    fallback_base,
+    fetch_catalog,
+    map_package_url,
+    read_with_fallback,
+)
 from utils.lut_manager import LUTManager
 
 MANIFEST_NAME = "lumina_lut_bundle.json"
@@ -84,12 +90,12 @@ def _env_csv(name: str) -> tuple[str, ...]:
 
 
 def get_registry_config() -> LutRegistryConfig:
-    """Resolve registry sync configuration from environment variables."""
+    """Resolve registry sync configuration from environment variables.
+    从环境变量解析同步配置，显式空地址禁用同步。
+    """
 
-    base_url = (
-        os.environ.get("LUMINA_LUT_REGISTRY_URL")
-        or os.environ.get("LUMINA_MATERIAL_REGISTRY_URL")
-        or ""
+    base_url = os.environ.get(
+        "LUMINA_LUT_REGISTRY_URL", os.environ.get("LUMINA_MATERIAL_REGISTRY_URL", "")
     ).strip()
     channels = (
         _env_csv("LUMINA_LUT_REGISTRY_CHANNELS")
@@ -205,8 +211,18 @@ def _safe_lut_path_under_root(local_path: Any, *, cloud: bool) -> Path | None:
     parts = _normalized_lut_local_parts(local_path, strip_cloud_prefix=cloud)
     if not parts:
         return None
-    root = Path(LUTManager.LUT_PRESET_DIR).resolve()
-    target_root = (root / "Cloud").resolve() if cloud else root
+    if cloud:
+        target_root = LUTManager.cloud_lut_dir().resolve()
+    elif parts[0].lower() == "custom":
+        target_root = LUTManager.custom_lut_dir().resolve()
+        parts = parts[1:]
+    elif parts[0].lower() == "cloud":
+        target_root = LUTManager.cloud_lut_dir().resolve()
+        parts = parts[1:]
+    else:
+        target_root = Path(LUTManager.LUT_PRESET_DIR).resolve()
+    if not parts:
+        return None
     try:
         target = (target_root / Path(*parts)).resolve()
         target.relative_to(target_root)
@@ -230,13 +246,16 @@ def _safe_index_installed_path(record: dict[str, Any]) -> Path | None:
     raw_path = record.get("installed_path")
     if not isinstance(raw_path, str) or not raw_path.strip():
         return None
-    root = Path(LUTManager.LUT_PRESET_DIR).resolve()
     try:
         candidate = Path(raw_path)
-        if not candidate.is_absolute():
-            candidate = root / candidate
-        path = candidate.resolve()
-        path.relative_to(root)
+        if candidate.is_absolute():
+            path = candidate.resolve()
+            if LUTManager.logical_lut_path(path) is None:
+                return None
+        else:
+            path = _safe_lut_path_under_root(raw_path, cloud=False)
+            if path is None:
+                return None
     except (OSError, ValueError):
         return None
     return _existing_lut_path(path)
@@ -250,10 +269,7 @@ def _read_installed_index_safe() -> dict[str, Any]:
 
 
 def _relative_lut_preset_path(path: Path) -> str | None:
-    try:
-        return path.resolve().relative_to(Path(LUTManager.LUT_PRESET_DIR).resolve()).as_posix()
-    except (OSError, ValueError):
-        return None
+    return LUTManager.logical_lut_path(path)
 
 
 def _catalog_item_local_presence(
@@ -365,7 +381,9 @@ def fetch_remote_catalog(
     offset: int = 0,
     client: httpx.Client | None = None,
 ) -> dict[str, Any]:
-    """Fetch a bounded LUT catalog payload from the configured registry."""
+    """Fetch a bounded LUT catalog payload from the configured registry.
+    从配置的主库读取有界 LUT 目录，临时故障时可尝试公开备用库。
+    """
 
     config = get_registry_config()
     base_url = _require_base_url(config)
@@ -378,13 +396,16 @@ def fetch_remote_catalog(
     owns_client = client is None
     active_client = client or _make_http_client()
     try:
-        response = active_client.get(
-            f"{base_url}/luts/catalog",
+        response = fetch_catalog(
+            client=active_client, primary=base_url, family="LUT", suffix="/luts/catalog",
+            channels=selected_channels,
             params=params,
             headers=_headers(config),
         )
     except httpx.HTTPError as exc:
         raise LutRegistryRemoteError(f"Failed to fetch LUT catalog: {exc}") from exc
+    except ValueError as exc:
+        raise LutRegistryRemoteError("LUT catalog response is invalid") from exc
     finally:
         if owns_client:
             active_client.close()
@@ -872,7 +893,7 @@ def _safe_cloud_target(local_path: Any) -> Path:
     if not parts:
         raise LutRegistryPackageError("local_path is unsafe")
 
-    cloud_root = (Path(LUTManager.LUT_PRESET_DIR) / "Cloud").resolve()
+    cloud_root = LUTManager.cloud_lut_dir().resolve()
     target = (cloud_root / Path(*parts)).resolve()
     if target != cloud_root and cloud_root not in target.parents:
         raise LutRegistryPackageError("local_path must stay within Cloud")
@@ -880,7 +901,7 @@ def _safe_cloud_target(local_path: Any) -> Path:
 
 
 def _index_path() -> Path:
-    return Path(LUTManager.LUT_PRESET_DIR) / "_sync" / "luts" / "index.json"
+    return LUTManager.cloud_lut_sync_dir() / "index.json"
 
 
 class _LutRegistryInstallFileLock:
@@ -994,11 +1015,33 @@ def _download_limited_package(
     package_url: str,
     headers: dict[str, str],
     expected_bytes: int,
+    channels: list[str] | tuple[str, ...] | None = None,
+) -> bytes:
+    config = get_registry_config()
+    primary = config.base_url or ""
+    fallback = fallback_base(primary, "LUT")
+    try:
+        backup_package = map_package_url(package_url, primary, fallback) if fallback else None
+    except ValueError:
+        backup_package = None
+    return read_with_fallback(
+        client=client, primary=primary, fallback=fallback if backup_package else None,
+        headers=headers, channels=channels or config.channels,
+        action=lambda base: _download_limited_package_once(
+            client=client, package_url=package_url if base == primary else backup_package,
+            headers=headers, expected_bytes=expected_bytes),
+    )
+
+
+def _download_limited_package_once(
+    *, client: httpx.Client, package_url: str, headers: dict[str, str], expected_bytes: int,
 ) -> bytes:
     chunks: list[bytes] = []
     total = 0
     try:
-        with client.stream("GET", package_url, headers=headers) as response:
+        with client.stream(
+            "GET", package_url, headers=headers, follow_redirects=False
+        ) as response:
             if 300 <= response.status_code < 400:
                 raise LutRegistryRemoteError("LUT package download was redirected")
             try:
@@ -1095,6 +1138,7 @@ def _install_verified_catalog_entry(
     entry: dict[str, Any],
     *,
     client: httpx.Client | None = None,
+    channels: list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """Download, validate, and install a cloud LUT package under Cloud/."""
 
@@ -1119,6 +1163,7 @@ def _install_verified_catalog_entry(
             package_url=package_url,
             headers=_headers(config),
             expected_bytes=package_bytes,
+            channels=channels or config.channels,
         )
     finally:
         if owns_client:
@@ -1192,7 +1237,9 @@ def install_lut_package(
     channels: list[str] | tuple[str, ...] | None = None,
     client: httpx.Client | None = None,
 ) -> dict[str, Any]:
-    """Resolve a registry catalog entry server-side and install its package."""
+    """Resolve a registry catalog entry server-side and install its package.
+    在服务端校验目录条目后安装，下载回退保留所选频道的权限边界。
+    """
 
     if not isinstance(lut_id, str) or not lut_id.strip():
         raise LutRegistryPackageError("lut_id is required")
@@ -1208,14 +1255,13 @@ def install_lut_package(
             channels=channels,
             client=active_client,
         )
-        return _install_verified_catalog_entry(entry, client=active_client)
+        return _install_verified_catalog_entry(entry, client=active_client, channels=channels)
     finally:
         if owns_client:
             active_client.close()
 
 
 def _local_lut_status_entries() -> list[dict[str, Any]]:
-    root = Path(LUTManager.LUT_PRESET_DIR).resolve()
     entries: list[dict[str, Any]] = []
     try:
         lut_files = LUTManager.get_all_lut_files()
@@ -1225,8 +1271,10 @@ def _local_lut_status_entries() -> list[dict[str, Any]]:
     for display_name, raw_path in sorted(lut_files.items(), key=lambda item: item[0].casefold()):
         try:
             path = Path(raw_path).resolve()
-            relative_path = path.relative_to(root).as_posix()
+            relative_path = LUTManager.logical_lut_path(path)
         except (OSError, ValueError):
+            continue
+        if relative_path is None:
             continue
         if "_sync" in PurePosixPath(relative_path).parts:
             continue

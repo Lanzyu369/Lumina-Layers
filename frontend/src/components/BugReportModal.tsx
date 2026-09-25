@@ -6,7 +6,10 @@ import { relayBugReport, submitBugReport } from "../api/feedback";
 import type { BugReportRequestPayload, BugReportResponse } from "../api/feedback";
 import { trackLuminaEvent } from "../analytics/umami";
 import { useI18n } from "../i18n/context";
-import { collectBugReportContext } from "../utils/bugReportContext";
+import {
+  collectBugReportContext,
+  collectBugReportOriginalImage,
+} from "../utils/bugReportContext";
 import { loadPersistedLogs } from "../utils/clientLog";
 import { isUnsafeVisibleErrorText } from "../utils/visibleErrorText";
 import { useActionHistoryStore } from "../stores/actionHistoryStore";
@@ -547,6 +550,12 @@ export function BugReportModal({
     setNotice(null);
     setFailedReport(null);
 
+    const currentOriginalImage = collectBugReportOriginalImage();
+    const expectedOriginalName = context.active_original_image_ref?.filename ?? null;
+    const originalImage =
+      currentOriginalImage && currentOriginalImage.name === expectedOriginalName
+        ? currentOriginalImage
+        : null;
     const reportPayload: BugReportRequestPayload = {
       description: trimmedDescription,
       user_email: email.trim() ? email.trim() : null,
@@ -554,7 +563,9 @@ export function BugReportModal({
       screenshot_data_url: screenshotDataUrl,
     };
     try {
-      const response = await submitBugReport(reportPayload);
+      const response = originalImage
+        ? await submitBugReport(reportPayload, originalImage)
+        : await submitBugReport(reportPayload);
       setSubmittedTicket(response);
       setSubmittedPayload(reportPayload);
       setSubmitting(false);
@@ -810,6 +821,33 @@ export function BugReportModal({
                       ? t("bug_report_success_email_failed")
                       : t("bug_report_success_email_unconfigured")}
               </p>
+
+              {submittedTicket.original_image_status && (
+                <StatusBanner
+                  tone={
+                    submittedTicket.original_image_status === "attached" ||
+                    submittedTicket.original_image_status === "session_fallback"
+                      ? "success"
+                      : "warning"
+                  }
+                  role="status"
+                >
+                  <span
+                    data-testid="bug-report-original-image-status"
+                    data-status={submittedTicket.original_image_status}
+                  >
+                    {submittedTicket.original_image_status === "attached"
+                      ? t("bug_report_success_original_attached")
+                      : submittedTicket.original_image_status === "session_fallback"
+                        ? t("bug_report_success_original_session_fallback")
+                        : submittedTicket.original_image_status === "too_large"
+                          ? t("bug_report_success_original_too_large")
+                          : submittedTicket.original_image_status === "failed"
+                            ? t("bug_report_success_original_failed")
+                            : t("bug_report_success_original_not_applicable")}
+                  </span>
+                </StatusBanner>
+              )}
 
               {(submittedTicket.email_status === "failed" ||
                 submittedTicket.email_status === "unconfigured") &&

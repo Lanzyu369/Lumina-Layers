@@ -23,6 +23,7 @@ import {
   panelSurfaceClass,
   sectionCardClass,
 } from "./ui/panelPrimitives";
+import { WIKI_DOCS } from "../utils/wikiDocs";
 
 const colorModeOptions = Object.values(ExtractorColorMode).map((v) => ({
   label: v,
@@ -386,7 +387,7 @@ export default function ExtractorPanel() {
               <Dropdown
                 label={t("ext_color_mode_label")}
                 labelAccessory={
-                  <HelpDot title={t("ext_color_mode_label")} description={t("ext_color_mode_hint")} />
+                  <HelpDot title={t("ext_color_mode_label")} description={t("ext_color_mode_hint")} wikiPath={WIKI_DOCS.lutExtractor} />
                 }
                 value={color_mode}
                 options={colorModeOptions}
@@ -399,7 +400,7 @@ export default function ExtractorPanel() {
                 <Dropdown
                   label={t("ext_page_label")}
                   labelAccessory={
-                    <HelpDot title={t("ext_page_label")} description={t("ext_page_hint")} />
+                    <HelpDot title={t("ext_page_label")} description={t("ext_page_hint")} wikiPath={WIKI_DOCS.lutExtractor} />
                   }
                   value={page}
                   options={pageOptions}
@@ -485,16 +486,17 @@ export default function ExtractorPanel() {
               >
                 <div className="flex flex-col gap-2 pt-4">
                   <div className="grid gap-2 lg:grid-cols-1 xl:grid-cols-1 2xl:grid-cols-1">
-                    <Slider label={t("ext_offset_x_label")} tooltip={t("ext_offset_x_hint")} value={offset_x} min={-30} max={30} step={1} onChange={setOffsetX} />
-                    <Slider label={t("ext_offset_y_label")} tooltip={t("ext_offset_y_hint")} value={offset_y} min={-30} max={30} step={1} onChange={setOffsetY} />
-                    <Slider label={t("ext_zoom_label")} tooltip={t("ext_zoom_hint")} value={zoom} min={0.8} max={1.2} step={0.01} onChange={setZoom} />
-                    <Slider label={t("ext_distortion_label")} tooltip={t("ext_distortion_hint")} value={distortion} min={-0.2} max={0.2} step={0.01} onChange={setDistortion} />
+                    <Slider label={t("ext_offset_x_label")} tooltip={t("ext_offset_x_hint")} wikiPath={WIKI_DOCS.extractorPhotoCorrection} value={offset_x} min={-30} max={30} step={1} onChange={setOffsetX} />
+                    <Slider label={t("ext_offset_y_label")} tooltip={t("ext_offset_y_hint")} wikiPath={WIKI_DOCS.extractorPhotoCorrection} value={offset_y} min={-30} max={30} step={1} onChange={setOffsetY} />
+                    <Slider label={t("ext_zoom_label")} tooltip={t("ext_zoom_hint")} wikiPath={WIKI_DOCS.extractorPhotoCorrection} value={zoom} min={0.8} max={1.2} step={0.01} onChange={setZoom} />
+                    <Slider label={t("ext_distortion_label")} tooltip={t("ext_distortion_hint")} wikiPath={WIKI_DOCS.extractorPhotoCorrection} value={distortion} min={-0.2} max={0.2} step={0.01} onChange={setDistortion} />
                   </div>
                   <div className="grid grid-cols-2 gap-2">
-                    <Checkbox label={t("ext_vignette_label")} tooltip={t("ext_vignette_hint")} checked={vignette_correction} onChange={setVignetteCorrection} />
+                    <Checkbox label={t("ext_vignette_label")} tooltip={t("ext_vignette_hint")} wikiPath={WIKI_DOCS.extractorPhotoCorrection} checked={vignette_correction} onChange={setVignetteCorrection} />
                     <Checkbox
                       label={t("ext_auto_wb_label")}
                       tooltip={t("ext_auto_wb_hint")}
+                      wikiPath={WIKI_DOCS.extractorPhotoCorrection}
                       checked={autoWbDisabled ? false : auto_wb}
                       onChange={(v) => void setAutoWb(v)}
                       disabled={autoWbDisabled}
@@ -507,7 +509,7 @@ export default function ExtractorPanel() {
         </section>
 
         <section data-testid="colorchecker-toggle-section" className={`${sectionCardClass}`}>
-          <Checkbox label={t("ext_colorchecker_label")} tooltip={t("ext_colorchecker_hint")} checked={colorchecker_enabled} onChange={setColorcheckerEnabled} disabled={isLoading} />
+          <Checkbox label={t("ext_colorchecker_label")} tooltip={t("ext_colorchecker_hint")} wikiPath={WIKI_DOCS.colorcheckerCalibration} checked={colorchecker_enabled} onChange={setColorcheckerEnabled} disabled={isLoading} />
         </section>
 
         <section
@@ -590,6 +592,7 @@ export default function ExtractorPanel() {
               <Slider
                 label={t("ext_nudge_step_label")}
                 tooltip={t("ext_nudge_step_hint")}
+                wikiPath={WIKI_DOCS.extractorPhotoCorrection}
                 value={nudge_step}
                 min={1}
                 max={10}

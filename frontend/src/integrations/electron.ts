@@ -4,6 +4,9 @@ import { useSettingsStore } from "../stores/settingsStore";
 interface ElectronAPI {
   setLanguage: (lang: string) => void;
   getAppVersion: () => Promise<string>;
+  getNativeBedModel?: (
+    deviceProfileId: string,
+  ) => Promise<ArrayBuffer | Uint8Array | null>;
   pickWorkshopImage?: () => Promise<{
     name: string;
     mimeType: string;

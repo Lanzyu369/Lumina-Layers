@@ -74,6 +74,7 @@ _NUMERIC_RUN_METRICS = (
     "peak_rss_increase_mb",
     "peak_thread_count",
     "peak_child_process_count",
+    "peak_container_current_mb",
 )
 _THREAD_ENVIRONMENT_KEYS = (
     "OMP_NUM_THREADS",
@@ -1106,8 +1107,32 @@ class _ResourceSampler:
         self.peak_rss_bytes = 0
         self.peak_thread_count = 0
         self.peak_child_process_count = 0
+        # Container charge, sampled from this process's own cgroup. Inside a
+        # memory-limited container the parent+children RSS sum is the useful
+        # figure; ``memory.current`` also covers pages the allocator has not
+        # returned yet.
+        # 容器计费：从本进程所属 cgroup 采样。受限容器里父进程与子进程的 RSS
+        # 之和是有意义的数字；``memory.current`` 还包含分配器尚未归还的页。
+        self.container_limit_bytes: int | None = None
+        self.container_source = "unavailable"
+        self.peak_container_current_bytes = 0
+
+    def _sample_container(self) -> None:
+        try:
+            from core.system_capacity import get_effective_memory_capacity
+
+            capacity = get_effective_memory_capacity()
+        except (ImportError, AttributeError, OSError, RuntimeError, ValueError):
+            return
+        self.container_limit_bytes = capacity.limit_bytes
+        self.container_source = capacity.source
+        if capacity.container_used_bytes is not None:
+            self.peak_container_current_bytes = max(
+                self.peak_container_current_bytes, int(capacity.container_used_bytes)
+            )
 
     def _sample(self) -> int | None:
+        self._sample_container()
         try:
             children = self._process.children(recursive=True)
             processes = [self._process, *children]
@@ -1196,9 +1221,6 @@ def _parallelism_metadata(
     if requested == "":
         requested = "<empty>"
 
-    def _first_value(*values):
-        return next((value for value in values if value is not None), None)
-
     def _optional_int(value, *, minimum: int) -> int | None:
         if isinstance(value, bool):
             return None
@@ -1223,78 +1245,46 @@ def _parallelism_metadata(
     if kind == "raster":
         stage_timings = hifi_timings
         stage_prefix = "mesh_parallelism_"
-        native_timings: dict[str, Any] = {}
     else:
         stage_timings = vector_timings
         stage_prefix = "material_parallelism_"
-        native_timings = vector_timings
 
-    def _stage_or_native(stage_suffix: str, native_suffix: str):
-        return _first_value(
-            stage_timings.get(f"{stage_prefix}{stage_suffix}"),
-            native_timings.get(f"native_mesh_parallel_{native_suffix}"),
-        )
+    def _stage_value(suffix: str):
+        return stage_timings.get(f"{stage_prefix}{suffix}")
 
     return {
         "requested": requested,
         "observed_workers": _optional_int(
-            _stage_or_native("workers", "workers"),
-            minimum=1,
-        ),
-        "native_workers": _optional_int(
-            native_timings.get("native_mesh_parallel_workers"),
+            _stage_value("workers"),
             minimum=1,
         ),
         "effective_cpu": _optional_int(
-            _stage_or_native("effective_cpu", "effective_cpu"),
+            _stage_value("effective_cpu"),
             minimum=1,
         ),
         "cpu_topology": _optional_reason(
-            _stage_or_native("cpu_topology", "cpu_topology"),
+            _stage_value("cpu_topology"),
         ),
         "cpu_scheduling_policy": _optional_reason(
-            _stage_or_native(
-                "cpu_scheduling_policy",
-                "cpu_scheduling_policy",
-            ),
+            _stage_value("cpu_scheduling_policy"),
         ),
         "performance_cpu": _optional_int(
-            _stage_or_native("performance_cpu", "performance_cpu"),
+            _stage_value("performance_cpu"),
             minimum=1,
         ),
         "outer_demand": _optional_int(
-            _stage_or_native("outer_demand", "outer_demand"),
+            _stage_value("outer_demand"),
             minimum=1,
         ),
         "cpu_fair_share": _optional_int(
-            _stage_or_native("cpu_fair_share", "cpu_fair_share"),
-            minimum=1,
-        ),
-        "memory_ceiling": _optional_int(
-            _stage_or_native("memory_ceiling", "memory_ceiling"),
+            _stage_value("cpu_fair_share"),
             minimum=1,
         ),
         "limiting_reason": _optional_reason(
-            _stage_or_native("limit", "limit"),
+            _stage_value("limit"),
         ),
         "demand_snapshot_fallback": _optional_bool(
-            _stage_or_native("demand_fallback", "demand_fallback"),
-        ),
-        "native_inflight_limit": _optional_int(
-            native_timings.get("native_mesh_parallel_inflight_limit"),
-            minimum=1,
-        ),
-        "native_max_estimated_batch_bytes": _optional_int(
-            native_timings.get(
-                "native_mesh_parallel_max_estimated_batch_bytes",
-            ),
-            minimum=0,
-        ),
-        "native_oversized_serial_batches": _optional_int(
-            native_timings.get(
-                "native_mesh_parallel_oversized_serial_batches",
-            ),
-            minimum=0,
+            _stage_value("demand_fallback"),
         ),
     }
 
@@ -1310,6 +1300,9 @@ def execute_case(
     """Execute and profile one quality-locked conversion phase.
 
     执行并分析一次质量参数锁定的转换阶段。
+
+    CPU totals include the material workers' explicitly reported CPU time.
+    CPU 总量包含材质子进程明确回传的累计 CPU 时间。
 
     Args:
         case: Deterministic profile case. 确定性的性能分析案例。
@@ -1372,14 +1365,26 @@ def execute_case(
         snapshot = semantic_snapshot(result) if capture_semantics else None
         hifi_timings = dict(result.get("_hifi_timings") or {})
         vector_timings = _extract_vector_timings(result)
+        child_cpu_s = float(vector_timings.get("materialize_child_cpu_s", 0.0))
+        total_cpu_s = cpu_s + child_cpu_s
         metrics = {
             "total_s": elapsed,
             "queue_wait_s": 0.0,
             "worker_execution_s": elapsed,
-            "cpu_s": cpu_s,
-            "average_cpu_percent": (cpu_s / elapsed * 100.0) if elapsed else 0.0,
+            "cpu_s": total_cpu_s,
+            "parent_cpu_s": cpu_s,
+            "child_cpu_s": child_cpu_s,
+            "average_cpu_percent": (total_cpu_s / elapsed * 100.0) if elapsed else 0.0,
             "rss_at_start_mb": resources.initial_rss_bytes / (1024 * 1024),
             "peak_rss_mb": resources.peak_rss_bytes / (1024 * 1024),
+            "container_limit_mb": (
+                None
+                if resources.container_limit_bytes is None
+                else resources.container_limit_bytes / (1024 * 1024)
+            ),
+            "peak_container_current_mb": resources.peak_container_current_bytes
+            / (1024 * 1024),
+            "container_source": resources.container_source,
             "peak_rss_increase_mb": max(
                 0,
                 resources.peak_rss_bytes - resources.initial_rss_bytes,

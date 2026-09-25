@@ -154,26 +154,6 @@ class TestSuggestColorsMitmPath:
         assert body["target_hex"] == "#AABBCC"
         assert body["target_rgb"] == [170, 187, 204]
 
-    def test_overflow_guard_returns_422_with_hint(
-        self, stub_palette_loader, stub_cache_miss, stub_runtime_miss
-    ):
-        client, *_ = _client_with_state()
-        response = client.post(
-            "/api/extractor/material-solver-cache/suggest-colors",
-            data={
-                "material_directory_names": json.dumps(["red", "blue", "white"]),
-                "layer_count": 10,
-                "layer_height_mm": 0.08,
-                "substrate": "white",
-                "target_hex": "#808080",
-                "top_k": 5,
-                "max_combinations": 10_000,
-            },
-        )
-        assert response.status_code == 422
-        detail = response.json()["detail"]
-        assert "combinations" in detail.lower()
-        assert "cache" in detail.lower()
 
 
 class TestSuggestColorsCachePath:

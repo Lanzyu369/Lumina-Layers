@@ -310,10 +310,17 @@ def get_lut_details_service(
     resolved_alias_path = Path(alias_config_path or (Path(__file__).resolve().parents[2] / "assets" / "lut_details_aliases.json")).resolve()
     alias_resolver = AliasResolver.from_file(resolved_alias_path)
     parser = LutParser()
+    additional_roots: tuple[tuple[str, Path], ...] = ()
+    if preset_dir is None:
+        additional_roots = (
+            ("Custom", LUTManager.custom_lut_dir()),
+            ("Cloud", LUTManager.cloud_lut_dir()),
+        )
     indexer = LutCatalogIndexer(
         preset_dir=resolved_preset_dir,
         alias_resolver=alias_resolver,
         parser=parser,
+        additional_roots=additional_roots,
     )
     return LutDetailService(
         preset_dir=resolved_preset_dir,

@@ -54,10 +54,26 @@ describe("convertPreview", () => {
     enable_outline: true,
     outline_width: 2.5,
     svg_pixels_per_mm: 25.5,
+    enable_smooth_vector_preview: false,
     hue_weight: 0,
     chroma_gate: 0,
     is_dark: false,
   };
+
+  it("serializes SVG compensation without dropping disabled zero thresholds", async () => {
+    mockPost.mockResolvedValueOnce({ data: { status: "ok", session_id: "svg" } });
+    await convertPreview(new File(["<svg/>"], "holes.svg", { type: "image/svg+xml" }), {
+      ...previewParams,
+      modeling_mode: ModelingMode.VECTOR,
+      svg_hole_compensation_enabled: true,
+      svg_hole_max_area_mm2: 0.75,
+      svg_hole_max_width_mm: 0,
+    });
+    const fd = mockPost.mock.calls[0][1] as FormData;
+    expect(fd.get("svg_hole_compensation_enabled")).toBe("true");
+    expect(fd.get("svg_hole_max_area_mm2")).toBe("0.75");
+    expect(fd.get("svg_hole_max_width_mm")).toBe("0");
+  });
 
   it("builds correct FormData and calls POST /convert/preview", async () => {
     const fakeResponse = {
@@ -89,6 +105,7 @@ describe("convertPreview", () => {
     expect(fd.get("enable_outline")).toBe("true");
     expect(fd.get("outline_width")).toBe("2.5");
     expect(fd.get("svg_pixels_per_mm")).toBe("25.5");
+    expect(fd.get("enable_smooth_vector_preview")).toBe("false");
 
     // 不应设置 responseType: blob（后端返回 JSON）
     expect(config).toMatchObject({ timeout: 0 });
@@ -271,6 +288,21 @@ describe("convertBatch", () => {
     auto_dynamic_range: false,
     enable_relief: false,
   };
+
+  it("serializes source SVG compensation for a batch", async () => {
+    mockPost.mockResolvedValueOnce({ data: { status: "ok", results: [] } });
+    await convertBatch([new File(["<svg/>"], "holes.svg", { type: "image/svg+xml" })], {
+      ...baseBatchParams,
+      modeling_mode: ModelingMode.VECTOR,
+      svg_hole_compensation_enabled: true,
+      svg_hole_max_area_mm2: 0,
+      svg_hole_max_width_mm: 0.12,
+    });
+    const fd = mockPost.mock.calls[0][1] as FormData;
+    expect(fd.get("svg_hole_compensation_enabled")).toBe("true");
+    expect(fd.get("svg_hole_max_area_mm2")).toBe("0");
+    expect(fd.get("svg_hole_max_width_mm")).toBe("0.12");
+  });
 
   it("serializes material archive batch fields into FormData", async () => {
     mockPost.mockResolvedValueOnce({
@@ -730,6 +762,7 @@ describe("generateColorCard", () => {
         nozzle_size: "0.2",
         device_profile_id: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
         build_plate_id: "smooth-high-temp-plate",
+        enable_wipe_tower_auto_placement: false,
       },
       120,
       0.6,
@@ -748,6 +781,7 @@ describe("generateColorCard", () => {
         nozzle_size: "0.2",
         device_profile_id: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
         build_plate_id: "smooth-high-temp-plate",
+        enable_wipe_tower_auto_placement: false,
       },
       { timeout: 0 },
     );

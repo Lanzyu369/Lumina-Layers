@@ -11,7 +11,10 @@ Native RGBA transparency support — no dual-pass hack needed.
 from api.structured_logging import get_logger
 import os
 import io
+import math
+import re
 import time
+import xml.etree.ElementTree as ET
 import numpy as np
 import cv2
 
@@ -30,12 +33,99 @@ _SVG_RASTER_CACHE_MAX = 4
 _RESVG_DPI = 96
 
 
+def _parse_svg_length_to_px(raw: str | None) -> float | None:
+    """Parse one absolute SVG length using the renderer's CSS pixel units.
+
+    按 resvg 使用的 CSS 像素和 DPI 解析一个绝对 SVG 长度。
+    百分比和未知单位不属于绝对长度，返回 ``None``。
+    """
+
+    match = re.match(
+        r"^\s*((?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)"
+        r"(?:[eE][+-]?[0-9]+)?)\s*"
+        r"(px|in|cm|mm|q|pt|pc)?\s*$",
+        str(raw or ""),
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    value = float(match.group(1))
+    unit = (match.group(2) or "px").lower()
+    px_per_unit = {
+        "px": 1.0,
+        "in": float(_RESVG_DPI),
+        "cm": float(_RESVG_DPI) / 2.54,
+        "mm": float(_RESVG_DPI) / 25.4,
+        "q": float(_RESVG_DPI) / 101.6,
+        "pt": float(_RESVG_DPI) / 72.0,
+        "pc": 16.0,
+    }[unit]
+    value *= px_per_unit
+    return value if math.isfinite(value) and value > 0 else None
+
+
+def _svg_canvas_height_width_ratio(svg_path: str) -> float | None:
+    """Read a finite SVG canvas height/width ratio without rasterization."""
+
+    try:
+        root = ET.parse(svg_path).getroot()
+        def is_full_percentage(raw: str | None) -> bool:
+            value = str(raw or "").strip()
+            if not value.endswith("%"):
+                return False
+            try:
+                percentage = float(value[:-1])
+            except ValueError:
+                return False
+            return math.isfinite(percentage) and percentage == 100.0
+
+        view_box_ratio = None
+        view_box = root.attrib.get("viewBox") or root.attrib.get("viewbox")
+        if view_box:
+            values = [
+                float(value)
+                for value in re.split(r"[\s,]+", view_box.strip())
+                if value
+            ]
+            if len(values) == 4 and values[2] > 0 and values[3] > 0:
+                ratio = values[3] / values[2]
+                if math.isfinite(ratio) and ratio > 0:
+                    view_box_ratio = ratio
+
+        raw_width = root.attrib.get("width")
+        raw_height = root.attrib.get("height")
+        width = _parse_svg_length_to_px(raw_width)
+        height = _parse_svg_length_to_px(raw_height)
+        if width is not None and height is not None:
+            ratio = height / width
+            return ratio if math.isfinite(ratio) and ratio > 0 else None
+        if (
+            view_box_ratio is not None
+            and is_full_percentage(raw_width)
+            and is_full_percentage(raw_height)
+        ):
+            return view_box_ratio
+        if raw_width is not None or raw_height is not None:
+            # resvg may use an explicit viewport even when its unit cannot be
+            # resolved here. Falling back to a conflicting viewBox would make
+            # the pre-render memory cap ineffective, so fail closed.
+            return None
+        return view_box_ratio
+    except (OSError, ET.ParseError, TypeError, ValueError, OverflowError):
+        return None
+    return None
+
+
 def rasterize_svg(
     svg_path: str,
     target_width_mm: float,
     pixels_per_mm: float = 20.0,
     *,
     crop_to_content: bool = True,
+    _min_quality_px: int = 800,
+    _max_longest_px: int | None = None,
+    _max_total_pixels: int | None = None,
+    _cache_result: bool = True,
 ) -> np.ndarray:
     """Rasterize an SVG file to an RGBA numpy array via resvg.
     通过 resvg 将 SVG 文件光栅化为 RGBA numpy 数组。
@@ -57,6 +147,12 @@ def rasterize_svg(
             content-aware crop and the post-render scale-back, returning
             the full canvas so pixel coordinates map deterministically to
             mm: ``pixel_x ≈ x_mm * (img.shape[1] / target_width_mm)``.
+        _min_quality_px: Internal lower bound for render width. One-shot
+            thumbnail callers may lower it after bounding the longest edge.
+        _max_longest_px: Internal hard cap for thumbnail canvas dimensions.
+        _max_total_pixels: Internal hard cap for full-canvas pixel count.
+        _cache_result: Internal switch for one-shot child processes where a
+            process-local cache would only duplicate the returned canvas.
 
     Returns:
         (H, W, 4) uint8 RGBA numpy 数组
@@ -64,30 +160,68 @@ def rasterize_svg(
     if not HAS_SVG:
         raise ImportError("Please install 'resvg-py' for SVG support.")
 
+    min_quality_px = max(1, int(_min_quality_px))
+    max_longest_px = (
+        max(1, int(_max_longest_px))
+        if _max_longest_px is not None
+        else None
+    )
+    max_total_pixels = (
+        max(1, int(_max_total_pixels))
+        if _max_total_pixels is not None
+        else None
+    )
     cache_key = None
-    try:
-        svg_abs = os.path.abspath(svg_path)
-        svg_mtime = os.path.getmtime(svg_abs)
-        cache_key = (
-            svg_abs,
-            round(float(target_width_mm), 4),
-            round(float(pixels_per_mm), 2),
-            svg_mtime,
-            bool(crop_to_content),
-        )
-        cached = _SVG_RASTER_CACHE.get(cache_key)
-        if cached is not None:
-            _log.debug("Cache hit: %s @ %spx/mm", os.path.basename(svg_abs), pixels_per_mm)
-            return cached.copy()
-    except (OSError, ValueError, TypeError):
-        cache_key = None
+    if _cache_result:
+        try:
+            svg_abs = os.path.abspath(svg_path)
+            svg_mtime = os.path.getmtime(svg_abs)
+            cache_key = (
+                svg_abs,
+                round(float(target_width_mm), 4),
+                round(float(pixels_per_mm), 2),
+                svg_mtime,
+                bool(crop_to_content),
+                min_quality_px,
+                max_longest_px,
+                max_total_pixels,
+            )
+            cached = _SVG_RASTER_CACHE.get(cache_key)
+            if cached is not None:
+                _log.debug("Cache hit: %s @ %spx/mm", os.path.basename(svg_abs), pixels_per_mm)
+                return cached.copy()
+        except (OSError, ValueError, TypeError):
+            cache_key = None
 
     _log.debug("Rasterizing (resvg): %s", svg_path)
     _t0_total = time.perf_counter()
 
     target_width_px = max(1, int(target_width_mm * pixels_per_mm))
-    MIN_QUALITY_PX = 800
-    render_width_px = max(target_width_px, MIN_QUALITY_PX)
+    render_width_px = max(target_width_px, min_quality_px)
+    if max_longest_px is not None or max_total_pixels is not None:
+        canvas_ratio = _svg_canvas_height_width_ratio(svg_path)
+        if canvas_ratio is None:
+            raise ValueError(
+                "SVG canvas ratio is required for bounded raster rendering"
+            )
+        if max_longest_px is not None:
+            longest_bounded_width_px = int(
+                math.floor(max_longest_px / max(1.0, canvas_ratio))
+            )
+            if longest_bounded_width_px < 1:
+                raise ValueError(
+                    "SVG canvas is too narrow to render safely as a thumbnail"
+                )
+            render_width_px = min(render_width_px, longest_bounded_width_px)
+        if max_total_pixels is not None:
+            pixel_bounded_width_px = int(
+                math.floor(math.sqrt(max_total_pixels / canvas_ratio))
+            )
+            if pixel_bounded_width_px < 1:
+                raise ValueError(
+                    "SVG canvas aspect ratio exceeds the raster pixel budget"
+                )
+            render_width_px = min(render_width_px, pixel_bounded_width_px)
 
     _t0 = time.perf_counter()
     png_bytes = resvg_py.svg_to_bytes(
@@ -100,7 +234,24 @@ def rasterize_svg(
     from PIL import Image
 
     img_pil = Image.open(io.BytesIO(bytes(png_bytes)))
+    if (
+        max_total_pixels is not None
+        and int(img_pil.width) * int(img_pil.height) > max_total_pixels
+    ):
+        raise ValueError("SVG renderer exceeded the declared pixel budget")
     img_final = np.array(img_pil.convert("RGBA"))
+    if (
+        max_longest_px is not None
+        and max(img_final.shape[:2]) > max_longest_px
+    ):
+        resize_scale = max_longest_px / float(max(img_final.shape[:2]))
+        bounded_width = max(1, int(round(img_final.shape[1] * resize_scale)))
+        bounded_height = max(1, int(round(img_final.shape[0] * resize_scale)))
+        img_final = cv2.resize(
+            img_final,
+            (bounded_width, bounded_height),
+            interpolation=cv2.INTER_AREA,
+        )
     _log.debug("Rendered: %sx%s px", img_final.shape[1], img_final.shape[0])
 
     if crop_to_content:

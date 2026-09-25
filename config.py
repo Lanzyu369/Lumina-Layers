@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import math
 import os
 import platform
 import sys
@@ -192,11 +191,9 @@ class WorkerPoolConfig:
 
     Attributes:
         MAX_WORKERS (int): Max number of worker processes. (最大工作进程数)
-        TASK_TIMEOUT (float): Task timeout in seconds. (任务超时秒数)
     """
 
     MAX_WORKERS: int = min(os.cpu_count() or 2, 4)
-    TASK_TIMEOUT: float = 0  # No timeout
 
     @staticmethod
     def _log_invalid_env(
@@ -249,42 +246,12 @@ class WorkerPoolConfig:
         return value
 
     @classmethod
-    def _read_finite_float_env(
-        cls,
-        env_var: str,
-        fallback: float,
-        *,
-        event: str,
-    ) -> float:
-        raw_value = os.environ.get(env_var)
-        if raw_value is None:
-            return fallback
-        value_text = raw_value.strip()
-        if not value_text:
-            return fallback
-        try:
-            value = float(value_text)
-            if not math.isfinite(value):
-                raise ValueError(f"{env_var} must be finite")
-        except ValueError:
-            cls._log_invalid_env(
-                event=event,
-                env_var=env_var,
-                raw_value=raw_value,
-                fallback=fallback,
-                message=f"{env_var} must be a finite number; got {raw_value!r}",
-            )
-            return fallback
-        return value
-
-    @classmethod
     def from_env(cls) -> "WorkerPoolConfig":
         """Create config with environment variable overrides.
         创建配置，支持环境变量覆盖。
 
         Reads:
             LUMINA_MAX_WORKERS: Override MAX_WORKERS. (覆盖最大工作进程数)
-            LUMINA_TASK_TIMEOUT: Override TASK_TIMEOUT. (覆盖任务超时秒数)
 
         Returns:
             WorkerPoolConfig: Config instance with env overrides applied.
@@ -295,11 +262,6 @@ class WorkerPoolConfig:
             "LUMINA_MAX_WORKERS",
             cls.MAX_WORKERS,
             event="worker_pool_max_workers_invalid",
-        )
-        cfg.TASK_TIMEOUT = cls._read_finite_float_env(
-            "LUMINA_TASK_TIMEOUT",
-            cls.TASK_TIMEOUT,
-            event="worker_pool_task_timeout_invalid",
         )
         return cfg
 
@@ -625,10 +587,6 @@ class VectorConfig:
     MIN_SAMPLING_MM: float = 0.01  # Ultra-high quality
     MAX_SAMPLING_MM: float = 0.20  # Low quality (faster)
 
-    # Performance limits
-    MAX_POLYGONS: int = 10000  # Prevent memory issues
-    MAX_VERTICES_PER_POLY: int = 5000  # Prevent degenerate geometry
-
     MATERIAL_VECTOR_SMALL_SHAPE_SNAP_MAX_AREA_RATIO: float = 0.01
     MATERIAL_VECTOR_SMALL_SHAPE_SNAP_MIN_ANCHOR_AREA_RATIO: float = 0.03
     MATERIAL_VECTOR_SMALL_SHAPE_SNAP_DELTA_E: float = 20.0
@@ -717,6 +675,10 @@ LEGACY_SLICER_ID_ALIASES: dict[str, str] = {
     "flash studio": "FlashStudio",
     "flash studio desktop": "FlashStudio",
     "flashstudio": "FlashStudio",
+    "qidi": "QIDIStudio",
+    "qidi_studio": "QIDIStudio",
+    "qidi studio": "QIDIStudio",
+    "qidistudio": "QIDIStudio",
 }
 
 
@@ -886,6 +848,7 @@ SUPPORTED_SLICERS: list[dict[str, str]] = [
     {"id": "ElegooSlicer", "display_name": "ElegooSlicer"},
     {"id": "AnycubicSlicerNext", "display_name": "Anycubic Slicer Next"},
     {"id": "FlashStudio", "display_name": "Flash Studio Desktop"},
+    {"id": "QIDIStudio", "display_name": "QIDI Studio"},
 ]
 
 DEFAULT_SLICER_ID: str = "BambuStudio"
@@ -1207,6 +1170,58 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         template_file="flashforge_guider4_pro.json",
         slicer_templates={"FlashStudio": "flashforge_guider4_pro.json"},
         supported_nozzle_sizes=("0.25", "0.4"),
+    ),
+    "qidi-q2": PrinterProfile(
+        id="qidi-q2",
+        display_name="Q2",
+        brand="QIDI",
+        bed_width=270,
+        bed_depth=270,
+        bed_height=256,
+        nozzle_count=1,
+        is_dual_head=False,
+        template_file="qidi_q2.json",
+        slicer_templates={"QIDIStudio": "qidi_q2.json"},
+        supported_nozzle_sizes=("0.2", "0.4"),
+    ),
+    "qidi-q2c": PrinterProfile(
+        id="qidi-q2c",
+        display_name="Q2C",
+        brand="QIDI",
+        bed_width=270,
+        bed_depth=270,
+        bed_height=256,
+        nozzle_count=1,
+        is_dual_head=False,
+        template_file="qidi_q2c.json",
+        slicer_templates={"QIDIStudio": "qidi_q2c.json"},
+        supported_nozzle_sizes=("0.2", "0.4"),
+    ),
+    "qidi-x-max-4": PrinterProfile(
+        id="qidi-x-max-4",
+        display_name="X-Max 4",
+        brand="QIDI",
+        bed_width=390,
+        bed_depth=390,
+        bed_height=340,
+        nozzle_count=1,
+        is_dual_head=False,
+        template_file="qidi_x_max_4.json",
+        slicer_templates={"QIDIStudio": "qidi_x_max_4.json"},
+        supported_nozzle_sizes=("0.2", "0.4"),
+    ),
+    "qidi-x-plus-5": PrinterProfile(
+        id="qidi-x-plus-5",
+        display_name="X-Plus 5",
+        brand="QIDI",
+        bed_width=320,
+        bed_depth=320,
+        bed_height=300,
+        nozzle_count=1,
+        is_dual_head=False,
+        template_file="qidi_x_plus_5.json",
+        slicer_templates={"QIDIStudio": "qidi_x_plus_5.json"},
+        supported_nozzle_sizes=("0.4",),
     ),
 }
 

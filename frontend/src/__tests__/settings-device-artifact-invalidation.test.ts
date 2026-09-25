@@ -20,8 +20,42 @@ describe("device setting changes invalidate generated 3MF artifacts", () => {
     expect(useConverterStore.getState().downloadUrl).toBeNull();
   });
 
+  it("updates the matching printer bed label before the action returns", () => {
+    useConverterStore.setState({
+      bed_label: "256×256 mm",
+      bedSizes: [
+        {
+          label: "350×320 mm",
+          width_mm: 350,
+          height_mm: 320,
+          is_default: false,
+          printer_id: "bambu-h2d",
+        },
+        {
+          label: "256×256 mm",
+          width_mm: 256,
+          height_mm: 256,
+          is_default: true,
+          printer_id: "bambu-p1s",
+        },
+      ],
+    });
+
+    useSettingsStore.getState().setPrinterModel("bambu-h2d");
+
+    expect(useConverterStore.getState().bed_label).toBe("350×320 mm");
+  });
+
   it("clears generated artifacts when slicer changes", async () => {
     useSettingsStore.getState().setSlicerSoftware("OrcaSlicer");
+
+    expect(useConverterStore.getState().modelUrl).toBeNull();
+    expect(useConverterStore.getState().threemfDiskPath).toBeNull();
+    expect(useConverterStore.getState().downloadUrl).toBeNull();
+  });
+
+  it("clears generated artifacts when wipe-tower auto placement changes", () => {
+    useSettingsStore.getState().setEnableWipeTowerAutoPlacement(false);
 
     expect(useConverterStore.getState().modelUrl).toBeNull();
     expect(useConverterStore.getState().threemfDiskPath).toBeNull();

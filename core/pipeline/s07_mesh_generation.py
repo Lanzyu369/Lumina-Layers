@@ -27,8 +27,6 @@ from core.task_parallelism import (
 
 _log = get_logger(__name__)
 _MIN_PARALLEL_MESH_WORK_UNITS = 100_000
-_MIN_ESTIMATED_MESH_WORKER_BYTES = 64 * 1024**2
-_ESTIMATED_MESH_WORKER_BYTES_PER_VOXEL = 8
 
 
 def _timed_generate_mesh(mesher, full_matrix, mat_id, target_h):
@@ -37,16 +35,6 @@ def _timed_generate_mesh(mesher, full_matrix, mat_id, target_h):
         _t = time.perf_counter()
         result = mesher.generate_mesh(full_matrix, mat_id, target_h)
         return result, time.perf_counter() - _t
-
-
-def _estimate_mesh_worker_bytes(full_matrix: np.ndarray) -> int:
-    """Estimate per-worker masks, rectangle arrays, and mesh build storage."""
-
-    return max(
-        _MIN_ESTIMATED_MESH_WORKER_BYTES,
-        int(np.asarray(full_matrix).size)
-        * _ESTIMATED_MESH_WORKER_BYTES_PER_VOXEL,
-    )
 
 
 def _load_boundary_geometry(boundary_path: str | None):
@@ -154,7 +142,6 @@ def run(ctx: dict) -> dict:
         hard_max_workers=None,
         work_units=int(np.asarray(full_matrix).size),
         min_parallel_work_units=_MIN_PARALLEL_MESH_WORK_UNITS,
-        estimated_worker_bytes=_estimate_mesh_worker_bytes(full_matrix),
     )
     max_workers = parallelism_plan.workers
     legacy_parallelism_disabled = (
@@ -284,9 +271,6 @@ def run(ctx: dict) -> dict:
         _hifi_timings["mesh_parallelism_cpu_fair_share"] = int(
             parallelism_plan.cpu_fair_share_ceiling,
         )
-        _hifi_timings["mesh_parallelism_memory_ceiling"] = int(
-            parallelism_plan.memory_ceiling,
-        )
         _hifi_timings["mesh_parallelism_demand_fallback"] = bool(
             parallelism_plan.demand_snapshot_fallback,
         )
@@ -319,7 +303,6 @@ def run(ctx: dict) -> dict:
                 "cpu_fair_share_ceiling": int(
                     parallelism_plan.cpu_fair_share_ceiling,
                 ),
-                "memory_ceiling": int(parallelism_plan.memory_ceiling),
                 "demand_snapshot_fallback": bool(
                     parallelism_plan.demand_snapshot_fallback,
                 ),

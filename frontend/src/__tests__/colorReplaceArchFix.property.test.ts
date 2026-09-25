@@ -34,6 +34,12 @@ vi.mock("../api/converter", async () => {
       message: "ok",
     }),
     resetReplacements: vi.fn(),
+    getEditorCommitStatus: vi.fn().mockResolvedValue({
+      status: "failed",
+      operation_id: "test-operation",
+      editor_content_revision: 0,
+      visible_content_revision: 0,
+    }),
   };
 });
 
@@ -319,7 +325,13 @@ describe("color replace architecture", () => {
     const request = useConverterStore
       .getState()
       .applyRegionReplace("ddeeff");
-    expect(regionReplace).toHaveBeenCalledWith("session-a", "#ddeeff");
+    expect(regionReplace).toHaveBeenCalledWith(
+      "session-a",
+      "#ddeeff",
+      undefined,
+      undefined,
+      expect.any(String),
+    );
 
     const sessionBRegion = toRegions(["112233"])[0];
     useConverterStore.setState({
@@ -707,19 +719,12 @@ describe("color replace architecture", () => {
     });
 
     const pendingReplace = useConverterStore.getState().submitReplacePreview();
-    useConverterStore.getState().clearAllRemaps();
+    const clearRequest = useConverterStore.getState().clearAllRemaps();
     await flushPromises();
 
-    let state = useConverterStore.getState();
-    expect(mockResetReplacements).toHaveBeenCalledWith("test-session");
-    expect(state.colorRemapMap).toEqual({});
-    expect(state.replacement_regions).toEqual([]);
-    expect(state.recipe_overrides).toEqual([]);
-    expect(state.regionReplacementCount).toBe(0);
-    expect(state.previewImageUrl).toBe("/api/files/reset-preview");
-    expect(state.previewBaseImageUrl).toBe("/api/files/reset-preview");
-    expect(state.previewGlbUrl).toBeNull();
-
+    // Same-session content edits share one barrier. The reset must wait for
+    // the earlier replacement request instead of overtaking it.
+    expect(mockResetReplacements).not.toHaveBeenCalled();
     staleReplace.resolve({
       status: "ok",
       message: "stale",
@@ -728,6 +733,20 @@ describe("color replace architecture", () => {
       replacement_count: 1,
     });
     await pendingReplace;
+    await clearRequest;
+
+    let state = useConverterStore.getState();
+    expect(mockResetReplacements).toHaveBeenCalledWith(
+      "test-session",
+      expect.any(String),
+    );
+    expect(state.colorRemapMap).toEqual({});
+    expect(state.replacement_regions).toEqual([]);
+    expect(state.recipe_overrides).toEqual([]);
+    expect(state.regionReplacementCount).toBe(0);
+    expect(state.previewImageUrl).toBe("/api/files/reset-preview");
+    expect(state.previewBaseImageUrl).toBe("/api/files/reset-preview");
+    expect(state.previewGlbUrl).toBeNull();
 
     state = useConverterStore.getState();
     expect(state.previewImageUrl).toBe("/api/files/reset-preview");

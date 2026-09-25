@@ -10,6 +10,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 
 from api.schemas.dynamic_material import DynamicMaterialResultResponse
+from api.schemas.converter import SelectionDocumentResponse
 from api.schemas.lut import (
     LutCoverageStatsResponse,
     LutHullPoint,
@@ -701,7 +702,6 @@ class MaterialSolverRuntimeEntryResponse(BaseModel):
     candidate_budget: int
     candidate_count: int
     candidate_pool_multiplier: int
-    build_memory_budget_bytes: int
     batch_recipe_count: int
     lab_grid_resolution: int
     seed: int
@@ -830,6 +830,7 @@ class RecipeOverrideApplyResponse(DynamicMaterialResultResponse):
     override_count: int = 0
     can_undo: bool = False
     can_redo: bool = False
+    selection: SelectionDocumentResponse | None = None
 
 
 class RegionRecipeEntry(BaseModel):
@@ -907,6 +908,7 @@ class ColorReplaceResponse(DynamicMaterialResultResponse):
     replacement_count: int
     can_undo: bool = False
     can_redo: bool = False
+    selection: SelectionDocumentResponse | None = None
 
 
 class MergePreviewResponse(BaseModel):
@@ -931,6 +933,8 @@ class GenerateResponse(_NoPublic3mfDiskPathMixin):
     threemf_disk_path: Optional[str] = None
     warnings: list[str] = Field(default_factory=list)
     performance_timing: Optional[PerformanceTimingResponse] = None
+    editor_content_revision: int | None = None
+    selection_revision: int | None = None
 
 
 class RecipePredictionResponse(BaseModel):
@@ -971,6 +975,8 @@ class PuzzleGenerateResponse(_NoPublic3mfDiskPathMixin):
     grid_cols: int
     grid_rows: int
     warnings: list[str] = Field(default_factory=list)
+    editor_content_revision: int | None = None
+    selection_revision: int | None = None
 
 
 class LargeFormatGenerateResponse(BaseModel):
@@ -983,6 +989,8 @@ class LargeFormatGenerateResponse(BaseModel):
     grid_cols: int
     grid_rows: int
     warnings: list[str] = Field(default_factory=list)
+    editor_content_revision: int | None = None
+    selection_revision: int | None = None
 
 
 class BatchItemResult(BaseModel):
@@ -1069,6 +1077,8 @@ class HealthResponse(BaseModel):
     """健康检查响应（含 Worker Pool 状态）。"""
 
     status: str
+    service: str = "lumina-studio"
+    desktop_instance_id: Optional[str] = None
     version: str
     uptime_seconds: float
     worker_pool: WorkerPoolStatus
@@ -1220,3 +1230,4 @@ class ResetReplacementsResponse(DynamicMaterialResultResponse):
     preview_glb_url: str | None = None
     can_undo: bool = False
     can_redo: bool = False
+    selection: SelectionDocumentResponse | None = None

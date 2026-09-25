@@ -114,74 +114,6 @@ def test_normalize_color_replacements_input_stays_in_s03() -> None:
     assert source_file.endswith("s03_color_replacement.py")
 
 
-def test_native_mesh_timing_fields_are_bounded_and_prefixed() -> None:
-    from core.pipeline.vector_branch import _native_mesh_timing_fields
-
-    fields = _native_mesh_timing_fields(
-        {
-            "native_group_count": 43,
-            "native_meshes": 40,
-            "fallback_groups": 3,
-            "pack_seconds": 0.12,
-            "native_seconds": 2.2,
-            "mesh_convert_seconds": 3.9,
-            "surface_validation_seconds": 2.5,
-            "fallback_seconds": 1.36,
-            "native_parallel_workers": 3,
-            "native_parallel_batch_count": 15,
-            "native_parallel_source_geometry_count": 2_251,
-            "native_parallel_limit_reason": "cpu_fair_share",
-            "native_parallel_effective_cpu": 8,
-            "native_parallel_cpu_topology": "heterogeneous",
-            "native_parallel_cpu_scheduling_policy": (
-                "os_core_type_scheduler"
-            ),
-            "native_parallel_performance_cpu": 4,
-            "native_parallel_outer_demand": 2,
-            "native_parallel_cpu_fair_share": 4,
-            "native_parallel_memory_ceiling": 3,
-            "native_parallel_demand_fallback": False,
-            "native_parallel_inflight_limit": 4,
-            "native_parallel_max_estimated_batch_bytes": 402_653_184,
-            "native_parallel_oversized_serial_batches": 1,
-            "native_parallel_wall_seconds": 1.0,
-            "fallback_reason_native_merged_empty_native_mesh": 3,
-            "private_polygon_payload": [[1, 2], [3, 4]],
-        }
-    )
-
-    assert fields == {
-        "native_mesh_group_count": 43,
-        "native_mesh_output_count": 40,
-        "native_mesh_fallback_count": 3,
-        "native_mesh_pack_s": 0.12,
-        "native_mesh_compute_s": 2.2,
-        "native_mesh_convert_s": 3.9,
-        "native_mesh_python_surface_validation_s": 2.5,
-        "native_mesh_fallback_s": 1.36,
-        "native_mesh_parallel_workers": 3,
-        "native_mesh_parallel_batch_count": 15,
-        "native_mesh_parallel_source_geometry_count": 2_251,
-        "native_mesh_parallel_limit": "cpu_fair_share",
-        "native_mesh_parallel_effective_cpu": 8,
-        "native_mesh_parallel_cpu_topology": "heterogeneous",
-        "native_mesh_parallel_cpu_scheduling_policy": (
-            "os_core_type_scheduler"
-        ),
-        "native_mesh_parallel_performance_cpu": 4,
-        "native_mesh_parallel_outer_demand": 2,
-        "native_mesh_parallel_cpu_fair_share": 4,
-        "native_mesh_parallel_memory_ceiling": 3,
-        "native_mesh_parallel_demand_fallback": False,
-        "native_mesh_parallel_inflight_limit": 4,
-        "native_mesh_parallel_max_estimated_batch_bytes": 402_653_184,
-        "native_mesh_parallel_oversized_serial_batches": 1,
-        "native_mesh_parallel_wall_s": 1.0,
-        "native_mesh_fallback_native_merged_empty_count": 3,
-    }
-    assert "private_polygon_payload" not in fields
-
-
 def test_material_parallelism_plan_is_recorded_as_bounded_scalars() -> None:
     from core.pipeline.vector_branch import _record_material_parallelism
 
@@ -194,9 +126,6 @@ def test_material_parallelism_plan_is_recorded_as_bounded_scalars() -> None:
         work_item_ceiling=40,
         work_unit_ceiling=4,
         stage_ceiling=4,
-        memory_ceiling=3,
-        available_memory_bytes=8 * 1024**3,
-        estimated_worker_bytes=256 * 1024**2,
         limiting_reason="cpu_fair_share",
         demand_snapshot_fallback=False,
         cpu_topology="heterogeneous",
@@ -224,7 +153,6 @@ def test_material_parallelism_plan_is_recorded_as_bounded_scalars() -> None:
         "material_parallelism_performance_cpu": 4.0,
         "material_parallelism_outer_demand": 2.0,
         "material_parallelism_cpu_fair_share": 2.0,
-        "material_parallelism_memory_ceiling": 3.0,
         "material_parallelism_demand_fallback": False,
     }
 

@@ -11,6 +11,7 @@ import json
 import os
 import re
 import uuid
+from collections.abc import Mapping
 from contextlib import suppress
 from ipaddress import ip_address
 from pathlib import Path
@@ -46,7 +47,10 @@ from api.schemas.system import (
 )
 from api.session_store import SessionStore
 from api.structured_logging import get_logger
-from core.machine_registry import resolve_machine_registry_root
+from core.machine_registry import (
+    resolve_installed_bed_model,
+    resolve_machine_registry_root,
+)
 
 router = APIRouter(prefix="/api/system", tags=["System"])
 log = get_logger(__name__)
@@ -779,6 +783,29 @@ def get_machine_registry_asset(asset_path: str) -> FileResponse:
     return FileResponse(path=requested, media_type=media_type)
 
 
+@router.get(
+    "/machine-registry/bed-model",
+    dependencies=[Depends(require_local_app_origin)],
+)
+def get_machine_registry_bed_model(device_profile_id: str) -> FileResponse:
+    """Serve an installed slicer's native bed model for one device profile.
+
+    返回指定设备配置对应的本机切片软件原生热床模型。
+    """
+
+    registry = _try_load_machine_registry()
+    if registry is None:
+        raise HTTPException(status_code=404, detail="Machine registry not found")
+    try:
+        profile = registry.get_device_profile(device_profile_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Device profile not found") from exc
+    model_path = resolve_installed_bed_model(profile)
+    if model_path is None:
+        raise HTTPException(status_code=404, detail="Bed model not found")
+    return FileResponse(path=model_path, media_type="model/stl")
+
+
 # ---------------------------------------------------------------------------
 # Slicers endpoint
 # ---------------------------------------------------------------------------
@@ -800,7 +827,33 @@ def get_slicers() -> SlicerListResponse:
 # Settings & Stats endpoints
 # ---------------------------------------------------------------------------
 
-SETTINGS_FILE: Path = Path("user_settings.json")
+def resolve_settings_file(env: Mapping[str, str]) -> Path:
+    """Resolve the user-settings file for development or launcher runtimes.
+
+    为开发环境或启动器运行时解析用户设置文件。
+
+    Args:
+        env: Process environment mapping. 进程环境变量映射。
+
+    Returns:
+        The legacy relative file or an absolute launcher-owned path.
+        旧版相对路径，或启动器托管的绝对路径。
+
+    Raises:
+        ValueError: If a launcher override is not absolute.
+            启动器覆盖路径不是绝对路径时抛出。
+    """
+
+    override = env.get("LUMINA_SETTINGS_PATH", "").strip()
+    if not override:
+        return Path("user_settings.json")
+    settings_path = Path(override).expanduser()
+    if not settings_path.is_absolute():
+        raise ValueError("LUMINA_SETTINGS_PATH must be an absolute file path")
+    return settings_path
+
+
+SETTINGS_FILE: Path = resolve_settings_file(os.environ)
 SETTINGS_SAVE_FAILED_DETAIL = (
     "Settings could not be saved. Check disk permissions or free space and try again."
 )
@@ -847,16 +900,40 @@ def get_settings() -> UserSettingsResponse:
     dependencies=[Depends(require_local_app_origin)],
 )
 def save_settings(settings: UserSettings) -> SaveSettingsResponse:
-    """将 UserSettings 写入 user_settings.json。"""
+    """Save validated settings while preserving fields owned by newer versions.
+
+    保存已校验的用户设置，同时保留较新版本拥有的未知字段。
+
+    Args:
+        settings: Validated user preferences. 已校验的用户偏好。
+
+    Returns:
+        Save confirmation. 保存成功确认。
+
+    Raises:
+        HTTPException: If the settings cannot be written. 设置无法写入时抛出。
+    """
     try:
         settings_payload = settings.model_dump()
-        serialized = json.dumps(settings_payload, indent=2, ensure_ascii=False)
+        stored_payload: dict[str, object] = {}
+        try:
+            if SETTINGS_FILE.exists():
+                existing = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+                if isinstance(existing, dict):
+                    stored_payload.update(existing)
+        except (OSError, TypeError, UnicodeError, json.JSONDecodeError):
+            # A broken legacy file must not prevent the validated current
+            # settings from repairing it.
+            stored_payload = {}
+        stored_payload.update(settings_payload)
+        serialized = json.dumps(stored_payload, indent=2, ensure_ascii=False)
+        SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
         SETTINGS_FILE.write_text(serialized, encoding="utf-8")
         log.info(
             "User settings saved",
             extra={
                 "event": "system_save_settings_done",
-                "settings_field_count": len(settings_payload),
+                "settings_field_count": len(stored_payload),
                 "bytes_written": len(serialized.encode("utf-8")),
                 "settings_path": str(SETTINGS_FILE),
             },

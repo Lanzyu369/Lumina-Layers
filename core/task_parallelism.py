@@ -26,8 +26,6 @@ _ENV_BY_WORKLOAD: dict[WorkloadKind, str] = {
 _WARNED_INVALID_VALUES: set[tuple[str, str]] = set()
 _WARNING_LOCK = threading.Lock()
 _WORKER_STATE = threading.local()
-_MIN_MEMORY_HEADROOM_BYTES = 1024**3
-_MEMORY_HEADROOM_FRACTION_DENOMINATOR = 10
 
 
 @dataclass(frozen=True)
@@ -52,12 +50,6 @@ class AdaptiveParallelismPlan:
             细粒度有效工作量上限。
         stage_ceiling: Stage-specific stability ceiling.
             阶段稳定性硬上限。
-        memory_ceiling: Per-task available-memory ceiling.
-            单任务可用内存上限。
-        available_memory_bytes: Sampled memory before headroom.
-            预留安全空间前采样的可用内存。
-        estimated_worker_bytes: Estimated incremental bytes per worker.
-            单 worker 估算增量内存。
         limiting_reason: Stable label for the selected ceiling.
             最终限制来源的稳定标签。
         demand_snapshot_fallback: Whether configured outer capacity was used.
@@ -78,9 +70,6 @@ class AdaptiveParallelismPlan:
     work_item_ceiling: int
     work_unit_ceiling: int
     stage_ceiling: int
-    memory_ceiling: int
-    available_memory_bytes: int | None
-    estimated_worker_bytes: int
     limiting_reason: str
     demand_snapshot_fallback: bool
     cpu_topology: str = "unknown"
@@ -112,37 +101,6 @@ def task_parallelism_worker_scope() -> Iterator[None]:
                 del _WORKER_STATE.depth
             except AttributeError:
                 pass
-
-
-def _available_memory_bytes() -> int | None:
-    """Return currently available system memory when psutil is usable."""
-
-    try:
-        import psutil
-
-        return max(0, int(psutil.virtual_memory().available))
-    except (ImportError, AttributeError, OSError, RuntimeError, ValueError):
-        return None
-
-
-def task_memory_headroom_bytes(available_memory_bytes: int) -> int:
-    """Return memory reserved from task-local worker admission.
-    返回任务内 worker 准入时预留的内存字节数。
-
-    Args:
-        available_memory_bytes: Current system-available memory.
-            当前系统可用内存。
-
-    Returns:
-        The larger of one GiB and ten percent of available memory.
-        一 GiB 与可用内存百分之十中的较大值。
-    """
-
-    available = max(0, int(available_memory_bytes))
-    return max(
-        _MIN_MEMORY_HEADROOM_BYTES,
-        available // _MEMORY_HEADROOM_FRACTION_DENOMINATOR,
-    )
 
 
 def _positive_int_or_default(raw_value: str | None, default: int) -> int:
@@ -221,15 +179,13 @@ def resolve_task_parallelism_plan(
     work_units: int | None = None,
     min_parallel_work_units: int = 0,
     work_units_per_worker: int | None = None,
-    estimated_worker_bytes: int | None = None,
-    available_memory_bytes: int | None = None,
     effective_cpu_capacity: int | None = None,
     outer_demand: int | None = None,
 ) -> AdaptiveParallelismPlan:
     """Resolve a safe, inspectable inner-worker plan for one task.
 
-    根据有效 CPU、外层负载、工作量、阶段上限和内存，生成可检查的安全并行计划。
-    显式配置仍只是上限；任何遥测缺失都会降低并发而不改变模型输出。
+    根据有效 CPU、外层负载、工作量和阶段上限，生成可检查的并行计划。
+    显式配置仍只是上限；任何 CPU 遥测缺失都会降低并发而不改变模型输出。
 
     Args:
         workload: Workload family selecting its environment override.
@@ -248,11 +204,6 @@ def resolve_task_parallelism_plan(
             每个 worker 档位需要的有效细粒度工作量。
         work_units_per_worker: Optional useful-work density for continuous
             worker scaling. 可选的连续 worker 有效工作量密度。
-        estimated_worker_bytes: Optional peak incremental bytes per worker.
-            可选的单 worker 增量峰值内存估算。
-        available_memory_bytes: Optional deterministic available-memory input;
-            otherwise current system memory is sampled best-effort.
-            可选的确定性可用内存；未提供时尽力读取当前系统值。
         effective_cpu_capacity: Optional deterministic process CPU capacity.
             可选的确定性进程 CPU 容量。
         outer_demand: Optional deterministic active outer-task count.
@@ -333,27 +284,6 @@ def resolve_task_parallelism_plan(
     else:
         work_unit_ceiling = stage_ceiling
 
-    worker_bytes = max(0, int(estimated_worker_bytes or 0))
-    memory_available: int | None
-    if available_memory_bytes is not None:
-        memory_available = max(0, int(available_memory_bytes))
-    elif worker_bytes:
-        memory_available = _available_memory_bytes()
-    else:
-        memory_available = None
-
-    if not worker_bytes:
-        memory_ceiling = stage_ceiling
-    elif memory_available is None:
-        memory_ceiling = 1
-    else:
-        usable_memory = max(
-            0,
-            memory_available - task_memory_headroom_bytes(memory_available),
-        )
-        per_task_memory = usable_memory // demand
-        memory_ceiling = max(1, per_task_memory // worker_bytes)
-
     work_item_ceiling = max(1, item_count)
     candidates: list[tuple[str, int]] = []
     if request_is_explicit:
@@ -365,7 +295,6 @@ def resolve_task_parallelism_plan(
             ("work_items", work_item_ceiling),
             ("work_units", work_unit_ceiling),
             ("stage", stage_ceiling),
-            ("memory", memory_ceiling),
         ]
     )
     selected_workers = max(
@@ -377,7 +306,6 @@ def resolve_task_parallelism_plan(
             work_item_ceiling,
             work_unit_ceiling,
             stage_ceiling,
-            memory_ceiling,
         ),
     )
 
@@ -410,9 +338,6 @@ def resolve_task_parallelism_plan(
         work_item_ceiling=work_item_ceiling,
         work_unit_ceiling=work_unit_ceiling,
         stage_ceiling=stage_ceiling,
-        memory_ceiling=memory_ceiling,
-        available_memory_bytes=memory_available,
-        estimated_worker_bytes=worker_bytes,
         limiting_reason=limiting_reason,
         demand_snapshot_fallback=demand_snapshot_fallback,
         cpu_topology=cpu_topology,
@@ -430,8 +355,6 @@ def resolve_task_parallelism(
     work_units: int | None = None,
     min_parallel_work_units: int = 0,
     work_units_per_worker: int | None = None,
-    estimated_worker_bytes: int | None = None,
-    available_memory_bytes: int | None = None,
     effective_cpu_capacity: int | None = None,
     outer_demand: int | None = None,
 ) -> int:
@@ -452,10 +375,6 @@ def resolve_task_parallelism(
             最小有效工作量阈值。
         work_units_per_worker: Optional useful-work density per worker.
             可选的单 worker 有效工作量密度。
-        estimated_worker_bytes: Estimated incremental memory per worker.
-            单 worker 估算增量内存。
-        available_memory_bytes: Deterministic memory sample when supplied.
-            可选的确定性可用内存。
         effective_cpu_capacity: Deterministic effective CPU when supplied.
             可选的确定性有效 CPU 容量。
         outer_demand: Deterministic outer demand when supplied.
@@ -473,8 +392,6 @@ def resolve_task_parallelism(
         work_units=work_units,
         min_parallel_work_units=min_parallel_work_units,
         work_units_per_worker=work_units_per_worker,
-        estimated_worker_bytes=estimated_worker_bytes,
-        available_memory_bytes=available_memory_bytes,
         effective_cpu_capacity=effective_cpu_capacity,
         outer_demand=outer_demand,
     ).workers

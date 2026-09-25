@@ -232,6 +232,44 @@ def _write_v2_material_package(
     return f"sha256:{content_hash}"
 
 
+def _extract_v2_material_files(
+    package_path: Path,
+    material_dir: Path,
+    *,
+    local_directory: str = "BrandA/pla-basic",
+) -> None:
+    material_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(package_path, "r") as archive:
+        package_root = f"materials/{local_directory}"
+        material_dir.joinpath("material.json").write_bytes(
+            archive.read(f"{package_root}/material.json")
+        )
+        material_dir.joinpath("stage_A_parameters.json").write_bytes(
+            archive.read(f"{package_root}/stage_A_parameters.json")
+        )
+
+
+def _registry_catalog_entry(
+    *,
+    content_hash: str,
+    package_sha256: str,
+    material_id: str = "mat_registry_test",
+    revision_id: str = "rev_registry_test",
+    channel: str = "official",
+    local_directory: str = "BrandA/pla-basic",
+    package_url: str = "/v1/packages/material_package.zip",
+) -> dict[str, object]:
+    return {
+        "material_id": material_id,
+        "revision_id": revision_id,
+        "content_hash": content_hash,
+        "channel": channel,
+        "local_directory": local_directory,
+        "package_url": package_url,
+        "package_sha256": package_sha256,
+    }
+
+
 def _write_v2_multi_material_package(zip_path: Path) -> dict[str, str]:
     package_records: list[dict[str, object]] = []
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -903,6 +941,7 @@ def test_material_sync_refresh_endpoint_returns_core_summary(monkeypatch) -> Non
                 }
             ],
             "failures": [],
+            "catalog_not_modified": True,
         }
 
     monkeypatch.setattr(
@@ -918,6 +957,7 @@ def test_material_sync_refresh_endpoint_returns_core_summary(monkeypatch) -> Non
     assert body["registry_url"] == "https://registry.test/v1"
     assert body["channels"] == ["official"]
     assert body["installed_count"] == 1
+    assert "catalog_not_modified" not in body
     assert body["installed_materials"][0]["directory_name"] == "BrandA/pla-basic"
     assert "archive_path" not in body["installed_materials"][0]
     assert "stage_a_params_path" not in body["installed_materials"][0]
@@ -943,6 +983,7 @@ def test_material_sync_refresh_endpoint_hides_package_failure_paths(
         if request.url.path == "/v1/materials/catalog":
             return httpx.Response(
                 200,
+                headers={"ETag": 'W/"catalog-with-broken-package"'},
                 json={
                     "schema_version": "1.0",
                     "materials": [
@@ -986,6 +1027,10 @@ def test_material_sync_refresh_endpoint_hides_package_failure_paths(
     body = response.json()
     assert body["status"] == "partial"
     assert body["failed_count"] == 1
+    sync_index = json.loads(
+        (materials_root / "_sync" / "index.json").read_text("utf-8")
+    )
+    assert sync_index["catalog_validators"] == {}
     assert str(temp_root) not in response.text
     assert "material_registry_package_" not in response.text
     failure_logs = _records_for_event(
@@ -1810,6 +1855,42 @@ def test_refresh_material_sync_from_registry_imports_only_catalog_revision(
     assert (materials_root / "BrandA" / "pla-other" / "material.json").exists() is False
 
 
+@pytest.mark.parametrize("catalog_key", ["materials", "packages"])
+def test_public_registry_refresh_fails_over_catalog_and_package(tmp_path, monkeypatch, catalog_key):
+    primary = "https://primary.test/v1"
+    backup = "https://backup.test/v1"
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_URL", primary)
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_FALLBACK_URL", backup)
+    monkeypatch.delenv("LUMINA_MATERIAL_REGISTRY_TOKEN", raising=False)
+    package_path = tmp_path / "bundle.zip"
+    info = _write_v2_multi_material_package(package_path)
+    package_bytes = package_path.read_bytes()
+    calls = []
+    def handle(request):
+        calls.append((request.url.host, request.url.path))
+        if request.url.host == "primary.test":
+            return httpx.Response(503)
+        if request.url.path.endswith("/catalog"):
+            assert "if-none-match" not in request.headers
+            return httpx.Response(200, headers={"etag": '"backup-only"'}, json={catalog_key: [{
+                "material_id": info["selected_material_id"],
+                "revision_id": info["selected_revision_id"],
+                "content_hash": info["selected_content_hash"], "channel": "official",
+                "visibility": "official", "package_url": backup + "/packages/bundle.zip",
+                "package_sha256": info["package_sha256"],
+            }]})
+        return httpx.Response(200, content=package_bytes)
+    root = tmp_path / "materials"
+    result = refresh_material_sync_from_registry(
+        materials_dir=str(root), channels=["official"], transport=httpx.MockTransport(handle))
+    assert result["installed_count"] == 1
+    assert result["failed_count"] == 0
+    assert (root / "BrandA" / "pla-selected" / "material.json").is_file()
+    assert not (root / "BrandA" / "pla-other").exists()
+    assert calls == [("primary.test", "/v1/materials/catalog"), ("backup.test", "/v1/materials/catalog"),
+                     ("primary.test", "/v1/packages/bundle.zip"), ("backup.test", "/v1/packages/bundle.zip")]
+
+
 def test_refresh_material_sync_from_registry_adopts_exact_local_material(
     tmp_path: Path,
 ) -> None:
@@ -2111,9 +2192,19 @@ def test_refresh_material_sync_from_registry_preserves_installed_ambiguous_revis
     tmp_path: Path,
 ) -> None:
     materials_root = tmp_path / "materials"
+    package_path = tmp_path / "rev_a.zip"
+    rev_a_content_hash = _write_v2_material_package(
+        package_path,
+        material_id="mat_ambiguous",
+        revision_id="rev_a",
+        local_directory="BrandA/pla-a",
+    )
     material_dir = materials_root / "BrandA" / "pla-a"
-    material_dir.mkdir(parents=True)
-    material_dir.joinpath("material.json").write_text("{}", encoding="utf-8")
+    _extract_v2_material_files(
+        package_path,
+        material_dir,
+        local_directory="BrandA/pla-a",
+    )
     sync_dir = materials_root / "_sync"
     sync_dir.mkdir()
     sync_dir.joinpath("index.json").write_text(
@@ -2123,7 +2214,7 @@ def test_refresh_material_sync_from_registry_preserves_installed_ambiguous_revis
                 "installed": {
                     "mat_ambiguous": {
                         "revision_id": "rev_a",
-                        "content_hash": "sha256:a",
+                        "content_hash": rev_a_content_hash,
                         "channel": "official",
                         "source": "package",
                         "local_directory": "BrandA/pla-a",
@@ -2147,7 +2238,7 @@ def test_refresh_material_sync_from_registry_preserves_installed_ambiguous_revis
                         {
                             "material_id": "mat_ambiguous",
                             "revision_id": "rev_a",
-                            "content_hash": "sha256:a",
+                            "content_hash": rev_a_content_hash,
                             "channel": "official",
                             "local_directory": "BrandA/pla-a",
                             "package_url": "/v1/packages/rev_a.zip",
@@ -2380,10 +2471,247 @@ def test_refresh_material_sync_from_registry_installs_new_revision_and_skips_sam
 
     index = json.loads((materials_root / "_sync" / "index.json").read_text("utf-8"))
     assert "https://registry.test/v1" in index["registries"]
+    assert index["catalog_validators"] == {}
     assert index["registries"]["https://registry.test/v1"]["channels"] == [
         "official",
         "team",
     ]
+
+
+def test_refresh_material_sync_from_registry_persists_etag_and_reuses_it_after_restart(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    package_path = tmp_path / "material_package.zip"
+    content_hash = _write_v2_material_package(
+        package_path,
+        material_id="mat_registry_test",
+        revision_id="rev_registry_test",
+    )
+    package_bytes = package_path.read_bytes()
+    package_sha256 = hashlib.sha256(package_bytes).hexdigest()
+    catalog_etag = 'W/"catalog-v1"'
+    catalog_headers: list[str | None] = []
+    package_requests = 0
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        nonlocal package_requests
+        if request.url.path == "/v1/materials/catalog":
+            catalog_headers.append(request.headers.get("if-none-match"))
+            if request.headers.get("if-none-match") == catalog_etag:
+                return httpx.Response(304, headers={"ETag": catalog_etag})
+            return httpx.Response(
+                200,
+                headers={"ETag": catalog_etag},
+                json={
+                    "schema_version": "1.0",
+                    "materials": [
+                        _registry_catalog_entry(
+                            content_hash=content_hash,
+                            package_sha256=package_sha256,
+                        )
+                    ],
+                },
+            )
+        if request.url.path == "/v1/packages/material_package.zip":
+            package_requests += 1
+            return httpx.Response(200, content=package_bytes)
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(_handler)
+    first = refresh_material_sync_from_registry(
+        registry_url="https://registry.test/v1",
+        materials_dir=str(materials_root),
+        transport=transport,
+    )
+    local_material_dir = materials_root / "BrandA" / "pla-basic"
+    local_material_dir.joinpath("usage_stats.json").write_text(
+        json.dumps({"total": 1}),
+        encoding="utf-8",
+    )
+    solver_cache = local_material_dir / "_solver_cache"
+    solver_cache.mkdir()
+    solver_cache.joinpath("solution.json").write_text("{}", encoding="utf-8")
+    second = refresh_material_sync_from_registry(
+        registry_url="https://registry.test/v1",
+        materials_dir=str(materials_root),
+        transport=transport,
+    )
+
+    assert first["catalog_not_modified"] is False
+    assert first["installed_count"] == 1
+    assert second["catalog_not_modified"] is True
+    assert second["checked_count"] == 1
+    assert second["installed_count"] == 0
+    assert second["skipped_count"] == 1
+    assert catalog_headers == [None, catalog_etag]
+    assert package_requests == 1
+
+    index = json.loads((materials_root / "_sync" / "index.json").read_text("utf-8"))
+    validator = index["catalog_validators"]["https://registry.test/v1"]["official"]
+    assert index["schema_version"] == "1.0"
+    assert validator["etag"] == catalog_etag
+    assert validator["checked_count"] == 1
+    assert validator["channels"] == ["official"]
+    assert validator["local_state_hash"].startswith("sha256:")
+
+    monkeypatch.setattr(materials_module, "MATERIALS_DIR", str(materials_root))
+    status_response = _client().get("/api/material-sync/status")
+    assert status_response.status_code == 200
+    assert "catalog_validators" not in status_response.text
+    assert catalog_etag not in status_response.text
+    assert validator["local_state_hash"] not in status_response.text
+
+
+@pytest.mark.parametrize("drift_kind", ["delete", "modify"])
+def test_refresh_material_sync_from_registry_repairs_local_content_drift(
+    tmp_path: Path,
+    drift_kind: str,
+) -> None:
+    materials_root = tmp_path / "materials"
+    package_path = tmp_path / "material_package.zip"
+    content_hash = _write_v2_material_package(
+        package_path,
+        material_id="mat_registry_test",
+        revision_id="rev_registry_test",
+    )
+    package_bytes = package_path.read_bytes()
+    package_sha256 = hashlib.sha256(package_bytes).hexdigest()
+    catalog_etag = 'W/"catalog-v1"'
+    conditional_headers: list[str | None] = []
+    package_requests = 0
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        nonlocal package_requests
+        if request.url.path == "/v1/materials/catalog":
+            conditional_headers.append(request.headers.get("if-none-match"))
+            return httpx.Response(
+                200,
+                headers={"ETag": catalog_etag},
+                json={
+                    "schema_version": "1.0",
+                    "materials": [
+                        _registry_catalog_entry(
+                            content_hash=content_hash,
+                            package_sha256=package_sha256,
+                        )
+                    ],
+                },
+            )
+        if request.url.path == "/v1/packages/material_package.zip":
+            package_requests += 1
+            return httpx.Response(200, content=package_bytes)
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(_handler)
+    refresh_material_sync_from_registry(
+        registry_url="https://registry.test/v1",
+        materials_dir=str(materials_root),
+        transport=transport,
+    )
+    original_dir = materials_root / "BrandA" / "pla-basic"
+    original_material_bytes = (original_dir / "material.json").read_bytes()
+    if drift_kind == "delete":
+        (original_dir / "stage_A_parameters.json").unlink()
+    else:
+        (original_dir / "material.json").write_bytes(
+            original_material_bytes + b"\n"
+        )
+
+    repaired = refresh_material_sync_from_registry(
+        registry_url="https://registry.test/v1",
+        materials_dir=str(materials_root),
+        transport=transport,
+    )
+
+    assert repaired["catalog_not_modified"] is False
+    assert repaired["installed_count"] == 1
+    assert repaired["failed_count"] == 0
+    assert conditional_headers == [None, None]
+    assert package_requests == 2
+    if drift_kind == "delete":
+        assert (original_dir / "stage_A_parameters.json").exists() is False
+    else:
+        assert (
+            original_dir.joinpath("material.json").read_bytes()
+            == original_material_bytes + b"\n"
+        )
+    index = json.loads((materials_root / "_sync" / "index.json").read_text("utf-8"))
+    repaired_directory = index["installed"]["mat_registry_test"]["local_directory"]
+    assert repaired_directory.startswith("BrandA/pla-basic_")
+    assert (
+        materials_root / Path(repaired_directory) / "stage_A_parameters.json"
+    ).is_file()
+
+
+def test_refresh_material_sync_from_registry_retries_once_when_304_races_with_drift(
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    package_path = tmp_path / "material_package.zip"
+    content_hash = _write_v2_material_package(
+        package_path,
+        material_id="mat_registry_test",
+        revision_id="rev_registry_test",
+    )
+    package_bytes = package_path.read_bytes()
+    package_sha256 = hashlib.sha256(package_bytes).hexdigest()
+    catalog_etag = 'W/"catalog-v1"'
+    catalog_headers: list[str | None] = []
+    package_requests = 0
+
+    def _catalog_payload() -> dict[str, object]:
+        return {
+            "schema_version": "1.0",
+            "materials": [
+                _registry_catalog_entry(
+                    content_hash=content_hash,
+                    package_sha256=package_sha256,
+                )
+            ],
+        }
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        nonlocal package_requests
+        if request.url.path == "/v1/materials/catalog":
+            conditional_etag = request.headers.get("if-none-match")
+            catalog_headers.append(conditional_etag)
+            if len(catalog_headers) == 2:
+                assert conditional_etag == catalog_etag
+                material_path = (
+                    materials_root / "BrandA" / "pla-basic" / "material.json"
+                )
+                material_path.write_bytes(material_path.read_bytes() + b"\n")
+                return httpx.Response(304, headers={"ETag": catalog_etag})
+            return httpx.Response(
+                200,
+                headers={"ETag": catalog_etag},
+                json=_catalog_payload(),
+            )
+        if request.url.path == "/v1/packages/material_package.zip":
+            package_requests += 1
+            return httpx.Response(200, content=package_bytes)
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(_handler)
+    refresh_material_sync_from_registry(
+        registry_url="https://registry.test/v1",
+        materials_dir=str(materials_root),
+        transport=transport,
+    )
+    raced = refresh_material_sync_from_registry(
+        registry_url="https://registry.test/v1",
+        materials_dir=str(materials_root),
+        transport=transport,
+    )
+
+    assert catalog_headers == [None, catalog_etag, None]
+    assert package_requests == 2
+    assert raced["catalog_not_modified"] is False
+    assert raced["installed_count"] == 1
+    assert raced["failed_count"] == 0
+    assert len(list(materials_root.rglob("material.json"))) == 2
 
 
 def test_refresh_material_sync_from_registry_rejects_cross_origin_package_url(
@@ -2511,12 +2839,32 @@ def test_refresh_material_sync_from_registry_preserves_local_rollback(
     tmp_path: Path,
 ) -> None:
     materials_root = tmp_path / "materials"
+    old_package_path = tmp_path / "rev_old.zip"
+    new_package_path = tmp_path / "rev_new.zip"
+    old_content_hash = _write_v2_material_package(
+        old_package_path,
+        material_id="mat_test",
+        revision_id="rev_old",
+        local_directory="BrandA/pla-basic",
+    )
+    new_content_hash = _write_v2_material_package(
+        new_package_path,
+        material_id="mat_test",
+        revision_id="rev_new",
+        local_directory="BrandA/pla-basic-new",
+    )
     old_dir = materials_root / "BrandA" / "pla-basic"
     new_dir = materials_root / "BrandA" / "pla-basic-new"
-    old_dir.mkdir(parents=True)
-    new_dir.mkdir(parents=True)
-    (old_dir / "material.json").write_text("{}", encoding="utf-8")
-    (new_dir / "material.json").write_text("{}", encoding="utf-8")
+    _extract_v2_material_files(
+        old_package_path,
+        old_dir,
+        local_directory="BrandA/pla-basic",
+    )
+    _extract_v2_material_files(
+        new_package_path,
+        new_dir,
+        local_directory="BrandA/pla-basic-new",
+    )
     (materials_root / "_sync").mkdir()
     (materials_root / "_sync" / "index.json").write_text(
         json.dumps(
@@ -2525,7 +2873,7 @@ def test_refresh_material_sync_from_registry_preserves_local_rollback(
                 "installed": {
                     "mat_test": {
                         "revision_id": "rev_old",
-                        "content_hash": "sha256:old",
+                        "content_hash": old_content_hash,
                         "channel": "official",
                         "source": "package",
                         "local_directory": "BrandA/pla-basic",
@@ -2537,7 +2885,7 @@ def test_refresh_material_sync_from_registry_preserves_local_rollback(
                     "mat_test": {
                         "rev_new": {
                             "revision_id": "rev_new",
-                            "content_hash": "sha256:new",
+                            "content_hash": new_content_hash,
                             "channel": "official",
                             "source": "package",
                             "local_directory": "BrandA/pla-basic-new",
@@ -2546,7 +2894,7 @@ def test_refresh_material_sync_from_registry_preserves_local_rollback(
                         },
                         "rev_old": {
                             "revision_id": "rev_old",
-                            "content_hash": "sha256:old",
+                            "content_hash": old_content_hash,
                             "channel": "official",
                             "source": "package",
                             "local_directory": "BrandA/pla-basic",
@@ -2573,7 +2921,7 @@ def test_refresh_material_sync_from_registry_preserves_local_rollback(
                         {
                             "material_id": "mat_test",
                             "revision_id": "rev_new",
-                            "content_hash": "sha256:new",
+                            "content_hash": new_content_hash,
                             "channel": "official",
                             "package_url": "/v1/packages/rev_new.zip",
                             "package_sha256": "a" * 64,

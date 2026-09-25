@@ -26,6 +26,24 @@ from scripts.profile_converter_multicore import (
 )
 
 
+def test_profile_counts_reported_material_child_cpu(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "input.svg"
+    source.write_text("<svg/>", encoding="utf-8")
+    case = ProfileCase("cpu", "vector", source, 120.0, 8)
+    monkeypatch.setattr(
+        profile_module, "run_raster_pipeline",
+        lambda ctx: {"vector_timing": {"materialize_child_cpu_s": 4.0}},
+    )
+    metrics = execute_case(case, "generate", enable_cprofile=False, capture_semantics=False)
+    assert metrics["child_cpu_s"] == 4.0
+    assert metrics["cpu_s"] == pytest.approx(metrics["parent_cpu_s"] + 4.0)
+    assert metrics["average_cpu_percent"] == pytest.approx(
+        metrics["cpu_s"] / metrics["total_s"] * 100.0,
+    )
+
+
 @pytest.mark.parametrize("size", [8, 12, 15])
 def test_material_palette_has_requested_unique_archives(size: int) -> None:
     palette = MATERIAL_PALETTES[size]
@@ -930,14 +948,14 @@ def test_extract_vector_timings_accepts_current_pipeline_key() -> None:
         {
             "vector_timing": {
                 "parse_s": 1.25,
-                "native_mesh_parallel_workers": 3,
-                "native_mesh_parallel_wall_s": 1.0,
+                "material_parallelism_workers": 3,
+                "build_mesh_s": 1.0,
             }
         }
     ) == {
         "parse_s": 1.25,
-        "native_mesh_parallel_workers": 3,
-        "native_mesh_parallel_wall_s": 1.0,
+        "material_parallelism_workers": 3,
+        "build_mesh_s": 1.0,
     }
 
 
@@ -1042,7 +1060,6 @@ def test_execute_case_can_disable_cprofile(
                 "mesh_parallelism_effective_cpu": 4,
                 "mesh_parallelism_outer_demand": 2,
                 "mesh_parallelism_cpu_fair_share": 2,
-                "mesh_parallelism_memory_ceiling": 3,
                 "mesh_parallelism_demand_fallback": False,
             },
         },
@@ -1065,23 +1082,18 @@ def test_execute_case_can_disable_cprofile(
     assert metrics["parallelism"] == {
         "requested": "auto",
         "observed_workers": 2,
-        "native_workers": None,
         "effective_cpu": 4,
         "cpu_topology": None,
         "cpu_scheduling_policy": None,
         "performance_cpu": None,
         "outer_demand": 2,
         "cpu_fair_share": 2,
-        "memory_ceiling": 3,
         "limiting_reason": "cpu_fair_share",
         "demand_snapshot_fallback": False,
-        "native_inflight_limit": None,
-        "native_max_estimated_batch_bytes": None,
-        "native_oversized_serial_batches": None,
     }
 
 
-def test_parallelism_metadata_combines_vector_plan_and_native_window(
+def test_parallelism_metadata_uses_current_vector_material_plan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("LUMINA_VECTOR_PARALLELISM", raising=False)
@@ -1100,31 +1112,21 @@ def test_parallelism_metadata_combines_vector_plan_and_native_window(
             "material_parallelism_performance_cpu": 2,
             "material_parallelism_outer_demand": 2,
             "material_parallelism_cpu_fair_share": 2,
-            "material_parallelism_memory_ceiling": 3,
             "material_parallelism_demand_fallback": False,
-            "native_mesh_parallel_workers": 2,
-            "native_mesh_parallel_inflight_limit": 3,
-            "native_mesh_parallel_max_estimated_batch_bytes": 402_653_184,
-            "native_mesh_parallel_oversized_serial_batches": 0,
         },
     )
 
     assert metadata == {
         "requested": "auto",
         "observed_workers": 1,
-        "native_workers": 2,
         "effective_cpu": 4,
         "cpu_topology": "heterogeneous",
         "cpu_scheduling_policy": "os_core_type_scheduler",
         "performance_cpu": 2,
         "outer_demand": 2,
         "cpu_fair_share": 2,
-        "memory_ceiling": 3,
         "limiting_reason": "cpu_fair_share",
         "demand_snapshot_fallback": False,
-        "native_inflight_limit": 3,
-        "native_max_estimated_batch_bytes": 402_653_184,
-        "native_oversized_serial_batches": 0,
     }
 
 
@@ -1142,19 +1144,14 @@ def test_parallelism_metadata_keeps_legacy_reports_readable(
     assert metadata == {
         "requested": "auto",
         "observed_workers": 2,
-        "native_workers": None,
         "effective_cpu": None,
         "cpu_topology": None,
         "cpu_scheduling_policy": None,
         "performance_cpu": None,
         "outer_demand": None,
         "cpu_fair_share": None,
-        "memory_ceiling": None,
         "limiting_reason": None,
         "demand_snapshot_fallback": None,
-        "native_inflight_limit": None,
-        "native_max_estimated_batch_bytes": None,
-        "native_oversized_serial_batches": None,
     }
 
 

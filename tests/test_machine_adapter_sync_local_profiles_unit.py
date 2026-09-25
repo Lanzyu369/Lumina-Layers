@@ -7,6 +7,7 @@ from tools.machine_adapter.sync_local_profiles import (
     discover_local_asset_roots,
     discover_local_import_sources,
 )
+import tools.machine_adapter.sync_local_profiles as sync_local_profiles_module
 
 
 def test_discover_local_asset_roots_includes_image_only_vendor_dirs(tmp_path):
@@ -21,6 +22,61 @@ def test_discover_local_asset_roots_includes_image_only_vendor_dirs(tmp_path):
     )
 
     assert roots == ((appdata_root / "BambuStudio" / "system", "Elegoo"),)
+
+
+def test_default_profile_root_uses_macos_application_support(monkeypatch):
+    monkeypatch.delenv("APPDATA", raising=False)
+    monkeypatch.setattr(sync_local_profiles_module.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(sync_local_profiles_module.Path, "home", lambda: Path("/Users/tester"))
+
+    assert sync_local_profiles_module._default_appdata_root() == (
+        Path("/Users/tester") / "Library" / "Application Support"
+    )
+
+
+def test_discover_local_asset_roots_includes_bed_model_only_vendor_dirs(tmp_path):
+    appdata_root = tmp_path / "AppData" / "Roaming"
+    anycubic = appdata_root / "AnycubicSlicerNext" / "system" / "Anycubic"
+    anycubic.mkdir(parents=True)
+    (anycubic / "Anycubic Kobra 3_buildplate_model.stl").write_bytes(b"stl")
+
+    roots = discover_local_asset_roots(
+        appdata_root=appdata_root,
+        slicer_ids=("AnycubicSlicerNext",),
+    )
+
+    assert roots == (
+        (appdata_root / "AnycubicSlicerNext" / "system", "Anycubic"),
+    )
+
+
+def test_discovers_bed_models_inside_installed_macos_slicer_bundles(tmp_path):
+    discover_installed_slicer_asset_roots = getattr(
+        sync_local_profiles_module,
+        "discover_installed_slicer_asset_roots",
+        None,
+    )
+    assert callable(discover_installed_slicer_asset_roots)
+    if discover_installed_slicer_asset_roots is None:
+        return
+
+    profiles_root = (
+        tmp_path
+        / "Applications"
+        / "BambuStudio.app"
+        / "Contents"
+        / "Resources"
+        / "profiles"
+    )
+    vendor_root = profiles_root / "BBL"
+    vendor_root.mkdir(parents=True)
+    (vendor_root / "bbl-3dp-A1M.stl").write_bytes(b"stl")
+
+    roots = discover_installed_slicer_asset_roots(
+        applications_root=tmp_path / "Applications",
+    )
+
+    assert roots == ((profiles_root, "BBL"),)
 
 
 def test_discover_local_import_sources_keeps_anycubic_client_version_overrides(tmp_path):
@@ -64,6 +120,34 @@ def test_discover_local_import_sources_keeps_flash_studio_version_contract(tmp_p
     assert source.source_version == "02.01.01.00"
     assert source.application_metadata == "BambuStudio-2.3.2"
     assert source.client_version == ""
+
+
+def test_discover_local_import_sources_keeps_qidi_studio_version_contract(tmp_path):
+    appdata_root = tmp_path / "AppData" / "Roaming"
+    qidi_root = appdata_root / "QIDIStudio" / "system"
+    for vendor_key in ("Q Series", "X 4 Series", "X 5 Series"):
+        (qidi_root / vendor_key / "machine").mkdir(parents=True)
+        (qidi_root / f"{vendor_key}.json").write_text(
+            '{"version":"02.07.02.60"}',
+            encoding="utf-8",
+        )
+
+    sources = discover_local_import_sources(
+        appdata_root=appdata_root,
+        slicer_ids=("QIDIStudio",),
+    )
+
+    assert len(sources) == 3
+    assert {source.vendor_keys for source in sources} == {
+        ("Q Series",),
+        ("X 4 Series",),
+        ("X 5 Series",),
+    }
+    for source in sources:
+        assert source.source_root == qidi_root
+        assert source.source_version == "02.07.02.60"
+        assert source.application_metadata == "QIDIStudio-02.07.02.60"
+        assert source.client_version == "02.07.02.60"
 
 
 def test_discover_local_asset_roots_includes_snapmaker_web_images(tmp_path):

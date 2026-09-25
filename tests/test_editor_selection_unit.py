@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from api.preview_cache_artifacts import PREVIEW_CACHE_REVISION_KEY
 from api.replacement_history import (
     push_replacement_checkpoint,
     restore_from_history,
@@ -139,6 +140,31 @@ def test_selection_history_is_cheap_and_content_commit_squashes_suffix() -> None
     assert restored_content["kind"] == "content"
     assert np.array_equal(get_selection_mask(session, shape), before)
     assert get_selection_revision(session) > 0
+
+
+def test_content_history_restore_gets_a_fresh_preview_cache_revision() -> None:
+    store = MemoryStore()
+    session = store.get("session")
+    assert session is not None
+    rgb = np.full((2, 2, 3), 91, dtype=np.uint8)
+    checkpoint_cache = _cache(rgb)
+    checkpoint_cache[PREVIEW_CACHE_REVISION_KEY] = "checkpoint-revision"
+    session["preview_cache"] = checkpoint_cache
+    checkpoint = snapshot_replacement_state(session, label="before_replace")
+    push_replacement_checkpoint("session", store, session, checkpoint)
+    session["preview_cache"] = {
+        **_cache(np.full((2, 2, 3), 19, dtype=np.uint8)),
+        PREVIEW_CACHE_REVISION_KEY: "current-revision",
+    }
+
+    restore_from_history("session", store, session, action="undo")
+
+    restored = session["preview_cache"]
+    assert isinstance(restored, dict)
+    assert restored[PREVIEW_CACHE_REVISION_KEY] not in {
+        "checkpoint-revision",
+        "current-revision",
+    }
 
 
 def test_clear_selection_allows_stale_content_revision_after_replace() -> None:

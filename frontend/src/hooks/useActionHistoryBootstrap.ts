@@ -92,6 +92,7 @@ function readSnapshot(): WorkflowSnapshot {
       maxBytes: 4096,
       svgPixelsPerMm: settings.svgPixelsPerMm,
       materialDeltaE00Tolerance: settings.materialDeltaE00Tolerance,
+      enableWipeTowerAutoPlacement: settings.enableWipeTowerAutoPlacement,
     }),
   };
 }
@@ -155,17 +156,17 @@ function installActionHistoryBridge(): () => void {
     },
   );
 
-  // --- Advanced-param toggle subscriptions ---
-  // Track the boolean feature toggles that materially change the generation
+  // --- Advanced-param subscriptions ---
+  // Track feature toggles and source-SVG settings that change the generation
   // output (relief / outline / cloisonne / fridge magnet / puzzle / large
   // format). Each toggle flip is recorded as its own ``advanced_param_change``
   // entry so a bug report can show the exact sequence of feature enables
   // and disables. Batched updates (e.g. recipe import) naturally produce one
   // entry per changed field because Zustand's subscribeWithSelector fires
   // once per selector whose value actually changed.
-  // 订阅会改变生成结果的布尔开关；每次翻转独立成一条 advanced_param_change
+  // 订阅会改变生成结果的开关和 SVG 参数；每次修改独立成一条 advanced_param_change
   // 记录，批量更新（如预设导入）按字段各自产生一条。
-  const TRACKED_TOGGLES = [
+  const TRACKED_ADVANCED_PARAMS = [
     "enable_relief",
     "enable_outline",
     "enable_cloisonne",
@@ -173,8 +174,11 @@ function installActionHistoryBridge(): () => void {
     "high_precision_3d_preview",
     "puzzleEnabled",
     "largeFormatEnabled",
+    "svg_hole_compensation_enabled",
+    "svg_hole_max_area_mm2",
+    "svg_hole_max_width_mm",
   ] as const;
-  const unsubToggles = TRACKED_TOGGLES.map((field) =>
+  const unsubToggles = TRACKED_ADVANCED_PARAMS.map((field) =>
     useConverterStore.subscribe(
       (s) => s[field],
       (next, prev) => {

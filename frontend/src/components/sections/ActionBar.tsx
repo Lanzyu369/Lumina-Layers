@@ -27,6 +27,7 @@ import BedSizeSelector from "./BedSizeSelector"
 import SlicerSelector from "./SlicerSelector"
 import WikiTooltip from "../ui/WikiTooltip"
 import { StatusBanner } from "../ui/panelPrimitives"
+import { WIKI_DOCS } from "../../utils/wikiDocs"
 import { resolvePreviewHoverPixel } from "./actionBarHoverUtils"
 import { useI18n } from "../../i18n/context"
 import { useWorkspaceMode } from "../../hooks/useWorkspaceMode"
@@ -58,6 +59,7 @@ function shouldUseApiErrorLanguage(error: unknown): boolean {
 
 function resolveRecipeExportError(error: unknown, t: (key: string) => string): string {
   if (error instanceof Error) {
+    if (error.message === 'file_save_failed' || error.message === 'file_save_too_large') return t(error.message)
     if (error.message === EXPORT_NO_IMAGE_MESSAGE) {
       return t("recipe_export_error_no_image")
     }
@@ -113,6 +115,9 @@ export default function ActionBar() {
   const materialLayerHeightMm = useConverterStore((s) => s.materialLayerHeightMm)
   const isLoading = useConverterStore((s) => s.isLoading)
   const isGenerating = useConverterStore((s) => s.isGenerating)
+  const replacePreviewLoading = useConverterStore((s) => s.replacePreviewLoading)
+  const contentCommitStatus = useConverterStore((s) => s.contentCommitStatus)
+  const reconcileUnknownContentCommit = useConverterStore((s) => s.reconcileUnknownContentCommit)
   const error = useConverterStore((s) => s.error)
   const previewImageUrl = useConverterStore((s) => s.previewImageUrl)
   const previewBaseImageUrl = useConverterStore((s) => s.previewBaseImageUrl)
@@ -179,6 +184,7 @@ export default function ActionBar() {
 
   const [isExporting, setIsExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
+  const [exportNotice, setExportNotice] = useState<string | null>(null)
 
   const canSubmit = !!imageFile && sourceSelection.isReady
   const canGenerate = canSubmit && !!sessionId
@@ -658,6 +664,20 @@ export default function ActionBar() {
         </>
       ) : (
         <>
+          {contentCommitStatus === "unknown" && (
+            <StatusBanner tone="warning" title={t("action_sync_editor_commit") }>
+              <div className="flex flex-col gap-2">
+                <span>{t("action_sync_editor_commit_hint")}</span>
+                <Button
+                  label={t("action_sync_editor_commit")}
+                  variant="secondary"
+                  onClick={() => void reconcileUnknownContentCommit()}
+                  disabled={replacePreviewLoading || isGenerating}
+                  className="w-full"
+                />
+              </div>
+            </StatusBanner>
+          )}
           {!canSubmit && (
             <p className="text-xs text-yellow-600 dark:text-yellow-400">
               {singleSubmitHintKey ? t(singleSubmitHintKey) : null}
@@ -676,13 +696,13 @@ export default function ActionBar() {
             <WikiTooltip
               title={t("action_generate_model_title")}
               description={t("action_generate_model_desc")}
-              wikiUrl="https://github.com/pekingduck/lumina-layers/wiki/Image-Converter"
+              wikiPath={WIKI_DOCS.generateActions}
             >
               <Button
                 label={t("action_generate")}
                 variant="primary"
                 onClick={() => void submitGenerate()}
-                disabled={!canGenerate || isLoading || isGenerating}
+                disabled={!canGenerate || isLoading || isGenerating || replacePreviewLoading}
                 loading={isGenerating}
                 className="w-full"
               />
@@ -706,7 +726,7 @@ export default function ActionBar() {
                     setIsExporting(true)
                     setExportError(null)
                     exportShareCard()
-                      .then(() => setExportError(null))
+                      .then((outcome) => setExportNotice(outcome === 'canceled' ? null : t(outcome === 'saved' ? 'file_save_saved' : 'file_save_download_started')))
                       .catch((err: unknown) => {
                         setExportError(resolveRecipeExportError(err, t))
                       })
@@ -724,7 +744,7 @@ export default function ActionBar() {
                     setIsExporting(true)
                     setExportError(null)
                     exportSidecar()
-                      .then(() => setExportError(null))
+                      .then((outcome) => setExportNotice(outcome === 'canceled' ? null : t(outcome === 'saved' ? 'file_save_saved' : 'file_save_download_started')))
                       .catch((err: unknown) => {
                         setExportError(resolveRecipeExportError(err, t))
                       })
@@ -746,6 +766,7 @@ export default function ActionBar() {
                 {t("recipe_export_error").replace("{error}", exportError)}
               </div>
             )}
+            {!isExporting && !exportError && exportNotice && <p role="status" className="text-xs">{exportNotice}</p>}
           </div>
         </>
       )}

@@ -112,9 +112,14 @@ export function useAutoPreview(): void {
       state.materialLayerCount,
       state.materialLayerHeightMm,
       state.materialBackingMaterialDirName,
-      state.target_width_mm,
+      state.largeFormatEnabled || state.svg_hole_compensation_enabled
+        ? [state.target_width_mm, state.target_height_mm]
+        : null,
       state.color_mode,
       state.modeling_mode,
+      state.svg_hole_compensation_enabled,
+      state.svg_hole_max_area_mm2,
+      state.svg_hole_max_width_mm,
       state.quantize_colors,
       state.high_precision_3d_preview,
       state.enable_cleanup,

@@ -5,6 +5,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+MODEL_SURFACE_FATAL_ERRORS = (MemoryError,)
+
 
 class ModelSurfaceError(ValueError):
     """Domain error for model-surface workflow.

@@ -58,6 +58,9 @@ export interface ConverterRecipeBase {
   high_precision_3d_preview?: boolean;
   enable_cleanup: boolean;
   svg_pixels_per_mm?: number;
+  svg_hole_compensation_enabled?: boolean;
+  svg_hole_max_area_mm2?: number;
+  svg_hole_max_width_mm?: number;
   hue_enable: boolean;
   /** Constrain colour matching to colours represented by the active LUT. */
   use_lut_constrained?: boolean;
@@ -180,6 +183,8 @@ export interface ConverterRecipeDevice {
   build_plate_id?: string;
   /** Preserve the slicer's base-layer height modifier choice. */
   enable_base_layer_height_modifier?: boolean;
+  /** Allow Lumina to adapt the model and wipe-tower layout during export. */
+  enable_wipe_tower_auto_placement?: boolean;
 }
 
 export interface ConverterRecipeFridgeMagnet {

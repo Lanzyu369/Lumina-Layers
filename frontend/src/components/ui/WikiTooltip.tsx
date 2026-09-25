@@ -3,12 +3,15 @@ import {
   isValidElement,
   useState,
   type ReactElement,
+  type MouseEvent,
   type ReactNode,
 } from "react";
 import type { Placement } from "@floating-ui/react";
 import {
   useFloating,
   useHover,
+  useFocus,
+  useClick,
   useDismiss,
   useRole,
   useInteractions,
@@ -17,9 +20,11 @@ import {
   shift,
   autoUpdate,
   FloatingPortal,
+  FloatingFocusManager,
 } from "@floating-ui/react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useI18n } from "../../i18n/context";
+import { buildWikiDocUrl, type WikiDocPath } from "../../utils/wikiDocs";
 
 interface WikiTooltipProps {
   /** Trigger element to wrap */
@@ -30,6 +35,8 @@ interface WikiTooltipProps {
   description: string;
   /** Optional wiki URL for external link */
   wikiUrl?: string;
+  /** Locale-neutral path inside the public Lumina Wiki. */
+  wikiPath?: WikiDocPath;
   /** Preferred placement direction, default "top" */
   placement?: Placement;
   /** Hover delay in ms before showing, default 600 */
@@ -39,6 +46,8 @@ interface WikiTooltipProps {
   className?: string;
   /** Bind the tooltip directly to a single child element instead of adding a wrapper. */
   asChild?: boolean;
+  /** Let an explicit help trigger open the tooltip on click or tap. */
+  openOnClick?: boolean;
 }
 
 export default function WikiTooltip({
@@ -46,13 +55,33 @@ export default function WikiTooltip({
   title,
   description,
   wikiUrl,
+  wikiPath,
   placement = "top",
   delay = 600,
   className,
   asChild = false,
+  openOnClick = false,
 }: WikiTooltipProps) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const [isOpen, setIsOpen] = useState(false);
+  const resolvedWikiUrl = wikiUrl ?? (wikiPath ? buildWikiDocUrl(wikiPath, lang) : undefined);
+  const handleWikiClick = (event: MouseEvent<HTMLAnchorElement>) => {
+    const openWiki = (
+      window as Window & {
+        electronAPI?: {
+          openWiki?: (url: string) => Promise<unknown>;
+        };
+      }
+    ).electronAPI?.openWiki;
+    if (!openWiki || !resolvedWikiUrl) {
+      return;
+    }
+    event.preventDefault();
+    void openWiki(resolvedWikiUrl).catch(() => {
+      // The main process intentionally rejects untrusted URLs. Do not fall
+      // back to an unrestricted renderer navigation when that happens.
+    });
+  };
 
   // 1. useFloating — positioning engine + middleware
   const { refs, floatingStyles, context } = useFloating({
@@ -73,6 +102,14 @@ export default function WikiTooltip({
     move: false,
   });
 
+  // Keyboard users can reveal the same explanation by focusing the trigger.
+  const focus = useFocus(context);
+
+  // Click/tap opening is opt-in so action buttons keep their original behavior.
+  const click = useClick(context, {
+    enabled: openOnClick,
+  });
+
   // 3. useDismiss — close on Escape
   const dismiss = useDismiss(context);
 
@@ -82,6 +119,8 @@ export default function WikiTooltip({
   // 5. merge interactions
   const { getReferenceProps, getFloatingProps } = useInteractions([
     hover,
+    focus,
+    click,
     dismiss,
     role,
   ]);
@@ -108,6 +147,43 @@ export default function WikiTooltip({
       </span>
     );
 
+  const floatingElement = (
+    <div
+      ref={refs.setFloating}
+      style={floatingStyles}
+      {...getFloatingProps()}
+      className={`z-[9999] ${resolvedWikiUrl ? "pointer-events-auto" : "pointer-events-none"}`}
+    >
+      <motion.div
+        initial={{ opacity: 0, y: 4 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: 4 }}
+        transition={{ duration: 0.15 }}
+        className="max-w-xs rounded-lg border border-slate-200 bg-slate-100 px-3 py-2.5 shadow-lg dark:border-slate-700 dark:bg-slate-800"
+      >
+        <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+          {title}
+        </div>
+        {description && (
+          <div className="text-xs text-slate-500 dark:text-slate-400 mt-1 whitespace-pre-line">
+            {description}
+          </div>
+        )}
+        {resolvedWikiUrl && (
+          <a
+            href={resolvedWikiUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={handleWikiClick}
+            className="text-xs text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 mt-2 inline-flex items-center gap-1"
+          >
+            {t("wiki_tooltip_link")}
+          </a>
+        )}
+      </motion.div>
+    </div>
+  );
+
   // 6. render
   return (
     <>
@@ -115,41 +191,19 @@ export default function WikiTooltip({
 
       <FloatingPortal>
         <AnimatePresence>
-          {isOpen && (
-            <div
-              ref={refs.setFloating}
-              style={floatingStyles}
-              {...getFloatingProps()}
-              className={`z-[9999] ${wikiUrl ? "pointer-events-auto" : "pointer-events-none"}`}
-            >
-              <motion.div
-                initial={{ opacity: 0, y: 4 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 4 }}
-                transition={{ duration: 0.15 }}
-                className="max-w-xs rounded-lg border border-slate-200 bg-slate-100 px-3 py-2.5 shadow-lg dark:border-slate-700 dark:bg-slate-800"
+          {isOpen &&
+            (resolvedWikiUrl ? (
+              <FloatingFocusManager
+                context={context}
+                modal={false}
+                initialFocus={-1}
+                returnFocus={false}
               >
-                <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                  {title}
-                </div>
-                {description && (
-                  <div className="text-xs text-slate-500 dark:text-slate-400 mt-1 whitespace-pre-line">
-                    {description}
-                  </div>
-                )}
-                {wikiUrl && (
-                  <a
-                    href={wikiUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 mt-2 inline-flex items-center gap-1"
-                  >
-                    {t("wiki_tooltip_link")}
-                  </a>
-                )}
-              </motion.div>
-            </div>
-          )}
+                {floatingElement}
+              </FloatingFocusManager>
+            ) : (
+              floatingElement
+            ))}
         </AnimatePresence>
       </FloatingPortal>
     </>

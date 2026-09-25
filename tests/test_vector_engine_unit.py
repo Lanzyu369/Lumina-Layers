@@ -199,8 +199,8 @@ class TestRunLengthExtrude:
         assert "Cyan" in result
         assert len(result["Cyan"]["meshes"]) == 1  # single merged volume
 
-    def test_alternating_channels_no_merge(self):
-        """Alternating recipe [0,1,0,1,0] → no channel gets consecutive layers."""
+    def test_alternating_channels_stay_one_object_per_material(self):
+        """Alternating runs remain distinct shells inside one material object."""
         geom = box(0, 0, 10, 10)
         matched = self._make_matched(geom, [0, 1, 0, 1, 0])
 
@@ -213,10 +213,12 @@ class TestRunLengthExtrude:
             scale_factor=1.0,
         )
 
-        white_count = len(result.get("White", {}).get("meshes", []))
-        cyan_count = len(result.get("Cyan", {}).get("meshes", []))
-        assert white_count == 3  # layers 0, 2, 4 → three separate runs
-        assert cyan_count == 2  # layers 1, 3 → two separate runs
+        white_meshes = result.get("White", {}).get("meshes", [])
+        cyan_meshes = result.get("Cyan", {}).get("meshes", [])
+        assert len(white_meshes) == 1
+        assert len(cyan_meshes) == 1
+        assert len(white_meshes[0].split(only_watertight=False)) == 3
+        assert len(cyan_meshes[0].split(only_watertight=False)) == 2
 
     def test_run_merges_consecutive(self):
         """Recipe [2,2,2,0,0] → channel 2 gets one run (layers 0-2),
@@ -362,191 +364,6 @@ class TestOutputOrdering:
         sorted_items = sorted(meshes_by_slot.items(), key=lambda x: x[1]["mat_id"])
         names = [name for name, _ in sorted_items]
         assert names == ["White", "Cyan", "Yellow"]
-
-
-# =====================================================================
-# 4. Extrude geometry helper
-# =====================================================================
-
-
-class TestExtrudeGeometry:
-
-    def test_polygon_produces_mesh(self):
-        poly = box(0, 0, 10, 10)
-        meshes = VectorProcessor._extrude_geometry(poly, height=1.0, z_offset=0, scale=1.0)
-        assert len(meshes) == 1
-        assert meshes[0].vertices.shape[0] > 0
-
-    def test_multipolygon(self):
-        from shapely.ops import unary_union
-
-        mp = unary_union([box(0, 0, 5, 5), box(10, 0, 15, 5)])
-        meshes = VectorProcessor._extrude_geometry(mp, height=0.5, z_offset=0, scale=1.0)
-        assert len(meshes) == 2
-
-    def test_empty_returns_empty(self):
-        meshes = VectorProcessor._extrude_geometry(Polygon(), height=1.0, z_offset=0, scale=1.0)
-        assert meshes == []
-
-    def test_float_residual_polygon_is_ignored_before_triangulation(self):
-        """Sub-atomic GEOS residue must not abort an otherwise valid export."""
-
-        residue = Polygon(
-            [
-                (678.5630000000006, 2494.571000000001),
-                (678.563000000001, 2494.5710000000013),
-                (678.5630000000007, 2494.571000000001),
-            ]
-        )
-
-        meshes = VectorProcessor._extrude_geometry(
-            residue,
-            height=0.08,
-            z_offset=0.0,
-            scale=0.2762232707950837,
-        )
-
-        assert meshes == []
-
-    def test_none_returns_empty(self):
-        meshes = VectorProcessor._extrude_geometry(None, height=1.0, z_offset=0, scale=1.0)
-        assert meshes == []
-
-    def test_extrude_cache_reuses_base_mesh(self):
-        """Same polygon/height/scale should hit cache and only extrude once."""
-        poly = Polygon([(0, 0), (10, 0), (10, 4), (4, 4), (4, 10), (0, 10)])
-        cache = {}
-
-        call_count = {"n": 0}
-        real_builder = _ve._extrude_polygon_unit_height_indexed
-
-        def counted_builder(_poly):
-            call_count["n"] += 1
-            return real_builder(_poly)
-
-        with patch.object(
-            _ve,
-            "_extrude_polygon_unit_height_indexed",
-            side_effect=counted_builder,
-        ):
-            meshes1 = VectorProcessor._extrude_geometry(poly, height=1.0, z_offset=0.0, scale=1.0, extrude_cache=cache)
-            meshes2 = VectorProcessor._extrude_geometry(poly, height=1.0, z_offset=2.0, scale=1.0, extrude_cache=cache)
-
-        assert len(meshes1) == 1
-        assert len(meshes2) == 1
-        assert call_count["n"] == 1
-
-    def test_extrude_cache_hit_builds_mesh_without_trimesh_copy(self):
-        """Cached extrusions should avoid Trimesh.copy on the hot path."""
-        poly = box(0, 0, 10, 10)
-        cache = {}
-
-        VectorProcessor._extrude_geometry(
-            poly,
-            height=1.0,
-            z_offset=0.0,
-            scale=1.5,
-            extrude_cache=cache,
-        )
-        assert len(cache) == 1
-
-        with patch.object(
-            _ve.trimesh.Trimesh,
-            "copy",
-            side_effect=AssertionError("cached extrusion should not call Trimesh.copy"),
-        ):
-            meshes = VectorProcessor._extrude_geometry(
-                poly,
-                height=2.5,
-                z_offset=3.0,
-                scale=1.5,
-                extrude_cache=cache,
-            )
-
-        assert len(meshes) == 1
-        z_min, z_max = meshes[0].bounds[:, 2]
-        assert z_min == pytest.approx(3.0)
-        assert z_max == pytest.approx(5.5)
-
-    def test_extrude_cache_hit_uses_object_key_without_wkb_serialization(self, monkeypatch):
-        poly = box(0, 0, 10, 10)
-        base_vertices = np.asarray(
-            [
-                [0.0, 0.0, 0.0],
-                [1.0, 0.0, 0.0],
-                [1.0, 1.0, 1.0],
-            ],
-            dtype=np.float64,
-        )
-        base_faces = np.asarray([[0, 1, 2]], dtype=np.int64)
-        cache = {(poly, 1.0): (base_vertices, base_faces)}
-
-        monkeypatch.setattr(
-            type(poly),
-            "wkb",
-            property(lambda _self: (_ for _ in ()).throw(RuntimeError("wkb should not be read on cache hit"))),
-        )
-
-        meshes = VectorProcessor._extrude_geometry(
-            poly,
-            height=2.0,
-            z_offset=3.0,
-            scale=1.0,
-            extrude_cache=cache,
-        )
-
-        assert len(meshes) == 1
-        assert meshes[0].bounds[:, 2].tolist() == pytest.approx([3.0, 5.0])
-
-    def test_convex_polygon_extrudes_without_indexed_triangulation(self):
-        """Convex no-hole polygons should use the direct extrusion path."""
-        poly = box(0, 0, 10, 10)
-
-        with patch.object(
-            _ve,
-            "_extrude_polygon_unit_height_indexed",
-            side_effect=AssertionError("convex no-hole polygons should not call trimesh extrusion"),
-        ):
-            meshes = VectorProcessor._extrude_geometry(
-                poly,
-                height=2.0,
-                z_offset=3.0,
-                scale=0.5,
-                extrude_cache={},
-            )
-
-        assert len(meshes) == 1
-        mesh = meshes[0]
-        assert mesh.is_watertight
-        assert mesh.bounds[0].tolist() == pytest.approx([0.0, 0.0, 3.0])
-        assert mesh.bounds[1].tolist() == pytest.approx([5.0, 5.0, 5.0])
-        assert abs(mesh.volume) == pytest.approx(50.0)
-
-    def test_nonconvex_polygon_uses_indexed_extrusion(self):
-        """Non-convex polygons use the slicer-safe indexed boundary path."""
-        poly = Polygon([(0, 0), (10, 0), (10, 4), (4, 4), (4, 10), (0, 10)])
-        calls = []
-        original = _ve._extrude_polygon_unit_height_indexed
-
-        def spy_indexed_extrusion(*args, **kwargs):
-            calls.append(args[0])
-            return original(*args, **kwargs)
-
-        with patch.object(
-            _ve,
-            "_extrude_polygon_unit_height_indexed",
-            side_effect=spy_indexed_extrusion,
-        ):
-            meshes = VectorProcessor._extrude_geometry(
-                poly,
-                height=1.0,
-                z_offset=0.0,
-                scale=1.0,
-                extrude_cache={},
-            )
-
-        assert len(meshes) == 1
-        assert calls == [poly]
 
 
 # =====================================================================
@@ -1429,7 +1246,7 @@ class TestVectorCoatingBuildMeshRegression:
 
 class TestVectorSingleSidedMirrorRegression:
 
-    def test_build_mesh_mirrors_non_5color_single_sided_x_coordinates(self):
+    def test_build_mesh_mirrors_non_5color_without_vertex_translation(self):
         processor = _make_parse_only_processor()
         processor.color_mode = "8-Color Max"
         analysis = VectorAnalysis(
@@ -1450,8 +1267,10 @@ class TestVectorSingleSidedMirrorRegression:
         scene = processor.build_mesh(analysis=analysis, thickness_mm=0.0, structure_mode="Single-sided")
         bounds = scene.geometry["Cyan"].bounds
 
-        assert bounds[0][0] == pytest.approx(6.0)
-        assert bounds[1][0] == pytest.approx(10.0)
+        # The X sign flip preserves viewing orientation.  Placement is kept
+        # out of vertex coordinates and emitted as a 3MF build transform.
+        assert bounds[0][0] == pytest.approx(-4.0)
+        assert bounds[1][0] == pytest.approx(0.0)
 
     def test_build_mesh_does_not_mirror_5color_single_sided_x_coordinates(self):
         processor = _make_parse_only_processor()

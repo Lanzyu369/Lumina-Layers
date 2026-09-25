@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   convertGenerate: vi.fn(),
   convertGenerateLargeFormat: vi.fn(),
   convertGeneratePuzzle: vi.fn(),
+  replaceColorsBatch: vi.fn(),
   uploadHeightmap: vi.fn(),
   fetchGradientGroups: vi.fn(),
   fetchSessionLutInfo: vi.fn(),
@@ -23,6 +24,7 @@ vi.mock("../api/converter", async () => {
     convertGenerate: mocks.convertGenerate,
     convertGenerateLargeFormat: mocks.convertGenerateLargeFormat,
     convertGeneratePuzzle: mocks.convertGeneratePuzzle,
+    replaceColorsBatch: mocks.replaceColorsBatch,
     uploadHeightmap: mocks.uploadHeightmap,
     fetchGradientGroups: mocks.fetchGradientGroups,
     mutateFreeColors: mocks.mutateFreeColors,
@@ -114,6 +116,14 @@ function generateResponse() {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 function baseReadyState() {
   return {
     imageFile: new File(["png"], "relief.png", { type: "image/png" }),
@@ -169,6 +179,7 @@ describe("converter store relief generate flow", () => {
     });
     mocks.convertPreview.mockResolvedValue(previewResponse());
     mocks.convertGenerate.mockResolvedValue(generateResponse());
+    mocks.replaceColorsBatch.mockReset();
     mocks.convertGenerateLargeFormat.mockResolvedValue({
       status: "ok",
       message: "Large format generated",
@@ -218,7 +229,7 @@ describe("converter store relief generate flow", () => {
 
     const result = await useConverterStore.getState().submitFullPipeline();
 
-    expect(result).toBe("/api/files/model.glb");
+    expect(result).toBeNull();
     expect(mocks.convertPreview).toHaveBeenCalledOnce();
     expect(mocks.convertGenerate).toHaveBeenCalledOnce();
     const [, generateParams] = mocks.convertGenerate.mock.calls[0];
@@ -231,6 +242,79 @@ describe("converter store relief generate flow", () => {
       }),
     );
     expect(useConverterStore.getState().error).toBeNull();
+  });
+
+  it("waits for an in-flight color edit before submitting generation", async () => {
+    const useConverterStore = await loadStore();
+    const replacement = deferred<{
+      status: string;
+      message: string;
+      preview_url: string;
+      replacement_count: number;
+    }>();
+    mocks.replaceColorsBatch.mockReturnValueOnce(replacement.promise);
+    useConverterStore.setState({
+      ...baseReadyState(),
+      sessionId: "session-relief",
+      palette: PREVIEW_PALETTE,
+      _pollAsyncGlb: vi.fn(),
+    });
+
+    useConverterStore.getState().applyColorRemap("111111", "eeeeee");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const generatePromise = useConverterStore.getState().submitGenerate();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mocks.convertGenerate).not.toHaveBeenCalled();
+
+    replacement.resolve({
+      status: "ok",
+      message: "replacement committed",
+      preview_url: "/api/files/replaced.png",
+      replacement_count: 1,
+    });
+    await generatePromise;
+
+    expect(mocks.convertGenerate).toHaveBeenCalledOnce();
+    expect(useConverterStore.getState().downloadUrl).toBe(
+      "/api/files/model.3mf",
+    );
+  });
+
+  it("does not publish a generate response after a newer color edit commits", async () => {
+    const useConverterStore = await loadStore();
+    const generated = deferred<ReturnType<typeof generateResponse>>();
+    mocks.convertGenerate.mockReturnValueOnce(generated.promise);
+    mocks.replaceColorsBatch.mockResolvedValueOnce({
+      status: "ok",
+      message: "replacement committed",
+      preview_url: "/api/files/replaced.png",
+      replacement_count: 1,
+    });
+    useConverterStore.setState({
+      ...baseReadyState(),
+      sessionId: "session-relief",
+      palette: PREVIEW_PALETTE,
+      _pollAsyncGlb: vi.fn(),
+    });
+
+    const generateRequest = useConverterStore.getState().submitGenerate();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mocks.convertGenerate).toHaveBeenCalledOnce();
+
+    useConverterStore.getState().applyColorRemap("111111", "eeeeee");
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    generated.resolve(generateResponse());
+    await generateRequest;
+
+    expect(useConverterStore.getState().downloadUrl).toBeNull();
+    expect(useConverterStore.getState().isGenerating).toBe(false);
   });
 
   it("replays imported whole-image mappings and keeps portable project color data", async () => {
@@ -523,7 +607,7 @@ describe("converter store relief generate flow", () => {
     expect(generateParams.heightmap_max_height).toBeCloseTo(4.2, 10);
   });
 
-  it("shows the generated GLB after heightmap relief generation even when a preview GLB exists", async () => {
+  it("keeps the lightweight GLB after heightmap relief generation", async () => {
     const useConverterStore = await loadStore();
     useConverterStore.setState({
       ...baseReadyState(),
@@ -538,9 +622,10 @@ describe("converter store relief generate flow", () => {
       heightmap_max_height: 3,
     });
 
-    await useConverterStore.getState().submitGenerate();
+    const result = await useConverterStore.getState().submitGenerate();
 
-    expect(useConverterStore.getState().modelUrl).toBe("/api/files/model.glb");
+    expect(result).toBeNull();
+    expect(useConverterStore.getState().modelUrl).toBeNull();
     expect(useConverterStore.getState().previewGlbUrl).toBe(
       "/api/files/flat-preview.glb",
     );
@@ -843,7 +928,7 @@ describe("converter store relief generate flow", () => {
 
     const result = await useConverterStore.getState().submitFullPipeline();
 
-    expect(result).toBe("/api/files/model.glb");
+    expect(result).toBeNull();
     expect(mocks.convertPreview).toHaveBeenCalledOnce();
     expect(mocks.uploadHeightmap).toHaveBeenCalledWith(
       file,

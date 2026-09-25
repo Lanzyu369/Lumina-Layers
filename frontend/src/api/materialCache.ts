@@ -83,20 +83,19 @@ export async function fetchMaterialSolverCacheStatus(
   const response = await apiClient.post<MaterialSolverCacheStatusResponse>(
     "/extractor/material-solver-cache/status",
     _formData(key, extra),
-    { timeout: 3_600_000 },
+    { timeout: 0 },
   );
   return response.data;
 }
 
 /**
- * Build and persist a solver cache. This is a long-running request — for 10
- * materials × 10 layers it can take 30-180 seconds — so callers should raise
- * the timeout and surface progress to the user.
- * 构建并持久化求解器缓存；长耗时请求，10 材料 × 10 层大约 30-180 秒。
+ * Build and persist a solver cache. This local computation request remains
+ * pending until it completes, is cancelled, or fails.
+ * 构建并持久化求解器缓存；本地计算会持续到完成、取消或真实失败。
  */
 export async function buildMaterialSolverCache(
   key: MaterialSolverCacheKey,
-  options?: { gridResolution?: number; timeoutMs?: number },
+  options?: { gridResolution?: number },
 ): Promise<MaterialSolverCacheBuildResponse> {
   const extra: Record<string, string> = {};
   if (options?.gridResolution != null) {
@@ -105,7 +104,7 @@ export async function buildMaterialSolverCache(
   const response = await apiClient.post<MaterialSolverCacheBuildResponse>(
     "/extractor/material-solver-cache/build",
     _formData(key, extra),
-    { timeout: options?.timeoutMs ?? 3_600_000 },
+    { timeout: 0 },
   );
   return response.data;
 }
@@ -125,7 +124,7 @@ export async function deleteMaterialSolverCache(
   const response = await apiClient.post<MaterialSolverCacheDeleteResponse>(
     "/extractor/material-solver-cache/delete",
     _formData(key, extra),
-    { timeout: 3_600_000 },
+    { timeout: 0 },
   );
   return response.data;
 }
@@ -145,7 +144,7 @@ export async function fetchMaterialSolverRuntimeStatus(
   const response = await apiClient.post<MaterialSolverRuntimeStatusResponse>(
     "/extractor/material-solver-runtime/status",
     _formData(key, extra),
-    { timeout: 3_600_000 },
+    { timeout: 0 },
   );
   return response.data;
 }
@@ -156,7 +155,7 @@ export async function fetchMaterialSolverRuntimeStatus(
  */
 export async function buildMaterialSolverRuntime(
   key: MaterialSolverCacheKey,
-  options?: { candidateBudget?: number; timeoutMs?: number },
+  options?: { candidateBudget?: number },
 ): Promise<MaterialSolverRuntimeBuildResponse> {
   const extra: Record<string, string> = {};
   if (options?.candidateBudget != null) {
@@ -165,7 +164,7 @@ export async function buildMaterialSolverRuntime(
   const response = await apiClient.post<MaterialSolverRuntimeBuildResponse>(
     "/extractor/material-solver-runtime/build",
     _formData(key, extra),
-    { timeout: options?.timeoutMs ?? 3_600_000 },
+    { timeout: 0 },
   );
   return response.data;
 }
@@ -185,7 +184,7 @@ export async function deleteMaterialSolverRuntime(
   const response = await apiClient.post<MaterialSolverRuntimeDeleteResponse>(
     "/extractor/material-solver-runtime/delete",
     _formData(key, extra),
-    { timeout: 3_600_000 },
+    { timeout: 0 },
   );
   return response.data;
 }
@@ -212,7 +211,7 @@ export async function fetchMaterialSolverRuntimeDetails(
   const response = await apiClient.post<MaterialSolverRuntimeDetailsResponse>(
     "/extractor/material-solver-runtime/details",
     _formData(key, extra),
-    { timeout: 3_600_000, signal: options?.signal },
+    { timeout: 0, signal: options?.signal },
   );
   return response.data;
 }
@@ -224,7 +223,7 @@ export async function fetchMaterialSolverRuntimeDetails(
 export async function listMaterialSolverCaches(): Promise<MaterialSolverCacheListResponse> {
   const response = await apiClient.get<MaterialSolverCacheListResponse>(
     "/extractor/material-solver-caches",
-    { timeout: 3_600_000 },
+    { timeout: 0 },
   );
   return response.data;
 }
@@ -253,7 +252,7 @@ export async function fetchMaterialSolverCacheDetails(
   const response = await apiClient.post<MaterialSolverCacheDetailsResponse>(
     "/extractor/material-solver-cache/details",
     _formData(key, extra),
-    { timeout: 3_600_000, signal: options?.signal },
+    { timeout: 0, signal: options?.signal },
   );
   return response.data;
 }
@@ -267,8 +266,6 @@ export interface MaterialColorSuggestOptions {
   topK?: number;
   /** Minimum Lab ΔE between neighbours (perceptual dedup). (最小间距) */
   minSpacing?: number;
-  /** Hard cap on ``M ** N`` for the MITM fallback. (MITM 回退上限) */
-  maxCombinations?: number;
   /**
    * Lab grid resolution (buckets per axis) to target. Defaults to the
    * backend's low-tier value; callers must pass this when the user opts
@@ -280,8 +277,6 @@ export interface MaterialColorSuggestOptions {
   gridResolution?: number;
   /** ``AbortSignal`` to cancel the in-flight request. (用于取消请求) */
   signal?: AbortSignal;
-  /** Request timeout. Defaults to 60 s to allow MITM fallback runs. (超时) */
-  timeoutMs?: number;
 }
 
 /**
@@ -302,9 +297,6 @@ export async function fetchMaterialColorSuggestions(
   if (options?.minSpacing != null) {
     extra.min_spacing = String(options.minSpacing);
   }
-  if (options?.maxCombinations != null) {
-    extra.max_combinations = String(options.maxCombinations);
-  }
   if (options?.gridResolution != null) {
     extra.grid_resolution = String(options.gridResolution);
   }
@@ -312,7 +304,7 @@ export async function fetchMaterialColorSuggestions(
     "/extractor/material-solver-cache/suggest-colors",
     _formData(key, extra),
     {
-      timeout: options?.timeoutMs ?? 3_600_000,
+      timeout: 0,
       signal: options?.signal,
     },
   );

@@ -103,6 +103,7 @@ describe("recipe round-trip properties", () => {
       target_height_mm: fc.integer({ min: 10, max: 400 }),
       spacer_thick: fc.double({ min: 0.2, max: 10, noNaN: true }),
       backing_infill_density_percent: fc.integer({ min: 5, max: 100 }),
+      enable_wipe_tower_auto_placement: fc.boolean(),
       quantize_colors: fc.integer({ min: 2, max: 128 }),
       high_precision_3d_preview: fc.boolean(),
       enable_cleanup: fc.boolean(),
@@ -115,6 +116,7 @@ describe("recipe round-trip properties", () => {
       outline_width: fc.double({ min: 0.1, max: 2.0, noNaN: true }),
       enable_cloisonne: fc.boolean(),
       enable_coating: fc.boolean(),
+      coating_height_mm: fc.constantFrom(0.04, 0.08, 0.12),
       largeFormatEnabled: fc.boolean(),
       tileWidthMm: fc.integer({ min: 50, max: 500 }),
       tileHeightMm: fc.integer({ min: 50, max: 500 }),
@@ -183,7 +185,15 @@ describe("recipe round-trip properties", () => {
             ? "Single-sided"
             : DEFAULT_STATE.structure_mode,
         } as ConverterState;
-        const recipe = exportConverterRecipe(state, DEFAULT_SETTINGS, fpForLut[overrides.lut_name]);
+        const recipe = exportConverterRecipe(
+          state,
+          {
+            ...DEFAULT_SETTINGS,
+            enableWipeTowerAutoPlacement:
+              overrides.enable_wipe_tower_auto_placement,
+          },
+          fpForLut[overrides.lut_name],
+        );
         expect(recipe.puzzle.engrave_back_labels).toBe(false);
 
         // Build a minimal LuminaRecipe wrapper for restoreConverterRecipe
@@ -264,6 +274,7 @@ describe("recipe round-trip properties", () => {
         expect(restored.enable_outline).toBe(overrides.enable_outline);
         expect(restored.enable_cloisonne).toBe(overrides.enable_cloisonne);
         expect(restored.enable_coating).toBe(overrides.enable_coating);
+        expect(restored.coating_height_mm).toBe(overrides.coating_height_mm);
         expect(restored.largeFormatEnabled).toBe(expectedLargeFormatEnabled);
         expect(restored.tileWidthMm).toBe(overrides.tileWidthMm);
         expect(restored.tileHeightMm).toBe(overrides.tileHeightMm);
@@ -282,6 +293,9 @@ describe("recipe round-trip properties", () => {
         expect(restored.base_spacer_thick).toBe(baseSpacerThick);
         expect(restored.spacer_thick).toBe(expectedSpacerThick);
         expect(restored.structure_mode).toBe(expectedStructureMode);
+        expect(recipe.device.enable_wipe_tower_auto_placement).toBe(
+          overrides.enable_wipe_tower_auto_placement,
+        );
         expect(restored.backing_infill_density_percent).toBe(
           restored.enable_relief || restored.puzzleEnabled
             ? 100

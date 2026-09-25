@@ -1,5 +1,7 @@
 # Electron 集成方案
 
+> **本文是当年的设计记录**（部分命令示例仍用 npm，现已统一为 pnpm）。日常开发、启动与打包请以操作手册 [`desktop-electron.md`](desktop-electron.md) 为准；两者冲突时以后者为准。
+
 在现有 FastAPI (`api_server.py`) + Vite/React (`frontend/`) 架构上增加一个 Electron 外壳，主进程托管后端生命周期并提供原生窗口、退出确认、一键启停，同时兼顾开发期 HMR 体验与生产期的离线打包可分发产物，不改动任何业务代码。
 
 ## 1. 目录与产物

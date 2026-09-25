@@ -24,6 +24,24 @@ from config import LUTMetadata, PaletteEntry, PrinterConfig
 from core.vector_matchers import MATERIAL_ARCHIVE_LUT_SENTINEL
 
 
+@pytest.fixture(autouse=True)
+def _keep_legacy_parser_unit_tests_on_the_legacy_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep mocked parse/clip internals on their intended legacy backend."""
+    from core import native_svg_adapter
+    from core.native_svg_adapter import NativeSvgFallback
+
+    monkeypatch.setattr(
+        native_svg_adapter,
+        "analyze_native_svg",
+        lambda *_args, **_kwargs: NativeSvgFallback(
+            reason_code="legacy_parser_unit_test",
+            native_version="test",
+        ),
+    )
+
+
 def _material_archive_ctx() -> dict:
     """Minimal ctx mirroring what S01 / P01 produce for material_archive."""
     return {

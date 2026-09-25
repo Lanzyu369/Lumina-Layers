@@ -11,7 +11,15 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 import trimesh
 
-from core.model_surface.types import ModelSurfaceError, SurfaceFootprint
+from core.layered_coordinate_domain import (
+    LayeredCoordinateDomain,
+    read_layered_coordinate_domain,
+)
+from core.model_surface.types import (
+    MODEL_SURFACE_FATAL_ERRORS,
+    ModelSurfaceError,
+    SurfaceFootprint,
+)
 from core.model_surface.validation import (
     MODEL_SURFACE_INSUFFICIENT_THICKNESS,
     MODEL_SURFACE_THICKNESS_UNKNOWN,
@@ -23,6 +31,11 @@ MODEL_SURFACE_DISPLAY_LAYER_HEIGHTS_KEY = (
     "model_surface_display_layer_heights_mm"
 )
 MODEL_SURFACE_LOGICAL_XY_BOUNDS_KEY = "model_surface_logical_xy_bounds_mm"
+
+
+# The manifold backend does not expose a reliable allocation estimate. Keep a
+# conservative fail-closed margin around base/cutter arrays until production
+# RSS evidence supports lowering it.
 
 
 @dataclass(frozen=True)
@@ -84,6 +97,7 @@ def build_embedded_overlay_scene(
     base_slot_name: str,
     base_color: tuple[int, int, int],
     allow_uncut_base: bool = False,
+    _take_pattern_ownership: bool = False,
 ) -> OverlaySceneResult:
     """Place color pattern meshes into the selected model surface frame.
 
@@ -105,6 +119,11 @@ def build_embedded_overlay_scene(
             f"available={available_depth_mm:.6f}"
         )
     display_layer_heights_mm = _pattern_layer_heights_mm(printable_scene)
+    display_z_bounds_mm = (
+        _pattern_z_bounds_mm(printable_scene)
+        if display_layer_heights_mm
+        else None
+    )
     base_copy = (
         base_mesh.copy()
         if allow_uncut_base
@@ -129,7 +148,7 @@ def build_embedded_overlay_scene(
     for name, mesh in printable_scene.geometry.items():
         if not isinstance(mesh, trimesh.Trimesh) or len(mesh.faces) == 0:
             continue
-        mesh_copy = mesh.copy()
+        mesh_copy = mesh if _take_pattern_ownership else mesh.copy()
         mesh_copy.apply_transform(transform)
         mesh_copy.metadata["name"] = str(name)
         result_scene.add_geometry(mesh_copy, node_name=str(name), geom_name=str(name))
@@ -143,7 +162,7 @@ def build_embedded_overlay_scene(
             display_layer_heights_mm
         )
         result_scene.metadata[MODEL_SURFACE_DISPLAY_Z_BOUNDS_KEY] = (
-            _pattern_z_bounds_mm(printable_scene)
+            display_z_bounds_mm
         )
     return OverlaySceneResult(result_scene, slot_names, preview_colors)
 
@@ -151,6 +170,8 @@ def build_embedded_overlay_scene(
 def apply_model_transform_to_overlay_scene(
     result: OverlaySceneResult,
     model_transform: dict | None,
+    *,
+    _copy_scene: bool = True,
 ) -> OverlaySceneResult:
     """Apply the selected model object transform to the assembled overlay scene.
 
@@ -173,7 +194,7 @@ def apply_model_transform_to_overlay_scene(
         dtype=np.float64,
     )
     matrix = _rotation_matrix_about_anchor(rotation_deg, anchor)
-    transformed_scene = result.scene.copy()
+    transformed_scene = result.scene.copy() if _copy_scene else result.scene
     _apply_transform_to_scene_geometry(transformed_scene, matrix)
     return OverlaySceneResult(
         scene=transformed_scene,
@@ -185,6 +206,8 @@ def apply_model_transform_to_overlay_scene(
 def orient_overlay_scene_for_print(
     result: OverlaySceneResult,
     face_orientation: str,
+    *,
+    _copy_scene: bool = True,
 ) -> OverlaySceneResult:
     """Orient the assembled display face for printing.
 
@@ -216,7 +239,7 @@ def orient_overlay_scene_for_print(
         [0.0, 1.0, 0.0],
         point=center,
     )
-    transformed_scene = result.scene.copy()
+    transformed_scene = result.scene.copy() if _copy_scene else result.scene
     _apply_transform_to_scene_geometry(transformed_scene, face_down_rotation)
     return OverlaySceneResult(
         scene=transformed_scene,
@@ -309,16 +332,23 @@ def _cut_surface_polygon_pocket(
                 z_offset_mm=-(float(pocket_depth_mm) + epsilon),
             )
         )
+    except MODEL_SURFACE_FATAL_ERRORS:
+        raise
     except Exception as exc:
         raise ModelSurfaceError("model_surface_boolean_failed") from exc
     if not cutter_mesh.is_volume:
         raise ModelSurfaceError("model_surface_boolean_failed")
-    prepared_base_mesh = prepare_model_surface_mesh_for_boolean(base_mesh)
+    prepared_base_mesh = prepare_model_surface_mesh_for_boolean(
+        base_mesh,
+        _take_ownership=True,
+    )
     try:
         result = trimesh.boolean.difference(
             [prepared_base_mesh, cutter_mesh],
             engine="manifold",
         )
+    except MODEL_SURFACE_FATAL_ERRORS:
+        raise
     except Exception as exc:
         raise ModelSurfaceError("model_surface_boolean_failed") from exc
 
@@ -365,6 +395,8 @@ def _build_polygon_prism_mesh(
         )
         faces = np.asarray(mesh_data.tri_verts, dtype=np.int64)
     except ModelSurfaceError:
+        raise
+    except MODEL_SURFACE_FATAL_ERRORS:
         raise
     except Exception as exc:
         raise ModelSurfaceError("model_surface_boolean_failed") from exc
@@ -454,6 +486,8 @@ def _pattern_footprint_in_surface_coordinates(
     )
     try:
         clipped = mapped.intersection(surface_polygon)
+    except MODEL_SURFACE_FATAL_ERRORS:
+        raise
     except Exception as exc:
         raise ModelSurfaceError("model_surface_boolean_failed") from exc
     return _coerce_polygonal_geometry(
@@ -473,6 +507,8 @@ def _coerce_polygonal_geometry(
     try:
         if not candidate.is_valid:
             candidate = candidate.buffer(0)
+    except MODEL_SURFACE_FATAL_ERRORS:
+        raise
     except Exception as exc:
         raise ModelSurfaceError(empty_error) from exc
 
@@ -485,6 +521,8 @@ def _coerce_polygonal_geometry(
             if len(components) == 1
             else unary_union(components)
         )
+    except MODEL_SURFACE_FATAL_ERRORS:
+        raise
     except Exception as exc:
         raise ModelSurfaceError(empty_error) from exc
     if (
@@ -633,6 +671,10 @@ def _available_surface_depth_mm(
 def _pattern_xy_bounds_mm(
     pattern_scene: trimesh.Scene,
 ) -> tuple[float, float, float, float]:
+    certified_domain = _certified_pattern_domain(pattern_scene)
+    if certified_domain is not None:
+        return certified_domain.writer_canvas_bounds_mm
+
     bounds = np.asarray(pattern_scene.bounds, dtype=np.float64)
     if bounds.shape != (2, 3) or not np.all(np.isfinite(bounds)):
         raise ModelSurfaceError("Overlay pattern scene has invalid bounds.")
@@ -714,6 +756,10 @@ def _first_triangle_hit_distance(
 
 
 def _pattern_z_bounds_mm(pattern_scene: trimesh.Scene) -> tuple[float, float]:
+    certified_domain = _certified_pattern_domain(pattern_scene)
+    if certified_domain is not None:
+        return certified_domain.writer_z_bounds_mm
+
     bounds = np.asarray(pattern_scene.bounds, dtype=np.float64)
     if bounds.shape != (2, 3) or not np.all(np.isfinite(bounds)):
         raise ModelSurfaceError("Overlay pattern scene has invalid bounds.")
@@ -737,6 +783,10 @@ def _pattern_z_bounds_mm(pattern_scene: trimesh.Scene) -> tuple[float, float]:
 
 
 def _pattern_layer_heights_mm(pattern_scene: trimesh.Scene) -> tuple[float, ...]:
+    certified_domain = _certified_pattern_domain(pattern_scene)
+    if certified_domain is not None:
+        return certified_domain.layer_heights_mm
+
     raw_heights = pattern_scene.metadata.get(
         MODEL_SURFACE_DISPLAY_LAYER_HEIGHTS_KEY
     )
@@ -756,6 +806,22 @@ def _pattern_layer_heights_mm(pattern_scene: trimesh.Scene) -> tuple[float, ...]
             "Overlay pattern layer heights do not match its logical Z depth."
         )
     return layer_heights
+
+
+def _certified_pattern_domain(
+    pattern_scene: trimesh.Scene,
+) -> LayeredCoordinateDomain | None:
+    """Return the producer-certified domain or preserve the legacy path."""
+
+    try:
+        return read_layered_coordinate_domain(
+            pattern_scene,
+            require_certified=True,
+        )
+    except ValueError as exc:
+        raise ModelSurfaceError(
+            "Overlay pattern coordinate-domain metadata is invalid."
+        ) from exc
 
 
 def _footprint_prism_to_surface_transform(

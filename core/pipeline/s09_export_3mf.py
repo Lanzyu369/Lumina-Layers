@@ -84,7 +84,10 @@ def run(ctx: dict) -> dict:
         - bambu_color_height_mm (float): Bambu 彩色层高度，缺省为 0.0
         - bambu_face_orientation (str): Bambu 朝向，缺省为 "down"
         - enable_base_layer_height_modifier (bool): 是否启用底板粗层高覆盖，缺省为 True
+        - enable_wipe_tower_auto_placement (bool): 是否自动调整擦料塔布局，缺省为 True
         - device_profile_id (str | None): 机器适配 V2 生成的切片器维度设备配置 ID
+        - export_transform_metadata (dict | None): Optional mutable export-transform result.
+          可选的可变导出变换结果容器。
 
     PipelineContext 输出键 / Output keys:
         - out_path (str): 导出的 3MF 文件路径
@@ -106,9 +109,25 @@ def run(ctx: dict) -> dict:
     # Face-down single-sided exports need an X mirror correction. Face-up
     # modes already print with the visible surface on top, so mirroring them
     # would make slicers display the model backwards.
-    if _should_mirror_single_sided_export(ctx, structure_mode):
-        model_width_mm = target_w * pixel_scale
-        mirror_transform = np.array([[-1, 0, 0, model_width_mm], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+    x_mirrored = _should_mirror_single_sided_export(ctx, structure_mode)
+    mirror_span_mm = float(target_w * pixel_scale)
+    export_transform_metadata = ctx.get("export_transform_metadata")
+    if isinstance(export_transform_metadata, dict):
+        export_transform_metadata.update(
+            {
+                "x_mirrored": x_mirrored,
+                "mirror_span_mm": mirror_span_mm,
+            }
+        )
+    if x_mirrored:
+        mirror_transform = np.array(
+            [
+                [-1, 0, 0, mirror_span_mm],
+                [0, 1, 0, 0],
+                [0, 0, 1, 0],
+                [0, 0, 0, 1],
+            ]
+        )
         for geom_name in list(scene.geometry.keys()):
             scene.geometry[geom_name].apply_transform(mirror_transform)
 
@@ -214,6 +233,9 @@ def run(ctx: dict) -> dict:
             enable_base_layer_height_modifier=(
                 bool(ctx.get("enable_base_layer_height_modifier", True))
                 and not bool(ctx.get("enable_relief", False))
+            ),
+            enable_wipe_tower_auto_placement=bool(
+                ctx.get("enable_wipe_tower_auto_placement", True)
             ),
             enable_relief=bool(ctx.get("enable_relief", False)),
             base_height_mm=float(ctx.get("bambu_base_height_mm", 0.0)),

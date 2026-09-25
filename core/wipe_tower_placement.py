@@ -143,6 +143,49 @@ class WipeTowerPlacementResult:
     reason: str
 
 
+@dataclass(frozen=True)
+class _ScoredPlacement:
+    """One safe placement plus deterministic selection ranks."""
+
+    result: WipeTowerPlacementResult
+    clearance_rank: int
+    orientation_index: int
+    width_rank: int
+    movement: float
+    side_rank: int
+    offset_rank: int
+
+    @property
+    def within_orientation_score(self) -> tuple[float, ...]:
+        return (
+            float(self.width_rank),
+            float(self.clearance_rank),
+            self.movement,
+            float(self.side_rank),
+            float(self.offset_rank),
+        )
+
+    def overall_score(self, *, prefer_vertical: bool) -> tuple[float, ...]:
+        vertical_preference_penalty = (
+            0.0
+            if not prefer_vertical or self.orientation_index == 1
+            else 1.0
+        )
+        footprint_area = (
+            self.result.tower_bounds.width * self.result.tower_bounds.height
+        )
+        return (
+            vertical_preference_penalty,
+            self.movement,
+            footprint_area,
+            float(self.width_rank),
+            float(self.clearance_rank),
+            float(self.orientation_index),
+            float(self.side_rank),
+            float(self.offset_rank),
+        )
+
+
 def _minimum_depth_for_height(model_height: float) -> float:
     points = ((5.0, 5.0), (100.0, 20.0), (250.0, 40.0), (350.0, 60.0))
     height = max(0.0, float(model_height))
@@ -244,8 +287,21 @@ def _tower_footprint_dimensions(
     )
 
 
-def _polygon_bounds(polygon: Sequence[Point2D]) -> Rect | None:
+def _polygon_has_area(polygon: Sequence[Point2D]) -> bool:
+    """Return whether a polygon encloses a non-zero two-dimensional area."""
+
     if len(polygon) < 3:
+        return False
+    area_twice = sum(
+        point[0] * polygon[(index + 1) % len(polygon)][1]
+        - polygon[(index + 1) % len(polygon)][0] * point[1]
+        for index, point in enumerate(polygon)
+    )
+    return abs(area_twice) > _EPSILON
+
+
+def _polygon_bounds(polygon: Sequence[Point2D]) -> Rect | None:
+    if not _polygon_has_area(polygon):
         return None
     xs = [float(point[0]) for point in polygon]
     ys = [float(point[1]) for point in polygon]
@@ -320,7 +376,9 @@ def _polygon_edges(polygon: Sequence[Point2D]) -> Iterable[tuple[Point2D, Point2
 
 
 def _rect_inside_polygon(rect: Rect, polygon: Sequence[Point2D]) -> bool:
-    if len(polygon) < 3 or not all(_point_in_polygon(point, polygon) for point in rect.sample_points()):
+    if not _polygon_has_area(polygon) or not all(
+        _point_in_polygon(point, polygon) for point in rect.sample_points()
+    ):
         return False
     # A concave printable polygon can contain all four corners while an edge
     # crosses a notch. Midpoints above catch common notches; this intersection
@@ -339,7 +397,7 @@ def _rect_inside_polygon(rect: Rect, polygon: Sequence[Point2D]) -> bool:
 
 
 def _rect_intersects_polygon(rect: Rect, polygon: Sequence[Point2D]) -> bool:
-    if len(polygon) < 3:
+    if not _polygon_has_area(polygon):
         return False
     if any(rect.contains_point(point) for point in polygon):
         return True
@@ -674,11 +732,11 @@ def _layout_is_safe(result: WipeTowerPlacementResult, request: WipeTowerPlacemen
 def solve_wipe_tower_placement(
     request: WipeTowerPlacementRequest,
 ) -> WipeTowerPlacementResult:
-    """Keep a safe template layout or find a long horizontal/vertical strip.
+    """Find an automatic horizontal/vertical tower layout for the current model.
 
-    安全时完整保留模板；发生越界或挤占时，在横向与纵向长条之间求解，并且
-    只平移模型，绝不缩放模型或关闭擦料塔。无安全解时返回可导出的尽力布局
-    及明确的手动调整标记。
+    开启自动摆放时始终根据当前模型重新求解，而不是因为模板碰巧未碰撞就
+    原样返回。求解只平移模型，绝不缩放模型或关闭擦料塔；无安全解时返回
+    可导出的尽力布局及明确的手动调整标记。
     """
 
     bed = _effective_bed_bounds(request)
@@ -708,8 +766,7 @@ def solve_wipe_tower_placement(
         requires_manual_adjustment=False,
         reason="template_layout_safe",
     )
-    if bed is not None and _layout_is_safe(original, request):
-        return original
+    original_is_safe = bed is not None and _layout_is_safe(original, request)
 
     if (
         request.model_translation_locked
@@ -729,7 +786,7 @@ def solve_wipe_tower_placement(
             reason="no_safe_layout_without_scaling_or_disabling_tower",
         )
 
-    safe_candidates: list[tuple[tuple[float, ...], WipeTowerPlacementResult]] = []
+    safe_candidates: list[_ScoredPlacement] = []
     fallback_candidates: list[WipeTowerPlacementResult] = []
     if bed is not None:
         preferred_edge_clearance = max(
@@ -886,31 +943,53 @@ def solve_wipe_tower_placement(
                                 )
                                 if not _layout_is_safe(candidate, request):
                                     continue
-                                if request.model_translation_locked:
-                                    return candidate
                                 movement = math.hypot(
                                     translation[0] - centered_translation[0],
                                     translation[1] - centered_translation[1],
                                 )
-                                orientation_preference = orientation_index
-                                if request.prefer_vertical_strip:
-                                    orientation_preference = (
-                                        0 if orientation_index == 1 else 1
+                                safe_candidates.append(
+                                    _ScoredPlacement(
+                                        result=candidate,
+                                        clearance_rank=clearance_index,
+                                        orientation_index=orientation_index,
+                                        width_rank=width_index,
+                                        movement=movement,
+                                        side_rank=side_index,
+                                        offset_rank=offset_index,
                                     )
-                                score = (
-                                    float(width_index),
-                                    float(clearance_index),
-                                    float(orientation_preference),
-                                    movement,
-                                    float(side_index),
-                                    float(offset_index),
                                 )
-                                safe_candidates.append((score, candidate))
                                 break
 
     if safe_candidates:
-        safe_candidates.sort(key=lambda item: item[0])
-        return safe_candidates[0][1]
+        # Preserve the proven width search within each orientation: use the
+        # candidate nearest the slicer's stable 30 mm vertical idiom (or the
+        # preferred long horizontal width) before considering farther widths.
+        # Then choose between the best horizontal and vertical layouts using
+        # model movement and physical footprint. This makes normal, already-safe
+        # projects visibly auto-plan without regressing tight-bed width choices.
+        best_by_orientation: dict[int, _ScoredPlacement] = {}
+        for candidate in safe_candidates:
+            current = best_by_orientation.get(candidate.orientation_index)
+            if (
+                current is None
+                or candidate.within_orientation_score
+                < current.within_orientation_score
+            ):
+                best_by_orientation[candidate.orientation_index] = candidate
+
+        selected = min(
+            best_by_orientation.values(),
+            key=lambda candidate: candidate.overall_score(
+                prefer_vertical=request.prefer_vertical_strip
+            ),
+        )
+        return selected.result
+
+    # Irregular vendor beds may admit a safe native template placement while
+    # none of the generic edge anchors fit. Preserve that verified-safe layout
+    # instead of turning a successful project into a false manual warning.
+    if original_is_safe:
+        return original
 
     fallback = fallback_candidates[0] if fallback_candidates else original
     return _build_result(

@@ -155,7 +155,7 @@ class TestParameterAnnotations:
     def test_preview_has_expected_param_count(self) -> None:
         """worker_generate_preview should expose the full preview parameter set."""
         sig = inspect.signature(worker_generate_preview)
-        assert len(sig.parameters) == 33
+        assert len(sig.parameters) == 36
 
     def test_model_has_expected_param_count(self) -> None:
         """worker_generate_model should have 3 parameters."""
@@ -185,8 +185,17 @@ class TestParameterAnnotations:
             "material_min_layer_count", "material_max_layer_count",
             "material_delta_e00_tolerance", "auto_dynamic_range",
             "high_precision_3d_preview", "replacement_regions",
+            "svg_hole_compensation_enabled", "svg_hole_max_area_mm2",
+            "svg_hole_max_width_mm",
         }
         assert set(sig.parameters.keys()) == expected
+
+    def test_preview_compensation_parameters_are_optional_scalars(self) -> None:
+        """Existing preview calls remain valid with compensation disabled."""
+        parameters = inspect.signature(worker_generate_preview).parameters
+        assert parameters["svg_hole_compensation_enabled"].default is False
+        assert parameters["svg_hole_max_area_mm2"].default == 0.5
+        assert parameters["svg_hole_max_width_mm"].default == 0.1
 
     def test_model_param_names(self) -> None:
         """Verify expected parameter names for worker_generate_model."""
@@ -302,11 +311,23 @@ def test_worker_generate_model_forwards_fridge_magnet_params_intact() -> None:
         "enable_fridge_magnet": True,
         "fridge_magnets": expected_fridge_magnets,
         "modeling_mode": "high-fidelity",
+        "original_matched_rgb_path": "original-rgb.npy",
+        "original_material_matrix_path": "original-material.npy",
+        "edit_projection": {
+            "mode": "delta",
+            "source_shape": [40, 80],
+        },
     }
+
+    def _generate_with_transform_metadata(**kwargs):
+        metadata = kwargs.get("export_transform_metadata")
+        if isinstance(metadata, dict):
+            metadata.update({"x_mirrored": True, "mirror_span_mm": 80.0})
+        return "out.3mf", "out.glb", None, "OK", None
 
     with patch(
         "core.converter.generate_final_model",
-        return_value=("out.3mf", "out.glb", None, "OK", None),
+        side_effect=_generate_with_transform_metadata,
     ) as generate_final_model_mock:
         result = worker_generate_model("image.png", "lut.npy", params)
 
@@ -314,12 +335,22 @@ def test_worker_generate_model_forwards_fridge_magnet_params_intact() -> None:
         "threemf_path": "out.3mf",
         "glb_path": "out.glb",
         "status_msg": "OK",
+        "x_mirrored": True,
+        "mirror_span_mm": 80.0,
     }
-    generate_final_model_mock.assert_called_once_with(
-        image_path="image.png",
-        lut_path="lut.npy",
-        **params,
-    )
+    generate_final_model_mock.assert_called_once()
+    call_kwargs = generate_final_model_mock.call_args.kwargs
+    assert call_kwargs["image_path"] == "image.png"
+    assert call_kwargs["lut_path"] == "lut.npy"
+    assert {
+        key: value
+        for key, value in call_kwargs.items()
+        if key not in {"image_path", "lut_path", "export_transform_metadata"}
+    } == params
+    assert call_kwargs["export_transform_metadata"] == {
+        "x_mirrored": True,
+        "mirror_span_mm": 80.0,
+    }
 
 
 def test_worker_batch_convert_item_forwards_relief_params_intact() -> None:
@@ -678,6 +709,7 @@ def test_worker_generate_preview_splits_vector_parse_clip_cache_blob(tmp_path) -
         "preview_rgba": preview_img.copy(),
         "color_conf": {},
         "vector_parse_clip_cache_blob": b"parse-clip-artifact",
+        "vector_parse_clip_cache_provenance": "a" * 64,
     }
 
     with (
@@ -705,6 +737,7 @@ def test_worker_generate_preview_splits_vector_parse_clip_cache_blob(tmp_path) -
         with open(result["cache_data_path"], "rb") as handle:
             restored_cache = pickle.load(handle)
         assert "vector_parse_clip_cache_blob" not in restored_cache
+        assert restored_cache["vector_parse_clip_cache_provenance"] == "a" * 64
         with open(result["vector_parse_clip_cache_path"], "rb") as handle:
             assert handle.read() == b"parse-clip-artifact"
     finally:

@@ -22,10 +22,7 @@ import type {
 } from "../api/types";
 import { useI18n } from "../i18n/context";
 import { tRuntime } from "../i18n/runtime";
-import {
-  estimateSolverCacheBuildBudget,
-  useSettingsStore,
-} from "../stores/settingsStore";
+import { useSettingsStore } from "../stores/settingsStore";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import Button from "./ui/Button";
 import Dropdown from "./ui/Dropdown";
@@ -122,18 +119,6 @@ export default function MaterialSolverCacheStatusCard({
     : undefined;
   const activeGridResolution =
     effectiveGridResolution ?? solverCacheGridResolution;
-  const buildBudget = useMemo(
-    () =>
-      estimateSolverCacheBuildBudget(
-        materialDirectoryNames.length,
-        layerCount,
-        activeGridResolution,
-      ),
-    [materialDirectoryNames.length, layerCount, activeGridResolution],
-  );
-  const isBuildBudgetUnsafe =
-    materialDirectoryNames.length > 0 && !buildBudget.isAllowed;
-
   const cacheKey = useMemo<MaterialSolverCacheKey>(
     () => ({
       materialDirectoryNames,
@@ -311,7 +296,6 @@ export default function MaterialSolverCacheStatusCard({
 
   const handleBuild = useCallback(async () => {
     if (materialDirectoryNames.length === 0) return;
-    if (isBuildBudgetUnsafe) return;
     setActionError(null);
     setIsBuilding(true);
     try {
@@ -332,7 +316,6 @@ export default function MaterialSolverCacheStatusCard({
     cacheKey,
     materialDirectoryNames.length,
     effectiveGridResolution,
-    isBuildBudgetUnsafe,
   ]);
 
   const handleDelete = useCallback(async () => {
@@ -511,15 +494,6 @@ export default function MaterialSolverCacheStatusCard({
         </p>
       ) : null}
 
-      {isBuildBudgetUnsafe ? (
-        <p className="text-[11px] leading-snug text-amber-600 dark:text-amber-300">
-          {tRuntime("basic_material_cache_budget_warning", {
-            combinations: combinationsLabel,
-            grid: activeGridResolution,
-          })}
-        </p>
-      ) : null}
-
       {isBuilding ? (
         <p className="text-[11px] text-slate-500 dark:text-slate-400">
           {tRuntime("basic_material_cache_building_hint", {
@@ -539,9 +513,7 @@ export default function MaterialSolverCacheStatusCard({
             <Button
               label={t("basic_material_cache_rebuild_button")}
               variant="secondary"
-              disabled={
-                materialDirectoryNames.length === 0 || isBuildBudgetUnsafe
-              }
+              disabled={materialDirectoryNames.length === 0}
               loading={isBuilding}
               onClick={handleBuild}
               className="px-3 text-xs"
@@ -576,11 +548,7 @@ export default function MaterialSolverCacheStatusCard({
                 : t("basic_material_cache_build_button")
             }
             variant="primary"
-            disabled={
-              materialDirectoryNames.length === 0 ||
-              isBuilding ||
-              isBuildBudgetUnsafe
-            }
+            disabled={materialDirectoryNames.length === 0 || isBuilding}
             loading={isBuilding}
             onClick={handleBuild}
             className="px-3 text-xs"

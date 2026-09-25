@@ -7,6 +7,7 @@ import {
   MATERIAL_DYNAMIC_LAYER_COUNT_MIN,
   inferDefaultMaterialBackingDirName,
   isValidImageType,
+  hasOnlySvgInputs,
   resolveConverterSourceSelection,
 } from "../../stores/converter";
 import {
@@ -41,7 +42,8 @@ import {
   type RecipeFileSource,
 } from "../../recipe/importRecipe";
 import { StatusBanner, workstationInputClass } from "../ui/panelPrimitives";
-import { isSvgImageFile, type ImageRotationDegrees } from "../../utils/imageRotation";
+import { type ImageRotationDegrees } from "../../utils/imageRotation";
+import { WIKI_DOCS } from "../../utils/wikiDocs";
 import {
   buildLutCatalogIndex,
   getBucketDisplayColorMode,
@@ -77,6 +79,8 @@ const THICKNESS_SLIDER_MAX_MM = 10;
 const BACKING_INFILL_DENSITY_MIN_PERCENT = 5;
 const BACKING_INFILL_DENSITY_MAX_PERCENT = 100;
 const BACKING_INFILL_DENSITY_STEP_PERCENT = 5;
+const STANDARD_DIMENSION_SLIDER_MAX_MM = 400;
+const LARGE_FORMAT_TILE_SLIDER_MAX_MM = 500;
 const GENERIC_HTTP_STATUS_ERROR_RE =
   /(?:Request failed with status code|HTTP(?:\s+error)?|status(?:\s+code)?)\s*\d{3}\b/i;
 const STARTUP_LUT_RETRY_DELAY_MS = 5_000;
@@ -128,14 +132,17 @@ function isInsideModelSurfaceDropZone(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(target.closest("[data-model-surface-drop-zone='true']"));
 }
 
+function isInsideLocalFileDropZone(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest("[data-local-file-drop-zone='true']"));
+}
+
 const LARGE_FORMAT_PREVIEW_FALLBACK_PREFIX =
   "Native vector large-format is unavailable for this SVG; large-format generation will fall back to raster tiling.";
 const LARGE_FORMAT_GENERATE_FALLBACK_WARNING =
   "Raster fallback was used for this large-format SVG request.";
 const LARGE_FORMAT_NATIVE_FAILURE_WARNING =
   "Native vector generation failed; raster fallback was used for this large-format SVG request.";
-const LARGE_FORMAT_DENSITY_REDUCED_WARNING =
-  "Raster fallback density was reduced to keep SVG large-format generation within the pixel budget.";
+const WIPE_TOWER_MANUAL_WARNING_CODE = "wipe_tower_manual_adjustment_required";
 
 function localizeLargeFormatWarning(
   warning: string,
@@ -157,8 +164,8 @@ function localizeLargeFormatWarning(
   if (warning === LARGE_FORMAT_NATIVE_FAILURE_WARNING) {
     return t("large_format_warning_native_failure");
   }
-  if (warning === LARGE_FORMAT_DENSITY_REDUCED_WARNING) {
-    return t("large_format_warning_density_reduced");
+  if (warning === WIPE_TOWER_MANUAL_WARNING_CODE) {
+    return t("wipe_tower_manual_adjustment_warning");
   }
   return warning;
 }
@@ -502,7 +509,7 @@ export default function BasicSettings() {
       setImportLoading(true);
       const preview = await prepareImport(file);
       setImportPreview(preview);
-      setImportSource(file.name.toLowerCase().endsWith(".lumina.json") ? "json" : "png");
+      setImportSource(file.name.toLowerCase().endsWith(".json") ? "json" : "png");
       setImportDialogOpen(true);
     } catch (err) {
       const visibleError = resolveRecipeImportError(err, t);
@@ -576,7 +583,7 @@ export default function BasicSettings() {
   const clearModelSurface = useConverterStore((s) => s.clearModelSurface);
   const rotateImageForExport = useConverterStore((s) => s.rotateImageForExport);
   const [selectedImageRotation, setSelectedImageRotation] = useState<ImageRotationDegrees>(90);
-  const isVectorModelingAvailable = isSvgImageFile(imageFile);
+  const isVectorModelingAvailable = useConverterStore(hasOnlySvgInputs);
   const disabledModelingModes = isVectorModelingAvailable ? [] : [ModelingMode.VECTOR];
 
   const handleFileReplace = useCallback(
@@ -612,6 +619,10 @@ export default function BasicSettings() {
       const modelFile = files.find(isSupportedModelSurfaceFile);
       const imageFiles = files.filter((file) => isValidImageType(file.type, file.name));
 
+      if (!modelFile && isInsideLocalFileDropZone(target)) {
+        return false;
+      }
+
       if (!modelFile && imageFiles.length === 0) {
         return false;
       }
@@ -632,7 +643,12 @@ export default function BasicSettings() {
   useEffect(() => {
     const handleWindowDragOver = (event: DragEvent) => {
       if (!hasDraggedFiles(event)) return;
-      setDropImportIntent(getDropImportIntent(Array.from(event.dataTransfer?.files ?? [])));
+      const intent = getDropImportIntent(Array.from(event.dataTransfer?.files ?? []));
+      if (isInsideLocalFileDropZone(event.target) && intent !== "model" && intent !== "mixed") {
+        setDropImportIntent(null);
+        return;
+      }
+      setDropImportIntent(intent);
       event.preventDefault();
     };
     const handleWindowDragLeave = (event: DragEvent) => {
@@ -1186,7 +1202,11 @@ export default function BasicSettings() {
     });
   };
 
-  const dimMax = largeFormatEnabled ? 9999 : 400;
+  // Keep the range control useful for everyday dimensions while allowing the
+  // precise text field to retain any finite large-format value.
+  // 日常拖动保持可用尺度，精确输入框保留任意有限的大画幅尺寸。
+  const dimMax = STANDARD_DIMENSION_SLIDER_MAX_MM;
+  const dimInputMax = largeFormatEnabled ? Number.POSITIVE_INFINITY : undefined;
 
   const tileGrid = useMemo(() => {
     if (!largeFormatEnabled) return null;
@@ -1315,6 +1335,7 @@ export default function BasicSettings() {
           <Checkbox
             label={t("basic_crop_after_upload")}
             tooltip={t("basic_crop_after_upload_hint")}
+            wikiPath={WIKI_DOCS.imageInputAndCrop}
             checked={enableCrop}
             onChange={setEnableCrop}
           />
@@ -1323,6 +1344,8 @@ export default function BasicSettings() {
             <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
               <Dropdown
                 label={t("basic_image_rotation_label")}
+                tooltip={t("basic_image_rotation_hint")}
+                wikiPath={WIKI_DOCS.imageInputAndCrop}
                 value={String(selectedImageRotation)}
                 options={IMAGE_ROTATION_OPTIONS}
                 onChange={(value) => setSelectedImageRotation(Number(value) as ImageRotationDegrees)}
@@ -1467,6 +1490,7 @@ export default function BasicSettings() {
       <RadioGroup
         label={t("basic_source_version_label")}
         tooltip={t("basic_source_version_hint")}
+        wikiPath={WIKI_DOCS.sourceType}
         value={source_version}
         options={sourceVersionOptions}
         onChange={(value) => setSourceVersion(value as "legacy" | "native" | "material")}
@@ -1526,6 +1550,7 @@ export default function BasicSettings() {
           <Checkbox
             label={t("basic_material_dynamic_layer_count_label")}
             tooltip={t("basic_material_dynamic_layer_count_hint")}
+            wikiPath={WIKI_DOCS.materialArchiveSource}
             checked={materialDynamicLayerCountEnabled}
             onChange={setMaterialDynamicLayerCountEnabled}
           />
@@ -1535,6 +1560,7 @@ export default function BasicSettings() {
               <Slider
                 label={t("basic_material_min_layer_count_label")}
                 tooltip={t("basic_material_min_layer_count_hint")}
+                wikiPath={WIKI_DOCS.materialArchiveSource}
                 value={materialMinLayerCount}
                 min={MATERIAL_DYNAMIC_LAYER_COUNT_MIN}
                 max={MATERIAL_DYNAMIC_LAYER_COUNT_MAX}
@@ -1544,6 +1570,7 @@ export default function BasicSettings() {
               <Slider
                 label={t("basic_material_max_layer_count_label")}
                 tooltip={t("basic_material_max_layer_count_hint")}
+                wikiPath={WIKI_DOCS.materialArchiveSource}
                 value={materialMaxLayerCount}
                 min={MATERIAL_DYNAMIC_LAYER_COUNT_MIN}
                 max={MATERIAL_DYNAMIC_LAYER_COUNT_MAX}
@@ -1558,6 +1585,7 @@ export default function BasicSettings() {
             <Slider
               label={t("basic_material_layer_count_label")}
               tooltip={t("basic_material_layer_count_hint")}
+              wikiPath={WIKI_DOCS.materialArchiveSource}
               value={materialLayerCount}
               min={5}
               max={10}
@@ -1569,6 +1597,7 @@ export default function BasicSettings() {
           <Dropdown
             label={t("basic_material_layer_height_label")}
             tooltip={t("basic_material_layer_height_hint")}
+            wikiPath={WIKI_DOCS.materialArchiveSource}
             value={String(materialLayerHeightMm)}
             options={materialLayerHeightOptions}
             onChange={(v) => setMaterialLayerHeightMm(Number(v))}
@@ -1577,6 +1606,7 @@ export default function BasicSettings() {
           <Dropdown
             label={t("basic_material_backing_label")}
             tooltip={t("basic_material_backing_hint")}
+            wikiPath={WIKI_DOCS.materialArchiveSource}
             value={resolvedMaterialBackingDirName}
             options={materialBackingOptions}
             onChange={(v) => setMaterialBackingMaterialDirName(v || null)}
@@ -1654,6 +1684,7 @@ export default function BasicSettings() {
                   <Slider
                     label={t("basic_color_layers_label")}
                     tooltip={t("basic_color_layers_hint")}
+                    wikiPath={WIKI_DOCS.legacyLutSource}
                     value={color_layers ?? selectedLutInfo.max_color_layers ?? 5}
                     min={1}
                     max={10}
@@ -1663,6 +1694,7 @@ export default function BasicSettings() {
                   <Dropdown
                     label={t("basic_layer_height_label")}
                     tooltip={t("basic_layer_height_hint")}
+                    wikiPath={WIKI_DOCS.legacyLutSource}
                     value={String(layer_height_mm ?? selectedLutInfo.layer_height_mm ?? 0.08)}
                     options={supportedLayerHeightOptions}
                     onChange={(value) => setLayerHeightMm(Number(value))}
@@ -1691,6 +1723,7 @@ export default function BasicSettings() {
               <Dropdown
                 label={t("basic_brand_label")}
                 tooltip={t("basic_brand_hint")}
+                wikiPath={WIKI_DOCS.inferredLutSource}
                 value={selectedNativeBrand?.brand_key ?? ""}
                 options={nativeBrandOptions}
                 onChange={setNativeBrandKey}
@@ -1737,6 +1770,7 @@ export default function BasicSettings() {
               <Slider
                 label={t("basic_native_layer_count_label")}
                 tooltip={t("basic_native_layer_count_hint")}
+                wikiPath={WIKI_DOCS.inferredLutSource}
                 value={nativeLayerCount}
                 min={1}
                 max={15}
@@ -1762,12 +1796,14 @@ export default function BasicSettings() {
                     <Checkbox
                       label={t("basic_model_enable")}
                       tooltip={t("basic_model_enable_hint")}
+                      wikiPath={WIKI_DOCS.modelAssistedMatching}
                       checked={model_enable}
                       onChange={setModelEnable}
                     />
                     <Checkbox
                       label={t("basic_model_only")}
                       tooltip={t("basic_model_only_hint")}
+                      wikiPath={WIKI_DOCS.modelAssistedMatching}
                       checked={model_only}
                       onChange={setModelOnly}
                     />
@@ -1789,9 +1825,11 @@ export default function BasicSettings() {
       <Slider
         label={t("basic_width")}
         tooltip={t("basic_width_hint")}
+        wikiPath={WIKI_DOCS.outputDimensions}
         value={target_width_mm}
         min={10}
         max={dimMax}
+        inputMax={dimInputMax}
         step={dimensionSliderStep(target_width_mm)}
         unit="mm"
         onChange={setTargetWidthMm}
@@ -1800,9 +1838,11 @@ export default function BasicSettings() {
       <Slider
         label={t("basic_height")}
         tooltip={t("basic_height_hint")}
+        wikiPath={WIKI_DOCS.outputDimensions}
         value={target_height_mm}
         min={10}
         max={dimMax}
+        inputMax={dimInputMax}
         step={dimensionSliderStep(target_height_mm)}
         unit="mm"
         onChange={setTargetHeightMm}
@@ -1814,6 +1854,7 @@ export default function BasicSettings() {
         onChange={setLargeFormatEnabled}
         disabled={puzzleEnabled || enable_fridge_magnet}
         tooltip={t("basic_large_format_hint")}
+        wikiPath={WIKI_DOCS.largeFormat}
       />
 
       {puzzleEnabled && !largeFormatEnabled && (
@@ -1837,9 +1878,11 @@ export default function BasicSettings() {
           <Slider
             label={t("basic_tile_width")}
             tooltip={t("basic_tile_width_hint")}
+            wikiPath={WIKI_DOCS.largeFormat}
             value={tileWidthMm}
             min={50}
-            max={500}
+            max={LARGE_FORMAT_TILE_SLIDER_MAX_MM}
+            inputMax={Number.POSITIVE_INFINITY}
             step={10}
             unit="mm"
             onChange={setTileWidthMm}
@@ -1847,9 +1890,11 @@ export default function BasicSettings() {
           <Slider
             label={t("basic_tile_height")}
             tooltip={t("basic_tile_height_hint")}
+            wikiPath={WIKI_DOCS.largeFormat}
             value={tileHeightMm}
             min={50}
-            max={500}
+            max={LARGE_FORMAT_TILE_SLIDER_MAX_MM}
+            inputMax={Number.POSITIVE_INFINITY}
             step={10}
             unit="mm"
             onChange={setTileHeightMm}
@@ -1868,6 +1913,7 @@ export default function BasicSettings() {
       <Slider
         label={t("basic_thickness")}
         tooltip={t("basic_thickness_hint")}
+        wikiPath={WIKI_DOCS.backingThickness}
         value={spacer_thick}
         min={THICKNESS_SLIDER_MIN_MM}
         max={THICKNESS_SLIDER_MAX_MM}
@@ -1881,6 +1927,7 @@ export default function BasicSettings() {
         <Slider
           label={t("basic_backing_infill_density")}
           tooltip={t("basic_backing_infill_density_hint")}
+          wikiPath={WIKI_DOCS.backingThickness}
           value={backing_infill_density_percent}
           min={BACKING_INFILL_DENSITY_MIN_PERCENT}
           max={BACKING_INFILL_DENSITY_MAX_PERCENT}
@@ -1895,6 +1942,7 @@ export default function BasicSettings() {
         <RadioGroup
           label={t("basic_structure_mode")}
           tooltip={t("basic_structure_mode_hint")}
+          wikiPath={WIKI_DOCS.structureMode}
           value={structure_mode}
           options={structureModeOptions}
           onChange={(v) => setStructureMode(v as StructureMode)}
@@ -1906,6 +1954,7 @@ export default function BasicSettings() {
       <RadioGroup
         label={t("basic_modeling_mode")}
         tooltip={t("basic_modeling_mode_hint")}
+        wikiPath={WIKI_DOCS.modelingMode}
         value={modeling_mode}
         options={modelingModeOptions}
         onChange={(v) => setModelingMode(v as ModelingMode)}
@@ -1950,6 +1999,7 @@ function QuantizeColorsControl() {
       <Slider
         label={t("adv_quantize_colors")}
         tooltip={t("adv_quantize_colors_hint")}
+        wikiPath={WIKI_DOCS.quantizeColors}
         value={quantize_colors}
         min={8}
         max={upperBound}

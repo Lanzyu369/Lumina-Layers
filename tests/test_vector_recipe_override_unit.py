@@ -29,19 +29,26 @@ from shapely.geometry import box
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 
-# Load core.vector_engine directly to skip the heavy core.__init__ chain
-# (matches the bootstrap used by other vector tests in this suite).
-# 直接按文件加载 vector_engine，避免 core 包的重依赖 import 链。
-_spec = importlib.util.spec_from_file_location(
-    "core.vector_engine", os.path.join(_ROOT, "core", "vector_engine.py")
-)
-_ve = importlib.util.module_from_spec(_spec)
-if "core" not in sys.modules:
-    _pkg = types.ModuleType("core")
-    _pkg.__path__ = [os.path.join(_ROOT, "core")]
-    sys.modules["core"] = _pkg
-sys.modules["core.vector_engine"] = _ve
-_spec.loader.exec_module(_ve)
+# Load core.vector_engine directly only when the suite has not loaded it yet.
+# Replacing an existing module leaves ``core.vector_engine`` on the package
+# pointing at the old object, so later monkeypatches can silently target a
+# different module from ``VectorProcessor`` during combined test runs.
+# 仅在测试进程尚未加载时直接载入，避免组合执行时产生两个模块对象。
+if "core.vector_engine" in sys.modules:
+    _ve = sys.modules["core.vector_engine"]
+else:
+    _spec = importlib.util.spec_from_file_location(
+        "core.vector_engine", os.path.join(_ROOT, "core", "vector_engine.py")
+    )
+    _ve = importlib.util.module_from_spec(_spec)
+    if "core" not in sys.modules:
+        _pkg = types.ModuleType("core")
+        _pkg.__path__ = [os.path.join(_ROOT, "core")]
+        sys.modules["core"] = _pkg
+    sys.modules["core.vector_engine"] = _ve
+    setattr(sys.modules["core"], "vector_engine", _ve)
+    assert _spec.loader is not None
+    _spec.loader.exec_module(_ve)
 
 VectorAnalysis = _ve.VectorAnalysis
 apply_recipe_overrides_to_analysis = _ve.apply_recipe_overrides_to_analysis
@@ -282,3 +289,32 @@ class TestApplyRecipeOverridesToAnalysis:
 
         # All masks rejected → overrides skipped, recipe untouched.
         assert analysis.matched_shapes[0]["recipe"] == [2, 2, 2]
+
+    def test_dimension_change_maps_recipe_mask_to_fresh_vector_geometry(self):
+        """Recipe footprints stay normalized when current physical size changes."""
+
+        shape_inside = {"geometry": box(1, 1, 4, 4), "recipe": [2, 2, 2]}
+        shape_outside = {"geometry": box(6, 6, 9, 9), "recipe": [1, 1, 1]}
+        analysis = _make_analysis(
+            [shape_inside, shape_outside],
+            scale_factor=2.0,
+        )
+        source_mask = np.zeros((100, 100), dtype=bool)
+        source_mask[10:41, 10:41] = True
+
+        apply_recipe_overrides_to_analysis(
+            analysis,
+            recipe_overrides=[
+                {
+                    "region_id": "region-A",
+                    "recipe": [0, 3, 3],
+                    "layer_order": "Top2Bottom",
+                }
+            ],
+            region_masks={"region-A": source_mask},
+            target_layers=3,
+            source_grid_shape=(100, 100),
+        )
+
+        assert analysis.matched_shapes[0]["recipe"] == [0, 3, 3]
+        assert analysis.matched_shapes[1]["recipe"] == [1, 1, 1]

@@ -41,7 +41,10 @@ def test_local_docker_image_installs_glb_v2_dependencies() -> None:
     assert "manifold3d" in base_declared
     assert "rasterio" in v2_declared
     assert "manifold3d" not in v2_declared
-    assert "COPY requirements.txt requirements-glb-v2.txt /app/" in dockerfile
+    assert (
+        "COPY requirements.txt requirements-glb-v2.txt "
+        "requirements-native-svg.txt /app/"
+    ) in dockerfile
     assert "pip install --no-cache-dir -r requirements.txt -r requirements-glb-v2.txt" in dockerfile
 
 

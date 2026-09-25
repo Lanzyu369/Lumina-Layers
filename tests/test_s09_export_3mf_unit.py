@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+import pytest
 import trimesh
 from unittest.mock import patch
 
@@ -30,6 +31,7 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         watermark: str = "LuminaStudio",
         project_slot_names=None,
         enable_base_layer_height_modifier: bool = True,
+        enable_wipe_tower_auto_placement: bool = True,
         enable_relief: bool = False,
         base_height_mm: float = 0.0,
         color_height_mm: float = 0.0,
@@ -51,6 +53,9 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         captured["project_slot_names"] = list(project_slot_names) if project_slot_names is not None else None
         captured["watermark"] = watermark
         captured["enable_base_layer_height_modifier"] = enable_base_layer_height_modifier
+        captured["enable_wipe_tower_auto_placement"] = (
+            enable_wipe_tower_auto_placement
+        )
         captured["enable_relief"] = enable_relief
         captured["base_height_mm"] = base_height_mm
         captured["color_height_mm"] = color_height_mm
@@ -127,6 +132,35 @@ def _make_minimal_s09_ctx(tmp_path, **extra_ctx) -> dict:
     return ctx
 
 
+def test_s09_records_actual_x_mirror_transform_metadata(tmp_path) -> None:
+    """S09 should expose the effective mirror decision and raster span."""
+
+    export_transform_metadata: dict[str, object] = {}
+    with patch.object(s09_export_3mf, "MODELS_DIR", str(tmp_path)), patch.object(
+        s09_export_3mf,
+        "generate_model_filename",
+        lambda *_args: "mirrored-piece.3mf",
+    ), patch.object(
+        s09_export_3mf,
+        "export_scene_with_bambu_metadata",
+        autospec=True,
+    ) as mock_export:
+        mock_export.return_value = str(tmp_path / "mirrored-piece.3mf")
+        s09_export_3mf.run(
+            _make_minimal_s09_ctx(
+                tmp_path,
+                target_w=338,
+                pixel_scale=0.1,
+                bambu_face_orientation="down",
+                center_on_bed=False,
+                export_transform_metadata=export_transform_metadata,
+            )
+        )
+
+    assert export_transform_metadata["x_mirrored"] is True
+    assert export_transform_metadata["mirror_span_mm"] == pytest.approx(33.8)
+
+
 def test_s09_passes_base_layer_kwargs_when_ctx_has_them(tmp_path) -> None:
     with patch.object(s09_export_3mf, "MODELS_DIR", str(tmp_path)), patch.object(
         s09_export_3mf,
@@ -142,6 +176,7 @@ def test_s09_passes_base_layer_kwargs_when_ctx_has_them(tmp_path) -> None:
                 bambu_color_height_mm=2.4,
                 bambu_face_orientation="down",
                 enable_base_layer_height_modifier=True,
+                enable_wipe_tower_auto_placement=False,
                 backing_infill_density_percent=20,
             )
         )
@@ -149,6 +184,7 @@ def test_s09_passes_base_layer_kwargs_when_ctx_has_them(tmp_path) -> None:
     assert result["out_path"] == str(tmp_path / "ctx-values.3mf")
     kwargs = mock_export.call_args.kwargs
     assert kwargs["enable_base_layer_height_modifier"] is True
+    assert kwargs["enable_wipe_tower_auto_placement"] is False
     assert kwargs["base_height_mm"] == 0.8
     assert kwargs["color_height_mm"] == 2.4
     assert kwargs["face_orientation"] == "down"
@@ -192,6 +228,7 @@ def test_s09_falls_back_to_safe_defaults_when_ctx_missing_keys(tmp_path) -> None
     assert result["out_path"] == str(tmp_path / "defaults.3mf")
     kwargs = mock_export.call_args.kwargs
     assert kwargs["enable_base_layer_height_modifier"] is True
+    assert kwargs["enable_wipe_tower_auto_placement"] is True
     assert kwargs["base_height_mm"] == 0.0
     assert kwargs["color_height_mm"] == 0.0
     assert kwargs["face_orientation"] == "down"
@@ -213,6 +250,7 @@ def test_s09_passes_face_up_for_five_color(tmp_path) -> None:
 
 def test_s09_does_not_x_mirror_face_up_single_sided_exports(tmp_path) -> None:
     captured: dict[str, object] = {}
+    export_transform_metadata: dict[str, object] = {}
 
     def _fake_export_scene_with_bambu_metadata(**kwargs) -> str:
         captured.update(kwargs)
@@ -236,6 +274,7 @@ def test_s09_does_not_x_mirror_face_up_single_sided_exports(tmp_path) -> None:
                 scene=scene,
                 bambu_face_orientation="up",
                 center_on_bed=False,
+                export_transform_metadata=export_transform_metadata,
             )
         )
 
@@ -244,6 +283,8 @@ def test_s09_does_not_x_mirror_face_up_single_sided_exports(tmp_path) -> None:
     center_x = (bounds[0][0] + bounds[1][0]) / 2
     assert center_x == 0
     assert captured["face_orientation"] == "up"
+    assert export_transform_metadata["x_mirrored"] is False
+    assert export_transform_metadata["mirror_span_mm"] == pytest.approx(16.0)
 
 
 def test_s09_passes_face_double_for_doublesided(tmp_path) -> None:

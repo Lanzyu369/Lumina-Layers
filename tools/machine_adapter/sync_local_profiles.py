@@ -5,6 +5,7 @@ from collections.abc import Callable
 import json
 import os
 from pathlib import Path
+import platform
 import tempfile
 import urllib.request
 
@@ -24,6 +25,17 @@ LOCAL_SLICER_SYSTEM_DIRS: dict[str, str] = {
     "ElegooSlicer": "ElegooSlicer/system",
     "AnycubicSlicerNext": "AnycubicSlicerNext/system",
     "FlashStudio": "Orca-Flashforge/system",
+    "QIDIStudio": "QIDIStudio/system",
+}
+
+MACOS_SLICER_APPLICATIONS: dict[str, str] = {
+    "BambuStudio": "BambuStudio.app",
+    "OrcaSlicer": "OrcaSlicer.app",
+    "SnapmakerOrca": "Snapmaker Orca.app",
+    "ElegooSlicer": "ElegooSlicer.app",
+    "AnycubicSlicerNext": "AnycubicSlicerNext.app",
+    "FlashStudio": "Flash Studio.app",
+    "QIDIStudio": "QIDIStudio.app",
 }
 
 _OFFICIAL_ORCA_COVER_ASSETS: tuple[tuple[str, str, str], ...] = (
@@ -49,6 +61,8 @@ def _default_appdata_root() -> Path:
     raw = os.environ.get("APPDATA")
     if raw:
         return Path(raw)
+    if platform.system() == "Darwin":
+        return Path.home() / "Library" / "Application Support"
     return Path.home() / "AppData" / "Roaming"
 
 
@@ -125,6 +139,13 @@ def _has_cover_assets(vendor_root: Path) -> bool:
     return False
 
 
+def _has_bed_model_assets(vendor_root: Path) -> bool:
+    return any(
+        item.is_file() and item.suffix.casefold() == ".stl"
+        for item in vendor_root.rglob("*")
+    )
+
+
 def _has_loose_cover_assets(asset_root: Path) -> bool:
     cover_suffixes = {".png", ".jpg", ".jpeg", ".webp", ".svg"}
     for item in asset_root.iterdir():
@@ -159,7 +180,10 @@ def discover_local_asset_roots(
         if not source_root.exists():
             continue
         for vendor_root in sorted(source_root.iterdir(), key=lambda item: item.name.casefold()):
-            if not vendor_root.is_dir() or not _has_cover_assets(vendor_root):
+            if not vendor_root.is_dir() or not (
+                _has_cover_assets(vendor_root)
+                or _has_bed_model_assets(vendor_root)
+            ):
                 continue
             key = (source_root.resolve().as_posix().casefold(), vendor_root.name.casefold())
             if key in seen:
@@ -179,6 +203,43 @@ def discover_local_asset_roots(
             if key not in seen:
                 seen.add(key)
                 asset_roots.append((snapmaker_web_images, ""))
+    return tuple(asset_roots)
+
+
+def discover_installed_slicer_asset_roots(
+    *,
+    applications_root: Path | None = None,
+    slicer_ids: tuple[str, ...] | None = None,
+) -> tuple[AssetRoot, ...]:
+    """Discover reusable profile assets inside installed macOS app bundles.
+
+    发现 macOS 已安装切片软件包内可复用的机器缩略图与热床模型资源。
+    """
+
+    root = applications_root or Path("/Applications")
+    if not root.is_dir():
+        return ()
+    requested = slicer_ids or tuple(MACOS_SLICER_APPLICATIONS)
+    asset_roots: list[AssetRoot] = []
+    seen: set[tuple[str, str]] = set()
+    for slicer_id in requested:
+        if slicer_id not in MACOS_SLICER_APPLICATIONS:
+            raise KeyError(f"Unsupported macOS slicer id: {slicer_id}")
+        app_name = MACOS_SLICER_APPLICATIONS[slicer_id]
+        profile_root = root / app_name / "Contents" / "Resources" / "profiles"
+        if not profile_root.is_dir():
+            continue
+        for vendor_root in sorted(profile_root.iterdir(), key=lambda item: item.name.casefold()):
+            if not vendor_root.is_dir() or not (
+                _has_cover_assets(vendor_root)
+                or _has_bed_model_assets(vendor_root)
+            ):
+                continue
+            key = (profile_root.resolve().as_posix().casefold(), vendor_root.name.casefold())
+            if key in seen:
+                continue
+            seen.add(key)
+            asset_roots.append((profile_root, vendor_root.name))
     return tuple(asset_roots)
 
 
@@ -226,6 +287,18 @@ def main() -> int:
         appdata_root=Path(args.appdata_root) if args.appdata_root else None,
         slicer_ids=tuple(args.slicers) if args.slicers else None,
     )
+    installed_asset_roots = discover_installed_slicer_asset_roots()
+    slicer_ids_with_sources = tuple(sorted({source.slicer_id for source in sources}))
+    bed_model_metadata_roots_by_slicer = {
+        slicer_id: (
+            *discover_local_asset_roots(
+                appdata_root=Path(args.appdata_root) if args.appdata_root else None,
+                slicer_ids=(slicer_id,),
+            ),
+            *discover_installed_slicer_asset_roots(slicer_ids=(slicer_id,)),
+        )
+        for slicer_id in slicer_ids_with_sources
+    }
     official_asset_roots: tuple[AssetRoot, ...] = ()
     if not args.skip_official_orca_assets:
         try:
@@ -237,7 +310,14 @@ def main() -> int:
     result = run_import_sources(
         sources,
         output_root=Path(args.output),
-        asset_search_roots=(*asset_roots, *official_asset_roots),
+        asset_search_roots=(
+            *asset_roots,
+            *installed_asset_roots,
+            *official_asset_roots,
+        ),
+        bed_model_metadata_search_roots_by_slicer=(
+            bed_model_metadata_roots_by_slicer
+        ),
     )
     print(f"Imported {result.device_count} device profiles from {len(sources)} local source packages")
     for source in sources:

@@ -22,6 +22,11 @@ vi.mock("../api/converter", () => ({
   cropImage: vi.fn(),
   convertBatch: vi.fn(),
   replaceColor: vi.fn(),
+  getEditorCommitStatus: vi.fn().mockResolvedValue({
+    status: "failed",
+    operation_id: "stale-operation",
+    editor_content_revision: 0,
+  }),
 }));
 
 import { replacementHistory } from "../api/converter";
@@ -100,6 +105,7 @@ describe("replacement undo/redo preserves relief height identity", () => {
     expect(mockReplacementHistory).toHaveBeenCalledWith(
       "height-identity-session",
       "undo",
+      expect.any(String),
     );
     expect(useConverterStore.getState().color_height_map).toEqual(heightMap);
   });
@@ -116,6 +122,7 @@ describe("replacement undo/redo preserves relief height identity", () => {
     expect(mockReplacementHistory).toHaveBeenCalledWith(
       "height-identity-session",
       "redo",
+      expect.any(String),
     );
     expect(useConverterStore.getState().color_height_map).toEqual(heightMap);
   });
@@ -190,7 +197,11 @@ describe("replacement undo/redo preserves relief height identity", () => {
 
       await request;
 
-      expect(mockReplacementHistory).toHaveBeenCalledWith("session-a", action);
+      expect(mockReplacementHistory).toHaveBeenCalledWith(
+        "session-a",
+        action,
+        expect.any(String),
+      );
       expect(useConverterStore.getState()).toMatchObject({
         sessionId: "session-b",
         previewImageUrl: "/api/files/session-b",
@@ -199,6 +210,57 @@ describe("replacement undo/redo preserves relief height identity", () => {
         historyBusy: false,
         historyCanUndo: false,
         historyCanRedo: false,
+        replacePreviewLoading: false,
+      });
+      expect(pollAsyncGlb).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { action: "undo" as const, historyCanUndo: true, historyCanRedo: false },
+    { action: "redo" as const, historyCanUndo: false, historyCanRedo: true },
+  ])(
+    "ignores a stale $action response after the preview revision changes",
+    async ({ action, historyCanUndo, historyCanRedo }) => {
+      const response = deferred<ReplacementHistoryResponse>();
+      mockReplacementHistory.mockReturnValueOnce(response.promise);
+      const pollAsyncGlb = vi.fn();
+      seedStore({
+        sessionId: "same-session",
+        previewRequestRevision: 30,
+        historyCanUndo,
+        historyCanRedo,
+        _pollAsyncGlb: pollAsyncGlb,
+      });
+
+      const request =
+        action === "undo"
+          ? useConverterStore.getState().undoColorRemap()
+          : useConverterStore.getState().redoColorRemap();
+      useConverterStore.setState({
+        previewRequestRevision: 31,
+        previewImageUrl: "/api/files/new-revision",
+        previewBaseImageUrl: "/api/files/new-revision",
+        previewGlbUrl: "/api/files/new-revision.glb",
+        historyBusy: false,
+        replacePreviewLoading: false,
+      });
+      response.resolve(
+        historyResponse({
+          action,
+          preview_url: "/api/files/stale-revision",
+          preview_glb_url: "/api/files/stale-revision.glb",
+        }),
+      );
+      await request;
+
+      expect(useConverterStore.getState()).toMatchObject({
+        sessionId: "same-session",
+        previewRequestRevision: 31,
+        previewImageUrl: "/api/files/new-revision",
+        previewBaseImageUrl: "/api/files/new-revision",
+        previewGlbUrl: "/api/files/new-revision.glb",
+        historyBusy: false,
         replacePreviewLoading: false,
       });
       expect(pollAsyncGlb).not.toHaveBeenCalled();

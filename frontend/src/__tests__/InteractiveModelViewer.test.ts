@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
 import {
+  applyInteractiveModelPreviewMaterials,
   computePreviewLayerZPositions,
   applyPreviewMeshDisplayColor,
   buildBatchedPaletteUvEncoding,
@@ -11,13 +12,152 @@ import {
   isBatchedMaterialAppearanceMeshName,
   isBatchedMaterialPhysicalMeshName,
   isLayeredMaterialColorMeshName,
+  prepareInteractiveModelSceneClone,
+  resolvePreviewMeshHeightKey,
+  resolvePreviewMeshReliefHeightMm,
   resolveLayeredMaterialPreviewTransform,
   resolvePreviewColorLayerHeightMm,
+  shouldApplyQuickPreviewGeometry,
   shouldMirrorPreview,
   shouldApplyColorRemapToMeshName,
 } from "../components/InteractiveModelViewer";
 import { materializePositionAttributeForGeometryBake } from "../utils/threeQuantizedGeometry";
-import { disposeMaterial } from "../utils/threeDisposal";
+import {
+  disposeMaterial,
+  disposeMeshResources,
+  disposeObjectTree,
+} from "../utils/threeDisposal";
+
+function buildEmbeddedOutlineScene(): THREE.Group {
+  const root = new THREE.Group();
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(10, 10, 1),
+    new THREE.MeshBasicMaterial({ color: 0xff0000 }),
+  );
+  body.name = "color_ff0000";
+  body.position.set(5, 5, 0.5);
+  root.add(body);
+
+  const outline = new THREE.Mesh(
+    new THREE.BoxGeometry(12, 10, 1),
+    new THREE.MeshBasicMaterial({ color: 0xffffff }),
+  );
+  outline.name = "Outline";
+  outline.position.set(5, -95, 0.5);
+  root.add(outline);
+  root.updateMatrixWorld(true);
+  return root;
+}
+
+describe("prepareInteractiveModelSceneClone", () => {
+  it("drops and disposes a stale quick-preview Outline before centering", () => {
+    const source = buildEmbeddedOutlineScene();
+    const sourceOutline = source.getObjectByName("Outline");
+    const geometryDispose = vi.spyOn(
+      THREE.BufferGeometry.prototype,
+      "dispose",
+    );
+    const materialDispose = vi.spyOn(THREE.Material.prototype, "dispose");
+    const prepared = prepareInteractiveModelSceneClone(
+      source,
+      "quick-preview",
+    );
+    let detachedBody: THREE.Mesh | null = null;
+
+    try {
+      expect(source.getObjectByName("Outline")).toBe(sourceOutline);
+      expect(prepared.clone.getObjectByName("Outline")).toBeUndefined();
+      expect(prepared.sceneCenter.x).toBeCloseTo(5, 5);
+      expect(prepared.sceneCenter.y).toBeCloseTo(5, 5);
+      expect(prepared.sceneCenter.z).toBeCloseTo(0.5, 5);
+
+      const centeredBounds = new THREE.Box3().setFromObject(prepared.clone);
+      expect(centeredBounds.min.x).toBeCloseTo(-5, 5);
+      expect(centeredBounds.max.x).toBeCloseTo(5, 5);
+      expect(centeredBounds.min.y).toBeCloseTo(-5, 5);
+      expect(centeredBounds.max.y).toBeCloseTo(5, 5);
+      expect(centeredBounds.min.z).toBeCloseTo(0, 5);
+      expect(centeredBounds.max.z).toBeCloseTo(1, 5);
+
+      const colorObject = prepared.clone.getObjectByName("color_ff0000");
+      if (colorObject instanceof THREE.Mesh) {
+        detachedBody = colorObject;
+        colorObject.removeFromParent();
+      }
+      expect(prepared.clone.getObjectByName("Outline")).toBeUndefined();
+      expect(geometryDispose).toHaveBeenCalledTimes(1);
+      expect(materialDispose).toHaveBeenCalledTimes(1);
+    } finally {
+      disposeObjectTree(prepared.clone);
+      if (detachedBody) {
+        disposeMeshResources(detachedBody);
+      }
+      disposeObjectTree(source);
+      geometryDispose.mockRestore();
+      materialDispose.mockRestore();
+    }
+  });
+
+  it.each(["generated", "batch"] as const)(
+    "preserves embedded Outline geometry for %s models",
+    (sourceRole) => {
+      const source = buildEmbeddedOutlineScene();
+      const prepared = prepareInteractiveModelSceneClone(source, sourceRole);
+
+      try {
+        expect(prepared.clone.getObjectByName("Outline")).toBeDefined();
+        expect(prepared.sceneCenter.x).toBeCloseTo(5, 5);
+        expect(prepared.sceneCenter.y).toBeCloseTo(-45, 5);
+        expect(prepared.sceneCenter.z).toBeCloseTo(0.5, 5);
+      } finally {
+        disposeObjectTree(prepared.clone);
+        disposeObjectTree(source);
+      }
+    },
+  );
+});
+
+describe("shouldApplyQuickPreviewGeometry", () => {
+  it("allows procedural geometry only for segmented quick previews", () => {
+    expect(shouldApplyQuickPreviewGeometry("quick-preview")).toBe(true);
+    expect(shouldApplyQuickPreviewGeometry("generated")).toBe(false);
+    expect(shouldApplyQuickPreviewGeometry("batch")).toBe(false);
+  });
+});
+
+describe("applyInteractiveModelPreviewMaterials", () => {
+  it.each(["generated", "batch"] as const)(
+    "preserves embedded MeshStandardMaterial for %s models",
+    (sourceRole) => {
+      const root = new THREE.Group();
+      const material = new THREE.MeshStandardMaterial({ color: 0x123456 });
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), material);
+      mesh.name = "color_123456";
+      root.add(mesh);
+
+      applyInteractiveModelPreviewMaterials(root, sourceRole);
+
+      expect(mesh.material).toBe(material);
+      expect(mesh.material).toBeInstanceOf(THREE.MeshStandardMaterial);
+      expect(material.color.getHexString(THREE.SRGBColorSpace)).toBe("123456");
+      disposeObjectTree(root);
+    },
+  );
+
+  it("converts quick-preview colour materials to matte materials", () => {
+    const root = new THREE.Group();
+    const material = new THREE.MeshStandardMaterial({ color: 0x123456 });
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), material);
+    mesh.name = "color_123456";
+    root.add(mesh);
+
+    applyInteractiveModelPreviewMaterials(root, "quick-preview");
+
+    expect(mesh.material).not.toBe(material);
+    expect(mesh.material).toBeInstanceOf(THREE.MeshBasicMaterial);
+    disposeObjectTree(root);
+  });
+});
 
 describe("extractHexFromMeshName", () => {
   it('extracts hex from "color_ff0000"', () => {
@@ -40,6 +180,48 @@ describe("extractHexFromMeshName", () => {
   it("extracts the original hex from chunked V2 color mesh names", () => {
     expect(extractHexFromMeshName("color_ff0000_chunk001")).toBe("ff0000");
     expect(extractHexFromMeshName("color_00ff00_1")).toBe("00ff00");
+  });
+});
+
+describe("resolvePreviewMeshHeightKey", () => {
+  it("prefers the stable analytic height key over the display colour", () => {
+    expect(
+      resolvePreviewMeshHeightKey("color_f46429", { height_key: "BEE6F8" }),
+    ).toBe("bee6f8");
+    expect(
+      resolvePreviewMeshHeightKey("color_00ff00", { height_key: "BEE6F8" }),
+    ).toBe("bee6f8");
+  });
+
+  it("falls back to the legacy mesh-name colour for old or invalid GLBs", () => {
+    expect(resolvePreviewMeshHeightKey("color_AABBCC", {})).toBe("aabbcc");
+    expect(
+      resolvePreviewMeshHeightKey("color_AABBCC", { height_key: "#112233" }),
+    ).toBe("aabbcc");
+    expect(
+      resolvePreviewMeshHeightKey("color_AABBCC", { height_key: "invalid" }),
+    ).toBe("aabbcc");
+  });
+
+  it("keeps the relief Z target unchanged when only display colour changes", () => {
+    const options = {
+      userData: { height_key: "bee6f8" },
+      colorHeightMap: { bee6f8: 0.48, f46429: 2.4 },
+      fallbackHeightMm: 0.4,
+    };
+
+    expect(
+      resolvePreviewMeshReliefHeightMm({
+        ...options,
+        meshName: "color_bee6f8",
+      }),
+    ).toBeCloseTo(0.48, 5);
+    expect(
+      resolvePreviewMeshReliefHeightMm({
+        ...options,
+        meshName: "color_f46429",
+      }),
+    ).toBeCloseTo(0.48, 5);
   });
 });
 

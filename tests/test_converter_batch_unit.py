@@ -15,6 +15,7 @@ Validates:
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures.process import BrokenProcessPool
 import io
 import inspect
 import json
@@ -448,6 +449,34 @@ class TestBatchAllFailed:
         assert body["preview_3d_url"] is None
         assert body["preview_items"] == []
 
+
+    def test_batch_broken_worker_pool_stops_before_next_item(self) -> None:
+        _mock_pool.submit = AsyncMock(
+            side_effect=BrokenProcessPool("worker was killed")
+        )
+
+        with (
+            patch(
+                "api.routers.converter.generate.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.generate.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[
+                    ("images", _make_test_image_buf("complex-1.png")),
+                    ("images", _make_test_image_buf("complex-2.png")),
+                ],
+                data={"lut_name": "test_lut"},
+            )
+
+        assert response.status_code == 503
+        assert _mock_pool.submit.await_count == 1
+
     def test_batch_worker_missing_output_sanitizes_status_message(self) -> None:
         private_path = "/Users/min/private/batch-output/missing.3mf"
         log_calls: list[tuple[str, str, dict[str, object]]] = []
@@ -514,32 +543,6 @@ class TestBatchAllFailed:
 class TestBatchTimeout:
     """Verify asyncio.TimeoutError from pool.submit is handled per-item."""
 
-    def test_batch_timeout_per_item(self) -> None:
-        _mock_pool.submit = AsyncMock(
-            side_effect=asyncio.TimeoutError(),
-        )
-
-        with (
-            patch(
-                "api.routers.converter.generate.LUTManager.get_lut_path",
-                return_value="/tmp/fake.npy",
-            ),
-            patch(
-                "api.routers.converter.generate.ensure_png_tempfile",
-                new=AsyncMock(return_value="/tmp/uploaded.png"),
-            ),
-        ):
-            response = client.post(
-                "/api/convert/batch",
-                files=[("images", _make_test_image_buf("slow.png"))],
-                data={"lut_name": "test_lut"},
-            )
-
-        assert response.status_code == 200
-        body = response.json()
-        assert body["status"] == "failed"
-        assert body["results"][0]["status"] == "failed"
-        assert "timed out" in body["results"][0]["error"].lower()
 
 
 # =========================================================================
@@ -548,9 +551,22 @@ class TestBatchTimeout:
 
 
 class TestBatchWorkerPoolSubmit:
-    """Verify pool.submit is called with worker_batch_convert_item and correct args."""
+    """Verify batch requests submit their settings to the worker pool."""
 
-    def test_batch_submits_to_pool(self) -> None:
+    @pytest.mark.parametrize("height", ["0.03", "0.13", "nan", "inf"])
+    def test_batch_rejects_invalid_coating_height(self, height):
+        _mock_pool.submit = AsyncMock()
+        response = client.post(
+            "/api/convert/batch",
+            files=[("images", _make_test_image_buf())],
+            data={"lut_name": "test_lut", "enable_coating": "true", "coating_height_mm": height},
+        )
+        assert response.status_code == 422
+        _mock_pool.submit.assert_not_called()
+
+    @pytest.mark.parametrize("coating_enabled", [True, False])
+    @pytest.mark.parametrize("compensation_enabled", [True, False])
+    def test_batch_submits_to_pool(self, coating_enabled, compensation_enabled) -> None:
         _mock_pool.submit = AsyncMock(
             return_value=_make_worker_result("test.png", 30.0, 20.0),
         )
@@ -567,8 +583,9 @@ class TestBatchWorkerPoolSubmit:
             ),
             patch(
                 "utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write",
-                _noop_3mf_write,
-            ),
+                autospec=True,
+                side_effect=_noop_3mf_write,
+            ) as merged_write_mock,
         ):
             response = client.post(
                 "/api/convert/batch",
@@ -596,7 +613,13 @@ class TestBatchWorkerPoolSubmit:
                     "slicer": "OrcaSlicer",
                     "nozzle_size": "0.2",
                     "enable_base_layer_height_modifier": "false",
+                    "enable_wipe_tower_auto_placement": "false",
                     "high_precision_3d_preview": "true",
+                    "enable_coating": str(coating_enabled).lower(),
+                    "coating_height_mm": "0.12",
+                    "svg_hole_compensation_enabled": str(compensation_enabled).lower(),
+                    "svg_hole_max_area_mm2": "0.75",
+                    "svg_hole_max_width_mm": "0.21",
                 },
             )
 
@@ -641,6 +664,24 @@ class TestBatchWorkerPoolSubmit:
         assert call_args[0][22] == "0.2"
         assert call_args[0][23] is False
         assert call_args[0][36] is True
+        worker_args = inspect.signature(worker_batch_convert_item).bind(
+            *call_args.args[1:]
+        ).arguments
+        assert worker_args["enable_wipe_tower_auto_placement"] is False
+        assert (
+            merged_write_mock.call_args.kwargs[
+                "enable_wipe_tower_auto_placement"
+            ]
+            is False
+        )
+        expected_options = {
+            "enable_coating": coating_enabled,
+            "coating_height_mm": 0.12,
+            "svg_hole_compensation_enabled": compensation_enabled,
+            "svg_hole_max_area_mm2": 0.75,
+            "svg_hole_max_width_mm": 0.21,
+        }
+        assert {key: worker_args.get(key) for key in expected_options} == expected_options
 
     def test_batch_submits_material_archive_source_to_worker(self) -> None:
         """Batch endpoint forwards material-archive source params to worker."""
@@ -1139,7 +1180,15 @@ def _make_worker_result(
     }
 
 
-def _noop_3mf_write(self, items, output_path, *, plate_width_mm, plate_depth_mm):
+def _noop_3mf_write(
+    self,
+    items,
+    output_path,
+    *,
+    plate_width_mm,
+    plate_depth_mm,
+    enable_wipe_tower_auto_placement=True,
+):
     """No-op replacement for MergedBambu3MFWriter.write that creates an empty file."""
     Path(output_path).write_bytes(b"fake-merged-3mf")
 
@@ -1161,7 +1210,15 @@ class TestBatchMergeFlow:
         )
         writer_plate_dims: list[tuple[float, float]] = []
 
-        def _tracking_3mf_write(self, items, output_path, *, plate_width_mm, plate_depth_mm):
+        def _tracking_3mf_write(
+            self,
+            items,
+            output_path,
+            *,
+            plate_width_mm,
+            plate_depth_mm,
+            enable_wipe_tower_auto_placement=True,
+        ):
             writer_plate_dims.append((plate_width_mm, plate_depth_mm))
             Path(output_path).write_bytes(b"fake-merged-3mf")
 
@@ -1615,7 +1672,15 @@ class TestBatchMergeFlow:
 
         written_item_counts: list[int] = []
 
-        def _tracking_3mf_write(self, items, output_path, *, plate_width_mm, plate_depth_mm):
+        def _tracking_3mf_write(
+            self,
+            items,
+            output_path,
+            *,
+            plate_width_mm,
+            plate_depth_mm,
+            enable_wipe_tower_auto_placement=True,
+        ):
             written_item_counts.append(len(items))
             Path(output_path).write_bytes(b"fake-merged-3mf")
 
@@ -1691,7 +1756,15 @@ class TestBatchMergeFlow:
 
         write_call_items_count = []
 
-        def _tracking_3mf_write(self, items, output_path, *, plate_width_mm, plate_depth_mm):
+        def _tracking_3mf_write(
+            self,
+            items,
+            output_path,
+            *,
+            plate_width_mm,
+            plate_depth_mm,
+            enable_wipe_tower_auto_placement=True,
+        ):
             write_call_items_count.append(len(items))
             Path(output_path).write_bytes(b"fake-merged-3mf")
 
@@ -1824,7 +1897,15 @@ class TestBatchMergeFlow:
         private_path = "/Users/min/private/batch-output/merged.3mf"
         raw_error_message = f"cannot write {private_path}: Permission denied"
 
-        def _failing_3mf_write(self, items, output_path, *, plate_width_mm, plate_depth_mm):
+        def _failing_3mf_write(
+            self,
+            items,
+            output_path,
+            *,
+            plate_width_mm,
+            plate_depth_mm,
+            enable_wipe_tower_auto_placement=True,
+        ):
             raise MergedWriteError(raw_error_message)
 
         # Capture _safe_log calls to verify structured log emission

@@ -15,12 +15,28 @@ const RUNTIME_URL_PATTERN = new RegExp(
 const BACKEND_RUNTIME_PATH_PATTERN = new RegExp(
   `^/api/workshop/v1/modules/${MODULE_ID_SOURCE}/${SEMVER_SOURCE}/runtime$`,
 );
+const BACKEND_BED_MODEL_PATH =
+  "/api/system/machine-registry/bed-model";
+const DEVICE_PROFILE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
+const WIKI_HOST = "wiki.luminastudio.com.cn";
+const WIKI_DOC_PATH_PATTERN = /^\/(?:zh|en)\/docs(?:\/|$)/;
 const NON_NETWORK_RESOURCE_TYPES = new Set([
   "font",
   "image",
   "media",
   "worker",
 ]);
+let managedDesktopHostEnabled = false;
+let desktopBackendPort = "8000";
+
+/** Enable the selected desktop frontend from the main process before navigation.
+ * 主进程在导航前启用所选端口的桌面前端；不接受 renderer 提供的地址。
+ */
+function enableManagedDesktopHost(port = 8000) {
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new TypeError("Invalid desktop backend port.");
+  desktopBackendPort = String(port);
+  managedDesktopHostEnabled = true;
+}
 
 function parseUrl(value) {
   if (typeof value !== "string" || value.length === 0) {
@@ -48,10 +64,12 @@ function isTrustedHostUrl(value) {
   if (parsed.protocol === "file:") {
     return parsed.username === "" && parsed.password === "";
   }
+  if (parsed.username !== "" || parsed.password !== "") return false;
   return (
     parsed.protocol === "http:" &&
     parsed.hostname === "127.0.0.1" &&
-    parsed.port === "4174"
+    (parsed.port === "4174" ||
+      (managedDesktopHostEnabled && parsed.port === desktopBackendPort && parsed.pathname === "/"))
   );
 }
 
@@ -79,12 +97,40 @@ function isTrustedInternalRuntimeRequest(details) {
     parsed !== null &&
     parsed.protocol === "http:" &&
     parsed.hostname === "127.0.0.1" &&
-    parsed.port === "8000" &&
+    parsed.port === desktopBackendPort &&
     parsed.username === "" &&
     parsed.password === "" &&
     parsed.search === "" &&
     parsed.hash === "" &&
     BACKEND_RUNTIME_PATH_PATTERN.test(parsed.pathname)
+  );
+}
+
+function isTrustedInternalBedModelRequest(details) {
+  if (
+    details.trustedInternal !== true ||
+    (details.method !== undefined && details.method !== "GET")
+  ) {
+    return false;
+  }
+  const parsed = parseUrl(details.url);
+  if (
+    parsed === null ||
+    parsed.protocol !== "http:" ||
+    parsed.hostname !== "127.0.0.1" ||
+    parsed.port !== desktopBackendPort ||
+    parsed.username !== "" ||
+    parsed.password !== "" ||
+    parsed.pathname !== BACKEND_BED_MODEL_PATH ||
+    parsed.hash !== ""
+  ) {
+    return false;
+  }
+  const parameters = [...parsed.searchParams.entries()];
+  return (
+    parameters.length === 1 &&
+    parameters[0][0] === "device_profile_id" &&
+    DEVICE_PROFILE_ID_PATTERN.test(parameters[0][1])
   );
 }
 
@@ -128,7 +174,10 @@ function resolveWorkshopRuntimeRequest(
 }
 
 function isAllowedWorkshopRequest(details) {
-  if (isTrustedInternalRuntimeRequest(details)) {
+  if (
+    isTrustedInternalRuntimeRequest(details) ||
+    isTrustedInternalBedModelRequest(details)
+  ) {
     return true;
   }
 
@@ -219,6 +268,44 @@ function isAllowedWorkshopIpcSender(frameUrl) {
   return isTrustedHostUrl(frameUrl);
 }
 
+/**
+ * Accept only the public documentation surface of the official Wiki.
+ *
+ * The renderer may provide the locale, path, and hash, but the main process
+ * still validates the complete URL before it reaches the system browser.
+ */
+function isAllowedWikiUrl(value) {
+  const parsed = parseUrl(value);
+  return (
+    parsed !== null &&
+    parsed.protocol === "https:" &&
+    parsed.hostname === WIKI_HOST &&
+    parsed.port === "" &&
+    parsed.username === "" &&
+    parsed.password === "" &&
+    WIKI_DOC_PATH_PATTERN.test(parsed.pathname)
+  );
+}
+
+/**
+ * Require the current trusted main window and its top-level frame for Wiki IPC.
+ *
+ * Workshop iframes deliberately do not satisfy this contract, and a missing
+ * frame URL is never treated as an authority signal.
+ */
+function isAllowedWikiIpcSender(details) {
+  return (
+    details !== null &&
+    typeof details === "object" &&
+    details.isMainFrame === true &&
+    Number.isInteger(details.senderWebContentsId) &&
+    details.senderWebContentsId === details.trustedWebContentsId &&
+    typeof details.senderFrameUrl === "string" &&
+    details.senderFrameUrl === details.trustedMainFrameUrl &&
+    isTrustedHostUrl(details.senderFrameUrl)
+  );
+}
+
 function isAllowedWorkshopPopup(details) {
   if (
     !isTrustedHostUrl(details.openerUrl) ||
@@ -263,12 +350,15 @@ function isWorkshopFrameProcessIsolated(mainProcessId, moduleProcessId) {
 }
 
 module.exports = {
+  enableManagedDesktopHost,
   createWorkshopSessionToken,
   isAllowedWorkshopDownload,
   isAllowedWorkshopIpcSender,
   isAllowedWorkshopPermission,
   isAllowedWorkshopPopup,
   isAllowedWorkshopRequest,
+  isAllowedWikiIpcSender,
+  isAllowedWikiUrl,
   isWorkshopFrameProcessIsolated,
   resolveWorkshopRuntimeRequest,
   shouldBlockWorkshopNavigation,

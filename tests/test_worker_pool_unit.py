@@ -7,11 +7,15 @@ max_workers defaults, and RuntimeError when pool not started.
 """
 
 import asyncio
+from concurrent.futures import Future
+from contextlib import suppress
 import json
 import logging
 import os
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -47,11 +51,15 @@ def _raise_value_error(msg: str) -> None:
     raise ValueError(msg)
 
 
+
+
 def _slow_task(seconds: float) -> str:
     """Sleep for given seconds, simulating a long-running task."""
     import time
     time.sleep(seconds)
     return "done"
+
+
 
 
 def _read_context_ids() -> tuple[str | None, str | None]:
@@ -67,7 +75,6 @@ def _read_runtime_demand() -> tuple[int, int, bool, bool]:
         current_demand_snapshot_path,
         read_outer_demand,
     )
-
     snapshot_path = current_demand_snapshot_path()
     state = read_outer_demand(snapshot_path, fallback_outer_workers=99)
     return (
@@ -76,6 +83,8 @@ def _read_runtime_demand() -> tuple[int, int, bool, bool]:
         state.snapshot_fallback,
         snapshot_path is not None,
     )
+
+
 
 
 def _return_mapping() -> dict[str, str]:
@@ -97,6 +106,19 @@ def _return_mapping_with_reserved_key() -> dict[str, object]:
 
 class TestWorkerPoolLifecycle:
     """Test start/shutdown/is_alive behavior."""
+
+    def test_windows_worker_stdio_falls_back_when_noconsole_stream_is_missing(
+        self,
+    ) -> None:
+        """PyInstaller windowed workers must tolerate ``sys.stdout = None``."""
+
+        stream = worker_pool._normalize_windows_output_stream(None)
+        try:
+            assert stream is not None
+            assert stream.writable()
+            assert stream.encoding.lower().replace("-", "") == "utf8"
+        finally:
+            stream.close()
 
     def test_not_alive_before_start(self) -> None:
         pool = WorkerPoolManager(max_workers=2)
@@ -164,7 +186,11 @@ class TestWorkerPoolLifecycle:
 
     def test_start_is_idempotent_when_pool_is_already_alive(self) -> None:
         pool = WorkerPoolManager(max_workers=2)
-        sentinel_pool = object()
+        class _SentinelExecutor:
+            def shutdown(self, **_kwargs):
+                return None
+
+        sentinel_pool = _SentinelExecutor()
 
         with patch("api.worker_pool.ProcessPoolExecutor", return_value=sentinel_pool) as executor_cls:
             pool.start()
@@ -174,6 +200,21 @@ class TestWorkerPoolLifecycle:
         assert first_pool is sentinel_pool
         assert pool._pool is sentinel_pool
         executor_cls.assert_called_once()
+        pool.shutdown(wait=False)
+
+    def test_generation_query_does_not_self_heal_an_unregistered_executor(self) -> None:
+        pool = WorkerPoolManager(max_workers=1)
+        sentinel_pool = object()
+        pool._pool = sentinel_pool
+        try:
+            with pool._pool_lock:
+                assert pool._current_generation_locked() is None
+                assert pool._generation is None
+                assert pool._generation_counter == 0
+                assert pool._service_open is False
+        finally:
+            pool._pool = None
+            pool.shutdown(wait=False)
 
     def test_not_alive_after_shutdown(self) -> None:
         pool = WorkerPoolManager(max_workers=2)
@@ -264,25 +305,8 @@ class TestMaxWorkers:
         expected = min(os.cpu_count() or 2, 4)
         assert pool.max_workers == expected
 
-    def test_default_task_timeout_from_constructor(self) -> None:
-        pool = WorkerPoolManager(max_workers=2, default_task_timeout=12.5)
-        assert pool.default_task_timeout == 12.5
 
-    def test_zero_default_task_timeout_disables_timeout(self) -> None:
-        pool = WorkerPoolManager(max_workers=2, default_task_timeout=0)
-        assert pool.default_task_timeout is None
 
-    def test_dependency_factory_wires_configured_task_timeout(self) -> None:
-        from api.dependencies import _build_worker_pool
-
-        cfg = WorkerPoolConfig()
-        cfg.MAX_WORKERS = 3
-        cfg.TASK_TIMEOUT = 14.0
-
-        pool = _build_worker_pool(cfg)
-
-        assert pool.max_workers == 3
-        assert pool.default_task_timeout == 14.0
 
 
 class TestWorkerPoolConfigEnvValidation:
@@ -313,30 +337,6 @@ class TestWorkerPoolConfigEnvValidation:
         assert getattr(warnings[0], "error_type", None) == "ValueError"
         assert getattr(warnings[0], "error_message", None)
 
-    def test_blank_worker_config_env_is_ignored_without_warning(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        monkeypatch.setenv("LUMINA_MAX_WORKERS", "   ")
-        monkeypatch.setenv("LUMINA_TASK_TIMEOUT", "   ")
-        target_logger = logging.getLogger("lumina.config")
-        target_logger.addHandler(caplog.handler)
-        caplog.set_level(logging.WARNING, logger=target_logger.name)
-
-        cfg = WorkerPoolConfig.from_env()
-
-        assert cfg.MAX_WORKERS == WorkerPoolConfig.MAX_WORKERS
-        assert cfg.TASK_TIMEOUT == WorkerPoolConfig.TASK_TIMEOUT
-        assert not [
-            record
-            for record in caplog.records
-            if getattr(record, "event", None)
-            in {
-                "worker_pool_max_workers_invalid",
-                "worker_pool_task_timeout_invalid",
-            }
-        ]
 
     @pytest.mark.parametrize("raw_value", ["0", "-2"])
     def test_non_positive_max_workers_falls_back_and_logs_warning(
@@ -362,97 +362,8 @@ class TestWorkerPoolConfigEnvValidation:
         assert getattr(warnings[0], "raw_value", None) == raw_value
         assert getattr(warnings[0], "fallback", None) == WorkerPoolConfig.MAX_WORKERS
 
-    def test_invalid_task_timeout_falls_back_and_logs_warning(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        monkeypatch.setenv("LUMINA_TASK_TIMEOUT", "notfloat")
-        target_logger = logging.getLogger("lumina.config")
-        target_logger.addHandler(caplog.handler)
-        caplog.set_level(logging.WARNING, logger=target_logger.name)
 
-        cfg = WorkerPoolConfig.from_env()
 
-        assert cfg.TASK_TIMEOUT == WorkerPoolConfig.TASK_TIMEOUT
-        warnings = [
-            record
-            for record in caplog.records
-            if getattr(record, "event", None) == "worker_pool_task_timeout_invalid"
-        ]
-        assert len(warnings) == 1
-        assert getattr(warnings[0], "env_var", None) == "LUMINA_TASK_TIMEOUT"
-        assert getattr(warnings[0], "raw_value", None) == "notfloat"
-        assert getattr(warnings[0], "fallback", None) == WorkerPoolConfig.TASK_TIMEOUT
-        assert getattr(warnings[0], "error_type", None) == "ValueError"
-        assert getattr(warnings[0], "error_message", None)
-
-    @pytest.mark.parametrize("raw_value", ["nan", "inf", "-inf"])
-    def test_non_finite_task_timeout_falls_back_and_logs_warning(
-        self,
-        raw_value: str,
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        monkeypatch.setenv("LUMINA_TASK_TIMEOUT", raw_value)
-        target_logger = logging.getLogger("lumina.config")
-        target_logger.addHandler(caplog.handler)
-        caplog.set_level(logging.WARNING, logger=target_logger.name)
-
-        cfg = WorkerPoolConfig.from_env()
-
-        assert cfg.TASK_TIMEOUT == WorkerPoolConfig.TASK_TIMEOUT
-        warnings = [
-            record
-            for record in caplog.records
-            if getattr(record, "event", None) == "worker_pool_task_timeout_invalid"
-        ]
-        assert len(warnings) == 1
-        assert getattr(warnings[0], "raw_value", None) == raw_value
-        assert getattr(warnings[0], "fallback", None) == WorkerPoolConfig.TASK_TIMEOUT
-
-    def test_invalid_worker_env_does_not_crash_dependencies_cold_import(
-        self,
-        tmp_path: Path,
-    ) -> None:
-        env = os.environ.copy()
-        env.update(
-            {
-                "LUMINA_ENV_LOCAL_PATH": str(tmp_path / "missing-env"),
-                "LUMINA_LOG_DIR": str(tmp_path / "logs"),
-                "LUMINA_MAX_WORKERS": "abc",
-                "LUMINA_TASK_TIMEOUT": "notfloat",
-                "PYTHONPATH": os.pathsep.join(
-                    filter(None, [os.getcwd(), env.get("PYTHONPATH", "")])
-                ),
-            }
-        )
-
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                (
-                    "import api.dependencies as deps; "
-                    "print("
-                    "f'max={deps.worker_pool.max_workers};"
-                    "timeout={deps.worker_pool.default_task_timeout!r}'"
-                    ")"
-                ),
-            ],
-            cwd=os.getcwd(),
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-
-        combined_output = f"{result.stdout}\n{result.stderr}"
-        assert result.returncode == 0, combined_output
-        assert f"max={WorkerPoolConfig.MAX_WORKERS};timeout=None" in result.stdout
-        assert "worker_pool_max_workers_invalid" in combined_output
-        assert "worker_pool_task_timeout_invalid" in combined_output
 
 
 # ---------------------------------------------------------------------------
@@ -461,6 +372,43 @@ class TestWorkerPoolConfigEnvValidation:
 
 class TestSubmit:
     """Test async submit behavior."""
+
+    @pytest.mark.asyncio
+    async def test_synchronous_submit_failure_restarts_pool_and_cleans_demand(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A submit-time executor failure keeps its error and does not leak demand."""
+
+        real_executor = worker_pool.ProcessPoolExecutor
+        factory_calls = 0
+
+        class _FailingExecutor:
+            _processes: dict = {}
+
+            def submit(self, *_args, **_kwargs):
+                raise OSError("synchronous submit failure")
+
+            def shutdown(self, **_kwargs):
+                return None
+
+        def _factory(**kwargs):
+            nonlocal factory_calls
+            factory_calls += 1
+            if factory_calls == 1:
+                return _FailingExecutor()
+            return real_executor(**kwargs)
+
+        monkeypatch.setattr(worker_pool, "ProcessPoolExecutor", _factory)
+        pool = WorkerPoolManager(max_workers=1)
+        pool.start()
+        try:
+            with pytest.raises(OSError, match="synchronous submit failure"):
+                await pool.submit(_add, 1, 2)
+            assert pool.outstanding_tasks == 0
+            assert await pool.submit(_add, 2, 3) == 5
+        finally:
+            pool.shutdown(wait=True)
 
     @pytest.mark.asyncio
     async def test_submit_returns_result(self) -> None:
@@ -485,6 +433,17 @@ class TestSubmit:
             )
         finally:
             pool.shutdown(wait=True)
+
+
+
+
+
+
+
+
+
+
+
 
     @pytest.mark.asyncio
     async def test_concurrent_submissions_publish_running_and_queued_demand(
@@ -577,20 +536,11 @@ class TestSubmit:
         finally:
             pool.shutdown(wait=True)
 
-    @pytest.mark.asyncio
-    async def test_submit_timeout_raises_timeout_error(self) -> None:
-        """Tasks exceeding timeout should raise asyncio.TimeoutError."""
-        pool = WorkerPoolManager(max_workers=1)
-        pool.start()
-        try:
-            with pytest.raises(asyncio.TimeoutError):
-                await pool.submit(_slow_task, 10.0, timeout=0.3)
-            assert pool.outstanding_tasks == 0
-        finally:
-            pool.shutdown(wait=False)
 
     @pytest.mark.asyncio
-    async def test_cancelled_submission_decrements_demand(self) -> None:
+    async def test_cancelled_submission_keeps_demand_until_worker_finishes(
+        self,
+    ) -> None:
         pool = WorkerPoolManager(max_workers=1)
         pool.start()
         task = asyncio.create_task(pool.submit(_slow_task, 0.3))
@@ -600,43 +550,15 @@ class TestSubmit:
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
+            assert pool.outstanding_tasks == 1
+            for _ in range(100):
+                if pool.outstanding_tasks == 0:
+                    break
+                await asyncio.sleep(0.01)
             assert pool.outstanding_tasks == 0
         finally:
-            pool.shutdown(wait=False)
+            pool.shutdown(wait=True)
 
-    @pytest.mark.asyncio
-    async def test_timeout_restarts_pool_so_next_task_can_run(
-        self,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        """A timed-out worker must not keep occupying the only pool slot."""
-        target_logger = logging.getLogger("lumina.api.worker_pool")
-        target_logger.addHandler(caplog.handler)
-        caplog.set_level(logging.WARNING, logger=target_logger.name)
-        pool = WorkerPoolManager(max_workers=1, default_task_timeout=0.2)
-        pool.start()
-        demand_snapshot_path = pool.demand_snapshot_path
-        try:
-            with pytest.raises(asyncio.TimeoutError):
-                await pool.submit(_slow_task, 2.0)
-
-            result = await pool.submit(_add, 4, 5, timeout=2.0)
-            assert result == 9
-            assert pool.demand_snapshot_path == demand_snapshot_path
-            assert pool.outstanding_tasks == 0
-
-            restarts = [
-                record
-                for record in caplog.records
-                if getattr(record, "event", None) == "worker_pool_restarted"
-            ]
-            assert len(restarts) == 1
-            assert getattr(restarts[0], "reason", None) == "task_timeout"
-            assert getattr(restarts[0], "error_type", None) == "task_timeout"
-            assert getattr(restarts[0], "error_message", None)
-            assert getattr(restarts[0], "terminated_workers", None) == 1
-        finally:
-            pool.shutdown(wait=False)
 
     @pytest.mark.asyncio
     async def test_demand_publish_failure_does_not_change_task_result(
@@ -678,35 +600,45 @@ class TestSubmit:
             pool.shutdown(wait=True)
 
     @pytest.mark.asyncio
-    async def test_broken_pool_decrements_demand_before_propagating(
+    async def test_broken_pool_defers_demand_until_generation_stops(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         pool = WorkerPoolManager(max_workers=1)
-        failed_pool = object()
-        pool._pool = failed_pool
-        loop = asyncio.get_running_loop()
+        executor_future: Future[object] = Future()
+        executor_future.set_exception(worker_pool.BrokenProcessPool("injected"))
+
+        class _BrokenExecutor:
+            def submit(self, *_args, **_kwargs):
+                return executor_future
+
+            def shutdown(self, **_kwargs):
+                return None
+
+        failed_pool = _BrokenExecutor()
+        monkeypatch.setattr(
+            worker_pool,
+            "ProcessPoolExecutor",
+            lambda **_kwargs: failed_pool,
+        )
+        pool.start()
         restart_reasons: list[str] = []
-
-        def fail_in_executor(*_args, **_kwargs):
-            future = loop.create_future()
-            future.set_exception(worker_pool.BrokenProcessPool("injected"))
-            return future
-
-        monkeypatch.setattr(loop, "run_in_executor", fail_in_executor)
         monkeypatch.setattr(
             pool,
             "_restart_after_failed_pool",
-            lambda _pool, *, reason, timeout=None: restart_reasons.append(reason),
+            lambda _pool, *, reason: restart_reasons.append(reason),
         )
         try:
             with pytest.raises(worker_pool.BrokenProcessPool, match="injected"):
                 await pool.submit(_add, 1, 2)
-            assert pool.outstanding_tasks == 0
+            assert pool.outstanding_tasks == 1
             assert restart_reasons == ["broken_process_pool"]
+            pool._complete_executor_generation(pool._generation)
+            assert pool.outstanding_tasks == 0
         finally:
-            pool._pool = None
             pool.shutdown(wait=True)
+
+
 
 
 class TestContextvarPropagation:
@@ -797,6 +729,7 @@ class TestRunInWorkerWithContext:
             "req-direct",
             "sess-direct",
             "/tmp/lumina-demand-test.json",
+            None,
         )
         assert captured == {"request_id": "req-direct", "session_id": "sess-direct"}
 
@@ -848,6 +781,37 @@ class TestRunInWorkerWithContext:
             )
             == 5
         )
+
+    def test_wrapper_installs_and_restores_worker_lease_path(self) -> None:
+        from api.worker_pool import _run_in_worker_with_context
+        from core.task_parallelism_runtime import (
+            current_demand_snapshot_path,
+            current_worker_lease_path,
+        )
+
+        observed: list[tuple[Path | None, Path | None]] = []
+
+        def capture_paths() -> None:
+            observed.append(
+                (current_demand_snapshot_path(), current_worker_lease_path())
+            )
+
+        assert current_worker_lease_path() is None
+        _run_in_worker_with_context(
+            capture_paths,
+            None,
+            None,
+            "/tmp/lumina-demand-test.json",
+            worker_lease_path="/tmp/lumina-workers-test.json",
+        )
+
+        assert observed == [
+            (
+                Path("/tmp/lumina-demand-test.json"),
+                Path("/tmp/lumina-workers-test.json"),
+            )
+        ]
+        assert current_worker_lease_path() is None
 
     def test_wrapper_installs_and_restores_demand_path(self) -> None:
         from api.worker_pool import _run_in_worker_with_context
@@ -961,3 +925,11 @@ class TestMaxTasksPerChild:
         assert kwargs["max_workers"] == 3
         assert kwargs["max_tasks_per_child"] == 20
         assert "initializer" in kwargs
+
+
+# ---------------------------------------------------------------------------
+# R3: a task may hand its evidence-based parallel memory requirement to the
+# parent admission gate. The gate grants a bounded, atomic extension inside the
+# capacity it already respects; a task that cannot get it keeps its required
+# reservation and runs with lower parallelism instead of being refused.
+# ---------------------------------------------------------------------------

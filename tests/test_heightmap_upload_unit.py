@@ -149,6 +149,36 @@ def _delete_externalized_preview_cache_field(
 class TestValidHeightmapUpload:
     """Verify valid heightmap upload returns 200 with expected fields."""
 
+    def test_uint16_png_preserves_thumbnail_cache_and_color_heights(self) -> None:
+        session_id = _setup_session_with_preview(_test_store)
+        pixels = np.empty((100, 100), dtype=np.uint16)
+        pixels[:50] = 16384
+        pixels[50:] = 49152
+        buf = io.BytesIO()
+        Image.fromarray(pixels).save(buf, format="PNG")
+        response = client.post(
+            "/api/convert/upload-heightmap",
+            files={"heightmap": ("heightmap16.png", buf.getvalue(), "image/png")},
+            data={"session_id": session_id, "max_relief_height": "3.0"},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["color_height_map"]["ff0000"] == pytest.approx(
+            0.08 + 64 / 255 * 2.92, abs=1e-4,
+        )
+        assert body["color_height_map"]["00ff00"] == pytest.approx(
+            0.08 + 191 / 255 * 2.92, abs=1e-4,
+        )
+        expected = np.where(pixels < 32768, 64, 191).astype(np.uint8)
+        np.testing.assert_array_equal(
+            _test_store.get(session_id)["heightmap_grayscale"], expected,
+        )
+        thumbnail = client.get(body["thumbnail_url"])
+        assert thumbnail.status_code == 200
+        np.testing.assert_array_equal(
+            np.array(Image.open(io.BytesIO(thumbnail.content))), expected,
+        )
+
     def test_valid_grayscale_png_returns_200(self) -> None:
         session_id = _setup_session_with_preview(_test_store)
         buf = _make_grayscale_png(100, 100)
@@ -172,7 +202,9 @@ class TestValidHeightmapUpload:
         for hex_key, height in body["color_height_map"].items():
             assert 0.08 <= height <= 2.0, f"Height {height} out of range for {hex_key}"
 
-        assert body["color_height_map"]["ff0000"] > body["color_height_map"]["00ff00"]
+        # The heightmap runs from black at the top to white at the bottom.
+        # White must therefore produce the higher relief region.
+        assert body["color_height_map"]["ff0000"] < body["color_height_map"]["00ff00"]
 
         assert "thumbnail_url" in body
         assert "original_size" in body

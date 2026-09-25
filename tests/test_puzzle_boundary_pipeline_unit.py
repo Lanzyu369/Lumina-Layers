@@ -233,5 +233,11 @@ def test_s08_boundary_outline_matches_legacy_padding_and_transform() -> None:
 
     assert legacy_outline.bounds[0, 0] < 0.0
     assert boundary_outline.bounds == pytest.approx(legacy_outline.bounds)
-    assert boundary_outline.bounds[0, 2] == pytest.approx(-coating_height_mm)
+    assert boundary_outline.bounds[0, 2] == pytest.approx(0.0)
     assert boundary_outline.bounds[1, 2] == pytest.approx(total_layers * PrinterConfig.LAYER_HEIGHT)
+    for ctx in (boundary_ctx, legacy_ctx):
+        assert ctx["scene"].geometry["Coating"].bounds[1, 2] == pytest.approx(0.0)
+        coat = ctx["scene"].geometry["Coating"]
+        outline = ctx["scene"].geometry["Outline"]
+        assert np.all(coat.bounds[0, :2] <= outline.bounds[0, :2] + 1e-6)
+        assert np.all(coat.bounds[1, :2] >= outline.bounds[1, :2] - 1e-6)

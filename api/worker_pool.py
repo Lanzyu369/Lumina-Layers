@@ -2,21 +2,23 @@
 WorkerPoolManager — ProcessPoolExecutor 生命周期管理器。
 
 Provides an async-friendly interface for submitting CPU-bound tasks
-to a process pool, with timeout support and graceful shutdown.
-提供异步友好的接口，将 CPU 密集型任务提交到进程池，
-支持超时控制和优雅关闭。
+to a process pool with graceful shutdown.
+提供异步友好的接口，将 CPU 密集型任务提交到进程池并优雅关闭。
 """
 
+from concurrent.futures import CancelledError as FutureCancelledError
+from concurrent.futures import Future as ConcurrentFuture
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Literal, TypeVar
 import asyncio
-import io
 import os
 import sys
 import threading
 import time
+import uuid
 
 from api.structured_logging import get_logger
 from core.task_parallelism_runtime import (
@@ -32,6 +34,22 @@ _ENV_MAX_TASKS_PER_CHILD = "LUMINA_WORKER_MAX_TASKS_PER_CHILD"
 _DEFAULT_MAX_TASKS_PER_CHILD = 20
 _DARWIN_DEFAULT_MAX_TASKS_PER_CHILD = 1
 _TERMINATE_GRACE_SECONDS = 1.0
+@dataclass
+class _LifecycleWaiter:
+    loop: asyncio.AbstractEventLoop
+    event: asyncio.Event
+
+
+@dataclass
+class _ExecutorGeneration:
+    """One concrete executor generation and its submission resources."""
+
+    generation_id: int
+    epoch: int
+    executor: Any
+    demand_publisher: OuterDemandPublisher | None
+    worker_lease_path: str | None
+    accepting: bool = True
 
 
 def _default_max_tasks_per_child() -> int:
@@ -83,14 +101,44 @@ def _resolve_max_tasks_per_child() -> int | None:
     return value
 
 
+def _normalize_windows_output_stream(stream: Any) -> Any:
+    """Return a writable UTF-8 stream for a Windows worker process.
+
+    PyInstaller windowed executables intentionally expose ``None`` for the
+    standard streams.  Workers still need a harmless target because logging
+    libraries may inspect or write to those streams during initialization.
+    """
+
+    if stream is None:
+        return open(  # noqa: SIM115 - process-lifetime fallback stream.
+            os.devnull,
+            "w",
+            encoding="utf-8",
+            errors="replace",
+        )
+    reconfigure = getattr(stream, "reconfigure", None)
+    if callable(reconfigure):
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            pass
+    return stream
+
+
+def _worker_smoke_task() -> int:
+    """Return the worker PID for the frozen-runtime CI smoke test."""
+
+    return os.getpid()
+
+
 def _worker_init() -> None:
     """Worker process initializer: force UTF-8 stdout/stderr on Windows,
     then redirect stdout to the same log file as the main process.
     工作进程初始化器：在 Windows 上强制 UTF-8 编码，并将 stdout 重定向到主进程日志文件。
     """
     if sys.platform == "win32":
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+        sys.stdout = _normalize_windows_output_stream(sys.stdout)
+        sys.stderr = _normalize_windows_output_stream(sys.stderr)
 
     log_path = os.environ.get("LUMINA_LOG_PATH")
     if log_path:
@@ -110,12 +158,10 @@ def _run_in_worker_with_context(
     session_id: str | None,
     demand_snapshot_path: str | None,
     *args: Any,
+    worker_lease_path: str | None = None,
 ) -> T:
-    """Replay parent-side contextvars inside the worker process before invoking fn.
+    """Replay parent context and CPU parallelism telemetry in the worker."""
 
-    在 worker 子进程中重放父进程的 request_id 与 session_id 后再执行 fn，
-    保证 worker 内部 logger 输出的事件能溯源到发起的 HTTP 请求。
-    """
     from api.structured_logging import set_request_id, set_session_id
 
     if request_id is not None:
@@ -124,7 +170,7 @@ def _run_in_worker_with_context(
         set_session_id(session_id)
     if demand_snapshot_path is None:
         return fn(*args)
-    with task_parallelism_runtime_scope(demand_snapshot_path):
+    with task_parallelism_runtime_scope(demand_snapshot_path, worker_lease_path):
         return fn(*args)
 
 
@@ -134,8 +180,10 @@ def _run_in_worker_with_context_timed(
     session_id: str | None,
     demand_snapshot_path: str | None,
     *args: Any,
+    worker_lease_path: str | None = None,
 ) -> tuple[T, int, int]:
-    """Run one contextualized task and return worker-local timing bounds."""
+    """Run one contextualized worker task and return timing bounds."""
+
     worker_started_ns = time.perf_counter_ns()
     result = _run_in_worker_with_context(
         fn,
@@ -143,22 +191,10 @@ def _run_in_worker_with_context_timed(
         session_id,
         demand_snapshot_path,
         *args,
+        worker_lease_path=worker_lease_path,
     )
     worker_finished_ns = time.perf_counter_ns()
     return result, worker_started_ns, worker_finished_ns
-
-
-def _normalize_timeout(timeout: float | None) -> float | None:
-    """Normalize non-positive task timeouts to disabled.
-
-    将非正数任务超时归一化为禁用状态。
-    """
-    if timeout is None:
-        return None
-    value = float(timeout)
-    if value <= 0:
-        return None
-    return value
 
 
 def _shutdown_executor(
@@ -175,24 +211,22 @@ def _shutdown_executor(
         executor.shutdown(wait=wait)
 
 
-def _terminate_executor_workers(executor: ProcessPoolExecutor) -> int:
+def _terminate_executor_workers(
+    executor: ProcessPoolExecutor,
+) -> tuple[int, int]:
     """Terminate worker processes owned by a ProcessPoolExecutor.
 
-    ``asyncio.wait_for`` can cancel the parent-side wait, but it cannot stop
-    the child process that is already executing. We intentionally use the
-    executor's private process table here because Python 3.12 does not expose
-    ``terminate_workers()`` / ``kill_workers()`` yet.
-
-    ``asyncio.wait_for`` 只能取消父进程等待，不能停止已经执行中的子进程。
-    Python 3.12 尚未提供公开的 terminate/kill worker API，因此这里有意
-    使用 executor 的私有进程表。
+    This is used only while cleaning up a failed executor generation. It is
+    deliberately separate from the lifetime of a user computation.
+    这里只在清理已经失败的 executor 世代时使用，不限制用户计算的运行时长。
     """
 
     processes = getattr(executor, "_processes", None)
     if not processes:
-        return 0
+        return 0, 0
 
     terminated = 0
+    survivors = 0
     for proc in list(processes.values()):
         if proc is None or not proc.is_alive():
             continue
@@ -204,8 +238,27 @@ def _terminate_executor_workers(executor: ProcessPoolExecutor) -> int:
                 if callable(kill):
                     kill()
                     proc.join(timeout=_TERMINATE_GRACE_SECONDS)
-            terminated += 1
+            if proc.is_alive():
+                survivors += 1
+                _log.error(
+                    "Worker process survived terminate and kill",
+                    extra={
+                        "event": "worker_pool_process_terminate_failed",
+                        "pid": getattr(proc, "pid", None),
+                        "error_type": "WorkerStillAlive",
+                        "error_message": (
+                            "Worker process is still alive after terminate/kill"
+                        ),
+                    },
+                )
+            else:
+                terminated += 1
         except (OSError, RuntimeError, ValueError) as exc:
+            try:
+                still_alive = bool(proc.is_alive())
+            except (OSError, RuntimeError, ValueError):
+                still_alive = True
+            survivors += int(still_alive)
             _log.warning(
                 "Failed to terminate timed-out worker process",
                 extra={
@@ -215,7 +268,7 @@ def _terminate_executor_workers(executor: ProcessPoolExecutor) -> int:
                     "error_message": str(exc),
                 },
             )
-    return terminated
+    return terminated, survivors
 
 
 class WorkerPoolManager:
@@ -233,34 +286,72 @@ class WorkerPoolManager:
     def __init__(
         self,
         max_workers: int | None = None,
-        default_task_timeout: float | None = None,
     ) -> None:
-        """Initialize WorkerPoolManager.
-        初始化 WorkerPoolManager。
+        """Initialize the CPU worker pool without application resource quotas.
 
-        Args:
-            max_workers (int | None): Max worker processes. Defaults to min(cpu_count, 4).
-                                      (最大工作进程数，默认 min(cpu_count, 4))
-            default_task_timeout (float | None): Default seconds before a task
-                times out. Non-positive values disable the default timeout.
-                (默认任务超时秒数；非正数表示禁用默认超时)
-
-        The per-child recycle threshold is read once from
-        ``LUMINA_WORKER_MAX_TASKS_PER_CHILD`` (default 20) so each pool instance
-        captures its env value at construction time.
-        子进程回收阈值在构造时从 ``LUMINA_WORKER_MAX_TASKS_PER_CHILD`` 读一次
-        (默认 20)，保证每个 pool 实例捕获自己的环境变量快照。
+        初始化仅负责 CPU worker 池；桌面任务不再经过内存额度审批或计算时限。
         """
         self._max_workers: int = max_workers or min(os.cpu_count() or 2, 4)
         self._max_tasks_per_child: int | None = _resolve_max_tasks_per_child()
-        self._default_task_timeout: float | None = _normalize_timeout(
-            default_task_timeout
-        )
         self._pool: ProcessPoolExecutor | None = None
         self._pool_lock = threading.RLock()
+        self._service_epoch = 0
+        self._service_open = False
+        self._restart_start_pending = False
+        self._restart_in_progress = False
+        self._generation_counter = 0
+        self._generation: _ExecutorGeneration | None = None
+        self._lifecycle_waiters: list[_LifecycleWaiter] = []
+        self._publisher_cleanup_pending = False
         self._demand_publisher: OuterDemandPublisher | None = (
             self._create_demand_publisher()
         )
+        self._active_task_lock = threading.Lock()
+        self._active_tasks: dict[
+            str,
+            tuple[object, OuterDemandPublisher | None],
+        ] = {}
+
+    def _signal_lifecycle_locked(self) -> None:
+        """Wake submissions waiting for an executor lifecycle transition."""
+
+        for waiter in tuple(self._lifecycle_waiters):
+            try:
+                waiter.loop.call_soon_threadsafe(waiter.event.set)
+            except RuntimeError:
+                pass
+
+    def _current_generation_locked(self) -> _ExecutorGeneration | None:
+        """Return the formally published current generation, if any."""
+
+        generation = self._generation
+        if generation is not None and generation.executor is self._pool:
+            return generation
+        return None
+
+    async def _wait_for_generation(
+        self,
+        request_epoch: int,
+    ) -> None:
+        """Wait for an accepting executor generation without polling."""
+
+        loop = asyncio.get_running_loop()
+        waiter = _LifecycleWaiter(loop, asyncio.Event())
+        with self._pool_lock:
+            generation = self._current_generation_locked()
+            if self._service_epoch != request_epoch:
+                raise RuntimeError("WorkerPool request epoch is closed")
+            if generation is not None and generation.accepting:
+                return
+            if not self._service_open:
+                raise RuntimeError("WorkerPool not started")
+            self._lifecycle_waiters.append(waiter)
+        try:
+            await waiter.event.wait()
+        finally:
+            with self._pool_lock:
+                if waiter in self._lifecycle_waiters:
+                    self._lifecycle_waiters.remove(waiter)
 
     def _create_demand_publisher(self) -> OuterDemandPublisher | None:
         """Create isolated demand state without making it a startup dependency."""
@@ -302,90 +393,176 @@ class WorkerPoolManager:
                 },
             )
 
+    def _register_active_task(
+        self,
+        *,
+        owner: object,
+        publisher: OuterDemandPublisher | None,
+    ) -> str:
+        """Track one executor task until its underlying work is truly done."""
+
+        token = uuid.uuid4().hex
+        with self._active_task_lock:
+            self._active_tasks[token] = (
+                owner,
+                publisher,
+            )
+        self._update_demand(publisher, "increment")
+        return token
+
+    def _complete_active_task(self, token: str) -> None:
+        """Idempotently release demand for one finished task."""
+
+        with self._active_task_lock:
+            state = self._active_tasks.pop(token, None)
+        if state is None:
+            return
+        _owner, publisher = state
+        self._update_demand(publisher, "decrement")
+        self._maybe_cleanup_publisher()
+
+    def _complete_executor_generation(
+        self,
+        owner: _ExecutorGeneration,
+    ) -> None:
+        """Complete every task owned by an executor confirmed to be stopped."""
+
+        with self._active_task_lock:
+            tokens = [
+                token
+                for token, (task_owner, _publisher) in (
+                    self._active_tasks.items()
+                )
+                if task_owner is owner
+            ]
+        for token in tokens:
+            self._complete_active_task(token)
+
     def start(self) -> None:
         """Initialize the process pool.
         初始化进程池。
         """
         with self._pool_lock:
-            if self._pool is not None:
+            if self._restart_in_progress:
                 return
+            if self._restart_start_pending and not self._service_open:
+                self._restart_start_pending = False
+                return
+            generation = self._current_generation_locked()
+            if generation is not None and generation.accepting:
+                return
+            preserve_epoch = self._restart_start_pending
+            self._restart_start_pending = False
+            if not preserve_epoch:
+                self._service_epoch += 1
+            self._service_open = True
             if self._demand_publisher is None:
                 self._demand_publisher = self._create_demand_publisher()
-            self._pool = ProcessPoolExecutor(
+            executor = ProcessPoolExecutor(
                 max_workers=self._max_workers,
                 initializer=_worker_init,
                 max_tasks_per_child=self._max_tasks_per_child,
             )
+            self._generation_counter += 1
+            self._pool = executor
+            self._generation = _ExecutorGeneration(
+                generation_id=self._generation_counter,
+                epoch=self._service_epoch,
+                executor=executor,
+                demand_publisher=self._demand_publisher,
+                worker_lease_path=(
+                    str(self._demand_publisher.worker_lease_path)
+                    if self._demand_publisher is not None
+                    else None
+                ),
+            )
+            self._signal_lifecycle_locked()
 
     def _restart_after_failed_pool(
         self,
         failed_pool: ProcessPoolExecutor,
         *,
         reason: str,
-        timeout: float | None = None,
     ) -> None:
         """Replace a failed executor with a fresh process pool."""
 
-        error_message = (
-            f"Task exceeded {timeout:.3f}s timeout; worker pool restarted"
-            if reason == "task_timeout" and timeout is not None
-            else f"Worker pool restarted after {reason}"
-        )
+        error_message = f"Worker pool restarted after {reason}"
         with self._pool_lock:
-            if self._pool is not failed_pool:
+            generation = self._current_generation_locked()
+            if generation is None or generation.executor is not failed_pool:
                 return
-            terminated = _terminate_executor_workers(failed_pool)
-            _shutdown_executor(failed_pool, wait=False, cancel_futures=True)
+            if not self._service_open:
+                return
+            generation.accepting = False
+            restart_epoch = self._service_epoch
+            self._restart_in_progress = True
             self._pool = None
-            _log.warning(
-                "Worker pool restarted after failed task",
-                extra={
-                    "event": "worker_pool_restarted",
-                    "reason": reason,
-                    "timeout_s": timeout,
-                    "terminated_workers": terminated,
-                    "max_workers": self._max_workers,
-                    "error_type": reason,
-                    "error_message": error_message,
-                },
+            self._signal_lifecycle_locked()
+
+        terminated, surviving_workers = _terminate_executor_workers(
+            failed_pool
+        )
+        _shutdown_executor(failed_pool, wait=False, cancel_futures=True)
+        if surviving_workers == 0:
+            self._complete_executor_generation(generation)
+
+        restarted = False
+        with self._pool_lock:
+            current_epoch_open = (
+                self._service_open and self._service_epoch == restart_epoch
             )
-            self.start()
+            if current_epoch_open and self._pool is None:
+                self._generation = None
+                self._restart_start_pending = True
+                restarted = True
+            else:
+                if self._pool is None:
+                    self._generation = None
+                self._restart_start_pending = False
+            self._restart_in_progress = False
+            self._signal_lifecycle_locked()
+        if restarted:
+            try:
+                self.start()
+            except Exception as exc:
+                with self._pool_lock:
+                    if self._service_epoch == restart_epoch:
+                        self._service_open = False
+                        self._restart_start_pending = False
+                        self._signal_lifecycle_locked()
+                _log.error(
+                    "Worker pool restart failed",
+                    extra={
+                        "event": "worker_pool_restart_failed",
+                        "reason": reason,
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                    },
+                )
+            else:
+                _log.warning(
+                    "Worker pool restarted after failed task",
+                    extra={
+                        "event": "worker_pool_restarted",
+                        "reason": reason,
+                        "terminated_workers": terminated,
+                        "surviving_workers": surviving_workers,
+                        "max_workers": self._max_workers,
+                        "error_type": reason,
+                        "error_message": error_message,
+                    },
+                )
 
     async def submit(
         self,
         fn: Callable[..., T],
         *args: Any,
-        timeout: float | None = None,
     ) -> T:
-        """Submit a CPU task to the pool and await result.
-        提交 CPU 任务到进程池并等待结果。
+        """Submit a CPU task and await its result without an application quota."""
 
-        Args:
-            fn (Callable[..., T]): Top-level function (must be picklable).
-                                   (顶层函数，必须可序列化)
-            *args (Any): Scalar args or file paths only.
-                         (仅标量参数或文件路径)
-            timeout (float | None): Max seconds to wait. ``None`` uses the
-                pool default; non-positive values disable timeout for this call.
-                (最大等待秒数；``None`` 使用池默认值；非正数表示本次调用不限时)
-
-        Returns:
-            T: Function return value. (函数返回值)
-
-        Raises:
-            asyncio.TimeoutError: If task exceeds timeout. (任务超时)
-            RuntimeError: If pool not started. (进程池未启动)
-
-        Parent-side contextvars (request_id / session_id) are captured at call
-        time and replayed inside the worker process, so worker-emitted log
-        records carry the same correlation IDs as the originating endpoint.
-        父进程当前的 request_id / session_id 会在调用时被快照，并在 worker
-        子进程内重放，使得 worker 发出的日志可与 endpoint 的请求关联。
-        """
         result, _timing = await self._submit_internal(
             fn,
             args,
-            timeout=timeout,
             include_timing=False,
         )
         return result
@@ -394,85 +571,152 @@ class WorkerPoolManager:
         self,
         fn: Callable[..., T],
         *args: Any,
-        timeout: float | None = None,
     ) -> tuple[T, dict[str, float]]:
-        """Submit a CPU task and return separate pool timing metadata.
+        """Submit a CPU task and return executor timing metadata."""
 
-        提交 CPU 任务，并将进程池计时作为独立元数据返回，不修改 worker
-        的原始返回值。
-
-        Args:
-            fn: Top-level picklable worker function. 顶层可序列化 worker 函数。
-            *args: Scalar arguments or file paths. 标量参数或文件路径。
-            timeout: Optional per-call timeout. 可选的单次调用超时。
-
-        Returns:
-            tuple: ``(worker_result, timing_seconds)``. worker 原始结果与秒级计时。
-        """
         result, timing = await self._submit_internal(
             fn,
             args,
-            timeout=timeout,
             include_timing=True,
         )
-        if timing is None:  # Defensive invariant; timed submissions set it.
+        if timing is None:
             raise RuntimeError("Timed worker submission returned no timing")
         return result, timing
+
+    def _complete_future_task(
+        self,
+        completed: ConcurrentFuture[Any],
+        task_token: str,
+    ) -> None:
+        """Complete a task unless a broken pool may still have a live worker."""
+
+        if completed.cancelled():
+            self._complete_active_task(task_token)
+            return
+        try:
+            exception = completed.exception()
+        except FutureCancelledError:
+            self._complete_active_task(task_token)
+            return
+        if isinstance(exception, BrokenProcessPool):
+            # CPython marks futures broken before it terminates every worker.
+            # The restart path releases the executor generation only after all
+            # known child processes are confirmed stopped.
+            return
+        self._complete_active_task(task_token)
+
+    async def _await_generation_for_submit(
+        self,
+        request_epoch: int,
+    ) -> _ExecutorGeneration:
+        """Return a current accepting generation without binding before await."""
+
+        while True:
+            with self._pool_lock:
+                generation = self._current_generation_locked()
+                if self._service_epoch != request_epoch:
+                    raise RuntimeError("WorkerPool request epoch is closed")
+                if (
+                    self._service_open
+                    and generation is not None
+                    and generation.accepting
+                ):
+                    return generation
+                if not self._service_open:
+                    raise RuntimeError("WorkerPool not started")
+            await self._wait_for_generation(request_epoch)
 
     async def _submit_internal(
         self,
         fn: Callable[..., T],
         args: tuple[Any, ...],
         *,
-        timeout: float | None,
         include_timing: bool,
     ) -> tuple[T, dict[str, float] | None]:
-        """Run one task while preserving the public ``submit`` return contract."""
-        pool = self._pool
-        if pool is None:
-            raise RuntimeError("WorkerPool not started")
+        """Submit work, preserving cancellation and real worker failures."""
+
         from api.structured_logging import get_request_id, get_session_id
 
         loop = asyncio.get_running_loop()
         request_id = get_request_id()
         session_id = get_session_id()
-        effective_timeout = _normalize_timeout(
-            timeout if timeout is not None else self._default_task_timeout
-        )
         worker_entry = (
             _run_in_worker_with_context_timed
             if include_timing
             else _run_in_worker_with_context
         )
-        demand_publisher = self._demand_publisher
-        demand_snapshot_path = (
-            str(demand_publisher.snapshot_path)
-            if demand_publisher is not None
-            else None
-        )
-        self._update_demand(demand_publisher, "increment")
+        with self._pool_lock:
+            initial_generation = self._current_generation_locked()
+            if not self._service_open or initial_generation is None:
+                raise RuntimeError("WorkerPool not started")
+            request_epoch = self._service_epoch
+
+        active_task_token: str | None = None
+        executor_future: ConcurrentFuture[Any] | None = None
+        submitted_generation: _ExecutorGeneration | None = None
+        submission_uncertain = False
         submitted_ns = time.perf_counter_ns() if include_timing else None
         try:
-            future = loop.run_in_executor(
-                pool,
-                worker_entry,
-                fn,
-                request_id,
-                session_id,
-                demand_snapshot_path,
-                *args,
-            )
-            raw_result = await asyncio.wait_for(
-                future,
-                timeout=effective_timeout,
-            )
+            while True:
+                generation = await self._await_generation_for_submit(
+                    request_epoch,
+                )
+                with self._pool_lock:
+                    current = self._current_generation_locked()
+                    if (
+                        not self._service_open
+                        or self._service_epoch != request_epoch
+                    ):
+                        raise RuntimeError("WorkerPool request epoch is closed")
+                    if (
+                        current is None
+                        or current is not generation
+                        or not current.accepting
+                    ):
+                        continue
+                    submitted_generation = current
+                    publisher = current.demand_publisher
+                    snapshot_path = (
+                        str(publisher.snapshot_path)
+                        if publisher is not None
+                        else None
+                    )
+                    worker_lease_path = current.worker_lease_path
+                    active_task_token = self._register_active_task(
+                        owner=current,
+                        publisher=publisher,
+                    )
+                    try:
+                        executor_future = current.executor.submit(
+                            worker_entry,
+                            fn,
+                            request_id,
+                            session_id,
+                            snapshot_path,
+                            *args,
+                            worker_lease_path=worker_lease_path,
+                        )
+                    except BaseException:
+                        submission_uncertain = True
+                        raise
+                    try:
+                        executor_future.add_done_callback(
+                            lambda completed, token=active_task_token: (
+                                self._complete_future_task(completed, token)
+                            )
+                        )
+                    except BaseException:
+                        submission_uncertain = True
+                        raise
+                    break
+
+            if executor_future is None:
+                raise RuntimeError("WorkerPool submission produced no future")
+            future = asyncio.wrap_future(executor_future, loop=loop)
+            raw_result = await asyncio.shield(future)
             if not include_timing:
                 return raw_result, None
-            (
-                result,
-                worker_started_ns,
-                worker_finished_ns,
-            ) = raw_result
+            result, worker_started_ns, worker_finished_ns = raw_result
             received_ns = time.perf_counter_ns()
             if submitted_ns is None:
                 raise RuntimeError("Timed worker submission has no start time")
@@ -503,19 +747,55 @@ class WorkerPoolManager:
                 },
             )
             return result, timing
-        except asyncio.TimeoutError:
-            future.cancel()
-            self._restart_after_failed_pool(
-                pool,
-                reason="task_timeout",
-                timeout=effective_timeout,
-            )
-            raise
         except BrokenProcessPool:
-            self._restart_after_failed_pool(pool, reason="broken_process_pool")
+            if submitted_generation is not None:
+                self._restart_after_failed_pool(
+                    submitted_generation.executor,
+                    reason="broken_process_pool",
+                )
+            raise
+        except BaseException:
+            if submission_uncertain and submitted_generation is not None:
+                self._restart_after_failed_pool(
+                    submitted_generation.executor,
+                    reason="submit_failed",
+                )
+            elif active_task_token is not None and executor_future is None:
+                self._complete_active_task(active_task_token)
             raise
         finally:
-            self._update_demand(demand_publisher, "decrement")
+            if active_task_token is not None and executor_future is None:
+                if not submission_uncertain:
+                    self._complete_active_task(active_task_token)
+
+    def _maybe_cleanup_publisher(self) -> None:
+        """Remove telemetry files only after the last submitted task ends."""
+
+        with self._active_task_lock:
+            if self._active_tasks:
+                return
+        with self._pool_lock:
+            if self._service_open or not self._publisher_cleanup_pending:
+                return
+            publisher = self._demand_publisher
+            if publisher is None:
+                self._publisher_cleanup_pending = False
+                return
+            try:
+                publisher.cleanup()
+            except (OSError, RuntimeError, ValueError) as exc:
+                _log.warning(
+                    "Failed to clean up worker-pool demand state",
+                    extra={
+                        "event": "worker_pool_demand_cleanup_failed",
+                        "path": str(publisher.snapshot_path),
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                    },
+                )
+            else:
+                self._demand_publisher = None
+                self._publisher_cleanup_pending = False
 
     def shutdown(self, wait: bool = True) -> None:
         """Shutdown the pool gracefully.
@@ -526,29 +806,27 @@ class WorkerPoolManager:
                          (是否等待待处理任务完成)
         """
         with self._pool_lock:
-            if self._pool is not None:
-                _shutdown_executor(
-                    self._pool,
-                    wait=wait,
-                    cancel_futures=not wait,
-                )
-                self._pool = None
-            publisher = self._demand_publisher
-            if publisher is not None:
-                try:
-                    publisher.cleanup()
-                except (OSError, RuntimeError, ValueError) as exc:
-                    _log.warning(
-                        "Failed to clean up worker-pool demand state",
-                        extra={
-                            "event": "worker_pool_demand_cleanup_failed",
-                            "path": str(publisher.snapshot_path),
-                            "error_type": type(exc).__name__,
-                            "error_message": str(exc),
-                        },
-                    )
-                else:
-                    self._demand_publisher = None
+            self._service_open = False
+            self._service_epoch += 1
+            self._restart_start_pending = False
+            generation = self._current_generation_locked()
+            if generation is not None:
+                generation.accepting = False
+            executor = self._pool
+            self._pool = None
+            self._generation = None
+            self._publisher_cleanup_pending = self._demand_publisher is not None
+            self._signal_lifecycle_locked()
+
+        if executor is not None:
+            _shutdown_executor(
+                executor,
+                wait=wait,
+                cancel_futures=not wait,
+            )
+        if wait and generation is not None:
+            self._complete_executor_generation(generation)
+        self._maybe_cleanup_publisher()
 
     @property
     def is_alive(self) -> bool:
@@ -609,10 +887,3 @@ class WorkerPoolManager:
                 (子进程被回收前可处理的最大任务数，``None`` 表示禁用回收)
         """
         return self._max_tasks_per_child
-
-    @property
-    def default_task_timeout(self) -> float | None:
-        """Get the default task timeout in seconds, or None when disabled.
-        获取默认任务超时秒数；禁用时返回 None。
-        """
-        return self._default_task_timeout
