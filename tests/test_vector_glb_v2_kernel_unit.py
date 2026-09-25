@@ -272,6 +272,44 @@ def test_analytic_parts_match_segmented_preview_world_y_orientation() -> None:
     )
 
 
+def test_analytic_parts_anchor_full_canvas_for_plain_svg() -> None:
+    """Plain SVGs still export the canvas anchor used by contour overlays."""
+
+    top_shape = box(0.2, 0.5, 1.2, 1.5)
+    source = vector_glb_preview.VectorQuickPreviewSourceV1(
+        provenance="a" * 64,
+        shape_data=(),
+        clipped_shapes=({"geometry": top_shape, "color": (0, 0, 0)},),
+        silhouette=top_shape,
+        image_vectorizer_bounds=None,
+        scale_factor=10.0,
+        bbox=(0.0, 0.0, 2.0, 4.0),
+    )
+    matched_rgb = np.full((40, 20, 3), (20, 30, 40), dtype=np.uint8)
+    mask_solid = np.zeros((40, 20), dtype=bool)
+    mask_solid[5:15, 2:12] = True
+
+    parts = vector_glb_preview.build_vector_quick_preview_parts(
+        source=source,
+        matched_rgb=matched_rgb,
+        height_identity_rgb=matched_rgb.copy(),
+        mask_solid=mask_solid,
+        backing_rgba=(255, 255, 255, 255),
+        backing_thickness_mm=1.6,
+    )
+
+    assert parts is not None
+    canvas_anchor = next(
+        part
+        for part in parts
+        if part.export_name == vector_glb_preview.PREVIEW_CANVAS_BOUNDS_NODE_NAME
+    )
+    assert canvas_anchor.fallback_mesh is not None
+    assert canvas_anchor.fallback_mesh.bounds[:, :2].ravel() == pytest.approx(
+        (0.0, 0.0, 20.0, 40.0)
+    )
+
+
 def test_analytic_parts_share_segmented_preview_zero_z_origin() -> None:
     """The browser owns layer placement, so asset slabs must start at Z=0."""
 

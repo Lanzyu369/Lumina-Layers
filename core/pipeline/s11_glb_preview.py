@@ -71,6 +71,97 @@ def _resolve_glb_pixel_scale(target_width_mm: object, pixel_width: float) -> flo
     return float(PrinterConfig.NOZZLE_WIDTH)
 
 
+_GLB_SIMPLIFY_THRESHOLD_PIXELS = 500_000
+_GLB_TARGET_PIXELS = 300_000
+
+
+def _resolve_glb_downsample_factor(total_pixels: int) -> int:
+    """Return the integer GLB preview downsample factor (1 means none)."""
+
+    if total_pixels <= _GLB_SIMPLIFY_THRESHOLD_PIXELS:
+        return 1
+    scale_factor = int(np.sqrt(total_pixels / _GLB_TARGET_PIXELS))
+    return max(2, min(scale_factor, 16))
+
+
+def _extract_mask_contours(
+    color_match: np.ndarray,
+    height: int,
+    pixel_scale: float,
+) -> list[list[list[float]]]:
+    """Return external contours of one colour mask in canvas millimetres.
+
+    Points use a bottom-left canvas origin so they match the
+    ``preview_canvas_bounds`` anchor consumed by the frontend.
+    """
+
+    mask_u8 = color_match.astype(np.uint8) * 255
+    cv_contours, _ = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contour_list: list[list[list[float]]] = []
+    for cnt in cv_contours:
+        if len(cnt) < 3:
+            continue
+        pts = cnt.squeeze(1).astype(float)
+        contour_list.append(
+            [[float(px * pixel_scale), float((height - py) * pixel_scale)] for px, py in pts]
+        )
+    return contour_list
+
+
+def extract_color_contours(
+    matched_rgb: np.ndarray,
+    mask_solid: np.ndarray,
+    target_width_mm: object,
+) -> dict[str, list[list[list[float]]]]:
+    """Extract per-colour 2D contours for renderers that skip segmented GLBs.
+
+    Uses the same downsampling, pixel scale, and canvas origin as
+    :func:`generate_segmented_glb`, so highlight overlays and keychain loop
+    placement stay aligned with the preview canvas anchor.
+
+    为不经过分段 GLB 的预览渲染器提取逐颜色二维轮廓。下采样、像素尺度与
+    画布原点均与 :func:`generate_segmented_glb` 一致，保证高亮叠加和挂环
+    定位与预览画布锚点对齐。
+
+    Args:
+        matched_rgb (np.ndarray): Matched colour raster ``(H, W, 3)``.
+            匹配后的颜色栅格。
+        mask_solid (np.ndarray): Solid-pixel mask ``(H, W)``. 实体像素掩码。
+        target_width_mm (object): Physical canvas width in millimetres.
+            画布物理宽度（毫米）。
+
+    Returns:
+        dict[str, list[list[list[float]]]]: Hex colour -> contour polygons;
+        empty when inputs are missing or mismatched.
+        十六进制颜色到轮廓多边形的映射；输入缺失或不匹配时为空。
+    """
+
+    if matched_rgb is None or mask_solid is None:
+        return {}
+    rgb = np.asarray(matched_rgb)
+    solid = np.asarray(mask_solid, dtype=bool)
+    if rgb.ndim != 3 or rgb.shape[2] < 3 or solid.shape != rgb.shape[:2]:
+        return {}
+    height, width = solid.shape
+    factor = _resolve_glb_downsample_factor(width * height)
+    if factor > 1:
+        new_w, new_h = width // factor, height // factor
+        rgb = cv2.resize(np.ascontiguousarray(rgb[:, :, :3]), (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+        solid = cv2.resize(solid.astype(np.uint8), (new_w, new_h), interpolation=cv2.INTER_NEAREST).astype(bool)
+        height, width = new_h, new_w
+    pixel_scale = _resolve_glb_pixel_scale(target_width_mm, width)
+
+    flat_rgb = rgb.reshape(-1, rgb.shape[-1])[:, :3].astype(np.uint32, copy=False)
+    codes = (flat_rgb[:, 0] << 16) | (flat_rgb[:, 1] << 8) | flat_rgb[:, 2]
+    codes = codes.reshape(height, width)
+    contours_data: dict[str, list[list[list[float]]]] = {}
+    for code in np.unique(codes[solid]):
+        contour_list = _extract_mask_contours(solid & (codes == code), height, pixel_scale)
+        if contour_list:
+            contours_data[_rgb_code_to_hex(int(code))] = contour_list
+    return contours_data
+
+
 def _resolve_kernel_choice() -> str:
     """Return the requested kernel id: 'shapely_v1', 'rasterio_manifold3d', or 'auto'.
 
@@ -1427,12 +1518,9 @@ def generate_segmented_glb(
         _t = time.perf_counter()
         height, width = matched_rgb.shape[:2]
         total_pixels = width * height
-        SIMPLIFY_THRESHOLD = 500_000
-        TARGET_PIXELS = 300_000
+        scale_factor = _resolve_glb_downsample_factor(total_pixels)
 
-        if total_pixels > SIMPLIFY_THRESHOLD:
-            scale_factor = int(np.sqrt(total_pixels / TARGET_PIXELS))
-            scale_factor = max(2, min(scale_factor, 16))
+        if scale_factor > 1:
             _log.debug(f"Downsampling by {scale_factor}x")
 
             new_h = height // scale_factor
@@ -1661,18 +1749,9 @@ def generate_segmented_glb(
                     scene.add_geometry(mesh, node_name=f"color_{hex_name}")
 
             # Reuse same color_match for contour extraction
-            mask_u8 = color_match.astype(np.uint8) * 255
-            cv_contours, _ = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if cv_contours:
-                color_contour_list: list[list[list[float]]] = []
-                for cnt in cv_contours:
-                    if len(cnt) < 3:
-                        continue
-                    pts = cnt.squeeze(1).astype(float)
-                    world_pts = [[float(px * pixel_scale), float((height - py) * pixel_scale)] for px, py in pts]
-                    color_contour_list.append(world_pts)
-                if color_contour_list:
-                    contours_data[hex_name] = color_contour_list
+            color_contour_list = _extract_mask_contours(color_match, height, pixel_scale)
+            if color_contour_list:
+                contours_data[hex_name] = color_contour_list
             color_match_flat[idxs] = False
 
         if material_matrix is not None:

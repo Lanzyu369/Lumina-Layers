@@ -49,6 +49,7 @@ from config import OUTPUT_DIR
 from core.converter import generate_segmented_glb
 from core.errors import CoreError
 from core.naming import generate_segmented_glb_filename
+from core.pipeline.s11_glb_preview import extract_color_contours
 from core.pipeline.vector_glb_preview import (
     build_vector_quick_preview_parts,
     coerce_preview_rgba,
@@ -274,6 +275,15 @@ def _build_preview_glb(
             )
             analytic_path = None
         if analytic_path:
+            # The analytic renderer skips generate_segmented_glb, so publish
+            # the same canvas-space contours for highlights and loop placement.
+            # 解析式渲染器不经过分段 GLB，这里补充同一画布坐标的轮廓，
+            # 供颜色高亮与挂环定位使用。
+            cache["color_contours"] = extract_color_contours(
+                cache.get("matched_rgb"),
+                cache.get("mask_solid"),
+                cache.get("target_width_mm"),
+            )
             return analytic_path, "vector_analytic"
 
     return (
