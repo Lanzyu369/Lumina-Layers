@@ -164,7 +164,7 @@ def test_settings_round_trip_generated_file_directory() -> None:
                 ]
                 == ""
             )
-            folder = "D:\Prints\Lumina 输出"
+            folder = "D:\\Prints\\Lumina 输出"
             post_resp = client.post(
                 "/api/system/settings",
                 json={"generated_file_directory": folder},
