@@ -16,7 +16,7 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
-    version: "2026-09-25",
+    version: "2026-09-26",
     title: {
       zh: "Lumina Layers — 9 月更新速览",
       en: "Lumina Layers — September updates",
@@ -35,6 +35,12 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
       items: [{
         zh: "修复换色、撤销后点击生成偶尔提示“画面内容已变化，请刷新后重试”而无法生成的问题，现在会自动同步后继续生成。",
         en: "Fixed an occasional “content changed, please refresh” error when generating after replacing colors or undoing. Generation now syncs automatically and continues.",
+      }, {
+        zh: "拼图模式生成 3MF 时会同时处理多块拼图，减少块数较多时的等待时间。",
+        en: "Puzzle 3MF generation now processes several pieces at once, reducing waits for larger puzzles.",
+      }, {
+        zh: "批量转换现在可以同时处理多张图片，结果和排盘仍按上传顺序排列。",
+        en: "Batch conversion now processes several images at once while keeping results and plate placement in upload order.",
       }],
     }],
   },

@@ -51,11 +51,14 @@ export function canPickGeneratedFileDirectory(): boolean {
 }
 
 /**
- * Open the native folder picker; returns the chosen folder or null.
- * 打开系统文件夹选择器；返回选中的文件夹，取消或失败时返回 null。
+ * Open the native folder picker; return null on cancel and throw on failure.
+ * 打开系统文件夹选择器；取消时返回 null，失败时抛错供界面显示提示。
  */
 export async function pickGeneratedFileDirectory(): Promise<string | null> {
   const result = await electronAPI?.pickGeneratedFileDirectory?.();
+  if (result?.status === "error") {
+    throw new Error(result.code ?? "dialog-failed");
+  }
   return result?.status === "selected" && result.directory ? result.directory : null;
 }
 
