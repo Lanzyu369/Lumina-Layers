@@ -717,7 +717,8 @@ def _build_combined_model_settings_bytes(
         object_node.set("id", str(root_object_id))
         _set_object_metadata(object_node, "name", piece_package.source.label)
         _set_object_metadata(object_node, "extruder", _get_object_metadata(object_node, "extruder") or "1")
-        for part_node in object_node.findall("part"):
+        part_nodes = object_node.findall("part")
+        for part_node in part_nodes:
             try:
                 original_part_id = int(part_node.get("id", "0"))
             except ValueError as exc:
@@ -733,6 +734,12 @@ def _build_combined_model_settings_bytes(
                 fallback_extruder=_get_part_metadata(part_node, "extruder"),
             )
             _set_part_metadata(part_node, "extruder", str(resolved_extruder))
+        if len(part_nodes) == 1:
+            # Slicers promote a single volume to object-level settings.
+            # Keep the remapped global filament instead of the local default.
+            _set_object_metadata(
+                object_node, "extruder", _get_part_metadata(part_nodes[0], "extruder") or "1",
+            )
         config.append(object_node)
 
     plate_node = ET.SubElement(config, "plate")

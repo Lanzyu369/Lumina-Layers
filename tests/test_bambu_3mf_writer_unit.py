@@ -26,6 +26,40 @@ from utils import bambu_3mf_writer as writer_module
 from utils.bambu_3mf_writer import BambuStudio3MFWriter, load_printer_template
 
 
+@pytest.mark.parametrize("material_index", [0, 3])
+@pytest.mark.parametrize("slicer,printer_id", [
+    ("BambuStudio", "bambu-h2d"),
+    ("OrcaSlicer", "bambu-h2d"),
+    ("SnapmakerOrca", "snapmaker-u1"),
+])
+def test_single_volume_object_uses_resolved_material_extruder(
+    tmp_path: Path, material_index: int, slicer: str, printer_id: str,
+) -> None:
+    """A single part must keep its filament after slicer volume promotion."""
+
+    names = ["Blue", "Red", "Yellow", "White"]
+    colors = [(47, 49, 129), (182, 61, 68), (248, 224, 65), (255, 254, 252)]
+    output = tmp_path / "single-volume.3mf"
+    writer = BambuStudio3MFWriter(
+        str(output), printer_id=printer_id, slicer=slicer,
+        enable_base_layer_height_modifier=False,
+        enable_wipe_tower_auto_placement=False,
+    )
+    writer._set_project_palette(names, {i: color for i, color in enumerate(colors)})
+    mesh = trimesh.creation.box(extents=(10, 10, 2))
+    mesh.metadata["bambu_material_name"] = names[material_index]
+    writer.add_mesh(mesh, "Backing", colors[material_index])
+    writer.export()
+
+    with zipfile.ZipFile(output) as archive:
+        settings = ET.fromstring(archive.read("Metadata/model_settings.config"))
+    obj = settings.find("object")
+    assert obj is not None
+    assert len(obj.findall("part")) == 1
+    assert _metadata_values(obj)["extruder"] == str(material_index + 1)
+    assert _metadata_values(obj.find("part"))["extruder"] == str(material_index + 1)
+
+
 class _FakeCustomPart:
     def __init__(self, path: str, content_type: str, data: bytes):
         self.path = path

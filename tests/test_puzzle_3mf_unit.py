@@ -10,6 +10,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 import trimesh
+import pytest
 
 from core.puzzle_3mf import (
     PuzzlePiece3MFSource,
@@ -311,6 +312,54 @@ def test_assemble_puzzle_3mf_restores_global_slot_palette_for_sparse_piece() -> 
         "Slot 1 (White)": "0",
         "Slot 3 (Green)": "2",
     }
+
+
+@pytest.mark.parametrize("material_index", [1, 2, 3])
+@pytest.mark.parametrize("slicer,printer_id", [
+    ("BambuStudio", "bambu-h2d"),
+    ("OrcaSlicer", "bambu-h2d"),
+    ("SnapmakerOrca", "snapmaker-u1"),
+])
+def test_single_material_piece_object_uses_its_global_extruder(
+    tmp_path: Path, material_index: int, slicer: str, printer_id: str,
+) -> None:
+    """Slicers must retain the material when collapsing a one-volume object."""
+
+    slot_names = ["赛纳PLA蓝色", "纵维立方PLA红色", "赛纳PLA黄色", "Bambu PLA Basic 玉石白"]
+    palette = [(47, 49, 129), (182, 61, 68), (248, 224, 65), (255, 254, 252)]
+    material_name = slot_names[material_index]
+    piece_path = tmp_path / "single-material-piece.3mf"
+    output_path = tmp_path / "puzzle.3mf"
+    writer = BambuStudio3MFWriter(
+        str(piece_path), printer_id=printer_id, slicer=slicer,
+        enable_base_layer_height_modifier=False,
+        enable_wipe_tower_auto_placement=False,
+    )
+    writer.add_mesh(trimesh.creation.box(extents=(10, 10, 2)), material_name, palette[material_index])
+    writer.export()
+
+    assemble_puzzle_3mf(
+        piece_sources=[PuzzlePiece3MFSource(
+            label="C11", threemf_path=str(piece_path), offset_x_mm=10, offset_y_mm=10,
+        )],
+        output_path=str(output_path),
+        preview_colors={index: (*rgb, 255) for index, rgb in enumerate(palette)},
+        slot_names=slot_names, printer_id=printer_id, slicer=slicer,
+        enable_wipe_tower_auto_placement=False,
+    )
+    with zipfile.ZipFile(output_path) as archive:
+        settings = ET.fromstring(archive.read("Metadata/model_settings.config"))
+        meshes = ET.fromstring(archive.read("3D/Objects/object_1.model"))
+    obj = settings.find("object")
+    assert obj is not None
+    parts = obj.findall("part")
+    assert len(parts) == 1
+    expected_extruder = str(material_index + 1)
+    assert _metadata_value(parts[0], "name") == material_name
+    assert _metadata_value(parts[0], "extruder") == expected_extruder
+    assert _metadata_value(obj, "extruder") == expected_extruder
+    mesh = meshes.find("m:resources/m:object", _NS)
+    assert mesh is not None and mesh.get("pindex") == str(material_index)
 
 
 def test_assemble_puzzle_3mf_rebuilds_flush_arrays_for_global_palette() -> None:
