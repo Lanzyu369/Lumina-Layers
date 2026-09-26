@@ -49,6 +49,7 @@ import WikiTooltip from "./ui/WikiTooltip";
 import SlicerLogo from "./slicer/SlicerLogo";
 import MachineSelectionDialog from "./settings/MachineSelectionDialog";
 import BuildPlateSelector from "./settings/BuildPlateSelector";
+import GeneratedFileDirectorySetting from "./settings/GeneratedFileDirectorySetting";
 import SvgHoleCompensationSettings from "./sections/SvgHoleCompensationSettings";
 import SettingsCategoryNav, {
   type SettingsCategory,
@@ -954,6 +955,8 @@ export default function SettingsPanel() {
                   ariaLabel={t("settings.preserve_upload_filename_heading")}
                 />
               </div>
+
+              <GeneratedFileDirectorySetting />
 
               <div className="flex items-start justify-between gap-4 border-t border-slate-200/60 pt-5 dark:border-slate-700/60">
                 <div className="min-w-0">

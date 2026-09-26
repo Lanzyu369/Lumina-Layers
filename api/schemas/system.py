@@ -112,6 +112,7 @@ class UserSettings(BaseModel):
     svg_pixels_per_mm: float = Field(default=10.0, ge=2.0, le=50.0)
     material_delta_e00_tolerance: float = Field(default=0.5, ge=0.0, le=5.0)
     auto_replace_gradient_banding: StrictBool = False
+    generated_file_directory: str = Field(default="", max_length=1024)
 
 
 class UserSettingsResponse(BaseModel):

@@ -2823,6 +2823,30 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "开启后，普通单件生成会把“海报.png”下载为“海报.3mf”。默认关闭；批量、拼图和大画幅继续使用原有名称。",
     en: "When enabled, a normal single-item export downloads “poster.png” as “poster.3mf”. It is off by default; batch, puzzle, and large-format exports keep their existing names.",
   },
+  "settings.generated_file_directory_heading": {
+    zh: "生成文件默认保存位置",
+    en: "Default save location",
+  },
+  "settings.generated_file_directory_description": {
+    zh: "下载 3MF、导出配方卡等保存对话框会默认打开这个文件夹，仍可在对话框里改选其他位置。",
+    en: "Save dialogs for 3MF downloads and recipe exports open in this folder by default; you can still pick another location in the dialog.",
+  },
+  "settings.generated_file_directory_system_default": {
+    zh: "系统默认位置",
+    en: "System default",
+  },
+  "settings.generated_file_directory_choose": {
+    zh: "选择文件夹",
+    en: "Choose folder",
+  },
+  "settings.generated_file_directory_reset": {
+    zh: "恢复默认",
+    en: "Reset",
+  },
+  "settings.generated_file_directory_pick_failed": {
+    zh: "无法打开文件夹选择器，请重试。",
+    en: "Could not open the folder picker. Please try again.",
+  },
   "settings.cache": {
     zh: "缓存管理",
     en: "Cache Management",
@@ -6672,6 +6696,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   slicer_generate_download: {
     zh: "生成并下载",
     en: "Generate & Download",
+  },
+  slicer_generate_download_3mf: {
+    zh: "生成并下载 3MF",
+    en: "Generate & Download 3MF",
   },
   slicer_download_failed: {
     zh: "下载文件暂时无法读取，请重新生成后再试。",

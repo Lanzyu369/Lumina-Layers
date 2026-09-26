@@ -147,6 +147,10 @@ import {
 } from "../../utils/imageRotation";
 import { resolveVectorPreviewRenderer } from "../../utils/vectorPreviewRenderer";
 import {
+  isGenerateRevisionConflict,
+  newestEditorContentRevision,
+} from "./editorRevision";
+import {
   canCommitPreviewResponse,
   capturePreviewCommitGuard,
   type PreviewCommitGuard,
@@ -2233,8 +2237,10 @@ function rememberConfirmedSelectionDocument(
   confirmedSelectionRevisions.set(sessionId, {
     selectionRevision: document.selection_revision,
     contentRevision: document.content_revision,
-    editorContentRevision:
-      document.editor_content_revision ?? known?.editorContentRevision,
+    editorContentRevision: newestEditorContentRevision(
+      document.editor_content_revision,
+      known?.editorContentRevision,
+    ),
   });
   return true;
 }
@@ -4503,6 +4509,30 @@ let _vectorRendererRequestQueue: Promise<void> = Promise.resolve();
 let _generateRequestSequence = 0;
 let _batchRequestSequence = 0;
 let _activeFilenameEligibleGenerateSequence: number | null = null;
+/** True while a generate retry after a revision conflict is running. 版本冲突重试进行中。 */
+let _generateRevisionRetryActive = false;
+
+/**
+ * Re-read the authoritative editor content revision from the backend.
+ * 从后端重新读取权威编辑内容版本。
+ *
+ * @returns Whether a finite revision was confirmed for the session.
+ *   (是否为该 session 确认到有效版本)
+ */
+async function refreshConfirmedEditorContentRevision(
+  sessionId: string,
+): Promise<boolean> {
+  try {
+    const document = await apiGetEditorSelection(sessionId);
+    const revision = document.editor_content_revision;
+    if (typeof revision !== "number" || !Number.isFinite(revision)) return false;
+    if (useConverterStore.getState().sessionId !== sessionId) return false;
+    rememberConfirmedEditorContentRevision(sessionId, revision);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // ========== Preview AbortController ==========
 
@@ -8016,6 +8046,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
                 threemfDiskPath: null,
                 downloadUrl: null,
                 ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+                ...dynamicMaterialResultState(response),
                 ...historyFlagsFromResponse(response),
                 ...selectionUpdatesFromResponse(
                   current,
@@ -8251,6 +8282,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           !isCurrentReplacementPreviewCommit(_get(), previewCommit)
         ) return;
         set({
+          ...editorCommitStateFromResponse(response),
           ...buildHistoryRestoreState(response),
           historyBusy: false,
           replacePreviewLoading: false,
@@ -8327,6 +8359,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           !isCurrentReplacementPreviewCommit(_get(), previewCommit)
         ) return;
         set({
+          ...editorCommitStateFromResponse(response),
           ...buildHistoryRestoreState(response),
           historyBusy: false,
           replacePreviewLoading: false,
@@ -10168,11 +10201,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           enable_wipe_tower_auto_placement:
             generateSettings.enableWipeTowerAutoPlacement,
           use_cached_matched_rgb: state.regionReplacementCount > 0,
-          editor_content_revision:
-            state.selectionDocument?.editor_content_revision ??
-            confirmedSelectionRevisions.get(sessionId)?.editorContentRevision ??
-            state.selectionDocument?.content_revision ??
-            undefined,
+          // Never fall back to the visible-region content_revision: it is a
+          // different counter and would always mismatch on the server.
+          // 不能回退到可见区域 content_revision，它是另一个计数器。
+          editor_content_revision: newestEditorContentRevision(
+            state.selectionDocument?.editor_content_revision,
+            confirmedSelectionRevisions.get(sessionId)?.editorContentRevision,
+          ),
           selection_revision:
             state.selectionDocument?.selection_revision ?? undefined,
           ...(state.modelSurfaceEnabled &&
@@ -10370,6 +10405,25 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       } catch (err) {
         if (shouldIgnoreStaleGenerateResponse()) {
           return null;
+        }
+        // The editor revision this client sent was behind the server. All
+        // pending edits were already awaited above, so re-read the committed
+        // revision once and retry; a second conflict is surfaced to the user.
+        // 客户端版本落后于服务端：前面已等待所有未完成编辑，这里重读一次
+        // 已提交版本并重试；再次冲突才提示用户。
+        if (!_generateRevisionRetryActive && isGenerateRevisionConflict(err)) {
+          const refreshed = await refreshConfirmedEditorContentRevision(sessionId);
+          if (refreshed && _get().sessionId === sessionId) {
+            _clientLog("generate: retry after editor revision refresh", {
+              session_id: sessionId,
+            });
+            _generateRevisionRetryActive = true;
+            try {
+              return await _get().submitGenerate();
+            } finally {
+              _generateRevisionRetryActive = false;
+            }
+          }
         }
         set({
           isGenerating: false,
