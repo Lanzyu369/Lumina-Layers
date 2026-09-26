@@ -159,13 +159,58 @@ export function createKeychainRingGeometry(
   return geometry;
 }
 
-function contourTopWithinBand(
+/**
+ * Distance from an unrotated loop's bottom edge to its hole, matching the
+ * backend `keychain_loop_hole_clearance`. The loop may sink this far into the
+ * body before the hole overlaps it.
+ * 未旋转挂环底边到挂孔最低点的距离，与后端 `keychain_loop_hole_clearance`
+ * 一致；挂环向本体内嵌入超过该深度时挂孔会与本体重叠。
+ */
+export function keychainLoopHoleClearance(
+  width: number,
+  length: number,
+  hole: number,
+): number {
+  const circleRadius = width / 2;
+  const rectHeight = Math.max(0.2, length - circleRadius);
+  const holeRadius = Math.min(hole / 2, circleRadius * 0.8, rectHeight * 0.8);
+  return Math.max(0, rectHeight - holeRadius);
+}
+
+interface ContourEdge {
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+}
+
+/** Highest edge Y crossing `x`, or -Infinity when no edge covers it. */
+function topProfileAt(edges: ContourEdge[], x: number): number {
+  let top = Number.NEGATIVE_INFINITY;
+  for (const edge of edges) {
+    const deltaX = edge.endX - edge.startX;
+    if (Math.abs(deltaX) <= Number.EPSILON) {
+      if (Math.abs(x - edge.startX) <= 1e-9) {
+        top = Math.max(top, edge.startY, edge.endY);
+      }
+      continue;
+    }
+    const ratio = (x - edge.startX) / deltaX;
+    if (ratio >= -1e-9 && ratio <= 1 + 1e-9) {
+      const clamped = Math.min(1, Math.max(0, ratio));
+      top = Math.max(top, edge.startY + clamped * (edge.endY - edge.startY));
+    }
+  }
+  return top;
+}
+
+function contourTopRangeWithinBand(
   contours: Record<string, number[][][]> | undefined,
   contourCanvasBounds: ContourCanvasBounds | null | undefined,
   centerX: number,
   contactWidth: number,
   contourToDisplayPoint?: ContourToDisplayPoint,
-): number | null {
+): { lowest: number; highest: number } | null {
   if (!contours || !contourCanvasBounds || contactWidth <= 0) {
     return null;
   }
@@ -195,13 +240,8 @@ function contourTopWithinBand(
   };
   const bandMinX = centerX - contactWidth / 2;
   const bandMaxX = centerX + contactWidth / 2;
-  let topY = Number.NEGATIVE_INFINITY;
-
-  const includePoint = (x: number, y: number) => {
-    if (x >= bandMinX && x <= bandMaxX) {
-      topY = Math.max(topY, y);
-    }
-  };
+  const edges: ContourEdge[] = [];
+  const sampleXs = new Set<number>([bandMinX, bandMaxX]);
 
   for (const polygon of polygons) {
     if (polygon.length < 2) {
@@ -222,23 +262,31 @@ function contourTopWithinBand(
       }
       const start = mapPoint(startPoint);
       const end = mapPoint(endPoint);
-      includePoint(start.x, start.y);
-      includePoint(end.x, end.y);
-
-      const deltaX = end.x - start.x;
-      if (Math.abs(deltaX) <= Number.EPSILON) {
+      if (Math.max(start.x, end.x) < bandMinX || Math.min(start.x, end.x) > bandMaxX) {
         continue;
       }
-      for (const boundaryX of [bandMinX, bandMaxX]) {
-        const ratio = (boundaryX - start.x) / deltaX;
-        if (ratio >= 0 && ratio <= 1) {
-          topY = Math.max(topY, start.y + ratio * (end.y - start.y));
+      edges.push({ startX: start.x, startY: start.y, endX: end.x, endY: end.y });
+      for (const vertexX of [start.x, end.x]) {
+        if (vertexX >= bandMinX && vertexX <= bandMaxX) {
+          sampleXs.add(vertexX);
         }
       }
     }
   }
 
-  return Number.isFinite(topY) ? topY : null;
+  // The top profile is piecewise linear between contour vertices, so the band
+  // ends plus every vertex inside the band contain both extremes.
+  let lowest = Number.POSITIVE_INFINITY;
+  let highest = Number.NEGATIVE_INFINITY;
+  for (const sampleX of sampleXs) {
+    const top = topProfileAt(edges, sampleX);
+    if (Number.isFinite(top)) {
+      lowest = Math.min(lowest, top);
+      highest = Math.max(highest, top);
+    }
+  }
+
+  return Number.isFinite(highest) ? { lowest, highest } : null;
 }
 
 /**
@@ -246,7 +294,12 @@ function contourTopWithinBand(
  * 根据模型边界和偏移量计算钥匙扣挂孔的 3D 位置。
  *
  * Anchors top-center loops to the local contour when contour data is available.
- * 有轮廓数据时，顶部居中挂环会锚定到接触带下方的局部轮廓。
+ * The loop bottom sits at the lowest contour point under the contact band, so
+ * sloped edges stay connected across the band, but never sinks further than
+ * the hole clearance below the highest point, so the hole stays outside.
+ * 有轮廓数据时，顶部居中挂环会锚定到接触带下方的局部轮廓：底边落在接触带内
+ * 轮廓最低点，斜边也能整段相连；但相对最高点的下沉不超过挂孔余量，挂孔始终
+ * 在本体之外。
  *
  * @param preset - Position preset. Local contour protection applies to top-center.
  *   (位置预设；局部轮廓保护用于顶部居中)
@@ -256,6 +309,8 @@ function contourTopWithinBand(
  * @param contourToDisplayPoint - Optional live resize transform applied to
  *   contour points; modelBounds must already be in display space.
  *   (可选的实时缩放变换，作用于轮廓点；modelBounds 需已为显示空间)
+ * @param holeClearance - Maximum sink depth below the highest contour point,
+ *   see `keychainLoopHoleClearance`. (相对轮廓最高点的最大下沉深度)
  * @returns Computed {x, y} position in mm. (计算后的 {x, y} 位置，毫米)
  */
 export function computeLoopPosition(
@@ -267,6 +322,7 @@ export function computeLoopPosition(
   contactWidth = 0,
   contourCanvasBounds?: ContourCanvasBounds | null,
   contourToDisplayPoint?: ContourToDisplayPoint,
+  holeClearance = Number.POSITIVE_INFINITY,
 ): { x: number; y: number } {
   return computeLoopPlacement(
     preset,
@@ -277,6 +333,7 @@ export function computeLoopPosition(
     contactWidth,
     contourCanvasBounds,
     contourToDisplayPoint,
+    holeClearance,
   ).position;
 }
 
@@ -288,12 +345,13 @@ function computeLoopPlacement(
   contours: Record<string, number[][][]> | undefined,
   contactWidth: number,
   contourCanvasBounds: ContourCanvasBounds | null | undefined,
-  contourToDisplayPoint?: ContourToDisplayPoint,
+  contourToDisplayPoint: ContourToDisplayPoint | undefined,
+  holeClearance: number,
 ): { position: { x: number; y: number }; usesLocalContour: boolean } {
   const baseX = (modelBounds.minX + modelBounds.maxX) / 2;
   const x = baseX + offsetX;
-  const localTop = preset === "top-center"
-    ? contourTopWithinBand(
+  const topRange = preset === "top-center"
+    ? contourTopRangeWithinBand(
       contours,
       contourCanvasBounds,
       x,
@@ -301,9 +359,13 @@ function computeLoopPlacement(
       contourToDisplayPoint,
     )
     : null;
-  if (localTop !== null) {
+  if (topRange !== null) {
+    const anchorY = Math.max(
+      topRange.lowest,
+      topRange.highest - Math.max(0, holeClearance),
+    );
     return {
-      position: { x, y: localTop + Math.max(0, offsetY) },
+      position: { x, y: anchorY + Math.max(0, offsetY) },
       usesLocalContour: true,
     };
   }
@@ -382,6 +444,7 @@ function KeychainRing3D({
       width,
       contourCanvasBounds,
       contourToDisplayPoint,
+      keychainLoopHoleClearance(width, length, hole),
     );
   }, [
     positionPreset,
@@ -391,6 +454,8 @@ function KeychainRing3D({
     angle,
     contours,
     width,
+    length,
+    hole,
     contourCanvasBounds,
     contourToDisplayPoint,
   ]);

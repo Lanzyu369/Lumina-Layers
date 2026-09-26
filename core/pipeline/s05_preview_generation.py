@@ -14,6 +14,10 @@ from PIL import Image, ImageDraw
 from typing import Optional, Dict, Tuple
 
 from api.structured_logging import get_logger
+from core.geometry_utils import (
+    keychain_loop_hole_clearance,
+    resolve_keychain_contact_anchor_y,
+)
 from core.pipeline.preview_color_utils import (
     build_material_preview_warning_extra,
     resolve_material_preview,
@@ -22,15 +26,15 @@ from core.pipeline.preview_color_utils import (
 _log = get_logger(__name__)
 
 
-def _top_edge_for_contact_band(
+def _top_edge_range_for_contact_band(
     mask_solid: np.ndarray,
     center_x_mm: float,
     contact_width_mm: float,
     target_h: int,
     pixel_scale: float,
-) -> float | None:
-    """Return the solid top edge under a horizontal loop contact band.
-    返回挂环水平接触带下方的实体上边缘。
+) -> tuple[float, float] | None:
+    """Return the lowest and highest solid top edge under a loop contact band.
+    返回挂环水平接触带下方实体上边缘的最低点和最高点。
     """
     if pixel_scale <= 0 or contact_width_mm <= 0:
         return None
@@ -44,14 +48,17 @@ def _top_edge_for_contact_band(
     if min_col > max_col:
         return None
 
-    contact_rows = np.any(mask_solid[:, min_col:max_col + 1], axis=1)
-    if not np.any(contact_rows):
+    band = mask_solid[:, min_col:max_col + 1]
+    solid_columns = np.any(band, axis=0)
+    if not np.any(solid_columns):
         return None
 
-    top_row = int(np.flatnonzero(contact_rows)[0])
+    top_rows = np.argmax(band, axis=0)[solid_columns]
     # A solid pixel row occupies one full cell, so the outward cell edge is
     # one pixel above the row's lower Y coordinate.
-    return (target_h - top_row) * pixel_scale
+    lowest_top = (target_h - int(np.max(top_rows))) * pixel_scale
+    highest_top = (target_h - int(np.min(top_rows))) * pixel_scale
+    return lowest_top, highest_top
 
 
 def _calculate_loop_position(
@@ -63,15 +70,19 @@ def _calculate_loop_position(
     target_h: int,
     pixel_scale: float,
     contact_width_mm: float = 0.0,
+    hole_clearance_mm: float = float("inf"),
 ) -> tuple:
     """Calculate keychain loop attach position based on preset and offset.
     根据位置预设和偏移量计算钥匙扣挂孔的吸附位置。
 
     Extracts model bounds from mask_solid and selects a preset snap point. When
     a top-center contact width is supplied, the loop follows the local contour
-    at its final X position and inward Y offsets stop at that contour.
+    at its final X position: its bottom sits at the lowest contour point under
+    the band (capped by the hole clearance) so sloped edges stay connected,
+    and inward Y offsets stop there.
     从 mask_solid 提取模型边界并选择预设吸附点；顶部居中且提供接触宽度时，
-    挂环跟随最终 X 位置的局部轮廓，向内的 Y 偏移会停在轮廓边缘。
+    挂环跟随最终 X 位置的局部轮廓：底边落在接触带下方轮廓的最低点（受挂孔
+    余量限制），保证斜边仍整段相连，向内的 Y 偏移停在该位置。
 
     Args:
         position_preset (str): Preset name for snap position.
@@ -88,6 +99,9 @@ def _calculate_loop_position(
         contact_width_mm (float): Width used to keep a top-center loop outside
             the local contour. Zero preserves the legacy bounds-only behavior.
             (用于防止顶部居中挂环侵入局部轮廓的接触宽度；0 保留旧边界行为)
+        hole_clearance_mm (float): Maximum depth the loop may sink below the
+            highest contour point before its hole meets the body.
+            (挂孔压入本体前，挂环相对轮廓最高点可下沉的最大深度)
 
     Returns:
         tuple[float, float]: (attach_x_mm, attach_y_mm) position in mm.
@@ -129,15 +143,18 @@ def _calculate_loop_position(
 
     if preset == "top-center":
         requested_x = center_x_mm + offset_x
-        local_top = _top_edge_for_contact_band(
+        top_range = _top_edge_range_for_contact_band(
             mask_solid,
             requested_x,
             contact_width_mm,
             target_h,
             pixel_scale,
         )
-        if local_top is not None:
-            return (requested_x, local_top + max(0.0, offset_y))
+        if top_range is not None:
+            anchor_y = resolve_keychain_contact_anchor_y(
+                *top_range, hole_clearance_mm
+            )
+            return (requested_x, anchor_y + max(0.0, offset_y))
         base_x = center_x_mm
         base_y = max_y_mm
     elif preset == "top-left":
@@ -256,6 +273,9 @@ def _calculate_loop_info(
                 loop_width
                 if effective_preset == "top-center" and abs(angle_deg) <= 1e-9
                 else 0.0
+            ),
+            hole_clearance_mm=keychain_loop_hole_clearance(
+                loop_width, loop_length, loop_hole
             ),
         )
         # Convert mm back to pixel coords for color sampling

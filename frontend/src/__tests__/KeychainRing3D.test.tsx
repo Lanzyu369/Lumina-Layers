@@ -6,6 +6,7 @@ import {
   default as KeychainRing3D,
   createKeychainRingGeometry,
   computeLoopPosition,
+  keychainLoopHoleClearance,
   resetKeychainRingGeometryDisposeForTests,
 } from "../components/KeychainRing3D";
 import { useConverterStore } from "../stores/converter";
@@ -604,6 +605,54 @@ describe("computeLoopPosition", () => {
     );
 
     expect(pos).toEqual({ x: 0, y: 10 });
+  });
+
+  it.each([0, -35])(
+    "sinks to the lowest point of a sloped edge so the loop stays connected (offset %s)",
+    (offsetY) => {
+      // Reviewer repro: 90 mm body whose top falls 0.75 mm per mm to the right.
+      const contours = {
+        body: [
+          [[0, 0], [90, 0], [90, 22.5], [0, 90]],
+        ],
+      };
+      const bounds = { minX: -45, maxX: 45, minY: -45, maxY: 45 };
+
+      const pos = computeLoopPosition(
+        "top-center",
+        bounds,
+        0,
+        offsetY,
+        contours,
+        7,
+        bounds,
+        undefined,
+        keychainLoopHoleClearance(7, 13.5, 2.5),
+      );
+
+      // Band x in [41.5, 48.5]; lowest top is 90 - 0.75 * 48.5 = 53.625.
+      expect(pos.x).toBe(0);
+      expect(pos.y).toBeCloseTo(53.625 - 45, 9);
+    },
+  );
+
+  it("stops sinking on a steep edge before the hole reaches the body", () => {
+    const contours = {
+      body: [
+        [[0, 0], [20, 0], [20, 10], [10, 40], [0, 40]],
+      ],
+    };
+    const bounds = { minX: -10, maxX: 10, minY: -20, maxY: 20 };
+    const clearance = keychainLoopHoleClearance(7, 13.5, 2.5);
+
+    const pos = computeLoopPosition(
+      "top-center", bounds, 0, 0, contours, 7, bounds, undefined, clearance,
+    );
+
+    // Band tops span 40 .. 29.5, deeper than the clearance, so the loop stops
+    // one clearance below the highest point.
+    expect(clearance).toBeCloseTo(8.75, 9);
+    expect(pos.y).toBeCloseTo(40 - clearance - 20, 9);
   });
 
   it("works with asymmetric bounds", () => {

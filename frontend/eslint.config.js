@@ -178,6 +178,7 @@ export default tseslint.config(
             'createKeychainRingGeometry',
             'resetKeychainRingGeometryDisposeForTests',
             'computeLoopPosition',
+            'keychainLoopHoleClearance',
             'rasterizeMeshToGrid',
             'rasterizeMeshesToGrid',
             'dilateGrid',
