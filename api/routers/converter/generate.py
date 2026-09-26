@@ -4744,6 +4744,51 @@ async def convert_generate_large_format(
 # Batch-mode structured logging helper (R7 §5: log failures must not propagate)
 # ---------------------------------------------------------------------------
 
+def _batch_intermediate_paths(worker_results: list[dict | BaseException]) -> list[Path]:
+    """Collect every returned artifact, including outputs of failed items."""
+    paths: list[Path] = []
+    for result in worker_results:
+        if isinstance(result, dict):
+            for key in ("threemf_path", "preview_glb_path", "metadata_sidecar_path"):
+                path = result.get(key)
+                if path:
+                    paths.append(Path(path))
+    return paths
+
+
+async def _run_batch_uploads(
+    uploads: list[UploadFile],
+    *,
+    pool: WorkerPoolManager,
+    worker_args: tuple[object, ...],
+    batch_run_id: str,
+) -> list[dict | BaseException]:
+    """Run one bounded group, keeping inputs alive until its workers finish.
+    并行处理一组上传文件，保留输入直到工作进程完成，并清理取消后的输出。
+    """
+
+    async def convert_upload(upload: UploadFile) -> dict:
+        temp_path: str | None = None
+        try:
+            temp_path = await ensure_png_tempfile(upload)
+            return await pool.submit(worker_batch_convert_item, temp_path, *worker_args)
+        finally:
+            _remove_temp_path(temp_path)
+
+    pending = asyncio.gather(
+        *(convert_upload(upload) for upload in uploads),
+        return_exceptions=True,
+    )
+    try:
+        return await asyncio.shield(pending)
+    except asyncio.CancelledError:
+        # Cancelling the request cannot stop running process-pool work.
+        # Drain this group before deleting inputs, outputs, or the shared LUT.
+        finished = await pending
+        _cleanup_intermediates(_batch_intermediate_paths(finished), batch_run_id)
+        raise
+
+
 def _cleanup_intermediates(paths: list[Path], batch_run_id: str) -> None:
     """Best-effort delete intermediate per-image files after successful merge.
 
@@ -5208,171 +5253,128 @@ async def convert_batch(
     results: list[BatchItemResult] = []
     successful_entries: list[dict] = []
 
-    # Submit each batch item sequentially to the process pool
-    for upload_file in images:
-        filename = upload_file.filename or "unknown"
-        temp_path: str | None = None
-        try:
-            # 1. File upload (I/O, main thread)
-            temp_path = await ensure_png_tempfile(upload_file)
-
-            # 2. CPU computation offloaded to process pool (only paths and scalars)
-            result = await pool.submit(
-                worker_batch_convert_item,
-                temp_path,
-                lut_path,
-                target_width_mm,
-                spacer_thick,
-                structure_mode,
-                color_mode,
-                modeling_mode,
-                color_layers,
-                layer_height_mm,
-                quantize_colors,
-                enable_cleanup,
-                artifact_prefix,
-                hue_weight,
-                chroma_gate,
-                enable_relief,
-                resolved_height_mode,
-                parsed_color_height_map,
-                heightmap_max_height,
-                svg_pixels_per_mm,
-                printer_id,
-                slicer,
-                nozzle_size,
-                enable_base_layer_height_modifier,
-                model_enable,
-                model_only,
-                model_threshold,
-                model_margin,
-                material_source,
-                selected_material_names,
-                material_layer_count,
-                material_layer_height_mm,
-                material_grid_resolution,
-                resolved_material_backing_index,
-                use_lut_constrained,
-                auto_dynamic_range,
-                high_precision_3d_preview,
-                device_profile_id,
-                build_plate_id,
-                backing_infill_density_percent,
-                material_dynamic_layer_count_enabled,
-                material_min_layer_count,
-                material_max_layer_count,
-                material_delta_e00_tolerance,
-                separate_backing,
-                enable_wipe_tower_auto_placement,
-                svg_hole_compensation_enabled,
-                svg_hole_max_area_mm2,
-                svg_hole_max_width_mm,
-                enable_coating,
-                coating_height_mm,
-            )
-
-            # 3. Result processing (main thread)
-            threemf_path: str | None = result.get("threemf_path")
-            status_msg: str = str(result.get("status_msg") or "")
-
-            if threemf_path and os.path.exists(threemf_path):
-                successful_entries.append(result)
-                results.append(
-                    BatchItemResult(
-                        filename=filename,
-                        status="success",
-                    )
-                )
-                if material_source == "material_archive":
-                    _record_material_archive_usage_safe(
-                        selected_materials=selected_material_names,
-                        color_mode=color_mode,
-                    )
-            else:
-                raw_status_msg = status_msg.strip() or "Worker result did not include a generated 3MF path"
-                _log_batch_item_failure(
-                    batch_run_id=batch_run_id,
-                    filename=filename,
-                    failure_kind="missing_output",
-                    error_type="MissingBatchOutput",
-                    error_message=raw_status_msg,
-                )
-                results.append(
-                    BatchItemResult(
-                        filename=filename,
-                        status="failed",
-                        error=BATCH_ITEM_FAILED_DETAIL,
-                    )
-                )
-        except MemoryError:
-            for prior_result in successful_entries:
-                _remove_temp_paths(
-                    [
-                        prior_result.get("threemf_path"),
-                        prior_result.get("preview_glb_path"),
-                        prior_result.get("metadata_sidecar_path"),
-                    ]
-                )
-            _remove_temp_path(temp_native_bundle_path)
-            raise
-        except BrokenProcessPool as e:
-            for prior_result in successful_entries:
-                _remove_temp_paths(
-                    [
-                        prior_result.get("threemf_path"),
-                        prior_result.get("preview_glb_path"),
-                        prior_result.get("metadata_sidecar_path"),
-                    ]
-                )
-            _remove_temp_path(temp_native_bundle_path)
-            raise HTTPException(
-                status_code=503,
-                detail=BATCH_GENERATION_FAILED_DETAIL,
-            ) from e
-        except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
-            for prior_result in successful_entries:
-                _remove_temp_paths(
-                    [
-                        prior_result.get("threemf_path"),
-                        prior_result.get("preview_glb_path"),
-                        prior_result.get("metadata_sidecar_path"),
-                    ]
-                )
-            _remove_temp_path(temp_native_bundle_path)
-            _handle_core_error(e, "batch material generation")
-        except ROUTER_HANDLED_ERRORS as e:
-            _log_batch_item_failure(
-                batch_run_id=batch_run_id,
-                filename=filename,
-                failure_kind="worker_exception",
-                error_type=type(e).__name__,
-                error_message=str(e),
-            )
-            results.append(
-                BatchItemResult(
-                    filename=filename,
-                    status="failed",
-                    error=BATCH_ITEM_FAILED_DETAIL,
-                )
-            )
-        finally:
-            _remove_temp_path(temp_path)
-
-    # --- Merge phase: layout → writers → FileRegistry → cleanup ---
-    # Build intermediates list from successful worker results
     intermediates: list[Path] = []
-    for wr in successful_entries:
-        intermediates.append(Path(wr["threemf_path"]))
-        if wr.get("preview_glb_path"):
-            intermediates.append(Path(wr["preview_glb_path"]))
-        if wr.get("metadata_sidecar_path"):
-            intermediates.append(Path(wr["metadata_sidecar_path"]))
+    worker_args: tuple[object, ...] = (
+        lut_path,
+        target_width_mm,
+        spacer_thick,
+        structure_mode,
+        color_mode,
+        modeling_mode,
+        color_layers,
+        layer_height_mm,
+        quantize_colors,
+        enable_cleanup,
+        artifact_prefix,
+        hue_weight,
+        chroma_gate,
+        enable_relief,
+        resolved_height_mode,
+        parsed_color_height_map,
+        heightmap_max_height,
+        svg_pixels_per_mm,
+        printer_id,
+        slicer,
+        nozzle_size,
+        enable_base_layer_height_modifier,
+        model_enable,
+        model_only,
+        model_threshold,
+        model_margin,
+        material_source,
+        selected_material_names,
+        material_layer_count,
+        material_layer_height_mm,
+        material_grid_resolution,
+        resolved_material_backing_index,
+        use_lut_constrained,
+        auto_dynamic_range,
+        high_precision_3d_preview,
+        device_profile_id,
+        build_plate_id,
+        backing_infill_density_percent,
+        material_dynamic_layer_count_enabled,
+        material_min_layer_count,
+        material_max_layer_count,
+        material_delta_e00_tolerance,
+        separate_backing,
+        enable_wipe_tower_auto_placement,
+        svg_hole_compensation_enabled,
+        svg_hole_max_area_mm2,
+        svg_hole_max_width_mm,
+        enable_coating,
+        coating_height_mm,
+    )
+    batch_size = max(1, int(pool.max_workers))
+    workers_completed = False
+    try:
+        for start in range(0, len(images), batch_size):
+            batch_uploads = images[start : start + batch_size]
+            outcomes = await _run_batch_uploads(
+                batch_uploads, pool=pool, worker_args=worker_args, batch_run_id=batch_run_id,
+            )
+            # Own all sibling outputs before propagating any fatal error.
+            intermediates.extend(_batch_intermediate_paths(outcomes))
+            for upload_file, result in zip(batch_uploads, outcomes):
+                filename = upload_file.filename or "unknown"
+                try:
+                    if isinstance(result, BaseException):
+                        raise result
+                    threemf_path: str | None = result.get("threemf_path")
+                    status_msg = str(result.get("status_msg") or "")
+                    if threemf_path and os.path.exists(threemf_path):
+                        successful_entries.append(result)
+                        results.append(BatchItemResult(filename=filename, status="success"))
+                        if material_source == "material_archive":
+                            _record_material_archive_usage_safe(
+                                selected_materials=selected_material_names,
+                                color_mode=color_mode,
+                            )
+                    else:
+                        _log_batch_item_failure(
+                            batch_run_id=batch_run_id,
+                            filename=filename,
+                            failure_kind="missing_output",
+                            error_type="MissingBatchOutput",
+                            error_message=(
+                                status_msg.strip()
+                                or "Worker result did not include a generated 3MF path"
+                            ),
+                        )
+                        results.append(BatchItemResult(
+                            filename=filename, status="failed", error=BATCH_ITEM_FAILED_DETAIL,
+                        ))
+                except (BrokenProcessPool, DynamicMaterialCandidateError, DynamicMaterialSolverError):
+                    raise
+                except ROUTER_HANDLED_ERRORS as exc:
+                    _log_batch_item_failure(
+                        batch_run_id=batch_run_id,
+                        filename=filename,
+                        failure_kind="worker_exception",
+                        error_type=type(exc).__name__,
+                        error_message=str(exc),
+                    )
+                    results.append(BatchItemResult(
+                        filename=filename, status="failed", error=BATCH_ITEM_FAILED_DETAIL,
+                    ))
+        workers_completed = True
+    except BrokenProcessPool as exc:
+        raise HTTPException(status_code=503, detail=BATCH_GENERATION_FAILED_DETAIL) from exc
+    except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as exc:
+        _handle_core_error(exc, "batch material generation")
+    finally:
+        # Release returned artifacts on cancellation or any fatal failure.
+        if not workers_completed:
+            _cleanup_intermediates(intermediates, batch_run_id)
+        _remove_temp_path(temp_native_bundle_path)
 
+    # --- Merge phase: layout -> writers -> FileRegistry -> cleanup ---
     successes = successful_entries
     plate_width_mm, plate_depth_mm = _resolve_batch_plate_dimensions(printer_id)
 
     # Zero successes → return immediately with null URLs
     if len(successes) == 0:
+        _cleanup_intermediates(intermediates, batch_run_id)
         _remove_temp_path(temp_native_bundle_path)
         return BatchResponse(
             status="failed",

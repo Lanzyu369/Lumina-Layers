@@ -16,6 +16,23 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-09-26",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [{
+      category: { zh: "稳定性", en: "Stability" },
+      items: [{
+        zh: "拼图模式生成 3MF 时会同时处理多块拼图，减少块数较多时的等待时间。",
+        en: "Puzzle 3MF generation now processes several pieces at once, reducing waits for larger puzzles.",
+      }, {
+        zh: "批量转换现在可以同时处理多张图片，结果和排盘仍按上传顺序排列。",
+        en: "Batch conversion now processes several images at once while keeping results and plate placement in upload order.",
+      }],
+    }],
+  },
+  {
     version: "2026-09-24",
     title: {
       zh: "Lumina Layers — 9 月更新速览",
