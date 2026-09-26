@@ -22,8 +22,20 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
       en: "Lumina Layers — September updates",
     },
     sections: [{
+      category: { zh: "新功能", en: "New" },
+      items: [{
+        zh: "检测到切片软件时，下拉菜单里的“下载 3MF”变为“生成并下载 3MF”：还没生成过也能直接点，会先生成再下载。",
+        en: "When a slicer is detected, the dropdown's “Download 3MF” is now “Generate & Download 3MF”: it works even before you generate, creating the file first and then downloading it.",
+      }, {
+        zh: "桌面版设置里可以选择生成文件的默认保存位置，保存对话框会默认打开这个文件夹，仍可临时改选其他位置。",
+        en: "In the desktop app you can now pick a default save folder in Settings. Save dialogs open there by default, and you can still choose another place each time.",
+      }],
+    }, {
       category: { zh: "稳定性", en: "Stability" },
       items: [{
+        zh: "修复换色、撤销后点击生成偶尔提示“画面内容已变化，请刷新后重试”而无法生成的问题，现在会自动同步后继续生成。",
+        en: "Fixed an occasional “content changed, please refresh” error when generating after replacing colors or undoing. Generation now syncs automatically and continues.",
+      }, {
         zh: "拼图模式生成 3MF 时会同时处理多块拼图，减少块数较多时的等待时间。",
         en: "Puzzle 3MF generation now processes several pieces at once, reducing waits for larger puzzles.",
       }, {

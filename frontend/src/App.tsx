@@ -46,7 +46,10 @@ import { useSingleStageStore } from "./stores/singleStageStore";
 import { useExtractorStore } from "./stores/extractorStore";
 import { collectConverterKeepFileIds, useConverterStore } from "./stores/converter";
 import { useShallow } from "zustand/react/shallow";
-import { useElectronLanguageSync } from "./integrations/electron";
+import {
+  useElectronGeneratedFileDirectorySync,
+  useElectronLanguageSync,
+} from "./integrations/electron";
 import { HEADER_STATUS_PILL_SHAPE_CLASS } from "./components/ui/headerControls";
 
 import LutDetailsPanel from "./components/LutDetailsPanel";
@@ -231,6 +234,7 @@ function AppContent() {
   useVectorPreviewRenderer();
   usePuzzleLayoutPreview();
   useElectronLanguageSync();
+  useElectronGeneratedFileDirectorySync();
   useSharedSettingsPersistence();
   const workspace = useWorkspaceMode();
   const reproMode = useReproMode();

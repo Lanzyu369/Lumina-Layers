@@ -10,4 +10,6 @@ test('all generated exports adopt controlled saving and ship its bridge', () => 
   assert.match(read('frontend/src/components/Scene3D.tsx'), /saveGeneratedFile\(/);
   assert.ok(JSON.parse(read('electron/package.json')).build.files.includes('generated-file-save.cjs'));
   assert.match(read('scripts/build_desktop.py'), /generated-file-save.cjs/);
+  assert.ok(JSON.parse(read('electron/package.json')).build.files.includes('generated-file-directory.cjs'));
+  assert.match(read('scripts/build_desktop.py'), /generated-file-directory.cjs/);
 });

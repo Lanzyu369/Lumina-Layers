@@ -440,4 +440,101 @@ describe("SlicerSelector settings linkage", () => {
       createElementSpy.mockRestore();
     }
   });
+
+  describe("dropdown download entry with a detected slicer", () => {
+    function stubAnchor() {
+      const anchorClick = vi.fn();
+      const anchor = { href: "", download: "", click: anchorClick } as unknown as HTMLAnchorElement;
+      const originalCreateElement = document.createElement.bind(document);
+      const spy = vi
+        .spyOn(document, "createElement")
+        .mockImplementation((tagName: string, options?: ElementCreationOptions) =>
+          tagName.toLowerCase() === "a" ? anchor : originalCreateElement(tagName, options),
+        );
+      return { anchor, anchorClick, restore: () => spy.mockRestore() };
+    }
+
+    it("generates first and then downloads when no 3MF exists yet", async () => {
+      assertResourceDownloadAvailableMock.mockResolvedValueOnce(undefined);
+      let latestDownloadUrl: string | null = null;
+      const onAutoGenerate = vi.fn(async () => {
+        latestDownloadUrl = "/api/files/fresh-model";
+        return latestDownloadUrl;
+      });
+      const onArtifactAction = vi.fn();
+      const { anchor, anchorClick, restore } = stubAnchor();
+
+      try {
+        render(
+          <I18nProvider>
+            <SlicerSelector
+              threemfDiskPath={null}
+              downloadUrl={null}
+              canSubmit
+              onAutoGenerate={onAutoGenerate}
+              getLatestDownloadUrl={() => latestDownloadUrl}
+              onArtifactAction={onArtifactAction}
+            />
+          </I18nProvider>,
+        );
+
+        fireEvent.click(screen.getByRole("button", { name: "切换切片软件列表" }));
+        const entry = screen.getByRole("button", { name: "生成并下载 3MF" });
+        expect(entry).toBeEnabled();
+        fireEvent.click(entry);
+
+        await waitFor(() => expect(anchorClick).toHaveBeenCalledOnce());
+        expect(onAutoGenerate).toHaveBeenCalledOnce();
+        expect(anchor.href).toBe("/api/files/fresh-model");
+        expect(vi.mocked(launchSlicer)).not.toHaveBeenCalled();
+        expect(onArtifactAction).toHaveBeenCalledOnce();
+      } finally {
+        restore();
+      }
+    });
+
+    it("downloads the existing 3MF without regenerating", async () => {
+      assertResourceDownloadAvailableMock.mockResolvedValueOnce(undefined);
+      const onAutoGenerate = vi.fn(async () => null);
+      const { anchor, anchorClick, restore } = stubAnchor();
+
+      try {
+        render(
+          <I18nProvider>
+            <SlicerSelector
+              threemfDiskPath={null}
+              downloadUrl="/api/files/model"
+              canSubmit
+              onAutoGenerate={onAutoGenerate}
+              onArtifactAction={vi.fn()}
+            />
+          </I18nProvider>,
+        );
+
+        fireEvent.click(screen.getByRole("button", { name: "切换切片软件列表" }));
+        fireEvent.click(screen.getByRole("button", { name: "下载 3MF" }));
+
+        await waitFor(() => expect(anchorClick).toHaveBeenCalledOnce());
+        expect(anchor.href).toBe("/api/files/model");
+        expect(onAutoGenerate).not.toHaveBeenCalled();
+      } finally {
+        restore();
+      }
+    });
+
+    it("stays disabled while the image or source is not ready", () => {
+      render(
+        <I18nProvider>
+          <SlicerSelector
+            threemfDiskPath={null}
+            downloadUrl={null}
+            canSubmit={false}
+            onAutoGenerate={async () => null}
+          />
+        </I18nProvider>,
+      );
+
+      expect(screen.getByRole("button", { name: "切换切片软件列表" })).toBeDisabled();
+    });
+  });
 });

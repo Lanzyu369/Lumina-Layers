@@ -78,6 +78,7 @@
       "preload.cjs",
       "bed-model-bridge.cjs",
       "generated-file-save.cjs",
+      "generated-file-directory.cjs",
       "workshop-file-picker.cjs",
       "workshop-security.cjs",
       "splash.html",

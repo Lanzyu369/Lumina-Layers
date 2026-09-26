@@ -1,10 +1,11 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const { resolveDefaultSavePath } = require('./generated-file-directory.cjs');
 const MAX_GENERATED_FILE_BYTES = 128 * 1024 * 1024;
 const extensions = { project: '.lumina.json', 'share-card': '.png', screenshot: '.png' };
 
-async function saveGeneratedFile({ event, window, trustedUrl, payload, showSaveDialog, fileSystem = fs }) {
+async function saveGeneratedFile({ event, window, trustedUrl, payload, showSaveDialog, defaultDirectory = '', fileSystem = fs }) {
   const frame = event?.senderFrame;
   if (!window?.webContents || event.sender !== window.webContents || !frame ||
       frame !== window.webContents.mainFrame || typeof trustedUrl !== 'string' || frame.url !== trustedUrl) {
@@ -28,7 +29,7 @@ async function saveGeneratedFile({ event, window, trustedUrl, payload, showSaveD
   } catch (_) { return { status: 'error', code: 'invalid' }; }
   let temporaryPath;
   try {
-    const choice = await showSaveDialog(window, { defaultPath: filename,
+    const choice = await showSaveDialog(window, { defaultPath: resolveDefaultSavePath(defaultDirectory, filename),
       filters: [{ name: purpose === 'project' ? 'Lumina JSON' : 'PNG', extensions: [purpose === 'project' ? 'json' : 'png'] }] });
     if (choice.canceled || !choice.filePath) return { status: 'canceled' };
     if (!choice.filePath.toLowerCase().endsWith(purpose === 'project' ? '.json' : extension)) return { status: 'error', code: 'invalid' };
