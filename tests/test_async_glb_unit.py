@@ -270,6 +270,57 @@ class TestRendererDispatch:
         assert renderer == "vector_analytic"
         assert calls == ["analytic"]
 
+    def test_analytic_renderer_publishes_canvas_color_contours(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        sid = _seed_session(tmp_path)
+        cache = _native_vector_cache(sid, tmp_path)
+        matched = np.zeros((20, 20, 3), dtype=np.uint8)
+        matched[10:20, 4:16] = [0, 0, 255]
+        mask_solid = np.zeros((20, 20), dtype=bool)
+        mask_solid[10:20, 4:16] = True
+        cache.update(
+            {
+                "matched_rgb": matched,
+                "mask_solid": mask_solid,
+                "target_width_mm": 20.0,
+                "color_contours": {"stale": [[[0.0, 0.0]]]},
+            }
+        )
+        monkeypatch.setattr(
+            async_glb_module,
+            "load_vector_quick_preview_source",
+            lambda *_args, **_kwargs: object(),
+        )
+        monkeypatch.setattr(
+            async_glb_module,
+            "build_vector_quick_preview_parts",
+            lambda **_kwargs: [object()],
+        )
+
+        def export(_parts: list[object], *, output_path: str) -> str:
+            Path(output_path).write_bytes(b"analytic")
+            return output_path
+
+        monkeypatch.setattr(async_glb_module, "export_vector_quick_preview_glb", export)
+
+        _result, renderer = async_glb_module._build_preview_glb(
+            session_id=sid,
+            store=_test_store,
+            cache=cache,
+            output_path=str(tmp_path / "analytic.glb"),
+        )
+
+        assert renderer == "vector_analytic"
+        assert set(cache["color_contours"]) == {"0000ff"}
+        points = np.array(cache["color_contours"]["0000ff"][0])
+        # 1 mm per pixel with a bottom-left canvas origin: the blue block
+        # occupies canvas Y 0..10 mm and never reaches the canvas top.
+        assert points[:, 1].max() == pytest.approx(10.0)
+        assert points[:, 0].min() == pytest.approx(4.0)
+
     @pytest.mark.parametrize(
         ("cache_update", "register_geometry"),
         [

@@ -1847,9 +1847,42 @@ def build_vector_quick_preview_parts(
         source,
         screen_to_world_canvas_height_mm=canvas_height_mm,
     )
+    if canvas_anchor is None:
+        canvas_anchor = _build_full_canvas_anchor_part(
+            real_width,
+            real_height,
+            float(source.scale_factor),
+        )
     if canvas_anchor is not None:
         parts.append(canvas_anchor)
     return parts
+
+
+def _build_full_canvas_anchor_part(
+    canvas_width: float,
+    canvas_height: float,
+    scale_factor: float,
+) -> VectorPreviewPart | None:
+    """Anchor the whole SVG canvas when no image-vectorizer bounds exist.
+
+    Plain SVG uploads have no ``image_vectorizer_bounds``; the preview raster
+    and its colour contours still span the full SVG canvas from the world
+    origin, so the frontend needs that rectangle to align contour overlays.
+    普通 SVG 上传没有图片矢量化边界；预览栅格与颜色轮廓仍从世界原点覆盖
+    整张 SVG 画布，前端需要该矩形来对齐轮廓叠加。
+    """
+
+    mesh = _build_preview_canvas_bounds_mesh(canvas_width, canvas_height, scale_factor)
+    if mesh is None:
+        return None
+    return VectorPreviewPart(
+        source_name=PREVIEW_CANVAS_BOUNDS_NODE_NAME,
+        export_name=PREVIEW_CANVAS_BOUNDS_NODE_NAME,
+        role="auxiliary",
+        rgba=(0, 0, 0, 0),
+        is_recolorable=False,
+        fallback_mesh=mesh,
+    )
 
 
 def _recipe_channel_runs(recipe: list[int]) -> list[tuple[int, int, int]]:

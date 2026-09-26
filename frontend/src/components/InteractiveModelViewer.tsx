@@ -84,6 +84,10 @@ export interface InteractiveModelViewerProps {
   puzzleOverlayEnabled?: boolean;
   puzzleOverlayUrl?: string | null;
   colorLayerHeightMm?: number;
+  onPreviewCanvasBoundsChange?: (
+    sourceUrl: string,
+    bounds: PuzzleOverlayBounds | null,
+  ) => void;
   heightmapReliefUrl?: string | null;
   heightmapArtworkUrl?: string | null;
   heightmapReliefMaxHeightMm?: number;
@@ -699,6 +703,7 @@ function InteractiveModelViewer({
   puzzleOverlayEnabled = false,
   puzzleOverlayUrl = null,
   colorLayerHeightMm = DEFAULT_COLOR_LAYER_HEIGHT_MM,
+  onPreviewCanvasBoundsChange,
   heightmapReliefUrl = null,
   heightmapArtworkUrl = null,
   heightmapReliefMaxHeightMm = 3.0,
@@ -971,6 +976,11 @@ function InteractiveModelViewer({
   useEffect(() => {
     useConverterStore.getState().setModelBounds(modelBounds);
   }, [modelBounds]);
+
+  useEffect(() => {
+    onPreviewCanvasBoundsChange?.(url, puzzleOverlayBounds);
+    return () => onPreviewCanvasBoundsChange?.(url, null);
+  }, [onPreviewCanvasBoundsChange, puzzleOverlayBounds, url]);
 
   useEffect(() => {
     return () => {

@@ -6,8 +6,11 @@ import {
   default as KeychainRing3D,
   createKeychainRingGeometry,
   computeLoopPosition,
+  keychainLoopHoleClearance,
   resetKeychainRingGeometryDisposeForTests,
 } from "../components/KeychainRing3D";
+import { useConverterStore } from "../stores/converter";
+import { createPreviewSpace } from "../utils/previewSpace";
 
 const mockControls = { enabled: true };
 const mockCanvas = document.createElement("canvas");
@@ -55,6 +58,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
   resetKeychainRingGeometryDisposeForTests();
+  useConverterStore.setState({ loop_offset_y: 0 });
   mockControls.enabled = true;
   document.body.style.cursor = "default";
 });
@@ -108,6 +112,30 @@ describe("KeychainRing3D", () => {
       // Geometry creation is valid — component should render without error
       const geo = createKeychainRingGeometry(4, 8, 2);
       expect(geo).not.toBeNull();
+    });
+
+    it("normalizes a constrained inward offset in the store", () => {
+      useConverterStore.setState({ loop_offset_y: -10.5 });
+      render(
+        <KeychainRing3D
+          enabled={true}
+          width={7}
+          length={13.5}
+          hole={4}
+          angle={0}
+          offsetX={0}
+          offsetY={-10.5}
+          positionPreset="top-center"
+          modelBounds={{ ...defaultBounds, minY: -30, maxY: 30 }}
+          contours={{
+            spike: [[[0, 0], [4, 0], [4, 60], [0, 60]]],
+            body: [[[18, 0], [42, 0], [42, 58], [18, 58]]],
+          }}
+          contourCanvasBounds={{ minX: -21, maxX: 21, minY: -30, maxY: 30 }}
+        />,
+      );
+
+      expect(useConverterStore.getState().loop_offset_y).toBe(0);
     });
 
     it("geometry is null when hole >= width (component would return null)", () => {
@@ -468,6 +496,163 @@ describe("computeLoopPosition", () => {
     const pos = computeLoopPosition("top-center", bounds, 5, -3);
     expect(pos.x).toBe(5);
     expect(pos.y).toBe(12);
+  });
+
+  it("clamps an inward offset to the contour under the loop", () => {
+    const contours = {
+      spike: [
+        [[0, 0], [4, 0], [4, 60], [0, 60]],
+      ],
+      body: [
+        [[18, 0], [42, 0], [42, 40], [18, 40]],
+      ],
+    };
+    const contourBounds = {
+      minX: -21,
+      maxX: 21,
+      minY: -30,
+      maxY: 30,
+    };
+
+    const pos = computeLoopPosition(
+      "top-center", contourBounds, 0, -25, contours, 8, contourBounds,
+    );
+
+    expect(pos).toEqual({ x: 0, y: 10 });
+  });
+
+  it("scales the local contour with a live 60 to 90 mm preview resize", () => {
+    const contours = {
+      spike: [
+        [[0, 0], [4, 0], [4, 60], [0, 60]],
+      ],
+      body: [
+        [[18, 0], [42, 0], [42, 40], [18, 40]],
+      ],
+    };
+    const contourBounds = {
+      minX: -21,
+      maxX: 21,
+      minY: -30,
+      maxY: 30,
+    };
+    const previewSpace = createPreviewSpace({ ...contourBounds, maxZ: 2 }, 1.5, 1.5);
+
+    const pos = computeLoopPosition(
+      "top-center",
+      previewSpace.displayBounds,
+      0,
+      -25,
+      contours,
+      8,
+      contourBounds,
+      previewSpace.toDisplayPoint,
+    );
+
+    expect(pos).toEqual({ x: 0, y: 15 });
+  });
+
+  it.each([-6.5, -10.5])(
+    "keeps the ticket offset %s outside its local contour",
+    (capturedOffsetY) => {
+      const contours = {
+        spike: [
+          [[0, 0], [4, 0], [4, 60], [0, 60]],
+        ],
+        body: [
+          [[18, 0], [42, 0], [42, 58], [18, 58]],
+        ],
+      };
+      const contourBounds = {
+        minX: -21,
+        maxX: 21,
+        minY: -30,
+        maxY: 30,
+      };
+
+      const pos = computeLoopPosition(
+        "top-center", contourBounds, 0, capturedOffsetY, contours, 7, contourBounds,
+      );
+
+      expect(pos).toEqual({ x: 0, y: 28 });
+    },
+  );
+
+  it("keeps full-canvas contour coordinates when backing bounds are wider", () => {
+    const contours = {
+      spike: [
+        [[10, 0], [20, 0], [20, 90], [10, 90]],
+      ],
+      body: [
+        [[40, 0], [60, 0], [60, 60], [40, 60]],
+      ],
+    };
+    const backingBounds = {
+      minX: -50,
+      maxX: 50,
+      minY: -50,
+      maxY: 50,
+    };
+
+    const pos = computeLoopPosition(
+      "top-center",
+      backingBounds,
+      0,
+      -10.5,
+      contours,
+      7,
+      backingBounds,
+    );
+
+    expect(pos).toEqual({ x: 0, y: 10 });
+  });
+
+  it.each([0, -35])(
+    "sinks to the lowest point of a sloped edge so the loop stays connected (offset %s)",
+    (offsetY) => {
+      // Reviewer repro: 90 mm body whose top falls 0.75 mm per mm to the right.
+      const contours = {
+        body: [
+          [[0, 0], [90, 0], [90, 22.5], [0, 90]],
+        ],
+      };
+      const bounds = { minX: -45, maxX: 45, minY: -45, maxY: 45 };
+
+      const pos = computeLoopPosition(
+        "top-center",
+        bounds,
+        0,
+        offsetY,
+        contours,
+        7,
+        bounds,
+        undefined,
+        keychainLoopHoleClearance(7, 13.5, 2.5),
+      );
+
+      // Band x in [41.5, 48.5]; lowest top is 90 - 0.75 * 48.5 = 53.625.
+      expect(pos.x).toBe(0);
+      expect(pos.y).toBeCloseTo(53.625 - 45, 9);
+    },
+  );
+
+  it("stops sinking on a steep edge before the hole reaches the body", () => {
+    const contours = {
+      body: [
+        [[0, 0], [20, 0], [20, 10], [10, 40], [0, 40]],
+      ],
+    };
+    const bounds = { minX: -10, maxX: 10, minY: -20, maxY: 20 };
+    const clearance = keychainLoopHoleClearance(7, 13.5, 2.5);
+
+    const pos = computeLoopPosition(
+      "top-center", bounds, 0, 0, contours, 7, bounds, undefined, clearance,
+    );
+
+    // Band tops span 40 .. 29.5, deeper than the clearance, so the loop stops
+    // one clearance below the highest point.
+    expect(clearance).toBeCloseTo(8.75, 9);
+    expect(pos.y).toBeCloseTo(40 - clearance - 20, 9);
   });
 
   it("works with asymmetric bounds", () => {

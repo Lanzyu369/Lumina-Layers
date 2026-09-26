@@ -745,6 +745,90 @@ beforeEach(() => {
 
   });
 
+  describe("keychain contour-coordinate wiring", () => {
+    it("passes the preview canvas bounds into the keychain contour mapper", () => {
+      useConverterStore.setState({
+        previewGlbUrl: "/api/files/mock-preview.glb",
+        add_loop: true,
+        modelBounds: {
+          minX: -50,
+          maxX: 50,
+          minY: -50,
+          maxY: 50,
+          maxZ: 2,
+        },
+      });
+
+      render(<Scene3D />);
+
+      const onBoundsChange = capturedInteractiveViewerProps
+        ?.onPreviewCanvasBoundsChange as ((
+          sourceUrl: string,
+          bounds: Record<string, number> | null,
+        ) => void) | undefined;
+      expect(onBoundsChange).toBeTypeOf("function");
+
+      const canvasBounds = {
+        minX: -50,
+        maxX: 50,
+        minY: -50,
+        maxY: 50,
+        maxZ: 0,
+      };
+      act(() => onBoundsChange?.("/api/files/mock-preview.glb", canvasBounds));
+
+      expect(capturedKeychainRingProps?.contourCanvasBounds).toEqual(canvasBounds);
+
+      act(() => {
+        useConverterStore.setState({ previewGlbUrl: "/api/files/next-preview.glb" });
+      });
+
+      expect(capturedKeychainRingProps?.contourCanvasBounds).toBeNull();
+
+      const nextCanvasBounds = { ...canvasBounds, minX: -40, maxX: 60 };
+      act(() => onBoundsChange?.("/api/files/next-preview.glb", nextCanvasBounds));
+      expect(capturedKeychainRingProps?.contourCanvasBounds).toEqual(nextCanvasBounds);
+
+      act(() => onBoundsChange?.("/api/files/mock-preview.glb", null));
+      expect(capturedKeychainRingProps?.contourCanvasBounds).toEqual(nextCanvasBounds);
+    });
+  });
+
+  describe("keychain contour live resize wiring", () => {
+    it("passes a display transform that follows a 60 to 90 mm preview resize", () => {
+      useConverterStore.setState({
+        previewGlbUrl: "/api/files/quick-preview.glb",
+        add_loop: true,
+        target_width_mm: 90,
+        target_height_mm: 90,
+        preview_width_mm: 60,
+        preview_height_mm: 60,
+        modelBounds: {
+          minX: -30,
+          maxX: 30,
+          minY: -30,
+          maxY: 30,
+          maxZ: 2,
+        },
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedKeychainRingProps?.modelBounds).toEqual({
+        minX: -45,
+        maxX: 45,
+        minY: -45,
+        maxY: 45,
+        maxZ: 2,
+      });
+      const toDisplayPoint = capturedKeychainRingProps?.contourToDisplayPoint as
+        | ((point: { x: number; y: number }) => { x: number; y: number })
+        | undefined;
+      expect(toDisplayPoint).toBeTypeOf("function");
+      expect(toDisplayPoint?.({ x: 0, y: 10 })).toEqual({ x: 0, y: 15 });
+    });
+  });
+
   describe("lightweight creative preview wiring", () => {
     it("passes a session-owned spatial heightmap and processed artwork to the quick preview", () => {
       useConverterStore.setState({
