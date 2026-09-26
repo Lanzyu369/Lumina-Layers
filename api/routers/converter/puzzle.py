@@ -16,8 +16,9 @@ import os
 import pickle
 import tempfile
 import uuid
-from dataclasses import dataclass
+from collections.abc import AsyncIterator
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -145,6 +146,16 @@ class _PuzzleGenerateBody(BaseModel):
 
     session_id: str
     params: PuzzleGenerateRequest
+
+
+@dataclass(frozen=True)
+class _PuzzlePieceJob:
+    """Detached inputs; constructing a job does not start a coroutine."""
+
+    piece: PuzzlePiece
+    image_path: str
+    lut_path: str
+    params: dict[str, Any]
 
 
 def _require_puzzle_cache(
@@ -892,6 +903,49 @@ def _submit_puzzle_worker(
     return worker_generate_model(image_path, lut_path, params)
 
 
+async def _iter_puzzle_piece_results(
+    jobs: list[_PuzzlePieceJob],
+    *,
+    pool: WorkerPoolManager,
+    store: SessionStore,
+    session_id: str,
+) -> AsyncIterator[tuple[PuzzlePiece, dict[str, Any] | BaseException]]:
+    """Run bounded batches and retain output ownership before reporting errors.
+    分批并行生成拼图，并在返回错误前登记同批任务的输出文件。
+    """
+
+    batch_size = max(1, int(pool.max_workers))
+    for start in range(0, len(jobs), batch_size):
+        batch_jobs = jobs[start : start + batch_size]
+        pending = asyncio.gather(
+            *(
+                pool.submit(_submit_puzzle_worker, job.image_path, job.lut_path, job.params)
+                for job in batch_jobs
+            ),
+            return_exceptions=True,
+        )
+        results: list[dict[str, Any] | BaseException] = []
+        try:
+            try:
+                results = await asyncio.shield(pending)
+            except asyncio.CancelledError:
+                # Process-pool cancellation cannot stop running CPU work.
+                # Drain only this batch so its output paths remain owned.
+                results = await pending
+                raise
+        finally:
+            for result in results:
+                if isinstance(result, dict):
+                    for key in ("threemf_path", "glb_path"):
+                        path = result.get(key)
+                        if path and os.path.exists(path):
+                            store.register_temp_file(session_id, path)
+
+        # gather keeps input order even when workers finish out of order.
+        for job, result in zip(batch_jobs, results):
+            yield job.piece, result
+
+
 @router.post("/puzzle-layout-preview", response_model=PuzzleLayoutPreviewResponse)
 async def puzzle_layout_preview(
     body: _PuzzleLayoutPreviewBody,
@@ -1160,9 +1214,21 @@ async def generate_puzzle(
         committed_content_revision,
         expected_selection_revision=committed_selection_revision,
     )
-    futures: list[asyncio.Future] = []
-    piece_records: list[PuzzlePiece] = []
+    piece_jobs: list[_PuzzlePieceJob] = []
     skipped_transparent_labels: list[str] = []
+
+    log.info(
+        "Puzzle generation started",
+        extra={
+            "event": "converter_puzzle_generate_init",
+            "session_id": sid,
+            "piece_count": layout.actual_piece_count,
+            "grid_cols": layout.cols,
+            "grid_rows": layout.rows,
+            "max_workers": int(pool.max_workers),
+            "material_source": session_material_source,
+        },
+    )
 
     for piece in layout.pieces:
         dynamic_asset_kwargs: dict[str, np.ndarray] = {}
@@ -1402,7 +1468,7 @@ async def generate_puzzle(
                 selected_materials,
                 requested_backing_index,
             )
-        log.info(
+        log.debug(
             "Puzzle hybrid boundary enabled",
             extra={
                 "event": "converter_puzzle_hybrid_boundary_enabled",
@@ -1426,15 +1492,14 @@ async def generate_puzzle(
         # All worker arguments are paths, scalars, and per-piece dicts. Copy
         # the dict before enqueueing so a later session edit cannot mutate an
         # already-bound puzzle piece request.
-        futures.append(
-            pool.submit(
-                _submit_puzzle_worker,
-                piece_image_path,
-                lut_path,
-                deepcopy(worker_params),
+        piece_jobs.append(
+            _PuzzlePieceJob(
+                piece=piece,
+                image_path=piece_image_path,
+                lut_path=lut_path,
+                params=deepcopy(worker_params),
             )
         )
-        piece_records.append(piece)
 
     if skipped_transparent_labels:
         warnings.append(
@@ -1443,13 +1508,14 @@ async def generate_puzzle(
 
     successful_entries: list[tuple[PuzzlePiece, str, bool, float]] = []
     errors: list[str] = []
-    for piece, future in zip(piece_records, futures):
+    async for piece, result in _iter_puzzle_piece_results(
+        piece_jobs, pool=pool, store=store, session_id=sid,
+    ):
         try:
-            result = await future
+            if isinstance(result, BaseException):
+                raise result
             threemf_path = result.get("threemf_path")
-            glb_path = result.get("glb_path")
             if threemf_path and os.path.exists(threemf_path):
-                store.register_temp_file(sid, threemf_path)
                 x_mirrored = result.get("x_mirrored")
                 mirror_span_mm = result.get("mirror_span_mm")
                 if (
@@ -1473,8 +1539,6 @@ async def generate_puzzle(
             else:
                 status_msg = result.get("status_msg", "unknown")
                 errors.append(f"{piece.label}: {status_msg}")
-            if glb_path and os.path.exists(glb_path):
-                store.register_temp_file(sid, glb_path)
         except asyncio.TimeoutError:
             errors.append(f"{piece.label}: generation failed")
         except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as exc:

@@ -46,6 +46,7 @@ from core.puzzle import (
 _test_store: SessionStore = SessionStore(ttl=1800)
 _test_registry: FileRegistry = FileRegistry()
 _mock_pool = MagicMock(spec=WorkerPoolManager)
+_mock_pool.max_workers = 2
 _TEST_TEMP_DIR = tempfile.gettempdir()
 _ORIGINAL_RUNTIME_TEMP_DIR = runtime_config.TEMP_DIR
 _ORIGINAL_PUZZLE_TEMP_DIR = puzzle_router.TEMP_DIR
@@ -1187,14 +1188,14 @@ def test_generate_puzzle_emits_hybrid_boundary_log_for_each_piece() -> None:
     body = _build_generate_body(session_id)
     with patch("api.routers.converter.puzzle.assemble_puzzle_3mf", side_effect=_assemble_stub), patch.object(
         puzzle_router.log,
-        "info",
-    ) as log_info:
+        "debug",
+    ) as log_debug:
         response = client.post("/api/convert/generate-puzzle", json=body)
 
     assert response.status_code == 200
     assert len(submitted_params) == 6
     hybrid_boundary_calls = [
-        call for call in log_info.call_args_list if call.kwargs["extra"]["event"] == "converter_puzzle_hybrid_boundary_enabled"
+        call for call in log_debug.call_args_list if call.kwargs["extra"]["event"] == "converter_puzzle_hybrid_boundary_enabled"
     ]
     assert len(hybrid_boundary_calls) == 6
 

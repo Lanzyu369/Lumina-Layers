@@ -245,6 +245,7 @@ CONVERTER_STRUCTURED_EVENTS = {
     "color_card_glb_registration_failed",
     "converter_large_format_failed",
     "converter_puzzle_layout_preview_done",
+    "converter_puzzle_generate_init",
     "converter_puzzle_generate_done",
     "converter_auto_detect_colors_done",
     "converter_auto_detect_colors_failed",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import pickle
 from pathlib import Path
@@ -20,6 +21,7 @@ from api.routers.converter import puzzle as puzzle_router
 from api.selection_state import RECIPE_OVERRIDE_APPLIED_MASKS_KEY
 from api.session_store import SessionStore
 from api.worker_pool import WorkerPoolManager
+from core.material_dynamic_solver import DynamicMaterialSolverError
 from core.puzzle import PuzzlePiece
 
 
@@ -30,6 +32,7 @@ def puzzle_harness():
     store = SessionStore(ttl=1800)
     registry = FileRegistry()
     pool = MagicMock(spec=WorkerPoolManager)
+    pool.max_workers = 2
 
     test_app = FastAPI()
     test_app.include_router(puzzle_router.router, prefix="/api/convert")
@@ -398,6 +401,186 @@ class TestGeneratePuzzleCanary:
         assert record.warning_count == len(body["warnings"])
         assert record.skipped_transparent_count == 0
         assert record.download_id == download_id
+        started_records = [
+            record for record in caplog.records
+            if getattr(record, "event", None) == "converter_puzzle_generate_init"
+        ]
+        assert len(started_records) == 1
+        assert started_records[0].piece_count == body["piece_count"]
+        assert started_records[0].max_workers == pool.max_workers
+        assert len([
+            record for record in caplog.records
+            if record.name == target_logger.name and record.levelno == logging.INFO
+        ]) == 2
+
+
+@pytest.mark.parametrize("source", ["lut", "material_archive", "dynamic_material"])
+def test_generate_puzzle_runs_bounded_parallel_pieces_in_layout_order(
+    puzzle_harness, tmp_path, source: str,
+) -> None:
+    """Independent pieces must overlap without exceeding the worker capacity."""
+
+    store = puzzle_harness["store"]
+    pool = puzzle_harness["pool"]
+    if source == "dynamic_material":
+        session_id = _seed_dynamic_puzzle_generate_session(store, tmp_path)
+    else:
+        session_id = _seed_puzzle_generate_session(store, tmp_path)
+        if source == "material_archive":
+            store.put(session_id, "material_source", source)
+            store.put(session_id, "selected_materials", ["Red", "White"])
+            store.put(session_id, "material_layer_count", 10)
+            store.put(session_id, "material_layer_height_mm", 0.08)
+            store.put(session_id, "material_backing_material_index", 1)
+
+    active = 0
+    peak_active = 0
+    completed_labels: list[str] = []
+    assembled_labels: list[str] = []
+    pair_started: asyncio.Event | None = None
+
+    async def submit_piece(_fn, image_path, _lut_path, params):
+        nonlocal active, peak_active, pair_started
+        label = Path(image_path).stem.split("_")[1]
+        active += 1
+        peak_active = max(peak_active, active)
+        if pair_started is None:
+            pair_started = asyncio.Event()
+        current_pair = pair_started
+        if active == 2:
+            pair_started = None
+            current_pair.set()
+        try:
+            await asyncio.wait_for(current_pair.wait(), timeout=0.5)
+            # Complete each second piece first to exercise output association.
+            if label.endswith("1"):
+                await asyncio.sleep(0.01)
+            path = tmp_path / f"piece-{label}.3mf"
+            path.write_bytes(b"piece-3mf")
+            completed_labels.append(label)
+            return {
+                "threemf_path": str(path),
+                "glb_path": None,
+                "status_msg": "ok",
+                "x_mirrored": False,
+                "mirror_span_mm": float(params["target_width_mm"]),
+            }
+        finally:
+            active -= 1
+
+    def assemble_pieces(*, piece_sources, output_path, **_kwargs):
+        for piece in piece_sources:
+            assert Path(piece.threemf_path).stem == f"piece-{piece.label}"
+            assembled_labels.append(piece.label)
+        Path(output_path).write_bytes(b"combined-3mf")
+        return output_path
+
+    pool.submit = AsyncMock(side_effect=submit_piece)
+    body = _generate_puzzle_body(session_id)
+    body["params"]["params"]["modeling_mode"] = "vector"
+    with patch.object(puzzle_router, "assemble_puzzle_3mf", side_effect=assemble_pieces):
+        response = puzzle_harness["client"].post(
+            "/api/convert/generate-puzzle", json=body,
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["piece_count"] == 4
+    assert peak_active == pool.max_workers
+    assert active == 0
+    assert completed_labels == ["A2", "A1", "B2", "B1"]
+    assert assembled_labels == ["A1", "A2", "B1", "B2"]
+
+
+def test_generate_puzzle_drains_failed_batch_and_tracks_successful_outputs(
+    puzzle_harness, tmp_path,
+) -> None:
+    """A typed failure must not strand sibling outputs or launch later batches."""
+
+    store = puzzle_harness["store"]
+    pool = puzzle_harness["pool"]
+    session_id = _seed_puzzle_generate_session(store, tmp_path)
+    outputs = [tmp_path / "sibling.3mf", tmp_path / "sibling.glb"]
+
+    async def submit_piece(_fn, image_path, _lut_path, _params):
+        if Path(image_path).stem.split("_")[1] == "A1":
+            raise DynamicMaterialSolverError("test solver failure")
+        await asyncio.sleep(0.01)
+        for path in outputs:
+            path.write_bytes(b"sibling output")
+        return {
+            "threemf_path": str(outputs[0]),
+            "glb_path": str(outputs[1]),
+            "x_mirrored": False,
+            "mirror_span_mm": 1.0,
+        }
+
+    pool.submit = AsyncMock(side_effect=submit_piece)
+    with patch.object(puzzle_router, "assemble_puzzle_3mf") as assemble:
+        response = puzzle_harness["client"].post(
+            "/api/convert/generate-puzzle",
+            json=_generate_puzzle_body(session_id),
+        )
+
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"]["code"] == "dynamic_material_solver_unavailable"
+    assert pool.submit.await_count == 2
+    assemble.assert_not_called()
+    assert all(path.exists() for path in outputs)
+    store.close(session_id)
+    assert all(not path.exists() for path in outputs)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_puzzle_drains_active_batch_without_starting_more_pieces(
+    puzzle_harness, tmp_path,
+) -> None:
+    """Already running processes keep output ownership after request cancellation."""
+
+    store = puzzle_harness["store"]
+    pool = puzzle_harness["pool"]
+    session_id = _seed_puzzle_generate_session(store, tmp_path)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    active_count = 0
+    outputs: list[Path] = []
+
+    async def submit_piece(_fn, image_path, _lut_path, _params):
+        nonlocal active_count
+        active_count += 1
+        if active_count == pool.max_workers:
+            started.set()
+        await release.wait()
+        path = tmp_path / f"{Path(image_path).stem}.3mf"
+        path.write_bytes(b"piece output")
+        outputs.append(path)
+        active_count -= 1
+        return {"threemf_path": str(path), "glb_path": None}
+
+    pool.submit = AsyncMock(side_effect=submit_piece)
+    task = asyncio.create_task(puzzle_router.generate_puzzle(
+        puzzle_router._PuzzleGenerateBody.model_validate(_generate_puzzle_body(session_id)),
+        store=store,
+        registry=puzzle_harness["registry"],
+        pool=pool,
+    ))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2.0)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+    finally:
+        release.set()
+        if not task.done():
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    assert task.cancelled()
+    assert pool.submit.await_count == 2
+    assert active_count == 0
+    assert len(outputs) == 2
+    assert all(path.exists() for path in outputs)
+    store.close(session_id)
+    assert all(not path.exists() for path in outputs)
 
 
 class TestDynamicPuzzlePreviewReuse:

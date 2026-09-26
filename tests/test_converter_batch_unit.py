@@ -346,6 +346,223 @@ class TestBatchPartialFailure:
 # =========================================================================
 
 
+@pytest.mark.parametrize("modeling_mode", ["high-fidelity", "vector"])
+@pytest.mark.parametrize("source", ["lut", "material_archive", "dynamic_material"])
+def test_batch_parallelism_preserves_upload_order_and_partial_success(
+    tmp_path: Path, modeling_mode: str, source: str,
+) -> None:
+    """Separate uploads overlap within capacity and retain their result identity."""
+
+    active = 0
+    peak_active = 0
+    pair_started: asyncio.Event | None = None
+    completed: list[str] = []
+    upload_paths: list[Path] = []
+    merged_names: list[str] = []
+    filenames = [f"image-{index}.png" for index in range(5)]
+
+    async def save_upload(upload):
+        path = tmp_path / upload.filename
+        path.write_bytes(b"input")
+        upload_paths.append(path)
+        return str(path)
+
+    async def submit_item(_fn, image_path, *_args):
+        nonlocal active, peak_active, pair_started
+        filename = Path(image_path).name
+        index = filenames.index(filename)
+        active += 1
+        peak_active = max(peak_active, active)
+        try:
+            if index < 4:
+                if pair_started is None:
+                    pair_started = asyncio.Event()
+                current_pair = pair_started
+                if active == 2:
+                    pair_started = None
+                    current_pair.set()
+                await asyncio.wait_for(current_pair.wait(), timeout=0.5)
+                if index % 2 == 0:
+                    await asyncio.sleep(0.01)
+            assert Path(image_path).exists()
+            completed.append(filename)
+            if index == 1:
+                raise RuntimeError("one image cannot be converted")
+            return _make_worker_result(filename)
+        finally:
+            active -= 1
+
+    def merge_items(self, items, output_path, **kwargs):
+        merged_names.extend(item.source_filename for item in items)
+        _noop_3mf_write(self, items, output_path, **kwargs)
+
+    params = {"lut_name": "test_lut", "modeling_mode": modeling_mode}
+    if source != "lut":
+        params.update({
+            "material_source": "material_archive",
+            "selected_materials": json.dumps(["Red", "White"]),
+            "material_backing_material_index": "1",
+            "material_layer_count": "10",
+            "material_dynamic_layer_count_enabled": str(source == "dynamic_material").lower(),
+        })
+    _mock_pool.submit = AsyncMock(side_effect=submit_item)
+    with (
+        patch("api.routers.converter.generate.LUTManager.get_lut_path", return_value="/tmp/fake.npy"),
+        patch("api.routers.converter.generate.ensure_png_tempfile", side_effect=save_upload),
+        patch("utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write", merge_items),
+    ):
+        response = client.post(
+            "/api/convert/batch",
+            files=[("images", _make_test_image_buf(name)) for name in filenames],
+            data=params,
+        )
+
+    assert response.status_code == 200, response.text
+    assert peak_active == _mock_pool.max_workers
+    assert active == 0
+    assert completed == [filenames[1], filenames[0], filenames[3], filenames[2], filenames[4]]
+    body = response.json()
+    assert [item["filename"] for item in body["results"]] == filenames
+    assert [item["status"] for item in body["results"]] == [
+        "success", "failed", "success", "success", "success",
+    ]
+    expected_successes = [name for name in filenames if name != filenames[1]]
+    assert merged_names == expected_successes
+    assert [item["filename"] for item in body["preview_items"]] == expected_successes
+    assert all(not path.exists() for path in upload_paths)
+    # Changing source sessions must not invalidate the completed batch download.
+    sid = _test_store.create()
+    _test_store.close(sid)
+    _test_registry.cleanup_session(sid)
+    download = client.get(body["download_url"])
+    assert download.status_code == 200
+    assert download.content == b"fake-merged-3mf"
+
+
+@pytest.mark.parametrize("failure_kind", ["pool", "solver"])
+def test_batch_fatal_failure_drains_sibling_and_cleans_its_outputs(
+    tmp_path: Path, failure_kind: str,
+) -> None:
+    from core.material_dynamic_solver import DynamicMaterialSolverError
+
+    sibling_outputs: list[str] = []
+    upload_paths: list[Path] = []
+
+    async def save_upload(upload):
+        path = tmp_path / upload.filename
+        path.write_bytes(b"input")
+        upload_paths.append(path)
+        return str(path)
+
+    async def submit_item(_fn, image_path, *_args):
+        if Path(image_path).name == "fail.png":
+            if failure_kind == "pool":
+                raise BrokenProcessPool("worker was killed")
+            raise DynamicMaterialSolverError("solver unavailable")
+        await asyncio.sleep(0.01)
+        result = _make_worker_result("sibling.png")
+        sibling_outputs.extend(result[key] for key in (
+            "threemf_path", "preview_glb_path", "metadata_sidecar_path",
+        ))
+        return result
+
+    _mock_pool.submit = AsyncMock(side_effect=submit_item)
+    with (
+        patch("api.routers.converter.generate.LUTManager.get_lut_path", return_value="/tmp/fake.npy"),
+        patch("api.routers.converter.generate.ensure_png_tempfile", side_effect=save_upload),
+        patch("utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write") as merge,
+    ):
+        response = client.post(
+            "/api/convert/batch",
+            files=[("images", _make_test_image_buf(name)) for name in (
+                "fail.png", "sibling.png", "later-1.png", "later-2.png",
+            )],
+            data={"lut_name": "test_lut"},
+        )
+
+    assert response.status_code == 503, response.text
+    assert _mock_pool.submit.await_count == 2
+    assert len(sibling_outputs) == 3
+    assert all(not Path(path).exists() for path in sibling_outputs)
+    assert all(not path.exists() for path in upload_paths)
+    merge.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_batch_cancellation_keeps_shared_lut_until_workers_finish(tmp_path: Path) -> None:
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+    from api.routers.converter import generate as generate_router
+
+    shared_lut = tmp_path / "native-bundle.msgpack"
+    shared_lut.write_bytes(b"shared LUT")
+    upload_paths: list[Path] = []
+    output_paths: list[str] = []
+    active = 0
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def save_upload(upload):
+        path = tmp_path / upload.filename
+        path.write_bytes(b"input")
+        upload_paths.append(path)
+        return str(path)
+
+    async def submit_item(_fn, image_path, lut_path, *_args):
+        nonlocal active
+        active += 1
+        if active == 2:
+            started.set()
+        await release.wait()
+        assert Path(image_path).exists()
+        assert Path(lut_path).exists()
+        result = _make_worker_result(Path(image_path).name)
+        output_paths.extend(result[key] for key in (
+            "threemf_path", "preview_glb_path", "metadata_sidecar_path",
+        ))
+        active -= 1
+        return result
+
+    _mock_pool.submit = AsyncMock(side_effect=submit_item)
+    test_app = FastAPI()
+    test_app.include_router(generate_router.router, prefix="/api/convert")
+    test_app.dependency_overrides[get_worker_pool] = lambda: _mock_pool
+    test_app.dependency_overrides[get_file_registry] = lambda: _test_registry
+    with (
+        patch.object(generate_router, "TEMP_DIR", str(tmp_path)),
+        patch.object(generate_router.LUTManager, "resolve_source_selection", return_value=(str(shared_lut), "Native")),
+        patch.object(generate_router, "ensure_png_tempfile", side_effect=save_upload),
+    ):
+        async with AsyncClient(transport=ASGITransport(app=test_app), base_url="http://testserver") as http:
+            request = asyncio.create_task(http.post(
+                "/api/convert/batch",
+                files=[("images", _make_test_image_buf(f"image-{i}.png")) for i in range(4)],
+                data={
+                    "source_kind": "native_bundle", "material_type": "PLA",
+                    "vendor": "Bambu", "db_names": json.dumps(["red.cdb", "white.cdb"]),
+                },
+            ))
+            try:
+                await asyncio.wait_for(started.wait(), timeout=2.0)
+                request.cancel()
+                await asyncio.sleep(0)
+                assert shared_lut.exists()
+                assert all(path.exists() for path in upload_paths)
+            finally:
+                release.set()
+                if not request.done() and not request.cancelling():
+                    request.cancel()
+                await asyncio.gather(request, return_exceptions=True)
+
+    assert request.cancelled()
+    assert _mock_pool.submit.await_count == 2
+    assert active == 0
+    assert len(output_paths) == 6
+    assert not shared_lut.exists()
+    assert all(not path.exists() for path in upload_paths)
+    assert all(not Path(path).exists() for path in output_paths)
+
+
 class TestBatchAllSuccess:
     """Verify all images succeed returns correct BatchResponse."""
 
@@ -450,7 +667,7 @@ class TestBatchAllFailed:
         assert body["preview_items"] == []
 
 
-    def test_batch_broken_worker_pool_stops_before_next_item(self) -> None:
+    def test_batch_broken_worker_pool_stops_before_next_group(self) -> None:
         _mock_pool.submit = AsyncMock(
             side_effect=BrokenProcessPool("worker was killed")
         )
@@ -470,12 +687,14 @@ class TestBatchAllFailed:
                 files=[
                     ("images", _make_test_image_buf("complex-1.png")),
                     ("images", _make_test_image_buf("complex-2.png")),
+                    ("images", _make_test_image_buf("complex-3.png")),
+                    ("images", _make_test_image_buf("complex-4.png")),
                 ],
                 data={"lut_name": "test_lut"},
             )
 
         assert response.status_code == 503
-        assert _mock_pool.submit.await_count == 1
+        assert _mock_pool.submit.await_count == _mock_pool.max_workers
 
     def test_batch_worker_missing_output_sanitizes_status_message(self) -> None:
         private_path = "/Users/min/private/batch-output/missing.3mf"
