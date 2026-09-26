@@ -3602,13 +3602,21 @@ class BambuStudio3MFWriter:
                     "value": os.path.splitext(os.path.basename(self.output_path))[0],
                 },
             )
-        ET.SubElement(obj_elem, "metadata", attrib={"key": "extruder", "value": "1"})
-
         source_file = os.path.basename(self.output_path)
         if material_index_by_object is None:
             resolved_material_indices = list(range(len(self.objects)))
         else:
             resolved_material_indices = material_index_by_object
+
+        # Single-volume imports use the object's filament as their authority.
+        object_extruder = (
+            resolved_material_indices[0] + 1
+            if len(self.objects) == 1 and len(resolved_material_indices) == 1
+            else 1
+        )
+        ET.SubElement(
+            obj_elem, "metadata", attrib={"key": "extruder", "value": str(object_extruder)},
+        )
 
         for idx, (entry, obj_id, material_index) in enumerate(
             zip(self.objects, object_ids, resolved_material_indices)

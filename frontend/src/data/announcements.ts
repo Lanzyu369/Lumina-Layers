@@ -41,6 +41,9 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
       }, {
         zh: "批量转换现在可以同时处理多张图片，结果和排盘仍按上传顺序排列。",
         en: "Batch conversion now processes several images at once while keeping results and plate placement in upload order.",
+      }, {
+        zh: "修复单色拼图块导入切片软件后误用第一种耗材的问题，白色拼图块不再因此变成蓝色。",
+        en: "Fixed single-color puzzle pieces using the first filament when opened in a slicer, which could turn white pieces blue.",
       }],
     }],
   },
