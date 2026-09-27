@@ -9,6 +9,7 @@ import { useI18n } from "../../i18n/context";
 import { cx, cardClass, wellPadClass } from "../ui/panelPrimitives";
 import { normalizeResourceUrl } from "../../utils/resourceUrl";
 import MaterialLayerBenefitCurve from "./MaterialLayerBenefitCurve";
+import SelectionToolPicker from "./SelectionToolPicker";
 
 // ========== ToolbarGroup ==========
 
@@ -331,11 +332,7 @@ export default function PalettePanel({
   const replacePreviewLoading = useConverterStore((s) => s.replacePreviewLoading);
   const heightmap_max_height = useConverterStore((s) => s.heightmap_max_height);
   const selectionMode = useConverterStore((s) => s.selectionMode);
-  const selectionTool = useConverterStore((s) => s.selectionTool);
-  const setSelectionTool = useConverterStore((s) => s.setSelectionTool);
   const selectionDocument = useConverterStore((s) => s.selectionDocument);
-  const brushSizePx = useConverterStore((s) => s.brushSizePx);
-  const setBrushSizePx = useConverterStore((s) => s.setBrushSizePx);
   const selectionBlinkEnabled = useConverterStore((s) => s.selectionBlinkEnabled);
   const toggleSelectionBlink = useConverterStore((s) => s.toggleSelectionBlink);
   const gradientSelection = useConverterStore((s) => s.gradientSelection);
@@ -525,43 +522,7 @@ export default function PalettePanel({
                 tint="sky"
                 contentClassName="grid min-h-9 grid-cols-[repeat(auto-fit,minmax(6.75rem,1fr))] items-center gap-1.5"
               >
-                <Button
-                  label={t("palette_mode_select_all")}
-                  variant={selectionTool === 'same-color' ? 'primary' : 'secondary'}
-                  size="sm"
-                  onClick={() => setSelectionTool('same-color')}
-                  className="w-full"
-                  title={t("palette_mode_select_all")}
-                />
-                <Button
-                  label={t("palette_mode_multi_select")}
-                  variant={selectionTool === 'point' ? 'primary' : 'secondary'}
-                  size="sm"
-                  onClick={() => setSelectionTool('point')}
-                  className="w-full"
-                />
-                <Button
-                  label={t("palette_mode_brush")}
-                  variant={selectionTool === 'brush' ? 'primary' : 'secondary'}
-                  size="sm"
-                  onClick={() => setSelectionTool('brush')}
-                  className="w-full"
-                />
-                {selectionTool === 'brush' && (
-                  <label className="col-span-full flex items-center gap-2 px-1 text-[11px] text-slate-600 dark:text-slate-300">
-                    <span className="shrink-0">{t("selection_brush_size")}</span>
-                    <input
-                      aria-label={t("selection_brush_size")}
-                      type="range"
-                      min={2}
-                      max={160}
-                      value={brushSizePx}
-                      onChange={(event) => setBrushSizePx(Number(event.target.value))}
-                      className="min-w-0 flex-1 accent-pink-500"
-                    />
-                    <span className="w-10 text-right tabular-nums">{brushSizePx}px</span>
-                  </label>
-                )}
+                <SelectionToolPicker />
                 <Button
                   label={t("palette_clear_selection")}
                   variant="secondary"

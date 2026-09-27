@@ -2099,12 +2099,19 @@ export interface EditorCommitStatusResponse {
 
 export interface SelectionMutationRequest {
   session_id: string;
-  operation: "point-toggle" | "same-color-toggle" | "brush-add" | "clear";
+  operation:
+    | "point-toggle"
+    | "same-color-toggle"
+    | "color-range-toggle"
+    | "brush-add"
+    | "clear";
   base_selection_revision: number;
   content_revision: number;
   x?: number;
   y?: number;
   color_hex?: string;
+  /** CIEDE2000 tolerance for ``color-range-toggle`` (0 = exact colour). */
+  color_tolerance?: number;
   brush_radius?: number;
   brush_points?: Array<{ x: number; y: number }>;
 }
@@ -2474,4 +2481,36 @@ export interface GradientGroupsResponse {
   /** ``"ok"`` when groups are available; ``"unavailable"`` otherwise. */
   status: "ok" | "unavailable";
   groups: GradientGroupItem[];
+}
+
+/** Request for printable recipes close to a target colour (colour workspace). */
+export interface SimilarRecipesRequest {
+  session_id: string;
+  /** Target colour as ``#rrggbb``. */
+  target_color: string;
+  limit?: number;
+  include_predictive?: boolean;
+}
+
+/** One suggested recipe; ``recipe`` is ordered top (viewing face) to bottom. */
+export interface SimilarRecipeItem {
+  hex: string;
+  rgb: [number, number, number];
+  delta_e00: number;
+  recipe: number[];
+  /**
+   * ``lut`` (measured LUT entry) and ``image`` (color already in the image)
+   * apply via region replace; ``predictive`` applies via recipe override.
+   */
+  source: "lut" | "predictive" | "image";
+  /** True when this color is already printed somewhere in the current image. */
+  in_image: boolean;
+}
+
+export interface SimilarRecipesResponse {
+  status: string;
+  target_color: string;
+  layer_order: string;
+  predictive_available: boolean;
+  items: SimilarRecipeItem[];
 }

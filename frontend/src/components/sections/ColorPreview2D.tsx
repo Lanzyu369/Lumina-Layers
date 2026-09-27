@@ -361,6 +361,7 @@ export default function ColorPreview2D({
   const selectionDocument = useConverterStore((s) => s.selectionDocument);
   const applySelectionMutation = useConverterStore((s) => s.applySelectionMutation);
   const brushSizePx = useConverterStore((s) => s.brushSizePx);
+  const colorRangeTolerance = useConverterStore((s) => s.colorRangeTolerance);
   const selectedColor = useConverterStore((s) => s.selectedColor);
   const selectedColors = useConverterStore((s) => s.selectedColors);
   const isLoading = useConverterStore((s) => s.isLoading);
@@ -896,6 +897,21 @@ export default function ColorPreview2D({
 
       const { pixelX, pixelY } = sample;
 
+      // Colour-range picks toggle every visible block within the ΔE00
+      // tolerance. The server resolves the clicked colour, so no local
+      // flood-fill placeholder is drawn (see DESIGN.md "No approximate flash").
+      // 颜色范围选择：切换与点击色 ΔE00 不超过容差的全部可见色块；由服务端
+      // 解析点击色，不绘制近似的本地占位轮廓。
+      if (selectionTool === 'color-range') {
+        void applySelectionMutation({
+          operation: 'color-range-toggle',
+          x: pixelX,
+          y: pixelY,
+          colorTolerance: colorRangeTolerance,
+        });
+        return;
+      }
+
       if (
         selectionDocument &&
         selectionMode !== 'current' &&
@@ -1168,6 +1184,7 @@ export default function ColorPreview2D({
       selectionTool,
       selectionDocument,
       applySelectionMutation,
+      colorRangeTolerance,
       handleSelectAllClick,
       readActivePreviewPixel,
       regionData,

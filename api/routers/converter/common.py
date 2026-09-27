@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import pickle
 import time
 from typing import NoReturn
@@ -37,6 +38,7 @@ from core.model_surface.validation import (
 from core.pipeline._input_validation_common import (
     VECTOR_NATIVE_REQUIRES_SVG_DETAIL,
 )
+from core.pipeline.processing_ops.lut_loader import load_lut
 from .source_validation import (
     SOURCE_SVG_NO_RENDERABLE_GEOMETRY_DETAIL,
     SOURCE_SVG_NO_RENDERABLE_GEOMETRY_ERROR,
@@ -663,6 +665,59 @@ def _require_session(store: SessionStore, session_id: str) -> dict:
     if data is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     return data
+
+
+def load_session_lut_runtime(
+    session_data: dict,
+    *,
+    color_layers: int,
+    layer_height_mm: float,
+) -> dict | None:
+    """Load the LUT runtime used by this session's colour matching.
+    加载当前会话颜色匹配所用的 LUT 运行时数据。
+
+    Replacement stack sync and similar-recipe suggestions share this loader
+    so a recommended recipe is exactly the stack a replacement will write.
+    替换叠层同步与相似配方推荐共用该加载器，保证推荐的配方就是替换时
+    实际写入的叠层。
+
+    Args:
+        session_data: Converter session state. (转换会话状态)
+        color_layers: Target colour layer count. (目标叠色层数)
+        layer_height_mm: Target colour layer height in mm. (目标叠色层高)
+
+    Returns:
+        dict | None: ``load_lut`` payload, or ``None`` when the session has no
+            usable LUT file or colour mode. (load_lut 结果；无可用 LUT 时为 None)
+
+    Raises:
+        KeyError, OSError, TypeError, ValueError: Propagated from ``load_lut``.
+            (由 load_lut 透传)
+    """
+    lut_path = session_data.get("lut_path")
+    color_mode = session_data.get("color_mode")
+    if not isinstance(lut_path, str) or not lut_path or not os.path.exists(lut_path):
+        return None
+    if not isinstance(color_mode, str) or not color_mode:
+        return None
+    return load_lut(
+        lut_path,
+        color_mode,
+        color_layers=int(color_layers),
+        layer_height_mm=float(layer_height_mm),
+        model_enable=bool(session_data.get("model_enable", False)),
+        model_only=bool(session_data.get("model_only", False)),
+        model_threshold=(
+            float(session_data["model_threshold"])
+            if session_data.get("model_threshold") is not None
+            else None
+        ),
+        model_margin=(
+            float(session_data["model_margin"])
+            if session_data.get("model_margin") is not None
+            else None
+        ),
+    )
 
 
 def _require_preview_cache(session_data: dict) -> dict:
