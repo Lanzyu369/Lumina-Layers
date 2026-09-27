@@ -13,6 +13,8 @@ import {
 import { resolveModelSurfaceArtworkAsset } from "../components/modelSurface/artworkAsset";
 import {
   CanvasOverlayHtml,
+  DEFAULT_CANVAS_OVERLAY_FRAME,
+  getCanvasOverlayBox,
   getCanvasOverlayFrame,
 } from "../components/modelSurface/overlayLayout";
 
@@ -280,6 +282,67 @@ describe("ModelSurfaceSelector3D", () => {
     expect(document.querySelector('[data-model-surface-canvas-overlay="fixed"]')).not.toBeNull();
     expect(mockHtmlProps.at(-1)?.wrapperClass).toBe("z-40");
     expect(mockHtmlProps.at(-1)?.zIndexRange).toEqual([40, 40]);
+  });
+
+  it("snaps the overlay box inward so it never extends past the canvas", () => {
+    const fractional = getCanvasOverlayBox({
+      ...DEFAULT_CANVAS_OVERLAY_FRAME,
+      canvasLeft: 0.5,
+      canvasTop: 163.5,
+      width: 1023.5,
+      height: 604.5,
+    });
+    expect(fractional).toEqual({ left: 1, top: 164, width: 1023, height: 604 });
+    expect(fractional.top + (fractional.height as number)).toBeLessThanOrEqual(768);
+
+    expect(
+      getCanvasOverlayBox({
+        ...DEFAULT_CANVAS_OVERLAY_FRAME,
+        canvasLeft: 100,
+        canvasTop: 80.000001,
+        width: 500,
+        height: 299.999999,
+      }),
+    ).toEqual({ left: 100, top: 80, width: 500, height: 300 });
+    expect(getCanvasOverlayBox(DEFAULT_CANVAS_OVERLAY_FRAME)).toEqual({
+      left: 0,
+      top: 0,
+      width: "100%",
+      height: "100%",
+    });
+  });
+
+  it("does not let a fractional canvas push the overlay below the viewport", async () => {
+    const canvas = document.createElement("canvas");
+    canvas.getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          left: 0,
+          top: 163.5,
+          width: 1024,
+          height: 604.5,
+          right: 1024,
+          bottom: 768,
+          x: 0,
+          y: 163.5,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+    mockGl.domElement = canvas;
+
+    render(
+      <CanvasOverlayHtml>
+        <div>overlay content</div>
+      </CanvasOverlayHtml>,
+    );
+
+    const overlay = await waitFor(() => {
+      const element = document.querySelector<HTMLElement>('[data-model-surface-canvas-overlay="fixed"]');
+      expect(element?.style.top).toBe("164px");
+      return element as HTMLElement;
+    });
+    expect(overlay.style.height).toBe("604px");
+    expect(parseFloat(overlay.style.top) + parseFloat(overlay.style.height)).toBeLessThanOrEqual(768);
   });
 
   it("uses an adaptive preview texture budget instead of a fixed large-image cap", () => {

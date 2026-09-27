@@ -336,12 +336,58 @@ export function getCanvasOverlayFrame(
   };
 }
 
-function toStableCssPixel(value: number): number {
-  return Math.round(value);
+export interface CanvasOverlayBox {
+  left: number;
+  top: number;
+  width: number | "100%";
+  height: number | "100%";
 }
 
-function toStableCssDimension(value: number): number | "100%" {
-  return value > 0 ? Math.round(value) : "100%";
+// Tolerance so float noise such as 163.0000001 does not shave off a whole pixel.
+const OVERLAY_EDGE_SNAP_EPSILON_PX = 0.01;
+
+function snapStartEdgeInward(value: number): number {
+  const snapped = Math.ceil(value - OVERLAY_EDGE_SNAP_EPSILON_PX);
+  // Math.ceil(-0.01) yields -0; normalize so styles and comparisons see a plain 0.
+  return snapped === 0 ? 0 : snapped;
+}
+
+function snapEndEdgeInward(value: number): number {
+  return Math.floor(value + OVERLAY_EDGE_SNAP_EPSILON_PX);
+}
+
+/**
+ * Snap the overlay box to whole pixels without leaving the canvas bounds.
+ * 将覆盖层盒子对齐到整数像素，且不超出画布边界。
+ *
+ * The overlay is portaled into `document.body` under a transformed wrapper, so it
+ * takes part in document scroll overflow. Rounding the origin and size separately
+ * can push the box 1px past the viewport (e.g. top 163.5 + height 604.5), which
+ * adds page scrollbars and shrinks the widget workspace. Snapping each edge inward
+ * keeps the box inside the canvas, and therefore inside the viewport.
+ * 覆盖层通过 portal 挂到 `document.body` 且外层带 transform，会参与文档滚动溢出。
+ * 分别取整起点和尺寸可能让盒子越出视口 1px，从而出现页面滚动条并挤窄工作区；
+ * 向内对齐每条边可保证盒子始终位于画布（也即视口）之内。
+ *
+ * Args:
+ *   frame (CanvasOverlayFrame): Measured canvas frame in viewport pixels. (视口像素下的画布测量框)
+ *
+ * Returns:
+ *   CanvasOverlayBox: Integer CSS box; unmeasured sizes fall back to "100%". (整数 CSS 盒子；未测量尺寸回退为 "100%")
+ */
+export function getCanvasOverlayBox(frame: CanvasOverlayFrame): CanvasOverlayBox {
+  const left = snapStartEdgeInward(frame.canvasLeft);
+  const top = snapStartEdgeInward(frame.canvasTop);
+  return {
+    left,
+    top,
+    width: frame.width > 0
+      ? Math.max(0, snapEndEdgeInward(frame.canvasLeft + frame.width) - left)
+      : "100%",
+    height: frame.height > 0
+      ? Math.max(0, snapEndEdgeInward(frame.canvasTop + frame.height) - top)
+      : "100%",
+  };
 }
 
 const getStableCanvasOverlayHtmlPosition = (): [number, number] => [0, 0];
@@ -400,10 +446,7 @@ export function CanvasOverlayHtml({
   const frame = useCanvasOverlayFrame(overlayRootRef);
   const style = {
     position: "fixed",
-    left: toStableCssPixel(frame.canvasLeft),
-    top: toStableCssPixel(frame.canvasTop),
-    width: toStableCssDimension(frame.width),
-    height: toStableCssDimension(frame.height),
+    ...getCanvasOverlayBox(frame),
     "--lumina-left-dock-width": frame.leftDockWidth,
     "--lumina-right-dock-width": frame.rightDockWidth,
   } as CSSProperties;
