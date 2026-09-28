@@ -22,6 +22,7 @@ import KeychainRing3D from "./KeychainRing3D";
 import FridgeMagnet3D from "./FridgeMagnet3D";
 import LargeFormatTileOverlay3D from "./LargeFormatTileOverlay3D";
 import { computePuzzleOverlayPlacement } from "./puzzleOverlay3DUtils";
+import { resolveLargeFormatTotalHeightMm } from "../utils/largeFormatTileLayout";
 import ModelSurfaceSelector3D from "./ModelSurfaceSelector3D";
 import { resolveModelSurfaceArtworkAsset } from "./modelSurface/artworkAsset";
 import { useConverterStore } from "../stores/converter";
@@ -952,6 +953,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const previewWidth = useConverterStore((s) => s.preview_width_mm);
   const previewHeight = useConverterStore((s) => s.preview_height_mm);
   const previewPixelWidth = useConverterStore((s) => s.previewPixelWidth);
+  const previewPixelHeight = useConverterStore((s) => s.previewPixelHeight);
 
   const { scaleX, scaleY } = computeScaleFactor(
     targetWidth, targetHeight, previewWidth, previewHeight
@@ -1633,7 +1635,12 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             bounds={largeFormatTilePlacement.bounds}
             z={largeFormatTilePlacement.z}
             totalWidthMm={targetWidth}
-            totalHeightMm={targetHeight}
+            totalHeightMm={resolveLargeFormatTotalHeightMm(
+              targetWidth,
+              targetHeight,
+              previewPixelWidth,
+              previewPixelHeight,
+            )}
             tileWidthMm={tileWidthMm}
             tileHeightMm={tileHeightMm}
           />

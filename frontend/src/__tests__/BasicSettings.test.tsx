@@ -391,6 +391,8 @@ describe("BasicSettings", () => {
         target_height_mm: 400,
         tileWidthMm: 250,
         tileHeightMm: 250,
+        previewPixelWidth: null,
+        previewPixelHeight: null,
         downloadUrl: "/api/files/ready.zip",
       } as never);
     });
@@ -406,6 +408,24 @@ describe("BasicSettings", () => {
     expect(state.largeFormatTileOverlayVisible).toBe(false);
     // Preview-only toggle must not invalidate an already generated download.
     expect(state.downloadUrl).toBe("/api/files/ready.zip");
+  });
+
+  it("counts large-format rows from the backend-derived height", () => {
+    // SVG case: browser height 400 mm (2 rows) but the backend preview ratio
+    // gives 520 mm, which generation actually splits into 3 rows.
+    useConverterStore.setState({
+      largeFormatEnabled: true,
+      target_width_mm: 600,
+      target_height_mm: 400,
+      tileWidthMm: 250,
+      tileHeightMm: 250,
+      previewPixelWidth: 600,
+      previewPixelHeight: 520,
+    } as never);
+
+    render(<BasicSettings />);
+
+    expect(screen.getByText("3×3 = 9 (100×20mm)")).toBeInTheDocument();
   });
 
   it("backs off failed startup LUT loads instead of retrying immediately", async () => {

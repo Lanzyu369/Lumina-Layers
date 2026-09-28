@@ -5,6 +5,7 @@ import {
   MAX_TILE_OVERLAY_CUTS_PER_AXIS,
   MAX_TILE_OVERLAY_LABELS,
   resolveLargeFormatTileGrid,
+  resolveLargeFormatTotalHeightMm,
 } from "../largeFormatTileLayout";
 
 const SCENE_BOUNDS = { minX: -50, maxX: 50, minY: -30, maxY: 30 };
@@ -44,6 +45,26 @@ describe("resolveLargeFormatTileGrid", () => {
     [100, 100, 250, Number.POSITIVE_INFINITY],
   ])("rejects invalid dimensions %#", (w, h, tw, th) => {
     expect(resolveLargeFormatTileGrid(w, h, tw, th)).toBeNull();
+  });
+});
+
+describe("resolveLargeFormatTotalHeightMm", () => {
+  it("derives the height from the backend preview ratio like generation does", () => {
+    // Browser says 400 mm, but the backend preview cache is 600 x 520.
+    expect(resolveLargeFormatTotalHeightMm(600, 400, 600, 520)).toBe(520);
+  });
+
+  it("rounds the derived height to 4 decimals like the backend", () => {
+    expect(resolveLargeFormatTotalHeightMm(100, 50, 3, 1)).toBe(33.3333);
+  });
+
+  it.each([
+    [null, null],
+    [0, 520],
+    [600, Number.NaN],
+    [undefined, 520],
+  ])("falls back to the browser height when the ratio is unknown %#", (pw, ph) => {
+    expect(resolveLargeFormatTotalHeightMm(600, 400, pw, ph)).toBe(400);
   });
 });
 

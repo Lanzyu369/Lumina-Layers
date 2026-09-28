@@ -91,6 +91,47 @@ export function resolveLargeFormatTileGrid(
 }
 
 /**
+ * Resolve the artwork height the backend will actually tile.
+ * 解析后端大画幅切分时实际使用的作品高度。
+ *
+ * Large-format generation sends only the width; the backend derives the
+ * height from the preview cache aspect ratio (`target_w` / `target_h`, which
+ * the preview response exposes as the preview pixel size) and rounds it to
+ * 4 decimals. The browser-side height can differ for SVGs, so prefer the
+ * backend ratio whenever it is known.
+ * 大画幅生成只提交宽度，后端按预览缓存比例推导高度并保留 4 位小数；
+ * SVG 的浏览器比例可能与后端不同，因此已知后端比例时优先使用它。
+ *
+ * Args:
+ *     targetWidthMm: Requested artwork width in mm. (请求的作品宽度，毫米)
+ *     fallbackHeightMm: Browser-side height used when the ratio is unknown.
+ *         比例未知时使用的前端高度。
+ *     previewPixelWidth: Backend preview width (`target_w`). (后端预览宽度)
+ *     previewPixelHeight: Backend preview height (`target_h`). (后端预览高度)
+ *
+ * Returns:
+ *     Height in mm matching the backend split. (与后端切分一致的高度，毫米)
+ */
+export function resolveLargeFormatTotalHeightMm(
+  targetWidthMm: number,
+  fallbackHeightMm: number,
+  previewPixelWidth: number | null | undefined,
+  previewPixelHeight: number | null | undefined,
+): number {
+  if (
+    !isPositiveFinite(targetWidthMm)
+    || typeof previewPixelWidth !== "number"
+    || typeof previewPixelHeight !== "number"
+    || !isPositiveFinite(previewPixelWidth)
+    || !isPositiveFinite(previewPixelHeight)
+  ) {
+    return fallbackHeightMm;
+  }
+  const derived = (targetWidthMm * previewPixelHeight) / previewPixelWidth;
+  return Math.round(derived * 1e4) / 1e4;
+}
+
+/**
  * Format a 1-based tile label exactly like the exported file suffix.
  * 按导出文件名后缀格式生成从 1 开始的分块标签。
  */

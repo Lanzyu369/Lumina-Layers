@@ -44,7 +44,10 @@ import {
 import { StatusBanner, workstationInputClass } from "../ui/panelPrimitives";
 import { type ImageRotationDegrees } from "../../utils/imageRotation";
 import { WIKI_DOCS } from "../../utils/wikiDocs";
-import { resolveLargeFormatTileGrid } from "../../utils/largeFormatTileLayout";
+import {
+  resolveLargeFormatTileGrid,
+  resolveLargeFormatTotalHeightMm,
+} from "../../utils/largeFormatTileLayout";
 import {
   buildLutCatalogIndex,
   getBucketDisplayColorMode,
@@ -331,6 +334,8 @@ export default function BasicSettings() {
     tileWidthMm,
     tileHeightMm,
     largeFormatTileOverlayVisible,
+    previewPixelWidth,
+    previewPixelHeight,
     previewImageUrl,
     previewWarnings,
     generatedLargeFormatWarnings,
@@ -414,6 +419,8 @@ export default function BasicSettings() {
     tileWidthMm: s.tileWidthMm,
     tileHeightMm: s.tileHeightMm,
     largeFormatTileOverlayVisible: s.largeFormatTileOverlayVisible,
+    previewPixelWidth: s.previewPixelWidth,
+    previewPixelHeight: s.previewPixelHeight,
     previewImageUrl: s.previewImageUrl,
     previewWarnings: s.previewWarnings,
     generatedLargeFormatWarnings: s.largeFormatWarnings,
@@ -1216,9 +1223,15 @@ export default function BasicSettings() {
 
   const tileGrid = useMemo(() => {
     if (!largeFormatEnabled) return null;
+    // Match the height the backend derives for large-format generation.
     const grid = resolveLargeFormatTileGrid(
       target_width_mm,
-      target_height_mm,
+      resolveLargeFormatTotalHeightMm(
+        target_width_mm,
+        target_height_mm,
+        previewPixelWidth,
+        previewPixelHeight,
+      ),
       tileWidthMm,
       tileHeightMm,
     );
@@ -1226,7 +1239,15 @@ export default function BasicSettings() {
     const lastW = Math.round(grid.lastColumnWidthMm);
     const lastH = Math.round(grid.lastRowHeightMm);
     return { cols: grid.cols, rows: grid.rows, total: grid.total, lastW, lastH };
-  }, [largeFormatEnabled, target_width_mm, target_height_mm, tileWidthMm, tileHeightMm]);
+  }, [
+    largeFormatEnabled,
+    target_width_mm,
+    target_height_mm,
+    previewPixelWidth,
+    previewPixelHeight,
+    tileWidthMm,
+    tileHeightMm,
+  ]);
 
   const mergedLargeFormatWarnings = useMemo(
     () =>

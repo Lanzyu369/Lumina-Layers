@@ -1,14 +1,11 @@
 import { useMemo } from "react";
 import { Html, Line } from "@react-three/drei";
+import { useThemeConfig } from "../hooks/useThemeConfig";
 import {
   buildLargeFormatTileOverlayGeometry,
   type LargeFormatOverlayBounds,
 } from "../utils/largeFormatTileLayout";
 
-/** Dark halo under the cut line so it stays visible on light artwork. */
-const TILE_OUTLINE_HALO_COLOR = "#0f172a";
-/** Bright cut line so it stays visible on dark artwork. */
-const TILE_OUTLINE_COLOR = "#f59e0b";
 const TILE_OUTLINE_HALO_WIDTH_PX = 5;
 const TILE_OUTLINE_WIDTH_PX = 3;
 const TILE_OUTLINE_RENDER_ORDER = 990;
@@ -36,6 +33,7 @@ export default function LargeFormatTileOverlay3D({
   tileWidthMm,
   tileHeightMm,
 }: LargeFormatTileOverlay3DProps) {
+  const themeColors = useThemeConfig();
   const geometry = useMemo(
     () =>
       buildLargeFormatTileOverlayGeometry(
@@ -64,7 +62,7 @@ export default function LargeFormatTileOverlay3D({
       <Line
         points={points}
         segments
-        color={TILE_OUTLINE_HALO_COLOR}
+        color={themeColors.largeFormatTileOutlineHalo}
         lineWidth={TILE_OUTLINE_HALO_WIDTH_PX}
         transparent
         opacity={0.55}
@@ -76,7 +74,7 @@ export default function LargeFormatTileOverlay3D({
       <Line
         points={points}
         segments
-        color={TILE_OUTLINE_COLOR}
+        color={themeColors.largeFormatTileOutline}
         lineWidth={TILE_OUTLINE_WIDTH_PX}
         depthTest={false}
         depthWrite={false}

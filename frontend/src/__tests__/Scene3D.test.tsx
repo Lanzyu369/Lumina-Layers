@@ -817,6 +817,8 @@ beforeEach(() => {
         target_height_mm: 400,
         preview_width_mm: 60,
         preview_height_mm: 40,
+        previewPixelWidth: null,
+        previewPixelHeight: null,
         modelBounds: { minX: -28, maxX: 28, minY: -20, maxY: 20, maxZ: 2 },
       } as never);
       render(<Scene3D />);
@@ -856,6 +858,19 @@ beforeEach(() => {
       // Floats above the color layer top (backing + default 0.4 mm color layer).
       const colorTopZ = useConverterStore.getState().spacer_thick + 0.4;
       expect(capturedLargeFormatTileOverlayProps?.z as number).toBeGreaterThan(colorTopZ);
+    });
+
+    it("uses the backend-derived height when the browser aspect ratio differs", () => {
+      renderLargeFormatPreview();
+      act(() => {
+        // SVG case: browser reports 600 x 400 mm but the backend preview
+        // cache ratio is 600 x 520, and generation derives the height from it.
+        useConverterStore.setState({ previewPixelWidth: 600, previewPixelHeight: 520 });
+      });
+      expect(capturedLargeFormatTileOverlayProps).toMatchObject({
+        totalWidthMm: 600,
+        totalHeightMm: 520,
+      });
     });
 
     it("hides the outline when the preview toggle or large-format mode is off", () => {
