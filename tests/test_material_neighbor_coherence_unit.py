@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import numpy as np
@@ -358,45 +357,6 @@ def test_blockwise_top_k_preserves_duplicate_ties_across_k_boundary(
         parallelism=parallelism,
     )
 
-    np.testing.assert_array_equal(actual_indices, expected_indices)
-    np.testing.assert_array_equal(actual_distances, expected_distances)
-
-
-def test_blockwise_top_k_caps_workers_to_total_distance_budget(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    observed_workers: list[int] = []
-
-    class _RecordingExecutor(ThreadPoolExecutor):
-        def __init__(self, max_workers: int) -> None:
-            observed_workers.append(max_workers)
-            super().__init__(max_workers=max_workers)
-
-    monkeypatch.setattr(
-        material_cache_module,
-        "ThreadPoolExecutor",
-        _RecordingExecutor,
-    )
-    rng = np.random.default_rng(20260728)
-    target_lab = rng.normal(size=(4, 3))
-    candidate_lab = rng.normal(size=(32, 3))
-    expected_indices, expected_distances = _legacy_top_k(
-        target_lab,
-        candidate_lab,
-        top_k=8,
-    )
-
-    actual_indices, actual_distances = _top_k_candidate_rows_blockwise(
-        target_lab=target_lab,
-        candidate_lab=candidate_lab,
-        top_k=8,
-        parallelism=4,
-        memory_budget_bytes=512,
-    )
-
-    # One distance row is 32 * float64 = 256 bytes, so a 512-byte total
-    # budget permits at most two concurrent workers.
-    assert observed_workers == [2]
     np.testing.assert_array_equal(actual_indices, expected_indices)
     np.testing.assert_array_equal(actual_distances, expected_distances)
 

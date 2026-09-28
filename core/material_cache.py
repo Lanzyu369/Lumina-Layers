@@ -509,11 +509,12 @@ def _iter_neighbor_pairs_with_distances(
             np.sum(differences * differences, axis=1),
         )
         valid_mask = exact_distances < float(threshold)
-        for column_index, distance in zip(
-            neighbor_indices[valid_mask],
-            exact_distances[valid_mask],
-            strict=True,
-        ):
+        for column_index in neighbor_indices[valid_mask]:
+            # Recompute with the coherence pass's own norm: the vectorized sum
+            # above can differ by one ULP from ``dot`` on some BLAS builds.
+            distance = _real_vector_norm(
+                targets[column_index] - targets[row_index]
+            )
             yield row_index, int(column_index), distance
 
 
