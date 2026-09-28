@@ -191,6 +191,35 @@ def _resolve_converter_separate_backing_color_id(
     )
 
 
+def _resolve_converter_backing_color_ids(
+    material_source: str,
+    selected_materials: Optional[List[str]],
+    material_backing_material_index: Optional[int],
+    backing_color_id: int,
+    separate_backing_color_id: Optional[int],
+) -> tuple[int, Optional[int]]:
+    """Resolve the board and separate-backing slots for one conversion.
+
+    A material archive with an explicit backing index overrides
+    ``backing_color_id``; every other source keeps the caller's value.
+    """
+    if (
+        material_source == "material_archive"
+        and material_backing_material_index is not None
+    ):
+        backing_color_id = _resolve_material_archive_backing_color_id(
+            selected_materials,
+            material_backing_material_index,
+        )
+    separate_backing_color_id = _resolve_converter_separate_backing_color_id(
+        material_source,
+        selected_materials,
+        material_backing_material_index,
+        separate_backing_color_id,
+    )
+    return backing_color_id, separate_backing_color_id
+
+
 def _build_color_contour_mesh(mask, height, total_layers, rgba):
     """Build a simple extruded mesh for a boolean mask.
     构建布尔掩码的简化挤出网格（兼容旧导出符号）。
@@ -442,18 +471,11 @@ def convert_image_to_3d(
     Returns:
         Tuple of (3mf_path, glb_path, preview_image, status_message, recipe_path)
     """
-    if (
-        material_source == "material_archive"
-        and material_backing_material_index is not None
-    ):
-        backing_color_id = _resolve_material_archive_backing_color_id(
-            selected_materials,
-            material_backing_material_index,
-        )
-    separate_backing_color_id = _resolve_converter_separate_backing_color_id(
+    backing_color_id, separate_backing_color_id = _resolve_converter_backing_color_ids(
         material_source,
         selected_materials,
         material_backing_material_index,
+        backing_color_id,
         separate_backing_color_id,
     )
 
