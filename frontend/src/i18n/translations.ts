@@ -9993,4 +9993,209 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "色块图例",
     en: "Swatch legend",
   },
+  // ==================== Beginner Tutorial ====================
+  tutorial_welcome_title: {
+    zh: "欢迎使用 Lumina Studio",
+    en: "Welcome to Lumina Studio",
+  },
+  tutorial_welcome_body: {
+    zh: "Lumina Studio 可以把一张普通图片转换成多色 3D 打印文件（3MF）：用几种耗材一层层叠着打印，叠出丰富的颜色。\n\n这份新手引导大约 1 分钟，带你认识从图片到打印文件的基本流程。",
+    en: "Lumina Studio turns an ordinary picture into a multi-color 3D print file (3MF): a few filaments are stacked in thin layers to reproduce rich colors.\n\nThis quick tour takes about a minute and walks you through the basic path from a picture to a print file.",
+  },
+  tutorial_welcome_note: {
+    zh: "引导只做讲解，不需要真的上传图片或生成模型。之后可以随时点击右上角的书本图标重新查看。",
+    en: "The tour only explains things. You don't need to upload or generate anything, and you can replay it any time from the book icon at the top right.",
+  },
+  tutorial_welcome_start: {
+    zh: "开始引导",
+    en: "Start tour",
+  },
+  tutorial_welcome_skip: {
+    zh: "跳过",
+    en: "Skip",
+  },
+  tutorial_welcome_close: {
+    zh: "关闭并跳过引导",
+    en: "Close and skip the tour",
+  },
+  tutorial_launcher_label: {
+    zh: "新手引导",
+    en: "Beginner tour",
+  },
+  tutorial_launcher_tooltip: {
+    zh: "重新查看新手引导",
+    en: "Replay the beginner tour",
+  },
+  tutorial_progress_label: {
+    zh: "新手引导",
+    en: "Beginner tour",
+  },
+  tutorial_skip: {
+    zh: "跳过引导",
+    en: "Skip tour",
+  },
+  tutorial_back: {
+    zh: "上一步",
+    en: "Back",
+  },
+  tutorial_next: {
+    zh: "下一步",
+    en: "Next",
+  },
+  tutorial_done: {
+    zh: "完成",
+    en: "Done",
+  },
+  tutorial_flow_label: {
+    zh: "工作原理",
+    en: "How it works",
+  },
+  tutorial_need_label: {
+    zh: "需要准备：",
+    en: "What you need: ",
+  },
+  tutorial_fit_label: {
+    zh: "适合：",
+    en: "Best for: ",
+  },
+  tutorial_step_tabs_title: {
+    zh: "顶部导航",
+    en: "Main navigation",
+  },
+  tutorial_step_tabs_body: {
+    zh: "「图像转换」是主要工作区，把图片变成打印文件的基础操作都在这里完成。\n其他页面（LUT管理、耗材管理、图像转矢量等）属于进阶功能，刚开始可以先不管。",
+    en: "Converter is the main workspace. Everything you need to turn a picture into a print file happens here.\nThe other pages (LUT Management, Material Management, Vectorizer and so on) are advanced tools you can ignore for now.",
+  },
+  tutorial_step_upload_title: {
+    zh: "第一步：放入图片",
+    en: "Step 1: Add a picture",
+  },
+  tutorial_step_upload_body: {
+    zh: "点击这里选择图片，或者直接把图片拖进来。常见的 JPG、PNG 等格式都可以。\n上传后还可以裁剪、旋转图片。",
+    en: "Click here to pick a picture, or drag one in. Common formats such as JPG and PNG work.\nAfter uploading you can also crop or rotate it.",
+  },
+  tutorial_step_source_title: {
+    zh: "第二步：选择颜色来源",
+    en: "Step 2: Choose a color source",
+  },
+  tutorial_step_source_body: {
+    zh: "多色打印的原理是：几种耗材按不同顺序和层数叠在一起，透出不同的颜色。软件需要知道「你的打印机和耗材能叠出哪些颜色」，才能为图片的每个颜色找到最接近的叠法。\n\n「颜色来源」就是这份颜色数据从哪里来。一共有三种方式，接下来逐一介绍。",
+    en: "Multi-color printing works by stacking a few filaments in different orders and layer counts, so light passing through them shows different colors. The software needs to know which colors your printer and filaments can actually produce, so it can find the closest stack for every color in your picture.\n\nThe color source is where that color data comes from. There are three options, explained next.",
+  },
+  tutorial_step_legacy_title: {
+    zh: "传统 LUT：实测色卡",
+    en: "Legacy LUT: measured color chart",
+  },
+  tutorial_step_legacy_body: {
+    zh: "LUT 是一张颜色对照表，记录了「每一种叠法实际打出来是什么颜色」。\n传统 LUT 的数据来自真实打印：先打印一块包含大量叠色组合的校准板，拍照后由软件逐格提取颜色。转换时，图片的每个颜色都去表里找最接近的一格，再按那一格的叠法打印。",
+    en: "A LUT (lookup table) records what color each layer stack actually prints as.\nA Legacy LUT comes from a real print: you print a calibration board with many stack combinations, photograph it, and the software reads the color of every patch. During conversion, each color in your picture is matched to the closest patch and printed with that patch's stack.",
+  },
+  tutorial_step_legacy_need: {
+    zh: "打印一块校准板并拍照提取（在「LUT管理」里完成）；也可以直接选用列表里同品牌耗材的现成 LUT。",
+    en: "Print a calibration board and extract it from a photo (done in LUT Management), or simply pick a ready-made LUT for the same filament brand from the list.",
+  },
+  tutorial_step_legacy_fit: {
+    zh: "追求颜色最准确的用户。数据是实际打印测出来的，和你的机器、耗材最吻合。",
+    en: "Anyone who wants the most accurate colors. The data is measured from real prints, so it matches your printer and filaments best.",
+  },
+  tutorial_flow_legacy_print: {
+    zh: "打印校准板",
+    en: "Print a calibration board",
+  },
+  tutorial_flow_legacy_extract: {
+    zh: "拍照提取颜色",
+    en: "Photograph and extract colors",
+  },
+  tutorial_flow_legacy_table: {
+    zh: "得到颜色对照表",
+    en: "Get a color lookup table",
+  },
+  tutorial_step_inferred_title: {
+    zh: "反推LUT：用品牌数据推算",
+    en: "Inferred LUT: predicted from brand data",
+  },
+  tutorial_step_inferred_body: {
+    zh: "软件内置了一些耗材品牌的颜色数据库。选好品牌和数据库后，软件根据这些已有数据推算出每一种叠法大概是什么颜色，直接生成一张可用的颜色对照表。\n不需要自己打印任何东西，但结果是推算值，和你手上那卷耗材可能有少量偏差。",
+    en: "The software ships with color databases for several filament brands. Pick a brand and database, and the software predicts roughly what color each stack will print as, producing a ready-to-use lookup table.\nNothing needs to be printed first, but the result is a prediction and may differ slightly from the spool you actually own.",
+  },
+  tutorial_step_inferred_need: {
+    zh: "只需要选择耗材品牌、数据库和层数。",
+    en: "Just choose a filament brand, a database and a layer count.",
+  },
+  tutorial_step_inferred_fit: {
+    zh: "想马上开始、暂时不想打印校准板的用户；耗材品牌在支持列表里时效果更好。",
+    en: "Getting started right away without printing a calibration board. Works best when your filament brand is on the supported list.",
+  },
+  tutorial_flow_inferred_database: {
+    zh: "品牌耗材数据库",
+    en: "Brand filament database",
+  },
+  tutorial_flow_inferred_predict: {
+    zh: "软件推算叠色",
+    en: "Software predicts stacks",
+  },
+  tutorial_flow_inferred_table: {
+    zh: "得到颜色对照表",
+    en: "Get a color lookup table",
+  },
+  tutorial_step_material_title: {
+    zh: "耗材档案：每卷耗材单独建档",
+    en: "Material Archive: one profile per spool",
+  },
+  tutorial_step_material_body: {
+    zh: "耗材档案不依赖固定的颜色对照表，而是先单独测量每一卷耗材：为它打印一张从薄到厚的梯度卡，拍照后软件测出这卷耗材在不同厚度下的颜色和透光程度，保存成一份「耗材档案」。\n转换时，你可以从已建档的耗材里自由挑选几种，软件根据它们的档案计算出叠在一起会是什么颜色。",
+    en: "Instead of a fixed lookup table, Material Archive measures each spool on its own: you print a thin-to-thick gradient card for it, photograph it, and the software records how that filament looks and how much light passes through at each thickness. That becomes the spool's material profile.\nWhen converting, you freely pick a few profiled filaments and the software calculates what colors they make when stacked.",
+  },
+  tutorial_step_material_need: {
+    zh: "为每卷要用的耗材打印一张梯度卡并提取（在「耗材管理」里完成）。",
+    en: "Print and extract a gradient card for every spool you want to use (done in Material Management).",
+  },
+  tutorial_step_material_fit: {
+    zh: "耗材多、经常换搭配的用户。建档一次，之后可以任意组合，不用为每种组合重新打印校准板。",
+    en: "People with many filaments who change combinations often. Profile each spool once, then mix freely without printing a new calibration board for every combination.",
+  },
+  tutorial_flow_material_card: {
+    zh: "每卷打印梯度卡",
+    en: "Print a gradient card per spool",
+  },
+  tutorial_flow_material_measure: {
+    zh: "测出颜色和透光",
+    en: "Measure color and translucency",
+  },
+  tutorial_flow_material_solve: {
+    zh: "自由组合并计算叠色",
+    en: "Mix freely and calculate stacks",
+  },
+  tutorial_step_size_title: {
+    zh: "第三步：设置尺寸",
+    en: "Step 3: Set the size",
+  },
+  tutorial_step_size_body: {
+    zh: "在这里设置打印成品的宽度和高度（毫米），需要在打印机的打印范围内。\n下方的「厚度」是底板厚度，第一次使用保持默认即可。",
+    en: "Set the printed width and height here (in mm). Keep them within your printer's print area.\nThe Thickness setting below controls the base plate. The default is fine for your first print.",
+  },
+  tutorial_step_preview_title: {
+    zh: "第四步：预览效果",
+    en: "Step 4: Preview",
+  },
+  tutorial_step_preview_body: {
+    zh: "放好图片、选好颜色来源后，点击「预览」。转换结果会显示在屏幕中间，可以拖动旋转、滚轮缩放，检查颜色和细节。\n不满意可以回去调整设置，再预览一次。",
+    en: "Once the picture and color source are set, click Preview. The result appears in the middle of the screen, where you can drag to rotate and scroll to zoom to check colors and details.\nIf something looks off, adjust the settings and preview again.",
+  },
+  tutorial_step_generate_title: {
+    zh: "第五步：生成打印文件",
+    en: "Step 5: Generate the print file",
+  },
+  tutorial_step_generate_body: {
+    zh: "预览满意后，点击「生成」得到 3MF 打印文件。把它导入切片软件，确认每个耗材槽位对应的颜色正确，就可以开始打印了。",
+    en: "When the preview looks right, click Generate to get a 3MF print file. Open it in your slicer, check that each filament slot has the right color, and start printing.",
+  },
+  tutorial_step_help_title: {
+    zh: "遇到问题时",
+    en: "When you need help",
+  },
+  tutorial_step_help_body: {
+    zh: "设置项旁边的问号图标可以查看说明和在线文档；右上角的反馈按钮可以把问题发给开发者。\n想再看一遍这份引导，随时点击这个书本图标。祝打印顺利！",
+    en: "The question-mark icons next to settings show explanations and link to the online docs, and the feedback button at the top right sends problems to the developers.\nTo see this tour again, click this book icon any time. Happy printing!",
+  },
 };
