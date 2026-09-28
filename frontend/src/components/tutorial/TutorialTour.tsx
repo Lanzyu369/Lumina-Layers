@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { JSX } from "react";
 import { createPortal } from "react-dom";
-import { motion, useReducedMotion } from "framer-motion";
 import { useI18n } from "../../i18n/context";
 import { TUTORIAL_STEPS } from "../../data/tutorialSteps";
 import type { TutorialStep } from "../../data/tutorialSteps";
@@ -105,7 +104,6 @@ export default function TutorialTour(): JSX.Element | null {
 
   const anchor = useTutorialAnchor(step.anchor);
   const viewport = useViewportSize();
-  const reduceMotion = useReducedMotion();
   const cardRef = useRef<HTMLDivElement>(null);
   const [cardSize, setCardSize] = useState<TutorialSize>(DEFAULT_CARD_SIZE);
 
@@ -170,7 +168,6 @@ export default function TutorialTour(): JSX.Element | null {
       : null;
   const position = computeTutorialCardPosition(spotlight, cardSize, viewport);
   const showCard = anchor.status !== "searching";
-  const transition = reduceMotion ? { duration: 0 } : { duration: 0.2, ease: "easeOut" as const };
 
   return createPortal(
     <div className="fixed inset-0 z-[9000]" data-testid="tutorial-tour">
@@ -186,22 +183,22 @@ export default function TutorialTour(): JSX.Element | null {
       {spotlight ? (
         <>
           {/* Dim layer with a rounded cut-out. The app disables box-shadow
-              globally, so the scrim is drawn with an SVG mask instead. */}
+              globally, so the scrim is drawn with an SVG mask instead. The
+              cut-out and outline are positioned directly (no animation) so
+              they always stay on the same element; framer-motion treats SVG
+              `x`/`y` as transforms, which drifted the cut-out on fast steps. */}
           <svg aria-hidden="true" className="pointer-events-none absolute inset-0 h-full w-full">
             <defs>
               <mask id="tutorial-spotlight-mask">
                 <rect width="100%" height="100%" fill="white" />
-                <motion.rect
+                <rect
+                  data-testid="tutorial-spotlight-cutout"
+                  x={spotlight.left}
+                  y={spotlight.top}
+                  width={spotlight.width}
+                  height={spotlight.height}
                   rx={SPOTLIGHT_RADIUS_PX}
                   fill="black"
-                  initial={false}
-                  animate={{
-                    x: spotlight.left,
-                    y: spotlight.top,
-                    width: spotlight.width,
-                    height: spotlight.height,
-                  }}
-                  transition={transition}
                 />
               </mask>
             </defs>
@@ -212,14 +209,11 @@ export default function TutorialTour(): JSX.Element | null {
               style={{ fill: "var(--surface-scrim)" }}
             />
           </svg>
-          <motion.div
+          <div
             aria-hidden="true"
             data-testid="tutorial-spotlight"
             className="pointer-events-none absolute border-2 border-blue-500 dark:border-blue-400"
-            style={{ borderRadius: SPOTLIGHT_RADIUS_PX }}
-            initial={false}
-            animate={spotlight}
-            transition={transition}
+            style={{ ...spotlight, borderRadius: SPOTLIGHT_RADIUS_PX }}
           />
         </>
       ) : null}

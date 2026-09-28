@@ -10083,20 +10083,20 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Multi-color printing works by stacking a few filaments in different orders and layer counts, so light passing through them shows different colors. The software needs to know which colors your printer and filaments can actually produce, so it can find the closest stack for every color in your picture.\n\nThe color source is where that color data comes from. There are three options, explained next.",
   },
   tutorial_step_legacy_title: {
-    zh: "传统 LUT：实测色卡",
-    en: "Legacy LUT: measured color chart",
+    zh: "传统 LUT：实拍色卡",
+    en: "Legacy LUT: photographed color chart",
   },
   tutorial_step_legacy_body: {
-    zh: "LUT 是一张颜色对照表，记录了「每一种叠法实际打出来是什么颜色」。\n传统 LUT 的数据来自真实打印：先打印一块包含大量叠色组合的校准板，拍照后由软件逐格提取颜色。转换时，图片的每个颜色都去表里找最接近的一格，再按那一格的叠法打印。",
-    en: "A LUT (lookup table) records what color each layer stack actually prints as.\nA Legacy LUT comes from a real print: you print a calibration board with many stack combinations, photograph it, and the software reads the color of every patch. During conversion, each color in your picture is matched to the closest patch and printed with that patch's stack.",
+    zh: "LUT 是一张颜色对照表，记录了「每一种叠法打出来是什么颜色」。\n传统 LUT 是最传统的做法：用你的打印机和耗材打印一块包含大量叠色组合的校准板，实拍照片后由软件逐格提取颜色。转换时，图片的每个颜色都去表里找最接近的一格，再按那一格的叠法打印。",
+    en: "A LUT (lookup table) records what color each layer stack prints as.\nLegacy LUT is the traditional approach: you print a calibration board full of stack combinations on your own printer and filaments, photograph it, and the software reads the color of every patch. During conversion, each color in your picture is matched to the closest patch and printed with that patch's stack.",
   },
   tutorial_step_legacy_need: {
-    zh: "打印一块校准板并拍照提取（在「LUT管理」里完成）；也可以直接选用列表里同品牌耗材的现成 LUT。",
-    en: "Print a calibration board and extract it from a photo (done in LUT Management), or simply pick a ready-made LUT for the same filament brand from the list.",
+    zh: "打印一块校准板并拍照提取（在「LUT管理」里完成）。校准板色块很多，打印时间较长。也可以直接选用列表里现成的 LUT。",
+    en: "Print a calibration board and extract it from a photo (done in LUT Management). The board has many patches, so printing takes a while. You can also pick a ready-made LUT from the list.",
   },
   tutorial_step_legacy_fit: {
-    zh: "追求颜色最准确的用户。数据是实际打印测出来的，和你的机器、耗材最吻合。",
-    en: "Anyone who wants the most accurate colors. The data is measured from real prints, so it matches your printer and filaments best.",
+    zh: "已经有现成 LUT，或者愿意花时间打印校准板、按传统流程实拍建表的用户。",
+    en: "People who already have a LUT, or who don't mind spending the print time on a calibration board and building the table the traditional way.",
   },
   tutorial_flow_legacy_print: {
     zh: "打印校准板",
@@ -10111,32 +10111,32 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Get a color lookup table",
   },
   tutorial_step_inferred_title: {
-    zh: "反推LUT：用品牌数据推算",
-    en: "Inferred LUT: predicted from brand data",
+    zh: "反推LUT：用品牌实测数据推算",
+    en: "Inferred LUT: predicted from brand measurements",
   },
   tutorial_step_inferred_body: {
-    zh: "软件内置了一些耗材品牌的颜色数据库。选好品牌和数据库后，软件根据这些已有数据推算出每一种叠法大概是什么颜色，直接生成一张可用的颜色对照表。\n不需要自己打印任何东西，但结果是推算值，和你手上那卷耗材可能有少量偏差。",
-    en: "The software ships with color databases for several filament brands. Pick a brand and database, and the software predicts roughly what color each stack will print as, producing a ready-to-use lookup table.\nNothing needs to be printed first, but the result is a prediction and may differ slightly from the spool you actually own.",
+    zh: "软件内置了部分耗材品牌的颜色数据库，里面是已经实际打印并测量过的大量叠色结果，同时附带一个由这些实测数据反推出来的颜色预测模型。\n转换时，软件先在实测数据里为每个颜色找最接近的叠法，并自动换算到你选的层数和层高；开启「模型辅助匹配」后，实测数据里找不到足够接近的颜色时，再改用模型预测的叠法补上。",
+    en: "The software ships with color databases for some filament brands. They hold many stack colors that were actually printed and measured, plus a color prediction model inferred from those measurements.\nDuring conversion, each color is first matched against the measured data, converted automatically to the layer count and layer height you choose. With Model-Assisted Matching on, colors the measured data can't match closely enough are filled in with stacks predicted by the model.",
   },
   tutorial_step_inferred_need: {
-    zh: "只需要选择耗材品牌、数据库和层数。",
-    en: "Just choose a filament brand, a database and a layer count.",
+    zh: "不需要打印任何东西，只要选择耗材品牌、数据库和层数；实际使用的耗材要和所选品牌一致。",
+    en: "Nothing to print. Just choose a filament brand, database and layer count, and use filaments that match the chosen brand.",
   },
   tutorial_step_inferred_fit: {
-    zh: "想马上开始、暂时不想打印校准板的用户；耗材品牌在支持列表里时效果更好。",
-    en: "Getting started right away without printing a calibration board. Works best when your filament brand is on the supported list.",
+    zh: "使用支持列表里品牌耗材、想马上开始的用户。数据来自参考打印的实测，和你手上的耗材、机器可能有少量差异。",
+    en: "Getting started right away with a brand on the supported list. The data comes from reference prints, so it may differ slightly from your own spools and printer.",
   },
   tutorial_flow_inferred_database: {
-    zh: "品牌耗材数据库",
-    en: "Brand filament database",
+    zh: "品牌实测颜色数据库",
+    en: "Measured brand color database",
   },
   tutorial_flow_inferred_predict: {
-    zh: "软件推算叠色",
-    en: "Software predicts stacks",
+    zh: "反推出颜色预测模型",
+    en: "Infer a color prediction model",
   },
   tutorial_flow_inferred_table: {
-    zh: "得到颜色对照表",
-    en: "Get a color lookup table",
+    zh: "按层数层高匹配叠色",
+    en: "Match stacks for your layer settings",
   },
   tutorial_step_material_title: {
     zh: "耗材档案：每卷耗材单独建档",
@@ -10151,8 +10151,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Print and extract a gradient card for every spool you want to use (done in Material Management).",
   },
   tutorial_step_material_fit: {
-    zh: "耗材多、经常换搭配的用户。建档一次，之后可以任意组合，不用为每种组合重新打印校准板。",
-    en: "People with many filaments who change combinations often. Profile each spool once, then mix freely without printing a new calibration board for every combination.",
+    zh: "耗材种类多、经常更换不同搭配；手上没有同一品牌的完整多色套装；不想局限于常规的 4 色、6 色、8 色耗材数量组合；或者需要某种颜色表现得更细腻（可以单独加入这种颜色的耗材）。",
+    en: "People with many filaments who often switch combinations; who don't own a complete multi-color set from one brand; who don't want to be limited to the usual 4, 6 or 8 filament setups; or who need finer shades of a particular color (just add a filament of that color).",
   },
   tutorial_flow_material_card: {
     zh: "每卷打印梯度卡",

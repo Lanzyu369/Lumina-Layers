@@ -51,6 +51,20 @@ describe("TutorialTour", () => {
     render(<TutorialTour />);
 
     expect(await screen.findByTestId("tutorial-spotlight")).toBeInTheDocument();
+    // The dimming cut-out must sit exactly on the padded anchor rect
+    // (anchor 40,20 600x48 plus 6px padding), not be offset by a transform.
+    const cutout = screen.getByTestId("tutorial-spotlight-cutout");
+    expect(cutout).toHaveAttribute("x", "34");
+    expect(cutout).toHaveAttribute("y", "14");
+    expect(cutout).toHaveAttribute("width", "612");
+    expect(cutout).toHaveAttribute("height", "60");
+    expect(cutout).not.toHaveAttribute("transform");
+    expect(screen.getByTestId("tutorial-spotlight")).toHaveStyle({
+      top: "14px",
+      left: "34px",
+      width: "612px",
+      height: "60px",
+    });
     expect(screen.getByText(zh("tutorial_step_tabs_title"))).toBeInTheDocument();
     expect(screen.getByTestId("tutorial-card")).toHaveAttribute("data-side", "bottom");
     expect(screen.queryByText(zh("tutorial_back"))).not.toBeInTheDocument();

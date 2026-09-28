@@ -81,6 +81,13 @@ Lumina sends only low-cardinality workflow events:
 - `lumina_batch_convert_failed`
 - `lumina_bug_report_done`
 - `lumina_bug_report_failed`
+- `lumina_tutorial_offered` (first-run welcome shown; once per device)
+- `lumina_tutorial_started` (`trigger`: `auto` | `manual`)
+- `lumina_tutorial_step_view` (`trigger`, `step_id`, `step_index`,
+  `total_steps`; at most one per tour step, only on user navigation)
+- `lumina_tutorial_skipped` (`trigger`, `via`: `welcome` | `skip_button` |
+  `escape`, `step_id`, `step_index`, `total_steps`, `elapsed_s`)
+- `lumina_tutorial_completed` (`trigger`, `total_steps`, `elapsed_s`)
 
 Payloads are sanitized in `frontend/src/analytics/umami.ts`. Fields whose keys
 look like file names, paths, URLs, session IDs, tickets, email, descriptions,
