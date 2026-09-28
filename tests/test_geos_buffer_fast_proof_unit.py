@@ -561,7 +561,7 @@ def test_extract_dense_geometry_uses_production_parse_policy() -> None:
     class FakeProcessor:
         def _parse_svg(self, svg_path: str, target_width_mm: float):
             assert self._parse_expand_stroke_to_fill is False
-            assert svg_path == "/tmp/dense.svg"
+            assert svg_path == str(Path("/tmp/dense.svg"))
             assert target_width_mm == 300.0
             return ([{"poly": components[0]}] * 5, 1.0, (0, 0, 5, 1))
 

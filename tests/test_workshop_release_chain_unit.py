@@ -60,10 +60,8 @@ def _write_sdk_release(tmp_path: Path) -> tuple[Path, Path]:
             output.addfile(member, io.BytesIO(payload))
     checksum = hashlib.sha256(archive.read_bytes()).hexdigest()
     checksum_path = tmp_path / f"{SDK_ASSET}.sha256"
-    checksum_path.write_text(
-        f"{checksum}  {SDK_ASSET}\n",
-        encoding="ascii",
-    )
+    # sha256sum format is byte-exact; write_text would emit CRLF on Windows.
+    checksum_path.write_bytes(f"{checksum}  {SDK_ASSET}\n".encode("ascii"))
     return archive, checksum_path
 
 
