@@ -11,12 +11,13 @@
  * 不保存任何编辑状态。
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { SimilarRecipeItem } from "../../api/types";
 import { normalizeReferenceHex, useSimilarRecipes } from "../../hooks/useSimilarRecipes";
 import { useI18n } from "../../i18n/context";
 import { useConverterStore } from "../../stores/converter";
+import { useEyedropperStore } from "../../stores/eyedropperStore";
 import { StatusBanner, cardClass, cx, groupHeaderClass } from "../ui/panelPrimitives";
 import SimilarRecipeList from "./SimilarRecipeList";
 import TargetColorPanel from "./TargetColorPanel";
@@ -109,6 +110,7 @@ export default function ColorQuickReplacePanel() {
   const handleApply = useCallback((item: SimilarRecipeItem) => {
     void applySuggestionToSelection(item);
   }, []);
+  const { eyedropperActive, toggleEyedropper } = useTargetEyedropper(handleTargetChange, expanded);
 
   return (
     <section className={cx(cardClass, "flex flex-col gap-3 px-4 py-3")} data-testid="color-quick-replace-panel">
@@ -135,6 +137,8 @@ export default function ColorQuickReplacePanel() {
             targetInput={targetInput}
             targetHex={targetHex}
             onTargetChange={handleTargetChange}
+            eyedropperActive={eyedropperActive}
+            onToggleEyedropper={toggleEyedropper}
             palette={palette}
             snapToPrintable={snapTargetToPrintable}
             nearest={targetRecipes.items[0] ?? null}
@@ -190,6 +194,50 @@ export default function ColorQuickReplacePanel() {
       )}
     </section>
   );
+}
+
+/**
+ * Feed eyedropper picks from the 2D preview into target color B. Esc cancels
+ * the eyedropper before the page's own Esc handler can close the overlay, and
+ * the eyedropper is switched off whenever the card collapses or unmounts.
+ * 把 2D 预览的吸管取色结果填入目标颜色 B。Esc 优先取消吸管（不关闭页面）；
+ * 卡片收起或卸载时自动关闭吸管。
+ */
+function useTargetEyedropper(onPick: (hex: string) => void, enabled: boolean) {
+  const eyedropperActive = useEyedropperStore((s) => s.active);
+  const lastPick = useEyedropperStore((s) => s.lastPick);
+  const handledSeq = useRef(lastPick?.seq ?? 0);
+
+  useEffect(() => {
+    if (lastPick && lastPick.seq !== handledSeq.current) {
+      handledSeq.current = lastPick.seq;
+      onPick(lastPick.hex);
+    }
+  }, [lastPick, onPick]);
+
+  useEffect(() => {
+    if (!enabled) useEyedropperStore.getState().cancel();
+    return () => useEyedropperStore.getState().cancel();
+  }, [enabled]);
+
+  useEffect(() => {
+    if (!eyedropperActive) return;
+    const cancelOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      useEyedropperStore.getState().cancel();
+    };
+    window.addEventListener("keydown", cancelOnEscape, { capture: true });
+    return () => window.removeEventListener("keydown", cancelOnEscape, { capture: true });
+  }, [eyedropperActive]);
+
+  const toggleEyedropper = useCallback(() => {
+    const store = useEyedropperStore.getState();
+    if (store.active) store.cancel();
+    else store.start();
+  }, []);
+
+  return { eyedropperActive, toggleEyedropper };
 }
 
 function BasisToggle({

@@ -19,6 +19,9 @@ interface TargetColorPanelProps {
   /** Normalised ``#rrggbb`` target, or ``null`` when the input is invalid. */
   targetHex: string | null;
   onTargetChange: (value: string) => void;
+  /** Whether the next click on the 2D preview picks B from that point. */
+  eyedropperActive: boolean;
+  onToggleEyedropper: () => void;
   palette: PaletteEntry[];
   /**
    * True: replace with the printable LUT color nearest to B. False (material
@@ -39,6 +42,8 @@ export default function TargetColorPanel({
   targetInput,
   targetHex,
   onTargetChange,
+  eyedropperActive,
+  onToggleEyedropper,
   palette,
   snapToPrintable,
   nearest,
@@ -96,7 +101,30 @@ export default function TargetColorPanel({
           className="min-w-0 flex-1 rounded-[10px] border border-slate-200/80 bg-slate-100/78 px-3 py-2 font-mono text-xs text-slate-700 outline-none shadow-[var(--shadow-control)] focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:bg-slate-900/72 dark:text-slate-100"
           data-testid="quick-replace-target-hex"
         />
+        <button
+          type="button"
+          aria-pressed={eyedropperActive}
+          aria-label={t("quick_replace_eyedropper")}
+          title={t("quick_replace_eyedropper_title")}
+          onClick={onToggleEyedropper}
+          data-testid="quick-replace-eyedropper"
+          className={cx(
+            "flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] border transition-colors",
+            eyedropperActive
+              ? "border-transparent bg-blue-600 text-white"
+              : "border-slate-200/80 bg-slate-100/78 text-slate-600 hover:bg-slate-200/80 dark:border-slate-700/80 dark:bg-slate-900/72 dark:text-slate-300 dark:hover:bg-slate-800",
+          )}
+        >
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 4l5 5m-2.5-2.5L20 4M13.5 5.5l5 5L9 20H4v-5l9.5-9.5z" />
+          </svg>
+        </button>
       </div>
+      {eyedropperActive && (
+        <p className="text-[11px] text-blue-700 dark:text-blue-300" role="status">
+          {t("quick_replace_eyedropper_active")}
+        </p>
+      )}
       {showInvalid && (
         <p className="text-[11px] text-rose-600 dark:text-rose-300">{t("quick_replace_target_hex_invalid")}</p>
       )}

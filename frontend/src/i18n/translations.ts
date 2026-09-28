@@ -2705,6 +2705,18 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "目标颜色 B",
     en: "Target color B",
   },
+  quick_replace_eyedropper: {
+    zh: "从图中取色",
+    en: "Pick from image",
+  },
+  quick_replace_eyedropper_title: {
+    zh: "点一下这个按钮，再点左侧图像上的任意一点，用那一点的颜色作为目标颜色 B（不会改变选区）",
+    en: "Click this, then click any point on the image to use its color as target color B (the selection is not changed)",
+  },
+  quick_replace_eyedropper_active: {
+    zh: "请在左侧图像上点击要取色的位置，按 Esc 取消。",
+    en: "Click the point on the image whose color you want. Press Esc to cancel.",
+  },
   quick_replace_target_hex_placeholder: {
     zh: "#ff8800",
     en: "#ff8800",

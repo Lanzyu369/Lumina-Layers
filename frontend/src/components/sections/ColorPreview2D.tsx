@@ -14,6 +14,7 @@ import { sourceColorPick } from '../../api/converter';
 import { ModelingMode } from '../../api/types';
 import { buildLayerImagesSourceKey, useConverterStore } from '../../stores/converter';
 import type { SelectionDocument } from '../../stores/converter';
+import { useEyedropperStore } from '../../stores/eyedropperStore';
 import { useI18n } from '../../i18n/context';
 import CanvasPreviewSurface, { type CanvasPreviewSurfaceViewport } from '../ui/CanvasPreviewSurface';
 import { cx } from '../ui/panelPrimitives';
@@ -362,6 +363,10 @@ export default function ColorPreview2D({
   const applySelectionMutation = useConverterStore((s) => s.applySelectionMutation);
   const brushSizePx = useConverterStore((s) => s.brushSizePx);
   const colorRangeTolerance = useConverterStore((s) => s.colorRangeTolerance);
+  const eyedropperActive = useEyedropperStore((s) => s.active);
+  const completeEyedropper = useEyedropperStore((s) => s.complete);
+  // The eyedropper takes over clicks even while the brush tool is selected.
+  const brushStrokesEnabled = selectionTool === 'brush' && !eyedropperActive;
   const selectedColor = useConverterStore((s) => s.selectedColor);
   const selectedColors = useConverterStore((s) => s.selectedColors);
   const isLoading = useConverterStore((s) => s.isLoading);
@@ -897,6 +902,15 @@ export default function ColorPreview2D({
 
       const { pixelX, pixelY } = sample;
 
+      // Eyedropper: read this point's colour for the quick-recolor card and
+      // leave the selection untouched. Transparent background reads as null.
+      // 吸管取色：只读取该点颜色交给快速换色卡片，不改变选区；透明背景忽略。
+      if (eyedropperActive) {
+        const pickedHex = readActivePreviewPixel(sample);
+        if (pickedHex) completeEyedropper(pickedHex);
+        return;
+      }
+
       // Colour-range picks toggle every visible block within the ΔE00
       // tolerance. The server resolves the clicked colour, so no local
       // flood-fill placeholder is drawn (see DESIGN.md "No approximate flash").
@@ -1185,6 +1199,8 @@ export default function ColorPreview2D({
       selectionDocument,
       applySelectionMutation,
       colorRangeTolerance,
+      eyedropperActive,
+      completeEyedropper,
       handleSelectAllClick,
       readActivePreviewPixel,
       regionData,
@@ -1902,13 +1918,13 @@ export default function ColorPreview2D({
         minScale={MIN_ZOOM}
         maxScale={MAX_ZOOM}
         wheelZoomStepMultiplier={ZOOM_STEP}
-        allowOutOfImageHover={selectionTool === 'brush'}
+        allowOutOfImageHover={brushStrokesEnabled}
         onHoverSample={handleCanvasHoverSample}
-        onClickSample={selectionTool === 'brush' ? undefined : handleClick}
-        onStrokeStart={selectionTool === 'brush' ? (sample) => appendBrushSample(sample, true) : undefined}
-        onStrokeMove={selectionTool === 'brush' ? (sample) => appendBrushSample(sample, false) : undefined}
-        onStrokeEnd={selectionTool === 'brush' ? endBrushStroke : undefined}
-        onStrokeCancel={selectionTool === 'brush' ? () => setBrushDraftVersion((version) => version + 1) : undefined}
+        onClickSample={brushStrokesEnabled ? undefined : handleClick}
+        onStrokeStart={brushStrokesEnabled ? (sample) => appendBrushSample(sample, true) : undefined}
+        onStrokeMove={brushStrokesEnabled ? (sample) => appendBrushSample(sample, false) : undefined}
+        onStrokeEnd={brushStrokesEnabled ? endBrushStroke : undefined}
+        onStrokeCancel={brushStrokesEnabled ? () => setBrushDraftVersion((version) => version + 1) : undefined}
         onSurfaceReady={handleSurfaceReady}
         onScaleChange={setZoom}
         middleButtonPanEnabled

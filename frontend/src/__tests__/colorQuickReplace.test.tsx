@@ -5,6 +5,7 @@ import type { SimilarRecipesResponse } from "../api/types";
 import ColorQuickReplacePanel from "../components/colorQuickReplace/ColorQuickReplacePanel";
 import SelectionToolPicker from "../components/sections/SelectionToolPicker";
 import { normalizeReferenceHex } from "../hooks/useSimilarRecipes";
+import { useEyedropperStore } from "../stores/eyedropperStore";
 import {
   DEFAULT_STATE,
   MAX_COLOR_RANGE_TOLERANCE,
@@ -243,6 +244,35 @@ describe("ColorQuickReplacePanel", () => {
     expect(screen.queryByTestId("quick-replace-nearest-printable")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: REPLACE_BUTTON_NAME }));
     expect(replaceSharedSelectionColor).toHaveBeenCalledWith("123456");
+  });
+
+  it("fills target colour B from an eyedropper pick on the image", async () => {
+    useEyedropperStore.setState({ active: false, lastPick: null });
+    await renderPanel();
+    fireEvent.click(screen.getByTestId("quick-replace-eyedropper"));
+    expect(useEyedropperStore.getState().active).toBe(true);
+    act(() => {
+      useEyedropperStore.getState().complete("1E3CC8");
+    });
+    expect(screen.getByTestId("quick-replace-target-hex")).toHaveValue("#1e3cc8");
+    await act(async () => {
+      vi.advanceTimersByTime(250);
+    });
+    expect(fetchSimilarRecipes).toHaveBeenLastCalledWith(
+      expect.objectContaining({ target_color: "#1e3cc8" }),
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("cancels the eyedropper with Esc and when the card collapses", async () => {
+    useEyedropperStore.setState({ active: false, lastPick: null });
+    await renderPanel();
+    fireEvent.click(screen.getByTestId("quick-replace-eyedropper"));
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(useEyedropperStore.getState().active).toBe(false);
+    fireEvent.click(screen.getByTestId("quick-replace-eyedropper"));
+    fireEvent.click(screen.getByRole("button", { expanded: true }));
+    expect(useEyedropperStore.getState().active).toBe(false);
   });
 
   it("does not request suggestions while collapsed", async () => {
