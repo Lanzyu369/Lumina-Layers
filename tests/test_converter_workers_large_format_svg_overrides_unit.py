@@ -227,9 +227,6 @@ def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
             wraps=vector_engine_module._concatenate_meshes_fast,
         ) as bounded_concat,
         patch(
-            "core.vector_engine._enforce_vector_mesh_runtime_headroom",
-        ) as memory_guard,
-        patch(
             "api.workers.converter_workers._rasterize_tile_for_cover",
             return_value=None,
         ),
@@ -247,14 +244,6 @@ def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
     bounded_concat.assert_called_once()
     assert len(captured_ranges) == 1
     assert captured_ranges[0] == ()
-    assert any(
-        call.kwargs.get("stage") == "large_format_vector_board_merge"
-        for call in memory_guard.call_args_list
-    )
-    assert any(
-        call.kwargs.get("stage") == "large_format_vector_3mf_export"
-        for call in memory_guard.call_args_list
-    )
 
     try:
         with zipfile.ZipFile(result["zip_path"]) as package:

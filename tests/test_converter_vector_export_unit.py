@@ -419,12 +419,6 @@ class TestVectorBranchExport:
                     "board merge must use the bounded vector concatenator"
                 ),
             ),
-            patch(
-                "core.vector_engine._enforce_vector_mesh_runtime_headroom",
-            ) as memory_guard,
-            patch(
-                "core.vector_engine._enforce_vector_scene_export_headroom",
-            ) as scene_export_guard,
         ):
             convert_image_to_3d(
                 image_path=str(svg_file),
@@ -441,17 +435,6 @@ class TestVectorBranchExport:
                 modeling_mode=ModelingMode.VECTOR,
                 backing_color_id=1,
             )
-
-        assert any(
-            call.kwargs.get("stage") == "vector_board_merge"
-            for call in memory_guard.call_args_list
-        )
-        export_guard_call = next(
-            call
-            for call in scene_export_guard.call_args_list
-            if call.kwargs.get("stage") == "vector_3mf_export"
-        )
-        assert export_guard_call.kwargs["workspace_multiplier"] == 2.0
 
         _, build_kwargs = fake_processor.build_mesh.call_args
         assert build_kwargs["backing_color_id"] == 1

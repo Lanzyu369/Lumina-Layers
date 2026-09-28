@@ -570,7 +570,7 @@ class TestVectorizeImageCanary:
         mock_pool.submit.assert_not_called()
         assert sorted(tmp_path.iterdir()) == []
 
-    def test_timeout_returns_504_and_cleans_upload_temp_file(
+    def test_worker_timeout_returns_sanitized_500_and_cleans_upload_temp_file(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
@@ -593,8 +593,12 @@ class TestVectorizeImageCanary:
         finally:
             app.dependency_overrides.clear()
 
-        assert response.status_code == 504
-        assert response.json()["detail"] == "Vectorization timed out"
+        # Application compute deadlines were removed (c49636463), so a worker
+        # TimeoutError is a real failure mapped like any other boundary error.
+        assert response.status_code == 500
+        assert response.json()["detail"] == (
+            "Vectorization failed. Check server logs for details."
+        )
         assert sorted(tmp_path.iterdir()) == []
 
     def test_worker_error_returns_sanitized_500_and_cleans_upload_temp_file(

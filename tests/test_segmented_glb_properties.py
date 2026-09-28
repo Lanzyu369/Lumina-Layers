@@ -34,6 +34,19 @@ def _hex_to_rgb(hex_str: str) -> tuple[int, int, int]:
     return (int(hex_str[0:2], 16), int(hex_str[2:4], 16), int(hex_str[4:6], 16))
 
 
+def _unique_mesh_rgb(mesh: trimesh.Trimesh) -> np.ndarray:
+    """Return the distinct RGB rows a loaded GLB mesh is drawn with.
+
+    The default v2 preview kernel stores one PBR ``baseColorFactor`` per mesh;
+    the legacy shapely kernel stores per-face colors.
+    """
+    material = getattr(mesh.visual, "material", None)
+    base_color = getattr(material, "baseColorFactor", None)
+    if base_color is not None:
+        return np.asarray(base_color, dtype=np.uint8)[None, :3]
+    return np.unique(np.asarray(mesh.visual.face_colors)[:, :3], axis=0)
+
+
 def _make_cache(
     matched_rgb: np.ndarray,
     mask_solid: np.ndarray,
@@ -175,13 +188,10 @@ def test_glb_segmentation_correctness(tmp_path, data):
 
         # (b) Name format already validated by regex match above
 
-        # (c) Face color matches the hex in the name
-        face_colors = mesh.visual.face_colors  # (N, 4) RGBA
-        assert face_colors is not None and len(face_colors) > 0, (
-            f"Mesh {node_name} has no face colors"
-        )
+        # (c) Mesh color matches the hex in the name
+        unique_face_rgb = _unique_mesh_rgb(mesh)
+        assert len(unique_face_rgb) > 0, f"Mesh {node_name} has no color"
         # All faces should share the same RGB (alpha may vary)
-        unique_face_rgb = np.unique(face_colors[:, :3], axis=0)
         assert len(unique_face_rgb) == 1, (
             f"Mesh {node_name} has {len(unique_face_rgb)} distinct face RGB values, expected 1"
         )

@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from api.app import app
+from api.routers.calibration import CALIBRATION_GENERATION_FAILED_DETAIL
 
 client: TestClient = TestClient(app)
 
@@ -335,7 +336,7 @@ class TestCalibration5ColorExtended:
             assert data["message"] == "5-Color Extended OK"
 
     def test_5color_extended_core_error_returns_500(self) -> None:
-        """Core function exception → HTTP 500."""
+        """Core function exception → sanitized HTTP 500."""
         with patch(
             "api.routers.calibration.generate_5color_extended_batch_zip",
             side_effect=RuntimeError("generation failed"),
@@ -350,4 +351,5 @@ class TestCalibration5ColorExtended:
                 },
             )
             assert response.status_code == 500
-            assert "generation failed" in response.json()["detail"]
+            assert response.json()["detail"] == CALIBRATION_GENERATION_FAILED_DETAIL
+            assert "generation failed" not in response.text

@@ -152,7 +152,11 @@ class TestP4BedSizeConsistency:
         # printable_area format: ["0x0", "WIDTHx0", "WIDTHxDEPTH", "0xDEPTH"]
         # Some printers use float offsets (e.g. "0.5x1", "270.5x271")
         # so we parse as float and compute span from min/max coordinates.
-        area = template["printable_area"]
+        area = list(template["printable_area"])
+        # Some vendor-native templates (e.g. QIDI Studio) close the outline by
+        # repeating the first corner; that closing point is not a fifth corner.
+        if len(area) == 5 and area[-1] == area[0]:
+            area = area[:-1]
         assert len(area) == 4, (
             f"printable_area for '{printer_id}' has {len(area)} points, expected 4"
         )

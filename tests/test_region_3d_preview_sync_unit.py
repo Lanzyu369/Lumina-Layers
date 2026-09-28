@@ -97,7 +97,8 @@ def _setup_session(
         cache["color_contours"] = color_contours
     store.put(session_id, "preview_cache", cache)
     store.put(session_id, "selected_region_mask", region_mask)
-    store.put(session_id, "selected_region_id", 1)
+    # Region IDs are stored as strings, matching the region-select route.
+    store.put(session_id, "selected_region_id", "1")
     return session_id
 
 

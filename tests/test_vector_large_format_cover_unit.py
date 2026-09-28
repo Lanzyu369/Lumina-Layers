@@ -233,7 +233,9 @@ def test_worker_mixes_all_three_rasterize_outcomes_with_correct_counters(caplog)
             if getattr(rec, "event", None) == "bambu_3mf_cover_thumbnail_failed"
         ]
         assert len(warnings) == 1
-        assert warnings[0].error_type == "tile_rasterize_timeout"
+        # No dedicated timeout label since compute deadlines were removed
+        # (c49636463); a TimeoutError is reported by its exception name.
+        assert warnings[0].error_type == "TimeoutError"
         assert warnings[0].fallback_action == "placeholder_written"
     finally:
         if os.path.exists(result["zip_path"]):
@@ -450,8 +452,8 @@ def test_counter_invariant_separates_skipped_empty_from_failed_cover(caplog) -> 
             if getattr(rec, "event", None) == "bambu_3mf_cover_thumbnail_failed"
         ]
         observed_error_types = {rec.error_type for rec in warning_records}
-        assert observed_error_types <= {"tile_rasterize_timeout", "RuntimeError"}
-        assert "tile_rasterize_timeout" in observed_error_types
+        assert observed_error_types <= {"TimeoutError", "RuntimeError"}
+        assert "TimeoutError" in observed_error_types
         assert "RuntimeError" in observed_error_types
         for rec in warning_records:
             assert rec.fallback_action == "placeholder_written"
