@@ -5474,6 +5474,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "大画幅模式下每个切片的高度（毫米）。切片越小，拼接数量越多。",
     en: "Height of each tile in large format mode (in mm). Smaller tiles result in more pieces to assemble.",
   },
+  basic_large_format_show_tiles: {
+    zh: "在预览中显示切割轮廓",
+    en: "Show Cut Outline in Preview",
+  },
+  basic_large_format_show_tiles_hint: {
+    zh: "在 3D 预览上用橙色线标出每一块的切割位置，并显示编号（如 R1C2 表示第 1 行第 2 列），编号与压缩包内的 3MF 文件名一致。只影响预览显示，不改变生成结果。",
+    en: "Draws orange cut lines over the 3D preview and labels each tile (e.g. R1C2 = row 1, column 2). Labels match the 3MF file names in the ZIP. Preview only; generated files are unchanged.",
+  },
 
   // ==================== Structure Mode Options ====================
   "structure_mode.Double-sided": {

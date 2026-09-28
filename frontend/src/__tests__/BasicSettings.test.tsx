@@ -374,6 +374,40 @@ describe("BasicSettings", () => {
     expect(widthInput).toHaveValue("30000");
   });
 
+  it("offers a preview-only cut outline toggle in large-format mode", () => {
+    useConverterStore.setState({
+      largeFormatEnabled: false,
+      largeFormatTileOverlayVisible: true,
+    } as never);
+    const { rerender } = render(<BasicSettings />);
+    expect(
+      screen.queryByRole("checkbox", { name: "在预览中显示切割轮廓" }),
+    ).not.toBeInTheDocument();
+
+    act(() => {
+      useConverterStore.setState({
+        largeFormatEnabled: true,
+        target_width_mm: 600,
+        target_height_mm: 400,
+        tileWidthMm: 250,
+        tileHeightMm: 250,
+        downloadUrl: "/api/files/ready.zip",
+      } as never);
+    });
+    rerender(<BasicSettings />);
+
+    expect(screen.getByText("3×2 = 6 (100×150mm)")).toBeInTheDocument();
+    const toggle = screen.getByRole("checkbox", { name: "在预览中显示切割轮廓" });
+    expect(toggle).toBeChecked();
+
+    fireEvent.click(toggle);
+
+    const state = useConverterStore.getState();
+    expect(state.largeFormatTileOverlayVisible).toBe(false);
+    // Preview-only toggle must not invalidate an already generated download.
+    expect(state.downloadUrl).toBe("/api/files/ready.zip");
+  });
+
   it("backs off failed startup LUT loads instead of retrying immediately", async () => {
     vi.useFakeTimers();
     vi.mocked(converterApi.fetchLutList)

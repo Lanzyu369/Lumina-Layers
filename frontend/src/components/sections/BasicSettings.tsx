@@ -44,6 +44,7 @@ import {
 import { StatusBanner, workstationInputClass } from "../ui/panelPrimitives";
 import { type ImageRotationDegrees } from "../../utils/imageRotation";
 import { WIKI_DOCS } from "../../utils/wikiDocs";
+import { resolveLargeFormatTileGrid } from "../../utils/largeFormatTileLayout";
 import {
   buildLutCatalogIndex,
   getBucketDisplayColorMode,
@@ -329,6 +330,7 @@ export default function BasicSettings() {
     puzzleEnabled,
     tileWidthMm,
     tileHeightMm,
+    largeFormatTileOverlayVisible,
     previewImageUrl,
     previewWarnings,
     generatedLargeFormatWarnings,
@@ -411,6 +413,7 @@ export default function BasicSettings() {
     puzzleEnabled: s.puzzleEnabled,
     tileWidthMm: s.tileWidthMm,
     tileHeightMm: s.tileHeightMm,
+    largeFormatTileOverlayVisible: s.largeFormatTileOverlayVisible,
     previewImageUrl: s.previewImageUrl,
     previewWarnings: s.previewWarnings,
     generatedLargeFormatWarnings: s.largeFormatWarnings,
@@ -578,6 +581,9 @@ export default function BasicSettings() {
   const setLargeFormatEnabled = useConverterStore((s) => s.setLargeFormatEnabled);
   const setTileWidthMm = useConverterStore((s) => s.setTileWidthMm);
   const setTileHeightMm = useConverterStore((s) => s.setTileHeightMm);
+  const setLargeFormatTileOverlayVisible = useConverterStore(
+    (s) => s.setLargeFormatTileOverlayVisible,
+  );
   const setModelSurfaceEnabled = useConverterStore((s) => s.setModelSurfaceEnabled);
   const uploadModelSurfaceFile = useConverterStore((s) => s.uploadModelSurfaceFile);
   const clearModelSurface = useConverterStore((s) => s.clearModelSurface);
@@ -1210,11 +1216,16 @@ export default function BasicSettings() {
 
   const tileGrid = useMemo(() => {
     if (!largeFormatEnabled) return null;
-    const cols = Math.max(1, Math.ceil(target_width_mm / tileWidthMm));
-    const rows = Math.max(1, Math.ceil(target_height_mm / tileHeightMm));
-    const lastW = Math.round(target_width_mm - (cols - 1) * tileWidthMm);
-    const lastH = Math.round(target_height_mm - (rows - 1) * tileHeightMm);
-    return { cols, rows, total: cols * rows, lastW, lastH };
+    const grid = resolveLargeFormatTileGrid(
+      target_width_mm,
+      target_height_mm,
+      tileWidthMm,
+      tileHeightMm,
+    );
+    if (!grid) return null;
+    const lastW = Math.round(grid.lastColumnWidthMm);
+    const lastH = Math.round(grid.lastRowHeightMm);
+    return { cols: grid.cols, rows: grid.rows, total: grid.total, lastW, lastH };
   }, [largeFormatEnabled, target_width_mm, target_height_mm, tileWidthMm, tileHeightMm]);
 
   const mergedLargeFormatWarnings = useMemo(
@@ -1907,6 +1918,12 @@ export default function BasicSettings() {
                 : ""}
             </div>
           )}
+          <Checkbox
+            label={t("basic_large_format_show_tiles")}
+            checked={largeFormatTileOverlayVisible}
+            onChange={setLargeFormatTileOverlayVisible}
+            tooltip={t("basic_large_format_show_tiles_hint")}
+          />
         </div>
       )}
 

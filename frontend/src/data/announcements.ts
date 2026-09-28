@@ -16,6 +16,20 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-09-28",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [{
+      category: { zh: "新功能", en: "New" },
+      items: [{
+        zh: "大画幅模式下，3D 预览会用橙色线画出作品会被切成哪几块，并在每块上标出编号（如 R1C2 表示第 1 行第 2 列），编号与压缩包里的 3MF 文件名一致。不想看时可以在大画幅设置里关掉。",
+        en: "In large format mode, the 3D preview now draws orange lines showing how your artwork will be split, and labels each piece (for example R1C2 means row 1, column 2) to match the 3MF file names in the ZIP. You can hide the lines in the large format settings.",
+      }],
+    }],
+  },
+  {
     version: "2026-09-26",
     title: {
       zh: "Lumina Layers — 9 月更新速览",
