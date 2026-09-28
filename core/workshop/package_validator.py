@@ -105,7 +105,9 @@ def _has_unsupported_file_type(info: ZipInfo) -> bool:
 
 
 def _validate_member_path(info: ZipInfo, seen: set[str]) -> str:
-    name = info.filename
+    # Validate the raw stored name: on Windows ``ZipInfo.filename`` rewrites
+    # ``\`` to ``/`` and truncates at NUL, which would hide unsafe paths.
+    name = info.orig_filename
     if (
         not name
         or "\x00" in name
