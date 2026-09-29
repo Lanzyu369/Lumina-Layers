@@ -86,6 +86,7 @@ class VectorQuickPreviewSourceV1:
     image_vectorizer_bounds: BaseGeometry | None
     scale_factor: float
     bbox: tuple[float, float, float, float]
+    svg_coordinate_domain: object | None = None
 
 
 def _quick_preview_geometry_coordinate_count(geometry: BaseGeometry) -> int | None:
@@ -215,6 +216,7 @@ def load_vector_quick_preview_source(
         image_vectorizer_bounds=image_bounds,
         scale_factor=scale_factor,
         bbox=(bbox[0], bbox[1], bbox[2], bbox[3]),
+        svg_coordinate_domain=entry.get("svg_coordinate_domain"),
     )
 
 
@@ -1386,17 +1388,20 @@ def _screen_geometry_to_preview_world_y(
 def _prepare_backing_footprint(
     geometry: BaseGeometry,
     scale_factor: float,
+    source_units_per_unit: float = 1.0,
 ) -> BaseGeometry | None:
     prepared = _valid_geometry(geometry)
-    return _prepare_footprint(prepared, scale_factor) if prepared is not None else None
+    return (_prepare_footprint(prepared, scale_factor, source_units_per_unit)
+            if prepared is not None else None)
 
 
 def _visible_backing_footprint(
     silhouette: BaseGeometry | None,
     scale_factor: float,
+    source_units_per_unit: float = 1.0,
 ) -> BaseGeometry | None:
     if silhouette is not None:
-        return _prepare_backing_footprint(silhouette, scale_factor)
+        return _prepare_backing_footprint(silhouette, scale_factor, source_units_per_unit)
     return None
 
 
@@ -1811,6 +1816,8 @@ def build_vector_quick_preview_parts(
     backing = _visible_backing_footprint(
         source.silhouette,
         source.scale_factor,
+        (source.svg_coordinate_domain.source_units_per_unit
+         if source.svg_coordinate_domain is not None else 1.0),
     )
     backing = _screen_geometry_to_preview_world_y(backing, canvas_height_mm)
     if backing is not None:
@@ -1989,7 +1996,10 @@ def build_vector_preview_parts_from_analysis(
     structure = resolve_structure_plan(
         analysis, float(outline_width_mm) if include_outline else 0.0,
     )
-    backing_footprint = structure.body if not structure.body.is_empty else None
+    backing_footprint = (
+        _scaled_geometry_mm(structure.body, structure.mm_per_unit)
+        if not structure.body.is_empty else None
+    )
     if include_backing and backing_footprint is not None:
         backing_height = max(float(thickness_mm or 0.0), layer_h)
         is_double = "双面" in str(structure_mode or "") or "Double" in str(structure_mode or "")
@@ -2023,7 +2033,10 @@ def build_vector_preview_parts_from_analysis(
         )
 
     if include_outline:
-        outline = structure.outline if not structure.outline.is_empty else None
+        outline = (
+            _scaled_geometry_mm(structure.outline, structure.mm_per_unit)
+            if not structure.outline.is_empty else None
+        )
         if outline is not None:
             max_z = max(
                 (extrusion.z_max for part in parts for extrusion in part.extrusions),

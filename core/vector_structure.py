@@ -8,8 +8,10 @@ import math
 
 from core import geos_buffer_fast
 from core.vector_layer_geometry import resolve_vector_writer_grid_mm
+from core.svg_coordinate_domain import SvgCoordinateDomain
 
 from shapely import affinity, difference
+import shapely
 from shapely.errors import ShapelyError
 from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, box
 from shapely.geometry.base import BaseGeometry
@@ -160,29 +162,55 @@ def _filter_backing_holes(
     return geom
 
 
-def _prepare_footprint(source: BaseGeometry, scale: float) -> BaseGeometry:
+def _prepare_footprint(
+    source: BaseGeometry, scale: float, source_units_per_unit: float = 1.0,
+    *, return_working: bool = False,
+) -> BaseGeometry:
     # Preserve the established structural cleanup in SVG units. Converting
     # these legacy constants directly to mm would silently change the model.
-    prepared = _normalize_contours(source, 0.4)
-    prepared = _filter_backing_holes(prepared, 0.3)
+    prepared = _normalize_contours(source, 0.4 / source_units_per_unit)
+    prepared = _filter_backing_holes(prepared, 0.3 / source_units_per_unit**2)
     try:
-        prepared = prepared.buffer(0.15, join_style="mitre", mitre_limit=2.0)
+        prepared = prepared.buffer(0.15 / source_units_per_unit, join_style="mitre", mitre_limit=2.0)
     except (ShapelyError, ValueError):
         pass
+    if return_working:
+        grid = float(shapely.get_precision(source))
+        return shapely.set_precision(prepared, grid) if grid > 0 else prepared
     return affinity.scale(prepared, xfact=scale, yfact=scale, origin=(0, 0))
 
 
 @dataclass(frozen=True)
 class VectorStructurePlan:
-    """Disjoint body/outline footprints and their coating envelope in mm.
+    """Structural footprints with an explicit physical coordinate scale.
 
-    毫米坐标中的主体、描边分区和覆盖两者的镀层范围。
+    主体、描边与镀层轮廓；显式比例描述每个计算单位对应的毫米数。
     """
 
     body: BaseGeometry
     envelope: BaseGeometry
     outline: BaseGeometry
     outline_width_mm: float
+    mm_per_unit: float = 1.0
+    precision_grid: float = 0.0
+
+    def in_units(self, geometry: BaseGeometry, mm_per_unit: float) -> BaseGeometry:
+        """Reuse matching working coordinates, or project a legacy mm view.
+
+        计算坐标相同时直接复用；旧毫米轮廓按目标单位投影。
+        """
+        if self.mm_per_unit == mm_per_unit:
+            return geometry
+        factor = self.mm_per_unit / mm_per_unit
+        return affinity.scale(geometry, xfact=factor, yfact=factor, origin=(0, 0))
+
+    def __setstate__(self, state: dict) -> None:
+        """Restore the structural grid across cache copies. 恢复结构缓存的精度模型。"""
+        grid = float(state.get("precision_grid", 0.0))
+        for key, value in state.items():
+            if grid > 0 and key in {"body", "envelope", "outline"}:
+                value = shapely.set_precision(value, grid, mode="pointwise")
+            object.__setattr__(self, key, value)
 
 
 def resolve_structure_plan(
@@ -204,7 +232,10 @@ def resolve_structure_plan(
         if existing.outline_width_mm == outline_width_mm:
             return existing
         if outline_width_mm == 0:
-            return VectorStructurePlan(existing.body, existing.body, GeometryCollection(), 0.0)
+            return VectorStructurePlan(
+                existing.body, existing.body, GeometryCollection(), 0.0,
+                existing.mm_per_unit, existing.precision_grid,
+            )
         raise ValueError("Rebuild the global vector structure before changing a tiled outline width.")
     source = None
     for name in ("silhouette",):
@@ -229,22 +260,37 @@ def resolve_structure_plan(
         raise ValueError("Vector structural scale must be positive and finite.")
     if not math.isfinite(outline_width_mm) or outline_width_mm < 0:
         raise ValueError("Vector outline width must be non-negative and finite.")
-    body = _prepare_footprint(source, scale)
+    svg_domain = getattr(analysis, "svg_coordinate_domain", None)
+    if not isinstance(svg_domain, SvgCoordinateDomain):
+        svg_domain = None
+    plan_scale = scale if svg_domain is not None else 1.0
+    width = outline_width_mm / plan_scale
+    body = _prepare_footprint(
+        source, scale,
+        float(svg_domain.source_units_per_unit) if svg_domain is not None else 1.0,
+        return_working=svg_domain is not None,
+    )
     envelope = (
-        body.buffer(outline_width_mm, join_style="mitre", mitre_limit=2.0)
+        body.buffer(width, join_style="mitre", mitre_limit=2.0)
         if outline_width_mm > 0 else body
     )
     if outline_width_mm > 0 and not body.is_empty:
         # Bound acute miter tips by the same requested expansion on each axis.
         x0, y0, x1, y1 = body.bounds
-        envelope = envelope.intersection(box(
-            x0 - outline_width_mm, y0 - outline_width_mm,
-            x1 + outline_width_mm, y1 + outline_width_mm,
-        ))
+        envelope = shapely.intersection(
+            envelope, box(x0 - width, y0 - width, x1 + width, y1 + width),
+            grid_size=svg_domain.grid_size if svg_domain is not None else 0.0,
+        )
     outline = GeometryCollection()
     if outline_width_mm > 0 and not envelope.is_empty:
         writer_grid_mm = resolve_vector_writer_grid_mm(
-            max(abs(value) for value in envelope.bounds)
+            max(abs(value) for value in envelope.bounds) * plan_scale
         )
-        outline = difference(envelope, body, grid_size=writer_grid_mm)
-    return VectorStructurePlan(body, envelope, outline, outline_width_mm)
+        outline = difference(
+            envelope, body,
+            grid_size=svg_domain.grid_size if svg_domain is not None else writer_grid_mm,
+        )
+    return VectorStructurePlan(
+        body, envelope, outline, outline_width_mm, plan_scale,
+        svg_domain.grid_size if svg_domain is not None else 0.0,
+    )

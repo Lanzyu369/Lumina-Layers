@@ -13,6 +13,7 @@ import numpy as np
 from shapely import STRtree
 from shapely.geometry import GeometryCollection, MultiPolygon, Polygon
 from shapely.geometry.base import BaseGeometry
+from core.svg_coordinate_domain import SvgCoordinateDomain
 
 Region = dict[str, Any]
 _COLOR_KEYS = ("color", "rgba", "rgba_f64")
@@ -183,6 +184,22 @@ def _polygons_in_source_space(parts: Any, scale_factor: float) -> list[Polygon]:
     ]
 
 
+def _polygons_in_working_space(parts: Any, domain: SvgCoordinateDomain) -> list[Polygon]:
+    from lumina_svg_core import project_regions_to_grid
+
+    regions = [[shell, *holes] for shell, holes in parts]
+    projected = project_regions_to_grid(
+        regions, 1.0 / (domain.mm_per_unit * domain.grid_size),
+    )
+    return [
+        domain.restore_precision(Polygon(
+            shell * domain.grid_size,
+            [hole * domain.grid_size for hole in holes],
+        ))
+        for region in projected for shell, holes in region
+    ]
+
+
 def _nearest_sources(
     holes: list[Polygon], regions: list[Region], source_indices: list[int]
 ) -> list[int]:
@@ -253,6 +270,33 @@ def compensate_svg_regions(
         ValueError: A physical setting or native coordinate is invalid.
             物理参数或原生坐标无效。
     """
+    return _compensate_regions(
+        regions, silhouette=silhouette, scale_factor=scale_factor,
+        max_hole_area_mm2=max_hole_area_mm2, max_hole_width_mm=max_hole_width_mm,
+        domain=None,
+    )
+
+
+def compensate_svg_regions_in_domain(
+    regions: list[Region], *, silhouette: BaseGeometry, domain: SvgCoordinateDomain,
+    max_hole_area_mm2: float = 0.5, max_hole_width_mm: float = 0.1,
+) -> SvgHoleCompensationResult:
+    """Keep optional source edits in the explicit SVG topology domain.
+
+    将可选补洞产生的新区域交回显式 SVG 拓扑域，保留原始区域对象。
+    """
+    return _compensate_regions(
+        regions, silhouette=silhouette, scale_factor=domain.mm_per_unit,
+        max_hole_area_mm2=max_hole_area_mm2, max_hole_width_mm=max_hole_width_mm,
+        domain=domain,
+    )
+
+
+def _compensate_regions(
+    regions: list[Region], *, silhouette: BaseGeometry, scale_factor: float,
+    max_hole_area_mm2: float, max_hole_width_mm: float,
+    domain: SvgCoordinateDomain | None,
+) -> SvgHoleCompensationResult:
     started = perf_counter()
     _validate_settings(scale_factor, max_hole_area_mm2, max_hole_width_mm)
     polygon_regions, source_indices, fragments = _polygon_regions(regions)
@@ -276,14 +320,18 @@ def compensate_svg_regions(
             polygon_regions, silhouette, elapsed_seconds=perf_counter() - started,
             unprintable_fragments=fragments,
         )
-    holes = _polygons_in_source_space(holes_mm, scale_factor)
+    holes = (_polygons_in_working_space(holes_mm, domain) if domain is not None
+             else _polygons_in_source_space(holes_mm, scale_factor))
     owners = _nearest_sources(holes, polygon_regions, source_indices)
     patches = [
         _patch(hole, polygon_regions[owner], source_indices[owner])
         for hole, owner in zip(holes, owners)
     ]
-    coverage = _polygons_in_source_space(coverage_mm, scale_factor)
+    coverage = (_polygons_in_working_space(coverage_mm, domain) if domain is not None
+                else _polygons_in_source_space(coverage_mm, scale_factor))
     filled_silhouette = coverage[0] if len(coverage) == 1 else MultiPolygon(coverage)
+    if domain is not None:
+        filled_silhouette = domain.restore_precision(filled_silhouette)
     return SvgHoleCompensationResult(
         regions=[*polygon_regions, *patches],
         silhouette=filled_silhouette,

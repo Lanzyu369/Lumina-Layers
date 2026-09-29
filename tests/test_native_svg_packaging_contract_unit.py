@@ -100,6 +100,7 @@ def test_desktop_build_requires_native_svg_before_pyinstaller() -> None:
     ).read_text(encoding="utf-8")
 
     assert '"lumina_svg_core"' in build_script
+    assert '"canonicalize_grid_regions"' in build_script
     dependency_check_index = build_script.rindex(
         "check_core_geometry_dependencies_available()"
     )
