@@ -24,8 +24,14 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
     sections: [{
       category: { zh: "新功能", en: "New" },
       items: [{
-        zh: "新增新手引导：第一次打开软件时会询问是否开始，用约 1 分钟走一遍从图片到 3MF（多色打印文件）的基本流程，并讲清三种颜色来源的区别。随时可以一键跳过，也可以点右上角的书本图标重新查看。",
-        en: "Added a beginner tour. On first launch it offers a one-minute walk-through from picture to 3MF (the multi-color print file) and explains the three color sources. Skip it with one click, or replay it any time from the book icon at the top right.",
+        zh: "新增新手引导：第一次打开软件时会询问是否开始，用约 1 分钟走一遍从图片到 3MF（多色打印文件）的基本流程，讲清三种颜色来源的区别，并教你用鼠标旋转、平移、缩放 3D 预览。随时可以一键跳过，也可以点右上角的书本图标重新查看。",
+        en: "Added a beginner tour. On first launch it offers a one-minute walk-through from picture to 3MF (the multi-color print file), explains the three color sources, and shows how to rotate, pan and zoom the 3D preview with the mouse. Skip it with one click, or replay it any time from the book icon at the top right.",
+      }],
+    }, {
+      category: { zh: "稳定性", en: "Stability" },
+      items: [{
+        zh: "修复部分复杂 SVG 能正常预览，却在生成 3MF 时报错的问题。",
+        en: "Fixed 3MF generation errors for some complex SVG files that previewed successfully.",
       }],
     }],
   },

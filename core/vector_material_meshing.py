@@ -38,6 +38,7 @@ from core.vector_layer_geometry import (
     build_vector_layered_volume,
 )
 from core.vector_mesh_memory import get_owned_memory_report
+from core.svg_coordinate_domain import PRINT_GRID_KEY
 
 MaterialBuilder = Callable[..., trimesh.Trimesh | None]
 
@@ -78,6 +79,7 @@ def _write_material_input(path: Path, slabs: list[dict]) -> None:
             "precision": float(shapely.get_precision(geometry)) if geometry is not None else 0.0,
             "height": slab.get("height", 0.0),
             "z_offset": slab.get("z_offset", 0.0),
+            **({PRINT_GRID_KEY: slab[PRINT_GRID_KEY]} if PRINT_GRID_KEY in slab else {}),
         })
     path.write_text(
         json.dumps(records, default=_json_scalar, separators=(",", ":")),

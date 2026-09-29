@@ -72,6 +72,21 @@ one authoritative serial replay.
 `NativeResult.replay_worker_count` reports the worker count used by the final
 geometry replay.
 
+## Integer print-grid boundaries
+
+`project_regions_to_grid()` is the quantizing projection entry point. It scales
+source rings, rounds them to the integer target grid, resolves projected
+winding through Clipper2, and exports canonical faces. Use it when geometry
+still needs target-grid projection or boolean cleanup.
+
+`canonicalize_grid_regions()` accepts already-valid, integer-grid coverage with
+shells oriented positive and holes negative. It does not scale or round the
+coordinates, and it uses the shared `BuildFilledFaces` boundary rule without a
+second Clipper2 union. This preserves the submitted fill while expressing
+point contacts and pinched boundaries as canonical faces. It is intended for
+coverage whose paint ownership and overlaps have already been resolved; it is
+not a substitute for the projection entry point.
+
 ## Desktop resource policy
 
 The desktop engine no longer rejects valid local SVG input because of a

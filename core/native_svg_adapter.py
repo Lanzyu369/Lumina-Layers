@@ -4,13 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import importlib
+import hashlib
+from functools import lru_cache
 import os
+from pathlib import Path
 import time
 from types import ModuleType
 from typing import Any
 
 import numpy as np
 import shapely
+from core.svg_coordinate_domain import SvgCoordinateDomain
 
 from core.errors import (
     NativeSvgInternalError,
@@ -98,6 +102,19 @@ class NativeSvgGeometry:
     )
     geometry_backend: str = field(default="native", init=False)
     image_vectorizer_bounds: Any | None = None
+    svg_coordinate_domain: SvgCoordinateDomain | None = None
+
+    def __setstate__(self, state: dict) -> None:
+        """Restore the explicit native working grid after serialization.
+
+        序列化往返后恢复显式原生计算格距。
+        """
+        self.__dict__.update(state)
+        domain = state.get("svg_coordinate_domain")
+        if isinstance(domain, SvgCoordinateDomain):
+            self.shape_data = domain.restore_records(self.shape_data, "poly")
+            self.clipped_shapes = domain.restore_records(self.clipped_shapes)
+            self.silhouette = domain.restore_precision(self.silhouette)
 
 
 def _load_native_module() -> ModuleType:
@@ -128,6 +145,38 @@ def native_runtime_identity() -> tuple[str, str, int]:
         str(getattr(module, "__version__", "unknown")),
         runtime_schema,
     )
+
+
+@lru_cache(maxsize=8)
+def _extension_digest(path: str, size: int, modified_ns: int) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+@lru_cache(maxsize=8)
+def _loaded_extension_digest(extension: ModuleType) -> str:
+    path = Path(extension.__file__).resolve()
+    stat = path.stat()
+    return _extension_digest(str(path), stat.st_size, stat.st_mtime_ns)
+
+
+def native_build_identity() -> str:
+    """Identify the loaded native binary, independently of package version.
+
+    根据实际加载扩展的内容识别构建，避免相同版本号污染几何缓存。
+    """
+    try:
+        module = _load_native_module()
+    except (ImportError, OSError):
+        return "native_dependency_unavailable"
+    extension = getattr(module, "_lumina_svg_core", None)
+    filename = getattr(extension, "__file__", None)
+    if not filename:
+        return "unidentified_native_build"
+    if isinstance(extension, ModuleType):
+        return _loaded_extension_digest(extension)
+    path = Path(filename).resolve()
+    stat = path.stat()
+    return _extension_digest(str(path), stat.st_size, stat.st_mtime_ns)
 
 
 def _native_array(
@@ -167,6 +216,11 @@ def _collection_geometries(collection: Any, grid_to_source_unit: float):
         raise NativeSvgInternalError(
             "The native SVG result returned an invalid coordinate array.",
             reason_code="invalid_coordinate_schema",
+        )
+    if np.any(integer_coordinates < -(2**53)) or np.any(integer_coordinates > 2**53):
+        raise NativeSvgInternalError(
+            "Native SVG coordinates cannot be represented exactly by the working domain.",
+            reason_code="inexact_coordinate_range",
         )
     coordinates = np.multiply(
         integer_coordinates,
@@ -900,14 +954,28 @@ def analyze_native_svg(
             "The native SVG result returned an invalid coordinate domain.",
             reason_code="invalid_coordinate_domain",
         )
-    raw_geometries = _collection_geometries(
-        result.raw, grid_to_source_unit
+    source_viewport = tuple(float(value) for value in getattr(result, "viewport_bounds", ()))
+    svg_domain = SvgCoordinateDomain(
+        grid_to_source_unit, scale_factor, bbox,
+        source_viewport_bounds=(
+            source_viewport if len(source_viewport) == 4 and np.isfinite(source_viewport).all() else None
+        ),
     )
+    raw_geometries = _collection_geometries(result.raw, svg_domain.grid_size)
     visible_geometries = _collection_geometries(
-        result.visible, grid_to_source_unit
+        result.visible, svg_domain.grid_size
     )
     silhouette_geometries = _collection_geometries(
-        result.silhouette, grid_to_source_unit
+        result.silhouette, svg_domain.grid_size
+    )
+    raw_geometries = shapely.set_precision(
+        raw_geometries, svg_domain.grid_size, mode="pointwise"
+    )
+    visible_geometries = shapely.set_precision(
+        visible_geometries, svg_domain.grid_size, mode="pointwise"
+    )
+    silhouette_geometries = shapely.set_precision(
+        silhouette_geometries, svg_domain.grid_size, mode="pointwise"
     )
     input_paint_count = int(result.input_paint_count)
     if (
@@ -965,11 +1033,12 @@ def analyze_native_svg(
             and viewport_width > 0
             and viewport_height > 0
         ):
+            factor = svg_domain.source_units_per_unit
             image_vectorizer_bounds = shapely.box(
-                viewport_x,
-                viewport_y,
-                viewport_x + viewport_width,
-                viewport_y + viewport_height,
+                viewport_x / factor,
+                viewport_y / factor,
+                (viewport_x + viewport_width) / factor,
+                (viewport_y + viewport_height) / factor,
             )
 
     native_result_conversion_seconds = float(
@@ -979,8 +1048,9 @@ def analyze_native_svg(
         shape_data=shape_data,
         clipped_shapes=clipped_shapes,
         silhouette=silhouette_geometries[0],
-        scale_factor=scale_factor,
-        bbox=bbox,
+        scale_factor=svg_domain.mm_per_unit,
+        bbox=svg_domain.bbox,
+        svg_coordinate_domain=svg_domain,
         stage_timings={
             "native_svg_s": native_call_seconds,
             "native_recorder_s": float(
@@ -1021,6 +1091,16 @@ def analyze_native_svg(
             "geometry_backend": "native",
             "native_version": native_version,
             "native_schema_version": int(result.schema_version),
+            "native_build_identity": native_build_identity(),
+            "native_extension_path": str(getattr(
+                getattr(module, "_lumina_svg_core", None), "__file__", "unknown"
+            )),
+            "svg_coordinate_contract_version": svg_domain.version,
+            "svg_work_grid_size": svg_domain.grid_size,
+            "svg_source_grid_size": svg_domain.source_grid_size,
+            "svg_mm_per_work_unit": svg_domain.mm_per_unit,
+            "shapely_version": str(shapely.__version__),
+            "geos_version": str(shapely.geos_version_string),
             "native_fallback_reason": "",
             "native_input_paint_count": input_paint_count,
             "native_raw_paint_count": int(result.raw.geometry_count),
@@ -1046,4 +1126,5 @@ __all__ = [
     "NativeSvgUnprintableFragment",
     "analyze_native_svg",
     "native_runtime_identity",
+    "native_build_identity",
 ]

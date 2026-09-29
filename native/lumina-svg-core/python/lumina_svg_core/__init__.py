@@ -13,6 +13,8 @@ from ._lumina_svg_core import (
     UnprintableFragmentCollection,
     analyze_svg,
     analyze_svg_svg,
+    canonicalize_grid_regions,
+    project_regions_to_grid,
     record_paint_commands,
     record_paint_commands_svg,
 )
@@ -32,6 +34,8 @@ __all__ = [
     "__version__",
     "analyze_svg",
     "analyze_svg_svg",
+    "canonicalize_grid_regions",
+    "project_regions_to_grid",
     "record_paint_commands",
     "record_paint_commands_svg",
 ]
