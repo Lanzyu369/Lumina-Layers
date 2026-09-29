@@ -66,7 +66,13 @@ except ImportError:  # Shapely < 2.0; scalar geometry.buffer remains available.
 from shapely.ops import polygonize, unary_union
 from shapely.strtree import STRtree
 from shapely.validation import make_valid
-from shapely import set_precision
+from shapely import (
+    difference as grid_difference,
+    get_precision,
+    intersection as grid_intersection,
+    set_precision,
+    union_all,
+)
 from shapely.errors import ShapelyError
 try:
     from shapely.prepared import prep
@@ -85,6 +91,13 @@ from api.structured_logging import get_logger
 from config import PrinterConfig, ColorSystem, VectorConfig
 from core import geos_buffer_fast
 from core import native_svg_adapter
+from core.svg_coordinate_domain import (
+    PRINT_GRID_KEY,
+    SVG_COORDINATE_CONTRACT_VERSION,
+    SvgCoordinateDomain,
+    project_print_regions,
+    prepare_print_slabs,
+)
 from core.errors import CoreDependencyError
 from core.layered_coordinate_domain import (
     LAYERED_COORDINATE_DOMAIN_KEY,
@@ -239,6 +252,10 @@ def _estimate_relief_backing_run_count(
 def _union_run_group_geometries(geometries):
     """Union run-group geometries using Shapely's sparse-geometry fast path."""
 
+    geometries = tuple(geometries)
+    precisions = {float(get_precision(geometry)) for geometry in geometries}
+    if len(precisions) == 1 and next(iter(precisions), 0.0) > 0:
+        return union_all(geometries, grid_size=next(iter(precisions)))
     if disjoint_subset_union_all is not None:
         try:
             return disjoint_subset_union_all(geometries)
@@ -2046,7 +2063,7 @@ def _try_parse_strict_top_level_path_svg(processor, svg_path, target_width_mm):
 _LuminaImageProcessor = None
 _VECTOR_PARSE_CLIP_CACHE = {}
 _VECTOR_PARSE_CLIP_CACHE_MAX = 8
-_VECTOR_PARSE_CLIP_ARTIFACT_SCHEMA = "lumina_vector_parse_clip_cache_v4"
+_VECTOR_PARSE_CLIP_ARTIFACT_SCHEMA = "lumina_vector_parse_clip_cache_v5"
 
 
 def _vector_parse_clip_cache_key(
@@ -2072,6 +2089,8 @@ def _vector_parse_clip_cache_key(
         bool(expand_stroke_to_fill),
         gradient_key,
         svg_mtime,
+        native_svg_adapter.native_build_identity(),
+        SVG_COORDINATE_CONTRACT_VERSION,
         *native_svg_adapter.native_runtime_identity(),
     )
 
@@ -2106,7 +2125,7 @@ def _vector_parse_clip_cache_provenance(cache_key):
 def _copy_vector_parse_clip_cache_entry(cache_entry):
     """Return a mutation-isolated shallow copy of a parse/clip cache entry."""
 
-    return {
+    copied = {
         "shape_data": [
             dict(item)
             for item in (cache_entry.get("shape_data") or [])
@@ -2123,7 +2142,14 @@ def _copy_vector_parse_clip_cache_entry(cache_entry):
         "geometry_stage_timings": dict(
             cache_entry.get("geometry_stage_timings") or {}
         ),
+        "svg_coordinate_domain": cache_entry.get("svg_coordinate_domain"),
     }
+    domain = copied["svg_coordinate_domain"]
+    if isinstance(domain, SvgCoordinateDomain):
+        copied["shape_data"] = domain.restore_records(copied["shape_data"], "poly")
+        copied["clipped_shapes"] = domain.restore_records(copied["clipped_shapes"])
+        copied["silhouette"] = domain.restore_precision(copied["silhouette"])
+    return copied
 
 
 def _read_vector_parse_clip_cache_artifact(path):
@@ -2149,6 +2175,14 @@ def _read_vector_parse_clip_cache_artifact(path):
         return None
     if payload.get("provenance") != actual_provenance:
         return None
+    if len(cache_key) >= 11 and cache_key[-3] in {"native", "legacy"}:
+        runtime_identity = (
+            native_svg_adapter.native_build_identity(),
+            SVG_COORDINATE_CONTRACT_VERSION,
+            *native_svg_adapter.native_runtime_identity(),
+        )
+        if cache_key[-5:] != runtime_identity:
+            return None
     entry = payload.get("entry")
     if not isinstance(entry, dict):
         return None
@@ -2225,6 +2259,20 @@ class VectorAnalysis:
     material_dynamic_layer_info: dict | None = None
     material_solver_info: dict | None = None
     coordinate_domain: LayeredCoordinateDomain | None = None
+    svg_coordinate_domain: SvgCoordinateDomain | None = None
+
+    def __setstate__(self, state: dict) -> None:
+        """Restore explicit topology precision after a cache/spawn round trip.
+
+        在缓存或工作进程往返后恢复显式拓扑精度模型。
+        """
+        self.__dict__.update(state)
+        domain = state.get("svg_coordinate_domain")
+        if isinstance(domain, SvgCoordinateDomain):
+            self.shape_data = domain.restore_records(self.shape_data, "poly")
+            self.clipped_shapes = domain.restore_records(self.clipped_shapes)
+            self.matched_shapes = domain.restore_records(self.matched_shapes)
+            self.silhouette = domain.restore_precision(self.silhouette)
 
 
 def _physical_backing_geometry(analysis: object) -> object | None:
@@ -4085,7 +4133,9 @@ class VectorProcessor:
                 continue
 
             try:
-                clipped = backing_sil.intersection(footprint)
+                clipped = grid_intersection(
+                    backing_sil, footprint, grid_size=float(get_precision(backing_sil)),
+                )
             except VECTOR_HANDLED_ERRORS:
                 clipped = footprint
 
@@ -4146,7 +4196,9 @@ class VectorProcessor:
                 if active_geoms:
                     cavity_union = unary_union(active_geoms)
                     cavity_union = VectorProcessor._extract_polygonal_geometry(make_valid(cavity_union))
-                    band_geom = backing_sil.difference(cavity_union) if cavity_union is not None else backing_sil
+                    band_geom = (grid_difference(
+                        backing_sil, cavity_union, grid_size=float(get_precision(backing_sil)),
+                    ) if cavity_union is not None else backing_sil)
                     band_kind = "cavity_band"
                 else:
                     band_geom = backing_sil
@@ -4549,6 +4601,7 @@ class VectorProcessor:
         """
         _log.debug("Analyzing: %s", svg_path)
         stage_timings = {}
+        svg_coordinate_domain = None
         expand_stroke_to_fill = bool(getattr(self, "expand_stroke_to_fill", False))
 
         # === Stage 1+2: Parse & Occlusion clip (with cache) ===
@@ -4588,6 +4641,7 @@ class VectorProcessor:
             image_vectorizer_bounds = cached_entry.get("image_vectorizer_bounds")
             scale_factor = cached_entry["scale_factor"]
             bbox = cached_entry["bbox"]
+            svg_coordinate_domain = working_entry.get("svg_coordinate_domain")
             self.parse_warnings = list(
                 working_entry.get("parse_warnings") or []
             )
@@ -4634,6 +4688,7 @@ class VectorProcessor:
                 image_vectorizer_bounds = native_outcome.image_vectorizer_bounds
                 scale_factor = native_outcome.scale_factor
                 bbox = native_outcome.bbox
+                svg_coordinate_domain = native_outcome.svg_coordinate_domain
                 self.parse_warnings = []
                 stage_timings.update(native_outcome.stage_timings)
                 stage_timings["native_svg_s"] = native_attempt_seconds
@@ -4793,6 +4848,7 @@ class VectorProcessor:
                     "image_vectorizer_bounds": image_vectorizer_bounds,
                     "scale_factor": scale_factor,
                     "bbox": bbox,
+                    "svg_coordinate_domain": svg_coordinate_domain,
                     "parse_warnings": list(
                         getattr(self, "parse_warnings", None) or []
                     ),
@@ -4805,13 +4861,20 @@ class VectorProcessor:
         # Keep pure parse caches independent of compensation settings. Apply the
         # optional edit once, before both material mapping and 2D preview output.
         if bool(getattr(self, "svg_hole_compensation_enabled", False)):
-            from core.svg_hole_compensation import compensate_svg_regions
+            from core.svg_hole_compensation import (
+                compensate_svg_regions, compensate_svg_regions_in_domain,
+            )
 
             try:
-                compensated = compensate_svg_regions(
+                compensate = (compensate_svg_regions_in_domain
+                              if svg_coordinate_domain is not None else compensate_svg_regions)
+                coordinate_options = ({"domain": svg_coordinate_domain}
+                                      if svg_coordinate_domain is not None
+                                      else {"scale_factor": scale_factor})
+                compensated = compensate(
                     clipped_shapes,
                     silhouette=silhouette,
-                    scale_factor=scale_factor,
+                    **coordinate_options,
                     max_hole_area_mm2=self.svg_hole_max_area_mm2,
                     max_hole_width_mm=self.svg_hole_max_width_mm,
                 )
@@ -5131,6 +5194,7 @@ class VectorProcessor:
             preview_colors=preview_colors,
             stage_timings=stage_timings,
             image_vectorizer_bounds=image_vectorizer_bounds,
+            svg_coordinate_domain=svg_coordinate_domain,
             material_dynamic_layer_info=getattr(
                 self.img_processor,
                 "dynamic_layer_info",
@@ -5231,6 +5295,11 @@ class VectorProcessor:
         geometry_grid_mm = resolve_vector_writer_grid_mm(
             max(abs(canvas_width_mm), abs(canvas_height_mm))
         )
+        prepared_grids = {float(item[PRINT_GRID_KEY]) for item in matched_shapes if PRINT_GRID_KEY in item}
+        if prepared_grids:
+            if len(prepared_grids) != 1 or any("print_geometry" not in item for item in matched_shapes):
+                raise ValueError("Vector analysis contains mixed print coordinate domains")
+            geometry_grid_mm = next(iter(prepared_grids))
         coordinate_domain = LayeredCoordinateDomain.from_canvas_and_layers(
             width_mm=canvas_width_mm,
             height_mm=canvas_height_mm,
@@ -5241,6 +5310,19 @@ class VectorProcessor:
             grid_mm=coordinate_domain.xy_grid_mm
         )
         analysis.coordinate_domain = coordinate_domain
+        if isinstance(getattr(analysis, "svg_coordinate_domain", None), SvgCoordinateDomain) and not prepared_grids:
+            projection_started = time.perf_counter()
+            projected = project_print_regions(
+                [item["geometry"] for item in matched_shapes],
+                mm_per_unit=scale_factor,
+                grid_mm=geometry_grid_mm,
+                metrics=stage_timings,
+            )
+            stage_timings["print_projection_s"] = time.perf_counter() - projection_started
+            matched_shapes = [
+                {**item, "print_geometry": geometry, PRINT_GRID_KEY: geometry_grid_mm}
+                for item, geometry in zip(matched_shapes, projected, strict=True)
+            ]
 
         raw_silhouette = getattr(analysis, "silhouette", None)
         if raw_silhouette is not None and not getattr(
@@ -5402,10 +5484,7 @@ class VectorProcessor:
             analysis, float(outline_width_mm) if enable_outline else 0.0,
         )
         # Extrusion and cavity helpers still consume SVG units.
-        silhouette = affinity.scale(
-            structure.body, xfact=1.0 / scale_factor,
-            yfact=1.0 / scale_factor, origin=(0, 0),
-        )
+        silhouette = structure.in_units(structure.body, scale_factor)
 
         if is_5color:
             backing_z_start = 0
@@ -5494,10 +5573,7 @@ class VectorProcessor:
 
         t0 = time.perf_counter()
         if enable_coating and silhouette is not None and not silhouette.is_empty:
-            coating_sil = affinity.scale(
-                structure.envelope, xfact=1.0 / scale_factor,
-                yfact=1.0 / scale_factor, origin=(0, 0),
-            )
+            coating_sil = structure.in_units(structure.envelope, scale_factor)
             try:
                 requested_coating_height = float(coating_height_mm)
             except (TypeError, ValueError):
@@ -5570,6 +5646,11 @@ class VectorProcessor:
 
         if deferred_vector_slabs:
             materialize_t0 = time.perf_counter()
+            if isinstance(getattr(analysis, "svg_coordinate_domain", None), SvgCoordinateDomain):
+                prepare_print_slabs(
+                    [slab for data in meshes_by_slot.values() for slab in data["slabs"]],
+                    mm_per_unit=scale_factor, grid_mm=geometry_grid_mm,
+                )
             meshes_by_slot = self._materialize_vector_slabs(
                 meshes_by_slot,
                 scale_factor=scale_factor,
@@ -5677,6 +5758,11 @@ class VectorProcessor:
         直接复用 ``matched_shapes``：浮雕只改变各色块的底板深度和光学层
         Z 偏移，不把 SVG 色块重新栅格化成体素。
         """
+        matched_shapes = tuple(matched_shapes)
+        print_grid_mm = next((item[PRINT_GRID_KEY] for item in matched_shapes
+                              if PRINT_GRID_KEY in item), None)
+        geometry_scale = float(print_grid_mm) if print_grid_mm is not None else scale_factor
+        geometry_bbox = tuple(value * scale_factor / geometry_scale for value in bbox)
         normalized_heights: dict[str, float] = {}
         for raw_key, raw_height in (color_height_map or {}).items():
             key = str(raw_key).strip().lower()
@@ -5741,7 +5827,8 @@ class VectorProcessor:
         backing_groups: dict[int, list] = {}
 
         for item in matched_shapes:
-            geometry = item.get("geometry")
+            source_geometry = item.get("geometry")
+            geometry = item.get("print_geometry", source_geometry)
             recipe = [int(value) for value in (item.get("recipe") or [])]
             if geometry is None or geometry.is_empty or not recipe:
                 continue
@@ -5756,7 +5843,7 @@ class VectorProcessor:
             except (TypeError, ValueError, IndexError):
                 color_key = ""
             if sampled_height_matrix is not None:
-                sample_point = geometry.representative_point()
+                sample_point = source_geometry.representative_point()
                 x_ratio = (float(sample_point.x) - float(bbox[0])) / float(bbox[2])
                 y_ratio = (float(sample_point.y) - float(bbox[1])) / float(bbox[3])
                 sample_x = int(
@@ -5818,6 +5905,8 @@ class VectorProcessor:
                     "geometry": merged,
                     "height": float(height),
                     "z_offset": float(z_offset),
+                    **({PRINT_GRID_KEY: float(print_grid_mm)}
+                       if print_grid_mm is not None else {}),
                 }
             )
 
@@ -5845,8 +5934,8 @@ class VectorProcessor:
             cavity_specs = VectorProcessor._build_vector_fridge_cavity_specs(
                 backing_sil=full_backing_sil,
                 fridge_magnets=fridge_magnets or [],
-                bbox=bbox,
-                scale_factor=scale_factor,
+                bbox=geometry_bbox,
+                scale_factor=geometry_scale,
                 backing_height=maximum_backing_height,
             )
         for backing_layers, geometries in backing_groups.items():
@@ -5854,8 +5943,11 @@ class VectorProcessor:
             backing_height = backing_layers * layer_h
             group_cavity_specs = []
             for spec in cavity_specs:
+                overlap = grid_intersection(
+                    merged, spec["geometry"], grid_size=float(get_precision(merged)),
+                )
                 clipped = VectorProcessor._extract_polygonal_geometry(
-                    make_valid(merged.intersection(spec["geometry"]))
+                    overlap if get_precision(merged) > 0 else make_valid(overlap)
                 )
                 if clipped is not None and not clipped.is_empty:
                     group_cavity_specs.append(
@@ -5873,6 +5965,11 @@ class VectorProcessor:
             )
             for slab in backing_slabs:
                 backing_volume_slabs.append(slab)
+        if print_grid_mm is not None:
+            prepare_print_slabs(
+                backing_volume_slabs, mm_per_unit=geometry_scale,
+                grid_mm=float(print_grid_mm),
+            )
         meshes_by_slot = VectorProcessor._materialize_vector_slabs(
             slabs_by_slot,
             scale_factor=scale_factor,
@@ -5880,7 +5977,7 @@ class VectorProcessor:
         )
         board_mesh = build_vector_layered_volume(
             backing_volume_slabs,
-            scale_mm_per_svg_unit=scale_factor,
+            scale_mm_per_svg_unit=geometry_scale,
             policy=geometry_policy,
         )
         if board_mesh is not None and len(board_mesh.faces) > 0:
@@ -6248,10 +6345,7 @@ class VectorProcessor:
             return slice(y0, y1), slice(x0, x1), local
 
         structure = resolve_structure_plan(analysis)
-        backing_geom = affinity.scale(
-            structure.body, xfact=1.0 / sf,
-            yfact=1.0 / sf, origin=(0, 0),
-        )
+        backing_geom = structure.in_units(structure.body, sf)
         backing_mask = np.zeros((h_px, w_px), dtype=bool)
         for poly in _iter_polygons(backing_geom):
             region_mask = _polygon_mask(poly, h_px, w_px, coord_scale)
@@ -6854,6 +6948,7 @@ class VectorProcessor:
                         sample_logs.append(f"{hex_c} -> {matched_hex} -> {recipe} (dist={lab_dist:.1f})")
 
             matched_shape = {
+                **item,
                 "geometry": item["geometry"],
                 "recipe": recipe,
                 "color": rgb,
@@ -6991,14 +7086,17 @@ class VectorProcessor:
         """
         # Group shapes by (channel, run) before canonical preparation.
         # Key: (channel_id, run_start, run_end)  Value: list of geometries
+        matched_shapes = tuple(matched_shapes)
         run_groups: dict[tuple, list] = {}
+        print_grid_mm = next((item[PRINT_GRID_KEY] for item in matched_shapes
+                              if PRINT_GRID_KEY in item), None)
         skipped_empty = 0
         invalid_channel_runs = 0
         invalid_slot_runs = 0
         short_recipe_shapes = 0
 
         for item in matched_shapes:
-            geom = item["geometry"]
+            geom = item.get("print_geometry", item["geometry"])
             recipe = item["recipe"]
             if geom is None or geom.is_empty:
                 skipped_empty += 1
@@ -7117,6 +7215,8 @@ class VectorProcessor:
                     "geometry": run_geometry,
                     "z_offset": float(z_bot),
                     "height": float(height),
+                    **({PRINT_GRID_KEY: float(print_grid_mm)}
+                       if print_grid_mm is not None else {}),
                 }
             )
             for layer_idx in range(int(run_start), int(run_end) + 1):

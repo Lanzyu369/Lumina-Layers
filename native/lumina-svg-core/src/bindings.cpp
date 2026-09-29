@@ -13,6 +13,7 @@
 #include <string>
 
 namespace py = pybind11;
+void bindCoordinateProjection(py::module_& module);
 
 namespace {
 
@@ -225,6 +226,7 @@ lumina_svg_core::UnprintableFragmentCollectionView unprintableView(
 
 PYBIND11_MODULE(_lumina_svg_core, module)
 {
+    bindCoordinateProjection(module);
     module.doc() = "Native SVG paint recorder and print geometry kernel";
     module.attr("RECORDER_SCHEMA_VERSION") =
         py::int_(lumina_svg_core::RECORDER_SCHEMA_VERSION);

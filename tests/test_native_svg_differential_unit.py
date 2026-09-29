@@ -70,6 +70,12 @@ def _by_color(analysis):
     return {color: unary_union(geometries) for color, geometries in grouped.items()}
 
 
+def _source_area(analysis, geometry):
+    domain = analysis.svg_coordinate_domain
+    scale = domain.source_units_per_unit if domain is not None else 1.0
+    return geometry.area * scale**2
+
+
 def _geometry_census(geometry) -> tuple[int, int]:
     polygons = (
         geometry.geoms
@@ -135,8 +141,11 @@ def test_native_matches_legacy_reference_within_physical_budget(
             case["fallback_reason"]
         )
     assert legacy.stage_timings["geometry_backend"] == "legacy"
-    assert native.bbox == pytest.approx(legacy.bbox, abs=0.001)
-    assert native.scale_factor == pytest.approx(legacy.scale_factor, rel=1e-6)
+    domain = native.svg_coordinate_domain
+    source_bbox = domain.source_bbox if domain else native.bbox
+    source_scale = domain.source_mm_per_unit if domain else native.scale_factor
+    assert source_bbox == pytest.approx(legacy.bbox, abs=0.001)
+    assert source_scale == pytest.approx(legacy.scale_factor, rel=1e-6)
     assert _ordered_paint_colors(native) == _ordered_paint_colors(legacy)
     assert _ordered_material_identities(native) == _ordered_material_identities(
         legacy
@@ -235,7 +244,7 @@ def test_native_preserves_components_below_the_legacy_area_cutoff(
     assert selected.stage_timings["geometry_backend"] == "native"
     assert _ordered_paint_colors(selected) == expected_colors
     assert sorted(
-        item["geometry"].area for item in selected.clipped_shapes
+        _source_area(selected, item["geometry"]) for item in selected.clipped_shapes
     ) == pytest.approx([0.0009, 2500.0], abs=1e-7)
     assert all(item["rgba"][3] == 255 for item in selected.clipped_shapes)
     assert all("native_paint_id" in item for item in selected.clipped_shapes)
@@ -273,7 +282,7 @@ def test_native_does_not_apply_the_legacy_component_area_threshold(
         (0, 0, 255),
     ]
     assert sorted(
-        item["geometry"].area for item in selected.clipped_shapes
+        _source_area(selected, item["geometry"]) for item in selected.clipped_shapes
     ) == pytest.approx([float(width) ** 2, 2500.0], abs=1e-6)
     assert [item["rgba"] for item in selected.clipped_shapes] == [
         (255, 0, 0, 255),
@@ -538,7 +547,7 @@ def test_self_intersecting_paint_uses_the_declared_svg_fill_rule(
     geometry = selected.clipped_shapes[0]["geometry"]
     assert geometry.is_valid
     assert _geometry_census(geometry) == (1, 0)
-    assert geometry.area == pytest.approx(expected_area, abs=1e-5)
+    assert _source_area(selected, geometry) == pytest.approx(expected_area, abs=1e-5)
     assert selected.clipped_shapes[0]["rgba"] == (255, 0, 0, 255)
 
 
@@ -566,7 +575,7 @@ def test_cubic_flattening_uses_physical_tolerance_across_user_unit_scales(
     assert _ordered_paint_colors(selected) == [(255, 0, 0)]
     geometry = selected.clipped_shapes[0]["geometry"]
     assert geometry.is_valid
-    assert geometry.area / (viewbox_size**2) == pytest.approx(
+    assert _source_area(selected, geometry) / (viewbox_size**2) == pytest.approx(
         0.8749386, abs=1e-5
     )
     assert selected.clipped_shapes[0]["rgba"] == (255, 0, 0, 255)
@@ -883,7 +892,7 @@ def test_inherited_clip_rule_stays_native(
     assert selected.stage_timings["geometry_backend"] == "native"
     geometry = selected.clipped_shapes[0]["geometry"]
     assert _geometry_census(geometry) == (1, 1)
-    assert geometry.area == pytest.approx(4800.0, abs=1e-5)
+    assert _source_area(selected, geometry) == pytest.approx(4800.0, abs=1e-5)
 
 
 def test_direct_clip_rule_remains_native_with_legacy_parity(
@@ -1056,7 +1065,7 @@ def test_native_parser_preserves_narrow_valid_geometry(
     geometry = selected.clipped_shapes[0]["geometry"]
     assert geometry.is_valid
     assert _geometry_census(geometry) == (1, expected_holes)
-    assert geometry.area == pytest.approx(expected_area, abs=1e-3)
+    assert _source_area(selected, geometry) == pytest.approx(expected_area, abs=1e-3)
     assert selected.clipped_shapes[0]["rgba"] == (255, 0, 0, 255)
 
 
@@ -1083,7 +1092,7 @@ def test_subthreshold_independent_paint_is_preserved_with_exact_identity(
         (0, 0, 255),
     ]
     assert sorted(
-        item["geometry"].area for item in selected.clipped_shapes
+        _source_area(selected, item["geometry"]) for item in selected.clipped_shapes
     ) == pytest.approx([0.000025, 2500.0], abs=5e-8)
     assert [item["rgba"] for item in selected.clipped_shapes] == [
         (255, 0, 0, 255),

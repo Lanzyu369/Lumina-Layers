@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from copy import deepcopy
 import mmap as stdlib_mmap
+import pickle
 from types import SimpleNamespace
 
 import numpy as np
@@ -21,6 +23,57 @@ from core.native_svg_adapter import (
     analyze_native_svg,
     native_runtime_identity,
 )
+
+
+@pytest.mark.parametrize("coordinates", [
+    [(675884046053, 323293585526), (676603618425, 324732730271),
+     (676603618421, 324732730263), (675472861842, 322471217105)],
+    [(686369243421, 641036184211), (686163651314, 640933388157),
+     (686163651316, 640933388158), (682154605263, 638055098684)],
+])
+def test_native_coordinate_handoff_preserves_near_collinear_topology(
+    monkeypatch: pytest.MonkeyPatch, coordinates,
+) -> None:
+    """Keep exact contact topology across a non-binary SVG scale.
+
+    非二进制 SVG 比例转换必须保持近共线边界的拓扑。
+    """
+    result = _native_result()
+    vertices = np.asarray(coordinates + [coordinates[0]], dtype=np.int64)
+    vertices.setflags(write=False)
+    result.raw.coordinates = vertices
+    result.grid_to_source_unit = 9.728e-9
+    result.bbox = (0.0, 0.0, 9728.0, 6376.0)
+    result.scale_factor = 190.0 / 9728.0
+    assert shapely.Polygon(vertices).is_valid
+    assert not shapely.Polygon(vertices * result.grid_to_source_unit).is_valid
+    monkeypatch.setattr(
+        "core.native_svg_adapter._load_native_module",
+        lambda: _native_module(result),
+    )
+    outcome = analyze_native_svg("numeric.svg", 190.0, 0.02)
+    geometry = outcome.clipped_shapes[0]["geometry"]
+    assert geometry.is_valid, shapely.is_valid_reason(geometry)
+    domain = outcome.svg_coordinate_domain
+    np.testing.assert_array_equal(
+        np.rint(np.asarray(geometry.exterior.coords) / domain.grid_size),
+        vertices,
+    )
+    assert outcome.bbox[2] * outcome.scale_factor == pytest.approx(190.0)
+    assert domain.source_bbox == result.bbox
+    for restored in (deepcopy(outcome), pickle.loads(pickle.dumps(outcome))):
+        restored_geometry = restored.clipped_shapes[0]["geometry"]
+        assert restored_geometry.is_valid
+        assert shapely.get_precision(restored_geometry) == domain.grid_size
+        np.testing.assert_array_equal(
+            np.asarray(restored_geometry.exterior.coords),
+            np.asarray(geometry.exterior.coords),
+        )
+    assert geometry.area * outcome.scale_factor**2 == pytest.approx(
+        shapely.Polygon(vertices).area
+        * (result.grid_to_source_unit * result.scale_factor)**2,
+        rel=1e-12,
+    )
 
 
 @dataclass
@@ -384,7 +437,9 @@ def test_adapter_preserves_every_native_component_without_area_filter(
     assert len(outcome.shape_data[0]["poly"].geoms) == 2
     assert len(outcome.clipped_shapes) == 2
     assert sorted(
-        float(item["geometry"].area) for item in outcome.clipped_shapes
+        float(item["geometry"].area)
+        * outcome.svg_coordinate_domain.source_units_per_unit**2
+        for item in outcome.clipped_shapes
     ) == pytest.approx([0.000001, 1.0])
     assert {
         item["native_component_index"] for item in outcome.clipped_shapes

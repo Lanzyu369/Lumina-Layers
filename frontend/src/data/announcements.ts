@@ -16,6 +16,20 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-09-28",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [{
+      category: { zh: "稳定性", en: "Stability" },
+      items: [{
+        zh: "修复部分复杂 SVG 能正常预览，却在生成 3MF 时报错的问题。",
+        en: "Fixed 3MF generation errors for some complex SVG files that previewed successfully.",
+      }],
+    }],
+  },
+  {
     version: "2026-09-26",
     title: {
       zh: "Lumina Layers — 9 月更新速览",

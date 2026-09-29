@@ -51,6 +51,14 @@ def verify_installed_compensation() -> None:
 
 def verify_installed_extension() -> None:
     import lumina_svg_core
+    from shapely.geometry import Polygon
+
+    assert callable(getattr(lumina_svg_core, "canonicalize_grid_regions", None))
+    triangle = [(0, 0), (1, 0), (0, 1000), (0, 0)]
+    canonical = lumina_svg_core.canonicalize_grid_regions([[triangle]])
+    assert sum(
+        Polygon(shell, holes).area for shell, holes in canonical[0]
+    ) == 500
 
     result = lumina_svg_core.analyze_svg_svg(
         "<svg viewBox='0 0 20 10'>"

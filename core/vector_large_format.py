@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 import math
 import xml.etree.ElementTree as ET
 
 from shapely import affinity
+import shapely
 from shapely.geometry import GeometryCollection, box
 from shapely.validation import make_valid
 
 from core.naming import _sanitize, _strip_temp_prefix
 from core.vector_engine import VectorAnalysis, VectorProcessor
 from core.vector_structure import VectorStructurePlan
+from core.svg_coordinate_domain import PRINT_GRID_KEY, SvgCoordinateDomain, project_print_regions
+from core.vector_layer_geometry import resolve_vector_writer_grid_mm
 
 SVG_LARGE_FORMAT_PREVIEW_FALLBACK_WARNING = (
     "Native vector large-format is unavailable for this SVG; large-format generation will fall back to raster tiling."
@@ -200,6 +203,19 @@ class TileGeometrySlicer:
         if geometry is None or geometry.is_empty:
             return None
 
+        grid = float(shapely.get_precision(geometry)) if isinstance(geometry, shapely.Geometry) else 0.0
+        if grid > 0:
+            sliced = shapely.intersection(geometry, self.tile_box, grid_size=grid)
+            sliced = VectorProcessor._extract_polygonal_geometry(sliced)
+            if sliced is None or sliced.is_empty:
+                return None
+            translated = affinity.translate(
+                sliced,
+                xoff=math.floor(self.xoff / grid + 0.5) * grid,
+                yoff=math.floor(self.yoff / grid + 0.5) * grid,
+            )
+            return shapely.set_precision(translated, grid, mode="pointwise")
+
         try:
             sliced = geometry.intersection(self.tile_box)
         except MemoryError:
@@ -247,10 +263,34 @@ class VectorAnalysisTiler:
     total_height_mm: float
     tile_width_mm: float
     tile_height_mm: float
+    _print_grid_mm: float | None = field(default=None, init=False, repr=False)
+    _print_regions: tuple | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.analysis.scale_factor <= 0:
             raise ValueError("analysis.scale_factor must be positive")
+        resolve_large_format_grid_shape(
+            total_width_mm=self.total_width_mm, total_height_mm=self.total_height_mm,
+            tile_width_mm=self.tile_width_mm, tile_height_mm=self.tile_height_mm,
+        )
+        domain = getattr(self.analysis, "svg_coordinate_domain", None)
+        if isinstance(domain, SvgCoordinateDomain):
+            plan = getattr(self.analysis, "structure_plan", None)
+            margin = (plan.outline_width_mm if isinstance(plan, VectorStructurePlan) else 0.0)
+            margin += 0.15 * domain.source_mm_per_unit
+            grid = resolve_vector_writer_grid_mm(max(self.tile_width_mm, self.tile_height_mm) + margin)
+            object.__setattr__(self, "_print_grid_mm", grid)
+
+    def _prepared_print_regions(self) -> tuple:
+        if self._print_regions is None:
+            if self._print_grid_mm is None:
+                return ()
+            regions = project_print_regions(
+                [item["geometry"] for item in self.analysis.matched_shapes],
+                mm_per_unit=self.analysis.scale_factor, grid_mm=self._print_grid_mm,
+            )
+            object.__setattr__(self, "_print_regions", tuple(regions))
+        return self._print_regions
 
     def build_tile_specs(self) -> list[VectorTileSpec]:
         """Resolve tile bounds from total output size and tile size."""
@@ -277,6 +317,11 @@ class VectorAnalysisTiler:
 
     def _tile_svg_bounds(self, spec: VectorTileSpec) -> tuple[float, float, float, float]:
         scale = self.analysis.scale_factor
+        if self._print_grid_mm is not None:
+            grid = self._print_grid_mm
+            return tuple(math.floor(value / grid + 0.5) * grid / scale for value in (
+                spec.x0_mm, spec.y0_mm, spec.x1_mm, spec.y1_mm,
+            ))
         return (
             spec.x0_mm / scale,
             spec.y0_mm / scale,
@@ -285,6 +330,7 @@ class VectorAnalysisTiler:
         )
 
     def _build_tile_analysis(self, spec: VectorTileSpec) -> SlicedVectorTile | None:
+        svg_domain = getattr(self.analysis, "svg_coordinate_domain", None)
         tile_x0_svg, tile_y0_svg, tile_x1_svg, tile_y1_svg = self._tile_svg_bounds(spec)
         slicer = TileGeometrySlicer(
             box(tile_x0_svg, tile_y0_svg, tile_x1_svg, tile_y1_svg),
@@ -292,26 +338,48 @@ class VectorAnalysisTiler:
             yoff=-tile_y0_svg,
         )
 
-        matched_shapes = slicer.slice_records(self.analysis.matched_shapes, geometry_key="geometry")
+        if self._print_grid_mm is None:
+            matched_shapes = slicer.slice_records(self.analysis.matched_shapes, geometry_key="geometry")
+        else:
+            grid = self._print_grid_mm
+            units = tuple(math.floor(value / grid + 0.5) for value in (
+                spec.x0_mm, spec.y0_mm, spec.x1_mm, spec.y1_mm,
+            ))
+            print_slicer = TileGeometrySlicer(box(*units), xoff=-units[0], yoff=-units[1])
+            matched_shapes = []
+            for record, prepared in zip(self.analysis.matched_shapes, self._prepared_print_regions(), strict=True):
+                geometry = slicer.slice_geometry(record.get("geometry"))
+                if geometry is not None:
+                    matched_shapes.append({
+                        **record, "geometry": geometry,
+                        "print_geometry": print_slicer.slice_geometry(prepared) or GeometryCollection(),
+                        PRINT_GRID_KEY: grid,
+                    })
         clipped_shapes = slicer.slice_records(self.analysis.clipped_shapes, geometry_key="geometry")
         shape_data = slicer.slice_records(self.analysis.shape_data, geometry_key="poly")
         silhouette = slicer.slice_geometry(self.analysis.silhouette)
         structure_plan = None
         global_plan = getattr(self.analysis, "structure_plan", None)
         if isinstance(global_plan, VectorStructurePlan) and not global_plan.envelope.is_empty:
+            plan_scale = global_plan.mm_per_unit
+            frame_bounds_mm = tuple(value * self.analysis.scale_factor for value in (
+                tile_x0_svg, tile_y0_svg, tile_x1_svg, tile_y1_svg,
+            ))
             x0, y0, x1, y1 = global_plan.envelope.bounds
             structural_slicer = TileGeometrySlicer(
                 box(
-                    min(x0, 0.0) if spec.x0_mm == 0 else spec.x0_mm,
-                    min(y0, 0.0) if spec.y0_mm == 0 else spec.y0_mm,
-                    max(x1, spec.x1_mm) if spec.x1_mm == self.total_width_mm else spec.x1_mm,
-                    max(y1, spec.y1_mm) if spec.y1_mm == self.total_height_mm else spec.y1_mm,
-                ), xoff=-spec.x0_mm, yoff=-spec.y0_mm,
+                    min(x0, 0.0) if spec.x0_mm == 0 else frame_bounds_mm[0] / plan_scale,
+                    min(y0, 0.0) if spec.y0_mm == 0 else frame_bounds_mm[1] / plan_scale,
+                    max(x1, frame_bounds_mm[2] / plan_scale) if spec.x1_mm == self.total_width_mm else frame_bounds_mm[2] / plan_scale,
+                    max(y1, frame_bounds_mm[3] / plan_scale) if spec.y1_mm == self.total_height_mm else frame_bounds_mm[3] / plan_scale,
+                ), xoff=-frame_bounds_mm[0] / plan_scale, yoff=-frame_bounds_mm[1] / plan_scale,
             )
             structure_plan = VectorStructurePlan(
                 *(structural_slicer.slice_geometry(geometry) or GeometryCollection()
                   for geometry in (global_plan.body, global_plan.envelope, global_plan.outline)),
                 outline_width_mm=global_plan.outline_width_mm,
+                mm_per_unit=plan_scale,
+                precision_grid=global_plan.precision_grid,
             )
 
         if (
@@ -346,6 +414,15 @@ class VectorAnalysisTiler:
                 else None
             ),
             structure_plan=structure_plan,
+            svg_coordinate_domain=(
+                replace(
+                    svg_domain,
+                    frame_origin_mm=(tile_x0_svg * self.analysis.scale_factor,
+                                     tile_y0_svg * self.analysis.scale_factor),
+                    frame_extent_mm=((tile_x1_svg-tile_x0_svg) * self.analysis.scale_factor,
+                                     (tile_y1_svg-tile_y0_svg) * self.analysis.scale_factor),
+                ) if isinstance(svg_domain, SvgCoordinateDomain) else None
+            ),
         )
         return SlicedVectorTile(spec=spec, analysis=tile_analysis)
 
