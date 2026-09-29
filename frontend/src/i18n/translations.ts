@@ -7381,6 +7381,30 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "毫米",
     en: "mm",
   },
+  common_pagination_label: {
+    zh: "分页",
+    en: "Pagination",
+  },
+  common_pagination_prev: {
+    zh: "上一页",
+    en: "Previous",
+  },
+  common_pagination_next: {
+    zh: "下一页",
+    en: "Next",
+  },
+  common_pagination_page: {
+    zh: "第 {page} 页",
+    en: "Page {page}",
+  },
+  common_pagination_jump: {
+    zh: "前往",
+    en: "Go to",
+  },
+  common_pagination_total_pages: {
+    zh: "页，共 {count} 页",
+    en: "of {count}",
+  },
   common_not_available: {
     zh: "不可用",
     en: "N/A",
@@ -9189,10 +9213,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "云端条目",
     en: "Cloud Items",
   },
-  mat_sync_catalog_loaded_inline: {
-    zh: "已加载 {loaded} / {total} 个云端耗材",
-    en: "Loaded {loaded} / {total} cloud materials",
-  },
   mat_sync_index_state_label: {
     zh: "索引状态",
     en: "Index",
@@ -9232,14 +9252,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   mat_sync_refresh_btn: {
     zh: "刷新云端目录",
     en: "Refresh Catalog",
-  },
-  mat_sync_load_more_btn: {
-    zh: "加载更多",
-    en: "Load More",
-  },
-  mat_sync_load_all_btn: {
-    zh: "加载全部",
-    en: "Load All",
   },
   mat_sync_status_failed: {
     zh: "读取云端耗材库失败",
@@ -9346,8 +9358,84 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Local files missing",
   },
   mat_sync_local_section_title: {
-    zh: "本地已安装 / 版本回滚",
-    en: "Local Installed / Rollback",
+    zh: "本地版本记录",
+    en: "Local Revision History",
+  },
+  mat_sync_local_section_hint: {
+    zh: "更新耗材后会保留旧版本；如果新版本效果不理想，可以一键回滚。",
+    en: "Older revisions are kept after an update, so you can roll back if the new one does not work well.",
+  },
+  mat_sync_local_section_expand: {
+    zh: "展开",
+    en: "Show",
+  },
+  mat_sync_local_section_collapse: {
+    zh: "收起",
+    en: "Hide",
+  },
+  mat_sync_local_current_revision: {
+    zh: "当前版本 {revision} · 更新于 {time}",
+    en: "Current {revision} · updated {time}",
+  },
+  mat_sync_channel_label: {
+    zh: "发布频道",
+    en: "Channel",
+  },
+  mat_sync_channel_official: {
+    zh: "官方频道",
+    en: "Official",
+  },
+  mat_sync_channel_community: {
+    zh: "社区频道",
+    en: "Community",
+  },
+  mat_sync_channel_team: {
+    zh: "团队频道",
+    en: "Team",
+  },
+  mat_sync_fit_error_label: {
+    zh: "拟合误差",
+    en: "Fit Error",
+  },
+  mat_sync_fit_error_hint: {
+    zh: "平均色差 ΔE，数值越低越准确；超过 {threshold} 视为偏高。",
+    en: "Mean color difference (ΔE); lower is more accurate. Above {threshold} is considered high.",
+  },
+  mat_sync_fit_error_value: {
+    zh: "ΔE {value}",
+    en: "ΔE {value}",
+  },
+  mat_sync_fit_error_grade_good: {
+    zh: "良好",
+    en: "Good",
+  },
+  mat_sync_fit_error_grade_high: {
+    zh: "偏高",
+    en: "High",
+  },
+  mat_sync_fit_error_missing: {
+    zh: "未提供",
+    en: "Not provided",
+  },
+  mat_sync_fit_error_verifications: {
+    zh: "{count} 次验证",
+    en: "{count} verifications",
+  },
+  mat_sync_page_range_inline: {
+    zh: "第 {from}–{to} 条，共 {total} 条",
+    en: "{from}–{to} of {total}",
+  },
+  mat_sync_full_catalog_failed: {
+    zh: "按安装状态筛选需要读取完整云端目录，但这次读取失败了。",
+    en: "Filtering by install status needs the full cloud catalog, but it could not be loaded.",
+  },
+  mat_sync_full_catalog_retry_btn: {
+    zh: "重试",
+    en: "Retry",
+  },
+  mat_sync_dismiss_btn: {
+    zh: "关闭提示",
+    en: "Dismiss",
   },
   mat_sync_catalog_empty: {
     zh: "没有匹配的云端耗材。",
@@ -9452,10 +9540,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   mat_sync_rollback_failed: {
     zh: "耗材版本回滚失败",
     en: "Material rollback failed",
-  },
-  mat_sync_no_rollback: {
-    zh: "暂无可回滚版本",
-    en: "No rollback revision",
   },
   mat_gradient_library_selection_summary: {
     zh: "已选择 {selected} / {total} 个耗材",

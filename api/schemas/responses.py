@@ -504,6 +504,13 @@ class MaterialRegistryCatalogEntryResponse(BaseModel):
     package_url: str
     package_sha256: str
     package_bytes: int
+    card_metadata: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Public card projection from the Registry (fit error, layer height, "
+            "verification count). Registry 公开卡片元数据（拟合误差、层高、验证次数）。"
+        ),
+    )
 
 
 class MaterialRegistryCatalogResponse(BaseModel):
