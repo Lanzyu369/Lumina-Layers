@@ -9398,12 +9398,16 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Fit Error",
   },
   mat_sync_fit_error_hint: {
-    zh: "平均色差 ΔE，数值越低越准确；超过 {threshold} 视为偏高。",
-    en: "Mean color difference (ΔE); lower is more accurate. Above {threshold} is considered high.",
+    zh: "平均色差 ΔE，数值越低越准确：不超过 {excellent} 为优秀，不超过 {high} 为良好，超过 {high} 为偏高。",
+    en: "Mean color difference (ΔE); lower is more accurate: up to {excellent} is excellent, up to {high} is good, above {high} is high.",
   },
   mat_sync_fit_error_value: {
     zh: "ΔE {value}",
     en: "ΔE {value}",
+  },
+  mat_sync_fit_error_grade_excellent: {
+    zh: "优秀",
+    en: "Excellent",
   },
   mat_sync_fit_error_grade_good: {
     zh: "良好",

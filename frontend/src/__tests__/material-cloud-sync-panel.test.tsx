@@ -298,6 +298,7 @@ describe("MaterialCloudSyncPanel", () => {
         visibility: "team",
         card_metadata: { mean_delta_e: 1.234, verification_count: 3 },
       }),
+      makeEntry("mat_good", "Good PLA", { card_metadata: { mean_delta_e: 2.5 } }),
     ]));
 
     render(<MaterialCloudSyncPanel />);
@@ -307,6 +308,7 @@ describe("MaterialCloudSyncPanel", () => {
     const plaBasicCard = cardFor("PLA Basic");
     const silkPetgCard = cardFor("Silk PETG");
     const teamCard = cardFor("Team ABS");
+    const goodCard = cardFor("Good PLA");
 
     expect(within(plaBasicCard).getByTestId("material-cloud-channel-badge")).toHaveTextContent(/官方频道|official/i);
     expect(within(silkPetgCard).getByTestId("material-cloud-channel-badge")).toHaveTextContent(/社区频道|community/i);
@@ -318,10 +320,16 @@ describe("MaterialCloudSyncPanel", () => {
     expect(highFit).toHaveTextContent(/偏高|high/i);
     expect(within(silkPetgCard).getByText(/2 次验证|2 verifications/)).toBeInTheDocument();
 
-    const goodFit = within(teamCard).getByTestId("material-cloud-fit-error");
+    const excellentFit = within(teamCard).getByTestId("material-cloud-fit-error");
+    expect(excellentFit).toHaveAttribute("data-grade", "excellent");
+    expect(excellentFit).toHaveTextContent("ΔE 1.23");
+    expect(excellentFit).toHaveTextContent(/优秀|excellent/i);
+
+    const goodFit = within(goodCard).getByTestId("material-cloud-fit-error");
     expect(goodFit).toHaveAttribute("data-grade", "good");
-    expect(goodFit).toHaveTextContent("ΔE 1.23");
+    expect(goodFit).toHaveTextContent("ΔE 2.50");
     expect(goodFit).toHaveTextContent(/良好|good/i);
+    expect(goodFit.className).not.toMatch(/font-(semibold|bold)|amber|emerald|rose|red-/);
 
     const missingFit = within(plaBasicCard).getByTestId("material-cloud-fit-error");
     expect(missingFit).toHaveAttribute("data-grade", "unknown");

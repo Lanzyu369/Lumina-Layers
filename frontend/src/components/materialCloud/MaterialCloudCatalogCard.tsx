@@ -6,6 +6,7 @@ import { tRuntime } from "../../i18n/runtime";
 import Button from "../ui/Button";
 import { cx, wellClass } from "../ui/panelPrimitives";
 import {
+  FIT_ERROR_EXCELLENT_THRESHOLD,
   FIT_ERROR_HIGH_THRESHOLD,
   formatBytes,
   resolveCatalogChannel,
@@ -18,7 +19,6 @@ import {
 import type {
   CatalogChannel,
   CatalogInstallState,
-  FitErrorGrade,
 } from "./catalogModel";
 
 interface MaterialCloudCatalogCardProps {
@@ -52,12 +52,6 @@ const installStateChipClass: Record<CatalogInstallState, string> = {
   local_available: "bg-slate-200/70 text-slate-700 dark:bg-slate-700/60 dark:text-slate-200",
   local_missing: "bg-amber-100 text-amber-800 dark:bg-amber-400/15 dark:text-amber-100",
   not_installed: "bg-slate-200/70 text-slate-600 dark:bg-slate-700/60 dark:text-slate-300",
-};
-
-const fitErrorToneClass: Record<FitErrorGrade, string> = {
-  good: "text-emerald-700 dark:text-emerald-300",
-  high: "text-amber-700 dark:text-amber-300",
-  unknown: "text-slate-500 dark:text-slate-400",
 };
 
 function MetaItem({
@@ -191,20 +185,23 @@ export default function MaterialCloudCatalogCard({
           <span
             data-testid="material-cloud-fit-error"
             data-grade={fitError.grade}
-            title={tRuntime("mat_sync_fit_error_hint", { threshold: FIT_ERROR_HIGH_THRESHOLD.toFixed(1) })}
-            className={cx("flex items-baseline gap-1.5", fitErrorToneClass[fitError.grade])}
+            title={tRuntime("mat_sync_fit_error_hint", {
+              excellent: FIT_ERROR_EXCELLENT_THRESHOLD.toFixed(1),
+              high: FIT_ERROR_HIGH_THRESHOLD.toFixed(1),
+            })}
+            className="flex items-baseline gap-1.5 font-normal text-slate-700 dark:text-slate-200"
           >
             {fitError.meanDeltaE !== null ? (
               <>
                 <span className="tabular-nums">
                   {tRuntime("mat_sync_fit_error_value", { value: fitError.meanDeltaE.toFixed(2) })}
                 </span>
-                <span className="text-[11px] font-medium">
+                <span className="text-[11px] text-slate-500 dark:text-slate-400">
                   {t(`mat_sync_fit_error_grade_${fitError.grade}`)}
                 </span>
               </>
             ) : (
-              <span className="text-xs font-medium">{t("mat_sync_fit_error_missing")}</span>
+              <span className="text-xs text-slate-500 dark:text-slate-400">{t("mat_sync_fit_error_missing")}</span>
             )}
           </span>
           {fitErrorDetail ? (

@@ -16,7 +16,7 @@ export type CatalogInstallState =
   | "local_missing"
   | "local_available";
 export type CatalogChannel = "official" | "community" | "team" | "other";
-export type FitErrorGrade = "good" | "high" | "unknown";
+export type FitErrorGrade = "excellent" | "good" | "high" | "unknown";
 
 export interface CatalogDisplay {
   brand: string;
@@ -39,11 +39,24 @@ export const CATALOG_FILTERS: CatalogFilter[] = [
   "installed",
 ];
 
+/** Mean ΔE at or below this is graded "excellent". */
+export const FIT_ERROR_EXCELLENT_THRESHOLD = 2.0;
+
 /**
  * Mirrors `_MEAN_DELTA_E_HIGH_THRESHOLD` in core/single_stage/materials.py:
  * above this mean ΔE the fit is treated as borderline.
  */
 export const FIT_ERROR_HIGH_THRESHOLD = 3.0;
+
+export const gradeFitError = (meanDeltaE: number | null): FitErrorGrade => {
+  if (meanDeltaE === null) {
+    return "unknown";
+  }
+  if (meanDeltaE <= FIT_ERROR_EXCELLENT_THRESHOLD) {
+    return "excellent";
+  }
+  return meanDeltaE <= FIT_ERROR_HIGH_THRESHOLD ? "good" : "high";
+};
 
 const KNOWN_CHANNELS: ReadonlySet<string> = new Set(["official", "community", "team"]);
 
@@ -118,15 +131,11 @@ export const resolveCatalogFitError = (entry: MaterialRegistryCatalogEntry): Cat
   const meanDeltaE = readNonNegativeNumber(metadata.mean_delta_e);
   const verificationCount = readNonNegativeNumber(metadata.verification_count);
   const layerHeight = readNonNegativeNumber(metadata.layer_height_mm);
-  let grade: FitErrorGrade = "unknown";
-  if (meanDeltaE !== null) {
-    grade = meanDeltaE > FIT_ERROR_HIGH_THRESHOLD ? "high" : "good";
-  }
   return {
     meanDeltaE,
     verificationCount: verificationCount === null ? null : Math.round(verificationCount),
     layerHeightMm: layerHeight && layerHeight > 0 ? layerHeight : null,
-    grade,
+    grade: gradeFitError(meanDeltaE),
   };
 };
 

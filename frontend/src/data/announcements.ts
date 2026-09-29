@@ -27,8 +27,8 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
         zh: "云端耗材库改成按页浏览，不用再一次次点“加载更多”；可以直接跳到任意一页。",
         en: "The cloud material library now has page-by-page browsing instead of repeated “Load more” clicks, and you can jump straight to any page.",
       }, {
-        zh: "云端耗材卡片会显示发布频道（官方、社区等）和拟合误差（色差越小越准），误差偏高的耗材会有提示。",
-        en: "Cloud material cards now show where each material was published (official, community, and so on) and its fit error, with a hint when the error is on the high side.",
+        zh: "云端耗材卡片会显示发布频道（官方、社区等）和拟合误差（色差越小越准），并按优秀、良好、偏高分级。",
+        en: "Cloud material cards now show where each material was published (official, community, and so on) and its fit error, graded as excellent, good, or high.",
       }, {
         zh: "按“可更新”“已安装”筛选时的数量更准确；耗材更新后保留的旧版本收进了可折叠的“本地版本记录”，需要时再展开回滚。",
         en: "The “Updates” and “Installed” filters now show accurate counts, and older versions kept after an update live in a collapsible “Local revision history” you can open when you need to roll back.",
