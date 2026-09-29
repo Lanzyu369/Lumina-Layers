@@ -1,14 +1,15 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { JSX } from "react";
+import type { CSSProperties, JSX, SyntheticEvent } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "../../i18n/context";
 import { TUTORIAL_STEPS } from "../../data/tutorialSteps";
 import type { TutorialStep } from "../../data/tutorialSteps";
+import { useDialogFocusTrap } from "../../hooks/useDialogFocusTrap";
 import { useTutorialAnchor } from "../../hooks/useTutorialAnchor";
 import { useTutorialStore } from "../../stores/tutorialStore";
 import Button from "../ui/Button";
 import { computeTutorialCardPosition } from "./tutorialPlacement";
-import type { TutorialSize } from "./tutorialPlacement";
+import type { TutorialRect, TutorialSize } from "./tutorialPlacement";
 
 /** Extra room drawn around the spotlighted element. 高亮框相对目标的外扩距离。 */
 const SPOTLIGHT_PADDING_PX = 6;
@@ -29,10 +30,86 @@ function useViewportSize(): TutorialSize {
   return viewport;
 }
 
+const stopEvent = (event: SyntheticEvent) => event.stopPropagation();
+
+/**
+ * Transparent layer that blocks the app. With a `hole`, it is built from four
+ * strips around the hole so pointer and wheel input inside it reach the app.
+ * 屏蔽界面的透明层；传入 `hole` 时改为围绕镂空的四条遮挡，镂空内的指针和滚轮
+ * 操作可以传到下方界面。
+ */
+function TutorialClickShield({
+  hole,
+  dimmed,
+}: {
+  hole: TutorialRect | null;
+  dimmed: boolean;
+}) {
+  const shieldProps = {
+    onClick: stopEvent,
+    onPointerDown: stopEvent,
+  };
+  if (!hole) {
+    return (
+      <div
+        className="pointer-events-auto absolute inset-0"
+        style={dimmed ? { background: "var(--surface-scrim)" } : undefined}
+        data-testid="tutorial-click-shield"
+        {...shieldProps}
+      />
+    );
+  }
+  const top = Math.max(0, hole.top);
+  const bottom = hole.top + hole.height;
+  const strips: CSSProperties[] = [
+    { top: 0, left: 0, right: 0, height: top },
+    { top: bottom, left: 0, right: 0, bottom: 0 },
+    { top, left: 0, width: Math.max(0, hole.left), height: hole.height },
+    { top, left: hole.left + hole.width, right: 0, height: hole.height },
+  ];
+  return (
+    <>
+      {strips.map((style, index) => (
+        <div
+          key={index}
+          className="pointer-events-auto absolute"
+          style={style}
+          data-testid="tutorial-click-shield-part"
+          {...shieldProps}
+        />
+      ))}
+    </>
+  );
+}
+
+function TutorialControlList({ step }: { step: TutorialStep }) {
+  const { t } = useI18n();
+  if (!step.controlHints || step.controlHints.length === 0) {
+    return null;
+  }
+  return (
+    <dl
+      className="mt-3 grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1.5 rounded-xl border border-slate-200/80 bg-slate-100/60 px-3 py-2.5 text-xs leading-5 dark:border-slate-700/60 dark:bg-slate-900/50"
+      aria-label={t("tutorial_controls_label")}
+      data-testid="tutorial-controls"
+    >
+      {step.controlHints.map((hint) => (
+        <div key={hint.gestureKey} className="contents">
+          <dt className="justify-self-start rounded-md border border-slate-300/80 bg-slate-50 px-2 py-0.5 font-semibold text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200">
+            {t(hint.gestureKey)}
+          </dt>
+          <dd className="text-slate-600 dark:text-slate-300">{t(hint.effectKey)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 function TutorialStepDetails({ step }: { step: TutorialStep }) {
   const { t } = useI18n();
   return (
     <>
+      <TutorialControlList step={step} />
       {step.flowKeys && step.flowKeys.length > 0 ? (
         <ol
           className="mt-3 flex flex-wrap items-center gap-1.5"
@@ -86,10 +163,13 @@ function TutorialStepDetails({ step }: { step: TutorialStep }) {
  * shows an explanation card beside it.
  * 分步高亮引导：压暗界面、框出当前步骤的元素，并在旁边显示说明卡片。
  *
- * The whole app is blocked while the tour runs so a stray click cannot open a
- * file picker or start a job; the tour only explains. When the element cannot
- * be found the card is centered and the tour continues.
- * 引导期间屏蔽整个界面，避免误触打开文件选择框或启动任务；引导只做讲解。
+ * The app is blocked while the tour runs so a stray click cannot open a file
+ * picker or start a job; the tour only explains. Steps marked `interactive`
+ * (the 3D view) leave only the spotlight usable so the user may try the
+ * gestures, but never have to. When the element cannot be found the card is
+ * centered and the tour continues.
+ * 引导期间屏蔽界面，避免误触打开文件选择框或启动任务；引导只做讲解。标记为
+ * `interactive` 的步骤（3D 预览）只放开高亮区域，用户可以试用但不强制。
  * 找不到目标元素时卡片居中显示，引导照常进行。
  */
 export default function TutorialTour(): JSX.Element | null {
@@ -105,7 +185,9 @@ export default function TutorialTour(): JSX.Element | null {
   const anchor = useTutorialAnchor(step.anchor);
   const viewport = useViewportSize();
   const cardRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const [cardSize, setCardSize] = useState<TutorialSize>(DEFAULT_CARD_SIZE);
+  useDialogFocusTrap(cardRef, true);
 
   // Card height changes with each step's copy; re-measure whenever it resizes.
   useLayoutEffect(() => {
@@ -135,6 +217,11 @@ export default function TutorialTour(): JSX.Element | null {
   useEffect(() => {
     cardRef.current?.focus({ preventScroll: true });
   }, [stepIndex, anchor.status]);
+
+  // Each step starts reading from the top of its (possibly scrolled) copy.
+  useEffect(() => {
+    bodyRef.current?.scrollTo?.({ top: 0 });
+  }, [stepIndex]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -166,19 +253,17 @@ export default function TutorialTour(): JSX.Element | null {
           height: anchor.rect.height + SPOTLIGHT_PADDING_PX * 2,
         }
       : null;
-  const position = computeTutorialCardPosition(spotlight, cardSize, viewport);
+  const position = computeTutorialCardPosition(spotlight, cardSize, viewport, {
+    inside: Boolean(step.cardInside),
+  });
   const showCard = anchor.status !== "searching";
+  const passThroughHole = step.interactive && spotlight ? spotlight : null;
 
   return createPortal(
-    <div className="fixed inset-0 z-[9000]" data-testid="tutorial-tour">
-      {/* Click shield: the tour explains only, it never lets clicks through. */}
-      <div
-        className="absolute inset-0"
-        style={spotlight ? undefined : { background: "var(--surface-scrim)" }}
-        onClick={(event) => event.stopPropagation()}
-        onPointerDown={(event) => event.stopPropagation()}
-        data-testid="tutorial-click-shield"
-      />
+    <div className="pointer-events-none fixed inset-0 z-[9000]" data-testid="tutorial-tour">
+      {/* Click shield: blocks the app while the tour explains. Interactive
+          steps leave the spotlight open so the user can try it there. */}
+      <TutorialClickShield hole={passThroughHole} dimmed={!spotlight} />
 
       {spotlight ? (
         <>
@@ -227,7 +312,7 @@ export default function TutorialTour(): JSX.Element | null {
         tabIndex={-1}
         data-testid="tutorial-card"
         data-side={position.side}
-        className="absolute w-[min(380px,calc(100vw-32px))] rounded-2xl border p-5 shadow-2xl outline-none"
+        className="pointer-events-auto absolute flex max-h-[calc(100dvh-32px)] w-[min(380px,calc(100vw-32px))] flex-col rounded-2xl border shadow-2xl outline-none"
         style={{
           top: position.top,
           left: position.left,
@@ -236,7 +321,9 @@ export default function TutorialTour(): JSX.Element | null {
           background: "var(--surface-panel-strong)",
         }}
       >
-        <div className="flex items-center justify-between gap-3">
+        {/* Header and actions stay pinned; only the copy scrolls on short
+            windows, so Skip and Next/Done are always reachable. */}
+        <div className="flex shrink-0 items-center justify-between gap-3 px-5 pt-5">
           <span className="text-xs font-semibold text-blue-600 dark:text-blue-400">
             {t("tutorial_progress_label")} · {stepIndex + 1} / {TUTORIAL_STEPS.length}
           </span>
@@ -250,22 +337,28 @@ export default function TutorialTour(): JSX.Element | null {
           </button>
         </div>
 
-        <h2
-          id="tutorial-step-title"
-          className="mt-2 text-base font-semibold text-slate-800 dark:text-slate-100"
+        <div
+          ref={bodyRef}
+          className="min-h-0 flex-1 overflow-y-auto px-5"
+          data-testid="tutorial-card-body"
         >
-          {t(step.titleKey)}
-        </h2>
-        <p
-          id="tutorial-step-body"
-          className="mt-2 whitespace-pre-line text-sm leading-6 text-slate-600 dark:text-slate-300"
-        >
-          {t(step.bodyKey)}
-        </p>
+          <h2
+            id="tutorial-step-title"
+            className="mt-2 text-base font-semibold text-slate-800 dark:text-slate-100"
+          >
+            {t(step.titleKey)}
+          </h2>
+          <p
+            id="tutorial-step-body"
+            className="mt-2 whitespace-pre-line text-sm leading-6 text-slate-600 dark:text-slate-300"
+          >
+            {t(step.bodyKey)}
+          </p>
 
-        <TutorialStepDetails step={step} />
+          <TutorialStepDetails step={step} />
+        </div>
 
-        <div className="mt-4 flex items-center justify-end gap-2">
+        <div className="flex shrink-0 items-center justify-end gap-2 px-5 pb-5 pt-4">
           {!isFirst ? (
             <Button label={t("tutorial_back")} variant="secondary" size="sm" onClick={back} />
           ) : null}

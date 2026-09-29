@@ -1,8 +1,13 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { JSX } from "react";
 import { createPortal } from "react-dom";
+import { useDialogFocusTrap } from "../../hooks/useDialogFocusTrap";
 import { useI18n } from "../../i18n/context";
 import Button from "../ui/Button";
+
+/** Focus the primary "Start tour" action when the dialog opens. 打开时聚焦「开始引导」。 */
+const focusStartAction = (container: HTMLElement) =>
+  container.querySelector<HTMLElement>("[data-welcome-actions] button:last-of-type");
 
 export interface TutorialWelcomeDialogProps {
   open: boolean;
@@ -24,6 +29,8 @@ export default function TutorialWelcomeDialog({
   onSkip,
 }: TutorialWelcomeDialogProps): JSX.Element | null {
   const { t } = useI18n();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocusTrap(dialogRef, open, { initialFocus: focusStartAction });
 
   useEffect(() => {
     if (!open) {
@@ -49,18 +56,20 @@ export default function TutorialWelcomeDialog({
       onClick={onSkip}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="tutorial-welcome-title"
+        tabIndex={-1}
         data-testid="tutorial-welcome-dialog"
-        className="relative mx-4 flex w-full max-w-md flex-col overflow-hidden rounded-2xl border shadow-2xl"
+        className="relative mx-4 flex max-h-[calc(100dvh-32px)] w-full max-w-md flex-col overflow-hidden rounded-2xl border shadow-2xl outline-none"
         style={{
           borderColor: "var(--surface-outline)",
           background: "var(--surface-panel-strong)",
         }}
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-start justify-between gap-3 px-5 pt-5">
+        <div className="flex shrink-0 items-start justify-between gap-3 px-5 pt-5">
           <div className="flex min-w-0 items-center gap-3">
             <img src="/favicon.ico" alt="" className="h-9 w-9 shrink-0 rounded" />
             <h2
@@ -80,7 +89,7 @@ export default function TutorialWelcomeDialog({
           </button>
         </div>
 
-        <div className="px-5 py-4">
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4" data-testid="tutorial-welcome-body">
           <p className="whitespace-pre-line text-sm leading-6 text-slate-600 dark:text-slate-300">
             {t("tutorial_welcome_body")}
           </p>
@@ -89,7 +98,10 @@ export default function TutorialWelcomeDialog({
           </p>
         </div>
 
-        <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-5 py-3 dark:border-slate-700">
+        <div
+          className="flex shrink-0 items-center justify-end gap-2 border-t border-slate-200 px-5 py-3 dark:border-slate-700"
+          data-welcome-actions
+        >
           <Button
             label={t("tutorial_welcome_skip")}
             variant="secondary"

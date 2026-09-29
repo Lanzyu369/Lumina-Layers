@@ -52,6 +52,34 @@ describe("TutorialHost", () => {
     expect(screen.queryByTestId("tutorial-welcome-dialog")).not.toBeInTheDocument();
   });
 
+  it("focuses Start and keeps Tab inside the welcome dialog", () => {
+    const outside = document.createElement("button");
+    outside.textContent = "background";
+    document.body.appendChild(outside);
+    render(<TutorialHost canAutoOffer />);
+
+    const start = screen.getByText(zh("tutorial_welcome_start")).closest("button");
+    expect(start).toHaveFocus();
+
+    outside.focus();
+    fireEvent.keyDown(document, { key: "Tab" });
+    const dialog = screen.getByTestId("tutorial-welcome-dialog");
+    expect(dialog.contains(document.activeElement)).toBe(true);
+
+    start?.focus();
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    outside.remove();
+  });
+
+  it("lets the welcome text scroll so the actions stay reachable", () => {
+    render(<TutorialHost canAutoOffer />);
+    expect(screen.getByTestId("tutorial-welcome-dialog")).toHaveClass("max-h-[calc(100dvh-32px)]");
+    const body = screen.getByTestId("tutorial-welcome-body");
+    expect(body).toHaveClass("overflow-y-auto", "min-h-0");
+    expect(body.contains(screen.getByText(zh("tutorial_welcome_start")))).toBe(false);
+  });
+
   it("closing the welcome with Escape counts as skipping", () => {
     render(<TutorialHost canAutoOffer />);
 

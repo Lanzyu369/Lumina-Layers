@@ -19,6 +19,7 @@ export type TutorialStepId =
   | "source-material-archive"
   | "output-size"
   | "preview"
+  | "view-3d"
   | "generate"
   | "help";
 
@@ -29,18 +30,38 @@ export interface TutorialStepPrepare {
   widget?: WidgetId;
 }
 
+/** One "gesture → effect" row, e.g. left-drag → rotate. 一行「操作 → 效果」说明。 */
+export interface TutorialControlHint {
+  gestureKey: string;
+  effectKey: string;
+}
+
 export interface TutorialStep {
   id: TutorialStepId;
   /** `data-tutorial` value to spotlight; null shows a centered card. 高亮目标；null 时卡片居中。 */
   anchor: string | null;
   titleKey: string;
   bodyKey: string;
-  /** Short principle chain rendered as chips joined by arrows. 原理流程芯片。 */
+  /** Short principle chain rendered as numbered chips. 原理流程芯片。 */
   flowKeys?: readonly string[];
   /** "What you need" line. 「需要准备」说明。 */
   needKey?: string;
   /** "Best for" line. 「适合」说明。 */
   fitKey?: string;
+  /** Gesture list rendered as a small table. 操作说明列表。 */
+  controlHints?: readonly TutorialControlHint[];
+  /**
+   * Let the user try the spotlighted area (clicks/drags/scroll pass through
+   * the cut-out); everything outside stays blocked.
+   * 允许用户在高亮区域内直接试用（点击、拖动、滚轮可穿透），区域外仍屏蔽。
+   */
+  interactive?: boolean;
+  /**
+   * Place the card inside the spotlight near its bottom edge, for targets
+   * too large to leave room beside them.
+   * 卡片放在高亮区域内部靠下，适用于太大、旁边放不下卡片的目标。
+   */
+  cardInside?: boolean;
   prepare?: TutorialStepPrepare;
 }
 
@@ -135,6 +156,21 @@ export const TUTORIAL_STEPS: readonly TutorialStep[] = [
     prepare: ACTION_BAR,
   },
   {
+    id: "view-3d",
+    anchor: "viewport-3d",
+    titleKey: "tutorial_step_view3d_title",
+    bodyKey: "tutorial_step_view3d_body",
+    controlHints: [
+      { gestureKey: "tutorial_control_left_drag", effectKey: "tutorial_control_rotate" },
+      { gestureKey: "tutorial_control_right_drag", effectKey: "tutorial_control_pan" },
+      { gestureKey: "tutorial_control_wheel", effectKey: "tutorial_control_zoom" },
+      { gestureKey: "tutorial_control_space_drag", effectKey: "tutorial_control_space_pan" },
+    ],
+    interactive: true,
+    cardInside: true,
+    prepare: { tab: "converter", converterSubTab: "core" },
+  },
+  {
     id: "generate",
     anchor: "generate-button",
     titleKey: "tutorial_step_generate_title",
@@ -162,5 +198,6 @@ export function collectTutorialStepKeys(
     ...(step.flowKeys ?? []),
     ...(step.needKey ? [step.needKey] : []),
     ...(step.fitKey ? [step.fitKey] : []),
+    ...(step.controlHints ?? []).flatMap((hint) => [hint.gestureKey, hint.effectKey]),
   ]);
 }

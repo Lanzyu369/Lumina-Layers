@@ -45,6 +45,22 @@ describe("computeTutorialCardPosition", () => {
     expect(position.top).toBeGreaterThanOrEqual(TUTORIAL_VIEWPORT_MARGIN_PX);
   });
 
+  it("places the card inside a large target near its bottom edge", () => {
+    const target = { top: 160, left: 360, width: 720, height: 700 };
+    const position = computeTutorialCardPosition(target, card, viewport, { inside: true });
+    expect(position.side).toBe("inside");
+    expect(position.left).toBe(360 + 360 - 190);
+    expect(position.top).toBe(160 + 700 - 280 - TUTORIAL_CARD_GAP_PX);
+  });
+
+  it("keeps an inside card within the viewport", () => {
+    const target = { top: 0, left: 0, width: 1440, height: 1200 };
+    const position = computeTutorialCardPosition(target, card, viewport, { inside: true });
+    expect(position.top + card.height).toBeLessThanOrEqual(
+      viewport.height - TUTORIAL_VIEWPORT_MARGIN_PX,
+    );
+  });
+
   it("falls back to the roomiest side when nothing fits", () => {
     const small = { width: 400, height: 400 };
     const target = { top: 50, left: 50, width: 300, height: 300 };

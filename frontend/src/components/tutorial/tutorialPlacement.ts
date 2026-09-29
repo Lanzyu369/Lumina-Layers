@@ -15,7 +15,12 @@ export interface TutorialSize {
   height: number;
 }
 
-export type TutorialCardSide = "right" | "left" | "bottom" | "top" | "center";
+export type TutorialCardSide = "right" | "left" | "bottom" | "top" | "center" | "inside";
+
+export interface TutorialPlacementOptions {
+  /** Put the card inside the target near its bottom edge. 卡片放在目标内部靠下。 */
+  inside?: boolean;
+}
 
 export interface TutorialCardPosition {
   top: number;
@@ -28,7 +33,9 @@ export const TUTORIAL_CARD_GAP_PX = 16;
 /** Minimum distance between the card and the viewport edge. 卡片与视口边缘的最小距离。 */
 export const TUTORIAL_VIEWPORT_MARGIN_PX = 16;
 
-const SIDE_ORDER: readonly Exclude<TutorialCardSide, "center">[] = [
+type OutsideSide = Exclude<TutorialCardSide, "center" | "inside">;
+
+const SIDE_ORDER: readonly OutsideSide[] = [
   "right",
   "left",
   "bottom",
@@ -43,7 +50,7 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 function availableSpace(
-  side: Exclude<TutorialCardSide, "center">,
+  side: OutsideSide,
   target: TutorialRect,
   viewport: TutorialSize,
 ): number {
@@ -60,7 +67,7 @@ function availableSpace(
 }
 
 function requiredSpace(
-  side: Exclude<TutorialCardSide, "center">,
+  side: OutsideSide,
   card: TutorialSize,
 ): number {
   const extent = side === "left" || side === "right" ? card.width : card.height;
@@ -68,7 +75,7 @@ function requiredSpace(
 }
 
 function placeOnSide(
-  side: Exclude<TutorialCardSide, "center">,
+  side: OutsideSide,
   target: TutorialRect,
   card: TutorialSize,
   viewport: TutorialSize,
@@ -113,14 +120,17 @@ function placeOnSide(
  *
  * Tries right, left, bottom, then top and uses the first side with enough
  * room; otherwise uses the roomiest side and clamps into the viewport. A
- * missing target centers the card.
+ * missing target centers the card. With `inside`, the card sits inside the
+ * target, horizontally centered and just above its bottom edge.
  * 依次尝试右、左、下、上，取第一个放得下的方向；都放不下时取空间最大的一侧
- * 并夹紧到视口内。没有目标时卡片居中。
+ * 并夹紧到视口内。没有目标时卡片居中。`inside` 时卡片放在目标内部、水平居中、
+ * 贴近底边。
  *
  * Args:
  *     target (TutorialRect | null): Spotlight rect in viewport pixels. 高亮区域。
  *     card (TutorialSize): Measured card size. 卡片尺寸。
  *     viewport (TutorialSize): Viewport size. 视口尺寸。
+ *     options (TutorialPlacementOptions): Placement options. 定位选项。
  *
  * Returns:
  *     TutorialCardPosition: Top-left corner and chosen side. 卡片左上角坐标与方向。
@@ -129,6 +139,7 @@ export function computeTutorialCardPosition(
   target: TutorialRect | null,
   card: TutorialSize,
   viewport: TutorialSize,
+  options: TutorialPlacementOptions = {},
 ): TutorialCardPosition {
   const margin = TUTORIAL_VIEWPORT_MARGIN_PX;
   if (!target) {
@@ -136,6 +147,22 @@ export function computeTutorialCardPosition(
       side: "center",
       top: clamp((viewport.height - card.height) / 2, margin, viewport.height - card.height - margin),
       left: clamp((viewport.width - card.width) / 2, margin, viewport.width - card.width - margin),
+    };
+  }
+
+  if (options.inside) {
+    return {
+      side: "inside",
+      top: clamp(
+        target.top + target.height - card.height - TUTORIAL_CARD_GAP_PX,
+        margin,
+        viewport.height - card.height - margin,
+      ),
+      left: clamp(
+        target.left + target.width / 2 - card.width / 2,
+        margin,
+        viewport.width - card.width - margin,
+      ),
     };
   }
 

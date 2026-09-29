@@ -96,6 +96,71 @@ describe("TutorialTour", () => {
     expect(screen.getByText(zh("tutorial_step_legacy_fit"))).toBeInTheDocument();
   });
 
+  it("explains 3D mouse controls and lets the user try them in the spotlight", async () => {
+    const viewIndex = TUTORIAL_STEPS.findIndex((step) => step.id === "view-3d");
+    mountAnchor("viewport-3d");
+    startTourAt(viewIndex);
+    render(<TutorialTour />);
+
+    // Wait until the anchor is found; while searching the full shield stays up.
+    await screen.findByTestId("tutorial-spotlight");
+    const controls = screen.getByTestId("tutorial-controls");
+    expect(controls.querySelectorAll("dt")).toHaveLength(4);
+    expect(screen.getByText(zh("tutorial_control_left_drag"))).toBeInTheDocument();
+    expect(screen.getByText(zh("tutorial_control_rotate"))).toBeInTheDocument();
+    expect(screen.getByText(zh("tutorial_control_right_drag"))).toBeInTheDocument();
+    expect(screen.getByText(zh("tutorial_control_pan"))).toBeInTheDocument();
+    expect(screen.getByText(zh("tutorial_control_wheel"))).toBeInTheDocument();
+    expect(screen.getByText(zh("tutorial_control_zoom"))).toBeInTheDocument();
+
+    // Only the area around the spotlight is shielded; the spotlight itself
+    // (the 3D view) stays usable, and the card sits inside it.
+    expect(screen.queryByTestId("tutorial-click-shield")).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("tutorial-click-shield-part")).toHaveLength(4);
+    expect(screen.getByTestId("tutorial-tour")).toHaveClass("pointer-events-none");
+    expect(screen.getByTestId("tutorial-card")).toHaveAttribute("data-side", "inside");
+  });
+
+  it("caps the card height and scrolls only the copy so actions stay reachable", async () => {
+    const legacyIndex = TUTORIAL_STEPS.findIndex((step) => step.id === "source-legacy-lut");
+    mountAnchor("color-source");
+    startTourAt(legacyIndex);
+    render(<TutorialTour />);
+
+    await screen.findByTestId("tutorial-spotlight");
+    const card = screen.getByTestId("tutorial-card");
+    expect(card).toHaveClass("flex", "flex-col", "max-h-[calc(100dvh-32px)]");
+    const body = screen.getByTestId("tutorial-card-body");
+    expect(body).toHaveClass("overflow-y-auto", "min-h-0");
+    expect(body.contains(screen.getByText(zh("tutorial_next")))).toBe(false);
+    expect(body.contains(screen.getByTestId("tutorial-skip-button"))).toBe(false);
+  });
+
+  it("keeps keyboard focus inside the step card", async () => {
+    const outside = document.createElement("button");
+    outside.textContent = "background";
+    document.body.appendChild(outside);
+    mountAnchor("primary-tabs");
+    startTourAt(0);
+    render(<TutorialTour />);
+    await screen.findByTestId("tutorial-spotlight");
+
+    outside.focus();
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(screen.getByTestId("tutorial-card").contains(document.activeElement)).toBe(true);
+    outside.remove();
+  });
+
+  it("keeps the whole app shielded on regular steps", async () => {
+    mountAnchor("primary-tabs");
+    startTourAt(0);
+    render(<TutorialTour />);
+
+    await screen.findByTestId("tutorial-spotlight");
+    expect(screen.getByTestId("tutorial-click-shield")).toHaveClass("pointer-events-auto", "inset-0");
+    expect(screen.queryByTestId("tutorial-click-shield-part")).not.toBeInTheDocument();
+  });
+
   it("moves forward and back with the buttons and arrow keys", async () => {
     mountAnchor("primary-tabs");
     startTourAt(0);

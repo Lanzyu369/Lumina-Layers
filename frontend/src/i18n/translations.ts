@@ -10179,8 +10179,52 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Step 4: Preview",
   },
   tutorial_step_preview_body: {
-    zh: "放好图片、选好颜色来源后，点击「预览」。转换结果会显示在屏幕中间，可以拖动旋转、滚轮缩放，检查颜色和细节。\n不满意可以回去调整设置，再预览一次。",
-    en: "Once the picture and color source are set, click Preview. The result appears in the middle of the screen, where you can drag to rotate and scroll to zoom to check colors and details.\nIf something looks off, adjust the settings and preview again.",
+    zh: "放好图片、选好颜色来源后，点击「预览」。转换结果会显示在屏幕中间的 3D 预览区，用来检查颜色和细节。\n不满意可以回去调整设置，再预览一次。",
+    en: "Once the picture and color source are set, click Preview. The result appears in the 3D preview in the middle of the screen, so you can check colors and details.\nIf something looks off, adjust the settings and preview again.",
+  },
+  tutorial_step_view3d_title: {
+    zh: "3D 预览：用鼠标查看",
+    en: "3D preview: mouse controls",
+  },
+  tutorial_step_view3d_body: {
+    zh: "中间这块区域是 3D 预览，预览后模型会显示在打印热床上。用下面的鼠标操作从各个角度检查效果，现在就可以在高亮区域里试一试。",
+    en: "This middle area is the 3D preview. After you preview, the model appears on the print bed. Use these mouse controls to inspect it from any angle, and feel free to try them in the highlighted area now.",
+  },
+  tutorial_controls_label: {
+    zh: "鼠标操作",
+    en: "Mouse controls",
+  },
+  tutorial_control_left_drag: {
+    zh: "左键拖动",
+    en: "Left-drag",
+  },
+  tutorial_control_rotate: {
+    zh: "旋转视角",
+    en: "Rotate the view",
+  },
+  tutorial_control_right_drag: {
+    zh: "右键（或中键）拖动",
+    en: "Right- or middle-drag",
+  },
+  tutorial_control_pan: {
+    zh: "平移视图",
+    en: "Pan the view",
+  },
+  tutorial_control_wheel: {
+    zh: "滚动鼠标滚轮",
+    en: "Scroll the wheel",
+  },
+  tutorial_control_zoom: {
+    zh: "放大 / 缩小",
+    en: "Zoom in / out",
+  },
+  tutorial_control_space_drag: {
+    zh: "按住空格 + 左键拖动",
+    en: "Hold Space + left-drag",
+  },
+  tutorial_control_space_pan: {
+    zh: "也可以平移，适合触控板",
+    en: "Also pans, handy on a trackpad",
   },
   tutorial_step_generate_title: {
     zh: "第五步：生成打印文件",
