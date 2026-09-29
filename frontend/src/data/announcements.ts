@@ -16,6 +16,23 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-09-30",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [{
+      category: { zh: "稳定性", en: "Stability" },
+      items: [{
+        zh: "问题反馈现在点一次“发送”就会上传到官方问题收集服务，不用再配置邮箱，也不用再确认转发；对话框会显示上传进度，失败时可以一键重试。",
+        en: "Bug reports now go straight to the official collection service with one click on Send. No mail setup or extra forwarding step is needed; the dialog shows upload progress and offers a one-click retry if it fails.",
+      }, {
+        zh: "反馈会带上和以前邮件一样完整的诊断资料，包括转换原图、生成的 3MF、所用 LUT 和材料档案（单个文件最大 40 MiB），开发者更容易复现问题。",
+        en: "Reports carry the same full diagnostics as before, including the source image, generated 3MF, LUT, and material archive in use (up to 40 MiB per file), so problems are easier to reproduce.",
+      }],
+    }],
+  },
+  {
     version: "2026-09-28",
     title: {
       zh: "Lumina Layers — 9 月更新速览",

@@ -226,8 +226,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "{message} Request ID: {requestId}.",
   },
   bug_report_modal_privacy_note: {
-    zh: "反馈会保存在本机。当前为单图转换时，最多 100 MiB 的原始输入图片会一并保存；低于邮件附件上限且本机邮件可用时也会作为附件发送。原图不会通过官方转发服务发送。",
-    en: "The report is saved on this device. For a single-image conversion, the original input up to 100 MiB is also saved and attached when it fits the email limit and local email is available. The original is never sent through the official relay.",
+    zh: "发送后，问题描述、可选邮箱、截图、自动收集的环境信息和操作记录，以及当前单图转换的原图、最近生成的 3MF、所用 LUT 和材料档案（单个文件最大 40 MiB），会先保存在本机，再上传到 Lumina Studio 官方问题收集服务，仅用于定位和回复问题。",
+    en: "When you send, your description, optional email, screenshot, automatically collected diagnostics and recent actions, plus the current single-image conversion source, latest generated 3MF, the LUT, and material archive in use (up to 40 MiB per file) are saved on this device and then uploaded to the Lumina Studio official bug collection service, used only to diagnose and reply to the issue.",
   },
   bug_report_modal_submit: {
     zh: "发送",
@@ -1065,37 +1065,45 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "请在右侧 3D 预览中旋转模型、选择或重选面；选好后再移动、旋转或缩放贴图。",
     en: "Rotate the model and select or reselect a surface in the 3D preview, then move, rotate, or scale the artwork.",
   },
-  bug_report_relay_prompt: {
-    zh: "本机邮件未成功发送。是否同意将这份反馈转发到 Lumina Studio 官方问题收集服务？",
-    en: "Local email delivery did not succeed. Do you agree to forward this report to the Lumina Studio official bug collection service?",
+  bug_report_toast_saved_locally: {
+    zh: "报告已保存在本机。工单号：{{ticket}}",
+    en: "The report was saved on this device. Ticket: {{ticket}}",
   },
-  bug_report_relay_privacy: {
-    zh: "转发内容包含你的问题描述、可选邮箱、截图和自动收集的环境信息，仅用于定位和回复问题；不会包含转换原图。",
-    en: "The forwarded report includes your description, optional email, screenshot, and automatically collected diagnostic context for triage and follow-up; it does not include the converter source image.",
+  bug_report_upload_pending: {
+    zh: "正在上传到官方问题收集服务，可以直接关闭此对话框，上传会在后台继续。",
+    en: "Uploading to the official bug collection service. You can close this dialog; the upload continues in the background.",
   },
-  bug_report_relay_send: {
-    zh: "同意并转发",
-    en: "Agree and forward",
+  bug_report_upload_pending_slow: {
+    zh: "上传比平时慢，仍在后台继续。可以关闭对话框，稍后用工单号联系开发者确认。",
+    en: "The upload is slower than usual and continues in the background. You can close this dialog and quote the ticket id to the developers later.",
   },
-  bug_report_relay_skip: {
-    zh: "不转发，手动发送",
-    en: "Do not forward; send manually",
+  bug_report_upload_submitted: {
+    zh: "已上传到官方问题收集服务，开发者会根据工单号跟进。",
+    en: "Uploaded to the official bug collection service. The developers will follow up using the ticket id.",
   },
-  bug_report_relay_success: {
-    zh: "已转发到官方问题收集服务。",
-    en: "Forwarded to the official bug collection service.",
+  bug_report_upload_failed: {
+    zh: "上传到官方问题收集服务失败，报告仍保存在本机。可以稍后重试，或用下面的方式手动发送。",
+    en: "Uploading to the official bug collection service failed. The report is still saved on this device; retry later or send it manually below.",
   },
-  bug_report_relay_failed: {
-    zh: "官方转发失败，请使用下面的手动方式发送。",
-    en: "Official forwarding failed. Use one of the manual options below.",
+  bug_report_upload_disabled: {
+    zh: "本机已关闭反馈上传，报告只保存在本机。请用下面的方式手动发送。",
+    en: "Report uploads are turned off on this installation, so the report stays on this device. Send it manually below.",
   },
-  bug_report_relay_unavailable: {
-    zh: "官方转发未配置，请使用下面的手动方式发送。",
-    en: "Official forwarding is not configured. Use one of the manual options below.",
+  bug_report_upload_held_back: {
+    zh: "以下文件太大或格式不支持，未上传，只保存在本机：{files}",
+    en: "These files were too large or unsupported and stay only on this device: {files}",
   },
-  bug_report_relay_skipped: {
-    zh: "未转发到官方服务，请使用下面的手动方式发送。",
-    en: "Official forwarding was skipped. Use one of the manual options below.",
+  bug_report_upload_retry: {
+    zh: "重试上传",
+    en: "Retry upload",
+  },
+  bug_report_upload_retrying: {
+    zh: "正在重试…",
+    en: "Retrying…",
+  },
+  bug_report_upload_retry_failed: {
+    zh: "仍然失败，请稍后再试。",
+    en: "Still failing. Please try again later.",
   },
   bug_report_success_ticket_label: {
     zh: "工单号",
@@ -1112,26 +1120,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   bug_report_success_copy_failed: {
     zh: "自动复制失败，请手动选中工单号复制。",
     en: "Automatic copy failed. Select the ticket id and copy it manually.",
-  },
-  bug_report_success_emailed_yes: {
-    zh: "报告已通过本机邮件发送给开发者。",
-    en: "Report was sent to the developer mailbox from this device.",
-  },
-  bug_report_success_emailed_no: {
-    zh: "本机邮件未成功发送，报告已保存到本地。请继续选择官方转发或手动发送。",
-    en: "Local email delivery did not succeed; the report was saved locally. Choose official forwarding or send it manually.",
-  },
-  bug_report_success_email_pending: {
-    zh: "报告已收到，邮件正在后台发送。你可以关闭此对话框，结果会在日志中记录。",
-    en: "Report received; the email is being sent in the background. You can close this dialog — the outcome is captured in the logs.",
-  },
-  bug_report_success_email_failed: {
-    zh: "本机邮件发送失败。报告已保存到本地，可以选择官方转发或手动发送。",
-    en: "Local email delivery failed. The report was saved locally; choose official forwarding or send it manually.",
-  },
-  bug_report_success_email_unconfigured: {
-    zh: "本机未配置邮件，报告已保存到本地。请选择官方转发或手动发送。",
-    en: "Local email is not configured; the report was saved locally. Choose official forwarding or send it manually.",
   },
   bug_report_success_original_attached: {
     zh: "转换原图已按原始字节随工单保存。",

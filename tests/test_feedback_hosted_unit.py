@@ -1,0 +1,203 @@
+"""Unit tests for uploading bug-report tickets to the official feedback server.
+
+官方反馈服务上传客户端的单元测试：工作量证明、附件筛选、重试与降级。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+from email.parser import BytesParser
+from email.policy import HTTP
+from pathlib import Path
+from typing import Any
+
+import httpx
+import pytest
+
+import api.feedback_hosted as feedback_hosted
+
+TICKET = "LUM-202609-0a1b2c3d"
+PNG = b"\x89PNG\r\n\x1a\n" + b"pixels"
+
+
+def _ticket_dir(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
+    ticket_dir = tmp_path / "2026-09" / TICKET
+    ticket_dir.mkdir(parents=True)
+    payload = {
+        "ticket_id": TICKET,
+        "description": "Crash",
+        "user_email": None,
+        "context": {"app_version": "1"},
+        "assembly_status": "done",
+        "submission": {"status": "pending", "attempts": 0},
+    }
+    (ticket_dir / "ticket.json").write_text(json.dumps(payload), encoding="utf-8")
+    (ticket_dir / "index.md").write_text("# index", encoding="utf-8")
+    (ticket_dir / "summary.txt").write_text("摘要", encoding="utf-8")
+    (ticket_dir / "original.png").write_bytes(PNG)
+    (ticket_dir / "final.glb").write_bytes(b"glTF")
+    (ticket_dir / "lut_1.npy").write_bytes(b"\x93NUMPY")
+    return ticket_dir, payload
+
+
+def _parse_multipart(request: httpx.Request) -> dict[str, list[tuple[str | None, bytes]]]:
+    raw = b"Content-Type: " + request.headers["content-type"].encode() + b"\r\n\r\n" + request.read()
+    message = BytesParser(policy=HTTP).parsebytes(raw)
+    parts: dict[str, list[tuple[str | None, bytes]]] = {}
+    for part in message.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        parts.setdefault(name, []).append((part.get_filename(), part.get_payload(decode=True)))
+    return parts
+
+
+class FakeServer:
+    """Minimal stand-in for the Distribution intake contract."""
+
+    def __init__(self, *, bits: int = 4, bundle_statuses: list[int] | None = None) -> None:
+        self.bits = bits
+        self.bundle_statuses = list(bundle_statuses or [])
+        self.bundles: list[dict[str, Any]] = []
+        self.challenges = 0
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v2/feedback/challenges":
+            self.challenges += 1
+            return httpx.Response(200, json={
+                "challenge": f"c{self.challenges}.sig", "difficulty_bits": self.bits,
+                "expires_in": 600, "algorithm": "sha256-leading-zero-bits",
+            })
+        assert request.url.path == "/v2/feedback/bundles"
+        assert "content-length" in request.headers
+        digest = hashlib.sha256(
+            f"{request.headers['x-lumina-challenge']}:{request.headers['x-lumina-ticket']}:"
+            f"{request.headers['x-lumina-proof']}".encode()
+        ).digest()
+        assert feedback_hosted._leading_zero_bits(digest) >= self.bits
+        parts = _parse_multipart(request)
+        self.bundles.append({
+            "report": json.loads(parts["report"][0][1]),
+            "files": {name: data for name, data in parts.get("attachment", [])},
+        })
+        status = self.bundle_statuses.pop(0) if self.bundle_statuses else 200
+        return httpx.Response(status, json={"ticket_id": TICKET, "status": "received"})
+
+
+def _submit(ticket_dir: Path, payload: dict[str, Any], server: FakeServer,
+            monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    monkeypatch.setenv("LUMINA_FEEDBACK_SERVER_URL", "https://feedback.example.test")
+    monkeypatch.setattr(feedback_hosted, "_RETRY_DELAY_S", 0)
+    return asyncio.run(feedback_hosted.submit_ticket_directory(
+        ticket_dir, payload, transport=httpx.MockTransport(server)))
+
+
+def test_server_url_defaults_to_official_service_and_can_be_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LUMINA_FEEDBACK_SERVER_URL", raising=False)
+    assert feedback_hosted.feedback_server_url() == feedback_hosted.DEFAULT_FEEDBACK_SERVER_URL
+    monkeypatch.setenv("LUMINA_FEEDBACK_SERVER_URL", "http://127.0.0.1:8766/")
+    assert feedback_hosted.feedback_server_url() == "http://127.0.0.1:8766"
+    monkeypatch.setenv("LUMINA_FEEDBACK_SERVER_URL", "off")
+    assert feedback_hosted.feedback_server_url() is None
+
+
+def test_proof_of_work_meets_requested_difficulty() -> None:
+    nonce = feedback_hosted.solve_proof_of_work("challenge", TICKET, 10)
+    digest = hashlib.sha256(f"challenge:{TICKET}:{nonce}".encode()).digest()
+    assert feedback_hosted._leading_zero_bits(digest) >= 10
+    with pytest.raises(feedback_hosted.HostedSubmissionError):
+        feedback_hosted.solve_proof_of_work("challenge", TICKET, 40)
+
+
+def test_bundle_keeps_email_scope_and_holds_back_unsupported_files(tmp_path: Path) -> None:
+    ticket_dir, payload = _ticket_dir(tmp_path)
+    bundle = feedback_hosted.build_ticket_bundle(ticket_dir, payload)
+
+    assert [item.name for item in bundle.files] == ["lut_1.npy", "original.png"]
+    assert bundle.held_back == [{"name": "final.glb", "size_bytes": 4, "reason": "unsupported_type"}]
+    assert bundle.document["index_md"] == "# index"
+    assert bundle.document["summary_txt"] == "摘要"
+    assert "submission" not in bundle.document["ticket"]
+    assert bundle.document["attachments"][1] == {
+        "name": "original.png", "kind": "original_image", "size_bytes": len(PNG),
+        "sha256": hashlib.sha256(PNG).hexdigest(),
+    }
+
+
+def test_submission_uploads_bundle_with_proof(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ticket_dir, payload = _ticket_dir(tmp_path)
+    server = FakeServer()
+
+    section = _submit(ticket_dir, payload, server, monkeypatch)
+
+    assert section["status"] == "submitted"
+    assert section["attempts"] == 1
+    assert section["uploaded_attachments"] == ["lut_1.npy", "original.png"]
+    uploaded = server.bundles[0]
+    assert uploaded["report"]["ticket_id"] == TICKET
+    assert uploaded["files"]["original.png"] == PNG
+
+
+def test_rejected_proof_is_retried_with_a_new_challenge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ticket_dir, payload = _ticket_dir(tmp_path)
+    server = FakeServer(bundle_statuses=[403])
+
+    section = _submit(ticket_dir, payload, server, monkeypatch)
+
+    assert section["status"] == "submitted"
+    assert server.challenges == 2
+
+
+def test_rejected_attachment_falls_back_to_text_only_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ticket_dir, payload = _ticket_dir(tmp_path)
+    server = FakeServer(bundle_statuses=[422])
+
+    section = _submit(ticket_dir, payload, server, monkeypatch)
+
+    assert section["status"] == "submitted"
+    assert server.bundles[1]["files"] == {}
+    assert server.bundles[1]["report"]["attachments"] == []
+    reasons = {item["name"]: item["reason"] for item in section["held_back_attachments"]}
+    assert reasons == {"final.glb": "unsupported_type", "lut_1.npy": "rejected", "original.png": "rejected"}
+
+
+def test_rate_limit_is_reported_without_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ticket_dir, payload = _ticket_dir(tmp_path)
+    server = FakeServer(bundle_statuses=[429])
+
+    section = _submit(ticket_dir, payload, server, monkeypatch)
+
+    assert section["status"] == "failed"
+    assert section["error_type"] == "RateLimited"
+    assert section["http_status"] == 429
+    assert len(server.bundles) == 1
+
+
+def test_unreachable_server_fails_gracefully(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ticket_dir, payload = _ticket_dir(tmp_path)
+
+    def _refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    section = _submit(ticket_dir, payload, _refuse, monkeypatch)  # type: ignore[arg-type]
+
+    assert section["status"] == "failed"
+    assert section["error_type"] == "ConnectError"
+
+
+def test_disabled_uploads_do_not_touch_network(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ticket_dir, payload = _ticket_dir(tmp_path)
+    monkeypatch.setenv("LUMINA_FEEDBACK_SERVER_URL", "off")
+
+    def _fail(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("network must not be used")
+
+    section = asyncio.run(feedback_hosted.submit_ticket_directory(
+        ticket_dir, payload, transport=httpx.MockTransport(_fail)))
+
+    assert section["status"] == "disabled"
+    assert section["attempts"] == 0
