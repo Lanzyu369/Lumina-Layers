@@ -127,6 +127,26 @@ def test_similar_recipes_includes_predictive_candidates(_iso, monkeypatch) -> No
     assert [1, 1, 0] in [item["recipe"] for item in predictive]
 
 
+def test_similar_recipes_converts_bottom_to_top_lut_stacks(_iso, monkeypatch) -> None:
+    sid = _seed_lut_session(_iso)
+    runtime = _fake_lut_runtime()
+    runtime["ref_stacks"] = np.array(
+        [[0, 0, 0], [0, 1, 1], [0, 2, 2], [1, 1, 1]],
+        dtype=np.int64,
+    )
+    runtime["layer_order"] = "Bottom2Top"
+    _patch_runtime(monkeypatch, runtime)
+    resp = client.post(
+        "/api/convert/similar-recipes",
+        json={"session_id": sid, "target_color": "#dc1e1e", "limit": 1},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["layer_order"] == "Top2Bottom"
+    # The stored Bottom2Top stack [0, 1, 1] is reported viewing face first.
+    assert body["items"][0]["recipe"] == [1, 1, 0]
+
+
 def test_similar_recipes_can_skip_predictive(_iso, monkeypatch) -> None:
     sid = _seed_lut_session(_iso)
     runtime = SimpleNamespace(

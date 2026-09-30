@@ -43,9 +43,9 @@ SIMILAR_RECIPES_LUT_UNAVAILABLE_DETAIL = (
     "The LUT for this session could not be loaded. Re-run preview and try again."
 )
 
-# Recipes are returned in the material-matrix storage convention so that the
+# Every recipe is converted to one response order (viewing face first) so the
 # frontend can render and apply every item without per-item order handling.
-# 统一以 material_matrix 的存储层序返回，前端无需逐条处理层序。
+# 所有配方统一转换为同一响应层序（观察面在前），前端无需逐条处理层序。
 _RESPONSE_LAYER_ORDER = "Top2Bottom"
 
 
@@ -107,9 +107,14 @@ def _lut_suggestions(
     session_data: dict,
     request: SimilarRecipesRequest,
     reference_rgb: tuple[int, int, int],
-) -> tuple[list[SimilarRecipeCandidate], str, bool]:
-    """Rank LUT (and predictive) recipes; returns ``(items, predictive_order, predictive)``.
-    排序 LUT（及预测）配方，返回候选、预测配方层序和是否有预测模型。
+) -> tuple[list[SimilarRecipeCandidate], dict[str, str], bool]:
+    """Rank LUT (and predictive) recipes; returns ``(items, source_orders, predictive)``.
+    排序 LUT（及预测）配方，返回候选、各来源配方层序和是否有预测模型。
+
+    ``ref_stacks`` keep the storage order declared by the LUT metadata, which
+    may be ``Bottom2Top``, so each source reports its own order for conversion.
+    ``ref_stacks`` 沿用 LUT 元数据声明的存储层序（可能为 ``Bottom2Top``），
+    因此每个来源都单独给出层序以便转换。
     """
     color_layers, layer_height_mm = _session_layer_params(session_data)
     try:
@@ -146,8 +151,10 @@ def _lut_suggestions(
         predictive_rgb=predictive[0] if predictive is not None else None,
         predictive_recipes=predictive[1] if predictive is not None else None,
     )
-    predictive_order = predictive[2] if predictive is not None else _RESPONSE_LAYER_ORDER
-    return candidates, predictive_order, predictive is not None
+    source_orders = {"lut": str(lut_data.get("layer_order") or _RESPONSE_LAYER_ORDER)}
+    if predictive is not None:
+        source_orders["predictive"] = predictive[2]
+    return candidates, source_orders, predictive is not None
 
 
 def _image_suggestions(
@@ -204,9 +211,9 @@ def similar_recipes(
     reference_rgb = parse_hex_color(request.target_color)
     if str(session_data.get("material_source") or "lut") == "material_archive":
         candidates = _image_suggestions(session_data, request, reference_rgb)
-        predictive_order, predictive_available = _RESPONSE_LAYER_ORDER, False
+        source_orders, predictive_available = {}, False
     else:
-        candidates, predictive_order, predictive_available = _lut_suggestions(
+        candidates, source_orders, predictive_available = _lut_suggestions(
             session_data, request, reference_rgb
         )
     image_colors = _image_color_hexes(session_data)
@@ -229,10 +236,11 @@ def similar_recipes(
                 hex=candidate.hex,
                 rgb=list(candidate.rgb),
                 delta_e00=round(candidate.delta_e00, 3),
-                # LUT and image stacks are stored Top2Bottom; only predictive recipes may differ.
+                # Image stacks come from the Top2Bottom material matrix; LUT and
+                # predictive recipes carry their own source order.
                 recipe=convert_recipe_between_orders(
                     candidate.recipe,
-                    predictive_order if candidate.source == "predictive" else _RESPONSE_LAYER_ORDER,
+                    source_orders.get(candidate.source, _RESPONSE_LAYER_ORDER),
                     _RESPONSE_LAYER_ORDER,
                 ),
                 source=candidate.source,

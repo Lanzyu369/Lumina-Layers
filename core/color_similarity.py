@@ -222,16 +222,22 @@ def _rank_source(
     source: RecipeSource,
     limit: int,
 ) -> list[SimilarRecipeCandidate]:
-    """Rank one recipe source; placeholder rows (negative indices) are skipped
-    and only the first row of each printed colour is kept, so a suggested
-    colour maps to exactly one recipe.
-    对单一来源排序：跳过占位行（含负索引），同一打印色只保留第一条。
+    """Rank one recipe source; all-Air placeholder rows are skipped and only
+    the first row of each printed colour is kept, so a suggested colour maps
+    to exactly one recipe.
+    对单一来源排序：跳过全 Air 占位行，同一打印色只保留第一条。
+
+    A single ``-1`` is legitimate Air padding (the 1024 base recipes of a
+    standard 2468 LUT, short keyed-JSON recipes), so such rows stay ranked
+    and only their padding is dropped from the reported recipe.
+    单个 ``-1`` 是合法的 Air 填充（标准 2468 LUT 的前 1024 条、keyed JSON
+    的短配方），这些行照常参与排序，仅在返回的配方中去掉填充。
     """
     rgb_rows = np.clip(np.asarray(rgb).reshape(-1, 3), 0, 255).astype(np.uint8)
     stack_rows = np.asarray(stacks, dtype=np.int64)
     if stack_rows.ndim != 2 or stack_rows.shape[0] != rgb_rows.shape[0]:
         raise ValueError(f"{source} colours and recipes must have the same length.")
-    real = np.all(stack_rows >= 0, axis=1)
+    real = np.any(stack_rows >= 0, axis=1)
     rgb_rows, stack_rows = rgb_rows[real], stack_rows[real]
     first_index = np.sort(np.unique(rgb_rows, axis=0, return_index=True)[1])
     rgb_rows, stack_rows = rgb_rows[first_index], stack_rows[first_index]
@@ -239,7 +245,7 @@ def _rank_source(
     return [
         SimilarRecipeCandidate(
             rgb=tuple(int(channel) for channel in rgb_rows[idx]),
-            recipe=tuple(int(channel) for channel in stack_rows[idx]),
+            recipe=tuple(int(channel) for channel in stack_rows[idx] if channel >= 0),
             delta_e00=float(distances[idx]),
             source=source,
         )

@@ -85,7 +85,11 @@ export default function ColorQuickReplacePanel() {
   // sources snap B to the nearest printable LUT color. Collapsed cards fetch nothing.
   const snapTargetToPrintable = sourceVersion !== "material";
   const suggestionSession = expanded ? sessionId : null;
-  const refreshKey = `${selectedLutInfo?.name ?? ""}|${colorLayers ?? ""}`;
+  // Replace, recipe override, undo and redo advance the content revision and
+  // change which suggestions are already in the image, so they refetch too.
+  const contentRevision =
+    selectionDocument?.editor_content_revision ?? selectionDocument?.content_revision ?? "";
+  const refreshKey = `${selectedLutInfo?.name ?? ""}|${colorLayers ?? ""}|${contentRevision}`;
   const targetRecipes = useSimilarRecipes(suggestionSession, targetHex, refreshKey);
   const referenceRecipes = useSimilarRecipes(
     suggestionSession,

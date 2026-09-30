@@ -94,6 +94,16 @@ def test_rank_similar_recipes_skips_placeholder_stacks() -> None:
     assert len(ranked) == 4
 
 
+def test_rank_similar_recipes_keeps_recipes_with_single_air_padding() -> None:
+    # Standard 2468 base recipes and short keyed-JSON recipes carry one -1 Air pad.
+    rgb = np.array([[220, 30, 30], [30, 30, 220], [100, 100, 100]], dtype=np.uint8)
+    stacks = np.array([[-1, 1, 1, 0], [2, 2, 0, -1], [-1, -1, -1, -1]], dtype=np.int64)
+    ranked = rank_similar_recipes((220, 30, 30), rgb, stacks, limit=10)
+    assert [item.hex for item in ranked] == ["#dc1e1e", "#1e1edc"]
+    assert ranked[0].recipe == (1, 1, 0)
+    assert ranked[1].recipe == (2, 2, 0)
+
+
 def test_rank_similar_recipes_merges_predictive_and_drops_lut_duplicates() -> None:
     rgb, stacks = _lut()
     predictive_rgb = np.array([[219, 31, 31], [220, 30, 30]], dtype=np.uint8)

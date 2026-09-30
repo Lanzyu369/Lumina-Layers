@@ -168,6 +168,29 @@ describe("ColorQuickReplacePanel", () => {
     expect(within(items[1]).queryByTestId("quick-replace-in-image")).toBeNull();
   });
 
+  it("refetches suggestions when an edit changes the image content", async () => {
+    await renderPanel();
+    expect(fetchSimilarRecipes).toHaveBeenCalledTimes(1);
+    // A selection-only change keeps the content revision, so nothing is refetched.
+    act(() => {
+      useConverterStore.setState({ selectionDocument: selectionDocument({ selection_revision: 3 }) });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(250);
+    });
+    expect(fetchSimilarRecipes).toHaveBeenCalledTimes(1);
+    // Replace / override / undo / redo advance the editor content revision.
+    act(() => {
+      useConverterStore.setState({
+        selectionDocument: selectionDocument({ selection_revision: 3, editor_content_revision: 5 }),
+      });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(250);
+    });
+    expect(fetchSimilarRecipes).toHaveBeenCalledTimes(2);
+  });
+
   it("applies a measured LUT recipe through shared-selection replacement", async () => {
     await renderPanel();
     const [lutItem] = screen.getAllByTestId("quick-replace-recipe-item");
