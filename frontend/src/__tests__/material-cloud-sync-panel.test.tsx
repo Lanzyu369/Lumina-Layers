@@ -377,6 +377,29 @@ describe("MaterialCloudSyncPanel", () => {
     expect(screen.queryByText("Item 24 PLA")).not.toBeInTheDocument();
   });
 
+  it("clamps page navigation to the last page when the catalog shrinks", async () => {
+    const liveEntries = manyEntries(50);
+    vi.mocked(fetchMaterialSyncStatus).mockResolvedValue(statusWith([]));
+    vi.mocked(fetchMaterialRegistryCatalog).mockImplementation(serveCatalog(liveEntries));
+
+    render(<MaterialCloudSyncPanel />);
+
+    expect(await screen.findByText("Item 00 PLA")).toBeInTheDocument();
+    liveEntries.splice(PAGE_SIZE);
+    fireEvent.click(screen.getByRole("button", { name: /第 3 页|page 3/i }));
+
+    await waitFor(() => {
+      expect(fetchMaterialRegistryCatalog).toHaveBeenCalledWith({ limit: PAGE_SIZE, offset: PAGE_SIZE * 2 });
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("material-cloud-page-range")).toHaveTextContent(/1–24/);
+    });
+    expect(screen.getByText("Item 00 PLA")).toBeInTheDocument();
+    expect(screen.getAllByTestId("material-cloud-catalog-card")).toHaveLength(PAGE_SIZE);
+    expect(screen.queryByTestId("material-cloud-catalog-empty")).not.toBeInTheDocument();
+    expect(screen.getByTestId("material-cloud-catalog-count")).toHaveTextContent("24");
+  });
+
   it("does not fetch the full catalog when nothing is installed locally", async () => {
     vi.mocked(fetchMaterialSyncStatus).mockResolvedValue(statusWith([]));
     vi.mocked(fetchMaterialRegistryCatalog).mockImplementation(serveCatalog(manyEntries(30)));

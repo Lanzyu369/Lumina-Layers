@@ -447,9 +447,10 @@ export function useMaterialCloudCatalog() {
     setIsPageLoading(true);
     setError(null);
     try {
-      const response = await fetchCatalogPage(query, target);
+      const result = await fetchCatalogPageClamped(query, target);
       if (requestId === catalogRequestIdRef.current) {
-        setServerPage({ query, page: target, response });
+        setServerPage({ query, ...result });
+        updatePage(result.page);
       }
     } catch (err) {
       if (requestId === catalogRequestIdRef.current) {
