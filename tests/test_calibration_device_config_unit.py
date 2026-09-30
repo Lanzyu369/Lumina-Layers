@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import zipfile
+from collections import UserDict
 from pathlib import Path
+from types import MappingProxyType
 
 from api.schemas.calibration import CalibrationGenerateRequest
 from config import PaletteEntry
@@ -37,6 +39,20 @@ def test_calibration_request_nozzle_size_matches_between_python_and_json_input()
         assert from_python.nozzle_size == expected
         assert from_json.nozzle_size == expected
 
+
+
+def test_calibration_request_normalizes_nozzle_size_for_any_mapping_input() -> None:
+    native = {
+        "printer_id": "anycubic-kobra-x",
+        "slicer": "AnycubicSlicerNext",
+        "nozzle_size": 0.25,
+        "device_profile_id": "AnycubicSlicerNext:anycubic:anycubic-kobra-x:0.25",
+    }
+    legacy = {"nozzle_size": "0.25mm"}
+
+    for payload, expected in ((native, "0.25"), (legacy, "0.2")):
+        for wrapped in (UserDict(payload), MappingProxyType(payload)):
+            assert CalibrationGenerateRequest.model_validate(wrapped).nozzle_size == expected
 
 def test_legacy_calibration_board_forwards_device_settings_to_writer(
     monkeypatch,

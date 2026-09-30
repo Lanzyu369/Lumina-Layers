@@ -12,6 +12,7 @@ existing tests and downstream callers.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import Enum
 from typing import Any
 
@@ -140,12 +141,14 @@ class CalibrationGenerateRequest(BaseModel):
         A field validator cannot read ``device_profile_id`` reliably: pydantic
         leaves ``ValidationInfo.data`` as ``None`` on the ``model_validate_json``
         path, so this runs on the raw input where both fields are visible.
+        Any ``Mapping`` (``UserDict``, read-only proxies) is copied into a
+        plain dict first so non-dict callers are normalized as well.
         """
-        if not isinstance(data, dict) or "nozzle_size" not in data:
+        if not isinstance(data, Mapping) or "nozzle_size" not in data:
             return data
         value = data["nozzle_size"]
         if str(data.get("device_profile_id") or "").strip():
             nozzle_size = format_native_nozzle_size(value) or "0.4"
         else:
             nozzle_size = normalize_nozzle_size(value) or "0.4"
-        return {**data, "nozzle_size": nozzle_size}
+        return {**dict(data), "nozzle_size": nozzle_size}
