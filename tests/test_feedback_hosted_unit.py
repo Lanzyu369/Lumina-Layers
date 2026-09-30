@@ -210,3 +210,59 @@ def test_bundle_accepts_all_32_numbered_luts(tmp_path: Path) -> None:
     bundle = feedback_hosted.build_ticket_bundle(ticket_dir, payload)
 
     assert "lut_32.json" in [item.name for item in bundle.files]
+
+
+def test_complete_ticket_with_32_luts_uploads_every_attachment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ticket_dir, payload = _ticket_dir(tmp_path)
+    (ticket_dir / "final.glb").unlink()
+    (ticket_dir / "final.3mf").write_bytes(b"PK\x03\x04")
+    (ticket_dir / "materials.zip").write_bytes(b"PK\x03\x04")
+    (ticket_dir / "screenshot.png").write_bytes(PNG)
+    for index in range(2, 33):
+        (ticket_dir / f"lut_{index}.npy").write_bytes(b"\x93NUMPY")
+    server = FakeServer()
+
+    section = _submit(ticket_dir, payload, server, monkeypatch)
+
+    assert section["status"] == "submitted"
+    assert section["held_back_attachments"] == []
+    assert len(server.bundles[0]["files"]) == 36
+    assert len(server.bundles[0]["report"]["attachments"]) == 36
+
+
+def test_whole_request_budget_keeps_reproduction_inputs_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ticket_dir, payload = _ticket_dir(tmp_path)
+    (ticket_dir / "final.3mf").write_bytes(b"PK" + b"0" * 30)
+    monkeypatch.setattr(feedback_hosted, "MAX_UPLOAD_BUNDLE_FILE_BYTES", len(PNG) + 6)
+
+    bundle = feedback_hosted.build_ticket_bundle(ticket_dir, payload)
+
+    assert [item.name for item in bundle.files] == ["lut_1.npy", "original.png"]
+    reasons = {item["name"]: item["reason"] for item in bundle.held_back}
+    assert reasons == {"final.3mf": "too_large", "final.glb": "unsupported_type"}
+
+
+def test_attachment_count_is_capped_at_server_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ticket_dir, payload = _ticket_dir(tmp_path)
+    monkeypatch.setattr(feedback_hosted, "MAX_UPLOAD_ATTACHMENTS", 1)
+
+    bundle = feedback_hosted.build_ticket_bundle(ticket_dir, payload)
+
+    assert [item.name for item in bundle.files] == ["original.png"]
+    assert {"name": "lut_1.npy", "size_bytes": 6, "reason": "too_large"} in bundle.held_back
+
+
+def test_oversized_request_falls_back_to_text_only_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ticket_dir, payload = _ticket_dir(tmp_path)
+    server = FakeServer(bundle_statuses=[413])
+
+    section = _submit(ticket_dir, payload, server, monkeypatch)
+
+    assert section["status"] == "submitted"
+    assert server.bundles[1]["files"] == {}

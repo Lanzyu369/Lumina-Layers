@@ -65,9 +65,10 @@ this allowlist changes.
 - `materials.zip` excludes `_solver_cache/` because developers can rebuild it locally
 - Materials bundling has a 30 second wall-clock timeout controlled by `LUMINA_FEEDBACK_MATERIALS_BUNDLE_TIMEOUT_S`
 - Clients hold no SMTP or server credentials. `api/feedback_hosted.py` uploads the same scope the old per-client email carried: `ticket.json` (without the volatile `submission` section), `index.md`, `summary.txt`, and every allowlisted attachment (`original.*`, `final.3mf|zip`, `lut*.npy|json|npz|msgpack`, `materials.zip`, `screenshot.*`) up to 40 MiB each
-- Files over 40 MiB or with other names stay on this device and are listed in `submission.held_back_attachments` with a reason (`too_large`, `unsupported_type`, `empty`, or `rejected` when the server refused the attachments and the text-only ticket was sent instead)
+- One upload carries at most 40 attachments and 150 MiB of files (the server accepts 40 attachments and 160 MiB per request; a complete ticket has at most 36). When the budget runs out, files are kept in priority order: original image, LUTs by number, screenshot, materials, final artifact
+- Files over 40 MiB, over the whole-upload budget, or with other names stay on this device and are listed in `submission.held_back_attachments` with a reason (`too_large`, `unsupported_type`, `empty`, or `rejected` when the server refused the attachments with 422/413 and the text-only ticket was sent instead)
 - The upload targets `LUMINA_FEEDBACK_SERVER_URL` (default: the official Lumina Distribution feedback service; `off` keeps reports local). Each attempt solves the server's proof-of-work challenge; retries send an identical document so the server answers `duplicate` instead of creating a second ticket
-- The server contract, limits, and operator export live in the private Distribution repository under `feedback-service/`; keep the attachment allowlist in both repositories aligned
+- The server contract, limits, and operator export live in the private Distribution repository under `feedback-service/`; keep the attachment allowlist, attachment count, and size limits in both repositories aligned
 - A failed upload is not a partial assembly. The dialog polls the status endpoint and offers a retry; interrupted uploads are marked `failed` by startup cleanup
 
 ## Cleanup

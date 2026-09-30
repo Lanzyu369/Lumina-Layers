@@ -35,7 +35,9 @@ __all__ = [
     "BUNDLE_SCHEMA",
     "DEFAULT_FEEDBACK_SERVER_URL",
     "ENV_FEEDBACK_SERVER_URL",
+    "MAX_UPLOAD_ATTACHMENTS",
     "MAX_UPLOAD_ATTACHMENT_BYTES",
+    "MAX_UPLOAD_BUNDLE_FILE_BYTES",
     "HostedSubmissionError",
     "SubmissionStatus",
     "TicketBundle",
@@ -66,6 +68,11 @@ ENV_FEEDBACK_SERVER_URL = "LUMINA_FEEDBACK_SERVER_URL"
 ENV_FEEDBACK_SERVER_TIMEOUT_S = "LUMINA_FEEDBACK_SERVER_TIMEOUT_S"
 BUNDLE_SCHEMA = "lumina-feedback-bundle/1"
 MAX_UPLOAD_ATTACHMENT_BYTES = 40 * 1024 * 1024
+# Server limits (feedback-service): 40 attachments, 160 MiB per request. The
+# file budget leaves headroom for the 2 MiB report document and multipart framing.
+# 服务端限制为 40 个附件、单次请求 160 MiB；文件预算为报告文档和分段开销留出余量。
+MAX_UPLOAD_ATTACHMENTS = 40
+MAX_UPLOAD_BUNDLE_FILE_BYTES = 150 * 1024 * 1024
 MAX_PROOF_OF_WORK_BITS = 26
 _DISABLED_VALUES = frozenset(("off", "disabled", "false", "0", "none"))
 _TICKET_TEXT_FILES = frozenset(("ticket.json", "index.md", "summary.txt"))
@@ -170,6 +177,17 @@ def _attachment_kind(name: str) -> str | None:
     return kind if extension in _EXTENSIONS_BY_KIND[kind] else None
 
 
+_UPLOAD_PRIORITY = {"original_image": 0, "lut": 1, "screenshot": 2, "materials_bundle": 3, "final_artifact": 4}
+_LUT_INDEX_RE = re.compile(r"^lut_(\d+)\.")
+
+
+def _upload_priority(path: Path) -> tuple[int, int, str]:
+    """Order files so reproduction inputs win when a server limit is reached."""
+    kind = _attachment_kind(path.name)
+    match = _LUT_INDEX_RE.match(path.name)
+    return (_UPLOAD_PRIORITY.get(kind or "", 5), int(match.group(1)) if match else -1, path.name)
+
+
 def _file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as source:
@@ -201,9 +219,12 @@ def build_ticket_bundle(ticket_dir: Path, payload: dict[str, Any]) -> TicketBund
     ticket = {key: value for key, value in payload.items() if key not in _VOLATILE_TICKET_KEYS}
     files: list[BundleFile] = []
     held_back: list[dict[str, Any]] = []
-    for path in sorted(ticket_dir.iterdir()):
-        if not path.is_file() or path.is_symlink() or path.name in _TICKET_TEXT_FILES:
-            continue
+    budget = MAX_UPLOAD_BUNDLE_FILE_BYTES
+    candidates = [
+        path for path in ticket_dir.iterdir()
+        if path.is_file() and not path.is_symlink() and path.name not in _TICKET_TEXT_FILES
+    ]
+    for path in sorted(candidates, key=_upload_priority):
         size = path.stat().st_size
         kind = _attachment_kind(path.name)
         reason = None
@@ -211,12 +232,18 @@ def build_ticket_bundle(ticket_dir: Path, payload: dict[str, Any]) -> TicketBund
             reason = "unsupported_type"
         elif size == 0:
             reason = "empty"
-        elif size > MAX_UPLOAD_ATTACHMENT_BYTES:
+        elif size > MAX_UPLOAD_ATTACHMENT_BYTES or size > budget or len(files) >= MAX_UPLOAD_ATTACHMENTS:
+            # Over the per-file or whole-request server limit: keep it local
+            # instead of letting the server reject every attachment.
+            # 超过单文件或整次请求的服务端上限时只留在本机，避免整包附件被拒。
             reason = "too_large"
         if reason is not None:
             held_back.append({"name": path.name, "size_bytes": size, "reason": reason})
             continue
+        budget -= size
         files.append(BundleFile(path.name, kind, path, size, _file_sha256(path)))
+    files.sort(key=lambda item: item.name)
+    held_back.sort(key=lambda item: item["name"])
     document = {
         "schema": BUNDLE_SCHEMA,
         "ticket_id": str(payload.get("ticket_id")),
@@ -423,11 +450,11 @@ async def submit_ticket_directory(
         try:
             receipt = await submit_ticket_bundle(bundle, base_url=base_url, transport=transport)
         except HostedSubmissionError as exc:
-            if exc.error_type != "BundleRejected" or not bundle.files:
+            if exc.error_type not in {"BundleRejected", "BundleTooLarge"} or not bundle.files:
                 raise
-            # One attachment failed the server's type checks; still deliver the
-            # text diagnostics rather than losing the whole report.
-            # 某个附件未通过服务端类型检查时，仍然送达文字诊断，避免整份报告丢失。
+            # The server refused the attachments (type checks or a stricter size
+            # limit); still deliver the text diagnostics rather than losing the report.
+            # 服务端拒绝附件（类型检查或更严格的大小限制）时，仍然送达文字诊断，避免整份报告丢失。
             bundle = without_attachments(bundle)
             section["held_back_attachments"] = bundle.held_back
             receipt = await submit_ticket_bundle(bundle, base_url=base_url, transport=transport)
