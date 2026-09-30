@@ -76,7 +76,7 @@ _RETRY_DELAY_S = 2.0
 # Must stay aligned with the server allowlist (feedback-service/ticket_bundle.py).
 # 必须与服务端白名单保持一致。
 _NAME_RE = re.compile(
-    r"^(original|final|lut|lut_(?:[0-9]|[12][0-9]|3[01])|materials|screenshot)\.([a-z0-9]{1,8})$"
+    r"^(original|final|lut|lut_(?:[0-9]|[12][0-9]|3[0-2])|materials|screenshot)\.([a-z0-9]{1,8})$"
 )
 _KIND_BY_STEM = {
     "original": "original_image",

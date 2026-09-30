@@ -963,6 +963,37 @@ def test_failed_upload_can_be_resubmitted_once_server_recovers(
     assert _read_ticket_json(feedback_root, data["ticket_id"])["submission"]["attempts"] == 2
 
 
+def test_resubmit_resumes_interrupted_assembly_before_uploading(
+    client: TestClient,
+    feedback_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    receipts: list[Any] = []
+    _enable_fake_feedback_server(monkeypatch, receipts, fail=True)
+    data = client.post("/api/feedback/bug-report", json=_payload()).json()
+    ticket_dir = next(feedback_root.glob(f"*/{data['ticket_id']}"))
+    # Simulate a restart before index/summary were rendered: startup cleanup
+    # marks the ticket interrupted and the upload failed.
+    ticket = json.loads((ticket_dir / "ticket.json").read_text(encoding="utf-8"))
+    ticket["assembly_status"] = "interrupted"
+    ticket["submission"] = {"status": "failed", "error_type": "UploadInterrupted"}
+    (ticket_dir / "ticket.json").write_text(json.dumps(ticket), encoding="utf-8")
+    (ticket_dir / "index.md").unlink()
+    (ticket_dir / "summary.txt").unlink()
+
+    _enable_fake_feedback_server(monkeypatch, receipts)
+    response = client.post(f"/api/feedback/bug-report/{data['ticket_id']}/resubmit")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["submission_status"] == "submitted"
+    assert body["assembly_status"] in ("done", "partial_failed")
+    uploaded = receipts[-1]["bundle"].document
+    assert uploaded["index_md"] and uploaded["summary_txt"]
+    assert uploaded["ticket"]["assembly_status"] in ("done", "partial_failed")
+    assert (ticket_dir / "index.md").exists()
+
+
 def test_oversized_attachment_is_held_back_and_reported(
     client: TestClient,
     feedback_root: Path,

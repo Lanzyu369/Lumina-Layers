@@ -201,3 +201,12 @@ def test_disabled_uploads_do_not_touch_network(tmp_path: Path, monkeypatch: pyte
 
     assert section["status"] == "disabled"
     assert section["attempts"] == 0
+
+
+def test_bundle_accepts_all_32_numbered_luts(tmp_path: Path) -> None:
+    ticket_dir, payload = _ticket_dir(tmp_path)
+    (ticket_dir / "lut_32.json").write_text("{}", encoding="utf-8")
+
+    bundle = feedback_hosted.build_ticket_bundle(ticket_dir, payload)
+
+    assert "lut_32.json" in [item.name for item in bundle.files]

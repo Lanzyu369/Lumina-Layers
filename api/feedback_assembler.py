@@ -1564,10 +1564,22 @@ def _write_ticket_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+_UPLOADABLE_ASSEMBLY_STATUSES = frozenset(("done", "partial_failed"))
+_RESUMING_TICKETS: set[str] = set()
+
+
 async def resubmit_ticket_async(ticket_dir: Path) -> dict[str, Any]:
     """Retry uploading an assembled ticket unless it already succeeded.
 
     重新上传已装配的工单；已成功上传的工单直接返回当前状态。
+
+    A ticket whose assembly was interrupted (for example by a restart before
+    ``index.md`` / ``summary.txt`` were written) is finalized again first, so
+    an incomplete directory is never uploaded. Tickets still assembling are
+    left alone.
+
+    装配被中断的工单（例如重启前尚未生成索引或摘要）会先重新装配再上传，
+    保证不会上传不完整的目录；仍在装配中的工单不做处理。
 
     Args:
         ticket_dir: Local ticket directory. / 本地工单目录。
@@ -1576,11 +1588,23 @@ async def resubmit_ticket_async(ticket_dir: Path) -> dict[str, Any]:
         dict[str, Any]: Updated ticket payload. / 更新后的工单内容。
     """
     ticket_json_path = ticket_dir / "ticket.json"
+    payload = json.loads(ticket_json_path.read_text(encoding="utf-8"))
+    if payload.get("assembly_status") == "interrupted":
+        if ticket_dir.name not in _RESUMING_TICKETS:
+            _RESUMING_TICKETS.add(ticket_dir.name)
+            try:
+                await finalize_ticket_async(ticket_dir, None)
+            finally:
+                _RESUMING_TICKETS.discard(ticket_dir.name)
+        return json.loads(ticket_json_path.read_text(encoding="utf-8"))
     async with _ticket_lock(ticket_dir.name):
         payload = json.loads(ticket_json_path.read_text(encoding="utf-8"))
         submission = payload.get("submission")
         status = submission.get("status") if isinstance(submission, dict) else None
-        if status in ("submitted", "pending") or payload.get("assembly_status") == "in_progress":
+        if (
+            status in ("submitted", "pending")
+            or payload.get("assembly_status") not in _UPLOADABLE_ASSEMBLY_STATUSES
+        ):
             return payload
         payload["submission"] = await submit_ticket_directory(ticket_dir, payload)
         _write_ticket_json(ticket_json_path, payload)
