@@ -11,6 +11,7 @@ import { create } from "zustand";
 import { trackLuminaEvent } from "../analytics/umami";
 import { TUTORIAL_STEPS } from "../data/tutorialSteps";
 import type { TutorialStep } from "../data/tutorialSteps";
+import type { ConverterSubTabId, TabId, WidgetId } from "../types/widget";
 import {
   hasTutorialBeenOffered,
   writeTutorialProgress,
@@ -40,6 +41,63 @@ interface TutorialState {
 const TOTAL_STEPS = TUTORIAL_STEPS.length;
 
 /**
+ * Workspace state the tour changed, restored on every exit path.
+ * 引导改动过的工作区状态，在所有退出路径上恢复。
+ */
+interface WorkspaceSnapshot {
+  activeTab: TabId;
+  activeConverterSubTab: ConverterSubTabId;
+  /** Only panels the tour itself revealed or expanded. 仅记录引导自己展开的面板。 */
+  openedWidgets: Map<WidgetId, { wasHidden: boolean; wasCollapsed: boolean }>;
+}
+
+let workspaceSnapshot: WorkspaceSnapshot | null = null;
+
+function captureWorkspace(): void {
+  const { activeTab, activeConverterSubTab } = useWidgetStore.getState();
+  workspaceSnapshot = { activeTab, activeConverterSubTab, openedWidgets: new Map() };
+}
+
+function recordOpenedWidget(id: WidgetId, wasHidden: boolean, wasCollapsed: boolean): void {
+  if (!workspaceSnapshot || workspaceSnapshot.openedWidgets.has(id)) {
+    return;
+  }
+  workspaceSnapshot.openedWidgets.set(id, { wasHidden, wasCollapsed });
+}
+
+/**
+ * Undo the page, sub-tab, and panel changes the tour made, so viewing or
+ * skipping it never rewrites the user's persisted workspace.
+ * 撤销引导切换的页面、子页面和展开的面板，查看或跳过引导不会改写用户持久化的工作区。
+ */
+function restoreWorkspace(): void {
+  const snapshot = workspaceSnapshot;
+  workspaceSnapshot = null;
+  if (!snapshot) {
+    return;
+  }
+  const widgetStore = useWidgetStore.getState();
+  for (const [id, opened] of snapshot.openedWidgets) {
+    const layout = useWidgetStore.getState().widgets[id];
+    if (!layout) {
+      continue;
+    }
+    if (opened.wasCollapsed && !layout.collapsed) {
+      widgetStore.toggleCollapse(id);
+    }
+    if (opened.wasHidden && layout.visible) {
+      widgetStore.toggleVisible(id);
+    }
+  }
+  if (useWidgetStore.getState().activeConverterSubTab !== snapshot.activeConverterSubTab) {
+    widgetStore.setActiveConverterSubTab(snapshot.activeConverterSubTab);
+  }
+  if (useWidgetStore.getState().activeTab !== snapshot.activeTab) {
+    widgetStore.setActiveTab(snapshot.activeTab);
+  }
+}
+
+/**
  * Open the page, sub-tab, and panel a step needs so its anchor can render.
  * 打开步骤所需的页面、子页面和面板，使高亮目标能够渲染出来。
  *
@@ -63,6 +121,9 @@ export function applyTutorialStepPrepare(step: TutorialStep): void {
   }
   if (prepare.widget) {
     const layout = useWidgetStore.getState().widgets[prepare.widget];
+    if (layout && (!layout.visible || layout.collapsed)) {
+      recordOpenedWidget(prepare.widget, !layout.visible, layout.collapsed);
+    }
     if (layout && !layout.visible) {
       widgetStore.toggleVisible(prepare.widget);
     }
@@ -121,6 +182,7 @@ export const useTutorialStore = create<TutorialState>()((set, get) => {
       if (get().phase === "touring") {
         return;
       }
+      captureWorkspace();
       set({ phase: "touring", trigger, startedAtMs: Date.now() });
       trackLuminaEvent("lumina_tutorial_started", { trigger });
       goToStep(0);
@@ -161,6 +223,7 @@ export const useTutorialStore = create<TutorialState>()((set, get) => {
         total_steps: TOTAL_STEPS,
         elapsed_s: elapsedSeconds(startedAtMs),
       });
+      restoreWorkspace();
       set({ phase: "idle", stepIndex: 0, startedAtMs: null });
     },
 
@@ -175,6 +238,7 @@ export const useTutorialStore = create<TutorialState>()((set, get) => {
         total_steps: TOTAL_STEPS,
         elapsed_s: elapsedSeconds(startedAtMs),
       });
+      restoreWorkspace();
       set({ phase: "idle", stepIndex: 0, startedAtMs: null });
     },
   };

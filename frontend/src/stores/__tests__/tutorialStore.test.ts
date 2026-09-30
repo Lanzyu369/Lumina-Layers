@@ -178,4 +178,61 @@ describe("tutorialStore", () => {
     widgets = useWidgetStore.getState();
     expect(widgets.widgets["action-bar"]).toMatchObject({ visible: true, collapsed: false });
   });
+
+  function hideAndCollapseWorkspace() {
+    useWidgetStore.setState((state) => ({
+      activeTab: "settings",
+      activeConverterSubTab: "color",
+      color2DOverlayOpen: true,
+      widgets: {
+        ...state.widgets,
+        "basic-settings": { ...state.widgets["basic-settings"], visible: false, collapsed: true },
+        "action-bar": { ...state.widgets["action-bar"], collapsed: true },
+      },
+    }));
+  }
+
+  function expectOriginalWorkspace() {
+    const widgets = useWidgetStore.getState();
+    expect(widgets.activeTab).toBe("settings");
+    expect(widgets.activeConverterSubTab).toBe("color");
+    expect(widgets.color2DOverlayOpen).toBe(true);
+    expect(widgets.widgets["basic-settings"]).toMatchObject({ visible: false, collapsed: true });
+    expect(widgets.widgets["action-bar"]).toMatchObject({ collapsed: true });
+  }
+
+  it("restores the user's page and panels when the tour is skipped", () => {
+    hideAndCollapseWorkspace();
+
+    useTutorialStore.getState().startTour("manual");
+    useTutorialStore.getState().next(); // opens basic-settings
+    expect(useWidgetStore.getState().activeTab).toBe("converter");
+
+    useTutorialStore.getState().skip("escape");
+
+    expectOriginalWorkspace();
+  });
+
+  it("restores the user's page and panels when the tour finishes", () => {
+    hideAndCollapseWorkspace();
+
+    useTutorialStore.getState().startTour("manual");
+    for (let i = 0; i < TOTAL; i += 1) {
+      useTutorialStore.getState().next();
+    }
+
+    expect(useTutorialStore.getState().phase).toBe("idle");
+    expectOriginalWorkspace();
+  });
+
+  it("keeps panels the tour did not change as the user left them", () => {
+    useTutorialStore.getState().startTour("manual");
+    useTutorialStore.getState().next();
+    // The user collapses an already-open panel during an interactive step.
+    useWidgetStore.getState().toggleCollapse("action-bar");
+
+    useTutorialStore.getState().skip("skip_button");
+
+    expect(useWidgetStore.getState().widgets["action-bar"].collapsed).toBe(true);
+  });
 });
