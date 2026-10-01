@@ -8,7 +8,11 @@ vi.mock("../TutorialTour", () => ({
 
 import { translations } from "../../../i18n/translations";
 import { useTutorialStore } from "../../../stores/tutorialStore";
-import { readTutorialProgress } from "../../../utils/tutorialProgress";
+import { useWidgetStore } from "../../../stores/widgetStore";
+import {
+  readTutorialProgress,
+  TUTORIAL_WORKSPACE_STORAGE_KEY,
+} from "../../../utils/tutorialProgress";
 import { TutorialHost } from "../TutorialHost";
 
 // setupTests.ts renders the Chinese copy for every t() call.
@@ -22,6 +26,19 @@ describe("TutorialHost", () => {
 
   afterEach(() => {
     cleanup();
+  });
+
+  it("restores the workspace left by a tour interrupted by a reload", () => {
+    useWidgetStore.setState({ activeTab: "converter", activeConverterSubTab: "core" });
+    localStorage.setItem(
+      TUTORIAL_WORKSPACE_STORAGE_KEY,
+      JSON.stringify({ activeTab: "settings", activeConverterSubTab: "core", openedWidgets: {} }),
+    );
+
+    render(<TutorialHost canAutoOffer={false} />);
+
+    expect(useWidgetStore.getState().activeTab).toBe("settings");
+    expect(localStorage.getItem(TUTORIAL_WORKSPACE_STORAGE_KEY)).toBeNull();
   });
 
   it("waits until other dialogs are gone before offering", () => {

@@ -21,6 +21,14 @@ export function TutorialHost({ canAutoOffer }: TutorialHostProps) {
   const offerFirstRun = useTutorialStore((s) => s.offerFirstRun);
   const startTour = useTutorialStore((s) => s.startTour);
   const skip = useTutorialStore((s) => s.skip);
+  const recoverInterruptedTour = useTutorialStore((s) => s.recoverInterruptedTour);
+
+  // A reload mid-tour leaves the tour's page and panel changes persisted;
+  // undo them once on mount, before any new offer.
+  // 引导中途刷新会留下已持久化的页面和面板改动；挂载时先撤销，再处理新的弹出。
+  useEffect(() => {
+    recoverInterruptedTour();
+  }, [recoverInterruptedTour]);
 
   useEffect(() => {
     if (canAutoOffer) {

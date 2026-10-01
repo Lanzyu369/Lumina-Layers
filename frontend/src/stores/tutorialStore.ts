@@ -14,9 +14,16 @@ import type { TutorialStep } from "../data/tutorialSteps";
 import type { ConverterSubTabId, TabId, WidgetId } from "../types/widget";
 import {
   hasTutorialBeenOffered,
+  readTutorialWorkspaceSnapshot,
   writeTutorialProgress,
+  writeTutorialWorkspaceSnapshot,
 } from "../utils/tutorialProgress";
-import { useWidgetStore } from "./widgetStore";
+import {
+  CONVERTER_SUB_TAB_WIDGET_MAP,
+  DEFAULT_LAYOUT,
+  TAB_WIDGET_MAP,
+  useWidgetStore,
+} from "./widgetStore";
 
 export type TutorialPhase = "idle" | "welcome" | "touring";
 /** How the tutorial was opened. 引导的打开方式。 */
@@ -36,33 +43,87 @@ interface TutorialState {
   back: () => void;
   skip: (via: TutorialSkipVia) => void;
   finish: () => void;
+  /**
+   * Restore the workspace left changed by a tour interrupted by a reload.
+   * 恢复因刷新而中断的引导留下的工作区改动。
+   */
+  recoverInterruptedTour: () => void;
 }
 
 const TOTAL_STEPS = TUTORIAL_STEPS.length;
 
+interface OpenedWidget {
+  wasHidden: boolean;
+  wasCollapsed: boolean;
+}
+
 /**
  * Workspace state the tour changed, restored on every exit path.
  * 引导改动过的工作区状态，在所有退出路径上恢复。
+ *
+ * It is mirrored to browser storage because the page and panel layout it
+ * undoes are persisted too; a reload mid-tour must still restore them.
+ * 由于它要撤销的页面和面板布局本身是持久化的，快照也同步写入浏览器存储，
+ * 引导中途刷新后仍能恢复。
  */
 interface WorkspaceSnapshot {
   activeTab: TabId;
   activeConverterSubTab: ConverterSubTabId;
   /** Only panels the tour itself revealed or expanded. 仅记录引导自己展开的面板。 */
-  openedWidgets: Map<WidgetId, { wasHidden: boolean; wasCollapsed: boolean }>;
+  openedWidgets: Partial<Record<WidgetId, OpenedWidget>>;
 }
 
 let workspaceSnapshot: WorkspaceSnapshot | null = null;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Validate a stored snapshot against the current tabs and widgets. 按当前页面和面板校验已保存的快照。 */
+function parseWorkspaceSnapshot(raw: unknown): WorkspaceSnapshot | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+  const { activeTab, activeConverterSubTab, openedWidgets } = raw;
+  if (typeof activeTab !== "string" || !(activeTab in TAB_WIDGET_MAP)) {
+    return null;
+  }
+  if (
+    typeof activeConverterSubTab !== "string" ||
+    !(activeConverterSubTab in CONVERTER_SUB_TAB_WIDGET_MAP)
+  ) {
+    return null;
+  }
+  const opened: Partial<Record<WidgetId, OpenedWidget>> = {};
+  if (isRecord(openedWidgets)) {
+    for (const [id, value] of Object.entries(openedWidgets)) {
+      if (id in DEFAULT_LAYOUT && isRecord(value)) {
+        opened[id as WidgetId] = {
+          wasHidden: value.wasHidden === true,
+          wasCollapsed: value.wasCollapsed === true,
+        };
+      }
+    }
+  }
+  return {
+    activeTab: activeTab as TabId,
+    activeConverterSubTab: activeConverterSubTab as ConverterSubTabId,
+    openedWidgets: opened,
+  };
+}
+
 function captureWorkspace(): void {
   const { activeTab, activeConverterSubTab } = useWidgetStore.getState();
-  workspaceSnapshot = { activeTab, activeConverterSubTab, openedWidgets: new Map() };
+  workspaceSnapshot = { activeTab, activeConverterSubTab, openedWidgets: {} };
+  writeTutorialWorkspaceSnapshot(workspaceSnapshot);
 }
 
 function recordOpenedWidget(id: WidgetId, wasHidden: boolean, wasCollapsed: boolean): void {
-  if (!workspaceSnapshot || workspaceSnapshot.openedWidgets.has(id)) {
+  if (!workspaceSnapshot || workspaceSnapshot.openedWidgets[id]) {
     return;
   }
-  workspaceSnapshot.openedWidgets.set(id, { wasHidden, wasCollapsed });
+  workspaceSnapshot.openedWidgets[id] = { wasHidden, wasCollapsed };
+  writeTutorialWorkspaceSnapshot(workspaceSnapshot);
 }
 
 /**
@@ -71,13 +132,14 @@ function recordOpenedWidget(id: WidgetId, wasHidden: boolean, wasCollapsed: bool
  * 撤销引导切换的页面、子页面和展开的面板，查看或跳过引导不会改写用户持久化的工作区。
  */
 function restoreWorkspace(): void {
-  const snapshot = workspaceSnapshot;
+  const snapshot = workspaceSnapshot ?? parseWorkspaceSnapshot(readTutorialWorkspaceSnapshot());
   workspaceSnapshot = null;
+  writeTutorialWorkspaceSnapshot(null);
   if (!snapshot) {
     return;
   }
   const widgetStore = useWidgetStore.getState();
-  for (const [id, opened] of snapshot.openedWidgets) {
+  for (const [id, opened] of Object.entries(snapshot.openedWidgets) as [WidgetId, OpenedWidget][]) {
     const layout = useWidgetStore.getState().widgets[id];
     if (!layout) {
       continue;
@@ -240,6 +302,13 @@ export const useTutorialStore = create<TutorialState>()((set, get) => {
       });
       restoreWorkspace();
       set({ phase: "idle", stepIndex: 0, startedAtMs: null });
+    },
+
+    recoverInterruptedTour: () => {
+      if (get().phase !== "idle") {
+        return;
+      }
+      restoreWorkspace();
     },
   };
 });

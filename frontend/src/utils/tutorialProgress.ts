@@ -11,6 +11,8 @@
 import { nowBeijingIso } from "./beijingTime";
 
 export const TUTORIAL_STORAGE_KEY = "lumina-beginner-tutorial";
+/** Workspace the running tour must restore, kept across reloads. 进行中的引导需恢复的工作区，跨刷新保留。 */
+export const TUTORIAL_WORKSPACE_STORAGE_KEY = "lumina-beginner-tutorial-workspace";
 
 /** Outcome of the latest tutorial offer. 最近一次引导的结果。 */
 export type TutorialOutcome = "offered" | "skipped" | "completed";
@@ -81,4 +83,46 @@ export function writeTutorialProgress(outcome: TutorialOutcome): void {
  */
 export function hasTutorialBeenOffered(): boolean {
   return readTutorialProgress() !== null;
+}
+
+/**
+ * Read the raw workspace snapshot left by a tour that has not exited yet.
+ * 读取尚未退出的引导留下的原始工作区快照。
+ *
+ * Returns:
+ *     unknown: Parsed JSON, or null when absent/unreadable. The caller
+ *     validates the shape. 解析后的 JSON；不存在或无法读取时为 null，由调用方校验结构。
+ */
+export function readTutorialWorkspaceSnapshot(): unknown {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const raw = window.localStorage.getItem(TUTORIAL_WORKSPACE_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as unknown) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persist the running tour's workspace snapshot, or clear it with null.
+ * 保存进行中引导的工作区快照；传入 null 时清除。
+ *
+ * Args:
+ *     snapshot (unknown): JSON-serialisable snapshot, or null. 可序列化的快照或 null。
+ */
+export function writeTutorialWorkspaceSnapshot(snapshot: unknown): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    if (snapshot === null) {
+      window.localStorage.removeItem(TUTORIAL_WORKSPACE_STORAGE_KEY);
+    } else {
+      window.localStorage.setItem(TUTORIAL_WORKSPACE_STORAGE_KEY, JSON.stringify(snapshot));
+    }
+  } catch {
+    // Ignore storage failures; restoring then only covers the current page load.
+  }
 }

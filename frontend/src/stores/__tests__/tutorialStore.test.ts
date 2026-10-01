@@ -8,6 +8,7 @@ import type { WidgetId, WidgetLayoutState } from "../../types/widget";
 import {
   readTutorialProgress,
   TUTORIAL_STORAGE_KEY,
+  TUTORIAL_WORKSPACE_STORAGE_KEY,
   writeTutorialProgress,
 } from "../../utils/tutorialProgress";
 import { useTutorialStore } from "../tutorialStore";
@@ -235,4 +236,35 @@ describe("tutorialStore", () => {
 
     expect(useWidgetStore.getState().widgets["action-bar"].collapsed).toBe(true);
   });
+
+  it("restores the user's workspace after a reload interrupts the tour", async () => {
+    hideAndCollapseWorkspace();
+    useTutorialStore.getState().startTour("manual");
+    useTutorialStore.getState().next(); // switches page and opens basic-settings
+    expect(useWidgetStore.getState().activeTab).toBe("converter");
+
+    // Reload: in-memory stores are rebuilt from browser storage only.
+    vi.resetModules();
+    const reloadedWidgets = (await import("../widgetStore")).useWidgetStore;
+    const reloadedTutorial = (await import("../tutorialStore")).useTutorialStore;
+    expect(reloadedWidgets.getState().activeTab).toBe("converter");
+
+    reloadedTutorial.getState().recoverInterruptedTour();
+
+    const widgets = reloadedWidgets.getState();
+    expect(widgets.activeTab).toBe("settings");
+    expect(widgets.activeConverterSubTab).toBe("color");
+    expect(widgets.widgets["basic-settings"]).toMatchObject({ visible: false, collapsed: true });
+    expect(localStorage.getItem(TUTORIAL_WORKSPACE_STORAGE_KEY)).toBeNull();
+  });
+
+  it("clears the stored workspace snapshot on a normal exit", () => {
+    useTutorialStore.getState().startTour("manual");
+    expect(localStorage.getItem(TUTORIAL_WORKSPACE_STORAGE_KEY)).not.toBeNull();
+
+    useTutorialStore.getState().skip("skip_button");
+
+    expect(localStorage.getItem(TUTORIAL_WORKSPACE_STORAGE_KEY)).toBeNull();
+  });
 });
+
