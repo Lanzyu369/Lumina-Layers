@@ -1025,6 +1025,10 @@ beforeEach(() => {
       expect(capturedModelSurfaceSelectorProps?.placement).toEqual(
         useConverterStore.getState().modelSurfacePlacement,
       );
+      expect(capturedModelSurfaceSelectorProps?.modelRotation).toEqual(
+        useConverterStore.getState().modelSurfaceModelRotation,
+      );
+      expect(capturedModelSurfaceSelectorProps?.selectionId).toBe("selection-1");
       expect(capturedModelSurfaceSelectorProps?.onUpdatePlacement).toBe(
         useConverterStore.getState().updateModelSurfacePlacement,
       );

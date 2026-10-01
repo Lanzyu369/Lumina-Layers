@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import shapely.affinity as sa
@@ -26,16 +26,15 @@ from core.model_surface.validation import (
     prepare_model_surface_mesh_for_boolean,
 )
 
+if TYPE_CHECKING:
+    from manifold3d import Manifold
+
 MODEL_SURFACE_DISPLAY_Z_BOUNDS_KEY = "model_surface_display_z_bounds_mm"
 MODEL_SURFACE_DISPLAY_LAYER_HEIGHTS_KEY = (
     "model_surface_display_layer_heights_mm"
 )
 MODEL_SURFACE_LOGICAL_XY_BOUNDS_KEY = "model_surface_logical_xy_bounds_mm"
-
-
-# The manifold backend does not expose a reliable allocation estimate. Keep a
-# conservative fail-closed margin around base/cutter arrays until production
-# RSS evidence supports lowering it.
+MODEL_SURFACE_PROJECT_SLOT_NAMES_KEY = "model_surface_project_slot_names"
 
 
 @dataclass(frozen=True)
@@ -86,6 +85,22 @@ class OverlaySceneResult:
     scene: trimesh.Scene
     slot_names: list[str]
     preview_colors: dict[str, tuple[int, int, int]]
+
+    @property
+    def project_slot_names(self) -> list[str]:
+        """Return the selected material palette independently of object names.
+
+        返回所选材料调色板，不把对象名称当作新的材料。
+        """
+        selected = self.scene.metadata.get(MODEL_SURFACE_PROJECT_SLOT_NAMES_KEY)
+        if selected is not None:
+            return list(selected)
+        materials = []
+        for name in self.slot_names:
+            mesh = self.scene.geometry.get(name)
+            metadata = mesh.metadata if mesh is not None else {}
+            materials.append(str(metadata.get("bambu_material_name") or name))
+        return list(dict.fromkeys(materials))
 
 
 def build_embedded_overlay_scene(
@@ -321,50 +336,53 @@ def _cut_surface_polygon_pocket(
         empty_error="Selected surface footprint is empty.",
     )
     epsilon = min(0.02, max(0.002, pocket_depth_mm * 0.05))
-    try:
-        cutter_mesh = _build_polygon_prism_mesh(
-            polygon,
-            height_mm=float(pocket_depth_mm + epsilon * 2.0),
-        )
-        cutter_mesh.apply_transform(
-            _footprint_prism_to_surface_transform(
-                footprint,
-                z_offset_mm=-(float(pocket_depth_mm) + epsilon),
-            )
-        )
-    except MODEL_SURFACE_FATAL_ERRORS:
-        raise
-    except Exception as exc:
-        raise ModelSurfaceError("model_surface_boolean_failed") from exc
-    if not cutter_mesh.is_volume:
-        raise ModelSurfaceError("model_surface_boolean_failed")
     prepared_base_mesh = prepare_model_surface_mesh_for_boolean(
         base_mesh,
         _take_ownership=True,
     )
     try:
-        result = trimesh.boolean.difference(
-            [prepared_base_mesh, cutter_mesh],
-            engine="manifold",
+        import manifold3d as m3d
+
+        cutter = _build_polygon_prism(
+            polygon,
+            height_mm=float(pocket_depth_mm + epsilon * 2.0),
         )
+        transform = _footprint_prism_to_surface_transform(
+            footprint,
+            z_offset_mm=-(float(pocket_depth_mm) + epsilon),
+        )
+        base = m3d.Manifold(m3d.Mesh64(
+            np.asarray(prepared_base_mesh.vertices, dtype=np.float64),
+            np.asarray(prepared_base_mesh.faces, dtype=np.uint64),
+        ))
+        # Export only the final solid: exporting/reimporting the intermediate
+        # cutter loses native topology at tiny holes and coincident vertices.
+        result = base - cutter.transform(transform[:3, :])
+        if result.status() != m3d.Error.NoError or result.is_empty():
+            raise ModelSurfaceError("model_surface_boolean_failed")
+        mesh_data = result.to_mesh64()
+        result_mesh = trimesh.Trimesh(
+            vertices=np.asarray(mesh_data.vert_properties)[:, :3].copy(),
+            faces=np.asarray(mesh_data.tri_verts).copy(),
+            process=False,
+        )
+    except ModelSurfaceError:
+        raise
     except MODEL_SURFACE_FATAL_ERRORS:
         raise
     except Exception as exc:
         raise ModelSurfaceError("model_surface_boolean_failed") from exc
 
-    result_mesh = _coerce_boolean_result(result)
-    if result_mesh is None or len(result_mesh.faces) == 0:
-        raise ModelSurfaceError("model_surface_boolean_failed")
     result_mesh.metadata.update(base_mesh.metadata or {})
     return result_mesh
 
 
-def _build_polygon_prism_mesh(
+def _build_polygon_prism(
     polygon: BaseGeometry,
     *,
     height_mm: float,
-) -> trimesh.Trimesh:
-    """Build a robust closed prism from polygonal geometry with Manifold."""
+) -> Manifold:
+    """Keep the pocket prism in its native solid representation."""
 
     if not np.isfinite(height_mm) or height_mm <= 0.0:
         raise ModelSurfaceError("Pocket depth must be positive.")
@@ -388,35 +406,13 @@ def _build_polygon_prism_mesh(
         solid = section.extrude(float(height_mm))
         if solid.is_empty() or solid.status() != m3d.Error.NoError:
             raise ModelSurfaceError("model_surface_boolean_failed")
-        mesh_data = solid.to_mesh()
-        vertices = np.asarray(
-            mesh_data.vert_properties,
-            dtype=np.float64,
-        )
-        faces = np.asarray(mesh_data.tri_verts, dtype=np.int64)
+        return solid
     except ModelSurfaceError:
         raise
     except MODEL_SURFACE_FATAL_ERRORS:
         raise
     except Exception as exc:
         raise ModelSurfaceError("model_surface_boolean_failed") from exc
-
-    if (
-        vertices.ndim != 2
-        or vertices.shape[1] < 3
-        or faces.ndim != 2
-        or faces.shape[1] != 3
-        or len(faces) == 0
-    ):
-        raise ModelSurfaceError("model_surface_boolean_failed")
-    mesh = trimesh.Trimesh(
-        vertices=vertices[:, :3].copy(),
-        faces=faces.copy(),
-        process=False,
-    )
-    if not mesh.is_volume:
-        raise ModelSurfaceError("model_surface_boolean_failed")
-    return mesh
 
 
 def _coerce_prepared_surface_pattern(
@@ -840,16 +836,6 @@ def _footprint_prism_to_surface_transform(
     transform[:3, 2] = normal
     transform[:3, 3] = origin + normal * float(z_offset_mm)
     return transform
-
-
-def _coerce_boolean_result(result: object) -> trimesh.Trimesh | None:
-    if isinstance(result, trimesh.Trimesh):
-        return result
-    if isinstance(result, list):
-        meshes = [mesh for mesh in result if isinstance(mesh, trimesh.Trimesh) and len(mesh.faces) > 0]
-        if meshes:
-            return trimesh.util.concatenate(meshes)
-    return None
 
 
 def _apply_face_color(mesh: trimesh.Trimesh, rgb: tuple[int, int, int]) -> None:
