@@ -305,9 +305,6 @@ SYSTEM_STRUCTURED_EVENTS = {
 }
 FEEDBACK_STRUCTURED_EVENTS = {
     "feedback_bug_report_rate_limited",
-    "feedback_bug_report_relay_done",
-    "feedback_bug_report_relay_failed",
-    "feedback_bug_report_relay_unconfigured",
     "feedback_bug_report_submitted",
     "feedback_ticket_assembled_init",
     "feedback_ticket_assembled_done",
@@ -327,9 +324,8 @@ FEEDBACK_STRUCTURED_EVENTS = {
     "feedback_startup_cleanup_failed",
     "feedback_config_invalid_env",
     "feedback_config_negative_env",
-    "feedback_smtp_unconfigured",
-    "feedback_email_attachment_skipped",
-    "feedback_email_failed",
+    "feedback_hosted_submission_done",
+    "feedback_hosted_submission_failed",
     "feedback_advanced_params_failed",
 }
 SLICER_STRUCTURED_EVENTS = {

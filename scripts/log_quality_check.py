@@ -389,7 +389,7 @@ def run_fast_mode(temp_log_path: Path, workflow: list[str]) -> dict[str, Any]:
 
     _prepare_log_environment(temp_log_path)
     if "feedback_submit" in workflow:
-        _clear_feedback_email_env(os.environ)
+        _disable_feedback_upload_env(os.environ)
 
     import io
     import numpy as np
@@ -692,7 +692,7 @@ def run_full_mode(
     env["LUMINA_LOG_FORMAT"] = "json"
     env.pop("LUMINA_LOG_INIT_BY_PARENT", None)
     if "feedback_submit" in workflow:
-        _clear_feedback_email_env(env)
+        _disable_feedback_upload_env(env)
     support_paths = (
         _ensure_single_stage_colorchecker_assets()
         if any(step in workflow for step in ("extract_single_stage", "fit_stage_a"))
@@ -1091,18 +1091,9 @@ def _prepare_log_environment(log_path: Path) -> None:
     os.environ.pop("LUMINA_LOG_INIT_BY_PARENT", None)
 
 
-def _clear_feedback_email_env(env: MutableMapping[str, str]) -> None:
-    for key in (
-        "LUMINA_FEEDBACK_SMTP_HOST",
-        "LUMINA_FEEDBACK_SMTP_PORT",
-        "LUMINA_FEEDBACK_SMTP_USER",
-        "LUMINA_FEEDBACK_SMTP_PASSWORD",
-        "LUMINA_FEEDBACK_SMTP_FROM",
-        "LUMINA_FEEDBACK_TO",
-        "LUMINA_FEEDBACK_SMTP_USE_TLS",
-        "LUMINA_FEEDBACK_SMTP_TIMEOUT_S",
-    ):
-        env.pop(key, None)
+def _disable_feedback_upload_env(env: MutableMapping[str, str]) -> None:
+    """Keep quality-gate bug reports local; never upload them to the real server."""
+    env["LUMINA_FEEDBACK_SERVER_URL"] = "off"
 
 
 def _build_mock_worker_result(

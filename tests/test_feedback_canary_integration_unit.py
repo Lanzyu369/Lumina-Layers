@@ -20,13 +20,10 @@ def _capture_feedback_logger(
 
 
 def _client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
-    import api.feedback_email as feedback_email
     from api.app import create_app
 
     monkeypatch.setenv("LUMINA_FEEDBACK_DUMP_DIR", str(tmp_path))
-    monkeypatch.delenv("LUMINA_FEEDBACK_SMTP_HOST", raising=False)
-    monkeypatch.delenv("LUMINA_FEEDBACK_TO", raising=False)
-    feedback_email.is_email_configured.cache_clear()
+    monkeypatch.setenv("LUMINA_FEEDBACK_SERVER_URL", "off")
     return TestClient(create_app())
 
 
