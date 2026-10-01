@@ -11,7 +11,7 @@ by construction and keeps independent printable islands explicit.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Sequence
 
 import numpy as np
@@ -25,6 +25,7 @@ from shapely.geometry.polygon import orient
 from shapely.validation import make_valid
 
 from core.vector_mesh_spill import AdaptiveMeshAccumulator
+from core.svg_coordinate_domain import PRINT_GRID_KEY
 
 
 @dataclass(frozen=True)
@@ -990,14 +991,16 @@ def _extrude_indexed_run_group(
         cap_face_counts,
     ):
         vertices_2d = np.vstack(rings).astype(np.float64)
-        vertices_2d *= float(prepared.grid_mm)
         ring_ends = np.cumsum([len(ring) for ring in rings], dtype=np.uint32)
         raw_cap_faces = _canonical_cap_faces(
             polygon,
             vertices_2d,
             ring_ends,
-            grid_mm=float(prepared.grid_mm),
+            grid_mm=1.0,
         )
+        # Keep topology in print-grid units through triangulation. The physical
+        # coordinates below are only for writer-representability checks/output.
+        vertices_2d *= float(prepared.grid_mm)
         expected_area = _indexed_polygon_area_mm2(
             polygon,
             grid_mm=float(prepared.grid_mm),
@@ -1322,6 +1325,25 @@ def _prepared_interval_group(
     )
 
 
+def _integer_layer_slabs(slabs: Sequence[dict], grid_mm: float) -> list[_PhysicalLayerSlab]:
+    if {float(slab[PRINT_GRID_KEY]) for slab in slabs} != {grid_mm}:
+        raise ValueError("Material slabs do not share the declared print grid")
+    prepared = []
+    for slab in slabs:
+        geometry = slab["geometry"]
+        if geometry.is_empty:
+            continue
+        coordinates = shapely.get_coordinates(geometry)
+        if not geometry.is_valid or not np.array_equal(coordinates, np.rint(coordinates)):
+            raise ValueError("Prepared print slab must contain valid integer topology")
+        z_start = float(slab.get("z_offset", 0.0))
+        z_end = z_start + float(slab.get("height", 0.0))
+        if not math.isfinite(z_start) or not math.isfinite(z_end) or z_end <= z_start:
+            raise ValueError("Prepared print slab has an invalid layer interval")
+        prepared.append(_PhysicalLayerSlab(geometry, z_start, z_end))
+    return prepared
+
+
 def build_vector_layered_volume(
     slabs: Sequence[dict],
     *,
@@ -1345,15 +1367,30 @@ def build_vector_layered_volume(
     """
 
     effective_policy = policy or VectorLayerGeometryPolicy()
+    slabs = tuple(slabs)
+    canonical_slabs = [slab for slab in slabs if PRINT_GRID_KEY in slab]
+    source_slabs = [slab for slab in slabs if PRINT_GRID_KEY not in slab]
     snapped_slabs, grid_mm = _physical_layer_slabs(
-        slabs,
+        source_slabs,
         scale_mm_per_svg_unit=scale_mm_per_svg_unit,
         policy=effective_policy,
     )
-    if not snapped_slabs:
+    if not snapped_slabs and not canonical_slabs:
         return None
+    if canonical_slabs and snapped_slabs and grid_mm != effective_policy.grid_mm:
+        raise ValueError("Mixed slab domains require the same declared print grid")
     coalesced_slabs = _coalesced_layer_slabs(snapped_slabs)
     with AdaptiveMeshAccumulator() as accumulator:
+        if canonical_slabs:
+            grid_mm = float(effective_policy.grid_mm)
+            integer_slabs = _integer_layer_slabs(canonical_slabs, grid_mm)
+            for slab in _coalesced_layer_slabs(integer_slabs):
+                prepared = _prepared_interval_group(_polygon_parts(slab.geometry), grid_mm=1.0)
+                prepared = replace(prepared, grid_mm=grid_mm, area_mm2=prepared.area_mm2 * grid_mm**2)
+                accumulator.add(_extrude_indexed_run_group(
+                    prepared, height_mm=slab.z_end_mm-slab.z_start_mm,
+                    z_offset_mm=slab.z_start_mm,
+                ))
         for slab in coalesced_slabs:
             prepared = _prepared_interval_group(
                 _polygon_parts(slab.geometry),

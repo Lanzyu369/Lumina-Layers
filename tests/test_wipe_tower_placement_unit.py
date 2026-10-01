@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import math
+from contextlib import contextmanager
 from dataclasses import replace
+from typing import Iterator
+from unittest.mock import patch
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
+import core.wipe_tower_placement as wipe_tower_placement
 from core.wipe_tower_placement import (
     Rect,
     WipeTowerPlacementRequest,
@@ -335,3 +341,155 @@ def test_impossible_layout_keeps_model_scale_and_requires_manual_adjustment() ->
     assert result.model_bounds.width == pytest.approx(179.0)
     assert result.model_bounds.height == pytest.approx(179.0)
     assert result.tower_width > 0.0
+
+
+# ---------------------------------------------------------------------------
+# Search pruning and containment caching must not change the selected layout
+# ---------------------------------------------------------------------------
+
+
+class _UncachedRectAllowance:
+    """Reference stand-in for ``_RectAllowanceCache`` that never memoizes."""
+
+    def __init__(self, request: WipeTowerPlacementRequest) -> None:
+        self._request = request
+
+    def __call__(self, rect: Rect) -> bool:
+        return wipe_tower_placement._rect_allowed(rect, self._request)
+
+
+@contextmanager
+def _exhaustive_search() -> Iterator[None]:
+    """Run the solver without width pruning or containment caching."""
+
+    with patch.object(wipe_tower_placement, "_width_can_still_win", lambda *_args, **_kwargs: True), patch.object(
+        wipe_tower_placement, "_RectAllowanceCache", _UncachedRectAllowance
+    ):
+        yield
+
+
+def _solve_exhaustively(request: WipeTowerPlacementRequest):
+    with _exhaustive_search():
+        return solve_wipe_tower_placement(request)
+
+
+def test_width_can_still_win_until_a_better_rank_is_proven() -> None:
+    can_still_win = wipe_tower_placement._width_can_still_win
+
+    assert can_still_win(None, width_rank=40, clearance_rank=1) is True
+    assert can_still_win((3, 0), width_rank=3, clearance_rank=0) is True
+    assert can_still_win((3, 1), width_rank=2, clearance_rank=1) is True
+    assert can_still_win((3, 0), width_rank=3, clearance_rank=1) is False
+    assert can_still_win((3, 0), width_rank=4, clearance_rank=0) is False
+
+
+@pytest.mark.parametrize(
+    ("request_kwargs", "overrides"),
+    [
+        pytest.param(
+            {
+                "model_size": (100.0, 155.0),
+                "tower_x": 7.45573,
+                "tower_y": 219.877,
+                "tower_width": 240.0,
+                "purge_volume": 30.0,
+            },
+            {},
+            id="vertical-strip",
+        ),
+        pytest.param(
+            {
+                "model_size": (80.0, 80.0),
+                "exclusions": (((0.0, 140.0), (180.0, 140.0), (180.0, 180.0), (0.0, 180.0)),),
+            },
+            {},
+            id="bed-exclusion",
+        ),
+        pytest.param(
+            {
+                "model_size": (179.0, 179.0),
+                "tower_x": 7.45573,
+                "tower_y": 219.877,
+                "tower_width": 240.0,
+            },
+            {},
+            id="impossible",
+        ),
+        pytest.param(
+            {
+                "model_size": (130.0, 146.6),
+                "tower_x": 5.70098,
+                "tower_y": 149.411,
+                "purge_volume": 45.0,
+            },
+            {"prefer_vertical_strip": True, "tower_infill_spacing_ratio": 1.5},
+            # The preferred 4 mm clearance only fits a far width; the 2 mm
+            # fallback clearance fits a nearer one, which must still win.
+            id="fallback-clearance-finds-nearer-width",
+        ),
+    ],
+)
+def test_pruned_search_matches_exhaustive_search(request_kwargs: dict, overrides: dict) -> None:
+    request = replace(_request(**request_kwargs), **overrides)
+
+    assert solve_wipe_tower_placement(request) == _solve_exhaustively(request)
+
+
+@settings(max_examples=15, deadline=None)
+@given(
+    bed_side=st.floats(min_value=120.0, max_value=180.0),
+    model_width_ratio=st.floats(min_value=0.1, max_value=0.95),
+    model_depth_ratio=st.floats(min_value=0.1, max_value=0.95),
+    model_height=st.floats(min_value=1.0, max_value=200.0),
+    material_count=st.integers(min_value=2, max_value=8),
+    purge_volume=st.floats(min_value=20.0, max_value=300.0),
+    prefer_vertical_strip=st.booleans(),
+)
+def test_pruned_search_matches_exhaustive_search_for_generated_requests(
+    bed_side: float,
+    model_width_ratio: float,
+    model_depth_ratio: float,
+    model_height: float,
+    material_count: int,
+    purge_volume: float,
+    prefer_vertical_strip: bool,
+) -> None:
+    request = replace(
+        _request(
+            bed_size=(bed_side, bed_side),
+            model_size=(bed_side * model_width_ratio, bed_side * model_depth_ratio),
+            model_height=model_height,
+            material_count=material_count,
+            purge_volume=purge_volume,
+        ),
+        prefer_vertical_strip=prefer_vertical_strip,
+    )
+
+    assert solve_wipe_tower_placement(request) == _solve_exhaustively(request)
+
+
+def test_vertical_strip_search_stops_after_the_preferred_safe_width() -> None:
+    request = _request(
+        model_size=(100.0, 155.0),
+        tower_x=7.45573,
+        tower_y=219.877,
+        tower_width=240.0,
+        purge_volume=30.0,
+    )
+    containment_checks = {"pruned": 0, "exhaustive": 0}
+    original_rect_allowed = wipe_tower_placement._rect_allowed
+
+    def _counting(mode: str):
+        def _rect_allowed(rect: Rect, request: WipeTowerPlacementRequest) -> bool:
+            containment_checks[mode] += 1
+            return original_rect_allowed(rect, request)
+
+        return _rect_allowed
+
+    with patch.object(wipe_tower_placement, "_rect_allowed", _counting("pruned")):
+        solve_wipe_tower_placement(request)
+    with patch.object(wipe_tower_placement, "_rect_allowed", _counting("exhaustive")), _exhaustive_search():
+        solve_wipe_tower_placement(request)
+
+    # Guard the export hot path: every Bambu 3MF export runs this solver.
+    assert containment_checks["pruned"] * 10 <= containment_checks["exhaustive"]

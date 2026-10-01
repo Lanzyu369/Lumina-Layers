@@ -292,9 +292,9 @@ cd electron; pnpm start
 
 ### 配置
 
-Lumina Studio 会从 `.env.local` 读取本地环境变量覆盖项。反馈邮件的 SMTP 配置请以 `.env.example` 为模板，真实密码或授权码只能放在 `.env.local` 或服务器 Secret 中，不能提交到 GitHub。
+Lumina Studio 会从 `.env.local` 读取本地环境变量覆盖项，请以 `.env.example` 为模板，不要把任何真实密钥提交到 GitHub。
 
-包含 `.env.local`、QQ 邮箱、Gmail、systemd 和 Docker 的部署示例，请查看 [反馈邮件配置](docs/feedback-email-configuration.md)。
+问题反馈会先保存在本机 `feedback/` 目录，再上传到 Lumina Studio 官方问题收集服务；客户端不保存任何邮箱或服务器凭据。可用 `LUMINA_FEEDBACK_SERVER_URL` 指向其他反馈服务，设为 `off` 则只保存在本机。反馈包含哪些内容见 [Bug Report Reproducibility](docs/bug-report-reproducibility.md)。
 
 ---
 

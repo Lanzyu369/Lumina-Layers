@@ -17,7 +17,6 @@ from math import isfinite
 from pathlib import Path
 from typing import Any, AsyncGenerator, AsyncIterator, Literal
 
-import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -30,10 +29,10 @@ from api.feedback_assembler import (
     collect_direct_original_upload,
     collect_sync_attachments,
     finalize_ticket_async,
+    resubmit_ticket_async,
 )
-from api.feedback_email import is_email_configured, send_bug_report_email_async
-from api.feedback_store import dump_bug_report, to_dump_path_string
-from api.feedback_ticket import generate_ticket_id, ticket_dir_for
+from api.feedback_hosted import SubmissionStatus, feedback_server_url
+from api.feedback_ticket import generate_ticket_id, ticket_dir_for, ticket_dir_from_id
 from api.feedback_time import format_received_cst, now_beijing
 from api.local_origin_guard import require_local_app_origin
 from api.structured_logging import get_logger
@@ -380,10 +379,10 @@ class BugReportWorkshopContext(BaseModel):
     Project payloads, pixels, palettes, image bytes, package paths,
     credentials, signing material, and desktop tokens are intentionally
     outside this schema. Unknown keys are discarded before the report is
-    persisted or relayed.
+    persisted or uploaded.
 
     工程载荷、像素、色板、图像字节、安装包路径、凭据、签名材料和桌面令牌
-    均不属于此结构；未知字段会在工单持久化或转发前被丢弃。
+    均不属于此结构；未知字段会在工单持久化或上传前被丢弃。
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -932,13 +931,19 @@ class BugReportResponse(BaseModel):
     """Bug report submission response payload.
 
     Bug 报告提交响应载荷。
+
+    ``submission_status`` is ``pending`` while the background task uploads
+    the ticket to the official feedback server, or ``disabled`` when uploads
+    are switched off on this installation. Poll the status endpoint for the
+    final result.
+
+    ``submission_status`` 在后台任务上传工单期间为 ``pending``；本机停用上传
+    时为 ``disabled``。最终结果请轮询状态接口。
     """
 
     ticket_id: str
-    emailed: bool
     dump_path: str
-    email_status: Literal["sent", "unconfigured", "failed", "pending"]
-    relay_available: bool
+    submission_status: SubmissionStatus
     assembly_status: Literal["in_progress", "done", "partial_failed"] | None = None
     original_image_status: Literal[
         "attached",
@@ -947,6 +952,28 @@ class BugReportResponse(BaseModel):
         "too_large",
         "failed",
     ] = "not_applicable"
+
+
+class BugReportHeldBackAttachment(BaseModel):
+    """A ticket file kept only on this device. 仅保留在本机的工单文件。"""
+
+    name: str
+    size_bytes: int
+    reason: Literal["too_large", "unsupported_type", "empty", "rejected"]
+
+
+class BugReportStatusResponse(BaseModel):
+    """Current upload state of one local ticket.
+
+    单个本地工单当前的上传状态。
+    """
+
+    ticket_id: str
+    assembly_status: str | None = None
+    submission_status: SubmissionStatus
+    error_type: str | None = None
+    uploaded_attachments: list[str] = Field(default_factory=list)
+    held_back_attachments: list[BugReportHeldBackAttachment] = Field(default_factory=list)
 
 
 def _original_image_response_status(
@@ -980,25 +1007,6 @@ def _original_image_response_status(
     return "failed"
 
 
-class BugReportRelayRequest(BaseModel):
-    """User-confirmed hosted relay request.
-
-    用户确认后的官方转发请求。
-    """
-
-    ticket_id: str = Field(min_length=1, max_length=64)
-    request_payload: BugReportRequest
-
-
-class BugReportRelayResponse(BaseModel):
-    """Hosted relay response.
-
-    官方转发响应。
-    """
-
-    forwarded: bool
-
-
 def _preferred_session_id(context: BugReportContext) -> str | None:
     """Choose the most useful session id for structured logging.
 
@@ -1029,17 +1037,6 @@ def _feedback_rate_limit_config() -> tuple[int, float]:
     except ValueError:
         window_s = _DEFAULT_RATE_LIMIT_WINDOW_S
     return max_requests, window_s
-
-
-def _is_feedback_relay_configured() -> bool:
-    return bool(os.environ.get("LUMINA_FEEDBACK_RELAY_URL"))
-
-
-def _feedback_relay_timeout_s() -> float:
-    try:
-        return float(os.environ.get("LUMINA_FEEDBACK_RELAY_TIMEOUT_S", "8"))
-    except ValueError:
-        return 8.0
 
 
 def _feedback_client_key(request: Request) -> str:
@@ -1235,24 +1232,6 @@ def _sanitize_bug_report_context_for_export(context: dict[str, Any]) -> dict[str
         sanitized_ref = dict(final_ref)
         sanitized_ref.pop("disk_path", None)
         sanitized["active_final_artifact_ref"] = sanitized_ref
-    return sanitized
-
-
-def _sanitize_bug_report_request_payload_for_export(
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    """Return an export-safe bug-report request payload copy.
-
-    返回可安全持久化或转发的 Bug 报告请求 payload 副本。
-    """
-
-    sanitized = deepcopy(payload)
-    description = sanitized.get("description")
-    if isinstance(description, str):
-        sanitized["description"] = _sanitize_bug_report_description(description)
-    context = sanitized.get("context")
-    if isinstance(context, dict):
-        sanitized["context"] = _sanitize_bug_report_context_for_export(context)
     return sanitized
 
 
@@ -1478,9 +1457,8 @@ async def submit_bug_report(
                 "size_bytes": None,
             },
         },
-        "email": {
-            "status": "unconfigured",
-            "oversized_skipped": [],
+        "submission": {
+            "status": "pending" if feedback_server_url() else "disabled",
         },
         "assembly_status": "in_progress",
     }
@@ -1597,16 +1575,12 @@ async def submit_bug_report(
             },
         )
 
-    # Schedule async finalize (materials zip + index/summary + email)
+    # Schedule async finalize (materials zip + index/summary + server upload)
     background_tasks.add_task(
         finalize_ticket_async, ticket_dir, file_registry, session_store
     )
 
-    email_configured = is_email_configured()
-    email_status: Literal["sent", "unconfigured", "failed", "pending"]
-    email_status = "pending" if email_configured else "unconfigured"
-
-    relay_available = _is_feedback_relay_configured()
+    submission_status: SubmissionStatus = payload["submission"]["status"]
     response_original_ref = request.context.active_original_image_ref
     original_image_expected = (
         request.context.active_tab == "converter"
@@ -1634,8 +1608,7 @@ async def submit_bug_report(
             "source_version": request.context.source_version,
             "color_mode": request.context.color_mode,
             "lut_name": request.context.lut_name,
-            "email_status": email_status,
-            "relay_available": relay_available,
+            "submission_status": submission_status,
             "original_image_status": original_image_status,
             "recent_client_log_count": len(request.context.recent_client_logs),
         },
@@ -1643,93 +1616,75 @@ async def submit_bug_report(
 
     return BugReportResponse(
         ticket_id=ticket_id,
-        emailed=False,
         dump_path=_relative_ticket_path(ticket_dir),
-        email_status=email_status,
-        relay_available=relay_available,
+        submission_status=submission_status,
         assembly_status="in_progress",
         original_image_status=original_image_status,
     )
 
 
-@router.post(
-    "/bug-report/relay",
-    response_model=BugReportRelayResponse,
+def _load_ticket_for_status(ticket_id: str) -> tuple[Path, dict[str, Any]]:
+    """Resolve and read a local ticket, mapping absence to 404.
+
+    定位并读取本地工单；不存在时返回 404。
+    """
+    try:
+        ticket_dir = ticket_dir_from_id(_resolve_feedback_root(), ticket_id)
+        payload = json.loads((ticket_dir / "ticket.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="Ticket not found") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    return ticket_dir, payload
+
+
+def _status_response(ticket_id: str, payload: dict[str, Any]) -> BugReportStatusResponse:
+    submission = payload.get("submission")
+    if not isinstance(submission, dict):
+        # Tickets written before server uploads existed were never submitted.
+        submission = {"status": "failed", "error_type": "LegacyTicket"}
+    return BugReportStatusResponse(
+        ticket_id=ticket_id,
+        assembly_status=payload.get("assembly_status"),
+        submission_status=submission.get("status", "failed"),
+        error_type=submission.get("error_type"),
+        uploaded_attachments=submission.get("uploaded_attachments") or [],
+        held_back_attachments=submission.get("held_back_attachments") or [],
+    )
+
+
+@router.get(
+    "/bug-report/{ticket_id}/status",
+    response_model=BugReportStatusResponse,
     dependencies=[Depends(require_local_app_origin)],
 )
-async def relay_bug_report(
-    request: BugReportRelayRequest,
-    http_request: Request,
-) -> BugReportRelayResponse:
-    """Forward a user-confirmed bug report to the hosted relay.
+async def get_bug_report_status(ticket_id: str) -> BugReportStatusResponse:
+    """Report whether a local ticket reached the official feedback server.
 
-    将用户确认后的 Bug 反馈转发到官方收集服务。
+    返回本地工单是否已上传到官方反馈服务。
+    """
+
+    _, payload = _load_ticket_for_status(ticket_id)
+    return _status_response(ticket_id, payload)
+
+
+@router.post(
+    "/bug-report/{ticket_id}/resubmit",
+    response_model=BugReportStatusResponse,
+    dependencies=[Depends(require_local_app_origin)],
+)
+async def resubmit_bug_report(ticket_id: str, http_request: Request) -> BugReportStatusResponse:
+    """Retry uploading a ticket whose previous upload failed.
+
+    重新上传之前上传失败的工单。
     """
 
     _enforce_feedback_rate_limit(http_request)
-    _raise_if_screenshot_too_large(request.request_payload)
-    relay_url = os.environ.get("LUMINA_FEEDBACK_RELAY_URL")
-    if not relay_url:
-        log.warning(
-            "Bug report relay is unconfigured.",
-            extra={
-                "event": "feedback_bug_report_relay_unconfigured",
-                "error_type": "RelayUnconfigured",
-                "error_message": "LUMINA_FEEDBACK_RELAY_URL is not set.",
-                "ticket_id": request.ticket_id,
-            },
-        )
+    ticket_dir, _ = _load_ticket_for_status(ticket_id)
+    if feedback_server_url() is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Feedback relay is not configured",
+            detail="Feedback upload is disabled on this installation",
         )
-
-    headers = {
-        "Content-Type": "application/json",
-        "X-Lumina-Feedback-Ticket": request.ticket_id,
-    }
-    relay_token = os.environ.get("LUMINA_FEEDBACK_RELAY_TOKEN")
-    if relay_token:
-        headers["Authorization"] = f"Bearer {relay_token}"
-
-    try:
-        async with httpx.AsyncClient(timeout=_feedback_relay_timeout_s()) as client:
-            response = await client.post(
-                relay_url,
-                json={
-                    "ticket_id": request.ticket_id,
-                    "request_payload": _sanitize_bug_report_request_payload_for_export(
-                        _dump_bug_report_request(
-                            request.request_payload,
-                            include_existing_defaults=False,
-                        )
-                    ),
-                },
-                headers=headers,
-            )
-            response.raise_for_status()
-    except httpx.HTTPError as exc:
-        log.error(
-            "Bug report relay failed.",
-            extra={
-                "event": "feedback_bug_report_relay_failed",
-                "ticket_id": request.ticket_id,
-                "error_type": type(exc).__name__,
-                "error_message": str(exc),
-                "dependency": "httpx",
-            },
-        )
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Feedback relay failed",
-        ) from exc
-
-    log.info(
-        "Bug report relayed.",
-        extra={
-            "event": "feedback_bug_report_relay_done",
-            "ticket_id": request.ticket_id,
-            "relay_status_code": response.status_code,
-        },
-    )
-    return BugReportRelayResponse(forwarded=True)
+    payload = await resubmit_ticket_async(ticket_dir)
+    return _status_response(ticket_id, payload)

@@ -306,9 +306,9 @@ The desktop shell spawns the Python backend and the Vite dev server automaticall
 
 ### Configuration
 
-Lumina Studio reads optional local environment overrides from `.env.local`. Use `.env.example` as the template for SMTP-backed bug-report delivery, and never commit real secrets. Store your real SMTP password only in `.env.local`.
+Lumina Studio reads optional local environment overrides from `.env.local`; use `.env.example` as the template and never commit real secrets.
 
-For deployment examples covering `.env.local`, QQ Mail, Gmail, systemd, and Docker, see [Bug Report Email Configuration](docs/feedback-email-configuration.md).
+Bug reports are saved locally under `feedback/` and then uploaded to the official Lumina Studio feedback service. The client holds no email or server credentials. Set `LUMINA_FEEDBACK_SERVER_URL` to point at another feedback server, or to `off` to keep reports on this device only. See [Bug Report Reproducibility](docs/bug-report-reproducibility.md) for what a report contains.
 
 ---
 
