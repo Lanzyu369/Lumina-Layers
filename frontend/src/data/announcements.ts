@@ -33,6 +33,15 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
         zh: "按“可更新”“已安装”筛选时的数量更准确；耗材更新后保留的旧版本收进了可折叠的“本地版本记录”，需要时再展开回滚。",
         en: "The “Updates” and “Installed” filters now show accurate counts, and older versions kept after an update live in a collapsible “Local revision history” you can open when you need to roll back.",
       }],
+    }, {
+      category: { zh: "稳定性", en: "Stability" },
+      items: [{
+        zh: "问题反馈现在点一次“发送”就会上传到官方问题收集服务，不用再配置邮箱，也不用再确认转发；对话框会显示上传进度，失败时可以一键重试。",
+        en: "Bug reports now go straight to the official collection service with one click on Send. No mail setup or extra forwarding step is needed; the dialog shows upload progress and offers a one-click retry if it fails.",
+      }, {
+        zh: "反馈会带上和以前邮件一样完整的诊断资料，包括转换原图、生成的 3MF、所用 LUT 和材料档案（单个文件最大 40 MiB），开发者更容易复现问题。",
+        en: "Reports carry the same full diagnostics as before, including the source image, generated 3MF, LUT, and material archive in use (up to 40 MiB per file), so problems are easier to reproduce.",
+      }],
     }],
   },
   {

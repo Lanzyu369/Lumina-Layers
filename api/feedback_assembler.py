@@ -1,7 +1,7 @@
 """Ticket directory assembly for the reproducible bug-report pipeline.
 
 反馈工单目录装配：同步部分（原图 / 生成产物 / LUT）+ 异步部分（耗材 zip、
-index.md、summary.txt、邮件发送）+ 启动时清理。
+index.md、summary.txt、上传官方反馈服务）+ 启动时清理。
 
 Design (`.kiro/specs/reproducible-bug-reports/design.md` §Components §5):
 
@@ -9,19 +9,20 @@ Design (`.kiro/specs/reproducible-bug-reports/design.md` §Components §5):
   response waits only on small file copies + sha256 (bounded to ~2 s).
 * Async path ``finalize_ticket_async`` runs via FastAPI BackgroundTasks; it
   packs ``materials.zip``, renders ``index.md`` / ``summary.txt``, and
-  sends the bug-report email. All steps are independently try/except so a
+  uploads the ticket to the official feedback server. All steps are independently try/except so a
   single failure downgrades the ticket to ``assembly_status='partial_failed'``
   but never crashes the background worker pool.
 * ``run_startup_cleanup`` purges bulky attachments that outlived their TTL
   and marks abandoned in-flight tickets as ``interrupted``.
 
 同步装配只做小文件拷贝与指纹（HTTP 请求内 ≤2 秒），其余大头（耗材 zip、
-渲染索引、发邮件）放后台任务。启动时清理按 TTL 删除大附件，并把异常残留
+渲染索引、上传工单）放后台任务。启动时清理按 TTL 删除大附件，并把异常残留
 的装配中工单标为 interrupted。
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -40,6 +41,7 @@ from api.feedback_config import (
     ticket_attachment_ttl_days,
 )
 from api.feedback_fingerprint import file_sha256, guess_mime
+from api.feedback_hosted import submit_ticket_directory
 from api.feedback_index import generate_index_markdown, generate_summary_text
 from api.feedback_materials_bundle import pack_materials
 from api.feedback_time import now_beijing
@@ -54,6 +56,7 @@ __all__ = [
     "collect_direct_original_upload",
     "collect_sync_attachments",
     "finalize_ticket_async",
+    "resubmit_ticket_async",
     "run_startup_cleanup",
 ]
 
@@ -1546,14 +1549,76 @@ def _critical_sync_attachments_complete(
     return complete
 
 
+_TICKET_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _ticket_lock(ticket_id: str) -> asyncio.Lock:
+    """Serialize uploads and ``ticket.json`` rewrites for one ticket.
+
+    串行化同一工单的上传与 ``ticket.json`` 回写，避免重复上传。
+    """
+    return _TICKET_LOCKS.setdefault(ticket_id, asyncio.Lock())
+
+
+def _write_ticket_json(path: Path, payload: dict[str, Any]) -> None:
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+_UPLOADABLE_ASSEMBLY_STATUSES = frozenset(("done", "partial_failed"))
+_RESUMING_TICKETS: set[str] = set()
+
+
+async def resubmit_ticket_async(ticket_dir: Path) -> dict[str, Any]:
+    """Retry uploading an assembled ticket unless it already succeeded.
+
+    重新上传已装配的工单；已成功上传的工单直接返回当前状态。
+
+    A ticket whose assembly was interrupted (for example by a restart before
+    ``index.md`` / ``summary.txt`` were written) is finalized again first, so
+    an incomplete directory is never uploaded. Tickets still assembling are
+    left alone.
+
+    装配被中断的工单（例如重启前尚未生成索引或摘要）会先重新装配再上传，
+    保证不会上传不完整的目录；仍在装配中的工单不做处理。
+
+    Args:
+        ticket_dir: Local ticket directory. / 本地工单目录。
+
+    Returns:
+        dict[str, Any]: Updated ticket payload. / 更新后的工单内容。
+    """
+    ticket_json_path = ticket_dir / "ticket.json"
+    payload = json.loads(ticket_json_path.read_text(encoding="utf-8"))
+    if payload.get("assembly_status") == "interrupted":
+        if ticket_dir.name not in _RESUMING_TICKETS:
+            _RESUMING_TICKETS.add(ticket_dir.name)
+            try:
+                await finalize_ticket_async(ticket_dir, None)
+            finally:
+                _RESUMING_TICKETS.discard(ticket_dir.name)
+        return json.loads(ticket_json_path.read_text(encoding="utf-8"))
+    async with _ticket_lock(ticket_dir.name):
+        payload = json.loads(ticket_json_path.read_text(encoding="utf-8"))
+        submission = payload.get("submission")
+        status = submission.get("status") if isinstance(submission, dict) else None
+        if (
+            status in ("submitted", "pending")
+            or payload.get("assembly_status") not in _UPLOADABLE_ASSEMBLY_STATUSES
+        ):
+            return payload
+        payload["submission"] = await submit_ticket_directory(ticket_dir, payload)
+        _write_ticket_json(ticket_json_path, payload)
+        return payload
+
+
 async def finalize_ticket_async(
     ticket_dir: Path,
     file_registry,
     session_store=None,
 ) -> None:
-    """Background task: materials zip + index / summary + email.
+    """Background task: materials zip + index / summary + server upload.
 
-    后台任务：打包耗材 zip、渲染 index/summary、发送邮件；任一子步骤失败
+    后台任务：打包耗材 zip、渲染 index/summary、上传到官方反馈服务；任一子步骤失败
     整体降级为 ``partial_failed``，不终止流程。
 
     ``session_store`` is currently unused; it is accepted so the task signature
@@ -1662,59 +1727,26 @@ async def finalize_ticket_async(
                 },
             )
 
-        # --- Email ---
+        # --- Finalize status, then upload ---
         #
-        # Note on the ``partial`` flag: a failed email send is intentionally
-        # NOT treated as a partial assembly failure. Email is a separate
-        # delivery channel; the ticket directory and all attachments can be
-        # fully populated even when SMTP is unreachable, and operators who
-        # pull tickets directly from disk shouldn't see ``partial_failed``
-        # just because the mail server timed out. We still record
-        # ``email.status='failed'`` and emit an ERROR log so the failure is
-        # observable.
-        # 邮件失败不翻转 partial_failed：邮件是独立通道，工单目录与所有
-        # 附件已完整；SMTP 超时不应让从磁盘直取工单的运维看到误导性的
-        # partial_failed。仍保留 email.status='failed' 与 ERROR 日志。
-        try:
-            from api.feedback_email import (  # noqa: PLC0415
-                is_email_configured,
-                send_bug_report_email_async,
-            )
-            if is_email_configured():
-                sent = await send_bug_report_email_async(
-                    ticket_id=ticket_id,
-                    request_payload=payload,
-                    dump_path=_public_ticket_path(ticket_dir),
-                    attachments_dir=ticket_dir,
-                )
-                payload.setdefault("email", {})["status"] = "sent" if sent else "failed"
-            else:
-                payload.setdefault("email", {})["status"] = "unconfigured"
-        except Exception as exc:
-            payload.setdefault("email", {})["status"] = "failed"
-            log.error(
-                "Email send threw.",
-                extra={
-                    "event": "feedback_email_failed",
-                    "ticket_id": ticket_id,
-                    "error_type": type(exc).__name__,
-                    "error_message": str(exc),
-                    "dependency": "aiosmtplib",
-                },
-            )
-
-        # --- Finalize ticket.json ---
+        # A failed upload is not a partial assembly: the local ticket stays
+        # complete and the user can retry from the dialog. The assembly status
+        # is fixed before uploading so retries send an identical ticket.
+        # 上传失败不算装配不完整：本地工单仍然完整，用户可在对话框重试。
+        # 先确定装配状态再上传，保证重试时发送的工单内容完全一致。
         payload["assembly_status"] = "partial_failed" if partial else "done"
-        ticket_json_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        payload["submission"] = {"status": "pending"}
+        _write_ticket_json(ticket_json_path, payload)
+        async with _ticket_lock(ticket_id):
+            payload["submission"] = await submit_ticket_directory(ticket_dir, payload)
+            _write_ticket_json(ticket_json_path, payload)
         log.info(
             "Assembly finished.",
             extra={
                 "event": "feedback_ticket_assembled_done",
                 "ticket_id": ticket_id,
                 "partial": partial,
+                "submission_status": payload["submission"]["status"],
             },
         )
     except Exception as exc:
@@ -1822,6 +1854,15 @@ def run_startup_cleanup(
                         "path": str(ticket_dir),
                     },
                 )
+
+            submission = payload.get("submission")
+            if (
+                isinstance(submission, dict)
+                and submission.get("status") == "pending"
+                and received < interrupted_cutoff
+            ):
+                submission.update(status="failed", error_type="UploadInterrupted")
+                mutated = True
 
             # Attachment TTL cleanup.
             if received < attachment_cutoff:

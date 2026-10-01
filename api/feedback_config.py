@@ -2,20 +2,18 @@
 
 反馈与 Bug 报告子系统的环境变量配置。
 
-This module centralizes the five environment variables that tune the new
+This module centralizes the four environment variables that tune the new
 reproducible-bug-report pipeline so the rest of the spec has a single place to
 import limits and timeouts from. Accessor functions re-read ``os.environ`` on
 every call so tests can override values via ``monkeypatch.setenv`` without
 having to reload modules or reset cached state.
 
-本模块集中解析可重现 Bug 报告流水线的五个环境变量，让其他代码只在一处
+本模块集中解析可重现 Bug 报告流水线的四个环境变量，让其他代码只在一处
 读取上限与超时配置。访问函数每次都会重新读取 ``os.environ``，因此测试
 可以直接通过 ``monkeypatch.setenv`` 覆盖值，无需重新加载模块或重置缓存。
 
 Default values (默认值):
 
-* ``LUMINA_FEEDBACK_MAX_EMAIL_ATTACHMENT_MB`` — 40 MB, per-attachment ceiling
-  for outbound email attachments. 邮件单个附件的上限（兆字节）。
 * ``LUMINA_FEEDBACK_MAX_LOCAL_TICKET_MB`` — 1024 MB (1 GiB), total on-disk
   budget for one ticket directory. **Reserved / parsed only**: the automatic
   eviction logic that would trim large artifacts when this budget is exceeded
@@ -39,14 +37,14 @@ Default values (默认值):
 
 Parsing rules (解析规则):
 
-All five accessors delegate to :func:`_parse_nonnegative_int`. If an
+All four accessors delegate to :func:`_parse_nonnegative_int`. If an
 environment variable is present but not a valid integer, or is negative (or
 zero when the caller requires strict positivity, e.g. timeouts), the helper
 emits a structured WARNING log and falls back to the documented default
 instead of raising. This keeps misconfigured deployments running with safe
 defaults while still surfacing the problem via the standard log pipeline.
 
-五个访问函数统一委托给 :func:`_parse_nonnegative_int` 解析。若环境变量
+四个访问函数统一委托给 :func:`_parse_nonnegative_int` 解析。若环境变量
 存在但不是合法整数，或者取到了负值（以及超时等字段不允许的 0），辅助
 函数会记录结构化 WARNING 日志，然后回退到对应的默认值，而不再抛出
 异常。这样即便部署侧配置错误，系统也能以安全默认值继续运行，同时
@@ -61,18 +59,15 @@ from dataclasses import dataclass
 from api.structured_logging import get_logger
 
 __all__ = [
-    "ENV_MAX_EMAIL_ATTACHMENT_MB",
     "ENV_MAX_LOCAL_TICKET_MB",
     "ENV_MATERIALS_BUNDLE_TIMEOUT_S",
     "ENV_TICKET_TTL_DAYS",
     "ENV_TICKET_JSON_TTL_DAYS",
-    "DEFAULT_MAX_EMAIL_ATTACHMENT_MB",
     "DEFAULT_MAX_LOCAL_TICKET_MB",
     "DEFAULT_MATERIALS_BUNDLE_TIMEOUT_S",
     "DEFAULT_TICKET_TTL_DAYS",
     "DEFAULT_TICKET_JSON_TTL_DAYS",
     "FeedbackConfig",
-    "max_email_attachment_bytes",
     "max_local_ticket_bytes",
     "materials_bundle_timeout_s",
     "ticket_attachment_ttl_days",
@@ -91,12 +86,6 @@ log = get_logger(__name__)
 
 # --- Environment variable names -------------------------------------------
 # 环境变量名称常量，便于测试与其他模块通过符号引用，避免字符串散落。
-
-ENV_MAX_EMAIL_ATTACHMENT_MB: str = "LUMINA_FEEDBACK_MAX_EMAIL_ATTACHMENT_MB"
-"""Env var: per-attachment email size ceiling in megabytes.
-
-邮件单个附件大小上限（兆字节）的环境变量名。
-"""
 
 ENV_MAX_LOCAL_TICKET_MB: str = "LUMINA_FEEDBACK_MAX_LOCAL_TICKET_MB"
 """Env var: local per-ticket total disk budget in megabytes.
@@ -125,12 +114,6 @@ ENV_TICKET_JSON_TTL_DAYS: str = "LUMINA_FEEDBACK_TICKET_JSON_TTL_DAYS"
 
 # --- Default values --------------------------------------------------------
 # 默认值常量，便于单测在不 set env 的场景直接引用同一份数字。
-
-DEFAULT_MAX_EMAIL_ATTACHMENT_MB: int = 40
-"""Default: 40 MB per outbound email attachment.
-
-默认值：邮件单个附件 40 MB。
-"""
 
 DEFAULT_MAX_LOCAL_TICKET_MB: int = 1024
 """Default: 1024 MB (1 GiB) per ticket directory.
@@ -308,8 +291,6 @@ class FeedbackConfig:
     意外修改。
 
     Attributes:
-        max_email_attachment_bytes: Per-attachment email ceiling in bytes.
-            (邮件单附件上限，字节)
         max_local_ticket_bytes: Per-ticket on-disk budget in bytes.
             (单工单磁盘上限，字节)
         materials_bundle_timeout_s: Materials zip packing timeout in seconds.
@@ -320,40 +301,10 @@ class FeedbackConfig:
             (小文件保留天数)
     """
 
-    max_email_attachment_bytes: int
     max_local_ticket_bytes: int
     materials_bundle_timeout_s: int
     ticket_attachment_ttl_days: int
     ticket_json_ttl_days: int
-
-
-def max_email_attachment_bytes() -> int:
-    """Return the per-attachment email size ceiling in bytes.
-
-    返回邮件单附件大小上限（字节）。
-
-    Reads :data:`ENV_MAX_EMAIL_ATTACHMENT_MB` as an integer number of
-    megabytes and converts to bytes via ``value * 1024 * 1024``. Defaults to
-    :data:`DEFAULT_MAX_EMAIL_ATTACHMENT_MB` (40 MB → ``41_943_040`` bytes)
-    when the env var is unset. Invalid or negative values silently fall back
-    to the default with a WARNING log (see :func:`_parse_nonnegative_int`).
-
-    以兆字节为单位读取环境变量 :data:`ENV_MAX_EMAIL_ATTACHMENT_MB`，通过
-    ``value * 1024 * 1024`` 转换为字节。未设置时回退到
-    :data:`DEFAULT_MAX_EMAIL_ATTACHMENT_MB`（40 MB → ``41_943_040`` 字节）。
-    非法值或负数会静默回退到默认值，并通过
-    :func:`_parse_nonnegative_int` 记录 WARNING 日志。
-
-    Returns:
-        int: Maximum attachment size in bytes.
-    """
-    mb = _parse_nonnegative_int(
-        ENV_MAX_EMAIL_ATTACHMENT_MB,
-        DEFAULT_MAX_EMAIL_ATTACHMENT_MB,
-        allow_zero=True,
-        purpose="per-attachment email size ceiling (MB)",
-    )
-    return mb * 1024 * 1024
 
 
 def max_local_ticket_bytes() -> int:
@@ -487,12 +438,11 @@ def ticket_json_ttl_days() -> int:
 
 
 def load_feedback_config() -> FeedbackConfig:
-    """Snapshot all five feedback-subsystem values at the current moment.
+    """Snapshot all four feedback-subsystem values at the current moment.
 
-    抓取反馈子系统所有五个值的当前快照。
+    抓取反馈子系统所有四个值的当前快照。
 
-    Calls each of the individual accessors (:func:`max_email_attachment_bytes`,
-    :func:`max_local_ticket_bytes`, :func:`materials_bundle_timeout_s`,
+    Calls each of the individual accessors (:func:`max_local_ticket_bytes`, :func:`materials_bundle_timeout_s`,
     :func:`ticket_attachment_ttl_days`, :func:`ticket_json_ttl_days`) once and
     packages the results into a :class:`FeedbackConfig`. Because the accessors
     each re-read ``os.environ``, the snapshot reflects environment state at
@@ -500,8 +450,8 @@ def load_feedback_config() -> FeedbackConfig:
     Invalid or negative env values silently fall back to defaults with a
     WARNING log (see :func:`_parse_nonnegative_int`).
 
-    依次调用五个访问函数
-    （:func:`max_email_attachment_bytes`、:func:`max_local_ticket_bytes`、
+    依次调用四个访问函数
+    （:func:`max_local_ticket_bytes`、
     :func:`materials_bundle_timeout_s`、:func:`ticket_attachment_ttl_days`、
     :func:`ticket_json_ttl_days`），把结果封装成
     :class:`FeedbackConfig`。由于访问函数每次都会重新读取 ``os.environ``，
@@ -514,7 +464,6 @@ def load_feedback_config() -> FeedbackConfig:
         day/second-valued duration fields.
     """
     return FeedbackConfig(
-        max_email_attachment_bytes=max_email_attachment_bytes(),
         max_local_ticket_bytes=max_local_ticket_bytes(),
         materials_bundle_timeout_s=materials_bundle_timeout_s(),
         ticket_attachment_ttl_days=ticket_attachment_ttl_days(),
