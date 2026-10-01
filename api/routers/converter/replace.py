@@ -160,6 +160,7 @@ from .common import (
     _require_session,
     _resolve_material_backing_index,
     load_session_lut_runtime,
+    lut_row_indices_for_colors,
     recompute_gradient_groups_into_session,
 )
 from .async_glb import schedule_glb_build
@@ -1097,12 +1098,10 @@ def _sync_lut_material_matrix_for_diff(
         int(ref_stacks.shape[1]),
     )
     unique_colors = np.unique(updated_rgb[diff_mask], axis=0)
-    for color in unique_colors:
+    lut_rows = lut_row_indices_for_colors(lut_data, unique_colors)
+    for color, lut_row in zip(unique_colors, lut_rows):
         color_mask = np.all(updated_rgb == color, axis=-1) & diff_mask
-        _, lut_idx = kdtree.query(
-            _rgb_to_lab(np.asarray(color, dtype=np.uint8).reshape(1, 3))
-        )
-        stack = ref_stacks[int(np.asarray(lut_idx).reshape(-1)[0])]
+        stack = ref_stacks[int(lut_row)]
         new_material_matrix[color_mask] = np.asarray(
             stack,
             dtype=new_material_matrix.dtype,

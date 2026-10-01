@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from api.app import app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
+from api.routers.converter import replace as replace_module
 from api.routers.converter import similar_recipes as similar_recipes_module
 from api.session_store import SessionStore
 
@@ -145,6 +146,56 @@ def test_similar_recipes_converts_bottom_to_top_lut_stacks(_iso, monkeypatch) ->
     assert body["layer_order"] == "Top2Bottom"
     # The stored Bottom2Top stack [0, 1, 1] is reported viewing face first.
     assert body["items"][0]["recipe"] == [1, 1, 0]
+
+
+class _LastRowWinsTree:
+    """Exact-match Lab lookup that breaks ties toward the last LUT row."""
+
+    def __init__(self, lab: np.ndarray) -> None:
+        self._lab = np.asarray(lab, dtype=np.float64)
+
+    def query(self, points: np.ndarray):
+        points = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+        dist = np.linalg.norm(self._lab[None, :, :] - points[:, None, :], axis=2)
+        flipped = dist[:, ::-1]
+        idx = self._lab.shape[0] - 1 - np.argmin(flipped, axis=1)
+        return dist[np.arange(points.shape[0]), idx], idx
+
+
+def test_similar_recipes_shows_the_stack_that_applying_writes(_iso, monkeypatch) -> None:
+    import cv2
+
+    sid = _seed_lut_session(_iso)
+    lut_rgb = np.array([[255, 80, 55], [255, 80, 55], [250, 250, 250]], dtype=np.uint8)
+    lab = cv2.cvtColor(lut_rgb.reshape(1, -1, 3), cv2.COLOR_RGB2LAB).reshape(-1, 3)
+    runtime = {
+        "lut_rgb": lut_rgb,
+        "ref_stacks": np.array([[1, 1, 1, 1, 0], [1, 1, 0, 1, 0], [0, 0, 0, 0, 0]], dtype=np.int64),
+        "layer_order": "Top2Bottom",
+        "kdtree": _LastRowWinsTree(lab),
+        "predictive_runtime": None,
+    }
+    _patch_runtime(monkeypatch, runtime)
+    monkeypatch.setattr(replace_module, "load_session_lut_runtime", lambda *a, **k: runtime)
+
+    resp = client.post(
+        "/api/convert/similar-recipes",
+        json={"session_id": sid, "target_color": "#ff5037", "limit": 1},
+    )
+    assert resp.status_code == 200, resp.text
+    shown = resp.json()["items"][0]["recipe"]
+
+    # Apply the same colour through the region-replacement stack sync.
+    updated_rgb = np.full((2, 2, 3), [255, 80, 55], dtype=np.uint8)
+    cache = {"material_matrix": np.zeros((2, 2, 5), dtype=np.int32), "color_layers": 5}
+    replace_module._sync_lut_material_matrix_for_diff(
+        {"color_layers": 5, "layer_height_mm": 0.08},
+        cache,
+        np.ones((2, 2), dtype=bool),
+        updated_rgb,
+    )
+    written = [int(v) for v in cache["material_matrix"][0, 0]]
+    assert shown == written == [1, 1, 0, 1, 0]
 
 
 def test_similar_recipes_can_skip_predictive(_iso, monkeypatch) -> None:

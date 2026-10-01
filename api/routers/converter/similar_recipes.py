@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException
@@ -34,6 +35,7 @@ from .common import (
     _require_preview_cache,
     _require_session,
     load_session_lut_runtime,
+    lut_row_indices_for_colors,
 )
 
 router = APIRouter()
@@ -103,6 +105,35 @@ def _predictive_candidates(lut_data: dict) -> tuple[np.ndarray, np.ndarray, str]
     return opencv_lab_to_rgb_uint8(pred_lab), recipes, str(runtime.layer_order)
 
 
+def _with_applied_lut_recipes(
+    candidates: list[SimilarRecipeCandidate],
+    lut_data: dict,
+    ref_stacks: np.ndarray,
+) -> list[SimilarRecipeCandidate]:
+    """Report, for each LUT item, the stack that applying it actually writes.
+    让每条 LUT 推荐展示套用后实际写入的叠层。
+
+    LUT items are applied through region replacement, which resolves the
+    colour back to a LUT row. When several rows share a printed colour that
+    row can differ from the one ranking kept, so the shown recipe follows the
+    replacement lookup instead.
+    LUT 条目经区域替换套用，替换会把颜色重新解析为某一 LUT 行；多行同色时该行
+    可能与排序保留的行不同，因此展示的配方以替换查找结果为准。
+    """
+    lut_positions = [pos for pos, item in enumerate(candidates) if item.source == "lut"]
+    if not lut_positions:
+        return candidates
+    colors = np.asarray([candidates[pos].rgb for pos in lut_positions], dtype=np.uint8)
+    rows = lut_row_indices_for_colors(lut_data, colors)
+    if rows is None:
+        return candidates
+    updated = list(candidates)
+    for pos, row in zip(lut_positions, rows):
+        stack = tuple(int(channel) for channel in ref_stacks[int(row)] if int(channel) >= 0)
+        updated[pos] = replace(updated[pos], recipe=stack)
+    return updated
+
+
 def _lut_suggestions(
     session_data: dict,
     request: SimilarRecipesRequest,
@@ -151,6 +182,7 @@ def _lut_suggestions(
         predictive_rgb=predictive[0] if predictive is not None else None,
         predictive_recipes=predictive[1] if predictive is not None else None,
     )
+    candidates = _with_applied_lut_recipes(candidates, lut_data, ref_stacks)
     source_orders = {"lut": str(lut_data.get("layer_order") or _RESPONSE_LAYER_ORDER)}
     if predictive is not None:
         source_orders["predictive"] = predictive[2]

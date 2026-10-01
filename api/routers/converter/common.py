@@ -720,6 +720,36 @@ def load_session_lut_runtime(
     )
 
 
+def lut_row_indices_for_colors(lut_data: dict, colors: np.ndarray) -> np.ndarray | None:
+    """Return the LUT row region replacement writes for each colour.
+    返回区域替换为每个颜色写入的 LUT 行号。
+
+    Replacement stack sync and similar-recipe suggestions share this lookup,
+    so a suggested recipe is the exact stack that applying it writes, even
+    when the LUT holds several rows with the same printed colour.
+    替换叠层同步与相似配方推荐共用该查找；即使 LUT 中有多行同色，推荐展示的
+    配方也就是套用后实际写入的叠层。
+
+    Args:
+        lut_data: ``load_lut`` runtime payload with a Lab ``kdtree``.
+            (带 Lab ``kdtree`` 的 load_lut 运行时载荷)
+        colors: ``(N, 3)`` sRGB colours. ((N, 3) 的 sRGB 颜色)
+
+    Returns:
+        np.ndarray | None: ``(N,)`` row indices into ``ref_stacks``, or
+            ``None`` when the runtime has no lookup tree. ((N,) 行号；无查找树时为 None)
+    """
+    kdtree = lut_data.get("kdtree")
+    if kdtree is None:
+        return None
+    rgb = np.clip(np.asarray(colors).reshape(-1, 3), 0, 255).astype(np.uint8)
+    if rgb.shape[0] == 0:
+        return np.zeros((0,), dtype=np.int64)
+    lab = cv2.cvtColor(rgb.reshape(1, -1, 3), cv2.COLOR_RGB2LAB).reshape(-1, 3)
+    _, indices = kdtree.query(lab.astype(np.float64))
+    return np.asarray(indices, dtype=np.int64).reshape(-1)
+
+
 def _require_preview_cache(session_data: dict) -> dict:
     cache = session_data.get("preview_cache")
     if cache is None:
