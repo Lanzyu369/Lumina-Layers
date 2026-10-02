@@ -16,6 +16,29 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-10-01",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [{
+      category: { zh: "预览 & 交互", en: "Preview & Interaction" },
+      items: [{
+        zh: "模型覆面选好平面后，视图会从正面显示，图案方向与旁边的二维预览一致；切换页面再回来，也会保留已经调整好的模型角度。",
+        en: "After choosing a model surface, the view now faces it directly with the artwork oriented like the 2D preview. Your model angle is also kept when you leave the page and return.",
+      }],
+    }, {
+      category: { zh: "稳定性", en: "Stability" },
+      items: [{
+        zh: "修复部分带有细小孔洞的复杂图案在模型覆面生成时提示开槽失败的问题。",
+        en: "Fixed pocket-cutting errors when generating some complex surface artwork with tiny holes.",
+      }, {
+        zh: "模型覆面使用材料档案生成时，底模会使用所选的底色材料，与图案共用对应材料槽，不再额外添加默认 PLA。",
+        en: "When generating a model surface from material archives, the base now uses your selected backing material and shares its slot with the artwork, without adding a default PLA material.",
+      }],
+    }],
+  },
+  {
     version: "2026-09-30",
     title: {
       zh: "Lumina Layers — 9 月更新速览",

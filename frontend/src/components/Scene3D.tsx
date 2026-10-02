@@ -903,6 +903,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const modelSurfaceFootprint = useConverterStore((s) => s.modelSurfaceFootprint);
   const modelSurfaceCandidates = useConverterStore((s) => s.modelSurfaceCandidates);
   const modelSurfacePlacement = useConverterStore((s) => s.modelSurfacePlacement);
+  const modelSurfaceModelRotation = useConverterStore((s) => s.modelSurfaceModelRotation);
   const modelSurfaceLoading = useConverterStore((s) => s.modelSurfaceLoading);
   const modelSurfaceSelecting = useConverterStore((s) => s.modelSurfaceSelecting);
   const imagePreviewUrl = useConverterStore((s) => s.imagePreviewUrl);
@@ -1448,6 +1449,8 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             footprint={modelSurfaceFootprint}
             surfaceCandidates={modelSurfaceCandidates}
             placement={modelSurfacePlacement}
+            modelRotation={modelSurfaceModelRotation}
+            selectionId={modelSurfaceSelectionId}
             bedGridVisible={modelSurfaceBedGridVisible}
             selectionReady={Boolean(modelSurfaceSelectionId)}
             selecting={modelSurfaceLoading || modelSurfaceSelecting}

@@ -19,6 +19,7 @@ from core.model_surface.assembly import (
     MODEL_SURFACE_DISPLAY_LAYER_HEIGHTS_KEY,
     MODEL_SURFACE_DISPLAY_Z_BOUNDS_KEY,
     MODEL_SURFACE_LOGICAL_XY_BOUNDS_KEY,
+    MODEL_SURFACE_PROJECT_SLOT_NAMES_KEY,
     OverlaySceneResult,
     PreparedSurfacePattern,
     apply_model_transform_to_overlay_scene,
@@ -35,6 +36,7 @@ from core.model_surface.types import (
     ModelSurfaceError,
     SurfaceFootprint,
 )
+from core.pipeline.preview_color_utils import resolve_material_preview
 
 
 # Shapely materializes one Polygon object per upward cap triangle before its
@@ -70,6 +72,29 @@ def build_surface_overlay_scene(
     if ctx.get("error"):
         raise ModelSurfaceError(str(ctx["error"]))
     face_orientation = str(ctx.get("bambu_face_orientation", "down") or "down")
+    base_color = (245, 245, 245)
+    project_materials: dict[str, tuple[int, int, int]] = {}
+    project_slot_names: tuple[str, ...] = ()
+    if ctx.get("material_source") == "material_archive":
+        project_slot_names = tuple(ctx["slot_names"])
+        backing_index = ctx.get("material_backing_material_index")
+        if backing_index is None:
+            backing_index = ctx.get("material_base_channel_idx", 0)
+        styles = [resolve_material_preview(
+            material_id=index,
+            slot_names=ctx["slot_names"],
+            preview_colors=ctx.get("preview_colors"),
+            color_conf=ctx.get("color_conf"),
+        ) for index in range(len(ctx["slot_names"]))]
+        base_style = styles[int(backing_index)]
+        if not base_style.is_resolved:
+            raise ModelSurfaceError("Converter did not resolve the surface backing material.")
+        loaded.mesh.metadata["bambu_material_name"] = base_style.material_name
+        base_color = base_style.rgba[:3]
+        project_materials = {
+            style.material_name: style.rgba[:3]
+            for style in styles if style.is_resolved
+        }
     pattern_scene = _build_pattern_scene(
         ctx,
         _take_vector_scene_ownership=True,
@@ -87,9 +112,12 @@ def build_surface_overlay_scene(
         footprint=footprint,
         pocket_depth_mm=pocket_depth_mm,
         base_slot_name="surface_base",
-        base_color=(245, 245, 245),
+        base_color=base_color,
         _take_pattern_ownership=True,
     )
+    if project_slot_names:
+        overlay.scene.metadata[MODEL_SURFACE_PROJECT_SLOT_NAMES_KEY] = project_slot_names
+        overlay.preview_colors.update(project_materials)
     transformed_overlay = apply_model_transform_to_overlay_scene(
         overlay,
         model_transform,

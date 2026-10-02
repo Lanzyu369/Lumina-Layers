@@ -1,14 +1,65 @@
 from __future__ import annotations
 
+import numpy as np
 import pytest
 import shapely.geometry as sg
 import trimesh
+from shapely.ops import unary_union
 
 from core.model_surface.assembly import (
-    _build_polygon_prism_mesh,
     cut_surface_pocket,
 )
 from core.model_surface.types import PlaneFrame, SurfaceFootprint
+
+
+def test_cut_surface_pocket_preserves_tiny_holes():
+    polygon = sg.Polygon(
+        [(40.10950907447116, -36.6471159409076),
+         (40.10950907447116, 36.43138405909241),
+         (-31.303589598272552, 36.43138405909241),
+         (-31.303589598272552, -36.6471159409076)],
+        holes=[
+            [(19.87440945055289, -28.323515940907598),
+             (19.612209455426054, -28.548615940907595),
+             (19.78650945218658, -28.4011159409076)],
+            [(-16.839689867093014, -28.260015940907593),
+             (-16.66158987040312, -28.25091594090759),
+             (-16.211789878762914, -28.2148159409076)],
+            [(8.042709670452311, -28.373515940907595),
+             (7.869609673669473, -28.38621594090759),
+             (7.8991096731212025, -28.386415940907597)],
+            [(7.4256096819215, -28.4802159409076),
+             (7.425709681919628, -28.4803159409076),
+             (8.042709670452311, -28.373515940907595)],
+            [(7.817209674643365, -28.385715940907602),
+             (7.6940096769331205, -28.3792159409076),
+             (7.757209675758503, -28.3852159409076)],
+        ],
+    )
+    base = trimesh.creation.box(extents=(100.0, 100.0, 3.0))
+    base.metadata["material_slot"] = 3
+    min_x, min_y, max_x, max_y = polygon.bounds
+    footprint = SurfaceFootprint(
+        frame=PlaneFrame((0, 0, 1.5), (0, 0, 1), (1, 0, 0), (0, 1, 0)),
+        outer=tuple(polygon.exterior.coords),
+        holes=tuple(tuple(ring.coords) for ring in polygon.interiors),
+        bounds_min=(min_x, min_y), bounds_max=(max_x, max_y),
+        bounds_width_mm=max_x - min_x, bounds_height_mm=max_y - min_y,
+        area_mm2=polygon.area, hole_count=len(polygon.interiors),
+    )
+
+    cut = cut_surface_pocket(base, footprint, pocket_depth_mm=0.64)
+
+    assert cut.is_volume
+    np.testing.assert_allclose(cut.bounds, base.bounds)
+    assert base.volume - cut.volume == pytest.approx(polygon.area * 0.66, abs=1e-5)
+    assert cut.metadata["material_slot"] == 3
+    top_triangles = cut.triangles[np.all(np.isclose(cut.triangles[:, :, 2], 1.5), axis=1)]
+    top = unary_union([sg.Polygon(triangle[:, :2]) for triangle in top_triangles])
+    # Every uncut hole retains material at the original top, including tiny holes.
+    for ring in polygon.interiors:
+        point = sg.Polygon(ring).representative_point()
+        assert top.covers(point)
 
 
 def test_cut_surface_pocket_preserves_outer_extents():
@@ -75,7 +126,7 @@ def test_cut_surface_pocket_preserves_reversed_inner_cavity() -> None:
     assert cut.volume == pytest.approx(base.volume, abs=1.0)
 
 
-def test_polygon_prism_is_volume_with_nearly_duplicate_boundary_vertices():
+def test_cut_surface_pocket_handles_nearly_duplicate_boundary_vertices():
     polygon = sg.Polygon(
         (
             (0.9710505662045676, 0.0),
@@ -92,7 +143,17 @@ def test_polygon_prism_is_volume_with_nearly_duplicate_boundary_vertices():
         )
     )
 
-    prism = _build_polygon_prism_mesh(polygon, height_mm=0.44)
+    base = trimesh.creation.box(extents=(4, 4, 3))
+    min_x, min_y, max_x, max_y = polygon.bounds
+    footprint = SurfaceFootprint(
+        frame=PlaneFrame((0, 0, 1.5), (0, 0, 1), (1, 0, 0), (0, 1, 0)),
+        outer=tuple(polygon.exterior.coords), holes=(),
+        bounds_min=(min_x, min_y), bounds_max=(max_x, max_y),
+        bounds_width_mm=max_x - min_x, bounds_height_mm=max_y - min_y,
+        area_mm2=polygon.area, hole_count=0,
+    )
 
-    assert prism.is_volume
-    assert prism.volume == pytest.approx(polygon.area * 0.44, rel=1e-6)
+    cut = cut_surface_pocket(base, footprint, pocket_depth_mm=0.4)
+
+    assert cut.is_volume
+    assert base.volume - cut.volume == pytest.approx(polygon.area * 0.42, rel=1e-6)

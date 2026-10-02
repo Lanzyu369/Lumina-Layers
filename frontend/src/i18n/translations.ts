@@ -178,8 +178,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "The selected surface is too thin for the current colour stack. Use fewer layers, a smaller layer height, or a thicker surface.",
   },
   api_error_model_surface_boolean_failed: {
-    zh: "无法在所选表面安全开槽。请修复模型，或选择更简单的表面。",
-    en: "The selected surface could not be cut safely. Repair the model or choose a simpler surface.",
+    zh: "模型覆面开槽计算失败。请提交问题反馈，并附上模型和图片。",
+    en: "Model-surface pocket calculation failed. Submit a bug report with the model and artwork attached.",
   },
   api_error_http_429: {
     zh: "请求过于频繁，请稍后再试。",
