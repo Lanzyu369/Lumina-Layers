@@ -106,25 +106,27 @@ def matched_rgb_strategy(draw: st.DrawFn):
 # **Validates: Requirements 1.1, 1.2, 1.4**
 # ============================================================================
 
+@pytest.mark.parametrize("kernel", ["shapely_v1", "rasterio_manifold3d"])
 @settings(
     max_examples=100,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
 @given(data=matched_rgb_strategy())
-def test_glb_segmentation_correctness(tmp_path, data):
+def test_glb_segmentation_correctness(tmp_path, monkeypatch, kernel, data):
     """Property 1: GLB 分段正确性
 
     For any valid preview cache (with matched_rgb and mask_solid),
     generate_segmented_glb() should produce a GLB file satisfying:
     (a) Each unique color maps to exactly one Mesh node
     (b) Each Mesh is named color_<hex> (6-digit lowercase hex)
-    (c) Each Mesh's face color matches the hex in its name
+    (c) Each Mesh's display color matches the hex in its name
     (d) Each Mesh's vertex min Z = 0 (Pivot Point constraint)
 
     ``tmp_path`` is reused across all hypothesis examples; each example
     writes-reads-asserts sequentially, so file overwrites within the test
     are safe and never observable to other tests.
     """
+    monkeypatch.setenv("LUMINA_GLB_KERNEL", kernel)
     matched_rgb, mask_solid, expected_unique_colors = data
     cache = _make_cache(matched_rgb, mask_solid)
 
@@ -175,19 +177,28 @@ def test_glb_segmentation_correctness(tmp_path, data):
 
         # (b) Name format already validated by regex match above
 
-        # (c) Face color matches the hex in the name
-        face_colors = mesh.visual.face_colors  # (N, 4) RGBA
-        assert face_colors is not None and len(face_colors) > 0, (
-            f"Mesh {node_name} has no face colors"
+        # (c) Both per-face and material-only exports must display the named RGB.
+        if isinstance(mesh.visual, trimesh.visual.TextureVisuals):
+            material = mesh.visual.material
+            assert isinstance(material, trimesh.visual.material.PBRMaterial)
+            assert material.baseColorTexture is None
+            material_rgba = np.asarray(material.baseColorFactor)
+            assert material_rgba.shape == (4,), (
+                f"Mesh {node_name} has no RGBA material color"
+            )
+            unique_rgb = material_rgba[:3].reshape(1, 3)
+        else:
+            face_colors = mesh.visual.face_colors
+            assert face_colors is not None and len(face_colors) > 0, (
+                f"Mesh {node_name} has no face colors"
+            )
+            unique_rgb = np.unique(face_colors[:, :3], axis=0)
+        assert len(unique_rgb) == 1, (
+            f"Mesh {node_name} has {len(unique_rgb)} distinct RGB values, expected 1"
         )
-        # All faces should share the same RGB (alpha may vary)
-        unique_face_rgb = np.unique(face_colors[:, :3], axis=0)
-        assert len(unique_face_rgb) == 1, (
-            f"Mesh {node_name} has {len(unique_face_rgb)} distinct face RGB values, expected 1"
-        )
-        actual_r, actual_g, actual_b = unique_face_rgb[0]
+        actual_r, actual_g, actual_b = unique_rgb[0]
         assert (actual_r, actual_g, actual_b) == (expected_r, expected_g, expected_b), (
-            f"Mesh {node_name} face color ({actual_r},{actual_g},{actual_b}) "
+            f"Mesh {node_name} display color ({actual_r},{actual_g},{actual_b}) "
             f"does not match name hex ({expected_r},{expected_g},{expected_b})"
         )
 

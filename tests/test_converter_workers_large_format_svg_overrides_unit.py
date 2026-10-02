@@ -213,7 +213,12 @@ def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
     real_export = bambu_writer_module.export_scene_with_bambu_metadata
 
     def _capture_export(**kwargs):
-        merged_mesh = kwargs["scene"].geometry["Red"]
+        scene = kwargs["scene"]
+        assert set(scene.geometry) == {"Red"}
+        merged_mesh = scene.geometry["Red"]
+        assert len(merged_mesh.vertices) == 16
+        assert len(merged_mesh.faces) == 24
+        assert merged_mesh.metadata["bambu_material_name"] == "Red"
         captured_ranges.append(get_mesh_export_part_ranges(merged_mesh))
         return real_export(**kwargs)
 
@@ -225,10 +230,7 @@ def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
         patch(
             "core.vector_engine._concatenate_meshes_fast",
             wraps=vector_engine_module._concatenate_meshes_fast,
-        ) as bounded_concat,
-        patch(
-            "core.vector_engine._enforce_vector_mesh_runtime_headroom",
-        ) as memory_guard,
+        ) as concatenate_meshes,
         patch(
             "api.workers.converter_workers._rasterize_tile_for_cover",
             return_value=None,
@@ -244,17 +246,9 @@ def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
             params,
         )
 
-    bounded_concat.assert_called_once()
+    concatenate_meshes.assert_called_once()
     assert len(captured_ranges) == 1
     assert captured_ranges[0] == ()
-    assert any(
-        call.kwargs.get("stage") == "large_format_vector_board_merge"
-        for call in memory_guard.call_args_list
-    )
-    assert any(
-        call.kwargs.get("stage") == "large_format_vector_3mf_export"
-        for call in memory_guard.call_args_list
-    )
 
     try:
         with zipfile.ZipFile(result["zip_path"]) as package:

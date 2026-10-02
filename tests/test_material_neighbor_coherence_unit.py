@@ -362,8 +362,15 @@ def test_blockwise_top_k_preserves_duplicate_ties_across_k_boundary(
     np.testing.assert_array_equal(actual_distances, expected_distances)
 
 
-def test_blockwise_top_k_caps_workers_to_total_distance_budget(
+@pytest.mark.parametrize(
+    ("block_size", "parallelism", "expected_workers"),
+    [(1, 4, [4]), (2, 4, [2]), (1, 2, [2]), (None, 4, [])],
+)
+def test_blockwise_top_k_uses_requested_workers_for_available_blocks(
     monkeypatch: pytest.MonkeyPatch,
+    block_size: int | None,
+    parallelism: int,
+    expected_workers: list[int],
 ) -> None:
     observed_workers: list[int] = []
 
@@ -390,13 +397,12 @@ def test_blockwise_top_k_caps_workers_to_total_distance_budget(
         target_lab=target_lab,
         candidate_lab=candidate_lab,
         top_k=8,
-        parallelism=4,
-        memory_budget_bytes=512,
+        block_size=block_size,
+        parallelism=parallelism,
     )
 
-    # One distance row is 32 * float64 = 256 bytes, so a 512-byte total
-    # budget permits at most two concurrent workers.
-    assert observed_workers == [2]
+    # Only multiple available blocks need a pool; one block stays serial.
+    assert observed_workers == expected_workers
     np.testing.assert_array_equal(actual_indices, expected_indices)
     np.testing.assert_array_equal(actual_distances, expected_distances)
 

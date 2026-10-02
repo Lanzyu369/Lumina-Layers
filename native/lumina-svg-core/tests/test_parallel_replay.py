@@ -197,18 +197,34 @@ def test_parallel_normalization_failure_replays_in_document_order(
         f"<rect x='{index * 10}' width='8' height='10'/>"
         for index in range(7)
     ]
-    # A three-point miter at the join threshold fails during normalization.
-    # Unlike billions of tiny dashes, this does not rely on a resource quota.
+    # The normal viewport proves these commands pass the stroke sizing pass.
+    # A large empty viewport changes only the final normalization grid; its
+    # finite miter refinement then fails without generating extra geometry.
     paints.insert(
         failing_paint_index,
-        "<path d='M2 2L10 2L3 5.872983346207417' fill='none' "
+        "<path d='M10 10L20 10L10.603 13.42' fill='none' "
         "stroke='red' stroke-width='2' stroke-linejoin='miter' "
         "stroke-miterlimit='4'/>",
     )
-    svg = "<svg viewBox='0 0 100 10'>" + "".join(paints) + "</svg>"
+    document = "<svg viewBox='0 0 {extent} {extent}'>" + "".join(paints) + "</svg>"
+    normal_svg = document.format(extent="100")
+    svg = document.format(extent="1e24")
     recorded = lumina_svg_core.record_paint_commands_svg(svg)
+    normal_recorded = lumina_svg_core.record_paint_commands_svg(normal_svg)
     assert recorded.status == "supported"
+    assert normal_recorded.status == "supported"
     assert len(recorded.commands) == 8
+    for command, normal_command in zip(
+        recorded.commands, normal_recorded.commands, strict=True,
+    ):
+        assert command.path_points == normal_command.path_points
+        assert command.matrix == normal_command.matrix
+
+    monkeypatch.setenv("LUMINA_SVG_REPLAY_THREADS", "4")
+    normal = _analyze(normal_svg)
+    assert normal.status == "supported"
+    assert normal.replay_worker_count == 4
+    assert normal.raw.geometry_count == 8
 
     monkeypatch.setenv("LUMINA_SVG_REPLAY_THREADS", "1")
     serial = _analyze(svg)
@@ -219,6 +235,7 @@ def test_parallel_normalization_failure_replays_in_document_order(
     assert serial.status == retried.status == "unsupported"
     assert serial.reason_code == retried.reason_code == "unsupported_input_precision"
     assert serial.input_paint_count == retried.input_paint_count == 8
+    assert serial.max_flattening_error_mm == retried.max_flattening_error_mm == 0.0
     assert _result_snapshot(retried) == _result_snapshot(serial)
 
 
