@@ -45,6 +45,10 @@ import { StatusBanner, workstationInputClass } from "../ui/panelPrimitives";
 import { type ImageRotationDegrees } from "../../utils/imageRotation";
 import { WIKI_DOCS } from "../../utils/wikiDocs";
 import {
+  resolveLargeFormatTileGrid,
+  resolveLargeFormatTotalHeightMm,
+} from "../../utils/largeFormatTileLayout";
+import {
   buildLutCatalogIndex,
   getBucketDisplayColorMode,
   listBucketsForManufacturer,
@@ -329,6 +333,9 @@ export default function BasicSettings() {
     puzzleEnabled,
     tileWidthMm,
     tileHeightMm,
+    largeFormatTileOverlayVisible,
+    previewPixelWidth,
+    previewPixelHeight,
     previewImageUrl,
     previewWarnings,
     generatedLargeFormatWarnings,
@@ -411,6 +418,9 @@ export default function BasicSettings() {
     puzzleEnabled: s.puzzleEnabled,
     tileWidthMm: s.tileWidthMm,
     tileHeightMm: s.tileHeightMm,
+    largeFormatTileOverlayVisible: s.largeFormatTileOverlayVisible,
+    previewPixelWidth: s.previewPixelWidth,
+    previewPixelHeight: s.previewPixelHeight,
     previewImageUrl: s.previewImageUrl,
     previewWarnings: s.previewWarnings,
     generatedLargeFormatWarnings: s.largeFormatWarnings,
@@ -578,6 +588,9 @@ export default function BasicSettings() {
   const setLargeFormatEnabled = useConverterStore((s) => s.setLargeFormatEnabled);
   const setTileWidthMm = useConverterStore((s) => s.setTileWidthMm);
   const setTileHeightMm = useConverterStore((s) => s.setTileHeightMm);
+  const setLargeFormatTileOverlayVisible = useConverterStore(
+    (s) => s.setLargeFormatTileOverlayVisible,
+  );
   const setModelSurfaceEnabled = useConverterStore((s) => s.setModelSurfaceEnabled);
   const uploadModelSurfaceFile = useConverterStore((s) => s.uploadModelSurfaceFile);
   const clearModelSurface = useConverterStore((s) => s.clearModelSurface);
@@ -1210,12 +1223,31 @@ export default function BasicSettings() {
 
   const tileGrid = useMemo(() => {
     if (!largeFormatEnabled) return null;
-    const cols = Math.max(1, Math.ceil(target_width_mm / tileWidthMm));
-    const rows = Math.max(1, Math.ceil(target_height_mm / tileHeightMm));
-    const lastW = Math.round(target_width_mm - (cols - 1) * tileWidthMm);
-    const lastH = Math.round(target_height_mm - (rows - 1) * tileHeightMm);
-    return { cols, rows, total: cols * rows, lastW, lastH };
-  }, [largeFormatEnabled, target_width_mm, target_height_mm, tileWidthMm, tileHeightMm]);
+    // Match the height the backend derives for large-format generation.
+    const grid = resolveLargeFormatTileGrid(
+      target_width_mm,
+      resolveLargeFormatTotalHeightMm(
+        target_width_mm,
+        target_height_mm,
+        previewPixelWidth,
+        previewPixelHeight,
+      ),
+      tileWidthMm,
+      tileHeightMm,
+    );
+    if (!grid) return null;
+    const lastW = Math.round(grid.lastColumnWidthMm);
+    const lastH = Math.round(grid.lastRowHeightMm);
+    return { cols: grid.cols, rows: grid.rows, total: grid.total, lastW, lastH };
+  }, [
+    largeFormatEnabled,
+    target_width_mm,
+    target_height_mm,
+    previewPixelWidth,
+    previewPixelHeight,
+    tileWidthMm,
+    tileHeightMm,
+  ]);
 
   const mergedLargeFormatWarnings = useMemo(
     () =>
@@ -1287,6 +1319,7 @@ export default function BasicSettings() {
           </div>
         </div>
       ) : null}
+      <div data-tutorial="image-upload">
       {uploaderExpanded ? (
         <UnifiedUploader
           singlePreview={imagePreviewUrl ?? undefined}
@@ -1319,6 +1352,7 @@ export default function BasicSettings() {
           </span>
         </button>
       )}
+      </div>
 
       {workshopSource ? (
         <WorkshopSourceBanner
@@ -1487,14 +1521,16 @@ export default function BasicSettings() {
         )}
       </div>
 
-      <RadioGroup
-        label={t("basic_source_version_label")}
-        tooltip={t("basic_source_version_hint")}
-        wikiPath={WIKI_DOCS.sourceType}
-        value={source_version}
-        options={sourceVersionOptions}
-        onChange={(value) => setSourceVersion(value as "legacy" | "native" | "material")}
-      />
+      <div data-tutorial="color-source">
+        <RadioGroup
+          label={t("basic_source_version_label")}
+          tooltip={t("basic_source_version_hint")}
+          wikiPath={WIKI_DOCS.sourceType}
+          value={source_version}
+          options={sourceVersionOptions}
+          onChange={(value) => setSourceVersion(value as "legacy" | "native" | "material")}
+        />
+      </div>
 
       {source_version === "material" ? (
         <div className="-mt-1 flex flex-col gap-3 rounded-lg border border-slate-200/60 bg-slate-100/50 p-3 dark:border-slate-700/40 dark:bg-slate-900/40">
@@ -1822,31 +1858,33 @@ export default function BasicSettings() {
         </>
       ) : null}
 
-      <Slider
-        label={t("basic_width")}
-        tooltip={t("basic_width_hint")}
-        wikiPath={WIKI_DOCS.outputDimensions}
-        value={target_width_mm}
-        min={10}
-        max={dimMax}
-        inputMax={dimInputMax}
-        step={dimensionSliderStep(target_width_mm)}
-        unit="mm"
-        onChange={setTargetWidthMm}
-      />
+      <div data-tutorial="output-size" className="flex flex-col gap-4">
+        <Slider
+          label={t("basic_width")}
+          tooltip={t("basic_width_hint")}
+          wikiPath={WIKI_DOCS.outputDimensions}
+          value={target_width_mm}
+          min={10}
+          max={dimMax}
+          inputMax={dimInputMax}
+          step={dimensionSliderStep(target_width_mm)}
+          unit="mm"
+          onChange={setTargetWidthMm}
+        />
 
-      <Slider
-        label={t("basic_height")}
-        tooltip={t("basic_height_hint")}
-        wikiPath={WIKI_DOCS.outputDimensions}
-        value={target_height_mm}
-        min={10}
-        max={dimMax}
-        inputMax={dimInputMax}
-        step={dimensionSliderStep(target_height_mm)}
-        unit="mm"
-        onChange={setTargetHeightMm}
-      />
+        <Slider
+          label={t("basic_height")}
+          tooltip={t("basic_height_hint")}
+          wikiPath={WIKI_DOCS.outputDimensions}
+          value={target_height_mm}
+          min={10}
+          max={dimMax}
+          inputMax={dimInputMax}
+          step={dimensionSliderStep(target_height_mm)}
+          unit="mm"
+          onChange={setTargetHeightMm}
+        />
+      </div>
 
       <Checkbox
         label={t("basic_large_format")}
@@ -1907,6 +1945,12 @@ export default function BasicSettings() {
                 : ""}
             </div>
           )}
+          <Checkbox
+            label={t("basic_large_format_show_tiles")}
+            checked={largeFormatTileOverlayVisible}
+            onChange={setLargeFormatTileOverlayVisible}
+            tooltip={t("basic_large_format_show_tiles_hint")}
+          />
         </div>
       )}
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import json
 import sys
 from types import SimpleNamespace
 import weakref
@@ -720,6 +721,52 @@ def test_build_surface_overlay_scene_orients_selected_face_toward_build_plate(
     np.testing.assert_allclose(artwork_bounds[:, 0], [7.0, 9.0], atol=1e-6)
     np.testing.assert_allclose(artwork_bounds[:, 2], [0.0, 0.4], atol=1e-6)
     np.testing.assert_allclose(result.scene.bounds[:, 2], [0.0, 2.0], atol=1e-6)
+
+
+@pytest.mark.parametrize("backing_index, expected_index", [(0, 0), (3, 3), (None, 2)])
+def test_surface_base_reuses_selected_material_and_preserves_unused_palette(
+    monkeypatch, tmp_path, backing_index, expected_index,
+):
+    base = trimesh.creation.box(extents=(20, 10, 3))
+    names = ["PETG Red", "PETG Yellow", "PETG White", "PETG Blue"]
+    colors = {0: (230, 10, 20), 1: (230, 220, 10), 2: (240, 240, 235), 3: (10, 20, 230)}
+    ctx = {
+        "material_source": "material_archive", "material_backing_material_index": backing_index,
+        "material_base_channel_idx": 2, "slot_names": names, "preview_colors": colors,
+        "bambu_face_orientation": "down",
+    }
+    pattern_mesh = trimesh.creation.box(extents=(2, 2, .08))
+    pattern_mesh.apply_translation((1, 1, .04))
+    pattern = PreparedSurfacePattern(trimesh.Scene({names[0]: pattern_mesh}), sg.box(0, 0, 2, 2))
+    footprint = SurfaceFootprint(
+        frame=PlaneFrame((0, 0, 1.5), (0, 0, 1), (1, 0, 0), (0, 1, 0)),
+        outer=((-10, -5), (10, -5), (10, 5), (-10, 5)), holes=(),
+        bounds_min=(-10, -5), bounds_max=(10, 5),
+        bounds_width_mm=20, bounds_height_mm=10, area_mm2=200, hole_count=0,
+    )
+    monkeypatch.setattr("core.model_surface.pipeline.load_model_surface_mesh", lambda _: SimpleNamespace(mesh=base))
+    monkeypatch.setattr("core.model_surface.pipeline.build_image_model_context", lambda **_: ctx)
+    monkeypatch.setattr("core.model_surface.pipeline._build_pattern_scene", lambda *_, **__: pattern)
+
+    overlay = build_surface_overlay_scene(model_path="model.stl", artwork_image_path="art.png",
+        lut_path="unused.npy", converter_params={}, footprint=footprint, pocket_depth_mm=.08)
+
+    assert overlay.scene.geometry["surface_base"].metadata["bambu_material_name"] == names[expected_index]
+    assert overlay.preview_colors["surface_base"] == colors[expected_index]
+    assert overlay.project_slot_names == names
+    output = tmp_path / "surface-material.3mf"
+    export_scene_with_bambu_metadata(scene=overlay.scene, output_path=str(output),
+        slot_names=overlay.slot_names, preview_colors=overlay.preview_colors,
+        project_slot_names=overlay.project_slot_names, settings={}, printer_id="bambu-p2s",
+        enable_wipe_tower_auto_placement=False)
+    with zipfile.ZipFile(output) as archive:
+        project = json.loads(archive.read("Metadata/project_settings.config"))
+        model_settings = ET.fromstring(archive.read("Metadata/model_settings.config"))
+    assert project["filament_type"] == ["PETG"] * 4
+    assert len(project["filament_colour"]) == 4
+    parts = model_settings.findall("./object/part")
+    base_part = next(p for p in parts if p.find("./metadata[@key='name']").get("value") == "surface_base")
+    assert base_part.find("./metadata[@key='extruder']").get("value") == str(expected_index + 1)
 
 
 def test_pattern_logical_xy_bounds_reject_geometry_outside_canvas():

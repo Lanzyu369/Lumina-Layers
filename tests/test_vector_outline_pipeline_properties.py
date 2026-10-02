@@ -444,7 +444,7 @@ def test_vector_outline_height_matches_structure_mode(
     assert float(outline_mesh.bounds[1, 2]) == pytest.approx(expected_height)
 
 
-def test_vector_outline_uses_one_canonical_build_and_runtime_guards() -> None:
+def test_vector_outline_uses_one_canonical_build_for_closed_material_ring() -> None:
     """Outline preparation stays on the unified physical-grid path."""
 
     from core.pipeline import vector_branch
@@ -462,15 +462,10 @@ def test_vector_outline_uses_one_canonical_build_and_runtime_guards() -> None:
         "enable_coating": False,
     }
 
-    with (
-        patch(
-            "core.vector_engine._enforce_vector_mesh_runtime_headroom",
-        ) as guard_mock,
-        patch(
-            "core.pipeline.vector_branch.build_vector_layered_volume",
-            wraps=vector_branch.build_vector_layered_volume,
-        ) as build_mock,
-    ):
+    with patch(
+        "core.pipeline.vector_branch.build_vector_layered_volume",
+        wraps=vector_branch.build_vector_layered_volume,
+    ) as build_mock:
         outline_mesh = _generate_vector_outline_mesh(
             analysis=analysis,
             outline_width_mm=2.0,
@@ -481,10 +476,19 @@ def test_vector_outline_uses_one_canonical_build_and_runtime_guards() -> None:
 
     assert outline_mesh is not None
     build_mock.assert_called_once()
-    stages = {call.kwargs["stage"] for call in guard_mock.call_args_list}
-    assert "vector_outline_union" in stages
-    assert "vector_outline_ring" in stages
-    assert "vector_outline_canonical_geometry" in stages
+    assert outline_mesh.is_watertight
+    assert outline_mesh.is_winding_consistent
+    assert outline_mesh.volume > 0.0
+    assert outline_mesh.metadata["name"] == "Outline"
+    assert outline_mesh.metadata["bambu_material_name"] == "White"
+    assert np.unique(outline_mesh.visual.face_colors, axis=0).tolist() == [
+        [255, 255, 255, 255]
+    ]
+    [slab] = build_mock.call_args.args[0]
+    source_fill = unary_union(
+        [shape["geometry"] for shape in analysis.matched_shapes]
+    )
+    assert slab["geometry"].intersection(source_fill).area == pytest.approx(0.0)
 
 
 def test_double_sided_vector_outline_stays_between_coating_faces() -> None:

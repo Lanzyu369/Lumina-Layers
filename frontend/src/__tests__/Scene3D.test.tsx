@@ -47,6 +47,13 @@ vi.mock("../components/ModelSurfaceSelector3D", () => ({
     return <div data-testid="mock-model-surface-selector" />;
   },
 }));
+let capturedLargeFormatTileOverlayProps: Record<string, unknown> | null = null;
+vi.mock("../components/LargeFormatTileOverlay3D", () => ({
+  default: (props: Record<string, unknown>) => {
+    capturedLargeFormatTileOverlayProps = props;
+    return <div data-testid="mock-large-format-tile-overlay" />;
+  },
+}));
 let capturedFridgeMagnet3DProps: Record<string, unknown> | null = null;
 vi.mock("../components/FridgeMagnet3D", () => ({
   default: (props: Record<string, unknown>) => {
@@ -251,6 +258,7 @@ beforeEach(() => {
     capturedKeychainRingProps = null;
     capturedModelSurfaceSelectorProps = null;
     capturedFridgeMagnet3DProps = null;
+    capturedLargeFormatTileOverlayProps = null;
     document.body.classList.remove("lumina-canvas-orbiting");
     // Reset the shared useThree state so each test gets a fresh renderer /
     // scene snapshot while every hook call within that test still sees
@@ -280,6 +288,10 @@ beforeEach(() => {
         layer_height_mm: 0.08,
         puzzleEnabled: false,
         puzzleOverlayUrl: null,
+        largeFormatEnabled: false,
+        largeFormatTileOverlayVisible: true,
+        tileWidthMm: 250,
+        tileHeightMm: 250,
         selectedColor: null,
         layerImages: [],
         layerImagesLoading: false,
@@ -794,6 +806,101 @@ beforeEach(() => {
     });
   });
 
+  describe("large-format tile outline wiring", () => {
+    function renderLargeFormatPreview() {
+      useConverterStore.setState({
+        previewGlbUrl: "/api/files/large-preview.glb",
+        largeFormatEnabled: true,
+        tileWidthMm: 250,
+        tileHeightMm: 250,
+        target_width_mm: 600,
+        target_height_mm: 400,
+        preview_width_mm: 60,
+        preview_height_mm: 40,
+        previewPixelWidth: null,
+        previewPixelHeight: null,
+        modelBounds: { minX: -28, maxX: 28, minY: -20, maxY: 20, maxZ: 2 },
+      } as never);
+      render(<Scene3D />);
+    }
+
+    it("anchors the outline to the scaled artwork canvas, not the trimmed model", () => {
+      renderLargeFormatPreview();
+
+      const onBoundsChange = capturedInteractiveViewerProps
+        ?.onPreviewCanvasBoundsChange as ((
+          sourceUrl: string,
+          bounds: Record<string, number> | null,
+        ) => void) | undefined;
+      act(() =>
+        onBoundsChange?.("/api/files/large-preview.glb", {
+          minX: -30,
+          maxX: 30,
+          minY: -20,
+          maxY: 20,
+          maxZ: 0,
+        }),
+      );
+
+      expect(screen.getByTestId("mock-large-format-tile-overlay")).toBeInTheDocument();
+      expect(capturedLargeFormatTileOverlayProps).toMatchObject({
+        totalWidthMm: 600,
+        totalHeightMm: 400,
+        tileWidthMm: 250,
+        tileHeightMm: 250,
+      });
+      // 60 mm preview displayed at 600 mm -> scale 10 around the model center.
+      const bounds = capturedLargeFormatTileOverlayProps?.bounds as Record<string, number>;
+      expect(bounds.minX).toBeCloseTo(-300);
+      expect(bounds.maxX).toBeCloseTo(300);
+      expect(bounds.minY).toBeCloseTo(-200);
+      expect(bounds.maxY).toBeCloseTo(200);
+      // Floats above the color layer top (backing + default 0.4 mm color layer).
+      const colorTopZ = useConverterStore.getState().spacer_thick + 0.4;
+      expect(capturedLargeFormatTileOverlayProps?.z as number).toBeGreaterThan(colorTopZ);
+    });
+
+    it("uses the backend-derived height when the browser aspect ratio differs", () => {
+      renderLargeFormatPreview();
+      act(() => {
+        // SVG case: browser reports 600 x 400 mm but the backend preview
+        // cache ratio is 600 x 520, and generation derives the height from it.
+        useConverterStore.setState({ previewPixelWidth: 600, previewPixelHeight: 520 });
+      });
+      expect(capturedLargeFormatTileOverlayProps).toMatchObject({
+        totalWidthMm: 600,
+        totalHeightMm: 520,
+      });
+    });
+
+    it("hides the outline when the preview toggle or large-format mode is off", () => {
+      renderLargeFormatPreview();
+      expect(screen.getByTestId("mock-large-format-tile-overlay")).toBeInTheDocument();
+
+      act(() => {
+        useConverterStore.setState({ largeFormatTileOverlayVisible: false });
+      });
+      expect(screen.queryByTestId("mock-large-format-tile-overlay")).not.toBeInTheDocument();
+
+      act(() => {
+        useConverterStore.setState({
+          largeFormatTileOverlayVisible: true,
+          largeFormatEnabled: false,
+        });
+      });
+      expect(screen.queryByTestId("mock-large-format-tile-overlay")).not.toBeInTheDocument();
+    });
+
+    it("does not draw the outline without a loaded model", () => {
+      useConverterStore.setState({
+        largeFormatEnabled: true,
+        modelBounds: { minX: -28, maxX: 28, minY: -20, maxY: 20, maxZ: 2 },
+      } as never);
+      render(<Scene3D />);
+      expect(screen.queryByTestId("mock-large-format-tile-overlay")).not.toBeInTheDocument();
+    });
+  });
+
   describe("keychain contour live resize wiring", () => {
     it("passes a display transform that follows a 60 to 90 mm preview resize", () => {
       useConverterStore.setState({
@@ -1025,6 +1132,10 @@ beforeEach(() => {
       expect(capturedModelSurfaceSelectorProps?.placement).toEqual(
         useConverterStore.getState().modelSurfacePlacement,
       );
+      expect(capturedModelSurfaceSelectorProps?.modelRotation).toEqual(
+        useConverterStore.getState().modelSurfaceModelRotation,
+      );
+      expect(capturedModelSurfaceSelectorProps?.selectionId).toBe("selection-1");
       expect(capturedModelSurfaceSelectorProps?.onUpdatePlacement).toBe(
         useConverterStore.getState().updateModelSurfacePlacement,
       );

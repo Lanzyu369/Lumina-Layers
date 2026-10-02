@@ -133,36 +133,36 @@ export interface BugReportRequestPayload {
   screenshot_data_url: string | null;
 }
 
+/**
+ * Upload state of a local ticket on the official feedback server.
+ *
+ * - ``pending``: the background task is still assembling or uploading.
+ * - ``submitted``: the server stored the ticket and its attachments.
+ * - ``failed``: the upload failed; the ticket stays on this device and can
+ *   be retried.
+ * - ``disabled``: uploads are switched off on this installation.
+ *
+ * 工单在官方反馈服务上的上传状态：``pending`` 后台仍在装配或上传；
+ * ``submitted`` 服务器已保存；``failed`` 上传失败，工单保留在本机可重试；
+ * ``disabled`` 本机已关闭上传。
+ */
+export type BugReportSubmissionStatus =
+  | "pending"
+  | "submitted"
+  | "failed"
+  | "disabled";
+
 export interface BugReportResponse {
   ticket_id: string;
-  emailed: boolean;
   dump_path: string;
-  /**
-   * Email delivery state.
-   *
-   * - ``sent``: SMTP accepted the message during synchronous submit.
-   * - ``pending``: email will be sent later in the background task; local
-   *   email is configured but the delivery result is not known yet at the
-   *   moment this response is returned.
-   * - ``failed``: SMTP rejected the message or the background task crashed
-   *   before sending.
-   * - ``unconfigured``: SMTP is not set up; no email will be attempted.
-   *
-   * 邮件投递状态。``sent`` 表示同步提交时 SMTP 已接受；``pending`` 表示
-   * 邮件还在后台任务中排队；``failed`` 表示已尝试但失败；
-   * ``unconfigured`` 表示本机未配置邮件。
-   */
-  email_status: "sent" | "pending" | "unconfigured" | "failed";
-  relay_available: boolean;
+  submission_status: BugReportSubmissionStatus;
   /**
    * Assembly status of the ticket directory. The synchronous submit path
-   * returns ``in_progress`` so the UI can show a non-blocking status; the
-   * background task later updates ``ticket.json`` to ``done`` or
-   * ``partial_failed``. Optional for backward compatibility with clients
-   * mocking older responses.
+   * returns ``in_progress``; the background task later updates it to
+   * ``done`` or ``partial_failed``. Optional for older mocked responses.
    *
    * 工单装配状态。同步路径返回 ``in_progress``，后台任务后续写入 ``done``
-   * 或 ``partial_failed``。为旧客户端/测试 mock 兼容留 optional。
+   * 或 ``partial_failed``。为旧测试 mock 兼容留 optional。
    */
   assembly_status?: "in_progress" | "done" | "partial_failed" | null;
   /** Exact-source capture result; optional for older backend compatibility. */
@@ -174,8 +174,19 @@ export interface BugReportResponse {
     | "failed";
 }
 
-export interface BugReportRelayResponse {
-  forwarded: boolean;
+export interface BugReportHeldBackAttachment {
+  name: string;
+  size_bytes: number;
+  reason: "too_large" | "unsupported_type" | "empty" | "rejected";
+}
+
+export interface BugReportStatusResponse {
+  ticket_id: string;
+  assembly_status: string | null;
+  submission_status: BugReportSubmissionStatus;
+  error_type: string | null;
+  uploaded_attachments: string[];
+  held_back_attachments: BugReportHeldBackAttachment[];
 }
 
 export const MAX_BUG_REPORT_ORIGINAL_IMAGE_BYTES = 100 * 1024 * 1024;
@@ -205,16 +216,20 @@ export async function submitBugReport(
   return data;
 }
 
-export async function relayBugReport(
+export async function getBugReportStatus(
   ticketId: string,
-  payload: BugReportRequestPayload,
-): Promise<BugReportRelayResponse> {
-  const { data } = await apiClient.post<BugReportRelayResponse>(
-    "/feedback/bug-report/relay",
-    {
-      ticket_id: ticketId,
-      request_payload: payload,
-    },
+): Promise<BugReportStatusResponse> {
+  const { data } = await apiClient.get<BugReportStatusResponse>(
+    `/feedback/bug-report/${encodeURIComponent(ticketId)}/status`,
+  );
+  return data;
+}
+
+export async function resubmitBugReport(
+  ticketId: string,
+): Promise<BugReportStatusResponse> {
+  const { data } = await apiClient.post<BugReportStatusResponse>(
+    `/feedback/bug-report/${encodeURIComponent(ticketId)}/resubmit`,
   );
   return data;
 }

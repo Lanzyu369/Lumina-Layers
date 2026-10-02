@@ -207,8 +207,7 @@ _REQUIRED_CANARY_FIELDS = (
     "source_version",
     "color_mode",
     "lut_name",
-    "email_status",
-    "relay_available",
+    "submission_status",
     "recent_client_log_count",
 )
 
@@ -324,7 +323,6 @@ def client(
     TestClient，将 feedback 路径配置固定到测试目录。
     """
     from api.app import create_app
-    import api.feedback_email as feedback_email
     import api.routers.feedback as feedback_router
 
     monkeypatch.setenv("LUMINA_FEEDBACK_DUMP_DIR", str(feedback_root))
@@ -340,12 +338,8 @@ def client(
     # 在中途触发 ``HTTP 429``。把上限设为 0 即按
     # ``_enforce_feedback_rate_limit`` 的关停约定旁路。
     monkeypatch.setenv("LUMINA_FEEDBACK_RATE_LIMIT_MAX", "0")
-    monkeypatch.delenv("LUMINA_FEEDBACK_SMTP_HOST", raising=False)
-    monkeypatch.delenv("LUMINA_FEEDBACK_TO", raising=False)
+    monkeypatch.setenv("LUMINA_FEEDBACK_SERVER_URL", "off")
     monkeypatch.delenv("LUMINA_FEEDBACK_RATE_LIMIT_WINDOW_S", raising=False)
-    monkeypatch.delenv("LUMINA_FEEDBACK_RELAY_URL", raising=False)
-    monkeypatch.delenv("LUMINA_FEEDBACK_RELAY_TOKEN", raising=False)
-    feedback_email.is_email_configured.cache_clear()
     feedback_router._clear_feedback_rate_limit_state()
     return TestClient(create_app())
 

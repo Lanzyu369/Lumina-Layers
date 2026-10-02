@@ -234,7 +234,9 @@ def _native_svg_self_test_payload(svg_path: str) -> dict[str, Any]:
     from core.native_svg_adapter import (
         NativeSvgFallback,
         analyze_native_svg,
+        native_build_identity,
     )
+    import shapely
 
     result = analyze_native_svg(
         svg_path,
@@ -252,6 +254,31 @@ def _native_svg_self_test_payload(svg_path: str) -> dict[str, Any]:
         raise NativeSvgSelfTestError("empty_visible_geometry")
     if result.silhouette is None or result.silhouette.is_empty:
         raise NativeSvgSelfTestError("empty_silhouette")
+    if result.svg_coordinate_domain is not None:
+        import lumina_svg_core
+        from core.svg_coordinate_domain import project_print_regions
+
+        if not callable(getattr(lumina_svg_core, "canonicalize_grid_regions", None)):
+            raise NativeSvgSelfTestError("native_grid_canonicalization_unavailable")
+        if not callable(getattr(lumina_svg_core, "project_regions_to_grid", None)):
+            raise NativeSvgSelfTestError("native_coordinate_projection_unavailable")
+        probe = lumina_svg_core.canonicalize_grid_regions([[
+            [(0, 0), (1, 0), (0, 1000), (0, 0)],
+        ]])
+        probe_area = sum(
+            shapely.Polygon(shell, holes).area
+            for shell, holes in probe[0]
+        )
+        if probe_area != 500.0:
+            raise NativeSvgSelfTestError(
+                "native_grid_canonicalization_lost_positive_area"
+            )
+        projected = project_print_regions(
+            [item["geometry"] for item in result.clipped_shapes],
+            mm_per_unit=result.scale_factor, grid_mm=0.0001,
+        )
+        if not all(geometry.is_valid for geometry in projected):
+            raise NativeSvgSelfTestError("invalid_print_domain_geometry")
 
     silhouette_components = (
         len(result.silhouette.geoms)
@@ -282,6 +309,16 @@ def _native_svg_self_test_payload(svg_path: str) -> dict[str, Any]:
         "geometry_backend": "native",
         "native_version": result.native_version,
         "native_schema_version": int(result.native_schema_version),
+        "native_build_sha256": native_build_identity(),
+        "native_extension_path": getattr(
+            sys.modules.get("lumina_svg_core._lumina_svg_core"), "__file__", None
+        ),
+        "coordinate_contract_version": (
+            result.svg_coordinate_domain.version
+            if result.svg_coordinate_domain is not None else None
+        ),
+        "shapely_version": str(shapely.__version__),
+        "geos_version": str(shapely.geos_version_string),
         "raw_geometry_count": len(result.shape_data),
         "visible_geometry_count": len(result.clipped_shapes),
         "silhouette_component_count": silhouette_components,

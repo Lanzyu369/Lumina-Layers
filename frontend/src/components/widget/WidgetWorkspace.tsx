@@ -298,15 +298,34 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
   }, []);
 
   // Keep a live workspace width snapshot for right-dock local positioning.
+  // The workspace can change width without a window resize (e.g. a page
+  // scrollbar appears), so observe the container itself; otherwise the stale
+  // snapshot shifts right-dock widgets and clips a strip of them.
+  // 工作区宽度可能在窗口未 resize 时变化（如出现页面滚动条），因此直接观察容器，
+  // 避免宽度快照过期导致右侧坞 widget 偏移并被裁掉一条。
   useEffect(() => {
+    const container = containerRef.current;
     const updateWidth = () => {
-      const width = containerRef.current?.getBoundingClientRect().width ?? 0;
+      const width = container?.getBoundingClientRect().width ?? 0;
       setContainerWidth(width);
     };
     updateWidth();
     window.addEventListener('resize', updateWidth);
-    return () => window.removeEventListener('resize', updateWidth);
+    const resizeObserver = container && typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(updateWidth)
+      : null;
+    if (container) resizeObserver?.observe(container);
+    return () => {
+      window.removeEventListener('resize', updateWidth);
+      resizeObserver?.disconnect();
+    };
   }, []);
+
+  // Re-stack against the new width so widget positions match rightDockOffset.
+  // 宽度变化后重新计算堆叠，使 widget 位置与 rightDockOffset 保持一致。
+  useEffect(() => {
+    if (containerWidth > 0) recalculateStacks();
+  }, [containerWidth, recalculateStacks]);
 
   const leftRegistry = activeRegistry.filter((config) => activeWidgetMap.get(config.id)?.snapEdge !== 'right');
   const rightRegistry = activeRegistry.filter((config) => activeWidgetMap.get(config.id)?.snapEdge === 'right');

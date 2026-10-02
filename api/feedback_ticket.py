@@ -27,6 +27,7 @@ __all__ = [
     "generate_ticket_id",
     "month_partition",
     "ticket_dir_for",
+    "ticket_dir_from_id",
 ]
 
 
@@ -72,6 +73,29 @@ def ticket_dir_for(feedback_root: Path, ticket_id: str, dt: datetime) -> Path:
         Path: ``feedback_root/<YYYY-MM>/<ticket_id>/``.
     """
     return feedback_root / month_partition(dt) / ticket_id
+
+
+def ticket_dir_from_id(feedback_root: Path, ticket_id: str) -> Path:
+    """Locate the directory of a random monthly ticket from its id alone.
+
+    仅根据随机月度工单号定位其目录。
+
+    Args:
+        feedback_root: Root directory containing monthly partitions.
+            (包含按月分层目录的反馈根目录。)
+        ticket_id: Ticket id matching :data:`TICKET_ID_PATTERN`.
+            (符合 :data:`TICKET_ID_PATTERN` 的工单号。)
+
+    Returns:
+        Path: ``feedback_root/<YYYY-MM>/<ticket_id>/``.
+
+    Raises:
+        ValueError: ``ticket_id`` is not a random monthly ticket id.
+            (``ticket_id`` 不是随机月度工单号。)
+    """
+    if not TICKET_ID_PATTERN.fullmatch(ticket_id):
+        raise ValueError("Invalid ticket id")
+    return feedback_root / f"{ticket_id[4:8]}-{ticket_id[8:10]}" / ticket_id
 
 
 def generate_ticket_id(

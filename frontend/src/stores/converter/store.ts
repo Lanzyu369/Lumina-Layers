@@ -3022,6 +3022,8 @@ export interface ConverterState {
   largeFormatEnabled: boolean;
   tileWidthMm: number;
   tileHeightMm: number;
+  /** View-only: draw the tile cut lines over the 3D preview. */
+  largeFormatTileOverlayVisible: boolean;
   puzzleEnabled: boolean;
   puzzleStyle: PuzzleStyle;
   puzzleSizingMode: PuzzleSizingMode;
@@ -3321,6 +3323,7 @@ export interface ConverterActions {
   setLargeFormatEnabled: (enabled: boolean) => void;
   setTileWidthMm: (width: number) => void;
   setTileHeightMm: (height: number) => void;
+  setLargeFormatTileOverlayVisible: (visible: boolean) => void;
   setPuzzleEnabled: (enabled: boolean) => void;
   setPuzzleStyle: (style: PuzzleStyle) => void;
   setPuzzleSizingMode: (mode: PuzzleSizingMode) => void;
@@ -4263,6 +4266,7 @@ export const DEFAULT_STATE: ConverterState = {
   largeFormatEnabled: false,
   tileWidthMm: 250,
   tileHeightMm: 250,
+  largeFormatTileOverlayVisible: true,
   puzzleEnabled: false,
   puzzleStyle: "regular" as PuzzleStyle,
   puzzleSizingMode: "piece_size" as PuzzleSizingMode,
@@ -6229,6 +6233,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         threemfDiskPath: null,
         downloadUrl: null,
       }),
+    // View-only toggle: does not change generated output, so keep downloads.
+    setLargeFormatTileOverlayVisible: (visible: boolean) =>
+      set({ largeFormatTileOverlayVisible: visible }),
 
     setPuzzleEnabled: (enabled: boolean) =>
       set((state) => {

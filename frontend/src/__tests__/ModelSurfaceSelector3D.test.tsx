@@ -11,8 +11,11 @@ import {
   computeSurfaceArtworkCanvasSize,
 } from "../components/modelSurface/artworkPlacement";
 import { resolveModelSurfaceArtworkAsset } from "../components/modelSurface/artworkAsset";
+import { getModelRotationWithSurfaceFacingUp, toModelEuler } from "../components/modelSurface/rotationMath";
 import {
   CanvasOverlayHtml,
+  DEFAULT_CANVAS_OVERLAY_FRAME,
+  getCanvasOverlayBox,
   getCanvasOverlayFrame,
 } from "../components/modelSurface/overlayLayout";
 
@@ -144,6 +147,7 @@ describe("ModelSurfaceSelector3D", () => {
     mockCamera.near = 0.1;
     mockCamera.far = 2000;
     mockCamera.fov = 45;
+    mockCamera.up.set(0, 1, 0);
     mockCamera.position.set(0, 0, 500);
     mockCamera.lookAt(0, 0, 0);
     mockCamera.updateProjectionMatrix();
@@ -282,6 +286,67 @@ describe("ModelSurfaceSelector3D", () => {
     expect(mockHtmlProps.at(-1)?.zIndexRange).toEqual([40, 40]);
   });
 
+  it("snaps the overlay box inward so it never extends past the canvas", () => {
+    const fractional = getCanvasOverlayBox({
+      ...DEFAULT_CANVAS_OVERLAY_FRAME,
+      canvasLeft: 0.5,
+      canvasTop: 163.5,
+      width: 1023.5,
+      height: 604.5,
+    });
+    expect(fractional).toEqual({ left: 1, top: 164, width: 1023, height: 604 });
+    expect(fractional.top + (fractional.height as number)).toBeLessThanOrEqual(768);
+
+    expect(
+      getCanvasOverlayBox({
+        ...DEFAULT_CANVAS_OVERLAY_FRAME,
+        canvasLeft: 100,
+        canvasTop: 80.000001,
+        width: 500,
+        height: 299.999999,
+      }),
+    ).toEqual({ left: 100, top: 80, width: 500, height: 300 });
+    expect(getCanvasOverlayBox(DEFAULT_CANVAS_OVERLAY_FRAME)).toEqual({
+      left: 0,
+      top: 0,
+      width: "100%",
+      height: "100%",
+    });
+  });
+
+  it("does not let a fractional canvas push the overlay below the viewport", async () => {
+    const canvas = document.createElement("canvas");
+    canvas.getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          left: 0,
+          top: 163.5,
+          width: 1024,
+          height: 604.5,
+          right: 1024,
+          bottom: 768,
+          x: 0,
+          y: 163.5,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+    mockGl.domElement = canvas;
+
+    render(
+      <CanvasOverlayHtml>
+        <div>overlay content</div>
+      </CanvasOverlayHtml>,
+    );
+
+    const overlay = await waitFor(() => {
+      const element = document.querySelector<HTMLElement>('[data-model-surface-canvas-overlay="fixed"]');
+      expect(element?.style.top).toBe("164px");
+      return element as HTMLElement;
+    });
+    expect(overlay.style.height).toBe("604px");
+    expect(parseFloat(overlay.style.top) + parseFloat(overlay.style.height)).toBeLessThanOrEqual(768);
+  });
+
   it("uses an adaptive preview texture budget instead of a fixed large-image cap", () => {
     const defaultPreview = computeSurfaceArtworkCanvasSize(1200, 800);
     const largeViewportPreview = computeSurfaceArtworkCanvasSize(1200, 800, {
@@ -390,17 +455,127 @@ describe("ModelSurfaceSelector3D", () => {
     expect(camera.near).toBeGreaterThanOrEqual(0.1);
   });
 
-  it("keeps a bottom-facing selected surface upright by flipping the camera up vector", () => {
-    const direction = getReadableSurfaceCameraDirection(new THREE.Vector3(0, 0, -1), false);
-    const up = getReadableSurfaceCameraUp(
-      new THREE.Vector3(0, 0, -1),
-      new THREE.Vector3(0, -1, 0),
-      direction,
-    );
+  it.each([
+    [0, 0, 1], [0, 0, -1], [1, 0, 0], [-1, 0, 0],
+    [0, 1, 0], [0, -1, 0], [0.3, 0.4, 0.5],
+  ])("keeps local U right and V up after selecting normal (%s, %s, %s)", (x, y, z) => {
+    const normal = new THREE.Vector3(x, y, z).normalize();
+    const seed = Math.abs(normal.x) > 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+    const u = seed.addScaledVector(normal, -seed.dot(normal)).normalize();
+    const v = new THREE.Vector3().crossVectors(normal, u).normalize();
+    for (const yaw of [0, Math.PI / 2, Math.PI, Math.PI * 1.5]) {
+      const initial = { x: 0, y: 0, z: yaw };
+      const rotation = getModelRotationWithSurfaceFacingUp(normal, initial) ?? initial;
+      const euler = toModelEuler(rotation);
+      const worldN = normal.clone().applyEuler(euler);
+      const worldU = u.clone().applyEuler(euler);
+      const worldV = v.clone().applyEuler(euler);
+      const direction = getReadableSurfaceCameraDirection(worldN, false);
+      const up = getReadableSurfaceCameraUp(worldN, worldV, direction);
+      const right = new THREE.Vector3().crossVectors(up, direction).normalize();
+      expect(right.dot(worldU)).toBeCloseTo(1, 6);
+      expect(up.dot(worldV)).toBeCloseTo(1, 6);
+    }
+  });
 
-    expect(Math.abs(up.x)).toBeLessThan(0.001);
-    expect(up.y).toBeGreaterThan(0.999);
-    expect(Math.abs(up.z)).toBeLessThan(0.001);
+  it("restores an existing controlled selection pose without auto-flipping or writing it back", async () => {
+    const file = new File(["solid"], "restored.stl");
+    vi.spyOn(file, "arrayBuffer").mockResolvedValue(new ArrayBuffer(16));
+    const footprint = {
+      frame: { origin: [0, 0, -1], normal: [0, 0, -1], u_axis: [1, 0, 0], v_axis: [0, -1, 0] },
+      bounds_min: [-10, -5], bounds_max: [10, 5], bounds_width_mm: 20, bounds_height_mm: 10,
+      outer: [[-10, -5], [10, -5], [10, 5], [-10, 5], [-10, -5]], holes: [],
+    } as import("../components/ModelSurfaceSelector3D").SurfaceFootprintPayload;
+    const onUpdateModelRotation = vi.fn();
+    const props = {
+      file, footprint, selectionId: "existing-selection", selectionReady: true, selecting: false,
+      modelRotation: { x_deg: 25, y_deg: 180, z_deg: 73 },
+      onSelectFace: vi.fn(), onUpdateModelRotation,
+    };
+    const first = render(<ModelSurfaceSelector3D {...props} />);
+    await waitFor(() => expect(document.querySelector('group[name="model-surface-transform"]'))
+      .toHaveAttribute("rotation", [25, 180, 73].map(THREE.MathUtils.degToRad).join(",")));
+    first.unmount();
+    render(<ModelSurfaceSelector3D {...props} />);
+    await waitFor(() => expect(document.querySelector('group[name="model-surface-transform"]'))
+      .toHaveAttribute("rotation", [25, 180, 73].map(THREE.MathUtils.degToRad).join(",")));
+    expect(onUpdateModelRotation).not.toHaveBeenCalled();
+    const worldV = new THREE.Vector3(0, -1, 0).applyEuler(toModelEuler({
+      x: THREE.MathUtils.degToRad(25), y: Math.PI, z: THREE.MathUtils.degToRad(73),
+    }));
+    expect(mockCamera.up.dot(worldV)).toBeCloseTo(1, 6);
+  });
+
+  it("restores shared camera up and field of view when leaving surface inspection", async () => {
+    const file = new File(["solid"], "camera-owner.stl");
+    vi.spyOn(file, "arrayBuffer").mockResolvedValue(new ArrayBuffer(16));
+    const view = render(<ModelSurfaceSelector3D
+      file={file} selectionReady selecting={false} selectionId="restored-bottom"
+      modelRotation={{ x_deg: 0, y_deg: 180, z_deg: 0 }}
+      footprint={{
+        frame: { origin: [0, 0, -1], normal: [0, 0, -1], u_axis: [1, 0, 0], v_axis: [0, -1, 0] },
+        bounds_min: [-10, -5], bounds_max: [10, 5], bounds_width_mm: 20, bounds_height_mm: 10,
+        outer: [[-10, -5], [10, -5], [10, 5], [-10, 5], [-10, -5]], holes: [],
+      }} onSelectFace={vi.fn()} />);
+    await waitFor(() => expect(mockCamera.up.y).toBeLessThan(-0.999));
+    expect(mockCamera.fov).toBeLessThan(3);
+    view.unmount();
+    expect(mockCamera.up.toArray()).toEqual([0, 1, 0]);
+    expect(mockCamera.fov).toBe(45);
+  });
+
+  it("writes a new controlled selection once and preserves later user rotation", async () => {
+    const file = new File(["solid"], "controlled.stl");
+    vi.spyOn(file, "arrayBuffer").mockResolvedValue(new ArrayBuffer(16));
+    const footprint = {
+      frame: { origin: [0, 0, -1], normal: [0, 0, -1], u_axis: [1, 0, 0], v_axis: [0, -1, 0] },
+      bounds_min: [-10, -5], bounds_max: [10, 5], bounds_width_mm: 20, bounds_height_mm: 10,
+      outer: [[-10, -5], [10, -5], [10, 5], [-10, 5], [-10, -5]], holes: [],
+    } as import("../components/ModelSurfaceSelector3D").SurfaceFootprintPayload;
+    const onUpdateModelRotation = vi.fn();
+    const props = { file, selecting: false, onSelectFace: vi.fn(), onUpdateModelRotation };
+    const view = render(<ModelSurfaceSelector3D {...props} selectionReady={false}
+      modelRotation={{ x_deg: 0, y_deg: 0, z_deg: 0 }} />);
+    await waitFor(() => expect(requireModelSurfaceBody()).toBeInTheDocument());
+    view.rerender(<ModelSurfaceSelector3D {...props} selectionReady selectionId="new-bottom" footprint={footprint}
+      modelRotation={{ x_deg: 0, y_deg: 0, z_deg: 0 }} />);
+    expect(onUpdateModelRotation).toHaveBeenCalledExactlyOnceWith({ x_deg: 0, y_deg: 180, z_deg: 0 });
+    view.rerender(<ModelSurfaceSelector3D {...props} selectionReady selectionId="new-bottom" footprint={footprint}
+      modelRotation={{ x_deg: 0, y_deg: 180, z_deg: 0 }} />);
+    await waitFor(() => expect(mockCamera.up.y).toBeLessThan(-0.999));
+    const cameraPosition = mockCamera.position.clone();
+    view.rerender(<ModelSurfaceSelector3D {...props} selectionReady selectionId="new-bottom" footprint={footprint}
+      modelRotation={{ x_deg: 25, y_deg: 180, z_deg: 90 }} />);
+    expect(mockCamera.position).toEqual(cameraPosition);
+    expect(onUpdateModelRotation).toHaveBeenCalledTimes(1);
+  });
+
+  it("resets inspection roll when uploading a different model without unmounting", async () => {
+    vi.spyOn(THREE.Box3.prototype, "setFromObject").mockImplementation(function (this: THREE.Box3) {
+      this.min.set(-10, -5, -1);
+      this.max.set(10, 5, 1);
+      return this;
+    });
+    const firstFile = new File(["solid"], "first-roll.stl");
+    const secondFile = new File(["solid"], "second-roll.stl");
+    vi.spyOn(firstFile, "arrayBuffer").mockResolvedValue(new ArrayBuffer(16));
+    const loadSecond = vi.spyOn(secondFile, "arrayBuffer").mockResolvedValue(new ArrayBuffer(16));
+    const props = { selectionReady: true, selecting: false, onSelectFace: vi.fn() };
+    const view = render(<ModelSurfaceSelector3D {...props} file={firstFile} selectionId="bottom-roll"
+      modelRotation={{ x_deg: 0, y_deg: 180, z_deg: 0 }} footprint={{
+        frame: { origin: [0, 0, -1], normal: [0, 0, -1], u_axis: [1, 0, 0], v_axis: [0, -1, 0] },
+        bounds_min: [-82.1, -39.5], bounds_max: [82.1, 39.5], bounds_width_mm: 164.2, bounds_height_mm: 79,
+        outer: [[-82.1, -39.5], [82.1, -39.5], [82.1, 39.5], [-82.1, 39.5], [-82.1, -39.5]], holes: [],
+      }} />);
+    await waitFor(() => expect(mockCamera.up.y).toBeLessThan(-0.999));
+    view.rerender(<ModelSurfaceSelector3D {...props} file={secondFile} selectionReady={false}
+      modelRotation={{ x_deg: 0, y_deg: 0, z_deg: 0 }} />);
+    await waitFor(() => {
+      expect(loadSecond).toHaveBeenCalledOnce();
+      expect(requireModelSurfaceBody()).toBeInTheDocument();
+      expect(mockCamera.up.toArray()).toEqual([0, 1, 0]);
+    });
+    expect(mockCamera.fov).toBe(45);
   });
 
   it("syncs the automatic bottom-surface face-up rotation into model transform state", async () => {
@@ -2030,7 +2205,8 @@ describe("ModelSurfaceSelector3D", () => {
     await waitFor(() => {
       expect(document.querySelector('group[name="model-surface-transform"]')).not.toBeNull();
     });
-    const initialTargetZ = mockControls.target.z;
+    // The previous view may be below the bed. Selection must inspect the new front side.
+    mockCamera.position.set(0, 0, -500);
 
     view.rerender(
       <ModelSurfaceSelector3D
@@ -2058,10 +2234,11 @@ describe("ModelSurfaceSelector3D", () => {
       const modelGroup = document.querySelector('group[name="model-surface-transform"]');
       expect(modelGroup).toHaveAttribute("rotation", expect.stringContaining("3.141"));
     });
-    expect(mockControls.target.z).toBeCloseTo(initialTargetZ, 4);
+    expect(mockCamera.position.z).toBeGreaterThan(mockControls.target.z);
+    expect(mockCamera.up.y).toBeLessThan(-0.999);
   });
 
-  it("turns a vertical selected surface upward without moving the camera", async () => {
+  it("turns a vertical selected surface upward and inspects it from the front", async () => {
     vi.spyOn(THREE.Box3.prototype, "setFromObject").mockImplementation(function (this: THREE.Box3) {
       this.min.set(-10, -5, 0);
       this.max.set(10, 5, 10);
@@ -2104,8 +2281,6 @@ describe("ModelSurfaceSelector3D", () => {
     await waitFor(() => {
       expect(document.querySelector('group[name="model-surface-transform"]')).not.toBeNull();
     });
-    const initialCameraPosition = mockCamera.position.clone();
-    const initialTarget = mockControls.target.clone();
 
     view.rerender(
       <ModelSurfaceSelector3D
@@ -2128,8 +2303,10 @@ describe("ModelSurfaceSelector3D", () => {
         z_deg: 0,
       });
     });
-    expect(mockCamera.position).toEqual(initialCameraPosition);
-    expect(mockControls.target).toEqual(initialTarget);
+    expect(mockCamera.position.z).toBeGreaterThan(mockControls.target.z);
+    expect(mockCamera.position.x).toBeCloseTo(mockControls.target.x, 6);
+    expect(mockCamera.position.y).toBeCloseTo(mockControls.target.y, 6);
+    expect(mockCamera.up.y).toBeLessThan(-0.999);
   });
 
   it("moves the camera from view cube corner buttons without rotating the model", async () => {
