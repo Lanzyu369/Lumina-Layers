@@ -1720,7 +1720,10 @@ def worker_generate_model_surface_overlay(
             output_path=out_path,
             slot_names=overlay.slot_names,
             preview_colors=overlay.preview_colors,
-            project_slot_names=overlay.slot_names,
+            project_slot_names=overlay.project_slot_names,
+            preserve_template_filament_slots=(
+                False if converter_params.get("material_source") == "material_archive" else None
+            ),
             settings={"layer_height": f"{display_layer_height_mm:g}"},
             color_mode=str(converter_params.get("color_mode", "4-Color")),
             printer_id=str(normalized_params.get("printer_id", "bambu-h2d")),

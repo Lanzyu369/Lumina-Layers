@@ -456,7 +456,6 @@ def convert_image_to_3d(
         material_backing_material_index,
         separate_backing_color_id,
     )
-
     ctx = {k: v for k, v in locals().items() if k != "progress"}
     ctx = build_image_model_context(progress=progress, **ctx)
     _raise_dynamic_material_pipeline_error(ctx)

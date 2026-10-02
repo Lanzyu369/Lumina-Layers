@@ -20,6 +20,9 @@ import InteractiveModelViewer, {
 import BedPlatform from "./BedPlatform";
 import KeychainRing3D from "./KeychainRing3D";
 import FridgeMagnet3D from "./FridgeMagnet3D";
+import LargeFormatTileOverlay3D from "./LargeFormatTileOverlay3D";
+import { computePuzzleOverlayPlacement } from "./puzzleOverlay3DUtils";
+import { resolveLargeFormatTotalHeightMm } from "../utils/largeFormatTileLayout";
 import ModelSurfaceSelector3D from "./ModelSurfaceSelector3D";
 import { resolveModelSurfaceArtworkAsset } from "./modelSurface/artworkAsset";
 import { useConverterStore } from "../stores/converter";
@@ -903,6 +906,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const modelSurfaceFootprint = useConverterStore((s) => s.modelSurfaceFootprint);
   const modelSurfaceCandidates = useConverterStore((s) => s.modelSurfaceCandidates);
   const modelSurfacePlacement = useConverterStore((s) => s.modelSurfacePlacement);
+  const modelSurfaceModelRotation = useConverterStore((s) => s.modelSurfaceModelRotation);
   const modelSurfaceLoading = useConverterStore((s) => s.modelSurfaceLoading);
   const modelSurfaceSelecting = useConverterStore((s) => s.modelSurfaceSelecting);
   const imagePreviewUrl = useConverterStore((s) => s.imagePreviewUrl);
@@ -937,6 +941,12 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const layerHeightMm = useConverterStore((s) => s.layer_height_mm);
   const puzzleEnabled = useConverterStore((s) => s.puzzleEnabled);
   const puzzleOverlayUrl = useConverterStore((s) => s.puzzleOverlayUrl);
+  const largeFormatEnabled = useConverterStore((s) => s.largeFormatEnabled);
+  const largeFormatTileOverlayVisible = useConverterStore(
+    (s) => s.largeFormatTileOverlayVisible,
+  );
+  const tileWidthMm = useConverterStore((s) => s.tileWidthMm);
+  const tileHeightMm = useConverterStore((s) => s.tileHeightMm);
 
   // Real-time scale dimensions
   const targetWidth = useConverterStore((s) => s.target_width_mm);
@@ -944,6 +954,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const previewWidth = useConverterStore((s) => s.preview_width_mm);
   const previewHeight = useConverterStore((s) => s.preview_height_mm);
   const previewPixelWidth = useConverterStore((s) => s.previewPixelWidth);
+  const previewPixelHeight = useConverterStore((s) => s.previewPixelHeight);
 
   const { scaleX, scaleY } = computeScaleFactor(
     targetWidth, targetHeight, previewWidth, previewHeight
@@ -1018,6 +1029,68 @@ function Scene3D({ modelUrl }: Scene3DProps) {
     [modelBounds, scaleX, scaleY],
   );
   const displayModelBounds = modelPreviewSpace?.displayBounds ?? null;
+  const activeModelUrl = effectiveModelUrl || previewGlbUrl;
+  const activePreviewCanvasBounds =
+    previewCanvasBoundsState?.sourceUrl === activeModelUrl
+      ? previewCanvasBoundsState.bounds
+      : null;
+  // The large-format split covers the full artwork canvas (including
+  // transparent margins), so anchor the outline to the canvas bounds.
+  // 大画幅按完整画布（含透明边距）切分，因此轮廓锚定在画布范围上。
+  const largeFormatTilePlacement = useMemo(() => {
+    if (!largeFormatEnabled || !largeFormatTileOverlayVisible || !modelPreviewSpace) {
+      return null;
+    }
+    let displayCanvasBounds: PreviewModelBounds | null = null;
+    if (activePreviewCanvasBounds) {
+      const min = modelPreviewSpace.toDisplayPoint({
+        x: activePreviewCanvasBounds.minX,
+        y: activePreviewCanvasBounds.minY,
+      });
+      const max = modelPreviewSpace.toDisplayPoint({
+        x: activePreviewCanvasBounds.maxX,
+        y: activePreviewCanvasBounds.maxY,
+      });
+      displayCanvasBounds = {
+        minX: Math.min(min.x, max.x),
+        maxX: Math.max(min.x, max.x),
+        minY: Math.min(min.y, max.y),
+        maxY: Math.max(min.y, max.y),
+        maxZ: activePreviewCanvasBounds.maxZ,
+      };
+    }
+    const placement = computePuzzleOverlayPlacement(
+      modelPreviewSpace.displayBounds,
+      spacerThick,
+      enableRelief,
+      colorHeightMap,
+      enableOutline,
+      enableCloisonne,
+      wireHeightMm,
+      displayCanvasBounds,
+    );
+    if (!placement) return null;
+    return {
+      bounds: {
+        minX: placement.centerX - placement.width / 2,
+        maxX: placement.centerX + placement.width / 2,
+        minY: placement.centerY - placement.height / 2,
+        maxY: placement.centerY + placement.height / 2,
+      },
+      z: placement.z,
+    };
+  }, [
+    activePreviewCanvasBounds,
+    colorHeightMap,
+    enableCloisonne,
+    enableOutline,
+    enableRelief,
+    largeFormatEnabled,
+    largeFormatTileOverlayVisible,
+    modelPreviewSpace,
+    spacerThick,
+    wireHeightMm,
+  ]);
   const diagnosticsSamplingEnabled = diagnosticsVisible || getThreePerfDebugConfig().enabled;
   const hasPerformanceTiming = Boolean(previewPerformanceTiming || generatePerformanceTiming);
 
@@ -1162,6 +1235,17 @@ function Scene3D({ modelUrl }: Scene3DProps) {
       onPointerCancel={finishViewportPointer}
     >
       {screenshotNotice && <div role="status" className="absolute bottom-4 left-4 z-30 rounded bg-[var(--surface-panel-strong)] p-2 text-sm">{screenshotNotice}</div>}
+      {/* Beginner-tutorial anchor: the visible 3D area between the docks
+          (the canvas itself spans underneath both docks). */}
+      <div
+        aria-hidden="true"
+        data-tutorial="viewport-3d"
+        className="pointer-events-none absolute inset-y-0"
+        style={{
+          left: "var(--lumina-left-dock-width, 0px)",
+          right: "var(--lumina-right-dock-width, 0px)",
+        }}
+      />
       {/* Floating action buttons — top-right with right-dock avoidance.
        * 浮动按钮组：右上角悬浮，依赖 WidgetWorkspace 注入的
        * `--lumina-right-dock-width` CSS 变量自动避开右侧坞内的 widget。
@@ -1448,6 +1532,8 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             footprint={modelSurfaceFootprint}
             surfaceCandidates={modelSurfaceCandidates}
             placement={modelSurfacePlacement}
+            modelRotation={modelSurfaceModelRotation}
+            selectionId={modelSurfaceSelectionId}
             bedGridVisible={modelSurfaceBedGridVisible}
             selectionReady={Boolean(modelSurfaceSelectionId)}
             selecting={modelSurfaceLoading || modelSurfaceSelecting}
@@ -1550,15 +1636,29 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             positionPreset={loopPositionPreset}
             modelBounds={displayModelBounds}
             contours={colorContours}
-            contourCanvasBounds={
-              previewCanvasBoundsState?.sourceUrl === (effectiveModelUrl || previewGlbUrl)
-                ? previewCanvasBoundsState.bounds
-                : null
-            }
+            contourCanvasBounds={activePreviewCanvasBounds}
             contourToDisplayPoint={modelPreviewSpace?.toDisplayPoint}
             cameraPanModifierActive={isSpacePanActive}
           />
           )}
+        {batchPreviewItems.length === 0
+          && !showModelSurfaceSelector
+          && Boolean(activeModelUrl)
+          && largeFormatTilePlacement && (
+          <LargeFormatTileOverlay3D
+            bounds={largeFormatTilePlacement.bounds}
+            z={largeFormatTilePlacement.z}
+            totalWidthMm={targetWidth}
+            totalHeightMm={resolveLargeFormatTotalHeightMm(
+              targetWidth,
+              targetHeight,
+              previewPixelWidth,
+              previewPixelHeight,
+            )}
+            tileWidthMm={tileWidthMm}
+            tileHeightMm={tileHeightMm}
+          />
+        )}
         {batchPreviewItems.length === 0 && enableFridgeMagnet && displayModelBounds && fridgeMagnets.length > 0 && (
           <FridgeMagnet3D
             enabled={enableFridgeMagnet}

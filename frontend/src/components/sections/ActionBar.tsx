@@ -685,28 +685,32 @@ export default function ActionBar() {
           )}
 
           <div className="grid grid-cols-1 gap-2">
-            <Button
-              label={t("action_preview")}
-              variant="secondary"
-              onClick={submitPreview}
-              disabled={!canSubmit || isLoading}
-              loading={isLoading}
-              className="w-full"
-            />
-            <WikiTooltip
-              title={t("action_generate_model_title")}
-              description={t("action_generate_model_desc")}
-              wikiPath={WIKI_DOCS.generateActions}
-            >
+            <div data-tutorial="preview-button" className="grid">
               <Button
-                label={t("action_generate")}
-                variant="primary"
-                onClick={() => void submitGenerate()}
-                disabled={!canGenerate || isLoading || isGenerating || replacePreviewLoading}
-                loading={isGenerating}
+                label={t("action_preview")}
+                variant="secondary"
+                onClick={submitPreview}
+                disabled={!canSubmit || isLoading}
+                loading={isLoading}
                 className="w-full"
               />
-            </WikiTooltip>
+            </div>
+            <div data-tutorial="generate-button" className="grid">
+              <WikiTooltip
+                title={t("action_generate_model_title")}
+                description={t("action_generate_model_desc")}
+                wikiPath={WIKI_DOCS.generateActions}
+              >
+                <Button
+                  label={t("action_generate")}
+                  variant="primary"
+                  onClick={() => void submitGenerate()}
+                  disabled={!canGenerate || isLoading || isGenerating || replacePreviewLoading}
+                  loading={isGenerating}
+                  className="w-full"
+                />
+              </WikiTooltip>
+            </div>
             {hasPreview && (
               <Button
                 label={layerImagesLoading ? t("action_layers_loading") : t("action_view_layers")}

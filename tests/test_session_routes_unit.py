@@ -333,8 +333,10 @@ def test_serve_file_renews_ttl_file_on_access(
             os.unlink(path)
 
 
+@pytest.mark.parametrize("origin", [None, "https://example.com"])
 def test_serve_large_glb_uses_gzip_when_client_accepts_it(
     client_with_stores: tuple[TestClient, SessionStore, FileRegistry],
+    origin: str | None,
 ) -> None:
     """GET /api/files/{file_id} should gzip large GLB previews for transport."""
     client, store, registry = client_with_stores
@@ -346,14 +348,25 @@ def test_serve_large_glb_uses_gzip_when_client_accepts_it(
     file_id = registry.register_path(session_id, glb_path, "preview.glb")
 
     try:
+        headers = {"Accept-Encoding": "gzip"}
+        if origin is not None:
+            headers["Origin"] = origin
         response = client.get(
             f"/api/files/{file_id}",
-            headers={"Accept-Encoding": "gzip"},
+            headers=headers,
         )
 
         assert response.status_code == 200
         assert response.headers["content-encoding"] == "gzip"
-        assert response.headers["vary"] == "Accept-Encoding"
+        vary_fields = {
+            value.strip().lower()
+            for value in response.headers["vary"].split(",")
+        }
+        assert "accept-encoding" in vary_fields
+        if origin is not None:
+            assert "origin" in vary_fields
+            assert response.headers["access-control-allow-origin"] == origin
+            assert response.headers["access-control-allow-credentials"] == "true"
         assert response.headers["content-type"].startswith("model/gltf-binary")
         assert "content-length" not in response.headers
         assert response.content == payload

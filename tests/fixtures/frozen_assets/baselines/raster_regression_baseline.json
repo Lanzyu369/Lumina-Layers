@@ -1,6 +1,6 @@
 ﻿{
-  "version": "1.0.0",
-  "generated_at": "2026-06-02T03:41:19.100840+00:00",
+  "version": "1.1.0",
+  "generated_at": "2026-10-02T05:10:32.229513+00:00",
   "regression_scope": "raster_only",
   "svg_regression": "paused",
   "fixed_params": {
@@ -36,20 +36,20 @@
         2.0
       ],
       "effective_layers": 5,
-      "recipe_top10_coverage": 0.9015520212889455,
+      "recipe_top10_coverage": 0.8419536893992837,
       "recipe_top10_distribution": [
-        0.1585999660662779,
-        0.1523936668958681,
-        0.10920407561862068,
-        0.08904923068680068,
-        0.08575408767402196,
-        0.06816213175214095,
-        0.062062991704097945,
+        0.15239813185930007,
+        0.10921300554548458,
+        0.10388630417116884,
+        0.08906262557709653,
+        0.08576301760088585,
+        0.06817106167900484,
+        0.06207192163096184,
         0.06122804354232339,
-        0.05958047203593403,
-        0.055517355312859985
+        0.055517355312859985,
+        0.054642222480197886
       ],
-      "recipe_unique_count": 12
+      "recipe_unique_count": 14
     },
     "high-fidelity__4c_rybw": {
       "case_id": "high-fidelity__4c_rybw",
@@ -222,20 +222,20 @@
         2.0
       ],
       "effective_layers": 5,
-      "recipe_top10_coverage": 0.8900652762298997,
+      "recipe_top10_coverage": 0.8326699570132146,
       "recipe_top10_distribution": [
         0.1555484795414743,
-        0.14941888234357587,
         0.12744785862123867,
-        0.0746696385925808,
+        0.09473013851297564,
+        0.07339595605795256,
         0.07204266836491005,
-        0.07092819614711034,
-        0.06766438465212546,
-        0.05866900175131348,
+        0.07084859098869607,
+        0.06535583505811177,
+        0.0595446584938704,
         0.05763413469192804,
-        0.05604203152364273
+        0.056121636682057
       ],
-      "recipe_unique_count": 16
+      "recipe_unique_count": 18
     },
     "pixel__4c_rybw": {
       "case_id": "pixel__4c_rybw",
@@ -284,20 +284,20 @@
         2.0
       ],
       "effective_layers": 5,
-      "recipe_top10_coverage": 0.3711192485273045,
+      "recipe_top10_coverage": 0.3681738576659767,
       "recipe_top10_distribution": [
         0.14050310460117815,
         0.051186116860372555,
         0.04784270020697341,
         0.027304569336092977,
-        0.02157299793026588,
+        0.02141378761343735,
         0.01711510905906703,
-        0.016876293583824233,
         0.01639866263333864,
         0.016159847158095843,
-        0.016159847158095843
+        0.016159847158095843,
+        0.014090113039324947
       ],
-      "recipe_unique_count": 410
+      "recipe_unique_count": 423
     },
     "pixel__6c_rybw": {
       "case_id": "pixel__6c_rybw",
@@ -315,13 +315,13 @@
         2.0
       ],
       "effective_layers": 5,
-      "recipe_top10_coverage": 0.35758637159687945,
+      "recipe_top10_coverage": 0.3569495303295654,
       "recipe_top10_distribution": [
-        0.13413469192803693,
+        0.13532876930425092,
         0.03765323992994746,
         0.03574271612800509,
         0.029055882821206813,
-        0.022846680464894124,
+        0.021015761821366025,
         0.021015761821366025,
         0.020697341187708964,
         0.020458525712466168,
@@ -346,20 +346,20 @@
         2.0
       ],
       "effective_layers": 5,
-      "recipe_top10_coverage": 0.33505811176564243,
+      "recipe_top10_coverage": 0.33426206018149973,
       "recipe_top10_distribution": [
-        0.1307912752746378,
+        0.13214456296768032,
         0.036379557395319215,
         0.028021015761821366,
-        0.022050628880751474,
         0.021891418563922942,
         0.021811813405508678,
         0.020697341187708964,
+        0.01990128960356631,
         0.01958286896990925,
         0.017990765801623947,
         0.015841426524438783
       ],
-      "recipe_unique_count": 523
+      "recipe_unique_count": 519
     },
     "pixel__8c": {
       "case_id": "pixel__8c",
@@ -377,9 +377,9 @@
         2.0
       ],
       "effective_layers": 5,
-      "recipe_top10_coverage": 0.2888075147269544,
+      "recipe_top10_coverage": 0.28928514567743996,
       "recipe_top10_distribution": [
-        0.11558669001751314,
+        0.11606432096799872,
         0.0316032478904633,
         0.02993153956376373,
         0.023165101098551185,
@@ -390,7 +390,42 @@
         0.012498009871039644,
         0.012338799554211112
       ],
-      "recipe_unique_count": 968
+      "recipe_unique_count": 965
     }
+  },
+  "generator_environment": {
+    "python": "3.12.13",
+    "system": "Darwin",
+    "machine": "arm64",
+    "numpy": "2.5.3",
+    "scipy": "1.18.1",
+    "opencv": "5.0.0",
+    "pillow": "12.3.0"
+  },
+  "reviewed_changes": [
+    {
+      "commit": "28d479c0bcced8e8e06cead94bcb4ba2003e43fc",
+      "reason": "Prefer achromatic LUT recipes for neutral inputs (LUM-20260618-002)."
+    },
+    {
+      "commit": "d9f29fb324fa037df233efa98f4e7b6116d1113e",
+      "reason": "Filter legacy 4-color blue/cyan outliers using the inferred raw channel instead of hard-coded channel 3."
+    }
+  ],
+  "revision_validation": {
+    "historical_replay": "Disabling only the two reviewed fixes reproduces all 12 prior material matrices exactly in the recorded environment.",
+    "geometry": "All 12 solid masks, effective layer counts and generated GLB extents are exactly unchanged.",
+    "updated_material_matrices": [
+      "high-fidelity__2c_bw",
+      "high-fidelity__4c_cmyw",
+      "high-fidelity__6c_cmyw",
+      "pixel__2c_bw",
+      "pixel__4c_cmyw",
+      "pixel__4c_rybw",
+      "pixel__6c_cmyw",
+      "pixel__6c_rybw",
+      "pixel__8c"
+    ],
+    "thresholds": "Unchanged from version 1.0.0."
   }
 }

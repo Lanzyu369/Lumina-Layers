@@ -442,31 +442,20 @@ export function getReadableSurfaceCameraDirection(
 }
 
 export function getReadableSurfaceCameraUp(
-  surfaceNormal: THREE.Vector3,
+  _surfaceNormal: THREE.Vector3,
   surfaceVAxis: THREE.Vector3,
   cameraDirection: THREE.Vector3,
 ): THREE.Vector3 {
   const direction = cameraDirection.lengthSq() > 1e-12
     ? cameraDirection.clone().normalize()
     : new THREE.Vector3(0, 0, 1);
-  let up = surfaceVAxis.lengthSq() > 1e-12
-    ? surfaceVAxis.clone().normalize()
-    : new THREE.Vector3(0, 1, 0);
-  if (Math.abs(up.dot(direction)) > 0.98) {
+  let up = surfaceVAxis.clone();
+  up.addScaledVector(direction, -up.dot(direction));
+  if (up.lengthSq() <= 1e-12) {
     up = Math.abs(direction.z) > 0.9
       ? new THREE.Vector3(0, 1, 0)
       : new THREE.Vector3(0, 0, 1);
+    up.addScaledVector(direction, -up.dot(direction));
   }
-
-  if (Math.abs(direction.z) > 0.9) {
-    if (up.y < 0) {
-      up.multiplyScalar(-1);
-    }
-    return up;
-  }
-
-  if (up.z < 0 || (Math.abs(up.z) <= 1e-6 && surfaceNormal.z < 0)) {
-    up.multiplyScalar(-1);
-  }
-  return up;
+  return up.normalize();
 }
