@@ -1319,6 +1319,7 @@ export default function BasicSettings() {
           </div>
         </div>
       ) : null}
+      <div data-tutorial="image-upload">
       {uploaderExpanded ? (
         <UnifiedUploader
           singlePreview={imagePreviewUrl ?? undefined}
@@ -1351,6 +1352,7 @@ export default function BasicSettings() {
           </span>
         </button>
       )}
+      </div>
 
       {workshopSource ? (
         <WorkshopSourceBanner
@@ -1519,14 +1521,16 @@ export default function BasicSettings() {
         )}
       </div>
 
-      <RadioGroup
-        label={t("basic_source_version_label")}
-        tooltip={t("basic_source_version_hint")}
-        wikiPath={WIKI_DOCS.sourceType}
-        value={source_version}
-        options={sourceVersionOptions}
-        onChange={(value) => setSourceVersion(value as "legacy" | "native" | "material")}
-      />
+      <div data-tutorial="color-source">
+        <RadioGroup
+          label={t("basic_source_version_label")}
+          tooltip={t("basic_source_version_hint")}
+          wikiPath={WIKI_DOCS.sourceType}
+          value={source_version}
+          options={sourceVersionOptions}
+          onChange={(value) => setSourceVersion(value as "legacy" | "native" | "material")}
+        />
+      </div>
 
       {source_version === "material" ? (
         <div className="-mt-1 flex flex-col gap-3 rounded-lg border border-slate-200/60 bg-slate-100/50 p-3 dark:border-slate-700/40 dark:bg-slate-900/40">
@@ -1854,31 +1858,33 @@ export default function BasicSettings() {
         </>
       ) : null}
 
-      <Slider
-        label={t("basic_width")}
-        tooltip={t("basic_width_hint")}
-        wikiPath={WIKI_DOCS.outputDimensions}
-        value={target_width_mm}
-        min={10}
-        max={dimMax}
-        inputMax={dimInputMax}
-        step={dimensionSliderStep(target_width_mm)}
-        unit="mm"
-        onChange={setTargetWidthMm}
-      />
+      <div data-tutorial="output-size" className="flex flex-col gap-4">
+        <Slider
+          label={t("basic_width")}
+          tooltip={t("basic_width_hint")}
+          wikiPath={WIKI_DOCS.outputDimensions}
+          value={target_width_mm}
+          min={10}
+          max={dimMax}
+          inputMax={dimInputMax}
+          step={dimensionSliderStep(target_width_mm)}
+          unit="mm"
+          onChange={setTargetWidthMm}
+        />
 
-      <Slider
-        label={t("basic_height")}
-        tooltip={t("basic_height_hint")}
-        wikiPath={WIKI_DOCS.outputDimensions}
-        value={target_height_mm}
-        min={10}
-        max={dimMax}
-        inputMax={dimInputMax}
-        step={dimensionSliderStep(target_height_mm)}
-        unit="mm"
-        onChange={setTargetHeightMm}
-      />
+        <Slider
+          label={t("basic_height")}
+          tooltip={t("basic_height_hint")}
+          wikiPath={WIKI_DOCS.outputDimensions}
+          value={target_height_mm}
+          min={10}
+          max={dimMax}
+          inputMax={dimInputMax}
+          step={dimensionSliderStep(target_height_mm)}
+          unit="mm"
+          onChange={setTargetHeightMm}
+        />
+      </div>
 
       <Checkbox
         label={t("basic_large_format")}

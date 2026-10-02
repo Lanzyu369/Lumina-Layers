@@ -1235,6 +1235,17 @@ function Scene3D({ modelUrl }: Scene3DProps) {
       onPointerCancel={finishViewportPointer}
     >
       {screenshotNotice && <div role="status" className="absolute bottom-4 left-4 z-30 rounded bg-[var(--surface-panel-strong)] p-2 text-sm">{screenshotNotice}</div>}
+      {/* Beginner-tutorial anchor: the visible 3D area between the docks
+          (the canvas itself spans underneath both docks). */}
+      <div
+        aria-hidden="true"
+        data-tutorial="viewport-3d"
+        className="pointer-events-none absolute inset-y-0"
+        style={{
+          left: "var(--lumina-left-dock-width, 0px)",
+          right: "var(--lumina-right-dock-width, 0px)",
+        }}
+      />
       {/* Floating action buttons — top-right with right-dock avoidance.
        * 浮动按钮组：右上角悬浮，依赖 WidgetWorkspace 注入的
        * `--lumina-right-dock-width` CSS 变量自动避开右侧坞内的 widget。

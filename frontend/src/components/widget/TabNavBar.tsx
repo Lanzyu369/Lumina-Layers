@@ -103,7 +103,7 @@ export default function TabNavBar({ activeTab, onTabChange, compact = false }: T
   const activePrimaryTab = resolvePrimaryTab(activeTab);
 
   return (
-    <nav className={`dock-scrollbar flex max-w-full items-center overflow-x-auto border border-slate-200/80 bg-slate-100/90 dark:border-slate-800/80 dark:bg-slate-900/90 ${compact ? "rounded-[20px] p-1" : "rounded-2xl p-1.5"}`}>
+    <nav data-tutorial="primary-tabs" className={`dock-scrollbar flex max-w-full items-center overflow-x-auto border border-slate-200/80 bg-slate-100/90 dark:border-slate-800/80 dark:bg-slate-900/90 ${compact ? "rounded-[20px] p-1" : "rounded-2xl p-1.5"}`}>
       <div className="flex min-w-max items-center gap-1">
         {PRIMARY_TAB_LIST.map(({ id, titleKey }) => {
           const isActive = id === activePrimaryTab;

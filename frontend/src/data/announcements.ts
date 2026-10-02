@@ -66,6 +66,9 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
       items: [{
         zh: "大画幅模式下，3D 预览会用橙色线画出作品会被切成哪几块，并在每块上标出编号（如 R1C2 表示第 1 行第 2 列），编号与压缩包里的 3MF 文件名一致。不想看时可以在大画幅设置里关掉。",
         en: "In large format mode, the 3D preview now draws orange lines showing how your artwork will be split, and labels each piece (for example R1C2 means row 1, column 2) to match the 3MF file names in the ZIP. You can hide the lines in the large format settings.",
+      }, {
+        zh: "新增新手引导：第一次打开软件时会询问是否开始，用约 1 分钟走一遍从图片到 3MF（多色打印文件）的基本流程，讲清三种颜色来源的区别，并教你用鼠标旋转、平移、缩放 3D 预览。随时可以一键跳过，也可以点右上角的书本图标重新查看。",
+        en: "Added a beginner tour. On first launch it offers a one-minute walk-through from picture to 3MF (the multi-color print file), explains the three color sources, and shows how to rotate, pan and zoom the 3D preview with the mouse. Skip it with one click, or replay it any time from the book icon at the top right.",
       }],
     }, {
       category: { zh: "稳定性", en: "Stability" },

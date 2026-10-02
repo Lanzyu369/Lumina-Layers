@@ -73,6 +73,10 @@ vi.mock("../components/LanguageToggle", () => ({ LanguageToggle: () => null }));
 vi.mock("../components/ThemeToggle", () => ({ ThemeToggle: () => null }));
 vi.mock("../components/BugReportButton", () => ({ BugReportButton: () => null }));
 vi.mock("../components/BugReportModal", () => ({ BugReportModal: () => null }));
+vi.mock("../components/tutorial/TutorialHost", () => ({ TutorialHost: () => null }));
+vi.mock("../components/tutorial/TutorialLauncherButton", () => ({
+  TutorialLauncherButton: () => null,
+}));
 vi.mock("../components/ui/AnnouncementDialog", () => ({ default: () => null }));
 vi.mock("../components/widget/WidgetWorkspace", () => ({
   WidgetWorkspace: ({ children }: { children: ReactNode }) => <div>{children}</div>,
