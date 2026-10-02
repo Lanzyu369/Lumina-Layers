@@ -45,6 +45,18 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
       en: "Lumina Layers — September updates",
     },
     sections: [{
+      category: { zh: "校准 & 材料", en: "Calibration & Materials" },
+      items: [{
+        zh: "云端耗材库改成按页浏览，不用再一次次点“加载更多”；可以直接跳到任意一页。",
+        en: "The cloud material library now has page-by-page browsing instead of repeated “Load more” clicks, and you can jump straight to any page.",
+      }, {
+        zh: "云端耗材卡片会显示发布频道（官方、社区等）和拟合误差（色差越小越准），并按优秀、良好、偏高分级。",
+        en: "Cloud material cards now show where each material was published (official, community, and so on) and its fit error, graded as excellent, good, or high.",
+      }, {
+        zh: "按“可更新”“已安装”筛选时的数量更准确；耗材更新后保留的旧版本收进了可折叠的“本地版本记录”，需要时再展开回滚。",
+        en: "The “Updates” and “Installed” filters now show accurate counts, and older versions kept after an update live in a collapsible “Local revision history” you can open when you need to roll back.",
+      }],
+    }, {
       category: { zh: "稳定性", en: "Stability" },
       items: [{
         zh: "问题反馈现在点一次“发送”就会上传到官方问题收集服务，不用再配置邮箱，也不用再确认转发；对话框会显示上传进度，失败时可以一键重试。",

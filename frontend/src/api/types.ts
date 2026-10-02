@@ -1215,6 +1215,18 @@ export interface MaterialRegistryCatalogEntry {
   package_url: string;
   package_sha256: string;
   package_bytes: number;
+  /** Public card projection from the Registry; older registries omit it. */
+  card_metadata?: MaterialRegistryCardMetadata | null;
+}
+
+/** Registry card metadata; every field is optional and may be malformed upstream. */
+export interface MaterialRegistryCardMetadata {
+  created_at?: string | null;
+  updated_at?: string | null;
+  estimated_rgb?: number[] | null;
+  layer_height_mm?: number | null;
+  mean_delta_e?: number | null;
+  verification_count?: number | null;
 }
 
 export interface MaterialRegistryCatalogResponse {

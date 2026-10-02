@@ -1078,6 +1078,57 @@ def test_material_sync_catalog_endpoint_returns_remote_catalog_without_installin
     body = response.json()
     assert body["count"] == 1
     assert body["materials"][0]["material_id"] == "mat_cloud_test"
+    assert body["materials"][0]["card_metadata"] is None
+
+
+def test_material_sync_catalog_endpoint_preserves_registry_card_metadata(
+    monkeypatch,
+) -> None:
+    card_metadata = {
+        "created_at": "2026-07-15T16:55:22+00:00",
+        "updated_at": "2026-07-15T16:55:23+00:00",
+        "estimated_rgb": [255, 255, 61],
+        "layer_height_mm": 0.08,
+        "mean_delta_e": 4.87,
+        "verification_count": 1,
+        "usage_stats": None,
+    }
+
+    def _fake_list_material_registry_catalog(**_: object) -> dict[str, object]:
+        return {
+            "schema_version": "1.0",
+            "channels": ["community"],
+            "count": 1,
+            "total_count": 1,
+            "materials": [
+                {
+                    "material_id": "mat_fit",
+                    "revision_id": "rev_fit",
+                    "content_hash": "sha256:fit",
+                    "channel": "community",
+                    "visibility": "community",
+                    "local_directory": "BrandA/petg-hf",
+                    "display": {"brand": "BrandA", "material_name": "PETG HF"},
+                    "compatibility": {},
+                    "package_url": "/v1/packages/mat_fit.zip",
+                    "package_sha256": "f" * 64,
+                    "package_bytes": 7418,
+                    "card_metadata": card_metadata,
+                }
+            ],
+        }
+
+    monkeypatch.setattr(
+        "api.routers.material_sync.list_material_registry_catalog",
+        _fake_list_material_registry_catalog,
+    )
+
+    response = _client().get("/api/material-sync/catalog", params={"limit": 24})
+
+    assert response.status_code == 200
+    entry = response.json()["materials"][0]
+    assert entry["channel"] == "community"
+    assert entry["card_metadata"] == card_metadata
 
 
 def test_material_sync_catalog_allows_public_channels_without_password(
