@@ -372,12 +372,19 @@ describe("MaterialPickerDialog", () => {
   it("shows every brand neutrally, merges case-only duplicates, and has no more-brands bucket", () => {
     renderPicker();
 
-    const brandOptions = screen.getAllByTestId("material-picker-brand-option");
-    expect(brandOptions.map((option) => option.textContent)).toEqual([
-      expect.stringMatching(/全部品牌.*3/),
-      expect.stringMatching(/JAYO.*2/),
-      expect.stringMatching(/瑞贝思.*1/),
-    ]);
+    const brandLabels = screen
+      .getAllByTestId("material-picker-brand-option")
+      .map((option) => option.textContent);
+    expect(brandLabels).toHaveLength(3);
+    expect(brandLabels[0]).toMatch(/全部品牌.*3/);
+    // Brand rows follow the host locale's collation (zh puts Han before
+    // Latin), so compare them without pinning an order.
+    expect(brandLabels.slice(1)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/JAYO.*2/),
+        expect.stringMatching(/瑞贝思.*1/),
+      ]),
+    );
     expect(screen.queryByText("更多品牌")).not.toBeInTheDocument();
   });
 

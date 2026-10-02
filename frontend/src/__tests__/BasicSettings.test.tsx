@@ -374,6 +374,60 @@ describe("BasicSettings", () => {
     expect(widthInput).toHaveValue("30000");
   });
 
+  it("offers a preview-only cut outline toggle in large-format mode", () => {
+    useConverterStore.setState({
+      largeFormatEnabled: false,
+      largeFormatTileOverlayVisible: true,
+    } as never);
+    const { rerender } = render(<BasicSettings />);
+    expect(
+      screen.queryByRole("checkbox", { name: "在预览中显示切割轮廓" }),
+    ).not.toBeInTheDocument();
+
+    act(() => {
+      useConverterStore.setState({
+        largeFormatEnabled: true,
+        target_width_mm: 600,
+        target_height_mm: 400,
+        tileWidthMm: 250,
+        tileHeightMm: 250,
+        previewPixelWidth: null,
+        previewPixelHeight: null,
+        downloadUrl: "/api/files/ready.zip",
+      } as never);
+    });
+    rerender(<BasicSettings />);
+
+    expect(screen.getByText("3×2 = 6 (100×150mm)")).toBeInTheDocument();
+    const toggle = screen.getByRole("checkbox", { name: "在预览中显示切割轮廓" });
+    expect(toggle).toBeChecked();
+
+    fireEvent.click(toggle);
+
+    const state = useConverterStore.getState();
+    expect(state.largeFormatTileOverlayVisible).toBe(false);
+    // Preview-only toggle must not invalidate an already generated download.
+    expect(state.downloadUrl).toBe("/api/files/ready.zip");
+  });
+
+  it("counts large-format rows from the backend-derived height", () => {
+    // SVG case: browser height 400 mm (2 rows) but the backend preview ratio
+    // gives 520 mm, which generation actually splits into 3 rows.
+    useConverterStore.setState({
+      largeFormatEnabled: true,
+      target_width_mm: 600,
+      target_height_mm: 400,
+      tileWidthMm: 250,
+      tileHeightMm: 250,
+      previewPixelWidth: 600,
+      previewPixelHeight: 520,
+    } as never);
+
+    render(<BasicSettings />);
+
+    expect(screen.getByText("3×3 = 9 (100×20mm)")).toBeInTheDocument();
+  });
+
   it("backs off failed startup LUT loads instead of retrying immediately", async () => {
     vi.useFakeTimers();
     vi.mocked(converterApi.fetchLutList)

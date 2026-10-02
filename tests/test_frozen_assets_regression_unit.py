@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -287,6 +288,23 @@ def _load_baseline() -> dict[str, Any] | None:
         return json.load(f)
 
 
+def _baseline_environment() -> dict[str, str]:
+    """Capture runtime versions needed to reproduce raster baselines."""
+    import cv2
+    import scipy
+    from PIL import __version__ as pillow_version
+
+    return {
+        "python": platform.python_version(),
+        "system": platform.system(),
+        "machine": platform.machine(),
+        "numpy": np.__version__,
+        "scipy": scipy.__version__,
+        "opencv": cv2.__version__,
+        "pillow": pillow_version,
+    }
+
+
 def _load_baseline_arrays(case_id: str) -> tuple[np.ndarray, np.ndarray]:
     npz_path = BASELINE_ARRAYS_DIR / f"{case_id}.npz"
     if not npz_path.is_file():
@@ -395,10 +413,11 @@ def generate_baseline() -> None:
         cases_out[case_id] = payload
 
     baseline_doc = {
-        "version": "1.0.0",
+        "version": "1.1.0",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "regression_scope": "raster_only",
         "svg_regression": "paused",
+        "generator_environment": _baseline_environment(),
         "fixed_params": FIXED_PARAMS,
         "thresholds": THRESHOLDS,
         "cases": cases_out,
@@ -456,6 +475,13 @@ def verify_against_baseline() -> bool:
 
 def test_frozen_manifest_integrity() -> None:
     _validate_manifest_integrity_strict()
+
+
+def test_frozen_baseline_parameters_and_thresholds_match_runner() -> None:
+    baseline = _load_baseline()
+    assert baseline is not None, "Frozen raster baseline must be present"
+    assert baseline["fixed_params"] == FIXED_PARAMS
+    assert baseline["thresholds"] == THRESHOLDS
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c["case_id"] for c in CASES])

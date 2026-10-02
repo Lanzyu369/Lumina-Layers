@@ -566,6 +566,7 @@ def test_worker_generate_model_surface_overlay_exports_bambu_3mf(tmp_path):
     assert captured["scene"] is scene
     assert captured["slot_names"] == ["surface_base", "red"]
     assert captured["project_slot_names"] == ["surface_base", "red"]
+    assert captured["preserve_template_filament_slots"] is False
     assert captured["preview_colors"] == overlay.preview_colors
     assert captured["cover_source"] == str(image_path)
     assert captured["settings"] == {"layer_height": "0.04"}

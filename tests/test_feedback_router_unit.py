@@ -2,10 +2,10 @@
 
 测试覆盖：
 - 同步路径返回 ``assembly_status == 'in_progress'``、
-  ``email_status`` 为 ``'pending'`` / ``'unconfigured'``
+  ``submission_status`` 为 ``'pending'`` / ``'disabled'``
 - 工单目录 ``feedback/<YYYY-MM>/<ticket_id>/ticket.json`` 正确落地
 - 失败场景（screenshot 过大 / 校验失败 / 限流 / 目录写入失败）
-- 现有 relay 行为保持不变
+- 工单上传状态查询与失败重传
 """
 
 from __future__ import annotations
@@ -241,19 +241,14 @@ def client(
     feedback_root: Path,
 ) -> TestClient:
     from api.app import create_app
-    import api.feedback_email as feedback_email
     import api.routers.feedback as feedback_router
 
     monkeypatch.setenv("LUMINA_FEEDBACK_DUMP_DIR", str(feedback_root))
     monkeypatch.setenv("LUMINA_FEEDBACK_STARTUP_CLEANUP", "false")
-    monkeypatch.delenv("LUMINA_FEEDBACK_SMTP_HOST", raising=False)
-    monkeypatch.delenv("LUMINA_FEEDBACK_TO", raising=False)
+    # Never reach the real feedback server from unit tests.
+    monkeypatch.setenv("LUMINA_FEEDBACK_SERVER_URL", "off")
     monkeypatch.delenv("LUMINA_FEEDBACK_RATE_LIMIT_MAX", raising=False)
     monkeypatch.delenv("LUMINA_FEEDBACK_RATE_LIMIT_WINDOW_S", raising=False)
-    monkeypatch.delenv("LUMINA_FEEDBACK_RELAY_URL", raising=False)
-    monkeypatch.delenv("LUMINA_FEEDBACK_RELAY_TOKEN", raising=False)
-    monkeypatch.delenv("LUMINA_FEEDBACK_RELAY_TIMEOUT_S", raising=False)
-    feedback_email.is_email_configured.cache_clear()
     feedback_router._clear_feedback_rate_limit_state()
     app = create_app()
     return TestClient(app)
@@ -275,10 +270,9 @@ def test_submit_bug_report_accepts_full_payload_and_logs_canary(
     assert response.status_code == 200
     data = response.json()
     assert data["ticket_id"].startswith("LUM-")
-    assert data["emailed"] is False
-    assert data["email_status"] == "unconfigured"
+    assert data["submission_status"] == "disabled"
+    assert "email_status" not in data and "relay_available" not in data
     assert data["assembly_status"] in ("in_progress", "done", "partial_failed")
-    assert data["relay_available"] is False
     assert data["dump_path"].endswith(data["ticket_id"])
 
     ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
@@ -299,7 +293,7 @@ def test_submit_bug_report_accepts_full_payload_and_logs_canary(
     assert canaries[0].description_length == len(payload["description"])
     assert canaries[0].language == "en"
     assert canaries[0].has_screenshot is True
-    assert canaries[0].email_status == "unconfigured"
+    assert canaries[0].submission_status == "disabled"
     assert canaries[0].source_version == "legacy"
     assert canaries[0].recent_client_log_count == 1
 
@@ -404,8 +398,7 @@ def test_submit_bug_report_accepts_description_only(client: TestClient) -> None:
 
     assert response.status_code == 200
     data = response.json()
-    assert data["emailed"] is False
-    assert data["email_status"] == "unconfigured"
+    assert data["submission_status"] == "disabled"
     assert data["assembly_status"] in ("in_progress", "done", "partial_failed")
 
 
@@ -842,28 +835,41 @@ def test_submit_bug_report_sanitizes_description_for_export(
     _assert_description_diagnostics_redacted(exported_text)
 
 
-def test_submit_bug_report_returns_pending_email_status_when_configured(
+def _enable_fake_feedback_server(
+    monkeypatch: pytest.MonkeyPatch,
+    receipts: list[Any],
+    *,
+    fail: bool = False,
+) -> None:
+    """Route uploads to an in-memory fake instead of the network."""
+    import api.feedback_hosted as feedback_hosted
+
+    async def _submit(bundle: Any, *, base_url: str, transport: Any = None) -> dict[str, Any]:
+        receipts.append({"bundle": bundle, "base_url": base_url})
+        if fail:
+            raise feedback_hosted.HostedSubmissionError(
+                "ServerUnavailable", "down", http_status=503
+            )
+        return {"ticket_id": bundle.ticket_id, "status": "received"}
+
+    monkeypatch.setenv("LUMINA_FEEDBACK_SERVER_URL", "https://feedback.example.test/")
+    monkeypatch.setattr(feedback_hosted, "submit_ticket_bundle", _submit)
+
+
+def test_submit_bug_report_uploads_sanitized_ticket_to_feedback_server(
     client: TestClient,
     feedback_root: Path,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    email_calls: list[dict[str, Any]] = []
-
-    async def _send(**kwargs: Any) -> bool:
-        email_calls.append(kwargs)
-        return True
-
-    monkeypatch.setenv("LUMINA_FEEDBACK_SMTP_HOST", "localhost")
-    monkeypatch.setenv("LUMINA_FEEDBACK_TO", "dev@example.com")
-    monkeypatch.setenv("LUMINA_FEEDBACK_RELAY_URL", "https://relay.example.test/feedback")
-    monkeypatch.setattr("api.feedback_email.send_bug_report_email_async", _send)
-    import api.feedback_email as feedback_email
-
-    feedback_email.is_email_configured.cache_clear()
+    receipts: list[Any] = []
+    _enable_fake_feedback_server(monkeypatch, receipts)
 
     private_path = tmp_path / "private-output" / "model.3mf"
-    payload = _payload(description=DESCRIPTION_RAW_DIAGNOSTICS)
+    payload = _payload(
+        description=DESCRIPTION_RAW_DIAGNOSTICS,
+        screenshot_data_url="data:image/png;base64," + ("a" * 1024),
+    )
     payload["context"]["recent_client_logs"] = [
         {
             "timestamp": "2026-05-10T01:02:03.000Z",
@@ -893,64 +899,143 @@ def test_submit_bug_report_returns_pending_email_status_when_configured(
 
     assert response.status_code == 200
     data = response.json()
-    # The new handler defers email to the background task; the sync response
-    # should report 'pending' when SMTP is configured and relay availability.
-    assert data["emailed"] is False
-    assert data["email_status"] == "pending"
-    assert data["relay_available"] is True
-    email_payload = email_calls[0]["request_payload"]
-    _assert_description_diagnostics_redacted(
-        json.dumps(email_payload, ensure_ascii=False)
-    )
-    active_ref = email_payload["context"]["active_final_artifact_ref"]
-    assert "disk_path" not in active_ref
-    assert private_path.as_posix() not in json.dumps(email_payload, ensure_ascii=False)
-    email_log_details = email_payload["context"]["recent_client_logs"][0]["details"]
-    assert email_log_details["api_path_transport_error"] == (
-        "The server reported an error while processing this request. "
-        "Context: /api/files/output-model"
-    )
-    assert email_log_details["status_code"] == 500
-    assert email_log_details["api_path"] == "/api/files/output-model"
-    assert "Request failed with status code 500" not in json.dumps(
-        email_payload,
-        ensure_ascii=False,
-    )
-    from api.feedback_email import _build_email_message
+    # Upload runs in the background task; the synchronous answer is pending.
+    assert data["submission_status"] == "pending"
+    assert len(receipts) == 1
+    assert receipts[0]["base_url"] == "https://feedback.example.test"
+    bundle = receipts[0]["bundle"]
+    document = bundle.document
+    assert document["schema"] == "lumina-feedback-bundle/1"
+    assert document["ticket_id"] == data["ticket_id"]
+    # The same ticket.json, index.md and summary.txt the old email carried.
+    assert document["index_md"] and document["summary_txt"]
+    assert "submission" not in document["ticket"]
+    assert [item.name for item in bundle.files] == ["screenshot.png"]
+    assert document["attachments"][0]["kind"] == "screenshot"
 
-    email_message = _build_email_message(
-        ticket_id=data["ticket_id"],
-        request_payload=email_payload,
-        dump_path=email_calls[0]["dump_path"],
-        smtp_from="from@example.com",
-        smtp_to=["dev@example.com"],
-    )
-    json_attachments = [
-        attachment
-        for attachment in email_message.iter_attachments()
-        if attachment.get_filename() == f"{data['ticket_id']}.json"
-    ]
-    assert len(json_attachments) == 1
-    attached_payload = json.loads(
-        json_attachments[0].get_payload(decode=True).decode("utf-8")
-    )
-    _assert_description_diagnostics_redacted(
-        json.dumps(attached_payload, ensure_ascii=False)
-    )
-    attached_details = attached_payload["context"]["recent_client_logs"][0]["details"]
-    assert attached_details["api_path_transport_error"] == (
+    uploaded_text = json.dumps(document, ensure_ascii=False)
+    _assert_description_diagnostics_redacted(uploaded_text)
+    assert "disk_path" not in document["ticket"]["context"]["active_final_artifact_ref"]
+    assert private_path.as_posix() not in uploaded_text
+    assert feedback_root.as_posix() not in uploaded_text
+    details = document["ticket"]["context"]["recent_client_logs"][0]["details"]
+    assert details["api_path_transport_error"] == (
         "The server reported an error while processing this request. "
         "Context: /api/files/output-model"
     )
-    assert "Request failed with status code 500" not in json.dumps(
-        attached_payload,
-        ensure_ascii=False,
+    assert "Request failed with status code 500" not in uploaded_text
+
+    ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
+    assert ticket_json["submission"]["status"] == "submitted"
+    assert ticket_json["submission"]["uploaded_attachments"] == ["screenshot.png"]
+    assert "email" not in ticket_json
+
+    status_response = client.get(f"/api/feedback/bug-report/{data['ticket_id']}/status")
+    assert status_response.status_code == 200
+    assert status_response.json()["submission_status"] == "submitted"
+
+
+def test_failed_upload_can_be_resubmitted_once_server_recovers(
+    client: TestClient,
+    feedback_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    receipts: list[Any] = []
+    _enable_fake_feedback_server(monkeypatch, receipts, fail=True)
+
+    data = client.post("/api/feedback/bug-report", json=_payload()).json()
+    status_url = f"/api/feedback/bug-report/{data['ticket_id']}/status"
+    failed = client.get(status_url).json()
+    assert failed["submission_status"] == "failed"
+    assert failed["error_type"] == "ServerUnavailable"
+
+    _enable_fake_feedback_server(monkeypatch, receipts)
+    resubmitted = client.post(f"/api/feedback/bug-report/{data['ticket_id']}/resubmit")
+    assert resubmitted.status_code == 200
+    assert resubmitted.json()["submission_status"] == "submitted"
+    first, second = receipts[0]["bundle"].document, receipts[1]["bundle"].document
+    # Retries send identical content so the server treats them idempotently.
+    assert first == second
+
+    again = client.post(f"/api/feedback/bug-report/{data['ticket_id']}/resubmit")
+    assert again.json()["submission_status"] == "submitted"
+    assert len(receipts) == 2
+    assert _read_ticket_json(feedback_root, data["ticket_id"])["submission"]["attempts"] == 2
+
+
+def test_resubmit_resumes_interrupted_assembly_before_uploading(
+    client: TestClient,
+    feedback_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    receipts: list[Any] = []
+    _enable_fake_feedback_server(monkeypatch, receipts, fail=True)
+    data = client.post("/api/feedback/bug-report", json=_payload()).json()
+    ticket_dir = next(feedback_root.glob(f"*/{data['ticket_id']}"))
+    # Simulate a restart before index/summary were rendered: startup cleanup
+    # marks the ticket interrupted and the upload failed.
+    ticket = json.loads((ticket_dir / "ticket.json").read_text(encoding="utf-8"))
+    ticket["assembly_status"] = "interrupted"
+    ticket["submission"] = {"status": "failed", "error_type": "UploadInterrupted"}
+    (ticket_dir / "ticket.json").write_text(json.dumps(ticket), encoding="utf-8")
+    (ticket_dir / "index.md").unlink()
+    (ticket_dir / "summary.txt").unlink()
+
+    _enable_fake_feedback_server(monkeypatch, receipts)
+    response = client.post(f"/api/feedback/bug-report/{data['ticket_id']}/resubmit")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["submission_status"] == "submitted"
+    assert body["assembly_status"] in ("done", "partial_failed")
+    uploaded = receipts[-1]["bundle"].document
+    assert uploaded["index_md"] and uploaded["summary_txt"]
+    assert uploaded["ticket"]["assembly_status"] in ("done", "partial_failed")
+    assert (ticket_dir / "index.md").exists()
+
+
+def test_oversized_attachment_is_held_back_and_reported(
+    client: TestClient,
+    feedback_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import api.feedback_hosted as feedback_hosted
+
+    receipts: list[Any] = []
+    _enable_fake_feedback_server(monkeypatch, receipts)
+    monkeypatch.setattr(feedback_hosted, "MAX_UPLOAD_ATTACHMENT_BYTES", 16)
+    payload = _payload(screenshot_data_url="data:image/png;base64," + ("a" * 1024))
+
+    data = client.post("/api/feedback/bug-report", json=payload).json()
+    status_body = client.get(f"/api/feedback/bug-report/{data['ticket_id']}/status").json()
+
+    assert status_body["submission_status"] == "submitted"
+    assert status_body["held_back_attachments"] == [
+        {"name": "screenshot.png", "size_bytes": 768, "reason": "too_large"}
+    ]
+    assert receipts[0]["bundle"].files == []
+
+
+def test_bug_report_status_rejects_unknown_or_malformed_ticket(client: TestClient) -> None:
+    assert client.get("/api/feedback/bug-report/LUM-202609-00000000/status").status_code == 404
+    assert client.get("/api/feedback/bug-report/..%2F..%2Fsecret/status").status_code == 404
+    assert client.post("/api/feedback/bug-report/LUM-2026-bad/resubmit").status_code == 404
+
+
+def test_resubmit_is_unavailable_when_uploads_are_disabled(client: TestClient) -> None:
+    data = client.post("/api/feedback/bug-report", json=_payload()).json()
+    assert data["submission_status"] == "disabled"
+    response = client.post(f"/api/feedback/bug-report/{data['ticket_id']}/resubmit")
+    assert response.status_code == 503
+
+
+def test_bug_report_status_rejects_untrusted_origin(client: TestClient) -> None:
+    data = client.post("/api/feedback/bug-report", json=_payload()).json()
+    response = client.get(
+        f"/api/feedback/bug-report/{data['ticket_id']}/status",
+        headers=UNTRUSTED_ORIGIN_HEADERS,
     )
-    email_dump_path = email_calls[0]["dump_path"]
-    assert email_dump_path.startswith("feedback/")
-    assert data["ticket_id"] in email_dump_path
-    assert not Path(email_dump_path).is_absolute()
-    assert feedback_root.as_posix() not in email_dump_path
+    assert response.status_code == 403
 
 
 def test_submit_bug_report_assembly_marks_done_after_background_task(
@@ -1471,344 +1556,6 @@ def test_submit_bug_report_returns_500_when_ticket_dir_creation_fails(
     ]
     assert len(failures) == 1
     assert failures[0].error_type == "OSError"
-
-
-def test_relay_bug_report_returns_503_when_unconfigured(
-    client: TestClient,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    _capture_feedback_logger(caplog, logging.WARNING)
-
-    response = client.post(
-        "/api/feedback/bug-report/relay",
-        json={"ticket_id": "abc12345", "request_payload": _payload()},
-    )
-
-    assert response.status_code == 503
-    warnings = [
-        record for record in caplog.records
-        if getattr(record, "event", None) == "feedback_bug_report_relay_unconfigured"
-    ]
-    assert len(warnings) == 1
-    assert warnings[0].error_type == "RelayUnconfigured"
-
-
-def test_relay_bug_report_rejects_untrusted_origin_before_relay_http(
-    client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import httpx
-
-    class _Client:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            pass
-
-        async def __aenter__(self) -> "_Client":
-            raise AssertionError("relay client should not be opened")
-
-        async def __aexit__(self, *_args: object) -> None:
-            return None
-
-    monkeypatch.setenv("LUMINA_FEEDBACK_RELAY_URL", "https://relay.example.test/feedback")
-    monkeypatch.setattr(httpx, "AsyncClient", _Client)
-
-    response = client.post(
-        "/api/feedback/bug-report/relay",
-        json={"ticket_id": "abc12345", "request_payload": _payload()},
-        headers=UNTRUSTED_ORIGIN_HEADERS,
-    )
-
-    assert response.status_code == 403
-    assert "local Lumina Studio app" in response.json()["detail"]
-
-
-def test_relay_bug_report_allows_untrusted_origin_for_public_gray_api(
-    client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import httpx
-
-    monkeypatch.setenv("LUMINA_ALLOW_PUBLIC_GRAY_API", "1")
-    calls: list[dict[str, Any]] = []
-
-    class _Response:
-        status_code = 202
-
-        def raise_for_status(self) -> None:
-            return None
-
-    class _Client:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            pass
-
-        async def __aenter__(self) -> "_Client":
-            return self
-
-        async def __aexit__(self, *_args: object) -> None:
-            return None
-
-        async def post(
-            self,
-            url: str,
-            *,
-            json: dict[str, Any],
-            headers: dict[str, str],
-        ) -> _Response:
-            calls.append({"url": url, "json": json, "headers": headers})
-            return _Response()
-
-    monkeypatch.setenv("LUMINA_FEEDBACK_RELAY_URL", "https://relay.example.test/feedback")
-    monkeypatch.setattr(httpx, "AsyncClient", _Client)
-
-    response = client.post(
-        "/api/feedback/bug-report/relay",
-        json={"ticket_id": "abc12345", "request_payload": _payload()},
-        headers=UNTRUSTED_ORIGIN_HEADERS,
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {"forwarded": True}
-    assert calls[0]["url"] == "https://relay.example.test/feedback"
-
-
-def test_relay_bug_report_forwards_to_configured_relay(
-    client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    import httpx
-
-    calls: list[dict[str, Any]] = []
-
-    class _Response:
-        status_code = 202
-
-        def raise_for_status(self) -> None:
-            return None
-
-    class _Client:
-        def __init__(self, *, timeout: float) -> None:
-            self.timeout = timeout
-
-        async def __aenter__(self) -> "_Client":
-            return self
-
-        async def __aexit__(self, *_args: object) -> None:
-            return None
-
-        async def post(
-            self,
-            url: str,
-            *,
-            json: dict[str, Any],
-            headers: dict[str, str],
-        ) -> _Response:
-            calls.append({
-                "url": url,
-                "json": json,
-                "headers": headers,
-                "timeout": self.timeout,
-            })
-            return _Response()
-
-    monkeypatch.setenv("LUMINA_FEEDBACK_RELAY_URL", "https://relay.example.test/feedback")
-    monkeypatch.setenv("LUMINA_FEEDBACK_RELAY_TOKEN", "secret-token")
-    monkeypatch.setenv("LUMINA_FEEDBACK_RELAY_TIMEOUT_S", "3")
-    monkeypatch.setattr(httpx, "AsyncClient", _Client)
-    _capture_feedback_logger(caplog, logging.INFO)
-
-    response = client.post(
-        "/api/feedback/bug-report/relay",
-        json={"ticket_id": "abc12345", "request_payload": _payload(description="Relay me")},
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {"forwarded": True}
-    assert calls == [
-        {
-            "url": "https://relay.example.test/feedback",
-            "json": {
-                "ticket_id": "abc12345",
-                "request_payload": _payload(description="Relay me"),
-            },
-            "headers": {
-                "Content-Type": "application/json",
-                "X-Lumina-Feedback-Ticket": "abc12345",
-                "Authorization": "Bearer secret-token",
-            },
-            "timeout": 3.0,
-        }
-    ]
-    infos = [
-        record for record in caplog.records
-        if getattr(record, "event", None) == "feedback_bug_report_relay_done"
-    ]
-    assert len(infos) == 1
-    assert infos[0].relay_status_code == 202
-
-
-def test_relay_bug_report_sanitizes_description_before_forwarding(
-    client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import httpx
-
-    calls: list[dict[str, Any]] = []
-
-    class _Response:
-        status_code = 202
-
-        def raise_for_status(self) -> None:
-            return None
-
-    class _Client:
-        def __init__(self, *, timeout: float) -> None:
-            self.timeout = timeout
-
-        async def __aenter__(self) -> "_Client":
-            return self
-
-        async def __aexit__(self, *_args: object) -> None:
-            return None
-
-        async def post(
-            self,
-            url: str,
-            *,
-            json: dict[str, Any],
-            headers: dict[str, str],
-        ) -> _Response:
-            calls.append({"url": url, "json": json, "headers": headers})
-            return _Response()
-
-    monkeypatch.setenv("LUMINA_FEEDBACK_RELAY_URL", "https://relay.example.test/feedback")
-    monkeypatch.setattr(httpx, "AsyncClient", _Client)
-
-    response = client.post(
-        "/api/feedback/bug-report/relay",
-        json={
-            "ticket_id": "abc12345",
-            "request_payload": _payload(description=DESCRIPTION_RAW_DIAGNOSTICS),
-        },
-    )
-
-    assert response.status_code == 200
-    forwarded_payload = calls[0]["json"]["request_payload"]
-    _assert_description_diagnostics_redacted(
-        json.dumps(forwarded_payload, ensure_ascii=False)
-    )
-
-
-def test_relay_bug_report_redacts_final_artifact_disk_path(
-    client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """Relay payloads must not forward local or server disk paths.
-
-    官方转发 payload 不应包含本机或服务器磁盘路径。
-    """
-    import httpx
-
-    calls: list[dict[str, Any]] = []
-
-    class _Response:
-        status_code = 202
-
-        def raise_for_status(self) -> None:
-            return None
-
-    class _Client:
-        def __init__(self, *, timeout: float) -> None:
-            self.timeout = timeout
-
-        async def __aenter__(self) -> "_Client":
-            return self
-
-        async def __aexit__(self, *_args: object) -> None:
-            return None
-
-        async def post(
-            self,
-            url: str,
-            *,
-            json: dict[str, Any],
-            headers: dict[str, str],
-        ) -> _Response:
-            calls.append({"url": url, "json": json, "headers": headers})
-            return _Response()
-
-    private_path = tmp_path / "private-output" / "model.3mf"
-    payload = _payload()
-    payload["context"]["active_final_artifact_ref"] = {
-        "session_id": "session-abcdef",
-        "download_url": None,
-        "artifact_type": "3mf",
-        "disk_path": private_path.as_posix(),
-        "source": "converter",
-    }
-
-    monkeypatch.setenv("LUMINA_FEEDBACK_RELAY_URL", "https://relay.example.test/feedback")
-    monkeypatch.setattr(httpx, "AsyncClient", _Client)
-
-    response = client.post(
-        "/api/feedback/bug-report/relay",
-        json={"ticket_id": "abc12345", "request_payload": payload},
-    )
-
-    assert response.status_code == 200
-    relayed_payload = calls[0]["json"]["request_payload"]
-    active_ref = relayed_payload["context"]["active_final_artifact_ref"]
-    assert "disk_path" not in active_ref
-    assert private_path.as_posix() not in json.dumps(relayed_payload, ensure_ascii=False)
-
-
-def test_relay_bug_report_returns_502_when_relay_fails(
-    client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    import httpx
-
-    class _Client:
-        def __init__(self, *, timeout: float) -> None:
-            self.timeout = timeout
-
-        async def __aenter__(self) -> "_Client":
-            return self
-
-        async def __aexit__(self, *_args: object) -> None:
-            return None
-
-        async def post(
-            self,
-            _url: str,
-            *,
-            json: dict[str, Any],
-            headers: dict[str, str],
-        ) -> httpx.Response:
-            raise httpx.ConnectError("offline")
-
-    monkeypatch.setenv("LUMINA_FEEDBACK_RELAY_URL", "https://relay.example.test/feedback")
-    monkeypatch.setattr(httpx, "AsyncClient", _Client)
-    _capture_feedback_logger(caplog, logging.ERROR)
-
-    response = client.post(
-        "/api/feedback/bug-report/relay",
-        json={"ticket_id": "abc12345", "request_payload": _payload()},
-    )
-
-    assert response.status_code == 502
-    failures = [
-        record for record in caplog.records
-        if getattr(record, "event", None) == "feedback_bug_report_relay_failed"
-    ]
-    assert len(failures) == 1
-    assert failures[0].dependency == "httpx"
-
-# ---------------------------------------------------------------------------
-# Screenshot data URL strict validation tests
-# ---------------------------------------------------------------------------
 
 
 def test_submit_bug_report_accepts_valid_png_screenshot(

@@ -76,8 +76,8 @@ MODEL_SURFACE_PUBLIC_ERROR_MESSAGES: dict[str, str] = {
         "Use fewer layers, a smaller layer height, or a thicker surface."
     ),
     MODEL_SURFACE_BOOLEAN_FAILED: (
-        "The selected surface could not be cut safely. "
-        "Repair the model or choose a simpler surface."
+        "Model-surface pocket calculation failed. "
+        "Submit a bug report with the model and artwork attached."
     ),
 }
 PREVIEW_CACHE_UNAVAILABLE_DETAIL = (

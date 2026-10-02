@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Iterable, Sequence
+from typing import Callable, Iterable, Sequence
 
 
 Point2D = tuple[float, float]
@@ -656,6 +656,24 @@ def _vertical_strip_dimensions(
     )
 
 
+def _width_can_still_win(
+    best_rank: tuple[int, int] | None,
+    *,
+    width_rank: int,
+    clearance_rank: int,
+) -> bool:
+    """Return whether a tower width can still beat the best safe layout so far.
+
+    ``_ScoredPlacement.within_orientation_score`` compares width rank first and
+    clearance rank second, and only the best layout per orientation is ever
+    selected. A width whose ``(width_rank, clearance_rank)`` is already worse
+    than a proven safe layout in the same orientation can therefore be skipped
+    without changing the result.
+    """
+
+    return best_rank is None or (width_rank, clearance_rank) <= best_rank
+
+
 def _build_result(
     request: WipeTowerPlacementRequest,
     *,
@@ -711,21 +729,48 @@ def _build_result(
     )
 
 
-def _layout_is_safe(result: WipeTowerPlacementResult, request: WipeTowerPlacementRequest) -> bool:
+class _RectAllowanceCache:
+    """Memoize ``_rect_allowed`` for the fixed request of one solve.
+
+    The candidate search revisits the same model and tower rectangles many
+    times, and the polygon containment test is the solver's hot path.
+    """
+
+    def __init__(self, request: WipeTowerPlacementRequest) -> None:
+        self._request = request
+        self._results: dict[Rect, bool] = {}
+
+    def __call__(self, rect: Rect) -> bool:
+        allowed = self._results.get(rect)
+        if allowed is None:
+            allowed = _rect_allowed(rect, self._request)
+            self._results[rect] = allowed
+        return allowed
+
+
+def _layout_is_safe(
+    result: WipeTowerPlacementResult,
+    request: WipeTowerPlacementRequest,
+    rect_allowed: Callable[[Rect], bool] | None = None,
+) -> bool:
+    if rect_allowed is None:
+        rect_allowed = _RectAllowanceCache(request)
     edge_clearance = max(0.0, float(request.edge_clearance))
     collision_expansion = max(
         0.0,
         float(request.model_tower_clearance) - 2.0 * edge_clearance,
     )
+    # Run the cheap overlap test before the polygon containment tests; all
+    # three checks are pure, so the order does not change the answer.
     return (
-        _rect_allowed(result.model_outer_bounds, request)
-        and _rect_allowed(result.tower_outer_bounds, request)
-        and result.model_outer_bounds.intersection_area(
+        result.model_outer_bounds.intersection_area(
             result.tower_outer_bounds.expanded(
                 collision_expansion
             )
         )
         <= _EPSILON
+        and rect_allowed(result.model_outer_bounds)
+        and rect_allowed(result.tower_outer_bounds)
     )
 
 
@@ -766,12 +811,13 @@ def solve_wipe_tower_placement(
         requires_manual_adjustment=False,
         reason="template_layout_safe",
     )
-    original_is_safe = bed is not None and _layout_is_safe(original, request)
+    rect_allowed = _RectAllowanceCache(request)
+    original_is_safe = bed is not None and _layout_is_safe(original, request, rect_allowed)
 
     if (
         request.model_translation_locked
         and bed is not None
-        and not _rect_allowed(original.model_outer_bounds, request)
+        and not rect_allowed(original.model_outer_bounds)
     ):
         return _build_result(
             request,
@@ -788,6 +834,7 @@ def solve_wipe_tower_placement(
 
     safe_candidates: list[_ScoredPlacement] = []
     fallback_candidates: list[WipeTowerPlacementResult] = []
+    best_rank_by_orientation: dict[int, tuple[int, int]] = {}
     if bed is not None:
         preferred_edge_clearance = max(
             edge_clearance,
@@ -834,6 +881,13 @@ def solve_wipe_tower_placement(
                     else _vertical_strip_dimensions(request, bed, tower_margin)
                 )
                 for width_index, (width, depth) in enumerate(dimensions):
+                    if not _width_can_still_win(
+                        best_rank_by_orientation.get(orientation_index),
+                        width_rank=width_index,
+                        clearance_rank=clearance_index,
+                    ):
+                        # Later widths only rank lower, so none of them can win.
+                        break
                     footprint_width, footprint_height = _tower_footprint_dimensions(
                         request,
                         width,
@@ -907,7 +961,7 @@ def solve_wipe_tower_placement(
                                 reason=f"adapted_{side}",
                             )
                             fallback_candidates.append(placeholder)
-                            if not _rect_allowed(placeholder.tower_outer_bounds, request):
+                            if not rect_allowed(placeholder.tower_outer_bounds):
                                 continue
                             collision_tower_outer = (
                                 placeholder.tower_outer_bounds.expanded(
@@ -941,7 +995,7 @@ def solve_wipe_tower_placement(
                                     requires_manual_adjustment=False,
                                     reason=f"adapted_{side}",
                                 )
-                                if not _layout_is_safe(candidate, request):
+                                if not _layout_is_safe(candidate, request, rect_allowed):
                                     continue
                                 movement = math.hypot(
                                     translation[0] - centered_translation[0],
@@ -957,6 +1011,11 @@ def solve_wipe_tower_placement(
                                         side_rank=side_index,
                                         offset_rank=offset_index,
                                     )
+                                )
+                                rank = (width_index, clearance_index)
+                                best_rank_by_orientation[orientation_index] = min(
+                                    best_rank_by_orientation.get(orientation_index, rank),
+                                    rank,
                                 )
                                 break
 

@@ -2,12 +2,17 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 vi.mock("../client", () => ({
   default: {
+    get: vi.fn(),
     post: vi.fn(),
   },
 }));
 
 import apiClient from "../client";
-import { relayBugReport, submitBugReport } from "../feedback";
+import {
+  getBugReportStatus,
+  resubmitBugReport,
+  submitBugReport,
+} from "../feedback";
 
 function makePayload() {
   return {
@@ -51,9 +56,7 @@ describe("submitBugReport", () => {
     vi.mocked(apiClient.post).mockResolvedValueOnce({
       data: {
         ticket_id: "abc12345",
-        emailed: false,
-        email_status: "unconfigured",
-        relay_available: false,
+        submission_status: "pending",
         dump_path: "feedback/abc12345.json",
       },
     });
@@ -65,9 +68,7 @@ describe("submitBugReport", () => {
     expect(apiClient.post).toHaveBeenCalledWith("/feedback/bug-report", payload);
     expect(result).toEqual({
       ticket_id: "abc12345",
-      emailed: false,
-      email_status: "unconfigured",
-      relay_available: false,
+      submission_status: "pending",
       dump_path: "feedback/abc12345.json",
     });
   });
@@ -76,9 +77,7 @@ describe("submitBugReport", () => {
     vi.mocked(apiClient.post).mockResolvedValueOnce({
       data: {
         ticket_id: "LUM-202608-deadbeef",
-        emailed: false,
-        email_status: "unconfigured",
-        relay_available: false,
+        submission_status: "pending",
         dump_path: "feedback/2026-08/LUM-202608-deadbeef",
         original_image_status: "attached",
       },
@@ -107,9 +106,7 @@ describe("submitBugReport", () => {
     vi.mocked(apiClient.post).mockResolvedValueOnce({
       data: {
         ticket_id: "LUM-202608-deadbeef",
-        emailed: false,
-        email_status: "unconfigured",
-        relay_available: false,
+        submission_status: "pending",
         dump_path: "feedback/2026-08/LUM-202608-deadbeef",
         original_image_status: "too_large",
       },
@@ -129,46 +126,35 @@ describe("submitBugReport", () => {
     expect(form.get("original_image_omission_reason")).toBe("too_large");
   });
 
-  it("posts confirmed payloads to /feedback/bug-report/relay", async () => {
-    vi.mocked(apiClient.post).mockResolvedValueOnce({
-      data: { forwarded: true },
-    });
-
-    const payload = {
-      description: "Preview failed",
-      user_email: null,
-      context: {
-        url: "",
-        user_agent: "",
-        screen_width: 0,
-        screen_height: 0,
-        device_pixel_ratio: 1,
-        app_version: "2.0.0",
-        language: "en" as const,
-        theme: "dark" as const,
-        active_tab: "converter",
-        active_session_ids: { converter: null, single_stage: null },
-        color_mode: null,
-        lut_name: null,
-        source_version: null,
-        selected_native_brand_key: null,
-        selected_native_db_names: [],
-        selected_material_dir_names: [],
-        material_layer_count: null,
-        material_layer_height_mm: null,
-        material_backing_material_dir_name: null,
-        recent_client_logs: [],
-      },
-      screenshot_data_url: null,
+  it("reads upload status for a ticket", async () => {
+    const status = {
+      ticket_id: "LUM-202609-deadbeef",
+      assembly_status: "done",
+      submission_status: "submitted",
+      error_type: null,
+      uploaded_attachments: ["original.png"],
+      held_back_attachments: [],
     };
+    vi.mocked(apiClient.get).mockResolvedValueOnce({ data: status });
 
-    const result = await relayBugReport("abc12345", payload);
+    const result = await getBugReportStatus("LUM-202609-deadbeef");
 
-    expect(apiClient.post).toHaveBeenCalledWith("/feedback/bug-report/relay", {
-      ticket_id: "abc12345",
-      request_payload: payload,
+    expect(apiClient.get).toHaveBeenCalledWith(
+      "/feedback/bug-report/LUM-202609-deadbeef/status",
+    );
+    expect(result).toEqual(status);
+  });
+
+  it("asks the backend to retry a failed upload", async () => {
+    vi.mocked(apiClient.post).mockResolvedValueOnce({
+      data: { ticket_id: "LUM-202609-deadbeef", submission_status: "submitted" },
     });
-    expect(result).toEqual({ forwarded: true });
+
+    await resubmitBugReport("LUM-202609-deadbeef");
+
+    expect(apiClient.post).toHaveBeenCalledWith(
+      "/feedback/bug-report/LUM-202609-deadbeef/resubmit",
+    );
   });
 
   it("rethrows non-2xx failures", async () => {
