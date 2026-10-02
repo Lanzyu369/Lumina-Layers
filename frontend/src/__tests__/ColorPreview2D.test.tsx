@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PaletteEntry } from '../api/types';
 import ColorPreview2D from '../components/sections/ColorPreview2D';
 import { buildLayerImagesSourceKey, DEFAULT_STATE, useConverterStore } from '../stores/converter';
+import { useEyedropperStore } from '../stores/eyedropperStore';
 
 const sourceColorPickMock = vi.hoisted(() => vi.fn());
 
@@ -518,6 +519,48 @@ describe('ColorPreview2D hover inspector', () => {
     expect(toggleColorInSelection).toHaveBeenCalledWith('ABCDEF');
     expect(setSelectedColor).toHaveBeenCalledWith('ABCDEF');
   });
+
+  it.each(['point', 'brush'] as const)(
+    'eyedropper picks the clicked pixel colour without touching the selection (%s tool)',
+    async (tool) => {
+      const applySelectionMutation = vi.fn(async () => {});
+      const toggleColorInSelection = vi.fn();
+      useEyedropperStore.setState({ active: true, lastPick: null });
+      useConverterStore.setState({
+        ...DEFAULT_STATE,
+        previewBaseImageUrl: '/preview.png',
+        previewImageUrl: '/preview.png',
+        previewPixelWidth: 100,
+        previewPixelHeight: 100,
+        selectionTool: tool,
+        selectionMode: 'multi-select',
+        applySelectionMutation,
+        toggleColorInSelection,
+        sessionId: 'session-eyedropper',
+        preview_width_mm: 80,
+        bed_label: '256 x 256 mm',
+        bedSizes: [],
+        fetchLayerImages: vi.fn(async () => {}),
+        layerImagesLoading: false,
+        layerImages: [],
+      });
+
+      render(<ColorPreview2D />);
+      flushPendingImages('/preview.png');
+      const container = screen.getByTestId('color-preview-2d-container');
+      mockPreviewRect(container);
+
+      await act(async () => {
+        fireEvent.click(container, { clientX: 80, clientY: 60 });
+      });
+
+      expect(useEyedropperStore.getState().lastPick?.hex).toBe('#abcdef');
+      expect(useEyedropperStore.getState().active).toBe(false);
+      expect(applySelectionMutation).not.toHaveBeenCalled();
+      expect(toggleColorInSelection).not.toHaveBeenCalled();
+      expect(sourceColorPickMock).not.toHaveBeenCalled();
+    },
+  );
 
   it('uses the server pick when the local preview pixel cannot be sampled', async () => {
     let resolvePick: (value: { source_matched_hex: string; quantized_hex: string }) => void = () => {};

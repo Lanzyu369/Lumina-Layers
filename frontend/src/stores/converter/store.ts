@@ -413,7 +413,12 @@ export type SelectionMode =
   | "multi-select"
   | "region";
 
-export type SelectionTool = "same-color" | "point" | "brush";
+export type SelectionTool = "same-color" | "color-range" | "point" | "brush";
+
+/** Default CIEDE2000 tolerance for the colour-range selection tool. */
+export const DEFAULT_COLOR_RANGE_TOLERANCE = 6;
+/** Upper bound for the colour-range tolerance slider (ΔE00). */
+export const MAX_COLOR_RANGE_TOLERANCE = 30;
 
 export type SelectionDocument = SelectionDocumentResponse;
 
@@ -2209,6 +2214,21 @@ function waitForSelectionMutation(sessionId: string): Promise<boolean> | null {
   return selectionMutationQueues.get(sessionId) ?? null;
 }
 
+/**
+ * Whether a colour replacement may target the shared selection mask: either a
+ * selection gesture is still in flight or a selection document is loaded.
+ * 颜色替换是否可能作用于共享选区：仍有选区手势在提交，或已加载选区文档。
+ */
+function mayUseSharedSelectionReplace(
+  state: Pick<ConverterState, "sessionId" | "selectionDocument">,
+): boolean {
+  if (!state.sessionId) return false;
+  return (
+    waitForSelectionMutation(state.sessionId) !== null ||
+    state.selectionDocument?.selection_revision !== undefined
+  );
+}
+
 function selectionDocumentVersion(
   document: Pick<SelectionDocumentResponse, "selection_revision" | "content_revision">,
 ): [number, number] {
@@ -3185,6 +3205,8 @@ export interface ConverterState {
   selectionTool: SelectionTool;
   selectionDocument: SelectionDocument | null;
   brushSizePx: number;
+  /** CIEDE2000 tolerance used by the colour-range selection tool. */
+  colorRangeTolerance: number;
   selectedColors: Set<string>;
   regionData: RegionData | null;
   selectedRegions: RegionData[];
@@ -3330,12 +3352,19 @@ export interface ConverterActions {
   setSelectionMode: (mode: SelectionMode) => void;
   setSelectionTool: (tool: SelectionTool) => void;
   setBrushSizePx: (size: number) => void;
+  setColorRangeTolerance: (tolerance: number) => void;
   hydrateSelectionDocument: () => Promise<void>;
   applySelectionMutation: (input: {
-    operation: "point-toggle" | "same-color-toggle" | "brush-add" | "clear";
+    operation:
+      | "point-toggle"
+      | "same-color-toggle"
+      | "color-range-toggle"
+      | "brush-add"
+      | "clear";
     x?: number;
     y?: number;
     colorHex?: string;
+    colorTolerance?: number;
     brushRadius?: number;
     brushPoints?: Array<{ x: number; y: number }>;
     optimisticDocument?: SelectionDocument;
@@ -3372,6 +3401,15 @@ export interface ConverterActions {
     historyId: string,
     regionIds: string[],
   ) => Promise<void>;
+
+  /**
+   * Replace the shared selection mask with ``targetHex`` via region replace.
+   * Resolves ``true`` when the shared-selection path consumed the request
+   * (applied or aborted) and ``false`` when no shared selection exists.
+   * 用目标色替换共享选区；返回 true 表示已由共享选区路径处理（成功或中止），
+   * false 表示当前没有共享选区。
+   */
+  replaceSharedSelectionColor: (targetHex: string) => Promise<boolean>;
 
   // 待确认颜色替换
   setPendingReplacement: (pending: PendingReplacement | null) => void;
@@ -4325,6 +4363,7 @@ export const DEFAULT_STATE: ConverterState = {
   selectionTool: "point" as SelectionTool,
   selectionDocument: null,
   brushSizePx: 24,
+  colorRangeTolerance: DEFAULT_COLOR_RANGE_TOLERANCE,
   selectedColors: new Set<string>(),
   regionData: null,
   selectedRegions: [],
@@ -6425,6 +6464,16 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set({ brushSizePx: Math.max(1, Math.min(512, Math.round(size))) });
     },
 
+    setColorRangeTolerance: (tolerance: number) => {
+      const finite = Number.isFinite(tolerance) ? tolerance : DEFAULT_COLOR_RANGE_TOLERANCE;
+      set({
+        colorRangeTolerance: Math.max(
+          0,
+          Math.min(MAX_COLOR_RANGE_TOLERANCE, Math.round(finite * 10) / 10),
+        ),
+      });
+    },
+
     hydrateSelectionDocument: async () => {
       const state = _get();
       if (!state.sessionId) return;
@@ -6510,6 +6559,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             ...(input.x !== undefined ? { x: input.x } : {}),
             ...(input.y !== undefined ? { y: input.y } : {}),
             ...(input.colorHex ? { color_hex: input.colorHex } : {}),
+            ...(input.colorTolerance !== undefined
+              ? { color_tolerance: input.colorTolerance }
+              : {}),
             ...(input.brushRadius !== undefined
               ? { brush_radius: input.brushRadius }
               : {}),
@@ -7939,6 +7991,100 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }
     },
 
+    replaceSharedSelectionColor: async (targetHex: string) => {
+      // Shared-selection path: repaint exactly the authoritative server mask.
+      // 共享选区路径：只重绘服务端权威选区内的像素。
+      const initialSelectionState = _get();
+      const pendingSelection = initialSelectionState.sessionId
+        ? waitForSelectionMutation(initialSelectionState.sessionId)
+        : null;
+      if (pendingSelection && !(await pendingSelection)) return true;
+      let currentSelectionState = _get();
+      if (currentSelectionState.sessionId !== initialSelectionState.sessionId) {
+        return true;
+      }
+      const currentSessionId = currentSelectionState.sessionId;
+      const selectionRevision = currentSelectionState.selectionDocument?.selection_revision;
+      if (selectionRevision !== undefined && currentSessionId) {
+        const contentReservation = acquireContentCommitTurn(currentSessionId);
+        if (
+          !contentReservation.readyImmediately &&
+          !(await contentReservation.ready)
+        ) {
+          releaseContentCommit(contentReservation, false);
+          return true;
+        }
+        currentSelectionState = _get();
+        if (
+          currentSelectionState.sessionId !== currentSessionId ||
+          currentSelectionState.selectionDocument?.selection_revision === undefined
+        ) {
+          releaseContentCommit(contentReservation, false);
+          return true;
+        }
+        const latestSelectionRevision =
+          currentSelectionState.selectionDocument.selection_revision;
+        const previewCommit = captureReplacementPreviewCommit(
+          currentSelectionState,
+          contentReservation,
+        );
+        set({ replacePreviewLoading: true, error: null });
+        try {
+          const response = await apiRegionReplace(
+            currentSessionId,
+            `#${targetHex}`,
+            undefined,
+            latestSelectionRevision,
+            previewCommit.operationId,
+          );
+          if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) {
+            return true;
+          }
+          const current = _get();
+          set({
+            previewImageUrl: normalizeResourceUrl(response.preview_url),
+            previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
+            replacePreviewLoading: false,
+            regionReplacementCount: current.regionReplacementCount + 1,
+            threemfDiskPath: null,
+            downloadUrl: null,
+            ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+            ...dynamicMaterialResultState(response),
+            ...historyFlagsFromResponse(response),
+            ...selectionUpdatesFromResponse(
+              current,
+              currentSessionId,
+              response.selection,
+            ),
+          });
+          if (!response.selection) {
+            // Never guess ``content_revision + 1`` on the client. The
+            // endpoint must return the authoritative document; an older
+            // server can still be synchronized explicitly before the next
+            // selection operation.
+            void _get().hydrateSelectionDocument();
+          }
+          _get()._pollAsyncGlb();
+        } catch (err) {
+          const settlement = await settleReplacementPreviewError(
+            _get(),
+            previewCommit,
+            _get,
+            (partial) => set(partial),
+            err,
+            "Selection color replacement failed",
+          );
+          if (!settlement.active || settlement.committed || settlement.unknown) return true;
+          set({
+            replacePreviewLoading: false,
+            error: visibleConverterError(err, "Selection color replacement failed"),
+          });
+        }
+        return true;
+      }
+      return false;
+    },
+
     // --- 待确认颜色替换 ---
     setPendingReplacement: (pending: PendingReplacement | null) => {
       set({ pendingReplacement: pending });
@@ -7998,92 +8144,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           }
           break;
         case "multi-select": {
-          const initialSelectionState = _get();
-          const pendingSelection = initialSelectionState.sessionId
-            ? waitForSelectionMutation(initialSelectionState.sessionId)
-            : null;
-          if (pendingSelection && !(await pendingSelection)) return;
-          let currentSelectionState = _get();
-          if (currentSelectionState.sessionId !== initialSelectionState.sessionId) {
-            return;
-          }
-          const currentSessionId = currentSelectionState.sessionId;
-          const selectionRevision = currentSelectionState.selectionDocument?.selection_revision;
-          if (selectionRevision !== undefined && currentSessionId) {
-            const contentReservation = acquireContentCommitTurn(currentSessionId);
-            if (
-              !contentReservation.readyImmediately &&
-              !(await contentReservation.ready)
-            ) {
-              releaseContentCommit(contentReservation, false);
-              return;
-            }
-            currentSelectionState = _get();
-            if (
-              currentSelectionState.sessionId !== currentSessionId ||
-              currentSelectionState.selectionDocument?.selection_revision === undefined
-            ) {
-              releaseContentCommit(contentReservation, false);
-              return;
-            }
-            const latestSelectionRevision =
-              currentSelectionState.selectionDocument.selection_revision;
-            const previewCommit = captureReplacementPreviewCommit(
-              currentSelectionState,
-              contentReservation,
-            );
-            set({ replacePreviewLoading: true, error: null });
-            try {
-              const response = await apiRegionReplace(
-                currentSessionId,
-                `#${pending.targetHex}`,
-                undefined,
-                latestSelectionRevision,
-                previewCommit.operationId,
-              );
-              if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) {
-                return;
-              }
-              const current = _get();
-              set({
-                previewImageUrl: normalizeResourceUrl(response.preview_url),
-                previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
-                replacePreviewLoading: false,
-                regionReplacementCount: current.regionReplacementCount + 1,
-                threemfDiskPath: null,
-                downloadUrl: null,
-                ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
-                ...dynamicMaterialResultState(response),
-                ...historyFlagsFromResponse(response),
-                ...selectionUpdatesFromResponse(
-                  current,
-                  currentSessionId,
-                  response.selection,
-                ),
-              });
-              if (!response.selection) {
-                // Never guess ``content_revision + 1`` on the client. The
-                // endpoint must return the authoritative document; an older
-                // server can still be synchronized explicitly before the next
-                // selection operation.
-                void _get().hydrateSelectionDocument();
-              }
-              _get()._pollAsyncGlb();
-            } catch (err) {
-              const settlement = await settleReplacementPreviewError(
-                _get(),
-                previewCommit,
-                _get,
-                (partial) => set(partial),
-                err,
-                "Selection color replacement failed",
-              );
-              if (!settlement.active || settlement.committed || settlement.unknown) return;
-              set({
-                replacePreviewLoading: false,
-                error: visibleConverterError(err, "Selection color replacement failed"),
-              });
-            }
+          // Only yield when the shared-selection path can apply, so the
+          // legacy fallback keeps its synchronous request shape.
+          // 仅在共享选区路径可能生效时才等待，旧版回退路径保持同步发起请求。
+          if (
+            mayUseSharedSelectionReplace(_get()) &&
+            (await _get().replaceSharedSelectionColor(pending.targetHex))
+          ) {
             break;
           }
           // Legacy multi-region fallback.

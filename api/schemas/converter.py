@@ -1041,6 +1041,31 @@ class RecipePredictRequest(BaseModel):
     )
 
 
+class SimilarRecipesRequest(BaseModel):
+    """Request for printable recipes whose colour is close to a target.
+    请求与目标颜色相近的可打印配方。
+
+    Attributes:
+        session_id: Active converter session. (当前转换会话)
+        target_color: Colour to match as ``#rrggbb``. (要匹配的颜色)
+        limit: Maximum number of suggestions. (最多返回条数)
+        include_predictive: Also rank forward-model candidates when the LUT
+            ships a predictive runtime. (LUT 带预测模型时同时排序预测候选)
+    """
+
+    session_id: str = Field(..., description="Session ID")
+    target_color: str = Field(
+        ...,
+        pattern=r"^#?[0-9a-fA-F]{6}$",
+        description="目标颜色 / target colour (#rrggbb)",
+    )
+    limit: int = Field(12, ge=1, le=48, description="最多返回条数 / max suggestions")
+    include_predictive: bool = Field(
+        True,
+        description="是否包含预测配方 / include forward-model candidates",
+    )
+
+
 class RecipeOverrideApplyRequest(RecipePredictRequest):
     """Request for applying a custom recipe to selected regions.
     将自定义配方应用到选区的请求。
@@ -1228,12 +1253,24 @@ class SelectionMutationRequest(BaseModel):
     """Mutate the shared editor selection without changing preview content."""
 
     session_id: str = Field(..., description="Session ID")
-    operation: Literal["point-toggle", "same-color-toggle", "brush-add", "clear"]
+    operation: Literal[
+        "point-toggle",
+        "same-color-toggle",
+        "color-range-toggle",
+        "brush-add",
+        "clear",
+    ]
     base_selection_revision: int = Field(..., ge=0, description="客户端选区版本")
     content_revision: int = Field(..., ge=0, description="可见区域缓存内容版本")
     x: int | None = Field(None, ge=0)
     y: int | None = Field(None, ge=0)
     color_hex: str | None = None
+    color_tolerance: float | None = Field(
+        None,
+        ge=0,
+        le=100,
+        description="颜色范围选择的 CIEDE2000 容差 / CIEDE2000 tolerance for colour-range selection",
+    )
     brush_radius: float | None = Field(None, gt=0, le=4096)
     brush_points: list[SelectionPoint] = Field(default_factory=list, max_length=10000)
 

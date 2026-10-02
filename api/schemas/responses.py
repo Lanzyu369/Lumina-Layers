@@ -816,6 +816,29 @@ class RecipePredictResponse(BaseModel):
     runtime_mode_key: str | None = None
 
 
+class SimilarRecipeItem(BaseModel):
+    """One suggested recipe ranked by CIEDE2000 distance.
+    按 CIEDE2000 色差排序的一条推荐配方。"""
+
+    hex: str
+    rgb: list[int]
+    delta_e00: float
+    recipe: list[int]
+    source: Literal["lut", "predictive", "image"]
+    in_image: bool = False
+
+
+class SimilarRecipesResponse(BaseModel):
+    """Similar-recipe suggestions for one target colour.
+    单个目标颜色的相似配方推荐结果。"""
+
+    status: str = "ok"
+    target_color: str
+    layer_order: str = "Top2Bottom"
+    predictive_available: bool = False
+    items: list[SimilarRecipeItem] = Field(default_factory=list)
+
+
 class RecipeOverrideApplyResponse(DynamicMaterialResultResponse):
     """Recipe override apply response."""
 

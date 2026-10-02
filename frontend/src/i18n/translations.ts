@@ -2661,6 +2661,158 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "颜色调整",
     en: "Color Adjustment",
   },
+  palette_mode_color_range: {
+    zh: "相近颜色",
+    en: "Similar colors",
+  },
+  selection_color_range_tolerance: {
+    zh: "色差容差",
+    en: "Tolerance",
+  },
+  selection_color_range_hint: {
+    zh: "点击图中的颜色，会选中所有色差（ΔE00）不超过容差的色块；容差为 0 时只选完全相同的颜色。再点一次同一颜色可取消。",
+    en: "Click a color on the image to select every block whose color difference (ΔE00) is within the tolerance; 0 selects only the exact color. Click the same color again to deselect.",
+  },
+  quick_replace_title: {
+    zh: "快速换色与相似配方",
+    en: "Quick recolor & similar recipes",
+  },
+  quick_replace_expand: {
+    zh: "展开",
+    en: "Expand",
+  },
+  quick_replace_collapse: {
+    zh: "收起",
+    en: "Collapse",
+  },
+  quick_replace_needs_selection: {
+    zh: "先在左侧图像上选择区域（同颜色、相近颜色、点选色块或画笔），再在这里换色。",
+    en: "Select an area on the image first (same color, similar colors, blocks or brush), then recolor it here.",
+  },
+  quick_replace_target_heading: {
+    zh: "目标颜色 B",
+    en: "Target color B",
+  },
+  quick_replace_eyedropper: {
+    zh: "从图中取色",
+    en: "Pick from image",
+  },
+  quick_replace_eyedropper_title: {
+    zh: "点一下这个按钮，再点左侧图像上的任意一点，用那一点的颜色作为目标颜色 B（不会改变选区）",
+    en: "Click this, then click any point on the image to use its color as target color B (the selection is not changed)",
+  },
+  quick_replace_eyedropper_active: {
+    zh: "请在左侧图像上点击要取色的位置，按 Esc 取消。",
+    en: "Click the point on the image whose color you want. Press Esc to cancel.",
+  },
+  quick_replace_target_hex_placeholder: {
+    zh: "#ff8800",
+    en: "#ff8800",
+  },
+  quick_replace_target_hex_invalid: {
+    zh: "请输入 6 位十六进制颜色，例如 #ff8800",
+    en: "Enter a 6-digit hex color, e.g. #ff8800",
+  },
+  quick_replace_target_from_image: {
+    zh: "从图中已有颜色选取",
+    en: "Pick from colors already in the image",
+  },
+  quick_replace_nearest_printable: {
+    zh: "最接近 B 的可打印颜色",
+    en: "Nearest printable color to B",
+  },
+  quick_replace_replace_button: {
+    zh: "把选区替换成这个颜色",
+    en: "Replace selection with this color",
+  },
+  quick_replace_recipes_heading: {
+    zh: "相似配方",
+    en: "Similar recipes",
+  },
+  quick_replace_reference: {
+    zh: "参考色",
+    en: "Reference",
+  },
+  quick_replace_basis_selection: {
+    zh: "按选区颜色",
+    en: "From selection",
+  },
+  quick_replace_basis_target: {
+    zh: "按目标颜色 B",
+    en: "From color B",
+  },
+  quick_replace_reference_colors: {
+    zh: "选区包含多种颜色，点击选择参考色",
+    en: "The selection has several colors; click one to use as reference",
+  },
+  quick_replace_recipes_loading: {
+    zh: "正在查找相似配方…",
+    en: "Finding similar recipes…",
+  },
+  quick_replace_recipes_empty: {
+    zh: "没有找到可用的配方",
+    en: "No printable recipes found",
+  },
+  quick_replace_recipes_pick_reference: {
+    zh: "选择区域或输入目标颜色 B 后，这里会列出颜色最接近的配方。",
+    en: "Select an area or enter target color B to list the closest recipes here.",
+  },
+  quick_replace_recipes_error: {
+    zh: "配方推荐加载失败，请重新生成预览后再试。",
+    en: "Could not load recipe suggestions. Regenerate the preview and try again.",
+  },
+  quick_replace_recipe_apply: {
+    zh: "替换",
+    en: "Apply",
+  },
+  quick_replace_recipe_apply_title: {
+    zh: "把选区替换为 {hex}（{layers}）",
+    en: "Replace the selection with {hex} ({layers})",
+  },
+  quick_replace_recipe_layers_hint: {
+    zh: "色块从左到右：观察面 → 底部",
+    en: "Chips left to right: viewing face → bottom",
+  },
+  quick_replace_source_lut: {
+    zh: "实测",
+    en: "Measured",
+  },
+  quick_replace_source_lut_title: {
+    zh: "来自 LUT 实测色卡，打印结果最可靠",
+    en: "From the measured LUT; the most reliable print result",
+  },
+  quick_replace_source_predictive: {
+    zh: "预测",
+    en: "Predicted",
+  },
+  quick_replace_source_predictive_title: {
+    zh: "由预测模型估算的颜色，实际打印可能略有差异；应用后需要重新选择区域",
+    en: "Estimated by the prediction model; the print may differ slightly. Re-select the area after applying",
+  },
+  quick_replace_in_image: {
+    zh: "图中已有",
+    en: "In image",
+  },
+  quick_replace_in_image_title: {
+    zh: "当前图像里已经用到了这个颜色",
+    en: "This color is already used in the current image",
+  },
+  quick_replace_delta_e_value: {
+    zh: "色差 ΔE {value}",
+    en: "ΔE {value}",
+  },
+  quick_replace_delta_e_close: {
+    zh: "几乎一致",
+    en: "Near match",
+  },
+  quick_replace_delta_e_near: {
+    zh: "接近",
+    en: "Close",
+  },
+  quick_replace_delta_e_far: {
+    zh: "差异明显",
+    en: "Visible difference",
+  },
   "tab.converterAdvanced": {
     zh: "高级功能",
     en: "Advanced",

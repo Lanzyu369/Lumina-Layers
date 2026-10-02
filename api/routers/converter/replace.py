@@ -101,7 +101,6 @@ from core.pipeline.material_dynamic_layers import (
     recompute_dynamic_material_benefit_curve,
     solve_dynamic_material_targets,
 )
-from core.pipeline.processing_ops.lut_loader import load_lut
 from core.predictive_lut import predict_recipe_color
 from core.recipe_order import (
     convert_recipe_between_orders,
@@ -130,6 +129,7 @@ from api.selection_state import (
     get_selection_mask,
     get_selection_revision,
     mutate_brush_add,
+    mutate_color_range_toggle,
     mutate_point_toggle,
     mutate_same_color_toggle,
     pack_applied_region_mask,
@@ -159,6 +159,8 @@ from .common import (
     _require_preview_cache,
     _require_session,
     _resolve_material_backing_index,
+    load_session_lut_runtime,
+    lut_row_indices_for_colors,
     recompute_gradient_groups_into_session,
 )
 from .async_glb import schedule_glb_build
@@ -1057,12 +1059,6 @@ def _sync_lut_material_matrix_for_diff(
     material_matrix = cache.get("material_matrix")
     if material_matrix is None:
         return
-    lut_path = session_data.get("lut_path")
-    color_mode = session_data.get("color_mode")
-    if not isinstance(lut_path, str) or not lut_path or not os.path.exists(lut_path):
-        return
-    if not isinstance(color_mode, str) or not color_mode:
-        return
     target_layers = int(
         cache.get("color_layers")
         or session_data.get("color_layers")
@@ -1074,23 +1070,10 @@ def _sync_lut_material_matrix_for_diff(
         or 0.08
     )
     try:
-        lut_data = load_lut(
-            lut_path,
-            color_mode,
+        lut_data = load_session_lut_runtime(
+            session_data,
             color_layers=target_layers,
             layer_height_mm=layer_height_mm,
-            model_enable=bool(session_data.get("model_enable", False)),
-            model_only=bool(session_data.get("model_only", False)),
-            model_threshold=(
-                float(session_data["model_threshold"])
-                if session_data.get("model_threshold") is not None
-                else None
-            ),
-            model_margin=(
-                float(session_data["model_margin"])
-                if session_data.get("model_margin") is not None
-                else None
-            ),
         )
     except (KeyError, OSError, TypeError, ValueError) as exc:
         log.warning(
@@ -1101,6 +1084,8 @@ def _sync_lut_material_matrix_for_diff(
                 "error_message": str(exc),
             },
         )
+        return
+    if lut_data is None:
         return
 
     ref_stacks = np.asarray(lut_data.get("ref_stacks"))
@@ -1113,12 +1098,10 @@ def _sync_lut_material_matrix_for_diff(
         int(ref_stacks.shape[1]),
     )
     unique_colors = np.unique(updated_rgb[diff_mask], axis=0)
-    for color in unique_colors:
+    lut_rows = lut_row_indices_for_colors(lut_data, unique_colors)
+    for color, lut_row in zip(unique_colors, lut_rows):
         color_mask = np.all(updated_rgb == color, axis=-1) & diff_mask
-        _, lut_idx = kdtree.query(
-            _rgb_to_lab(np.asarray(color, dtype=np.uint8).reshape(1, 3))
-        )
-        stack = ref_stacks[int(np.asarray(lut_idx).reshape(-1)[0])]
+        stack = ref_stacks[int(lut_row)]
         new_material_matrix[color_mask] = np.asarray(
             stack,
             dtype=new_material_matrix.dtype,
@@ -2954,6 +2937,17 @@ def mutate_editor_selection(
                     x=request.x,
                     y=request.y,
                     color_hex=request.color_hex,
+                )
+            elif request.operation == "color-range-toggle":
+                if request.color_tolerance is None:
+                    raise ValueError("Colour-range selection requires color_tolerance.")
+                next_mask = mutate_color_range_toggle(
+                    component_cache,
+                    current,
+                    x=request.x,
+                    y=request.y,
+                    color_hex=request.color_hex,
+                    tolerance=request.color_tolerance,
                 )
             elif request.operation == "brush-add":
                 if request.brush_radius is None:

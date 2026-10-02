@@ -33,6 +33,8 @@ import type {
   ReplacementHistoryResponse,
   SelectionDocumentResponse,
   SelectionMutationRequest,
+  SimilarRecipesRequest,
+  SimilarRecipesResponse,
   EditorCommitStatusResponse,
   AutoDetectColorsResponse,
   ModelSurfaceHitTriangle,
@@ -490,6 +492,22 @@ export async function mutateEditorSelection(
     "/convert/selection/mutate",
     request,
     { timeout: 3_600_000 },
+  );
+  return response.data;
+}
+
+/**
+ * Suggest printable recipes closest to a target colour (colour workspace).
+ * 推荐与目标颜色色差最小的可打印配方（颜色工作台）。
+ */
+export async function fetchSimilarRecipes(
+  request: SimilarRecipesRequest,
+  signal?: AbortSignal,
+): Promise<SimilarRecipesResponse> {
+  const response = await apiClient.post<SimilarRecipesResponse>(
+    "/convert/similar-recipes",
+    request,
+    { timeout: 30_000, signal },
   );
   return response.data;
 }

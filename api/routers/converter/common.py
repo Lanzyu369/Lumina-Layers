@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import pickle
 import time
 from typing import NoReturn
@@ -37,6 +38,7 @@ from core.model_surface.validation import (
 from core.pipeline._input_validation_common import (
     VECTOR_NATIVE_REQUIRES_SVG_DETAIL,
 )
+from core.pipeline.processing_ops.lut_loader import load_lut
 from .source_validation import (
     SOURCE_SVG_NO_RENDERABLE_GEOMETRY_DETAIL,
     SOURCE_SVG_NO_RENDERABLE_GEOMETRY_ERROR,
@@ -663,6 +665,89 @@ def _require_session(store: SessionStore, session_id: str) -> dict:
     if data is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     return data
+
+
+def load_session_lut_runtime(
+    session_data: dict,
+    *,
+    color_layers: int,
+    layer_height_mm: float,
+) -> dict | None:
+    """Load the LUT runtime used by this session's colour matching.
+    加载当前会话颜色匹配所用的 LUT 运行时数据。
+
+    Replacement stack sync and similar-recipe suggestions share this loader
+    so a recommended recipe is exactly the stack a replacement will write.
+    替换叠层同步与相似配方推荐共用该加载器，保证推荐的配方就是替换时
+    实际写入的叠层。
+
+    Args:
+        session_data: Converter session state. (转换会话状态)
+        color_layers: Target colour layer count. (目标叠色层数)
+        layer_height_mm: Target colour layer height in mm. (目标叠色层高)
+
+    Returns:
+        dict | None: ``load_lut`` payload, or ``None`` when the session has no
+            usable LUT file or colour mode. (load_lut 结果；无可用 LUT 时为 None)
+
+    Raises:
+        KeyError, OSError, TypeError, ValueError: Propagated from ``load_lut``.
+            (由 load_lut 透传)
+    """
+    lut_path = session_data.get("lut_path")
+    color_mode = session_data.get("color_mode")
+    if not isinstance(lut_path, str) or not lut_path or not os.path.exists(lut_path):
+        return None
+    if not isinstance(color_mode, str) or not color_mode:
+        return None
+    return load_lut(
+        lut_path,
+        color_mode,
+        color_layers=int(color_layers),
+        layer_height_mm=float(layer_height_mm),
+        model_enable=bool(session_data.get("model_enable", False)),
+        model_only=bool(session_data.get("model_only", False)),
+        model_threshold=(
+            float(session_data["model_threshold"])
+            if session_data.get("model_threshold") is not None
+            else None
+        ),
+        model_margin=(
+            float(session_data["model_margin"])
+            if session_data.get("model_margin") is not None
+            else None
+        ),
+    )
+
+
+def lut_row_indices_for_colors(lut_data: dict, colors: np.ndarray) -> np.ndarray | None:
+    """Return the LUT row region replacement writes for each colour.
+    返回区域替换为每个颜色写入的 LUT 行号。
+
+    Replacement stack sync and similar-recipe suggestions share this lookup,
+    so a suggested recipe is the exact stack that applying it writes, even
+    when the LUT holds several rows with the same printed colour.
+    替换叠层同步与相似配方推荐共用该查找；即使 LUT 中有多行同色，推荐展示的
+    配方也就是套用后实际写入的叠层。
+
+    Args:
+        lut_data: ``load_lut`` runtime payload with a Lab ``kdtree``.
+            (带 Lab ``kdtree`` 的 load_lut 运行时载荷)
+        colors: ``(N, 3)`` sRGB colours. ((N, 3) 的 sRGB 颜色)
+
+    Returns:
+        np.ndarray | None: ``(N,)`` row indices into ``ref_stacks``, or
+            ``None`` when the runtime has no lookup tree. ((N,) 行号；无查找树时为 None)
+    """
+    kdtree = lut_data.get("kdtree")
+    if kdtree is None:
+        return None
+    rgb = np.clip(np.asarray(colors).reshape(-1, 3), 0, 255).astype(np.uint8)
+    if rgb.shape[0] == 0:
+        return np.zeros((0,), dtype=np.int64)
+    lab = cv2.cvtColor(rgb.reshape(1, -1, 3), cv2.COLOR_RGB2LAB).reshape(-1, 3)
+    _, indices = kdtree.query(lab.astype(np.float64))
+    return np.asarray(indices, dtype=np.int64).reshape(-1)
 
 
 def _require_preview_cache(session_data: dict) -> dict:
