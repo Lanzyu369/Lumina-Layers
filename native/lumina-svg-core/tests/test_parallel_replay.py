@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
+import pytest
 
 import lumina_svg_core
 
@@ -187,20 +188,27 @@ def test_requested_worker_count_is_bounded_and_output_is_stable(
     assert _result_snapshot(bounded) == _result_snapshot(serial)
 
 
+@pytest.mark.parametrize("failing_paint_index", [0, 3, 7])
 def test_parallel_normalization_failure_replays_in_document_order(
     monkeypatch,
+    failing_paint_index: int,
 ) -> None:
-    valid = "".join(
+    paints = [
         f"<rect x='{index * 10}' width='8' height='10'/>"
         for index in range(7)
+    ]
+    # A three-point miter at the join threshold fails during normalization.
+    # Unlike billions of tiny dashes, this does not rely on a resource quota.
+    paints.insert(
+        failing_paint_index,
+        "<path d='M2 2L10 2L3 5.872983346207417' fill='none' "
+        "stroke='red' stroke-width='2' stroke-linejoin='miter' "
+        "stroke-miterlimit='4'/>",
     )
-    svg = (
-        "<svg viewBox='0 0 100 10'>"
-        + valid
-        + "<path d='M0 5H100' fill='none' stroke='red' stroke-width='1' "
-        "stroke-dasharray='0.00000001 0.00000001'/>"
-        "</svg>"
-    )
+    svg = "<svg viewBox='0 0 100 10'>" + "".join(paints) + "</svg>"
+    recorded = lumina_svg_core.record_paint_commands_svg(svg)
+    assert recorded.status == "supported"
+    assert len(recorded.commands) == 8
 
     monkeypatch.setenv("LUMINA_SVG_REPLAY_THREADS", "1")
     serial = _analyze(svg)
@@ -209,7 +217,8 @@ def test_parallel_normalization_failure_replays_in_document_order(
     retried = _analyze(svg)
 
     assert serial.status == retried.status == "unsupported"
-    assert serial.reason_code == retried.reason_code == "unsupported_complexity"
+    assert serial.reason_code == retried.reason_code == "unsupported_input_precision"
+    assert serial.input_paint_count == retried.input_paint_count == 8
     assert _result_snapshot(retried) == _result_snapshot(serial)
 
 
