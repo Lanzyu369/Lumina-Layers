@@ -312,6 +312,10 @@ def run_hifi_benchmark(run_preview: bool = True):
 
 
 def main():
+    from api.structured_logging import configure_structured_logging
+
+    configure_structured_logging()
+
     parser = argparse.ArgumentParser(description="Lumina headless benchmark")
     parser.add_argument('--svg-only',    action='store_true', help='Only run SVG benchmark')
     parser.add_argument('--hifi-only',   action='store_true', help='Only run HiFi benchmark')

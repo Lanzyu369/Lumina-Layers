@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import subprocess
 import sys
 import tempfile
 import uuid
@@ -12,6 +14,34 @@ import pytest
 
 import api.structured_logging as structured_logging
 from api.structured_logging import _HumanFormatter, _JsonFormatter
+
+
+def test_get_logger_does_not_initialize_process_logging(tmp_path: Path) -> None:
+    """Acquiring loggers leaves the embedding application's logging untouched."""
+    script = '''
+import logging
+from pathlib import Path
+import sys
+from api.structured_logging import get_logger
+
+loggers = [logging.getLogger(name) for name in ("", "uvicorn.error", "uvicorn.access", "lumina")]
+for logger in loggers:
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = True
+    logger.handlers[:] = [logging.NullHandler()]
+before = [(logger.level, logger.propagate, list(logger.handlers)) for logger in loggers]
+for _ in range(3):
+    assert get_logger("core.probe") is get_logger("lumina.core.probe")
+assert before == [(logger.level, logger.propagate, list(logger.handlers)) for logger in loggers]
+assert not Path(sys.argv[1]).exists()
+'''
+    log_dir = tmp_path / "uncreated"
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(log_dir)],
+        env={**os.environ, "LUMINA_LOG_PATH": str(log_dir / "probe.log")},
+        capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 class _CaptureStream(StringIO):
@@ -28,7 +58,6 @@ def _reset_lumina_logging(monkeypatch=None) -> None:
     for handler in list(logger.handlers):
         handler.close()
     logger.handlers.clear()
-    structured_logging._configured = False
     if monkeypatch is not None:
         monkeypatch.delenv("LUMINA_LOG_PATH", raising=False)
 
@@ -43,12 +72,10 @@ def _clean_lumina_logger():
     import api.structured_logging as sl
 
     logging.getLogger("lumina").handlers.clear()
-    sl._configured = False
     sl.set_request_id(None)
     sl.bind_session_id(None)
     yield
     logging.getLogger("lumina").handlers.clear()
-    sl._configured = False
     sl.set_request_id(None)
     sl.bind_session_id(None)
 

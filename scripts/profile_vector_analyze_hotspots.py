@@ -338,4 +338,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 if __name__ == "__main__":
+    from api.structured_logging import configure_structured_logging
+
+    configure_structured_logging()
+
     raise SystemExit(run(parse_args(sys.argv[1:])))

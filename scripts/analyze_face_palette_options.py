@@ -331,6 +331,10 @@ def round_metrics(metrics: dict[str, object]) -> dict[str, object]:
 
 
 def main() -> None:
+    from api.structured_logging import configure_structured_logging
+
+    configure_structured_logging()
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--image", type=str, default=None)
     parser.add_argument("--beam-width", type=int, default=32)

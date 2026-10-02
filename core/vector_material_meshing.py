@@ -117,6 +117,10 @@ def _initialize_material_process(
         if getattr(sys, name) is None:
             setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))
 
+    from api.structured_logging import configure_structured_logging
+
+    configure_structured_logging()
+
 
 def _build_material_file(
     input_path: str,

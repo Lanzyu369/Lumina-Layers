@@ -44,6 +44,10 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    from api.structured_logging import configure_structured_logging
+
+    configure_structured_logging()
+
     args = _parse_args()
     target_hex, target_rgb = _parse_hex_color(args.target_hex)
     materials = load_multiple_materials(args.material)

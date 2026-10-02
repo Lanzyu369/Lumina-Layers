@@ -18,7 +18,6 @@ def _reset_file_logging(monkeypatch) -> None:
     for handler in list(lumina_logger.handlers):
         handler.close()
     lumina_logger.handlers.clear()
-    structured_logging._configured = False
 
 
 def _temp_log_path(name: str) -> Path:

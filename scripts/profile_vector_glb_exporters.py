@@ -106,6 +106,10 @@ def _run_once(svg_path: Path, kernel: str, lut_path: Path) -> dict[str, object]:
 
 
 def main() -> int:
+    from api.structured_logging import configure_structured_logging
+
+    configure_structured_logging()
+
     parser = argparse.ArgumentParser()
     parser.add_argument("svg", type=Path)
     parser.add_argument("--kernel", choices=("v1", "v2"), required=True)

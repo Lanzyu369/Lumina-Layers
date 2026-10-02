@@ -419,6 +419,10 @@ def _render_region_identification(
 
 
 def main() -> int:
+    from api.structured_logging import configure_structured_logging
+
+    configure_structured_logging()
+
     args = _parse_args()
 
     image_path = Path(args.image)

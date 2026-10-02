@@ -15,6 +15,14 @@
 
 ### 1. Where logs are written
 
+`get_logger(name)` only acquires a namespaced logger; it does not configure
+handlers, change root/Uvicorn settings, or create files. Initialize logging at
+the process entry point with `configure_structured_logging()`. The API app uses
+`setup_file_logging()` first to select the shared file; API workers and vector
+material workers attach during their process initializers. CLI tools configure
+their own output in `main()`. Keep `LUMINA_LOG_PATH` and
+`LUMINA_LOG_INIT_BY_PARENT=1` inherited by child processes.
+
 The file path resolution chain (defined in `api/logger.py::_resolve_log_candidates`):
 
 1. **`LUMINA_LOG_PATH=/abs/path.log`** — explicit override; the file (or its parent) will be created if missing. Used in worker subprocesses to inherit the parent's log file.
@@ -255,6 +263,13 @@ For a deeper governance reference, see `progress/governance-roadmap.md` (v2 fina
 - PR / 发版前过 gate: `python scripts/log_quality_check.py --mode fast` (smoke) 与 `--mode full` (发版).
 
 ### 1. 日志写到哪
+
+`get_logger(name)` 只获取命名空间下的 logger，不配置 handler、不改变
+root/Uvicorn 设置，也不创建文件。进程入口负责调用
+`configure_structured_logging()`。API app 先用 `setup_file_logging()`
+确定共享日志文件；API worker 和矢量材料 worker 在各自的进程初始化器中
+接入日志。CLI 在 `main()` 中配置输出。子进程继续继承 `LUMINA_LOG_PATH`
+和 `LUMINA_LOG_INIT_BY_PARENT=1`。
 
 文件路径解析链 (实现在 `api/logger.py::_resolve_log_candidates`):
 
