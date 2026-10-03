@@ -5,10 +5,10 @@ Lumina Studio - 高度图加载与处理模块 (Heightmap Loader)
 灰度值映射规则：黑色(0) = 最低底板厚度，白色(255) = 最高浮雕高度。
 """
 
-import logging
 import numpy as np
 import cv2
 from PIL import Image as PILImage
+from api.structured_logging import get_logger
 
 # HEIC/HEIF support (optional dependency)
 try:
@@ -18,7 +18,7 @@ try:
 except ImportError:
     pass
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
 class HeightmapLoader:
@@ -71,7 +71,16 @@ class HeightmapLoader:
         """
         orig_h, orig_w = grayscale.shape[:2]
         resized = cv2.resize(grayscale, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
-        log.info(f"缩放灰度图: ({orig_w}x{orig_h}) → ({target_w}x{target_h})")
+        log.debug(
+            "Heightmap resized",
+            extra={
+                "event": "heightmap_resized",
+                "source_width": orig_w,
+                "source_height": orig_h,
+                "target_width": target_w,
+                "target_height": target_h,
+            },
+        )
         return resized.astype(np.uint8)
 
     @staticmethod
@@ -129,10 +138,11 @@ class HeightmapLoader:
 
     @staticmethod
     def load_and_validate(heightmap_path: str) -> dict:
-        """加载并验证高度图文件。
+        """Load and validate a heightmap, including a nonempty thumbnail.
+        加载并验证高度图文件，生成非空缩略图。
 
         Args:
-            heightmap_path: 高度图文件路径。
+            heightmap_path: Original image path. (高度图原始文件路径。)
 
         Returns:
             dict: {
@@ -179,7 +189,14 @@ class HeightmapLoader:
             }
 
         orig_h, orig_w = image.shape[:2]
-        log.info(f"加载图像: {heightmap_path} ({orig_w}x{orig_h})")
+        log.debug(
+            "Heightmap image decoded",
+            extra={
+                "event": "heightmap_image_decoded",
+                "image_width": orig_w,
+                "image_height": orig_h,
+            },
+        )
 
         # 转换为灰度图
         grayscale = HeightmapLoader._to_grayscale(image)
@@ -188,8 +205,8 @@ class HeightmapLoader:
         max_dim = max(orig_h, orig_w)
         if max_dim > HeightmapLoader.THUMBNAIL_MAX_SIZE:
             scale = HeightmapLoader.THUMBNAIL_MAX_SIZE / max_dim
-            thumb_w = int(orig_w * scale)
-            thumb_h = int(orig_h * scale)
+            thumb_w = max(1, int(orig_w * scale))
+            thumb_h = max(1, int(orig_h * scale))
             thumbnail = cv2.resize(grayscale, (thumb_w, thumb_h), interpolation=cv2.INTER_LINEAR)
         else:
             thumbnail = grayscale.copy()

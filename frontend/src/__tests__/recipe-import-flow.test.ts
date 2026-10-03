@@ -28,6 +28,7 @@ import { createBeadRecipeSourceFixture } from "./fixtures/beadRecipeSource";
 import * as exportRecipeModule from "../recipe/exportRecipe";
 import * as pngMetadataModule from "../recipe/pngMetadata";
 import * as systemApi from "../api/system";
+import apiClient from "../api/client";
 
 const PRINTERS: PrinterInfo[] = [
   {
@@ -239,14 +240,15 @@ describe("recipe/importFlow", () => {
   it.each(["primary", "heightmap"])("rejects an undecodable %s before applying imported settings", async (assetKey) => {
     const recipe = makeRecipe();
     if (assetKey === "heightmap") recipe.asset.heightmap = { ...recipe.asset.primary, filename: "height.png" };
-    let decodedCount = 0;
+    if (assetKey === "heightmap") {
+      vi.spyOn(apiClient, "post").mockRejectedValue(new Error("Cannot decode heightmap"));
+    }
     class ImportImage {
       src = "";
       naturalWidth = 1;
       naturalHeight = 1;
       async decode() {
-        decodedCount += 1;
-        if (assetKey === "primary" || decodedCount === 2) throw new Error("Cannot decode image");
+        if (assetKey === "primary") throw new Error("Cannot decode image");
       }
     }
     vi.stubGlobal("Image", ImportImage);
@@ -260,7 +262,7 @@ describe("recipe/importFlow", () => {
     expect(useConverterStore.getState().target_width_mm).toBe(initialWidth);
     expect(useSettingsStore.getState().printerModel).toBe(initialPrinter);
     expect(printers).not.toHaveBeenCalled();
-    expect(revoke).toHaveBeenCalledTimes(assetKey === "primary" ? 1 : 2);
+    expect(revoke).toHaveBeenCalledTimes(1);
   });
 
   it.each(["source.nef", "source.heic"])("uses the existing backend decoder for %s and preserves failures", async (filename) => {
@@ -279,14 +281,20 @@ describe("recipe/importFlow", () => {
     if (assetKey === "heightmap") recipe.asset.heightmap = { ...recipe.asset.primary, filename: "height.png" };
     let markDecodingStarted: () => void = () => {};
     const decodingStarted = new Promise<void>((resolve) => { markDecodingStarted = resolve; });
-    let decodeCount = 0;
+    let heightmapSignal: AbortSignal | undefined;
+    if (assetKey === "heightmap") {
+      vi.spyOn(apiClient, "post").mockImplementation((_url, _data, options) => {
+        heightmapSignal = options?.signal as AbortSignal;
+        markDecodingStarted();
+        return new Promise(() => {});
+      });
+    }
     class PendingImage {
       src = "";
       naturalWidth = 1;
       naturalHeight = 1;
       decode() {
-        decodeCount += 1;
-        if (assetKey === "heightmap" && decodeCount === 1) return Promise.resolve();
+        if (assetKey === "heightmap") return Promise.resolve();
         markDecodingStarted();
         return new Promise<void>(() => {});
       }
@@ -302,7 +310,8 @@ describe("recipe/importFlow", () => {
     expect(failure).toBeInstanceOf(Error);
     expect((failure as Error).message).toContain("Asset data is corrupted");
     expect(useConverterStore.getState().imageFile).toBeNull();
-    expect(revoke).toHaveBeenCalledTimes(assetKey === "primary" ? 1 : 2);
+    expect(revoke).toHaveBeenCalledTimes(1);
+    if (assetKey === "heightmap") expect(heightmapSignal?.aborted).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
     await preparation;
   });

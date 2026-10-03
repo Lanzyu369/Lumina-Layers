@@ -12,7 +12,8 @@ import {
 } from "../stores/settingsStore";
 import { useWidgetStore } from "../stores/widgetStore";
 import { useWorkshopStore } from "../workshop/store";
-import { getPrinters, uploadImagePreview } from "../api/system";
+import { getPrinters, uploadImagePreview, validateHeightmapImage } from "../api/system";
+import { HEIGHTMAP_IMAGE_TYPES } from "../constants/heightmap";
 import type { PrinterInfo } from "../api/types";
 import {
   parseRecipeFile,
@@ -140,7 +141,7 @@ export async function prepareImport(file: File): Promise<ImportPreview> {
   const restoreResult = restoreConverterRecipe(recipe, lutListFull);
   await validateRestoredImage(restoreResult.assetFile);
   if (restoreResult.heightmapFile) {
-    await validateRestoredImage(restoreResult.heightmapFile);
+    await validateRestoredHeightmap(restoreResult.heightmapFile);
   }
 
   // Build cover preview URL
@@ -158,6 +159,36 @@ export async function prepareImport(file: File): Promise<ImportPreview> {
   }
 
   return { recipe, restoreResult, coverUrl, printerOptions };
+}
+
+async function validateRestoredHeightmap(file: File): Promise<void> {
+  if (!HEIGHTMAP_IMAGE_TYPES.some((mime) => mime === file.type)) {
+    throw new Error(RECIPE_ASSET_CORRUPT_ERROR);
+  }
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const result = await Promise.race([
+      validateHeightmapImage(file, controller.signal),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          controller.abort();
+          reject(new Error(RECIPE_ASSET_CORRUPT_ERROR));
+        }, IMAGE_DECODE_TIMEOUT_MS);
+      }),
+    ]);
+    if (
+      !Number.isFinite(result.width) ||
+      !Number.isFinite(result.height) ||
+      result.width <= 0 || result.height <= 0
+    ) {
+      throw new Error(RECIPE_ASSET_CORRUPT_ERROR);
+    }
+  } catch {
+    throw new Error(RECIPE_ASSET_CORRUPT_ERROR);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
 }
 
 async function validateRestoredImage(file: File): Promise<void> {
