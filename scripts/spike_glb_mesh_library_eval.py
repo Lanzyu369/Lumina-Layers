@@ -1608,6 +1608,10 @@ def _run_end_to_end_for_kernel(
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    from api.structured_logging import configure_structured_logging
+
+    configure_structured_logging()
+
     args = parse_args(argv)
     candidates = [c.strip() for c in args.candidates.split(",") if c.strip()]
     unknown = [c for c in candidates if c not in CANDIDATES]

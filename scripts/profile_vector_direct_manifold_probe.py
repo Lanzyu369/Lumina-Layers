@@ -173,6 +173,10 @@ def _build_color_extrusions(svg_path: Path, lut_path: Path, target_width_mm: flo
 
 
 def main() -> int:
+    from api.structured_logging import configure_structured_logging
+
+    configure_structured_logging()
+
     parser = argparse.ArgumentParser()
     parser.add_argument("svg", type=Path)
     parser.add_argument("--lut", type=Path, default=DEFAULT_LUT_PATH)

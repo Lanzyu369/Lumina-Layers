@@ -221,6 +221,10 @@ def build(output_path: Path) -> Path:
 
 
 def main() -> int:
+    from api.structured_logging import configure_structured_logging
+
+    configure_structured_logging()
+
     out = _REPO_ROOT / "progress" / "auto_dr_curve_demo.xlsx"
     saved = build(out)
     print(f"已生成 {saved.relative_to(_REPO_ROOT)}")

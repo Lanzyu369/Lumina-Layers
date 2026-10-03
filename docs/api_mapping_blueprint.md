@@ -31,6 +31,34 @@
 19. [Session 状态变量 / Session State Variables](#session-状态变量)
 20. [持久化设置 / Persistent Settings (user_settings.json)](#持久化设置)
 21. [Pydantic 模型骨架 / Pydantic Model Skeletons](#pydantic-模型骨架)
+22. [材料缓存与 LUT 目录契约](#材料缓存与-lut-目录契约)
+
+## 材料缓存与 LUT 目录契约
+
+持久材料求解缓存只由用户显式建缓存操作触发，不能在选择材料时自动启动完整磁盘缓存构建。
+入口是 `POST /api/extractor/material-solver-cache/build`，对应
+[MaterialSolverCacheStatusCard](../frontend/src/components/MaterialSolverCacheStatusCard.tsx)
+和 [single_stage 路由](../api/routers/single_stage.py)。没有持久缓存时，预览使用
+现有 [material_lut_provider](../core/material_lut_provider.py) 运行时求解，
+由 `material_solver_info` 报告实际来源；运行时准备不等于自动写持久缓存。
+动态层数走独立的精确求解路径，不能按旧进度表把全部模式重新绑定为同一 B&B 路径。
+
+缓存是 `.npz` 加 `.meta.json`，默认目录与路径覆盖规则归
+[material_cache.py](../core/material_cache.py) 所有。键包含规范材料指纹、层数、层高、
+基底和网格密度；材料重排仍需按规范顺序映射配方列。当前材料指纹使用 E、k、C0_white
+及既有浮点舍入规则，旧进度表中的目录名/C0_black 哈希公式不再是实现契约。
+默认密度和可选档位使用该模块常量；旧文件名只在元数据密度匹配时兼容加载。
+求解器的 `buffer_layers` 当前默认为 0（严格），旧计划中的 1 不应恢复为默认；
+历史耗时目标不能视为当前性能承诺。回归入口是
+[缓存测试](../tests/test_material_cache_unit.py) 与
+[求解测试](../tests/test_material_solver_optimal_unit.py)。
+
+基础设置的两级 LUT 选择器由 `GET /api/lut/details/catalog` 提供按厂商分组的条目及
+`color_mode`，由 converter store 的 `fetchLegacyCatalog()` 独立获取和缓存。
+它不能依赖懒加载的 LUT 详情页 store。`GET /api/lut/catalog` 继续负责 legacy/native
+来源目录、`lutList`、原生厂商和上传后刷新；两种目录职责不同。
+复用 [API 客户端](../frontend/src/api/lut.ts) 和现有
+`LutDetailsCatalogGroup` / `LutDetailsCatalogItem` 类型，不额外创建一套目录状态。
 
 ---
 
@@ -201,24 +229,34 @@
 
 ## Calibration Tab
 
+当前校准 API 不暴露底板颜色选择：需要底色的路由固定传 `backing_color="White"`。
+用户调节 `backing_thickness`，当前默认 1.2 mm、范围 0.4–3.5 mm，UI 步进 0.08 mm
+与打印层高一致。路由把它作为 `backing_thickness_mm` 传给 core；省略该可选参数时，
+core 继续使用 `PrinterConfig.BACKING_MM`。兼容枚举不等于 UI 仍提供底色选择。
+参数权威分别是 [schema](../api/schemas/calibration.py)、
+[store 常量](../frontend/src/stores/calibrationStore.ts) 和
+[底板层数解析](../core/calibration.py)；历史迁移默认值不覆盖当前实现。
+
 > API Endpoint: `POST /api/calibration/generate`
-> 函数: `generate_calibration_board()` (4-Color), `generate_smart_board()` (6-Color), `generate_8color_batch_zip()` (8-Color), `generate_bw_calibration_board()` (BW)
+> 当前颜色模式与底板参数的转发见下表；完整设备参数以 [calibration 路由](../api/routers/calibration.py) 为准。
 
 | Gradio Component | Variable Name | Data Type | Default | Range / Choices | Pydantic Field | Pydantic Type | Converter Param | Notes |
 |---|---|---|---|---|---|---|---|---|
-| `gr.Radio` | `radio_cal_color_mode` | `str` | `"4-Color"` | `"BW (Black & White)"`, `"4-Color"`, `"6-Color (Smart 1296)"`, `"8-Color Max"` | `color_mode` | `Literal["BW (Black & White)","4-Color","6-Color (Smart 1296)","8-Color Max"]` | `color_mode` (路由) | 决定调用哪个生成函数 |
-| `gr.Slider` | `slider_cal_block_size` | `int` | `5` | 3–10, step=1 | `block_size` | `int` | `block_size` | 色块尺寸 (mm) |
-| `gr.Slider` | `slider_cal_gap` | `float` | `0.84` | 0.4–2.0, step=0.02 | `gap` | `float` | `gap` | 色块间距 (mm) |
-| `gr.Dropdown` | `dropdown_cal_backing` | `str` | `"White"` | `"White"`, `"Cyan"`, `"Magenta"`, `"Yellow"`, `"Red"`, `"Blue"` | `backing` | `Literal["White","Cyan","Magenta","Yellow","Red","Blue"]` | `backing` | 底板颜色；8-Color 模式下忽略 |
+| 颜色模式选择 | `color_mode` | `str` | `"4-Color (RYBW)"` | 使用 `CalibrationColorMode` | `color_mode` | `CalibrationColorMode` | `color_mode` (路由) | 决定调用哪个生成函数 |
+| `gr.Slider` | `slider_cal_block_size` | `float` | `5.0` | 3–10, step=1 | `block_size` | `float` | `block_size_mm` | 色块尺寸 (mm) |
+| `gr.Slider` | `slider_cal_gap` | `float` | `0.84` | 0.4–2.0, step=0.02 | `gap` | `float` | `gap_mm` | 色块间距 (mm) |
+| 厚度滑块 | `backing_thickness` | `float` | `1.2` | 0.4–3.5, step=0.08 | `backing_thickness` | `float` | `backing_thickness_mm` | 底板厚度 (mm) |
 
 ### 函数路由逻辑 / Function Routing
 
 | color_mode | 调用函数 | 参数 |
 |---|---|---|
-| `"BW (Black & White)"` | `generate_bw_calibration_board(block_size, gap, backing)` | block_size, gap, backing |
-| `"4-Color"` | `generate_calibration_board("RYBW", block_size, gap, backing)` | palette="RYBW", block_size, gap, backing |
-| `"6-Color (Smart 1296)"` | `generate_smart_board(block_size, gap)` | block_size, gap |
-| `"8-Color Max"` | `generate_8color_batch_zip()` | 无参数 |
+| `"BW (Black & White)"` | `generate_bw_calibration_board` | block_size_mm, gap_mm, backing_color="White", backing_thickness_mm |
+| `"4-Color (RYBW)"` / `"4-Color (CMYW)"` | `generate_calibration_board` | color_mode="RYBW" / "CMYW", block_size_mm, gap_mm, backing_color="White", backing_thickness_mm |
+| `"6-Color (CMYWGK 1296)"` | `generate_smart_board` | block_size_mm, gap_mm, backing_thickness_mm |
+| `"6-Color (RYBWGK 1296)"` | `generate_smart_board_rybw` | block_size_mm, gap_mm, backing_thickness_mm |
+| `"8-Color Max"` | `generate_8color_batch_zip` / `generate_8color_full_batch_zip` | block_size_mm, gap_mm, backing_thickness_mm；按 eight_color_full_export 选择 |
+| `"5-Color Extended (1444)"` | `generate_5color_extended_batch_zip` | block_size_mm, gap_mm, backing_thickness_mm |
 
 ---
 
@@ -584,7 +622,7 @@ class CalibrationGenerateRequest(BaseModel):
     color_mode: CalibrationColorMode = Field(CalibrationColorMode.FOUR_COLOR)
     block_size: int = Field(5, ge=3, le=10, description="色块尺寸 (mm)")
     gap: float = Field(0.84, ge=0.4, le=2.0, description="色块间距 (mm)")
-    backing_thickness: float = Field(1.6, ge=0.4, le=3.5, description="底板厚度 (mm)")
+    backing_thickness: float = Field(1.2, ge=0.4, le=3.5, description="底板厚度 (mm)")
 
 
 # ========== Extractor ==========

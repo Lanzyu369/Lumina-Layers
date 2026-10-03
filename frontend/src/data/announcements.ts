@@ -16,6 +16,20 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-10-03",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [{
+      category: { zh: "稳定性", en: "Stability" },
+      items: [{
+        zh: "浮雕、掐丝或磁铁孔槽生成失败时会提示错误，不再把缺少这些结构的平面模型当作成功结果；之前已生成的下载文件仍可使用。",
+        en: "Generation now reports failures when building relief, wirework or magnet cavities, instead of returning a flat model with those features missing. Previously generated downloads remain available.",
+      }],
+    }],
+  },
+  {
     version: "2026-10-01",
     title: {
       zh: "Lumina Layers — 9 月更新速览",

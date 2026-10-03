@@ -307,7 +307,7 @@ _LEGACY_UI_HELPER_FUNCTIONS = {
     "update_preview_with_backing_color",
 }
 
-# converter.py 中需要检查 ≤20 行的函数
+# Explicit parameter mappings are validated by behavior, not source line count.
 _CONVERTER_THIN_WRAPPER_FUNCTIONS = [
     "convert_image_to_3d",
     "generate_preview_cached",
@@ -322,20 +322,54 @@ _IMAGE_PROCESSOR_METHODS = [
 ]
 
 
+class TestConverterEntryResults:
+    @pytest.mark.parametrize("func_name", _CONVERTER_THIN_WRAPPER_FUNCTIONS)
+    @pytest.mark.parametrize("failed", [False, True])
+    def test_delegates_once_and_preserves_success_or_failure_tuple(
+        self, monkeypatch: pytest.MonkeyPatch, func_name: str, failed: bool,
+    ) -> None:
+        from unittest.mock import Mock
+        from core import converter
+
+        entry = getattr(converter, func_name)
+        image, cache = object(), {"material_matrix": object()}
+        generated = ("model.3mf", "model.glb", image, "OK", "recipe.json")
+        error = "[ERROR] Requested voxel geometry failed"
+        ctx = {
+            "result_tuple": generated, "display_image": image,
+            "cache": cache, "status_msg": "OK",
+        }
+        if failed:
+            ctx["error"] = error
+        runner = Mock(return_value=ctx)
+        pipeline = (
+            "build_image_model_context"
+            if func_name == "convert_image_to_3d" else "run_preview_pipeline"
+        )
+        monkeypatch.setattr(converter, pipeline, runner)
+        required = {
+            name: object() for name, param in inspect.signature(entry).parameters.items()
+            if param.default is inspect.Parameter.empty
+        }
+
+        result = entry(**required)
+
+        runner.assert_called_once()
+        if func_name == "convert_image_to_3d":
+            if failed:
+                assert result == (None, None, None, error, None)
+            else:
+                assert result is generated
+        elif failed:
+            assert result == (None, None, error)
+        else:
+            assert result[0] is image
+            assert result[1] is cache
+            assert result[2] == "OK"
+
+
 class TestProperty11FunctionBodyLineLimit:
-    """使用 AST 解析验证函数体行数限制。
-
-    - converter.py 中 convert_image_to_3d 和 generate_preview_cached 函数体不超过 20 行
-    - image_processing.py 中 LuminaImageProcessor 的指定方法体不超过 30 行
-    """
-
-    @pytest.fixture(scope="class")
-    def converter_ast(self):
-        """解析 converter.py 的 AST。"""
-        converter_path = os.path.join("core", "converter.py")
-        with open(converter_path, "r", encoding="utf-8") as f:
-            source = f.read()
-        return ast.parse(source, filename=converter_path)
+    """Validate the existing image-processor delegation size guard."""
 
     @pytest.fixture(scope="class")
     def image_processing_ast(self):
@@ -344,19 +378,6 @@ class TestProperty11FunctionBodyLineLimit:
         with open(ip_path, "r", encoding="utf-8") as f:
             source = f.read()
         return ast.parse(source, filename=ip_path)
-
-    @pytest.mark.parametrize("func_name", _CONVERTER_THIN_WRAPPER_FUNCTIONS)
-    def test_converter_thin_wrapper_within_20_lines(self, converter_ast, func_name: str):
-        """converter.py 中薄包装函数体不超过 20 行。"""
-        found = False
-        for node in ast.walk(converter_ast):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                if node.name == func_name:
-                    found = True
-                    body_lines = _count_function_body_lines(node)
-                    assert body_lines <= 20, f"converter.py::{func_name} 函数体为 {body_lines} 行，" f"超过 20 行限制"
-                    break
-        assert found, f"converter.py 中未找到函数 {func_name}"
 
     @pytest.mark.parametrize("method_name", _IMAGE_PROCESSOR_METHODS)
     def test_image_processor_method_within_30_lines(self, image_processing_ast, method_name: str):

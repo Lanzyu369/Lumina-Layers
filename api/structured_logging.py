@@ -23,7 +23,6 @@ _EXTERNAL_NOISE_KEYS = frozenset(
 )
 _EXTERNAL_LOGGER_PREFIXES = ("uvicorn", "fastapi", "starlette", "asyncio", "httpx", "watchfiles")
 
-_configured = False
 _CONSOLE_HANDLER_ATTR = "_lumina_console_handler"
 _FILE_HANDLER_ATTR = "_lumina_file_handler"
 _FILE_HANDLER_PATH_ATTR = "_lumina_file_path"
@@ -292,8 +291,9 @@ def _configure_uvicorn_loggers(level: int) -> None:
 
 
 def configure_structured_logging() -> None:
-    """Configure the `lumina` logger family for structured output."""
-    global _configured
+    """Initialize process logging, reusing the existing Lumina handlers.
+    初始化进程日志，复用已有的 Lumina 输出 handler。
+    """
     logger = logging.getLogger("lumina")
     level = _parse_log_level(os.environ.get("LUMINA_LOG_LEVEL"))
     logger.setLevel(level)
@@ -303,12 +303,12 @@ def configure_structured_logging() -> None:
     _ensure_file_handler(logger, level)
     attach_root_logger()
     _configure_uvicorn_loggers(level)
-    _configured = True
 
 
 def get_logger(name: str) -> logging.Logger:
-    """Get a namespaced logger under the `lumina` family."""
-    configure_structured_logging()
+    """Get a Lumina logger without configuring the host process.
+    获取 Lumina 命名空间下的 logger，不改变宿主进程的日志配置。
+    """
     if name.startswith("lumina."):
         return logging.getLogger(name)
     return logging.getLogger(f"lumina.{name}")

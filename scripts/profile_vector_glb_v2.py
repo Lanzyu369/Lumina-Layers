@@ -55,6 +55,10 @@ def _run_once(svg_path: Path, kernel: str, *, lut_path: Path) -> dict[str, objec
 
 
 def main() -> int:
+    from api.structured_logging import configure_structured_logging
+
+    configure_structured_logging()
+
     parser = argparse.ArgumentParser()
     parser.add_argument("svg", nargs="+", help="SVG fixture paths")
     parser.add_argument("--lut", default=DEFAULT_LUT_PATH)

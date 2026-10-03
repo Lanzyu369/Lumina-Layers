@@ -847,6 +847,10 @@ def render_markdown(
 
 
 def main(argv: list[str] | None = None) -> int:
+    from api.structured_logging import configure_structured_logging
+
+    configure_structured_logging()
+
     args = parse_args(argv)
     image_path = Path(args.image).resolve()
     if not image_path.is_file():

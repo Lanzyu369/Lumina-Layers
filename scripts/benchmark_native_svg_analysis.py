@@ -626,6 +626,10 @@ def _measure_complete_entry_isolated(
 
 
 def _measurement_child_main(argv: list[str]) -> int:
+    from api.structured_logging import configure_structured_logging
+
+    configure_structured_logging()
+
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--_measurement-child", action="store_true")
     parser.add_argument("--svg", type=Path, required=True)
@@ -920,6 +924,10 @@ def _threshold_failures(manifest: dict[str, Any]) -> list[str]:
 
 
 def main() -> None:
+    from api.structured_logging import configure_structured_logging
+
+    configure_structured_logging()
+
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--svg",

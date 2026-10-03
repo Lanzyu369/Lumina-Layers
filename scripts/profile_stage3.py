@@ -383,6 +383,10 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    from api.structured_logging import configure_structured_logging
+
+    configure_structured_logging()
+
     args = _parse_args()
     if args.image is not None:
         # Custom dataset path — used by the GLB v2 spec to measure

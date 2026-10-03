@@ -471,6 +471,10 @@ def _compare_pair(fast_row: dict[str, object], fallback_row: dict[str, object]) 
 
 
 def main() -> int:
+    from api.structured_logging import configure_structured_logging
+
+    configure_structured_logging()
+
     parser = argparse.ArgumentParser()
     parser.add_argument("svg", nargs="*", type=Path, help="SVG fixtures to profile.")
     parser.add_argument("--lut", type=Path, default=DEFAULT_LUT_PATH)

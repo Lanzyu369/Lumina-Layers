@@ -416,6 +416,10 @@ def main() -> int:
     """Run the SVG converter repro CLI.
     运行 SVG 转 3D 复现命令行工具。
     """
+    from api.structured_logging import configure_structured_logging
+
+    configure_structured_logging()
+
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
     args = _parse_args()
     random.seed(args.seed)

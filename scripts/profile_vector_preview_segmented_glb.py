@@ -161,6 +161,10 @@ def _run_glb(cache: dict[str, object], kernel: str, output_path: Path) -> dict[s
 
 
 def main() -> int:
+    from api.structured_logging import configure_structured_logging
+
+    configure_structured_logging()
+
     parser = argparse.ArgumentParser()
     parser.add_argument("svg", type=Path)
     parser.add_argument("--lut", type=Path, default=DEFAULT_LUT_PATH)

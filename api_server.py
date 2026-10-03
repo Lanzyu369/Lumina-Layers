@@ -177,8 +177,13 @@ def _run_frozen_worker_smoke() -> None:
 
     from concurrent.futures import ProcessPoolExecutor
 
+    from api.logger import setup_file_logging
+    from api.structured_logging import configure_structured_logging
     from api.worker_pool import _worker_init, _worker_smoke_task
 
+    if log_path := os.environ.get("LUMINA_LOG_PATH"):
+        setup_file_logging(log_path=log_path)
+    configure_structured_logging()
     with ProcessPoolExecutor(max_workers=1, initializer=_worker_init) as pool:
         worker_pid = pool.submit(_worker_smoke_task).result(timeout=60)
     if worker_pid == os.getpid():
@@ -416,6 +421,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         _run_frozen_worker_smoke()
         return 0
     if args.native_svg_self_test or args.svg_hole_compensation_self_test:
+        from api.structured_logging import configure_structured_logging
+
+        configure_structured_logging()
         try:
             payload = (
                 _svg_hole_compensation_self_test_payload()

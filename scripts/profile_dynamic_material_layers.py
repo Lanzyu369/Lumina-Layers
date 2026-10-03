@@ -1050,6 +1050,10 @@ def _build_report(args: argparse.Namespace) -> dict[str, Any]:
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI and emit one UTF-8 JSON report. 运行 CLI 并输出 JSON。"""
 
+    from api.structured_logging import configure_structured_logging
+
+    configure_structured_logging()
+
     args = _parse_args(argv)
     try:
         report = _build_report(args)
