@@ -2216,7 +2216,7 @@ def _load_vector_parse_clip_cache_artifact_by_provenance(
 ):
     """Load a parse/clip artifact matching server-held provenance."""
 
-    if not isinstance(expected_provenance, str) or len(expected_provenance) != 64:
+    if not isinstance(expected_provenance, str) or not expected_provenance:
         return None
     payload = _read_vector_parse_clip_cache_artifact(path)
     if payload is None or payload.get("provenance") != expected_provenance:

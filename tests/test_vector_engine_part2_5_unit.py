@@ -343,8 +343,21 @@ def test_vector_parse_clip_artifact_carries_stable_provenance(tmp_path):
     expected = vector_engine._vector_parse_clip_cache_provenance(cache_key)
     assert payload["provenance"] == expected
     assert json.loads(expected) == list(cache_key)
+    artifact = tmp_path / "parse_clip.pkl"
+    artifact.write_bytes(pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL))
+    assert vector_engine._load_vector_parse_clip_cache_artifact(
+        str(artifact), cache_key,
+    ) is not None
+    restored = vector_engine._load_vector_parse_clip_cache_artifact_by_provenance(
+        str(artifact), expected,
+    )
+    assert restored is not None
+    assert restored["silhouette"].equals(geometry)
     changed_key = (*cache_key[:1], 11.0, *cache_key[2:])
     assert vector_engine._vector_parse_clip_cache_provenance(changed_key) != expected
+    assert vector_engine._load_vector_parse_clip_cache_artifact_by_provenance(
+        str(artifact), vector_engine._vector_parse_clip_cache_provenance(changed_key),
+    ) is None
 
 
 def test_vector_cache_reloads_same_path_size_and_restored_timestamp(tmp_path):

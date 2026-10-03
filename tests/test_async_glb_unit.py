@@ -28,6 +28,7 @@ Covers / 覆盖范围:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -51,6 +52,8 @@ from api.preview_cache_artifacts import (
 from api.routers.converter import async_glb as async_glb_module
 from api.session_store import SessionStore
 from config import ModelingMode
+from core import vector_engine
+from shapely.geometry import box
 
 _test_store: SessionStore = SessionStore(ttl=1800)
 _test_registry: FileRegistry = FileRegistry()
@@ -199,15 +202,36 @@ def _native_vector_cache(sid: str, tmp_path: Path) -> dict:
     session_data = _test_store.get(sid)
     assert session_data is not None
     cache = dict(session_data["preview_cache"])
+    svg_path = tmp_path / "preview.svg"
+    svg_path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="3" height="3">'
+        '<rect width="3" height="3" fill="#ff0000"/></svg>', encoding="utf-8",
+    )
+    geometry = box(0, 0, 3, 3)
+    cache_key = vector_engine._vector_parse_clip_cache_key(
+        str(svg_path), target_width_mm=60.0, sampling_precision=0.02,
+        expand_stroke_to_fill=False, gradient_color_bands=None,
+    )
     geometry_path = tmp_path / "vector-geometry.pkl"
-    geometry_path.write_bytes(b"server-owned-vector-geometry")
+    geometry_path.write_bytes(vector_engine._serialize_vector_parse_clip_cache(
+        cache_key, {
+            "shape_data": [{"poly": geometry, "color": (255, 0, 0)}],
+            "clipped_shapes": [{"geometry": geometry, "color": (255, 0, 0)}],
+            "silhouette": geometry,
+            "image_vectorizer_bounds": geometry,
+            "scale_factor": 20.0,
+            "bbox": (0, 0, 3, 3),
+        },
+    ))
     _test_store.register_temp_file(sid, str(geometry_path))
     cache.update(
         {
             "modeling_mode": "vector",
             "enable_smooth_vector_preview": True,
             "vector_parse_clip_cache_path": str(geometry_path),
-            "vector_parse_clip_cache_provenance": "d" * 64,
+            "vector_parse_clip_cache_provenance": (
+                vector_engine._vector_parse_clip_cache_provenance(cache_key)
+            ),
             "height_identity_rgb": cache["matched_rgb"].copy(),
             "preview_colors": {0: [255, 255, 255, 255]},
             "backing_color_id": 0,
@@ -219,6 +243,57 @@ def _native_vector_cache(sid: str, tmp_path: Path) -> dict:
 
 
 class TestRendererDispatch:
+    def test_real_session_artifact_reaches_analytic_glb(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        sid = _seed_session(tmp_path)
+        cache = _native_vector_cache(sid, tmp_path)
+        monkeypatch.setattr(
+            async_glb_module, "generate_segmented_glb",
+            lambda *_args, **_kwargs: pytest.fail("valid artifact must reach analytic renderer"),
+        )
+        output = tmp_path / "real-analytic.glb"
+        path, renderer = async_glb_module._build_preview_glb(
+            session_id=sid, store=_test_store, cache=cache, output_path=str(output),
+        )
+        assert renderer == "vector_analytic"
+        assert path == str(output)
+        assert output.read_bytes()[:4] == b"glTF"
+
+    @pytest.mark.parametrize("mismatch", ["provenance", "owner", "runtime"])
+    def test_real_session_artifact_rejects_mismatched_reuse(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mismatch: str,
+    ) -> None:
+        sid = _seed_session(tmp_path)
+        cache = _native_vector_cache(sid, tmp_path)
+        if mismatch == "provenance":
+            key = json.loads(cache["vector_parse_clip_cache_provenance"])
+            key[1] += 1
+            cache["vector_parse_clip_cache_provenance"] = (
+                vector_engine._vector_parse_clip_cache_provenance(key)
+            )
+        elif mismatch == "owner":
+            sid = _test_store.create()
+        else:
+            monkeypatch.setattr(
+                vector_engine.native_svg_adapter, "native_build_identity",
+                lambda: "different-build",
+            )
+        calls = []
+
+        def segmented(_cache, *, output_path):
+            calls.append(output_path)
+            return output_path
+
+        monkeypatch.setattr(async_glb_module, "generate_segmented_glb", segmented)
+        output = tmp_path / "fallback.glb"
+        path, renderer = async_glb_module._build_preview_glb(
+            session_id=sid, store=_test_store, cache=cache, output_path=str(output),
+        )
+        assert renderer == "segmented"
+        assert path == str(output)
+        assert calls == [str(output)]
+
     @pytest.mark.parametrize("modeling_mode", ["vector", ModelingMode.VECTOR])
     def test_native_vector_prefers_analytic_renderer(
         self,
