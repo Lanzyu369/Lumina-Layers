@@ -21,7 +21,10 @@ from typing import Callable
 import numpy as np
 
 from api.structured_logging import get_logger
-from core.material_cache import _material_fingerprint, default_cache_directory
+from core.material_cache import (
+    _find_cache_record, _legacy_material_enumeration_key, describe_material,
+    default_cache_directory,
+)
 from core.material_candidate_cache import HYBRID_CANDIDATE_ALGORITHM_VERSION
 from core.material_color_solver import MaterialParams, rgb_to_lab
 from core.material_dynamic_solver import (
@@ -30,7 +33,7 @@ from core.material_dynamic_solver import (
 )
 
 
-DYNAMIC_CATALOG_SCHEMA_VERSION = 1
+DYNAMIC_CATALOG_SCHEMA_VERSION = 2
 DYNAMIC_CATALOG_ALGORITHM_VERSION = "dynamic-ciede2000-v2"
 _DYNAMIC_CACHE_SUBDIRECTORY = "dynamic-catalogs"
 _CACHE_LOCK_TIMEOUT_SECONDS = 30.0
@@ -65,10 +68,10 @@ class DynamicCatalogCacheKey:
         algorithm_version: Dynamic catalog algorithm version. 动态目录算法版本。
         candidate_source_version: Bounded candidate source algorithm version.
             有界候选来源算法版本。
-        palette_fingerprint: Order-independent material palette fingerprint.
-            与耗材顺序无关的调色板指纹。
-        backing_material_fingerprint: Identity and optical fingerprint of the
-            selected backing material. 所选基板耗材的身份与光学指纹。
+        palette_descriptor: Serialized effective material descriptors.
+            序列化的有效耗材描述。
+        backing_material_descriptor: Selected backing identity and parameters.
+            所选基板耗材的身份与参数。
         material_count: Number of materials in the palette. 调色板耗材数。
         layer_height_mm: Physical layer height. 物理层高。
         substrate: White or black optical substrate. 光学基底。
@@ -80,8 +83,8 @@ class DynamicCatalogCacheKey:
 
     algorithm_version: str
     candidate_source_version: str
-    palette_fingerprint: str
-    backing_material_fingerprint: str
+    palette_descriptor: str
+    backing_material_descriptor: str
     material_count: int
     layer_height_mm: float
     substrate: str
@@ -142,36 +145,29 @@ def _validate_materials(materials: list[MaterialParams]) -> None:
         raise TypeError("materials must contain MaterialParams values")
 
 
-def _normalized_material_identity(material: MaterialParams) -> tuple[str, str]:
-    return (
-        str(material.directory_name).strip().casefold(),
-        str(material.name).strip().casefold(),
-    )
+def _serialized_material(material: MaterialParams) -> str:
+    return json.dumps(describe_material(material), sort_keys=True, separators=(",", ":"))
 
 
-def _dynamic_material_identity_fingerprint(material: MaterialParams) -> str:
-    """Hash stable material identity together with optical parameters.
+def _serialized_palette(materials: list[MaterialParams]) -> str:
+    descriptors = [describe_material(materials[index])
+                   for index in dynamic_material_canonical_order(materials)]
+    return json.dumps(descriptors, sort_keys=True, separators=(",", ":"))
 
-    将稳定耗材身份与光学参数共同哈希。
+
+def _legacy_dynamic_enumeration_key(material: MaterialParams) -> str:
+    """Preserve the historical dynamic recipe order, never cache identity.
+
+    Equal optical results retain the same physical material choice. Cache
+    records instead compare the complete saved descriptors directly.
     """
-
-    directory_name, name = _normalized_material_identity(material)
     payload = {
-        "directory_name": directory_name,
-        "name": name,
-        "optical_fingerprint": _material_fingerprint(material),
+        "directory_name": str(material.directory_name).strip().casefold(),
+        "name": str(material.name).strip().casefold(),
+        "optical_fingerprint": _legacy_material_enumeration_key(material),
     }
     serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
-
-
-def _dynamic_palette_identity_fingerprint(
-    materials: list[MaterialParams],
-) -> str:
-    identities = sorted(
-        _dynamic_material_identity_fingerprint(material) for material in materials
-    )
-    return hashlib.sha256("|".join(identities).encode("utf-8")).hexdigest()
 
 
 def dynamic_material_canonical_order(
@@ -200,15 +196,14 @@ def dynamic_material_canonical_order(
 
     _validate_materials(materials)
     identities = [
-        _dynamic_material_identity_fingerprint(material) for material in materials
+        _serialized_material(material) for material in materials
     ]
     if len(identities) != len(set(identities)):
         raise ValueError(
             "dynamic material catalog does not support duplicate material identities"
         )
-    return tuple(
-        sorted(range(len(materials)), key=lambda index: (identities[index], index))
-    )
+    enumeration_keys = [_legacy_dynamic_enumeration_key(material) for material in materials]
+    return tuple(sorted(range(len(materials)), key=lambda index: enumeration_keys[index]))
 
 
 def build_dynamic_catalog_cache_key(
@@ -284,8 +279,8 @@ def build_dynamic_catalog_cache_key(
     return DynamicCatalogCacheKey(
         algorithm_version=normalized_version,
         candidate_source_version=HYBRID_CANDIDATE_ALGORITHM_VERSION,
-        palette_fingerprint=_dynamic_palette_identity_fingerprint(materials),
-        backing_material_fingerprint=_dynamic_material_identity_fingerprint(
+        palette_descriptor=_serialized_palette(materials),
+        backing_material_descriptor=_serialized_material(
             materials[backing_index]
         ),
         material_count=len(materials),
@@ -316,15 +311,10 @@ def dynamic_catalog_cache_file_path(
 
     if not isinstance(key, DynamicCatalogCacheKey):
         raise TypeError("key must be a DynamicCatalogCacheKey")
-    payload = json.dumps(
-        key.as_metadata(), sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
-    digest = hashlib.sha256(payload).hexdigest()[:24]
-    return (
-        default_cache_directory(cache_root)
-        / _DYNAMIC_CACHE_SUBDIRECTORY
-        / f"{digest}.npz"
-    )
+    directory = default_cache_directory(cache_root) / _DYNAMIC_CACHE_SUBDIRECTORY
+    expected = {"schema_version": DYNAMIC_CATALOG_SCHEMA_VERSION, "key": key.as_metadata()}
+    existing = _find_cache_record(directory, expected)
+    return existing or directory / f"catalog-{uuid.uuid4().hex}.npz"
 
 
 def _canonical_index_maps(
@@ -348,11 +338,10 @@ def _canonical_backing_index(
     matches = [
         index
         for index, material in enumerate(materials)
-        if _dynamic_material_identity_fingerprint(material)
-        == key.backing_material_fingerprint
+        if _serialized_material(material) == key.backing_material_descriptor
     ]
     if not matches:
-        raise ValueError("backing material fingerprint is absent from the palette")
+        raise ValueError("backing material descriptor is absent from the palette")
     return int(user_to_canonical[matches[0]])
 
 
@@ -470,7 +459,7 @@ def _prepare_catalog_payload(
     _validate_materials(materials)
     if not isinstance(catalog, DynamicCandidateCatalog):
         raise TypeError("catalog must be a DynamicCandidateCatalog")
-    if key.palette_fingerprint != _dynamic_palette_identity_fingerprint(materials):
+    if key.palette_descriptor != _serialized_palette(materials):
         raise ValueError("cache key does not match the material palette")
     before_count = int(candidate_count_before_dedup)
     after_count = int(catalog.score_srgb.shape[0])
@@ -487,16 +476,16 @@ def _prepare_catalog_payload(
     canonical_recipes = user_to_canonical[catalog.print_recipes]
     canonical_backing = _canonical_backing_index(materials, key, user_to_canonical)
     canonical_identities = [
-        _dynamic_material_identity_fingerprint(materials[int(user_index)])
+        _serialized_material(materials[int(user_index)])
         for user_index in canonical_to_user
     ]
     metadata: dict[str, object] = {
         "schema_version": DYNAMIC_CATALOG_SCHEMA_VERSION,
         "key": key.as_metadata(),
         "recipe_index_space": "canonical",
-        "canonical_material_identity_fingerprints": canonical_identities,
+        "canonical_material_descriptors": canonical_identities,
         "canonical_backing_material_index": canonical_backing,
-        "canonical_backing_material_fingerprint": canonical_identities[
+        "canonical_backing_material_descriptor": canonical_identities[
             canonical_backing
         ],
         "candidate_count_before_dedup": before_count,
@@ -526,6 +515,32 @@ def _prepare_catalog_payload(
         key=key,
     )
     return payload
+
+
+def _resolve_catalog_record(
+    key: DynamicCatalogCacheKey, cache_root: str | Path | None, *, register: bool,
+) -> Path:
+    directory = default_cache_directory(cache_root) / _DYNAMIC_CACHE_SUBDIRECTORY
+    with _DynamicCatalogKeyLock(directory / "catalog", layer_count=key.max_layer_count):
+        path = dynamic_catalog_cache_file_path(key, cache_root=cache_root)
+        meta_path = path.with_suffix(".meta.json")
+        if register and not meta_path.exists():
+            temporary = meta_path.with_name(meta_path.name + f".tmp-{uuid.uuid4().hex}")
+            try:
+                temporary.write_text(json.dumps({
+                    "schema_version": DYNAMIC_CATALOG_SCHEMA_VERSION,
+                    "key": key.as_metadata(), "cache_id": path.stem,
+                }, ensure_ascii=False), encoding="utf-8")
+                os.replace(temporary, meta_path)
+            except OSError as exc:
+                raise DynamicMaterialCandidateError(
+                    "dynamic catalog record could not be registered",
+                    layer_count=key.max_layer_count,
+                    phase="dynamic_catalog_cache_register",
+                ) from exc
+            finally:
+                temporary.unlink(missing_ok=True)
+    return path
 
 
 def _write_catalog_payload_unlocked(
@@ -579,8 +594,7 @@ def save_dynamic_candidate_catalog(
         key=key,
         candidate_count_before_dedup=candidate_count_before_dedup,
     )
-    path = dynamic_catalog_cache_file_path(key, cache_root=cache_root)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path = _resolve_catalog_record(key, cache_root, register=True)
     with _DynamicCatalogKeyLock(path, layer_count=key.max_layer_count):
         _write_catalog_payload_unlocked(path, payload)
     return path
@@ -608,10 +622,10 @@ def _validated_loaded_catalog(
         _corruption("dynamic catalog recipes are not canonical indices")
     canonical_to_user, _user_to_canonical = _canonical_index_maps(materials)
     canonical_identities = [
-        _dynamic_material_identity_fingerprint(materials[int(user_index)])
+        _serialized_material(materials[int(user_index)])
         for user_index in canonical_to_user
     ]
-    if metadata.get("canonical_material_identity_fingerprints") != canonical_identities:
+    if metadata.get("canonical_material_descriptors") != canonical_identities:
         _corruption("dynamic catalog canonical material identities are invalid")
 
     expected_dtypes = {
@@ -676,10 +690,10 @@ def _validated_loaded_catalog(
     if not 0 <= canonical_backing < len(materials):
         _corruption("dynamic catalog canonical backing index is invalid")
     if (
-        metadata.get("canonical_backing_material_fingerprint")
-        != key.backing_material_fingerprint
+        metadata.get("canonical_backing_material_descriptor")
+        != key.backing_material_descriptor
         or canonical_identities[canonical_backing]
-        != key.backing_material_fingerprint
+        != key.backing_material_descriptor
     ):
         _corruption("dynamic catalog canonical backing identity is invalid")
     if not np.any(max_reachable):
@@ -778,9 +792,11 @@ def load_dynamic_candidate_catalog(
     """
 
     _validate_materials(materials)
-    if key.palette_fingerprint != _dynamic_palette_identity_fingerprint(materials):
+    if key.palette_descriptor != _serialized_palette(materials):
         raise ValueError("cache key does not match the material palette")
-    path = dynamic_catalog_cache_file_path(key, cache_root=cache_root)
+    path = _resolve_catalog_record(key, cache_root, register=False)
+    if not path.exists():
+        return None
     with _DynamicCatalogKeyLock(path, layer_count=key.max_layer_count):
         return _load_dynamic_candidate_catalog_unlocked(
             materials=materials,
@@ -817,9 +833,9 @@ def load_or_build_dynamic_candidate_catalog(
     """
 
     _validate_materials(materials)
-    if key.palette_fingerprint != _dynamic_palette_identity_fingerprint(materials):
+    if key.palette_descriptor != _serialized_palette(materials):
         raise ValueError("cache key does not match the material palette")
-    path = dynamic_catalog_cache_file_path(key, cache_root=cache_root)
+    path = _resolve_catalog_record(key, cache_root, register=True)
     key_id = path.stem
     with _DynamicCatalogKeyLock(path, layer_count=key.max_layer_count):
         rebuilt_corrupt = False

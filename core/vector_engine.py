@@ -21,7 +21,6 @@ import re
 import json
 import io
 import pickle
-import hashlib
 import warnings
 import math
 from concurrent.futures import ThreadPoolExecutor
@@ -2077,7 +2076,9 @@ def _vector_parse_clip_cache_key(
     """Build the parse/clip cache key shared by memory and artifact caches."""
 
     svg_abs = os.path.abspath(svg_path)
-    svg_mtime = os.path.getmtime(svg_abs)
+    # External overwrites and restored backups can preserve both mtime and size.
+    with open(svg_abs, "rb") as source:
+        svg_source = source.read().hex()
     try:
         gradient_key = None if gradient_color_bands is None else int(gradient_color_bands)
     except (TypeError, ValueError):
@@ -2088,7 +2089,7 @@ def _vector_parse_clip_cache_key(
         round(float(sampling_precision), 4),
         bool(expand_stroke_to_fill),
         gradient_key,
-        svg_mtime,
+        svg_source,
         native_svg_adapter.native_build_identity(),
         SVG_COORDINATE_CONTRACT_VERSION,
         *native_svg_adapter.native_runtime_identity(),
@@ -2111,15 +2112,15 @@ def _serialize_vector_parse_clip_cache(cache_key, cache_entry):
 
 
 def _vector_parse_clip_cache_provenance(cache_key):
-    """Return a stable identity digest for one parse/clip cache key."""
+    """Return the exact serialized parse/clip identity. 返回完整解析缓存标识。"""
 
     canonical_key = json.dumps(
         list(cache_key),
         ensure_ascii=False,
         allow_nan=False,
         separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(canonical_key).hexdigest()
+    )
+    return canonical_key
 
 
 def _copy_vector_parse_clip_cache_entry(cache_entry):

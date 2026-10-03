@@ -230,7 +230,7 @@ def test_material_solver_cache_list_hides_cache_file_path(
         "api.routers.single_stage.list_cached_entries",
         lambda: [
             {
-                "palette_hash": "stub_hash",
+                "cache_id": "stub_hash",
                 "canonical_materials": [
                     {"directory_name": "BrandA/pla-basic"},
                     {"directory_name": "BrandB/pla-red"},

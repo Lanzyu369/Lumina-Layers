@@ -1,4 +1,6 @@
+import json
 import math
+import os
 import pickle
 from types import SimpleNamespace
 
@@ -340,9 +342,28 @@ def test_vector_parse_clip_artifact_carries_stable_provenance(tmp_path):
 
     expected = vector_engine._vector_parse_clip_cache_provenance(cache_key)
     assert payload["provenance"] == expected
-    assert len(expected) == 64
+    assert json.loads(expected) == list(cache_key)
     changed_key = (*cache_key[:1], 11.0, *cache_key[2:])
     assert vector_engine._vector_parse_clip_cache_provenance(changed_key) != expected
+
+
+def test_vector_cache_reloads_same_path_size_and_restored_timestamp(tmp_path):
+    source = tmp_path / "overwritten.svg"
+    source.write_bytes(b"<svg>A</svg>")
+    stat = source.stat()
+    parameters = dict(
+        target_width_mm=10.0, sampling_precision=0.02,
+        expand_stroke_to_fill=False, gradient_color_bands=None,
+    )
+    first = vector_engine._vector_parse_clip_cache_key(str(source), **parameters)
+    assert vector_engine._vector_parse_clip_cache_key(str(source), **parameters) == first
+    source.write_bytes(b"<svg>B</svg>")
+    os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    changed = vector_engine._vector_parse_clip_cache_key(str(source), **parameters)
+    assert changed != first
+    source.write_bytes(b"<svg>A</svg>")
+    os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    assert vector_engine._vector_parse_clip_cache_key(str(source), **parameters) == first
 
 
 def test_vector_parse_clip_cache_entry_is_not_mutated_by_later_filters(

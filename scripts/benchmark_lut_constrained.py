@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import time
-import hashlib
 import sys
 import os
 
@@ -82,7 +81,6 @@ def main() -> None:
         lut_rgb = _load_lut_rgb(lut_path)
         lut_lab = LuminaImageProcessor._rgb_to_lab(lut_rgb)
         lut_tree = KDTree(lut_lab)
-        lut_fp = hashlib.sha1(lut_lab.tobytes()).hexdigest()[:12]
 
         print(f"{'─' * 65}")
         print(f"  {mode_label}  |  LUT: {os.path.basename(lut_path)}  ({len(lut_rgb)} entries)")
@@ -107,7 +105,7 @@ def main() -> None:
             out_new = quantize_colors(
                 rgb, n_colors=n_colors, seed=42, skip_post_blur=True,
                 lut_lab=lut_lab, lut_rgb=lut_rgb, lut_tree=lut_tree,
-                use_lut_constrained=True, lut_fingerprint=lut_fp,
+                use_lut_constrained=True,
             )
             final_new = _lut_match_quantized(out_new, lut_rgb, lut_lab, lut_tree)
             t_new = time.perf_counter() - t0

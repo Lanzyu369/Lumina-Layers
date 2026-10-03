@@ -8,7 +8,6 @@ from __future__ import annotations
 from collections.abc import Iterator, MutableMapping
 from contextlib import contextmanager
 from copy import deepcopy
-import hashlib
 import os
 import tempfile
 import uuid
@@ -816,13 +815,7 @@ def _build_field_ref(
         "dtype": str(array.dtype),
         "nbytes": int(array.nbytes),
         "revision": int(revision),
-        "sha256": _array_sha256(array),
     }
-
-
-def _array_sha256(array: np.ndarray) -> str:
-    contiguous = np.ascontiguousarray(array)
-    return hashlib.sha256(contiguous.tobytes()).hexdigest()
 
 
 def _delete_if_exists(path: str) -> None:

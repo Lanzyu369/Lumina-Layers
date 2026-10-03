@@ -22,8 +22,9 @@ from core.material_cache import (
     _hue_aware_rerank,
     _neighbor_coherence_refine,
     canonical_palette_order,
+    describe_palette,
     default_cache_directory,
-    fingerprint_palette,
+    _find_cache_record,
 )
 from core.material_candidate_sampling import (
     CandidateRecipeBatch,
@@ -55,7 +56,7 @@ RECOMMENDED_PERSISTED_CANDIDATE_BUDGET = 33_554_432
 MAX_PERSISTED_CANDIDATE_BUDGET = 67_108_864
 DEFAULT_PERSISTED_CANDIDATE_BUDGET = RECOMMENDED_PERSISTED_CANDIDATE_BUDGET
 DEFAULT_CANDIDATE_BUILD_WORKERS = max(1, min(16, os.cpu_count() or 1))
-HYBRID_CANDIDATE_SCHEMA_VERSION = "2.0"
+HYBRID_CANDIDATE_SCHEMA_VERSION = "3.0"
 HYBRID_CANDIDATE_ALGORITHM_VERSION = "hybrid-v2"
 
 
@@ -214,27 +215,45 @@ def _resolve_candidate_build_worker_count(worker_count: int | None = None) -> in
     return max(1, int(worker_count))
 
 
-def _height_to_str(layer_height_mm: float) -> str:
-    return f"{float(layer_height_mm):g}".replace(".", "_")
-
-
 def _candidate_cache_meta_path_for(npz_path: Path) -> Path:
     return npz_path.with_name(npz_path.stem + ".meta.json")
 
 
-def _candidate_cache_file_stem(
-    *,
-    palette_hash: str,
-    layer_count: int,
-    layer_height_mm: float,
-    substrate: str,
-    candidate_budget: int,
-) -> str:
-    return (
-        f"{palette_hash}-N{int(layer_count):02d}"
-        f"-t{_height_to_str(layer_height_mm)}-{substrate}"
-        f"-{HYBRID_CANDIDATE_ALGORITHM_VERSION}-b{int(candidate_budget)}"
+def _candidate_configuration(config: MaterialCandidateCacheConfig) -> dict[str, Any]:
+    return {
+        "grid_resolution": int(config.lab_grid_resolution),
+        "candidate_pool_multiplier": int(config.candidate_pool_multiplier),
+        "batch_recipe_count": int(config.batch_recipe_count),
+        "seed": int(config.seed),
+        "inverse_refinement": {
+            "enabled": bool(config.enable_inverse_refinement),
+            "max_refine_materials": int(config.max_refine_materials),
+            "max_refine_top_suffixes": int(config.max_refine_top_suffixes),
+            "max_refine_bottom_prefixes": int(config.max_refine_bottom_prefixes),
+            "refine_bottom_neighbors": int(config.refine_bottom_neighbors),
+        },
+    }
+
+
+def _candidate_cache_parameters(
+    materials: list[MaterialParams], layer_count: int, layer_height_mm: float,
+    substrate: str, candidate_budget: int,
+    config: MaterialCandidateCacheConfig | None = None,
+) -> dict[str, Any]:
+    effective_config = config or MaterialCandidateCacheConfig.persisted_for_budget(
+        candidate_budget
     )
+    return {
+        "schema_version": HYBRID_CANDIDATE_SCHEMA_VERSION,
+        "algorithm_version": HYBRID_CANDIDATE_ALGORITHM_VERSION,
+        "mode": "candidate_hybrid",
+        "canonical_materials": describe_palette(materials),
+        "layer_count": int(layer_count),
+        "layer_height_mm": float(layer_height_mm),
+        "substrate": str(substrate),
+        "candidate_budget": int(candidate_budget),
+        **_candidate_configuration(effective_config),
+    }
 
 
 def candidate_cache_file_path(
@@ -245,6 +264,7 @@ def candidate_cache_file_path(
     *,
     candidate_budget: int,
     cache_root: str | Path | None = None,
+    config: MaterialCandidateCacheConfig | None = None,
 ) -> Path:
     """Resolve the canonical ``.npz`` path for a hybrid candidate runtime.
     返回 hybrid candidate runtime 的规范 ``.npz`` 路径。
@@ -254,21 +274,20 @@ def candidate_cache_file_path(
         layer_count: Recipe layer count. (配方层数)
         layer_height_mm: Layer thickness in mm. (层厚 mm)
         substrate: ``"white"`` or ``"black"`` substrate. (基底)
-        candidate_budget: Candidate budget encoded in the filename.
-            (写入文件名的候选预算)
+        candidate_budget: Requested candidate budget. 请求的候选预算。
         cache_root: Optional cache directory override. (可选缓存目录)
+        config: Effective candidate settings; defaults to the persisted settings
+            for this budget. 有效候选配置；默认使用该预算的持久配置。
 
     Returns:
         Path: Canonical candidate runtime file path. (规范候选运行时路径)
     """
-    stem = _candidate_cache_file_stem(
-        palette_hash=fingerprint_palette(materials),
-        layer_count=int(layer_count),
-        layer_height_mm=float(layer_height_mm),
-        substrate=str(substrate),
-        candidate_budget=int(candidate_budget),
+    directory = default_cache_directory(cache_root)
+    expected = _candidate_cache_parameters(
+        materials, layer_count, layer_height_mm, substrate, candidate_budget, config
     )
-    return default_cache_directory(cache_root) / f"{stem}.npz"
+    existing = _find_cache_record(directory, expected)
+    return existing or directory / f"candidate-{uuid.uuid4().hex}.npz"
 
 
 def _substrate_linear(substrate: str) -> np.ndarray:
@@ -823,8 +842,18 @@ class MaterialCandidateRuntime:
         return str(self.metadata["substrate"])
 
     @property
+    def cache_id(self) -> str:
+        """Return this opaque cache record ID.
+        返回不透明缓存记录 ID。
+        """
+        return str(self.metadata["cache_id"])
+
+    @property
     def palette_hash(self) -> str:
-        return str(self.metadata["palette_hash"])
+        """Expose the record ID through the historic public API name.
+        通过历史公开 API 名返回记录 ID。
+        """
+        return self.cache_id
 
     @property
     def grid_resolution(self) -> int:
@@ -887,8 +916,8 @@ class MaterialCandidateRuntime:
                 np.zeros((0, self.layer_count), dtype=np.int32),
                 np.zeros((0,), dtype=np.float64),
             )
-        if fingerprint_palette(user_materials) != self.palette_hash:
-            raise ValueError("MaterialCandidateRuntime palette_hash mismatch")
+        if describe_palette(user_materials) != self.metadata["canonical_materials"]:
+            raise ValueError("MaterialCandidateRuntime material descriptors mismatch")
         if self.valid_cell_count <= 0:
             raise ValueError("MaterialCandidateRuntime has no candidates")
 
@@ -998,8 +1027,8 @@ class MaterialCandidateRuntime:
             raise ValueError(
                 f"min_spacing must be non-negative, got {min_spacing}"
             )
-        if fingerprint_palette(user_materials) != self.palette_hash:
-            raise ValueError("MaterialCandidateRuntime palette_hash mismatch")
+        if describe_palette(user_materials) != self.metadata["canonical_materials"]:
+            raise ValueError("MaterialCandidateRuntime material descriptors mismatch")
         if self.valid_cell_count <= 0:
             return []
 
@@ -1097,36 +1126,20 @@ def build_material_candidate_runtime(
     )
     metadata = {
         "mode": "candidate_hybrid",
-        "palette_hash": fingerprint_palette(canonical_materials),
+        "cache_id": uuid.uuid4().hex,
         "layer_count": int(layer_count),
         "layer_height_mm": float(layer_height_mm),
         "substrate": str(substrate),
-        "grid_resolution": int(cfg.lab_grid_resolution),
         "lab_grid_resolution": int(cfg.lab_grid_resolution),
         "candidate_budget": int(cfg.candidate_budget),
-        "candidate_pool_multiplier": int(cfg.candidate_pool_multiplier),
-        "batch_recipe_count": int(cfg.batch_recipe_count),
         "build_worker_count": int(selection.worker_count),
         "build_mode": "streaming_parallel",
         "recipe_dtype": recipe_dtype.name,
-        "seed": int(cfg.seed),
+        **_candidate_configuration(cfg),
         "canonical_material_directory_names": [
             str(material.directory_name) for material in canonical_materials
         ],
-        "canonical_materials": [
-            {
-                "name": str(material.name),
-                "directory_name": str(material.directory_name),
-            }
-            for material in canonical_materials
-        ],
-        "inverse_refinement": {
-            "enabled": bool(cfg.enable_inverse_refinement),
-            "max_refine_materials": int(cfg.max_refine_materials),
-            "max_refine_top_suffixes": int(cfg.max_refine_top_suffixes),
-            "max_refine_bottom_prefixes": int(cfg.max_refine_bottom_prefixes),
-            "refine_bottom_neighbors": int(cfg.refine_bottom_neighbors),
-        },
+        "canonical_materials": describe_palette(canonical_materials),
     }
     return MaterialCandidateRuntime(
         candidate_recipes=selection.recipes,
@@ -1154,17 +1167,6 @@ def save_material_candidate_runtime(
     """
     directory = default_cache_directory(cache_root)
     directory.mkdir(parents=True, exist_ok=True)
-    candidate_budget = int(runtime.metadata["candidate_budget"])
-    stem = _candidate_cache_file_stem(
-        palette_hash=runtime.palette_hash,
-        layer_count=runtime.layer_count,
-        layer_height_mm=runtime.layer_height_mm,
-        substrate=runtime.substrate,
-        candidate_budget=candidate_budget,
-    )
-    npz_path = directory / f"{stem}.npz"
-    meta_path = _candidate_cache_meta_path_for(npz_path)
-
     recipes = np.asarray(runtime.candidate_recipes)
     recipe_dtype = "uint8" if int(recipes.max(initial=0)) <= 255 else "uint16"
     recipes_to_save = recipes.astype(recipe_dtype, copy=False)
@@ -1181,6 +1183,20 @@ def save_material_candidate_runtime(
             ),
         }
     )
+
+    expected = {key: metadata[key] for key in (
+        "schema_version", "algorithm_version", "mode", "canonical_materials",
+        "layer_count", "layer_height_mm", "substrate", "candidate_budget",
+        "grid_resolution", "candidate_pool_multiplier", "batch_recipe_count",
+        "seed", "inverse_refinement",
+    )}
+    npz_path = _find_cache_record(directory, expected)
+    if npz_path is None:
+        npz_path = directory / f"candidate-{runtime.cache_id}.npz"
+    else:
+        stored = json.loads(_candidate_cache_meta_path_for(npz_path).read_text(encoding="utf-8"))
+        metadata["cache_id"] = stored["cache_id"]
+    meta_path = _candidate_cache_meta_path_for(npz_path)
 
     tmp_suffix = f".tmp-{os.getpid()}-{uuid.uuid4().hex}"
     tmp_npz = npz_path.with_name(npz_path.name + tmp_suffix)
@@ -1217,22 +1233,13 @@ def _validated_candidate_runtime_metadata(
     layer_height_mm: float,
     substrate: str,
     candidate_budget: int,
+    config: MaterialCandidateCacheConfig | None = None,
 ) -> dict[str, Any] | None:
     try:
-        if metadata.get("schema_version") != HYBRID_CANDIDATE_SCHEMA_VERSION:
-            return None
-        if metadata.get("mode") != "candidate_hybrid":
-            return None
-        if metadata.get("palette_hash") != fingerprint_palette(materials):
-            return None
-        if int(metadata.get("layer_count", -1)) != int(layer_count):
-            return None
-        stored_layer_height = float(metadata.get("layer_height_mm", -1.0))
-        if abs(stored_layer_height - float(layer_height_mm)) > 1e-12:
-            return None
-        if str(metadata.get("substrate", "")) != str(substrate):
-            return None
-        if int(metadata.get("candidate_budget", -1)) != int(candidate_budget):
+        expected = _candidate_cache_parameters(
+            materials, layer_count, layer_height_mm, substrate, candidate_budget, config
+        )
+        if any(metadata.get(key) != value for key, value in expected.items()):
             return None
     except (TypeError, ValueError):
         return None
@@ -1247,17 +1254,20 @@ def load_material_candidate_runtime_metadata(
     *,
     candidate_budget: int,
     cache_root: str | Path | None = None,
+    config: MaterialCandidateCacheConfig | None = None,
 ) -> MaterialCandidateRuntimeMetadata | None:
     """Load persisted hybrid runtime metadata without opening array payloads.
     只加载持久化 hybrid runtime 元数据，不打开大型数组载荷。
 
     Args:
-        materials: Material palette used to validate the fingerprint. (耗材调色板)
+        materials: Material palette used to compare effective descriptors. (耗材调色板)
         layer_count: Recipe layer count. (配方层数)
         layer_height_mm: Layer thickness in mm. (层厚 mm)
         substrate: ``"white"`` or ``"black"`` substrate. (基底)
-        candidate_budget: Candidate budget encoded in the filename. (候选预算)
+        candidate_budget: Requested candidate budget. 请求的候选预算。
         cache_root: Optional cache directory override. (可选缓存目录)
+        config: Effective candidate settings; defaults to the persisted settings
+            for this budget. 有效候选配置；默认使用该预算的持久配置。
 
     Returns:
         MaterialCandidateRuntimeMetadata | None: Valid metadata entry or
@@ -1270,6 +1280,7 @@ def load_material_candidate_runtime_metadata(
         substrate,
         candidate_budget=int(candidate_budget),
         cache_root=cache_root,
+        config=config,
     )
     meta_path = _candidate_cache_meta_path_for(npz_path)
     if not npz_path.exists() or not meta_path.exists():
@@ -1288,6 +1299,7 @@ def load_material_candidate_runtime_metadata(
         layer_height_mm,
         substrate,
         candidate_budget,
+        config,
     )
     if validated is None:
         return None
@@ -1306,17 +1318,20 @@ def load_material_candidate_runtime(
     *,
     candidate_budget: int,
     cache_root: str | Path | None = None,
+    config: MaterialCandidateCacheConfig | None = None,
 ) -> MaterialCandidateRuntime | None:
     """Load a persisted hybrid candidate runtime, returning ``None`` on miss.
     加载持久化 hybrid candidate runtime；不存在或校验失败时返回 ``None``。
 
     Args:
-        materials: Material palette used to validate the fingerprint. (耗材调色板)
+        materials: Material palette used to compare effective descriptors. (耗材调色板)
         layer_count: Recipe layer count. (配方层数)
         layer_height_mm: Layer thickness in mm. (层厚 mm)
         substrate: ``"white"`` or ``"black"`` substrate. (基底)
-        candidate_budget: Candidate budget encoded in the filename. (候选预算)
+        candidate_budget: Requested candidate budget. 请求的候选预算。
         cache_root: Optional cache directory override. (可选缓存目录)
+        config: Effective candidate settings; defaults to the persisted settings
+            for this budget. 有效候选配置；默认使用该预算的持久配置。
 
     Returns:
         MaterialCandidateRuntime | None: Loaded runtime or ``None``.
@@ -1329,6 +1344,7 @@ def load_material_candidate_runtime(
         substrate,
         candidate_budget=int(candidate_budget),
         cache_root=cache_root,
+        config=config,
     )
     meta_path = _candidate_cache_meta_path_for(npz_path)
     if not npz_path.exists() or not meta_path.exists():
@@ -1346,6 +1362,7 @@ def load_material_candidate_runtime(
         layer_height_mm,
         substrate,
         candidate_budget,
+        config,
     )
     if metadata is None:
         return None
@@ -1386,6 +1403,7 @@ def delete_material_candidate_runtime(
     *,
     candidate_budget: int,
     cache_root: str | Path | None = None,
+    config: MaterialCandidateCacheConfig | None = None,
 ) -> bool:
     """Delete one persisted hybrid candidate runtime file pair.
     删除一组持久化 hybrid candidate runtime 文件。
@@ -1395,8 +1413,10 @@ def delete_material_candidate_runtime(
         layer_count: Recipe layer count. (配方层数)
         layer_height_mm: Layer thickness in mm. (层厚 mm)
         substrate: ``"white"`` or ``"black"`` substrate. (基底)
-        candidate_budget: Candidate budget encoded in the filename. (候选预算)
+        candidate_budget: Requested candidate budget. 请求的候选预算。
         cache_root: Optional cache directory override. (可选缓存目录)
+        config: Effective candidate settings; defaults to the persisted settings
+            for this budget. 有效候选配置；默认使用该预算的持久配置。
 
     Returns:
         bool: ``True`` if at least one file was removed. (是否删除了文件)
@@ -1408,6 +1428,7 @@ def delete_material_candidate_runtime(
         substrate,
         candidate_budget=int(candidate_budget),
         cache_root=cache_root,
+        config=config,
     )
     targets = [npz_path, _candidate_cache_meta_path_for(npz_path)]
     deleted = False

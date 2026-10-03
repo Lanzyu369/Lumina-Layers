@@ -187,7 +187,6 @@ class LuminaImageProcessor:
         self.predictive_threshold = lut_data.get("predictive_threshold")
         self.predictive_margin = lut_data.get("predictive_margin")
         self.native_reference_source = bool(lut_data.get("native_reference_source", False))
-        self.lut_fingerprint = lut_data.get("lut_fingerprint", None)
 
     def _build_initial_match_info(self):
         return {
@@ -616,7 +615,6 @@ class LuminaImageProcessor:
             lut_rgb=self.lut_rgb if self.use_lut_constrained else None,
             lut_tree=self.kdtree if self.use_lut_constrained else None,
             use_lut_constrained=self.use_lut_constrained,
-            lut_fingerprint=getattr(self, 'lut_fingerprint', None),
         )
         t0 = time.perf_counter()
         unique_colors = _unique_rgb_rows_fast(quantized_image.reshape(-1, 3))

@@ -7,7 +7,6 @@ separate index domains for volumes that merely touch at an edge or a point.
 
 from __future__ import annotations
 
-import hashlib
 import math
 from dataclasses import asdict, dataclass
 from functools import lru_cache
@@ -1830,36 +1829,17 @@ def build_labeled_surface_mesh(
         component_bbox_volumes[non_cuboid_indices]
         <= _COMPONENT_SIGNATURE_MAX_WORKING_BYTES
     ]
-    hashed_groups: dict[
-        tuple[tuple[int, ...], bytes],
-        list[list[int]],
-    ] = {}
+    exact_groups: dict[tuple[tuple[int, ...], bytes], list[int]] = {}
     for component_index in signature_candidate_indices:
         bounds = component_bounds[component_index]
         if bounds is None:
             raise ValueError("Layered mesh component labels are not contiguous")
-        shell_id = int(component_index) + 1
-        local_component = component_labels[bounds] == shell_id
-        packed_component = np.packbits(local_component.reshape(-1))
+        local_component = component_labels[bounds] == int(component_index) + 1
         signature_key = (
             tuple(int(value) for value in local_component.shape),
-            hashlib.blake2b(packed_component, digest_size=16).digest(),
+            np.packbits(local_component.reshape(-1)).tobytes(),
         )
-        collision_groups = hashed_groups.setdefault(signature_key, [])
-        for collision_group in collision_groups:
-            representative_index = collision_group[0]
-            representative_bounds = component_bounds[representative_index]
-            if representative_bounds is None:
-                raise ValueError("Layered mesh component labels are not contiguous")
-            representative = (
-                component_labels[representative_bounds]
-                == representative_index + 1
-            )
-            if np.array_equal(local_component, representative):
-                collision_group.append(int(component_index))
-                break
-        else:
-            collision_groups.append([int(component_index)])
+        exact_groups.setdefault(signature_key, []).append(int(component_index))
 
     template_groups: list[list[int]] = []
     individual_component_indices = list(
@@ -1869,12 +1849,11 @@ def build_labeled_surface_mesh(
             > _COMPONENT_SIGNATURE_MAX_WORKING_BYTES
         ]
     )
-    for collision_groups in hashed_groups.values():
-        for collision_group in collision_groups:
-            if len(collision_group) > 1:
-                template_groups.append(collision_group)
-            else:
-                individual_component_indices.extend(collision_group)
+    for collision_group in exact_groups.values():
+        if len(collision_group) > 1:
+            template_groups.append(collision_group)
+        else:
+            individual_component_indices.extend(collision_group)
 
     for component_indices in template_groups:
         first_component_index = component_indices[0]
@@ -2041,7 +2020,7 @@ def build_labeled_surface_mesh(
         cuboid_indices,
         non_cuboid_indices,
         signature_candidate_indices,
-        hashed_groups,
+        exact_groups,
         template_groups,
         individual_component_indices,
         selected,

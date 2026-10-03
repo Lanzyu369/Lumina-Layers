@@ -76,7 +76,7 @@ from core.material_cache import (
     build_material_solver_cache,
     cache_file_path,
     delete_cached_entry,
-    fingerprint_palette,
+    describe_palette,
     list_cached_entries,
     load_material_solver_cache,
     load_material_solver_cache_with_fallback,
@@ -103,6 +103,7 @@ from core.material_color_solver import (
     MAX_LAYER_COUNT as _SOLVER_MAX_LAYER_COUNT,  # noqa: N811
     MIN_LAYER_COUNT as _SOLVER_MIN_LAYER_COUNT,  # noqa: N811
     ColorSuggestion,
+    MaterialParams,
     predict_material_recipe_srgb,
     suggest_colors_for_target,
 )
@@ -2268,7 +2269,7 @@ def _cache_entry_from_metadata(
         if isinstance(entry, dict) and entry.get("directory_name")
     ]
     return MaterialSolverCacheEntryResponse(
-        palette_hash=str(metadata.get("palette_hash", "")),
+        palette_hash=str(metadata["cache_id"]),
         material_directory_names=material_dir_names,
         layer_count=int(metadata.get("layer_count", 0)),
         layer_height_mm=float(metadata.get("layer_height_mm", 0.0)),
@@ -2309,7 +2310,7 @@ def _runtime_entry_from_metadata(
     ]
     inverse = metadata.get("inverse_refinement") or {}
     return MaterialSolverRuntimeEntryResponse(
-        palette_hash=str(metadata.get("palette_hash", "")),
+        palette_hash=str(metadata["cache_id"]),
         material_directory_names=material_dir_names,
         layer_count=int(metadata.get("layer_count", 0)),
         layer_height_mm=float(metadata.get("layer_height_mm", 0.0)),
@@ -2336,6 +2337,10 @@ def _runtime_entry_from_metadata_record(record: Any) -> MaterialSolverRuntimeEnt
         record.metadata,
         cache_file_size_bytes=int(record.cache_file_size_bytes),
     )
+
+
+def _palette_cache_identity(materials: list[MaterialParams]) -> str:
+    return json.dumps(describe_palette(materials), sort_keys=True, separators=(",", ":"))
 
 
 def _runtime_build_key(
@@ -2421,7 +2426,7 @@ async def material_solver_cache_status(
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
     _validate_grid_resolution(grid_resolution)
     materials = _load_palette_or_raise(dir_names)
-    palette_hash = fingerprint_palette(materials)
+    palette_hash = _palette_cache_identity(materials)
     # Use the fallback loader so exact-mode caches (grid=0) and any-grid
     # bucketed caches are discoverable regardless of the caller's requested
     # grid_resolution. Without this, an exact-mode cache (saved as -g000)
@@ -2433,6 +2438,8 @@ async def material_solver_cache_status(
         grid_resolution=grid_resolution,
     )
     cached_flag = cache is not None
+    if cache is not None:
+        palette_hash = str(cache.metadata["cache_id"])
     # Resolve the actual npz_path for file size reporting.
     if cache is not None:
         npz_path = cache_file_path(
@@ -2618,7 +2625,7 @@ async def material_solver_cache_delete(
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
     _validate_grid_resolution(grid_resolution)
     materials = _load_palette_or_raise(dir_names)
-    palette_hash = fingerprint_palette(materials)
+    palette_hash = _palette_cache_identity(materials)
     deleted = delete_cached_entry(
         materials, layer_count, layer_height_mm, substrate,
         grid_resolution=grid_resolution,
@@ -2667,7 +2674,7 @@ async def material_solver_runtime_status(
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
     _validate_candidate_budget(candidate_budget)
     materials = _load_palette_or_raise(dir_names)
-    palette_hash = fingerprint_palette(materials)
+    palette_hash = _palette_cache_identity(materials)
     metadata_record = load_material_candidate_runtime_metadata(
         materials,
         layer_count,
@@ -2676,6 +2683,8 @@ async def material_solver_runtime_status(
         candidate_budget=candidate_budget,
     )
     cached_flag = metadata_record is not None
+    if metadata_record is not None:
+        palette_hash = str(metadata_record.metadata["cache_id"])
     log.info(
         "Material solver runtime status checked",
         extra={
@@ -2734,7 +2743,7 @@ async def material_solver_runtime_build(
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
     _validate_candidate_budget(candidate_budget)
     materials = _load_palette_or_raise(dir_names)
-    palette_hash = fingerprint_palette(materials)
+    palette_hash = _palette_cache_identity(materials)
     config = MaterialCandidateCacheConfig.persisted_for_budget(
         int(candidate_budget)
     )
@@ -2863,7 +2872,7 @@ async def material_solver_runtime_delete(
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
     _validate_candidate_budget(candidate_budget)
     materials = _load_palette_or_raise(dir_names)
-    palette_hash = fingerprint_palette(materials)
+    palette_hash = _palette_cache_identity(materials)
     deleted = delete_material_candidate_runtime(
         materials,
         layer_count,
@@ -2919,7 +2928,7 @@ async def material_solver_runtime_details(
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
     _validate_candidate_budget(candidate_budget)
     materials = _load_palette_or_raise(dir_names)
-    palette_hash = fingerprint_palette(materials)
+    palette_hash = _palette_cache_identity(materials)
     runtime = load_material_candidate_runtime(
         materials,
         layer_count,
@@ -2937,6 +2946,7 @@ async def material_solver_runtime_details(
         )
 
     details = build_material_runtime_details(runtime, max_points=int(max_points))
+    palette_hash = str(runtime.metadata["cache_id"])
     log.info(
         "Material solver runtime details rendered",
         extra={
@@ -3149,7 +3159,7 @@ async def material_solver_cache_details(
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
     _validate_grid_resolution(grid_resolution)
     materials = _load_palette_or_raise(dir_names)
-    palette_hash = fingerprint_palette(materials)
+    palette_hash = _palette_cache_identity(materials)
 
     cache, actual_grid = load_material_solver_cache_with_fallback(
         materials, layer_count, layer_height_mm, substrate,
@@ -3165,6 +3175,7 @@ async def material_solver_cache_details(
         )
 
     effective_grid = int(actual_grid) if actual_grid is not None else int(grid_resolution)
+    palette_hash = str(cache.metadata["cache_id"])
     details = build_material_cache_details(
         cache,
         palette_hash=palette_hash,
@@ -3297,7 +3308,7 @@ async def material_solver_cache_suggest_colors(
     _validate_suggest_parameters(top_k, min_spacing)
     target_hex_clean, target_rgb_tuple = _parse_target_hex(target_hex)
     materials = _load_palette_or_raise(dir_names)
-    palette_hash = fingerprint_palette(materials)
+    palette_hash = _palette_cache_identity(materials)
 
     target_rgb_arr = np.asarray(target_rgb_tuple, dtype=np.uint8)
 

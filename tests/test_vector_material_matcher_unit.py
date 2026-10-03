@@ -175,12 +175,15 @@ class TestMaterialVectorMatcherSolveForFills:
     def test_info_summary_is_bounded_and_excludes_source_colors(self, caplog):
         m = _build_matcher(layer_count=4, materials_count=3)
         target_logger = logging.getLogger("lumina.core.vector_matchers")
+        previous_propagation = target_logger.propagate
+        target_logger.propagate = False
         target_logger.addHandler(caplog.handler)
         caplog.set_level(logging.INFO, logger=target_logger.name)
         try:
             m.solve_for_fills([(1, 2, 3), (4, 5, 6)])
         finally:
             target_logger.removeHandler(caplog.handler)
+            target_logger.propagate = previous_propagation
 
         records = [
             record

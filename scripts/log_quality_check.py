@@ -600,8 +600,8 @@ def run_fast_mode(temp_log_path: Path, workflow: list[str]) -> dict[str, Any]:
                     side_effect=_mock_load_multiple_materials,
                 ),
                 patch(
-                    "api.routers.single_stage.fingerprint_palette",
-                    side_effect=_mock_fingerprint_palette,
+                    "api.routers.single_stage._palette_cache_identity",
+                    side_effect=_mock_palette_cache_identity,
                 ),
                 patch(
                     "api.routers.single_stage.cache_file_path",
@@ -1650,7 +1650,7 @@ def _mock_import_gradient_card_materials(
 
 def _mock_solver_cache_metadata() -> dict[str, Any]:
     return {
-        "palette_hash": "stub_hash",
+        "cache_id": "stub_hash",
         "canonical_materials": [
             {"directory_name": "stub_material_v1"},
             {"directory_name": "stub_material_v2"},
@@ -1724,7 +1724,7 @@ def _mock_load_multiple_materials(directory_names: Sequence[str]) -> list[Any]:
     ]
 
 
-def _mock_fingerprint_palette(_materials: Sequence[Any]) -> str:
+def _mock_palette_cache_identity(_materials: Sequence[Any]) -> str:
     return "stub_hash"
 
 
