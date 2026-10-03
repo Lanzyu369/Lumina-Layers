@@ -262,8 +262,8 @@ describe("ActionBar — auto batch mode", () => {
           vendor: "Bambu Lab",
           display_name: "Bambu PLA",
           db_options: [
-            { name: "DB-A", path: "/DB-A.json", color_mode: "8-Color Max", fingerprint: "fp-DB-A" },
-            { name: "DB-B", path: "/DB-B.json", color_mode: "8-Color Max", fingerprint: "fp-DB-B" },
+            { name: "DB-A", path: "/DB-A.json", color_mode: "8-Color Max" },
+            { name: "DB-B", path: "/DB-B.json", color_mode: "8-Color Max" },
           ],
           default_db_names: ["DB-A", "DB-B"],
           supported_modes: [{ color_layers: 5, layer_height_mm: 0.08 }],
@@ -344,8 +344,8 @@ describe("ActionBar — auto batch mode", () => {
           vendor: "Bambu Lab",
           display_name: "Bambu PLA",
           db_options: [
-            { name: "DB-A", path: "/DB-A.json", color_mode: "8-Color Max", fingerprint: "fp-DB-A" },
-            { name: "DB-B", path: "/DB-B.json", color_mode: "8-Color Max", fingerprint: "fp-DB-B" },
+            { name: "DB-A", path: "/DB-A.json", color_mode: "8-Color Max" },
+            { name: "DB-B", path: "/DB-B.json", color_mode: "8-Color Max" },
           ],
           default_db_names: ["DB-A", "DB-B"],
           supported_modes: [{ color_layers: 5, layer_height_mm: 0.08 }],

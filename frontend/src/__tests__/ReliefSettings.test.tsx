@@ -89,7 +89,6 @@ describe("ReliefSettings", () => {
           name: "legacy-five",
           color_mode: ColorMode.FIVE_COLOR_EXT,
           path: "/legacy-five.npy",
-          fingerprint: "fp-five",
         },
       ],
       lutColorsLutName: "legacy-five",

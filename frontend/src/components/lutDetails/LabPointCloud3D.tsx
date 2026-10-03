@@ -31,7 +31,6 @@ interface HullGeometryData {
 
 interface LabPointCloud3DProps {
   dataTestId: string;
-  fingerprint: string;
   points: LutDetailsPoint3D[];
   emptyMessage: string;
   loadingHullMessage: string;
@@ -44,7 +43,7 @@ interface LabPointCloud3DProps {
   referenceSliceSliderLabel: string;
 }
 
-const HULL_CACHE = new Map<string, HullGeometryData>();
+let HULL_CACHE = new WeakMap<LutDetailsPoint3D[], HullGeometryData>();
 const VIEWPORT_HEIGHT_RATIO = 0.82;
 const MIN_VIEWPORT_HEIGHT = 320;
 const MAX_VIEWPORT_HEIGHT = 720;
@@ -219,12 +218,11 @@ function createHullWorker(): Worker {
 }
 
 export function clearLabPointCloud3DHullCacheForTests(): void {
-  HULL_CACHE.clear();
+  HULL_CACHE = new WeakMap();
 }
 
 export default function LabPointCloud3D({
   dataTestId,
-  fingerprint,
   points,
   emptyMessage,
   loadingHullMessage,
@@ -237,9 +235,9 @@ export default function LabPointCloud3D({
   referenceSliceSliderLabel,
 }: LabPointCloud3DProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [hullState, setHullState] = useState<HullState>(() => (HULL_CACHE.has(fingerprint) ? "ready" : "idle"));
+  const [hullState, setHullState] = useState<HullState>(() => (HULL_CACHE.has(points) ? "ready" : "idle"));
   const [hullError, setHullError] = useState<string | null>(null);
-  const [hullData, setHullData] = useState<HullGeometryData | null>(() => HULL_CACHE.get(fingerprint) ?? null);
+  const [hullData, setHullData] = useState<HullGeometryData | null>(() => HULL_CACHE.get(points) ?? null);
   const [showReferenceSlice, setShowReferenceSlice] = useState(false);
   const [viewportHeight, setViewportHeight] = useState<number>(440);
   const workerRef = useRef<Worker | null>(null);
@@ -296,7 +294,7 @@ export default function LabPointCloud3D({
 
   useEffect(() => {
     setReferenceSliceLightness(defaultReferenceSliceLightness);
-  }, [defaultReferenceSliceLightness, fingerprint]);
+  }, [defaultReferenceSliceLightness, points]);
 
   useEffect(() => {
     if (!showReferenceSlice) {
@@ -369,7 +367,7 @@ export default function LabPointCloud3D({
   }, []);
 
   useEffect(() => {
-    const cached = HULL_CACHE.get(fingerprint);
+    const cached = HULL_CACHE.get(points);
     if (cached) {
       setHullData(cached);
       setHullState("ready");
@@ -402,7 +400,7 @@ export default function LabPointCloud3D({
         setHullError(hullErrorMessage);
         return;
       }
-      HULL_CACHE.set(fingerprint, nextHull);
+      HULL_CACHE.set(points, nextHull);
       setHullData(nextHull);
       setHullState("ready");
       setHullError(null);
@@ -432,7 +430,7 @@ export default function LabPointCloud3D({
         workerRef.current = null;
       }
     };
-  }, [fingerprint, hullErrorMessage, uniqueHullInput]);
+  }, [points, hullErrorMessage, uniqueHullInput]);
 
   const pointGeometry = useMemo(() => {
     const geometry = new THREE.BufferGeometry();
@@ -481,7 +479,7 @@ export default function LabPointCloud3D({
 
   if (points.length === 0) {
     return (
-      <div data-testid={dataTestId} data-hull-state="idle" data-fingerprint={fingerprint}>
+      <div data-testid={dataTestId} data-hull-state="idle">
         <p className="text-sm leading-6 text-slate-500 dark:text-slate-400">{emptyMessage}</p>
       </div>
     );
@@ -492,7 +490,7 @@ export default function LabPointCloud3D({
       ref={containerRef}
       data-testid={dataTestId}
       data-hull-state={hullState}
-      data-fingerprint={fingerprint}
+
       className="flex flex-col gap-3"
     >
       <div

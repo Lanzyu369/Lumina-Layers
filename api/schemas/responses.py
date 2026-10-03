@@ -1087,7 +1087,6 @@ class LutInfo(BaseModel):
     name: str
     color_mode: str
     path: str = Field(..., description="公开引用（非本机文件系统路径）")
-    fingerprint: str = ""
 
 
 class LUTListResponse(BaseModel):

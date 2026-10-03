@@ -16,7 +16,8 @@ FastAPI 会话/状态），现在作为主应用内部共享逻辑保留，避�
 
 from __future__ import annotations
 
-import hashlib
+from functools import lru_cache
+from uuid import uuid4
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
@@ -133,10 +134,9 @@ def _lut_reference_suffix(path_text: str) -> str:
     return suffix.lower()
 
 
-def _hashed_lut_reference(path_text: str) -> str:
-    normalized = path_text.replace("\\", "/")
-    digest = hashlib.sha256(normalized.encode("utf-8", "surrogatepass")).hexdigest()[:12]
-    return f"lut-ref/{digest}{_lut_reference_suffix(path_text)}"
+@lru_cache(maxsize=512)
+def _opaque_lut_reference(path_text: str) -> str:
+    return f"lut-ref/{uuid4().hex}{_lut_reference_suffix(path_text)}"
 
 
 def _is_absolute_path_like(path_text: str) -> bool:
@@ -171,7 +171,7 @@ def public_lut_path_reference(path: str | Path | None) -> str:
     Returns:
         A public reference that never exposes user directories or unknown
         absolute filenames. Known application roots are represented as
-        relative catalog references; unknown absolute paths are hash-only
+        relative catalog references; unknown absolute paths are opaque
         references. (不暴露用户目录或未知绝对文件名的公开引用)
     """
     path_text = str(path or "").strip()
@@ -193,12 +193,12 @@ def public_lut_path_reference(path: str | Path | None) -> str:
         pass
 
     if _is_absolute_path_like(path_text):
-        return _hashed_lut_reference(path_text)
+        return _opaque_lut_reference(path_text)
 
     safe_relative = _safe_relative_lut_reference(path_text)
     if safe_relative is not None:
         return safe_relative
-    return _hashed_lut_reference(path_text)
+    return _opaque_lut_reference(path_text)
 
 
 def public_lut_source_catalog_paths(catalog: dict) -> dict:

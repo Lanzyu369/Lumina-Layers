@@ -65,20 +65,14 @@ function canonicalSerialize(value: unknown): string {
 // ========== Local LUT registry for round-trip ==========
 
 const LOCAL_LUTS: LutInfo[] = [
-  { name: "LUT-A", color_mode: ColorMode.FOUR_COLOR_RYBW, path: "/a", fingerprint: "fpA" },
-  { name: "LUT-B", color_mode: ColorMode.EIGHT_COLOR, path: "/b", fingerprint: "fpB" },
-  { name: "LUT-C", color_mode: ColorMode.BW, path: "/c", fingerprint: "fpC" },
+  { name: "LUT-A", color_mode: ColorMode.FOUR_COLOR_RYBW, path: "/a" },
+  { name: "LUT-B", color_mode: ColorMode.EIGHT_COLOR, path: "/b" },
+  { name: "LUT-C", color_mode: ColorMode.BW, path: "/c" },
 ];
-const LOCAL_FINGERPRINTS: Record<string, string> = {
-  "LUT-A": "fpA",
-  "LUT-B": "fpB",
-  "LUT-C": "fpC",
-};
-
-const LUT_FINGERPRINT_BY_NAME: Record<string, string> = {
-  "LUT-A": "fpA",
-  "LUT-B": "fpB",
-  "LUT-C": "fpC",
+const LUT_PATH_BY_NAME: Record<string, string> = {
+  "LUT-A": "/a",
+  "LUT-B": "/b",
+  "LUT-C": "/c",
 };
 
 // ========== Recipe wrapper helper ==========
@@ -96,16 +90,11 @@ function wrapRecipe(converterRecipe: ReturnType<typeof exportConverterRecipe>): 
         filename: "vector-anchor.svg",
         mime_type: "image/svg+xml",
         byte_size: 4,
-        sha256: "a".repeat(64),
         encoding: "base64",
         payload_b64: "dGVzdA==",
       },
     },
     recipe: { converter: converterRecipe },
-    integrity: {
-      recipe_sha256: "0".repeat(64),
-      asset_checksums: { primary: "a".repeat(64) },
-    },
     compat: { min_schema_version: 1 },
     warnings: [],
   };
@@ -212,7 +201,10 @@ const arbVectorNoOutlineOverrides: fc.Arbitrary<StateOverrides> = fc.record({
   enable_relief: fc.boolean(),
   enable_cloisonne: fc.boolean(),
   enable_coating: fc.boolean(),
-});
+}).map((overrides) => ({
+  ...overrides,
+  color_mode: LOCAL_LUTS.find((lut) => lut.name === overrides.lut_name)!.color_mode,
+}));
 
 // ========== Round-trip evaluator ==========
 
@@ -222,20 +214,19 @@ const arbVectorNoOutlineOverrides: fc.Arbitrary<StateOverrides> = fc.record({
  * assertions.
  */
 function runRoundTrip(state: ConverterState) {
-  const lutFingerprint = LUT_FINGERPRINT_BY_NAME[state.lut_name] ?? "fp-unknown";
-  const recipe1 = exportConverterRecipe(state, DEFAULT_SETTINGS, lutFingerprint);
+  const lutPath = LUT_PATH_BY_NAME[state.lut_name];
+  const recipe1 = exportConverterRecipe(state, DEFAULT_SETTINGS, lutPath);
   const wrapped1 = wrapRecipe(recipe1);
   const { state: restored } = restoreConverterRecipe(
     wrapped1,
     LOCAL_LUTS,
-    LOCAL_FINGERPRINTS,
   );
 
   // Merge restored partial state into DEFAULT_STATE so we can re-export.
   // restoreConverterRecipe returns Partial<ConverterState>; the export adapter
   // reads only the fields it cares about, so merging onto DEFAULT_STATE is safe.
   const merged: ConverterState = { ...DEFAULT_STATE, ...restored } as ConverterState;
-  const recipe2 = exportConverterRecipe(merged, DEFAULT_SETTINGS, lutFingerprint);
+  const recipe2 = exportConverterRecipe(merged, DEFAULT_SETTINGS, lutPath);
 
   return {
     recipe1Serialized: canonicalSerialize(recipe1),

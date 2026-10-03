@@ -3,7 +3,7 @@
  * 配方导入编排：协调解析、恢复和 store 更新。
  */
 
-import { useConverterStore } from "../stores/converter";
+import { isValidImageType, RAW_EXTENSIONS_CONVERTER, useConverterStore } from "../stores/converter";
 import { saveGeneratedFile, type SaveOutcome } from "../utils/saveGeneratedFile";
 import {
   resolveBuildPlateSelection,
@@ -12,10 +12,11 @@ import {
 } from "../stores/settingsStore";
 import { useWidgetStore } from "../stores/widgetStore";
 import { useWorkshopStore } from "../workshop/store";
-import { getPrinters } from "../api/system";
+import { getPrinters, uploadImagePreview } from "../api/system";
 import type { PrinterInfo } from "../api/types";
 import {
   parseRecipeFile,
+  RECIPE_ASSET_CORRUPT_ERROR,
   RECIPE_IMPORT_WARNING_SPATIAL_EDITS_NOT_SERIALIZED,
   restoreConverterRecipe,
 } from "./importRecipe";
@@ -31,6 +32,7 @@ import {
 
 const SPATIAL_EDIT_DEGRADED_FIELD =
   "converter.color_ops.spatial_region_edits";
+const IMAGE_DECODE_TIMEOUT_MS = 30_000;
 
 export const MODEL_SURFACE_RECIPE_EXPORT_UNAVAILABLE_ERROR =
   "Model surface recipes are not supported";
@@ -135,15 +137,11 @@ export async function prepareImport(file: File): Promise<ImportPreview> {
   const converterState = useConverterStore.getState();
   const lutListFull = converterState.lutListFull;
 
-  // Build fingerprint map from local LUT list
-  const localFingerprints: Record<string, string> = {};
-  for (const lut of lutListFull) {
-    if (lut.fingerprint) {
-      localFingerprints[lut.name] = lut.fingerprint;
-    }
+  const restoreResult = restoreConverterRecipe(recipe, lutListFull);
+  await validateRestoredImage(restoreResult.assetFile);
+  if (restoreResult.heightmapFile) {
+    await validateRestoredImage(restoreResult.heightmapFile);
   }
-
-  const restoreResult = restoreConverterRecipe(recipe, lutListFull, localFingerprints);
 
   // Build cover preview URL
   let coverUrl: string | null = null;
@@ -160,6 +158,40 @@ export async function prepareImport(file: File): Promise<ImportPreview> {
   }
 
   return { recipe, restoreResult, coverUrl, printerOptions };
+}
+
+async function validateRestoredImage(file: File): Promise<void> {
+  if (!isValidImageType(file.type, file.name)) {
+    throw new Error(RECIPE_ASSET_CORRUPT_ERROR);
+  }
+  const extension = file.name.toLowerCase().slice(file.name.lastIndexOf("."));
+  if (RAW_EXTENSIONS_CONVERTER.has(extension) || file.type === "image/heic" || file.type === "image/heif") {
+    // These formats already use the backend's optional image decoders.
+    await uploadImagePreview(file);
+    return;
+  }
+  const url = URL.createObjectURL(file);
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let image: HTMLImageElement | undefined;
+  try {
+    image = new Image();
+    image.src = url;
+    await Promise.race([
+      image.decode(),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(RECIPE_ASSET_CORRUPT_ERROR)), IMAGE_DECODE_TIMEOUT_MS);
+      }),
+    ]);
+    if (image.naturalWidth <= 0 || image.naturalHeight <= 0) {
+      throw new Error(RECIPE_ASSET_CORRUPT_ERROR);
+    }
+  } catch {
+    throw new Error(RECIPE_ASSET_CORRUPT_ERROR);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+    if (image) image.src = "";
+    URL.revokeObjectURL(url);
+  }
 }
 
 /**
@@ -310,7 +342,6 @@ export async function exportShareCard(): Promise<SaveOutcome> {
   const { exportConverterRecipe, buildFullRecipe, buildRecipeAssets, buildCoverImage } =
     await import("./exportRecipe");
   const { embedRecipeInPng } = await import("./pngMetadata");
-  const { sha256String } = await import("./utils");
 
   const settingsState = useSettingsStore.getState();
 
@@ -322,17 +353,16 @@ export async function exportShareCard(): Promise<SaveOutcome> {
     throw new Error("No preview available — please generate a preview first");
   }
 
-  // Get LUT fingerprint
+  // Use the existing LUT record reference.
   const lutInfo = converterState.lutListFull.find(
     (l) => l.name === converterState.lut_name,
   );
-  const lutFingerprint = lutInfo?.fingerprint ?? "";
 
   // 1. Build converter recipe
   const converterRecipe = exportConverterRecipe(
     converterState,
     settingsState,
-    lutFingerprint,
+    lutInfo?.path,
   );
 
   // 2. Build assets
@@ -357,14 +387,10 @@ export async function exportShareCard(): Promise<SaveOutcome> {
     converterState.regionReplacementCount,
   );
 
-  // 5. Compute recipe JSON SHA-256
-  const recipeJsonForHash = JSON.stringify(fullRecipe.recipe);
-  const recipeSha256 = await sha256String(recipeJsonForHash);
+  // 5. Embed into PNG
+  const shareCardBlob = await embedRecipeInPng(coverBlob, fullRecipe);
 
-  // 6. Embed into PNG
-  const shareCardBlob = await embedRecipeInPng(coverBlob, fullRecipe, recipeSha256);
-
-  // 7. Trigger download
+  // 6. Trigger download
   const filename = converterState.imageFile.name.replace(/\.[^.]+$/, "") + "-share.png";
   return saveGeneratedFile(shareCardBlob, filename, 'share-card');
 }
@@ -392,12 +418,11 @@ export async function exportSidecar(): Promise<SaveOutcome> {
   const lutInfo = converterState.lutListFull.find(
     (l) => l.name === converterState.lut_name,
   );
-  const lutFingerprint = lutInfo?.fingerprint ?? "";
 
   const converterRecipe = exportConverterRecipe(
     converterState,
     settingsState,
-    lutFingerprint,
+    lutInfo?.path,
   );
 
   const assets = await buildRecipeAssets(

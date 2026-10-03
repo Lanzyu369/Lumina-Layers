@@ -21,14 +21,13 @@ export type {
   RecipeSource,
   RecipeCover,
   RecipeAssets,
-  RecipeIntegrity,
   RecipeCompat,
 } from "./types";
 
 export { RECIPE_FORMAT, RECIPE_SCHEMA_VERSION } from "./types";
 
 // Utils
-export { sha256Hex, sha256String, fileToBase64, base64ToFile, buildAssetEntry } from "./utils";
+export { fileToBase64, base64ToFile, buildAssetEntry } from "./utils";
 
 // PNG metadata
 export { embedRecipeInPng, extractRecipeFromPng, hasLuminaRecipe, extractCoverFromPng } from "./pngMetadata";

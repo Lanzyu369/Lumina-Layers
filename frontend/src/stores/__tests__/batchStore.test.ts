@@ -270,13 +270,11 @@ describe("submitBatch API 调用和状态管理", () => {
               name: "red.cdb",
               path: "/db/red.cdb",
               color_mode: "native",
-              fingerprint: "",
             },
             {
               name: "white.cdb",
               path: "/db/white.cdb",
               color_mode: "native",
-              fingerprint: "",
             },
           ],
           default_db_names: ["red.cdb"],

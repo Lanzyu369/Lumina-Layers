@@ -38,7 +38,6 @@ class LutCatalogItemSummary:
 
     name: str
     path: str
-    fingerprint: str
     color_mode: str
     source_kind: str
     compatibility_key: str
@@ -47,6 +46,7 @@ class LutCatalogItemSummary:
     manufacturer_source: str
     material_source: str
     search_tokens: tuple[str, ...]
+    revision: str = ""
 
 
 @dataclass(frozen=True)
@@ -110,7 +110,6 @@ class LutCatalogIndexer:
         self._candidate_cache: dict[str, tuple[Path, ...]] | None = None
         self._resolved_path_cache: dict[str, Path] = {}
         self._resolved_path_signature_cache: dict[str, tuple[int, int]] = {}
-        self._catalog_cache_signature: tuple[tuple[str, tuple[tuple[str, int, int], ...]], ...] | None = None
         self._catalog_cache_checked_at: float | None = None
         self._catalog_cache_value: LutDetailsCatalog | None = None
 
@@ -131,14 +130,7 @@ class LutCatalogIndexer:
             return self._catalog_cache_value
 
         candidates_by_name = self._discover_file_candidates(refresh=True)
-        catalog_signature = self._catalog_signature(candidates_by_name)
-        if (
-            self._catalog_cache_value is not None
-            and self._catalog_cache_signature == catalog_signature
-        ):
-            self._catalog_cache_checked_at = now
-            return self._catalog_cache_value
-
+        revision = str(time.monotonic_ns())
         grouped: dict[str, list[LutCatalogItemSummary]] = {}
         resolved_paths: dict[str, Path] = {}
         resolved_signatures: dict[str, tuple[int, int]] = {}
@@ -163,7 +155,6 @@ class LutCatalogIndexer:
             item = LutCatalogItemSummary(
                 name=name,
                 path=str(resolved_path),
-                fingerprint=parsed.fingerprint,
                 color_mode=parsed.color_mode,
                 source_kind=parsed.source_kind,
                 compatibility_key=parsed.compatibility_key,
@@ -172,6 +163,7 @@ class LutCatalogIndexer:
                 manufacturer_source=identity.manufacturer_source,
                 material_source=identity.material_source,
                 search_tokens=tuple(tokens),
+                revision=revision,
             )
             grouped.setdefault(identity.manufacturer, []).append(item)
 
@@ -187,7 +179,6 @@ class LutCatalogIndexer:
         self._resolved_path_cache = resolved_paths
         self._resolved_path_signature_cache = resolved_signatures
         catalog = LutDetailsCatalog(groups=groups)
-        self._catalog_cache_signature = catalog_signature
         self._catalog_cache_checked_at = now
         self._catalog_cache_value = catalog
         return catalog
@@ -254,7 +245,6 @@ class LutCatalogIndexer:
         )
 
     def _clear_catalog_cache(self) -> None:
-        self._catalog_cache_signature = None
         self._catalog_cache_checked_at = None
         self._catalog_cache_value = None
 
@@ -291,21 +281,6 @@ class LutCatalogIndexer:
         }
         self._candidate_cache = dict(sorted(candidates.items(), key=lambda entry: entry[0].casefold()))
         return self._candidate_cache
-
-    def _catalog_signature(
-        self,
-        candidates_by_name: dict[str, tuple[Path, ...]],
-    ) -> tuple[tuple[str, tuple[tuple[str, int, int], ...]], ...]:
-        return tuple(
-            (
-                name,
-                tuple(
-                    (str(path), *self._path_signature(path))
-                    for path in candidates
-                ),
-            )
-            for name, candidates in candidates_by_name.items()
-        )
 
     def _path_signature(self, path: Path) -> tuple[int, int]:
         try:

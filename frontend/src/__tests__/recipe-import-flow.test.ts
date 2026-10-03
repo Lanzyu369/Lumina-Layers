@@ -11,6 +11,7 @@ import {
   exportShareCard,
   exportSidecar,
   MODEL_SURFACE_RECIPE_EXPORT_UNAVAILABLE_ERROR,
+  prepareImport,
 } from "../recipe/importFlow";
 import type { RestoreResult } from "../recipe/importRecipe";
 import type { ConverterRecipeDevice, LuminaRecipe } from "../recipe/types";
@@ -26,6 +27,7 @@ import { useWorkshopStore } from "../workshop/store";
 import { createBeadRecipeSourceFixture } from "./fixtures/beadRecipeSource";
 import * as exportRecipeModule from "../recipe/exportRecipe";
 import * as pngMetadataModule from "../recipe/pngMetadata";
+import * as systemApi from "../api/system";
 
 const PRINTERS: PrinterInfo[] = [
   {
@@ -152,7 +154,6 @@ function makeRecipe(
         filename: "source.png",
         mime_type: "image/png",
         byte_size: 4,
-        sha256: "abcd",
         encoding: "base64",
         payload_b64: "dGVzdA==",
       },
@@ -160,7 +161,7 @@ function makeRecipe(
     recipe: {
       converter: {
         base: {
-          lut: { name: "lut", color_mode: "4-Color (RYBW)", fingerprint: "fp" },
+          lut: { name: "lut", color_mode: "4-Color (RYBW)" },
           color_mode: "4-Color (RYBW)",
           modeling_mode: "high-fidelity",
           target_width_mm: 60,
@@ -213,10 +214,6 @@ function makeRecipe(
         device,
       },
     },
-    integrity: {
-      recipe_sha256: "0".repeat(64),
-      asset_checksums: { primary: "abcd" },
-    },
     compat: { min_schema_version: 1 },
     warnings: [],
   };
@@ -235,6 +232,79 @@ describe("recipe/importFlow", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it.each(["primary", "heightmap"])("rejects an undecodable %s before applying imported settings", async (assetKey) => {
+    const recipe = makeRecipe();
+    if (assetKey === "heightmap") recipe.asset.heightmap = { ...recipe.asset.primary, filename: "height.png" };
+    let decodedCount = 0;
+    class ImportImage {
+      src = "";
+      naturalWidth = 1;
+      naturalHeight = 1;
+      async decode() {
+        decodedCount += 1;
+        if (assetKey === "primary" || decodedCount === 2) throw new Error("Cannot decode image");
+      }
+    }
+    vi.stubGlobal("Image", ImportImage);
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:import-image");
+    const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    const printers = vi.spyOn(systemApi, "getPrinters").mockResolvedValue([]);
+    const initialWidth = useConverterStore.getState().target_width_mm;
+    const initialPrinter = useSettingsStore.getState().printerModel;
+    await expect(prepareImport(new File([JSON.stringify(recipe)], "invalid.lumina.json"))).rejects.toThrow("Asset data is corrupted");
+    expect(useConverterStore.getState().imageFile).toBeNull();
+    expect(useConverterStore.getState().target_width_mm).toBe(initialWidth);
+    expect(useSettingsStore.getState().printerModel).toBe(initialPrinter);
+    expect(printers).not.toHaveBeenCalled();
+    expect(revoke).toHaveBeenCalledTimes(assetKey === "primary" ? 1 : 2);
+  });
+
+  it.each(["source.nef", "source.heic"])("uses the existing backend decoder for %s and preserves failures", async (filename) => {
+    const recipe = makeRecipe();
+    recipe.asset.primary.filename = filename;
+    recipe.asset.primary.mime_type = filename.endsWith("heic") ? "image/heic" : "application/octet-stream";
+    const decodeFailure = new Error("Optional image decoder unavailable");
+    vi.spyOn(systemApi, "uploadImagePreview").mockRejectedValue(decodeFailure);
+    await expect(prepareImport(new File([JSON.stringify(recipe)], "image.lumina.json"))).rejects.toBe(decodeFailure);
+    expect(useConverterStore.getState().imageFile).toBeNull();
+  });
+
+  it.each(["primary", "heightmap"])("bounds a pending %s decoder and releases its URL without applying state", async (assetKey) => {
+    vi.useFakeTimers();
+    const recipe = makeRecipe();
+    if (assetKey === "heightmap") recipe.asset.heightmap = { ...recipe.asset.primary, filename: "height.png" };
+    let markDecodingStarted: () => void = () => {};
+    const decodingStarted = new Promise<void>((resolve) => { markDecodingStarted = resolve; });
+    let decodeCount = 0;
+    class PendingImage {
+      src = "";
+      naturalWidth = 1;
+      naturalHeight = 1;
+      decode() {
+        decodeCount += 1;
+        if (assetKey === "heightmap" && decodeCount === 1) return Promise.resolve();
+        markDecodingStarted();
+        return new Promise<void>(() => {});
+      }
+    }
+    vi.stubGlobal("Image", PendingImage);
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:pending-decode");
+    const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    let failure: unknown;
+    const preparation = prepareImport(new File([JSON.stringify(recipe)], "pending.lumina.json"))
+      .catch((error: unknown) => { failure = error; });
+    await decodingStarted;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain("Asset data is corrupted");
+    expect(useConverterStore.getState().imageFile).toBeNull();
+    expect(revoke).toHaveBeenCalledTimes(assetKey === "primary" ? 1 : 2);
+    expect(vi.getTimerCount()).toBe(0);
+    await preparation;
   });
 
   it("restores generated machine device profile into settings", () => {

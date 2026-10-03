@@ -70,7 +70,6 @@ function makeDbOption(name: string) {
     name,
     path: `/${name}.json`,
     color_mode: "8-Color Max",
-    fingerprint: `fp-${name}`,
   };
 }
 
@@ -95,7 +94,7 @@ function makeNonPredictiveBrand() {
     vendor: "Vendor B",
     display_name: "Vendor B PLA",
     db_options: [
-      { name: "DB-B1", path: "/db-b1.json", color_mode: "4-Color (RYBW)", fingerprint: "fp-b1" },
+      { name: "DB-B1", path: "/db-b1.json", color_mode: "4-Color (RYBW)" },
     ],
     default_db_names: ["DB-B1"],
     supported_modes: [{ color_layers: 5, layer_height_mm: 0.08 }],
@@ -111,7 +110,6 @@ function makeLegacyDetailsCatalog() {
           {
             name: "legacy-a",
             path: "/legacy-a.npy",
-            fingerprint: "fp-a",
             color_mode: ColorMode.FOUR_COLOR_RYBW,
             source_kind: "legacy_lookup",
             manufacturer: "Brand A",
@@ -128,7 +126,6 @@ function makeLegacyDetailsCatalog() {
           {
             name: "legacy-b",
             path: "/legacy-b.npy",
-            fingerprint: "fp-b",
             color_mode: ColorMode.EIGHT_COLOR,
             source_kind: "legacy_lookup",
             manufacturer: "Brand B",
@@ -1211,7 +1208,6 @@ describe("native bundle converter flow", () => {
                 name: lutName,
                 color_mode: ColorMode.FIVE_COLOR_EXT,
                 path: `/${lutName}.npy`,
-                fingerprint: `fp-${lutName}`,
               },
             ]
           : [],
@@ -1270,7 +1266,6 @@ describe("native bundle converter flow", () => {
           name: "legacy-eight",
           color_mode: "8-Color",
           path: "/legacy-eight.npy",
-          fingerprint: "fp-eight",
         },
       ],
       target_width_mm: 90,
@@ -1325,7 +1320,6 @@ describe("native bundle converter flow", () => {
             {
               name: "A RYBW",
               path: "/legacy-rybw.npy",
-              fingerprint: "fp-rybw",
               color_mode: ColorMode.FOUR_COLOR_RYBW,
               compatibility_key: "sig-rybw",
               source_kind: "legacy_lookup",
@@ -1338,7 +1332,6 @@ describe("native bundle converter flow", () => {
             {
               name: "A RYBW Alt",
               path: "/legacy-rybw-alt.npy",
-              fingerprint: "fp-rybw-alt",
               color_mode: ColorMode.FOUR_COLOR_RYBW,
               compatibility_key: "sig-rybw",
               source_kind: "legacy_lookup",
@@ -1351,7 +1344,6 @@ describe("native bundle converter flow", () => {
             {
               name: "A 8C",
               path: "/legacy-eight.npy",
-              fingerprint: "fp-eight",
               color_mode: ColorMode.EIGHT_COLOR,
               compatibility_key: "sig-eight",
               source_kind: "legacy_lookup",
@@ -1369,19 +1361,16 @@ describe("native bundle converter flow", () => {
           name: "legacy-rybw",
           color_mode: ColorMode.FOUR_COLOR_RYBW,
           path: "/legacy-rybw.npy",
-          fingerprint: "fp-rybw",
         },
         {
           name: "legacy-eight",
           color_mode: ColorMode.EIGHT_COLOR,
           path: "/legacy-eight.npy",
-          fingerprint: "fp-eight",
         },
         {
           name: "legacy-rybw-alt",
           color_mode: ColorMode.FOUR_COLOR_RYBW,
           path: "/legacy-rybw-alt.npy",
-          fingerprint: "fp-rybw-alt",
         },
       ],
     } as never);
@@ -1417,7 +1406,6 @@ describe("native bundle converter flow", () => {
             {
               name: "A RYBW",
               path: "/legacy-a.npy",
-              fingerprint: "fp-a",
               color_mode: ColorMode.FOUR_COLOR_RYBW,
               compatibility_key: "sig-a",
               source_kind: "legacy_lookup",
@@ -1430,7 +1418,6 @@ describe("native bundle converter flow", () => {
             {
               name: "B RYBW",
               path: "/legacy-b.npy",
-              fingerprint: "fp-b",
               color_mode: ColorMode.FOUR_COLOR_RYBW,
               compatibility_key: "sig-b",
               source_kind: "legacy_lookup",
@@ -1448,13 +1435,11 @@ describe("native bundle converter flow", () => {
           name: "legacy-a",
           color_mode: ColorMode.FOUR_COLOR_RYBW,
           path: "/legacy-a.npy",
-          fingerprint: "fp-a",
         },
         {
           name: "legacy-b",
           color_mode: ColorMode.FOUR_COLOR_RYBW,
           path: "/legacy-b.npy",
-          fingerprint: "fp-b",
         },
       ],
     } as never);
@@ -1478,7 +1463,6 @@ describe("native bundle converter flow", () => {
             {
               name: "Display A",
               path: "/legacy-a.npy",
-              fingerprint: "fp-a",
               color_mode: ColorMode.FOUR_COLOR_RYBW,
               compatibility_key: "sig-a",
               source_kind: "legacy_lookup",
@@ -1491,7 +1475,6 @@ describe("native bundle converter flow", () => {
             {
               name: "Display B",
               path: "/legacy-b.npy",
-              fingerprint: "fp-b",
               color_mode: ColorMode.FOUR_COLOR_RYBW,
               compatibility_key: "sig-b",
               source_kind: "legacy_lookup",
@@ -1510,8 +1493,8 @@ describe("native bundle converter flow", () => {
         {
           group_name: "Legacy",
           items: [
-            { name: "legacy-a", color_mode: ColorMode.FOUR_COLOR_RYBW, path: "/legacy-a.npy", fingerprint: "fp-a" },
-            { name: "legacy-b", color_mode: ColorMode.FOUR_COLOR_RYBW, path: "/legacy-b.npy", fingerprint: "fp-b" },
+            { name: "legacy-a", color_mode: ColorMode.FOUR_COLOR_RYBW, path: "/legacy-a.npy" },
+            { name: "legacy-b", color_mode: ColorMode.FOUR_COLOR_RYBW, path: "/legacy-b.npy" },
           ],
         },
       ],
@@ -1563,7 +1546,6 @@ describe("native bundle converter flow", () => {
             {
               name: "Display A",
               path: "/legacy-a.npy",
-              fingerprint: "fp-a",
               color_mode: ColorMode.FOUR_COLOR_RYBW,
               compatibility_key: "sig-a",
               source_kind: "legacy_lookup",
@@ -1576,7 +1558,6 @@ describe("native bundle converter flow", () => {
             {
               name: "Display B",
               path: "/legacy-b.npy",
-              fingerprint: "fp-b",
               color_mode: ColorMode.FOUR_COLOR_RYBW,
               compatibility_key: "sig-b",
               source_kind: "legacy_lookup",
@@ -1594,13 +1575,11 @@ describe("native bundle converter flow", () => {
           name: "legacy-a",
           color_mode: ColorMode.FOUR_COLOR_RYBW,
           path: "/legacy-a.npy",
-          fingerprint: "fp-a",
         },
         {
           name: "legacy-b",
           color_mode: ColorMode.FOUR_COLOR_RYBW,
           path: "/legacy-b.npy",
-          fingerprint: "fp-b",
         },
       ],
     } as never);
@@ -1644,7 +1623,6 @@ describe("native bundle converter flow", () => {
             {
               name: "Display A",
               path: "/legacy-a.npy",
-              fingerprint: "fp-a",
               color_mode: ColorMode.FOUR_COLOR_RYBW,
               compatibility_key: "sig-a",
               source_kind: "legacy_lookup",
@@ -1657,7 +1635,6 @@ describe("native bundle converter flow", () => {
             {
               name: "Display B",
               path: "/legacy-b.npy",
-              fingerprint: "fp-b",
               color_mode: ColorMode.FOUR_COLOR_RYBW,
               compatibility_key: "sig-b",
               source_kind: "legacy_lookup",
@@ -1689,13 +1666,13 @@ describe("native bundle converter flow", () => {
         {
           group_name: "Preset",
           items: [
-            { name: "legacy-a", color_mode: ColorMode.FOUR_COLOR_RYBW, path: "/a.npy", fingerprint: "fp-a" },
+            { name: "legacy-a", color_mode: ColorMode.FOUR_COLOR_RYBW, path: "/a.npy" },
           ],
         },
         {
           group_name: "ReferenceDB",
           items: [
-            { name: "legacy-b", color_mode: ColorMode.BW, path: "/b.npy", fingerprint: "fp-b" },
+            { name: "legacy-b", color_mode: ColorMode.BW, path: "/b.npy" },
           ],
         },
       ],
@@ -1757,7 +1734,6 @@ describe("native bundle converter flow", () => {
           name: "legacy-b",
           color_mode: ColorMode.EIGHT_COLOR,
           path: "/legacy-b.npy",
-          fingerprint: "legacy-b-fp",
         },
       ],
     });

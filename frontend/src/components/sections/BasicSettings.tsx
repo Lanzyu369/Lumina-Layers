@@ -38,7 +38,6 @@ import type { ImportPreview } from "../../recipe/importFlow";
 import {
   RECIPE_ASSET_CORRUPT_ERROR,
   RECIPE_IMPORT_NOT_SHARE_CARD_ERROR,
-  RECIPE_INTEGRITY_ERROR,
   type RecipeFileSource,
 } from "../../recipe/importRecipe";
 import { StatusBanner, workstationInputClass } from "../ui/panelPrimitives";
@@ -212,9 +211,6 @@ function resolveRecipeImportError(
   const message = error instanceof Error ? error.message.trim() : "";
   if (message === RECIPE_IMPORT_NOT_SHARE_CARD_ERROR) {
     return t("recipe_import_not_share_card");
-  }
-  if (message === RECIPE_INTEGRITY_ERROR) {
-    return t("recipe_import_integrity_fail");
   }
   if (message === RECIPE_ASSET_CORRUPT_ERROR) {
     return t("recipe_import_asset_corrupt");
