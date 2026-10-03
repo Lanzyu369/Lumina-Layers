@@ -112,3 +112,29 @@ def test_distributed_visible_components_use_hierarchical_coverage() -> None:
     )
 
     assert large_elapsed < small_elapsed * 10.0 + 0.1
+
+
+def _duplicate_paints_elapsed(count: int) -> float:
+    paints = "".join(
+        f'<rect width="10" height="10" fill="#{index % 251:02x}0000"/>'
+        for index in range(count)
+    )
+    started = perf_counter()
+    result = lumina_svg_core.analyze_svg_svg(
+        f'<svg viewBox="0 0 10 10">{paints}</svg>',
+        target_width_mm=10.0,
+        tolerance_mm=0.02,
+    )
+    elapsed = perf_counter() - started
+    assert result.status == "supported"
+    assert result.visible.component_count == 1
+    assert result.visible.draw_indices.tolist() == [count - 1]
+    assert result.visible.rgba.tolist() == [[(count - 1) % 251, 0, 0, 255]]
+    return elapsed
+
+
+def test_exact_duplicate_paints_keep_last_owner_with_bounded_lookup() -> None:
+    small_elapsed = min(_duplicate_paints_elapsed(600) for _ in range(2))
+    large_elapsed = min(_duplicate_paints_elapsed(2400) for _ in range(2))
+
+    assert large_elapsed < small_elapsed * 8.0 + 0.05

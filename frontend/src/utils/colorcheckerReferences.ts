@@ -1,4 +1,5 @@
 import readExcelFile from "read-excel-file/browser";
+import { createRandomId } from "./randomId";
 import type {
   ColorcheckerReferenceNormalizeResponse,
   ColorcheckerReferencePatch,
@@ -19,7 +20,6 @@ export interface StoredColorcheckerReference {
   name: string;
   patches: ColorcheckerReferencePatch[];
   source: ColorcheckerReferenceSource;
-  referenceHash: string;
   warnings: string[];
   createdAt: string;
 }
@@ -111,19 +111,16 @@ export function makeStoredColorcheckerReference(
   normalized: ColorcheckerReferenceNormalizeResponse,
   fallbackName: string,
 ): StoredColorcheckerReference {
-  const hash = normalized.referenceHash;
   const sourceName = normalized.source.sourceName?.trim() || fallbackName || "自定义校色基准";
   const serial = normalized.source.serialNumber?.trim();
   return {
-    key: `custom:${hash}`,
+    key: `custom:${createRandomId()}`,
     name: serial ? `${sourceName} (${serial})` : sourceName,
     patches: normalized.patches,
     source: {
       ...normalized.source,
-      referenceHash: hash,
       patchCount: normalized.patches.length,
     },
-    referenceHash: hash,
     warnings: normalized.warnings,
     createdAt: new Date().toISOString(),
   };
@@ -135,7 +132,20 @@ export function loadStoredColorcheckerReferences(): StoredColorcheckerReference[
     const raw = window.localStorage.getItem(CUSTOM_REFERENCES_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isStoredReference);
+    return parsed.filter(isStoredReference).map((item) => ({
+      key: item.key,
+      name: item.name,
+      patches: item.patches,
+      source: {
+        sourceType: item.source?.sourceType,
+        sourceName: item.source?.sourceName,
+        serialNumber: item.source?.serialNumber,
+        patchCount: item.source?.patchCount,
+        labWhitePoint: item.source?.labWhitePoint,
+      },
+      warnings: item.warnings ?? [],
+      createdAt: item.createdAt,
+    }));
   } catch {
     return [];
   }
@@ -383,7 +393,6 @@ function isStoredReference(value: unknown): value is StoredColorcheckerReference
     typeof item.key === "string" &&
     item.key.startsWith("custom:") &&
     typeof item.name === "string" &&
-    typeof item.referenceHash === "string" &&
     Array.isArray(item.patches)
   );
 }

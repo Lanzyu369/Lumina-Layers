@@ -1,6 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { parseColorcheckerReferenceRows } from "../utils/colorcheckerReferences";
+import {
+  loadSelectedColorcheckerReferenceKey,
+  loadStoredColorcheckerReferences,
+  makeStoredColorcheckerReference,
+  parseColorcheckerReferenceRows,
+  saveSelectedColorcheckerReferenceKey,
+  saveStoredColorcheckerReferences,
+  upsertStoredColorcheckerReference,
+} from "../utils/colorcheckerReferences";
 
 const rows = [
   ["大凡光学", "SN:DF-RCC-01240409"],
@@ -113,5 +121,75 @@ describe("colorchecker reference parser", () => {
     expect(() => parseColorcheckerReferenceRows(badRows, "bad.xlsx")).toThrow(
       "三元组不完整",
     );
+  });
+});
+
+describe("stored colorchecker references", () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it("stores distinct uploaded references when LAN HTTP omits randomUUID", () => {
+    const parsed = parseColorcheckerReferenceRows(rows, "reference.xlsx");
+    const normalized = { patches: parsed.patches, source: parsed.source, warnings: [] };
+    vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto) });
+    try {
+      const first = makeStoredColorcheckerReference(normalized, "reference");
+      const second = makeStoredColorcheckerReference(normalized, "reference");
+      expect(first.key).toMatch(/^custom:[\da-f]{32}$/);
+      expect(second.key).not.toBe(first.key);
+      expect(upsertStoredColorcheckerReference(first).persisted).toBe(true);
+      expect(upsertStoredColorcheckerReference(second).persisted).toBe(true);
+      expect(loadStoredColorcheckerReferences().map((item) => item.key))
+        .toEqual([second.key, first.key]);
+      expect(loadStoredColorcheckerReferences()[0].patches).toEqual(parsed.patches);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("uses independent record IDs and preserves reference values across reload", () => {
+    const parsed = parseColorcheckerReferenceRows(rows, "reference.xlsx");
+    const normalized = { patches: parsed.patches, source: parsed.source, warnings: [] };
+    const first = makeStoredColorcheckerReference(normalized, "reference");
+    const second = makeStoredColorcheckerReference(normalized, "reference");
+
+    expect(first.key).toMatch(/^custom:.+/);
+    expect(second.key).not.toBe(first.key);
+    expect(first).not.toHaveProperty("referenceHash");
+    expect(first.source).not.toHaveProperty("referenceHash");
+    expect(upsertStoredColorcheckerReference(first).persisted).toBe(true);
+    expect(upsertStoredColorcheckerReference(second).persisted).toBe(true);
+    expect(saveSelectedColorcheckerReferenceKey(second.key)).toBe(true);
+
+    const loaded = loadStoredColorcheckerReferences();
+    expect(loaded.map((item) => item.key)).toEqual([second.key, first.key]);
+    expect(loaded[0].patches).toEqual(parsed.patches);
+    expect(loaded[0].source).toEqual(parsed.source);
+    expect(loadSelectedColorcheckerReferenceKey()).toBe(second.key);
+  });
+
+  it("keeps legacy record and selection IDs while discarding retired digest metadata", () => {
+    const parsed = parseColorcheckerReferenceRows(rows, "legacy.xlsx");
+    const key = "custom:legacy-digest-key";
+    window.localStorage.setItem("lumina.colorchecker.references.v1", JSON.stringify([{
+      key,
+      name: "legacy reference",
+      patches: parsed.patches,
+      source: { ...parsed.source, referenceHash: "old-digest" },
+      referenceHash: "old-digest",
+      warnings: [],
+      createdAt: "2026-10-02T00:00:00Z",
+    }]));
+    saveSelectedColorcheckerReferenceKey(key);
+
+    const loaded = loadStoredColorcheckerReferences();
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0].key).toBe(key);
+    expect(loaded[0].patches).toEqual(parsed.patches);
+    expect(loaded[0].source).toEqual(parsed.source);
+    expect(loaded[0]).not.toHaveProperty("referenceHash");
+    expect(loadSelectedColorcheckerReferenceKey()).toBe(key);
+    saveStoredColorcheckerReferences(loaded);
+    expect(JSON.parse(window.localStorage.getItem("lumina.colorchecker.references.v1")!))
+      .toEqual(loaded);
   });
 });

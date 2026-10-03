@@ -153,7 +153,7 @@ def _format_api_errors_table(action_history: Any) -> str:
 def _format_attachments_table(attachments: Any) -> str:
     if not isinstance(attachments, dict) or not attachments:
         return "_(no attachments)_\n"
-    lines = ["| kind | status | filename | size (bytes) | sha256 / detail |", "|---|---|---|---|---|"]
+    lines = ["| kind | status | filename | size (bytes) | detail |", "|---|---|---|---|---|"]
     known = (
         "original_image",
         "final_artifact",
@@ -170,8 +170,6 @@ def _format_attachments_table(attachments: Any) -> str:
         filename = _safe_str(entry.get("filename"))
         size = entry.get("size_bytes") or entry.get("compressed_size_bytes")
         detail_parts: list[str] = []
-        if entry.get("sha256"):
-            detail_parts.append(f"sha256={entry['sha256'][:12]}…")
         if kind == "original_image":
             if entry.get("capture_source"):
                 detail_parts.append(f"capture={entry['capture_source']}")

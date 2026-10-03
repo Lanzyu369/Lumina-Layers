@@ -352,7 +352,6 @@ def _colorchecker_reference_source_response(source: object) -> dict[str, object 
         "serialNumber": raw.get("serial_number"),
         "patchCount": raw.get("patch_count"),
         "labWhitePoint": raw.get("lab_white_point"),
-        "referenceHash": raw.get("reference_hash"),
     }
 
 
@@ -367,7 +366,6 @@ def _colorchecker_reference_summary_response(summary: dict[str, object]) -> dict
         "patchCount": summary.get("patchCount"),
         "labWhitePoint": summary.get("labWhitePoint") or source_payload.get("labWhitePoint"),
         "serialNumber": summary.get("serialNumber") or source_payload.get("serialNumber"),
-        "referenceHash": summary.get("referenceHash") or source_payload.get("referenceHash"),
     }
 
 
@@ -888,7 +886,6 @@ async def extractor_colorchecker_reference_normalize(
     return {
         "patches": normalized["patches"],
         "source": _colorchecker_reference_source_response(normalized["source"]),
-        "referenceHash": normalized["reference_hash"],
         "warnings": normalized["warnings"],
     }
 

@@ -56,7 +56,8 @@ class TestColorcheckerReferenceNormalization:
         assert len(first["Lab_d50"]) == 3
         assert len(first["Lab_d65"]) == 3
         assert result["source"]["source_name"] == "Upload"
-        assert len(result["reference_hash"]) == 64
+        assert "reference_hash" not in result
+        assert "reference_hash" not in result["source"]
 
     def test_accepts_lab_only_and_derives_srgb(self) -> None:
         result = normalize_reference(_reference_patches_with("Lab_d50"))
@@ -356,7 +357,7 @@ class TestApplyColorcheckerCalibration:
         assert result.display_summary["luminanceCurve"][0]["grayPatch"] is True
         assert result.display_summary["reference"]["sourceName"] == "大凡光学"
         assert result.display_summary["reference"]["labWhitePoint"] == "D50"
-        assert result.display_summary["reference"]["referenceHash"] == "abc123"
+        assert "referenceHash" not in result.display_summary["reference"]
         assert result.display_summary["settings"]["method"] == "median"
         assert result.display_summary["settings"]["calibrationMode"] == "root_polynomial"
         assert result.display_summary["settings"]["grayAffineMode"] == "enabled"

@@ -22,6 +22,7 @@
 #include <memory>
 #include <numeric>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -4327,38 +4328,27 @@ std::vector<Paths64> partitionNormalizedPaths(
     return groups;
 }
 
-uint64_t pathsFingerprint(const Paths64& paths)
-{
-    constexpr uint64_t FNV_OFFSET = 1469598103934665603ULL;
-    constexpr uint64_t FNV_PRIME = 1099511628211ULL;
-    uint64_t fingerprint = FNV_OFFSET;
-    auto include = [&](uint64_t value) {
-        fingerprint ^= value;
-        fingerprint *= FNV_PRIME;
-    };
-    include(paths.size());
-    for(const auto& path : paths) {
-        include(path.size());
-        for(const auto& point : path) {
-            include(static_cast<uint64_t>(point.x));
-            include(static_cast<uint64_t>(point.y));
-        }
-    }
-    return fingerprint;
-}
+struct PaintPathsLess {
+    const std::vector<PaintGeometry>& paints;
 
-bool hasExactLaterPaint(
-    const std::unordered_multimap<uint64_t, size_t>& fingerprints,
-    const std::vector<PaintGeometry>& paints, size_t paintIndex,
-    uint64_t fingerprint)
-{
-    const auto range = fingerprints.equal_range(fingerprint);
-    for(auto iterator = range.first; iterator != range.second; ++iterator) {
-        if(paints[iterator->second].paths == paints[paintIndex].paths)
-            return true;
+    bool operator()(size_t left, size_t right) const
+    {
+        const auto& leftPaths = paints[left].paths;
+        const auto& rightPaths = paints[right].paths;
+        return std::lexicographical_compare(
+            leftPaths.begin(), leftPaths.end(),
+            rightPaths.begin(), rightPaths.end(),
+            [](const Path64& first, const Path64& second) {
+                return std::lexicographical_compare(
+                    first.begin(), first.end(), second.begin(), second.end(),
+                    [](const Point64& firstPoint, const Point64& secondPoint) {
+                        return firstPoint.x < secondPoint.x
+                            || (firstPoint.x == secondPoint.x
+                                && firstPoint.y < secondPoint.y);
+                    });
+            });
     }
-    return false;
-}
+};
 
 CompositedPaths compositePaints(const std::vector<PaintGeometry>& paints,
                                 const PhysicalDomain& domain)
@@ -4381,8 +4371,9 @@ CompositedPaths compositePaints(const std::vector<PaintGeometry>& paints,
     // log2(N) indexes and sends only spatially relevant coverage rings to
     // Clipper, without rebuilding the entire later-paint suffix per draw.
     std::vector<CoverageBatch> coverageBatches;
-    std::unordered_multimap<uint64_t, size_t> laterFingerprints;
-    laterFingerprints.reserve(paints.size());
+    // Store indices into immutable paints; compare geometry directly with
+    // logarithmic lookup and no copied paths or content fingerprints.
+    std::set<size_t, PaintPathsLess> laterPaints(PaintPathsLess{paints});
     const auto mergeCoverage = [&](CoverageBatch left,
                                    CoverageBatch right) {
         CoverageBatch merged;
@@ -4408,9 +4399,7 @@ CompositedPaths compositePaints(const std::vector<PaintGeometry>& paints,
 
     for(size_t reverseIndex = paints.size(); reverseIndex > 0; --reverseIndex) {
         const size_t index = reverseIndex - 1;
-        const uint64_t fingerprint = pathsFingerprint(paints[index].paths);
-        if(hasExactLaterPaint(
-                laterFingerprints, paints, index, fingerprint)) {
+        if(!laterPaints.insert(index).second) {
             composited.visible[index] = {};
         } else {
             Paths64 visible;
@@ -4469,7 +4458,6 @@ CompositedPaths compositePaints(const std::vector<PaintGeometry>& paints,
                 coverageBatches.emplace_back(std::move(batch));
             }
         }
-        laterFingerprints.emplace(fingerprint, index);
     }
 
     for(auto& batch : coverageBatches) {

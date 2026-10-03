@@ -186,14 +186,12 @@ beforeEach(() => {
         patchCount: 24,
         labWhitePoint: "D50",
         serialNumber: null,
-        referenceHash: "dafan-hash",
         source: {
           sourceType: "built_in",
           sourceName: "Dafan",
           serialNumber: null,
           patchCount: 24,
           labWhitePoint: "D50",
-          referenceHash: "dafan-hash",
         },
       },
     ],
@@ -212,9 +210,7 @@ beforeEach(() => {
       serialNumber: "SN-TEST",
       patchCount: 24,
       labWhitePoint: "D50",
-      referenceHash: "custom-hash",
     },
-    referenceHash: "custom-hash",
     warnings: [],
   });
   vi.mocked(colorcheckerDetectChart).mockResolvedValue({

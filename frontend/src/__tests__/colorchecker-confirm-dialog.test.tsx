@@ -182,14 +182,12 @@ describe("ColorcheckerConfirmDialog", () => {
           patchCount: 24,
           labWhitePoint: "D50",
           serialNumber: null,
-          referenceHash: "dafan-hash",
           source: {
             sourceType: "built_in",
             sourceName: "大凡光学",
             serialNumber: null,
             patchCount: 24,
             labWhitePoint: "D50",
-            referenceHash: "dafan-hash",
           },
         },
       ],
@@ -208,9 +206,7 @@ describe("ColorcheckerConfirmDialog", () => {
         serialNumber: "SN-TEST",
         patchCount: 24,
         labWhitePoint: "D50",
-        referenceHash: "custom-hash",
       },
-      referenceHash: "custom-hash",
       warnings: [],
     });
     vi.mocked(colorcheckerDetectChart).mockResolvedValue({
@@ -589,7 +585,6 @@ describe("ColorcheckerConfirmDialog", () => {
           kind: "custom",
           referenceSource: expect.objectContaining({
             sourceName: "custom-reference",
-            referenceHash: "custom-hash",
           }),
         }),
       ),
@@ -603,7 +598,8 @@ describe("ColorcheckerConfirmDialog", () => {
       expect.objectContaining({
         kind: "custom",
         referenceSource: expect.objectContaining({
-          referenceHash: "custom-hash",
+          sourceName: "custom-reference",
+          patchCount: 24,
         }),
       }),
     );
@@ -668,7 +664,8 @@ describe("ColorcheckerConfirmDialog", () => {
           expect.objectContaining({
             kind: "custom",
             referenceSource: expect.objectContaining({
-              referenceHash: "custom-hash",
+              sourceName: "custom-reference",
+              patchCount: 24,
             }),
           }),
         ),
@@ -681,7 +678,8 @@ describe("ColorcheckerConfirmDialog", () => {
         expect.objectContaining({
           kind: "custom",
           referenceSource: expect.objectContaining({
-            referenceHash: "custom-hash",
+            sourceName: "custom-reference",
+            patchCount: 24,
           }),
         }),
       );
@@ -709,9 +707,7 @@ describe("ColorcheckerConfirmDialog", () => {
         serialNumber: "SN-TEST",
         patchCount: 24,
         labWhitePoint: "D50",
-        referenceHash: "custom-hash",
       },
-      referenceHash: "custom-hash",
       warnings: ["warn 1", "warn 2"],
     });
     const { container } = renderDialog();

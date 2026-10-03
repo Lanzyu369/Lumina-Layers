@@ -1,7 +1,7 @@
 """
 Lumina Studio - Backing Plate 形状属性测试 (Property-Based Tests)
 
-使用 Hypothesis 验证 _build_color_contour_mesh 生成 mesh 的正确性属性。
+使用 Hypothesis 验证 _build_color_extruded_mesh 生成 mesh 的正确性属性。
 每个属性测试至少运行 100 次迭代。
 """
 
@@ -15,7 +15,7 @@ from hypothesis import strategies as st
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from core.converter import _build_color_contour_mesh
+from core.pipeline.s11_glb_preview import _build_color_extruded_mesh
 
 BACKING_PLATE_RGBA = np.array([245, 245, 245, 255], dtype=np.uint8)
 
@@ -50,13 +50,13 @@ def test_non_empty_mask_returns_mesh(data):
     """Property 1: 非空 mask 总是返回有效 mesh
 
     For any mask_solid with at least one True pixel,
-    _build_color_contour_mesh should return a non-None Trimesh.
+    _build_color_extruded_mesh should return a non-None Trimesh.
 
     **Validates: Requirements 1.1**
     """
     mask_solid, height, width = data
 
-    mesh = _build_color_contour_mesh(
+    mesh = _build_color_extruded_mesh(
         mask=mask_solid,
         height=height,
         total_layers=1,
@@ -81,13 +81,13 @@ def test_non_empty_mask_returns_mesh(data):
 def test_empty_mask_returns_none(h, w):
     """Property 2: 全 False mask 返回 None
 
-    For any all-False mask_solid, _build_color_contour_mesh should return None.
+    For any all-False mask_solid, _build_color_extruded_mesh should return None.
 
     **Validates: Requirements 1.2**
     """
     mask_solid = np.zeros((h, w), dtype=bool)
 
-    mesh = _build_color_contour_mesh(
+    mesh = _build_color_extruded_mesh(
         mask=mask_solid,
         height=h,
         total_layers=1,
@@ -116,7 +116,7 @@ def test_z_span_matches_total_layers(data, total_layers):
     """
     mask_solid, height, width = data
 
-    mesh = _build_color_contour_mesh(
+    mesh = _build_color_extruded_mesh(
         mask=mask_solid,
         height=height,
         total_layers=total_layers,
@@ -148,7 +148,7 @@ def test_face_colors_match_rgba(data):
     """
     mask_solid, height, width = data
 
-    mesh = _build_color_contour_mesh(
+    mesh = _build_color_extruded_mesh(
         mask=mask_solid,
         height=height,
         total_layers=1,

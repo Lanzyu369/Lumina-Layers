@@ -6,7 +6,7 @@ index.md、summary.txt、上传官方反馈服务）+ 启动时清理。
 Design (`.kiro/specs/reproducible-bug-reports/design.md` §Components §5):
 
 * Sync path ``collect_sync_attachments`` runs inside the HTTP handler so the
-  response waits only on small file copies + sha256 (bounded to ~2 s).
+  response waits only on small file copies (bounded to ~2 s).
 * Async path ``finalize_ticket_async`` runs via FastAPI BackgroundTasks; it
   packs ``materials.zip``, renders ``index.md`` / ``summary.txt``, and
   uploads the ticket to the official feedback server. All steps are independently try/except so a
@@ -15,7 +15,7 @@ Design (`.kiro/specs/reproducible-bug-reports/design.md` §Components §5):
 * ``run_startup_cleanup`` purges bulky attachments that outlived their TTL
   and marks abandoned in-flight tickets as ``interrupted``.
 
-同步装配只做小文件拷贝与指纹（HTTP 请求内 ≤2 秒），其余大头（耗材 zip、
+同步装配只做小文件拷贝（HTTP 请求内 ≤2 秒），其余大头（耗材 zip、
 渲染索引、上传工单）放后台任务。启动时清理按 TTL 删除大附件，并把异常残留
 的装配中工单标为 interrupted。
 """
@@ -23,7 +23,6 @@ Design (`.kiro/specs/reproducible-bug-reports/design.md` §Components §5):
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
 import shutil
@@ -40,7 +39,7 @@ from api.feedback_config import (
     materials_bundle_timeout_s,
     ticket_attachment_ttl_days,
 )
-from api.feedback_fingerprint import file_sha256, guess_mime
+from api.feedback_mime import guess_mime
 from api.feedback_hosted import submit_ticket_directory
 from api.feedback_index import generate_index_markdown, generate_summary_text
 from api.feedback_materials_bundle import pack_materials
@@ -121,7 +120,6 @@ def _direct_original_result(
     result: dict[str, Any] = {
         "status": status,
         "filename": None,
-        "sha256": None,
         "size_bytes": None,
         "mime_type": None,
         "source_session_id": session_id,
@@ -201,7 +199,6 @@ async def collect_direct_original_upload(
         )
 
     destination = ticket_dir / f"original{suffix}"
-    digest = hashlib.sha256()
     total_bytes = 0
     destination_created = False
     try:
@@ -220,7 +217,6 @@ async def collect_direct_original_upload(
                     raise OSError(
                         "Short write while saving the direct original image."
                     )
-                digest.update(chunk)
     except Exception as exc:  # noqa: BLE001 - attachment boundary must not abort report.
         if destination_created:
             try:
@@ -253,7 +249,6 @@ async def collect_direct_original_upload(
     return {
         "status": "attached",
         "filename": destination.name,
-        "sha256": digest.hexdigest(),
         "size_bytes": total_bytes,
         "mime_type": guess_mime(destination),
         "source_session_id": session_id,
@@ -272,7 +267,6 @@ def _failed_original_image(
     return {
         "status": "failed",
         "filename": None,
-        "sha256": None,
         "size_bytes": None,
         "mime_type": None,
         "source_session_id": session_id,
@@ -294,7 +288,6 @@ def _failed_final_artifact(
     return {
         "status": "failed",
         "filename": None,
-        "sha256": None,
         "size_bytes": None,
         "artifact_type": artifact_type,
         "source_session_id": session_id,
@@ -319,7 +312,6 @@ def _failed_lut(
         "name": lut_name,
         "preset_relative_path": preset_relative_path,
         "filename": None,
-        "sha256": None,
         "size_bytes": None,
         "metadata": {},
         "error_type": error_type,
@@ -339,7 +331,6 @@ def _empty_lut_attachment() -> dict[str, Any]:
         "name": None,
         "preset_relative_path": None,
         "filename": None,
-        "sha256": None,
         "size_bytes": None,
         "metadata": {},
     }
@@ -561,7 +552,6 @@ def _collect_final_artifact_from_download_url(
     try:
         shutil.copy2(src_path, dst)
         size = dst.stat().st_size
-        sha = file_sha256(dst)
     except OSError as exc:
         try:
             dst.unlink()
@@ -578,7 +568,6 @@ def _collect_final_artifact_from_download_url(
     return {
         "status": "attached",
         "filename": dst.name,
-        "sha256": sha,
         "size_bytes": size,
         "artifact_type": suffix.lstrip(".") or artifact_type,
         "source_session_id": session_id,
@@ -705,7 +694,6 @@ def collect_sync_attachments(
     default_original = {
         "status": "not_applicable",
         "filename": None,
-        "sha256": None,
         "size_bytes": None,
         "mime_type": None,
         "source_session_id": None,
@@ -715,7 +703,6 @@ def collect_sync_attachments(
     default_final = {
         "status": "not_applicable",
         "filename": None,
-        "sha256": None,
         "size_bytes": None,
         "artifact_type": None,
         "source_session_id": None,
@@ -728,7 +715,6 @@ def collect_sync_attachments(
         "name": None,
         "preset_relative_path": None,
         "filename": None,
-        "sha256": None,
         "size_bytes": None,
         "metadata": {},
     }
@@ -915,7 +901,6 @@ def _collect_original_image(
     default_missing = {
         "status": "not_applicable",
         "filename": None,
-        "sha256": None,
         "size_bytes": None,
         "mime_type": None,
         "source_session_id": session_id,
@@ -928,7 +913,6 @@ def _collect_original_image(
     unavailable = {
         "status": "unavailable_after_cleanup",
         "filename": None,
-        "sha256": None,
         "size_bytes": None,
         "mime_type": None,
         "source_session_id": session_id,
@@ -975,7 +959,6 @@ def _copy_original_image_path(
     try:
         shutil.copy2(src_path, dst)
         size = dst.stat().st_size
-        sha = file_sha256(dst)
     except OSError as exc:
         if isinstance(exc, FileNotFoundError) and not src_path.is_file():
             return None
@@ -991,7 +974,6 @@ def _copy_original_image_path(
     return {
         "status": "attached",
         "filename": dst.name,
-        "sha256": sha,
         "size_bytes": size,
         "mime_type": guess_mime(dst),
         "source_session_id": session_id,
@@ -1064,7 +1046,6 @@ def _collect_final_artifact(
     base = {
         "status": "not_applicable",
         "filename": None,
-        "sha256": None,
         "size_bytes": None,
         "artifact_type": artifact_type,
         "source_session_id": session_id,
@@ -1095,7 +1076,6 @@ def _collect_final_artifact(
                     try:
                         shutil.copy2(src_path, dst)
                         size = dst.stat().st_size
-                        sha = file_sha256(dst)
                     except OSError as exc:
                         try:
                             dst.unlink()
@@ -1112,7 +1092,6 @@ def _collect_final_artifact(
                         return {
                             "status": "attached",
                             "filename": dst.name,
-                            "sha256": sha,
                             "size_bytes": size,
                             "artifact_type": suffix.lstrip(".") or artifact_type,
                             "source_session_id": session_id,
@@ -1209,7 +1188,6 @@ def _collect_single_lut(
             is_custom = False
     try:
         size = found.stat().st_size
-        sha = file_sha256(found)
     except OSError as exc:
         return _failed_lut(
             lut_name,
@@ -1239,7 +1217,6 @@ def _collect_single_lut(
             "name": lut_name,
             "preset_relative_path": None,
             "filename": dst.name,
-            "sha256": sha,
             "size_bytes": size,
             "metadata": {},
         }
@@ -1259,7 +1236,6 @@ def _collect_single_lut(
         "name": lut_name,
         "preset_relative_path": rel,
         "filename": None,
-        "sha256": sha,
         "size_bytes": size,
         "metadata": {},
     }
@@ -1289,7 +1265,6 @@ def _attachment_file_path(
     attachment.update(
         {
             "status": "failed",
-            "sha256": None,
             "size_bytes": None,
             "error_type": "AttachmentFileMissing",
             "error_message": failure_message,
@@ -1298,12 +1273,6 @@ def _attachment_file_path(
     return None
 
 
-def _is_sha256_hex(value: Any) -> bool:
-    return (
-        isinstance(value, str)
-        and len(value) == 64
-        and all(char in "0123456789abcdefABCDEF" for char in value)
-    )
 
 
 def _is_positive_int(value: Any) -> bool:
@@ -1337,7 +1306,6 @@ def _mark_invalid_attachment_manifest(
         {
             "status": "failed",
             "filename": None,
-            "sha256": None,
             "size_bytes": None,
             "error_type": "InvalidAttachmentManifest",
             "error_message": "Attachment manifest is invalid.",
@@ -1352,8 +1320,6 @@ def _attachment_metadata_is_valid(
     required_text_fields: tuple[str, ...],
     path: Path | None = None,
 ) -> bool:
-    if not _is_sha256_hex(attachment.get("sha256")):
-        return _mark_invalid_attachment_manifest(attachment)
     if not _is_positive_int(attachment.get("size_bytes")):
         return _mark_invalid_attachment_manifest(attachment)
     if any(
@@ -1364,8 +1330,6 @@ def _attachment_metadata_is_valid(
     if path is not None:
         try:
             if attachment.get("size_bytes") != path.stat().st_size:
-                return _mark_invalid_attachment_manifest(attachment)
-            if str(attachment.get("sha256")).lower() != file_sha256(path).lower():
                 return _mark_invalid_attachment_manifest(attachment)
         except OSError:
             return _mark_invalid_attachment_manifest(attachment)
@@ -1668,7 +1632,6 @@ async def finalize_ticket_async(
                 attachments["materials_bundle"] = {
                     "status": bundle.status,
                     "filename": bundle.path.name if bundle.path else None,
-                    "sha256": bundle.sha256,
                     "compressed_size_bytes": bundle.compressed_size_bytes,
                     "entry_count": bundle.entry_count,
                     "included_dirs": bundle.included_dirs,
