@@ -105,6 +105,13 @@ def _request_with_redirects(
 ) -> httpx.Response:
     current = _validated_remote_url(url)
     for _redirect in range(_MAX_REDIRECTS + 1):
+        if (
+            accept == "application/vnd.github+json"
+            and urlsplit(current).netloc != "api.github.com"
+        ):
+            raise WorkshopReleaseError(
+                "GitHub API metadata must remain inside api.github.com"
+            )
         request = client.build_request(
             "GET",
             current,
@@ -127,9 +134,9 @@ def _request_with_redirects(
 
 
 def fetch_github_json(url: str) -> dict[str, object]:
-    """Fetch one bounded JSON document from a trusted GitHub URL.
+    """Fetch bounded JSON through the HTTPS GitHub API only.
 
-    从可信 GitHub URL 获取一份有界 JSON 文档。
+    仅通过 HTTPS GitHub API 获取有大小限制的 JSON 文档。
     """
 
     chunks: list[bytes] = []
@@ -342,6 +349,34 @@ def _repository_parts(repository_url: str) -> tuple[str, str]:
     return parts[0], parts[1]
 
 
+def _canonical_repository_url(
+    repository_url: str,
+    *,
+    fetch_json: JsonFetcher,
+) -> str:
+    owner, repository = _repository_parts(repository_url)
+    metadata = fetch_json(
+        "https://api.github.com/repos/"
+        f"{quote(owner, safe='')}/{quote(repository, safe='')}"
+    )
+    repository_id = metadata.get("id")
+    full_name = metadata.get("full_name")
+    canonical_url = metadata.get("html_url")
+    if (
+        not isinstance(repository_id, int)
+        or isinstance(repository_id, bool)
+        or repository_id <= 0
+        or not isinstance(full_name, str)
+        or not isinstance(canonical_url, str)
+        or canonical_url != f"https://github.com/{full_name}"
+    ):
+        raise WorkshopReleaseError(
+            "GitHub asset URL does not match the requested repository"
+        )
+    _repository_parts(canonical_url)
+    return canonical_url
+
+
 def resolve_github_release_package(
     repository_url: str,
     version: str,
@@ -349,9 +384,9 @@ def resolve_github_release_package(
     fetch_json: JsonFetcher | None = None,
     package_downloader: PackageDownloader | None = None,
 ) -> Path:
-    """Resolve one full public GitHub Release and its standard asset.
+    """Resolve a full public Release, including confirmed repository moves.
 
-    解析一个正式公开的 GitHub Release 及其标准安装包资源。
+    解析正式公开的 Release 和标准安装包, 支持 GitHub 确认的仓库迁移。
     """
 
     try:
@@ -367,7 +402,8 @@ def resolve_github_release_package(
         f"{quote(owner, safe='')}/{quote(repository, safe='')}/"
         f"releases/tags/{quote(tag, safe='')}"
     )
-    metadata = (fetch_json or fetch_github_json)(metadata_url)
+    active_fetcher = fetch_json or fetch_github_json
+    metadata = active_fetcher(metadata_url)
     if (
         metadata.get("tag_name") != tag
         or metadata.get("draft") is not False
@@ -401,9 +437,17 @@ def resolve_github_release_package(
         f"{repository_url}/releases/download/{tag}/{asset_name}"
     )
     if asset.get("browser_download_url") != expected_url:
-        raise WorkshopReleaseError(
-            "GitHub asset URL does not match the requested repository"
+        canonical_repository = _canonical_repository_url(
+            repository_url,
+            fetch_json=active_fetcher,
         )
+        canonical_asset_url = (
+            f"{canonical_repository}/releases/download/{tag}/{asset_name}"
+        )
+        if asset.get("browser_download_url") != canonical_asset_url:
+            raise WorkshopReleaseError(
+                "GitHub asset URL does not match the requested repository"
+            )
     asset_size = asset.get("size")
     if (
         not isinstance(asset_size, int)
@@ -436,4 +480,3 @@ def resolve_github_release_package(
         _remove_rejected_download(path)
         raise
     return path
-
