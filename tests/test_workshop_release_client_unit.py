@@ -227,6 +227,122 @@ def test_github_release_rejects_encoded_repository_segment() -> None:
         )
 
 
+def test_github_release_accepts_confirmed_repository_transfer(
+    tmp_path: Path,
+) -> None:
+    archive = write_package(tmp_path)
+    metadata = release_metadata(archive)
+    canonical_repository = "https://github.com/new-owner/Fixture-Workshop"
+    metadata["assets"][0]["browser_download_url"] = (
+        f"{canonical_repository}/releases/download/v1.0.0/{archive.name}"
+    )
+    requested_urls: list[str] = []
+    downloaded_urls: list[str] = []
+
+    def fetch_json(url: str) -> dict[str, object]:
+        requested_urls.append(url)
+        if url.endswith("/releases/tags/v1.0.0"):
+            return metadata
+        return {
+            "id": 123,
+            "full_name": "new-owner/Fixture-Workshop",
+            "html_url": canonical_repository,
+        }
+
+    def download(url: str, _size: int | None, _digest: str | None) -> Path:
+        downloaded_urls.append(url)
+        return archive
+
+    resolved = release_client.resolve_github_release_package(
+        REPOSITORY,
+        "1.0.0",
+        fetch_json=fetch_json,
+        package_downloader=download,
+    )
+
+    assert resolved == archive
+    assert requested_urls[-1] == (
+        "https://api.github.com/repos/lumina-layer-studio/Fixture-Workshop"
+    )
+    assert downloaded_urls == [
+        f"{REPOSITORY}/releases/download/v1.0.0/{archive.name}"
+    ]
+
+
+@pytest.mark.parametrize(
+    "repository_metadata",
+    [
+        {
+            "id": True,
+            "full_name": "new-owner/Fixture-Workshop",
+            "html_url": "https://github.com/new-owner/Fixture-Workshop",
+        },
+        {
+            "id": 123,
+            "full_name": "other-owner/Fixture-Workshop",
+            "html_url": "https://github.com/new-owner/Fixture-Workshop",
+        },
+        {
+            "id": 123,
+            "full_name": "new-owner/Fixture-Workshop",
+            "html_url": "https://evil.example/repository",
+        },
+    ],
+)
+def test_github_release_rejects_unconfirmed_repository_transfer(
+    tmp_path: Path,
+    repository_metadata: dict[str, object],
+) -> None:
+    archive = write_package(tmp_path)
+    metadata = release_metadata(archive)
+    metadata["assets"][0]["browser_download_url"] = (
+        "https://github.com/new-owner/Fixture-Workshop/releases/download/"
+        f"v1.0.0/{archive.name}"
+    )
+
+    with pytest.raises(WorkshopReleaseError, match="requested repository"):
+        release_client.resolve_github_release_package(
+            REPOSITORY,
+            "1.0.0",
+            fetch_json=lambda url: (
+                metadata if "/releases/tags/" in url else repository_metadata
+            ),
+            package_downloader=lambda *_args: pytest.fail(
+                "unconfirmed transfer must not download a package"
+            ),
+        )
+
+
+def test_github_metadata_redirect_stays_inside_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_urls: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if request.url.host == "api.github.com":
+            return httpx.Response(
+                302,
+                headers={
+                    "Location": "https://release-assets.githubusercontent.com/metadata"
+                },
+            )
+        return httpx.Response(200, json={"id": 123})
+
+    monkeypatch.setattr(
+        release_client,
+        "_new_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handle)),
+    )
+
+    with pytest.raises(WorkshopReleaseError, match="GitHub API"):
+        release_client.fetch_github_json(
+            "https://api.github.com/repos/lumina-layer-studio/Fixture-Workshop"
+        )
+
+    assert len(requested_urls) == 1
+
+
 def test_stream_download_blocks_redirect_outside_github(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -282,4 +398,3 @@ def test_stream_download_enforces_limit_without_content_length(
         )
 
     assert list(tmp_path.iterdir()) == []
-

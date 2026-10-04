@@ -16,6 +16,20 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-10-04",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [{
+      category: { zh: "稳定性", en: "Stability" },
+      items: [{
+        zh: "创意工坊从 GitHub 安装模块时，现在能识别仓库更名或转移后的地址，修复了官方拼豆工作台因仓库转移而无法安装的问题。",
+        en: "Creative Workshop now recognizes renamed or transferred GitHub repositories when installing modules, fixing installation of the official Fuse Bead Studio after its repository moved.",
+      }],
+    }],
+  },
+  {
     version: "2026-10-03",
     title: {
       zh: "Lumina Layers — 9 月更新速览",

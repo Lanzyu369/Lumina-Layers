@@ -23,28 +23,65 @@ Registry 中标记为 `official` 的模块、预装官方 seed 和测试 fixture
 
 ## 获取不可变 SDK
 
-公开 SDK 的稳定身份是：
+新模块推荐使用的公开 SDK 是：
 
 - npm 包名：`@lumina/workshop-sdk`
-- 版本：`1.0.1`
+- 版本：`1.0.2`
 - 公开源码仓库：`https://github.com/lumina-layer-studio/Lumina-Workshop-SDK`
-- GitHub Release tag：`v1.0.1`
-- 资产：`lumina-workshop-sdk-1.0.1.tgz`
-- 校验文件：`lumina-workshop-sdk-1.0.1.tgz.sha256`
+- GitHub Release tag：`v1.0.2`
+- 资产：`lumina-workshop-sdk-1.0.2.tgz`
+- 校验文件：`lumina-workshop-sdk-1.0.2.tgz.sha256`
 
 SDK 只通过独立公开仓库的不可变 GitHub Release 分发，不发布可变 `latest` 资产，
 也不发布到 npm registry。依赖必须写成包含精确版本的 Release URL：
 
 ```bash
 pnpm add --save-exact \
-  https://github.com/lumina-layer-studio/Lumina-Workshop-SDK/releases/download/v1.0.1/lumina-workshop-sdk-1.0.1.tgz
+  https://github.com/lumina-layer-studio/Lumina-Workshop-SDK/releases/download/v1.0.2/lumina-workshop-sdk-1.0.2.tgz
 ```
 
 发布资产的 SHA-256 是
-`76e6ffab8106b3bfb6a757307b864bff19734397c756afb63a6ac6cfc25dc420`；
+`f23f8d0b5181116e8173c0a6f4171405980269615f429be4805973ec4efa93ad`；
 也可下载同一 Release 的校验文件独立核对。模块仓库必须提交 `pnpm-lock.yaml`，
 CI 使用 `pnpm install --frozen-lockfile`。不要依赖本机 vendor 文件、Lumina
 工作区中的 `workspace:*` 路径或未发布的 SDK 源码。
+
+### 版本兼容与预装包 / Compatibility and bundled modules
+
+SDK 包版本、Workshop API 版本和模块版本分别管理，不能用它们的数字是否相同判断兼容性。
+
+| 项目 / Item | 当前版本 / Version | 用途 / Purpose |
+| --- | --- | --- |
+| 宿主锁定的 SDK / Host SDK pin | `1.0.1` | 固定宿主依赖，不限制模块使用 SDK 1.0.2 / Host pin, not a module SDK requirement |
+| 推荐的模块 SDK / Recommended module SDK | `1.0.2` | 新模块开发 / New module development |
+| Workshop API / Manifest | `1.0.0` / `1` | 两个 SDK 版本共用 / Shared protocol and package format |
+| 官方预装拼豆包 / Bundled bead module | `1.0.1` | 固定的离线安装与恢复包 / Pinned offline installation and recovery |
+| 在线拼豆更新 / Catalog bead update | `1.0.8` | 用户可安装的已审核更新 / Reviewed user-installed update |
+
+SDK 1.0.2 保留 PNG 交接和 `ui.getState()`，新增可选 `svgBytes`、
+`recommendedTotalThicknessMm` 和 `ui.stateChanged` 事件订阅。当前宿主已实现这些扩展；
+面向不支持扩展的旧宿主时，应只发送基础 PNG 交接字段，省略 `svgBytes` 和
+`recommendedTotalThicknessMm`；同时提供 PNG 并不会让旧宿主接受未知字段。
+只面向支持扩展的宿主时，应声明并测试对应宿主范围。宿主不推送事件时仍读取初始状态。
+兼容范围由 manifest 的 `workshopApi` 和 `luminaVersion` 声明，并由宿主安装时校验。
+
+SDK 1.0.1 and 1.0.2 share Workshop API 1.0.0 and manifest v1. SDK 1.0.2 adds
+optional SVG/thickness handoff and live UI events. The current host supports
+these extensions. For older hosts without extension support, send only the base
+PNG handoff fields and omit `svgBytes` and `recommendedTotalThicknessMm`;
+including PNG alongside unknown fields is not a fallback. Alternatively, require
+a tested host range that supports the extensions. Use `ui.getState()` when a host
+does not push UI events.
+Declare and test the required host range in the manifest rather than matching
+the host's SDK dependency version.
+
+预装包保持锁定，不会因为在线目录出现新版本而在启动时强制升级。在线更新仍先作为候选
+版本安装，成功启动后才启用；离线恢复仍使用锁定的预装包。SDK、预装包和签名目录的
+历史资产不得替换或重新发布。
+
+The bundled seed remains pinned and does not force an update on startup.
+Catalog updates activate only after the candidate starts successfully. Offline
+recovery uses the pinned seed; existing release assets remain immutable.
 
 ## 最小仓库结构
 
@@ -116,6 +153,14 @@ URL。
 模块 ID 是永久的全局身份，应使用小写分段名。版本、Release tag、包名和 manifest
 版本必须精确一致。同一模块 ID 不能换仓库或改作另一种产品。
 
+仓库更名或转移时，登记的仓库地址和历史签名记录保持不变。宿主只接受 GitHub API
+从登记地址确认的当前仓库及其精确 Release 资产地址；模块 ID、发布者和审核身份的
+变更仍需单独审核。不要用任意新仓库地址替换登记记录。
+
+Repository redirects preserve the reviewed source identity. GitHub API metadata
+must confirm the current repository before a changed asset URL is accepted;
+publisher or trust changes still require separate review.
+
 ### v1 权限
 
 | 权限 | SDK 调用 | 宿主边界 |
@@ -146,9 +191,13 @@ const client = await connectWorkshop({
   moduleVersion,
 });
 
+const unsubscribeUiState = client.ui.subscribeState(applyWorkshopUiState);
 applyWorkshopUiState(await client.ui.getState());
 await client.lifecycle.ready();
 ```
+
+模块关闭时调用 `unsubscribeUiState()`。SDK 1.0.2 的订阅会重放连接期间收到的最新状态，
+并防止迟到的 `getState()` 返回值覆盖新状态；旧宿主不发送事件时仍可读取初始状态。
 
 握手必须在 iframe load 后 10 秒内完成。普通请求默认 30 秒，图片交接 120 秒，
 原生图片选择器最多等待 5 分钟；控制消息不超过 1 MiB，单次二进制不超过 64 MiB。

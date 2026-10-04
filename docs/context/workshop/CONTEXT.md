@@ -33,6 +33,9 @@ independent module repository
 
 - Public source: `https://github.com/lumina-layer-studio/Lumina-Workshop-SDK`.
 - Exact host dependency: public Release `v1.0.1`.
+- Recommended SDK for new modules: public Release `v1.0.2`. Both SDK
+  releases use Workshop API `1.0.0` and manifest v1. The host dependency pin
+  is not a requirement for the SDK version bundled into an installed module.
 - The SDK owns manifest, permission, RPC, project, color-library, UI-state,
   handoff, and recipe contracts plus the bounded iframe client.
 - The public repository's protected `validate` and Release workflows are the
@@ -40,6 +43,17 @@ independent module repository
 
 The SDK has no dependency on React, Electron, Lumina source, or private host
 objects.
+
+The current host supports SDK 1.0.2's optional native SVG/thickness handoff
+and live UI-state events. Modules targeting older hosts without these extensions
+must omit `svgBytes` and `recommendedTotalThicknessMm`, send only base PNG
+handoff fields, and use `ui.getState()` when UI events are unavailable. Including
+PNG alongside unknown fields does not satisfy older hosts' closed schemas.
+Modules may instead require a tested host range that supports the extensions;
+declare actual host/API compatibility in the manifest.
+The offline bead seed stays at `1.0.1`; the signed online catalog also offers
+the reviewed `1.0.8` module. Startup does not force an online upgrade, and seed
+restore keeps using the exact lock. Existing assets and digests are immutable.
 
 ### Python trust and lifecycle
 
@@ -129,6 +143,10 @@ mode.
 ## Invariants
 
 1. A module ID is permanently bound to one product and reviewed repository.
+   GitHub-confirmed URL redirects do not rewrite that binding. A changed
+   Release asset URL is accepted only when repository metadata fetched through
+   the registered address confirms its current canonical repository. Metadata
+   redirects stay inside the HTTPS GitHub API; package hashes still apply.
 2. Official and community packages use the same package inspection, install
    transaction, sandbox, RPC, quota, health, rollback, and uninstall paths.
 3. A module receives only permissions declared in its exact manifest version.
