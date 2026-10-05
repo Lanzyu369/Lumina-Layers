@@ -120,7 +120,6 @@ import {
   summarizeErrorForLog,
   summarizeFileForLog,
 } from "../../utils/clientLog";
-import { trackLuminaEvent } from "../../analytics/umami";
 import {
   captureGeneratedArtifactIdentity,
   isGeneratedArtifactIdentityCurrent,
@@ -4170,26 +4169,6 @@ function _clientLog(
     phase: label,
     method,
   });
-}
-
-function getElapsedMsSince(startTime: number | null): number | null {
-  if (startTime == null || typeof performance === "undefined") {
-    return null;
-  }
-  return Math.round(performance.now() - startTime);
-}
-
-function getFileCountBucket(count: number): string {
-  if (count <= 0) return "0";
-  if (count === 1) return "1";
-  if (count <= 5) return "2-5";
-  if (count <= 10) return "6-10";
-  if (count <= 25) return "11-25";
-  return "26+";
-}
-
-function getErrorType(error: unknown): string {
-  return error instanceof Error ? error.name : typeof error;
 }
 
 function buildPuzzlePreviewParams(
@@ -9625,15 +9604,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           preview_pixel_height: response.dimensions?.height ?? null,
           warning_count: (response.warnings ?? []).length,
         });
-        trackLuminaEvent("lumina_converter_preview_done", {
-          source_version: state.source_version,
-          source_kind: sourceParams.source_kind,
-          color_mode: colorMode,
-          modeling_mode: state.modeling_mode,
-          elapsed_ms: getElapsedMsSince(_previewStartTime),
-          warning_count: (response.warnings ?? []).length,
-          palette_count: normalizedPalette.length,
-        });
         if (!heightmapReuploadFailed) {
           notifyCompletion("preview");
         }
@@ -9674,13 +9644,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         set({
           isLoading: false,
           error: visibleConverterError(err, "预览失败"),
-        });
-        trackLuminaEvent("lumina_converter_preview_failed", {
-          source_version: state.source_version,
-          color_mode: state.color_mode,
-          modeling_mode: state.modeling_mode,
-          elapsed_ms: getElapsedMsSince(_previewStartTime),
-          error_type: getErrorType(err),
         });
         _previewClientLog(
           "preview: failed",
@@ -10052,17 +10015,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             grid_cols: puzzleResponse.grid_cols ?? null,
             piece_count: puzzleResponse.piece_count ?? null,
           });
-          trackLuminaEvent("lumina_converter_generate_done", {
-            source_version: state.source_version,
-            source_kind: sourceParams.source_kind,
-            color_mode: colorMode,
-            modeling_mode: state.modeling_mode,
-            output_kind: "puzzle_3mf",
-            puzzle: true,
-            large_format: false,
-            elapsed_ms: getElapsedMsSince(_generateStartTime),
-            warning_count: (puzzleResponse.warnings ?? []).length,
-          });
           notifyCompletion("generation");
           return null;
         }
@@ -10100,17 +10052,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             target_height_mm: state.target_height_mm,
             tile_width_mm: state.tileWidthMm,
             tile_height_mm: state.tileHeightMm,
-          });
-          trackLuminaEvent("lumina_converter_generate_done", {
-            source_version: state.source_version,
-            source_kind: sourceParams.source_kind,
-            color_mode: colorMode,
-            modeling_mode: state.modeling_mode,
-            output_kind: "large_format_zip",
-            puzzle: false,
-            large_format: true,
-            elapsed_ms: getElapsedMsSince(_generateStartTime),
-            warning_count: (lfResponse.warnings ?? []).length,
           });
           notifyCompletion("generation");
           return null;
@@ -10164,17 +10105,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           has_legacy_threemf_disk_path: Boolean(response.threemf_disk_path),
           warning_count: (response.warnings ?? []).length,
         });
-        trackLuminaEvent("lumina_converter_generate_done", {
-          source_version: state.source_version,
-          source_kind: sourceParams.source_kind,
-          color_mode: colorMode,
-          modeling_mode: state.modeling_mode,
-          output_kind: "threemf",
-          puzzle: false,
-          large_format: false,
-          elapsed_ms: getElapsedMsSince(_generateStartTime),
-          warning_count: (response.warnings ?? []).length,
-        });
         notifyCompletion("generation");
         return null;
       } catch (err) {
@@ -10203,15 +10133,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         set({
           isGenerating: false,
           error: visibleConverterError(err, "生成失败"),
-        });
-        trackLuminaEvent("lumina_converter_generate_failed", {
-          source_version: state.source_version,
-          color_mode: state.color_mode,
-          modeling_mode: state.modeling_mode,
-          puzzle: state.puzzleEnabled,
-          large_format: state.largeFormatEnabled,
-          elapsed_ms: getElapsedMsSince(_generateStartTime),
-          error_type: getErrorType(err),
         });
         _clientLog("generate: failed", summarizeErrorForLog(err), "error");
         return null;
@@ -10709,9 +10630,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
     submitBatch: async () => {
       let state = _get();
-      const batchStartTime =
-        typeof performance !== "undefined" ? performance.now() : null;
-      const batchFileCount = state.batchFiles.length;
       const sourceSelection = resolveConverterSourceSelection(state);
       if (!sourceSelection.isReady) {
         set({
@@ -10879,29 +10797,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           downloadUrl,
           threemfDiskPath: null,
         });
-        trackLuminaEvent("lumina_batch_convert_done", {
-          source_version: state.source_version,
-          source_kind: sourceParams.source_kind,
-          color_mode: state.color_mode,
-          modeling_mode: state.modeling_mode,
-          file_count_bucket: getFileCountBucket(batchFileCount),
-          elapsed_ms: getElapsedMsSince(batchStartTime),
-          preview_item_count: previewItems.length,
-        });
         notifyCompletion("batch");
       } catch (err) {
         if (!isCurrentBatchRequest()) return;
         set({
           batchLoading: false,
           error: visibleConverterError(err, "批量处理失败"),
-        });
-        trackLuminaEvent("lumina_batch_convert_failed", {
-          source_version: state.source_version,
-          color_mode: state.color_mode,
-          modeling_mode: state.modeling_mode,
-          file_count_bucket: getFileCountBucket(batchFileCount),
-          elapsed_ms: getElapsedMsSince(batchStartTime),
-          error_type: getErrorType(err),
         });
       }
     },
