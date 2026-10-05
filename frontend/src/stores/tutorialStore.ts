@@ -2,13 +2,12 @@
  * Beginner tutorial orchestration store.
  * 新手引导编排 store。
  *
- * Owns the welcome/tour phase, the current step, first-run persistence, and
- * usage analytics. Components only render state and call these actions.
- * 负责欢迎窗/分步引导阶段、当前步骤、首次启动记录和使用统计；
+ * Owns the welcome/tour phase, the current step, and first-run persistence.
+ * Components only render state and call these actions.
+ * 负责欢迎窗/分步引导阶段、当前步骤和首次启动记录；
  * 组件只负责渲染状态并调用这些 action。
  */
 import { create } from "zustand";
-import { trackLuminaEvent } from "../analytics/umami";
 import { TUTORIAL_STEPS } from "../data/tutorialSteps";
 import type { TutorialStep } from "../data/tutorialSteps";
 import type { ConverterSubTabId, TabId, WidgetId } from "../types/widget";
@@ -35,7 +34,6 @@ interface TutorialState {
   phase: TutorialPhase;
   stepIndex: number;
   trigger: TutorialTrigger;
-  startedAtMs: number | null;
   /** Open the welcome dialog once per device. 每台设备只自动弹出一次欢迎窗。 */
   offerFirstRun: () => void;
   startTour: (trigger: TutorialTrigger) => void;
@@ -195,22 +193,6 @@ export function applyTutorialStepPrepare(step: TutorialStep): void {
   }
 }
 
-function elapsedSeconds(startedAtMs: number | null): number | null {
-  if (startedAtMs === null) {
-    return null;
-  }
-  return Math.max(0, Math.round((Date.now() - startedAtMs) / 1000));
-}
-
-function trackStepView(trigger: TutorialTrigger, stepIndex: number): void {
-  trackLuminaEvent("lumina_tutorial_step_view", {
-    trigger,
-    step_id: TUTORIAL_STEPS[stepIndex]?.id ?? null,
-    step_index: stepIndex + 1,
-    total_steps: TOTAL_STEPS,
-  });
-}
-
 export const useTutorialStore = create<TutorialState>()((set, get) => {
   const goToStep = (stepIndex: number) => {
     const step = TUTORIAL_STEPS[stepIndex];
@@ -219,14 +201,12 @@ export const useTutorialStore = create<TutorialState>()((set, get) => {
     }
     applyTutorialStepPrepare(step);
     set({ stepIndex });
-    trackStepView(get().trigger, stepIndex);
   };
 
   return {
     phase: "idle",
     stepIndex: 0,
     trigger: "auto",
-    startedAtMs: null,
 
     offerFirstRun: () => {
       if (get().phase !== "idle" || hasTutorialBeenOffered()) {
@@ -236,8 +216,7 @@ export const useTutorialStore = create<TutorialState>()((set, get) => {
       // still counts as "shown once".
       // 在用户做选择前就记录，确保中途关闭软件也算「已弹出过一次」。
       writeTutorialProgress("offered");
-      set({ phase: "welcome", trigger: "auto", stepIndex: 0, startedAtMs: null });
-      trackLuminaEvent("lumina_tutorial_offered");
+      set({ phase: "welcome", trigger: "auto", stepIndex: 0 });
     },
 
     startTour: (trigger) => {
@@ -245,8 +224,7 @@ export const useTutorialStore = create<TutorialState>()((set, get) => {
         return;
       }
       captureWorkspace();
-      set({ phase: "touring", trigger, startedAtMs: Date.now() });
-      trackLuminaEvent("lumina_tutorial_started", { trigger });
+      set({ phase: "touring", trigger });
       goToStep(0);
     },
 
@@ -270,38 +248,24 @@ export const useTutorialStore = create<TutorialState>()((set, get) => {
       goToStep(stepIndex - 1);
     },
 
-    skip: (via) => {
-      const { phase, stepIndex, trigger, startedAtMs } = get();
+    skip: (_via) => {
+      const { phase } = get();
       if (phase === "idle") {
         return;
       }
-      const onWelcome = phase === "welcome";
       writeTutorialProgress("skipped");
-      trackLuminaEvent("lumina_tutorial_skipped", {
-        trigger,
-        via,
-        step_id: onWelcome ? "welcome" : (TUTORIAL_STEPS[stepIndex]?.id ?? null),
-        step_index: onWelcome ? 0 : stepIndex + 1,
-        total_steps: TOTAL_STEPS,
-        elapsed_s: elapsedSeconds(startedAtMs),
-      });
       restoreWorkspace();
-      set({ phase: "idle", stepIndex: 0, startedAtMs: null });
+      set({ phase: "idle", stepIndex: 0 });
     },
 
     finish: () => {
-      const { phase, trigger, startedAtMs } = get();
+      const { phase } = get();
       if (phase !== "touring") {
         return;
       }
       writeTutorialProgress("completed");
-      trackLuminaEvent("lumina_tutorial_completed", {
-        trigger,
-        total_steps: TOTAL_STEPS,
-        elapsed_s: elapsedSeconds(startedAtMs),
-      });
       restoreWorkspace();
-      set({ phase: "idle", stepIndex: 0, startedAtMs: null });
+      set({ phase: "idle", stepIndex: 0 });
     },
 
     recoverInterruptedTour: () => {
