@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { apiStatusCodeToVisibleMessage } from "../api/client";
 import { submitBugReport } from "../api/feedback";
 import type { BugReportRequestPayload, BugReportResponse } from "../api/feedback";
+import { trackLuminaEvent } from "../analytics/umami";
 import { useBugReportUploadStatus } from "../hooks/useBugReportUploadStatus";
 import { useI18n } from "../i18n/context";
 import {
@@ -572,7 +573,12 @@ export function BugReportModal({
       setSubmitting(false);
       setCopied(false);
       setSubmittedReportCopied(false);
-    } catch {
+      trackLuminaEvent("lumina_bug_report_done", {
+        active_tab: context.active_tab,
+        has_screenshot: Boolean(screenshotDataUrl),
+        delivery_status: response.submission_status,
+      });
+    } catch (err) {
       setNotice({
         tone: "error",
         message: t("bug_report_toast_error"),
@@ -582,6 +588,11 @@ export function BugReportModal({
         copied: false,
       });
       setSubmitting(false);
+      trackLuminaEvent("lumina_bug_report_failed", {
+        active_tab: context.active_tab,
+        has_screenshot: Boolean(screenshotDataUrl),
+        error_type: err instanceof Error ? err.name : typeof err,
+      });
     }
   };
 
