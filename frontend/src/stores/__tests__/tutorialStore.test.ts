@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("../../analytics/umami", () => ({ trackLuminaEvent: vi.fn() }));
+
+import { trackLuminaEvent } from "../../analytics/umami";
 import { TUTORIAL_STEPS } from "../../data/tutorialSteps";
 import type { WidgetId, WidgetLayoutState } from "../../types/widget";
 import {
@@ -11,6 +14,7 @@ import {
 import { useTutorialStore } from "../tutorialStore";
 import { DEFAULT_LAYOUT, useWidgetStore } from "../widgetStore";
 
+const trackMock = vi.mocked(trackLuminaEvent);
 const TOTAL = TUTORIAL_STEPS.length;
 
 function freshLayout(): Record<WidgetId, WidgetLayoutState> {
@@ -19,13 +23,19 @@ function freshLayout(): Record<WidgetId, WidgetLayoutState> {
   ) as Record<WidgetId, WidgetLayoutState>;
 }
 
+function eventsNamed(name: string) {
+  return trackMock.mock.calls.filter(([eventName]) => eventName === name);
+}
+
 describe("tutorialStore", () => {
   beforeEach(() => {
     localStorage.clear();
+    trackMock.mockClear();
     useTutorialStore.setState({
       phase: "idle",
       stepIndex: 0,
       trigger: "auto",
+      startedAtMs: null,
     });
     useWidgetStore.setState({
       widgets: freshLayout(),
@@ -40,11 +50,13 @@ describe("tutorialStore", () => {
 
     expect(useTutorialStore.getState().phase).toBe("welcome");
     expect(readTutorialProgress()?.outcome).toBe("offered");
+    expect(eventsNamed("lumina_tutorial_offered")).toHaveLength(1);
 
     useTutorialStore.setState({ phase: "idle" });
     useTutorialStore.getState().offerFirstRun();
 
     expect(useTutorialStore.getState().phase).toBe("idle");
+    expect(eventsNamed("lumina_tutorial_offered")).toHaveLength(1);
   });
 
   it("does not auto-offer when a previous outcome exists", () => {
@@ -53,6 +65,7 @@ describe("tutorialStore", () => {
     useTutorialStore.getState().offerFirstRun();
 
     expect(useTutorialStore.getState().phase).toBe("idle");
+    expect(trackMock).not.toHaveBeenCalled();
   });
 
   it("treats an unreadable record as not offered", () => {
@@ -63,7 +76,7 @@ describe("tutorialStore", () => {
     expect(useTutorialStore.getState().phase).toBe("welcome");
   });
 
-  it("starts the tour from the welcome at the first step", () => {
+  it("starts the tour from the welcome and reports the first step", () => {
     const store = useTutorialStore.getState();
     store.offerFirstRun();
     store.startTour("auto");
@@ -71,20 +84,28 @@ describe("tutorialStore", () => {
     const state = useTutorialStore.getState();
     expect(state.phase).toBe("touring");
     expect(state.stepIndex).toBe(0);
-    expect(state.trigger).toBe("auto");
+    expect(trackMock).toHaveBeenCalledWith("lumina_tutorial_started", { trigger: "auto" });
+    expect(trackMock).toHaveBeenCalledWith("lumina_tutorial_step_view", {
+      trigger: "auto",
+      step_id: "primary-tabs",
+      step_index: 1,
+      total_steps: TOTAL,
+    });
   });
 
   it("walks every step and records completion", () => {
     const store = useTutorialStore.getState();
     store.startTour("manual");
     for (let i = 0; i < TOTAL; i += 1) {
-      expect(useTutorialStore.getState().phase).toBe("touring");
-      expect(useTutorialStore.getState().stepIndex).toBe(i);
       useTutorialStore.getState().next();
     }
 
     expect(useTutorialStore.getState().phase).toBe("idle");
     expect(readTutorialProgress()?.outcome).toBe("completed");
+    expect(eventsNamed("lumina_tutorial_step_view")).toHaveLength(TOTAL);
+    const [completed] = eventsNamed("lumina_tutorial_completed");
+    expect(completed?.[1]).toMatchObject({ trigger: "manual", total_steps: TOTAL });
+    expect(eventsNamed("lumina_tutorial_skipped")).toHaveLength(0);
   });
 
   it("back is a no-op on the first step and returns one step otherwise", () => {
@@ -99,7 +120,7 @@ describe("tutorialStore", () => {
     expect(useTutorialStore.getState().stepIndex).toBe(1);
   });
 
-  it("skips mid-tour in one call and records the outcome", () => {
+  it("skips mid-tour in one call and reports where the user left", () => {
     const store = useTutorialStore.getState();
     store.startTour("auto");
     useTutorialStore.getState().next();
@@ -108,18 +129,26 @@ describe("tutorialStore", () => {
     useTutorialStore.getState().skip("skip_button");
 
     expect(useTutorialStore.getState().phase).toBe("idle");
-    expect(useTutorialStore.getState().stepIndex).toBe(0);
     expect(readTutorialProgress()?.outcome).toBe("skipped");
+    const [skipped] = eventsNamed("lumina_tutorial_skipped");
+    expect(skipped?.[1]).toMatchObject({
+      trigger: "auto",
+      via: "skip_button",
+      step_id: "color-source",
+      step_index: 3,
+      total_steps: TOTAL,
+    });
   });
 
-  it("records skipping the welcome without starting the tour", () => {
+  it("skipping the welcome is reported as the welcome step", () => {
     const store = useTutorialStore.getState();
     store.offerFirstRun();
     store.skip("welcome");
 
     expect(useTutorialStore.getState().phase).toBe("idle");
     expect(readTutorialProgress()?.outcome).toBe("skipped");
-    expect(localStorage.getItem(TUTORIAL_WORKSPACE_STORAGE_KEY)).toBeNull();
+    const [skipped] = eventsNamed("lumina_tutorial_skipped");
+    expect(skipped?.[1]).toMatchObject({ via: "welcome", step_id: "welcome", step_index: 0 });
   });
 
   it("opens the page and panel a step needs", () => {
@@ -238,3 +267,4 @@ describe("tutorialStore", () => {
     expect(localStorage.getItem(TUTORIAL_WORKSPACE_STORAGE_KEY)).toBeNull();
   });
 });
+

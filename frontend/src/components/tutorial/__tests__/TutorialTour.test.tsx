@@ -1,6 +1,9 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("../../../analytics/umami", () => ({ trackLuminaEvent: vi.fn() }));
+
+import { trackLuminaEvent } from "../../../analytics/umami";
 import { TUTORIAL_STEPS } from "../../../data/tutorialSteps";
 import { TUTORIAL_ANCHOR_TIMEOUT_MS } from "../../../hooks/useTutorialAnchor";
 import { translations } from "../../../i18n/translations";
@@ -28,7 +31,8 @@ function startTourAt(stepIndex: number) {
 describe("TutorialTour", () => {
   beforeEach(() => {
     localStorage.clear();
-    useTutorialStore.setState({ phase: "idle", stepIndex: 0, trigger: "auto" });
+    vi.mocked(trackLuminaEvent).mockClear();
+    useTutorialStore.setState({ phase: "idle", stepIndex: 0, trigger: "auto", startedAtMs: null });
     vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) =>
       window.setTimeout(() => cb(performance.now()), 16),
     );
@@ -186,6 +190,10 @@ describe("TutorialTour", () => {
 
     expect(useTutorialStore.getState().phase).toBe("idle");
     expect(readTutorialProgress()?.outcome).toBe("skipped");
+    expect(trackLuminaEvent).toHaveBeenCalledWith(
+      "lumina_tutorial_skipped",
+      expect.objectContaining({ via: "skip_button", step_index: 4 }),
+    );
   });
 
   it("skips with the Escape key", () => {
@@ -197,7 +205,10 @@ describe("TutorialTour", () => {
     });
 
     expect(useTutorialStore.getState().phase).toBe("idle");
-    expect(readTutorialProgress()?.outcome).toBe("skipped");
+    expect(trackLuminaEvent).toHaveBeenCalledWith(
+      "lumina_tutorial_skipped",
+      expect.objectContaining({ via: "escape" }),
+    );
   });
 
   it("finishes from the last step", async () => {

@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("../../../analytics/umami", () => ({ trackLuminaEvent: vi.fn() }));
 vi.mock("../TutorialTour", () => ({
   default: () => <div data-testid="tutorial-tour-stub" />,
 }));
@@ -20,7 +21,7 @@ const zh = (key: string) => translations[key].zh;
 describe("TutorialHost", () => {
   beforeEach(() => {
     localStorage.clear();
-    useTutorialStore.setState({ phase: "idle", stepIndex: 0, trigger: "auto" });
+    useTutorialStore.setState({ phase: "idle", stepIndex: 0, trigger: "auto", startedAtMs: null });
   });
 
   afterEach(() => {
