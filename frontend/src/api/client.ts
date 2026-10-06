@@ -2,6 +2,7 @@ import axios from "axios";
 import { postClientLog, summarizeErrorForLog } from "../utils/clientLog";
 import { isUnsafeVisibleErrorText } from "../utils/visibleErrorText";
 import { useActionHistoryStore } from "../stores/actionHistoryStore";
+import { useErrorTicketPromptStore } from "../stores/errorTicketPromptStore";
 import { tRuntime } from "../i18n/runtime";
 
 export interface ApiRequestOptions {
@@ -786,6 +787,14 @@ function recordApiFailure({
       // 即便历史记录失败，也不得影响 HTTP 调用链。
     }
   }
+  // Offer a bug-report ticket for unexpected server failures (5xx only).
+  // 服务端意外错误（仅 5xx）时提示用户是否提交工单。
+  useErrorTicketPromptStore.getState().reportApiError({
+    statusCode,
+    path: url,
+    requestId,
+    message: readableMessage,
+  });
 }
 
 async function readResourceErrorData(response: Response): Promise<unknown> {
