@@ -10,25 +10,10 @@ Runtime lookup: given target sRGB colors, a KD-Tree over occupied bucket
 centers finds the nearest stored recipe. Worst-case ΔE(target, achieved) is
 bounded by a cell's half-diagonal; typical error is ~1-2 ΔE for the 128³ default.
 
-On-disk layout (one ``.npz`` + one ``.meta.json`` sidecar per cache entry):
-
-    <cache_root>/
-        <palette_hash>-N<count>-t<height_str>-<substrate>-g<grid>.npz
-        <palette_hash>-N<count>-t<height_str>-<substrate>-g<grid>.meta.json
-
-Filename components:
-    palette_hash       — 16-char sha256 prefix of the canonically-ordered palette
-    N<count>           — zero-padded layer count (e.g. ``N10``)
-    t<height_str>      — layer height with dots replaced by underscores (e.g. ``t0_08``)
-    <substrate>        — ``"white"`` or ``"black"``
-    g<grid>            — zero-padded Lab grid resolution (e.g. ``g128``)
-
-Legacy caches written before the grid-resolution suffix was introduced live
-at ``<...>-<substrate>.npz`` (no ``-g<grid>`` tail). The loader falls back to
-that legacy path whenever the new suffixed path is missing **and** the legacy
-file's metadata reports a ``grid_resolution`` that matches the caller's
-expected value; this keeps pre-existing 64³ caches readable for callers that
-explicitly request ``grid_resolution=64``.
+Each cache uses an opaque record filename and a small ``.meta.json`` sidecar.
+Reuse compares the saved material identities, effective optical parameters,
+layer settings, grid and solver version directly. Older entries without these
+descriptors remain on disk but are not reused.
 
 Public API:
     - ``MaterialSolverCache``          — loaded cache with ``lookup()``
@@ -37,7 +22,7 @@ Public API:
     - ``load_material_solver_cache``   — load from disk
     - ``cache_file_path``              — canonical on-disk path for parameters
     - ``default_cache_directory``      — cache root (launcher override or materials fallback)
-    - ``fingerprint_palette``          — stable hash of material parameters
+    - ``describe_palette``             — canonical effective material descriptors
     - ``list_cached_entries``          — enumerate cached combinations
 """
 
@@ -45,10 +30,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import os
-import re
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from itertools import chain
@@ -61,6 +45,7 @@ from scipy.spatial import cKDTree
 from scipy.spatial.distance import cdist
 
 from config import MATERIALS_DIR
+from api.structured_logging import get_logger
 from core.material_color_solver import (
     ALLOWED_LAYER_HEIGHTS_MM,
     DEFAULT_SUGGEST_MIN_SPACING,
@@ -79,7 +64,7 @@ from core.material_color_solver import (
 )
 from core.task_parallelism import task_parallelism_worker_scope
 
-_log = logging.getLogger(__name__)
+_log = get_logger(__name__)
 
 # Maximum CIE76 ΔE penalty tolerated when switching from the CIE76-best
 # candidate to a hue-aware candidate.  If the hue pick's ΔE exceeds the
@@ -160,11 +145,11 @@ adapters must reject unknown values with a 4xx error.
 pipeline 适配层必须拒绝白名单之外的值并返回 4xx。
 """
 
-CACHE_SCHEMA_VERSION: str = "1.1"
+CACHE_SCHEMA_VERSION: str = "2.0"
+CACHE_SOLVER_VERSION: str = "continuous-lab-v2"
 CACHE_SUBDIR: str = "_solver_cache"
 
-_FINGERPRINT_DECIMALS: int = 6
-_HASH_PREFIX_LEN: int = 16
+_PARAMETER_DECIMALS: int = 6
 
 _CHUNK_TARGET_BYTES: int = 64 * 1024 * 1024
 """Local temporary-array target for one build chunk."""
@@ -188,50 +173,80 @@ def _is_exact_mode_eligible(num_materials: int, layer_count: int) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Palette fingerprinting
+# Effective material descriptors
 # ---------------------------------------------------------------------------
 
 
-def _material_fingerprint(mat: MaterialParams) -> str:
-    """Stable content hash of a material's Beer-Lambert parameters.
-    耗材 Beer-Lambert 参数的稳定内容哈希。
+def describe_material(mat: MaterialParams) -> dict[str, Any]:
+    """Describe stable identity and effective Beer-Lambert parameters.
+    描述稳定耗材身份与有效 Beer-Lambert 参数。
 
-    Rounds each float to :data:`_FINGERPRINT_DECIMALS` decimals so tiny
-    floating-point jitter across fit runs does not invalidate caches.
+    Preserve the existing six-decimal cache equivalence for fitted parameters.
+    保留拟合参数现有的六位小数缓存等价规则。
+
+    Args:
+        mat: Material identity and optical parameters. 耗材身份与光学参数。
+
+    Returns:
+        dict[str, Any]: JSON-compatible effective descriptor.
+            可 JSON 序列化的有效参数描述。
     """
-    payload = {
-        "E": [round(float(v), _FINGERPRINT_DECIMALS) for v in mat.E.tolist()],
-        "k": [round(float(v), _FINGERPRINT_DECIMALS) for v in mat.k.tolist()],
+    return {
+        "directory_name": str(mat.directory_name),
+        "name": str(mat.name),
+        "E": [round(float(v), _PARAMETER_DECIMALS) for v in mat.E.tolist()],
+        "k": [round(float(v), _PARAMETER_DECIMALS) for v in mat.k.tolist()],
         "C0_white": [
-            round(float(v), _FINGERPRINT_DECIMALS) for v in mat.C0_white.tolist()
+            round(float(v), _PARAMETER_DECIMALS) for v in mat.C0_white.tolist()
         ],
     }
-    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def describe_palette(materials: list[MaterialParams]) -> list[dict[str, Any]]:
+    """Return directly comparable descriptors in established recipe order.
+    按既有配方顺序返回可直接比较的耗材描述。
+
+    Materials with equal optical parameters keep their original input order.
+    光学参数相同的耗材保持原输入顺序。
+
+    Args:
+        materials: Non-empty material palette. 非空耗材列表。
+
+    Returns:
+        list[dict[str, Any]]: Descriptors in canonical recipe-column order.
+            按规范配方列顺序排列的耗材描述。
+    """
+    if not materials:
+        raise ValueError("Cannot describe an empty palette")
+    return [describe_material(materials[i]) for i in canonical_palette_order(materials)]
+
+
+def _legacy_material_enumeration_key(mat: MaterialParams) -> str:
+    """Preserve the numerical algorithm's established material ordering only.
+
+    Bounded sampling and equal-color recipe choices depend on this historical
+    order. It is never a cache identity, filename, or equality check.
+    """
+    descriptor = describe_material(mat)
+    optical_parameters = {
+        field: descriptor[field] for field in ("E", "k", "C0_white")
+    }
+    serialized = json.dumps(optical_parameters, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
-def fingerprint_palette(materials: list[MaterialParams]) -> str:
-    """Compute a canonical 16-char fingerprint for a palette.
-    计算调色板的 16 字符规范指纹。
-
-    The fingerprint is independent of the caller's material ordering: materials
-    are sorted by their individual fingerprint before the palette hash is
-    computed. Callers who rebind recipe columns must use the canonical order
-    returned by :func:`canonical_palette_order`.
-    """
-    if not materials:
-        raise ValueError("Cannot fingerprint an empty palette")
-    per_material = sorted(_material_fingerprint(m) for m in materials)
-    palette_blob = "|".join(per_material)
-    return hashlib.sha256(palette_blob.encode("utf-8")).hexdigest()[:_HASH_PREFIX_LEN]
-
-
 def canonical_palette_order(materials: list[MaterialParams]) -> list[int]:
-    """Return indices such that ``[materials[i] for i in order]`` is canonical.
-    返回将耗材列表重排为规范顺序的索引列表。
+    """Return the established enumeration and sampling order of material indices.
+    返回既有枚举与采样算法使用的耗材索引顺序。
+
+    Preserve historical optical-parameter ordering and stable input ties so
+    existing color results and physical recipes remain unchanged. Cache reuse
+    separately compares full material descriptors directly.
+    保留历史光学参数排序与输入顺序并列规则，使颜色结果和物理配方保持不变。
+    缓存复用另行直接比较完整耗材描述。
     """
-    fingerprints = [_material_fingerprint(m) for m in materials]
-    return sorted(range(len(materials)), key=lambda i: fingerprints[i])
+    enumeration_keys = [_legacy_material_enumeration_key(material) for material in materials]
+    return sorted(range(len(materials)), key=lambda i: enumeration_keys[i])
 
 
 # ---------------------------------------------------------------------------
@@ -271,37 +286,37 @@ def default_cache_directory(cache_root: str | Path | None = None) -> Path:
     return root / CACHE_SUBDIR
 
 
-def _height_to_str(layer_height_mm: float) -> str:
-    return f"{float(layer_height_mm):g}".replace(".", "_")
+def _find_cache_record(directory: Path, expected: dict[str, Any]) -> Path | None:
+    records = []
+    for meta_path in sorted(directory.glob("*.meta.json")):
+        try:
+            metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if isinstance(metadata, dict) and metadata.get("cache_id") and all(
+            metadata.get(key) == value for key, value in expected.items()
+        ):
+            records.append(meta_path.with_name(
+                meta_path.name.removesuffix(".meta.json") + ".npz"
+            ))
+    return records[0] if records else None
 
 
-def _cache_file_stem(
-    palette_hash: str,
-    layer_count: int,
-    layer_height_mm: float,
-    substrate: str,
-    grid_resolution: int,
-) -> str:
-    return (
-        f"{palette_hash}-N{int(layer_count):02d}"
-        f"-t{_height_to_str(layer_height_mm)}-{substrate}"
-        f"-g{int(grid_resolution):03d}"
-    )
-
-
-def _legacy_cache_file_stem(
-    palette_hash: str,
-    layer_count: int,
-    layer_height_mm: float,
-    substrate: str,
-) -> str:
-    """Pre-``-g<grid>`` filename stem, used only for backward-compatible loads.
-    引入 ``-g<grid>`` 之前的缓存文件名词干，仅在向后兼容加载时使用。
-    """
-    return (
-        f"{palette_hash}-N{int(layer_count):02d}"
-        f"-t{_height_to_str(layer_height_mm)}-{substrate}"
-    )
+def _solver_cache_parameters(
+    materials: list[MaterialParams], layer_count: int, layer_height_mm: float,
+    substrate: str, grid_resolution: int | None = None,
+) -> dict[str, Any]:
+    expected = {
+        "schema_version": CACHE_SCHEMA_VERSION,
+        "solver_version": CACHE_SOLVER_VERSION,
+        "canonical_materials": describe_palette(materials),
+        "layer_count": int(layer_count),
+        "layer_height_mm": float(layer_height_mm),
+        "substrate": str(substrate),
+    }
+    if grid_resolution is not None:
+        expected["grid_resolution"] = int(grid_resolution)
+    return expected
 
 
 def cache_file_path(
@@ -313,43 +328,23 @@ def cache_file_path(
     grid_resolution: int = DEFAULT_GRID_RESOLUTION,
     cache_root: str | Path | None = None,
 ) -> Path:
-    """Resolve the canonical ``.npz`` path for the given cache parameters.
-    返回指定缓存参数对应的规范 ``.npz`` 路径。
+    """Find a matching record, or allocate an opaque path for a new entry.
+    查找匹配记录，或为新条目分配不透明路径。
 
     Args:
         materials: Palette used for enumeration. (枚举用耗材列表)
         layer_count: Number of layers per pixel. (每像素层数)
         layer_height_mm: Layer thickness in mm. (层厚 mm)
         substrate: ``"white"`` or ``"black"``. (基底)
-        grid_resolution: Lab grid cells per axis written into the filename
-            suffix; defaults to :data:`DEFAULT_GRID_RESOLUTION`. Callers that
-            need a non-default resolution (for testing, multi-resolution
-            coexistence, etc.) must pass it explicitly.
-            (写入文件名后缀的 Lab 网格分辨率，默认 :data:`DEFAULT_GRID_RESOLUTION`)
+        grid_resolution: Expected Lab cells per axis; zero selects exact mode.
+            期望的 Lab 每轴格数；零表示精确模式。
         cache_root: Optional override for the cache directory. (可选缓存根目录)
     """
-    palette_hash = fingerprint_palette(materials)
-    stem = _cache_file_stem(
-        palette_hash, layer_count, layer_height_mm, substrate, grid_resolution
-    )
-    return default_cache_directory(cache_root) / f"{stem}.npz"
-
-
-def _legacy_cache_file_path(
-    palette_hash: str,
-    layer_count: int,
-    layer_height_mm: float,
-    substrate: str,
-    *,
-    cache_root: str | Path | None = None,
-) -> Path:
-    """Resolve the pre-``-g<grid>`` legacy ``.npz`` path.
-    返回引入 ``-g<grid>`` 之前的历史 ``.npz`` 路径。
-    """
-    stem = _legacy_cache_file_stem(
-        palette_hash, layer_count, layer_height_mm, substrate
-    )
-    return default_cache_directory(cache_root) / f"{stem}.npz"
+    directory = default_cache_directory(cache_root)
+    existing = _find_cache_record(directory, _solver_cache_parameters(
+        materials, layer_count, layer_height_mm, substrate, grid_resolution
+    ))
+    return existing or directory / f"solver-{uuid.uuid4().hex}.npz"
 
 
 def _cache_meta_path_for(npz_path: Path) -> Path:
@@ -974,7 +969,7 @@ class MaterialSolverCache:
             (纯色配方，每种耗材一条，不受桶碰撞剔除)
         uniform_achieved_srgb: (M, 3) uint8 predicted sRGB for each pure-colour
             recipe. (每条纯色配方的预测 sRGB)
-        metadata: JSON-serialisable dictionary with palette fingerprint,
+        metadata: JSON-serialisable dictionary with material descriptors,
             parameters, build stats, and timestamps. (元数据)
     """
 
@@ -1010,8 +1005,18 @@ class MaterialSolverCache:
         return str(self.metadata["substrate"])
 
     @property
+    def cache_id(self) -> str:
+        """Return this opaque cache record ID.
+        返回不透明缓存记录 ID。
+        """
+        return str(self.metadata["cache_id"])
+
+    @property
     def palette_hash(self) -> str:
-        return str(self.metadata["palette_hash"])
+        """Expose the record ID through the historic public API name.
+        通过历史公开 API 名返回记录 ID。
+        """
+        return self.cache_id
 
     @property
     def grid_resolution(self) -> int:
@@ -1095,7 +1100,7 @@ class MaterialSolverCache:
 
         Raises:
             ValueError: If ``target_srgb`` is not shaped ``(C, 3)``, the
-                caller's palette fingerprint does not match the cache, or the
+                caller's material descriptors does not match the cache, or the
                 cache contains no populated cells.
         """
         if target_srgb.ndim != 2 or target_srgb.shape[1] != 3:
@@ -1112,13 +1117,8 @@ class MaterialSolverCache:
                 "MaterialSolverCache has no populated cells; rebuild the cache "
                 "before lookup. (缓存不含任何有效分桶，请先重建缓存)"
             )
-        # Validate user palette fingerprint matches the cache.
-        user_fp = fingerprint_palette(user_materials)
-        if user_fp != self.palette_hash:
-            raise ValueError(
-                f"User palette fingerprint {user_fp} does not match cached "
-                f"palette {self.palette_hash}"
-            )
+        if describe_palette(user_materials) != self.metadata["canonical_materials"]:
+            raise ValueError("User material descriptors do not match the cached palette")
 
         # ---- Exact mode: brute-force vectorised ΔE over full formula table ----
         # 精确模式：对全量配方表做向量化暴力 ΔE 搜索，零精度损失。
@@ -1393,7 +1393,7 @@ class MaterialSolverCache:
 
         Raises:
             ValueError: ``target_srgb`` shape is wrong or ``top_k <= 0`` or
-                the caller's palette fingerprint does not match the cache.
+                the caller's material descriptors does not match the cache.
         """
         target_srgb = np.asarray(target_srgb, dtype=np.uint8)
         if target_srgb.shape != (3,):
@@ -1404,12 +1404,8 @@ class MaterialSolverCache:
             raise ValueError(f"top_k must be positive, got {top_k}")
         if min_spacing < 0.0:
             raise ValueError(f"min_spacing must be non-negative, got {min_spacing}")
-        user_fp = fingerprint_palette(user_materials)
-        if user_fp != self.palette_hash:
-            raise ValueError(
-                f"User palette fingerprint {user_fp} does not match cached "
-                f"palette {self.palette_hash}"
-            )
+        if describe_palette(user_materials) != self.metadata["canonical_materials"]:
+            raise ValueError("User material descriptors do not match the cached palette")
         if self.lab_centers.shape[0] == 0 and self.uniform_recipes.shape[0] == 0:
             return []
 
@@ -1526,7 +1522,7 @@ class MaterialSolverCache:
             Where ``K = min(k, available_candidates)``.
 
         Raises:
-            ValueError: Shape or fingerprint mismatch.
+            ValueError: Shape or material descriptor mismatch.
         """
         if target_srgb.ndim != 2 or target_srgb.shape[1] != 3:
             raise ValueError("target_srgb must be shaped (C, 3)")
@@ -1544,12 +1540,8 @@ class MaterialSolverCache:
                 "MaterialSolverCache has no populated cells; rebuild the cache "
                 "before lookup_candidates. (缓存不含任何有效分桶)"
             )
-        user_fp = fingerprint_palette(user_materials)
-        if user_fp != self.palette_hash:
-            raise ValueError(
-                f"User palette fingerprint {user_fp} does not match cached "
-                f"palette {self.palette_hash}"
-            )
+        if describe_palette(user_materials) != self.metadata["canonical_materials"]:
+            raise ValueError("User material descriptors do not match the cached palette")
 
         # Query more from KDTree than k to have room after merging uniform pool.
         tree = cKDTree(self.achieved_lab.astype(np.float64))
@@ -1712,11 +1704,11 @@ def _compute_uniform_recipes(
 
     Uses the Beer-Lambert forward model to predict the final colour of a
     ``[i, i, ..., i]`` stack for each material index ``i``, keeping the
-    recipes in canonical (fingerprint-sorted) order so they align with the
+        recipes in established canonical order so they align with the
     rest of the cache arrays.
 
     对每种耗材 ``i``，用 Beer-Lambert 前向模型计算 N 层同样耗材叠加后的颜色，
-    配方按规范（指纹序）排列以对齐缓存其它数组。
+    配方按既有规范顺序排列以对齐缓存其它数组。
 
     Args:
         materials: Palette in canonical order. (规范序耗材列表)
@@ -1752,7 +1744,7 @@ def _compute_uniform_recipes(
 def _build_exact_cache(
     canonical_materials: list[MaterialParams],
     canonical_order: list[int],
-    palette_hash: str,
+    cache_id: str,
     layer_count: int,
     layer_height_mm: float,
     substrate: str,
@@ -1864,20 +1856,9 @@ def _build_exact_cache(
         "schema_version": CACHE_SCHEMA_VERSION,
         "color_precision": "continuous_lab",
         "mode": "exact",
-        "palette_hash": palette_hash,
-        "canonical_materials": [
-            {
-                "name": m.name,
-                "directory_name": m.directory_name,
-                "fingerprint": _material_fingerprint(m),
-                "E": [round(float(v), _FINGERPRINT_DECIMALS) for v in m.E.tolist()],
-                "k": [round(float(v), _FINGERPRINT_DECIMALS) for v in m.k.tolist()],
-                "C0_white": [
-                    round(float(v), _FINGERPRINT_DECIMALS) for v in m.C0_white.tolist()
-                ],
-            }
-            for m in canonical_materials
-        ],
+        "cache_id": cache_id,
+        "solver_version": CACHE_SOLVER_VERSION,
+        "canonical_materials": describe_palette(canonical_materials),
         "layer_count": int(layer_count),
         "layer_height_mm": float(layer_height_mm),
         "substrate": substrate,
@@ -1894,14 +1875,14 @@ def _build_exact_cache(
     _log.info(
         "Built EXACT material solver cache: palette=%s M=%d N=%d "
         "combinations=%d build=%.1fs",
-        palette_hash,
+        cache_id,
         M,
         layer_count,
         total_combinations,
         build_time,
         extra={
             "event": "material_solver_cache_built",
-            "palette_hash": palette_hash,
+            "cache_id": cache_id,
             "layer_count": layer_count,
             "layer_height_mm": layer_height_mm,
             "substrate": substrate,
@@ -1960,7 +1941,7 @@ def build_material_solver_cache(
 
     Args:
         materials: Palette used for enumeration. The solver internally reorders
-            to canonical (fingerprint-sorted) order and stores recipes in that
+            to established canonical order and stores recipes in that
             order; :meth:`MaterialSolverCache.lookup` rebinds indices to the
             caller's order at query time. (枚举用耗材列表)
         layer_count: Number of layers (5-10). (层数)
@@ -2000,7 +1981,7 @@ def build_material_solver_cache(
     # Re-order materials to canonical order for storage.
     canonical_order = canonical_palette_order(materials)
     canonical_materials = [materials[i] for i in canonical_order]
-    palette_hash = fingerprint_palette(canonical_materials)
+    cache_id = uuid.uuid4().hex
 
     # ---- Exact mode shortcut: M≤10 and N≤5 → store full formula table ----
     # 精确模式快速路径：小规模调色板直接存全量配方表，零精度损失。
@@ -2012,7 +1993,7 @@ def build_material_solver_cache(
         return _build_exact_cache(
             canonical_materials,
             canonical_order,
-            palette_hash,
+            cache_id,
             layer_count,
             layer_height_mm,
             substrate,
@@ -2207,20 +2188,9 @@ def build_material_solver_cache(
     metadata = {
         "schema_version": CACHE_SCHEMA_VERSION,
         "color_precision": "continuous_lab",
-        "palette_hash": palette_hash,
-        "canonical_materials": [
-            {
-                "name": m.name,
-                "directory_name": m.directory_name,
-                "fingerprint": _material_fingerprint(m),
-                "E": [round(float(v), _FINGERPRINT_DECIMALS) for v in m.E.tolist()],
-                "k": [round(float(v), _FINGERPRINT_DECIMALS) for v in m.k.tolist()],
-                "C0_white": [
-                    round(float(v), _FINGERPRINT_DECIMALS) for v in m.C0_white.tolist()
-                ],
-            }
-            for m in canonical_materials
-        ],
+        "cache_id": cache_id,
+        "solver_version": CACHE_SOLVER_VERSION,
+        "canonical_materials": describe_palette(canonical_materials),
         "layer_count": int(layer_count),
         "layer_height_mm": float(layer_height_mm),
         "substrate": substrate,
@@ -2237,7 +2207,7 @@ def build_material_solver_cache(
     _log.info(
         "Built material solver cache: palette=%s N=%d t=%.2f substrate=%s "
         "valid_cells=%d/%d mean_ΔE=%.2f build=%.1fs",
-        palette_hash,
+        cache_id,
         layer_count,
         layer_height_mm,
         substrate,
@@ -2247,7 +2217,7 @@ def build_material_solver_cache(
         build_time,
         extra={
             "event": "material_solver_cache_built",
-            "palette_hash": palette_hash,
+            "cache_id": cache_id,
             "layer_count": layer_count,
             "layer_height_mm": layer_height_mm,
             "substrate": substrate,
@@ -2291,14 +2261,16 @@ def save_material_solver_cache(
     """
     directory = default_cache_directory(cache_root)
     directory.mkdir(parents=True, exist_ok=True)
-    stem = _cache_file_stem(
-        cache.palette_hash,
-        cache.layer_count,
-        cache.layer_height_mm,
-        cache.substrate,
-        cache.grid_resolution,
-    )
-    npz_path = directory / f"{stem}.npz"
+    expected = {key: cache.metadata[key] for key in (
+        "schema_version", "solver_version", "canonical_materials", "layer_count",
+        "layer_height_mm", "substrate", "grid_resolution",
+    )}
+    npz_path = _find_cache_record(directory, expected)
+    if npz_path is None:
+        npz_path = directory / f"solver-{cache.cache_id}.npz"
+    else:
+        stored_metadata = json.loads(_cache_meta_path_for(npz_path).read_text(encoding="utf-8"))
+        cache.metadata["cache_id"] = stored_metadata["cache_id"]
     meta_path = _cache_meta_path_for(npz_path)
 
     # Write arrays atomically. np.savez_compressed appends ``.npz`` when the
@@ -2349,20 +2321,13 @@ def load_material_solver_cache(
     从磁盘加载缓存；不存在或损坏时返回 ``None``。
 
     Args:
-        materials: Caller's material palette. Used both to locate the canonical
-            ``-g<grid>`` cache file and to validate the stored fingerprint.
-            (调用方耗材列表，用于定位带 ``-g<grid>`` 后缀的规范文件并校验指纹)
+        materials: Current palette, compared with saved effective descriptors.
+            调用方耗材列表，用于直接比较保存的有效参数描述。
         layer_count: Number of layers per pixel. (每像素层数)
         layer_height_mm: Layer thickness in mm. (层厚 mm)
         substrate: ``"white"`` or ``"black"``. (基底)
-        grid_resolution: Expected Lab grid resolution. The loader first tries
-            the ``-g<grid>`` suffixed path; if it is missing, it falls back to
-            the pre-suffix legacy path **only** when the legacy file's
-            metadata reports the same ``grid_resolution``. This keeps
-            pre-upgrade 64³ caches readable for callers that explicitly ask
-            for ``grid_resolution=64``.
-            (期望的 Lab 网格分辨率；优先读带 ``-g<grid>`` 的新路径，若不存在
-            且旧路径元数据声明的分辨率与调用方一致时允许回退)
+        grid_resolution: Expected Lab grid resolution; zero selects exact mode.
+            期望的 Lab 网格分辨率；零表示精确模式。
         cache_root: Optional override for the cache directory.
     """
     npz_path = cache_file_path(
@@ -2375,40 +2340,8 @@ def load_material_solver_cache(
     )
     meta_path = _cache_meta_path_for(npz_path)
 
-    # Backward-compatibility: fall back to the legacy pre-``-g<grid>`` path
-    # when the new suffixed file is missing. Acceptance is gated on the legacy
-    # metadata reporting the same grid_resolution so we never silently return
-    # a cache at a resolution the caller did not request.
     if not npz_path.exists() or not meta_path.exists():
-        legacy_npz = _legacy_cache_file_path(
-            fingerprint_palette(materials),
-            layer_count,
-            layer_height_mm,
-            substrate,
-            cache_root=cache_root,
-        )
-        legacy_meta = _cache_meta_path_for(legacy_npz)
-        if not (legacy_npz.exists() and legacy_meta.exists()):
-            return None
-        try:
-            legacy_metadata = json.loads(legacy_meta.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return None
-        legacy_grid = int(legacy_metadata.get("grid_resolution", 0))
-        if legacy_grid != int(grid_resolution):
-            _log.info(
-                "Legacy material solver cache %s reports grid_resolution=%d but "
-                "caller requested %d; skipping legacy fallback.",
-                legacy_npz.name, legacy_grid, int(grid_resolution),
-                extra={
-                    "event": "material_solver_legacy_cache_skipped",
-                    "cache_file": legacy_npz.name,
-                    "legacy_grid_resolution": legacy_grid,
-                    "requested_grid_resolution": int(grid_resolution),
-                },
-            )
-            return None
-        npz_path, meta_path = legacy_npz, legacy_meta
+        return None
 
     try:
         with np.load(npz_path) as loaded:
@@ -2446,10 +2379,12 @@ def load_material_solver_cache(
     ):
         return None
 
-    # Sanity checks: shapes consistent, fingerprint matches caller's palette,
-    # stored grid_resolution matches the caller's expectation.
+    # Validate array contracts before exposing the loaded runtime.
     if (
-        recipes.shape[0] != lab_centers.shape[0]
+        recipes.ndim != 2
+        or lab_centers.ndim != 2
+        or center_delta_e.ndim != 1
+        or recipes.shape[0] != lab_centers.shape[0]
         or recipes.shape[1] != int(metadata.get("layer_count", -1))
         or achieved_srgb.shape != lab_centers.shape
         or achieved_lab.shape != lab_centers.shape
@@ -2460,39 +2395,11 @@ def load_material_solver_cache(
             extra={"event": "material_solver_cache_shape_mismatch", "cache_file": npz_path.name},
         )
         return None
-    expected_hash = fingerprint_palette(materials)
-    if metadata.get("palette_hash") != expected_hash:
-        _log.warning(
-            "Material solver cache %s palette_hash mismatch (expected %s got %s)",
-            npz_path.name, expected_hash, metadata.get("palette_hash"),
-            extra={
-                "event": "material_solver_cache_palette_mismatch",
-                "cache_file": npz_path.name,
-                "expected_palette_hash": expected_hash,
-                "actual_palette_hash": metadata.get("palette_hash"),
-            },
-        )
+    expected = _solver_cache_parameters(
+        materials, layer_count, layer_height_mm, substrate, grid_resolution
+    )
+    if any(metadata.get(key) != value for key, value in expected.items()):
         return None
-    stored_grid = int(metadata.get("grid_resolution", DEFAULT_GRID_RESOLUTION))
-    stored_mode = str(metadata.get("mode", "bucketed"))
-    # Exact-mode caches (grid_resolution=0) supersede any grid request —
-    # they are strictly better than any bucketed tier for the same palette.
-    # 精确模式缓存（grid_resolution=0）无条件匹配任何 grid 请求，因为它
-    # 严格优于任何分桶分辨率。
-    if stored_mode != "exact" and stored_grid != int(grid_resolution):
-        _log.info(
-            "Material solver cache %s grid_resolution=%d does not match caller's "
-            "expected %d; treating as missing.",
-            npz_path.name, stored_grid, int(grid_resolution),
-            extra={
-                "event": "material_solver_cache_grid_mismatch",
-                "cache_file": npz_path.name,
-                "stored_grid_resolution": stored_grid,
-                "requested_grid_resolution": int(grid_resolution),
-            },
-        )
-        return None
-
     return MaterialSolverCache(
         lab_centers=lab_centers,
         recipes=recipes,
@@ -2515,22 +2422,14 @@ def find_any_cached_grid(
 ) -> list[tuple[int, Path]]:
     """Return every ``(grid_resolution, npz_path)`` cache on disk for this key.
 
-    Scans :func:`default_cache_directory` for files whose stem matches the
-    ``<palette_hash>-N<count>-t<height>-<substrate>[-g<grid>]`` pattern for
-    the caller's palette/layer/substrate parameters. Both the new
-    ``-g<grid>``-suffixed files and any surviving legacy (pre-suffix) file
-    are included; the legacy entry's grid is read from its ``.meta.json``.
-
-    The result is sorted by ``grid_resolution`` descending so callers that
-    want a "finer-first" fallback can iterate directly. File contents are
-    **not** validated here — callers are still expected to invoke
-    :func:`load_material_solver_cache` with the returned grid so the stored
-    palette fingerprint and shapes are rechecked.
+    Compare small metadata sidecars with the material and layer descriptors,
+    returning available grid records in descending resolution order. Array
+    validation is deferred to :func:`load_material_solver_cache`.
 
     扫描缓存目录下所有与调用方 ``(palette, N, 层高, 基底)`` 匹配、不同
     ``grid_resolution`` 的缓存文件，按分辨率降序返回 ``(grid, path)`` 列表。
     文件内容不在此处校验，调用方仍需通过 :func:`load_material_solver_cache`
-    完成指纹/形状等完整性检查。
+    完成参数与数组形状检查。
 
     Args:
         materials: Palette to match. (调色板)
@@ -2548,47 +2447,19 @@ def find_any_cached_grid(
     if not cache_dir.is_dir():
         return []
 
-    palette_hash = fingerprint_palette(materials)
-    legacy_stem = _legacy_cache_file_stem(
-        palette_hash, layer_count, layer_height_mm, substrate
-    )
-
-    # Collect grid -> path without allowing duplicates; new-style suffixed
-    # files take priority over a legacy file that happens to report the same
-    # grid in its metadata.
-    # 收集 grid -> path 且不允许重复；带 ``-g`` 后缀的新文件优先于报告相同
-    # grid 的旧格式文件。
+    expected = _solver_cache_parameters(materials, layer_count, layer_height_mm, substrate)
     by_grid: dict[int, Path] = {}
-
-    suffix_pattern = re.compile(
-        rf"^{re.escape(legacy_stem)}-g(\d+)$"
-    )
-    for npz_path in cache_dir.glob(f"{legacy_stem}-g*.npz"):
-        match = suffix_pattern.match(npz_path.stem)
-        if match is None:
-            continue
-        meta_path = _cache_meta_path_for(npz_path)
-        if not meta_path.exists():
-            continue
-        grid = int(match.group(1))
-        by_grid[grid] = npz_path
-
-    legacy_npz = _legacy_cache_file_path(
-        palette_hash, layer_count, layer_height_mm, substrate,
-        cache_root=cache_root,
-    )
-    legacy_meta = _cache_meta_path_for(legacy_npz)
-    if legacy_npz.exists() and legacy_meta.exists():
+    for meta_path in sorted(cache_dir.glob("*.meta.json")):
         try:
-            legacy_metadata = json.loads(legacy_meta.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            legacy_metadata = None
-        if legacy_metadata is not None:
-            legacy_grid = int(
-                legacy_metadata.get("grid_resolution", DEFAULT_GRID_RESOLUTION)
-            )
-            by_grid.setdefault(legacy_grid, legacy_npz)
-
+            metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+            if any(metadata.get(key) != value for key, value in expected.items()):
+                continue
+            grid = int(metadata["grid_resolution"])
+        except (OSError, UnicodeDecodeError, ValueError, TypeError, KeyError):
+            continue
+        path = meta_path.with_name(meta_path.name.removesuffix(".meta.json") + ".npz")
+        if path.exists():
+            by_grid.setdefault(grid, path)
     return sorted(by_grid.items(), key=lambda item: item[0], reverse=True)
 
 
@@ -2707,6 +2578,8 @@ def list_cached_entries(
             metadata = json.loads(meta_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
+        if not metadata.get("cache_id"):
+            continue
         try:
             file_size = npz_path.stat().st_size
         except OSError:
@@ -2734,14 +2607,10 @@ def delete_cached_entry(
     """Remove the cache entry for the given parameters. Returns ``True`` on hit.
     删除指定参数的缓存条目；命中返回 ``True``。
 
-    Removes the canonical ``-g<grid>`` entry first, then also sweeps any
-    pre-suffix legacy entry whose metadata reports the matching
-    ``grid_resolution`` so old 64³/128³ files do not silently pile up.
-    When the palette is exact-mode eligible, the exact cache (``-g000``) is
-    also targeted.
-    (先删除带 ``-g<grid>`` 后缀的规范条目，并按元数据声明的分辨率一并清理
-    没有后缀的历史条目，避免新旧缓存文件在磁盘上堆积。当调色板满足精确模式
-    条件时，同时删除精确缓存（-g000）。)
+    Only directly matching records are removed. Unsafe older entries remain.
+    When eligible, the palette's exact-mode record is also targeted.
+    仅删除描述直接匹配的记录；无法安全匹配的旧条目保留。
+    若调色板支持精确模式，同时删除对应的精确缓存记录。
     """
     npz_path = cache_file_path(
         materials, layer_count, layer_height_mm, substrate,
@@ -2761,26 +2630,6 @@ def delete_cached_entry(
         )
         exact_meta = _cache_meta_path_for(exact_npz)
         targets.extend((exact_npz, exact_meta))
-
-    # Also sweep the legacy pre-``-g<grid>`` file pair when its metadata
-    # reports the same grid_resolution, so repeated deletes from modern
-    # callers do not leave orphan legacy files behind.
-    legacy_npz = _legacy_cache_file_path(
-        fingerprint_palette(materials),
-        layer_count,
-        layer_height_mm,
-        substrate,
-        cache_root=cache_root,
-    )
-    legacy_meta = _cache_meta_path_for(legacy_npz)
-    if legacy_npz.exists() and legacy_meta.exists():
-        try:
-            legacy_metadata = json.loads(legacy_meta.read_text(encoding="utf-8"))
-            legacy_grid = int(legacy_metadata.get("grid_resolution", 0))
-        except (OSError, json.JSONDecodeError):
-            legacy_grid = 0
-        if legacy_grid == int(grid_resolution):
-            targets.extend((legacy_npz, legacy_meta))
 
     removed_any = False
     for path in targets:

@@ -14,6 +14,7 @@ import Checkbox from "../ui/Checkbox";
 import Slider from "../ui/Slider";
 import Dropdown from "../ui/Dropdown";
 import ImageUpload from "../ui/ImageUpload";
+import { ACCEPT_HEIGHTMAP_FORMATS } from "../../constants/heightmap";
 import { useI18n } from "../../i18n/context";
 import { workstationFieldLabelClass } from "../ui/panelPrimitives";
 import { WIKI_DOCS } from "../../utils/wikiDocs";
@@ -144,7 +145,7 @@ export default function ReliefSettings() {
                 <label className={workstationFieldLabelClass}>{t("relief_heightmap_label")}</label>
                 <ImageUpload
                   onFileSelect={handleHeightmapSelect}
-                  accept="image/png,image/jpeg,image/bmp,image/tiff"
+                  accept={ACCEPT_HEIGHTMAP_FORMATS}
                   preview={heightmapThumbnailUrl ?? undefined}
                 />
                 {heightmapFile && !heightmapThumbnailUrl && (

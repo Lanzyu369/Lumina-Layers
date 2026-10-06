@@ -29,7 +29,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from api.feedback_fingerprint import file_sha256
 from api.structured_logging import get_logger
 
 __all__ = [
@@ -60,14 +59,13 @@ class MaterialsBundleResult:
 
     Attributes:
         status: Terminal status — ``attached`` means the zip is on disk and
-            the fingerprint is valid; ``packaging_timeout`` means we gave up
+            its entries are ready; ``packaging_timeout`` means we gave up
             and deleted the partial zip; ``not_applicable`` means no
             selection was provided.
-            (终态状态：attached 表示 zip 已落盘且指纹有效；packaging_timeout
+            (终态状态：attached 表示 zip 已落盘且条目可用；packaging_timeout
             表示超时放弃并删除了部分产物；not_applicable 表示未选中任何目录。)
         path: Path to the produced zip or ``None`` when not ``attached``.
             (产物路径；非 attached 时为 None。)
-        sha256: Hex digest of the produced zip; ``None`` unless attached.
         compressed_size_bytes: Size of the produced zip in bytes.
         entry_count: Number of files actually written into the zip (excludes
             skipped ``_solver_cache`` entries).
@@ -80,7 +78,6 @@ class MaterialsBundleResult:
 
     status: Literal["attached", "packaging_timeout", "not_applicable"]
     path: Path | None
-    sha256: str | None
     compressed_size_bytes: int | None
     entry_count: int
     included_dirs: list[str] = field(default_factory=list)
@@ -168,7 +165,6 @@ def pack_materials(
         return MaterialsBundleResult(
             status="not_applicable",
             path=None,
-            sha256=None,
             compressed_size_bytes=None,
             entry_count=0,
             included_dirs=[],
@@ -239,7 +235,6 @@ def pack_materials(
         return MaterialsBundleResult(
             status="not_applicable",
             path=None,
-            sha256=None,
             compressed_size_bytes=None,
             entry_count=0,
             included_dirs=[],
@@ -307,7 +302,6 @@ def pack_materials(
         return MaterialsBundleResult(
             status="packaging_timeout",
             path=None,
-            sha256=None,
             compressed_size_bytes=None,
             entry_count=0,
             included_dirs=[],
@@ -316,15 +310,11 @@ def pack_materials(
             else [],
         )
 
-    # Compute fingerprint outside the zip context manager so the file is
-    # closed and flushed first.
-    sha = file_sha256(output_zip)
     size = output_zip.stat().st_size
 
     return MaterialsBundleResult(
         status="attached",
         path=output_zip,
-        sha256=sha,
         compressed_size_bytes=size,
         entry_count=entry_count,
         included_dirs=included_dirs,

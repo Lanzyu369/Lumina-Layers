@@ -1,5 +1,10 @@
 # Cloud Resource Center V2 Frontend And Acceptance Implementation Plan
 
+> Deployment update (2026-10-06): Docker support and the public-test bypass
+> are retired. This historical record preserves earlier implementation and
+> validation evidence; use [Runtime support](../../runtime-support.md) for current behavior.
+> 部署更新：Docker 支持及公网测试访问旁路已移除；本文保留历史实现与验证记录，当前运行方式以上述说明为准。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace separate cloud/local material and LUT pages with two independent, production-ready resource centers that support cloud discovery, local management, exact lifecycle actions, offline browsing, and verified desktop/mobile workflows.

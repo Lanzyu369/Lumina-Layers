@@ -1,5 +1,10 @@
 # Vector 区域覆盖 ROI 性能优化结果
 
+> Deployment update (2026-10-06): Docker support and the public-test bypass
+> are retired. This historical record preserves earlier implementation and
+> validation evidence; use [Runtime support](../../runtime-support.md) for current behavior.
+> 部署更新：Docker 支持及公网测试访问旁路已移除；本文保留历史实现与验证记录，当前运行方式以上述说明为准。
+
 日期：2026-07-30
 状态：`ready_for_draft_pr_with_tooling_caveat`。实现、独立 base 对照、
 第二轮独立代码审核和最终功能门禁已完成；Smoke 包装器的后端与前端测试均

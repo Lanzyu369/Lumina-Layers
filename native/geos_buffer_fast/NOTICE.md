@@ -1,7 +1,7 @@
 # Modified GEOS notice
 
-Lumina Studio's server Docker image contains a dynamically loaded modified build
-of GEOS 3.13.1.
+Lumina Studio's optional local dense-buffer runtime dynamically loads a
+modified build of GEOS 3.13.1.
 
 - Upstream project: https://libgeos.org/
 - Upstream source: https://github.com/libgeos/geos.git
@@ -11,9 +11,10 @@ of GEOS 3.13.1.
 - Lumina modification:
   `patches/geos-3.13.1-buffer-subgraph-index.patch`
 
-The Docker image retains the complete pinned GEOS source tree, upstream license,
-Lumina patch, and reproducible build script under `/app`. The modification
-indexes buffer-subgraph candidate lookup while retaining the existing depth
+The local build retains the complete pinned GEOS source tree and upstream
+license under `.scratch/geos_buffer_fast_proof`. Keep that source, the Lumina
+patch and the reproducible build script with any redistributed library. The
+modification indexes buffer-subgraph candidate lookup while retaining the existing depth
 locator, ordering, noding, coordinate construction, and public C API behavior.
 
 This notice describes the engineering distribution boundary and is not legal

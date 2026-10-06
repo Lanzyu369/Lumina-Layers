@@ -653,7 +653,6 @@ const LutDetailsLoadedPrimaryColumn = memo(function LutDetailsLoadedPrimaryColum
           <InfoField label={t("lut_details_summary_color_mode")} value={detail.color_mode} />
           <InfoField label={t("lut_details_summary_color_count")} value={String(detail.color_count)} />
           <InfoField label={t("lut_details_summary_source_kind")} value={detail.source_kind} />
-          <InfoField label={t("lut_details_summary_fingerprint")} value={detail.fingerprint} />
           <InfoField label={t("lut_details_summary_path")} value={detail.path} />
         </dl>
       </section>
@@ -713,7 +712,6 @@ export const LutColorDistributionCharts = memo(function LutColorDistributionChar
   source,
 }: {
   source: {
-    fingerprint: string;
     lab_points: LutDetailsResponse["lab_points"];
     lab_points_3d: LutDetailsResponse["lab_points_3d"];
     lab_hull: LutDetailsResponse["lab_hull"];
@@ -855,7 +853,6 @@ export const LutColorDistributionCharts = memo(function LutColorDistributionChar
           </div>
           <LabPointCloud3D
             dataTestId="lut-details-lab-chart-3d"
-            fingerprint={source.fingerprint}
             points={labPoints3D}
             emptyMessage={t("lut_details_no_chart_points")}
             loadingHullMessage={t("lut_details_lab_3d_loading_hull")}
@@ -978,7 +975,6 @@ const LutDetailsLoadedSecondaryColumn = memo(function LutDetailsLoadedSecondaryC
       {/* 四张散点图由共享组件渲染，使求解缓存「色彩分布图」与本面板视觉完全一致。 */}
       <LutColorDistributionCharts
         source={{
-          fingerprint: detail.fingerprint,
           lab_points: detail.lab_points,
           lab_points_3d: detail.lab_points_3d,
           lab_hull: detail.lab_hull,

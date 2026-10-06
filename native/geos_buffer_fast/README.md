@@ -1,4 +1,4 @@
-# GEOS Dense-Buffer Server Runtime
+# GEOS Dense-Buffer Local Runtime
 
 This directory records the source patch, notice, and reproduction instructions
 for Lumina's lossless dense-`MultiPolygon` buffer acceleration. [GEOS identifies
@@ -22,10 +22,12 @@ Build the runtime locally with:
 python scripts/build_geos_buffer_fast_proof.py --rebuild
 ```
 
-The server Docker image runs that command during its build and retains the
-complete cloned source, upstream `COPYING`, this patch, and the build scripts in
-the image. Runtime activation uses the generated verified manifest at
-`/app/.scratch/geos_buffer_fast_proof/build_manifest.json`.
+Activate the local runtime by setting `LUMINA_GEOS_BUFFER_FAST_MANIFEST` to
+the absolute path of `.scratch/geos_buffer_fast_proof/build_manifest.json`.
+The build directory retains the complete cloned source and upstream `COPYING`;
+keep them together with this patch and the build script when distributing the
+modified library. Activation remains optional and is not part of default
+installation or CI.
 
 Desktop/PyInstaller packaging deliberately does not enable or bundle this
 modified library yet. Desktop continues to use stock Shapely until shared-library

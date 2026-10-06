@@ -1415,7 +1415,6 @@ async def submit_bug_report(
             "original_image": {
                 "status": "not_applicable",
                 "filename": None,
-                "sha256": None,
                 "size_bytes": None,
                 "mime_type": None,
                 "source_session_id": None,
@@ -1425,7 +1424,6 @@ async def submit_bug_report(
             "final_artifact": {
                 "status": "not_applicable",
                 "filename": None,
-                "sha256": None,
                 "size_bytes": None,
                 "artifact_type": None,
                 "source_session_id": None,
@@ -1438,14 +1436,12 @@ async def submit_bug_report(
                 "name": None,
                 "preset_relative_path": None,
                 "filename": None,
-                "sha256": None,
                 "size_bytes": None,
                 "metadata": {},
             },
             "materials_bundle": {
                 "status": "not_applicable",
                 "filename": None,
-                "sha256": None,
                 "compressed_size_bytes": None,
                 "entry_count": 0,
                 "included_dirs": [],

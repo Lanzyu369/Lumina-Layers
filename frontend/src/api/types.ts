@@ -541,14 +541,12 @@ export interface LutInfo {
   name: string;
   color_mode: ColorMode;
   path: string;
-  fingerprint: string;
 }
 
 export interface LutCatalogItem {
   name: string;
   color_mode: ColorMode;
   path: string;
-  fingerprint: string;
 }
 
 export interface LutCatalogGroup {
@@ -560,7 +558,6 @@ export interface NativeDbOption {
   name: string;
   path: string;
   color_mode: string;
-  fingerprint: string;
 }
 
 export interface NativeBrandGroup {
@@ -583,7 +580,6 @@ export interface LutCatalogResponse {
 export interface LutDetailsCatalogItem {
   name: string;
   path: string;
-  fingerprint: string;
   color_mode: string;
   source_kind: string;
   compatibility_key?: string;
@@ -592,6 +588,7 @@ export interface LutDetailsCatalogItem {
   manufacturer_source: string;
   material_source: string;
   search_tokens: string[];
+  revision?: string;
 }
 
 export interface LutDetailsCatalogGroup {
@@ -1519,7 +1516,6 @@ export interface LutDetailsPoint3D {
 export interface LutDetailsResponse {
   name: string;
   path: string;
-  fingerprint: string;
   manufacturer: string;
   manufacturer_source: string;
   material_type: string;

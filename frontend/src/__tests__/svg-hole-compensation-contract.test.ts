@@ -49,10 +49,9 @@ function wrapRecipe(base = exportConverterRecipe(useConverterStore.getState(), D
     cover: { width: 1, height: 1, mime_type: "image/png" },
     asset: { primary: {
       filename: "holes.svg", mime_type: "image/svg+xml", byte_size: 6,
-      sha256: "", encoding: "base64", payload_b64: "PHN2Zy8+",
+      encoding: "base64", payload_b64: "PHN2Zy8+",
     } },
     recipe: { converter: base },
-    integrity: { recipe_sha256: "", asset_checksums: { primary: "" } },
     compat: { min_schema_version: 1 }, warnings: [],
   };
 }
@@ -326,7 +325,7 @@ describe("source SVG compensation product contract", () => {
   });
 
   it("persists imported compensation preferences for the next SVG", () => {
-    const restored = restoreConverterRecipe(wrapRecipe(), [], {});
+    const restored = restoreConverterRecipe(wrapRecipe(), []);
     useConverterStore.getState().importRecipeState(restored.state, svgFile());
     useConverterStore.setState({ ...DEFAULT_STATE });
     useConverterStore.getState().setImageFile(svgFile());
@@ -364,7 +363,7 @@ describe("source SVG compensation product contract", () => {
   it("preserves compensation settings in project export and restore", () => {
     const recipe = wrapRecipe();
     expect(recipe.recipe.converter?.base).toMatchObject(OPTIONS);
-    const restored = restoreConverterRecipe(recipe, [], {});
+    const restored = restoreConverterRecipe(recipe, []);
     expect(restored.state).toMatchObject(OPTIONS);
   });
 
@@ -373,7 +372,7 @@ describe("source SVG compensation product contract", () => {
     delete recipe.recipe.converter!.base.svg_hole_compensation_enabled;
     delete recipe.recipe.converter!.base.svg_hole_max_area_mm2;
     delete recipe.recipe.converter!.base.svg_hole_max_width_mm;
-    expect(restoreConverterRecipe(recipe, [], {}).state).toMatchObject({
+    expect(restoreConverterRecipe(recipe, []).state).toMatchObject({
       svg_hole_compensation_enabled: false, svg_hole_max_area_mm2: 0.5,
       svg_hole_max_width_mm: 0.1,
     });
@@ -382,7 +381,7 @@ describe("source SVG compensation product contract", () => {
   it.each([-1, Number.NaN, Number.POSITIVE_INFINITY])("rejects invalid compensation thresholds from projects: %s", (area) => {
     const recipe = wrapRecipe();
     recipe.recipe.converter!.base.svg_hole_max_area_mm2 = area;
-    expect(() => restoreConverterRecipe(recipe, [], {})).toThrow(/SVG/);
+    expect(() => restoreConverterRecipe(recipe, [])).toThrow(/SVG/);
   });
 
   it("includes compensation settings in feedback and action-history snapshots", () => {

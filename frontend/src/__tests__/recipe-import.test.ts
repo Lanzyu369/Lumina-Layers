@@ -96,7 +96,6 @@ function createTestRecipe(overrides?: Partial<LuminaRecipe>): LuminaRecipe {
         filename: "photo.png",
         mime_type: "image/png",
         byte_size: 4,
-        sha256: "abcd",
         encoding: "base64",
         payload_b64: "dGVzdA==", // "test"
       },
@@ -104,7 +103,7 @@ function createTestRecipe(overrides?: Partial<LuminaRecipe>): LuminaRecipe {
     recipe: {
       converter: {
         base: {
-          lut: { name: "MyLUT", color_mode: "4-Color (RYBW)", fingerprint: "fp123" },
+          lut: { name: "MyLUT", color_mode: "4-Color (RYBW)", path_hint: "/luts/my.json" },
           color_mode: "4-Color (RYBW)",
           modeling_mode: "high-fidelity",
           target_width_mm: 80,
@@ -169,10 +168,6 @@ function createTestRecipe(overrides?: Partial<LuminaRecipe>): LuminaRecipe {
         device: { printer_id: "bambu-h2d", slicer: "BambuStudio", nozzle_size: "0.2" },
       },
     },
-    integrity: {
-      recipe_sha256: "0".repeat(64),
-      asset_checksums: { primary: "abcd" },
-    },
     compat: { min_schema_version: 1 },
     warnings: [],
     ...overrides,
@@ -180,14 +175,9 @@ function createTestRecipe(overrides?: Partial<LuminaRecipe>): LuminaRecipe {
 }
 
 const LOCAL_LUTS: LutInfo[] = [
-  { name: "MyLUT", color_mode: ColorMode.FOUR_COLOR_RYBW, path: "/luts/my.json", fingerprint: "fp123" },
-  { name: "OtherLUT", color_mode: ColorMode.SIX_COLOR, path: "/luts/other.json", fingerprint: "fpOther" },
+  { name: "MyLUT", color_mode: ColorMode.FOUR_COLOR_RYBW, path: "/luts/my.json" },
+  { name: "OtherLUT", color_mode: ColorMode.SIX_COLOR, path: "/luts/other.json" },
 ];
-
-const LOCAL_FINGERPRINTS: Record<string, string> = {
-  MyLUT: "fp123",
-  OtherLUT: "fpOther",
-};
 
 // ========== Tests ==========
 
@@ -210,17 +200,27 @@ describe("recipe/importRecipe", () => {
   });
 
   describe("matchLut", () => {
-    it("matches by fingerprint", () => {
-      const result = matchLut({ name: "SomeName", fingerprint: "fp123" }, LOCAL_LUTS, LOCAL_FINGERPRINTS);
+    it("requires compatible color mode metadata even for an existing record", () => {
+      const result = matchLut({ name: "MyLUT", color_mode: ColorMode.BW, path_hint: "/luts/my.json" }, LOCAL_LUTS);
+      expect(result.matched).toBe(false);
+    });
+
+    it("leaves duplicate names unresolved even if one record path matches", () => {
+      const luts = [LOCAL_LUTS[0], { ...LOCAL_LUTS[0], path: "/luts/duplicate.json" }];
+      expect(matchLut({ name: "MyLUT", color_mode: ColorMode.FOUR_COLOR_RYBW, path_hint: "/luts/my.json" }, luts).matched).toBe(false);
+    });
+
+    it("matches by the existing record path", () => {
+      const result = matchLut({ name: "SomeName", color_mode: ColorMode.FOUR_COLOR_RYBW, path_hint: "/luts/my.json" }, LOCAL_LUTS);
       expect(result.matched).toBe(true);
       if (result.matched) {
         expect(result.lutName).toBe("MyLUT");
-        expect(result.matchType).toBe("fingerprint");
+        expect(result.matchType).toBe("record");
       }
     });
 
     it("falls back to name match", () => {
-      const result = matchLut({ name: "OtherLUT", fingerprint: "wrongFP" }, LOCAL_LUTS, LOCAL_FINGERPRINTS);
+      const result = matchLut({ name: "OtherLUT", color_mode: ColorMode.SIX_COLOR, path_hint: "missing-record" }, LOCAL_LUTS);
       expect(result.matched).toBe(true);
       if (result.matched) {
         expect(result.lutName).toBe("OtherLUT");
@@ -229,7 +229,7 @@ describe("recipe/importRecipe", () => {
     });
 
     it("returns not matched when LUT is missing", () => {
-      const result = matchLut({ name: "NonExistent", fingerprint: "nope" }, LOCAL_LUTS, LOCAL_FINGERPRINTS);
+      const result = matchLut({ name: "NonExistent", color_mode: ColorMode.FOUR_COLOR_RYBW }, LOCAL_LUTS);
       expect(result.matched).toBe(false);
       if (!result.matched) {
         expect(result.originalName).toBe("NonExistent");
@@ -240,7 +240,7 @@ describe("recipe/importRecipe", () => {
   describe("restoreConverterRecipe", () => {
     it("restores all converter parameters", () => {
       const recipe = createTestRecipe();
-      const { state, assetFile, warnings } = restoreConverterRecipe(recipe, LOCAL_LUTS, LOCAL_FINGERPRINTS);
+      const { state, assetFile, warnings } = restoreConverterRecipe(recipe, LOCAL_LUTS);
 
       // Base params
       expect(state.lut_name).toBe("MyLUT");
@@ -316,7 +316,7 @@ describe("recipe/importRecipe", () => {
       expect(assetFile).toBeInstanceOf(File);
       expect(assetFile.name).toBe("photo.png");
 
-      // No warnings for fingerprint match
+      // No warnings for record match
       expect(warnings).toHaveLength(0);
     });
 
@@ -330,7 +330,6 @@ describe("recipe/importRecipe", () => {
       const { state } = restoreConverterRecipe(
         recipe,
         LOCAL_LUTS,
-        LOCAL_FINGERPRINTS,
       );
 
       expect(state.quantize_colors_unlocked).toBe(true);
@@ -356,7 +355,7 @@ describe("recipe/importRecipe", () => {
         material_backing_material_dir_name: "brand/white",
       };
 
-      const { state } = restoreConverterRecipe(recipe, LOCAL_LUTS, LOCAL_FINGERPRINTS);
+      const { state } = restoreConverterRecipe(recipe, LOCAL_LUTS);
 
       expect(state.source_version).toBe("native");
       expect(state.selectedNativeBrandKey).toBe("bambulab_pla");
@@ -381,7 +380,6 @@ describe("recipe/importRecipe", () => {
       const { state } = restoreConverterRecipe(
         recipe,
         LOCAL_LUTS,
-        LOCAL_FINGERPRINTS,
       );
 
       expect(state).toMatchObject({
@@ -407,7 +405,6 @@ describe("recipe/importRecipe", () => {
       const { state } = restoreConverterRecipe(
         recipe,
         LOCAL_LUTS,
-        LOCAL_FINGERPRINTS,
       );
 
       expect(state.materialDynamicRecipes).toEqual([DYNAMIC_RECIPE]);
@@ -446,7 +443,6 @@ describe("recipe/importRecipe", () => {
       const invalidState = restoreConverterRecipe(
         invalidRecipe,
         LOCAL_LUTS,
-        LOCAL_FINGERPRINTS,
       ).state;
       expect(invalidState.materialDynamicRecipes).toEqual([]);
       expect(invalidState.materialLayerBenefitCurve).toEqual([]);
@@ -459,7 +455,6 @@ describe("recipe/importRecipe", () => {
       const inapplicableState = restoreConverterRecipe(
         inapplicableRecipe,
         LOCAL_LUTS,
-        LOCAL_FINGERPRINTS,
       ).state;
       expect(inapplicableState.materialDynamicRecipes).toEqual([]);
       expect(inapplicableState.materialLayerBenefitCurve).toEqual([]);
@@ -489,7 +484,6 @@ describe("recipe/importRecipe", () => {
       const restored = restoreConverterRecipe(
         recipe,
         LOCAL_LUTS,
-        LOCAL_FINGERPRINTS,
       );
       const secondExport = exportConverterRecipe(
         { ...state, ...restored.state } as ConverterState,
@@ -515,7 +509,6 @@ describe("recipe/importRecipe", () => {
       const { state, warnings } = restoreConverterRecipe(
         recipe,
         LOCAL_LUTS,
-        LOCAL_FINGERPRINTS,
       );
 
       expect(state.puzzleEnabled).toBe(true);
@@ -540,7 +533,6 @@ describe("recipe/importRecipe", () => {
       const { state, warnings } = restoreConverterRecipe(
         recipe,
         LOCAL_LUTS,
-        LOCAL_FINGERPRINTS,
       );
 
       expect(state.labelsEnabled).toBe(true);
@@ -575,7 +567,6 @@ describe("recipe/importRecipe", () => {
       const { state, warnings } = restoreConverterRecipe(
         recipe,
         LOCAL_LUTS,
-        LOCAL_FINGERPRINTS,
       );
 
       expect(state.enable_fridge_magnet).toBe(true);
@@ -625,7 +616,6 @@ describe("recipe/importRecipe", () => {
       const { state } = restoreConverterRecipe(
         recipe,
         LOCAL_LUTS,
-        LOCAL_FINGERPRINTS,
       );
 
       expect(state.fridge_magnets).toEqual([
@@ -658,8 +648,8 @@ describe("recipe/importRecipe", () => {
 
     it("adds warning for name-only LUT match", () => {
       const recipe = createTestRecipe();
-      recipe.recipe.converter!.base.lut.fingerprint = "differentFP";
-      const { warnings, state } = restoreConverterRecipe(recipe, LOCAL_LUTS, LOCAL_FINGERPRINTS);
+      recipe.recipe.converter!.base.lut.path_hint = "missing-record";
+      const { warnings, state } = restoreConverterRecipe(recipe, LOCAL_LUTS);
 
       expect(state.lut_name).toBe("MyLUT"); // Still matches by name
       expect(warnings).toContain(RECIPE_IMPORT_WARNING_LUT_DEGRADED);
@@ -668,8 +658,8 @@ describe("recipe/importRecipe", () => {
     it("adds warning for missing LUT", () => {
       const recipe = createTestRecipe();
       recipe.recipe.converter!.base.lut.name = "GoneLUT";
-      recipe.recipe.converter!.base.lut.fingerprint = "gone";
-      const { state, warnings } = restoreConverterRecipe(recipe, LOCAL_LUTS, LOCAL_FINGERPRINTS);
+      recipe.recipe.converter!.base.lut.path_hint = "missing-record";
+      const { state, warnings } = restoreConverterRecipe(recipe, LOCAL_LUTS);
 
       expect(state.lut_name).toBe(""); // Empty — user must select manually
       expect(warnings).toContain(RECIPE_IMPORT_WARNING_LUT_MISSING);
@@ -697,7 +687,6 @@ describe("recipe/importRecipe", () => {
       const { state, warnings } = restoreConverterRecipe(
         recipe,
         LOCAL_LUTS,
-        LOCAL_FINGERPRINTS,
       );
 
       expect(state.lut_name).toBe("MyLUT");
@@ -707,7 +696,7 @@ describe("recipe/importRecipe", () => {
 
     it("clears session and preview state", () => {
       const recipe = createTestRecipe();
-      const { state } = restoreConverterRecipe(recipe, LOCAL_LUTS, LOCAL_FINGERPRINTS);
+      const { state } = restoreConverterRecipe(recipe, LOCAL_LUTS);
 
       expect(state.sessionId).toBeNull();
       expect(state.previewImageUrl).toBeNull();
@@ -721,11 +710,10 @@ describe("recipe/importRecipe", () => {
         filename: "height.png",
         mime_type: "image/png",
         byte_size: 4,
-        sha256: "hmhash",
         encoding: "base64",
         payload_b64: "AAAA",
       };
-      const { heightmapFile } = restoreConverterRecipe(recipe, LOCAL_LUTS, LOCAL_FINGERPRINTS);
+      const { heightmapFile } = restoreConverterRecipe(recipe, LOCAL_LUTS);
       expect(heightmapFile).toBeInstanceOf(File);
       expect(heightmapFile!.name).toBe("height.png");
     });
@@ -738,7 +726,6 @@ describe("recipe/importRecipe", () => {
       const { state, warnings } = restoreConverterRecipe(
         recipe,
         LOCAL_LUTS,
-        LOCAL_FINGERPRINTS,
       );
 
       expect(state.workshopSource).toEqual(source);
@@ -765,7 +752,6 @@ describe("recipe/importRecipe", () => {
       const malformedResult = restoreConverterRecipe(
         malformed,
         LOCAL_LUTS,
-        LOCAL_FINGERPRINTS,
       );
       expect(malformedResult.state.workshopSource).toBeNull();
       expect(malformedResult.state.target_width_mm).toBe(80);
@@ -783,7 +769,6 @@ describe("recipe/importRecipe", () => {
       const unavailableResult = restoreConverterRecipe(
         unavailable,
         LOCAL_LUTS,
-        LOCAL_FINGERPRINTS,
       );
       expect(unavailableResult.state.workshopSource).toEqual(
         unavailableSource,
@@ -804,7 +789,6 @@ describe("recipe/importRecipe", () => {
       const result = restoreConverterRecipe(
         recipe,
         LOCAL_LUTS,
-        LOCAL_FINGERPRINTS,
       );
 
       expect(result.state.workshopSource).toBeNull();
@@ -845,7 +829,6 @@ describe("recipe/importRecipe", () => {
         const result = restoreConverterRecipe(
           recipe,
           LOCAL_LUTS,
-          LOCAL_FINGERPRINTS,
         );
         expect(result.state.workshopSource).toBeNull();
         expect(result.warnings).not.toContain(
@@ -857,17 +840,17 @@ describe("recipe/importRecipe", () => {
 });
 
 describe("recipe/migration", () => {
-  it("passes through V1 recipe unchanged", () => {
+  it("migrates V1 to the editable V4 format", () => {
     const recipe = createTestRecipe();
     const migrated = migrateRecipe(recipe);
-    expect(migrated.schema_version).toBe(1);
+    expect(migrated.schema_version).toBe(4);
     expect(migrated.recipe.converter).toEqual(recipe.recipe.converter);
   });
 
-  it("passes through V2 recipes without inventing workshop data", () => {
+  it("migrates V2 without inventing workshop data", () => {
     const recipe = createTestRecipe({ schema_version: 2 });
     const migrated = migrateRecipe(recipe);
-    expect(migrated.schema_version).toBe(2);
+    expect(migrated.schema_version).toBe(4);
     expect(migrated.recipe.workshop).toBeUndefined();
   });
 

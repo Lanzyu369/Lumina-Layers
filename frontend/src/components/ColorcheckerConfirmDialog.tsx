@@ -169,10 +169,6 @@ function optionLabel(
   return t(options.find((option) => option.value === value)?.labelKey ?? "ext_cc_unknown_value");
 }
 
-function shortReferenceHash(value: string | null | undefined) {
-  return value ? value.slice(0, 12) : "-";
-}
-
 function normalizePatchOrientation(value: string | null | undefined): PatchOrientation {
   const normalized = (value || "normal").trim().toLowerCase() as PatchOrientation;
   return PATCH_ORIENTATION_VALUES.has(normalized) ? normalized : "normal";
@@ -456,9 +452,6 @@ function CalibrationReferenceInfo({
             whitePoint: String(reference?.labWhitePoint ?? "D50"),
           })}
         </div>
-        <div className="mt-1 truncate font-mono text-[11px] text-slate-400 dark:text-slate-500">
-          {shortReferenceHash(reference?.referenceHash)}
-        </div>
       </div>
       <div
         className="rounded-2xl border border-slate-200/80 px-3 py-2 dark:border-slate-700/80"
@@ -654,7 +647,6 @@ export function ColorcheckerConfirmDialogInner({
         sourceName: selectedServerReference?.name ?? "大凡光学",
         patchCount: selectedServerReference?.patchCount ?? 24,
         labWhitePoint: selectedServerReference?.labWhitePoint ?? "D50",
-        referenceHash: selectedServerReference?.referenceHash ?? null,
       };
   const referenceOptions = useMemo(
     () => [
@@ -1410,9 +1402,6 @@ export function ColorcheckerConfirmDialogInner({
                       {t("ext_cc_reference_select_hint")}
                     </p>
                   </div>
-                  <span className="shrink-0 rounded-full border border-slate-200/80 px-2 py-1 font-mono text-[10px] text-slate-500 dark:border-slate-700/80 dark:text-slate-400">
-                    {shortReferenceHash(selectedReferenceMeta.referenceHash)}
-                  </span>
                 </div>
                 <div className="mt-3">
                   <Dropdown

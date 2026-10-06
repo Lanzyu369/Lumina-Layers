@@ -164,10 +164,20 @@ def test_load_vector_quick_preview_source_requires_expected_provenance(
     assert (
         vector_glb_preview.load_vector_quick_preview_source(
             str(artifact_path),
-            expected_provenance="0" * 64,
+            expected_provenance=json.dumps(["another-session", *json.loads(provenance)[1:]]),
         )
         is None
     )
+
+
+@pytest.mark.parametrize("provenance", [None, 0, "", " "])
+def test_load_vector_quick_preview_source_rejects_invalid_identity(
+    tmp_path: Path, provenance,
+) -> None:
+    artifact_path, _ = _write_quick_preview_source(tmp_path)
+    assert vector_glb_preview.load_vector_quick_preview_source(
+        str(artifact_path), expected_provenance=provenance,
+    ) is None
 
 
 def test_load_vector_quick_preview_source_rejects_tampered_key(

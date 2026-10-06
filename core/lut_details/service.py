@@ -82,7 +82,6 @@ class LutDetails:
 
     name: str
     path: str
-    fingerprint: str
     manufacturer: str
     manufacturer_source: str
     material_type: str
@@ -207,7 +206,6 @@ class LutDetailService:
         return LutDetails(
             name=parsed.name,
             path=str(parsed.path),
-            fingerprint=parsed.fingerprint,
             manufacturer=identity.manufacturer,
             manufacturer_source=identity.manufacturer_source,
             material_type=identity.material_type,

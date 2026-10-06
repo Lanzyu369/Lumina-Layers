@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -66,18 +65,15 @@ def normalize_reference(
     """
 
     normalized_patches, warnings = normalize_reference_patches(patches)
-    reference_hash = compute_reference_hash(normalized_patches)
     normalized_source = normalize_reference_source(
         source,
         source_type=source_type,
         source_name=source_name,
         patch_count=len(normalized_patches),
-        reference_hash=reference_hash,
     )
     return {
         "patches": normalized_patches,
         "source": normalized_source,
-        "reference_hash": reference_hash,
         "warnings": warnings,
     }
 
@@ -134,7 +130,6 @@ def normalize_reference_source(
     source_type: str,
     source_name: str,
     patch_count: int,
-    reference_hash: str,
 ) -> dict[str, object]:
     raw = source if isinstance(source, Mapping) else {}
     return {
@@ -151,28 +146,9 @@ def normalize_reference_source(
         "lab_white_point": str(
             _first_present(raw, "lab_white_point", "labWhitePoint") or "D50"
         ),
-        "reference_hash": str(reference_hash),
     }
 
 
-def compute_reference_hash(patches: Sequence[Mapping[str, object]]) -> str:
-    payload = []
-    for patch in patches:
-        payload.append(
-            {
-                "index": int(patch["index"]),
-                "sRGB": [int(v) for v in patch["sRGB"]],  # type: ignore[index]
-                "Lab_d50": [_round_lab_value(v) for v in patch["Lab_d50"]],  # type: ignore[index]
-                "Lab_d65": [_round_lab_value(v) for v in patch["Lab_d65"]],  # type: ignore[index]
-            }
-        )
-    encoded = json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def sanitize_exposure_anchor_target(
@@ -248,19 +224,16 @@ def build_brand(
         )
         patches = normalized["patches"]
         reference_source = normalized["source"]
-        reference_hash = str(normalized["reference_hash"])
     else:
         patches = load_reference_patches(
             Path(definition["reference_file"]),
             exposure_anchor_target_srgb=exposure_anchor_target_srgb,
         )
-        reference_hash = compute_reference_hash(patches)
         reference_source = normalize_reference_source(
             _definition_source(definition),
             source_type="built_in",
             source_name=str(definition["name"]),
             patch_count=len(patches),
-            reference_hash=reference_hash,
         )
     patch_list = list(patches)  # type: ignore[arg-type]
     return {
@@ -270,7 +243,6 @@ def build_brand(
         "patches": patch_list,
         "color_map": build_color_map(patch_list),
         "reference_source": reference_source,
-        "reference_hash": reference_hash,
         "exposure_anchor_patch_index": EXPOSURE_ANCHOR_PATCH_INDEX,
         "exposure_anchor_target_srgb": int(exposure_anchor_target_srgb),
     }
@@ -326,7 +298,6 @@ def resolve_reference(
         "patches": patches,
         "color_map": build_color_map(patches),
         "reference_source": source,
-        "reference_hash": str(normalized["reference_hash"]),
         "warnings": list(normalized["warnings"]),  # type: ignore[arg-type]
         "exposure_anchor_patch_index": EXPOSURE_ANCHOR_PATCH_INDEX,
         "exposure_anchor_target_srgb": int(exposure_anchor_target_srgb),
@@ -351,7 +322,6 @@ def list_brand_summaries() -> list[dict[str, object]]:
                 if isinstance(brand.get("reference_source"), dict)
                 else "D50"
             ),
-            "referenceHash": brand.get("reference_hash"),
         }
         for brand in BRAND_REGISTRY.values()
     ]

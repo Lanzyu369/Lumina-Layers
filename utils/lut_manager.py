@@ -5,7 +5,6 @@ LUT preset management module
 
 import copy
 from dataclasses import dataclass
-import hashlib
 import os
 import re
 import sys
@@ -161,7 +160,6 @@ class _NativeDbIndexItem:
     name: str
     path: str
     color_mode: str
-    fingerprint: str
 
 
 @dataclass(frozen=True)
@@ -308,7 +306,6 @@ class LUTManager:
     _native_source_index_cache_at: float | None = None
     _native_source_index_lock = threading.Lock()
     _source_catalog_cache: dict[str, list[dict]] | None = None
-    _source_catalog_cache_signature: tuple[Any, ...] | None = None
     _source_catalog_cache_checked_at: float | None = None
     _source_catalog_cache_lock = threading.Lock()
     NATIVE_SOURCE_INDEX_TTL_SECONDS = 30.0
@@ -799,7 +796,6 @@ class LUTManager:
 
         with cls._source_catalog_cache_lock:
             cls._source_catalog_cache = None
-            cls._source_catalog_cache_signature = None
             cls._source_catalog_cache_checked_at = None
 
     @classmethod
@@ -863,16 +859,10 @@ class LUTManager:
                 group["model_path"] = native_ctx.stage_model_path
 
             if native_ctx.source_kind == SOURCE_KIND_COLORD_DB:
-                try:
-                    fingerprint_fn = cls.compute_fingerprint
-                    fingerprint = fingerprint_fn(file_path)
-                except OSError:
-                    fingerprint = ""
                 group["db_options"][Path(file_path).name] = _NativeDbIndexItem(
                     name=Path(file_path).name,
                     path=file_path,
                     color_mode=cls.infer_color_mode(Path(file_path).name, file_path),
-                    fingerprint=fingerprint,
                 )
             elif native_ctx.source_kind == SOURCE_KIND_PACKAGE:
                 group["package_name"] = Path(file_path).name
@@ -936,69 +926,9 @@ class LUTManager:
                 and (now - cls._native_source_index_cache_at) < float(cls.NATIVE_SOURCE_INDEX_TTL_SECONDS)
             ):
                 return cls._native_source_index_cache
-            if cls._native_source_index_cache is None or cls._native_source_index_cache_at is None:
-                cls._native_source_index_cache = cls._build_native_source_index()
-                cls._native_source_index_cache_at = now
-            elif (now - cls._native_source_index_cache_at) >= float(cls.NATIVE_SOURCE_INDEX_TTL_SECONDS):
-                cls._native_source_index_cache = cls._build_native_source_index()
-                cls._native_source_index_cache_at = now
+            cls._native_source_index_cache = cls._build_native_source_index()
+            cls._native_source_index_cache_at = now
             return cls._native_source_index_cache
-
-    @classmethod
-    def _source_catalog_legacy_signature(cls) -> tuple[tuple[str, str, str, int, int], ...]:
-        signature: list[tuple[str, str, str, int, int]] = []
-        for root_label, root_dir in cls._scan_legacy_roots():
-            patterns = [
-                os.path.join(root_dir, "**", "*.npy"),
-                os.path.join(root_dir, "**", "*.json"),
-                os.path.join(root_dir, "**", "*.npz"),
-                os.path.join(root_dir, "**", "*.msgpack"),
-            ]
-            seen: set[str] = set()
-            for pattern in patterns:
-                for file_path in glob.glob(pattern, recursive=True):
-                    if cls._is_preset_sync_file(root_label, root_dir, file_path):
-                        continue
-                    resolved_path = str(Path(file_path).resolve())
-                    if resolved_path in seen:
-                        continue
-                    seen.add(resolved_path)
-                    try:
-                        stat = Path(resolved_path).stat()
-                        mtime_ns = int(stat.st_mtime_ns)
-                        size = int(stat.st_size)
-                    except OSError:
-                        mtime_ns = -1
-                        size = -1
-                    signature.append((root_label, root_dir, resolved_path, mtime_ns, size))
-        return tuple(sorted(signature))
-
-    @staticmethod
-    def _native_source_index_signature(
-        native_index: tuple[_NativeBrandIndexItem, ...],
-    ) -> tuple[tuple[Any, ...], ...]:
-        return tuple(
-            (
-                item.brand_key,
-                item.material_type,
-                item.vendor,
-                item.display_name,
-                tuple(
-                    (
-                        option.name,
-                        option.path,
-                        option.color_mode,
-                        option.fingerprint,
-                    )
-                    for option in item.db_options
-                ),
-                item.default_db_names,
-                item.package_name,
-                item.model_name,
-                item.supported_modes,
-            )
-            for item in native_index
-        )
 
     @classmethod
     def _build_legacy_catalog_groups(cls) -> list[dict]:
@@ -1018,17 +948,11 @@ class LUTManager:
                 if cls._is_preset_sync_file(root_label, root_dir, file_path):
                     continue
                 display_name = cls._display_name_for_root(root_label, root_dir, file_path)
-                try:
-                    fingerprint_fn = cls.compute_fingerprint
-                    fingerprint = fingerprint_fn(file_path)
-                except OSError:
-                    fingerprint = ""
                 groups.setdefault(root_label, []).append(
                     {
                         "name": display_name,
                         "color_mode": cls.infer_color_mode(display_name, file_path),
                         "path": file_path,
-                        "fingerprint": fingerprint,
                     }
                 )
 
@@ -1056,7 +980,6 @@ class LUTManager:
                             "name": option.name,
                             "path": option.path,
                             "color_mode": option.color_mode,
-                            "fingerprint": option.fingerprint,
                         }
                         for option in item.db_options
                     ],
@@ -1166,7 +1089,7 @@ class LUTManager:
             separators=(",", ":"),
             default=str,
         )
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        return payload
 
     @staticmethod
     def _legacy_standard_stacks_for_count(color_count: int) -> np.ndarray | None:
@@ -1356,7 +1279,7 @@ class LUTManager:
     ) -> str:
         rgb_parts: list[np.ndarray] = []
         stack_parts: list[np.ndarray] = []
-        source_fingerprints: list[dict[str, str]] = []
+        source_references: list[dict[str, str]] = []
         seen_recipes: set[tuple[int, ...]] = set()
         baseline_print_signature: dict[str, Any] | None = None
         baseline_metadata: LUTMetadata | None = None
@@ -1417,11 +1340,10 @@ class LUTManager:
             if kept_rgb:
                 rgb_parts.append(np.asarray(kept_rgb, dtype=np.uint8).reshape(-1, 3))
                 stack_parts.append(np.asarray(kept_stacks, dtype=np.int32))
-            source_fingerprints.append(
+            source_references.append(
                 {
                     "name": lut_name,
                     "path": str(Path(lut_path).resolve()),
-                    "fingerprint": cls.compute_fingerprint(lut_path),
                 }
             )
 
@@ -1448,7 +1370,8 @@ class LUTManager:
             metadata.extensions.pop(key, None)
         metadata.extensions["source_kind"] = "legacy_multi"
         metadata.extensions["selected_lut_names"] = list(selected_names)
-        metadata.extensions["source_fingerprints"] = source_fingerprints
+        metadata.extensions.pop("source_fingerprints", None)
+        metadata.extensions["source_references"] = source_references
 
         fd, temp_path = tempfile.mkstemp(suffix=".npz", dir=TEMP_DIR)
         os.close(fd)
@@ -1476,24 +1399,11 @@ class LUTManager:
                 return copy.deepcopy(cls._source_catalog_cache)
 
         native_index = cls._get_native_source_index()
-        signature = (
-            cls._source_catalog_legacy_signature(),
-            cls._native_source_index_signature(native_index),
-        )
-        with cls._source_catalog_cache_lock:
-            if (
-                cls._source_catalog_cache is not None
-                and cls._source_catalog_cache_signature == signature
-            ):
-                cls._source_catalog_cache_checked_at = now
-                return copy.deepcopy(cls._source_catalog_cache)
-
         catalog = {
             "legacy_groups": cls._build_legacy_catalog_groups(),
             "native_brand_groups": cls._build_native_brand_catalog_groups_from_index(native_index),
         }
         with cls._source_catalog_cache_lock:
-            cls._source_catalog_cache_signature = signature
             cls._source_catalog_cache = copy.deepcopy(catalog)
             cls._source_catalog_cache_checked_at = now
         return catalog
@@ -1576,24 +1486,6 @@ class LUTManager:
 
         raise ValueError(f"No loadable source found for native brand: {vendor}/{material_type}")
 
-    @staticmethod
-    def _compute_lut_digest(file_path: str) -> str:
-        """Compute a SHA-256 fingerprint (first 32 hex chars) for a LUT file.
-        计算 LUT 文件的 SHA-256 指纹（前 32 个十六进制字符）。
-
-        Args:
-            file_path: LUT 文件的绝对路径。
-
-        Returns:
-            str: SHA-256 前 32 个十六进制字符。
-        """
-        sha = hashlib.sha256()
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                sha.update(chunk)
-        return sha.hexdigest()[:32]
-
-    compute_fingerprint = staticmethod(_compute_lut_digest)
     
     @classmethod
     def save_uploaded_lut(cls, uploaded_file, custom_name=None):

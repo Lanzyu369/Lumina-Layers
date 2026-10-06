@@ -127,6 +127,27 @@ class TestLoadMaterialsMemo:
         assert len(calls) == 2
 
 
+def test_same_path_same_size_and_restored_mtime_reload_archive(tmp_path, monkeypatch):
+    import os
+
+    _write_material(tmp_path, "red")
+    archive = tmp_path / "red" / "material.json"
+    old_stat = archive.stat()
+    original = archive.read_text(encoding="utf-8")
+    loads = []
+    monkeypatch.setattr(
+        provider._material_lut_synthesis, "load_multiple_materials",
+        lambda names, **kwargs: loads.append(archive.read_text(encoding="utf-8")) or [object()],
+    )
+    provider.load_materials(["red"], materials_dir=str(tmp_path))
+    replacement = original.replace("red", "tan")
+    assert replacement != original and len(replacement) == len(original)
+    archive.write_text(replacement, encoding="utf-8")
+    os.utime(archive, ns=(old_stat.st_atime_ns, old_stat.st_mtime_ns))
+    provider.load_materials(["red"], materials_dir=str(tmp_path))
+    assert loads == [original, replacement]
+
+
 class TestLoadSolverCachePassthrough:
     """``load_solver_cache`` faithfully delegates to the fallback loader.
     ``load_solver_cache`` 忠实委托给回退加载器。

@@ -19,7 +19,6 @@ function createPreview(): ImportPreview {
           filename: "photo.png",
           mime_type: "image/png",
           byte_size: 4,
-          sha256: "abcd",
           encoding: "base64",
           payload_b64: "dGVzdA==",
         },
@@ -27,7 +26,7 @@ function createPreview(): ImportPreview {
       recipe: {
         converter: {
           base: {
-            lut: { name: "LUT", color_mode: "4-Color (RYBW)", fingerprint: "fp" },
+            lut: { name: "LUT", color_mode: "4-Color (RYBW)" },
             color_mode: "4-Color (RYBW)",
             modeling_mode: "high-fidelity",
             target_width_mm: 10,
@@ -84,10 +83,6 @@ function createPreview(): ImportPreview {
           device: { printer_id: "", slicer: "", nozzle_size: "0.4" },
         },
       },
-      integrity: {
-        recipe_sha256: "0".repeat(64),
-        asset_checksums: { primary: "abcd" },
-      },
       compat: { min_schema_version: 1 },
       warnings: [],
     },
@@ -116,16 +111,11 @@ function createPreview(): ImportPreview {
             filename: "photo.png",
             mime_type: "image/png",
             byte_size: 4,
-            sha256: "abcd",
             encoding: "base64",
             payload_b64: "dGVzdA==",
           },
         },
         recipe: {},
-        integrity: {
-          recipe_sha256: "0".repeat(64),
-          asset_checksums: { primary: "abcd" },
-        },
         compat: { min_schema_version: 1 },
         warnings: [],
       },

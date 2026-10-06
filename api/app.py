@@ -18,7 +18,6 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
-from hashlib import sha256
 from math import isfinite
 from pathlib import Path
 from typing import Any
@@ -43,13 +42,13 @@ from api.runtime_limits import configure_blas_thread_limits
 # the call at api.app module scope (rather than only in api_server.py)
 # ensures coverage for every entry point that imports the FastAPI app:
 # api_server.py, ``python -m uvicorn api.app:app``, debugpy launches,
-# start_dev.py spawns, and Docker / CI runners.
+# launcher subprocesses and CI runners.
 # 在任何模块读取 os.environ 之前，从 <repo>/.env.local 把值填入进程
 # 环境。必须早于日志初始化（它会读 LUMINA_LOG_*）以及第一次请求触发
 # feedback_email 的 lru_cached is_email_configured()。把调用放在
 # api.app 模块作用域而不是仅限 api_server.py，可以覆盖所有导入 FastAPI
 # 应用的入口：api_server.py、``python -m uvicorn api.app:app``、
-# debugpy 启动、start_dev.py 子进程、Docker / CI 等。
+# debugpy 启动、启动器子进程及 CI 等。
 load_env_local()
 configure_blas_thread_limits()
 
@@ -298,7 +297,7 @@ class _FrontendStaticFiles(StaticFiles):
         )
         # File timestamps alone cannot distinguish a cached, incorrect MIME type.
         representation = f"{response.headers['etag']}:{media_type}"
-        response.headers["etag"] = f'"{sha256(representation.encode()).hexdigest()}"'
+        response.headers["etag"] = f'"{representation.encode().hex()}"'
         request_headers = Headers(scope=scope)
         if request_headers.get("if-none-match") and self.is_not_modified(
             response.headers, request_headers
@@ -308,8 +307,8 @@ class _FrontendStaticFiles(StaticFiles):
 
 
 def _configure_frontend_dist(app: FastAPI) -> None:
-    """Serve the built React SPA for packaged desktop and Docker deployments.
-    为桌面打包版及 Docker 部署提供已构建的 React SPA。
+    """Serve the built React SPA for packaged desktop installations.
+    为桌面打包版提供已构建的 React SPA。
     """
     if not _env_enabled("LUMINA_SERVE_FRONTEND_DIST"):
         return

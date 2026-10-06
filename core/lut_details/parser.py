@@ -27,7 +27,6 @@ class ParsedLut:
 
     name: str
     path: Path
-    fingerprint: str
     color_mode: str
     color_count: int
     source_kind: str
@@ -56,7 +55,6 @@ class LutParser:
         """
 
         resolved_path = Path(path).resolve()
-        fingerprint = LUTManager.compute_fingerprint(str(resolved_path))
         raw_payload = self._load_raw_payload(resolved_path)
         suffix = resolved_path.suffix.lower()
         loaded_model_package = False
@@ -98,7 +96,6 @@ class LutParser:
         return ParsedLut(
             name=name,
             path=resolved_path,
-            fingerprint=fingerprint,
             color_mode=color_mode,
             color_count=color_count,
             source_kind=metadata.get_source_kind(),

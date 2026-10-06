@@ -5,7 +5,7 @@
  * Our writer emits tEXt, but external tools (e.g. ImageMagick resizing a card)
  * re-save long tEXt values as zlib-compressed zTXt. These tests rewrite the
  * recipe chunk the same way and run the full parseRecipeFile() path, which
- * includes the recipe_sha256 and asset checksum integrity checks.
+ * retains attachment decoding and declared byte-size validation.
  */
 
 import { crc32, deflateSync } from "node:zlib";
@@ -18,7 +18,6 @@ import {
   extractRecipeFromPng,
   hasLuminaRecipe,
 } from "../recipe/pngMetadata";
-import { sha256String } from "../recipe/utils";
 import { DEFAULT_STATE } from "../stores/converter";
 import type { ConverterState } from "../stores/converter/store";
 import { DEFAULT_SETTINGS } from "../stores/settingsStore";
@@ -143,11 +142,29 @@ async function listChunkTypes(png: Blob): Promise<string[]> {
 }
 
 describe("share-card PNG textual chunk compatibility", () => {
+  it("ignores retired legacy digest chunks and omits them from new cards", async () => {
+    const recipe = await buildShareCardRecipe(new Uint8Array([1, 2, 3, 4]));
+    const current = await embedRecipeInPng(createMinimalPng(), recipe);
+    expect(new TextDecoder().decode(await current.arrayBuffer())).not.toContain("lumina:recipe_sha256");
+    const legacy = JSON.parse(JSON.stringify(recipe));
+    legacy.schema_version = 3;
+    legacy.integrity = { recipe_sha256: "stale", asset_checksums: { primary: "stale" } };
+    legacy.asset.primary.sha256 = "stale";
+    legacy.recipe.converter.base.target_width_mm = 124;
+    const bytes = new Uint8Array(await (await embedRecipeInPng(createMinimalPng(), legacy)).arrayBuffer());
+    const staleChunk = encodeTextualChunk("tEXt", "lumina:recipe_sha256", "stale");
+    const oldCard = new Blob([concatBytes([bytes.subarray(0, bytes.length - 12), staleChunk, bytes.subarray(bytes.length - 12)])], { type: "image/png" });
+    const parsed = await parseRecipeFile(new File([oldCard], "legacy.png", { type: "image/png" }));
+    expect(parsed.recipe.recipe.converter!.base.target_width_mm).toBe(124);
+    expect(parsed.recipe).not.toHaveProperty("integrity");
+    expect(await listChunkTypes(await extractCoverFromPng(oldCard))).toEqual(["IHDR", "IDAT", "IEND"]);
+  });
+
   it.each<TextualChunkKind>(["tEXt", "zTXt", "iTXt", "iTXt-compressed"])(
-    "imports a card whose recipe is stored as %s and passes integrity checks",
+    "imports a card whose recipe is stored as %s and restores its recipe",
     async (kind) => {
       const recipe = await buildShareCardRecipe(new Uint8Array([1, 2, 3, 4]));
-      const embedded = await embedRecipeInPng(createMinimalPng(), recipe, recipe.integrity.recipe_sha256);
+      const embedded = await embedRecipeInPng(createMinimalPng(), recipe);
       const card = await rewriteTextChunks(embedded, new Set([KEY_RECIPE_JSON]), kind);
 
       const expectedType = kind.startsWith("iTXt") ? "iTXt" : kind;
@@ -156,15 +173,12 @@ describe("share-card PNG textual chunk compatibility", () => {
       const parsed = await parseRecipeFile(new File([card], "card.png", { type: "image/png" }));
       expect(parsed.source).toBe("png");
       expect(parsed.recipe.recipe).toEqual(recipe.recipe);
-      expect(await sha256String(JSON.stringify(parsed.recipe.recipe))).toBe(
-        recipe.integrity.recipe_sha256,
-      );
     },
   );
 
   it("detects a card whose lumina:format marker is compressed", async () => {
     const recipe = await buildShareCardRecipe(new Uint8Array([1, 2, 3, 4]));
-    const embedded = await embedRecipeInPng(createMinimalPng(), recipe, recipe.integrity.recipe_sha256);
+    const embedded = await embedRecipeInPng(createMinimalPng(), recipe);
     const card = await rewriteTextChunks(embedded, new Set([KEY_FORMAT, KEY_RECIPE_JSON]), "zTXt");
 
     expect(await hasLuminaRecipe(card)).toBe(true);
@@ -172,7 +186,7 @@ describe("share-card PNG textual chunk compatibility", () => {
 
   it("strips compressed Lumina chunks when extracting the cover", async () => {
     const recipe = await buildShareCardRecipe(new Uint8Array([1, 2, 3, 4]));
-    const embedded = await embedRecipeInPng(createMinimalPng(), recipe, recipe.integrity.recipe_sha256);
+    const embedded = await embedRecipeInPng(createMinimalPng(), recipe);
     const card = await rewriteTextChunks(embedded, new Set([KEY_RECIPE_JSON]), "zTXt");
 
     const cover = await extractCoverFromPng(card);
@@ -181,7 +195,7 @@ describe("share-card PNG textual chunk compatibility", () => {
 
   it("returns null instead of throwing for a corrupt zTXt recipe stream", async () => {
     const recipe = await buildShareCardRecipe(new Uint8Array([1, 2, 3, 4]));
-    const embedded = await embedRecipeInPng(createMinimalPng(), recipe, recipe.integrity.recipe_sha256);
+    const embedded = await embedRecipeInPng(createMinimalPng(), recipe);
     const card = await rewriteTextChunks(embedded, new Set([KEY_RECIPE_JSON]), "zTXt");
     const bytes = new Uint8Array(await card.arrayBuffer());
     const typeIdx = bytes.findIndex(
@@ -196,7 +210,7 @@ describe("share-card PNG textual chunk compatibility", () => {
   });
 
   it(
-    "imports a >10 MB recipe stored as zTXt with a valid recipe_sha256",
+    "imports a >10 MB recipe stored as zTXt without digest metadata",
     async () => {
       // 8 MB image asset -> ~10.7 MB base64 inside the recipe JSON.
       const imageBytes = new Uint8Array(8 * 1024 * 1024);
@@ -205,14 +219,13 @@ describe("share-card PNG textual chunk compatibility", () => {
       const recipeJsonBytes = new TextEncoder().encode(JSON.stringify(recipe)).length;
       expect(recipeJsonBytes).toBeGreaterThan(10 * 1024 * 1024);
 
-      const embedded = await embedRecipeInPng(createMinimalPng(), recipe, recipe.integrity.recipe_sha256);
+      const embedded = await embedRecipeInPng(createMinimalPng(), recipe);
       const card = await rewriteTextChunks(embedded, new Set([KEY_RECIPE_JSON]), "zTXt");
       expect(await listChunkTypes(card)).toContain("zTXt");
 
       const parsed = await parseRecipeFile(new File([card], "large.png", { type: "image/png" }));
-      expect(parsed.recipe.integrity.recipe_sha256).toBe(recipe.integrity.recipe_sha256);
       expect(parsed.recipe.asset.primary.byte_size).toBe(imageBytes.length);
-      expect(parsed.recipe.asset.primary.sha256).toBe(recipe.asset.primary.sha256);
+      expect(parsed.recipe.asset.primary.payload_b64).toBe(recipe.asset.primary.payload_b64);
     },
     60_000,
   );

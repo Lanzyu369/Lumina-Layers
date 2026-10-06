@@ -74,8 +74,8 @@ def test_frontend_dist_can_be_served_when_enabled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Docker/local deployment can serve the built SPA from FastAPI.
-    Docker/本地部署可由 FastAPI 服务已构建的前端 SPA。
+    """Packaged desktop installations serve the built SPA from FastAPI.
+    桌面打包版可由 FastAPI 服务已构建的前端 SPA。
     """
     dist_dir = tmp_path / "dist"
     assets_dir = dist_dir / "assets"

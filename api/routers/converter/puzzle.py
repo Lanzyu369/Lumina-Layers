@@ -9,7 +9,6 @@ for the converter workspace.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import io
 import json
 import os
@@ -322,9 +321,9 @@ def _get_layout_dimensions(
     return width_px, height_px, total_width_mm, total_height_mm
 
 
-def _get_mask_hash(mask_solid: np.ndarray | None) -> str:
-    """Build a stable hash for the current solid mask.
-    为当前实体蒙版生成稳定哈希。
+def _get_mask_identity(mask_solid: np.ndarray | None) -> str | bytes:
+    """Compare the exact packed solid mask.
+    直接比较当前实体蒙版的完整压缩数据。
     """
 
     if mask_solid is None:
@@ -333,7 +332,7 @@ def _get_mask_hash(mask_solid: np.ndarray | None) -> str:
     if solid_mask.size == 0 or np.all(solid_mask):
         return "full-rect"
     packed = np.packbits(solid_mask, axis=None)
-    return hashlib.sha1(packed.tobytes()).hexdigest()
+    return packed.tobytes()
 
 
 def _build_layout_cache_key(
@@ -362,7 +361,7 @@ def _build_layout_cache_key(
         request.connector_style.value,
         round(float(request.irregularity_strength), 6),
         round(float(request.min_neck_width_mm), 6),
-        _get_mask_hash(mask_solid if isinstance(mask_solid, np.ndarray) else None),
+        _get_mask_identity(mask_solid if isinstance(mask_solid, np.ndarray) else None),
     )
 
 
@@ -392,7 +391,7 @@ def _build_boundary_cache_key(
     return (
         width_px,
         height_px,
-        _get_mask_hash(mask_solid if isinstance(mask_solid, np.ndarray) else None),
+        _get_mask_identity(mask_solid if isinstance(mask_solid, np.ndarray) else None),
     )
 
 

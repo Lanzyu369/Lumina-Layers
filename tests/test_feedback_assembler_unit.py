@@ -223,9 +223,9 @@ def test_collect_sync_attachments_copies_original_and_final(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Original image + final 3MF manifests are built with correct fingerprints.
+    """Original image and final artifact are copied with descriptive metadata.
 
-    原图与最终 3MF 的 manifest 包含正确的 SHA256 与字节大小。
+    原图与最终 3MF 保持源文件字节，并记录文件名与字节大小。
     """
     target_logger = logging.getLogger("lumina.api.feedback_assembler")
     target_logger.addHandler(caplog.handler)
@@ -276,13 +276,15 @@ def test_collect_sync_attachments_copies_original_and_final(
     assert result.original_image["status"] == "attached"
     assert result.original_image["filename"] == "original.png"
     assert result.original_image["size_bytes"] == len(b"PNGDATA")
-    assert (ticket_dir / "original.png").exists()
+    assert (ticket_dir / "original.png").read_bytes() == image_path.read_bytes()
+    assert "sha256" not in result.original_image
 
     assert result.final_artifact["status"] == "attached"
     assert result.final_artifact["filename"] == "final.3mf"
     assert result.final_artifact["artifact_type"] == "3mf"
     assert result.final_artifact["history_count"] == 1
-    assert (ticket_dir / "final.3mf").exists()
+    assert (ticket_dir / "final.3mf").read_bytes() == artifact_path.read_bytes()
+    assert "sha256" not in result.final_artifact
 
     assert result.lut["status"] == "not_applicable"
     attachment_logs = [
@@ -465,7 +467,7 @@ def test_collect_sync_attachments_marks_copy_failures_explicitly(
     assert not (ticket_dir / "final.3mf").exists()
 
 
-def test_collect_sync_attachments_marks_hash_failures_explicitly(
+def test_collect_sync_attachments_marks_copy_failures_explicitly(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -498,12 +500,10 @@ def test_collect_sync_attachments_marks_hash_failures_explicitly(
         },
     }
 
-    def _fail_hash(path: str | Path) -> str:
-        if Path(path).name in {"original.png", "final.3mf"}:
-            raise OSError("hash read failed")
-        return "0" * 64
+    def _fail_copy(_source: Path, _destination: Path) -> None:
+        raise OSError("copy failed")
 
-    monkeypatch.setattr("api.feedback_assembler.file_sha256", _fail_hash)
+    monkeypatch.setattr("api.feedback_assembler.shutil.copy2", _fail_copy)
 
     result = collect_sync_attachments(ticket_dir, payload, registry, now_beijing())
 
@@ -752,10 +752,10 @@ def test_shared_cloud_reference_survives_full_ticket_finalization(
         if mutation == "missing":
             source.unlink()
         elif mutation == "changed":
-            source.write_bytes(b"CHANGED_LUT!")  # Equal length: require hash validation.
+            source.write_bytes(b"CHANGED_LUT!")  # A preset reference has no content digest gate.
         elif mutation == "symlink":
             outside = tmp_path / "outside.json"
-            outside.write_bytes(original)  # Matching hash must not bypass containment.
+            outside.write_bytes(original)  # Matching bytes must not bypass containment.
             source.unlink()
             try:
                 source.symlink_to(outside)
@@ -764,7 +764,7 @@ def test_shared_cloud_reference_survives_full_ticket_finalization(
         asyncio.run(finalize_ticket_async(ticket_dir, _MockFileRegistry({})))
         finalized = json.loads(ticket_json.read_text(encoding="utf-8"))
         attachment = finalized["attachments"]["lut"]
-        if mutation == "unchanged":
+        if mutation in {"unchanged", "changed"}:
             assert finalized["assembly_status"] == "done"
             assert attachment["status"] == "preset_reference_only"
         else:
@@ -847,6 +847,69 @@ def test_finalize_ticket_async_marks_invalid_attachment_section_partial(
     assert finalized["attachments"]["original_image"]["error_type"] == (
         "InvalidAttachmentManifest"
     )
+
+
+@pytest.mark.parametrize("legacy_digest", [None, "retired-digest"])
+def test_finalize_ticket_accepts_local_attachments_without_content_digests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy_digest: str | None,
+) -> None:
+    """Local finalization accepts new manifests and ignores old digest metadata.
+    本地终结流程接受新清单，并忽略旧摘要元数据。
+    """
+    _disable_feedback_upload(monkeypatch)
+    repo_root = _use_feedback_lut_repo(monkeypatch, tmp_path)
+    source_lut = repo_root / "lut-preset" / "Custom" / "safe.json"
+    source_lut.write_bytes(b"CUSTOM_LUT_BYTES")
+    image_path = tmp_path / "input.png"
+    image_path.write_bytes(b"PNGDATA")
+    artifact_path = tmp_path / "output.3mf"
+    artifact_path.write_bytes(b"3MFDATA")
+    registry = _MockFileRegistry({
+        "session": {
+            "image": _make_entry(str(image_path), image_path.name, created_at=1.0),
+            "final": _make_entry(str(artifact_path), artifact_path.name, created_at=2.0),
+        },
+    })
+    ticket_dir = tmp_path / "LUM-20261003-local"
+    ticket_dir.mkdir()
+    payload = {
+        "schema_version": 3,
+        "ticket_id": ticket_dir.name,
+        "received_at_cst": now_beijing().isoformat(),
+        "assembly_status": "in_progress",
+        "context": {
+            "active_tab": "converter", "source_version": "legacy",
+            "lut_name": "Custom - safe",
+            "active_original_image_ref": {"session_id": "session"},
+            "active_final_artifact_ref": {"session_id": "session", "artifact_type": "3mf"},
+        },
+    }
+    try:
+        collected = collect_sync_attachments(ticket_dir, payload, registry, now_beijing())
+        payload["attachments"] = {
+            "original_image": collected.original_image,
+            "final_artifact": collected.final_artifact,
+            "lut": collected.lut,
+        }
+        for attachment in payload["attachments"].values():
+            assert "sha256" not in attachment
+            if legacy_digest is not None:
+                attachment["sha256"] = legacy_digest
+        ticket_json = ticket_dir / "ticket.json"
+        ticket_json.write_text(json.dumps(payload), encoding="utf-8")
+
+        asyncio.run(finalize_ticket_async(ticket_dir, registry))
+
+        finalized = json.loads(ticket_json.read_text(encoding="utf-8"))
+        assert finalized["assembly_status"] == "done"
+        for key in ("original_image", "final_artifact", "lut"):
+            assert finalized["attachments"][key]["status"] == "attached"
+        assert (ticket_dir / "original.png").read_bytes() == image_path.read_bytes()
+        assert (ticket_dir / "final.3mf").read_bytes() == artifact_path.read_bytes()
+        assert (ticket_dir / "lut.json").read_bytes() == source_lut.read_bytes()
+        assert "sha256" not in (ticket_dir / "index.md").read_text(encoding="utf-8")
+    finally:
+        LUTManager.invalidate_preset_cache()
 
 
 def test_finalize_ticket_async_marks_invalid_attached_manifests_partial(
@@ -1406,7 +1469,7 @@ def test_collect_lut_marks_custom_copy_failure(
     assert not (ticket_dir / "lut.json").exists()
 
 
-def test_collect_lut_marks_custom_hash_failure(
+def test_collect_lut_marks_custom_copy_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1426,12 +1489,10 @@ def test_collect_lut_marks_custom_hash_failure(
         },
     }
 
-    def _fail_hash(path: str | Path) -> str:
-        if Path(path).name == "safe.json":
-            raise OSError("hash read failed")
-        return "0" * 64
+    def _fail_copy(_source: Path, _destination: Path) -> None:
+        raise OSError("copy failed")
 
-    monkeypatch.setattr("api.feedback_assembler.file_sha256", _fail_hash)
+    monkeypatch.setattr("api.feedback_assembler.shutil.copy2", _fail_copy)
 
     try:
         result = collect_sync_attachments(

@@ -234,7 +234,6 @@ describe('Feature: palette-optimization, Property 1: LUT 颜色缓存命中跳�
           name: string;
           path: string;
           color_mode: string;
-          fingerprint: string;
         }>;
       }>;
       native_brand_groups: [];
@@ -246,7 +245,6 @@ describe('Feature: palette-optimization, Property 1: LUT 颜色缓存命中跳�
           name: string;
           path: string;
           color_mode: string;
-          fingerprint: string;
         }>;
       }>;
       native_brand_groups: [];
@@ -273,7 +271,6 @@ describe('Feature: palette-optimization, Property 1: LUT 颜色缓存命中跳�
               name: 'new-lut',
               path: '/new.npy',
               color_mode: '4-Color (RYBW)',
-              fingerprint: 'new-fingerprint',
             },
           ],
         },
@@ -290,7 +287,6 @@ describe('Feature: palette-optimization, Property 1: LUT 颜色缓存命中跳�
               name: 'old-lut',
               path: '/old.npy',
               color_mode: '4-Color (RYBW)',
-              fingerprint: 'old-fingerprint',
             },
           ],
         },
@@ -304,7 +300,6 @@ describe('Feature: palette-optimization, Property 1: LUT 颜色缓存命中跳�
       lutListFull: [
         expect.objectContaining({
           name: 'new-lut',
-          fingerprint: 'new-fingerprint',
         }),
       ],
       nativeBrandGroupsLoading: false,

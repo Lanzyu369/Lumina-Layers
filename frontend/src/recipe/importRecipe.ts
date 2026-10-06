@@ -6,9 +6,10 @@
 import type {
   AssetEntry,
   ConverterRecipeSource,
+  LutReference,
   LuminaRecipe,
 } from "./types";
-import { WORKSHOP_RECIPE_ENVELOPE_MAX_BYTES } from "./types";
+import { DEFAULT_CONVERTER_RECIPE_PUZZLE, WORKSHOP_RECIPE_ENVELOPE_MAX_BYTES } from "./types";
 import {
   DEFAULT_MODEL_SURFACE_MODEL_ROTATION,
   DEFAULT_MODEL_SURFACE_PLACEMENT,
@@ -24,7 +25,7 @@ import type {
 } from "../api/types";
 import { extractRecipeFromPng } from "./pngMetadata";
 import { migrateRecipe } from "./migration";
-import { base64ToFile, sha256Hex, sha256String } from "./utils";
+import { base64ToFile } from "./utils";
 import {
   normalizeFridgeMagnetItems,
   resolveFridgeMagnetSpacerThick,
@@ -124,8 +125,6 @@ export const RECIPE_IMPORT_WARNING_WORKSHOP_DEGRADED =
 
 export const RECIPE_IMPORT_NOT_SHARE_CARD_ERROR =
   "PNG file does not contain Lumina recipe metadata";
-export const RECIPE_INTEGRITY_ERROR =
-  "Integrity check failed — recipe data may be corrupted";
 export const RECIPE_ASSET_CORRUPT_ERROR =
   "Asset data is corrupted — unable to restore original file";
 const WORKSHOP_MODULE_ID_PATTERN =
@@ -233,7 +232,7 @@ export async function parseRecipeFile(file: File): Promise<ParsedRecipe> {
       throw new Error("Invalid .lumina.json: failed to parse JSON");
     }
     const recipe = migrateRecipe(raw);
-    await validateRecipeIntegrity(recipe);
+    validateRecipeAssets(recipe);
     return { recipe, source: "json" };
   }
 
@@ -243,109 +242,90 @@ export async function parseRecipeFile(file: File): Promise<ParsedRecipe> {
       throw new Error(RECIPE_IMPORT_NOT_SHARE_CARD_ERROR);
     }
     const migrated = migrateRecipe(recipe);
-    await validateRecipeIntegrity(migrated);
+    validateRecipeAssets(migrated);
     return { recipe: migrated, source: "png" };
   }
 
   throw new Error(`Unsupported file type: ${file.name}`);
 }
 
-async function validateRecipeIntegrity(recipe: LuminaRecipe): Promise<void> {
-  const integrity = recipe.integrity;
-  if (
-    !integrity ||
-    typeof integrity.recipe_sha256 !== "string" ||
-    !integrity.asset_checksums ||
-    typeof integrity.asset_checksums !== "object"
-  ) {
-    throw new Error(RECIPE_INTEGRITY_ERROR);
-  }
-
-  const expectedRecipeHash = await sha256String(JSON.stringify(recipe.recipe));
-  if (expectedRecipeHash !== integrity.recipe_sha256) {
-    throw new Error(RECIPE_INTEGRITY_ERROR);
-  }
-
+function validateRecipeAssets(recipe: LuminaRecipe): void {
   const assetEntries = recipe.asset;
-  await validateAssetIntegrity("primary", assetEntries?.primary, integrity.asset_checksums);
-  if (assetEntries?.heightmap) {
-    await validateAssetIntegrity("heightmap", assetEntries.heightmap, integrity.asset_checksums);
+  validateAsset(assetEntries?.primary);
+  const relief = recipe.recipe.converter?.relief;
+  if (relief?.enable_relief && relief.auto_height_mode === "use-heightmap" && !assetEntries.heightmap) {
+    throw new Error(RECIPE_ASSET_CORRUPT_ERROR);
+  }
+  if (assetEntries?.heightmap !== undefined) {
+    validateAsset(assetEntries.heightmap);
   }
 }
 
-async function validateAssetIntegrity(
-  key: "primary" | "heightmap",
+function validateAsset(
   asset: AssetEntry | undefined,
-  checksums: Record<string, string>,
-): Promise<void> {
+): void {
   if (
     !asset ||
     asset.encoding !== "base64" ||
     typeof asset.payload_b64 !== "string" ||
-    typeof asset.sha256 !== "string" ||
-    typeof asset.byte_size !== "number" ||
-    typeof checksums[key] !== "string"
+    !isNonEmptyString(asset.filename) ||
+    !isNonEmptyString(asset.mime_type) ||
+    !Number.isSafeInteger(asset.byte_size) ||
+    asset.byte_size < 0
   ) {
     throw new Error(RECIPE_ASSET_CORRUPT_ERROR);
   }
 
-  let bytes: ArrayBuffer;
+  let file: File;
   try {
-    bytes = await base64ToFile(
+    file = base64ToFile(
       asset.payload_b64,
       asset.filename,
       asset.mime_type,
-    ).arrayBuffer();
+    );
   } catch {
     throw new Error(RECIPE_ASSET_CORRUPT_ERROR);
   }
 
-  if (bytes.byteLength !== asset.byte_size) {
+  if (file.size !== asset.byte_size) {
     throw new Error(RECIPE_ASSET_CORRUPT_ERROR);
   }
 
-  const actualHash = await sha256Hex(bytes);
-  if (actualHash !== asset.sha256 || actualHash !== checksums[key]) {
-    throw new Error(RECIPE_ASSET_CORRUPT_ERROR);
-  }
 }
 
 // ========== LUT matching ==========
 
 export type LutMatchResult =
-  | { matched: true; lutName: string; matchType: "fingerprint" | "name" }
-  | { matched: false; originalName: string; originalFingerprint: string };
+  | { matched: true; lutName: string; matchType: "record" | "name" }
+  | { matched: false; originalName: string };
 
 /**
  * Match a LUT reference against the locally available LUT list.
  * 将 LUT 引用与本地可用的 LUT 列表匹配。
  *
- * Priority: fingerprint → name → not found.
+ * Prefer the existing record path, then a unique name and color mode.
+ * 优先使用已有记录路径，其次匹配唯一名称与颜色模式。
  */
 export function matchLut(
-  lutRef: { name: string; fingerprint: string },
+  lutRef: LutReference,
   localLuts: LutInfo[],
-  localFingerprints: Record<string, string>,
 ): LutMatchResult {
-  // 1. Fingerprint match
-  for (const lut of localLuts) {
-    const fp = localFingerprints[lut.name];
-    if (fp && fp === lutRef.fingerprint) {
-      return { matched: true, lutName: lut.name, matchType: "fingerprint" };
-    }
+  const compatible = localLuts.filter((lut) => lut.color_mode === lutRef.color_mode);
+  const byRecord = lutRef.path_hint
+    ? compatible.filter((lut) => lut.path === lutRef.path_hint)
+    : [];
+  const candidates = byRecord.length > 0
+    ? byRecord
+    : compatible.filter((lut) => lut.name === lutRef.name);
+  const candidate = candidates[0];
+  // Converter selection is name-based; a duplicate name cannot restore safely.
+  if (candidates.length !== 1 || localLuts.filter((lut) => lut.name === candidate.name).length !== 1) {
+    return { matched: false, originalName: lutRef.name };
   }
-
-  // 2. Name match
-  const byName = localLuts.find((l) => l.name === lutRef.name);
-  if (byName) {
-    return { matched: true, lutName: byName.name, matchType: "name" };
-  }
-
-  // 3. Not found
   return {
-    matched: false,
-    originalName: lutRef.name,
-    originalFingerprint: lutRef.fingerprint,
+    matched: true,
+    lutName: candidate.name,
+    matchType: byRecord.length > 0 ? "record" : "name",
   };
 }
 
@@ -370,7 +350,6 @@ function restoreLegacyLutNames(
     return { names: [], missingSecondary: false };
   }
 
-  const availableNames = new Set(localLuts.map((lut) => lut.name));
   const normalized = normalizeStringList(selectedNames);
   const secondaryNames = normalized.slice(1);
   const names = [primaryName];
@@ -379,7 +358,7 @@ function restoreLegacyLutNames(
     if (name === primaryName || names.includes(name)) {
       continue;
     }
-    if (availableNames.has(name)) {
+    if (localLuts.filter((lut) => lut.name === name).length === 1) {
       names.push(name);
     } else {
       missingSecondary = true;
@@ -409,13 +388,11 @@ export interface RestoreResult {
  *
  * @param recipe - The parsed and migrated LuminaRecipe.
  * @param localLuts - Available LUT list from the store.
- * @param localFingerprints - LUT name → fingerprint map.
  * @returns RestoreResult with partial state, files, and warnings.
  */
 export function restoreConverterRecipe(
   recipe: LuminaRecipe,
   localLuts: LutInfo[],
-  localFingerprints: Record<string, string>,
 ): RestoreResult {
   if (!recipe.recipe.converter) {
     throw new Error("Recipe does not contain converter data");
@@ -456,11 +433,11 @@ export function restoreConverterRecipe(
   }
 
   // --- LUT matching ---
-  const lutMatch = matchLut(conv.base.lut, localLuts, localFingerprints);
+  const lutMatch = matchLut(conv.base.lut, localLuts);
   let lutName = "";
   if (lutMatch.matched) {
     lutName = lutMatch.lutName;
-    if (lutMatch.matchType === "name") {
+    if (lutMatch.matchType === "name" && conv.base.lut.path_hint) {
       warnings.push(RECIPE_IMPORT_WARNING_LUT_DEGRADED);
     }
   } else {
@@ -553,22 +530,7 @@ export function restoreConverterRecipe(
     colorHeightMap[stripHash(hex)] = height;
   }
 
-  const puzzle = conv.puzzle ?? {
-    puzzle_enabled: false,
-    puzzle_style: "regular",
-    puzzle_sizing_mode: "piece_size",
-    piece_width_mm: 20,
-    piece_height_mm: 20,
-    puzzle_rows: 3,
-    puzzle_cols: 3,
-    target_piece_count: 12,
-    puzzle_seed: 0,
-    connector_style: "classic",
-    labels_enabled: false,
-    engrave_back_labels: false,
-    irregularity_strength: 0.35,
-    min_neck_width_mm: 1.2,
-  };
+  const puzzle = conv.puzzle ?? DEFAULT_CONVERTER_RECIPE_PUZZLE;
 
   const fridgeMagnet = conv.fridge_magnet ?? {
     enable_fridge_magnet: false,

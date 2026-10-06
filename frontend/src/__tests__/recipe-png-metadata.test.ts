@@ -40,7 +40,6 @@ function createTestRecipe(): LuminaRecipe {
         filename: "test.png",
         mime_type: "image/png",
         byte_size: 10,
-        sha256: "abc123",
         encoding: "base64",
         payload_b64: "dGVzdA==",
       },
@@ -48,7 +47,7 @@ function createTestRecipe(): LuminaRecipe {
     recipe: {
       converter: {
         base: {
-          lut: { name: "Test LUT", color_mode: "4-Color (RYBW)", fingerprint: "abcdef1234567890" },
+          lut: { name: "Test LUT", color_mode: "4-Color (RYBW)" },
           color_mode: "4-Color (RYBW)",
           modeling_mode: "high-fidelity",
           target_width_mm: 80,
@@ -107,10 +106,6 @@ function createTestRecipe(): LuminaRecipe {
         },
       },
     },
-    integrity: {
-      recipe_sha256: "0000000000000000000000000000000000000000000000000000000000000000",
-      asset_checksums: { primary: "abc123" },
-    },
     compat: { min_schema_version: 1 },
     warnings: [],
   };
@@ -122,7 +117,7 @@ describe("recipe/pngMetadata", () => {
       const png = createMinimalPng();
       const recipe = createTestRecipe();
 
-      const embedded = await embedRecipeInPng(png, recipe, "test-sha256");
+      const embedded = await embedRecipeInPng(png, recipe);
       expect(embedded).toBeInstanceOf(Blob);
       expect(embedded.size).toBeGreaterThan(png.size);
 
@@ -141,7 +136,7 @@ describe("recipe/pngMetadata", () => {
       const png = createMinimalPng();
       const recipe = createTestRecipe();
 
-      const embedded = await embedRecipeInPng(png, recipe, "sha");
+      const embedded = await embedRecipeInPng(png, recipe);
       const extracted = await extractRecipeFromPng(embedded);
 
       // Deep equality on the recipe section
@@ -155,7 +150,7 @@ describe("recipe/pngMetadata", () => {
     it("returns true for a PNG with embedded recipe", async () => {
       const png = createMinimalPng();
       const recipe = createTestRecipe();
-      const embedded = await embedRecipeInPng(png, recipe, "sha");
+      const embedded = await embedRecipeInPng(png, recipe);
 
       expect(await hasLuminaRecipe(embedded)).toBe(true);
     });

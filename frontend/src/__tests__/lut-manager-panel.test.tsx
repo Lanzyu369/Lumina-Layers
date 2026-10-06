@@ -23,7 +23,6 @@ beforeEach(() => {
         name: "Test LUT",
         color_mode: "8-Color Max" as unknown as ColorMode,
         path: "/fake/path.npy",
-        fingerprint: "fp-test",
       },
     ],
     lutListLoading: false,

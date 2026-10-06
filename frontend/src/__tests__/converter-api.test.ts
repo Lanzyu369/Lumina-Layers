@@ -946,7 +946,7 @@ describe("fetchLutCatalog", () => {
         {
           group_name: "Preset",
           items: [
-            { name: "lut-a", color_mode: ColorMode.FOUR_COLOR_RYBW, path: "/a.npy", fingerprint: "fp-a" },
+            { name: "lut-a", color_mode: ColorMode.FOUR_COLOR_RYBW, path: "/a.npy" },
           ],
         },
       ],
@@ -957,7 +957,7 @@ describe("fetchLutCatalog", () => {
           vendor: "Bambu Lab",
           display_name: "Bambu PLA",
           db_options: [
-            { name: "DB-A", path: "/DB-A.json", color_mode: "8-Color Max", fingerprint: "fp-db-a" },
+            { name: "DB-A", path: "/DB-A.json", color_mode: "8-Color Max" },
           ],
           default_db_names: ["DB-A"],
           supported_modes: [{ color_layers: 5, layer_height_mm: 0.08 }],

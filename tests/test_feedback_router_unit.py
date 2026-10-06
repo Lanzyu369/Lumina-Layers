@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 from pathlib import Path
@@ -298,10 +297,14 @@ def test_submit_bug_report_accepts_full_payload_and_logs_canary(
     assert canaries[0].recent_client_log_count == 1
 
 
+@pytest.mark.parametrize("legacy_env_value", ["", "1"])
 def test_submit_bug_report_rejects_untrusted_origin_before_ticket_write(
     client: TestClient,
     feedback_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    legacy_env_value: str,
 ) -> None:
+    monkeypatch.setenv("LUMINA_ALLOW_PUBLIC_GRAY_API", legacy_env_value)
     response = client.post(
         "/api/feedback/bug-report",
         json=_payload(description="cross-origin probe"),
@@ -311,23 +314,6 @@ def test_submit_bug_report_rejects_untrusted_origin_before_ticket_write(
     assert response.status_code == 403
     assert "local Lumina Studio app" in response.json()["detail"]
     assert list(feedback_root.rglob("ticket.json")) == []
-
-
-def test_submit_bug_report_allows_untrusted_origin_for_public_gray_api(
-    client: TestClient,
-    feedback_root: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("LUMINA_ALLOW_PUBLIC_GRAY_API", "1")
-    response = client.post(
-        "/api/feedback/bug-report",
-        json=_payload(description="cross-origin probe"),
-        headers=UNTRUSTED_ORIGIN_HEADERS,
-    )
-
-    assert response.status_code == 200
-    ticket_json = _read_ticket_json(feedback_root, response.json()["ticket_id"])
-    assert ticket_json["description"] == "cross-origin probe"
 
 
 def test_submit_bug_report_allows_local_frontend_origin(
@@ -533,7 +519,7 @@ def test_submit_bug_report_multipart_saves_exact_original_without_session(
     assert original["direct_upload_status"] == "attached"
     assert original["source_session_id"] is None
     assert original["size_bytes"] == len(original_bytes)
-    assert original["sha256"] == hashlib.sha256(original_bytes).hexdigest()
+    assert "sha256" not in original
 
 
 def test_submit_bug_report_multipart_uses_direct_upload_before_session(

@@ -246,6 +246,8 @@ class TestEmptyAndNoneInputs:
             raise RuntimeError("glb writer unavailable")
 
         logger = logging.getLogger("lumina.core.pipeline.s11_glb_preview")
+        previous_propagate = logger.propagate
+        logger.propagate = False
         logger.addHandler(caplog.handler)
         caplog.set_level(logging.ERROR, logger="lumina.core.pipeline.s11_glb_preview")
         monkeypatch.setattr(trimesh.Scene, "export", _raise_export_error)
@@ -259,6 +261,7 @@ class TestEmptyAndNoneInputs:
             result = generate_segmented_glb(cache, output_path=out_path)
         finally:
             logger.removeHandler(caplog.handler)
+            logger.propagate = previous_propagate
 
         assert result is None
 
@@ -284,6 +287,8 @@ class TestEmptyAndNoneInputs:
     ) -> None:
         """Logging should not mask the original GLB failure."""
         logger = logging.getLogger("lumina.core.pipeline.s11_glb_preview")
+        previous_propagate = logger.propagate
+        logger.propagate = False
         logger.addHandler(caplog.handler)
         caplog.set_level(logging.ERROR, logger="lumina.core.pipeline.s11_glb_preview")
 
@@ -296,6 +301,7 @@ class TestEmptyAndNoneInputs:
             result = generate_segmented_glb(cache, output_path=out_path, max_meshes=None)
         finally:
             logger.removeHandler(caplog.handler)
+            logger.propagate = previous_propagate
 
         assert result is None
 

@@ -35,13 +35,24 @@ describe("devServerConfig", () => {
     ).toBe("http://127.0.0.1:8001");
   });
 
-  it("allows all hosts only when explicitly requested", () => {
+  it.each(["1", "true", "yes", "on"])(
+    "ignores the retired all-hosts switch set to %s",
+    (legacyValue) => {
+      const env = {
+        VITE_ALLOW_ALL_HOSTS: legacyValue,
+        VITE_ALLOWED_HOSTS: "preview.example.test",
+      };
+      expect(resolveDevServerConfig(env).allowedHosts).toEqual([
+        "online.luminastudio.com.cn",
+        "preview.example.test",
+      ]);
+    },
+  );
+
+  it("keeps the default allowed host", () => {
     expect(resolveDevServerConfig({}).allowedHosts).toEqual([
       "online.luminastudio.com.cn",
     ]);
-    expect(
-      resolveDevServerConfig({ VITE_ALLOW_ALL_HOSTS: "true" }).allowedHosts,
-    ).toBe(true);
   });
 
   it("parses comma-separated allowed hosts from environment", () => {

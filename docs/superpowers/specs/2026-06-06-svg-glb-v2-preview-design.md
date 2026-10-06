@@ -1,5 +1,10 @@
 # SVG 预览 GLB V2 设计说明
 
+> Deployment update (2026-10-06): Docker support and the public-test bypass
+> are retired. This historical record preserves earlier implementation and
+> validation evidence; use [Runtime support](../../runtime-support.md) for current behavior.
+> 部署更新：Docker 支持及公网测试访问旁路已移除；本文保留历史实现与验证记录，当前运行方式以上述说明为准。
+
 ## 先说结论
 
 这次要优化的是 **SVG 文件生成前端 3D 预览模型，也就是 GLB 预览模型的速度**。用户能感知到的目标是：上传或调整 SVG 后，右侧 3D 预览更快出来，同时现有前端预览功能不丢、不偏、不少。

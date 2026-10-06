@@ -1,5 +1,10 @@
 # SVG Relief Watertight Preview Design
 
+> Deployment update (2026-10-06): Docker support and the public-test bypass
+> are retired. This historical record preserves earlier implementation and
+> validation evidence; use [Runtime support](../../runtime-support.md) for current behavior.
+> 部署更新：Docker 支持及公网测试访问旁路已移除；本文保留历史实现与验证记录，当前运行方式以上述说明为准。
+
 ## Problem
 
 Native SVG relief currently extrudes every backing-height group as an independent

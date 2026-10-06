@@ -8,6 +8,8 @@
  * V2: 区域配方覆盖与自定义配方历史。
  * V3: Optional versioned Creative Workshop restore source.
  * V3: 可选的版本化创意工坊恢复来源。
+ * V4: Editable local recipes without application content digests.
+ * V4: 可直接编辑的本地配方，不包含应用自建内容摘要。
  */
 
 import type {
@@ -25,18 +27,16 @@ export interface AssetEntry {
   filename: string;
   mime_type: string;
   byte_size: number;
-  sha256: string;
   encoding: "base64";
   payload_b64: string;
 }
 
 // ========== LUT Reference ==========
 
-/** LUT identity for fingerprint-based matching. */
+/** LUT record identity and matching metadata. */
 export interface LutReference {
   name: string;
   color_mode: string;
-  fingerprint: string;
   path_hint?: string;
 }
 
@@ -173,6 +173,24 @@ export interface ConverterRecipePuzzle {
   min_neck_width_mm: number;
 }
 
+/** Existing restore defaults for cards created before puzzle support. */
+export const DEFAULT_CONVERTER_RECIPE_PUZZLE: Readonly<ConverterRecipePuzzle> = {
+  puzzle_enabled: false,
+  puzzle_style: "regular",
+  puzzle_sizing_mode: "piece_size",
+  piece_width_mm: 20,
+  piece_height_mm: 20,
+  puzzle_rows: 3,
+  puzzle_cols: 3,
+  target_piece_count: 12,
+  puzzle_seed: 0,
+  connector_style: "classic",
+  labels_enabled: false,
+  engrave_back_labels: false,
+  irregularity_strength: 0.35,
+  min_neck_width_mm: 1.2,
+};
+
 export interface ConverterRecipeDevice {
   printer_id: string;
   slicer: string;
@@ -259,11 +277,6 @@ export interface RecipeAssets {
   heightmap?: AssetEntry;
 }
 
-export interface RecipeIntegrity {
-  recipe_sha256: string;
-  asset_checksums: Record<string, string>;
-}
-
 export interface RecipeCompat {
   min_schema_version: number;
   degraded_fields?: string[];
@@ -281,7 +294,6 @@ export interface LuminaRecipe {
     converter?: ConverterRecipe;
     workshop?: WorkshopRecipeSource;
   };
-  integrity: RecipeIntegrity;
   compat: RecipeCompat;
   warnings: string[];
 }
@@ -289,5 +301,5 @@ export interface LuminaRecipe {
 // ========== Constants ==========
 
 export const RECIPE_FORMAT = "lumina-recipe" as const;
-export const RECIPE_SCHEMA_VERSION = 3;
+export const RECIPE_SCHEMA_VERSION = 4;
 export const WORKSHOP_RECIPE_ENVELOPE_MAX_BYTES = 1024 * 1024;

@@ -43,7 +43,6 @@ function makeItem(
   return {
     name,
     path: `/lut/${name}.npy`,
-    fingerprint: `fp-${name}`,
     color_mode: colorMode,
     compatibility_key: compatibilityKey,
     source_kind: "legacy_lookup",

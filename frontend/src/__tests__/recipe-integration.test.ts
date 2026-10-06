@@ -10,6 +10,7 @@ import { describe, it, expect } from "vitest";
 import { exportConverterRecipe, buildFullRecipe, buildRecipeAssets } from "../recipe/exportRecipe";
 import {
   parseRecipeFile,
+  matchLut,
   RECIPE_IMPORT_WARNING_LUT_DEGRADED,
   RECIPE_IMPORT_WARNING_LUT_MISSING,
   RECIPE_IMPORT_WARNING_SPATIAL_EDITS_NOT_SERIALIZED,
@@ -28,6 +29,7 @@ import { ColorMode } from "../api/types";
 import type { LuminaRecipe, RecipeCover } from "../recipe/types";
 import { translations } from "../i18n/translations";
 import { createBeadRecipeSourceFixture } from "./fixtures/beadRecipeSource";
+import { createLegacyRecipeV1 } from "./fixtures/legacyRecipeV1";
 
 // ========== Helpers ==========
 
@@ -45,31 +47,25 @@ function createMinimalPng(): Blob {
 }
 
 const LOCAL_LUTS: LutInfo[] = [
-  { name: "TestLUT", color_mode: ColorMode.FOUR_COLOR_RYBW, path: "/luts/test.json", fingerprint: "fp_test" },
-  { name: "SixColorLUT", color_mode: ColorMode.SIX_COLOR, path: "/luts/six.json", fingerprint: "fp_six" },
-  { name: "BWLUT", color_mode: ColorMode.BW, path: "/luts/bw.json", fingerprint: "fp_bw" },
+  { name: "TestLUT", color_mode: ColorMode.FOUR_COLOR_RYBW, path: "/luts/test.json" },
+  { name: "SixColorLUT", color_mode: ColorMode.SIX_COLOR, path: "/luts/six.json" },
+  { name: "BWLUT", color_mode: ColorMode.BW, path: "/luts/bw.json" },
 ];
-
-const LOCAL_FP: Record<string, string> = {
-  TestLUT: "fp_test",
-  SixColorLUT: "fp_six",
-  BWLUT: "fp_bw",
-};
 
 async function buildTestRecipe(
   stateOverrides: Partial<ConverterState> = {},
-  fingerprint?: string,
+  lutPath?: string,
   settingsOverrides: Partial<SettingsState> = {},
 ): Promise<{
   recipe: LuminaRecipe;
   state: ConverterState;
 }> {
   const state = { ...DEFAULT_STATE, ...stateOverrides } as ConverterState;
-  const fp = fingerprint ?? (LOCAL_FP[state.lut_name] || "unknown_fp");
+  const path = lutPath ?? LOCAL_LUTS.find((lut) => lut.name === state.lut_name)?.path;
   const converterRecipe = exportConverterRecipe(
     state,
     { ...DEFAULT_SETTINGS, ...settingsOverrides },
-    fp,
+    path,
   );
   const imageFile = new File([new Uint8Array([1, 2, 3, 4])], "photo.png", { type: "image/png" });
   const assets = await buildRecipeAssets(imageFile, state.heightmapFile);
@@ -92,9 +88,9 @@ describe("recipe integration", () => {
     expect(await isShareCardFile(file)).toBe(true);
     const parsed = await parseRecipeFile(file);
     expect(parsed.recipe).toEqual(recipe);
-    expect(restoreConverterRecipe(parsed.recipe, LOCAL_LUTS, LOCAL_FP).state.target_width_mm).toBe(123);
+    expect(restoreConverterRecipe(parsed.recipe, LOCAL_LUTS).state.target_width_mm).toBe(123);
     recipe.recipe.converter!.base.target_width_mm = 124;
-    expect(await isShareCardFile(new File([JSON.stringify(recipe)], 'tampered.json'))).toBe(false);
+    expect(await isShareCardFile(new File([JSON.stringify(recipe)], 'edited.json'))).toBe(true);
   });
   it('does not misidentify ordinary, LUT, broken or oversized JSON as a project', async () => {
     for (const text of ['{}', '{"colors":[[255,0,0]],"metadata":{"color_mode":"BW"}}', '{bad json']) {
@@ -118,13 +114,13 @@ describe("recipe integration", () => {
         spacer_thick: 0.8,
       });
 
-      const { state: restored, warnings } = restoreConverterRecipe(recipe, LOCAL_LUTS, LOCAL_FP);
+      const { state: restored, warnings } = restoreConverterRecipe(recipe, LOCAL_LUTS);
 
       expect(restored.lut_name).toBe("TestLUT");
       expect(restored.target_width_mm).toBe(120);
       expect(restored.target_height_mm).toBe(90);
       expect(restored.spacer_thick).toBe(0.8);
-      expect(warnings).toHaveLength(0); // fingerprint match, no warnings
+      expect(warnings).toHaveLength(0); // record match, no warnings
     });
 
     it("complex recipe with loop + coating + outline + cloisonne + relief", async () => {
@@ -151,7 +147,7 @@ describe("recipe integration", () => {
         heightmap_max_height: 1.2,
       });
 
-      const { state: restored } = restoreConverterRecipe(recipe, LOCAL_LUTS, LOCAL_FP);
+      const { state: restored } = restoreConverterRecipe(recipe, LOCAL_LUTS);
 
       // Loop
       expect(restored.add_loop).toBe(true);
@@ -191,7 +187,7 @@ describe("recipe integration", () => {
         free_color_set: freeColors,
       });
 
-      const { state: restored } = restoreConverterRecipe(recipe, LOCAL_LUTS, LOCAL_FP);
+      const { state: restored } = restoreConverterRecipe(recipe, LOCAL_LUTS);
 
       expect(restored.replacement_regions).toHaveLength(2);
       expect(restored.replacement_regions![0].quantized_hex).toBe("aa0000");
@@ -247,7 +243,6 @@ describe("recipe integration", () => {
       const { state: restored, warnings } = restoreConverterRecipe(
         recipe,
         LOCAL_LUTS,
-        LOCAL_FP,
       );
 
       expect(restored.recipe_overrides).toEqual([]);
@@ -272,7 +267,6 @@ describe("recipe integration", () => {
       const embedded = await embedRecipeInPng(
         createMinimalPng(),
         recipe,
-        recipe.integrity.recipe_sha256,
       );
       const extracted = await extractRecipeFromPng(embedded);
       expect(
@@ -285,9 +279,9 @@ describe("recipe integration", () => {
       });
     });
 
-    it("exports schema_version 3 and imports legacy defaults without warnings", async () => {
+    it("exports schema_version 4 and imports legacy defaults without warnings", async () => {
       const { recipe } = await buildTestRecipe({ lut_name: "TestLUT" });
-      expect(recipe.schema_version).toBe(3);
+      expect(recipe.schema_version).toBe(4);
 
       const legacy = JSON.parse(JSON.stringify(recipe)) as LuminaRecipe;
       legacy.schema_version = 1;
@@ -302,7 +296,6 @@ describe("recipe integration", () => {
       const { state: restored } = restoreConverterRecipe(
         migrated,
         LOCAL_LUTS,
-        LOCAL_FP,
       );
       expect(restored.recipe_overrides).toEqual([]);
       expect(restored.customRecipeHistory).toEqual([]);
@@ -317,7 +310,6 @@ describe("recipe integration", () => {
       const { state: restoredV2 } = restoreConverterRecipe(
         migrateRecipe(legacyV2),
         LOCAL_LUTS,
-        LOCAL_FP,
       );
       expect(restoredV2.backing_infill_density_percent).toBe(100);
     });
@@ -332,7 +324,7 @@ describe("recipe integration", () => {
         target_height_mm: 400,
       });
 
-      const { state: restored } = restoreConverterRecipe(recipe, LOCAL_LUTS, LOCAL_FP);
+      const { state: restored } = restoreConverterRecipe(recipe, LOCAL_LUTS);
 
       expect(restored.largeFormatEnabled).toBe(true);
       expect(restored.tileWidthMm).toBe(180);
@@ -359,7 +351,7 @@ describe("recipe integration", () => {
       );
 
       const png = createMinimalPng();
-      const embedded = await embedRecipeInPng(png, recipe, recipe.integrity.recipe_sha256);
+      const embedded = await embedRecipeInPng(png, recipe);
 
       expect(await hasLuminaRecipe(embedded)).toBe(true);
 
@@ -377,13 +369,14 @@ describe("recipe integration", () => {
     it("full flow: export → embed → file parse → import", async () => {
       const { recipe } = await buildTestRecipe({
         lut_name: "SixColorLUT",
+        color_mode: ColorMode.SIX_COLOR,
         target_width_mm: 200,
         enable_coating: true,
         coating_height_mm: 0.15,
       });
 
       const png = createMinimalPng();
-      const embedded = await embedRecipeInPng(png, recipe, recipe.integrity.recipe_sha256);
+      const embedded = await embedRecipeInPng(png, recipe);
 
       // Create a File from the embedded blob
       const shareCardFile = new File([embedded], "share.png", { type: "image/png" });
@@ -393,7 +386,6 @@ describe("recipe integration", () => {
       const { state: restored, warnings } = restoreConverterRecipe(
         parsed.recipe,
         LOCAL_LUTS,
-        LOCAL_FP,
       );
 
       expect(restored.lut_name).toBe("SixColorLUT");
@@ -433,7 +425,7 @@ describe("recipe integration", () => {
         "textured-pei-plate",
       );
 
-      const { state: restored } = restoreConverterRecipe(parsed.recipe, LOCAL_LUTS, LOCAL_FP);
+      const { state: restored } = restoreConverterRecipe(parsed.recipe, LOCAL_LUTS);
       expect(restored.lut_name).toBe("TestLUT");
       expect(restored.target_width_mm).toBe(60);
       expect(restored.add_loop).toBe(true);
@@ -455,7 +447,6 @@ describe("recipe integration", () => {
       const embedded = await embedRecipeInPng(
         createMinimalPng(),
         recipe,
-        recipe.integrity.recipe_sha256,
       );
       const parsed = await parseRecipeFile(
         new File([embedded], "project.png", { type: "image/png" }),
@@ -464,7 +455,6 @@ describe("recipe integration", () => {
       const { state: restored } = restoreConverterRecipe(
         parsed.recipe,
         LOCAL_LUTS,
-        LOCAL_FP,
       );
 
       expect(restored.quantize_colors_unlocked).toBe(true);
@@ -499,7 +489,6 @@ describe("recipe integration", () => {
       const png = await embedRecipeInPng(
         createMinimalPng(),
         recipe,
-        recipe.integrity.recipe_sha256,
       );
       const files = [
         new File([png], "spatial-share.png", { type: "image/png" }),
@@ -510,7 +499,7 @@ describe("recipe integration", () => {
 
       for (const file of files) {
         const parsed = await parseRecipeFile(file);
-        const restored = restoreConverterRecipe(parsed.recipe, LOCAL_LUTS, LOCAL_FP);
+        const restored = restoreConverterRecipe(parsed.recipe, LOCAL_LUTS);
         expect(restored.warnings).toContain(
           RECIPE_IMPORT_WARNING_SPATIAL_EDITS_NOT_SERIALIZED,
         );
@@ -541,17 +530,17 @@ describe("recipe integration", () => {
 
   describe("LUT missing scenarios", () => {
     it("missing LUT produces warning and empty lut_name", async () => {
-      const { recipe } = await buildTestRecipe({ lut_name: "NonExistentLUT" }, "no_match_fp");
+      const { recipe } = await buildTestRecipe({ lut_name: "NonExistentLUT" }, "missing-record");
 
-      const { state: restored, warnings } = restoreConverterRecipe(recipe, LOCAL_LUTS, LOCAL_FP);
+      const { state: restored, warnings } = restoreConverterRecipe(recipe, LOCAL_LUTS);
 
       expect(restored.lut_name).toBe(""); // Cannot match
       expect(warnings).toContain(RECIPE_IMPORT_WARNING_LUT_MISSING);
     });
 
-    it("LUT fingerprint mismatch triggers name fallback with warning", async () => {
+    it("changed LUT record path triggers name fallback with warning", async () => {
       const state = { ...DEFAULT_STATE, lut_name: "TestLUT" } as ConverterState;
-      const converterRecipe = exportConverterRecipe(state, DEFAULT_SETTINGS, "wrong_fingerprint");
+      const converterRecipe = exportConverterRecipe(state, DEFAULT_SETTINGS, "missing-record");
 
       const recipe = await buildFullRecipe(
         converterRecipe,
@@ -561,14 +550,13 @@ describe("recipe integration", () => {
             filename: "t.png",
             mime_type: "image/png",
             byte_size: 4,
-            sha256: "a",
             encoding: "base64",
             payload_b64: "dGVzdA==",
           },
         },
       );
 
-      const { state: restored, warnings } = restoreConverterRecipe(recipe, LOCAL_LUTS, LOCAL_FP);
+      const { state: restored, warnings } = restoreConverterRecipe(recipe, LOCAL_LUTS);
 
       expect(restored.lut_name).toBe("TestLUT"); // Name fallback still works
       expect(warnings).toContain(RECIPE_IMPORT_WARNING_LUT_DEGRADED);
@@ -578,7 +566,7 @@ describe("recipe integration", () => {
   describe("import does not pollute unrelated state", () => {
     it("session/preview state is cleared on import", async () => {
       const { recipe } = await buildTestRecipe({ lut_name: "TestLUT" });
-      const { state: restored } = restoreConverterRecipe(recipe, LOCAL_LUTS, LOCAL_FP);
+      const { state: restored } = restoreConverterRecipe(recipe, LOCAL_LUTS);
 
       expect(restored.sessionId).toBeNull();
       expect(restored.previewImageUrl).toBeNull();
@@ -591,34 +579,48 @@ describe("recipe integration", () => {
 
     it("colorRemapMap is cleared (merged into replacement_regions)", async () => {
       const { recipe } = await buildTestRecipe({ lut_name: "TestLUT" });
-      const { state: restored } = restoreConverterRecipe(recipe, LOCAL_LUTS, LOCAL_FP);
+      const { state: restored } = restoreConverterRecipe(recipe, LOCAL_LUTS);
 
       expect(restored.colorRemapMap).toEqual({});
       expect(restored.remapHistory).toEqual([]);
     });
   });
 
-  describe("integrity", () => {
-    it("recipe has valid integrity hashes", async () => {
+  describe("editable recipes and asset validation", () => {
+    it("exports schema v4 without retired recipe or asset digests", async () => {
       const { recipe } = await buildTestRecipe({ lut_name: "TestLUT" });
-
-      expect(recipe.integrity.recipe_sha256).toHaveLength(64);
-      expect(recipe.integrity.asset_checksums.primary).toHaveLength(64);
+      expect(recipe.schema_version).toBe(4);
+      expect(recipe.compat.min_schema_version).toBe(4);
+      expect(recipe).not.toHaveProperty("integrity");
+      expect(recipe.asset.primary).not.toHaveProperty("sha256");
+      expect(recipe.recipe.converter!.base.lut).not.toHaveProperty("fingerprint");
     });
 
-    it("rejects JSON sidecars whose recipe hash no longer matches the recipe section", async () => {
+    it.each([1, 2, 3])("imports a legally edited v%s JSON with stale or absent digests", async (version) => {
       const { recipe } = await buildTestRecipe({ lut_name: "TestLUT" });
-      recipe.recipe.converter!.base.target_width_mm += 1;
-      const file = new File([JSON.stringify(recipe)], "tampered.lumina.json", {
-        type: "application/json",
-      });
-
-      await expect(parseRecipeFile(file)).rejects.toThrow("Integrity check failed");
+      const legacy = JSON.parse(JSON.stringify(recipe));
+      legacy.schema_version = version;
+      legacy.integrity = { recipe_sha256: "stale", asset_checksums: { primary: "stale" } };
+      legacy.asset.primary.sha256 = "stale";
+      legacy.recipe.converter.base.lut.fingerprint = "retired";
+      legacy.recipe.converter.base.target_width_mm = 124;
+      for (const hasDigest of [true, false]) {
+        if (!hasDigest) {
+          delete legacy.integrity;
+          delete legacy.asset.primary.sha256;
+        }
+        const parsed = await parseRecipeFile(new File([JSON.stringify(legacy)], "edited.lumina.json"));
+        expect(parsed.recipe.schema_version).toBe(4);
+        expect(parsed.recipe).not.toHaveProperty("integrity");
+        expect(parsed.recipe.asset.primary).not.toHaveProperty("sha256");
+        expect(parsed.recipe.recipe.converter!.base.lut).not.toHaveProperty("fingerprint");
+        expect(restoreConverterRecipe(parsed.recipe, LOCAL_LUTS).state.target_width_mm).toBe(124);
+      }
     });
 
-    it("rejects JSON sidecars whose primary asset payload no longer matches its checksum", async () => {
+    it("rejects an invalid base64 primary attachment", async () => {
       const { recipe } = await buildTestRecipe({ lut_name: "TestLUT" });
-      recipe.asset.primary.payload_b64 = "dGFtcGVyZWQ=";
+      recipe.asset.primary.payload_b64 = "@broken";
       const file = new File([JSON.stringify(recipe)], "tampered.lumina.json", {
         type: "application/json",
       });
@@ -626,7 +628,7 @@ describe("recipe integration", () => {
       await expect(parseRecipeFile(file)).rejects.toThrow("Asset data is corrupted");
     });
 
-    it("rejects JSON sidecars whose heightmap asset payload no longer matches its checksum", async () => {
+    it("rejects a heightmap attachment whose declared byte size is wrong", async () => {
       const heightmapFile = new File([new Uint8Array([10, 20, 30])], "height.png", {
         type: "image/png",
       });
@@ -642,20 +644,32 @@ describe("recipe integration", () => {
       await expect(parseRecipeFile(file)).rejects.toThrow("Asset data is corrupted");
     });
 
-    it("rejects PNG share cards whose embedded recipe integrity is stale", async () => {
-      const { recipe } = await buildTestRecipe({ lut_name: "TestLUT" });
+    it("rejects an active heightmap reference whose attachment is missing", async () => {
+      const { recipe } = await buildTestRecipe({ lut_name: "TestLUT", enable_relief: true, autoHeightMode: "use-heightmap" });
+      await expect(parseRecipeFile(new File([JSON.stringify(recipe)], "missing-heightmap.lumina.json"))).rejects.toThrow("Asset data is corrupted");
+    });
+
+    it("imports an edited legacy PNG and preserves primary and heightmap bytes", async () => {
+      const heightmapFile = new File([new Uint8Array([10, 20, 30])], "height.png", { type: "image/png" });
+      const { recipe } = await buildTestRecipe({ lut_name: "TestLUT", heightmapFile });
       recipe.recipe.converter!.base.target_width_mm += 1;
+      const legacy = JSON.parse(JSON.stringify(recipe));
+      legacy.schema_version = 3;
+      legacy.integrity = { recipe_sha256: "stale", asset_checksums: {} };
       const embedded = await embedRecipeInPng(
         createMinimalPng(),
-        recipe,
-        recipe.integrity.recipe_sha256,
+        legacy,
       );
       const file = new File([embedded], "tampered-share.png", { type: "image/png" });
 
-      await expect(parseRecipeFile(file)).rejects.toThrow("Integrity check failed");
+      const parsed = await parseRecipeFile(file);
+      const restored = restoreConverterRecipe(parsed.recipe, LOCAL_LUTS);
+      expect(restored.state.target_width_mm).toBe(recipe.recipe.converter!.base.target_width_mm);
+      expect(new Uint8Array(await restored.assetFile.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3, 4]));
+      expect(new Uint8Array(await restored.heightmapFile!.arrayBuffer())).toEqual(new Uint8Array([10, 20, 30]));
     });
 
-    it("recipe with heightmap includes heightmap checksum", async () => {
+    it("recipe with heightmap preserves its attachment without digest metadata", async () => {
       const hmFile = new File([new Uint8Array([10, 20, 30])], "height.png", { type: "image/png" });
       const state = { ...DEFAULT_STATE, lut_name: "TestLUT", heightmapFile: hmFile } as ConverterState;
       const converterRecipe = exportConverterRecipe(state, DEFAULT_SETTINGS, "fp_test");
@@ -669,12 +683,75 @@ describe("recipe integration", () => {
         assets,
       );
 
-      expect(recipe.integrity.asset_checksums["heightmap"]).toHaveLength(64);
       expect(recipe.asset.heightmap).toBeDefined();
+      expect(recipe.asset.heightmap).not.toHaveProperty("sha256");
+    });
+
+    it("does not silently choose between same-name LUT records", () => {
+      const luts = [
+        { ...LOCAL_LUTS[0], path: "first" },
+        { ...LOCAL_LUTS[0], path: "second" },
+      ];
+      expect(matchLut({ name: "TestLUT", color_mode: ColorMode.FOUR_COLOR_RYBW }, luts)).toMatchObject({ matched: false });
+    });
+
+    it.each(["missing base", "non-positive width"])("rejects invalid converter structure: %s", async (invalid) => {
+      const { recipe } = await buildTestRecipe({ lut_name: "TestLUT" });
+      const raw = JSON.parse(JSON.stringify(recipe));
+      if (invalid === "missing base") delete raw.recipe.converter.base;
+      else raw.recipe.converter.base.target_width_mm = 0;
+      await expect(parseRecipeFile(new File([JSON.stringify(raw)], "invalid.lumina.json"))).rejects.toThrow("Invalid recipe");
     });
   });
 
   describe("schema migration", () => {
+    it("keeps the migrated early V1 recipe valid across repeated migrations", () => {
+      const migrated = migrateRecipe(createLegacyRecipeV1());
+      expect(migrateRecipe(migrated)).toEqual(migrated);
+      expect(migrated.recipe.converter!.puzzle).toMatchObject({ puzzle_enabled: false, puzzle_rows: 3 });
+    });
+
+    it("imports an already migrated early V1 card after PNG serialization", async () => {
+      const migrated = migrateRecipe(createLegacyRecipeV1());
+      const png = await embedRecipeInPng(createMinimalPng(), migrated);
+      const parsed = await parseRecipeFile(new File([png], "migrated-early-v1.png", { type: "image/png" }));
+      const restored = restoreConverterRecipe(parsed.recipe, LOCAL_LUTS);
+      expect(parsed.recipe).toEqual(migrated);
+      expect(restored.state).toMatchObject({ puzzleEnabled: false, puzzleRows: 3, target_width_mm: 80, target_height_mm: 60 });
+      expect(restored.assetFile.size).toBe(migrated.asset.primary.byte_size);
+    });
+
+    it.each(["json", "png"])("imports the published first V1 field shape from %s", async (container) => {
+      const legacy = createLegacyRecipeV1();
+      expect(legacy.recipe.converter).not.toHaveProperty("puzzle");
+      expect(legacy.recipe.converter).not.toHaveProperty("source");
+      expect(legacy.recipe.converter).not.toHaveProperty("fridge_magnet");
+      expect(legacy.recipe.converter.device).not.toHaveProperty("nozzle_size");
+      const body = container === "png"
+        ? await embedRecipeInPng(createMinimalPng(), legacy as unknown as LuminaRecipe)
+        : JSON.stringify(legacy);
+      const parsed = await parseRecipeFile(new File([body], `first-v1.${container}`));
+      const restored = restoreConverterRecipe(parsed.recipe, LOCAL_LUTS);
+      expect(parsed.recipe.schema_version).toBe(4);
+      expect(restored.state).toMatchObject({
+        lut_name: "TestLUT", target_width_mm: 80, target_height_mm: 60,
+        source_version: "legacy", puzzleEnabled: false, puzzleRows: 3,
+        enable_fridge_magnet: false, backing_infill_density_percent: 100,
+      });
+      expect(restored.assetFile.name).toBe("original.png");
+      expect(restored.assetFile.size).toBe(legacy.asset.primary.byte_size);
+    });
+
+    it("requires the puzzle section on newly exported schema V4 recipes", () => {
+      expect(() => migrateRecipe({ ...createLegacyRecipeV1(), schema_version: 4 })).toThrow("Invalid recipe");
+    });
+
+    it.each([1, 4])("rejects a malformed puzzle section on schema V%s", (version) => {
+      const legacy = createLegacyRecipeV1();
+      const malformed = { ...legacy, schema_version: version, recipe: { converter: { ...legacy.recipe.converter, puzzle: [] } } };
+      expect(() => migrateRecipe(malformed)).toThrow("Invalid recipe");
+    });
+
     it("future schema version passes with warning", async () => {
       const { recipe } = await buildTestRecipe({ lut_name: "TestLUT" });
       const futureRecipe = { ...recipe, schema_version: 99 };

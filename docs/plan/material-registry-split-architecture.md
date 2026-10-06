@@ -156,7 +156,7 @@ Lumina 主仓库构建时消费某个固定版本的耗材 release artifact。
 
 1. 构建参数指定耗材 release 版本或本地 artifact 路径。
 2. CI 下载并校验只包含 official 耗材的 `lumina-materials-seed.zip`。
-3. 桌面包和 Docker 镜像把 seed 放入只读资源区。
+3. 桌面包把 seed 放入只读资源区。
 4. 首次启动时，如果用户运行时 `materials/` 为空，则把 seed 安装到可写运行时目录。
 5. 后续同步只更新可写运行时目录，不修改应用安装目录内的 seed。
 
@@ -170,7 +170,6 @@ Lumina 主仓库构建时消费某个固定版本的耗材 release artifact。
 当前本仓库需要的改造点：
 
 - `config.py` 的 `MATERIALS_DIR` 需要支持环境变量覆盖和桌面用户数据目录，不应只依赖当前工作目录。
-- Docker 本地部署脚本需要区分应用运行时 `materials/` 与耗材 seed。
 - Electron/PyInstaller 打包脚本需要引入 seed artifact，而不是直接依赖仓库内完整 `materials/`。
 - `.gitignore` 和 PR #242 当前把 `material-registry-packages/` 放进主仓库的策略需要调整：主仓库不应长期持有官方耗材包集合。
 
@@ -349,7 +348,6 @@ Lumina clients
 
 修改方向：
 
-- Docker 构建支持 `MATERIALS_SEED_PATH` 或 `MATERIALS_SEED_URL`。
 - Electron/PyInstaller 构建脚本下载/校验 seed artifact。
 - 应用首次启动时把 seed 安装到可写 `materials/`。
 - 应用升级时不覆盖已有本地耗材。
@@ -436,13 +434,12 @@ python scripts/validate_packages.py --archive seed/lumina-materials-seed.zip
 
 ```powershell
 python scripts/build_desktop.py
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\docker_local_deploy.ps1
 ```
 
 需要新增：
 
 - 指定 seed artifact 的构建参数。
-- 构建后检查安装包/镜像包含 seed，但不包含 Registry 写入密钥。
+- 构建后检查安装包包含 seed，但不包含 Registry 写入密钥。
 - 首次启动生成可写 `materials/`。
 - 无网络启动仍能列出 seed 耗材。
 

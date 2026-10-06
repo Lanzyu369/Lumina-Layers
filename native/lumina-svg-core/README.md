@@ -156,5 +156,7 @@ python -m build --wheel
 python -m pytest tests -q
 ```
 
-The first release targets CPython 3.12 wheels for Windows amd64, macOS arm64
-and x86_64, and manylinux x86_64.
+Release wheels target CPython 3.12 on Windows amd64, macOS arm64 and x86_64,
+and Linux x86_64. Linux wheels are built directly on Ubuntu 24.04 and use its
+system ABI; older glibc compatibility is not guaranteed. Linux hosts can also
+build from source with `python -m pip install .`.

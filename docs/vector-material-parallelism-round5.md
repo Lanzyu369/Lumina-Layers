@@ -32,8 +32,8 @@
 ## R2 容器内存上限看不到可见的父级
 
 **问题。** 内存探测只看本进程 cgroup 叶子层的 `memory.max`。在
-`/docker/abc/workload.scope` 这类层级里，叶子常是 `max`，真正的上限在父级
-`/docker/abc`。只看叶子会把受限容器读成不受限，材质网格预算与并行度按宿主机
+`/delegated/abc/workload.scope` 这类层级里，叶子常是 `max`，真正的上限在父级
+`/delegated/abc`。只看叶子会把受限工作负载读成不受限，材质网格预算与并行度按宿主机
 可用内存计算。
 
 **做法。** 复用既有的 cgroup/mount 解析：`_read_cgroup_v2_memory_levels()`

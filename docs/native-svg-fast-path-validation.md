@@ -285,8 +285,10 @@ reusing an older parser result or substituting another file.
 The standalone source tree contains the Apache-2.0 project license and complete
 third-party notices for LunaSVG, PlutoVG, Clipper2, FreeType, stb, and pybind11.
 Release wheels target CPython 3.12 on Windows amd64, macOS arm64, macOS x86_64,
-and manylinux x86_64. The production workflow also verifies a Docker build and
-a Windows PyInstaller onefile native self-test.
+and Linux x86_64. Linux wheels are built directly on Ubuntu 24.04 with its
+system ABI; older glibc compatibility requires a source build. The production
+workflow verifies host Linux product artifacts and a Windows PyInstaller
+onefile native self-test.
 
 The previous published PR head completed all configured hosted checks. A fresh
 workflow run is required after this parser update; its final state belongs in

@@ -16,6 +16,20 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-10-06",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [{
+      category: { zh: "稳定性", en: "Stability" },
+      items: [{
+        zh: "移除 Docker 部署和自动更新支持，请使用桌面客户端或本地安装；用于公网测试的访问放行开关也已移除。",
+        en: "Docker deployment and automatic updates have been removed. Use the desktop app or a local installation; the access bypass for public testing has also been removed.",
+      }],
+    }],
+  },
+  {
     version: "2026-10-04",
     title: {
       zh: "Lumina Layers — 9 月更新速览",
@@ -40,6 +54,12 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
       items: [{
         zh: "浮雕、掐丝或磁铁孔槽生成失败时会提示错误，不再把缺少这些结构的平面模型当作成功结果；之前已生成的下载文件仍可使用。",
         en: "Generation now reports failures when building relief, wirework or magnet cavities, instead of returning a flat model with those features missing. Previously generated downloads remain available.",
+      }, {
+        zh: "修改分享配方中的合法参数后可以直接导入，旧分享卡仍可打开；新分享卡需要使用更新后的 Lumina 打开。同名 LUT 无法明确匹配时会提示重新选择。",
+        en: "Recipes can now be imported after editing valid settings, and older share cards still open. New cards require an updated Lumina. Ambiguous LUT names prompt you to choose a source again.",
+      }, {
+        zh: "更换耗材或重新拟合后，计算结果会按实际材料参数重新匹配。旧缓存文件会保留，但首次使用可能需要重新计算。",
+        en: "After changing or refitting materials, cached results are matched against the actual material settings. Older cache files are kept, though the first use may require a rebuild.",
       }],
     }],
   },

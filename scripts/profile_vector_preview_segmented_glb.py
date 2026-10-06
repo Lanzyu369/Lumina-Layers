@@ -2,8 +2,8 @@
 
 This measures the path used by the in-app 3D preview after SVG preview:
 ``_run_vector_preview_branch`` builds the preview cache, then
-``generate_segmented_glb`` exports the color-segmented GLB. It does not
-restart Docker or touch runtime material data.
+``generate_segmented_glb`` exports the color-segmented GLB without changing
+runtime material data.
 """
 
 from __future__ import annotations

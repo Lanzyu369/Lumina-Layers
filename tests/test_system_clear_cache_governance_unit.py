@@ -111,12 +111,16 @@ def _records_for_event(
         (None, "evil.test:8000"),
     ],
 )
-def test_clear_cache_rejects_untrusted_origins_by_default(
+@pytest.mark.parametrize("legacy_env_value", ["", "1"])
+def test_clear_cache_rejects_untrusted_origins(
     cache_scenario: _CacheScenario,
     caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    legacy_env_value: str,
     origin: str | None,
     host: str,
 ) -> None:
+    monkeypatch.setenv("LUMINA_ALLOW_PUBLIC_GRAY_API", legacy_env_value)
     cache_scenario.assert_artifact_available()
     logger = _capture_system_logger(caplog)
     headers = {"Host": host}
@@ -135,46 +139,6 @@ def test_clear_cache_rejects_untrusted_origins_by_default(
 
     records = _records_for_event(caplog, "system_clear_cache_forbidden")
     assert len(records) == 1
-
-
-@pytest.mark.parametrize(
-    ("origin", "host"),
-    [
-        ("https://example.invalid", "127.0.0.1:8000"),
-        ("http://evil.test:8000", "evil.test:8000"),
-        ("null", "127.0.0.1:8000"),
-        ("not a url", "127.0.0.1:8000"),
-        (None, "evil.test:8000"),
-    ],
-)
-def test_clear_cache_allows_untrusted_origins_for_public_gray_api(
-    cache_scenario: _CacheScenario,
-    caplog: pytest.LogCaptureFixture,
-    monkeypatch: pytest.MonkeyPatch,
-    origin: str | None,
-    host: str,
-) -> None:
-    monkeypatch.setenv("LUMINA_ALLOW_PUBLIC_GRAY_API", "1")
-    cache_scenario.assert_artifact_available()
-    logger = _capture_system_logger(caplog)
-    headers = {"Host": host}
-    if origin is not None:
-        headers["Origin"] = origin
-    try:
-        response = cache_scenario.client.post(
-            "/api/system/clear-cache",
-            headers=headers,
-        )
-    finally:
-        _release_system_logger(logger, caplog)
-
-    assert response.status_code == 200
-    assert response.json()["details"]["registry_cleaned"] == 1
-    assert response.json()["details"]["sessions_cleaned"] == 1
-    cache_scenario.assert_artifact_cleaned()
-
-    records = _records_for_event(caplog, "system_clear_cache_forbidden")
-    assert records == []
 
 
 def test_clear_cache_allows_direct_local_management_request(

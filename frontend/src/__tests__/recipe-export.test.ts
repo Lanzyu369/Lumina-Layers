@@ -3,7 +3,6 @@ import {
   buildFullRecipe,
   exportConverterRecipe,
 } from "../recipe/exportRecipe";
-import { sha256String } from "../recipe/utils";
 import type { ConverterState } from "../stores/converter/store";
 import { DEFAULT_STATE } from "../stores/converter";
 import type { SettingsState } from "../stores/settingsStore";
@@ -41,7 +40,7 @@ describe("recipe/exportRecipe", () => {
       const recipe = exportConverterRecipe(state, makeSettings(), "fp123");
 
       expect(recipe.base.lut.name).toBe("TestLUT");
-      expect(recipe.base.lut.fingerprint).toBe("fp123");
+      expect(recipe.base.lut.path_hint).toBe("fp123");
       expect(recipe.base.color_mode).toBe("4-Color (RYBW)");
       expect(recipe.base.target_width_mm).toBe(100);
       expect(recipe.base.target_height_mm).toBe(75);
@@ -341,7 +340,7 @@ describe("recipe/exportRecipe", () => {
     });
   });
 
-  it("builds schema v3 with a deep-cloned workshop source inside integrity", async () => {
+  it("builds schema v4 with a deep-cloned workshop source", async () => {
     const converter = exportConverterRecipe(
       makeState(),
       makeSettings(),
@@ -356,7 +355,6 @@ describe("recipe/exportRecipe", () => {
           filename: "bead.png",
           mime_type: "image/png",
           byte_size: 3,
-          sha256: "asset-sha",
           encoding: "base64",
           payload_b64: "cG5n",
         },
@@ -364,13 +362,11 @@ describe("recipe/exportRecipe", () => {
       source,
     );
 
-    expect(recipe.schema_version).toBe(3);
+    expect(recipe.schema_version).toBe(4);
     expect(recipe.recipe.workshop).toEqual(source);
     expect(recipe.recipe.workshop).not.toBe(source);
     expect(recipe.recipe.workshop?.payload).not.toBe(source.payload);
-    expect(recipe.integrity.recipe_sha256).toBe(
-      await sha256String(JSON.stringify(recipe.recipe)),
-    );
+    expect(recipe).not.toHaveProperty("integrity");
 
     source.payload.compression = 1;
     expect(recipe.recipe.workshop?.payload.compression).toBe(73);

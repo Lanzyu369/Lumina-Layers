@@ -11,7 +11,7 @@ import type {
   RecipeCover,
 } from "./types";
 import { RECIPE_FORMAT, RECIPE_SCHEMA_VERSION } from "./types";
-import { buildAssetEntry, sha256String } from "./utils";
+import { buildAssetEntry } from "./utils";
 import { colorRemapToReplacementRegions } from "../utils/colorUtils";
 import type { ConverterState } from "../stores/converter/store";
 import type { SettingsState } from "../stores/settingsStore";
@@ -105,12 +105,12 @@ function getAppVersion(): string {
  *
  * @param state - Current ConverterState snapshot.
  * @param settings - Current SettingsState snapshot.
- * @param lutFingerprint - SHA-256 fingerprint of the current LUT (first 32 hex chars).
+ * @param lutPath - Existing local LUT record path, when available.
  */
 export function exportConverterRecipe(
   state: ConverterState,
   settings: SettingsState,
-  lutFingerprint: string,
+  lutPath?: string,
 ): ConverterRecipe {
   // Merge global-only colorRemapMap entries into global replacement_regions.
   // Spatial region edits remain session-scoped and are never serialized here.
@@ -150,7 +150,7 @@ export function exportConverterRecipe(
   const lutRef: LutReference = {
     name: state.lut_name,
     color_mode: state.color_mode,
-    fingerprint: lutFingerprint,
+    ...(lutPath ? { path_hint: lutPath } : {}),
   };
 
   return {
@@ -329,7 +329,7 @@ export function exportConverterRecipe(
  * @param cover - Cover image metadata.
  * @param assets - Primary and optional heightmap asset entries.
  * @param workshopSource - Optional matrix-only workshop restore source.
- * @returns The complete LuminaRecipe with integrity hashes.
+ * @returns The complete editable LuminaRecipe.
  */
 export async function buildFullRecipe(
   converterRecipe: ConverterRecipe,
@@ -337,18 +337,7 @@ export async function buildFullRecipe(
   assets: RecipeAssets,
   workshopSource?: WorkshopRecipeSource | null,
 ): Promise<LuminaRecipe> {
-  // Compute asset checksums
-  const assetChecksums: Record<string, string> = {
-    primary: assets.primary.sha256,
-  };
-  if (assets.heightmap) {
-    assetChecksums["heightmap"] = assets.heightmap.sha256;
-  }
-
-  // Build recipe without integrity first (for hashing)
-  const recipeWithoutIntegrity: Omit<LuminaRecipe, "integrity"> & {
-    integrity?: unknown;
-  } = {
+  return {
     format: RECIPE_FORMAT,
     schema_version: RECIPE_SCHEMA_VERSION,
     app_version: getAppVersion(),
@@ -363,24 +352,11 @@ export async function buildFullRecipe(
         : {}),
     },
     compat: {
-      min_schema_version: 1,
+      min_schema_version: RECIPE_SCHEMA_VERSION,
     },
     warnings: [],
   };
 
-  // Compute recipe SHA-256 (over the recipe section only, for stability)
-  const recipeJsonForHash = JSON.stringify(recipeWithoutIntegrity.recipe);
-  const recipeSha256 = await sha256String(recipeJsonForHash);
-
-  const fullRecipe: LuminaRecipe = {
-    ...(recipeWithoutIntegrity as Omit<LuminaRecipe, "integrity">),
-    integrity: {
-      recipe_sha256: recipeSha256,
-      asset_checksums: assetChecksums,
-    },
-  };
-
-  return fullRecipe;
 }
 
 /**

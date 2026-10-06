@@ -712,7 +712,6 @@ def _extract_reference_summary(report: dict[str, Any]) -> dict[str, object | Non
             "serialNumber": None,
             "patchCount": 24,
             "labWhitePoint": "D50",
-            "referenceHash": report.get("reference_hash") or report.get("reference_token"),
         }
     return {
         "sourceType": source.get("source_type"),
@@ -720,7 +719,6 @@ def _extract_reference_summary(report: dict[str, Any]) -> dict[str, object | Non
         "serialNumber": source.get("serial_number"),
         "patchCount": source.get("patch_count"),
         "labWhitePoint": source.get("lab_white_point"),
-        "referenceHash": source.get("reference_hash") or report.get("reference_hash") or report.get("reference_token"),
     }
 
 

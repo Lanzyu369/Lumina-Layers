@@ -376,10 +376,6 @@ def get_lut_color_choices(lut_path: str) -> List[tuple]:
     return choices
 
 
-# generate_lut_color_dropdown_html relocated to api/lut_html.py — see
-# the deferred re-export block at the bottom of this file.
-
-
 def _resolve_color_mode_from_size(
     total_colors: int,
     layer_count: int | None,
@@ -627,25 +623,3 @@ def _ensure_quantized_image_in_cache(cache):
 
     cache["quantized_image"] = q
     return cache
-
-
-# ---------------------------------------------------------------------------
-# Phase 0 Sub-PR B: HTML grid + click-selection helpers relocated to api/.
-# 这两块原先位于本模块，违反 ``core/ -> api/ -> UI`` 层次约束（``AGENTS.md`` L72）。
-# 现已迁移到 ``api/lut_html.py`` 与 ``api/color_workstation_helpers.py``。下面的
-# 再导出仅作过渡兼容（``core.converter`` 链上的旧调用与
-# ``tests/test_backward_compat_properties.py`` 仍依赖此处可见同名符号）；Phase 4
-# 完成消费方迁移后将一并删除。
-# ---------------------------------------------------------------------------
-from api.lut_html import (  # noqa: E402  -- transitional layer-violation, Phase 0 Sub-PR B
-    generate_lut_card_grid_html,
-    generate_lut_color_dropdown_html,
-    generate_lut_grid_html,
-)
-from api.color_workstation_helpers import (  # noqa: E402  -- transitional layer-violation
-    _build_dual_recommendations,
-    _build_selection_meta,
-    _recommend_lut_colors_by_rgb,
-    _resolve_click_selection_hexes,
-    _resolve_highlight_mask,
-)

@@ -1921,42 +1921,22 @@ def _compute_layer_images_cache_key(
     slots_src: object,
     *,
     material_matrix_ref: dict | None = None,
-) -> str:
-    """Hash key derived from the inputs that determine the rendered layer PNGs.
-    Artifact-backed caches use the material_matrix field revision/hash instead
-    of reading and hashing matrix bytes.
-    基于决定层图像素内容的输入计算缓存 key；material_matrix / 调色板没变就命中。
+) -> tuple:
+    """Compare field revision and rendering parameters directly.
+    直接比较字段代次与渲染参数；旧内存会话使用完整数据，避免覆盖误命中。
     """
-    import hashlib
-
-    hasher = hashlib.sha1()
     if material_matrix_ref is not None:
-        hasher.update(
-            repr(
-                {
-                    "shape": material_matrix_ref.get("shape"),
-                    "dtype": material_matrix_ref.get("dtype"),
-                    "revision": material_matrix_ref.get("revision"),
-                    "sha256": material_matrix_ref.get("sha256"),
-                }
-            ).encode("utf-8", errors="replace")
+        source = (
+            material_matrix_ref.get("path"),
+            tuple(material_matrix_ref.get("shape") or ()),
+            material_matrix_ref.get("dtype"),
+            material_matrix_ref.get("revision"),
         )
     else:
         if material_matrix is None:
             raise ValueError("material_matrix is required for legacy layer cache keys")
-        # Legacy in-memory sessions have no field revision; keep byte hashing
-        # only for that compatibility path. New preview sessions are artifact
-        # backed and use the branch above.
-        # 旧内存 session 没有字段 revision，仅兼容路径继续 hash bytes。
-        hasher.update(bytes(str(material_matrix.shape), "ascii"))
-        hasher.update(material_matrix.tobytes())
-    # preview_colors + slots affect only the colour mapping but are cheap to
-    # serialise and small, so include them to stay correct when a caller
-    # rebinds colours in-place without touching material_matrix.
-    # 把调色板也塞进 key，支持颜色 dict 变化但 matrix 不变的边缘情况。
-    hasher.update(repr(preview_colors_src).encode("utf-8", errors="replace"))
-    hasher.update(repr(slots_src).encode("utf-8", errors="replace"))
-    return hasher.hexdigest()
+        source = (material_matrix.shape, material_matrix.dtype.str, material_matrix.tobytes())
+    return (source, repr(preview_colors_src), repr(slots_src))
 
 
 def _require_preview_cache_for_layer_images(

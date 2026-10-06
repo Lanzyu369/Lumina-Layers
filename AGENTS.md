@@ -53,8 +53,6 @@ Use a multi-context layout organized by business system or workflow: root `CONTE
 - `python scripts/check_perf_regression.py --use-cold-start`
 - `python scripts/log_quality_check.py --mode fast`
 - `python scripts/log_quality_check.py --mode full`
-- Docker build: `docker build -t lumina-layers .`
-- Docker run: `docker run -p 4174:4174 -p 8000:8000 lumina-layers`
 
 ## Engineering Rules
 
@@ -202,7 +200,7 @@ Use a multi-context layout organized by business system or workflow: root `CONTE
 
 ## Agent Process Hygiene
 
-- Any agent that starts a long-running local process must stop it before finishing the task. This includes `python start_all.py`, `python api_server.py`, Vite dev servers, Docker containers, preview servers, Vitest watch mode, and ad-hoc subprocesses.
+- Any agent that starts a long-running local process must stop it before finishing the task. This includes `python start_all.py`, `python api_server.py`, Vite dev servers, preview servers, Vitest watch mode, and ad-hoc subprocesses.
 - Prefer project cleanup wrappers instead of raw commands. Use `python start_all.py --kill` to clear Lumina launcher leftovers, and use `python scripts/run_vitest.py ...` for non-watch frontend tests so the test wrapper can manage Windows Job Object cleanup.
 - Do not call raw watch-mode commands unless the task explicitly requires them. If watch mode or a dev server must stay running for the user, say so explicitly and include the stop command.
 - After launcher/manual/browser verification, check for leftover Lumina backend/frontend/test helper processes before reporting completion. On Windows, inspect command lines for `api_server.py`, `start_all.py`, `vite`, `vitest`, `esbuild`, `node_modules`, and this project path.

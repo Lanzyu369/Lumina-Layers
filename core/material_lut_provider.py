@@ -4,13 +4,13 @@
 The staged pipeline calls this module instead of importing
 ``core.material_lut_synthesis`` / ``core.material_cache`` directly. It keeps
 the useful local optimization from the split experiment: a process-local memo
-cache keyed by request parameters and material archive mtimes, so repeated
+cache keyed by request parameters and material archive contents, so repeated
 loads within a preview/generate run hit memory while edits on disk invalidate
 the memo automatically.
 
 分阶段管线通过本模块访问耗材与求解缓存，而不是直接 import
 ``core.material_lut_synthesis`` / ``core.material_cache``。这里保留拆分实验中
-有价值的本地优化：按请求参数和耗材档案 mtime 建键的进程内 memo 缓存，使一次
+有价值的本地优化：按请求参数和耗材档案内容 建键的进程内 memo 缓存，使一次
 预览/生成内的重复加载命中内存，同时磁盘编辑会自动使 memo 失效。
 """
 
@@ -46,64 +46,40 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 _materials_lock = threading.Lock()
-_materials_memo: dict[tuple[str, tuple[str, ...], tuple[float, ...]], list[MaterialParams]] = {}
+_materials_memo: dict[tuple, list[MaterialParams]] = {}
 
 
-def _material_archive_mtimes(
+def _material_archive_state(
     directory_names: list[str],
     materials_dir: str | None,
-) -> tuple[float, ...]:
-    """Compute an mtime fingerprint of each material's on-disk archive files.
-    计算每个耗材磁盘档案文件的 mtime 指纹。
-
-    Folding this into the memo key makes the cache **self-invalidating across
-    local edits and processes**: if another local tool, worker, or request
-    imports/edits/deletes a material, the ``material.json`` /
-    ``stage_A_parameters.json`` mtimes change, the key changes, and the main
-    app reloads fresh data on the next request — without any explicit
-    invalidation protocol. Missing files contribute ``0.0`` so a deletion
-    still shifts the fingerprint.
-
-    把它折进 memo 键，使缓存能对**本地编辑和跨进程写入自失效**：当其他本地工具、
-    worker 或请求导入/编辑/删除耗材时，``material.json`` /
-    ``stage_A_parameters.json`` 的 mtime 变化使键变化，主应用下次请求即重载最新
-    数据，无需任何显式失效协议。文件缺失记为 ``0.0``，使删除同样改变指纹。
-
-    Args:
-        directory_names: Material directory names. (耗材目录名)
-        materials_dir: Optional materials root override. (可选耗材根目录覆盖)
-
-    Returns:
-        tuple[float, ...]: Per-material mtime values, aligned to inputs.
-            (与输入对齐的逐耗材 mtime 值)
+) -> tuple:
+    """Read the small archive inputs so same-path replacements invalidate reuse.
+    读取小型档案输入，确保同路径覆盖也会使复用失效。
     """
     root = Path(materials_dir or MATERIALS_DIR)
-    fingerprints: list[float] = []
+    states = []
     for directory_name in directory_names:
         material_dir = root / directory_name
-        mtime = 0.0
         for filename in ("material.json", "stage_A_parameters.json"):
             try:
-                mtime = max(mtime, (material_dir / filename).stat().st_mtime)
+                path = material_dir / filename
+                states.append((path.stat().st_mtime_ns, path.read_bytes()))
             except OSError:
-                # Missing/unreadable file contributes 0.0 so deletions and
-                # renames still shift the fingerprint. 缺失文件记 0.0。
-                continue
-        fingerprints.append(mtime)
-    return tuple(fingerprints)
+                states.append(None)
+    return tuple(states)
 
 
 def _materials_key(
     directory_names: list[str],
     materials_dir: str | None,
-) -> tuple[str, tuple[str, ...], tuple[float, ...]]:
+) -> tuple:
     """Build the memo key for a material-load request.
-    为一次耗材加载请求构建 memo 键（含 mtime 指纹以支持自失效）。
+    为一次耗材加载请求构建 memo 键，直接比较档案内容。
     """
     return (
         str(materials_dir or ""),
         tuple(directory_names),
-        _material_archive_mtimes(directory_names, materials_dir),
+        _material_archive_state(directory_names, materials_dir),
     )
 
 
@@ -300,13 +276,13 @@ def load_dynamic_candidate_runtime(
     fixed-grid :class:`MaterialSolverCache`. A single explicit candidate budget
     therefore identifies the same bounded universe at every effective layer,
     even if legacy cache files are added later. Palettes containing duplicate
-    optical fingerprints also bypass the optical-only persisted runtime so the
-    fresh runtime preserves the current material identities and order.
+    optical parameters remain distinct because persisted runtimes compare material
+    identities and parameters directly.
 
     与 :func:`load_solver_runtime` 不同，本函数绝不探测旧的固定网格
     :class:`MaterialSolverCache`。因此同一个显式候选预算在每个有效层数上始终
-    对应同一个有界候选宇宙，不会因后来新增旧缓存而改变。若调色板包含重复
-    光学指纹，也会绕过仅按光学参数持久化的运行时，以当前耗材身份和顺序重建。
+    对应同一个有界候选宇宙，不会因后来新增旧缓存而改变。持久运行时直接比较
+    耗材身份与参数，即使光学参数相同也能正确重绑当前耗材顺序。
 
     Args:
         materials: Material palette. 耗材调色板。
@@ -325,22 +301,14 @@ def load_dynamic_candidate_runtime(
     config = MaterialCandidateCacheConfig.persisted_for_budget(
         int(candidate_budget)
     )
-    optical_fingerprints = [
-        _material_cache._material_fingerprint(material) for material in materials
-    ]
-    has_duplicate_optics = len(set(optical_fingerprints)) != len(
-        optical_fingerprints
+    persisted_runtime = load_material_candidate_runtime(
+        materials,
+        int(layer_count),
+        float(layer_height_mm),
+        str(substrate),
+        candidate_budget=int(config.candidate_budget),
+        cache_root=cache_root,
     )
-    persisted_runtime = None
-    if not has_duplicate_optics:
-        persisted_runtime = load_material_candidate_runtime(
-            materials,
-            int(layer_count),
-            float(layer_height_mm),
-            str(substrate),
-            candidate_budget=int(config.candidate_budget),
-            cache_root=cache_root,
-        )
     if persisted_runtime is not None:
         return persisted_runtime, persisted_runtime.grid_resolution
 

@@ -36,7 +36,6 @@ vi.mock("../api/extractor", () => ({
           patchCount: 24,
           labWhitePoint: "D50",
           serialNumber: null,
-          referenceHash: "test-reference",
         },
       ],
     }),

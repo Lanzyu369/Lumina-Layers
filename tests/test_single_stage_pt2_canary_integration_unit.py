@@ -64,7 +64,7 @@ def _solver_cache_metadata(
     grid_resolution: int = 64,
 ) -> dict[str, object]:
     return {
-        "palette_hash": palette_hash,
+        "cache_id": palette_hash,
         "canonical_materials": [
             {"directory_name": "stub_material_a"},
             {"directory_name": "stub_material_b"},
@@ -96,7 +96,7 @@ def _patch_solver_cache_common(
         lambda directory_names: [SimpleNamespace(directory_name=name) for name in directory_names],
     )
     monkeypatch.setattr(
-        "api.routers.single_stage.fingerprint_palette",
+        "api.routers.single_stage._palette_cache_identity",
         lambda materials: "stub_hash",
     )
     monkeypatch.setattr(
@@ -161,7 +161,7 @@ def _solver_runtime_metadata(
     return {
         "schema_version": "2.0",
         "mode": "candidate_hybrid",
-        "palette_hash": palette_hash,
+        "cache_id": palette_hash,
         "canonical_materials": [
             {"directory_name": "stub_material_a"},
             {"directory_name": "stub_material_b"},
@@ -324,7 +324,7 @@ def _patch_material_solver_management_dependencies(
         _load_multiple_materials,
     )
     monkeypatch.setattr(
-        "api.routers.single_stage.fingerprint_palette",
+        "api.routers.single_stage._palette_cache_identity",
         lambda materials: "stub_hash",
     )
     monkeypatch.setattr(
@@ -409,12 +409,15 @@ def _patch_material_solver_management_dependencies(
         ("/api/extractor/material-solver-runtime/details", _solver_runtime_form_data),
     ],
 )
-def test_material_solver_management_posts_reject_untrusted_origin_by_default(
+@pytest.mark.parametrize("legacy_env_value", ["", "1"])
+def test_material_solver_management_posts_reject_untrusted_origin(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     path: str,
     data_factory,
+    legacy_env_value: str,
 ) -> None:
+    monkeypatch.setenv("LUMINA_ALLOW_PUBLIC_GRAY_API", legacy_env_value)
     client, _, _ = _client_with_state()
     calls = _patch_material_solver_management_dependencies(monkeypatch, tmp_path)
 
@@ -428,46 +431,12 @@ def test_material_solver_management_posts_reject_untrusted_origin_by_default(
     assert calls == []
 
 
-@pytest.mark.parametrize(
-    ("path", "data_factory"),
-    [
-        ("/api/extractor/material-solver-cache/status", _solver_cache_form_data),
-        ("/api/extractor/material-solver-cache/build", _solver_cache_form_data),
-        ("/api/extractor/material-solver-cache/delete", _solver_cache_form_data),
-        ("/api/extractor/material-solver-cache/details", _solver_cache_form_data),
-        (
-            "/api/extractor/material-solver-cache/suggest-colors",
-            _solver_cache_suggest_form_data,
-        ),
-        ("/api/extractor/material-solver-runtime/status", _solver_runtime_form_data),
-        ("/api/extractor/material-solver-runtime/build", _solver_runtime_form_data),
-        ("/api/extractor/material-solver-runtime/delete", _solver_runtime_form_data),
-        ("/api/extractor/material-solver-runtime/details", _solver_runtime_form_data),
-    ],
-)
-def test_material_solver_management_posts_allow_untrusted_origin_for_public_gray_api(
+@pytest.mark.parametrize("legacy_env_value", ["", "1"])
+def test_material_solver_cache_list_rejects_untrusted_origin(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    path: str,
-    data_factory,
+    legacy_env_value: str,
 ) -> None:
-    monkeypatch.setenv("LUMINA_ALLOW_PUBLIC_GRAY_API", "1")
-    client, _, _ = _client_with_state()
-    calls = _patch_material_solver_management_dependencies(monkeypatch, tmp_path)
-
-    response = client.post(
-        path,
-        data=data_factory(),
-        headers=UNTRUSTED_ORIGIN_HEADERS,
-    )
-
-    assert response.status_code != 403
-    assert calls != []
-
-
-def test_material_solver_cache_list_rejects_untrusted_origin_by_default(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+    monkeypatch.setenv("LUMINA_ALLOW_PUBLIC_GRAY_API", legacy_env_value)
     client, _, _ = _client_with_state()
     called = False
     private_path = "/Users/min/private/materials/_solver_cache/cache.npz"
@@ -495,40 +464,6 @@ def test_material_solver_cache_list_rejects_untrusted_origin_by_default(
 
     assert response.status_code == 403
     assert called is False
-
-
-def test_material_solver_cache_list_allows_untrusted_origin_for_public_gray_api(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("LUMINA_ALLOW_PUBLIC_GRAY_API", "1")
-    client, _, _ = _client_with_state()
-    called = False
-    private_path = "/Users/min/private/materials/_solver_cache/cache.npz"
-
-    def _list_cached_entries():
-        nonlocal called
-        called = True
-        return [
-            {
-                **_solver_cache_metadata(),
-                "cache_file_size_bytes": 128,
-                "cache_file_path": private_path,
-            }
-        ]
-
-    monkeypatch.setattr(
-        "api.routers.single_stage.list_cached_entries",
-        _list_cached_entries,
-    )
-
-    response = client.get(
-        "/api/extractor/material-solver-caches",
-        headers=UNTRUSTED_ORIGIN_HEADERS,
-    )
-
-    assert response.status_code == 200
-    assert called is True
-    assert private_path not in response.text
 
 
 def test_material_solver_management_allows_local_frontend_origin(
@@ -725,7 +660,7 @@ class TestMaterialSolverCacheSuggestColorsCanary:
             ],
         )
         monkeypatch.setattr(
-            "api.routers.single_stage.fingerprint_palette",
+            "api.routers.single_stage._palette_cache_identity",
             lambda materials: "stub_hash",
         )
 
@@ -785,7 +720,7 @@ class TestMaterialSolverCacheSuggestColorsCanary:
             ],
         )
         monkeypatch.setattr(
-            "api.routers.single_stage.fingerprint_palette",
+            "api.routers.single_stage._palette_cache_identity",
             lambda materials: "stub_hash",
         )
         monkeypatch.setattr(
@@ -945,7 +880,7 @@ class TestMaterialSolverRuntimeCanary:
             ],
         )
         monkeypatch.setattr(
-            "api.routers.single_stage.fingerprint_palette",
+            "api.routers.single_stage._palette_cache_identity",
             lambda materials: "stub_hash",
         )
         monkeypatch.setattr(
@@ -996,7 +931,7 @@ class TestMaterialSolverRuntimeCanary:
             ],
         )
         monkeypatch.setattr(
-            "api.routers.single_stage.fingerprint_palette",
+            "api.routers.single_stage._palette_cache_identity",
             lambda materials: "stub_hash",
         )
 
@@ -1047,7 +982,7 @@ class TestMaterialSolverRuntimeCanary:
             ],
         )
         monkeypatch.setattr(
-            "api.routers.single_stage.fingerprint_palette",
+            "api.routers.single_stage._palette_cache_identity",
             lambda materials: "stub_hash",
         )
 
@@ -1123,7 +1058,7 @@ class TestMaterialSolverRuntimeCanary:
             ],
         )
         monkeypatch.setattr(
-            "api.routers.single_stage.fingerprint_palette",
+            "api.routers.single_stage._palette_cache_identity",
             lambda materials: "stub_hash",
         )
         monkeypatch.setattr(
@@ -1178,7 +1113,7 @@ class TestMaterialSolverRuntimeCanary:
             ],
         )
         monkeypatch.setattr(
-            "api.routers.single_stage.fingerprint_palette",
+            "api.routers.single_stage._palette_cache_identity",
             lambda materials: "stub_hash",
         )
 
@@ -1256,7 +1191,7 @@ class TestMaterialSolverRuntimeCanary:
             ],
         )
         monkeypatch.setattr(
-            "api.routers.single_stage.fingerprint_palette",
+            "api.routers.single_stage._palette_cache_identity",
             lambda materials: "stub_hash",
         )
         monkeypatch.setattr(
@@ -1318,7 +1253,7 @@ class TestMaterialSolverRuntimeCanary:
             ],
         )
         monkeypatch.setattr(
-            "api.routers.single_stage.fingerprint_palette",
+            "api.routers.single_stage._palette_cache_identity",
             lambda materials: "stub_hash",
         )
         monkeypatch.setattr(
@@ -1369,7 +1304,7 @@ class TestMaterialSolverCacheDeleteCanary:
             ],
         )
         monkeypatch.setattr(
-            "api.routers.single_stage.fingerprint_palette",
+            "api.routers.single_stage._palette_cache_identity",
             lambda materials: "stub_hash",
         )
         monkeypatch.setattr(

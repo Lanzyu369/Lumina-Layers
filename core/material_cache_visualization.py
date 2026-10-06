@@ -206,7 +206,7 @@ def build_material_cache_details(
 
     Args:
         cache: Loaded solver cache. (已加载的求解器缓存)
-        palette_hash: Canonical palette fingerprint for traceability.
+        palette_hash: Opaque cache record ID (historic API field name).
             (调色板规范指纹，用于可追溯性)
         grid_resolution: Effective Lab grid resolution that produced this
             cache; used both for total-cell-count fallback and the response

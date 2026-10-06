@@ -605,7 +605,6 @@ def _fake_lut_detail(path: str) -> SimpleNamespace:
     return SimpleNamespace(
         name="Secret LUT",
         path=path,
-        fingerprint="fp-secret",
         manufacturer="Private",
         manufacturer_source="metadata",
         material_type="PLA",
@@ -658,7 +657,6 @@ class _SuccessfulDetailsService:
                         SimpleNamespace(
                             name="Secret LUT",
                             path=_PRIVATE_ERROR_PATH,
-                            fingerprint="fp-secret",
                             color_mode="4-Color (RYBW)",
                             source_kind="legacy_lookup",
                             manufacturer="Private",
@@ -666,6 +664,7 @@ class _SuccessfulDetailsService:
                             manufacturer_source="metadata",
                             material_source="metadata",
                             search_tokens=["secret", "private"],
+                            revision="catalog-read-1",
                         )
                     ],
                 )
@@ -687,11 +686,6 @@ def test_public_lut_listing_and_catalog_responses_hide_local_paths(
         lut_router.LUTManager,
         "get_all_lut_files",
         staticmethod(lambda: {"Secret LUT": _PRIVATE_ERROR_PATH}),
-    )
-    monkeypatch.setattr(
-        lut_router.LUTManager,
-        "compute_fingerprint",
-        staticmethod(lambda _path: "fp-secret"),
     )
     monkeypatch.setattr(
         lut_router.LUTManager,
@@ -787,7 +781,7 @@ def test_public_lut_details_responses_hide_local_paths(
 
 
 def test_lut_list_reuses_file_metadata_until_signature_changes(tmp_path: Path) -> None:
-    """Repeated list calls should not re-hash unchanged LUT files."""
+    """Repeated list calls reuse inferred metadata within the TTL."""
     lut_router._invalidate_lut_details_service_cache()
     lut_path = tmp_path / "cached.json"
     lut_path.write_text('{"color_mode": "4-Color (RYBW)", "entries": []}', encoding="utf-8")
@@ -798,10 +792,6 @@ def test_lut_list_reuses_file_metadata_until_signature_changes(tmp_path: Path) -
                 "api.routers.lut.LUTManager.get_all_lut_files",
                 return_value={"Cached": str(lut_path)},
             ),
-            patch(
-                "api.routers.lut.LUTManager.compute_fingerprint",
-                return_value="fingerprint-a",
-            ) as mock_fingerprint,
             patch(
                 "api.routers.lut.LUTManager.infer_color_mode",
                 return_value="4-Color (RYBW)",
@@ -819,7 +809,6 @@ def test_lut_list_reuses_file_metadata_until_signature_changes(tmp_path: Path) -
         assert [item.name for item in first.luts] == ["Cached"]
         assert [item.name for item in second.luts] == ["Cached"]
         assert [item.name for item in third.luts] == ["Cached"]
-        assert mock_fingerprint.call_count == 2
         assert mock_infer_mode.call_count == 2
     finally:
         lut_router._invalidate_lut_details_service_cache()
@@ -836,10 +825,6 @@ def test_lut_list_skips_signature_scan_within_hot_cache_window(tmp_path: Path) -
             patch(
                 "api.routers.lut.LUTManager.get_all_lut_files",
                 return_value={"Cached": str(lut_path)},
-            ),
-            patch(
-                "api.routers.lut.LUTManager.compute_fingerprint",
-                return_value="fingerprint-a",
             ),
             patch(
                 "api.routers.lut.LUTManager.infer_color_mode",
@@ -872,10 +857,6 @@ def test_lut_list_renews_hot_window_when_signature_is_unchanged(tmp_path: Path) 
             patch(
                 "api.routers.lut.LUTManager.get_all_lut_files",
                 return_value={"Cached": str(lut_path)},
-            ),
-            patch(
-                "api.routers.lut.LUTManager.compute_fingerprint",
-                return_value="fingerprint-a",
             ),
             patch(
                 "api.routers.lut.LUTManager.infer_color_mode",
@@ -1603,7 +1584,6 @@ class TestSourceCatalog:
                     patch("utils.lut_manager.LUTManager._build_legacy_catalog_groups", return_value=[]),
                     patch("utils.lut_manager.LUTManager._iter_scanned_lut_files", return_value=[("ReferenceDB", tmpdir, fake_path)]),
                     patch("utils.lut_manager.discover_native_reference_context", return_value=native_ctx) as mock_discover,
-                    patch("utils.lut_manager.LUTManager.compute_fingerprint", return_value="fp"),
                     patch("utils.lut_manager.LUTManager.infer_color_mode", return_value="4-Color (RYBW)"),
                 ):
                     first = LUTManager.get_source_catalog()
@@ -1658,20 +1638,43 @@ class TestSourceCatalog:
         finally:
             LUTManager.invalidate_native_source_index_cache()
 
-    def test_source_catalog_skips_legacy_signature_scan_within_hot_cache_window(self) -> None:
+    def test_source_catalog_rereads_same_size_overwrite_after_ttl(self, tmp_path) -> None:
+        from utils.lut_manager import LUTManager
+
+        lut_path = tmp_path / "mutable.json"
+        before = '{"color_mode":"4-Color (RYBW)"}'
+        after = '{"color_mode":"4-Color (CMYW)"}'
+        assert len(before) == len(after)
+        lut_path.write_text(before, encoding="utf-8")
+        initial_stat = lut_path.stat()
+        LUTManager.invalidate_native_source_index_cache()
+        try:
+            with (
+                patch("utils.lut_manager.LUTManager._scan_legacy_roots", return_value=(("Custom", str(tmp_path)),)),
+                patch("utils.lut_manager.LUTManager._get_native_source_index", return_value=()),
+                patch("utils.lut_manager.time.monotonic", side_effect=[0.0, 6.0]),
+            ):
+                first = LUTManager.get_source_catalog()
+                lut_path.write_text(after, encoding="utf-8")
+                os.utime(lut_path, ns=(initial_stat.st_atime_ns, initial_stat.st_mtime_ns))
+                assert lut_path.stat().st_size == initial_stat.st_size
+                second = LUTManager.get_source_catalog()
+
+            assert first["legacy_groups"][0]["items"][0]["color_mode"] == "4-Color (RYBW)"
+            assert second["legacy_groups"][0]["items"][0]["color_mode"] == "4-Color (CMYW)"
+        finally:
+            LUTManager.invalidate_native_source_index_cache()
+
+    def test_source_catalog_reuses_groups_within_hot_cache_window(self) -> None:
         from utils.lut_manager import LUTManager
 
         LUTManager.invalidate_native_source_index_cache()
         try:
             with (
                 patch(
-                    "utils.lut_manager.LUTManager._source_catalog_legacy_signature",
-                    return_value=(("Preset", "root", "A.json", 1, 2),),
-                ) as mock_signature,
-                patch(
                     "utils.lut_manager.LUTManager._build_legacy_catalog_groups",
                     return_value=[],
-                ),
+                ) as mock_legacy,
                 patch(
                     "utils.lut_manager.LUTManager._get_native_source_index",
                     return_value=(),
@@ -1682,24 +1685,20 @@ class TestSourceCatalog:
                 second = LUTManager.get_source_catalog()
 
             assert first == second
-            assert mock_signature.call_count == 1
+            assert mock_legacy.call_count == 1
         finally:
             LUTManager.invalidate_native_source_index_cache()
 
-    def test_source_catalog_renews_hot_window_when_signature_is_unchanged(self) -> None:
+    def test_source_catalog_rereads_groups_after_hot_window_expires(self) -> None:
         from utils.lut_manager import LUTManager
 
         LUTManager.invalidate_native_source_index_cache()
         try:
             with (
                 patch(
-                    "utils.lut_manager.LUTManager._source_catalog_legacy_signature",
-                    return_value=(("Preset", "root", "A.json", 1, 2),),
-                ) as mock_signature,
-                patch(
                     "utils.lut_manager.LUTManager._build_legacy_catalog_groups",
                     return_value=[],
-                ),
+                ) as mock_legacy,
                 patch(
                     "utils.lut_manager.LUTManager._get_native_source_index",
                     return_value=(),
@@ -1710,7 +1709,7 @@ class TestSourceCatalog:
                 LUTManager.get_source_catalog()
                 LUTManager.get_source_catalog()
 
-            assert mock_signature.call_count == 2
+            assert mock_legacy.call_count == 2
         finally:
             LUTManager.invalidate_native_source_index_cache()
 
@@ -1731,7 +1730,6 @@ class TestSourceCatalog:
                         name="A.json",
                         path="A.json",
                         color_mode="4-Color (RYBW)",
-                        fingerprint="fp-a",
                     ),
                 ),
                 default_db_names=("A.json",),
@@ -1753,7 +1751,6 @@ class TestSourceCatalog:
                         name="B.json",
                         path="B.json",
                         color_mode="4-Color (CMYW)",
-                        fingerprint="fp-b",
                     ),
                 ),
                 default_db_names=("B.json",),

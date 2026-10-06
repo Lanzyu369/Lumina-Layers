@@ -39,26 +39,12 @@ def test_runtime_requirement_is_an_exact_workspace_package() -> None:
     assert 'requires-python = "==3.12.*"' in pyproject
 
 
-def test_docker_builds_native_runtime_with_python312_before_requirements() -> None:
-    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-
-    assert dockerfile.startswith("FROM python:3.12-slim\n")
-    native_copy_index = dockerfile.index(
-        "COPY native/lumina-svg-core /app/native/lumina-svg-core"
-    )
-    requirements_install_index = dockerfile.index(
-        "RUN pip install --no-cache-dir -r requirements.txt"
-    )
-    assert native_copy_index < requirements_install_index
-    assert "requirements-native-svg.txt" in dockerfile
-
-
 def test_wheel_commands_resolve_the_package_directory() -> None:
     pyproject = (
         ROOT / "native" / "lumina-svg-core" / "pyproject.toml"
     ).read_text(encoding="utf-8")
 
-    assert pyproject.count("{package}/tools/verify_wheel.py") == 4
+    assert pyproject.count("{package}/tools/verify_wheel.py") == 3
     assert "pytest {package}/tests -q" in pyproject
     assert "{project}/tools/verify_wheel.py" not in pyproject
 

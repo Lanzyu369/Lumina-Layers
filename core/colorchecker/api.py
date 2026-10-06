@@ -110,7 +110,6 @@ def calibrate(
     reference_patches = brand_data["patches"]
     reference_color_map = brand_data["color_map"]
     reference_source = _brand_reference_source(brand_data)
-    reference_hash = brand_data.get("reference_hash") or reference_source.get("reference_hash")
     normalized_corners = _normalize_points(corners, expected_count=4, name="corners")
     if patch_points is None:
         if not auto_arrange:
@@ -154,8 +153,6 @@ def calibrate(
         preview_png = encode_png_bytes(calibration.preview_image)
         overlay_png = encode_png_bytes(calibration.preview_overlay_image)
         calibration.report.setdefault("reference_source", reference_source)
-        calibration.report.setdefault("reference_hash", reference_hash)
-        calibration.report.setdefault("reference_token", reference_hash)
         return CalibrationResult(
             calibrated_image=calibration.calibrated_image,
             preview_image=calibration.preview_image,
@@ -194,8 +191,6 @@ def calibrate(
     preview_png = encode_png_bytes(calibration.preview_image)
     overlay_png = encode_png_bytes(calibration.preview_overlay_image)
     calibration.report.setdefault("reference_source", reference_source)
-    calibration.report.setdefault("reference_hash", reference_hash)
-    calibration.report.setdefault("reference_token", reference_hash)
     return CalibrationResult(
         calibrated_image=calibration.calibrated_image,
         preview_image=calibration.preview_image,
@@ -248,7 +243,6 @@ def _brand_reference_source(brand_data: dict[str, Any]) -> dict[str, object]:
         "serial_number": None,
         "patch_count": len(brand_data.get("patches") or []),
         "lab_white_point": "D50",
-        "reference_hash": brand_data.get("reference_hash"),
     }
 
 
