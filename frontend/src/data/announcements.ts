@@ -16,6 +16,26 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-10-07",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [{
+      category: { zh: "新功能", en: "New" },
+      items: [{
+        zh: "设置中可以导入、选择和删除切片软件保存的单盘 3MF 项目模板。图像、矢量、材料档案、大幅分块和模型覆面导出可沿用模板工艺；批量、拼图、校准和色块生成仍使用内置配置。",
+        en: "Settings now lets you import, select and delete single-plate 3MF project templates. Image, vector, material-archive, large-format and model-surface exports can reuse template tuning; batch, puzzle, calibration and swatch generation use built-in settings.",
+      }],
+    }, {
+      category: { zh: "稳定性", en: "Stability" },
+      items: [{
+        zh: "生成的 3MF 更新了对 Anycubic Slicer Next 2.0.0.3、Flash Studio 1.7.18 和 Snapmaker Orca 2.4.0 的配置适配；同时修复首层高度设置冲突导致导出失败的问题。",
+        en: "Updated 3MF settings for Anycubic Slicer Next 2.0.0.3, Flash Studio 1.7.18 and Snapmaker Orca 2.4.0, and fixed export failures caused by conflicting first-layer height defaults.",
+      }],
+    }],
+  },
+  {
     version: "2026-10-06",
     title: {
       zh: "Lumina Layers — 9 月更新速览",
@@ -52,6 +72,9 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
     sections: [{
       category: { zh: "稳定性", en: "Stability" },
       items: [{
+        zh: "平面拼图可以使用所选的底板填充率和底板层高设置，观赏面附近仍保持实心；合并拼图时也会保留各块的材料槽、温度和流量设置。",
+        en: "Flat puzzles now keep your backing infill and layer height choices while staying solid near the viewing surface. Combining pieces also preserves their material slots, temperatures, and flow settings.",
+      }, {
         zh: "浮雕、掐丝或磁铁孔槽生成失败时会提示错误，不再把缺少这些结构的平面模型当作成功结果；之前已生成的下载文件仍可使用。",
         en: "Generation now reports failures when building relief, wirework or magnet cavities, instead of returning a flat model with those features missing. Previously generated downloads remain available.",
       }, {

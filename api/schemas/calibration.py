@@ -12,9 +12,11 @@ existing tests and downstream callers.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import Enum
+from typing import Any
 
-from pydantic import BaseModel, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from api.schemas.extractor import CalibrationColorMode
 from config import (
@@ -115,6 +117,7 @@ class CalibrationGenerateRequest(BaseModel):
     eight_color_full_export: bool = Field(False, description="8 色是否导出全量分页包")
     printer_id: str = Field(DEFAULT_PRINTER_ID, description="打印机配置 ID")
     slicer: str = Field(DEFAULT_SLICER_ID, description="切片软件 ID")
+    custom_3mf_template_id: str | None = None
     device_profile_id: str | None = Field(None, description="机器注册表设备配置 ID")
     build_plate_id: str | None = Field(None, description="打印板配置 ID")
     nozzle_size: str = Field("0.4", description="喷嘴直径")
@@ -131,9 +134,28 @@ class CalibrationGenerateRequest(BaseModel):
         normalized = normalize_slicer_software_id(str(value or ""))
         return normalized or DEFAULT_SLICER_ID
 
-    @field_validator("nozzle_size", mode="before")
+    @model_validator(mode="before")
     @classmethod
-    def normalize_nozzle(cls, value: object, info: ValidationInfo) -> str:
-        if str(info.data.get("device_profile_id") or "").strip():
-            return format_native_nozzle_size(value) or "0.4"
-        return normalize_nozzle_size(value) or "0.4"
+    def normalize_nozzle(cls, data: Any) -> Any:
+        """Normalize ``nozzle_size`` against the requested device profile.
+        根据请求的设备配置规范化 ``nozzle_size``。
+
+        A field validator cannot read ``device_profile_id`` reliably: pydantic
+        leaves ``ValidationInfo.data`` as ``None`` on the ``model_validate_json``
+        path, so this runs on the raw input where both fields are visible.
+        Any ``Mapping`` (``UserDict``, read-only proxies) is copied into a
+        plain dict first so non-dict callers are normalized as well.
+
+        字段校验器无法可靠读取 ``device_profile_id``：在 ``model_validate_json``
+        路径中，pydantic 会将 ``ValidationInfo.data`` 保持为 ``None``，因此此处
+        在同时包含两个字段的原始输入上执行规范化。任意 ``Mapping``（例如
+        ``UserDict`` 或只读代理）都会先复制为普通字典，以兼容非字典调用方。
+        """
+        if not isinstance(data, Mapping) or "nozzle_size" not in data:
+            return data
+        value = data["nozzle_size"]
+        if str(data.get("device_profile_id") or "").strip():
+            nozzle_size = format_native_nozzle_size(value) or "0.4"
+        else:
+            nozzle_size = normalize_nozzle_size(value) or "0.4"
+        return {**dict(data), "nozzle_size": nozzle_size}

@@ -298,6 +298,8 @@ LUT_STRUCTURED_EVENTS = {
     "lut_upload_validation_failed",
 }
 SYSTEM_STRUCTURED_EVENTS = {
+    "system_3mf_template_import_done",
+    "system_3mf_template_delete_done",
     "system_image_preview_done",
     "system_save_settings_done",
     "system_preview_resource_done",

@@ -505,3 +505,47 @@ def build_palette_preview_colors(palette: list[Any], color_conf: dict[str, Any])
         for idx, entry in enumerate(palette)
     }
     return slot_names, preview_colors
+
+
+def build_palette_material_types(
+    palette: Sequence[Any],
+    *,
+    default_material_type: str | None = None,
+) -> dict[str, str | None]:
+    """Keep explicit palette materials separate from display names.
+
+    将调色板明确记录的材料与显示名称分开；空值保持未知。
+    """
+    materials: dict[str, str | None] = {}
+    for entry in palette:
+        name = str(getattr(entry, "color", ""))
+        value = getattr(entry, "material", default_material_type)
+        materials[name] = value.strip() or None if isinstance(value, str) else None
+    return materials
+
+
+def build_lut_material_types(
+    metadata: Any,
+    slot_names: Sequence[str],
+) -> dict[str, str | None]:
+    """Resolve source materials, with PLA only for a standard colour palette.
+
+    解析来源材料；只有没有材料调色板的标准颜色槽使用产品默认 PLA。
+    """
+    from core.native_reference import (
+        SOURCE_KIND_COLORD_DB,
+        SOURCE_KIND_PACKAGE,
+        SOURCE_KIND_STAGE_MODEL,
+    )
+
+    extensions = getattr(metadata, "extensions", None) or {}
+    native_type = extensions.get("native_material_type")
+    native_type = native_type.strip() or None if isinstance(native_type, str) else None
+    palette = getattr(metadata, "palette", None) or []
+    if palette:
+        return build_palette_material_types(palette, default_material_type=native_type)
+    if extensions.get("source_kind") in {
+        SOURCE_KIND_COLORD_DB, SOURCE_KIND_STAGE_MODEL, SOURCE_KIND_PACKAGE,
+    }:
+        return {str(name): native_type for name in slot_names}
+    return {str(name): native_type or "PLA Basic" for name in slot_names}

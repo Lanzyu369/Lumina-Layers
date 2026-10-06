@@ -163,6 +163,7 @@ def calibration_generate(
         nozzle_size=request.nozzle_size,
         device_profile_id=request.device_profile_id,
         build_plate_id=request.build_plate_id,
+        custom_3mf_template_id=request.custom_3mf_template_id,
     )
     mode = request.color_mode.value
     backing_thickness_mm = float(request.backing_thickness)
@@ -364,6 +365,7 @@ def calibration_generate_single_stage_kit(
         nozzle_size=request.nozzle_size,
         device_profile_id=request.device_profile_id,
         build_plate_id=request.build_plate_id,
+        custom_3mf_template_id=request.custom_3mf_template_id,
     )
     try:
         palette = [

@@ -1,0 +1,896 @@
+diff --git a/include/neroued/3mf/builder.h b/include/neroued/3mf/builder.h
+index fb1be6d..b2f1529 100644
+--- a/include/neroued/3mf/builder.h
++++ b/include/neroued/3mf/builder.h
+@@ -54,9 +54,11 @@ class DocumentBuilder {
+                                        std::string type = "");
+     DocumentBuilder &SetComponentTransform(uint32_t object_id, Transform transform);
+     DocumentBuilder &SetObjectUUID(uint32_t object_id, std::string uuid);
++    DocumentBuilder &SetComponentUUID(uint32_t object_id, std::string uuid);
+ 
+     DocumentBuilder &AddBuildItem(uint32_t object_id, Transform transform = Transform::Identity(),
+-                                  std::string partnumber = "", std::string uuid = "");
++                                  std::string partnumber = "", std::string uuid = "",
++                                  std::string auto_drop = "");
+ 
+     DocumentBuilder &SetThumbnail(std::vector<uint8_t> data, std::string content_type);
+ 
+@@ -66,9 +68,20 @@ class DocumentBuilder {
+ 
+     DocumentBuilder &EnableProduction(Transform assembly_transform = Transform::Identity());
+     DocumentBuilder &SetProductionMergeObjects(bool merge = true);
++    DocumentBuilder &SetProductionBuildUUID(std::string uuid);
++    DocumentBuilder &SetProductionAssemblyUUID(std::string uuid);
+     DocumentBuilder &AddExternalModelMetadata(std::string name, std::string value,
+                                               std::string type = "");
+ 
++    /// Register a group of mesh objects written to one external Production model.
++    /// Returns the generated root assembly object ID; add one BuildItem for it.
++    uint32_t AddProductionGroup(std::string name, std::vector<uint32_t> object_ids,
++                                std::string uuid = "");
++
++    /// Plan the Production assembly/object paths without serializing meshes.
++    /// The builder remains usable and can still be consumed by Build().
++    ProductionLayout PlanProductionLayout() const;
++
+     /// Build the Document and transfer ownership of any owned meshes.
+     /// After calling Build(), the builder is in a moved-from state for owned meshes.
+     Document Build();
+diff --git a/include/neroued/3mf/document.h b/include/neroued/3mf/document.h
+index 3480449..23bc18c 100644
+--- a/include/neroued/3mf/document.h
++++ b/include/neroued/3mf/document.h
+@@ -57,6 +57,8 @@ struct Object {
+ 
+     /// Production Extension p:UUID; empty = omit.
+     std::string uuid;
++    /// Production Extension p:UUID for this object's root component reference.
++    std::string component_uuid;
+ };
+ 
+ struct BuildItem {
+@@ -65,6 +67,8 @@ struct BuildItem {
+     std::string partnumber;
+     /// Production Extension p:UUID; empty = omit.
+     std::string uuid;
++    /// Orca build-item auto_drop attribute; empty = omit.
++    std::string auto_drop;
+ };
+ 
+ struct Thumbnail {
+@@ -92,6 +96,37 @@ struct CustomContentType {
+     std::string content_type;
+ };
+ 
++/// Read-only Production layout calculated from the same object/path rules as
++/// the OPC writer.  Paths use the leading slash required by p:path.
++struct ProductionObjectLayout {
++    uint32_t object_id = 0;
++    std::string path;
++};
++
++/// Explicit group of mesh objects written together to one external model.
++struct ProductionGroup {
++    uint32_t assembly_id = 0;
++    std::string name;
++    std::vector<uint32_t> object_ids;
++    /// Production Extension p:UUID for the generated assembly object.
++    std::string uuid;
++};
++
++/// Read-only layout for one explicit external Production model group.
++struct ProductionGroupLayout {
++    uint32_t assembly_id = 0;
++    std::string name;
++    std::string path;
++    std::vector<ProductionObjectLayout> objects;
++};
++
++struct ProductionLayout {
++    uint32_t assembly_id = 0;
++    std::string main_model_path = "3D/3dmodel.model";
++    std::vector<ProductionObjectLayout> external_objects;
++    std::vector<ProductionGroupLayout> groups;
++};
++
+ struct Document {
+     /// Move-only because Object::mesh may reference data in owned_meshes.
+     Document() = default;
+@@ -119,7 +154,14 @@ struct Document {
+         bool enabled = false;
+         Transform assembly_build_transform = Transform::Identity();
+         bool merge_objects = false;
++        /// Production Extension UUID for the root build element.
++        std::string build_uuid;
++        /// Production Extension UUID for the generated assembly object.
++        std::string assembly_uuid;
+         std::vector<Metadata> external_model_metadata;
++        /// When non-empty, each group becomes one root assembly/build item and
++        /// one external model file. Objects must be assigned exactly once.
++        std::vector<ProductionGroup> groups;
+     } production;
+ 
+     /// Mesh data owned by this Document (populated when DocumentBuilder
+diff --git a/python/src/bind.cpp b/python/src/bind.cpp
+index ca25286..d0a4262 100644
+--- a/python/src/bind.cpp
++++ b/python/src/bind.cpp
+@@ -437,16 +437,17 @@ NB_MODULE(_neroued_3mf, m) {
+         .def(
+             "__init__",
+             [](n3mf::BuildItem *self, uint32_t object_id, n3mf::Transform transform,
+-               std::string partnumber, std::string uuid) {
+-                new (self)
+-                    n3mf::BuildItem{object_id, transform, std::move(partnumber), std::move(uuid)};
++               std::string partnumber, std::string uuid, std::string auto_drop) {
++                new (self) n3mf::BuildItem{object_id, transform, std::move(partnumber),
++                                           std::move(uuid), std::move(auto_drop)};
+             },
+             "object_id"_a = 0u, "transform"_a = n3mf::Transform::Identity(), "partnumber"_a = "",
+-            "uuid"_a = "")
++            "uuid"_a = "", "auto_drop"_a = "")
+         .def_rw("object_id", &n3mf::BuildItem::object_id)
+         .def_rw("transform", &n3mf::BuildItem::transform)
+         .def_rw("partnumber", &n3mf::BuildItem::partnumber)
+-        .def_rw("uuid", &n3mf::BuildItem::uuid);
++        .def_rw("uuid", &n3mf::BuildItem::uuid)
++        .def_rw("auto_drop", &n3mf::BuildItem::auto_drop);
+ 
+     // ---- Thumbnail ---------------------------------------------------------
+ 
+@@ -512,6 +513,15 @@ NB_MODULE(_neroued_3mf, m) {
+         .def_rw("extension", &n3mf::CustomContentType::extension)
+         .def_rw("content_type", &n3mf::CustomContentType::content_type);
+ 
++    // ---- Production group --------------------------------------------------
++
++    nb::class_<n3mf::ProductionGroup>(m, "ProductionGroup")
++        .def(nb::init<>())
++        .def_ro("assembly_id", &n3mf::ProductionGroup::assembly_id)
++        .def_ro("name", &n3mf::ProductionGroup::name)
++        .def_ro("object_ids", &n3mf::ProductionGroup::object_ids)
++        .def_ro("uuid", &n3mf::ProductionGroup::uuid);
++
+     // ---- Document::ProductionConfig ----------------------------------------
+ 
+     nb::class_<n3mf::Document::ProductionConfig>(m, "ProductionConfig")
+@@ -520,6 +530,9 @@ NB_MODULE(_neroued_3mf, m) {
+         .def_ro("assembly_build_transform",
+                 &n3mf::Document::ProductionConfig::assembly_build_transform)
+         .def_ro("merge_objects", &n3mf::Document::ProductionConfig::merge_objects)
++        .def_ro("build_uuid", &n3mf::Document::ProductionConfig::build_uuid)
++        .def_ro("assembly_uuid", &n3mf::Document::ProductionConfig::assembly_uuid)
++        .def_ro("groups", &n3mf::Document::ProductionConfig::groups)
+         .def_ro("external_model_metadata",
+                 &n3mf::Document::ProductionConfig::external_model_metadata);
+ 
+@@ -545,6 +558,27 @@ NB_MODULE(_neroued_3mf, m) {
+                    ", build_items=" + std::to_string(doc.build_items.size()) + ")";
+         });
+ 
++    // ---- Production layout plan -------------------------------------------
++
++    nb::class_<n3mf::ProductionObjectLayout>(m, "ProductionObjectLayout")
++        .def(nb::init<>())
++        .def_ro("object_id", &n3mf::ProductionObjectLayout::object_id)
++        .def_ro("path", &n3mf::ProductionObjectLayout::path);
++
++    nb::class_<n3mf::ProductionGroupLayout>(m, "ProductionGroupLayout")
++        .def(nb::init<>())
++        .def_ro("assembly_id", &n3mf::ProductionGroupLayout::assembly_id)
++        .def_ro("name", &n3mf::ProductionGroupLayout::name)
++        .def_ro("path", &n3mf::ProductionGroupLayout::path)
++        .def_ro("objects", &n3mf::ProductionGroupLayout::objects);
++
++    nb::class_<n3mf::ProductionLayout>(m, "ProductionLayout")
++        .def(nb::init<>())
++        .def_ro("assembly_id", &n3mf::ProductionLayout::assembly_id)
++        .def_ro("main_model_path", &n3mf::ProductionLayout::main_model_path)
++        .def_ro("external_objects", &n3mf::ProductionLayout::external_objects)
++        .def_ro("groups", &n3mf::ProductionLayout::groups);
++
+     // ---- WatermarkConfig ----------------------------------------------------
+ 
+     nb::class_<n3mf::WatermarkConfig>(m, "WatermarkConfig")
+@@ -707,9 +741,12 @@ NB_MODULE(_neroued_3mf, m) {
+         .def("set_object_uuid", &n3mf::DocumentBuilder::SetObjectUUID, "object_id"_a, "uuid"_a,
+              nb::rv_policy::reference)
+ 
++        .def("set_component_uuid", &n3mf::DocumentBuilder::SetComponentUUID, "object_id"_a,
++             "uuid"_a, nb::rv_policy::reference)
++
+         .def("add_build_item", &n3mf::DocumentBuilder::AddBuildItem, "object_id"_a,
+              "transform"_a = n3mf::Transform::Identity(), "partnumber"_a = "", "uuid"_a = "",
+-             nb::rv_policy::reference)
++             "auto_drop"_a = "", nb::rv_policy::reference)
+ 
+         .def(
+             "set_thumbnail",
+@@ -736,9 +773,20 @@ NB_MODULE(_neroued_3mf, m) {
+         .def("set_production_merge_objects", &n3mf::DocumentBuilder::SetProductionMergeObjects,
+              "merge"_a = true, nb::rv_policy::reference)
+ 
++        .def("set_production_build_uuid", &n3mf::DocumentBuilder::SetProductionBuildUUID, "uuid"_a,
++             nb::rv_policy::reference)
++
++        .def("set_production_assembly_uuid", &n3mf::DocumentBuilder::SetProductionAssemblyUUID,
++             "uuid"_a, nb::rv_policy::reference)
++
+         .def("add_external_model_metadata", &n3mf::DocumentBuilder::AddExternalModelMetadata,
+              "name"_a, "value"_a, "type"_a = "", nb::rv_policy::reference)
+ 
++        .def("add_production_group", &n3mf::DocumentBuilder::AddProductionGroup,
++             "name"_a, "object_ids"_a, "uuid"_a = "")
++
++        .def("plan_production_layout", &n3mf::DocumentBuilder::PlanProductionLayout)
++
+         .def("build", &n3mf::DocumentBuilder::Build, nb::keep_alive<0, 1>());
+ 
+     // ---- Writer functions --------------------------------------------------
+diff --git a/src/builder.cpp b/src/builder.cpp
+index de02759..6e2a549 100644
+--- a/src/builder.cpp
++++ b/src/builder.cpp
+@@ -6,8 +6,10 @@
+ #include "neroued/3mf/error.h"
+ 
+ #include "internal/validate.h"
++#include "opc.h"
+ 
+ #include <algorithm>
++#include <unordered_set>
+ #include <utility>
+ 
+ namespace neroued_3mf {
+@@ -147,10 +149,18 @@ DocumentBuilder &DocumentBuilder::SetObjectUUID(uint32_t object_id, std::string
+     return *this;
+ }
+ 
++DocumentBuilder &DocumentBuilder::SetComponentUUID(uint32_t object_id, std::string uuid) {
++    CheckNotBuilt();
++    FindObjectById(object_id).component_uuid = std::move(uuid);
++    return *this;
++}
++
+ DocumentBuilder &DocumentBuilder::AddBuildItem(uint32_t object_id, Transform transform,
+-                                               std::string partnumber, std::string uuid) {
++                                               std::string partnumber, std::string uuid,
++                                               std::string auto_drop) {
+     CheckNotBuilt();
+-    build_items_.push_back({object_id, transform, std::move(partnumber), std::move(uuid)});
++    build_items_.push_back(
++        {object_id, transform, std::move(partnumber), std::move(uuid), std::move(auto_drop)});
+     return *this;
+ }
+ 
+@@ -198,6 +208,18 @@ DocumentBuilder &DocumentBuilder::SetProductionMergeObjects(bool merge) {
+     return *this;
+ }
+ 
++DocumentBuilder &DocumentBuilder::SetProductionBuildUUID(std::string uuid) {
++    CheckNotBuilt();
++    production_.build_uuid = std::move(uuid);
++    return *this;
++}
++
++DocumentBuilder &DocumentBuilder::SetProductionAssemblyUUID(std::string uuid) {
++    CheckNotBuilt();
++    production_.assembly_uuid = std::move(uuid);
++    return *this;
++}
++
+ DocumentBuilder &DocumentBuilder::AddExternalModelMetadata(std::string name, std::string value,
+                                                            std::string type) {
+     CheckNotBuilt();
+@@ -206,6 +228,52 @@ DocumentBuilder &DocumentBuilder::AddExternalModelMetadata(std::string name, std
+     return *this;
+ }
+ 
++uint32_t DocumentBuilder::AddProductionGroup(std::string name,
++                                             std::vector<uint32_t> object_ids,
++                                             std::string uuid) {
++    CheckNotBuilt();
++    if (!production_.enabled) {
++        throw InputError("Production groups require Production mode");
++    }
++    if (name.empty()) { throw InputError("Production group name is empty"); }
++    if (object_ids.empty()) { throw InputError("Production group has no objects"); }
++
++    std::unordered_set<uint32_t> unique_ids;
++    for (const auto object_id : object_ids) {
++        if (!unique_ids.insert(object_id).second) {
++            throw InputError("Production group repeats object id " + std::to_string(object_id));
++        }
++        const auto &object = FindObjectById(object_id);
++        if (object.mesh.vertices.empty() || !object.components.empty()) {
++            throw InputError("Production groups require mesh objects; invalid id " +
++                             std::to_string(object_id));
++        }
++        for (const auto &existing : production_.groups) {
++            if (std::find(existing.object_ids.begin(), existing.object_ids.end(), object_id) !=
++                existing.object_ids.end()) {
++                throw InputError("Production group repeats previously assigned object id " +
++                                 std::to_string(object_id));
++            }
++        }
++    }
++
++    const uint32_t assembly_id = NextId();
++    production_.groups.push_back(
++        {assembly_id, std::move(name), std::move(object_ids), std::move(uuid)});
++    return assembly_id;
++}
++
++ProductionLayout DocumentBuilder::PlanProductionLayout() const {
++    CheckNotBuilt();
++    if (!production_.enabled) {
++        throw InputError("Production layout requires production mode");
++    }
++    if (build_items_.empty()) {
++        throw InputError("Production layout requires at least one build item");
++    }
++    return detail::BuildProductionLayout(objects_, production_);
++}
++
+ Document DocumentBuilder::Build() {
+     CheckNotBuilt();
+     built_ = true;
+diff --git a/src/internal/validate.h b/src/internal/validate.h
+index d79645a..4f3dc06 100644
+--- a/src/internal/validate.h
++++ b/src/internal/validate.h
+@@ -6,6 +6,7 @@
+ #include "neroued/3mf/document.h"
+ #include "neroued/3mf/error.h"
+ 
++#include <algorithm>
+ #include <cmath>
+ #include <cstdint>
+ #include <string>
+@@ -148,14 +149,67 @@ inline void ValidateDocument(const Document &doc, bool reject_repeated_vertex_in
+         object_ids.insert(obj.id);
+     }
+ 
++    std::unordered_set<uint32_t> production_group_ids;
++    std::unordered_set<uint32_t> grouped_object_ids;
++    if (!doc.production.groups.empty() && !doc.production.enabled) {
++        throw InputError("Production groups require Production mode");
++    }
++    if (!doc.production.groups.empty() &&
++        (!doc.production.assembly_build_transform.IsIdentity() ||
++         !doc.production.assembly_uuid.empty())) {
++        throw InputError("Explicit Production groups use per-group transforms and UUIDs");
++    }
++    for (const auto &group : doc.production.groups) {
++        ValidateResourceId(group.assembly_id, "Production group assembly id");
++        if (!resource_ids.insert(group.assembly_id).second) {
++            throw InputError("Duplicate resource id " + std::to_string(group.assembly_id));
++        }
++        if (group.name.empty()) { throw InputError("Production group name is empty"); }
++        if (group.object_ids.empty()) {
++            throw InputError("Production group " + group.name + " has no objects");
++        }
++        production_group_ids.insert(group.assembly_id);
++        for (const auto object_id : group.object_ids) {
++            if (!object_ids.contains(object_id)) {
++                throw InputError("Production group references non-existent object id " +
++                                 std::to_string(object_id));
++            }
++            if (!grouped_object_ids.insert(object_id).second) {
++                throw InputError("Production object id " + std::to_string(object_id) +
++                                 " appears in more than one group");
++            }
++            auto object = std::find_if(doc.objects.begin(), doc.objects.end(),
++                                       [object_id](const Object &candidate) {
++                                           return candidate.id == object_id;
++                                       });
++            if (object == doc.objects.end() || object->mesh.vertices.empty() ||
++                !object->components.empty()) {
++                throw InputError("Production groups require mesh objects; invalid id " +
++                                 std::to_string(object_id));
++            }
++        }
++    }
++    if (!doc.production.groups.empty() && grouped_object_ids.size() != doc.objects.size()) {
++        throw InputError("Every mesh object must belong to exactly one Production group");
++    }
++
++    std::unordered_set<uint32_t> build_item_ids;
+     for (const auto &item : doc.build_items) {
+-        if (!object_ids.contains(item.object_id)) {
++        const auto &valid_ids = doc.production.groups.empty() ? object_ids : production_group_ids;
++        if (!valid_ids.contains(item.object_id)) {
+             throw InputError("BuildItem references non-existent object id " +
+                              std::to_string(item.object_id));
+         }
++        if (!doc.production.groups.empty() && !build_item_ids.insert(item.object_id).second) {
++            throw InputError("Production group has more than one BuildItem " +
++                             std::to_string(item.object_id));
++        }
+         ValidateTransform(item.transform,
+                           "BuildItem for object " + std::to_string(item.object_id) + " transform");
+     }
++    if (!doc.production.groups.empty() && build_item_ids != production_group_ids) {
++        throw InputError("Each Production group must have exactly one BuildItem");
++    }
+ 
+     for (const auto &obj : doc.objects) {
+         const std::string object_label =
+diff --git a/src/opc.cpp b/src/opc.cpp
+index 83993aa..c958858 100644
+--- a/src/opc.cpp
++++ b/src/opc.cpp
+@@ -13,6 +13,7 @@
+ #include <string_view>
+ #include <unordered_map>
+ #include <unordered_set>
++#include <utility>
+ 
+ namespace neroued_3mf::detail {
+ 
+@@ -128,6 +129,60 @@ std::string ThumbnailExtension(const std::string &content_type) {
+ 
+ } // namespace
+ 
++ProductionLayout BuildProductionLayout(std::span<const Object> objects, bool merge_objects) {
++    if (objects.empty()) { throw InputError("3MF document has no mesh objects"); }
++
++    uint32_t assembly_id = 0;
++    for (const auto &obj : objects) { assembly_id = std::max(assembly_id, obj.id); }
++    if (assembly_id == UINT32_MAX) {
++        throw InputError("Production assembly ID would overflow");
++    }
++
++    ProductionLayout layout;
++    layout.assembly_id = assembly_id + 1;
++    layout.external_objects.reserve(objects.size());
++    for (std::size_t i = 0; i < objects.size(); ++i) {
++        layout.external_objects.push_back({
++            objects[i].id,
++            merge_objects ? "/3D/Objects/object_1.model"
++                          : "/3D/Objects/object_" + std::to_string(i + 1) + ".model",
++        });
++    }
++    return layout;
++}
++
++ProductionLayout BuildProductionLayout(
++    std::span<const Object> objects,
++    const Document::ProductionConfig &production) {
++    if (production.groups.empty()) {
++        return BuildProductionLayout(objects, production.merge_objects);
++    }
++
++    ProductionLayout layout;
++    layout.groups.reserve(production.groups.size());
++    for (std::size_t group_index = 0; group_index < production.groups.size(); ++group_index) {
++        const auto &group = production.groups[group_index];
++        ProductionGroupLayout group_layout;
++        group_layout.assembly_id = group.assembly_id;
++        group_layout.name = group.name;
++        group_layout.path = "/3D/Objects/object_" + std::to_string(group_index + 1) + ".model";
++        group_layout.objects.reserve(group.object_ids.size());
++        for (const auto object_id : group.object_ids) {
++            group_layout.objects.push_back({object_id, group_layout.path});
++            layout.external_objects.push_back({object_id, group_layout.path});
++        }
++        layout.groups.push_back(std::move(group_layout));
++    }
++    return layout;
++}
++
++ProductionLayout BuildProductionLayout(const Document &doc) {
++    if (doc.objects.empty() || doc.build_items.empty()) {
++        throw InputError("3MF document has no mesh/build items");
++    }
++    return BuildProductionLayout(doc.objects, doc.production);
++}
++
+ std::vector<OpcPart> BuildOpcParts(const Document &doc) {
+     if (doc.objects.empty() || doc.build_items.empty()) {
+         throw InputError("3MF document has no mesh/build items");
+@@ -136,7 +191,9 @@ std::vector<OpcPart> BuildOpcParts(const Document &doc) {
+     std::vector<OpcPart> parts;
+     parts.reserve(8 + doc.custom_parts.size());
+ 
+-    const std::string model_path = "3D/3dmodel.model";
++    const auto production_layout =
++        doc.production.enabled ? BuildProductionLayout(doc) : ProductionLayout{};
++    const std::string model_path = production_layout.main_model_path;
+ 
+     // -- relationships by source_part ---------------------------------------
+     std::unordered_map<std::string, std::vector<OpcRelationship>> rels_by_source;
+@@ -214,60 +271,170 @@ std::vector<OpcPart> BuildOpcParts(const Document &doc) {
+             axml += "</metadata>\n";
+         }
+ 
+-        uint32_t assembly_id = 0;
+-        for (const auto &obj : doc.objects) { assembly_id = std::max(assembly_id, obj.id); }
+-        ++assembly_id;
+-
+-        axml += "  <resources>\n    <object id=\"";
+-        axml += std::to_string(assembly_id);
+-        axml += "\" type=\"model\">\n      <components>\n";
+-
+-        const bool merge = doc.production.merge_objects;
+-        const std::string merged_ext_path = "/3D/Objects/object_1.model";
+-
+-        for (std::size_t i = 0; i < doc.objects.size(); ++i) {
+-            const auto &obj = doc.objects[i];
+-            std::string ext_path =
+-                merge ? merged_ext_path : "/3D/Objects/object_" + std::to_string(i + 1) + ".model";
+-            axml += "        <component p:path=\"";
+-            axml += EscapeXml(ext_path);
+-            axml += "\" objectid=\"";
+-            axml += std::to_string(obj.id);
++        axml += "  <resources>\n";
++        if (doc.production.groups.empty()) {
++            const uint32_t assembly_id = production_layout.assembly_id;
++            axml += "    <object id=\"";
++            axml += std::to_string(assembly_id);
++            axml += "\" type=\"model\"";
++            if (!doc.production.assembly_uuid.empty()) {
++                axml += " p:UUID=\"";
++                axml += EscapeXml(doc.production.assembly_uuid);
++                axml += "\"";
++            }
++            axml += ">\n      <components>\n";
++
++            for (std::size_t i = 0; i < doc.objects.size(); ++i) {
++                const auto &obj = doc.objects[i];
++                const std::string &ext_path = production_layout.external_objects[i].path;
++                axml += "        <component p:path=\"";
++                axml += EscapeXml(ext_path);
++                axml += "\" objectid=\"";
++                axml += std::to_string(obj.id);
++                axml += "\"";
++                if (!obj.component_transform.IsIdentity()) {
++                    axml += " transform=\"";
++                    axml += SerializeTransform(obj.component_transform);
++                    axml += "\"";
++                }
++                const auto &component_uuid =
++                    obj.component_uuid.empty() ? obj.uuid : obj.component_uuid;
++                if (!component_uuid.empty()) {
++                    axml += " p:UUID=\"";
++                    axml += EscapeXml(component_uuid);
++                    axml += "\"";
++                }
++                axml += "/>\n";
++            }
++            axml += "      </components>\n    </object>\n  </resources>\n  <build";
++            if (!doc.production.build_uuid.empty()) {
++                axml += " p:UUID=\"";
++                axml += EscapeXml(doc.production.build_uuid);
++                axml += "\"";
++            }
++            axml += ">\n    <item objectid=\"";
++            axml += std::to_string(assembly_id);
+             axml += "\"";
+-            if (!obj.component_transform.IsIdentity()) {
++            if (!doc.production.assembly_build_transform.IsIdentity()) {
+                 axml += " transform=\"";
+-                axml += SerializeTransform(obj.component_transform);
++                axml += SerializeTransform(doc.production.assembly_build_transform);
+                 axml += "\"";
+             }
+-            if (!obj.uuid.empty()) {
++            if (!doc.build_items.empty() && !doc.build_items.front().uuid.empty()) {
+                 axml += " p:UUID=\"";
+-                axml += EscapeXml(obj.uuid);
++                axml += EscapeXml(doc.build_items.front().uuid);
+                 axml += "\"";
+             }
+-            axml += "/>\n";
+-        }
+-
+-        axml +=
+-            "      </components>\n    </object>\n  </resources>\n  <build>\n    <item objectid=\"";
+-        axml += std::to_string(assembly_id);
+-        axml += "\"";
+-        if (!doc.production.assembly_build_transform.IsIdentity()) {
+-            axml += " transform=\"";
+-            axml += SerializeTransform(doc.production.assembly_build_transform);
+-            axml += "\"";
++            if (!doc.build_items.empty() && !doc.build_items.front().auto_drop.empty()) {
++                axml += " auto_drop=\"";
++                axml += EscapeXml(doc.build_items.front().auto_drop);
++                axml += "\"";
++            }
++            axml += " printable=\"1\"/>\n  </build>\n</model>\n";
++        } else {
++            for (std::size_t group_index = 0; group_index < doc.production.groups.size();
++                 ++group_index) {
++                const auto &group = doc.production.groups[group_index];
++                const auto &group_layout = production_layout.groups[group_index];
++                axml += "    <object id=\"";
++                axml += std::to_string(group.assembly_id);
++                axml += "\" type=\"model\" name=\"";
++                axml += EscapeXml(group.name);
++                axml += "\"";
++                if (!group.uuid.empty()) {
++                    axml += " p:UUID=\"";
++                    axml += EscapeXml(group.uuid);
++                    axml += "\"";
++                }
++                axml += ">\n      <components>\n";
++                for (const auto &object_layout : group_layout.objects) {
++                    const auto object = std::find_if(
++                        doc.objects.begin(), doc.objects.end(),
++                        [&object_layout](const Object &candidate) {
++                            return candidate.id == object_layout.object_id;
++                        });
++                    if (object == doc.objects.end()) {
++                        throw InputError("Production layout references missing object id " +
++                                         std::to_string(object_layout.object_id));
++                    }
++                    axml += "        <component p:path=\"";
++                    axml += EscapeXml(object_layout.path);
++                    axml += "\" objectid=\"";
++                    axml += std::to_string(object->id);
++                    axml += "\"";
++                    if (!object->component_transform.IsIdentity()) {
++                        axml += " transform=\"";
++                        axml += SerializeTransform(object->component_transform);
++                        axml += "\"";
++                    }
++                    const auto &component_uuid = object->component_uuid.empty()
++                                                     ? object->uuid
++                                                     : object->component_uuid;
++                    if (!component_uuid.empty()) {
++                        axml += " p:UUID=\"";
++                        axml += EscapeXml(component_uuid);
++                        axml += "\"";
++                    }
++                    axml += "/>\n";
++                }
++                axml += "      </components>\n    </object>\n";
++            }
++            axml += "  </resources>\n  <build";
++            if (!doc.production.build_uuid.empty()) {
++                axml += " p:UUID=\"";
++                axml += EscapeXml(doc.production.build_uuid);
++                axml += "\"";
++            }
++            axml += ">\n";
++            for (const auto &item : doc.build_items) {
++                axml += "    <item objectid=\"";
++                axml += std::to_string(item.object_id);
++                axml += "\"";
++                if (!item.transform.IsIdentity()) {
++                    axml += " transform=\"";
++                    axml += SerializeTransform(item.transform);
++                    axml += "\"";
++                }
++                if (!item.partnumber.empty()) {
++                    axml += " partnumber=\"";
++                    axml += EscapeXml(item.partnumber);
++                    axml += "\"";
++                }
++                if (!item.uuid.empty()) {
++                    axml += " p:UUID=\"";
++                    axml += EscapeXml(item.uuid);
++                    axml += "\"";
++                }
++                if (!item.auto_drop.empty()) {
++                    axml += " auto_drop=\"";
++                    axml += EscapeXml(item.auto_drop);
++                    axml += "\"";
++                }
++                axml += " printable=\"1\"/>\n";
++            }
++            axml += "  </build>\n</model>\n";
+         }
+-        axml += " printable=\"1\"/>\n  </build>\n</model>\n";
+ 
+         parts.push_back({model_path, std::string(kModelContentType), StringToBytes(axml)});
+ 
+-        if (merge) {
+-            std::string ext_zip = "3D/Objects/object_1.model";
++        if (!doc.production.groups.empty()) {
++            for (std::size_t i = 0; i < production_layout.groups.size(); ++i) {
++                const auto &group = production_layout.groups[i];
++                const std::string ext_path = NormalizeZipPath(group.path);
++                part_content_types.emplace(ext_path, std::string(kModelContentType));
++                rels_by_source[model_path].push_back({.id = "rel-obj-" + std::to_string(i + 1),
++                                                      .type = std::string(kModelRelType),
++                                                      .target = "/" + ext_path});
++            }
++        } else if (doc.production.merge_objects) {
++            std::string ext_zip = NormalizeZipPath(production_layout.external_objects.front().path);
+             part_content_types.emplace(ext_zip, std::string(kModelContentType));
+             rels_by_source[model_path].push_back(
+                 {.id = "rel-obj-1", .type = std::string(kModelRelType), .target = "/" + ext_zip});
+         } else {
+             for (std::size_t i = 0; i < doc.objects.size(); ++i) {
+-                std::string ext_path = "3D/Objects/object_" + std::to_string(i + 1) + ".model";
++                std::string ext_path =
++                    NormalizeZipPath(production_layout.external_objects[i].path);
+                 part_content_types.emplace(ext_path, std::string(kModelContentType));
+                 rels_by_source[model_path].push_back({.id = "rel-obj-" + std::to_string(i + 1),
+                                                       .type = std::string(kModelRelType),
+diff --git a/src/opc.h b/src/opc.h
+index 36d413b..31b3628 100644
+--- a/src/opc.h
++++ b/src/opc.h
+@@ -58,6 +58,11 @@ inline std::string_view ObjectTypeToStringView(ObjectType type) {
+     return "model";
+ }
+ 
++ProductionLayout BuildProductionLayout(std::span<const Object> objects, bool merge_objects);
++ProductionLayout BuildProductionLayout(
++    std::span<const Object> objects,
++    const Document::ProductionConfig &production);
++ProductionLayout BuildProductionLayout(const Document &doc);
+ std::vector<OpcPart> BuildOpcParts(const Document &doc);
+ 
+ enum class MeshXmlFormat { FlatModel, ObjectsModel };
+@@ -142,27 +147,31 @@ void StreamMeshXml(const Document &doc, MeshXmlFormat format, bool compact, int
+         buf.Append(i2);
+         buf.Append("<resources>\n");
+ 
+-        for (const auto &bmg : doc.base_material_groups) {
+-            buf.Append(i4);
+-            buf.Append("<basematerials id=\"");
+-            buf.AppendUint32(bmg.id);
+-            buf.Append("\">\n");
+-            for (const auto &mat : bmg.materials) {
+-                buf.Append(i6);
+-                buf.Append("<base name=\"");
+-                buf.Append(EscapeXml(mat.name));
+-                buf.Append("\" displaycolor=\"");
+-                buf.Append(EscapeXml(mat.display_color.ToHex()));
+-                buf.Append("\"/>\n");
+-            }
+-            buf.Append(i4);
+-            buf.Append("</basematerials>\n");
+-        }
+     } else {
+         buf.Append(i2);
+         buf.Append("<resources>\n");
+     }
+ 
++    // Material resources belong to the model part that owns the object. In
++    // Production mode this is an external ObjectsModel part, not only the
++    // flat root model path.
++    for (const auto &bmg : doc.base_material_groups) {
++        buf.Append(i4);
++        buf.Append("<basematerials id=\"");
++        buf.AppendUint32(bmg.id);
++        buf.Append("\">\n");
++        for (const auto &mat : bmg.materials) {
++            buf.Append(i6);
++            buf.Append("<base name=\"");
++            buf.Append(EscapeXml(mat.name));
++            buf.Append("\" displaycolor=\"");
++            buf.Append(EscapeXml(mat.display_color.ToHex()));
++            buf.Append("\"/>\n");
++        }
++        buf.Append(i4);
++        buf.Append("</basematerials>\n");
++    }
++
+     // -- Objects (hot path: zero heap allocations per vertex/triangle) --
+     std::size_t obj_tri_base = tri_offset;
+     for (std::size_t obj_index = 0; obj_index < doc.objects.size(); ++obj_index) {
+@@ -472,6 +481,11 @@ void StreamMeshXml(const Document &doc, MeshXmlFormat format, bool compact, int
+                 buf.Append(EscapeXml(item.uuid));
+                 buf.Append("\"");
+             }
++            if (!item.auto_drop.empty()) {
++                buf.Append(" auto_drop=\"");
++                buf.Append(EscapeXml(item.auto_drop));
++                buf.Append("\"");
++            }
+             buf.Append("/>\n");
+         }
+         buf.Append(i2);
+diff --git a/src/writer.cpp b/src/writer.cpp
+index 0710a2d..7e687b9 100644
+--- a/src/writer.cpp
++++ b/src/writer.cpp
+@@ -11,8 +11,10 @@
+ #include "opc.h"
+ #include "zip.h"
+ 
++#include <algorithm>
+ #include <filesystem>
+ #include <fstream>
++#include <iterator>
+ #include <ostream>
+ #include <random>
+ #include <system_error>
+@@ -156,27 +158,90 @@ void WriteAllEntries(detail::StreamingZipWriter &zip, const Document &doc,
+     auto zip_sink = [&](std::string_view chunk) { zip.WriteChunk(chunk.data(), chunk.size()); };
+ 
+     if (doc.production.enabled) {
+-        if (doc.production.merge_objects) {
++        const auto production_layout = detail::BuildProductionLayout(doc);
++        if (!doc.production.groups.empty()) {
++            std::vector<std::size_t> triangle_offsets(doc.objects.size(), 0);
++            std::size_t triangle_offset = 0;
++            for (std::size_t i = 0; i < triangle_write_plans.size(); ++i) {
++                triangle_offsets[i] = triangle_offset;
++                triangle_offset += triangle_write_plans[i].written_triangle_count;
++            }
++
++            for (std::size_t group_index = 0; group_index < production_layout.groups.size();
++                 ++group_index) {
++                const auto &group_layout = production_layout.groups[group_index];
++                Document group_doc;
++                group_doc.unit = doc.unit;
++                group_doc.language = doc.language;
++                group_doc.base_material_groups = doc.base_material_groups;
++                group_doc.production = doc.production;
++                group_doc.custom_namespaces = doc.custom_namespaces;
++
++                std::vector<detail::TriangleWritePlan> group_triangle_plans;
++                std::vector<uint8_t> group_rotation_table;
++                group_doc.objects.reserve(group_layout.objects.size());
++                group_triangle_plans.reserve(group_layout.objects.size());
++                for (const auto &object_layout : group_layout.objects) {
++                    const auto object_it = std::find_if(
++                        doc.objects.begin(), doc.objects.end(),
++                        [&object_layout](const Object &object) {
++                            return object.id == object_layout.object_id;
++                        });
++                    if (object_it == doc.objects.end()) {
++                        throw InputError("Production layout references missing object id " +
++                                         std::to_string(object_layout.object_id));
++                    }
++                    const auto object_index =
++                        static_cast<std::size_t>(std::distance(doc.objects.begin(), object_it));
++                    group_doc.objects.push_back(*object_it);
++                    group_triangle_plans.push_back(triangle_write_plans[object_index]);
++                    if (!rotation_table.empty()) {
++                        const auto begin = rotation_table.begin() +
++                                           static_cast<std::ptrdiff_t>(triangle_offsets[object_index]);
++                        const auto end = begin + static_cast<std::ptrdiff_t>(
++                                                   triangle_write_plans[object_index]
++                                                       .written_triangle_count);
++                        group_rotation_table.insert(group_rotation_table.end(), begin, end);
++                    }
++                }
++
++                std::string external_path = group_layout.path;
++                if (!external_path.empty() && external_path.front() == '/') {
++                    external_path.erase(0, 1);
++                }
++                zip.BeginDeflateEntry(external_path);
++                detail::StreamMeshXml(
++                    group_doc, detail::MeshXmlFormat::ObjectsModel, opts.compact_xml,
++                    opts.vertex_precision, group_rotation_table, 0, group_triangle_plans,
++                    zip_sink);
++                zip.EndEntry();
++            }
++        } else if (doc.production.merge_objects) {
+             Document merged_doc;
+             merged_doc.unit = doc.unit;
+             merged_doc.language = doc.language;
+             merged_doc.objects = doc.objects;
++            merged_doc.base_material_groups = doc.base_material_groups;
+             merged_doc.production = doc.production;
+             merged_doc.custom_namespaces = doc.custom_namespaces;
+ 
+-            zip.BeginDeflateEntry("3D/Objects/object_1.model");
++            std::string ext_path = production_layout.external_objects.front().path;
++            if (!ext_path.empty() && ext_path.front() == '/') { ext_path.erase(0, 1); }
++            zip.BeginDeflateEntry(ext_path);
+             detail::StreamMeshXml(merged_doc, detail::MeshXmlFormat::ObjectsModel, opts.compact_xml,
+                                   opts.vertex_precision, rt, 0, triangle_write_plans, zip_sink);
+             zip.EndEntry();
+         } else {
+             std::size_t tri_offset = 0;
+             for (std::size_t i = 0; i < doc.objects.size(); ++i) {
+-                std::string ext_path = "3D/Objects/object_" + std::to_string(i + 1) + ".model";
++                std::string ext_path = production_layout.external_objects[i].path;
++                if (!ext_path.empty() && ext_path.front() == '/') { ext_path.erase(0, 1); }
+ 
+                 Document single_doc;
+                 single_doc.unit = doc.unit;
+                 single_doc.language = doc.language;
+                 single_doc.objects = {doc.objects[i]};
++                single_doc.base_material_groups = doc.base_material_groups;
+                 single_doc.production = doc.production;
+                 single_doc.custom_namespaces = doc.custom_namespaces;
+ 

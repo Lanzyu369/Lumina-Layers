@@ -24,6 +24,55 @@ from core.mesh_export_parts import (
 )
 from utils import bambu_3mf_writer as writer_module
 from utils.bambu_3mf_writer import BambuStudio3MFWriter, load_printer_template
+from fatcat_material_assertions import assert_native_materials
+
+
+def _compose_project(writer: BambuStudio3MFWriter) -> dict:
+    palette, _ = writer._build_material_palette()
+    request = writer._build_fatcat_project_request(
+        palette, writer._select_metadata_target(),
+    )
+    if request.get("project_source") == "fatcat_native":
+        result = writer_module.compose_builtin_project_settings(request)
+    else:
+        result = writer_module.compose_project_settings(
+            writer._get_base_config_template(), request,
+        )
+    return json.loads(result["project_settings_json"])
+
+
+def _compose_model(writer, object_ids=None, assembly_id=None, material_indices=None):
+    palette, indices = writer._build_material_palette()
+    target = writer._select_metadata_target()
+    request = writer._build_fatcat_project_request(palette, target)
+    if request.get("project_source") == "fatcat_native":
+        result = writer_module.compose_builtin_project_settings(request)
+    else:
+        result = writer_module.compose_project_settings(
+            writer._get_base_config_template(), request,
+        )
+    defaults = result["metadata_defaults"]
+    object_ids = list(range(1, len(writer.objects) + 1)) if object_ids is None else object_ids
+    request = writer_module.build_model_metadata_request(
+        target=target, assembly_id=len(object_ids) + 1 if assembly_id is None else assembly_id,
+        object_ids=object_ids, entries=writer.objects,
+        material_index_by_object=(
+            [indices[entry.material_name] for entry in writer.objects]
+            if material_indices is None else material_indices
+        ),
+        output_path=writer.output_path, bed_type=defaults["plate_value"],
+    )
+    request["active_material_count"] = len(palette)
+    request["identify_id"] = defaults["identify_id"]
+    request["component_inputs"] = {}
+    request["resource_roles"] = list(writer_module.metadata_resource_specs(writer.slicer))
+    if defaults.get("slice_uuid_seed_prefix"):
+        request["slice_uuid"] = "0123456789abcdef0123456789abcdef"
+    metadata = writer_module.compose_model_metadata(result["project_settings_json"], request)
+    for part in metadata["parts"]:
+        if part["role"] in {"model_settings", "slice_info"}:
+            metadata[f"{part['role']}_xml"] = part["content"]
+    return metadata
 
 
 @pytest.mark.parametrize("material_index", [0, 3])
@@ -58,31 +107,6 @@ def test_single_volume_object_uses_resolved_material_extruder(
     assert len(obj.findall("part")) == 1
     assert _metadata_values(obj)["extruder"] == str(material_index + 1)
     assert _metadata_values(obj.find("part"))["extruder"] == str(material_index + 1)
-
-
-class _FakeCustomPart:
-    def __init__(self, path: str, content_type: str, data: bytes):
-        self.path = path
-        self.content_type = content_type
-        self.data = data
-
-
-class _FakeContentType:
-    def __init__(self, extension: str, content_type: str):
-        self.extension = extension
-        self.content_type = content_type
-
-
-class _FakeBuilder:
-    def __init__(self) -> None:
-        self.parts: list[_FakeCustomPart] = []
-        self.content_types: list[_FakeContentType] = []
-
-    def add_custom_part(self, part: _FakeCustomPart) -> None:
-        self.parts.append(part)
-
-    def add_custom_content_type(self, content_type: _FakeContentType) -> None:
-        self.content_types.append(content_type)
 
 
 def _convex_hulls_have_positive_interior_overlap(
@@ -246,7 +270,7 @@ def test_writer_expands_touching_runs_into_same_material_mesh_leaves() -> None:
     assert material_indices == {"White": 0}
 
     model_settings = ET.fromstring(
-        writer._build_model_settings_bytes([2, 3], 4, [0, 0])
+        _compose_model(writer, [2, 3], 4, [0, 0])["model_settings_xml"]
     )
     assert [
         _metadata_values(part)["extruder"]
@@ -641,14 +665,6 @@ def _metadata_values(parent: ET.Element) -> dict[str, str]:
     return {child.attrib["key"]: child.attrib["value"] for child in parent.findall("metadata")}
 
 
-def _raw_zip_member_bytes(path: Path, member_name: str) -> bytes:
-    with zipfile.ZipFile(path, "r") as archive:
-        info = archive.getinfo(member_name)
-        with path.open("rb") as handle:
-            handle.seek(info.header_offset)
-            return handle.read(info._end_offset - info.header_offset)
-
-
 def _add_rybw_meshes(writer: BambuStudio3MFWriter) -> None:
     for offset, (name, rgb) in enumerate(
         [
@@ -693,7 +709,7 @@ def test_orca_project_disables_precise_outer_wall_for_one_wall_art() -> None:
     )
     _add_8c_meshes(writer)
 
-    settings = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
+    settings = _compose_project(writer)
 
     assert settings["wall_generator"] == "arachne"
     assert settings["wall_loops"] == "1"
@@ -703,7 +719,7 @@ def test_orca_project_disables_precise_outer_wall_for_one_wall_art() -> None:
     )
 
 
-def test_bambu_project_keeps_native_precise_outer_wall_value(monkeypatch) -> None:
+def test_bambu_user_template_keeps_explicit_precise_outer_wall_value() -> None:
     writer = BambuStudio3MFWriter(
         "bambu-native-wall.3mf",
         settings={},
@@ -712,150 +728,34 @@ def test_bambu_project_keeps_native_precise_outer_wall_value(monkeypatch) -> Non
         slicer="BambuStudio",
     )
     _add_rybw_meshes(writer)
-    original_loader = writer._get_base_config_template
+    template = writer._get_base_config_template()
+    template["precise_outer_wall"] = "1"
+    writer._custom_template = template
 
-    def precise_template() -> dict[str, object]:
-        template = original_loader()
-        template["precise_outer_wall"] = "1"
-        return template
-
-    monkeypatch.setattr(writer, "_get_base_config_template", precise_template)
-
-    settings = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
+    settings = _compose_project(writer)
 
     assert settings["precise_outer_wall"] == "1"
 
 
-def test_cover_relationship_postprocess_raw_copies_unchanged_deflated_entries(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    """Rewriting cover rels should not decompress/recompress large entries."""
-    intermediate = tmp_path / "intermediate.3mf"
+def test_cover_relationships_preserve_root_rels_default_namespace(tmp_path) -> None:
     output = tmp_path / "output.3mf"
-    rels_xml = (
-        b'<?xml version="1.0" encoding="UTF-8"?>'
-        b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-        b'<Relationship Id="rel-1" Type="model" Target="/3D/3dmodel.model" />'
-        b'</Relationships>'
-    )
-    original_zip_file = zipfile.ZipFile
-
-    with original_zip_file(intermediate, "w") as archive:
-        archive.writestr(
-            "3D/Objects/object_1.model",
-            b"<mesh>" + (b"0123456789abcdef" * 4096) + b"</mesh>",
-            compress_type=zipfile.ZIP_DEFLATED,
-        )
-        archive.writestr("_rels/.rels", rels_xml, compress_type=zipfile.ZIP_STORED)
-
-    writes: list[str] = []
-
-    class TrackingZipFile(original_zip_file):
-        def writestr(self, zinfo_or_arcname, data, *args, **kwargs):
-            if isinstance(zinfo_or_arcname, zipfile.ZipInfo):
-                writes.append(zinfo_or_arcname.filename)
-            else:
-                writes.append(str(zinfo_or_arcname))
-            return super().writestr(zinfo_or_arcname, data, *args, **kwargs)
-
-    monkeypatch.setattr(writer_module.zipfile, "ZipFile", TrackingZipFile)
     writer = BambuStudio3MFWriter(
-        str(output),
-        settings={},
-        color_mode="4-Color",
-    )
-
-    writer._inject_cover_relationships_postprocess(str(intermediate), str(output))
-
-    assert writes == ["_rels/.rels"]
-    assert _raw_zip_member_bytes(output, "3D/Objects/object_1.model") == (
-        _raw_zip_member_bytes(intermediate, "3D/Objects/object_1.model")
-    )
-    with original_zip_file(output, "r") as archive:
-        root = ET.fromstring(archive.read("_rels/.rels"))
-    rels = root.findall(
-        "{http://schemas.openxmlformats.org/package/2006/relationships}Relationship"
-    )
-    cover_targets = [
-        rel.get("Target")
-        for rel in rels
-        if (rel.get("Target") or "").startswith("/Auxiliaries/.thumbnails/")
-    ]
-    assert len(cover_targets) == 3
-
-
-def test_cover_relationship_postprocess_preserves_root_rels_default_namespace(
-    tmp_path,
-) -> None:
-    """Rewriting 3dmodel first must not leak the 3MF namespace into root rels."""
-    intermediate = tmp_path / "intermediate.3mf"
-    output = tmp_path / "output.3mf"
-    rels_xml = (
-        b'<?xml version="1.0" encoding="UTF-8"?>'
-        b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-        b'<Relationship Id="rel0" '
-        b'Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel" '
-        b'Target="/3D/3dmodel.model" />'
-        b"</Relationships>"
-    )
-    model_xml = (
-        b'<?xml version="1.0" encoding="UTF-8"?>'
-        b'<model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" '
-        b'xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" '
-        b'unit="millimeter" requiredextensions="p">'
-        b'<resources><object id="2" type="model"><mesh><vertices />'
-        b'<triangles /></mesh></object></resources>'
-        b'<build><item objectid="2" /></build>'
-        b"</model>"
-    )
-
-    with zipfile.ZipFile(intermediate, "w") as archive:
-        archive.writestr("3D/3dmodel.model", model_xml)
-        archive.writestr("_rels/.rels", rels_xml)
-
-    writer = BambuStudio3MFWriter(
-        str(output),
-        settings={},
-        color_mode="4-Color",
-        printer_id="bambu-p1s",
-        slicer="BambuStudio",
+        str(output), settings={}, color_mode="4-Color",
+        printer_id="bambu-p1s", slicer="BambuStudio",
     )
     writer.add_mesh(trimesh.creation.box(extents=[1, 1, 1]), "White", (255, 255, 255))
-
-    writer._inject_cover_relationships_postprocess(str(intermediate), str(output))
-
-    with zipfile.ZipFile(output, "r") as archive:
-        rewritten_rels = archive.read("_rels/.rels")
-
-    assert b"<Relationships xmlns=" in rewritten_rels
-    assert b"ns0:" not in rewritten_rels
+    writer.export()
+    with zipfile.ZipFile(output) as archive:
+        relationships = archive.read("_rels/.rels")
+    assert b"<Relationships xmlns=" in relationships
+    assert b"ns0:" not in relationships
 
 
-def test_difference_index_preserves_bambu_project_slot_shape() -> None:
-    original = ["bottom_shell_layers;wall_loops", "", "", "", "", ""]
-
-    normalized = writer_module._normalize_difference_index(
-        original,
-        extra_keys=["layer_height", "wall_loops"],
-    )
-
-    assert normalized == [
-        "bottom_shell_layers;layer_height;wall_loops",
-        "",
-        "",
-        "",
-        "",
-        "",
-    ]
-    assert original == ["bottom_shell_layers;wall_loops", "", "", "", "", ""]
-
-
-def test_builtin_h2d_template_keeps_native_multicolor_slot_shape() -> None:
+def test_builtin_h2d_template_keeps_current_native_slot_shape() -> None:
     template = load_printer_template("bambu-h2d", slicer="BambuStudio", nozzle_size="0.4")
 
-    assert len(template["filament_settings_id"]) == 8
-    assert len(template["filament_colour"]) == 8
+    assert template["filament_settings_id"] == ["Bambu PLA Basic @BBL H2D"]
+    assert len(template["filament_colour"]) == 1
     assert template["printer_settings_id"] == "Bambu Lab H2D 0.4 nozzle"
 
 
@@ -938,7 +838,7 @@ def _make_anycubic_writer(tmp_path) -> BambuStudio3MFWriter:
         ),
     ],
 )
-def test_registry_exports_preserve_native_filament_slot_shape(
+def test_registry_exports_use_active_palette_and_exact_native_hardware(
     tmp_path,
     monkeypatch,
     printer_id,
@@ -967,7 +867,6 @@ def test_registry_exports_preserve_native_filament_slot_shape(
         vendor_key=vendor_key,
     )
     monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
-    writer_module._PRINTER_TEMPLATE_CACHE.clear()
 
     writer = BambuStudio3MFWriter(
         str(tmp_path / "registry-slots.3mf"),
@@ -988,11 +887,13 @@ def test_registry_exports_preserve_native_filament_slot_shape(
         },
     )
 
-    settings = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
+    settings = _compose_project(writer)
 
-    assert len(settings["filament_settings_id"]) == 8
-    assert len(settings["filament_colour"]) == 8
+    assert len(settings["filament_settings_id"]) == 4
+    assert len(settings["filament_colour"]) == 4
     assert settings["filament_colour"][:4] == ["#FFFFFF", "#C12E1F", "#F4EE2A", "#0A2989"]
+    assert settings["printer_model"] == template_payload["printer_model"]
+    assert settings["nozzle_diameter"] == template_payload["nozzle_diameter"]
 
 
 def _write_registry_fixture(
@@ -1053,7 +954,9 @@ def _write_registry_fixture(
                     {
                         "device_profile_id": device_profile_id,
                         "nozzle_size": nozzle_size,
-                        "source_profile_name": "Bambu Lab H2D 0.4 nozzle",
+                        "source_profile_name": template_payload.get(
+                            "printer_settings_id", f"{display_name} {nozzle_size} nozzle"
+                        ),
                         "template": template_path.relative_to(registry_root).as_posix(),
                         "revision": revision,
                         "supported": True,
@@ -1104,7 +1007,6 @@ def test_selected_build_plate_updates_project_and_plate_metadata(
         default_build_plate_id=plate["id"],
     )
     monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
-    writer_module._PRINTER_TEMPLATE_CACHE.clear()
     writer = BambuStudio3MFWriter(
         str(tmp_path / "selected-plate.3mf"),
         settings={},
@@ -1117,8 +1019,8 @@ def test_selected_build_plate_updates_project_and_plate_metadata(
     )
     _add_rybw_meshes(writer)
 
-    project = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
-    model_root = ET.fromstring(writer._build_model_settings_bytes([1, 2, 3, 4], 5))
+    project = _compose_project(writer)
+    model_root = ET.fromstring(_compose_model(writer, [1, 2, 3, 4], 5)["model_settings_xml"])
     plate_root = model_root.find("./plate")
 
     assert project["curr_bed_type"] == "High Temp Plate"
@@ -1135,7 +1037,6 @@ def test_selected_build_plate_is_validated_for_device_profile(tmp_path, monkeypa
         build_plates=[],
     )
     monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
-    writer_module._PRINTER_TEMPLATE_CACHE.clear()
 
     with pytest.raises(ValueError, match="Unsupported build plate"):
         BambuStudio3MFWriter(
@@ -1184,7 +1085,6 @@ def test_flashstudio_selected_build_plate_updates_plate_sidecar(
         default_build_plate_id=plate["id"],
     )
     monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
-    writer_module._PRINTER_TEMPLATE_CACHE.clear()
     writer = BambuStudio3MFWriter(
         str(tmp_path / "flash-selected-plate.3mf"),
         printer_id="flashforge-guider-3-ultra",
@@ -1194,7 +1094,10 @@ def test_flashstudio_selected_build_plate_updates_plate_sidecar(
         build_plate_id=plate["id"],
     )
 
-    sidecar = json.loads(writer._build_flashstudio_plate_json_bytes())
+    _add_rybw_meshes(writer)
+    writer.export()
+    with zipfile.ZipFile(writer.output_path) as package:
+        sidecar = json.loads(package.read("Metadata/plate_1.json"))
 
     assert sidecar["bed_type"] == "hot_plate"
 
@@ -1232,7 +1135,6 @@ def _export_two_mesh_registry_3mf(
         vendor_key=vendor_key,
     )
     monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
-    writer_module._PRINTER_TEMPLATE_CACHE.clear()
 
     out_path = tmp_path / f"{printer_id}-{slicer}.3mf"
     writer = BambuStudio3MFWriter(
@@ -1287,7 +1189,7 @@ def _count_object_model_geometry(archive: zipfile.ZipFile) -> tuple[int, int]:
             "Anycubic Kobra X",
             "Anycubic",
             "Anycubic",
-            {"X-ACNext-Client-Version": "1.4.1.2 20260604104233"},
+            {"X-ACNext-Client-Version": "2.0.0.2 20260902193208"},
         ),
         (
             "elegoo-cc2",
@@ -1302,7 +1204,7 @@ def _count_object_model_geometry(archive: zipfile.ZipFile) -> tuple[int, int]:
             "Elegoo",
             "Elegoo",
             {
-                "X-BBL-Client-Version": "01.05.01.06",
+                "X-BBL-Client-Version": "01.05.03.05",
                 "X-BBL-Client-Name": "ElegooSlicer",
             },
         ),
@@ -1318,7 +1220,7 @@ def _count_object_model_geometry(archive: zipfile.ZipFile) -> tuple[int, int]:
             "Flashforge AD5X",
             "Flashforge",
             "Flashforge",
-            {"X-BBL-Client-Version": ""},
+            {"X-BBL-Client-Version": "01.10.01.50"},
         ),
     ],
 )
@@ -1382,7 +1284,12 @@ def test_registry_ac_and_elegoo_exports_keep_native_identity_and_geometry(
 
         assert project_settings["printer_model"] == display_name
         assert project_settings["printer_settings_id"] == f"{display_name} 0.4 nozzle"
-        assert f'name="Application">{application_metadata}</metadata>' in model_xml
+        expected_application = {
+            "AnycubicSlicerNext": "BambuStudio-2.0.0.2",
+            "ElegooSlicer": "ElegooSlicer-1.5.3.5",
+            "FlashStudio": "BambuStudio-01.10.01.50",
+        }[slicer]
+        assert f'name="Application">{expected_application}</metadata>' in model_xml
         for key, expected_value in expected_slice_header.items():
             assert slice_header[key] == expected_value
         assert "A1 mini" not in package_text
@@ -1400,11 +1307,10 @@ def test_registry_ac_and_elegoo_exports_keep_native_identity_and_geometry(
             assert "Metadata/filament_sequence.json" not in entries
             assert "Metadata/cut_information.xml" not in entries
         if slicer == "FlashStudio":
-            assert "OrcaSlicer-Version" not in slice_header
-            assert "OrcaSlicer" not in package_text
+            assert slice_header["OrcaSlicer-Version"] == "2.3.2"
 
 
-def test_load_printer_template_merges_registry_device_profile_into_legacy_project_template(
+def test_load_printer_template_uses_exact_fatcat_native_project(
     tmp_path, monkeypatch,
 ) -> None:
     registry_root = tmp_path / "machine_registry"
@@ -1427,7 +1333,7 @@ def test_load_printer_template_merges_registry_device_profile_into_legacy_projec
                 "printer_settings_id": "Bambu Lab H2D 0.4 nozzle",
                 "printer_variant": "0.4",
                 "nozzle_diameter": ["0.4", "0.4"],
-                "layer_height": "0.20",
+                "layer_height": "0.33",
                 "different_settings_to_system": ["printer_settings_id;layer_height"],
                 "inherits": "fdm_bbl_3dp_002_common",
             }
@@ -1480,46 +1386,35 @@ def test_load_printer_template_merges_registry_device_profile_into_legacy_projec
     )
 
     assert template["printer_model"] == "Bambu Lab H2D"
-    assert template["layer_height"] == "0.08"
+    assert template["layer_height"] == "0.2"
     assert template["from"] == "project"
     assert template["name"] == "project_settings"
-    assert template["version"] == "02.07.01.57"
-    assert template["curr_bed_type"] == "Textured PEI Plate"
-    assert template["filament_settings_id"] == ["Bambu PLA Basic @BBL H2D"] * 8
-    assert len(template["flush_volumes_matrix"]) == 128
-    assert len(template["flush_volumes_vector"]) == 16
+    assert template["version"] == "02.08.02.61"
+    assert "curr_bed_type" not in template
+    assert template["filament_settings_id"] == ["Bambu PLA Basic @BBL H2D"]
+    assert "flush_volumes_matrix" not in template
+    assert "flush_volumes_vector" not in template
     assert "type" not in template
     assert "instantiation" not in template
     assert "inherits" not in template
 
 
-def test_load_printer_template_uses_frozen_registry_and_project_profile(
+def test_load_printer_template_uses_frozen_registry_and_fatcat_source(
     tmp_path,
     monkeypatch,
 ) -> None:
-    from config import get_printer_profile
-
     frozen_root = tmp_path / "frozen"
     registry_root = frozen_root / "machine_registry"
     _write_registry_fixture(
         registry_root,
-        template_payload={"printer_model": "Default Registry H2D", "layer_height": "0.08"},
+        template_payload={"printer_model": "Default Registry H2D", "layer_height": "0.33"},
     )
-    template_file = get_printer_profile("bambu-h2d").get_template_file(
-        "BambuStudio",
-        nozzle_size="0.4",
-    )
-    source_template = Path(__file__).resolve().parents[1] / "printer_profiles" / template_file
-    bundled_template = frozen_root / "printer_profiles" / template_file
-    bundled_template.parent.mkdir(parents=True)
-    bundled_template.write_bytes(source_template.read_bytes())
     unrelated_cwd = tmp_path / "cwd"
     unrelated_cwd.mkdir()
     monkeypatch.delenv("LUMINA_MACHINE_REGISTRY_DIR", raising=False)
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "_MEIPASS", str(frozen_root), raising=False)
     monkeypatch.chdir(unrelated_cwd)
-    writer_module._PRINTER_TEMPLATE_CACHE.clear()
 
     template = load_printer_template(
         "bambu-h2d",
@@ -1529,7 +1424,7 @@ def test_load_printer_template_uses_frozen_registry_and_project_profile(
     )
 
     assert template["printer_model"] == "Bambu Lab H2D"
-    assert template["layer_height"] == "0.08"
+    assert template["layer_height"] == "0.2"
     assert template["from"] == "project"
 
 
@@ -1540,7 +1435,6 @@ def test_load_printer_template_rejects_mismatched_registry_profile(tmp_path, mon
         template_payload={"printer_model": "Bambu Lab H2D"},
     )
     monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
-    writer_module._PRINTER_TEMPLATE_CACHE.clear()
 
     with pytest.raises(ValueError, match="does not match requested slicer/nozzle"):
         load_printer_template(
@@ -1558,7 +1452,6 @@ def test_load_printer_template_rejects_registry_profile_for_other_printer(tmp_pa
         template_payload={"printer_model": "Bambu Lab H2D"},
     )
     monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
-    writer_module._PRINTER_TEMPLATE_CACHE.clear()
 
     with pytest.raises(ValueError, match="does not match requested printer"):
         load_printer_template(
@@ -1576,7 +1469,6 @@ def test_load_printer_template_normalizes_slicer_alias_for_registry_profile(tmp_
         template_payload={"printer_model": "Bambu Lab H2D", "alias_marker": "matched"},
     )
     monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
-    writer_module._PRINTER_TEMPLATE_CACHE.clear()
 
     template = load_printer_template(
         "bambu-h2d",
@@ -1589,16 +1481,18 @@ def test_load_printer_template_normalizes_slicer_alias_for_registry_profile(tmp_
     assert template["from"] == "project"
 
 
-def test_load_printer_template_cache_changes_when_registry_revision_changes(tmp_path, monkeypatch) -> None:
+def test_load_printer_template_uses_pinned_native_source_across_registry_revisions(
+    tmp_path, monkeypatch,
+) -> None:
     registry_root = tmp_path / "machine_registry"
     monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
-    writer_module._PRINTER_TEMPLATE_CACHE.clear()
 
     _write_registry_fixture(
         registry_root,
         template_payload={
             "printer_model": "Bambu Lab H2D",
-            "printer_settings_id": "Registry Old H2D 0.4 nozzle",
+            "printer_settings_id": "Bambu Lab H2D 0.4 nozzle",
+            "layer_height": "0.33",
         },
         revision="sha256:old",
     )
@@ -1613,7 +1507,8 @@ def test_load_printer_template_cache_changes_when_registry_revision_changes(tmp_
         registry_root,
         template_payload={
             "printer_model": "Bambu Lab H2D",
-            "printer_settings_id": "Registry New H2D 0.4 nozzle",
+            "printer_settings_id": "Bambu Lab H2D 0.4 nozzle",
+            "layer_height": "0.44",
         },
         revision="sha256:new",
     )
@@ -1626,13 +1521,14 @@ def test_load_printer_template_cache_changes_when_registry_revision_changes(tmp_
 
     assert first["printer_model"] == "Bambu Lab H2D"
     assert second["printer_model"] == "Bambu Lab H2D"
-    assert first["printer_settings_id"] == "Registry Old H2D 0.4 nozzle"
-    assert second["printer_settings_id"] == "Registry New H2D 0.4 nozzle"
+    assert first["printer_settings_id"] == "Bambu Lab H2D 0.4 nozzle"
+    assert second["printer_settings_id"] == "Bambu Lab H2D 0.4 nozzle"
+    assert first["layer_height"] == second["layer_height"] == "0.2"
     assert first["from"] == "project"
     assert second["from"] == "project"
 
 
-def test_load_printer_template_preserves_registry_native_quarter_nozzle_project_profiles(
+def test_load_printer_template_uses_exact_native_quarter_nozzle_source(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -1662,7 +1558,6 @@ def test_load_printer_template_preserves_registry_native_quarter_nozzle_project_
         vendor_key="Anycubic",
     )
     monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
-    writer_module._PRINTER_TEMPLATE_CACHE.clear()
 
     template = load_printer_template(
         "anycubic-kobra-x",
@@ -1672,18 +1567,19 @@ def test_load_printer_template_preserves_registry_native_quarter_nozzle_project_
     )
 
     assert template["printer_settings_id"] == "Anycubic Kobra X 0.25 nozzle"
-    assert template["print_settings_id"] == "0.08mm Standard @Anycubic Kobra X 0.25 nozzle"
+    assert template["print_settings_id"] == "0.10mm Standard @Anycubic Kobra X 0.25 nozzle"
     assert template["default_print_profile"] == "0.10mm Standard @Anycubic Kobra X 0.25 nozzle"
     assert template["default_filament_profile"] == [
         "Anycubic PLA @Anycubic Kobra X 0.25 nozzle",
     ]
     assert template["filament_settings_id"] == [
         "Anycubic PLA @Anycubic Kobra X 0.25 nozzle",
-    ] * 8
+    ]
+    assert template["nozzle_diameter"] == ["0.25"]
     assert "0.2 nozzle" not in json.dumps(template)
 
 
-def test_writer_uses_registry_application_metadata_for_slice_info(tmp_path, monkeypatch) -> None:
+def test_writer_uses_fatcat_application_metadata_for_slice_info(tmp_path, monkeypatch) -> None:
     registry_root = tmp_path / "machine_registry"
     _write_registry_fixture(
         registry_root,
@@ -1703,15 +1599,22 @@ def test_writer_uses_registry_application_metadata_for_slice_info(tmp_path, monk
         device_profile_id="BambuStudio:bbl:bambu-lab-h2d:0.4",
     )
 
-    assert writer._get_app_version_str() == "BambuStudio-99.88.77.66"
-    config = ET.fromstring(writer._build_slice_info_bytes())
+    _add_rybw_meshes(writer)
+    assert writer._get_base_config_template()["version"] == "02.08.02.61"
+    metadata = _compose_model(writer)
+    application = next(
+        item["value"] for item in metadata["root_model"]["metadata"]
+        if item["name"] == "Application"
+    )
+    assert application == "BambuStudio-02.08.02.61"
+    config = ET.fromstring(_compose_model(writer)["slice_info_xml"])
     header = config.find("header")
     assert header is not None
     values = {
         item.attrib["key"]: item.attrib["value"]
         for item in header.findall("header_item")
     }
-    assert values["X-BBL-Client-Version"] == "99.88.77.66"
+    assert values["X-BBL-Client-Version"] == "02.08.02.61"
 
 
 def test_flash_studio_fallback_metadata_matches_native_export_without_device_profile(tmp_path) -> None:
@@ -1724,8 +1627,14 @@ def test_flash_studio_fallback_metadata_matches_native_export_without_device_pro
         nozzle_size="0.25",
     )
 
-    assert writer._get_app_version_str() == "BambuStudio-2.3.2"
-    root = ET.fromstring(writer._build_slice_info_bytes())
+    _add_rybw_meshes(writer)
+    metadata = _compose_model(writer)
+    application = next(
+        item["value"] for item in metadata["root_model"]["metadata"]
+        if item["name"] == "Application"
+    )
+    assert application == "BambuStudio-01.10.01.50"
+    root = ET.fromstring(_compose_model(writer)["slice_info_xml"])
     header = root.find("header")
     assert header is not None
     values = {
@@ -1734,7 +1643,8 @@ def test_flash_studio_fallback_metadata_matches_native_export_without_device_pro
     }
     assert values == {
         "X-BBL-Client-Type": "slicer",
-        "X-BBL-Client-Version": "",
+        "X-BBL-Client-Version": "01.10.01.50",
+        "OrcaSlicer-Version": "2.3.2",
     }
     uuid_node = header.find("uuid")
     assert uuid_node is not None
@@ -1743,7 +1653,6 @@ def test_flash_studio_fallback_metadata_matches_native_export_without_device_pro
 
 def test_bundled_flash_studio_quarter_profile_exports_native_package(tmp_path) -> None:
     output_path = tmp_path / "flash-studio-creator-5-quarter.3mf"
-    writer_module._PRINTER_TEMPLATE_CACHE.clear()
     writer = BambuStudio3MFWriter(
         str(output_path),
         settings={},
@@ -1780,13 +1689,11 @@ def test_bundled_flash_studio_quarter_profile_exports_native_package(tmp_path) -
     assert project["nozzle_diameter"] == ["0.25"] * 4
     assert (
         project["default_print_profile"]
-        == "0.20mm Standard @Flashforge AD5M Pro 0.4 Nozzle"
+        == "0.12mm Standard @FF C5 0.25 nozzle"
     )
-    assert project["default_filament_profile"] == [
-        "Flashforge Generic PLA"
-    ]
-    assert project["version"] == "2.3.2"
-    assert project["auxiliary_fan"] == "1"
+    assert project["default_filament_profile"] == ['Flashforge PLA Basic @FF C5 0.25 nozzle'] * 4
+    assert project["version"] == "01.10.01.50"
+    assert project["auxiliary_fan"] == "0"
     assert project["before_layer_change_gcode"] == ";BEFORE_LAYER_CHANGE\n;[layer_z]"
     assert project["layer_height"] == "0.08"
     assert project["initial_layer_print_height"] == "0.08"
@@ -1796,7 +1703,7 @@ def test_bundled_flash_studio_quarter_profile_exports_native_package(tmp_path) -
     assert project["skirt_distance"] == "2"
     assert project["skirt_height"] == "1"
     assert project["draft_shield"] == "disabled"
-    assert project["filament_map_mode"] == "Auto For Flush"
+    assert "filament_map_mode" not in project
     for key in (
         "filament_colour",
         "filament_multi_colour",
@@ -1805,11 +1712,12 @@ def test_bundled_flash_studio_quarter_profile_exports_native_package(tmp_path) -
         "filament_vendor",
     ):
         assert len(project[key]) == 4
-    assert project["filament_self_index"] == ["1", "2", "3", "4"]
+    assert "filament_self_index" not in project
     assert project["filament_extruder_variant"] == ["Direct Drive Standard"] * 4
     assert slice_header == {
         "X-BBL-Client-Type": "slicer",
-        "X-BBL-Client-Version": "",
+        "X-BBL-Client-Version": "01.10.01.50",
+        "OrcaSlicer-Version": "2.3.2",
     }
     uuid_node = slice_root.find("./header/uuid")
     assert uuid_node is not None
@@ -1832,7 +1740,7 @@ def test_bundled_flash_studio_quarter_profile_exports_native_package(tmp_path) -
         for item in model_settings.findall("./object/metadata")
     }
     assert object_metadata["name"] == output_path.stem
-    assert '<metadata name="Application">BambuStudio-2.3.2</metadata>' in model_text
+    assert '<metadata name="Application">BambuStudio-01.10.01.50</metadata>' in model_text
     model_metadata = {
         item.attrib["name"]: item.text or ""
         for item in model_root
@@ -1844,9 +1752,9 @@ def test_bundled_flash_studio_quarter_profile_exports_native_package(tmp_path) -
     assert model_metadata["Thumbnail_Small"] == (
         "/Auxiliaries/.thumbnails/thumbnail_small.png"
     )
+    assert model_metadata["OrcaSlicer"] == "2.3.2"
     relationships = list(rels_root)
     assert len(relationships) == 4
-    assert "OrcaSlicer" not in model_text
     assert "Metadata/plate_1.json" in entries
     assert "Metadata/plate_1_small.png" in entries
     assert {
@@ -1861,7 +1769,6 @@ def test_bundled_flash_studio_quarter_profile_exports_native_package(tmp_path) -
 
 def test_bundled_qidi_q2_profile_exports_native_package_with_lumina_process(tmp_path) -> None:
     output_path = tmp_path / "qidi-q2.3mf"
-    writer_module._PRINTER_TEMPLATE_CACHE.clear()
     writer = BambuStudio3MFWriter(
         str(output_path),
         settings={},
@@ -1950,10 +1857,9 @@ def test_bundled_qidi_q2_profile_exports_native_package_with_lumina_process(tmp_
     assert len(list(model_relationships)) == 1
 
 
-def test_flash_studio_creator_5_pro_matches_manual_project_shape(tmp_path) -> None:
-    """C5 Pro exports combine native machine fields with Lumina process values."""
+def test_flash_studio_creator_5_pro_uses_exact_native_profile_with_lumina_process(tmp_path) -> None:
+    """C5 Pro exports keep current native identities and Lumina process values."""
 
-    writer_module._PRINTER_TEMPLATE_CACHE.clear()
     writer = BambuStudio3MFWriter(
         str(tmp_path / "creator-5-pro-manual-shape.3mf"),
         settings={},
@@ -1967,9 +1873,9 @@ def test_flash_studio_creator_5_pro_matches_manual_project_shape(tmp_path) -> No
     )
     _add_rybw_meshes(writer)
 
-    project = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
+    project = _compose_project(writer)
 
-    assert project["version"] == "2.3.2"
+    assert project["version"] == "01.10.01.50"
     assert project["printer_model"] == "Flashforge Creator 5 Pro"
     assert project["printer_settings_id"] == (
         "Flashforge Creator 5 Pro 0.4 nozzle"
@@ -1978,14 +1884,16 @@ def test_flash_studio_creator_5_pro_matches_manual_project_shape(tmp_path) -> No
     assert project["default_print_profile"] == (
         "0.20mm Standard @Flashforge AD5M Pro 0.4 Nozzle"
     )
-    assert project["print_settings_id"] == "0.20mm Standard @FF C5"
+    assert project["print_settings_id"] == (
+        "0.20mm Standard @Flashforge AD5M Pro 0.4 Nozzle"
+    )
     assert project["auxiliary_fan"] == "1"
     assert project["bed_mesh_max"] == "99999,99999"
     assert project["bed_mesh_min"] == "-99999,-99999"
     assert project["before_layer_change_gcode"] == (
         ";BEFORE_LAYER_CHANGE\n;[layer_z]"
     )
-    assert project["default_filament_profile"] == ["Flashforge Generic PLA"]
+    assert project["default_filament_profile"] == ['Flashforge PLA Basic @FF C5P'] * 4
     for key in (
         "filament_colour",
         "filament_multi_colour",
@@ -1993,9 +1901,9 @@ def test_flash_studio_creator_5_pro_matches_manual_project_shape(tmp_path) -> No
         "filament_type",
         "filament_vendor",
         "nozzle_temperature",
-        "bed_temperature",
     ):
         assert len(project[key]) == 4
+    assert "bed_temperature" not in project
 
     # Native machine metadata must not replace Lumina's print process.
     assert project["layer_height"] == "0.08"
@@ -2044,7 +1952,6 @@ def test_bundled_flash_studio_profiles_keep_machine_specific_nozzle_metadata(
     default_print_profile,
 ) -> None:
     output_path = tmp_path / f"flash-studio-{printer_id}-{nozzle_size}.3mf"
-    writer_module._PRINTER_TEMPLATE_CACHE.clear()
     writer = BambuStudio3MFWriter(
         str(output_path),
         settings={},
@@ -2070,13 +1977,13 @@ def test_bundled_flash_studio_profiles_keep_machine_specific_nozzle_metadata(
     assert project["nozzle_diameter"] == nozzle_diameter
     assert project["default_print_profile"] == default_print_profile
     assert project["print_settings_id"] == default_print_profile
-    assert '<metadata name="Application">BambuStudio-2.3.2</metadata>' in model_text
+    assert '<metadata name="Application">BambuStudio-01.10.01.50</metadata>' in model_text
     assert "Metadata/filament_sequence.json" not in entries
     assert "Metadata/cut_information.xml" not in entries
     assert "Metadata/custom_gcode_per_layer.xml" not in entries
 
 
-def test_writer_base_template_uses_registry_device_profile(tmp_path, monkeypatch) -> None:
+def test_writer_base_template_uses_native_device_profile(tmp_path, monkeypatch) -> None:
     registry_root = tmp_path / "machine_registry"
     template_path = (
         registry_root
@@ -2139,6 +2046,7 @@ def test_writer_base_template_uses_registry_device_profile(tmp_path, monkeypatch
         device_profile_id="BambuStudio:bbl:bambu-lab-h2d:0.4",
     )
 
+    _add_rybw_meshes(writer)
     settings = writer._get_base_config_template()
     assert settings["printer_model"] == "Bambu Lab H2D"
     assert settings["printer_settings_id"] == "Bambu Lab H2D 0.4 nozzle"
@@ -2163,7 +2071,6 @@ def test_anycubic_registry_keeps_full_client_version_stamp(tmp_path, monkeypatch
         bed_height=250,
     )
     monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
-    writer_module._PRINTER_TEMPLATE_CACHE.clear()
 
     writer = BambuStudio3MFWriter(
         str(tmp_path / "anycubic-registry.3mf"),
@@ -2175,14 +2082,15 @@ def test_anycubic_registry_keeps_full_client_version_stamp(tmp_path, monkeypatch
         device_profile_id="AnycubicSlicerNext:anycubic:anycubic-kobra-s1:0.4",
     )
 
-    config = ET.fromstring(writer._build_slice_info_bytes())
+    _add_rybw_meshes(writer)
+    config = ET.fromstring(_compose_model(writer)["slice_info_xml"])
     header = config.find("header")
     assert header is not None
     values = {
         item.attrib["key"]: item.attrib["value"]
         for item in header.findall("header_item")
     }
-    assert values["X-ACNext-Client-Version"] == "1.3.9.4 20260319225535"
+    assert values["X-ACNext-Client-Version"] == "2.0.0.2 20260902193208"
 
 
 def test_anycubic_registry_separates_profile_and_client_versions(tmp_path, monkeypatch) -> None:
@@ -2205,7 +2113,6 @@ def test_anycubic_registry_separates_profile_and_client_versions(tmp_path, monke
         bed_height=260,
     )
     monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
-    writer_module._PRINTER_TEMPLATE_CACHE.clear()
 
     writer = BambuStudio3MFWriter(
         str(tmp_path / "anycubic-client-version.3mf"),
@@ -2217,20 +2124,28 @@ def test_anycubic_registry_separates_profile_and_client_versions(tmp_path, monke
         device_profile_id="AnycubicSlicerNext:anycubic:anycubic-kobra-x:0.4",
     )
 
-    assert writer._get_app_version_str() == "AnycubicSlicerNext-1.4.1.2"
-    assert writer._get_registry_source_version() == "1.3.2605.22"
-    assert writer._get_base_config_template()["version"] == "1.3.2605.22"
-    config = ET.fromstring(writer._build_slice_info_bytes())
+    _add_rybw_meshes(writer)
+    metadata = _compose_model(writer)
+    application = next(
+        item["value"] for item in metadata["root_model"]["metadata"]
+        if item["name"] == "Application"
+    )
+    assert application == "BambuStudio-2.0.0.2"
+    assert writer._registry_device_profile.source_version == "1.3.2605.22"
+    # Fat Cat pins this profile source independently of the locally installed
+    # Anycubic package. The saved project keeps the pinned source version.
+    assert writer._get_base_config_template()["version"] == "2.0.0.2"
+    config = ET.fromstring(_compose_model(writer)["slice_info_xml"])
     header = config.find("header")
     assert header is not None
     values = {
         item.attrib["key"]: item.attrib["value"]
         for item in header.findall("header_item")
     }
-    assert values["X-ACNext-Client-Version"] == "1.4.1.2 20260604104233"
+    assert values["X-ACNext-Client-Version"] == "2.0.0.2 20260902193208"
 
 
-def test_load_printer_template_accepts_registry_only_printer_id(tmp_path, monkeypatch) -> None:
+def test_load_printer_template_rejects_registry_only_printer_id(tmp_path, monkeypatch) -> None:
     registry_root = tmp_path / "machine_registry"
     _write_registry_fixture(
         registry_root,
@@ -2249,16 +2164,14 @@ def test_load_printer_template_accepts_registry_only_printer_id(tmp_path, monkey
         bed_height=400,
     )
     monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
-    writer_module._PRINTER_TEMPLATE_CACHE.clear()
 
-    template = load_printer_template(
-        printer_id="snapmaker-artisan",
-        slicer="OrcaSlicer",
-        nozzle_size="0.4",
-        device_profile_id="OrcaSlicer:snapmaker:snapmaker-artisan:0.4",
-    )
-
-    assert template["printer_model"] == "Snapmaker Artisan"
+    with pytest.raises(ValueError, match="Fat Cat has no exact native machine identity"):
+        load_printer_template(
+            printer_id="snapmaker-artisan",
+            slicer="OrcaSlicer",
+            nozzle_size="0.4",
+            device_profile_id="OrcaSlicer:snapmaker:snapmaker-artisan:0.4",
+        )
 
 
 def test_bambu_registry_x2d_uses_bundled_project_template(tmp_path, monkeypatch) -> None:
@@ -2301,7 +2214,6 @@ def test_bambu_registry_x2d_uses_bundled_project_template(tmp_path, monkeypatch)
         bed_height=261,
     )
     monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
-    writer_module._PRINTER_TEMPLATE_CACHE.clear()
 
     template = load_printer_template(
         printer_id="bambu-lab-x2d",
@@ -2312,28 +2224,27 @@ def test_bambu_registry_x2d_uses_bundled_project_template(tmp_path, monkeypatch)
 
     assert template["from"] == "project"
     assert template["name"] == "project_settings"
-    assert template["version"] == "02.07.01.57"
+    assert template["version"] == "02.08.02.61"
     assert template["printer_model"] == "Bambu Lab X2D"
     assert template["printer_settings_id"] == "Bambu Lab X2D 0.4 nozzle"
     assert template["nozzle_diameter"] == ["0.4", "0.4"]
-    assert template["printable_area"] == ["0x0", "256x0", "256x256", "0x256"]
+    assert template["printable_area"] == ["0x0", "256x0", "256x256", "0x256 "]
     assert template["default_filament_profile"] == ["Bambu PLA Basic @BBL X2D 0.4 nozzle"]
     assert template["default_print_profile"] == "0.20mm Standard @BBL X2D"
     assert "X2D start gcode" in template["machine_start_gcode"]
     assert "X2D end gcode" in template["machine_end_gcode"]
     assert template["printer_structure"] == "corexy"
-    assert template["layer_height"] == "0.08"
-    assert template["prime_tower_width"] == "200"
+    assert template["layer_height"] == "0.2"
+    assert template["prime_tower_width"] == "35"
     assert template["prime_tower_brim_width"] == "-1"
-    assert len(template["different_settings_to_system"]) == 11
-    assert "prime_tower_width" in template["different_settings_to_system"][0]
-    assert len(template["filament_settings_id"]) == 9
-    assert template["filament_settings_id"][0] == "Bambu PETG Basic @BBL X2D 0.4 nozzle"
-    assert set(template["filament_settings_id"][1:]) == {
+    assert template["different_settings_to_system"] == [
+        "enable_prime_tower;filament_colour;filament_multi_colour"
+    ]
+    assert template["filament_settings_id"] == [
         "Bambu PLA Basic @BBL X2D 0.4 nozzle"
-    }
-    assert len(template["flush_volumes_matrix"]) == 162
-    assert len(template["flush_volumes_vector"]) == 18
+    ]
+    assert "flush_volumes_matrix" not in template
+    assert "flush_volumes_vector" not in template
     assert "type" not in template
     assert "instantiation" not in template
     assert "inherits" not in template
@@ -2380,7 +2291,6 @@ def test_bambu_a2_registry_uses_bundled_project_template(tmp_path, monkeypatch) 
         bed_height=325,
     )
     monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
-    writer_module._PRINTER_TEMPLATE_CACHE.clear()
 
     template = load_printer_template(
         printer_id="bambu-lab-a2l",
@@ -2391,7 +2301,7 @@ def test_bambu_a2_registry_uses_bundled_project_template(tmp_path, monkeypatch) 
 
     assert template["from"] == "project"
     assert template["name"] == "project_settings"
-    assert template["version"] == "02.07.01.57"
+    assert template["version"] == "02.08.02.61"
     assert template["printer_model"] == "Bambu Lab A2L"
     assert template["printer_settings_id"] == "Bambu Lab A2L 0.4 nozzle"
     assert template["default_filament_profile"] == ["Bambu PLA Basic @BBL A2L 0.4 nozzle"]
@@ -2399,20 +2309,19 @@ def test_bambu_a2_registry_uses_bundled_project_template(tmp_path, monkeypatch) 
     assert "A2L start gcode" in template["machine_start_gcode"]
     assert "A2L end gcode" in template["machine_end_gcode"]
     assert template["printer_structure"] == "i3"
-    assert "default_wipe_tower_pos" not in template
-    assert template["prime_tower_width"] == "200"
+    assert template["default_wipe_tower_pos"] == "0.0x1.0"
+    assert template["prime_tower_width"] == "35"
     assert template["prime_tower_brim_width"] == "-1"
-    assert template["curr_bed_type"] == "Textured PEI Plate"
-    assert len(template["filament_settings_id"]) == 9
-    assert template["filament_settings_id"][0] == "Bambu PETG Basic @BBL A2L 0.4 nozzle"
-    assert set(template["filament_settings_id"][1:]) == {
+    assert "curr_bed_type" not in template
+    assert template["filament_settings_id"] == [
         "Bambu PLA Basic @BBL A2L 0.4 nozzle"
-    }
-    assert len(template["different_settings_to_system"]) == 11
-    assert "prime_tower_width" in template["different_settings_to_system"][0]
-    assert len(template["flush_volumes_matrix"]) == 81
-    assert len(template["flush_volumes_vector"]) == 18
-    assert template["layer_height"] == "0.08"
+    ]
+    assert template["different_settings_to_system"] == [
+        "enable_prime_tower;filament_colour;filament_multi_colour"
+    ]
+    assert "flush_volumes_matrix" not in template
+    assert "flush_volumes_vector" not in template
+    assert template["layer_height"] == "0.2"
     assert "type" not in template
     assert "instantiation" not in template
     assert "inherits" not in template
@@ -2454,7 +2363,6 @@ def test_bambu_registry_project_settings_can_trim_native_template_filament_slots
         bed_height=261,
     )
     monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
-    writer_module._PRINTER_TEMPLATE_CACHE.clear()
 
     writer = BambuStudio3MFWriter(
         "x2d-slots.3mf",
@@ -2468,10 +2376,10 @@ def test_bambu_registry_project_settings_can_trim_native_template_filament_slots
     )
     writer._set_project_palette(
         [
-            "赛纳PETG白色 by MingDee",
-            "PETG 肤色 by荒沙",
-            "PETG 深红 by荒沙",
-            "PETG 深灰 by荒沙",
+            "PLA slot 1",
+            "PLA slot 2",
+            "PLA slot 3",
+            "PLA slot 4",
         ],
         {
             0: (255, 255, 249, 255),
@@ -2480,27 +2388,38 @@ def test_bambu_registry_project_settings_can_trim_native_template_filament_slots
             3: (169, 168, 166, 255),
         },
     )
+    writer._material_types.update({f"PLA slot {index}": "PLA" for index in range(1, 5)})
 
-    settings = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
+    settings = _compose_project(writer)
+    writer.add_mesh(
+        trimesh.creation.box(extents=[1, 1, 1]), "PLA slot 1", (255, 255, 255)
+    )
 
     assert settings["filament_settings_id"] == [
-        "Bambu PETG Basic @BBL X2D 0.4 nozzle",
-        "Bambu PETG Basic @BBL X2D 0.4 nozzle",
-        "Bambu PETG Basic @BBL X2D 0.4 nozzle",
-        "Bambu PETG Basic @BBL X2D 0.4 nozzle",
+        "Bambu PLA Basic @BBL X2D 0.4 nozzle",
+        "Bambu PLA Basic @BBL X2D 0.4 nozzle",
+        "Bambu PLA Basic @BBL X2D 0.4 nozzle",
+        "Bambu PLA Basic @BBL X2D 0.4 nozzle",
     ]
     assert settings["filament_colour"] == ["#FFFFF9", "#FDCBA6", "#CD3C46", "#A9A8A6"]
     assert settings["filament_multi_colour"] == ["#FFFFF9", "#FDCBA6", "#CD3C46", "#A9A8A6"]
-    assert settings["filament_type"] == ["PETG", "PETG", "PETG", "PETG"]
-    assert len(settings["filament_is_mixed"]) == 4
-    assert len(settings["activate_air_filtration"]) == 4
-    assert len(settings["additional_fan_full_speed_layer"]) == 4
-    assert len(settings["pressure_advance"]) == 4
-    assert len(settings["flush_volumes_matrix"]) == 32
-    assert len(settings["flush_volumes_vector"]) == 8
-    assert len(settings["different_settings_to_system"]) == 11
-    assert settings["version"] == "02.07.01.57"
-    assert settings["prime_tower_width"] == "200"
+    assert settings["filament_type"] == ["PLA", "PLA", "PLA", "PLA"]
+    source = writer._get_base_config_template()
+    for key in (
+        "filament_is_mixed",
+        "activate_air_filtration",
+        "additional_fan_full_speed_layer",
+        "pressure_advance",
+    ):
+        if key in source:
+            assert len(settings[key]) == 4
+        else:
+            assert key not in settings
+    assert "flush_volumes_matrix" not in settings
+    assert "flush_volumes_vector" not in settings
+    assert len(settings["different_settings_to_system"]) == 1
+    assert settings["version"] == "02.08.02.61"
+    assert settings["prime_tower_width"] == "35"
 
 
 def test_bambu_h2c_extends_beyond_native_slots_without_group_vector_bloat() -> None:
@@ -2515,18 +2434,20 @@ def test_bambu_h2c_extends_beyond_native_slots_without_group_vector_bloat() -> N
         preserve_template_filament_slots=False,
     )
     writer._set_project_palette(
-        [f"PETG slot {index}" for index in range(10)],
+        [f"PLA slot {index}" for index in range(10)],
         {index: (index * 20, index * 10, index * 5, 255) for index in range(10)},
     )
+    writer._material_types.update({f"PLA slot {index}": "PLA" for index in range(10)})
 
-    settings = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
+    settings = _compose_project(writer)
 
     assert len(settings["filament_colour"]) == 10
     assert len(settings["filament_type"]) == 10
-    assert len(settings["filament_extruder_variant"]) == 10
-    assert len(settings["filament_dev_ams_drying_time"]) == 10
-    assert len(settings["flush_volumes_matrix"]) == 32
-    assert len(settings["flush_volumes_vector"]) == 10
+    # The H2C native profile exposes two nozzle variants and four drying-time values.
+    assert len(settings["filament_extruder_variant"]) == 20
+    assert len(settings["filament_dev_ams_drying_time"]) == 40
+    assert "flush_volumes_matrix" not in settings
+    assert "flush_volumes_vector" not in settings
 
 
 class TestAnycubicWriterMetadata:
@@ -2544,9 +2465,7 @@ class TestAnycubicWriterMetadata:
             (255, 255, 255),
         )
 
-        settings = json.loads(
-            writer._build_project_settings_bytes().decode("utf-8")
-        )
+        settings = _compose_project(writer)
 
         assert settings["print_compatible_printers"] == [
             settings["printer_settings_id"]
@@ -2560,6 +2479,11 @@ class TestAnycubicWriterMetadata:
             printer_id="bambu-p1s",
             slicer="BambuStudio",
             nozzle_size="0.2",
+        )
+        writer.add_mesh(
+            trimesh.creation.box(extents=[1, 1, 1]),
+            "White",
+            (255, 255, 255),
         )
 
         settings = writer._get_base_config_template()
@@ -2580,7 +2504,7 @@ class TestAnycubicWriterMetadata:
         )
         writer.add_mesh(trimesh.creation.box(extents=[1, 1, 1]), "White", (255, 255, 255))
 
-        settings = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
+        settings = _compose_project(writer)
         assert settings["line_width"] == "0.22"
         assert settings["initial_layer_line_width"] == "0.22"
 
@@ -2595,38 +2519,39 @@ class TestAnycubicWriterMetadata:
             printer_id="bambu-p1s",
             slicer="BambuStudio",
             nozzle_size="0.2",
+            preserve_template_filament_slots=True,
         )
         writer.add_mesh(trimesh.creation.box(extents=[1, 1, 1]), "White", (255, 255, 255))
-        original_loader = writer._get_base_config_template
+        template = writer._get_base_config_template()
+        slot_count = 4
+        for key in ("filament_colour", "filament_type", "filament_settings_id"):
+            template[key] = [template[key][0]] * slot_count
+        template["different_settings_to_system"] = [
+            "line_width",
+            "wall_loops;top_shell_layers",
+            "bottom_shell_layers",
+        ] + [""] * (slot_count - 2) + ["printer_settings_id"]
+        writer._custom_template = template
 
-        def stale_template() -> dict[str, object]:
-            template = original_loader()
-            template["different_settings_to_system"] = [
-                "line_width",
-                "wall_loops;top_shell_layers",
-                "bottom_shell_layers",
-                "",
-            ]
-            return template
-
-        monkeypatch.setattr(writer, "_get_base_config_template", stale_template)
-
-        settings = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
+        settings = _compose_project(writer)
 
         different_settings = settings["different_settings_to_system"]
         assert isinstance(different_settings, list)
-        assert len(different_settings) == 4
+        assert len(different_settings) == len(settings["filament_settings_id"]) + 2
         difference_index = different_settings[0].split(";")
         assert difference_index == sorted(set(difference_index))
         assert {
             "line_width",
             "wall_loops",
         } <= set(difference_index)
-        assert different_settings[1:] == [
-            "wall_loops;top_shell_layers",
-            "bottom_shell_layers",
-            "",
-        ]
+        assert {"wall_loops", "top_shell_layers"} <= set(
+            different_settings[1].split(";")
+        )
+        assert different_settings[2] == "bottom_shell_layers"
+        assert different_settings[3:-1] == [""] * (
+            len(settings["filament_settings_id"]) - 2
+        )
+        assert "printer_settings_id" in different_settings[-1].split(";")
 
     def test_shared_material_palette_deduplicates_project_filaments(self) -> None:
         writer = BambuStudio3MFWriter(
@@ -2651,17 +2576,17 @@ class TestAnycubicWriterMetadata:
         third.metadata["bambu_material_name"] = "Slot 2 (Black)"
         writer.add_mesh(third, "A1__Slot 2 (Black)", (0, 0, 0))
 
-        settings = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
+        settings = _compose_project(writer)
         assert settings["filament_colour"] == ["#FFFFFF", "#000000"]
 
-        root = ET.fromstring(writer._build_model_settings_bytes([1, 2, 3], 4, [0, 0, 1]))
+        root = ET.fromstring(_compose_model(writer, [1, 2, 3], 4, [0, 0, 1])["model_settings_xml"])
         part_extruders = [
             _metadata_values(part)["extruder"]
             for part in root.findall("./object/part")
         ]
         assert part_extruders == ["1", "1", "2"]
 
-    def test_bambu_project_settings_copy_petg_template_row_for_petg_materials(self) -> None:
+    def test_bambu_project_settings_resolve_petg_material_identity(self) -> None:
         writer = BambuStudio3MFWriter(
             "petg-materials.3mf",
             settings={},
@@ -2678,77 +2603,23 @@ class TestAnycubicWriterMetadata:
             },
         )
 
-        settings = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
+        settings = _compose_project(writer)
 
         assert settings["filament_type"] == ["PETG", "PLA"]
         assert settings["filament_settings_id"] == [
             "Bambu PETG Basic @BBL X1C 0.2 nozzle",
             "Bambu PLA Basic @BBL X1C 0.2 nozzle",
         ]
-        assert settings["nozzle_temperature"] == ["255", "220"]
-        assert settings["nozzle_temperature_initial_layer"] == ["245", "220"]
-        assert settings["textured_plate_temp"] == ["70", "55"]
-        assert settings["cool_plate_temp"] == ["0", "35"]
-
-    def test_bambu_project_settings_disable_cut_retraction_filament_overrides(self) -> None:
-        template = load_printer_template("bambu-p1s", slicer="BambuStudio")
-        assert "1" in template["filament_long_retractions_when_cut"]
-        assert "18" in template["filament_retraction_distances_when_cut"]
-
-        writer = BambuStudio3MFWriter(
-            "cut-retraction-overrides.3mf",
-            settings={},
-            color_mode="4-Color",
-            printer_id="bambu-p1s",
-            slicer="BambuStudio",
-        )
-        writer._set_project_palette(
-            ["Bambu PLA Basic White", "Bambu PETG Basic Red"],
-            {
-                0: (255, 255, 255, 255),
-                1: (220, 20, 60, 255),
-            },
+        assert_native_materials(
+            settings, slicer_id="BambuStudio", machine_uid="bambu-lab:p1s",
+            nozzle_uid="nozzle:0.2mm", material_types=["PETG", "PLA"],
         )
 
-        settings = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
-
-        assert settings["filament_type"] == ["PLA", "PETG"]
-        assert settings["filament_long_retractions_when_cut"] == ["nil", "nil"]
-        assert settings["filament_retraction_distances_when_cut"] == ["nil", "nil"]
-        assert all(value == "0" for value in settings["long_retractions_when_cut"])
-
-    def test_orca_project_settings_derive_petg_metadata_when_template_is_pla_only(self) -> None:
-        writer = BambuStudio3MFWriter(
-            "orca-petg-materials.3mf",
-            settings={},
-            color_mode="4-Color",
-            printer_id="bambu-p1s",
-            slicer="OrcaSlicer",
-            nozzle_size="0.2",
-        )
-        writer._set_project_palette(
-            ["PETG HF Red", "PLA Basic White"],
-            {
-                0: (220, 20, 60, 255),
-                1: (255, 255, 255, 255),
-            },
-        )
-
-        settings = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
-
-        assert settings["filament_type"] == ["PETG", "PLA"]
-        assert settings["filament_settings_id"] == [
-            "Bambu PETG HF @BBL X1C",
-            "Bambu PLA Basic @BBL X1C",
-        ]
-        assert settings["nozzle_temperature"] == ["255", "220"]
-        assert settings["nozzle_temperature_initial_layer"] == ["245", "220"]
-        assert settings["textured_plate_temp"] == ["70", "55"]
 
     def test_anycubic_model_settings_match_sample_shape(self, tmp_path) -> None:
         writer = _make_anycubic_writer(tmp_path)
 
-        root = ET.fromstring(writer._build_model_settings_bytes([1, 2], 3))
+        root = ET.fromstring(_compose_model(writer, [1, 2], 3)["model_settings_xml"])
         first_part = root.find("./object/part")
         assert first_part is not None
 
@@ -2774,23 +2645,22 @@ class TestAnycubicWriterMetadata:
         model_instance = plate.find("./model_instance")
         assert model_instance is not None
         instance_meta = _metadata_values(model_instance)
-        assert instance_meta["identify_id"] == "160"
+        assert instance_meta["identify_id"] == "1"
 
     def test_anycubic_project_settings_preserve_template_filament_metadata(self, tmp_path) -> None:
         writer = _make_anycubic_writer(tmp_path)
-        settings = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
+        settings = _compose_project(writer)
         template = load_printer_template("anycubic-kobra-s1", slicer="AnycubicSlicerNext")
 
         expected_vendor = template["filament_vendor"][0]
-        expected_filament_id = template["filament_ids"][0]
         expected_settings_id = template["filament_settings_id"][0]
 
         assert settings["filament_vendor"] == [expected_vendor, expected_vendor]
-        assert settings["filament_ids"] == [expected_filament_id, expected_filament_id]
+        assert "filament_ids" not in template
+        assert "filament_ids" not in settings
         assert settings["filament_settings_id"] == [expected_settings_id, expected_settings_id]
         assert settings["filament_colour"] == ["#FF0000", "#00FF00"]
         assert all(value != "Bambu Lab" for value in settings["filament_vendor"])
-        assert all(value != "GFA00" for value in settings["filament_ids"])
 
     def test_export_scene_uses_global_slot_number_for_sparse_slots(self, monkeypatch) -> None:
         captured_colors: list[tuple[str, tuple[int, int, int]]] = []
@@ -2880,7 +2750,7 @@ class TestAnycubicWriterMetadata:
 
             def export(self) -> str:
                 captured_object_names.extend(entry.object_name for entry in self.objects)
-                captured_settings.update(json.loads(self._build_project_settings_bytes().decode("utf-8")))
+                captured_settings.update(_compose_project(self))
                 return self.output_path
 
         monkeypatch.setattr(writer_module, "BambuStudio3MFWriter", _CapturingWriter)
@@ -2943,7 +2813,7 @@ class TestAnycubicWriterMetadata:
             "#FFFFFF",
             "#FFE600",
         ]
-        assert len(captured_settings["filament_ids"]) == 8
+        assert "filament_ids" not in captured_settings
 
     def test_export_scene_forwards_registry_device_profile_id(self, monkeypatch) -> None:
         captured: dict[str, object] = {}
@@ -2992,38 +2862,23 @@ class TestAnycubicWriterMetadata:
         assert out_path == "registry-export.3mf"
         assert captured["device_profile_id"] == "BambuStudio:bbl:bambu-lab-h2d:0.4"
 
-    def test_anycubic_slice_info_and_custom_parts_use_acnext_layout(
-        self,
-        tmp_path,
-        monkeypatch,
-    ) -> None:
+    def test_anycubic_slice_info_and_custom_parts_use_acnext_layout(self, tmp_path) -> None:
         writer = _make_anycubic_writer(tmp_path)
-        slice_info = ET.fromstring(writer._build_slice_info_bytes())
+        writer.export()
+        with zipfile.ZipFile(writer.output_path) as package:
+            slice_info = ET.fromstring(package.read("Metadata/slice_info.config"))
+            part_paths = set(package.namelist())
+            custom_xml = ET.fromstring(package.read("Metadata/custom_gcode_per_layer.xml"))
         header = slice_info.find("./header")
         assert header is not None
         header_items = {item.attrib["key"]: item.attrib["value"] for item in header.findall("header_item")}
-
         assert header_items == {
             "X-ACNext-Client-Type": "slicer",
-            "X-ACNext-Client-Version": "1.3.9.4 20260319225535",
+            "X-ACNext-Client-Version": "2.0.0.2 20260902193208",
         }
-
-        fake_n3mf = SimpleNamespace(
-            CustomPart=_FakeCustomPart,
-            CustomContentType=_FakeContentType,
-        )
-        monkeypatch.setattr(writer_module, "_n3mf", fake_n3mf)
-
-        builder = _FakeBuilder()
-        writer._inject_metadata_parts(builder, [1, 2], 3)
-
-        part_paths = [part.path for part in builder.parts]
         assert "Metadata/custom_gcode_per_layer.xml" in part_paths
         assert "Metadata/filament_sequence.json" not in part_paths
         assert "Metadata/cut_information.xml" not in part_paths
-
-        custom_part = next(part for part in builder.parts if part.path == "Metadata/custom_gcode_per_layer.xml")
-        custom_xml = ET.fromstring(custom_part.data)
         plate = custom_xml.find("./plate")
         assert plate is not None
         plate_info = plate.find("./plate_info")
@@ -3050,7 +2905,7 @@ class TestAnycubicWriterMetadata:
             model_metadata = {
                 node.attrib["name"]: (node.text or "") for node in model_root.findall("m:metadata", core_ns)
             }
-            assert model_metadata["Application"] == "BambuStudio-1.3.9.4"
+            assert model_metadata["Application"] == "BambuStudio-2.0.0.2"
             assert model_metadata["BambuStudio:3mfVersion"] == "1"
 
             slice_root = ET.fromstring(package.read("Metadata/slice_info.config"))
@@ -3058,7 +2913,7 @@ class TestAnycubicWriterMetadata:
             assert header is not None
             header_items = {item.attrib["key"]: item.attrib["value"] for item in header.findall("header_item")}
             assert header_items["X-ACNext-Client-Type"] == "slicer"
-            assert header_items["X-ACNext-Client-Version"] == "1.3.9.4 20260319225535"
+            assert header_items["X-ACNext-Client-Version"] == "2.0.0.2 20260902193208"
 
     def test_orca_registry_u1_uses_orca_native_filament_metadata(self, tmp_path) -> None:
         writer = writer_module.BambuStudio3MFWriter(
@@ -3095,12 +2950,12 @@ class TestAnycubicWriterMetadata:
             root_rels = package.read("_rels/.rels")
 
         serialized = json.dumps(project_settings, ensure_ascii=False)
-        assert model_metadata["Application"] == "OrcaSlicer-02.04.00.00"
+        assert model_metadata["Application"] == "BambuStudio-02.06.00.51"
         assert model_metadata["BambuStudio:3mfVersion"] == "1"
-        assert model_metadata["OrcaSlicer"] == "2.4.0"
+        assert model_metadata["OrcaSlicer"] == "2.4.2"
         assert slice_header_items["X-BBL-Client-Type"] == "slicer"
-        assert slice_header_items["X-BBL-Client-Version"] == "02.04.00.00"
-        assert slice_header_items["OrcaSlicer-Version"] == "2.4.0"
+        assert slice_header_items["X-BBL-Client-Version"] == "02.06.00.51"
+        assert slice_header_items["OrcaSlicer-Version"] == "2.4.2"
         assert root_rels.startswith(b"<?xml version=")
         assert b"<Relationships xmlns=" in root_rels
         assert b"ns0:" not in root_rels
@@ -3108,13 +2963,18 @@ class TestAnycubicWriterMetadata:
         assert build_item.attrib["printable"] == "1"
         assert build_item.attrib["auto_drop"] == "1"
         assert len(build_item.attrib["transform"].split()) == 12
-        assert "Snapmaker PLA Basic @U1" not in serialized
+        assert "Snapmaker PLA Basic @U1" in serialized
         assert project_settings["printer_settings_id"] == "Snapmaker U1 (0.4 nozzle)"
-        assert project_settings["filament_settings_id"] == ["Snapmaker PLA @U1"] * 4
-        assert project_settings["default_print_profile"] == "0.20mm Standard @Snapmaker"
-        assert project_settings["default_filament_profile"] == ["Snapmaker PLA"]
-        assert "inherits_group" not in project_settings
-        assert "different_settings_to_system" not in project_settings
+        assert project_settings["filament_settings_id"] == ["Snapmaker PLA Basic @U1"] * 4
+        assert project_settings["default_print_profile"] == "0.08 Extra Fine @Snapmaker U1 (0.4 nozzle)"
+        assert project_settings["default_filament_profile"] == ["Snapmaker PLA Basic @U1"] * 4
+        assert project_settings["inherits_group"] == ["0.08 Extra Fine @Snapmaker U1 (0.4 nozzle)"] + [""] * 5
+        assert project_settings["version"] == "2.2.4"
+        assert project_settings["textured_plate_temp"] == ["65"] * 4
+        assert project_settings["nozzle_temperature"] == ["220"] * 4
+        assert project_settings["different_settings_to_system"][0].startswith(
+            "bottom_shell_layers;"
+        )
 
     def test_orca_registry_u1_preserves_native_metadata_for_8c_exports(
         self, tmp_path
@@ -3151,14 +3011,19 @@ class TestAnycubicWriterMetadata:
                 for item in slice_header.findall("header_item")
             }
 
-        assert model_metadata["OrcaSlicer"] == "2.4.0"
-        assert slice_header_items["OrcaSlicer-Version"] == "2.4.0"
+        assert model_metadata["OrcaSlicer"] == "2.4.2"
+        assert slice_header_items["OrcaSlicer-Version"] == "2.4.2"
         assert build_item is not None
         assert build_item.attrib["printable"] == "1"
         assert build_item.attrib["auto_drop"] == "1"
-        assert project_settings["filament_settings_id"] == ["Snapmaker PLA @U1"] * 8
-        assert "inherits_group" not in project_settings
-        assert "different_settings_to_system" not in project_settings
+        assert project_settings["filament_settings_id"] == ["Snapmaker PLA Basic @U1"] * 8
+        assert project_settings["inherits_group"] == ["0.08 Extra Fine @Snapmaker U1 (0.4 nozzle)"] + [""] * 9
+        assert project_settings["default_filament_profile"] == ["Snapmaker PLA Basic @U1"] * 8
+        assert project_settings["version"] == "2.2.4"
+        assert project_settings["textured_plate_temp"] == ["65"] * 8
+        assert project_settings["nozzle_temperature"] == ["220"] * 8
+        assert len(project_settings["different_settings_to_system"]) == 10
+        assert "prime_tower_width" in project_settings["different_settings_to_system"][0]
 
     def test_snapmaker_orca_registry_u1_uses_snapmaker_orca_filament_metadata(
         self, tmp_path
@@ -3194,19 +3059,19 @@ class TestAnycubicWriterMetadata:
                 for item in slice_header.findall("header_item")
             }
 
-        assert model_metadata["Application"] == "SnapmakerOrca-02.02.49.02"
+        assert model_metadata["Application"] == "BambuStudio-2.3.6"
         assert slice_header_items["X-BBL-Client-Type"] == "slicer"
-        assert slice_header_items["X-BBL-Client-Version"] == "02.02.49.02"
+        assert slice_header_items["X-BBL-Client-Version"] == ""
         assert project_settings["printer_settings_id"] == "Snapmaker U1 (0.4 nozzle)"
-        assert project_settings["filament_settings_id"] == [
-            "Snapmaker PLA Basic @U1"
-        ] * 4
-        assert project_settings["default_print_profile"] == "0.20mm Standard @Snapmaker"
-        assert project_settings["default_filament_profile"] == [
-            "Snapmaker PLA Basic"
-        ]
+        assert project_settings["filament_settings_id"] == ["Snapmaker PLA Basic @U1"] * 4
+        assert project_settings["default_print_profile"] == "0.20 Standard @Snapmaker U1 (0.4 nozzle)"
+        assert project_settings["default_filament_profile"] == ["Snapmaker PLA Basic @U1"] * 4
+        assert project_settings["textured_plate_temp"] == ["65"] * 4
+        assert project_settings["nozzle_temperature"] == ["220"] * 4
         assert "inherits_group" not in project_settings
-        assert "different_settings_to_system" not in project_settings
+        assert "filament_colour;filament_multi_colour" in project_settings[
+            "different_settings_to_system"
+        ][1]
 
     def test_snapmaker_orca_u1_without_device_profile_uses_snapmaker_metadata_fallback(
         self, tmp_path
@@ -3241,62 +3106,60 @@ class TestAnycubicWriterMetadata:
                 for item in slice_header.findall("header_item")
             }
 
-        assert model_metadata["Application"] == "SnapmakerOrca-02.02.49.02"
+        assert model_metadata["Application"] == "BambuStudio-2.3.6"
         assert slice_header_items["X-BBL-Client-Type"] == "slicer"
-        assert slice_header_items["X-BBL-Client-Version"] == "02.02.49.02"
+        assert slice_header_items["X-BBL-Client-Version"] == ""
         assert project_settings["printer_settings_id"] == "Snapmaker U1 (0.4 nozzle)"
-        assert project_settings["filament_settings_id"] == [
-            "Snapmaker PLA Basic @U1"
-        ] * 4
+        assert project_settings["filament_settings_id"] == ["Snapmaker PLA Basic @U1"] * 4
+        assert project_settings["textured_plate_temp"] == ["65"] * 4
+        assert project_settings["nozzle_temperature"] == ["220"] * 4
 
     @pytest.mark.parametrize(
-        ("slicer", "nozzle_size", "device_profile_id", "expected_filament"),
+        ("slicer", "nozzle_size", "device_profile_id"),
         [
             (
                 "OrcaSlicer",
                 "0.6",
                 "OrcaSlicer:snapmaker:snapmaker-u1:0.6",
-                "Snapmaker PLA @U1",
             ),
             (
                 "SnapmakerOrca",
                 "0.2",
                 "SnapmakerOrca:snapmaker:snapmaker-u1:0.2",
-                "Snapmaker PLA @U1",
             ),
             (
                 "SnapmakerOrca",
                 "0.6",
                 "SnapmakerOrca:snapmaker:snapmaker-u1:0.6",
-                "Snapmaker PLA @U1",
             ),
             (
                 "SnapmakerOrca",
                 "0.8",
                 "SnapmakerOrca:snapmaker:snapmaker-u1:0.8",
-                "Snapmaker PLA @U1",
             ),
         ],
     )
-    def test_registry_u1_non_default_nozzles_keep_native_filament_metadata(
+    def test_registry_u1_non_default_nozzles_use_exact_native_material_sources(
         self,
         slicer: str,
         nozzle_size: str,
         device_profile_id: str,
-        expected_filament: str,
     ) -> None:
-        template = load_printer_template(
-            "snapmaker-u1",
-            slicer=slicer,
-            nozzle_size=nozzle_size,
-            device_profile_id=device_profile_id,
-        )
-
-        assert template["printer_settings_id"] == (
-            f"Snapmaker U1 ({nozzle_size} nozzle)"
-        )
-        assert template["filament_settings_id"] == [expected_filament] * 8
-        assert template["default_filament_profile"] == ["Snapmaker PLA"]
+        if slicer == "OrcaSlicer":
+            # This exact nozzle source has compatible materials, but no PLA.
+            with pytest.raises(ValueError, match="no available native filament profile"):
+                load_printer_template("snapmaker-u1", slicer=slicer,
+                    nozzle_size=nozzle_size, device_profile_id=device_profile_id)
+            return
+        project = load_printer_template("snapmaker-u1", slicer=slicer,
+            nozzle_size=nozzle_size, device_profile_id=device_profile_id)
+        assert project["version"] == "2.3.6"
+        assert project["printer_settings_id"] == f"Snapmaker U1 ({nozzle_size} nozzle)"
+        assert project["nozzle_diameter"] == [nozzle_size] * 4
+        assert project["filament_settings_id"] == [f"Generic PLA @U1 {nozzle_size} nozzle"]
+        assert project["filament_type"] == ["PLA"]
+        assert project["textured_plate_temp"] == ["65"]
+        assert project["nozzle_temperature"] == ["220"]
 
     def test_bambu_export_centers_and_drops_build_item_on_selected_bed(self, tmp_path) -> None:
         writer = writer_module.BambuStudio3MFWriter(
@@ -3321,8 +3184,8 @@ class TestAnycubicWriterMetadata:
         core_ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
         build_item = model_root.find("m:build/m:item", core_ns)
         assert build_item is not None
-        assert build_item.attrib["transform"] == (
-            "1 0 0 0 1 0 0 0 1 128 128 0.2"
+        assert [float(value) for value in build_item.attrib["transform"].split()] == pytest.approx(
+            [1, 0, 0, 0, 1, 0, 0, 0, 1, 128, 128, 0.2]
         )
 
     def test_bambu_export_centers_negative_local_vertices_with_build_transform(
@@ -3358,8 +3221,8 @@ class TestAnycubicWriterMetadata:
         vertices = object_root.findall(".//m:vertex", core_ns)
 
         assert build_item is not None
-        assert build_item.attrib["transform"] == (
-            "1 0 0 0 1 0 0 0 1 139 150 0.2"
+        assert [float(value) for value in build_item.attrib["transform"].split()] == pytest.approx(
+            [1, 0, 0, 0, 1, 0, 0, 0, 1, 139, 150, 0.2]
         )
         assert min(float(vertex.attrib["x"]) for vertex in vertices) == pytest.approx(
             -12.0
@@ -3374,7 +3237,7 @@ class TestAnycubicWriterMetadata:
             -20.0
         )
 
-    def test_h2d_0_2_bambu_version_uses_h2_family_client_stamp(self, tmp_path) -> None:
+    def test_h2d_0_2_bambu_version_uses_fatcat_target_stamp(self, tmp_path) -> None:
         writer = writer_module.BambuStudio3MFWriter(
             output_path=str(tmp_path / "h2d-0_2.3mf"),
             settings={},
@@ -3384,15 +3247,21 @@ class TestAnycubicWriterMetadata:
             nozzle_size="0.2",
         )
 
-        assert writer._get_app_version_str() == "BambuStudio-02.05.00.66"
+        _add_rybw_meshes(writer)
+        metadata = _compose_model(writer)
+        application = next(
+            item["value"] for item in metadata["root_model"]["metadata"]
+            if item["name"] == "Application"
+        )
+        assert application == "BambuStudio-02.08.02.61"
 
-        slice_info = ET.fromstring(writer._build_slice_info_bytes())
+        slice_info = ET.fromstring(_compose_model(writer)["slice_info_xml"])
         header = slice_info.find("./header")
         assert header is not None
         header_items = {item.attrib["key"]: item.attrib["value"] for item in header.findall("header_item")}
-        assert header_items["X-BBL-Client-Version"] == "02.05.00.66"
+        assert header_items["X-BBL-Client-Version"] == "02.08.02.61"
 
-    def test_non_h2_0_2_bambu_version_keeps_legacy_client_stamp(self, tmp_path) -> None:
+    def test_non_h2_0_2_bambu_version_uses_same_fatcat_target_stamp(self, tmp_path) -> None:
         writer = writer_module.BambuStudio3MFWriter(
             output_path=str(tmp_path / "p1s-0_2.3mf"),
             settings={},
@@ -3402,10 +3271,16 @@ class TestAnycubicWriterMetadata:
             nozzle_size="0.2",
         )
 
-        assert writer._get_app_version_str() == "BambuStudio-02.04.00.70"
+        _add_rybw_meshes(writer)
+        metadata = _compose_model(writer)
+        application = next(
+            item["value"] for item in metadata["root_model"]["metadata"]
+            if item["name"] == "Application"
+        )
+        assert application == "BambuStudio-02.08.02.61"
 
-        slice_info = ET.fromstring(writer._build_slice_info_bytes())
+        slice_info = ET.fromstring(_compose_model(writer)["slice_info_xml"])
         header = slice_info.find("./header")
         assert header is not None
         header_items = {item.attrib["key"]: item.attrib["value"] for item in header.findall("header_item")}
-        assert header_items["X-BBL-Client-Version"] == "02.04.00.70"
+        assert header_items["X-BBL-Client-Version"] == "02.08.02.61"

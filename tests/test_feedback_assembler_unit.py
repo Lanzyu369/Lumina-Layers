@@ -757,7 +757,10 @@ def test_shared_cloud_reference_survives_full_ticket_finalization(
             outside = tmp_path / "outside.json"
             outside.write_bytes(original)  # Matching bytes must not bypass containment.
             source.unlink()
-            source.symlink_to(outside)
+            try:
+                source.symlink_to(outside)
+            except OSError:
+                pytest.skip("File symlink creation is unavailable")
         asyncio.run(finalize_ticket_async(ticket_dir, _MockFileRegistry({})))
         finalized = json.loads(ticket_json.read_text(encoding="utf-8"))
         attachment = finalized["attachments"]["lut"]
@@ -1393,7 +1396,10 @@ def test_shared_cloud_lut_lookup_preserves_attachment_containment(
     if escape:
         outside = tmp_path / "outside.json"
         outside.write_bytes(b"PRIVATE")
-        source.symlink_to(outside)
+        try:
+            source.symlink_to(outside)
+        except OSError:
+            pytest.skip("File symlink creation is unavailable")
     else:
         source.write_bytes(b"SHARED_CLOUD")
     monkeypatch.setenv("LUMINA_CLOUD_LUT_DIR", str(cloud))

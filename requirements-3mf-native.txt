@@ -1,0 +1,11 @@
+# Native metadata dependencies for the selected slicer export routes.
+#
+# Public source: https://github.com/MOVIBALE/fatcat-metadata
+# Pin: 9d77c6860cf7520f9a67037e15f7c2ae44ffa803; build from its root pyproject.toml.
+# Run scripts/build_3mf_native_wheels.py --install before installing requirements.
+# Keeping this as a local wheelhouse
+# requirement prevents pip from silently replacing the patched writer with the
+# stock PyPI build.
+--find-links ./wheelhouse/3mf
+
+fatcat-metadata==0.1.0; python_version >= "3.12"

@@ -612,8 +612,21 @@ def run_fast_mode(temp_log_path: Path, workflow: list[str]) -> dict[str, Any]:
                     ),
                 ),
                 patch(
-                    "api.routers.converter.puzzle.assemble_puzzle_3mf",
+                    "api.routers.converter.puzzle.assemble_puzzle_3mf_fatcat",
                     side_effect=_mock_assemble_puzzle_3mf,
+                ),
+                # Fast workers emit sentinel bytes; metadata reads belong to
+                # the real package integration checks, not this logging gate.
+                patch(
+                    "api.routers.converter.puzzle._batch_extract_slots_from_3mf",
+                    return_value=[{
+                        "slot_id": 0, "slot_name": "White",
+                        "preview_color": "#ffffff", "material_id": "PLA",
+                    }],
+                ),
+                patch(
+                    "api.routers.converter.puzzle.read_wipe_tower_placement_warnings",
+                    return_value=[],
                 ),
                 patch(
                     "api.routers.calibration.generate_calibration_board",
@@ -1331,6 +1344,8 @@ def _build_mock_generate_result(created_paths: list[Path], *, worker_name: str =
         "glb_path": str(glb_path),
         "status_msg": "Model OK",
     }
+    if worker_name == "_submit_puzzle_worker":
+        result.update(x_mirrored=False, mirror_span_mm=60.0)
     if worker_name == "worker_batch_convert_item":
         # Batch merge flow needs additional fields from the worker result.
         preview_glb_path = _make_temp_path(".glb", created_paths)
@@ -1366,7 +1381,7 @@ def _build_mock_generate_result(created_paths: list[Path], *, worker_name: str =
 
 
 def _mock_assemble_puzzle_3mf(*, output_path: str, **_kwargs: Any) -> str:
-    """Fast-mode stub for ``core.puzzle_3mf.assemble_puzzle_3mf``.
+    """Fast-mode stub for ``core.puzzle_3mf.assemble_puzzle_3mf_fatcat``.
 
     Writes a placeholder byte payload to ``output_path`` so the puzzle endpoint
     success path can complete. The endpoint emits its canary log and registers

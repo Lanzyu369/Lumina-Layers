@@ -10,22 +10,12 @@ from hypothesis import given, assume, settings
 from hypothesis import strategies as st
 
 from config import PRINTER_PROFILES, get_printer_profile, DEFAULT_PRINTER_ID
-from utils.bambu_3mf_writer import load_printer_template, _PRINTER_TEMPLATE_CACHE
+from utils.bambu_3mf_writer import load_printer_template
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-@pytest.fixture(autouse=True)
-def clear_template_cache():
-    """Clear the printer template cache before each test to avoid stale data.
-    每个测试前清除模板缓存，避免脏数据。
-    """
-    _PRINTER_TEMPLATE_CACHE.clear()
-    yield
-    _PRINTER_TEMPLATE_CACHE.clear()
-
 
 # ---------------------------------------------------------------------------
 # P1: 打印机注册表完整性 (Registry Integrity)
@@ -85,7 +75,12 @@ class TestP2TemplateLoadingConsistency:
         **Validates: Requirements 3.1, 3.2**
         """
         profile = PRINTER_PROFILES[printer_id]
-        template = load_printer_template(printer_id)
+        slicer = (
+            "BambuStudio"
+            if profile.brand == "Bambu Lab"
+            else next(iter(profile.slicer_templates), "BambuStudio")
+        )
+        template = load_printer_template(printer_id, slicer=slicer)
 
         assert "printer_model" in template, (
             f"Template for '{printer_id}' missing 'printer_model' field"
@@ -143,7 +138,12 @@ class TestP4BedSizeConsistency:
         **Validates: Requirements 3.3, 7.1**
         """
         profile = PRINTER_PROFILES[printer_id]
-        template = load_printer_template(printer_id)
+        slicer = (
+            "BambuStudio"
+            if profile.brand == "Bambu Lab"
+            else next(iter(profile.slicer_templates), "BambuStudio")
+        )
+        template = load_printer_template(printer_id, slicer=slicer)
 
         assert "printable_area" in template, (
             f"Template for '{printer_id}' missing 'printable_area' field"

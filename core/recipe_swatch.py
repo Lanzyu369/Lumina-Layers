@@ -50,11 +50,14 @@ class RecipeSwatchItem:
         result_hex: Blended result hex color. (混合结果 hex 颜色)
         base_color_names: Name of each base color by index. (各基础色名称)
         base_color_hexes: Hex of each base color by index. (各基础色 hex)
+        material_types: Explicit material types by base color index.
+            （按基础色索引排列的材料类型；来源缺失时保留空值。）
     """
     selected_indices: list[int]
     result_hex: str
     base_color_names: list[str]
     base_color_hexes: list[str]
+    material_types: list[str | None] | None = None
 
 
 def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
@@ -339,10 +342,16 @@ def generate_recipe_swatch(
     material_map: dict[str, tuple[int, int, int]] = {
         _GRID_MATERIAL_NAME: _hex_to_rgb(_GRID_MATERIAL_HEX),
     }
+    material_types: dict[str, str | None] = {_GRID_MATERIAL_NAME: "PLA Basic"}
     for recipe in recipes:
         for idx in recipe.selected_indices:
             if idx < len(recipe.base_color_names):
                 name = recipe.base_color_names[idx]
+                material_types[name] = (
+                    recipe.material_types[idx]
+                    if recipe.material_types is not None and idx < len(recipe.material_types)
+                    else None
+                )
                 hex_c = recipe.base_color_hexes[idx] if idx < len(recipe.base_color_hexes) else "#808080"
                 if name not in material_map:
                     material_map[name] = _hex_to_rgb(hex_c)
@@ -469,6 +478,7 @@ def generate_recipe_swatch(
             scene=scene,
             output_path=output_path,
             slot_names=valid_slot_names,
+            material_types={name: material_types[name] for name in valid_slot_names},
             preview_colors=preview_colors,
             settings={
                 "layer_height": str(layer_h),

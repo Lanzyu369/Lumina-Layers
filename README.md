@@ -262,6 +262,14 @@ cd Lumina-studio
 **Core dependencies** (required; use Python 3.12):
 
 ```bash
+# Python 3.12+ requires current-platform native 3MF wheels first. Clone
+# https://github.com/MOVIBALE/fatcat-metadata and check out
+# 9d77c6860cf7520f9a67037e15f7c2ae44ffa803, then follow the desktop guide to
+# prepare the pinned neroued source and apply Lumina's B7 patch.
+# python scripts/build_3mf_native_wheels.py \
+#   --fatcat-root ../fatcat-metadata \
+#   --neroued-source ../neroued-3mf \
+#   --install
 python -m pip install -r requirements.txt
 corepack enable
 cd frontend
@@ -272,6 +280,12 @@ python start_all.py
 
 The launcher starts the backend and frontend. Open the frontend address printed
 by the launcher (default: `http://localhost:4174`).
+
+For a local or desktop install, build `wheelhouse/3mf` from the pinned public
+Fat Cat root and patched `neroued-3mf` source before installing; do not reuse
+wheels from another OS or CPU. The required public source commit is
+`9d77c6860cf7520f9a67037e15f7c2ae44ffa803`, recorded as `FATCAT_SOURCE_COMMIT`
+in `scripts/fatcat_packaging_contract.py`.
 
 ### Option 2: Desktop Client (Electron)
 

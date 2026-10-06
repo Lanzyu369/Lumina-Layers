@@ -90,7 +90,7 @@
 | `gr.Slider` | `slider_conv_width` | `float` | `60` | 10–400, step=1 | `target_width_mm` | `float` | `target_width_mm` | 联动: 修改时自动按比例更新 height |
 | `gr.Slider` | `slider_conv_height` | `float` | `60` | 10–400, step=1 | `target_height_mm` | `float` | — | 联动: 修改时自动按比例更新 width；不直接传入 converter，由 width + 图片比例推算 |
 | `gr.Slider` | `slider_conv_thickness` | `float` | `1.2` | 0.24–10.0, step=0.08 | `spacer_thick` | `float` | `spacer_thick` | 底板厚度 (mm) |
-| `gr.Slider` | `slider_conv_backing_infill` | `int` | `100` | 5–100, step=5 | `backing_infill_density_percent` | `int` | `backing_infill_density_percent` | 深层底板填充率；观赏面保护区固定为 100%，浮雕与拼图固定为 100% |
+| `gr.Slider` | `slider_conv_backing_infill` | `int` | `100` | 5–100, step=5 | `backing_infill_density_percent` | `int` | `backing_infill_density_percent` | 深层底板填充率；平面拼图保留用户选择，观赏面保护区固定为 100%，浮雕固定为 100% |
 | `gr.Radio` | `radio_conv_color_mode` | `str` | 从 `user_settings.json` 读取，fallback `"4-Color"` | `"BW (Black & White)"`, `"4-Color"`, `"6-Color (Smart 1296)"`, `"8-Color Max"`, `"Merged"` | `color_mode` | `Literal["BW (Black & White)","4-Color","6-Color (Smart 1296)","8-Color Max","Merged"]` | `color_mode` | `interactive=False`, `visible=False`; 由 LUT 自动检测设置 |
 | `gr.Radio` | `radio_conv_structure` | `str` | `"Double-sided"` | `"Double-sided"`, `"Single-sided"` | `structure_mode` | `Literal["Double-sided","Single-sided"]` | `structure_mode` | i18n 显示名不同，内部值固定为英文 |
 | `gr.Radio` | `radio_conv_modeling_mode` | `ModelingMode` | 从 `user_settings.json` 读取，fallback `ModelingMode.HIGH_FIDELITY` | `ModelingMode.HIGH_FIDELITY`, `ModelingMode.PIXEL`, `ModelingMode.VECTOR` | `modeling_mode` | `Literal["high-fidelity","pixel","vector"]` | `modeling_mode` | 切换时联动禁用/启用 cleanup、outline、cloisonné |

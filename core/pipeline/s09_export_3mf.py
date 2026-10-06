@@ -172,10 +172,6 @@ def run(ctx: dict) -> dict:
         "elefant_foot_compensation": "0",
         "sparse_infill_density": "100%",
         "sparse_infill_pattern": "zig-zag",
-        "nozzle_temperature": ["220"] * 8,
-        "bed_temperature": ["60"] * 8,
-        "filament_type": ["PLA"] * 8,
-        "print_speed": "100",
         "travel_speed": "150",
         "enable_support": "0",
         "brim_width": "5",
@@ -225,6 +221,7 @@ def run(ctx: dict) -> dict:
             slot_names=valid_slot_names,
             preview_colors=preview_colors,
             project_slot_names=slot_names,
+            material_types=ctx.get("material_types"),
             settings=print_settings,
             color_mode=color_mode,
             printer_id=ctx.get("printer_id", "bambu-h2d"),
@@ -246,6 +243,7 @@ def run(ctx: dict) -> dict:
             ),
             cover_source=ctx.get("cover_source_path") or ctx.get("image_path"),
             device_profile_id=ctx.get("device_profile_id") or None,
+            custom_3mf_template_id=ctx.get("custom_3mf_template_id") or None,
             build_plate_id=ctx.get("build_plate_id") or None,
             preserve_template_filament_slots=(
                 False

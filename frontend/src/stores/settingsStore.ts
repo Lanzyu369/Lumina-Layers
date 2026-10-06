@@ -81,6 +81,7 @@ export interface SettingsState {
   slicerSoftware: string;
   deviceProfileId: string;
   buildPlateId: string;
+  custom3mfTemplateId: string | null;
   buildPlateSelections: Record<string, string>;
   customSlicerPath: string;
   customSlicerId: string;
@@ -149,6 +150,7 @@ export interface SettingsActions {
   setPrinterModel: (id: string) => void;
   setSlicerSoftware: (id: string) => void;
   setDeviceProfileId: (id: string) => void;
+  setCustom3mfTemplateId: (id: string | null) => void;
   setBuildPlateForMachine: (machineProfileId: string, plateId: string) => void;
   setCustomSlicerPath: (path: string) => void;
   setCustomSlicerId: (id: string) => void;
@@ -188,6 +190,7 @@ export const DEFAULT_SETTINGS: SettingsState = {
   slicerSoftware: "BambuStudio",
   deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.4",
   buildPlateId: "",
+  custom3mfTemplateId: null,
   buildPlateSelections: {},
   customSlicerPath: "",
   customSlicerId: "",
@@ -326,6 +329,12 @@ export function deriveBackendDeviceSettingsPatch(
     settings.language === "zh" || settings.language === "en"
       ? settings.language
       : undefined,
+  );
+  setScalarIfFresh(
+    "custom3mfTemplateId",
+    typeof settings.custom_3mf_template_id === "string"
+      ? settings.custom_3mf_template_id || null
+      : settings.custom_3mf_template_id === null ? null : undefined,
   );
   setScalarIfFresh(
     "theme",
@@ -636,6 +645,13 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
         invalidateGeneratedArtifacts();
       },
 
+      setCustom3mfTemplateId: (id: string | null) => {
+        if (get().custom3mfTemplateId === id) return;
+        set({ custom3mfTemplateId: id });
+        invalidateGeneratedArtifacts({ preservePreviews: true });
+        void get().syncToBackend();
+      },
+
       setBuildPlateForMachine: (machineProfileId: string, plateId: string) => {
         const current = get();
         if (
@@ -811,6 +827,7 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
             slicer_software: state.slicerSoftware,
             device_profile_id: state.deviceProfileId,
             build_plate_id: state.buildPlateId,
+            custom_3mf_template_id: state.custom3mfTemplateId,
             build_plate_selections: state.buildPlateSelections,
             custom_slicer_path: state.customSlicerPath,
             custom_slicer_id: state.customSlicerId,

@@ -107,6 +107,7 @@ class ColorCardRequest(BaseModel):
     )
     printer_id: str = Field(DEFAULT_PRINTER_ID, description="Printer profile ID.")
     slicer: str = Field(DEFAULT_SLICER_ID, description="Slicer software ID.")
+    custom_3mf_template_id: str | None = None
     nozzle_size: str = Field("0.4", description="Nozzle size.")
     device_profile_id: str | None = Field(
         None,
@@ -148,6 +149,7 @@ async def generate_color_card(
         nozzle_size=body.nozzle_size,
         device_profile_id=body.device_profile_id,
         build_plate_id=body.build_plate_id,
+        custom_3mf_template_id=body.custom_3mf_template_id,
     )
 
     # 1. Session + cache validation

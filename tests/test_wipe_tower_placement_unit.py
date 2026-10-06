@@ -16,6 +16,7 @@ from core.wipe_tower_placement import (
     WipeTowerPlacementRequest,
     estimate_wipe_tower_depth,
     solve_wipe_tower_placement,
+    _tower_footprint_dimensions,
 )
 
 
@@ -69,6 +70,76 @@ def _assert_safe(result) -> None:
     assert result.model_outer_bounds.intersection_area(result.tower_outer_bounds) == pytest.approx(0.0)
     assert result.model_outer_bounds.width > 0
     assert result.model_outer_bounds.height > 0
+
+
+@pytest.mark.parametrize("extra_length", [0.0, 6.0, -6.0])
+def test_native_rib_tower_reserves_wall_overhang_without_scaling(extra_length) -> None:
+    request = replace(
+        _request(bed_size=(256.0, 256.0), model_size=(18.6, 13.2),
+                 tower_width=30.0, material_count=8, purge_volume=45.0,
+                 model_height=1.2),
+        nozzle_diameter=0.6,
+        tower_infill_spacing_ratio=1.5,
+        tower_rib_width=8.0,
+        tower_extra_rib_length=extra_length,
+    )
+    result = solve_wipe_tower_placement(request)
+    _assert_safe(result)
+    # Native diagonal ribs extend by half the positive extra length at each
+    # end and half their width sideways; reserve both outside the tower body.
+    margin = 3.0 + 2.0 + 4.0 + max(0.0, extra_length) / 2.0
+    assert result.tower_outer_bounds == result.tower_bounds.expanded(margin)
+    assert result.tower_outer_bounds.left >= 0.0
+    assert result.tower_outer_bounds.right <= 256.0
+    assert result.tower_outer_bounds.bottom >= 0.0
+    assert result.tower_outer_bounds.top <= 256.0
+    assert result.model_bounds.width == pytest.approx(18.6)
+    assert result.model_bounds.height == pytest.approx(13.2)
+
+
+def test_disabled_rib_wall_leaves_existing_rectangle_layout_unchanged() -> None:
+    request = _request(purge_volume=45.0)
+    assert solve_wipe_tower_placement(request) == solve_wipe_tower_placement(
+        replace(request, tower_rib_width=0.0, tower_extra_rib_length=100.0)
+    )
+
+
+def test_bambu_style_native_rib_tower_is_squared_before_placement() -> None:
+    request = replace(
+        _request(bed_size=(256, 256), model_size=(18.6, 13.2),
+                 tower_width=30, material_count=8, purge_volume=45,
+                 model_height=1.2),
+        nozzle_diameter=0.6, tower_infill_spacing_ratio=1.5,
+        tower_rib_width=8, tower_square_rib_body=True,
+    )
+    result = solve_wipe_tower_placement(request)
+    _assert_safe(result)
+    width, depth = _tower_footprint_dimensions(request, 30.0, 229.125)
+    assert width == pytest.approx(83.25)
+    assert depth >= 83.25
+    # Native Orca 2.4.2 X1 .6 readback from the same model: tower bbox relative
+    # to origin was [-2.933116, -2.951885, 60.215549, 58.41137]. The actual
+    # square body, not merely the configured 30 mm width, must fit on the bed.
+    assert result.tower_x + 60.215549 <= 256.0
+    assert result.tower_y + 58.41137 <= 256.0
+    assert result.tower_outer_bounds.right <= 256.0
+    assert result.tower_outer_bounds.top <= 256.0
+
+
+def test_zero_width_ribs_still_use_the_native_square_body() -> None:
+    request = replace(
+        _request(bed_size=(256, 256), model_size=(18.6, 13.2),
+                 tower_width=30, material_count=8, purge_volume=45,
+                 model_height=1.2),
+        nozzle_diameter=0.6, tower_infill_spacing_ratio=1.5,
+        tower_rib_width=0, tower_square_rib_body=True,
+    )
+    # Wall mode, not rib thickness, selects the native square-body algorithm.
+    assert _tower_footprint_dimensions(request, 30.0, 229.125)[0] == pytest.approx(83.25)
+    result = solve_wipe_tower_placement(request)
+    _assert_safe(result)
+    assert result.tower_bounds.width > 30.0
+    assert result.tower_outer_bounds.right <= 256.0
 
 
 def test_estimated_depth_decreases_when_long_strip_grows() -> None:

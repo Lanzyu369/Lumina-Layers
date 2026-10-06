@@ -262,6 +262,7 @@ export default function MaterialRecipeQueryPanel() {
         nozzle_size: settings.nozzleSize,
         device_profile_id: settings.deviceProfileId,
         build_plate_id: settings.buildPlateId,
+        custom_3mf_template_id: settings.custom3mfTemplateId,
       });
       if (!isCurrentRequest()) return;
       setSwatchDownloadUrl(response.download_url);

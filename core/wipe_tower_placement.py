@@ -118,6 +118,11 @@ class WipeTowerPlacementRequest:
     model_translation_locked: bool = False
     minimum_tower_footprint_width: float = 0.0
     minimum_tower_depth: float = 0.0
+    tower_rib_width: float = 0.0
+    tower_extra_rib_length: float = 0.0
+    tower_square_rib_body: bool = False
+    tower_preview_x_guard_enabled: bool = False
+    tower_preview_x_guard_margin: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -274,6 +279,29 @@ def _estimate_request_tower_depth(
     )
 
 
+def _tower_margin(
+    request: WipeTowerPlacementRequest,
+    width: float,
+    edge_clearance: float,
+) -> float:
+    """Reserve brim and the native diagonal rib envelope around the body."""
+    margin = max(0.0, request.tower_brim) + max(0.0, edge_clearance)
+    if request.tower_rib_width <= 0.0:
+        return margin
+    # Bambu/Orca WipeTower::plan_tower / generate_rib_polygon: two diagonal
+    # rectangles extend beyond the body by half their width and extra length.
+    # Native rib length may also reach the height-dependent minimum diagonal.
+    # Its unknown sliced body diagonal is >= width; this bounds that extension
+    # without assuming our conservative purge-depth estimate is the real depth.
+    half_rib_width = min(request.tower_rib_width, width / 2.0) / 2.0
+    minimum_diagonal = (
+        _minimum_depth_for_height(request.model_height) * math.sqrt(2.0)
+    )
+    extension = max(0.0, minimum_diagonal - width)
+    extension = max(0.0, extension + request.tower_extra_rib_length) / 2.0
+    return margin + half_rib_width + extension
+
+
 def _tower_footprint_dimensions(
     request: WipeTowerPlacementRequest,
     width: float,
@@ -281,6 +309,17 @@ def _tower_footprint_dimensions(
 ) -> tuple[float, float]:
     """Return the physical envelope reserved around native tower paths."""
 
+    if request.tower_square_rib_body:
+        # Bambu-style WipeTower::plan_tower_new (also used by Orca for Bambu
+        # printers) squares the purge area, ignoring the requested strip shape.
+        # Our depth already includes infill spacing; do not apply it twice.
+        line_width = max(0.1, request.nozzle_diameter) * 1.25
+        width = math.ceil(math.sqrt(width * depth) / line_width) * line_width
+        # The area estimate bounds the native squared body in both axes.
+        # Its width can exceed the slicer's actual width; recalculating depth
+        # at that larger width can then underestimate the real Y extent.
+        # Keep the square envelope as well as the recalculated path depth.
+        depth = max(width, _estimate_request_tower_depth(request, width))
     return (
         max(float(width), max(0.0, float(request.minimum_tower_footprint_width))),
         max(float(depth), max(0.0, float(request.minimum_tower_depth))),
@@ -705,7 +744,7 @@ def _build_result(
         tower_rotation,
     )
     tower_outer = tower_bounds.expanded(
-        max(0.0, request.tower_brim) + edge_clearance
+        _tower_margin(request, footprint_width, edge_clearance)
     )
     return WipeTowerPlacementResult(
         model_translation=translation,
@@ -756,6 +795,9 @@ def _layout_is_safe(
     if rect_allowed is None:
         rect_allowed = _RectAllowanceCache(request)
     edge_clearance = max(0.0, float(request.edge_clearance))
+    bed = _effective_bed_bounds(request)
+    preview_guard_enabled = bool(request.tower_preview_x_guard_enabled)
+    preview_guard_margin = max(0.0, float(request.tower_preview_x_guard_margin))
     collision_expansion = max(
         0.0,
         float(request.model_tower_clearance) - 2.0 * edge_clearance,
@@ -763,7 +805,14 @@ def _layout_is_safe(
     # Run the cheap overlap test before the polygon containment tests; all
     # three checks are pure, so the order does not change the answer.
     return (
-        result.model_outer_bounds.intersection_area(
+        (
+            not preview_guard_enabled
+            or bed is not None
+            and result.tower_x >= preview_guard_margin - _EPSILON
+            and result.tower_x + result.tower_width + preview_guard_margin
+            <= bed.right + _EPSILON
+        )
+        and result.model_outer_bounds.intersection_area(
             result.tower_outer_bounds.expanded(
                 collision_expansion
             )
@@ -832,6 +881,36 @@ def solve_wipe_tower_placement(
             reason="no_safe_layout_without_scaling_or_disabling_tower",
         )
 
+    # Snapmaker Orca 2.3.6 clamps the tower's X coordinate in its preview to
+    # the bed edges using configured width, brim, and a 1 mm pad. Match that
+    # single-axis adjustment before generic placement so opening a generated
+    # project does not silently rewrite its tower position.
+    preview_guard_enabled = bool(request.tower_preview_x_guard_enabled)
+    preview_guard_margin = max(0.0, float(request.tower_preview_x_guard_margin))
+    if bed is not None and preview_guard_enabled:
+        maximum_preview_guarded_x = (
+            bed.right - original.tower_width - preview_guard_margin
+        )
+        adjusted_preview_guarded_x = min(
+            max(original.tower_x, preview_guard_margin),
+            maximum_preview_guarded_x,
+        )
+        if abs(adjusted_preview_guarded_x - original.tower_x) > _EPSILON:
+            guarded_original = _build_result(
+                request,
+                translation=centered_translation,
+                tower_x=adjusted_preview_guarded_x,
+                tower_y=original.tower_y,
+                tower_width=original.tower_width,
+                tower_depth=original.tower_depth,
+                tower_rotation=original.tower_rotation,
+                adapted=True,
+                requires_manual_adjustment=False,
+                reason="adapted_native_preview_x_guard",
+            )
+            if _layout_is_safe(guarded_original, request, rect_allowed):
+                return guarded_original
+
     safe_candidates: list[_ScoredPlacement] = []
     fallback_candidates: list[WipeTowerPlacementResult] = []
     best_rank_by_orientation: dict[int, tuple[int, int]] = {}
@@ -849,10 +928,13 @@ def solve_wipe_tower_placement(
             model_margin = (
                 max(0.0, request.model_brim) + candidate_edge_clearance
             )
-            tower_margin = (
+            base_tower_margin = (
                 max(0.0, request.tower_brim) + candidate_edge_clearance
             )
-            max_horizontal_width = bed.width - 2.0 * tower_margin
+            max_horizontal_width = bed.width - 2.0 * _tower_margin(
+                request, max(2.0, bed.width - 2.0 * base_tower_margin),
+                candidate_edge_clearance,
+            )
             horizontal_dimensions: list[tuple[float, float]] = []
             if max_horizontal_width >= 2.0:
                 preferred_width = min(
@@ -878,7 +960,7 @@ def solve_wipe_tower_placement(
                 dimensions = (
                     horizontal_dimensions
                     if orientation_index == 0
-                    else _vertical_strip_dimensions(request, bed, tower_margin)
+                    else _vertical_strip_dimensions(request, bed, base_tower_margin)
                 )
                 for width_index, (width, depth) in enumerate(dimensions):
                     if not _width_can_still_win(
@@ -893,6 +975,9 @@ def solve_wipe_tower_placement(
                         width,
                         depth,
                     )
+                    tower_margin = _tower_margin(
+                        request, footprint_width, candidate_edge_clearance,
+                    )
                     if (
                         footprint_width + 2.0 * tower_margin > bed.width + _EPSILON
                         or footprint_height + 2.0 * tower_margin > bed.height + _EPSILON
@@ -903,9 +988,8 @@ def solve_wipe_tower_placement(
                         if clearance_index == 0 and side == "top":
                             perpendicular_margin = max(
                                 perpendicular_margin,
-                                max(0.0, request.tower_brim)
-                                + max(
-                                    0.0,
+                                _tower_margin(
+                                    request, footprint_width,
                                     float(request.preferred_top_edge_clearance),
                                 ),
                             )
@@ -948,6 +1032,23 @@ def solve_wipe_tower_placement(
                                 depth,
                                 0.0,
                             )
+                            position_reason = f"adapted_{side}"
+                            if preview_guard_enabled:
+                                maximum_preview_guarded_x = (
+                                    bed.right - width - preview_guard_margin
+                                )
+                                if maximum_preview_guarded_x < preview_guard_margin:
+                                    continue
+                                guarded_x = _clamp(
+                                    tower_x,
+                                    preview_guard_margin,
+                                    maximum_preview_guarded_x,
+                                )
+                                if abs(guarded_x - tower_x) > _EPSILON:
+                                    tower_x = guarded_x
+                                    position_reason = (
+                                        "adapted_native_preview_x_guard"
+                                    )
                             placeholder = _build_result(
                                 request,
                                 translation=centered_translation,
@@ -958,7 +1059,7 @@ def solve_wipe_tower_placement(
                                 tower_rotation=0.0,
                                 adapted=True,
                                 requires_manual_adjustment=False,
-                                reason=f"adapted_{side}",
+                                reason=position_reason,
                             )
                             fallback_candidates.append(placeholder)
                             if not rect_allowed(placeholder.tower_outer_bounds):
@@ -993,7 +1094,7 @@ def solve_wipe_tower_placement(
                                     tower_rotation=0.0,
                                     adapted=True,
                                     requires_manual_adjustment=False,
-                                    reason=f"adapted_{side}",
+                                    reason=position_reason,
                                 )
                                 if not _layout_is_safe(candidate, request, rect_allowed):
                                     continue

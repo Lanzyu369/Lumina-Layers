@@ -1974,7 +1974,7 @@ export default function BasicSettings() {
           step={BACKING_INFILL_DENSITY_STEP_PERCENT}
           unit="%"
           onChange={setBackingInfillDensityPercent}
-          disabled={enable_relief || puzzleEnabled}
+          disabled={enable_relief}
         />
       )}
 

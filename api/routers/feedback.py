@@ -427,6 +427,7 @@ class BugReportContext(BaseModel):
     active_session_ids: BugReportSessionIds
     printer_id: str | None = Field(default=None, max_length=128)
     slicer: str | None = Field(default=None, max_length=128)
+    custom_3mf_template_id: str | None = Field(default=None, max_length=128)
     nozzle_size: str | None = Field(default=None, max_length=16)
     device_profile_id: str | None = Field(default=None, max_length=256)
     build_plate_id: str | None = Field(default=None, max_length=128)
@@ -1235,6 +1236,19 @@ def _sanitize_bug_report_context_for_export(context: dict[str, Any]) -> dict[str
     return sanitized
 
 
+def _capture_custom_3mf_template(template_id: str) -> dict[str, Any]:
+    from core.custom_3mf_templates import load_template
+
+    try:
+        settings = load_template(template_id)
+        encoded = json.dumps(settings, ensure_ascii=False).encode("utf-8")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return {"status": "unavailable", "error_type": type(exc).__name__}
+    if len(encoded) > 256 * 1024:
+        return {"status": "too_large", "byte_length": len(encoded)}
+    return {"status": "captured", "settings": settings}
+
+
 @router.post(
     "/bug-report",
     response_model=BugReportResponse,
@@ -1359,6 +1373,10 @@ async def submit_bug_report(
     request_dump = _dump_bug_report_request(request)
     attachment_context_dump = deepcopy(request_dump.get("context") or {})
     context_dump = _sanitize_bug_report_context_for_export(attachment_context_dump)
+    if context_dump.get("custom_3mf_template_id"):
+        context_dump["custom_3mf_template_snapshot"] = _capture_custom_3mf_template(
+            context_dump["custom_3mf_template_id"]
+        )
 
     # Dedicated sanitization for ``advanced_params``. Pydantic's validator only
     # shape-checks the field (dict-or-null); the real depth/size enforcement

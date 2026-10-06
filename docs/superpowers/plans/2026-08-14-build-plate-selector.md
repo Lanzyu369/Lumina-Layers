@@ -66,14 +66,13 @@
 - Modify: `utils/merged_bambu_3mf_writer.py`
 - Modify: `tests/helpers_threemf_manifest.py`
 - Test: `tests/test_bambu_3mf_writer_unit.py`
-- Test: `tests/test_3mf_template_matrix_unit.py`
 - Test: `tests/test_puzzle_3mf_unit.py`
 
 - [ ] Add failing tests selecting a non-default plate and asserting project, model plate, and sidecar metadata.
 - [ ] Add a registry resolver that validates the ID against the selected machine and returns project/plate native values.
 - [ ] Apply the resolved values to `curr_bed_type`, plate `bed_type`, and supported sidecars.
 - [ ] Preserve template defaults when the registry has no plate data.
-- [ ] Run focused writer and matrix tests to PASS.
+- [ ] Run the focused writer and puzzle metadata tests to PASS.
 
 ### Task 5: Propagate through every export workflow
 

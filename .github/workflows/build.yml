@@ -36,6 +36,9 @@ jobs:
         echo "FULL_NAME=$FULL_NAME" >> $GITHUB_ENV
         echo "full_name=$FULL_NAME" >> $GITHUB_OUTPUT
 
+    - name: Prepare native 3MF wheelhouse
+      uses: ./.github/actions/prepare-3mf-native-wheels
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip

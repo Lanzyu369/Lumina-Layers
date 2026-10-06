@@ -70,6 +70,18 @@ def required_files() -> dict[str, bytes]:
     }
 
 
+def raw_zip_info(name: str) -> ZipInfo:
+    """Build a ZipInfo that stores ``name`` byte-exact on every platform.
+
+    ``ZipInfo(name)`` rewrites ``\\`` to ``/`` on Windows, so an archive built
+    from a plain string could never carry a backslash member there.
+    """
+    info = ZipInfo("placeholder")
+    info.filename = name
+    info.orig_filename = name
+    return info
+
+
 def write_raw_zip(
     tmp_path: Path,
     entries: list[tuple[str | ZipInfo, bytes]],
@@ -164,13 +176,13 @@ def test_valid_package_is_inspected_without_execution(tmp_path: Path) -> None:
     [
         ("../escape.txt", "unsafe archive path"),
         ("/absolute.txt", "unsafe archive path"),
-        ("folder\\escape.txt", "unsafe archive path"),
+        (raw_zip_info("folder\\escape.txt"), "unsafe archive path"),
         ("UI/index.html", "case-insensitive duplicate"),
     ],
 )
 def test_archive_paths_fail_closed(
     tmp_path: Path,
-    name: str,
+    name: str | ZipInfo,
     message: str,
 ) -> None:
     archive = write_raw_zip(

@@ -99,6 +99,8 @@ def build_surface_overlay_scene(
         ctx,
         _take_vector_scene_ownership=True,
     )
+    material_types = dict(ctx.get("material_types") or {})
+    material_types["surface_base"] = "PLA Basic"
     # This context is private to the model-surface request. Pattern building
     # has either transferred the native mesh arrays or materialized the voxel
     # pattern, so retaining converter analysis/cache state only inflates peak
@@ -115,6 +117,7 @@ def build_surface_overlay_scene(
         base_color=base_color,
         _take_pattern_ownership=True,
     )
+    overlay.scene.metadata["material_types"] = material_types
     if project_slot_names:
         overlay.scene.metadata[MODEL_SURFACE_PROJECT_SLOT_NAMES_KEY] = project_slot_names
         overlay.preview_colors.update(project_materials)

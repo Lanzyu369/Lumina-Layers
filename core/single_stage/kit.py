@@ -463,6 +463,23 @@ def generate_single_stage_kit(
             substrate_rgb,
             spec,
         )
+        substrate_tokens = {
+            _sanitize_token(substrate_id),
+            _sanitize_token(substrate_display_name),
+        }
+        substrate_entry = next(
+            (
+                entry for entry in palette
+                if any(
+                    candidate and _sanitize_token(candidate) in substrate_tokens
+                    for candidate in (entry.color_name, entry.color)
+                )
+            ),
+            None,
+        )
+        substrate_material = (
+            (substrate_entry.material if substrate_entry else None) or material_default
+        )
         # 无原图，封面走静默占位（不发 WARNING）
         export_scene_with_bambu_metadata(
             scene=scene,
@@ -490,6 +507,10 @@ def generate_single_stage_kit(
             device_profile_id=device_profile_id,
             build_plate_id=build_plate_id,
             cover_source=None,
+            material_types={
+                f"Base - {substrate_display_name}": substrate_material,
+                shared_entry.material: shared_entry.material,
+            },
         )
 
         manifest = {

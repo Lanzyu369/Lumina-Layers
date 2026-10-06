@@ -74,6 +74,8 @@ def _load_spec_namespace(monkeypatch) -> dict[str, object]:
     return runpy.run_path(
         str(ROOT / "lumina_studio.spec"),
         init_globals={
+            "SPEC": str(ROOT / "lumina_studio.spec"),
+            "SPECPATH": str(ROOT),
             "Analysis": fake_analysis,
             "PYZ": lambda *_args, **_kwargs: object(),
             "EXE": lambda *_args, **_kwargs: object(),

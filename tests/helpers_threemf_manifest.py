@@ -9,7 +9,6 @@ from pathlib import Path
 
 import trimesh
 
-from config import list_printer_profiles
 from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
 
 _CORE_NS = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
@@ -60,39 +59,6 @@ TEMPLATE_PROJECT_KEYS = (
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
-
-
-def supported_printer_slicer_pairs() -> list[tuple[str, str]]:
-    pairs: list[tuple[str, str]] = []
-    for profile in list_printer_profiles():
-        slicers: list[str] = []
-        if profile.template_file.startswith("bambu_"):
-            slicers.append("BambuStudio")
-        slicers.extend(profile.slicer_templates.keys())
-        seen: set[str] = set()
-        for slicer in slicers:
-            if slicer in seen:
-                continue
-            seen.add(slicer)
-            pairs.append((profile.id, slicer))
-    return pairs
-
-
-def load_expected_template_direct(
-    *,
-    printer_id: str,
-    slicer: str,
-    nozzle_size: str,
-) -> dict[str, object]:
-    from config import get_printer_profile
-
-    profiles_dir = repo_root() / "printer_profiles"
-    profile = get_printer_profile(printer_id)
-    template_name = profile.get_template_file(slicer, nozzle_size=nozzle_size)
-    template_path = profiles_dir / template_name
-    if not template_path.exists():
-        raise FileNotFoundError(f"Expected template missing: {template_path}")
-    return json.loads(template_path.read_text(encoding="utf-8"))
 
 
 def reserve_temp_3mf(prefix: str) -> Path:

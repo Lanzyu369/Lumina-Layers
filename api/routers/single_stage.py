@@ -2123,6 +2123,7 @@ async def generate_material_swatch(
         nozzle_size=payload.nozzle_size,
         device_profile_id=payload.device_profile_id,
         build_plate_id=payload.build_plate_id,
+        custom_3mf_template_id=payload.custom_3mf_template_id,
     )
     from api.file_bridge import pil_to_png_bytes
     from api.structured_logging import get_request_id
@@ -2149,6 +2150,7 @@ async def generate_material_swatch(
                 result_hex=recipe_req.result_hex,
                 layer_height_mm=float(recipe_req.layer_height_mm),
                 substrate=recipe_req.substrate,
+                material_types=[material.material_type for material in materials],
             )
         )
 

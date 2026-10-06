@@ -82,6 +82,56 @@ MACHINE_REGISTRY_ASSET_MEDIA_TYPES: dict[str, str] = {
 }
 
 
+@router.get("/3mf-templates", dependencies=[Depends(require_local_app_origin)])
+def list_custom_3mf_templates() -> dict:
+    """List saved 3MF template metadata. 列出已保存的 3MF 模板信息。"""
+    from core.custom_3mf_templates import list_templates
+
+    return {"templates": list_templates()}
+
+
+@router.post("/3mf-templates", dependencies=[Depends(require_local_app_origin)])
+async def import_custom_3mf_template(
+    file: UploadFile = File(...), name: str = Form(""), slicer: str | None = Form(None)
+) -> dict:
+    """Import printer settings from a 3MF. 从 3MF 导入打印机设置。"""
+    from core.custom_3mf_templates import import_template
+
+    try:
+        metadata = await run_in_threadpool(
+            import_template,
+            await file.read(), name.strip() or Path(file.filename or "Template").stem,
+            **({"slicer_hint": slicer} if slicer else {}),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log.info(
+        "Custom 3MF template imported",
+        extra={"event": "system_3mf_template_import_done", "template_id": metadata["id"]},
+    )
+    return metadata
+
+
+@router.delete(
+    "/3mf-templates/{template_id}", dependencies=[Depends(require_local_app_origin)]
+)
+def delete_custom_3mf_template(template_id: str) -> dict:
+    """Delete a saved 3MF template. 删除已保存的 3MF 模板。"""
+    from core.custom_3mf_templates import delete_template
+
+    try:
+        delete_template(template_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Custom 3MF template was not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log.info(
+        "Custom 3MF template deleted",
+        extra={"event": "system_3mf_template_delete_done", "template_id": template_id},
+    )
+    return {"status": "ok"}
+
+
 def _normalize_host(value: str | None) -> str | None:
     if value is None:
         return None
@@ -719,9 +769,9 @@ def get_printers() -> PrinterListResponse:
     existing_ids = {profile.id for profile in profiles}
     attached_registry_keys: set[tuple[str, str]] = set()
     for p in profiles:
-        # Build supported slicer list: default template → BambuStudio, plus slicer_templates keys
+        # Keep Bambu Studio first for profiles carrying the legacy Bambu label.
         slicers = []
-        # If template_file starts with "bambu_", default slicer is BambuStudio
+        # The legacy label identifies the default UI slicer; it is not a file path.
         if p.template_file.startswith("bambu_"):
             slicers.append("BambuStudio")
         slicers.extend(p.slicer_templates.keys())

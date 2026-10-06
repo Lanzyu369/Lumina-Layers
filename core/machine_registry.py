@@ -472,7 +472,7 @@ def load_machine_registry(path: str | Path) -> MachineRegistry:
                     bed_model=str(machine.get("bed_model", "")),
                     nozzle_size=str(nozzle["nozzle_size"]),
                     source_profile_name=str(nozzle["source_profile_name"]),
-                    template=str(nozzle["template"]),
+                    template=str(nozzle.get("template") or ""),
                     revision=str(nozzle["revision"]),
                     supported=bool(nozzle.get("supported", True)),
                     build_plates=machine_build_plates,

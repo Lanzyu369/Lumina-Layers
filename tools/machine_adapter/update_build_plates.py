@@ -10,44 +10,48 @@ from tools.machine_adapter.build_plates import (
     intersect_machine_build_plate_scopes,
     resolve_machine_build_plates,
 )
-from tools.machine_adapter.resolver import resolve_machine_model_settings
-
-
-def _load_templates(
-    registry_root: Path,
-    machine: dict[str, Any],
-) -> list[dict[str, Any]]:
-    templates: list[dict[str, Any]] = []
-    for nozzle in machine.get("nozzles") or []:
-        template = registry_root / str(nozzle["template"])
-        templates.append(json.loads(template.read_text(encoding="utf-8")))
-    return templates or [{}]
+from tools.machine_adapter.resolver import (
+    resolve_machine_model_settings,
+    resolve_machine_profiles,
+)
 
 
 def _resolve_machine_plate_scope(
     *,
-    registry_root: Path,
     source_root: Path,
     slicer_id: str,
     source_version: str,
     machine: dict[str, Any],
     plate_ids: set[str],
 ) -> tuple[list[str], str]:
+    nozzle_profiles = {
+        profile.name: profile
+        for profile in resolve_machine_profiles(
+            root=source_root,
+            vendor_key=str(machine.get("vendor_key") or ""),
+        )
+    }
     model_settings = resolve_machine_model_settings(
         root=source_root,
         vendor_key=str(machine.get("vendor_key") or ""),
         printer_model=str(machine.get("display_name") or ""),
     )
-    resolutions = [
-        resolve_machine_build_plates(
+    resolutions = []
+    for nozzle in machine.get("nozzles") or []:
+        source_name = str(nozzle.get("source_profile_name") or "")
+        profile = nozzle_profiles.get(source_name)
+        if profile is None:
+            raise ValueError(
+                "Native source profile is missing while resolving build plates: "
+                f"{slicer_id}/{source_name}"
+            )
+        resolutions.append(resolve_machine_build_plates(
             slicer_id=slicer_id,
-            settings={**model_settings, **template},
+            settings={**model_settings, **profile.settings},
             available_plate_ids=plate_ids,
             source_version=source_version,
             machine_profile_id=str(machine.get("machine_profile_id") or ""),
-        )
-        for template in _load_templates(registry_root, machine)
-    ]
+        ))
     return intersect_machine_build_plate_scopes(resolutions)
 
 
@@ -56,9 +60,9 @@ def update_registry_build_plates(
     registry_root: Path,
     source_roots: dict[str, Path],
 ) -> None:
-    """Refresh neutral selector artwork without regenerating machine templates.
+    """Refresh neutral selector artwork without touching native project sources.
 
-    在不重新生成机器模板的前提下刷新中性打印板选择器图片。
+    刷新中性打印板选择器图片，不修改原生项目来源。
     """
 
     registry_path = registry_root / "registry.json"
@@ -81,7 +85,6 @@ def update_registry_build_plates(
         plate_ids = {str(plate["id"]) for plate in build_plates}
         for machine in slicer["machines"]:
             supported, default = _resolve_machine_plate_scope(
-                registry_root=registry_root,
                 source_root=source_root,
                 slicer_id=slicer_id,
                 source_version=str(slicer["source_version"]),

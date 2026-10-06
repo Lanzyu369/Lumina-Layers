@@ -2,361 +2,187 @@
 
 ## Purpose
 
-This document describes how Lumina Studio exports slicer-specific 3MF metadata,
-how native nozzle variants are selected, and how to verify that an
-exported 3MF matches the intended template.
+This guide describes the current 3MF export boundary and where its configuration lives.
+Lumina supplies selected device/material facts, geometry, layout, and explicit product
+process values. FatCat composes slicer project metadata; the patched `neroued-3mf`
+writer writes the final package once.
 
-本文说明 Lumina Studio 如何导出切片器相关的 3MF 元数据、如何选择
-原生喷嘴模板，以及如何验证导出的 3MF 是否与目标模板一致。
+本文说明当前 3MF 导出边界及配置归属。Lumina 提供用户选择的设备和材料事实、几何、
+布局及明确的产品工艺值；FatCat 合成切片器项目元数据，补丁版 `neroued-3mf` 单次写出最终包。
 
-## Scope
+## Ownership
 
-The current export stack covers all printer/slicer combinations registered in
-`config.py`.
+- **FatCat** owns stable native machine/nozzle identities, native source data, material
+  and process composition rules, and slicer-specific package metadata.
+- **Lumina** owns the device picker and its registry/assets, user material selection,
+  geometry/layout, and explicit Lumina process intent. It does not read FatCat's
+  private package files.
+- **neroued-3mf** owns the one final 3MF package write.
 
-当前导出链路覆盖 `config.py` 中已注册的全部机型/切片器组合。
+FatCat is distributed as `fatcat-metadata`, imported as `fatcat_metadata`, version
+`0.1.0`. Lumina builds from the public
+[`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata) root
+project at source revision `9d77c6860cf7520f9a67037e15f7c2ae44ffa803` and pins
+the writer contract in
+`scripts/fatcat_packaging_contract.py`; build and installation steps are in
+[the desktop setup guide](desktop-electron.md).
 
-At the time of writing:
+FatCat 发行包名为 `fatcat-metadata`，导入名为 `fatcat_metadata`，版本固定为 `0.1.0`。
+Lumina 从公开仓库
+[`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata) 的根项目构建，
+源码提交固定为 `9d77c6860cf7520f9a67037e15f7c2ae44ffa803`，并在
+`scripts/fatcat_packaging_contract.py` 维护 writer 合同；构建与安装步骤见
+[桌面环境指南](desktop-electron.md)。
 
-- 30 printer profiles are registered
-- 41 base metadata templates exist under `printer_profiles/`
-- 34 sibling `*_0_2.json` templates exist for `0.2` nozzle exports
-- Flashforge AD5X / Creator 5 / Creator 5 Pro / Guider4 / Guider4 Pro provide
-  native `0.25` / `0.4` templates for Flash Studio Desktop
-- Flashforge Guider 3 Ultra provides a native `0.4` template
-- QIDI Q2 / Q2C / X-Max 4 provide native `0.2` / `0.4` templates for
-  QIDI Studio; X-Plus 5 provides its native `0.4` template
+The current source pin includes Bambu Studio 02.08.02.61, OrcaSlicer 2.4.2,
+QIDI Studio 02.07.02.60, ElegooSlicer 1.5.3.5, Anycubic Slicer Next macOS
+2.0.0.3, Flash Studio 1.7.18, and Snapmaker Orca 2.4.0 metadata.
+Native process defaults supply specific printing speeds. Lumina no longer sends
+the historical `print_speed` placeholder, which has no reviewed FatCat mapping.
+Explicit unsupported overrides are rejected; they are not silently dropped.
+Either first-layer height alias replaces both product defaults, while conflicting
+explicit aliases still produce an error. Saved user-template settings remain opaque
+source data rather than being reinterpreted as new process overrides.
 
-## Core Files
+当前源码固定值包含上述七种软件的元数据版本。具体打印速度来自原生工艺配置，
+Lumina 不再发送没有经过映射核对的历史 `print_speed` 占位值；明确请求的不支持
+参数仍会报错，不会静默忽略。明确指定任一首层高度名称会替换默认值；两个名称
+下明确提供矛盾值时仍会报错。用户模板中的设置继续作为原始来源数据保留，
+不会被重新解释成新的工艺修改请求。
 
-- `machine_registry/`
-  Generated Machine Adapter V2 registry and slicer-native metadata templates.
-  For upgrade/update operations, use `docs/machine-adapter-v2-maintenance.md`
-  as the maintenance checklist.
-- `config.py`
-  Resolves printer profiles, supported slicers, and nozzle-size-aware template paths.
-- `printer_profiles/*.json`
-  Checked-in metadata templates. Base files are treated as `0.4` truth; sibling
-  `*_0_2.json` files are the `0.2` variants.
-- `utils/bambu_3mf_writer.py`
-  Loads the selected template and builds the embedded 3MF metadata payloads.
-- `core/pipeline/s09_export_3mf.py`
-  Raster export stage that forwards `printer_id`, `slicer`, and `nozzle_size`
-  to the writer.
-- `api/routers/converter/generate.py`
-  Receives the frontend generate request and threads the metadata selectors into
-  worker params.
-- `api/routers/slicer.py`
-  Launches the slicer against an isolated temporary copy so the canonical file
-  in `output/models/` is not mutated by the slicer.
-- `scripts/derive_nozzle_0_2_templates.py`
-  Deterministic derivation script for the `*_0_2.json` template set.
-- `scripts/verify_3mf_template_matrix.py`
-  Full matrix verifier over all supported printer/slicer/nozzle combinations.
+## Current Selection and Composition
 
-## Template Selection
+Lumina maps its selected registry entry to FatCat's public native-source catalog by
+exact slicer, source profile name, and nozzle identity. The resulting stable machine
+and nozzle identifiers, requested plate, selected materials, and explicit process
+values are passed to FatCat. No similar-family machine or project snapshot is used as
+a built-in fallback.
 
-3MF metadata selection is driven by this tuple:
+- Built-in single exports use FatCat's installed native-source composer.
+- Saved user project templates keep the existing explicit-project composer and retain
+  their unknown settings; they do not need an available built-in process preset.
+- Merged exports pass the actual source projects to FatCat's explicit-project composer.
+  Matching preset IDs do not authorize replacing source values: user-edited temperatures,
+  flow settings, and unknown keys remain source data.
+- Wipe-tower placement and object layout are computed by Lumina and passed explicitly
+  to FatCat for metadata application.
 
-```text
-(printer_id, slicer, nozzle_size)
-```
+Lumina resolves the picker entry through FatCat's public
+`native_project_source_catalog(slicer_id)` binding. Built-in project composition uses
+`compose_project_settings(request_json)`; user projects and merged source projects use
+the existing explicit two-argument form. C++ consumers use the same packaged source
+catalog and built-in composer through a public packaged data root. The existing
+four-argument explicit-source composer remains supported.
 
-Resolution flow:
+**Snapmaker U1 compatibility source.** OrcaSlicer 2.4.2 has an exact native U1 0.4
+machine source, but its native process is unavailable. The complete native catalogue
+contains `Snapmaker PLA @U1`, whose textured plate temperature is zero.
+The separate declared Snapmaker PLA default only lists A250/A350 as compatible. FatCat packages
+one complete Orca 2.2.4 compatibility project and selects it through the same
+built-in source composer. Hardware comes from 2.4.2; process and the real
+Snapmaker PLA Basic @U1 material retain their 2.2.4 project settings, including
+65 C textured plate and 220 C nozzle temperatures for the actual default Textured PEI plate. The result records both
+`process_source` and `material_source` provenance. Lumina does not store or
+probe a compatibility file or select a special machine path.
 
-1. `config.get_printer_profile(printer_id)` resolves the canonical printer profile.
-2. `PrinterProfile.get_template_file(slicer, nozzle_size)` maps the tuple to a
-   concrete template filename under `printer_profiles/`.
-3. `utils.bambu_3mf_writer.load_printer_template(...)` loads and caches that JSON.
-4. `BambuStudio3MFWriter._build_project_settings_bytes()` uses the loaded
-   template as the base project settings payload.
+**Snapmaker U1 兼容来源。** OrcaSlicer 2.4.2 提供精确的 U1 0.4 机器来源，但没有可用的原生工艺来源。完整材料目录中的 Snapmaker PLA @U1 纹理板温度为 0，
+不能用于所选纹理板。
+机器声明的 Snapmaker PLA 默认材料仅兼容 A250/A350。
+FatCat 安装包保存来自 Orca 2.2.4 的完整兼容项目，由同一内置来源合成入口选择。
+硬件使用 2.4.2 来源；工艺及实际 Snapmaker PLA Basic @U1 材料保留 2.2.4 项目原值，
+包括纹理板 65°C、喷嘴 220°C。结果同时记录 `process_source` 和 `material_source`。Lumina 不保存或探测
+兼容文件，也不选择机型特例路径。
 
-Important:
+**Flat puzzle backing.** Ordinary flat puzzles accept the selected sparse backing
+infill and base layer-height modifier. Workers receive both values. The shared
+merge path retains each source's Z ranges and remaps object/extruder identities;
+viewing-surface protection stays at 100% while deep backing uses the chosen
+density. Actual relief geometry still requires 100% backing.
 
-- `0.4` remains the base template truth.
-- `0.2` always uses a checked-in sibling `*_0_2.json`.
-- A slicer-native size explicitly declared by a printer profile is preserved;
-  Flashforge `0.25` therefore selects `*_0_25.json` instead of being rounded
-  into the legacy `0.2` slot.
-- Flash Studio profiles are selected from its formal vendor `machine_list`, not
-  by scanning every JSON left in the install directory. Only native presets at
-  or below Lumina's `0.4` mm boundary are bundled; same-diameter standard and HF
-  Guider4 presets are de-duplicated in favor of the standard preset.
-- QIDI Studio profiles are bounded by the formal `Q Series`, `X 4 Series`, and
-  `X 5 Series` manifests. Lumina exposes the four models backed by supplied
-  native 3MF fixtures and keeps only native nozzle presets at or below `0.4` mm.
-- `supported_nozzle_sizes` is exposed for every currently supported printer.
+**平面拼图底板。** 普通平面拼图保留用户选择的稀疏底板填充率和底板层高修改器。
+Worker 接收两项参数，共用合并路径保留源 Z 区间并映射对象和挤出机身份。
+观赏面保护区仍为 100%，深层底板使用所选填充率；实际浮雕几何仍要求 100%。
+单块只使用全局调色板中的部分材料时，仅提供实际源槽位；缺失全局选择由 FatCat
+通用来源合成入口补齐，用户材料温度、流量、工艺及未知字段继续取自实际源项目。
 
-## Metadata Package Layout
+## User Project Templates
 
-The writer produces a core 3MF plus slicer-specific metadata sidecars.
+In **Settings → Printer & Slicer → 3MF project template**, select the slicer that
+saved your single-plate project, import its `.3mf`, and select a matching printer
+and nozzle. The imported template is selected automatically. Choose **Use built-in
+settings** to stop using it; **Delete template** removes the local saved settings.
+FatCat validates and imports the project settings through the existing SDK entry;
+Lumina stores them without copying the source geometry or adding another parser.
 
-Common files:
+Image, vector, material-archive, large-format and model-surface exports pass the
+selected template through the common writer. Batch, puzzle, calibration and swatch
+generation reject a selected custom template explicitly; select built-in settings
+for those workflows. A missing template or hardware/slicer mismatch is an error,
+not permission to replace it with built-in settings.
 
-- `3D/3dmodel.model`
-- `3D/_rels/3dmodel.model.rels`
-- `Metadata/project_settings.config`
-- `Metadata/model_settings.config`
-- `Metadata/slice_info.config`
-- preview PNG placeholders under `Metadata/`
+Templates retain global tuning, including speed, temperature,
+flow, retraction and cooling. Lumina applies its geometry-related layer, line-width,
+wall, shell and infill values. Tower handling follows the automatic placement
+option. Material slot tables are preserved or compacted according to the workflow.
+Source geometry, per-object tuning and modifiers are not imported.
 
-Family-specific rules:
+Template selection is saved in local and backend settings and in converter recipes.
+Recipes carry a **device-local ID**, not the template file: on another device,
+import the original project and select the new local template. The UI keeps an
+unavailable selection visible instead of silently clearing it. Bug reports capture
+the saved settings when available (up to 256 KiB); the reproduction loader does not
+automatically reinstall that snapshot as a local template.
 
-- `BambuStudio`
-  Includes `Metadata/filament_sequence.json` and `Metadata/cut_information.xml`.
-- `OrcaSlicer`
-  Omits Bambu-only aux sidecars.
-- `SnapmakerOrca`
-  Omits Bambu-only aux sidecars.
-- `ElegooSlicer`
-  Omits Bambu-only aux sidecars and uses the Elegoo client-name/version stamp.
-- `AnycubicSlicerNext`
-  Uses `Metadata/custom_gcode_per_layer.xml` instead of Bambu aux sidecars.
-- `FlashStudio`
-  Omits Bambu-only aux sidecars, uses the native BBL client header, and does
-  not emit an `OrcaSlicer-Version` tag.
-- `QIDIStudio`
-  Uses the native QDT client header, retains `filament_sequence.json` and
-  `cut_information.xml`, emits `plate_1.json`, and uses QIDI package-cover
-  relationship URIs.
+在 **设置 → 打印与切片 → 3MF 项目模板** 中，先选择保存原项目的切片软件，
+导入单盘 `.3mf` 项目，并选择匹配的打印机和喷嘴。导入后自动选中模板；切换到
+**使用内置配置** 可停用，**删除模板** 删除本机保存的设置。项目由 FatCat 的现有
+入口校验和导入，Lumina 仅保存配置，不复制原模型，也不另建元数据解析器。
 
-## Nozzle Variant Rules
+图像、矢量、材料档案、大幅分块及模型覆面导出使用同一个 writer 接收模板。
+批量、拼图、校准和色块生成暂不支持自定义模板，会明确拒绝；请先切回内置配置。
+模板缺失或机型、喷嘴、软件不匹配时会报错，不会静默替换成内置配置。
 
-### General
+模板保留速度、温度、流量、回抽、冷却等全局调校，耗材槽表按生成流程保留或收紧；Lumina 根据模型需要
+覆盖层高、线宽、墙层、顶底壳层及填充率，擦料塔遵循自动摆放选项。
+原模型、原模型局部设置和修改器不导入。
 
-The nozzle variant must affect both printer identity and process parameters.
+模板选择会保存到本机、后端设置和转换分享配方。配方只带本机模板 ID，不携带
+模板文件；换设备后需要导入原项目并重新选择。不可用的选择会保留并提示。
+错误报告会尽力保存不超过 256 KiB 的模板设置快照，但复现加载器暂不自动安装该快照。
 
-喷嘴尺寸不仅要影响打印机身份字段，还必须影响工艺参数字段。
+## Maintained Files
 
-Minimum required `0.2` signals include:
+- `utils/fatcat_metadata.py`: public catalog lookup and the thin Lumina-to-FatCat adapter.
+- `utils/bambu_3mf_writer.py`: single export, explicit user-template path, and final package writing.
+- `utils/merged_bambu_3mf_writer.py`: source-project-preserving merged export.
+- `core/machine_process_overlay.py`: explicit Lumina product process values; it does not load
+  machine templates. The old `apply_lumina_process_overlay` name remains a compatibility
+  wrapper; new export code passes explicit process values directly.
+- `machine_registry/registry.json` and its plate assets: user-facing device choices and UI facts.
+- `tools/machine_adapter/`: refreshes Lumina's picker registry from explicit local slicer
+  sources; it does not produce 3MF project templates.
+- FatCat's own `native_project_sources/` and target contracts: maintained in the FatCat
+  repository and queried through its public Python/C++ entry points.
 
-- `printer_settings_id`
-- `printer_variant`
-- `nozzle_diameter`
-- `default_print_profile`
-- `print_settings_id`
-- `initial_layer_line_width`
-- `outer_wall_line_width`
-- `inner_wall_line_width`
-- `top_surface_line_width`
-- `sparse_infill_line_width`
-- `internal_solid_infill_line_width`
-- `support_line_width`
-- `line_width`
+## Package Inspection
 
-### H2 Family Official Process Presets
-
-For Bambu H2-family printers, the `0.2` templates must align with official
-system process preset names that Bambu Studio can recognize directly.
-
-当前已对齐的官方 `0.2` process preset 名称：
-
-- `bambu-h2d`
-  `0.08mm Extra Fine @BBL H2D 0.2 nozzle`
-- `bambu-h2c`
-  `0.08mm High Quality @BBL H2C 0.2 nozzle`
-- `bambu-h2s`
-  `0.08mm High Quality @BBL H2S 0.2 nozzle`
-- `bambu-h2d-pro`
-  `0.08mm Extra Fine @BBL H2DP 0.2 nozzle`
-
-Important details:
-
-- `H2D Pro` uses the official short code `H2DP` inside process / filament preset
-  names, even though the machine name remains `Bambu Lab H2D Pro 0.2 nozzle`.
-- Using a custom `print_settings_id` or a stale `inherits_group` string can lead
-  to Bambu Studio showing locked `0.4`-style line widths even when the raw
-  template line-width fields are already `0.22`.
-
-## Bambu Client Version Stamps
-
-The `Application` metadata and `Metadata/slice_info.config` client-version stamp
-must match the target family.
-
-Rules currently used by the writer:
-
-- Bambu `0.2` for non-H2 family: `02.04.00.70`
-- Bambu `0.4`: `02.05.00.66`
-- Bambu H2 family `0.2`: `02.05.00.66`
-- Orca: `BambuStudio-2.3.2-rc2`
-- Snapmaker: `SnapmakerOrca-02.02.49.02`
-- Elegoo: `ElegooSlicer-1.3.2.9`
-- Anycubic: `BambuStudio-1.3.9.4`
-- Flash Studio Desktop: `BambuStudio-2.3.2`
-- QIDI Studio: `QIDIStudio-02.07.02.60`
-
-Flash Studio keeps three versions separate:
-
-- desktop product version: `1.7.11` (installation detection/display only)
-- bundled Flashforge profile version: `02.01.01.00` (`source_version`)
-- native 3MF project/Application version: `2.3.2`
-- native `X-BBL-Client-Version`: empty string
-
-Its native 3MF identity is intentionally Bambu-compatible: `Application` is
-`BambuStudio-2.3.2`, `project_settings.version` is `2.3.2`, and
-`slice_info.config` keeps `X-BBL-Client-Version` empty. Do not rewrite these
-as `FlashStudio-*` or add Orca-only version tags. Native Flash Studio packages
-also contain `Metadata/plate_1.json`, a 128×128 `Metadata/plate_1_small.png`,
-and a 32-character UUID in the slice header. A manually configured and saved
-multi-material project additionally confirms that Lumina's three
-`Auxiliaries/.thumbnails/*.png` cover assets and their package relationships
-must be retained alongside the Flash-specific plate sidecars. Flash project
-filament arrays are contracted to the active project palette rather than a
-generic eight-slot template. These are format metadata only;
-Lumina remains authoritative for layer height, line widths, wall generation,
-temperatures, speeds, infill, support, and brim.
-
-QIDI Studio `02.07.02.60` uses the same value for its installed profile bundle,
-`Application`, project settings version, and `X-QDT-Client-Version`. Its native
-model metadata also contains `QIDIStudio:3mfVersion=1` and
-`OrcaSlicer=2.1.0.14`. The four supplied saved projects establish the supported
-machine boundary: Q2, Q2C, X-Max 4, and X-Plus 5. Q2, Q2C, and X-Max 4 expose
-`0.2` / `0.4`; X-Plus 5 exposes `0.4` only. The QIDI-specific fields are routing
-and package metadata; Lumina remains authoritative for process values.
-All four native reference projects explicitly disable the skirt
-(`skirt_loops=0`) and draft shield; Lumina writes those fields explicitly so
-QIDI Studio cannot fall back to a local process default that enables them.
-
-The H2-family `0.2` branch intentionally uses the newer Bambu client stamp
-because those machine/process presets are aligned to the newer H2 system family.
-
-## Frontend and API Propagation
-
-The frontend must send the selected metadata tuple explicitly in every 3MF-producing flow:
-
-- `printer_id`
-- `slicer`
-- `nozzle_size`
-
-Relevant path:
-
-1. `frontend/src/stores/settingsStore.ts`
-   Stores the user-facing printer / slicer / nozzle selection.
-2. `frontend/src/App.tsx`
-   Backfills missing local device settings from `/api/system/settings`.
-3. `frontend/src/stores/converter/store.ts`
-   Injects `printer_id`, `slicer`, and `nozzle_size` into generate requests.
-4. `frontend/src/stores/fiveColorStore.ts`
-   Injects the same tuple into recipe swatch 3MF generation.
-5. `api/routers/converter/generate.py`
-   Copies those fields into worker params without reading them from session state.
-6. `core/pipeline/s09_export_3mf.py`
-   Passes the tuple to `export_scene_with_bambu_metadata(...)`.
-
-When printer / slicer / nozzle selection changes, any already-generated 3MF artifact
-must be invalidated on the frontend so stale files cannot be reopened or redownloaded
-under a new device tuple.
+For a generated 3MF, inspect `Metadata/project_settings.config`,
+`Metadata/model_settings.config`, `Metadata/slice_info.config`, and `3D/3dmodel.model`.
+Check the selected machine/nozzle identity, source material identities and array shapes,
+explicit process values, application/client version, and slicer-specific sidecars. For a
+merge, compare edited source values and unknown fields with the final project settings.
+For U1 0.4, confirm the retained project identifies Snapmaker U1 0.4 and keep its
+OrcaSlicer 2.2.4 process and material provenance explicit. This branch uses the existing source-project
+composer; it must not be reported as a project composed from an OrcaSlicer 2.4.2 native
+process or material preset.
 
 ## Slicer Launch Isolation
 
-Some slicers may rewrite a 3MF file after opening it.
+Some slicers may rewrite a 3MF after opening it. `/api/slicer/launch` opens a temporary
+copy under `output/temp/`, so the canonical export under `output/models/` is not mutated.
 
-部分切片器在打开 3MF 后可能会直接改写文件。
-
-To keep `output/models/` as the canonical export artifact:
-
-- `/api/slicer/launch` now creates a temporary launch copy under `output/temp/`
-- the slicer opens that copy
-- the original file under `output/models/` remains unchanged
-
-This prevents post-launch metadata drift from corrupting the canonical export.
-
-## Verification Workflow
-
-### Fast automated checks
-
-Use focused tests when changing template selection, writer behavior, or launch isolation:
-
-```powershell
-python -m pytest tests/test_printer_profile_unit.py -q
-python -m pytest tests/test_bambu_3mf_writer_unit.py -q
-python -m pytest tests/test_lut_api_unit.py tests/test_color_mode_propagation_unit.py -q
-python -m pytest tests/test_slicer_unit.py tests/test_slicer_properties.py -q
-```
-
-### Full metadata matrix
-
-```powershell
-python scripts/verify_3mf_template_matrix.py
-```
-
-This verifies:
-
-- every supported `(printer_id, slicer, nozzle_size)` export
-- canonical family `Application` and slice-header fields
-- sidecar presence rules
-- selected project-settings subset against the chosen template
-
-### Manual inspection
-
-For one exported file:
-
-1. Open the `.3mf` as a ZIP archive.
-2. Inspect:
-   - `Metadata/project_settings.config`
-   - `Metadata/slice_info.config`
-   - `3D/3dmodel.model`
-3. Compare the target fields against the intended template JSON under
-   `printer_profiles/`.
-
-Suggested Python snippet:
-
-```python
-import ast, json, re, zipfile
-from pathlib import Path
-
-three_path = Path("output/models/example.3mf")
-template_path = Path("printer_profiles/bambu_h2d_0_2.json")
-
-with zipfile.ZipFile(three_path) as zf:
-    project = ast.literal_eval(zf.read("Metadata/project_settings.config").decode("utf-8"))
-    model_xml = zf.read("3D/3dmodel.model").decode("utf-8", errors="ignore")
-
-template = json.loads(template_path.read_text(encoding="utf-8"))
-app = re.search(r'<metadata name="Application">([^<]+)</metadata>', model_xml).group(1)
-
-for key in [
-    "print_settings_id",
-    "line_width",
-    "outer_wall_line_width",
-    "top_surface_line_width",
-    "internal_solid_infill_line_width",
-]:
-    print(key, project.get(key), template.get(key))
-
-print("Application:", app)
-```
-
-## Known Debugging Pitfalls
-
-- A file may look correct before slicer launch and wrong after launch if the
-  slicer rewrites the same path.
-- If Bambu Studio shows locked `0.42` line widths while the raw template fields
-  are `0.22`, check the process preset identity fields first:
-  - `print_settings_id`
-  - `inherits_group`
-  - `default_print_profile`
-- If frontend-generated files differ from direct API exports, inspect the actual
-  request body sent from the frontend store, especially:
-  - `printer_id`
-  - `slicer`
-  - `nozzle_size`
-  - `color_mode`
-
-## Maintenance Rules
-
-- When adding a new printer or slicer family, update:
-  - `config.py`
-  - `printer_profiles/`
-  - frontend settings exposure
-  - verification tests
-- When deriving a new `0.2` template, prefer official system preset names over
-  custom labels if the slicer family is known to key off preset identity.
-- Re-run the metadata matrix after any change to:
-  - template JSON
-  - writer family stamps
-  - launch behavior
-  - frontend request propagation
+部分切片器打开 3MF 后可能会改写文件。`/api/slicer/launch` 会打开 `output/temp/` 下的临时副本，
+`output/models/` 中的规范导出文件不会因此被改写。
 
 ## Base-plate Layer-Height Modifier / 底板层高修改器
 
@@ -543,3 +369,20 @@ Bambu-family slicer IDs (see `frontend/src/utils/settingsOptionIds.ts`):
   — UI gating by slicer family + translation assertions
 - `frontend/src/__tests__/settingsOptionIds.test.ts` — `isBambuFamilySlicer`
   canonicalization
+
+**Native material and plate support.** The bundled catalogue includes complete
+machine-compatible material candidates, resolved through their unchanged native
+inheritance. Selection also checks the actual active plate, including an omitted
+plate's source default. Native zero plate temperatures mean unsupported; they
+are not replaced with invented temperatures. The test matrix checks both
+supported compositions and precise rejection of unsupported active combinations.
+Imported unused material tails retain their source settings even when their
+material would be unsupported as an active native selection on that plate.
+Exact nondefault SnapmakerOrca nozzle sources and FlashStudio 0.25 mm use their
+actual compatible native materials; OrcaSlicer 2.4.2 U1 0.6 mm has no PLA source.
+
+**Legacy merged calls.** Calls that omit `metadata_target` infer their exact
+existing machine/nozzle identity from the source project before using the same
+FatCat export path. An omitted plate keeps the imported project's actual plate.
+Structural relationships and content types follow the current FatCat dialect;
+geometry, UUID, Z-range, process and material preservation remain checked.

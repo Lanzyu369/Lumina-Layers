@@ -30,6 +30,14 @@ function validateConverterShape(recipe: Record<string, unknown>, version: number
     throw new Error("Invalid recipe: malformed puzzle section");
   }
   const base = converter.base as Record<string, unknown>;
+  const device = converter.device as Record<string, unknown>;
+  if (
+    device.custom_3mf_template_id !== undefined &&
+    device.custom_3mf_template_id !== null &&
+    typeof device.custom_3mf_template_id !== "string"
+  ) {
+    throw new Error("Invalid recipe: custom 3MF template ID");
+  }
   if (
     !isRecord(base.lut) ||
     typeof base.lut.name !== "string" ||

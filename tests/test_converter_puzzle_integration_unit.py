@@ -46,6 +46,19 @@ def puzzle_harness():
     store.clear_all()
 
 
+@pytest.fixture(autouse=True)
+def stub_metadata_reads_for_stub_worker_packages(monkeypatch):
+    """These route tests use sentinel bytes, not real source packages.
+
+    Real source interpretation and assembly are exercised separately by the
+    writer integration tests; keep these worker scheduling tests independent.
+    """
+    monkeypatch.setattr(puzzle_router, '_batch_extract_slots_from_3mf', lambda *args, **kwargs: [
+        {'slot_id': 0, 'slot_name': 'White', 'preview_color': '#FFFFFF', 'material_id': 'PLA'},
+    ])
+    monkeypatch.setattr(puzzle_router, 'read_wipe_tower_placement_warnings', lambda path: [])
+
+
 def _capture_puzzle_logger(caplog: pytest.LogCaptureFixture) -> logging.Logger:
     logger = logging.getLogger("lumina.api.routers.converter.puzzle")
     logger.addHandler(caplog.handler)
@@ -371,7 +384,7 @@ class TestGeneratePuzzleCanary:
         target_logger = _capture_puzzle_logger(caplog)
         try:
             with patch(
-                "api.routers.converter.puzzle.assemble_puzzle_3mf",
+                "api.routers.converter.puzzle.assemble_puzzle_3mf_fatcat",
                 side_effect=_assemble_stub,
             ):
                 response = client.post(
@@ -441,6 +454,8 @@ def test_generate_puzzle_runs_bounded_parallel_pieces_in_layout_order(
 
     async def submit_piece(_fn, image_path, _lut_path, params):
         nonlocal active, peak_active, pair_started
+        assert params['backing_infill_density_percent'] == 20
+        assert params['enable_base_layer_height_modifier'] is False
         label = Path(image_path).stem.split("_")[1]
         active += 1
         peak_active = max(peak_active, active)
@@ -478,7 +493,9 @@ def test_generate_puzzle_runs_bounded_parallel_pieces_in_layout_order(
     pool.submit = AsyncMock(side_effect=submit_piece)
     body = _generate_puzzle_body(session_id)
     body["params"]["params"]["modeling_mode"] = "vector"
-    with patch.object(puzzle_router, "assemble_puzzle_3mf", side_effect=assemble_pieces):
+    body['params']['params']['backing_infill_density_percent'] = 20
+    body['params']['params']['enable_base_layer_height_modifier'] = False
+    with patch.object(puzzle_router, "assemble_puzzle_3mf_fatcat", side_effect=assemble_pieces):
         response = puzzle_harness["client"].post(
             "/api/convert/generate-puzzle", json=body,
         )
@@ -515,7 +532,7 @@ def test_generate_puzzle_drains_failed_batch_and_tracks_successful_outputs(
         }
 
     pool.submit = AsyncMock(side_effect=submit_piece)
-    with patch.object(puzzle_router, "assemble_puzzle_3mf") as assemble:
+    with patch.object(puzzle_router, "assemble_puzzle_3mf_fatcat") as assemble:
         response = puzzle_harness["client"].post(
             "/api/convert/generate-puzzle",
             json=_generate_puzzle_body(session_id),
@@ -632,7 +649,7 @@ class TestDynamicPuzzlePreviewReuse:
 
         pool.submit = AsyncMock(side_effect=_submit_stub)
         with patch(
-            "api.routers.converter.puzzle.assemble_puzzle_3mf",
+            "api.routers.converter.puzzle.assemble_puzzle_3mf_fatcat",
             side_effect=_assemble_stub,
         ):
             response = client.post(
@@ -675,7 +692,7 @@ class TestDynamicPuzzlePreviewReuse:
 
         pool.submit = AsyncMock(side_effect=_submit_stub)
         with patch(
-            "api.routers.converter.puzzle.assemble_puzzle_3mf",
+            "api.routers.converter.puzzle.assemble_puzzle_3mf_fatcat",
             side_effect=_assemble_stub,
         ):
             response = client.post(
@@ -788,7 +805,7 @@ class TestDynamicPuzzlePreviewReuse:
 
         pool.submit = AsyncMock(side_effect=_submit_stub)
         with patch(
-            "api.routers.converter.puzzle.assemble_puzzle_3mf",
+            "api.routers.converter.puzzle.assemble_puzzle_3mf_fatcat",
             side_effect=_assemble_stub,
         ):
             response = client.post(
@@ -876,7 +893,7 @@ class TestDynamicPuzzlePreviewReuse:
 
         pool.submit = AsyncMock(side_effect=_submit_stub)
         with patch(
-            "api.routers.converter.puzzle.assemble_puzzle_3mf",
+            "api.routers.converter.puzzle.assemble_puzzle_3mf_fatcat",
             side_effect=_assemble_stub,
         ):
             response = client.post(

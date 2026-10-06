@@ -23,6 +23,8 @@ def validate_export_device_selection(
     nozzle_size: str,
     device_profile_id: str | None,
     build_plate_id: str | None,
+    custom_3mf_template_id: str | None = None,
+    supports_custom_template: bool = False,
 ) -> None:
     """Validate explicit machine-registry selections at the API boundary.
 
@@ -35,11 +37,39 @@ def validate_export_device_selection(
         nozzle_size: Requested nozzle size. 请求的喷嘴尺寸。
         device_profile_id: Optional registry device ID. 可选注册表设备 ID。
         build_plate_id: Optional native build plate ID. 可选原生打印板 ID。
+        custom_3mf_template_id: Saved template ID. 已保存的模板 ID。
+        supports_custom_template: Whether this export supports templates.
+            当前导出是否支持自定义模板。
 
     Raises:
         HTTPException: 422 for invalid combinations or 503 when the registry
             cannot be loaded. 组合非法时返回 422，注册表不可用时返回 503。
+            Custom templates return 400 when unsupported or mismatched, and
+            404 when missing. 自定义模板不支持或不匹配返回 400，缺失返回 404。
     """
+    if custom_3mf_template_id:
+        if not supports_custom_template:
+            raise HTTPException(
+                status_code=400,
+                detail="Custom 3MF templates are not supported for this export.",
+            )
+        from utils.bambu_3mf_writer import load_printer_template
+
+        try:
+            load_printer_template(
+                printer_id,
+                slicer,
+                nozzle_size,
+                device_profile_id,
+                custom_3mf_template_id=custom_3mf_template_id,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail="Custom 3MF template was not found. Select or import a template again.",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     selected_device_id = str(device_profile_id or "").strip()
     selected_plate_id = str(build_plate_id or "").strip()
     if not selected_device_id:

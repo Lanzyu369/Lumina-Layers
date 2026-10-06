@@ -12,6 +12,37 @@ import type {
   SlicerListResponse,
 } from "./types";
 
+export interface Custom3mfTemplate {
+  id: string;
+  name: string;
+  printer_model: string;
+  slicer: string;
+  nozzle_diameter: string[];
+  filament_count: number;
+}
+
+export async function getCustom3mfTemplates(): Promise<Custom3mfTemplate[]> {
+  const response = await apiClient.get<{ templates: Custom3mfTemplate[] }>("/system/3mf-templates");
+  return response.data.templates;
+}
+
+export async function importCustom3mfTemplate(
+  file: File,
+  name: string,
+  slicer?: string,
+): Promise<Custom3mfTemplate> {
+  const body = new FormData();
+  body.append("file", file);
+  body.append("name", name.trim());
+  if (slicer) body.append("slicer", slicer);
+  const response = await apiClient.post<Custom3mfTemplate>("/system/3mf-templates", body);
+  return response.data;
+}
+
+export async function deleteCustom3mfTemplate(id: string): Promise<void> {
+  await apiClient.delete(`/system/3mf-templates/${encodeURIComponent(id)}`);
+}
+
 /** Convert a generated machine-registry asset path into a backend URL. */
 export function getMachineRegistryAssetUrl(path: string | null | undefined): string {
   const trimmed = path?.trim();

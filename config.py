@@ -778,8 +778,8 @@ def format_native_nozzle_size(nozzle_size: Any) -> Optional[str]:
 
 @dataclass
 class PrinterProfile:
-    """Printer hardware profile for 3MF export template selection.
-    打印机硬件配置，用于 3MF 导出模板选择。
+    """Lumina printer hardware facts with legacy slicer labels.
+    Lumina 打印机硬件事实及兼容保留的软件标签。
 
     Attributes:
         id (str): Unique printer identifier, e.g. "bambu-h2d". (唯一打印机标识)
@@ -790,8 +790,10 @@ class PrinterProfile:
         bed_height (int): Max print height in mm. (最大打印高度，毫米)
         nozzle_count (int): Number of nozzles, 1=single, 2=dual. (喷头数量)
         is_dual_head (bool): Whether the printer has dual print heads. (是否双头)
-        template_file (str): Default (BambuStudio) config template filename. (默认模板文件名)
-        slicer_templates (dict[str, str]): Slicer-specific template filenames. (切片器专属模板)
+        template_file (str): Legacy label retained for compatibility; not read from disk.
+            (兼容保留的旧标签，不再从磁盘读取)
+        slicer_templates (dict[str, str]): Legacy slicer labels retained for compatibility.
+            (兼容保留的旧切片器标签)
         thumbnail (str): Thumbnail image filename, reserved for future use. (缩略图文件名，预留)
         supported_nozzle_sizes (tuple[str, ...]): Supported nozzle sizes for template variants.
             (支持生成模板变体的喷嘴尺寸)
@@ -811,8 +813,8 @@ class PrinterProfile:
     supported_nozzle_sizes: tuple[str, ...] = ("0.2", "0.4")
 
     def get_template_file(self, slicer: str = "BambuStudio", nozzle_size: Optional[str | float] = None) -> str:
-        """Return template filename for the given slicer.
-        返回指定切片器的模板文件名。
+        """Return the legacy label for the given slicer and nozzle.
+        返回指定切片器和喷嘴对应的旧兼容标签。
 
         Args:
             slicer (str): Slicer identifier, e.g. "BambuStudio" or "OrcaSlicer". (切片器标识)
@@ -820,7 +822,8 @@ class PrinterProfile:
                 the base template is returned. (请求的喷嘴尺寸，未提供时返回基础模板)
 
         Returns:
-            str: Template filename. Falls back to default template_file. (模板文件名，回退到默认)
+            str: Legacy label. This is not a runtime project-file path.
+                (旧兼容标签，不是运行时项目文件路径)
         """
         normalized_slicer = normalize_slicer_software_id(slicer)
         template_file = self.slicer_templates.get(normalized_slicer, self.template_file)
@@ -977,11 +980,11 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         id="bambu-h2s",
         display_name="Bambu Lab H2S",
         brand="Bambu Lab",
-        bed_width=350,
+        bed_width=340,
         bed_depth=320,
-        bed_height=325,
-        nozzle_count=2,
-        is_dual_head=True,
+        bed_height=340,
+        nozzle_count=1,
+        is_dual_head=False,
         template_file="bambu_h2s.json",
         slicer_templates={"OrcaSlicer": "orca_h2s.json"},
     ),
@@ -1001,7 +1004,7 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         id="bambu-h2c",
         display_name="Bambu Lab H2C",
         brand="Bambu Lab",
-        bed_width=350,
+        bed_width=330,
         bed_depth=320,
         bed_height=325,
         nozzle_count=2,

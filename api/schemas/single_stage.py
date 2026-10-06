@@ -33,6 +33,7 @@ class SingleStageKitGenerateRequest(BaseModel):
     )
     printer_id: str = Field(DEFAULT_PRINTER_ID, description="Printer profile ID.")
     slicer: str = Field(DEFAULT_SLICER_ID, description="Slicer software ID.")
+    custom_3mf_template_id: str | None = None
     nozzle_size: str = Field("0.4", description="Nozzle size.")
     device_profile_id: str | None = Field(None, description="Machine registry device profile ID.")
     build_plate_id: str | None = Field(None, description="Native slicer build plate ID.")
@@ -194,6 +195,7 @@ class MaterialRecipeSwatchRequest(BaseModel):
     structure_mode: str = Field("Single-sided", description="Single-sided / Double-sided.")
     printer_id: str = Field("bambu-h2d", description="Printer profile ID.")
     slicer: str = Field("BambuStudio", description="Slicer software ID.")
+    custom_3mf_template_id: str | None = None
     nozzle_size: str = Field("0.4", description="Nozzle size.")
     device_profile_id: str | None = Field(None, description="Machine registry device profile ID.")
     build_plate_id: str | None = Field(None, description="Native slicer build plate ID.")

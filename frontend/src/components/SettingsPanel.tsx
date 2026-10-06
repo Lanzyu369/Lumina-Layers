@@ -49,6 +49,7 @@ import WikiTooltip from "./ui/WikiTooltip";
 import SlicerLogo from "./slicer/SlicerLogo";
 import MachineSelectionDialog from "./settings/MachineSelectionDialog";
 import BuildPlateSelector from "./settings/BuildPlateSelector";
+import Custom3mfTemplateSettings from "./settings/Custom3mfTemplateSettings";
 import GeneratedFileDirectorySetting from "./settings/GeneratedFileDirectorySetting";
 import SvgHoleCompensationSettings from "./sections/SvgHoleCompensationSettings";
 import SettingsCategoryNav, {
@@ -763,6 +764,8 @@ export default function SettingsPanel() {
                   {t("settings.build_plate_fallback")}
                 </StatusBanner>
               )}
+
+              <Custom3mfTemplateSettings />
 
               <div
                 data-testid="wipe-tower-auto-placement-row"

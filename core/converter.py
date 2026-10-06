@@ -192,6 +192,33 @@ def _resolve_converter_separate_backing_color_id(
     )
 
 
+def _resolve_converter_backing_color_ids(
+    material_source: str,
+    selected_materials: Optional[List[str]],
+    material_backing_material_index: Optional[int],
+    backing_color_id: int,
+    separate_backing_color_id: Optional[int],
+) -> tuple[int, Optional[int]]:
+    """Resolve the board and separate-backing slots for one conversion.
+
+    A material archive with an explicit backing index overrides
+    ``backing_color_id``; every other source keeps the caller's value.
+    """
+    if (
+        material_source == "material_archive"
+        and material_backing_material_index is not None
+    ):
+        backing_color_id = _resolve_material_archive_backing_color_id(
+            selected_materials,
+            material_backing_material_index,
+        )
+    separate_backing_color_id = _resolve_converter_separate_backing_color_id(
+        material_source,
+        selected_materials,
+        material_backing_material_index,
+        separate_backing_color_id,
+    )
+    return backing_color_id, separate_backing_color_id
 
 
 def build_image_model_context(
@@ -317,6 +344,7 @@ def convert_image_to_3d(
     *,
     backing_infill_density_percent: int = 100,
     enable_wipe_tower_auto_placement: bool = True,
+    custom_3mf_template_id: Optional[str] = None,
     height_identity_rgb_path: Optional[str] = None,
     original_matched_rgb_path: Optional[str] = None,
     original_material_matrix_path: Optional[str] = None,
@@ -332,11 +360,14 @@ def convert_image_to_3d(
     svg_hole_compensation_enabled: bool = False,
     svg_hole_max_area_mm2: float = 0.5,
     svg_hole_max_width_mm: float = 0.1,
+    metadata_consumer_type: str = "",
 ):
     """Main conversion function: Convert image to 3D model.
     主要转换函数：将图像转换为 3D 模型。
 
     Args:
+        custom_3mf_template_id: Saved native project template for export.
+            (导出时使用的已保存原生项目模板)
         svg_hole_compensation_enabled: Fill enclosed source-SVG voids before
             matching, in vector mode. (矢量模式下在配色前补 SVG 二维孔洞)
         svg_hole_max_area_mm2: Maximum filled hole area; zero disables this
@@ -408,18 +439,11 @@ def convert_image_to_3d(
     Returns:
         Tuple of (3mf_path, glb_path, preview_image, status_message, recipe_path)
     """
-    if (
-        material_source == "material_archive"
-        and material_backing_material_index is not None
-    ):
-        backing_color_id = _resolve_material_archive_backing_color_id(
-            selected_materials,
-            material_backing_material_index,
-        )
-    separate_backing_color_id = _resolve_converter_separate_backing_color_id(
+    backing_color_id, separate_backing_color_id = _resolve_converter_backing_color_ids(
         material_source,
         selected_materials,
         material_backing_material_index,
+        backing_color_id,
         separate_backing_color_id,
     )
     ctx = {
@@ -485,6 +509,7 @@ def convert_image_to_3d(
         "nozzle_size": nozzle_size,
         "device_profile_id": device_profile_id,
         "build_plate_id": build_plate_id,
+        "custom_3mf_template_id": custom_3mf_template_id,
         "enable_base_layer_height_modifier": enable_base_layer_height_modifier,
         "center_on_bed": center_on_bed,
         "relief_global_max_height": relief_global_max_height,
@@ -755,6 +780,7 @@ def generate_final_model(
     *,
     backing_infill_density_percent: int = 100,
     enable_wipe_tower_auto_placement: bool = True,
+    custom_3mf_template_id: Optional[str] = None,
     height_identity_rgb_path: Optional[str] = None,
     original_matched_rgb_path: Optional[str] = None,
     original_material_matrix_path: Optional[str] = None,
@@ -770,6 +796,7 @@ def generate_final_model(
     svg_hole_compensation_enabled: bool = False,
     svg_hole_max_area_mm2: float = 0.5,
     svg_hole_max_width_mm: float = 0.1,
+    metadata_consumer_type: str = "",
 ):
     """Wrapper function for generating final model.
     包装函数，用于生成最终模型。
@@ -778,6 +805,8 @@ def generate_final_model(
     - smooth_sigma=10 (gentle bilateral filter, preserve edges)
 
     Args:
+        custom_3mf_template_id: Saved native project template for export.
+            (用于导出的已保存原生项目模板 ID。)
         svg_hole_compensation_enabled: Fill enclosed source-SVG voids before
             matching, in vector mode. (矢量模式下在配色前补 SVG 二维孔洞)
         svg_hole_max_area_mm2: Maximum filled hole area; zero disables this
@@ -801,6 +830,8 @@ def generate_final_model(
         build_plate_id: Optional native slicer build-plate selection forwarded
             to ``convert_image_to_3d`` and 3MF export.
             (可选的切片软件原生打印板 ID，透传到主转换与 3MF 导出)
+        metadata_consumer_type: Deprecated compatibility argument; ignored.
+            (已弃用的兼容参数，不影响导出结果。)
         backing_infill_density_percent: Deep-backing sparse-infill percentage
             forwarded to the 3MF writer.（透传到 3MF 写入器的深层底板稀疏填充
             百分比）
@@ -957,6 +988,7 @@ def generate_final_model(
         nozzle_size=nozzle_size,
         device_profile_id=device_profile_id,
         build_plate_id=build_plate_id,
+        custom_3mf_template_id=custom_3mf_template_id,
         enable_base_layer_height_modifier=enable_base_layer_height_modifier,
         enable_wipe_tower_auto_placement=enable_wipe_tower_auto_placement,
         center_on_bed=center_on_bed,

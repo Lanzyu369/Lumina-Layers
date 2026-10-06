@@ -250,6 +250,14 @@ cd Lumina-studio
 
 **基础依赖**（必需，请使用 Python 3.12）：
 ```bash
+# Python 3.12+ 需要先为当前平台构建原生 3MF wheel。先克隆
+# https://github.com/MOVIBALE/fatcat-metadata 并检出
+# 9d77c6860cf7520f9a67037e15f7c2ae44ffa803，再按桌面指南准备固定版本的
+# neroued 源码并应用 Lumina 的 B7 补丁：
+# python scripts/build_3mf_native_wheels.py \
+#   --fatcat-root ../fatcat-metadata \
+#   --neroued-source ../neroued-3mf \
+#   --install
 python -m pip install -r requirements.txt
 corepack enable
 cd frontend
@@ -260,6 +268,11 @@ python start_all.py
 
 启动器会同时启动后端和前端。在浏览器中打开启动器显示的前端地址
 （默认：`http://localhost:4174`）。
+
+本地或桌面安装必须先用固定提交的公开 Fat Cat 根项目和已打补丁的
+`neroued-3mf` 源码生成 `wheelhouse/3mf`，不要复制其他操作系统或 CPU 架构的
+wheel。Fat Cat 源码固定为提交 `9d77c6860cf7520f9a67037e15f7c2ae44ffa803`，
+与 `scripts/fatcat_packaging_contract.py` 中的 `FATCAT_SOURCE_COMMIT` 保持一致。
 
 ### 选项 2：桌面客户端（Electron）
 

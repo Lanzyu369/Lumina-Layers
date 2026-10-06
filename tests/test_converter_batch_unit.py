@@ -1407,6 +1407,7 @@ def _noop_3mf_write(
     plate_width_mm,
     plate_depth_mm,
     enable_wipe_tower_auto_placement=True,
+    **kwargs,
 ):
     """No-op replacement for MergedBambu3MFWriter.write that creates an empty file."""
     Path(output_path).write_bytes(b"fake-merged-3mf")
@@ -1437,6 +1438,7 @@ class TestBatchMergeFlow:
             plate_width_mm,
             plate_depth_mm,
             enable_wipe_tower_auto_placement=True,
+            **kwargs,
         ):
             writer_plate_dims.append((plate_width_mm, plate_depth_mm))
             Path(output_path).write_bytes(b"fake-merged-3mf")
@@ -1899,6 +1901,7 @@ class TestBatchMergeFlow:
             plate_width_mm,
             plate_depth_mm,
             enable_wipe_tower_auto_placement=True,
+            **kwargs,
         ):
             written_item_counts.append(len(items))
             Path(output_path).write_bytes(b"fake-merged-3mf")
@@ -1983,6 +1986,7 @@ class TestBatchMergeFlow:
             plate_width_mm,
             plate_depth_mm,
             enable_wipe_tower_auto_placement=True,
+            **kwargs,
         ):
             write_call_items_count.append(len(items))
             Path(output_path).write_bytes(b"fake-merged-3mf")
@@ -2124,6 +2128,7 @@ class TestBatchMergeFlow:
             plate_width_mm,
             plate_depth_mm,
             enable_wipe_tower_auto_placement=True,
+            **kwargs,
         ):
             raise MergedWriteError(raw_error_message)
 
