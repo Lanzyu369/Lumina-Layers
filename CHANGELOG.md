@@ -8,6 +8,9 @@ All notable changes to Lumina Studio are documented in this file.
 
 ## Unreleased
 
+### Removed
+- **Docker deployment** - Removed image builds, Compose provisioning, deployment/auto-update scripts, container CI and public-test origin bypasses. Use local installation or the Electron desktop client. Linux native wheels now build directly on the host; see [Runtime support](docs/runtime-support.md).
+
 ### Features
 - **Quick Recolor & Similar Recipes** - Color Adjustment gains a new **Similar colors** selection tool (selects every block within a ΔE00 color-difference tolerance) and a quick-recolor card: choose a target color B (type it, or use the eyedropper to click any point on the image) and replace the current selection with it in one click (LUT sources snap B to the nearest printable color), or pick from similar recipes ranked by color difference, each showing its layer stack. LUT sources suggest measured LUT entries (plus predicted recipes when the LUT has a prediction model); material-archive sources suggest colors already in the image. Suggestions whose color already appears in the image are marked "In image".
 - **Selection Workstation (Next-Gen)** - Reworked region selection around a single authoritative server-side selection mask with revision-based optimistic locking. Clicking a block now selects the whole visible matched-colour component instantly (local 4-connected flood-fill with server reconciliation), clicking again deselects, and a new **Selection Brush** paints circular strokes to sweep whole blocks into the selection. Selection boundaries render as Photoshop-style marching ants (white/black dual dashed outline) that stay crisp at any zoom and honour reduced-motion preferences.

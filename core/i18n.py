@@ -430,11 +430,6 @@ class I18n:
 - **自动检测**：8色LUT自动检测(2600-2800色范围)
 - **完整工作流**：校准板生成 → 颜色提取 → 图像转换
 
-#### 🐳 Docker支持
-- **容器化部署**：添加Dockerfile支持
-- **简化安装**：无需手动配置系统依赖
-- **跨平台**：统一的部署体验
-
 ---
 
 ### 📝 v1.5.5 更新日志 (历史)
@@ -601,11 +596,6 @@ Accurate color reproduction for FDM printing
 - **UI Enhancement**: Added 8-color mode to Image Converter tab
 - **Auto Detection**: 8-color LUT auto-detection (2600-2800 color range)
 - **Complete Workflow**: Calibration → Color Extraction → Image Conversion
-
-#### 🐳 Docker Support
-- **Containerization**: Added Dockerfile support
-- **Simplified Installation**: No manual system dependency configuration needed
-- **Cross-Platform**: Unified deployment experience
 
 ---
 

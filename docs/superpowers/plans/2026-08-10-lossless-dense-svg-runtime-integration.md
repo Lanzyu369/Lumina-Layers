@@ -1,5 +1,10 @@
 # Lossless Dense SVG Runtime Integration Plan
 
+> Deployment update (2026-10-06): Docker support and the public-test bypass
+> are retired. This historical record preserves earlier implementation and
+> validation evidence; use [Runtime support](../../runtime-support.md) for current behavior.
+> 部署更新：Docker 支持及公网测试访问旁路已移除；本文保留历史实现与验证记录，当前运行方式以上述说明为准。
+
 > Execute task-by-task with TDD and fresh verification before each commit.
 
 **Goal:** Put the proven dense GEOS positive-buffer acceleration and exact

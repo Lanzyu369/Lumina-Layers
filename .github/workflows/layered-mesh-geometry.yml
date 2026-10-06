@@ -35,19 +35,27 @@ jobs:
           tests/test_bambu_3mf_writer_unit.py
           tests/test_3mf_native_dependency_unit.py -q
 
-  ubuntu-production-container:
+  ubuntu-geometry:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build the production Docker image
-        run: docker build --tag lumina-layered-geometry:${{ github.sha }} .
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-glb-v2.txt
+
+      - name: Install geometry dependencies
+        run: python -m pip install -r requirements.txt -r requirements-glb-v2.txt
 
       - name: Exercise production geometry and writer contracts
         run: >-
-          docker run --rm lumina-layered-geometry:${{ github.sha }}
           python -m pytest
           tests/test_geos_buffer_fast_unit.py
           tests/test_vector_engine_fixes_unit.py

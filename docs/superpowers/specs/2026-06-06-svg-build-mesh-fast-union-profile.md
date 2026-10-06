@@ -1,5 +1,10 @@
 # SVG build_mesh fast union 优化说明与 Profile 对比
 
+> Deployment update (2026-10-06): Docker support and the public-test bypass
+> are retired. This historical record preserves earlier implementation and
+> validation evidence; use [Runtime support](../../runtime-support.md) for current behavior.
+> 部署更新：Docker 支持及公网测试访问旁路已移除；本文保留历史实现与验证记录，当前运行方式以上述说明为准。
+
 ## 结论
 
 这次优化解决的是 SVG 预览/生成链路里 `build_mesh` 阶段的一个明确热点：同一材料、同一高度区间内的几何合并过去使用 Shapely `unary_union`，复杂 SVG 中大量离散小图形会让这一步变得很慢。

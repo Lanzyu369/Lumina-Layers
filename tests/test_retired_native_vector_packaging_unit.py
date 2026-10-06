@@ -8,14 +8,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_docker_does_not_build_or_enable_retired_native_vector_engine() -> None:
-    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-
-    assert "scripts/build_native_extensions.py" not in dockerfile
-    assert "LUMINA_VECTOR_NATIVE_MESH" not in dockerfile
-    assert "clipper2_batch" not in dockerfile
-
-
 def test_desktop_build_does_not_build_or_mark_retired_native_vector_engine() -> None:
     build_script = (ROOT / "scripts" / "build_desktop.py").read_text(
         encoding="utf-8"
@@ -63,14 +55,17 @@ def test_ci_does_not_run_retired_native_vector_engine_gate() -> None:
     assert "LUMINA_VECTOR_NATIVE_MESH" not in workflows
 
 
-def test_layered_geometry_ci_keeps_windows_and_docker_gates() -> None:
+def test_layered_geometry_ci_keeps_windows_and_linux_host_gates() -> None:
     workflow = (
         ROOT / ".github" / "workflows" / "layered-mesh-geometry.yml"
     ).read_text(encoding="utf-8")
 
     assert "branches: [dev-refactor, main]" in workflow
     assert "runs-on: windows-latest" in workflow
-    assert "docker build" in workflow
+    assert "runs-on: ubuntu-latest" in workflow
+    assert (
+        "python -m pip install -r requirements.txt -r requirements-glb-v2.txt"
+    ) in workflow
     assert "tests/test_layered_surface_mesh_unit.py" in workflow
     assert "tests/test_vector_engine_mesh_weld_unit.py" in workflow
     assert "tests/test_bambu_3mf_writer_unit.py" in workflow

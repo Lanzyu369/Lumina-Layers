@@ -242,33 +242,26 @@ Lumina Studio v1.5.4整合三大模块，统一界面：
 ### 克隆仓库
 
 ```bash
-git clone https://github.com/MOVIBALE/Lumina-Layers.git
-cd Lumina-Layers
+git clone https://github.com/lumina-layer-studio/Lumina-studio.git
+cd Lumina-studio
 ```
 
-### 选项 1：Docker (推荐)
+### 选项 1：本地安装
 
-使用 Docker 是运行 Lumina Studio 最简单的方法，无需担心系统级依赖项（如 `cairo` 或 `pkg-config`）。
-
-1. **构建并运行本地 Docker 部署**：
-   ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\docker_local_deploy.ps1
-   ```
-
-2. 在浏览器中打开主前端：`http://localhost:4174`。
-
-该脚本会启动 Lumina 主前端/后端，并使用主应用内置的本地耗材与 LUT 路由。
-运行时数据会挂载到 Docker 镜像之外；端口、E 盘运行时目录和自动更新设置见
-[Local Docker Deployment](docs/local-docker-deployment.md)。
-
-### 选项 2：本地安装
-
-**基础依赖**（必需）：
+**基础依赖**（必需，请使用 Python 3.12）：
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
+corepack enable
+cd frontend
+pnpm install
+cd ..
+python start_all.py
 ```
 
-### 选项 3：桌面客户端（Electron）
+启动器会同时启动后端和前端。在浏览器中打开启动器显示的前端地址
+（默认：`http://localhost:4174`）。
+
+### 选项 2：桌面客户端（Electron）
 
 ```bash
 # 必需：桌面外壳会自动启动 Python 后端，但仍需先安装其依赖。
@@ -303,10 +296,10 @@ Lumina Studio 会从 `.env.local` 读取本地环境变量覆盖项，请以 `.e
 ### 快速启动
 
 ```bash
-python main.py
+python start_all.py
 ```
 
-这将在标签页中启动包含所有三个模块的Web界面。
+安装好上述依赖后，此命令会启动后端和前端。在浏览器中打开启动器显示的前端地址。
 
 ---
 

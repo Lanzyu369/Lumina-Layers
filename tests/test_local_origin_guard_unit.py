@@ -95,10 +95,38 @@ def test_require_local_app_origin_rejects_untrusted_sources(
         ({"Sec-Fetch-Site": "cross-site"}, "127.0.0.1"),
     ],
 )
-def test_require_local_app_origin_allows_untrusted_sources_for_public_gray_api(
+def test_require_local_app_origin_rejects_untrusted_sources_with_retired_bypass(
     monkeypatch: pytest.MonkeyPatch,
     headers: dict[str, str],
     client_host: str,
 ) -> None:
     monkeypatch.setenv("LUMINA_ALLOW_PUBLIC_GRAY_API", "1")
-    require_local_app_origin(_request(headers, client_host=client_host))
+    with pytest.raises(HTTPException) as exc_info:
+        require_local_app_origin(_request(headers, client_host=client_host))
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.parametrize("legacy_env_value", ["1", "true", "yes", "on"])
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Host": "localhost:8000", "Origin": "https://attacker.example"},
+        {"Host": "attacker.example"},
+    ],
+)
+def test_management_guards_reject_retired_bypass(
+    monkeypatch: pytest.MonkeyPatch,
+    legacy_env_value: str,
+    headers: dict[str, str],
+) -> None:
+    from api.routers.single_stage import _enforce_material_library_request
+    from api.routers.system import _enforce_clear_cache_origin
+
+    monkeypatch.setenv("LUMINA_ALLOW_PUBLIC_GRAY_API", legacy_env_value)
+    request = _request(headers)
+    for guard in (_enforce_clear_cache_origin, _enforce_material_library_request):
+        with pytest.raises(HTTPException) as exc_info:
+            guard(request)
+
+        assert exc_info.value.status_code == 403

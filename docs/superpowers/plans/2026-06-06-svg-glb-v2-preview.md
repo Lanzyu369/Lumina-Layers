@@ -1,5 +1,10 @@
 # SVG GLB V2 Preview Implementation Plan
 
+> Deployment update (2026-10-06): Docker support and the public-test bypass
+> are retired. This historical record preserves earlier implementation and
+> validation evidence; use [Runtime support](../../runtime-support.md) for current behavior.
+> 部署更新：Docker 支持及公网测试访问旁路已移除；本文保留历史实现与验证记录，当前运行方式以上述说明为准。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 让 SVG 预览 GLB 在本地可选择走 V2 mesh 生成链路，提高常规 SVG 3D 预览模型生成速度，同时保留描边、拼图、钥匙扣、冰箱贴、单双面、5 色扩展、底板和前端命名契约，并在任何不确定情况整次回退 V1。

@@ -38,15 +38,7 @@ $env:LUMINA_MATERIAL_REGISTRY_URL = "http://154.17.28.23/api/material-registry/v
 $env:LUMINA_MATERIAL_REGISTRY_CHANNELS = "official,community"
 ```
 
-如果使用本地 Docker 部署脚本，可以传入：
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\docker_local_deploy.ps1 `
-  -MaterialRegistryUrl "http://154.17.28.23/api/material-registry/v1" `
-  -MaterialRegistryChannels "official,community"
-```
-
-脚本也会从当前进程环境或仓库根目录的 `.env.local` 转发以下可选配置：
+应用会从当前进程环境或仓库根目录的 `.env.local` 读取以下可选配置：
 
 ```text
 LUMINA_MATERIAL_REGISTRY_TOKEN

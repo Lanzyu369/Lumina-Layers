@@ -325,7 +325,7 @@ def test_cgroup_reader_maps_namespace_path_from_mount_root(
     cgroup_path, mountinfo_path, mount_point = _write_cgroup_v2_probe(
         tmp_path,
         process_cgroup="0::/workload.scope\n",
-        mount_root="/docker/container-id",
+        mount_root="/delegated/workload-id",
     )
     cpu_max_path = mount_point / "workload.scope" / "cpu.max"
     cpu_max_path.parent.mkdir(parents=True)
@@ -437,7 +437,7 @@ def test_cgroup_reader_resolves_memory_limit_and_usage(tmp_path: Path) -> None:
     """The memory reader reuses the CPU path discovery, not a second parser."""
 
     system_capacity = _capacity_module()
-    relative_path = Path("docker/abc123")
+    relative_path = Path("delegated/abc123")
     cgroup_path, mountinfo_path, mount_point = _write_cgroup_v2_probe(
         tmp_path,
         process_cgroup=f"0::/{relative_path.as_posix()}\n",
@@ -796,8 +796,8 @@ def test_container_limit_does_not_escape_the_visible_mount(tmp_path: Path) -> No
     system_capacity = _capacity_module()
     cgroup_path, mountinfo_path, mount_point = _write_cgroup_v2_probe(
         tmp_path,
-        process_cgroup="0::/docker/abc/workload.scope\n",
-        mount_root="/docker/abc",
+        process_cgroup="0::/delegated/abc/workload.scope\n",
+        mount_root="/delegated/abc",
     )
     _write_cgroup_memory_level(
         mount_point, "", limit="max", current=str(1024**3)

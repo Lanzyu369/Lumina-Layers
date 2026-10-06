@@ -14,3 +14,5 @@ or unsupported.
 For system-wide decisions, also inspect `docs/adr/` when present. When a topic
 has no context document yet, use the real code, tests, and focused maintenance
 guide as the source of truth.
+
+For supported launch and deployment paths, read [Runtime support](docs/runtime-support.md).
