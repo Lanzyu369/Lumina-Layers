@@ -3517,10 +3517,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "来源类型",
     en: "Source Kind",
   },
-  lut_details_summary_fingerprint: {
-    zh: "指纹",
-    en: "Fingerprint",
-  },
   lut_details_summary_path: {
     zh: "公开引用",
     en: "Public reference",
@@ -7916,8 +7912,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "LUT not found, please select a compatible LUT manually",
   },
   recipe_import_lut_degraded: {
-    zh: "LUT 已降级匹配（名称相同但指纹不一致）",
-    en: "LUT matched by name but fingerprint differs — colors may vary",
+    zh: "原 LUT 记录未找到，已按名称与颜色模式匹配，请确认选中了预期 LUT。",
+    en: "Original LUT record unavailable; matched by name and color mode. Confirm the intended LUT is selected.",
   },
   recipe_import_warning_secondary_lut_missing: {
     zh: "部分多选 LUT 在本机未找到，已从导入选择中移除。",
@@ -8330,10 +8326,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   recipe_import_schema_newer: {
     zh: "配方版本较新，部分参数可能无法恢复",
     en: "Recipe uses a newer schema version — some parameters may not restore",
-  },
-  recipe_import_integrity_fail: {
-    zh: "完整性校验失败，配方数据可能已损坏",
-    en: "Integrity check failed — recipe data may be corrupted",
   },
   recipe_import_asset_corrupt: {
     zh: "素材数据损坏，无法恢复原始文件",
@@ -9224,10 +9216,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   lut_library_path_label: {
     zh: "路径",
     en: "Path",
-  },
-  lut_library_fingerprint_label: {
-    zh: "指纹",
-    en: "Fingerprint",
   },
   lut_library_details_btn: {
     zh: "查看详情",

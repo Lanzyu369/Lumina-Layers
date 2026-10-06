@@ -676,7 +676,6 @@ export default function MaterialSolverCacheStatusCard({
             ) : runtimeChartsData ? (
               <LutColorDistributionCharts
                 source={{
-                  fingerprint: runtimeChartsData.palette_hash,
                   lab_points: runtimeChartsData.lab_points,
                   lab_points_3d: runtimeChartsData.lab_points_3d,
                   lab_hull: runtimeChartsData.lab_hull,
@@ -704,7 +703,6 @@ export default function MaterialSolverCacheStatusCard({
           ) : chartsData ? (
             <LutColorDistributionCharts
               source={{
-                fingerprint: chartsData.palette_hash,
                 lab_points: chartsData.lab_points,
                 lab_points_3d: chartsData.lab_points_3d,
                 lab_hull: chartsData.lab_hull,

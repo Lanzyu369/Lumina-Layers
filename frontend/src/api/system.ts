@@ -117,6 +117,23 @@ export interface PreviewResourceResponse {
   source_type?: string | null;
 }
 
+/** Validate original heightmap bytes without creating a preview or session.
+ * 校验高度图原始字节，不创建预览资源或会话。
+ */
+export async function validateHeightmapImage(
+  file: File,
+  signal: AbortSignal,
+): Promise<{ width: number; height: number }> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const response = await apiClient.post<{ width: number; height: number }>(
+    "/system/validate-heightmap",
+    formData,
+    { timeout: 30_000, signal },
+  );
+  return response.data;
+}
+
 export interface PreviewResourceUploadProgress {
   loaded: number;
   total: number | null;

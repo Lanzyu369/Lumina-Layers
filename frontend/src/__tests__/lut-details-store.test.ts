@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { LutDetailsResponse } from "../api/types";
+import type { LutDetailsCatalogGroup, LutDetailsResponse } from "../api/types";
 import { tRuntime } from "../i18n/runtime";
 import { filterLutDetailsCatalog, useLutDetailsStore } from "../stores/lutDetailsStore";
 
@@ -11,14 +11,13 @@ vi.mock("../api/lut", () => ({
   fetchLutDetails: (...args: unknown[]) => mockFetchLutDetails(...args),
 }));
 
-const CATALOG = [
+const CATALOG: LutDetailsCatalogGroup[] = [
   {
     manufacturer: "Bambu Lab",
     items: [
       {
         name: "Bambu Lab - PLA - RYBW",
         path: "/fake/a.json",
-        fingerprint: "fp-a",
         color_mode: "4-Color (RYBW)",
         source_kind: "legacy_lookup",
         manufacturer: "Bambu Lab",
@@ -35,7 +34,6 @@ const CATALOG = [
       {
         name: "Aliz - PETG - CMYW",
         path: "/fake/b.json",
-        fingerprint: "fp-b",
         color_mode: "4-Color (CMYW)",
         source_kind: "legacy_lookup",
         manufacturer: "Aliz",
@@ -50,14 +48,13 @@ const CATALOG = [
 
 function buildDetail(
   name: string,
-  fingerprint: string,
+  fixtureTag: string,
   path: string,
   overrides: Partial<LutDetailsResponse> = {},
 ): LutDetailsResponse {
   return {
     name,
     path,
-    fingerprint,
     manufacturer: name.startsWith("Aliz") ? "Aliz" : "Bambu Lab",
     manufacturer_source: name.startsWith("Aliz") ? "folder" : "metadata",
     material_type: name.startsWith("Aliz") ? "PETG" : "PLA",
@@ -68,7 +65,7 @@ function buildDetail(
     schema_version: "1.0",
     capabilities: ["legacy_lookup"],
     supported_modes: [],
-    raw_metadata: {},
+    raw_metadata: { fixtureTag },
     palette: [],
     coverage_stats: {
       entry_count: 4,
@@ -194,7 +191,7 @@ describe("useLutDetailsStore", () => {
     const state = useLutDetailsStore.getState();
     expect(mockFetchLutDetails).toHaveBeenCalledWith("Bambu Lab - PLA - RYBW");
     expect(state.loadedLutName).toBe("Bambu Lab - PLA - RYBW");
-    expect(state.detail?.fingerprint).toBe("fp-a");
+    expect(state.detail?.path).toBe("/fake/a.json");
     expect(state.hasLoadedDetail).toBe(true);
     expect(state.isSelectionDirty).toBe(false);
     expect(state.canLoadSelectedLut).toBe(true);
@@ -297,7 +294,7 @@ describe("useLutDetailsStore", () => {
     expect(state.errorKind).toBe("detail");
   });
 
-  it("refreshes the loaded detail when the catalog refresh changes the same-name fingerprint", async () => {
+  it("refreshes the loaded detail when the catalog refresh changes the same-name file", async () => {
     useLutDetailsStore.setState({
       catalog: CATALOG,
       selectedManufacturer: "",
@@ -324,7 +321,6 @@ describe("useLutDetailsStore", () => {
             {
               name: "Bambu Lab - PLA - RYBW",
               path: "/fake/a-v2.json",
-              fingerprint: "fp-new",
               color_mode: "4-Color (RYBW)",
               source_kind: "legacy_lookup",
               manufacturer: "Bambu Lab",
@@ -347,9 +343,31 @@ describe("useLutDetailsStore", () => {
 
     const state = useLutDetailsStore.getState();
     expect(mockFetchLutDetails).toHaveBeenCalledWith("Bambu Lab - PLA - RYBW");
-    expect(state.detail?.fingerprint).toBe("fp-new");
+    expect(state.detail?.path).toBe("/fake/a-v2.json");
     expect(state.detail?.raw_metadata).toEqual({ request: "new" });
     expect(state.loadedLutName).toBe("Bambu Lab - PLA - RYBW");
+  });
+
+  it("reloads an overwritten LUT at the same path after its catalog revision changes", async () => {
+    const nextCatalog = structuredClone(CATALOG);
+    nextCatalog[0].items[0].revision = "read-2";
+    const name = nextCatalog[0].items[0].name;
+    const path = nextCatalog[0].items[0].path;
+    useLutDetailsStore.setState({
+      catalog: CATALOG,
+      loadedLutName: name,
+      selectedLutName: name,
+      detail: buildDetail(name, "old", path, { raw_metadata: { version: "old" } }),
+    });
+    mockFetchLutDetailsCatalog.mockResolvedValueOnce({ groups: nextCatalog });
+    mockFetchLutDetails.mockResolvedValueOnce(
+      buildDetail(name, "new", path, { raw_metadata: { version: "new" } }),
+    );
+    await useLutDetailsStore.getState().fetchCatalog();
+    await vi.waitFor(() => {
+      expect(useLutDetailsStore.getState().detail?.raw_metadata).toEqual({ version: "new" });
+    });
+    expect(mockFetchLutDetails).toHaveBeenCalledWith(name);
   });
 
   it("clears the loaded detail when the catalog refresh removes the loaded LUT", async () => {
@@ -377,7 +395,6 @@ describe("useLutDetailsStore", () => {
             {
               name: "Aliz - PETG - CMYW",
               path: "/fake/b.json",
-              fingerprint: "fp-b",
               color_mode: "4-Color (CMYW)",
               source_kind: "legacy_lookup",
               manufacturer: "Aliz",

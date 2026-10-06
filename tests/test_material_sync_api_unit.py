@@ -2605,7 +2605,7 @@ def test_refresh_material_sync_from_registry_persists_etag_and_reuses_it_after_r
     assert validator["etag"] == catalog_etag
     assert validator["checked_count"] == 1
     assert validator["channels"] == ["official"]
-    assert validator["local_state_hash"].startswith("sha256:")
+    assert set(json.loads(validator["local_state_hash"])) == {"materials", "bindings"}
 
     monkeypatch.setattr(materials_module, "MATERIALS_DIR", str(materials_root))
     status_response = _client().get("/api/material-sync/status")

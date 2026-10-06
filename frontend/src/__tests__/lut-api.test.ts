@@ -26,7 +26,6 @@ describe("lut details api", () => {
               {
                 name: "Bambu Lab - PLA - RYBW",
                 path: "lut-ref/fp-a.json",
-                fingerprint: "fp-a",
                 color_mode: "4-Color (RYBW)",
                 source_kind: "legacy_lookup",
                 manufacturer: "Bambu Lab",
@@ -67,7 +66,6 @@ describe("lut details api", () => {
       data: {
         name: "Bambu Lab - PLA - RYBW",
         path: "lut-ref/fp-a.json",
-        fingerprint: "fp-a",
         manufacturer: "Bambu Lab",
         manufacturer_source: "metadata",
         material_type: "PLA",

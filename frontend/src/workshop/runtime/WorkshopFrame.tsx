@@ -6,6 +6,7 @@ import {
 } from "react";
 
 import { useI18n } from "../../i18n/context";
+import { createRandomId } from "../../utils/randomId";
 import {
   WORKSHOP_API_VERSION,
   WORKSHOP_RPC_EVENT_NAMES,
@@ -139,17 +140,6 @@ async function defaultLoadBrowserRuntime(
     throw new Error("Workshop runtime did not return HTML.");
   }
   return response.text();
-}
-
-function createSessionId(): string {
-  if (typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (value) =>
-    value.toString(16).padStart(2, "0"),
-  ).join("");
 }
 
 function readyEvents(
@@ -557,7 +547,7 @@ export function WorkshopFrame({
         iframeRef.current?.contentWindow?.postMessage(
           {
             type: "lumina.workshop.connect",
-            sessionId: createSessionId(),
+            sessionId: createRandomId(),
           },
           "*",
           [channel.port2],

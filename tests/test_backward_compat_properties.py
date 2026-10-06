@@ -27,7 +27,6 @@ _PUBLIC_IMPORT_NAMES = [
     "calculate_luminance",
     "extract_lut_available_colors",
     "get_lut_color_choices",
-    "generate_lut_color_dropdown_html",
     "detect_lut_color_mode",
     "detect_image_type",
     "_ensure_quantized_image_in_cache",
@@ -37,8 +36,6 @@ _PUBLIC_IMPORT_NAMES = [
     "_resolve_highlight_mask",
     "_build_dual_recommendations",
     "_resolve_click_selection_hexes",
-    "generate_lut_grid_html",
-    "generate_lut_card_grid_html",
     # s03_color_replacement
     "_normalize_color_replacements_input",
     "_apply_region_replacement",
@@ -50,7 +47,6 @@ _PUBLIC_IMPORT_NAMES = [
     "generate_empty_bed_glb",
     "_create_preview_mesh",
     "_merge_low_frequency_colors",
-    "_build_color_contour_mesh",
     # s06_voxel_building
     "_build_voxel_matrix",
     "_build_voxel_matrix_faceup",

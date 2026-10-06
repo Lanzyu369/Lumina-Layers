@@ -81,7 +81,6 @@ _LUT_LIST_SIGNATURE_TTL_SECONDS = 5.0
 _lut_list_cache_lock = threading.Lock()
 _lut_list_cache_checked_at: float | None = None
 _lut_list_cache_file_map: tuple[tuple[str, str], ...] | None = None
-_lut_list_cache_signature: tuple[tuple[str, str, int, int], ...] | None = None
 _lut_list_cache_response: LUTListResponse | None = None
 _ALLOWED_LUT_EXTENSIONS = {".npy", ".json", ".npz", ".msgpack"}
 _LUT_MERGE_FAILED_DETAIL = (
@@ -171,11 +170,10 @@ def _clear_lut_list_cache() -> None:
     """Drop the route-level LUT list response cache. (清空 LUT 列表响应缓存)"""
 
     global _lut_list_cache_checked_at, _lut_list_cache_file_map
-    global _lut_list_cache_signature, _lut_list_cache_response
+    global _lut_list_cache_response
     with _lut_list_cache_lock:
         _lut_list_cache_checked_at = None
         _lut_list_cache_file_map = None
-        _lut_list_cache_signature = None
         _lut_list_cache_response = None
 
 
@@ -258,7 +256,7 @@ def list_luts() -> LUTListResponse:
     返回所有可用 LUT 预设，以 LutInfo 对象列表形式返回。
     """
     global _lut_list_cache_checked_at, _lut_list_cache_file_map
-    global _lut_list_cache_signature, _lut_list_cache_response
+    global _lut_list_cache_response
 
     lut_dict: dict[str, str] = LUTManager.get_all_lut_files()
     lut_file_map = _build_lut_list_file_map(lut_dict)
@@ -274,22 +272,8 @@ def list_luts() -> LUTListResponse:
 
     signature = _build_lut_list_signature(lut_dict)
     cacheable = _is_lut_list_signature_cacheable(signature)
-    with _lut_list_cache_lock:
-        if (
-            cacheable
-            and _lut_list_cache_response is not None
-            and _lut_list_cache_signature == signature
-        ):
-            _lut_list_cache_checked_at = now
-            _lut_list_cache_file_map = lut_file_map
-            return _lut_list_cache_response.model_copy(deep=True)
-
     lut_list: list[LutInfo] = []
     for display_name, file_path in lut_dict.items():
-        try:
-            fingerprint = LUTManager.compute_fingerprint(file_path)
-        except OSError:
-            fingerprint = ""
         lut_list.append(
             LutInfo(
                 name=display_name,
@@ -297,7 +281,6 @@ def list_luts() -> LUTListResponse:
                     LUTManager.infer_color_mode(display_name, file_path)
                 ),
                 path=_public_lut_path_reference(file_path),
-                fingerprint=fingerprint,
             )
         )
     response = LUTListResponse(luts=lut_list)
@@ -305,12 +288,10 @@ def list_luts() -> LUTListResponse:
         if cacheable:
             _lut_list_cache_checked_at = now
             _lut_list_cache_file_map = lut_file_map
-            _lut_list_cache_signature = signature
             _lut_list_cache_response = response
         else:
             _lut_list_cache_checked_at = None
             _lut_list_cache_file_map = None
-            _lut_list_cache_signature = None
             _lut_list_cache_response = None
     return response
 
@@ -355,7 +336,6 @@ def get_lut_details_catalog() -> LutDetailsCatalogResponse:
                     LutDetailsCatalogItem(
                         name=item.name,
                         path=_public_lut_path_reference(item.path),
-                        fingerprint=item.fingerprint,
                         color_mode=_canonicalize_public_color_mode(item.color_mode),
                         source_kind=item.source_kind,
                         compatibility_key=getattr(item, "compatibility_key", ""),
@@ -364,6 +344,7 @@ def get_lut_details_catalog() -> LutDetailsCatalogResponse:
                         manufacturer_source=item.manufacturer_source,
                         material_source=item.material_source,
                         search_tokens=list(item.search_tokens),
+                        revision=item.revision,
                     )
                     for item in group.items
                     if not _is_lut_sync_index_path(item.path)
@@ -1191,7 +1172,6 @@ def get_lut_details(lut_name: str) -> LutDetailsResponse:
     return LutDetailsResponse(
         name=detail.name,
         path=_public_lut_path_reference(detail.path),
-        fingerprint=detail.fingerprint,
         manufacturer=detail.manufacturer,
         manufacturer_source=detail.manufacturer_source,
         material_type=detail.material_type,

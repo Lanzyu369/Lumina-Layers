@@ -81,7 +81,7 @@ def test_externalize_preview_cache_writes_arrays_and_manifest(
         assert field_ref["revision"] == 1
         stored = np.load(field_path)
         assert field_ref["nbytes"] == stored.nbytes
-        assert field_ref["sha256"]
+        assert "sha256" not in field_ref
         np.testing.assert_array_equal(stored, cache[field_name])
 
 
@@ -300,10 +300,10 @@ def test_externalize_preview_cache_cleans_artifact_when_ref_build_fails(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    def fail_hash(array: np.ndarray) -> str:
-        raise RuntimeError("simulated artifact hash failure")
+    def fail_ref(path: str, array: np.ndarray, *, revision: int) -> dict:
+        raise RuntimeError("simulated artifact ref failure")
 
-    monkeypatch.setattr(preview_cache_artifacts, "_array_sha256", fail_hash)
+    monkeypatch.setattr(preview_cache_artifacts, "_build_field_ref", fail_ref)
 
     try:
         preview_cache_artifacts.externalize_preview_cache_to_artifacts(
@@ -311,9 +311,9 @@ def test_externalize_preview_cache_cleans_artifact_when_ref_build_fails(
             root_dir=tmp_path,
         )
     except RuntimeError as exc:
-        assert "simulated artifact hash failure" in str(exc)
+        assert "simulated artifact ref failure" in str(exc)
     else:
-        raise AssertionError("Expected artifact hash failure")
+        raise AssertionError("Expected artifact ref failure")
 
     assert list(tmp_path.iterdir()) == []
 

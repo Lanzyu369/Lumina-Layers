@@ -64,7 +64,7 @@ def _solver_cache_metadata(
     grid_resolution: int = 64,
 ) -> dict[str, object]:
     return {
-        "palette_hash": palette_hash,
+        "cache_id": palette_hash,
         "canonical_materials": [
             {"directory_name": "stub_material_a"},
             {"directory_name": "stub_material_b"},
@@ -96,7 +96,7 @@ def _patch_solver_cache_common(
         lambda directory_names: [SimpleNamespace(directory_name=name) for name in directory_names],
     )
     monkeypatch.setattr(
-        "api.routers.single_stage.fingerprint_palette",
+        "api.routers.single_stage._palette_cache_identity",
         lambda materials: "stub_hash",
     )
     monkeypatch.setattr(
@@ -161,7 +161,7 @@ def _solver_runtime_metadata(
     return {
         "schema_version": "2.0",
         "mode": "candidate_hybrid",
-        "palette_hash": palette_hash,
+        "cache_id": palette_hash,
         "canonical_materials": [
             {"directory_name": "stub_material_a"},
             {"directory_name": "stub_material_b"},
@@ -324,7 +324,7 @@ def _patch_material_solver_management_dependencies(
         _load_multiple_materials,
     )
     monkeypatch.setattr(
-        "api.routers.single_stage.fingerprint_palette",
+        "api.routers.single_stage._palette_cache_identity",
         lambda materials: "stub_hash",
     )
     monkeypatch.setattr(
@@ -660,7 +660,7 @@ class TestMaterialSolverCacheSuggestColorsCanary:
             ],
         )
         monkeypatch.setattr(
-            "api.routers.single_stage.fingerprint_palette",
+            "api.routers.single_stage._palette_cache_identity",
             lambda materials: "stub_hash",
         )
 
@@ -720,7 +720,7 @@ class TestMaterialSolverCacheSuggestColorsCanary:
             ],
         )
         monkeypatch.setattr(
-            "api.routers.single_stage.fingerprint_palette",
+            "api.routers.single_stage._palette_cache_identity",
             lambda materials: "stub_hash",
         )
         monkeypatch.setattr(
@@ -880,7 +880,7 @@ class TestMaterialSolverRuntimeCanary:
             ],
         )
         monkeypatch.setattr(
-            "api.routers.single_stage.fingerprint_palette",
+            "api.routers.single_stage._palette_cache_identity",
             lambda materials: "stub_hash",
         )
         monkeypatch.setattr(
@@ -931,7 +931,7 @@ class TestMaterialSolverRuntimeCanary:
             ],
         )
         monkeypatch.setattr(
-            "api.routers.single_stage.fingerprint_palette",
+            "api.routers.single_stage._palette_cache_identity",
             lambda materials: "stub_hash",
         )
 
@@ -982,7 +982,7 @@ class TestMaterialSolverRuntimeCanary:
             ],
         )
         monkeypatch.setattr(
-            "api.routers.single_stage.fingerprint_palette",
+            "api.routers.single_stage._palette_cache_identity",
             lambda materials: "stub_hash",
         )
 
@@ -1058,7 +1058,7 @@ class TestMaterialSolverRuntimeCanary:
             ],
         )
         monkeypatch.setattr(
-            "api.routers.single_stage.fingerprint_palette",
+            "api.routers.single_stage._palette_cache_identity",
             lambda materials: "stub_hash",
         )
         monkeypatch.setattr(
@@ -1113,7 +1113,7 @@ class TestMaterialSolverRuntimeCanary:
             ],
         )
         monkeypatch.setattr(
-            "api.routers.single_stage.fingerprint_palette",
+            "api.routers.single_stage._palette_cache_identity",
             lambda materials: "stub_hash",
         )
 
@@ -1191,7 +1191,7 @@ class TestMaterialSolverRuntimeCanary:
             ],
         )
         monkeypatch.setattr(
-            "api.routers.single_stage.fingerprint_palette",
+            "api.routers.single_stage._palette_cache_identity",
             lambda materials: "stub_hash",
         )
         monkeypatch.setattr(
@@ -1253,7 +1253,7 @@ class TestMaterialSolverRuntimeCanary:
             ],
         )
         monkeypatch.setattr(
-            "api.routers.single_stage.fingerprint_palette",
+            "api.routers.single_stage._palette_cache_identity",
             lambda materials: "stub_hash",
         )
         monkeypatch.setattr(
@@ -1304,7 +1304,7 @@ class TestMaterialSolverCacheDeleteCanary:
             ],
         )
         monkeypatch.setattr(
-            "api.routers.single_stage.fingerprint_palette",
+            "api.routers.single_stage._palette_cache_identity",
             lambda materials: "stub_hash",
         )
         monkeypatch.setattr(

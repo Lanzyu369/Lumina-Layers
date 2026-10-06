@@ -9,7 +9,6 @@ Extracted from _process_high_fidelity_mode Step 4.
 """
 
 from api.structured_logging import get_logger
-import hashlib
 import time
 import numpy as np
 import cv2
@@ -18,26 +17,25 @@ from scipy.spatial import KDTree
 _log = get_logger(__name__)
 
 
-# Module-level K-Means cache: SHA-256 identities cover output-affecting arrays.
-_kmeans_cache: dict = {}
+# At most four exact input snapshots; no digest or caller identity is needed.
+_kmeans_cache: list[tuple[tuple, tuple[np.ndarray, ...], np.ndarray]] = []
 _KMEANS_CACHE_MAX = 4
 
 
-def _stable_array_digest(array: np.ndarray) -> str:
-    """Hash every array byte; contiguous inputs use a zero-copy buffer."""
+def _cached_quantization(parameters: tuple, arrays: tuple[np.ndarray, ...]) -> np.ndarray | None:
+    for stored_parameters, snapshots, result in _kmeans_cache:
+        if stored_parameters == parameters and all(
+            current.dtype == saved.dtype and np.array_equal(current, saved)
+            for current, saved in zip(arrays, snapshots, strict=True)
+        ):
+            return result.copy()
+    return None
 
-    contiguous = np.ascontiguousarray(array)
-    return hashlib.sha256(memoryview(contiguous).cast("B")).hexdigest()
 
-
-def _stable_array_identity(array: np.ndarray) -> str:
-    """Return a stable cache identity including array layout metadata."""
-
-    normalized = np.asarray(array)
-    return (
-        f"{normalized.shape}_{normalized.dtype.str}_"
-        f"{_stable_array_digest(normalized)}"
-    )
+def _store_quantization(parameters: tuple, arrays: tuple[np.ndarray, ...], result: np.ndarray) -> None:
+    if len(_kmeans_cache) >= _KMEANS_CACHE_MAX:
+        del _kmeans_cache[0]
+    _kmeans_cache.append((parameters, tuple(array.copy() for array in arrays), result.copy()))
 
 
 def _resolve_cluster_count(requested_colors: int, sample_count: int) -> int:
@@ -167,19 +165,11 @@ def _lut_constrained_quantize(
     if effective_k <= 0:
         return rgb.copy()
 
-    rgb_identity = _stable_array_identity(rgb)
-    lut_lab_identity = _stable_array_identity(lut_lab)
-    lut_rgb_identity = _stable_array_identity(lut_rgb)
-    _cache_key = (
-        f"{rgb_identity}_"
-        f"{effective_k}_{seed}_"
-        f"lc4_lab_{lut_lab_identity}_"
-        f"rgb_{lut_rgb_identity}_"
-        f"caller_{lut_fingerprint or ''}"
-    )
-    if _cache_key in _kmeans_cache:
-        _log.debug("LUT-Constrained K-Means cache hit: %s", _cache_key)
-        return _kmeans_cache[_cache_key].copy()
+    _cache_key = ("lut", effective_k, seed)
+    _cache_arrays = (rgb, lut_lab, lut_rgb)
+    cached_result = _cached_quantization(_cache_key, _cache_arrays)
+    if cached_result is not None:
+        return cached_result
 
     # ``lut_lab`` is the authoritative LUT geometry. Rebuild the default tree
     # only on cache misses so externally supplied construction options or tree
@@ -202,10 +192,7 @@ def _lut_constrained_quantize(
             lut_rgb,
             canonical_lut_tree,
         )
-        if len(_kmeans_cache) >= _KMEANS_CACHE_MAX:
-            oldest = next(iter(_kmeans_cache))
-            del _kmeans_cache[oldest]
-        _kmeans_cache[_cache_key] = quantized_image.copy()
+        _store_quantization(_cache_key, _cache_arrays, quantized_image)
         return quantized_image
 
     rng = np.random.RandomState(seed)
@@ -295,10 +282,7 @@ def _lut_constrained_quantize(
 
     quantized_image = centers_rgb[labels].reshape(h, w, 3)
 
-    if len(_kmeans_cache) >= _KMEANS_CACHE_MAX:
-        oldest = next(iter(_kmeans_cache))
-        del _kmeans_cache[oldest]
-    _kmeans_cache[_cache_key] = quantized_image.copy()
+    _store_quantization(_cache_key, _cache_arrays, quantized_image)
     return quantized_image
 
 
@@ -358,7 +342,8 @@ def quantize_colors(
             and loaded-LUT validation; cache misses rebuild a default KDTree
             from authoritative ``lut_lab`` for deterministic tie-breaking.)
         use_lut_constrained: 若为 True 且 LUT 数据有效，使用 LUT-Constrained K-Means。
-        lut_fingerprint: LUT 指纹，用于缓存隔离。
+        lut_fingerprint: Retired caller metadata, accepted for compatibility.
+            已退役的调用方元数据；兼容接收，缓存直接比较实际输入。
 
     Returns:
         (H, W, 3) uint8 quantized RGB. Without ``mask``, the whole-image
@@ -428,26 +413,10 @@ def quantize_colors(
     if low_unique_result is not None:
         return low_unique_result if selected_rgb is None else rgb.copy()
 
-    # Algorithm selection and cache identity are independent: all full-image
-    # and partial-mask calls hash every RGB byte they consume. This prevents
-    # same-shape requests with equal sparse samples from sharing old output.
-    if selected_rgb is None:
-        _rgb_fingerprint = _stable_array_digest(rgb)
-        _mask_fingerprint = ""
-    else:
-        # Masked results can be reused only when every selected RGB matches.
-        # A sampled key can alias images whose unsampled visible pixels differ.
-        _rgb_fingerprint = _stable_array_digest(selected_rgb)
-        _mask_fingerprint = _stable_array_digest(mask_arr)
-    _cache_key = (
-        f"{rgb.shape}_{rgb.dtype.str}_{_rgb_fingerprint}_"
-        f"{effective_n_colors}_{seed}_"
-        f"lc{int(use_lut_constrained)}_{lut_fingerprint or ''}_"
-        f"mask{_mask_fingerprint}"
-    )
-    if _cache_key in _kmeans_cache:
-        _log.debug(f"K-Means cache hit: {_cache_key}")
-        cached_result = _kmeans_cache[_cache_key].copy()
+    _cache_key = ("rgb", effective_n_colors, seed, rgb.shape, mask_arr is not None)
+    _cache_arrays = (rgb,) if selected_rgb is None else (selected_rgb, mask_arr)
+    cached_result = _cached_quantization(_cache_key, _cache_arrays)
+    if cached_result is not None:
         if mask_arr is not None:
             cached_result[~mask_arr] = rgb[~mask_arr]
         return cached_result
@@ -550,8 +519,5 @@ def quantize_colors(
     # 下游 isolated_pixel_cleanup 共同完成，后者在材料矩阵上工作不破坏调色板。)
     _log.debug(f"Quantization complete!")
     # 写入缓存（LRU 简化：超限时清空最旧条目）
-    if len(_kmeans_cache) >= _KMEANS_CACHE_MAX:
-        oldest = next(iter(_kmeans_cache))
-        del _kmeans_cache[oldest]
-    _kmeans_cache[_cache_key] = quantized_image.copy()
+    _store_quantization(_cache_key, _cache_arrays, quantized_image)
     return quantized_image

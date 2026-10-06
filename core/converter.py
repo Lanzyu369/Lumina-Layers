@@ -42,18 +42,19 @@ from core.pipeline.pipeline_utils import (
     calculate_luminance,
     extract_lut_available_colors,
     get_lut_color_choices,
-    generate_lut_color_dropdown_html,
     detect_lut_color_mode,
     detect_image_type,
     _ensure_quantized_image_in_cache,
     generate_auto_height_map,
+)
+
+# --- click selection ---
+from api.color_workstation_helpers import (
     _recommend_lut_colors_by_rgb,
     _build_selection_meta,
     _resolve_highlight_mask,
     _build_dual_recommendations,
     _resolve_click_selection_hexes,
-    generate_lut_grid_html,
-    generate_lut_card_grid_html,
 )
 
 # --- s03_color_replacement ---
@@ -191,41 +192,6 @@ def _resolve_converter_separate_backing_color_id(
     )
 
 
-def _build_color_contour_mesh(mask, height, total_layers, rgba):
-    """Build a simple extruded mesh for a boolean mask.
-    构建布尔掩码的简化挤出网格（兼容旧导出符号）。
-    This compatibility helper is kept in ``core.converter`` because legacy tests
-    and callers import it from here. Implementation is intentionally minimal:
-    each True pixel is extruded to a box and concatenated into one mesh.
-    该兼容函数保留在 ``core.converter``，用于维持历史导入契约。
-    实现保持最小化：每个 True 像素挤出为盒体并合并为单个 mesh。"""
-    import trimesh
-
-    mask_arr = np.asarray(mask, dtype=bool)
-    if mask_arr.ndim != 2 or not np.any(mask_arr):
-        return None
-
-    h, w = mask_arr.shape
-    z_extent = float(total_layers)
-    boxes = []
-
-    for y, x in np.argwhere(mask_arr):
-        # Keep a deterministic XY mapping while ensuring Z span is [0, total_layers].
-        center_x = float(x) + 0.5
-        center_y = float(h - 1 - y) + 0.5
-        center_z = z_extent / 2.0
-
-        box = trimesh.creation.box(extents=(1.0, 1.0, z_extent))
-        box.apply_translation((center_x, center_y, center_z))
-        box.visual.face_colors = np.array(rgba, dtype=np.uint8)
-        boxes.append(box)
-
-    if not boxes:
-        return None
-
-    merged = trimesh.util.concatenate(boxes)
-    merged.visual.face_colors = np.array(rgba, dtype=np.uint8)
-    return merged
 
 
 def build_image_model_context(
@@ -1509,192 +1475,8 @@ def on_preview_click_select_color(
     return display_img, display_text, q_hex, status_msg
 
 
-def generate_lut_grid_html(lut_path, lang: str = "zh"):
-    """
-    生成 LUT 可用颜色的 HTML 网格 (with hue filter + smart search)
-    """
-    from core.i18n import I18n
-    import colorsys
-
-    colors = extract_lut_available_colors(lut_path)
-
-    if not colors:
-        return f"<div style='color:orange'>LUT 文件无效或为空</div>"
-
-    count = len(colors)
-
-    def _classify_hue(r, g, b):
-        rf, gf, bf = r / 255.0, g / 255.0, b / 255.0
-        h, s, v = colorsys.rgb_to_hsv(rf, gf, bf)
-        h360 = h * 360
-        if s < 0.15 or v < 0.10:
-            return "neutral"
-        if h360 < 15 or h360 >= 345:
-            return "red"
-        elif h360 < 40:
-            return "orange"
-        elif h360 < 70:
-            return "yellow"
-        elif h360 < 160:
-            return "green"
-        elif h360 < 195:
-            return "cyan"
-        elif h360 < 260:
-            return "blue"
-        elif h360 < 345:
-            return "purple"
-        return "neutral"
-
-    # NOTE: Search/hue-filter UI is rendered by the web frontend via API data.
-    _search_bar_html = ""
-    _hue_filter_html = ""
-
-    # Derive LUT key for favorites persistence
-    _lut_key = os.path.splitext(os.path.basename(lut_path))[0] if lut_path else ""
-
-    html = f"""
-    <div class="lut-grid-container">
-        <div style="margin-bottom: 8px; font-size: 12px; color: #666;">
-            {I18n.get('lut_grid_count', lang).format(count=count)}: <span id="lut-color-visible-count">{count}</span>
-        </div>
-        {_search_bar_html}
-        {_hue_filter_html}
-        <div id="lut-color-grid-container" data-lut-key="{_lut_key}" style="
-            display: flex;
-            flex-wrap: wrap;
-            gap: 4px;
-            max-height: 300px;
-            overflow-y: auto;
-            padding: 5px;
-            border: 1px solid #eee;
-            border-radius: 8px;
-            background: #f9f9f9;">
-    """
-
-    for entry in colors:
-        hex_val = entry["hex"]
-        r, g, b = entry["color"]
-        rgb_val = f"R:{r} G:{g} B:{b}"
-        hue_cat = _classify_hue(r, g, b)
-
-        html += f"""
-        <div class="lut-color-swatch-container" data-hue="{hue_cat}" style="display:flex;">
-        <div class="lut-swatch lut-color-swatch"
-             data-color="{hex_val}"
-             style="background-color: {hex_val}; width:24px; height:24px; cursor:pointer; border:1px solid #ddd; border-radius:3px;"
-             title="{hex_val} ({rgb_val})">
-        </div>
-        </div>
-        """
-
-    html += "</div></div>"
-    return html
 
 
-def generate_lut_card_grid_html(lut_path, lang: str = "zh"):
-    """
-    Generate a calibration-card-style (色卡) HTML grid for the LUT.
-
-    Colors are displayed in their original LUT order arranged in a square grid,
-    matching the physical calibration board layout.  For 8-color LUTs the two
-    halves are shown side-by-side horizontally.
-
-    Includes search bar (highlight-in-place, no hiding) and hue filter
-    (dims non-matching swatches instead of hiding to preserve grid layout).
-
-    Each swatch is clickable (same data-color / class as the swatch grid) so
-    the existing event-delegation click handler picks it up automatically.
-    """
-    if not lut_path:
-        return "<div style='color:orange'>LUT 文件无效或为空</div>"
-
-    try:
-        lut_grid = np.load(lut_path)
-        measured_colors = lut_grid.reshape(-1, 3)
-    except (OSError, ValueError) as exc:
-        return f"<div style='color:orange'>LUT 加载失败: {exc}</div>"
-
-    total = len(measured_colors)
-
-    from core.i18n import I18n
-    import colorsys
-
-    def _classify_hue(r, g, b):
-        rf, gf, bf = r / 255.0, g / 255.0, b / 255.0
-        h, s, v = colorsys.rgb_to_hsv(rf, gf, bf)
-        h360 = h * 360
-        if s < 0.15 or v < 0.10:
-            return "neutral"
-        if h360 < 15 or h360 >= 345:
-            return "red"
-        elif h360 < 40:
-            return "orange"
-        elif h360 < 70:
-            return "yellow"
-        elif h360 < 160:
-            return "green"
-        elif h360 < 195:
-            return "cyan"
-        elif h360 < 260:
-            return "blue"
-        elif h360 < 345:
-            return "purple"
-        return "neutral"
-
-    import math
-
-    if total == 2738:
-        half = total // 2
-        remainder = total - half
-        dim1 = int(math.ceil(math.sqrt(half)))
-        dim2 = int(math.ceil(math.sqrt(remainder)))
-        grids = [
-            (measured_colors[:half], dim1, "色卡 A" if lang == "zh" else "Card A"),
-            (measured_colors[half:], dim2, "色卡 B" if lang == "zh" else "Card B"),
-        ]
-    else:
-        dim = int(math.ceil(math.sqrt(total)))
-        label = f"{total} 色卡" if lang == "zh" else f"{total}-color Card"
-        grids = [(measured_colors, dim, label)]
-
-    cell = 18
-    gap = 1
-
-    # NOTE: Search/hue-filter UI is rendered by the web frontend via API data.
-    html_parts = [
-        f'<div style="margin-bottom:8px; font-size:12px; color:#666;">{I18n.get("lut_grid_count", lang).format(count=total)}: <span id="lut-color-visible-count">{total}</span></div>',
-    ]
-
-    # Derive LUT key for favorites persistence
-    _lut_key = os.path.splitext(os.path.basename(lut_path))[0] if lut_path else ""
-
-    # Grid
-    html_parts.append(
-        f"<div id='lut-color-grid-container' data-lut-key='{_lut_key}' style='display:flex; gap:12px; align-items:flex-start; "
-        "overflow-x:auto; padding:4px;'>"
-    )
-
-    for colors_arr, dim, title in grids:
-        html_parts.append(
-            f"<div style='flex-shrink:0;'>"
-            f"<div style='font-size:11px; color:#666; margin-bottom:4px;'>{title} ({len(colors_arr)})</div>"
-            f"<div style='display:grid; grid-template-columns:repeat({dim}, {cell}px); gap:{gap}px; "
-            f"border:1px solid #eee; border-radius:6px; padding:4px; background:#f9f9f9;'>"
-        )
-        for c in colors_arr:
-            r, g, b = int(c[0]), int(c[1]), int(c[2])
-            hex_val = f"#{r:02x}{g:02x}{b:02x}"
-            hue_cat = _classify_hue(r, g, b)
-            html_parts.append(
-                f"<div class='lut-swatch lut-color-swatch' data-color='{hex_val}' data-hue='{hue_cat}' "
-                f"style='width:{cell}px;height:{cell}px;background:{hex_val};"
-                f"cursor:pointer;border-radius:2px;' "
-                f"title='{hex_val} (R:{r} G:{g} B:{b})'></div>"
-            )
-        html_parts.append("</div></div>")
-
-    html_parts.append("</div>")
-    return "".join(html_parts)
 
 
 # ========== Auto-detection Functions ==========

@@ -18,7 +18,6 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
-from hashlib import sha256
 from math import isfinite
 from pathlib import Path
 from typing import Any
@@ -298,7 +297,7 @@ class _FrontendStaticFiles(StaticFiles):
         )
         # File timestamps alone cannot distinguish a cached, incorrect MIME type.
         representation = f"{response.headers['etag']}:{media_type}"
-        response.headers["etag"] = f'"{sha256(representation.encode()).hexdigest()}"'
+        response.headers["etag"] = f'"{representation.encode().hex()}"'
         request_headers = Headers(scope=scope)
         if request_headers.get("if-none-match") and self.is_not_modified(
             response.headers, request_headers

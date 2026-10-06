@@ -20,7 +20,6 @@ const CATALOG = [
       {
         name: "Bambu Lab - PLA - Test",
         path: "lut-ref/fp-1.json",
-        fingerprint: "fp-1",
         color_mode: "4-Color (RYBW)",
         source_kind: "legacy_lookup",
         manufacturer: "Bambu Lab",
@@ -37,7 +36,6 @@ const CATALOG = [
       {
         name: "Aliz - PETG - Test",
         path: "lut-ref/fp-2.json",
-        fingerprint: "fp-2",
         color_mode: "4-Color (CMYW)",
         source_kind: "legacy_lookup",
         manufacturer: "Aliz",
@@ -52,14 +50,13 @@ const CATALOG = [
 
 function buildDetail(
   name: string,
-  fingerprint: string,
+  fixtureTag: string,
   path: string,
   overrides: Partial<LutDetailsResponse> = {},
 ): LutDetailsResponse {
   return {
     name,
     path,
-    fingerprint,
     manufacturer: name.startsWith("Aliz") ? "Aliz" : "Bambu Lab",
     manufacturer_source: name.startsWith("Aliz") ? "folder" : "metadata",
     material_type: name.startsWith("Aliz") ? "PETG" : "PLA",
@@ -70,7 +67,7 @@ function buildDetail(
     schema_version: "1.0",
     capabilities: ["legacy_lookup"],
     supported_modes: [],
-    raw_metadata: { batch_code: fingerprint },
+    raw_metadata: { batch_code: fixtureTag },
     palette: [
       {
         color: "White",

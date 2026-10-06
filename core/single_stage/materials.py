@@ -2175,7 +2175,7 @@ def _material_sync_binding_projection(index: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _material_sync_local_state_hash(target_root: Path) -> str:
+def _material_sync_local_state_descriptor(target_root: Path) -> str:
     index = _load_material_sync_index(target_root)
     local_entries: list[dict[str, Any]] = []
     if target_root.exists():
@@ -2237,8 +2237,8 @@ def _material_sync_local_state_hash(target_root: Path) -> str:
         sort_keys=True,
         separators=(",", ":"),
         allow_nan=False,
-    ).encode("utf-8")
-    return f"sha256:{hashlib.sha256(canonical_state).hexdigest()}"
+    )
+    return canonical_state
 
 
 def _local_material_paths_by_sync_signature(
@@ -2682,7 +2682,7 @@ def _material_sync_catalog_validator(
     checked_count = raw_validator.get("checked_count")
     if (
         etag is None
-        or re.fullmatch(r"sha256:[0-9a-f]{64}", local_state_hash) is None
+        or not local_state_hash
         or isinstance(checked_count, bool)
         or not isinstance(checked_count, int)
         or checked_count < 0
@@ -3286,12 +3286,11 @@ def _material_registry_remote_catalog_cache_key(
     offset: int,
     query: str,
 ) -> tuple[str, tuple[str, ...], str, Any, int | None, int, str]:
-    token_fingerprint = _sha256_bytes(token.encode("utf-8")) if token else ""
     transport_identity = transport if transport is not None else None
     return (
         registry_url,
         tuple(channels),
-        token_fingerprint,
+        token,
         transport_identity,
         limit,
         offset,
@@ -5905,7 +5904,7 @@ def refresh_material_sync_from_registry(
         headers = {"User-Agent": "LuminaStudioMaterialSync/1"}
         if auth_token:
             headers["Authorization"] = f"Bearer {auth_token}"
-        pre_request_state_hash = _material_sync_local_state_hash(target_root)
+        pre_request_state_hash = _material_sync_local_state_descriptor(target_root)
         sync_index = _load_material_sync_index(target_root)
         stored_validator = _material_sync_catalog_validator(
             index=sync_index,
@@ -5939,7 +5938,7 @@ def refresh_material_sync_from_registry(
                         raise ValueError(
                             "Material registry returned 304 without a usable validator"
                         )
-                    post_response_state_hash = _material_sync_local_state_hash(
+                    post_response_state_hash = _material_sync_local_state_descriptor(
                         target_root
                     )
                     if post_response_state_hash == pre_request_state_hash:
@@ -6142,7 +6141,7 @@ def refresh_material_sync_from_registry(
             if isinstance(catalog_payload, dict)
             else None
         )
-        local_state_hash = _material_sync_local_state_hash(target_root)
+        local_state_hash = _material_sync_local_state_descriptor(target_root)
         catalog_is_converged = (
             failed_count == 0
             and _material_registry_catalog_is_locally_converged(
@@ -6151,7 +6150,7 @@ def refresh_material_sync_from_registry(
             )
         )
         verified_state_hash = (
-            _material_sync_local_state_hash(target_root)
+            _material_sync_local_state_descriptor(target_root)
             if catalog_is_converged
             else None
         )

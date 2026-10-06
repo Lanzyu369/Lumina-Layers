@@ -1,7 +1,7 @@
 """Unit tests for the disk-backed material-solver cache.
 
 Covers:
-- Palette fingerprinting (stability, order-independence, parameter-change invalidation)
+- Material descriptors and the established enumeration order
 - Build: shape/metadata contracts, cell coverage for small palettes
 - Save / load roundtrip (with corrupted-file handling)
 - Lookup: ΔE stays within a grid-cell diagonal of the strict optimal solver
@@ -11,6 +11,7 @@ Covers:
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -24,7 +25,7 @@ from core.material_cache import (
     default_cache_directory,
     delete_cached_entry,
     find_any_cached_grid,
-    fingerprint_palette,
+    describe_palette,
     list_cached_entries,
     load_material_solver_cache,
     load_material_solver_cache_with_fallback,
@@ -66,36 +67,149 @@ MEDIUM_PALETTE = [RED, BLUE, WHITE, GREEN, BLACK]
 _BUCKETED_LAYER_COUNT = 6  # Forces bucketed mode for any palette (N > 5)
 
 
+def test_established_numeric_enumeration_order_is_preserved():
+    assert canonical_palette_order(SMALL_PALETTE) == [1, 2, 0]
+    assert canonical_palette_order(MEDIUM_PALETTE) == [4, 1, 2, 0, 3]
+    renamed = [replace(material, name="renamed", directory_name="new-directory")
+               for material in SMALL_PALETTE]
+    assert canonical_palette_order(renamed) == [1, 2, 0]
+
+
+def test_identical_optics_keep_stable_input_order_and_identity_safe_records(tmp_path):
+    second = replace(RED, name="Other red", directory_name="other-red")
+    materials = [RED, second]
+    reordered = list(reversed(materials))
+    assert canonical_palette_order(materials) == [0, 1]
+    assert canonical_palette_order(reordered) == [0, 1]
+    cache = build_material_solver_cache(materials, 5, 0.08)
+    save_material_solver_cache(cache, cache_root=tmp_path)
+    loaded = load_material_solver_cache(reordered, 5, 0.08, grid_resolution=0,
+                                        cache_root=tmp_path)
+    assert loaded is None
+    # Same optics have different physical identities. Stable input ties must
+    # not reuse a record whose columns describe the opposite identity order.
+    reversed_cache = build_material_solver_cache(reordered, 5, 0.08)
+    save_material_solver_cache(reversed_cache, cache_root=tmp_path)
+    loaded = load_material_solver_cache(reordered, 5, 0.08, grid_resolution=0,
+                                        cache_root=tmp_path)
+    assert loaded is not None and loaded.cache_id == reversed_cache.cache_id
+    assert load_material_solver_cache([RED, replace(second, directory_name="third-red")],
+                                      5, 0.08, grid_resolution=0,
+                                      cache_root=tmp_path) is None
+
+
+@pytest.mark.parametrize("field", ["E", "k", "C0_white"])
+def test_refitted_effective_parameters_miss_persistent_cache(tmp_path, field):
+    cache = build_material_solver_cache(SMALL_PALETTE, 5, 0.08)
+    path = save_material_solver_cache(cache, cache_root=tmp_path)
+    changed = getattr(RED, field).copy()
+    changed[0] += 0.01
+    materials = [replace(RED, **{field: changed}), BLUE, WHITE]
+    assert load_material_solver_cache(materials, 5, 0.08, grid_resolution=0,
+                                      cache_root=tmp_path) is None
+    assert path.exists()
+
+
+def test_cache_without_material_identity_metadata_is_skipped_and_preserved(tmp_path):
+    import json
+
+    cache = build_material_solver_cache(SMALL_PALETTE, 5, 0.08)
+    path = save_material_solver_cache(cache, cache_root=tmp_path)
+    meta_path = path.with_suffix(".meta.json")
+    metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+    for material in metadata["canonical_materials"]:
+        material.pop("directory_name")
+    meta_path.write_text(json.dumps(metadata), encoding="utf-8")
+    assert load_material_solver_cache(SMALL_PALETTE, 5, 0.08,
+                                      grid_resolution=0, cache_root=tmp_path) is None
+    assert path.exists() and meta_path.exists()
+
+
+@pytest.mark.parametrize("changes", [
+    {"layer_count": 7}, {"layer_height_mm": 0.12},
+    {"substrate": "black"}, {"grid_resolution": 64},
+])
+def test_layer_height_substrate_and_grid_do_not_alias_saved_cache(tmp_path, changes):
+    cache = build_material_solver_cache(SMALL_PALETTE, 6, 0.08, grid_resolution=32)
+    path = save_material_solver_cache(cache, cache_root=tmp_path)
+    parameters = {"layer_count": 6, "layer_height_mm": 0.08,
+                  "substrate": "white", "grid_resolution": 32}
+    parameters.update(changes)
+    assert load_material_solver_cache(SMALL_PALETTE, cache_root=tmp_path,
+                                      **parameters) is None
+    assert path.exists()
+
+
+def test_solver_version_change_preserves_but_does_not_reuse_old_record(tmp_path, monkeypatch):
+    cache = build_material_solver_cache(SMALL_PALETTE, 5, 0.08)
+    path = save_material_solver_cache(cache, cache_root=tmp_path)
+    monkeypatch.setattr("core.material_cache.CACHE_SOLVER_VERSION", "next-solver")
+    assert load_material_solver_cache(SMALL_PALETTE, 5, 0.08, grid_resolution=0,
+                                      cache_root=tmp_path) is None
+    assert path.exists()
+
+
+def test_opaque_record_is_reused_after_process_restart(tmp_path):
+    import json
+    import subprocess
+    import sys
+
+    cache = build_material_solver_cache(SMALL_PALETTE, 5, 0.08)
+    path = save_material_solver_cache(cache, cache_root=tmp_path)
+    script = """
+import json, sys
+import numpy as np
+from core.material_color_solver import MaterialParams
+from core.material_cache import load_material_solver_cache
+materials = [MaterialParams(name=m['name'], directory_name=m['directory_name'],
+    E=np.array(m['E']), k=np.array(m['k']), C0_white=np.array(m['C0_white']),
+    estimated_rgb=np.zeros(3, dtype=np.uint8)) for m in json.loads(sys.argv[1])]
+cache = load_material_solver_cache(materials, 5, 0.08, grid_resolution=0,
+    cache_root=sys.argv[2])
+assert cache is not None
+print(cache.cache_id)
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script, json.dumps(describe_palette(SMALL_PALETTE)), str(tmp_path)],
+        capture_output=True, text=True, check=True, timeout=30,
+    )
+    assert completed.stdout.strip() == cache.cache_id
+    assert path.exists() and len(list(path.parent.glob("*.npz"))) == 1
+
+
 # ---------------------------------------------------------------------------
-# Palette fingerprinting
+# Effective material descriptors
 # ---------------------------------------------------------------------------
 
 
-class TestFingerprintPalette:
+class TestDescribePalette:
     def test_stable_across_calls(self):
-        assert fingerprint_palette(SMALL_PALETTE) == fingerprint_palette(SMALL_PALETTE)
+        assert describe_palette(SMALL_PALETTE) == describe_palette(SMALL_PALETTE)
 
     def test_order_independent(self):
-        fp1 = fingerprint_palette([RED, BLUE, WHITE])
-        fp2 = fingerprint_palette([WHITE, RED, BLUE])
-        fp3 = fingerprint_palette([BLUE, WHITE, RED])
+        fp1 = describe_palette([RED, BLUE, WHITE])
+        fp2 = describe_palette([WHITE, RED, BLUE])
+        fp3 = describe_palette([BLUE, WHITE, RED])
         assert fp1 == fp2 == fp3
 
     def test_changes_when_material_parameter_changes(self):
         RED_ALT = _mat("Red", E=(0.65, 0.05, 0.05), k=(4.0, 4.0, 4.0))
-        assert fingerprint_palette([RED, BLUE]) != fingerprint_palette([RED_ALT, BLUE])
+        assert describe_palette([RED, BLUE]) != describe_palette([RED_ALT, BLUE])
 
     def test_changes_when_palette_size_changes(self):
-        assert fingerprint_palette([RED, BLUE]) != fingerprint_palette([RED, BLUE, WHITE])
+        assert describe_palette([RED, BLUE]) != describe_palette([RED, BLUE, WHITE])
 
     def test_empty_palette_raises(self):
         with pytest.raises(ValueError):
-            fingerprint_palette([])
+            describe_palette([])
 
-    def test_fingerprint_is_16_hex_chars(self):
-        fp = fingerprint_palette(SMALL_PALETTE)
-        assert len(fp) == 16
-        assert all(c in "0123456789abcdef" for c in fp)
+    def test_descriptors_retain_identity_and_effective_parameters(self):
+        descriptors = describe_palette(SMALL_PALETTE)
+        assert len(descriptors) == 3
+        red = next(item for item in descriptors if item["directory_name"] == "red")
+        assert red["E"] == [0.6, 0.05, 0.05]
+        assert red["k"] == [4.0, 4.0, 4.0]
+        assert red["C0_white"] == [1.0, 1.0, 1.0]
 
     def test_canonical_order_is_stable(self):
         order1 = canonical_palette_order([RED, BLUE, WHITE])
@@ -117,17 +231,12 @@ class TestFingerprintPalette:
 
 
 class TestCacheFilePath:
-    def test_path_includes_all_key_parameters(self, tmp_path: Path):
-        p = cache_file_path(
-            SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
-            substrate="white", cache_root=tmp_path,
-        )
-        name = p.name
-        assert name.startswith(fingerprint_palette(SMALL_PALETTE))
-        assert "-N05-" in name
-        assert "-t0_08-" in name
-        # Default grid is 128, so the canonical stem ends with -white-g128.npz.
-        assert name.endswith(f"-white-g{DEFAULT_GRID_RESOLUTION:03d}.npz")
+    def test_path_resolves_saved_opaque_record(self, tmp_path: Path):
+        cache = build_material_solver_cache(SMALL_PALETTE, 5, 0.08)
+        saved = save_material_solver_cache(cache, cache_root=tmp_path)
+        assert cache_file_path(SMALL_PALETTE, 5, 0.08, "white",
+                               grid_resolution=0, cache_root=tmp_path) == saved
+        assert saved.stem == f"solver-{cache.palette_hash}"
 
     def test_path_differs_for_different_substrate(self, tmp_path: Path):
         p_white = cache_file_path(
@@ -148,8 +257,15 @@ class TestCacheFilePath:
             grid_resolution=128, cache_root=tmp_path,
         )
         assert p_64 != p_128
-        assert p_64.name.endswith("-white-g064.npz")
-        assert p_128.name.endswith("-white-g128.npz")
+        cache_64 = build_material_solver_cache(SMALL_PALETTE, 6, 0.08, grid_resolution=64)
+        cache_128 = build_material_solver_cache(SMALL_PALETTE, 6, 0.08, grid_resolution=128)
+        saved_64 = save_material_solver_cache(cache_64, cache_root=tmp_path)
+        saved_128 = save_material_solver_cache(cache_128, cache_root=tmp_path)
+        assert saved_64 != saved_128
+        assert cache_file_path(SMALL_PALETTE, 6, 0.08, "white", grid_resolution=64,
+                               cache_root=tmp_path) == saved_64
+        assert cache_file_path(SMALL_PALETTE, 6, 0.08, "white", grid_resolution=128,
+                               cache_root=tmp_path) == saved_128
 
     def test_default_cache_directory_includes_subdir(self, tmp_path: Path):
         d = default_cache_directory(tmp_path)
@@ -181,7 +297,7 @@ class TestBuild:
         # SMALL_PALETTE (M=3, N=5) triggers exact mode: grid_resolution=0.
         assert cache.metadata["mode"] == "exact"
         assert cache.metadata["grid_resolution"] == 0
-        assert cache.metadata["palette_hash"] == fingerprint_palette(SMALL_PALETTE)
+        assert cache.metadata["canonical_materials"] == describe_palette(SMALL_PALETTE)
         assert cache.metadata["valid_cell_count"] == cache.valid_cell_count
         assert cache.metadata["total_combinations"] == 3 ** 5
 
@@ -314,7 +430,7 @@ class TestSaveLoadRoundtrip:
         np.testing.assert_allclose(
             loaded.center_delta_e, cache.center_delta_e, atol=1e-3
         )
-        assert loaded.metadata["palette_hash"] == cache.metadata["palette_hash"]
+        assert loaded.metadata["cache_id"] == cache.metadata["cache_id"]
         assert loaded.metadata["layer_count"] == cache.metadata["layer_count"]
 
     def test_roundtrip_exact_mode(self, tmp_path: Path):
@@ -436,8 +552,7 @@ class TestSaveLoadRoundtrip:
         )
         suffixed_meta = suffixed_npz.with_suffix(".meta.json")
         directory = suffixed_npz.parent
-        palette_hash = fingerprint_palette(SMALL_PALETTE)
-        legacy_stem = f"{palette_hash}-N{_BUCKETED_LAYER_COUNT:02d}-t0_08-white"
+        legacy_stem = "opaque-preexisting-record-N06-t0_08-white"
         legacy_npz = directory / f"{legacy_stem}.npz"
         legacy_meta = directory / f"{legacy_stem}.meta.json"
         suffixed_npz.replace(legacy_npz)
@@ -520,7 +635,8 @@ class TestLookup:
             uniform_recipes=np.zeros((0, 0), dtype=np.uint8),
             uniform_achieved_srgb=np.zeros((0, 3), dtype=np.uint8),
             metadata={
-                "palette_hash": fingerprint_palette(SMALL_PALETTE),
+                "canonical_materials": describe_palette(SMALL_PALETTE),
+                "cache_id": "test-record",
                 "layer_count": 5,
                 "layer_height_mm": 0.08,
                 "substrate": "white",
@@ -608,7 +724,8 @@ class TestLookup:
             uniform_recipes=np.zeros((0, 0), dtype=np.uint8),
             uniform_achieved_srgb=np.zeros((0, 3), dtype=np.uint8),
             metadata={
-                "palette_hash": fingerprint_palette(SMALL_PALETTE),
+                "canonical_materials": describe_palette(SMALL_PALETTE),
+                "cache_id": "test-record",
                 "layer_count": 5,
                 "layer_height_mm": 0.08,
                 "substrate": "white",
@@ -647,7 +764,7 @@ class TestListingAndDeletion:
         entries = list_cached_entries(cache_root=tmp_path)
         assert len(entries) == 1
         entry = entries[0]
-        assert entry["palette_hash"] == cache.palette_hash
+        assert entry["cache_id"] == cache.palette_hash
         assert entry["layer_count"] == 5
         assert entry["substrate"] == "white"
         assert entry["cache_file_size_bytes"] > 0

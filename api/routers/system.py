@@ -11,6 +11,7 @@ import json
 import os
 import re
 import uuid
+import cv2
 from collections.abc import Mapping
 from contextlib import suppress
 from ipaddress import ip_address
@@ -20,10 +21,11 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from PIL import Image
+from starlette.concurrency import run_in_threadpool
 
 import config
 from api.dependencies import get_file_registry, get_session_store
-from api.file_bridge import ensure_png_tempfile
+from api.file_bridge import ensure_png_tempfile, upload_to_tempfile
 from api.file_registry import FileRegistry
 from api.local_origin_guard import require_local_app_origin
 from api.preview_resources import (
@@ -51,6 +53,7 @@ from core.machine_registry import (
     resolve_installed_bed_model,
     resolve_machine_registry_root,
 )
+from core.heightmap_loader import HeightmapLoader
 
 router = APIRouter(prefix="/api/system", tags=["System"])
 log = get_logger(__name__)
@@ -58,6 +61,9 @@ log = get_logger(__name__)
 CLEANABLE_EXTENSIONS: set[str] = {".3mf", ".glb", ".png", ".jpg", ".txt"}
 PROTECTED_FILES: set[str] = {"lumina_stats.txt", "lumina_lut.json"}
 EPHEMERAL_PREVIEW_TTL_SECONDS = 600
+_HEIGHTMAP_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+_HEIGHTMAP_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/bmp", "image/tiff"}
+_HEIGHTMAP_UNREADABLE_DETAIL = "Invalid or damaged heightmap image."
 IMAGE_PREVIEW_PREPARATION_FAILED_DETAIL = (
     "Image preview could not be prepared. Please try again."
 )
@@ -498,6 +504,42 @@ def perform_cache_cleanup(
         output_files_cleaned=output_files_cleaned,
         total_freed_bytes=freed_bytes,
     )
+
+
+@router.post("/validate-heightmap")
+async def validate_heightmap(file: UploadFile = File(...)) -> dict[str, int]:
+    """Decode original heightmap bytes without altering any session or asset.
+    解码高度图原始字节，不修改任何会话或素材。
+
+    Args:
+        file: Original PNG/JPEG/BMP/TIFF upload. (原始高度图上传文件。)
+
+    Returns:
+        dict[str, int]: Decoded width and height. (解码后的宽高。)
+
+    Raises:
+        HTTPException: Invalid image. (无效图像。)
+    """
+    suffix = Path(file.filename or "").suffix.lower()
+    if (
+        suffix not in _HEIGHTMAP_IMAGE_SUFFIXES
+        or file.content_type not in _HEIGHTMAP_IMAGE_MIME_TYPES
+    ):
+        raise HTTPException(status_code=422, detail=_HEIGHTMAP_UNREADABLE_DETAIL)
+    temp_path = await upload_to_tempfile(file)
+    try:
+        result = await run_in_threadpool(HeightmapLoader.load_and_validate, temp_path)
+        if not result["success"] or not result["original_size"]:
+            raise HTTPException(status_code=422, detail=_HEIGHTMAP_UNREADABLE_DETAIL)
+        width, height = result["original_size"]
+        if width <= 0 or height <= 0:
+            raise HTTPException(status_code=422, detail=_HEIGHTMAP_UNREADABLE_DETAIL)
+        return {"width": int(width), "height": int(height)}
+    except (OSError, ValueError, TypeError, RuntimeError, cv2.error) as exc:
+        raise HTTPException(status_code=422, detail=_HEIGHTMAP_UNREADABLE_DETAIL) from exc
+    finally:
+        with suppress(OSError):
+            os.unlink(temp_path)
 
 
 @router.post("/image-preview")

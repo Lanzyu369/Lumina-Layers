@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import fc from "fast-check";
-import { fileToBase64, base64ToFile, sha256Hex, sha256String } from "../recipe/utils";
+import { fileToBase64, base64ToFile } from "../recipe/utils";
 import { exportConverterRecipe } from "../recipe/exportRecipe";
 import { restoreConverterRecipe } from "../recipe/importRecipe";
 import { resolveFridgeMagnetSpacerThick } from "../constants/fridgeMagnets";
@@ -47,31 +47,6 @@ describe("recipe round-trip properties", () => {
         expect(restBuf).toEqual(origBuf);
       }),
       { numRuns: 30 },
-    );
-  });
-
-  it("sha256Hex is deterministic for the same input", async () => {
-    await fc.assert(
-      fc.asyncProperty(arbBytes, async (bytes) => {
-        const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-        const h1 = await sha256Hex(buf);
-        const h2 = await sha256Hex(buf);
-        expect(h1).toBe(h2);
-        expect(h1).toHaveLength(64);
-      }),
-      { numRuns: 20 },
-    );
-  });
-
-  it("sha256String is deterministic for the same string", async () => {
-    await fc.assert(
-      fc.asyncProperty(fc.string({ minLength: 0, maxLength: 200 }), async (s) => {
-        const h1 = await sha256String(s);
-        const h2 = await sha256String(s);
-        expect(h1).toBe(h2);
-        expect(h1).toHaveLength(64);
-      }),
-      { numRuns: 20 },
     );
   });
 
@@ -161,11 +136,10 @@ describe("recipe round-trip properties", () => {
     });
 
     const localLuts: LutInfo[] = [
-      { name: "LUT-A", color_mode: ColorMode.FOUR_COLOR_RYBW, path: "/a", fingerprint: "fpA" },
-      { name: "LUT-B", color_mode: ColorMode.SIX_COLOR, path: "/b", fingerprint: "fpB" },
+      { name: "LUT-A", color_mode: ColorMode.FOUR_COLOR_RYBW, path: "/a" },
+      { name: "LUT-B", color_mode: ColorMode.SIX_COLOR, path: "/b" },
     ];
-    const localFP: Record<string, string> = { "LUT-A": "fpA", "LUT-B": "fpB" };
-    const fpForLut: Record<string, string> = { "LUT-A": "fpA", "LUT-B": "fpB" };
+    const pathForLut: Record<string, string> = { "LUT-A": "/a", "LUT-B": "/b" };
 
     fc.assert(
       fc.property(arbState, (overrides) => {
@@ -175,6 +149,7 @@ describe("recipe round-trip properties", () => {
         const state = {
           ...DEFAULT_STATE,
           ...overrides,
+          color_mode: localLuts.find((lut) => lut.name === overrides.lut_name)!.color_mode,
           base_spacer_thick: baseSpacerThick,
           spacer_thick: resolveFridgeMagnetSpacerThick(
             baseSpacerThick,
@@ -192,7 +167,7 @@ describe("recipe round-trip properties", () => {
             enableWipeTowerAutoPlacement:
               overrides.enable_wipe_tower_auto_placement,
           },
-          fpForLut[overrides.lut_name],
+          pathForLut[overrides.lut_name],
         );
         expect(recipe.puzzle.engrave_back_labels).toBe(false);
 
@@ -209,21 +184,16 @@ describe("recipe round-trip properties", () => {
               filename: "test.png",
               mime_type: "image/png",
               byte_size: 4,
-              sha256: "abcd",
               encoding: "base64" as const,
               payload_b64: "dGVzdA==",
             },
           },
           recipe: { converter: recipe },
-          integrity: {
-            recipe_sha256: "0".repeat(64),
-            asset_checksums: { primary: "abcd" },
-          },
           compat: { min_schema_version: 1 },
           warnings: [] as string[],
         };
 
-        const { state: restored } = restoreConverterRecipe(fullRecipe, localLuts, localFP);
+        const { state: restored } = restoreConverterRecipe(fullRecipe, localLuts);
         const expectedLargeFormatEnabled = overrides.puzzleEnabled
           ? false
           : overrides.enable_fridge_magnet
@@ -331,18 +301,16 @@ describe("recipe round-trip properties", () => {
               filename: "t.png",
               mime_type: "image/png",
               byte_size: 4,
-              sha256: "a",
               encoding: "base64" as const,
               payload_b64: "dGVzdA==",
             },
           },
           recipe: { converter: recipe },
-          integrity: { recipe_sha256: "0".repeat(64), asset_checksums: { primary: "a" } },
           compat: { min_schema_version: 1 },
           warnings: [] as string[],
         };
 
-        const { state: restored } = restoreConverterRecipe(fullRecipe, [], {});
+        const { state: restored } = restoreConverterRecipe(fullRecipe, []);
         // Restored Set should match original (both without '#')
         expect(restored.free_color_set).toEqual(new Set(hexes));
       }),
@@ -383,7 +351,7 @@ describe("recipe round-trip properties", () => {
           const converter = exportConverterRecipe(
             { ...DEFAULT_STATE, lut_name: "LUT-A" } as ConverterState,
             DEFAULT_SETTINGS,
-            "fpA",
+            "/a",
           );
           const fullRecipe = {
             format: "lumina-recipe" as const,
@@ -401,16 +369,11 @@ describe("recipe round-trip properties", () => {
                 filename: "bead.png",
                 mime_type: "image/png",
                 byte_size: 4,
-                sha256: "abcd",
                 encoding: "base64" as const,
                 payload_b64: "dGVzdA==",
               },
             },
             recipe: { converter, workshop: source },
-            integrity: {
-              recipe_sha256: "0".repeat(64),
-              asset_checksums: { primary: "abcd" },
-            },
             compat: { min_schema_version: 1 },
             warnings: [] as string[],
           };
@@ -422,10 +385,8 @@ describe("recipe round-trip properties", () => {
                 name: "LUT-A",
                 color_mode: ColorMode.FOUR_COLOR_RYBW,
                 path: "/a",
-                fingerprint: "fpA",
               },
             ],
-            { "LUT-A": "fpA" },
           );
           expect(restored.workshopSource).toEqual(source);
           expect(restored.workshopSource?.payload.cellsRle).toContainEqual([

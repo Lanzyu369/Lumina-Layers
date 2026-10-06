@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -64,6 +65,57 @@ GREEN = _mat("Green", E=(0.1, 0.6, 0.1), k=(4.0, 4.0, 4.0))
 BLACK = _mat("Black", E=(0.05, 0.05, 0.05), k=(6.0, 6.0, 6.0))
 SMALL_PALETTE = [RED, BLUE, WHITE]
 MEDIUM_PALETTE = [RED, BLUE, WHITE, GREEN, BLACK]
+
+
+def test_persisted_candidate_identity_change_is_a_miss(tmp_path):
+    from core.material_candidate_cache import (
+        load_material_candidate_runtime, save_material_candidate_runtime,
+    )
+
+    runtime = build_material_candidate_runtime(
+        materials=SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+        config=MaterialCandidateCacheConfig.persisted_for_budget(32),
+    )
+    path = save_material_candidate_runtime(runtime, cache_root=tmp_path)
+    changed = [replace(RED, directory_name="another-red"), BLUE, WHITE]
+    assert load_material_candidate_runtime(changed, 5, 0.08, candidate_budget=32,
+                                            cache_root=tmp_path) is None
+    assert path.exists()
+
+
+@pytest.mark.parametrize("changes", [
+    {"lab_grid_resolution": 128}, {"seed": 19},
+    {"candidate_pool_multiplier": 1},
+])
+def test_candidate_configuration_is_compared_before_reuse(tmp_path, changes):
+    from core.material_candidate_cache import (
+        load_material_candidate_runtime, save_material_candidate_runtime,
+    )
+
+    config = replace(MaterialCandidateCacheConfig.persisted_for_budget(32), **changes)
+    runtime = build_material_candidate_runtime(
+        materials=SMALL_PALETTE, layer_count=5, layer_height_mm=0.08, config=config,
+    )
+    path = save_material_candidate_runtime(runtime, cache_root=tmp_path)
+    assert load_material_candidate_runtime(SMALL_PALETTE, 5, 0.08,
+                                            candidate_budget=32, cache_root=tmp_path) is None
+    loaded = load_material_candidate_runtime(
+        SMALL_PALETTE, 5, 0.08, candidate_budget=32,
+        cache_root=tmp_path, config=config,
+    )
+    assert loaded is not None and loaded.cache_id == runtime.cache_id
+    np.testing.assert_array_equal(loaded.candidate_recipes, runtime.candidate_recipes)
+    baseline = build_material_candidate_runtime(
+        materials=SMALL_PALETTE, layer_count=5, layer_height_mm=0.08,
+        config=MaterialCandidateCacheConfig.persisted_for_budget(32),
+    )
+    baseline_path = save_material_candidate_runtime(baseline, cache_root=tmp_path)
+    assert baseline_path != path
+    default = load_material_candidate_runtime(
+        SMALL_PALETTE, 5, 0.08, candidate_budget=32, cache_root=tmp_path,
+    )
+    assert default is not None and default.cache_id == baseline.cache_id
+    assert path.exists()
 
 
 def test_default_candidate_config_keeps_8gib_build_guard() -> None:
@@ -730,7 +782,7 @@ def test_candidate_cache_file_path_uses_hybrid_budget_stem(tmp_path: Path) -> No
         cache_root=tmp_path,
     )
 
-    assert path.name.endswith("-hybrid-v2-b64.npz")
+    assert path.name.startswith("candidate-") and path.suffix == ".npz"
     assert "-g" not in path.stem
 
 
@@ -753,6 +805,7 @@ def test_candidate_runtime_save_load_roundtrip(tmp_path: Path) -> None:
         substrate="white",
         candidate_budget=32,
         cache_root=tmp_path,
+        config=MaterialCandidateCacheConfig(candidate_budget=32, seed=44),
     )
 
     assert npz_path.exists()
@@ -761,14 +814,12 @@ def test_candidate_runtime_save_load_roundtrip(tmp_path: Path) -> None:
     np.testing.assert_array_equal(loaded.achieved_srgb, runtime.achieved_srgb)
     np.testing.assert_array_equal(loaded.achieved_lab, runtime.achieved_lab)
     np.testing.assert_array_equal(loaded.pinned_mask, runtime.pinned_mask)
-    assert loaded.metadata["schema_version"] == "2.0"
+    assert loaded.metadata["schema_version"] == "3.0"
     assert loaded.metadata["mode"] == "candidate_hybrid"
     assert loaded.metadata["candidate_budget"] == 32
     assert loaded.metadata["candidate_count"] == runtime.valid_cell_count
     assert loaded.metadata["canonical_material_directory_names"] == [
-        "blue",
-        "white",
-        "red",
+        item["directory_name"] for item in loaded.metadata["canonical_materials"]
     ]
     assert loaded.metadata["candidate_pool_multiplier"] == 8
     assert loaded.metadata["batch_recipe_count"] == 524_288
@@ -804,10 +855,11 @@ def test_candidate_runtime_metadata_load_does_not_open_npz_payload(
         substrate="white",
         candidate_budget=32,
         cache_root=tmp_path,
+        config=MaterialCandidateCacheConfig(candidate_budget=32, seed=44),
     )
 
     assert entry is not None
-    assert entry.metadata["schema_version"] == "2.0"
+    assert entry.metadata["schema_version"] == "3.0"
     assert entry.metadata["mode"] == "candidate_hybrid"
     assert entry.metadata["candidate_count"] == runtime.valid_cell_count
     assert entry.cache_file_size_bytes == npz_path.stat().st_size
@@ -878,6 +930,8 @@ def test_candidate_runtime_keeps_uint8_recipes_for_82_materials(
         substrate="white",
         candidate_budget=256,
         cache_root=tmp_path,
+        config=MaterialCandidateCacheConfig(candidate_budget=256, candidate_pool_multiplier=1,
+            batch_recipe_count=32, seed=44, enable_inverse_refinement=False),
     )
 
     assert loaded is not None

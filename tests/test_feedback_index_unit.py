@@ -85,13 +85,11 @@ def _sample_payload(**overrides):
             "original_image": {
                 "status": "attached",
                 "filename": "original.png",
-                "sha256": "a" * 64,
                 "size_bytes": 123456,
             },
             "final_artifact": {
                 "status": "attached",
                 "filename": "final.3mf",
-                "sha256": "b" * 64,
                 "size_bytes": 234567,
                 "artifact_type": "3mf",
             },

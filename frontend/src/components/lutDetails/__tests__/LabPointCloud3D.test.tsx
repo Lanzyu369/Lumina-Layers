@@ -82,7 +82,6 @@ describe("LabPointCloud3D", () => {
     render(
       <LabPointCloud3D
         dataTestId="lab-3d"
-        fingerprint="fp-1"
         points={[
           { l: 62, a: -14, b: 18, hex_color: "#ff3366", rgb: [255, 51, 102], label: "1" },
           { l: 71, a: 22, b: 9, hex_color: "#33ccff", rgb: [51, 204, 255], label: "2" },
@@ -110,7 +109,6 @@ describe("LabPointCloud3D", () => {
     render(
       <LabPointCloud3D
         dataTestId="lab-3d"
-        fingerprint="fp-2"
         points={[
           { l: 62, a: -14, b: 18, hex_color: "#ff3366", rgb: [255, 51, 102], label: "1" },
           { l: 71, a: 22, b: 9, hex_color: "#33ccff", rgb: [51, 204, 255], label: "2" },
@@ -147,7 +145,6 @@ describe("LabPointCloud3D", () => {
     render(
       <LabPointCloud3D
         dataTestId="lab-3d"
-        fingerprint="fp-3"
         points={[
           { l: 62, a: -14, b: 18, hex_color: "#ff3366", rgb: [255, 51, 102], label: "1" },
           { l: 71, a: 22, b: 9, hex_color: "#33ccff", rgb: [51, 204, 255], label: "2" },
@@ -185,7 +182,6 @@ describe("LabPointCloud3D", () => {
     render(
       <LabPointCloud3D
         dataTestId="lab-3d"
-        fingerprint="fp-4"
         points={[
           { l: 62, a: -14, b: 18, hex_color: "#ff3366", rgb: [255, 51, 102], label: "1" },
           { l: 71, a: 22, b: 9, hex_color: "#33ccff", rgb: [51, 204, 255], label: "2" },

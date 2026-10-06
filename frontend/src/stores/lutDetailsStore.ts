@@ -297,6 +297,7 @@ export const useLutDetailsStore = create<LutDetailsState & LutDetailsActions>(
           }
           const catalog = response.groups ?? [];
           const current = get();
+          const previousLoadedItem = findItemByName(current.catalog, current.loadedLutName);
           const { manufacturer, lutName } = resolveSelection(
             catalog,
             current.query,
@@ -328,8 +329,8 @@ export const useLutDetailsStore = create<LutDetailsState & LutDetailsActions>(
             refreshedState.detail
             && loadedItem
             && (
-              refreshedState.detail.fingerprint !== loadedItem.fingerprint
-              || refreshedState.detail.path !== loadedItem.path
+              refreshedState.detail.path !== loadedItem.path
+              || (loadedItem.revision && loadedItem.revision !== previousLoadedItem?.revision)
             )
           ) {
             void loadDetail(refreshedState.loadedLutName, "loaded");

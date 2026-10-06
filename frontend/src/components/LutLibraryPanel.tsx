@@ -273,7 +273,7 @@ export default function LutLibraryPanel() {
                   const origin = resolveLutOrigin(item);
                   return (
                     <article
-                      key={`${item.name}:${item.fingerprint}`}
+                      key={item.path}
                       data-testid="lut-library-card"
                       className={`${wellPadClass} flex min-w-0 flex-col gap-4 p-4`}
                     >
@@ -302,10 +302,6 @@ export default function LutLibraryPanel() {
                         <div className="min-w-0">
                           <dt className="font-medium text-slate-500 dark:text-slate-400">{t("lut_library_path_label")}</dt>
                           <dd className="mt-1 truncate">{item.path}</dd>
-                        </div>
-                        <div className="min-w-0">
-                          <dt className="font-medium text-slate-500 dark:text-slate-400">{t("lut_library_fingerprint_label")}</dt>
-                          <dd className="mt-1 truncate">{item.fingerprint}</dd>
                         </div>
                       </dl>
                       <Button

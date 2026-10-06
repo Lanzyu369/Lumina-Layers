@@ -21,7 +21,6 @@ describe("LutLibraryPanel", () => {
             {
               name: "Cloud - Simulated - local_simulated_lut",
               path: "lut-preset/Cloud/Simulated/local_simulated_lut.json",
-              fingerprint: "cloud-fp",
               color_mode: "4-Color (RYBW)",
               source_kind: "legacy_lookup",
               manufacturer: "Cloud",
@@ -38,7 +37,6 @@ describe("LutLibraryPanel", () => {
             {
               name: "Custom - uploaded_lut",
               path: "lut-preset/Custom/uploaded_lut.json",
-              fingerprint: "custom-fp",
               color_mode: "6-Color",
               source_kind: "legacy_lookup",
               manufacturer: "Custom",

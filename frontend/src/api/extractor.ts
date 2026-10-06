@@ -121,7 +121,6 @@ export interface ColorcheckerReferenceSource {
   serialNumber?: string | null;
   patchCount?: number | null;
   labWhitePoint?: string | null;
-  referenceHash?: string | null;
 }
 
 export interface ColorcheckerReferenceSummary {
@@ -132,7 +131,6 @@ export interface ColorcheckerReferenceSummary {
   patchCount: number;
   labWhitePoint?: string | null;
   serialNumber?: string | null;
-  referenceHash?: string | null;
 }
 
 export interface ColorcheckerReferencesResponse {
@@ -143,7 +141,6 @@ export interface ColorcheckerReferencesResponse {
 export interface ColorcheckerReferenceNormalizeResponse {
   patches: ColorcheckerReferencePatch[];
   source: ColorcheckerReferenceSource;
-  referenceHash: string;
   warnings: string[];
 }
 

@@ -43,7 +43,6 @@ class LutCatalogItem(BaseModel):
     name: str = Field(..., description="LUT 显示名称")
     color_mode: str = Field(..., description="颜色模式")
     path: str = Field(..., description="公开引用（非本机文件系统路径）")
-    fingerprint: str = Field("", description="文件指纹")
 
 
 class LutCatalogGroup(BaseModel):
@@ -63,7 +62,6 @@ class NativeDbOption(BaseModel):
     name: str = Field(..., description="DB 文件名")
     path: str = Field(..., description="公开引用（非本机文件系统路径）")
     color_mode: str = Field(..., description="颜色模式")
-    fingerprint: str = Field("", description="文件指纹")
 
 
 class NativeBrandCatalogGroup(BaseModel):
@@ -98,7 +96,6 @@ class LutDetailsCatalogItem(BaseModel):
 
     name: str = Field(..., description="LUT 详情显示名称")
     path: str = Field(..., description="公开引用（非本机文件系统路径）")
-    fingerprint: str = Field("", description="文件指纹")
     color_mode: str = Field(..., description="颜色模式")
     source_kind: str = Field("legacy_lookup", description="来源类型")
     compatibility_key: str = Field("", description="legacy_multi 兼容分组键")
@@ -107,6 +104,7 @@ class LutDetailsCatalogItem(BaseModel):
     manufacturer_source: str = Field(..., description="厂商解析来源")
     material_source: str = Field(..., description="材质解析来源")
     search_tokens: list[str] = Field(default_factory=list, description="预计算搜索 token")
+    revision: str = Field("", description="目录读取代次，更新时重新加载详情")
 
 
 class LutDetailsCatalogGroup(BaseModel):
@@ -191,7 +189,6 @@ class LutDetailsResponse(BaseModel):
 
     name: str = Field(..., description="LUT 名称")
     path: str = Field(..., description="公开引用（非本机文件系统路径）")
-    fingerprint: str = Field("", description="文件指纹")
     manufacturer: str = Field(..., description="解析后的厂商")
     manufacturer_source: str = Field(..., description="厂商解析来源")
     material_type: str = Field("", description="解析后的材质")

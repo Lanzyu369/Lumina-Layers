@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import threading
 import weakref
 import time
@@ -672,17 +671,13 @@ def _build_region_id(
     pixel_count: int,
     bbox: list[int],
 ) -> str:
-    digest = hashlib.blake2s(digest_size=12)
     # The cache-local numeric label depends on component enumeration order and
     # differs between click-lazy and full-index builds. Geometry + colour is the
     # stable identity the frontend can safely reconcile without visual jumps.
-    digest.update(
-        (
-            f"{generation}:{color_hex}:"
-            f"{pixel_count}:{bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}"
-        ).encode("ascii")
+    return (
+        f"region-{generation}:{color_hex}:"
+        f"{pixel_count}:{bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}"
     )
-    return f"region-{digest.hexdigest()}"
 
 
 def _code_to_hex(code: int) -> str:

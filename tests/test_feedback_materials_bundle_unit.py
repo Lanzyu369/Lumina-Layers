@@ -53,8 +53,6 @@ def test_single_dir_packs_all_files(tmp_path: Path) -> None:
     assert result.entry_count == 2
     assert result.included_dirs == ["BrandA"]
     assert result.excluded_cache_keys == []
-    assert result.sha256 is not None
-    assert len(result.sha256) == 64
     with zipfile.ZipFile(out) as zf:
         names = set(zf.namelist())
     assert names == {"BrandA/profile.json", "BrandA/notes.txt"}

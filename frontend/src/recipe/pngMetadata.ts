@@ -27,7 +27,6 @@ const PNG_COMPRESSION_ZLIB = 0;
 const KEY_FORMAT = "lumina:format";
 const KEY_SCHEMA_VERSION = "lumina:schema_version";
 const KEY_RECIPE_JSON = "lumina:recipe_json";
-const KEY_RECIPE_SHA256 = "lumina:recipe_sha256";
 
 // ========== Low-level PNG helpers ==========
 
@@ -285,13 +284,11 @@ async function findTextualValue(buffer: ArrayBuffer, keyword: string): Promise<s
  *
  * @param coverPng - The cover image PNG blob (becomes the visible layer).
  * @param recipe - The full LuminaRecipe to embed.
- * @param recipeSha256 - Pre-computed SHA-256 of the recipe JSON string.
  * @returns A new PNG Blob with embedded metadata.
  */
 export async function embedRecipeInPng(
   coverPng: Blob,
   recipe: LuminaRecipe,
-  recipeSha256: string,
 ): Promise<Blob> {
   const buffer = await coverPng.arrayBuffer();
   const originalBytes = new Uint8Array(buffer);
@@ -309,7 +306,6 @@ export async function embedRecipeInPng(
   const formatChunk = buildTextChunk(KEY_FORMAT, RECIPE_FORMAT);
   const versionChunk = buildTextChunk(KEY_SCHEMA_VERSION, String(recipe.schema_version));
   const jsonChunk = buildTextChunk(KEY_RECIPE_JSON, recipeJson);
-  const sha256Chunk = buildTextChunk(KEY_RECIPE_SHA256, recipeSha256);
 
   // Find IEND chunk offset
   let iendOffset = -1;
@@ -333,7 +329,6 @@ export async function embedRecipeInPng(
     formatChunk.length +
     versionChunk.length +
     jsonChunk.length +
-    sha256Chunk.length +
     iendAndAfter.length;
 
   const result = new Uint8Array(totalSize);
@@ -350,9 +345,6 @@ export async function embedRecipeInPng(
 
   result.set(jsonChunk, pos);
   pos += jsonChunk.length;
-
-  result.set(sha256Chunk, pos);
-  pos += sha256Chunk.length;
 
   result.set(iendAndAfter, pos);
 
@@ -415,14 +407,12 @@ export async function extractCoverFromPng(pngBlob: Blob): Promise<Blob> {
   const buffer = await pngBlob.arrayBuffer();
   const originalBytes = new Uint8Array(buffer);
 
-  const luminaKeys = new Set([KEY_FORMAT, KEY_SCHEMA_VERSION, KEY_RECIPE_JSON, KEY_RECIPE_SHA256]);
-
   const parts: BlobPart[] = [new Uint8Array(PNG_SIGNATURE)];
 
   for (const chunk of iterateChunks(buffer)) {
     if (TEXTUAL_CHUNK_TYPES.has(chunk.type)) {
       const keyword = readChunkKeyword(chunk.data);
-      if (keyword !== null && luminaKeys.has(keyword)) {
+      if (keyword?.startsWith("lumina:")) {
         continue; // Skip Lumina metadata chunks
       }
     }

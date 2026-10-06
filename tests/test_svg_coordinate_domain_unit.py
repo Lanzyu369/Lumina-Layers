@@ -300,6 +300,9 @@ def test_same_version_new_native_build_invalidates_parse_cache(monkeypatch, tmp_
     key = _vector_parse_clip_cache_key(str(source), **options)
     artifact = tmp_path / "cache.pickle"
     artifact.write_bytes(_serialize_vector_parse_clip_cache(key, vars(_analysis())))
+    assert _load_vector_parse_clip_cache_artifact_by_provenance(
+        str(artifact), _vector_parse_clip_cache_provenance(key),
+    ) is not None
     binary.write_bytes(b"second distinct build")
     updated = _vector_parse_clip_cache_key(str(source), **options)
     assert key != updated

@@ -63,6 +63,16 @@ def _duplicate_optical_materials() -> list[MaterialParams]:
     ]
 
 
+@pytest.mark.parametrize("materials", [_materials(), _duplicate_optical_materials()])
+def test_established_dynamic_enumeration_order_and_rebinding(materials):
+    assert catalog_cache.dynamic_material_canonical_order(materials) == (1, 0)
+    reordered = list(reversed(materials))
+    assert catalog_cache.dynamic_material_canonical_order(reordered) == (0, 1)
+    assert [materials[index].directory_name for index in (1, 0)] == [
+        reordered[index].directory_name for index in (0, 1)
+    ]
+
+
 def _catalog() -> dynamic_solver.DynamicCandidateCatalog:
     return build_dynamic_candidate_catalog(
         np.asarray([[12, 34, 56], [78, 90, 123]], dtype=np.uint8),
@@ -283,7 +293,7 @@ def test_cache_hit_is_bit_identical_to_fresh_build_and_does_not_rebuild(
         )
 
 
-def test_cache_write_is_one_atomic_npz_replace_without_sidecar(
+def test_cache_write_atomically_replaces_payload_and_descriptor_sidecar(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -305,18 +315,19 @@ def test_cache_write_is_one_atomic_npz_replace_without_sidecar(
         cache_root=tmp_path,
     )
 
-    assert replacements == [(replacements[0][0], path)]
-    assert len(replacements) == 1
+    assert [target for _source, target in replacements] == [path.with_suffix(".meta.json"), path]
     assert path.suffix == ".npz"
-    assert list(path.parent.glob(path.stem + "*.json")) == []
+    assert path.with_suffix(".meta.json").is_file()
     assert list(path.parent.glob("*.tmp-*")) == []
 
 
 def test_corrupt_entry_is_removed_and_explicitly_rebuilt(tmp_path: Path) -> None:
     materials = _materials()
     key = _key(materials)
-    path = dynamic_catalog_cache_file_path(key, cache_root=tmp_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path = save_dynamic_candidate_catalog(
+        _catalog(), materials=materials, key=key,
+        candidate_count_before_dedup=3, cache_root=tmp_path,
+    )
     path.write_bytes(b"not-an-npz")
     build_calls = 0
 
@@ -349,8 +360,10 @@ def test_invalid_payload_raises_corruption_instead_of_becoming_a_hit(
 ) -> None:
     materials = _materials()
     key = _key(materials)
-    path = dynamic_catalog_cache_file_path(key, cache_root=tmp_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path = save_dynamic_candidate_catalog(
+        _catalog(), materials=materials, key=key,
+        candidate_count_before_dedup=3, cache_root=tmp_path,
+    )
     with path.open("wb") as handle:
         np.savez_compressed(
             handle,
@@ -718,7 +731,7 @@ def test_dynamic_runtime_provider_bypasses_legacy_fixed_cache(
     assert candidate_calls == [PREVIEW_SAFE_CANDIDATE_BUDGET]
 
 
-def test_dynamic_runtime_provider_skips_optical_only_cache_for_duplicate_optics(
+def test_dynamic_runtime_provider_reuses_identity_safe_cache_for_duplicate_optics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     materials = _duplicate_optical_materials()
@@ -727,9 +740,7 @@ def test_dynamic_runtime_provider_skips_optical_only_cache_for_duplicate_optics(
     monkeypatch.setattr(
         material_provider,
         "load_material_candidate_runtime",
-        lambda *_args, **_kwargs: pytest.fail(
-            "duplicate optical identities must bypass persisted candidate runtimes"
-        ),
+        lambda *_args, **_kwargs: runtime,
     )
 
     def build_runtime(*, materials, **_kwargs):
@@ -751,7 +762,7 @@ def test_dynamic_runtime_provider_skips_optical_only_cache_for_duplicate_optics(
     )
 
     assert loaded is runtime
-    assert build_orders == [["identity a", "identity b"]]
+    assert build_orders == []
 
 
 def test_concurrent_miss_builds_once_and_second_caller_hits(tmp_path: Path) -> None:
@@ -782,6 +793,42 @@ def test_concurrent_miss_builds_once_and_second_caller_hits(tmp_path: Path) -> N
 
     assert build_calls == 1
     assert sorted(result.cache_hit for result in results) == [False, True]
+
+
+def test_blocked_build_does_not_block_another_catalog_cache_hit(tmp_path: Path) -> None:
+    materials = _materials()
+    cached_key = _key(materials)
+    blocked_key = _key(materials, candidate_budget=4096)
+    save_dynamic_candidate_catalog(
+        _catalog(), materials=materials, key=cached_key,
+        candidate_count_before_dedup=3, cache_root=tmp_path,
+    )
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked_builder():
+        entered.set()
+        assert release.wait(10)
+        return _catalog(), 3
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        blocked = executor.submit(
+            load_or_build_dynamic_candidate_catalog,
+            materials=materials, key=blocked_key, builder=blocked_builder,
+            cache_root=tmp_path,
+        )
+        assert entered.wait(2)
+        hit = executor.submit(
+            load_or_build_dynamic_candidate_catalog,
+            materials=materials, key=cached_key,
+            builder=lambda: pytest.fail("existing catalog must be reused"),
+            cache_root=tmp_path,
+        )
+        try:
+            assert hit.result(timeout=1).cache_hit
+        finally:
+            release.set()
+            blocked.result(timeout=2)
 
 
 def test_cache_emits_structured_hit_miss_build_and_corruption_logs(
@@ -879,8 +926,10 @@ def test_corrupt_rebuild_rejects_invalid_builder_without_replacing_entry(
         max_layer_reachable=np.asarray([False, False], dtype=np.bool_),
         source_indices=valid.source_indices,
     )
-    path = dynamic_catalog_cache_file_path(key, cache_root=tmp_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path = save_dynamic_candidate_catalog(
+        _catalog(), materials=materials, key=key,
+        candidate_count_before_dedup=3, cache_root=tmp_path,
+    )
     path.write_bytes(b"corrupt")
 
     with pytest.raises(dynamic_solver.DynamicMaterialCandidateError) as caught:

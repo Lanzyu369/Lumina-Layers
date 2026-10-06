@@ -56,7 +56,6 @@ function makeLegacyCatalogGroups(): LutDetailsCatalogGroup[] {
         {
           name: "A 4C",
           path: "lut-ref/fp-a4.npy",
-          fingerprint: "fp-a4",
           color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
           compatibility_key: "sig-a4",
           source_kind: "legacy_lookup",
@@ -69,7 +68,6 @@ function makeLegacyCatalogGroups(): LutDetailsCatalogGroup[] {
         {
           name: "A 4C Alt",
           path: "lut-ref/fp-a4-alt.npy",
-          fingerprint: "fp-a4-alt",
           color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
           compatibility_key: "sig-a4-alt",
           source_kind: "legacy_lookup",
@@ -82,7 +80,6 @@ function makeLegacyCatalogGroups(): LutDetailsCatalogGroup[] {
         {
           name: "A 8C",
           path: "lut-ref/fp-a8.npy",
-          fingerprint: "fp-a8",
           color_mode: ColorModeEnum.EIGHT_COLOR,
           compatibility_key: "sig-a8",
           source_kind: "legacy_lookup",
@@ -100,7 +97,6 @@ function makeLegacyCatalogGroups(): LutDetailsCatalogGroup[] {
         {
           name: "B BW",
           path: "lut-ref/fp-bbw.npy",
-          fingerprint: "fp-bbw",
           color_mode: ColorModeEnum.BW,
           compatibility_key: "sig-bw",
           source_kind: "legacy_lookup",
@@ -118,7 +114,6 @@ function makeLegacyCatalogGroups(): LutDetailsCatalogGroup[] {
         {
           name: "Loose Merged",
           path: "lut-ref/fp-loose.npy",
-          fingerprint: "fp-loose",
           color_mode: ColorModeEnum.MERGED,
           compatibility_key: "sig-merged",
           source_kind: "legacy_lookup",
@@ -142,7 +137,6 @@ beforeEach(() => {
         name: "Brand A - A4",
         color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
         path: "lut-ref/fp-a4.npy",
-        fingerprint: "fp-a4",
       },
     ],
   });
@@ -196,31 +190,26 @@ beforeEach(() => {
         name: "Brand A - A4",
         color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
         path: "lut-ref/fp-a4.npy",
-        fingerprint: "fp-a4",
       },
       {
         name: "Brand A - A4 Alt",
         color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
         path: "lut-ref/fp-a4-alt.npy",
-        fingerprint: "fp-a4-alt",
       },
       {
         name: "Brand A - A8",
         color_mode: ColorModeEnum.EIGHT_COLOR,
         path: "lut-ref/fp-a8.npy",
-        fingerprint: "fp-a8",
       },
       {
         name: "Brand B - BW",
         color_mode: ColorModeEnum.BW,
         path: "lut-ref/fp-bbw.npy",
-        fingerprint: "fp-bbw",
       },
       {
         name: "Loose Merged",
         color_mode: ColorModeEnum.MERGED,
         path: "lut-ref/fp-loose.npy",
-        fingerprint: "fp-loose",
       },
     ],
     lutListLoading: false,
@@ -275,7 +264,6 @@ function makeDbOption(name: string) {
     name,
     path: `/${name}.json`,
     color_mode: "8-Color Max",
-    fingerprint: `fp-${name}`,
   };
 }
 
@@ -438,7 +426,6 @@ describe("BasicSettings", () => {
             name: "Recovered LUT",
             color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
             path: "/recovered.npy",
-            fingerprint: "fp-recovered",
           },
         ],
       });
@@ -903,7 +890,6 @@ describe("BasicSettings", () => {
         {
           name: "快造&4色PLA&RYBW",
           path: "lut-ref/snapmaker-rybw.npy",
-          fingerprint: "fp-snapmaker-rybw",
           color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
           compatibility_key: "sig-snapmaker-rybw",
           source_kind: "legacy_lookup",
@@ -924,7 +910,6 @@ describe("BasicSettings", () => {
           name: "snapmaker - 快造&4色PLA&RYBW",
           color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
           path: "lut-ref/snapmaker-rybw.npy",
-          fingerprint: "fp-snapmaker-rybw",
         },
       ],
     });

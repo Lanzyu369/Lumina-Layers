@@ -105,7 +105,7 @@ def test_load_solver_runtime_uses_persisted_candidate_before_building(
         layer_count=5,
         layer_height_mm=0.08,
         substrate="white",
-        config=provider.MaterialCandidateCacheConfig(candidate_budget=32, seed=5),
+        config=provider.MaterialCandidateCacheConfig.persisted_for_budget(32),
     )
     save_material_candidate_runtime(saved_runtime, cache_root=tmp_path)
 
@@ -148,9 +148,8 @@ def test_load_solver_runtime_uses_persisted_default_candidate_when_budget_unspec
         layer_count=5,
         layer_height_mm=0.08,
         substrate="white",
-        config=MaterialCandidateCacheConfig(candidate_budget=32, seed=5),
+        config=MaterialCandidateCacheConfig.persisted_for_budget(DEFAULT_PERSISTED_CANDIDATE_BUDGET),
     )
-    saved_runtime.metadata["candidate_budget"] = DEFAULT_PERSISTED_CANDIDATE_BUDGET
     save_material_candidate_runtime(saved_runtime, cache_root=tmp_path)
 
     monkeypatch.setattr(provider, "load_solver_cache", lambda *args, **kwargs: (None, None))
@@ -197,9 +196,8 @@ def test_load_solver_runtime_prefers_highest_persisted_candidate_budget(
             layer_count=5,
             layer_height_mm=0.08,
             substrate="white",
-            config=MaterialCandidateCacheConfig(candidate_budget=32, seed=budget),
+            config=MaterialCandidateCacheConfig.persisted_for_budget(budget),
         )
-        saved_runtime.metadata["candidate_budget"] = budget
         save_material_candidate_runtime(saved_runtime, cache_root=tmp_path)
 
     monkeypatch.setattr(provider, "load_solver_cache", lambda *args, **kwargs: (None, None))
@@ -239,9 +237,8 @@ def test_load_solver_runtime_falls_back_to_legacy_4m_candidate_budget(
         layer_count=5,
         layer_height_mm=0.08,
         substrate="white",
-        config=MaterialCandidateCacheConfig(candidate_budget=32, seed=5),
+        config=MaterialCandidateCacheConfig.persisted_for_budget(LEGACY_PERSISTED_CANDIDATE_BUDGET),
     )
-    saved_runtime.metadata["candidate_budget"] = LEGACY_PERSISTED_CANDIDATE_BUDGET
     save_material_candidate_runtime(saved_runtime, cache_root=tmp_path)
 
     monkeypatch.setattr(provider, "load_solver_cache", lambda *args, **kwargs: (None, None))

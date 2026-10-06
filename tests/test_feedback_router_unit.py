@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 from pathlib import Path
@@ -520,7 +519,7 @@ def test_submit_bug_report_multipart_saves_exact_original_without_session(
     assert original["direct_upload_status"] == "attached"
     assert original["source_session_id"] is None
     assert original["size_bytes"] == len(original_bytes)
-    assert original["sha256"] == hashlib.sha256(original_bytes).hexdigest()
+    assert "sha256" not in original
 
 
 def test_submit_bug_report_multipart_uses_direct_upload_before_session(
