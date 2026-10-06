@@ -129,15 +129,3 @@ def test_narrow_heightmap_decodes_with_nonempty_thumbnail(validation_client, siz
     assert response.status_code == 200
     assert response.json() == {"width": size[0], "height": size[1]}
     assert not list(temp_dir.iterdir())
-
-
-def test_oversized_heightmap_cleans_partial_temp_file(validation_client, monkeypatch):
-    client, temp_dir = validation_client
-    monkeypatch.setattr(system, "_HEIGHTMAP_VALIDATION_MAX_BYTES", 16)
-    response = client.post(
-        "/api/system/validate-heightmap",
-        files={"file": ("heightmap.png", (FIXTURES / "heightmap.png").read_bytes(), "image/png")},
-    )
-    assert response.status_code == 413
-    assert response.json() == {"detail": "Heightmap image exceeds 128 MiB."}
-    assert not list(temp_dir.iterdir())

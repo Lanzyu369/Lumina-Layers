@@ -25,7 +25,7 @@ from starlette.concurrency import run_in_threadpool
 
 import config
 from api.dependencies import get_file_registry, get_session_store
-from api.file_bridge import UploadTooLargeError, ensure_png_tempfile, upload_to_tempfile
+from api.file_bridge import ensure_png_tempfile, upload_to_tempfile
 from api.file_registry import FileRegistry
 from api.local_origin_guard import allow_public_gray_api, require_local_app_origin
 from api.preview_resources import (
@@ -61,7 +61,6 @@ log = get_logger(__name__)
 CLEANABLE_EXTENSIONS: set[str] = {".3mf", ".glb", ".png", ".jpg", ".txt"}
 PROTECTED_FILES: set[str] = {"lumina_stats.txt", "lumina_lut.json"}
 EPHEMERAL_PREVIEW_TTL_SECONDS = 600
-_HEIGHTMAP_VALIDATION_MAX_BYTES = 128 * 1024 * 1024
 _HEIGHTMAP_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 _HEIGHTMAP_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/bmp", "image/tiff"}
 _HEIGHTMAP_UNREADABLE_DETAIL = "Invalid or damaged heightmap image."
@@ -522,8 +521,7 @@ async def validate_heightmap(file: UploadFile = File(...)) -> dict[str, int]:
         dict[str, int]: Decoded width and height. (解码后的宽高。)
 
     Raises:
-        HTTPException: Invalid image or upload over 128 MiB.
-        (无效图像或上传超过 128 MiB。)
+        HTTPException: Invalid image. (无效图像。)
     """
     suffix = Path(file.filename or "").suffix.lower()
     if (
@@ -531,12 +529,7 @@ async def validate_heightmap(file: UploadFile = File(...)) -> dict[str, int]:
         or file.content_type not in _HEIGHTMAP_IMAGE_MIME_TYPES
     ):
         raise HTTPException(status_code=422, detail=_HEIGHTMAP_UNREADABLE_DETAIL)
-    try:
-        temp_path = await upload_to_tempfile(
-            file, max_bytes=_HEIGHTMAP_VALIDATION_MAX_BYTES,
-        )
-    except UploadTooLargeError as exc:
-        raise HTTPException(status_code=413, detail="Heightmap image exceeds 128 MiB.") from exc
+    temp_path = await upload_to_tempfile(file)
     try:
         result = await run_in_threadpool(HeightmapLoader.load_and_validate, temp_path)
         if not result["success"] or not result["original_size"]:
