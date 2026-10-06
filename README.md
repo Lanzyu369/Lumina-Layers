@@ -253,36 +253,27 @@ For detailed version history, see [CHANGELOG.md](CHANGELOG.md) / [CHANGELOG_CN.m
 ### Clone the repository
 
 ```bash
-git clone https://github.com/MOVIBALE/Lumina-Layers.git
-cd Lumina-Layers
+git clone https://github.com/lumina-layer-studio/Lumina-studio.git
+cd Lumina-studio
 ```
 
-### Option 1: Docker (Recommended)
+### Option 1: Local Installation
 
-Using Docker is the easiest way to run Lumina Studio without worrying about system-level dependencies (like `cairo` or `pkg-config`).
-
-1. **Build and run the local Docker deployment**:
-
-   ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\docker_local_deploy.ps1
-   ```
-
-2. Open the main frontend at `http://localhost:4174`.
-
-This starts the main Lumina frontend/backend with the local material and LUT
-routes enabled. Runtime data is bind-mounted outside the Docker image; see
-[Local Docker Deployment](docs/local-docker-deployment.md) for ports, E-drive
-runtime paths, and auto-update setup.
-
-### Option 2: Local Installation
-
-**Core dependencies** (required):
+**Core dependencies** (required; use Python 3.12):
 
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
+corepack enable
+cd frontend
+pnpm install
+cd ..
+python start_all.py
 ```
 
-### Option 3: Desktop Client (Electron)
+The launcher starts the backend and frontend. Open the frontend address printed
+by the launcher (default: `http://localhost:4174`).
+
+### Option 2: Desktop Client (Electron)
 
 ```bash
 # Required: the desktop shell starts the Python backend for you.
@@ -317,10 +308,11 @@ Bug reports are saved locally under `feedback/` and then uploaded to the officia
 ### Quick Start
 
 ```bash
-python main.py
+python start_all.py
 ```
 
-This launches the web interface with all three modules in tabs.
+After installing the dependencies above, this starts the backend and frontend.
+Open the frontend address printed by the launcher.
 
 ---
 

@@ -49,7 +49,7 @@ cd electron && corepack pnpm install && cd ..
 
 手动安装和启动可以把命令写成 `corepack pnpm ...`；但 `scripts/build_desktop.py` 内部会直接调用 `pnpm`，所以打 Windows 安装包前必须通过 `corepack enable` 或其他方式确保裸 `pnpm` 已在 `PATH` 中。
 
-**为什么不能合并成一个根目录 workspace**：2026-08 曾做过根目录 pnpm workspace 实验，因破坏 Docker 构建、与"各目录独立安装"的既有约定冲突而放弃。上游采用的方案是在各子目录内分别声明安装脚本白名单：`frontend/` 用 `pnpm-workspace.yaml` 的 `allowBuilds`，`electron/` 用其 `package.json` 的 `pnpm.onlyBuiltDependencies`（如 esbuild、electron）。保持现状即可。
+**为什么不能合并成一个根目录 workspace**：2026-08 曾做过根目录 pnpm workspace 实验，因与"各目录独立安装"的既有约定冲突而放弃。上游采用的方案是在各子目录内分别声明安装脚本白名单：`frontend/` 用 `pnpm-workspace.yaml` 的 `allowBuilds`，`electron/` 用其 `package.json` 的 `pnpm.onlyBuiltDependencies`（如 esbuild、electron）。保持现状即可。
 
 ## 3. 启动桌面开发版
 

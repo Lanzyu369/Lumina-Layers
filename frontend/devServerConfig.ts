@@ -8,7 +8,6 @@ interface DevServerEnv {
   VITE_DEV_HOST?: string;
   VITE_DEV_PORT?: string;
   VITE_API_PROXY_TARGET?: string;
-  VITE_ALLOW_ALL_HOSTS?: string;
   VITE_ALLOWED_HOSTS?: string;
 }
 
@@ -25,10 +24,6 @@ function parsePort(rawPort: string | undefined): number | null {
   return parsed;
 }
 
-function isTruthy(rawValue: string | undefined): boolean {
-  return ["1", "true", "yes", "on"].includes((rawValue ?? "").trim().toLowerCase());
-}
-
 function parseAllowedHosts(rawHosts: string | undefined): string[] {
   const extras = (rawHosts ?? "")
     .split(",")
@@ -38,15 +33,11 @@ function parseAllowedHosts(rawHosts: string | undefined): string[] {
 }
 
 export function resolveDevServerConfig(env: DevServerEnv) {
-  const allowedHosts: true | string[] = isTruthy(env.VITE_ALLOW_ALL_HOSTS)
-    ? true
-    : parseAllowedHosts(env.VITE_ALLOWED_HOSTS);
-
   return {
     host: env.VITE_DEV_HOST?.trim() || DEFAULT_DEV_HOST,
     port: parsePort(env.PORT) ?? parsePort(env.VITE_DEV_PORT) ?? DEFAULT_DEV_PORT,
     strictPort: true,
-    allowedHosts,
+    allowedHosts: parseAllowedHosts(env.VITE_ALLOWED_HOSTS),
   };
 }
 

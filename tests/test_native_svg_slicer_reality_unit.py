@@ -290,14 +290,13 @@ def test_native_svg_workflow_covers_all_release_realities() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
     for platform_id in (
-        "manylinux-x86_64",
+        "linux-x86_64",
         "windows-amd64",
         "macos-arm64",
         "macos-x86_64",
     ):
         assert platform_id in workflow
     for job_or_probe in (
-        "docker-reality",
         "windows-onefile-reality",
         "product-artifacts",
         "--native-svg-self-test",
@@ -305,7 +304,11 @@ def test_native_svg_workflow_covers_all_release_realities() -> None:
         "lumina-native-svg-reality",
     ):
         assert job_or_probe in workflow
-    assert "docker build" in workflow
+    assert (
+        "python -m pip wheel ./native/lumina-svg-core "
+        "--no-deps --wheel-dir wheelhouse"
+    ) in workflow
+    assert "if: runner.os != 'Linux'" in workflow
     assert "pyinstaller --noconfirm --clean lumina_studio.spec" in workflow
     assert (
         "actions/upload-artifact@"

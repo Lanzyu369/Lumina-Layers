@@ -16,6 +16,20 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-10-06",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [{
+      category: { zh: "稳定性", en: "Stability" },
+      items: [{
+        zh: "移除 Docker 部署和自动更新支持，请使用桌面客户端或本地安装；用于公网测试的访问放行开关也已移除。",
+        en: "Docker deployment and automatic updates have been removed. Use the desktop app or a local installation; the access bypass for public testing has also been removed.",
+      }],
+    }],
+  },
+  {
     version: "2026-10-04",
     title: {
       zh: "Lumina Layers — 9 月更新速览",

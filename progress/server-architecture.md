@@ -1,5 +1,10 @@
 # Server Architecture — Design Document (Twin-Track)
 
+> Deployment update (2026-10-06): Docker support and the public-test bypass
+> are retired. This historical record preserves earlier implementation and
+> validation evidence; use [Runtime support](../docs/runtime-support.md) for current behavior.
+> 部署更新：Docker 支持及公网测试访问旁路已移除；本文保留历史实现与验证记录，当前运行方式以上述说明为准。
+
 > **Status**: Draft v0. Phase A current-state diagnosis + A4-A6 detailed plan + Phase B/C/D outline. Each later phase will get its own self-contained design doc when started.
 > **Author**: Cascade (planning, post-PR-#130).
 > **Trigger**: Recent A1+A2 audit (PRs #126/#129/#130) revealed that single-process FastAPI + in-memory `SessionStore`/`FileRegistry` cannot meet the twin-track production posture (B2B for Elegoo single-tenant + B2C crowdfunded SaaS). The cross-session GLB overwrite leak fixed by PR #130 is one symptom; restart-loses-state and worker-pool process-affinity are the other two we have already hit.

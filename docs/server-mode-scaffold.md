@@ -64,7 +64,6 @@ trace any single behaviour back to its origin.
 
 | File | Lines | Purpose |
 |---|---:|---|
-| `docker-compose.yml` | 56 | Postgres 16 + Redis 7 services with healthchecks; bind to localhost ports `5432` / `6379`; named volumes for data persistence |
 | `api/migrations/alembic.ini` | 58 | Alembic config; `script_location = %(here)s` (CWD-independent — use the same pattern for any future Alembic configs) |
 | `api/migrations/env.py` | 100 | Reads `LUMINA_DATABASE_URL` at runtime; supports both offline and online migration modes; loaded only by `alembic` CLI (never by application code) |
 | `api/migrations/script.py.mako` | 26 | Template for new migrations |
@@ -164,24 +163,19 @@ Do **NOT** flip `LUMINA_BACKEND=postgres` in any deployment just because:
 
 ## 4. Smoke test — verify the scaffold still works
 
-Five-minute end-to-end verification, runnable today, requires Docker
-Desktop installed.
+End-to-end verification requires an independently provisioned PostgreSQL
+service and its client tools. Use a disposable test database. The default
+desktop backend does not need PostgreSQL or Redis.
 
-### 4.1 Start the data plane
-
-```bash
-docker compose up -d postgres redis
-docker compose ps  # both services should report "healthy" within ~10s
-```
-
-Connect from your machine to confirm the containers accept connections:
+### 4.1 Check the database connection
 
 ```bash
-docker compose exec postgres pg_isready -U lumina -d lumina_dev
-# → /var/run/postgresql:5432 - accepting connections
-docker compose exec redis redis-cli ping
-# → PONG
+pg_isready -h localhost -p 5432 -U lumina -d lumina_dev
 ```
+
+Provision the database, user and password outside this repository, then adapt
+the connection URL below to that test service. Redis is not required for these
+Postgres session/file backend checks.
 
 ### 4.2 Apply migrations
 
@@ -198,7 +192,7 @@ alembic -c api/migrations/alembic.ini upgrade head
 ### 4.3 Inspect the schema
 
 ```bash
-docker compose exec postgres psql -U lumina -d lumina_dev -c "\dt"
+psql -h localhost -p 5432 -U lumina -d lumina_dev -c "\dt"
 ```
 
 Expected output:
@@ -231,7 +225,7 @@ in too.
 If any fail after a future Python upgrade or SQLAlchemy bump, fix
 before any further A4 work.
 
-### 4.5 Verify the live Postgres backend (optional, requires Docker)
+### 4.5 Verify the live Postgres backend (optional, requires a test database)
 
 Integration tests against a real database are gated by
 `LUMINA_INTEGRATION_DB_URL` so they never run in default CI. Run them
@@ -256,13 +250,11 @@ resolve → cleanup works, (c) non-UUID owner strings (e.g.
 
 ### 4.6 Tear down
 
-```bash
-docker compose down            # stop containers, keep volumes
-docker compose down -v         # stop + delete volumes (full reset)
-```
+Stop only the disposable database service started for this check using its
+own service manager. No repository script provisions or removes that service.
 
-冒烟测试 6 步: 起容器 → 跑迁移 → 查表 → 跑快速契约 +
-codec 测试 → (可选) 跑 Postgres 集成 → 收摊. 任意一步失败, 先修复
+冒烟测试 6 步: 准备测试数据库 → 跑迁移 → 查表 → 跑快速契约 +
+codec 测试 → (可选) 跑 Postgres 集成 → 停止测试服务. 任意一步失败, 先修复
 再考虑在部署中启用 Postgres 模式.
 
 ---
@@ -443,7 +435,7 @@ python start_dev.py
 
 A future PR can add the `--postgres` flag per the original sketch:
 
-1. Verify `docker compose ps postgres` reports healthy (or start it)
+1. Verify the independently provisioned PostgreSQL service accepts connections
 2. Set `LUMINA_BACKEND=postgres` + `LUMINA_DATABASE_URL=...` for the
    spawned `api_server.py` process
 3. Emit a `startup_backend_selected` INFO event with `backend=postgres`
@@ -604,7 +596,7 @@ containing `alembic.ini` itself, making the config CWD-independent.
 
 Auto-detection (e.g., "if Postgres is reachable on localhost, use it")
 would silently change behavior between dev runs based on whether
-Docker happens to be running. Explicit env opt-in gives the operator
+the database service happens to be running. Explicit env opt-in gives the operator
 full control and makes the active backend obvious in logs.
 
 ---
