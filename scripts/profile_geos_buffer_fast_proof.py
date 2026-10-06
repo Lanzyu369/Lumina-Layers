@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import resource
 import sys
 import time
 from dataclasses import asdict, dataclass
@@ -222,6 +221,14 @@ def compare_geometry(
 
 
 def _peak_rss_bytes() -> int:
+    try:
+        import resource
+    except ImportError:
+        # Windows has no ``resource`` module; psutil reports the peak working set.
+        import psutil
+
+        memory = psutil.Process().memory_info()
+        return int(getattr(memory, "peak_wset", memory.rss))
     peak = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
     return peak if sys.platform == "darwin" else peak * 1024
 
