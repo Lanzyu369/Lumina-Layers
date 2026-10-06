@@ -64,6 +64,10 @@ def _compute_delta_e_mean(original_rgb: np.ndarray, output_rgb: np.ndarray) -> f
 
 
 def main() -> None:
+    from api.structured_logging import configure_structured_logging
+
+    configure_structured_logging()
+
     image_path = r"G:\Lumina\Lumina-Layers\test_images\LUT_Stress_Test_HD.png"
 
     print(f"Loading image: {image_path}")

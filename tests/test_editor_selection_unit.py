@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from api.preview_cache_artifacts import PREVIEW_CACHE_REVISION_KEY
 from api.replacement_history import (
@@ -13,6 +14,7 @@ from api.selection_state import (
     get_selection_mask,
     get_selection_revision,
     mutate_brush_add,
+    mutate_color_range_toggle,
     mutate_point_toggle,
     mutate_same_color_toggle,
     persist_selection_mask,
@@ -309,3 +311,51 @@ def test_repeated_free_color_toggle_preserves_serial_history() -> None:
         assert session["free_color_set"] == set()
     finally:
         app.dependency_overrides.pop(get_session_store, None)
+
+
+def test_color_range_toggle_zero_tolerance_matches_same_colour() -> None:
+    components, _rgb = _component_cache()
+    empty = np.zeros((3, 4), dtype=bool)
+    by_range = mutate_color_range_toggle(
+        components, empty, x=0, y=0, color_hex=None, tolerance=0.0
+    )
+    by_color = mutate_same_color_toggle(
+        components, empty, x=0, y=0, color_hex=None
+    )
+    assert np.array_equal(by_range, by_color)
+
+
+def test_color_range_toggle_selects_near_shades_and_is_reversible() -> None:
+    rgb = np.array(
+        [
+            [[200, 0, 0], [0, 0, 0], [204, 4, 2]],
+            [[0, 0, 0], [0, 0, 0], [0, 0, 0]],
+            [[0, 0, 200], [0, 0, 0], [200, 0, 0]],
+        ],
+        dtype=np.uint8,
+    )
+    components = build_visible_region_component_cache(_cache(rgb), generation=1)
+    empty = np.zeros((3, 3), dtype=bool)
+    selected = mutate_color_range_toggle(
+        components, empty, x=None, y=None, color_hex="#c80000", tolerance=5.0
+    )
+    assert bool(selected[0, 0]) and bool(selected[0, 2]) and bool(selected[2, 2])
+    assert not bool(selected[2, 0])
+    assert not bool(selected[1, 1])
+    cleared = mutate_color_range_toggle(
+        components, selected, x=0, y=0, color_hex=None, tolerance=5.0
+    )
+    assert not np.any(cleared)
+
+
+def test_color_range_toggle_requires_colour_or_point() -> None:
+    components, _rgb = _component_cache()
+    with pytest.raises(ValueError):
+        mutate_color_range_toggle(
+            components,
+            np.zeros((3, 4), dtype=bool),
+            x=None,
+            y=None,
+            color_hex=None,
+            tolerance=3.0,
+        )

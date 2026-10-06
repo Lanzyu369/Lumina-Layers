@@ -233,10 +233,11 @@ def test_worker_mixes_all_three_rasterize_outcomes_with_correct_counters(caplog)
             if getattr(rec, "event", None) == "bambu_3mf_cover_thumbnail_failed"
         ]
         assert len(warnings) == 1
-        # No dedicated timeout label since compute deadlines were removed
-        # (c49636463); a TimeoutError is reported by its exception name.
         assert warnings[0].error_type == "TimeoutError"
+        assert warnings[0].error_message == "synthetic timeout"
+        assert warnings[0].path == captured[1]["output_path"]
         assert warnings[0].fallback_action == "placeholder_written"
+        assert all(not os.path.exists(entry["output_path"]) for entry in captured)
     finally:
         if os.path.exists(result["zip_path"]):
             os.unlink(result["zip_path"])
@@ -446,17 +447,22 @@ def test_counter_invariant_separates_skipped_empty_from_failed_cover(caplog) -> 
         ]
         assert warning_events.count("bambu_3mf_cover_thumbnail_failed") == 3
 
-        # Each WARNING's error_type is one of the two expected categories.
+        # Preserve each actual exception type, message, and affected tile.
         warning_records = [
             rec for rec in caplog.records
             if getattr(rec, "event", None) == "bambu_3mf_cover_thumbnail_failed"
         ]
-        observed_error_types = {rec.error_type for rec in warning_records}
-        assert observed_error_types <= {"TimeoutError", "RuntimeError"}
-        assert "TimeoutError" in observed_error_types
-        assert "RuntimeError" in observed_error_types
+        assert [(rec.error_type, rec.error_message) for rec in warning_records] == [
+            ("TimeoutError", "synthetic timeout 1"),
+            ("TimeoutError", "synthetic timeout 2"),
+            ("RuntimeError", "synthetic raster failure"),
+        ]
+        assert [rec.path for rec in warning_records] == [
+            entry["output_path"] for entry in captured[:3]
+        ]
         for rec in warning_records:
             assert rec.fallback_action == "placeholder_written"
+        assert all(not os.path.exists(entry["output_path"]) for entry in captured)
 
         # All 6 sliced tiles must be present in the ZIP.
         with zipfile.ZipFile(result["zip_path"]) as archive:

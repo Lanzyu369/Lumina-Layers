@@ -5,8 +5,50 @@ from __future__ import annotations
 import inspect
 from unittest.mock import patch
 
+import numpy as np
+import pytest
+
 from config import ModelingMode
-from core.converter import convert_image_to_3d, generate_final_model
+from core.converter import convert_image_to_3d, generate_final_model, generate_preview_cached
+
+
+@pytest.mark.parametrize("entry", [convert_image_to_3d, generate_preview_cached])
+@pytest.mark.parametrize("use_defaults", [False, True])
+@pytest.mark.parametrize("positional", [False, True])
+def test_entry_context_preserves_arguments_and_object_identity(
+    entry, use_defaults: bool, positional: bool,
+) -> None:
+    """Context assembly forwards values without cloning arrays or nested metadata."""
+    signature = inspect.signature(entry)
+    supplied = {
+        name: object()
+        for name, parameter in signature.parameters.items()
+        if not use_defaults or parameter.default is inspect.Parameter.empty
+    }
+    if not use_defaults:
+        supplied.update(
+            material_source="lut",
+            selected_materials=["white", "red"],
+            replacement_regions=[{"mask": np.ones((2, 2), dtype=bool)}],
+        )
+    bound = signature.bind(**supplied)
+    bound.apply_defaults()
+    expected = dict(bound.arguments)
+    pipeline = "build_image_model_context" if entry is convert_image_to_3d else "run_preview_pipeline"
+
+    with (
+        patch(f"core.converter.{pipeline}", return_value={}) as run,
+        patch("core.converter._resolve_converter_separate_backing_color_id", side_effect=lambda *args: args[-1]),
+    ):
+        if positional:
+            entry(*bound.args, **bound.kwargs)
+        else:
+            entry(**bound.arguments)
+
+    received = run.call_args.kwargs if entry is convert_image_to_3d else run.call_args.args[0]
+    assert received.keys() == expected.keys()
+    for name, value in expected.items():
+        assert received[name] is value, name
 
 
 def test_height_identity_path_preserves_legacy_positional_bindings() -> None:

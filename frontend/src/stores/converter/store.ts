@@ -93,7 +93,14 @@ import {
 } from "../../utils/colorUtils";
 import { normalizeResourceUrl } from "../../utils/resourceUrl";
 import { computeScaleFactor } from "../../utils/scaleUtils";
-import { createPreviewSpace } from "../../utils/previewSpace";
+import { createPreviewSpace, type PreviewSpaceBounds } from "../../utils/previewSpace";
+import {
+  autoLayoutFridgeMagnets,
+  buildSuggestedFridgeMagnetCenters,
+  canonicalizeFridgeMagnets,
+  getDefaultFridgeMagnetCount,
+  layoutFridgeMagnetsByCenters,
+} from "../../utils/fridgeMagnetLayout";
 import {
   createFridgeMagnetFromPreset,
   getDefaultFridgeMagnetPresetKey,
@@ -413,7 +420,12 @@ export type SelectionMode =
   | "multi-select"
   | "region";
 
-export type SelectionTool = "same-color" | "point" | "brush";
+export type SelectionTool = "same-color" | "color-range" | "point" | "brush";
+
+/** Default CIEDE2000 tolerance for the colour-range selection tool. */
+export const DEFAULT_COLOR_RANGE_TOLERANCE = 6;
+/** Upper bound for the colour-range tolerance slider (ΔE00). */
+export const MAX_COLOR_RANGE_TOLERANCE = 30;
 
 export type SelectionDocument = SelectionDocumentResponse;
 
@@ -1066,7 +1078,7 @@ function hasAdjustmentState(
   );
 }
 
-type FridgeMagnetLayoutState = Pick<
+type FridgeMagnetBoundsState = Pick<
   ConverterState,
   | "modelBounds"
   | "target_width_mm"
@@ -1076,8 +1088,8 @@ type FridgeMagnetLayoutState = Pick<
 >;
 
 function getFallbackModelBounds(
-  state: FridgeMagnetLayoutState,
-): NonNullable<ConverterState["modelBounds"]> {
+  state: FridgeMagnetBoundsState,
+): PreviewSpaceBounds {
   if (state.modelBounds) {
     const { scaleX, scaleY } = computeScaleFactor(
       state.target_width_mm,
@@ -1110,141 +1122,6 @@ function getFallbackModelBounds(
   };
 }
 
-function getModelCenter(
-  _state: FridgeMagnetLayoutState,
-): { x: number; y: number } {
-  return { x: 0, y: 0 };
-}
-
-function getDefaultFridgeMagnetCount(
-  state: FridgeMagnetLayoutState,
-): number {
-  const bounds = getFallbackModelBounds(state);
-  const width = Math.max(bounds.maxX - bounds.minX, 0);
-  const height = Math.max(bounds.maxY - bounds.minY, 0);
-  const area = width * height;
-
-  if (area <= 5000) {
-    return 1;
-  }
-  if (area <= 15000) {
-    return 2;
-  }
-  return 4;
-}
-
-const FRIDGE_MAGNET_LAYOUT_GAP_MM = 1;
-
-function buildFridgeMagnetLayoutRatios(count: number): Array<[number, number]> {
-  if (count <= 1) {
-    return [[0.5, 0.5]];
-  }
-  if (count === 2) {
-    return [
-      [0.3, 0.5],
-      [0.7, 0.5],
-    ];
-  }
-  if (count === 3) {
-    return [
-      [0.3, 0.35],
-      [0.7, 0.35],
-      [0.5, 0.72],
-    ];
-  }
-  if (count === 4) {
-    return [
-      [0.3, 0.3],
-      [0.7, 0.3],
-      [0.3, 0.7],
-      [0.7, 0.7],
-    ];
-  }
-
-  const cols = Math.ceil(Math.sqrt(count));
-  const rows = Math.ceil(count / cols);
-  const marginX = 0.18;
-  const marginY = 0.18;
-  const usableWidth = 1 - marginX * 2;
-  const usableHeight = 1 - marginY * 2;
-  const ratios: Array<[number, number]> = [];
-
-  for (let row = 0; row < rows; row += 1) {
-    for (let col = 0; col < cols; col += 1) {
-      if (ratios.length >= count) {
-        break;
-      }
-      const xRatio =
-        cols === 1 ? 0.5 : marginX + (usableWidth * col) / (cols - 1);
-      const yRatio =
-        rows === 1 ? 0.5 : marginY + (usableHeight * row) / (rows - 1);
-      ratios.push([xRatio, yRatio]);
-    }
-  }
-
-  return ratios;
-}
-
-function buildSuggestedFridgeMagnetCenters(
-  state: FridgeMagnetLayoutState,
-  count: number,
-): Array<{ x: number; y: number }> {
-  const bounds = getFallbackModelBounds(state);
-  const boundsCenterX = (bounds.minX + bounds.maxX) / 2;
-  const boundsCenterY = (bounds.minY + bounds.maxY) / 2;
-  const interpolate = (min: number, max: number, ratio: number) =>
-    min + (max - min) * ratio;
-
-  return buildFridgeMagnetLayoutRatios(Math.max(1, count)).map(
-    ([xRatio, yRatio]) => ({
-      x: interpolate(bounds.minX, bounds.maxX, xRatio) - boundsCenterX,
-      y: interpolate(bounds.minY, bounds.maxY, yRatio) - boundsCenterY,
-    }),
-  );
-}
-
-function getFridgeMagnetLayoutSize(magnet: FridgeMagnetItem): {
-  width: number;
-  height: number;
-} {
-  if (magnet.shape === "round") {
-    const diameter = magnet.diameter_mm ?? 0;
-    return { width: diameter, height: diameter };
-  }
-
-  return {
-    width: magnet.width_mm ?? 0,
-    height: magnet.height_mm ?? 0,
-  };
-}
-
-function clampFridgeMagnetLayoutCenter(
-  center: { x: number; y: number },
-  magnet: FridgeMagnetItem,
-  bounds: NonNullable<ConverterState["modelBounds"]>,
-): { x: number; y: number } {
-  const { width, height } = getFridgeMagnetLayoutSize(magnet);
-  const halfWidth = width / 2;
-  const halfHeight = height / 2;
-  const boundsCenterX = (bounds.minX + bounds.maxX) / 2;
-  const boundsCenterY = (bounds.minY + bounds.maxY) / 2;
-  const clampAxis = (value: number, min: number, max: number) =>
-    min > max ? (min + max) / 2 : clampValue(value, min, max);
-
-  return {
-    x: clampAxis(
-      center.x,
-      bounds.minX - boundsCenterX + halfWidth,
-      bounds.maxX - boundsCenterX - halfWidth,
-    ),
-    y: clampAxis(
-      center.y,
-      bounds.minY - boundsCenterY + halfHeight,
-      bounds.maxY - boundsCenterY - halfHeight,
-    ),
-  };
-}
-
 function sanitizeFiniteNumber(value: number, fallback: number): number {
   return Number.isFinite(value) ? value : fallback;
 }
@@ -1263,158 +1140,6 @@ function sanitizeOptionalFiniteNumber(
   return Number.isFinite(value) ? value : fallback;
 }
 
-function layoutFridgeMagnetsByCenters(
-  state: FridgeMagnetLayoutState,
-  magnets: FridgeMagnetItem[],
-  initialCenters?: Array<{ x: number; y: number }>,
-): FridgeMagnetItem[] {
-  if (magnets.length === 0) {
-    return [];
-  }
-
-  const bounds = getFallbackModelBounds(state);
-  const fallbackCenter = getModelCenter(state);
-  const positioned = magnets.map((magnet, index) => ({
-    ...magnet,
-    ...clampFridgeMagnetLayoutCenter(
-      initialCenters?.[index] ?? fallbackCenter,
-      magnet,
-      bounds,
-    ),
-  }));
-
-  for (let iteration = 0; iteration < 48; iteration += 1) {
-    let moved = false;
-
-    for (let leftIndex = 0; leftIndex < positioned.length; leftIndex += 1) {
-      for (
-        let rightIndex = leftIndex + 1;
-        rightIndex < positioned.length;
-        rightIndex += 1
-      ) {
-        const left = positioned[leftIndex];
-        const right = positioned[rightIndex];
-        const leftSize = getFridgeMagnetLayoutSize(left);
-        const rightSize = getFridgeMagnetLayoutSize(right);
-        const minSeparationX =
-          leftSize.width / 2 +
-          rightSize.width / 2 +
-          FRIDGE_MAGNET_LAYOUT_GAP_MM;
-        const minSeparationY =
-          leftSize.height / 2 +
-          rightSize.height / 2 +
-          FRIDGE_MAGNET_LAYOUT_GAP_MM;
-        const deltaX = right.center_x_mm - left.center_x_mm;
-        const deltaY = right.center_y_mm - left.center_y_mm;
-        const overlapX = minSeparationX - Math.abs(deltaX);
-        const overlapY = minSeparationY - Math.abs(deltaY);
-
-        if (overlapX <= 0 || overlapY <= 0) {
-          continue;
-        }
-
-        const leftRoomX = left.center_x_mm - (bounds.minX + leftSize.width / 2);
-        const rightRoomX =
-          bounds.maxX - rightSize.width / 2 - right.center_x_mm;
-        const leftRoomY =
-          left.center_y_mm - (bounds.minY + leftSize.height / 2);
-        const rightRoomY =
-          bounds.maxY - rightSize.height / 2 - right.center_y_mm;
-        const roomX = Math.max(0, leftRoomX) + Math.max(0, rightRoomX);
-        const roomY = Math.max(0, leftRoomY) + Math.max(0, rightRoomY);
-        const separateOnX =
-          roomX >= overlapX && (roomX >= roomY || roomY < overlapY);
-        const directionX =
-          deltaX === 0 ? (leftIndex % 2 === 0 ? -1 : 1) : Math.sign(deltaX);
-        const directionY =
-          deltaY === 0 ? (leftIndex % 2 === 0 ? -1 : 1) : Math.sign(deltaY);
-
-        if (separateOnX) {
-          const shift = overlapX / 2 + 0.01;
-          left.center_x_mm -= directionX * shift;
-          right.center_x_mm += directionX * shift;
-        } else {
-          const shift = overlapY / 2 + 0.01;
-          left.center_y_mm -= directionY * shift;
-          right.center_y_mm += directionY * shift;
-        }
-
-        const clampedLeft = clampFridgeMagnetLayoutCenter(
-          { x: left.center_x_mm, y: left.center_y_mm },
-          left,
-          bounds,
-        );
-        const clampedRight = clampFridgeMagnetLayoutCenter(
-          { x: right.center_x_mm, y: right.center_y_mm },
-          right,
-          bounds,
-        );
-        left.center_x_mm = clampedLeft.x;
-        left.center_y_mm = clampedLeft.y;
-        right.center_x_mm = clampedRight.x;
-        right.center_y_mm = clampedRight.y;
-        moved = true;
-      }
-    }
-
-    if (!moved) {
-      break;
-    }
-  }
-
-  return positioned;
-}
-
-function canonicalizeFridgeMagnets(
-  state: Pick<
-    ConverterState,
-    | "modelBounds"
-    | "target_width_mm"
-    | "target_height_mm"
-    | "preview_width_mm"
-    | "preview_height_mm"
-    | "base_spacer_thick"
-    | "enable_fridge_magnet"
-    | "fridge_magnets"
-  >,
-  magnets: FridgeMagnetItem[],
-  options?: { resolveCollisions?: boolean },
-): FridgeMagnetItem[] {
-  if (magnets.length === 0) {
-    return [];
-  }
-
-  const normalizedMagnets = magnets.map(normalizeFridgeMagnetItem);
-  const fallbackCenter = getModelCenter(state);
-  const bounds = getFallbackModelBounds(state);
-  const sanitizedCenters = normalizedMagnets.map((magnet) => ({
-    x: sanitizeFiniteNumber(magnet.center_x_mm, fallbackCenter.x),
-    y: sanitizeFiniteNumber(magnet.center_y_mm, fallbackCenter.y),
-  }));
-
-  if (options?.resolveCollisions) {
-    return layoutFridgeMagnetsByCenters(
-      state,
-      normalizedMagnets,
-      sanitizedCenters,
-    );
-  }
-
-  return normalizedMagnets.map((magnet, index) => {
-    const center = clampFridgeMagnetLayoutCenter(
-      sanitizedCenters[index],
-      magnet,
-      bounds,
-    );
-
-    return {
-      ...magnet,
-      center_x_mm: center.x,
-      center_y_mm: center.y,
-    };
-  });
-}
-
 function createNextFridgeMagnetId(fridgeMagnets: FridgeMagnetItem[]): string {
   const maxId = fridgeMagnets.reduce((max, item) => {
     const match = item.id.match(/^fridge-magnet-(\d+)$/);
@@ -1428,11 +1153,12 @@ function createNextFridgeMagnetId(fridgeMagnets: FridgeMagnetItem[]): string {
 }
 
 function buildDefaultFridgeMagnetLayout(
-  state: FridgeMagnetLayoutState,
+  state: FridgeMagnetBoundsState,
 ): FridgeMagnetItem[] {
+  const bounds = getFallbackModelBounds(state);
   const magnets = buildSuggestedFridgeMagnetCenters(
-    state,
-    getDefaultFridgeMagnetCount(state),
+    bounds,
+    getDefaultFridgeMagnetCount(bounds),
   ).map(({ x, y }, index) =>
     createFridgeMagnetFromPreset(
       `fridge-magnet-${index + 1}`,
@@ -1443,36 +1169,13 @@ function buildDefaultFridgeMagnetLayout(
   );
 
   return layoutFridgeMagnetsByCenters(
-    state,
+    bounds,
     magnets,
     magnets.map((magnet) => ({
       x: magnet.center_x_mm,
       y: magnet.center_y_mm,
     })),
   );
-}
-
-function autoLayoutFridgeMagnets(
-  state: Pick<
-    ConverterState,
-    | "modelBounds"
-    | "target_width_mm"
-    | "target_height_mm"
-    | "preview_width_mm"
-    | "preview_height_mm"
-    | "fridge_magnets"
-  >,
-): FridgeMagnetItem[] {
-  const currentMagnets = state.fridge_magnets.map(normalizeFridgeMagnetItem);
-  if (currentMagnets.length === 0) {
-    return [];
-  }
-
-  const centers = buildSuggestedFridgeMagnetCenters(
-    state,
-    currentMagnets.length,
-  );
-  return layoutFridgeMagnetsByCenters(state, currentMagnets, centers);
 }
 
 function buildFridgeMagnetState(
@@ -1505,7 +1208,7 @@ function buildFridgeMagnetState(
   const enableFridgeMagnet =
     overrides?.enable_fridge_magnet ?? state.enable_fridge_magnet;
   const fridgeMagnets = canonicalizeFridgeMagnets(
-    state,
+    getFallbackModelBounds(state),
     overrides?.fridge_magnets ?? state.fridge_magnets,
   );
 
@@ -2207,6 +1910,21 @@ function queueSelectionMutation(
 
 function waitForSelectionMutation(sessionId: string): Promise<boolean> | null {
   return selectionMutationQueues.get(sessionId) ?? null;
+}
+
+/**
+ * Whether a colour replacement may target the shared selection mask: either a
+ * selection gesture is still in flight or a selection document is loaded.
+ * 颜色替换是否可能作用于共享选区：仍有选区手势在提交，或已加载选区文档。
+ */
+function mayUseSharedSelectionReplace(
+  state: Pick<ConverterState, "sessionId" | "selectionDocument">,
+): boolean {
+  if (!state.sessionId) return false;
+  return (
+    waitForSelectionMutation(state.sessionId) !== null ||
+    state.selectionDocument?.selection_revision !== undefined
+  );
 }
 
 function selectionDocumentVersion(
@@ -3002,6 +2720,8 @@ export interface ConverterState {
   largeFormatEnabled: boolean;
   tileWidthMm: number;
   tileHeightMm: number;
+  /** View-only: draw the tile cut lines over the 3D preview. */
+  largeFormatTileOverlayVisible: boolean;
   puzzleEnabled: boolean;
   puzzleStyle: PuzzleStyle;
   puzzleSizingMode: PuzzleSizingMode;
@@ -3183,6 +2903,8 @@ export interface ConverterState {
   selectionTool: SelectionTool;
   selectionDocument: SelectionDocument | null;
   brushSizePx: number;
+  /** CIEDE2000 tolerance used by the colour-range selection tool. */
+  colorRangeTolerance: number;
   selectedColors: Set<string>;
   regionData: RegionData | null;
   selectedRegions: RegionData[];
@@ -3299,6 +3021,7 @@ export interface ConverterActions {
   setLargeFormatEnabled: (enabled: boolean) => void;
   setTileWidthMm: (width: number) => void;
   setTileHeightMm: (height: number) => void;
+  setLargeFormatTileOverlayVisible: (visible: boolean) => void;
   setPuzzleEnabled: (enabled: boolean) => void;
   setPuzzleStyle: (style: PuzzleStyle) => void;
   setPuzzleSizingMode: (mode: PuzzleSizingMode) => void;
@@ -3327,12 +3050,19 @@ export interface ConverterActions {
   setSelectionMode: (mode: SelectionMode) => void;
   setSelectionTool: (tool: SelectionTool) => void;
   setBrushSizePx: (size: number) => void;
+  setColorRangeTolerance: (tolerance: number) => void;
   hydrateSelectionDocument: () => Promise<void>;
   applySelectionMutation: (input: {
-    operation: "point-toggle" | "same-color-toggle" | "brush-add" | "clear";
+    operation:
+      | "point-toggle"
+      | "same-color-toggle"
+      | "color-range-toggle"
+      | "brush-add"
+      | "clear";
     x?: number;
     y?: number;
     colorHex?: string;
+    colorTolerance?: number;
     brushRadius?: number;
     brushPoints?: Array<{ x: number; y: number }>;
     optimisticDocument?: SelectionDocument;
@@ -3369,6 +3099,15 @@ export interface ConverterActions {
     historyId: string,
     regionIds: string[],
   ) => Promise<void>;
+
+  /**
+   * Replace the shared selection mask with ``targetHex`` via region replace.
+   * Resolves ``true`` when the shared-selection path consumed the request
+   * (applied or aborted) and ``false`` when no shared selection exists.
+   * 用目标色替换共享选区；返回 true 表示已由共享选区路径处理（成功或中止），
+   * false 表示当前没有共享选区。
+   */
+  replaceSharedSelectionColor: (targetHex: string) => Promise<boolean>;
 
   // 待确认颜色替换
   setPendingReplacement: (pending: PendingReplacement | null) => void;
@@ -4225,6 +3964,7 @@ export const DEFAULT_STATE: ConverterState = {
   largeFormatEnabled: false,
   tileWidthMm: 250,
   tileHeightMm: 250,
+  largeFormatTileOverlayVisible: true,
   puzzleEnabled: false,
   puzzleStyle: "regular" as PuzzleStyle,
   puzzleSizingMode: "piece_size" as PuzzleSizingMode,
@@ -4321,6 +4061,7 @@ export const DEFAULT_STATE: ConverterState = {
   selectionTool: "point" as SelectionTool,
   selectionDocument: null,
   brushSizePx: 24,
+  colorRangeTolerance: DEFAULT_COLOR_RANGE_TOLERANCE,
   selectedColors: new Set<string>(),
   regionData: null,
   selectedRegions: [],
@@ -5627,7 +5368,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           : { target_width_mm: clamped };
         const fridgeMagnets = state.fridge_magnets.length > 0
           ? canonicalizeFridgeMagnets(
-              { ...state, ...dimensions },
+              getFallbackModelBounds({ ...state, ...dimensions }),
               state.fridge_magnets,
             )
           : state.fridge_magnets;
@@ -5659,7 +5400,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           fridge_magnets:
             state.fridge_magnets.length > 0
               ? canonicalizeFridgeMagnets(
-                  { ...state, ...dimensions },
+                  getFallbackModelBounds({ ...state, ...dimensions }),
                   state.fridge_magnets,
                 )
               : state.fridge_magnets,
@@ -5916,7 +5657,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     resetFridgeMagnetLayout: () =>
       set((state) => ({
         ...buildFridgeMagnetState(state, {
-          fridge_magnets: autoLayoutFridgeMagnets(state),
+          fridge_magnets: autoLayoutFridgeMagnets(
+            getFallbackModelBounds(state),
+            state.fridge_magnets,
+          ),
         }),
         selectedFridgeMagnetId: null,
         threemfDiskPath: null,
@@ -5925,18 +5669,18 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
     addFridgeMagnet: () =>
       set((state) => {
-        const nextFridgeMagnets = autoLayoutFridgeMagnets({
-          ...state,
-          fridge_magnets: [
+        const nextFridgeMagnets = autoLayoutFridgeMagnets(
+          getFallbackModelBounds(state),
+          [
             ...state.fridge_magnets,
             createFridgeMagnetFromPreset(
               createNextFridgeMagnetId(state.fridge_magnets),
               getDefaultFridgeMagnetPresetKey("round"),
-              getModelCenter(state).x,
-              getModelCenter(state).y,
+              0,
+              0,
             ),
           ],
-        });
+        );
 
         return {
           ...buildFridgeMagnetState(state, {
@@ -6190,6 +5934,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         threemfDiskPath: null,
         downloadUrl: null,
       }),
+    // View-only toggle: does not change generated output, so keep downloads.
+    setLargeFormatTileOverlayVisible: (visible: boolean) =>
+      set({ largeFormatTileOverlayVisible: visible }),
 
     setPuzzleEnabled: (enabled: boolean) =>
       set((state) => {
@@ -6418,6 +6165,16 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set({ brushSizePx: Math.max(1, Math.min(512, Math.round(size))) });
     },
 
+    setColorRangeTolerance: (tolerance: number) => {
+      const finite = Number.isFinite(tolerance) ? tolerance : DEFAULT_COLOR_RANGE_TOLERANCE;
+      set({
+        colorRangeTolerance: Math.max(
+          0,
+          Math.min(MAX_COLOR_RANGE_TOLERANCE, Math.round(finite * 10) / 10),
+        ),
+      });
+    },
+
     hydrateSelectionDocument: async () => {
       const state = _get();
       if (!state.sessionId) return;
@@ -6503,6 +6260,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             ...(input.x !== undefined ? { x: input.x } : {}),
             ...(input.y !== undefined ? { y: input.y } : {}),
             ...(input.colorHex ? { color_hex: input.colorHex } : {}),
+            ...(input.colorTolerance !== undefined
+              ? { color_tolerance: input.colorTolerance }
+              : {}),
             ...(input.brushRadius !== undefined
               ? { brush_radius: input.brushRadius }
               : {}),
@@ -7932,6 +7692,100 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }
     },
 
+    replaceSharedSelectionColor: async (targetHex: string) => {
+      // Shared-selection path: repaint exactly the authoritative server mask.
+      // 共享选区路径：只重绘服务端权威选区内的像素。
+      const initialSelectionState = _get();
+      const pendingSelection = initialSelectionState.sessionId
+        ? waitForSelectionMutation(initialSelectionState.sessionId)
+        : null;
+      if (pendingSelection && !(await pendingSelection)) return true;
+      let currentSelectionState = _get();
+      if (currentSelectionState.sessionId !== initialSelectionState.sessionId) {
+        return true;
+      }
+      const currentSessionId = currentSelectionState.sessionId;
+      const selectionRevision = currentSelectionState.selectionDocument?.selection_revision;
+      if (selectionRevision !== undefined && currentSessionId) {
+        const contentReservation = acquireContentCommitTurn(currentSessionId);
+        if (
+          !contentReservation.readyImmediately &&
+          !(await contentReservation.ready)
+        ) {
+          releaseContentCommit(contentReservation, false);
+          return true;
+        }
+        currentSelectionState = _get();
+        if (
+          currentSelectionState.sessionId !== currentSessionId ||
+          currentSelectionState.selectionDocument?.selection_revision === undefined
+        ) {
+          releaseContentCommit(contentReservation, false);
+          return true;
+        }
+        const latestSelectionRevision =
+          currentSelectionState.selectionDocument.selection_revision;
+        const previewCommit = captureReplacementPreviewCommit(
+          currentSelectionState,
+          contentReservation,
+        );
+        set({ replacePreviewLoading: true, error: null });
+        try {
+          const response = await apiRegionReplace(
+            currentSessionId,
+            `#${targetHex}`,
+            undefined,
+            latestSelectionRevision,
+            previewCommit.operationId,
+          );
+          if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) {
+            return true;
+          }
+          const current = _get();
+          set({
+            previewImageUrl: normalizeResourceUrl(response.preview_url),
+            previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
+            replacePreviewLoading: false,
+            regionReplacementCount: current.regionReplacementCount + 1,
+            threemfDiskPath: null,
+            downloadUrl: null,
+            ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+            ...dynamicMaterialResultState(response),
+            ...historyFlagsFromResponse(response),
+            ...selectionUpdatesFromResponse(
+              current,
+              currentSessionId,
+              response.selection,
+            ),
+          });
+          if (!response.selection) {
+            // Never guess ``content_revision + 1`` on the client. The
+            // endpoint must return the authoritative document; an older
+            // server can still be synchronized explicitly before the next
+            // selection operation.
+            void _get().hydrateSelectionDocument();
+          }
+          _get()._pollAsyncGlb();
+        } catch (err) {
+          const settlement = await settleReplacementPreviewError(
+            _get(),
+            previewCommit,
+            _get,
+            (partial) => set(partial),
+            err,
+            "Selection color replacement failed",
+          );
+          if (!settlement.active || settlement.committed || settlement.unknown) return true;
+          set({
+            replacePreviewLoading: false,
+            error: visibleConverterError(err, "Selection color replacement failed"),
+          });
+        }
+        return true;
+      }
+      return false;
+    },
+
     // --- 待确认颜色替换 ---
     setPendingReplacement: (pending: PendingReplacement | null) => {
       set({ pendingReplacement: pending });
@@ -7991,92 +7845,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           }
           break;
         case "multi-select": {
-          const initialSelectionState = _get();
-          const pendingSelection = initialSelectionState.sessionId
-            ? waitForSelectionMutation(initialSelectionState.sessionId)
-            : null;
-          if (pendingSelection && !(await pendingSelection)) return;
-          let currentSelectionState = _get();
-          if (currentSelectionState.sessionId !== initialSelectionState.sessionId) {
-            return;
-          }
-          const currentSessionId = currentSelectionState.sessionId;
-          const selectionRevision = currentSelectionState.selectionDocument?.selection_revision;
-          if (selectionRevision !== undefined && currentSessionId) {
-            const contentReservation = acquireContentCommitTurn(currentSessionId);
-            if (
-              !contentReservation.readyImmediately &&
-              !(await contentReservation.ready)
-            ) {
-              releaseContentCommit(contentReservation, false);
-              return;
-            }
-            currentSelectionState = _get();
-            if (
-              currentSelectionState.sessionId !== currentSessionId ||
-              currentSelectionState.selectionDocument?.selection_revision === undefined
-            ) {
-              releaseContentCommit(contentReservation, false);
-              return;
-            }
-            const latestSelectionRevision =
-              currentSelectionState.selectionDocument.selection_revision;
-            const previewCommit = captureReplacementPreviewCommit(
-              currentSelectionState,
-              contentReservation,
-            );
-            set({ replacePreviewLoading: true, error: null });
-            try {
-              const response = await apiRegionReplace(
-                currentSessionId,
-                `#${pending.targetHex}`,
-                undefined,
-                latestSelectionRevision,
-                previewCommit.operationId,
-              );
-              if (!isCurrentReplacementPreviewCommit(_get(), previewCommit)) {
-                return;
-              }
-              const current = _get();
-              set({
-                previewImageUrl: normalizeResourceUrl(response.preview_url),
-                previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
-                replacePreviewLoading: false,
-                regionReplacementCount: current.regionReplacementCount + 1,
-                threemfDiskPath: null,
-                downloadUrl: null,
-                ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
-                ...dynamicMaterialResultState(response),
-                ...historyFlagsFromResponse(response),
-                ...selectionUpdatesFromResponse(
-                  current,
-                  currentSessionId,
-                  response.selection,
-                ),
-              });
-              if (!response.selection) {
-                // Never guess ``content_revision + 1`` on the client. The
-                // endpoint must return the authoritative document; an older
-                // server can still be synchronized explicitly before the next
-                // selection operation.
-                void _get().hydrateSelectionDocument();
-              }
-              _get()._pollAsyncGlb();
-            } catch (err) {
-              const settlement = await settleReplacementPreviewError(
-                _get(),
-                previewCommit,
-                _get,
-                (partial) => set(partial),
-                err,
-                "Selection color replacement failed",
-              );
-              if (!settlement.active || settlement.committed || settlement.unknown) return;
-              set({
-                replacePreviewLoading: false,
-                error: visibleConverterError(err, "Selection color replacement failed"),
-              });
-            }
+          // Only yield when the shared-selection path can apply, so the
+          // legacy fallback keeps its synchronous request shape.
+          // 仅在共享选区路径可能生效时才等待，旧版回退路径保持同步发起请求。
+          if (
+            mayUseSharedSelectionReplace(_get()) &&
+            (await _get().replaceSharedSelectionColor(pending.targetHex))
+          ) {
             break;
           }
           // Legacy multi-region fallback.

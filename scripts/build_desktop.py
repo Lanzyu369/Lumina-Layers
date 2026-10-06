@@ -75,6 +75,17 @@ def check_core_geometry_dependencies_available() -> None:
             missing.append((module_name, exc))
 
     if not missing:
+        native = importlib.import_module("lumina_svg_core")
+        if not callable(getattr(native, "project_regions_to_grid", None)):
+            missing.append(("lumina_svg_core.project_regions_to_grid", RuntimeError(
+                "Rebuild requirements-native-svg.txt from this checkout; the installed native library is stale."
+            )))
+        elif not callable(getattr(native, "canonicalize_grid_regions", None)):
+            missing.append(("lumina_svg_core.canonicalize_grid_regions", RuntimeError(
+                "Rebuild requirements-native-svg.txt from this checkout; the installed native library is stale."
+            )))
+
+    if not missing:
         print("  Core geometry dependencies available for packaging.")
         return
 

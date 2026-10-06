@@ -20,6 +20,8 @@ import AnnouncementDialog from "./components/ui/AnnouncementDialog";
 import { I18nProvider, useI18n } from "./i18n/context";
 import { BugReportButton } from "./components/BugReportButton";
 import { BugReportModal } from "./components/BugReportModal";
+import { TutorialHost } from "./components/tutorial/TutorialHost";
+import { TutorialLauncherButton } from "./components/tutorial/TutorialLauncherButton";
 import { LanguageToggle } from "./components/LanguageToggle";
 import { ThemeToggle } from "./components/ThemeToggle";
 import { WidgetWorkspace } from "./components/widget/WidgetWorkspace";
@@ -369,6 +371,7 @@ function AppContent() {
           <WidgetToggles />
           <LanguageToggle />
           <ThemeToggle />
+          <TutorialLauncherButton />
           <BugReportButton onClick={() => setBugReportOpen(true)} />
           {reproMode.enabled && (
             <span
@@ -491,6 +494,11 @@ function AppContent() {
       <BugReportModal
         open={bugReportOpen}
         onClose={() => setBugReportOpen(false)}
+      />
+      {/* Beginner tutorial: offered once after the release announcement is
+          gone, and never during bug-report reproduction sessions. */}
+      <TutorialHost
+        canAutoOffer={announcementReady && !announcement.visible && !reproMode.enabled}
       />
       {/* Extractor ColorChecker calibration popup. Mounted at the app root so
           it appears regardless of whether the extractor is opened as the

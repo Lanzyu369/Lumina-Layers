@@ -2,9 +2,11 @@
  * PNG tEXt metadata chunk reader/writer for Lumina recipe embedding.
  * PNG tEXt 元数据块读写器，用于 Lumina 配方嵌入。
  *
- * Uses standard PNG tEXt chunks (Latin-1 key + value).
- * For large payloads we use zTXt (compressed text) when beneficial.
- * 使用标准 PNG tEXt 块（Latin-1 键 + 值）。
+ * The writer emits standard PNG tEXt chunks (Latin-1 key + UTF-8 value).
+ * The reader also accepts zTXt and iTXt, because external tools (e.g.
+ * ImageMagick) re-save long tEXt values as compressed zTXt.
+ * 写入端使用标准 PNG tEXt 块；读取端同时兼容 zTXt / iTXt，
+ * 因为外部工具（如 ImageMagick）重新保存时会把长文本压缩为 zTXt。
  */
 
 import type { LuminaRecipe } from "./types";
@@ -15,6 +17,11 @@ import { RECIPE_FORMAT } from "./types";
 const PNG_SIGNATURE = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 const CHUNK_TYPE_IEND = "IEND";
 const CHUNK_TYPE_TEXT = "tEXt";
+const CHUNK_TYPE_ZTXT = "zTXt";
+const CHUNK_TYPE_ITXT = "iTXt";
+const TEXTUAL_CHUNK_TYPES = new Set([CHUNK_TYPE_TEXT, CHUNK_TYPE_ZTXT, CHUNK_TYPE_ITXT]);
+/** The only compression method defined by the PNG spec (zlib/deflate). */
+const PNG_COMPRESSION_ZLIB = 0;
 
 // Lumina metadata keys
 const KEY_FORMAT = "lumina:format";
@@ -165,6 +172,111 @@ function parseTextChunkData(data: Uint8Array): { keyword: string; value: string 
   return { keyword, value };
 }
 
+/** Read the null-terminated keyword of any textual chunk without decoding its value. */
+function readChunkKeyword(data: Uint8Array): string | null {
+  const nullIdx = data.indexOf(0);
+  return nullIdx < 0 ? null : latin1Decode(data.subarray(0, nullIdx));
+}
+
+/** Inflate a zlib (RFC 1950) stream; returns null when unsupported or corrupt. */
+async function inflateZlib(compressed: Uint8Array): Promise<Uint8Array | null> {
+  if (typeof DecompressionStream === "undefined") return null;
+  try {
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(compressed);
+        controller.close();
+      },
+    });
+    const reader = source.pipeThrough(new DecompressionStream("deflate")).getReader();
+    const parts: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value);
+      total += value.length;
+    }
+    const out = new Uint8Array(total);
+    let pos = 0;
+    for (const part of parts) {
+      out.set(part, pos);
+      pos += part.length;
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+/** Parse zTXt data: keyword NUL compression-method(1) zlib-stream. */
+async function parseZtxtChunkData(
+  data: Uint8Array,
+): Promise<{ keyword: string; value: string } | null> {
+  const nullIdx = data.indexOf(0);
+  if (nullIdx < 0 || data[nullIdx + 1] !== PNG_COMPRESSION_ZLIB) return null;
+  const inflated = await inflateZlib(data.subarray(nullIdx + 2));
+  if (!inflated) return null;
+  const keyword = latin1Decode(data.subarray(0, nullIdx));
+  return { keyword, value: new TextDecoder().decode(inflated) };
+}
+
+/**
+ * Parse iTXt data: keyword NUL compression-flag(1) compression-method(1)
+ * language-tag NUL translated-keyword NUL text (UTF-8, optionally zlib).
+ */
+async function parseItxtChunkData(
+  data: Uint8Array,
+): Promise<{ keyword: string; value: string } | null> {
+  const keywordEnd = data.indexOf(0);
+  if (keywordEnd < 0) return null;
+  const compressionFlag = data[keywordEnd + 1];
+  const compressionMethod = data[keywordEnd + 2];
+  const languageEnd = data.indexOf(0, keywordEnd + 3);
+  if (languageEnd < 0) return null;
+  const translatedEnd = data.indexOf(0, languageEnd + 1);
+  if (translatedEnd < 0) return null;
+
+  let textBytes: Uint8Array | null = data.subarray(translatedEnd + 1);
+  if (compressionFlag === 1) {
+    if (compressionMethod !== PNG_COMPRESSION_ZLIB) return null;
+    textBytes = await inflateZlib(textBytes);
+    if (!textBytes) return null;
+  }
+  const keyword = latin1Decode(data.subarray(0, keywordEnd));
+  return { keyword, value: new TextDecoder().decode(textBytes) };
+}
+
+/** Decode a tEXt / zTXt / iTXt chunk into { keyword, value }; null for other chunks. */
+async function readTextualChunk(
+  chunk: PngChunk,
+): Promise<{ keyword: string; value: string } | null> {
+  switch (chunk.type) {
+    case CHUNK_TYPE_TEXT:
+      return parseTextChunkData(chunk.data);
+    case CHUNK_TYPE_ZTXT:
+      return parseZtxtChunkData(chunk.data);
+    case CHUNK_TYPE_ITXT:
+      return parseItxtChunkData(chunk.data);
+    default:
+      return null;
+  }
+}
+
+/**
+ * Find the value of the first textual chunk with the given keyword.
+ * Only chunks whose keyword matches are decompressed.
+ */
+async function findTextualValue(buffer: ArrayBuffer, keyword: string): Promise<string | null> {
+  for (const chunk of iterateChunks(buffer)) {
+    if (!TEXTUAL_CHUNK_TYPES.has(chunk.type)) continue;
+    if (readChunkKeyword(chunk.data) !== keyword) continue;
+    const parsed = await readTextualChunk(chunk);
+    if (parsed) return parsed.value;
+  }
+  return null;
+}
+
 // ========== Public API ==========
 
 /**
@@ -248,8 +360,8 @@ export async function embedRecipeInPng(
 }
 
 /**
- * Extract a LuminaRecipe from a PNG blob's tEXt metadata.
- * 从 PNG blob 的 tEXt 元数据中提取 LuminaRecipe。
+ * Extract a LuminaRecipe from a PNG blob's tEXt / zTXt / iTXt metadata.
+ * 从 PNG blob 的 tEXt / zTXt / iTXt 元数据中提取 LuminaRecipe。
  *
  * @returns The parsed recipe, or null if no Lumina metadata found.
  */
@@ -266,18 +378,7 @@ export async function extractRecipeFromPng(
     }
   }
 
-  let recipeJson: string | null = null;
-
-  for (const chunk of iterateChunks(buffer)) {
-    if (chunk.type === CHUNK_TYPE_TEXT) {
-      const parsed = parseTextChunkData(chunk.data);
-      if (parsed && parsed.keyword === KEY_RECIPE_JSON) {
-        recipeJson = parsed.value;
-        break;
-      }
-    }
-  }
-
+  const recipeJson = await findTextualValue(buffer, KEY_RECIPE_JSON);
   if (!recipeJson) return null;
 
   try {
@@ -302,27 +403,13 @@ export async function hasLuminaRecipe(pngBlob: Blob): Promise<boolean> {
     }
   }
 
-  for (const chunk of iterateChunks(buffer)) {
-    if (chunk.type === CHUNK_TYPE_TEXT) {
-      const parsed = parseTextChunkData(chunk.data);
-      if (parsed && parsed.keyword === KEY_FORMAT && parsed.value === RECIPE_FORMAT) {
-        return true;
-      }
-    }
-    // Stop early after IHDR + a few ancillary chunks if not found
-    if (chunk.type === "IDAT") {
-      // tEXt chunks before IDAT are typical; after IDAT they're still valid
-      // but we keep scanning
-    }
-  }
-
-  return false;
+  return (await findTextualValue(buffer, KEY_FORMAT)) === RECIPE_FORMAT;
 }
 
 /**
  * Extract the cover image (visible PNG layer) from a share card PNG.
- * This strips all Lumina tEXt metadata chunks and returns a clean PNG.
- * 从分享卡 PNG 中提取封面图（可视 PNG 层），去掉所有 Lumina tEXt 元数据块。
+ * This strips all Lumina tEXt / zTXt / iTXt metadata chunks and returns a clean PNG.
+ * 从分享卡 PNG 中提取封面图（可视 PNG 层），去掉所有 Lumina 文本元数据块。
  */
 export async function extractCoverFromPng(pngBlob: Blob): Promise<Blob> {
   const buffer = await pngBlob.arrayBuffer();
@@ -333,9 +420,9 @@ export async function extractCoverFromPng(pngBlob: Blob): Promise<Blob> {
   const parts: BlobPart[] = [new Uint8Array(PNG_SIGNATURE)];
 
   for (const chunk of iterateChunks(buffer)) {
-    if (chunk.type === CHUNK_TYPE_TEXT) {
-      const parsed = parseTextChunkData(chunk.data);
-      if (parsed && luminaKeys.has(parsed.keyword)) {
+    if (TEXTUAL_CHUNK_TYPES.has(chunk.type)) {
+      const keyword = readChunkKeyword(chunk.data);
+      if (keyword !== null && luminaKeys.has(keyword)) {
         continue; // Skip Lumina metadata chunks
       }
     }

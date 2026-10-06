@@ -1989,10 +1989,15 @@ class TestS08AuxiliaryMeshes:
         )
         if enable_outline:
             outline = result["scene"].geometry["Outline"]
-            # The coating owns both outer intervals, so the outline stays
-            # between them and never shares volume with the coating (81a3bea3b).
+            bottom_coating, top_coating = sorted(
+                coating.split(only_watertight=False),
+                key=lambda mesh: mesh.bounds[0, 2],
+            )
+            # Materials share their boundary faces, never the coating volume.
             assert outline.bounds[0, 2] == pytest.approx(0.0)
             assert outline.bounds[1, 2] == pytest.approx(total_layers * layer_height)
+            assert outline.bounds[0, 2] == pytest.approx(bottom_coating.bounds[1, 2])
+            assert outline.bounds[1, 2] == pytest.approx(top_coating.bounds[0, 2])
             assert coating.bounds[0, 0] <= outline.bounds[0, 0]
             assert coating.bounds[0, 1] <= outline.bounds[0, 1]
             assert coating.bounds[1, 0] >= outline.bounds[1, 0]

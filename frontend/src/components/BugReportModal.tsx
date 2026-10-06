@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ChangeEvent, FormEvent, JSX } from "react";
 import { createPortal } from "react-dom";
 import { apiStatusCodeToVisibleMessage } from "../api/client";
-import { relayBugReport, submitBugReport } from "../api/feedback";
+import { submitBugReport } from "../api/feedback";
 import type { BugReportRequestPayload, BugReportResponse } from "../api/feedback";
 import { trackLuminaEvent } from "../analytics/umami";
+import { useBugReportUploadStatus } from "../hooks/useBugReportUploadStatus";
 import { useI18n } from "../i18n/context";
 import {
   collectBugReportContext,
@@ -178,7 +179,6 @@ interface FailedReportState {
   copied: boolean;
 }
 
-type RelayState = "idle" | "sending" | "sent" | "failed" | "skipped";
 
 const LOCAL_PATH_PLACEHOLDER = "<local-path>";
 const STACK_TRACE_PLACEHOLDER = "<stack-trace omitted>";
@@ -353,7 +353,6 @@ export function BugReportModal({
   const [copied, setCopied] = useState(false);
   const [submittedReportCopied, setSubmittedReportCopied] = useState(false);
   const [failedReport, setFailedReport] = useState<FailedReportState | null>(null);
-  const [relayState, setRelayState] = useState<RelayState>("idle");
   const [screenshotDataUrl, setScreenshotDataUrl] = useState<string | null>(null);
   const [screenshotName, setScreenshotName] = useState<string | null>(null);
   const [screenshotError, setScreenshotError] = useState<string | null>(null);
@@ -364,6 +363,10 @@ export function BugReportModal({
    * 仅在用户展开「完整上下文」时按需渲染；避免打开 modal 就做昂贵序列化。
    */
   const [fullContextJson, setFullContextJson] = useState<string | null>(null);
+  const upload = useBugReportUploadStatus(
+    submittedTicket?.ticket_id ?? null,
+    submittedTicket?.submission_status ?? null,
+  );
 
   const resetForm = useCallback(() => {
     setDescription(presetDescription);
@@ -378,7 +381,6 @@ export function BugReportModal({
     setCopied(false);
     setSubmittedReportCopied(false);
     setFailedReport(null);
-    setRelayState("idle");
     setScreenshotDataUrl(null);
     setScreenshotName(null);
     setScreenshotError(null);
@@ -571,12 +573,10 @@ export function BugReportModal({
       setSubmitting(false);
       setCopied(false);
       setSubmittedReportCopied(false);
-      setRelayState("idle");
       trackLuminaEvent("lumina_bug_report_done", {
         active_tab: context.active_tab,
         has_screenshot: Boolean(screenshotDataUrl),
-        relay: false,
-        delivery_status: response.email_status,
+        delivery_status: response.submission_status,
       });
     } catch (err) {
       setNotice({
@@ -591,7 +591,6 @@ export function BugReportModal({
       trackLuminaEvent("lumina_bug_report_failed", {
         active_tab: context.active_tab,
         has_screenshot: Boolean(screenshotDataUrl),
-        relay: false,
         error_type: err instanceof Error ? err.name : typeof err,
       });
     }
@@ -619,38 +618,9 @@ export function BugReportModal({
     ? stringifyManualFallbackReport(submittedPayload)
     : "";
 
-  const handleRelayReport = async () => {
-    if (!submittedTicket || !submittedPayload) {
-      return;
-    }
-    setRelayState("sending");
+  const handleRetryUpload = async () => {
     setNotice(null);
-    try {
-      await relayBugReport(submittedTicket.ticket_id, submittedPayload);
-      setRelayState("sent");
-      setNotice({
-        tone: "success",
-        message: t("bug_report_relay_success"),
-      });
-      trackLuminaEvent("lumina_bug_report_done", {
-        active_tab: submittedPayload.context.active_tab,
-        has_screenshot: Boolean(submittedPayload.screenshot_data_url),
-        relay: true,
-        delivery_status: "relayed",
-      });
-    } catch (err) {
-      setRelayState("failed");
-      setNotice({
-        tone: "error",
-        message: t("bug_report_relay_failed"),
-      });
-      trackLuminaEvent("lumina_bug_report_failed", {
-        active_tab: submittedPayload.context.active_tab,
-        has_screenshot: Boolean(submittedPayload.screenshot_data_url),
-        relay: true,
-        error_type: err instanceof Error ? err.name : typeof err,
-      });
-    }
+    await upload.retry();
   };
 
   const handleCopySubmittedReport = async () => {
@@ -758,9 +728,18 @@ export function BugReportModal({
         {submittedTicket ? (
           <div className="flex min-h-0 flex-1 flex-col">
             <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
-              <StatusBanner tone="success" role="status">
+              <StatusBanner
+                tone={
+                  upload.status === "failed" || upload.status === "disabled"
+                    ? "warning"
+                    : "success"
+                }
+                role="status"
+              >
                 {interpolateTicket(
-                  t("bug_report_toast_success"),
+                  upload.status === "failed" || upload.status === "disabled"
+                    ? t("bug_report_toast_saved_locally")
+                    : t("bug_report_toast_success"),
                   submittedTicket.ticket_id,
                 )}
               </StatusBanner>
@@ -809,18 +788,56 @@ export function BugReportModal({
               </div>
 
               <p
-                data-testid="bug-report-email-status"
-                data-status={submittedTicket.email_status}
+                data-testid="bug-report-upload-status"
+                data-status={upload.status ?? "pending"}
                 className="text-sm leading-6 text-slate-700 dark:text-slate-200"
               >
-                {submittedTicket.email_status === "sent"
-                  ? t("bug_report_success_emailed_yes")
-                  : submittedTicket.email_status === "pending"
-                    ? t("bug_report_success_email_pending")
-                    : submittedTicket.email_status === "failed"
-                      ? t("bug_report_success_email_failed")
-                      : t("bug_report_success_email_unconfigured")}
+                {upload.status === "submitted"
+                  ? t("bug_report_upload_submitted")
+                  : upload.status === "failed"
+                    ? t("bug_report_upload_failed")
+                    : upload.status === "disabled"
+                      ? t("bug_report_upload_disabled")
+                      : upload.timedOut
+                        ? t("bug_report_upload_pending_slow")
+                        : t("bug_report_upload_pending")}
               </p>
+
+              {upload.status === "submitted" &&
+                (upload.details?.held_back_attachments.length ?? 0) > 0 && (
+                <StatusBanner tone="warning" role="status">
+                  <span data-testid="bug-report-upload-held-back">
+                    {t("bug_report_upload_held_back").replace(
+                      "{files}",
+                      (upload.details?.held_back_attachments ?? [])
+                        .map((item) => item.name)
+                        .join(", "),
+                    )}
+                  </span>
+                </StatusBanner>
+              )}
+
+              {upload.status === "failed" && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    data-testid="bug-report-upload-retry"
+                    onClick={handleRetryUpload}
+                    disabled={upload.retrying}
+                    className="rounded-lg px-3 py-1 text-xs font-medium transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] dark:hover:bg-slate-800"
+                    style={{ color: "var(--surface-text-muted)" }}
+                  >
+                    {upload.retrying
+                      ? t("bug_report_upload_retrying")
+                      : t("bug_report_upload_retry")}
+                  </button>
+                  {upload.retryFailed && (
+                    <span className="text-xs text-[var(--error-fg)]">
+                      {t("bug_report_upload_retry_failed")}
+                    </span>
+                  )}
+                </div>
+              )}
 
               {submittedTicket.original_image_status && (
                 <StatusBanner
@@ -849,57 +866,8 @@ export function BugReportModal({
                 </StatusBanner>
               )}
 
-              {(submittedTicket.email_status === "failed" ||
-                submittedTicket.email_status === "unconfigured") &&
-                submittedTicket.relay_available &&
-                relayState !== "sent" && (
-                <div
-                  className="space-y-3 rounded-[18px] border px-4 py-3"
-                  style={{
-                    borderColor: "var(--surface-outline)",
-                    background:
-                      "color-mix(in srgb, var(--surface-panel-strong) 68%, transparent)",
-                  }}
-                >
-                  <p className="text-sm leading-6 text-slate-700 dark:text-slate-200">
-                    {t("bug_report_relay_prompt")}
-                  </p>
-                  <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">
-                    {t("bug_report_relay_privacy")}
-                  </p>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      data-testid="bug-report-relay-send"
-                      onClick={handleRelayReport}
-                      disabled={relayState === "sending"}
-                      className="rounded-lg px-3 py-1 text-xs font-medium transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] dark:hover:bg-slate-800"
-                      style={{ color: "var(--surface-text-muted)" }}
-                    >
-                      {t("bug_report_relay_send")}
-                    </button>
-                    <button
-                      type="button"
-                      data-testid="bug-report-relay-skip"
-                      onClick={() => {
-                        setRelayState("skipped");
-                        setNotice({
-                          tone: "warning",
-                          message: t("bug_report_relay_skipped"),
-                        });
-                      }}
-                      className="rounded-lg px-3 py-1 text-xs font-medium transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] dark:hover:bg-slate-800"
-                      style={{ color: "var(--surface-text-muted)" }}
-                    >
-                      {t("bug_report_relay_skip")}
-                    </button>
-                  </div>
-                </div>
-              )}
-              {(submittedTicket.email_status === "failed" ||
-                submittedTicket.email_status === "unconfigured") &&
-                submittedReportText &&
-                relayState !== "sent" && (
+              {(upload.status === "failed" || upload.status === "disabled") &&
+                submittedReportText && (
                 <div
                   className="space-y-3 rounded-[18px] border px-4 py-3"
                   style={{

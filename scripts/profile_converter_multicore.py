@@ -1564,6 +1564,10 @@ def main(argv: list[str] | None = None) -> int:
         Process exit code. 进程退出码。
     """
 
+    from api.structured_logging import configure_structured_logging
+
+    configure_structured_logging()
+
     args = _parse_args(argv)
     case = ProfileCase(
         name=f"{args.kind}-{args.material_count}",

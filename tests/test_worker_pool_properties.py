@@ -13,6 +13,7 @@ import asyncio
 import os
 import re
 import time
+from typing import Iterator
 from unittest.mock import patch
 
 import pytest
@@ -111,6 +112,21 @@ class TestWorkerPoolMaxWorkersProperty:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(scope="class")
+def exception_pool() -> Iterator[WorkerPoolManager]:
+    """One started pool shared by every generated example.
+
+    Spawning a Windows process pool per example cost about 0.8 s each; reusing
+    one pool also proves it keeps serving tasks after workers raise.
+    """
+    pool = WorkerPoolManager(max_workers=1)
+    pool.start()
+    try:
+        yield pool
+    finally:
+        pool.shutdown(wait=True)
+
+
 class TestWorkerExceptionPropagationProperty:
     """For any exception type raised in a worker, pool.submit() propagates it.
 
@@ -126,7 +142,12 @@ class TestWorkerExceptionPropagationProperty:
         ).filter(lambda s: s.strip()),
     )
     @settings(max_examples=100, deadline=5000)
-    def test_worker_exception_propagates(self, exc_index: int, msg: str) -> None:
+    def test_worker_exception_propagates(
+        self,
+        exception_pool: WorkerPoolManager,
+        exc_index: int,
+        msg: str,
+    ) -> None:
         """Property 2: Worker 异常传播.
         Property 2: Worker 异常传播。
 
@@ -137,13 +158,8 @@ class TestWorkerExceptionPropagationProperty:
         **Validates: Requirements 1.4**
         """
         exc_type, worker_fn = _EXCEPTION_WORKERS[exc_index]
-        pool = WorkerPoolManager(max_workers=1)
-        pool.start()
-        try:
-            with pytest.raises(exc_type, match=re.escape(msg)):
-                asyncio.run(pool.submit(worker_fn, msg))
-        finally:
-            pool.shutdown(wait=True)
+        with pytest.raises(exc_type, match=re.escape(msg)):
+            asyncio.run(exception_pool.submit(worker_fn, msg))
 
 
 # ---------------------------------------------------------------------------

@@ -739,6 +739,10 @@ def _write_report(path: Path, report: dict[str, Any]) -> None:
 
 
 def main() -> int:
+    from api.structured_logging import configure_structured_logging
+
+    configure_structured_logging()
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--generate-artifacts", action="store_true")
     parser.add_argument("--generate-only", action="store_true")

@@ -30,6 +30,10 @@ export interface ThemeColors {
   bedBrand: string;
   /** Neutral model body color in the model-surface workflow (覆面模型本体中性色) */
   modelSurfaceBody: string;
+  /** Large-format tile cut line; bright so it reads on dark artwork (大画幅切割线色) */
+  largeFormatTileOutline: string;
+  /** Halo under the cut line so it reads on light artwork (大画幅切割线描边色) */
+  largeFormatTileOutlineHalo: string;
 }
 
 /** Color roles used by the virtual printer bed. (虚拟打印热床使用的颜色角色) */
@@ -105,6 +109,8 @@ export const THEME_CONFIG: Record<"light" | "dark", ThemeColors> = {
     bedBorder: "#9da6b1",
     bedBrand: "#606b78",
     modelSurfaceBody: "#a8b4c4",
+    largeFormatTileOutline: "#f59e0b",
+    largeFormatTileOutlineHalo: "#0f172a",
   },
   dark: {
     canvasClearColor: "#1e1e26",
@@ -118,6 +124,8 @@ export const THEME_CONFIG: Record<"light" | "dark", ThemeColors> = {
     bedBorder: "#171b22",
     bedBrand: "#9ba6b4",
     modelSurfaceBody: "#64748b",
+    largeFormatTileOutline: "#f59e0b",
+    largeFormatTileOutlineHalo: "#0f172a",
   },
 };
 

@@ -21,6 +21,7 @@ from api.visible_region_cache import (
     get_component_at,
     union_mask_contours,
 )
+from core.color_similarity import colors_within_delta_e, parse_hex_color
 
 SELECTION_MASK_KEY = "editor_selection_mask"
 SELECTION_REVISION_KEY = "editor_selection_revision"
@@ -344,6 +345,36 @@ def mutate_point_toggle(
     return next_mask
 
 
+def _reference_color_hex(
+    component_cache: dict[str, Any],
+    x: int | None,
+    y: int | None,
+    color_hex: str | None,
+) -> str:
+    """Use the explicit colour, else the visible colour of the clicked block."""
+    if color_hex:
+        return color_hex
+    if x is None or y is None:
+        raise ValueError("Colour selection requires a colour or point.")
+    _label, component = get_component_at(component_cache, x, y)
+    return str(component["color_hex"])
+
+
+def _toggle_component_group(
+    component_cache: dict[str, Any],
+    current: np.ndarray,
+    labels: list[int],
+    reference_hex: str,
+) -> np.ndarray:
+    """Deselect the group if it is fully selected, otherwise add it."""
+    group_mask = component_union_mask(component_cache, labels)
+    if not np.any(group_mask):
+        raise KeyError(f"No visible components found for colour {reference_hex}.")
+    next_mask = current.copy()
+    next_mask[group_mask] = not bool(np.all(next_mask[group_mask]))
+    return next_mask
+
+
 def mutate_same_color_toggle(
     component_cache: dict[str, Any],
     current: np.ndarray,
@@ -352,22 +383,58 @@ def mutate_same_color_toggle(
     y: int | None,
     color_hex: str | None,
 ) -> np.ndarray:
-    resolved_hex = color_hex
-    if not resolved_hex:
-        if x is None or y is None:
-            raise ValueError("Same-colour selection requires a colour or point.")
-        _label, component = get_component_at(component_cache, x, y)
-        resolved_hex = str(component["color_hex"])
-    labels = component_labels_for_color(component_cache, resolved_hex)
-    group_mask = component_union_mask(component_cache, labels)
-    if not np.any(group_mask):
-        raise KeyError(f"No visible components found for colour {resolved_hex}.")
-    next_mask = current.copy()
-    if np.all(next_mask[group_mask]):
-        next_mask[group_mask] = False
-    else:
-        next_mask[group_mask] = True
-    return next_mask
+    reference_hex = _reference_color_hex(component_cache, x, y, color_hex)
+    labels = component_labels_for_color(component_cache, reference_hex)
+    return _toggle_component_group(component_cache, current, labels, reference_hex)
+
+
+def _labels_within_delta_e(
+    component_cache: dict[str, Any],
+    reference_hex: str,
+    max_delta_e00: float,
+) -> list[int]:
+    """Labels of visible blocks whose colour is within the ΔE00 tolerance."""
+    labels_by_hex: dict[str, list[int]] = {}
+    for label, component in component_cache["components"].items():
+        labels_by_hex.setdefault(str(component["color_hex"]), []).append(int(label))
+    hexes = list(labels_by_hex)
+    if not hexes:
+        return []
+    candidate_rgb = np.asarray([parse_hex_color(value) for value in hexes], dtype=np.uint8)
+    within = colors_within_delta_e(parse_hex_color(reference_hex), candidate_rgb, max_delta_e00)
+    return [label for value, hit in zip(hexes, within, strict=True) if hit for label in labels_by_hex[value]]
+
+
+def mutate_color_range_toggle(
+    component_cache: dict[str, Any],
+    current: np.ndarray,
+    *,
+    x: int | None,
+    y: int | None,
+    color_hex: str | None,
+    tolerance: float,
+) -> np.ndarray:
+    """Toggle every visible block whose colour is within ``tolerance`` ΔE00.
+    切换所有与参考色色差（ΔE00）不超过容差的可见色块；容差 0 等同同色选择。
+
+    Args:
+        component_cache: Visible-region component cache. (可见区域连通块缓存)
+        current: Current selection mask. (当前选区掩码)
+        x: Clicked pixel X, used when ``color_hex`` is absent. (点击 X)
+        y: Clicked pixel Y, used when ``color_hex`` is absent. (点击 Y)
+        color_hex: Optional explicit reference colour. (显式参考色)
+        tolerance: Inclusive CIEDE2000 tolerance. (ΔE00 容差)
+
+    Returns:
+        np.ndarray: Next selection mask. (新的选区掩码)
+
+    Raises:
+        ValueError: No colour/point given, or invalid tolerance. (缺少颜色/坐标或容差非法)
+        KeyError: No visible block matches. (没有命中的可见色块)
+    """
+    reference_hex = _reference_color_hex(component_cache, x, y, color_hex)
+    labels = _labels_within_delta_e(component_cache, reference_hex, tolerance)
+    return _toggle_component_group(component_cache, current, labels, reference_hex)
 
 
 def rasterize_brush_stroke(

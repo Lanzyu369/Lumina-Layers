@@ -197,7 +197,7 @@ Use a multi-context layout organized by business system or workflow: root `CONTE
 
 ## Bug Report Reproducibility
 
-- Read `docs/bug-report-reproducibility.md` before changing `/api/feedback/bug-report`, feedback ticket assembly, attachment collection, cleanup, email attachment handling, `scripts/load_bug_repro.py`, or any converter generation parameter captured for reproduction
+- Read `docs/bug-report-reproducibility.md` before changing `/api/feedback/bug-report`, feedback ticket assembly, attachment collection, cleanup, feedback server upload handling, `scripts/load_bug_repro.py`, or any converter generation parameter captured for reproduction
 - Preserve ticket-based reproducibility under `feedback/<YYYY-MM>/<ticket_id>/`; update schemas, frontend/backend tests, and structured logging whitelists when bug-report payloads or assembly steps change
 
 ## Agent Process Hygiene

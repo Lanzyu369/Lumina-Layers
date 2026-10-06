@@ -2512,7 +2512,7 @@ class TestSplitDisconnectedShapes:
             target_width_mm=200.0,
         )
 
-        assert analysis.scale_factor == pytest.approx(200.0)
+        assert analysis.svg_coordinate_domain.source_mm_per_unit == pytest.approx(200.0)
         assert len(analysis.clipped_shapes) == 1
         physical_area_mm2 = (
             float(analysis.clipped_shapes[0]["geometry"].area)

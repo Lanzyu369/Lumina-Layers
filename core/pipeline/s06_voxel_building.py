@@ -876,11 +876,11 @@ def run(ctx: dict) -> dict:
                             _log.warning(f"{w}")
                         _log.debug(f"Heightmap loaded: {heightmap_height_matrix.shape}")
                     else:
-                        _log.warning(f"Heightmap processing failed: {hm_result['error']}, falling back to flat")
+                        raise RuntimeError(f"Heightmap processing failed: {hm_result['error']}")
                 except (ImportError, OSError, ValueError, TypeError, KeyError) as e:
-                    _log.warning(f"Heightmap processing error: {e}, falling back to flat")
+                    raise RuntimeError(f"Heightmap processing error: {e}") from e
             elif enable_relief and height_mode == "heightmap" and heightmap_path is None:
-                _log.warning("heightmap mode selected but no heightmap provided, falling back to flat")
+                raise RuntimeError("Heightmap mode selected but no heightmap provided")
 
             if heightmap_height_matrix is not None:
                 # Heightmap mode
@@ -943,26 +943,19 @@ def run(ctx: dict) -> dict:
         )
 
     except (ValueError, TypeError, KeyError, RuntimeError, OSError) as e:
-        _log.error(f"Error marking backing layer: {e}")
-        _log.warning(
-            "Falling back to original behavior (backing_color_id=%s)",
-            effective_backing_color_id,
+        # A flat retry would discard the requested relief, wire or cavities.
+        # 平面重试会丢掉请求中的浮雕、掐丝或磁铁孔槽，不能作为成功结果。
+        _log.error(
+            "Voxel matrix generation failed: %s",
+            e,
+            extra={
+                "event": "voxel_build_failed",
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+            },
         )
-
-        # Fallback to original behavior
-        try:
-            full_matrix, backing_metadata = _build_voxel_matrix(
-                material_matrix,
-                mask_solid,
-                spacer_thick,
-                structure_mode,
-                backing_color_id=effective_backing_color_id,
-            )
-            total_layers = full_matrix.shape[0]
-            _log.debug(f"Fallback successful: {full_matrix.shape} (ZxHxW)")
-        except (ValueError, TypeError, KeyError, RuntimeError, OSError) as fallback_error:
-            ctx["error"] = f"[ERROR] Voxel matrix generation failed: {fallback_error}"
-            return ctx
+        ctx["error"] = f"[ERROR] Voxel matrix generation failed: {e}"
+        return ctx
 
     ctx["full_matrix"] = full_matrix
     ctx["backing_metadata"] = backing_metadata

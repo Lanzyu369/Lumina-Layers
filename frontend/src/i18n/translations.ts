@@ -178,8 +178,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "The selected surface is too thin for the current colour stack. Use fewer layers, a smaller layer height, or a thicker surface.",
   },
   api_error_model_surface_boolean_failed: {
-    zh: "无法在所选表面安全开槽。请修复模型，或选择更简单的表面。",
-    en: "The selected surface could not be cut safely. Repair the model or choose a simpler surface.",
+    zh: "模型覆面开槽计算失败。请提交问题反馈，并附上模型和图片。",
+    en: "Model-surface pocket calculation failed. Submit a bug report with the model and artwork attached.",
   },
   api_error_http_429: {
     zh: "请求过于频繁，请稍后再试。",
@@ -226,8 +226,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "{message} Request ID: {requestId}.",
   },
   bug_report_modal_privacy_note: {
-    zh: "反馈会保存在本机。当前为单图转换时，最多 100 MiB 的原始输入图片会一并保存；低于邮件附件上限且本机邮件可用时也会作为附件发送。原图不会通过官方转发服务发送。",
-    en: "The report is saved on this device. For a single-image conversion, the original input up to 100 MiB is also saved and attached when it fits the email limit and local email is available. The original is never sent through the official relay.",
+    zh: "发送后，问题描述、可选邮箱、截图、自动收集的环境信息和操作记录，以及当前单图转换的原图、最近生成的 3MF、所用 LUT 和材料档案（单个文件最大 40 MiB），会先保存在本机，再上传到 Lumina Studio 官方问题收集服务，仅用于定位和回复问题。",
+    en: "When you send, your description, optional email, screenshot, automatically collected diagnostics and recent actions, plus the current single-image conversion source, latest generated 3MF, the LUT, and material archive in use (up to 40 MiB per file) are saved on this device and then uploaded to the Lumina Studio official bug collection service, used only to diagnose and reply to the issue.",
   },
   bug_report_modal_submit: {
     zh: "发送",
@@ -1065,37 +1065,45 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "请在右侧 3D 预览中旋转模型、选择或重选面；选好后再移动、旋转或缩放贴图。",
     en: "Rotate the model and select or reselect a surface in the 3D preview, then move, rotate, or scale the artwork.",
   },
-  bug_report_relay_prompt: {
-    zh: "本机邮件未成功发送。是否同意将这份反馈转发到 Lumina Studio 官方问题收集服务？",
-    en: "Local email delivery did not succeed. Do you agree to forward this report to the Lumina Studio official bug collection service?",
+  bug_report_toast_saved_locally: {
+    zh: "报告已保存在本机。工单号：{{ticket}}",
+    en: "The report was saved on this device. Ticket: {{ticket}}",
   },
-  bug_report_relay_privacy: {
-    zh: "转发内容包含你的问题描述、可选邮箱、截图和自动收集的环境信息，仅用于定位和回复问题；不会包含转换原图。",
-    en: "The forwarded report includes your description, optional email, screenshot, and automatically collected diagnostic context for triage and follow-up; it does not include the converter source image.",
+  bug_report_upload_pending: {
+    zh: "正在上传到官方问题收集服务，可以直接关闭此对话框，上传会在后台继续。",
+    en: "Uploading to the official bug collection service. You can close this dialog; the upload continues in the background.",
   },
-  bug_report_relay_send: {
-    zh: "同意并转发",
-    en: "Agree and forward",
+  bug_report_upload_pending_slow: {
+    zh: "上传比平时慢，仍在后台继续。可以关闭对话框，稍后用工单号联系开发者确认。",
+    en: "The upload is slower than usual and continues in the background. You can close this dialog and quote the ticket id to the developers later.",
   },
-  bug_report_relay_skip: {
-    zh: "不转发，手动发送",
-    en: "Do not forward; send manually",
+  bug_report_upload_submitted: {
+    zh: "已上传到官方问题收集服务，开发者会根据工单号跟进。",
+    en: "Uploaded to the official bug collection service. The developers will follow up using the ticket id.",
   },
-  bug_report_relay_success: {
-    zh: "已转发到官方问题收集服务。",
-    en: "Forwarded to the official bug collection service.",
+  bug_report_upload_failed: {
+    zh: "上传到官方问题收集服务失败，报告仍保存在本机。可以稍后重试，或用下面的方式手动发送。",
+    en: "Uploading to the official bug collection service failed. The report is still saved on this device; retry later or send it manually below.",
   },
-  bug_report_relay_failed: {
-    zh: "官方转发失败，请使用下面的手动方式发送。",
-    en: "Official forwarding failed. Use one of the manual options below.",
+  bug_report_upload_disabled: {
+    zh: "本机已关闭反馈上传，报告只保存在本机。请用下面的方式手动发送。",
+    en: "Report uploads are turned off on this installation, so the report stays on this device. Send it manually below.",
   },
-  bug_report_relay_unavailable: {
-    zh: "官方转发未配置，请使用下面的手动方式发送。",
-    en: "Official forwarding is not configured. Use one of the manual options below.",
+  bug_report_upload_held_back: {
+    zh: "以下文件太大或格式不支持，未上传，只保存在本机：{files}",
+    en: "These files were too large or unsupported and stay only on this device: {files}",
   },
-  bug_report_relay_skipped: {
-    zh: "未转发到官方服务，请使用下面的手动方式发送。",
-    en: "Official forwarding was skipped. Use one of the manual options below.",
+  bug_report_upload_retry: {
+    zh: "重试上传",
+    en: "Retry upload",
+  },
+  bug_report_upload_retrying: {
+    zh: "正在重试…",
+    en: "Retrying…",
+  },
+  bug_report_upload_retry_failed: {
+    zh: "仍然失败，请稍后再试。",
+    en: "Still failing. Please try again later.",
   },
   bug_report_success_ticket_label: {
     zh: "工单号",
@@ -1112,26 +1120,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   bug_report_success_copy_failed: {
     zh: "自动复制失败，请手动选中工单号复制。",
     en: "Automatic copy failed. Select the ticket id and copy it manually.",
-  },
-  bug_report_success_emailed_yes: {
-    zh: "报告已通过本机邮件发送给开发者。",
-    en: "Report was sent to the developer mailbox from this device.",
-  },
-  bug_report_success_emailed_no: {
-    zh: "本机邮件未成功发送，报告已保存到本地。请继续选择官方转发或手动发送。",
-    en: "Local email delivery did not succeed; the report was saved locally. Choose official forwarding or send it manually.",
-  },
-  bug_report_success_email_pending: {
-    zh: "报告已收到，邮件正在后台发送。你可以关闭此对话框，结果会在日志中记录。",
-    en: "Report received; the email is being sent in the background. You can close this dialog — the outcome is captured in the logs.",
-  },
-  bug_report_success_email_failed: {
-    zh: "本机邮件发送失败。报告已保存到本地，可以选择官方转发或手动发送。",
-    en: "Local email delivery failed. The report was saved locally; choose official forwarding or send it manually.",
-  },
-  bug_report_success_email_unconfigured: {
-    zh: "本机未配置邮件，报告已保存到本地。请选择官方转发或手动发送。",
-    en: "Local email is not configured; the report was saved locally. Choose official forwarding or send it manually.",
   },
   bug_report_success_original_attached: {
     zh: "转换原图已按原始字节随工单保存。",
@@ -2672,6 +2660,158 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   "tab.converterColor": {
     zh: "颜色调整",
     en: "Color Adjustment",
+  },
+  palette_mode_color_range: {
+    zh: "相近颜色",
+    en: "Similar colors",
+  },
+  selection_color_range_tolerance: {
+    zh: "色差容差",
+    en: "Tolerance",
+  },
+  selection_color_range_hint: {
+    zh: "点击图中的颜色，会选中所有色差（ΔE00）不超过容差的色块；容差为 0 时只选完全相同的颜色。再点一次同一颜色可取消。",
+    en: "Click a color on the image to select every block whose color difference (ΔE00) is within the tolerance; 0 selects only the exact color. Click the same color again to deselect.",
+  },
+  quick_replace_title: {
+    zh: "快速换色与相似配方",
+    en: "Quick recolor & similar recipes",
+  },
+  quick_replace_expand: {
+    zh: "展开",
+    en: "Expand",
+  },
+  quick_replace_collapse: {
+    zh: "收起",
+    en: "Collapse",
+  },
+  quick_replace_needs_selection: {
+    zh: "先在左侧图像上选择区域（同颜色、相近颜色、点选色块或画笔），再在这里换色。",
+    en: "Select an area on the image first (same color, similar colors, blocks or brush), then recolor it here.",
+  },
+  quick_replace_target_heading: {
+    zh: "目标颜色 B",
+    en: "Target color B",
+  },
+  quick_replace_eyedropper: {
+    zh: "从图中取色",
+    en: "Pick from image",
+  },
+  quick_replace_eyedropper_title: {
+    zh: "点一下这个按钮，再点左侧图像上的任意一点，用那一点的颜色作为目标颜色 B（不会改变选区）",
+    en: "Click this, then click any point on the image to use its color as target color B (the selection is not changed)",
+  },
+  quick_replace_eyedropper_active: {
+    zh: "请在左侧图像上点击要取色的位置，按 Esc 取消。",
+    en: "Click the point on the image whose color you want. Press Esc to cancel.",
+  },
+  quick_replace_target_hex_placeholder: {
+    zh: "#ff8800",
+    en: "#ff8800",
+  },
+  quick_replace_target_hex_invalid: {
+    zh: "请输入 6 位十六进制颜色，例如 #ff8800",
+    en: "Enter a 6-digit hex color, e.g. #ff8800",
+  },
+  quick_replace_target_from_image: {
+    zh: "从图中已有颜色选取",
+    en: "Pick from colors already in the image",
+  },
+  quick_replace_nearest_printable: {
+    zh: "最接近 B 的可打印颜色",
+    en: "Nearest printable color to B",
+  },
+  quick_replace_replace_button: {
+    zh: "把选区替换成这个颜色",
+    en: "Replace selection with this color",
+  },
+  quick_replace_recipes_heading: {
+    zh: "相似配方",
+    en: "Similar recipes",
+  },
+  quick_replace_reference: {
+    zh: "参考色",
+    en: "Reference",
+  },
+  quick_replace_basis_selection: {
+    zh: "按选区颜色",
+    en: "From selection",
+  },
+  quick_replace_basis_target: {
+    zh: "按目标颜色 B",
+    en: "From color B",
+  },
+  quick_replace_reference_colors: {
+    zh: "选区包含多种颜色，点击选择参考色",
+    en: "The selection has several colors; click one to use as reference",
+  },
+  quick_replace_recipes_loading: {
+    zh: "正在查找相似配方…",
+    en: "Finding similar recipes…",
+  },
+  quick_replace_recipes_empty: {
+    zh: "没有找到可用的配方",
+    en: "No printable recipes found",
+  },
+  quick_replace_recipes_pick_reference: {
+    zh: "选择区域或输入目标颜色 B 后，这里会列出颜色最接近的配方。",
+    en: "Select an area or enter target color B to list the closest recipes here.",
+  },
+  quick_replace_recipes_error: {
+    zh: "配方推荐加载失败，请重新生成预览后再试。",
+    en: "Could not load recipe suggestions. Regenerate the preview and try again.",
+  },
+  quick_replace_recipe_apply: {
+    zh: "替换",
+    en: "Apply",
+  },
+  quick_replace_recipe_apply_title: {
+    zh: "把选区替换为 {hex}（{layers}）",
+    en: "Replace the selection with {hex} ({layers})",
+  },
+  quick_replace_recipe_layers_hint: {
+    zh: "色块从左到右：观察面 → 底部",
+    en: "Chips left to right: viewing face → bottom",
+  },
+  quick_replace_source_lut: {
+    zh: "实测",
+    en: "Measured",
+  },
+  quick_replace_source_lut_title: {
+    zh: "来自 LUT 实测色卡，打印结果最可靠",
+    en: "From the measured LUT; the most reliable print result",
+  },
+  quick_replace_source_predictive: {
+    zh: "预测",
+    en: "Predicted",
+  },
+  quick_replace_source_predictive_title: {
+    zh: "由预测模型估算的颜色，实际打印可能略有差异；应用后需要重新选择区域",
+    en: "Estimated by the prediction model; the print may differ slightly. Re-select the area after applying",
+  },
+  quick_replace_in_image: {
+    zh: "图中已有",
+    en: "In image",
+  },
+  quick_replace_in_image_title: {
+    zh: "当前图像里已经用到了这个颜色",
+    en: "This color is already used in the current image",
+  },
+  quick_replace_delta_e_value: {
+    zh: "色差 ΔE {value}",
+    en: "ΔE {value}",
+  },
+  quick_replace_delta_e_close: {
+    zh: "几乎一致",
+    en: "Near match",
+  },
+  quick_replace_delta_e_near: {
+    zh: "接近",
+    en: "Close",
+  },
+  quick_replace_delta_e_far: {
+    zh: "差异明显",
+    en: "Visible difference",
   },
   "tab.converterAdvanced": {
     zh: "高级功能",
@@ -5474,6 +5614,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "大画幅模式下每个切片的高度（毫米）。切片越小，拼接数量越多。",
     en: "Height of each tile in large format mode (in mm). Smaller tiles result in more pieces to assemble.",
   },
+  basic_large_format_show_tiles: {
+    zh: "在预览中显示切割轮廓",
+    en: "Show Cut Outline in Preview",
+  },
+  basic_large_format_show_tiles_hint: {
+    zh: "在 3D 预览上用橙色线标出每一块的切割位置，并显示编号（如 R1C2 表示第 1 行第 2 列），编号与压缩包内的 3MF 文件名一致。只影响预览显示，不改变生成结果。",
+    en: "Draws orange cut lines over the 3D preview and labels each tile (e.g. R1C2 = row 1, column 2). Labels match the 3MF file names in the ZIP. Preview only; generated files are unchanged.",
+  },
 
   // ==================== Structure Mode Options ====================
   "structure_mode.Double-sided": {
@@ -7381,6 +7529,30 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "毫米",
     en: "mm",
   },
+  common_pagination_label: {
+    zh: "分页",
+    en: "Pagination",
+  },
+  common_pagination_prev: {
+    zh: "上一页",
+    en: "Previous",
+  },
+  common_pagination_next: {
+    zh: "下一页",
+    en: "Next",
+  },
+  common_pagination_page: {
+    zh: "第 {page} 页",
+    en: "Page {page}",
+  },
+  common_pagination_jump: {
+    zh: "前往",
+    en: "Go to",
+  },
+  common_pagination_total_pages: {
+    zh: "页，共 {count} 页",
+    en: "of {count}",
+  },
   common_not_available: {
     zh: "不可用",
     en: "N/A",
@@ -9189,10 +9361,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "云端条目",
     en: "Cloud Items",
   },
-  mat_sync_catalog_loaded_inline: {
-    zh: "已加载 {loaded} / {total} 个云端耗材",
-    en: "Loaded {loaded} / {total} cloud materials",
-  },
   mat_sync_index_state_label: {
     zh: "索引状态",
     en: "Index",
@@ -9232,14 +9400,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   mat_sync_refresh_btn: {
     zh: "刷新云端目录",
     en: "Refresh Catalog",
-  },
-  mat_sync_load_more_btn: {
-    zh: "加载更多",
-    en: "Load More",
-  },
-  mat_sync_load_all_btn: {
-    zh: "加载全部",
-    en: "Load All",
   },
   mat_sync_status_failed: {
     zh: "读取云端耗材库失败",
@@ -9346,8 +9506,88 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Local files missing",
   },
   mat_sync_local_section_title: {
-    zh: "本地已安装 / 版本回滚",
-    en: "Local Installed / Rollback",
+    zh: "本地版本记录",
+    en: "Local Revision History",
+  },
+  mat_sync_local_section_hint: {
+    zh: "更新耗材后会保留旧版本；如果新版本效果不理想，可以一键回滚。",
+    en: "Older revisions are kept after an update, so you can roll back if the new one does not work well.",
+  },
+  mat_sync_local_section_expand: {
+    zh: "展开",
+    en: "Show",
+  },
+  mat_sync_local_section_collapse: {
+    zh: "收起",
+    en: "Hide",
+  },
+  mat_sync_local_current_revision: {
+    zh: "当前版本 {revision} · 更新于 {time}",
+    en: "Current {revision} · updated {time}",
+  },
+  mat_sync_channel_label: {
+    zh: "发布频道",
+    en: "Channel",
+  },
+  mat_sync_channel_official: {
+    zh: "官方频道",
+    en: "Official",
+  },
+  mat_sync_channel_community: {
+    zh: "社区频道",
+    en: "Community",
+  },
+  mat_sync_channel_team: {
+    zh: "团队频道",
+    en: "Team",
+  },
+  mat_sync_fit_error_label: {
+    zh: "拟合误差",
+    en: "Fit Error",
+  },
+  mat_sync_fit_error_hint: {
+    zh: "平均色差 ΔE，数值越低越准确：不超过 {excellent} 为优秀，不超过 {high} 为良好，超过 {high} 为偏高。",
+    en: "Mean color difference (ΔE); lower is more accurate: up to {excellent} is excellent, up to {high} is good, above {high} is high.",
+  },
+  mat_sync_fit_error_value: {
+    zh: "ΔE {value}",
+    en: "ΔE {value}",
+  },
+  mat_sync_fit_error_grade_excellent: {
+    zh: "优秀",
+    en: "Excellent",
+  },
+  mat_sync_fit_error_grade_good: {
+    zh: "良好",
+    en: "Good",
+  },
+  mat_sync_fit_error_grade_high: {
+    zh: "偏高",
+    en: "High",
+  },
+  mat_sync_fit_error_missing: {
+    zh: "未提供",
+    en: "Not provided",
+  },
+  mat_sync_fit_error_verifications: {
+    zh: "{count} 次验证",
+    en: "{count} verifications",
+  },
+  mat_sync_page_range_inline: {
+    zh: "第 {from}–{to} 条，共 {total} 条",
+    en: "{from}–{to} of {total}",
+  },
+  mat_sync_full_catalog_failed: {
+    zh: "按安装状态筛选需要读取完整云端目录，但这次读取失败了。",
+    en: "Filtering by install status needs the full cloud catalog, but it could not be loaded.",
+  },
+  mat_sync_full_catalog_retry_btn: {
+    zh: "重试",
+    en: "Retry",
+  },
+  mat_sync_dismiss_btn: {
+    zh: "关闭提示",
+    en: "Dismiss",
   },
   mat_sync_catalog_empty: {
     zh: "没有匹配的云端耗材。",
@@ -9452,10 +9692,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   mat_sync_rollback_failed: {
     zh: "耗材版本回滚失败",
     en: "Material rollback failed",
-  },
-  mat_sync_no_rollback: {
-    zh: "暂无可回滚版本",
-    en: "No rollback revision",
   },
   mat_gradient_library_selection_summary: {
     zh: "已选择 {selected} / {total} 个耗材",
@@ -9992,5 +10228,254 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   material_recipe_swatch_legend_alt: {
     zh: "色块图例",
     en: "Swatch legend",
+  },
+  // ==================== Beginner Tutorial ====================
+  tutorial_welcome_title: {
+    zh: "欢迎使用 Lumina Studio",
+    en: "Welcome to Lumina Studio",
+  },
+  tutorial_welcome_body: {
+    zh: "Lumina Studio 可以把一张普通图片转换成多色 3D 打印文件（3MF）：用几种耗材一层层叠着打印，叠出丰富的颜色。\n\n这份新手引导大约 1 分钟，带你认识从图片到打印文件的基本流程。",
+    en: "Lumina Studio turns an ordinary picture into a multi-color 3D print file (3MF): a few filaments are stacked in thin layers to reproduce rich colors.\n\nThis quick tour takes about a minute and walks you through the basic path from a picture to a print file.",
+  },
+  tutorial_welcome_note: {
+    zh: "引导只做讲解，不需要真的上传图片或生成模型。之后可以随时点击右上角的书本图标重新查看。",
+    en: "The tour only explains things. You don't need to upload or generate anything, and you can replay it any time from the book icon at the top right.",
+  },
+  tutorial_welcome_start: {
+    zh: "开始引导",
+    en: "Start tour",
+  },
+  tutorial_welcome_skip: {
+    zh: "跳过",
+    en: "Skip",
+  },
+  tutorial_welcome_close: {
+    zh: "关闭并跳过引导",
+    en: "Close and skip the tour",
+  },
+  tutorial_launcher_label: {
+    zh: "新手引导",
+    en: "Beginner tour",
+  },
+  tutorial_launcher_tooltip: {
+    zh: "重新查看新手引导",
+    en: "Replay the beginner tour",
+  },
+  tutorial_progress_label: {
+    zh: "新手引导",
+    en: "Beginner tour",
+  },
+  tutorial_skip: {
+    zh: "跳过引导",
+    en: "Skip tour",
+  },
+  tutorial_back: {
+    zh: "上一步",
+    en: "Back",
+  },
+  tutorial_next: {
+    zh: "下一步",
+    en: "Next",
+  },
+  tutorial_done: {
+    zh: "完成",
+    en: "Done",
+  },
+  tutorial_flow_label: {
+    zh: "工作原理",
+    en: "How it works",
+  },
+  tutorial_need_label: {
+    zh: "需要准备：",
+    en: "What you need: ",
+  },
+  tutorial_fit_label: {
+    zh: "适合：",
+    en: "Best for: ",
+  },
+  tutorial_step_tabs_title: {
+    zh: "顶部导航",
+    en: "Main navigation",
+  },
+  tutorial_step_tabs_body: {
+    zh: "「图像转换」是主要工作区，把图片变成打印文件的基础操作都在这里完成。\n其他页面（LUT管理、耗材管理、图像转矢量等）属于进阶功能，刚开始可以先不管。",
+    en: "Converter is the main workspace. Everything you need to turn a picture into a print file happens here.\nThe other pages (LUT Management, Material Management, Vectorizer and so on) are advanced tools you can ignore for now.",
+  },
+  tutorial_step_upload_title: {
+    zh: "第一步：放入图片",
+    en: "Step 1: Add a picture",
+  },
+  tutorial_step_upload_body: {
+    zh: "点击这里选择图片，或者直接把图片拖进来。常见的 JPG、PNG 等格式都可以。\n上传后还可以裁剪、旋转图片。",
+    en: "Click here to pick a picture, or drag one in. Common formats such as JPG and PNG work.\nAfter uploading you can also crop or rotate it.",
+  },
+  tutorial_step_source_title: {
+    zh: "第二步：选择颜色来源",
+    en: "Step 2: Choose a color source",
+  },
+  tutorial_step_source_body: {
+    zh: "多色打印的原理是：几种耗材按不同顺序和层数叠在一起，透出不同的颜色。软件需要知道「你的打印机和耗材能叠出哪些颜色」，才能为图片的每个颜色找到最接近的叠法。\n\n「颜色来源」就是这份颜色数据从哪里来。一共有三种方式，接下来逐一介绍。",
+    en: "Multi-color printing works by stacking a few filaments in different orders and layer counts, so light passing through them shows different colors. The software needs to know which colors your printer and filaments can actually produce, so it can find the closest stack for every color in your picture.\n\nThe color source is where that color data comes from. There are three options, explained next.",
+  },
+  tutorial_step_legacy_title: {
+    zh: "传统 LUT：实拍色卡",
+    en: "Legacy LUT: photographed color chart",
+  },
+  tutorial_step_legacy_body: {
+    zh: "LUT 是一张颜色对照表，记录了「每一种叠法打出来是什么颜色」。\n传统 LUT 是最传统的做法：用你的打印机和耗材打印一块包含大量叠色组合的校准板，实拍照片后由软件逐格提取颜色。转换时，图片的每个颜色都去表里找最接近的一格，再按那一格的叠法打印。",
+    en: "A LUT (lookup table) records what color each layer stack prints as.\nLegacy LUT is the traditional approach: you print a calibration board full of stack combinations on your own printer and filaments, photograph it, and the software reads the color of every patch. During conversion, each color in your picture is matched to the closest patch and printed with that patch's stack.",
+  },
+  tutorial_step_legacy_need: {
+    zh: "打印一块校准板并拍照提取（在「LUT管理」里完成）。校准板色块很多，打印时间较长。也可以直接选用列表里现成的 LUT。",
+    en: "Print a calibration board and extract it from a photo (done in LUT Management). The board has many patches, so printing takes a while. You can also pick a ready-made LUT from the list.",
+  },
+  tutorial_step_legacy_fit: {
+    zh: "已经有现成 LUT，或者愿意花时间打印校准板、按传统流程实拍建表的用户。",
+    en: "People who already have a LUT, or who don't mind spending the print time on a calibration board and building the table the traditional way.",
+  },
+  tutorial_flow_legacy_print: {
+    zh: "打印校准板",
+    en: "Print a calibration board",
+  },
+  tutorial_flow_legacy_extract: {
+    zh: "拍照提取颜色",
+    en: "Photograph and extract colors",
+  },
+  tutorial_flow_legacy_table: {
+    zh: "得到颜色对照表",
+    en: "Get a color lookup table",
+  },
+  tutorial_step_inferred_title: {
+    zh: "反推LUT：用品牌实测数据推算",
+    en: "Inferred LUT: predicted from brand measurements",
+  },
+  tutorial_step_inferred_body: {
+    zh: "软件内置了部分耗材品牌的颜色数据库，里面是已经实际打印并测量过的大量叠色结果，同时附带一个由这些实测数据反推出来的颜色预测模型。\n转换时，软件先在实测数据里为每个颜色找最接近的叠法，并自动换算到你选的层数和层高；开启「模型辅助匹配」后，实测数据里找不到足够接近的颜色时，再改用模型预测的叠法补上。",
+    en: "The software ships with color databases for some filament brands. They hold many stack colors that were actually printed and measured, plus a color prediction model inferred from those measurements.\nDuring conversion, each color is first matched against the measured data, converted automatically to the layer count and layer height you choose. With Model-Assisted Matching on, colors the measured data can't match closely enough are filled in with stacks predicted by the model.",
+  },
+  tutorial_step_inferred_need: {
+    zh: "不需要打印任何东西，只要选择耗材品牌、数据库和层数；实际使用的耗材要和所选品牌一致。",
+    en: "Nothing to print. Just choose a filament brand, database and layer count, and use filaments that match the chosen brand.",
+  },
+  tutorial_step_inferred_fit: {
+    zh: "使用支持列表里品牌耗材、想马上开始的用户。数据来自参考打印的实测，和你手上的耗材、机器可能有少量差异。",
+    en: "Getting started right away with a brand on the supported list. The data comes from reference prints, so it may differ slightly from your own spools and printer.",
+  },
+  tutorial_flow_inferred_database: {
+    zh: "品牌实测颜色数据库",
+    en: "Measured brand color database",
+  },
+  tutorial_flow_inferred_predict: {
+    zh: "反推出颜色预测模型",
+    en: "Infer a color prediction model",
+  },
+  tutorial_flow_inferred_table: {
+    zh: "按层数层高匹配叠色",
+    en: "Match stacks for your layer settings",
+  },
+  tutorial_step_material_title: {
+    zh: "耗材档案：每卷耗材单独建档",
+    en: "Material Archive: one profile per spool",
+  },
+  tutorial_step_material_body: {
+    zh: "耗材档案不依赖固定的颜色对照表，而是先单独测量每一卷耗材：为它打印一张从薄到厚的梯度卡，拍照后软件测出这卷耗材在不同厚度下的颜色和透光程度，保存成一份「耗材档案」。\n转换时，你可以从已建档的耗材里自由挑选几种，软件根据它们的档案计算出叠在一起会是什么颜色。",
+    en: "Instead of a fixed lookup table, Material Archive measures each spool on its own: you print a thin-to-thick gradient card for it, photograph it, and the software records how that filament looks and how much light passes through at each thickness. That becomes the spool's material profile.\nWhen converting, you freely pick a few profiled filaments and the software calculates what colors they make when stacked.",
+  },
+  tutorial_step_material_need: {
+    zh: "为每卷要用的耗材打印一张梯度卡并提取（在「耗材管理」里完成）。",
+    en: "Print and extract a gradient card for every spool you want to use (done in Material Management).",
+  },
+  tutorial_step_material_fit: {
+    zh: "耗材种类多、经常更换不同搭配；手上没有同一品牌的完整多色套装；不想局限于常规的 4 色、6 色、8 色耗材数量组合；或者需要某种颜色表现得更细腻（可以单独加入这种颜色的耗材）。",
+    en: "People with many filaments who often switch combinations; who don't own a complete multi-color set from one brand; who don't want to be limited to the usual 4, 6 or 8 filament setups; or who need finer shades of a particular color (just add a filament of that color).",
+  },
+  tutorial_flow_material_card: {
+    zh: "每卷打印梯度卡",
+    en: "Print a gradient card per spool",
+  },
+  tutorial_flow_material_measure: {
+    zh: "测出颜色和透光",
+    en: "Measure color and translucency",
+  },
+  tutorial_flow_material_solve: {
+    zh: "自由组合并计算叠色",
+    en: "Mix freely and calculate stacks",
+  },
+  tutorial_step_size_title: {
+    zh: "第三步：设置尺寸",
+    en: "Step 3: Set the size",
+  },
+  tutorial_step_size_body: {
+    zh: "在这里设置打印成品的宽度和高度（毫米），需要在打印机的打印范围内。\n下方的「厚度」是底板厚度，第一次使用保持默认即可。",
+    en: "Set the printed width and height here (in mm). Keep them within your printer's print area.\nThe Thickness setting below controls the base plate. The default is fine for your first print.",
+  },
+  tutorial_step_preview_title: {
+    zh: "第四步：预览效果",
+    en: "Step 4: Preview",
+  },
+  tutorial_step_preview_body: {
+    zh: "放好图片、选好颜色来源后，点击「预览」。转换结果会显示在屏幕中间的 3D 预览区，用来检查颜色和细节。\n不满意可以回去调整设置，再预览一次。",
+    en: "Once the picture and color source are set, click Preview. The result appears in the 3D preview in the middle of the screen, so you can check colors and details.\nIf something looks off, adjust the settings and preview again.",
+  },
+  tutorial_step_view3d_title: {
+    zh: "3D 预览：用鼠标查看",
+    en: "3D preview: mouse controls",
+  },
+  tutorial_step_view3d_body: {
+    zh: "中间这块区域是 3D 预览，预览后模型会显示在打印热床上。用下面的鼠标操作从各个角度检查效果，现在就可以在高亮区域里试一试。",
+    en: "This middle area is the 3D preview. After you preview, the model appears on the print bed. Use these mouse controls to inspect it from any angle, and feel free to try them in the highlighted area now.",
+  },
+  tutorial_controls_label: {
+    zh: "鼠标操作",
+    en: "Mouse controls",
+  },
+  tutorial_control_left_drag: {
+    zh: "左键拖动",
+    en: "Left-drag",
+  },
+  tutorial_control_rotate: {
+    zh: "旋转视角",
+    en: "Rotate the view",
+  },
+  tutorial_control_right_drag: {
+    zh: "右键（或中键）拖动",
+    en: "Right- or middle-drag",
+  },
+  tutorial_control_pan: {
+    zh: "平移视图",
+    en: "Pan the view",
+  },
+  tutorial_control_wheel: {
+    zh: "滚动鼠标滚轮",
+    en: "Scroll the wheel",
+  },
+  tutorial_control_zoom: {
+    zh: "放大 / 缩小",
+    en: "Zoom in / out",
+  },
+  tutorial_control_space_drag: {
+    zh: "按住空格 + 左键拖动",
+    en: "Hold Space + left-drag",
+  },
+  tutorial_control_space_pan: {
+    zh: "也可以平移，适合触控板",
+    en: "Also pans, handy on a trackpad",
+  },
+  tutorial_step_generate_title: {
+    zh: "第五步：生成打印文件",
+    en: "Step 5: Generate the print file",
+  },
+  tutorial_step_generate_body: {
+    zh: "预览满意后，点击「生成」得到 3MF 打印文件。把它导入切片软件，确认每个耗材槽位对应的颜色正确，就可以开始打印了。",
+    en: "When the preview looks right, click Generate to get a 3MF print file. Open it in your slicer, check that each filament slot has the right color, and start printing.",
+  },
+  tutorial_step_help_title: {
+    zh: "遇到问题时",
+    en: "When you need help",
+  },
+  tutorial_step_help_body: {
+    zh: "设置项旁边的问号图标可以查看说明和在线文档；右上角的反馈按钮可以把问题发给开发者。\n想再看一遍这份引导，随时点击这个书本图标。祝打印顺利！",
+    en: "The question-mark icons next to settings show explanations and link to the online docs, and the feedback button at the top right sends problems to the developers.\nTo see this tour again, click this book icon any time. Happy printing!",
   },
 };

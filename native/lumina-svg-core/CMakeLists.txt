@@ -33,6 +33,7 @@ pybind11_add_module(
   _lumina_svg_core
   MODULE
   src/bindings.cpp
+  src/coordinate_projection.cpp
   src/geometry_kernel.cpp
   src/paint_command.cpp
   src/result.cpp

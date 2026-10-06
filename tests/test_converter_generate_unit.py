@@ -14,6 +14,7 @@ Validates:
 from __future__ import annotations
 
 import asyncio
+from contextlib import ExitStack
 from concurrent.futures.process import BrokenProcessPool
 import inspect
 import json
@@ -3052,6 +3053,82 @@ class TestGenerateTimeout:
 # =========================================================================
 # 6. Worker exception → HTTP 500 - Requirement 1.4
 # =========================================================================
+
+
+def test_s06_failure_reaches_api_without_export_or_replacing_previous_download(
+    tmp_path: Path,
+) -> None:
+    """Run the real worker/coordinator/S06 failure path with prepared image inputs."""
+    from core.pipeline import coordinator, s06_voxel_building
+
+    sid = _create_session_with_preview_and_files(_test_store)
+    image_path = tmp_path / "source.png"
+    Image.new("RGB", (2, 2), "white").save(image_path)
+    lut_path = tmp_path / "lut.npy"
+    np.save(lut_path, np.zeros((1, 3), dtype=np.uint8))
+    _test_store.put(sid, "image_path", str(image_path))
+    _test_store.put(sid, "lut_path", str(lut_path))
+    previous = tmp_path / "previous.3mf"
+    previous.write_bytes(b"previous successful model")
+    previous_id = _test_registry.register_path(
+        "previous-download", str(previous), ttl_seconds=600,
+    )
+    original_cache = _test_store.get(sid)["preview_cache"]
+
+    def prepare_voxel_inputs(ctx: dict) -> dict:
+        ctx.update(
+            material_matrix=np.zeros((2, 2, 5), dtype=int),
+            mask_solid=np.ones((2, 2), dtype=bool),
+            matched_rgb=np.full((2, 2, 3), 255, dtype=np.uint8),
+            pixel_scale=0.1,
+        )
+        return ctx
+
+    async def run_worker_inline(worker, *args):
+        return worker(*args)
+
+    _mock_pool.submit = AsyncMock(side_effect=run_worker_inline)
+    later_steps = []
+    try:
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(coordinator.s01_input_validation, "run", side_effect=lambda ctx: ctx))
+            for module, label, *_ in coordinator._RASTER_STEPS:
+                if label < "S06":
+                    stack.enter_context(patch.object(module, "run", side_effect=prepare_voxel_inputs))
+                elif label > "S06":
+                    later_steps.append(stack.enter_context(patch.object(module, "run")))
+            relief = stack.enter_context(patch.object(
+                s06_voxel_building, "_build_relief_voxel_matrix",
+                side_effect=RuntimeError("internal relief failure details"),
+            ))
+            flat = stack.enter_context(patch.object(
+                s06_voxel_building, "_build_voxel_matrix",
+                wraps=s06_voxel_building._build_voxel_matrix,
+            ))
+            register = stack.enter_context(patch.object(_test_registry, "register_path", wraps=_test_registry.register_path))
+            response = client.post("/api/convert/generate", json={
+                "session_id": sid,
+                "params": {
+                    "lut_name": "test_lut", "modeling_mode": "high-fidelity",
+                    "enable_relief": True, "color_height_map": {"#ffffff": 2.4},
+                },
+            })
+
+        relief.assert_called_once()
+        flat.assert_not_called()
+        for step in later_steps:
+            step.assert_not_called()
+        register.assert_not_called()
+        assert response.status_code == 500, response.text
+        assert response.json()["detail"] == MODEL_GENERATION_FAILED_DETAIL
+        assert "internal relief failure" not in response.text
+        assert "download_url" not in response.json()
+        assert _test_store.get(sid)["preview_cache"] is original_cache
+        assert previous.read_bytes() == b"previous successful model"
+        assert client.get(f"/api/files/{previous_id}").status_code == 200
+    finally:
+        _test_store.close(sid)
+        _test_registry.cleanup_session("previous-download")
 
 
 class TestGenerateWorkerException:

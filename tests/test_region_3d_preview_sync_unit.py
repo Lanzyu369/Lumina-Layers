@@ -97,8 +97,7 @@ def _setup_session(
         cache["color_contours"] = color_contours
     store.put(session_id, "preview_cache", cache)
     store.put(session_id, "selected_region_mask", region_mask)
-    # Region IDs are stored as strings, matching the region-select route.
-    store.put(session_id, "selected_region_id", "1")
+    store.put(session_id, "selected_region_id", "region-preview-sync")
     return session_id
 
 
@@ -198,6 +197,17 @@ class TestRegionReplaceGlbProperty:
             assert data["color_contours"] is not None, "color_contours should not be None"
             assert isinstance(data["color_contours"], dict), "color_contours should be a dict"
             assert len(data["color_contours"]) > 0, "color_contours should be non-empty"
+
+            mock_glb.assert_called_once()
+            updated_cache = store.get(session_id)["preview_cache"]
+            expected_rgb = matched_rgb.copy()
+            expected_rgb[region_mask] = replacement_rgb
+            np.testing.assert_array_equal(updated_cache["matched_rgb"], expected_rgb)
+            assert updated_cache["color_contours"] == fake_contours
+
+            glb_response = client.get(data["preview_glb_url"])
+            assert glb_response.status_code == 200
+            assert glb_response.content == b"fake-glb-data"
         finally:
             if os.path.exists(fake_glb_path):
                 os.unlink(fake_glb_path)

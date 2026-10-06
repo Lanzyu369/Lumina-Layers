@@ -4,12 +4,12 @@
 
 The Lumina backend reads configuration via ``os.environ`` directly;
 this module provides a tiny self-contained parser so operators can
-keep secrets such as SMTP credentials in a gitignored ``.env.local``
+keep machine-local settings in a gitignored ``.env.local``
 file without pulling in an extra runtime dependency such as
 ``python-dotenv``.
 
 Lumina 后端直接通过 ``os.environ`` 读取配置；本模块提供一个零依赖
-的小解析器，让运维可以把 SMTP 凭证等敏感信息放在被 gitignore 的
+的小解析器，让运维可以把本机专用配置放在被 gitignore 的
 ``.env.local`` 文件中，无需引入 ``python-dotenv`` 之类的运行时依赖。
 
 Usage:

@@ -119,6 +119,8 @@ interface ModelSurfaceSelector3DProps {
   footprint?: SurfaceFootprintPayload | null;
   surfaceCandidates?: ModelSurfaceCandidate[];
   placement?: ModelSurfacePlacement;
+  modelRotation?: ModelSurfaceModelRotation;
+  selectionId?: string | null;
   bedGridVisible?: boolean;
   selectionReady: boolean;
   selecting: boolean;
@@ -3034,6 +3036,8 @@ export default function ModelSurfaceSelector3D({
   footprint = null,
   surfaceCandidates = [],
   placement = DEFAULT_PLACEMENT,
+  modelRotation: storedModelRotation,
+  selectionId = null,
   bedGridVisible = true,
   selectionReady,
   selecting,
@@ -3055,7 +3059,12 @@ export default function ModelSurfaceSelector3D({
   const [model, setModel] = useState<LoadedSurfaceModel | null>(null);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
   const [activeTool, setActiveTool] = useState<SurfaceTool>("select");
-  const [modelRotation, setModelRotation] = useState<ModelRotation>(DEFAULT_MODEL_ROTATION);
+  const [localModelRotation, setLocalModelRotation] = useState<ModelRotation>(DEFAULT_MODEL_ROTATION);
+  const modelRotation = useMemo<ModelRotation>(() => storedModelRotation ? {
+    x: THREE.MathUtils.degToRad(storedModelRotation.x_deg),
+    y: THREE.MathUtils.degToRad(storedModelRotation.y_deg),
+    z: THREE.MathUtils.degToRad(storedModelRotation.z_deg),
+  } : localModelRotation, [localModelRotation, storedModelRotation]);
   const [modelRotationBaseline, setModelRotationBaseline] = useState<ModelRotation>(DEFAULT_MODEL_ROTATION);
   const [modelRotationRelativeInput, setModelRotationRelativeInput] = useState<ModelRotationDegrees>(
     DEFAULT_MODEL_RELATIVE_ROTATION_INPUT,
@@ -3075,8 +3084,18 @@ export default function ModelSurfaceSelector3D({
   const [rotationTooltipPoint, setRotationTooltipPoint] = useState<ScreenPoint | null>(null);
   const modelRotateDragRef = useRef<ModelRotationDragState | null>(null);
   const modelRotateReturnForceReselectRef = useRef(false);
-  const faceUpOrientedSurfaceRef = useRef<ResolvedSurfaceFootprint | null>(null);
-  const skipFocusAfterFaceUpOrientationRef = useRef<ResolvedSurfaceFootprint | null>(null);
+  const surfaceSelectionKey = footprint ? selectionId ?? footprint : null;
+  const faceUpOrientedSurfaceRef = useRef<typeof surfaceSelectionKey>(
+    storedModelRotation && selectionReady ? surfaceSelectionKey : null,
+  );
+  const pendingSurfaceFocusRef = useRef<{
+    selectionKey: typeof surfaceSelectionKey;
+    rotation: ModelSurfaceModelRotation | null;
+  } | null>(storedModelRotation && selectionReady && surfaceSelectionKey ? {
+    selectionKey: surfaceSelectionKey,
+    rotation: null,
+  } : null);
+  const previousReverseViewRef = useRef(false);
   const lastCandidateSelectionRef = useRef<{
     faceIndex: number;
     candidateId: string;
@@ -3088,12 +3107,16 @@ export default function ModelSurfaceSelector3D({
 
   const commitModelRotation = useCallback(
     (updater: (current: ModelRotation) => ModelRotation) => {
-      setModelRotation((current) => {
-        const next = updater(current);
-        return next;
-      });
+      if (storedModelRotation) {
+        const next = modelRotationToSurfaceModelRotation(updater(modelRotation));
+        if (!isSameSurfaceModelRotation(storedModelRotation, next)) {
+          onUpdateModelRotation?.(next);
+        }
+      } else {
+        setLocalModelRotation(updater);
+      }
     },
-    [],
+    [modelRotation, onUpdateModelRotation, storedModelRotation],
   );
   const groupRef = useRef<THREE.Group>(null);
   const camera = useThree((state) => state.camera);
@@ -3104,6 +3127,23 @@ export default function ModelSurfaceSelector3D({
   const modelBodyColor = themeColors.modelSurfaceBody;
   const initialModelBodyColorRef = useRef(modelBodyColor);
   const defaultCameraFovRef = useRef<number | null>(null);
+  const initialCameraUpRef = useRef(camera.up.clone());
+  const cameraControlsRef = useRef(controls);
+  cameraControlsRef.current = controls;
+  useEffect(() => () => {
+    camera.up.copy(initialCameraUpRef.current);
+    const orbit = cameraControlsRef.current as { target?: THREE.Vector3; update?: () => void } | null;
+    if (orbit?.target) {
+      camera.lookAt(orbit.target);
+    }
+    const perspective = camera as THREE.PerspectiveCamera;
+    if (defaultCameraFovRef.current !== null && typeof perspective.fov === "number") {
+      perspective.fov = defaultCameraFovRef.current;
+      perspective.updateProjectionMatrix();
+    }
+    orbit?.update?.();
+    invalidate();
+  }, [camera, invalidate]);
   const getPerspectiveCameraFov = useCallback(() => {
     const perspectiveCamera = camera as THREE.PerspectiveCamera;
     if (typeof perspectiveCamera.fov !== "number") {
@@ -3169,13 +3209,6 @@ export default function ModelSurfaceSelector3D({
     () => [modelRotation.x, modelRotation.y, modelRotation.z] as [number, number, number],
     [modelRotation],
   );
-  const selectedSurfaceNeedsFaceUpRotation = useMemo(
-    () =>
-      resolvedSurface
-        ? getModelRotationWithSurfaceFacingUp(resolvedSurface.frame.normal, modelRotation) !== null
-        : false,
-    [modelRotation, resolvedSurface],
-  );
   const modelPivot = modelBounds.center;
   const modelPivotTuple = useMemo(
     () => [modelPivot.x, modelPivot.y, modelPivot.z] as [number, number, number],
@@ -3209,13 +3242,16 @@ export default function ModelSurfaceSelector3D({
   );
 
   useEffect(() => {
+    if (storedModelRotation) {
+      return;
+    }
     const next = modelRotationToSurfaceModelRotation(modelRotation);
     if (isSameSurfaceModelRotation(notifiedModelRotationRef.current, next)) {
       return;
     }
     notifiedModelRotationRef.current = next;
     onUpdateModelRotation?.(next);
-  }, [modelRotation, onUpdateModelRotation]);
+  }, [modelRotation, onUpdateModelRotation, storedModelRotation]);
 
   const setOrbitControlsEnabled = useCallback(
     (enabled: boolean) => {
@@ -3680,7 +3716,7 @@ export default function ModelSurfaceSelector3D({
     };
 
     setLoadState("loading");
-    setModelRotation(DEFAULT_MODEL_ROTATION);
+    setLocalModelRotation(DEFAULT_MODEL_ROTATION);
     setModelRotationBaseline(DEFAULT_MODEL_ROTATION);
     setModelRotationRelativeInput({ ...DEFAULT_MODEL_RELATIVE_ROTATION_INPUT });
     setActiveRotationAxis(null);
@@ -3738,25 +3774,28 @@ export default function ModelSurfaceSelector3D({
   useEffect(() => {
     if (!resolvedSurface) {
       faceUpOrientedSurfaceRef.current = null;
-      skipFocusAfterFaceUpOrientationRef.current = null;
+      pendingSurfaceFocusRef.current = null;
       return;
     }
-    if (faceUpOrientedSurfaceRef.current === resolvedSurface) {
+    if (faceUpOrientedSurfaceRef.current === surfaceSelectionKey) {
       return;
     }
     const nextRotation = getModelRotationWithSurfaceFacingUp(
       resolvedSurface.frame.normal,
       modelRotation,
     );
-    faceUpOrientedSurfaceRef.current = resolvedSurface;
+    faceUpOrientedSurfaceRef.current = surfaceSelectionKey;
+    pendingSurfaceFocusRef.current = {
+      selectionKey: surfaceSelectionKey,
+      rotation: nextRotation ? modelRotationToSurfaceModelRotation(nextRotation) : null,
+    };
     if (!nextRotation) {
       return;
     }
-    skipFocusAfterFaceUpOrientationRef.current = resolvedSurface;
     commitModelRotation(() => nextRotation);
     setModelRotationRelativeInput({ ...DEFAULT_MODEL_RELATIVE_ROTATION_INPUT });
     invalidate();
-  }, [commitModelRotation, invalidate, modelRotation, resolvedSurface]);
+  }, [commitModelRotation, invalidate, modelRotation, resolvedSurface, surfaceSelectionKey]);
 
   useEffect(() => {
     if (shouldLockOrbitControls(activeTool)) {
@@ -3783,11 +3822,12 @@ export default function ModelSurfaceSelector3D({
     const radius = Math.max(size.x, size.y, size.z, 1) / 2;
     const fov = restoreDefaultCameraFov();
     const dist = computeFitDistance(radius, fov) * 1.55;
+    camera.up.copy(initialCameraUpRef.current);
     camera.position.set(center.x, center.y - dist * 0.42, center.z + dist);
     camera.lookAt(center);
     camera.updateProjectionMatrix();
-    if (controls) {
-      const orbit = controls as unknown as {
+    if (cameraControlsRef.current) {
+      const orbit = cameraControlsRef.current as unknown as {
         target: THREE.Vector3;
         maxDistance: number;
         minDistance: number;
@@ -3799,7 +3839,7 @@ export default function ModelSurfaceSelector3D({
       orbit.update();
     }
     invalidate();
-  }, [camera, controls, invalidate, model, restoreDefaultCameraFov]);
+  }, [camera, invalidate, model, restoreDefaultCameraFov]);
 
   const handleSelectPointerDown = useCallback(
     (event: ModelRotatePointerEvent) => {
@@ -4207,19 +4247,22 @@ export default function ModelSurfaceSelector3D({
   }, []);
 
   useEffect(() => {
-    if (!resolvedSurface || selectedSurfaceNeedsFaceUpRotation || activeTool === "modelRotate") {
+    const reverseChanged = previousReverseViewRef.current !== reverseView;
+    previousReverseViewRef.current = reverseView;
+    const pendingFocus = pendingSurfaceFocusRef.current;
+    const selectionNeedsFocus = pendingFocus?.selectionKey === surfaceSelectionKey
+      && surfaceSelectionKey !== null;
+    const awaitingFaceUpRotation = pendingFocus?.rotation
+      && !isSameSurfaceModelRotation(pendingFocus.rotation, modelRotationToSurfaceModelRotation(modelRotation));
+    if (!model || !resolvedSurface || activeTool === "modelRotate") {
       return;
     }
-    if (skipFocusAfterFaceUpOrientationRef.current === resolvedSurface) {
-      skipFocusAfterFaceUpOrientationRef.current = null;
+    if (!reverseChanged && (!selectionNeedsFocus || awaitingFaceUpRotation)) {
       return;
     }
+    pendingSurfaceFocusRef.current = null;
     focusSelectedSurface();
-    // Focus on selection changes or reverse-view toggles. Model rotation itself should not keep
-    // pulling the camera while the user is dragging the model, except to skip the one auto-flip
-    // handoff where the model moves instead of the camera.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resolvedSurface, reverseView, selectedSurfaceNeedsFaceUpRotation]);
+  }, [activeTool, focusSelectedSurface, model, modelRotation, resolvedSurface, reverseView, surfaceSelectionKey]);
 
   if (!model) {
     if (loadState === "error") {

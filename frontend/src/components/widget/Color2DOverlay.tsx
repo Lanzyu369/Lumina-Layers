@@ -16,6 +16,7 @@ import { useConverterStore } from '../../stores/converter';
 import ColorPreview2D from '../sections/ColorPreview2D';
 import PalettePanel from '../sections/PalettePanel';
 import LutColorGrid from '../sections/LutColorGrid';
+import ColorQuickReplacePanel from '../colorQuickReplace/ColorQuickReplacePanel';
 
 export default function Color2DOverlay() {
   const closeOverlay = useWidgetStore((s) => s.closeColor2DOverlay);
@@ -109,9 +110,10 @@ export default function Color2DOverlay() {
           </div>
         </div>
 
-        {/* Right: LUT color grid */}
-        <div className="min-h-0 px-3 py-2">
-          <div className="h-full overflow-y-auto">
+        {/* Right: quick recolor card + LUT color grid */}
+        <div className="flex min-h-0 flex-col gap-2 px-3 py-2">
+          <ColorQuickReplacePanel />
+          <div className="min-h-0 flex-1 overflow-y-auto">
             <LutColorGrid />
           </div>
         </div>

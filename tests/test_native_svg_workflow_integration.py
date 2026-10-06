@@ -244,10 +244,11 @@ def test_native_adjacent_triangle_preserves_large_component_hole_and_shells() ->
     assert raw_geometry.geom_type == "MultiPolygon"
     assert len(raw_geometry.geoms) == 3
     assert sum(len(component.interiors) for component in raw_geometry.geoms) == 1
-    assert raw_geometry.area == pytest.approx(301.3, abs=0.001)
+    source_scale = outcome.svg_coordinate_domain.source_units_per_unit
+    assert raw_geometry.area * source_scale**2 == pytest.approx(301.3, abs=0.001)
     assert len(outcome.clipped_shapes) == 3
     assert sorted(
-        item["geometry"].area for item in outcome.clipped_shapes
+        item["geometry"].area * source_scale**2 for item in outcome.clipped_shapes
     ) == pytest.approx([0.5, 16.0, 284.8], abs=0.001)
 
 
@@ -272,7 +273,7 @@ def test_native_image_vectorizer_preserves_preview_canvas_glb_anchor(
 
     assert analysis.stage_timings["geometry_backend"] == "native"
     assert analysis.image_vectorizer_bounds is not None
-    assert analysis.image_vectorizer_bounds.bounds == pytest.approx(
+    assert np.asarray(analysis.image_vectorizer_bounds.bounds) * analysis.scale_factor == pytest.approx(
         (0.0, 0.0, 20.0, 20.0)
     )
 
@@ -364,6 +365,38 @@ def test_native_analysis_builds_single_double_and_auxiliary_meshes() -> None:
         24.0,
         abs=0.001,
     )
+
+
+def test_native_svg_build_mesh_retains_per_material_optical_volume() -> None:
+    processor, analysis = _analyze("clip_inherited_fill.svg")
+    processor.enable_fridge_magnet = False
+    processor.enable_coating = False
+    processor.enable_outline = False
+
+    scene = processor.build_mesh(
+        analysis,
+        thickness_mm=1.2,
+        structure_mode="Single-sided",
+    )
+    expected_by_slot = {name: 0.0 for name in analysis.slot_names}
+    for item in analysis.matched_shapes:
+        area_mm2 = item["geometry"].area * analysis.scale_factor**2
+        for channel in set(item["recipe"]):
+            expected_by_slot[analysis.slot_names[channel]] += (
+                area_mm2 * processor.layer_height_mm * item["recipe"].count(channel)
+            )
+    expected_by_slot = {
+        name: volume for name, volume in expected_by_slot.items() if volume > 0.0
+    }
+    actual_by_slot = {
+        name: abs(float(scene.geometry[name].volume))
+        for name in expected_by_slot
+        if name in scene.geometry
+    }
+
+    assert actual_by_slot.keys() == expected_by_slot.keys()
+    assert actual_by_slot == pytest.approx(expected_by_slot, rel=1e-6)
+    assert all(scene.geometry[name].is_watertight for name in expected_by_slot)
 
 
 def test_native_analysis_drives_outline_keychain_glb_and_cross_slicer_3mf(

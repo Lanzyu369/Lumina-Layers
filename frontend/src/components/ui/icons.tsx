@@ -171,3 +171,18 @@ export const HelpCircleIcon = (props: SVGProps<SVGSVGElement>) => (
     <line x1="12" y1="17" x2="12.01" y2="17" />
   </svg>
 );
+
+export const HistoryIcon = (props: SVGProps<SVGSVGElement>) => (
+  <svg {...baseProps} className={sizeClass} {...props}>
+    <path d="M3 12a9 9 0 1 0 2.64-6.36" />
+    <path d="M3 3v6h6" />
+    <path d="M12 7v5l3 2" />
+  </svg>
+);
+
+export const XIcon = (props: SVGProps<SVGSVGElement>) => (
+  <svg {...baseProps} className={sizeClass} {...props}>
+    <line x1="18" y1="6" x2="6" y2="18" />
+    <line x1="6" y1="6" x2="18" y2="18" />
+  </svg>
+);

@@ -375,6 +375,7 @@ class TestVectorBranchExport:
         tmp_path,
     ):
         from config import ModelingMode
+        from core import vector_engine as vector_engine_module
 
         svg_file = tmp_path / "material-backing.svg"
         svg_file.write_text(
@@ -416,9 +417,13 @@ class TestVectorBranchExport:
             patch(
                 "trimesh.util.concatenate",
                 side_effect=AssertionError(
-                    "board merge must use the bounded vector concatenator"
+                    "board merge must use the direct vector concatenator"
                 ),
             ),
+            patch(
+                "core.vector_engine._concatenate_meshes_fast",
+                wraps=vector_engine_module._concatenate_meshes_fast,
+            ) as concatenate_meshes,
         ):
             convert_image_to_3d(
                 image_path=str(svg_file),
@@ -436,6 +441,10 @@ class TestVectorBranchExport:
                 backing_color_id=1,
             )
 
+        concatenate_meshes.assert_called_once_with([cyan, board])
+        fake_processor.build_mesh.assert_called_once()
+        mock_bambu_export.assert_called_once()
+
         _, build_kwargs = fake_processor.build_mesh.call_args
         assert build_kwargs["backing_color_id"] == 1
 
@@ -444,6 +453,13 @@ class TestVectorBranchExport:
         assert export_kwargs["slot_names"] == ["White", "Cyan"]
         assert "Board" not in exported_scene.geometry
         merged_cyan = exported_scene.geometry["Cyan"]
+        assert len(merged_cyan.vertices) == len(cyan.vertices) + len(board.vertices)
+        assert len(merged_cyan.faces) == len(cyan.faces) + len(board.faces)
+        assert merged_cyan.metadata["name"] == "Cyan"
+        np.testing.assert_array_equal(
+            exported_scene.geometry["White"].vertices,
+            white.vertices,
+        )
         face_colors = np.asarray(merged_cyan.visual.face_colors)
         assert face_colors.shape == (len(merged_cyan.faces), 4)
         assert np.unique(face_colors, axis=0).tolist() == [[

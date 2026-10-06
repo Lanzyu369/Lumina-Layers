@@ -152,17 +152,22 @@ class TestP4BedSizeConsistency:
         # printable_area format: ["0x0", "WIDTHx0", "WIDTHxDEPTH", "0xDEPTH"]
         # Some printers use float offsets (e.g. "0.5x1", "270.5x271")
         # so we parse as float and compute span from min/max coordinates.
-        area = list(template["printable_area"])
-        # Some vendor-native templates (e.g. QIDI Studio) close the outline by
-        # repeating the first corner; that closing point is not a fifth corner.
-        if len(area) == 5 and area[-1] == area[0]:
-            area = area[:-1]
-        assert len(area) == 4, (
-            f"printable_area for '{printer_id}' has {len(area)} points, expected 4"
+        points = [
+            tuple(float(value) for value in point.split("x"))
+            for point in template["printable_area"]
+        ]
+        # Slicer polygons may repeat the first corner to close the ring.
+        if points[0] == points[-1]:
+            points = points[:-1]
+        assert len(points) == 4, (
+            f"printable_area for '{printer_id}' has {len(points)} corners, expected 4"
         )
 
-        xs = [float(pt.split("x")[0]) for pt in area]
-        ys = [float(pt.split("x")[1]) for pt in area]
+        xs, ys = zip(*points)
+        assert set(points) == {
+            (min(xs), min(ys)), (max(xs), min(ys)),
+            (max(xs), max(ys)), (min(xs), max(ys)),
+        }
         parsed_width = round(max(xs) - min(xs))
         parsed_depth = round(max(ys) - min(ys))
 

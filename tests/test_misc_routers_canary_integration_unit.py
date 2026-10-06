@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import io
 import json
 import logging
@@ -574,16 +573,19 @@ class TestVectorizeImageCanary:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         monkeypatch.setattr(config, "TEMP_DIR", str(tmp_path))
+        private_detail = f"worker timeout while reading {tmp_path / 'private.png'}"
         mock_pool = SimpleNamespace(
-            submit=AsyncMock(side_effect=asyncio.TimeoutError())
+            submit=AsyncMock(side_effect=TimeoutError(private_detail))
         )
         app = create_app()
         registry = FileRegistry()
         app.dependency_overrides[get_file_registry] = lambda: registry
         app.dependency_overrides[get_worker_pool] = lambda: mock_pool
         client = TestClient(app)
+        target_logger = _capture_router_logger(caplog, "vectorizer")
         try:
             response = client.post(
                 "/api/vectorize",
@@ -591,14 +593,20 @@ class TestVectorizeImageCanary:
                 data={"params": "{}"},
             )
         finally:
+            target_logger.removeHandler(caplog.handler)
             app.dependency_overrides.clear()
 
-        # Application compute deadlines were removed (c49636463), so a worker
-        # TimeoutError is a real failure mapped like any other boundary error.
         assert response.status_code == 500
         assert response.json()["detail"] == (
             "Vectorization failed. Check server logs for details."
         )
+        assert str(tmp_path) not in response.text
+        mock_pool.submit.assert_awaited_once()
+        records = _records_for_event(caplog, "vectorize_image_failed")
+        assert len(records) == 1
+        assert records[0].stage == "worker"
+        assert records[0].error_type == "TimeoutError"
+        assert records[0].error_message == private_detail
         assert sorted(tmp_path.iterdir()) == []
 
     def test_worker_error_returns_sanitized_500_and_cleans_upload_temp_file(

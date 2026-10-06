@@ -16,6 +16,109 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-10-04",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [{
+      category: { zh: "稳定性", en: "Stability" },
+      items: [{
+        zh: "创意工坊从 GitHub 安装模块时，现在能识别仓库更名或转移后的地址，修复了官方拼豆工作台因仓库转移而无法安装的问题。",
+        en: "Creative Workshop now recognizes renamed or transferred GitHub repositories when installing modules, fixing installation of the official Fuse Bead Studio after its repository moved.",
+      }],
+    }],
+  },
+  {
+    version: "2026-10-03",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [{
+      category: { zh: "稳定性", en: "Stability" },
+      items: [{
+        zh: "浮雕、掐丝或磁铁孔槽生成失败时会提示错误，不再把缺少这些结构的平面模型当作成功结果；之前已生成的下载文件仍可使用。",
+        en: "Generation now reports failures when building relief, wirework or magnet cavities, instead of returning a flat model with those features missing. Previously generated downloads remain available.",
+      }],
+    }],
+  },
+  {
+    version: "2026-10-01",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [{
+      category: { zh: "预览 & 交互", en: "Preview & Interaction" },
+      items: [{
+        zh: "模型覆面选好平面后，视图会从正面显示，图案方向与旁边的二维预览一致；切换页面再回来，也会保留已经调整好的模型角度。",
+        en: "After choosing a model surface, the view now faces it directly with the artwork oriented like the 2D preview. Your model angle is also kept when you leave the page and return.",
+      }],
+    }, {
+      category: { zh: "稳定性", en: "Stability" },
+      items: [{
+        zh: "修复部分带有细小孔洞的复杂图案在模型覆面生成时提示开槽失败的问题。",
+        en: "Fixed pocket-cutting errors when generating some complex surface artwork with tiny holes.",
+      }, {
+        zh: "模型覆面使用材料档案生成时，底模会使用所选的底色材料，与图案共用对应材料槽，不再额外添加默认 PLA。",
+        en: "When generating a model surface from material archives, the base now uses your selected backing material and shares its slot with the artwork, without adding a default PLA material.",
+      }],
+    }],
+  },
+  {
+    version: "2026-09-30",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [{
+      category: { zh: "校准 & 材料", en: "Calibration & Materials" },
+      items: [{
+        zh: "云端耗材库改成按页浏览，不用再一次次点“加载更多”；可以直接跳到任意一页。",
+        en: "The cloud material library now has page-by-page browsing instead of repeated “Load more” clicks, and you can jump straight to any page.",
+      }, {
+        zh: "云端耗材卡片会显示发布频道（官方、社区等）和拟合误差（色差越小越准），并按优秀、良好、偏高分级。",
+        en: "Cloud material cards now show where each material was published (official, community, and so on) and its fit error, graded as excellent, good, or high.",
+      }, {
+        zh: "按“可更新”“已安装”筛选时的数量更准确；耗材更新后保留的旧版本收进了可折叠的“本地版本记录”，需要时再展开回滚。",
+        en: "The “Updates” and “Installed” filters now show accurate counts, and older versions kept after an update live in a collapsible “Local revision history” you can open when you need to roll back.",
+      }],
+    }, {
+      category: { zh: "稳定性", en: "Stability" },
+      items: [{
+        zh: "问题反馈现在点一次“发送”就会上传到官方问题收集服务，不用再配置邮箱，也不用再确认转发；对话框会显示上传进度，失败时可以一键重试。",
+        en: "Bug reports now go straight to the official collection service with one click on Send. No mail setup or extra forwarding step is needed; the dialog shows upload progress and offers a one-click retry if it fails.",
+      }, {
+        zh: "反馈会带上和以前邮件一样完整的诊断资料，包括转换原图、生成的 3MF、所用 LUT 和材料档案（单个文件最大 40 MiB），开发者更容易复现问题。",
+        en: "Reports carry the same full diagnostics as before, including the source image, generated 3MF, LUT, and material archive in use (up to 40 MiB per file), so problems are easier to reproduce.",
+      }],
+    }],
+  },
+  {
+    version: "2026-09-28",
+    title: {
+      zh: "Lumina Layers — 9 月更新速览",
+      en: "Lumina Layers — September updates",
+    },
+    sections: [{
+      category: { zh: "新功能", en: "New" },
+      items: [{
+        zh: "大画幅模式下，3D 预览会用橙色线画出作品会被切成哪几块，并在每块上标出编号（如 R1C2 表示第 1 行第 2 列），编号与压缩包里的 3MF 文件名一致。不想看时可以在大画幅设置里关掉。",
+        en: "In large format mode, the 3D preview now draws orange lines showing how your artwork will be split, and labels each piece (for example R1C2 means row 1, column 2) to match the 3MF file names in the ZIP. You can hide the lines in the large format settings.",
+      }, {
+        zh: "新增新手引导：第一次打开软件时会询问是否开始，用约 1 分钟走一遍从图片到 3MF（多色打印文件）的基本流程，讲清三种颜色来源的区别，并教你用鼠标旋转、平移、缩放 3D 预览。随时可以一键跳过，也可以点右上角的书本图标重新查看。",
+        en: "Added a beginner tour. On first launch it offers a one-minute walk-through from picture to 3MF (the multi-color print file), explains the three color sources, and shows how to rotate, pan and zoom the 3D preview with the mouse. Skip it with one click, or replay it any time from the book icon at the top right.",
+      }],
+    }, {
+      category: { zh: "稳定性", en: "Stability" },
+      items: [{
+        zh: "修复部分复杂 SVG 能正常预览，却在生成 3MF 时报错的问题。",
+        en: "Fixed 3MF generation errors for some complex SVG files that previewed successfully.",
+      }],
+    }],
+  },
+  {
     version: "2026-09-26",
     title: {
       zh: "Lumina Layers — 9 月更新速览",

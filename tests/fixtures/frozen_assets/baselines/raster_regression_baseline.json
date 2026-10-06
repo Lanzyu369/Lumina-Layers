@@ -1,6 +1,6 @@
 ﻿{
-  "version": "1.0.0",
-  "generated_at": "2026-09-28T04:53:12.507604+00:00",
+  "version": "1.1.0",
+  "generated_at": "2026-10-02T05:10:32.229513+00:00",
   "regression_scope": "raster_only",
   "svg_regression": "paused",
   "fixed_params": {
@@ -26,7 +26,7 @@
       "lut_id": "2c_bw",
       "lut_rel": "luts/2c/Bambulab&PLA&BW&白-黑.npy",
       "color_mode": "BW (Black & White)",
-      "preview_status": "[OK] Preview (600x528px, 13 colors) | Click image to place loop",
+      "preview_status": "[OK] Preview (600x528px, 12 colors) | Click image to place loop",
       "generate_status": "Conversion complete (High-Fidelity)! Resolution: 600x528px",
       "threemf_exists": true,
       "glb_exists": true,
@@ -232,8 +232,8 @@
         0.07084859098869607,
         0.06535583505811177,
         0.0595446584938704,
-        0.057713739850342304,
-        0.05604203152364273
+        0.05763413469192804,
+        0.056121636682057
       ],
       "recipe_unique_count": 18
     },
@@ -274,7 +274,7 @@
       "lut_id": "4c_cmyw",
       "lut_rel": "luts/4c/Aliz&PLA&4色CMYW&20260223.npy",
       "color_mode": "4-Color (CMYW)",
-      "preview_status": "[OK] Preview (142x125px, 423 colors) | Click image to place loop",
+      "preview_status": "[OK] Preview (142x125px, 410 colors) | Click image to place loop",
       "generate_status": "Conversion complete (Pixel Art)! Resolution: 142x125px",
       "threemf_exists": true,
       "glb_exists": true,
@@ -336,7 +336,7 @@
       "lut_id": "6c_cmyw",
       "lut_rel": "luts/6c/Aliz&PLA&CMYW&品红-青-黄-绿-白-黑&20260223.npy",
       "color_mode": "6-Color (CMYWGK 1296)",
-      "preview_status": "[OK] Preview (142x125px, 519 colors) | Click image to place loop",
+      "preview_status": "[OK] Preview (142x125px, 523 colors) | Click image to place loop",
       "generate_status": "Conversion complete (Pixel Art)! Resolution: 142x125px",
       "threemf_exists": true,
       "glb_exists": true,
@@ -367,7 +367,7 @@
       "lut_id": "8c",
       "lut_rel": "luts/8c/Aliz&PLA&8色红-黄-蓝-品红-青-白-绿-黑&20260213.npy",
       "color_mode": "8-Color Max",
-      "preview_status": "[OK] Preview (142x125px, 965 colors) | Click image to place loop",
+      "preview_status": "[OK] Preview (142x125px, 968 colors) | Click image to place loop",
       "generate_status": "Conversion complete (Pixel Art)! Resolution: 142x125px",
       "threemf_exists": true,
       "glb_exists": true,
@@ -392,5 +392,40 @@
       ],
       "recipe_unique_count": 965
     }
+  },
+  "generator_environment": {
+    "python": "3.12.13",
+    "system": "Darwin",
+    "machine": "arm64",
+    "numpy": "2.5.3",
+    "scipy": "1.18.1",
+    "opencv": "5.0.0",
+    "pillow": "12.3.0"
+  },
+  "reviewed_changes": [
+    {
+      "commit": "28d479c0bcced8e8e06cead94bcb4ba2003e43fc",
+      "reason": "Prefer achromatic LUT recipes for neutral inputs (LUM-20260618-002)."
+    },
+    {
+      "commit": "d9f29fb324fa037df233efa98f4e7b6116d1113e",
+      "reason": "Filter legacy 4-color blue/cyan outliers using the inferred raw channel instead of hard-coded channel 3."
+    }
+  ],
+  "revision_validation": {
+    "historical_replay": "Disabling only the two reviewed fixes reproduces all 12 prior material matrices exactly in the recorded environment.",
+    "geometry": "All 12 solid masks, effective layer counts and generated GLB extents are exactly unchanged.",
+    "updated_material_matrices": [
+      "high-fidelity__2c_bw",
+      "high-fidelity__4c_cmyw",
+      "high-fidelity__6c_cmyw",
+      "pixel__2c_bw",
+      "pixel__4c_cmyw",
+      "pixel__4c_rybw",
+      "pixel__6c_cmyw",
+      "pixel__6c_rybw",
+      "pixel__8c"
+    ],
+    "thresholds": "Unchanged from version 1.0.0."
   }
 }

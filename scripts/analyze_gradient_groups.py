@@ -524,6 +524,10 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    from api.structured_logging import configure_structured_logging
+
+    configure_structured_logging()
+
     args = _parse_args()
 
     image_path = Path(args.image)

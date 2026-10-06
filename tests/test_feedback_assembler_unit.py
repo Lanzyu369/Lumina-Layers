@@ -214,12 +214,9 @@ def _make_entry(
     }
 
 
-def _disable_feedback_email(monkeypatch: pytest.MonkeyPatch) -> None:
-    import api.feedback_email as feedback_email
+def _disable_feedback_upload(monkeypatch: pytest.MonkeyPatch) -> None:
 
-    monkeypatch.delenv("LUMINA_FEEDBACK_SMTP_HOST", raising=False)
-    monkeypatch.delenv("LUMINA_FEEDBACK_TO", raising=False)
-    feedback_email.is_email_configured.cache_clear()
+    monkeypatch.setenv("LUMINA_FEEDBACK_SERVER_URL", "off")
 
 
 def test_collect_sync_attachments_copies_original_and_final(
@@ -544,7 +541,7 @@ def test_finalize_ticket_async_marks_missing_declared_attachments_partial(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _disable_feedback_email(monkeypatch)
+    _disable_feedback_upload(monkeypatch)
     ticket_dir = tmp_path / "LUM-20260619-002"
     ticket_dir.mkdir()
     ticket_json = ticket_dir / "ticket.json"
@@ -592,7 +589,7 @@ def test_finalize_ticket_async_marks_disk_path_only_final_ref_partial(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _disable_feedback_email(monkeypatch)
+    _disable_feedback_upload(monkeypatch)
     ticket_dir = tmp_path / "LUM-20260619-016"
     ticket_dir.mkdir()
     ticket_json = ticket_dir / "ticket.json"
@@ -634,7 +631,7 @@ def test_finalize_ticket_async_leaves_unreferenced_attachments_done(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _disable_feedback_email(monkeypatch)
+    _disable_feedback_upload(monkeypatch)
     ticket_dir = tmp_path / "LUM-20260619-003"
     ticket_dir.mkdir()
     ticket_json = ticket_dir / "ticket.json"
@@ -667,7 +664,7 @@ def test_finalize_ticket_async_accepts_preset_lut_reference(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _disable_feedback_email(monkeypatch)
+    _disable_feedback_upload(monkeypatch)
     repo_root = _use_feedback_lut_repo(monkeypatch, tmp_path)
     preset_lut = repo_root / "lut-preset" / "BIQU" / "preset.json"
     preset_lut.write_bytes(b"PRESET_LUT_BYTES")
@@ -718,7 +715,7 @@ def test_shared_cloud_reference_survives_full_ticket_finalization(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     preset_exists: bool, mutation: str,
 ) -> None:
-    _disable_feedback_email(monkeypatch)
+    _disable_feedback_upload(monkeypatch)
     _use_feedback_lut_repo(monkeypatch, tmp_path)
     if not preset_exists:
         monkeypatch.setattr("api.feedback_assembler.REPO_ROOT", tmp_path / "missing-repo")
@@ -784,7 +781,7 @@ def test_finalize_ticket_async_does_not_require_lut_for_native_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _disable_feedback_email(monkeypatch)
+    _disable_feedback_upload(monkeypatch)
     ticket_dir = tmp_path / "LUM-20260619-014"
     ticket_dir.mkdir()
     ticket_json = ticket_dir / "ticket.json"
@@ -819,7 +816,7 @@ def test_finalize_ticket_async_marks_invalid_attachment_section_partial(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _disable_feedback_email(monkeypatch)
+    _disable_feedback_upload(monkeypatch)
     ticket_dir = tmp_path / "LUM-20260619-007"
     ticket_dir.mkdir()
     ticket_json = ticket_dir / "ticket.json"
@@ -856,7 +853,7 @@ def test_finalize_ticket_async_marks_invalid_attached_manifests_partial(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _disable_feedback_email(monkeypatch)
+    _disable_feedback_upload(monkeypatch)
     repo_root = _use_feedback_lut_repo(monkeypatch, tmp_path)
     preset_lut = repo_root / "lut-preset" / "BIQU" / "preset.json"
     preset_lut.write_bytes(b"PRESET_LUT_BYTES")
@@ -933,7 +930,7 @@ def test_finalize_ticket_async_tolerates_malformed_context(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _disable_feedback_email(monkeypatch)
+    _disable_feedback_upload(monkeypatch)
     ticket_dir = tmp_path / "LUM-20260619-011"
     ticket_dir.mkdir()
     ticket_json = ticket_dir / "ticket.json"

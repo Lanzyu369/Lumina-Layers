@@ -53,8 +53,11 @@ from core.pipeline.s08_auxiliary_meshes import (
 from core.vector_structure import resolve_structure_plan
 from core.preview_analysis_cache import preview_analysis_reuse_is_required
 from core.vector_layer_geometry import (
+    VectorLayerGeometryPolicy,
     build_vector_layered_volume,
+    resolve_vector_writer_grid_mm,
 )
+from core.svg_coordinate_domain import SvgCoordinateDomain, prepare_print_slabs
 
 # ---------------------------------------------------------------------------
 # Cycle-safe re-import of small helpers that originate in coordinator.
@@ -942,15 +945,28 @@ def _generate_vector_outline_mesh(
     outline_layers = max(1, int(round(thickness_mm / layer_h)))
     outline_height_mm = float(outline_layers) * layer_h
 
-    outline_mesh = build_vector_layered_volume(
-        [
+    outline_slabs = [
             {
                 "geometry": ring,
                 "height": outline_height_mm,
                 "z_offset": z_min_mm,
             }
-        ],
-        scale_mm_per_svg_unit=1.0,
+        ]
+    outline_policy = None
+    if isinstance(getattr(analysis, "svg_coordinate_domain", None), SvgCoordinateDomain):
+        coordinate_domain = getattr(analysis, "coordinate_domain", None)
+        grid_mm = (
+            coordinate_domain.xy_grid_mm if coordinate_domain is not None
+            else resolve_vector_writer_grid_mm(
+                max(abs(v) for v in structure.envelope.bounds) * structure.mm_per_unit
+            )
+        )
+        outline_policy = VectorLayerGeometryPolicy(grid_mm=grid_mm)
+        prepare_print_slabs(outline_slabs, mm_per_unit=structure.mm_per_unit, grid_mm=grid_mm)
+    outline_mesh = build_vector_layered_volume(
+        outline_slabs,
+        scale_mm_per_svg_unit=structure.mm_per_unit,
+        policy=outline_policy,
     )
     if outline_mesh is None:
         return None
@@ -1404,6 +1420,7 @@ def _build_vector_parse_cache_artifacts(
             "image_vectorizer_bounds": analysis.image_vectorizer_bounds,
             "scale_factor": analysis.scale_factor,
             "bbox": analysis.bbox,
+            "svg_coordinate_domain": analysis.svg_coordinate_domain,
             "parse_warnings": list(getattr(processor, "parse_warnings", None) or []),
             "geometry_stage_timings": dict(analysis.stage_timings or {}),
         }

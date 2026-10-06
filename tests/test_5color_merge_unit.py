@@ -336,10 +336,13 @@ class TestCalibration5ColorExtended:
             assert data["message"] == "5-Color Extended OK"
 
     def test_5color_extended_core_error_returns_500(self) -> None:
-        """Core function exception → sanitized HTTP 500."""
-        with patch(
-            "api.routers.calibration.generate_5color_extended_batch_zip",
-            side_effect=RuntimeError("generation failed"),
+        """Return an actionable HTTP 500 and keep core diagnostics in logs."""
+        with (
+            patch(
+                "api.routers.calibration.generate_5color_extended_batch_zip",
+                side_effect=RuntimeError("generation failed"),
+            ),
+            patch("api.routers.calibration.log.error") as log_error,
         ):
             response = client.post(
                 "/api/calibration/generate",
@@ -352,4 +355,8 @@ class TestCalibration5ColorExtended:
             )
             assert response.status_code == 500
             assert response.json()["detail"] == CALIBRATION_GENERATION_FAILED_DETAIL
-            assert "generation failed" not in response.text
+            log_error.assert_called_once()
+            diagnostics = log_error.call_args.kwargs["extra"]
+            assert diagnostics["event"] == "calibration_core_operation_failed"
+            assert diagnostics["error_type"] == "RuntimeError"
+            assert diagnostics["error_message"] == "generation failed"

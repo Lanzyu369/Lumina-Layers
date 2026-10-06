@@ -515,6 +515,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from api.structured_logging import configure_structured_logging
+
+    configure_structured_logging()
+
     args = parse_args(argv)
     manifest = _load_build_manifest()
     library_path = (

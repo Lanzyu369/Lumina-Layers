@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import numpy as np
@@ -357,6 +358,51 @@ def test_blockwise_top_k_preserves_duplicate_ties_across_k_boundary(
         parallelism=parallelism,
     )
 
+    np.testing.assert_array_equal(actual_indices, expected_indices)
+    np.testing.assert_array_equal(actual_distances, expected_distances)
+
+
+@pytest.mark.parametrize(
+    ("block_size", "parallelism", "expected_workers"),
+    [(1, 4, [4]), (2, 4, [2]), (1, 2, [2]), (None, 4, [])],
+)
+def test_blockwise_top_k_uses_requested_workers_for_available_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+    block_size: int | None,
+    parallelism: int,
+    expected_workers: list[int],
+) -> None:
+    observed_workers: list[int] = []
+
+    class _RecordingExecutor(ThreadPoolExecutor):
+        def __init__(self, max_workers: int) -> None:
+            observed_workers.append(max_workers)
+            super().__init__(max_workers=max_workers)
+
+    monkeypatch.setattr(
+        material_cache_module,
+        "ThreadPoolExecutor",
+        _RecordingExecutor,
+    )
+    rng = np.random.default_rng(20260728)
+    target_lab = rng.normal(size=(4, 3))
+    candidate_lab = rng.normal(size=(32, 3))
+    expected_indices, expected_distances = _legacy_top_k(
+        target_lab,
+        candidate_lab,
+        top_k=8,
+    )
+
+    actual_indices, actual_distances = _top_k_candidate_rows_blockwise(
+        target_lab=target_lab,
+        candidate_lab=candidate_lab,
+        top_k=8,
+        block_size=block_size,
+        parallelism=parallelism,
+    )
+
+    # Only multiple available blocks need a pool; one block stays serial.
+    assert observed_workers == expected_workers
     np.testing.assert_array_equal(actual_indices, expected_indices)
     np.testing.assert_array_equal(actual_distances, expected_distances)
 

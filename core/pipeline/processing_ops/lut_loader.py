@@ -134,6 +134,8 @@ def _finalize_loaded_lut(
         "lut_rgb": lut_rgb,
         "lut_lab": lut_lab,
         "ref_stacks": ref_stacks,
+        # ``ref_stacks`` keep the storage order declared by the LUT metadata.
+        "layer_order": str(getattr(metadata, "layer_order", "Top2Bottom") or "Top2Bottom"),
         "kdtree": kdtree,
         "layer_count": layer_count,
         "lut_fingerprint": lut_fingerprint,
