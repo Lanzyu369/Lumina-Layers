@@ -1092,7 +1092,6 @@ async def generate_puzzle(
         nozzle_size=generate_params.nozzle_size,
         device_profile_id=generate_params.device_profile_id,
         build_plate_id=generate_params.build_plate_id,
-        custom_3mf_template_id=generate_params.custom_3mf_template_id,
     )
     if generate_params.enable_fridge_magnet:
         raise HTTPException(status_code=422, detail="Puzzle mode does not support fridge magnet cavities.")

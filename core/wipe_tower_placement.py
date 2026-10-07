@@ -123,6 +123,7 @@ class WipeTowerPlacementRequest:
     tower_square_rib_body: bool = False
     tower_preview_x_guard_enabled: bool = False
     tower_preview_x_guard_margin: float = 0.0
+    cyclic_toolchanges: bool = False
 
 
 @dataclass(frozen=True)
@@ -214,11 +215,12 @@ def estimate_wipe_tower_depth(
     tower_infill_spacing_ratio: float = 1.0,
     extruder_count: int = 1,
     filament_change_volume: float = 0.0,
+    cyclic_toolchanges: bool = False,
 ) -> float:
-    """Estimate peak tower depth using the Bambu/Orca prime-volume formula.
+    """Estimate peak tower depth from native transition-volume facts.
 
-    按 Bambu/Orca 的首层冲刷体积公式估算擦料塔最大深度。该值用于预留
-    占地，不会改变冲刷量，也不会关闭擦料塔。
+    按原生换料体积和循环换料规则估算擦料塔深度，用于预留占地；
+    不改变冲刷量，也不会关闭擦料塔。
     """
 
     width = max(2.0, float(width))
@@ -227,8 +229,10 @@ def estimate_wipe_tower_depth(
     material_count = max(1, int(material_count))
     extruder_count = max(1, int(extruder_count))
     transition_count = (
-        material_count if extruder_count == 2 else material_count - 1
+        material_count if extruder_count == 2 or cyclic_toolchanges else material_count - 1
     )
+    if cyclic_toolchanges and material_count == 1:
+        transition_count = 0
     purge_volume = max(0.0, float(purge_volume))
     spacing_ratio = max(0.01, float(tower_infill_spacing_ratio))
     usable_line_length = max(tower_line_width, width - 2.0 * tower_line_width)
@@ -275,6 +279,7 @@ def _estimate_request_tower_depth(
             tower_infill_spacing_ratio=request.tower_infill_spacing_ratio,
             extruder_count=request.extruder_count,
             filament_change_volume=request.filament_change_volume,
+            cyclic_toolchanges=request.cyclic_toolchanges,
         ),
     )
 

@@ -74,6 +74,7 @@ def build_lumina_process_settings(
     settings: dict[str, Any] | None = None,
     *,
     nozzle_size: object = None,
+    slicer_id: str = "",
 ) -> dict[str, str]:
     """Return the explicit Lumina process values for one export.
 
@@ -86,6 +87,9 @@ def build_lumina_process_settings(
     line_width = _format_mm(nozzle_mm + 0.02)
     initial_line_width = "0.25" if nozzle_mm <= 0.25 else line_width
     result = {key: str(value) for key, value in PROTECTED_LUMINA_PROCESS_SETTINGS.items()}
+    if slicer_id == "PrusaSlicer":
+        # Product default: Prusa has no automatic-brim enum.
+        result["brim_type"] = "outer_only"
     result.update({key: line_width for key in _PROTECTED_LINE_WIDTH_KEYS})
     result["initial_layer_line_width"] = initial_line_width
     explicit = {

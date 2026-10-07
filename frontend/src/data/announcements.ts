@@ -24,6 +24,9 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
     sections: [{
       category: { zh: "新功能", en: "New" },
       items: [{
+        zh: "现在可选择 Prusa 机型，并导出供 PrusaSlicer 3.0.0-alpha12 打开的单件、批量及拼图工程；多色模型需要 MMU 或足够的打印头，材料数量超过设备容量会明确提示。",
+        en: "Select a Prusa printer and export single, batch or puzzle projects for PrusaSlicer 3.0.0-alpha12. Multicolor models require an MMU or enough print heads; exports report when the palette exceeds the printer's capacity.",
+      }, {
         zh: "设置中可以导入、选择和删除切片软件保存的单盘 3MF 项目模板。图像、矢量、材料档案、大幅分块和模型覆面导出可沿用模板工艺；批量、拼图、校准和色块生成仍使用内置配置。",
         en: "Settings now lets you import, select and delete single-plate 3MF project templates. Image, vector, material-archive, large-format and model-surface exports can reuse template tuning; batch, puzzle, calibration and swatch generation use built-in settings.",
       }],

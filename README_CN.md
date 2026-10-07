@@ -252,7 +252,7 @@ cd Lumina-studio
 ```bash
 # Python 3.12+ 需要先为当前平台构建原生 3MF wheel。先克隆
 # https://github.com/MOVIBALE/fatcat-metadata 并检出
-# 9d77c6860cf7520f9a67037e15f7c2ae44ffa803，再按桌面指南准备固定版本的
+# 5fcd16d44059e0c47c555cc2de86b3433b928900，再按桌面指南准备固定版本的
 # neroued 源码并应用 Lumina 的 B7 补丁：
 # python scripts/build_3mf_native_wheels.py \
 #   --fatcat-root ../fatcat-metadata \
@@ -271,8 +271,13 @@ python start_all.py
 
 本地或桌面安装必须先用固定提交的公开 Fat Cat 根项目和已打补丁的
 `neroued-3mf` 源码生成 `wheelhouse/3mf`，不要复制其他操作系统或 CPU 架构的
-wheel。Fat Cat 源码固定为提交 `9d77c6860cf7520f9a67037e15f7c2ae44ffa803`，
+wheel。Fat Cat 源码固定为提交 `5fcd16d44059e0c47c555cc2de86b3433b928900`，
 与 `scripts/fatcat_packaging_contract.py` 中的 `FATCAT_SOURCE_COMMIT` 保持一致。
+
+Prusa 导出使用 **PrusaSlicer 3.0.0-alpha12** 预览版格式。在设置中选择 PrusaSlicer
+及对应设备；内置配置使用原生默认 0.4 mm 喷嘴和板型。多色模型需要 MMU 或足够的
+打印头。单件、材料档案、批量、拼图及用户模板图像已在原生软件中实际打开和切片。
+工艺、来源保留规则及限制见 [3MF 元数据导出说明](docs/3mf-metadata-export.md)。
 
 ### 选项 2：桌面客户端（Electron）
 

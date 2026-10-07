@@ -161,21 +161,10 @@ def run(ctx: dict) -> dict:
         ctx["error"] = "[ERROR] Mesh generation failed: No valid meshes generated"
         return ctx
 
-    # BambuStudio print settings
+    # Geometry-driven values; shared product defaults belong to the writer.
     print_settings = {
         "layer_height": "0.08",
         "initial_layer_height": "0.08",
-        "wall_loops": "1",
-        "top_shell_layers": "0",
-        "bottom_shell_layers": "1",
-        "bottom_surface_pattern": "monotonicline",
-        "elefant_foot_compensation": "0",
-        "sparse_infill_density": "100%",
-        "sparse_infill_pattern": "zig-zag",
-        "travel_speed": "150",
-        "enable_support": "0",
-        "brim_width": "5",
-        "brim_type": "auto_brim",
     }
 
     try:

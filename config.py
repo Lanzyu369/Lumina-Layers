@@ -679,6 +679,10 @@ LEGACY_SLICER_ID_ALIASES: dict[str, str] = {
     "qidi_studio": "QIDIStudio",
     "qidi studio": "QIDIStudio",
     "qidistudio": "QIDIStudio",
+    "prusa": "PrusaSlicer",
+    "prusa_slicer": "PrusaSlicer",
+    "prusa slicer": "PrusaSlicer",
+    "prusaslicer": "PrusaSlicer",
 }
 
 
@@ -852,6 +856,7 @@ SUPPORTED_SLICERS: list[dict[str, str]] = [
     {"id": "AnycubicSlicerNext", "display_name": "Anycubic Slicer Next"},
     {"id": "FlashStudio", "display_name": "Flash Studio Desktop"},
     {"id": "QIDIStudio", "display_name": "QIDI Studio"},
+    {"id": "PrusaSlicer", "display_name": "PrusaSlicer 3.0.0-alpha12"},
 ]
 
 DEFAULT_SLICER_ID: str = "BambuStudio"
@@ -1232,8 +1237,8 @@ DEFAULT_PRINTER_ID: str = "bambu-h2d"
 
 
 def get_printer_profile(printer_id: str) -> PrinterProfile:
-    """Get printer profile by ID, falling back to default (H2D) for unknown IDs.
-    根据 ID 获取打印机配置，未知 ID 回退到默认机型 H2D。
+    """Resolve a product or FatCat Prusa profile; unknown IDs retain H2D fallback.
+    解析本体或 FatCat Prusa 机型；未知 ID 保留 H2D 回退。
 
     Args:
         printer_id (str): Printer identifier, e.g. "bambu-h2d". (打印机标识)
@@ -1242,6 +1247,37 @@ def get_printer_profile(printer_id: str) -> PrinterProfile:
         PrinterProfile: Matching profile or default H2D profile. (匹配的配置或默认 H2D 配置)
     """
     normalized_printer_id = normalize_printer_profile_id(printer_id)
+    profile = PRINTER_PROFILES.get(normalized_printer_id)
+    if profile is not None:
+        return profile
+    if "prusa" in normalized_printer_id:
+        from core.machine_registry import _registry_printer_slug
+        from utils.fatcat_metadata import native_project_source_catalog
+
+        sources = native_project_source_catalog("PrusaSlicer")["sources"]
+        matches = [
+            row for row in sources
+            if normalized_printer_id in {
+                _registry_printer_slug(row["display_name"]),
+                str(row["machine_uid"]).replace(":", "-"),
+            }
+        ]
+        if matches:
+            source = matches[0]
+            hardware = source["hardware_settings"]
+            bed = hardware["bed"]
+            return PrinterProfile(
+                id=normalized_printer_id, display_name=source["display_name"], brand="Prusa",
+                bed_width=int(bed["width"]), bed_depth=int(bed["height"]),
+                bed_height=int(bed["max_print_height"]),
+                nozzle_count=int(hardware["tool_count"]),
+                is_dual_head=int(hardware["tool_count"]) > 1,
+                template_file="", slicer_templates={"PrusaSlicer": ""},
+                supported_nozzle_sizes=tuple(dict.fromkeys(
+                    str(row["nozzle_uid"]).removeprefix("nozzle:").removesuffix("mm")
+                    for row in matches
+                )),
+            )
     return PRINTER_PROFILES.get(
         normalized_printer_id,
         PRINTER_PROFILES[DEFAULT_PRINTER_ID],

@@ -18,7 +18,7 @@ FATCAT_MODULE = "fatcat_metadata"
 FATCAT_ADAPTER_MODULE = "fatcat_metadata_neroued"
 FATCAT_VERSION = "0.1.0"
 FATCAT_REPOSITORY = "https://github.com/MOVIBALE/fatcat-metadata"
-FATCAT_SOURCE_COMMIT = "9d77c6860cf7520f9a67037e15f7c2ae44ffa803"
+FATCAT_SOURCE_COMMIT = "5fcd16d44059e0c47c555cc2de86b3433b928900"
 FATCAT_LEGACY_DISTRIBUTION = "lumina-3mf-metadata-cpp"
 FATCAT_WRITER_DISTRIBUTION = "neroued-3mf"
 FATCAT_WRITER_VERSION = "0.4.0+fatcat.b7"
@@ -57,7 +57,10 @@ FATCAT_REQUIRED_DATA_FILES = (
     Path("translations/targets/anycubic-slicer-next-2.0.0.3.json"),
     Path("translations/targets/flash-studio-1.7.18.json"),
     Path("translations/targets/snapmaker-orca-2.4.0.json"),
+    Path("translations/targets/prusa-slicer-3.0.0-alpha12.json"),
     Path("native_project_sources/source-index.json"),
+    Path("native_project_sources/prusa-3/catalog.json"),
+    Path("native_project_sources/prusa-3/schema.json"),
 )
 
 

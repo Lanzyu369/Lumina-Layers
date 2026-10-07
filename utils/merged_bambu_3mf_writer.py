@@ -387,12 +387,12 @@ def _parse_source_assembly(
             # (p:path, objectid, transform, p:UUID)
             referenced: list[tuple[str, str, str, str]] = []
             for comp in components.findall(_qname_core("component")):
-                p_path = comp.get(_qname_prod("path"))
+                p_path = comp.get(_qname_prod("path")) or "/3D/3dmodel.model"
                 obj_id = comp.get("objectid")
-                if not p_path or not obj_id:
+                if not obj_id:
                     raise MergedWriteError(
                         f"MergedItem[{item_idx}].source_3mf_path has <component> without "
-                        "p:path or objectid"
+                        "objectid"
                     )
                 # Preserve transform and UUID from source component
                 comp_transform = comp.get("transform") or ""
@@ -784,24 +784,16 @@ def _resolve_merged_wipe_tower_placement(
 
 
 class MergedBambu3MFWriter:
-    """Write N MergedItem objects into a SINGLE Bambu-compatible 3MF.
+    """Merge source geometry and tuning into one native slicer project.
 
-    每个 MergedItem 对应：
-        - 1 个 per-item ``.model`` 文件（含该 item 的所有 mesh ``<object>``）
-        - 1 个顶层 ``3D/3dmodel.model`` 中的 assembly ``<object>``
-          （含 ``<components>`` 引用 per-item ``.model``）
-        - 1 个 ``<build><item>`` 引用 assembly object（带 XY 平移 transform）
-        - 1 个 ``Metadata/model_settings.config`` 中的 ``<object>``
-          （含 ``<part>`` 子节点保留 Bambu 元数据）
-        - 1 个 ``<plate><model_instance>`` 条目，将对象绑定到热床与工艺视图
-        - 1 个 ``<assemble><assemble_item>`` 条目
+    将各源工程的几何和工艺合并为一个目标切片软件原生工程。
 
-    结构对齐 ``元数据分析/多项目参考.3mf`` 中
-    ``3D/3dmodel.model``、``3D/_rels/3dmodel.model.rels``、
-    ``Metadata/model_settings.config``。
-
-    NOTE: 不修改 ``utils/bambu_3mf_writer.py::BambuStudio3MFWriter`` 的
-    现有公开签名。
+    FatCat merges metadata, material identities and object settings. This writer
+    reuses source meshes/transforms and follows FatCat's core/Production layout
+    policy, then asks Neroued to write one archive. The historical class name and
+    public signature remain compatible with existing callers.
+    FatCat 合并元数据、耗材身份和局部设置；此 writer 复用源网格及变换，
+    按 FatCat 的布局规则调用 Neroued 单次写包，保留现有类名和公开签名。
     """
 
     def write(
@@ -1100,8 +1092,10 @@ class MergedBambu3MFWriter:
         builder = n3mf.DocumentBuilder()
         builder.set_unit(n3mf.Unit.Millimeter)
         builder.set_language("en-US")
-        builder.enable_production()
-        builder.set_production_build_uuid(str(uuid.uuid4()))
+        core_layout = project_result["metadata_defaults"].get("geometry_layout") == "core"
+        if not core_layout:
+            builder.enable_production()
+            builder.set_production_build_uuid(str(uuid.uuid4()))
 
         material_group_ids: list[dict[str, int]] = []
         material_indexes: list[dict[str, dict[int, int]]] = []
@@ -1210,9 +1204,9 @@ class MergedBambu3MFWriter:
                         mesh_id, metadata["name"], metadata["value"], metadata["type"],
                     )
                 object_uuid = source_object.get(_qname_prod("UUID"))
-                if object_uuid:
+                if object_uuid and not core_layout:
                     builder.set_object_uuid(mesh_id, object_uuid)
-                if mesh_index < len(assembly.component_transforms):
+                if not core_layout and mesh_index < len(assembly.component_transforms):
                     builder.set_component_transform(
                         mesh_id,
                         _n3mf_transform(
@@ -1222,7 +1216,7 @@ class MergedBambu3MFWriter:
                             ),
                         ),
                     )
-                if mesh_index < len(assembly.component_uuids):
+                if not core_layout and mesh_index < len(assembly.component_uuids):
                     component_uuid = assembly.component_uuids[mesh_index]
                     builder.set_component_uuid(
                         mesh_id, component_uuid or str(uuid.uuid4())
@@ -1243,11 +1237,18 @@ class MergedBambu3MFWriter:
                     for value in build_transforms[model_index - 1]
                 ]
                 dx, dy, dz = build_transform[9:12]
-            group_id = builder.add_production_group(
-                item.source_filename or f"object_{model_index}",
-                mesh_ids,
-                assembly.source_assembly_uuid or str(uuid.uuid4()),
-            )
+            group_name = item.source_filename or f"object_{model_index}"
+            if core_layout:
+                group_id = builder.add_component_object(group_name, [
+                    n3mf.Component(mesh_id, _n3mf_transform(
+                        n3mf, _parse_transform_matrix(assembly.component_transforms[index]),
+                    ))
+                    for index, mesh_id in enumerate(mesh_ids)
+                ])
+            else:
+                group_id = builder.add_production_group(
+                    group_name, mesh_ids, assembly.source_assembly_uuid or str(uuid.uuid4()),
+                )
             assembly_ids_by_model[model_index] = group_id
             source_id = str(model_index - 1)
             source_mapping = source_mappings[source_id]
@@ -1277,6 +1278,7 @@ class MergedBambu3MFWriter:
                     for mesh_id, source_mesh in zip(mesh_ids, assembly.meshes)
                 ],
                 "source_slot_output_indexes": source_slot_output_indexes,
+                "output_slot_count": output_slot_count,
                 "default_slot_output_index": source_mapping.get(0, min(source_mapping.values())),
                 "source_slots": [
                     {
@@ -1373,8 +1375,10 @@ class MergedBambu3MFWriter:
                     [float(value) for value in build_item["transform"].split()],
                 ),
                 uuid=(
-                    assemblies[model_index - 1].source_build_item_uuid
-                    or str(uuid.uuid4())
+                    "" if core_layout else (
+                        assemblies[model_index - 1].source_build_item_uuid
+                        or str(uuid.uuid4())
+                    )
                 ),
                 auto_drop=properties.get("auto_drop", ""),
             )

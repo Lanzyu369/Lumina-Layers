@@ -18,6 +18,7 @@ import zipfile
 import json
 import copy
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, List, Dict, Mapping, Optional
 import numpy as np
 from PIL import Image
@@ -55,6 +56,7 @@ from utils.fatcat_metadata import (
     compose_model_metadata,
     compose_project_settings,
     metadata_resource_specs,
+    native_project_source_catalog,
     native_source_for_target,
     resolve_template_build_plate,
     select_metadata_target,
@@ -763,11 +765,17 @@ def load_printer_template(
         template = load_template(custom_3mf_template_id)
         source_slicer = template.pop("_lumina_template_slicer")
         expected = dict(source.get("hardware_settings") or {})
-        if not expected:
-            raise ValueError(
-                "Fat Cat source does not expose hardware facts for validating "
-                f"a user template: {target.slicer_id}/{target.machine_uid}"
+        if target.slicer_id == "PrusaSlicer":
+            # Native structured hardware is validated by FatCat against its
+            # exact config, rather than a flattened nozzle/bed summary.
+            native = compose_builtin_project_settings(
+                build_builtin_project_settings_request({}, [{
+                    "name": "PLA", "colour": "#808080", "material_type": "PLA",
+                }], target=target)
             )
+            expected = json.loads(native["project_settings_json"])
+        if not expected:
+            raise ValueError("Fat Cat source has no hardware facts for template validation")
         validate_template_hardware(
             template,
             expected,
@@ -777,8 +785,7 @@ def load_printer_template(
         return template
 
     request = build_builtin_project_settings_request(
-        {},
-        [{"name": "PLA", "colour": "#808080", "material_type": "PLA"}],
+        {}, [{"name": "PLA", "colour": "#808080", "material_type": "PLA"}],
         target=target,
     )
     composed = compose_builtin_project_settings(request)
@@ -897,6 +904,7 @@ def _build_wipe_tower_placement_request(
         tower_rotation=layout["tower_rotation"],
         tower_brim=0.0 if uses_native_tower_envelope else tower_brim,
         tower_infill_spacing_ratio=layout["tower_infill_spacing_ratio"],
+        cyclic_toolchanges=bool(layout.get("tower_cyclic_toolchanges", False)),
         tower_rib_width=(
             layout["tower_rib_width"]
             if uses_rib_wall and not uses_native_tower_envelope else 0.0
@@ -1031,14 +1039,14 @@ def _build_wipe_tower_placement_metadata_payload(
 
 
 class BambuStudio3MFWriter:
-    """Enhanced 3MF writer with BambuStudio-compatible metadata.
-    使用 neroued-3mf Production Extension 生成 Bambu 兼容 3MF。
+    """Write geometry with FatCat's selected native slicer metadata.
+    将几何与 FatCat 提供的目标切片软件原生元数据单次写包。
 
-    Features:
-    - Embeds print settings (layer height, temperatures, speeds)
-    - Adds color information to objects via BaseMaterial
-    - Compatible with BambuStudio/OrcaSlicer/ElegooSlicer/SnapmakerOrca
-    - C++ streaming XML serialisation with native ZIP64 support
+    The historical class name is retained for caller compatibility. FatCat
+    selects native metadata and core/Production layout; Neroued writes the
+    archive once. Lumina supplies meshes, materials and placement facts.
+    保留历史类名以兼容调用方；FatCat 选择原生元数据及几何布局，
+    Neroued 单次写包，Lumina 提供网格、材料选择和摆放事实。
     """
 
     DEFAULT_SETTINGS = {
@@ -1128,7 +1136,7 @@ class BambuStudio3MFWriter:
                 slot count. ``None`` keeps the existing automatic behavior;
                 ``False`` trims arrays to the selected palette.（兼容参数，用于控制
                 是否保留原生项目的来源槽数；``None`` 保持现有自动行为，``False`` 按
-                已选调色板裁剪。）
+                已选调色板裁剪；声明固定物理槽数的目标始终保留原生容量。）
             custom_3mf_template_id: Successfully loaded user template selects
                 preserved tuning instead of target-native material defaults.
                 成功加载的用户模板使用保留调校模式，不套用原生耗材默认值。
@@ -1142,11 +1150,14 @@ class BambuStudio3MFWriter:
         from core.machine_process_overlay import merge_lumina_process_settings
 
         self.output_path = output_path
-        self.settings = merge_lumina_process_settings(self.DEFAULT_SETTINGS, settings)
         self.objects: list[_MeshExportEntry] = []
         self.color_mode = color_mode
         self.printer_id = printer_id
         self.slicer = normalize_slicer_software_id(slicer)
+        defaults = dict(self.DEFAULT_SETTINGS)
+        if self.slicer == "PrusaSlicer":
+            defaults["brim_type"] = "outer_only"
+        self.settings = merge_lumina_process_settings(defaults, settings)
         self._material_types = dict(material_types or {})
         self.device_profile_id = str(device_profile_id or "").strip() or None
         self.build_plate_id = str(build_plate_id or "").strip() or None
@@ -1231,7 +1242,9 @@ class BambuStudio3MFWriter:
             default_build_plate_uid=target.build_plate_uid,
             model_plate_value=self._custom_template.get("_lumina_template_plate_value"),
             sidecar_bed_value=self._custom_template.get("_lumina_template_sidecar_bed"),
-            project_bed_value=self._custom_template.get("curr_bed_type"),
+            project_bed_value=read_project_layout(
+                self._custom_template, slicer_id=self.slicer,
+            )["bed_type"],
         )
 
     def add_mesh(self, mesh: trimesh.Trimesh, name: str, color_rgb: tuple):
@@ -1359,8 +1372,16 @@ class BambuStudio3MFWriter:
 
         向 Fat Cat 传递已选来源事实，由 C++ 选择硬件、材料和槽位策略。
         """
+        slot_mode = (
+            "auto" if self.preserve_template_filament_slots is None
+            else "preserve" if self.preserve_template_filament_slots else "compact"
+        )
+        slot_policy = native_project_source_catalog(target.slicer_id).get(
+            "filament_slot_policy"
+        )
+        if slot_policy == "preserve_native_capacity":
+            slot_mode = "preserve"
         if self._custom_template is not None:
-            process = self.settings
             process = {
                 key: self.settings[key] for key in (
                     "layer_height", "initial_layer_print_height", "initial_layer_height",
@@ -1388,10 +1409,7 @@ class BambuStudio3MFWriter:
                 },
                 "process_settings": process,
                 "preserve_source_material_settings": True,
-                "filament_slot_mode": (
-                    "auto" if self.preserve_template_filament_slots is None
-                    else "preserve" if self.preserve_template_filament_slots else "compact"
-                ),
+                "filament_slot_mode": slot_mode,
                 "source_profile": {
                     "registry": profile is not None,
                     "brand": getattr(profile, "brand", ""),
@@ -1414,13 +1432,12 @@ class BambuStudio3MFWriter:
             for name, (red, green, blue) in material_palette
         ]
         request = build_builtin_project_settings_request(
-            build_lumina_process_settings(self.settings, nozzle_size=self.nozzle_size),
+            build_lumina_process_settings(
+                self.settings, nozzle_size=self.nozzle_size, slicer_id=self.slicer,
+            ),
             materials,
             target=target,
-            filament_slot_mode=(
-                "auto" if self.preserve_template_filament_slots is None
-                else "preserve" if self.preserve_template_filament_slots else "compact"
-            ),
+            filament_slot_mode=slot_mode,
             source_slot_colours={
                 str(key): "#{:02X}{:02X}{:02X}".format(*_coerce_preview_rgb(value))
                 for key, value in (self._project_preview_colors or {}).items()
@@ -1431,8 +1448,8 @@ class BambuStudio3MFWriter:
         return request
 
     def export(self) -> str:
-        """Export all meshes to a BambuStudio-compatible 3MF file.
-        将所有网格导出为 BambuStudio 兼容的 3MF 文件。
+        """Export all meshes as the selected slicer's native 3MF project.
+        将所有网格导出为所选切片软件的原生 3MF 工程。
 
         Returns:
             str: Path to the exported 3MF file
@@ -1461,7 +1478,10 @@ class BambuStudio3MFWriter:
             material_palette, metadata_target,
         )
         if self._custom_template is not None:
-            base_project = self._get_base_config_template()
+            base_project = {
+                key: value for key, value in self._get_base_config_template().items()
+                if not key.startswith("_lumina_template_")
+            }
         else:
             base_project = None
 
@@ -1508,9 +1528,6 @@ class BambuStudio3MFWriter:
                 material_index=material_index,
                 retained_views=retained_mesh_views,
             )
-            builder.set_object_uuid(obj_id, str(uuid.uuid4()))
-            builder.set_component_uuid(obj_id, str(uuid.uuid4()))
-            builder.set_component_transform(obj_id, n3mf.Transform.identity())
             object_ids.append(obj_id)
             material_index_by_object.append(material_index)
 
@@ -1536,8 +1553,9 @@ class BambuStudio3MFWriter:
         # existing explicit tower-field API instead of composing the whole
         # project a second time.
         project_layout = read_project_layout(final_project, slicer_id=self.slicer)
+        effective_settings = composed_project["effective_settings"]
         placement = self._get_wipe_tower_placement(
-            effective_settings=final_project,
+            effective_settings=effective_settings,
             project_layout=project_layout,
         )
         # Patching tower fields preserves the bed and layer facts reused below.
@@ -1567,34 +1585,42 @@ class BambuStudio3MFWriter:
                 "Fat Cat C++ project composer returned invalid build-item properties"
             )
         build_translation = self._get_build_item_translation(
-            effective_settings=final_project,
+            effective_settings=effective_settings,
             precomputed_placement=placement,
             placement_was_computed=True,
             project_layout=project_layout,
         )
-        builder.enable_production(
-            n3mf.Transform.translation(*build_translation)
-        )
-        builder.set_production_merge_objects(True)
-        builder.set_production_build_uuid(str(uuid.uuid4()))
-        builder.set_production_assembly_uuid(str(uuid.uuid4()))
-        for index, object_id in enumerate(object_ids):
+        metadata_defaults = composed_project["metadata_defaults"]
+        if metadata_defaults.get("geometry_layout") == "core":
+            assembly_id = builder.add_component_object(
+                Path(self.output_path).stem,
+                [n3mf.Component(object_id, n3mf.Transform.identity()) for object_id in object_ids],
+            )
             builder.add_build_item(
-                object_id,
-                uuid=str(uuid.uuid4()) if index == 0 else "",
+                assembly_id, n3mf.Transform.translation(*build_translation),
                 **build_item_properties,
             )
-
-        plan = builder.plan_production_layout()
-        planned_object_ids = tuple(
-            int(item.object_id) for item in plan.external_objects
-        )
-        if planned_object_ids != tuple(object_ids):
-            raise RuntimeError(
-                "Fat Cat writer layout plan does not match queued object IDs"
+        else:
+            for obj_id in object_ids:
+                builder.set_object_uuid(obj_id, str(uuid.uuid4()))
+                builder.set_component_uuid(obj_id, str(uuid.uuid4()))
+                builder.set_component_transform(obj_id, n3mf.Transform.identity())
+            builder.enable_production(n3mf.Transform.translation(*build_translation))
+            builder.set_production_merge_objects(True)
+            builder.set_production_build_uuid(str(uuid.uuid4()))
+            builder.set_production_assembly_uuid(str(uuid.uuid4()))
+            for index, object_id in enumerate(object_ids):
+                builder.add_build_item(
+                    object_id, uuid=str(uuid.uuid4()) if index == 0 else "",
+                    **build_item_properties,
+                )
+            plan = builder.plan_production_layout()
+            planned_object_ids = tuple(
+                int(item.object_id) for item in plan.external_objects
             )
-        assembly_id = int(plan.assembly_id)
-        metadata_defaults = composed_project["metadata_defaults"]
+            if planned_object_ids != tuple(object_ids):
+                raise RuntimeError("Fat Cat writer layout plan does not match queued object IDs")
+            assembly_id = int(plan.assembly_id)
         model_request = build_model_metadata_request(
             target=metadata_target,
             assembly_id=assembly_id,

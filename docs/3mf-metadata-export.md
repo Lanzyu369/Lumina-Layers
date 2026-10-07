@@ -22,7 +22,7 @@ writer writes the final package once.
 FatCat is distributed as `fatcat-metadata`, imported as `fatcat_metadata`, version
 `0.1.0`. Lumina builds from the public
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata) root
-project at source revision `9d77c6860cf7520f9a67037e15f7c2ae44ffa803` and pins
+project at source revision `5fcd16d44059e0c47c555cc2de86b3433b928900` and pins
 the writer contract in
 `scripts/fatcat_packaging_contract.py`; build and installation steps are in
 [the desktop setup guide](desktop-electron.md).
@@ -30,13 +30,14 @@ the writer contract in
 FatCat 发行包名为 `fatcat-metadata`，导入名为 `fatcat_metadata`，版本固定为 `0.1.0`。
 Lumina 从公开仓库
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata) 的根项目构建，
-源码提交固定为 `9d77c6860cf7520f9a67037e15f7c2ae44ffa803`，并在
+源码提交固定为 `5fcd16d44059e0c47c555cc2de86b3433b928900`，并在
 `scripts/fatcat_packaging_contract.py` 维护 writer 合同；构建与安装步骤见
 [桌面环境指南](desktop-electron.md)。
 
 The current source pin includes Bambu Studio 02.08.02.61, OrcaSlicer 2.4.2,
 QIDI Studio 02.07.02.60, ElegooSlicer 1.5.3.5, Anycubic Slicer Next macOS
-2.0.0.3, Flash Studio 1.7.18, and Snapmaker Orca 2.4.0 metadata.
+2.0.0.3, Flash Studio 1.7.18, Snapmaker Orca 2.4.0, and PrusaSlicer
+3.0.0-alpha12 metadata.
 Native process defaults supply specific printing speeds. Lumina no longer sends
 the historical `print_speed` placeholder, which has no reviewed FatCat mapping.
 Explicit unsupported overrides are rejected; they are not silently dropped.
@@ -44,7 +45,7 @@ Either first-layer height alias replaces both product defaults, while conflictin
 explicit aliases still produce an error. Saved user-template settings remain opaque
 source data rather than being reinterpreted as new process overrides.
 
-当前源码固定值包含上述七种软件的元数据版本。具体打印速度来自原生工艺配置，
+当前源码固定值包含上述八种软件的元数据版本。具体打印速度来自原生工艺配置，
 Lumina 不再发送没有经过映射核对的历史 `print_speed` 占位值；明确请求的不支持
 参数仍会报错，不会静默忽略。明确指定任一首层高度名称会替换默认值；两个名称
 下明确提供矛盾值时仍会报错。用户模板中的设置继续作为原始来源数据保留，
@@ -106,6 +107,38 @@ Worker 接收两项参数，共用合并路径保留源 Z 区间并映射对象�
 通用来源合成入口补齐，用户材料温度、流量、工艺及未知字段继续取自实际源项目。
 
 ## User Project Templates
+
+### PrusaSlicer 3 preview / Prusa 3 预览版
+
+Select **PrusaSlicer 3.0.0-alpha12** in Settings, then the exact Prusa machine.
+The 32 built-in device entries come from FatCat's public native catalogue, with
+the native default 0.4 mm nozzle and sheet. They are not separate Lumina preset
+copies. Ordinary single-material devices cannot print the four-material palette;
+select an MMU or a multi-tool configuration with sufficient capacity.
+
+The common writer follows FatCat's `geometry_layout=core` and fixed native slot
+policy. Material-archive palettes do not remove physical MMU slots or XL tools.
+Prusa layer ranges support backing layer height and infill. Merged exports
+preserve source filament tuning and object/volume/range extruders; incompatible
+project-wide differences are rejected. Native tower purge/ramming values and
+cyclic transitions drive the existing placement calculation. Actual tower shape
+still comes from the slicer.
+
+Real TCP generation with the process worker pool and native GUI slicing were
+observed for MMU3 single images, two-image batch, two-piece puzzle, XL 5T image,
+material-archive image, and an imported user template. The template's GUI-exported G-code used 237°C and
+0.91 extrusion multipliers. Other geometry workflows share this writer but have
+not each been sliced with Prusa. Neither all machine/material combinations nor
+physical printing are claimed. Prusa 2.x, SLA, other 3.x versions, mixed native
+configuration containers and native hardware slot compaction remain unsupported.
+
+设置中选择准确的 Prusa 设备。32 个内置设备来自 FatCat 公共原生目录；本体不再复制
+一份逐机型预设。普通单材料设备用于四色会明确提示容量不足，多色需要 MMU 或足够的
+打印头。保留真实硬件槽数、源耗材调校和局部层高；无法表示的合并差异明确拒绝。
+以上代表样本已实际生成并在预览版切片，其他几何流程没有逐一验过，不声明全组合或
+实体打印通过。
+
+### Import and persistence / 导入与保存
 
 In **Settings → Printer & Slicer → 3MF project template**, select the slicer that
 saved your single-plate project, import its `.3mf`, and select a matching printer

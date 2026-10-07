@@ -123,6 +123,7 @@ _REGISTRY_TO_DETECTED_SLICER_ID = {
     "AnycubicSlicerNext": "anycubic_slicer_next",
     "FlashStudio": "flash_studio",
     "QIDIStudio": "qidi_studio",
+    "PrusaSlicer": "prusa_slicer",
 }
 
 
@@ -383,7 +384,9 @@ def _require_mapping(value: Any, *, label: str) -> dict[str, Any]:
 
 
 def load_machine_registry(path: str | Path) -> MachineRegistry:
-    """Load a generated Lumina machine registry JSON file.
+    """Load registry entries and current native Prusa devices from FatCat.
+
+    读取已有机器目录，并从 FatCat 公共目录加入当前 Prusa 设备。
 
     Args:
         path: Path to ``machine_registry/registry.json``.
@@ -488,9 +491,48 @@ def load_machine_registry(path: str | Path) -> MachineRegistry:
                     plate.id: plate for plate in machine_build_plates
                 }
 
+    _add_prusa_devices(devices, build_plates_by_device_id)
     return MachineRegistry(
         schema_version=int(data["schema_version"]),
         generated_at=str(data["generated_at"]),
         devices_by_id=devices,
         build_plates_by_device_id=build_plates_by_device_id,
     )
+
+
+def _add_prusa_devices(
+    devices: dict[str, DeviceProfile],
+    build_plates: dict[str, dict[str, BuildPlateProfile]],
+) -> None:
+    from utils.fatcat_metadata import native_project_source_catalog
+
+    catalog = native_project_source_catalog("PrusaSlicer")
+    version = str(catalog["application_version"])
+    for source in catalog["sources"]:
+        hardware = source["hardware_settings"]
+        bed = hardware["bed"]
+        sheet = hardware["sheet"]
+        plate_id = "prusa-sheet:" + str(sheet["type"])
+        plate = BuildPlateProfile(
+            id=plate_id, display_name=str(sheet["name"]),
+            display_name_zh=str(sheet["name"]), project_value=str(sheet["type"]),
+            plate_value=str(sheet["type"]), sidecar_value="", image="",
+            source_path="", source_version=version, revision=version,
+        )
+        machine_id = str(source["machine_uid"]).replace(":", "-")
+        nozzle = str(source["nozzle_uid"]).removeprefix("nozzle:").removesuffix("mm")
+        device_id = f"PrusaSlicer:{machine_id}:{nozzle}"
+        device = DeviceProfile(
+            device_profile_id=device_id, machine_profile_id=machine_id,
+            slicer_id="PrusaSlicer", slicer_display_name=f"PrusaSlicer {version}",
+            source_version=version, application_metadata=f"PrusaSlicer-{version}",
+            client_version=version, sidecar_policy="native", display_name=str(source["display_name"]),
+            brand="Prusa", vendor_key="PrusaResearch", bed_width=int(bed["width"]),
+            bed_depth=int(bed["height"]), bed_height=int(bed["max_print_height"]),
+            thumbnail="", bed_model="", nozzle_size=nozzle,
+            source_profile_name=str(source["source_machine_profile_name"]),
+            template="", revision=version, supported=True,
+            build_plates=(plate,), default_build_plate_id=plate_id,
+        )
+        devices[device_id] = device
+        build_plates[device_id] = {plate_id: plate}

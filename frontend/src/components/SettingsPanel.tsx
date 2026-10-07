@@ -736,6 +736,11 @@ export default function SettingsPanel() {
                         {selectedDeviceProfile.source_profile_name}
                       </p>
                     )}
+                    {resolvedSlicerSoftware === "PrusaSlicer" && (
+                      <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                        {t("settings.prusa_preview_help")}
+                      </p>
+                    )}
                   </div>
                 </div>
                 <Button

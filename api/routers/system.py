@@ -396,6 +396,7 @@ def _registry_machines_by_key() -> dict[tuple[str, str], dict[str, object]]:
                         "display_name_zh": plate.display_name_zh,
                         "image_url": (
                             "/api/system/machine-registry/assets/" + plate.image
+                            if plate.image else ""
                         ),
                     }
                     for plate in device.build_plates

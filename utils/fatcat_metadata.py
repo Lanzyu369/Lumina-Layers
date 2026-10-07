@@ -140,7 +140,10 @@ def select_user_template_metadata_target(
         application_version=str(identity["application_version"]),
         machine_uid="",
         nozzle_uid="",
-        build_plate_uid=_PLATE_UIDS.get(build_plate_id, ""),
+        build_plate_uid=(
+            build_plate_id if str(build_plate_id or "").startswith("prusa-sheet:")
+            else _PLATE_UIDS.get(build_plate_id, "")
+        ),
         hardware_mode="auto",
     )
 
@@ -163,7 +166,7 @@ def select_batch_source_material_target(
     )
 
 
-@lru_cache(maxsize=7)
+@lru_cache(maxsize=None)
 def native_project_source_catalog(slicer_id: str) -> dict[str, Any]:
     """Read Fat Cat's public machine identity catalog for one target.
 
@@ -268,7 +271,10 @@ def select_builtin_metadata_target(
             registry.resolve_build_plate(profile.device_profile_id, selected_plate_id)
         except KeyError as exc:
             raise ValueError(str(exc).strip("'")) from exc
-        plate_uid = _PLATE_UIDS.get(selected_plate_id, "")
+        plate_uid = (
+            selected_plate_id if selected_plate_id.startswith("prusa-sheet:")
+            else _PLATE_UIDS.get(selected_plate_id, "")
+        )
         if not plate_uid:
             raise ValueError(
                 f"Fat Cat has no build-plate identity for Lumina selection {selected_plate_id!r}"
