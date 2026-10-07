@@ -11,7 +11,7 @@ import trimesh
 
 from core import custom_3mf_templates
 from core.wipe_tower_placement import Rect
-from fatcat_material_assertions import assert_native_materials, native_materials_support_plate
+from fatcat_material_assertions import assert_native_materials, native_materials_support_plate, native_plate_binding
 from fatcat_native_source_fixtures import complete_native_project, assert_source_material_snapshot
 from test_fatcat_b73_routing_unit import PRINTERS, new_devices
 import utils.bambu_3mf_writer as writer_module
@@ -92,11 +92,16 @@ def test_every_device_plate_and_material_uses_its_exact_native_binding(tmp_path,
     writer = make_writer(tmp_path, device, plate=plate)
     palette = [(names[0], (220, 20, 30)), (names[1], (240, 245, 250))]
     seed_selected_materials(writer, palette)
+    binding = native_plate_binding(
+        slicer_id=device.slicer_id, build_plate_id=plate.id,
+    )
+    assert writer._select_metadata_target().build_plate_uid == binding["build_plate_uid"]
+    plate_value = binding["project_value"]
     machine = device.machine_profile_id.split(":bbl:bambu-lab-")[1]
     types = ["PETG" if name.startswith("PETG") else "PLA" for name in names]
     if not native_materials_support_plate(slicer_id=device.slicer_id,
             machine_uid=f"bambu-lab:{machine}", nozzle_uid=f"nozzle:{device.nozzle_size}mm",
-            material_types=types, plate_value=plate.project_value):
+            material_types=types, plate_value=plate_value):
         # Native zero temperatures explicitly forbid this active material/plate.
         with pytest.raises(ValueError, match="no available native filament profile"):
             compose(writer, palette)
@@ -107,13 +112,13 @@ def test_every_device_plate_and_material_uses_its_exact_native_binding(tmp_path,
                             nozzle_uid=f"nozzle:{device.nozzle_size}mm",
                             material_types=["PETG" if name.startswith("PETG") else "PLA" for name in names])
     assert final["filament_colour"] == ["#DC141E", "#F0F5FA"]
-    assert final["curr_bed_type"] == plate.project_value
+    assert final["curr_bed_type"] == plate_value
     assert final["printer_settings_id"] == source["printer_settings_id"]
     assert final["print_compatible_printers"] == [source["printer_settings_id"]]
     for key in ("printer_model", "nozzle_diameter", "printable_area", "printable_height"):
         assert final[key] == source[key], key
     assert len(final["different_settings_to_system"]) == 1
-    for key in ("layer_height", "initial_layer_height", "initial_layer_print_height", "enable_prime_tower"):
+    for key in ("layer_height", "initial_layer_print_height", "enable_prime_tower"):
         assert result["effective_settings"][key] == final[key]
     assert final["filament_type"] == ["PETG" if name.startswith("PETG") else "PLA" for name in names]
 

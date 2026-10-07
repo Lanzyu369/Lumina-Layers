@@ -55,40 +55,6 @@ _PLATE_UIDS = {
     "supertack-plate": "plate:supertack",
 }
 
-_PROCESS_KEYS = (
-    "layer_height",
-    "initial_layer_print_height",
-    "initial_layer_height",
-    "line_width",
-    "initial_layer_line_width",
-    "inner_wall_line_width",
-    "outer_wall_line_width",
-    "top_surface_line_width",
-    "sparse_infill_line_width",
-    "internal_solid_infill_line_width",
-    "support_line_width",
-    "wall_loops",
-    "top_shell_layers",
-    "bottom_shell_layers",
-    "bottom_surface_pattern",
-    "elefant_foot_compensation",
-    "sparse_infill_density",
-    "sparse_infill_pattern",
-    "print_speed",
-    "travel_speed",
-    "enable_support",
-    "single_extruder_multi_material",
-    "precise_outer_wall",
-    "brim_type",
-    "brim_width",
-    "wall_generator",
-    "skirt_loops",
-    "skirt_distance",
-    "skirt_height",
-    "draft_shield",
-)
-
-
 def select_user_template_metadata_target(
     *,
     slicer: str,
@@ -128,6 +94,25 @@ def native_project_source_catalog(slicer_id: str) -> dict[str, Any]:
     if catalog.get("slicer_id") != target_slicer_id:
         raise RuntimeError("Fat Cat source catalog returned a different slicer identity")
     return catalog
+
+
+@lru_cache(maxsize=None)
+def process_setting_aliases(slicer_id: str) -> dict[str, str]:
+    """Read input aliases from FatCat's public process contract.
+
+    从 FatCat 公共工艺合同读取输入别名，本体不复制切片器映射表。
+
+    Args:
+        slicer_id: Selected slicer identity. 所选切片软件身份。
+
+    Returns:
+        Input names mapped to the target's native process field names.
+        输入名称到目标原生工艺字段名称的映射。
+    """
+    slicer_id = _canonical_slicer_id(slicer_id)
+    version = _metadata_target_identity(slicer_id)["application_version"]
+    fields = _load_fatcat().list_native_fields(slicer_id, version)
+    return fields["process_settings_contract"]["aliases"]
 
 
 def native_source_for_target(target: MetadataTarget) -> dict[str, Any]:
@@ -332,11 +317,11 @@ def build_project_settings_request(
         request["filament_source_slots"] = list(filament_source_slots)
     if disable_cut_retraction:
         request["disable_cut_retraction"] = True
-    for key in _PROCESS_KEYS:
-        if key in settings and settings[key] is not None:
-            text = _scalar_text(settings[key])
-            if text:
-                request[key] = text
+    request["process_settings"] = {
+        str(key): _scalar_text(value)
+        for key, value in settings.items()
+        if value is not None
+    }
     return request
 
 
@@ -579,6 +564,7 @@ def _load_fatcat() -> Any:
         for name in (
             "compose_project_settings",
             "native_project_source_catalog",
+            "list_native_fields",
             "compose_model_metadata",
             "patch_wipe_tower",
             "template_import_parts",
@@ -814,8 +800,20 @@ def _read_source_metadata_parts(
     target: MetadataTarget | SourceMaterialTarget | None = None,
 ) -> tuple[dict[str, Any], dict[str, bytes]]:
     """Decode source metadata once and retain its bytes for geometry assembly."""
-    paths = template_import_parts(target.slicer_id if target else "BambuStudio")
     members = set(package.namelist())
+    if target is None:
+        common_paths = template_import_parts("BambuStudio")
+        source = detect_template_source(
+            package.read(common_paths["source_model"]).decode("utf-8")
+            if common_paths["source_model"] in members else None,
+            package.read(common_paths["slice_info"]).decode("utf-8")
+            if common_paths["slice_info"] in members else None,
+        )
+        slicer_id = source["source_slicer"] or "BambuStudio"
+        target = SourceMaterialTarget(
+            slicer_id, _metadata_target_identity(slicer_id)["application_version"],
+        )
+    paths = template_import_parts(target.slicer_id)
     parts = {
         role: package.read(paths[role])
         for role in (

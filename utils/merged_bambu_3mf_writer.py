@@ -664,8 +664,10 @@ def _infer_printer_id_from_settings(
 ) -> str:
     """Resolve a Lumina printer only from exact registry source identity."""
 
-    from config import format_native_nozzle_size, list_printer_profiles
-    from core.machine_registry import load_machine_registry, resolve_machine_registry_root
+    from config import format_native_nozzle_size, get_printer_profile, list_printer_profiles
+    from core.machine_registry import (
+        _registry_printer_slug, load_machine_registry, resolve_machine_registry_root,
+    )
 
     source_name = str(settings.get("printer_settings_id") or "").strip()
     nozzle = format_native_nozzle_size(nozzle_size)
@@ -687,17 +689,23 @@ def _infer_printer_id_from_settings(
         (profile.display_name.casefold(), profile.brand.casefold())
         for profile in devices
     }
-    matches = [
-        profile for profile in list_printer_profiles()
+    # The config resolver also knows SDK catalog devices absent from the static
+    # product list. Resolve only exact registry identities, never a name guess.
+    candidates = list_printer_profiles() + [
+        get_printer_profile(_registry_printer_slug(device.display_name))
+        for device in devices
+    ]
+    matches = {
+        profile.id: profile for profile in candidates
         if (profile.display_name.casefold(), profile.brand.casefold()) in identities
         and nozzle in profile.supported_nozzle_sizes
-    ]
+    }
     if len(matches) != 1:
         raise MergedWriteError(
             "Merged export could not map native machine identity exactly: "
             f"{slicer}/{source_name}/{nozzle} (Lumina matches: {len(matches)})"
         )
-    return matches[0].id
+    return next(iter(matches))
 
 
 def _resolve_merged_wipe_tower_placement(

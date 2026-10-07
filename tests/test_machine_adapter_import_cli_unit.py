@@ -415,7 +415,7 @@ def test_neutral_asset_catalogs_cover_snapmaker_and_anycubic():
     for slicer_id in ("SnapmakerOrca", "AnycubicSlicerNext"):
         specs = native_build_plate_specs(slicer_id)
         assert len(specs) == 6
-        assert all(spec.source_filename.endswith(".png") for spec in specs)
+        assert all(spec.id and spec.display_name and spec.display_name_zh for spec in specs)
 
 
 def test_flash_studio_catalog_uses_neutral_app_owned_assets():
@@ -636,12 +636,6 @@ def test_full_import_applies_kobra_s1_snapshot_plate_exclusion(tmp_path):
             "default_bed_type": "Textured PEI Plate",
         },
     )
-    orca_root = tmp_path / "Orca" / "Resources" / "profiles"
-    orca_images = orca_root.parent / "images"
-    orca_images.mkdir(parents=True)
-    for spec in native_build_plate_specs("AnycubicSlicerNext"):
-        (orca_images / spec.source_filename).write_bytes(spec.id.encode("ascii"))
-
     output_root = tmp_path / "registry"
     run_import(
         slicer_id="AnycubicSlicerNext",
@@ -649,7 +643,6 @@ def test_full_import_applies_kobra_s1_snapshot_plate_exclusion(tmp_path):
         source_version="1.3.2605.22",
         vendor_keys=("Anycubic",),
         output_root=output_root,
-        build_plate_source_roots={"OrcaSlicer": orca_root},
     )
 
     registry = json.loads((output_root / "registry.json").read_text(encoding="utf-8"))
@@ -692,12 +685,6 @@ def test_full_import_intersects_snapmaker_nozzle_plate_scopes(tmp_path):
             f"Snapmaker U1 ({nozzle} nozzle).json",
             payload,
         )
-    orca_root = tmp_path / "Orca" / "Resources" / "profiles"
-    orca_images = orca_root.parent / "images"
-    orca_images.mkdir(parents=True)
-    for spec in native_build_plate_specs("SnapmakerOrca"):
-        (orca_images / spec.source_filename).write_bytes(spec.id.encode("ascii"))
-
     output_root = tmp_path / "registry"
     run_import(
         slicer_id="SnapmakerOrca",
@@ -705,7 +692,6 @@ def test_full_import_intersects_snapmaker_nozzle_plate_scopes(tmp_path):
         source_version="02.02.49.02",
         vendor_keys=("Snapmaker",),
         output_root=output_root,
-        build_plate_source_roots={"OrcaSlicer": orca_root},
     )
 
     registry = json.loads((output_root / "registry.json").read_text(encoding="utf-8"))

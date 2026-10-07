@@ -78,9 +78,6 @@ def test_load_machine_registry_indexes_device_profiles(tmp_path):
                                 "id": "textured-pei",
                                 "display_name": "Textured PEI Plate",
                                 "display_name_zh": "纹理PEI打印板",
-                                "project_value": "Textured PEI Plate",
-                                "plate_value": "Textured PEI Plate",
-                                "sidecar_value": "textured_plate",
                                 "image": (
                                     "slicers/BambuStudio/02.07.01.57/"
                                     "assets/build-plates/bed_pei.png"
@@ -135,9 +132,9 @@ def test_load_machine_registry_indexes_device_profiles(tmp_path):
     assert profile.build_plates[0].display_name_zh == "纹理PEI打印板"
 
     resolved = registry.resolve_build_plate(profile.device_profile_id, "textured-pei")
-    assert resolved.project_value == "Textured PEI Plate"
-    assert resolved.plate_value == "Textured PEI Plate"
-    assert resolved.sidecar_value == "textured_plate"
+    assert resolved.id == "textured-pei"
+    assert resolved.display_name == "Textured PEI Plate"
+    assert resolved.image == profile.build_plates[0].image
 
 
 def test_resolve_installed_bed_model_stays_inside_the_matching_slicer_bundle(
@@ -327,9 +324,6 @@ def test_load_machine_registry_rejects_duplicate_build_plate_ids(tmp_path):
     plate = {
         "id": "textured-pei",
         "display_name": "Textured PEI Plate",
-        "project_value": "Textured PEI Plate",
-        "plate_value": "Textured PEI Plate",
-        "sidecar_value": "textured_plate",
         "image": "assets/bed_pei.png",
         "source_path": "resources/images/bed_pei.png",
         "source_version": "2.4.0",

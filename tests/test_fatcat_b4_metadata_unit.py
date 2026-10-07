@@ -102,7 +102,7 @@ def test_project_request_preserves_template_materials_and_explicit_process_field
         "bottom_surface_pattern": "monotonicline",
         "sparse_infill_density": "100%",
         "sparse_infill_pattern": "grid",
-        "print_speed": "85",
+        "outer_wall_speed": "85",
         "travel_speed": "180",
         "enable_support": "0",
         "brim_type": "auto_brim",
@@ -118,7 +118,7 @@ def test_project_request_preserves_template_materials_and_explicit_process_field
     assert request["filament_colour"] == ["#112233", "#445566"]
     assert request["filament_multi_colour"] == ["#112233", "#445566"]
     assert request["enable_prime_tower"] == "1"
-    assert request["line_width"] == "0.42"
+    assert request["process_settings"] == settings
     assert "nozzle_temperature" not in request
     assert "filament_settings_id" not in request
     assert request["slicer_id"] == target.slicer_id
@@ -129,7 +129,7 @@ def test_project_request_preserves_template_materials_and_explicit_process_field
     assert "material_uid" not in request
     # B7.2 assigns native defaults to ordinary exports; preserve is reserved
     # for actual user tuning and must not inject the ordinary precision choice.
-    assert "precise_outer_wall" not in request
+    assert "precise_outer_wall" not in request["process_settings"]
 
 
 def test_model_request_uses_writer_ids_and_current_geometry_descriptors() -> None:

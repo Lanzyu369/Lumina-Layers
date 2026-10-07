@@ -126,15 +126,7 @@ def assert_native_materials(
         for profile in profiles
     ]
 
-    target_name = {
-        "BambuStudio": "bambu-studio-02.08.02.61.json",
-        "OrcaSlicer": "orca-slicer-2.4.2.json",
-    }[slicer_id]
-    target_path = (
-        Path(fatcat_metadata.__file__).parent
-        / "fatcat_metadata_data" / "translations" / "targets" / target_name
-    )
-    target = json.loads(target_path.read_text(encoding="utf-8"))
+    target = _native_target(slicer_id)
     snapshot = target["package_dialect"]["filament_snapshot"]
     defaults = snapshot.get("native_schema_defaults", {}).get("values", {})
     if defaults:
@@ -186,6 +178,35 @@ def assert_native_materials(
     return profiles
 
 
+def _native_target(slicer_id):
+    import fatcat_metadata
+
+    target_name = {
+        "BambuStudio": "bambu-studio-02.08.02.61.json",
+        "OrcaSlicer": "orca-slicer-2.4.2.json",
+    }[slicer_id]
+    path = Path(fatcat_metadata.__file__).parent / "fatcat_metadata_data" / "translations/targets" / target_name
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def native_plate_binding(*, slicer_id, build_plate_id):
+    """Check the picker ID contract independently of the writer's selected UID."""
+    expected_uid = {
+        "cool-plate": "plate:cool",
+        "smooth-cool-plate": "plate:cool",
+        "engineering-plate": "plate:engineering",
+        "smooth-pei-plate": "plate:smooth-pei",
+        "smooth-high-temp-plate": "plate:smooth-pei",
+        "textured-pei-plate": "plate:textured-pei",
+        "textured-cool-plate": "plate:textured-cool",
+        "supertack-plate": "plate:supertack",
+    }[build_plate_id]
+    return next(
+        row for row in _native_target(slicer_id)["build_plate_bindings"]
+        if row["build_plate_uid"] == expected_uid
+    )
+
+
 def native_materials_support_plate(*, slicer_id, machine_uid, nozzle_uid, material_types, plate_value):
     """Derive support independently from exact native compatibility and plate temperatures."""
     import fatcat_metadata
@@ -195,8 +216,7 @@ def native_materials_support_plate(*, slicer_id, machine_uid, nozzle_uid, materi
     index = json.loads((data_root / "source-index.json").read_text(encoding="utf-8"))
     source = next(row for row in index["sources"] if row["slicer_id"] == slicer_id
                   and row["machine_uid"] == machine_uid and row["nozzle_uid"] == nozzle_uid)
-    target_name = {"BambuStudio": "bambu-studio-02.08.02.61.json", "OrcaSlicer": "orca-slicer-2.4.2.json"}[slicer_id]
-    target = json.loads((package_root / "translations/targets" / target_name).read_text(encoding="utf-8"))
+    target = _native_target(slicer_id)
     binding = next(row for row in target["build_plate_bindings"] if row["project_value"] == plate_value)
     key = binding["sidecar_value"] + "_temp"
     profiles = [_resolved_profile(data_root, index, option["path"])

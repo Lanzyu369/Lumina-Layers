@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 from config import format_native_nozzle_size
 
@@ -45,15 +45,19 @@ def _format_mm(value: float) -> str:
 def merge_lumina_process_settings(
     defaults: dict[str, Any],
     requested: dict[str, Any] | None,
+    *,
+    aliases: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Apply explicit settings without retaining a competing first-layer default.
+    """Replace defaults sharing a native field with an explicit override.
 
-    合并明确工艺设置；指定任一首层高度名称时，移除两个名称下的默认值。
+    根据工艺别名合并明确设置，移除同一原生字段的默认值。
     明确提供的相互矛盾值会保留，交由 Fat Cat 拒绝。
 
     Args:
         defaults: Product process defaults. 产品工艺默认值。
         requested: Caller-supplied settings. 调用方明确提供的设置。
+        aliases: FatCat's public input-to-native field mapping.
+            FatCat 公共合同中的输入名称映射。
 
     Returns:
         Combined values retaining explicit conflicts for validation.
@@ -61,11 +65,19 @@ def merge_lumina_process_settings(
     """
 
     supplied = dict(requested or {})
-    result = dict(defaults)
-    first_layer_keys = ("initial_layer_height", "initial_layer_print_height")
-    if any(supplied.get(key) is not None for key in first_layer_keys):
-        for key in first_layer_keys:
-            result.pop(key, None)
+    field_aliases = (
+        aliases if aliases is not None
+        else {"initial_layer_height": "initial_layer_print_height"}
+    )
+    overridden = {
+        field_aliases.get(key, key)
+        for key, value in supplied.items()
+        if value is not None
+    }
+    result = {
+        key: value for key, value in defaults.items()
+        if field_aliases.get(key, key) not in overridden
+    }
     result.update(supplied)
     return result
 
@@ -75,10 +87,21 @@ def build_lumina_process_settings(
     *,
     nozzle_size: object = None,
     slicer_id: str = "",
+    aliases: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Return the explicit Lumina process values for one export.
 
     返回本次导出明确使用的 Lumina 工艺参数；不会读取机器模板。
+
+    Args:
+        settings: Explicit process overrides. 明确的工艺覆盖值。
+        nozzle_size: Selected nozzle diameter. 已选喷嘴直径。
+        slicer_id: Selected slicer identity. 已选切片软件身份。
+        aliases: Public FatCat process aliases. FatCat 公共工艺别名。
+
+    Returns:
+        Product defaults combined with explicit overrides.
+        合并产品默认值与明确覆盖值的工艺设置。
     """
 
     requested = dict(settings or {})
@@ -97,4 +120,4 @@ def build_lumina_process_settings(
         for key, value in requested.items()
         if value is not None and not isinstance(value, (dict, list, tuple))
     }
-    return merge_lumina_process_settings(result, explicit)
+    return merge_lumina_process_settings(result, explicit, aliases=aliases)

@@ -456,12 +456,12 @@ def test_writer_forwards_layer_heights_and_strict_printer_limits(tmp_path, monke
     writer.export()
 
     assert captured["fine_layer_height_mm"] == pytest.approx(0.06)
-    assert captured["initial_layer_height_mm"] == pytest.approx(0.10)
+    assert captured["initial_layer_height_mm"] == pytest.approx(0.20)
     assert captured["min_layer_height_mm"] == pytest.approx(0.06)
     assert captured["max_layer_height_mm"] == pytest.approx(0.12)
 
 
-def test_writer_skips_face_up_modifier_when_canonical_initial_height_is_missing(
+def test_writer_skips_face_up_modifier_when_effective_initial_height_is_missing(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -474,10 +474,14 @@ def test_writer_skips_face_up_modifier_when_canonical_initial_height_is_missing(
         nozzle_size="0.4",
     )
     writer.add_mesh(_make_box_mesh(), "Slot 1", (255, 0, 0))
-    template = writer._get_base_config_template()
-    template.pop("initial_layer_print_height", None)
-    template.pop("initial_layer_height", None)
-    writer._custom_template = template
+    # Exercise the boundary when the selected target cannot resolve first-layer
+    # height. Removing a template value alone still leaves the product default.
+    read_layout = writer_module.read_project_layout
+
+    def unresolved_first_layer(*args, **kwargs):
+        return {**read_layout(*args, **kwargs), "initial_layer_height": None}
+
+    monkeypatch.setattr(writer_module, "read_project_layout", unresolved_first_layer)
     writer.export()
 
     with zipfile.ZipFile(output_path) as package:

@@ -12,18 +12,14 @@ from typing import Any
 
 @dataclass(frozen=True)
 class BuildPlateProfile:
-    """One slicer-native build plate definition.
+    """Build plate identity and artwork for the device picker.
 
-    单个切片软件原生打印板定义。项目、盘面和厂商 sidecar 可能使用不同值，
-    因此三者保持为显式字段，禁止在写出阶段猜测。
+    设备选择器使用的打印板身份和图片；原生项目字段由 FatCat 解析。
     """
 
     id: str
     display_name: str
     display_name_zh: str
-    project_value: str
-    plate_value: str
-    sidecar_value: str
     image: str
     source_path: str
     source_version: str
@@ -412,9 +408,6 @@ def load_machine_registry(path: str | Path) -> MachineRegistry:
                 display_name_zh=str(
                     plate.get("display_name_zh") or plate["display_name"]
                 ),
-                project_value=str(plate["project_value"]),
-                plate_value=str(plate["plate_value"]),
-                sidecar_value=str(plate.get("sidecar_value") or ""),
                 image=str(plate["image"]),
                 source_path=str(plate["source_path"]),
                 source_version=str(plate["source_version"]),
@@ -515,8 +508,7 @@ def _add_prusa_devices(
         plate_id = "prusa-sheet:" + str(sheet["type"])
         plate = BuildPlateProfile(
             id=plate_id, display_name=str(sheet["name"]),
-            display_name_zh=str(sheet["name"]), project_value=str(sheet["type"]),
-            plate_value=str(sheet["type"]), sidecar_value="", image="",
+            display_name_zh=str(sheet["name"]), image="",
             source_path="", source_version=version, revision=version,
         )
         machine_id = str(source["machine_uid"]).replace(":", "-")

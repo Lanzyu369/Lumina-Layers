@@ -18,6 +18,7 @@ import sys
 import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
+from dataclasses import replace
 from pathlib import Path
 
 from hypothesis import given, settings
@@ -99,17 +100,6 @@ _ascii_name_strategy = st.text(
 
 
 @st.composite
-def _slot_strategy(draw: st.DrawFn, slot_id: int) -> MaterialSlot:
-    """Generate a MaterialSlot with a given slot_id."""
-    return MaterialSlot(
-        slot_id=slot_id,
-        slot_name=draw(_ascii_name_strategy),
-        preview_color=draw(_hex_color_strategy),
-        material_id=draw(_ascii_name_strategy),
-    )
-
-
-@st.composite
 def _merged_items_strategy(draw: st.DrawFn) -> list[tuple[MergedItem, float, float]]:
     """Generate N ∈ [2, 5] MergedItems with source 3MFs.
 
@@ -118,19 +108,35 @@ def _merged_items_strategy(draw: st.DrawFn) -> list[tuple[MergedItem, float, flo
     n = draw(st.integers(min_value=2, max_value=5))
     os.makedirs(TEMP_DIR, exist_ok=True)
 
+    # A global slot ID identifies the same material in every input item.
+    palette_ids = draw(st.lists(
+        st.integers(min_value=0, max_value=16), min_size=1, max_size=8, unique=True,
+    ))
+    palette_names = draw(st.lists(
+        _ascii_name_strategy, min_size=len(palette_ids), max_size=len(palette_ids), unique=True,
+    ))
+    global_palette = {
+        slot_id: MaterialSlot(
+            slot_id=slot_id, slot_name=name,
+            preview_color=draw(_hex_color_strategy), material_id=draw(_ascii_name_strategy),
+        )
+        for slot_id, name in zip(palette_ids, palette_names)
+    }
     items: list[tuple[MergedItem, float, float]] = []
     for idx in range(n):
-        # Generate 1-4 unique slot_ids in [0, 16].
-        num_slots = draw(st.integers(min_value=1, max_value=4))
+        num_slots = draw(st.integers(min_value=1, max_value=min(4, len(palette_ids))))
         slot_ids = draw(
             st.lists(
-                st.integers(min_value=0, max_value=16),
+                st.sampled_from(palette_ids),
                 min_size=num_slots,
                 max_size=num_slots,
                 unique=True,
             )
         )
-        slots = tuple(draw(_slot_strategy(sid)) for sid in slot_ids)
+        slots = tuple(
+            replace(global_palette[sid], source_slot_index=index)
+            for index, sid in enumerate(slot_ids)
+        )
 
         # Use slot_names for the 3MF fixture.
         slot_names = [s.slot_name for s in slots]
@@ -389,13 +395,16 @@ def test_p7_structural_fingerprint(items_data: list[tuple[MergedItem, float, flo
 
         result = _parse_merged_3mf(Path(out_path))
 
-        # 3D relationships include N object links only. Bambu project metadata
-        # remains at canonical Metadata/* paths, matching real multi-object
-        # Bambu exports.
+        # FatCat links both source model objects and every emitted settings part.
         assert result["object_relationship_count"] == N, (
             f"object_relationship_count={result['object_relationship_count']} != N={N}"
         )
-        assert result["metadata_relationship_targets"] == set()
+        metadata_parts = {
+            "Metadata/model_settings.config", "Metadata/project_settings.config",
+            "Metadata/slice_info.config", "Metadata/lumina_wipe_tower_placement.json",
+            "Metadata/filament_sequence.json", "Metadata/cut_information.xml",
+        }
+        assert result["metadata_relationship_targets"] == metadata_parts
         assert result["root_metadata"].get("Application", "").startswith("BambuStudio-")
         assert result["root_metadata"].get("BambuStudio:3mfVersion") == "1"
         assert result["object_relationship_targets"] == {
@@ -406,8 +415,11 @@ def test_p7_structural_fingerprint(items_data: list[tuple[MergedItem, float, flo
             "http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"
             in result["top_relationship_types"]
         )
-        assert result["content_type_defaults"] == {"gcode", "model", "png", "rels"}
-        assert result["content_type_overrides"] == set()
+        assert result["content_type_defaults"] == {"config", "json", "model", "png", "rels", "xml"}
+        assert result["content_type_overrides"] == {
+            "/3D/3dmodel.model", *("/" + path for path in metadata_parts),
+            *(f"/3D/Objects/object_{idx}.model" for idx in range(1, N + 1)),
+        }
         assert result["project_settings"].get("filament_colour")
         assert result["has_plate"]
 

@@ -1085,6 +1085,7 @@ async def generate_puzzle(
         nozzle_size=generate_params.nozzle_size,
         device_profile_id=generate_params.device_profile_id,
         build_plate_id=generate_params.build_plate_id,
+        custom_3mf_template_id=generate_params.custom_3mf_template_id,
     )
     metadata_target = select_metadata_target(
         slicer=generate_params.slicer,

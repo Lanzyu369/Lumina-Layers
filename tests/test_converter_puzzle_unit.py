@@ -83,6 +83,21 @@ def _make_puzzle_client() -> TestClient:
 client = _make_puzzle_client()
 
 
+@pytest.fixture(autouse=True)
+def stub_material_slots_for_sentinel_worker_packages(monkeypatch) -> None:
+    """Keep route scheduling independent of the fake worker's sentinel bytes.
+
+    路由调度用的 worker 假文件不是 3MF；真实槽位读回由 writer 集成测试覆盖。
+    """
+    monkeypatch.setattr(
+        puzzle_router,
+        "_batch_extract_slots_from_3mf",
+        lambda *_args, **_kwargs: [
+            {"slot_id": 0, "slot_name": "White", "preview_color": "#FFFFFF", "material_id": "PLA"},
+        ],
+    )
+
+
 def _make_session() -> tuple[str, dict[str, Any]]:
     """Create a preview-ready session for puzzle endpoint tests.
 
@@ -511,11 +526,13 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb(compe
     def _assemble_stub(
         *,
         piece_sources: list[Any],
+        piece_slots: list[Any],
         output_path: str,
         preview_colors: dict[object, object] | None,
         slot_names: list[str] | None,
+        slot_index_by_name: dict[str, int],
         printer_id: str,
-        slicer: str,
+        metadata_target: Any,
         nozzle_size: str = "0.4",
         device_profile_id: str | None = None,
         build_plate_id: str | None = None,
@@ -527,7 +544,9 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb(compe
                 "piece_count": len(piece_sources),
                 "offsets_x_mm": [source.offset_x_mm for source in piece_sources],
                 "printer_id": printer_id,
-                "slicer": slicer,
+                "slicer": metadata_target.slicer_id,
+                "piece_slots": piece_slots,
+                "slot_index_by_name": slot_index_by_name,
                 "nozzle_size": nozzle_size,
                 "build_plate_id": build_plate_id,
                 "enable_wipe_tower_auto_placement": (
@@ -609,6 +628,9 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb(compe
         assembled_calls[0]["enable_wipe_tower_auto_placement"] is False
     )
     assert assembled_calls[0]["slot_names"] == ["White"]
+    assert len(assembled_calls[0]["piece_slots"]) == 6
+    assert all(slots[0].slot_name == "White" for slots in assembled_calls[0]["piece_slots"])
+    assert assembled_calls[0]["slot_index_by_name"] == {"White": 0}
     assert isinstance(assembled_calls[0]["overview_bytes"], bytes)
     assert assembled_calls[0]["overview_bytes"].startswith(b"\x89PNG")
 
@@ -1079,11 +1101,13 @@ def test_generate_puzzle_resizes_heightmap_crop_to_worker_grid() -> None:
     def _assemble_stub(
         *,
         piece_sources: list[Any],
+        piece_slots: list[Any],
         output_path: str,
         preview_colors: dict[object, object] | None,
         slot_names: list[str] | None,
+        slot_index_by_name: dict[str, int],
         printer_id: str,
-        slicer: str,
+        metadata_target: Any,
         nozzle_size: str = "0.4",
         device_profile_id: str | None = None,
         build_plate_id: str | None = None,
@@ -1168,11 +1192,13 @@ def test_generate_puzzle_emits_hybrid_boundary_log_for_each_piece() -> None:
     def _assemble_stub(
         *,
         piece_sources: list[Any],
+        piece_slots: list[Any],
         output_path: str,
         preview_colors: dict[object, object] | None,
         slot_names: list[str] | None,
+        slot_index_by_name: dict[str, int],
         printer_id: str,
-        slicer: str,
+        metadata_target: Any,
         nozzle_size: str = "0.4",
         device_profile_id: str | None = None,
         build_plate_id: str | None = None,
@@ -1263,11 +1289,13 @@ def test_generate_puzzle_reuses_cached_layout_after_preview() -> None:
     def _assemble_stub(
         *,
         piece_sources: list[Any],
+        piece_slots: list[Any],
         output_path: str,
         preview_colors: dict[object, object] | None,
         slot_names: list[str] | None,
+        slot_index_by_name: dict[str, int],
         printer_id: str,
-        slicer: str,
+        metadata_target: Any,
         nozzle_size: str = "0.4",
         device_profile_id: str | None = None,
         build_plate_id: str | None = None,
@@ -1421,11 +1449,13 @@ def test_generate_puzzle_filters_fully_transparent_pieces_during_layout() -> Non
     def _assemble_stub(
         *,
         piece_sources: list[Any],
+        piece_slots: list[Any],
         output_path: str,
         preview_colors: dict[object, object] | None,
         slot_names: list[str] | None,
+        slot_index_by_name: dict[str, int],
         printer_id: str,
-        slicer: str,
+        metadata_target: Any,
         nozzle_size: str = "0.4",
         device_profile_id: str | None = None,
         build_plate_id: str | None = None,

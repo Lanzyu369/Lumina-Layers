@@ -12,7 +12,7 @@ import trimesh
 from core.machine_registry import load_machine_registry, resolve_machine_registry_root
 from utils.bambu_3mf_writer import BambuStudio3MFWriter
 from utils.fatcat_metadata import compose_builtin_project_settings
-from fatcat_material_assertions import assert_native_materials, native_materials_support_plate
+from fatcat_material_assertions import assert_native_materials, native_materials_support_plate, native_plate_binding
 from fatcat_native_source_fixtures import complete_native_project, assert_source_material_snapshot
 
 pytestmark = pytest.mark.skipif(os.environ.get("FATCAT_B4_INTEGRATION") != "1", reason="installed native dependencies required")
@@ -40,10 +40,15 @@ def test_native_source_preserves_selected_materials_and_selected_plate(tmp_path:
         writer.add_mesh(mesh, name, colour)
     target = writer._select_metadata_target()
     assert target is not None
+    binding = native_plate_binding(
+        slicer_id=device.slicer_id, build_plate_id=plate.id,
+    )
+    assert target.build_plate_uid == binding["build_plate_uid"]
+    plate_value = binding["project_value"]
     request = writer._build_fatcat_project_request(palette, target)
     supported = native_materials_support_plate(slicer_id=device.slicer_id,
         machine_uid=f"bambu-lab:{machine}", nozzle_uid=f"nozzle:{device.nozzle_size}mm",
-        material_types=["PLA"] * 2, plate_value=plate.project_value)
+        material_types=["PLA"] * 2, plate_value=plate_value)
     if not supported:
         with pytest.raises(ValueError, match="no available native filament profile"):
             compose_builtin_project_settings(request)
@@ -55,7 +60,7 @@ def test_native_source_preserves_selected_materials_and_selected_plate(tmp_path:
         assert slots == len(palette)
         for key in ("printer_model", "printer_settings_id", "nozzle_diameter", "printable_area", "printable_height"):
             assert key in final, key
-        assert final["curr_bed_type"] == plate.project_value
+        assert final["curr_bed_type"] == plate_value
         assert final["filament_colour"][:2] == ["#123456", "#ABCDEF"]
         assert len(final["filament_settings_id"]) == slots
         assert len(final["filament_type"]) == slots
@@ -72,7 +77,7 @@ def test_native_source_preserves_selected_materials_and_selected_plate(tmp_path:
     # the saved plate selection with PETG only in the inactive tail. Native active
     # palette coverage above must not replace preservation of imported tails.
     source = complete_native_project(writer, ["PLA"] * 7 + ["PETG"], material_plate_uid="plate:textured-pei")
-    source["curr_bed_type"] = plate.project_value
+    source["curr_bed_type"] = plate_value
     source["unmanaged_vendor_array"] = ["opaque3", "opaque1"]
     writer._custom_template = source
     writer._set_project_palette([name for name, _ in palette], dict(palette))
@@ -83,7 +88,7 @@ def test_native_source_preserves_selected_materials_and_selected_plate(tmp_path:
     assert preserved["filament_colour"] == ["#123456", "#ABCDEF"] + source["filament_colour"][2:]
     assert preserved["filament_type"][2:] == ["PLA"] * 5 + ["PETG"]
     assert preserved["unmanaged_vendor_array"] == source["unmanaged_vendor_array"]
-    assert preserved["curr_bed_type"] == plate.project_value
+    assert preserved["curr_bed_type"] == plate_value
 
 
 @pytest.mark.parametrize("device,plate", _matrix(), ids=[f"{d.device_profile_id}/{p.id}" for d, p in _matrix()])
@@ -98,12 +103,17 @@ def test_native_source_compacts_four_materials_and_selected_plate(tmp_path: Path
     writer.add_mesh(trimesh.creation.box(extents=(6.0, 6.0, 1.2)), "PLA", (18, 52, 86))
     target = writer._select_metadata_target()
     assert target is not None
+    binding = native_plate_binding(
+        slicer_id=device.slicer_id, build_plate_id=plate.id,
+    )
+    assert target.build_plate_uid == binding["build_plate_uid"]
+    plate_value = binding["project_value"]
     palette = [(f"Slot {i}", (10 + i, 20, 30)) for i in range(4)]
     request = writer._build_fatcat_project_request(palette, target)
     assert request["filament_slot_mode"] == "compact"
     supported = native_materials_support_plate(slicer_id=device.slicer_id,
         machine_uid=f"bambu-lab:{machine}", nozzle_uid=f"nozzle:{device.nozzle_size}mm",
-        material_types=["PLA"] * 4, plate_value=plate.project_value)
+        material_types=["PLA"] * 4, plate_value=plate_value)
     if not supported:
         with pytest.raises(ValueError, match="no available native filament profile"):
             compose_builtin_project_settings(request)
@@ -129,12 +139,12 @@ def test_native_source_compacts_four_materials_and_selected_plate(tmp_path: Path
         assert len(final["different_settings_to_system"]) == 1
         for key in ("printer_settings_id", "nozzle_diameter", "printable_area", "printable_height"):
             assert key in final, key
-        assert final["curr_bed_type"] == plate.project_value
+        assert final["curr_bed_type"] == plate_value
 
     # Exercise the writer's custom-source compact path as well as its native
     # source path. Only declared slot arrays/matrices may be truncated.
     full_source = complete_native_project(writer, ["PLA"] * 7 + ["PETG"], material_plate_uid="plate:textured-pei")
-    full_source["curr_bed_type"] = plate.project_value
+    full_source["curr_bed_type"] = plate_value
     full_source["unknown_compact_values"] = [f"opaque{i}" for i in range(16)]
     full_source["flush_volumes_matrix"] = [str(i) for i in range(64)]
     writer._custom_template = full_source
@@ -151,7 +161,7 @@ def test_native_source_compacts_four_materials_and_selected_plate(tmp_path: Path
     assert compact["filament_colour"] == [f"#{10 + i:02X}141E" for i in range(4)]
     assert compact["flush_volumes_matrix"] == [str(row * 8 + column) for row in range(4) for column in range(4)]
     assert compact["unknown_compact_values"] == full_source["unknown_compact_values"]
-    assert compact["curr_bed_type"] == plate.project_value
+    assert compact["curr_bed_type"] == plate_value
     for key in ("printer_settings_id", "nozzle_diameter", "printable_area", "printable_height",
                 "retraction_distances_when_cut"):
         if key in full_source:

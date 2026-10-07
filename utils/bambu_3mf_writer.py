@@ -58,6 +58,7 @@ from utils.fatcat_metadata import (
     metadata_resource_specs,
     native_project_source_catalog,
     native_source_for_target,
+    process_setting_aliases,
     resolve_template_build_plate,
     select_metadata_target,
     select_user_template_metadata_target,
@@ -1154,7 +1155,9 @@ class BambuStudio3MFWriter:
         defaults = dict(self.DEFAULT_SETTINGS)
         if self.slicer == "PrusaSlicer":
             defaults["brim_type"] = "outer_only"
-        self.settings = merge_lumina_process_settings(defaults, settings)
+        self.settings = merge_lumina_process_settings(
+            defaults, settings, aliases=process_setting_aliases(self.slicer),
+        )
         self._material_types = dict(material_types or {})
         self.device_profile_id = str(device_profile_id or "").strip() or None
         self.build_plate_id = str(build_plate_id or "").strip() or None
@@ -1202,16 +1205,28 @@ class BambuStudio3MFWriter:
                 face=self.face_orientation,
             )
         )
-        self.settings["sparse_infill_density"] = (
-            f"{self.effective_backing_infill_density_percent}%"
+        aliases = process_setting_aliases(self.slicer)
+        # The dedicated backing-density parameter owns this geometry setting.
+        self.settings = merge_lumina_process_settings(
+            self.settings,
+            {"sparse_infill_density": f"{self.effective_backing_infill_density_percent}%"},
+            aliases=aliases,
         )
         if self.effective_backing_infill_density_percent < 100:
             # A zero-layer top shell leaves the non-viewing face as exposed
             # sparse infill even when the template carries a thickness value.
             # Keep the template thickness contract and require one top skin.
-            self.settings["top_shell_layers"] = str(
-                max(1, int(self.settings.get("top_shell_layers", "0")))
-            )
+            top_field = aliases.get("top_shell_layers", "top_shell_layers")
+            top_values = {
+                str(value) for key, value in self.settings.items()
+                if aliases.get(key, key) == top_field and value is not None
+            }
+            # Keep conflicting explicit aliases intact for SDK validation.
+            if len(top_values) <= 1:
+                top_layers = max(1, int(next(iter(top_values), "0")))
+                self.settings = merge_lumina_process_settings(
+                    self.settings, {"top_shell_layers": str(top_layers)}, aliases=aliases,
+                )
         self._project_slot_names: list[str] = []
         self._project_preview_colors: dict | None = None
         self.cover_source: "str | bytes | Image.Image | None" = cover_source
@@ -1380,12 +1395,17 @@ class BambuStudio3MFWriter:
         if slot_policy == "preserve_native_capacity":
             slot_mode = "preserve"
         if self._custom_template is not None:
-            process = {
-                key: self.settings[key] for key in (
+            aliases = process_setting_aliases(self.slicer)
+            geometry_fields = {
+                aliases.get(key, key) for key in (
                     "layer_height", "initial_layer_print_height", "initial_layer_height",
                     "line_width", "initial_layer_line_width", "wall_loops",
                     "top_shell_layers", "bottom_shell_layers", "sparse_infill_density",
-                ) if key in self.settings
+                )
+            }
+            process = {
+                key: value for key, value in self.settings.items()
+                if aliases.get(key, key) in geometry_fields
             }
             profile = self._registry_device_profile
             request = {
@@ -1432,6 +1452,7 @@ class BambuStudio3MFWriter:
         request = build_builtin_project_settings_request(
             build_lumina_process_settings(
                 self.settings, nozzle_size=self.nozzle_size, slicer_id=self.slicer,
+                aliases=process_setting_aliases(self.slicer),
             ),
             materials,
             target=target,

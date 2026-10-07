@@ -211,7 +211,7 @@ class TestLoadExportProjectSettings:
             ("qidi-x-plus-5", "X-Plus 5", "0.4"),
         ],
     )
-    def test_qidi_templates_keep_native_machine_and_lumina_process_identity(
+    def test_qidi_sources_keep_native_machine_and_default_process_identity(
         self,
         printer_id: str,
         model: str,
@@ -228,7 +228,7 @@ class TestLoadExportProjectSettings:
         assert template["printer_variant"] == nozzle_size
         assert template["nozzle_diameter"] == [nozzle_size]
         assert template["version"] == "02.07.02.60"
-        assert template["layer_height"] == "0.08"
+        assert template["layer_height"] == ("0.1" if nozzle_size == "0.2" else "0.2")
         assert template["line_width"] == ("0.22" if nozzle_size == "0.2" else "0.42")
 
     def test_load_export_project_settings_reads_0_2_variant(self) -> None:
@@ -238,16 +238,16 @@ class TestLoadExportProjectSettings:
 
     def test_h2d_0_2_template_uses_official_0_2_process_preset_ids(self) -> None:
         template = load_export_project_settings("bambu-h2d", nozzle_size="0.2")
-        assert template["print_settings_id"] == "0.08mm Extra Fine @BBL H2D 0.2 nozzle"
-        assert template["inherits_group"][0] == "0.08mm Extra Fine @BBL H2D 0.2 nozzle"
+        assert template["print_settings_id"] == "0.10mm Standard @BBL H2D 0.2 nozzle"
+        assert template["default_print_profile"] == template["print_settings_id"]
         assert template["top_surface_line_width"] == "0.22"
         assert template["support_line_width"] == "0.22"
 
     @pytest.mark.parametrize(
         ("printer_id", "process_id"),
         [
-            ("bambu-lab-a2l", "0.08mm High Quality @BBL A2L 0.2 nozzle"),
-            ("bambu-lab-x2d", "0.08mm High Quality @BBL X2D 0.2 nozzle"),
+            ("bambu-lab-a2l", "0.10mm Standard @BBL A2L 0.2 nozzle"),
+            ("bambu-lab-x2d", "0.10mm Standard @BBL X2D 0.2 nozzle"),
         ],
     )
     def test_new_bambu_0_2_templates_keep_official_process_identity(
@@ -258,8 +258,7 @@ class TestLoadExportProjectSettings:
         template = load_export_project_settings(printer_id, nozzle_size="0.2")
 
         assert template["print_settings_id"] == process_id
-        assert template["inherits_group"][0] == process_id
-        assert "0.2 nozzle" in template["default_print_profile"]
+        assert template["default_print_profile"] == process_id
         assert template["print_compatible_printers"] == [template["printer_settings_id"]]
 
 

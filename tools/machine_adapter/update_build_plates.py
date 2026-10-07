@@ -72,10 +72,7 @@ def update_registry_build_plates(
         source_root = source_roots.get(slicer_id)
         build_plates = copy_native_build_plate_assets(
             slicer_id=slicer_id,
-            source_root=source_root or registry_root,
-            source_version=str(slicer["source_version"]),
             output_root=registry_root,
-            source_roots=source_roots,
         )
         if not build_plates:
             continue

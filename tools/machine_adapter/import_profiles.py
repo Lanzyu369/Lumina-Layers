@@ -435,7 +435,6 @@ def run_import(
     vendor_keys: tuple[str, ...],
     output_root: Path,
     machine_name: str | None = None,
-    build_plate_source_roots: dict[str, Path] | None = None,
 ) -> ImportResult:
     source = ImportSource(
         slicer_id=slicer_id,
@@ -447,7 +446,6 @@ def run_import(
     slicer_payload, device_count = _collect_import_payload(
         source,
         output_root=output_root,
-        build_plate_source_roots=build_plate_source_roots,
     )
     _write_import_payload(output_root=output_root, slicers=[slicer_payload])
     return ImportResult(device_count=device_count)
@@ -459,7 +457,6 @@ def _collect_import_payload(
     output_root: Path,
     asset_roots: tuple[AssetRoot, ...] = (),
     bed_model_metadata_roots: tuple[AssetRoot, ...] | None = None,
-    build_plate_source_roots: dict[str, Path] | None = None,
 ) -> tuple[dict[str, Any], int]:
     slicer_id = source.slicer_id
     source_root = source.source_root
@@ -472,10 +469,7 @@ def _collect_import_payload(
     provider = get_provider(slicer_id)
     build_plates = copy_native_build_plate_assets(
         slicer_id=provider.slicer_id,
-        source_root=source_root,
-        source_version=source_version,
         output_root=output_root,
-        source_roots=build_plate_source_roots,
     )
     available_build_plate_ids = {str(plate["id"]) for plate in build_plates}
     machines: dict[str, dict[str, Any]] = {}
@@ -650,9 +644,6 @@ def run_import_sources(
         for vendor_key in source.vendor_keys
     )
     all_asset_roots = (*source_asset_roots, *asset_search_roots)
-    build_plate_source_roots = {
-        source.slicer_id: source.source_root for source in sources
-    }
     for source in sources:
         if bed_model_metadata_search_roots_by_slicer is None:
             bed_model_metadata_roots = all_asset_roots
@@ -672,7 +663,6 @@ def run_import_sources(
             output_root=output_root,
             asset_roots=all_asset_roots,
             bed_model_metadata_roots=bed_model_metadata_roots,
-            build_plate_source_roots=build_plate_source_roots,
         )
         if source_device_count == 0:
             continue

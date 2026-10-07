@@ -119,9 +119,12 @@ def _expected_machine_registry_manifest() -> set[str]:
             str(plate["image"]) for plate in slicer.get("build_plates", [])
         )
         for machine in slicer["machines"]:
-            relative_paths.update(
-                str(nozzle["template"]) for nozzle in machine["nozzles"]
-            )
+            if machine.get("thumbnail"):
+                relative_paths.add(str(machine["thumbnail"]))
+    for index_path in (ROOT / "machine_registry").glob("slicers/*/*/picker-assets.json"):
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        relative_paths.add(index_path.relative_to(ROOT / "machine_registry").as_posix())
+        relative_paths.update(str(image) for image in index["thumbnails"].values())
     return {f"machine_registry/{path}" for path in relative_paths}
 
 
@@ -131,7 +134,7 @@ def test_pyinstaller_spec_bundles_only_registry_runtime_contract(monkeypatch) ->
     )
 
     assert packaged == _expected_machine_registry_manifest()
-    assert not any("/assets/" in path for path in packaged)
+    assert not any(path.endswith((".3mf", ".stl")) for path in packaged)
     assert not any("/bed_models/" in path for path in packaged)
     assert "machine_registry/BUILD_PLATE_SOURCES.md" not in packaged
 

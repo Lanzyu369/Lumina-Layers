@@ -39,15 +39,17 @@ QIDI Studio 02.07.02.60, ElegooSlicer 1.5.3.5, Anycubic Slicer Next macOS
 2.0.0.3, Flash Studio 1.7.18, Snapmaker Orca 2.4.0, and PrusaSlicer
 3.0.0-alpha12 metadata.
 Native process defaults supply specific printing speeds. Lumina no longer sends
-the historical `print_speed` placeholder, which has no reviewed FatCat mapping.
+the historical overall `print_speed` placeholder. Specific speed overrides follow
+each target's declared FatCat contract; Bambu-family overall-speed requests are rejected.
 Explicit unsupported overrides are rejected; they are not silently dropped.
-Either first-layer height alias replaces both product defaults, while conflicting
+FatCat's declared aliases replace matching product defaults, while conflicting
 explicit aliases still produce an error. Saved user-template settings remain opaque
 source data rather than being reinterpreted as new process overrides.
 
 当前源码固定值包含上述八种软件的元数据版本。具体打印速度来自原生工艺配置，
-Lumina 不再发送没有经过映射核对的历史 `print_speed` 占位值；明确请求的不支持
-参数仍会报错，不会静默忽略。明确指定任一首层高度名称会替换默认值；两个名称
+Lumina 不再发送历史 `print_speed` 总速度占位值；具体速度修改遵循目标软件的
+FatCat 合同，Bambu 家族不支持的总速度请求会报错。明确请求的不支持参数仍会
+报错，不会静默忽略。明确指定任一首层高度名称会替换默认值；两个名称
 下明确提供矛盾值时仍会报错。用户模板中的设置继续作为原始来源数据保留，
 不会被重新解释成新的工艺修改请求。
 
@@ -200,8 +202,10 @@ automatically reinstall that snapshot as a local template.
 
 ## Package Inspection
 
-For a generated 3MF, inspect `Metadata/project_settings.config`,
+For Bambu-family 3MFs, inspect `Metadata/project_settings.config`,
 `Metadata/model_settings.config`, `Metadata/slice_info.config`, and `3D/3dmodel.model`.
+PrusaSlicer 3 uses `Metadata/PrusaSlicer3_project.json` and its native object/volume
+metadata in `3D/3dmodel.model`; the Bambu-family settings files are not universal.
 Check the selected machine/nozzle identity, source material identities and array shapes,
 explicit process values, application/client version, and slicer-specific sidecars. For a
 merge, compare edited source values and unknown fields with the final project settings.
@@ -285,8 +289,10 @@ The writer skips emitting `layer_config_ranges.xml` when any of:
   limits, is not coarser than the configured fine height, or would leave fewer
   than two backing layers
 - `face_orientation == "double"`
-- puzzle combine path (`core/puzzle_3mf.py` forces it off because object ids
-  and Z coordinates differ from single-piece exports)
+
+Puzzle and batch assembly preserve source object-height ranges. The shared
+merged writer remaps object indexes while XY placement leaves local Z unchanged.
+拼图和批量装配保留源对象高度区间；共用合并 writer 重映射对象序号，XY 摆放不改变局部 Z。
 
 ### Example XML / 样例 XML
 
@@ -360,16 +366,15 @@ If the complete backing fits inside the protected depth (or inside both depths
 for a double-sided model), the effective global density is promoted to `100%`
 and no density-only range is needed. Sparse relief is rejected because its
 variable backing boundary cannot be protected by a single global Z range.
-Sparse puzzle generation is also rejected because puzzle assembly intentionally
-removes source object-height ranges. Raster, vector, native large-format, and
-batch exports all forward the same density and geometry context; merged batch
-archives remap the one-based model-object indexes while preserving the ranges.
+Raster, vector, native large-format, batch, and puzzle exports forward the same
+density and geometry context. The shared merged writer remaps the one-based
+model-object indexes while preserving source local height ranges.
 
 当整块底板不超过保护深度（双面模型则不超过两侧保护深度之和）时，实际全局
 填充率会提升为 `100%`，无需额外的密度区间。浮雕底板边界随位置变化，无法用
-单一全局 Z 区间可靠保护，因此稀疏浮雕会被拒绝；拼图装配会主动移除源对象的
-高度区间，因此也拒绝稀疏拼图。光栅、矢量、原生大画幅和批量导出统一透传
-密度与几何上下文，批量合并时会重映射从 1 开始的模型对象序号并保留区间。
+单一全局 Z 区间可靠保护，因此稀疏浮雕会被拒绝。光栅、矢量、原生大画幅、
+批量和拼图导出统一透传密度与几何上下文，共用合并 writer 重映射从 1 开始的
+模型对象序号并保留源对象局部高度区间。
 
 ### Turning it Off / 关闭方式
 
@@ -391,8 +396,8 @@ Bambu-family slicer IDs (see `frontend/src/utils/settingsOptionIds.ts`):
   derivation
 - `tests/test_s09_export_3mf_unit.py` — s09 forwards ctx to writer and
   falls back to safe defaults
-- `tests/test_puzzle_3mf_unit.py` — combined puzzle explicitly excludes
-  `Metadata/layer_config_ranges.xml`
+- `tests/test_puzzle_3mf_unit.py` — combined puzzle preserves source-local
+  `Metadata/layer_config_ranges.xml` with remapped object indexes
 - `tests/test_converter_generate_unit.py::TestConverterEntryAcceptsBaseLayerModifierKwarg`
   — signature contract (prevents API↔worker kwargs drift)
 - `tests/test_bambu_3mf_writer_unit.py` — writer-level kwargs plumbing

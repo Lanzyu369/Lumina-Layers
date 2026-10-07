@@ -965,9 +965,6 @@ def test_selected_build_plate_updates_project_and_plate_metadata(
     plate = {
         "id": "smooth-pei-plate",
         "display_name": "Smooth PEI Plate / High Temp Plate",
-        "project_value": "High Temp Plate",
-        "plate_value": "High Temp Plate",
-        "sidecar_value": "hot_plate",
         "image": "plates/high-temp.png",
         "source_path": "resources/images/bed_high_templ.png",
         "source_version": "02.07.01.57",
@@ -1030,9 +1027,6 @@ def test_flashstudio_selected_build_plate_updates_plate_sidecar(
     plate = {
         "id": "smooth-high-temp-plate",
         "display_name": "Smooth High Temp Plate",
-        "project_value": "High Temp Plate",
-        "plate_value": "High Temp Plate",
-        "sidecar_value": "hot_plate",
         "image": "plates/high-temp.png",
         "source_path": "resources/images/bed_high_templ.png",
         "source_version": "02.01.01.00",
@@ -1791,12 +1785,14 @@ def test_flash_studio_creator_5_pro_uses_exact_native_profile_with_lumina_proces
 
     # Native machine metadata must not replace Lumina's print process.
     assert project["layer_height"] == "0.08"
-    assert project["initial_layer_height"] == "0.08"
+    assert project["initial_layer_print_height"] == "0.08"
     assert project["wall_loops"] == "1"
     assert project["wall_generator"] == "arachne"
     assert project["sparse_infill_density"] == "100%"
     assert project["sparse_infill_pattern"] == "zig-zag"
-    assert project["print_speed"] == "100"
+    assert "print_speed" not in project
+    assert project["outer_wall_speed"]
+    assert project["inner_wall_speed"]
     assert project["travel_speed"] == "150"
 
 

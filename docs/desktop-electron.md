@@ -48,7 +48,7 @@ python scripts/build_3mf_native_wheels.py `
 同一版本重新构建也需要此安装步骤，不能只依赖普通 `pip install -r`。
 已有当前构建产物时可运行 `python scripts/build_3mf_native_wheels.py --install-only`。
 生成目录仅受控更新原生 wheel，其他文件保留。完成后再执行下面的
-`pip install -r requirements.txt`；CI 和 Docker 也按此顺序安装。
+`pip install -r requirements.txt`；原生依赖的构建流程也按此顺序安装。
 
 ## 2. 环境准备（一次性）
 
