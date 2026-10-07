@@ -1236,11 +1236,28 @@ def _sanitize_bug_report_context_for_export(context: dict[str, Any]) -> dict[str
     return sanitized
 
 
+def _sanitize_custom_3mf_template_settings(value: Any) -> Any:
+    """Exclude native printer connections from the reproducible settings snapshot.
+
+    从可复现的模板快照中移除原生打印机连接信息，保留工艺和材料配置。
+    """
+    if isinstance(value, dict):
+        return {
+            key: _sanitize_custom_3mf_template_settings(item)
+            for key, item in value.items()
+            if key.casefold() not in {"host_type", "bbl_use_printhost"}
+            and not key.casefold().startswith(("print_host", "printhost_"))
+        }
+    if isinstance(value, list):
+        return [_sanitize_custom_3mf_template_settings(item) for item in value]
+    return value
+
+
 def _capture_custom_3mf_template(template_id: str) -> dict[str, Any]:
     from core.custom_3mf_templates import load_template
 
     try:
-        settings = load_template(template_id)
+        settings = _sanitize_custom_3mf_template_settings(load_template(template_id))
         encoded = json.dumps(settings, ensure_ascii=False).encode("utf-8")
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return {"status": "unavailable", "error_type": type(exc).__name__}

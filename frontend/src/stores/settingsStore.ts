@@ -1,6 +1,11 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { saveSettings } from "../api/system";
+import {
+  deleteCustom3mfTemplate,
+  importCustom3mfTemplate,
+  saveSettings,
+  type Custom3mfTemplate,
+} from "../api/system";
 import type { UserSettings } from "../api/types";
 import {
   invalidateGeneratedArtifacts,
@@ -151,6 +156,8 @@ export interface SettingsActions {
   setSlicerSoftware: (id: string) => void;
   setDeviceProfileId: (id: string) => void;
   setCustom3mfTemplateId: (id: string | null) => void;
+  importCustom3mfTemplate: (file: File, name: string) => Promise<Custom3mfTemplate>;
+  deleteCustom3mfTemplate: (id: string) => Promise<void>;
   setBuildPlateForMachine: (machineProfileId: string, plateId: string) => void;
   setCustomSlicerPath: (path: string) => void;
   setCustomSlicerId: (id: string) => void;
@@ -650,6 +657,38 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
         set({ custom3mfTemplateId: id });
         invalidateGeneratedArtifacts({ preservePreviews: true });
         void get().syncToBackend();
+      },
+
+      /** Import and select unless the user changed selection while awaiting the API.
+       * 导入模板；等待期间用户更改过的模板或切片软件选择优先保留。
+       */
+      importCustom3mfTemplate: async (file, name) => {
+        const { slicerSoftware } = get();
+        let selectionUnchanged = true;
+        const unsubscribe = useSettingsStore.subscribe((current, previous) => {
+          if (
+            current.custom3mfTemplateId !== previous.custom3mfTemplateId ||
+            current.slicerSoftware !== previous.slicerSoftware
+          ) {
+            selectionUnchanged = false;
+          }
+        });
+        try {
+          const template = await importCustom3mfTemplate(file, name, slicerSoftware);
+          if (selectionUnchanged) get().setCustom3mfTemplateId(template.id);
+          return template;
+        } finally {
+          unsubscribe();
+        }
+      },
+
+      /** Clear a deleted selection independently of the settings panel lifecycle.
+       * 删除成功后清理仍指向该模板的全局选择，不依赖设置面板是否挂载。
+       */
+      deleteCustom3mfTemplate: async (id) => {
+        await deleteCustom3mfTemplate(id);
+        const current = get();
+        if (current.custom3mfTemplateId === id) current.setCustom3mfTemplateId(null);
       },
 
       setBuildPlateForMachine: (machineProfileId: string, plateId: string) => {

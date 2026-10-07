@@ -75,11 +75,11 @@ class MaterialSlot:
         preview_color: Six-digit hex color used for frontend preview
             (e.g. ``"#101010"``).
             前端预览用六位十六进制颜色（例如 ``"#101010"``）。
-        material_id: Stable identifier in the material archive (e.g.
-            ``"GFL00"``); merged 3MF round-trip tests assert this value
-            survives unchanged.
-            材料 archive 中的稳定标识（例如 ``"GFL00"``）；合并 3MF
-            round-trip 测试断言该值原样保留。
+        material_id: Stable material-archive identity used to detect conflicting
+            assignments to the same logical slot. The output preserves the
+            source's native filament identity in the slicer's project arrays.
+            材料库的稳定标识，用于检查同一逻辑槽位的材料是否冲突。
+            输出通过切片软件的原生耗材数组保留源项目的材料身份。
         source_slot_index: Optional index in the source project's filament
             arrays. It differs from slot_id when puzzle palette order selects
             or reorders source slots.

@@ -58,6 +58,7 @@ def _native_profile_names(
     profiles = {
         item["name"]: _resolved_profile(data_root, index, item["path"])
         for item in options
+        if "path" in item and "unavailable_reason" not in item
     }
     default_names = source.get("default_filament_profile_names") or [
         source.get("default_filament_profile_name", "")
@@ -75,12 +76,20 @@ def _native_profile_names(
         default_name = default_names[slot] if slot < len(default_names) else default_names[0]
         if default_name in matching:
             selected.append(default_name)
-        elif len(matching) == 1:
-            selected.append(matching[0])
         else:
-            raise AssertionError(
-                f"native source has no unique {requested_type!r} profile for slot {slot}: {matching}"
-            )
+            requested = " ".join(requested_type.upper().replace("_", " ").split())
+            preferred = [name for name in matching if f"{family} BASIC" in name.upper()]
+            generic = [name for name in matching if name.split("@")[0].strip().upper() == f"GENERIC {family}"]
+            if requested in {family, f"{family} BASIC"} and len(preferred) == 1:
+                selected.append(preferred[0])
+            elif requested in {family, f"{family} BASIC"} and len(generic) == 1:
+                selected.append(generic[0])
+            elif len(matching) == 1:
+                selected.append(matching[0])
+            else:
+                raise AssertionError(
+                    f"native source has no unique {requested_type!r} profile for slot {slot}: {matching}"
+                )
     return selected
 
 
@@ -116,6 +125,7 @@ def assert_native_materials(
     profiles_by_name = {
         item["name"]: _resolved_profile(data_root, index, item["path"])
         for item in source["filament_profile_options"]
+        if "path" in item and "unavailable_reason" not in item
     }
     profiles = [profiles_by_name[name] for name in names]
 

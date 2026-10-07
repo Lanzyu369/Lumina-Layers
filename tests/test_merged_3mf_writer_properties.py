@@ -3,7 +3,7 @@
 Validates:
 - P6: build_item == object == model_instance == assemble_item == N
 - P7: Structural fingerprint matches multi-object 3MF shape
-- P8: MaterialSlot quadruples round-trip via lumina_merged_slots_json
+- P8: Native material identities, colours and part extruders survive slot merging
 - P9: XY bbox min matches (tx_mm, ty_mm) within 1e-3 mm
 - P10: Z range unchanged within 1e-6 mm
 
@@ -34,7 +34,6 @@ from utils.merged_bambu_3mf_writer import (
     MergedBambu3MFWriter,
     MergedItem,
     MaterialSlot,
-    _LUMINA_SLOTS_JSON_KEY,
 )
 
 _NS_CORE = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
@@ -303,18 +302,14 @@ def _parse_merged_3mf(path: Path) -> dict:
                 "local_max_z": max_z,
             })
 
-        # Extract slots JSON from config.
-        slots_per_item: list[list[dict]] = []
-        for cfg_obj in config_objects:
-            slots_json_str = None
-            for md in cfg_obj.findall("metadata"):
-                if md.get("key") == _LUMINA_SLOTS_JSON_KEY:
-                    slots_json_str = md.get("value")
-                    break
-            if slots_json_str:
-                slots_per_item.append(json.loads(slots_json_str))
-            else:
-                slots_per_item.append([])
+        # Read the slicer's native part metadata and project material arrays.
+        parts_per_item = [
+            [
+                {md.get("key"): md.get("value") for md in part.findall("metadata")}
+                for part in cfg_obj.findall("part")
+            ]
+            for cfg_obj in config_objects
+        ]
 
         return {
             "build_item_count": len(build_items),
@@ -334,7 +329,7 @@ def _parse_merged_3mf(path: Path) -> dict:
             "content_type_overrides": content_type_overrides,
             "project_settings": project_settings,
             "per_item_data": per_item_data,
-            "slots_per_item": slots_per_item,
+            "parts_per_item": parts_per_item,
         }
 
 
@@ -443,7 +438,10 @@ def test_p7_structural_fingerprint(items_data: list[tuple[MergedItem, float, flo
 @settings(max_examples=50, deadline=None)
 @given(items_data=_merged_items_strategy())
 def test_p8_slots_round_trip(items_data: list[tuple[MergedItem, float, float]]) -> None:
-    """P8: MaterialSlot quadruples round-trip via lumina_merged_slots_json."""
+    """P8: Preserve native material identities and remap each part's extruder.
+
+    保留原生材料身份与颜色，并将各部件的耗材索引映射到合并后的全局槽位。
+    """
     items = [item for item, _, _ in items_data]
 
     os.makedirs(TEMP_DIR, exist_ok=True)
@@ -456,27 +454,32 @@ def test_p8_slots_round_trip(items_data: list[tuple[MergedItem, float, float]]) 
 
         result = _parse_merged_3mf(Path(out_path))
 
+        identity_keys = ("filament_settings_id", "filament_type", "filament_vendor")
+        expected_by_id = {}
+        for item in items:
+            with zipfile.ZipFile(item.source_3mf_path) as source:
+                project = json.loads(source.read("Metadata/project_settings.config"))
+            for slot in item.slots:
+                expected = {
+                    key: project[key][slot.source_slot_index] for key in identity_keys
+                }
+                expected["filament_colour"] = slot.preview_color.upper()
+                if slot.slot_id in expected_by_id:
+                    assert expected_by_id[slot.slot_id] == expected
+                expected_by_id[slot.slot_id] = expected
+
+        output_ids = sorted(expected_by_id)
+        for key in (*identity_keys, "filament_colour"):
+            assert result["project_settings"][key] == [
+                expected_by_id[slot_id][key] for slot_id in output_ids
+            ]
+        extruder_by_id = {slot_id: index + 1 for index, slot_id in enumerate(output_ids)}
         for idx, item in enumerate(items):
-            recovered_slots = result["slots_per_item"][idx]
-            assert len(recovered_slots) == len(item.slots), (
-                f"Item {idx}: slot count mismatch: "
-                f"recovered={len(recovered_slots)} input={len(item.slots)}"
-            )
-            for s_idx, (recovered, original) in enumerate(
-                zip(recovered_slots, item.slots)
-            ):
-                assert recovered["slot_id"] == original.slot_id, (
-                    f"Item {idx} slot {s_idx}: slot_id mismatch"
-                )
-                assert recovered["slot_name"] == original.slot_name, (
-                    f"Item {idx} slot {s_idx}: slot_name mismatch"
-                )
-                assert recovered["preview_color"] == original.preview_color, (
-                    f"Item {idx} slot {s_idx}: preview_color mismatch"
-                )
-                assert recovered["material_id"] == original.material_id, (
-                    f"Item {idx} slot {s_idx}: material_id mismatch"
-                )
+            parts = result["parts_per_item"][idx]
+            assert len(parts) == len(item.slots)
+            assert {part["name"]: int(part["extruder"]) for part in parts} == {
+                slot.slot_name: extruder_by_id[slot.slot_id] for slot in item.slots
+            }
     finally:
         _cleanup_items(items, out_path)
 

@@ -42,6 +42,7 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         build_plate_id: str | None = None,
         preserve_template_filament_slots: bool | None = None,
         material_types: dict[str, str | None] | None = None,
+        custom_3mf_template_id: str | None = None,
     ) -> str:
         captured["scene"] = scene
         captured["output_path"] = output_path
@@ -69,6 +70,7 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         captured["build_plate_id"] = build_plate_id
         captured["preserve_template_filament_slots"] = preserve_template_filament_slots
         captured["material_types"] = material_types
+        captured["custom_3mf_template_id"] = custom_3mf_template_id
         return output_path
 
     monkeypatch.setattr(s09_export_3mf, "MODELS_DIR", str(tmp_path))
@@ -92,6 +94,7 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         "printer_id": "bambu-h2d",
         "slicer": "BambuStudio",
         "build_plate_id": "smooth-pei-plate",
+        "custom_3mf_template_id": "selected-native-template",
     }
 
     result = s09_export_3mf.run(ctx)
@@ -109,6 +112,7 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         "yellow",
     ]
     assert captured["build_plate_id"] == "smooth-pei-plate"
+    assert captured["custom_3mf_template_id"] == "selected-native-template"
 
 
 def _make_minimal_s09_ctx(tmp_path, **extra_ctx) -> dict:

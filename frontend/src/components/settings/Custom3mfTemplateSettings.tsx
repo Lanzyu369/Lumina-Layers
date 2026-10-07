@@ -1,8 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import {
-  deleteCustom3mfTemplate,
   getCustom3mfTemplates,
-  importCustom3mfTemplate,
   type Custom3mfTemplate,
 } from "../../api/system";
 import { apiErrorToVisibleMessage } from "../../api/client";
@@ -18,8 +16,9 @@ export default function Custom3mfTemplateSettings() {
   const fileInput = useRef<HTMLInputElement>(null);
   const mounted = useRef(true);
   const selectedId = useSettingsStore((s) => s.custom3mfTemplateId);
-  const slicer = useSettingsStore((s) => s.slicerSoftware);
   const select = useSettingsStore((s) => s.setCustom3mfTemplateId);
+  const importTemplate = useSettingsStore((s) => s.importCustom3mfTemplate);
+  const deleteTemplate = useSettingsStore((s) => s.deleteCustom3mfTemplate);
   const [templates, setTemplates] = useState<Custom3mfTemplate[]>([]);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -56,10 +55,9 @@ export default function Custom3mfTemplateSettings() {
     setBusy(true);
     setError(null);
     try {
-      const item = await importCustom3mfTemplate(file, name, slicer);
+      const item = await importTemplate(file, name);
       if (!mounted.current) return;
       setTemplates((items) => [...items, item]);
-      select(item.id);
       setName("");
       setFile(null);
       if (fileInput.current) fileInput.current.value = "";
@@ -78,10 +76,9 @@ export default function Custom3mfTemplateSettings() {
     setError(null);
     setErrorDetail(null);
     try {
-      await deleteCustom3mfTemplate(selectedId);
+      await deleteTemplate(selectedId);
       if (!mounted.current) return;
       setTemplates((items) => items.filter((item) => item.id !== selectedId));
-      if (useSettingsStore.getState().custom3mfTemplateId === selectedId) select(null);
     } catch (cause) {
       if (!mounted.current) return;
       setError("settings.template_delete_error");

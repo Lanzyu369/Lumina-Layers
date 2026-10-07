@@ -25,6 +25,7 @@ Use this guide before changing `/api/feedback/bug-report`, feedback ticket assem
 - Original-image collection priority is browser upload, then `FileRegistry`, then `SessionStore`. `capture_source` and `direct_upload_status` record the path taken; missing, failed, or oversized attachments are explicit in the manifest
 - Other bulky files are attached independently when available via `FileRegistry` + copy; missing attachments are explicitly marked in the manifest, never silently dropped
 - Final artifacts must be copied only from server-side `FileRegistry` ownership or an exact `/api/files/<file_id>` reference; client-provided `disk_path` values are diagnostic context only and must not authorize copying files into a ticket
+- Imported 3MF template snapshots retain process and material settings for reproduction. Native printer connection settings (`print_host*`, `printhost_*`, `host_type`, and `bbl_use_printhost`) are excluded before ticket persistence and bundling, including nested settings. The local template remains unchanged.
 
 ## Assembly Model
 
