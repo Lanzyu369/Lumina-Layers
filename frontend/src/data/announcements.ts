@@ -33,6 +33,9 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
     }, {
       category: { zh: "稳定性", en: "Stability" },
       items: [{
+        zh: "补齐 Prusa 机型的官方缩略图，设置中的设备卡片现在会显示对应打印机图片。",
+        en: "Prusa device cards in Settings now show the matching official printer thumbnails.",
+      }, {
         zh: "生成的 3MF 更新了对 Anycubic Slicer Next 2.0.0.3、Flash Studio 1.7.18 和 Snapmaker Orca 2.4.0 的配置适配；同时修复首层高度设置冲突导致导出失败的问题。",
         en: "Updated 3MF settings for Anycubic Slicer Next 2.0.0.3, Flash Studio 1.7.18 and Snapmaker Orca 2.4.0, and fixed export failures caused by conflicting first-layer height defaults.",
       }],

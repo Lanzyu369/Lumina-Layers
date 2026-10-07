@@ -491,7 +491,7 @@ def load_machine_registry(path: str | Path) -> MachineRegistry:
                     plate.id: plate for plate in machine_build_plates
                 }
 
-    _add_prusa_devices(devices, build_plates_by_device_id)
+    _add_prusa_devices(devices, build_plates_by_device_id, registry_path.parent)
     return MachineRegistry(
         schema_version=int(data["schema_version"]),
         generated_at=str(data["generated_at"]),
@@ -503,11 +503,17 @@ def load_machine_registry(path: str | Path) -> MachineRegistry:
 def _add_prusa_devices(
     devices: dict[str, DeviceProfile],
     build_plates: dict[str, dict[str, BuildPlateProfile]],
+    registry_root: Path,
 ) -> None:
     from utils.fatcat_metadata import native_project_source_catalog
 
     catalog = native_project_source_catalog("PrusaSlicer")
     version = str(catalog["application_version"])
+    asset_index = registry_root / "slicers" / "PrusaSlicer" / version / "picker-assets.json"
+    thumbnails = (
+        json.loads(asset_index.read_text(encoding="utf-8"))["thumbnails"]
+        if asset_index.is_file() else {}
+    )
     for source in catalog["sources"]:
         hardware = source["hardware_settings"]
         bed = hardware["bed"]
@@ -529,7 +535,8 @@ def _add_prusa_devices(
             client_version=version, sidecar_policy="native", display_name=str(source["display_name"]),
             brand="Prusa", vendor_key="PrusaResearch", bed_width=int(bed["width"]),
             bed_depth=int(bed["height"]), bed_height=int(bed["max_print_height"]),
-            thumbnail="", bed_model="", nozzle_size=nozzle,
+            thumbnail=str(thumbnails.get(source["machine_uid"], "")),
+            bed_model="", nozzle_size=nozzle,
             source_profile_name=str(source["source_machine_profile_name"]),
             template="", revision=version, supported=True,
             build_plates=(plate,), default_build_plate_id=plate_id,

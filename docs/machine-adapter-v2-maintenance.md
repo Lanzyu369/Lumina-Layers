@@ -75,6 +75,28 @@ python tools/machine_adapter/import_profiles.py \
 `machine_registry/registry.json`、图片和版面事实属于 Lumina UI 数据；不要把这些
 数据复制进 FatCat 原生配置快照。
 
+### Prusa 设备图片
+
+Prusa 机型、容量和尺寸由已安装 FatCat 的公共目录读取，不在 Lumina 复制工艺
+或材料配置。设备图片使用独立的 `picker-assets.json`，按稳定 `machine_uid`
+引用同版本原生配置指定图片的 512 像素 PNG；MMU、喷头数量等变体沿用上游
+图片选择。原始 SVG 留在上游来源目录，不作为数千行图片描述提交进本体。
+
+用当前 FatCat 依赖及对应 PrusaResearch 原生图片目录刷新：
+
+```bash
+python -m tools.machine_adapter.sync_prusa_assets \
+  --asset-root /path/to/PrusaResearch/assets \
+  --registry-root machine_registry
+```
+
+该命令只读取公共配置结果并渲染引用图片，不生成几何或 3MF，也不保存原生
+工艺快照。图片及索引随 `machine_registry/` 一起安装，运行时无需联网或安装
+PrusaSlicer。来源记录见该版本目录中的 `SOURCES.md`。
+
+设备列表的切片软件支持范围直接取已加载的设备目录，不再从
+`PrinterProfile` 的旧模板文件名推断；旧模板标签只保留兼容接口用途。
+
 ## 更新 FatCat 原生配置
 
 原生项目源的更新在 FatCat 仓库完成。`scripts/sync_native_project_sources.py`

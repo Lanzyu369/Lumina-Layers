@@ -770,12 +770,6 @@ def get_printers() -> PrinterListResponse:
     existing_ids = {profile.id for profile in profiles}
     attached_registry_keys: set[tuple[str, str]] = set()
     for p in profiles:
-        # Keep Bambu Studio first for profiles carrying the legacy Bambu label.
-        slicers = []
-        # The legacy label identifies the default UI slicer; it is not a file path.
-        if p.template_file.startswith("bambu_"):
-            slicers.append("BambuStudio")
-        slicers.extend(p.slicer_templates.keys())
         key = (p.display_name.casefold(), p.brand.casefold())
         registry_machine = registry_machines.get(key, {})
         registry_device_profiles = registry_machine.get("profiles", [])
@@ -790,7 +784,10 @@ def get_printers() -> PrinterListResponse:
             for profile in registry_device_profiles
             if isinstance(profile, DeviceProfileInfo)
         ]
-        unique_slicers = _unique_preserve_order([*slicers, *registry_slicers])
+        unique_slicers = _unique_preserve_order(registry_slicers)
+        if config.DEFAULT_SLICER_ID in unique_slicers:
+            unique_slicers.remove(config.DEFAULT_SLICER_ID)
+            unique_slicers.insert(0, config.DEFAULT_SLICER_ID)
         unique_nozzles = _unique_preserve_order([*p.supported_nozzle_sizes, *registry_nozzles])
         attached_registry_keys.add(key)
         printers.append(

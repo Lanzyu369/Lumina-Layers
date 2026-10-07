@@ -55,7 +55,7 @@ def collect_glb_v2_package(package_name):
 
 
 def collect_machine_registry_runtime_datas(registry_root):
-    """Collect the registry and plate art used by the device picker."""
+    """Collect the registry, thumbnails and plate art used by the device picker."""
 
     registry_root = Path(registry_root).resolve()
     registry_path = registry_root / "registry.json"
@@ -63,6 +63,15 @@ def collect_machine_registry_runtime_datas(registry_root):
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     for slicer in registry["slicers"]:
         relative_paths.update(Path(plate["image"]) for plate in slicer.get("build_plates", []))
+        relative_paths.update(
+            Path(machine["thumbnail"])
+            for machine in slicer.get("machines", [])
+            if machine.get("thumbnail")
+        )
+    for asset_index_path in registry_root.glob("slicers/*/*/picker-assets.json"):
+        asset_index = json.loads(asset_index_path.read_text(encoding="utf-8"))
+        relative_paths.add(asset_index_path.relative_to(registry_root))
+        relative_paths.update(Path(image) for image in asset_index["thumbnails"].values())
 
     datas = []
     for relative_path in sorted(relative_paths, key=lambda path: path.as_posix()):
