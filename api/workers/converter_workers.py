@@ -1297,17 +1297,16 @@ def worker_batch_convert_item(
         final_glb_path = target_glb_path
 
     # Build the sidecar from the moved 3MF + occupied image footprint.
-    # Supported targets use Fat Cat source-slot rules; other targets keep
-    # the existing Python reader.
-    # 用产出 3MF + 输入图实际占位构建 sidecar；已支持目标使用 Fat Cat 读槽。
+    # FatCat reads source slots; Lumina computes the image footprint.
+    # FatCat 读取源槽位，Lumina 计算输入图实际占位。
     width_mm, depth_mm = _batch_compute_xy_bbox_mm(
         image_path,
         target_width_mm,
         svg_pixels_per_mm=svg_pixels_per_mm,
     )
-    from utils.fatcat_metadata import select_batch_source_material_target
+    from utils.fatcat_metadata import select_metadata_target
 
-    slot_target = select_batch_source_material_target(
+    slot_target = select_metadata_target(
         slicer=slicer,
         printer_id=printer_id,
         nozzle_size=nozzle_size,

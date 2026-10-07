@@ -98,29 +98,3 @@ def build_lumina_process_settings(
         if value is not None and not isinstance(value, (dict, list, tuple))
     }
     return merge_lumina_process_settings(result, explicit)
-
-
-def apply_lumina_process_overlay(
-    native_settings: dict[str, Any],
-    *,
-    slot_count: int = 8,
-    source_profile_name: str | None = None,
-    slicer_id: str | None = None,
-) -> dict[str, Any]:
-    """Compatibility wrapper for callers of the former build-time overlay.
-
-    兼容旧调用；新导出把工艺参数作为明确请求传给 Fat Cat。
-    """
-
-    del slot_count, source_profile_name, slicer_id
-    result = dict(native_settings)
-    raw_nozzle = native_settings.get("nozzle_diameter")
-    if isinstance(raw_nozzle, (list, tuple)) and raw_nozzle:
-        raw_nozzle = raw_nozzle[0]
-    nozzle_size = (
-        format_native_nozzle_size(raw_nozzle)
-        or format_native_nozzle_size(native_settings.get("printer_variant"))
-        or "0.4"
-    )
-    result.update(build_lumina_process_settings(nozzle_size=nozzle_size))
-    return result

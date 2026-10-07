@@ -20,8 +20,9 @@ from core.puzzle_3mf import PuzzlePiece3MFSource, assemble_puzzle_3mf
 from utils.bambu_3mf_writer import BambuStudio3MFWriter
 from utils.fatcat_metadata import (
     build_builtin_project_settings_request, compose_builtin_project_settings,
-    select_metadata_target,
+    read_source_metadata, select_metadata_target,
 )
+from utils.merged_bambu_3mf_writer import MaterialSlot
 
 TARGETS = [('BambuStudio', 'bambu-h2d'), ('OrcaSlicer', 'bambu-h2d'),
            ('SnapmakerOrca', 'snapmaker-u1')]
@@ -88,10 +89,18 @@ def test_real_puzzle_preserves_user_process_slots_and_local_height_ranges(
     for path in sources:
         _write_piece(path, slicer=slicer, printer=printer, density=density, modifier=modifier)
     output = tmp_path/'puzzle.3mf'
+    target = select_metadata_target(slicer=slicer, printer_id=printer,
+        nozzle_size='0.4', device_profile_id=None, build_plate_id=None)
     assemble_puzzle_3mf(
-        [PuzzlePiece3MFSource('A1', str(sources[0]), 0, 0),
+        piece_sources=[PuzzlePiece3MFSource('A1', str(sources[0]), 0, 0),
          PuzzlePiece3MFSource('A2', str(sources[1]), 20, 0)],
-        str(output), dict(zip(PALETTE, COLORS)), PALETTE, printer, slicer,
+        piece_slots=[tuple(MaterialSlot(**slot)
+            for slot in read_source_metadata(path, target=target)['slots'])
+            for path in sources],
+        output_path=str(output), preview_colors=dict(zip(PALETTE, COLORS)),
+        slot_names=PALETTE, printer_id=printer, nozzle_size='0.4',
+        slot_index_by_name=None, device_profile_id=None, build_plate_id=None,
+        metadata_target=target,
         overview_png_bytes=_overview(),
     )
     first, final = _project(sources[0]), _project(output)
@@ -138,8 +147,15 @@ def test_real_puzzle_preserves_user_process_slots_and_local_height_ranges(
 def test_real_puzzle_can_disable_final_tower_planning(tmp_path, slicer, printer):
     source, output = tmp_path/'piece.3mf', tmp_path/'puzzle.3mf'
     _write_piece(source, slicer=slicer, printer=printer, density=20, modifier=True)
-    assemble_puzzle_3mf([PuzzlePiece3MFSource('A1', str(source), 0, 0)],
-        str(output), dict(zip(PALETTE, COLORS)), PALETTE, printer, slicer,
+    target = select_metadata_target(slicer=slicer, printer_id=printer,
+        nozzle_size='0.4', device_profile_id=None, build_plate_id=None)
+    assemble_puzzle_3mf(piece_sources=[PuzzlePiece3MFSource('A1', str(source), 0, 0)],
+        piece_slots=[tuple(MaterialSlot(**slot)
+            for slot in read_source_metadata(source, target=target)['slots'])],
+        output_path=str(output), preview_colors=dict(zip(PALETTE, COLORS)),
+        slot_names=PALETTE, printer_id=printer, nozzle_size='0.4',
+        slot_index_by_name=None, device_profile_id=None, build_plate_id=None,
+        overview_png_bytes=None, metadata_target=target,
         enable_wipe_tower_auto_placement=False)
     with zipfile.ZipFile(output) as archive:
         placement = json.loads(archive.read('Metadata/lumina_wipe_tower_placement.json'))
@@ -176,13 +192,19 @@ def test_single_material_piece_object_uses_its_global_extruder(
     writer.add_mesh(trimesh.creation.box(extents=(10, 10, 2)), material_name, palette[material_index])
     writer.export()
 
+    target = select_metadata_target(slicer=slicer, printer_id=printer_id,
+        nozzle_size='0.4', device_profile_id=None, build_plate_id=None)
     assemble_puzzle_3mf(
         piece_sources=[PuzzlePiece3MFSource(
             label="C11", threemf_path=str(piece_path), offset_x_mm=10, offset_y_mm=10,
         )],
         output_path=str(output_path),
+        piece_slots=[tuple(MaterialSlot(**slot)
+            for slot in read_source_metadata(piece_path, target=target)['slots'])],
         preview_colors={index: (*rgb, 255) for index, rgb in enumerate(palette)},
-        slot_names=slot_names, printer_id=printer_id, slicer=slicer,
+        slot_names=slot_names, printer_id=printer_id, nozzle_size='0.4',
+        slot_index_by_name=None, device_profile_id=None, build_plate_id=None,
+        overview_png_bytes=None, metadata_target=target,
         enable_wipe_tower_auto_placement=False,
     )
     with zipfile.ZipFile(output_path) as archive:

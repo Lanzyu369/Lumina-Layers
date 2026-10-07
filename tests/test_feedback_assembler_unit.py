@@ -1275,7 +1275,7 @@ def test_collect_lut_rejects_path_traversal_lut_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo_root = _use_feedback_lut_repo(monkeypatch, tmp_path)
-    (repo_root / "bambu_config_template.json").write_bytes(b"ROOT_CONFIG")
+    (repo_root / "private_config.json").write_bytes(b"ROOT_CONFIG")
     ticket_dir = tmp_path / "LUM-20260618-001"
     ticket_dir.mkdir()
     payload = {
@@ -1284,7 +1284,7 @@ def test_collect_lut_rejects_path_traversal_lut_name(
             "active_original_image_ref": None,
             "active_final_artifact_ref": None,
             "source_version": "legacy",
-            "lut_name": "Custom/../../bambu_config_template",
+            "lut_name": "Custom/../../private_config",
         },
     }
 

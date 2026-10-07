@@ -64,7 +64,7 @@ from core.puzzle import (
 )
 from core.puzzle_3mf import (
     PuzzlePiece3MFSource,
-    assemble_puzzle_3mf_fatcat,
+    assemble_puzzle_3mf,
 )
 from core.material_dynamic_solver import (
     DynamicMaterialCandidateError,
@@ -1638,7 +1638,7 @@ async def generate_puzzle(
             )
             for piece_source in piece_sources
         ]
-        assemble_puzzle_3mf_fatcat(
+        assemble_puzzle_3mf(
             piece_sources=piece_sources,
             piece_slots=piece_slots,
             output_path=combined_3mf_path,
@@ -1646,7 +1646,6 @@ async def generate_puzzle(
             preview_colors=preview_colors,
             slot_index_by_name=slot_index_by_name,
             printer_id=generate_params.printer_id,
-            slicer=generate_params.slicer,
             nozzle_size=generate_params.nozzle_size,
             device_profile_id=generate_params.device_profile_id,
             build_plate_id=generate_params.build_plate_id,

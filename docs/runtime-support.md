@@ -18,6 +18,9 @@
   wheels use the Ubuntu 24.04 system ABI; an older glibc host needs a source build.
 - Linux cgroup CPU/memory limits and the optional local GEOS dense-buffer
   runtime remain independent of deployment packaging.
+- Desktop packaging uses `scripts/build_desktop.py` and `lumina_studio.spec`.
+  The former Gradio `main.py` packaging workflow and bundled application
+  3MF template file have been retired; metadata data comes from FatCat.
 
 ## Retired on 2026-10-06
 
@@ -36,6 +39,8 @@ previously installed services, scheduled tasks or user data.
 
 当前支持源码本地运行和 Electron 桌面客户端。桌面页面服务、本地访问限制、
 Linux 资源限额检测、可选 PostgreSQL 后端及本地 GEOS 构建均继续保留。
+桌面打包统一使用 `scripts/build_desktop.py` 和 `lumina_studio.spec`；旧 Gradio
+启动文件的打包流程及本体内置 3MF 模板文件已移除，元数据配置来自 FatCat。
 Linux 原生组件改为直接在 Ubuntu 24.04 主机上构建；较旧 glibc 系统需要源码构建。
 
 2026-10-06 起移除 Docker 构建、部署、定时自动更新、数据库容器配置、

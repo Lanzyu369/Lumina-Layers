@@ -20,7 +20,6 @@ SMOKE_TEST_FILES = {
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REFERENCE_ROOT = REPO_ROOT / "reference" / "ChromaPrint3D"
-METADATA_SAMPLES_ROOT = REPO_ROOT / "元数据分析"
 SVG_DIAGNOSIS_ROOT = REPO_ROOT / "artifacts" / "svg_diagnosis"
 
 REFERENCE_ASSET_TESTS = {
@@ -77,8 +76,6 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         filename = Path(str(item.fspath)).name
         if filename in SMOKE_TEST_FILES:
             item.add_marker(smoke_marker)
-        if filename == "test_3mf_reference_golden_unit.py" and not METADATA_SAMPLES_ROOT.exists():
-            item.add_marker(pytest.mark.skip(reason=f"requires external test asset: {METADATA_SAMPLES_ROOT}"))
         if filename in REFERENCE_ASSET_TESTS and item.name in REFERENCE_ASSET_TESTS[filename]:
             if not REFERENCE_ROOT.exists():
                 item.add_marker(pytest.mark.skip(reason=f"requires external test asset: {REFERENCE_ROOT}"))

@@ -31,7 +31,6 @@ class MetadataTarget:
     machine_uid: str
     nozzle_uid: str
     build_plate_uid: str
-    hardware_mode: str = "auto"
 
 
 @dataclass(frozen=True)
@@ -90,36 +89,9 @@ _PROCESS_KEYS = (
 )
 
 
-
-
-def select_metadata_target(
-    *,
-    slicer: str,
-    printer_id: str,
-    nozzle_size: object,
-    device_profile_id: str | None,
-    build_plate_id: str | None,
-) -> MetadataTarget:
-    """Resolve the selected Lumina device to one exact Fat Cat source.
-
-    将 Lumina 已选设备映射到一个精确 Fat Cat 来源。
-    """
-
-    return select_builtin_metadata_target(
-        slicer=slicer,
-        printer_id=printer_id,
-        nozzle_size=nozzle_size,
-        device_profile_id=device_profile_id,
-        build_plate_id=build_plate_id,
-    )
-
-
 def select_user_template_metadata_target(
     *,
     slicer: str,
-    printer_id: str,
-    nozzle_size: object,
-    device_profile_id: str | None,
     build_plate_id: str | None,
 ) -> MetadataTarget:
     """Resolve slicer identity for a saved project with its own settings.
@@ -140,25 +112,6 @@ def select_user_template_metadata_target(
             build_plate_id if str(build_plate_id or "").startswith("prusa-sheet:")
             else _PLATE_UIDS.get(build_plate_id, "")
         ),
-        hardware_mode="auto",
-    )
-
-
-def select_batch_source_material_target(
-    *,
-    slicer: str,
-    printer_id: str,
-    nozzle_size: object,
-    device_profile_id: str | None,
-    build_plate_id: str | None,
-) -> MetadataTarget | SourceMaterialTarget | None:
-    """Select the same Fat Cat reader for all source configurations.
-
-    所有来源配置共用同一 Fat Cat 读取入口。
-    """
-    return select_metadata_target(
-        slicer=slicer, printer_id=printer_id, nozzle_size=nozzle_size,
-        device_profile_id=device_profile_id, build_plate_id=build_plate_id,
     )
 
 
@@ -197,7 +150,7 @@ def native_source_for_target(target: MetadataTarget) -> dict[str, Any]:
     return matches[0]
 
 
-def select_builtin_metadata_target(
+def select_metadata_target(
     *,
     slicer: str,
     printer_id: str,
@@ -304,7 +257,6 @@ def select_builtin_metadata_target(
         machine_uid=str(source["machine_uid"]),
         nozzle_uid=nozzle_uid,
         build_plate_uid=plate_uid,
-        hardware_mode="preserve_source",
     )
 
 
@@ -454,13 +406,10 @@ def build_merged_project_settings_request(
     *,
     target: MetadataTarget,
     sources: Sequence[tuple[str, Mapping[str, object], Sequence[object]]],
-    consumer_type: str = "merged",
 ) -> dict[str, Any]:
     """Pass source projects and slot identities for C++ batch composition.
 
     将源项目设置和槽位身份传给 C++，由 Fat Cat 合成批量项目设置。
-    consumer_type is accepted for compatibility and ignored.
-    consumer_type 仅为兼容旧调用而保留，不影响合成结果。
     """
 
     merge_sources: list[dict[str, Any]] = []
@@ -505,15 +454,11 @@ def build_merged_model_metadata_request(
     objects: Sequence[Mapping[str, object]],
     bed_type: str,
     wipe_tower_placement: Mapping[str, object],
-    consumer_type: str = "merged",
     source_slice_info_xml: str | None = None,
 ) -> dict[str, Any]:
     """Describe final merged objects and caller-computed placement to Fat Cat.
 
     将最终对象及调用方计算的布局位置传给 Fat Cat。
-
-    consumer_type is accepted for compatibility and ignored.
-    consumer_type 仅为兼容旧调用而保留，不参与元数据决策。
     """
 
     request = {
@@ -636,8 +581,6 @@ def _load_fatcat() -> Any:
             "native_project_source_catalog",
             "compose_model_metadata",
             "patch_wipe_tower",
-            "source_material_settings_parts",
-            "extract_source_material_slots",
             "template_import_parts",
             "detect_template_source",
             "import_template_metadata",
@@ -758,57 +701,6 @@ def import_template_metadata(
     except RuntimeError as exc:
         raise ValueError(str(exc)) from exc
     return _parse_native_json(raw)
-
-
-def source_material_settings_parts(target: MetadataTarget | SourceMaterialTarget) -> dict[str, Any]:
-    """Read the source project/model settings paths from Fat Cat target data.
-
-    从 Fat Cat 目标数据读取源项目设置和模型设置的包内路径。
-
-    Args:
-        target: Selected source material identity.
-            已选中的源耗材身份。
-
-    Returns:
-        Mapping of the existing ``project_settings`` and ``model_settings``
-        roles to package member paths. (现有两个 role 对应的包内路径。)
-    """
-
-    request_json = _target_selection_json(target)
-    raw = _load_fatcat().source_material_settings_parts(request_json)
-    return _parse_native_json(raw)
-
-
-def extract_source_material_slots(
-    project_settings_json: str,
-    model_settings_xml: str,
-    *,
-    target: MetadataTarget | SourceMaterialTarget,
-) -> list[dict[str, Any]]:
-    """Extract source slot identities through the installed Fat Cat binding.
-
-    通过已安装的 Fat Cat binding 提取源文件耗材槽身份。
-
-    Args:
-        project_settings_json: UTF-8 project settings text.
-            UTF-8 项目设置文本。
-        model_settings_xml: UTF-8 model settings text.
-            UTF-8 模型设置文本。
-        target: Selected source material identity.
-            已选中的源耗材身份。
-
-    Returns:
-        Source-order slot records matching the four-field sidecar contract.
-        (符合四字段 sidecar 合同的源槽顺序记录。)
-    """
-
-    request_json = _target_selection_json(target)
-    raw = _load_fatcat().extract_source_material_slots(
-        project_settings_json,
-        model_settings_xml,
-        request_json,
-    )
-    return json.loads(raw)
 
 
 @lru_cache(maxsize=None)

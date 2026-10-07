@@ -42,109 +42,16 @@ class PuzzlePiece3MFSource:
 
 def assemble_puzzle_3mf(
     piece_sources: list[PuzzlePiece3MFSource],
-    output_path: str,
-    preview_colors: dict[object, object] | None,
-    slot_names: list[str] | None,
-    printer_id: str,
-    slicer: str,
-    nozzle_size: str = "0.4",
-    overview_png_bytes: bytes | None = None,
-    device_profile_id: str | None = None,
-    build_plate_id: str | None = None,
-    enable_wipe_tower_auto_placement: bool = True,
-) -> str:
-    """Assemble multiple puzzle piece 3MF files into one grouped 3MF.
-    将多个拼图单块 3MF 组装为一个按块分组的统一 3MF。
-
-    Source metadata is read by Fat Cat; the shared merged writer preserves
-    piece placement and writes the final package once through neroued.
-    源元数据由 Fat Cat 读取，共用合并写入器保留拼图位置并通过 neroued 一次写包。
-
-    Args:
-        piece_sources: Per-piece 3MF sources with global placement offsets.
-            带有全局装配偏移量的单块 3MF 源列表。
-        output_path: Target output 3MF path.
-            目标输出 3MF 路径。
-        preview_colors: Preview color mapping from the converter cache.
-            来自 converter 缓存的预览颜色映射。
-        slot_names: Slot-name list matching preview color IDs when needed.
-            当颜色映射按槽位 ID 保存时使用的槽位名称列表。
-        printer_id: Printer profile identifier.
-            打印机配置 ID。
-        slicer: Slicer software identifier.
-            切片软件 ID。
-        nozzle_size: Nozzle size variant for template selection.
-            喷嘴尺寸变体，用于模板选择。
-        overview_png_bytes: Combined assembly preview PNG reused for package thumbnails.
-            （组合总览 PNG，可复用于包内缩略图资源）
-        device_profile_id: Optional generated machine registry profile ID.
-            可选的生成式机器注册表设备配置 ID。
-        enable_wipe_tower_auto_placement: Whether to solve one wipe-tower
-            layout for the final combined geometry.（是否针对最终组合几何求解
-            一次擦料塔布局。）
-
-    Returns:
-        str: Output 3MF path.
-            输出 3MF 文件路径。
-
-    Raises:
-        ValueError: If no valid piece geometry can be assembled.
-            当无法组装出任何有效几何时抛出。
-    """
-    if not piece_sources:
-        raise ValueError("Puzzle 3MF assembly received no piece sources.")
-
-    from utils.fatcat_metadata import read_source_metadata, select_metadata_target
-    from utils.merged_bambu_3mf_writer import MaterialSlot
-
-    metadata_target = select_metadata_target(
-        slicer=slicer,
-        printer_id=printer_id,
-        nozzle_size=nozzle_size,
-        device_profile_id=device_profile_id,
-        build_plate_id=build_plate_id,
-    )
-    piece_slots = [
-        tuple(
-            MaterialSlot(**slot)
-            for slot in read_source_metadata(
-                piece_source.threemf_path,
-                target=metadata_target,
-            )["slots"]
-        )
-        for piece_source in piece_sources
-    ]
-    return assemble_puzzle_3mf_fatcat(
-        piece_sources=piece_sources,
-        piece_slots=piece_slots,
-        output_path=output_path,
-        slot_names=slot_names,
-        preview_colors=preview_colors,
-        slot_index_by_name=None,
-        printer_id=printer_id,
-        slicer=slicer,
-        nozzle_size=nozzle_size,
-        device_profile_id=device_profile_id,
-        build_plate_id=build_plate_id,
-        overview_png_bytes=overview_png_bytes,
-        metadata_target=metadata_target,
-        enable_wipe_tower_auto_placement=enable_wipe_tower_auto_placement,
-    )
-
-
-def assemble_puzzle_3mf_fatcat(
-    piece_sources: list[PuzzlePiece3MFSource],
     piece_slots: Sequence[Sequence[Any]],
     output_path: str,
     slot_names: list[str] | None,
     preview_colors: dict[object, object] | None,
     slot_index_by_name: Mapping[str, int] | None,
     printer_id: str,
-    slicer: str,
     nozzle_size: str,
-    device_profile_id: str,
-    build_plate_id: str,
-    overview_png_bytes: bytes,
+    device_profile_id: str | None,
+    build_plate_id: str | None,
+    overview_png_bytes: bytes | None,
     metadata_target: Any,
     enable_wipe_tower_auto_placement: bool = True,
 ) -> str:
@@ -164,7 +71,6 @@ def assemble_puzzle_3mf_fatcat(
         slot_index_by_name: Business palette slot to source-array index.
             业务调色板槽位到源数组索引的映射。
         printer_id: Selected Lumina printer profile. (所选 Lumina 打印机配置)
-        slicer: Explicit selected slicer. (明确选择的切片软件)
         nozzle_size: Selected nozzle size. (所选喷嘴尺寸)
         device_profile_id: Explicit slicer device profile. (明确的切片器设备配置)
         build_plate_id: Explicit native build plate. (明确的原生打印板)

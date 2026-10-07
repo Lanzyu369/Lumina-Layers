@@ -189,8 +189,9 @@ automatically reinstall that snapshot as a local template.
 - `utils/bambu_3mf_writer.py`: single export, explicit user-template path, and final package writing.
 - `utils/merged_bambu_3mf_writer.py`: source-project-preserving merged export.
 - `core/machine_process_overlay.py`: explicit Lumina product process values; it does not load
-  machine templates. The old `apply_lumina_process_overlay` name remains a compatibility
-  wrapper; new export code passes explicit process values directly.
+  machine templates. Export code passes the explicit process values to FatCat.
+- `core/puzzle_3mf.py`: one puzzle assembly entry using the shared merged writer;
+  the caller supplies source material identities and Lumina-computed placement.
 - `machine_registry/registry.json` and its plate assets: user-facing device choices and UI facts.
 - `tools/machine_adapter/`: refreshes Lumina's picker registry from explicit local slicer
   sources; it does not produce 3MF project templates.

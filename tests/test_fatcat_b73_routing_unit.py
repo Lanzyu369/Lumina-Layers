@@ -37,7 +37,6 @@ def test_each_real_alias_nozzle_and_valid_plate_delegates_hardware_selection(dev
             build_plate_id=plate.id,
         )
         assert target is not None
-        assert target.hardware_mode == "preserve_source"
         assert target.machine_uid == f"bambu-lab:{machine}"
         assert target.nozzle_uid == f"nozzle:{device.nozzle_size}mm"
         assert target.application_version == {"BambuStudio": "02.08.02.61", "OrcaSlicer": "2.4.2"}[device.slicer_id]
@@ -59,7 +58,6 @@ def test_exact_registry_profile_pins_source_hardware():
         device_profile_id="BambuStudio:bbl:bambu-lab-x1-carbon:0.4",
         build_plate_id="textured-pei-plate",
     )
-    assert target.hardware_mode == "preserve_source"
     assert target.machine_uid == "bambu-lab:x1-carbon"
     assert target.nozzle_uid == "nozzle:0.4mm"
 

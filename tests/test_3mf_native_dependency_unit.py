@@ -258,7 +258,6 @@ def test_public_fatcat_source_builds_without_a_token() -> None:
     assert "fatcat_root / \"pyproject.toml\"" in build_script
 
     for workflow in (
-        ROOT / ".github" / "workflows" / "build.yml",
         ROOT / ".github" / "workflows" / "layered-mesh-geometry.yml",
         ROOT / ".github" / "workflows" / "native-svg-core.yml",
     ):

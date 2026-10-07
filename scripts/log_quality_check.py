@@ -612,7 +612,7 @@ def run_fast_mode(temp_log_path: Path, workflow: list[str]) -> dict[str, Any]:
                     ),
                 ),
                 patch(
-                    "api.routers.converter.puzzle.assemble_puzzle_3mf_fatcat",
+                    "api.routers.converter.puzzle.assemble_puzzle_3mf",
                     side_effect=_mock_assemble_puzzle_3mf,
                 ),
                 # Fast workers emit sentinel bytes; metadata reads belong to
@@ -1381,7 +1381,7 @@ def _build_mock_generate_result(created_paths: list[Path], *, worker_name: str =
 
 
 def _mock_assemble_puzzle_3mf(*, output_path: str, **_kwargs: Any) -> str:
-    """Fast-mode stub for ``core.puzzle_3mf.assemble_puzzle_3mf_fatcat``.
+    """Fast-mode stub for ``core.puzzle_3mf.assemble_puzzle_3mf``.
 
     Writes a placeholder byte payload to ``output_path`` so the puzzle endpoint
     success path can complete. The endpoint emits its canary log and registers

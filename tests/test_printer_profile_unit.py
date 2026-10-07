@@ -36,7 +36,7 @@ REQUIRED_FIELDS = (
 
 
 # ====================================================================
-# Task 7.1 — Registry queries, default fallback, template loading
+# Registry queries, default selection, and native export settings
 # ====================================================================
 
 
@@ -195,8 +195,8 @@ class TestLoadExportProjectSettings:
         assert template["printer_model"] == model
         assert template["printer_settings_id"] == source_profile_name
         assert template["nozzle_diameter"] == [nozzle_size] * physical_tools
-        assert template["version"] == "2.3.2"
-        assert template["filament_vendor"] == ["Flashforge"] * 8
+        assert template["version"] == "02.06.00.51"
+        assert template["filament_vendor"] == ["Flashforge"]
         assert "Flashforge" in str(template["default_filament_profile"])
 
     @pytest.mark.parametrize(

@@ -33,8 +33,6 @@ FATCAT_REQUIRED_ENTRY_POINTS = (
     "compose_project_settings",
     "compose_model_metadata",
     "patch_wipe_tower",
-    "source_material_settings_parts",
-    "extract_source_material_slots",
     "read_source_metadata",
     "read_project_layout",
     "read_placement_warnings",

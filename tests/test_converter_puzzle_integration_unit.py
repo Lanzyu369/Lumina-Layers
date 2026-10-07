@@ -384,7 +384,7 @@ class TestGeneratePuzzleCanary:
         target_logger = _capture_puzzle_logger(caplog)
         try:
             with patch(
-                "api.routers.converter.puzzle.assemble_puzzle_3mf_fatcat",
+                "api.routers.converter.puzzle.assemble_puzzle_3mf",
                 side_effect=_assemble_stub,
             ):
                 response = client.post(
@@ -495,7 +495,7 @@ def test_generate_puzzle_runs_bounded_parallel_pieces_in_layout_order(
     body["params"]["params"]["modeling_mode"] = "vector"
     body['params']['params']['backing_infill_density_percent'] = 20
     body['params']['params']['enable_base_layer_height_modifier'] = False
-    with patch.object(puzzle_router, "assemble_puzzle_3mf_fatcat", side_effect=assemble_pieces):
+    with patch.object(puzzle_router, "assemble_puzzle_3mf", side_effect=assemble_pieces):
         response = puzzle_harness["client"].post(
             "/api/convert/generate-puzzle", json=body,
         )
@@ -532,7 +532,7 @@ def test_generate_puzzle_drains_failed_batch_and_tracks_successful_outputs(
         }
 
     pool.submit = AsyncMock(side_effect=submit_piece)
-    with patch.object(puzzle_router, "assemble_puzzle_3mf_fatcat") as assemble:
+    with patch.object(puzzle_router, "assemble_puzzle_3mf") as assemble:
         response = puzzle_harness["client"].post(
             "/api/convert/generate-puzzle",
             json=_generate_puzzle_body(session_id),
@@ -649,7 +649,7 @@ class TestDynamicPuzzlePreviewReuse:
 
         pool.submit = AsyncMock(side_effect=_submit_stub)
         with patch(
-            "api.routers.converter.puzzle.assemble_puzzle_3mf_fatcat",
+            "api.routers.converter.puzzle.assemble_puzzle_3mf",
             side_effect=_assemble_stub,
         ):
             response = client.post(
@@ -692,7 +692,7 @@ class TestDynamicPuzzlePreviewReuse:
 
         pool.submit = AsyncMock(side_effect=_submit_stub)
         with patch(
-            "api.routers.converter.puzzle.assemble_puzzle_3mf_fatcat",
+            "api.routers.converter.puzzle.assemble_puzzle_3mf",
             side_effect=_assemble_stub,
         ):
             response = client.post(
@@ -805,7 +805,7 @@ class TestDynamicPuzzlePreviewReuse:
 
         pool.submit = AsyncMock(side_effect=_submit_stub)
         with patch(
-            "api.routers.converter.puzzle.assemble_puzzle_3mf_fatcat",
+            "api.routers.converter.puzzle.assemble_puzzle_3mf",
             side_effect=_assemble_stub,
         ):
             response = client.post(
@@ -893,7 +893,7 @@ class TestDynamicPuzzlePreviewReuse:
 
         pool.submit = AsyncMock(side_effect=_submit_stub)
         with patch(
-            "api.routers.converter.puzzle.assemble_puzzle_3mf_fatcat",
+            "api.routers.converter.puzzle.assemble_puzzle_3mf",
             side_effect=_assemble_stub,
         ):
             response = client.post(

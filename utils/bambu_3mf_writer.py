@@ -733,7 +733,6 @@ def load_export_project_settings(
         build_builtin_project_settings_request,
         compose_builtin_project_settings,
         native_source_for_target,
-        select_builtin_metadata_target,
     )
 
     selected_nozzle_size = nozzle_size
@@ -750,7 +749,7 @@ def load_export_project_settings(
     if selected_nozzle_size is None:
         selected_nozzle_size = "0.4"
 
-    target = select_builtin_metadata_target(
+    target = select_metadata_target(
         slicer=slicer,
         printer_id=printer_id,
         nozzle_size=selected_nozzle_size,
@@ -1345,18 +1344,19 @@ class BambuStudio3MFWriter:
         为本次导出统一选择 Fat Cat 元数据目标。
         """
 
-        selector = (
-            select_user_template_metadata_target
-            if self._custom_template is not None
-            else select_metadata_target
-        )
-        target = selector(
-            slicer=self.slicer,
-            printer_id=self.printer_id,
-            nozzle_size=self.nozzle_size,
-            device_profile_id=self.device_profile_id,
-            build_plate_id=self.build_plate_id,
-        )
+        if self._custom_template is not None:
+            target = select_user_template_metadata_target(
+                slicer=self.slicer,
+                build_plate_id=self.build_plate_id,
+            )
+        else:
+            target = select_metadata_target(
+                slicer=self.slicer,
+                printer_id=self.printer_id,
+                nozzle_size=self.nozzle_size,
+                device_profile_id=self.device_profile_id,
+                build_plate_id=self.build_plate_id,
+            )
         if self._template_build_plate is not None:
             return replace(target, build_plate_uid=self._template_build_plate["build_plate_uid"])
         return target
@@ -2108,7 +2108,7 @@ class BambuStudio3MFWriter:
 
 
 # ======================================================================
-# Public convenience function (signature unchanged from original)
+# Scene export entry and generated placement warnings.
 # ======================================================================
 
 

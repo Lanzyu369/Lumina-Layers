@@ -64,7 +64,6 @@ def test_target_selection_uses_exact_runtime_profile(slicer: str, version: str) 
     target = select_metadata_target(**common)
     assert target is not None
     assert target.application_version == version
-    assert target.hardware_mode == "preserve_source"
     assert target.machine_uid == "bambu-lab:a1-mini"
     assert target.nozzle_uid == "nozzle:0.4mm"
     assert target.build_plate_uid == "plate:textured-pei"
@@ -73,7 +72,6 @@ def test_target_selection_uses_exact_runtime_profile(slicer: str, version: str) 
         "nozzle_size": "0.6",
         "device_profile_id": f"{slicer}:bbl:bambu-lab-a1-mini:0.6",
     })
-    assert wide_nozzle.hardware_mode == "preserve_source"
     assert wide_nozzle.nozzle_uid == "nozzle:0.6mm"
     alternative_plate = "smooth-pei-plate" if slicer == "BambuStudio" else "smooth-high-temp-plate"
     alternative_uid = "plate:smooth-pei"
@@ -81,7 +79,6 @@ def test_target_selection_uses_exact_runtime_profile(slicer: str, version: str) 
         **common,
         "build_plate_id": alternative_plate,
     }).build_plate_uid == alternative_uid
-    assert select_metadata_target(**{**common, "device_profile_id": None}).hardware_mode == "preserve_source"
     flashstudio = select_metadata_target(
         slicer="FlashStudio", printer_id="flashforge-ad5x", nozzle_size="0.4",
         device_profile_id="FlashStudio:flashforge:flashforge-ad5x:0.4",
