@@ -28,17 +28,15 @@ Lumina 不再维护 `printer_profiles/*.json` 或
 旧 UI 设备 ID 到 FatCat 稳定 `machine_uid` / `nozzle_uid` 的映射必须同时匹配
 切片器、原生 profile 名和喷嘴。
 
-`source_version`、3MF `application_metadata`、`client_version` 和 profile
-`revision` 各自含义不同：
+设备目录只保留 UI 所需的来源身份和硬件事实：
 
 | 字段 | 用途 |
 |---|---|
 | `source_version` | profile 来源包的版本 |
-| `application_metadata` | 3MF 中声明的目标切片器版本 |
-| `client_version` | 切片器项目头中的客户端版本 |
 | `revision` | UI picker 来源记录的原生 profile 内容哈希 |
 
-更新其中一个值时，不要从其余值推导替代。
+3MF 的 Application、客户端版本头和附属文件策略由 FatCat 根据实际目标
+软件版本生成。Lumina 的目录、provider 和导入命令不保存或覆盖这些值。
 
 ## 更新 Lumina 设备 picker
 
@@ -94,8 +92,9 @@ python -m tools.machine_adapter.sync_prusa_assets \
 工艺快照。图片及索引随 `machine_registry/` 一起安装，运行时无需联网或安装
 PrusaSlicer。来源记录见该版本目录中的 `SOURCES.md`。
 
-设备列表的切片软件支持范围直接取已加载的设备目录，不再从
-`PrinterProfile` 的旧模板文件名推断；旧模板标签只保留兼容接口用途。
+设备列表的切片软件支持范围直接取已加载的设备目录。`PrinterProfile`
+只保存几何和设备选择使用的硬件事实；旧模板文件名、切片器模板映射和
+拼接模板文件名的方法已经删除。
 
 ## 更新 FatCat 原生配置
 
@@ -123,8 +122,9 @@ FatCat Python 包名为 `fatcat-metadata`，import 名为 `fatcat_metadata`，�
 `0.1.0`。Lumina 的打包合同要求 `native_project_source_catalog` 和随包的
 `native_project_sources/source-index.json`。Lumina 只通过公共目录 API 解析 picker
 身份；C++ 消费者可使用 FatCat 的 `native_project_source_catalog` 和
-`compose_builtin_project_settings`，旧四参 `compose_project_settings` 仍用于
-显式项目来源。
+`compose_builtin_project_settings`，四参 `compose_project_settings` 用于
+显式项目来源。Lumina 的 `load_export_project_settings` 读取内置来源或用户
+保存的项目，导出入口不再接收已经不起作用的 `metadata_consumer_type` 参数。
 
 ## 3MF 导出维护检查
 

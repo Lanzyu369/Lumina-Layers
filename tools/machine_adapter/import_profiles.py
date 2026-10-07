@@ -57,8 +57,6 @@ class ImportSource:
     source_version: str
     vendor_keys: tuple[str, ...]
     machine_name: str | None = None
-    application_metadata: str | None = None
-    client_version: str | None = None
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -437,8 +435,6 @@ def run_import(
     vendor_keys: tuple[str, ...],
     output_root: Path,
     machine_name: str | None = None,
-    application_metadata: str | None = None,
-    client_version: str | None = None,
     build_plate_source_roots: dict[str, Path] | None = None,
 ) -> ImportResult:
     source = ImportSource(
@@ -447,8 +443,6 @@ def run_import(
         source_version=source_version,
         vendor_keys=vendor_keys,
         machine_name=machine_name,
-        application_metadata=application_metadata,
-        client_version=client_version,
     )
     slicer_payload, device_count = _collect_import_payload(
         source,
@@ -515,7 +509,7 @@ def _collect_import_payload(
                 settings=profile.settings,
             ):
                 continue
-            entry, _retired_template_output = build_device_registry_entry(
+            entry = build_device_registry_entry(
                 provider=provider,
                 source_version=source_version,
                 profile=profile,
@@ -600,34 +594,15 @@ def _collect_import_payload(
         machines[machine_id]["supported_build_plate_ids"] = supported_build_plate_ids
         machines[machine_id]["default_build_plate_id"] = default_build_plate_id
 
-    if source.application_metadata is not None:
-        application_metadata = source.application_metadata
-    elif provider.default_application_metadata is not None:
-        application_metadata = provider.default_application_metadata
-    else:
-        application_metadata = (
-            f"ElegooSlicer-{source_version}"
-            if provider.slicer_id == "ElegooSlicer"
-            else f"{provider.slicer_id}-{source_version}"
-        )
-    client_version = (
-        source.client_version
-        if source.client_version is not None
-        else provider.default_client_version
-    )
     slicer_payload = {
         "slicer_id": provider.slicer_id,
         "display_name": provider.display_name,
         "source_kind": "local_install",
         "source_version": source_version,
         "profile_format": provider.profile_format,
-        "application_metadata": application_metadata,
-        "sidecar_policy": provider.sidecar_policy,
         "build_plates": build_plates,
         "machines": list(machines.values()),
     }
-    if client_version is not None:
-        slicer_payload["client_version"] = client_version
     device_count = sum(len(machine["nozzles"]) for machine in machines.values())
     return slicer_payload, device_count
 
@@ -712,8 +687,6 @@ def main() -> int:
     parser.add_argument("--slicer", required=True)
     parser.add_argument("--source-root", required=True)
     parser.add_argument("--source-version", required=True)
-    parser.add_argument("--application-metadata")
-    parser.add_argument("--client-version")
     parser.add_argument("--vendor", action="append", dest="vendors")
     parser.add_argument("--machine-name")
     parser.add_argument("--output", required=True)
@@ -727,8 +700,6 @@ def main() -> int:
         vendor_keys=tuple(args.vendors or provider.default_vendor_keys),
         output_root=Path(args.output),
         machine_name=args.machine_name,
-        application_metadata=args.application_metadata,
-        client_version=args.client_version,
     )
     print(f"Imported {result.device_count} device profiles")
     return 0

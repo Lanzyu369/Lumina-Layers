@@ -32,16 +32,15 @@ class BuildPlateProfile:
 
 @dataclass(frozen=True)
 class DeviceProfile:
-    """Resolved Lumina device profile at slicer + machine + nozzle grain."""
+    """UI device identity and hardware at slicer + machine + nozzle grain.
+    按切片器、机器和喷嘴确定的 UI 设备身份与硬件信息。
+    """
 
     device_profile_id: str
     machine_profile_id: str
     slicer_id: str
     slicer_display_name: str
     source_version: str
-    application_metadata: str
-    client_version: str
-    sidecar_policy: str
     display_name: str
     brand: str
     vendor_key: str
@@ -52,7 +51,6 @@ class DeviceProfile:
     bed_model: str
     nozzle_size: str
     source_profile_name: str
-    template: str
     revision: str
     supported: bool
     build_plates: tuple[BuildPlateProfile, ...]
@@ -462,9 +460,6 @@ def load_machine_registry(path: str | Path) -> MachineRegistry:
                     slicer_id=slicer_id,
                     slicer_display_name=str(slicer["display_name"]),
                     source_version=str(slicer["source_version"]),
-                    application_metadata=str(slicer["application_metadata"]),
-                    client_version=str(slicer.get("client_version") or ""),
-                    sidecar_policy=str(slicer["sidecar_policy"]),
                     display_name=str(machine["display_name"]),
                     brand=str(machine["brand"]),
                     vendor_key=str(machine["vendor_key"]),
@@ -475,7 +470,6 @@ def load_machine_registry(path: str | Path) -> MachineRegistry:
                     bed_model=str(machine.get("bed_model", "")),
                     nozzle_size=str(nozzle["nozzle_size"]),
                     source_profile_name=str(nozzle["source_profile_name"]),
-                    template=str(nozzle.get("template") or ""),
                     revision=str(nozzle["revision"]),
                     supported=bool(nozzle.get("supported", True)),
                     build_plates=machine_build_plates,
@@ -531,14 +525,13 @@ def _add_prusa_devices(
         device = DeviceProfile(
             device_profile_id=device_id, machine_profile_id=machine_id,
             slicer_id="PrusaSlicer", slicer_display_name=f"PrusaSlicer {version}",
-            source_version=version, application_metadata=f"PrusaSlicer-{version}",
-            client_version=version, sidecar_policy="native", display_name=str(source["display_name"]),
+            source_version=version, display_name=str(source["display_name"]),
             brand="Prusa", vendor_key="PrusaResearch", bed_width=int(bed["width"]),
             bed_depth=int(bed["height"]), bed_height=int(bed["max_print_height"]),
             thumbnail=str(thumbnails.get(source["machine_uid"], "")),
             bed_model="", nozzle_size=nozzle,
             source_profile_name=str(source["source_machine_profile_name"]),
-            template="", revision=version, supported=True,
+            revision=version, supported=True,
             build_plates=(plate,), default_build_plate_id=plate_id,
         )
         devices[device_id] = device

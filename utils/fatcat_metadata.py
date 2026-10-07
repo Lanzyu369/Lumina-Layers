@@ -99,16 +99,12 @@ def select_metadata_target(
     nozzle_size: object,
     device_profile_id: str | None,
     build_plate_id: str | None,
-    metadata_consumer_type: str = "",
 ) -> MetadataTarget:
     """Resolve the selected Lumina device to one exact Fat Cat source.
 
     将 Lumina 已选设备映射到一个精确 Fat Cat 来源。
-    ``metadata_consumer_type`` remains accepted for compatibility.
-    保留 ``metadata_consumer_type`` 参数以兼容旧调用。
     """
 
-    del metadata_consumer_type
     return select_builtin_metadata_target(
         slicer=slicer,
         printer_id=printer_id,

@@ -6,12 +6,8 @@ import json
 from importlib.machinery import EXTENSION_SUFFIXES
 from pathlib import Path
 import runpy
-import shutil
 import sys
 from types import ModuleType, SimpleNamespace
-
-import pytest
-
 
 ROOT = Path(__file__).resolve().parents[1]
 FAKE_NATIVE_EXTENSION_PATH = Path("/tmp") / (
@@ -160,12 +156,6 @@ def test_pyinstaller_spec_bundles_colorchecker_reference_data(monkeypatch) -> No
     )
 
 
-def test_pyinstaller_spec_bundles_registry_project_profile_dependencies() -> None:
-    spec = (ROOT / "lumina_studio.spec").read_text(encoding="utf-8")
-
-    assert spec.count("('printer_profiles', 'printer_profiles')") == 1
-
-
 def test_electron_does_not_duplicate_pyinstaller_machine_registry() -> None:
     package_json = json.loads(
         (ROOT / "electron" / "package.json").read_text(encoding="utf-8")
@@ -196,50 +186,6 @@ def test_desktop_build_checks_geometry_dependencies_before_pyinstaller() -> None
     deps_index = build_script.rindex("check_core_geometry_dependencies_available()")
     pyinstaller_index = build_script.index("pyinstaller lumina_studio.spec")
     assert deps_index < pyinstaller_index
-
-
-def test_production_pyinstaller_spec_packages_printer_templates() -> None:
-    spec = (ROOT / "lumina_studio.spec").read_text(encoding="utf-8")
-
-    assert "('printer_profiles', 'printer_profiles')" in spec
-    assert "('bambu_config_template.json', '.')" in spec
-    assert "('lut-preset', 'lut-preset')" in spec
-
-
-def test_frozen_meipass_loads_packaged_orca_p2s_profile(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The production spec must materialize templates where the loader reads."""
-
-    shutil.copytree(ROOT / "printer_profiles", tmp_path / "printer_profiles")
-    shutil.copy2(
-        ROOT / "bambu_config_template.json",
-        tmp_path / "bambu_config_template.json",
-    )
-
-    from utils.bambu_3mf_writer import (
-        _PRINTER_TEMPLATE_CACHE,
-        load_printer_template,
-    )
-
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
-    _PRINTER_TEMPLATE_CACHE.clear()
-    try:
-        template = load_printer_template(
-            "bambu-p2s",
-            slicer="OrcaSlicer",
-            nozzle_size="0.4",
-        )
-    finally:
-        _PRINTER_TEMPLATE_CACHE.clear()
-
-    assert template
-    assert template["initial_layer_print_height"] == "0.08"
-    assert template["print_compatible_printers"] == [
-        "Bambu Lab P2S 0.4 nozzle"
-    ]
 
 
 def test_electron_build_packages_workshop_security_boundary() -> None:

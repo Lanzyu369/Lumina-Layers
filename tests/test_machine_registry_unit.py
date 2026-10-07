@@ -73,8 +73,6 @@ def test_load_machine_registry_indexes_device_profiles(tmp_path):
                         "source_kind": "local_install",
                         "source_version": "02.07.01.57",
                         "profile_format": "bambu_orca",
-                        "application_metadata": "BambuStudio-02.07.01.57",
-                        "sidecar_policy": "bambu_studio",
                         "build_plates": [
                             {
                                 "id": "textured-pei",
@@ -110,10 +108,6 @@ def test_load_machine_registry_indexes_device_profiles(tmp_path):
                                         "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d:0.4",
                                         "nozzle_size": "0.4",
                                         "source_profile_name": "Bambu Lab H2D 0.4 nozzle",
-                                        "template": (
-                                            "slicers/BambuStudio/02.07.01.57/"
-                                            "metadata_templates/h2d_0_4.json"
-                                        ),
                                         "revision": "sha256:abc",
                                         "supported": True,
                                     }
@@ -134,8 +128,6 @@ def test_load_machine_registry_indexes_device_profiles(tmp_path):
     assert profile.slicer_id == "BambuStudio"
     assert profile.machine_profile_id == "BambuStudio:bbl:bambu-lab-h2d"
     assert profile.nozzle_size == "0.4"
-    assert profile.application_metadata == "BambuStudio-02.07.01.57"
-    assert profile.sidecar_policy == "bambu_studio"
     assert profile.bed_model == "bbl-3dp-H2D.stl"
     assert profile.default_build_plate_id == "textured-pei"
     assert [plate.id for plate in profile.build_plates] == ["textured-pei"]
@@ -162,8 +154,6 @@ def test_resolve_installed_bed_model_stays_inside_the_matching_slicer_bundle(
                         "slicer_id": "OrcaSlicer",
                         "display_name": "OrcaSlicer",
                         "source_version": "02.04.00.00",
-                        "application_metadata": "BambuStudio-02.04.00.00",
-                        "sidecar_policy": "orca_like",
                         "build_plates": [],
                         "machines": [
                             {
@@ -183,7 +173,6 @@ def test_resolve_installed_bed_model_stays_inside_the_matching_slicer_bundle(
                                         "device_profile_id": "OrcaSlicer:bbl:a1-mini:0.4",
                                         "nozzle_size": "0.4",
                                         "source_profile_name": "A1 mini 0.4 nozzle",
-                                        "template": "template.json",
                                         "revision": "sha256:test",
                                         "supported": True,
                                     }
@@ -356,8 +345,6 @@ def test_load_machine_registry_rejects_duplicate_build_plate_ids(tmp_path):
                         "slicer_id": "OrcaSlicer",
                         "display_name": "OrcaSlicer",
                         "source_version": "02.04.00.00",
-                        "application_metadata": "BambuStudio-02.04.00.00",
-                        "sidecar_policy": "orca_like",
                         "build_plates": [plate, dict(plate)],
                         "machines": [],
                     }
@@ -383,8 +370,6 @@ def test_load_machine_registry_rejects_unknown_machine_build_plate_reference(tmp
                         "slicer_id": "BambuStudio",
                         "display_name": "Bambu Studio",
                         "source_version": "02.07.01.57",
-                        "application_metadata": "BambuStudio-02.07.01.57",
-                        "sidecar_policy": "bambu_studio",
                         "build_plates": [],
                         "machines": [
                             {
@@ -425,8 +410,6 @@ def test_load_machine_registry_rejects_duplicate_device_profile_ids(tmp_path):
                         "source_kind": "local_install",
                         "source_version": "02.07.01.57",
                         "profile_format": "bambu_orca",
-                        "application_metadata": "BambuStudio-02.07.01.57",
-                        "sidecar_policy": "bambu_studio",
                         "machines": [
                             {
                                 "machine_profile_id": "BambuStudio:bbl:bambu-lab-h2d",
@@ -442,7 +425,6 @@ def test_load_machine_registry_rejects_duplicate_device_profile_ids(tmp_path):
                                         "device_profile_id": "duplicate",
                                         "nozzle_size": "0.4",
                                         "source_profile_name": "A",
-                                        "template": "a.json",
                                         "revision": "sha256:a",
                                         "supported": True,
                                     },
@@ -450,7 +432,6 @@ def test_load_machine_registry_rejects_duplicate_device_profile_ids(tmp_path):
                                         "device_profile_id": "duplicate",
                                         "nozzle_size": "0.4",
                                         "source_profile_name": "B",
-                                        "template": "b.json",
                                         "revision": "sha256:b",
                                         "supported": True,
                                     },

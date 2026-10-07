@@ -710,7 +710,7 @@ def _split_layer_config_overrides(
     return segments
 
 
-def load_printer_template(
+def load_export_project_settings(
     printer_id: str,
     slicer: str = "BambuStudio",
     nozzle_size: Optional[str | float] = None,
@@ -718,15 +718,14 @@ def load_printer_template(
     *,
     custom_3mf_template_id: Optional[str] = None,
 ) -> dict:
-    """Load an exact Fat Cat native project or a saved user template.
+    """Resolve export settings from FatCat or a saved user project.
 
     从 Fat Cat 精确原生来源或用户保存的项目模板读取配置。
 
-    The historical positional signature remains available. Built-in targets
-    use the installed Fat Cat source catalog; user templates keep their own
-    project fields and are checked against native hardware facts.
-    保留旧的位置参数签名。内置目标使用已安装 Fat Cat 来源目录；用户模板继续
-    保留其项目字段，并按原生硬件事实校验。
+    Built-in targets use the installed Fat Cat source catalog; user templates
+    keep their own project fields and are checked against native hardware facts.
+    内置目标使用已安装 Fat Cat 来源目录；用户模板保留其项目字段，
+    并按原生硬件事实校验。
     """
 
     from config import normalize_slicer_software_id
@@ -1087,7 +1086,6 @@ class BambuStudio3MFWriter:
         build_plate_id: Optional[str] = None,
         preserve_template_filament_slots: Optional[bool] = None,
         custom_3mf_template_id: Optional[str] = None,
-        metadata_consumer_type: str = "",
         material_types: Mapping[str, str | None] | None = None,
     ):
         """Initialize a writer for an exact native target or saved user project.
@@ -1221,7 +1219,7 @@ class BambuStudio3MFWriter:
         self.cover_bundle: Optional[CoverPngBundle] = None
         self.preserve_template_filament_slots = preserve_template_filament_slots
         self._custom_template = (
-            load_printer_template(
+            load_export_project_settings(
                 self.printer_id, self.slicer, self.nozzle_size, self.device_profile_id,
                 custom_3mf_template_id=custom_3mf_template_id,
             ) if custom_3mf_template_id else None
@@ -2164,7 +2162,6 @@ def export_scene_with_bambu_metadata(
     build_plate_id: Optional[str] = None,
     preserve_template_filament_slots: Optional[bool] = None,
     custom_3mf_template_id: Optional[str] = None,
-    metadata_consumer_type: str = "",
     material_types: Mapping[str, str | None] | None = None,
 ):
     """Export a Trimesh scene to BambuStudio/OrcaSlicer-compatible 3MF with metadata.

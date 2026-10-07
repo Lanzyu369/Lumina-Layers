@@ -360,7 +360,6 @@ def convert_image_to_3d(
     svg_hole_compensation_enabled: bool = False,
     svg_hole_max_area_mm2: float = 0.5,
     svg_hole_max_width_mm: float = 0.1,
-    metadata_consumer_type: str = "",
 ):
     """Main conversion function: Convert image to 3D model.
     主要转换函数：将图像转换为 3D 模型。
@@ -796,7 +795,6 @@ def generate_final_model(
     svg_hole_compensation_enabled: bool = False,
     svg_hole_max_area_mm2: float = 0.5,
     svg_hole_max_width_mm: float = 0.1,
-    metadata_consumer_type: str = "",
 ):
     """Wrapper function for generating final model.
     包装函数，用于生成最终模型。
@@ -830,8 +828,6 @@ def generate_final_model(
         build_plate_id: Optional native slicer build-plate selection forwarded
             to ``convert_image_to_3d`` and 3MF export.
             (可选的切片软件原生打印板 ID，透传到主转换与 3MF 导出)
-        metadata_consumer_type: Deprecated compatibility argument; ignored.
-            (已弃用的兼容参数，不影响导出结果。)
         backing_infill_density_percent: Deep-backing sparse-infill percentage
             forwarded to the 3MF writer.（透传到 3MF 写入器的深层底板稀疏填充
             百分比）

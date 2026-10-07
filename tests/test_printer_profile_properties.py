@@ -5,12 +5,12 @@ Uses Hypothesis to verify correctness properties across all printer profiles.
 使用 Hypothesis 验证所有打印机配置的正确性属性。
 """
 
-import pytest
 from hypothesis import given, assume, settings
 from hypothesis import strategies as st
 
 from config import PRINTER_PROFILES, get_printer_profile, DEFAULT_PRINTER_ID
-from utils.bambu_3mf_writer import load_printer_template
+from core.machine_registry import load_machine_registry, resolve_machine_registry_root
+from utils.bambu_3mf_writer import load_export_project_settings
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +62,7 @@ class TestP1RegistryIntegrity:
 class TestP2TemplateLoadingConsistency:
     """**Validates: Requirements 3.1, 3.2**
 
-    For any printer ID in the registry, load_printer_template returns a JSON
+    For any printer ID in the registry, load_export_project_settings returns a JSON
     where printer_model matches the registry's display_name.
     """
 
@@ -75,12 +75,14 @@ class TestP2TemplateLoadingConsistency:
         **Validates: Requirements 3.1, 3.2**
         """
         profile = PRINTER_PROFILES[printer_id]
-        slicer = (
-            "BambuStudio"
-            if profile.brand == "Bambu Lab"
-            else next(iter(profile.slicer_templates), "BambuStudio")
+        registry = load_machine_registry(resolve_machine_registry_root() / "registry.json")
+        slicer = next(
+            device.slicer_id for device in registry.devices_by_id.values()
+            if device.supported
+            and device.display_name.casefold() == profile.display_name.casefold()
+            and device.brand.casefold() == profile.brand.casefold()
         )
-        template = load_printer_template(printer_id, slicer=slicer)
+        template = load_export_project_settings(printer_id, slicer=slicer)
 
         assert "printer_model" in template, (
             f"Template for '{printer_id}' missing 'printer_model' field"
@@ -138,12 +140,14 @@ class TestP4BedSizeConsistency:
         **Validates: Requirements 3.3, 7.1**
         """
         profile = PRINTER_PROFILES[printer_id]
-        slicer = (
-            "BambuStudio"
-            if profile.brand == "Bambu Lab"
-            else next(iter(profile.slicer_templates), "BambuStudio")
+        registry = load_machine_registry(resolve_machine_registry_root() / "registry.json")
+        slicer = next(
+            device.slicer_id for device in registry.devices_by_id.values()
+            if device.supported
+            and device.display_name.casefold() == profile.display_name.casefold()
+            and device.brand.casefold() == profile.brand.casefold()
         )
-        template = load_printer_template(printer_id, slicer=slicer)
+        template = load_export_project_settings(printer_id, slicer=slicer)
 
         assert "printable_area" in template, (
             f"Template for '{printer_id}' missing 'printable_area' field"

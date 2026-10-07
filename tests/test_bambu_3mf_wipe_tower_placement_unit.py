@@ -121,27 +121,17 @@ def _auto_placement_profile_slicer_cases() -> tuple[
     cases: list[tuple[str, str, str | None]] = []
     registry = load_machine_registry(resolve_machine_registry_root() / "registry.json")
     for profile in list_printer_profiles():
-        slicers = list(profile.slicer_templates)
-        if profile.brand == "Bambu Lab":
-            slicers.insert(0, "BambuStudio")
-        if not slicers:
-            slicers.append("BambuStudio")
-        for slicer in dict.fromkeys(slicers):
-            # The placement matrix follows device profiles that the current
-            # registry can actually select, rather than config-only legacy
-            # slicer-template declarations.
-            devices = [
-                device for device in registry.devices_by_id.values()
-                if device.supported
-                and device.slicer_id == slicer
-                and device.nozzle_size == "0.4"
-                and device.display_name.casefold() == profile.display_name.casefold()
-                and device.brand.casefold() == profile.brand.casefold()
-            ]
-            cases.extend(
-                (profile.id, slicer, device.device_profile_id)
-                for device in devices
-            )
+        devices = [
+            device for device in registry.devices_by_id.values()
+            if device.supported
+            and device.nozzle_size == "0.4"
+            and device.display_name.casefold() == profile.display_name.casefold()
+            and device.brand.casefold() == profile.brand.casefold()
+        ]
+        cases.extend(
+            (profile.id, device.slicer_id, device.device_profile_id)
+            for device in devices
+        )
     return tuple(cases)
 
 

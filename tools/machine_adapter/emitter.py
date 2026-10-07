@@ -104,7 +104,7 @@ def build_device_registry_entry(
     provider: MachineAdapterProvider,
     source_version: str,
     profile: ResolvedMachineProfile,
-) -> tuple[dict[str, Any], dict[str, Any]]:
+) -> dict[str, Any]:
     """Build a UI registry entry from the exact native machine profile.
     从精确原生机器配置构建设备 UI 注册表条目。
 
@@ -114,8 +114,8 @@ def build_device_registry_entry(
         profile: Resolved native printer profile.（已解析的原生打印机配置）
 
     Returns:
-        Registry entry and an empty compatibility value for the retired template
-        output.（注册表条目及已退役模板输出的空兼容值）
+        UI registry entry without project settings or metadata templates.
+        （不含项目设置或元数据模板的 UI 注册表条目）
     """
     settings = dict(profile.settings)
     printer_model = str(settings.get("printer_model") or profile.name)
@@ -146,11 +146,6 @@ def build_device_registry_entry(
         "source_profile_name": profile.name,
         "revision": revision,
         "supported": True,
-        "application_metadata": (
-            provider.default_application_metadata
-            or f"{provider.slicer_id}-{source_version}"
-        ),
-        "sidecar_policy": provider.sidecar_policy,
         "source_hashes": source_hashes,
     }
-    return entry, {}
+    return entry

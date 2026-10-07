@@ -34,8 +34,6 @@ def test_entry_context_preserves_arguments_and_object_identity(
     bound = signature.bind(**supplied)
     bound.apply_defaults()
     expected = dict(bound.arguments)
-    # The deprecated compatibility argument remains accepted but has no effect.
-    expected.pop("metadata_consumer_type", None)
     pipeline = "build_image_model_context" if entry is convert_image_to_3d else "run_preview_pipeline"
 
     with (
@@ -48,7 +46,6 @@ def test_entry_context_preserves_arguments_and_object_identity(
             entry(**bound.arguments)
 
     received = run.call_args.kwargs if entry is convert_image_to_3d else run.call_args.args[0]
-    assert "metadata_consumer_type" not in received
     assert received.keys() == expected.keys()
     for name, value in expected.items():
         assert received[name] is value, name

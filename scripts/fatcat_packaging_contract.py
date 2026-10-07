@@ -30,8 +30,6 @@ FATCAT_REQUIRED_ENTRY_POINTS = (
     "metadata_target",
     "metadata_resource_specs",
     "native_project_source_catalog",
-    "assemble_project_template",
-    "assemble_machine_registry_template",
     "compose_project_settings",
     "compose_model_metadata",
     "patch_wipe_tower",

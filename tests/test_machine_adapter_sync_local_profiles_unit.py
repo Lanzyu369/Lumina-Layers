@@ -79,7 +79,7 @@ def test_discovers_bed_models_inside_installed_macos_slicer_bundles(tmp_path):
     assert roots == ((profiles_root, "BBL"),)
 
 
-def test_discover_local_import_sources_keeps_anycubic_client_version_overrides(tmp_path):
+def test_discover_local_import_sources_keeps_anycubic_profile_source_version(tmp_path):
     appdata_root = tmp_path / "AppData" / "Roaming"
     anycubic_root = appdata_root / "AnycubicSlicerNext" / "system"
     (anycubic_root / "Anycubic" / "machine").mkdir(parents=True)
@@ -96,8 +96,6 @@ def test_discover_local_import_sources_keeps_anycubic_client_version_overrides(t
     assert len(sources) == 1
     source = sources[0]
     assert source.source_version == "1.3.2605.22"
-    assert source.application_metadata == "AnycubicSlicerNext-1.4.1.2"
-    assert source.client_version == "1.4.1.2 20260604104233"
 
 
 def test_discover_local_import_sources_keeps_flash_studio_version_contract(tmp_path):
@@ -118,8 +116,6 @@ def test_discover_local_import_sources_keeps_flash_studio_version_contract(tmp_p
     source = sources[0]
     assert source.source_root == flash_root
     assert source.source_version == "02.01.01.00"
-    assert source.application_metadata == "BambuStudio-2.3.2"
-    assert source.client_version == ""
 
 
 def test_discover_local_import_sources_keeps_qidi_studio_version_contract(tmp_path):
@@ -146,8 +142,6 @@ def test_discover_local_import_sources_keeps_qidi_studio_version_contract(tmp_pa
     for source in sources:
         assert source.source_root == qidi_root
         assert source.source_version == "02.07.02.60"
-        assert source.application_metadata == "QIDIStudio-02.07.02.60"
-        assert source.client_version == "02.07.02.60"
 
 
 def test_discover_local_asset_roots_includes_snapmaker_web_images(tmp_path):

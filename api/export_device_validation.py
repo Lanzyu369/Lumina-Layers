@@ -53,10 +53,10 @@ def validate_export_device_selection(
                 status_code=400,
                 detail="Custom 3MF templates are not supported for this export.",
             )
-        from utils.bambu_3mf_writer import load_printer_template
+        from utils.bambu_3mf_writer import load_export_project_settings
 
         try:
-            load_printer_template(
+            load_export_project_settings(
                 printer_id,
                 slicer,
                 nozzle_size,
