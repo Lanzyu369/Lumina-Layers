@@ -9,10 +9,12 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import os
 import time
+import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -219,6 +221,24 @@ def _disable_feedback_upload(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LUMINA_FEEDBACK_SERVER_URL", "off")
 
 
+def _project_bytes(marker: bytes, settings: dict[str, Any] | None = None) -> bytes:
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as package:
+        package.writestr("3D/3dmodel.model", marker)
+        package.writestr(
+            "Metadata/project_settings.config",
+            json.dumps(settings or {"layer_height": "0.2"}),
+        )
+    return payload.getvalue()
+
+
+def _batch_bytes(marker: bytes) -> bytes:
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as package:
+        package.writestr("tile/model.3mf", _project_bytes(marker))
+    return payload.getvalue()
+
+
 def test_collect_sync_attachments_copies_original_and_final(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
@@ -236,7 +256,7 @@ def test_collect_sync_attachments_copies_original_and_final(
     image_path = src_dir / "hello.png"
     image_path.write_bytes(b"PNGDATA")
     artifact_path = src_dir / "model.3mf"
-    artifact_path.write_bytes(b"3MFDATA")
+    artifact_path.write_bytes(_project_bytes(b"3MFDATA"))
 
     registry = _MockFileRegistry(
         {
@@ -416,7 +436,7 @@ def test_collect_sync_attachments_marks_copy_failures_explicitly(
     image_path = src_dir / "hello.png"
     image_path.write_bytes(b"PNGDATA")
     artifact_path = src_dir / "model.3mf"
-    artifact_path.write_bytes(b"3MFDATA")
+    artifact_path.write_bytes(_project_bytes(b"3MFDATA"))
 
     registry = _MockFileRegistry(
         {
@@ -476,7 +496,7 @@ def test_collect_sync_attachments_marks_copy_failures_explicitly(
     image_path = src_dir / "hello.png"
     image_path.write_bytes(b"PNGDATA")
     artifact_path = src_dir / "model.3mf"
-    artifact_path.write_bytes(b"3MFDATA")
+    artifact_path.write_bytes(_project_bytes(b"3MFDATA"))
     registry = _MockFileRegistry(
         {
             "sess-report": {
@@ -863,7 +883,7 @@ def test_finalize_ticket_accepts_local_attachments_without_content_digests(
     image_path = tmp_path / "input.png"
     image_path.write_bytes(b"PNGDATA")
     artifact_path = tmp_path / "output.3mf"
-    artifact_path.write_bytes(b"3MFDATA")
+    artifact_path.write_bytes(_project_bytes(b"3MFDATA"))
     registry = _MockFileRegistry({
         "session": {
             "image": _make_entry(str(image_path), image_path.name, created_at=1.0),
@@ -1782,7 +1802,14 @@ def test_collect_final_artifact_uses_download_url_for_ttl_zip(
     大画幅 ZIP 可能不挂在当前业务 session 下，应能按下载 URL 精确复制。
     """
     zip_path = tmp_path / "large_format_tiles.zip"
-    zip_path.write_bytes(b"PK\x03\x04LARGE_FORMAT")
+    project = _project_bytes(b"GEOMETRY", {
+        "printhost_apikey": "fake-secret", "layer_height": "0.16",
+        "nested": [{"PrInThOsT_password": "fake-password", "wall_loops": "3"}],
+    })
+    with zipfile.ZipFile(zip_path, "w") as batch:
+        batch.writestr("tiles/model.3mf", project)
+        batch.writestr("preview.png", b"PREVIEW")
+    original_bytes = zip_path.read_bytes()
     registry = _MockFileRegistry(
         {
             "foreign-ttl-owner": {
@@ -1817,7 +1844,14 @@ def test_collect_final_artifact_uses_download_url_for_ttl_zip(
     assert result.final_artifact["filename"] == "final.zip"
     assert result.final_artifact["artifact_type"] == "zip"
     assert result.final_artifact["history_count"] == 1
-    assert (ticket_dir / "final.zip").read_bytes() == b"PK\x03\x04LARGE_FORMAT"
+    assert zip_path.read_bytes() == original_bytes
+    with zipfile.ZipFile(ticket_dir / "final.zip") as batch:
+        assert batch.read("preview.png") == b"PREVIEW"
+        with zipfile.ZipFile(io.BytesIO(batch.read("tiles/model.3mf"))) as project:
+            assert project.read("3D/3dmodel.model") == b"GEOMETRY"
+            assert json.loads(project.read("Metadata/project_settings.config")) == {
+                "layer_height": "0.16", "nested": [{"wall_loops": "3"}],
+            }
 
 
 def test_collect_final_artifact_download_url_copy_failure_is_failed(
@@ -1886,7 +1920,7 @@ def test_collect_final_artifact_prefers_download_url_over_stale_session_entry(
     stale_path = tmp_path / "stale_model.3mf"
     stale_path.write_bytes(b"OLD_3MF")
     current_path = tmp_path / "current_tiles.zip"
-    current_path.write_bytes(b"CURRENT_ZIP")
+    current_path.write_bytes(_batch_bytes(b"CURRENT_ZIP"))
     registry = _MockFileRegistry(
         {
             "sess-current": {
@@ -1929,7 +1963,7 @@ def test_collect_final_artifact_prefers_download_url_over_stale_session_entry(
     assert result.final_artifact["artifact_type"] == "zip"
     assert result.final_artifact["source_session_id"] == "sess-current"
     assert result.final_artifact["history_count"] == 1
-    assert (ticket_dir / "final.zip").read_bytes() == b"CURRENT_ZIP"
+    assert (ticket_dir / "final.zip").read_bytes() == current_path.read_bytes()
     assert not (ticket_dir / "final.3mf").exists()
 
 
@@ -2217,7 +2251,7 @@ def test_collect_final_artifact_registry_hit_takes_priority_over_disk_path(
     src_dir = tmp_path / "source"
     src_dir.mkdir()
     registry_3mf = src_dir / "registry_model.3mf"
-    registry_3mf.write_bytes(b"REGISTRY_3MF")
+    registry_3mf.write_bytes(_project_bytes(b"REGISTRY_3MF"))
 
     # Also create a disk_path file (different content).
     output_dir = REPO_ROOT / "output"
@@ -2254,7 +2288,7 @@ def test_collect_final_artifact_registry_hit_takes_priority_over_disk_path(
 
         assert result.final_artifact["status"] == "attached"
         # Should have the registry file content, not the disk_path content.
-        assert (ticket_dir / "final.3mf").read_bytes() == b"REGISTRY_3MF"
+        assert (ticket_dir / "final.3mf").read_bytes() == registry_3mf.read_bytes()
     finally:
         disk_3mf.unlink(missing_ok=True)
 
@@ -2317,7 +2351,7 @@ def test_collect_final_artifact_stale_registry_falls_back_to_download_url(
     """
     stale_path = tmp_path / "missing_session_model.3mf"
     ttl_zip_path = tmp_path / "large_format_tiles.zip"
-    ttl_zip_path.write_bytes(b"PK\x03\x04TTL_ZIP")
+    ttl_zip_path.write_bytes(_batch_bytes(b"TTL_ZIP"))
     registry = _MockFileRegistry(
         {
             "sess-final": {
@@ -2357,4 +2391,4 @@ def test_collect_final_artifact_stale_registry_falls_back_to_download_url(
     assert result.final_artifact["status"] == "attached"
     assert result.final_artifact["filename"] == "final.zip"
     assert result.final_artifact["artifact_type"] == "zip"
-    assert (ticket_dir / "final.zip").read_bytes() == b"PK\x03\x04TTL_ZIP"
+    assert (ticket_dir / "final.zip").read_bytes() == ttl_zip_path.read_bytes()

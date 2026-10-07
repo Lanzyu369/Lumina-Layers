@@ -2507,6 +2507,7 @@ class TestAnycubicWriterMetadata:
         captured_object_names: list[str] = []
         captured_settings: dict[str, object] = {}
         captured_color_mode: dict[str, str] = {}
+        captured_source_colours: dict[str, str] = {}
 
         class _CapturingWriter(writer_module.BambuStudio3MFWriter):
             def __init__(
@@ -2538,6 +2539,11 @@ class TestAnycubicWriterMetadata:
 
             def export(self) -> str:
                 captured_object_names.extend(entry.object_name for entry in self.objects)
+                palette, _ = self._build_material_palette()
+                request = self._build_fatcat_project_request(
+                    palette, self._select_metadata_target(),
+                )
+                captured_source_colours.update(request["source_slot_colours"])
                 captured_settings.update(_compose_project(self))
                 return self.output_path
 
@@ -2569,6 +2575,10 @@ class TestAnycubicWriterMetadata:
             6: (255, 255, 255, 255),
             7: (255, 230, 0, 255),
         }
+        preview_colors.update({
+            name: preview_colors[index]
+            for index, name in enumerate(full_palette)
+        })
 
         out_path = writer_module.export_scene_with_bambu_metadata(
             scene=scene,
@@ -2602,6 +2612,10 @@ class TestAnycubicWriterMetadata:
             "#FFE600",
         ]
         assert "filament_ids" not in captured_settings
+        assert captured_source_colours == {
+            str(index): colour
+            for index, colour in enumerate(captured_settings["filament_colour"])
+        }
 
     def test_export_scene_forwards_registry_device_profile_id(self, monkeypatch) -> None:
         captured: dict[str, object] = {}

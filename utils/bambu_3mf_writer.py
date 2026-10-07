@@ -1385,6 +1385,10 @@ class BambuStudio3MFWriter:
 
         向 Fat Cat 传递已选来源事实，由 C++ 选择硬件、材料和槽位策略。
         """
+        source_slot_colours = {
+            str(index): "#{:02X}{:02X}{:02X}".format(*colour)
+            for index, (_name, colour) in enumerate(material_palette)
+        }
         slot_mode = (
             "auto" if self.preserve_template_filament_slots is None
             else "preserve" if self.preserve_template_filament_slots else "compact"
@@ -1421,10 +1425,7 @@ class BambuStudio3MFWriter:
                     }
                     for name, (red, green, blue) in material_palette
                 ],
-                "source_slot_colours": {
-                    str(key): "#{:02X}{:02X}{:02X}".format(*_coerce_preview_rgb(value))
-                    for key, value in (self._project_preview_colors or {}).items()
-                },
+                "source_slot_colours": source_slot_colours,
                 "process_settings": process,
                 "preserve_source_material_settings": True,
                 "filament_slot_mode": slot_mode,
@@ -1457,10 +1458,7 @@ class BambuStudio3MFWriter:
             materials,
             target=target,
             filament_slot_mode=slot_mode,
-            source_slot_colours={
-                str(key): "#{:02X}{:02X}{:02X}".format(*_coerce_preview_rgb(value))
-                for key, value in (self._project_preview_colors or {}).items()
-            },
+            source_slot_colours=source_slot_colours,
         )
         if self.build_plate_id is not None:
             request["build_plate_uid"] = target.build_plate_uid

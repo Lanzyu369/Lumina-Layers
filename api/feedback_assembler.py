@@ -43,6 +43,7 @@ from api.feedback_mime import guess_mime
 from api.feedback_hosted import submit_ticket_directory
 from api.feedback_index import generate_index_markdown, generate_summary_text
 from api.feedback_materials_bundle import pack_materials
+from api.feedback_privacy import copy_feedback_project_artifact
 from api.feedback_time import now_beijing
 from api.file_bridge import SUPPORTED_UPLOAD_IMAGE_EXTENSIONS
 from api.structured_logging import get_logger
@@ -550,9 +551,9 @@ def _collect_final_artifact_from_download_url(
 
     dst = ticket_dir / f"final{suffix}"
     try:
-        shutil.copy2(src_path, dst)
+        copy_feedback_project_artifact(src_path, dst)
         size = dst.stat().st_size
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         try:
             dst.unlink()
         except OSError:
@@ -1074,9 +1075,9 @@ def _collect_final_artifact(
                     suffix = src_path.suffix.lower() or ".3mf"
                     dst = ticket_dir / f"final{suffix}"
                     try:
-                        shutil.copy2(src_path, dst)
+                        copy_feedback_project_artifact(src_path, dst)
                         size = dst.stat().st_size
-                    except OSError as exc:
+                    except (OSError, ValueError) as exc:
                         try:
                             dst.unlink()
                         except OSError:

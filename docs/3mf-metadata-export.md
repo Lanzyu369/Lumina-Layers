@@ -22,7 +22,7 @@ writer writes the final package once.
 FatCat is distributed as `fatcat-metadata`, imported as `fatcat_metadata`, version
 `0.1.0`. Lumina builds from the public
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata) root
-project at source revision `19962a14f3db16020e0d7d8e604d671c8122c32a` and pins
+project at source revision `673b1b694dd7c3369f5094fb8ddbf77fdb869d90` and pins
 the writer contract in
 `scripts/fatcat_packaging_contract.py`; build and installation steps are in
 [the desktop setup guide](desktop-electron.md).
@@ -30,7 +30,7 @@ the writer contract in
 FatCat 发行包名为 `fatcat-metadata`，导入名为 `fatcat_metadata`，版本固定为 `0.1.0`。
 Lumina 从公开仓库
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata) 的根项目构建，
-源码提交固定为 `19962a14f3db16020e0d7d8e604d671c8122c32a`，并在
+源码提交固定为 `673b1b694dd7c3369f5094fb8ddbf77fdb869d90`，并在
 `scripts/fatcat_packaging_contract.py` 维护 writer 合同；构建与安装步骤见
 [桌面环境指南](desktop-electron.md)。
 

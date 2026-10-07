@@ -18,7 +18,7 @@ Python 3.12 及以上的 3MF 导出链路要求 `wheelhouse/3mf` 中存在当前
 writer 版本和补丁位置统一由 `scripts/fatcat_packaging_contract.py` 维护。
 Fat Cat 来自公开仓库
 [`MOVIBALE/fatcat-metadata`](https://github.com/MOVIBALE/fatcat-metadata)，固定
-完整提交 `19962a14f3db16020e0d7d8e604d671c8122c32a`。构建脚本把 `--fatcat-root`
+完整提交 `673b1b694dd7c3369f5094fb8ddbf77fdb869d90`。构建脚本把 `--fatcat-root`
 视为该仓库根目录，从根 `pyproject.toml` 构建 wheel；无需进入 `cpp/` 子目录。
 CI 会匿名检出该提交，并在目标平台构建 wheel。
 
@@ -29,7 +29,7 @@ Lumina 在 `reference/neroued-patches/neroued-3mf-v0.4.0-b7.patch` 保存精确�
 
 ```powershell
 git clone https://github.com/MOVIBALE/fatcat-metadata ..\fatcat-metadata
-git -C ..\fatcat-metadata checkout 19962a14f3db16020e0d7d8e604d671c8122c32a
+git -C ..\fatcat-metadata checkout 673b1b694dd7c3369f5094fb8ddbf77fdb869d90
 git clone https://github.com/neroued/neroued_3mf.git ..\neroued-3mf
 git -C ..\neroued-3mf checkout 331ac6fa62a719f0dddacf9f005861b187d54f0c
 $writerPatch = (Resolve-Path .\reference\neroued-patches\neroued-3mf-v0.4.0-b7.patch).Path
